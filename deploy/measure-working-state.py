@@ -10,8 +10,9 @@ subprocesses are one read-only `journalctl --user` run (`deaths`, `spawn`;
 `ccrc-api mail list` reads (`pushes`, `interrupts`, `stall`; `--feed FILE` and
 `--mail FILE` read exports instead).
 
-WHAT IT READS, AND NOTHING ELSE (plan Task M): `<home>/.claude*/sessions/*.json`
-(Claude Code's live files), `$REG/<id>.uuid`, `$REG/<id>.hookstate.json`,
+WHAT IT READS, AND NOTHING ELSE (plan Task M, widened by D-5351):
+`<home>/.claude*/sessions/*.json` (Claude Code's live files, each kept only when
+`/proc/<pid>` is there), `$REG/<id>.uuid`, `$REG/<id>.hookstate.json`,
 `$REG/<id>.turn.json`, `$REG/<id>.hibernated`, `$REG/.lifecycle/journal-*.ndjson`
 (ccd's own act journal, for `hibernate` acts), `$REG/swap.log`,
 `<home>/.ccrc/server-caps`, the user journal, the server's feed and mail
@@ -34,7 +35,10 @@ and nothing else.
 
 `--since` (inclusive) and `--until` (exclusive) are `YYYY-MM-DD[ HH:MM[:SS]]`
 in LOCAL time, because swap.log's stamps are `date '+%F %T'` on the box that
-wrote them; run it on the fleet box (or with TZ set to its zone). `--now`
+wrote them; run it on the fleet box in the box's own zone (check it with
+`timedatectl` first, and set no TZ override for `swaps`, `deaths` or
+`interrupts`, which read swap.log). `--proc` (default /proc) is the process
+table a live file's pid is checked in (D-5351). `--now`
 (epoch seconds) pins the snapshot's clock for the test suite. Live-file,
 hookstate and turn-marker stamps are epoch MILLISECONDS; feed and mail `at`
 are epoch milliseconds; transcript stamps are ISO UTC.
@@ -81,7 +85,8 @@ CARRIER_EVENTS = ('Stop', 'SubagentStart', 'SubagentStop')
 COVERS_DELEGATION_FROM = (2, 1, 277)
 # ccd/ccd: `echo "session $id ended; exiting for systemd restart"`.
 END_RE = re.compile(r"^session (\S+) ended; exiting for systemd restart$")
-# D-5237's interrupt sources (an older or newer word is `unknown`).
+# D-5237's interrupt sources (an older or newer word is `unknown`); DERIVED until
+# Tasks 7 and 8 land the feed event and swap.log's `escape` verb (D-5354).
 INTERRUPT_SOURCES = ('keycap', 'escape-key', 'deny', 'drawer-escape', 'drawer-ctrl-c', 'unknown')
 # server/src/coord/stall.ts: STALL_CHECK_PREFIX, STALL_REPORT_PREFIX, STALL_SENDER.
 STALL_CHECK_PREFIX = 'stall-check:'
@@ -182,11 +187,21 @@ def covers_delegation(version):
     return t is not None and t >= COVERS_DELEGATION_FROM
 
 
+def pid_check(ctx):
+    """True when `ctx["proc"]` (default /proc) is there to ask; off Linux it is not,
+    and every live file is kept (`live_pid_check: unavailable` says so)."""
+    return os.path.isdir(ctx["proc"])
+
+
 def live_files(ctx):
     """{sessionId: live} over every account root's live files; the newest
     `statusUpdatedAt` wins where two name one session. `unreadable` counts the
-    files read as not JSON (a torn read, D-5234)."""
-    out, unreadable = {}, 0
+    files read as not JSON (a torn read, D-5234). A file whose `pid` has no
+    `/proc/<pid>` is a dead process's leftover (an OOM or SIGKILL end may not
+    remove it) and is skipped, counted in `dead` — fleet.ts reads only a live
+    pane's process's file. The check is one `isdir`, read-only."""
+    out, unreadable, dead = {}, 0, 0
+    check = pid_check(ctx)
     for p in sorted(glob.glob(os.path.join(ctx["home"], ".claude*", "sessions", "*.json"))):
         raw = read_json(p)
         if not isinstance(raw, dict):
@@ -194,6 +209,10 @@ def live_files(ctx):
             continue
         sid = raw.get("sessionId")
         if not isinstance(sid, str):
+            continue
+        pid = raw.get("pid")
+        if check and is_int(pid) and not os.path.isdir(os.path.join(ctx["proc"], str(pid))):
+            dead += 1
             continue
         live = {
             "status": raw.get("status") if isinstance(raw.get("status"), str) else "",
@@ -204,7 +223,7 @@ def live_files(ctx):
         prev = out.get(sid)
         if prev is None or (live["since"] or 0) > (prev["since"] or 0):
             out[sid] = live
-    return out, unreadable
+    return out, unreadable, dead
 
 
 def hookstate(ctx, rid, uuid):
@@ -257,10 +276,15 @@ def hook_fresh(hs, now_ms):
 
 
 def shown_bucket(live, hs, now_ms, rung):
-    """`sessionBucket`'s non-attention rungs (shared/api.ts), mirrored: 'working',
-    'done' or 'idle'. `rung` False drops D-5231's `!delegated` rung, which is what
-    a server before Task 1 showed for the same files."""
+    """`sessionBucket`'s rungs for a live row (shared/api.ts), mirrored: 'attention',
+    'working', 'done' or 'idle'. `rung` False drops D-5231's `!delegated` rung,
+    which is what a server before Task 1 showed for the same files. A live
+    `waiting` or a fresh hook `waiting` is `attention`, as fleet.ts feeds it
+    (`dialogPending` = liveWaiting || hs.state == 'waiting'); a pane-scraped
+    dialog is not on this box, so that third source is not seen."""
     h = hs if hook_fresh(hs, now_ms) else None
+    if (live is not None and live["status"] == "waiting") or (h is not None and h["state"] == "waiting"):
+        return "attention"
     status = "idle" if live is None or live["status"] == "idle" else "busy"
     since = live["since"] if live else None
     hook_newer = h is not None and (since is None or h["updatedAt"] > since)
@@ -278,18 +302,18 @@ def shown_bucket(live, hs, now_ms, rung):
 
 def rows_now(ctx, now_ms):
     """Every registry row joined to its live file, hookstate and turn marker."""
-    lives, unreadable = live_files(ctx)
+    lives, unreadable, dead = live_files(ctx)
     out = []
     for rid, uuid in registry(ctx).items():
         out.append({"id": rid, "uuid": uuid, "live": lives.get(uuid),
                     "hs": hookstate(ctx, rid, uuid), "mark": turnmark(ctx, rid, uuid)})
-    return out, unreadable
+    return out, unreadable, dead
 
 
 # ── snapshot ───────────────────────────────────────────────────────────────────
 def server_caps(ctx, now_s):
     """`<home>/.ccrc/server-caps` (D-5232: `at`, `caps`, `end`). DERIVED from the
-    ledger's prose until Task 9b lands its writer: `at <epoch-s>` / `at=<epoch-s>`,
+    ledger's prose until Task 9b lands its writer (D-5353): `at <epoch-s>` / `at=<epoch-s>`,
     `caps <word> …` / `caps=<word>,…`, and a closing `end` line."""
     p = os.path.join(ctx["home"], ".ccrc", "server-caps")
     try:
@@ -333,7 +357,7 @@ def hibernate_acts(ctx):
 
 def s_snapshot(ctx):
     now_ms = ctx["now"] * 1000
-    rows, unreadable = rows_now(ctx, now_ms)
+    rows, unreadable, dead = rows_now(ctx, now_ms)
     live = [r for r in rows if r["live"] is not None]
     hs_rows = [r for r in rows if r["hs"] is not None]
     roster_total = sum(len(r["hs"]["subagents"]) for r in hs_rows)
@@ -370,6 +394,7 @@ def s_snapshot(ctx):
     hibernated = len(glob.glob(os.path.join(reg_dir(ctx), "*.hibernated")))
     out = {
         "rows": len(rows), "live_sessions": len(live), "live_unreadable": unreadable,
+        "live_dead_pid": dead, "live_pid_check": "proc" if pid_check(ctx) else "unavailable",
         "hookstate_files": len(hs_rows),
         "roster_entries": roster_total,
         "roster_files_with_entries": sum(1 for r in hs_rows if r["hs"]["subagents"]),
@@ -377,6 +402,7 @@ def s_snapshot(ctx):
         "roster_files_with_stale": stale_files,
         "idle_working_postcompact": len(idle_pc),
         "busy_sessions": len(busy),
+        "shown_attention": sum(1 for r in live if shown_bucket(r["live"], r["hs"], now_ms, True) == "attention"),
         "shown_done_while_busy": len(done_busy),
         "shown_done_while_busy_delegated": sum(1 for r in done_busy if marker_delegated(r["mark"])),
         "pre_d5231_done_while_busy": len(raw_done_busy),
@@ -385,6 +411,7 @@ def s_snapshot(ctx):
         "idle_live_sessions": len(ages) + unknown_age,
         "idle_age_unknown": unknown_age,
         "hold_scheduled": scheduled, "hold_scheduled_unknown": crons_unknown,
+        # D-5352: reported as unmeasured, never estimated.
         "hold_attached": "unmeasured (tmux is never run)",
         "hold_viewer": "unmeasured (the server's presence is not on this box)",
         "hibernated_markers": hibernated,
@@ -402,7 +429,7 @@ def digest(salt, rid):
 
 
 def sample(ctx, salt, now_ms):
-    rows, _ = rows_now(ctx, now_ms)
+    rows, _, _ = rows_now(ctx, now_ms)
     out = []
     for r in rows:
         if r["live"] is None:
@@ -763,7 +790,7 @@ def s_deaths(ctx):
         "oom_associated": oom,
         "oom_associated_failed_line": with_failed,
         "oom_associated_no_failed_line": oom - with_failed,
-        "victim_mapping": "unmeasured until Task 13 records the signatures",
+        "victim_mapping": "unmeasured until Task 13 records the signatures",   # D-5352
         "pane_scope_oom_kills": len(wkills),
         "oom_kills_within_120s_after_a_restart": after_restart,
     }
@@ -804,6 +831,18 @@ def s_spawn(ctx):
 
 # ── swaps ──────────────────────────────────────────────────────────────────────
 SWAP_ACT = re.compile(r"^(\S+): (\S+) -> (\S+) \(uuid (\S+)\)$")
+# ccd/ccd `_swap_refuse`'s reasons are free text (a uuid, an account, a path, a
+# job id), so a refusal is COUNTED under a fixed word from this table and the
+# reason itself never leaves; a reason no pattern names is `other`. Each pattern
+# is pinned to the ccd sentence it reads by measure-working-state.test.ts.
+SWAP_REFUSAL = re.compile(r"^\S+: \S+ -> \S+ \((.*)\)$")
+REFUSAL_REASONS = (
+    ("no-transcript", r"no transcript found for "),
+    ("copy-failed", r"transcript found for \S+ under \S+ but "),
+    ("background-job", r"conversation \S+ is live in background job "),
+    ("left-roster", r"account \S+ left the roster "),
+    ("roster-unreadable", r".* could not be re-read while this swap was carrying"),
+)
 DECISION_VERBS = {"auto-home": "auto-home", "auto-pool": "auto-pool", "auto-rescue": "rescue"}
 
 
@@ -821,8 +860,9 @@ def s_swaps(ctx):
         if verb in DECISION_VERBS:
             decisions[rest.split(":", 1)[0]].append((t, DECISION_VERBS[verb]))
         elif verb == "swap-refused" and in_window(t, ctx):
-            m = re.search(r"\(([^()]*)\)$", rest)
-            refused[(m.group(1) if m else "?").split(" ", 1)[0]] += 1
+            m = SWAP_REFUSAL.match(rest)
+            why = m.group(1) if m else ""
+            refused[next((w for w, pat in REFUSAL_REASONS if re.match(pat, why)), "other")] += 1
         elif verb == "swap" and in_window(t, ctx):
             m = SWAP_ACT.match(rest)
             if not m:
@@ -841,7 +881,7 @@ def s_swaps(ctx):
         out["swaps_" + k] = acts[k]
         out["swaps_" + k + "_cut_output"] = cut[k]
         out["swaps_" + k + "_no_transcript"] = untold[k]
-    out["swap_refusals_by_reason"] = dict(sorted(refused.items()))
+    out["swap_refusals_by_reason"] = {w: refused[w] for w in [w for w, _ in REFUSAL_REASONS] + ["other"]}
     return out
 
 
@@ -922,6 +962,7 @@ def s_interrupts(ctx):
 
 
 def s_stall(ctx):
+    """Notices by kind and window; not split by the worker's state at send (D-5355)."""
     ms = mail_rows(ctx)
     if ms is None:
         return {"mail": "unreadable"}
@@ -962,6 +1003,7 @@ def main(argv=None):
     ap.add_argument("--swap-log", help="default: <home>/.cc-sessions/swap.log")
     ap.add_argument("--since", type=parse_local)
     ap.add_argument("--until", type=parse_local)
+    ap.add_argument("--proc", default="/proc", help="the process table to ask for a live file's pid (fixtures)")
     ap.add_argument("--now", type=int, help="the snapshot's clock, epoch seconds (default: now)")
     ap.add_argument("--section", action="append", choices=sorted(SECTIONS))
     ap.add_argument("--journal", help="a `journalctl --user -o json` export to read instead of journalctl")
@@ -977,7 +1019,7 @@ def main(argv=None):
     ctx = {"home": a.home, "swap_log": a.swap_log or os.path.join(a.home, ".cc-sessions", "swap.log"),
            "since": a.since, "until": a.until, "now": a.now if a.now is not None else int(time.time()),
            "journal": a.journal, "journal_live": a.journal_live, "feed": a.feed, "mail": a.mail,
-           "samples": a.samples}
+           "samples": a.samples, "proc": a.proc}
     if a.poll is not None:
         if not a.out:
             ap.error("--poll needs --out")

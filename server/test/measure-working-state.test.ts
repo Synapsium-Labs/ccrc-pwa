@@ -8,6 +8,7 @@
 // then moved, so the instrument reads the bytes the writer writes. The "no text leaves" rule is pinned by sentinels.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
@@ -35,6 +36,18 @@ const SENTINEL_SUBJECT = 'SENTINEL-MAIL-SUBJECT-91c2';
 
 const sidOf = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 
+/** ccd/ccd's `_swap_refuse` reasons, verbatim from its call sites (each pinned by a test), and the word the instrument
+ *  counts each under. `refusal()` fills the shell variables: a uuid, accounts, a job id and an absolute HOME path. */
+const REFUSALS: [string, string][] = [
+  ['no-transcript', 'no transcript found for $uuid under $cur'],
+  ['no-transcript', 'no transcript found for $uuid under $cur after flush'],
+  ['copy-failed', 'transcript found for $uuid under $cur but every copy failed'],
+  ['copy-failed', 'transcript found for $uuid under $cur but the copy to $mdir failed — the directory the resumed session reads first'],
+  ['background-job', 'conversation $_CI_END_HID is live in background job $bgheld on $cur — a swap would resume a copy on $target while that job keeps writing here; let it finish or stop it ($cur stop $bgheld) first'],
+  ['left-roster', 'account $target left the roster while this swap was carrying its transcripts'],
+  ['roster-unreadable', '$CCRC_ACCOUNTS_SH could not be re-read while this swap was carrying its transcripts, so $target cannot be proved to still exist'],
+];
+
 let home: string;
 beforeEach(() => {
   home = mkTmp('ccrc-mws-');
@@ -48,7 +61,13 @@ beforeEach(() => {
 afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
 
 const reg = (f: string): string => path.join(home, '.cc-sessions', f);
-const run = (args: string[]) => spawnSync('python3', [SCRIPT, '--home', home, '--now', String(NOW_S), ...args], {
+const refusal = (tpl: string): string => tpl.replace(/\$[A-Za-z_]+/g, (v) => ({
+  $uuid: sidOf(9), $cur: 'lane-a', $target: 'lane-b', $mdir: path.join(home, '.claude-lane-b', 'projects', '-rig-repo'),
+  $_CI_END_HID: sidOf(9), $bgheld: 'b77', $CCRC_ACCOUNTS_SH: path.join(home, '.ccrc', SENTINEL, 'accounts.sh'),
+} as Record<string, string>)[v] ?? v);
+/** The fixture's process table: `live()` makes `<home>/proc/<pid>` for a live process; a pid with no entry is dead. */
+const proc = (): string => path.join(home, 'proc');
+const run = (args: string[]) => spawnSync('python3', [SCRIPT, '--home', home, '--proc', proc(), '--now', String(NOW_S), ...args], {
   encoding: 'utf8', env: { ...process.env, TZ: 'UTC', PYTHONDONTWRITEBYTECODE: '1', PATH: '/usr/bin:/bin' },
   timeout: 60_000,
 });
@@ -96,9 +115,11 @@ const hook = (id: string, sid: string, payload: Record<string, unknown>,
   patch(turn, { ...stamps, ...mark });
 };
 
-/** Claude Code's live file, the key set `livestate.test.ts` builds. */
+/** Claude Code's live file, the key set `livestate.test.ts` builds; `alive` false leaves its pid out of the fixture's
+ *  process table (a dead process's leftover file). */
 const live = (pid: number, sid: string, status: string, statusUpdatedAt: number,
-  over: Record<string, unknown> = {}): void => {
+  over: Record<string, unknown> = {}, alive = true): void => {
+  if (alive) fs.mkdirSync(path.join(proc(), String(pid)), { recursive: true });
   fs.writeFileSync(path.join(home, '.claude-lane-a', 'sessions', `${pid}.json`), JSON.stringify({
     pid, sessionId: sid, cwd: '/rig/repo', name: 'fixture', status, statusUpdatedAt,
     startedAt: NOW - 120 * MIN, version: '2.1.300', ...over,
@@ -196,12 +217,14 @@ describe('measure-working-state.py: its second spellings are bound to their home
 
   // The displayed bucket the instrument counts is `sessionBucket`'s, fed as `fleet.ts` feeds it (an aged hookstate
   // is no hookstate; `background` only on a covering build, a carrier event and a `done`). Iterated over a matrix.
-  it('shown_bucket agrees with sessionBucket on every non-attention case', () => {
+  // A live `waiting` (fleet.ts's liveWaiting) and a fresh hook `waiting` both reach `dialogPending`, so the attention
+  // rung is in the matrix; `aliveAt` keeps an old `updatedAt` fresh (D-4041), and 30 min exactly is still fresh.
+  it('shown_bucket agrees with sessionBucket on every live-row case, attention included', () => {
     const cases: Record<string, unknown>[] = [];
-    for (const status of ['busy', 'idle']) for (const since of [null, NOW - 10 * MIN]) for (const version of ['2.1.276', '2.1.300'])
-      for (const hs of [null, ...['working', 'done'].flatMap((state) => ['Stop', 'SessionStart', 'SubagentStop', 'PostCompact', 'PostToolUse']
-        .flatMap((event) => [NOW - 5 * MIN, NOW - 20 * MIN, NOW - 40 * MIN].flatMap((updatedAt) => [null, 0, 2]
-          .map((bgDelegated) => ({ state, event, updatedAt, aliveAt: null, subagents: [], bgDelegated })))))])
+    for (const status of ['busy', 'idle', 'waiting']) for (const since of [null, NOW - 10 * MIN]) for (const version of ['2.1.276', '2.1.300'])
+      for (const hs of [null, ...['working', 'done', 'waiting'].flatMap((state) => ['Stop', 'SessionStart', 'SubagentStop', 'PostCompact', 'PostToolUse']
+        .flatMap((event) => [NOW - 5 * MIN, NOW - 20 * MIN, NOW - 30 * MIN, NOW - 40 * MIN].flatMap((updatedAt) => [null, 0, 2]
+          .flatMap((bgDelegated) => [null, NOW - 5 * MIN].map((aliveAt) => ({ state, event, updatedAt, aliveAt, subagents: [], bgDelegated }))))))])
         cases.push({ live: { status, since, startedAt: null, version }, hs });
     const py = spawnSync('python3', ['-c', [
       'import importlib.util, json, sys',
@@ -214,15 +237,18 @@ describe('measure-working-state.py: its second spellings are bound to their home
     const got = JSON.parse(py.stdout) as string[];
     const want = cases.map((c) => {
       const l = c['live'] as { status: string; since: number | null; version: string };
-      const h = c['hs'] as { state: 'working' | 'done'; event: string; updatedAt: number; bgDelegated: number | null } | null;
-      const fresh = h !== null && NOW - h.updatedAt <= HOOKSTATE_FRESH_MS ? h : null;
+      const h = c['hs'] as { state: 'working' | 'done' | 'waiting'; event: string; updatedAt: number; aliveAt: number | null; bgDelegated: number | null } | null;
+      const fresh = h !== null && NOW - Math.max(h.updatedAt, h.aliveAt ?? h.updatedAt) <= HOOKSTATE_FRESH_MS ? h : null;
       const background = fresh && fresh.state === 'done' && ['Stop', 'SubagentStart', 'SubagentStop'].includes(fresh.event)
         && fresh.bgDelegated !== null && liveStatusCoversDelegation(l.version) ? { count: fresh.bgDelegated, kinds: [] } : null;
-      const s = { status: l.status, statusUpdatedAt: l.since, dialogPending: false, hookState: fresh?.state ?? null,
+      // liveSessionStatus collapses `waiting` into `busy`; the raw word survives as liveWaiting (fleet.ts).
+      const s = { status: l.status === 'waiting' ? 'busy' : l.status, statusUpdatedAt: l.since,
+        dialogPending: l.status === 'waiting' || fresh?.state === 'waiting', hookState: fresh?.state ?? null,
         archivedAt: null, pr: null, background } as unknown as FleetSession;
       return sessionBucket(s, fresh?.updatedAt ?? null, fresh?.event ?? null).bucket;
     });
     expect(cases.length, 'guards the guard: the matrix is not empty').toBeGreaterThan(200);
+    expect(want, 'guards the guard: the matrix reaches the attention rung').toContain('attention');
     expect(got).toEqual(want);
   });
 });
@@ -295,6 +321,55 @@ describe('measure-working-state.py --section snapshot', () => {
     expect(json(['--section', 'snapshot'])['snapshot']!['server_caps']).toBe('incomplete');
     fs.writeFileSync(path.join(home, '.ccrc', 'server-caps'), `at ${NOW_S - 181}\ncaps x\nend\n`);
     expect(json(['--section', 'snapshot'])['snapshot']!['server_caps']).toBe('stale');
+    fs.writeFileSync(path.join(home, '.ccrc', 'server-caps'), `at ${NOW_S + 60}\ncaps x\nend\n`);   // stamped in the future
+    expect(json(['--section', 'snapshot'])['snapshot']!['server_caps']).toBe('stale');
+  });
+
+  // Each row tells one guard apart (the mutation table names which): a dead pid's file, two files naming one session,
+  // an aged done/PostCompact, a BUSY working/PostCompact, a v:2 hookstate, a marker whose bg is 0, a roster entry
+  // started with the process, a live `waiting`.
+  it('guards: dead pid, newest live file, aged badges, busy PostCompact, v:2, bg 0, roster at start, waiting', () => {
+    row('lane-c-dup', sidOf(31));                  // two live files: the NEWER (idle) wins over the older busy one
+    live(301, sidOf(31), 'idle', NOW - MIN);
+    live(302, sidOf(31), 'busy', NOW - 50 * MIN);
+    row('lane-c-dead', sidOf(32));                 // its process is gone; the file was left behind
+    live(303, sidOf(32), 'busy', NOW - 10 * MIN, {}, false);
+    row('lane-c-aged-badge', sidOf(33));           // done/PostCompact 40 min old: no badge
+    hook('lane-c-aged-badge', sidOf(33), stopWith([]), { updatedAt: NOW - 60 * MIN });
+    hook('lane-c-aged-badge', sidOf(33), postCompact('manual'), { updatedAt: NOW - 40 * MIN });
+    live(304, sidOf(33), 'idle', NOW - 45 * MIN);
+    row('lane-c-busy-pc', sidOf(34));              // working/PostCompact over a BUSY live file: not the idle row
+    hook('lane-c-busy-pc', sidOf(34), stopWith([]), { updatedAt: NOW - 3 * MIN });
+    hook('lane-c-busy-pc', sidOf(34), postCompact('auto'), { updatedAt: NOW - 2 * MIN });
+    live(305, sidOf(34), 'busy', NOW - 10 * MIN);
+    row('lane-c-v2', sidOf(35));                   // a hookstate of another schema version is not read
+    hook('lane-c-v2', sidOf(35), stopWith([]), { updatedAt: NOW - MIN, v: 2 });
+    live(306, sidOf(35), 'idle', NOW - 10 * MIN);
+    row('lane-c-bg0', sidOf(36));                  // done over busy, its marker lists kinds but counts bg 0: not delegated
+    hook('lane-c-bg0', sidOf(36), fiveKinds(), { updatedAt: NOW - MIN, bgDelegated: undefined, bgDelegatedKinds: undefined }, { bg: 0 });
+    live(307, sidOf(36), 'busy', NOW - 10 * MIN);
+    row('lane-c-roster', sidOf(37));               // a roster entry started WITH the process is not older than it
+    hook('lane-c-roster', sidOf(37), stopWith([]), { updatedAt: NOW - 5 * MIN });
+    hook('lane-c-roster', sidOf(37), subagentStart('a0000000000000003'));
+    const rs = JSON.parse(fs.readFileSync(reg('lane-c-roster.hookstate.json'), 'utf8')) as { subagents: Record<string, unknown>[] };
+    expect(rs.subagents.length, 'guards the guard: the real hook kept the entry').toBe(1);
+    patch(reg('lane-c-roster.hookstate.json'), { updatedAt: NOW - 5 * MIN, subagents: [{ ...rs.subagents[0], startedAt: NOW - 120 * MIN }] });
+    live(308, sidOf(37), 'idle', NOW - 4 * MIN);
+    row('lane-c-waiting', sidOf(38));              // a live `waiting`: attention, never done
+    hook('lane-c-waiting', sidOf(38), stopWith([]), { updatedAt: NOW - MIN });
+    live(309, sidOf(38), 'waiting', NOW - 10 * MIN);
+    const mark = JSON.parse(fs.readFileSync(reg('lane-c-bg0.turn.json'), 'utf8')) as { bgKinds: string };
+    expect(mark.bgKinds.split(',').some((k) => !(NON_DELEGATING_TASK_KINDS as readonly string[]).includes(k)),
+      'guards the guard: the bg-0 marker still lists a delegating kind').toBe(true);
+
+    const s = json(['--section', 'snapshot'])['snapshot']!;
+    expect(s).toMatchObject({
+      rows: 8, live_sessions: 7, live_dead_pid: 1, live_pid_check: 'proc', hookstate_files: 5,
+      busy_sessions: 3, shown_attention: 1,
+      shown_done_while_busy: 1, shown_done_while_busy_delegated: 0, pre_d5231_done_while_busy_delegated: 0,
+      idle_working_postcompact: 0, compaction_done_badges: 0,
+      roster_entries: 1, roster_entries_older_than_process: 0,
+    });
   });
 
   it('a hookstate or marker naming another session is not this row’s', () => {
@@ -328,14 +403,17 @@ describe('measure-working-state.py --section samples', () => {
       // s4: delegated busy 0-2; idle from 3 and shown done.
       rows.push(i <= 2 ? tick({ sid: 's4', busy: true, shown: 'working', pre: 'working', delegated: true, markdone: true })
         : tick({ sid: 's4', markdone: true, delegated: true, shown: 'done', pre: 'done' }));
+      // s5: busy 0-2 with NO delegated work, its marker done; idle from 3: not a delegated end either way.
+      rows.push(i <= 2 ? tick({ sid: 's5', busy: true, shown: 'working', pre: 'working', markdone: true })
+        : tick({ sid: 's5', markdone: true }));
       return { t: NOW + i * 2000, rows };
     });
     const p = writeJson('samples.jsonl', ticks.map((t) => JSON.stringify(t)).join('\n') + '\n');
     const s = json(['--section', 'samples', '--samples', p])['samples']!;
     expect(s).toMatchObject({
-      samples: 10, sessions: 4, span_s: 20, busy_session_seconds: 36,
+      samples: 10, sessions: 5, span_s: 20, busy_session_seconds: 42,
       done_while_busy_episodes: 2, done_while_busy_episodes_delegated: 1, done_while_busy_seconds: 8,
-      done_while_busy_episodes_per_hour: 360, done_while_busy_share_of_busy: 0.2222,
+      done_while_busy_episodes_per_hour: 360, done_while_busy_share_of_busy: 0.1905,
       pre_d5231_done_while_busy_episodes: 3, pre_d5231_done_while_busy_episodes_delegated: 2, pre_d5231_done_while_busy_seconds: 18,
       compaction_done_badges: 1,
       delegated_ends_with_done: 1, delegated_ends_with_no_done: 1,
@@ -376,32 +454,38 @@ describe('measure-working-state.py --section pushes', () => {
     push('p-turn', T);
     sess(2, 'p-compact', [{ at: T - 30_000, kind: 'end' }, { at: T + 600_000 - 20_000, kind: 'compact' }, { at: T + 600_000 - 19_000, kind: 'summary' }]);
     push('p-compact', T + 600_000);
-    sess(3, 'p-mid', [{ at: T + 1_200_000 - 5_000, kind: 'tool' }, { at: T + 1_200_000 - 3_000, kind: 'result' }, { at: T + 1_200_000 + 30_000, kind: 'tool' }]);
+    // A subagent's end_turn (a sidechain row) inside the unfinished main turn does not end it.
+    sess(3, 'p-mid', [{ at: T + 1_200_000 - 5_000, kind: 'tool' }, { at: T + 1_200_000 - 3_000, kind: 'result' },
+      { at: T + 1_200_000 - 1_000, kind: 'side' }, { at: T + 1_200_000 + 30_000, kind: 'tool' }]);
     push('p-mid', T + 1_200_000);
     sess(4, 'p-restart', [{ at: T + 1_800_000 - 50_000, kind: 'tool' }]);
     push('p-restart', T + 1_800_000);
-    const C = T + 2_400_000;                       // the overload cluster: five sessions inside 3 s
-    for (let i = 0; i < 4; i++) { sess(10 + i, `p-over-${i}`, [{ at: C - 40_000, kind: 'tool' }]); push(`p-over-${i}`, C + i * 500); }
+    const C = T + 2_400_000;                       // the overload cluster: exactly OVERLOAD_N (4) sessions inside 3 s
+    for (let i = 0; i < 3; i++) { sess(10 + i, `p-over-${i}`, [{ at: C - 40_000, kind: 'tool' }]); push(`p-over-${i}`, C + i * 500); }
     sess(14, 'p-over-real', [{ at: C - 2_000, kind: 'end' }]);
     push('p-over-real', C + 1_000);
     row('p-none', sidOf(20));                      // a row with no transcript
     push('p-none', T + 3_000_000);
-    sess(21, 'p-unsure', [{ at: T + 3_600_000 - 50_000, kind: 'tool' }]);
+    sess(21, 'p-unsure', [{ at: T + 3_600_000 - 50_000, kind: 'tool' }]);   // its session also ended 5 h earlier: no restart
     push('p-unsure', T + 3_600_000);
+    sess(23, 'p-slop', [{ at: T + 4_800_000 + 3_000, kind: 'end' }]);       // written 3 s after the push: still before it
+    push('p-slop', T + 4_800_000);
+    sess(24, 'p-late', [{ at: T + 5_400_000 + 5_400, kind: 'end' }]);       // 5.4 s after (the stamp's fraction counts): after
+    push('p-late', T + 5_400_000);
     sess(22, 'p-api', [{ at: T + 4_200_000 - 4_000, kind: 'apierror' }]);   // a turn ended by an API error is a turn end
     push('p-api', T + 4_200_000);
     push('p-turn', T - 3 * 86_400_000);            // outside the window
     events.push({ seq: 99, at: T, kind: 'mail', sessionId: 'p-turn', title: SENTINEL_SUBJECT, body: SENTINEL_SUBJECT, runId: null });
     const feed = writeJson('feed.json', { events });
-    const j = journalFile([jEnd((T + 1_800_000 - 20_000) / 1000, 'p-restart')]);
+    const j = journalFile([jEnd((T + 1_800_000 - 20_000) / 1000, 'p-restart'), jEnd((T + 3_600_000 - 5 * 3_600_000) / 1000, 'p-unsure')]);
     const since = local(T - 86_400_000), until = local(T + 86_400_000);
     const r = run(['--section', 'pushes', '--feed', feed, '--journal', j, '--since', since, '--until', until, '--json']);
     expect(r.status, r.stderr).toBe(0);
     const s = (JSON.parse(r.stdout) as Record<string, Record<string, unknown>>)['pushes']!;
     expect(s).toMatchObject({
-      finished_pushes: 12, push_turn_end: 3, push_compaction_only: 1, push_mid_turn: 1, push_restart: 1,
-      push_overload: 4, push_uncertain: 1, push_unclassifiable: 1,
-      push_false: 7, push_classifiable: 10, push_false_share: 0.7, push_false_per_day: 3.5,
+      finished_pushes: 13, push_turn_end: 4, push_compaction_only: 1, push_mid_turn: 1, push_restart: 1,
+      push_overload: 3, push_uncertain: 2, push_unclassifiable: 1,
+      push_false: 6, push_classifiable: 10, push_false_share: 0.6, push_false_per_day: 3,
       push_restart_rule: 'journal read',
     });
     for (const leak of [SENTINEL, SENTINEL_SUBJECT, 'p-turn', 'p-over', sidOf(1), home]) expect(r.stdout).not.toContain(leak);
@@ -414,27 +498,32 @@ describe('measure-working-state.py --section deaths / spawn', () => {
     const D0 = Date.UTC(2026, 9, 10, 0, 0, 0);
     const s = (ms: number): number => ms / 1000;
     const e1 = D0 + 3_600_000, e2 = D0 + 7_200_000, e3 = D0 + 10_800_000, e4 = D0 + 86_400_000 + 3_600_000;
+    const e5 = D0 + 86_400_000 + 5 * 3_600_000;
     const j = journalFile([
       jKill(s(e1 - 5_000), 'p1'), jFailed(s(e1 - 4_000), 'p1'), jEnd(s(e1), 'lane-a-project-a'),
       jKill(s(e1 + 60_000), 'p5'),                                   // inside 120 s after a restart
       jKill(s(e2 - 10_000), 'p2'), jEnd(s(e2), 'lane-a-project-b'),  // OOM-associated, no Failed line
       jKill(s(e3 - 30_000), 'p3'), jEnd(s(e3), 'lane-a-project-a'),  // the kill is 30 s earlier: not associated
       jEnd(s(e4), 'project-a-quiet-basin'),
+      // Two pane-scope kills before one end: the LATER one is the death's, and its Failed line pairs.
+      jKill(s(e5 - 12_000), 'p6'), jKill(s(e5 - 3_000), 'p7'), jFailed(s(e5 - 2_000), 'p7'), jEnd(s(e5), 'lane-b-project-e'),
       jEnd(s(D0 - 86_400_000), 'lane-a-project-a'),                  // outside the window
       { at: s(e2 + 5_000), MESSAGE: SENTINEL, _SYSTEMD_USER_UNIT: 'claude-session@lane-a-project-a.service' },
     ]);
     swapLog([
       [e1 - 300_000, 'redrive lane-a-project-a: the transcript’s newest turn is the unsubmitted resume pair after 20s; typing the prompt [wrapper=lane-a]'],
       [e4 + 3_600_000, 'redrive project-a-quiet-basin: the transcript’s newest turn is the unsubmitted resume pair after 20s; typing the prompt [wrapper=lane-a]'],
+      // ANOTHER session ends 2 min after this re-drive: not this re-drive's loop.
+      [e2 - 120_000, 'redrive lane-a-project-c: the transcript’s newest turn is the unsubmitted resume pair after 20s; typing the prompt [wrapper=lane-a]'],
     ]);
     const r = run(['--section', 'deaths', '--journal', j, '--since', '2026-10-10', '--until', '2026-10-12', '--json']);
     expect(r.status, r.stderr).toBe(0);
     const d = (JSON.parse(r.stdout) as Record<string, Record<string, unknown>>)['deaths']!;
     expect(d).toMatchObject({
-      session_ends: 4, session_ends_per_day: 2, session_ends_by_day: { '2026-10-10': 3, '2026-10-11': 1 },
-      oom_associated: 2, oom_associated_failed_line: 1, oom_associated_no_failed_line: 1,
-      pane_scope_oom_kills: 4, oom_kills_within_120s_after_a_restart: 1,
-      redrives: 2, redrives_followed_by_an_end_within_10m: 1,
+      session_ends: 5, session_ends_per_day: 2.5, session_ends_by_day: { '2026-10-10': 3, '2026-10-11': 2 },
+      oom_associated: 3, oom_associated_failed_line: 2, oom_associated_no_failed_line: 1,
+      pane_scope_oom_kills: 6, oom_kills_within_120s_after_a_restart: 1,
+      redrives: 3, redrives_followed_by_an_end_within_10m: 1,
     });
     for (const leak of [SENTINEL, 'lane-a-project', 'quiet-basin']) expect(r.stdout).not.toContain(leak);
   });
@@ -448,6 +537,8 @@ describe('measure-working-state.py --section deaths / spawn', () => {
     });
     const j = journalFile([
       jStart((R - 3_000) / 1000, 'lane-a-project-a'), jStart((R - 4_200) / 1000, 'lane-a-project-b'),
+      // The unit's own stop job, later than its start: not a start (JOB_TYPE says so).
+      { ...jStart((R - 1_000) / 1000, 'lane-a-project-b'), JOB_TYPE: 'stop', MESSAGE: 'Stopping claude-session.' },
       jStart((R - 600_000) / 1000, 'project-a-quiet-basin'), jStart((R - 9_000) / 1000, 'project-a-quiet-basin'),
     ]);
     const s = json(['--section', 'spawn', '--journal', j])['spawn']!;
@@ -473,19 +564,38 @@ describe('measure-working-state.py --section swaps', () => {
       [T - 20_000, 'auto-rescue lane-b-project-d: lane-a (blocked) -> lane-b [home=lane-a]'], act(4, 'lane-b-project-d', T),
       act(5, 'lane-b-project-e', T),
       [T - 400_000, 'auto-home lane-b-project-f: lane-a -> lane-b [home=lane-b]'], act(6, 'lane-b-project-f', T),
-      [T, 'swap-refused lane-b-project-e: lane-a -> lane-b (session-busy)'],
-      [T, 'swap-refused lane-b-project-f: lane-a -> lane-b (session-busy)'],
-      [T, 'swap-refused lane-b-project-f: lane-a -> lane-b (status-unknown)'],
+      // Two decisions before one act: the LATER one names its kind (rescue, not auto-home).
+      [T - 200_000, 'auto-home lane-b-project-g: lane-a -> lane-b [home=lane-b]'],
+      [T - 100_000, 'auto-rescue lane-b-project-g: lane-a (blocked) -> lane-b [home=lane-a]'], act(7, 'lane-b-project-g', T),
+      act(8, 'lane-b-project-h', T + 86_400_000),                     // AT --until: outside (the bound is exclusive)
+      ...REFUSALS.map(([, tpl]): [number, string] => [T, `swap-refused lane-b-project-e: lane-a -> lane-b (${refusal(tpl)})`]),
+      [T, `swap-refused lane-b-project-f: lane-a -> lane-b (${SENTINEL} under ${home})`],    // no known shape: other
+      [T, 'swap-refused lane-b-project-f: not the act shape'],                               // other
       act(1, 'lane-a-project-a', T - 30 * 86_400_000),                // outside the window
     ]);
-    const s = json(['--section', 'swaps', '--since', local(T - 86_400_000), '--until', local(T + 86_400_000)])['swaps']!;
+    const r = run(['--section', 'swaps', '--since', local(T - 86_400_000), '--until', local(T + 86_400_000), '--json']);
+    expect(r.status, r.stderr).toBe(0);
+    const s = (JSON.parse(r.stdout) as Record<string, Record<string, unknown>>)['swaps']!;
     expect(s).toMatchObject({
       'swaps_auto-home': 2, 'swaps_auto-home_cut_output': 1, 'swaps_auto-home_no_transcript': 0,
-      swaps_rescue: 2, swaps_rescue_cut_output: 1,
+      swaps_rescue: 3, swaps_rescue_cut_output: 1, swaps_rescue_no_transcript: 1,
       swaps_manual: 2, swaps_manual_cut_output: 1, swaps_manual_no_transcript: 1,
       'swaps_auto-pool': 0,
-      swap_refusals_by_reason: { 'session-busy': 2, 'status-unknown': 1 },
     });
+    // A FIXED key set: every reason is one of the table's words or `other`; the reason's own text never leaves.
+    expect(s['swap_refusals_by_reason']).toEqual({ 'no-transcript': 2, 'copy-failed': 2, 'background-job': 1,
+      'left-roster': 1, 'roster-unreadable': 1, other: 2 });
+    for (const leak of [SENTINEL, home, '.ccrc', 'accounts.sh', sidOf(9), 'b77', 'lane-b-project']) expect(r.stdout).not.toContain(leak);
+  });
+
+  it('each refusal word reads a sentence ccd’s _swap_refuse is actually called with', () => {
+    const ccd = fs.readFileSync(CCD, 'utf8');
+    expect(ccd).toContain('echo "$(date \'+%F %T\') swap-refused $id: $cur -> $target ($reason)" >> "$REG/swap.log"');
+    for (const [word, tpl] of REFUSALS) expect(ccd, word).toContain(tpl);
+    const src = fs.readFileSync(SCRIPT, 'utf8');
+    const words = [...(/^REFUSAL_REASONS = \(([\s\S]*?)\n\)/m.exec(src)?.[1] ?? '').matchAll(/\("([a-z-]+)", r"/g)].map((m) => m[1]);
+    expect(words, 'guards the guard: the table is read').toHaveLength(5);
+    expect(new Set(REFUSALS.map(([w]) => w))).toEqual(new Set(words));
   });
 });
 
@@ -528,17 +638,32 @@ describe('measure-working-state.py: read-only, and nothing but counts leaves', (
     hook('lane-a-project-a', sidOf(1), fiveKinds(), { updatedAt: NOW - MIN });
     live(101, sidOf(1), 'busy', NOW - 10 * MIN);
     transcript(sidOf(1), [{ at: NOW - MIN - 10_000, kind: 'end' }]);
-    swapLog([[NOW - MIN, `swap lane-a-project-a: lane-a -> lane-b (uuid ${sidOf(1)})`]]);
+    swapLog([[NOW - MIN, `swap lane-a-project-a: lane-a -> lane-b (uuid ${sidOf(1)})`],
+      ...REFUSALS.map(([, tpl]): [number, string] => [NOW - MIN, `swap-refused lane-a-project-a: lane-a -> lane-b (${refusal(tpl)})`])]);
     const feed = writeJson('feed.json', { events: [{ seq: 1, at: NOW - MIN, kind: 'done', sessionId: 'lane-a-project-a', title: SENTINEL_SUBJECT, body: SENTINEL_SUBJECT, runId: null }] });
     const j = journalFile([jEnd((NOW - MIN) / 1000, 'lane-a-project-a')]);
     const mail = writeJson('mail.json', { ok: true, mail: [{ id: 1, at: NOW - MIN, fromId: 'operator', toId: 'lane-a-project-a', subject: `${STALL_CHECK_PREFIX} ${SENTINEL_SUBJECT}` }] });
-    const snap = (): string => execFileSync('bash', ['-c', 'cd "$1" && find . -type f -print0 | sort -z | xargs -0 shasum && find . -printf "%p %T@\\n" 2>/dev/null | sort || find . -exec stat -f "%N %m" {} + | sort', '_', home], { encoding: 'utf8' });
+    // Every entry's path, mtime (ns) and, for a file, a sha256 — in Node, so the macOS legs check mtimes too.
+    const snap = (): string[] => {
+      const out: string[] = [];
+      const walk = (dir: string): void => {
+        for (const name of fs.readdirSync(dir).sort()) {
+          const p = path.join(dir, name);
+          const st = fs.lstatSync(p, { bigint: true });
+          out.push(`${path.relative(home, p)} ${st.mtimeNs} ${st.isFile() ? createHash('sha256').update(fs.readFileSync(p)).digest('hex') : '-'}`);
+          if (st.isDirectory()) walk(p);
+        }
+      };
+      walk(home);
+      return out;
+    };
     const before = snap();
+    expect(before.length, 'guards the guard: the snapshot sees the populated HOME').toBeGreaterThan(10);
     const r = run(['--feed', feed, '--journal', j, '--mail', mail]);
     expect(r.status, r.stderr).toBe(0);
     for (const sec of ['snapshot', 'pushes', 'deaths', 'swaps', 'interrupts', 'stall', 'spawn']) expect(r.stdout).toContain(`== ${sec}\n`);
-    expect(snap()).toBe(before);
-    for (const leak of [SENTINEL, SENTINEL_SUBJECT, 'lane-a-project-a', sidOf(1), home, '/rig/repo']) expect(r.stdout).not.toContain(leak);
+    expect(snap()).toEqual(before);
+    for (const leak of [SENTINEL, SENTINEL_SUBJECT, 'lane-a-project-a', sidOf(1), home, '/rig/repo', sidOf(9), 'accounts.sh', 'b77']) expect(r.stdout).not.toContain(leak);
     expect(r.stdout).toMatch(/^swaps_manual_cut_output: 1$/m);
   });
 
