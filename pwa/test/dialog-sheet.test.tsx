@@ -4,6 +4,7 @@
 // the sheet open on the store's dialog; scrim cancel only hides (the store
 // keeps signalling) and is refused while an answer is in flight.
 import { readFileSync } from 'node:fs';
+import type { DialogAnswered } from '../../shared/api';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
@@ -22,6 +23,7 @@ import { createSessionStore } from '../src/stores/session';
 import { atBlock, declValue, effectiveValue, norm, ruleIn, selectorsOf } from './cssRule';
 import {
   CACHING_TRACING,
+  CC296_LONG,
   COLOUR_FEATURES,
   DRINK_FEATURES_TOOLS,
   FOUR_Q,
@@ -116,7 +118,7 @@ describe('DialogSheet (parsed)', () => {
   });
 
   it('stays open after a successful answer until dialog_cleared closes it', async () => {
-    vi.spyOn(api, 'answerDialog').mockResolvedValue(undefined);
+    vi.spyOn(api, 'answerDialog').mockResolvedValue({ ok: true });
     const { store } = renderWithDialog(parsedDialog());
 
     fireEvent.click(screen.getByRole('button', { name: 'Expand–contract' }));
@@ -1446,8 +1448,8 @@ describe('own words go through the free-text row (D-5090)', () => {
   const deferred = () => {
     let resolve!: () => void;
     let reject!: (err: unknown) => void;
-    const promise = new Promise<void>((res, rej) => {
-      resolve = res;
+    const promise = new Promise<DialogAnswered>((res, rej) => {
+      resolve = () => res({ ok: true });
       reject = rej;
     });
     return { promise, resolve, reject };
@@ -1707,7 +1709,7 @@ describe('own words go through the free-text row (D-5090)', () => {
   });
 
   it('ok clears the text, and question 2 is answerable', async () => {
-    vi.spyOn(api, 'answerDialogText').mockResolvedValue(undefined);
+    vi.spyOn(api, 'answerDialogText').mockResolvedValue({ ok: true });
     const q1 = pane('cc300-ask-same-labels-q1');
     const { store } = renderAsk(CACHING_TRACING, q1);
     type('only in production');
@@ -1726,7 +1728,7 @@ describe('own words go through the free-text row (D-5090)', () => {
   it('an answer that landed waits for the pane to move on, through a late frame of the typed row', async () => {
     // Like a tapped option: the sheet stays busy after ok until the pane paints the next screen. A capture of the
     // typed row taken before Enter can arrive after the call answered; it is this send, not other text.
-    vi.spyOn(api, 'answerDialogText').mockResolvedValue(undefined);
+    vi.spyOn(api, 'answerDialogText').mockResolvedValue({ ok: true });
     const { store } = renderAsk(CACHING_TRACING, pane('cc300-ask-same-labels-q2'));
     type(TEXT);
     fireEvent.click(send());
@@ -1746,7 +1748,7 @@ describe('own words go through the free-text row (D-5090)', () => {
   it('an answer that landed stops waiting on another question, even one whose row reads the same text', async () => {
     // Only this send's OWN typed row keeps the sheet waiting: the same text in another question's free-text row is
     // that question's. DERIVED: the recorded typed row (`cc300-ask-freetext-walk-3-typed`) under Caching's title.
-    vi.spyOn(api, 'answerDialogText').mockResolvedValue(undefined);
+    vi.spyOn(api, 'answerDialogText').mockResolvedValue({ ok: true });
     const { store } = renderAsk(CACHING_TRACING, pane('cc300-ask-same-labels-q2'));
     type(TEXT);
     fireEvent.click(send());
@@ -2012,8 +2014,8 @@ describe('multiSelect boxes (D-5091)', () => {
   const refused = (code: string) => new ApiError(409, { ok: false, error: code });
   const deferred = () => {
     let resolve!: () => void;
-    const promise = new Promise<void>((res) => {
-      resolve = res;
+    const promise = new Promise<DialogAnswered>((res) => {
+      resolve = () => res({ ok: true });
     });
     return { promise, resolve };
   };
@@ -2856,5 +2858,167 @@ describe('the full question, behind its own disclosure', () => {
     // The LEGEND names the destination, like every other toggle in this app.
     fireEvent.click(screen.getByRole('button', { name: 'Hide full question' }));
     expect(screen.queryByText(/Something the parse missed/)).toBeNull();
+  });
+});
+
+// The 2026-10-16 report: a two-question ask answered from the sheet, the last answer landed, and the sheet showed
+// "Open terminal to answer" where the review's Submit belonged. Every screen here is the recorded Claude Code 2.1.296
+// ask (`cc296-ask-2q-long-*`, unrelated made-up content) and its envelope (`CC296_LONG`).
+describe('the sheet can always submit (the 2026-10-16 report)', () => {
+  const q1 = (): Dialog => pane('cc296-ask-2q-long-q1');
+  const q2 = (): Dialog => pane('cc296-ask-2q-long-q2');
+  const review = (): Dialog => pane('cc296-ask-2q-long-review');
+  const CTA = /Open terminal to answer/;
+  const render296 = (first: Dialog | null) => {
+    const store = createSessionStore(SESSION_ID, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } });
+    act(() => {
+      if (first) store.getState().apply({ type: 'dialog', dialog: first });
+      store.getState().apply({ type: 'ask', ask: CC296_LONG, key: null });
+    });
+    render(
+      <>
+        <DialogSheet id={SESSION_ID} store={store} onOpenTerminal={vi.fn()} />
+        <ToastHost />
+      </>,
+    );
+    return store;
+  };
+
+  it('reproduces the report: Q2 answered, then a poll with no menu — the envelope sheet falls to the terminal CTA', async () => {
+    vi.spyOn(api, 'answerDialog').mockResolvedValue({ ok: true });
+    const store = render296(q2());
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /^Borrow and transport/ }));
+    });
+    act(() => store.getState().apply({ type: 'dialog_cleared' }));
+    // What the operator saw. This is the state the answer's `next` (below) moves the sheet out of.
+    expect(screen.getByRole('button', { name: CTA })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Submit answers/ })).toBeNull();
+  });
+
+  it('the answer\'s next screen opens the review even after that poll (decision ask-answer-returns-next-screen)', async () => {
+    let land!: (v: DialogAnswered) => void;
+    vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise<DialogAnswered>((r) => { land = r; }));
+    const store = render296(q2());
+    fireEvent.click(screen.getByRole('button', { name: /^Borrow and transport/ }));
+    act(() => store.getState().apply({ type: 'dialog_cleared' }));
+    await act(async () => land({ ok: true, next: review() }));
+    expect(screen.getByRole('button', { name: /^Submit answers/ })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: CTA })).toBeNull();
+  });
+
+  it('the answer\'s next screen opens the review with no frame from the stream at all', async () => {
+    vi.spyOn(api, 'answerDialog').mockResolvedValue({ ok: true, next: review() });
+    render296(q2());
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /^Borrow and transport/ }));
+    });
+    expect(screen.getByRole('button', { name: /^Submit answers/ })).toBeEnabled();
+  });
+
+  it('a frame the stream delivered after the answer was sent wins over the answer\'s next', async () => {
+    let land!: (v: DialogAnswered) => void;
+    vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise<DialogAnswered>((r) => { land = r; }));
+    const store = render296(q1());
+    fireEvent.click(screen.getByRole('button', { name: /^Split shifts/ }));
+    act(() => store.getState().apply({ type: 'dialog', dialog: review() }));
+    await act(async () => land({ ok: true, next: q2() }));
+    expect(store.getState().dialog?.id).toBe(review().id);
+  });
+
+  it('hidden on Q2, the review still opens: dismissal is per screen (decision ask-envelope-dismissal-per-screen)', async () => {
+    const store = render296(q2());
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
+    await act(async () => {});
+    expect(screen.queryByRole('dialog')).toBeNull();
+    // A poll that saw no menu is no screen: it never re-opens a hidden sheet on its own.
+    act(() => store.getState().apply({ type: 'dialog_cleared' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    act(() => store.getState().apply({ type: 'dialog', dialog: review() }));
+    expect(screen.getByRole('button', { name: /^Submit answers/ })).toBeEnabled();
+  });
+
+  // Decision `ask-envelope-dismissal-per-screen`, keyed on the QUESTION, never the raw id: a parsed id hashes every
+  // row's label, so typing into the free-text row in the terminal repaints the same question under a new id, and a
+  // mid-redraw grab of it comes back unparsed under another. Neither is a different screen.
+  const hideOn = async (store: ReturnType<typeof render296>) => {
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
+    await act(async () => {});
+    expect(screen.queryByRole('dialog')).toBeNull();
+    return store;
+  };
+
+  it('hidden on Q2, typing into its free-text row in the terminal keeps it hidden', async () => {
+    const store = await hideOn(render296(q2()));
+    const d = q2();
+    const free = d.options.length - 1; // the free-text row sits above "Chat about this"
+    const typed = { ...d, id: 'typed000000', options: d.options.map((o, i) => (i === free - 1 ? { ...o, label: 'own words here' } : o)) };
+    act(() => store.getState().apply({ type: 'dialog', dialog: typed }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('hidden on Q2, an unparsed repaint of it keeps it hidden', async () => {
+    const store = await hideOn(render296(q2()));
+    act(() => store.getState().apply({ type: 'dialog', dialog: { ...q2(), parsed: false, id: 'deadbeef', options: [] } }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    // Nor does a screen the sheet cannot place at all.
+    act(() => store.getState().apply({ type: 'dialog', dialog: { ...q2(), parsed: false, id: 'cafef00d', title: '', options: [] } }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('hidden on an unparsed grab of Q2, the parsed Q2 keeps it hidden: the title names the question', async () => {
+    const store = render296({ ...q2(), parsed: false, id: 'deadbeef', options: [] });
+    await hideOn(store);
+    act(() => store.getState().apply({ type: 'dialog', dialog: q2() }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('hidden on Q1, the next question opens it', async () => {
+    const store = await hideOn(render296(q1()));
+    act(() => store.getState().apply({ type: 'dialog', dialog: q2() }));
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+  });
+
+  it('a review with a row painted under it still offers exactly Submit and Cancel (decision ask-review-lenient-arm)', () => {
+    const r = review();
+    render296({ ...r, options: [...r.options, { index: 3, label: '🤖 Opus · xhigh' }] });
+    expect(screen.getByRole('button', { name: /^Submit answers/ })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /^Cancel/ })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: /Opus/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: CTA })).toBeNull();
+  });
+
+  it('on the review, 1 submits and 2 cancels at once, as in Claude Code (decision ask-review-digit-keys)', async () => {
+    const spy = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    render296(review());
+    // The Cancel row keeps saying what it does.
+    expect(screen.getByText(/Declines every question in this ask/)).toBeInTheDocument();
+    fireEvent.keyDown(document.body, { key: '2' });
+    expect(spy).toHaveBeenCalledWith(SESSION_ID, review().id, 2);
+    // One send at a time: a second digit while it is in flight sends nothing.
+    fireEvent.keyDown(document.body, { key: '1' });
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it('digit 1 on the review submits; a digit typed into a text field, or with a modifier, is text', () => {
+    const spy = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    render296(review());
+    const field = document.createElement('textarea');
+    document.body.appendChild(field);
+    fireEvent.keyDown(field, { key: '2' });
+    fireEvent.keyDown(document.body, { key: '2', metaKey: true });
+    expect(spy).not.toHaveBeenCalled();
+    fireEvent.keyDown(document.body, { key: '1' });
+    expect(spy).toHaveBeenCalledWith(SESSION_ID, review().id, 1);
+    field.remove();
+  });
+
+  // Decision `ask-sheet-keyboard-model` (PR 2) supersedes this case's first form ("digits on a question are not the
+  // review's keys"): on a question a digit answers that option at once, as Claude Code's does.
+  it('a digit on a question answers that option, as in Claude Code', () => {
+    const spy = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    render296(q2());
+    fireEvent.keyDown(document.body, { key: '2' });
+    expect(spy).toHaveBeenCalledWith(SESSION_ID, q2().id, 2);
   });
 });

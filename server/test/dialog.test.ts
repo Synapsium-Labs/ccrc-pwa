@@ -3,6 +3,7 @@ import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { editHintShown, freeTextRow, hasMenu, parseDialog, paneOptionRows, paneState, turnRunning } from '../src/pane/dialog.js';
+import { reviewRows } from '../../shared/ask-menu.js';
 import { FleetWatcher } from '../src/watch.js';
 import { Bus } from '../src/bus.js';
 import { Tmux, type Runner } from '../src/exec.js';
@@ -1501,5 +1502,36 @@ describe('the sheet half\'s hand-built readings are parseDialog\'s (D-5089)', ()
       const { raw: _raw, ...fresh } = d!;
       expect(fresh, name).toEqual(reading);
     }
+  });
+});
+
+// Decision `ask-review-lenient-arm`: the review screen's two rows found by label (`reviewRows`, shared/ask-menu.ts),
+// strict first, then lenient on any screen that paints the ready line. Panes: a recorded Claude Code 2.1.296 ask,
+// in unrelated made-up content (`cc296-ask-2q-long-*`), and the 2.1.300 reviews.
+describe('reviewRows: the review screen and its Submit and Cancel rows', () => {
+  const panes = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'panes');
+  const read = (name: string): string => readFileSync(path.join(panes, `${name}.txt`), 'utf8');
+  const review = read('cc296-ask-2q-long-review');
+
+  it('every recorded review, 2.1.296 and 2.1.300, by the strict arm', () => {
+    for (const name of ['cc296-ask-2q-long-review', 'cc300-ask-review-same-labels', 'cc300-ask-review-4q-long', 'cc300-ask-review-skipped']) {
+      expect(reviewRows(parseDialog(read(name))), name).toEqual({ submit: 1, cancel: 2 });
+    }
+  });
+
+  it('a rule and a status row painted under the rows (DERIVED): parsed as a third option, still the review', () => {
+    const lines = review.replace(/\s+$/, '').split('\n');
+    const pane = [...lines, '─'.repeat(220), '  🤖 Opus · xhigh', ''].join('\n');
+    const d = parseDialog(pane)!;
+    expect(d.options.map((o) => o.label)).toEqual(['Submit answers', 'Cancel', '🤖 Opus · xhigh']);
+    expect(reviewRows(d)).toEqual({ submit: 1, cancel: 2 });
+  });
+
+  it('never a question screen, and never a screen without the ready line', () => {
+    expect(reviewRows(parseDialog(read('cc296-ask-2q-long-q1')))).toBeNull();
+    expect(reviewRows(parseDialog(read('cc296-ask-2q-long-q2')))).toBeNull();
+    const noReady = review.replace('Ready to submit your answers?', '');
+    expect(reviewRows(parseDialog(noReady))).toBeNull();
+    expect(reviewRows(null)).toBeNull();
   });
 });

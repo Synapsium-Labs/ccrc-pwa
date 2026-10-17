@@ -10072,6 +10072,19 @@ export interface CollectLaneConfirmRequired {
   };
 }
 
+/** The 200 answer of the three answer routes (`POST /api/sessions/:id/dialog`, `/dialog/text`, `/dialog/multi`):
+ *  the screen the pane settled on after the answer's last key (decision `ask-answer-returns-next-screen`).
+ *  - `next` a Dialog: the pane moved to that menu (the next question, or the review screen an ask ends on);
+ *  - `next: null`: no menu is on screen any more (the ask was submitted or declined);
+ *  - `next` absent: the pane had not settled on another screen within the route's budget, or the route predates this
+ *    field. The caller then waits for the session stream's next `dialog` frame, as it always did.
+ *  Additive: a client that ignores it keeps the old behaviour. The answering sheet applies it at once, so the next
+ *  screen never waits on the stream's 2 s poll, or on a poll that captured nothing (the 2026-10-16 report). */
+export interface DialogAnswered {
+  readonly ok: true;
+  readonly next?: Dialog | null;
+}
+
 /** Every refusal `POST /api/sessions/:id/dialog` answers with (`answerDialog`, `server/src/inject/send.ts`), each a 409.
  *  Spelled once, as a total table's keys, and the list derived: a code that leaves the union and stays here, or joins it
  *  without a row here, is a compile error.
@@ -10172,6 +10185,66 @@ const DIALOG_MULTI_REFUSE_CODE_MAP: Readonly<Record<DialogMultiRefuseCode, true>
 };
 export const DIALOG_MULTI_REFUSE_CODES: readonly DialogMultiRefuseCode[] =
   Object.keys(DIALOG_MULTI_REFUSE_CODE_MAP) as DialogMultiRefuseCode[];
+
+/** The most tabs `POST /api/sessions/:id/dialog/tab` will count to (decision `ask-dialog-tab-route`). Claude Code's
+ *  AskUserQuestion takes at most four questions; this is slack for a build that takes more, not a measured limit. */
+export const DIALOG_TAB_MAX = 16;
+
+/** Where `POST /api/sessions/:id/dialog/tab` moves the pane: one tab back or on (`prev`/`next`, the arrow keys), to the
+ *  review screen (`submit`, the `✔ Submit` tab), or to question tab `k` (1-based, a tab-strip chip). */
+export type DialogTabTarget = 'prev' | 'next' | 'submit' | number;
+
+/** The body of `POST /api/sessions/:id/dialog/tab`. `from` is the 1-based tab the caller believes is up, sent with a
+ *  numbered target: the pane marks its active tab by colour alone, so a plain capture cannot say. The server ignores it
+ *  on the review screen, which it can tell, and every step it takes is proved by a new screen either way. */
+export interface DialogTabRequest {
+  readonly dialogId: string;
+  readonly to: DialogTabTarget;
+  readonly from?: number;
+}
+
+const isTabNumber = (n: unknown): n is number =>
+  typeof n === 'number' && Number.isInteger(n) && n >= 1 && n <= DIALOG_TAB_MAX;
+
+/** Is `body` a `DialogTabRequest` the route will act on? A numbered target needs `from`, unless the pane is on the
+ *  review (the route checks that once it has captured). The route answers 400 `bad-request` otherwise. */
+export function isDialogTab(body: unknown): body is DialogTabRequest {
+  if (typeof body !== 'object' || body === null) return false;
+  const { dialogId, to, from } = body as Record<string, unknown>;
+  if (typeof dialogId !== 'string' || dialogId === '') return false;
+  if (from !== undefined && !isTabNumber(from)) return false;
+  return to === 'prev' || to === 'next' || to === 'submit' || isTabNumber(to);
+}
+
+/** Every refusal `POST /api/sessions/:id/dialog/tab` answers with (`moveDialogTab`, `server/src/inject/send.ts`), each a
+ *  409 except `bad-request` (400). No refusal ever pressed Enter: a tab move sends arrows only.
+ *  - `bad-request`: `isDialogTab` refuses the body, or a numbered target came with no `from` on a question screen, or
+ *    names a tab the row does not have. Nothing was pressed.
+ *  - `not-alive`: the pane could not be captured.
+ *  - `stale-dialog`: no menu is on screen, or not the one the caller was shown. Nothing was pressed.
+ *  - `no-tabs`: the screen paints no tab row (`parseAskTabs`): a one-question single-select ask, or no ask at all.
+ *  - `unparsed-dialog`: the screen did not parse and is no multiSelect question either, so nothing proves where the
+ *    cursor is. Nothing was pressed.
+ *  - `walk-failed`: the cursor sat on the free-text row or below it, where Claude Code swallows ←/→ (measured on 2.1.296
+ *    and 2.1.302), and a walk Up did not land it on row 1. No arrow across tabs was pressed.
+ *  - `no-move`: an arrow was pressed and no capture showed another screen within the budget: an edge (← on the first
+ *    question, measured as a no-op), a pane that ignored it, or two tabs that read exactly alike.
+ *  - `menu-gone`: a capture after an arrow showed no menu at all. */
+export type DialogTabRefuseCode =
+  | 'bad-request' | 'not-alive' | 'stale-dialog' | 'no-tabs' | 'unparsed-dialog' | 'walk-failed' | 'no-move'
+  | 'menu-gone';
+const DIALOG_TAB_REFUSE_CODE_MAP: Readonly<Record<DialogTabRefuseCode, true>> = {
+  'bad-request': true, 'not-alive': true, 'stale-dialog': true, 'no-tabs': true, 'unparsed-dialog': true,
+  'walk-failed': true, 'no-move': true, 'menu-gone': true,
+};
+export const DIALOG_TAB_REFUSE_CODES: readonly DialogTabRefuseCode[] =
+  Object.keys(DIALOG_TAB_REFUSE_CODE_MAP) as DialogTabRefuseCode[];
+
+/** The 200 answer of `POST /api/sessions/:id/dialog/tab`: the screen the pane settled on, always a menu. */
+export interface DialogTabMoved {
+  readonly ok: true;
+  readonly next: Dialog;
+}
 
 // ── The server's capability words (D-5232's mechanism; plan 2026-10-16, Task 9b; spec §6.1) ─────────────────────
 // APPENDED at the very end, because README and the specs cite this file by line.

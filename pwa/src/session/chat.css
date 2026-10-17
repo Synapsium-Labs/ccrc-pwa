@@ -1724,3 +1724,47 @@ button.metachip:active {
 .history-row--gap, .history-gap { color: var(--status-dead-text); font-size: var(--fs-xs); }
 .history-loading, .history-empty, .history-error { color: var(--ink-secondary); padding: var(--sp-3) 0; }
 
+
+/* The ask's tab strip (decision `ask-tab-strip`, `AskParts.tsx`'s `AskTabs`): one chip per question, then ✔ Submit.
+   One row at every width: a phone scrolls the chips sideways INSIDE the strip (`overflow-x: auto`, and
+   `overscroll-behavior-x: contain` so a fling never drags the sheet or the page), and each chip is 44px tall, the touch
+   floor (`--tap-min`). The 2px inset keeps the focus ring inside the strip's clip. Both skins colour it through their
+   own tokens. */
+.ask-tabs {
+  display: flex;
+  gap: var(--sp-2);
+  margin: 0 0 var(--sp-3);
+  padding: 2px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+}
+.ask-tab {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-height: var(--tap-min);
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-full);
+  background: var(--bg-surface);
+  color: var(--ink-secondary);
+  font: var(--weight-medium) var(--fs-sm) / 1 var(--family-ui);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.ask-tab[aria-current='step'] {
+  border-color: var(--accent);
+  background: var(--accent-tint);
+  color: var(--accent);
+}
+.ask-tab:disabled {
+  cursor: default;
+}
+/* A chip that waits (a send or move under way, uncommitted picks, or a tab the sheet cannot place) reads in the
+   tertiary ink, as the own-words Send does while it waits (`.dlg-reply-send:disabled`), which still clears the text
+   floor on the chip's ground; the current chip keeps its accent. */
+.ask-tab:disabled:not([aria-current]) {
+  color: var(--ink-tertiary);
+}
