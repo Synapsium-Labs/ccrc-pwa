@@ -3871,8 +3871,6 @@ describe('R89 (W1 b, coordinator 5512): an owner a pass listed is read once befo
 
 describe('R101, R102 and R106 (review F1, F2, F6): a listed owner leaves only once read durably, and once more after it goes', () => {
   const pair = [sessionOf('demo-a'), sessionOf('demo-x')];
-  const corrVerdictsFor = (corr: ReturnType<typeof vi.spyOn<typeof correlation, 'correlateDelegation'>>, adminRecord: string) =>
-    corr.mock.calls.flatMap((c, i) => (c[0].record.adminRecord === adminRecord ? [corr.mock.results[i]!.value] : []));
 
   it('R101 (F1): a read lost at the flush (the journal write fails at its first byte) keeps its owner pending: it is read again once the applier recovers, though no census names it', async () => {
     const w = world();
@@ -3921,7 +3919,8 @@ describe('R101, R102 and R106 (review F1, F2, F6): a listed owner leaves only on
     for (let i = 1; i < 6; i++) await censusPass(w, at(i), WITH_TREE);  // demo-x is in no census from here on (it ended)
     expect(w.calls.ranges, 'read once more after it went').toContain(`demo-x/${BUCKET10}.spool`);
     expect(leasesOf(w.home)).toEqual([]);
-    expect(corrVerdictsFor(corr, 'raw-tree').at(-1), 'the overlap rule decides it').toMatchObject({ kind: 'unresolved', reason: 'overlapping-listing-window' });
+    const raw = corr.mock.calls.flatMap((c, i) => (c[0].record.adminRecord === 'raw-tree' ? [corr.mock.results[i]!.value] : []));
+    expect(raw.at(-1), 'the overlap rule decides it').toMatchObject({ kind: 'unresolved', reason: 'overlapping-listing-window' });
   });
 
   it('R106 (F6): a pending owner\'s MEASURED, UNCLOSED hours veto too: an owner read just before the hour turned, whose next read throws, holds its last calls', async () => {
