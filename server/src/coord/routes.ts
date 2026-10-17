@@ -3986,6 +3986,14 @@ export function registerCoordRoutes(
       return reply.code(403).send({ ok: false, error: 'not-parent',
         detail: 'only this child\'s derived parent may pre-empt its question' });
     }
+    // D-5290: a row MINTED released (`releaseReason` set — the parent was not
+    // live, or of another project) was never held and never mailed: the
+    // operator owned it from the first tick, so late answer wins (D-5289),
+    // which reaches a row the LAPSE released, does not reach this one. No new
+    // word: `not-held` is "the row is no longer pre-emptible".
+    if (ask.releaseReason !== null) {
+      return reply.code(409).send({ ok: false, error: 'not-held' });
+    }
 
     // D-2170: re-read the child's hookstate and prove the menu on screen is
     // the INSTANCE this row was minted for — see `freshAskAt`'s own comment.

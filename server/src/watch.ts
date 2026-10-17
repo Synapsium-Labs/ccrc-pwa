@@ -2,7 +2,7 @@ import { performance } from 'node:perf_hooks';
 import type { Deps } from './server.js';
 import type { Bus } from './bus.js';
 import { assembleFleet, lifecycleInputFor, registrySecondsToMs } from './fleet.js';
-import { answeredByBody, askPushBody } from './askbody.js';
+import { answeredByBody, askPushBody, withCoordinatorBody } from './askbody.js';
 import { measuredIdentity, readRegistry, readRegistryMeasured } from './registry.js';
 import {
   accountPoolsEnforcement, poolsEnforcement, poolsWire, readObservedEpochFromRegistry, readPoolEpoch,
@@ -29,7 +29,7 @@ import { askActions, askKey } from './askkey.js';
 // module — `watch.ts` imports `assembleFleet` from it — so they now live
 // where both may read them. `ASK_SWEEP_MS` below is unaffected: it is this
 // lane's poll cadence, not a window, and this file is still its only reader.
-import { ASK_ANSWERING_MAX_MS, ASK_GRACE_MS } from './askwindow.js';
+import { ASK_ANSWERING_MAX_MS, ASK_GRACE_MS, ASK_SETTLE_TICKS } from './askwindow.js';
 import type { SessionRecord } from './registry.js';
 import type {
   ChildMark, ChildReclaimAttention, ChildReclaimGeneration, ChildReclaimKeptWord, CoordStatus, DeadCoordinatorAttention, Dialog, ExpiryAttention, FleetSession, HookAsk, HookAskQuestion,
@@ -54,7 +54,7 @@ import { landingAsk, landingVerdict, type LandingFacts } from './coord/landing.j
 import { readWorktreeRecords } from './coord/gitref.js';
 import { ccdIdForWorktree, divergences, unclaimedWorktrees, type DivergenceInput } from './divergence.js';
 import { claimExpiry, type LivenessProbe } from './coord/claims.js';
-import { measureClaimant } from './coord/reclaim.js';
+import { claimantMeasuredDead, measureClaimant } from './coord/reclaim.js';
 import {
   BACKLOG_HORIZON_MS, STALL_CHECK_PREFIX, STALL_QUIET_MS, STALL_REPLY_PREFIX, parseStallDetail, stallArmingOf,
   stallCheckMail, stallCitedCheck, stallCoordinatorSubjects, stallDeadShaped, stallDetail, stallFacts,
@@ -729,6 +729,13 @@ export class FleetWatcher {
    *  sitting on a lapsed question. Its loss on a restart is free: the operator
    *  keeps the lapse's notification, today's behaviour. */
   private lapsedAsks = new Map<string, { askId: number; ev: Parameters<FleetWatcher['pushOne']>[0] }>();
+  /** D-5290: dialogs whose FIRST raise is deferred, per child — the dialog id
+   *  and how many ticks it has been seen while the child's hookstate was not
+   *  yet `waiting` and no envelope made it answerable. Bounded by
+   *  `ASK_SETTLE_TICKS`; dropped the moment the dialog is raised or held, and
+   *  whenever it clears or is replaced. Its loss on a restart is free: a
+   *  restart re-raises nothing anyway (`heldAsks`' own note). */
+  private settlingAsks = new Map<string, { dialogId: string; ticks: number }>();
   /** Fail-shut kill switch for the hold, `$REG/asks-disabled`. Declared in
    *  Task 6 (RULING F2) so the mint fork below compiled before this method
    *  existed; now SET by `sweepAsks` below, off the same registry listing
@@ -5263,7 +5270,7 @@ export class FleetWatcher {
       measuredAt.set(id, at);
       measured.set(id, await measureClaimant({ coord, io: this.deps.io, cfg: this.deps.cfg, tmux }, id, at));
     }
-    const dead = ids.filter((id) => measured.get(id)!.state === 'dead');
+    const dead = ids.filter((id) => claimantMeasuredDead(measured.get(id)!));
     let journalOf: (id: string) => DeadCoordinatorJournal;
     /** The newest successful spawn's instant for a claimant the clause called crashed (so the journal was trusted), or `null`. */
     let journalSpawnedAtOf: (id: string) => number | null = () => null;
@@ -7924,74 +7931,18 @@ export class FleetWatcher {
           }
           this.dialogIds.set(r.id, dialog.id);
           this.bus.emit(`session:${r.id}`, { type: 'dialog', dialog });
+          this.settlingAsks.delete(r.id);
           if (notify) {
-            const hs = this.hookStates.get(r.id) ?? null;
-            const ask = hs?.ask ?? null;
-            // D-2173: ELIGIBILITY IS `askActions`, and nothing else. Its own
-            // contract is "offer an action only where `answerAsk` would
-            // accept it", so every ask it refuses — an approval, a
-            // multi-question envelope, a multi-select, a free-text ask, a
-            // blank label — is one no principal could answer through this
-            // lane. Holding those would be a grace window that can never
-            // resolve to an answer. `ask !== null && 'questions' in ask` is
-            // redundant with `actions !== null` at runtime (`askActions`
-            // returns null for exactly the same envelopes) — it exists so
-            // the compiler, not just the contract, knows `ask.questions[0]`
-            // is safe to read inside `hold`.
-            let held = false;
-            if (actions !== null && hs !== null && ask !== null && 'questions' in ask) {
-              // Fix round 1, item 2 (Important): `parentOfSession` and
-              // everything `hold` itself does (`openRunsForSession`, the
-              // WRITE `insertAsk`, `queueSystemMail`'s own `tx()`/`BEGIN
-              // IMMEDIATE`, plus `hold`'s own explicit throw on a
-              // key-derivation drift) reach `node:sqlite` directly,
-              // unguarded — and `tick()` is fired as `void this.tick()` with
-              // no `unhandledRejection` handler anywhere in this tree, so an
-              // unguarded throw here would kill the whole process over a
-              // fault every neighbouring coord lane already survives
-              // (`pushNewMail`/`pushNewRuns` above, `recordFeedEvent` inside
-              // `pushOne`, this file's own ruling on exactly this class at
-              // the `pushNewMail`/`pushNewRuns` call site). FALLS BACK TO
-              // `raise()` on any failure — the fail-safe direction: the lane
-              // degrades to today's ordinary immediate push rather than
-              // losing the question or the process.
-              try {
-                const parent = this.deps.coord?.parentOfSession(r.id) ?? null;
-                if (parent !== null && parent !== r.id && !this.asksDisabled) {
-                  const mint = this.hold(r, dialog, actions, hs, ask, parent);
-                  // D-2172: the RECORD is minted now, not at release.
-                  // `pushOne` returns before `notifyLog.record` when the
-                  // operator is looking, so suppressing the raise without
-                  // recording would delete the operator's only durable
-                  // trace of a question their parent then answered in their
-                  // name.
-                  this.pushOne({ ...mint.ev, recordAlways: true, recordOnly: true }, this.activeProjects);
-                  this.heldAsks.set(r.id, mint);
-                  held = true;
-                }
-              } catch (err) {
-                console.warn(`ccrc-server: ask hold failed for ${r.id} (${err instanceof Error ? err.message : String(err)}) — falling back to an immediate push`);
-                // Fix round 2, item 2: `insertAsk` and `queueSystemMail` are
-                // SEPARATE transactions inside `hold()` — a throw after the
-                // first commits (inside `queueSystemMail`'s own `tx()`, or in
-                // `pushOne`/`heldAsks.set` below it) would otherwise leave an
-                // ask row `held` with NO `heldAsks` entry: unreachable by
-                // Task 7's map-keyed sweep and Task 8's dialog-keyed
-                // `staleAsk`, while the `raise()` below means the operator
-                // gets the push AND a nudged parent may still act on the
-                // very question that push just escalated. Settle whatever
-                // may have committed — a no-op (0 rows changed) in the
-                // common case where nothing did — wrapped so the
-                // compensation itself cannot throw OUT of this catch and
-                // undo the fallback to `raise()` it exists to protect.
-                try {
-                  this.deps.coord?.staleAsk(dialog.id, r.id, Date.now());
-                } catch (compErr) {
-                  console.warn(`ccrc-server: ask hold compensation failed for ${r.id} (${compErr instanceof Error ? compErr.message : String(compErr)}) — a held row may remain orphaned`);
-                }
-              }
+            // D-5290: the FIRST raise waits while the child's hookstate is not
+            // yet `waiting` and nothing made the dialog answerable — the menu
+            // painted after this tick's hookstate read (`tick()`'s ordering
+            // note), and one or two ticks later the envelope is there to hold.
+            // Bounded by `ASK_SETTLE_TICKS`, in the arm below.
+            if (actions === null && this.hookStates.get(r.id)?.state !== 'waiting') {
+              this.settlingAsks.set(r.id, { dialogId: dialog.id, ticks: 1 });
+            } else if ((await this.tryHold(r, dialog, actions, recs)).kind === 'none') {
+              raise();
             }
-            if (!held) raise();
           }
         } else {
           // SAME DIALOG, STILL PAINTED (D-2403). The continuity observation
@@ -8007,20 +7958,51 @@ export class FleetWatcher {
           // re-stamping is not a weakening. Runs BEFORE the amendment gate, and
           // independent of it, whether or not the notification is replaced.
           this.restampHeldAsk(r.id, dialog.id);
-          if (notify && actions && this.actionlessAsks.get(r.id) === dialog.id) {
+          const settling = this.settlingAsks.get(r.id);
+          if (settling !== undefined && settling.dialogId === dialog.id) {
+            // D-5290, the deferred first raise: still nothing to hold and
+            // hookstate still not `waiting` — wait, at most `ASK_SETTLE_TICKS`
+            // ticks in all; otherwise this IS the first raise, through the one
+            // `tryHold` the first sighting uses.
+            if (actions === null && this.hookStates.get(r.id)?.state !== 'waiting' && settling.ticks < ASK_SETTLE_TICKS) {
+              settling.ticks += 1;
+            } else {
+              this.settlingAsks.delete(r.id);
+              if (notify && (await this.tryHold(r, dialog, actions, recs)).kind === 'none') raise();
+            }
+          } else if (notify && actions && this.actionlessAsks.get(r.id) === dialog.id) {
             // The amendment. Same question, same tag — `push-sw.js` sets
-            // `renotify` from the tag, so this REPLACES the un-answerable
-            // notification in its slot rather than stacking a second one
-            // under it. It is a second raise, so `pushOne` records a second
-            // event in the catch-up ring: the ring is a record of what was
-            // raised, and two really were, which is the honest cost of not
-            // leaving the question un-answerable.
-            raise();
+            // `renotify` from the tag, so a raise here REPLACES the
+            // un-answerable notification in its slot rather than stacking a
+            // second one under it. It is a second raise, so `pushOne` records
+            // a second event in the catch-up ring: the ring is a record of
+            // what was raised, and two really were, which is the honest cost
+            // of not leaving the question un-answerable.
+            //
+            // D-5290: the envelope that arrived a tick after the menu is the
+            // hold's first chance, so the amendment asks `tryHold` first. Held,
+            // the actionless notification is replaced, same tag, by the quiet
+            // "with coordinator" body and no buttons, and nothing is raised;
+            // released at once (a parent not live, or of another project),
+            // `tryHold` has already pushed the answerable payload.
+            const outcome = await this.tryHold(r, dialog, actions, recs);
+            if (outcome.kind === 'none') {
+              raise();
+            } else {
+              this.actionlessAsks.delete(r.id);
+              if (outcome.kind === 'held') {
+                this.pushOne({
+                  kind: 'ask', sessionId: r.id, project: r.project,
+                  title: '❓ Question', body: withCoordinatorBody(outcome.parent),
+                }, this.activeProjects);
+              }
+            }
           }
         }
       } else if (last !== undefined) {
         this.dialogIds.delete(r.id);
         this.actionlessAsks.delete(r.id);
+        this.settlingAsks.delete(r.id);
         // Task 8: the dialog went away with nothing to replace it — the
         // operator hit escape at the terminal, or the session was
         // interrupted, cleared, swapped, or died. The pane is the only
@@ -8317,11 +8299,117 @@ export class FleetWatcher {
   }
 
   /**
+   * D-5290 (coordinator-first routing spec §5.2): THE ONE DECISION every hold
+   * goes through — `detectDialogs`' first sighting, its deferred first raise
+   * and its amendment branch alike, so the envelope that arrives a tick after
+   * the menu is held exactly as one that arrived with it. Answers `none` (raise
+   * to the operator as today), `held` (minted `held`, the parent mailed, the
+   * operator's push deferred and recorded) or `released` (minted `released`
+   * with its reason and the operator pushed on this tick).
+   *
+   * The checks, in order, each `none` when it fails:
+   *  - D-2173: ELIGIBILITY IS `askActions`, and nothing else. Its own contract
+   *    is "offer an action only where `answerAsk` would accept it", so every
+   *    ask it refuses — an approval, a multi-question envelope, a
+   *    multi-select, a free-text ask, a blank label — is one no principal
+   *    could answer through this lane. `'questions' in ask` is redundant with
+   *    `actions !== null` at runtime; it exists so the compiler knows
+   *    `ask.questions[0]` is safe to read inside `hold`.
+   *  - the kill switch (`$REG/asks-disabled`, `sweepAsks`).
+   *  - THE CHILD MARK (spec §4): the registry row's `ChildMark` is
+   *    `{kind: 'child'}`. `none` and `unreadable` never hold: a run can name
+   *    any session (`POST /api/runs`, until Task 11b), so `parentOfSession`
+   *    alone does not make an operator-created session a child.
+   *  - `parentOfSession` answers, the self-claim guard (`parent !== r.id`),
+   *    and the parent it answers is the claimant of the run the mark names —
+   *    the minting run. Compared by claimant, not by run id: a wave N >= 2 run
+   *    resumes the SAME workspace (`dispatch.ts`'s resume arm), whose marker
+   *    still names wave 1, and `reclaimProgram` moves every run of a programme
+   *    to its heir together, so the claimant is the one fact the binding run
+   *    and the minting run share.
+   *  Then, past those, the row is minted either way:
+   *  - the parent's registry row exists (else `parent-not-live`), is of the
+   *    child's project (else `parent-project-mismatch`), is neither archived
+   *    nor stopped, and is not measured dead by `claimantMeasuredDead`, the
+   *    predicate `sweepDeadCoordinators` reads (else `parent-not-live`).
+   *
+   * Fix round 1, item 2 (Important): `parentOfSession` and everything `hold`
+   * does (`openRunsForSession`, the WRITE `insertAsk`, `queueSystemMail`'s own
+   * `tx()`/`BEGIN IMMEDIATE`, plus `hold`'s own throw on a key-derivation
+   * drift) reach `node:sqlite` directly, unguarded — and `tick()` is fired as
+   * `void this.tick()` with no `unhandledRejection` handler anywhere in this
+   * tree, so an unguarded throw here would kill the whole process. ANY FAILURE
+   * ANSWERS `none`, so the caller falls back to `raise()`: the lane degrades to
+   * today's ordinary immediate push rather than losing the question or the
+   * process.
+   */
+  private async tryHold(
+    r: SessionRecord, dialog: Dialog, actions: PushPayload['actions'] | null, recs: readonly SessionRecord[],
+  ): Promise<{ kind: 'none' } | { kind: 'held'; parent: string } | { kind: 'released' }> {
+    const none = { kind: 'none' } as const;
+    const hs = this.hookStates.get(r.id) ?? null;
+    const ask = hs?.ask ?? null;
+    if (actions === null || hs === null || ask === null || !('questions' in ask)) return none;
+    const coord = this.deps.coord;
+    if (!coord || this.asksDisabled) return none;
+    const mark = r.child;
+    if (mark.kind !== 'child') return none;
+    try {
+      const parent = coord.parentOfSession(r.id);
+      if (parent === null || parent === r.id) return none;
+      const minting = coord.run(mark.runId);
+      if (!minting.ok || minting.run === null || minting.run.claimedBy !== parent) return none;
+      const row = recs.find((x) => x.id === parent) ?? null;
+      let reason: 'parent-not-live' | 'parent-project-mismatch' | null = null;
+      if (row === null) reason = 'parent-not-live';
+      else if (row.project !== r.project) reason = 'parent-project-mismatch';
+      else if (row.archivedAt !== null || row.stopped !== null) reason = 'parent-not-live';
+      else if (claimantMeasuredDead(await measureClaimant(
+        { coord, io: this.deps.io, cfg: this.deps.cfg, tmux: this.deps.tmux }, parent, Date.now()))) {
+        reason = 'parent-not-live';
+      }
+      const mint = this.hold(r, dialog, actions, hs, ask, parent, reason);
+      if (reason !== null) {
+        // Released at once: the operator's answerable push fires on THIS
+        // tick, never after the window, and no hold is kept for the sweep.
+        this.pushOne(mint.ev, this.activeProjects);
+        return { kind: 'released' };
+      }
+      // D-2172: the RECORD is minted now, not at release. `pushOne` returns
+      // before `notifyLog.record` when the operator is looking, so suppressing
+      // the raise without recording would delete the operator's only durable
+      // trace of a question their parent then answered in their name.
+      this.pushOne({ ...mint.ev, recordAlways: true, recordOnly: true }, this.activeProjects);
+      this.heldAsks.set(r.id, mint);
+      return { kind: 'held', parent };
+    } catch (err) {
+      console.warn(`ccrc-server: ask hold failed for ${r.id} (${err instanceof Error ? err.message : String(err)}) — falling back to an immediate push`);
+      // Fix round 2, item 2: `insertAsk` and `queueSystemMail` are SEPARATE
+      // transactions inside `hold()` — a throw after the first commits (inside
+      // `queueSystemMail`'s own `tx()`, or in `pushOne`/`heldAsks.set` after
+      // it) would otherwise leave an ask row `held` with NO `heldAsks` entry:
+      // unreachable by Task 7's map-keyed sweep and Task 8's dialog-keyed
+      // `staleAsk`, while the fallback `raise()` means the operator gets the
+      // push AND a nudged parent may still act on the very question that push
+      // just escalated. Settle whatever may have committed — a no-op (0 rows
+      // changed) in the common case where nothing did — wrapped so the
+      // compensation itself cannot throw OUT of this catch.
+      try {
+        coord.staleAsk(dialog.id, r.id, Date.now());
+      } catch (compErr) {
+        console.warn(`ccrc-server: ask hold compensation failed for ${r.id} (${compErr instanceof Error ? compErr.message : String(compErr)}) — a held row may remain orphaned`);
+      }
+      return none;
+    }
+  }
+
+  /**
    * Mint the ask row, snapshot the push `raise()` would have sent, and queue
-   * the mail that wakes the parent. Called ONLY from the eligibility fork
-   * above, which has already proven `actions !== null` (so `ask` is a
-   * single-question envelope with readable labels) and `parent !== null &&
-   * parent !== r.id`.
+   * the mail that wakes the parent. Called ONLY from `tryHold`, which has
+   * already proven `actions !== null` (so `ask` is a single-question envelope
+   * with readable labels), the child mark and `parent !== null && parent !==
+   * r.id`. With a `releaseReason` (D-5290) the row is minted `released` and no
+   * mail is queued; the caller pushes `ev` at once.
    *
    * `ev` is snapshotted here, not re-derived at release (Task 7's
    * `sweepAsks`) or at answer time — nothing persists a tick-local closure
@@ -8333,6 +8421,7 @@ export class FleetWatcher {
   private hold(
     r: SessionRecord, dialog: Dialog, actions: PushPayload['actions'],
     hs: HookState, ask: Extract<HookAsk, { questions: HookAskQuestion[] }>, parent: string,
+    releaseReason: 'parent-not-live' | 'parent-project-mismatch' | null,
   ): { until: number; askId: number; ev: Parameters<FleetWatcher['pushOne']>[0]; answeringSince: number | null } {
     const q = ask.questions[0]!;
     const key = askKey(ask);
@@ -8362,6 +8451,7 @@ export class FleetWatcher {
     const askId = this.deps.coord!.insertAsk({
       childId: r.id, parentId: parent, runId, askKey: key, askAt: hs.updatedAt,
       dialogId: dialog.id, question: q.question, options, now,
+      ...(releaseReason === null ? {} : { releaseReason }),
     });
     const ev: Parameters<FleetWatcher['pushOne']>[0] = {
       kind: 'ask', sessionId: r.id, project: r.project,
@@ -8383,10 +8473,14 @@ export class FleetWatcher {
     // literal: `isAskNudgeMail` in the same module must recognise exactly
     // this shape, and a queue/reader pair spelling one convention twice is
     // the kind of thing that drifts.
-    queueSystemMail(this.deps.coord!, null, {
-      fromId: 'operator', toId: parent, runId: null, kind: 'question',
-      subject: askNudgeSubject(askId), body: renderAskBrief(askId, r.id, q.question, options),
-    });
+    // D-5290: a row minted released mails nobody — its parent is not live, or
+    // is not this child's project's, and the operator already has the push.
+    if (releaseReason === null) {
+      queueSystemMail(this.deps.coord!, null, {
+        fromId: 'operator', toId: parent, runId: null, kind: 'question',
+        subject: askNudgeSubject(askId), body: renderAskBrief(askId, r.id, q.question, options),
+      });
+    }
     return { until: now + ASK_GRACE_MS, askId, ev, answeringSince: null };
   }
 }

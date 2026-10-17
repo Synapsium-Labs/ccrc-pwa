@@ -1,6 +1,7 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { mkdtemp } from 'node:fs/promises';
+import { ASK_SETTLE_TICKS } from '../src/askwindow.js';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Bus } from '../src/bus.js';
@@ -582,6 +583,14 @@ describe('ask notifications carry actions only where the route would accept them
       showMenu: (text: string = MENU_PANE) => { pane = text; },
       clearMenu: () => { pane = 'ready\n❯ \n'; },
       writeAsk: (ask: unknown, state?: string) => writeHookState(home, id, ask, state),
+      // D-5290: make this session a dispatched child of `parent` (its `.child`
+      // marker naming `runId`), and give the parent a live registry row.
+      child: (runId: number, parent: string, project: string) => {
+        const reg = path.join(home, '.cc-sessions');
+        writeFileSync(path.join(reg, `${id}.child`), String(runId));
+        const fields: Record<string, string> = { wrapper: 'claude', project, workdir: `/w/${parent}`, uuid: `u-${parent}`, started: '1' };
+        for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${parent}.${k}`), v);
+      },
       ...(coord ? { coord } : {}),
     };
   }
@@ -594,7 +603,16 @@ describe('ask notifications carry actions only where the route would accept them
     if (ask !== undefined) f.writeAsk(ask, opts.state);
     f.showMenu();
     await f.tick();                                  // the menu appears → one ask push
+    // D-5290: with no hookstate `waiting`, the first actionless raise waits out
+    // the bounded settle window and fires on the sighting after it.
+    if (ask === undefined || (opts.state !== undefined && opts.state !== 'waiting')) await settle(f);
     return f.sent;
+  }
+
+  /** D-5290: tick through `ASK_SETTLE_TICKS`, the deferral a pane-only menu's
+   *  first raise waits while hookstate is not `waiting`. */
+  async function settle(f: { tick: () => Promise<void> }): Promise<void> {
+    for (let i = 0; i < ASK_SETTLE_TICKS; i++) await f.tick();
   }
 
   it('attaches the first two option labels as actions, each carrying the key', async () => {
@@ -693,7 +711,8 @@ describe('ask notifications carry actions only where the route would accept them
     const f = askFixture();
     await f.tick();                       // priming, no menu
     f.showMenu();
-    await f.tick();                       // menu with no envelope → action-less push
+    await f.tick();                       // menu with no envelope → deferred (D-5290)
+    await settle(f);                      // … then the action-less push
     expect(f.sent).toHaveLength(1);
     expect(f.sent[0]!.actions).toBeUndefined();
 
@@ -756,6 +775,7 @@ describe('ask notifications carry actions only where the route would accept them
     await f.tick();                                  // priming: no menu
     f.showMenu(`${BUSY_LINE}\n\n${MENU_PANE}`);
     await f.tick();                                   // RC-off: both on screen at once
+    await settle(f);                                  // no hookstate: the D-5290 deferral
     expect(f.sent).toHaveLength(1);
     expect(f.sent[0]!.title).toBe('❓ Question');
   });
@@ -771,6 +791,7 @@ describe('ask notifications carry actions only where the route would accept them
     await f.tick();                                  // priming: no menu
     f.showMenu(GLYPH_MENU_PANE);
     await f.tick();                                  // the menu appears → one ask push
+    await settle(f);                                 // no hookstate: the D-5290 deferral
     expect(f.sent).toHaveLength(1);
     expect(f.sent[0]!.body).not.toMatch(GLYPHS);
     expect(f.sent[0]!.body).toBe('Claude has a question');
@@ -831,6 +852,7 @@ describe('ask notifications carry actions only where the route would accept them
       wave: 1, waveOf: null, claimedBy: 'project-a-calm-mesa',
     }) as { id: number };
     f.coord!.setSession(run.id, 'project-a-quiet-basin');
+    f.child(run.id, 'project-a-calm-mesa', 'project-a');
     await f.tick();                                  // priming: no menu
     f.writeAsk(oneQuestion([{ label: 'Red' }, { label: 'Blue' }]));
     f.showMenu(GLYPH_MENU_PANE);
