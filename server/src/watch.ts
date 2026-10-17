@@ -64,6 +64,7 @@ import {
 } from './coord/delegation-ingest.js';
 import { correlateDelegation, type DelegationCorrelationInput, type DelegationListingWindow } from './coord/delegation-correlation.js';
 import { DELEGATION_EVIDENCE_MARGIN_MS, delegationLostEvidenceForced, delegationMarkAttributionOf } from './coord/delegation-correlation.js';
+import { DELEGATION_CLOCK_SKEW_MS } from './coord/delegation-correlation.js';
 import {
   DELEGATION_DROPPED_UNMEASURED, delegationDroppedKeyId, delegationDroppedKeyOf, delegationGoneTrees, delegationTreeKey, indexDelegationDropped,
   planDelegationDroppedPrune, type DelegationDroppedEvidence, type DelegationDroppedKey, type DelegationPruneProject,
@@ -8511,16 +8512,21 @@ function renderAskBrief(askId: number, childId: string, question: string, option
 //
 //   THE LANE NEVER LINKS ACROSS A STRETCH IT KNOWS IT DID NOT READ (W1, coordinator 5512; R88, R89). Lane memory only, both:
 //     - THE LATEST READY INSTANT (R88, `readyAt`). Set by the first pass of a process that reaches the owners, and again by the first
-//       pass to reach them after a pass found the lane NOT READY (no census, no applier, or an applier not `ready` or failed): to the
-//       instant the recovery of that same pass returned, or else to the pass's own clock. Correlation gets one lost window from the
-//       epoch to it on every repository (`delegationNotReadyWindowOf`): a stretch's start cannot be measured, so every rung-4 candidate
-//       whose creator began at or before it is held, and through X1 so is a rung-3 link whose creator bracket reaches back to it.
-//       Cleared by nothing; only a later ready instant moves it, and a restart starts again from none.
+//       pass to reach them after the lane was found NOT READY (no census, no applier, or an applier not `ready` or failed; and R103, a
+//       registry `tick()` could not list, which stops the tick before the census and this lane): to the instant the recovery of that
+//       same pass returned, or else to the pass's own clock. (No census and no applier can only be found before a process's first ready
+//       pass: the census is never unset and the applier is cached once opened; they stay as defence.) Correlation gets one lost window
+//       from the epoch to it plus the clock skew on every repository (`delegationNotReadyWindowOf`, R104): a stretch's start cannot be
+//       measured, so every rung-4 candidate whose creator began at or before it is held, and through X1 so is a rung-3 link whose creator
+//       bracket reaches back to it. Cleared by nothing; only a later ready instant moves it, and a restart starts again from none.
 //     - THE OWNERS A PASS LISTED (R89, `pendingOwners`). Every owner a census lists is remembered, with the hours it was listed in, until
-//       one observation of it COMPLETES in a pass that was not cut: so a pass cut before it reaches an owner leaves that owner to the
-//       next pass, live or not, whatever the next census says. Until then its listed hours are lost windows. An hour that leaves the
-//       read horizon before the owner is read is recorded as a durable gap with a LOSS word (`hour-never-closed`, never a carve-out
-//       word), and the owner is forgotten once it has no listed hour left: so the memory is bounded by the read horizon.
+//       one observation of it COMPLETES in a pass that was not cut AND what it read is DURABLE (R101: after the pass's flush, which did
+//       not fail past its first byte and refused none of its buckets): so a pass cut before it reaches an owner, or whose read is lost
+//       at the flush, leaves that owner to a later pass, live or not, whatever the next census says. An owner the last pass listed and
+//       this one does not is pending again (R102), so its last lines are read once more after it ends. Until it is read its listed hours,
+//       and its measured hours not yet closed (R106), are lost windows. An hour that leaves the read horizon before the owner is read is
+//       recorded as a durable gap with a LOSS word (`hour-never-closed`, never a carve-out word), and the owner is forgotten once it has
+//       no listed hour left: so the memory is bounded by the read horizon (and `lastListed` by the live sessions).
 //
 //   REPORT-ONLY EFFECTS. Attempts are made durable through one checkpoint-only change BEFORE any lease is journaled (so the next pass
 //   sees them), then each lease request goes through `createLease` (which deduplicates on the identity key, so a request re-emitted
@@ -8791,13 +8797,15 @@ function delegationLostHourWindow(sessionId: string, parentIncarnation: string, 
  * session born and gone in that stretch is never read; and the start of such a stretch cannot be measured (a restart remembers
  * nothing of the process before it). So every candidate whose creator began at or before the ready instant is held, on every
  * repository, and an in-process recovery moves the instant (the lane's own memory, `DelegationLane.readyAt`: no durable fact bounds the
- * window). A null instant (no ready pass yet) is an OPEN-ENDED window from the epoch, which vetoes everything: it fails safe, and it is
- * never reached, since the lane reconciles only after a pass has set the instant. Pure.
+ * window). R104 (review F4): the ready instant is the SERVER's clock and a call's start is the FLEET's (`observedAt`), so the window
+ * ends `DELEGATION_CLOCK_SKEW_MS` after it, as X1 widens the same comparison: a fleet clock AHEAD of the server's stamps a call made
+ * before the ready instant up to the skew after it. A null instant (no ready pass yet) is an OPEN-ENDED window from the epoch, which
+ * vetoes everything: it fails safe, and it is never reached, since the lane reconciles only after a pass has set the instant. Pure.
  */
 export function delegationNotReadyWindowOf(readyAtMs: number | null): DelegationListingWindow {
   return {
     sessionId: '', parentIncarnation: '', toolUseId: '', repository: null, lost: true,
-    startedAt: formatDelegationInstant(0), endedAt: readyAtMs === null ? null : formatDelegationInstant(readyAtMs), before: [], after: null,
+    startedAt: formatDelegationInstant(0), endedAt: readyAtMs === null ? null : formatDelegationInstant(readyAtMs + DELEGATION_CLOCK_SKEW_MS), before: [], after: null,
   };
 }
 
@@ -8966,7 +8974,12 @@ class DelegationLane {
 
   constructor(private readonly deps: Deps, private readonly census: () => DelegationCensusPass | null) {}
 
-  noteRegistry(listed: boolean): void { this.registryListed = listed; }
+  /** R103 (review F3): an unlistable registry stops `tick()` before the census and before this lane's pass (its fail-shut return), so
+   *  nothing is listed while it lasts: it is "no census", and marks the lane NOT READY. The first pass after it sets the ready instant. */
+  noteRegistry(listed: boolean): void {
+    this.registryListed = listed;
+    if (!listed) this.notReady = true;
+  }
 
   setSeams(seams: DelegationLaneSeams): void { this.seams = seams; }
 

@@ -344,7 +344,7 @@ async function endToEnd(): Promise<{ w: World; hw: HookWorld; at: (n: number) =>
   const hw = hookWorld();
   const w = world({ home: hw.home });
   expect(w.reg, 'the lane reads the registry the hook wrote').toBe(hw.reg);
-  await primed(w, Date.now() - 1000);                                // R88: the lane was ready before the hook's first event
+  await primed(w, Date.now() - 120_000);                             // R88, R104: ready more than the clock skew before the hook's first event
   hw.fire(hookEvent(hw, 'SessionStart', { source: 'startup' }));
   hw.fire(hookEvent(hw, 'SubagentStart', { agent_id: AGENT_ID, agent_type: 'general-purpose' }));
   hw.fire(hookEvent(hw, 'PreToolUse', { tool_name: 'Bash', tool_input: { command: WORKTREE_CMD }, tool_use_id: 'toolu_wt1' }));

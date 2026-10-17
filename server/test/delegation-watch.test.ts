@@ -2047,10 +2047,10 @@ describe('the lane remembers what it dropped (R65): a link that rests on an even
         expect(marksOf(restarted).forced).toEqual(NONE);
         expect(leasesOf(restarted.home), '5484 (3): its first sighting was lost with the restart').toEqual([]);
         expect(restarted.watcher.delegationReport().lostEvidence.forced, 'held by lost evidence, not by the mark').toBe(1);
-        // measured: the tree is not listed. R88: more than the margin and the clock skew after this lane's ready instant (at(7)), so the
-        // tree's creator bracket no longer reaches back to it (X1)
-        await censusPass(restarted, at(29), { demo: [] }, [sessionOf('demo-b')]);
-        for (let i = 30; i < 33; i++) await censusPass(restarted, at(i), census, [sessionOf('demo-b')]);
+        // measured: the tree is not listed. R88, R104: more than the margin and twice the clock skew after this lane's ready instant
+        // (at(7)), so the tree's creator bracket no longer reaches back to the not-ready window (X1)
+        await censusPass(restarted, at(30), { demo: [] }, [sessionOf('demo-b')]);
+        for (let i = 31; i < 34; i++) await censusPass(restarted, at(i), census, [sessionOf('demo-b')]);
         expect(leasesOf(restarted.home).map((l) => [l.adminRecord, l.sourceKind])).toEqual([['raw-tree', 'agent']]);
         expect(attemptsOf(restarted.home).map((a) => [a.adminRecord, a.verdict, a.rung])).toEqual([['raw-tree', 'linked', 3]]);
       });
@@ -2544,9 +2544,11 @@ describe('the evidence read can fail (M1, M3): partial evidence never reaches co
     });
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     await censusPass(again, at(1), { demo: [OLD] });                                // the restarted lane's first ready pass
+    await censusPass(again, at(2), { demo: [OLD] });
+    // R104: the call begins more than the clock skew after that ready instant
     appendBucket(again, 'demo-a', BUCKET10,
-      bashPre('demo-a', 'toolu_wt1', ['old-tree'], iso(at(1) + 10_000)), bashPost('demo-a', 'toolu_wt1', ['old-tree', 'raw-tree'], iso(at(1) + 13_000)));
-    for (let i = 2; i < 5; i++) await censusPass(again, at(i), { demo: [OLD, RAW] });
+      bashPre('demo-a', 'toolu_wt1', ['old-tree'], iso(at(2) + 10_000)), bashPost('demo-a', 'toolu_wt1', ['old-tree', 'raw-tree'], iso(at(2) + 13_000)));
+    for (let i = 3; i < 5; i++) await censusPass(again, at(i), { demo: [OLD, RAW] });
     expect(again.watcher.delegationReport().reconciliations, 'a reconciliation ran on partial evidence').toBe(0);
     expect(leasesOf(first.home)).toEqual([]);
     expect(attemptsOf(first.home)).toEqual([]);
@@ -2907,6 +2909,22 @@ describe('final review I-1: a restart never re-creates an evicted-session veto a
     // R88: the creator's call began before this lane's first ready pass, so it is held; lost evidence alone holds it, never the I-1 window
     expect(leasesOf(again.home)).toEqual([]);
     expect(again.watcher.delegationReport().lostEvidence.forced, 'the unknown window leaves the link possible: only lost evidence holds it').toBe(1);
+    expect(again.watcher.delegationReport().marks.forced.window).toBe(0);
+  });
+
+  it('LIVENESS, with a lease (review 2 section 5): an unknown window that does not overlap a creator call made AFTER the restarted lane\'s ready instant leaves the link to it standing', async () => {
+    const first = world();
+    writeBucket(first, 'demo-a', BUCKET10, bashPre('demo-a', 'toolu_o1', ['old-tree'], '2026-10-15T10:06:00.000Z'), bashPost('demo-a', 'toolu_o1', ['old-tree'], '2026-10-15T10:06:01.000Z'));
+    makeOwner(first, 'demo-b');
+    await censusPass(first, at(0), { demo: [OLD] }, both);              // demo-a's call is ingested and journaled; then the restart
+    await first.watcher.closeDelegation();
+    const again = world({ home: first.home });
+    (again.cfg as { projectsRoot: string }).projectsRoot = first.cfg.projectsRoot;
+    await censusPass(again, at(4), { demo: [OLD] }, onlyB);              // the restarted lane's first ready pass; demo-a's row is gone
+    writeBucket(again, 'demo-b', BUCKET10,
+      bashPre('demo-b', 'toolu_wt1', ['old-tree'], iso(at(5) + 20_000)), bashPost('demo-b', 'toolu_wt1', ['old-tree', 'raw-tree'], iso(at(5) + 23_000)));
+    for (let i = 6; i < 10; i++) await censusPass(again, at(i), census, onlyB);
+    expect(leasesOf(again.home).map((l) => [l.adminRecord, l.parentId])).toEqual([['raw-tree', 'demo-b']]);
     expect(again.watcher.delegationReport().marks.forced.window).toBe(0);
   });
 });
@@ -3661,7 +3679,8 @@ describe('2c (R84) in the lane: a shed listing, an unmeasured hour or a lost cre
 // ── W1 (coordinator 5512; R88, R89): the lane never links across a stretch it knows it did not read ───────────────────────
 
 /** demo-a creates raw-tree in a call 20 to 23 seconds after `t` (a clean one-record delta); `other`, when named, runs a call inside it, on
- *  demo, 21 to 22 seconds after `t`. */
+ *  demo, 21 to 22 seconds after `t`. R104: a row whose calls should be able to link is ready at `t - 60 s` or earlier, so they begin more
+ *  than the clock skew after the ready instant. */
 const creatorAfter = (w: World, t: number, other?: string): void => {
   writeBucket(w, 'demo-a', BUCKET10, bashPre('demo-a', 'toolu_wt1', ['old-tree'], iso(t + 20_000)), bashPost('demo-a', 'toolu_wt1', ['old-tree', 'raw-tree'], iso(t + 23_000)));
   if (other !== undefined) writeBucket(w, other, BUCKET10, bashPre(other, 'toolu_o1', ['old-tree'], iso(t + 21_000)), bashPost(other, 'toolu_o1', ['old-tree'], iso(t + 22_000)));
@@ -3672,8 +3691,9 @@ const WITH_TREE = { demo: [OLD, RAW] };
 
 describe('R88 (W1 a, coordinator 5512): the lane never links across a stretch it was not ready for', () => {
   it('R88 pure: the not-ready window runs from the epoch to the latest ready instant, on every repository and naming no call; with no ready instant yet it runs for ever (it fails safe)', () => {
+    // R104: it ends the clock skew after the ready instant (the server's clock), since a call's start is the fleet's
     expect(delegationNotReadyWindowOf(at(3))).toEqual({
-      sessionId: '', parentIncarnation: '', toolUseId: '', repository: null, lost: true, startedAt: iso(0), endedAt: iso(at(3)), before: [], after: null,
+      sessionId: '', parentIncarnation: '', toolUseId: '', repository: null, lost: true, startedAt: iso(0), endedAt: iso(at(3) + correlation.DELEGATION_CLOCK_SKEW_MS), before: [], after: null,
     });
     expect(delegationNotReadyWindowOf(null)).toMatchObject({ repository: null, lost: true, startedAt: iso(0), endedAt: null });
   });
@@ -3695,7 +3715,7 @@ describe('R88 (W1 a, coordinator 5512): the lane never links across a stretch it
   it('R88 in-process recovery: a call made after the lane was ready, before its applier failed closed and recovered in process, is held after the recovery (the recovery moved the ready instant)', async () => {
     const w = world();
     makeOwner(w, 'demo-a');
-    await censusPass(w, at(0), BEFORE_TREE);                           // ready at at(0)
+    await censusPass(w, at(-1), BEFORE_TREE);                           // ready at at(-1), more than the skew before the call (R104)
     creatorAfter(w, at(0));
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     vi.spyOn(DelegationDurability.prototype as never as { replaceCheckpoint: (b: Uint8Array) => Promise<void> }, 'replaceCheckpoint')
@@ -3715,13 +3735,13 @@ describe('R88 (W1 a, coordinator 5512): the lane never links across a stretch it
   it('R88 liveness: a candidate wholly after the ready instant, with every owner read, links at rung 4', async () => {
     const w = world();
     makeOwner(w, 'demo-a');
-    await censusPass(w, at(0), BEFORE_TREE);                           // the lane's first ready pass
+    await censusPass(w, at(-1), BEFORE_TREE);                           // the lane's first ready pass
     creatorAfter(w, at(0));
     for (let i = 1; i < 5; i++) await censusPass(w, at(i), WITH_TREE);
     expect(leasedOf(w)).toEqual([['raw-tree', 'raw', 'demo-a']]);
   });
 
-  it('R88 through X1, measured: a rung-3 link is held while its creator bracket reaches back to the ready instant, which is while the last census that did not list the tree is at most the margin plus the clock skew (21 minutes) after it', async () => {
+  it('R88 through X1, measured: a rung-3 link is held while its creator bracket reaches back to the not-ready window, which is while the last census that did not list the tree is at most the margin plus twice the clock skew (22 minutes) after the ready instant', async () => {
     const A1 = 'a1b2c3d4e5f60718';
     const both = [sessionOf('demo-a'), sessionOf('demo-b')];
     /** demo-b's subagent works inside raw-tree, which no census listed at `at(before)` and every census lists after it. */
@@ -3737,8 +3757,32 @@ describe('R88 (W1 a, coordinator 5512): the lane never links across a stretch it
       for (let i = 1; i < 6; i++) await censusPass(w, at(before + i), WITH_TREE, both);
       return leasedOf(w);
     };
-    expect(await outcome(21), '21 minutes after the ready instant: the bracket reaches it').toEqual([]);
-    expect(await outcome(22), '22 minutes after: rung 3 links').toEqual([['raw-tree', 'agent', 'demo-b']]);
+    // R104: the window ends the skew after the ready instant, and the bracket starts the margin and the skew before that census
+    expect(await outcome(22), '22 minutes after the ready instant: the bracket reaches the window').toEqual([]);
+    expect(await outcome(23), '23 minutes after: rung 3 links').toEqual([['raw-tree', 'agent', 'demo-b']]);
+  });
+
+  it('R104 (review F4): a call stamped within the clock skew AFTER the ready instant is held (a fleet clock ahead of the server\'s may have stamped a call made before it)', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    await censusPass(w, at(0), BEFORE_TREE);                           // the lane's first ready pass: at(0) on the server's clock
+    creatorAfter(w, at(0));                                            // stamped 20 to 23 seconds after it on the fleet's
+    for (let i = 1; i < 5; i++) await censusPass(w, at(i), WITH_TREE);
+    expect(leasesOf(w.home), 'within the skew of the ready instant').toEqual([]);
+    expect(w.watcher.delegationReport().lostEvidence.forced, 'held by lost evidence: the full evidence links it').toBe(1);
+  });
+
+  it('R103 (review F3): a registry tick() cannot list marks the lane not ready: a call made while that lasted, beside a session no census listed, is held', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    await censusPass(w, at(-1), BEFORE_TREE);                          // ready
+    w.watcher.noteDelegationRegistry(false);                           // tick() returns before the census and before this lane, for minutes
+    creatorAfter(w, at(3), 'demo-y');                                  // meanwhile demo-a creates raw-tree, and demo-y, born and gone in that stretch, overlaps it
+    w.watcher.noteDelegationRegistry(true);
+    for (let i = 10; i < 15; i++) await censusPass(w, at(i), WITH_TREE);
+    expect(w.calls.listings, 'no census ever listed demo-y').not.toContain('demo-y');
+    expect(leasesOf(w.home), 'the stretch the lane could not list holds the call').toEqual([]);
+    expect(w.watcher.delegationReport().lostEvidence.forced).toBe(1);
   });
 });
 
@@ -3766,7 +3810,7 @@ describe('R89 (W1 b, coordinator 5512): an owner a pass listed is read once befo
   it('R89: a pass cut before it reaches an owner it listed: the owner, gone by the next census, is read anyway, and rung 4 does not link across its overlapping call', async () => {
     const w = world();
     makeOwner(w, 'demo-a');
-    await censusPass(w, at(0), BEFORE_TREE);                            // ready
+    await censusPass(w, at(-1), BEFORE_TREE);                            // ready
     creatorAfter(w, at(0), 'demo-x');                                   // demo-x's call overlaps demo-a's, on demo
     await cutAt(w, at(1), WITH_TREE, pair, { 'demo-a': measured(), 'demo-x': measured() }, 'demo-x');
     expect(w.calls.ranges.some((r) => r.startsWith('demo-x/')), 'the cut pass read demo-x').toBe(false);
@@ -3782,7 +3826,7 @@ describe('R89 (W1 b, coordinator 5512): an owner a pass listed is read once befo
   it('R89: an owner whose read fails until the hour it was listed in leaves the read horizon: until then that hour vetoes, and then it is recorded as a LOSS (never a carve-out word) that goes on vetoing', async () => {
     const w = world();
     makeOwner(w, 'demo-a');
-    await censusPass(w, at(0), BEFORE_TREE);                            // ready
+    await censusPass(w, at(-1), BEFORE_TREE);                            // ready
     creatorAfter(w, at(0), 'demo-x');
     const dropped = Promise.reject(new Error('agent socket dropped'));
     dropped.catch(() => undefined);
@@ -3908,7 +3952,7 @@ describe('R90 (W3, coordinator 5512): within one hour a loss word displaces a ca
   it('R90 in the lane: an hour of an owner with no cursor first recorded directory-absent, then directory-unreadable in the same hour, is the loss, and vetoes the link (the no-op skip re-stages it)', async () => {
     const w = world();
     makeOwner(w, 'demo-a');
-    await censusPass(w, at(0), BEFORE_TREE);                             // ready
+    await censusPass(w, at(-1), BEFORE_TREE);                             // ready
     creatorAfter(w, at(0));
     await censusPass(w, at(1), WITH_TREE, pair);                         // demo-x has no spool directory: the carve-out word
     expect(intervalFor(w.home, 'demo-x')!.detail).toMatch(/^directory-absent/);
@@ -3924,7 +3968,7 @@ describe('R90 (W3, coordinator 5512): within one hour a loss word displaces a ca
     const w = world();
     makeOwner(w, 'demo-a');
     writeBucket(w, 'demo-x', BUCKET10, startLine('demo-x', '2026-10-15T10:01:00.000Z'));
-    await censusPass(w, at(0), BEFORE_TREE, pair);                       // ready; demo-x's bucket is read: it has a cursor row
+    await censusPass(w, at(-1), BEFORE_TREE, pair);                       // ready; demo-x's bucket is read: it has a cursor row
     creatorAfter(w, at(0));
     appendBucket(w, 'demo-x', BUCKET10, bashPre('demo-x', 'toolu_o1', ['old-tree'], iso(at(0) + 21_000)), bashPost('demo-x', 'toolu_o1', ['old-tree'], iso(at(0) + 22_000)));
     w.faults.range.add('demo-x');
@@ -3940,7 +3984,7 @@ describe('R90 (W3, coordinator 5512): within one hour a loss word displaces a ca
   it('R90 in the lane: a listed hour that leaves the read horizon unread (R89) is a loss over the carve-out word recorded earlier in that hour, and vetoes (a noted gap re-stages it too)', async () => {
     const w = world();
     makeOwner(w, 'demo-a');
-    await censusPass(w, at(0), BEFORE_TREE);                             // ready
+    await censusPass(w, at(-1), BEFORE_TREE);                             // ready
     creatorAfter(w, at(0));
     await censusPass(w, at(1), WITH_TREE, pair);                         // demo-x has no spool directory: the carve-out word
     expect(intervalFor(w.home, 'demo-x')!.detail).toMatch(/^directory-absent/);
@@ -3965,7 +4009,7 @@ describe('R91 and R94: the never-listed gap, pinned as it is today, and two inca
     // candidate is listing the spool root; a lane that does so turns this row red, which is intended: then flip its expectation.
     const w = world();
     makeOwner(w, 'demo-a');
-    await censusPass(w, at(0), BEFORE_TREE);                             // ready
+    await censusPass(w, at(-1), BEFORE_TREE);                             // ready
     creatorAfter(w, at(0), 'demo-gone');                                 // demo-gone was born after at(0)'s census and gone before at(1)'s
     for (let i = 1; i < 5; i++) await censusPass(w, at(i), WITH_TREE);
     expect(w.calls.listings, 'its spool was never listed').not.toContain('demo-gone');
