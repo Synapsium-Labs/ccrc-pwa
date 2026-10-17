@@ -73,6 +73,16 @@ const seed = (home: string, id: string, over: Partial<Record<string, string>> = 
   for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${id}.${k}`), v);
 };
 
+/** D-5238: the pane pid `makeRunner` answers, and the idle live file it names under the `claude` wrapper's config
+ *  dir — what the resume arm's live `/clear` gate reads as a measured-idle pane. */
+const LIVE_PANE = 4242;
+const seedIdleLive = (home: string): void => {
+  const dir = path.join(home, '.claude', 'sessions');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(path.join(dir, `${LIVE_PANE}.json`),
+    JSON.stringify({ pid: LIVE_PANE, sessionId: 'u-live', status: 'idle', statusUpdatedAt: 1 }));
+};
+
 /** The scripted `capture-pane` sequence a happy `sendPrompt('/clear')` needs
  *  — copied from `send.test.ts`'s own happy-path shape (empty box, echo,
  *  emptied-after-Enter), text swapped for `/clear`. */
@@ -121,7 +131,12 @@ function makeRunner(home: string, cfg: RunnerConfig = {}): { run: Runner; calls:
       capIdx++;
       return { code: 0, stdout: p, stderr: '' };
     }
-    return { code: 0, stdout: '', stderr: '' };   // ensure, ws-hold, ws-release, ws-archive, send-keys, has-session…
+    // D-5238: the resume arm's live `/clear` gate reads the pane. `ensure` finds it already alive (`cmd_ensure`'s
+    // `alive: <id>`), and its pid names the idle live file `openApp` writes — the measured-idle pane every resume
+    // case below assumes. A case about the gate itself lives in `dispatch-live-gate.test.ts`.
+    if (verb === 'ensure') return { code: 0, stdout: `alive: ${args[1] ?? ''}\n`, stderr: '' };
+    if (verb === 'list-panes' && args.includes('#{pane_pid}')) return { code: 0, stdout: `${LIVE_PANE}\n`, stderr: '' };
+    return { code: 0, stdout: '', stderr: '' };   // ws-hold, ws-release, ws-archive, send-keys, has-session…
   };
   return { run, calls };
 }
@@ -141,6 +156,7 @@ const openApp = async (
   // same way `seed()` already creates it as a side effect of writing a real
   // session's fields.
   mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+  seedIdleLive(home);
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const base = testDeps(home, run);
   const app = await buildServer({ ...base, mailToken: TOKEN, coord, ...over, cfg: { ...base.cfg, ...(over.cfg ?? {}) } });
@@ -1458,20 +1474,28 @@ describe('POST /api/runs/:id/dispatch', () => {
     expect(okRun(w.coord.run(id))?.state).toBe('dispatched');
   });
 
-  it('leaves the honest-stale case exactly as it was — a listable registry with no row for the session', async () => {
-    // `record === undefined` on a LISTABLE registry is the tolerated case
-    // (`DoneRun`'s own docstring): the run falls back to its own workspace and
-    // branch, as it always has. Refusing on a fact not measured would be the
-    // same error in the other direction.
+  it('the honest-stale case — a listable registry with no row for the session — is refused by the live gate, untouched (D-5273)', async () => {
+    // `record === undefined` on a LISTABLE registry is still tolerated by the
+    // project and child gates (`DoneRun`'s own docstring: refusing on a project
+    // not measured would be the same error in the other direction). But D-5238's
+    // live `/clear` gate asks a different question — what turn would the
+    // `/clear` lose? — and with no row there is no wrapper, so no config dir to
+    // read the live file under: `stopVerdict` answers `unmeasured`, and the
+    // gate refuses `status-unmeasurable` before the hold, the route write, the
+    // transition and the `/clear`. (On the fleet this arm is reached only by a
+    // race: `cmd_ensure` itself dies on an id with no registry row.)
     const home = mkTmp('ccrc-runs-');
-    const { run } = makeRunner(home);
+    const { run, calls } = makeRunner(home);
     const w = await openApp(home, run); app = w.app;
     const opened = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-ghost' });
     expect(opened.statusCode).toBe(200);
     const id = (opened.json() as { id: number }).id;
+    const before = calls.length;   // the OPEN's own hold on the named session is not the dispatch's act
     const res = await postDispatch(app, id);
-    expect(res.statusCode).toBe(200);
-    expect(okRun(w.coord.run(id))?.state).toBe('dispatched');
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, refused: 'status-unmeasurable' });
+    expect(okRun(w.coord.run(id))?.state).toBe('planned');
+    expect(calls.slice(before).some((c) => c[0] === 'ws-hold' || (c[0] === 'send-keys' && c.includes('/clear')))).toBe(false);
   });
 
   it('still answers registry-unmeasurable when the registry cannot be listed at all', async () => {

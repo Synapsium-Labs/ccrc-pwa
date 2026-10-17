@@ -435,7 +435,7 @@ export async function assembleFleet(
   cfg: CcrcConfig,
   tmux: Tmux,
   now = Math.floor(Date.now() / 1000),
-  pendingDialogs?: Set<string>,
+  pendingDialogs?: ReadonlySet<string>,
   statuslines?: Map<string, Statusline>,
   taskProgress?: Map<string, TaskProgress>,
   /** Last-swept PR state per session id (FleetWatcher's third lane). Absent on
