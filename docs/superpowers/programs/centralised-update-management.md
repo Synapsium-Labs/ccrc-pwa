@@ -39,7 +39,7 @@ numbers; the spec wave each one implements is named beside it.
 | 15 | — (`ccd/ccd`) | `--no-reload` for `_svc_enable`, alone | fleet-first | — | **Reviewed and accepted** (2026-10-16): PR #441 at `9888457bc`; review 510 found one prose minor (R31); lands after #410, run 360 and #435. Was: **cleared to dispatch** (2026-10-16): both consents in; plan `527296ffc` + `ca3abb150`. Was: **planned; dispatch on consent** (2026-10-15 22:11): claim 1396 (run 308) holds `ccd/ccd`, claim 1423 (run 360) holds `ccd/ccrc`; Reading 7 re-ruled; lands last among the `ccd/ccd` landers; adds R25(c) and R25(a)'s code-comment half. Was: **planned; dispatch held on three claims.** Plan `527296ffc` (workflow `wf_f9c94b88-140`; 2 tasks; it defines D-4286, and the reserve is numbers 4287 to 4291). It waits until claims 1057 (`ccd/ccd`), 1058 (`macos-platform.test.ts`) and 1055 (`ccd/ccrc`) have ended (Reading 7). Was: **Run 300 open, planned** 2026-10-06 16:07 UTC. Deviation block 4286 to 4295 (bare until defined). To plan. `ccd/ccd` is unclaimed, but open PRs #299, #301 and #303 also edit it, so whichever lands later rebases and restamps. |
 | 16 | — (sweep and verify; before stable) | R18(e) (item 3's false "is FAILED" warning, the stale-pid comment), Reading 9's sweep half (warn only), the pgid clause's comment, T6-INT-W closed, R18(a), R18(b), R10j, R8c, R10c(3), R8g | fleet-first; auto moves it, the coordinator watches | — | **Fix round 1** (2026-10-16): PR #444 at `e2c48be75`, review 512: F3 and F4 fixed now, then the run-360 merge and one scoped review. Was: run 484, plan `0f07ddcb9` |
 | 17 | — (install, doctor, backup prune) | `ccrc-api` placed by the install spine and removed by uninstall (README's `ccrc-api` lines), Reading 9's doctor half (WARN only), R10k, R8f, R14(a), R10i, R34 (both KEEP spellings; D1c pins them equal), R25(a)'s code-comment half, R35(b) | fleet-first; auto moves it, the coordinator watches | — | waits for run 360 to land (claims 1388, 1410, 1423) and claim 1403 (run 468, #425) on README (2026-10-15 22:11) |
-| 18 | — (test containment) | `makeCcdHarness` containment parity, R14(b)'s raw-spawn census, R23(a), R23(b), R23(d) | none (tests) | — | **IN REVIEW** 2026-10-17 02:55 UTC: wave-done at `b5b83ad66` (PR #482), run 517 awaiting-review, review run 535; lands after run 360. Was: **DISPATCHED** 2026-10-17 00:50 UTC (run 517, worker still-delta): plan `f9abdcc0e` (D-5247 to D-5253, reserve 5254 to 5258), readings ruled; lands after run 360. Was: **PLANNING** 2026-10-16 18:00 UTC: run 517 opened (planned), block 5247 to 5266; the plan workflow runs (`wf_21fbd9dc-804`). `ccdWsHelpers.ts` is unclaimed since claim 1396 ended. Was: to plan; `ccdWsHelpers.ts` held by claim 1396 (run 308); R14(b) and R23 can go first (2026-10-15 22:11) |
+| 18 | — (test containment) | `makeCcdHarness` containment parity, R14(b)'s raw-spawn census, R23(a), R23(b), R23(d) | none (tests) | — | **FIX ROUND 1** 2026-10-17 03:45 UTC: review 535 (18 findings) ruled in plan `3098b03ea`, mail 5698; then the landing round and one scoped review; lands after run 360. Was: **IN REVIEW** 2026-10-17 02:55 UTC: wave-done at `b5b83ad66` (PR #482), run 517 awaiting-review, review run 535. Was: **DISPATCHED** 2026-10-17 00:50 UTC (run 517, worker still-delta): plan `f9abdcc0e` (D-5247 to D-5253, reserve 5254 to 5258), readings ruled; lands after run 360. Was: **PLANNING** 2026-10-16 18:00 UTC: run 517 opened (planned), block 5247 to 5266; the plan workflow runs (`wf_21fbd9dc-804`). `ccdWsHelpers.ts` is unclaimed since claim 1396 ended. Was: to plan; `ccdWsHelpers.ts` held by claim 1396 (run 308); R14(b) and R23 can go first (2026-10-15 22:11) |
 | 19 | — (PWA and server residue) | R24(a), (b), (d), R26(a)-(d), R27(a), R27(b)'s test half; B5, the `update-inventory.test.ts` stable flake | server | — | **MERGED** `a6b2606c9` (PR #443, 2026-10-16 12:54 UTC, run 483 done); tree equals merge-tree of the reviewed tip `95aa8f3bf`; review 511 found 4 minor (R33) |
 | — | — | docs PR: R22, R24(e), R23(c), (e), R27(b)'s plan half, R27(c), R25(a), (b), R35(c), README's Reading 9 clause, the closure sentences | none (docs) | — | to write; README half waits for claim 1403 (#425) (2026-10-15 22:11) |
 | — | — | final rollout: promote to `stable` (the coordinator, ruling 2026-10-15), auto convergence and a read-only `ccrc rollout --check` (no hand `ccrc rollout`, ruling 2026-09-30), the exit criteria measured live (the operator taps the rehearsal) | — | — | planned; stable waits on B1, B2, B5 and wave 16 |
@@ -3578,6 +3578,35 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   - **Order:** the review, then the landing after run 360: merge `main`, re-run the census and update its lists,
     re-run the harness files, and a fresh wave-done.
 
+- **2026-10-17 03:45 UTC: review 535 ruled; wave 18's fix round 1 sent (mail 5698).**
+  - **The review** (`swift-cove`, at `b5b83ad66`): the held-out panel plus three wave lenses, 93 agents, none died.
+    18 findings survived the refuters (three important, F1 to F3) and 6 were refuted. No suite ran locally, because
+    the memory gate never opened. CI is green on every Linux leg: the PR's selection (305 of 714 server files, all
+    280 harness reachers among them) and a full run on the branch. The full run's only reds are two macOS shards
+    that `main`'s daily shares. Run 535 closed `done` on the reviewer's fingerprint.
+  - **The findings:** the census misses a command line built by `.join` or `+` (six live sites, none bare today,
+    F1); three of its detector arms have no corpus line or mutation row (F2); and the reach-spy logs never ran
+    anywhere (F3). The minor ones are more census spellings, the bus gate's `;` and `%` forms, missing red rows,
+    a mutation table measured before the tip, and prose.
+  - **Before ruling,** three critics checked the draft rulings (rigour, proportion, factual premises; workflow
+    `wf_a3883085-0c3`). They found that two of its fixes, done naively, make false hits (one in a file run 360
+    holds). They also found that it gave new detector arms no mutation rows, and that it measured the table twice.
+  - **Ruled, in plan `3098b03ea`:**
+    - **Fix or name.** Fix a census gap when it is live in the tree, when it breaks the header's own promise, or
+      when it is a gate this wave created. Otherwise name it. A fix that would touch a claimed file is named. The
+      header's claim is restated to the spellings it lists.
+    - **Mutation rows.** Every new arm and guard gets a measured mutation row.
+    - **F3: the reach-spy run is not a merge gate.** Its safety half is pinned structurally. Its coverage half
+      (which tests meet a poison and stay green) is lost for this wave and goes to residue R35(e).
+    - **D-numbers.** Numbers 5256 and 5257 go to the census widenings and the bus refusal.
+    - **The gate.** The table is re-measured once, at the landing tip, and the full CI runs stand in for the
+      local shards.
+  - **A correction.** The 00:50 entry, and the plan's first rulings, said `sweepFixture.ts` is not on `main`. It
+    is: wave 11 (#287) added it. R35(d) stands for another reason: wave 16 (#444) edits the file.
+  - **The order:** fix round 1, a wave-done, then held for #448. Then the landing round (merge `main`, the single
+    re-measure, a fresh wave-done), and one scoped review of the round and the merge. That review checks only the
+    ruled fixes, the new rows and any new real-tree hit, so it converges.
+
 ## Carried constraints
 
 From W1's whole-branch review (minors, not patched in W1) — each lands in the wave named:
@@ -3846,6 +3875,10 @@ merges. The ones marked **before stable** are fixed, reviewed and merged before 
   `ALLOWED`, and the sliced members in `ccrc-doctor` and `ccrc-install`, get `ccrcContainedEnv`, and the census
   lists follow. (c) The docs PR: seven comment citations into `ccdWsHelpers.ts` were already stale at `256b25ecb`.
   (d) After wave 16 lands, `sweepFixture.ts`'s Darwin helper cases become plain `it`, with a dispatched full run.
+  (e) From review 535 (F3, F4, F8, F9): a harness cleanup that reports any poison record left behind, so that the
+  tests that meet a poison and stay green become a standing red rather than a one-time log. Also the symlinked bus
+  value, and the census's named spellings (a script path followed by arguments, three namespace spellings, lexical
+  scope and destructuring).
 
 ## Next-wave brief
 
