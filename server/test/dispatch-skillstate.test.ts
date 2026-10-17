@@ -89,6 +89,7 @@ const harness = async (cfg: Cfg) => {
     configDir: cfg.unrostered === true
       ? (): string | undefined => undefined
       : (w: string): string | undefined => configDirFor(conf, w),
+    turnVerdict: async () => 'idle' as const,
   } as DispatchRunDeps;
 
   return {
@@ -177,10 +178,14 @@ describe('the dispatch preflight measures the worker skill and never refuses', (
         asked.push(w);
         return configDirFor(base.cfg, w);
       },
+      turnVerdict: async () => 'idle' as const,
     } as DispatchRunDeps;
 
+    // D-5238: with no row there is no wrapper to read a live file under, so the live `/clear` gate cannot measure
+    // the turn and refuses `status-unmeasurable` before the hold — the honest-stale row no longer reaches the
+    // preflight. The invariant this case pins still holds on that path: nobody asked the roster about a wrapper.
     const out = await dispatchRun(deps, opened.id, 'go', undefined);
-    expect(out).toMatchObject({ ok: true, skillState: 'unmeasurable' });
+    expect(out).toEqual({ ok: false, kind: 'refused', code: 'status-unmeasurable' });
     expect(asked, 'the preflight asked the roster about a wrapper it never had').toEqual([]);
   });
 
