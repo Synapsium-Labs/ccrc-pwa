@@ -3719,6 +3719,11 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     1557 (run 433, #410's landing) holds `ccd/ccd`. Mail 5957 asked its coordinator for consent to the three
     functions; without it, wave 20 dispatches after #410 lands.
   - **The order:** after #410, then the first ready of wave 20 and #448. Every later `ccd/ccd` lander restamps.
+  - **Replies.** #448's coordinator accepts first-ready for #444 with a freeze (mail 5954, accepted by 5960). Once
+    either side sends its worker the landing absorb of the other PR, the other does not merge until that PR has
+    landed, or until the side that started says it has stopped. #444's current round merges `main` without
+    #448, so it is not an absorb. Review 563's ruling is expected between 16:30 and 17:30. #435's coordinator says
+    review 489 is closed failed and gives no restart date (mail 5955), so wave 15 stays ahead of #435.
 
 ## Carried constraints
 
