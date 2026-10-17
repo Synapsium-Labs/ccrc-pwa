@@ -27,7 +27,7 @@ import { dequeuedSubject, mergedSubject } from '../src/coord/rundefs.js';
 import { COLLECT_LANE_LIVE_MARKER } from '../src/collectLane.js';
 import type { DoneClaim } from '../src/coord/fingerprint.js';
 import {
-  ASK_REFUSE_CODES, MAIL_BODY_MAX_BYTES, MAIL_REJECT_CODES, RUN_REFUSE_CODES,
+  ASK_REFUSE_CODES, ASK_STATES, MAIL_BODY_MAX_BYTES, MAIL_REJECT_CODES, RUN_REFUSE_CODES,
   isPrPhase, isRunRefuseCode, SUITE_WORDS, FAILURE_KINDS, SPAWN_VERDICTS, ACTIVE_RUN_STATES, REVIEW_DONE_SUBJECT, WAVE_DONE_SUBJECT,
 } from '../../shared/api.js';
 
@@ -1826,7 +1826,16 @@ describe('the coordinator-resume runbook (program-leverage wave 1, spec S3 item 
 // is EXEMPT-BUT-AUTHENTICATED (`auth/gate.ts`, D-149) precisely so a cookieless
 // fleet-host session can read it. Anchors by SYMBOL — see M2 above.
 describe('the ask-answer 409 contract distinguishes route/CAS guards from answerAsk refusals', () => {
-  const ROUTE_CAS_409 = ['not-held', 'ask-moved', 'child-unmeasurable'] as const;
+  const ROUTE_CAS_409 = [
+    'not-held', 'ask-moved', 'child-unmeasurable', 'declined', 'already-answered',
+  ] as const;
+  /** D-5357: Task 4's two route refusals (D-5289, late answer wins), named in
+   *  the skill AGENT-FIRST — this text ships before the server that sends them,
+   *  so the shared vocabulary may not carry them yet. They are tied to the
+   *  `declined` AskState that same server change adds: the codes are shared
+   *  exactly when the state is, so the server landing without them (or with
+   *  only one half) reds here instead of being waved through forever. */
+  const LATE_ANSWER_409: readonly string[] = ['declined', 'already-answered'];
 
   /** Derive the downstream vocabulary from answerAsk's own return statements,
    *  then prove every token still belongs to the shared wire vocabulary. */
@@ -1836,7 +1845,7 @@ describe('the ask-answer 409 contract distinguishes route/CAS guards from answer
     return [...new Set([...body.matchAll(/ok: false, error: '([^']+)'/g)].map((m) => m[1]!))].sort();
   };
 
-  it('names the three pre-answer route/CAS 409s and every downstream refusal separately', () => {
+  it('names the five pre-answer route/CAS 409s and every downstream refusal separately', () => {
     const lifecycle = refs('wave-lifecycle.md');
     // Guard on the INDEX, not the slice: `slice(-1)` on a missing heading hands
     // back the file's last character, so a `not.toBe('')` here can never fire and
@@ -1849,14 +1858,38 @@ describe('the ask-answer 409 contract distinguishes route/CAS guards from answer
     const downstream = downstreamAnswerRefusals();
     expect(downstream, 'answerAsk no longer exposes the ten documented downstream refusals')
       .toHaveLength(10);
+    const lateAnswerShipped = (ASK_STATES as readonly string[]).includes('declined');
     for (const code of [...ROUTE_CAS_409, ...downstream]) {
-      expect(ASK_REFUSE_CODES as readonly string[], `${code} is not a shared AskRefuseCode`)
-        .toContain(code);
+      if (LATE_ANSWER_409.includes(code)) {
+        expect((ASK_REFUSE_CODES as readonly string[]).includes(code),
+          `${code} is a shared AskRefuseCode exactly when the declined AskState is (D-5357)`)
+          .toBe(lateAnswerShipped);
+      } else {
+        expect(ASK_REFUSE_CODES as readonly string[], `${code} is not a shared AskRefuseCode`)
+          .toContain(code);
+      }
       expect(section, `the ask lane does not name ${code}`).toContain(`\`${code}\``);
     }
 
     expect(flat(section), 'the route/CAS refusals are not scoped before answerAsk')
-      .toContain(flat('three route/CAS guards before `answerAsk` (`not-held`, `ask-moved`, or `child-unmeasurable`)'));
+      .toContain(flat('five route/CAS guards before `answerAsk` (`not-held`, ' +
+        '`ask-moved`, `child-unmeasurable`, `declined`, or `already-answered`)'));
+    // D-5357: the contract Task 4 (D-5289) ships — a lapse leaves the row
+    // answerable, a refused press goes back where it was taken from, and a
+    // parent's own release is final.
+    const lane = flat(section);
+    expect(lane, 'the ask lane no longer says a lapse leaves the row answerable')
+      .toContain(flat('when the grace window lapses, the operator\'s notification fires and the row ' +
+        'moves to `released`, but it stays answerable, by you or by the operator, until one of you acts.'));
+    expect(lane, 'the ask lane no longer says a refused press goes back to its source state')
+      .toContain(flat('route puts the row back in the state it was taken from: `held`, or ' +
+        '`released` if the window had already lapsed.'));
+    expect(lane, 'the ask lane no longer says a release is final')
+      .toContain(flat('A release is FINAL: the row moves to `declined`, a terminal state,'));
+    expect(lane, 'the ask lane still says `not-held` covers a lapse')
+      .not.toContain('the grace window lapsed and the operator was notified after all');
+    expect(lane, 'the ask lane still says a refused press always returns to `held`')
+      .not.toContain('rolls the row back to `held`');
     expect(flat(section), 'the downstream refusal list is not identified as answerAsk output')
       .toContain(flat('Downstream `answerAsk` refusals include'));
     // The negative below only catches the literal phrasings; a paraphrase
