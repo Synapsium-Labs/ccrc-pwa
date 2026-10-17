@@ -594,6 +594,8 @@ and `_bak_keepset`'s header "Links are counted as `_bak_list` counts them (R10i,
 
 - [ ] **Step 4: mutation row** *(prototype)*: drop `[ ! -L "$d" ]`: F1 RED, and `row-p18b.sh` RED *(prototype, revised)*. P18 and P18c red, and P18b's suite form *(unmeasured)*; the worker measures each red before Step 2, as well as under the dropped test.
 
+- **Step 5 (deploy.sh's remote lister, ruling 6 option 1): As built.** `deploy/deploy.sh`'s remote lister line is now `for d in <pattern>; do [ -d \"\$d\" ] && [ ! -L \"\$d\" ] && printf '%s\n' \"\$d\"; done \`, one line for one line. D3c (`agent/test/deploy-verify.test.ts`, beside D3/D3b/D3d; `runPruneOnDisk` gained an optional `links` argument and an `outside` result) plants a real `20250101-000000` and a newer link `20250102-000000` at KEEP=1: RED before the change (`left` was `20250102-000000`, `pre-flip-hand-made`: the real backup removed), GREEN after (both left, the link's target untouched). Mutation: restoring the `ls -d` line reds D3c alone (D1b and D3/D3b/D3d stay green); restored, `cmp` clean. `row-pk2.sh` agrees (old left only the link; new left both). D1b's substring (`| sort | head -n -N | grep -vxF -- '$TS' | xargs -r rm -rf --`) held unchanged; no pin changed. Whole `deploy-verify.test.ts`: 114 passed; `bash -n deploy/deploy.sh` clean. Task 7 Step 2 note: `_bak_gc`'s header takes the "(neither counts a link, D-5319)" wording, not the "deploy.sh's remote prune still counts links" one.
+
 ### Task 8: both KEEP spellings accept ASCII digits only (R34; W17-g; D-5320)
 
 Rebase onto #444's final head first: `deploy/deploy.sh`'s KEEP test exists only there (D-5142), and its all-zeros refusal (D-5144) shares the line.
