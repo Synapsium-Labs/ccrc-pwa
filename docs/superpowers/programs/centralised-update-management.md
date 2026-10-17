@@ -1807,6 +1807,9 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       26/0/0). The fleet sweep skipped the same four failed supervisors, and the fleet's prune took its backups from
       189M to 175M. STATUS: fleet and server v0.0.226, newest v0.0.226, intent dev/auto=stable, backups fleet
       175M/server 801M, disk free fleet 214G/work volume 111G/server 32G, no anomalies.
+    - **2026-10-17 16:58 UTC:** v0.0.227 released at 16:14:29 (#495, docs) and stays unapplied under `auto=stable`.
+      STATUS: fleet and server v0.0.226, newest v0.0.227, intent dev/auto=stable, backups fleet 175M/server 801M,
+      disk free fleet 214G/work volume 111G/server 32G, no anomalies.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
@@ -3785,6 +3788,13 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     and the route's wait read the real clock. Unless it is fixed, it can red the stable gate's `full-suite`. The
     owner is the working-state programme (#484 to #489), whose session this coordinator cannot find. It is put to
     the operator.
+  - **16:50 UTC: an operator ruling: this programme fixes D-5238's tests.** The route's `waitForMeasuredVerdict`
+    counts its own fake `setTimeout` steps and reads no clock. The test's `advance` moves fake time after a fixed 40
+    `setImmediate` turns, so under load the route's real I/O falls behind fake time. The fix is test-only: fake
+    time moves only while the route is parked on a fake timer, bounded by real time. A new row puts a real delay on
+    every read, and its mutation row restores the old flush. It rides wave 16's branch as D-5145 (mail 5982), before
+    review 568. Review 568's brief now covers it, and the review waits for that wave-done. No other PR or claim
+    touches the file.
 
 ## Carried constraints
 
