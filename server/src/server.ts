@@ -2410,14 +2410,14 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // D-5236: what Escape would interrupt, from the RAW live word (never `liveStatus()`'s collapse, which reads `shell`
     // and `waiting` busy) and the frame's row with its hook stamp — the turn reads' one home, `turnverdict.ts`.
     // `interruptVerdict` holds the rule. A row that cannot be found, or a word that cannot be read, is `not-busy`, as
-    // `liveStatus()` answered it (D-115); an identity that is not measured reads the word alone.
+    // `liveStatus()` answered it (D-115); with an unmeasured identity no row is read, so any non-idle word sends Escape.
     const res = await interrupt(sendDeps, id, async (): Promise<InterruptVerdict> => {
       const read = await readSessionRecord(deps.io, deps.cfg, id);
       if (!read.found) return { kind: 'idle' };
       const word = await liveWordFor(turnReads, read.record);
       const identity = measuredIdentity(read.record);
       if (!word.ok || word.word === 'idle' || identity === null) {
-        return interruptVerdict({ word, row: null, hookUpdatedAt: null });
+        return interruptVerdict({ word, row: null, hookUpdatedAt: null, hookEvent: null });
       }
       return interruptVerdict({ word, ...(await liveRowWithHookFor(turnReads, read.record, identity.uuid)) });
     });

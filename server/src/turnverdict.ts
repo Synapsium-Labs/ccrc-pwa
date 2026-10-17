@@ -54,15 +54,15 @@ export async function liveRowFor(d: TurnReadDeps, rec: SessionRecord, uuid: stri
   return (await liveRowWithHookFor(d, rec, uuid)).row;
 }
 
-/** `liveRowFor`'s row with the stamp of the hook state it was assembled from (`updatedAt`, the stamp D-75 compares
- *  with the live file's), which the row does not carry: ONE hookstate read for both, so the two cannot disagree. Null
- *  when no fresh hook state was read. The interrupt route's reads (D-5236). */
+/** `liveRowFor`'s row with the stamp and event of the hook state it was assembled from (`updatedAt`, the stamp D-75
+ *  compares with the live file's, and `event`), which the row does not carry: ONE hookstate read for all three, so they
+ *  cannot disagree. Null when no fresh hook state was read. The interrupt route's reads (D-5236). */
 export async function liveRowWithHookFor(d: TurnReadDeps, rec: SessionRecord, uuid: string):
-Promise<{ row: FleetSession | null; hookUpdatedAt: number | null }> {
+Promise<{ row: FleetSession | null; hookUpdatedAt: number | null; hookEvent: string | null }> {
   const hs = await readHookState(d.io, d.cfg.registryDir, rec.id, uuid, Date.now());
   const [row] = await assembleFleet(d.io, d.cfg, d.tmux, undefined, d.pendingDialogs(),
     d.statuslines(), undefined, undefined, new Map(hs === null ? [] : [[rec.id, hs]]), [rec]);
-  return { row: row ?? null, hookUpdatedAt: hs?.updatedAt ?? null };
+  return { row: row ?? null, hookUpdatedAt: hs?.updatedAt ?? null, hookEvent: hs?.event ?? null };
 }
 
 /** The pane reads in ccd's order, each skipped only when an earlier answer makes it impossible: the wrapper's config

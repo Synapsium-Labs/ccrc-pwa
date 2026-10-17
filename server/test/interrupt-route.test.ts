@@ -1,7 +1,7 @@
 // D-5236 (plan docs/superpowers/plans/2026-10-16-working-state-and-interruptions.md, Task 6; spec §5.5): the interrupt
 // route answers `409 background-only` and presses NO key when Escape would interrupt nothing — no pane menu pending, and
-// either (a) the raw live word is `busy`, the row carries `background` and its hook state is a `done` stamped NEWER than
-// the live file's `statusUpdatedAt` (the main turn ended; delegated work runs on), or (b) the raw live word is `shell`
+// either (a) the raw live word is `busy`, the row carries `background` and its hook state is a `done` from a `Stop`
+// stamped NEWER than the live file's `statusUpdatedAt` (the main turn ended; delegated work runs on), or (b) the raw live word is `shell`
 // (an idle main loop over a background shell or monitor). Everything else keeps today's answers.
 //
 // The harness follows `dispatch-live-gate.test.ts` (a pane whose pid and live file the fixture writes, the watcher's
@@ -120,6 +120,16 @@ describe('POST /api/sessions/:id/interrupt over background-only work (D-5236)', 
     expect(keys).toEqual(ESCAPE);
   });
 
+  // The hook re-stamps `updatedAt` when a SubagentStop carries the `done` (D-5272), so the carried stamp is newer than a
+  // turn begun after the Stop: only a Stop's stamp proves the main turn ended, and Escape must reach this one.
+  it('a SubagentStop re-stamps the done after a live re-stamp (a turn running): Escape', async () => {
+    const hook = { state: 'done', event: 'SubagentStop', at: NOW - 1000, bg: { count: 1, kinds: 'workflow' } };
+    const { res, keys } = await box({ live: { status: 'busy', at: T2 }, hook });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    expect(keys).toEqual(ESCAPE);
+  });
+
   it('live shell, no menu: 409 background-only with no count, no key', async () => {
     const { res, keys } = await box({ live: { status: 'shell', at: T0 } });
     expect(res.statusCode).toBe(409);
@@ -179,15 +189,24 @@ describe('interruptVerdict (D-5236)', () => {
   const BG = { count: 2, kinds: ['workflow'] };
   const busy = { ok: true as const, word: 'busy', since: T0 };
   it('a working hook state over a background pair is a turn', () => {
-    expect(interruptVerdict({ word: busy, row: { dialogPending: false, hookState: 'working', background: BG }, hookUpdatedAt: T1 }))
+    expect(interruptVerdict({ word: busy, row: { dialogPending: false, hookState: 'working', background: BG }, hookUpdatedAt: T1,
+      hookEvent: 'Stop' }))
       .toEqual({ kind: 'turn' });
   });
   it('a done newer than the live stamp over the pair is background-only', () => {
-    expect(interruptVerdict({ word: busy, row: { dialogPending: false, hookState: 'done', background: BG }, hookUpdatedAt: T1 }))
+    expect(interruptVerdict({ word: busy, row: { dialogPending: false, hookState: 'done', background: BG }, hookUpdatedAt: T1,
+      hookEvent: 'Stop' }))
       .toEqual({ kind: 'background-only', count: 2, kinds: ['workflow'] });
   });
+  it('a done an agent event carried, newer than the live stamp, is a turn', () => {
+    for (const hookEvent of ['SubagentStart', 'SubagentStop', null]) {
+      expect(interruptVerdict({ word: busy, row: { dialogPending: false, hookState: 'done', background: BG },
+        hookUpdatedAt: T1, hookEvent }))
+        .toEqual({ kind: 'turn' });
+    }
+  });
   it('a row that could not be assembled is a turn, under shell too', () => {
-    expect(interruptVerdict({ word: { ok: true, word: 'shell', since: T0 }, row: null, hookUpdatedAt: null }))
+    expect(interruptVerdict({ word: { ok: true, word: 'shell', since: T0 }, row: null, hookUpdatedAt: null, hookEvent: null }))
       .toEqual({ kind: 'turn' });
   });
 });

@@ -1892,31 +1892,34 @@ export type InterruptVerdict =
 
 /** D-5236: the reads `interruptVerdict` decides on — the session's RAW live word and its stamp (`liveWordFor`, never
  *  `liveStatus()`'s collapse, which reads `shell` and `waiting` busy), the frame's row for it (`liveRowFor`: the
- *  watcher's pane menu, the hook state, D-5231's `background`) and the hook state's own stamp, which the row does not
- *  carry. `row` null is a row that could not be assembled. */
+ *  watcher's pane menu, the hook state, D-5231's `background`) and the hook state's own stamp and event, which the row
+ *  does not carry. `row` null is a row that could not be assembled. */
 export interface InterruptReading {
   word: { ok: true; word: string; since: number | null } | { ok: false };
   row: Pick<FleetSession, 'dialogPending' | 'hookState' | 'background'> | null;
   hookUpdatedAt: number | null;
+  hookEvent: string | null;
 }
 
 /**
  * D-5236 (spec §5.5): `background-only` in two cases, each with no pane menu pending (a Deny must still reach its
- * menu): (a) the live word is `busy`, the row carries `background` and its hook state is a `done` stamped NEWER than
- * the live file's `statusUpdatedAt` (D-75's comparison, a null live stamp reading the hook newer) — the main turn
+ * menu): (a) the live word is `busy`, the row carries `background` and its hook state is a `done` from a `Stop` stamped
+ * NEWER than the live file's `statusUpdatedAt` (D-75's comparison, a null live stamp reading the hook newer) — the main turn
  * ended and only delegated work runs; "newer" is load-bearing, because a turn begun after that Stop with no hook event
  * re-stamps the live file, and Escape must then interrupt it; or (b) the live word is `shell`, which Claude Code writes
  * only for an idle main loop over a background shell or monitor (no count). An unreadable word, or `idle`, is `idle`:
  * the answer `liveStatus()` gave, so an unread word still withholds the key (D-115). `waiting` and every other word
- * are a `turn`. `background` already holds D-5272's carrier rule (a Stop's `done`, carried through agent events).
+ * are a `turn`. Arm (a) needs the hook event to be `Stop`, narrower than D-5272's carriers: the hook re-stamps
+ * `updatedAt` when a SubagentStart or SubagentStop carries the `done`, so a carried stamp can be newer than a main turn
+ * begun after that Stop, and only a Stop's stamp proves the main turn ended. A carried `done` is a `turn` (Escape).
  */
 export function interruptVerdict(r: InterruptReading): InterruptVerdict {
   if (!r.word.ok || r.word.word === 'idle') return { kind: 'idle' };
   if (r.row === null || r.row.dialogPending) return { kind: 'turn' };
   if (r.word.word === 'shell') return { kind: 'background-only', count: null, kinds: [] };
   const bg = r.row.background;
-  if (r.word.word === 'busy' && bg !== null && bg.count > 0 && r.row.hookState === 'done' && r.hookUpdatedAt !== null
-    && (r.word.since === null || r.hookUpdatedAt > r.word.since)) {
+  if (r.word.word === 'busy' && bg !== null && bg.count > 0 && r.row.hookState === 'done' && r.hookEvent === 'Stop'
+    && r.hookUpdatedAt !== null && (r.word.since === null || r.hookUpdatedAt > r.word.since)) {
     return { kind: 'background-only', count: bg.count, kinds: bg.kinds };
   }
   return { kind: 'turn' };
