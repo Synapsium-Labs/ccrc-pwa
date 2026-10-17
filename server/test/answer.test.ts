@@ -280,30 +280,37 @@ describe('answerDialog and the free-text row (D-5045)', () => {
 });
 
 describe('interrupt', () => {
-  // Busy-ness comes from an injected resolver (the authoritative live status
-  // file), NOT the pane: a --remote-control pane never renders "esc to
+  // What Escape would interrupt comes from an injected verdict (the
+  // authoritative live status file and the frame's row, D-5236), NOT the pane: a --remote-control pane never renders "esc to
   // interrupt" at all, and an RC-off pane does render it, but the same marker
   // can sit under (or beside) a dialog painted over it — either way
   // pane-based busy detection would report the wrong thing, and the live
   // status file is the one signal that also sees subagents (inject/send.ts's
   // `interrupt` docstring, D-102).
-  it('busy (per resolver): sends Escape', async () => {
+  it('a turn (per verdict): sends Escape', async () => {
     const { tmux, calls } = fakeTmux(['generation in progress\n❯ \n']);
-    const res = await interrupt(deps(tmux), 'x', async () => true);
+    const res = await interrupt(deps(tmux), 'x', async () => ({ kind: 'turn' }));
     expect(res).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', '=cc-x:', 'Escape']]);
   });
 
-  it('idle (per resolver): not-busy, no keys sent', async () => {
+  it('idle (per verdict): not-busy, no keys sent', async () => {
     const { tmux, calls } = fakeTmux(['scrollback\n❯ \n']);
-    const res = await interrupt(deps(tmux), 'x', async () => false);
+    const res = await interrupt(deps(tmux), 'x', async () => ({ kind: 'idle' }));
     expect(res).toEqual({ ok: false, error: 'not-busy' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+  });
+
+  it('background-only (per verdict, D-5236): refused with its count and kinds, no keys sent', async () => {
+    const { tmux, calls } = fakeTmux(['scrollback\n❯ \n']);
+    const res = await interrupt(deps(tmux), 'x', async () => ({ kind: 'background-only', count: 2, kinds: ['workflow'] }));
+    expect(res).toEqual({ ok: false, error: 'background-only', count: 2, kinds: ['workflow'] });
     expect(sendKeysCalls(calls)).toEqual([]);
   });
 
   it('not-alive when capture fails', async () => {
     const { tmux } = fakeTmux([null]);
-    const res = await interrupt(deps(tmux), 'x', async () => true);
+    const res = await interrupt(deps(tmux), 'x', async () => ({ kind: 'turn' }));
     expect(res).toEqual({ ok: false, error: 'not-alive' });
   });
 });

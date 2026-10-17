@@ -6,7 +6,7 @@
 // DialogSheet and the TerminalDrawer mount at the bottom.
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { repoLabel, substrateFault, type FleetSession, type RouteField, type SessionStatus } from '../../../shared/api';
+import { backgroundOnlyRefusal, repoLabel, substrateFault, type FleetSession, type RouteField, type SessionStatus } from '../../../shared/api';
 import { ATTENTION_DOT, Button, MailStrip, Skeleton, TaskStrip, toast } from '@ccrc/ui';
 import { SwapSheet } from '../fleet/SwapSheet';
 import { ArchiveSheet, restoreSession } from '../fleet/ArchiveSheet';
@@ -251,12 +251,21 @@ export function SessionScreen({
   };
 
   // Confirm-free: esc just sends. A 409 means the turn already ended — say so
-  // quietly; anything else is a real failure.
+  // quietly; anything else is a real failure. `background-only` (D-5236): the
+  // main turn ended over background work the server would not Escape, because
+  // Escape stops none of it — the toast says what still runs.
   const interrupt = async (): Promise<void> => {
     try {
       await api.interrupt(id);
     } catch (err) {
-      if (err instanceof ApiError && err.status === 409) {
+      const bg = err instanceof ApiError && err.status === 409 ? backgroundOnlyRefusal(err.body) : null;
+      if (bg !== null) {
+        toast(bg.count === null
+          ? 'The main turn has finished; a background shell or monitor is still running. Escape would not stop it.'
+          : `The main turn has finished; ${bg.count} background ${bg.count === 1 ? 'task' : 'tasks'}`
+            + `${bg.kinds.length > 0 ? ` (${bg.kinds.join(', ')})` : ''} ${bg.count === 1 ? 'is' : 'are'} still running.`
+            + ` Escape would not stop ${bg.count === 1 ? 'it' : 'them'}.`);
+      } else if (err instanceof ApiError && err.status === 409) {
         toast("Claude isn't working right now — nothing to stop");
       } else {
         toast(`Couldn't stop — ${err instanceof Error ? err.message : String(err)}`, 'error');
