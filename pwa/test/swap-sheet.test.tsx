@@ -12,7 +12,7 @@ import { fleetSession as baseSession } from './fleetFixture';
 import { useState } from 'react';
 import { ToastHost } from '@ccrc/ui';
 import { SWAP_REFUSALS } from '../../shared/api';
-import { api, ApiError } from '../src/lib/api';
+import { api, ApiError, SWAP_REFUSAL_TEXT } from '../src/lib/api';
 import { SwapSheet } from '../src/fleet/SwapSheet';
 import { leastLoaded } from '../src/fleet/accountPicker';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
@@ -893,7 +893,55 @@ describe('SwapSheet: a busy session asks "swap anyway" (D-5240)', () => {
     rerender(<Retarget s={b} />);
     await waitFor(() => expect(screen.queryByText("It's working — swap anyway?")).not.toBeInTheDocument());
     expect(screen.queryByRole('button', { name: 'Swap anyway' })).not.toBeInTheDocument();
+    // Retargeted back to A: the retarget dropped the ask, it does not come back.
+    rerender(<Retarget s={a} />);
+    await act(async () => {});
+    expect(screen.queryByText("It's working — swap anyway?")).not.toBeInTheDocument();
     expect(swap).toHaveBeenCalledTimes(1);
+  });
+
+  it('a refusal that lands while the sheet shows another session is a toast, and returning to it asks nothing', async () => {
+    let reject: (e: unknown) => void = () => {};
+    const swap = vi.spyOn(api, 'swap').mockImplementationOnce(() => new Promise((_, r) => { reject = r; }));
+    const a = fleetSession({ wrapper: 'claude', home: 'claude' });
+    const b = fleetSession({ id: 'claude:other', project: 'other', wrapper: 'claude', home: 'claude' });
+    const store = storeWith([a, b]);
+    const Retarget = ({ s }: { s: FleetSession }) => {
+      const [open, setOpen] = useState(true);
+      return (<><ToastHost /><SwapSheet session={s} open={open} onClose={() => setOpen(false)} fleet={store} /></>);
+    };
+    const { rerender } = render(<Retarget s={a} />);
+    fireEvent.click(await screen.findByRole('button', { name: /team·b/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Move' }));
+    // Retargeted to B BEFORE the refusal for A lands.
+    rerender(<Retarget s={b} />);
+    await act(async () => { reject(refused(SWAP_REFUSALS.sessionBusy)); });
+    expect(await screen.findByText(new RegExp(`Couldn.t move ${a.project} — ${SWAP_REFUSAL_TEXT[SWAP_REFUSALS.sessionBusy]}`)))
+      .toBeInTheDocument();
+    expect(screen.queryByText("It's working — swap anyway?")).not.toBeInTheDocument();
+    // Back to A: the stale refusal raises no consent.
+    rerender(<Retarget s={a} />);
+    await act(async () => {});
+    expect(screen.queryByText("It's working — swap anyway?")).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Swap anyway' })).not.toBeInTheDocument();
+    expect(swap).toHaveBeenCalledTimes(1);
+  });
+
+  it('a second 409 session-busy after "Swap anyway" is an error toast, never the confirm again', async () => {
+    const swap = vi.spyOn(api, 'swap')
+      .mockRejectedValueOnce(refused(SWAP_REFUSALS.sessionBusy))
+      .mockRejectedValueOnce(refused(SWAP_REFUSALS.sessionBusy));
+    const s = fleetSession({ wrapper: 'claude', home: 'claude' });
+    render(<Harness s={s} fleet={storeWith([s])} />);
+    fireEvent.click(await screen.findByRole('button', { name: /team·b/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Move' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Swap anyway' }));
+    await waitFor(() => expect(swap).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText(new RegExp(`Couldn.t move ${s.project} — ${SWAP_REFUSAL_TEXT[SWAP_REFUSALS.sessionBusy]}`)))
+      .toBeInTheDocument();
+    await act(async () => {});
+    expect(screen.queryByText("It's working — swap anyway?")).not.toBeInTheDocument();
+    expect(swap).toHaveBeenCalledTimes(2);
   });
 
   it('opening the sheet again drops a standing ask: the operator is choosing afresh', async () => {

@@ -122,6 +122,17 @@ describe('the swap route refuses a turn it was not told to lose (D-5240)', () =>
     expect(b.ccd()).toEqual([]);
   });
 
+  it('consent is the boolean true only: interrupt "true" or 1 on a busy session is still 409 session-busy', async () => {
+    for (const interrupt of ['true', 1] as const) {
+      const b = await box({ caps: ALL_CAPS });
+      liveStatus(b.home, 'busy');
+      const res = await post(b.app, { wrapper: 'lane-b', interrupt });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toEqual({ ok: false, error: SWAP_REFUSALS.sessionBusy });
+      expect(b.ccd()).toEqual([]);
+    }
+  });
+
   it('interrupt + busy, on a box that advertises swap-busy-v1, sends --interrupt', async () => {
     const b = await box({ caps: ALL_CAPS });
     liveStatus(b.home, 'busy');

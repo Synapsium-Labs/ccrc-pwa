@@ -10,7 +10,7 @@
 // opens a QuickConfirm whose consequence sentence does the explaining;
 // confirming posts api.swap — the restart itself then plays out over the fleet
 // stream.
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { FleetSession } from '../../../shared/api';
 import { SWAP_REFUSALS, isSwapRefusal, type SwapRefusal } from '../../../shared/api';
@@ -124,11 +124,17 @@ export function SwapSheet({
   useEffect(() => { setTarget(null); setShowOther(false); }, [open, session.id]);
 
   // D-5240: the "swap anyway" ask, raised by a `409 session-busy` that arrives AFTER the sheet closed (`move()` closes
-  // on the tap, below), so the sheet's own close is not its end. It is cleared when the sheet opens again, and it
-  // renders only for the session it was raised for (`busyAsk.id`), so an actions sheet retargeted to another session
-  // (the class the comment above describes) can never show it, or confirm it, over that session.
+  // on the tap, below), so the sheet's own close is not its end. It is cleared when the sheet opens again and when the
+  // sheet is retargeted (`session.id` changes), and it renders only for the session it was raised for (`busyAsk.id`),
+  // so an actions sheet retargeted to another session (the class the comment above describes) can never show it, or
+  // confirm it, over that session. A refusal that LANDS while the sheet shows another session is not parked for later
+  // either: `move()` reads `shownId` (the session displayed now, not the one its closure captured) and toasts that
+  // refusal in words instead, so returning to the refused session later never pops a consent for a stale refusal.
   const [busyAsk, setBusyAsk] = useState<{ id: string; project: string; wrapper: string; cross: boolean } | null>(null);
+  const shownId = useRef(session.id);
+  shownId.current = session.id;
   useEffect(() => { if (open) setBusyAsk(null); }, [open]);
+  useEffect(() => { setBusyAsk(null); }, [session.id]);
 
   // ONE SOURCE FOR EVERY ACCOUNT-LEVEL FACT THIS SHEET SHOWS OR RANKS ON, and
   // it is the poll, not the fleet frame. The frame's `FleetSession.limits` used
@@ -183,7 +189,10 @@ export function SwapSheet({
       } catch (err) {
         const refusal = swapRefusalOf(err);
         // A measured turn, not yet consented to: ask, archive's shape. Anything else the route refused in its own words.
-        if (refusal === SWAP_REFUSALS.sessionBusy && !interrupt) return setBusyAsk({ id, project, wrapper, cross });
+        // Only while the refused session is still the one displayed (D-5240); retargeted away, the refusal is a toast.
+        if (refusal === SWAP_REFUSALS.sessionBusy && !interrupt && id === shownId.current) {
+          return setBusyAsk({ id, project, wrapper, cross });
+        }
         toast(refusal !== null ? `Couldn't move ${project} — ${SWAP_REFUSAL_TEXT[refusal]}` : failedTo('move', err), 'error');
       }
     })();
