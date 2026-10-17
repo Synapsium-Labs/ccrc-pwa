@@ -100,9 +100,11 @@ const runDrRcState = (body: string | undefined): string => {
       mkdirSync(join(home, '.ccrc'), { recursive: true });
       writeFileSync(join(home, '.ccrc', 'remote-control'), body);
     }
-    // Contained like the spawn below (wave 18, D-5255): the doctor checks are outside the raw-spawn census's names.
-    const r = spawnSync('bash', ['-c', `. "$1"; _dr_rc_state`, 'bash', DOCTOR_CHECKS],
-      { env: ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' }), encoding: 'utf8' });
+    // Contained like the spawn below (wave 18, D-5255): the doctor checks are outside the raw-spawn census's names, so
+    // no census row sees this env. The assertion reads the SAME binding the spawn takes (review 535 F11).
+    const env = ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' });
+    assertNoRealTool(env, home);
+    const r = spawnSync('bash', ['-c', `. "$1"; _dr_rc_state`, 'bash', DOCTOR_CHECKS], { env, encoding: 'utf8' });
     expect(r.status, r.stderr).toBe(0);
     return r.stdout;
   } finally {

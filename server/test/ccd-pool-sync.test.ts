@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { makeCcdHarness, ghContainedEnv, stubContainedTool } from './ccdWsHelpers.js';
+import { assertNoRealTool } from './containedTools.js';
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, rmSync } from 'node:fs';
 import { execFileSync, spawnSync } from 'node:child_process';
 import path from 'node:path';
@@ -379,6 +380,9 @@ describe('ccd-pool-sync', () => {
     // neither.
     const env = ghContainedEnv(h.home, { ...process.env, HOME: h.home },
       { systemd: true, tmux: true, net: true });
+    // On the binding it spawns with (review 535 F10): the listing runs no curl, but the env it carries
+    // still must not resolve a real one, so dropping `net` above reds here.
+    assertNoRealTool(env, h.home);
     const strays = execFileSync('bash', ['-c', `ls -a ${reg} | grep -c 'pool-epoch\\.' || true`],
       { encoding: 'utf8', env }).trim();
     expect(strays).toBe('0');
@@ -395,6 +399,9 @@ describe('ccd-pool-sync', () => {
   const runFull = (bin: string, extra: NodeJS.ProcessEnv = {}): { rc: number; out: string; err: string } => {
     const env = ghContainedEnv(h.home, { ...process.env, CCRC_POOL_SYNC_TIMEOUT: undefined, ...extra, HOME: h.home, PATH: `${bin}:${process.env.PATH}` },
       { systemd: true, tmux: true, net: true });
+    // On the binding it spawns with (review 535 F10): without `net` a stub-less caller would find the host's curl, and
+    // no poison would record it.
+    assertNoRealTool(env, h.home);
     const r = spawnSync('bash', [path.resolve('../ccd/ccd-pool-sync')], { encoding: 'utf8', env });
     return { rc: r.status ?? -1, out: r.stdout ?? '', err: r.stderr ?? '' };
   };
