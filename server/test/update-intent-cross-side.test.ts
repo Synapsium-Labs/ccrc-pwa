@@ -41,7 +41,9 @@ import { UpdateIntentLog, defaultUpdateIntentLogPath } from '../src/coord/update
 import { FLEET_LABEL, reportFrom } from '../src/update/inventory.js';
 import { PROJECTION_LEASE_S } from '../src/update/resolve.js';
 import { resolveAndProject } from '../src/update/project.js';
-import { IN_FLIGHT_UPDATE_PHASES, UPDATE_PHASES, type UpdateChannel } from '../../shared/api.js';
+import {
+  IN_FLIGHT_UPDATE_PHASES, UPDATE_PHASES, SERVER_CAPS, SERVER_CAPS_FILE, parseServerCaps, type UpdateChannel,
+} from '../../shared/api.js';
 import { seedRoster } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { describeLinux } from './platformFixtures.js';
@@ -142,13 +144,20 @@ function fleetNode(): string {
     'while [ $# -gt 0 ]; do',
     '  case "$1" in',
     '    -o) dest="$2"; shift 2 ;;',
-    '    -K|-w|-H|--max-time) shift 2 ;;',
+    '    -K|-w|-H|--max-time|--max-filesize) shift 2 ;;',
     '    -*) shift ;;',
     '    *) url="$1"; shift ;;',
     '  esac',
     'done',
     'printf \'%s\\n\' "$url" >> "$HOME/curl-argv"',
     'case "$url" in',
+    // Task 9b's caps pull (D-5232's mechanism) asks `/health` first, with no token. A case that hands `pull` the real
+    // route's `/health` body has it answered byte for byte; any other case's server is unreachable there (curl's exit
+    // 7), which the puller records as nothing and falls through to the intent pull.
+    '  */health)',
+    '    [ -f "$HOME/fixture-health-body" ] || { echo "curl: (7) Failed to connect" >&2; exit 7; }',
+    '    cp "$HOME/fixture-health-body" "$dest"',
+    '    printf \'%s\' 200 ;;',
     '  local://*)',
     '    src="${url#local://}"',
     '    [ -f "$src" ] || { echo "curl: (22) The requested URL returned error: 404" >&2; exit 22; }',
@@ -165,8 +174,9 @@ function fleetNode(): string {
 }
 
 /** One run of the REAL puller against `body`. */
-function pull(home: string, body: string): { code: number; stderr: string } {
+function pull(home: string, body: string, health?: string): { code: number; stderr: string } {
   writeFileSync(path.join(home, 'fixture-intent-body'), body);
+  if (health !== undefined) writeFileSync(path.join(home, 'fixture-health-body'), health);
   const r = spawnSync('bash', [CCD_UPDATE_SYNC], { env: nodeEnv(home), encoding: 'utf8' });
   return { code: r.status ?? -1, stderr: r.stderr };
 }
@@ -261,11 +271,16 @@ describeLinux('the real route → the real ccd-update-sync → the real _upd_int
     app = await openServer();
     const body = await routeBody(app);
     const home = fleetNode();
-    const p = pull(home, body);
+    // The same server's real `/health` (Task 9b): the puller records its words before the intent pull.
+    const health = await app.inject({ method: 'GET', url: '/health' });
+    expect(health.statusCode, health.body).toBe(200);
+    const p = pull(home, body, health.body);
     expect(p.code, p.stderr).toBe(0);
     expect(p.stderr).toBe('');
     expect(readFileSync(path.join(home, 'curl-argv'), 'utf8'))
-      .toBe(`https://example.invalid/api/updates/intent/${FLEET_ID}\n`);
+      .toBe(`https://example.invalid/health\nhttps://example.invalid/api/updates/intent/${FLEET_ID}\n`);
+    const caps = parseServerCaps(readFileSync(path.join(home, '.ccrc', SERVER_CAPS_FILE), 'utf8'), Math.floor(Date.now() / 1000));
+    expect(caps).toMatchObject({ ok: true, words: [...SERVER_CAPS] });
     expect(readFileSync(intentFile(home), 'utf8')).toBe(body);
     expect(statSync(intentFile(home)).mode & 0o777).toBe(0o600);
     const got = readIntent(home);

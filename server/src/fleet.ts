@@ -27,8 +27,11 @@ import { foldLastRuns, releasedFrom, type ReleasedLookup } from './coord/release
 // reader) imports this module, so the constants could not stay there.
 import { ASK_HELD_CHIP_MAX_MS } from './askwindow.js';
 
-/** `FleetSession.askSummary`'s ceiling — a fleet card row, not a transcript. */
-const ASK_SUMMARY_MAX_LEN = 80;
+/** `FleetSession.askSummary`'s ceiling — a fleet card row, not a transcript; an ask push's too (D-5356). */
+export const ASK_SUMMARY_MAX_LEN = 80;
+/** D-5231, D-5272: the hook events whose `done` can hold the delegated pair —
+ *  the main `Stop` that writes it, and the two subagent events that carry it. */
+const BACKGROUND_CARRIER_EVENTS: ReadonlySet<string> = new Set(['Stop', 'SubagentStart', 'SubagentStop']);
 
 /**
  * The fleet card's one-line summary of a `waiting` hook state.
@@ -314,12 +317,12 @@ export function idHomeWrapper(roster: Roster, id: string): string {
 
 /**
  * Authoritative live status for one session — the same signal the fleet uses:
- * dead if no tmux session, else busy/idle from the live status file. Used by
- * the interrupt route: a --remote-control pane never renders the busy marker
- * at all, and an RC-off pane does render it, but the same pane can ALSO be
- * showing a dialog painted right alongside it — either way busy-ness has to
- * come from the live status file, which also sees subagents the pane never
- * shows.
+ * dead if no tmux session, else busy/idle from the live status file. No route reads it since D-5236
+ * (the interrupt route takes the RAW word, `turnverdict.ts`'s `liveWordFor`); its D-115 pins stay.
+ * Why the file: a --remote-control pane never renders the busy marker at all, and an RC-off pane
+ * does render it, but the same pane can ALSO be showing a dialog painted right alongside it —
+ * either way busy-ness has to come from the live status file, which also sees subagents the pane
+ * never shows.
  */
 export async function liveStatus(io: FleetIO, cfg: CcrcConfig, tmux: Tmux, id: string): Promise<SessionStatus> {
   // C0.3: this only ever asks about ONE id — no uniqueness or subtraction
@@ -352,9 +355,9 @@ export async function liveStatus(io: FleetIO, cfg: CcrcConfig, tmux: Tmux, id: s
   // `assembleFleet` below takes `readLiveStateMeasured` and paints an
   // unreadable live file `busy`; this function must keep answering `'idle'`
   // for it, and the two are not drift. A card DISPLAYS, so its reassuring
-  // word is the dangerous one; this function's sole consumer is
-  // `POST /api/sessions/:id/interrupt`'s `… === 'busy'` check, which REFUSES
-  // on anything else — so here `'idle'` is what withholds the keystroke, and
+  // word is the dangerous one; this function's consumer was the interrupt
+  // route's `… === 'busy'` check (D-5236 keeps the same answer in `interruptVerdict`),
+  // which REFUSES on anything else — so `'idle'` is what withholds the keystroke, and
   // "fail toward busy" would GRANT an interrupt on a read that measured
   // nothing, inverting D-115's own intent one line from its remedy. Same
   // direction the `!cfgDir` fallback above already argues for, on the same
@@ -555,7 +558,7 @@ export async function assembleFleet(
         // on this display surface, declared unmeasured so `watch.ts` keeps
         // the row's previous status instead of spending an edge — an overload
         // tick that failed six busy rows' reads used to push six "Finished".
-        // `liveStatus` keeps answering `idle` here for the interrupt route.
+        // The interrupt route's verdict answers `not-busy` here (D-5236).
         status = 'busy';
         statusUnmeasured = true;
       } else if (cfgDir) {
@@ -594,8 +597,8 @@ export async function assembleFleet(
           // surface's: a card is read as permission to walk away, so the
           // reassuring word is the dangerous one here. `liveStatus` two
           // functions up answers `'idle'` on this identical failure ON
-          // PURPOSE — its sole consumer is the interrupt route's
-          // `… === 'busy'`, which REFUSES on idle, so "fail toward busy"
+          // PURPOSE, as the interrupt route's verdict does (D-5236): it
+          // REFUSES on an unread word, so "fail toward busy"
           // there would GRANT interrupts on a read that measured nothing.
           // Both are failing away from the act that cannot be taken back;
           // `fleet.test.ts` pins the pair together on ONE fixture so the
@@ -746,6 +749,22 @@ export async function assembleFleet(
       // `assembleFleet`, which neither caller wraps.
       ask: fleetAsk(asksByChild.get(r.id) ?? null, nowMs),
       subagents: hs?.subagents ?? null,
+      // `background-aware-working` (D-5231): the delegated work a main Stop
+      // left running, and ONLY when the live file's own word covers that work
+      // (2.1.277 on, `liveCoversWorkflows`) — below that floor D-75 answers as
+      // before — and only while the hook state is that Stop's `done` with a
+      // count above zero. Null everywhere else, which is the ladder's old answer.
+      // A subagent event after that Stop carries the pair but, until D-5232's
+      // gated arm keeps the main event, rewrites `event`: so the `done` may
+      // read `SubagentStart`/`SubagentStop`, the two events that carry it
+      // (`BACKGROUND_CARRIER_EVENTS`, D-5272); no other event writes the pair.
+      background: liveCoversWorkflows && hs !== null && hs.state === 'done'
+        && hs.event !== null && BACKGROUND_CARRIER_EVENTS.has(hs.event)
+        && hs.background !== undefined && hs.background.count > 0
+        ? hs.background : null,
+      // D-5237: the registry's record of the last process end, carried as is;
+      // the PWA shows it for an hour (`recentLastEnd`).
+      lastEnd: r.lastEnd,
       // `?? null` and not `?? 0`: no hook data at all and a hook reporting
       // zero reads are two conditions, and `hookstate.ts` already keeps them
       // apart — collapsing them one layer out would undo that on the wire.

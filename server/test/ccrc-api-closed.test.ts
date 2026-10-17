@@ -312,6 +312,23 @@ describe('the client stays closed', () => {
     expect((src.match(/=~ \$SAFE_RE/g) ?? []).length,
       'both the id and the query value must be checked').toBeGreaterThanOrEqual(3);
   });
+
+  it('fills a body on exactly two rows, and the census of rows is unchanged (D-5298)', () => {
+    // A body fill is the one place this client writes words its caller did not.
+    // `ledger.allocate` fills `byId`; `runs.open` fills `claimedByUuid`, the
+    // claimant's own `.uuid` (coordinator-first routing, plan Task 11a). A third
+    // row, or `runs.open`'s fill moved onto a row that sets no claimant, is a
+    // decision this census makes someone take on purpose. Neither fill is a new
+    // row, a new route or a passthrough: the table stays twenty-four.
+    const code = clientCode();
+    const filled = [...code.matchAll(/^\s*if \[\[ "\$key" == '([a-z.-]+)' && -n "\$body" \]\]; then$/gm)]
+      .map((m) => m[1]!).sort();
+    expect(filled).toEqual(['ledger.allocate', 'runs.open']);
+    expect(routeKeys().size).toBe(24);
+    // The claimant's identity is the PANE's, derived, never a value the caller
+    // passes as a flag: the runs.open fill splices `$DERIVED_UUID` and nothing else.
+    expect(code).toMatch(/splice_body_field 'claimedByUuid' "\$DERIVED_UUID"/);
+  });
 });
 
 describe('the client is not on the exec surface', () => {

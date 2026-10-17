@@ -287,6 +287,23 @@ derive_identity() {   # sets DERIVED_ID / DERIVED_UUID, or refuses. NEVER call i
   [[ "$DERIVED_UUID" =~ $SAFE_RE ]] || refuse 'bad-uuid' 'session uuid is not a usable value'
 }
 
+# Adds `"<field>":"<value>"` as the FIRST key of the JSON object in `$body`
+# (main's local, read and rewritten here). Used by both body fills below.
+# `<value>` is always SAFE_RE-checked before it reaches this function (a `--by`
+# value, a derived id or a derived uuid), so it admits no quote and no backslash
+# and cannot escape the string it lands in. The third argument is the
+# `bad-body` detail for a body that is not an object.
+splice_body_field() {   # field, value, not-an-object detail
+  local lead rest restnb
+  lead="${body%%[![:space:]]*}"
+  rest="${body#"$lead"}"
+  [[ "$rest" == '{'* ]] || refuse 'bad-body' "$3"
+  rest="${rest#\{}"
+  restnb="${rest//[[:space:]]/}"
+  if [[ "$restnb" == '}' ]]; then body="{\"$1\":\"$2\"}"
+  else body="{\"$1\":\"$2\",$rest"; fi
+}
+
 cmd_whoami() {
   derive_identity
   printf '{"id":"%s","uuid":"%s"}\n' "$DERIVED_ID" "$DERIVED_UUID"
@@ -402,10 +419,11 @@ main() {
     fi
   fi
 
-  # The intent row's body is the one `parse_intent` synthesized: never read from a file or stdin.
+  # The intent row's body is the body `parse_intent` synthesized: never read from a file or stdin.
   [[ -z "$intent_body" ]] || body="$intent_body"
 
-  # THE ONE BODY THIS CLIENT REWRITES, and the first in its history. Measured
+  # THE FIRST BODY THIS CLIENT REWRITES. It now rewrites two more: the intent
+  # row's (above, replaced whole) and `runs.open`'s (below). Measured
   # 2026-09-02: at least 101 of this project's allocations already carry an empty
   # holder, because the documented body omits `byId` and the route stores
   # `byId ?? ''` — an omitted field and an explicit empty string reaching one
@@ -450,16 +468,44 @@ main() {
     case "$nb" in
       *'"byId":'*) : ;;                      # the caller has spoken
       *)
-        local who lead rest restnb
+        local who
         if [[ -n "$by" ]]; then who="$by"; else derive_identity; who="$DERIVED_ID"; fi
-        lead="${body%%[![:space:]]*}"
-        rest="${body#"$lead"}"
-        [[ "$rest" == '{'* ]] \
-          || refuse 'bad-body' 'the allocate body is not a JSON object; byId cannot be added'
-        rest="${rest#\{}"
-        restnb="${rest//[[:space:]]/}"
-        if [[ "$restnb" == '}' ]]; then body="{\"byId\":\"$who\"}"
-        else body="{\"byId\":\"$who\",$rest"; fi ;;
+        splice_body_field 'byId' "$who" \
+          'the allocate body is not a JSON object; byId cannot be added' ;;
+    esac
+  fi
+
+  # THE SECOND BODY THIS CLIENT FILLS: a run's claimant sends its own identity
+  # (D-5298; coordinator-first routing, spec §6.4). `POST /api/runs` is where a
+  # coordinator becomes a child's parent, and the server checks the claimant with
+  # `requireAttribution` against `claimedByUuid`. The coordinator skill's body
+  # names `claimedBy` and no uuid, and it stays that way: the uuid is read here,
+  # from the caller's own `$REG/<id>.uuid` through `derive_identity` (the pane,
+  # then the registry, as `whoami` and `asks list` read it), so no caller can get
+  # it wrong one call at a time. `runs.open` is the only row that sets a claimant:
+  # dispatch, advance, close, items and route take a run id and leave
+  # `claimedBy` and `sessionId` alone, and the reclaim door that does change them
+  # is one of the four that never have a row here (above).
+  #
+  # SAME RULES AS THE `byId` FILL, for the same reasons: a body that already
+  # names `claimedByUuid` is left alone (the route re-measures it, so the caller
+  # who spoke owns the answer, and it needs no pane); a blank one is refused; a
+  # body with no derivable identity is refused and nothing is sent; a bodyless
+  # call is untouched. The textual test's limits stated for `byId` hold here
+  # too. Freshness, not identity: every `.uuid` is readable by the one UNIX user
+  # these sessions share, so this stops a confused session, not a hostile one.
+  if [[ "$key" == 'runs.open' && -n "$body" ]]; then
+    local ob="${body//[[:space:]]/}"
+    case "$ob" in
+      *'"claimedByUuid":""'*)
+        refuse 'bad-body' 'the body names an EMPTY claimedByUuid; the claimant would be unattributed' ;;
+    esac
+    case "$ob" in
+      *'"claimedByUuid":'*) : ;;             # the caller has spoken
+      *)
+        derive_identity
+        splice_body_field 'claimedByUuid' "$DERIVED_UUID" \
+          'the runs open body is not a JSON object; claimedByUuid cannot be added' ;;
     esac
   fi
 

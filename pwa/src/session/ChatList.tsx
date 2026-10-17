@@ -46,6 +46,7 @@ function ChatItemBody({
   onRetry,
   onDiscard,
   askPending,
+  answerLabel,
   onAnswer,
 }: {
   item: ChatItem;
@@ -54,6 +55,8 @@ function ChatItemBody({
   onRetry?: (key: string) => void;
   onDiscard?: (key: string) => void;
   askPending?: boolean;
+  /** The transcript's Answer control's word (decision `ask-answer-control-says-submit`). */
+  answerLabel?: string;
   onAnswer?: () => void;
 }): ReactNode {
   switch (item.kind) {
@@ -63,7 +66,7 @@ function ChatItemBody({
       return <MessageBubble event={item.event} id={id} streaming={item.streaming} />;
     case 'tool':
       return (
-        <ToolCard use={item.use} result={item.result} askPending={askPending} onAnswer={onAnswer} />
+        <ToolCard use={item.use} result={item.result} askPending={askPending} answerLabel={answerLabel} onAnswer={onAnswer} />
       );
     case 'mail':
       return <MailCard envelope={item.envelope} />;
@@ -112,6 +115,8 @@ export interface ChatListProps {
    *  two sources the ask card's state axis is derived from; the other is the
    *  card's own `tool_result`. */
   askPending?: boolean;
+  /** The transcript's Answer control's word (decision `ask-answer-control-says-submit`). */
+  answerLabel?: string;
   /** Raise the answer sheet. The transcript never answers anything itself —
    *  `EnvelopeSheet` stays the one hardened sender. */
   onAnswer?: () => void;
@@ -127,6 +132,7 @@ export function ChatListInner({
   onRetry,
   onDiscard,
   askPending,
+  answerLabel,
   onAnswer,
 }: ChatListProps): ReactNode {
   const items = buildChatItems(events, pending, busy);
@@ -139,7 +145,7 @@ export function ChatListInner({
             id={id}
             onRetry={onRetry}
             onDiscard={onDiscard}
-            askPending={askPending}
+            askPending={askPending} answerLabel={answerLabel}
             onAnswer={onAnswer}
           />
         </div>
@@ -585,6 +591,7 @@ function ChatScroller({
   onRetry,
   onDiscard,
   askPending,
+  answerLabel,
   onAnswer,
   column,
 }: ChatListProps & { column: Column }): ReactNode {
@@ -673,7 +680,7 @@ function ChatScroller({
                 id={id}
                 onRetry={onRetry}
                 onDiscard={onDiscard}
-                askPending={askPending}
+                askPending={askPending} answerLabel={answerLabel}
                 onAnswer={onAnswer}
               />
             </MeasuredItem>

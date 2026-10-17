@@ -21036,9 +21036,16 @@ _upd_legacy_target() {   # <tag> -> 0, or dies before anything is installed
 # (wave 10), so the arms differ there (D-3949, D-3975) (single-definition's
 # sweep pin holds the Linux halves together; the Darwin halves are pinned by
 # the same file's Darwin-arm test).
-_ccrc_job_pid() {   # <unit> -> the job's pid on stdout, or nothing when it has none
-  local out
-  out="$(_svc_launchctl print "$(_svc_domain)/$(_svc_label "$1")" 2>/dev/null)" || return 0
+# `_ccrc_job_pid` tells a `launchctl print` that FAILED from a job launchd does not hold (wave 16, R10j; D-5141): 113 is
+# launchd's one positive "not loaded" answer (`_svc_is_active`'s rule), so it prints nothing, as a job with no pid does;
+# any other non-zero exit prints `!<rc>`, a question never answered. It runs inside `$(…)`, so the answer rides stdout.
+_ccrc_job_pid() {   # <unit> -> the job's pid on stdout; nothing when it has none or is not loaded (113); `!<rc>` when print failed
+  local out rc=0
+  out="$(_svc_launchctl print "$(_svc_domain)/$(_svc_label "$1")" 2>/dev/null)" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    [ "$rc" -eq 113 ] || printf '!%s' "$rc"
+    return 0
+  fi
   case "$out" in
     *"pid = "*) out="${out#*pid = }"; printf '%s' "${out%%[!0-9]*}" ;;
   esac
@@ -21048,17 +21055,25 @@ _ccrc_job_stayed_up() {   # <unit>... -> 0 iff ONE pid held across ONE shared wi
   # One settle, one pid read per job, one window, a second read per job. With ONE unit this is the call sequence and
   # the CCRC_STAYED_DETAIL the gate and `_inst_enable` have always had. With several: CCRC_STAYED_BAD lists the jobs
   # whose pid did not hold, CCRC_STAYED_WHY their details in the same order, and CCRC_STAYED_DETAIL is the first one's.
-  local u i=0 d p2
+  # Wave 16 (R18(b); D-5139, D-5140): no unit is a refusal, never a vacuous pass, and each sleep runs in the background
+  # under a `wait`, which an INT to this shell alone interrupts at once (a foreground `sleep` defers it to the sleep's
+  # end). The orphaned `sleep` ends by itself. A caller that traps another signal and returns would cut the window short:
+  # no caller does. An unmeasured read (`!<rc>`, D-5141) never holds, even against an equal one.
+  local u i=0 d p2 a b
   local -a p1=()
   CCRC_STAYED_BAD=(); CCRC_STAYED_WHY=(); CCRC_STAYED_DETAIL=""
-  sleep "${CCRC_VERIFY_SETTLE:-3}"
+  [ "$#" -gt 0 ] || return 1
+  sleep "${CCRC_VERIFY_SETTLE:-3}" & wait $!
   for u in "$@"; do p1+=("$(_ccrc_job_pid "$u")"); done
-  sleep "${CCRC_VERIFY_WINDOW:-5}"
+  sleep "${CCRC_VERIFY_WINDOW:-5}" & wait $!
   for u in "$@"; do
     p2="$(_ccrc_job_pid "$u")"
-    d="pid ${p1[i]:-none} -> ${p2:-none} across ${CCRC_VERIFY_SETTLE:-3}s+${CCRC_VERIFY_WINDOW:-5}s"
+    a="${p1[i]:-none}"; b="${p2:-none}"
+    case "$a" in '!'*) a="unmeasured (launchctl print exited ${a#!})" ;; esac
+    case "$b" in '!'*) b="unmeasured (launchctl print exited ${b#!})" ;; esac
+    d="pid $a -> $b across ${CCRC_VERIFY_SETTLE:-3}s+${CCRC_VERIFY_WINDOW:-5}s"
     [ "$#" -eq 1 ] && CCRC_STAYED_DETAIL="$d"
-    if [ -z "${p1[i]}" ] || [ "${p1[i]}" != "$p2" ]; then
+    if [ -z "${p1[i]}" ] || [ "${p1[i]}" != "$p2" ] || [ "${p1[i]:0:1}" = '!' ]; then
       CCRC_STAYED_BAD+=("$u"); CCRC_STAYED_WHY+=("$d")
       [ -n "$CCRC_STAYED_DETAIL" ] || CCRC_STAYED_DETAIL="$d"
     fi
@@ -21104,7 +21119,7 @@ _upd_sweep_launch() {
 }
 # _upd_sweep_stop <vdir> — stop the launcher of the batch in flight and wait for it, so that every job it forked has its
 # pid recorded before `_upd_sweep_kill` looks (wave 11, D-3988). The launcher's pid is `$vdir/launcher.proc`, written by
-# the sweep right after it starts the launcher and truncated right after it is reaped (a stale pid is never signalled).
+# the sweep right after it starts the launcher and truncated right after it is reaped (an INT in the few builtins between can TERM the reaped pid once).
 # It is not named `*.pid`: `_upd_sweep_kill` signals the process group of every such file.
 # It creates `$vdir/stop`; if the launcher has finished its loop (`looped`) it is only waiting for its jobs, so it is
 # TERMed; otherwise it reads the stop file at its next iteration, ends, and never waits for its jobs. BOUNDED either
@@ -21263,8 +21278,8 @@ _upd_sweep() {
   # for a reason that has nothing to do with this box.
   : "${XDG_RUNTIME_DIR:=/run/user/$UID}"; export XDG_RUNTIME_DIR
   : "${DBUS_SESSION_BUS_ADDRESS:=unix:path=${XDG_RUNTIME_DIR}/bus}"; export DBUS_SESSION_BUS_ADDRESS
-  local u km listing lu _ll la _lr lrc=0
-  local -a before=() after=() failed=()
+  local u km listing lu _ll la _lr lrc=0 fb fin pi pin pb
+  local -a before=() after=() failed=() prior=() priorw=() pback=()
   listing="$(systemctl --user list-units "claude-session@*" --plain --no-legend)" || lrc=$?
   # fix round 1 item 1 (D-3599): the plan's Task 5 code dropped this rc with
   # `|| :` and built `before` from this listing alone, so a transient failure
@@ -21281,9 +21296,12 @@ _upd_sweep() {
   # Wave 8 item G: the supervisors the restart below can touch are the ones
   # ACTIVE before it runs — read from THIS listing's ACTIVE column (`--plain
   # --no-legend`: UNIT LOAD ACTIVE SUB DESCRIPTION), so no systemctl call is
-  # added, and the argv order below is unchanged.
+  # added, and the argv order below is unchanged. A unit that column shows
+  # `activating` or `failed` goes to `prior`, with its word: never verified,
+  # and named below (wave 16, D-5136).
   while read -r lu _ll la _lr; do
-    [ "$la" = active ] && before+=("$lu")
+    if [ "$la" = active ]; then before+=("$lu")
+    else case "$la" in activating|failed) prior+=("$lu"); priorw+=("$la") ;; esac; fi
   done <<< "$listing"
   for u in $(printf '%s\n' "$listing" | awk '{print $1}') \
            claude-session@ccrc-update-preflight.service; do
@@ -21303,8 +21321,13 @@ _upd_sweep() {
     || _upd_sweep_die "systemctl --user try-restart claude-session@* failed — the supervisors' state is now mixed; read: systemctl --user list-units 'claude-session@*'"
   # try-restart is a no-op on a failed unit (its own man page), so a
   # pre-existing failed session was neither restarted nor verified — not this
-  # update's doing, must not fail it, must not be silent either.
+  # update's doing, must not fail it, must not be silent either. A unit in
+  # `before` that reads failed here WAS restarted: it is the verify's below
+  # (D-3984), or item G's line when that cannot run, so it gets neither this
+  # line nor a place in `failed` (wave 16, D-5135; item 3 of 2026-10-06 01:29).
   for u in $(systemctl --user list-units "claude-session@*" --state=failed --plain --no-legend | awk '{print $1}'); do
+    fin=0; for fb in ${before[@]+"${before[@]}"}; do [ "$fb" = "$u" ] && { fin=1; break; }; done
+    [ "$fin" -eq 0 ] || continue
     echo "update: warning: $u is FAILED — try-restart skipped it and this sweep did not verify it. On the box: systemctl --user reset-failed $u, then ccd start the session" >&2
     failed+=("$u")
   done
@@ -21341,7 +21364,13 @@ _upd_sweep() {
   local -a units=() missing=() crash=() unrec=() ncfail=()
   local vdir="" vjobs="${CCRC_SWEEP_VERIFY_JOBS:-128}" i j k r lrc d o cu _cl cw _cs _cd clist crc=0 m inb cb kc=0 mn=0 rfail="" lpid="" ltrap=""
   [[ "$vjobs" =~ ^[1-9][0-9]{0,3}$ ]] || vjobs=128
-  for u in $(printf '%s\n' "$after_listing" | awk '{print $1}'); do units+=("$u"); done
+  # A unit the pre-restart listing showed `activating` or `failed` is never verified, even when this listing shows it
+  # active (wave 16, D-5136; one absent from that listing, or shown in any other state, is still verified). Type=simple
+  # reads `active` the moment try-restart forks it, so a crash-looping one is usually here: it goes to `pback`, named below.
+  for u in $(printf '%s\n' "$after_listing" | awk '{print $1}'); do
+    pin=0; for pb in ${prior[@]+"${prior[@]}"}; do [ "$pb" = "$u" ] && { pin=1; break; }; done
+    if [ "$pin" -eq 1 ]; then pback+=("$u"); else units+=("$u"); fi
+  done
   if [ -f "$verify" ]; then
     for cb in ${before[@]+"${before[@]}"}; do
       inb=0; for u in ${units[@]+"${units[@]}"}; do [ "$u" = "$cb" ] && { inb=1; break; }; done
@@ -21468,6 +21497,21 @@ _upd_sweep() {
     seen=0
     for a in ${after[@]+"${after[@]}"} ${failed[@]+"${failed[@]}"}; do [ "$a" = "$b" ] && { seen=1; break; }; done
     [ "$seen" -eq 1 ] || echo "update: warning: $b was active before try-restart and is not active after it — this sweep did not verify it. On the box: systemctl --user status $b" >&2
+  done
+  # Reading 9's sweep half (the operator, 2026-10-15: warn only; wave 16, D-5136): a unit the pre-restart listing showed
+  # `activating` or `failed` is NAMED, once, and is never verified and never fails this update. One that item 3 named
+  # above is in `failed` and gets no second line. One the post-restart listing shows active is in `pback`. Only when
+  # that listing was READ (`arc` 0): an unread one proves nothing about "after it". Above the zero line, so a box
+  # with nothing active before still names it.
+  for ((pi = 0; arc == 0 && pi < ${#prior[@]}; pi++)); do
+    b="${prior[pi]}"; seen=""
+    for a in ${pback[@]+"${pback[@]}"}; do [ "$a" = "$b" ] && { seen=back; break; }; done
+    for a in ${failed[@]+"${failed[@]}"}; do [ "$a" = "$b" ] && { seen=failed; break; }; done
+    case "$seen" in
+      back) echo "update: warning: $b was already '${priorw[pi]}' before try-restart and reads 'active' after it — it is named, not verified, and does not fail this update (a supervisor already 'activating' or 'failed' before the restart is never verified; wave 16, D-5136). On the box: systemctl --user status $b" >&2 ;;
+      failed) ;;
+      *) echo "update: warning: $b was already '${priorw[pi]}' before try-restart and is not active after it — it is named, not verified, and does not fail this update (a supervisor already 'activating' or 'failed' before the restart is never verified; wave 16, D-5136). On the box: systemctl --user status $b" >&2 ;;
+    esac
   done
   if [ "${#before[@]}" -eq 0 ]; then
     echo "update: sweep: no claude-session@ supervisor was active when the sweep began, so try-restart had nothing running to restart (KillMode=process verified before the restart; panes untouched)"

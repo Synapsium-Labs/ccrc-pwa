@@ -11,7 +11,7 @@
 // exists to catch — a class string is not an import, so a vocabulary with two
 // authors has no single definition to outlive. Those names are emitted here
 // and nowhere else now.
-import type { ReactNode } from 'react';
+import type { ReactNode, Ref } from 'react';
 import { cn } from '../lib/cn';
 import { FOCUS_RING } from '../lib/focus';
 import './option-row.css';
@@ -58,6 +58,14 @@ export interface OptionRowProps {
    *  No class of its own: the box rides the column every row already has,
    *  marked `data-box`, so the owned vocabulary does not grow. */
   checked?: boolean;
+  /** The button's own element, for a caller that moves focus between rows itself (the ask sheets' arrow keys, a
+   *  roving tabindex). A read-only row (no `onClick`) is never focused, so it takes none. */
+  ref?: Ref<HTMLButtonElement>;
+  /** The button's place in the tab order: a roving group passes 0 on the row the arrows reach first and -1 on the
+   *  rest. Absent, the browser's default. */
+  tabIndex?: number;
+  /** The key that answers this row, announced as `aria-keyshortcuts` (a menu digit). */
+  keyShortcut?: string;
   className?: string;
 }
 
@@ -74,6 +82,9 @@ export function OptionRow({
   disabled,
   busy,
   checked,
+  ref,
+  tabIndex,
+  keyShortcut,
   className,
 }: OptionRowProps): ReactNode {
   // The ring rides the row only when it IS a control — `onClick` absent
@@ -123,9 +134,12 @@ export function OptionRow({
   }
   return (
     <button
+      ref={ref}
       type="button"
       className={cls}
       {...box}
+      tabIndex={tabIndex}
+      aria-keyshortcuts={keyShortcut}
       disabled={disabled}
       aria-busy={busy || undefined}
       onClick={onClick}

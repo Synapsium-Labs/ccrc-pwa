@@ -9,7 +9,7 @@ import { fleetSession as baseSession } from './fleetFixture';
 import { Sheet, ToastHost } from '@ccrc/ui';
 import { api, ApiError } from '../src/lib/api';
 import { SessionHeader, type SessionHeaderProps } from '../src/session/SessionHeader';
-import { SessionScreen, useKeyboardInsets } from '../src/screens/SessionScreen';
+import { SessionScreen, chatPulsing, useKeyboardInsets } from '../src/screens/SessionScreen';
 import { createFleetStore } from '../src/stores/fleet';
 import { createSessionStore } from '../src/stores/session';
 import { TEST_ROSTER } from './rosterFixture';
@@ -986,6 +986,61 @@ describe('the Escape binding ignores every other key', () => {
   });
 });
 
+// `background-aware-working` (D-5231; plan 2026-10-16-working-state-and-interruptions Task 1): the header says what
+// the card says about delegated work a main Stop left running, and the chat pulse follows the server's BUCKET, so a
+// wedged `busy` the ladder filed `done` stops pulsing and delegated work after a Stop keeps it.
+describe('delegated background work (D-5231)', () => {
+  const NEUTRAL = 'lane-a:project-a';
+  const row = (over: Partial<FleetSession> = {}): FleetSession => baseSession({
+    id: NEUTRAL, project: 'project-a', status: 'busy', bucket: 'working', hookState: 'done',
+    statusUpdatedAt: Date.now() - 95 * 60_000, background: { count: 2, kinds: ['workflow'] }, ...over,
+  });
+
+  it('a working row with background reads `working · 2 in background`, the kinds in the title', () => {
+    renderHeader({ status: 'busy', session: row() });
+    const line = screen.getByText('working · 2 in background');
+    expect(line.getAttribute('title')).toBe('in background: workflow');
+  });
+
+  it('the same row with no background keeps the elapsed clock', () => {
+    renderHeader({ status: 'busy', session: row({ background: null }) });
+    expect(screen.queryByText(/in background/)).not.toBeInTheDocument();
+    expect(screen.getByText(/^working · /)).toBeInTheDocument();
+  });
+
+  it('a row the ladder filed `done` never shows the background words', () => {
+    renderHeader({ status: 'busy', session: row({ bucket: 'done' }) });
+    expect(screen.queryByText(/in background/)).not.toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'finished' })).toBeInTheDocument();
+    // Nor the kinds in a title: the row's `background` is still set (fleet.ts does not clear it once the live file
+    // goes idle after the Stop), so only the `bucket === 'working'` gate keeps a stale title off the done line.
+    const line = document.querySelector('.status-line');
+    expect(line).not.toBeNull();
+    expect(line!.textContent).toMatch(/^done/);
+    expect(line!.hasAttribute('title')).toBe(false);
+  });
+
+  // The pulse rule is tested directly: `ChatList` renders through Virtuoso, which cannot measure in jsdom, so a
+  // SessionScreen render never shows the trailing indicator whatever `busy` is (a vacuous assertion).
+  it('the chat does not pulse on a wedged busy row whose bucket is `done`', () => {
+    expect(chatPulsing(row({ bucket: 'done', background: null }), 'busy')).toBe(false);
+  });
+
+  it('the chat pulses on a busy row the ladder keeps `working` for its delegated work', () => {
+    expect(chatPulsing(row(), 'busy')).toBe(true);
+  });
+
+  it('the chat pulses on a `working` row while the live word already reads idle (the bucket decides)', () => {
+    expect(chatPulsing(row(), 'idle')).toBe(true);
+  });
+
+  it('before the snapshot row lands the live word decides, and a dead session never pulses', () => {
+    expect(chatPulsing(null, 'busy')).toBe(true);
+    expect(chatPulsing(null, 'idle')).toBe(false);
+    expect(chatPulsing(row(), 'dead')).toBe(false);
+  });
+});
+
 // D-5235 (spec 2026-10-16 §5.5; plan Task 5). The desktop Escape binding sits
 // on the window, in the bubble phase, so the same keystroke that dismisses a
 // sheet (Radix's dismiss, in its document capture listener, preventDefault()s
@@ -1085,5 +1140,22 @@ describe('Escape that closes a sheet never interrupts (D-5235)', () => {
     act(() => box.focus());
     fireEvent.keyDown(box, { key: 'Escape', code: 'Escape', keyCode: 27 });
     expect(p.onInterrupt).not.toHaveBeenCalled();
+  });
+});
+
+// `interrupt-and-restart-causes-recorded` (D-5237; plan 2026-10-16-working-state-and-interruptions Task 8): the
+// header names a recent process end as the card does, for an hour.
+describe('a recent restart is named (D-5237)', () => {
+  const row = (over: Partial<FleetSession> = {}): FleetSession => baseSession({
+    id: 'lane-a:project-a', project: 'project-a', ...over,
+  });
+  it('an oom end 3 minutes ago reads `restarted · out of memory · 3m ago`', () => {
+    renderHeader({ status: 'idle', session: row({ lastEnd: { at: Date.now() - 3 * 60_000 - 5_000, cause: 'oom' } }) });
+    const chip = screen.getByText('restarted · out of memory · 3m ago');
+    expect(chip.closest('[data-restart]')?.getAttribute('data-restart')).toBe('oom');
+  });
+  it('after an hour, or with no end, nothing', () => {
+    renderHeader({ status: 'idle', session: row({ lastEnd: { at: Date.now() - 61 * 60_000, cause: 'oom' } }) });
+    expect(screen.queryByText(/^restarted · /)).not.toBeInTheDocument();
   });
 });

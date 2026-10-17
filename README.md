@@ -841,6 +841,25 @@ predates `update --check`. `deploy.sh` never writes a role, so **the first move 
 hand, once per box (D-3106):** add the `CCRC_ROLE=` line to that box's `~/.ccrc/ccrc.env`, then
 `ssh <box> ccrc update --to vX.Y.Z`, fleet box first. Every release after that is `ccrc rollout`.
 
+**The server's capability words (D-5232's mechanism).** Some fleet-side changes alter what an existing hookstate
+field means and are safe only behind a server that reads the new meaning. No rollout form can hold that order for
+every mover (the one-tap and the `auto` dispatcher move fleet nodes first, `deploy.sh` and a hand-run `ccrc update`
+follow no order, and a server can be rolled back or restore itself after a failed health gate), so the hook gates
+itself on its server instead. The server advertises words in `GET /health`'s additive `caps` (`SERVER_CAPS`,
+`shared/api.ts`; a word is added by the change that builds what it names and never reused for another promise;
+the first is `dispatch-live-gate-v1`, D-5238's dispatch gate). The fleet box records them in `~/.ccrc/server-caps`
+(`SERVER_CAPS_FILE`): three lines, `at <unix seconds>`, `caps` and the words, `end`, whole by rename at mode 0600.
+On a `fleet` node `ccd-update-sync` writes it every minute from a second request of its own to `/health` (no token;
+placed before its node-id and box-token checks, and its failures write nothing and never stop the intent pull); on a
+`server` or `both` node the server process writes it at its first tick and then on a minute beat of its own, which
+does not need a coordination database. A hook arm that changes a field's meaning engages only while the file is
+whole, at most `SERVER_CAPS_LEASE_S` (180 s) old by the hook's clock, not in the future, and lists the arm's word;
+otherwise it writes exactly what it wrote before, which every server reads correctly. So no rollout order is needed
+for such an arm: a fleet that moves first runs with the arm off until its server lists the word, and a server rolled
+back below the word turns the arm off within a minute on a fleet node and within the 180 s lease on a `server` or
+`both` node, whose file the older server never rewrites. `ccrc doctor`'s `server-caps` check reads the file on a
+`fleet` or `both` node and WARNs, naming the writer, when it is absent, torn, malformed, stale or in the future.
+
 **Control plane (update-management W2).** The server now measures and records the fleet's update state; what moves
 a node is the one-tap, below. `coord.db` (migration 14) holds a **release catalogue** — the repo's GitHub releases
 listing, read every 30 minutes with `If-None-Match` and no token (owner and repo come from the installed tree's
@@ -2246,6 +2265,25 @@ message to resume"; the server parser keys on the structural markers — `isMeta
 line, `message.model === '<synthetic>'` for the padding — each narrowed by the exact sentence
 (`RESUME_PROMPT_PREFIX` / `NO_RESPONSE_TEXT`, `shared/api.ts`); ccd's `RESUME_PROMPT` must keep
 starting with that prefix, which `server/test/ccd-resume-flag.test.ts` pins (D-2228).
+
+**Every process end is recorded, and the prompt names it (D-5237).** `_spawn_start` reads the pane's
+scope unit once, after the pane exists, into `$REG/<id>.panescope` (one `/proc` read per spawn,
+none per supervise tick). When tmux pronounces the session `gone`, the supervise loop classifies the
+end: `oom` when that scope's journal names an OOM kill in the last 120 s (`journalctl --user -u
+<scope>`, bounded by `timeout 5`), `tmux-server` when `tmux list-sessions` fails, `exited`
+otherwise, and `unknown` when the journal read fails or no scope was recorded on Linux. `cmd_swap`
+records `swap-manual`, `swap-auto-home`, `swap-auto-rescue` or `swap-auto` after its act-time gates
+and before it stops the unit, so a refused swap records no end. Each goes to `$REG/<id>.lastend`
+(`<epoch> <cause>`; an `oom` also appends to `$REG/<id>.oomends`, kept to the last 10 minutes) and
+to `swap.log` as `ended <id>: <cause>`. `_resume_prompt_for` composes the prompt per spawn: a
+`lastend` at most 10 minutes old replaces RESUME_PROMPT's "an account swap or a supervisor revival"
+with the cause, and for `oom` adds how many out-of-memory restarts the last 10 minutes held and that
+the step that was running must not be re-run at the same parallelism. `_resume_env <id>` carries it
+and `_redrive_after_spawn` types the same text; no clause holds a single quote. The server reads
+`lastend` only when the registry listing names it, into `FleetSession.lastEnd` (`parseLastEnd`;
+an unknown cause reads `unknown`), and the card and the session header show "restarted · out of
+memory · 3m ago" for an hour. `_route_escape` writes `route-escape <id>` to `swap.log` before each
+Escape it sends.
 
 ### A limit is measured on the transcript, and Claude Code's own recovery is left alone (D-2360–D-2370)
 
@@ -5125,15 +5163,15 @@ things at that moment: it builds a SECOND card — the files this context was wo
 community and dependents read out of the same graph — and it MEASURES the compaction, writing one line to a
 per-session journal. Three arms of `ccd/session-hook.sh` do it, and **none of them opens a new output
 channel**: the card rides the one `additionalContext` envelope `SessionStart` already prints — the compact
-arm calls `_hook_emit_context "$CARD" "$CARD_COMPACT"` (`ccd/session-hook.sh:3012`), which appends the second
+arm calls `_hook_emit_context "$CARD" "$CARD_COMPACT"` (`ccd/session-hook.sh:3037`), which appends the second
 subject under its own `COMPACT_CARD_MAX_CHARS` ceiling (`:97`) before the single `jq -cn` print (`:103-105`) — and `PreCompact` and
 `PostCompact` print nothing at all. `PreCompact` decides whose transcript is compacting and publishes the
 working set, `SessionStart(compact)` serves the card once beside the graph card in that one envelope, and
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:7975-7977`), each with an operator sentence of its own at `:8027`,
-`:8035` and `:8048`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:8138-8140`), each with an operator sentence of its own at `:8190`,
+`:8198` and `:8211`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 
@@ -5815,6 +5853,29 @@ unknown wrapper. So `sessionBucket` compares `hookUpdatedAt` against
 "finished"), and a newer hook `working` raises a stale or absent `idle`.
 `status` itself is untouched by this — it stays frozen and hook-blind.
 
+**A Stop that leaves delegated work running keeps the session `working`**
+(D-5231). From 2.1.277 Claude Code keeps the live file `busy` while delegated
+work it started runs (local agents, workflows, teammates, remote agents —
+`liveStatusCoversDelegation`), so after such a Stop a live `busy` is that work,
+not a wedge. The hook records, on every main Stop whose `background_tasks` is an
+array, `bgDelegated` and `bgDelegatedKinds`: the count and kinds of the listed
+tasks that are delegated and not finished, by one rule defined in `shared/api.ts`
+(`NON_DELEGATING_TASK_KINDS`, `TERMINAL_TASK_STATUSES`, mirrored in the hook's
+`jq`): every kind counts except `shell`, `monitor`, `mcp-task`, `dream`,
+`auto-mode-scan` and `memory-import`, and every status except `completed`,
+`failed` and `killed`; an unseen kind or status counts. A subagent event carries
+the pair; a new main turn's first write leaves it out. `fleet.ts` ships it as
+`FleetSession.background` only on a build whose live word covers delegation and
+only while the hook state is that Stop's `done`, and while it is set the hook
+`done` does not unseat a live `busy`: the row reads `working · N in background`,
+the wedge qualifier stands down, and the chat pulse follows the bucket. When the
+work ends the live file writes `idle` and the row reads `done` dated from that
+write, so its badge fires then. D-75's wedge recovery is unchanged for a Stop
+with no delegated work, a Stop listing only shells or monitors included. This
+corrects the 2026-08-17 working-detection spec's §3, which held that D-75 covers
+the Workflow-orchestrator case for free: that assumed a live `idle` during
+delegation, which Claude Code stopped writing at 2.1.277.
+
 `bucketSince` is *derived* from evidence already on the record — never
 remembered by the watcher, which would reset on every deploy and paint the whole
 fleet as freshly-unseen several times a day.
@@ -6234,9 +6295,9 @@ Known real-format subtleties already encoded:
   (`'sandbox request'`, `'input needed'`, `'dialog open'`, or the top dialog's
   own label). `liveSessionStatus` still collapses everything but `idle` to
   `busy` on purpose — the fleet card and the session socket must never paint a
-  human-blocked session as at rest, and the interrupt route's `liveStatus`
-  reads the same collapse — and `waiting` reaches the attention bucket through
-  `dialogPending` instead. The mail gate no longer reads that collapse:
+  human-blocked session as at rest — and `waiting` reaches the attention bucket
+  through `dialogPending` instead. The interrupt route no longer reads that
+  collapse (D-5236: `shell` is `409 background-only`). Nor does the mail gate:
   `mailTurnIdle` (`server/src/turnidle.ts`) takes the raw word and, by default,
   delivers on `idle` and on `shell` (an idle main loop over a background shell),
   and holds `waiting`, `busy` and any word it does not know; `mail-gate-strict`

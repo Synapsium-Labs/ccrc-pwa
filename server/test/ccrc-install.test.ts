@@ -8381,6 +8381,13 @@ describeLinux('ccrc install: a timer systemd refuses is a COUNTED degraded step 
  *  that PR's merged tree: the three maps each gained `"transcripts": "PASS"`
  *  (the fresh fleet box's registry holds no row reading a superseded
  *  transcript) and nothing else moved.
+ *  RE-MEASURED again when doctor gained its `server-caps` check (plan 2026-10-16
+ *  Task 9b, D-5232's mechanism), by the live-shape case on Linux CI on that PR's
+ *  merged tree: the three maps each gained `"server-caps": "PASS"`
+ *  (`first-write-pending`: the `--role fleet` install placed
+ *  `ccd-update-sync.timer` seconds before and no sync has written
+ *  `~/.ccrc/server-caps`, the fresh-install grace D-4168 rules) and nothing else
+ *  moved.
  *  It is a golden: nothing re-measures
  *  it, so a merge-up that moves a doctor check's class on the live shape reds
  *  the live-shape case until Step 3 is re-run on a disposable copy of the new
@@ -8438,6 +8445,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "routing": "PASS",
         "scope-sweep": "SKIP",
         "scopes": "SKIP",
+        "server-caps": "PASS",
         "services": "PASS",
         "skills": "PASS",
         "timeout": "PASS",
@@ -8492,6 +8500,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "routing": "PASS",
         "scope-sweep": "SKIP",
         "scopes": "SKIP",
+        "server-caps": "PASS",
         "services": "PASS",
         "skills": "PASS",
         "timeout": "PASS",
@@ -8616,6 +8625,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
       "routing": "PASS",
       "scope-sweep": "SKIP",
       "scopes": "SKIP",
+      "server-caps": "PASS",
       "services": "PASS",
       "skills": "PASS",
       "timeout": "PASS",

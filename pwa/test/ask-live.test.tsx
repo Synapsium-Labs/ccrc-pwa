@@ -26,6 +26,8 @@ import { api } from '../src/lib/api';
 import { ChatListInner } from '../src/session/ChatList';
 import { ASK_GLYPH, ASK_WORD, askState, type ToolResultEvent } from '@ccrc/ui';
 import { DialogSheet } from '../src/session/DialogSheet';
+import { answerControlLabel } from '../src/session/askLive';
+import { pane } from './askPanes';
 import { createSessionStore, type SessionStore } from '../src/stores/session';
 import { declValue, norm, ruleIn, stripComments } from './cssRule';
 
@@ -150,7 +152,7 @@ describe('Answer opens the one answer path, and does nothing else', () => {
     // Negative pin. Every send path this could have reached is spied; the
     // control must touch none of them.
     const answerAsk = vi.spyOn(api, 'answerAsk').mockResolvedValue(undefined as never);
-    const answerDialog = vi.spyOn(api, 'answerDialog').mockResolvedValue(undefined as never);
+    const answerDialog = vi.spyOn(api, 'answerDialog').mockResolvedValue({ ok: true });
     const prompt = vi.spyOn(api, 'prompt').mockResolvedValue(undefined as never);
     const onAnswer = vi.fn();
 
@@ -267,5 +269,28 @@ describe('the live cue is governed', () => {
     const buttons = screen.getAllByRole('button');
     expect(buttons).toHaveLength(1);
     expect(buttons[0]?.getAttribute('title') ?? '').toMatch(/sheet/i);
+  });
+});
+
+// Decision `ask-answer-control-says-submit` (the 2026-10-16 report): while the pane is on an ask's review screen the
+// transcript's control says what the sheet it raises is waiting on. It still only raises the sheet.
+describe('the Answer control on the review says Submit answers', () => {
+  it('the label rule: Submit answers on the recorded review, the default elsewhere', () => {
+    expect(answerControlLabel(pane('cc296-ask-2q-long-review'))).toBe('Submit answers');
+    expect(answerControlLabel(pane('cc296-ask-2q-long-q2'))).toBeUndefined();
+    expect(answerControlLabel(null)).toBeUndefined();
+  });
+
+  it('the card renders the label it is given, and Answer without one; either only raises the sheet', () => {
+    const onAnswer = vi.fn();
+    const { unmount } = render(
+      <ChatListInner id="s" events={[askUse()]} pending={[]} askPending answerLabel="Submit answers" onAnswer={onAnswer} />,
+    );
+    expect(answerBtn()?.textContent).toBe('Submit answers');
+    fireEvent.click(answerBtn() as HTMLElement);
+    expect(onAnswer).toHaveBeenCalledTimes(1);
+    unmount();
+    render(<ChatListInner id="s" events={[askUse()]} pending={[]} askPending onAnswer={vi.fn()} />);
+    expect(answerBtn()?.textContent).toBe('Answer');
   });
 });

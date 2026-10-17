@@ -14,8 +14,12 @@ import { readTasks } from './tasks/read.js';
 import { readHookState } from './hookstate.js';
 import { askKey } from './askkey.js';
 import type { Dialog, DialogAsk, SessionStatus, SessionStreamMsg } from '../../shared/api.js';
+import { reviewRows } from '../../shared/ask-menu.js';
 
 const POLL_MS = 2000;
+/** Failed captures in a row after which the menu the client holds is cleared (decision `ask-failed-capture-holds`):
+ *  three polls, at least 6 s of the pane unreadable. One or two are the blips a slow remote call produces. */
+const FAILED_CAPTURES_CLEAR = 3;
 const BACKLOG_N = 50;
 const SGR = /\x1b\[[0-9;]*m/g; // same idiom as inject/send.ts:80 — see checkDialog's own comment
 
@@ -62,10 +66,17 @@ export class SessionStream {
   private poll: NodeJS.Timeout | null = null;
   private stopped = false;
   private ticking = false;
+  /** When the running poll started (`tick`), for the frame log's `tick=`; null between polls. */
+  private tickStartedAt: number | null = null;
   private uuid: string | null = null;
   private status: SessionStatus | null = null;
   /** What the client last saw of the pane menu — see nextDialogFrame. */
   private seenDialog: DialogSeen = { id: null, ask: null, raw: null };
+  /** Failed captures in a row since the last reading of the pane (decision `ask-failed-capture-holds`). */
+  private failedCaptures = 0;
+  /** Bumped on every `answered:<id>` this stream handles; a poll reading taken under an older value read the pane
+   *  from before that answer and is dropped (decision `ask-stale-poll-dropped`). */
+  private answeredGen = 0;
   /** The transcript state that already failed to explain the menu on screen —
    *  see claimAskRead. */
   private askProbe: { file: string; id: string; size: number; mtimeMs: number } | null = null;
@@ -158,6 +169,25 @@ export class SessionStream {
     this.send(m);
   };
 
+  /** Decision `ask-answer-returns-next-screen`: an answer route saw the pane move to `next` (null: no menu). It goes
+   *  through the same gate as a poll's reading (`nextDialogFrame`), so this stream's record of what its client saw stays
+   *  true, and a later poll that finds the screen gone still says so. Every open stream of the session gets it, so a
+   *  second tab moves with the one that answered. */
+  private readonly onAnswered = (next: Dialog | null): void => {
+    if (this.stopped) return;
+    this.answeredGen += 1;
+    this.frame(next, 'answer');
+  };
+
+  /** Send what `dialog` (a reading of the pane, or null for no menu) changes for the client, if anything, and log it. */
+  private frame(dialog: Dialog | null, from: 'poll' | 'answer'): void {
+    const { seen, msg } = nextDialogFrame(this.seenDialog, dialog);
+    this.seenDialog = seen;
+    if (!msg) return;
+    console.log(dialogFrameLine(this.id, msg, from, this.tickStartedAt === null ? null : Date.now() - this.tickStartedAt));
+    this.send(msg);
+  }
+
   constructor(
     private readonly deps: Deps,
     private readonly bus: Bus,
@@ -200,6 +230,7 @@ export class SessionStream {
   async start(): Promise<void> {
     this.bus.on('notice', this.onNotice);
     this.bus.on(`session:${this.id}`, this.onSessionMsg);
+    this.bus.on(`answered:${this.id}`, this.onAnswered);
     const r = await this.resolve();
     if (this.stopped) return;
     if (r.ok) {
@@ -300,7 +331,27 @@ export class SessionStream {
    *  null (unresolvable session) → the menu still ships, unenriched. */
   private async checkDialog(file: string | null): Promise<void> {
     if (this.stopped) return;
+    // Decision `ask-stale-poll-dropped`: the generation this capture started under. An answer handled while it (or the
+    // transcript read below) was in flight already told the client where the pane went, from a later look than this
+    // one; framing this reading would send the answered screen back over it.
+    const gen = this.answeredGen;
     const pane = await this.deps.tmux.capture(this.id);
+    if (this.stopped || gen !== this.answeredGen) return;
+    // Decision `ask-failed-capture-holds`: a failed capture (tmux, or the remote call behind it, returned nothing) is
+    // NO READING, not "no menu". Clearing on it is what put the 2026-10-16 sheet on "Open terminal to answer" with the
+    // review still on the pane. Nothing is framed and `seenDialog` is kept, so the menu the client holds stays and a
+    // later reading of the same menu sends nothing. Only FAILED_CAPTURES_CLEAR failures in a row clear it: a pane tmux
+    // can no longer read at all is not offering a menu (an answer to it is refused `not-alive`), and the sheet must not
+    // hold one forever. A session the registry reports gone never reaches here (`tick` returns early).
+    if (pane === null) {
+      this.failedCaptures += 1;
+      if (this.failedCaptures >= FAILED_CAPTURES_CLEAR) {
+        this.askProbe = null;
+        this.frame(null, 'poll');
+      }
+      return;
+    }
+    this.failedCaptures = 0;
     // hasMenu, not paneState() === 'menu': paneState tests BUSY_RE across the
     // WHOLE pane, and an RC-off pane renders the busy marker WHILE a dialog is
     // painted below it (fleet.ts's liveStatus doc) — so paneState would answer
@@ -310,7 +361,7 @@ export class SessionStream {
     // whether a menu owns the keyboard. SGR strip mirrors that idiom, though
     // tmux.capture() (-p, no -e) carries no escape codes to strip today, unlike
     // captureAnsi().
-    let dialog = pane !== null && hasMenu(pane.replace(SGR, '')) ? parseDialog(pane) : null;
+    let dialog = hasMenu(pane.replace(SGR, '')) ? parseDialog(pane) : null;
     // Read the transcript only while this menu is still unexplained. Once its ask
     // is latched, re-reading costs a 256 KB tail every 2 s and can buy nothing:
     // nextDialogFrame would suppress the frame anyway. Menus that never latch are
@@ -318,10 +369,10 @@ export class SessionStream {
     const latched = dialog !== null && this.seenDialog.id === dialog.id && this.seenDialog.ask !== null;
     if (dialog?.parsed && file !== null && !latched) {
       const st = await this.deps.io.stat(file);
-      if (this.stopped) return;
+      if (this.stopped || gen !== this.answeredGen) return;
       if (this.claimAskRead(file, dialog.id, st)) {
         const questions = await readPendingAsk(this.deps.io, file);
-        if (this.stopped) return;
+        if (this.stopped || gen !== this.answeredGen) return;
         const ask = questions === null ? null : alignAsk(dialog.options, questions);
         // Enrichment rides ALONGSIDE the scraped options — it never rewrites them.
         // `id` stays a hash of the pane alone (answerDialog re-parses the pane to
@@ -330,7 +381,8 @@ export class SessionStream {
       }
     }
     // The probe is scoped to the PARSED menu on screen, so it dies with it. A
-    // capture can miss a menu that is still there: tmux returns null, one stray
+    // capture can miss a menu that is still there: tmux returns null (held above,
+    // so the probe survives it until FAILED_CAPTURES_CLEAR), one stray
     // 'esc to interrupt' anywhere in the pane flips it to busy, or the grab lands
     // mid-redraw and comes back `unparsed` (a menu footer with its option rows
     // half-erased — dialog.ts:94). That last one is still a dialog, so testing
@@ -341,9 +393,7 @@ export class SessionStream {
     // bare. Forgetting it costs nothing: the read above is gated on
     // `dialog?.parsed`, so an unparsed menu never spends one.
     if (dialog === null || !dialog.parsed) this.askProbe = null;
-    const { seen, msg } = nextDialogFrame(this.seenDialog, dialog);
-    this.seenDialog = seen;
-    if (msg) this.send(msg);
+    this.frame(dialog, 'poll');
   }
 
   /**
@@ -546,6 +596,7 @@ export class SessionStream {
     this.stopped = true;
     this.bus.off('notice', this.onNotice);
     this.bus.off(`session:${this.id}`, this.onSessionMsg);
+    this.bus.off(`answered:${this.id}`, this.onAnswered);
     if (this.poll) clearInterval(this.poll);
     this.poll = null;
     this.tailer?.stop();
@@ -767,6 +818,7 @@ export class SessionStream {
   private async tick(): Promise<void> {
     if (this.stopped || this.ticking) return;
     this.ticking = true;
+    this.tickStartedAt = Date.now();
     try {
       const r = await this.resolve();
       // Registry ladder, Task 2: `unmeasurable` returns EARLY, touching
@@ -910,8 +962,29 @@ export class SessionStream {
       await this.checkMail();
     } finally {
       this.ticking = false;
+      this.tickStartedAt = null;
     }
   }
+}
+
+/**
+ * The journal line for one `dialog`/`dialog_cleared` frame a session stream sends (decision `dialog-frame-log`). Until
+ * it, nothing on either box recorded what the sheet was told, so the 2026-10-16 report could only be settled by asking
+ * the operator what the sheet showed. One line per frame actually sent, never per poll:
+ * `ccrc-server: dialog-frame <session> <kind> <id8> from=<poll|answer> tick=<ms|->`.
+ * - `kind`: `cleared`, `review` (`reviewRows`), `multi` (`Dialog.multi`), `unparsed`, or `question`;
+ * - `tick`: how far into its poll the stream was when it sent the frame (`-` for an answer's frame, sent between polls).
+ * Ids and kinds only: no pane text, no labels.
+ */
+export function dialogFrameLine(id: string, msg: SessionStreamMsg, from: 'poll' | 'answer', tickMs: number | null): string {
+  let kind = 'cleared';
+  let short = '-';
+  if (msg.type === 'dialog') {
+    const d = msg.dialog;
+    short = d.id.slice(0, 8);
+    kind = reviewRows(d) !== null ? 'review' : d.multi !== undefined ? 'multi' : d.parsed ? 'question' : 'unparsed';
+  }
+  return `ccrc-server: dialog-frame ${id} ${kind} ${short} from=${from} tick=${tickMs === null ? '-' : String(tickMs)}`;
 }
 
 /** What a client has already been told about the pane menu: the dialog id it

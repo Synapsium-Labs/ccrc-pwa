@@ -239,7 +239,7 @@ install_ccd_pair() {
 # this runs the deploy has verifiably succeeded, and a nonzero exit here
 # would report failure for services that are live and green.
 prune_backups() {   # keep the newest $CCRC_BACKUP_KEEP (default 10) timestamped backups
-  local keep="${CCRC_BACKUP_KEEP:-10}"
+  local keep="${CCRC_BACKUP_KEEP:-10}" v; [[ "$keep" =~ ^[0-9]{1,4}$ ]] || { v="${keep:0:32}"; [ "${#keep}" -le 32 ] || v="$v..."; echo "deploy: warning: CCRC_BACKUP_KEEP='${v//[![:print:]]/?}' is not a whole number from 0 to 9999 — nothing pruned" >&2; return 1; }; ! [[ "$keep" =~ ^0+$ ]] || { echo "deploy: warning: CCRC_BACKUP_KEEP='$keep' keeps no backup, so the prune would remove every one — nothing pruned" >&2; return 1; }   # D-5142: ccd/ccrc's _keep_ok and _keep_why, spelled again (this file never sources ccd/ccrc); D-5144: an all-zeros KEEP is refused too, a separate test on this same line (lines keep their places)
   "${SSH[@]}" "$BOX" "cd ~/ccrc-backups 2>/dev/null || exit 0
     ls -d [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9] 2>/dev/null \
       | sort | head -n -$keep | xargs -r rm -rf --"
@@ -1107,8 +1107,13 @@ cd ~/ccrc/agent && npm ci && npm run build \
   # than a misplaced one). That fallback is exactly the state this guard is
   # written for, and it is unobservable from here. Do not delete it because a
   # healthy box makes it look unnecessary.
+  #
+  # A LISTING THAT FAILS REFUSES THE SWEEP (wave 16, R10c(3); D-5143), as `ccrc update`'s sweep refuses (D-3599): the
+  # loop below would otherwise see only the template probe, and try-restart would run over units nobody listed.
   SWEEP_CMD='export XDG_RUNTIME_DIR=/run/user/$(id -u) \
-    && for u in $(systemctl --user list-units "claude-session@*" --plain --no-legend | awk "{print \$1}") claude-session@ccrc-deploy-preflight.service; do \
+    && { listing=$(systemctl --user list-units "claude-session@*" --plain --no-legend) \
+         || { echo "deploy: FAILED — systemctl --user list-units claude-session@* failed, so the supervisors to be checked could not be listed. REFUSING to sweep." >&2; exit 1; }; } \
+    && for u in $(printf "%s\n" "$listing" | awk "{print \$1}") claude-session@ccrc-deploy-preflight.service; do \
          km=$(systemctl --user show -p KillMode "$u" 2>/dev/null); \
          [ "$km" = "KillMode=process" ] \
            || { echo "deploy: FAILED — $u resolves to ${km:-no answer from systemd}, and the sweep needs KillMode=process. systemds default is control-group, and whenever the tmux server placement falls back to a bare create — no systemd-run, no D-Bus, or a scope name not yet collected — every session on this box is a child of ONE tmux server sitting in a claude-session@ cgroup, so try-restart would kill the lot. A drop-in under ~/.config/systemd/user/claude-session@.service.d/ can set this without the base unit changing a byte. REFUSING to sweep." >&2; exit 1; }; \

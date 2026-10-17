@@ -277,7 +277,7 @@ describe('sweepAsks — the release sweep (Task 7)', () => {
     // The principal gives up — `answering -> held` — and the VERY NEXT sweep
     // (own clock, past ASK_SWEEP_MS) fires the still-live hold. This is only
     // possible because the entry survived the sweep above.
-    f.coord.untakeAsk(askId);
+    f.coord.untakeAsk(askId, 'held');
     at(T0 + ASK_GRACE_MS + 1 + ASK_SWEEP_MS + 1);
     await f.w.sweepAsks();
 
@@ -418,7 +418,7 @@ describe('sweepAsks — the release sweep (Task 7)', () => {
     // `releaseAsk` is stubbed to report a beaten CAS anyway, the only way to
     // reach the 'held' arm of the switch in a single-threaded process (a
     // real CAS against a genuinely-held row would simply succeed).
-    f.coord.untakeAsk(askId);
+    f.coord.untakeAsk(askId, 'held');
     const realReleaseAsk = f.coord.releaseAsk.bind(f.coord);
     f.coord.releaseAsk = () => false;
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -456,6 +456,66 @@ describe('sweepAsks — the release sweep (Task 7)', () => {
     expect(sent.filter((p) => p.tag === askTag('cc-a'))).toHaveLength(1);
     expect(heldMap(f.w).has('cc-a')).toBe(false);
     expect(warn).toHaveBeenCalled();
+  });
+});
+
+// D-5289 (coordinator-first routing, Task 4; spec §5.1): the lapse still
+// pushes at the deadline, but the row stays answerable by its parent; a late
+// parent answer replaces the operator's notification under the SAME tag.
+describe('sweepAsks — late answer wins (D-5289)', () => {
+  const KID = 'project-a-quiet-basin';
+  const MESA = 'project-a-calm-mesa';
+
+  it('the lapse pushes at the deadline; a later parent answer replaces the notification', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    at(T0);
+    const f = fixture({ push, sessions: [`project-a/${KID}`] });
+    const askId = await mintHold(f, KID, MESA);
+
+    at(T0 + ASK_GRACE_MS + 1);
+    await f.w.sweepAsks();
+    expect(sent.filter((p) => p.tag === askTag(KID))).toHaveLength(1);
+    expect(okAsk(f.coord.askById(askId))!.state).toBe('released');
+
+    f.w.answeredLate(KID, askId, MESA);
+    const tagged = sent.filter((p) => p.tag === askTag(KID));
+    expect(tagged).toHaveLength(2);
+    expect(tagged[1]!.body).toBe(`Answered by ${MESA}`);
+    expect(tagged[1]!.actions).toBeUndefined();
+
+    // Once: the replacement is the lapse's, not a fresh notification per call.
+    f.w.answeredLate(KID, askId, MESA);
+    expect(sent.filter((p) => p.tag === askTag(KID))).toHaveLength(2);
+  });
+
+  it('replaces nothing for a different ask id, or for an ask that never lapsed', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    at(T0);
+    const f = fixture({ push, sessions: [`project-a/${KID}`] });
+    const askId = await mintHold(f, KID, MESA);
+    f.w.answeredLate(KID, askId, MESA);                 // still held: no push went out
+    expect(sent.filter((p) => p.tag === askTag(KID))).toEqual([]);
+
+    at(T0 + ASK_GRACE_MS + 1);
+    await f.w.sweepAsks();
+    f.w.answeredLate(KID, askId + 1, MESA);             // another row's answer
+    expect(sent.filter((p) => p.tag === askTag(KID))).toHaveLength(1);
+  });
+
+  it('a dialog that clears after the lapse forgets the notification', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    at(T0);
+    const f = fixture({ push, sessions: [`project-a/${KID}`] });
+    const askId = await mintHold(f, KID, MESA);
+    at(T0 + ASK_GRACE_MS + 1);
+    await f.w.sweepAsks();
+    f.showMenu(KID, BARE_PROMPT);
+    await f.tick();                                      // dialog_cleared
+    f.w.answeredLate(KID, askId, MESA);
+    expect(sent.filter((p) => p.tag === askTag(KID))).toHaveLength(1);
   });
 });
 

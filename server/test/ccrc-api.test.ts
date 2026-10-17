@@ -442,7 +442,9 @@ describe('the token never rides curl\'s argv (R16)', () => {
 
   it.each([
     ['a GET', ['runs', 'list'], undefined, ''],
-    ['a POST whose body is a --json file', ['runs', 'open', '--json', 'BODYFILE'], undefined, '{"program":"p","wave":1}'],
+    // `claims take`, not `runs open`: the client fills `runs open`'s body
+    // (`claimedByUuid`, D-5298), and this case measures a body sent as written.
+    ['a POST whose body is a --json file', ['claims', 'take', '--json', 'BODYFILE'], undefined, '{"program":"p","wave":1}'],
     // THE COLLISION CASE: stdin is the body (read by `body=$(cat)`) AND curl's
     // config (the printf pipe). The mail envelope's own ack line is this shape.
     ['a POST whose body is --json - (stdin twice: the body, then curl\'s config)', ['asks', 'answer', '7', '--json', '-'],
@@ -774,15 +776,18 @@ describe('a query key rides only if its row declared it', () => {
 });
 
 describe('the body comes from --json, and only from there', () => {
+  // `claims take` is the plain POST here: `runs open` and `ledger allocate` are
+  // the two rows whose body the client fills (their own describes below), so a
+  // "sent verbatim" case on either would measure the fill, not the transport.
   it('sends a file body verbatim', async () => {
     const f = path.join(home, 'body.json');
     fs.writeFileSync(f, '{"program":"p","wave":1}');
-    await run(['runs', 'open', '--json', f]);
+    await run(['claims', 'take', '--json', f]);
     expect(seen[0]!.body).toBe('{"program":"p","wave":1}');
   });
 
   it('reads stdin for --json -', async () => {
-    await run(['runs', 'open', '--json', '-'], '{"program":"from-stdin"}');
+    await run(['claims', 'take', '--json', '-'], '{"program":"from-stdin"}');
     expect(seen[0]!.body).toBe('{"program":"from-stdin"}');
   });
 
@@ -795,7 +800,7 @@ describe('the body comes from --json, and only from there', () => {
   it('sets content-type on a POST that carries a body', async () => {
     const f = path.join(home, 'body.json');
     fs.writeFileSync(f, '{}');
-    await run(['runs', 'open', '--json', f]);
+    await run(['claims', 'take', '--json', f]);
     expect(seen).toHaveLength(1);
   });
 
@@ -1119,5 +1124,117 @@ describe('ledger allocate carries an identity, or refuses', () => {
     expect(r.status).toBe(0);
     expect(seen).toHaveLength(1);
     expect(seen[0]!.body).toBe('');
+  });
+});
+
+// D-5298 (coordinator-first routing, spec §6.4; plan Task 11a). `POST /api/runs`
+// is where a coordinator becomes a child's parent, and the server half (Task 11b)
+// will refuse a claimant it cannot attribute. This half ships first, on the fleet
+// box: the client fills `claimedByUuid` from the caller's own `$REG/<id>.uuid`
+// (the pane, then the registry, exactly as `whoami` and `asks list` derive it),
+// so no coordinator's documented body has to change. An older server reads the
+// extra field as nothing. The fixture body is the coordinator skill's executable
+// `runs open` example and its review-run form, with neutral ids.
+describe('runs open carries its claimant\'s identity (D-5298)', () => {
+  const CLAIMANT = 'project-a-calm-mesa';
+  const CLAIMANT_UUID = 'u-calm-mesa-0001';
+  const WAVE = {
+    program: 'program-a', title: 'Wave 1', project: 'project-a', homeProject: 'project-a',
+    wave: 1, waveOf: null, claimedBy: CLAIMANT,
+  };
+  const REVIEW = {
+    program: 'program-a', title: 'Review wave 1', kind: 'review', reviews: 12,
+    claimedBy: CLAIMANT, homeProject: 'project-a',
+  };
+
+  it.each([
+    ['a wave run', WAVE],
+    ['a review run', REVIEW],
+  ])('fills claimedByUuid from this pane\'s own .uuid on %s', async (_what, body) => {
+    plantPane(CLAIMANT, CLAIMANT_UUID);
+    // Another session's .uuid beside it: the fill reads the PANE's, not any row.
+    fs.writeFileSync(path.join(home, '.cc-sessions', 'project-a-open-dune.uuid'), 'u-open-dune-0002\n');
+    const r = await run(['runs', 'open', '--json', '-'], JSON.stringify(body), { TMUX_PANE: '%7' });
+    expect(r.status, r.stdout).toBe(0);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.method).toBe('POST');
+    expect(seen[0]!.url).toBe('/api/runs');
+    expect(JSON.parse(seen[0]!.body)).toEqual({ ...body, claimedByUuid: CLAIMANT_UUID });
+    expect(tmuxArgv().some((a) => a.includes('-t %7')), 'the pane was not the tmux target').toBe(true);
+  });
+
+  it('an EMPTY object body gets a whole object back, not a trailing comma', async () => {
+    for (const body of ['{}', '{ }']) {
+      seen.length = 0;
+      plantPane(CLAIMANT, CLAIMANT_UUID);
+      const r = await run(['runs', 'open', '--json', '-'], body, { TMUX_PANE: '%7' });
+      expect(r.status, `an empty object body (${body}) refused`).toBe(0);
+      expect(seen).toHaveLength(1);
+      expect(seen[0]!.body).toBe(`{"claimedByUuid":"${CLAIMANT_UUID}"}`);
+    }
+  });
+
+  it('leading whitespace (a heredoc, a pretty-printer) is still an object', async () => {
+    plantPane(CLAIMANT, CLAIMANT_UUID);
+    const r = await run(['runs', 'open', '--json', '-'], `\n  ${JSON.stringify(WAVE)}`, { TMUX_PANE: '%7' });
+    expect(r.status, r.stdout).toBe(0);
+    expect(JSON.parse(seen[0]!.body)).toEqual({ ...WAVE, claimedByUuid: CLAIMANT_UUID });
+  });
+
+  it('sends NOTHING when there is a body and no derivable identity', async () => {
+    plantPane('project-b-far-ridge', 'u-far-ridge-0003');   // tmux WOULD answer
+    const r = await run(['runs', 'open', '--json', '-'], JSON.stringify(WAVE),
+      { TMUX_PANE: undefined, TMUX: undefined });
+    expect(seen, 'an unattributed runs open reached the wire').toHaveLength(0);
+    expect(r.status).not.toBe(0);
+    expect(r.stdout).toContain('no-pane');
+  });
+
+  it('sends NOTHING when the pane\'s session has no .uuid', async () => {
+    plantPane(CLAIMANT, CLAIMANT_UUID);
+    fs.rmSync(path.join(home, '.cc-sessions', `${CLAIMANT}.uuid`));
+    const r = await run(['runs', 'open', '--json', '-'], JSON.stringify(WAVE), { TMUX_PANE: '%7' });
+    expect(seen).toHaveLength(0);
+    expect(r.stdout).toContain('no-uuid');
+  });
+
+  it.each([
+    ['a blank claimedByUuid', '{"claimedByUuid":"","claimedBy":"project-a-calm-mesa"}'],
+    ['its spaced spelling', '{"claimedByUuid" : "","claimedBy":"project-a-calm-mesa"}'],
+    ['a body that is not a JSON object', '[1,2]'],
+  ])('refuses %s rather than sending it', async (_what, body) => {
+    plantPane(CLAIMANT, CLAIMANT_UUID);
+    const r = await run(['runs', 'open', '--json', '-'], body, { TMUX_PANE: '%7' });
+    expect(seen).toHaveLength(0);
+    expect(r.status).not.toBe(0);
+    expect(r.stdout).toContain('bad-body');
+  });
+
+  it('leaves a caller-supplied claimedByUuid exactly as written, and needs no pane for it', async () => {
+    // Never an override: the server re-measures it against the registry
+    // (`requireAttribution`), so the caller who spoke owns the answer.
+    const body = '{"claimedBy":"project-a-calm-mesa","claimedByUuid":"u-chosen"}';
+    const r = await run(['runs', 'open', '--json', '-'], body, { TMUX_PANE: undefined, TMUX: undefined });
+    expect(r.status, r.stdout).toBe(0);
+    expect(seen[0]!.body).toBe(body);
+  });
+
+  it('a BODYLESS runs open is untouched — there is nothing to attribute', async () => {
+    const r = await run(['runs', 'open'], undefined, { TMUX_PANE: undefined, TMUX: undefined });
+    expect(r.status).toBe(0);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.body).toBe('');
+  });
+
+  it.each([
+    ['dispatch', '{"brief":"b"}'],
+    ['advance', '{"to":"running","fingerprint":"f"}'],
+    ['close', '{"state":"failed"}'],
+    ['route', '{"target":"worker"}'],
+  ])('runs %s sets no claimant, so its body is sent as written', async (verb, body) => {
+    plantPane(CLAIMANT, CLAIMANT_UUID);
+    await run(['runs', verb, '12', '--json', '-'], body, { TMUX_PANE: '%7' });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.body).toBe(body);
   });
 });

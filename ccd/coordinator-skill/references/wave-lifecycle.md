@@ -1051,19 +1051,35 @@ entry, not an invitation like the operator-only doors above.
 JSON
 ```
 
-Press an answer in with that body. A 409 from this route can come from three
-route/CAS guards before `answerAsk` (`not-held`, `ask-moved`, or
-`child-unmeasurable`) or from a downstream `answerAsk` refusal. No refusal path
-presses a digit when the eligible ask is single-select, which is the only shape
-this hold lane mints; after a downstream refusal the route rolls the row back to
-`held`.
-- `not-held` — the row has LEFT `held` and is no longer pre-emptible. That is FOUR different
-  endings, not one: another principal is mid-answer, the grace window lapsed and the operator
-  was notified after all, the child's dialog went away, or someone already ruled. Only the
-  first is a race a retry could win, and you cannot tell which from this code alone — read the
-  row (`GET /api/asks`, below) rather than retrying blind. (This entry said "a lost race
-  against another principal that already took the row" for one wave, naming one of the four:
-  the gloss came from `store.ts`, where it was equally wrong, and both were corrected together.)
+Press an answer in with that body. A LAPSE DOES NOT END YOUR TURN (late answer wins, D-5289):
+when the grace window lapses, the operator's notification fires and the row moves to
+`released`, but it stays answerable, by you or by the operator, until one of you acts. An
+answer you press after the lapse still lands, and the operator's notification is replaced by
+one saying you answered it. Only a ruling ends it: an answer from either principal, or your
+own release (below).
+
+A 409 from this route can come from five route/CAS guards before `answerAsk` (`not-held`,
+`ask-moved`, `child-unmeasurable`, `declined`, or `already-answered`) or from a downstream
+`answerAsk` refusal (D-5357). No refusal path presses a digit when the eligible ask is
+single-select, which is the only shape this hold lane mints; after a downstream refusal the
+route puts the row back in the state it was taken from: `held`, or `released` if the window
+had already lapsed.
+- `not-held` — the row is in no state a principal can take it from, and no ruling is the
+  reason. That is THREE different endings, not one: another principal is mid-answer, the
+  child's dialog went away, or the row carries a state this build cannot read. Only the first
+  is a race a retry could win, and you cannot tell which from this code alone — read the row
+  (`GET /api/asks`, below) rather than retrying blind. A lapse is NOT one of them: a lapsed
+  row is still answerable (above). (This entry said "a lost race against another principal
+  that already took the row" for one wave, naming one of its endings: the gloss came from
+  `store.ts`, where it was equally wrong, and both were corrected together. It then said
+  `not-held` also covered a lapse and an answered row, until D-5289 made a lapsed row
+  answerable and named the two rulings below apart.)
+- `declined` — YOU released this question yourself (`asks release`, below). A release is
+  final: you handed the question to the operator, and your later answer is refused. Do not
+  retry; the question is the operator's now.
+- `already-answered` — a principal already ruled: you earlier, or the operator from their own
+  phone, after the lapse or before it. Nothing is left to do; read the row (`GET /api/asks`)
+  for who answered if your ledger needs it.
 - `ask-moved` — the CHILD REPAINTED AN IDENTICAL QUESTION since this row was minted; the menu
   on its screen right now may be a different instance of what looks like the same question.
   This IS a reason to re-read the ask and answer the CURRENT one, never a reason to retry the
@@ -1078,7 +1094,7 @@ this hold lane mints; after a downstream refusal the route rolls the row back to
   `not-alive`, `no-menu`, and `menu-mismatch`. Each names the failed live-state,
   option, or pane guard; stop and re-read rather than treating 409 as three
   possible conditions or retrying blind. Counting both halves, this route answers
-  409 with thirteen (3 + 10) distinct codes.
+  409 with fifteen (5 + 10) distinct codes.
 ```bash
 : "${ask_id:?set ask_id to the held ask row positive decimal id}"
 "$API" asks release "$ask_id" --json - <<JSON
@@ -1089,8 +1105,11 @@ JSON
 Decline to rule on it with that body. A decline is not a failure: it is what turns the grace window
 into a CEILING rather than a flat tax on every question you cannot answer — the operator's
 notification fires AT ONCE on release, instead of the child's question sitting quiet until the
-window lapses on its own. Decline anything that would be a NEW decision (clause 11's own
-words — product intent, scope, a tradeoff nobody ruled on, anything irreversible) rather than
+window lapses on its own. A release is FINAL: the row moves to `declined`, a terminal state,
+and an answer you send for it afterwards is refused `declined` (D-5289) — releasing hands the
+question over, it does not defer it. Only a `held` row can be released; a release of a row
+that has already lapsed, or that a principal has taken or answered, is refused `not-held`.
+Decline anything that would be a NEW decision (clause 11's own words — product intent, scope, a tradeoff nobody ruled on, anything irreversible) rather than
 guessing at it.
 ```bash
 "$API" asks list

@@ -159,7 +159,7 @@ export interface FleetSession {
    * this one through an HTTP call to the server's own route would be a new
    * pattern for no gain (ruling F5).
    *
-   * Only two of `AskState`'s six members ever reach this field: `held`
+   * Only two of `AskState`'s seven members ever reach this field: `held`
    * while a parent may still pre-empt the child's live question, and
    * `answered` once one has ruled AND recently (`fleet.ts`'s
    * `ASK_ANSWERED_CHIP_WINDOW_MS`, fix round 1 item 4 — past that window
@@ -172,12 +172,12 @@ export interface FleetSession {
    * may answer" and "ruled by <parent>" — and F1 made the second three,
    * because the OPERATOR can settle the same row from their own phone: see
    * `answeredBy` below, and `SessionLine.tsx`'s `askWords` for the wording
-   * of each. `assembleFleet` folds the other four
-   * (`answering`, `released`, `stale`, `unknown`) to `null` rather than
+   * of each. `assembleFleet` folds the other five
+   * (`answering`, `released`, `declined`, `stale`, `unknown`) to `null` rather than
    * pass them through raw: `answering` is the between-tick sliver while a
    * digit is in flight, so it is folded onto `held` (still, functionally,
    * "may answer") rather than shown as a state the design doc gives no
-   * words for; `released` and `stale` both mean the operator's own ordinary
+   * words for; `released`, `declined` and `stale` all mean the operator's own ordinary
    * push has already fired or the dialog itself is gone, so a chip
    * explaining why they were not asked would be explaining something no
    * longer true; `unknown` is an out-of-vocabulary token this build cannot
@@ -230,6 +230,22 @@ export interface FleetSession {
    *  subagents running — same null-vs-empty-array discipline as `WsAudit`'s
    *  array fields above. */
   subagents: { name: string; startedAt: number }[] | null;
+  /** `background-aware-working` (D-5231): the DELEGATED background work the
+   *  last main Stop listed and left running — `count` tasks, of the unique
+   *  `kinds` (sorted). Set only when the live file's build covers delegation
+   *  (`liveCoversWorkflows`), the hook state is a `Stop`'s `done`, and the
+   *  count is above zero (`fleet.ts`); null everywhere else, an older peer's
+   *  snapshot included (`reviveFleetSession`). While set, the bucket ladder
+   *  keeps a live `busy` on `working` (`sessionBucket`'s `!delegated`) and the
+   *  wedge qualifier stands down. ADDITIVE: no `FLEET_PROTO` bump. */
+  background: { count: number; kinds: string[] } | null;
+  /** `interrupt-and-restart-causes-recorded` (D-5237): when and why this
+   *  session's previous process ended, from `$REG/<id>.lastend` through
+   *  `parseLastEnd`; null when the registry holds none or it is malformed.
+   *  Read on a live frame through `recentLastEnd` (an older server omits the
+   *  key), which shows it for `LAST_END_SHOWN_MS`. ADDITIVE: no `FLEET_PROTO`
+   *  bump. */
+  lastEnd: LastEnd | null;
   /** How many graph READS this session has made — `hookstate.ts`'s
    *  `graphQueries`, carried through unchanged. ADDITIVE: no `FLEET_PROTO`
    *  bump, and an older peer that omits it revives as `null` below.
@@ -628,7 +644,7 @@ export function graphGateCount(s: { graphGateDenials?: number | null }): number 
  * stance every sibling tolerant reader above takes.
  *
  * A present-but-broken shape (not an object, `parentId` not a non-empty
- * string, `state` not one of `AskState`'s six tokens) degrades to `null`
+ * string, `state` not one of `AskState`'s seven tokens) degrades to `null`
  * whole: unlike `substrateFault`'s per-half tolerance, the `(state,
  * parentId)` pair only means something TOGETHER — a state with no parent to
  * name, or a parent with a state this build cannot read, has nothing honest
@@ -639,7 +655,7 @@ export function graphGateCount(s: { graphGateDenials?: number | null }): number 
  * any later surface cannot drift onto two different fallbacks.
  * `SessionLine.tsx` then renders content for exactly `held`/`answered` —
  * the two the design doc gives words to (`FleetSession.ask`'s own
- * docstring) — so the other four valid-but-unrendered tokens read as "no
+ * docstring) — so the other five valid-but-unrendered tokens read as "no
  * chip" here too, the same fold `assembleFleet` already applies
  * server-side, now doubled client-side for a server ahead of this build.
  */
@@ -1366,8 +1382,48 @@ export interface WsTombstone {
  *  without any of them needing to be the whole shape. */
 export type BucketInput = Pick<
   FleetSession,
-  'status' | 'statusUpdatedAt' | 'dialogPending' | 'hookState' | 'archivedAt' | 'pr'
+  'status' | 'statusUpdatedAt' | 'dialogPending' | 'hookState' | 'archivedAt' | 'pr' | 'background'
 >;
+
+/** `background-aware-working` (D-5231) — THE DELEGATED-TASK RULE, its one home.
+ *  A task listed in a Stop's `background_tasks` is DELEGATED work (it can hold
+ *  Claude Code's live file `busy` after the main turn ended) unless its cleaned
+ *  kind is one of these six labels — Claude Code's own type labels, after the
+ *  hook's cleaning (lower-cased, spaces to `-`, anything outside `a-z_-`
+ *  dropped) — whose work never holds the live file `busy`: an idle main loop
+ *  over only shells or monitors writes `shell` or `idle`, and the other four are
+ *  outside the live file's delegation set. The hook's `jq` in
+ *  `ccd/session-hook.sh` is the documented second spelling, held equal by
+ *  `session-hook-background.test.ts`, which iterates over this list. */
+export const NON_DELEGATING_TASK_KINDS = ['shell', 'monitor', 'mcp-task', 'dream', 'auto-mode-scan', 'memory-import'] as const;
+/** D-5231: the terminal words of Claude Code's task code. A task whose status
+ *  is one of them is finished, whatever its kind; `running`, `pending` and any
+ *  status no build has shown count as running. The builder already leaves
+ *  finished tasks out, so this is a second wall: a finished task some later
+ *  build lists must not keep a wedged `busy` on `working`. */
+export const TERMINAL_TASK_STATUSES = ['completed', 'failed', 'killed'] as const;
+/** D-5231: is this listed task delegated work that is still running? `type` is
+ *  the CLEANED kind (as the hook records it); an unseen kind or status counts. */
+export function isDelegatedTask(t: { type: string; status: string }): boolean {
+  return !(NON_DELEGATING_TASK_KINDS as readonly string[]).includes(t.type)
+    && !(TERMINAL_TASK_STATUSES as readonly string[]).includes(t.status);
+}
+/** D-5231: the ONE reader of `FleetSession.background` for display. The live
+ *  `fleet` frame is cast, not revived, so a server predating the field omits
+ *  the key at runtime: `undefined` reads as null here, never as a TypeError.
+ *  A count of zero is no background work. */
+export function backgroundWork(s: Partial<Pick<FleetSession, 'background'>>): { count: number; kinds: string[] } | null {
+  const b = s.background;
+  return b != null && b.count > 0 ? b : null;
+}
+/** D-5231: the words `working · N in background` add, and the title naming
+ *  the kinds, for the card and the header alike. */
+export function backgroundWords(b: { count: number; kinds: string[] }): { text: string; title: string } {
+  return {
+    text: `${b.count} in background`,
+    title: b.kinds.length > 0 ? `in background: ${b.kinds.join(', ')}` : 'in background',
+  };
+}
 
 /**
  * One session → one bucket, plus when it entered.
@@ -1506,8 +1562,16 @@ export function sessionBucket(
   // finished", so it is not evidence that a turn ENDED and must not unseat a
   // live `busy` — a resuming session is legitimately working while that write
   // is the newest hook fact on disk.
+  //
+  // `background-aware-working` (D-5231): nor is a Stop that left DELEGATED
+  // work running (`background`, set only on a `Stop`'s `done` on a build whose
+  // live file covers delegation). From 2.1.277 Claude Code keeps the live file
+  // `busy` through delegated work, so after such a Stop a live `busy` is that
+  // work, not a wedge: the session stays `working` until the live file writes
+  // `idle`. D-75's wedge recovery is kept for a Stop with no delegated work.
+  const delegated = s.background !== null && s.background.count > 0;
   const finishedAfterStatus =
-    hookNewer && s.hookState === 'done' && hookEvent !== 'SessionStart';
+    hookNewer && s.hookState === 'done' && hookEvent !== 'SessionStart' && !delegated;
   // NOT the hook's timestamp: the hook rewrites `updatedAt` on every
   // PostToolUse, so a busy session would report a continuously-refreshed
   // "since" — permanently new, and permanently badged. That holds for the
@@ -1529,7 +1593,14 @@ export function sessionBucket(
     // the bucket a virgin session would report if `SessionStart` had never
     // touched `state` at all, which is the honest fact on the ground.
     if (hookEvent === 'SessionStart') return { bucket: 'idle', bucketSince: s.statusUpdatedAt };
-    return { bucket: 'done', bucketSince: hookUpdatedAt ?? s.statusUpdatedAt };
+    // D-5231: after a Stop that left delegated work running, `done` is reached
+    // only once the live file writes `idle` (the rung above held `working`
+    // until then), so it is dated from THAT write when it is the later one —
+    // the badge fires when the work ends, not at the Stop already seen.
+    const since = delegated
+      ? Math.max(hookUpdatedAt ?? 0, s.statusUpdatedAt ?? 0) || null
+      : hookUpdatedAt ?? s.statusUpdatedAt;
+    return { bucket: 'done', bucketSince: since };
   }
   return { bucket: 'idle', bucketSince: s.statusUpdatedAt };
 }
@@ -1825,15 +1896,23 @@ export function isReadyVerdict(v: unknown): v is ReadyVerdict {
  *  `held`      the push is deferred; the parent may answer.
  *  `answering` a principal has taken the row and is pressing a key (D-2171).
  *  `answered`  a digit landed. `answeredBy` says which principal.
- *  `released`  the parent declined, or the window lapsed. The push has fired.
+ *  `released`  the window lapsed. The push has fired, but the row is still
+ *              answerable by either principal until one of them acts (late
+ *              answer wins, D-5289): `takeAskForAnswer` and `heldAskFor` take
+ *              `held` or `released`, under the same `askAt` instance guard.
+ *  `declined`  the parent released the question itself (`POST
+ *              /api/asks/:id/release`): it handed the question over, the push
+ *              fired at once, and the parent's later answer is refused
+ *              `declined` (D-5289). Terminal. An older build reads this token
+ *              as `unknown` through `isAskState`.
  *  `stale`     the dialog went away unanswered — interrupted, cleared, swapped.
  *  `unknown`   a token this build does not know, read off disk after a deploy
  *              rollback. Never accepted at ingress; a writer claiming it is
  *              refused `bad-state`. */
-export type AskState = 'held' | 'answering' | 'answered' | 'released' | 'stale' | 'unknown';
+export type AskState = 'held' | 'answering' | 'answered' | 'released' | 'declined' | 'stale' | 'unknown';
 
 export const ASK_STATE_MAP: Record<AskState, true> = {
-  held: true, answering: true, answered: true, released: true, stale: true, unknown: true,
+  held: true, answering: true, answered: true, released: true, declined: true, stale: true, unknown: true,
 };
 
 export const ASK_STATES: readonly AskState[] = Object.keys(ASK_STATE_MAP) as AskState[];
@@ -1861,9 +1940,12 @@ export function isAskState(v: unknown): v is AskState {
  */
 export const ASK_OPERATOR_PRINCIPAL = 'operator';
 
-/** `answerAsk`'s ten typed refusals, plus the five route-level refusals the
+/** `answerAsk`'s ten typed refusals, plus the seven route-level refusals the
  *  ask pre-emption routes (server/src/coord) emit as their own literals —
- *  `unknown-ask`, `not-held`, `ask-moved`, `not-parent`, `child-unmeasurable`.
+ *  `unknown-ask`, `not-held`, `ask-moved`, `not-parent`, `child-unmeasurable`,
+ *  and D-5289's two: `declined` (the parent released this question itself and
+ *  may not answer it later) and `already-answered` (a principal already
+ *  answered it; late answer wins only until one of them acts).
  *  Both groups are the same refusal family (reasons an ask answer was
  *  refused), so they share this one union rather than splitting into two
  *  (D-2174, the `ReadFailure` precedent of D-1438). Map idiom: a code that
@@ -1884,7 +1966,7 @@ export const ASK_REFUSE_CODE_MAP: Record<AskRefuseCode, true> = {
   'multi-question': true, range: true, multiselect: true, 'duplicate-index': true,
   'no-menu': true, 'menu-mismatch': true,
   'unknown-ask': true, 'not-held': true, 'ask-moved': true, 'not-parent': true,
-  'child-unmeasurable': true,
+  'child-unmeasurable': true, declined: true, 'already-answered': true,
 };
 
 export const ASK_REFUSE_CODES: readonly AskRefuseCode[] =
@@ -1893,7 +1975,8 @@ export const ASK_REFUSE_CODES: readonly AskRefuseCode[] =
 export type AskRefuseCode =
   | 'not-alive' | 'not-waiting' | 'stale-ask' | 'ask-mismatch' | 'multi-question'
   | 'range' | 'multiselect' | 'duplicate-index' | 'no-menu' | 'menu-mismatch'
-  | 'unknown-ask' | 'not-held' | 'ask-moved' | 'not-parent' | 'child-unmeasurable';
+  | 'unknown-ask' | 'not-held' | 'ask-moved' | 'not-parent' | 'child-unmeasurable'
+  | 'declined' | 'already-answered';
 
 export function isAskRefuseCode(v: unknown): v is AskRefuseCode {
   return typeof v === 'string' && (ASK_REFUSE_CODES as readonly string[]).includes(v);
@@ -2793,6 +2876,31 @@ const optSubagents = (o: RawObj, k: string): SubagentEntry[] | null => {
   return (v as unknown[]).map((item, i) => reviveSubagentEntry(item, `${k}[${i}]`));
 };
 
+/** `FleetSession.background` (D-5231) — absent or malformed → null. */
+const reviveBackground = (o: RawObj, k: string): { count: number; kinds: string[] } | null => {
+  const v = o[k];
+  if (v === null || typeof v !== 'object' || Array.isArray(v)) return null;
+  const b = v as Record<string, unknown>;
+  const count = b['count'];
+  const kinds = b['kinds'];
+  if (typeof count !== 'number' || !Number.isInteger(count) || count < 0) return null;
+  if (!Array.isArray(kinds) || !kinds.every((x) => typeof x === 'string')) return null;
+  return { count, kinds: kinds as string[] };
+};
+
+/** D-5237. Absent → null (an older snapshot or server predates the field);
+ *  malformed → null too (`reviveBackground`'s rule: a display line, it gates
+ *  nothing); an unknown cause word → `unknown`. */
+const reviveLastEnd = (o: RawObj, k: string): LastEnd | null => {
+  const v = o[k];
+  if (v === null || typeof v !== 'object' || Array.isArray(v)) return null;
+  const e = v as Record<string, unknown>;
+  const at = e['at'];
+  const cause = e['cause'];
+  if (typeof at !== 'number' || !Number.isSafeInteger(at) || at <= 0 || typeof cause !== 'string') return null;
+  return { at, cause: isRestartCause(cause) ? cause : 'unknown' };
+};
+
 const IDENTITY_FIELDS: readonly string[] = ['uuid', 'wrapper', 'workdir'];
 
 /** `FleetSession.unmeasured` — split from every OTHER array field above on
@@ -3010,6 +3118,14 @@ export function reviveFleetSession(raw: unknown, unnamedSpawnWord: UnnamedSpawnW
       // the full argument.
       ask: reviveAsk(o, 'ask'),
       subagents: optSubagents(o, 'subagents'),
+      // D-5231. Absent → null: an older snapshot predates the field, and null
+      // is the ladder's old answer. Malformed also degrades to null
+      // (`reviveAsk`'s rule): the field is a display chip and one ladder
+      // conjunct, and a cached row is bucketed with no hook stamp anyway.
+      background: reviveBackground(o, 'background'),
+      // D-5237. Absent → null (an older snapshot predates the field);
+      // malformed → null (`reviveLastEnd`); an unknown cause → `unknown`.
+      lastEnd: reviveLastEnd(o, 'lastEnd'),
       // Absent → null, exactly as `optSubagents` degrades: a snapshot written
       // before this field existed is ignorant of the count, not a witness to
       // its being zero. Present-but-not-a-finite-number throws inside
@@ -3953,6 +4069,53 @@ export type SystemOrigin = 'resume-prompt' | 'no-response' | 'limit';
 /** The sentence Claude Code's default resume prompt is, and every variant —
  *  including ccd's RESUME_PROMPT — begins with. The parser matches the prefix. */
 export const RESUME_PROMPT_PREFIX = 'Continue from where you left off.';
+/** `interrupt-and-restart-causes-recorded` (D-5237, second half): how a
+ *  session's previous process ended, as `ccd` records it in
+ *  `$REG/<id>.lastend` (`<epoch seconds> <cause>`) and in `swap.log`
+ *  (`ended <id>: <cause>`). `oom` is the pane scope's journal naming an OOM
+ *  kill in the 120 s before the end; `tmux-server` the tmux server itself not
+ *  answering; `exited` neither; `unknown` a journal read that failed, and the
+ *  degrade for a word this build does not know. The swap words are written by
+ *  `cmd_swap` once its act-time gates have passed; `swap-auto` is the
+ *  automatic swap whose arm the dispatcher did not name. The value is the
+ *  PWA's words for the cause. ccd spells the same words in bash (it cannot
+ *  import this); `ccd-restart-cause.test.ts` loops over this list against it. */
+export const RESTART_CAUSE_WORDS = {
+  oom: 'out of memory',
+  'tmux-server': 'tmux server gone',
+  exited: 'process exited',
+  'swap-auto-home': 'swapped home',
+  'swap-auto-rescue': 'swapped off a blocked account',
+  'swap-auto': 'swapped automatically',   // D-5348: an automatic swap whose arm is not named
+  'swap-manual': 'swapped by hand',
+  unknown: 'cause unknown',
+} as const;
+export type RestartCause = keyof typeof RESTART_CAUSE_WORDS;
+export const RESTART_CAUSES = Object.keys(RESTART_CAUSE_WORDS) as RestartCause[];
+/** `FleetSession.lastEnd`: when (epoch ms) and why the previous process ended. */
+export interface LastEnd { at: number; cause: RestartCause }
+/** How long the header and the card name a restart (spec §5.6: an hour). */
+export const LAST_END_SHOWN_MS = 3_600_000;
+const isRestartCause = (v: string): v is RestartCause => Object.prototype.hasOwnProperty.call(RESTART_CAUSE_WORDS, v);
+/** `$REG/<id>.lastend`'s ONE parser: `<epoch seconds> <cause>` on one line.
+ *  Null for an absent file and for any line that is not that shape (the row
+ *  still parses); a well-formed line whose cause this build does not know
+ *  degrades to `unknown`, never to null — an end happened. */
+export function parseLastEnd(raw: string | null): LastEnd | null {
+  if (raw === null) return null;
+  const m = /^(\d{1,12}) ([a-z][a-z-]{0,39})$/.exec(raw.trim());
+  if (m === null) return null;
+  const at = Number(m[1]) * 1000;
+  if (!Number.isSafeInteger(at) || at <= 0) return null;
+  return { at, cause: isRestartCause(m[2]!) ? m[2]! as RestartCause : 'unknown' };
+}
+/** The one reader of a LIVE frame's `lastEnd`: null when absent (an older
+ *  server), malformed, or older than `LAST_END_SHOWN_MS`; otherwise the end. */
+export function recentLastEnd(s: Pick<FleetSession, 'lastEnd'>, now: number): LastEnd | null {
+  const e = reviveLastEnd(s as unknown as RawObj, 'lastEnd');
+  if (e === null || now - e.at > LAST_END_SHOWN_MS || now - e.at < -60_000) return null;
+  return e;
+}
 export const NO_RESPONSE_TEXT = 'No response requested.';
 export const SYNTHETIC_MODEL = '<synthetic>';
 /** The `error` Claude Code writes on the assistant row it appends for a 429
@@ -9999,6 +10162,19 @@ export interface CollectLaneConfirmRequired {
   };
 }
 
+/** The 200 answer of the three answer routes (`POST /api/sessions/:id/dialog`, `/dialog/text`, `/dialog/multi`):
+ *  the screen the pane settled on after the answer's last key (decision `ask-answer-returns-next-screen`).
+ *  - `next` a Dialog: the pane moved to that menu (the next question, or the review screen an ask ends on);
+ *  - `next: null`: no menu is on screen any more (the ask was submitted or declined);
+ *  - `next` absent: the pane had not settled on another screen within the route's budget, or the route predates this
+ *    field. The caller then waits for the session stream's next `dialog` frame, as it always did.
+ *  Additive: a client that ignores it keeps the old behaviour. The answering sheet applies it at once, so the next
+ *  screen never waits on the stream's 2 s poll, or on a poll that captured nothing (the 2026-10-16 report). */
+export interface DialogAnswered {
+  readonly ok: true;
+  readonly next?: Dialog | null;
+}
+
 /** Every refusal `POST /api/sessions/:id/dialog` answers with (`answerDialog`, `server/src/inject/send.ts`), each a 409.
  *  Spelled once, as a total table's keys, and the list derived: a code that leaves the union and stays here, or joins it
  *  without a row here, is a compile error.
@@ -10099,6 +10275,193 @@ const DIALOG_MULTI_REFUSE_CODE_MAP: Readonly<Record<DialogMultiRefuseCode, true>
 };
 export const DIALOG_MULTI_REFUSE_CODES: readonly DialogMultiRefuseCode[] =
   Object.keys(DIALOG_MULTI_REFUSE_CODE_MAP) as DialogMultiRefuseCode[];
+
+/** The most tabs `POST /api/sessions/:id/dialog/tab` will count to (decision `ask-dialog-tab-route`). Claude Code's
+ *  AskUserQuestion takes at most four questions; this is slack for a build that takes more, not a measured limit. */
+export const DIALOG_TAB_MAX = 16;
+
+/** Where `POST /api/sessions/:id/dialog/tab` moves the pane: one tab back or on (`prev`/`next`, the arrow keys), to the
+ *  review screen (`submit`, the `✔ Submit` tab), or to question tab `k` (1-based, a tab-strip chip). */
+export type DialogTabTarget = 'prev' | 'next' | 'submit' | number;
+
+/** The body of `POST /api/sessions/:id/dialog/tab`. `from` is the 1-based tab the caller believes is up, sent with a
+ *  numbered target: the pane marks its active tab by colour alone, so a plain capture cannot say. The server ignores it
+ *  on the review screen, which it can tell, and every step it takes is proved by a new screen either way. */
+export interface DialogTabRequest {
+  readonly dialogId: string;
+  readonly to: DialogTabTarget;
+  readonly from?: number;
+}
+
+const isTabNumber = (n: unknown): n is number =>
+  typeof n === 'number' && Number.isInteger(n) && n >= 1 && n <= DIALOG_TAB_MAX;
+
+/** Is `body` a `DialogTabRequest` the route will act on? A numbered target needs `from`, unless the pane is on the
+ *  review (the route checks that once it has captured). The route answers 400 `bad-request` otherwise. */
+export function isDialogTab(body: unknown): body is DialogTabRequest {
+  if (typeof body !== 'object' || body === null) return false;
+  const { dialogId, to, from } = body as Record<string, unknown>;
+  if (typeof dialogId !== 'string' || dialogId === '') return false;
+  if (from !== undefined && !isTabNumber(from)) return false;
+  return to === 'prev' || to === 'next' || to === 'submit' || isTabNumber(to);
+}
+
+/** Every refusal `POST /api/sessions/:id/dialog/tab` answers with (`moveDialogTab`, `server/src/inject/send.ts`), each a
+ *  409 except `bad-request` (400). No refusal ever pressed Enter: a tab move sends arrows only.
+ *  - `bad-request`: `isDialogTab` refuses the body, or a numbered target came with no `from` on a question screen, or
+ *    names a tab the row does not have. Nothing was pressed.
+ *  - `not-alive`: the pane could not be captured.
+ *  - `stale-dialog`: no menu is on screen, or not the one the caller was shown. Nothing was pressed.
+ *  - `no-tabs`: the screen paints no tab row (`parseAskTabs`): a one-question single-select ask, or no ask at all.
+ *  - `unparsed-dialog`: the screen did not parse and is no multiSelect question either, so nothing proves where the
+ *    cursor is. Nothing was pressed.
+ *  - `walk-failed`: the cursor sat on the free-text row or below it, where Claude Code swallows ←/→ (measured on 2.1.296
+ *    and 2.1.302), and a walk Up did not land it on row 1. No arrow across tabs was pressed.
+ *  - `no-move`: an arrow was pressed and no capture showed another screen within the budget: an edge (← on the first
+ *    question, measured as a no-op), a pane that ignored it, or two tabs that read exactly alike.
+ *  - `menu-gone`: a capture after an arrow showed no menu at all. */
+export type DialogTabRefuseCode =
+  | 'bad-request' | 'not-alive' | 'stale-dialog' | 'no-tabs' | 'unparsed-dialog' | 'walk-failed' | 'no-move'
+  | 'menu-gone';
+const DIALOG_TAB_REFUSE_CODE_MAP: Readonly<Record<DialogTabRefuseCode, true>> = {
+  'bad-request': true, 'not-alive': true, 'stale-dialog': true, 'no-tabs': true, 'unparsed-dialog': true,
+  'walk-failed': true, 'no-move': true, 'menu-gone': true,
+};
+export const DIALOG_TAB_REFUSE_CODES: readonly DialogTabRefuseCode[] =
+  Object.keys(DIALOG_TAB_REFUSE_CODE_MAP) as DialogTabRefuseCode[];
+
+/** The 200 answer of `POST /api/sessions/:id/dialog/tab`: the screen the pane settled on, always a menu. */
+export interface DialogTabMoved {
+  readonly ok: true;
+  readonly next: Dialog;
+}
+
+/** `POST /api/sessions/:id/interrupt`'s refusal codes, each a `409` with zero keys pressed (`interrupt`,
+ *  `server/src/inject/send.ts`):
+ *  - `not-alive`: no pane to press a key in.
+ *  - `not-busy`: no turn measured — an idle live word, or one that could not be read (D-115's asymmetry: an unread
+ *    word withholds the key).
+ *  - `background-only` (D-5236): the main loop is idle over background work Escape would not stop — the live word
+ *    `busy` after a main Stop that left delegated work running (the body carries its `count` and `kinds`), or the
+ *    live word `shell` (`count: null`, no kinds). Never with a pane menu pending. */
+export type InterruptRefusal = 'not-alive' | 'not-busy' | 'background-only';
+const INTERRUPT_REFUSAL_MAP: Readonly<Record<InterruptRefusal, true>> = {
+  'not-alive': true, 'not-busy': true, 'background-only': true,
+};
+export const INTERRUPT_REFUSALS: readonly InterruptRefusal[] = Object.keys(INTERRUPT_REFUSAL_MAP) as InterruptRefusal[];
+/** The interrupt route's refusal body. */
+export type InterruptRefusalBody =
+  | { ok: false; error: 'not-alive' | 'not-busy' }
+  | { ok: false; error: 'background-only'; count: number | null; kinds: string[] };
+/** D-5236: the ONE reader of a `background-only` refusal body, for the PWA. Anything else — another code, an older
+ *  server's body, a malformed count or kinds — is null, and the caller keeps its generic 409 words. */
+export function backgroundOnlyRefusal(body: unknown): { count: number | null; kinds: string[] } | null {
+  if (typeof body !== 'object' || body === null) return null;
+  const b = body as Record<string, unknown>;
+  if (b['error'] !== 'background-only') return null;
+  const count = b['count'];
+  const kinds = b['kinds'];
+  if (count !== null && !(typeof count === 'number' && Number.isInteger(count) && count > 0)) return null;
+  if (!Array.isArray(kinds) || !kinds.every((k) => typeof k === 'string')) return null;
+  return { count, kinds: kinds as string[] };
+}
+
+// ── The server's capability words (D-5232's mechanism; plan 2026-10-16, Task 9b; spec §6.1) ─────────────────────
+// APPENDED at the very end, because README and the specs cite this file by line.
+//
+// A fleet-side change that alters what an EXISTING hookstate field means is safe only behind the server half that
+// reads the new meaning (D-5232's carry, D-5239's compaction skip). No rollout form holds that order for every mover
+// (the `auto` dispatcher and the one-tap move fleet nodes first, `deploy.sh` and a hand-run `ccrc update` follow no
+// order, a server can be rolled back or restore itself after a failed health gate). So the server ADVERTISES what it
+// reads, as words in `GET /health`'s additive `caps`; the fleet box records them in `~/.ccrc/<SERVER_CAPS_FILE>`
+// (written every minute by `ccd/ccd-update-sync` on a `fleet` node, by the server process itself on a `server` or
+// `both` node, `server/src/update/serverCaps.ts`); and the hook engages a gated arm only while that file is whole,
+// current within `SERVER_CAPS_LEASE_S` by its own clock and lists the arm's word. Absent, stale, torn or unlisted
+// reads as "not advertised", and the arm writes exactly what it writes today.
+//
+// A WORD IS ADDED BY THE CHANGE THAT BUILDS WHAT IT NAMES (or, for what was built before this list existed, by the
+// change that creates the list), cut after everything the word promises, so a server cannot advertise a word without
+// all of it. A word is never reused for a different promise: a changed promise is a new word (`-v2`).
+//
+// The bash spellings are documented second copies, held equal by tests that iterate over these values: the word
+// grammar and the file's name in `ccd/ccd-update-sync` (`server-caps.test.ts`, `ccd-update-sync.test.ts`), and,
+// from Tasks 2 and 10, the file's name, the lease and the grammar in `ccd/session-hook.sh`.
+
+/** One capability word the server advertises. Spelled once, as the keys of `SERVER_CAP_MAP`. */
+export type ServerCap = 'dispatch-live-gate-v1';
+
+/** Every word, with what it promises. The value is `true`; the promise is the comment, which a word's reader may
+ *  rely on and nothing weaker. `PR_REASON_MAP`'s idiom: a word added to `ServerCap` and not here is TS2741. */
+const SERVER_CAP_MAP: Readonly<Record<ServerCap, true>> = {
+  /** D-5238 (Task 9): the dispatch resume arm types `/clear` only when the fail-closed turn verdict
+   *  (`turnVerdictFor`, `server/src/turnverdict.ts`) reads `idle`, at the gate and again immediately before the act;
+   *  `busy` refuses `worker-busy`, `unmeasured` refuses `status-unmeasurable` (or `worker-starting` after an `ensure`
+   *  that started the pane). So a hook `done` standing over a busy pane (D-5239's compaction skip) can never be read
+   *  by this server as a session safe to `/clear`. Added by Task 9b (the change that creates this list), cut after
+   *  Task 9 merged; `dispatch-live-gate.test.ts` pins the word beside the gate it names. */
+  'dispatch-live-gate-v1': true,
+};
+
+/** The words this server advertises, in `GET /health`'s `caps`, and in the file a `server` or `both` node writes. */
+export const SERVER_CAPS: readonly ServerCap[] = Object.keys(SERVER_CAP_MAP) as ServerCap[];
+
+/** The file's name, under `~/.ccrc` (the node's ccrc directory). */
+export const SERVER_CAPS_FILE = 'server-caps';
+
+/** How old the file's `at` may be, in seconds by the READER's clock, before it reads as not advertised: three
+ *  periods of the one-minute writers, so one missed write never turns an arm off. A server rolled back below a word
+ *  turns its arm off within this lease on a `server` or `both` node (an older server never rewrites the file). */
+export const SERVER_CAPS_LEASE_S = 180;
+
+/** One word's grammar. The file is three `\n`-terminated lines: `at <1–11 digits>` (unix seconds, the writer's
+ *  clock), `caps` followed by zero or more words separated by single spaces, `end`. */
+const SERVER_CAP_WORD_RE = /^[a-z0-9-]{1,64}$/;
+const SERVER_CAPS_AT_RE = /^at ([0-9]{1,11})$/;
+const SERVER_CAPS_CAPS_RE = /^caps((?: [a-z0-9-]{1,64})*)$/;
+
+/** Is `w` a word the file's grammar admits? */
+export function isServerCapWord(w: string): boolean {
+  return SERVER_CAP_WORD_RE.test(w);
+}
+
+/** The file's three lines. Pure. Throws `RangeError` on a word the grammar refuses or an `atS` that is not a whole
+ *  number of 1–11 digits: a document the reader would refuse is never rendered. */
+export function renderServerCaps(words: readonly string[], atS: number): string {
+  if (!Number.isSafeInteger(atS) || atS < 0 || String(atS).length > 11) {
+    throw new RangeError(`server-caps: at ${String(atS)} is not unix seconds of 1 to 11 digits`);
+  }
+  for (const w of words) {
+    if (!isServerCapWord(w)) throw new RangeError(`server-caps: ${JSON.stringify(w)} is not a capability word`);
+  }
+  return `at ${atS}\ncaps${words.map((w) => ` ${w}`).join('')}\nend\n`;
+}
+
+/** `parseServerCaps`'s answer. Each refusal is its own reason, never folded into another:
+ *  - `torn`: fewer than three whole lines, every whole line on its grammar (a write cut short, `end` missing);
+ *  - `malformed`: a whole line off its grammar (a bad word, a 12-digit `at`), or anything after `end`;
+ *  - `stale`: `at` more than `SERVER_CAPS_LEASE_S` before `nowS`;
+ *  - `future`: `at` after `nowS`. */
+export type ServerCapsParse =
+  | { ok: true; at: number; words: string[] }
+  | { ok: false; why: 'torn' | 'malformed' | 'stale' | 'future' };
+
+/** The reader of the file's grammar, by `nowS` (unix seconds, the reader's own clock). Pure. */
+export function parseServerCaps(text: string, nowS: number): ServerCapsParse {
+  const parts = text.split('\n');
+  const whole = parts.slice(0, -1);          // every line that ended in `\n`
+  const rest = parts[parts.length - 1]!;     // what follows the last `\n` ('' in a whole document)
+  if (whole.length > 3 || (whole.length === 3 && rest !== '')) return { ok: false, why: 'malformed' };
+  const grammar = [SERVER_CAPS_AT_RE, SERVER_CAPS_CAPS_RE, /^end$/];
+  for (let i = 0; i < whole.length; i++) {
+    if (!grammar[i]!.test(whole[i]!)) return { ok: false, why: 'malformed' };
+  }
+  if (whole.length < 3) return { ok: false, why: 'torn' };
+  const at = Number(SERVER_CAPS_AT_RE.exec(whole[0]!)![1]);
+  const words = SERVER_CAPS_CAPS_RE.exec(whole[1]!)![1]!.split(' ').filter((w) => w !== '');
+  if (at > nowS) return { ok: false, why: 'future' };
+  if (nowS - at > SERVER_CAPS_LEASE_S) return { ok: false, why: 'stale' };
+  return { ok: true, at, words };
+}
 
 // ── Delegation observation: the shared event and state vocabulary (delegation broker wave 3) ──────────────────────
 // Declared ONCE, here, and derived everywhere else: each closed set is an `as const` array with its type read from

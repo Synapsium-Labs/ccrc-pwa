@@ -4015,9 +4015,10 @@ export function registerCoordRoutes(
     if (!res.ok) {
       // The refused-press rollback: `untakeAsk`, NOT `releaseAsk` — see this
       // route's own docstring. `answerAsk` never pressed a digit on this
-      // path, so the row goes back to `'held'` rather than being abandoned
-      // in `'answering'` with no exit.
-      if (!coord.untakeAsk(id)) {
+      // path, so the row goes back to where the take found it (`'held'`, or
+      // `'released'` after a lapse — D-5289) rather than being abandoned in
+      // `'answering'` with no exit.
+      if (!coord.untakeAsk(id, taken.from)) {
         // Unexpected (fix round 1, item 5): `untakeAsk`'s CAS source is
         // `'answering'`, and THIS request is the one that put the row there
         // (`takeAskForAnswer` above, this same request). Nothing else should
@@ -4085,6 +4086,13 @@ export function registerCoordRoutes(
         "'answering'; the feed record above (if it landed) is the surviving audit trace");
     }
 
+    // D-5289, late answer wins: the lapse already notified the operator, so
+    // that notification is replaced, under the same tag, with who answered.
+    // Only after a take from `'released'` — inside the window nothing was
+    // pushed and there is nothing to replace. The watcher decides whether its
+    // snapshot of the lapse is still this row's (`answeredLate`).
+    if (taken.from === 'released') watcher?.answeredLate(ask.childId, id, fromId);
+
     return { ok: true };
   });
 
@@ -4106,11 +4114,14 @@ export function registerCoordRoutes(
    * decline any other session's ask, exactly the reason `/answer` layers the
    * same check on top of the box token.
    *
-   * `releaseAsk`'s CAS is the row acting as its own mutex, the same shape
+   * `declineAsk`'s CAS is the row acting as its own mutex, the same shape
    * `/answer`'s `takeAskForAnswer` uses: its source state is `'held'`, so a
    * decline of a row that is already `'answering'`/`'answered'`/`'released'`/
-   * `'stale'` refuses `not-held` rather than pretending to succeed — a
-   * decline that finds nothing held must not lie about what it did.
+   * `'declined'`/`'stale'` refuses `not-held` rather than pretending to
+   * succeed — a decline that finds nothing held must not lie about what it
+   * did. It moves the row to `'declined'`, NOT the lapse's `'released'`
+   * (D-5289): a parent that handed the question over may not answer it later
+   * (`/answer` refuses `409 declined`), where a lapsed row stays answerable.
    *
    * `watcher.releaseHeldAsk` is the ONLY way this route touches the
    * watcher's in-memory hold (F12's own argument, `watch.ts`'s docstring on
@@ -4165,13 +4176,13 @@ export function registerCoordRoutes(
     // A decline is not a failure — it is the parent saying "the operator
     // should see this now", and it is what makes the grace window a CEILING
     // rather than a tax on every ask the parent cannot rule on.
-    if (!coord.releaseAsk(id, Date.now())) {
+    if (!coord.declineAsk(id, Date.now())) {
       return reply.code(409).send({ ok: false, error: 'not-held' });
     }
     // Fix round 1, item 1: `watcher` is undefined for every non-test caller
     // of `buildServer` today (`src/index.ts` always builds one) — but the
-    // row above has ALREADY moved `'held' -> 'released'` by the time this
-    // line runs, and the response below is unconditionally `{ok:true}`.
+    // row above has ALREADY moved `'held' -> 'declined'` (D-5289) by the time
+    // this line runs, and the response below is unconditionally `{ok:true}`.
     // With no watcher there is no `heldAsks` entry to drop and no snapshotted
     // push to fire, so the decline is real (the row genuinely released) but
     // the operator's buzz — the entire reason this lane exists — silently
@@ -4180,7 +4191,7 @@ export function registerCoordRoutes(
     // a worse lie than a log line nobody reads until they go looking.
     if (watcher === undefined) {
       console.warn(`ccrc-server: POST /api/asks/:id/release released ask ${id} (child ` +
-        `${ask.childId}) with no watcher configured — the row is released but the operator's ` +
+        `${ask.childId}) with no watcher configured — the row is declined but the operator's ` +
         'push was never fired');
     } else {
       watcher.releaseHeldAsk(ask.childId);

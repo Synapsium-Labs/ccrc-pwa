@@ -2,6 +2,7 @@ import { performance } from 'node:perf_hooks';
 import type { Deps } from './server.js';
 import type { Bus } from './bus.js';
 import { assembleFleet, lifecycleInputFor, registrySecondsToMs } from './fleet.js';
+import { answeredByBody, askPushBody } from './askbody.js';
 import { measuredIdentity, readRegistry, readRegistryMeasured } from './registry.js';
 import {
   accountPoolsEnforcement, poolsEnforcement, poolsWire, readObservedEpochFromRegistry, readPoolEpoch,
@@ -39,7 +40,7 @@ import type { DelegationEventEnvelopeV1, DelegationHealthInput, DelegationObserv
 // ONE LINE, deliberately: `single-definition.test.ts` scans for `UNCHECKED_PR`
 // arriving from shared/api on a single import line, and a prettier multi-line
 // form is invisible to it.
-import { FLEET_SCOPE, LEDGER_STALE_MS, MAIL_MAX_ATTEMPTS, MAIL_REPLAY_MS, STALL_FOLLOW_LABEL, STALL_LEVEL_TEXT, TERMINAL_DELIVERY_STATES, UNCHECKED_PR, lifecycleIsDead, sessionLifecycle } from '../../shared/api.js';
+import { FLEET_SCOPE, LEDGER_STALE_MS, SERVER_CAPS, MAIL_MAX_ATTEMPTS, MAIL_REPLAY_MS, STALL_FOLLOW_LABEL, STALL_LEVEL_TEXT, TERMINAL_DELIVERY_STATES, UNCHECKED_PR, lifecycleIsDead, sessionLifecycle } from '../../shared/api.js';
 import { JournalMirror } from './coord/mirror.js';
 // The pause marker's ONE definition in the tree. `MAIL_DISABLED_MARKER` is
 // NOT imported beside it: this file holds its own module-local literal
@@ -166,6 +167,7 @@ import type { CoordRoutesHandle } from './coord/routes.js';
 import { localIO } from './io.js';
 import { measureFleetReadiness, type FleetReadiness } from './readiness.js';
 import { FLEET_LABEL, SERVER_LABEL, sweepInventory, type InventoryDeps, type SweepOutcome } from './update/inventory.js';
+import { SERVER_CAPS_WRITE_MS, writeServerCaps, type WriteServerCapsResult } from './update/serverCaps.js';
 import { resolveAndProject, type ProjectionOutcome } from './update/project.js';
 import { runDispatch, type DispatchRunResult } from './update/converge.js';
 import type { MoveFeedRecord } from './update/dispatch.js';
@@ -754,6 +756,15 @@ export class FleetWatcher {
    *  see `ASK_ANSWERING_MAX_MS`'s own docstring). */
   private heldAsks = new Map<string, { until: number; askId: number;
     ev: Parameters<FleetWatcher['pushOne']>[0]; answeringSince: number | null }>();
+  /** D-5289, late answer wins: the push the lapse fired, per child, kept so a
+   *  parent's answer after the deadline can replace that notification under
+   *  the same tag (`answeredLate`). Set only by `sweepAsks`'s own lapse (a
+   *  parent's `declined` never lands here: its push is the parent's own act),
+   *  dropped when replaced and whenever the child's dialog clears or is
+   *  replaced (`detectDialogs`), so it holds at most one entry per child
+   *  sitting on a lapsed question. Its loss on a restart is free: the operator
+   *  keeps the lapse's notification, today's behaviour. */
+  private lapsedAsks = new Map<string, { askId: number; ev: Parameters<FleetWatcher['pushOne']>[0] }>();
   /** Fail-shut kill switch for the hold, `$REG/asks-disabled`. Declared in
    *  Task 6 (RULING F2) so the mint fork below compiled before this method
    *  existed; now SET by `sweepAsks` below, off the same registry listing
@@ -858,6 +869,14 @@ export class FleetWatcher {
    *  a `ready`-triggered sweep also defers the minute gate's next one. */
   private lastInventoryAt = 0;
   private inventoryRun: Promise<SweepOutcome[]> | null = null;
+  /** The server-caps beat's clock and its ONE write in flight (D-5232's mechanism, Task 9b). Starts at 0 so the first
+   *  tick after a start writes: that tick IS the boot write (`start()` ticks at once). Its own clock, never the
+   *  inventory lane's, so the file is rewritten whether or not this server has a coordination database. */
+  private lastServerCapsAt = 0;
+  private serverCapsRun: Promise<WriteServerCapsResult | null> | null = null;
+  /** The last server-caps write failure's stable key (`unwritable:<errno>`), so an unwritable ~/.ccrc warns once
+   *  per change of reason, not once a minute (`lastProjectionWhy`'s idiom); null after a success. */
+  private lastServerCapsWhy: string | null = null;
   /** C2 (final fix wave): the last inventory-sweep REJECTION message warned
    *  about, so a standing cause (a locked or corrupt coord.db held past one
    *  sweep) warns once, not every tick/ready — reset to null the moment a
@@ -1474,6 +1493,34 @@ export class FleetWatcher {
       clearInterval(this.timer);
       this.timer = null;
     }
+  }
+
+  /**
+   * The server-caps write (D-5232's mechanism; plan 2026-10-16 Task 9b; spec §6.1): on a `server` or `both` node, the
+   * words this server advertises, at this process's clock, into `<ccrcDir>/server-caps`, the file the fleet's hook
+   * gates on. A `fleet`-role server writes nothing (`ccd-update-sync` is that node's writer) and answers null.
+   * Single-flight: a beat that finds a write in flight joins it. A failure warns once per change of `code`.
+   */
+  serverCapsNow(): Promise<WriteServerCapsResult | null> {
+    if (this.serverCapsRun !== null) return this.serverCapsRun;
+    this.lastServerCapsAt = Date.now();
+    const { role, ccrcDir } = this.deps.cfg;
+    if (role !== 'server' && role !== 'both') return Promise.resolve(null);
+    const run = writeServerCaps(ccrcDir, SERVER_CAPS, Math.floor(Date.now() / 1000)).then((r) => {
+      const key = r.ok ? null : `${r.why}:${r.code ?? 'none'}`;
+      if (!r.ok && key !== this.lastServerCapsWhy) {
+        console.warn(`ccrc-server: could not write ~/.ccrc/server-caps (the fleet hook's gated arms stay off until it is written): ${r.detail}`);
+      }
+      this.lastServerCapsWhy = key;
+      return r;
+    }).finally(() => { this.serverCapsRun = null; });
+    this.serverCapsRun = run;
+    return run;
+  }
+
+  /** Resolves once no server-caps write is in flight. For a caller that fired the beat and must read its result. */
+  async serverCapsSettled(): Promise<void> {
+    if (this.serverCapsRun !== null) await this.serverCapsRun;
   }
 
   /**
@@ -2097,6 +2144,14 @@ export class FleetWatcher {
       // above, never swallowed silently either way.
       if (this.deps.coord && Date.now() - this.lastInventoryAt >= UPDATE_INVENTORY_MS) {
         void this.dispatchInventorySweep();
+      }
+
+      // The server-caps beat (D-5232's mechanism, Task 9b) sits BESIDE the inventory lane, never inside it: that lane
+      // is `coord`-gated, and a coord-less server must still keep its fleet's file current. Above the registry's
+      // fail-shut return for the same reason as both update lanes (it reads nothing from the registry). NEVER
+      // awaited; `serverCapsNow` never rejects (`writeServerCaps` never throws, and its warning is its own).
+      if (Date.now() - this.lastServerCapsAt >= SERVER_CAPS_WRITE_MS) {
+        void this.serverCapsNow();
       }
 
       // Read once, share with the two lanes that would otherwise each read it
@@ -7919,7 +7974,7 @@ export class FleetWatcher {
           // `sweepMerged` above.
           this.pushOne({
             kind: 'ask', sessionId: r.id, project: r.project,
-            title: '❓ Question', body: dialog.title || 'Claude has a question',
+            title: '❓ Question', body: askPushBody(this.hookStates.get(r.id) ?? null, dialog),
             ...(actions ? { actions } : {}),
           }, this.activeProjects);
           // Latched whenever this raise had no actions, cleared the moment one
@@ -7953,6 +8008,9 @@ export class FleetWatcher {
           // scope), is the only place left that can still name it — done
           // unconditionally, before eligibility is even asked for the NEW
           // dialog, because the OLD one is gone from the pane either way.
+          // D-5289: a lapsed question this child replaced is no longer one a
+          // late parent answer could land in, so its notification is final.
+          this.lapsedAsks.delete(r.id);
           const orphaned = this.heldAsks.get(r.id);
           if (orphaned !== undefined && last !== undefined) {
             // The map entry is dropped unconditionally, BEFORE the guarded
@@ -8090,6 +8148,9 @@ export class FleetWatcher {
         // different dialog minted later on the same session. Settling the
         // held ask on the way out, in THIS branch, means there is nothing
         // left for that guard to miss.
+        // D-5289: a lapsed question whose dialog cleared was acted on (or went
+        // away); no late parent answer can land in it, so its notification is final.
+        this.lapsedAsks.delete(r.id);
         const held = this.heldAsks.get(r.id);
         if (held !== undefined) {
           // Dropped unconditionally, BEFORE the guarded write below — same
@@ -8181,8 +8242,9 @@ export class FleetWatcher {
    *     mid-call — strand the question forever, silently. Past
    *     `ASK_ANSWERING_MAX_MS` since first observed `'answering'`, this
    *     degrades exactly like the missing-row arm below: push, drop.
-   *   - `'answered'` | `'released'` | `'stale'` — somebody already resolved
-   *     it (an answer landed, an explicit `POST /api/asks/:id/release`, or
+   *   - `'answered'` | `'released'` | `'declined'` | `'stale'` — somebody
+   *     already resolved it (an answer landed, an explicit `POST
+   *     /api/asks/:id/release`, which is `'declined'` since D-5289, or
    *     `detectDialogs`'s own orphan-settle). Drop the entry, no push — the
    *     question is already closed.
    *   - `'held'` — the CAS above just failed against this exact state, so
@@ -8235,6 +8297,7 @@ export class FleetWatcher {
       }
       if (released) {
         this.heldAsks.delete(id);
+        this.lapsedAsks.set(id, { askId: held.askId, ev: held.ev });
         this.pushOne(held.ev, this.activeProjects);
         continue;
       }
@@ -8278,6 +8341,7 @@ export class FleetWatcher {
         }
         case 'answered':
         case 'released':
+        case 'declined':
         case 'stale':
           this.heldAsks.delete(id);    // settled by someone else — no push
           continue;
@@ -8339,6 +8403,30 @@ export class FleetWatcher {
   }
 
   /**
+   * D-5289, late answer wins: `POST /api/asks/:id/answer` settled a row it
+   * took from `'released'`, so the lapse already notified the operator. Replace
+   * that notification under the same tag (`pushOne`'s default
+   * `${kind}-${sessionId}`, the lapse's own) with `answeredByBody(parent)`, and
+   * no actions: the question is answered, so the lock-screen buttons must go.
+   * Only for the lapse this watcher snapshotted for THIS row (`askId`), and
+   * once: a restart, a cleared dialog or another row's answer replaces nothing.
+   * PUBLIC for the same reason `releaseHeldAsk` is: the route's only door in.
+   *
+   * A known race, benign: a tick that captures the pane while the route is
+   * still awaiting `sendKey` can see the dialog already cleared and drop the
+   * `lapsedAsks` entry before this runs, so the operator keeps the lapse's
+   * original notification (today's behaviour). Open follow-up, not this
+   * method's: a `'released'` row whose dialog clears with nobody answering
+   * never moves to `'stale'` (`staleAsk` takes `held`/`answering` only).
+   */
+  answeredLate(childId: string, askId: number, parent: string): void {
+    const lapsed = this.lapsedAsks.get(childId);
+    if (lapsed === undefined || lapsed.askId !== askId) return;
+    this.lapsedAsks.delete(childId);
+    this.pushOne({ ...lapsed.ev, body: answeredByBody(parent), actions: undefined }, this.activeProjects);
+  }
+
+  /**
    * Mint the ask row, snapshot the push `raise()` would have sent, and queue
    * the mail that wakes the parent. Called ONLY from the eligibility fork
    * above, which has already proven `actions !== null` (so `ask` is a
@@ -8387,7 +8475,7 @@ export class FleetWatcher {
     });
     const ev: Parameters<FleetWatcher['pushOne']>[0] = {
       kind: 'ask', sessionId: r.id, project: r.project,
-      title: '❓ Question', body: dialog.title || 'Claude has a question',
+      title: '❓ Question', body: askPushBody(hs, dialog),
       actions,
     };
     // The parent is asleep and nothing else will wake it. Ordinary mail, so

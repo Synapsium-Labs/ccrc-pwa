@@ -6,7 +6,7 @@
 // DialogSheet and the TerminalDrawer mount at the bottom.
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { repoLabel, substrateFault, type RouteField } from '../../../shared/api';
+import { backgroundOnlyRefusal, repoLabel, substrateFault, type FleetSession, type RouteField, type SessionStatus } from '../../../shared/api';
 import { ATTENTION_DOT, Button, MailStrip, Skeleton, TaskStrip, toast } from '@ccrc/ui';
 import { SwapSheet } from '../fleet/SwapSheet';
 import { ArchiveSheet, restoreSession } from '../fleet/ArchiveSheet';
@@ -30,6 +30,7 @@ import { HistoryTab } from '../session/HistoryTab';
 import { TerminalDrawer } from '../session/TerminalDrawer';
 import { modelOptions, effortOptions, type PickOption } from '../lib/models';
 import '../session/chat.css';
+import { answerControlLabel } from '../session/askLive';
 
 /** Keyboard discipline: the bottom inset the on-screen keyboard covers. The
  *  screen pads its shell by this much so the composer stays above the
@@ -38,6 +39,18 @@ import '../session/chat.css';
  *  named export — tests and later tasks import it from here). */
 export function useKeyboardInsets(): number {
   return useKeyboardInset({ pinTop: true });
+}
+
+/** `background-aware-working` (D-5231): does the chat wear its working pulse?
+ *  It reads the server's BUCKET once a snapshot row exists, and the live word
+ *  only before it, so card, header and chat cannot disagree: a wedged `busy`
+ *  that the ladder filed `done` stops pulsing, and delegated work after a Stop
+ *  keeps it. A dead session never pulses. */
+export function chatPulsing(
+  live: Pick<FleetSession, 'bucket'> | null, effectiveStatus: SessionStatus | null,
+): boolean {
+  if (effectiveStatus === 'dead') return false;
+  return live !== null ? live.bucket === 'working' : effectiveStatus === 'busy';
 }
 
 export function SessionScreen({
@@ -72,6 +85,9 @@ export function SessionScreen({
   const liveAsk = useStore((s) => s.ask);
   const liveDialog = useStore((s) => s.dialog);
   const askPending = liveAsk !== null || liveDialog !== null;
+  // Decision `ask-answer-control-says-submit`: while the pane is on an ask's review screen, the transcript's control
+  // says what the sheet it raises is waiting on, so a hidden sheet is one labelled click from Submit.
+  const answerLabel = answerControlLabel(liveDialog);
   // This session's fleet entry — live name, account, dialogPending badge.
   const live = useFleet((s) => s.sessions.find((x) => x.id === id) ?? null);
   const roster = useFleet((s) => s.roster);
@@ -197,6 +213,7 @@ export function SessionScreen({
   // dead session is read-only and a busy one wears the caret from first paint.
   const effectiveStatus = status ?? live?.status ?? null;
   const dead = effectiveStatus === 'dead';
+  const pulsing = chatPulsing(live, effectiveStatus);
   const loading = uuid === null && missingFile === null;
   // An UNMEASURED absence is not an empty chat. When the resolver could not
   // finish looking (§5.2's `searchComplete: false`, which §5.5 makes routine
@@ -234,12 +251,21 @@ export function SessionScreen({
   };
 
   // Confirm-free: esc just sends. A 409 means the turn already ended — say so
-  // quietly; anything else is a real failure.
+  // quietly; anything else is a real failure. `background-only` (D-5236): the
+  // main turn ended over background work the server would not Escape, because
+  // Escape stops none of it — the toast says what still runs.
   const interrupt = async (): Promise<void> => {
     try {
       await api.interrupt(id);
     } catch (err) {
-      if (err instanceof ApiError && err.status === 409) {
+      const bg = err instanceof ApiError && err.status === 409 ? backgroundOnlyRefusal(err.body) : null;
+      if (bg !== null) {
+        toast(bg.count === null
+          ? 'The main turn has finished; a background shell or monitor is still running. Escape would not stop it.'
+          : `The main turn has finished; ${bg.count} background ${bg.count === 1 ? 'task' : 'tasks'}`
+            + `${bg.kinds.length > 0 ? ` (${bg.kinds.join(', ')})` : ''} ${bg.count === 1 ? 'is' : 'are'} still running.`
+            + ` Escape would not stop ${bg.count === 1 ? 'it' : 'them'}.`);
+      } else if (err instanceof ApiError && err.status === 409) {
         toast("Claude isn't working right now — nothing to stop");
       } else {
         toast(`Couldn't stop — ${err instanceof Error ? err.message : String(err)}`, 'error');
@@ -433,10 +459,11 @@ export function SessionScreen({
             id={id}
             events={events}
             pending={pending}
-            busy={effectiveStatus === 'busy'}
+            busy={pulsing}
             onRetry={(key) => useStore.getState().retry(key)}
             onDiscard={(key) => useStore.getState().discard(key)}
             askPending={askPending}
+            answerLabel={answerLabel}
             onAnswer={() => setRaise((n) => n + 1)}
           />
         )}
