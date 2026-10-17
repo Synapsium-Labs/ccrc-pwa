@@ -52,7 +52,7 @@ spec  →  plan  →  waves of subagents  →  per-PR review lenses  →  whole-
 | **Sessions that stay out of each other's way** | A session claims the paths it is about to edit, all or nothing, and a conflict names the holder to mail. A dispatched worker is denied `gh pr merge` — the coordinator lands work — and deviation numbers are issued by the server, never guessed. |
 | **Hook-first session state** | Each session reports its own state through a Claude Code hook; scraping the tmux pane is the ranked fallback, not the source. |
 | **A code graph for every tree** | graphify keeps an AST-derived knowledge graph fresh per git tree on the fleet host, and a ccrc session that searches a freshly graphed tree before querying it is turned back, at most three times (`touch ~/.ccrc/graph-gate-off` lifts the gate). |
-| **Answer from the lock screen** | A session asks a question; your phone gets a push and you answer it from the notification, without opening a terminal. A worker's question goes to its coordinator first, and reaches you when the coordinator passes on it or two minutes go by. |
+| **Answer from the lock screen** | A session asks a question; your phone gets a push and you answer it from the notification, without opening a terminal. A worker's question goes to its coordinator first, and reaches you when the coordinator passes on it or three minutes go by. |
 | **A terminal, a transcript and a PR in the browser** | The transcript streams as it is written, agent mail rendered as cards; a terminal drawer attaches to the real tmux pane; type, interrupt or attach a screenshot from the phone, and open a PR or a draft — there is no merge button, by design. |
 | **Workspace holds** | A program declares a claim on a worktree. No timeout, no expiry — the reason string *is* the display, and the verbs that delete, rename or reclaim the workspace refuse or defer while it stands. |
 | **Two-phase workspace destruction** | Nothing irreversible happens on one tap, and every precondition is re-proved at the moment it matters. |
@@ -2922,7 +2922,7 @@ edge pushes as before. Delegated background work keeps its push for the moment t
 - **A parent answers first** (the ask pre-emption lane). When the worker of an open run blocks on a
   single-question, single-select `AskUserQuestion`, the server does not push to you at once: it records the ask,
   mails the run's coordinator (the newest open run's `claimedBy`) an `ask:<id>` nudge through the ordinary
-  idle-gated lane, and holds **only your notification** for up to 120 s (`ASK_GRACE_MS`, `server/src/askwindow.ts`).
+  idle-gated lane, and holds **only your notification** for up to 180 s (`ASK_GRACE_MS`, `server/src/askwindow.ts`).
   The coordinator may answer from what it can read — `POST /api/asks/:id/answer`, box token plus registry
   attribution, accepted only from that worker's own parent, which re-proves the question is still the live one
   before it presses one digit; its body is the operator's own (`readAskAnswer`, D-5293), so an `askKey` it sends must
@@ -4468,6 +4468,28 @@ row's generation, and the executor and the audit re-prove it, so a slug minted a
 the old licence by a licensed request, nor by any request on a ccd whose audit binds the generation. On an
 older ccd an unlicensed request keeps the gap from the executor's re-read to the act, the spec's stated
 residual.
+
+**A finished run's worker is stopped once idle (D-5370).** A wave that is not the programme's last leaves its
+child workspace in place — the reclaim sweep above waits for the programme — and, until this lane, its Claude Code
+process too, holding its memory for as long as the programme ran. The server's stop-done lane (`stopDoneSweep.ts`,
+its verdict the pure `stopDone.ts`; once a minute on the watcher's tick, never inside the run's transition) stops
+such a worker with the already-granted `ccd stop <id> --surface agent`: only a dispatched child (a `.child` marker —
+never an operator's own session), whose newest run is `done` and closed at least 10 minutes ago, which no other open
+run names as worker or claimant, with no live claim, no outstanding mail, no open run it reviews, nobody viewing it, no hold, pane menu,
+background work or subagents, a bucket of `idle`, a measured live word and fail-closed turn verdict of `idle`, and a
+turn marker that reads `done` with no background task listed at its last Stop (`bg` exactly 0, so a shell or Monitor
+left running is never killed with the pane). Immediately before the act, on the coordination serialiser, the
+registry record and its row, the store, presence and the live state are read again. At most three stops a pass; a refused stop is
+not asked again for an hour. The stop journals a `stop` row with its declared surface and writes `.stopped`, so the
+row reads `stopped` (never crashed, to the dead-coordinator lane or the PWA), and the coordinator's feed gets one
+`Worker stopped` row per stop. A re-dispatch onto the worker restarts it: the dispatch resume arm's `ccd ensure`
+re-supervises and resumes a stopped session. Switches: `$REG/stop-done-disabled` (this lane only; no writer in the
+tree — touch and remove it by hand on the fleet box) and `$REG/reclaim-paused` (every cleanup lane, above). Its holds
+carry hibernation's words (D-5242), and hibernation absorbs it when it lands; until then it acts earlier (10 minutes
+after the run's close, against hibernation's 6 h of idleness) and is looser in a few facts — it has no `recent` (N)
+hold, a page open in a hidden tab does not hold the worker (hibernation's open-socket presence does not exist yet),
+and nor do session crons, a terminal attached on the box or an opt-out marker — so the operator who comes back to such
+a page revives a stopped session (`ensure` resumes it; nothing is lost).
 
 **Landing order (landing-order wave 1).** Every merge of `main` into a branch restarts that branch's
 CI, so a session absorbs `main` only on a licence. Worker clause 16 names three, each read after one

@@ -1514,9 +1514,9 @@ describe('api client — each door sends exactly its own request', () => {
     });
   });
 
-  it('POSTs the interrupt with no body', async () => {
-    await api.interrupt(ID);
-    expect(sent()).toEqual({ url: `/api/sessions/${ENC}/interrupt`, method: 'POST', body: undefined });
+  it('POSTs the interrupt with the source that sent it (D-5237)', async () => {
+    await api.interrupt(ID, 'keycap');
+    expect(sent()).toEqual({ url: `/api/sessions/${ENC}/interrupt`, method: 'POST', body: { source: 'keycap' } });
   });
 
   it('GETs the command list under the session', async () => {

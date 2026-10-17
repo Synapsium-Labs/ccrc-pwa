@@ -261,9 +261,9 @@ export function SessionScreen({
   // quietly; anything else is a real failure. `background-only` (D-5236): the
   // main turn ended over background work the server would not Escape, because
   // Escape stops none of it — the toast says what still runs.
-  const interrupt = async (): Promise<void> => {
+  const interrupt = async (source: 'keycap' | 'escape-key'): Promise<void> => {
     try {
-      await api.interrupt(id);
+      await api.interrupt(id, source);
     } catch (err) {
       const bg = err instanceof ApiError && err.status === 409 ? backgroundOnlyRefusal(err.body) : null;
       if (bg !== null) {
@@ -359,7 +359,7 @@ export function SessionScreen({
         statusUpdatedAt={statusUpdatedAt}
         roster={roster}
         repo={repo}
-        onInterrupt={() => void interrupt()}
+        onInterrupt={(source) => void interrupt(source)}
         onOpenTerminal={openTerminal}
         onBack={() => navigate('/')}
         onChangeModel={changeModel}

@@ -3,7 +3,7 @@ import type { Deps } from './server.js';
 import type { Bus } from './bus.js';
 import { assembleFleet, lifecycleInputFor, registrySecondsToMs } from './fleet.js';
 import { answeredByBody, askPushBody, withCoordinatorBody } from './askbody.js';
-import { measuredIdentity, readRegistry, readRegistryMeasured } from './registry.js';
+import { measuredIdentity, readRegistry, readRegistryMeasured, readSessionRecord } from './registry.js';
 import {
   accountPoolsEnforcement, poolsEnforcement, poolsWire, readObservedEpochFromRegistry, readPoolEpoch,
   readProjectPools,
@@ -29,7 +29,8 @@ import { askActions, askKey } from './askkey.js';
 // module — `watch.ts` imports `assembleFleet` from it — so they now live
 // where both may read them. `ASK_SWEEP_MS` below is unaffected: it is this
 // lane's poll cadence, not a window, and this file is still its only reader.
-import { ASK_ANSWERING_MAX_MS, ASK_GRACE_MS, ASK_SETTLE_TICKS } from './askwindow.js';
+import { ASK_ANSWERING_MAX_MS, ASK_SETTLE_TICKS, askNotifyAt } from './askwindow.js';
+import { UNTRUSTED_CAP_BYTES, untrustedBlock } from './coord/untrusted.js';
 import type { SessionRecord } from './registry.js';
 import type {
   ChildMark, ChildReclaimAttention, ChildReclaimGeneration, ChildReclaimKeptWord, CoordStatus, DeadCoordinatorAttention, Dialog, ExpiryAttention, FleetSession, HookAsk, HookAskQuestion,
@@ -179,6 +180,9 @@ import { CATALOGUE_POLL_INTERVAL_MS } from './update/catalogue.js';
 import { COLLECT_CAP } from './ccdargv.js';
 import type { ChildReclaimCollectInput } from './childReclaimSweep.js';
 import { NO_FLEET_IDENTITY } from './fleetidentity.js';
+import { stopDonePass, type StopDoneMemory } from './stopDoneSweep.js';
+import { STOP_DONE_SWEEP_MS } from './stopDone.js';
+import { liveRowFor, liveWordFor, turnMarkFor, turnReadDeps, turnVerdictFor } from './turnverdict.js';
 import {
   COLLECT_AUDITS_PER_PASS, COLLECT_FEED_TITLE, collectAfterAct, collectAfterAudit, collectAfterFoldFailed, collectAfterHold,
   collectAfterPresence, collectAfterWouldCollect, collectAttentionItems, collectAttentionViews, collectBoxAfterPopulation,
@@ -1386,6 +1390,14 @@ export class FleetWatcher {
    *  newer has already answered. A pass that finds another running returns at once — so at most one expiry act is
    *  ever in flight, fleet-wide, and every act's answer is folded onto the entry it was asked for. */
   private archivedExpirySweeping = false;
+  /** The stop-done lane (D-5370, `stopDoneSweep.ts`): its last pass, whether one runs, its one memory (a refused
+   *  stop's retry instant), the coordination serialiser `buildServer` hands it, and the process start it holds
+   *  `viewer` against (presence is never persisted). */
+  private lastStopDoneSweep = 0;
+  private stopDoneSweeping = false;
+  private readonly stopDoneMemory: StopDoneMemory = { retryAt: new Map() };
+  private stopDoneSerial: (<T>(fn: () => Promise<T>) => Promise<T>) | null = null;
+  private readonly stopDoneStartedAt = Date.now();
   /** `flock-unavailable`, once a box has answered it: the lane composes nothing more there (this process). */
   private archivedExpiryBoxRefused: string | null = null;
   /** THE DEAD-COORDINATOR LANE (workspace lifecycle wave 4): its clock; ONE PASS AT A TIME, the expiry lane's reason;
@@ -2084,6 +2096,48 @@ export class FleetWatcher {
     this.deadCoordinatorSerial = h.withSweepAbandon;
   }
 
+  /** `buildServer` hands the stop-done lane (D-5370) the coordination serialiser: its stop re-reads the store and acts
+   *  inside it. Until then the lane stops nothing. */
+  useStopDoneSerialiser(h: Pick<CoordRoutesHandle, 'serial'>): void {
+    this.stopDoneSerial = (fn) => h.serial(fn);
+  }
+
+  /**
+   * THE STOP-DONE LANE (D-5370): a finished run's dispatched worker is stopped once idle, and restarts on re-dispatch.
+   * A sibling on the tick, at its own cadence, on THIS tick's assembled rows and registry listing (the listing carries
+   * the kill switch). Never awaited by the tick; one pass at a time. The rule is `stopDoneVerdict` (L1), the pass
+   * `stopDonePass` (L4).
+   */
+  async sweepStopDone(sessions: readonly FleetSession[], records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
+    const coord = this.deps.coord;
+    if (!coord || this.stopDoneSweeping) return;
+    const now = Date.now();
+    if (this.lastStopDoneSweep !== 0 && now - this.lastStopDoneSweep < STOP_DONE_SWEEP_MS) return;
+    this.lastStopDoneSweep = now;
+    this.stopDoneSweeping = true;
+    try {
+      const reads = turnReadDeps(this.deps, this);
+      await stopDonePass({
+        coord, runCcd: this.deps.runCcd, fleetState: this.deps.fleetState, presence: this.deps.presence,
+        notifyLog: this.deps.notifyLog,
+        liveWord: (rec) => liveWordFor(reads, rec), turnVerdict: (rec, uuid) => turnVerdictFor(reads, rec, uuid),
+        mark: (rec) => turnMarkFor(reads, rec),
+        rowAtAct: async (rec) => {
+          const again = await readSessionRecord(this.deps.io, this.deps.cfg, rec.id);
+          if (!again.found) return { ok: false };
+          const row = await liveRowFor(reads, again.record, again.record.uuid);
+          return row === null ? { ok: false } : { ok: true, row };
+        },
+        serial: this.stopDoneSerial, queueRun: (id, fn) => this.deps.queue.run(id, fn),
+        startedAt: this.stopDoneStartedAt, now: Date.now,
+      }, this.stopDoneMemory, sessions, records, names);
+    } catch (err) {
+      console.warn(`ccrc-server: sweepStopDone failed (${err instanceof Error ? err.message : String(err)}) — no stops this pass`);
+    } finally {
+      this.stopDoneSweeping = false;
+    }
+  }
+
   /** The last measured project-pool sweep, or null if none has been taken yet
    *  — same reasoning as `currentCoord()`'s null. */
   currentPools(): ProjectPoolsWire | null {
@@ -2487,6 +2541,9 @@ export class FleetWatcher {
       // awaited: its reads are async, so it cannot sit in the claim pair's synchronous try-block. It gates itself
       // on `primed`, which is set below, so the priming tick never judges.
       void this.sweepStalls(sessions, registryRead.names, { panePids, records }).catch(() => { /* one bad sweep must not kill the poll */ });
+      // NEVER awaited, the stall watch's reasons: the STOP-DONE lane (D-5370) on THIS tick's rows and listing. Gated on
+      // `primed` like the stall watch, so the priming tick never stops anything.
+      if (this.primed) void this.sweepStopDone(sessions, records, registryRead.names).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as `sweepDivergences`: each is a
       // handful of io reads per PROJECT, on an hourly / 15-minute clock.
       void this.sweepLedgerFloor(records).catch(() => { /* one bad sweep must not kill the poll */ });
@@ -8545,6 +8602,8 @@ export class FleetWatcher {
     if (key === null) throw new Error(`hold: eligible ask on ${r.id} produced no askKey`);
     const options = q.options.map((o) => o.label);
     const now = Date.now();
+    // D-5294: the one deadline, read by the sweep (`until`) and stated in the brief.
+    const until = askNotifyAt(now);
     // Same run `parentOfSession` derived the parent from — `openRunsForSession`
     // mirrors its `ORDER BY id DESC LIMIT 1` pick via "last of the ASC list",
     // the same idiom `sweepMerged` above already uses. Recorded on the ask
@@ -8591,32 +8650,59 @@ export class FleetWatcher {
     if (releaseReason === null) {
       queueSystemMail(this.deps.coord!, null, {
         fromId: 'operator', toId: parent, runId: null, kind: 'question',
-        subject: askNudgeSubject(askId), body: renderAskBrief(askId, r.id, q.question, options),
+        subject: askNudgeSubject(askId), body: renderAskBrief(askId, r.id, q.question, options, until),
       });
     }
-    return { until: now + ASK_GRACE_MS, askId, ev, answeringSince: null };
+    return { until, askId, ev, answeringSince: null };
   }
 }
 
 /**
  * The parent's ENTIRE evidentiary surface (design spec §6.1) is this ask row
  * plus its own artifacts — no route, ws feed, or ccd verb lets one session
- * read another's transcript. So this states four things and nothing else:
- * the child's id, the question and its options in order, the two routes a
- * parent may act through, and the lazy role invocation (design spec §4) —
- * this session is that child's parent, and `ccrc-coordinator` is the skill
- * for the job. That sentence is why nothing has to happen at session
- * creation: the role arrives with its first duty.
+ * read another's transcript. So this states the child's id, the moment the
+ * operator is notified (D-5294), the question and its options in order, the
+ * ready-to-run commands a parent may act through, and the lazy role invocation
+ * (design spec §4) — this session is that child's parent, and
+ * `ccrc-coordinator` is the skill for the job. That sentence is why nothing has
+ * to happen at session creation: the role arrives with its first duty.
+ *
+ * D-5294 (coordinator-first spec §5.4, §6.7):
+ * - the deadline is `notifyAt` (`askNotifyAt`, the one computation the sweep
+ *   also acts on), printed in UTC, with the late-answer sentence D-5289 makes
+ *   true; it counts from the mint (the row's `at`), not the row's `askAt`
+ *   (D-5364);
+ * - the question and the option labels are the child's text, so they ride
+ *   inside `untrustedBlock` and nowhere else; outside it the brief names
+ *   options only by index;
+ * - the commands (D-5365) are the coordinator skill's own client form
+ *   (`wave-lifecycle.md`'s ask lane): `"$API"`, `$id` and `$uuid` are the
+ *   names the skill's preamble sets, so the heredoc is UNQUOTED and the shell
+ *   expands them into the attribution the route requires. Nothing the child
+ *   wrote is inside a heredoc: the ask id and the index are integers this
+ *   server minted;
+ * - the question is fenced but not yet redacted (D-5366): `redactCommand`
+ *   comes from Task 12, and plan Task 16 applies it to the question before
+ *   the row stores it and before this brief carries it.
  */
-function renderAskBrief(askId: number, childId: string, question: string, options: string[]): string {
-  const numbered = options.map((label, i) => `  ${i}. ${label}`).join('\n');
-  return `You are the parent of session \`${childId}\`, which is waiting on a question it cannot answer itself:\n` +
-    `${question}\n${numbered}\n\n` +
+function renderAskBrief(
+  askId: number, childId: string, question: string, options: string[], notifyAt: number,
+): string {
+  const asked = `${question}\n${options.map((label, i) => `  ${i}. ${label}`).join('\n')}`;
+  const deadline = new Date(notifyAt).toISOString().slice(11, 19);
+  const who = '"fromId":"$id","fromUuid":"$uuid"';
+  const answers = options.map((_label, i) =>
+    `Option ${i}:\n"$API" asks answer ${askId} --json - <<JSON\n{${who},"optionIndexes":[${i}]}\nJSON\n`).join('');
+  return `You are the parent of session \`${childId}\`, which is waiting on a question it cannot answer itself.\n` +
+    `The operator is notified at ${deadline} UTC unless you answer or hand over; ` +
+    `a later answer still counts until the operator acts.\n\n` +
+    `${untrustedBlock(asked, UNTRUSTED_CAP_BYTES, 'on the ask row (`"$API" asks list` shows it while the row is held, not after the lapse)')}\n\n` +
     `Rule from your own artifacts — spec, plan, ledger, branch, your prior rulings — never from the child's ` +
-    `reasoning, which you cannot see.\n` +
-    `Answer: POST /api/asks/${askId}/answer { optionIndexes: [<index>] }\n` +
-    `Decline (not yours to rule — fires the operator's own notification at once): ` +
-    `POST /api/asks/${askId}/release\n\n` +
+    `reasoning, which you cannot see.\n\n` +
+    `Answer with the index of the option you rule for ("$API", $id and $uuid are the ccrc-coordinator skill's):\n` +
+    answers +
+    `\nDecline (not yours to rule — fires the operator's own notification at once, and is final):\n` +
+    `"$API" asks release ${askId} --json - <<JSON\n{${who}}\nJSON\n\n` +
     `Run the ccrc-coordinator skill.`;
 }
 

@@ -4297,36 +4297,78 @@ fi
 # else: a new main turn's first write leaves it out. A plain test, no fork, so the hot path pays nothing.
 [[ "$event" == Stop || "$event" == SubagentStart || "$event" == SubagentStop ]] || { bgd="" bgdk=""; }
 bgd="${bgd:-}" bgdk="${bgdk:-}"
-out=$(jq -cn \
-  --argjson v 1 --arg state "$state" --arg event "${w_ev:-$event}" \
-  --arg sessionId "${CLAUDE_CODE_SESSION_ID:-}" --argjson pid "${CLAUDE_PID:-0}" \
-  --argjson updatedAt "${w_upd:-${hts:-$(_hook_epoch_ms)}}" --argjson interrupted "$interrupted" \
-  --argjson ask "$ask_json" --argjson subagents "$subs" --argjson graphQueries "$gq" \
-  --argjson graphGateDenials "$gd" --arg waitBy "$waitby" --arg aliveAt "$w_alive" \
-  --argjson ccrcPeerReads "$cp" --argjson ccrcClaims "$cc" \
-  --arg bgDelegated "$bgd" --arg bgDelegatedKinds "$bgdk" \
-  '{v:$v, state:$state, event:$event, sessionId:$sessionId, pid:$pid,
-    updatedAt:$updatedAt, ask:$ask, subagents:$subagents, graphQueries:$graphQueries,
-    graphGateDenials:$graphGateDenials, ccrcPeerReads:$ccrcPeerReads,
-    ccrcClaims:$ccrcClaims}
-   + (if $interrupted then {interrupted:true} else {} end)
-   + (if $waitBy == "subagent" then {waitBy:"subagent"} else {} end)
-   + (if $aliveAt != "" then {aliveAt: ($aliveAt | tonumber)} else {} end)
-   + (if $bgDelegated != "" then {bgDelegated: ($bgDelegated | tonumber), bgDelegatedKinds: $bgDelegatedKinds} else {} end)') || exit 0
 
-# 64KB cap: drop the questions envelope before anything else — a truncated
-# envelope is worse than none.
-if (( ${#out} > 65536 )); then
-  out=$(jq -c '.ask = null' <<<"$out" 2>/dev/null) || exit 0
-  (( ${#out} <= 65536 )) || exit 0
-fi
+# `_hook_server_cap <word>` (D-5232's gate, plan 2026-10-16 Task 9b; spec §6.1): 0 iff the server this box talks to
+# advertises <word>, measured. `~/.ccrc/server-caps` is written every minute by `ccd-update-sync` on a `fleet` node and
+# by the server itself on a `server` or `both` node. It counts only when it is EXACTLY three `\n`-terminated lines
+# (`at <1–11 digits>`, `caps` then zero or more words of `[a-z0-9-]{1,64}` each after one space, `end`, nothing after),
+# its `at` is not in the future and at most 180 s old by this hook's clock, and <word> is listed whole (never a prefix).
+# Anything else (absent, torn, malformed, stale, future, unlisted) reads as NOT advertised, and the gated arm writes
+# exactly what it writes today: the fail-safe direction. Builtins only, no fork: one grouped `read` of the file, and the
+# clock is `EPOCHREALTIME`'s seconds, the source `_hook_epoch_ms` reads first (bash 5.0+), else `printf '%(%s)T'`, the
+# same realtime clock as a 4.4 builtin. The file name `server-caps` and the lease `180` are the bash copies of
+# `SERVER_CAPS_FILE` and `SERVER_CAPS_LEASE_S` (shared/api.ts); `session-hook-compact-carry.test.ts` holds them equal
+# and iterates the grammar against `parseServerCaps`. Task 2's carry reuses this gate with its own word.
+_hook_server_cap() {   # <word> -> 0 advertised and current; 1 otherwise
+  local want="$1" l1="" l2="" l3="" l4="" at now
+  { { IFS= read -r l1 && IFS= read -r l2 && IFS= read -r l3 && ! IFS= read -r l4; } < "$HOME/.ccrc/server-caps"; } 2>/dev/null || return 1
+  [[ -z "$l4" && "$l3" == end && "$l1" =~ ^at\ ([0123456789]{1,11})$ ]] || return 1
+  at=$(( 10#${BASH_REMATCH[1]} ))
+  # The word class is spelled out, never a range: under a UTF-8 locale `a-z` may collate non-ASCII letters into it.
+  [[ "$l2" =~ ^caps(\ [abcdefghijklmnopqrstuvwxyz0123456789-]{1,64})*$ ]] || return 1
+  if [[ -n "${EPOCHREALTIME:-}" ]]; then now="${EPOCHREALTIME%%[.,]*}"; else printf -v now '%(%s)T' -1; fi
+  [[ "$now" =~ ^[0123456789]+$ ]] || return 1
+  (( at <= now && now - at <= 180 )) || return 1
+  [[ " ${l2#caps} " == *" $want "* ]]
+}
 
-# The braces put the REDIRECTION's own failure under the 2>/dev/null too: with
-# `> "$tmp" 2>/dev/null` bash reports an unopenable "$tmp" on the hook's real
-# stderr before the second redirection is applied (D-1691).
-tmp="$REG/.$id.$$.hookstate.tmp"
-{ printf '%s\n' "$out" > "$tmp"; } 2>/dev/null || { rm -f "$tmp"; exit 0; }
-mv -f "$tmp" "$f" 2>/dev/null || { rm -f "$tmp"; exit 0; }
+# `compactions-write-no-hookstate` (D-5239, spec §5.8): while the server advertises `dispatch-live-gate-v1` (its
+# dispatch gate reads the live pane, so a `done` standing over a busy compaction can never be `/clear`ed), PreCompact
+# and PostCompact, `auto` and `manual` alike, WRITE NO HOOKSTATE: the file stays byte for byte as it was, which carries
+# the whole field set by construction (`state`, `event`, `updatedAt`, `ask`, `interrupted`, `waitBy`, `waitPrev`, the
+# delegated pair, the roster, `aliveAt`), so an idle compaction leaves `done` with no fresh `bucketSince` and no badge,
+# and a mid-turn one leaves `working`. No `aliveAt` is written either: compactions stay plumbing for the stall watch.
+# The case arms above (`PreCompact` → working, `PostCompact` manual → done) are left as they are, and this flag
+# overrides them; the print and the two compaction helpers below still run. Measured (2.1.280 to 2.1.292 in the
+# committed `clear-compact-resume` captures, and 2.1.300 on a workstation rig): a typed `/compact` fires PreCompact,
+# a SubagentStop and PostCompact, and NO UserPromptSubmit, so there is no `/compact` prompt arm. With the word not
+# advertised, a compaction writes exactly what it writes today. `hs_skip` is the one flag the write below honours
+# (Task 2's no-file agent event sets it too).
+hs_skip=""
+if [[ "$event" == PreCompact || "$event" == PostCompact ]] && _hook_server_cap dispatch-live-gate-v1; then hs_skip=1; fi
+
+if [[ -z "$hs_skip" ]]; then
+  out=$(jq -cn \
+    --argjson v 1 --arg state "$state" --arg event "${w_ev:-$event}" \
+    --arg sessionId "${CLAUDE_CODE_SESSION_ID:-}" --argjson pid "${CLAUDE_PID:-0}" \
+    --argjson updatedAt "${w_upd:-${hts:-$(_hook_epoch_ms)}}" --argjson interrupted "$interrupted" \
+    --argjson ask "$ask_json" --argjson subagents "$subs" --argjson graphQueries "$gq" \
+    --argjson graphGateDenials "$gd" --arg waitBy "$waitby" --arg aliveAt "$w_alive" \
+    --argjson ccrcPeerReads "$cp" --argjson ccrcClaims "$cc" \
+    --arg bgDelegated "$bgd" --arg bgDelegatedKinds "$bgdk" \
+    '{v:$v, state:$state, event:$event, sessionId:$sessionId, pid:$pid,
+      updatedAt:$updatedAt, ask:$ask, subagents:$subagents, graphQueries:$graphQueries,
+      graphGateDenials:$graphGateDenials, ccrcPeerReads:$ccrcPeerReads,
+      ccrcClaims:$ccrcClaims}
+     + (if $interrupted then {interrupted:true} else {} end)
+     + (if $waitBy == "subagent" then {waitBy:"subagent"} else {} end)
+     + (if $aliveAt != "" then {aliveAt: ($aliveAt | tonumber)} else {} end)
+     + (if $bgDelegated != "" then {bgDelegated: ($bgDelegated | tonumber), bgDelegatedKinds: $bgDelegatedKinds} else {} end)') || exit 0
+
+  # 64KB cap: drop the questions envelope before anything else — a truncated
+  # envelope is worse than none.
+  if (( ${#out} > 65536 )); then
+    out=$(jq -c '.ask = null' <<<"$out" 2>/dev/null) || exit 0
+    (( ${#out} <= 65536 )) || exit 0
+  fi
+
+  # The braces put the REDIRECTION's own failure under the 2>/dev/null too: with
+  # `> "$tmp" 2>/dev/null` bash reports an unopenable "$tmp" on the hook's real
+  # stderr before the second redirection is applied (D-1691).
+  tmp="$REG/.$id.$$.hookstate.tmp"
+  { printf '%s\n' "$out" > "$tmp"; } 2>/dev/null || { rm -f "$tmp"; exit 0; }
+  mv -f "$tmp" "$f" 2>/dev/null || { rm -f "$tmp"; exit 0; }
+fi   # hs_skip
 # The one PreToolUse envelope this file ever prints — a deny (R5) or a nudge
 # (R6, or the landing advisory) — and only now: the count a deny names is on disk, so the next event
 # will see it (D-1689). The nudge counts nothing, but it shares this site so

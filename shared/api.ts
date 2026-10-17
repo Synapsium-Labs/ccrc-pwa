@@ -4399,8 +4399,8 @@ export interface NotifyEvent {
    *  attribution row would land in `run_events` and be seen by nobody (D-1163). Additive: an
    *  older client degrades it to `unknown` through `reviveNotifyEvent`, which is the
    *  degradation this union was given `unknown` for. `update` is a move the update dispatcher
-   *  leased (wave 8 item A) — about no session and no run, recorded, never pushed; `queue` is the landing lane's dequeue notice. */
-  kind: 'ask' | 'done' | 'merged' | 'mail' | 'run' | 'coord' | 'update' | 'queue' | 'unknown';
+   *  leased (wave 8 item A) — about no session and no run, recorded, never pushed; `queue` is the landing lane's dequeue notice; `interrupt` is an Escape or Ctrl-C the console sent, with its source and outcome (D-5237, `INTERRUPT_SOURCES`), recorded, never pushed. */
+  kind: 'ask' | 'done' | 'merged' | 'mail' | 'run' | 'coord' | 'update' | 'queue' | 'interrupt' | 'unknown';
   sessionId: string; title: string; body: string;
   /**
    * WHICH RUN this notification is about, or `null` when it is about none.
@@ -4439,7 +4439,7 @@ export interface CatchUp { epoch: string; seq: number; resync: boolean; events: 
 /** The recognised `NotifyEvent.kind` tokens. Kept private; the door in is
  *  `isNotifyKind` below, the same split `PR_PHASES`/`isPrPhase` use and for
  *  the identical reason (that function's own docstring has the argument). */
-const NOTIFY_KINDS: readonly NotifyEvent['kind'][] = ['ask', 'done', 'merged', 'mail', 'run', 'coord', 'update', 'queue', 'unknown'];
+const NOTIFY_KINDS: readonly NotifyEvent['kind'][] = ['ask', 'done', 'merged', 'mail', 'run', 'coord', 'update', 'queue', 'interrupt', 'unknown'];
 
 /**
  * Use THIS, never `NOTIFY_KINDS.includes(x as NotifyEvent['kind'])` — the
@@ -10511,6 +10511,53 @@ export const ASK_RELEASE_REASON_MAP: Record<AskReleaseReason, true> = {
 
 export function isAskReleaseReason(v: unknown): v is AskReleaseReason {
   return typeof v === 'string' && (Object.keys(ASK_RELEASE_REASON_MAP) as string[]).includes(v);
+}
+
+// ── Interrupt sources (D-5237's first half; plan 2026-10-16, Task 7; spec §5.5) ────────────────────────────────────
+// APPENDED at the very end, for the reason the block above gives (README and the specs cite this file by line).
+//
+// Every Escape (or Ctrl-C) the console sends is recorded as a `NotifyEvent` of kind `interrupt`, recorded and never
+// pushed, whose body is `source=<InterruptSource> outcome=<InterruptOutcome>` (`interruptEventBody`, the one writer;
+// `parseInterruptEventBody`, the one reader). The route's three sources are the PWA's controls; the drawer's two are
+// raw pty input frames that are exactly ESC or exactly Ctrl-C (`server/src/interruptlog.ts`); `unknown` is what any
+// other or absent route `source` degrades to, and what a reader makes of a token it does not know.
+
+/** Who sent the interrupt, and through which door. The value says which door may claim it: `route` sources arrive as
+ *  `POST /api/sessions/:id/interrupt`'s optional `source`, `drawer` sources are only ever minted by the pty relay,
+ *  and `unknown` is the degrade. */
+const INTERRUPT_SOURCE_MAP = {
+  keycap: 'route', 'escape-key': 'route', deny: 'route',
+  'drawer-escape': 'drawer', 'drawer-ctrl-c': 'drawer',
+  unknown: 'degrade',
+} as const satisfies Record<string, 'route' | 'drawer' | 'degrade'>;
+export type InterruptSource = keyof typeof INTERRUPT_SOURCE_MAP;
+export const INTERRUPT_SOURCES: readonly InterruptSource[] = Object.keys(INTERRUPT_SOURCE_MAP) as InterruptSource[];
+/** The sources a client may name in the interrupt route's body. */
+export type InterruptRouteSource = { [K in InterruptSource]: (typeof INTERRUPT_SOURCE_MAP)[K] extends 'route' ? K : never }[InterruptSource];
+export function isInterruptSource(v: unknown): v is InterruptSource {
+  return typeof v === 'string' && Object.prototype.hasOwnProperty.call(INTERRUPT_SOURCE_MAP, v);
+}
+/** The route's reader of its body's `source`: a route source is kept, anything else (absent, another type, a token
+ *  this build does not know, or a drawer source no client may claim) is `unknown`, never a 400. */
+export function interruptRouteSource(v: unknown): InterruptSource {
+  return isInterruptSource(v) && INTERRUPT_SOURCE_MAP[v] === 'route' ? v : 'unknown';
+}
+
+/** What the interrupt did: `sent` (the key was pressed), or the route's refusal code (zero keys). */
+export type InterruptOutcome = 'sent' | InterruptRefusal;
+export function isInterruptOutcome(v: unknown): v is InterruptOutcome {
+  return v === 'sent' || (typeof v === 'string' && (INTERRUPT_REFUSALS as readonly string[]).includes(v));
+}
+/** The one writer of an `interrupt` event's body. */
+export function interruptEventBody(source: InterruptSource, outcome: InterruptOutcome): string {
+  return `source=${source} outcome=${outcome}`;
+}
+/** The one reader of an `interrupt` event's body: null off its grammar; a token this build does not know is
+ *  `unknown` (a newer server's source or outcome on an older client). */
+export function parseInterruptEventBody(body: string): { source: InterruptSource; outcome: InterruptOutcome | 'unknown' } | null {
+  const m = /^source=(\S+) outcome=(\S+)$/.exec(body);
+  if (m === null) return null;
+  return { source: isInterruptSource(m[1]) ? m[1] : 'unknown', outcome: isInterruptOutcome(m[2]) ? m[2] : 'unknown' };
 }
 
 // ── Delegation observation: the shared event and state vocabulary (delegation broker wave 3) ──────────────────────

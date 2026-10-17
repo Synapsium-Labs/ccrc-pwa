@@ -2024,3 +2024,64 @@ describe('dialog-cap-clock-ignores-inbound-mail (D-4040)', () => {
       .toEqual(capOf('limit-cap', RUN67_DISPATCHED));
   });
 });
+
+// `compactions-write-no-hookstate` (D-5239; spec §5.8): behind the server's word a compaction writes no hookstate, so
+// the stall watch's hook fact after one is the PRE-compaction activity, with no fresh `updatedAt` and no `aliveAt`:
+// compactions stay plumbing. Fed by the real hook over a planted file. At base the compaction rewrites the file as a
+// fresh `PreCompact`/`PostCompact` event, and the delegates hold the Stop earned is lost.
+import { spawnSync as spawnHook } from 'node:child_process';
+import fsHook from 'node:fs';
+import pathHook from 'node:path';
+import { mkTmp as mkTmpHook } from './tmpHelpers.js';
+import { SERVER_CAPS_FILE, renderServerCaps } from '../../shared/api.js';
+
+describe('a hookstate carried through a compaction reads the pre-compaction activity (D-5239)', () => {
+  const HOOK = pathHook.resolve(__dirname, '../../ccd/session-hook.sh');
+  const SID = 'lane-a-project-a';
+  /** Plant `file`, run PreCompact and PostCompact (`trigger`) through the real hook behind the word, and answer the
+   *  stall lane's fact of what is on disk after, plus whether the file gained `aliveAt`. */
+  const throughCompaction = (file: Record<string, unknown>, trigger: 'auto' | 'manual'): { fact: HookRawFact; alive: boolean } => {
+    const home = mkTmpHook('ccrc-stall-compact-');
+    try {
+      const reg = pathHook.join(home, '.cc-sessions');
+      const bin = pathHook.join(home, 'bin');
+      fsHook.mkdirSync(reg, { recursive: true });
+      fsHook.mkdirSync(bin, { recursive: true });
+      fsHook.mkdirSync(pathHook.join(home, '.ccrc'), { recursive: true });
+      fsHook.writeFileSync(pathHook.join(bin, 'tmux'), `#!/bin/sh\necho "cc-${SID}"\n`, { mode: 0o755 });
+      fsHook.writeFileSync(pathHook.join(home, '.ccrc', SERVER_CAPS_FILE), renderServerCaps(['dispatch-live-gate-v1'], Math.floor(Date.now() / 1000)));
+      const hs = pathHook.join(reg, `${SID}.hookstate.json`);
+      fsHook.writeFileSync(hs, JSON.stringify(file) + '\n');
+      for (const ev of ['PreCompact', 'PostCompact']) {
+        const r = spawnHook('bash', [HOOK], {
+          input: JSON.stringify({ session_id: UUID, transcript_path: '/rig/fixhome/cfg/projects/-rig-repo/x.jsonl', cwd: '/rig/repo',
+            prompt_id: '00000000-0000-4000-8000-0000000000c1', hook_event_name: ev, trigger,
+            ...(ev === 'PreCompact' ? { custom_instructions: null } : { compact_summary: 'fixture summary' }) }),
+          encoding: 'utf8',
+          env: { ...process.env, HOME: home, PATH: `${bin}:${process.env['PATH'] ?? ''}`, TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: UUID, CLAUDE_PID: '4242' },
+        });
+        expect(r.status).toBe(0);
+      }
+      const after = JSON.parse(fsHook.readFileSync(hs, 'utf8')) as { updatedAt: number; event: string };
+      return { fact: hookAt(after.updatedAt, after.event), alive: 'aliveAt' in after };
+    } finally { fsHook.rmSync(home, { recursive: true, force: true }); }
+  };
+  const file = (state: string, event: string, updatedAt: number): Record<string, unknown> => ({
+    v: 1, state, event, sessionId: UUID, pid: 4242, updatedAt, ask: null, subagents: [], graphQueries: 0,
+    graphGateDenials: 0, ccrcPeerReads: 0, ccrcClaims: 0,
+  });
+
+  it('the delegates hold a Stop 29 min ago earned survives an idle compaction', () => {
+    const { fact, alive } = throughCompaction(file('done', 'Stop', NOW - 29 * MIN), 'manual');
+    expect(alive).toBe(false);
+    expect(fact).toEqual(hookAt(NOW - 29 * MIN, 'Stop'));
+    expect(vw({ arming: W2_LIVE }, { hook: fact })).toEqual(hold('delegates'));
+  });
+
+  it('the frozen clock still reads the last tool event 61 min ago through a mid-turn compaction', () => {
+    const { fact, alive } = throughCompaction(file('working', 'PostToolUse', NOW - 61 * MIN), 'auto');
+    expect(alive).toBe(false);
+    expect(fact).toEqual(hookAt(NOW - 61 * MIN, 'PostToolUse'));
+    expect(fv(fact)).toEqual(frozenV(NOW - 2 * H));
+  });
+});

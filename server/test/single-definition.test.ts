@@ -6608,3 +6608,77 @@ describe('one eligibility rule and one answer body for the parent and the operat
     }
   });
 });
+
+// D-5294, D-5295 (plan docs/superpowers/plans/2026-10-17-coordinator-first-routing.md, Task 6; spec §5.4, §5.5,
+// §6.7). APPENDED. The ask window has ONE home and ONE deadline computation: `ASK_GRACE_MS` (180 s) is defined in
+// `server/src/askwindow.ts` and read by name on a code line nowhere else in the source roots, so the hold's sweep
+// deadline and the brief's "notified at" both go through `askNotifyAt`, defined there too. The fence renderer for a
+// child's text in a coordinator's mail, `untrustedBlock`, is defined in `server/src/coord/untrusted.ts` alone, its
+// preface spelled there alone, and the brief calls it. Code lines only (`stallCode`).
+describe('the ask window, its deadline and the untrusted-data fence are each defined once (D-5294, D-5295)', () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  const defines = (name: string): RegExp =>
+    new RegExp(`\\bfunction\\s+${name}\\b|\\b(?:const|let|var)\\s+${name}\\s*=`);
+
+  it('CONTROL: the patterns see a definition and a read, and pass over comment lines', () => {
+    expect(defines('askNotifyAt').test('export function askNotifyAt(heldAt: number): number {')).toBe(true);
+    expect(defines('askNotifyAt').test('const askNotifyAt = (t) => t;')).toBe(true);
+    expect(/\bASK_GRACE_MS\b/.test('return { until: now + ASK_GRACE_MS };')).toBe(true);
+    expect(stallCodeText('// the window is ASK_GRACE_MS\nconst x = 1;')).not.toMatch(/\bASK_GRACE_MS\b/);
+  });
+
+  it('ASK_GRACE_MS is 180 000, defined in server/src/askwindow.ts', () => {
+    const src = stallCode(path.join(ccrcRoot, 'server/src/askwindow.ts'));
+    expect(src).toMatch(/export const ASK_GRACE_MS = 180_000;/);
+    expect(holders(defines('ASK_GRACE_MS'))).toEqual(['server/src/askwindow.ts']);
+  });
+
+  it('ASK_GRACE_MS is read on a code line in server/src/askwindow.ts and nowhere else', () => {
+    expect(holders(/\bASK_GRACE_MS\b/)).toEqual(['server/src/askwindow.ts']);
+  });
+
+  it('askNotifyAt is defined in server/src/askwindow.ts alone, and the hold reads it once for both uses', () => {
+    expect(holders(defines('askNotifyAt'))).toEqual(['server/src/askwindow.ts']);
+    const watch = stallCode(path.join(ccrcRoot, 'server/src/watch.ts'));
+    expect(watch.match(/\baskNotifyAt\(/g) ?? []).toHaveLength(1);
+    expect(watch).toMatch(/renderAskBrief\([^)]*\buntil\)/);
+    expect(watch).toMatch(/return \{ until, askId,/);
+  });
+
+  it('untrustedBlock and its preface live in server/src/coord/untrusted.ts alone, and the brief calls it', () => {
+    expect(holders(defines('untrustedBlock'))).toEqual(['server/src/coord/untrusted.ts']);
+    expect(holders(/untrusted data written by a model/)).toEqual(['server/src/coord/untrusted.ts']);
+    const watch = stallCode(path.join(ccrcRoot, 'server/src/watch.ts'));
+    expect(watch).toMatch(/\buntrustedBlock\(asked, UNTRUSTED_CAP_BYTES,/);
+  });
+});
+
+// D-5370 (`stop-worker-at-run-done`). APPENDED, for the reason the stall-watch blocks above state. The stop-done lane
+// ships LIVE (the operator's ruling), and its kill switch `$REG/stop-done-disabled` is the operator's to touch and
+// remove BY HAND, beside `stall-watch-disabled` — so no line of shell names it, its one TS holder on a code line is its
+// definer (an L1 file that reaches no `node:` module and so cannot write it), and the files that name its constant are
+// the definer and the lane, neither of which reaches a write. Its numbers and its holds are spelled once, in the definer.
+describe('D-5370: the stop-done lane’s kill switch has no writer, and its constants one home', () => {
+  const NAME = 'stop-done-disabled';
+  const DEFINER = 'server/src/stopDone.ts';
+  it('no shell line names it, and its one TS holder is its definer, which reaches no node: module', () => {
+    expect(holdersOf(NAME), 'a line of shell names it — a writer, or a reader this design never had').toEqual([]);
+    expect(ALL.filter((f) => stallCode(f).includes(NAME)).map(rel).sort(), `spelled on a code line outside ${DEFINER}`)
+      .toEqual([DEFINER]);
+    expect(stallCode(path.join(ccrcRoot, DEFINER))).not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
+  });
+  it('the files that name STOP_DONE_DISABLED_MARKER are the definer and the lane, and neither reaches a write', () => {
+    const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
+    expect(WRITE.test('await deps.io.writeFile(`${dir}/${m}`, "");'), 'CONTROL: the pattern sees a write').toBe(true);
+    const holders = ALL.filter((f) => stallCode(f).includes('STOP_DONE_DISABLED_MARKER')).map(rel).sort();
+    expect(holders).toEqual([DEFINER, 'server/src/stopDoneSweep.ts']);
+    for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(WRITE);
+  });
+  it('each of its constants and its hold list is declared once, in the definer', () => {
+    for (const c of ['STOP_DONE_GRACE_MS', 'STOP_DONE_PER_PASS', 'STOP_DONE_MEASURES_PER_PASS', 'STOP_DONE_SWEEP_MS',
+      'STOP_DONE_RETRY_MS', 'STOP_DONE_DISABLED_MARKER', 'STOP_DONE_HOLDS', 'STOP_DONE_HOLD_MAP']) {
+      const decl = new RegExp(`\\b(?:const|let|var)\\s+${c}\\b`);
+      expect(ALL.filter((f) => decl.test(stallCode(f))).map(rel), c).toEqual([DEFINER]);
+    }
+  });
+});
