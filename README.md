@@ -2913,7 +2913,7 @@ edge pushes as before. Delegated background work keeps its push for the moment t
   The coordinator may answer from what it can read — `POST /api/asks/:id/answer`, box token plus registry
   attribution, accepted only from that worker's own parent, which re-proves the question is still the live one
   before it presses one digit; its body is the operator's own (`readAskAnswer`, D-5293), so an `askKey` it sends must
-  be the row's (`409 ask-mismatch`), and what it may hold is what your route answers (`answerableAsk`) — or decline anything that would be a new decision with
+  be the row's (`409 ask-mismatch`, D-5368), and what it may hold is what your route answers (`answerableAsk`) — or decline anything that would be a new decision with
   `POST /api/asks/:id/release`, which fires your push at once (coordinator clause 11). Your own answer from the
   lock screen takes the same ask row, so the record names whoever ruled. A multi-select or multi-question ask, a
   session with no parent, a run this box could not read, or `$REG/asks-disabled` (touched by hand on the fleet

@@ -569,12 +569,15 @@ describe('answerAsk', () => {
 // D-5293 (plan docs/superpowers/plans/2026-10-17-coordinator-first-routing.md, Task 8; spec §5.3). APPENDED. The
 // parent's hold and the operator's answer route read ONE eligibility rule, `answerableAsk` (`askkey.ts`): `askActions`
 // (the hold's sole gate, D-2173, and the push's buttons) is non-null exactly where it admits, and `answerAsk` answers
-// exactly where it admits and refuses everywhere else BEFORE it reads the pane or presses a key. The envelopes copy
-// committed real shapes: the single-select captures `ask-route` already answers, the 2.1.280 multiSelect capture, and
-// the three two-question asks the ask-sheet work (#491, #493) measured on 2.1.296 and 2.1.302 (their prompts are in
-// `cc302-ask-preview-q2.txt`; the hook copies no `description` or `preview`). The operator answers those last ones on
-// the pane routes (`/dialog`, `/dialog/multi`, `/dialog/text`, `/dialog/tab`), never on `answerAsk`'s envelope route,
-// so the lane, which presses through `answerAsk`, admits none of them either.
+// exactly where it admits and refuses everywhere else BEFORE it reads the pane or presses a key. Only some rows are
+// committed captures: the single-select captures `ask-route` already answers and the 2.1.280 multiSelect capture. The
+// three two-question rows are NOT copies of what the ask-sheet work (#491, #493) measured on 2.1.296 and 2.1.302: their
+// text is invented (neutral fruit, pet and layout questions), shaped like those captures as the hook reports them
+// (`cc302-ask-preview-q2.txt` holds the measured prompts). The hook copies no `description` or `preview`, so the
+// "with previews" row is the same envelope shape as the plain two-question row; it stays to name the #493 case. The
+// operator answers two-question asks on the pane routes (`/dialog`, `/dialog/multi`, `/dialog/text`, `/dialog/tab`),
+// never on `answerAsk`'s envelope route, so the lane, which presses through `answerAsk`, admits none of them either
+// (D-5367).
 import { answerableAsk, askActions } from '../src/askkey.js';
 import type { HookState } from '../src/hookstate.js';
 

@@ -1058,9 +1058,9 @@ answer you press after the lapse still lands, and the operator's notification is
 one saying you answered it. Only a ruling ends it: an answer from either principal, or your
 own release (below).
 
-A 409 from this route can come from five route/CAS guards before `answerAsk` (`not-held`,
-`ask-moved`, `child-unmeasurable`, `declined`, or `already-answered`) or from a downstream
-`answerAsk` refusal (D-5357). No refusal path presses a digit when the eligible ask is
+A 409 from this route can come from six route/CAS guards before `answerAsk` (`not-held`,
+`ask-moved`, `child-unmeasurable`, `declined`, `already-answered`, or `ask-mismatch`) or from
+a downstream `answerAsk` refusal (D-5357, D-5368). No refusal path presses a digit when the eligible ask is
 single-select, which is the only shape this hold lane mints; after a downstream refusal the
 route puts the row back in the state it was taken from: `held`, or `released` if the window
 had already lapsed.
@@ -1074,6 +1074,10 @@ had already lapsed.
   `store.ts`, where it was equally wrong, and both were corrected together. It then said
   `not-held` also covered a lapse and an answered row, until D-5289 made a lapsed row
   answerable and named the two rulings below apart.)
+- `ask-mismatch` — your body carried an `askKey` (optional; the operator's route sends one)
+  that is not this row's key (D-5368). The route refuses it before it takes the row: nothing
+  is pressed and the row is unchanged. Re-read the ask (`GET /api/asks`, below) and answer
+  the question it shows, or send no `askKey`.
 - `declined` — YOU released this question yourself (`asks release`, below). A release is
   final: you handed the question to the operator, and your later answer is refused. Do not
   retry; the question is the operator's now.
@@ -1094,7 +1098,7 @@ had already lapsed.
   `not-alive`, `no-menu`, and `menu-mismatch`. Each names the failed live-state,
   option, or pane guard; stop and re-read rather than treating 409 as three
   possible conditions or retrying blind. Counting both halves, this route answers
-  409 with fifteen (5 + 10) distinct codes.
+  409 with 15 distinct codes (6 + 10, `ask-mismatch` in both halves).
 ```bash
 : "${ask_id:?set ask_id to the held ask row positive decimal id}"
 "$API" asks release "$ask_id" --json - <<JSON

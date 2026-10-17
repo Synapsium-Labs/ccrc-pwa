@@ -33,6 +33,9 @@ export function askKey(ask: HookAsk | null): string | null {
  * envelope, more than one question, a multiSelect question, no options, a
  * blank option label anywhere in the envelope. Envelope only: whether the hook
  * is `waiting`, and whether the key and the pane still match, are the callers'.
+ * D-5367: the ask-sheet work (#491, #493) widened only the `/dialog/*` pane
+ * routes, not `answerAsk`, so this admits exactly what `askActions` admitted
+ * before it: the lane gains no envelope until `answerAsk` itself widens.
  */
 export function answerableAsk(ask: HookAsk | null): boolean {
   if (ask === null || !('questions' in ask)) return false;

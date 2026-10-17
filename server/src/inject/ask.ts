@@ -19,7 +19,7 @@ export type AskResult = { ok: true } | { ok: false; error: AskRefuseCode };
  * (`coord/routes.ts`). `optionIndexes` is an array of numbers (`answerAsk`
  * judges each one); `askKey`, when present, is a string. The operator's route
  * requires it; the parent's route compares it with the key its row was minted
- * for. `null` is both routes' 400 `bad-request`.
+ * for (D-5368). `null` is both routes' 400 `bad-request`.
  */
 export function readAskAnswer(body: unknown): { askKey: string | undefined; optionIndexes: number[] } | null {
   if (typeof body !== 'object' || body === null) return null;

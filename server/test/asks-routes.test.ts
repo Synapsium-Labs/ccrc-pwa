@@ -332,7 +332,7 @@ describe('POST /api/asks/:id/answer', () => {
     expect(okAsk(coord.askById(id))!.state).toBe('answered');
   });
 
-  it('refuses ask-mismatch for an askKey that is not the row\'s, before any key, and the row stays held (D-5293)', async () => {
+  it('refuses ask-mismatch for an askKey that is not the row\'s, before any key, and the row stays held (D-5293, D-5368)', async () => {
     const { coord, id, calls } = await setup(Date.now());
     const res = await answer(app!, id,
       { fromId: PARENT, fromUuid: PARENT_UUID, askKey: 'deadbeefdeadbeef', optionIndexes: [1] });
