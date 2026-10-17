@@ -8513,13 +8513,17 @@ function renderAskBrief(askId: number, childId: string, question: string, option
 //   THE LANE NEVER LINKS ACROSS A STRETCH IT KNOWS IT DID NOT READ (W1, coordinator 5512; R88, R89). Lane memory only, both:
 //     - THE LATEST READY INSTANT (R88, `readyAt`). Set by the first pass of a process that reaches the owners, and again by the first
 //       pass to reach them after the lane was found NOT READY (no census, no applier, or an applier not `ready` or failed; and R103, a
-//       registry `tick()` could not list, which stops the tick before the census and this lane; and R109, a pass cut before the owners,
-//       which listed no one): to the instant the recovery of that same pass returned (the in-process one, R112), or else to the
-//       instant the pass's applier answered (`appliedAt`, R113), which covers the BOOT recovery `open()` makes, for the pass that started
-//       the open and for a later one awaiting the cached applier alike, and is never earlier than the pass's own clock. (Measuring after
-//       the await carries the clock-skew allowance from the recovery's return: that covers a call made during the recovery by a hook
-//       clock running ahead of the server's. When the clocks agree, the pass budget (45 s) already keeps a recovery inside the skew
-//       (60 s), unless a starved event loop fires the budget timer late.) (No census and no applier can only be found before a process's first ready
+//       registry `tick()` could not list, which stops the tick before the census and this lane; R109, a pass cut before the owners,
+//       which listed no one; and R116, a recovery the lane started that has not SETTLED, returned or thrown: while it runs, its
+//       projection repair after `recover()` already reports `ready` included, a pass reads no owner, reconciles nothing and sets no
+//       instant): to the settle of the last recovery the lane started (`recoveredAt`, the in-process one, R112, R116), whichever pass
+//       started it, or else to the instant the pass's applier answered (`appliedAt`, R113), which covers the BOOT recovery `open()`
+//       makes, for the pass that started the open and for a later one awaiting the cached applier alike (R117); and never earlier than
+//       the setting pass's own clock, whatever the wall clock does (R115, one clamp for both arms). (Measuring after the await carries
+//       the clock-skew allowance from the settle: that covers a call made during the recovery by a hook clock running ahead of the
+//       server's. When the clocks agree, the pass budget (45 s) keeps a recovery whose pass is not cut inside the skew (60 s), unless a
+//       starved event loop fires the budget timer late; a recovery whose pass was cut runs on past the budget, and its settle covers that
+//       too.) (No census and no applier can only be found before a process's first ready
 //       pass: the census is never unset and the applier is cached once opened; they stay as defence.) Correlation gets one lost window
 //       from the epoch to it plus the clock skew on every repository (`delegationNotReadyWindowOf`, R104): a stretch's start cannot be
 //       measured, so every rung-4 candidate whose creator began at or before it is held, and through X1 so is a rung-3 link whose creator
@@ -8899,6 +8903,19 @@ class DelegationLane {
   private readyAt: number | null = null;
   /** R88: a pass found the lane not ready since `readyAt` was set (a fresh process starts so): the next pass to reach the owners sets it. */
   private notReady = true;
+  /** R116 (review 556 W1): a recovery this lane started (`run()`'s `await durable.recover()`, its one caller) has not settled. Set just
+   *  before that await and cleared in its `finally`, so it clears whether the recovery returned or threw. While it is set the lane is NOT
+   *  READY: a pass reads no owner, reconciles nothing and sets no instant, even once `recover()` already reports `ready` and only its
+   *  projection repair (`repairLocked`) is still running. Lane memory only. */
+  private recovering = false;
+  /** R112, R116: the instant (epoch ms) the last recovery this lane started SETTLED (returned or threw), measured in that await's
+   *  `finally`; null once an instant has consumed it. A LANE field, not the recovering pass's own: in W1's order the pass that recovered
+   *  is cut, and the pass that sets the instant is a later one. Measured after the await, so the clock-skew allowance runs from the
+   *  settle, which covers a call made during the recovery by a hook clock running ahead of the server's. When the clocks agree, the pass
+   *  budget (45 s) keeps a recovery whose pass is not cut inside the skew (60 s), unless a starved event loop fires the budget timer
+   *  late; a recovery whose pass was cut runs on past the budget, and its settle covers that too. Overwritten by each settle, so it is
+   *  the LAST recovery's. Lane memory only. */
+  private recoveredAt: number | null = null;
   /** R89 (W1 b): the owners a pass LISTED and no completed observation has read since, by `laneOwnerKey`. Lane memory only; bounded by the
    *  read horizon (an hour past it is recorded as a gap and leaves, and an owner with no hour left leaves with it). */
   private readonly pendingOwners = new Map<string, LanePendingOwner>();
@@ -9327,27 +9344,32 @@ class DelegationLane {
     this.noteSessions(pass);
     const durable = await this.applier();
     /** R113 (review 544 P2): when the applier answered, so the boot recovery `open()` makes is covered like an in-process one (R112): for
-     *  the pass that started the open, and for a later pass awaiting the cached applier after the first was cut. Never earlier than
-     *  `pass.now`; the reason to measure after the await is the M1 sentence on `recoveredAt` below. */
+     *  the pass that started the open, and for a later pass awaiting the cached applier after the first was cut (R117), because the
+     *  cached promise resolves only after `open()` recovered. Measured after the await for the reason on `recoveredAt`. The wall clock
+     *  can step back during the await, so this can be earlier than `pass.now`: the instant below clamps it (R115). */
     const appliedAt = Date.now();
     if (durable === null) {
       this.notReady = true;                                            // R88: no applier, nothing is read
       return;
     }
+    if (this.recovering) { this.notReady = true; return; }             // R116 (W1): a recovery the lane started has not settled: not ready
     if (pass.signal.aborted) return;
-    /** R88, R112: the instant a recovery of THIS pass returned, measured after its await. That carries the clock-skew allowance from the
-     *  recovery's return, which covers a call made during the recovery by a hook clock running ahead of the server's; when the clocks
-     *  agree, the pass budget (45 s) already keeps a recovery inside the skew (60 s), unless a starved event loop fires the budget timer
-     *  late. The same holds for the boot recovery, through `appliedAt` (R113). */
-    let recoveredAt: number | null = null;
     if (durable.state().phase !== 'ready' || durable.failure() !== null) {
       this.notReady = true;                                            // R88: in recovery, or failed: what happens now is not read
       this.unreconcile();                                              // M-1: what was counted is not this state's
       // A recovery that failed applies NOTHING and reads nothing: the files are left exactly as they are. It is tried again, rarely.
       if (pass.now - this.lastRecoverAt < DELEGATION_RECOVERY_RETRY_MS) return;
       this.lastRecoverAt = pass.now;
-      await durable.recover();
-      recoveredAt = Date.now();
+      this.recovering = true;                                          // R116: until it settles, every pass is not ready
+      try {
+        await durable.recover();
+      } finally {
+        this.recovering = false;                                       // R116: settled, returned or thrown
+        this.recoveredAt = Date.now();                                 // R112, R116: the settle, for whichever pass sets the next instant
+      }
+      // On a return these run in the same synchronous continuation as the `finally`, so no pass sees the recovery settled with the old
+      // slice still marked loaded. (A throw skips them, as before: `recover()` throws only before it clears its failure, since its
+      // projection repair never throws, so the next pass finds the applier failed and is not ready, by R88's arm above.)
       this.evidenceLoaded = false;                                     // the slice and the dropped-evidence index are measured again by the next load
       this.dropped.clear();
       this.tupleLatest.clear();
@@ -9362,11 +9384,14 @@ class DelegationLane {
     pass.reachedOwners = true;                                         // R109: synchronously after the last check, before any await
 
     // R88: the first pass to reach the owners after a not-ready mark (and the first of a process) is the latest ready instant: the
-    // instant this pass's own in-process recovery returned (R112), else the instant its applier answered, after the boot recovery
-    // `open()` makes (R113). Measured after the awaits, so the skew allowance runs from the recovery's return (the M1 reason above).
-    // Everything at or before it may hold a session nothing listed.
+    // settle of the last recovery the lane started (`recoveredAt`, R112, R116), whichever pass started it, else the instant this pass's
+    // applier answered, after the boot recovery `open()` makes (R113, R117); and never earlier than this pass's own clock, whatever the
+    // wall clock did during the awaits (R115: one clamp for both arms). Measured after the awaits, so the skew allowance runs from the
+    // settle (the reason on `recoveredAt`). The settle is consumed here. Everything at or before the instant may hold a session nothing
+    // listed.
     if (this.notReady) {
-      this.readyAt = recoveredAt ?? appliedAt;
+      this.readyAt = Math.max(pass.now, this.recoveredAt ?? appliedAt);
+      this.recoveredAt = null;
       this.notReady = false;
     }
     await this.expirePendingOwners(pass, durable);

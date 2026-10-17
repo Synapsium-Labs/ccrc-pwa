@@ -4211,6 +4211,145 @@ describe('R113 and R114 (review 544 P2, P1): the ready instant covers the boot r
   });
 });
 
+describe('R115 to R117 (review 556 F3, W1, F2): the ready instant is never earlier than the setting pass\'s clock, a recovery the lane started is not ready until it settles, and a pass awaiting the cached applier waits for the boot recovery', () => {
+  /** A fresh lane's boot open (`DelegationDurability.open`), held before it starts: `release(atMs)` moves the mocked clock to `atMs`, then
+   *  lets the real open (and its recovery) run, so the applier answers at `atMs`. */
+  function holdOpen(): { held: () => boolean; release: (atMs: number) => void } {
+    const realOpen = DelegationDurability.open.bind(DelegationDurability);
+    let openGate!: () => void;
+    const gate = new Promise<void>((resolve) => { openGate = resolve; });
+    let held = false;
+    vi.spyOn(DelegationDurability, 'open').mockImplementation(async (deps) => {
+      held = true;
+      await gate;
+      return realOpen(deps);
+    });
+    return { held: () => held, release: (atMs) => { setNow(atMs); openGate(); } };
+  }
+
+  /**
+   * W1's order (review 556; review 518's W1(a)), on a lane ready at at(-1):
+   *   1. pass B at at(5) (past the retry interval) finds the applier failed and recovers in process through the REAL `recover()`, whose
+   *      tail, the projection repair (`repairLocked`), is held: the real one has already cleared its failure and set the state `ready`
+   *      when it calls it, so the applier reports `ready` while the recovery has not returned;
+   *   2. B is cut at its budget, inside that repair;
+   *   3. pass C at at(6) runs during the repair. It is started and not awaited: a C that read the owners would wait on the applier's
+   *      queue, which the held repair holds. `cSettled` says whether it has returned.
+   * `settle(atMs)` moves the mocked clock to `atMs` and lets the repair, and so the recovery, return; it resolves once B's continuation
+   * has run. The timeline is mocked: the repair outlives B's budget only because the budget timer is faked and advanced at the cut.
+   */
+  async function cutInHeldRepair(w: World): Promise<{ c: Promise<void>; cListed: number; settle: (atMs: number) => Promise<void> }> {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const failed = vi.spyOn(DelegationDurability.prototype, 'failure').mockReturnValue({ code: 'journal-unreadable', detail: 'a fixture failure' } as never);
+    const realRecover = DelegationDurability.prototype.recover;
+    type Repairs = { repairLocked: () => Promise<unknown> };
+    const realRepair = (DelegationDurability.prototype as never as Repairs).repairLocked;
+    let openRepair!: () => void;
+    const repairGate = new Promise<void>((resolve) => { openRepair = resolve; });
+    let armed = false;
+    let inRepair = false;
+    let returned = false;
+    vi.spyOn(DelegationDurability.prototype as never as Repairs, 'repairLocked').mockImplementation(async function (this: DelegationDurability) {
+      if (!armed) return realRepair.call(this);
+      armed = false;
+      inRepair = true;
+      await repairGate;
+      return realRepair.call(this);
+    });
+    vi.spyOn(DelegationDurability.prototype, 'recover').mockImplementation(async function (this: DelegationDurability) {
+      failed.mockRestore();                                             // the REAL recovery runs: it clears the failure itself
+      armed = true;
+      try { return await realRecover.call(this); } finally { returned = true; }
+    });
+    // B: recovers, the repair is held, and B is cut at its budget
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    setNow(at(5));
+    setCensus(w, BEFORE_TREE, { 'demo-a': measured() }, at(5));
+    const b = pass(w);
+    await vi.waitFor(() => expect(inRepair, 'B is inside the held repair').toBe(true));
+    const durable = (await w.watcher.delegationApplier())!;
+    expect([durable.state().phase, durable.failure()], 'the applier already reports ready').toEqual(['ready', null]);
+    await vi.advanceTimersByTimeAsync(DELEGATION_PASS_BUDGET_MS + 1);
+    await b;
+    vi.useRealTimers();
+    // C: during the repair
+    setNow(at(6));
+    setCensus(w, BEFORE_TREE, { 'demo-a': measured() }, at(6));
+    const before = w.calls.listings.length;
+    let cDone = false;
+    const c = pass(w).then(() => { cDone = true; });
+    await vi.waitFor(() => expect(cDone || w.calls.listings.length > before, 'C returned, or read an owner').toBe(true));
+    const cListed = w.calls.listings.length - before;
+    return {
+      c, cListed,
+      settle: async (atMs) => {
+        setNow(atMs);
+        openRepair();
+        await vi.waitFor(() => expect(returned, 'the recovery returned').toBe(true));
+        await new Promise((resolve) => setTimeout(resolve, 20));       // B's continuation (the settle, the clears) has run
+      },
+    };
+  }
+
+  it('R115 (F3): the ready instant is never earlier than the setting pass\'s own clock, whatever the wall clock does: after a backward step during the held boot open, a creator call within the skew after the pass\'s clock is held', async () => {
+    // A MOCKED timeline: the pass starts at at(0), the boot open is held, and the wall clock steps BACK 180 s before the open returns, so
+    // `appliedAt` is at(0) - 180 s, earlier than the pass's clock. demo-a's creator call begins at at(0) + 20 s: within the skew after
+    // the pass's clock, and more than the skew after `appliedAt`, so without the clamp the instant would be `appliedAt` and the call
+    // would link. ONE clamp, `Math.max(pass.now, recoveredAt ?? appliedAt)`, covers both arms, the boot recovery's `appliedAt` and an
+    // in-process recovery's `recoveredAt`, so no separate row pins the recoveredAt arm. Mutant: the clamp removed
+    // (`readyAt = recoveredAt ?? appliedAt`), W1's mechanism kept: this row reds (a lease).
+    const w = world();
+    makeOwner(w, 'demo-a');
+    const open = holdOpen();
+    setNow(at(0));
+    setCensus(w, WITH_TREE, { 'demo-a': measured() }, at(0));
+    const first = pass(w);                                              // the lane's first pass: it starts the open
+    await vi.waitFor(() => expect(open.held(), 'the open is held').toBe(true));
+    creatorAfter(w, at(0));                                             // at(0) + 20 s, on the fleet's clock
+    open.release(at(0) - 180_000);                                      // the wall clock stepped back while the open ran
+    await first;                                                        // the same pass reaches the owners and reconciles
+    for (let i = 4; i < 8; i++) await censusPass(w, at(i), WITH_TREE);
+    expect(leasesOf(w.home), 'the creator began within the skew after the pass\'s clock').toEqual([]);
+    expect(w.watcher.delegationReport().lostEvidence.forced, 'held by lost evidence: the full evidence links it').toBe(1);
+  });
+
+  it('R116 (a) (W1): a pass that runs while a recovery the lane started has not settled reads nothing, even once recover() reports ready: a creator call more than the skew after its clock, and within the skew after the recovery\'s return, is held', async () => {
+    // W1's order (`cutInHeldRepair`). C runs during the held repair: it reads no owner, reconciles nothing and sets no instant. The
+    // creator call begins at at(6) + 120 s (more than the skew after C's clock) and the recovery returns at at(6) + 180 s; the timeline is
+    // mocked (a repair that outlives a cut pass). The first pass after the settle (at(10)) sets an instant no earlier than the settle.
+    // Mutant: W1's check removed (the `if (this.recovering) …` line deleted): C sets the instant to its own clock, and the call links.
+    const w = world();
+    makeOwner(w, 'demo-a');
+    await censusPass(w, at(-1), BEFORE_TREE);                           // ready; the applier opened at at(-1)
+    const held = await cutInHeldRepair(w);
+    writeBucket(w, 'demo-a', BUCKET10,                                  // during the repair, more than the skew after C's clock
+      bashPre('demo-a', 'toolu_wt1', ['old-tree'], iso(at(6) + 120_000)), bashPost('demo-a', 'toolu_wt1', ['old-tree', 'raw-tree'], iso(at(6) + 123_000)));
+    await held.settle(at(6) + 180_000);                                 // the recovery returns
+    await held.c;
+    expect((await w.watcher.delegationApplier())!.failure()).toBeNull();
+    for (let i = 10; i < 14; i++) await censusPass(w, at(i), WITH_TREE);
+    expect(leasesOf(w.home), 'the creator began inside the recovery, which no pass read').toEqual([]);
+    expect(w.watcher.delegationReport().lostEvidence.forced, 'held by lost evidence: the full evidence links it').toBe(1);
+    expect(held.cListed, 'C read no owner during the repair').toBe(0);
+  });
+
+  it('R116 (b) (W1, liveness): once the recovery has settled, a candidate wholly after its return plus the skew, with every owner read, links', async () => {
+    // The same order; the creator call comes after the settle. The first pass after it (at(10)) sets the instant, and demo-a creates
+    // raw-tree at at(11) + 20 s, more than the skew after both that instant and the settle (at(9)). Mutant: the in-flight mark left set
+    // after the recovery settles (`this.recovering = false` removed from the `finally`): no pass is ever ready again, and nothing links.
+    const w = world();
+    makeOwner(w, 'demo-a');
+    await censusPass(w, at(-1), BEFORE_TREE);                           // ready
+    const held = await cutInHeldRepair(w);
+    await held.settle(at(6) + 180_000);                                 // the recovery returns at at(9)
+    await held.c;
+    await censusPass(w, at(10), BEFORE_TREE);                           // the first pass after the settle: the instant
+    creatorAfter(w, at(11));
+    for (let i = 12; i < 16; i++) await censusPass(w, at(i), WITH_TREE);
+    expect(leasedOf(w), 'after the settle, the lane reads again and links').toEqual([['raw-tree', 'raw', 'demo-a']]);
+  });
+});
+
 describe('R90 (W3, coordinator 5512): within one hour a loss word displaces a carve-out word, and a carve-out word never displaces a loss word', () => {
   const pair = [sessionOf('demo-a'), sessionOf('demo-x')];
   const T1 = '2026-10-15T10:31:00.000Z';
