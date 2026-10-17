@@ -332,7 +332,7 @@ describe('POST /api/asks/:id/answer', () => {
  *
  * Its gate ladder is `/answer`'s minus the pane-touching half: box token,
  * body shape, attribution, `unknown-ask`, `ask.parentId === fromId`, then
- * the store's own `releaseAsk` CAS (`'held' -> 'released'`) — a decline that
+ * the store's own `declineAsk` CAS (`'held' -> 'declined'`, D-5289) — a decline that
  * finds nothing held refuses `not-held` rather than pretending to succeed.
  */
 describe('POST /api/asks/:id/release', () => {
@@ -418,7 +418,8 @@ describe('POST /api/asks/:id/release', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
 
-    expect(okAsk(coord.askById(id))!.state).toBe('released');
+    // D-5289: a parent's own release is `declined`, not the lapse's `released`.
+    expect(okAsk(coord.askById(id))!.state).toBe('declined');
     // The deferred push fired NOW rather than waiting for `sweepAsks` to
     // notice the grace window lapse — the whole point of this route.
     expect(sent.filter((p) => p.tag === `ask-${CHILD}`)).toHaveLength(1);
@@ -442,18 +443,18 @@ describe('POST /api/asks/:id/release', () => {
     expect(sent).toEqual([]);
   });
 
-  it('409s not-held on a decline of an already-released ask', async () => {
+  it('409s not-held on a decline of an already-declined ask', async () => {
     const { coord, id, sent } = await setup(Date.now());
     const first = await release(id, { fromId: PARENT, fromUuid: PARENT_UUID });
     expect(first.statusCode).toBe(200);
 
     // A decline that finds nothing held must not pretend it succeeded — the
-    // store's own CAS (`releaseAsk`, source state `'held'`) refuses, and the
+    // store's own CAS (`declineAsk`, source state `'held'`) refuses, and the
     // route must refuse with it rather than reporting `{ok:true}` again.
     const second = await release(id, { fromId: PARENT, fromUuid: PARENT_UUID });
     expect(second.statusCode).toBe(409);
     expect(second.json()).toEqual({ ok: false, error: 'not-held' });
-    expect(okAsk(coord.askById(id))!.state).toBe('released');
+    expect(okAsk(coord.askById(id))!.state).toBe('declined');
     // No double push: the second decline never reached `releaseHeldAsk`.
     expect(sent.filter((p) => p.tag === `ask-${CHILD}`)).toHaveLength(1);
   });
@@ -488,9 +489,9 @@ describe('POST /api/asks/:id/release', () => {
     const res = await release(id, { fromId: PARENT, fromUuid: PARENT_UUID });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
-    // The decline is genuinely real — the row released — even with no
-    // watcher to notify anyone about it.
-    expect(okAsk(built.coord.askById(id))!.state).toBe('released');
+    // The decline is genuinely real — the row declined (D-5289) — even with
+    // no watcher to notify anyone about it.
+    expect(okAsk(built.coord.askById(id))!.state).toBe('declined');
     expect(warn).toHaveBeenCalledTimes(1);
     const [msg] = warn.mock.calls[0]!;
     expect(msg).toContain(String(id));
@@ -735,13 +736,14 @@ describe('POST /api/sessions/:id/ask — closes the held row (Task 12)', () => {
     expect(row.answer).toBe('Blue');
 
     // The row is what the parent's own route CASes against — it must now
-    // find nothing to take.
+    // find nothing to take, and say why (D-5289: `already-answered`, no
+    // longer folded onto `not-held`).
     const parent = await app!.inject({
       method: 'POST', url: `/api/asks/${id}/answer`, headers: TOK,
       payload: { fromId: PARENT, fromUuid: PARENT_UUID, optionIndexes: [0] },
     });
     expect(parent.statusCode).toBe(409);
-    expect(parent.json()).toEqual({ ok: false, error: 'not-held' });
+    expect(parent.json()).toEqual({ ok: false, error: 'already-answered' });
 
     // D-2172's second durable record, same as the parent's own route writes
     // on its own successful press.
@@ -903,5 +905,104 @@ describe('POST /api/sessions/:id/ask — closes the held row (Task 12)', () => {
     expect(res.json()).toEqual({ ok: false, error: 'ask-mismatch' });
     expect(sendKeysCalls(calls)).toEqual([]);
     expect(okAsk(coord.askById(id!))!.state).toBe('held');
+  });
+});
+
+/**
+ * D-5289 (coordinator-first routing, Task 4; spec §5.1): late answer wins, and
+ * a parent's own release is `declined`. The lapse (`releaseAsk`, the sweep's)
+ * still fires the operator's push at the deadline, but the parent may answer
+ * the row until the operator acts; when it does, the operator's notification
+ * is replaced under the same tag. A parent that released the question itself
+ * handed it over and is refused `409 declined`; a second answer is refused
+ * `409 already-answered`.
+ */
+describe('late answer wins; declined (D-5289)', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  const KID = 'project-a-quiet-basin';
+  const MESA = 'project-a-calm-mesa';
+  const KID_UUID = 'q'.repeat(36);
+  const MESA_UUID = 'm'.repeat(36);
+
+  const setup = async (now: number) => {
+    const home = mkTmp('ccrc-asks-');
+    seed(home, KID, KID_UUID);
+    seed(home, MESA, MESA_UUID);
+    seedHookstate(home, KID, KID_UUID, now);
+    const sent: PushPayload[] = [];
+    const { run, calls } = tmuxRunner([ASK_PANE]);
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const notify = async (p: PushPayload) => { sent.push(p); };
+    const deps = { ...testDeps(home, run), mailToken: TOKEN, coord, push: { notify } as never };
+    const bus = new Bus();
+    const w = new FleetWatcher(deps, bus, 10_000);
+    app = await buildServer(deps, bus, w);
+    const id = coord.insertAsk({
+      childId: KID, parentId: MESA, runId: null, askKey: ASK_KEY,
+      askAt: now, dialogId: 'dlg-1', question: QUESTION.question,
+      options: QUESTION.options.map((o) => o.label), now,
+    });
+    const ev = { kind: 'ask' as const, sessionId: KID, project: 'demo', title: '❓ Question',
+      body: QUESTION.question };
+    (w as unknown as { heldAsks: Map<string, unknown> }).heldAsks.set(KID,
+      { until: now + 1, askId: id, ev, answeringSince: null });
+    // `sweepAsks` runs only once the watcher has primed; set it the way the
+    // sweep tests' first `tick()` would, without a tick's other lanes.
+    (w as unknown as { primed: boolean }).primed = true;
+    return { coord, w, id, sent, calls };
+  };
+  const by = (id: number, verb: 'answer' | 'release', extra: Record<string, unknown> = {}) =>
+    app!.inject({ method: 'POST', url: `/api/asks/${id}/${verb}`, headers: TOK,
+      payload: { fromId: MESA, fromUuid: MESA_UUID, ...extra } });
+
+  it('the release route leaves the row declined and pushes at once', async () => {
+    const { coord, id, sent } = await setup(Date.now());
+    const res = await by(id, 'release');
+    expect(res.statusCode).toBe(200);
+    expect(okAsk(coord.askById(id))!.state).toBe('declined');
+    expect(sent.filter((p) => p.tag === `ask-${KID}`)).toHaveLength(1);
+  });
+
+  it('an answer after the parent declined is refused 409 declined, and nothing is pressed', async () => {
+    const { coord, id, calls } = await setup(Date.now());
+    expect((await by(id, 'release')).statusCode).toBe(200);
+    const res = await by(id, 'answer', { optionIndexes: [1] });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'declined' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+    expect(okAsk(coord.askById(id))!.state).toBe('declined');
+  });
+
+  it('an answer after the lapse is 200, names the parent, and replaces the notification', async () => {
+    const { coord, w, id, sent, calls } = await setup(Date.now());
+    await w.sweepAsks();                               // the lapse: held -> released, push fires
+    expect(okAsk(coord.askById(id))!.state).toBe('released');
+    expect(sent.filter((p) => p.tag === `ask-${KID}`)).toHaveLength(1);
+
+    const res = await by(id, 'answer', { optionIndexes: [1] });
+    expect(res.statusCode).toBe(200);
+    expect(sendKeysCalls(calls)).toHaveLength(1);
+    expect(okAsk(coord.askById(id))).toMatchObject({ state: 'answered', answeredBy: MESA, answer: 'Blue' });
+    const tagged = sent.filter((p) => p.tag === `ask-${KID}`);
+    expect(tagged).toHaveLength(2);
+    expect(tagged[1]!.body).toBe(`answered by ${MESA}`);
+    expect(tagged[1]!.actions).toBeUndefined();
+  });
+
+  it('a second answer is refused 409 already-answered', async () => {
+    const { id, calls } = await setup(Date.now());
+    expect((await by(id, 'answer', { optionIndexes: [0] })).statusCode).toBe(200);
+    const res = await by(id, 'answer', { optionIndexes: [1] });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'already-answered' });
+    expect(sendKeysCalls(calls)).toHaveLength(1);
+  });
+
+  it('an answer inside the window replaces nothing — there was no notification to replace', async () => {
+    const { id, sent } = await setup(Date.now() + 60_000);
+    expect((await by(id, 'answer', { optionIndexes: [0] })).statusCode).toBe(200);
+    expect(sent.filter((p) => p.tag === `ask-${KID}`)).toEqual([]);
   });
 });

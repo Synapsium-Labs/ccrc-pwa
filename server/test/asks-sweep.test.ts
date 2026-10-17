@@ -466,6 +466,66 @@ describe('sweepAsks — the release sweep (Task 7)', () => {
 // caught: the pane is the one signal a `cmd_swap` (which does not rotate the
 // session uuid) cannot lie to, where hookstate's identity gate would stay
 // blind and keep reading `waiting` behind a pane that's gone.
+// D-5289 (coordinator-first routing, Task 4; spec §5.1): the lapse still
+// pushes at the deadline, but the row stays answerable by its parent; a late
+// parent answer replaces the operator's notification under the SAME tag.
+describe('sweepAsks — late answer wins (D-5289)', () => {
+  const KID = 'project-a-quiet-basin';
+  const MESA = 'project-a-calm-mesa';
+
+  it('the lapse pushes at the deadline; a later parent answer replaces the notification', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    at(T0);
+    const f = fixture({ push, sessions: [`project-a/${KID}`] });
+    const askId = await mintHold(f, KID, MESA);
+
+    at(T0 + ASK_GRACE_MS + 1);
+    await f.w.sweepAsks();
+    expect(sent.filter((p) => p.tag === askTag(KID))).toHaveLength(1);
+    expect(okAsk(f.coord.askById(askId))!.state).toBe('released');
+
+    f.w.answeredLate(KID, askId, MESA);
+    const tagged = sent.filter((p) => p.tag === askTag(KID));
+    expect(tagged).toHaveLength(2);
+    expect(tagged[1]!.body).toBe(`answered by ${MESA}`);
+    expect(tagged[1]!.actions).toBeUndefined();
+
+    // Once: the replacement is the lapse's, not a fresh notification per call.
+    f.w.answeredLate(KID, askId, MESA);
+    expect(sent.filter((p) => p.tag === askTag(KID))).toHaveLength(2);
+  });
+
+  it('replaces nothing for a different ask id, or for an ask that never lapsed', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    at(T0);
+    const f = fixture({ push, sessions: [`project-a/${KID}`] });
+    const askId = await mintHold(f, KID, MESA);
+    f.w.answeredLate(KID, askId, MESA);                 // still held: no push went out
+    expect(sent.filter((p) => p.tag === askTag(KID))).toEqual([]);
+
+    at(T0 + ASK_GRACE_MS + 1);
+    await f.w.sweepAsks();
+    f.w.answeredLate(KID, askId + 1, MESA);             // another row's answer
+    expect(sent.filter((p) => p.tag === askTag(KID))).toHaveLength(1);
+  });
+
+  it('a dialog that clears after the lapse forgets the notification', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    at(T0);
+    const f = fixture({ push, sessions: [`project-a/${KID}`] });
+    const askId = await mintHold(f, KID, MESA);
+    at(T0 + ASK_GRACE_MS + 1);
+    await f.w.sweepAsks();
+    f.showMenu(KID, BARE_PROMPT);
+    await f.tick();                                      // dialog_cleared
+    f.w.answeredLate(KID, askId, MESA);
+    expect(sent.filter((p) => p.tag === askTag(KID))).toHaveLength(1);
+  });
+});
+
 describe('detectDialogs — staleness off dialog_cleared (Task 8)', () => {
   it('marks a held ask stale when its dialog goes away unanswered, no push', async () => {
     const sent: PushPayload[] = [];

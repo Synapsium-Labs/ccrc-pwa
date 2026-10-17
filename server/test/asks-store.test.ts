@@ -7,7 +7,7 @@ import { COORD_SCHEMA_VERSION, openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { mkTmp } from './tmpHelpers.js';
 import { okAsk, okAsksByChild } from './coordReadHelpers.js';
-import { RUN_HOLD_NUMBER_MAX } from '../../shared/api.js';
+import { ASK_STATES, isAskState, RUN_HOLD_NUMBER_MAX } from '../../shared/api.js';
 
 const dbPathIn = (home: string): string => path.join(home, '.ccrc', 'coord.db');
 
@@ -403,5 +403,101 @@ describe('the ask read surface refuses an unrepresentable row, and tells absent 
     expect((s.db.prepare('SELECT COUNT(*) AS n FROM asks').get() as { n: number }).n).toBe(0);
     expect(typeof mint(null)).toBe('number');
     expect(okAsk(s.currentAskFor('c'))!.runId).toBeNull();
+  });
+});
+
+// D-5289 (coordinator-first routing, Task 4; spec §5.1): late answer wins.
+// A lapse moves the row `held -> released` and fires the operator's push, but
+// the row stays answerable by either principal until one of them acts — the
+// `askAt` instance guard still decides WHICH dialog an answer may land in. A
+// parent's own release is a different fact, a terminal `declined`, after which
+// the parent may not answer at all.
+describe('late answer wins; declined (D-5289)', () => {
+  const CHILD = 'project-a-quiet-basin';
+  const PARENT = 'project-a-calm-mesa';
+  const mk = (): CoordStore => new CoordStore(openCoordDb(dbPathIn(mkTmp('ccrc-coord-'))));
+  const mint = (s: CoordStore): number => s.insertAsk({ childId: CHILD, parentId: PARENT, runId: null,
+    askKey: 'k', askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: 1 });
+
+  it('isAskState knows declined', () => {
+    expect(isAskState('declined')).toBe(true);
+  });
+
+  it('takes a row the lapse released, and settles it answered', () => {
+    const s = mk();
+    const id = mint(s);
+    expect(s.releaseAsk(id, 2)).toBe(true);
+    const taken = s.takeAskForAnswer(id, 1000);
+    expect(taken.ok).toBe(true);
+    s.settleAsk(id, PARENT, 'b', 3);
+    expect(okAsk(s.askById(id))).toMatchObject({ state: 'answered', answeredBy: PARENT, answer: 'b' });
+  });
+
+  it('a refused press after a late take rolls the row back to released, not held', () => {
+    const s = mk();
+    const id = mint(s);
+    expect(s.releaseAsk(id, 2)).toBe(true);
+    const taken = s.takeAskForAnswer(id, 1000);
+    expect(taken.ok && taken.from).toBe('released');
+    expect(s.untakeAsk(id, 'released')).toBe(true);
+    expect(okAsk(s.askById(id))!.state).toBe('released');
+  });
+
+  it('keeps the instance guard on a released row — a re-minted dialog is refused', () => {
+    const s = mk();
+    const id = mint(s);
+    expect(s.releaseAsk(id, 2)).toBe(true);
+    expect(s.takeAskForAnswer(id, 2000)).toEqual({ ok: false, why: 'ask-moved' });
+    expect(okAsk(s.askById(id))!.state).toBe('released');
+  });
+
+  it('declineAsk moves held -> declined, and a declined row is refused declined', () => {
+    const s = mk();
+    const id = mint(s);
+    expect(s.declineAsk(id, 2)).toBe(true);
+    expect(okAsk(s.askById(id))).toMatchObject({ state: 'declined', releasedAt: 2 });
+    expect(s.declineAsk(id, 3)).toBe(false);
+    expect(s.takeAskForAnswer(id, 1000)).toEqual({ ok: false, why: 'declined' });
+    expect(okAsk(s.askById(id))!.state).toBe('declined');
+  });
+
+  it('an answered row is refused already-answered', () => {
+    const s = mk();
+    const id = mint(s);
+    expect(s.takeAskForAnswer(id, 1000).ok).toBe(true);
+    s.settleAsk(id, PARENT, 'a', 2);
+    expect(s.takeAskForAnswer(id, 1000)).toEqual({ ok: false, why: 'already-answered' });
+  });
+
+  it('heldAskFor returns a released row, so the operator after a lapse is recorded', () => {
+    const s = mk();
+    const id = mint(s);
+    expect(s.releaseAsk(id, 2)).toBe(true);
+    expect(okAsk(s.heldAskFor(CHILD))?.id).toBe(id);
+  });
+
+  it('heldAskFor never returns a declined row', () => {
+    const s = mk();
+    const id = mint(s);
+    expect(s.declineAsk(id, 2)).toBe(true);
+    expect(okAsk(s.heldAskFor(CHILD))).toBeNull();
+  });
+
+  it('reads a declined row back as declined, never unknown', () => {
+    const s = mk();
+    const id = mint(s);
+    s.db.prepare("UPDATE asks SET state = 'declined' WHERE id = ?").run(id);
+    expect(okAsk(s.askById(id))!.state).toBe('declined');
+  });
+
+  // The compatibility claim in D-5289: a build whose vocabulary predates
+  // `declined` reads it through the same fold every reader uses
+  // (`isAskState(x) ? x : 'unknown'`). The six members are frozen here as that
+  // older build's map; this build's map must be them plus `declined`.
+  it('an older reader, without the member, degrades declined to unknown', () => {
+    const OLDER: readonly string[] = ['held', 'answering', 'answered', 'released', 'stale', 'unknown'];
+    const olderFold = (v: string): string => (OLDER.includes(v) ? v : 'unknown');
+    expect(olderFold('declined')).toBe('unknown');
+    expect([...ASK_STATES].sort()).toEqual([...OLDER, 'declined'].sort());
   });
 });

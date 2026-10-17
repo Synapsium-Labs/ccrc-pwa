@@ -711,17 +711,27 @@ export interface AskRow {
  *  `not-held` is NOT "another principal already took this row" — this
  *  docstring said exactly that for a wave, and the gloss SPREAD from here
  *  into the shipped coordinator contract (whole-branch review M3, corrected
- *  in `ccd/coordinator-skill/references/wave-lifecycle.md` too). The CAS
- *  source is the single state `'held'`, so every other state answers it:
- *  `answering` (the lost race the old sentence described), and equally
- *  `released` (the grace window lapsed and the operator's push has already
- *  fired), `stale` (the dialog is gone) and `answered` (someone already
- *  ruled). Only the first of those four is a race, and only the first is
- *  worth a retry — which is precisely why the false gloss mattered on a
- *  surface a coordinator reads. */
+ *  in `ccd/coordinator-skill/references/wave-lifecycle.md` too). Since D-5289
+ *  (late answer wins) the CAS source is `'held'` OR `'released'` (a lapse
+ *  leaves the row answerable until a principal acts), and the two terminal
+ *  decisions are named apart: `declined` (the parent released the question
+ *  itself) and `already-answered` (someone already ruled). What still answers
+ *  `not-held` is `answering` (the lost race the old sentence described, the
+ *  one refusal a retry can win), `stale` (the dialog is gone) and `unknown`
+ *  — which is precisely why the false gloss mattered on a surface a
+ *  coordinator reads. */
 export type AskTakeResult =
-  | { ok: true; row: AskRow }
-  | { ok: false; why: 'unknown-ask' | 'not-held' | 'ask-moved' };
+  | { ok: true; row: AskRow; from: AskTakeSource }
+  | { ok: false; why: 'unknown-ask' | 'not-held' | 'ask-moved' | 'declined' | 'already-answered' };
+
+/** The two states a principal may take a row from (D-5289, late answer wins):
+ *  `held` inside the window, `released` once the lapse has fired the
+ *  operator's push but before either principal has acted. A take remembers
+ *  which, so `untakeAsk`'s rollback restores the row to where it was — a
+ *  refused press after the lapse must not put the row back in `held`, where
+ *  the chip would claim the parent may still pre-empt a push that already
+ *  fired. `declined` is NOT a source: the parent handed the question over. */
+export type AskTakeSource = 'held' | 'released';
 
 /**
  * D-2545 — THE FIVE READ ANSWERS, and the one rule that makes them worth
@@ -7064,11 +7074,20 @@ export class CoordStore {
   /** Task 12's lookup when the operator answers: the row this child's live
    *  question is held under, if any. At most one `held` row per child is ever
    *  live at a time (a second mint only happens once the first has left
-   *  `held`), so the newest is the right — and normally only — answer. */
+   *  `held`), so the newest is the right — and normally only — answer.
+   *
+   *  `held` OR `released` (D-5289, late answer wins): a lapsed row is still
+   *  answerable until a principal acts, so the operator's answer after the
+   *  lapse must take and settle it too — otherwise the parent's later attempt
+   *  would find it still `released` and press into a dialog the operator
+   *  already answered (the instance guard and `answerAsk`'s own re-check stop
+   *  the key, but the row would not record who answered). An older released
+   *  row for a dialog that has since gone is harmless here: the take's
+   *  `askAt` guard refuses it, and this route never refuses the operator. */
   heldAskFor(childId: string): AskReadResult {
     const row = this.db.prepare(
       `SELECT ${CoordStore.ASK_COLS} FROM asks ` +
-      "WHERE childId = ? AND state = 'held' ORDER BY id DESC LIMIT 1",
+      "WHERE childId = ? AND state IN ('held','released') ORDER BY id DESC LIMIT 1",
     ).get(childId) as Parameters<CoordStore['hydrateAsk']>[0] | undefined;
     if (row === undefined) return { ok: true, ask: null };
     const h = this.hydrateAsk(row);
@@ -7078,7 +7097,7 @@ export class CoordStore {
   /** Task 19's fleet-chip lookup: the newest ask row for this child, in ANY
    *  state — unlike `heldAskFor` above, which is scoped to `'held'` for Task
    *  12's operator-answer lookup and would answer `null` through
-   *  `answering`/`answered`/`released`/`stale` alike. This method makes no
+   *  `answering`/`answered`/`declined`/`stale` alike. This method makes no
    *  judgement about which states are worth showing; `fleet.ts`'s `fleetAsk`
    *  does that folding on the row this returns, the same "hydrate raw, let
    *  the caller fold" split `asksForParent` already keeps. Keyed on
@@ -7147,12 +7166,13 @@ export class CoordStore {
    *  seam — one is about the row, the other is a near-miss wrong answer.
    *
    *  CORRECTED (whole-branch review M3): this said `not-held` means "another
-   *  principal already took this row", naming ONE of the four states that
-   *  answer it. The CAS source is `'held'` alone, so `answering` (the take
-   *  it described), `released`, `stale` and `answered` all land here — and
-   *  only the first is a lost race a retry could win. See `AskTakeResult`'s
-   *  own docstring above for the full list; the same false gloss had reached
-   *  `wave-lifecycle.md`, where a coordinator reads it. */
+   *  principal already took this row", naming ONE of the states that answer
+   *  it. Since D-5289 the CAS source is `'held'` or `'released'` (late answer
+   *  wins; the take returns which as `from`), `declined` and `answered` are
+   *  refused by name, and `answering` (the take it described), `stale` and
+   *  `unknown` land on `not-held` — only the first a lost race a retry could
+   *  win. See `AskTakeResult`'s own docstring above; the same false gloss had
+   *  reached `wave-lifecycle.md`, where a coordinator reads it. */
   takeAskForAnswer(id: number, askAt: number): AskTakeResult {
     return tx(this.db, () => {
       const read = this.readAsk(id);
@@ -7168,12 +7188,22 @@ export class CoordStore {
       if (!read.ok) throw new Error(`takeAskForAnswer: ${read.detail}`);
       const row = read.ask;
       if (row === null) return { ok: false as const, why: 'unknown-ask' as const };
+      // D-5289: the two terminal decisions a principal acted on are named, not
+      // folded onto `not-held` — `declined` (the parent handed this question
+      // over) and `already-answered` (somebody ruled). Both are facts about
+      // the ROW, so they answer before the instance guard does.
+      if (row.state === 'declined') return { ok: false as const, why: 'declined' as const };
+      if (row.state === 'answered') return { ok: false as const, why: 'already-answered' as const };
       if (row.askAt !== askAt) return { ok: false as const, why: 'ask-moved' as const };
+      if (row.state !== 'held' && row.state !== 'released') {
+        return { ok: false as const, why: 'not-held' as const };
+      }
+      const from: AskTakeSource = row.state;
       const res = this.db.prepare(
-        "UPDATE asks SET state = 'answering' WHERE id = ? AND state = 'held' AND askAt = ?",
-      ).run(id, askAt);
+        "UPDATE asks SET state = 'answering' WHERE id = ? AND state = ? AND askAt = ?",
+      ).run(id, from, askAt);
       if (Number(res.changes) === 0) return { ok: false as const, why: 'not-held' as const };
-      return { ok: true as const, row };
+      return { ok: true as const, row, from };
     });
   }
 
@@ -7202,10 +7232,11 @@ export class CoordStore {
    *  this call finds, which sat in `'answering'`. Returns whether THIS call
    *  moved it, the same "I did it" vs. "someone else already did" shape as
    *  `releaseAsk`/`staleAsk`. */
-  untakeAsk(id: number): boolean {
+  untakeAsk(id: number, to: AskTakeSource = 'held'): boolean {
+    // D-5289: back to where the take found it (`AskTakeResult.from`).
     const res = this.db.prepare(
-      "UPDATE asks SET state = 'held' WHERE id = ? AND state = 'answering'",
-    ).run(id);
+      "UPDATE asks SET state = ? WHERE id = ? AND state = 'answering'",
+    ).run(to, id);
     return Number(res.changes) > 0;
   }
 
@@ -7236,6 +7267,20 @@ export class CoordStore {
   releaseAsk(id: number, now: number): boolean {
     const res = this.db.prepare(
       "UPDATE asks SET state = 'released', releasedAt = ? WHERE id = ? AND state = 'held'",
+    ).run(now, id);
+    return Number(res.changes) > 0;
+  }
+
+  /** held -> declined, CAS (D-5289). The parent's OWN release (`POST
+   *  /api/asks/:id/release`), and a different fact from the lapse
+   *  (`releaseAsk` above, the sweep's): the parent handed the question over,
+   *  so the row is terminal and its later answer is refused `declined`, where
+   *  a lapsed row stays answerable until a principal acts. Same "did THIS call
+   *  move it" return as `releaseAsk`, and the same `releasedAt` column: the
+   *  instant the operator's push was released. */
+  declineAsk(id: number, now: number): boolean {
+    const res = this.db.prepare(
+      "UPDATE asks SET state = 'declined', releasedAt = ? WHERE id = ? AND state = 'held'",
     ).run(now, id);
     return Number(res.changes) > 0;
   }
