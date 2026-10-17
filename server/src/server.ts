@@ -10,7 +10,7 @@ import { configDirFor, type CcrcConfig } from './config.js';
 import type { BuildInfo } from './buildinfo.js';
 import type { Tmux } from './exec.js';
 import type { FleetIO } from './io.js';
-import { assembleFleet, liveStatus } from './fleet.js';
+import { assembleFleet } from './fleet.js';
 import { readLimits, projectHome, projectPlacement } from './limits.js';
 import { readSharesMeasured } from './shares.js';
 import { CLASSES, type ModelClass } from '../../shared/models.js';
@@ -40,7 +40,8 @@ import type { FleetWatcher } from './watch.js';
 import { SessionStream, parseSince } from './sessionws.js';
 import { KeyedQueue } from './inject/queue.js';
 import {
-  sendPrompt, answerDialog, answerDialogMulti, answerDialogText, interrupt, submitEnter, type SendDeps,
+  sendPrompt, answerDialog, answerDialogMulti, answerDialogText, interrupt, interruptVerdict, submitEnter,
+  type InterruptVerdict, type SendDeps,
 } from './inject/send.js';
 import { answerAsk, type AskDeps } from './inject/ask.js';
 import { freshAskAt, measuredIdentity, readRegistry, readSessionRecord } from './registry.js';
@@ -100,7 +101,7 @@ import {
   archiveFlags, archiveOutcome, busyReadFailsClosed, decideArchive, frameRowVerdict, refusedAtStop, worktreeOf, type ArchiveMeasure,
   type TurnVerdict,
 } from './coord/archiveDoor.js';
-import { liveRowFor, turnReadDeps, turnVerdictFor } from './turnverdict.js';
+import { liveRowFor, liveRowWithHookFor, liveWordFor, turnReadDeps, turnVerdictFor } from './turnverdict.js';
 
 /**
  * A client frame off the per-session socket, or null if it isn't one.
@@ -2391,7 +2392,20 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   app.post('/api/sessions/:id/interrupt', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
-    const res = await interrupt(sendDeps, id, async () => (await liveStatus(deps.io, deps.cfg, deps.tmux, id)) === 'busy');
+    // D-5236: what Escape would interrupt, from the RAW live word (never `liveStatus()`'s collapse, which reads `shell`
+    // and `waiting` busy) and the frame's row with its hook stamp — the turn reads' one home, `turnverdict.ts`.
+    // `interruptVerdict` holds the rule. A row that cannot be found, or a word that cannot be read, is `not-busy`, as
+    // `liveStatus()` answered it (D-115); an identity that is not measured reads the word alone.
+    const res = await interrupt(sendDeps, id, async (): Promise<InterruptVerdict> => {
+      const read = await readSessionRecord(deps.io, deps.cfg, id);
+      if (!read.found) return { kind: 'idle' };
+      const word = await liveWordFor(turnReads, read.record);
+      const identity = measuredIdentity(read.record);
+      if (!word.ok || word.word === 'idle' || identity === null) {
+        return interruptVerdict({ word, row: null, hookUpdatedAt: null });
+      }
+      return interruptVerdict({ word, ...(await liveRowWithHookFor(turnReads, read.record, identity.uuid)) });
+    });
     return res.ok ? res : reply.code(409).send(res);
   });
 

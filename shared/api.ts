@@ -10185,3 +10185,33 @@ const DIALOG_MULTI_REFUSE_CODE_MAP: Readonly<Record<DialogMultiRefuseCode, true>
 };
 export const DIALOG_MULTI_REFUSE_CODES: readonly DialogMultiRefuseCode[] =
   Object.keys(DIALOG_MULTI_REFUSE_CODE_MAP) as DialogMultiRefuseCode[];
+
+/** `POST /api/sessions/:id/interrupt`'s refusal codes, each a `409` with zero keys pressed (`interrupt`,
+ *  `server/src/inject/send.ts`):
+ *  - `not-alive`: no pane to press a key in.
+ *  - `not-busy`: no turn measured — an idle live word, or one that could not be read (D-115's asymmetry: an unread
+ *    word withholds the key).
+ *  - `background-only` (D-5236): the main loop is idle over background work Escape would not stop — the live word
+ *    `busy` after a main Stop that left delegated work running (the body carries its `count` and `kinds`), or the
+ *    live word `shell` (`count: null`, no kinds). Never with a pane menu pending. */
+export type InterruptRefusal = 'not-alive' | 'not-busy' | 'background-only';
+const INTERRUPT_REFUSAL_MAP: Readonly<Record<InterruptRefusal, true>> = {
+  'not-alive': true, 'not-busy': true, 'background-only': true,
+};
+export const INTERRUPT_REFUSALS: readonly InterruptRefusal[] = Object.keys(INTERRUPT_REFUSAL_MAP) as InterruptRefusal[];
+/** The interrupt route's refusal body. */
+export type InterruptRefusalBody =
+  | { ok: false; error: 'not-alive' | 'not-busy' }
+  | { ok: false; error: 'background-only'; count: number | null; kinds: string[] };
+/** D-5236: the ONE reader of a `background-only` refusal body, for the PWA. Anything else — another code, an older
+ *  server's body, a malformed count or kinds — is null, and the caller keeps its generic 409 words. */
+export function backgroundOnlyRefusal(body: unknown): { count: number | null; kinds: string[] } | null {
+  if (typeof body !== 'object' || body === null) return null;
+  const b = body as Record<string, unknown>;
+  if (b['error'] !== 'background-only') return null;
+  const count = b['count'];
+  const kinds = b['kinds'];
+  if (count !== null && !(typeof count === 'number' && Number.isInteger(count) && count > 0)) return null;
+  if (!Array.isArray(kinds) || !kinds.every((k) => typeof k === 'string')) return null;
+  return { count, kinds: kinds as string[] };
+}

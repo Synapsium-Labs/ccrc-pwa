@@ -2,7 +2,7 @@ import type { Tmux } from '../exec.js';
 import { autoContinueArmed, editHintShown, freeTextRow, hasMenu, parseDialog, turnRunning } from '../pane/dialog.js';
 import type { KeyedQueue } from './queue.js';
 import {
-  composePrompt, isDialogMultiIndexes, isDialogText, MAIL_ENVELOPE_FENCE,
+  composePrompt, isDialogMultiIndexes, isDialogText, MAIL_ENVELOPE_FENCE, type FleetSession, type InterruptRefusalBody,
   type Dialog, type DialogAnswered, type DialogMultiRefuseCode, type DialogRefuseCode, type DialogTextRefuseCode,
 } from '../../../shared/api.js';
 import { FREE_TEXT_PLACEHOLDER_RE } from '../../../shared/ask-menu.js';
@@ -1760,29 +1760,66 @@ export function answerDialogMulti(
   });
 }
 
+/** D-5236: what an Escape would interrupt. `turn` — a main turn, a pane menu, a `waiting` word, or anything else this
+ *  route cannot rule out — so Escape is pressed; `background-only` — the main loop is idle over background work Escape
+ *  would not stop, so it is refused with zero keys; `idle` — no turn measured (`not-busy`). */
+export type InterruptVerdict =
+  | { kind: 'turn' }
+  | { kind: 'background-only'; count: number | null; kinds: string[] }
+  | { kind: 'idle' };
+
+/** D-5236: the reads `interruptVerdict` decides on — the session's RAW live word and its stamp (`liveWordFor`, never
+ *  `liveStatus()`'s collapse, which reads `shell` and `waiting` busy), the frame's row for it (`liveRowFor`: the
+ *  watcher's pane menu, the hook state, D-5231's `background`) and the hook state's own stamp, which the row does not
+ *  carry. `row` null is a row that could not be assembled. */
+export interface InterruptReading {
+  word: { ok: true; word: string; since: number | null } | { ok: false };
+  row: Pick<FleetSession, 'dialogPending' | 'hookState' | 'background'> | null;
+  hookUpdatedAt: number | null;
+}
+
 /**
- * Send Escape to a mid-turn session; refuses when it isn't busy. Busy-ness is
- * resolved by the injected `isBusy` (the authoritative live status file), NOT
- * the pane: a --remote-control pane never renders "esc to interrupt" at all,
- * and an RC-off pane does render it, but the same marker can sit under (or
- * beside) a dialog painted over it — either way pane-based busy detection
- * would report the wrong thing, and the live status file is the one signal
- * that also sees subagents. The mail lane's `turnRunning` (`pane/dialog.ts`)
- * does read that marker — for exactly these reasons, only as a best-effort
- * tripwire behind the live file, never as the reading. And `isBusy` is
- * `liveSessionStatus`'s collapse (`fleet.ts`'s `liveStatus`): `shell` and
- * `waiting` read busy too, as does an idle main loop whose background agents
- * still run, so this can send Escape to a session with no turn in flight.
+ * D-5236 (spec §5.5): `background-only` in two cases, each with no pane menu pending (a Deny must still reach its
+ * menu): (a) the live word is `busy`, the row carries `background` and its hook state is a `done` stamped NEWER than
+ * the live file's `statusUpdatedAt` (D-75's comparison, a null live stamp reading the hook newer) — the main turn
+ * ended and only delegated work runs; "newer" is load-bearing, because a turn begun after that Stop with no hook event
+ * re-stamps the live file, and Escape must then interrupt it; or (b) the live word is `shell`, which Claude Code writes
+ * only for an idle main loop over a background shell or monitor (no count). An unreadable word, or `idle`, is `idle`:
+ * the answer `liveStatus()` gave, so an unread word still withholds the key (D-115). `waiting` and every other word
+ * are a `turn`. `background` already holds D-5272's carrier rule (a Stop's `done`, carried through agent events).
+ */
+export function interruptVerdict(r: InterruptReading): InterruptVerdict {
+  if (!r.word.ok || r.word.word === 'idle') return { kind: 'idle' };
+  if (r.row === null || r.row.dialogPending) return { kind: 'turn' };
+  if (r.word.word === 'shell') return { kind: 'background-only', count: null, kinds: [] };
+  const bg = r.row.background;
+  if (r.word.word === 'busy' && bg !== null && bg.count > 0 && r.row.hookState === 'done' && r.hookUpdatedAt !== null
+    && (r.word.since === null || r.hookUpdatedAt > r.word.since)) {
+    return { kind: 'background-only', count: bg.count, kinds: bg.kinds };
+  }
+  return { kind: 'turn' };
+}
+
+/**
+ * Send Escape to a mid-turn session; refuses when Escape would interrupt nothing. What it would interrupt is the
+ * injected `verdict` (`interruptVerdict` over the authoritative live status file and the frame's row), NOT the pane:
+ * a --remote-control pane never renders "esc to interrupt" at all, and an RC-off pane does render it, but the same
+ * marker can sit under (or beside) a dialog painted over it — either way pane-based busy detection would report the
+ * wrong thing, and the live status file is the one signal that also sees subagents. The mail lane's `turnRunning`
+ * (`pane/dialog.ts`) does read that marker — for exactly these reasons, only as a best-effort tripwire behind the live
+ * file, never as the reading. A `background-only` verdict (D-5236) is refused like `idle`, with zero keys pressed.
  */
 export function interrupt(
   d: SendDeps,
   id: string,
-  isBusy: () => Promise<boolean>,
-): Promise<{ ok: true } | { ok: false; error: 'not-alive' | 'not-busy' }> {
-  return d.queue.run(id, async (): Promise<{ ok: true } | { ok: false; error: 'not-alive' | 'not-busy' }> => {
+  verdict: () => Promise<InterruptVerdict>,
+): Promise<{ ok: true } | InterruptRefusalBody> {
+  return d.queue.run(id, async (): Promise<{ ok: true } | InterruptRefusalBody> => {
     const pane = await d.tmux.capture(id);
     if (pane === null) return { ok: false, error: 'not-alive' };
-    if (!(await isBusy())) return { ok: false, error: 'not-busy' };
+    const v = await verdict();
+    if (v.kind === 'idle') return { ok: false, error: 'not-busy' };
+    if (v.kind === 'background-only') return { ok: false, error: 'background-only', count: v.count, kinds: v.kinds };
     await d.tmux.sendKey(id, 'Escape');
     return { ok: true };
   });

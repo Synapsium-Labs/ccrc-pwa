@@ -38,7 +38,7 @@ const seedSession = (home: string, id: string, wrapper: string) => {
  *  mkdtemp dir created inside this call, so it can't be known before calling. */
 async function makeApp(
   panes: (string | null)[] | ((home: string) => (string | null)[]),
-  opts: { status?: 'busy' | 'idle'; io?: FleetIO; mailToken?: string } = {},
+  opts: { status?: 'busy' | 'idle' | 'shell'; io?: FleetIO; mailToken?: string } = {},
 ): Promise<{ app: FastifyInstance; calls: string[][]; bus: Bus; home: string }> {
   const home = mkTmp('ccrc-');
   seedRoster(home);
@@ -613,6 +613,17 @@ describe('write routes', () => {
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/interrupt`, payload: {} });
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({ ok: false, error: 'not-busy' });
+    await app.close();
+  });
+
+  // D-5236: the raw word `shell` is an idle main loop over a background shell
+  // or monitor — Escape interrupts nothing there, so no key is pressed.
+  it('POST interrupt on a shell session returns 409 background-only, no keys', async () => {
+    const { app, calls } = await makeApp(['❯ \n'], { status: 'shell' });
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/interrupt`, payload: {} });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'background-only', count: null, kinds: [] });
+    expect(sendKeysCalls(calls)).toEqual([]);
     await app.close();
   });
 
