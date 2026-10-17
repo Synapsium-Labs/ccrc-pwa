@@ -72,7 +72,7 @@ Reviewers: do not raise these.
 - **The reach logs' coverage half (review 535, F3).** Neither the before nor the after reach-spy run happened, so which tests met a real `ssh`, `scp`, `curl` or bus at the base, or meet a poison now and stay green, is unmeasured for this wave. The coordinator records a standing check for a later test wave: a harness cleanup that reports any poison record left behind.
 - **`ccd-child-reclaim-entry.test.ts`'s rebuilt harness (around `:863`).** One case deletes its harness's `.local` and rebuilds it without `net`. It runs an echo stub only, so nothing reaches a real tool today (this answers Review Focus's question on module-level and rebuilt harnesses).
 - **A symlinked bus (D-5257).** A bus path under HOME that is a symlink to the real runtime dir passes `busUnder` and `assertNoRealTool`, which check the value lexically. Nothing passes one today.
-- **The census's named blind spots (D-5255, D-5256):** sibling scripts, a path bound through an unfollowed call or handed to a helper, a path followed by arguments in one string, a template directory join, three namespace spellings, lexical scope and destructuring. None hides a bare spawn of `ccd` or `ccrc` today.
+- **The census's named blind spots (D-5255, D-5256, review 574):** sibling scripts, a path bound through an unfollowed call or handed to a helper, a path followed by arguments in one string, a template directory join, a joined array concatenated further, three namespace spellings, lexical scope and destructuring; and, from review 574, a directory alias through a namespace member, a `+` command line with a call as an operand, a `.join` whose argument holds parentheses, and an `env:` binding that is `let x = undefined`. None hides a bare spawn of `ccd` or `ccrc` today.
 - **Seven stale comment citations into `ccdWsHelpers.ts`** in four other files (Reading 5), for the docs PR.
 
 ## Global Constraints
@@ -626,26 +626,27 @@ diff --git a/server/test/ccdWsHelpers.ts b/server/test/ccdWsHelpers.ts
   - Read it. A test that passed because it reached the operator's runtime dir is a finding for the wave-done, not a regression. The scope-sweep verdict record `ccrc-doctor-checks:7583` reads is one such path. If the file is unclaimed, give it a fixture runtime dir under HOME, which `busUnder` keeps (a reserve number). If it is claimed, report it.
   - A test that needs the real bus for a reason the wave accepts takes the fallback above, recorded under a reserve number.
 
-- [ ] **Step 4: Mutation rows** *(revised, unmeasured)*. Each is one edit, run against `ccd-harness-containment.test.ts` (25 tests) unless named. Where the prototype measured the same mutation on its earlier rows, its result is in brackets.
+- [ ] **Step 4: Mutation rows** *(worker, measured: each row says where)*. Each is one edit, run against `ccd-harness-containment.test.ts` unless named: 28 tests at fix round 2's tip `a71a3443c` (H18-12 added), 27 at the landing tip `aaf923a4b`, 25 at the base of fix round 1. Where the prototype measured the same mutation on its earlier rows, its result is in brackets.
 
   | row | mutation | expected red set |
   |---|---|---|
-  | T1-1 | the creation site asks `{ systemd, tmux }` (drops `net`) | H18-1 only. [prototype: H18-1 only, 1 of 23: "expected [ Array(5) ] to deeply equal [ 'curl', 'gh', 'launchctl', …(5) ]"] |
-  | T1-2 | `env()` asks `{ systemd, tmux }` (drops `net`) | H18-4 only: H18-3 stays green, because the creation site planted the poison. [prototype: H18-4 only, 1 of 23: "expected '/usr/bin/ssh' to be '<home>/.local/bin/ssh'"] |
-  | T1-3 | the bus keyed on a flag nobody sets (`opts.systemd && false`) | H18-2 ("assertNoRealTool: XDG_RUNTIME_…"), H18-6, H18-7 (its managers case), H18-8 (its half case), H18-10, H18-11: 6 of 27 *(worker, measured at the landing tip `aaf923a4b`)*. Was, before fix round 1: the first four, which still red |
-  | T1-4 | `return { ...bus, ...env, PATH … }` (the caller's env wins) | H18-2 (the inherited real pair wins), H18-6, H18-7 (managers case), H18-8 (half case), H18-10, H18-11: 6 of 27 *(worker, measured at the landing tip `aaf923a4b`)*. Was, before fix round 1: the first four, which still red. [prototype, as `bus`: H18-2, H18-6, H18-7, 3 of 23] |
-  | T1-5 | `busUnder` dropped (the fixture always forced) | H18-8, its own-pair case only |
-  | T1-6 | `busUnder` reads `.some` (one variable under HOME is enough) | H18-8 (its half case), H18-10, H18-11: 3 of 27 *(worker, measured at the landing tip `aaf923a4b`)*. Was, before fix round 1: H18-8, its half case only, which still reds |
-  | T1-7 | the early return tests `systemd` and `tmux` only | H18-7, its net case ("ssh: expected false to be true"). [prototype: H18-7, 1 of 23] |
-  | T1-8 | `for (const n of NET_TOOLS)` without `if (opts.net)` | H18-7, its tmux-only and managers cases ("ssh: expected true to be false"). [prototype: H18-7, 1 of 23] |
-  | T1-9 | `net` removes a present file before planting (overwrites a stub) | H18-5, H18-9, and, run over `ccd-pool-sync` and `pool-accounts-route` too: every `ccd-pool-sync` test that writes a stub (by its assertion or by the `afterEach` guard), and `pool-accounts-route`'s three `syncInto` rows. [prototype, before the pool runners asked `net`: H18-5 only, 1 of 94: "expected 'rc=97' to be 'rc=0'"] |
-  | T1-10 | `NET_TOOLS = ['ssh', 'curl']` (drops `scp`) | H18-1, H18-2, H18-3 scp, H18-7 (net case) ("assertNoRealTool: scp resolved…"; "expected '/usr/bin/scp' to be …"). [prototype: the same 4 of 23] |
-  | T1-11 | the rejected H3 shape: `net` planted for every `systemd` caller (`if (opts.net \|\| opts.systemd)`), run on `ccd-update-sync`, `ccrc-api`, `ccd-pool-sync`, `pool-accounts-route` and `ccrc-token-sync` | `ccd-update-sync` 37, `ccrc-api` 53, `ccrc-token-sync` 1; the two pool files 0 (D-5247). [prototype, with `bus` on as well: 91 of 312, first assertion "ccd-update-sync: unmeasured — curl exited 97"] |
-  | T1-12 | the bus keyed on `opts.systemd \|\| opts.tmux` | H18-7, its tmux-only case ("no systemd, no bus") |
-  | T1-13 | `stubContainedTool`'s refusal removed | H18-9 ("expected [Function] to throw") |
-  | T1-14 | `stubContainedTool`'s `gh` refusal removed (D-5254) | H18-9 only, 1 of 25: "expected [Function] to throw an error" *(worker, measured)* |
-  | T1-15 | `busPath`'s refusal of `;` removed (D-5257, fix round 1) | H18-10 only, 1 of 27 *(worker, measured at the fix-round tip)* |
-  | T1-16 | `busPath`'s refusal of `%` removed (D-5257, fix round 1) | H18-11 only, 1 of 27 *(worker, measured at the fix-round tip)* |
+  | T1-1 | the creation site asks `{ systemd, tmux }` (drops `net`) | H18-1 only. [prototype: H18-1 only, 1 of 23: "expected [ Array(5) ] to deeply equal [ 'curl', 'gh', 'launchctl', …(5) ]"] *(worker, measured: 1 of 27 at the landing tip `aaf923a4b`, 1 of 28 at fix round 2's tip `a71a3443c`)* |
+  | T1-2 | `env()` asks `{ systemd, tmux }` (drops `net`) | H18-4 only: H18-3 stays green, because the creation site planted the poison. [prototype: H18-4 only, 1 of 23: "expected '/usr/bin/ssh' to be '<home>/.local/bin/ssh'"] *(worker, measured: 1 of 27 at the landing tip `aaf923a4b`, 1 of 28 at fix round 2's tip `a71a3443c`)* |
+  | T1-3 | the bus keyed on a flag nobody sets (`opts.systemd && false`) | H18-2 ("assertNoRealTool: XDG_RUNTIME_…"), H18-6, H18-7 (its managers case), H18-8 (its half case), H18-10, H18-11, H18-12: 7 of 28 *(worker, measured at fix round 2's tip `a71a3443c`)*. At the landing tip `aaf923a4b`, before H18-12: 6 of 27. Was, before fix round 1: the first four, which still red |
+  | T1-4 | `return { ...bus, ...env, PATH … }` (the caller's env wins) | H18-2 (the inherited real pair wins), H18-6, H18-7 (managers case), H18-8 (half case), H18-10, H18-11, H18-12: 7 of 28 *(worker, measured at fix round 2's tip `a71a3443c`)*. At the landing tip `aaf923a4b`, before H18-12: 6 of 27. Was, before fix round 1: the first four, which still red. [prototype, as `bus`: H18-2, H18-6, H18-7, 3 of 23] |
+  | T1-5 | `busUnder` dropped (the fixture always forced) | H18-8, its own-pair case only *(worker, measured: 1 of 27 at the landing tip `aaf923a4b`, 1 of 28 at fix round 2's tip `a71a3443c`)* |
+  | T1-6 | `busUnder` reads `.some` (one variable under HOME is enough) | H18-8 (its half case), H18-10, H18-11, H18-12: 4 of 28 *(worker, measured at fix round 2's tip `a71a3443c`)*. At the landing tip `aaf923a4b`, before H18-12: 3 of 27. Was, before fix round 1: H18-8, its half case only, which still reds |
+  | T1-7 | the early return tests `systemd` and `tmux` only | H18-7, its net case ("ssh: expected false to be true"). [prototype: H18-7, 1 of 23] *(worker, measured: 1 of 27 at the landing tip `aaf923a4b`, 1 of 28 at fix round 2's tip `a71a3443c`)* |
+  | T1-8 | `for (const n of NET_TOOLS)` without `if (opts.net)` | H18-7, its tmux-only and managers cases ("ssh: expected true to be false"). [prototype: H18-7, 1 of 23] *(worker, measured: 1 of 27 at the landing tip `aaf923a4b`, 1 of 28 at fix round 2's tip `a71a3443c`)* |
+  | T1-9 | `net` removes a present file before planting (overwrites a stub) | H18-5, H18-9, and, run over `ccd-pool-sync` and `pool-accounts-route` too: every `ccd-pool-sync` test that writes a stub (by its assertion or by the `afterEach` guard), and `pool-accounts-route`'s three `syncInto` rows. [prototype, before the pool runners asked `net`: H18-5 only, 1 of 94: "expected 'rc=97' to be 'rc=0'"] *(worker, measured at the landing tip `aaf923a4b`: H18-5 and H18-9, 2 of 27; `ccd-pool-sync` 38 of 41; `pool-accounts-route` 3 of 31. The same at fix round 2's tip `a71a3443c`, 2 of 28)* |
+  | T1-10 | `NET_TOOLS = ['ssh', 'curl']` (drops `scp`) | H18-1, H18-2, H18-3 scp, H18-7 (net case) ("assertNoRealTool: scp resolved…"; "expected '/usr/bin/scp' to be …"). [prototype: the same 4 of 23] *(worker, measured: 4 of 27 at the landing tip `aaf923a4b`, 4 of 28 at fix round 2's tip `a71a3443c`)* |
+  | T1-11 | the rejected H3 shape: `net` planted for every `systemd` caller (`if (opts.net \|\| opts.systemd)`), run on `ccd-update-sync`, `ccrc-api`, `ccd-pool-sync`, `pool-accounts-route` and `ccrc-token-sync` | `ccd-update-sync` 37, `ccrc-api` 53, `ccrc-token-sync` 1; the two pool files 0 (D-5247). [prototype, with `bus` on as well: 91 of 312, first assertion "ccd-update-sync: unmeasured — curl exited 97"] *(worker, measured at the landing tip `aaf923a4b`: `ccd-update-sync` 37 of 45, `ccrc-api` 53 of 103, `ccrc-token-sync` 1 of 93, `ccd-pool-sync` 0 of 41, `pool-accounts-route` 0 of 31. Not re-measured at fix round 2's tip `a71a3443c`: neither the mutated file nor these five changed)* |
+  | T1-12 | the bus keyed on `opts.systemd \|\| opts.tmux` | H18-7, its tmux-only case ("no systemd, no bus") *(worker, measured: 1 of 27 at the landing tip `aaf923a4b`, 1 of 28 at fix round 2's tip `a71a3443c`)* |
+  | T1-13 | `stubContainedTool`'s refusal removed | H18-9 ("expected [Function] to throw") *(worker, measured: 1 of 27 at the landing tip `aaf923a4b`, 1 of 28 at fix round 2's tip `a71a3443c`)* |
+  | T1-14 | `stubContainedTool`'s `gh` refusal removed (D-5254) | H18-9 only, 1 of 25: "expected [Function] to throw an error" *(worker, measured)*; 1 of 27 at the landing tip `aaf923a4b`, 1 of 28 at fix round 2's tip `a71a3443c` |
+  | T1-15 | `busPath`'s refusal of `;` removed (D-5257, fix round 1) | H18-10 only, 1 of 27 *(worker, measured at the fix-round tip and again at the landing tip `aaf923a4b`)*; 1 of 28 at fix round 2's tip `a71a3443c` |
+  | T1-16 | `busPath`'s refusal of `%` removed (D-5257, fix round 1) | H18-11 only, 1 of 27 *(worker, measured at the fix-round tip and again at the landing tip `aaf923a4b`)*; 1 of 28 at fix round 2's tip `a71a3443c` |
+  | T1-17 | `busPath`'s refusal of a second `path=` key removed (D-5258, fix round 2) | H18-12 only, 1 of 28 *(worker, measured at fix round 2's tip `a71a3443c`)* |
 
 - [ ] **Step 5: Commit** `test(update): the ccd harness poisons ssh, scp and curl, the user bus under HOME rides systemd, and one door for a functional stub (wave 18, D-5247, D-5248, D-5249)`.
 
@@ -845,13 +846,13 @@ diff --git a/server/test/pool-accounts-route.test.ts b/server/test/pool-accounts
 
   | row | mutation | expected red set |
   |---|---|---|
-  | T2-1 | `stubCurl` reverted to writing `<home>/bin/curl` (as at the base) | every `ccd-pool-sync` test that calls `stubCurl`, by its own positive assertion or by the `afterEach` guard (the poison now answers every one of them); the worker lists the set |
-  | T2-2a…d | each of the four inline sites (the 1 MiB refusal, the just-under-the-cap read, curl 63, the 65536-byte document) reverted alone | that one test, by its assertion or by the guard |
-  | T2-3 | `syncInto` reverted to `<home>/bin` | `pool-accounts-route`'s three C1/W1 rows (Step 1's set). [prototype, as the red-first: the same three] |
-  | T2-4 | `run()`'s `net: true` dropped | the new row only ("the poison answered the curl: expected false to be true"). The host's curl runs against `example.invalid`, which does not resolve, so nothing is contacted |
-  | T2-5 | T2-1 with the `afterEach` guard removed (the control) | only the stub tests that assert a positive side effect: the absence-only rows go green, which is what the guard exists for |
-  | T2-6 | `runFull` drops `net` (fix round 1, review 535 F10) | the ten `runFull` rows, 10 of 41, by `assertNoRealTool: ssh resolved to /usr/bin/ssh, outside the fixture HOME` *(worker, measured at the fix-round tip)* |
-  | T2-7 | the strays listing drops `net` with an `assertNoRealTool` on its env (F10) | nothing: 41 of 41 green, because the poisons `run()` planted earlier in the same test stay on PATH. So the ruling's other option was taken: the listing asks no `net` (it runs no curl) and carries no assertion *(worker, measured at the fix-round tip)* |
+  | T2-1 | `stubCurl` reverted to writing `<home>/bin/curl` (as at the base) | every `ccd-pool-sync` test that calls `stubCurl`, by its own positive assertion or by the `afterEach` guard (the poison now answers every one of them); the worker lists the set *(carried from 51baba484)* |
+  | T2-2a…d | each of the four inline sites (the 1 MiB refusal, the just-under-the-cap read, curl 63, the 65536-byte document) reverted alone | that one test, by its assertion or by the guard *(carried from 51baba484)* |
+  | T2-3 | `syncInto` reverted to `<home>/bin` | `pool-accounts-route`'s three C1/W1 rows (Step 1's set). [prototype, as the red-first: the same three] *(carried from 51baba484)* |
+  | T2-4 | `run()`'s `net: true` dropped | the new row only ("the poison answered the curl: expected false to be true"). The host's curl runs against `example.invalid`, which does not resolve, so nothing is contacted *(worker, measured at the landing tip `aaf923a4b`: 1 of 41)* |
+  | T2-5 | T2-1 with the `afterEach` guard removed (the control) | only the stub tests that assert a positive side effect: the absence-only rows go green, which is what the guard exists for *(carried from 51baba484)* |
+  | T2-6 | `runFull` drops `net` (fix round 1, review 535 F10) | the ten `runFull` rows, 10 of 41, by `assertNoRealTool: ssh resolved to /usr/bin/ssh, outside the fixture HOME` *(worker, measured at the fix-round tip and again at the landing tip `aaf923a4b`)* |
+  | T2-7 | the strays listing drops `net` with an `assertNoRealTool` on its env (F10) | nothing: 41 of 41 green, because the poisons `run()` planted earlier in the same test stay on PATH. So the ruling's other option was taken: the listing asks no `net` (it runs no curl) and carries no assertion *(worker, measured at the fix-round tip, and again at fix round 2's tip `a71a3443c`, 41 of 41 green; `ccd-pool-sync.test.ts` is unchanged since the landing tip `aaf923a4b`)* |
 
 - [ ] **Step 5: Commit** `test(update): the pool-sync curl stubs go through stubContainedTool, and ccd-pool-sync's runners ask net (wave 18, D-5249)`.
 
@@ -1809,7 +1810,7 @@ index 98588f683..78b7d1959 100644
 
   Then `single-definition` (585, *prototype*, with the prototype's census file present). It must not see the ccd script's path spelled as two quoted adjacent segments, and the corpus's `ghContainedEnv(`, `ccrcContainedEnv(` and `memEnv(` text must not read as a second definition: *(to be measured by the worker)*. Then `ccd-workspaces` (81).
 
-- [ ] **Step 4: Mutation rows.** T3-1a to T3-5r were *(reviser, measured standalone)* on the prototype tree, each applied to a scratch copy of the census and restored with `cmp`; under vitest the worker re-measures them. T3-6 to T3-10 are *(revised, unmeasured)* unless bracketed. The T3-1 rows are standing pins: each one breaks a detector branch, and the fixture corpus (row 7) is what reds.
+- [ ] **Step 4: Mutation rows.** T3-1a to T3-5r were *(reviser, measured standalone)* on the prototype tree, each applied to a scratch copy of the census and restored with `cmp`; under vitest the worker re-measures them. T3-6 to T3-10 are *(revised, unmeasured)* unless bracketed or marked. The T3-1 rows are standing pins: each one breaks a detector branch, and the fixture corpus (row 7) is what reds. Every T3 row was re-measured at the landing tip `aaf923a4b`, the census rows standalone, and each red set below held (T3-4 also reds row 7, through the corpus's unplaced pin). The census rows were measured standalone again at fix round 2's tip `a71a3443c`, after fix round 2's corpus lines, and each held again.
 
   | row | mutation | expected red set |
   |---|---|---|
@@ -1835,12 +1836,12 @@ index 98588f683..78b7d1959 100644
   | T3-4 | `'bash'` removed from `RUNNERS` | row 4 only, listing every `'bash'` spawn. [prototype: 1 of 5] |
   | T3-5 | `'cat'` added to `READERS` | row 4 only: "'cat' is placed but no spawn uses it". [prototype: 1 of 5] |
   | T3-5r | `deploy-env-guard`'s reason cut to `'x'` | row 5 only |
-  | T3-6 | `runbook-holds`' env reverted to `{ ...process.env, HOME: home }`; run `runbook-holds` and the census | the census (`runbook-holds.test.ts:160` at the fix-round tip; `:158` at `b5b83ad66`, `:157` at `51baba484`), and two `runbook-holds` rows ("the exposure PASS line …", "the name PASS line …"), each by `assertNoRealTool: XDG_RUNTIME_DIR=/run/user/<uid> does not name a path inside the fixture HOME`. [prototype: 3 of 28] |
-  | T3-7 | `ccrc-memory`'s `memEnv` reverted to `({ ...process.env, HOME: home, ...extra })`; run `ccrc-memory` and the census | `ccrc-memory`'s "the env every spawn here uses passes assertNoRealTool" only. The census stays GREEN: every spawn passes `memEnv(…)`, a call (D-5253). [prototype: 1 of 64] |
-  | T3-8 | either `projected-home` call site reverted to `env: { ...process.env, HOME: … }` | row 2, naming that line. [prototype, on the inline form: the census reddened its line] |
-  | T3-9 | `phEnv` drops `net` | `projected-home`'s new row: "assertNoRealTool: ssh resolved to …". The census stays green (a helper call) |
-  | T3-10 | `phEnv` drops `systemd` | `projected-home`'s new row: the bus pair and `systemctl` are no longer under HOME |
-  | T3-6b | `runDrRcState`'s env reverted to `{ ...process.env, HOME: home }` (fix round 1, review 535 F11) | the two `runbook-holds` rows that call `runDrRcState`, 2 of 23, by `assertNoRealTool: XDG_RUNTIME_DIR=/run/user/<uid> does not name a path inside the fixture HOME`; the census stays green, the doctor checks being outside its names *(worker, measured at the fix-round tip)* |
+  | T3-6 | `runbook-holds`' env reverted to `{ ...process.env, HOME: home }`; run `runbook-holds` and the census | the census (`runbook-holds.test.ts:160` at the fix-round tip; `:158` at `b5b83ad66`, `:157` at `51baba484`), and two `runbook-holds` rows ("the exposure PASS line …", "the name PASS line …"), each by `assertNoRealTool: XDG_RUNTIME_DIR=/run/user/<uid> does not name a path inside the fixture HOME`. [prototype: 3 of 28] *(worker, measured at the landing tip `aaf923a4b`: `runbook-holds` 2 of 23, and the census standalone, row 2 at `:160`)* |
+  | T3-7 | `ccrc-memory`'s `memEnv` reverted to `({ ...process.env, HOME: home, ...extra })`; run `ccrc-memory` and the census | `ccrc-memory`'s "the env every spawn here uses passes assertNoRealTool" only. The census stays GREEN: every spawn passes `memEnv(…)`, a call (D-5253). [prototype: 1 of 64] *(worker, measured at the landing tip `aaf923a4b`: `ccrc-memory` 1 of 59; the census standalone, 7 of 7 green)* |
+  | T3-8 | either `projected-home` call site reverted to `env: { ...process.env, HOME: … }` | row 2, naming that line. [prototype, on the inline form: the census reddened its line] *(worker, measured standalone at the landing tip `aaf923a4b`: row 2, naming `projected-home.test.ts:54` or `:671`)* |
+  | T3-9 | `phEnv` drops `net` | `projected-home`'s new row: "assertNoRealTool: ssh resolved to …". The census stays green (a helper call) *(worker, measured at the landing tip `aaf923a4b`: 1 of 58)* |
+  | T3-10 | `phEnv` drops `systemd` | `projected-home`'s new row: the bus pair and `systemctl` are no longer under HOME *(worker, measured at the landing tip `aaf923a4b`: 1 of 58)* |
+  | T3-6b | `runDrRcState`'s env reverted to `{ ...process.env, HOME: home }` (fix round 1, review 535 F11) | the two `runbook-holds` rows that call `runDrRcState`, 2 of 23, by `assertNoRealTool: XDG_RUNTIME_DIR=/run/user/<uid> does not name a path inside the fixture HOME`; the census stays green, the doctor checks being outside its names *(worker, measured at the fix-round tip and again at the landing tip `aaf923a4b`)* |
 
   Fix round 1's census rows (D-5256), each measured standalone *(worker, standalone: node type stripping and a minimal `describe`/`it`/`expect` shim, at the fix-round tip; row numbers: 1 found, 2 ALLOWED, 3 SLICED_ALLOWED, 4 placement, 5 reasons, 6 R14(b)'s spawn, 7 corpus)*. Unmutated: 7 of 7. On `git archive 0a06ebb9a`: row 2 only, the seven predicted hits plus the `ALLOWED` one.
 
@@ -1866,8 +1867,12 @@ index 98588f683..78b7d1959 100644
   | T3-28 | a NAMED callback is no longer recognised (M2) | row 7 only |
   | T3-29 | a followed spread that decided nothing overwrites a decided verdict (M3) | row 7 only |
   | T3-30 | `undefined` read as bare anywhere `bareEnv` looks, a spread included (M4) | row 7 only: `{ ...ghContainedEnv(d), ...e3 }` becomes a false hit |
+  | T3-31 | the directory-alias arm deleted (review 574, F2) | row 7 only: the corpus `const D2 = SCRIPTS_DIR` line *(worker, standalone, at fix round 2's tip `a71a3443c`)* |
+  | T3-32 | `isDir` resolves by name file-wide, not per binding (review 574, F2) | row 7 only: the corpus `rebind` line whose `D` is not the scripts' directory becomes a hit *(worker, standalone, at fix round 2's tip `a71a3443c`)* |
+  | T3-33 | with no earlier binding, a DIRECTORY name falls back to the file's first binding before its import (review 574, F2) | row 7 only: the corpus `shadow` line that joins onto `SCRIPTS_DIR` *(worker, standalone, at fix round 2's tip `a71a3443c`)* |
+  | T3-34 | the PROGRAM rule's `for … of` half, `\|\| scoped.includes(prog)`, deleted (review 574, F3) | row 7 only: the corpus line whose program is the loop's script variable becomes unplaced *(worker, standalone, at fix round 2's tip `a71a3443c`)* |
 
-  The whole tree, `b5b83ad66` against the fix-round tip *(worker, standalone)*: 854 sources and 1215 spawns both times; script spawns 181 → 191, sliced 24 → 24, hits 1 → 1 (`ccrc-doctor.test.ts:8375`), sliced hits 12 → 12, unplaced 0 → 0. The ten new script spawns are all contained: `ccrc-doctor.test.ts:4260`, `:5201`, `:5389` (F1, an array `.join`), `:13878`, `:14545`, `:14791`, `:14819` (F7), `ccrc-models.test.ts:461`, `ccrc-token-sync.test.ts:847` (program `bashPath`, now in `RUNNERS`) and `doctor-box-token.test.ts:76` (F1). No site stopped being one (`runbook-holds.test.ts`' spawn moved from `:158` to `:160`). No `ALLOWED` or `SLICED_ALLOWED` entry changed.
+  At fix round 2's tip `a71a3443c` the whole tree reads 859 sources, 1217 spawns, 191 script spawns, 24 sliced, the one hit and twelve sliced hits, and nothing unplaced, as the review measured at `1065b9994` *(worker, standalone)*. The whole tree, `b5b83ad66` against the fix-round tip *(worker, standalone)*: 854 sources and 1215 spawns both times; script spawns 181 → 191, sliced 24 → 24, hits 1 → 1 (`ccrc-doctor.test.ts:8375`), sliced hits 12 → 12, unplaced 0 → 0. The ten new script spawns are all contained: `ccrc-doctor.test.ts:4260`, `:5201`, `:5389` (F1, an array `.join`), `:13878`, `:14545`, `:14791`, `:14819` (F7), `ccrc-models.test.ts:461`, `ccrc-token-sync.test.ts:847` (program `bashPath`, now in `RUNNERS`) and `doctor-box-token.test.ts:76` (F1). No site stopped being one (`runbook-holds.test.ts`' spawn moved from `:158` to `:160`). No `ALLOWED` or `SLICED_ALLOWED` entry changed.
 
 - [ ] **Step 5: Commit** `test(update): a census of raw spawns of the ccd and ccrc scripts and of text sliced from them, and the hits it found (wave 18, R14(b), D-5250, D-5251, D-5253)`.
 
@@ -1984,7 +1989,7 @@ index 98588f683..78b7d1959 100644
 
   Run `ccrc-containment`. Expected *(prototype)*: 96 of 96 (95 at the base, plus the leading-blank row). The two rows' logs read exactly `-sS -K -\n`.
 
-- [ ] **Step 3: Mutation rows.** All *(prototype)*:
+- [ ] **Step 3: Mutation rows.** All *(prototype)*, and carried from 51baba484: F12 named no T5 row for the landing re-measure.
 
   | row | mutation (in `containedTools.ts`'s generated front) | expected red set (measured) |
   |---|---|---|
@@ -2165,7 +2170,7 @@ for f in sorted(set(b) & set(a)):
 
 - [ ] **Step 1: Merge `main` forward if it moved.** Run `git fetch origin main`. If `origin/main` is not in HEAD, run `git merge --no-edit origin/main`: an ordinary merge, never a rebase, a force-push or GitHub's Update branch.
   - Stop and report only on a conflict, or on a hunk that overlaps one of this wave's in a File-structure file. A disjoint change to one is merged and named.
-  - **If the merge carries #435, or any other change to `ccdWsHelpers.ts` or `containedTools.ts`,** re-run `ccd-harness-containment`, `ccd-workspaces`, `ccd-tmux-anchor` and `raw-spawn-census`, and re-measure rows T1-1 to T1-14.
+  - **If the merge carries #435, or any other change to `ccdWsHelpers.ts` or `containedTools.ts`,** re-run `ccd-harness-containment`, `ccd-workspaces`, `ccd-tmux-anchor` and `raw-spawn-census`, and re-measure rows T1-1 to T1-17.
   - **After every merge of `main`,** re-run `raw-spawn-census`: `main` may have changed a file its lists count.
   - Re-read the claims and the open PRs.
 - [ ] **Step 2: The touched and pinning suites, one file per call** (counts *prototype* unless marked):
@@ -2433,3 +2438,37 @@ file.
 4. One scoped review of fix round 1, the merge and the measurements. It checks three things only: the ruled fixes
    do what these rulings say; each new row is measured; and no widening created a new hit or false positive in the
    real tree. A new spelling found there is named by default.
+
+## Coordinator rulings on review 574 (2026-10-17)
+
+Review 574 read fix round 1, the merge `aaf923a4b` and the prose commit `1065b9994` (scope `b5b83ad66..1065b9994`).
+It found eight findings, all minor, and two needed a ruling. These rulings govern fix round 2, under the same
+fix-or-name line as the rulings on review 535.
+
+**The landing round has two parts** (the coordinator's ruling of 15:40, recorded here because the order above
+names one landing round after #448):
+- **Part 1, now:** merge `main` (`aaf923a4b`), the single landing re-measure F12 asks for, a fresh wave-done, and a
+  scoped review. The re-measure at `aaf923a4b` IS F12's. Rows that held there carry the landing-tip mark; rows F12
+  did not name for it are marked "carried from 51baba484".
+- **Part 2, after #448 lands:** merge `main` again; the census, `delegation-spool` and
+  `delegation-wave3.integration` by vitest, one file per call; a check that the PR's CI summary lists #448's harness
+  files; and a fresh wave-done. A clean merge that touches none of this wave's files needs no second review.
+
+**Per finding:**
+- **F4: fix, as D-5258.** `busPath` refuses a first address with more than one `path=` key, by the same arm as `;`
+  and `%`, because libdbus reads the first and the capture reads the last. Row H18-12, and mutation row T1-17.
+- **F7: yes.** Recorded above. Task 7 Step 1 re-measures T1-1 to T1-17 (the ruling said T1-16; T1-17 mutates the
+  same file).
+- **F2: pin.** A corpus line for the directory-alias arm, and for `isDir`'s per-binding resolution and its import
+  fallback; rows T3-31 to T3-33. The alias arm's dotted half is unreachable through the binding's shape test, and
+  the blind-spot paragraph says so.
+- **F3: pin.** A corpus line whose program is a `for … of` script variable; row T3-34 deletes `|| scoped.includes(prog)`.
+- **F5: name.** `joinLike`'s limits go in the blind-spot paragraph: the `+` arm's operand kinds, a `.join` whose
+  argument holds parentheses, and `env: x` with `let x = undefined` read undecided. None is live.
+- **F1, F6, F8: prose.** The header's resolution order as the code has it since M1; the residue and the PR body
+  reconciled (M5, and the "Not in this wave" items); Task 1 Step 4's preamble.
+
+**The gate for this round.** One file per call, `--pool=forks --maxWorkers=1`, nothing while the slice's anonymous
+memory reads 22 GiB or more: `raw-spawn-census`, `ccd-harness-containment`, `ccrc-containment`, `ccd-pool-sync`,
+`runbook-holds`, `topology-clean`, `deviation-refs` (after `git fetch origin main`) and `dtbd`. Every new mutation
+row is measured. No merge of `main` in this round.
