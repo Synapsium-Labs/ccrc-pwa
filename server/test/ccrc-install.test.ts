@@ -4341,8 +4341,8 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
   });
 
   itLinux('a FOREIGN ccgpt-usage@ unit pair and its enabled instance survive install --role fleet and uninstall, byte for byte', () => {
-    // The live fleet box's shape (F-1), in a fixture HOME: another
-    // repository's template pair at the two names, and an ENABLED instance of
+    // The fleet box's shape before Plan 4 removed that repository's copy (F-1),
+    // in a fixture HOME: another repository's template pair at the two names, and an ENABLED instance of
     // it (the `timers.target.wants/` link `systemctl enable` makes). Every
     // fixture HOME before this case was empty there, so nothing could see an
     // install overwrite that pair or an uninstall delete it.
@@ -6877,13 +6877,15 @@ describe('ccrc install: install-step names the step the spine is entering (desig
 
 describeLinux('ccrc install and uninstall leave another repository\'s GPT-lane files alone (D-3478)', () => {
   it('a foreign ccgpt, ccgpt-proxy and ccgpt-usage in ~/.local/bin, and an alias to the first, survive install --role fleet and uninstall, byte for byte', () => {
-    // The fleet box's shape (m-livebox): three dotless files another repository
-    // owns — the launcher both live Codex lanes exec, its shim, its publisher —
-    // and a lane alias symlinked to the launcher. `_inst_atomic` has no ownership
-    // check, so ONE placement at any of these names silently cuts over every live
-    // lane at once; that is why ccrc's launcher is `ccrc-codex`. This case reads
-    // what the verbs DID, so it also sees a placement or removal from a function
-    // `install-census.test.ts` does not read.
+    // The fleet box's shape before the cutover (m-livebox): three dotless files
+    // another repository owned — the launcher both live Codex lanes exec'd, its
+    // shim, its publisher (retired by Plan 4) — and a lane alias symlinked to the
+    // launcher. A box may still carry another repository's `ccgpt` (the fleet
+    // box's copy was removed by Plan 4), and `_inst_atomic` has no ownership
+    // check, so ONE placement at any of these names silently cuts over every
+    // lane that execs it; that is why ccrc's launcher is `ccrc-codex`. This case
+    // reads what the verbs DID, so it also sees a placement or removal from a
+    // function `install-census.test.ts` does not read.
     const home = freshBox('ccrc-install-foreign-ccgpt-bins-');
     mkdirSync(join(home, '.ccrc'), { recursive: true });
     writeFileSync(join(home, '.ccrc', 'agent.env'),
@@ -8236,7 +8238,7 @@ describeLinux('ccrc install: the codex usage converge on a real spine (Plan 3a T
   it('one usage timer per codex lane and none for an external lane; a re-run arms the same one again and nothing else', async () => {
     const lanes = await freeLanes(['codex-a']);
     const home = codexBox('ccrc-codex-usage-spine-', lanes);
-    // `ext-a`: the live lanes' shape (exec.kind external, telemetry codex), a fixture id.
+    // `ext-a`: the live lanes' shape before the cutover (exec.kind external, telemetry codex; retired by Plan 4), a fixture id.
     codexRoster(home, lanes, [{ id: 'ext-a', label: 'ext-a', configDirSuffix: '.claude-ext-a',
       exec: { kind: 'external', provider: 'openai' }, homeAble: false, telemetry: 'codex' }]);
     const usage = (): string[] => systemctlCalls(home).map((c) => c.argv).filter((a) => a.includes('usage@'));
@@ -8375,6 +8377,91 @@ function fleetBox(prefix: string, opts: { systemd?: boolean; fleetFiles?: boolea
 const PROVISIONED_BOX_TOKEN =
   /^PASS box-token: fleet: token file 0600, generation recorded, last sync proved, transport https$/m;
 
+/** Every doctor check's class (`doctorClasses`) on a fleet box with no
+ *  external lane: `fleetBox(prefix)`'s `install --role fleet` and its doctor.
+ *  It holds what `BASE_LIVE_SHAPE` held for every fleet install until Plan 4
+ *  retired that golden with the external lane: the whole `--role fleet` map,
+ *  so a check that moves class on a fresh install reds here, not only one that
+ *  FAILs. MEASURED, never typed: on this branch at `5eb911725` (Plan 4's
+ *  final fix wave), by a MEASURE-only case, since removed, that ran
+ *  `install --role fleet` then `doctor` on `fleetBox(prefix)`, and two
+ *  installs then `doctor` on `fleetBox(prefix, { fleetFiles: true })`, and
+ *  wrote `doctorClasses` of each transcript as JSON. All five exited 0, and
+ *  the five maps are equal but for `credentials`: SKIP here (no
+ *  `~/.cc-secrets`), PASS on the provisioned box (the directory exists, so a
+ *  credential is owed and its file is there). Exactly two WARNs, each the
+ *  fresh-install word of a timer the install placed seconds before:
+ *  `pool-sync` (`pool-sync-not-yet-synced`) and `update-sync`
+ *  (`update-sync-not-yet-synced`). `server-caps` is PASS by its
+ *  `first-write-pending` grace (D-4168). Against `BASE_LIVE_SHAPE`'s install
+ *  map, three classes differ, each by the seat: `models` SKIP (no lane here
+ *  has a model registry), `credentials` SKIP (above), and `codex` SKIP, which
+ *  that golden left out. A merge-up that moves a class here reds both
+ *  box-token cases until this is re-measured the same way; it is never
+ *  hand-edited. */
+const FLEET_BOX_CLASSES: Readonly<Record<string, string>> = {
+  "accounts": "PASS",
+  "auth": "SKIP",
+  "box-token": "PASS",
+  "build": "PASS",
+  "caddy": "SKIP",
+  "caddyfile": "SKIP",
+  "cert": "SKIP",
+  "codex": "SKIP",
+  "config": "PASS",
+  "credentials": "SKIP",
+  "disk": "PASS",
+  "docs": "PASS",
+  "docs-sw": "SKIP",
+  "exposure": "SKIP",
+  "fleet": "SKIP",
+  "flock": "PASS",
+  "gh": "PASS",
+  "gh_auth": "PASS",
+  "git": "PASS",
+  "git_email": "PASS",
+  "graphify": "PASS",
+  "graphify-path": "PASS",
+  "history": "PASS",
+  "jq": "PASS",
+  "jq_regex": "PASS",
+  "linger": "PASS",
+  "memory": "PASS",
+  "model-default": "PASS",
+  "models": "SKIP",
+  "name": "SKIP",
+  "node": "PASS",
+  "path": "PASS",
+  "pool-sync": "WARN",
+  "pools": "PASS",
+  "provenance": "PASS",
+  "python3": "PASS",
+  "rc": "PASS",
+  "routing": "PASS",
+  "scope-sweep": "SKIP",
+  "scopes": "SKIP",
+  "server-caps": "PASS",
+  "services": "PASS",
+  "skills": "PASS",
+  "timeout": "PASS",
+  "tmux": "PASS",
+  "tmux_skew": "PASS",
+  "transcripts": "PASS",
+  "update-exposure": "SKIP",
+  "update-sync": "WARN",
+  "wrappers": "PASS"
+};
+/** A fleet box's class map, said three ways: the two WARNs by name and
+ *  `server-caps` PASS (so a failure names the check that moved), then the
+ *  whole map against `want`. */
+function expectFleetBoxClasses(stdout: string, want: Readonly<Record<string, string>>, stage: string): void {
+  const got = doctorClasses(stdout);
+  expect(Object.keys(got).filter((k) => got[k] === 'WARN').sort(), `${stage}: the WARN set on a fleet box with no external lane`)
+    .toEqual(['pool-sync', 'update-sync']);
+  expect(got['server-caps'], `${stage}: server-caps on a fresh fleet install (its first-write-pending grace)`).toBe('PASS');
+  expect(got, `${stage}: a check's class moved from FLEET_BOX_CLASSES — re-measure it, never hand-edit it`).toEqual(want);
+}
+
 /** What a flipped lane's `init codex` (ruling Z3 forces it after the flip) and
  *  its first refresh leave, stood in by their files: the class registry, the
  *  catalogue, and the lane files a models mutation re-materialises. Fixture
@@ -8463,23 +8550,28 @@ describeLinux('Plan 3a Task 10 — what the cutover rehearsal still holds: box-t
     expect("  remedy: the server writes it at its next rotation (Rotate now on the console's Box token card)").toMatch(CARD_REMEDY);
     expect(r.stdout).not.toMatch(CARD_REMEDY);
     expect(r.stdout).not.toMatch(/^FAIL /m);
-  });
+    expectFleetBoxClasses(r.stdout, FLEET_BOX_CLASSES, 'a fresh fleet box\'s install');
+  }, 120_000);
 
   it('box-token live shape: a provisioned fleet box keeps box-token PASS through two fleet installs and doctor (Plan 4)', () => {
     const home = fleetBox('ccrc-rehearsal-provisioned-', { fleetFiles: true });
     homes.push(home);
+    // `~/.cc-secrets` exists here, so `credentials` is owed and PASSes: the one class that differs (measured)
+    const provisioned = { ...FLEET_BOX_CLASSES, credentials: 'PASS' };
     // two installs: the second is what every update's staged spine runs
     for (const pass of [1, 2]) {
       const r = runInstall(home, ['install', '--role', 'fleet'], READY);
       expect(r.code, `install pass ${pass}:\n${r.stdout}\n${r.stderr}`).toBe(0);
       expect(r.stdout, `install pass ${pass}: the provisioned fleet arm did not PASS`).toMatch(PROVISIONED_BOX_TOKEN);
       expect(r.stdout, `install pass ${pass}`).not.toMatch(/^FAIL /m);
+      expectFleetBoxClasses(r.stdout, provisioned, `install pass ${pass}`);
     }
     const d = runInstall(home, ['doctor'], READY);
     expect(d.code, d.stdout).toBe(0);
     expect(d.stdout, 'doctor: the provisioned fleet arm did not PASS').toMatch(PROVISIONED_BOX_TOKEN);
     expect(d.stdout).not.toMatch(/^FAIL /m);
-  });
+    expectFleetBoxClasses(d.stdout, provisioned, 'doctor');
+  }, 180_000);
 
   it('the flip, in Plan 3b\'s order: only codex-a\'s ccrc instance is enabled, codex-b and its foreign timer are untouched, and doctor answers PASS for the lane', async () => {
     const home = fleetBox('ccrc-rehearsal-flip-', { systemd: true });
