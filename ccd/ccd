@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=29541c4924d71b2daf75530284a7a4b82dd5df8eb0cc4f313c63516a744e12e6
+# ccrc:generated 1 sha256=d6bc59806e6d52e04e99717305a7d736845ec828b10da4edb9477e7cb0c43ed2
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -8686,6 +8686,7 @@ EOF
   echo docs-fetch
   echo docs-index
   echo docs-v1
+  echo swap-busy-v1   # cmd_swap re-measures at the act and takes --interrupt (D-5240): the server sends the flag only behind this word
 }
 
 cmd_version() {   # what THIS box runs, per the deploy's own stamp — never a guess.
@@ -17287,7 +17288,7 @@ _default_pool() {   # id -> wrappers this session may auto-swap between.
 # cannot become one file by accident.
 _pool_for() { local p; p=$(_reg_get "$1" pool); [[ -n "$p" ]] && echo "$p" || _default_pool "$1"; }
 
-_dispatch_swap() {   # id target — run `ccd swap` in ITS OWN transient systemd unit.
+_dispatch_swap() {   # id target [arm prev decided dfrom dto tx txbytes] — run `ccd swap` in ITS OWN transient systemd unit.
   # setsid is NOT enough: it detaches the tty but stays in the caller's CGROUP, so the
   # swap's own `systemctl stop` half-kills it mid-swap (left-over processes, dead session
   # never respawned — bit us 2026-07-05). systemd-run escapes the cgroup entirely.
@@ -17333,8 +17334,24 @@ _dispatch_swap() {   # id target — run `ccd swap` in ITS OWN transient systemd
   # number, for the reason D-1850's own citation gives it: a number goes
   # stale the moment code above it moves — this exact citation already did,
   # inside this same task's own fix round, before it was ever re-measured.
+  #
+  # THE DECISION TRAVELS WITH THE MOVE (D-5240). `cmd_swap` re-measures at the
+  # act, so it needs what the decision saw: the arm (`affinity`|`rescue`), the
+  # row's `lastswap` from before the caller stamped it (restored by a refusal),
+  # the decision's epoch (the `ts` of a rescue's limits row), the degrade rung
+  # (stamped at the act now, `_route_degrade_at_move`), and for a rescue the
+  # transcript and its size (output since then backs the rescue off). Each
+  # value is `%q`-quoted, so a path cannot break out of the `bash -c` string.
+  # Positional, all optional: a caller passing two arguments composes exactly
+  # the old line plus empty words, which the act reads as "no gate" (an older
+  # caller's dispatch) and so proceeds as it always did.
+  local env="" k v i=3
+  for k in ARM PREV DECIDED DFROM DTO TX TX_BYTES; do
+    printf -v v '%q' "${!i-}"; i=$((i + 1))
+    env+="CCD_SWAP_$k=$v "
+  done
   _svc_run_detached \
-    bash -c "sleep $jitter; CCD_SWAP_AUTO=1 exec '$HOME/.local/bin/ccd' swap '$1' '$2' >>'$REG/swap.log' 2>&1" \
+    bash -c "sleep $jitter; ${env}CCD_SWAP_AUTO=1 exec '$HOME/.local/bin/ccd' swap '$1' '$2' >>'$REG/swap.log' 2>&1" \
     || echo "$(date '+%F %T') dispatch FAILED for $1 -> $2" >> "$REG/swap.log"
 }
 
@@ -17596,6 +17613,13 @@ _route_restore() {   # id from to why — clear `degraded` (the intended class `
 # `_dispatch_swap` site, where the move is certain. Ruling S3-R5's "a degrade
 # that cannot write its stamp stands still" is unchanged and now reads more
 # simply: rc 1 here means the caller returns without dispatching.
+#
+# AND THE MOVE IS NOW THE TRANSIENT UNIT'S ACT (D-5240). `cmd_swap` re-measures
+# after the jitter and can still re-queue or cancel, so the dispatch is no
+# longer certain either: `_dispatch_swap` carries the rung into the unit and
+# `cmd_swap` calls this after its act-time gates, immediately before
+# `_operator_choice_keep`. rc 1 there stands still at the act (lastswap
+# restored, nothing stopped, a rescue's limits row put back).
 _route_degrade_at_move() {   # id from to -> rc 0 if there is nothing to stamp or the stamp landed; rc 1, loudly, if it did not
   [[ -n "${3:-}" ]] || return 0
   _route_degrade "$1" "$2" "$3" "unservable: $2 on every candidate lane" && return 0
@@ -18353,7 +18377,11 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
   # PREDICATE — `KS_WHY`/`KS_DETAIL` and `PROBE_VERDICT` are the same shape, for
   # the same reason — and because a `$( )` call site would lose a well-known
   # variable to the subshell.
-  HARD_BLOCK_VIA=""; HARD_BLOCK_RESET=""; HARD_BLOCK_TYPE=""; HARD_BLOCK_ROW=""
+  # `HARD_BLOCK_NO` is the same idea for the other answer (D-5240): rc 1 is
+  # not one answer, so each `return 1` names why — `unmeasurable`, `carried-in`,
+  # `running`, `stalepress`, `negative` or `draft`. No caller's answer changes;
+  # only `cmd_swap`'s act-time rescue gate reads the word.
+  HARD_BLOCK_VIA=""; HARD_BLOCK_NO=""; HARD_BLOCK_RESET=""; HARD_BLOCK_TYPE=""; HARD_BLOCK_ROW=""
   # DEFENCE IN DEPTH, AND IT DECIDES NOTHING TODAY — measured, not assumed.
   # Both paths into this function are already below `_auto_swap_check`'s own
   # guard: its direct call, and `_tick_strand_undecidable`, whose only two call
@@ -18364,10 +18392,10 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
   # does not come through that tick must not inherit a verdict off an unmeasured
   # pane. rc 1 is "not hard blocked", which is what "no verdict" has to look
   # like to a boolean caller.
-  _pane_measurable "$id" || return 1   # unmeasurable -> NO VERDICT (§6.3): the rescue this feeds is a restart that types
+  _pane_measurable "$id" || { HARD_BLOCK_NO=unmeasurable; return 1; }   # unmeasurable -> NO VERDICT (§6.3): the rescue this feeds is a restart that types
   # A CARRIED-IN BANNER IS NOT A BLOCK, on any rung (D-3526): a pane positive the transcript dates to an
   # earlier process, with a swap after it, answers no (`_pane_carried_in`); `_limit_dated` holds the rule.
-  _pane_hard_blocked "$pane" && { _pane_carried_in "$id" pane "$pane" && return 1; HARD_BLOCK_VIA=pane; return 0; }
+  _pane_hard_blocked "$pane" && { _pane_carried_in "$id" pane "$pane" && { HARD_BLOCK_NO=carried-in; return 1; }; HARD_BLOCK_VIA=pane; return 0; }
   # THE SECOND PANE RUNG (D-3100), and it is a PANE rung rather than a third
   # arm below the transcript deliberately: a banner Claude Code is rendering on
   # screen right now is the same condition `_pane_hard_blocked` answers, merely
@@ -18375,10 +18403,10 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
   # the pane arm's cost (a `grep` over eight lines), its immediacy (no 30-second
   # cache) and its contract. Below `_pane_hard_blocked` so that a pane matching
   # both still reports the older, more specific detector.
-  _pane_limit_banner "$pane" && { _pane_carried_in "$id" banner "$pane" && return 1; HARD_BLOCK_VIA=banner; return 0; }
-  grep -q "esc to interrupt" <<<"$pane" && return 1
+  _pane_limit_banner "$pane" && { _pane_carried_in "$id" banner "$pane" && { HARD_BLOCK_NO=carried-in; return 1; }; HARD_BLOCK_VIA=banner; return 0; }
+  grep -q "esc to interrupt" <<<"$pane" && { HARD_BLOCK_NO=running; return 1; }
   _now_s_to now; _reg_get_to last "$id" stalepress   # D-4961: the clock seam; D-4963: a builtin read, no subshell
-  [[ "$last" =~ ^[0-9]+$ && $((now - last)) -lt "$STALE_RESUME_GRACE" ]] && return 1
+  [[ "$last" =~ ^[0-9]+$ && $((now - last)) -lt "$STALE_RESUME_GRACE" ]] && { HARD_BLOCK_NO=stalepress; return 1; }
   _reg_get_to scan "$id" tscan   # D-4963: a builtin read, no subshell (tick-diet spec §6.4)
   scan_ts="${scan%% *}"; scan_verdict="${scan#* }"
   if [[ "$scan_ts" =~ ^[0-9]+$ && "$scan_verdict" =~ ^[01]$ \
@@ -18389,11 +18417,11 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
     _limit_dated "$id" transcript "$born" && verdict=1   # rc 3, carried in, caches as 0 like any no (D-3526)
     _reg_set "$id" tscan "$now $verdict" 2>/dev/null || true
   fi
-  [[ "$verdict" -eq 1 ]] || return 1
+  [[ "$verdict" -eq 1 ]] || { HARD_BLOCK_NO=negative; return 1; }
   # SPELLED OUT rather than left as the function's trailing exit status, because
   # the provenance has to be stamped on the success side only: `! cmd` as a tail
   # says the same thing about the rc and gives nowhere to write the word.
-  _pane_box_has_content "$(tmux capture-pane -t "$(_tmux_t "$id")" -p -e 2>/dev/null)" && return 1
+  _pane_box_has_content "$(tmux capture-pane -t "$(_tmux_t "$id")" -p -e 2>/dev/null)" && { HARD_BLOCK_NO=draft; return 1; }
   HARD_BLOCK_VIA=transcript; _hard_block_dated "$id"
   return 0
 }
@@ -19141,16 +19169,21 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # write while an exclusion is fresh, or fold the two writers into one) is
   # deferred.
   if [[ -n "$hard_blocked" ]]; then
-    # THE DEGRADE STAMP, AT THE MOVE (see `_route_degrade_at_move`). First in
-    # the block, so a stamp that cannot be written costs neither the gpt
-    # exclusion, nor `lastswap`, nor a swap.log line claiming a rescue.
-    _route_degrade_at_move "$id" "$dfrom" "$dto" || return 0
+    # THE DEGRADE STAMP IS NOT WRITTEN HERE ANY MORE (D-5240): the rung rides
+    # into the unit and `cmd_swap` stamps it at the act, after the gates that
+    # can still re-queue or cancel this move (`_route_degrade_at_move`).
     # _is_valid_wrapper first, so a stale registry `wrapper` — an account since
     # dropped from the roster — cannot name the file this writes.
     # BACKEND, not placement: this row is the Codex lane's only "pool is full"
     # signal, and it must survive that lane becoming placeable.
-    _is_valid_wrapper "$wrapper" && ! _is_anthropic_backend "$wrapper" \
-      && printf '{"five":100,"seven":0,"ts":%s}' "$now" > "$LIMITS_DIR/$wrapper.json"
+    # THE PRIOR BYTES ARE SAVED FIRST (D-5240), so an act that finds the session
+    # no longer blocked can put back exactly what was there: `.rescueprev`
+    # holds the decision's epoch, then the old bytes verbatim, or `<epoch>
+    # absent`. `cmd_swap` removes it in every arm of its rescue gate.
+    if _is_valid_wrapper "$wrapper" && ! _is_anthropic_backend "$wrapper"; then
+      _rescue_prev_save "$id" "$LIMITS_DIR/$wrapper.json" "$now"
+      printf '{"five":100,"seven":0,"ts":%s}' "$now" > "$LIMITS_DIR/$wrapper.json"
+    fi
     # A RESCUE OFF A DEAD CREDENTIAL MARKS IT (D-3522). `_swap_target`'s
     # home-recovered arm refuses an auth-dead home, and the marker's only other
     # writer, ccd-account-health, is systemd-only and silent for an account it
@@ -19174,7 +19207,9 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
     # new word, and an operator seeing it knows the pane said so in this year's
     # wording rather than the transcript having been scanned for it.
     echo "$(date '+%F %T') auto-rescue $id: $wrapper (blocked) -> $target [home=$home]$([[ "${HARD_BLOCK_VIA:-}" == pane ]] || printf ' via=%s' "${HARD_BLOCK_VIA:-unknown}")$(_rescue_line_extra)" >> "$REG/swap.log"
-    _dispatch_swap "$id" "$target"   # an open rescue wait ends `swap` at cmd_swap's landing, never here: the swap can still be refused
+    local rtx="" rtxb=""
+    rtx=$(_transcript_path "$id" 2>/dev/null) && [[ -f "$rtx" ]] && rtxb=$(_plat_size "$rtx" 2>/dev/null) || { rtx=""; rtxb=""; }
+    _dispatch_swap "$id" "$target" rescue "$last" "$now" "$dfrom" "$dto" "$rtx" "$rtxb"   # an open rescue wait ends `swap` at cmd_swap's landing, never here: the swap can still be refused
     return 0
   fi
   # WAVE 3 §3.3, AND THE PLACEMENT IS THE WHOLE RULING. Everything from here
@@ -19214,8 +19249,33 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # Otherwise (returning home, or leaving at the rate ceiling): relocate only at a clean turn
   # boundary — never mid-turn or mid-subagent. The idle gate reads the live process status file;
   # pane heuristics alone miss running subagents (learned 2026-07-03).
-  echo "$pane" | grep -q "esc to interrupt" && return 0    # mid-turn: wait for the gap
-  echo "$pane" | grep -q "❯" || return 0                    # not at a prompt yet
+  _swap_idle_gate "$id" "$pane" "$wrapper" "$now" || return 0   # the same gate the act re-runs (D-5240)
+  # The degrade rung rides into the unit with the move; `cmd_swap` stamps it
+  # after re-running this same idle gate at the act (D-5240).
+  _reg_set "$id" lastswap "$now"
+  echo "$(date '+%F %T') $aff_verb $id: $wrapper -> $target [home=$home]" >> "$REG/swap.log"
+  _dispatch_swap "$id" "$target" affinity "$last" "$now" "$dfrom" "$dto"
+  return 0
+}
+
+_swap_idle_gate() {   # id [pane [wrapper [now]]] -> rc 0 iff the session is at a clean turn boundary an affinity move may take (D-5240)
+  # ONE GATE, TWO CALLERS: `_auto_swap_check`'s non-blocked arm decides with it,
+  # and `cmd_swap` re-runs it at the act, after the jitter, so a turn that began
+  # in between re-queues the move instead of losing the turn. The tick passes
+  # the pane it already captured (no second capture per tick); the act passes
+  # only the id and the gate captures, reads the wrapper and the clock itself.
+  local id="$1" pane wrapper now
+  # A NARROW PANE STANDS DOWN FIRST (D-5349; §6.3, `ccd-reader-standdown`'s census): a
+  # clipped status row can hide `esc to interrupt`. The tick's own guard at its
+  # top already ran before it captured the pane it passes in; the act's capture
+  # here gets its own, so an unmeasurable pane re-queues rather than reads idle.
+  if [[ $# -ge 2 ]]; then pane="$2"
+  else _pane_measurable "$id" || return 1; pane=$(tmux capture-pane -t "$(_tmux_t "$id")" -p 2>/dev/null | tail -8); fi
+  if [[ $# -ge 3 ]]; then wrapper="$3"; else _reg_read_to wrapper "$id" wrapper || return 1; fi
+  [[ -n "$wrapper" ]] || return 1
+  if [[ $# -ge 4 ]]; then now="$4"; else _now_s_to now; fi
+  echo "$pane" | grep -q "esc to interrupt" && return 1    # mid-turn: wait for the gap
+  echo "$pane" | grep -q "❯" || return 1                    # not at a prompt yet
   local spid sf st sua
   spid=$(tmux list-panes -t "$(_tmux_t "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
   _cfg_dir_to sf "$wrapper"; sf="$sf/sessions/$spid.json"   # tick-diet spec §6.2: memoised per wrapper — an exact memo, no D-number (Task 5)
@@ -19227,25 +19287,18 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # quiet positive control still swaps. Behaviour-identical for every input that
   # answers today — absent, a directory, a `chmod 000` file and `/dev/null` all
   # make `grep` produce nothing, `st` stays empty, and the line below already
-  # returns 0 — true HERE, where the only answers are idle and not-idle.
+  # declines — true HERE, where the only answers are idle and not-idle.
   # `_auto_compact_check` carries the same rung over the same path and a
   # DIFFERENT arm, because #70 gave that lane a `status-unreadable` note this
   # one has no equivalent of; the sentence that stood here called the two reads
   # identical and the merge falsified it.
-  [[ -f "$sf" ]] || return 0
+  [[ -f "$sf" ]] || return 1
   st=$(grep -oE '"status":"[a-z_-]+"' "$sf" 2>/dev/null | head -1 | cut -d'"' -f4)
-  [[ "$st" == "idle" ]] || return 0
+  [[ "$st" == "idle" ]] || return 1
   # Quiet gate (short): don't relocate a session someone just touched from any surface —
   # statusUpdatedAt (ms) ticks on every busy<->idle transition, incl. web/mobile clients.
   sua=$(grep -oE '"statusUpdatedAt":[0-9]+' "$sf" 2>/dev/null | head -1 | cut -d: -f2)
-  [[ -n "$sua" && $(( now * 1000 - sua )) -ge $(( SWAP_CEIL_QUIET * 1000 )) ]] || return 0
-  # AFTER THE LAST GATE THAT CAN DECLINE, for the reason the rescue arm stamps
-  # first in its own block: every `return 0` above this line is a move that did
-  # not happen, and `degraded` names the class actually served.
-  _route_degrade_at_move "$id" "$dfrom" "$dto" || return 0
-  _reg_set "$id" lastswap "$now"
-  echo "$(date '+%F %T') $aff_verb $id: $wrapper -> $target [home=$home]" >> "$REG/swap.log"
-  _dispatch_swap "$id" "$target"
+  [[ -n "$sua" && $(( now * 1000 - sua )) -ge $(( SWAP_CEIL_QUIET * 1000 )) ]] || return 1
   return 0
 }
 
@@ -27066,7 +27119,102 @@ _crosspool_mark() {   # id project-pool account — record a DELIBERATE crossing
   _reg_set "$1" crosspool "$(date +%s) $2 $3"
 }
 
-cmd_swap() {   # [--force] [--cross-pool] id target-wrapper — move a session to another account, conversation intact.
+# ── SWAP GUARDS AT THE ACT (D-5240) ──────────────────────────────────────────
+# A swap is decided on one supervise tick and acted on in a transient unit up
+# to SWAP_JITTER seconds later. These are the act's re-measurements and the
+# undo of the one account write a rescue decision makes; `cmd_swap` calls
+# them before `_operator_choice_keep` and the stop, so a refusal leaves no
+# `.choicekept`, no `degraded` and no stopped pane behind.
+
+_swap_lastswap_restore() {   # id — put `lastswap` back to what it was before the decision stamped it (CCD_SWAP_PREV), or remove it
+  if [[ "${CCD_SWAP_PREV:-}" =~ ^[0-9]+$ ]]; then _reg_set "$1" lastswap "$CCD_SWAP_PREV"
+  else rm -f -- "$REG/$1.lastswap"; fi
+}
+
+_rescue_prev_save() {   # id limits-file epoch — save the limits file's prior bytes to `$REG/<id>.rescueprev` before the rescue decision overwrites them. Always 0.
+  # First line the decision's epoch, then the prior bytes verbatim; or the one
+  # line `<epoch> absent`. Written through a temp file and a rename, so a half
+  # write is never read back as a prior. A save that fails leaves no file, and
+  # `_rescue_prev_restore` then restores nothing — the row stays as the
+  # decision wrote it, which is today's behaviour.
+  local id="$1" f="$2" ep="$3" tmp
+  tmp=$(mktemp "$REG/$id.rescueprev.tmp.XXXXXX" 2>/dev/null) || return 0
+  if [[ -f "$f" ]]; then
+    { printf '%s\n' "$ep"; cat -- "$f"; } > "$tmp" 2>/dev/null || { rm -f -- "$tmp"; return 0; }
+  else
+    printf '%s absent\n' "$ep" > "$tmp" 2>/dev/null || { rm -f -- "$tmp"; return 0; }
+  fi
+  mv -f -- "$tmp" "$REG/$id.rescueprev" 2>/dev/null || rm -f -- "$tmp"
+  return 0
+}
+
+_rescue_prev_restore() {   # id wrapper — undo the rescue decision's limits row BY COMPARE. Always 0.
+  # Only while the file is still byte-equal to the decision's own row
+  # (`{"five":100,"seven":0,"ts":<CCD_SWAP_DECIDED>}`) and the saved prior names
+  # the same epoch: any other content is a newer write — another session's
+  # decision, the lane's usage poller — and is left alone. The `<wrapper>-authdead`
+  # marker is NEVER touched here: a pane reading says nothing about a
+  # credential, and removing a `rescue-401` marker would send sessions back to
+  # a dead credential through `_swap_target`'s home-recovered arm.
+  local id="$1" w="$2" p="$REG/$1.rescueprev" f first ep="${CCD_SWAP_DECIDED:-}" tmp
+  [[ "$ep" =~ ^[0-9]+$ && -f "$p" ]] || return 0
+  f="$LIMITS_DIR/$w.json"
+  IFS= read -r first < "$p" || return 0
+  [[ "${first%% *}" == "$ep" ]] || return 0
+  [[ -f "$f" ]] && cmp -s -- "$f" <(printf '{"five":100,"seven":0,"ts":%s}' "$ep") || return 0
+  if [[ "$first" == "$ep absent" ]]; then
+    rm -f -- "$f"
+  elif [[ "$first" == "$ep" ]]; then
+    tmp=$(mktemp "$LIMITS_DIR/$w.json.tmp.XXXXXX" 2>/dev/null) || return 0
+    tail -n +2 -- "$p" > "$tmp" 2>/dev/null && mv -f -- "$tmp" "$f" 2>/dev/null || rm -f -- "$tmp"
+  fi
+  return 0
+}
+
+_swap_output_since() {   # transcript bytes -> rc 0 iff an assistant entry that is NOT an API-error message was appended after byte `bytes`
+  # The session produced output past the block it was rescued for, so a swap
+  # would cut a live turn. Bounded read (8 MiB) and `-f` first, so a FIFO or a
+  # device cannot hold the act. A file shorter than the offset (rotated,
+  # truncated) says nothing and answers no. A row whose text merely QUOTES an
+  # assistant shape can read as output: that errs toward backing off, which
+  # undoes nothing and is re-decided on the next tick.
+  # One awk over the whole slice, never `grep | grep -q`: under `pipefail` an
+  # early-exiting reader turns its writer's SIGPIPE into a false "no".
+  local tx="$1" b="$2" sz new
+  [[ -n "$tx" && "$b" =~ ^[0-9]+$ && -f "$tx" ]] || return 1
+  sz=$(_plat_size "$tx" 2>/dev/null) || return 1
+  [[ "$sz" =~ ^[0-9]+$ ]] && (( sz > b )) || return 1
+  new=$(tail -c +"$((b + 1))" -- "$tx" 2>/dev/null | head -c 8388608)
+  LC_ALL=C awk '/"type":[[:space:]]*"assistant"/ && !/"isApiErrorMessage":[[:space:]]*true/ { f = 1 } END { exit !f }' <<<"$new"
+}
+
+_swap_rescue_act_gate() {   # id wrapper -> rc 0 proceed as decided | 1 cancelled or backed off (logged, `lastswap` restored, `.rescueprev` gone, nothing stopped)
+  # The decision's own detector, re-run on a fresh capture. Its rc 1 is not one
+  # answer, so `HARD_BLOCK_NO` decides: only a MEASURED not-blocked answer
+  # (`negative`, `carried-in`) cancels and undoes the limits row; a running
+  # turn, a draft or a fresh stale-press backs off and undoes nothing; an
+  # unmeasurable pane proceeds, as it always did. Still blocked, it proceeds
+  # unless the transcript shows output since the decision.
+  local id="$1" w="$2" pane word=""
+  pane=$(tmux capture-pane -t "$(_tmux_t "$id")" -p 2>/dev/null | tail -8)
+  if ! _session_hard_blocked "$id" "$pane"; then
+    case "${HARD_BLOCK_NO:-}" in
+      negative|carried-in)
+        echo "$(date '+%F %T') rescue-cancel $id: no longer blocked ($HARD_BLOCK_NO)" >> "$REG/swap.log"
+        _rescue_prev_restore "$id" "$w"
+        _swap_lastswap_restore "$id"; rm -f -- "$REG/$id.rescueprev"
+        return 1 ;;
+      running|draft|stalepress) word="$HARD_BLOCK_NO" ;;
+    esac
+  fi
+  [[ -z "$word" ]] && _swap_output_since "${CCD_SWAP_TX:-}" "${CCD_SWAP_TX_BYTES:-}" && word="output since decision"
+  [[ -n "$word" ]] || return 0
+  echo "$(date '+%F %T') rescue-backoff $id: $word" >> "$REG/swap.log"
+  _swap_lastswap_restore "$id"; rm -f -- "$REG/$id.rescueprev"
+  return 1
+}
+
+cmd_swap() {   # [--force] [--cross-pool] [--interrupt] id target-wrapper — move a session to another account, conversation intact.
   # Transcripts are plain JSONL with no account binding (validated 2026-07-03): carry the
   # session's transcripts into the target config dir, flip the registry wrapper, restart.
   # A manual swap is now pool-constrained exactly like an automatic one — see
@@ -27094,18 +27242,19 @@ cmd_swap() {   # [--force] [--cross-pool] id target-wrapper — move a session t
   # this loop the ONLY guard against the flag landing in a positional slot —
   # it must stay ABOVE the `local id=… target=…` reads below, never move
   # beneath them.
-  local force="" cross="" args=()
+  local force="" cross="" interrupt="" args=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --force)      force=1; shift ;;
       --cross-pool) cross=1; shift ;;
+      --interrupt)  interrupt=1; shift ;;   # consent to losing a MEASURED busy turn (D-5240); never covers an unreadable status
       --)      shift; args+=("$@"); break ;;
       *)       args+=("$1"); shift ;;
     esac
   done
   set -- "${args[@]}"    # bash >= 4.4 (the fleet host runs 5.2): an empty array here is
                          # not an unbound-variable error under `set -u`.
-  local id="${1:?usage: ccd swap [--force] [--cross-pool] <id> <target-wrapper>}" target="${2:?usage: ccd swap [--force] [--cross-pool] <id> <target-wrapper>}"
+  local id="${1:?usage: ccd swap [--force] [--cross-pool] [--interrupt] <id> <target-wrapper>}" target="${2:?usage: ccd swap [--force] [--cross-pool] [--interrupt] <id> <target-wrapper>}"
   _is_valid_wrapper "$target" || die "unknown wrapper '$target' (valid: ${CCRC_ACCOUNTS[*]})"
   [[ -f "$REG/$id.uuid" ]] || die "no registry for '$id'"
   _ws_expire_refuse_return "$id" swap   # a return during an expiry refuses, before anything is journaled (EXPIRE region)
@@ -27204,6 +27353,37 @@ cmd_swap() {   # [--force] [--cross-pool] id target-wrapper — move a session t
       die "pool-mismatch: $(_pool_mismatch_why "$target" "$pstate" "$project" "$pps") — to cross on purpose: ccd swap --cross-pool $id $target"
     fi
   fi
+  # ── THE MANUAL GATE (D-5240) ─────────────────────────────────────────────
+  # A swap the operator typed (or the PWA sent) reads the status the way
+  # `ws-archive` does, through `_ws_status`: `busy` refuses unless
+  # `--interrupt` consents to losing that turn, and a status that cannot be
+  # read refuses WHATEVER THE FLAGS — consent covers a measured turn only, and
+  # there is no override (stop the session first: with no pane `_ws_status`
+  # answers idle). HERE, above the detach arm, so a session swapping itself
+  # without consent is refused on its own stderr rather than told "detached"
+  # and refused later by a process nobody waits for. Inside the detached re-run
+  # the same gate runs again (a turn can start in the 2 s before it), and since
+  # nobody reads that stderr its refusal goes to swap.log and notify.sh — never
+  # through `_swap_refuse`, whose `swapblocked` stamp would hold auto-rescue for
+  # SWAPBLOCK_COOLDOWN over a failure that has nothing to do with carrying the
+  # conversation (the detach arm's own comment below rejects it for the same
+  # reason). The automatic arms have their own gates, at the act, below.
+  if [[ "${CCD_SWAP_AUTO:-}" != 1 ]]; then
+    local wst wrefuse=""
+    if ! wst=$(_ws_status "$id"); then wrefuse=status-unknown
+    elif [[ "$wst" != idle && -z "$interrupt" ]]; then wrefuse=session-busy
+    fi
+    if [[ -n "$wrefuse" ]]; then
+      if [[ -n "${CCD_SWAP_DETACHED:-}" ]]; then
+        echo "$(date '+%F %T') swap-refused-status $id: $cur -> $target ($wrefuse)" >> "$REG/swap.log"
+        [[ -x "$REG/notify.sh" ]] && "$REG/notify.sh" "cc swap NOT DONE: $id stays on $cur — $wrefuse" >/dev/null 2>&1
+        return 1
+      fi
+      [[ "$wrefuse" == session-busy ]] \
+        && die "session-busy: $id is working — a swap restarts it and loses the turn in progress and its background tasks; nothing was touched. To swap anyway: ccd swap --interrupt $id $target"
+      die "status-unknown: the status of $id could not be read, so a swap could lose a turn nobody measured; nothing was touched. --interrupt does not cover this — stop it first (ccd stop $id), then swap"
+    fi
+  fi
   # Invoked from inside the session being swapped (Claude's own Bash tool)? The swap kills
   # its caller mid-flight — detach an orphan to finish the job after we return. The
   # detached process re-enters this function and runs the pre-flight itself; its refusal
@@ -27226,9 +27406,9 @@ cmd_swap() {   # [--force] [--cross-pool] id target-wrapper — move a session t
     # lie about the cause (the conversation was never even looked for) and would
     # gate a legitimate auto-rescue for the next SWAPBLOCK_COOLDOWN seconds over
     # a failure that has nothing to do with carrying it.
-    if ! _svc_run_detached bash -c "sleep 2; CCD_SWAP_DETACHED=1 exec '$HOME/.local/bin/ccd' swap ${force:+--force} ${cross:+--cross-pool} '$id' '$target' >>'$REG/swap.log' 2>&1"; then
+    if ! _svc_run_detached bash -c "sleep 2; CCD_SWAP_DETACHED=1 exec '$HOME/.local/bin/ccd' swap ${force:+--force} ${cross:+--cross-pool} ${interrupt:+--interrupt} '$id' '$target' >>'$REG/swap.log' 2>&1"; then
       echo "$(date '+%F %T') detach FAILED for $id: $cur -> $target (systemd-run)" >> "$REG/swap.log"
-      echo "ccd: could not detach the swap of $id ($cur -> $target): systemd-run failed. Nothing was moved and this session is untouched — retry from OUTSIDE the session: ccd swap ${force:+--force }${cross:+--cross-pool }$id $target" >&2
+      echo "ccd: could not detach the swap of $id ($cur -> $target): systemd-run failed. Nothing was moved and this session is untouched — retry from OUTSIDE the session: ccd swap ${force:+--force }${cross:+--cross-pool }${interrupt:+--interrupt }$id $target" >&2
       return 1
     fi
     echo "detached: $id will restart under $target in a few seconds (this session dies with the swap — that's expected)"
@@ -27270,6 +27450,32 @@ cmd_swap() {   # [--force] [--cross-pool] id target-wrapper — move a session t
     _swap_refuse "$id" "$cur" "$target" "conversation $_CI_END_HID is live in background job $bgheld on $cur — a swap would resume a copy on $target while that job keeps writing here; let it finish or stop it ($cur stop $bgheld) first" 0 \
       "--force does not move it: --force accepts a transcript that cannot be found, and this is the opposite hazard — two writers. Swap again once the job has ended."
     return 1
+  fi
+  # ── THE AUTOMATIC GATES, AT THE ACT (D-5240) ───────────────────────────
+  # Last before the first write the stop path makes (`.choicekept`, then the
+  # stop), so a refusal leaves nothing behind but the `lastswap` it restores.
+  # An affinity move re-runs the decision's idle gate (`requeue`); a rescue
+  # re-confirms its block (`rescue-cancel`/`rescue-backoff`). Then, once they
+  # pass, the degrade stamp the decision carried in — the move is certain only
+  # here. A dispatch with no arm (an older supervisor's) passes as before.
+  if [[ "${CCD_SWAP_AUTO:-}" == 1 ]]; then
+    case "${CCD_SWAP_ARM:-}" in
+      affinity)
+        if ! _swap_idle_gate "$id"; then
+          echo "$(date '+%F %T') requeue $id: busy after jitter" >> "$REG/swap.log"
+          _swap_lastswap_restore "$id"
+          return 0
+        fi ;;
+      rescue)
+        _swap_rescue_act_gate "$id" "$cur" || return 0 ;;
+    esac
+    if ! _route_degrade_at_move "$id" "${CCD_SWAP_DFROM:-}" "${CCD_SWAP_DTO:-}"; then
+      _swap_lastswap_restore "$id"
+      [[ "${CCD_SWAP_ARM:-}" == rescue ]] && _rescue_prev_restore "$id" "$cur"
+      rm -f -- "$REG/$id.rescueprev"
+      return 1
+    fi
+    rm -f -- "$REG/$id.rescueprev"
   fi
   [[ -e "$REG/$id.choicekept" ]] || _operator_choice_keep "$id"   # a stop the spawn below follows: the operator's own /model and /effort reach the record first; a session already stopped and read (a marker) is not read again (§5.7)
   _svc_stop "claude-session@$id" 2>/dev/null   # first, or Restart=always resurrects under the old wrapper
@@ -27459,7 +27665,7 @@ cmd_swap_self() {   # target — run from INSIDE a cc session (terminal, web, or
   [[ -n "${TMUX:-}" ]] || die "swap-self only works from inside a cc tmux session"
   local id; id=$(tmux display-message -p '#S' 2>/dev/null); id="${id#cc-}"
   [[ -f "$REG/$id.uuid" ]] || die "current tmux session '$id' is not ccd-managed"
-  cmd_swap "$id" "$target"
+  cmd_swap --interrupt "$id" "$target"   # a session asking for its own move is busy by definition (D-5240)
 }
 
 cmd_prefer() {   # [--cross-pool] id wrapper — set a session's HOME account (auto-swap keeps it
