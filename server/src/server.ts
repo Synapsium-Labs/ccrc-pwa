@@ -95,7 +95,8 @@ import {
   type FloorState, type ProjectRow, type ProjectPoolsWire, type ProjectPoolWire, type ProjectRepoWire,
   parseRouteFields, programKickoffVerdict, routeFieldsOrNull, routeParseDetail, type RouteFields,
 } from '../../shared/api.js';
-import { ARCHIVE_REFUSALS, SERVER_CAPS } from '../../shared/api.js';
+import { ARCHIVE_REFUSALS, SERVER_CAPS, interruptRouteSource } from '../../shared/api.js';
+import { DrawerInterruptThrottle, drawerInterruptSource, recordInterrupt } from './interruptlog.js';
 import type { Dialog } from '../../shared/api.js';
 import {
   archiveFlags, archiveOutcome, busyReadFailsClosed, decideArchive, frameRowVerdict, refusedAtStop, worktreeOf, type ArchiveMeasure,
@@ -1769,6 +1770,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return Number.isFinite(n) && n > 0 ? Math.floor(n) : dflt;
   };
 
+  const drawerInterrupts = new DrawerInterruptThrottle();   // D-5237: one lone ESC / Ctrl-C row per session per 2 s
   app.get('/ws/pty/:id', { websocket: true }, (socket, req) => {
     const { id } = req.params as { id: string };
     const q = req.query as { cols?: string; rows?: string };
@@ -1847,8 +1849,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     socket.on('message', (raw) => {
       try {
         const m = JSON.parse(String(raw)) as { type?: unknown; data?: unknown; cols?: unknown; rows?: unknown };
-        if (m.type === 'input' && typeof m.data === 'string') p.write(m.data);
-        else if (m.type === 'resize' && typeof m.cols === 'number' && typeof m.rows === 'number') {
+        if (m.type === 'input' && typeof m.data === 'string') {
+          p.write(m.data);   // D-5237: the bytes pass through unchanged; a lone ESC or Ctrl-C is also recorded
+          const src = drawerInterruptSource(m.data);
+          if (src !== null && drawerInterrupts.admit(id, Date.now())) recordInterrupt(deps, id, src, 'sent');
+        } else if (m.type === 'resize' && typeof m.cols === 'number' && typeof m.rows === 'number') {
           p.resize(m.cols, m.rows);
         }
       } catch { /* ignore malformed frames */ }
@@ -2423,6 +2428,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       }
       return interruptVerdict({ word, ...(await liveRowWithHookFor(turnReads, read.record, identity.uuid)) });
     });
+    // D-5237: every answer is recorded with the client's source (anything else is `unknown`) and its outcome; never pushed.
+    recordInterrupt(deps, id, interruptRouteSource((req.body as { source?: unknown } | null)?.source), res.ok ? 'sent' : res.error);
     return res.ok ? res : reply.code(409).send(res);
   });
 

@@ -5,7 +5,7 @@
 import type { AccountsResponse, AckAnswer, ApplyUpdateBody, AutoMode, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, MoveSkipWhy, NotifyEvent, NotifyMode, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, RollbackUpdateBody, RouteField, RouteFields, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, UpdateChannel, UpdateRouteError, UpdatesView, WsAudit } from '../../../shared/api';
 import { raiseAuthLostFrom } from './auth';
 import { ARCHIVE_REFUSALS, isArchiveRefusal, type ArchiveAnswer, type ArchiveBody, type ArchiveRefusal } from '../../../shared/api';
-import type { Dialog, DialogAnswered, DialogTabRequest } from '../../../shared/api';
+import type { Dialog, DialogAnswered, DialogTabRequest, InterruptRouteSource } from '../../../shared/api';
 
 import { isNodeRole } from '../../../shared/node-role';
 import { TOKEN_TRANSPORTS } from '../../../shared/agent-protocol';
@@ -1190,7 +1190,8 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     claims: (opts?: { all?: boolean }): Promise<{ claims: ClaimSummary[] }> =>
       getJson<{ claims: ClaimSummary[] }>(
         opts?.all === true ? '/api/claims?all=1' : '/api/claims'),
-    interrupt: (id: string) => post(`${sid(id)}/interrupt`),
+    /** D-5237: `source` names the control that sent it (the keycap, the Escape key, a Deny); the server records it. */
+    interrupt: (id: string, source: InterruptRouteSource) => post(`${sid(id)}/interrupt`, { source }),
     /** `POST /api/coord/pause` (spec §4.2) — request `{paused}`, response
      *  `{ok:true, requested}` on success (the field is `requested`, never
      *  `paused`: the route ran a verb, it did not read the marker back).
