@@ -11,6 +11,8 @@ import path from 'node:path';
 import { mungePath } from '../src/munge.js';
 import { eventsOf } from './lifecycleHelpers.js';
 
+/** A pane tmux cannot find — `_ws_status` reads it idle (D-5240's manual swap gate). */
+const GONE = 'case "${1:-}" in has-session) echo "can\'t find session: x" >&2; return 1 ;; esac; return 0;';
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('sync-uuid'); });
 afterEach(() => { h.cleanup(); });
@@ -1113,7 +1115,9 @@ describe('D-4944: every resume follows the chain before it resumes', () => {
 
   /** cmd_swap's own teardown and carry, stubbed to calls a test can read — the
    *  pattern `ccd-account-ok.test.ts` drives the verb with. */
-  const SWAP_STUBS = 'sleep() { :; }; tmux() { :; };\n'
+  // The pane is GONE on `has-session`: D-5240's manual gate reads `_ws_status`
+  // first, and `tmux() { :; }` alone is an alive pane with no pid (unreadable).
+  const SWAP_STUBS = `sleep() { :; }; tmux() { ${GONE} };\n`
     + '_svc_stop() { echo "svc_stop $*" >> "$HOME/ccd-calls"; }; _svc_start() { :; };\n'
     + '_swap_beat() { :; }; _swap_beat_stop() { :; }; _swap_carry_sidecars() { :; };\n'
     + '_swap_carry_jsonl() { echo "carry $3" >> "$HOME/ccd-calls"; return 0; };\n';
@@ -1578,7 +1582,7 @@ describe('#189 round 2 (RR-1): no unwritten successor ever reaches the registry'
     mkdirSync(dir, { recursive: true });
     writeFileSync(path.join(dir, `${A}.jsonl`), `${turnLine('one')}${marker(A, C)}`);
     jobStateAt(JOB, 'working');
-    const out = h.sh(`sleep() { :; }; tmux() { :; }; _svc_stop() { echo svc_stop >> "$HOME/ccd-calls"; }; `
+    const out = h.sh(`sleep() { :; }; tmux() { ${GONE} }; _svc_stop() { echo svc_stop >> "$HOME/ccd-calls"; }; `
       + `out=$( { cmd_swap ${swapId} claude-a; } 2>&1 ); echo "RC:$?"; printf '%s\\n' "$out"`);
     expect(pick(out, 'RC')).toBe('1');
     expect(h.reg(swapId, 'swapblocked') ?? '').toContain(`conversation ${C}`);

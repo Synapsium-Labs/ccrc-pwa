@@ -68,7 +68,7 @@ const BLOCKED = `
              capture-pane) echo "API Error: 429 Too Many Requests" ;;
              list-panes)   echo ${PANE_PID} ;;
            esac; return 0; };
-  _dispatch_swap() { echo "dispatch $1 -> $2" >> "$REG/swap.log"; };
+  _dispatch_swap() { echo "dispatch $1 -> $2" >> "$REG/swap.log"; echo "rung $3 \${6:-∅} -> \${7:-∅}" >> "$REG/swap.log"; };
 `;
 const plantNotify = (): void => {
   fs.writeFileSync(path.join(h.home, '.cc-sessions', 'notify.sh'),
@@ -104,7 +104,7 @@ const QUIET = `
              capture-pane) printf '%s\\n' "❯ " ;;
              list-panes)   echo ${PANE_PID} ;;
            esac; return 0; };
-  _dispatch_swap() { echo "dispatch $1 -> $2" >> "$REG/swap.log"; };
+  _dispatch_swap() { echo "dispatch $1 -> $2" >> "$REG/swap.log"; echo "rung $3 \${6:-∅} -> \${7:-∅}" >> "$REG/swap.log"; };
 `;
 const quietTick = (): string => h.sh(`${QUIET} _auto_swap_check ${ID}`);
 /** `status: idle`, touched long before SWAP_CEIL_QUIET — the last two affinity
@@ -253,40 +253,23 @@ describe('the tick spends rc 5 and rc 6', () => {
     expect(h.reg(ID, 'degraded'), 'and nobody degrades on a fabricated fact').toBeNull();
   });
 
-  it('rc 6 stamps `degraded`, journals a route row with actor ccd, and dispatches to the destination', () => {
+  it('rc 6 dispatches to the destination carrying the rung, and stamps nothing at the decision (D-5240)', () => {
+    // The stamp is the ACT's now (`cmd_swap`, after its act-time gates;
+    // `ccd-swap-guards.test.ts` pins the stamp, its route row and its order):
+    // the transient unit can still re-queue or cancel this move.
     limits('claude', 99, 99); limits('claude-a', 20, 20); seedRow('claude', 'fable');
     sweep({ claude: 0.5, 'claude-a': 0.5, 'claude-b': 0.6, 'claude-d': 0.7 });
     plantNotify();
     tick();
-    expect(h.reg(ID, 'degraded')).toBe('opus');
-    const rows = eventsOf(h.home, 'route');
-    expect(rows.length).toBe(1);
-    expect(decOf(rows[0]!)).toMatchObject({ actor: 'ccd' });
-    expect(String(rows[0]!['detail'])).toBe('degraded: ∅ -> opus');
-    expect(swapLog()).toMatch(/degrade claude-demo: fable -> opus/);
     expect(swapLog()).toContain('dispatch claude-demo -> claude-a');
+    expect(swapLog(), 'the rescue arm carries the rung into the unit').toContain('rung rescue fable -> opus');
+    expect(h.reg(ID, 'degraded'), 'nothing stamped at the decision').toBeNull();
+    expect(eventsOf(h.home, 'route').length).toBe(0);
   });
 
-  it('a `degraded` stamp that cannot be WRITTEN stands still: no dispatch, no row, one line saying so', () => {
-    // Ruling S3-R5. `_route_degrade` returns 1 when `_reg_set` fails, and the arm used to
-    // discard that rc: the session was then dispatched to a lane chosen for the rung BELOW
-    // while the record still said `fable`, so `_spawn_start` would compose `--model fable` on
-    // a lane just measured unable to serve it. The failure is planted the way `_reg_set` can
-    // actually fail — its `_plat_mv_notdir` refuses to overwrite a DIRECTORY with a file, and
-    // `_reg_get`'s `-f` guard makes the standing read answer "absent" over the same inode.
-    limits('claude', 99, 99); limits('claude-a', 20, 20); seedRow('claude', 'fable');
-    sweep({ claude: 0.5, 'claude-a': 0.5, 'claude-b': 0.6, 'claude-d': 0.7 });
-    const stamp = path.join(h.home, '.cc-sessions', `${ID}.degraded`);
-    fs.mkdirSync(stamp);
-    plantNotify();
-    tick('tick-stderr');
-    expect(swapLog()).toContain(`degrade-unwritable ${ID}: fable -> opus (stamp not written; standing still)`);
-    expect(fs.statSync(stamp).isDirectory(), 'nothing was written over the unwritable field').toBe(true);
-    expect(eventsOf(h.home, 'route').length, 'no journal row for a stamp that did not land').toBe(0);
-    expect(swapLog(), 'and the move itself never happened').not.toMatch(/dispatch |auto-rescue| degrade claude-demo:/);
-    // standing still is not stranding: the next tick re-measures and retries
-    expect(fs.existsSync(path.join(h.home, '.cc-sessions', `${ID}.stranded`))).toBe(false);
-  });
+  // A `degraded` stamp that cannot be WRITTEN stands still (ruling S3-R5):
+  // since D-5240 that is the ACT's arm, pinned in `ccd-swap-guards.test.ts`
+  // ("a stamp that cannot be written stands still", and its rescue twin).
 });
 
 // `_route_restore` is the OTHER writer of `degraded`, and Task 6's settle path
@@ -352,8 +335,9 @@ describe('the rc-6 degrade is stamped at the MOVE, not at the decision', () => {
     seedRc6Affinity(); idleStatus();
     quietTick();
     expect(swapLog(), 'the move happened').toContain(`dispatch ${ID} -> claude-a`);
-    expect(h.reg(ID, 'degraded'), 'and the class served was stamped').toBe('opus');
-    expect(String(eventsOf(h.home, 'route')[0]!['detail'])).toBe('degraded: ∅ -> opus');
+    // D-5240: the rung rides into the unit; the act stamps it after its gates.
+    expect(swapLog(), 'and it carries the rung').toContain('rung affinity fable -> opus');
+    expect(h.reg(ID, 'degraded'), 'never stamped at the decision').toBeNull();
   });
 
   it('a HELD session: rc 6 is decided, the hold declines the move, and NOTHING is stamped', () => {

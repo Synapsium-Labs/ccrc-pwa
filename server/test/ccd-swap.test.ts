@@ -32,8 +32,14 @@ const EMPTY_TEXT = '{"message":{"content":[{"type":"text","text":""}]}}';
  *  depends on it. TMUX is emptied at the call site so the detached-self-swap
  *  branch — which re-execs ccd under `systemd-run` — can never be taken from a
  *  suite that may itself be running inside tmux. */
+/** D-5240: a manual swap reads `_ws_status` first and refuses an unreadable
+ *  one, and a logging stub that answers `has-session` 0 with no pane pid IS
+ *  unreadable. These cases are about the carry, not the gate, so the pane is
+ *  GONE (`can't find session`), which `_ws_status` reads as idle — the gate's
+ *  own cases live in `ccd-swap-guards.test.ts`. */
+const NO_PANE = 'case "${1:-}" in has-session) echo "can\'t find session: x" >&2; return 1 ;; esac;';
 const SWAP = 'systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; }; launchctl() { echo "launchctl $*" >> "$HOME/ccd-calls"; }; '
-  + 'tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; }; sleep() { :; };';
+  + `tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${NO_PANE} }; sleep() { :; };`;
 
 const runSwap = (target = 'claude-d'): string =>
   h.sh(`${SWAP} cmd_swap ${ID} ${target}`, { TMUX: '' });
@@ -252,6 +258,9 @@ describe('cmd_swap keeps carrying the task list', () => {
     plant('.claude', mdir, 'HISTORY\n');
     runSwap();
     expect(asManagerCalls(h.calls())).toEqual([
+      // D-5240's manual gate reads the status first (`_ws_status`), and
+      // its probe is the one tmux call ahead of the teardown.
+      'tmux has-session -t =cc-claude-demo:',
       'systemctl --user stop claude-session@claude-demo',
       'tmux kill-session -t =cc-claude-demo:',
       // cmd_swap's own `_lc_done` (task 18) is the first `_lc_emit` in this
@@ -278,7 +287,7 @@ describe('the detached self-swap answers for its own dispatch', () => {
   const SELF = (runRc: number): string =>
     `systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; }; launchctl() { echo "launchctl $*" >> "$HOME/ccd-calls"; }; sleep() { :; };
      tmux() { case "\${1:-}" in display-message) echo "cc-${ID}";; esac;
-       echo "tmux $*" >> "$HOME/ccd-calls"; return 0; };
+       echo "tmux $*" >> "$HOME/ccd-calls"; ${NO_PANE} return 0; };
      systemd-run() { echo "systemd-run $*" >> "$HOME/ccd-calls"; return ${runRc}; };
      # THE SEAM, not the tool: _svc_run_detached is what ccd calls to fire a
      # detached job, and only its Linux arm is systemd-run. On macOS there is
@@ -339,7 +348,7 @@ describe('the swap heartbeats WHILE it carries, not just around the carry', () =
   // is deliberately NOT stubbed here.
   const SLOW = `systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; };
   launchctl() { echo "launchctl $*" >> "$HOME/ccd-calls"; }; 
-    tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; };
+    tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${NO_PANE} };
     SWAP_BEAT_INTERVAL=1
     cp() { if [[ -z "\${SLOWED:-}" ]]; then SLOWED=1; command sleep 7; fi; command cp "$@"; };`;
 
@@ -434,7 +443,7 @@ describe('the swap heartbeats WHILE it carries, not just around the carry', () =
    *  `cmd_swap`'s own `sleep 1` flush is still skipped. */
   const BEAT_ALIVE = `systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; };
   launchctl() { echo "launchctl $*" >> "$HOME/ccd-calls"; }; 
-    tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; };
+    tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${NO_PANE} };
     SWAP_BEAT_INTERVAL=3
     sleep() { [[ "\${1:-}" == "$SWAP_BEAT_INTERVAL" ]] && command sleep "$1"; return 0; };`;
 
