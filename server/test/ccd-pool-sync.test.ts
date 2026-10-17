@@ -1,11 +1,18 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { makeCcdHarness, ghContainedEnv } from './ccdWsHelpers.js';
-import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync, readdirSync } from 'node:fs';
+import { makeCcdHarness, ghContainedEnv, stubContainedTool } from './ccdWsHelpers.js';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, rmSync } from 'node:fs';
 import { execFileSync, spawnSync } from 'node:child_process';
 import path from 'node:path';
 
 const h = makeCcdHarness('pool-sync');
-afterEach(() => h.cleanup());
+// Wave 18 (D-5249): every curl here is a stub or the poison. A test the poison answered had its stub displaced, or
+// ran a curl with none, and its assertions can stay green on the poison's 97 (a row that asserts only an absence
+// does). So the poison's record is read before the cleanup, the cleanup runs, and a record is red.
+afterEach(() => {
+  const ran = existsSync(path.join(h.home, 'curl-poison'));
+  h.cleanup();
+  expect(ran, 'the curl poison ran: a curl stub was displaced, or a curl ran with no stub').toBe(false);
+});
 
 /** Plant a fake curl that answers `body` with `status`, and record its argv.
  *  The brief's own version of this stub captured stdin but NOT argv, despite
@@ -34,14 +41,9 @@ for a in "$@"; do
 done
 `;
 function stubCurl(body: string, status = '200'): string {
-  const bin = path.join(h.home, 'bin');
-  mkdirSync(bin, { recursive: true });
-  const p = path.join(bin, 'curl');
-  writeFileSync(p,
-    CURL_STUB_HEAD + `printf '%s' '${body}' > "$outfile"\nprintf '%s' '${status}'\n`,
-    'utf8');
-  chmodSync(p, 0o755);
-  return bin;
+  // Through the named door (wave 18, D-5249): INTO harnessBin, where the stub REPLACES the curl poison.
+  return path.dirname(stubContainedTool(h.home, 'curl',
+    CURL_STUB_HEAD + `printf '%s' '${body}' > "$outfile"\nprintf '%s' '${status}'\n`));
 }
 function seedConfig(): void {
   mkdirSync(path.join(h.home, '.ccrc'), { recursive: true });
@@ -57,9 +59,13 @@ const curlArgv = (): string => readFileSync(path.join(h.home, 'curl.argv'), 'utf
 /** CONTAINMENT, and it is `ccd-workspaces.test.ts`'s source scan that requires
  *  it of every bash call site in a ccd test file — not a judgement per call
  *  site about what the child "could" reach. `ghContainedEnv` PREPENDS its own
- *  bin, so the `gh` poison cannot be displaced by the stub PATH built below;
- *  `$HOME/bin` (the curl stub) stays second and still wins for `curl`, which
- *  the poison directory does not hold. `ccd-account-auth.test.ts` is the
+ *  bin, so the `gh` poison cannot be displaced by the stub PATH built below.
+ *  The curl stub is written INTO that bin (`stubContainedTool`), where it
+ *  REPLACES the curl poison (D-5249): a stub in a directory of its own would
+ *  lose to the poison on ordering, which is how "writes the projection from a
+ *  200" went red. Each runner asks `net` itself: this file's harness is
+ *  module-level and the cleanup removes its HOME after every test, so the plant
+ *  `makeCcdHarness` made at creation is gone after the first. `ccd-account-auth.test.ts` is the
  *  precedent — the other sibling executable, contained the same way at every
  *  one of its call sites.
  *
@@ -79,7 +85,7 @@ const curlArgv = (): string => readFileSync(path.join(h.home, 'curl.argv'), 'utf
  *  in this suite wants a functional service manager. */
 const run = (bin: string): { rc: number; out: string } => {
   const env = ghContainedEnv(h.home, { ...process.env, HOME: h.home, PATH: `${bin}:${process.env.PATH}` },
-    { systemd: true, tmux: true });
+    { systemd: true, tmux: true, net: true });
   try {
     const out = execFileSync('bash', [path.resolve('../ccd/ccd-pool-sync')], {
       encoding: 'utf8', env,
@@ -372,7 +378,7 @@ describe('ccd-pool-sync', () => {
     // and the parent's `gh` credentials before, for a listing that needs
     // neither.
     const env = ghContainedEnv(h.home, { ...process.env, HOME: h.home },
-      { systemd: true, tmux: true });
+      { systemd: true, tmux: true, net: true });
     const strays = execFileSync('bash', ['-c', `ls -a ${reg} | grep -c 'pool-epoch\\.' || true`],
       { encoding: 'utf8', env }).trim();
     expect(strays).toBe('0');
@@ -388,7 +394,7 @@ describe('ccd-pool-sync', () => {
    *  ccd-workspaces scan reads this window, not a helper's). */
   const runFull = (bin: string, extra: NodeJS.ProcessEnv = {}): { rc: number; out: string; err: string } => {
     const env = ghContainedEnv(h.home, { ...process.env, CCRC_POOL_SYNC_TIMEOUT: undefined, ...extra, HOME: h.home, PATH: `${bin}:${process.env.PATH}` },
-      { systemd: true, tmux: true });
+      { systemd: true, tmux: true, net: true });
     const r = spawnSync('bash', [path.resolve('../ccd/ccd-pool-sync')], { encoding: 'utf8', env });
     return { rc: r.status ?? -1, out: r.stdout ?? '', err: r.stderr ?? '' };
   };
@@ -413,11 +419,8 @@ describe('ccd-pool-sync', () => {
     // its length to RAW_CAP would pass this case unchanged, so the memory bound
     // is pinned by nothing (`ccd-pool-sync` says the same beside the read).
     const body = JSON.stringify({ epoch: 1, issuedAt: 1, leaseUntil: 9999999999, accounts: {}, pad: 'x'.repeat(1_100_000) });
-    const bin = path.join(h.home, 'bin');
-    mkdirSync(bin, { recursive: true });
     writeFileSync(path.join(h.home, 'oversized-body.json'), body, 'utf8');
-    writeFileSync(path.join(bin, 'curl'), `${CURL_STUB_HEAD}cat "$HOME/oversized-body.json" > "$outfile"\nprintf '200'\n`, 'utf8');
-    chmodSync(path.join(bin, 'curl'), 0o755);
+    const bin = path.dirname(stubContainedTool(h.home, 'curl', `${CURL_STUB_HEAD}cat "$HOME/oversized-body.json" > "$outfile"\nprintf '200'\n`));
     const r = runFull(bin);
     expect(r.rc).not.toBe(0);
     expect(r.err).toContain('response body is over the 1048576-byte cap');
@@ -427,21 +430,15 @@ describe('ccd-pool-sync', () => {
 
   it('a body just under the cap is still read whole (the bound is a bound, not a cut)', () => {
     const body = JSON.stringify({ epoch: 5, issuedAt: 1, leaseUntil: 9999999999, accounts: {}, pad: 'x'.repeat(900_000) });
-    const bin = path.join(h.home, 'bin');
-    mkdirSync(bin, { recursive: true });
     writeFileSync(path.join(h.home, 'oversized-body.json'), body, 'utf8');
-    writeFileSync(path.join(bin, 'curl'), `${CURL_STUB_HEAD}cat "$HOME/oversized-body.json" > "$outfile"\nprintf '200'\n`, 'utf8');
-    chmodSync(path.join(bin, 'curl'), 0o755);
+    const bin = path.dirname(stubContainedTool(h.home, 'curl', `${CURL_STUB_HEAD}cat "$HOME/oversized-body.json" > "$outfile"\nprintf '200'\n`));
     const r = runFull(bin);
     expect(r.rc, r.err).toBe(0);
     expect(doc()).toBe('epoch 5\nissued 1\nlease 9999999999\nend\n');
   });
 
   it('names curl 63 (the size bound fired) as its own sentence', () => {
-    const bin = path.join(h.home, 'bin');
-    mkdirSync(bin, { recursive: true });
-    writeFileSync(path.join(bin, 'curl'), `${CURL_STUB_HEAD}exit 63\n`, 'utf8');
-    chmodSync(path.join(bin, 'curl'), 0o755);
+    const bin = path.dirname(stubContainedTool(h.home, 'curl', `${CURL_STUB_HEAD}exit 63\n`));
     const r = runFull(bin);
     expect(r.rc).toBe(1);
     expect(r.err).toContain('unmeasured — curl exited 63 (response exceeded the 1048576-byte cap)');
@@ -568,15 +565,23 @@ describe('ccd-pool-sync', () => {
       accounts[id] = { pools: ['pool-a'] };
     }
     const body = JSON.stringify({ epoch: 1, issuedAt: 1, leaseUntil: 9999999999, accounts });
-    const bin = path.join(h.home, 'bin');
-    mkdirSync(bin, { recursive: true });
     const bodyFile = path.join(h.home, 'oversized-body.json');
     writeFileSync(bodyFile, body, 'utf8');
-    writeFileSync(path.join(bin, 'curl'),
-      `${CURL_STUB_HEAD}cat "$HOME/oversized-body.json" > "$outfile"\nprintf '200'\n`,
-      'utf8');
-    chmodSync(path.join(bin, 'curl'), 0o755);
+    const bin = path.dirname(stubContainedTool(h.home, 'curl',
+      `${CURL_STUB_HEAD}cat "$HOME/oversized-body.json" > "$outfile"\nprintf '200'\n`));
     expect(run(bin).rc).not.toBe(0);
     expect(existsSync(path.join(h.home, '.cc-sessions', 'pool-epoch'))).toBe(false);
+  });
+
+  it('a curl with no stub is the poison, even after a cleanup removed the creation-time plant (wave 18, D-5249)', () => {
+    // This file's harness is module-level, and the afterEach cleanup removes its HOME: the plant makeCcdHarness
+    // made at creation is gone for every test after the first. The runner's own `net: true` plants it again.
+    h.cleanup();
+    seedConfig();
+    const bin = path.join(h.home, 'no-stub-bin');
+    mkdirSync(bin, { recursive: true });
+    expect(run(bin).rc).not.toBe(0);
+    expect(existsSync(path.join(h.home, 'curl-poison')), 'the poison answered the curl').toBe(true);
+    rmSync(path.join(h.home, 'curl-poison')); // meant to run here: the afterEach guard reads this record
   });
 });
