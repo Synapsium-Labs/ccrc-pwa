@@ -1285,9 +1285,10 @@ describe('lane.json (spec §5.4) — the codex lane manifest', () => {
   });
 
   it('on a lane that is not exec.kind codex, writes no manifest and answers lane: null', () => {
-    // `router` is `external` carrying a CODEX registry, as today's live Codex
-    // lanes are (the next case adds their provider and telemetry). It has no
-    // auth dir or ports to write, and nothing may guess them.
+    // `router` is `external` carrying a CODEX registry, as the live Codex
+    // lanes were before the cutover (retired by Plan 4; the next case adds
+    // their provider and telemetry). It has no auth dir or ports to write, and
+    // nothing may guess them.
     plantCodex('router');
     const r = op('materialise', '--file', rosterPath(), '--id', 'router');
     expect(r.code).toBe(0);
@@ -1295,7 +1296,7 @@ describe('lane.json (spec §5.4) — the codex lane manifest', () => {
     expect(fs.existsSync(path.join(home, '.ccrc', 'codex'))).toBe(false);
   });
 
-  it('on a LIVE-shaped external Codex row (provider openai, telemetry codex), writes no manifest either', () => {
+  it('on an external row carrying a codex registry, in the pre-cutover shape (provider openai, telemetry codex), writes no manifest either', () => {
     // A gate on `telemetry === 'codex'` or on `exec.provider === 'openai'`
     // passes the `router` case above and would write THIS row a manifest with no
     // authDir and no ports — `JSON.stringify` drops the undefined fields.

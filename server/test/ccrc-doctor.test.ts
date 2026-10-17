@@ -10986,10 +10986,12 @@ describe('ccrc doctor: accounts', () => {
   });
 
   it('an external row in the live Codex lanes\' shape is judged exactly as before: the arm keys on exec.kind, never provider or telemetry', () => {
-    // `ext-a` is a fixture id in the live shape (external, provider openai,
-    // telemetry codex) — plus a hand-edited proxyPort the parser would refuse
-    // on this kind, so an arm keyed on anything but `exec.kind` WOULD build a
-    // loopback URL here and this case would see it.
+    // `ext-a` is a fixture id in the shape the live lanes had before the
+    // cutover (external, provider openai, telemetry codex; retired by Plan 4;
+    // the title keeps the words spec §20.10 quotes) — plus a hand-edited
+    // proxyPort the parser would refuse on this kind, so an arm keyed on
+    // anything but `exec.kind` WOULD build a loopback URL here and this case
+    // would see it.
     const home = healthy('ccrc-doctor-accounts-codex-external-');
     writeRoster(home, [{
       id: 'ext-a', configDirSuffix: '.claude-ext-a',

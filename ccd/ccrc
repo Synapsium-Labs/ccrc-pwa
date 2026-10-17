@@ -10499,8 +10499,8 @@ _models_litellm_lane_held() {   # <codex accountId> -> prints exactly one JSON o
 # for a roster that cannot say (Plan 3b Task A1, D-4046), the lane library's
 # own word, `roster-invalid` or `missing-dependency`, as `_codex_row`'s
 # refusals are propagated, with its line already on stderr. `not-codex-kind`
-# is this dispatcher's own word: models-op's `not-a-codex-lane` keeps its
-# meaning, a codex-kind row whose registry is absent or not a codex probe.
+# is this dispatcher's own word: models-op's `not-a-codex-lane` keeps its meaning, a row whose
+# registry is absent or not a codex probe (through this dispatcher, only a codex-kind row reaches it).
 # A row that is not codex-kind used to take the EXTERNAL arm, which rendered
 # its model list into the other repository's box-global config and stopped
 # that repository's proxy through that repository's own launcher. The arm left
