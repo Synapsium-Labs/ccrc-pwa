@@ -250,6 +250,34 @@ describe('assembleFleet: an unmeasured live status file is not a session at rest
     const status = await liveStatus(io, loadConfig({ CCRC_HOME: home }), new Tmux(run), ID);
     expect(status).toBe('idle');
   });
+
+  // D-5234: the read one step earlier. `hasSession` says the pane is alive,
+  // and `panePid` comes back null (`list-panes` failed: a loaded tmux server, a
+  // dropped round trip). Nothing was measured about the session, so the card
+  // takes D-115's shape — `busy`, and declared unmeasured so the watcher never
+  // spends it as an edge — rather than the `alive` default `idle`.
+  const failedPid = (): { home: string; run: Runner } => {
+    const { home, run: healthy } = setup();
+    const run: Runner = async (cmd, args) => (args[0] === 'list-panes'
+      ? { code: 1, stdout: '', stderr: 'server exited unexpectedly' }
+      : healthy(cmd, args));
+    return { home, run };
+  };
+
+  it('D-5234: an alive pane whose panePid read fails is busy and statusUnmeasured, never a measured idle', async () => {
+    const { home, run } = failedPid();
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1784600000);
+    const s = fleet.find((x) => x.id === ID)!;
+    expect(s.status).toBe('busy');
+    expect(s.statusUnmeasured).toBe(true);
+    expect(s.statusUpdatedAt).toBeNull();
+    expect(s.version).toBeNull();
+  });
+
+  it('D-5234: … and liveStatus on the SAME failed panePid still answers idle, so the interrupt route still refuses', async () => {
+    const { home, run } = failedPid();
+    expect(await liveStatus(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), ID)).toBe('idle');
+  });
 });
 
 describe('branch precedence', () => {
