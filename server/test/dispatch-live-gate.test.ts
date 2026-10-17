@@ -230,6 +230,18 @@ describe('the dispatch /clear gate needs the live file measured idle (D-5238)', 
     expect(b.cleared()).toBe(false);
     expect(b.state()).toBe('planned');
   });
+
+  it('the live file turns unreadable between the gate and the /clear → status-unmeasurable at the act, no /clear typed', async () => {
+    const b = await box({ onCall: (args) => { if (args[0] === 'ws-hold') unreadableLive(b.home); } });
+    hookDone(b.home);
+    live(b.home, 'idle');
+    const res = await b.dispatch();
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, refused: 'status-unmeasurable' });
+    expect(b.calls.some((c) => c[0] === 'ws-hold')).toBe(true);
+    expect(b.cleared()).toBe(false);
+    expect(b.state()).toBe('planned');
+  });
 });
 
 describe('a pane this dispatch started is waited for outside coordMutex (D-5238)', () => {

@@ -1474,7 +1474,7 @@ describe('POST /api/runs/:id/dispatch', () => {
     expect(okRun(w.coord.run(id))?.state).toBe('dispatched');
   });
 
-  it('the honest-stale case — a listable registry with no row for the session — is refused by the live gate, untouched', async () => {
+  it('the honest-stale case — a listable registry with no row for the session — is refused by the live gate, untouched (D-5273)', async () => {
     // `record === undefined` on a LISTABLE registry is still tolerated by the
     // project and child gates (`DoneRun`'s own docstring: refusing on a project
     // not measured would be the same error in the other direction). But D-5238's

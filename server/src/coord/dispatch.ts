@@ -930,7 +930,7 @@ export async function dispatchRun(
     // `status-unmeasurable` — EXCEPT after an `ensure` that started the pane, whose live file may simply not exist
     // yet: that answers `worker-starting` at once, with nothing after the `ensure` done, and the route waits OUTSIDE
     // `coordMutex` (this function never waits). An honest-stale row (`record` undefined on a listable registry) has
-    // no wrapper to read a live file under, so nothing can be measured and it is `status-unmeasurable`.
+    // no wrapper to read a live file under, so nothing can be measured and it is `status-unmeasurable` (D-5273).
     if (record === undefined || recordIdentity === null) {
       return { ok: false, kind: 'refused', code: 'status-unmeasurable' };
     }

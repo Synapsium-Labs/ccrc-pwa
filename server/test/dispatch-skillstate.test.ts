@@ -181,7 +181,7 @@ describe('the dispatch preflight measures the worker skill and never refuses', (
       turnVerdict: async () => 'idle' as const,
     } as DispatchRunDeps;
 
-    // D-5238: with no row there is no wrapper to read a live file under, so the live `/clear` gate cannot measure
+    // D-5238, D-5273: with no row there is no wrapper to read a live file under, so the live `/clear` gate cannot measure
     // the turn and refuses `status-unmeasurable` before the hold — the honest-stale row no longer reaches the
     // preflight. The invariant this case pins still holds on that path: nobody asked the roster about a wrapper.
     const out = await dispatchRun(deps, opened.id, 'go', undefined);
