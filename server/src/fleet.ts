@@ -27,8 +27,8 @@ import { foldLastRuns, releasedFrom, type ReleasedLookup } from './coord/release
 // reader) imports this module, so the constants could not stay there.
 import { ASK_HELD_CHIP_MAX_MS } from './askwindow.js';
 
-/** `FleetSession.askSummary`'s ceiling — a fleet card row, not a transcript. */
-const ASK_SUMMARY_MAX_LEN = 80;
+/** `FleetSession.askSummary`'s ceiling — a fleet card row, not a transcript; an ask push's too (D-5356). */
+export const ASK_SUMMARY_MAX_LEN = 80;
 /** D-5231, D-5272: the hook events whose `done` can hold the delegated pair —
  *  the main `Stop` that writes it, and the two subagent events that carry it. */
 const BACKGROUND_CARRIER_EVENTS: ReadonlySet<string> = new Set(['Stop', 'SubagentStart', 'SubagentStop']);

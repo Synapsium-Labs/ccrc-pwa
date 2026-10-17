@@ -6288,3 +6288,46 @@ describe('the server\'s capability words, their file and its lease are declared 
     }
   });
 });
+
+// D-5302 (plan docs/superpowers/plans/2026-10-17-coordinator-first-routing.md, Task 3; spec §9). APPENDED. An ask's
+// push body is built in ONE place, `askPushBody` in `server/src/askbody.ts`, from the hook envelope; both raise sites
+// pushed `dialog.title || 'Claude has a question'` and 14 of 36 measured bodies were a lone border glyph. The fallback
+// string is spelled on a code line there and nowhere else, `askPushBody` is defined there and nowhere else, and no
+// raise site in `watch.ts` reaches for `dialog.title` as a body any more. Code lines only (`stallCode`).
+describe('the ask push body is built once, in server/src/askbody.ts (D-5302)', () => {
+  const FALLBACK = /Claude has a question/;
+  const DEFINES = /\bfunction\s+askPushBody\b|\baskPushBody\s*=\s*(?:\(|function\b)/;
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+
+  it('CONTROL: the patterns see a string and a definition, and pass over comment lines', () => {
+    expect(FALLBACK.test("body: dialog.title || 'Claude has a question',")).toBe(true);
+    expect(DEFINES.test('export function askPushBody(hs, dialog) {')).toBe(true);
+    expect(DEFINES.test('const askPushBody = (hs, dialog) => x;')).toBe(true);
+    expect(stallCodeText("// the push says 'Claude has a question'\nconst x = 1;")).not.toMatch(FALLBACK);
+  });
+
+  it('the fallback body is spelled on a code line in server/src/askbody.ts and nowhere else', () => {
+    expect(holders(FALLBACK)).toEqual(['server/src/askbody.ts']);
+  });
+
+  it('askPushBody is defined in server/src/askbody.ts and nowhere else', () => {
+    expect(holders(DEFINES)).toEqual(['server/src/askbody.ts']);
+  });
+
+  it("watch.ts's ask raise sites call askPushBody, and no body there reads dialog.title", () => {
+    const watch = stallCode(path.join(ccrcRoot, 'server/src/watch.ts'));
+    expect(watch).toMatch(/import\s*\{[^}]*\baskPushBody\b[^}]*\}\s*from\s*'\.\/askbody\.js'/);
+    expect(watch.match(/body:\s*askPushBody\(/g) ?? []).toHaveLength(2);
+    expect(watch).not.toMatch(/body:\s*dialog\.title/);
+  });
+
+  // D-5356 (coordinator ruling `approval-push-body-tool-only-until-redactor`): until the redactor is applied where
+  // the approval summary enters the wire (Task 16), the push body module reads no approval `summary` (the command),
+  // directly or through `hookAskSummary`, and the fixed phrase is spelled there only.
+  it('D-5356: askbody.ts never reads an approval summary, and the fixed phrase is spelled there only', () => {
+    const askbody = stallCode(path.join(ccrcRoot, 'server/src/askbody.ts'));
+    expect(askbody).not.toMatch(/\.summary\b|\bsummary\s*[,}]|\bhookAskSummary\b/);
+    expect(stallCodeText('const { tool, summary } = a;')).toMatch(/\bsummary\s*[,}]/);   // CONTROL
+    expect(holders(/permission requested/)).toEqual(['server/src/askbody.ts']);
+  });
+});

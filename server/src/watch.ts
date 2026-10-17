@@ -2,6 +2,7 @@ import { performance } from 'node:perf_hooks';
 import type { Deps } from './server.js';
 import type { Bus } from './bus.js';
 import { assembleFleet, lifecycleInputFor, registrySecondsToMs } from './fleet.js';
+import { askPushBody } from './askbody.js';
 import { measuredIdentity, readRegistry, readRegistryMeasured } from './registry.js';
 import {
   accountPoolsEnforcement, poolsEnforcement, poolsWire, readObservedEpochFromRegistry, readPoolEpoch,
@@ -7854,7 +7855,7 @@ export class FleetWatcher {
           // `sweepMerged` above.
           this.pushOne({
             kind: 'ask', sessionId: r.id, project: r.project,
-            title: '❓ Question', body: dialog.title || 'Claude has a question',
+            title: '❓ Question', body: askPushBody(this.hookStates.get(r.id) ?? null, dialog),
             ...(actions ? { actions } : {}),
           }, this.activeProjects);
           // Latched whenever this raise had no actions, cleared the moment one
@@ -8322,7 +8323,7 @@ export class FleetWatcher {
     });
     const ev: Parameters<FleetWatcher['pushOne']>[0] = {
       kind: 'ask', sessionId: r.id, project: r.project,
-      title: '❓ Question', body: dialog.title || 'Claude has a question',
+      title: '❓ Question', body: askPushBody(hs, dialog),
       actions,
     };
     // The parent is asleep and nothing else will wake it. Ordinary mail, so
