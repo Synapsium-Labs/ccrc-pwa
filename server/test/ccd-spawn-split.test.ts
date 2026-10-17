@@ -100,6 +100,19 @@ describe('_spawn_start / _spawn_settle', () => {
     expect(h.reg('myid', 'started')).toBeNull();
   });
 
+  it('_spawn_start reads the pane scope ONCE, after the pane that stands — the retry line included (D-5237)', () => {
+    seed('myid');
+    // RESUME_DIES, answering the pane pid as well.
+    h.sh(`${RESUME_DIES.replace('list-sessions) return 0 ;;', 'list-sessions) return 0 ;;\n        list-panes) case "$*" in *pane_pid*) echo 4242 ;; esac ;;')}
+          _panescope_proc_root() { echo procread >> "$HOME/ccd-calls"; printf '%s' "$HOME/proc"; }
+          rm -f "$HOME/pane-up"; _spawn_start myid resume 2>/dev/null`);
+    const calls = h.calls();
+    expect(calls.filter((c) => c === 'procread')).toHaveLength(1);
+    const lastNew = calls.map((c) => c.startsWith('tmux new-session')).lastIndexOf(true);
+    expect(newSessions()).toHaveLength(2);
+    expect(calls.indexOf('procread')).toBeGreaterThan(lastNew);
+  });
+
   it('_spawn_start sets SPAWN_FROMSWAP=1 when the spawn lands within 300s of a swap', () => {
     seed('myid');
     const out = h.sh(

@@ -14,6 +14,7 @@ import {
   backgroundWork, backgroundWords, substrateFault,
   type FleetSession, type RosterWire, type RouteField, type SessionBucket, type SessionStatus,
 } from '../../../shared/api';
+import { restartWords } from '../lib/restart';
 import {
   BackButton, Chip, Keycap, ListRow, Sheet, StatusDot, TypedLabel, cn, elapsedShort, statusLabel, useNow,
 } from '@ccrc/ui';
@@ -240,6 +241,8 @@ export function SessionHeader({
   // reads `working · N in background` (the kinds in the title), as the card does.
   const bg = bucket === 'working' && session != null ? backgroundWork(session) : null;
   const bgWords = bg === null ? null : backgroundWords(bg);
+  // D-5237: "restarted · out of memory · 3m ago" for an hour after a process end.
+  const restart = session != null ? restartWords(session, now) : null;
   const word =
     bucket === 'attention'
       ? 'waiting on you'
@@ -334,6 +337,11 @@ export function SessionHeader({
           {wrapper !== '' && (
             <Chip dot className={chipTone('active')}>
               {accountLabel(roster, wrapper)}
+            </Chip>
+          )}
+          {restart !== null && (
+            <Chip className={chipTone('restart')} title={restart.title} data-restart={restart.cause}>
+              {restart.text}
             </Chip>
           )}
           {repo !== null && (
