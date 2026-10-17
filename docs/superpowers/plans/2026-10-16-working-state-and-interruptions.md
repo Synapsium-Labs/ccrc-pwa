@@ -279,7 +279,7 @@ Variants are built from it in the test by editing `background_tasks` only: the s
   | `stopAt >= turnAt` removed | (c) |
   | `unmeasured` accepted | (e) |
   | the absent fallback accepts any `done` event | (f)'s PostCompact case |
-  | `busySince` taken at the edge instead of the busy tick | (b) |
+  | `busySince` taken at the edge instead of the busy tick | (a), (f)'s Stop push, (g) — a later start only tightens the rule, so it cannot red (b); measured when Task 3 landed |
 
 - [ ] **Step 4: Gates:** `finished-push`, `push-copy`, `notifylog`, `fleetws`, `stall-sweep`, `mail-sweep`, `turnmark`, the four ledger and hygiene suites, tsc.
 - [ ] **Step 5: Commit** `fix(push): Finished only when a main Stop falls inside the busy episode (D-5233)`.
