@@ -4046,7 +4046,7 @@ describe('R107 to R109 (re-review N1 to N3): a cut pass never forgets what a new
   });
 });
 
-describe('R110 to R112 (review 533 F1, F2): each arm of R109 holds alone, and the ready instant covers the recovery\'s own duration', () => {
+describe('R110 to R112 (review 533 F1, F2): each arm of R109 holds alone, and the ready instant carries the skew allowance from the recovery\'s return', () => {
   /** A pass at `t` over `sessions`, CUT at its budget while the read `reached` reports is still held; the read is NOT released here. */
   async function cutHeld(w: World, t: number, projects: Record<string, CensusView>, sessions: readonly Sess[], reached: () => boolean): Promise<void> {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
@@ -4127,7 +4127,11 @@ describe('R110 to R112 (review 533 F1, F2): each arm of R109 holds alone, and th
     // while it recovers: the clock moves (the budget timer does not), and demo-a creates raw-tree after the pass's clock and the skew
     writeBucket(w, 'demo-a', BUCKET10,
       bashPre('demo-a', 'toolu_wt1', ['old-tree'], iso(at(5) + 120_000)), bashPost('demo-a', 'toolu_wt1', ['old-tree', 'raw-tree'], iso(at(5) + 123_000)));
-    setNow(at(5) + 180_000);                                            // the recovery returns three minutes after the pass began
+    // A MOCKED timeline beyond the pass budget: the recovery "returns" 180 s after the pass began while the budget timer (real time) does
+    // not fire. Measuring after the await carries the clock-skew allowance from the recovery's return: that covers a call made during the
+    // recovery by a hook clock running ahead of the server's; when the clocks agree, the pass budget (45 s) already keeps a recovery
+    // inside the skew (60 s), unless a starved event loop fires the budget timer late.
+    setNow(at(5) + 180_000);
     openRecover();
     await recovering;                                                   // the same pass reaches the owners and reconciles
     expect((await w.watcher.delegationApplier())!.failure()).toBeNull();
@@ -4168,6 +4172,42 @@ describe('R113 and R114 (review 544 P2, P1): the ready instant covers the boot r
     for (let i = 4; i < 8; i++) await censusPass(w, at(i), WITH_TREE);
     expect(leasesOf(w.home), 'the creator began inside the boot recovery').toEqual([]);
     expect(w.watcher.delegationReport().lostEvidence.forced).toBe(1);
+  });
+
+  it('R114 (P1; THIS ROW PINS A LIVENESS COST, not a safety property, as R91 pins today\'s link): a cut pass\'s late return after a newer pass reached the owners moves the ready instant a second time, and holds a creator call whose owners were all read', async () => {
+    // R110's sequence with no other session. The mark at the cut moves the instant to at(2); the cut pass's late return marks the lane
+    // again, so at(6), the first pass after it, moves the instant once more. demo-a, an owner every later pass read, then creates
+    // raw-tree at at(6)+20 s: inside that instant plus the skew, and more than the skew after at(2)'s. Today the call is HELD. That
+    // over-hold moves toward holding, which spec §5.3 allows; making the late arm conditional was declined for this wave (review 544)
+    // and left for the operator to place. A lane that makes it conditional turns this row red, as intended: then flip its expectation.
+    const w = world();
+    makeOwner(w, 'demo-a');
+    await censusPass(w, at(-1), BEFORE_TREE);                           // ready
+    const realRealpath = w.io.realpath;
+    let holdNext = true;
+    let reached = false;
+    let openRoot!: () => void;
+    const rootGate = new Promise<void>((resolve) => { openRoot = resolve; });
+    w.io.realpath = async (p) => {
+      if (holdNext) { holdNext = false; reached = true; await rootGate; }
+      return realRealpath(p);
+    };
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    setNow(at(1));
+    setCensus(w, BEFORE_TREE, { 'demo-a': measured() }, at(1));
+    const cut = pass(w);                                                // cut while its own projects-root read is held
+    await vi.waitFor(() => expect(reached, 'the pass reached the held read').toBe(true));
+    await vi.advanceTimersByTimeAsync(DELEGATION_PASS_BUDGET_MS + 1);
+    await cut;
+    vi.useRealTimers();
+    for (let i = 2; i < 6; i++) await censusPass(w, at(i), BEFORE_TREE);  // these reach the owners before the cut pass returns
+    openRoot();                                                         // the cut pass returns now, and marks the lane again
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await censusPass(w, at(6), BEFORE_TREE);                            // the first pass after it: the instant moves to at(6)
+    creatorAfter(w, at(6));
+    for (let i = 7; i < 11; i++) await censusPass(w, at(i), WITH_TREE);
+    expect(leasesOf(w.home), 'today: held by the second move of the instant').toEqual([]);
+    expect(w.watcher.delegationReport().lostEvidence.forced, 'held by lost evidence: the full evidence links it').toBe(1);
   });
 });
 
