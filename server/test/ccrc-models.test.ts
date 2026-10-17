@@ -1335,7 +1335,7 @@ describe('ccrc models <id> discovery', () => {
     const r = run(['models', 'refresh', 'gpt'], { CHATGPT_TOKEN_DIR: poisonedDir });
     expect(r.code).toBe(1);
     const [row] = oneObject(r)['refreshed'] as { id: string; ok: boolean; reason?: string }[];
-    expect(row).toMatchObject({ id: 'gpt', ok: false });
+    expect(row).toMatchObject({ id: LEGACY_EXTERNAL_ID, ok: false });
     expect(/no-token-dir/.test(String(row!.reason)),
       'a scrubbed CHATGPT_TOKEN_DIR leaves the codex fetch no directory, so it refuses no-token-dir; a leaked one would refuse runtime-absent')
       .toBe(true);
@@ -1372,7 +1372,7 @@ describe('ccrc models <id> discovery', () => {
     const r = run(['models', 'refresh', 'gpt2'], { CHATGPT_TOKEN_DIR: poisonedDir });
     expect(r.code).toBe(1);
     const [row] = oneObject(r)['refreshed'] as { id: string; ok: boolean; reason?: string }[];
-    expect(row).toMatchObject({ id: 'gpt2', ok: false });
+    expect(row).toMatchObject({ id: LEGACY_SECRETS_EXTERNAL_ID, ok: false });
     expect(/no-token-dir/.test(String(row!.reason)),
       'a secrets file that sets a different credential must not leave CHATGPT_TOKEN_DIR for the codex fetch to inherit from the calling shell')
       .toBe(true);
