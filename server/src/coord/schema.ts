@@ -1375,6 +1375,23 @@ export const MIGRATIONS: readonly string[] = [
   INSERT INTO collect_lane_settings (id, choice, fleetNodeId, markerRetiredAt, generation, updatedAt)
     VALUES (1, 'off', NULL, NULL, 0, 0);
   `,
+  // ── 21: user_version 20 -> 21 ─────────────────────────────────────────────
+  // D-5290 (coordinator-first routing spec 2026-10-17 §5.2): an ask row may be MINTED `released`, never held, when
+  // its child's parent is not live (`parent-not-live`) or is a session of another project (`parent-project-mismatch`):
+  // the operator is pushed on the same tick, and the row is the journal of why the parent was skipped. `releaseReason`
+  // is that why, NULL for every row the hold minted (a lapse or a decline leaves it NULL too). Read back through
+  // `isAskReleaseReason`, never a cast; NO CHECK, for the reason `collect_lane_settings.choice` gives: a token a newer
+  // build writes must not stop an older build opening the file.
+  //
+  // ONE ADDITIVE COLUMN, nullable, no default, and nothing else: an older build opening a file at `user_version 21`
+  // takes rule 3 (it warns, reads as-is and migrates nothing); its `ASK_COLS` never names the column, so it reads these
+  // rows as the lapsed `released` rows they look like. Every earlier entry is frozen. RE-MEASURE the slot immediately
+  // before the PR and before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE asks ADD COLUMN releaseReason TEXT;
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a
