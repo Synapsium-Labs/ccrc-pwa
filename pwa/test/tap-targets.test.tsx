@@ -33,7 +33,7 @@ import { CoordBanner } from '../src/fleet/CoordBanner';
 import { MailBadge } from '../src/fleet/MailBadge';
 import { StartProgramSheet } from '../src/fleet/StartProgramSheet';
 import {
-  BARE_ROW, CONTROL_ROW, CollapsibleStrip, MailStrip, SELECT, Select, TEXT_INPUT, buttonVariants,
+  BARE_ROW, CONTROL_ROW, CollapsibleStrip, LIST_ROW, MailStrip, SELECT, Select, TEXT_INPUT, buttonVariants,
 } from '@ccrc/ui';
 import { PrKeycap } from '../src/session/PrKeycap';
 import { PrSheet } from '../src/session/PrSheet';
@@ -957,7 +957,7 @@ describe('the Docs controls (docs W5 part 1, spec 4.14)', () => {
 
   describe('every banner action: .docs-banner-action (a btn-ghost) and .docs-hint-link', () => {
     it('are at least one tap tall, off the shared token, and the banner rule gives back only the width', () => {
-      expect(floorIn(read('components', 'primitives.css'), '.btn-ghost')).toBe('var(--tap-min)');
+      expect(buttonVariants({ variant: 'ghost' })).toContain('min-h-tap'); // @ccrc/ui's ghost Button carries the floor
       expect(floorIn(docsCss, '.btn-ghost.docs-banner-action')).toBe('var(--tap-min)');
       expect(floorIn(docsCss, '.docs-hint-link')).toBe('var(--tap-min)');
     });
@@ -977,7 +977,7 @@ describe('the Docs controls (docs W5 part 1, spec 4.14)', () => {
 
   describe('the failure view’s Retry and Fetch from origin (.docs-fail-action, a btn-ghost)', () => {
     it('are at least one tap tall, off the shared token', () => {
-      expect(floorIn(read('components', 'primitives.css'), '.btn-ghost')).toBe('var(--tap-min)');
+      expect(buttonVariants({ variant: 'ghost' })).toContain('min-h-tap'); // @ccrc/ui's ghost Button carries the floor
       expect(floorIn(docsCss, '.btn-ghost.docs-fail-action')).toBe('var(--tap-min)');
     });
     it('are the classes both rendered buttons carry', () => {
@@ -1047,12 +1047,13 @@ describe('the Docs controls (docs W5 part 1, spec 4.14)', () => {
   describe('the session links: the actions sheet’s row (a btn-ghost) and the session menu’s item (a menu-item)', () => {
     const session = sess({ project: 'demo', workspace: 'ws-old', branch: 'main' });
     it('ride the shared rules’ floors: .btn-ghost on the token, .menu-item at or above it', () => {
-      expect(floorIn(read('components', 'primitives.css'), '.btn-ghost')).toBe('var(--tap-min)');
-      // `.menu-item` (session/chat.css, which W5 does not edit) floors at 52px, above the 44px token; the Docs item
-      // adds no rule that could lower it.
+      expect(buttonVariants({ variant: 'ghost' })).toContain('min-h-tap'); // @ccrc/ui's ghost Button carries the floor
+      // `.menu-item` is the session menu's `MenuItem`, a @ccrc/ui `ListRow`, whose LIST_ROW floors at 52px, above the
+      // 44px token (W5 edits neither); the Docs item adds no rule that could lower it.
       const token = Number.parseFloat(declValue(ruleIn(tokensCss, ':root'), '--tap-min') ?? 'NaN');
-      const menu = declValue(ruleIn(chatCss, '.menu-item'), 'min-height');
-      expect(menu === 'var(--tap-min)' || Number.parseFloat(menu ?? 'NaN') >= token, String(menu)).toBe(true);
+      const menu = /(?:^|\s)min-h-(tap|\[(\d+)px\])(?:\s|$)/.exec(LIST_ROW);
+      expect(menu, LIST_ROW).not.toBeNull();
+      expect(menu?.[1] === 'tap' || Number(menu?.[2]) >= token, String(menu?.[0])).toBe(true);
       // docs.css may carry OVERFLOW rules for the two (a long branch must not push the word off the row), but no rule
       // whose selector list names either class may declare a min-height: the floor stays the shared class's.
       const naming = stripComments(docsCss).split('}')

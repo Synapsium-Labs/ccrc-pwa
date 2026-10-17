@@ -21,7 +21,7 @@
    which sets no floor of its own (WCAG 2.5.8's inline exception): the failure view's "Did you mean …?" link
    (`.docs-fail-suggest a`) and the links inside a rendered document. A Docs link that stands alone as a control
    (`.docs-action`, `.docs-hint-link`, `.docs-owner-link`) carries the floor. The two `btn-ghost` controls take the
-   floor from `.btn-ghost` (components/primitives.css) and restate it here beside the width they give back. */
+   floor from @ccrc/ui's ghost `Button` (its `min-h-tap`) and restate it here beside the width they give back. */
 
 /* — the Docs door, in the fleet header before `.accounts-door` (section 4.8): the box `.settings-door` had before `Door` — */
 .docs-door {

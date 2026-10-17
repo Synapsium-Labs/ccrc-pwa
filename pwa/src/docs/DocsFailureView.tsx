@@ -3,6 +3,7 @@
 // WHEN an action is offered by passing its handler (an absent handler means the action is not offered), and this
 // view decides only WHETHER the answer allows it at all (a `none` word never shows Retry, whatever is passed).
 import type { ReactNode } from 'react';
+import { Button } from '@ccrc/ui';
 import { docsRetryPlan, type DocsNotOk } from './failures';
 import {
   NOT_A_FILE_KIND_TEXT, TRIED_RESULT_TEXT, UNRESOLVED_TAG_HINT, failureSentence, slotSentence,
@@ -101,12 +102,12 @@ export function DocsFailureView(p: DocsFailureViewProps): ReactNode {
       {(retry !== undefined || fetchFromOrigin !== undefined) && (
         <div className="docs-fail-actions">
           {fetchFromOrigin !== undefined && (
-            <button type="button" className="btn-ghost docs-fail-action" disabled={p.fetching === true} onClick={fetchFromOrigin}>
+            <Button variant="ghost" className="docs-fail-action" disabled={p.fetching === true} onClick={fetchFromOrigin}>
               Fetch from origin
-            </button>
+            </Button>
           )}
           {retry !== undefined && (
-            <button type="button" className="btn-ghost docs-fail-action" onClick={retry}>Retry</button>
+            <Button variant="ghost" className="docs-fail-action" onClick={retry}>Retry</Button>
           )}
         </div>
       )}

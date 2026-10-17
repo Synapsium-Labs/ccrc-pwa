@@ -6,6 +6,7 @@
 // class cap is the `too-large` sentence, and nothing was requested (the visit's `too-large` slot). The header and the
 // banners are `DocsScreen`'s (`DocsHead`, `DocsBanners`), above this body, so a file failure replaces only the body.
 import { useContext, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { Button } from '@ccrc/ui';
 import type { Element as HastElement } from 'hast';
 import hljs from 'highlight.js/lib/core';
 import { contentClass, docsApi, entryView, type DocPin, type DocsPageLocation, type DocsShowOk, type DocsTreeOk } from '../../../shared/docs';
@@ -242,7 +243,7 @@ export function DocsLeaf(p: {
       body = (
         <div className="docs-changing" role="alert">
           <p className="docs-note">{DOCS_VIEW_TEXT.changing}</p>
-          <button type="button" className="btn-ghost docs-fail-action" onClick={visit.retryFile}>Retry</button>
+          <Button variant="ghost" className="docs-fail-action" onClick={visit.retryFile}>Retry</Button>
         </div>
       );
     } else if (file.s !== 'ok') {

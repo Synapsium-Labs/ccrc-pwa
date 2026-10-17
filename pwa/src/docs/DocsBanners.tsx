@@ -7,6 +7,7 @@
 // drafted images are counted; `view=committed` offers the way back. A pure renderer: it starts no request (Retry and Re-list call
 // `onRelist`), and every link is `docsPageUrl(docsLocation(page, to))` (refinement (q)).
 import type { ReactNode } from 'react';
+import { Button } from '@ccrc/ui';
 import { docsPageUrl, parseDocsRef, type DocsPageLocation, type DocsTreeOk } from '../../../shared/docs';
 import { docsLocation } from './docsLinks';
 import {
@@ -28,7 +29,7 @@ function Banner(p: { readonly id: string; readonly tone: Tone; readonly text: st
 }
 
 function RelistButton(p: { readonly label: string; readonly onRelist: () => void }): ReactNode {
-  return <>{' '}<button type="button" className="btn-ghost docs-banner-action" onClick={p.onRelist}>{p.label}</button></>;
+  return <>{' '}<Button variant="ghost" className="docs-banner-action" onClick={p.onRelist}>{p.label}</Button></>;
 }
 
 function HintLink(p: { readonly href: string | null; readonly label: string }): ReactNode {
