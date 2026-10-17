@@ -16,7 +16,6 @@ import { DIALOG_TEXT_MAX } from '../../shared/api.js';
 // proves the row holds exactly the text. Every pane here is a recorded 2.1.300 screen (`fixtures/panes/cc300-ask-*.txt`,
 // 220x50, read with `capture-pane -p` as `Tmux.capture` reads), or one marked DERIVED with the edit it makes.
 
-const noSleep = async () => {};
 
 /** `answer.test.ts`'s scripted-capture fake: capture-pane answers the scripted panes in order (the last one repeats;
  *  null is exit 1). `failLiteral` makes every `send-keys -l` exit 1, as tmux does when the session has gone. */
@@ -38,7 +37,11 @@ function fakeTmux(panes: (string | null)[], opts: { failLiteral?: boolean } = {}
 
 const sendKeysCalls = (calls: string[][]) => calls.filter((c) => c[1] === 'send-keys');
 const captureCalls = (calls: string[][]) => calls.filter((c) => c[1] === 'capture-pane');
-const deps = (tmux: Tmux): SendDeps => ({ tmux, queue: new KeyedQueue(), sleep: noSleep });
+/** A fake clock that only sleeps move, so `settleNext`'s 1.5 s wall-clock budget is spent in fake time. */
+const deps = (tmux: Tmux): SendDeps => {
+  let t = 0;
+  return { tmux, queue: new KeyedQueue(), sleep: async (ms) => { t += ms; }, now: () => t };
+};
 
 const panesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'panes');
 const fixture = (name: string): string => readFileSync(path.join(panesDir, name), 'utf8');
@@ -317,5 +320,17 @@ describe('answerDialogText: types into the free-text row, proved focused and ech
     const res = await answerDialogText(deps(tmux), SID, idOf(OPEN), 3, TEXT);
     expect(res).toEqual({ ok: false, error: 'echo-failed' });
     expect(sendKeysCalls(calls)).toEqual([key('Down'), key('Down'), literal(TEXT)]);
+  });
+});
+
+// Decision `ask-answer-returns-next-screen`: the typed answer returns the screen the pane moved to. Typing changed the
+// question's id (its label is the text), so the typed row is still the answered question, never "the next screen": the
+// tests above, whose pane stays on TYPED, answer `{ ok: true }` with no `next`.
+describe('answerDialogText returns the screen it moved to', () => {
+  it('the typed answer to the last question returns the review screen', async () => {
+    const review = fixture('cc300-ask-review-same-labels.txt');
+    const { tmux } = fakeTmux([OPEN, FOCUSED, TYPED, review, review]);
+    const res = await answerDialogText(deps(tmux), SID, idOf(OPEN), 3, TEXT);
+    expect(res).toEqual({ ok: true, next: parseDialog(review) });
   });
 });

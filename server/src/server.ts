@@ -95,6 +95,7 @@ import {
   parseRouteFields, programKickoffVerdict, routeFieldsOrNull, routeParseDetail, type RouteFields,
 } from '../../shared/api.js';
 import { ARCHIVE_REFUSALS } from '../../shared/api.js';
+import type { Dialog } from '../../shared/api.js';
 import {
   archiveFlags, archiveOutcome, busyReadFailsClosed, decideArchive, frameRowVerdict, refusedAtStop, worktreeOf, type ArchiveMeasure,
   type TurnVerdict,
@@ -2130,6 +2131,19 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return { ok: true, queued: out.queued };
   });
 
+  /** After an answer route (decisions `ask-answer-returns-next-screen`, `dialog-frame-log`): a refusal is logged by its
+   *  code, since until now nothing recorded one; an answer that saw the pane move hands that screen to every open
+   *  stream of the session (`answered:<id>`, `SessionStream`'s `onAnswered`). */
+  const answeredFrame = (
+    id: string, route: string, res: { ok: true; next?: Dialog | null } | { ok: false; error: string },
+  ): void => {
+    if (!res.ok) {
+      console.log(`ccrc-server: dialog-refused ${id} ${route} ${res.error}`);
+      return;
+    }
+    if (res.next !== undefined) bus.emit(`answered:${id}`, res.next);
+  };
+
   app.post('/api/sessions/:id/dialog', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
@@ -2138,6 +2152,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
     const res = await answerDialog(sendDeps, id, body.dialogId, body.optionIndex);
+    answeredFrame(id, 'dialog', res);
     return res.ok ? res : reply.code(409).send(res);
   });
 
@@ -2156,6 +2171,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
     const res = await answerDialogText(sendDeps, id, body.dialogId, body.optionIndex, body.text);
+    answeredFrame(id, 'dialog/text', res);
     if (res.ok) return res;
     return reply.code(res.error === 'bad-text' ? 400 : 409).send(res);
   });
@@ -2176,6 +2192,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
     const res = await answerDialogMulti(sendDeps, id, body.dialogId, body.optionIndexes as number[]);
+    answeredFrame(id, 'dialog/multi', res);
     if (res.ok) return res;
     return reply.code(res.error === 'bad-indexes' ? 400 : 409).send(res);
   });

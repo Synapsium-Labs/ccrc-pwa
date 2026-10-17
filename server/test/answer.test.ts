@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,7 +8,6 @@ import { parseDialog } from '../src/pane/dialog.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { tmuxTarget } from '../../shared/tmux-target.js';
 
-const noSleep = async () => {};
 
 /** Tmux backed by a fake runner: capture-pane returns scripted panes in order (last one repeats; null → code 1). */
 function fakeTmux(panes: (string | null)[]) {
@@ -27,7 +26,11 @@ function fakeTmux(panes: (string | null)[]) {
 }
 
 const sendKeysCalls = (calls: string[][]) => calls.filter((c) => c[1] === 'send-keys');
-const deps = (tmux: Tmux): SendDeps => ({ tmux, queue: new KeyedQueue(), sleep: noSleep });
+/** A fake clock that only sleeps move, so a wall-clock budget is spent in fake time (`settleNext`'s 1.5 s). */
+const deps = (tmux: Tmux): SendDeps => {
+  let t = 0;
+  return { tmux, queue: new KeyedQueue(), sleep: async (ms) => { t += ms; }, now: () => t };
+};
 
 const OPTS = ['A + B drawer (Recommended)', 'A pure', 'B first, A later', 'Other'];
 
@@ -302,5 +305,108 @@ describe('interrupt', () => {
     const { tmux } = fakeTmux([null]);
     const res = await interrupt(deps(tmux), 'x', async () => true);
     expect(res).toEqual({ ok: false, error: 'not-alive' });
+  });
+});
+
+// Decision `ask-answer-returns-next-screen` (the 2026-10-16 report: a two-question ask answered from the sheet, the
+// last answer landed, and the sheet showed "Open terminal to answer" instead of the review). The answer route now
+// reads the screen the pane moved to and returns it, so the sheet never waits on the session stream's poll for it.
+// The panes are a recorded Claude Code 2.1.296 ask at 220x50 in unrelated made-up content (`fixtures/panes/cc296-ask-2q-long-*.txt`):
+// two long single-select questions, 2 and 3 options with descriptions, and the review screen they end on.
+describe('answerDialog returns the screen it moved to', () => {
+  const cc296 = (name: string): string =>
+    readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'panes', `cc296-ask-2q-long-${name}.txt`), 'utf8');
+  const q2 = cc296('q2');
+  const review = cc296('review');
+  const q2Id = parseDialog(q2)!.id;
+  const reviewDialog = parseDialog(review)!;
+  // DERIVED from the review: the same screen caught before its cursor row repainted (`❯ 1.` drawn as `  1.`), which
+  // `hasMenu` reads as no menu at all. A poll that took it sent `dialog_cleared`.
+  const halfPainted = review.replace('❯ 1. Submit answers', '  1. Submit answers');
+
+  it('the last answer returns the review screen', async () => {
+    const { tmux, calls } = fakeTmux([q2, q2, review, review]);
+    const res = await answerDialog(deps(tmux), 'x', q2Id, 1);
+    expect(res).toEqual({ ok: true, next: reviewDialog });
+    expect(sendKeysCalls(calls).map((c) => c.at(-1))).toEqual(['Enter']);
+  });
+
+  it('a capture taken mid-repaint is never returned: it waits for a screen seen twice', async () => {
+    const { tmux } = fakeTmux([q2, q2, halfPainted, review, review]);
+    expect(await answerDialog(deps(tmux), 'x', q2Id, 1)).toEqual({ ok: true, next: reviewDialog });
+  });
+
+  it('a failed capture is no reading: two in a row are not "no menu"', async () => {
+    const { tmux } = fakeTmux([q2, q2, null, null, review, null, review]);
+    expect(await answerDialog(deps(tmux), 'x', q2Id, 1)).toEqual({ ok: true, next: reviewDialog });
+  });
+
+  it('no menu left (submitted or declined): next is null', async () => {
+    const { tmux } = fakeTmux([q2, q2, 'done\n❯ \n']);
+    expect(await answerDialog(deps(tmux), 'x', q2Id, 1)).toEqual({ ok: true, next: null });
+  });
+
+  it('a pane still on the answered screen after the budget: next is absent, as before', async () => {
+    const { tmux, calls } = fakeTmux([q2]);
+    expect(await answerDialog(deps(tmux), 'x', q2Id, 1)).toEqual({ ok: true });
+    // 1 check + 1 landing + the 14 captures 100 ms apart that fit in 1.5 s, and nothing typed after Enter.
+    expect(calls.filter((c) => c[1] === 'capture-pane')).toHaveLength(16);
+    expect(sendKeysCalls(calls).map((c) => c.at(-1))).toEqual(['Enter']);
+  });
+
+  // The budget is wall-clock, not a count of captures: on the fleet one capture is a remote call that can wait 15 s,
+  // and the settle runs inside the session's keyboard queue, which holds every prompt and interrupt behind it.
+  it('slow captures: the budget is 1.5 s of clock, not 15 captures', async () => {
+    let t = 0;
+    let caps = 0;
+    const panes = [q2, q2];
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] !== 'capture-pane') return { code: 0, stdout: '', stderr: '' };
+      const pane = panes[Math.min(caps, panes.length - 1)]!;
+      if (caps >= 2) t += 400; // every settle capture takes 400 ms
+      caps++;
+      return { code: 0, stdout: pane, stderr: '' };
+    };
+    const d: SendDeps = { tmux: new Tmux(run), queue: new KeyedQueue(), sleep: async (ms) => { t += ms; }, now: () => t };
+    expect(await answerDialog(d, 'x', q2Id, 1)).toEqual({ ok: true });
+    expect(t).toBeLessThanOrEqual(1500 + 400); // the last capture began inside the budget
+    expect(caps - 2).toBe(3); // 100+400, 100+400, 100+400 = 1500
+  });
+
+  it('a screen confirmed only by a capture that ended past the budget is not returned', async () => {
+    let t = 0;
+    let caps = 0;
+    // check, landing, then settle captures of 400 ms each: Q2 (ends 500), the review (1000), the review (1500).
+    const panes = [q2, q2, q2, review, review];
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] !== 'capture-pane') return { code: 0, stdout: '', stderr: '' };
+      const pane = panes[Math.min(caps, panes.length - 1)]!;
+      if (caps >= 2) t += 400;
+      caps++;
+      return { code: 0, stdout: pane, stderr: '' };
+    };
+    const d: SendDeps = { tmux: new Tmux(run), queue: new KeyedQueue(), sleep: async (ms) => { t += ms; }, now: () => t };
+    expect(await answerDialog(d, 'x', q2Id, 1)).toEqual({ ok: true });
+  });
+
+  it('a capture that never returns is given up on when the budget runs out, and the queue is released', async () => {
+    vi.useFakeTimers();
+    try {
+      let caps = 0;
+      const run: Runner = (_cmd, args) => {
+        if (args[0] !== 'capture-pane') return Promise.resolve({ code: 0, stdout: '', stderr: '' });
+        caps++;
+        return caps <= 2 ? Promise.resolve({ code: 0, stdout: q2, stderr: '' }) : new Promise(() => {});
+      };
+      const queue = new KeyedQueue();
+      const d: SendDeps = { tmux: new Tmux(run), queue, sleep: async () => {}, now: () => Date.now() };
+      const res = answerDialog(d, 'x', q2Id, 1);
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(await res).toEqual({ ok: true });
+      // The session's queue runs the next job: nothing is left holding the keyboard.
+      expect(await queue.run('x', async () => 'next')).toBe('next');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

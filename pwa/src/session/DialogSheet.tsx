@@ -146,7 +146,7 @@ import {
   AskEyebrow, AskReview, ChatRow, MultiPick, OwnWords, REVIEW_TITLE, ownWordsRow, picksBusy, wordsBusy,
   type PickCall, type Picks, type Words, type WordsCall,
 } from './AskParts';
-import { chatRow, freeTextSlot, isAskReview, paneQuestion, paneTicks, questionKey, slotHolds } from './askLive';
+import { askScreen, chatRow, freeTextSlot, isAskReview, paneQuestion, paneTicks, questionKey, slotHolds } from './askLive';
 import { dialogMultiRefusal, dialogRefusal, dialogTextRefusal } from './askWords';
 import { api, ApiError } from '../lib/api';
 import { getSessionStore, type SessionStore } from '../stores/session';
@@ -212,6 +212,8 @@ export interface DialogSheetProps {
 export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetProps): ReactNode {
   const useStore = store ?? getSessionStore(id);
   const dialog = useStore((s) => s.dialog);
+  /** Decision `ask-answer-returns-next-screen`: an answer route's `next`, into the store (`applyAnswered`). */
+  const applyAnswered = (answeredId: string, next: Dialog | null): void => useStore.getState().applyAnswered(answeredId, next);
   const hookAsk = useStore((s) => s.ask);
 
   // The option index whose answer is in flight (null = none).
@@ -229,6 +231,8 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
   // ever equals, so without this the hand-off on `ask_cleared` re-opened the
   // very question the operator had just waved away.
   const [dismissedDialogId, setDismissedDialogId] = useState<string | null>(null);
+  /** The envelope's screen (`askScreen`) the sheet was hidden on; meaningful only while `dismissedKey` is that ask. */
+  const [dismissedScreen, setDismissedScreen] = useState<string | null>(null);
   // D-5090: the own-words text and its call, one value so the two change together (see `WordsCall`).
   const [own, setOwn] = useState(NO_WORDS);
   // D-5091: a multiSelect question's set and its commit, one value for the same reason (see `PickCall`).
@@ -301,9 +305,12 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
   const answer = async (optionIndex: number): Promise<void> => {
     if (dialog === null || !claim()) return;
     setAnswering(optionIndex);
+    const answered = dialog.id;
     try {
-      await api.answerDialog(id, dialog.id, optionIndex);
-      // Stay in "answering…" — the sheet closes when dialog_cleared lands.
+      const res = await api.answerDialog(id, answered, optionIndex);
+      // Decision `ask-answer-returns-next-screen`: the route says which screen the pane moved to, so the next question
+      // or the review opens now, not on the stream's next poll. Without it, stay in "answering…" until a frame lands.
+      if (res.next !== undefined) applyAnswered(answered, res.next);
     } catch (err) {
       setAnswering(null);
       // Each refusal by its code (`dialogRefusal`, plan Task 5), where every 409 once read alike. A stale dialog is
@@ -326,7 +333,13 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
     const call = { row, question: questionKey(current, row) };
     setOwn({ text: kept, call: { ...call, state: 'flight' } });
     try {
-      await api.answerDialogText(id, current.id, row, kept.trim());
+      const res = await api.answerDialogText(id, current.id, row, kept.trim());
+      if (res.next !== undefined) {
+        // Typing changed the screen's id, so the store may hold the typed row by now: the same question by its key.
+        const held = useStore.getState().dialog;
+        const same = held !== null && held.parsed && questionKey(held, row) === call.question;
+        applyAnswered(same ? held.id : current.id, res.next);
+      }
       // Landed. Like a tapped option, the sheet stays busy until the pane moves on — unless it already has: the next
       // screen can reach the store before the call's answer does, and must not be held busy by it.
       const now = useStore.getState().dialog;
@@ -366,7 +379,8 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
     const call: PickCall = { dialogId: current.id, wanted, state: 'flight' };
     setPick((p) => ({ ...p, call }));
     try {
-      await api.answerDialogMulti(id, current.id, wanted);
+      const res = await api.answerDialogMulti(id, current.id, wanted);
+      if (res.next !== undefined) applyAnswered(current.id, res.next);
       const waiting = useStore.getState().dialog?.id === current.id;
       setPick(waiting ? { id: current.id, picked: wanted, call: { ...call, state: 'landed' } } : NO_PICK);
     } catch (err) {
@@ -394,6 +408,8 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
     // genuinely new one always serializes differently (a new question
     // string, a new tool/summary pair, an added/removed option, …).
     const askKey = JSON.stringify(hookAsk);
+    // An approval is one screen; a question ask is one per question plus its review (`askScreen`).
+    const screenNow = 'approval' in hookAsk ? (dialog === null ? null : 'approval') : askScreen(hookAsk, dialog);
     return (
       <EnvelopeSheet
         id={id}
@@ -402,9 +418,17 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
         answering={answering}
         words={words}
         picks={picks}
-        open={askKey !== dismissedKey}
+        // Decision `ask-envelope-dismissal-per-screen`: a hide hides the SCREEN that was showing, never the rest of the
+        // ask. The envelope's JSON is the same for every question and the review (the hook writes them all at once), so
+        // keying on it alone kept a sheet hidden on question 2 hidden through the review: no Submit anywhere but the
+        // terminal. A screen is a QUESTION, or the review (`askScreen`), never a raw dialog id: typing into the
+        // free-text row in the terminal, or a mid-redraw grab, repaints the same question under a new id, and must not
+        // put a modal back over the terminal the operator is typing in. Only a different question or the review
+        // opens it again; a screen the sheet cannot place (no menu, an unparsed grab) never does.
+        open={!(askKey === dismissedKey && (screenNow === null || screenNow === dismissedScreen))}
         onHide={() => {
           setDismissedKey(askKey);
+          setDismissedScreen(screenNow);
           setDismissedDialogId(dialog?.id ?? null);
         }}
         onSelectOption={(optionIndex) => void answer(optionIndex)}

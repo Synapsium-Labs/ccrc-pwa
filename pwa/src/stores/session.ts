@@ -147,6 +147,12 @@ export interface SessionState {
   pending: PendingSend[]; // optimistic sends
   conn: 'connecting' | 'open' | 'down';
   apply(msg: SessionStreamMsg): void;
+  /** Decision `ask-answer-returns-next-screen`: the screen an answer route says the pane moved to (`DialogAnswered`'s
+   *  `next`), applied by the sheet that sent the answer. It replaces `dialog` only while the store still holds the
+   *  screen that was answered (`answeredId`), or no screen at all: a frame the stream delivered since is newer, and
+   *  wins. A no-menu poll that cleared `dialog` before the answer came back is exactly what it overrides (the
+   *  2026-10-16 report). `next: null` clears it, as `dialog_cleared` would. */
+  applyAnswered(answeredId: string, next: Dialog | null): void;
   connect(): void;
   disconnect(): void;
   send(text: string, opts?: { replaceDraft?: boolean; attachments?: PendingAttachment[] }): Promise<void>;
@@ -700,6 +706,10 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
       file: null,
       pending: [],
       conn: 'connecting',
+
+      applyAnswered(answeredId, next) {
+        set((s) => (s.dialog === null || s.dialog.id === answeredId ? { dialog: next } : {}));
+      },
 
       apply(msg) {
         set((s) => {

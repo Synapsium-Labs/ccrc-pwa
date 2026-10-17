@@ -15,9 +15,10 @@
 // D-5091 (Task 4) adds a multiSelect question's boxes (`MultiPick`), which both sheets render in place of the option
 // rows when the pane carries `Dialog.multi`. Their state, the operator's set and the commit's call, lives in
 // `DialogSheet` for the same reason.
-import { useId, type ReactNode } from 'react';
+import { useEffect, useId, type ReactNode } from 'react';
 import type { Dialog, DialogMulti, HookAskQuestion } from '../../../shared/api';
 import { Button, EYEBROW, OptionRow } from '@ccrc/ui';
+import { reviewRows } from '../../../shared/ask-menu';
 import {
   commitsToReview, paneTicks, reviewSummary, slotHolds, slotHoldsPart, wantedTicks, type FreeTextSlot,
 } from './askLive';
@@ -39,9 +40,6 @@ export const SEVERAL_ANSWERS =
 /** What Cancel on the review does, said before the tap: it rejects the whole tool call and every answer with it
  *  (measured, `cc300-ask-review-cancelled`: "User declined to answer questions"). */
 const CANCEL_DECLINES_ALL = 'Declines every question in this ask — nothing you answered is sent.';
-
-/** The review's Cancel row. `isAskReview` proved the screen has exactly two rows, Submit answers then Cancel. */
-const REVIEW_CANCEL_INDEX = 2;
 
 /**
  * The sheet's kicker: `claude is asking`, the question's header chip when it has one, and `n of N` when the sheet
@@ -74,6 +72,14 @@ export function AskEyebrow({
   );
 }
 
+/** Is a key event's target a place the operator types into (an input, a textarea, an editable)? Digits pressed there
+ *  are text, never an answer. */
+function typingInto(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return target.isContentEditable || target.tagName === 'INPUT' || target.tagName === 'TEXTAREA'
+    || target.tagName === 'SELECT';
+}
+
 /**
  * The review screen an ask ends on: the pane's summary, then the pane's own two rows. `Submit answers` is `answer(1)`
  * and sends every answer; `Cancel` is `answer(2)` and says first that it declines them all.
@@ -96,11 +102,33 @@ export function AskReview({
   onAnswer: (optionIndex: number) => void;
 }): ReactNode {
   const summary = reviewSummary(dialog);
+  // Submit and Cancel by LABEL (`reviewRows`, decision `ask-review-lenient-arm`), and only those two: a review with
+  // anything numbered painted after its rows still offers exactly the pane's own two, each under its printed digit.
+  const rows = reviewRows(dialog);
+  const shown = rows === null ? [] : dialog.options.filter((o) => o.index === rows.submit || o.index === rows.cancel);
+  const disabled = locked || answering !== null;
+  // Claude Code's own keys on this screen (decision `ask-review-digit-keys`, the operator's ruling "Match Claude Code"):
+  // `1` submits every answer and `2` cancels AT ONCE, which declines the whole ask, exactly as in the terminal. The
+  // Cancel row keeps saying so (`CANCEL_DECLINES_ALL`). Bound only while this review is mounted (the sheet is open),
+  // and never while a text field or editable has focus, so a digit typed into the composer stays the composer's.
+  useEffect(() => {
+    if (rows === null || disabled) return undefined;
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.defaultPrevented || e.repeat || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+      if (e.key !== '1' && e.key !== '2') return;
+      if (typingInto(e.target)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      onAnswer(e.key === '1' ? rows.submit : rows.cancel);
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [rows?.submit, rows?.cancel, disabled, onAnswer]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <>
       {summary.length > 0 && <p className="dlg-body">{summary.join('\n')}</p>}
       <div className="opts">
-        {dialog.options.map((o) => {
+        {shown.map((o) => {
           const selected = o.index === dialog.selectedIndex;
           const waiting = answering === o.index;
           return (
@@ -110,8 +138,8 @@ export function AskReview({
               glyph={selected ? '❯' : ''}
               index={o.index}
               label={o.label}
-              sublabel={o.index === REVIEW_CANCEL_INDEX ? CANCEL_DECLINES_ALL : undefined}
-              disabled={locked || answering !== null}
+              sublabel={o.index === rows?.cancel ? CANCEL_DECLINES_ALL : undefined}
+              disabled={disabled}
               busy={waiting}
               onClick={() => onAnswer(o.index)}
               marker={waiting ? <span className="opt-wait">answering…</span> : undefined}

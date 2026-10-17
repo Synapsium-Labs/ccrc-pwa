@@ -3,7 +3,7 @@ import { autoContinueArmed, editHintShown, freeTextRow, hasMenu, parseDialog, tu
 import type { KeyedQueue } from './queue.js';
 import {
   composePrompt, isDialogMultiIndexes, isDialogText, MAIL_ENVELOPE_FENCE,
-  type Dialog, type DialogMultiRefuseCode, type DialogRefuseCode, type DialogTextRefuseCode,
+  type Dialog, type DialogAnswered, type DialogMultiRefuseCode, type DialogRefuseCode, type DialogTextRefuseCode,
 } from '../../../shared/api.js';
 import { FREE_TEXT_PLACEHOLDER_RE } from '../../../shared/ask-menu.js';
 
@@ -1432,7 +1432,70 @@ export function submitEnter(
 }
 
 /** `answerDialog`'s answer. The refusals are `DialogRefuseCode` (`shared/api.ts`), where each is described. */
-export type DialogResult = { ok: true } | { ok: false; error: DialogRefuseCode };
+export type DialogResult = DialogAnswered | { ok: false; error: DialogRefuseCode };
+
+/** `settleNext`'s pause between captures, and its wall-clock budget from the answer's last key. */
+const SETTLE_POLL_MS = 100;
+const SETTLE_BUDGET_MS = 1500;
+
+/** What a capture shows, as the session stream would frame it: the menu `parseDialog` reads, or null for no menu
+ *  (the same `hasMenu` gate as `sessionws.ts`'s `checkDialog`, SGR stripped). */
+function screenOf(pane: string): Dialog | null {
+  return hasMenu(pane.replace(SGR, '')) ? parseDialog(pane) : null;
+}
+
+/**
+ * The screen an answer moved the pane to (decision `ask-answer-returns-next-screen`): captured every 100 ms after the
+ * answer's last key, for at most 1.5 s of wall-clock time (`d.now`; each capture is raced against what is left of it,
+ * so a slow remote capture cannot hold the session's keyboard queue past it), until the pane shows a screen other than
+ * the one answered (`still` says which screens are still that one) TWICE IN A ROW, so a capture taken mid-repaint is never returned as the next screen. The
+ * screen is a Dialog, or null for no menu at all (the ask was submitted or declined). Absent (`{}`) when the pane did
+ * not settle on another screen within the budget, which leaves the caller on the session stream's next frame, as before.
+ *
+ * Why it exists (the 2026-10-16 report): the sheet that answered the last question learned of the review screen only
+ * from the stream's 2 s poll. One poll that saw no menu sent `dialog_cleared`, and until a later poll sent the review,
+ * the envelope sheet had nothing to match and showed "Open terminal to answer". The answer's own route has the
+ * keyboard queue and the pane: it can say where the pane went.
+ *
+ * A failed capture (null) is no reading: it neither moves nor settles. Reads only; it never sends a key.
+ */
+async function settleNext(
+  d: SendDeps, id: string, still: (dialog: Dialog) => boolean, sleep: (ms: number) => Promise<void>,
+): Promise<{ next?: Dialog | null }> {
+  const now = d.now ?? Date.now;
+  const deadline = now() + SETTLE_BUDGET_MS;
+  let seen: { next: Dialog | null; key: string } | null = null;
+  for (;;) {
+    if (now() >= deadline) return {};
+    await sleep(Math.min(SETTLE_POLL_MS, deadline - now()));
+    if (now() >= deadline) return {};
+    const pane = await captureWithin(d, id, deadline - now());
+    if (now() >= deadline || pane === OUT_OF_TIME) return {};
+    if (pane === null) continue;
+    const next = screenOf(pane);
+    if (next !== null && still(next)) {
+      seen = null;
+      continue;
+    }
+    const key = next === null ? '' : `${next.id}\n${next.parsed ? '' : next.raw}`;
+    if (seen !== null && seen.key === key) return { next };
+    seen = { next, key };
+  }
+}
+
+const OUT_OF_TIME = Symbol('out-of-time');
+
+/** One capture, given up on after `ms` of real time. On the fleet a capture is a remote call that can wait 15 s, and
+ *  `settleNext` runs inside the session's keyboard queue: the budget has to bound the wait, not only the count. A
+ *  capture given up on is left to finish on its own; nothing reads it. */
+function captureWithin(d: SendDeps, id: string, ms: number): Promise<string | null | typeof OUT_OF_TIME> {
+  let timer: NodeJS.Timeout | undefined;
+  const out = new Promise<typeof OUT_OF_TIME>((resolve) => {
+    timer = setTimeout(() => resolve(OUT_OF_TIME), Math.max(0, ms));
+    timer.unref?.();
+  });
+  return Promise.race([d.tmux.capture(id), out]).finally(() => clearTimeout(timer));
+}
 
 /**
  * Answer a pane menu dialog by walking the ❯ marker to `optionIndex` and
@@ -1482,7 +1545,7 @@ export function answerDialog(
     if (freeTextRow(after) === optionIndex) return { ok: false, error: 'free-text-row' };
 
     await d.tmux.sendKey(id, 'Enter');
-    return { ok: true };
+    return { ok: true, ...(await settleNext(d, id, (now) => now.id === dialogId, sleep)) };
   });
 }
 
@@ -1507,7 +1570,7 @@ async function walkCursor(
 }
 
 /** `answerDialogText`'s answer. The refusals are `DialogTextRefuseCode` (`shared/api.ts`), where each is described. */
-export type DialogTextResult = { ok: true } | { ok: false; error: DialogTextRefuseCode };
+export type DialogTextResult = DialogAnswered | { ok: false; error: DialogTextRefuseCode };
 
 /** Whitespace runs collapsed and the ends trimmed: how a row's text and the caller's text are compared. The pane keeps
  *  no run: `leftCol` cuts a label at two spaces, and a wrapped answer's rows are joined back with one space. */
@@ -1593,12 +1656,17 @@ export function answerDialogText(
     }
 
     await d.tmux.sendKey(id, 'Enter');
-    return { ok: true };
+    // Typing changed this screen's id (it hashes the row's label), so "still this question" is its title and every
+    // other row's label, the pwa's `questionKey` rule.
+    const others = (screen: Dialog): string[] => screen.options.filter((o) => o.index !== optionIndex).map((o) => o.label);
+    const same = (screen: Dialog): boolean =>
+      screen.parsed && screen.title === dialog.title && others(screen).join('\n') === others(dialog).join('\n');
+    return { ok: true, ...(await settleNext(d, id, same, sleep)) };
   });
 }
 
 /** `answerDialogMulti`'s answer. The refusals are `DialogMultiRefuseCode` (`shared/api.ts`), where each is described. */
-export type DialogMultiResult = { ok: true } | { ok: false; error: DialogMultiRefuseCode };
+export type DialogMultiResult = DialogAnswered | { ok: false; error: DialogMultiRefuseCode };
 
 /**
  * Answer a multiSelect AskUserQuestion question (D-5048, `POST /api/sessions/:id/dialog/multi`): leave exactly the
@@ -1687,7 +1755,8 @@ export function answerDialogMulti(
       const next = seen === null ? null : parseDialog(seen);
       moved = next !== null && next.title !== dialog.title;
     }
-    return moved ? { ok: true } : { ok: false, error: 'commit-failed' };
+    if (!moved) return { ok: false, error: 'commit-failed' };
+    return { ok: true, ...(await settleNext(d, id, (now) => now.title === dialog.title, sleep)) };
   });
 }
 

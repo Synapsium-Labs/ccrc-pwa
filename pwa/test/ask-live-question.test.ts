@@ -200,6 +200,9 @@ describe('namedQuestion: the question the pane title names (D-5089)', () => {
   });
 });
 
+/** A capture with every ready line taken out: the screen never painted it. */
+const withoutReady = (raw: string): string => raw.split('\n').filter((l) => !/ready to submit your answers\?/i.test(l)).join('\n');
+
 describe('isAskReview: the review screen, told by its body\'s last line and its two rows (D-5089)', () => {
   it('every recorded review screen', () => {
     for (const name of [
@@ -230,16 +233,24 @@ describe('isAskReview: the review screen, told by its body\'s last line and its 
   it('the review\'s last line over other rows is not the review (DERIVED)', () => {
     const review = pane('cc300-ask-review-same-labels');
     expect(isAskReview({ ...review, options: [{ index: 1, label: 'Yes' }, { index: 2, label: 'No' }] })).toBe(false);
-    expect(isAskReview({ ...review, options: [...review.options, { index: 3, label: 'Chat about this' }] })).toBe(false);
+    // A third row under Submit answers and Cancel is the lenient arm's case (decision `ask-review-lenient-arm`): still
+    // the review while the screen paints the ready line; without it, not.
+    const third = { ...review, options: [...review.options, { index: 3, label: 'Chat about this' }] };
+    expect(isAskReview(third)).toBe(true);
+    expect(isAskReview({ ...third, raw: withoutReady(third.raw) })).toBe(false);
     // Each row is read: Submit answers over another second row is not it either.
     expect(isAskReview({ ...review, options: [review.options[0]!, { index: 2, label: 'Edit answers' }] })).toBe(false);
     expect(isAskReview({ ...review, options: [{ index: 1, label: 'Send' }, review.options[1]!] })).toBe(false);
   });
 
-  it('Submit answers and Cancel under a body that does not end with the ready line are not the review (DERIVED)', () => {
+  it('Submit answers and Cancel on a screen that never paints the ready line are not the review (DERIVED)', () => {
     const review = pane('cc300-ask-review-same-labels');
-    expect(isAskReview({ ...review, body: 'Review your answers\n\nEnable caching?\n   → Yes' })).toBe(false);
-    expect(isAskReview({ ...review, body: undefined })).toBe(false);
+    const raw = withoutReady(review.raw);
+    expect(isAskReview({ ...review, raw, body: 'Review your answers\n\nEnable caching?\n   → Yes' })).toBe(false);
+    expect(isAskReview({ ...review, raw, body: undefined })).toBe(false);
+    // A body cut short of the ready line, on a screen that does paint it, is the lenient arm's (decision
+    // `ask-review-lenient-arm`).
+    expect(isAskReview({ ...review, body: 'Review your answers\n\nEnable caching?\n   → Yes' })).toBe(true);
     // An unparsed screen never is, whatever it carries.
     expect(isAskReview({ ...review, parsed: false })).toBe(false);
   });

@@ -247,6 +247,7 @@ function AskCard({
   questions,
   result,
   askPending = false,
+  answerLabel = 'Answer',
   onAnswer,
 }: {
   questions: string[];
@@ -255,6 +256,9 @@ function AskCard({
    *  derivation source. Both shapes are hosted by the same sheet, so both
    *  make this card answerable. */
   askPending?: boolean;
+  /** The control's word: `Answer`, or what the sheet it raises is waiting on (`Submit answers` while the pane is on an
+   *  ask's review screen). It still only raises the sheet. */
+  answerLabel?: string;
   /** Raise the answer sheet. NOT an answer — see the state row below. */
   onAnswer?: () => void;
 }): ReactNode {
@@ -297,7 +301,7 @@ function AskCard({
               title="Open the answer sheet"
               onClick={onAnswer}
             >
-              Answer
+              {answerLabel}
             </button>
           )}
         </p>
@@ -336,17 +340,19 @@ export function ToolCard({
   use,
   result,
   askPending,
+  answerLabel,
   onAnswer,
 }: {
   use: ToolUseEvent;
   result?: ToolResultEvent;
   askPending?: boolean;
+  answerLabel?: string;
   onAnswer?: () => void;
 }): ReactNode {
   const questions = askOf(use);
   if (questions !== null) {
     return (
-      <AskCard questions={questions} result={result} askPending={askPending} onAnswer={onAnswer} />
+      <AskCard questions={questions} result={result} askPending={askPending} answerLabel={answerLabel} onAnswer={onAnswer} />
     );
   }
   return <GenericToolCard use={use} result={result} />;
