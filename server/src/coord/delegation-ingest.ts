@@ -506,7 +506,7 @@ export function ingestDelegationBucket(input: DelegationBucketInput, state: Deep
   const prior = durableRow(state, id);
   if (prior !== undefined && prior.replaced) return gap(state, id, prior.detail ?? `${DELEGATION_BUCKET_REPLACED}: this bucket was replaced`, false, true);
   if (state.phase !== 'ready') return gap(state, id, 'recovery-not-ready: the observation lane is reconstructing', false, true);
-  if (input.capabilityPresent === false) return gap(state, id, 'capability-absent', false, true);
+  if (input.capabilityPresent === false) return gap(state, id, DELEGATION_HOUR_NO_CAPABILITY, false, true);
   if (input.capabilityPresent === null) return gap(state, id, 'capability-unmeasured', false, true);
 
   const durable = prior ?? freshRow(id);
@@ -720,11 +720,11 @@ export async function readDelegationBucket(
       || (req.anchorStart !== null && (!isOffset(req.anchorStart) || req.anchorStart > req.cursor))) {
     return bad('input-invalid', 'the request does not name an owner, an hourly bucket and a durable coordinate');
   }
-  if (req.capabilityPresent === false) return bad('capability-absent', 'the fleet does not offer delegation events');
+  if (req.capabilityPresent === false) return bad(DELEGATION_HOUR_NO_CAPABILITY, 'the fleet does not offer delegation events');
   if (req.capabilityPresent === null) return bad('capability-unmeasured', 'the delegation capability could not be measured');
   if (!req.listing.ok) {
     return req.listing.reason === 'absent'
-      ? bad('directory-absent', 'the owner spool directory does not exist')
+      ? bad(DELEGATION_HOUR_NO_SPOOL, 'the owner spool directory does not exist')
       : bad('directory-unreadable', 'the owner spool directory could not be listed');
   }
   const readStart = req.anchorStart ?? req.cursor;

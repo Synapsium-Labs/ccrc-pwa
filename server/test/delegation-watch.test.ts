@@ -3844,6 +3844,19 @@ describe('R89 (W1 b, coordinator 5512): an owner a pass listed is read once befo
     expect(w.watcher.delegationReport().lostEvidence.forced).toBe(1);
   });
 
+  it('R105 (review F5): a listed owner, gone by the next census, whose late listing fails is still read for the hour it was listed in: that hour is a loss, and vetoes', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    makeOwner(w, 'demo-x');
+    await censusPass(w, at(-1), BEFORE_TREE);                           // ready
+    creatorAfter(w, at(0));
+    await cutAt(w, at(1), WITH_TREE, pair, { 'demo-a': measured(), 'demo-x': measured() }, 'demo-x');
+    w.faults.listing.set('demo-x', 'unreadable');                       // from here on its directory cannot be listed: no bucket names an hour
+    for (let i = 2; i < 6; i++) await censusPass(w, at(i), WITH_TREE);   // demo-x is in no census from here on
+    expect(leasesOf(w.home), 'its listed hour vetoes').toEqual([]);
+    expect(intervalFor(w.home, 'demo-x')).toMatchObject({ state: 'unmeasured', detail: expect.stringMatching(/^directory-unreadable/) });
+  });
+
   it('R89: a listed owner whose incarnation was unmeasured, gone by the next census, still gets its incarnation-unmeasured gap for the hour it was listed in', async () => {
     const w = world();
     makeOwner(w, 'demo-0');
