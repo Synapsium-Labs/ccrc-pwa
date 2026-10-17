@@ -3554,18 +3554,20 @@ describe.skipIf(process.platform !== 'linux')('row 64 on Darwin: killpg answers 
     expect(t20log()).toEqual(['15 EPERM', '0 ESRCH', '15 EPERM', '0 ESRCH']);
   }, 60000);
 
-  it('EPERM stays loud: a live leader that refuses, and a leader already reaped that refuses, both raise EPERM; any other errno raises even against an exited, unreaped leader', () => {
+  // Each fake refuses the SIGTERM alone and lets every later signal through, so an arm reads the SIGTERM call's own
+  // decision: a refusal kept up to the SIGKILL would raise there whatever the SIGTERM call did (D-5335).
+  it('EPERM stays loud: a live leader that refuses the SIGTERM, and a leader already reaped that refuses it, both raise EPERM; any other errno raises even against an exited, unreaped leader', () => {
     const got = unitJson<Record<string, string>>(h.home, [
       'import errno, os, signal, subprocess',
       'real = os.killpg',
-      'def refuse(pgid, sig):',
-      '    raise OSError(errno.EPERM, "Operation not permitted")',
-      'def einval_at_term(pgid, sig):',
-      '    if sig != signal.SIGTERM:',
-      '        return real(pgid, sig)',
-      '    raise OSError(errno.EINVAL, "Invalid argument")',
-      'def stop(p, fake=refuse):',
-      '    os.killpg = fake',
+      'def at_term(err):',
+      '    def fake(pgid, sig):',
+      '        if sig != signal.SIGTERM:',
+      '            return real(pgid, sig)',
+      '        raise OSError(err, os.strerror(err))',
+      '    return fake',
+      'def stop(p, err=errno.EPERM):',
+      '    os.killpg = at_term(err)',
       '    try:',
       '        H.SYS._stop(p)',
       "        return 'returned'",
@@ -3586,7 +3588,7 @@ describe.skipIf(process.platform !== 'linux')('row 64 on Darwin: killpg answers 
       "res['reaped'] = stop(done)",
       "odd = subprocess.Popen(['true'], start_new_session=True)",
       'os.waitid(os.P_PID, odd.pid, os.WEXITED | os.WNOWAIT)   # exited, not reaped',
-      "res['einval'] = stop(odd, einval_at_term)",
+      "res['einval'] = stop(odd, errno.EINVAL)",
       'odd.wait()',
       'out(res)',
     ].join('\n'), { timeoutMs: 60_000 });

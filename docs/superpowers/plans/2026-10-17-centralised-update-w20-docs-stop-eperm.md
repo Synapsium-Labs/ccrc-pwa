@@ -308,6 +308,21 @@ The coordinator's mail ruled on review 573's six findings at `97493f9b2`. F1: th
 
 - [x] **Step 1 (red first).** Case 4 is new: `the absorb is the SIGTERM call's alone: at the SIGKILL, an EPERM against an exited, unreaped leader raises (D-5335)`. Its fake `killpg` swallows the SIGTERM, so the leader (`sleep 30`) outlives the grace. At the SIGKILL it makes the real call, waits with `waitid(WNOWAIT)` until the leader has exited unreaped, and answers EPERM, Darwin's answer for that group of zombies.
   **Measured at `97493f9b2` with the new rows:** `1 failed | 3 passed | 184 skipped`. Case 4 is red, reading `kill: returned` with signals `[15, 9]`. Case 3's new `einval` arm is already green there, because the old code raises every errno but EPERM.
+- [x] **Step 2 (the fix, D-5335).** `_signal_group(self, proc, sig, absorb_reaped=False)`: the absorb's condition gains `absorb_reaped and` in front, and the docstring says the grace loop judges what is left only after the SIGTERM. `_stop` passes `absorb_reaped=True` at its SIGTERM call and nothing at its SIGKILL call. Line 2 is restamped with the verb; `--check ccd/ccd` reads `ccrc-unmodified`, with one marker line. `ccd/ccd` is 39788 lines, mode 100755, numstat 12 9 against `97493f9b2`, in two hunks: line 2, and `_stop` with `_signal_group`. `_group_alive` is untouched, and `git grep '_signal_group('` finds no caller but `_stop`'s two.
+  **Measured:** the describe gives `4 passed | 184 skipped`.
+- [x] **Step 3 (case 3 re-aimed).** Under the fix, T20-M2 and T20-M3 measured **green**. Case 3's fakes refused every signal, so after a mutant absorbed the SIGTERM the refusal still reached the SIGKILL, which now raises, and both arms read `raised EPERM` anyway. Each fake now refuses the SIGTERM alone and lets later signals through, so each arm reads the SIGTERM call's own decision. The arms are named `live`, `reaped` and `einval`; `einval` waits with `waitid(WNOWAIT)` for an exited, unreaped leader.
+- [x] **Step 4 (mutation rows, measured, worker, 2026-10-17).** Each mutant is applied by exact string to the fixed `ccd/ccd` (not restamped). The describe then runs with `-t 'row 64 on Darwin'`, the file is restored with `cp`, and `cmp` matches. `--check` read `ccrc-unmodified` after the last restore.
+
+| Row | Mutant | Measured red |
+|---|---|---|
+| T20-M1 | `reaped = False` | cases 1 and 2 |
+| T20-M2 | drop `proc.returncode is None and` | case 3: `reaped` reads `returned` |
+| T20-M3 | drop `and proc.poll() is not None` | case 3: `live` reads `returned` |
+| T20-M4 | `if e.errno not in (errno.ESRCH, errno.EPERM): raise` | case 3 (`live` and `reaped` read `returned`) and case 4 (`kill` reads `returned`) |
+| T20-M5 | drop `e.errno == errno.EPERM and` (review 573's F2) | case 3: `einval` reads `returned` |
+| T20-M6 | the SIGKILL call passes `absorb_reaped=True` (absorb at both calls) | case 4: `kill` reads `returned` |
+
+T20-M4 now reds case 4 as well, because that mutant absorbs every EPERM at every call. No row is green.
 
 ## Readings (for the coordinator to rule)
 

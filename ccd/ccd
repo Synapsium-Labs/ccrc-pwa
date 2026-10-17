@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=ed352348edc66ab2e8ecf09bbd47eeb62317f887a07557fd6cd268cf09223cd7
+# ccrc:generated 1 sha256=b1fbda5a0b27c600974b8e676cf56e57afb2b170513e86edbb1ec06ef2518d7f
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -36734,7 +36734,7 @@ class Sys(Sys):
         later gets SIGKILL. The leader is reaped as it goes, so a group that
         has emptied answers ESRCH, which ends the wait early."""
         pgid = proc.pid
-        self._signal_group(proc, signal.SIGTERM)
+        self._signal_group(proc, signal.SIGTERM, absorb_reaped=True)
         until = self.monotonic() + KILL_GRACE_S
         while self.monotonic() < until:
             if proc.poll() is not None and not self._group_alive(pgid):
@@ -36744,18 +36744,21 @@ class Sys(Sys):
             self._signal_group(proc, signal.SIGKILL)
         proc.wait()
 
-    def _signal_group(self, proc, sig):
+    def _signal_group(self, proc, sig, absorb_reaped=False):
         """killpg the leader's group. ESRCH, a group already empty, is no
         error. Darwin answers EPERM, not ESRCH, while every member left is a
-        zombie, and an exited leader not yet reaped is one: an EPERM met while
-        the leader was unreaped reaps it (poll) and is no error either, and
-        _stop's wait judges whatever is left. Any other EPERM, a leader
-        already reaped included, is a refusal and raises; on Linux, which
-        signals a zombie leader's group with rc 0, that is the only kind."""
+        zombie, and an exited leader not yet reaped is one. With absorb_reaped,
+        which only _stop's SIGTERM passes, an EPERM met while the leader was
+        unreaped reaps it (poll) and is no error either: the grace loop that
+        follows judges whatever is left. At the SIGKILL no wait follows but
+        the leader's, so there every EPERM raises, and a refusal to stop a
+        member is loud, never hidden. Any other EPERM, a leader already reaped
+        included, is a refusal and raises; on Linux, which signals a zombie
+        leader's group with rc 0, that is the only kind."""
         try:
             os.killpg(proc.pid, sig)
         except OSError as e:
-            reaped = e.errno == errno.EPERM and proc.returncode is None and proc.poll() is not None
+            reaped = absorb_reaped and e.errno == errno.EPERM and proc.returncode is None and proc.poll() is not None
             if e.errno != errno.ESRCH and not reaped:
                 raise
 
