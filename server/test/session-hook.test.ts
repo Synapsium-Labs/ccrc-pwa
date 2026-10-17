@@ -1129,7 +1129,7 @@ describe('the SessionStart graph card', () => {
 
   it('prints NOTHING when the tree has no graph and the sweep never mentioned it', () => {
     const tree = path.join(home, 'tree');
-    gitTree(tree, 1);
+    gitTree(tree, 1); fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-basin.child'), '');   // a child row: the D-5301 role subject is silent, so this subject's own silence is what is measured
     expect(run({ hook_event_name: 'SessionStart', cwd: tree })).toBe('');
   });
 
@@ -1149,7 +1149,7 @@ describe('the SessionStart graph card', () => {
   // engine's stderr, or from a whole matched refusal line.
   it('clips a pathological census reason instead of injecting it whole', () => {
     const tree = path.join(home, 'tree');
-    gitTree(tree, 1);
+    gitTree(tree, 1); fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-basin.child'), '');   // a child row: the D-5301 role subject is silent, so the bound measures this subject alone
     sweepPass([{ path: tree, outcome: 'failed', reason: 'x'.repeat(100_000) }]);
     const text = card(run({ hook_event_name: 'SessionStart', cwd: tree }));
     expect(text).toContain('failed');
@@ -1222,7 +1222,7 @@ describe('the SessionStart graph card', () => {
       passes: [{ started: 'x', finished: 'x', pin: '0.9.9', status: 'ok', trees: [
         { path: gone, outcome: 'never-built', reason: 'no exclude entry', duration_ms: 3 },
       ] }],
-    }));
+    })); fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-basin.child'), '');   // a child row: the D-5301 role subject is silent, so this subject's own silence is what is measured
     expect(run({ hook_event_name: 'SessionStart', cwd: gone })).toBe('');
     expect(readState().state).toBe('done');
   });
@@ -10279,7 +10279,7 @@ describe('memory convergence (spec 2026-09-08 §2)', () => {
   // deleted fleet-wide. Every other memory test here reads the filesystem, so
   // a stray `echo` on the converge path was invisible to all of them.
   it('prints nothing on the converge path — a second stdout line deletes both cards fleet-wide', () => {
-    expect(run(payload())).toBe('');
+    fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-basin.child'), ''); expect(run(payload())).toBe('');   // a child row: the D-5301 role subject is silent
   });
 
   // The call site sits ABOVE the `source == compact` early return, and the
