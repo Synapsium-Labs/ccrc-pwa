@@ -5710,13 +5710,25 @@ export function routeFieldsOrNull(r: RouteFields): RouteFields | null {
  * evidence could not be read; retry, and do NOT drop the `sessionId` on this
  * account", because an unreadable marker or ledger is not a spent one. A
  * workspace with no marker is refused only when the registry cannot be listed.
+ *
+ * `status-unmeasurable` and `worker-starting` are the dispatch resume arm's
+ * live gate (D-5238): the `/clear` is typed only when the fail-closed turn
+ * verdict (`turnVerdictFor`, `server/src/turnverdict.ts`) reads `idle`.
+ * `status-unmeasurable` — the session's live file (or its pane) could not be
+ * read, so whether it is mid-turn was never measured: `hookstate-unmeasurable`'s
+ * twin one read further, with the same retry-once-then-report rule.
+ * `worker-starting` — the pane THIS dispatch's `ensure` just started has not
+ * published its live file yet, within the server's bounded wait: nothing was
+ * held, cleared or sent and the run is untouched, so the dispatch is simply
+ * sent again (the only way a spawn slower than the wait completes).
  */
 export type RunRefuseCode =
   | 'claimed-by-another' | 'paused' | 'mail-disabled' | 'cap-concurrency' | 'cap-daily'
   | 'ambiguous-dispatch' | 'worker-busy' | 'hookstate-unmeasurable' | 'not-dispatched'
   | 'prhistory-unreadable' | 'bad-transition' | 'unknown-item' | 'item-terminal'
   | 'project-mismatch' | 'home-mismatch' | 'hold-oversize' | 'hold-invalid' | 'review-in-flight'
-  | 'claimant-is-a-worker' | 'workspace-spent' | 'spent-unmeasured';
+  | 'claimant-is-a-worker' | 'workspace-spent' | 'spent-unmeasured'
+  | 'status-unmeasurable' | 'worker-starting';
 
 const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'claimed-by-another': true, paused: true, 'mail-disabled': true, 'cap-concurrency': true,
@@ -5726,6 +5738,7 @@ const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'project-mismatch': true, 'home-mismatch': true, 'hold-oversize': true, 'hold-invalid': true,
   'review-in-flight': true, 'claimant-is-a-worker': true,
   'workspace-spent': true, 'spent-unmeasured': true,
+  'status-unmeasurable': true, 'worker-starting': true,
 };
 export const RUN_REFUSE_CODES: readonly RunRefuseCode[] = Object.keys(RUN_REFUSE_CODE_MAP) as RunRefuseCode[];
 
