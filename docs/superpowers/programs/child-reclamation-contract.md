@@ -3811,6 +3811,10 @@ comments and test titles cite the spec, never this contract.
   The landing round absorbed `main` a fourth time, as `98fdbe114`, of `main` at `0b3ff2f62`. That brought five PRs:
   code PRs #384 (child reclamation's wave 10), #427, #428 and #431, and docs PR #426. Its one conflict was this
   contract's two "§17 as built" notes, which meet at the end of the file; both were kept whole, wave 10's first.
+  The second landing round absorbed `main` a fifth time, as `8fdce432e`, of `main` at `5fa7efddc`. That brought
+  seventeen PRs: code PRs #429, #438, #439, #443, #446, #447, #449, #450, #452, #483, #484, #485 (the supervisor
+  tick diet's third wave), #487, #488 and #489, and docs PRs #440 and #451. Its one conflict was `ccd/ccd`'s
+  generated stamp line, restamped; no function changed on both sides.
 - Workspace lifecycle's coordinator consented to its three `ws-expire` edits: the loop's identity pair and the verb's
   entry line, each with its short comment, and `_ws_expire_audit_contained`'s entry line. `_ws_expire_locked` and the
   EXPIRE-V1 note were not edited.
