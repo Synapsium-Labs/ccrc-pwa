@@ -1175,6 +1175,10 @@
 .sess-state--waiting { color: var(--status-attention-text); }
 .sess-state--working { color: var(--status-busy-text); }
 .sess-state--exited  { color: var(--ink-secondary); }
+/* D-5296: the quiet "with coordinator" state. The calm tone: secondary ink,
+   not the busy or attention hue — the session is neither running nor waiting
+   on the operator; its parent holds the question. */
+.sess-state--coordinator { color: var(--ink-secondary); }
 
 .sess-tally {
   font-family: var(--family-mono);

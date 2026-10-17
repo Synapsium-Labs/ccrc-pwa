@@ -239,6 +239,19 @@ export interface FleetSession {
    *  keeps a live `busy` on `working` (`sessionBucket`'s `!delegated`) and the
    *  wedge qualifier stands down. ADDITIVE: no `FLEET_PROTO` bump. */
   background: { count: number; kinds: string[] } | null;
+  /** `with-coordinator-state` (D-5296): this session's question is held by
+   *  its parent (the coordinator), which may answer before the operator is
+   *  notified. Set by `fleet.ts` from the session's NEWEST `asks` row while it
+   *  is `held` or `answering` and the assembly's clock is before `notifyAt`
+   *  (`askNotifyAt` of the row's mint time, D-5364); null in every other
+   *  case. While set, `sessionBucket` skips the attention rung and answers
+   *  `working`, dated `since`, so the child leaves Needs-you without a new
+   *  `SessionBucket` member. `kind` is `question` today; plan Task 16 adds
+   *  `approval` through the same computation. ADDITIVE: no `FLEET_PROTO`
+   *  bump. Read a live (cast) frame through `sessionWithCoordinator`; a cached
+   *  snapshot revives it as null (`reviveFleetSession`), which shows
+   *  Needs-you, the safe direction. */
+  withCoordinator: WithCoordinator | null;
   /** `interrupt-and-restart-causes-recorded` (D-5237): when and why this
    *  session's previous process ended, from `$REG/<id>.lastend` through
    *  `parseLastEnd`; null when the registry holds none or it is malformed.
@@ -676,6 +689,52 @@ export function sessionAsk(
     state: raw.state,
     parentId: raw.parentId,
     answeredBy: typeof by === 'string' && by !== '' ? by : null,
+  };
+}
+
+/** `with-coordinator-state` (D-5296): what the quiet state carries. `since` is
+ *  the hold's start (the asks row's mint time, ms) and `notifyAt` the moment
+ *  the operator is notified (`askNotifyAt` of that same time), both epoch ms. */
+export interface WithCoordinator {
+  kind: 'question' | 'approval';
+  parentId: string;
+  since: number;
+  notifyAt: number;
+}
+
+/** D-5296: THE ONE reader of `FleetSession.withCoordinator` on a live (cast,
+ *  not revived) frame and in the bucket ladder. A server predating the field
+ *  omits the key: `undefined` reads as null. A present-but-malformed value
+ *  (not an object, an unknown `kind`, a blank `parentId`, a non-finite
+ *  `since` or `notifyAt`) also reads as null, never a throw: null is the old
+ *  answer, Needs-you, which is the safe direction for a state that hides a
+ *  question from the operator's list. */
+export function sessionWithCoordinator(s: { withCoordinator?: unknown }): WithCoordinator | null {
+  const v = s.withCoordinator;
+  if (v === undefined || v === null || typeof v !== 'object' || Array.isArray(v)) return null;
+  const o = v as { kind?: unknown; parentId?: unknown; since?: unknown; notifyAt?: unknown };
+  if (o.kind !== 'question' && o.kind !== 'approval') return null;
+  if (typeof o.parentId !== 'string' || o.parentId === '') return null;
+  if (typeof o.since !== 'number' || !Number.isFinite(o.since)) return null;
+  if (typeof o.notifyAt !== 'number' || !Number.isFinite(o.notifyAt)) return null;
+  return { kind: o.kind, parentId: o.parentId, since: o.since, notifyAt: o.notifyAt };
+}
+
+/** D-5296, D-5390: the words of the quiet state, for the card and the header alike:
+ *  `with coordinator · <parent's short name>`. The short name is the parent's
+ *  id less the child's own `<project>-` prefix (a held ask's parent is in the
+ *  child's project, D-5363), or the whole id when it does not carry that
+ *  prefix. `title` says why the operator was not asked, and when they will be. */
+export function withCoordinatorWords(wc: WithCoordinator, project: string): { text: string; short: string; title: string } {
+  const prefix = `${project}-`;
+  const short = project !== '' && wc.parentId.startsWith(prefix) && wc.parentId.length > prefix.length
+    ? wc.parentId.slice(prefix.length)
+    : wc.parentId;
+  const what = wc.kind === 'approval' ? 'permission prompt' : 'question';
+  return {
+    text: `with coordinator · ${short}`,
+    short,
+    title: `${wc.parentId} holds this ${what} and may answer it first; you are notified at ${new Date(wc.notifyAt).toISOString().slice(11, 19)} UTC unless it answers or hands it over. You can still answer it yourself.`,
   };
 }
 
@@ -1383,7 +1442,11 @@ export interface WsTombstone {
 export type BucketInput = Pick<
   FleetSession,
   'status' | 'statusUpdatedAt' | 'dialogPending' | 'hookState' | 'archivedAt' | 'pr' | 'background'
->;
+> & {
+  /** D-5296: optional here so a literal that predates the field still
+   *  buckets; absent reads as null through `sessionWithCoordinator`. */
+  withCoordinator?: FleetSession['withCoordinator'];
+};
 
 /** `background-aware-working` (D-5231) — THE DELEGATED-TASK RULE, its one home.
  *  A task listed in a Stop's `background_tasks` is DELEGATED work (it can hold
@@ -1534,6 +1597,12 @@ export function sessionBucket(
   }
   if (s.status === 'dead') return { bucket: 'dead', bucketSince: s.statusUpdatedAt };
   if (s.dialogPending || s.hookState === 'waiting') {
+    // `with-coordinator-state` (D-5296): while the session's parent holds the
+    // question, the attention rung stands down and the row reads `working`,
+    // dated from the hold, so it leaves Needs-you. `fleet.ts` clears the field
+    // at `notifyAt` and on every hand-over, and the row returns here.
+    const wc = sessionWithCoordinator(s);
+    if (wc !== null) return { bucket: 'working', bucketSince: wc.since };
     // The hook's timestamp is the honest episode start ONLY when the hook is
     // why we are here; a pane-scraped dialog has no hook write behind it.
     const since = s.hookState === 'waiting' ? hookUpdatedAt ?? s.statusUpdatedAt : s.statusUpdatedAt;
@@ -3123,6 +3192,10 @@ export function reviveFleetSession(raw: unknown, unnamedSpawnWord: UnnamedSpawnW
       // (`reviveAsk`'s rule): the field is a display chip and one ladder
       // conjunct, and a cached row is bucketed with no hook stamp anyway.
       background: reviveBackground(o, 'background'),
+      // D-5296: ALWAYS null, whatever the snapshot carried. A cached row is
+      // old by definition, and a hold it recorded may have lapsed or been
+      // handed over since; null shows Needs-you, the safe direction.
+      withCoordinator: null,
       // D-5237. Absent → null (an older snapshot predates the field);
       // malformed → null (`reviveLastEnd`); an unknown cause → `unknown`.
       lastEnd: reviveLastEnd(o, 'lastEnd'),
@@ -3167,10 +3240,17 @@ export function reviveFleetSession(raw: unknown, unnamedSpawnWord: UnnamedSpawnW
     // that wrote it had `hookUpdatedAt` and we do not. An absent one is derived
     // and dated `null`: the ladder's bucket needs nothing this record lacks,
     // its `bucketSince` does.
+    // D-5389 (beside D-5296): a snapshot written while the session's parent
+    // held its question recorded the `working` that hold produced. That
+    // bucket is derived too,
+    // with the field now null, so the revived row shows Needs-you instead of
+    // a stale quiet state.
+    const wcRaw = o['withCoordinator'];
+    const derive = bucketRaw === null || (wcRaw !== undefined && wcRaw !== null);
     return {
       ...revived,
-      bucket: bucketRaw === null ? sessionBucket(revived, null).bucket : (bucketRaw as SessionBucket),
-      bucketSince: bucketRaw === null ? null : optNum(o, 'bucketSince'),
+      bucket: derive ? sessionBucket(revived, null).bucket : (bucketRaw as SessionBucket),
+      bucketSince: derive ? null : optNum(o, 'bucketSince'),
     };
   } catch (err) {
     if (err instanceof MalformedSnapshot) return null;

@@ -2918,8 +2918,10 @@ edge pushes as before. Delegated background work keeps its push for the moment t
   lock screen takes the same ask row, so the record names whoever ruled. A multi-select or multi-question ask, a
   session with no parent, a run this box could not read, or `$REG/asks-disabled` (touched by hand on the fleet
   host; an unlistable registry counts as present, and an ask already held still waits out its window) means the
-  push goes out at once, as before. The fleet row says what happened: `held — <parent> may answer`, then
-  `ruled by <parent>` or `answered by you`. An answer taken but never settled is given up, and your push sent,
+  push goes out at once, as before. While the parent holds the question the session leaves the attention bucket
+  and reads `with coordinator · <parent>` in a calm tone, on its card and its header, until the parent answers,
+  hands it over or the window ends (`FleetSession.withCoordinator`, D-5296); its dialog stays answerable from the
+  session screen. Afterwards the row says what happened: `ruled by <parent>` or `answered by you`. An answer taken but never settled is given up, and your push sent,
   60 s after it was first seen (`ASK_ANSWERING_MAX_MS`); the hold lives in memory, so a server restart mid-hold
   loses that one push. `GET /api/asks?parent=<id>` lists a parent's asks.
 - **Catch-up watermark**: `{epoch, seq}` as one atomic JSON value on both sides
@@ -5180,8 +5182,8 @@ working set, `SessionStart(compact)` serves the card once beside the graph card 
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:8174-8176`), each with an operator sentence of its own at `:8226`,
-`:8234` and `:8247`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:8254-8256`), each with an operator sentence of its own at `:8306`,
+`:8314` and `:8327`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 

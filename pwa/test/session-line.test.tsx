@@ -1656,3 +1656,53 @@ describe('a recent restart is named (D-5237)', () => {
     expect(cell()?.textContent).toBe('restarted · cause unknown · 2m ago');
   });
 });
+
+// `with-coordinator-state` (D-5296; plan Task 7): while the session's parent
+// holds its question the server buckets it `working` and sets
+// `withCoordinator`; the card's state word reads `with coordinator · <parent>`
+// in the calm tone, and the held chip yields to it (D-5390).
+describe('the quiet "with coordinator" state (D-5296)', () => {
+  const WC = { kind: 'question' as const, parentId: 'project-a-calm-mesa', since: 4000, notifyAt: 184_000 };
+  const held = (over: Partial<FleetSession> = {}): FleetSession => fleetSession({
+    id: 'project-a-quiet-basin', project: 'project-a', workspace: 'quiet-basin', status: 'idle',
+    hookState: 'waiting', bucket: 'working', bucketSince: 4000, withCoordinator: WC,
+    ask: { state: 'held', parentId: 'project-a-calm-mesa', answeredBy: null }, ...over,
+  });
+
+  for (const width of [360, 390, 1280, 1920]) {
+    it(`reads "with coordinator · calm-mesa" in the calm tone at ${width} px, with no held chip`, () => {
+      window.innerWidth = width;
+      window.dispatchEvent(new Event('resize'));
+      const { container } = render(<SessionLine session={held()} onOpen={() => {}} onActions={() => {}} />);
+      const cell = container.querySelector('.sess-state');
+      expect(cell?.textContent).toBe('with coordinator · calm-mesa');
+      expect(cell?.className).toContain('sess-state--coordinator');
+      expect(cell?.getAttribute('title')).toContain('project-a-calm-mesa');
+      expect(container.querySelector('.sess-ask-state')).not.toBeInTheDocument();
+    });
+  }
+
+  it('a parent outside the project prefix is named in full', () => {
+    const { container } = render(
+      <SessionLine session={held({ withCoordinator: { ...WC, parentId: 'lane-b-other' } })} onOpen={() => {}} onActions={() => {}} />,
+    );
+    expect(container.querySelector('.sess-state')?.textContent).toBe('with coordinator · lane-b-other');
+  });
+
+  it('without the field (an older server, or null) the row keeps its ordinary word and the held chip', () => {
+    const { container } = render(
+      <SessionLine session={held({ withCoordinator: undefined as never })} onOpen={() => {}} onActions={() => {}} />,
+    );
+    expect(container.querySelector('.sess-state')?.textContent).toBe('working');
+    expect(container.querySelector('.sess-ask-state')?.textContent).toBe('held — project-a-calm-mesa may answer');
+  });
+
+  it('Needs-you does not list it: the bucket bar has no Attention chip for it, and does for the lapsed row', async () => {
+    const { BucketBar } = await import('../src/fleet/BucketBar');
+    const quiet = render(<BucketBar sessions={[held()]} acks={{}} ackAll={() => {}} />);
+    expect(quiet.container.textContent).not.toContain('Attention');
+    quiet.unmount();
+    const loud = render(<BucketBar sessions={[held({ withCoordinator: null, bucket: 'attention' })]} acks={{}} ackAll={() => {}} />);
+    expect(loud.container.textContent).toContain('Attention');
+  });
+});

@@ -1163,3 +1163,54 @@ describe('a recent restart is named (D-5237)', () => {
     expect(screen.queryByText(/^restarted · /)).not.toBeInTheDocument();
   });
 });
+
+// `with-coordinator-state` (D-5296; plan Task 7): the header reads the same
+// words as the card, in the calm (idle) tint, and the dialog stays answerable
+// from the session screen: the operator can still answer first.
+describe('the quiet "with coordinator" state (D-5296)', () => {
+  const WC = { kind: 'question' as const, parentId: 'project-a-calm-mesa', since: 4000, notifyAt: 184_000 };
+  const held = (over: Partial<FleetSession> = {}): FleetSession => baseSession({
+    id: 'project-a-quiet-basin', project: 'project-a', workspace: 'quiet-basin', workdir: '/data/projects/project-a/quiet-basin',
+    status: 'idle', hookState: 'waiting', bucket: 'working', bucketSince: 4000, withCoordinator: WC, ...over,
+  });
+
+  for (const width of [360, 390, 1280, 1920]) {
+    it(`reads "with coordinator · calm-mesa" in the calm tint at ${width} px`, () => {
+      window.innerWidth = width;
+      window.dispatchEvent(new Event('resize'));
+      renderHeader({ session: held(), status: 'idle' });
+      const line = document.querySelector('.status-line');
+      expect(line?.textContent).toBe('with coordinator · calm-mesa');
+      expect(line?.className).toContain('status-line--idle');
+      expect(line?.getAttribute('title')).toContain('You can still answer it yourself.');
+    });
+  }
+
+  it('without the field the header reads the ordinary working word', () => {
+    renderHeader({ session: held({ withCoordinator: null }), status: 'idle' });
+    expect(document.querySelector('.status-line')?.textContent).not.toContain('with coordinator');
+  });
+
+  it('the DialogSheet still opens from the session screen while the parent holds the question', () => {
+    const store = createSessionStore('project-a-quiet-basin', {
+      makeSocket: fakeSocket,
+      api: { prompt: vi.fn().mockResolvedValue(undefined) },
+    });
+    const fleet = createFleetStore({ makeSocket: fakeSocket });
+    act(() => { fleet.setState({ sessions: [held()], conn: 'open' }); });
+    render(<SessionScreen id="project-a-quiet-basin" store={store} fleet={fleet} />);
+    act(() => {
+      store.setState({
+        uuid: 'u1', status: 'idle',
+        dialog: {
+          id: 'd-1', title: 'Which branch?',
+          options: [{ index: 1, label: 'main' }, { index: 2, label: 'release' }],
+          selectedIndex: 1, parsed: true, raw: '❯ 1. main\n  2. release',
+        },
+      });
+    });
+    expect(document.querySelector('.status-line')?.textContent).toBe('with coordinator · calm-mesa');
+    expect(screen.getByText('Which branch?')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /release/ })).toBeInTheDocument();
+  });
+});

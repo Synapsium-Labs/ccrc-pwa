@@ -1895,3 +1895,99 @@ describe('a compaction keeps bucketSince (D-5239)', () => {
     expect(r.bucketSince).toBe(T0);
   });
 });
+
+// `with-coordinator-state` (D-5296; plan Task 7). `FleetSession.withCoordinator`
+// from the session's newest asks row: set while it is `held` or `answering` and
+// the assembly's clock is before `askNotifyAt(row.at)` (the MINT time, D-5364,
+// never `askAt`), null on every other state and from `notifyAt` on. The row
+// shape is the Task 19 block's own `insertAsk` fixture, neutral ids.
+describe('the quiet "with coordinator" state (D-5296)', () => {
+  const mkCoord = (): CoordStore =>
+    new CoordStore(openCoordDb(path.join(mkTmp('ccrc-coord-'), '.ccrc', 'coord.db')));
+  const dead = new Tmux(async () => ({ code: 1, stdout: '', stderr: '' }));
+  const live = new Tmux(async (_cmd, args) => {
+    if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
+    return { code: 0, stdout: '', stderr: '' };
+  });
+  const NOW_S = 1784600000;
+  const NOW_MS = NOW_S * 1000;
+  // `askAt` is deliberately far from the mint: a computation that read it
+  // instead of `at` would put `notifyAt` in 1970 and clear every case.
+  const mint = (coord: CoordStore, at: number, childId = 'project-a-quiet-basin'): number => coord.insertAsk({
+    childId, parentId: 'project-a-calm-mesa', runId: null, askKey: 'k',
+    askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: at,
+  });
+  const assemble = async (coord: CoordStore, nowS: number, tmux: Tmux = dead, hookStates?: Map<string, HookState>) => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'project-a-quiet-basin', 'claude');
+    seedSession(home, 'project-a-calm-mesa', 'claude');
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), tmux, nowS,
+      undefined, undefined, undefined, undefined, hookStates, undefined, coord,
+    );
+    return (id: string) => fleet.find((x) => x.id === id)!;
+  };
+
+  it('a held row one second before notifyAt sets the field; at notifyAt it is null', async () => {
+    // Minted 179 s before NOW: notifyAt = mint + 180 s = NOW + 1 s.
+    const coord = mkCoord();
+    mint(coord, NOW_MS - 179_000);
+    const before = await assemble(coord, NOW_S);
+    expect(before('project-a-quiet-basin').withCoordinator).toEqual({
+      kind: 'question', parentId: 'project-a-calm-mesa', since: NOW_MS - 179_000, notifyAt: NOW_MS + 1000,
+    });
+    const at = await assemble(coord, NOW_S + 1);
+    expect(at('project-a-quiet-basin').withCoordinator).toBeNull();
+  });
+
+  it('an answering row (mid-answer) keeps it', async () => {
+    const coord = mkCoord();
+    const id = mint(coord, NOW_MS - 10_000);
+    expect(coord.takeAskForAnswer(id, 1000).ok).toBe(true);
+    const get = await assemble(coord, NOW_S);
+    expect(get('project-a-quiet-basin').withCoordinator?.parentId).toBe('project-a-calm-mesa');
+  });
+
+  it('a declined, released or answered row gives null', async () => {
+    const declined = mkCoord();
+    expect(declined.declineAsk(mint(declined, NOW_MS - 10_000), NOW_MS - 5000)).toBe(true);
+    expect((await assemble(declined, NOW_S))('project-a-quiet-basin').withCoordinator).toBeNull();
+
+    const released = mkCoord();
+    expect(released.releaseAsk(mint(released, NOW_MS - 10_000), NOW_MS - 5000)).toBe(true);
+    expect((await assemble(released, NOW_S))('project-a-quiet-basin').withCoordinator).toBeNull();
+
+    const answered = mkCoord();
+    const id = mint(answered, NOW_MS - 10_000);
+    answered.takeAskForAnswer(id, 1000);
+    answered.settleAsk(id, 'project-a-calm-mesa', 'a', NOW_MS - 5000);
+    expect((await assemble(answered, NOW_S))('project-a-quiet-basin').withCoordinator).toBeNull();
+  });
+
+  it('a top-level session never has it, and neither does any session without a coord store', async () => {
+    const coord = mkCoord();
+    mint(coord, NOW_MS - 10_000);
+    const get = await assemble(coord, NOW_S);
+    expect(get('project-a-calm-mesa').withCoordinator).toBeNull();
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'project-a-quiet-basin', 'claude');
+    const bare = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), dead, NOW_S);
+    expect(bare.find((x) => x.id === 'project-a-quiet-basin')!.withCoordinator).toBeNull();
+  });
+
+  it('end to end: a live waiting child with the field is working, dated from the hold; without it, attention', async () => {
+    const hooks = new Map<string, HookState>([
+      ['project-a-quiet-basin', mkHookState({ state: 'waiting', updatedAt: NOW_MS - 2000 })],
+    ]);
+    const coord = mkCoord();
+    mint(coord, NOW_MS - 10_000);
+    const held = (await assemble(coord, NOW_S, live, hooks))('project-a-quiet-basin');
+    expect(held.withCoordinator).not.toBeNull();
+    expect({ bucket: held.bucket, bucketSince: held.bucketSince }).toEqual({ bucket: 'working', bucketSince: NOW_MS - 10_000 });
+    const lapsed = (await assemble(coord, NOW_S + 171, live, hooks))('project-a-quiet-basin');
+    expect(lapsed.withCoordinator).toBeNull();
+    expect(lapsed.bucket).toBe('attention');
+  });
+});
