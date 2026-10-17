@@ -4046,6 +4046,97 @@ describe('R107 to R109 (re-review N1 to N3): a cut pass never forgets what a new
   });
 });
 
+describe('R110 to R112 (review 533 F1, F2): each arm of R109 holds alone, and the ready instant covers the recovery\'s own duration', () => {
+  /** A pass at `t` over `sessions`, CUT at its budget while the read `reached` reports is still held; the read is NOT released here. */
+  async function cutHeld(w: World, t: number, projects: Record<string, CensusView>, sessions: readonly Sess[], reached: () => boolean): Promise<void> {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    setNow(t);
+    setCensus(w, projects, Object.fromEntries(sessions.map((s) => [s.id, measured()])), t);
+    const cut = pass(w, sessions);
+    await vi.waitFor(() => expect(reached(), 'the pass reached the held read').toBe(true));
+    await vi.advanceTimersByTimeAsync(DELEGATION_PASS_BUDGET_MS + 1);
+    await cut;
+    vi.useRealTimers();
+  }
+
+  it('R110 (F1 C): a pass cut while its OWN projects-root read is still pending marks the lane not ready AT THE CUT: the next pass reaches the owners and reconciles before the cut pass returns, and a session only the cut pass\'s census named does not let rung 4 link', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    await censusPass(w, at(-1), BEFORE_TREE);                           // ready
+    creatorAfter(w, at(0), 'demo-g');                                   // demo-g overlaps demo-a's creator, and only at(1)'s census names it
+    // the projects-root read of the NEXT pass that asks is held open (that pass's own call, not a shared promise); later ones answer
+    const realRealpath = w.io.realpath;
+    let holdNext = true;
+    let reached = false;
+    let openRoot!: () => void;
+    const rootGate = new Promise<void>((resolve) => { openRoot = resolve; });
+    w.io.realpath = async (p) => {
+      if (holdNext) { holdNext = false; reached = true; await rootGate; }
+      return realRealpath(p);
+    };
+    await cutHeld(w, at(1), WITH_TREE, [sessionOf('demo-a'), sessionOf('demo-g')], () => reached);
+    for (let i = 2; i < 6; i++) await censusPass(w, at(i), WITH_TREE);    // demo-g is gone; these passes reach the owners and reconcile
+    expect(leasesOf(w.home), 'the cut pass is still waiting on its read, and nothing links').toEqual([]);
+    openRoot();                                                         // only now does the cut pass return (its own mark comes too late)
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    for (let i = 6; i < 9; i++) await censusPass(w, at(i), WITH_TREE);
+    expect(w.calls.listings, 'no pass ever listed demo-g').not.toContain('demo-g');
+    expect(leasesOf(w.home), 'nor after it returned').toEqual([]);
+  });
+
+  it('R111 (F1 D): a pass cut AFTER the owners leaves the ready instant where it was: a creator call after that instant and the skew, and before the next pass, links once every owner is read', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    makeOwner(w, 'demo-x');
+    const pair = [sessionOf('demo-a'), sessionOf('demo-x')];
+    await censusPass(w, at(-1), BEFORE_TREE, pair);                     // the ready instant: at(-1)
+    creatorAfter(w, at(0));                                             // at(0)+20 s: after the instant and the skew, before at(1)
+    let releaseX!: () => void;
+    w.faults.hold.set('demo-x', new Promise<void>((resolve) => { releaseX = resolve; }));
+    const listed = w.calls.listings.filter((o) => o === 'demo-x').length;
+    await cutHeld(w, at(1), WITH_TREE, pair, () => w.calls.listings.filter((o) => o === 'demo-x').length > listed);   // cut on demo-x's listing
+    w.faults.hold.delete('demo-x');
+    releaseX();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    for (let i = 2; i < 6; i++) await censusPass(w, at(i), WITH_TREE, pair);   // every owner, demo-x included, is read
+    expect(w.calls.listings.filter((o) => o === 'demo-x').length, 'demo-x read after the cut').toBeGreaterThan(listed + 1);
+    expect(leasedOf(w), 'the cut came after the owners, so the instant did not move').toEqual([['raw-tree', 'raw', 'demo-a']]);
+  });
+
+  it('R112 (F2 G): the ready instant after an in-process recovery is when the recovery RETURNED: a creator call stamped inside a held-open recover() is held', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    await censusPass(w, at(-1), BEFORE_TREE);                           // ready; the applier opened at at(-1)
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const failed = vi.spyOn(DelegationDurability.prototype, 'failure').mockReturnValue({ code: 'journal-unreadable', detail: 'a fixture failure' } as never);
+    const realRecover = DelegationDurability.prototype.recover;
+    let openRecover!: () => void;
+    const recoverGate = new Promise<void>((resolve) => { openRecover = resolve; });
+    let inRecovery = false;
+    vi.spyOn(DelegationDurability.prototype, 'recover').mockImplementation(async function (this: DelegationDurability) {
+      failed.mockRestore();
+      inRecovery = true;
+      await recoverGate;
+      return realRecover.call(this);
+    });
+    // the pass at at(5) (past the retry interval) finds the applier failed and recovers, in process, with the recovery held open
+    setNow(at(5));
+    setCensus(w, WITH_TREE, { 'demo-a': measured() }, at(5));
+    const recovering = pass(w);
+    await vi.waitFor(() => expect(inRecovery, 'the pass is recovering').toBe(true));
+    // while it recovers: the clock moves (the budget timer does not), and demo-a creates raw-tree after the pass's clock and the skew
+    writeBucket(w, 'demo-a', BUCKET10,
+      bashPre('demo-a', 'toolu_wt1', ['old-tree'], iso(at(5) + 120_000)), bashPost('demo-a', 'toolu_wt1', ['old-tree', 'raw-tree'], iso(at(5) + 123_000)));
+    setNow(at(5) + 180_000);                                            // the recovery returns three minutes after the pass began
+    openRecover();
+    await recovering;                                                   // the same pass reaches the owners and reconciles
+    expect((await w.watcher.delegationApplier())!.failure()).toBeNull();
+    for (let i = 9; i < 13; i++) await censusPass(w, at(i), WITH_TREE);
+    expect(leasesOf(w.home), 'the creator began inside the recovery, which nothing listed').toEqual([]);
+    expect(w.watcher.delegationReport().lostEvidence.forced).toBe(1);
+  });
+});
+
 describe('R90 (W3, coordinator 5512): within one hour a loss word displaces a carve-out word, and a carve-out word never displaces a loss word', () => {
   const pair = [sessionOf('demo-a'), sessionOf('demo-x')];
   const T1 = '2026-10-15T10:31:00.000Z';
