@@ -39,7 +39,8 @@ with a shell on the fleet host and someone else's branch". They are not advice.
 **Editing note (D-104):** these ten lines are pinned verbatim by
 `server/test/reviewer-skill.test.ts`, whose clause literals are double-quoted.
 Keep every apostrophe STRAIGHT and keep double-quote characters out of a
-clause except the JSON shape in clause 7, which the pin spells escaped.
+clause except the JSON shape in clause 7 and the `rm -rf "$X"` shape in
+clause 9 (D-5292), which the pin spells escaped.
 
 1. Learn who you are on EVERY call: `fromId` and `fromUuid` come from `ccrc-api whoami`, which reads the pane you are in and REFUSES rather than naming another session. Re-read them each time; a uuid you cached is guaranteed stale after the `/clear` dispatch runs.
 2. Ack before you act, keyed on the row's DELIVERY id, never the mail row's own `id`. Reply to the coordinator through mail (`toId:'coordinator'`, with the `runId` of THIS review run), never by typing into your own pane.
@@ -49,7 +50,7 @@ clause except the JSON shape in clause 7, which the pin spells escaped.
 6. Report, never rule. This session never calls `POST /api/runs/:id/advance`, `POST /api/runs/:id/close`, `POST /api/runs/:id/dispatch` or `POST /api/ledger/deviations` on any run, never mails the worker, never sends work back and never allocates a deviation number. A finding that needs a ruling is written as such in the report — `needs a ruling:` and the question — and the coordinator rules.
 7. One report, written ONCE: to an absolute path under `$HOME/.cc-clips/<your session id>/`, by temp file and `mv` so a half-written report never exists at that path, named in the `review-done` mail's `artifacts`; after that mail you do not touch it. NOT under this worktree, however readable the file looks to you: the close route stats that path through the agent, whose read allowlist is `.cc-sessions`, `.cc-limits`, `.cc-clips`, `$HOME/.claude*` and the projects root — and every session worktree sits outside all five, so a report beside your checkout is refused `report-unreadable`. The mail's body opens with one JSON line, `{"reviewedTip":"<sha>","report":"<absolute path>"}`, which the coordinator submits to the close route exactly as you wrote it.
 8. Never run `ws-rm`, `ws-reap`, `ws-gc`, `ws-archive` or `ws-restore`. This workspace's lifecycle belongs to ccd and to the human, for any reason.
-9. Every question rides the AskUserQuestion tool — the structured ask the session hook captures — never free text in your pane; your parent (the coordinator) may answer it before the operator is notified. Keep your input box empty: a half-typed draft makes the delivery lane refuse `draft-present`.
+9. Every question rides the AskUserQuestion tool — the structured ask the session hook captures — never free text in your pane; your parent (the coordinator) may answer it before the operator is notified. Keep your input box empty: a half-typed draft makes the delivery lane refuse `draft-present`. In a shell script, never delete through a variable (`rm -rf "$X"`): use a literal path under your scratch directory, or leave temp directories to the reaper; such deletes stop your work on a permission prompt the operator must answer. Subagents never read this skill, and they raise almost all of these prompts: every subagent brief you write carries this rule, word for word.
 10. Remote control is decided at your creation, not by you: dispatched reviewers spawn WITHOUT it (`ws-add --no-rc`, the dispatch path's own declaration), and `~/.ccrc/remote-control` governs every non-dispatched session on this box. Neither is yours to write.
 
 **Clause 3 is the one the server checks.** When the coordinator closes your
