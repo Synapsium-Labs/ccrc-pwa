@@ -46,6 +46,9 @@ interface BoxCfg {
   onCall?: (args: string[], n: Record<string, number>) => void;
   /** The watcher's newest pane dialogs. */
   pending?: string[];
+  /** Real wall time added before EVERY call of the box's `io` (the turn verdict's and the live file's reads among
+   *  them): a loaded box, where the route's own I/O is still running when a fixed number of event-loop turns ends. */
+  slowIoMs?: number;
 }
 
 let open: FastifyInstance[] = [];
@@ -110,7 +113,15 @@ const box = async (cfg: BoxCfg = {}) => {
     return { code: 0, stdout: '', stderr: '' };
   };
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
-  const base = testDeps(home, run);
+  const base0 = testDeps(home, run);
+  const slow = cfg.slowIoMs;
+  const base = slow === undefined ? base0 : {
+    ...base0,
+    io: Object.fromEntries(Object.entries(base0.io).map(([k, f]) => [k, async (...a: unknown[]) => {
+      await realDelay(slow);
+      return (f as (...x: unknown[]) => unknown).apply(base0.io, a);
+    }])) as unknown as typeof base0.io,
+  };
   const watcher = { currentPending: () => new Set(cfg.pending ?? []), currentStatuslines: () => new Map(),
     stop: () => {} } as unknown as FleetWatcher;
   const app = await buildServer({ ...base, mailToken: TOKEN, coord }, new Bus(), watcher);
@@ -128,28 +139,51 @@ const box = async (cfg: BoxCfg = {}) => {
   };
 };
 
-/** Let real I/O (fs promises, the coordination database) finish between fake-clock steps: only `setTimeout` is faked,
- *  so `setImmediate` still turns the real event loop, poll phase included. */
-const flushIO = async (): Promise<void> => {
-  for (let i = 0; i < 40; i++) await new Promise<void>((r) => { setImmediate(r); });
+// The fake clock moves ONLY while the code under test is parked on a fake timer (D-5145). Only `setTimeout` is
+// faked, so `setImmediate` still turns the real event loop, poll phase included, and `Date` still reads real time.
+// Before every fake step the loop turns until a fake timer is pending (the route's own poll, re-armed after its read)
+// or the awaited request has settled. A fixed number of turns let fake time run ahead of the route's real I/O on a
+// loaded box: the route's read was still in flight, so the test stepped on, and the interleaving with its writes moved.
+
+/** Real wall time any one wait on the code under test may take before the case fails. */
+const REAL_BOUND_MS = 20_000;
+const turn = (): Promise<void> => new Promise<void>((r) => { setImmediate(r); });
+/** Wait `ms` of REAL time, through event-loop turns (the faked `setTimeout` cannot). */
+const realDelay = async (ms: number): Promise<void> => {
+  const until = Date.now() + ms;
+  while (Date.now() < until) await turn();
 };
-/** Advance fake time by `ms`, in 100 ms steps, flushing real I/O around each. */
+/** Turn the real event loop until `ok()` holds, failing past `REAL_BOUND_MS` of real time. */
+const untilReal = async (ok: () => boolean, what: string): Promise<void> => {
+  const deadline = Date.now() + REAL_BOUND_MS;
+  await turn();
+  while (!ok()) {
+    if (Date.now() > deadline) throw new Error(`${what} within ${REAL_BOUND_MS} ms of real time`);
+    await turn();
+  }
+};
+/** Turn the real event loop until the code under test is parked on a fake timer, or `isDone()`. */
+const untilParked = (isDone: () => boolean = () => false): Promise<void> =>
+  untilReal(() => vi.getTimerCount() > 0 || isDone(), 'the code under test neither parked on a timer nor settled');
+/** Advance fake time by `ms`, in 100 ms steps, each taken only once the code under test is parked; and park again. */
 const advance = async (ms: number): Promise<void> => {
   for (let t = 0; t < ms; t += 100) {
-    await flushIO();
+    await untilParked();
     await vi.advanceTimersByTimeAsync(Math.min(100, ms - t));
   }
-  await flushIO();
+  await untilParked();
 };
-/** Advance fake time in small steps until `p` settles; answers the value and how much fake time it took. */
+/** Advance fake time in small steps until `p` settles; answers the value and how much fake time it took — only the
+ *  fake milliseconds really advanced, each step taken only once the code under test is parked on a fake timer. */
 const settle = async <T>(p: Promise<T>, capMs = 60_000): Promise<{ value: T; elapsed: number }> => {
   let done = false; let value!: T;
   void p.then((v) => { done = true; value = v; });
   let elapsed = 0;
-  await flushIO();
+  await untilParked(() => done);
   while (!done && elapsed <= capMs) {
-    await advance(100);
+    await vi.advanceTimersByTimeAsync(100);
     elapsed += 100;
+    await untilParked(() => done);
   }
   if (!done) throw new Error(`did not settle within ${capMs} ms of fake time`);
   return { value, elapsed };
@@ -278,6 +312,21 @@ describe('a pane this dispatch started is waited for outside coordMutex (D-5238)
     expect(b.state()).toBe('planned');
   });
 
+  it('absent past the bound with every io read 40 ms slow in REAL time → the same 409, ensure count and elapsed bounds (D-5145)', async () => {
+    // The harness waits for the route's own timer: fake time never runs ahead of a read the route has not finished.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const b = await box({ ensure: [`ensured ${ID}\n`], slowIoMs: 40 });
+    hookDone(b.home);
+    const { value: res, elapsed } = await settle(b.dispatch());
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ ok: false, refused: 'worker-starting' });
+    expect(elapsed).toBeGreaterThanOrEqual(DISPATCH_SPAWN_WAIT_MS);
+    expect(elapsed).toBeLessThan(DISPATCH_SPAWN_WAIT_MS + DISPATCH_SPAWN_POLL_MS);
+    expect(b.n['ensure']).toBe(1);
+    expect(b.acts()).toEqual([]);
+    expect(b.state()).toBe('planned');
+  }, 60_000);
+
   it('an ensure that starts the pane AGAIN on the re-run → 409 worker-starting, with no second wait', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const b = await box({
@@ -310,7 +359,7 @@ describe('a pane this dispatch started is waited for outside coordMutex (D-5238)
       headers: { 'x-ccrc-mail-token': TOKEN }, payload: { intent: 'abandon' } });
     let closed = false;
     void close.then(() => { closed = true; });
-    for (let i = 0; i < 50 && !closed; i++) await flushIO();
+    await untilReal(() => closed, 'the close did not answer').catch(() => undefined);
     expect(closed, 'the close waited behind the dispatch\'s wait').toBe(true);
     expect(dispatched).toBe(false);
     expect((await close).statusCode).toBe(200);
