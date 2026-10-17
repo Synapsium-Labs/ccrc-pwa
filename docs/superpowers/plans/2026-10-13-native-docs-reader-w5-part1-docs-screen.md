@@ -22644,7 +22644,12 @@ reds += ['gate: ' + l for l in gate.splitlines() if l.startswith('FAIL ')]
 if not re.search(r'^\d+ gate checks, \d+ PASS$', gate, re.M):
     die('w5p1-gate.txt has no summary line: run Step 3 again')
 mut_head = json.load(open(os.path.join(S, 'w5p1-mut.manifest.json'), encoding='utf-8'))['head']
-if mut_head != git('rev-parse', 'HEAD'):
+# Fix round 4: the table may have been measured one plan-only commit back (its rows' `red` texts are written from the
+# table's own measurements, so they land after it); the code is the same when every path between differs only in PLAN.
+plan_only = mut_head != git('rev-parse', 'HEAD') and subprocess.run(
+    ['git', 'merge-base', '--is-ancestor', mut_head, 'HEAD']).returncode == 0 and git(
+    'diff', '--name-only', mut_head, 'HEAD').split() == [PLAN]
+if mut_head != git('rev-parse', 'HEAD') and not plan_only:
     die('the mutation table was measured at %s and HEAD is %s: run Step 4 again' % (mut_head[:12],
                                                                                 git('rev-parse', 'HEAD')[:12]))
 table = open(os.path.join(S, 'w5p1-mutation-table.md'), encoding='utf-8').read().rstrip('\n')
@@ -22744,8 +22749,11 @@ out = [HEAD, '',
        '```text', quote(gate), '```', '',
        '### Mutation table', '',
        'Every `W5P1-T<n>-M<k>` row of Tasks 1-13, extracted from this plan (a re-anchored id counts once, at its last '
-       'occurrence) and run by `mutate.py` in a `git archive` copy of the tree at `%s`, one row at a time, each file '
-       'restored byte for byte after its row. No task recorded an equivalent mutant.' % tip, '',
+       'occurrence) and run by `mutate.py` in a `git archive` copy of the tree at %s, one row at a time, each file '
+       'restored byte for byte after its row. No task recorded an equivalent mutant.' % (
+           ('`%s`' % tip) if not plan_only
+           else '`%s` (the code of this tree: the one commit after it changed this plan only)' % mut_head[:12]),
+       '',
        quote(table), '',
        '### The six bounds', ''] + bound_lines + [
        '', '### Merge gate', '',
@@ -23094,29 +23102,29 @@ No commit in this task but Step 5's: everything else it writes is scratch or git
 
 ## Wave 5 part 1 results
 
-Measured 2026-10-15 04:13 UTC on the tree at `d579edc82113` (base `162c91491476`, 122 W5.1 commits on the first-parent line). Every number below was printed by a Task 14 command; none is a forecast. The commit that adds this section changes only this file and is the branch's last: with it the first-parent line holds 123 W5.1 commits, and it is the wave-done `handoffCommit`. The invariants and the gate were measured on this tree, and again at that commit (the wave-done says so).
+Measured 2026-10-17 20:08 UTC on the tree at `1cab77f7a1b8` (base `162c91491476`, 136 W5.1 commits on the first-parent line). Every number below was printed by a Task 14 command; none is a forecast. The commit that adds this section changes only this file and is the branch's last: with it the first-parent line holds 137 W5.1 commits, and it is the wave-done `handoffCommit`. The invariants and the gate were measured on this tree, and again at that commit (the wave-done says so).
 
 Deviation entries: 12, the first 12 numbers of the issued block 4917-4932, in order, defined in `## Deviations found` above.
 
 ### Suites
 
-Spec section 7.9's every-wave and W5 suites: the PWA `tsc`, the contrast gate, the whole hermetic PWA suite as three shards (proved below to add up to the hermetic file list), the browser leg in a real Chrome, and the server files that read part 1's files as text; all in the foreground. The full server suite runs in this pull request's CI (part 1 edits `pwa/package.json`, the lock, `pwa/tsconfig.json`, a vitest config and `.github/`). First complete run of these suites in this wave: **green** (at `1abcf03b7060`); this run's first pass was red in 04, 08.
+Spec section 7.9's every-wave and W5 suites: the PWA `tsc`, the contrast gate, the whole hermetic PWA suite as three shards (proved below to add up to the hermetic file list), the browser leg in a real Chrome, and the server files that read part 1's files as text; all in the foreground. The full server suite runs in this pull request's CI (part 1 edits `pwa/package.json`, the lock, `pwa/tsconfig.json`, a vitest config and `.github/`). First complete run of these suites in this wave: **green** (at `1abcf03b7060`); this run's first pass was red in 09.
 
 | # | Command | Test Files | Tests | s | rc |
 |---|---|---|---|---|---|
-| 01 | `( cd pwa && CI=1 node node_modules/typescript/bin/tsc --noEmit -p tsconfig.json )` | - | compiled, no errors | 41 | 0 |
-| 02 | `( cd pwa && CI=1 node design/contrast-check.mjs )` | - | ALL 702 PASS | 1 | 0 |
-| 03 | `( cd pwa && CI=1 ./node_modules/.bin/vitest run --shard=1/3 --maxWorkers=4 )` | 50 passed (50) | 1390 passed (1390) | 119 | 0 |
-| 04 | `( cd pwa && CI=1 ./node_modules/.bin/vitest run --shard=2/3 --maxWorkers=4 )` | 2 failed \| 48 passed (50) | 3 failed \| 2104 passed (2107) | 291 | 1; re-run alone: 0 |
-| 05 | `( cd pwa && CI=1 ./node_modules/.bin/vitest run --shard=3/3 --maxWorkers=4 )` | 50 passed (50) | 1830 passed (1830) | 248 | 0 |
-| 06 | `( cd pwa && CI=1 CCRC_CHROME="$(cat <SCRATCH>/w5p1-chrome)" ./node_modules/.bin/vitest run --config vitest.browser.config.ts )` | 1 passed (1) | 13 passed (13) | 22 | 0 |
-| 07 | `( cd server && ./node_modules/.bin/vitest run test/docs-shared.test.ts test/single-definition.test.ts test/docs-parity.test.ts test/ci-pipeline.test.ts )` | 4 passed (4) | 899 passed (899) | 39 | 0 |
-| 08 | `( cd server && ./node_modules/.bin/vitest run test/docs-url.test.ts test/docs-grammar.test.ts test/ci-merge-queue.test.ts test/ci-verdict.test.ts test/oss-metadata.test.ts test/license.test.ts test/node-floor.test.ts test/run-routes.test.ts test/no-routing-keystroke-from-server.test.ts test/pane-history-route.test.ts test/resume-reclaim-l0.test.ts test/child-reclaim-attention-arms.test.ts )` | 1 failed \| 11 passed (12) | 2 failed \| 5129 passed (5131) | 299 | 1; re-run alone: 0 |
-| 09 | `( cd server && ./node_modules/.bin/vitest run test/typecheck-tests.test.ts )` | 1 passed (1) | 12 passed (12) | 187 | 0 |
-| 10 | `( cd server && ./node_modules/.bin/vitest run test/topology-clean.test.ts test/source-bytes.test.ts test/deviation-refs.test.ts test/dtbd.test.ts )` | 4 passed (4) | 89 passed (89) | 22 | 0 |
+| 01 | `( cd pwa && CI=1 node node_modules/typescript/bin/tsc --noEmit -p tsconfig.json )` | - | compiled, no errors | 30 | 0 |
+| 02 | `( cd pwa && CI=1 node design/contrast-check.mjs )` | - | ALL 3984 PASS | 1 | 0 |
+| 03 | `( cd pwa && CI=1 ./node_modules/.bin/vitest run --shard=1/3 --maxWorkers=4 )` | 71 passed (71) | 1885 passed (1885) | 168 | 0 |
+| 04 | `( cd pwa && CI=1 ./node_modules/.bin/vitest run --shard=2/3 --maxWorkers=4 )` | 70 passed (70) | 3694 passed (3694) | 204 | 0 |
+| 05 | `( cd pwa && CI=1 ./node_modules/.bin/vitest run --shard=3/3 --maxWorkers=4 )` | 70 passed (70) | 2444 passed (2444) | 235 | 0 |
+| 06 | `( cd pwa && CI=1 CCRC_CHROME="$(cat <SCRATCH>/w5p1-chrome)" ./node_modules/.bin/vitest run --config vitest.browser.config.ts )` | 1 passed (1) | 13 passed (13) | 19 | 0 |
+| 07 | `( cd server && ./node_modules/.bin/vitest run test/docs-shared.test.ts test/single-definition.test.ts test/docs-parity.test.ts test/ci-pipeline.test.ts )` | 4 passed (4) | 960 passed (960) | 29 | 0 |
+| 08 | `( cd server && ./node_modules/.bin/vitest run test/docs-url.test.ts test/docs-grammar.test.ts test/ci-merge-queue.test.ts test/ci-verdict.test.ts test/oss-metadata.test.ts test/license.test.ts test/node-floor.test.ts test/run-routes.test.ts test/no-routing-keystroke-from-server.test.ts test/pane-history-route.test.ts test/resume-reclaim-l0.test.ts test/child-reclaim-attention-arms.test.ts )` | 12 passed (12) | 5134 passed (5134) | 143 | 0 |
+| 09 | `( cd server && ./node_modules/.bin/vitest run test/typecheck-tests.test.ts )` | 1 failed (1) | 1 failed \| 11 passed (12) | 276 | 1; re-run alone: 0 |
+| 10 | `( cd server && ./node_modules/.bin/vitest run test/topology-clean.test.ts test/source-bytes.test.ts test/deviation-refs.test.ts test/dtbd.test.ts )` | 4 passed (4) | 89 passed (89) | 21 | 0 |
 
 ```text
-OK pwa shards: 50 + 50 + 50 = 150 test files; `vitest list --filesOnly` holds 150 hermetic files
+OK pwa shards: 71 + 70 + 70 = 211 test files; `vitest list --filesOnly` holds 211 hermetic files
 ```
 
 ### Invariants
@@ -23124,12 +23132,12 @@ OK pwa shards: 50 + 50 + 50 = 150 test files; `vitest list --filesOnly` holds 15
 From `w5p1-invariants.py` (scope from W5.1's own commits; net shapes against the base, or the last merge of main):
 
 ```text
-base 162c91491476, ref 162c91491476, tip d579edc82113, 122 W5.1 commits, 0 merges of main
-PASS subjects      122 first-parent commits since the base; subjects not ending (docs W5.1), (docs W5.1 review), (docs W5.1 review 439), (docs W5.1 review 450) or (docs W5.1 review 460): none
-PASS scope         77 files touched by W5.1 commits (this plan among them: True); outside the scope: none; scope files untouched: none
+base 162c91491476, ref 9936c56fb225, tip 1cab77f7a1b8, 136 W5.1 commits, 2 merges of main
+PASS subjects      136 first-parent commits since the base; subjects not ending (docs W5.1), (docs W5.1 review), (docs W5.1 review 439), (docs W5.1 review 450), (docs W5.1 review 460) or (docs W5.1 review 471): none
+PASS scope         80 files touched by W5.1 commits (this plan among them: True); outside the scope: none; scope files untouched: none
 PASS untouched     server/src/, agent/, ccd/, deploy/, README.md, CLAUDE.md, chat.css, Sheet.tsx, index.html, sw-denylist.ts, docs-parity.test.ts changed vs ref: none
 PASS frozen        56 golden files; golden files, the corpus, the golden test and message-links changed by a W5.1 commit: none; net vs ref: unchanged
-PASS single-def    server/test/single-definition.test.ts vs ref (5683 lines): 2 line(s) naming docsText.ts beside worktree-gone in place, 1 EOF append (83 lines), other hunks: none
+PASS single-def    server/test/single-definition.test.ts vs ref (6251 lines): 2 line(s) naming docsText.ts beside worktree-gone in place, 1 EOF append (83 lines), other hunks: none
 PASS shared-test   server/test/docs-shared.test.ts: the M3.11 describe spans ref lines 1101-1256; 10 hunks inside it, 1 EOF append; other hunks: none
 PASS section-h     shared/docs.ts: section H spans ref lines 865-983; 8 hunks inside it; other hunks: none
 PASS api           pwa/src/lib/api.ts vs ref: imports 1, apierror 3, throw 1, docs-block 1, other 0
@@ -23138,7 +23146,7 @@ PASS lock          pwa/package-lock.json differs from ref at ['packages/""/devDe
 PASS vite-line     the navigateFallbackDenylist line, byte-equal to ref: ["        navigateFallbackDenylist: swDenylist(process.env['CCRC_SW_DENYLIST']),"]
 PASS ci            .github/workflows/ci.yml vs ref: job 1, needs 1, results 1, comment 1, other 0
 PASS w4-plan       docs/superpowers/plans/2026-10-09-native-docs-reader-w4-pwa-foundation.md: 7 row `red` line(s) re-measured in place; other hunks: none
-PASS stylesheets   pwa/**/*.css: 6 at ref, 7 at the tip, added ['pwa/src/docs/docs.css'], removed none
+PASS stylesheets   pwa/**/*.css: 4 at ref, 5 at the tip, added ['pwa/src/docs/docs.css'], removed none
 PASS spellings     pwa/src: no navigator.share(, react-dom/server, ?inline, <iframe or srcDoc; createObjectURL/new Blob under docs and lib/markdown* only in ['pwa/src/docs/objectUrls.ts']; postMessage or a message listener under docs: none
 PASS deviations    ## Deviations found x1 outside fences; defined ['D-<n>', 'D-<n>', 'D-<n>', 'D-<n>', 'D-<n>', 'D-<n>', 'D-<n>', 'D-<n>', 'D-<n>', 'D-<n>', 'D-<n>', 'D-<n>'] (issued 4917-4932; the first 12 expected in order); malformed definition lines: 0
 PASS no-d-number   D-<n> tokens new in W5.1 files: none; in this plan outside ## Deviations found: none
@@ -23150,11 +23158,11 @@ PASS no-d-number   D-<n> tokens new in W5.1 files: none; in this plan outside ##
 From `w5p1-gate.py`, on `git archive` copies of the base and the tip built for production:
 
 ```text
-PASS measured-at     the tip copy is HEAD d579edc82113; HEAD is d579edc82113
+PASS measured-at     the tip copy is HEAD d0e0460fd371; HEAD is d0e0460fd371
 PASS builds          npm run build rc: base 0, tip 0
 PASS worker-chunk    markdownWorker chunks: tip ['assets/markdownWorker-DftuN5no.js'], named [1] time(s) in sw.js; base ['assets/markdownWorker-DdJLW5_N.js']
 PASS one-denylist    denylist:[ in sw.js: tip 1, base 1
-PASS precache        17 entries at the base, 17 at the tip; added none; removed none (no lazy chunk); index js 1370890 -> 1468860 bytes (+97970), index css 141516 -> 150752 bytes (+9236)
+PASS precache        17 entries at the base, 17 at the tip; added none; removed none (no lazy chunk); index js 1370890 -> 1582817 bytes (+211927), index css 141516 -> 165949 bytes (+24433)
 PASS docs-chrome     built index css (1 sheet): tip {"door": 1, "doorActive": 1, "fresh": 3, "docBody": 3}; base {"door": 0, "doorActive": 0, "fresh": 0, "docBody": 0}
 PASS no-test-code    built files naming playwright or the browser harness: none
 PASS built-worker    tip: load ok, document undefined; docs a<br>b {"kind": "tree", "elements": null, "br": 1, "brText": 0}; chat a<br>b {"kind": "tree", "elements": null, "br": 0, "brText": 1}; docs chord flood {"kind": "too-wide", "elements": 25601, "br": 0, "brText": 0}. base: docs a<br>b {"kind": "tree", "elements": null, "br": 0, "brText": 1}; chord flood {"kind": "tree", "elements": null, "br": 0, "brText": 0}
@@ -23163,7 +23171,7 @@ PASS built-worker    tip: load ok, document undefined; docs a<br>b {"kind": "tre
 
 ### Mutation table
 
-Every `W5P1-T<n>-M<k>` row of Tasks 1-13, extracted from this plan (a re-anchored id counts once, at its last occurrence) and run by `mutate.py` in a `git archive` copy of the tree at `d579edc82113`, one row at a time, each file restored byte for byte after its row. No task recorded an equivalent mutant.
+Every `W5P1-T<n>-M<k>` row of Tasks 1-13, extracted from this plan (a re-anchored id counts once, at its last occurrence) and run by `mutate.py` in a `git archive` copy of the tree at `d0e0460fd371` (the code of this tree: the one commit after it changed this plan only), one row at a time, each file restored byte for byte after its row. No task recorded an equivalent mutant.
 
 | Row | Task | File | Result | First red case (measured) |
 |---|---|---|---|---|
@@ -23390,7 +23398,7 @@ Every `W5P1-T<n>-M<k>` row of Tasks 1-13, extracted from this plan (a re-anchore
 | W5P1-T7-M37 | T7 | `pwa/src/docs/DocImage.tsx` | red | a draft image listed over its class cap is refused too-large by its DRAFT size, whatever the committed size |
 | W5P1-T7-M38 | T7 | `pwa/src/docs/DocImage.tsx` | red | an SVG over one base64 chunk (32 768 bytes) holding multi-byte UTF-8 keeps its bytes exactly in the data: URL |
 | W5P1-T8-M1 | T8 | `pwa/src/docs/DocMarkdown.tsx` | red | a 600 KiB doc shows the gate with Format anyway and Show as text, and the parser has 0 calls |
-| W5P1-T8-M2 | T8 | `pwa/src/docs/DocMarkdown.tsx` | red | timed out only when mutated (unmutated control green): Show as text gives pre.doc-plain with the whole text, and still no parse |
+| W5P1-T8-M2 | T8 | `pwa/src/docs/DocMarkdown.tsx` | red | a doc of exactly DOCS_RENDER_GATE_BYTES is not gated: it parses at once at the normal budget |
 | W5P1-T8-M3 | T8 | `pwa/src/docs/DocMarkdown.tsx` | red | M4.P6 (W5 half): Format anyway posts one docs job whose budget timer is DOCS_PARSE_BUDGET_LARGE_MS |
 | W5P1-T8-M4 | T8 | `pwa/src/docs/DocMarkdown.tsx` | red | the normal job's budget is DOCS_PARSE_BUDGET_MS of the UTF-8 bytes, per document |
 | W5P1-T8-M5 | T8 | `pwa/src/docs/DocMarkdown.tsx` | red | DocMarkdown shows {"kind":"worker-unavailable"} as DocPlain with its note, and draws nothing |
@@ -23532,21 +23540,21 @@ Every `W5P1-T<n>-M<k>` row of Tasks 1-13, extracted from this plan (a re-anchore
 | W5P1-T10-M67 | T10 | `pwa/src/docs/DocsBanners.tsx` | red | a holder on local main with 3 dirty docs: zero draft rows, and a hint (n = 3) linking ?ref=refs/heads/main |
 | W5P1-T10-M68 | T10 | `pwa/src/docs/DocsBanners.tsx` | red | baseEqual false: the base hint linking refs/heads/<b>, and no overlay |
 | W5P1-T10-M69 | T10 | `pwa/src/docs/DocsBanners.tsx` | red | a holder on local main with 3 dirty docs: zero draft rows, and a hint (n = 3) linking ?ref=refs/heads/main |
-| W5P1-T11-M1 | T11 | `pwa/src/screens/FleetScreen.tsx` | red | is the class the rendered door actually carries |
-| W5P1-T11-M2 | T11 | `pwa/src/screens/FleetScreen.tsx` | red | sits in the fleet header immediately before the accounts door, says Docs, and routes to /docs |
-| W5P1-T11-M3 | T11 | `pwa/src/screens/FleetScreen.tsx` | red | is the class the rendered door actually carries |
+| W5P1-T11-M1 | T11 (re-anchored in T13) | `pwa/src/fleet/FleetHead.tsx` | red | is the class the rendered door actually carries |
+| W5P1-T11-M2 | T11 (re-anchored in T13) | `pwa/src/fleet/FleetHead.tsx` | red | sits in the fleet header immediately before the accounts door, says Docs, and routes to /docs |
+| W5P1-T11-M3 | T11 (re-anchored in T13) | `pwa/src/fleet/FleetHead.tsx` | red | is the class the rendered door actually carries |
 | W5P1-T11-M4 | T11 | `pwa/src/docs/docsLinks.ts` | red | links the branch the worktree holds now, written verbatim, never the workspace slug |
 | W5P1-T11-M5 | T11 | `pwa/src/docs/docsLinks.ts` | red | renders no link for a project outside the project grammar: "" |
 | W5P1-T11-M6 | T11 | `pwa/src/docs/docsLinks.ts` | red | reads the session’s own project, never the card it renders on |
 | W5P1-T11-M7 | T11 | `pwa/src/docs/docsLinks.ts` | red | links the default view when the session reports no branch |
 | W5P1-T11-M8 | T11 | `pwa/src/fleet/SessionActionsSheet.tsx` | red | closes the sheet, then navigates to exactly the href the builder made |
 | W5P1-T11-M9 | T11 | `pwa/src/fleet/SessionActionsSheet.tsx` | red | closes the sheet, then navigates to exactly the href the builder made |
-| W5P1-T11-M10 | T11 | `pwa/src/fleet/SessionActionsSheet.tsx` | red | is a btn-ghost row right after Restart, labelled with the branch |
-| W5P1-T11-M11 | T11 | `pwa/src/session/SessionHeader.tsx` | red | closes the menu and navigates to exactly the href the builder made |
-| W5P1-T11-M12 | T11 | `pwa/src/session/SessionHeader.tsx` | red | is a menu-item named Docs whose hint is the branch, or default |
-| W5P1-T11-M13 | T11 | `pwa/design/audit.mjs` | red | passes every pair it measures |
-| W5P1-T11-M14 | T11 | `pwa/design/audit.mjs` | red | passes every pair it measures |
-| W5P1-T11-M15 | T11 | `pwa/src/docs/docs.css` | red | docs.css .docs-door:active is registered on the page and also clears AA on the desktop sidebar it sits on |
+| W5P1-T11-M10 | T11 (re-anchored in T13) | `pwa/src/fleet/SessionActionsSheet.tsx` | red | is a btn-ghost row right after Restart, labelled with the branch |
+| W5P1-T11-M11 | T11 (re-anchored in T13) | `pwa/src/session/SessionHeader.tsx` | red | closes the menu and navigates to exactly the href the builder made |
+| W5P1-T11-M12 | T11 (re-anchored in T13) | `pwa/src/session/SessionHeader.tsx` | red | is a menu-item named Docs whose hint is the branch, or default |
+| W5P1-T11-M13 | T11 (re-anchored in T13) | `pwa/design/audit.mjs` | red | passes every pair it measures |
+| W5P1-T11-M14 | T11 (re-anchored in T13) | `pwa/design/audit.mjs` | red | passes every pair it measures |
+| W5P1-T11-M15 | T11 | `pwa/src/docs/docs.css` | red | passes every pair it measures |
 | W5P1-T11-M16 | T11 | `pwa/src/docs/docs.css` | red | spells no literal colour (tokens only, section 4.14) |
 | W5P1-T11-M17 | T11 | `pwa/src/docs/docs.css` | red | contains no identities beyond the grandfathered blind spots |
 | W5P1-T11-M18 | T11 | `pwa/src/docs/docs.css` | red | keeps every floored rule on the token, never a bare 44px literal |
@@ -23559,7 +23567,7 @@ Every `W5P1-T<n>-M<k>` row of Tasks 1-13, extracted from this plan (a re-anchore
 | W5P1-T11-M25 | T11 (re-anchored in T13) | `pwa/src/docs/DocImage.tsx` | red | are the classes the rendered controls carry |
 | W5P1-T11-M26 | T11 | `pwa/src/docs/docs.css` | red | declares none |
 | W5P1-T11-M27 | T11 | `pwa/src/screens/DocsScreen.tsx` | red | reaches the main stylesheet: DocsScreen imports docs.css, and app.tsx imports DocsScreen statically |
-| W5P1-T11-M28 | T11 | `pwa/src/screens/FleetScreen.tsx` | red | is still there, in the header cluster before the accounts door, with a session present |
+| W5P1-T11-M28 | T11 (re-anchored in T13) | `pwa/src/fleet/FleetHead.tsx` | red | is still there, in the header cluster before the accounts door, with a session present |
 | W5P1-T11-M29 | T11 | `pwa/src/docs/docs.css` | red | keep a long branch name on its own line: the hint truncates beside the word, the row label breaks (jsdom lays nothing out, so the declarations are pinned) |
 | W5P1-T11-M30 | T11 | `pwa/src/docs/docs.css` | red | keep a long branch name on its own line: the hint truncates beside the word, the row label breaks (jsdom lays nothing out, so the declarations are pinned) |
 | W5P1-T11-M31 | T11 | `pwa/src/docs/docs.css` | red | keep a long branch name on its own line: the hint truncates beside the word, the row label breaks (jsdom lays nothing out, so the declarations are pinned) |
@@ -23575,7 +23583,7 @@ Every `W5P1-T<n>-M<k>` row of Tasks 1-13, extracted from this plan (a re-anchore
 | W5P1-T12-M7 | T12 | `pwa/browser/harness.ts` | red | a file that is not executable, or a directory, is not a Chrome |
 | W5P1-T12-M8 | T12 | `pwa/package.json` | red | playwright-core is an exact-version devDependency, and the lock installs that version |
 | W5P1-T12-M9 | T12 | `pwa/package.json` | red | "test:browser" runs vitest on the browser config |
-| W5P1-T12-M10 | T12 | `pwa/tsconfig.json` | red | pwa: EVERY .ts file in the package is in some typecheck project — directories discovered, not listed |
+| W5P1-T12-M10 | T12 (re-anchored in T13) | `pwa/tsconfig.json` | red | pwa: EVERY .ts file in the package is in some typecheck project — directories discovered, not listed |
 | W5P1-T12-M11 | T12 | `.github/workflows/ci.yml` | red | full-suite needs every leg — Linux shards, typecheck, agent, pwa, build, macOS, the Node floor, the browser — and asks verdict.mjs full |
 | W5P1-T12-M12 | T12 | `.github/workflows/ci.yml` | red | full-suite needs every leg — Linux shards, typecheck, agent, pwa, build, macOS, the Node floor, the browser — and asks verdict.mjs full |
 | W5P1-T12-M13 | T12 | `.github/workflows/ci.yml` | red | the required matrix, build-pwa and the browser leg carry no job-level if: and no needs: |
@@ -23673,7 +23681,7 @@ Every `W5P1-T<n>-M<k>` row of Tasks 1-13, extracted from this plan (a re-anchore
 | W5P1-T13-M82 | T13 | `pwa/src/docs/docsLinks.ts` | red | (a) three markdown blocks of 65 536 characters: the first two (exactly 131 072) are highlighted, the third is not |
 | W5P1-T13-M83 | T13 | `pwa/src/docs/docsLinks.ts` | red | (a) three markdown blocks of 65 536 characters: the first two (exactly 131 072) are highlighted, the third is not |
 | W5P1-T13-M84 | T13 | `pwa/src/docs/docsLinks.ts` | red | (e) xml and markdown reach no bounded grammar, so they do not count in the scan sum: an xml block after the ts budget is spent is still highlighted |
-| W5P1-T13-M85 | T13 | `pwa/src/lib/markdownLimits.ts` | red | DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS is 131072 |
+| W5P1-T13-M85 | T13 | `pwa/src/lib/markdownLimits.ts` | red | (a) three markdown blocks of 65 536 characters: the first two (exactly 131 072) are highlighted, the third is not |
 | W5P1-T13-M86 | T13 | `pwa/src/lib/markdown.tsx` | red | (a) three markdown blocks of 65 536 characters: the first two (exactly 131 072) are highlighted, the third is not |
 | W5P1-T13-M87 | T13 | `pwa/src/lib/markdown.tsx` | red | true while the running sum is within the budget, false from the block that passes it, for every later block |
 | W5P1-T13-M88 | T13 | `pwa/src/screens/DocsScreen.tsx` | red | review 460 F12: the page's 1 s clock stops at the end of its wait: no timer of its own is pending one tick after it |
@@ -23688,8 +23696,8 @@ Every `W5P1-T<n>-M<k>` row of Tasks 1-13, extracted from this plan (a re-anchore
 - **2-2**: `DOCS_MAX_RENDER_ELEMENTS` = 20000; the parse's own element count adds, for every inline `code` not under `pre`, exactly what the chip component draws (2N-1 for a chord of N parts), so `too-wide` fires before anything renders, in the worker, for every profile (refinements (d) and (g)). Basis: Task 3 Step 0 measured the exact count moving no real document under `docs/superpowers` across the limit. Rows: W5P1-T3-M8 red, W5P1-T3-M9 red, W5P1-T3-M10 red, W5P1-T3-M11 red.
 - **line**: `MD_HIGHLIGHT_MAX_LINE_CHARS` = 2048; no highlighting for a registered block that holds a line longer than this (a line ends at a line feed or a carriage return), labelled "{label} · not highlighted (a {n}-character line)": the size cap is checked first, then r10's word scan and this linear line scan with no regular expression, each run whenever the size cap passes (Task 3's decision 9: a fourth bound beside spec 4.10's three, recorded in `## Deviations found`). Basis: some grammars are quadratic on shapes that are not one long identifier, and that cost grows with line length (a `markdown` fence of one 64 KiB line of `[` about 9.6 s, a `yaml` fence of one 64 KiB line of `a a a ...` 2.8-3.6 s); the bound stops where that growth meets the length-independent plateau of the slowest grammars, and at 2 048 the worst line-driven shape costs 245-263 ms, where 4 096 would cost about twice it. Its sweep put one unit on each line; whitespace that spans lines is the fifth bound's shape. The plateau itself is carried below. Rows: W5P1-T3-M16 red, W5P1-T3-M17 red, W5P1-T3-M18 red, W5P1-T3-M19 red, W5P1-T3-M20 red, W5P1-T3-M21 red.
 - **blank**: `MD_HIGHLIGHT_MAX_BLANK_CHARS` = 2048; no highlighting for a registered block whose longest run of blank code units (ECMAScript whitespace, a run that crosses line breaks) is longer than this, labelled "{label} · not highlighted (a {n}-character run of whitespace)": checked after the size, word and line bounds, by one linear scan with no regular expression (review 439 F1, a fifth bound, recorded in `## Deviations found`). Basis: `typescript` and `javascript` cost highlight.js the square of a blank run that holds a line terminator (64 KiB of `\n` about 5-6 s; about 40 s for a page of eight), which none of the four bounds above caught; a sweep of all 15 grammars over 28 cross-line shapes (pure blank runs, and short units each followed by a line break) found, among those shapes, no other grammar that grows (review 450 then found multi-character shapes that do: the sixth bound). The bound stops where that growth meets the plateau: at 2 048 the worst run that reaches it (U+2028 or U+2029 alternated with `\n`; a longer run of U+2028 alone is r10's) costs 225-336 ms, re-measured at load about 31, against a plateau of 230-290 ms, where 4 096 would cost about twice it; the longest blank run in a real fence is 104. Rows: W5P1-T13-M34 red, W5P1-T13-M35 red, W5P1-T13-M36 red, W5P1-T13-M37 red, W5P1-T13-M38 red.
-- **grammar**: `MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS` = 8192, `MD_HIGHLIGHT_RUST_BLOCK_MAX_CHARS` = 4096, `DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS` = 393216, `DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS` = 131072; a `typescript` or `javascript` block (every alias they carry) over the first, or a `rust` block over the second, is not highlighted, labelled in the size form; a Docs page highlights at most the third of those grammars' code together and at most the fourth of `markdown`, each summed in `detachUrls` beside the page budget, a block of another grammar never refused by either; `xml` is registered without the `subLanguage` of its `<script>` and `<style>` modes; and the set of bounded grammars is the closure of the base set under highlight.js `subLanguage`, derived once and pinned by a test (review 450 F1, a sixth bound, recorded in `## Deviations found` with asks 38-41). Basis: `'<a>'` repeated makes `typescript` and `javascript` quadratic (JSX `hasClosingTag`: 2.8 s per 64 KiB block, 5.5-6.7 ms a KiB at 6-10 KiB, 43 at 64 KiB), an unclosed `r#"` makes `rust` quadratic (3.8 s per 64 KiB), xml's `<script>`/`<style>` regions are quadratic whatever they embed (8 KiB of `<script>` one per line 7.9 s), and `markdown`, which hands every tag to xml, is linear at about twice the plateau (64 KiB of `<a>` lines 652 ms against 242-356). Cost, measured through the Docs pipeline and so on the pages Docs formats (review 460 F7): 736 real fences of `docs/superpowers` (78 pages) are plain, one 375-character html fence loses its script/style colouring, and the markdown budget costs none (the most markdown code on a page Docs formats is 24 056 characters). What the six bounds leave is carried below. Rows: W5P1-T13-M63 red, W5P1-T13-M64 red, W5P1-T13-M65 red, W5P1-T13-M66 red, W5P1-T13-M67 red, W5P1-T13-M68 red, W5P1-T13-M69 red, W5P1-T13-M70 red, W5P1-T13-M71 red, W5P1-T13-M76 red, W5P1-T13-M77 red, W5P1-T13-M78 red, W5P1-T13-M79 red, W5P1-T13-M80 red, W5P1-T13-M81 red, W5P1-T13-M82 red, W5P1-T13-M83 red, W5P1-T13-M84 red, W5P1-T13-M85 red, W5P1-T13-M86 red, W5P1-T13-M87 red.
-- Re-measured here (node v24.14.1, highlight.js 11.11.1, one run each, on this box's load): a 256-character `typescript` identifier highlights in 1.65 ms and a 4 096-character one in 98.79 ms; a span of `a`, 64 spaces and `b` splits in 0.12 ms, and with 16 384 spaces in 308.8 ms. The built worker's 2-2 answer is the gate's `built-worker` line above.
+- **grammar**: `MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS` = 8192, `MD_HIGHLIGHT_RUST_BLOCK_MAX_CHARS` = 4096, `DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS` = 393216, `DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS` = 131072; a `typescript` or `javascript` block (every alias they carry) over the first, or a `rust` block over the second, is not highlighted, labelled in the size form; a Docs page highlights at most the third of those grammars' code together and at most the fourth of `markdown`, each summed in `detachUrls` beside the page budget, a block of another grammar never refused by either; `xml` is registered without the `subLanguage` of its `<script>` and `<style>` modes; and the set of bounded grammars is the closure of the base set under highlight.js `subLanguage`, derived once and pinned by a test (review 450 F1, a sixth bound, recorded in `## Deviations found` with asks 38-41). Basis: `'<a>'` repeated makes `typescript` and `javascript` quadratic (JSX `hasClosingTag`: 2.8 s per 64 KiB block, 5.5-6.7 ms a KiB at 6-10 KiB, 43 at 64 KiB), an unclosed `r#"` makes `rust` quadratic (3.8 s per 64 KiB), xml's `<script>`/`<style>` regions are quadratic whatever they embed (8 KiB of `<script>` one per line 7.9 s), and `markdown`, which hands every tag to xml, is linear at about twice the plateau (64 KiB of `<a>` lines 652 ms against 242-356). Cost, measured through the Docs pipeline over all of `docs/superpowers` (review 460 F7; Docs serves its specs and plans, and 7 of the 8 508 fences counted sit in `programs/` and `research/`, which it never serves: review 471 F3): 736 real fences (78 pages, all in `plans/`) are plain, one 375-character html fence loses its script/style colouring, and the markdown budget costs none (the most markdown code on a page Docs formats is 24 056 characters). What the six bounds leave is carried below. Rows: W5P1-T13-M63 red, W5P1-T13-M64 red, W5P1-T13-M65 red, W5P1-T13-M66 red, W5P1-T13-M67 red, W5P1-T13-M68 red, W5P1-T13-M69 red, W5P1-T13-M70 red, W5P1-T13-M71 red, W5P1-T13-M76 red, W5P1-T13-M77 red, W5P1-T13-M78 red, W5P1-T13-M79 red, W5P1-T13-M80 red, W5P1-T13-M81 red, W5P1-T13-M82 red, W5P1-T13-M83 red, W5P1-T13-M84 red, W5P1-T13-M85 red, W5P1-T13-M86 red, W5P1-T13-M87 red.
+- Re-measured here (node v24.14.1, highlight.js 11.11.1, one run each, on this box's load): a 256-character `typescript` identifier highlights in 1.62 ms and a 4 096-character one in 99.42 ms; a span of `a`, 64 spaces and `b` splits in 0.87 ms, and with 16 384 spaces in 264.2 ms. The built worker's 2-2 answer is the gate's `built-worker` line above.
 
 ### Merge gate
 
@@ -23716,7 +23724,7 @@ M4.P12's mutation "count only after render" is row W5P1-T8-M8 (the parse's too-w
 - pinFor: `export function pinFor`, at `pwa/src/docs/useDocsVisit.ts:96`.
 - imagePinFor: `export function imagePinFor`, at `pwa/src/docs/docsLinks.ts:252`.
 - detachUrls (a copy; DocMarkdown's memo per outcome): `export function detachUrls`, at `pwa/src/docs/docsLinks.ts:97`.
-- DocMarkdown's detach memo: `const detached = useMemo(() => detachUrls`, at `pwa/src/docs/DocMarkdown.tsx:148`.
+- DocMarkdown's detach memo: `const detached = useMemo(() => detachUrls`, at `pwa/src/docs/DocMarkdown.tsx:149`.
 - copyText: `export async function copyText`, at `pwa/src/docs/share.ts:8`.
 - saveBytes: `export function saveBytes`, at `pwa/src/docs/objectUrls.ts:33`.
 - docs-scans.test.ts (part 2 adds M4.SH7, M4.EX2, M4.EX11, M4.EX16): `describe("clause 1: no Docs file reads a draft's state`, at `pwa/test/docs-scans.test.ts:102`.
@@ -23753,12 +23761,17 @@ M4.P12's mutation "count only after render" is row W5P1-T8-M8 (the parse's too-w
 - The F1 sweep (fix round 2): all 15 registered grammars over one fixed list of 77 units of one to four characters and up to ten keywords each, at 16 and 64 KiB (review 460 F6 corrected "about 80 units of two to four characters"; the units are listed under Carried), found `typescript`/`javascript` (`<a>`, `<ab>`) and `rust` (`r#"`) growing faster than linear; a security review of the first commit found `xml` embedding javascript, and measurement found xml's `<script>`/`<style>` regions quadratic whatever they embed and `markdown` linear at about twice the plateau. Each was asked before it was bounded (asks 38-41). Evidence: the SDD ledger's fr2 directory.
 - Invariant 'subjects' widened in the scratch tool to admit '(docs W5.1 review 450)', and invariant 'scope' to admit `pwa/test/markdown-highlight.test.tsx` (F1's caps moved two of its `ts` cases to `python`) and `pwa/test/docs-relist-bounded.test.tsx` (F4's bounded case).
 - Fix round 2's Task 14 runs, under the coordinator's terms (mails 4838 and 4937): every heavy command in the foreground, one at a time, each in its own memory-capped scope; suites 01-10 first at `5c6289b2c` (green), then again at the code tip `3efa9babe` after two comment-only commits that Step 2's no-d-number invariant asked for (green); the gate and the table each started with at least 6 GB in `free -g`'s available column (6 and 7 GB; its free column read 1 and 3); the table ran sequentially in ONE `git archive` copy with `vitest --maxWorkers=1`, 11 calls and one re-measure of W5P1-T2-M50 (timed out in its first call before its control ran; red, timing out only when mutated). The table's baseline needed three passes: one command, `markdown-bounds` with `markdown-limits`, timed out once on one case (20 s at load 70-80 in a 4 GB scope; 0.2-0.7 s alone), and the scope was raised to 6 GB; no step was recorded red because of pressure.
-- **Fix round 3 (review 460, the coordinator's rulings by mail 5053, under the operator's strategy ruling of 2026-10-15, "Ship, then off-thread wave": part 1 keeps its bounds and values, carries the crafted-input freeze truthfully and merges after R1 and R2; then a dedicated wave (W5h) moves highlighting off the main thread into its own highlight worker, with a per-block deadline; Share runs in parallel with it, and Export waits for it (operator, 2026-10-15); the coordinator's addendum, mail 5070, corrected "into the parse worker").** Each finding, as ruled: F1, F2 and F3 carried with the reviewer's figures (`89301d5b8`: `markdownLimits.ts`, the grammar bound's entry in `## Deviations found` and the Carried entries below); F4 and F5 re-measured on pages where every block is admitted (`02a0cc5f5`, `d579edc82`); F6 fixed, the coverage stated as run (`87c2ecf36`, `5ae37bd24`); F7 fixed, the fences counted through the Docs pipeline on the pages Docs formats (`dd8e58afc`, `d579edc82`); F8 fixed (`b7f005448`, `a926b847b`); F9 fixed, the chat goldens unchanged (`93e053b68`, `da276fd2f`; `markdown-golden` with CI=1, 172/172); F10 a deterministic case (`b1510dbdb`, `cb5761aa3`); F11 fixed (`85f39aae1`); F12 a case and a row (`f448e3b65`, `241189434`); F13 a case and a row (`7239e9789`). No bound, value or shipped behaviour changed, and no number was spent. The round had an Opus task review; its five points are commits of their own (`241189434`, `da276fd2f`, `5ae37bd24`, `a926b847b`, `d579edc82`).
+- **Fix round 3 (review 460, the coordinator's rulings by mail 5053, under the operator's strategy ruling of 2026-10-15, "Ship, then off-thread wave": part 1 keeps its bounds and values, carries the crafted-input freeze truthfully and merges after R1 and R2; then a dedicated wave (W5h) moves highlighting off the main thread into its own highlight worker, with a per-block deadline; Share runs in parallel with it, and Export waits for it (operator, 2026-10-15); the coordinator's addendum, mail 5070, corrected "into the parse worker").** Each finding, as ruled: F1, F2 and F3 carried with the reviewer's figures (`89301d5b8`: `markdownLimits.ts`, the grammar bound's entry in `## Deviations found` and the Carried entries below); F4 and F5 re-measured on pages where every block is admitted (`02a0cc5f5`, `d579edc82`); F6 fixed, the coverage stated as run (`87c2ecf36`, `5ae37bd24`); F7 fixed, the fences counted through the Docs pipeline over all of `docs/superpowers`, not only the pages Docs serves, as review 471 F3 found (`dd8e58afc`, `d579edc82`); F8 fixed (`b7f005448`, `a926b847b`); F9 fixed, the chat goldens unchanged (`93e053b68`, `da276fd2f`; `markdown-golden` with CI=1, 172/172); F10 a deterministic case (`b1510dbdb`, `cb5761aa3`); F11 fixed (`85f39aae1`); F12 a case and a row (`f448e3b65`, `241189434`); F13 a case and a row (`7239e9789`). No bound, value or shipped behaviour changed, and no number was spent. The round had an Opus task review; its five points are commits of their own (`241189434`, `da276fd2f`, `5ae37bd24`, `a926b847b`, `d579edc82`).
 - F10: the deterministic case replaces the timed reading of asks 40 and 41's terms ("the end-to-end page under the target"), by the coordinator's ruling, because a wall-clock assertion on a shared box is load-sensitive. The timings, recorded here instead: the case's three pages built with the crafted shapes in place of its cheap code and without its refused blocks (every block highlighted; a scratch harness through `detachUrls` and `CodeBlock`, three interleaved rounds, best of 3, load 17-157, 2026-10-15): page S, 48 blocks of 8 191 characters of `<a>` lines, 2.3-3.1 s in `typescript` or `javascript`; page M, two 65 535-character `markdown` blocks of `<a>` lines, 0.78-0.94 s; page G, both together (the accepted page), 3.2-3.5 s; a plateau page of eight 65 535-character `yaml` or `json` blocks timed beside them, 1.7-2.2 s. Spec 4.9 asks 0.25 s for a page.
 - Fix round 3's rows: W5P1-T13-M88 (F12) and W5P1-T13-M89 (F13), in Task 13's block, each measured red at `b1510dbdb` in a `git archive` copy; M88 again at `241189434`, after the task review tightened its case (also red for clocks that stop 1.5 s or 5 s late).
 - New or changed user-visible sentences in fix round 3: none (the record, comments and tests only).
 - Invariant 'subjects' widened in the scratch tool to admit '(docs W5.1 review 460)'.
 - Fix round 3's Task 14 runs, under the same terms: every heavy command in the foreground, one at a time, in its own memory-capped scope; suites 01-10 at the code tip `d579edc82`. Three first runs were red only on timeouts at load average 60-78 and green re-run alone: suite 04, `docs-highlight-budget.test.tsx` case (f)'s hook at 10 s and two `settings-screen.test.tsx` cases at 5 s (re-run 210/210; `docs-highlight-budget` alone 22/22 in 9 s); suite 08, `run-routes.test.ts` at 20 s, whose first re-run timed out on another of its cases and whose second was green (5 131/5 131; the file alone 230/230). The gate and the table each started with 6 GB in `free -g`'s available column; the table ran sequentially in ONE `git archive` copy with `vitest --maxWorkers=1` (baseline in 3 calls, rows in 12, final in 2), every row measured in its first call. From the table's fourth call on, the box gave no 6 GB window for 8 minutes, so its later calls started at 3-6 GB available, each in a 6 GB scope; none was killed or timed out.
+- **Fix round 4 (review 471 accepted part 1 at `26d8893c1` with four minor record defects; the coordinator's fix-round mail 5984, on a measured conflict with main at `9936c56fb`).** Each finding, as ruled: F1 fixed, the xml wrapper's record now states, measured against stock highlight.js 11.11.1, that after an unclosed `<style>` stock coloured later markdown tags as CSS, that only the matching closer restores colour, that JSX loses the rest of a block after `<style>` as after `<script>`, and that an `html` tagged template reaches xml the same way (`ba62cc10d`); F2 fixed, the F12 case's comment says a clock one tick late passes it (`8432024ec`); F3 fixed, the F7 count names its population, all of `docs/superpowers` with 8 501 of its 8 508 fences on pages Docs serves (`08656d5fc`); F4: the record of the first merge's tip is corrected here: at `26d8893c1` the pwa shards were 1 482 / 2 081 / 1 927 tests (156 files), as review 471 measured on complete first runs; the 1 853 that wave-done 5131 gave for shard 3 came from a run in which two files never started (`accounts-pool`, `markdown-purity`: 74 tests).
+- The second merge of main (`12881c153`, `9936c56fb`, trigger 1, mail 5984) met main's design system (`@ccrc/ui`, #419, and the two-skins waves) on eight files. Resolved as source: `single-definition` keep-both with W5's describe last; `tsconfig.json` and `vite.config.ts` both sides; the Docs door moved unchanged into main's new `FleetHead.tsx`; the session row a ghost `Button`; the menu item a seventh `MenuItem`; `useNow`, moved unchanged to `@ccrc/ui`, imported there. Main's move also reached W5 where no line conflicted, each fixed in its own commit and none by weakening a check: the contrast registrations re-keyed on the selector and held to every palette (`7bcc6055d`); the four plain `btn-ghost` buttons made ghost `Button`s, since the class no longer styles anything by itself (`ab40d4a5b`); CI's `browser (pwa)` job installs `@ccrc/ui` first, without which the leg failed to import in a clean copy (`05bf40800`); the doc body's prose class named through `PROSE` and registered as an `<article>`'s skin (`017c4366f`); the browser-leg test loading the two configs with vite's `loadConfigFromFile`, because vitest's own transform rewrote main's `new URL(…, import.meta.url)` into an `http:` URL (`73e36be39`); the session-link fixture built from main's `fleetSession` (`a3e205f01`); and main's markup and control censuses given the Docs screen's entries, each argued (`75bc5a174`, `d0e0460fd`). Eleven mutation rows whose anchors the merge moved are re-anchored in Task 13's block (`1cab77f7a`); W5P1-T11-M28's guard is FleetHead's own `countLine === null`, measured red on its case in a copy of its own, and its first record (red on a render error, because FleetHead has no `sessions`) is superseded in the table.
+- New or changed user-visible sentences in fix round 4: none.
+- Scratch tools changed in fix round 4: `mutate.py` links `ui/node_modules` into its copy and stages the copy's files in its own index (main's ci-pipeline census lists `git ls-files`); `w5p1-gate.py` installs `ui` before `pwa` in a tree that has it; invariant 'subjects' admits '(docs W5.1 review 471)' and 'scope' admits main's three design-system census tests, where this round only added entries; the results writer accepts a table measured one plan-only commit back.
+- Fix round 4's Task 14 runs, under the same terms, at the code tip `d0e0460fd`: suites 01-08 and 10 green on their first runs there (pwa shards 1 885 + 3 694 + 2 444, 211 files); suite 09 timed out at 120 s on its first run (load about 30-40) and was green re-run alone (12/12). Earlier runs in the round, at tips this round then changed, went red on main's censuses (fixed by the commits above) and, at load 113, on timeouts only. Invariants 17/17 and the gate 8/8 (tip copy with `ui` installed). The table: 511/511 measured as expected in one copy, sequential, `--maxWorkers=1`, plus M28's re-anchor in a copy of its own; from its first call the box gave no 6 GB window, so every heavy call ran at 3-5 GB available in a 5-6 GB scope, none killed. Main moved to `69327c016` during the round and merges with this branch cleanly (`git merge-tree` exit 0), so nothing more was absorbed.
 
 ### Carried, not fixed
 
