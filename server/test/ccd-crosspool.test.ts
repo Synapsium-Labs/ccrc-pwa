@@ -76,7 +76,7 @@ const writeLimits = (w: string, five: number, seven: number): void => {
     JSON.stringify({ five, seven, ts: Math.floor(Date.now() / 1000) }));
 };
 
-/** D-5240: a manual swap reads `_ws_status` before anything else, and an
+/** D-5240 (fixture fallout, D-5350): a manual swap reads `_ws_status` before anything else, and an
  *  alive pane with no pid is unreadable there (status-unknown). These cases
  *  are about pools, so the pane is GONE, which `_ws_status` reads as idle. */
 const NO_PANE = 'case "${1:-}" in has-session) echo "can\'t find session: x" >&2; return 1 ;; esac;';

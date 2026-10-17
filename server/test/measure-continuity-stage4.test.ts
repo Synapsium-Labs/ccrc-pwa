@@ -15,7 +15,7 @@ import { CCD, makeCcdHarness, type CcdHarness, WIDE_PANE } from './ccdWsHelpers.
 
 const TOOL = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../deploy/measure-continuity.py');
 
-/** A pane tmux cannot find: D-5240's manual swap gate reads `_ws_status`, which
+/** A pane tmux cannot find (D-5350): D-5240's manual swap gate reads `_ws_status`, which
  *  answers idle for it (a bare `tmux() { :; }` is an alive pane with no pid, unreadable). */
 const GONE_PANE = 'case "${1:-}" in has-session) echo "can\'t find session: x" >&2; return 1 ;; esac;';
 let h: CcdHarness;

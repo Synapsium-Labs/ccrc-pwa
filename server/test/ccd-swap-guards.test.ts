@@ -117,16 +117,18 @@ const manual = (args: string, env: NodeJS.ProcessEnv = { TMUX: '' }, extra = '')
 
 // ── the automatic affinity arm ───────────────────────────────────────────────
 describe('an automatic affinity swap re-runs its idle gate at the act', () => {
-  const decideIdle = (extra = ''): void => {
+  /** Returns the prior \`lastswap\` it seeded, computed once (a second re-computation races the clock). */
+  const decideIdle = (extra = ''): string => {
     seed('claude'); pane('❯ '); live('claude', 'idle');
-    fs.writeFileSync(regPath('lastswap'), `${nowS() - 5000}`);
+    const prev = String(nowS() - 5000);
+    fs.writeFileSync(regPath('lastswap'), prev);
     decide(extra);
     expect(detached(), 'the control: the decision dispatched').toHaveLength(1);
+    return prev;
   };
 
   it('a pane that turned busy during the jitter re-queues: lastswap restored, nothing stopped, no .choicekept', () => {
-    decideIdle();
-    const prev = String(nowS() - 5000);
+    const prev = decideIdle();
     live('claude', 'busy');
     expect(act()).toContain('rc=0');
     expect(swapLog()).toContain(`requeue ${ID}: busy after jitter`);
@@ -234,8 +236,12 @@ describe('the degrade stamp is written at the act, after the gates', () => {
 describe('a rescue re-confirms the block at the act, on a measured answer only', () => {
   const PRIOR = '{"five":40,"seven":10,"ts":1700000000}';
   let prevSwap = '';
-  const decideRescue = (prior: string | null = PRIOR): string => {
+  /** A normal assistant reply, then the API error the rescue is for: what a real transcript holds BEFORE the decision. */
+  const HISTORY = '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"earlier reply"}]}}\n'
+    + '{"type":"assistant","isApiErrorMessage":true,"error":"rate_limit","message":{"role":"assistant","content":[{"type":"text","text":"API Error: 429"}]}}\n';
+  const decideRescue = (prior: string | null = PRIOR, history = false): string => {
     const tx = seed('gpt');
+    if (history) fs.appendFileSync(tx, HISTORY);
     if (prior !== null) fs.writeFileSync(limitsFile(), prior);
     pane('API Error: 429 Too Many Requests');
     prevSwap = String(nowS() - 5000);
@@ -305,6 +311,7 @@ describe('a rescue re-confirms the block at the act, on a measured answer only',
     fs.writeFileSync(regPath('tscan'), `${nowS()} 1`);
     act();
     expect(swapLog()).toContain(`rescue-backoff ${ID}: draft`);
+    expect(h.reg(ID, 'lastswap'), 'a back-off restores lastswap').toBe(prevSwap);
     expect(fs.readFileSync(limitsFile(), 'utf8')).toMatch(/"five":100/);
     expect(fs.existsSync(marker)).toBe(true);
     expect(stopped()).toBe(false);
@@ -317,6 +324,7 @@ describe('a rescue re-confirms the block at the act, on a measured answer only',
     fs.writeFileSync(regPath('stalepress'), `${nowS()}`);
     act();
     expect(swapLog()).toContain(`rescue-backoff ${ID}: stalepress`);
+    expect(h.reg(ID, 'lastswap'), 'a back-off restores lastswap').toBe(prevSwap);
     expect(fs.readFileSync(limitsFile(), 'utf8')).toMatch(/"five":100/);
     expect(stopped()).toBe(false);
   });
@@ -326,14 +334,17 @@ describe('a rescue re-confirms the block at the act, on a measured answer only',
     pane('✻ Working… (esc to interrupt)');
     act();
     expect(swapLog()).toContain(`rescue-backoff ${ID}: running`);
+    expect(h.reg(ID, 'lastswap'), 'a back-off restores lastswap').toBe(prevSwap);
     expect(fs.readFileSync(limitsFile(), 'utf8')).toMatch(/"five":100/);
     expect(stopped()).toBe(false);
   });
 
-  it('an unmeasurable pane proceeds as decided and undoes nothing', () => {
-    decideRescue();
+  it('an unmeasurable pane proceeds as decided and undoes nothing, over a transcript with earlier replies', () => {
+    const tx = decideRescue(PRIOR, true);
     pane('❯ ');
     fs.writeFileSync(path.join(h.home, 'narrow'), '');
+    // Something after the decision, so the offset is read at all (an unchanged size answers no before it).
+    fs.appendFileSync(tx, '{"type":"assistant","isApiErrorMessage":true,"error":"rate_limit","message":{"role":"assistant","content":[{"type":"text","text":"API Error: 429"}]}}\n');
     act();
     expect(swapLog()).not.toMatch(/rescue-cancel|rescue-backoff/);
     expect(swapLog()).toContain(`swap ${ID}: gpt -> claude-d`);
@@ -347,12 +358,13 @@ describe('a rescue re-confirms the block at the act, on a measured answer only',
     fs.appendFileSync(tx, '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}\n');
     act();
     expect(swapLog()).toContain(`rescue-backoff ${ID}: output since decision`);
+    expect(h.reg(ID, 'lastswap'), 'a back-off restores lastswap').toBe(prevSwap);
     expect(fs.readFileSync(limitsFile(), 'utf8')).toMatch(/"five":100/);
     expect(stopped()).toBe(false);
   });
 
-  it('still blocked, and the only new entry is an API error: proceed', () => {
-    const tx = decideRescue();
+  it('still blocked, and the only new entry is an API error: proceed (earlier replies before the decision do not count)', () => {
+    const tx = decideRescue(PRIOR, true);
     pane('❯ ');
     fs.writeFileSync(regPath('tscan'), `${nowS()} 1`);
     fs.appendFileSync(tx, '{"type":"assistant","isApiErrorMessage":true,"error":"rate_limit","message":{"role":"assistant","content":[{"type":"text","text":"API Error: 429"}]}}\n');

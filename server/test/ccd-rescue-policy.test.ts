@@ -701,7 +701,7 @@ describe('rule 2: the near-reset wait (C6, C13)', () => {
 describe('a completed swap ends an open wait as a swap, whoever asked for it', () => {
   const SWAP = 'systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; }; launchctl() { echo "launchctl $*" >> "$HOME/ccd-calls"; }; '
     + 'tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; case "${1:-}" in has-session) echo "can\'t find session: x" >&2; return 1 ;; esac; }; sleep() { :; };';
-  // ^ the pane is GONE: D-5240's manual gate reads `_ws_status` first, and an alive pane with no pid is unreadable there.
+  // ^ the pane is GONE (D-5350): D-5240's manual gate reads `_ws_status` first, and an alive pane with no pid is unreadable there.
   const seedSwap = (): void => {
     const wd = path.join(h.home, 'projects', 'demo');
     fs.mkdirSync(wd, { recursive: true });

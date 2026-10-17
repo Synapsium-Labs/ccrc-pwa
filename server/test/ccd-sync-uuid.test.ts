@@ -11,7 +11,7 @@ import path from 'node:path';
 import { mungePath } from '../src/munge.js';
 import { eventsOf } from './lifecycleHelpers.js';
 
-/** A pane tmux cannot find — `_ws_status` reads it idle (D-5240's manual swap gate). */
+/** A pane tmux cannot find — `_ws_status` reads it idle (D-5240's manual swap gate; D-5350). */
 const GONE = 'case "${1:-}" in has-session) echo "can\'t find session: x" >&2; return 1 ;; esac; return 0;';
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('sync-uuid'); });

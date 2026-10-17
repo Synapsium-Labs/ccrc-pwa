@@ -268,7 +268,7 @@ describe('the tick spends rc 5 and rc 6', () => {
   });
 
   // A `degraded` stamp that cannot be WRITTEN stands still (ruling S3-R5):
-  // since D-5240 that is the ACT's arm, pinned in `ccd-swap-guards.test.ts`
+  // since D-5240 that is the ACT's arm, and the case moved (D-5350) to `ccd-swap-guards.test.ts`
   // ("a stamp that cannot be written stands still", and its rescue twin).
 });
 

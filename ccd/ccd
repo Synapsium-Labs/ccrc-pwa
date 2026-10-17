@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=5ee6d250af69ecf8c9a2067af7380c20c736fc6a99a26cbc34180d6b32e55ced
+# ccrc:generated 1 sha256=d6bc59806e6d52e04e99717305a7d736845ec828b10da4edb9477e7cb0c43ed2
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -19265,7 +19265,7 @@ _swap_idle_gate() {   # id [pane [wrapper [now]]] -> rc 0 iff the session is at 
   # the pane it already captured (no second capture per tick); the act passes
   # only the id and the gate captures, reads the wrapper and the clock itself.
   local id="$1" pane wrapper now
-  # A NARROW PANE STANDS DOWN FIRST (§6.3, `ccd-reader-standdown`'s census): a
+  # A NARROW PANE STANDS DOWN FIRST (D-5349; §6.3, `ccd-reader-standdown`'s census): a
   # clipped status row can hide `esc to interrupt`. The tick's own guard at its
   # top already ran before it captured the pane it passes in; the act's capture
   # here gets its own, so an unmeasurable pane re-queues rather than reads idle.

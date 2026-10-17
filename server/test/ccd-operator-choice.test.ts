@@ -103,7 +103,7 @@ const floorRow = (id = ID): string | undefined => (h.reg(id, 'typed') ?? '').spl
 /** The real cmd_swap, with systemd, tmux and the flush wait stubbed (the
  *  `ccd-swap.test.ts` idiom); TMUX is emptied so the detached arm is never taken. */
 const SWAP = 'systemctl() { :; }; launchctl() { :; }; sleep() { :; };'
-  // GONE on `has-session`: D-5240's manual gate reads `_ws_status` first, and
+  // GONE on `has-session` (D-5350): D-5240's manual gate reads `_ws_status` first, and
   // `tmux() { :; }` alone is an alive pane with no pid, which it reads as unreadable.
   + ' tmux() { case "${1:-}" in has-session) echo "can\'t find session: x" >&2; return 1 ;; esac; };';
 

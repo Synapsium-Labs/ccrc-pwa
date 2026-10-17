@@ -335,7 +335,8 @@ const POPULATION: Record<string, GuardSpec> = {
   // WAS `_auto_swap_check` UNTIL D-5240 extracted its idle gate into
   // `_swap_idle_gate`, which the act in `cmd_swap` re-runs; the phrase moved with
   // it. The tick's own guard still runs first and hands the gate its pane; the
-  // act's call captures its own, behind this guard.
+  // act's call captures its own, behind this guard: at the act an unmeasurable
+  // pane re-queues the move (D-5349).
   _swap_idle_gate: {
     count: 1,
     guard: /(?<!!\s*)_pane_measurable\s+"\$id"\s*\|\|.*\breturn\b/,
