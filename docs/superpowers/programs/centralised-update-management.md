@@ -1779,6 +1779,9 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       26/0/0). The fleet run's sweep again skipped supervisors that had failed before it, four this time (one at
       06:38, three on 10-12). STATUS: fleet and server v0.0.216, newest v0.0.216, intent dev/auto=stable, backups
       fleet 186M/server 771M, disk free fleet 216G/work volume 123G/server 32G, no anomalies.
+    - **2026-10-17 10:58 UTC:** v0.0.217 released at 10:49:26 (#483, a server change to how the PWA is served);
+      under `auto=stable` no box moved, as designed. STATUS: fleet and server v0.0.216, newest v0.0.217, intent
+      dev/auto=stable, backups fleet 186M/server 771M, disk free fleet 216G/work volume 117G/server 32G, no anomalies.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
