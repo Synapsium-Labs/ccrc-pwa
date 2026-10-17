@@ -4017,6 +4017,33 @@ describe('R107 to R109 (re-review N1 to N3): a cut pass never forgets what a new
     expect(leasesOf(w.home), 'the pass that alone named it was cut before the owners').toEqual([]);
     expect(w.watcher.delegationReport().lostEvidence.forced).toBe(1);
   });
+
+  it('R108 (N2, probe P6): a cut pass reading a NON-LIVE, re-pended owner keeps it pending: it is read by the next pass, and its call vetoes', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    makeOwner(w, 'demo-x');
+    await censusPass(w, at(-1), BEFORE_TREE, [sessionOf('demo-a'), sessionOf('demo-x')]);   // ready; demo-x is listed and read
+    creatorAfter(w, at(0), 'demo-x');                                   // then its call overlaps demo-a's creator, and it ends
+    // pass at(1) re-pends demo-x (R102) and is cut on its listing: no observation of it completes
+    let releaseX!: () => void;
+    w.faults.hold.set('demo-x', new Promise<void>((resolve) => { releaseX = resolve; }));
+    const listed = w.calls.listings.filter((o) => o === 'demo-x').length;
+    // the cut pass's late application (demo-a's creator, read before the cut) resolves, and its forgetting runs, before the next pass
+    let lateApplied!: () => void;
+    const lateDone = new Promise<void>((resolve) => { lateApplied = resolve; });
+    const realApply = DelegationDurability.prototype.applyAcceptedBatch;
+    vi.spyOn(DelegationDurability.prototype, 'applyAcceptedBatch').mockImplementation(async function (this: DelegationDurability, batches) {
+      try { return await realApply.call(this, batches); } finally { lateApplied(); }
+    });
+    await cutWhile(w, at(1), WITH_TREE, [sessionOf('demo-a')], {
+      reached: () => w.calls.listings.filter((o) => o === 'demo-x').length > listed, release: () => { w.faults.hold.delete('demo-x'); releaseX(); },
+    });
+    await lateDone;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    for (let i = 2; i < 7; i++) await censusPass(w, at(i), WITH_TREE);
+    expect(w.calls.ranges, 'read by the next pass').toContain(`demo-x/${BUCKET10}.spool`);
+    expect(leasesOf(w.home), 'its overlapping call vetoes').toEqual([]);
+  });
 });
 
 describe('R90 (W3, coordinator 5512): within one hour a loss word displaces a carve-out word, and a carve-out word never displaces a loss word', () => {
