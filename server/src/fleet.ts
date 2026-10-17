@@ -550,7 +550,18 @@ export async function assembleFleet(
       const pid = await tmux.panePid(r.id);
       panePids?.set(r.id, pid);
       const cfgDir = configDirFor(cfg, r.wrapper);
-      if (pid && cfgDir) {
+      if (pid === null) {
+        // D-5234: the pane is alive and its pid read FAILED (`list-panes`
+        // answered non-zero or nothing parseable — a loaded tmux server, a
+        // dropped round trip). That measured nothing about the session, so
+        // it takes the unreadable-live-file arm's shape below (D-115): `busy`
+        // on this display surface, declared unmeasured so `watch.ts` keeps
+        // the row's previous status instead of spending an edge — an overload
+        // tick that failed six busy rows' reads used to push six "Finished".
+        // `liveStatus` keeps answering `idle` here for the interrupt route.
+        status = 'busy';
+        statusUnmeasured = true;
+      } else if (cfgDir) {
         // D-115: `readLiveStateMeasured`, not `readLiveState`. The folded read
         // answered ONE null for four conditions, and this block spent it as
         // "leave `status` at the `alive` default" — which is `'idle'`. So a
@@ -599,8 +610,8 @@ export async function assembleFleet(
           // them is the same defect one field over — `statusUpdatedAt` in
           // particular renders as the `· 1m ago` beside the word, so a
           // fabricated one would put a fresh timestamp under a status nobody
-          // measured. `no-state` — absent, half-written, or naming no session
-          // — is untouched and still leaves the whole block at `idle`: that
+          // measured. `no-state` — absent, or a well-formed record naming no
+          // session (a torn body is unmeasured since D-5234) — is untouched and still leaves the whole block at `idle`: that
           // is a real measurement of a pane that has published nothing yet,
           // the ordinary shape in the seconds after `ccd ws-add`.
           status = 'busy';

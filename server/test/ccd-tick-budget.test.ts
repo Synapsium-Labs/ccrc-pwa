@@ -86,17 +86,62 @@ import {
  *    idle-home 167/73 -> 128/46 · busy 164/72 -> 125/45 · narrow 75/28 (=) · away-over-ceiling 193/91 -> 128/46 ·
  *    hard-blocked 406/218 -> 172/56 · cooldown 97/36 (=) · fable 156/65 -> 130/47 · leaving 391/224 -> 151/56 ·
  *    fable-leaving 375/211 -> 159/60.
+ *
+ *  LOWERED BY W3 Task 13 (D-4963, `_reg_get` and `_reg_read` read through `_file_read_to`; macOS, bash 5.3): every
+ *  registry read that finds its field loses its `cat`. A `$(_reg_get …)` loses 1 fork and 1 exec, the `cat` its
+ *  subshell forked. A `$(_reg_read …)` loses 2 forks and 1 exec: its inner `v=$(cat -- "$f" 2>/dev/null)` carries a
+ *  redirection, which keeps bash from exec'ing `cat` in the substitution's own child, so it was two processes
+ *  (measured on bash 5.3 with a logging `cat`, xtrace off). So execs fall by the reads that found a field, and forks by
+ *  those plus the `_reg_read` reads among them (4 on most fixtures, 6 on hard-blocked, 3 on cooldown, none on
+ *  narrow). The plan's model was about -15 `cat` execs per tick [I]; measured -11 to -19 (D-5271). Before -> after:
+ *    idle-home 128/46 -> 111/33 · busy 125/45 -> 109/33 · narrow 75/28 -> 64/17 · away-over-ceiling 128/46 -> 111/33 ·
+ *    hard-blocked 172/56 -> 147/37 · cooldown 97/36 -> 82/24 · fable 130/47 -> 113/34 · leaving 151/56 -> 134/43 ·
+ *    fable-leaving 159/60 -> 142/47.
+ *
+ *  LOWERED BY W3 Task 14 (D-4963, the hot sites: `_session_hard_blocked`'s `stalepress` and `tscan`,
+ *  `_auto_stale_check`'s `stalepress`, `_auto_swap_check`'s `wrapper` (`_reg_read_to`), `lastswap` and `swapblocked`,
+ *  `_auto_compact_check`'s `lastcompact`, `lastswap` and action-path `wrapper`; macOS bash 5.3 and Linux bash 5.2
+ *  print the same table, ticks 1-4 included): each converted read loses its `$( )`, 1 fork and no exec (Task 13
+ *  already took its `cat`), so forks fall by the converted reads a steady tick reaches and execs do not move. 7 where
+ *  every gate is passed; busy 5 (`esc to interrupt` returns ahead of `stalepress` and `tscan`); hard-blocked 5 (the
+ *  pane rung answers first); cooldown 4 (`lastswap`'s gate returns before `swapblocked` and the transcript); narrow 2
+ *  (only `_auto_compact_check`'s two reads sit above its `_pane_measurable`). `_auto_stale_check`'s read and the
+ *  action-path `wrapper` are reached by no fixture.
+ *  Before -> after:
+ *    idle-home 111/33 -> 104/33 · busy 109/33 -> 104/33 · narrow 64/17 -> 62/17 · away-over-ceiling 111/33 -> 104/33 ·
+ *    hard-blocked 147/37 -> 142/37 · cooldown 82/24 -> 78/24 · fable 113/34 -> 106/34 · leaving 134/43 -> 127/43 ·
+ *    fable-leaving 142/47 -> 135/47.
+ *
+ *  LOWERED BY W3 Task 15 (D-4963, the route chain through out-vars and `_swap_target`'s class peek; macOS bash 5.3,
+ *  ticks 1-4 included; Linux not re-run for this task): every fixture plants a route record that is fully
+ *  applied, so each steady tick walks `_route_apply_pending`'s whole chain. It nested 15 subshells; 4 remain, one per
+ *  `_route_peek_to` read (`class`, `degraded`, `effort`, `inert`), whose own `$(_reg_get …)` stays a capture because
+ *  `ccd-crosspool` enumerates that rc reader by its text (D-5269). So the chain is -11 forks on every fixture (the
+ *  plan's -15: D-5271), and `_swap_target`'s class peek, `$(_route_peek …)` around its own capture, is -1 per call:
+ *  one call per steady tick on idle-home, busy, away-over-ceiling, fable, leaving and fable-leaving, two on
+ *  hard-blocked, none on narrow or cooldown. Execs do not move (Task 13 took the `cat`s). Before -> after:
+ *    idle-home 104/33 -> 92/33 · busy 104/33 -> 92/33 · narrow 62/17 -> 51/17 · away-over-ceiling 104/33 -> 92/33 ·
+ *    hard-blocked 142/37 -> 129/37 · cooldown 78/24 -> 67/24 · fable 106/34 -> 94/34 · leaving 127/43 -> 115/43 ·
+ *    fable-leaving 135/47 -> 123/47.
+ *
+ *  LOWERED BY W3 Task 16 (D-4963, `_auto_swap_check`'s home read through `_home_measured_to`): the call lost its
+ *  `$( )` and `_home_measured`'s own `$(_reg_read …)` became `_reg_read_to`, so -2 forks on every fixture whose
+ *  steady tick reaches the home read, and none on narrow, which returns before it. Execs do not move (Task 13 took the
+ *  `cat`). `_authdead`'s `cat` is reached by no fixture's steady tick. Before -> after:
+ *    idle-home 92/33 -> 90/33 · busy 92/33 -> 90/33 · narrow 51/17 -> 51/17 · away-over-ceiling 92/33 -> 90/33 ·
+ *    hard-blocked 129/37 -> 127/37 · cooldown 67/24 -> 65/24 · fable 94/34 -> 92/34 · leaving 115/43 -> 113/43 ·
+ *    fable-leaving 123/47 -> 121/47.
  */
 const TICK_BUDGET: Record<FixtureName, { forks: number; execs: number }> = {
-  'idle-home': { forks: 128, execs: 46 },
-  busy: { forks: 125, execs: 45 },
-  narrow: { forks: 75, execs: 28 },
-  'away-over-ceiling': { forks: 128, execs: 46 },
-  'hard-blocked': { forks: 172, execs: 56 },
-  cooldown: { forks: 97, execs: 36 },
-  fable: { forks: 130, execs: 47 },
-  leaving: { forks: 151, execs: 56 },
-  'fable-leaving': { forks: 159, execs: 60 },
+  'idle-home': { forks: 90, execs: 33 },
+  busy: { forks: 90, execs: 33 },
+  narrow: { forks: 51, execs: 17 },
+  'away-over-ceiling': { forks: 90, execs: 33 },
+  'hard-blocked': { forks: 127, execs: 37 },
+  cooldown: { forks: 65, execs: 24 },
+  fable: { forks: 92, execs: 34 },
+  leaving: { forks: 113, execs: 43 },
+  'fable-leaving': { forks: 121, execs: 47 },
 };
 
 /** `_plat_timeout`'s `-k` probe, per tick inside the loop. On `main` at

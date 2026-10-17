@@ -971,7 +971,7 @@ describe('rule 3: spread, no bounce, and the chain wait', () => {
     fs.writeFileSync(path.join(h.home, '.cc-limits', 'claude-b.json'), JSON.stringify({ five: 100, seven: 5, ts: t }));
     pastLog(120, 'auto-rescue other-sess: claude-b (blocked) -> claude-a [home=claude-b]');
     // The class window is unmeasured on claude-d alone (`_class_gate` rc 2).
-    h.sh(`${STUBS(STALLED, null)} _route_peek() { [[ "$2" == class ]] && echo opus; return 0; };
+    h.sh(`${STUBS(STALLED, null)} _route_peek() { [[ "$2" == class ]] && echo opus; return 0; }; _route_peek_to() { printf -v "$1" ''; [[ "$3" == class ]] && printf -v "$1" opus; return 0; };
       _class_gate() { [[ -z "\${2:-}" ]] && return 0; [[ "$1" == claude-d ]] && return 2; return 0; };
       _auto_swap_check ${ID}`, BORN());
     expect(dispatches()).toEqual([`dispatch ${ID} -> claude-a`]);

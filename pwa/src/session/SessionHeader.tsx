@@ -211,6 +211,15 @@ export function SessionHeader({
     if (!finePointer || !busy) return;
     const onKey = (e: globalThis.KeyboardEvent): void => {
       if (e.key !== 'Escape') return;
+      // D-5235: AN ESCAPE THAT CLOSES A SHEET IS NOT AN INTERRUPT. Radix's
+      // dismiss (under every `@ccrc/ui` Sheet and dialog, the terminal drawer
+      // included) handles the key in its document capture listener and
+      // prevents the default without stopping propagation, so the same
+      // keystroke reached this window listener and killed the turn. Both
+      // checks: the first is the one Radix sets today; the second holds if a
+      // layer ever handles Escape without preventing it.
+      if (e.defaultPrevented) return;
+      if (document.querySelector('[role="dialog"][data-state="open"]') !== null) return;
       // Escape inside a text field dismisses autocomplete or clears the draft —
       // it must not reach through and kill the turn.
       const el = e.target as HTMLElement | null;

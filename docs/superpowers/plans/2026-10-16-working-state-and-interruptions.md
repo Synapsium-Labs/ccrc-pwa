@@ -279,7 +279,7 @@ Variants are built from it in the test by editing `background_tasks` only: the s
   | `stopAt >= turnAt` removed | (c) |
   | `unmeasured` accepted | (e) |
   | the absent fallback accepts any `done` event | (f)'s PostCompact case |
-  | `busySince` taken at the edge instead of the busy tick | (b) |
+  | `busySince` taken at the edge instead of the busy tick | (a), (f)'s Stop push, (g) — a later start only tightens the rule, so it cannot red (b); measured when Task 3 landed |
 
 - [ ] **Step 4: Gates:** `finished-push`, `push-copy`, `notifylog`, `fleetws`, `stall-sweep`, `mail-sweep`, `turnmark`, the four ledger and hygiene suites, tsc.
 - [ ] **Step 5: Commit** `fix(push): Finished only when a main Stop falls inside the busy episode (D-5233)`.
@@ -867,3 +867,10 @@ Filled by Task 13 (the probe answers) and Task M (baseline and after-runs). Empt
 - **D-5272** — `background-carried-through-agent-events` (Task 1): `FleetSession.background` is set on a hook `done` whose `event` is `Stop`, `SubagentStart` or `SubagentStop` (`BACKGROUND_CARRIER_EVENTS` in `server/src/fleet.ts`), not only on a `Stop`'s, as D-5231 states it. It departs because, until D-5232's gated arm keeps the main state, a subagent event after the main Stop rewrites `event` while it keeps `done` and carries D-5231's pair, so a Stop-only test would drop the background words at the first agent event of a delegated run. It is held by the hook writing the pair only at a main Stop and carrying it only at a subagent event (both or neither, each value validated at the fresh read), so no other event's `done` can hold it; once D-5232 keeps `event`, the two agent events no longer reach the set and the rule narrows to D-5231's on its own.
 
 Issued and unused: none. All twelve numbers, 5231 to 5242, are defined above.
+
+### Issued 2026-10-17 and defined here
+
+- **D-5274** — `archive-unmeasured-row-is-status-unknown` (Task 4, coordinator ruling): a fleet frame row that is `busy` only because a read failed (`statusUnmeasured`: an unread pane pid since D-5234, an unreadable live file since D-115) measured no turn, so the archive door reads it `unmeasured` and refuses `409 status-unknown` whatever the consents, never `409 session-busy`. It departs from the frame row's two-valued `archiveInterrupts` read for an ordinary workspace archive, which since D-5234 answered `session-busy` for an unread pid and invited an `interrupt` retry that the fail-closed read then refused `status-unknown` anyway; "consent covers a measured turn only" (D-3881). Held by `frameRowVerdict` (the non-`interrupt` path) and by `stopVerdict`'s row arm (the fail-closed path), both in `server/src/coord/archiveDoor.ts`, pinned in `archive-door-decide.test.ts` and, through the route with no consent, `interrupt` and `force`, in `archive-door.test.ts`.
+- **D-5275** — `chat-header-mirrors-null-pid` (Task 4, coordinator ruling): the chat header (`SessionStream`'s resolve in `server/src/sessionws.ts`) reads an alive pane whose pane-pid read failed as `busy`, with no `statusUpdatedAt` and the registry's `cwd`, mirroring `assembleFleet` after D-5234. Spec §5.4 scoped the pid fix to the fleet frame only, which left the card `busy` beside a header `idle` for the same session, the disagreement D-115's mirror rule exists to prevent. Held by the null-pid branch in `sessionws.ts`, pinned in `sessionws.test.ts` (busy while the read fails, idle once it heals).
+
+Issued and unused: none. Both numbers, 5274 and 5275, are defined above.
