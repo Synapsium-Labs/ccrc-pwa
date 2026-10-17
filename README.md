@@ -2890,7 +2890,7 @@ edge pushes as before. Delegated background work keeps its push for the moment t
 - **A parent answers first** (the ask pre-emption lane). When the worker of an open run blocks on a
   single-question, single-select `AskUserQuestion`, the server does not push to you at once: it records the ask,
   mails the run's coordinator (the newest open run's `claimedBy`) an `ask:<id>` nudge through the ordinary
-  idle-gated lane, and holds **only your notification** for up to 120 s (`ASK_GRACE_MS`, `server/src/askwindow.ts`).
+  idle-gated lane, and holds **only your notification** for up to 180 s (`ASK_GRACE_MS`, `server/src/askwindow.ts`).
   The coordinator may answer from what it can read — `POST /api/asks/:id/answer`, box token plus registry
   attribution, accepted only from that worker's own parent, which re-proves the question is still the live one
   before it presses one digit — or decline anything that would be a new decision with

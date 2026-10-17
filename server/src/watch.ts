@@ -29,7 +29,8 @@ import { askActions, askKey } from './askkey.js';
 // module — `watch.ts` imports `assembleFleet` from it — so they now live
 // where both may read them. `ASK_SWEEP_MS` below is unaffected: it is this
 // lane's poll cadence, not a window, and this file is still its only reader.
-import { ASK_ANSWERING_MAX_MS, ASK_GRACE_MS } from './askwindow.js';
+import { ASK_ANSWERING_MAX_MS, askNotifyAt } from './askwindow.js';
+import { UNTRUSTED_CAP_BYTES, untrustedBlock } from './coord/untrusted.js';
 import type { SessionRecord } from './registry.js';
 import type {
   ChildMark, ChildReclaimAttention, ChildReclaimGeneration, ChildReclaimKeptWord, CoordStatus, DeadCoordinatorAttention, Dialog, ExpiryAttention, FleetSession, HookAsk, HookAskQuestion,
@@ -8343,6 +8344,8 @@ export class FleetWatcher {
     if (key === null) throw new Error(`hold: eligible ask on ${r.id} produced no askKey`);
     const options = q.options.map((o) => o.label);
     const now = Date.now();
+    // D-5294: the one deadline, read by the sweep (`until`) and stated in the brief.
+    const until = askNotifyAt(now);
     // Same run `parentOfSession` derived the parent from — `openRunsForSession`
     // mirrors its `ORDER BY id DESC LIMIT 1` pick via "last of the ASC list",
     // the same idiom `sweepMerged` above already uses. Recorded on the ask
@@ -8385,30 +8388,53 @@ export class FleetWatcher {
     // the kind of thing that drifts.
     queueSystemMail(this.deps.coord!, null, {
       fromId: 'operator', toId: parent, runId: null, kind: 'question',
-      subject: askNudgeSubject(askId), body: renderAskBrief(askId, r.id, q.question, options),
+      subject: askNudgeSubject(askId), body: renderAskBrief(askId, r.id, q.question, options, until),
     });
-    return { until: now + ASK_GRACE_MS, askId, ev, answeringSince: null };
+    return { until, askId, ev, answeringSince: null };
   }
 }
 
 /**
  * The parent's ENTIRE evidentiary surface (design spec §6.1) is this ask row
  * plus its own artifacts — no route, ws feed, or ccd verb lets one session
- * read another's transcript. So this states four things and nothing else:
- * the child's id, the question and its options in order, the two routes a
- * parent may act through, and the lazy role invocation (design spec §4) —
- * this session is that child's parent, and `ccrc-coordinator` is the skill
- * for the job. That sentence is why nothing has to happen at session
- * creation: the role arrives with its first duty.
+ * read another's transcript. So this states the child's id, the moment the
+ * operator is notified (D-5294), the question and its options in order, the
+ * ready-to-run commands a parent may act through, and the lazy role invocation
+ * (design spec §4) — this session is that child's parent, and
+ * `ccrc-coordinator` is the skill for the job. That sentence is why nothing has
+ * to happen at session creation: the role arrives with its first duty.
+ *
+ * D-5294 (coordinator-first spec §5.4, §6.7):
+ * - the deadline is `notifyAt` (`askNotifyAt`, the one computation the sweep
+ *   also acts on), printed in UTC, with the late-answer sentence D-5289 makes
+ *   true;
+ * - the question and the option labels are the child's text, so they ride
+ *   inside `untrustedBlock` and nowhere else; outside it the brief names
+ *   options only by index;
+ * - the commands are the coordinator skill's own client form
+ *   (`wave-lifecycle.md`'s ask lane): `"$API"`, `$id` and `$uuid` are the
+ *   names the skill's preamble sets, so the heredoc is UNQUOTED and the shell
+ *   expands them into the attribution the route requires. Nothing the child
+ *   wrote is inside a heredoc: the ask id and the index are integers this
+ *   server minted.
  */
-function renderAskBrief(askId: number, childId: string, question: string, options: string[]): string {
-  const numbered = options.map((label, i) => `  ${i}. ${label}`).join('\n');
-  return `You are the parent of session \`${childId}\`, which is waiting on a question it cannot answer itself:\n` +
-    `${question}\n${numbered}\n\n` +
+function renderAskBrief(
+  askId: number, childId: string, question: string, options: string[], notifyAt: number,
+): string {
+  const asked = `${question}\n${options.map((label, i) => `  ${i}. ${label}`).join('\n')}`;
+  const deadline = new Date(notifyAt).toISOString().slice(11, 19);
+  const who = '"fromId":"$id","fromUuid":"$uuid"';
+  const answers = options.map((_label, i) =>
+    `Option ${i}:\n"$API" asks answer ${askId} --json - <<JSON\n{${who},"optionIndexes":[${i}]}\nJSON\n`).join('');
+  return `You are the parent of session \`${childId}\`, which is waiting on a question it cannot answer itself.\n` +
+    `The operator is notified at ${deadline} UTC unless you answer or hand over; ` +
+    `a later answer still counts until the operator acts.\n\n` +
+    `${untrustedBlock(asked, UNTRUSTED_CAP_BYTES, 'on the row (`"$API" asks list`)')}\n\n` +
     `Rule from your own artifacts — spec, plan, ledger, branch, your prior rulings — never from the child's ` +
-    `reasoning, which you cannot see.\n` +
-    `Answer: POST /api/asks/${askId}/answer { optionIndexes: [<index>] }\n` +
-    `Decline (not yours to rule — fires the operator's own notification at once): ` +
-    `POST /api/asks/${askId}/release\n\n` +
+    `reasoning, which you cannot see.\n\n` +
+    `Answer with the index of the option you rule for ("$API", $id and $uuid are the ccrc-coordinator skill's):\n` +
+    answers +
+    `\nDecline (not yours to rule — fires the operator's own notification at once, and is final):\n` +
+    `"$API" asks release ${askId} --json - <<JSON\n{${who}}\nJSON\n\n` +
     `Run the ccrc-coordinator skill.`;
 }
