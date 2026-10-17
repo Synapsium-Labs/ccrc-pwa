@@ -13,11 +13,11 @@ The operator ruled on 2026-10-17 at 15:50 UTC that this programme repairs stable
 - **Not measured:** why the kernel answered EPERM, whether any member of the group was live, and whether the leader had exited or been reaped.
 
 **The fitting hypothesis, not a measured cause:** Darwin answers EPERM, not ESRCH, from `killpg` while every member left in the group is a zombie. An exited `git` that its parent has not yet reaped is one. Linux signals such a group with rc 0, which is why row 64 is green on every Linux leg. The change below is correct whether or not the hypothesis holds:
-- it absorbs an EPERM only when the leader turns out to have exited, and reaps it;
-- any other EPERM still raises, a leader that is still alive included;
-- a live member other than the leader is still stopped through the existing grace and SIGKILL path.
+- it absorbs an EPERM only at the first signal, the SIGTERM, and only when the leader turns out to have exited, and reaps it;
+- any other EPERM still raises, a leader that is still alive included, and so does every EPERM at the SIGKILL (D-5335);
+- a live member other than the leader is still signalled through the existing grace and SIGKILL path, and one that refuses the SIGKILL makes it raise, so the refusal is never hidden.
 
-**Architecture:** one function changes shape, inside the Docs helper's `Sys` class in `ccd/ccd`. `_signal_group` takes the `Popen`, not its pgid, so it can tell an exited leader from a live one at the moment EPERM arrives. `_stop` passes the `Popen`. `_group_alive` is unchanged. The test replays Darwin's answer on Linux through the helper's own seam: the helper's `os` is the unit's `os`, so a unit can swap `os.killpg`.
+**Architecture:** one function changes shape, inside the Docs helper's `Sys` class in `ccd/ccd`. `_signal_group` takes the `Popen`, not its pgid, so it can tell an exited leader from a live one at the moment EPERM arrives. `_stop` passes the `Popen`, and only its SIGTERM call asks for the absorb, by an explicit argument (D-5335). `_group_alive` is unchanged. The test replays Darwin's answer on Linux through the helper's own seam: the helper's `os` is the unit's `os`, so a unit can swap `os.killpg`.
 
 **Deploy class:** fleet-first. `ccd/ccd` reaches each home through the install spine, and the Docs verbs run on the fleet box.
 
@@ -26,7 +26,7 @@ The operator ruled on 2026-10-17 at 15:50 UTC that this programme repairs stable
 ## Not in this wave
 
 - Any other change to the Docs helper, its caps, its deadline or its verbs. Row 64 itself stays **byte-unchanged**, because it is the macOS proof.
-- `_group_alive`'s EPERM reading. It still reads EPERM as alive. After `_signal_group` has reaped the leader, an empty group answers ESRCH and the wait ends. A group whose members are zombies of a reaped leader's children is not reachable: they re-parent to init, which reaps them. Reading 2 asks the coordinator to confirm this.
+- `_group_alive`'s EPERM reading. It still reads EPERM as alive. After `_signal_group` has reaped the leader, an empty group answers ESRCH and the wait ends. On Darwin the reaped leader's exited children can stay in the group as zombies until launchd reaps them, and through that window `_group_alive` reads EPERM as alive, which only keeps the loop polling. The window is transient, bounded by launchd's reap; if it outlasts `KILL_GRACE_S` the SIGKILL arm raises (loud, no leak). Changing `_group_alive` would not help, because any raise comes from `_signal_group`. Reading 2 asks the coordinator to confirm this.
 - The Docs reader programme's diagnostic branch. It stays unlanded, by that programme's own ruling.
 
 ## Global Constraints
@@ -39,7 +39,7 @@ The operator ruled on 2026-10-17 at 15:50 UTC that this programme repairs stable
 
 ## Review Focus
 
-- Is the EPERM absorbed **only** when the leader had not been reaped before the signal and `poll()` now shows it exited? Linux EPERM, a live leader's EPERM and an already-reaped leader's EPERM must all still raise.
+- Is the EPERM absorbed **only** at the SIGTERM, and only when the leader had not been reaped before the signal and `poll()` now shows it exited? Linux EPERM, a live leader's EPERM, an already-reaped leader's EPERM and every EPERM at the SIGKILL must all still raise.
 - Does a live non-leader member still get SIGTERM and then, after `KILL_GRACE_S`, SIGKILL?
 - Does the injected row really discriminate: green with the change, and red on `main` and under each mutation row?
 - Is row 64 byte-unchanged, and is the stamp recomputed rather than copied?
@@ -47,7 +47,7 @@ The operator ruled on 2026-10-17 at 15:50 UTC that this programme repairs stable
 ## Risk notes
 
 - **Linux EPERM stays loud.** On Linux EPERM means a real refusal, a member owned by another user. The absorb arm requires both conditions: the leader was unreaped before the call, and `poll()` reaps it now. A refusal with a live leader still raises.
-- **The reap racing the signal.** `poll()` reaps at most the leader, so a later `killpg` on an emptied group answers ESRCH, which is already absorbed. The second unit models the leader dying between the stop's start and its signal.
+- **The reap racing the signal.** `poll()` reaps at most the leader, so a later `killpg` on an emptied group answers ESRCH, which is already absorbed. The second unit's two halves cover one path: in both, the leader is an unreaped zombie at the first signal, one having exited on its own and one killed as that signal was sent. `_stop` does nothing between its start and its first `killpg`, so there is no separate window to model.
 - **Darwin versions.** The runner had macOS 26.6.2 and CPython 3.15.0. The replay models XNU's answer: ESRCH for no member, EPERM when every member is a zombie, otherwise the real call. Only the dispatched full run proves the macOS leg.
 - **The replay reads `/proc`,** so its describe is `skipIf(process.platform !== 'linux')`. On macOS, row 64 itself is the test.
 
@@ -55,12 +55,13 @@ The operator ruled on 2026-10-17 at 15:50 UTC that this programme repairs stable
 
 - **D-5333.** `Sys._signal_group` takes the `Popen` instead of its pgid. It absorbs an EPERM when the leader was unreaped before the call and `poll()` reaps it now, and raises every other EPERM. `_stop` passes the `Popen` to both of its signal calls. Why: the Docs reader programme measured EPERM from the first SIGTERM after an overflow on macOS, and the old function, which re-raised everything but ESRCH, turned it into `unreadable`. The cause is a hypothesis, so the arm keys on the one fact that makes the absorb safe, an exited leader, rather than on the platform.
 - **D-5334.** The test replays Darwin's `killpg` answer on Linux, through the helper's `os` seam, from `/proc`'s member states. It logs every answer to `$HOME/killpg.log` so a green row proves the EPERM was met. Row 64 stays byte-unchanged as the macOS proof. Why: a pull request skips `test-macos`, and a fix proved only on the platform it cannot reach would ship unpinned on Linux CI.
-- Numbers 5335 to 5338 are the coordinator's. The worker's reserve is 5339 to 5342, spent in order, each defined here before use.
+- **D-5335** (the coordinator's ruling on review 573's F1). The absorb applies at `_stop`'s SIGTERM call only, asked for by an explicit argument (`_signal_group(proc, signal.SIGTERM, absorb_reaped=True)`); at the SIGKILL call an EPERM raises exactly as before D-5333, even with a leader that `poll()` would now reap. Why: at the SIGKILL no wait follows but the leader's, so an absorb there could hide a refusal to stop a live member with foreign credentials, and fail-loud (`unreadable`) is the safer error. Row 64's case meets the zombie leader at the first signal, which the SIGTERM absorb still covers. The cost: a leader that exits in the last poll gap before the SIGKILL, leaving a group of zombies, raises `unreadable` again; that is as rare, and loud. A fourth case pins it, and mutation row T20-M6 reds it.
+- Numbers 5336 to 5338 are the coordinator's. The worker's reserve is 5339 to 5342, spent in order, each defined here before use.
 
 ## File structure
 
 - `ccd/ccd`: in the Docs helper's `class Sys`, `_stop` changes in two lines and `_signal_group` changes in its signature, its body and a new docstring. Line 2 is restamped.
-- `server/test/ccd-docs-tree.test.ts`: one new describe at the end of the file, with three cases and the `T20_DARWIN_KILLPG` preamble. It uses the existing `t14phase` (its `pre` option), `t14holder`, `T14_S`, `t14fs`, `t14path`, `h` and `unitJson`.
+- `server/test/ccd-docs-tree.test.ts`: one new describe at the end of the file, with three cases and the `T20_DARWIN_KILLPG` preamble (four cases after fix round 1). It uses the existing `t14phase` (its `pre` option), `t14holder`, `T14_S`, `t14fs`, `t14path`, `h` and `unitJson`.
 
 ## Tasks
 
@@ -299,10 +300,17 @@ Each row was restored with `cp`, and `cmp` matched. `--check` was `ccrc-unmodifi
   - **Wave 15's gate files, re-run:** `ccd-supervised-start` 28 (4 skipped), `macos-platform` 104 (11 skipped).
   - **The other suites that load the Docs helper, since `_stop` serves every verb:** `ccd-docs-index` 256, `ccd-docs-fetch` 31, `ccd-docs-show` 86, `docs-budget` 19, `docs-grammar` 158, `docs-parity` 54.
 - [ ] **Step 2.** Commit on the workspace branch. Open the PR with a body that says what changed, why (B2), and that it is proved on macOS only by a dispatched full run. Use noreply identity, and put no hosts, paths, lane or account names in it.
-- [ ] **Step 3.** Send the wave-done. The suite line follows the worker skill. Name the dispatched full run the coordinator must trigger on the branch (`gh workflow run ci.yml --ref <branch> -f mode=full`). The worker runs no `gh` writes itself. The coordinator triggers the run and reads `test-macos 3/4`.
+- [ ] **Step 3.** Send the wave-done. The suite line follows the worker skill. Name the dispatched full run the coordinator must trigger on the branch (`gh workflow run ci.yml --ref <branch> -f mode=full`). The worker runs no `gh` writes itself. The coordinator triggers the run and reads the `test-macos` shard that runs `ccd-docs-tree`: on full run 39050387114 that was `test-macos 2/4` (job 117447659194), not 3/4.
+
+### Fix round 1 (review 573, 2026-10-17)
+
+The coordinator's mail ruled on review 573's six findings at `97493f9b2`. F1: the absorb applies at the SIGTERM call only (D-5335). F2: case 3 gains an EINVAL arm against an exited, unreaped leader, and mutation row T20-M5 joins the table. F3: `_t20_racing` bound-waits for the `Z` member after its real SIGKILL, through the same `_t20_await_zombie` the first answer uses. F4, F5 and F6 correct this plan's prose: "Not in this wave", the Risk note and case 2's title, and the proof shard.
+
+- [x] **Step 1 (red first).** Case 4 is new: `the absorb is the SIGTERM call's alone: at the SIGKILL, an EPERM against an exited, unreaped leader raises (D-5335)`. Its fake `killpg` swallows the SIGTERM, so the leader (`sleep 30`) outlives the grace. At the SIGKILL it makes the real call, waits with `waitid(WNOWAIT)` until the leader has exited unreaped, and answers EPERM, Darwin's answer for that group of zombies.
+  **Measured at `97493f9b2` with the new rows:** `1 failed | 3 passed | 184 skipped`. Case 4 is red, reading `kill: returned` with signals `[15, 9]`. Case 3's new `einval` arm is already green there, because the old code raises every errno but EPERM.
 
 ## Readings (for the coordinator to rule)
 
-1. **The proof.** Is a green `test-macos 3/4` on the dispatched full run enough proof of the fix, given that the cause is a hypothesis? The coordinator proposes yes: row 64 is the measured failure, and it goes green or it does not.
+1. **The proof.** Is a green row 64 on the dispatched full run's macOS leg (`test-macos 2/4`, job 117447659194, on run 39050387114, where row 64 ran and passed) enough proof of the fix, given that the cause is a hypothesis? The coordinator proposes yes: row 64 is the measured failure, and it goes green or it does not.
 2. **`_group_alive`.** Leave it unchanged, by the argument in "Not in this wave"? The coordinator proposes yes.
 3. **No plan attack lenses ran.** The memory cap killed them. The held-out review panel reads this plan with the wave.

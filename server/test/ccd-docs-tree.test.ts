@@ -3471,9 +3471,9 @@ describe('docs-tree: a spent deadline degrades the drafts, never the tree (D-416
 // can see it. These units replay Darwin's answer through the helper's own seam: the helper's `os` is the unit's
 // `os`, so the unit swaps `os.killpg` for one that reads the group's members from /proc and answers as XNU's
 // killpg does (no member: ESRCH; every member a zombie: EPERM; else the real call). Linux only (/proc); row 64
-// itself stays byte-unchanged as the macOS proof. Its first answer waits (bounded) for the leader to have exited,
-// so the zombie leader is a fact of the run, not a race won. Every answer is logged to $HOME/killpg.log, so a green
-// row shows that the EPERM was met.
+// itself stays byte-unchanged as the macOS proof. Its first answer, and case 2's racing kill, each wait (bounded)
+// for the leader to be a zombie, so a zombie leader at the first signal is a fact of each run, not a race won. Every
+// answer is logged to $HOME/killpg.log, so a green row shows that the EPERM was met.
 const T20_DARWIN_KILLPG: string[] = [
   'import errno as _t20_errno',
   'import os as _t20_os',
@@ -3496,11 +3496,13 @@ const T20_DARWIN_KILLPG: string[] = [
   'def _t20_answer(sig, word):',
   '    with open(_t20_log, "a") as f:',
   '        f.write("%d %s\\n" % (sig, word))',
+  'def _t20_await_zombie(pgid):',
+  '    end = _t20_time.monotonic() + 5',
+  '    while _t20_time.monotonic() < end and "Z" not in _t20_members(pgid):',
+  '        _t20_time.sleep(0.01)',
   'def _t20_killpg(pgid, sig):',
   '    if not _t20_os.path.exists(_t20_log):',
-  '        end = _t20_time.monotonic() + 5',
-  '        while _t20_time.monotonic() < end and "Z" not in _t20_members(pgid):',
-  '            _t20_time.sleep(0.01)',
+  '        _t20_await_zombie(pgid)',
   '    m = _t20_members(pgid)',
   '    if not m:',
   '        _t20_answer(sig, "ESRCH")',
@@ -3529,7 +3531,7 @@ describe.skipIf(process.platform !== 'linux')('row 64 on Darwin: killpg answers 
     expect(t20log()).toEqual(['15 EPERM', '0 ESRCH']);
   }, 60000);
 
-  it('_stop: a leader that exited before the stop, or between the reap and the signal, is reaped and the call returns', () => {
+  it('_stop: a leader that is an unreaped zombie at the first signal, whether it exited on its own or was killed as that signal was sent, is reaped and the call returns', () => {
     const got = unitJson<Record<string, unknown>>(h.home, [
       ...T20_DARWIN_KILLPG,
       'import signal, subprocess',
@@ -3540,6 +3542,7 @@ describe.skipIf(process.platform !== 'linux')('row 64 on Darwin: killpg answers 
       "q = subprocess.Popen(['sleep', '30'], start_new_session=True)",
       'def _t20_racing(pgid, sig):',
       '    _t20_real(pgid, signal.SIGKILL)   # the leader dies after the stop began, before this signal lands',
+      '    _t20_await_zombie(pgid)',
       '    _t20_os.killpg = _t20_killpg',
       '    return _t20_killpg(pgid, sig)',
       '_t20_os.killpg = _t20_racing',
@@ -3551,14 +3554,18 @@ describe.skipIf(process.platform !== 'linux')('row 64 on Darwin: killpg answers 
     expect(t20log()).toEqual(['15 EPERM', '0 ESRCH', '15 EPERM', '0 ESRCH']);
   }, 60000);
 
-  it('EPERM stays loud: a live leader that refuses, and a leader already reaped that refuses, both raise EPERM', () => {
+  it('EPERM stays loud: a live leader that refuses, and a leader already reaped that refuses, both raise EPERM; any other errno raises even against an exited, unreaped leader', () => {
     const got = unitJson<Record<string, string>>(h.home, [
       'import errno, os, signal, subprocess',
       'real = os.killpg',
       'def refuse(pgid, sig):',
       '    raise OSError(errno.EPERM, "Operation not permitted")',
-      'def stop(p):',
-      '    os.killpg = refuse',
+      'def einval_at_term(pgid, sig):',
+      '    if sig != signal.SIGTERM:',
+      '        return real(pgid, sig)',
+      '    raise OSError(errno.EINVAL, "Invalid argument")',
+      'def stop(p, fake=refuse):',
+      '    os.killpg = fake',
       '    try:',
       '        H.SYS._stop(p)',
       "        return 'returned'",
@@ -3577,8 +3584,42 @@ describe.skipIf(process.platform !== 'linux')('row 64 on Darwin: killpg answers 
       "done = subprocess.Popen(['true'], start_new_session=True)",
       'done.wait()',
       "res['reaped'] = stop(done)",
+      "odd = subprocess.Popen(['true'], start_new_session=True)",
+      'os.waitid(os.P_PID, odd.pid, os.WEXITED | os.WNOWAIT)   # exited, not reaped',
+      "res['einval'] = stop(odd, einval_at_term)",
+      'odd.wait()',
       'out(res)',
     ].join('\n'), { timeoutMs: 60_000 });
-    expect(got).toEqual({ live: 'raised EPERM', reaped: 'raised EPERM' });
+    expect(got).toEqual({ live: 'raised EPERM', reaped: 'raised EPERM', einval: 'raised EINVAL' });
+  }, 60000);
+
+  it('the absorb is the SIGTERM call\'s alone: at the SIGKILL, an EPERM against an exited, unreaped leader raises (D-5335)', () => {
+    const got = unitJson<Record<string, unknown>>(h.home, [
+      'import errno, os, signal, subprocess',
+      'real = os.killpg',
+      'seen = []',
+      'def darwin_at_kill(pgid, sig):',
+      '    seen.append(sig)',
+      '    if sig == signal.SIGTERM:',
+      '        return   # swallowed: the leader outlives the grace',
+      '    if sig == signal.SIGKILL:',
+      '        real(pgid, sig)',
+      '        os.waitid(os.P_PID, pgid, os.WEXITED | os.WNOWAIT)   # exited, not reaped: a group of zombies',
+      '        raise OSError(errno.EPERM, "Operation not permitted")',
+      '    return real(pgid, sig)',
+      "p = subprocess.Popen(['sleep', '30'], start_new_session=True)",
+      'os.killpg = darwin_at_kill',
+      'try:',
+      '    H.SYS._stop(p)',
+      "    res = {'kill': 'returned'}",
+      'except OSError as e:',
+      "    res = {'kill': 'raised ' + errno.errorcode[e.errno]}",
+      'finally:',
+      '    os.killpg = real',
+      'p.wait()',
+      "res['signals'] = seen",
+      'out(res)',
+    ].join('\n'), { timeoutMs: 60_000 });
+    expect(got).toEqual({ kill: 'raised EPERM', signals: [15, 9] });
   }, 60000);
 });
