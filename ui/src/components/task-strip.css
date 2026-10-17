@@ -109,6 +109,14 @@
   .task-row--in_progress .task-subject {
     font-weight: var(--weight-semibold);
   }
+  /* D-5372: a stale list is a plan left open — its in_progress rows read as
+     open, not in flight: neutral glyph, regular weight. */
+  .task-row--in_progress.task-row--stale .task-glyph {
+    color: var(--ink-tertiary);
+  }
+  .task-row--in_progress.task-row--stale .task-subject {
+    font-weight: var(--weight-regular);
+  }
   .task-row--completed .task-subject {
     color: var(--ink-tertiary);
     text-decoration: line-through;
