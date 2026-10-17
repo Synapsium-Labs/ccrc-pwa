@@ -957,6 +957,10 @@ function pathWithout(home: string, missing: string): string {
     'node', 'git', 'npm', 'rsync', 'bash', 'sleep', 'jq', 'mktemp', 'basename',
     'diff', 'tmux', 'python3', 'flock', 'timeout', 'stat', 'grep', 'awk', 'realpath',
     'ln', 'readlink', SHA256_TOOL,
+    // `head` (wave 17 R8f, D-5317): `_inst_stamp_shipped` reads the release tag
+    // as `git tag --points-at HEAD | grep -E … | head -n1`, so a farm without it
+    // stamps no `version` at all, silently, in every case built on this list.
+    'head',
     // macOS: the service manager, its plist linter, and `uname`. The last one
     // is not decoration — `ccd`'s platform detection prefers bash's own
     // `$OSTYPE` precisely so a PATH without `uname` cannot silently answer
@@ -4056,6 +4060,34 @@ describe('ccrc install: the build stamp', () => {
     expect(stamp['sha']).toBe(sha);
     expect(stamp['version']).toBe('v2.0.1');
     expect(r.stdout).toMatch(/^install: stamp: [0-9a-f]{40} \(fixture-branch, v2\.0\.1\)$/m);
+  });
+
+  // Wave 17 R8f (D-5317): `pathWithout`'s farm of real tools carries `head`, because the stamp's release-tag read
+  // pipes through it; without it the version is dropped silently ("head: command not found" into /dev/null).
+  it('H1: pathWithout links a runnable head into its farm, and omits it when head is the named absence (wave 17 R8f, D-5317)', () => {
+    const farmOf = (path: string): string => path.split(':')[1] ?? '';
+    const runnable = (dir: string): boolean => {
+      try { return (statSync(join(dir, 'head')).mode & 0o111) !== 0; } catch { return false; }
+    };
+    const home = freshBox('ccrc-install-pathwithout-head-');
+    expect(runnable(farmOf(pathWithout(home, 'git'))), 'the farm lacks a runnable head').toBe(true);
+    expect(runnable(farmOf(pathWithout(home, 'head'))), 'head was linked although it is the named absence').toBe(false);
+  });
+
+  it('H2: an install from a checkout tagged v9.9.9, on a farm PATH, stamps version v9.9.9 (wave 17 R8f, D-5317)', () => {
+    const home = freshBox('ccrc-install-stamp-farm-tag-');
+    const root = treeRoot(home);
+    const sha = gitInit(root);
+    const t = spawnSync('git', ['-C', root, 'tag', 'v9.9.9'], {
+      env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' }, encoding: 'utf8',
+    });
+    if (t.status !== 0) throw new Error(`fixture git tag failed: ${t.stderr}`);
+    // No tool is the subject here: a name no farm entry carries leaves the whole farm linked.
+    const r = runInstall(home, ['install'], { PATH: pathWithout(home, 'nothing-is-missing') });
+    expect(r.stdout, r.stderr).toMatch(/^install: stamp: [0-9a-f]{40} \(fixture-branch, v9\.9\.9\)$/m);
+    const stamp = stampOf(home);
+    expect(stamp['sha']).toBe(sha);
+    expect(stamp['version'], 'the release tag was not read through the farm PATH').toBe('v9.9.9');
   });
 
   it('says dirty when the checkout has uncommitted work', () => {

@@ -522,12 +522,13 @@ The bus-default lines cannot red under the `_svc_is_active` stub; the worker's s
 
 ### Task 5: `pathWithout` carries `head` (R8f; W17-d; D-5317)
 
-- [ ] **Step 1: the red row** *(unmeasured: the worker measures it)*. The helper is `server/test/ccrc-install.test.ts`' `function pathWithout(home, missing)`; the two other helpers of that name (`ccrc-uninstall.test.ts`, `ccrc-codex.test.ts`) link the whole parent PATH and already have `head`. Add, beside the existing `pathWithout` cases:
+- [x] **Step 1: the red row** *(unmeasured: the worker measures it)*. The helper is `server/test/ccrc-install.test.ts`' `function pathWithout(home, missing)`; the two other helpers of that name (`ccrc-uninstall.test.ts`, `ccrc-codex.test.ts`) link the whole parent PATH and already have `head`. Add, beside the existing `pathWithout` cases:
   - H1: `pathWithout(home, 'git')` returns a PATH whose first directory holds a `head` that resolves to an executable, and `pathWithout(home, 'head')`'s does not;
   - H2: an install from a fixture git checkout tagged `v9.9.9`, run with `PATH: pathWithout(home, 'rsync')` or the least-disruptive missing tool the existing cases use, writes a stamp whose `version` is `v9.9.9`.
   The defect itself was measured at planning by a bash row: a PATH of `git` and `grep` only, no `head`, over a repository tagged `v1.2.3` gave `version=[]` and `head: command not found`; with `head` linked, `version=[v1.2.3]`.
+  - As built: H1 and H2 are in `describe('ccrc install: the build stamp')`, before `says dirty`. H1 reads the farm directory (the second PATH entry; the first is `~/.local/bin`) and checks `head` resolves to an executable. H2 uses `pathWithout(home, 'nothing-is-missing')` (a name no farm entry carries, so the whole farm is linked; `rsync` would refuse the install) over a fixture checkout tagged `v9.9.9`. Note: the stamp's tag read is `_inst_stamp`'s, not `_inst_stamp_shipped`'s.
 
-- [ ] **Step 2: the change** *(prototype: applied in the projection)*. In the list `for (const b of ['mkdir', 'cp', …`, after `'ln', 'readlink', SHA256_TOOL,`:
+- [x] **Step 2: the change** *(prototype: applied in the projection)*. In the list `for (const b of ['mkdir', 'cp', …`, after `'ln', 'readlink', SHA256_TOOL,`:
 
 ```ts
     // `head` (wave 17 R8f, D-5317): `_inst_stamp_shipped` reads the release tag
@@ -536,7 +537,8 @@ The bus-default lines cannot red under the `_svc_is_active` stub; the worker's s
     'head',
 ```
 
-- [ ] **Step 3: mutation row** *(unmeasured)*: delete `'head'`; H1 and H2 red.
+- [x] **Step 3: mutation row** *(unmeasured)*: delete `'head'`; H1 and H2 red.
+  - As built: with the `'head',` line deleted, `ccrc-install.test.ts -t 'H1:|H2:'` 2 failed (321 skipped; H2 at the stamp-line assertion); restored with `cp`, `cmp` clean; `-t 'H1:|H2:|the build stamp'` 12 passed.
 
 ### Task 6: one spelling of the removal filter (R14(a); W17-e; D-5318)
 
