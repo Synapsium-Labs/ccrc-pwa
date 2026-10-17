@@ -2018,12 +2018,14 @@ export function externalCodexRow(id: string): Record<string, unknown> {
 
 /** The launcher such a row owes at `~/.local/bin/<id>`: somebody else's
  *  program, which ccrc records and never writes, and whose presence doctor's
- *  `wrappers` check measures. A stand-in that exits 0. */
+ *  `wrappers` check measures. A stand-in that exits 0; `EXTERNAL_LAUNCHER` is
+ *  its bytes, so a case can show they were never rewritten. */
+export const EXTERNAL_LAUNCHER =
+  '#!/bin/sh\n# fixture: an external lane\'s launcher, which ccrc records and never writes\nexit 0\n';
 export function plantExternalLauncher(home: string, id: string): void {
   const p = path.join(home, '.local', 'bin', id);
   fs.mkdirSync(path.dirname(p), { recursive: true });
-  fs.writeFileSync(p, '#!/bin/sh\n# fixture: an external lane\'s launcher, which ccrc records and never writes\nexit 0\n',
-    { mode: 0o755 });
+  fs.writeFileSync(p, EXTERNAL_LAUNCHER, { mode: 0o755 });
   fs.chmodSync(p, 0o755);
 }
 

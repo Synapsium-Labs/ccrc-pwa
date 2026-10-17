@@ -76,7 +76,7 @@ import {
 } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { renderCcdEntry } from './ccdWsHelpers.js';
@@ -86,13 +86,15 @@ import { describeLinux, describeDarwin, itLinux, itDarwin, python3ProgramArm, IS
 import { PKG_DESCRIPTION, skillMd } from './graphifySkillFixture.js';
 import { TREE_STUBS, installFixtureTree, installVersionedTree, keepDigest, rsyncRecorder } from './installTreeFixture.js';
 import { verifyMarker } from '../../shared/mark.mjs';
+import { FLEET_TOKEN_FILE_COMMENT } from '../../shared/box-token.js';
+import { NODE_FILES } from '../../shared/agent-protocol.js';
 import {
   plantFakeRuntime, codexRoster, plantSystemd, killLaneProcesses, spawnListener, adoptPlantedSystemd,
   assertSpineFrontContained, spineSystemctlArms, spineSystemdRun, SPINE_CONTAINMENT_PROBE, managerCalls,
   spineRunCalls, isolationManagerStubs, assertIsolationWallFirst, strayManagerCalls, ccrcFunction, ccrcLine,
   recordingStub, lockStub, freeLanes, portAccepts, laneAnswer, plantLaneAuth, plantLaneConfig, fakeLitellmSource,
   laneUnits, registerLaneCleanup, GPT_LANE_BINS, codexAuthDir, authDirOf, plantForeignUsage,
-  externalCodexRow, plantExternalLauncher, REHEARSAL_REGISTRY, writeRehearsalCatalogue, doctorClasses, stateCallsNaming,
+  externalCodexRow, plantExternalLauncher, EXTERNAL_LAUNCHER, REHEARSAL_REGISTRY, writeRehearsalCatalogue, doctorClasses, stateCallsNaming,
   type StubRc, type LanePorts,
 } from './codexLaneFixture.js';
 import { docsProbeProgram } from './docsHelperPy.js';
@@ -8312,11 +8314,12 @@ describeLinux('ccrc install: a timer systemd refuses is a COUNTED degraded step 
 // models-op and ccrc-models cases), the flip back, and `assertForeignFront`
 // with its own cases. That shape no longer exists, so re-measuring it would
 // measure a fiction, and Part C removes the external rollback path.
-// What stays, on a fleet box that holds no other repository's files: a fresh
-// fleet box keeps box-token measured, a flip made in Plan 3b's order enables
-// only that lane's ccrc instance, and a flip made while the other
-// repository's instance timer for that lane is still enabled withholds
-// ccrc's. The runbook's two steps that need a real LiteLLM (the refresh of a
+// What stays, on a fleet box that starts with no other repository's files (the
+// flip cases plant that repository's instance timer for codex-b themselves): a
+// fresh fleet box keeps box-token measured, a provisioned one keeps it PASS
+// through two installs and doctor, a flip made in Plan 3b's order enables only
+// that lane's ccrc instance, and a flip made while the other repository's
+// instance timer for that lane is still enabled withholds ccrc's. The runbook's two steps that need a real LiteLLM (the refresh of a
 // codex lane and the one publisher run) are stood in for by the files each
 // leaves: the default suite has no real LiteLLM (Global Constraints), and
 // Task 1's two-lane case and ccgpt-usage.test.ts own their behaviour.
@@ -8336,18 +8339,41 @@ const usageRow = (): string =>
  *  tree is stamped (`codexBox`'s reason: with no stamp `_inst_installed` writes
  *  no record), and its agent env is present so `--role fleet` never prompts.
  *  The runtime template is planted so that a later flip can build; with no
- *  codex lane it is never used. It holds no fleet token file, generation file
- *  or sync report: the fresh-fleet case tests their absence. */
-function fleetBox(prefix: string, opts: { systemd?: boolean } = {}): string {
+ *  codex lane it is never used.
+ *
+ *  By default it holds no fleet token file, generation file or sync report:
+ *  the fresh-fleet case tests their absence. `{ fleetFiles: true }` gives it
+ *  what part B leaves on every provisioned fleet box (box-token row 2a): the
+ *  fleet token file (0600: the comment line, then a runtime-random 64-hex
+ *  value, so no fixture value is a literal here), the generation file (16 hex)
+ *  and the proved sync report, plus the roster's one upstream account's
+ *  setup-token file (runtime-random too), which `~/.cc-secrets` existing makes
+ *  `credentials` owe. */
+function fleetBox(prefix: string, opts: { systemd?: boolean; fleetFiles?: boolean } = {}): string {
   const home = freshBox(prefix);
   gitInit(treeRoot(home));
   mkdirSync(join(home, '.ccrc'), { recursive: true });
   writeFileSync(join(home, '.ccrc', 'agent.env'),
     'CCRC_SERVER_URL=http://127.0.0.1:7788\nCCRC_AGENT_TOKEN=fixture-not-a-real-token\n');
+  if (opts.fleetFiles === true) {
+    mkdirSync(join(home, '.cc-secrets'), { recursive: true, mode: 0o700 });
+    writeFileSync(join(home, '.cc-secrets', 'claude-oauth.env'),
+      `CLAUDE_CODE_OAUTH_TOKEN=${randomBytes(32).toString('hex')}\n`, { mode: 0o600 });
+    writeFileSync(join(home, '.cc-secrets', 'ccrc-mail.token'),
+      `${FLEET_TOKEN_FILE_COMMENT}\n${randomBytes(32).toString('hex')}\n`, { mode: 0o600 });
+    const generation = randomBytes(8).toString('hex');
+    writeFileSync(join(home, '.ccrc', NODE_FILES.tokenGeneration), `${generation}\n`, { mode: 0o600 });
+    writeFileSync(join(home, '.ccrc', 'token-sync.json'),
+      JSON.stringify({ v: 1, at: epochS() - 3600, result: 'synced', generation, transport: 'https', proof: 'proved' }), { mode: 0o600 });
+  }
   plantRuntimeTemplate(home, { verdict: 'pass', version: '1.101.0' });
   if (opts.systemd === true) plantSystemd(home, { userManager: true });
   return home;
 }
+
+/** The fleet arm's line for a provisioned box: token file, generation and a proved sync (`_bt_fleet_arm`). */
+const PROVISIONED_BOX_TOKEN =
+  /^PASS box-token: fleet: token file 0600, generation recorded, last sync proved, transport https$/m;
 
 /** What a flipped lane's `init codex` (ruling Z3 forces it after the flip) and
  *  its first refresh leave, stood in by their files: the class registry, the
@@ -8361,13 +8387,19 @@ function plantFlippedLaneModels(home: string, id: string): void {
   expect(m.code, `ccrc models ${id} set-subagent sonnet:\n${m.stdout}\n${m.stderr}`).toBe(0);
 }
 
-describeLinux('Plan 3a Task 10 — what the cutover rehearsal still holds: box-token on a new fleet box, and a codex lane\'s flip', () => {
+describeLinux('Plan 3a Task 10 — what the cutover rehearsal still holds: box-token on a new and a provisioned fleet box, and a codex lane\'s flip', () => {
   const homes: string[] = [];
   afterEach(async () => {
     for (const h of homes.splice(0)) await killLaneProcesses(h);
   });
 
   interface Flip { lane: LanePorts }
+  /** What `lstat` alone says of a file: mode, size, mtime and inode. */
+  const sealedStat = (p: string): { mode: number; size: number; mtimeMs: number; ino: number } => {
+    const st = lstatSync(p);
+    return { mode: st.mode & 0o7777, size: st.size, mtimeMs: st.mtimeMs, ino: st.ino };
+  };
+  const isLink = (p: string): boolean => { try { return lstatSync(p).isSymbolicLink(); } catch { return false; } };
 
   /** Plan 3b's per-lane steps for the lane-1 analog, in the runbook's order,
    *  from the roster edit on. */
@@ -8382,6 +8414,14 @@ describeLinux('Plan 3a Task 10 — what the cutover rehearsal still holds: box-t
     plantExternalLauncher(home, 'codex-b');
     expect(authDirOf(home, 'codex-a')).toBe(join(home, codexAuthDir('codex-a')));
     plantLaneAuth(home, 'codex-a');
+    //    neither file is ccrc's to write: codex-a's OAuth file is measured by
+    //    lstat alone (never opened, so a rewrite of the same bytes still shows),
+    //    and codex-b's launcher by its bytes and mode
+    const auth = join(authDirOf(home, 'codex-a'), 'auth.json');
+    const launcher = join(bin, 'codex-b');
+    const authBefore = sealedStat(auth);
+    expect(read(launcher)).toBe(EXTERNAL_LAUNCHER);
+    const launcherMode = statSync(launcher).mode & 0o7777;
     // f. wrappers; `init codex` and the refresh, stood in by the files they
     //    leave; litellm
     const w = runInstall(home, ['wrappers'], READY);
@@ -8401,6 +8441,9 @@ describeLinux('Plan 3a Task 10 — what the cutover rehearsal still holds: box-t
     });
     const start = runInstall(home, ['codex', 'start', 'codex-a'], READY, { from: REPO_CCRC });
     expect(start.code, `ccrc codex start codex-a:\n${start.stdout}\n${start.stderr}`).toBe(0);
+    expect(sealedStat(auth), 'wrappers, install or start rewrote codex-a\'s OAuth file').toEqual(authBefore);
+    expect(read(launcher), 'wrappers, install or start rewrote codex-b\'s external launcher').toBe(EXTERNAL_LAUNCHER);
+    expect(statSync(launcher).mode & 0o7777, 'the external launcher\'s mode changed').toBe(launcherMode);
     // h. the one publisher run, stood in by the row it leaves
     mkdirSync(join(home, '.cc-limits'), { recursive: true });
     writeFileSync(join(home, '.cc-limits', 'codex-a.json'), usageRow());
@@ -8422,6 +8465,22 @@ describeLinux('Plan 3a Task 10 — what the cutover rehearsal still holds: box-t
     expect(r.stdout).not.toMatch(/^FAIL /m);
   });
 
+  it('box-token live shape: a provisioned fleet box keeps box-token PASS through two fleet installs and doctor (Plan 4)', () => {
+    const home = fleetBox('ccrc-rehearsal-provisioned-', { fleetFiles: true });
+    homes.push(home);
+    // two installs: the second is what every update's staged spine runs
+    for (const pass of [1, 2]) {
+      const r = runInstall(home, ['install', '--role', 'fleet'], READY);
+      expect(r.code, `install pass ${pass}:\n${r.stdout}\n${r.stderr}`).toBe(0);
+      expect(r.stdout, `install pass ${pass}: the provisioned fleet arm did not PASS`).toMatch(PROVISIONED_BOX_TOKEN);
+      expect(r.stdout, `install pass ${pass}`).not.toMatch(/^FAIL /m);
+    }
+    const d = runInstall(home, ['doctor'], READY);
+    expect(d.code, d.stdout).toBe(0);
+    expect(d.stdout, 'doctor: the provisioned fleet arm did not PASS').toMatch(PROVISIONED_BOX_TOKEN);
+    expect(d.stdout).not.toMatch(/^FAIL /m);
+  });
+
   it('the flip, in Plan 3b\'s order: only codex-a\'s ccrc instance is enabled, codex-b and its foreign timer are untouched, and doctor answers PASS for the lane', async () => {
     const home = fleetBox('ccrc-rehearsal-flip-', { systemd: true });
     homes.push(home);
@@ -8438,6 +8497,7 @@ describeLinux('Plan 3a Task 10 — what the cutover rehearsal still holds: box-t
     const units = laneUnits(home, 'codex-a');
     expect(spineRunCalls(home).map((l) => /--unit=(\S+)/.exec(l)?.[1]).filter((u) => u?.startsWith('ccgpt-')).sort(),
       'a ccgpt- unit other than codex-a\'s two tiers was started').toEqual([units.litellm, units.shim].sort());
+    expect(isLink(foreign), 'the other repository\'s timer for codex-b is gone').toBe(true);
     expect(readlinkSync(foreign), 'the other repository\'s timer for codex-b was moved').toBe(foreignTarget);
     const ans = await laneAnswer(f.lane.proxyPort);
     expect(JSON.parse(ans!.body)).toEqual({ lane: 'codex-a' });

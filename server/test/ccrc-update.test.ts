@@ -57,7 +57,7 @@ import { reportFrom, type NodeFileRead } from '../src/update/inventory.js';
 import { COLLECT_LANE_JOURNAL_BASENAME } from '../src/coord/collectLaneJournal.js';
 import {
   SPINE_CONTAINMENT_PROBE, spineRunCalls, adoptPlantedSystemd, assertSpineFrontContained, spineSystemctlArms,
-  spineSystemdRun, codexRoster, externalCodexRow, plantExternalLauncher, stateCallsNaming,
+  spineSystemdRun, codexRoster, externalCodexRow, plantExternalLauncher, plantForeignUsage, stateCallsNaming,
 } from './codexLaneFixture.js';
 import { docsProbeProgram } from './docsHelperPy.js';
 import { DOCS_INDEX_READY } from './docsIndexFixtures.js';
@@ -13054,7 +13054,9 @@ describe('ccrc update: the codex steps ride the staged spine (Plan 2b-2 Task 10)
 // whose roster has no codex lane — its one GPT-shaped row, `ext-a`, is `external` (the shape the GPT lanes had before
 // their flip) and has the launcher such a row owes — on the box the "codex steps ride the staged spine" describe above
 // uses. The other repository's files it once ran over (`plantLiveShape`) are retired with that repository's lane, and
-// so is the snapshot of them.
+// so is the snapshot of them. One ccgpt- unit stays on the box, the other repository's flat usage timer, enabled, so
+// that the state-changing-verb check has a unit to catch: a flat one, never an instance for `ext-a`, which would make
+// the converge withhold that row and hide a converge that took it for a codex lane.
 describe('Plan 3a Task 10 — ccrc update onto this tree on a box with no codex lane (Plan 4)', () => {
   itLinux('a real update on a box with no codex lane names no ccgpt- unit in a state-changing verb, and builds nothing (Plan 4)', () => {
     const home = freshUpdateBox('ccrc-update-no-codex-lane-');
@@ -13062,6 +13064,7 @@ describe('Plan 3a Task 10 — ccrc update onto this tree on a box with no codex 
     plantCoordDb(home);
     codexRoster(home, [], [externalCodexRow('ext-a')]);
     plantExternalLauncher(home, 'ext-a');
+    plantForeignUsage(home, null);
     packRelease(home, fullTree(home, { version: 'v2.0.0', sha: 'newsha0000000000000000000000000000000000' }), { tag: 'v2.0.0' });
     const r = runUpdate(home);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
