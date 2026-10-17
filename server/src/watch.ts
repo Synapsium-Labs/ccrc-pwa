@@ -8660,6 +8660,9 @@ interface LanePass {
   pending: LaneStaged[];
   /** Hours to remember as settled once the pass's application is durable (never before: a failed one leaves them to be read again). */
   settle: string[];
+  /** R101: the owners whose observation COMPLETED in this pass before any cut. Each leaves the pending memory only once what it staged
+   *  is durable (`forgetRead`, after the flush), never when the observation merely returns. */
+  completed: LaneOwner[];
 }
 
 const laneTreeKey = delegationTreeKey;
@@ -8872,6 +8875,9 @@ class DelegationLane {
   /** R89 (W1 b): the owners a pass LISTED and no completed observation has read since, by `laneOwnerKey`. Lane memory only; bounded by the
    *  read horizon (an hour past it is recorded as a gap and leaves, and an owner with no hour left leaves with it). */
   private readonly pendingOwners = new Map<string, LanePendingOwner>();
+  /** R102: the owners the last pass to reach the owners LISTED alive, with the hour it listed them in. One the next pass does not list is
+   *  pending again, so it is read once more after it goes. Lane memory only; bounded by the live sessions. */
+  private lastListed = new Map<string, { id: string; incarnation: string | null; reason: string; hourMs: number }>();
   // evidence for correlation
   private readonly evidence = new Map<string, { event: DelegationEventEnvelopeV1; key: string | null }>();
   private readonly evidenceKeys = new Map<string, string>();
@@ -9263,7 +9269,7 @@ class DelegationLane {
     const timer = setTimeout(() => ac.abort(), DELEGATION_PASS_BUDGET_MS);
     timer.unref();
     const pass: LanePass = {
-      now, signal: ac.signal, census, sessions, records, capability: delegationCapabilityState(this.deps.fleetState?.ccdVerbs), pending: [], settle: [],
+      now, signal: ac.signal, census, sessions, records, capability: delegationCapabilityState(this.deps.fleetState?.ccdVerbs), pending: [], settle: [], completed: [],
     };
     const work = this.run(pass).then(() => 'done' as const);
     work.catch(() => undefined);                                         // a late rejection of a cut pass is not an unhandled one
@@ -9320,8 +9326,8 @@ class DelegationLane {
       if (pass.signal.aborted) break;
       try {
         await this.observeOwner(pass, durable, owner);
-        // R89: one observation COMPLETED, in a pass that was not cut: the owner's spool has been read once, so it is no longer pending.
-        if (!pass.signal.aborted) this.pendingOwners.delete(laneOwnerKey(owner.id, owner.incarnation));
+        // R89: one observation COMPLETED, in a pass that was not cut. R101: it is forgotten only once what it staged is durable.
+        if (!pass.signal.aborted) pass.completed.push(owner);
       } catch (err) { console.warn(`ccrc-server: delegation owner ${owner.id} could not be observed: ${err instanceof Error ? err.message : String(err)}`); }
     }
     // D-4658: what the owners staged, as ONE durable application. Also after a cut: everything staged came from a read that answered
@@ -9331,7 +9337,8 @@ class DelegationLane {
     // pass applies it from an older one. Nothing applies twice (events dedupe by `eventId`), intervals never regress (their merge is
     // order-independent and `unmeasured` is sticky), `replaced` stays sticky, and a cursor that steps back once is re-read and deduped by
     // the next pass.
-    await this.flushPass(pass, durable);
+    // R101: the owners this pass read are forgotten only now, and only for what the flush made durable (a cut pass's late flush too).
+    this.forgetRead(pass, await this.flushPass(pass, durable));
     if (pass.signal.aborted) return;
 
     // The upkeep: retention, and the hour that was never closed. One checkpoint-only change over the INTERVALS, and only when there is
@@ -9414,6 +9421,7 @@ class DelegationLane {
   private ownersOf(pass: LanePass, state: DeepReadonly<DelegationRecoveryState>): LaneOwner[] {
     const out = new Map<string, LaneOwner>();
     const nowHour = laneHourOf(pass.now);
+    const listed = new Map<string, { id: string; incarnation: string | null; reason: string; hourMs: number }>();
     for (const s of pass.sessions) {
       if (s.status === 'dead') continue;
       const inc = pass.census.incarnations.get(s.id);
@@ -9427,7 +9435,17 @@ class DelegationLane {
       pending.hours.add(nowHour);
       this.pendingOwners.set(k, pending);
       out.set(k, { id: s.id, incarnation, reason, live: true, listedHours: [] });
+      listed.set(k, { id: s.id, incarnation, reason, hourMs: nowHour });
     }
+    // R102 (review F2): an owner the last pass listed and this one does not (it ended, or died, since) may have written after its last
+    // read: it is pending again, not live, with the hour it was last listed in, so it is read once more before it leaves.
+    for (const [k, gone] of this.lastListed) {
+      if (listed.has(k)) continue;
+      const pending = this.pendingOwners.get(k) ?? { id: gone.id, incarnation: gone.incarnation, reason: gone.reason, hours: new Set<number>() };
+      pending.hours.add(gone.hourMs);
+      this.pendingOwners.set(k, pending);
+    }
+    this.lastListed = listed;
     // R89: an owner a pass listed whose observation never completed (a cut pass, an observation that threw), which the census no longer
     // names alive: it is read anyway, once, as an owner that is not live.
     for (const [k, p] of this.pendingOwners) if (!out.has(k)) out.set(k, { id: p.id, incarnation: p.incarnation, reason: p.reason, live: false, listedHours: [] });
@@ -9469,11 +9487,22 @@ class DelegationLane {
     }
   }
 
-  /** R89: the hours of every owner a pass listed and no completed observation has read, as lost windows (on every repository). */
-  private pendingWindows(): DelegationListingWindow[] {
+  /** R89: the hours of every owner a pass listed and no completed observation has read, as lost windows (on every repository). R106
+   *  (review F6): and every hour of it the checkpoint holds MEASURED and not yet closed (recorded before its close): lines may have
+   *  landed there after its last read (an owner read at 10:59:30 whose read throws at 11:00:30 is listed in hour 11 only). */
+  private pendingWindows(state: DeepReadonly<DelegationRecoveryState>): DelegationListingWindow[] {
     const out: DelegationListingWindow[] = [];
     for (const p of this.pendingOwners.values()) {
-      for (const hourMs of p.hours) out.push(delegationLostHourWindow(p.id, p.incarnation ?? DELEGATION_UNMEASURED_INCARNATION, hourMs));
+      const hours = new Set(p.hours);
+      if (p.incarnation !== null) {
+        for (const r of state.checkpoint.observationIntervals) {
+          if (r.sessionId !== p.id || r.parentIncarnation !== p.incarnation || r.state !== 'measured') continue;
+          const at = laneInstantMs(r.utcHour);
+          const recorded = laneInstantMs(r.recordedAt);
+          if (at !== null && (recorded === null || recorded < laneCloseAt(at))) hours.add(at);
+        }
+      }
+      for (const hourMs of hours) out.push(delegationLostHourWindow(p.id, p.incarnation ?? DELEGATION_UNMEASURED_INCARNATION, hourMs));
     }
     return out;
   }
@@ -9585,7 +9614,7 @@ class DelegationLane {
    * builds every result inside those shapes, so no spool content is known to reach one; the isolation exists because the applier
    * re-validates independently, and a disagreement (a future change on either side) must cost one bucket, not the fleet's evidence.
    */
-  private async flushPass(pass: LanePass, durable: DelegationDurability): Promise<void> {
+  private async flushPass(pass: LanePass, durable: DelegationDurability): Promise<{ failed: boolean; refused: ReadonlySet<string> }> {
     const staged = pass.pending.splice(0);
     const refused = new Set<string>();
     // R85 (A-F4): a refusal whose bucket is past the read horizon is never staged again, so remembering it would only grow the set.
@@ -9601,9 +9630,31 @@ class DelegationLane {
     } catch (err) {
       console.warn(`ccrc-server: the delegation pass's durable application of ${staged.length} bucket result(s) failed after it began writing; the applier recovers and the next pass reads them again: ${err instanceof Error ? err.message : String(err)}`);
       pass.settle.length = 0;
-      return;
+      return { failed: true, refused };
     }
     for (const k of pass.settle.splice(0)) if (!refused.has(k)) this.settled.add(k);
+    return { failed: false, refused };
+  }
+
+  /**
+   * R101 (review F1): an owner whose observation completed leaves the pending memory only once what it read is DURABLE. After a failure
+   * past the first byte nothing of the pass is durable, so every owner it read stays pending (and is read again once the applier
+   * recovers, whether or not a census still names it); an owner one of whose buckets the applier REFUSED before writing (R82) stays
+   * pending too, so its refused bucket is staged again. Otherwise the hours the observation covered (its listed hours) leave the owner's
+   * memory, and an owner with none left is forgotten: a later pass's listing (a cut pass's late flush can land after it) keeps its own.
+   */
+  private forgetRead(pass: LanePass, flushed: { failed: boolean; refused: ReadonlySet<string> }): void {
+    const done = pass.completed.splice(0);
+    if (flushed.failed) return;
+    const refusedOwners = new Set([...flushed.refused].map((k) => { const [id, inc] = JSON.parse(k) as [string, string, number]; return JSON.stringify([id, inc]); }));
+    for (const owner of done) {
+      if (refusedOwners.has(JSON.stringify([owner.id, owner.incarnation ?? DELEGATION_UNMEASURED_INCARNATION]))) continue;
+      const k = laneOwnerKey(owner.id, owner.incarnation);
+      const pending = this.pendingOwners.get(k);
+      if (pending === undefined) continue;
+      for (const hourMs of owner.listedHours) pending.hours.delete(hourMs);
+      if (pending.hours.size === 0) this.pendingOwners.delete(k);
+    }
   }
 
   /** R82: applies `entries` as one application; on a PRE-WRITE refusal, bisects until each refusing result stands alone, and refuses it
@@ -9898,7 +9949,7 @@ class DelegationLane {
       ...delegationListingWindowsOf([...this.evidence.values()].map((v) => v.event), (sessionId) => this.sessionProject.get(sessionId), listedOf),
       ...delegationLostWindowsOf(state.checkpoint.observationIntervals, state.checkpoint.bucketCursors, pass.now),
       delegationNotReadyWindowOf(this.readyAt),
-      ...this.pendingWindows(),
+      ...this.pendingWindows(state),
     ];
     const pointMetas = [...this.pointMetas.values()];
     const inputFor = (record: DelegationCensusRecord): DelegationCorrelationInput => {

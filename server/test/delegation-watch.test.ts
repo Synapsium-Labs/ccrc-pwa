@@ -34,7 +34,9 @@ import {
   decodeDelegationCheckpoint,
   mergeDelegationObservationInterval,
 } from '../src/coord/delegation-checkpoint.js';
-import { DELEGATION_JOURNAL_FILE, DELEGATION_TORN_DIR, nodeDelegationFilePort, type DelegationFilePort } from '../src/coord/delegation-journal.js';
+import {
+  DELEGATION_JOURNAL_FILE, DELEGATION_TORN_DIR, DelegationJournalWriter, nodeDelegationFilePort, type DelegationFilePort,
+} from '../src/coord/delegation-journal.js';
 import {
   DELEGATION_EVENTS_CAP,
   DELEGATION_HOUR_CLOSE_MARGIN_MS,
@@ -2436,7 +2438,8 @@ describe('the read horizon and cursor retention in the lane (R58, D-4654)', () =
     setCensus(w, { demo: [] }, {}, NOW + DAY3);
     await pass(w, [sessionOf('demo-x', 'dead')]);
     expect(w.calls.ranges.slice(reads), 'a dead owner\'s three-day-old bucket was range-read').toEqual([]);
-    expect(w.calls.listings.filter((o) => o === 'demo-x')).toHaveLength(1);          // not even listed again: nothing to close
+    // R102: listed once more after it went (it may have written in a readable hour since); its three-day-old bucket is still not read
+    expect(w.calls.listings.filter((o) => o === 'demo-x')).toHaveLength(2);
     expect(intervalFor(w.home, 'demo-x')).toMatchObject({ state: 'unmeasured', detail: expect.stringMatching(/^hour-never-closed/) });
   });
 
@@ -3806,6 +3809,79 @@ describe('R89 (W1 b, coordinator 5512): an owner a pass listed is read once befo
     await censusPass(w, at(2), { demo: [] }, [sessionOf('demo-0')]);    // demo-x is gone
     expect(intervalFor(w.home, 'demo-x', HOUR10, DELEGATION_UNMEASURED_INCARNATION))
       .toMatchObject({ state: 'unmeasured', detail: 'incarnation-unmeasured: the parent\'s registry incarnation is changing' });
+  });
+});
+
+describe('R101, R102 and R106 (review F1, F2, F6): a listed owner leaves only once read durably, and once more after it goes', () => {
+  const pair = [sessionOf('demo-a'), sessionOf('demo-x')];
+  const corrVerdictsFor = (corr: ReturnType<typeof vi.spyOn<typeof correlation, 'correlateDelegation'>>, adminRecord: string) =>
+    corr.mock.calls.flatMap((c, i) => (c[0].record.adminRecord === adminRecord ? [corr.mock.results[i]!.value] : []));
+
+  it('R101 (F1): a read lost at the flush (the journal write fails at its first byte) keeps its owner pending: it is read again once the applier recovers, though no census names it', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    makeOwner(w, 'demo-x');
+    await censusPass(w, at(-1), BEFORE_TREE, pair);                    // ready; demo-x is listed and read (an empty hour)
+    // demo-x starts a worktree call and never ends it (no PostToolUse: a failed call, or a pane killed mid-call), and is gone
+    writeBucket(w, 'demo-x', BUCKET10, bashPre('demo-x', 'toolu_o1', ['old-tree'], iso(at(0) + 21_000)));
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(DelegationJournalWriter.prototype, 'write').mockRejectedValueOnce(new Error('EIO: a fixture fault at the journal write'));
+    await censusPass(w, at(1), BEFORE_TREE);                           // R102 reads demo-x once more; its application fails at the first byte
+    expect((await w.watcher.delegationApplier())!.failure(), 'failed closed').not.toBeNull();
+    for (let i = 2; i < 8; i++) await censusPass(w, at(i), BEFORE_TREE);   // recovered in process at the retry interval (at(4))
+    creatorAfter(w, at(8));                                            // demo-a creates raw-tree, after the recovery's ready instant
+    for (let i = 9; i < 14; i++) await censusPass(w, at(i), WITH_TREE);
+    expect(leasesOf(w.home), 'demo-x\'s open call vetoes').toEqual([]);
+    expect(disk(w.home).checkpoint!.bucketCursors.some((c) => c.sessionId === 'demo-x' && c.cursor > 0), 'read again after the recovery').toBe(true);
+  });
+
+  it('R101 (F1): an owner one of whose buckets the applier refuses before writing (R82) stays pending, and its listed hour vetoes', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    writeBucket(w, 'demo-x', BUCKET10, bashPre('demo-x', 'toolu_o1', ['old-tree'], iso(at(0) + 21_000)), bashPost('demo-x', 'toolu_o1', ['old-tree'], iso(at(0) + 22_000)));
+    // every application of demo-x's bucket is refused before anything is written (its cursor's anchor starts past its cursor)
+    const real = DelegationDurability.prototype.applyAcceptedBatch;
+    vi.spyOn(DelegationDurability.prototype, 'applyAcceptedBatch').mockImplementation(function (this: DelegationDurability, batches) {
+      return real.call(this, batches.map((b) => (b.cursor !== null && b.cursor.sessionId === 'demo-x'
+        ? { ...b, cursor: { ...b.cursor, anchor: { start: b.cursor.cursor + 1, sha256: 'a'.repeat(64) } } } : b)));
+    });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await censusPass(w, at(-1), BEFORE_TREE, pair);                    // ready; demo-x's bucket is read and refused
+    creatorAfter(w, at(0));
+    for (let i = 1; i < 6; i++) await censusPass(w, at(i), WITH_TREE);  // demo-x is in no census from here on
+    expect(intervalFor(w.home, 'demo-x'), 'nothing of demo-x was ever applied').toBeUndefined();
+    expect(leasesOf(w.home), 'refused, so not read: its listed hour vetoes').toEqual([]);
+  });
+
+  it('R102 (F2): an owner the last pass listed and this one does not is read once more, so its calls after its last read are not lost', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    makeOwner(w, 'demo-x');
+    await censusPass(w, at(-1), BEFORE_TREE, pair);                    // ready
+    await censusPass(w, at(0), BEFORE_TREE, pair);                     // demo-x is listed and read: its hour is measured, not closed
+    creatorAfter(w, at(0), 'demo-x');                                  // after that read, demo-x's call overlaps demo-a's creator
+    const corr = vi.spyOn(correlation, 'correlateDelegation');
+    for (let i = 1; i < 6; i++) await censusPass(w, at(i), WITH_TREE);  // demo-x is in no census from here on (it ended)
+    expect(w.calls.ranges, 'read once more after it went').toContain(`demo-x/${BUCKET10}.spool`);
+    expect(leasesOf(w.home)).toEqual([]);
+    expect(corrVerdictsFor(corr, 'raw-tree').at(-1), 'the overlap rule decides it').toMatchObject({ kind: 'unresolved', reason: 'overlapping-listing-window' });
+  });
+
+  it('R106 (F6): a pending owner\'s MEASURED, UNCLOSED hours veto too: an owner read just before the hour turned, whose next read throws, holds its last calls', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    writeBucket(w, 'demo-x', BUCKET10, startLine('demo-x', '2026-10-15T10:01:00.000Z'));
+    await censusPass(w, at(-1), BEFORE_TREE, pair);                    // ready
+    await censusPass(w, at(29) + 30_000, BEFORE_TREE, pair);           // 10:59:30: demo-x's hour 10 is read, measured, not closed
+    writeBucket(w, 'demo-a', BUCKET10, bashPre('demo-a', 'toolu_wt1', ['old-tree'], '2026-10-15T10:59:40.000Z'), bashPost('demo-a', 'toolu_wt1', ['old-tree', 'raw-tree'], '2026-10-15T10:59:43.000Z'));
+    appendBucket(w, 'demo-x', BUCKET10, bashPre('demo-x', 'toolu_o1', ['old-tree'], '2026-10-15T10:59:41.000Z'), bashPost('demo-x', 'toolu_o1', ['old-tree'], '2026-10-15T10:59:42.000Z'));
+    const dropped = Promise.reject(new Error('agent socket dropped'));
+    dropped.catch(() => undefined);
+    w.faults.holdRange.set('demo-x', dropped);                         // from 11:00:30 every range read of demo-x throws: it is listed in hour 11 only
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    for (let i = 30; i < 35; i++) await censusPass(w, at(i) + 30_000, WITH_TREE, pair);
+    expect(intervalFor(w.home, 'demo-x')).toMatchObject({ state: 'measured' });
+    expect(leasesOf(w.home), 'its measured, unclosed hour 10 vetoes').toEqual([]);
   });
 });
 
