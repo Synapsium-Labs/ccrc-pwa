@@ -838,6 +838,13 @@ jobs:
         if: env.CCRC_LEG == 'run'
         working-directory: pwa
         run: npm ci
+      # BEFORE the browser config runs, for the test matrix's reason above: pwa
+      # reads @ccrc/ui as SOURCE, and the leg's imports reach it (lib/router.ts,
+      # through DocImage), which resolves only from ui's own node_modules.
+      - name: Install @ccrc/ui
+        if: env.CCRC_LEG == 'run'
+        working-directory: ui
+        run: npm ci
       # Local binary, never npx (see the test matrix above).
       - name: Test
         if: env.CCRC_LEG == 'run'

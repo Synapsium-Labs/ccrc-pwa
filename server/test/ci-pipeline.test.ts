@@ -960,12 +960,16 @@ describe('ci.yml: the browser leg (native Docs reader spec 2026-10-01 §5.7)', (
 
   it('checks out, sets up Node 22, installs pwa with npm ci, and runs the browser config with the local vitest', () => {
     const s = steps(job('browser-pwa'));
-    expect(s, 'the browser leg has exactly four steps').toHaveLength(4);
+    expect(s, 'the browser leg has exactly five steps').toHaveLength(5);
     expect(s[0]).toMatch(/^ {6}- uses: actions\/checkout@v4\n/);
     expect(s[1]).toMatch(/^ {6}- uses: actions\/setup-node@v4\n/);
     expect(s[1]).toMatch(/^ {10}node-version: '22'$/m);
     expect(s[1]).toMatch(/^ {10}cache-dependency-path: pwa\/package-lock\.json$/m);
     expect(step(job('browser-pwa'), 'Install')).toMatch(/^ {8}working-directory: pwa\n {8}run: npm ci\n/m);
+    // pwa reads @ccrc/ui as SOURCE and the leg's imports reach it, so ui is installed too, before the Test step.
+    expect(step(job('browser-pwa'), 'Install @ccrc/ui')).toMatch(/^ {8}working-directory: ui\n {8}run: npm ci\n/m);
+    expect(s.findIndex((st) => /- name: Install @ccrc\/ui$/m.test(st)), 'ui is installed before the Test step')
+      .toBeLessThan(s.findIndex((st) => /- name: Test$/m.test(st)));
     expect(step(job('browser-pwa'), 'Test'))
       .toMatch(/^ {8}working-directory: pwa\n {8}run: \.\/node_modules\/\.bin\/vitest run --config vitest\.browser\.config\.ts\n/m);
   });
