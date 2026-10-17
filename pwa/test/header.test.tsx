@@ -997,15 +997,18 @@ describe('the Escape binding ignores every other key', () => {
 // nothing-open and textarea cases passed before and after, as they should.
 //
 // MUTATION TABLE (plan Task 5 Step 3; RUN 2026-10-16 on an isolated copy, each
-// mutant applied, header + drawer-view run, restored and compared byte for byte):
+// mutant applied, header + drawer-view run, restored and compared byte for byte;
+// the open-dialog rows re-run 2026-10-17 with the window-dispatched case added):
 //   the defaultPrevented check removed ......... RED: the already-handled case
 //                                                (the sheet case stays green
 //                                                through the open-dialog check)
-//   the open-dialog check removed .............. GREEN, as the plan expected: Radix
-//                                                prevents the default, so today
-//                                                the second check is a backstop
+//   the open-dialog check removed .............. RED: the open-sheet,
+//                                                window-dispatched case (Radix
+//                                                never sees that Escape, so only
+//                                                the open-dialog check holds it)
 //   both removed ............................... RED: the sheet case, the
-//                                                already-handled case, and the
+//                                                already-handled case, the
+//                                                window-dispatched case, and the
 //                                                drawer's focus-elsewhere case
 //   the textarea skip removed .................. RED: both textarea cases; the
 //                                                drawer's terminal-focused case
@@ -1049,6 +1052,21 @@ describe('Escape that closes a sheet never interrupts (D-5235)', () => {
       document.removeEventListener('keydown', handled, { capture: true });
     }
     expect(p.onInterrupt, 'an already-handled Escape interrupted the turn').not.toHaveBeenCalled();
+  });
+
+  it('a sheet is open and an Escape reaches the window without Radix preventing it: nothing is interrupted', () => {
+    stubPointer(true);
+    const p = props({ session: neutral, status: 'busy' });
+    render(
+      <>
+        <SessionHeader {...p} />
+        <Sheet open onClose={vi.fn()} title="a sheet"><button type="button">inside</button></Sheet>
+      </>,
+    );
+    // Dispatched straight on window: Radix's document listener never sees it,
+    // so its default is not prevented and only the open-dialog check holds it.
+    act(() => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+    expect(p.onInterrupt, 'an Escape with a sheet open interrupted the turn').not.toHaveBeenCalled();
   });
 
   it('with nothing open, Escape still interrupts, once', () => {
