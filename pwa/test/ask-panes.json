@@ -1174,5 +1174,303 @@
     ],
     "selectedIndex": 1,
     "parsed": true
+  },
+  "cc296-ask-2q-long-q1-on-text": {
+    "id": "a9d0d51f2f4f2bde84a2360b30f4edcf67efb7a0",
+    "title": "│ cost about two hundred pounds and needs a flat spot beside the shed, which the parish council must approve first. Until then, how should the weekly watering rota cope?",
+    "body": "←  ☐ Water rota  ☐ Table supply  ✔ Submit  →\n\n│ The garden club waters the north beds from one shared tank. On hot weeks the tank runs dry by Thursday, and the volunteers on the late shift find nothing left for the tomato rows near the fence. A second tank would\n│ cost about two hundred pounds and needs a flat spot beside the shed, which the parish council must approve first. Until then, how should the weekly watering rota cope?",
+    "options": [
+      {
+        "index": 1,
+        "label": "Split shifts (Recommended)",
+        "description": "Early shifts water only the bean rows, so the tomato rows keep half the tank. Each shift then logs the gauge reading on the chart."
+      },
+      {
+        "index": 2,
+        "label": "Wait for the second tank",
+        "description": "Keep the current rota and ask the council for a decision. The late shift may still find the tank empty for weeks."
+      },
+      {
+        "index": 3,
+        "label": "Type something."
+      },
+      {
+        "index": 4,
+        "label": "Chat about this"
+      }
+    ],
+    "selectedIndex": 3,
+    "parsed": true
+  },
+  "cc296-ask-2q-long-q1-typed": {
+    "id": "2c7cbadac05bce590230a9f7b9ad2a3ca0099604",
+    "title": "│ cost about two hundred pounds and needs a flat spot beside the shed, which the parish council must approve first. Until then, how should the weekly watering rota cope?",
+    "body": "←  ☐ Water rota  ☐ Table supply  ✔ Submit  →\n\n│ The garden club waters the north beds from one shared tank. On hot weeks the tank runs dry by Thursday, and the volunteers on the late shift find nothing left for the tomato rows near the fence. A second tank would\n│ cost about two hundred pounds and needs a flat spot beside the shed, which the parish council must approve first. Until then, how should the weekly watering rota cope?",
+    "options": [
+      {
+        "index": 1,
+        "label": "Split shifts (Recommended)",
+        "description": "Early shifts water only the bean rows, so the tomato rows keep half the tank. Each shift then logs the gauge reading on the chart."
+      },
+      {
+        "index": 2,
+        "label": "Wait for the second tank",
+        "description": "Keep the current rota and ask the council for a decision. The late shift may still find the tank empty for weeks."
+      },
+      {
+        "index": 3,
+        "label": "ab"
+      },
+      {
+        "index": 4,
+        "label": "Chat about this"
+      }
+    ],
+    "selectedIndex": 3,
+    "parsed": true
+  },
+  "cc296-ask-2q-long-q1-on-chat": {
+    "id": "a9d0d51f2f4f2bde84a2360b30f4edcf67efb7a0",
+    "title": "│ cost about two hundred pounds and needs a flat spot beside the shed, which the parish council must approve first. Until then, how should the weekly watering rota cope?",
+    "body": "←  ☐ Water rota  ☐ Table supply  ✔ Submit  →\n\n│ The garden club waters the north beds from one shared tank. On hot weeks the tank runs dry by Thursday, and the volunteers on the late shift find nothing left for the tomato rows near the fence. A second tank would\n│ cost about two hundred pounds and needs a flat spot beside the shed, which the parish council must approve first. Until then, how should the weekly watering rota cope?",
+    "options": [
+      {
+        "index": 1,
+        "label": "Split shifts (Recommended)",
+        "description": "Early shifts water only the bean rows, so the tomato rows keep half the tank. Each shift then logs the gauge reading on the chart."
+      },
+      {
+        "index": 2,
+        "label": "Wait for the second tank",
+        "description": "Keep the current rota and ask the council for a decision. The late shift may still find the tank empty for weeks."
+      },
+      {
+        "index": 3,
+        "label": "Type something."
+      },
+      {
+        "index": 4,
+        "label": "Chat about this"
+      }
+    ],
+    "selectedIndex": 4,
+    "parsed": true
+  },
+  "cc296-ask-2q-long-right-q2": {
+    "id": "be6a2df7697b27d9b0f3feaab81f263d12c7ac86",
+    "title": "│ own four tables, but the swap usually fills nine. Two neighbouring groups have offered to lend theirs if we collect them on Friday evening in a hired van. Which arrangement should the club confirm with the hall?",
+    "body": "←  ☐ Water rota  ☐ Table supply  ✔ Submit  →\n\n│ The spring seed swap is booked at the village hall on the second Saturday in April. The hall committee now asks every group to bring its own folding tables, since theirs went to the school fete and never came back. We\n│ own four tables, but the swap usually fills nine. Two neighbouring groups have offered to lend theirs if we collect them on Friday evening in a hired van. Which arrangement should the club confirm with the hall?",
+    "options": [
+      {
+        "index": 1,
+        "label": "Borrow and transport (Recommended)",
+        "description": "Accept both offers and book a van for Friday evening. Two members load the tables after work, and they go back on Sunday before the church service."
+      },
+      {
+        "index": 2,
+        "label": "Move the swap outdoors",
+        "description": "Hold the swap on the green beside the hall, where the stalls can use the picnic benches. Rain would mean a very late cancellation."
+      },
+      {
+        "index": 3,
+        "label": "Hire five big tables",
+        "description": "Pay the hire shop for five tables, delivered on Saturday at dawn."
+      },
+      {
+        "index": 4,
+        "label": "Type something."
+      },
+      {
+        "index": 5,
+        "label": "Chat about this"
+      }
+    ],
+    "selectedIndex": 1,
+    "parsed": true
+  },
+  "cc296-ask-2q-long-right-review": {
+    "id": "bce80487ffc0484b995137d08c6a01f89c168ac2",
+    "title": "←  ☐ Water rota  ☐ Table supply  ✔ Submit  →",
+    "body": "Review your answers\n\n⚠ You have not answered all questions\n\nReady to submit your answers?",
+    "options": [
+      {
+        "index": 1,
+        "label": "Submit answers"
+      },
+      {
+        "index": 2,
+        "label": "Cancel"
+      }
+    ],
+    "selectedIndex": 1,
+    "parsed": true
+  },
+  "cc296-ask-2q-long-revisit-q2": {
+    "id": "7b04109385cfdf29031b19e1c72a04e3be70e8dd",
+    "title": "│ own four tables, but the swap usually fills nine. Two neighbouring groups have offered to lend theirs if we collect them on Friday evening in a hired van. Which arrangement should the club confirm with the hall?",
+    "body": "←  ☒ Water rota  ☒ Table supply  ✔ Submit  →\n\n│ The spring seed swap is booked at the village hall on the second Saturday in April. The hall committee now asks every group to bring its own folding tables, since theirs went to the school fete and never came back. We\n│ own four tables, but the swap usually fills nine. Two neighbouring groups have offered to lend theirs if we collect them on Friday evening in a hired van. Which arrangement should the club confirm with the hall?",
+    "options": [
+      {
+        "index": 1,
+        "label": "Borrow and transport (Recommended) ✔",
+        "description": "Accept both offers and book a van for Friday evening. Two members load the tables after work, and they go back on Sunday before the church service."
+      },
+      {
+        "index": 2,
+        "label": "Move the swap outdoors",
+        "description": "Hold the swap on the green beside the hall, where the stalls can use the picnic benches. Rain would mean a very late cancellation."
+      },
+      {
+        "index": 3,
+        "label": "Hire five big tables",
+        "description": "Pay the hire shop for five tables, delivered on Saturday at dawn."
+      },
+      {
+        "index": 4,
+        "label": "Type something."
+      },
+      {
+        "index": 5,
+        "label": "Chat about this"
+      }
+    ],
+    "selectedIndex": 1,
+    "parsed": true
+  },
+  "cc296-ask-2q-long-revisit-q1": {
+    "id": "06bd8a17eafbcd635cdbf70eea6ac17796867163",
+    "title": "│ cost about two hundred pounds and needs a flat spot beside the shed, which the parish council must approve first. Until then, how should the weekly watering rota cope?",
+    "body": "←  ☒ Water rota  ☒ Table supply  ✔ Submit  →\n\n│ The garden club waters the north beds from one shared tank. On hot weeks the tank runs dry by Thursday, and the volunteers on the late shift find nothing left for the tomato rows near the fence. A second tank would\n│ cost about two hundred pounds and needs a flat spot beside the shed, which the parish council must approve first. Until then, how should the weekly watering rota cope?",
+    "options": [
+      {
+        "index": 1,
+        "label": "Split shifts (Recommended) ✔",
+        "description": "Early shifts water only the bean rows, so the tomato rows keep half the tank. Each shift then logs the gauge reading on the chart."
+      },
+      {
+        "index": 2,
+        "label": "Wait for the second tank",
+        "description": "Keep the current rota and ask the council for a decision. The late shift may still find the tank empty for weeks."
+      },
+      {
+        "index": 3,
+        "label": "ab"
+      },
+      {
+        "index": 4,
+        "label": "Chat about this"
+      }
+    ],
+    "selectedIndex": 1,
+    "parsed": true
+  },
+  "cc296-ask-2q-long-review-cancel": {
+    "id": "021c8be8e7a1e797736127535bdbee9ea622c4cb",
+    "title": "←  ☒ Water rota  ☒ Table supply  ✔ Submit  →",
+    "body": "Review your answers\n\n │ ● The garden club waters the north beds from one shared tank. On hot weeks the tank runs dry by Thursday, and the volunteers on the late shift find nothing left for the tomato rows near the fence. A second tank would\n │   cost about two hundred pounds and needs a flat spot beside the shed, which the parish council must approve first. Until then, how should the weekly watering rota cope?\n   → Split shifts (Recommended)\n │ ● The spring seed swap is booked at the village hall on the second Saturday in April. The hall committee now asks every group to bring its own folding tables, since theirs went to the school fete and never came back.\n │   We own four tables, but the swap usually fills nine. Two neighbouring groups have offered to lend theirs if we collect them on Friday evening in a hired van. Which arrangement should the club confirm with the hall?\n   → Borrow and transport (Recommended)\n\nReady to submit your answers?",
+    "options": [
+      {
+        "index": 1,
+        "label": "Submit answers"
+      },
+      {
+        "index": 2,
+        "label": "Cancel"
+      }
+    ],
+    "selectedIndex": 2,
+    "parsed": true
+  },
+  "cc302-ask-multiselect-q2": {
+    "id": "7e06f54621f1239a4f51ddc1e079ac28a7c0e955",
+    "title": "Which toppings?",
+    "options": [],
+    "selectedIndex": 1,
+    "parsed": false,
+    "body": "←  ☒ Pet  ☐ Toppings  ✔ Submit  →\n\nWhich toppings?",
+    "multi": {
+      "options": [
+        {
+          "index": 1,
+          "label": "Cheese",
+          "description": "Melted mozzarella or similar",
+          "checked": false
+        },
+        {
+          "index": 2,
+          "label": "Olives",
+          "description": "Briny sliced olives",
+          "checked": false
+        },
+        {
+          "index": 3,
+          "label": "Basil",
+          "description": "Fresh aromatic herb leaves",
+          "checked": false
+        }
+      ],
+      "freeText": {
+        "index": 4,
+        "label": "Type something",
+        "checked": false
+      },
+      "commit": "Submit",
+      "cursor": 1
+    }
+  },
+  "cc302-ask-multiselect-right-review": {
+    "id": "84851fe93e3148e89875ac6fade7052f6490fd6b",
+    "title": "←  ☒ Pet  ☒ Toppings  ✔ Submit  →",
+    "body": "Review your answers\n\nWhich pet?\n   → Dog\nWhich toppings?\n   → Cheese, Basil\n\nReady to submit your answers?",
+    "options": [
+      {
+        "index": 1,
+        "label": "Submit answers"
+      },
+      {
+        "index": 2,
+        "label": "Cancel"
+      }
+    ],
+    "selectedIndex": 1,
+    "parsed": true
+  },
+  "cc302-ask-preview-q2": {
+    "id": "0e808af6340e2c220354e7729a574ba389bedd7a",
+    "title": "Which layout?",
+    "body": "←  ☒ Lang  ☐ Layout  ✔ Submit  →\n\nWhich layout?",
+    "options": [
+      {
+        "index": 1,
+        "label": "Grid"
+      },
+      {
+        "index": 2,
+        "label": "List"
+      },
+      {
+        "index": 3,
+        "label": "Chat about this"
+      }
+    ],
+    "selectedIndex": 1,
+    "parsed": true
+  },
+  "cc302-ask-preview-right-review": {
+    "id": "845231819f2230d65690cb42226a7de0f4d41ed3",
+    "title": "←  ☒ Lang  ☐ Layout  ✔ Submit  →",
+    "body": "Review your answers\n\n⚠ You have not answered all questions\n\nWhich language?\n   → Python\n\nReady to submit your answers?",
+    "options": [
+      {
+        "index": 1,
+        "label": "Submit answers"
+      },
+      {
+        "index": 2,
+        "label": "Cancel"
+      }
+    ],
+    "selectedIndex": 1,
+    "parsed": true
   }
 }

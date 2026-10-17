@@ -264,6 +264,8 @@ describe('knownId route census', () => {
       // D-5048: a multiSelect question's own route, for the same reason: an older server answers it 404, never with a
       // keystroke into a menu whose Enter only toggles.
       { method: 'POST', routePath: '/api/sessions/:id/dialog/multi', args: 'id' },
+      // Decision `ask-dialog-tab-route`: moving the pane between an ask's tabs, arrows only, never Enter.
+      { method: 'POST', routePath: '/api/sessions/:id/dialog/tab', args: 'id' },
       { method: 'POST', routePath: '/api/sessions/:id/ask', args: 'id' },
       { method: 'GET', routePath: '/api/sessions/:id/commands', args: 'id' },
       { method: 'POST', routePath: '/api/sessions/:id/interrupt', args: 'id' },
@@ -280,8 +282,8 @@ describe('knownId route census', () => {
       { method: 'GET', routePath: '/api/sessions/:id/workspace/audit', args: 'id' },
       { method: 'POST', routePath: '/api/sessions/:id/workspace/reap', args: 'id' },
     ]);
-    expect(requestGates).toHaveLength(20);
-    expect(requestGates.filter(({ method }) => method === 'POST')).toHaveLength(16);
+    expect(requestGates).toHaveLength(21);
+    expect(requestGates.filter(({ method }) => method === 'POST')).toHaveLength(17);
     expect(requestGates.filter(({ method }) => method === 'GET')).toHaveLength(4);
 
     const revivalProbes = calls.filter(({ args }) => args !== 'id');
@@ -599,6 +601,49 @@ describe('write routes', () => {
     await app.close();
   });
 
+  // Decision `ask-dialog-tab-route`. The recorded 2.1.296 ask (neutral text): → on the last question lands on the
+  // review, which comes back as `next` and goes to every open stream of the session, as an answer's screen does.
+  it('POST dialog/tab presses Right, answers with the review, and hands it to the session\'s streams', async () => {
+    const q2 = askPane('cc296-ask-2q-long-q2.txt');
+    const review = askPane('cc296-ask-2q-long-review.txt');
+    const { app, bus, calls } = await makeApp([q2, review]);
+    const seen: unknown[] = [];
+    bus.on(`answered:${ID}`, (next) => seen.push(next));
+    const res = await app.inject({
+      method: 'POST', url: `/api/sessions/${ID}/dialog/tab`, payload: { dialogId: parseDialog(q2)!.id, to: 'next' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true, next: parseDialog(review) });
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Right']]);
+    expect(seen).toEqual([parseDialog(review)]);
+    await app.close();
+  });
+
+  it('POST dialog/tab answers 400 bad-request for a body it will not act on, before any capture or key', async () => {
+    const q2 = askPane('cc296-ask-2q-long-q2.txt');
+    const { app, calls } = await makeApp([q2]);
+    const id = parseDialog(q2)!.id;
+    for (const payload of [{ dialogId: id }, { dialogId: id, to: 'up' }, { dialogId: id, to: 0 }, { to: 'next' }]) {
+      const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/dialog/tab`, payload });
+      expect(res.statusCode, JSON.stringify(payload)).toBe(400);
+      expect(res.json()).toEqual({ ok: false, error: 'bad-request' });
+    }
+    expect(calls.filter((c) => c[1] === 'capture-pane' || c[1] === 'send-keys')).toEqual([]);
+    await app.close();
+  });
+
+  it('POST dialog/tab answers a refusal as 409 with its code, and sends no key', async () => {
+    const one = askPane('cc300-ask-1q-open.txt');
+    const { app, calls } = await makeApp([one]);
+    const res = await app.inject({
+      method: 'POST', url: `/api/sessions/${ID}/dialog/tab`, payload: { dialogId: parseDialog(one)!.id, to: 'next' },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'no-tabs' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+    await app.close();
+  });
+
   it('POST interrupt on a busy session (live status) sends Escape', async () => {
     const { app, calls } = await makeApp(['generation…\n❯ \n'], { status: 'busy' });
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/interrupt`, payload: {} });
@@ -634,6 +679,7 @@ describe('write routes', () => {
       ['/api/sessions/nope/dialog', { dialogId: 'x', optionIndex: 1 }],
       ['/api/sessions/nope/dialog/text', { dialogId: 'x', optionIndex: 1, text: 'hi' }],
       ['/api/sessions/nope/dialog/multi', { dialogId: 'x', optionIndexes: [1] }],
+      ['/api/sessions/nope/dialog/tab', { dialogId: 'x', to: 'next' }],
       ['/api/sessions/nope/interrupt', {}],
       ['/api/sessions/nope/ask', { askKey: 'k', optionIndexes: [0] }],
       ['/api/sessions/nope/submit', {}],
