@@ -15,7 +15,7 @@ The operator ruled on 2026-10-17 at 15:50 UTC that this programme repairs stable
 **The fitting hypothesis, not a measured cause:** Darwin answers EPERM, not ESRCH, from `killpg` while every member left in the group is a zombie. An exited `git` that its parent has not yet reaped is one. Linux signals such a group with rc 0, which is why row 64 is green on every Linux leg. The change below is correct whether or not the hypothesis holds:
 - it absorbs an EPERM only at the first signal, the SIGTERM, and only when the leader turns out to have exited, and reaps it;
 - any other EPERM still raises, a leader that is still alive included, and so does every EPERM at the SIGKILL (D-5335);
-- a live member other than the leader is still signalled through the existing grace and SIGKILL path, and one that refuses the SIGKILL makes it raise, so the refusal is never hidden.
+- a live member other than the leader is still signalled through the existing grace and SIGKILL path, and every EPERM the SIGKILL call meets raises.
 
 **Architecture:** one function changes shape, inside the Docs helper's `Sys` class in `ccd/ccd`. `_signal_group` takes the `Popen`, not its pgid, so it can tell an exited leader from a live one at the moment EPERM arrives. `_stop` passes the `Popen`, and only its SIGTERM call asks for the absorb, by an explicit argument (D-5335). `_group_alive` is unchanged. The test replays Darwin's answer on Linux through the helper's own seam: the helper's `os` is the unit's `os`, so a unit can swap `os.killpg`.
 
@@ -26,7 +26,7 @@ The operator ruled on 2026-10-17 at 15:50 UTC that this programme repairs stable
 ## Not in this wave
 
 - Any other change to the Docs helper, its caps, its deadline or its verbs. Row 64 itself stays **byte-unchanged**, because it is the macOS proof.
-- `_group_alive`'s EPERM reading. It still reads EPERM as alive. After `_signal_group` has reaped the leader, an empty group answers ESRCH and the wait ends. On Darwin the reaped leader's exited children can stay in the group as zombies until launchd reaps them, and through that window `_group_alive` reads EPERM as alive, which only keeps the loop polling. The window is transient, bounded by launchd's reap; if it outlasts `KILL_GRACE_S` the SIGKILL arm raises (loud, no leak). Changing `_group_alive` would not help, because any raise comes from `_signal_group`. Reading 2 asks the coordinator to confirm this.
+- `_group_alive`'s EPERM reading. It still reads EPERM as alive. After `_signal_group` has reaped the leader, an empty group answers ESRCH and the wait ends. On Darwin the reaped leader's exited children can stay in the group as zombies until launchd reaps them, and through that window `_group_alive` reads EPERM as alive, which only keeps the loop polling. The window is transient, bounded by launchd's reap; if it outlasts `KILL_GRACE_S` the SIGKILL arm raises (loud, no leak). It stays unchanged for D-5335's reason: reading EPERM as gone would also read a live member with foreign credentials as stopped, and so hide a refusal. Reading 2 asks the coordinator to confirm this.
 - The Docs reader programme's diagnostic branch. It stays unlanded, by that programme's own ruling.
 
 ## Global Constraints
@@ -46,7 +46,7 @@ The operator ruled on 2026-10-17 at 15:50 UTC that this programme repairs stable
 
 ## Risk notes
 
-- **Linux EPERM stays loud.** On Linux EPERM means a real refusal, a member owned by another user. The absorb arm requires both conditions: the leader was unreaped before the call, and `poll()` reaps it now. A refusal with a live leader still raises.
+- **Linux EPERM stays loud.** On Linux EPERM means a real refusal, a member owned by another user. The absorb arm requires three conditions: the call is `_stop`'s SIGTERM (`absorb_reaped`, D-5335), the leader was unreaped before the call, and `poll()` reaps it now. A refusal with a live leader still raises.
 - **The reap racing the signal.** `poll()` reaps at most the leader, so a later `killpg` on an emptied group answers ESRCH, which is already absorbed. The second unit's two halves cover one path: in both, the leader is an unreaped zombie at the first signal, one having exited on its own and one killed as that signal was sent. `_stop` does nothing between its start and its first `killpg`, so there is no separate window to model.
 - **Darwin versions.** The runner had macOS 26.6.2 and CPython 3.15.0. The replay models XNU's answer: ESRCH for no member, EPERM when every member is a zombie, otherwise the real call. Only the dispatched full run proves the macOS leg.
 - **The replay reads `/proc`,** so its describe is `skipIf(process.platform !== 'linux')`. On macOS, row 64 itself is the test.
@@ -66,6 +66,8 @@ The operator ruled on 2026-10-17 at 15:50 UTC that this programme repairs stable
 ## Tasks
 
 ### Task 1: the red row first
+
+> The code blocks in Tasks 1 and 2 are the red-first snapshots of the first round. Fix round 1 below supersedes their header comment, case 2's title and case 3's fake; the committed test file is the authority.
 
 - [x] **Step 1.** Take the claims (Global Constraints). Append the describe below to the end of `server/test/ccd-docs-tree.test.ts`, exactly:
 
@@ -306,11 +308,11 @@ Each row was restored with `cp`, and `cmp` matched. `--check` was `ccrc-unmodifi
 
 The coordinator's mail ruled on review 573's six findings at `97493f9b2`. F1: the absorb applies at the SIGTERM call only (D-5335). F2: case 3 gains an EINVAL arm against an exited, unreaped leader, and mutation row T20-M5 joins the table. F3: `_t20_racing` bound-waits for the `Z` member after its real SIGKILL, through the same `_t20_await_zombie` the first answer uses. F4, F5 and F6 correct this plan's prose: "Not in this wave", the Risk note and case 2's title, and the proof shard.
 
-- [x] **Step 1 (red first).** Case 4 is new: `the absorb is the SIGTERM call's alone: at the SIGKILL, an EPERM against an exited, unreaped leader raises (D-5335)`. Its fake `killpg` swallows the SIGTERM, so the leader (`sleep 30`) outlives the grace. At the SIGKILL it makes the real call, waits with `waitid(WNOWAIT)` until the leader has exited unreaped, and answers EPERM, Darwin's answer for that group of zombies.
+- [x] **Step 1 (red first).** Case 4 is new: `the absorb is the SIGTERM call's alone: at the SIGKILL, an EPERM against an exited, unreaped leader raises (D-5335)`. Its fake `killpg` swallows the SIGTERM, so the leader (`sleep 30`) outlives the grace. At the SIGKILL it makes the real call, waits with `waitid(WNOWAIT)` until the leader has exited unreaped, and answers EPERM. That reaches the state Darwin's answer for that group of zombies would leave at the except clause (EPERM, `returncode` unset, `poll()` reaping), by another route: Darwin's EPERM means nothing was signalled.
   **Measured at `97493f9b2` with the new rows:** `1 failed | 3 passed | 184 skipped`. Case 4 is red, reading `kill: returned` with signals `[15, 9]`. Case 3's new `einval` arm is already green there, because the old code raises every errno but EPERM.
-- [x] **Step 2 (the fix, D-5335).** `_signal_group(self, proc, sig, absorb_reaped=False)`: the absorb's condition gains `absorb_reaped and` in front, and the docstring says the grace loop judges what is left only after the SIGTERM. `_stop` passes `absorb_reaped=True` at its SIGTERM call and nothing at its SIGKILL call. Line 2 is restamped with the verb; `--check ccd/ccd` reads `ccrc-unmodified`, with one marker line. `ccd/ccd` is 39788 lines, mode 100755, numstat 12 9 against `97493f9b2`, in two hunks: line 2, and `_stop` with `_signal_group`. `_group_alive` is untouched, and `git grep '_signal_group('` finds no caller but `_stop`'s two.
+- [x] **Step 2 (the fix, D-5335).** `_signal_group(self, proc, sig, absorb_reaped=False)`: the absorb's condition gains `absorb_reaped and` in front, and the docstring says the grace loop judges what is left only after the SIGTERM. `_stop` passes `absorb_reaped=True` at its SIGTERM call and nothing at its SIGKILL call. Line 2 is restamped with the verb; `--check ccd/ccd` reads `ccrc-unmodified`, with one marker line. `ccd/ccd` is 39788 lines, mode 100755, numstat 12 9 against `97493f9b2`, in three hunks (line 2, `:36737`, and `:36747-36763`), two regions: line 2, and `_stop` with `_signal_group`. `_group_alive` is untouched, and `git grep '_signal_group('` finds no caller but `_stop`'s two.
   **Measured:** the describe gives `4 passed | 184 skipped`.
-- [x] **Step 3 (case 3 re-aimed).** Under the fix, T20-M2 and T20-M3 measured **green**. Case 3's fakes refused every signal, so after a mutant absorbed the SIGTERM the refusal still reached the SIGKILL, which now raises, and both arms read `raised EPERM` anyway. Each fake now refuses the SIGTERM alone and lets later signals through, so each arm reads the SIGTERM call's own decision. The arms are named `live`, `reaped` and `einval`; `einval` waits with `waitid(WNOWAIT)` for an exited, unreaped leader.
+- [x] **Step 3 (case 3 re-aimed).** Under the fix, T20-M2 and T20-M3 measured **green**. Case 3's fakes refused every signal, so after a mutant absorbed the SIGTERM the refusal still reached the SIGKILL, which now raises, and both arms read `raised EPERM` anyway. Each fake now refuses the SIGTERM alone and lets later signals through, so each arm reads the SIGTERM call's own decision. T20-M2 and T20-M3 therefore pin the SIGTERM call's predicate, not end-to-end loudness: under a refusal that holds at every signal, as a real one does, either mutant still raises the same EPERM at the SIGKILL, `KILL_GRACE_S` later. The arms are named `live`, `reaped` and `einval`; `einval` waits with `waitid(WNOWAIT)` for an exited, unreaped leader.
 - [x] **Step 4 (mutation rows, measured, worker, 2026-10-17).** Each mutant is applied by exact string to the fixed `ccd/ccd` (not restamped). The describe then runs with `-t 'row 64 on Darwin'`, the file is restored with `cp`, and `cmp` matches. `--check` read `ccrc-unmodified` after the last restore.
 
 | Row | Mutant | Measured red |
@@ -330,6 +332,7 @@ T20-M4 now reds case 4 as well, because that mutant absorbs every EPERM at every
   - `archived-expiry-policy` 76;
   - `session-hook -t 'the compaction card — every line citation is anchored'`: 13;
   - `topology-clean` 55, `deviation-refs` 31 (after `git fetch origin main`, at `8462a70d6`), `dtbd` 1.
+  - The other suites that load the Docs helper, measured by the reviewer (review 576) at `c0fe55ee5`, all green: `ccd-docs-index` 256, `ccd-docs-fetch` 31, `ccd-docs-show` 86, `docs-budget` 19, `docs-grammar` 158, `docs-parity` 54.
 
   No merge of `main` in this round: #441 lands after #410 and #448, by one merge on the coordinator's mail.
 

@@ -3555,7 +3555,9 @@ describe.skipIf(process.platform !== 'linux')('row 64 on Darwin: killpg answers 
   }, 60000);
 
   // Each fake refuses the SIGTERM alone and lets every later signal through, so an arm reads the SIGTERM call's own
-  // decision: a refusal kept up to the SIGKILL would raise there whatever the SIGTERM call did (D-5335).
+  // decision: a refusal kept up to the SIGKILL would raise there whatever the SIGTERM call did (D-5335). So T20-M2 and
+  // T20-M3 pin the SIGTERM call's predicate, not end-to-end loudness: under a refusal that holds at every signal, as a
+  // real one does, either mutant still raises the same EPERM, KILL_GRACE_S later, at the SIGKILL.
   it('EPERM stays loud: a live leader that refuses the SIGTERM, and a leader already reaped that refuses it, both raise EPERM; any other errno raises even against an exited, unreaped leader', () => {
     const got = unitJson<Record<string, string>>(h.home, [
       'import errno, os, signal, subprocess',

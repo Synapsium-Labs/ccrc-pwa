@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=b1fbda5a0b27c600974b8e676cf56e57afb2b170513e86edbb1ec06ef2518d7f
+# ccrc:generated 1 sha256=f26a1b986c8246be9472cb2c23a18e061e86ee037c54b545145d332541045263
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -36751,10 +36751,10 @@ class Sys(Sys):
         which only _stop's SIGTERM passes, an EPERM met while the leader was
         unreaped reaps it (poll) and is no error either: the grace loop that
         follows judges whatever is left. At the SIGKILL no wait follows but
-        the leader's, so there every EPERM raises, and a refusal to stop a
-        member is loud, never hidden. Any other EPERM, a leader already reaped
-        included, is a refusal and raises; on Linux, which signals a zombie
-        leader's group with rc 0, that is the only kind."""
+        the leader's, so every EPERM the SIGKILL call meets raises. Any other
+        EPERM, a leader already reaped included, is a refusal and raises; on
+        Linux, which signals a zombie leader's group with rc 0, that is the
+        only kind."""
         try:
             os.killpg(proc.pid, sig)
         except OSError as e:
