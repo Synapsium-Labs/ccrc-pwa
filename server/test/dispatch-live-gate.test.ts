@@ -49,11 +49,15 @@ interface BoxCfg {
   /** Real wall time added before EVERY call of the box's `io` (the turn verdict's and the live file's reads among
    *  them): a loaded box, where the route's own I/O is still running when a fixed number of event-loop turns ends. */
   slowIoMs?: number;
+  /** Real wall time an `onRequest` hook spends before the route runs: event-loop turns in which the dispatch has begun
+   *  but has nothing of the box in flight yet. */
+  requestDelayMs?: number;
 }
 
 let open: FastifyInstance[] = [];
 afterEach(async () => {
   vi.useRealTimers();
+  parkProbe = null;
   for (const a of open) await a.close();
   open = [];
 });
@@ -94,6 +98,13 @@ const box = async (cfg: BoxCfg = {}) => {
   const calls: string[][] = [];
   const n: Record<string, number> = {};
   let capIdx = 0;
+  const probe: ParkProbe = { started: false, inflight: 0 };
+  parkProbe = probe;
+  const tracked = async <T>(work: () => Promise<T>): Promise<T> => {
+    probe.started = true;
+    probe.inflight++;
+    try { return await work(); } finally { probe.inflight--; }
+  };
   const run: Runner = async (_cmd, args) => {
     calls.push(args);
     const verb = args[0] ?? '';
@@ -115,17 +126,19 @@ const box = async (cfg: BoxCfg = {}) => {
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const base0 = testDeps(home, run);
   const slow = cfg.slowIoMs;
-  const base = slow === undefined ? base0 : {
+  const base = {
     ...base0,
-    io: Object.fromEntries(Object.entries(base0.io).map(([k, f]) => [k, async (...a: unknown[]) => {
-      await realDelay(slow);
+    io: Object.fromEntries(Object.entries(base0.io).map(([k, f]) => [k, (...a: unknown[]) => tracked(async () => {
+      if (slow !== undefined) await realDelay(slow);
       return (f as (...x: unknown[]) => unknown).apply(base0.io, a);
-    }])) as unknown as typeof base0.io,
+    })])) as unknown as typeof base0.io,
   };
   const watcher = { currentPending: () => new Set(cfg.pending ?? []), currentStatuslines: () => new Map(),
     stop: () => {} } as unknown as FleetWatcher;
   const app = await buildServer({ ...base, mailToken: TOKEN, coord }, new Bus(), watcher);
   open.push(app);
+  const requestDelay = cfg.requestDelayMs;
+  if (requestDelay !== undefined) app.addHook('onRequest', async () => { await realDelay(requestDelay); });
   const opened = coord.openRun({ program: 'p', title: 't', project: PROJECT, wave: 2, waveOf: 3, claimedBy: 'c' });
   if (!('id' in opened)) throw new Error(`fixture openRun refused: ${JSON.stringify(opened)}`);
   coord.setSession(opened.id, ID);
@@ -141,9 +154,11 @@ const box = async (cfg: BoxCfg = {}) => {
 
 // The fake clock moves ONLY while the code under test is parked on a fake timer (D-5145). Only `setTimeout` is
 // faked, so `setImmediate` still turns the real event loop, poll phase included, and `Date` still reads real time.
-// Before every fake step the loop turns until a fake timer is pending (the route's own poll, re-armed after its read)
-// or the awaited request has settled. A fixed number of turns let fake time run ahead of the route's real I/O on a
-// loaded box: the route's read was still in flight, so the test stepped on, and the interleaving with its writes moved.
+// Before every fake step the loop turns until the route is parked on its own poll (`untilParked`: a timer pending and
+// nothing of the box in flight) or the awaited request has settled. A fixed number of turns let fake time run ahead of
+// the route's real I/O on a loaded box: the route's read was still in flight, so the test stepped on, and the
+// interleaving with its writes moved. A pending timer alone is no better a sign: any fake timer the route did not arm
+// reads as parked, and a case's write lands inside the first decision (the pause case pins this with one).
 
 /** Real wall time any one wait on the code under test may take before the case fails. */
 const REAL_BOUND_MS = 20_000;
@@ -162,9 +177,18 @@ const untilReal = async (ok: () => boolean, what: string): Promise<void> => {
     await turn();
   }
 };
-/** Turn the real event loop until the code under test is parked on a fake timer, or `isDone()`. */
+/** What the newest `box` has seen of its own io reads (D-5145): whether one has begun, and how many are in flight. */
+interface ParkProbe { started: boolean; inflight: number }
+let parkProbe: ParkProbe | null = null;
+/** Turn the real event loop until the code under test is parked on ITS OWN fake timer, or `isDone()`. A pending fake
+ *  timer alone is not that: one the route did not arm (the server's, or a case's own) is pending while the route is
+ *  still deciding. Parked is a pending timer, once the box has begun a read, with none of the box's io reads
+ *  in flight. Every real wait the route makes on its way to its wait is one of those reads (the box's runner answers
+ *  within microtasks), so between its first read and its wait no event-loop turn ends with nothing in flight. */
 const untilParked = (isDone: () => boolean = () => false): Promise<void> =>
-  untilReal(() => vi.getTimerCount() > 0 || isDone(), 'the code under test neither parked on a timer nor settled');
+  untilReal(() => isDone() || (vi.getTimerCount() > 0
+    && (parkProbe === null || (parkProbe.started && parkProbe.inflight === 0))),
+  'the code under test neither parked on a timer nor settled');
 /** Advance fake time by `ms`, in 100 ms steps, each taken only once the code under test is parked; and park again. */
 const advance = async (ms: number): Promise<void> => {
   for (let t = 0; t < ms; t += 100) {
@@ -368,8 +392,14 @@ describe('a pane this dispatch started is waited for outside coordMutex (D-5238)
 
   it('the re-run re-decides: a pause raised during the wait refuses `paused`, and the first ensure is the only act', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    const b = await box({ ensure: [`ensured ${ID}\n`] });
+    const b = await box({ ensure: [`ensured ${ID}\n`], requestDelayMs: 50 });
     hookDone(b.home);
+    // A fake timer that is not the route's, pending the whole case: the pause must still land during the WAIT. Were
+    // "parked" any pending timer, the harness would step on while the first decision is still reading, the pause and
+    // the `idle` would land between its pause check and its verdict, and that first decision would clear (`ok: true`).
+    setTimeout(() => {}, 10 * DISPATCH_SPAWN_WAIT_MS);
+    // And real turns before the route's first read (`requestDelayMs`): a harness that took "nothing in flight" as
+    // parked before any read had begun would step through them, and the pause would land before the first decision.
     const p = b.dispatch();
     await advance(DISPATCH_SPAWN_POLL_MS / 2);
     writeFileSync(path.join(b.home, '.cc-sessions', COORDINATOR_PAUSE_MARKER), '');
