@@ -6249,3 +6249,85 @@ describe('the turn verdict\'s reads and rule each have one home (D-5238)', () =>
     expect(dispatch).not.toMatch(/readLiveStateMeasured|readLiveState\b|panePid\(/);
   });
 });
+
+// D-5232's mechanism (plan docs/superpowers/plans/2026-10-16-working-state-and-interruptions.md, Task 9b). APPENDED at
+// the very end, for the reason the notes above state. THE SERVER'S CAPABILITY WORDS (`SERVER_CAPS`, derived from
+// `SERVER_CAP_MAP`), the file they are recorded in (`SERVER_CAPS_FILE`) and its lease (`SERVER_CAPS_LEASE_S`) have one
+// TypeScript home, `shared/api.ts`: `/health` advertises the list and `server/src/update/serverCaps.ts` writes it. The
+// bash spellings (`ccd/ccd-update-sync`'s grammar and file name; from Tasks 2 and 10, `ccd/session-hook.sh`'s file
+// name, lease and grammar) are documented second copies held equal by tests that iterate over these values
+// (`ccd-update-sync.test.ts`'s shared table), not by this text scan.
+describe('the server\'s capability words, their file and its lease are declared once, in shared/api.ts (D-5232)', () => {
+  const VALUE_DEF = (name: string): RegExp => new RegExp(`^\\s*(?:export\\s+)?(?:const|let|var)\\s+${name}\\b`, 'm');
+  // The seed word, quoted on a code line: a hand-copied list carries it.
+  const WORD = /(['"`])dispatch-live-gate-v1\1/;
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+
+  it('CONTROL: the patterns see a declaration and a quoted copy, and not an import, a use or prose', () => {
+    expect(VALUE_DEF('SERVER_CAPS').test('export const SERVER_CAPS: readonly ServerCap[] = [];')).toBe(true);
+    expect(VALUE_DEF('SERVER_CAPS').test("import { SERVER_CAPS } from '../../shared/api.js';")).toBe(false);
+    expect(VALUE_DEF('SERVER_CAPS').test('const SERVER_CAPS_FILE = 1;')).toBe(false);
+    expect(VALUE_DEF('SERVER_CAPS_LEASE_S').test('if (age > SERVER_CAPS_LEASE_S) return;')).toBe(false);
+    expect(WORD.test("const caps = ['dispatch-live-gate-v1'];")).toBe(true);
+    expect(stallCodeText('// the dispatch-live-gate-v1 word, in prose\nconst x = 1;')).not.toMatch(WORD);
+  });
+
+  it('declares SERVER_CAP_MAP, SERVER_CAPS, SERVER_CAPS_FILE and SERVER_CAPS_LEASE_S exactly once, in shared/api.ts', () => {
+    for (const name of ['SERVER_CAP_MAP', 'SERVER_CAPS', 'SERVER_CAPS_FILE', 'SERVER_CAPS_LEASE_S']) {
+      expect(ALL.filter((f) => VALUE_DEF(name).test(readFileSync(f, 'utf8'))).map(rel), name).toEqual(['shared/api.ts']);
+    }
+  });
+
+  it('quotes the seed word on a code line in shared/api.ts and nowhere else across the four roots', () => {
+    expect(holders(WORD)).toEqual(['shared/api.ts']);
+  });
+
+  it('the grammar\'s three functions are defined once, in shared/api.ts', () => {
+    for (const name of ['renderServerCaps', 'parseServerCaps', 'isServerCapWord']) {
+      expect(holders(new RegExp(`\\bfunction ${name}\\b|\\bconst ${name}\\s*=`)), name).toEqual(['shared/api.ts']);
+    }
+  });
+});
+
+// D-5302 (plan docs/superpowers/plans/2026-10-17-coordinator-first-routing.md, Task 3; spec §9). APPENDED. An ask's
+// push body is built in ONE place, `askPushBody` in `server/src/askbody.ts`, from the hook envelope; both raise sites
+// pushed `dialog.title || 'Claude has a question'` and 14 of 36 measured bodies were a lone border glyph. The fallback
+// string is spelled on a code line there and nowhere else, `askPushBody` is defined there and nowhere else, and no
+// raise site in `watch.ts` reaches for `dialog.title` as a body any more. Code lines only (`stallCode`).
+describe('the ask push body is built once, in server/src/askbody.ts (D-5302)', () => {
+  const FALLBACK = /Claude has a question/;
+  const DEFINES = /\bfunction\s+askPushBody\b|\baskPushBody\s*=\s*(?:\(|function\b)/;
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+
+  it('CONTROL: the patterns see a string and a definition, and pass over comment lines', () => {
+    expect(FALLBACK.test("body: dialog.title || 'Claude has a question',")).toBe(true);
+    expect(DEFINES.test('export function askPushBody(hs, dialog) {')).toBe(true);
+    expect(DEFINES.test('const askPushBody = (hs, dialog) => x;')).toBe(true);
+    expect(stallCodeText("// the push says 'Claude has a question'\nconst x = 1;")).not.toMatch(FALLBACK);
+  });
+
+  it('the fallback body is spelled on a code line in server/src/askbody.ts and nowhere else', () => {
+    expect(holders(FALLBACK)).toEqual(['server/src/askbody.ts']);
+  });
+
+  it('askPushBody is defined in server/src/askbody.ts and nowhere else', () => {
+    expect(holders(DEFINES)).toEqual(['server/src/askbody.ts']);
+  });
+
+  it("watch.ts's ask raise sites call askPushBody, and no body there reads dialog.title", () => {
+    const watch = stallCode(path.join(ccrcRoot, 'server/src/watch.ts'));
+    expect(watch).toMatch(/import\s*\{[^}]*\baskPushBody\b[^}]*\}\s*from\s*'\.\/askbody\.js'/);
+    expect(watch.match(/body:\s*askPushBody\(/g) ?? []).toHaveLength(2);
+    expect(watch).not.toMatch(/body:\s*dialog\.title/);
+  });
+
+  // D-5356 (coordinator ruling `approval-push-body-tool-only-until-redactor`): until the redactor is applied where
+  // the approval summary enters the wire (Task 16), the push body module reads no approval `summary` (the command),
+  // directly or through `hookAskSummary`, and the fixed phrase is spelled there only.
+  it('D-5356: askbody.ts never reads an approval summary, and the fixed phrase is spelled there only', () => {
+    const askbody = stallCode(path.join(ccrcRoot, 'server/src/askbody.ts'));
+    expect(askbody).not.toMatch(/\.summary\b|\bsummary\s*[,}]|\bhookAskSummary\b/);
+    expect(stallCodeText('const { tool, summary } = a;')).toMatch(/\bsummary\s*[,}]/);   // CONTROL
+    expect(holders(/permission requested/)).toEqual(['server/src/askbody.ts']);
+  });
+});
