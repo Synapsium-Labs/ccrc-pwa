@@ -208,7 +208,7 @@ cd server && TMPDIR=~/.cc-tmp/w20 ./node_modules/.bin/vitest run test/ccd-docs-t
 
 ### Task 2: the change in `ccd/ccd`
 
-- [ ] **Step 1.** Apply this hunk to `class Sys` (anchor `def _stop(self, proc):`). It changes nothing else:
+- [x] **Step 1.** Apply this hunk to `class Sys` (anchor `def _stop(self, proc):`). It changes nothing else:
 
 ```diff
 diff --git a/ccd/ccd b/ccd/ccd
@@ -252,8 +252,16 @@ index bd6e1e20c..da3a3c7b2 100755
      def _group_alive(self, pgid):
 ```
 
-- [ ] **Step 2.** Restamp by recomputing: from the checkout root, run `ccd/ccrc restamp ccd/ccd`. Then `node shared/mark.mjs --check ccd/ccd` must print `ccrc-unmodified`, and `grep -c '^# ccrc:generated' ccd/ccd` must print 1. Never copy a stamp from this plan, a PR or another branch.
-- [ ] **Step 3.** Re-run Task 1 Step 2's command. All three cases are green, and case 1's log reads `15 EPERM`, then `0 ESRCH` *(unmeasured: the worker measures it)*. Then run the whole file once, alone. Row 64 and every older row stay green on Linux.
+- [x] **Step 2.** Restamp by recomputing: from the checkout root, run `ccd/ccrc restamp ccd/ccd`. Then `node shared/mark.mjs --check ccd/ccd` must print `ccrc-unmodified`, and `grep -c '^# ccrc:generated' ccd/ccd` must print 1. Never copy a stamp from this plan, a PR or another branch.
+  **Measured (worker, 2026-10-17):**
+  - The hunk applied by exact-string replacement, one match per site, in `_stop` at `ccd/ccd:36730` (`_signal_group` at `:36747`, before the edit). It went onto this branch's tree, base `0b3ff2f62` plus wave 15.
+  - `git diff --numstat` gives `14 6 ccd/ccd`, and `wc -l` goes from 39777 to **39785** (+8: the 7-line docstring and the `reaped` line). The file mode stays 100755.
+  - `~/.local/bin/ccrc restamp ccd/ccd` printed `restamp: ccd/ccd: restamped`. `--check` gives `ccrc-unmodified`, and the `# ccrc:generated` count is 1.
+  - `_signal_group` has no other caller in `ccd`, `server/src` or `server/test`.
+- [x] **Step 3.** Re-run Task 1 Step 2's command. All three cases are green, and case 1's log reads `15 EPERM`, then `0 ESRCH` *(unmeasured: the worker measures it)*. Then run the whole file once, alone. Row 64 and every older row stay green on Linux.
+  **Measured:**
+  - The describe gives `3 passed | 184 skipped`. Its `killpg.log` assertions held: case 1 logged `['15 EPERM', '0 ESRCH']` and case 2 logged the doubled sequence.
+  - The whole file, alone: **187 passed** (75 s).
 
 ### Task 3: mutation rows
 
@@ -266,11 +274,30 @@ Before each row, `cp ccd/ccd "$SCRATCH/ccd.good"`. Apply the mutant (not restamp
 | T20-M3 | drop `and proc.poll() is not None` (absorb any EPERM while the leader is unreaped) | case 3's `live` arm |
 | T20-M4 | `if e.errno not in (errno.ESRCH, errno.EPERM): raise` | case 3, both arms |
 
+**Measured (worker, 2026-10-17): every row's red equals its expected set.**
+
+| Row | Measured red |
+|---|---|
+| T20-M1 | cases 1 and 2 |
+| T20-M2 | case 3, with `reaped` reading `returned` and `live` still `raised EPERM` |
+| T20-M3 | case 3, with `live` reading `returned` and `reaped` still `raised EPERM` |
+| T20-M4 | case 3, with both arms reading `returned` |
+
+Each row was restored with `cp`, and `cmp` matched. `--check` was `ccrc-unmodified` after each restore.
+
 `ownership.test.ts` is red under every unrestamped mutant. That red belongs to no row.
 
 ### Task 4: the gate and the PR
 
-- [ ] **Step 1.** Run one file at a time: `ccd-docs-tree.test.ts` (whole), `ownership.test.ts`, `mark-check.test.ts`, and the three ledger guards `topology-clean`, `deviation-refs` and `dtbd` (run `git fetch origin main` before `deviation-refs`). A known load flake re-runs alone.
+- [x] **Step 1.** Run one file at a time: `ccd-docs-tree.test.ts` (whole), `ownership.test.ts`, `mark-check.test.ts`, and the three ledger guards `topology-clean`, `deviation-refs` and `dtbd` (run `git fetch origin main` before `deviation-refs`). A known load flake re-runs alone.
+  **Measured (worker, 2026-10-17).** One file at a time, with `--pool=forks --maxWorkers=1` and a short TMPDIR. Slice anon read 20.4 to 21.5 GiB at each start, and every file is green.
+  - **This wave's gate:** `ccd-docs-tree` 187, `ownership` 14, `mark-check` 7, `topology-clean` 55, `deviation-refs` 31, `dtbd` 1.
+  - **The obligations the `ccd/ccd` holder named:**
+    - `session-hook`'s citation corpus (`-t 'the compaction card — every line citation is anchored'`): 13.
+    - `archived-expiry-policy`: 76. No failed or refused site was added.
+    - `ccd-id-cap` cannot be measured here: the file exists only on #410's branch. It is measured after #410 lands and `main` is merged.
+  - **Wave 15's gate files, re-run:** `ccd-supervised-start` 28 (4 skipped), `macos-platform` 104 (11 skipped).
+  - **The other suites that load the Docs helper, since `_stop` serves every verb:** `ccd-docs-index` 256, `ccd-docs-fetch` 31, `ccd-docs-show` 86, `docs-budget` 19, `docs-grammar` 158, `docs-parity` 54.
 - [ ] **Step 2.** Commit on the workspace branch. Open the PR with a body that says what changed, why (B2), and that it is proved on macOS only by a dispatched full run. Use noreply identity, and put no hosts, paths, lane or account names in it.
 - [ ] **Step 3.** Send the wave-done. The suite line follows the worker skill. Name the dispatched full run the coordinator must trigger on the branch (`gh workflow run ci.yml --ref <branch> -f mode=full`). The worker runs no `gh` writes itself. The coordinator triggers the run and reads `test-macos 3/4`.
 
