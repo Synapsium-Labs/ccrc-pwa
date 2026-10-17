@@ -41,8 +41,9 @@ numbers; the spec wave each one implements is named beside it.
 | 17 | — (install, doctor, backup prune) | `ccrc-api` placed by the install spine and removed by uninstall (README's `ccrc-api` lines), Reading 9's doctor half (WARN only), R10k, R8f, R14(a), R10i, R34 (both KEEP spellings; D1c pins them equal), R25(a)'s code-comment half, R35(b) | fleet-first; auto moves it, the coordinator watches | — | **PLANNING** 2026-10-17 15:40 UTC: run 564 open (planned), block 5313 to 5332; plan workflow `wf_012aef14-576`; README's `ccrc-api` lines move to the docs PR; lands after #448, #482, #444 and #441. Was: waits for run 360 to land (claims 1388, 1410, 1423) and claim 1403 (run 468, #425) on README (2026-10-15 22:11) |
 | 18 | — (test containment) | `makeCcdHarness` containment parity, R14(b)'s raw-spawn census, R23(a), R23(b), R23(d) | none (tests) | — | **LANDING ROUND, PART 1** 2026-10-17 15:40 UTC (mail 5951): merge `main`, the single re-measure, a fresh wave-done, the scoped review; part 2 and the landing after #448. Was: **FIX ROUND 1 DONE** 2026-10-17 04:35 UTC: verified at `81bf1f135` (PR #482), run 517 awaiting-review, held for #448; then the landing round and one scoped review. Was: **FIX ROUND 1** 2026-10-17 03:45 UTC: review 535 (18 findings) ruled in plan `3098b03ea`, mail 5698. Was: **IN REVIEW** 2026-10-17 02:55 UTC: wave-done at `b5b83ad66` (PR #482), run 517 awaiting-review, review run 535. Was: **DISPATCHED** 2026-10-17 00:50 UTC (run 517, worker still-delta): plan `f9abdcc0e` (D-5247 to D-5253, reserve 5254 to 5258), readings ruled; lands after run 360. Was: **PLANNING** 2026-10-16 18:00 UTC: run 517 opened (planned), block 5247 to 5266; the plan workflow runs (`wf_21fbd9dc-804`). `ccdWsHelpers.ts` is unclaimed since claim 1396 ended. Was: to plan; `ccdWsHelpers.ts` held by claim 1396 (run 308); R14(b) and R23 can go first (2026-10-15 22:11) |
 | 19 | — (PWA and server residue) | R24(a), (b), (d), R26(a)-(d), R27(a), R27(b)'s test half; B5, the `update-inventory.test.ts` stable flake | server | — | **MERGED** `a6b2606c9` (PR #443, 2026-10-16 12:54 UTC, run 483 done); tree equals merge-tree of the reviewed tip `95aa8f3bf`; review 511 found 4 minor (R33) |
+| 20 | — (B2: the Docs helper's group stop) | `_stop`, `_signal_group` and `_group_alive` survive Darwin's EPERM from a zombie-only group; row 64 of `ccd-docs-tree.test.ts` goes green on macOS (operator ruling 2026-10-17 15:50) | fleet-first | — | **PLANNING** 2026-10-17 15:51 UTC: run 566 open (planned), block 5333 to 5342; plan workflow `wf_dae77d40-97a`; `ccd/ccd` consent asked of claim 1557's coordinator (mail 5957); lands after #410, first-ready against #448 |
 | — | — | docs PR: R22, R24(e), R23(c), (e), R27(b)'s plan half, R27(c), R25(a), (b), R35(c), README's Reading 9 clause, README's `ccrc-api` lines (from wave 17, 2026-10-17), the closure sentences | none (docs) | — | to write; README half waits for claim 1403 (#425) (2026-10-15 22:11) |
-| — | — | final rollout: promote to `stable` (the coordinator, ruling 2026-10-15), auto convergence and a read-only `ccrc rollout --check` (no hand `ccrc rollout`, ruling 2026-09-30), the exit criteria measured live (the operator taps the rehearsal) | — | — | planned; stable waits on B1 (#429 merged 2026-10-17 13:20; full run 39045734294 on `main` tests it on macOS), B2 (measured 2026-10-17 15:40; who repairs it is put to the operator) and wave 16. Was: on B1 (a green macOS run confirms #429), B2 and wave 16. Was: on B1, B2, B5 and wave 16 (B5 left with wave 19) |
+| — | — | final rollout: promote to `stable` (the coordinator, ruling 2026-10-15), auto convergence and a read-only `ccrc rollout --check` (no hand `ccrc rollout`, ruling 2026-09-30), the exit criteria measured live (the operator taps the rehearsal) | — | — | planned; stable waits on B1 (#429 merged 2026-10-17 13:20; full run 39045734294 on `main` tests it on macOS), B2 (wave 20, run 566, by the operator's ruling of 2026-10-17 15:50) and wave 16. Was: on B1 (a green macOS run confirms #429), B2 and wave 16. Was: on B1, B2, B5 and wave 16 (B5 left with wave 19) |
 
 **Order.** 2 → {3, 4} → {5, 6} → rollout. Waves 3 and 4 touch disjoint files (PWA + notifier vs `ccd/ccrc` +
 deploy units) and both need only wave 2's interfaces, so they may run concurrently on two workspaces once wave 2
@@ -3705,6 +3706,19 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     `ccd/ccd`) re-raises EPERM from `killpg`. Darwin answers EPERM when every member of a group is a zombie.
     `_group_alive` also reads EPERM as alive. The Docs reader programme has opened no repair wave since its
     authorisation, so who repairs it is put to the operator.
+
+- **2026-10-17 15:50 UTC: an operator ruling: this programme repairs B2, as wave 20 (run 566).**
+  - **The ruling,** given in chat: "This programme fixes it". It moves the repair the operator authorised to the
+    native Docs reader programme on 10-16 to this programme. Mail 5956 told that programme's coordinator, and
+    asked for any runner measurements it holds. Its diagnostic branch stays unlanded.
+  - **Run 566** is open, with deviation block 5333 to 5342 (bare until defined). Its scope is the smallest change
+    to the Docs helper's `_stop`, `_signal_group` and `_group_alive` in `ccd/ccd`. It adds a Linux row that injects
+    Darwin's EPERM and a mutation row for each new arm, and leaves row 64 byte-unchanged as the macOS proof. A
+    dispatched full run on the branch gives that proof, because a pull request skips `test-macos`.
+  - **The plan** is drafted by workflow `wf_dae77d40-97a` (a drafter, two attack lenses and a reviser). Claim
+    1557 (run 433, #410's landing) holds `ccd/ccd`. Mail 5957 asked its coordinator for consent to the three
+    functions; without it, wave 20 dispatches after #410 lands.
+  - **The order:** after #410, then the first ready of wave 20 and #448. Every later `ccd/ccd` lander restamps.
 
 ## Carried constraints
 
