@@ -109,7 +109,7 @@ Task order follows the claims: Tasks 1, 2, 3, 5, 8 and 9 are claim group A and c
 
 The prototype is applied in the projection (staged). Its four hunks are reproduced here so the worker can apply them to its own branch.
 
-- [ ] **Step 1: the red row.** In `server/test/install-census.test.ts`, inside the describe `deploy/deploy.sh, the fallback installer, places everything \`ccrc install\` places`, immediately BEFORE `it('every systemd unit file _inst_units places, deploy.sh places too (except DEPLOY_SH_WITHHOLDS.units)'` (never at the end of the file: #448 appends a describe after the "rides the release tarball" describe), add:
+- [x] **Step 1: the red row.** In `server/test/install-census.test.ts`, inside the describe `deploy/deploy.sh, the fallback installer, places everything \`ccrc install\` places`, immediately BEFORE `it('every systemd unit file _inst_units places, deploy.sh places too (except DEPLOY_SH_WITHHOLDS.units)'` (never at the end of the file: #448 appends a describe after the "rides the release tarball" describe), add:
 
 ```ts
   // THE OTHER WAY, for binaries only (wave 17, D-5313): a name the fallback
@@ -134,8 +134,9 @@ The prototype is applied in the projection (staged). Its four hunks are reproduc
 ```
 
 Measured *(prototype, by the first drafter's vitest-free shim, at the projection without #441)*: this case FAILED naming `ccrc-api` before Step 2, and the five census describes (`id-shaped`, `install census and the uninstall`, `deploy.sh, the fallback`, `tracked in this repository`, `release tarball`) ran 17 passed, 0 failed after it. `deployPlacedBins`, `BIN_FLOOR` and `DEPLOY_WHERE` already exist in the file. Re-measure with vitest: `./node_modules/.bin/vitest run test/install-census.test.ts --pool=forks --maxWorkers=1` *(unmeasured: the worker measures it)*.
+  - As built: `./node_modules/.bin/vitest run test/install-census.test.ts --pool=forks --maxWorkers=1` RED before Step 2: 1 failed (the new case), 25 passed, `expected [ 'ccrc-api' ] to deeply equal []`; GREEN after Steps 2-3: 26 passed. Inserted before the `every systemd unit file _inst_units places` case, as briefed.
 
-- [ ] **Step 2: the placement.** In `ccd/ccrc` `_inst_bins`, immediately after `_inst_atomic "$tree/ccd/ccd-account-auth" "$bin/ccd-account-auth" 755` (outside the one `if [ "$INST_ROLE" != server ]` block and outside the non-Darwin arm):
+- [x] **Step 2: the placement.** In `ccd/ccrc` `_inst_bins`, immediately after `_inst_atomic "$tree/ccd/ccd-account-auth" "$bin/ccd-account-auth" 755` (outside the one `if [ "$INST_ROLE" != server ]` block and outside the non-Darwin arm):
 
 ```bash
   # `ccrc-api`, the closed client every coordinator, worker and reviewer skill
@@ -155,8 +156,9 @@ Measured *(prototype, by the first drafter's vitest-free shim, at the projection
 ```
 
 and in the two closing echoes, `ccd, ccd-account-auth${lane_bins}` (Darwin) becomes `ccd, ccd-account-auth${api_bin}${lane_bins}`, and `ccd-update-sync${hist_bin}${lane_bins}` (Linux) becomes `ccd-update-sync${hist_bin}${api_bin}${lane_bins}`.
+  - As built: applied at base `d656d022a`'s `_inst_bins` as briefed; `bash -n ccd/ccrc` green. The closing echoes carry `${api_bin}` on both arms.
 
-- [ ] **Step 3: the removal and the id-shaped lists.** In `_uninst_tree_bins`: the `rm -f --` operand line `"$HOME/.local/bin/ccgpt-runtime" "$HOME/.local/bin/ccrc-codex" \` gains `"$HOME/.local/bin/ccrc-api"` before its `\`; the closing echo's `ccgpt-runtime, ccrc-codex and the ccrc launcher` becomes `ccgpt-runtime, ccrc-codex, ccrc-api and the ccrc launcher`; and after the paragraph that ends "so it is removed here on every role." (the history sweep's), add:
+- [x] **Step 3: the removal and the id-shaped lists.** In `_uninst_tree_bins`: the `rm -f --` operand line `"$HOME/.local/bin/ccgpt-runtime" "$HOME/.local/bin/ccrc-codex" \` gains `"$HOME/.local/bin/ccrc-api"` before its `\`; the closing echo's `ccgpt-runtime, ccrc-codex and the ccrc launcher` becomes `ccgpt-runtime, ccrc-codex, ccrc-api and the ccrc launcher`; and after the paragraph that ends "so it is removed here on every role." (the history sweep's), add:
 
 ```bash
   #
@@ -174,8 +176,9 @@ In `_uninst_wrappers`, the one `case "$name" in ccd|ccrc|…|ccgpt-runtime|ccrc-
   // The closed client the role skills call, placed by _inst_bins since wave 17 (D-5313).
   'ccrc-api']);
 ```
+  - As built: applied as briefed. Deviation from the brief's anchor, not a ledger entry: this tree's `_uninst_tree_bins` has no paragraph ending "so it is removed here on every role." for the history sweep, so the new `ccrc-api` paragraph sits after the update-sync paragraph (the one ending "on every role."), before "THE ORDINALS ARE GONE".
 
-- [ ] **Step 4: the fixture source.** In `server/test/installTreeFixture.ts`, after `'ccd/history',`:
+- [x] **Step 4: the fixture source.** In `server/test/installTreeFixture.ts`, after `'ccd/history',`:
 
 ```ts
   // `ccrc-api` (wave 17, D-5313), placed by `_inst_bins` on both arms for every
@@ -185,15 +188,17 @@ In `_uninst_wrappers`, the one `case "$name" in ccd|ccrc|…|ccgpt-runtime|ccrc-
 ```
 
 The first drafters' prototype missed this line *(prototype: applied in the projection by this draft)*. Without it every Linux install describe dies at `_inst_atomic` *(unmeasured: the worker measures it, by running `ccrc-install.test.ts -t 'ccd-history-sweep lands too'` with and without the line)*.
+  - As built: measured. With the `'ccd/ccrc-api',` line removed, `ccrc-install.test.ts -t 'ccd-history-sweep lands too'` FAILED (`ENOENT … .local/bin/ccd-history-sweep`, the install died at `_inst_atomic`); with it, GREEN.
 
-- [ ] **Step 5: the rows a census cannot see** *(unmeasured: the worker measures each)*. In `server/test/ccrc-install.test.ts`:
+- [x] **Step 5: the rows a census cannot see** *(unmeasured: the worker measures each)*. In `server/test/ccrc-install.test.ts`:
   - the exact `.local/bin` sets (the Darwin list and the Linux list, beside the `history spec §9.5` comment): add `'ccrc-api'` in sorted position to both;
   - after `itLinux('ccd-history-sweep lands too (history spec §9.5) …'`, a case `it('ccrc-api lands too, a byte copy at 0755 on both arms (wave 17, D-5313)'` that installs into a fresh fixture HOME and asserts `readFileSync(join(home, '.local', 'bin', 'ccrc-api'))` equals `readFileSync(placed(home, 'ccd', 'ccrc-api'))`, `statSync(…).mode & 0o777` is `0o755`, and the closing line matches `/^install: bins: .*(?<![\w-])ccrc-api(?![\w-])/m`. It is `it`, not `itLinux`, because the placement is on both arms;
   - in the `--role server` case that asserts `--role server placed ccd-history-sweep` is false, add `expect(existsSync(join(home, '.local', 'bin', 'ccrc-api')), '--role server placed ccrc-api').toBe(false)` and, beside the server closing-line assertion, `.not.toContain('ccrc-api')`.
   - after the byte-copy case, `itLinux('ccrc-api: README\'s link to the tree survives an install, still a link to the tree file (wave 17, D-5313)'`: plant `symlinkSync(join(home, 'ccrc', 'ccd', 'ccrc-api'), join(home, '.local', 'bin', 'ccrc-api'))` (README's `ln -sfn` shape) in a fixture HOME whose `~/ccrc` the install places, run the install, and assert `lstatSync(…).isSymbolicLink()` is still true and `realpathSync(…)` equals `realpathSync(placed(home, 'ccd', 'ccrc-api'))` *(revised, unmeasured)*.
   In `server/test/ccrc-uninstall.test.ts`: `plantInstalledBox` plants `join(bin, 'ccrc-api')` as it plants the history sweep, the removal loop's name list gains `'ccrc-api'`, and one case plants it as a LINK into the fixture tree instead and asserts the link is gone and its target is untouched *(revised, unmeasured)*.
+  - As built: all rows measured green. `ccrc-install.test.ts -t 'ccrc-api|ccd-history-sweep lands too|closing line names every executable'` 4 passed (byte copy at 0755 under umask 077, the link case, the history shim, the closing-line census); `-t 'role server is today|runs the wrapper converger'` 2 passed (the server-role absence, both exact `.local/bin` sets with `'ccrc-api'`). `ccrc-uninstall.test.ts` whole: 99 passed, 1 timeout under load (`every ENABLED instance of ccrc's usage template…`, 20000ms), green alone. The uninstall link case plants the link into the fixture tree as briefed; the verb removes `~/ccrc` first, so the link dangles when the census `rm -f` runs, and the case asserts it is gone and the closing line names `ccrc-api`. `gen-wrappers.test.ts` whole: 31 passed.
 
-- [ ] **Step 6: mutation rows** *(Step 1's row: prototype; the rest unmeasured: the worker measures them)*:
+- [x] **Step 6: mutation rows** *(Step 1's row: prototype; the rest unmeasured: the worker measures them)*:
 
 | Mutation | Expected red |
 |---|---|
@@ -204,6 +209,7 @@ The first drafters' prototype missed this line *(prototype: applied in the proje
 | drop the `[ "$INST_ROLE" = server ] \|\|` gate | Step 5's server-role case |
 | move the line inside the `!= server` block | `gptGateBlock()`'s reservation case |
 | replace `_inst_atomic`'s `cmp -s` branch by an unconditional copy (`cp`, `chmod`, `mv -f`) | Step 5's link case (the link becomes a regular file); every other row stays green, which is why the link case exists *(revised, unmeasured)* |
+  - As built: every row measured RED then restored (`cmp` clean). M1 delete the `_inst_atomic` line: census 4 failed (`uninstall census removes nothing the install spine does not place`, the new deploy-vs-spine case, and both id-shaped cases), `every binary the install spine places is removed` stays green as predicted; install byte-copy case RED. M2 delete the `rm -f` operand: census `every binary the install spine places is removed by the uninstall census` RED; uninstall `the tree and the executables go…` RED. M3 delete the `TOOLCHAIN_EXECUTABLES` entry: census id-shaped case RED. M4 delete from `_uninst_wrappers`' `case`: census exclusion-case RED. M5 drop the `[ "$INST_ROLE" = server ] ||` gate: `--role server is today's spine…` RED. M6 move the line into the `!= server` block: census `both GPT_TOOLCHAIN_ACCOUNT_IDS mirrors…` RED and the `--role server` case RED (`gptGateBlock()`'s reservation case is that census row). M7 `_inst_atomic` without its `cmp` branch: the link case RED, `ccd-history-sweep lands too` stays green.
 
 ### Task 2: the update records its sweep (Reading 9's record half; W17-b; D-5314)
 

@@ -2250,6 +2250,34 @@ describe('ccrc install: the executables and files it installs', () => {
     expect(mode(bin)).toBe(0o755);
   });
 
+  it('ccrc-api lands too, a byte copy at 0755 on both arms (wave 17, D-5313)', () => {
+    // The closed client every role skill calls. `_inst_bins` places it on BOTH
+    // platform arms (hence `it`, not `itLinux`), behind the one-line role test
+    // the history sweep's shim uses; this install is role `both`, so it lands.
+    // At umask 077 the 0755 can only come from the chmod. The `--role server`
+    // case pins its absence, and the closing line must name it.
+    const { home, r } = installed;
+    const bin = join(home, '.local', 'bin', 'ccrc-api');
+    expect(readFileSync(bin)).toEqual(readFileSync(placed(home, 'ccd', 'ccrc-api')));
+    expect(mode(bin)).toBe(0o755);
+    expect(r.stdout).toMatch(/^install: bins: .*(?<![\w-])ccrc-api(?![\w-])/m);
+  });
+
+  itLinux('ccrc-api: README\'s link to the tree survives an install, still a link to the tree file (wave 17, D-5313)', () => {
+    // README links `~/.local/bin/ccrc-api` to the tree's file with `ln -sfn`.
+    // The source `_inst_atomic` compares is that link's own target, so its
+    // `cmp` branch keeps the link; a copy that always replaced the file would
+    // turn the link into a regular file that stops following updates.
+    const home = freshBox('ccrc-install-api-link-');
+    mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+    const dest = join(home, '.local', 'bin', 'ccrc-api');
+    symlinkSync(join(home, 'ccrc', 'ccd', 'ccrc-api'), dest);
+    const r = runInstall(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(lstatSync(dest).isSymbolicLink(), 'the install turned README\'s link into a regular file').toBe(true);
+    expect(realpathSync(dest)).toBe(realpathSync(placed(home, 'ccd', 'ccrc-api')));
+  });
+
   it('the launcher is BYTE FOR BYTE what deploy.sh generates', () => {
     // THE AGREEMENT PIN. The launcher now has two generators — `deploy.sh`'s
     // `install_ccrc_shim` for a box reached over ssh, and `_inst_shim` for a
@@ -5052,7 +5080,8 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
         // joined in the commit that placed them, and no earlier than the
         // commits that wrote them (fix round 1, Finding 1). NEVER `ccgpt`
         // (D-3478).
-        ? ['ccd', 'ccd-account-auth', 'ccrc', 'graphify', ...GPT_LANE_BINS].sort()
+        // wave 17 (D-5313): `ccrc-api`, the closed client the role skills call, is on BOTH arms for every role but server.
+        ? ['ccd', 'ccd-account-auth', 'ccrc', 'ccrc-api', 'graphify', ...GPT_LANE_BINS].sort()
         // account-pool-membership wave 1, Task 4 fix round 1 (F1): `ccd-pool-sync`
         // joins the non-Darwin list on the timer-bound names' own terms. THIS
         // ASSERTION IS THE MUTATION SITE for that line in `_inst_bins`: it is
@@ -5064,7 +5093,7 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
         // history spec §9.5: `ccd-history-sweep` joins on the timer-bound names' terms, behind its role gate (this install is `both`).
         : ['ccd', 'ccd-account-auth', 'ccd-account-health', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-history-sweep',
            'ccd-pool-sync', 'ccd-scope-sweep', 'ccd-telemetry-keepalive', 'ccd-tmp-sweep', 'ccd-update-sync', 'ccd-usage-sweep',
-           'ccd-usage-sweep.py', 'ccrc', 'graphify', ...GPT_LANE_BINS].sort());
+           'ccd-usage-sweep.py', 'ccrc', 'ccrc-api', 'graphify', ...GPT_LANE_BINS].sort());
   });
 
   it('_inst_bins\' own closing line names every executable it placed', () => {
@@ -6304,6 +6333,8 @@ describe('ccrc install --role: the refusals and the default', () => {
     // history spec §9.5: no shim, no unit pair and no enable on a server box —
     // it hosts no sessions and must never hold a store D-4183.
     expect(existsSync(join(home, '.local', 'bin', 'ccd-history-sweep')), '--role server placed ccd-history-sweep').toBe(false);
+    // wave 17 (D-5313): `ccrc-api` is gated on the same one-line role test.
+    expect(existsSync(join(home, '.local', 'bin', 'ccrc-api')), '--role server placed ccrc-api').toBe(false);
     expect(existsSync(unitDir(home, 'ccd-history-sweep.service'))).toBe(false);
     expect(existsSync(unitDir(home, 'ccd-history-sweep.timer'))).toBe(false);
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-history-sweep');
@@ -6343,6 +6374,7 @@ describe('ccrc install --role: the refusals and the default', () => {
     expect(bins, 'no `install: bins:` line in the transcript').toBeDefined();
     expect(bins!, 'the server-role closing line claims a GPT-lane executable').not.toMatch(/ccgpt|ccrc-codex/);
     expect(bins!, 'the server-role closing line names a history shim it never placed').not.toContain('ccd-history-sweep');
+    expect(bins!, 'the server-role closing line names ccrc-api, which it never placed').not.toContain('ccrc-api');
     expect(read(dotCcrc(home, 'ccrc.env'))).toMatch(/^CCRC_ROLE=server$/m);
     expect(r.stdout).toMatch(/^install: gate: /m);
   });

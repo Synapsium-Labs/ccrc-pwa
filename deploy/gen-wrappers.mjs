@@ -210,7 +210,9 @@ const ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
 const TOOLCHAIN_EXECUTABLES = new Set(['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-account-health',
   'ccd-telemetry-keepalive', 'ccd-account-auth', 'ccd-usage-sweep', 'ccd-pool-sync', 'ccd-tmp-sweep', 'ccd-scope-sweep', 'ccd-update-sync', 'ccd-history-sweep',
   // GPT-lane launcher and runtime builder, placed by _inst_bins since Plan 2b-2; ccgpt is not ours (D-3478).
-  'ccrc-codex', 'ccgpt-runtime']);
+  'ccrc-codex', 'ccgpt-runtime',
+  // The closed client the role skills call, placed by _inst_bins since wave 17 (D-5313).
+  'ccrc-api']);
 
 /** Reads an existing wrapper at `path` and reports what is there against the
  *  text this run staged for it. SIX outcomes, never five: `absent` (nothing

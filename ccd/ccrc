@@ -14209,6 +14209,20 @@ _inst_bins() {   # what has to be ON PATH: ccrc's own executables, and the launc
   # that is the DEFAULT path on a platform is not the no-op `ccd-cap-scopes`'
   # own comment warns about.
   _inst_atomic "$tree/ccd/ccd-account-auth" "$bin/ccd-account-auth" 755
+  # `ccrc-api`, the closed client every coordinator, worker and reviewer skill
+  # calls for its mail, runs, claims and ledger (wave 17, D-5313), on BOTH arms
+  # (it is portable: macos-platform.test.ts reads it in the GNU-call corpus)
+  # and ROLE-gated by a ONE-LINE `||` test, the history sweep's shape below,
+  # never a second `!= server` block (install-census.test.ts's gptGateBlock()
+  # requires exactly one): its callers are sessions, and a server-role box
+  # hosts none (D-3111). Until wave 17 the spine placed nothing here: a box
+  # carrying README's link to the tree followed every update, an unlinked one
+  # kept whatever copy the last fallback deploy left. On a linked box the source
+  # IS the link's target, so `_inst_atomic`'s `cmp` branch keeps the link.
+  # `_uninst_tree_bins` removes it on every role, as it does every name here.
+  local api_bin=""
+  [ "$INST_ROLE" = server ] || _inst_atomic "$tree/ccd/ccrc-api" "$bin/ccrc-api" 755
+  [ "$INST_ROLE" = server ] || api_bin=", ccrc-api"
   # The GPT lane's four common executables, BEFORE the platform `if` below, so
   # on BOTH arms — but ROLE-gated by this function's ONE `if [ "$INST_ROLE"
   # != server ]` block (spec §11 says so, and why). The history sweep's shim
@@ -14328,9 +14342,9 @@ _inst_bins() {   # what has to be ON PATH: ccrc's own executables, and the launc
   _inst_atomic "$gen" "$bin/ccrc" 755
   rm -f -- "$gen"
   if [ "$CCD_OS" = darwin ]; then
-    echo "install: bins: ccd, ccd-account-auth${lane_bins} and the ccrc launcher in \$HOME/.local/bin${lane_note} (no ccd-cap-scopes — it caps cgroup scopes, and macOS has none; no ccd-graph-sweep, no ccd-account-health, no ccd-telemetry-keepalive, no ccd-usage-sweep, no ccd-tmp-sweep, no ccd-scope-sweep, no ccd-history-sweep, no ccd-pool-sync and no ccd-update-sync — their timers are systemd-only)"
+    echo "install: bins: ccd, ccd-account-auth${api_bin}${lane_bins} and the ccrc launcher in \$HOME/.local/bin${lane_note} (no ccd-cap-scopes — it caps cgroup scopes, and macOS has none; no ccd-graph-sweep, no ccd-account-health, no ccd-telemetry-keepalive, no ccd-usage-sweep, no ccd-tmp-sweep, no ccd-scope-sweep, no ccd-history-sweep, no ccd-pool-sync and no ccd-update-sync — their timers are systemd-only)"
   else
-    echo "install: bins: ccd, ccd-account-auth, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-usage-sweep, ccd-tmp-sweep, ccd-scope-sweep, ccd-pool-sync, ccd-update-sync${hist_bin}${lane_bins} and the ccrc launcher in \$HOME/.local/bin${lane_note}"
+    echo "install: bins: ccd, ccd-account-auth, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-usage-sweep, ccd-tmp-sweep, ccd-scope-sweep, ccd-pool-sync, ccd-update-sync${hist_bin}${api_bin}${lane_bins} and the ccrc launcher in \$HOME/.local/bin${lane_note}"
   fi
 }
 
@@ -23486,7 +23500,7 @@ _uninst_wrappers() {
     # is another repository's unmarked launcher, which the marker test below
     # already keeps, and nothing here places it (D-3478). `ccd-update-sync`
     # joins on the same terms as the timer-bound binary from programme wave 4.
-    case "$name" in ccd|ccrc|ccd-cap-scopes|ccd-graph-sweep|ccd-account-health|ccd-telemetry-keepalive|ccd-account-auth|ccd-usage-sweep|ccd-tmp-sweep|ccd-scope-sweep|ccd-history-sweep|ccd-pool-sync|ccd-update-sync|ccgpt-runtime|ccrc-codex) continue ;; esac
+    case "$name" in ccd|ccrc|ccd-cap-scopes|ccd-graph-sweep|ccd-account-health|ccd-telemetry-keepalive|ccd-account-auth|ccd-usage-sweep|ccd-tmp-sweep|ccd-scope-sweep|ccd-history-sweep|ccd-pool-sync|ccd-update-sync|ccgpt-runtime|ccrc-codex|ccrc-api) continue ;; esac
     [[ "$name" =~ $WRAPPER_ID_RE ]] || continue
     verdict="$(node --no-warnings --input-type=module -e '
 import { readFileSync, statSync } from "node:fs";
@@ -23687,6 +23701,12 @@ _uninst_tree_bins() {
   # non-Darwin role and only its timer is fleet-gated, so it is removed here
   # on every role.
   #
+  # `ccrc-api` (wave 17, D-5313), the closed client the role skills call, joins
+  # on `ccd-history-sweep`'s terms: `_inst_bins` places it on both platform
+  # arms and every role but server, so it is removed here on every role (a
+  # no-op on a server box). Whatever is at the path goes, README's link to the
+  # tree or a copy deploy.sh or the spine placed: each is ccrc's own file.
+  #
   # THE ORDINALS ARE GONE, and that is the fix, not an omission. This census
   # was hand-kept and was caught stale THREE times (D-1347; again at the
   # account wave's merge, where main added `ccd-telemetry-keepalive` to the
@@ -23706,6 +23726,7 @@ _uninst_tree_bins() {
     "$HOME/.local/bin/ccd-update-sync" \
     "$HOME/.local/bin/ccgpt-proxy.py" "$HOME/.local/bin/ccgpt-usage.py" \
     "$HOME/.local/bin/ccgpt-runtime" "$HOME/.local/bin/ccrc-codex" \
+    "$HOME/.local/bin/ccrc-api" \
     || _ccrc_die "removing the executables from \$HOME/.local/bin failed"
   # ccd's BODY (D-3696), the other half of the pair the launcher above named,
   # and its directory only if that leaves it empty — anything else an operator
@@ -23713,7 +23734,7 @@ _uninst_tree_bins() {
   rm -f -- "$HOME/.local/libexec/ccrc/ccd" \
     || _ccrc_die "removing ccd's body from \$HOME/.local/libexec/ccrc failed"
   rmdir -- "$HOME/.local/libexec/ccrc" 2>/dev/null || :
-  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-scope-sweep, ccd-history-sweep, ccd-pool-sync, ccd-update-sync, ccgpt-proxy.py, ccgpt-usage.py, ccgpt-runtime, ccrc-codex and the ccrc launcher removed from \$HOME/.local/bin, and ccd's body from \$HOME/.local/libexec/ccrc; the completed-install record and the node's update state (~/.ccrc/previous, install-step, update.json, update.lock, update-intent) removed$vsaid$msaid$nsaid"
+  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-scope-sweep, ccd-history-sweep, ccd-pool-sync, ccd-update-sync, ccgpt-proxy.py, ccgpt-usage.py, ccgpt-runtime, ccrc-codex, ccrc-api and the ccrc launcher removed from \$HOME/.local/bin, and ccd's body from \$HOME/.local/libexec/ccrc; the completed-install record and the node's update state (~/.ccrc/previous, install-step, update.json, update.lock, update-intent) removed$vsaid$msaid$nsaid"
   echo "uninstall: tree: the box token's node records (~/.ccrc/box-token-generation, token-sync.json) removed; its value and state files stay with ~/.ccrc/mail.token, and ~/.cc-secrets/ccrc-mail.token is not touched"
   # ── the one entry that is not ccrc's own binary ─────────────────────────
   # `_inst_graphify_engine` converges `$HOME/.local/bin/graphify` onto the
