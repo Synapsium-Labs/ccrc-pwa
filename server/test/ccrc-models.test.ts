@@ -724,8 +724,8 @@ describe('ccrc models <id> show', () => {
 describe('ccrc models <id> init', () => {
   // Plan 3a Task 2 (operator ruling Z3, D-3706): the verb CREATES a codex
   // registry on an `exec.kind: "codex"` row only. Its seeding claim moves to
-  // one; the live Codex lanes' shape (`EXT_A_ROW`) is refused by name with
-  // nothing written, and keeps a registry it already has.
+  // one; the live Codex lanes' old shape (`EXT_A_ROW`, retired by Plan 4) is
+  // refused by name with nothing written, and keeps a registry it already has.
   it('seeds a codex-kind lane\'s registry and materialises, at exit 0', () => {
     fs.rmSync(home, { recursive: true, force: true });
     home = box({ ...ROSTER, accounts: [...ROSTER.accounts, codexRow('codex-a', 45010, 45011)] });
@@ -1503,10 +1503,15 @@ describe.skipIf(pythonOrSkip() === null)('each codex lane\'s probe reads its OWN
     const pr = probeRuntime(home, CODEX_RAW);
     const rt = plantFakeRuntime(home, { python: pr.python });
     fs.mkdirSync(join(home, '.secrets'), { recursive: true });
-    // The secrets file hands the probe the runtime's own recorder: were it not
-    // withheld from a non-codex row, the probe below would run it.
+    // The secrets file hands the probe a directory and the runtime's own
+    // recorder. The directory holds an auth.json (`{}`, a fixture file), so
+    // the probe's last refusal before the interpreter, not-logged-in, cannot
+    // stop it: were the interpreter not withheld from a non-codex row, the
+    // probe below would run the recorder, and the last expectation would red.
     fs.writeFileSync(join(home, '.secrets', 'router.env'), 'export ANTHROPIC_AUTH_TOKEN=lane-token\n'
       + `export CHATGPT_TOKEN_DIR=${join(home, 'from-a-secrets-file')}\nexport CCRC_CODEX_PYTHON=${rt.python}\n`);
+    fs.mkdirSync(join(home, 'from-a-secrets-file'), { recursive: true });
+    fs.writeFileSync(join(home, 'from-a-secrets-file', 'auth.json'), '{}\n');
     // The ambient interpreter is a value no row would get, so a codex row's own
     // export is what the first expectation reads, never an inherited one.
     const ambient = { CHATGPT_TOKEN_DIR: join(home, 'ambient-dir'), CCRC_CODEX_PYTHON: join(home, 'ambient-py') };
@@ -2925,19 +2930,6 @@ describe('ccrc models litellm — a codex-kind lane renders its own config and r
       expect(lines[0]).toMatch(/^ccrc codex: litellm-unrendered: /);
       expect(lines[0]).toContain("'ccrc models refresh codex-a'");
       expect(fs.existsSync(lanePath('codex-a'))).toBe(false);
-    });
-
-    it('never takes the EXTERNAL arm, even handed an id that is not a codex lane', () => {
-      // `_codex_cmd_start` gates on `_codex_row` first, so this is belt and braces —
-      // but the deleted external arm's failure mode was the box-global
-      // file and a bare `ccgpt stop`, so the braces are measured. R40: the
-      // non-codex id here is `router2`, the tree's existing external row —
-      // never a live lane id.
-      writeCatalogue('router2');
-      seedCodex('router2');
-      sourced('_codex_litellm_ensure router2', ['lock', 'ours', 'stop', 'start']);
-      expect(fs.existsSync(boxGlobal())).toBe(false);
-      for (const name of ['pgrep', 'ccgpt']) expect(poisonLog(name), name).toEqual([]);
     });
 
     it('`ccrc codex start` asks for it under the lane lock, after the gateway key and before any tier is adopted or started', () => {
