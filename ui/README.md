@@ -9,9 +9,11 @@ app resolves it.)
 
     cd ui && npm ci && npm run storybook      # every component, every state
 
-Storybook's toolbar carries the two things the system is actually about: the
-**theme** switch (Phosphor dark / Paper light) and the **viewport** (phone,
-tablet, desktop). The a11y addon runs axe against each story.
+Storybook's toolbar carries the things the system is actually about: the
+**theme** switch (every palette, dark and light), the **skin** switch (Refined
+and Instrument, below) and the **viewport**, whose presets are the widths
+every change is checked at: phone 360, 390 and 438, laptop 1280 and 1470, and
+wide 1920. The a11y addon runs axe against each story.
 
 ## Using it
 
@@ -50,6 +52,165 @@ Tailwind v4's namespaces first: `--text-*`, `--font-*`, `--leading-*`,
 makes `@theme inline` emit a circular reference that CSS drops — silently, in
 one theme. That is why the local families are spelled `--fs-*`, `--family-*`,
 `--lh-*`, `--ls-*`, `--elev-*` and `--curve-*`.
+
+Then check the KEY, the utility's spelling, against every namespace its
+utility reads, not just its own. `text-*` reads `--color-*` as well as
+`--text-*`, `font-*` reads `--font-weight-*` as well as `--font-*`, and `w-*`
+and `max-w-*` read Tailwind's `--container-*` beside `--spacing-*`. A key two
+of them share compiles as whichever one Tailwind tries first, with no warning.
+That is why the page title's role is `text-title` and not `text-page`: `page`
+is the page ground's colour, so `text-page` paints text in it.
+`pwa/test/skin-catalogue.test.ts` compiles every key the bridge maps, and
+every key of Tailwind's own theme, through every utility that reads it, and
+reds on a key that another namespace claims, whichever side loses.
+
+## Skins
+
+The skin is a third axis beside the palette and light/dark (D-5093):
+`data-skin` on `<html>`, `refined` or `instrument`. A skin varies density,
+structure and chrome. It never varies colour: colour is the palette's axis,
+and the contrast gate measures each palette once, for both skins.
+
+- `src/styles/skins.ts` holds the catalogue (`SKINS`), the storage key
+  (`SKIN_STORAGE_KEY`, `ccrc-skin`), the closed list of tokens a skin may
+  override (`SKIN_TOKENS`, by class), `resolveSkin` and `applySkin`.
+- `src/styles/skins.css` holds Instrument's values as
+  `:root[data-skin='instrument']` blocks. Refined is `:root` itself and has no
+  block. The selector's (0,2,0) specificity outranks every palette block, so
+  source order never decides a tie. Two rules follow from that:
+  - Every duration sits inside `@media (prefers-reduced-motion: no-preference)`,
+    because the same specificity would otherwise beat `:root`'s reduced-motion
+    block and re-animate the app.
+  - `--row-h` is 44px, and 32px only inside `@media (pointer: fine)`, so a
+    coarse pointer, or one reporting `pointer: none`, keeps the tap floor.
+- The attribute is always stamped, Refined included, unlike Phosphor's palette,
+  which is stamped by absence. The app's half is `pwa/src/lib/skin.ts`
+  (`setSkin`, `initSkin`, `useSkin`), and `pwa/index.html` stamps the stored
+  value before first paint.
+- **The roles.** `tokens.css`'s `:root` declares the type and density roles at
+  Refined's values (`--fs-ui`, `--fs-prose`, `--fs-meta`, `--fs-page`, the
+  `--*-section` set, `--gutter`, `--row-h`, `--pad-card`, `--gap-section`,
+  `--page-max`, `--page-max-wide`, `--measure-chat`). Each one chooses a step
+  from a scale, so it adds no new size. `theme.css` maps them as `text-md`
+  (the 14px scale step), `text-ui`, `text-prose`, `text-meta`, `text-title`
+  (the page title, `--fs-page`) and `text-section`, and as the spacing keys
+  `gutter`, `row`, `card` and `section` (`px-gutter`, `min-h-row`, `p-card`,
+  `gap-section`). `cn()` is taught every one of these names, or it would
+  delete the ink beside `text-meta`. A role sets the font size only: Tailwind
+  attaches no line height to a key it did not define. The page title's key is
+  `title` because `page` is already a colour (see "Adding a token").
+- **Nothing reads the roles yet.** The shared primitives adopt them in a later
+  change. Until then, Instrument differs from Refined only in radii, card
+  elevation and motion.
+
+Storybook's **Skin** toolbar applies the skin through the same `applySkin`
+the app calls, and the token reference has a **Skin roles** page that shows
+every `SKIN_TOKENS` value as the selected skin resolves it.
+
+### Axe in each skin
+
+A build opens every story in the skin named by `STORYBOOK_SKIN`, read through
+`resolveSkin`, so an unset or unknown value is Refined. CI's `storybook-a11y`
+job runs axe over the default build only, for now. To run it over every story
+in both skins locally, build twice:
+
+    npm run build-storybook -- --quiet
+    STORYBOOK_SKIN=instrument npm run build-storybook -- --quiet -o storybook-static-instrument
+
+Serve each build in the background:
+
+    ./node_modules/.bin/vite preview --outDir storybook-static --host 127.0.0.1 --port 6006 --strictPort &
+    ./node_modules/.bin/vite preview --outDir storybook-static-instrument --host 127.0.0.1 --port 6007 --strictPort &
+
+Then run the test runner once against each:
+
+    npm run test-storybook -- --maxWorkers=2 --url http://127.0.0.1:6006
+    npm run test-storybook -- --maxWorkers=2 --url http://127.0.0.1:6007
+
+The test runner drives Playwright's Chromium, which
+`./node_modules/.bin/playwright install chromium` fetches once. Stop the two
+servers when the runs finish.
+
+### Reaching Instrument before there is a picker
+
+Instrument is a preview until its shell lands, and the Settings picker comes
+later. Until the command palette offers "Switch layout", select it from the
+browser console on the app's own page, then reload:
+
+    localStorage.setItem('ccrc-skin', 'instrument')
+
+To return to the default, remove it and reload:
+
+    localStorage.removeItem('ccrc-skin')
+
+## Identity core
+
+Some things never vary between skins (D-5094, spec §3.1). A skin may change
+how dense the console is. It never changes what the console is:
+
+- **The wordmark `❯ ccrc`.** The `❯` is in `--accent`, then `ccrc` in mono at
+  medium weight, top-left in every shell.
+- **The `❯` caret** means "selected" or "acting" wherever it appears, page
+  titles included. A skin never adds a second cursor glyph.
+- **The phosphor accent** (`--accent` and its family) marks commit actions, the
+  active selection and living status, and nothing else.
+- **Glow means life.** Only `busy` and `attention` emit light, at the same
+  rhythm in both skins.
+- **Lamp dots** (`StatusDot`) pair a glyph with a word, and stay round.
+- **Dark wells.** Terminals and code sit in wells that stay dark in every
+  palette.
+- **The Geist pair** sets every glyph in both skins.
+- **Lane hues.** Each lane keeps its hue and its mono name, and never glows.
+- **The twelve palettes**, light and dark, render in both skins. A skin cannot
+  add, remove or retint one.
+- **The rule of voice.** Mono for what the machine says, sans for prose, and
+  tabular figures for readouts.
+- **The accessibility floors.** `--tap-min` (44px), `--fs-input` (16px),
+  `--fs-2xs` (11px) as the smallest type, and `prefers-reduced-motion`. Rows
+  are 44px tall unless the primary pointer is fine.
+
+`pwa/test/skin-identity.test.ts` holds the token half. Every rule is run
+against the real tree and against a planted copy, so each one is shown to
+fire. It reads `skins.css` and `tokens.css` and fails when:
+
+- a declaration in `skins.css` sits outside a `:root[data-skin='<id>']` block
+  (optionally inside `@media`), or the id is not a non-default skin in `SKINS`;
+- a declared property is not a `SKIN_TOKENS` member, or a member has no
+  default in `tokens.css`'s top-level `:root`;
+- `skins.css` holds a colour literal (hex, a colour function, a named or
+  system colour), names `currentColor`, or uses a `var()` outside its class's
+  allowlist. Elevation may name `--edge-subtle` and `--edge-strong`. Type may
+  name `--fs-*`, `--ls-*`, `--weight-*` and the two families. Density may
+  name `--sp-*`. Radius, meter and motion name nothing;
+- a type role is not `var()` of a step on its own scale, or a family role is
+  not one of the Geist pair. This is checked in `skins.css` and in Refined's
+  own `:root` values alike (D-5243);
+- a `--dur-*` sits outside `@media (prefers-reduced-motion: no-preference)`.
+  A skin block is (0,2,0) and outranks the reduced-motion `:root`;
+- a tap-bearing density token (`--row-h`) is below `--tap-min` outside
+  `@media (pointer: fine)`, in either file (D-5243);
+- a `[data-theme]` palette block declares a type, density, radius, meter or
+  motion skin token (elevation is the one shared class);
+- `skins.css` holds `!important`;
+- the contrast gate's stylesheet walk (`pwa/design/audit.mjs`) no longer lists
+  `ui/src/styles/skins.css` by that exact path.
+
+Three censuses in the same file keep the skin out of shared code:
+
+- `data-skin` appears in no stylesheet under `pwa/src` or `ui/src` but
+  `skins.css`. W2's skin stylesheets select on their own classes, never on
+  the attribute.
+- `data-skin` and `dataset.skin` appear in no source under `pwa/src`,
+  `ui/src`, `ui/.storybook` or `pwa/index.html` but `skins.ts`,
+  `pwa/src/lib/skin.ts` and `index.html`. Tests and stories are excluded.
+- `useSkin` is reached only from a file its registry lists. The registry is
+  empty until the skin picker and W2's shells add theirs.
+
+To give a skin a new token, add it to `SKIN_TOKENS` in the right class, give it
+a default in `tokens.css`'s `:root`, and only then set it in `skins.css`. If
+its class's rule does not fit the value, the value is probably a colour or a
+new size, and it belongs in a palette or on a scale instead. The element half
+of the guard, which covers the shells themselves, lands with W2.
 
 ## Hook classes
 

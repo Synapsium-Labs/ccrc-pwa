@@ -2251,7 +2251,9 @@ describe('a chip never names rows that are not on the screen', () => {
     expect(within(chip).queryByRole('button', { name: /mark all/i })).not.toBeInTheDocument();
     expect(document.activeElement).not.toBe(document.body);
     expect(document.activeElement).toBe(within(chip).getByText('Attention'));
-    expect(screen.getByRole('status')).toHaveTextContent('Attention: 2 marked seen');
+    // The bucket bar's region, named by its text: since wave 19 (D-5124) the screen has a status region of its own
+    // for the stale sentence, always mounted so an announcement lands in a live region that already exists.
+    expect(screen.getByText('Attention: 2 marked seen', { selector: '[role="status"]' })).toBeInTheDocument();
   });
 
   // Finding 4's screen-level half: the ack stamp is floored against the
@@ -3016,5 +3018,52 @@ describe('the halt on the fleet screen (programme wave 14, R15)', () => {
     act(() => { document.dispatchEvent(new Event('visibilitychange')); });
     await until(() => expect(updates).toHaveBeenCalledTimes(3));
     await until(() => expect(screen.getByRole('button', { name: 'Ack fleet' })).not.toBeDisabled());
+  });
+
+  // Centralised-update wave 19, R24(b): a later poll failed, so every update surface on the screen is showing the
+  // last answer that landed, and each says so once, in the update plane's own sentence. Assistive tech hears it once,
+  // from the screen's one status region (D-5124). A screen that never had an answer says nothing of the kind: there
+  // is no "last answer" to mark.
+  it('wave 19, R24(b): after a failed later poll every update surface says it is the last answer, once each, announced once; with no answer ever, none does', async () => {
+    const until = async (check: () => void): Promise<void> => {   // the case above says why not waitFor
+      for (let i = 0; i < 100; i++) {
+        try { check(); return; } catch { /* not yet */ }
+        await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+      }
+      check();
+    };
+    const STALE = 'The latest read failed — this is the last answer that landed.';
+    const count = (el: Element | null): number => (el?.textContent ?? '').split(STALE).length - 1;
+    const exposed = (): number => {   // text nodes carrying the sentence outside any aria-hidden subtree
+      const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      let n = 0;
+      for (let t = w.nextNode(); t !== null; t = w.nextNode()) {
+        if ((t.textContent ?? '').includes(STALE) && t.parentElement?.closest('[aria-hidden="true"]') == null) n++;
+      }
+      return n;
+    };
+    vi.spyOn(api, 'fleetHealth').mockResolvedValue({ mode: 'remote', connected: true, downSince: null, roster: 'agreed', build: 'skewed' });
+    const updates = vi.spyOn(api, 'updates')
+      .mockImplementationOnce(() => Promise.resolve(halted()))
+      .mockImplementation(() => Promise.reject(new Error('offline')));
+    render(<FleetScreen store={makeStore()} />);
+    await screen.findByRole('button', { name: 'Ack fleet' });
+    await until(() => expect(screen.getByText(/run different builds/i)).toBeInTheDocument());
+    expect(count(document.body), 'the first read landed: nothing is stale yet').toBe(0);
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+    await until(() => expect(updates).toHaveBeenCalledTimes(2));
+    await until(() => expect(count(document.querySelector('.halt-banner'))).toBe(1));
+    expect(count(document.querySelector('.banner')), 'the skew banner').toBe(1);
+    expect(count(document.querySelector('.update-banner')), 'the release banner').toBe(1);
+    expect(count(document.querySelector('.build-line')), 'the build line').toBe(1);
+    expect(count(document.body), 'four surfaces shown, and the one announcement').toBe(5);
+    expect(exposed(), 'said to assistive tech once').toBe(1);
+    expect(screen.getByText(/run different builds/i), 'and the skew arm no longer vouches for auto').toHaveTextContent('then run ccrc rollout');
+    cleanup();
+    vi.spyOn(api, 'updates').mockRejectedValue(new Error('offline'));
+    render(<FleetScreen store={makeStore()} />);
+    await until(() => expect(document.querySelector('.build-line')).not.toBeNull());
+    expect(count(document.body), 'no answer ever landed: nothing to call the last one').toBe(0);
   });
 });

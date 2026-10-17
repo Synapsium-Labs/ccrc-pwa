@@ -176,6 +176,172 @@ function fit(label, seedHex, groundHexes, floor, hint, margin = 0.15, fades = []
   return seedHex;
 }
 
+// ── the ink tiers (D-5097, D-5155) ──────────────────────────────────────────
+/** Tertiary's preferred stop: the last value at this on every ground a
+ *  neutral ink sits on — the 4.5 text floor plus a margin. */
+const TERTIARY_FLOOR = 4.9;
+/** The lowest tertiary may go, and only while the band still needs it: the
+ *  gate's own text floor (D-5155). */
+const TERTIARY_MIN = 4.5;
+/** ΔL(primary, tertiary) the QUIET tiers aim for: the gate's 0.12
+ *  (pwa/design/contrast-check.mjs) plus a margin. An aim, not a refusal —
+ *  see `inkTiers`. */
+const TIER_AIM = 0.14;
+/** The gate's tier floor. Primary moves only while the band is under it. */
+const TIER_FLOOR = 0.12;
+/** How far primary may move from the ink it was fitted to, in OKLab ΔE: one
+ *  just-noticeable difference, the JND of 0.02 that CSS Color 4's gamut
+ *  mapping uses to call two colours the same (D-5155). */
+const PRIMARY_CAP = 0.02;
+/** The pressed recipe: `--ink-primary` at this share over `--bg-surface`, in
+ *  sRGB — what `--bg-pressed` will hold (D-5101). */
+const PRESSED = 0.09;
+/** One OKLab-lightness step of the walk and the move. Finer than `fit`'s
+ *  0.004 because both END at a floor rather than merely clearing it: at 0.004
+ *  a tertiary could stop as high as 5.03 where 4.9 was the line, and that
+ *  slack is tier band thrown away. */
+const STEP = 0.001;
+
+/** The worst ratio `rgb` reaches over a set of grounds. Grounds are sRGB
+ *  triples, not hexes, so a computed ground (the pressed recipe) is measured
+ *  as the browser mixes it rather than as a rounded copy of it. */
+const worst = (rgb, grounds) => Math.min(...grounds.map((g) => ratio(rgb, g)));
+/** What will actually be written: the hex, read back. Every value the tiers
+ *  accept is measured AFTER rounding, so the file never carries a value that
+ *  only cleared its floor before it was rounded. */
+const emitted = (rgb) => hexToRgb(rgbToHex(rgb));
+const lightness = (rgb) => rgbToOklab(rgb)[0];
+/** OKLab ΔE — the distance a reader sees between two colours. */
+const deltaE = (a, b) => {
+  const [p, q] = [rgbToOklab(a), rgbToOklab(b)];
+  return Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]);
+};
+
+/** One step of a lightness walk: lightness `L` at hue `h`, carrying as much of
+ *  chroma `C` as that lightness can hold inside the sRGB gamut. Hue is always
+ *  held; chroma is held unless the gamut forbids it, and then it bleeds only as
+ *  far as this one step needs. Returns the emitted value and the share of `C`
+ *  it kept, or null past the gamut's last lightness. */
+function stepAt(L, C, h) {
+  for (let k = 25; k >= 0; k -= 1) {
+    const rgb = fromLch([L, C * (k / 25), h]);
+    if (inGamut(rgb)) return { rgb: emitted(rgb), kept: k / 25 };
+  }
+  return null;
+}
+const bleedNote = (label, kept) => {
+  if (kept < 1) NOTES.push(`${label}: lightness alone could not carry its chroma in gamut; chroma bled to ${Math.round(kept * 100)}%`);
+};
+
+/** THE THREE NEUTRAL INKS, DERIVED FROM EACH OTHER.
+ *
+ *  They used to be three `fit` calls on the SAME seed against the SAME four
+ *  grounds at the same 4.5 floor, differing only in margin. Wherever the seed
+ *  already cleared the largest margin, all three returned the seed: one ink
+ *  wearing three names, in ten of the twelve palettes (ΔL(primary, tertiary)
+ *  measured 0.000 to 0.085, against 0.294 and 0.274 for Phosphor's hand-tuned
+ *  pair).
+ *
+ *  THE BAND IS OPENED BY THE QUIET TIERS, AND PRIMARY KEEPS THE PALETTE'S OWN
+ *  INK (D-5155). Primary is what makes a palette recognisable — Nord's
+ *  #ECEFF4 is Nord — so it is the last thing that moves, and never far:
+ *
+ *    * TERTIARY walks from primary TOWARD the grounds and keeps the LAST value
+ *      at 4.9 or better on every ground a neutral ink sits on — the opposite
+ *      of `fit`, which keeps the FIRST value that clears: a quiet ink wants to
+ *      be as quiet as its floor allows. Where that leaves the band under 0.14
+ *      it walks on, toward the gate's own 4.5, and stops as soon as the band
+ *      reaches 0.14 or the floor arrives.
+ *    * PRIMARY moves only if the band is still under the GATE's 0.12, and
+ *      then only as far as reaching it takes: lightness alone, hue and chroma
+ *      held, never more than ΔEOK 0.02 from the ink it was fitted to. A step
+ *      whose chroma the gamut cannot hold ends the move rather than bleeding
+ *      it, so primary can never be carried to white or black.
+ *    * SECONDARY is their OKLab midpoint.
+ *
+ *  Where the cap binds before the band reaches 0.12 (the light palettes: their
+ *  dark ink sits low on the lightness axis, where the same contrast span is a
+ *  shorter OKLab distance), the run says so and writes — the gate is the
+ *  authority on the band, and it rules. It names two exceptions, Solarized
+ *  Light and Catppuccin Latte, held to 0.10 (D-5155); any other palette this
+ *  leaves under 0.12 reds it.
+ *
+ *  THE TERTIARY'S GROUNDS INCLUDE TWO NO TOKEN NAMES YET: the accent tint (the
+ *  selected fleet row's ground once the reverse-video slab goes) and the
+ *  pressed recipe, primary at 9% over surface in sRGB — the value
+ *  `--bg-pressed` will hold (D-5101). The gate adds the neutral inks on both
+ *  AFTER this lands, so the walk holds them from the start: walked on the four
+ *  card grounds alone, tertiary measured as low as 4.44 on the tint (Tokyo
+ *  Night and Gruvbox Dark) and 4.32 on the pressed recipe (Tokyo Night;
+ *  GitHub Light 4.38). The pressed recipe moves with primary, which is why
+ *  tertiary is re-walked for every primary the move tries. It also bounds the
+ *  hover recipe (5%): the mix moves the ground monotonically toward the ink,
+ *  so a tertiary that clears 9% clears 5%.
+ *
+ *  Refusals, not warnings: a quiet tier under the text floor is UNREACHABLE,
+ *  and nothing is written. */
+function inkTiers(name, fittedHex, cardGrounds, tint, surface, dark) {
+  const away = dark ? +1 : -1;
+  const fitted = hexToRgb(fittedHex);
+  const [L0, C, h] = toLch(fitted);
+  const pressedOver = (p) => [0, 1, 2].map((i) => p[i] * PRESSED + surface[i] * (1 - PRESSED));
+  const neutralFor = (p) => [...cardGrounds, tint, pressedOver(p)];
+  const band = (p, t) => Math.abs(lightness(p) - lightness(t));
+  const tertiaryFor = (p) => {
+    const grounds = neutralFor(p);
+    const [Lp, Cp, hp] = toLch(p);
+    let last = { rgb: p, kept: 1 };
+    for (let i = 1; i <= 1000; i += 1) {
+      const step = stepAt(Lp - away * i * STEP, Cp, hp);
+      if (step === null) break;
+      const w = worst(step.rgb, grounds);
+      if (w < TERTIARY_MIN) break;
+      // Past 4.9 only while the band still needs it.
+      if (w < TERTIARY_FLOOR && band(p, last.rgb) >= TIER_AIM) break;
+      last = step;
+    }
+    return last;
+  };
+
+  let primary = fitted;
+  let tertiary = tertiaryFor(fitted);
+  let capped = false;
+  for (let i = 1; i <= 1000 && band(primary, tertiary.rgb) < TIER_FLOOR; i += 1) {
+    const step = stepAt(L0 + away * i * STEP, C, h);
+    if (step === null || step.kept < 1) break;
+    if (deltaE(step.rgb, fitted) > PRIMARY_CAP) { capped = true; break; }
+    primary = step.rgb;
+    tertiary = tertiaryFor(primary);
+  }
+  const P = rgbToOklab(primary);
+  const T = rgbToOklab(tertiary.rgb);
+  const secondary = emitted(oklabToRgb([0, 1, 2].map((i) => (P[i] + T[i]) / 2)));
+  const dL = Math.abs(P[0] - T[0]);
+
+  bleedNote(`${name} ink-tertiary`, tertiary.kept);
+  const moved = deltaE(primary, fitted);
+  if (moved > 0) {
+    NOTES.push(`${name} ink-primary: moved ΔEOK ${moved.toFixed(3)} (cap ${PRIMARY_CAP}) for the gate's ΔL ${TIER_FLOOR}`);
+  }
+  const neutral = neutralFor(primary);
+  const tRatio = worst(tertiary.rgb, neutral);
+  if (tRatio < TERTIARY_FLOOR) {
+    NOTES.push(`${name} ink-tertiary: walked past ${TERTIARY_FLOOR} to ${tRatio.toFixed(2)}:1 on its worst ground for the band`);
+  }
+  if (dL < TIER_FLOOR) {
+    NOTES.push(`${name} ink tiers: ΔL(primary, tertiary) ${dL.toFixed(3)}, under the gate's ${TIER_FLOOR}: `
+      + `${capped ? `primary's ΔEOK ${PRIMARY_CAP} cap` : 'the gamut'} bound first, with tertiary at ${tRatio.toFixed(2)}:1 — the gate rules`);
+  }
+  if (tRatio < TERTIARY_MIN) {
+    UNREACHABLE.push(`${name} ink-tertiary: ${tRatio.toFixed(2)}:1 on its worst ground, under ${TERTIARY_MIN}`);
+  }
+  const sRatio = worst(secondary, neutral);
+  if (sRatio < TERTIARY_MIN) {
+    UNREACHABLE.push(`${name} ink-secondary: the tiers' midpoint reads ${sRatio.toFixed(2)}:1, under ${TERTIARY_MIN}`);
+  }
+  return { primary: rgbToHex(primary), secondary: rgbToHex(secondary), tertiary: rgbToHex(tertiary.rgb) };
+}
+
 // ── the seeds ───────────────────────────────────────────────────────────────
 // Each entry is the published palette's own colours. `dark` decides which way
 // legibility lies. `well` is the terminal glass: ALWAYS dark, in every theme,
@@ -277,27 +443,17 @@ function build(seed) {
     return rgbToHex(fromLch([dark ? L + amount : L - amount, C, h]));
   };
   t['--edge-subtle'] = edge(0.05);
-  // (Fitted against `ink` deliberately: `--ink-primary` is not assigned yet at
-  // this point, and it is re-fitted twice below, so reading it here would bind
-  // to a ground that then moves. `ink` is the seed both derive from.)
-  // `--edge-strong` is ALSO the INK of the inverted active row, where
-  // `--ink-primary` is the background (`.sess-line--active .sess-meta` and its
-  // twenty siblings, fleet.css). It is a hairline token being read as text, so
-  // it owes the TEXT floor of 4.5 there — not the 3:1 a border would. Fitting
-  // it at 3 left four palettes between 3.89 and 4.47: close enough to look
-  // deliberate, and wrong.
-  t['--edge-strong'] = fit(`${name} edge-strong`, edge(0.12),
-    [ink], 4.5, dark ? 'down' : 'up', 0.2);
-
-  t['--ink-primary']   = fit(`${name} ink-primary`, ink, grounds, 4.5, up, 2.0);
-  t['--ink-secondary'] = fit(`${name} ink-secondary`, ink, grounds, 4.5, up, 1.2);
-  t['--ink-tertiary']  = fit(`${name} ink-tertiary`, ink, grounds, 4.5, up, 0.35);
-  // Disabled is deliberately sub-AA and WCAG-exempt (inactive controls), so it
-  // is the one ink that is NOT fitted — it is a step toward the ground.
-  {
-    const [L, C, h] = toLch(hexToRgb(t['--ink-tertiary']));
-    t['--ink-disabled'] = rgbToHex(fromLch([dark ? L - 0.14 : L + 0.14, C, h]));
-  }
+  // SLOTS. A block lists its tokens in the order they were first assigned, and
+  // these four are derived from values that do not exist yet: `--edge-strong`
+  // from the FINAL primary, and the three quieter inks from a primary that is
+  // re-fitted against the accent tint and may then move (D-5155), both below. Their
+  // places are reserved here so the emitted block keeps the order a reader
+  // scans it in; the emitter refuses a slot left unfilled.
+  t['--edge-strong'] = null;
+  t['--ink-primary'] = fit(`${name} ink-primary`, ink, grounds, 4.5, up, 2.0);
+  t['--ink-secondary'] = null;
+  t['--ink-tertiary'] = null;
+  t['--ink-disabled'] = null;
   // The well is dark in EVERY theme, so its ink always lightens.
   t['--ink-on-well'] = fit(`${name} ink-on-well`, ink, [well], 4.5, 'up', 2.0);
 
@@ -338,6 +494,35 @@ function build(seed) {
     [t['--accent']], 4.5, dark ? 'down' : 'up', 0.3);
   t['--ink-primary'] = fit(`${name} ink-primary (+tint)`, t['--ink-primary'],
     [...grounds, t['--accent-tint']], 4.5, up, 1.4);
+
+  // THE INK TIERS (D-5097, D-5155): tertiary walked from primary to the
+  // grounds a neutral ink sits on, secondary between, and primary held to the
+  // palette's own ink — see `inkTiers`.
+  {
+    const tiers = inkTiers(name, t['--ink-primary'], grounds.map(hexToRgb),
+      hexToRgb(t['--accent-tint']), hexToRgb(surface), dark);
+    t['--ink-primary'] = tiers.primary;
+    t['--ink-secondary'] = tiers.secondary;
+    t['--ink-tertiary'] = tiers.tertiary;
+  }
+  // Disabled is deliberately sub-AA and WCAG-exempt (inactive controls), so it
+  // is the one ink that is NOT fitted — it is a step toward the ground.
+  {
+    const [L, C, h] = toLch(hexToRgb(t['--ink-tertiary']));
+    t['--ink-disabled'] = rgbToHex(fromLch([dark ? L - 0.14 : L + 0.14, C, h]));
+  }
+  // `--edge-strong` is ALSO the INK of the inverted active row, where
+  // `--ink-primary` is the background (`.sess-line--active .sess-meta` and its
+  // twenty siblings, fleet.css). It is a hairline token being read as text, so
+  // it owes the TEXT floor of 4.5 there — not the 3:1 a border would. Fitting
+  // it at 3 left four palettes between 3.89 and 4.47: close enough to look
+  // deliberate, and wrong. It is fitted against the FINAL primary — the ground
+  // it is actually read on — and not the seed `ink`, which both fits above and
+  // the tiers can move primary away from: fitted to the seed, it was pushed
+  // further than the real ground needs (pwa/test/ink-tiers.test.ts replays it).
+  t['--edge-strong'] = fit(`${name} edge-strong`, edge(0.12),
+    [t['--ink-primary']], 4.5, dark ? 'down' : 'up', 0.2);
+
   t['--accent-on-well'] = fit(`${name} accent-on-well`, accent, [well], 4.5, 'up', 0.8);
 
   // Status: the DOT is a 3:1 non-text mark on surface / page / well; the TEXT
@@ -428,6 +613,12 @@ const END = '/* === END GENERATED THEMES === */';
 
 const blocks = SEEDS.map((seed) => {
   const t = build(seed);
+  // A slot reserved in `build` and never filled would print as `null;` — a
+  // declaration the browser drops, so the token silently falls through to
+  // `:root`'s Phosphor value. Refused, not written.
+  for (const [k, v] of Object.entries(t)) {
+    if (v === null || v === undefined) throw new Error(`${seed.name}: ${k} was reserved and never derived`);
+  }
   const body = Object.entries(t)
     .map(([k, v]) => `  ${k}:${' '.repeat(Math.max(1, 26 - k.length))}${v};`)
     .join('\n');
