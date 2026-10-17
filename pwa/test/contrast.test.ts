@@ -266,6 +266,7 @@ const GRANDFATHERED_UNCOVERED = new Set([
   '.sys-divider--restart',
   '.sys-divider--stalled',
   '.sys-divider--limit',
+  '.sys-divider--idle',
   '.msg-receipt',
   '.msg-receipt--ok b',
   '.msg-receipt--failed',

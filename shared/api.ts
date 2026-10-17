@@ -4057,7 +4057,26 @@ export interface SlashCommand {
  *  ignores it, an older writer omits it.
  *  'limit' — the assistant row Claude Code appends on a 429
  *  (`isApiErrorMessage:true, error:"rate_limit"`; D-2365). */
-export type SystemOrigin = 'resume-prompt' | 'no-response' | 'limit';
+export type SystemOrigin = 'resume-prompt' | 'no-response' | 'limit' | 'idle-compact';
+/** `idle-compact-marker` (D-5371): the notice Claude Code writes after its
+ *  idle ("sleep") compaction — a `type:"system"`, `subtype:"informational"`
+ *  row whose TOP-LEVEL `content` is one of these sentences (Claude Code
+ *  2.1.302, `igs`/`ags`), followed by a no-break space and "turn off with
+ *  "idleCompaction": false in settings.json". That compaction runs only on a
+ *  turn that had already ended and starts none, so the row is what says the
+ *  session is waiting for the operator rather than stalled (110 of 111
+ *  measured post-compaction "stalls", 2026-10-17). The parser matches the
+ *  prefix; a reworded notice degrades to today's drop, never to a false pill. */
+/** `stale-task-strip` (D-5372): a task list whose newest file is older than
+ *  this is a plan left open, not running work — the strip says "N open" and
+ *  "Plan · untouched <age>" rather than "N running". Claude Code rewrites a task
+ *  file on every status change, so a live plan is seconds or minutes old; 6 h
+ *  outlasts any one turn measured. */
+export const TASKS_STALE_MS = 6 * 60 * 60 * 1000;
+export const IDLE_COMPACT_NOTICE_PREFIXES = [
+  'Compacted while idle',
+  'Compacted after an hour idle',
+] as const;
 /** The sentence Claude Code's default resume prompt is, and every variant —
  *  including ccd's RESUME_PROMPT — begins with. The parser matches the prefix. */
 export const RESUME_PROMPT_PREFIX = 'Continue from where you left off.';
@@ -4288,7 +4307,11 @@ export type SessionStreamMsg =
    *  when both are present. */
   | { type: 'ask'; ask: HookAsk; key: string | null }   // key: answerable via POST /api/sessions/:id/ask; null for approval envelopes
   | { type: 'ask_cleared' }                       // the hook's ask went null, stale, or its hookstate file is gone
-  | { type: 'tasks'; tasks: TaskItem[] }          // the session's task list changed (or first read)
+  | { type: 'tasks'; tasks: TaskItem[];          // the session's task list changed (or first read)
+      /** D-5372: the newest task file `mtimeMs`, epoch ms. OPTIONAL: absent when
+       *  the list has no open item, no stat answered, or the server is older;
+       *  absence renders the strip as it always did. */
+      touchedAt?: number }
   /** This session's own OUTSTANDING mail — `state` restricted server-side to
    *  `queued` or `delivered`, never `acked`/`rejected` (`sessionws.ts`'s
    *  `checkMail`). Read directly off `CoordStore.outstandingMailFor` in-process,

@@ -4,8 +4,9 @@ import { SessionScreen } from '../src/screens/SessionScreen';
 import { createSessionStore } from '../src/stores/session';
 import { TaskStrip, orderTasks, summarize } from '@ccrc/ui';
 import { applySessionMsg } from '../src/stores/session';
+import { staleFor } from '../src/session/taskStaleness';
 import type { SessionSnapshot } from '../src/stores/session';
-import type { TaskItem } from '../../shared/api';
+import { TASKS_STALE_MS, type TaskItem } from '../../shared/api';
 
 afterEach(() => {
   cleanup();
@@ -77,6 +78,55 @@ describe('TaskStrip', () => {
   });
 });
 
+// D-5372: a list untouched for longer than TASKS_STALE_MS is a plan the model
+// left open, not running work. The measured shape: 22 tasks, 17 completed,
+// 4 in_progress, 1 pending, the files last written three days earlier.
+describe('TaskStrip — a stale list is a plan, not running work (D-5372)', () => {
+  const STALE_PLAN: TaskItem[] = [
+    ...Array.from({ length: 17 }, (_, i) => task(String(i + 1), `step ${i + 1}`, 'completed')),
+    ...Array.from({ length: 4 }, (_, i) => task(String(i + 18), `step ${i + 18}`, 'in_progress', `Doing step ${i + 18}`)),
+    task('22', 'step 22', 'pending'),
+  ];
+  const HOUR = 60 * 60 * 1000;
+
+  it('three days untouched: "4 open", the headline names the age, no running mark', () => {
+    const { container } = render(<TaskStrip tasks={STALE_PLAN} untouchedFor={72 * HOUR} />);
+    expect(screen.getByText('4 open \u00b7 1 left \u00b7 17 \u2713')).toBeTruthy();
+    expect(screen.getByText('Plan \u00b7 untouched 3d')).toBeTruthy();
+    expect(screen.queryByText('Doing step 18')).toBeNull();
+    expect(container.querySelector('.task-mark--running')).toBeNull();
+    expect(screen.getByText('17/22')).toBeTruthy();
+  });
+  it('hours are named in hours below a day', () => {
+    render(<TaskStrip tasks={STALE_PLAN} untouchedFor={7 * HOUR + 59 * 60 * 1000} />);
+    expect(screen.getByText('Plan \u00b7 untouched 7h')).toBeTruthy();
+  });
+  it('untouchedFor absent renders as today — the running activeForm, "4 running", the running mark', () => {
+    const { container } = render(<TaskStrip tasks={STALE_PLAN} />);
+    expect(screen.getByText('Doing step 18')).toBeTruthy();
+    expect(screen.getByText('4 running \u00b7 1 left \u00b7 17 \u2713')).toBeTruthy();
+    expect(container.querySelector('.task-mark--running')).not.toBeNull();
+  });
+  it('summarize names in_progress as open when asked to', () => {
+    expect(summarize(STALE_PLAN, { stale: true })).toBe('4 open \u00b7 1 left \u00b7 17 \u2713');
+    expect(summarize(STALE_PLAN)).toBe('4 running \u00b7 1 left \u00b7 17 \u2713');
+  });
+});
+
+describe('staleFor — the one reader of TASKS_STALE_MS (D-5372)', () => {
+  const NOW = Date.parse('2026-10-17T20:30:00Z');
+  it('older than the threshold answers the age; at it, or younger, or absent, undefined', () => {
+    expect(staleFor(NOW - 3 * 24 * 60 * 60 * 1000, NOW)).toBe(3 * 24 * 60 * 60 * 1000);
+    expect(staleFor(NOW - TASKS_STALE_MS - 1, NOW)).toBe(TASKS_STALE_MS + 1);
+    expect(staleFor(NOW - TASKS_STALE_MS, NOW)).toBeUndefined();
+    expect(staleFor(NOW - 5 * 60 * 1000, NOW)).toBeUndefined();
+    expect(staleFor(undefined, NOW)).toBeUndefined();
+  });
+  it('the threshold is six hours', () => {
+    expect(TASKS_STALE_MS).toBe(6 * 60 * 60 * 1000);
+  });
+});
+
 describe('session reducer — tasks', () => {
   const snap = (): SessionSnapshot => ({
     events: [], offset: 0, uuid: null, status: null, statusUpdatedAt: null,
@@ -88,6 +138,12 @@ describe('session reducer — tasks', () => {
     const s = applySessionMsg(snap(), { type: 'tasks', tasks: PLAN });
     expect(s.tasks).toHaveLength(5);
     expect(applySessionMsg(s, { type: 'tasks', tasks: [] }).tasks).toEqual([]);
+  });
+
+  it('keeps the frame\'s touchedAt (D-5372), and a frame without one clears it', () => {
+    const s = applySessionMsg(snap(), { type: 'tasks', tasks: PLAN, touchedAt: 1760000000000 });
+    expect(s.tasksTouchedAt).toBe(1760000000000);
+    expect(applySessionMsg(s, { type: 'tasks', tasks: PLAN }).tasksTouchedAt).toBeUndefined();
   });
 
   it('keeps the plan across a transcript rotation — a compaction does not clear it', () => {
@@ -115,5 +171,18 @@ describe('SessionScreen shows the plan', () => {
     expect(screen.getByText('2/5')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { expanded: false }));
     expect(screen.getByText('Task 1: least-priv CH user')).toBeTruthy();
+  });
+  it('a frame whose touchedAt is days old paints the plan headline (D-5372)', () => {
+    const store = createSessionStore('claude:demo', {
+      makeSocket: () => ({ onopen: null, onmessage: null, onclose: null, onerror: null, close() {} }) as unknown as WebSocket,
+      api: { prompt: async () => {} },
+    });
+    act(() => {
+      store.getState().apply({ type: 'backlog', uuid: 'u1', events: [], offset: 0, file: '/t.jsonl', missing: false });
+      store.getState().apply({ type: 'tasks', tasks: PLAN, touchedAt: Date.now() - 3 * 24 * 60 * 60 * 1000 });
+    });
+    render(<SessionScreen id="claude:demo" store={store} />);
+    expect(screen.getByText('Plan \u00b7 untouched 3d')).toBeTruthy();
+    expect(screen.queryByText('Building claude_spend_reader')).toBeNull();
   });
 });

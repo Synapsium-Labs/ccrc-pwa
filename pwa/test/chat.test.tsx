@@ -7,6 +7,7 @@ import type { ReactNode } from 'react';
 import { createSessionStore, type SessionStore } from '../src/stores/session';
 import { ChatListInner } from '../src/session/ChatList';
 import { buildChatItems } from '../src/session/chatItems';
+import { foldsAway } from '../src/session/MessageBubble';
 import { Composer } from '../src/session/Composer';
 import { loadAcks } from '../src/lib/seen';
 import { SessionScreen } from '../src/screens/SessionScreen';
@@ -810,6 +811,34 @@ describe('a usage limit reads as a harness line, not a reply (D-2366)', () => {
   it('without resetsAt: the sentence itself, still a limit line', () => {
     const { container } = render(<ChatListInner id="s" events={[limit()]} pending={[]} />);
     expect(container.querySelector('.sys-divider--limit')!.textContent).toBe(`usage limit · ${SENTENCE}`);
+  });
+});
+
+// D-5371: after Claude Code's idle compaction the chat's last item was the
+// folded recap, whose text says "Continue the conversation from where it left
+// off" — read as a stall. The notice row the parser now keeps says the truth.
+describe('an idle compaction reads as waiting for you, not as a stall (D-5371)', () => {
+  const NOTICE = 'Compacted while idle, before the prompt cache expired · turn off with "idleCompaction": false in settings.json';
+  const RECAP = 'This session is being continued from a previous conversation that ran out of context.\n\nSummary:\nthe things\n\nContinue the conversation from where it left off without asking the user any further questions.';
+  const events: ChatEvent[] = [
+    { kind: 'assistant', uuid: 'a1', ts: '2026-10-17T17:43:12.000Z', text: 'Here is the third question.' },
+    { kind: 'user', uuid: 's1', ts: '2026-10-17T18:37:58.500Z', text: RECAP },
+    { kind: 'system', uuid: 'n1', ts: '2026-10-17T18:37:59.980Z', text: NOTICE, origin: 'idle-compact' },
+  ];
+  it('the folded recap, then the pill — the pill is the last row, CC\'s sentence as its tooltip', () => {
+    const { container } = render(<ChatListInner id="s" events={events} pending={[]} />);
+    const pill = container.querySelector('.sys-divider--idle');
+    expect(pill).not.toBeNull();
+    expect(pill!.textContent).toBe('compacted while idle · nothing was running — waiting for you');
+    expect(pill!.getAttribute('title')).toBe(NOTICE);
+    const recap = container.querySelector('.compaction');
+    expect(recap).not.toBeNull();
+    // document order: the recap card comes before the pill
+    expect(recap!.compareDocumentPosition(pill!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(container.querySelector('.msg-user')).toBeNull();
+  });
+  it('the pill never folds, whatever its text', () => {
+    expect(foldsAway(events[2] as Extract<ChatEvent, { kind: 'system' }>)).toBe(false);
   });
 });
 

@@ -188,6 +188,17 @@ export function MessageBubble({
         </p>
       );
     }
+    if (event.origin === 'idle-compact') {
+      // D-5371: Claude Code's idle compaction ran on a turn that had already
+      // ended and started none. Without this pill the chat's last item is the
+      // recap whose text says "continue where it left off", which read as a
+      // stall. Claude Code's own sentence (and its off switch) is the tooltip.
+      return (
+        <p className="sys-divider sys-divider--idle" title={event.text}>
+          compacted while idle · nothing was running — waiting for you
+        </p>
+      );
+    }
     // A system row whose text runs to more than ONE LINE cannot be told by the
     // pill below, and the pill does not fail loudly — it lies quietly.
     // `.sys-divider` declares no `white-space`, so every newline COLLAPSES into
