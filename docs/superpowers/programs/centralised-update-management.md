@@ -1813,6 +1813,11 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     - **2026-10-17 17:58 UTC:** v0.0.228 released at 17:38:41 (#497) and stays unapplied under `auto=stable`.
       STATUS: fleet and server v0.0.226, newest v0.0.228, intent dev/auto=stable, backups fleet 175M/server 801M,
       disk free fleet 214G/work volume 108G/server 32G, no anomalies.
+    - **2026-10-17 18:58 UTC:** v0.0.229 (17:59, #505), v0.0.230 (18:10, #499), v0.0.231 (18:26, #502) and
+      v0.0.232 (18:50, #498) released and stay unapplied under `auto=stable`. #498 adds one `SERVER_CAPS` case to
+      `dispatch-live-gate.test.ts`; #444 still merges clean (measured). STATUS: fleet and server v0.0.226, newest
+      v0.0.232, intent dev/auto=stable, backups fleet 175M/server 801M, disk free fleet 214G/work volume 87G/server
+      32G, no anomalies.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
