@@ -93,7 +93,7 @@ import {
  *  redirection, which keeps bash from exec'ing `cat` in the substitution's own child, so it was two processes
  *  (measured on bash 5.3 with a logging `cat`, xtrace off). So execs fall by the reads that found a field, and forks by
  *  those plus the `_reg_read` reads among them (4 on most fixtures, 6 on hard-blocked, 3 on cooldown, none on
- *  narrow). The plan's model was about -15 `cat` execs per tick [I]; measured -11 to -19. Before -> after:
+ *  narrow). The plan's model was about -15 `cat` execs per tick [I]; measured -11 to -19 (D-5271). Before -> after:
  *    idle-home 128/46 -> 111/33 · busy 125/45 -> 109/33 · narrow 75/28 -> 64/17 · away-over-ceiling 128/46 -> 111/33 ·
  *    hard-blocked 172/56 -> 147/37 · cooldown 97/36 -> 82/24 · fable 130/47 -> 113/34 · leaving 151/56 -> 134/43 ·
  *    fable-leaving 159/60 -> 142/47.
@@ -112,14 +112,14 @@ import {
  *    hard-blocked 147/37 -> 142/37 · cooldown 82/24 -> 78/24 · fable 113/34 -> 106/34 · leaving 134/43 -> 127/43 ·
  *    fable-leaving 142/47 -> 135/47.
  *
- *  LOWERED BY W3 Task 15 (D-4963, the route chain through out-vars and `_swap_target`'s class peek; macOS bash 5.3
- *  and Linux bash 5.2 print the same table, ticks 1-4 included): every fixture plants a route record that is fully
+ *  LOWERED BY W3 Task 15 (D-4963, the route chain through out-vars and `_swap_target`'s class peek; macOS bash 5.3,
+ *  ticks 1-4 included; Linux not re-run for this task): every fixture plants a route record that is fully
  *  applied, so each steady tick walks `_route_apply_pending`'s whole chain. It nested 15 subshells; 4 remain, one per
  *  `_route_peek_to` read (`class`, `degraded`, `effort`, `inert`), whose own `$(_reg_get …)` stays a capture because
- *  `ccd-crosspool` enumerates that rc reader by its text. So the chain is -11 forks on every fixture, and
- *  `_swap_target`'s class peek, `$(_route_peek …)` around its own capture, is -1 per call: one call per steady tick
- *  on idle-home, busy, away-over-ceiling, fable, leaving and fable-leaving, two on hard-blocked, none on narrow or
- *  cooldown. Execs do not move (Task 13 took the `cat`s). Before -> after:
+ *  `ccd-crosspool` enumerates that rc reader by its text (D-5269). So the chain is -11 forks on every fixture (the
+ *  plan's -15: D-5271), and `_swap_target`'s class peek, `$(_route_peek …)` around its own capture, is -1 per call:
+ *  one call per steady tick on idle-home, busy, away-over-ceiling, fable, leaving and fable-leaving, two on
+ *  hard-blocked, none on narrow or cooldown. Execs do not move (Task 13 took the `cat`s). Before -> after:
  *    idle-home 104/33 -> 92/33 · busy 104/33 -> 92/33 · narrow 62/17 -> 51/17 · away-over-ceiling 104/33 -> 92/33 ·
  *    hard-blocked 142/37 -> 129/37 · cooldown 78/24 -> 67/24 · fable 106/34 -> 94/34 · leaving 127/43 -> 115/43 ·
  *    fable-leaving 135/47 -> 123/47.

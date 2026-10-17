@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=08dedfdd1a789f4899fef9db24991bb35b2da7422383b42462aeb77288916d7e
+# ccrc:generated 1 sha256=29541c4924d71b2daf75530284a7a4b82dd5df8eb0cc4f313c63516a744e12e6
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -3130,7 +3130,7 @@ _reg_set() {   # id field value -> 0 iff the value is on disk under its own name
 # diverging from a pattern this tree names as doctrine. The divergence is
 # written down here rather than discovered later, and it is now written down
 # at its real price.
-_reg_get() { [[ -f "$REG/$1.$2" && ! -L "$REG/$1.$2" ]] || return 1; local __rg_v; _file_read_to __rg_v "$REG/$1.$2" || return $?; printf '%s' "$__rg_v"; }   # id field
+_reg_get() { [[ -f "$REG/$1.$2" && ! -L "$REG/$1.$2" ]] || return 1; local __rg_v; _file_read_to __rg_v "$REG/$1.$2" || return $?; printf '%s' "$__rg_v"; }   # id field (D-5267: the guard stays at this line's head)
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
@@ -24432,7 +24432,7 @@ _share_pct_to() {   # var wrapper -> var and rc as `v=$(_share_pct w); rc=$?` le
 #  - the open failed (the redirection failed, so the group never ran): rc 1 and an empty var.
 #    That is the unreadable rung: `_reg_get` answers rc 1, as the failed `cat` did, and
 #    `_reg_read_to`'s unchanged ladder answers 2, or 1 for a field that vanished.
-#  - a NUL: the legacy `cat`, whose NULs `$( )` drops with bash's warning, as it always did.
+#  - a NUL: the legacy `cat`, whose NULs `$( )` drops with bash's warning, as it always did (in the C scope: D-5268).
 # The read runs under a scoped `LC_ALL=C`: under a UTF-8 locale bash 5.x misses a NUL that
 # follows a lead byte in `read -d ''` (D-3833, D-3979; platform-hazards R14(i)).
 # THE TYPE CHECKS STAY THE CALLERS', AND COME FIRST: `_reg_get` and `_reg_get_to` require a
@@ -24442,12 +24442,12 @@ _share_pct_to() {   # var wrapper -> var and rc as `v=$(_share_pct w); rc=$?` le
 # `read`, which fails on one the way it meets EOF. The comments inside `_reg_read_to` still
 # say `cat`: the open they argue about is `_file_read_to`'s now, at the same place and in
 # the same order.
-# `_reg_get` keeps its own line, with its guard at the head of it, a direct path test and
+# `_reg_get` keeps its own line, with its guard at the head of it (D-5267), a direct path test and
 # never a listing (ccd-collect-recycle-pins pins that text), and then reads through
 # `_file_read_to`; `_reg_get_to` asks the same guard for the out-var form. `_reg_get` prints
 # what `$( )` leaves, so a field that ends in newlines or holds a NUL no longer prints its
 # raw bytes. Every call site in this file captures it with `$( )`, which drops both: the
-# equivalence suite's E8d holds that census, and its E8f states the edge.
+# equivalence suite's E8d holds that census, and its E8f states the edge (D-5268).
 # `_reg_get_to` and `_reg_read_to` are the out-var forms the tick's hot reads call.
 _file_read_to() {   # var path -> rc 0: var = the bytes `$(cat path)` gives | 1: the open failed (var empty). LC_ALL=C:
   # under UTF-8, bash 5.x misses a NUL after a lead byte in `read -d ''` (D-3833/D-3979, platform-hazards R14(i)).
@@ -24482,13 +24482,13 @@ _reg_read() { local __rrw_v __rrw_rc; _reg_read_to __rrw_v "$@"; __rrw_rc=$?; pr
 #    `BASH_REMATCH`; no caller of these forms reads it after the call (W3's audit).
 # `_route_effort_for_to`'s non-quiet arm keeps its `$(_route_get …)`: its journal lines and floor markers are the
 # settle's, and only the quiet arm, the tick's, is converted. `_route_peek_to` keeps its own read as a captured
-# `_reg_get`, `|| return 0` on the rc: that rc reader is one of the two that `ccd-crosspool` enumerates by text.
+# `_reg_get`, `|| return 0` on the rc: that rc reader is one of the two that `ccd-crosspool` enumerates by text (D-5269).
 _route_peek() { local __w; _route_peek_to __w "$@"; printf '%s' "$__w"; return 0; }
 _route_applied_get() { local __w; _route_applied_get_to __w "$@"; printf '%s' "$__w"; return 0; }
 _route_effort_for() { local __w; _route_effort_for_to __w "$@"; printf '%s' "$__w"; return 0; }
 _route_wanted() { local __w; _route_wanted_to __w "$@"; printf '%s' "$__w"; return 0; }
 _route_pending_word() { local __w; _route_pending_word_to __w "$@"; printf '%s' "$__w"; return 0; }
-# D-4963 (tick-diet spec §6.4): the printing form of the home read, renamed in place as its out-var form above.
+# D-4963 (tick-diet spec §6.4): the printing form of the home read, renamed in place as its out-var form above (D-5270: raw stdout drops the fallback's newline).
 _home_measured() { local __hmw_v __hmw_rc; _home_measured_to __hmw_v "$@"; __hmw_rc=$?; printf '%s' "$__hmw_v"; return "$__hmw_rc"; }
 
 cmd_supervise() {   # systemd ExecStart: ensure then block until the session dies

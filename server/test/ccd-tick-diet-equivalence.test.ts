@@ -1780,7 +1780,7 @@ const regRow = (id: string): FileRow => {
  *  - `_reg_read`'s RAW stdout: its legacy body already printed `$(cat)`'s value, so its printing contract is raw;
  *  - `_reg_read_to` into `rv`, set to `__P` first. NOT into `v`: `_reg_read_to` is `_reg_read` renamed in place, and
  *    keeps its legacy locals `f` and `v` (plan §Interfaces), so `v` is a name it would catch in its own local and the
- *    caller's `v` would keep `__P` (measured; E8g holds the census that forbids it). */
+ *    caller's `v` would keep `__P` (measured; E8g holds the census that forbids it; D-5268). */
 const rg4 = (get: string, getTo: string, read: string, readTo: string): string => [
   '__rg4() {',
   '  local r rv',
@@ -1807,7 +1807,7 @@ const VANISH_LIVE = [
   'fi',
 ].join('\n');
 
-/** The rows whose `_reg_get` RAW stdout differs from the legacy `cat`'s (E8f): a readable regular field that ends in
+/** The rows whose `_reg_get` RAW stdout differs from the legacy `cat`'s (E8f, D-5268): a readable regular field that ends in
  *  a newline or holds a NUL. `$( )` drops both, every call site reads through one (E8d), and the printing form prints
  *  what `$( )` leaves. */
 const rawGetDiverges = (r: FileRow): boolean =>
@@ -2226,7 +2226,8 @@ function w3HomeRows(): { home: Row[]; named: Row[]; raw: DomainRow[]; authdead: 
 }
 
 /** Every call to the printing `_home_measured` in `src`'s code that is NOT the first word of a command substitution,
- *  as `line: text` — E8d's census (`rawRegGetCalls`) for this name: such a caller would see E10c's raw-stdout edge. */
+ *  as `line: text` — E8d's census (`rawRegGetCalls`) for this name: such a caller would see E10c's raw-stdout edge
+ *  (D-5270). */
 function rawHomeMeasuredCalls(src: string): string[] {
   const out: string[] = [];
   stripShellComments(src).split('\n').forEach((l, i) => {
