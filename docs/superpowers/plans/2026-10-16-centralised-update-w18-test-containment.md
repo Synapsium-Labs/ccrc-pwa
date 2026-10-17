@@ -628,10 +628,10 @@ diff --git a/server/test/ccdWsHelpers.ts b/server/test/ccdWsHelpers.ts
   |---|---|---|
   | T1-1 | the creation site asks `{ systemd, tmux }` (drops `net`) | H18-1 only. [prototype: H18-1 only, 1 of 23: "expected [ Array(5) ] to deeply equal [ 'curl', 'gh', 'launchctl', …(5) ]"] |
   | T1-2 | `env()` asks `{ systemd, tmux }` (drops `net`) | H18-4 only: H18-3 stays green, because the creation site planted the poison. [prototype: H18-4 only, 1 of 23: "expected '/usr/bin/ssh' to be '<home>/.local/bin/ssh'"] |
-  | T1-3 | the bus keyed on a flag nobody sets (`opts.systemd && false`) | H18-2 ("assertNoRealTool: XDG_RUNTIME_…"), H18-6, H18-7 (its managers case), H18-8 (its half case) |
-  | T1-4 | `return { ...bus, ...env, PATH … }` (the caller's env wins) | H18-2 (the inherited real pair wins), H18-6, H18-7 (managers case), H18-8 (half case). [prototype, as `bus`: H18-2, H18-6, H18-7, 3 of 23] |
+  | T1-3 | the bus keyed on a flag nobody sets (`opts.systemd && false`) | H18-2 ("assertNoRealTool: XDG_RUNTIME_…"), H18-6, H18-7 (its managers case), H18-8 (its half case), H18-10, H18-11: 6 of 27 *(worker, measured at the landing tip `aaf923a4b`)*. Was, before fix round 1: the first four, which still red |
+  | T1-4 | `return { ...bus, ...env, PATH … }` (the caller's env wins) | H18-2 (the inherited real pair wins), H18-6, H18-7 (managers case), H18-8 (half case), H18-10, H18-11: 6 of 27 *(worker, measured at the landing tip `aaf923a4b`)*. Was, before fix round 1: the first four, which still red. [prototype, as `bus`: H18-2, H18-6, H18-7, 3 of 23] |
   | T1-5 | `busUnder` dropped (the fixture always forced) | H18-8, its own-pair case only |
-  | T1-6 | `busUnder` reads `.some` (one variable under HOME is enough) | H18-8, its half case only |
+  | T1-6 | `busUnder` reads `.some` (one variable under HOME is enough) | H18-8 (its half case), H18-10, H18-11: 3 of 27 *(worker, measured at the landing tip `aaf923a4b`)*. Was, before fix round 1: H18-8, its half case only, which still reds |
   | T1-7 | the early return tests `systemd` and `tmux` only | H18-7, its net case ("ssh: expected false to be true"). [prototype: H18-7, 1 of 23] |
   | T1-8 | `for (const n of NET_TOOLS)` without `if (opts.net)` | H18-7, its tmux-only and managers cases ("ssh: expected true to be false"). [prototype: H18-7, 1 of 23] |
   | T1-9 | `net` removes a present file before planting (overwrites a stub) | H18-5, H18-9, and, run over `ccd-pool-sync` and `pool-accounts-route` too: every `ccd-pool-sync` test that writes a stub (by its assertion or by the `afterEach` guard), and `pool-accounts-route`'s three `syncInto` rows. [prototype, before the pool runners asked `net`: H18-5 only, 1 of 94: "expected 'rc=97' to be 'rc=0'"] |
