@@ -95,7 +95,7 @@ import {
   type FloorState, type ProjectRow, type ProjectPoolsWire, type ProjectPoolWire, type ProjectRepoWire,
   parseRouteFields, programKickoffVerdict, routeFieldsOrNull, routeParseDetail, type RouteFields,
 } from '../../shared/api.js';
-import { ARCHIVE_REFUSALS } from '../../shared/api.js';
+import { ARCHIVE_REFUSALS, SERVER_CAPS } from '../../shared/api.js';
 import type { Dialog } from '../../shared/api.js';
 import {
   archiveFlags, archiveOutcome, busyReadFailsClosed, decideArchive, frameRowVerdict, refusedAtStop, worktreeOf, type ArchiveMeasure,
@@ -1181,11 +1181,14 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // carrying `version` follows. Emitting `version: undefined` instead would
   // serialise away, but the conditional keeps the two cases distinguishable
   // in tests (`toEqual` is strict about keys) and in intent.
+  // `caps` (D-5232's mechanism, Task 9b; spec §6.1) is additive and always present: the words this server advertises,
+  // which a fleet node's `ccd-update-sync` records for the hook's gated arms. deploy.sh's gate greps `"sha"` and the
+  // update health gate reads `.version`, so neither sees it.
   app.get('/health', async () => {
     const build = deps.build ?? null;
     return build?.version !== undefined
-      ? { ok: true, build, version: build.version }
-      : { ok: true, build };
+      ? { ok: true, build, version: build.version, caps: SERVER_CAPS }
+      : { ok: true, build, caps: SERVER_CAPS };
   });
 
   const stateCachePath = deps.stateCachePath ?? defaultCachePath();
