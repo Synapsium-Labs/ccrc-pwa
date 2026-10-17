@@ -8529,7 +8529,7 @@ function renderAskBrief(askId: number, childId: string, question: string, option
 //       this one does not is pending again (R102), so its last lines are read once more after it ends. A pass forgets nothing of an owner a
 //       NEWER pass has listed or re-pended (R107, the `listedBy` stamp): a cut pass's late flush can land after it. Until it is read its listed hours,
 //       and its measured hours not yet closed (R106), are lost windows. An hour that leaves the read horizon before the owner is read is
-//       STAGED as a gap with a LOSS word (`hour-never-closed`, never a carve-out word) for the pass's flush, and leaves the memory then;
+//       STAGED as a gap with a LOSS word (`hour-never-closed`, never a carve-out word) for the pass's flush, and leaves the memory as it is staged;
 //       the owner is forgotten once it has no listed hour left: so the memory is bounded by the read horizon (and `lastListed` by the live
 //       sessions). A failed flush is covered by the next recovery's not-ready window; an R82 pre-write refusal of that gap's own bucket
 //       would drop it unrecorded, and nothing known produces one.
@@ -9510,7 +9510,7 @@ class DelegationLane {
   /**
    * R89: a listed hour of a pending owner that has LEFT THE READ HORIZON before any observation of it completed can never be read: it is
    * STAGED as a gap with a LOSS word for the pass's flush, never `directory-absent` or `capability-absent` (nothing measured either),
-   * under the owner's incarnation (the stand-in for an unmeasured one, whose own word it keeps), and leaves the memory then; an owner
+   * under the owner's incarnation (the stand-in for an unmeasured one, whose own word it keeps), and leaves the memory as it is staged; an owner
    * with no listed hour left is forgotten. So the memory is bounded by the read horizon. The two edges: a flush that fails is covered by
    * the next recovery's not-ready window, and an R82 pre-write refusal of that gap's own bucket would drop it unrecorded (nothing known
    * produces one).
