@@ -1029,7 +1029,10 @@ describe('Review 450 F3: the no-listing page\'s fetch note stops counting at the
     expect(noteText(container)).toMatch(/^fetched moments ago; again in [1-4]s$/);
     expect(vi.getTimerCount()).toBeGreaterThan(idle);
     // The clock's first tick at or after `until` lands within one second of it and renders with the wait over, so
-    // just past that second the note is gone and so is the clock (a clock that ran on any longer stays pending here).
+    // just past that second the note is gone and so is the clock. A clock that runs MORE than one tick longer stays
+    // pending here; one extra tick does not (review 471 F2): the first tick at or after `until` lands at `until + 1`
+    // and the count is read at `until + 1001`, so a clock stopped one tick late (`Date.now() < soon + 1000`, or
+    // `+ 1001`) passes, and one stopped two ticks late (`+ 1002`) reds. Row W5P1-T13-M88 is `useNow`'s gate removed.
     expect(until).toBeGreaterThan(0);
     await advance(until - 1 - Date.now());
     expect(vi.getTimerCount()).toBeGreaterThan(idle);
