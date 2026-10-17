@@ -1705,3 +1705,79 @@ describe('assembleFleet hands back the pane pids it read (worker stall watch wav
     expect([...await pidsFor({ code: 1, stdout: '' })]).toEqual([['claude-a-MekWarLive', null]]);
   });
 });
+
+// `background-aware-working` (D-5231; spec §5.1): `fleet.ts` ships `background` ONLY when the live file's build covers
+// delegation (`liveCoversWorkflows`, 2.1.277 on), the hook state is a `Stop`'s `done`, and the count is above zero.
+describe('FleetSession.background (D-5231)', () => {
+  const ID = 'lane-a-project-a';
+  const UUID = '00000000-0000-4000-8000-000000000001';
+  const ROSTER = { version: 1, accounts: [{
+    id: 'lane-a', label: 'lane-a', configDirSuffix: '.lane-a',
+    exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic',
+  }] };
+  const HOOK_AT = 1_784_600_000_000;
+  const hook = (o: Partial<HookState> = {}): HookState => ({
+    state: 'done', updatedAt: HOOK_AT, event: 'Stop', ask: null, subagents: [], graphQueries: 0, graphGateDenials: 0,
+    interrupted: false, background: { count: 2, kinds: ['subagent', 'workflow'] }, ...o,
+  });
+  const row = async (version: string, hs: HookState): Promise<{ background: unknown; bucket: string }> => {
+    const home = mkTmp('ccrc-bg-');
+    seedRoster(home, ROSTER);
+    const reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    const fields = { wrapper: 'lane-a', project: 'project-a', workdir: '/data/projects/project-a', uuid: UUID, started: '1' };
+    for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${ID}.${k}`), v);
+    mkdirSync(path.join(home, '.lane-a', 'sessions'), { recursive: true });
+    writeFileSync(path.join(home, '.lane-a', 'sessions', '40613.json'), JSON.stringify({
+      pid: 40613, sessionId: UUID, cwd: '/data/projects/project-a',
+      status: 'busy', statusUpdatedAt: HOOK_AT - 60_000, version,
+    }));
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return { code: args.includes(`=cc-${ID}:`) ? 0 : 1, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), HOOK_AT / 1000,
+      undefined, undefined, undefined, undefined, new Map([[ID, hs]]));
+    return fleet.find((x) => x.id === ID)!;
+  };
+
+  it('a 2.1.296 live file, hook Stop done with the pair: background set, the row working', async () => {
+    const r = await row('2.1.296', hook());
+    expect(r.background).toEqual({ count: 2, kinds: ['subagent', 'workflow'] });
+    expect(r.bucket).toBe('working');
+  });
+
+  it('a 2.1.270 live file (below the floor): background null, D-75 answers done', async () => {
+    const r = await row('2.1.270', hook());
+    expect(r.background).toBeNull();
+    expect(r.bucket).toBe('done');
+  });
+
+  it('a hook `working`: background null', async () => {
+    expect((await row('2.1.296', hook({ state: 'working', event: 'PostToolUse' }))).background).toBeNull();
+  });
+
+  it.each(['SubagentStop', 'SubagentStart'])('a `done` the hook carried through a %s keeps background', async (event) => {
+    // the subagent arm carries the pair and (until D-5232's gated arm) rewrites `event`
+    const r = await row('2.1.296', hook({ event }));
+    expect(r.background).toEqual({ count: 2, kinds: ['subagent', 'workflow'] });
+    expect(r.bucket).toBe('working');
+  });
+
+  it.each(['SessionStart', 'PreCompact', null])('a `done` from %s, which never writes the pair: background null', async (event) => {
+    expect((await row('2.1.296', hook({ event }))).background).toBeNull();
+  });
+
+  it('the pair at count 0: background null, D-75 answers done', async () => {
+    const r = await row('2.1.296', hook({ background: { count: 0, kinds: [] } }));
+    expect(r.background).toBeNull();
+    expect(r.bucket).toBe('done');
+  });
+
+  it('no pair at all: background null', async () => {
+    const hs = hook();
+    delete hs.background;
+    expect((await row('2.1.296', hs)).background).toBeNull();
+  });
+});

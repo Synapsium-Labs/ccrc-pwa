@@ -230,6 +230,15 @@ export interface FleetSession {
    *  subagents running — same null-vs-empty-array discipline as `WsAudit`'s
    *  array fields above. */
   subagents: { name: string; startedAt: number }[] | null;
+  /** `background-aware-working` (D-5231): the DELEGATED background work the
+   *  last main Stop listed and left running — `count` tasks, of the unique
+   *  `kinds` (sorted). Set only when the live file's build covers delegation
+   *  (`liveCoversWorkflows`), the hook state is a `Stop`'s `done`, and the
+   *  count is above zero (`fleet.ts`); null everywhere else, an older peer's
+   *  snapshot included (`reviveFleetSession`). While set, the bucket ladder
+   *  keeps a live `busy` on `working` (`sessionBucket`'s `!delegated`) and the
+   *  wedge qualifier stands down. ADDITIVE: no `FLEET_PROTO` bump. */
+  background: { count: number; kinds: string[] } | null;
   /** How many graph READS this session has made — `hookstate.ts`'s
    *  `graphQueries`, carried through unchanged. ADDITIVE: no `FLEET_PROTO`
    *  bump, and an older peer that omits it revives as `null` below.
@@ -1366,8 +1375,48 @@ export interface WsTombstone {
  *  without any of them needing to be the whole shape. */
 export type BucketInput = Pick<
   FleetSession,
-  'status' | 'statusUpdatedAt' | 'dialogPending' | 'hookState' | 'archivedAt' | 'pr'
+  'status' | 'statusUpdatedAt' | 'dialogPending' | 'hookState' | 'archivedAt' | 'pr' | 'background'
 >;
+
+/** `background-aware-working` (D-5231) — THE DELEGATED-TASK RULE, its one home.
+ *  A task listed in a Stop's `background_tasks` is DELEGATED work (it can hold
+ *  Claude Code's live file `busy` after the main turn ended) unless its cleaned
+ *  kind is one of these six labels — Claude Code's own type labels, after the
+ *  hook's cleaning (lower-cased, spaces to `-`, anything outside `a-z_-`
+ *  dropped) — whose work never holds the live file `busy`: an idle main loop
+ *  over only shells or monitors writes `shell` or `idle`, and the other four are
+ *  outside the live file's delegation set. The hook's `jq` in
+ *  `ccd/session-hook.sh` is the documented second spelling, held equal by
+ *  `session-hook-background.test.ts`, which iterates over this list. */
+export const NON_DELEGATING_TASK_KINDS = ['shell', 'monitor', 'mcp-task', 'dream', 'auto-mode-scan', 'memory-import'] as const;
+/** D-5231: the terminal words of Claude Code's task code. A task whose status
+ *  is one of them is finished, whatever its kind; `running`, `pending` and any
+ *  status no build has shown count as running. The builder already leaves
+ *  finished tasks out, so this is a second wall: a finished task some later
+ *  build lists must not keep a wedged `busy` on `working`. */
+export const TERMINAL_TASK_STATUSES = ['completed', 'failed', 'killed'] as const;
+/** D-5231: is this listed task delegated work that is still running? `type` is
+ *  the CLEANED kind (as the hook records it); an unseen kind or status counts. */
+export function isDelegatedTask(t: { type: string; status: string }): boolean {
+  return !(NON_DELEGATING_TASK_KINDS as readonly string[]).includes(t.type)
+    && !(TERMINAL_TASK_STATUSES as readonly string[]).includes(t.status);
+}
+/** D-5231: the ONE reader of `FleetSession.background` for display. The live
+ *  `fleet` frame is cast, not revived, so a server predating the field omits
+ *  the key at runtime: `undefined` reads as null here, never as a TypeError.
+ *  A count of zero is no background work. */
+export function backgroundWork(s: Partial<Pick<FleetSession, 'background'>>): { count: number; kinds: string[] } | null {
+  const b = s.background;
+  return b != null && b.count > 0 ? b : null;
+}
+/** D-5231: the words `working · N in background` add, and the title naming
+ *  the kinds, for the card and the header alike. */
+export function backgroundWords(b: { count: number; kinds: string[] }): { text: string; title: string } {
+  return {
+    text: `${b.count} in background`,
+    title: b.kinds.length > 0 ? `in background: ${b.kinds.join(', ')}` : 'in background',
+  };
+}
 
 /**
  * One session → one bucket, plus when it entered.
@@ -1506,8 +1555,16 @@ export function sessionBucket(
   // finished", so it is not evidence that a turn ENDED and must not unseat a
   // live `busy` — a resuming session is legitimately working while that write
   // is the newest hook fact on disk.
+  //
+  // `background-aware-working` (D-5231): nor is a Stop that left DELEGATED
+  // work running (`background`, set only on a `Stop`'s `done` on a build whose
+  // live file covers delegation). From 2.1.277 Claude Code keeps the live file
+  // `busy` through delegated work, so after such a Stop a live `busy` is that
+  // work, not a wedge: the session stays `working` until the live file writes
+  // `idle`. D-75's wedge recovery is kept for a Stop with no delegated work.
+  const delegated = s.background !== null && s.background.count > 0;
   const finishedAfterStatus =
-    hookNewer && s.hookState === 'done' && hookEvent !== 'SessionStart';
+    hookNewer && s.hookState === 'done' && hookEvent !== 'SessionStart' && !delegated;
   // NOT the hook's timestamp: the hook rewrites `updatedAt` on every
   // PostToolUse, so a busy session would report a continuously-refreshed
   // "since" — permanently new, and permanently badged. That holds for the
@@ -1529,7 +1586,14 @@ export function sessionBucket(
     // the bucket a virgin session would report if `SessionStart` had never
     // touched `state` at all, which is the honest fact on the ground.
     if (hookEvent === 'SessionStart') return { bucket: 'idle', bucketSince: s.statusUpdatedAt };
-    return { bucket: 'done', bucketSince: hookUpdatedAt ?? s.statusUpdatedAt };
+    // D-5231: after a Stop that left delegated work running, `done` is reached
+    // only once the live file writes `idle` (the rung above held `working`
+    // until then), so it is dated from THAT write when it is the later one —
+    // the badge fires when the work ends, not at the Stop already seen.
+    const since = delegated
+      ? Math.max(hookUpdatedAt ?? 0, s.statusUpdatedAt ?? 0) || null
+      : hookUpdatedAt ?? s.statusUpdatedAt;
+    return { bucket: 'done', bucketSince: since };
   }
   return { bucket: 'idle', bucketSince: s.statusUpdatedAt };
 }
@@ -2793,6 +2857,18 @@ const optSubagents = (o: RawObj, k: string): SubagentEntry[] | null => {
   return (v as unknown[]).map((item, i) => reviveSubagentEntry(item, `${k}[${i}]`));
 };
 
+/** `FleetSession.background` (D-5231) — absent or malformed → null. */
+const reviveBackground = (o: RawObj, k: string): { count: number; kinds: string[] } | null => {
+  const v = o[k];
+  if (v === null || typeof v !== 'object' || Array.isArray(v)) return null;
+  const b = v as Record<string, unknown>;
+  const count = b['count'];
+  const kinds = b['kinds'];
+  if (typeof count !== 'number' || !Number.isInteger(count) || count < 0) return null;
+  if (!Array.isArray(kinds) || !kinds.every((x) => typeof x === 'string')) return null;
+  return { count, kinds: kinds as string[] };
+};
+
 const IDENTITY_FIELDS: readonly string[] = ['uuid', 'wrapper', 'workdir'];
 
 /** `FleetSession.unmeasured` — split from every OTHER array field above on
@@ -3010,6 +3086,11 @@ export function reviveFleetSession(raw: unknown, unnamedSpawnWord: UnnamedSpawnW
       // the full argument.
       ask: reviveAsk(o, 'ask'),
       subagents: optSubagents(o, 'subagents'),
+      // D-5231. Absent → null: an older snapshot predates the field, and null
+      // is the ladder's old answer. Malformed also degrades to null
+      // (`reviveAsk`'s rule): the field is a display chip and one ladder
+      // conjunct, and a cached row is bucketed with no hook stamp anyway.
+      background: reviveBackground(o, 'background'),
       // Absent → null, exactly as `optSubagents` degrades: a snapshot written
       // before this field existed is ignorant of the count, not a witness to
       // its being zero. Present-but-not-a-finite-number throws inside
