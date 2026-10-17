@@ -1918,6 +1918,7 @@ UPD_REPORT_PID=""       # overrides a report's `pid` (empty = this process)
 # forger's export never survives to be read.
 unset UPD_FROM_CALLER_PID
 UPD_FAIL_PREFIX=""      # "provenance: " for a die that is a verdict on the RELEASE (plan D-3239)
+UPD_SWEEP_WORD=""       # what `_upd_sweep` did, one word; `_upd_phase` writes it as update.json's `sweep` key while set (wave 17, D-5314)
 UPD_LOCK_FD=""          # the descriptor _upd_lock holds; "" when not held, or when inherited
 UPD_LOCK_INHERITED=0    # 1 = a restore child under its parent's lock — measured by _upd_lock_probe, never assumed
 UPD_PREV_TAG=""      # _upd_read_previous: line 1 of ~/.ccrc/previous (a tag, or `untagged`)
@@ -18592,7 +18593,7 @@ _upd_detach() {
 # rc 0, and it never calls `_ccrc_die` (which calls it). A directory at the
 # name is refused rather than moved INTO, which `mv` would do silently.
 _upd_phase() {
-  local phase="$1" detail="${2:-}" now target="null" det tmp
+  local phase="$1" detail="${2:-}" now target="null" det tmp sw=""
   now="$(date +%s 2>/dev/null)"
   [[ "$now" =~ ^[1-9][0-9]{0,10}$ ]] || now=""
   [[ "$UPD_REPORT_STARTED" =~ ^[1-9][0-9]{0,10}$ ]] || UPD_REPORT_STARTED="$now"
@@ -18605,13 +18606,20 @@ _upd_phase() {
   # `_ccrc_die` the choke point for dies.
   detail="$(_upd_redact "$detail")"
   det="$(_upd_json_str "$detail")"
+  # The sweep's record (wave 17, D-5314, D-5315): an ADDITIVE eighth key, written
+  # only while `_upd_sweep` has set UPD_SWEEP_WORD, so it is absent on every
+  # phase before the sweep, on every path that never swept, and in every report
+  # an older build wrote. Absent means NOT MEASURED, never "nothing was down";
+  # `ccrc doctor`'s update-sweep check reads it that way. The server's
+  # `reportFrom` reads keys by name and ignores this one.
+  [ -z "$UPD_SWEEP_WORD" ] || sw=",\"sweep\":$(_upd_json_str "$(_upd_redact "$UPD_SWEEP_WORD")")"
   tmp="$BOX_UPDATE_JSON.tmp.$$"
   _tmp_guard "$tmp"
   if [ -n "$now" ] \
      && { [ -d "${BOX_UPDATE_JSON%/*}" ] || mkdir -p "${BOX_UPDATE_JSON%/*}"; } 2>/dev/null \
      && [ ! -d "$BOX_UPDATE_JSON" ] \
-     && { printf '{"target":%s,"phase":"%s","startedAt":%s,"updatedAt":%s,"detail":%s,"from":"%s","pid":%s}\n' \
-            "$target" "$phase" "$UPD_REPORT_STARTED" "$now" "$det" "$UPD_FROM" "${UPD_REPORT_PID:-$$}" > "$tmp"; } 2>/dev/null \
+     && { printf '{"target":%s,"phase":"%s","startedAt":%s,"updatedAt":%s,"detail":%s,"from":"%s","pid":%s%s}\n' \
+            "$target" "$phase" "$UPD_REPORT_STARTED" "$now" "$det" "$UPD_FROM" "${UPD_REPORT_PID:-$$}" "$sw" > "$tmp"; } 2>/dev/null \
      && chmod 644 "$tmp" 2>/dev/null \
      && mv -f -- "$tmp" "$BOX_UPDATE_JSON" 2>/dev/null; then
     return 0
@@ -21064,6 +21072,7 @@ _ccrc_job_stayed_up() {   # <unit>... -> 0 iff ONE pid held across ONE shared wi
 # pipeline or `( … )`: `_ccrc_die` reports only from the run's own shell (`$BASHPID = $$`), so a die there would end
 # that subshell alone and the sweep would print its success line over a failed unit (the R12 critic's I8).
 _upd_sweep_die() {
+  UPD_SWEEP_WORD="died: sweep"   # R10k's record of a die (wave 17, D-5315): the failed report carries it; the detail says where
   if [ "${UPD_REPORTING:-0}" = 1 ] && ! _upd_report_is_mine; then
     echo "update: report: skipped — ~/.ccrc/update.json no longer names this run's pid (${UPD_REPORT_PID:-$$}); a newer update took the lock this run released before the sweep, and this run's failed report would have overwritten its in-flight one"
     UPD_REPORTING=0
@@ -21149,7 +21158,29 @@ _upd_sweep_spo() {
   while IFS= read -r l || [ -n "$l" ]; do case "$l" in 'stopped on purpose: '*) return 0 ;; esac; done < "$1"
   return 1
 }
+# `_upd_sweep_set_down [<unit>...]` — sets UPD_SWEEP_WORD from the units the
+# sweep found already `activating` or `failed` before its restart, whatever
+# they read after it (Reading 9's doctor half, wave 17, D-5314): the sweep
+# never verifies one of them, and one that reads `active` after try-restart is
+# usually a crash-looping Type=simple unit caught between restarts. `ok` when
+# there are none, else `down: <n>: <id> ...`, the COUNT first and WHOLE ids
+# only, as many as fit in `_upd_json_str`'s 200 characters, so the report never
+# carries a cut id that would read as a unit of its own. Ids are the unit names
+# without `claude-session@` and `.service`.
+_upd_sweep_set_down() {
+  local u id word
+  if [ "$#" -eq 0 ]; then UPD_SWEEP_WORD="ok"; return 0; fi
+  word="down: $#:"
+  for u in "$@"; do
+    id="${u#claude-session@}"; id="${id%.service}"
+    [ $(( ${#word} + 1 + ${#id} )) -le 200 ] || break
+    word="$word $id"
+  done
+  UPD_SWEEP_WORD="$word"
+}
 _upd_sweep() {
+  UPD_SWEEP_WORD=""   # wave 17, D-5314: set at each return below, and by `_upd_sweep_die` (`died: sweep`, D-5315)
+  local -a down=()    # Darwin: the start-limit units the sweep skipped (Linux records `prior` itself)
   # ── THE DARWIN ARM ──────────────────────────────────────────────────────
   # Same job, same guard, different observable — and the verify is not quite the
   # Linux one: no deliberate-stop classifier (D-3949), and a re-check of each
@@ -21188,6 +21219,7 @@ _upd_sweep() {
       # clean update. The remedy tail names the per-session fix the same way
       # the Linux line names its try-restart.
       echo "update: DEGRADED: the supervisor sweep did not run — every live claude-session@ supervisor keeps executing the PREVIOUS ccd until restarted. Fix the job files above (ccd start <id> rewrites each), then restart per session: launchctl kickstart -k $(_svc_domain)/<label>"
+      UPD_SWEEP_WORD="refused: job-file"   # R10k, D-5315
       return 0
     fi
     # `_svc_try_restart`'s `_svc_is_loaded || return 0` skips a job launchd no
@@ -21203,6 +21235,7 @@ _upd_sweep() {
       if [ "$(_svc_is_active "$u")" = failed ]; then
         sid="${u#claude-session@}"; sid="${sid%.service}"
         echo "update: warning: $u is FAILED (start-limit stamp) — the sweep skipped it and did not verify it. On the box: ccd start $sid (it clears the stamp and re-bootstraps the job)" >&2
+        down+=("$u")
         continue
       fi
       _svc_is_loaded "$u" || continue
@@ -21246,6 +21279,7 @@ _upd_sweep() {
     else
       echo "update: sweep: every live claude-session@ supervisor now runs the ccd this update installed (AbandonProcessGroup verified in every job file; ${#kicked[@]} restarted and re-measured still up)"
     fi
+    _upd_sweep_set_down ${down[@]+"${down[@]}"}
     return 0
   fi
   # The bus contingency `_inst_enable` carries, for the same reason: without
@@ -21266,6 +21300,7 @@ _upd_sweep() {
   if [ "$lrc" -ne 0 ]; then
     echo "update: sweep REFUSED — systemctl --user list-units \"claude-session@*\" --plain --no-legend failed (rc $lrc), so the supervisors to be checked could not be listed." >&2
     echo "update: DEGRADED: the supervisor sweep did not run — every live claude-session@ supervisor keeps executing the PREVIOUS ccd until restarted. Once systemctl --user list-units 'claude-session@*' answers, confirm KillMode=process on each unit, then restart them."
+    UPD_SWEEP_WORD="refused: listing"   # R10k, D-5315
     return 0
   fi
   # Wave 8 item G: the supervisors the restart below can touch are the ones
@@ -21284,6 +21319,7 @@ _upd_sweep() {
     if [ "$km" != "KillMode=process" ]; then
       echo "update: sweep REFUSED — $u resolves to ${km:-no answer from systemd}, and the sweep needs KillMode=process: systemds default is control-group, and whenever the tmux server placement falls back to a bare create every session on this box is a child of ONE tmux server sitting in a claude-session@ cgroup, so try-restart would kill the lot. A drop-in under $BOX_UNIT_DIR/claude-session@.service.d/ can set this without the base unit changing a byte." >&2
       echo "update: DEGRADED: the supervisor sweep did not run — every live claude-session@ supervisor keeps executing the PREVIOUS ccd until restarted. Fix the KillMode above, then: systemctl --user try-restart 'claude-session@*'"
+      UPD_SWEEP_WORD="refused: killmode"   # R10k, D-5315
       return 0
     fi
   done
@@ -21334,6 +21370,7 @@ _upd_sweep() {
   if [ "$arc" -ne 0 ] && [ "${#before[@]}" -gt 0 ]; then
     echo "update: warning: the post-restart set could not be listed (systemctl --user list-units \"claude-session@*\" --state=active --plain --no-legend failed, rc $arc) — no supervisor was verified." >&2
     echo "update: DEGRADED: every live claude-session@ supervisor was restarted, and none of them was verified by this sweep."
+    UPD_SWEEP_WORD="unverified: relist"   # R10k, D-5315
     return 0
   fi
   local -a units=() missing=() crash=() unrec=() ncfail=()
@@ -21488,6 +21525,10 @@ _upd_sweep() {
       *) echo "update: warning: $b was already '${priorw[pi]}' before try-restart and is not active after it — it is named, not verified, and does not fail this update (a supervisor already 'activating' or 'failed' before the restart is never verified; wave 16, D-5136). On the box: systemctl --user status $b" >&2 ;;
     esac
   done
+  # The record (wave 17, D-5314): every unit already `activating` or `failed`
+  # before the restart, read from the PRE-restart listing, so it needs no
+  # post-restart one (with `before` non-empty an unread one returned above).
+  _upd_sweep_set_down ${prior[@]+"${prior[@]}"}
   if [ "${#before[@]}" -eq 0 ]; then
     echo "update: sweep: no claude-session@ supervisor was active when the sweep began, so try-restart had nothing running to restart (KillMode=process verified before the restart; panes untouched)"
     return 0

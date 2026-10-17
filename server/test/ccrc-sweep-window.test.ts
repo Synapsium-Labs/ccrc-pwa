@@ -247,11 +247,12 @@ describe('_upd_sweep, Linux arm: one shared verify window, a re-check, crash-sha
     const box = makeBox({ units: [churn(A), stable(B, 1)], report: { pid: 4242 } });
     const r = runSweep(box, { reporting: { pid: 4242 } });
     expect(r.code, ctx(r)).toBe(1);
-    const j = JSON.parse(report(box)!) as { phase: string; detail: string };
+    const j = JSON.parse(report(box)!) as { phase: string; detail: string; sweep?: string };
     expect(j.phase).toBe('failed');
     expect(j.detail.startsWith('sweep: 1 of 2 supervisors did not stay up on a first verify; a re-check failed, '
       + '0 left un-re-checked - install complete, nothing was rolled back (first failed re-check: '
       + 'claude-session@demo-a'), j.detail).toBe(true);
+    expect(j.sweep, 'S4: the die is recorded as a die, the detail says where (wave 17, D-5315)').toBe('died: sweep');
     expect(r.stdout).not.toContain('update: sweep: every live');
     noPoison(box);
   }, 60_000);
@@ -1373,6 +1374,116 @@ describe('_upd_sweep, Linux arm: a unit that did not come back active is named t
     expect(r.code, ctx(r)).toBe(0);
     expect(r.stderr, ctx(r)).not.toContain(X);
     expect(r.stderr, ctx(r)).not.toContain(F);
+    noPoison(box);
+  }, 60_000);
+});
+
+// WAVE 17 (centralised update management; D-5314, D-5315): the sweep RECORDS what it did, as update.json's eighth key,
+// `sweep`. The fixture runs the sweep in a shell that then writes the update's own `done` report (`tail`), so what is
+// read back is the real writer's key over the real word the real sweep set, on the same plants wave 16's rows use.
+describe('_upd_sweep, Linux arm: the sweep records what it did in update.json (wave 17, D-5314, D-5315)', () => {
+  const F = U('f');
+  const X = U('x');
+  const ZERO_17 = 'update: sweep: no claude-session@ supervisor was active when the sweep began';
+  type Rep = { phase: string; detail: string | null; sweep?: string };
+  const swept = (box: Box): { r: ReturnType<typeof runSweep>; j: Rep } => {
+    const r = runSweep(box, { reporting: { pid: 4242 }, tail: '_upd_phase done' });
+    return { r, j: JSON.parse(report(box)!) as Rep };
+  };
+  const withReport = (o: Parameters<typeof makeBox>[0]): Box => makeBox({ ...o, report: { pid: 4242 } });
+
+  itLinux('S1 a clean sweep records ok, and its detail stays null', () => {
+    const box = withReport({ units: [stable(A, 0), stable(B, 1)] });
+    const { r, j } = swept(box);
+    expect(r.code, ctx(r)).toBe(0);
+    expect(j.phase).toBe('done');
+    expect(j.sweep).toBe('ok');
+    expect(j.detail).toBeNull();
+    noPoison(box);
+  }, 60_000);
+
+  itLinux('S2 a unit failed before and after the restart is recorded by id, with the count first; exit and stderr as wave 16 pins them', () => {
+    const box = withReport({
+      units: [stable(A, 0),
+        { unit: F, active: ['failed'], mainPid: [], listed: 'crash:failed', preRestart: 'failed', failedListed: true }],
+    });
+    const { r, j } = swept(box);
+    expect(r.code, ctx(r)).toBe(0);
+    expect(r.stderr, ctx(r)).toContain(`${F} is FAILED — try-restart skipped it and this sweep did not verify it`);
+    expect(lines(r.stderr, F), 'item 3 names it, and nothing else does').toBe(1);
+    expect(r.stdout).toContain(SWEEP_OK);
+    expect(j.sweep).toBe('down: 1: demo-f');
+    expect(j.detail).toBeNull();
+    noPoison(box);
+  }, 60_000);
+
+  itLinux('S2b a unit activating before the restart and active after it is recorded as down, not ok', () => {
+    const box = withReport({
+      units: [stable(A, 0), { unit: X, active: ['active'], mainPid: ['5000'], listed: 'active', preRestart: 'activating' }],
+    });
+    const { r, j } = swept(box);
+    expect(r.code, ctx(r)).toBe(0);
+    expect(count(box, act(X)), 'never verified').toBe(0);
+    expect(j.sweep).toBe('down: 1: demo-x');
+    noPoison(box);
+  }, 60_000);
+
+  itLinux('S2c every unit down before the restart is named, in listing order, count first', () => {
+    const box = withReport({
+      units: [stable(A, 0),
+        { unit: F, active: ['inactive'], mainPid: [], listed: 'gone', preRestart: 'failed' },
+        { unit: X, active: ['inactive'], mainPid: [], listed: 'crash:activating', preRestart: 'activating' }],
+    });
+    const { r, j } = swept(box);
+    expect(r.code, ctx(r)).toBe(0);
+    expect(j.sweep).toBe('down: 2: demo-f demo-x');
+    noPoison(box);
+  }, 60_000);
+
+  itLinux('S4 a sweep whose re-check fails records failed, the die sentence, and died: sweep', () => {
+    const box = withReport({ units: [churn(A), stable(B, 1)] });
+    const r = runSweep(box, { reporting: { pid: 4242 } });
+    expect(r.code, ctx(r)).toBe(1);
+    const j = JSON.parse(report(box)!) as Rep;
+    expect(j.phase).toBe('failed');
+    expect(j.detail, 'the detail says where').toContain('sweep: 1 of 2 supervisors did not stay up on a first verify');
+    expect(j.sweep).toBe('died: sweep');
+    noPoison(box);
+  }, 60_000);
+
+  // `before` empty and the post-restart listing unread: nothing was restarted, so nothing is "unverified"; the record is
+  // what the PRE-restart listing showed, which needs no post-restart one.
+  itLinux('S5 nothing active before, one unit down before, the post-restart listing failing: down, not unverified', () => {
+    const box = withReport({
+      units: [{ unit: X, active: ['inactive'], mainPid: [], listed: 'gone', preRestart: 'activating' }],
+      activeListingRc: 94,
+    });
+    const { r, j } = swept(box);
+    expect(r.code, ctx(r)).toBe(0);
+    expect(r.stdout).toContain(ZERO_17);
+    expect(j.sweep).toBe('down: 1: demo-x');
+    noPoison(box);
+  }, 60_000);
+
+  itLinux('S5b nothing active and nothing down before, the post-restart listing failing: ok', () => {
+    const box = withReport({ units: [], activeListingRc: 94 });
+    const { r, j } = swept(box);
+    expect(r.code, ctx(r)).toBe(0);
+    expect(r.stdout).toContain(ZERO_17);
+    expect(j.sweep).toBe('ok');
+    noPoison(box);
+  }, 60_000);
+
+  // R10k (D-5315): a sweep that ran unverified says so in the report; exit code, stdout and stderr are as
+  // `ccrc-update.test.ts` pins them (review 196 item 1), so only the record is read here. Its refusals are that file's.
+  itLinux('S6 something restarted and the post-restart listing failing records unverified: relist', () => {
+    const box = withReport({ units: [stable(A, 0)], activeListingRc: 94 });
+    const { r, j } = swept(box);
+    expect(r.code, ctx(r)).toBe(0);
+    expect(r.stdout).toContain('update: DEGRADED: every live claude-session@ supervisor was restarted, and none of them was verified by this sweep.');
+    expect(j.phase).toBe('done');
+    expect(j.detail).toBeNull();
+    expect(j.sweep).toBe('unverified: relist');
     noPoison(box);
   }, 60_000);
 });

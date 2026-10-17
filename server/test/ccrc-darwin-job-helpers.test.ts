@@ -13,7 +13,7 @@
 // asserts that none survives before any assertion on the run's outcome. It does not show that an orphan existed, only
 // that none is left behind.
 import { describe, expect } from 'vitest';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { itLinux } from './platformFixtures.js';
@@ -154,5 +154,62 @@ describe('_ccrc_job_stayed_up: an INT to the shell alone ends it at once (wave 1
     expect(end!.signal, `stdout: ${stdout}`).toBe('SIGINT');
     expect(elapsed, 'the INT waited out the sleep').toBeLessThan(4_000);
     expect(stdout).not.toContain('rc=');
+  }, 60_000);
+});
+
+// The Darwin arm of `_upd_sweep` RECORDS what it did (wave 17, D-5314, D-5315). Forced on Linux the way the helpers
+// above are: `CCD_OS=darwin` and the job lookups shadowed, so what is under test is the sweep's own shell and the
+// update's own `_upd_phase`, never launchd. The report is read back after a `done` write, as the update makes it.
+describe('_upd_sweep, Darwin arm: the sweep records what it did in update.json (wave 17, D-5314, D-5315)', () => {
+  const D1 = 'claude-session@acct-a-demo.service';
+  const D2 = 'claude-session@acct-b-demo.service';
+  const DSHADOWS = [
+    '_svc_domain() { printf %s gui/501; }',
+    '_svc_label() { local x="${1#claude-session@}"; printf %s "app.ccrc.session.${x%.service}"; }',
+    '_svc_list_sessions() { printf \'%s\\n\' ' + `${D1} ${D2}` + '; }',
+    '_svc_plist() { printf \'%s/plists/%s\' "$HOME" "${1#claude-session@}"; }',
+    '_svc_is_active() { [ -f "$HOME/failed.${1#claude-session@}" ] && echo failed || echo active; }',
+    '_svc_is_loaded() { return 0; }',
+    '_svc_try_restart() { return 0; }',
+    '_ccrc_job_stayed_up() { return 0; }',
+  ].join('\n');
+
+  function sweepRecord(plists: Record<string, string>, failed: string[]): { code: number; stdout: string; j: Record<string, unknown> } {
+    const b = makeBox({ units: [], report: { pid: 4242 } });
+    mkdirSync(join(b.home, 'plists'), { recursive: true });
+    for (const [u, body] of Object.entries(plists)) writeFileSync(join(b.home, 'plists', u.slice('claude-session@'.length)), body);
+    for (const u of failed) writeFileSync(join(b.home, `failed.${u.slice('claude-session@'.length)}`), '');
+    const e = { ...b.env };
+    assertContained({ home: b.home, env: e });
+    const body = ['CCD_OS=darwin', 'UPD_REPORTING=1; UPD_REPORT_PID=4242; UPD_REPORT_TARGET=v0.0.85; UPD_FROM=auto; UPD_REPORT_STARTED=1',
+      '_upd_sweep; rc=$?', '_upd_phase done', 'exit $rc'].join('\n');
+    const r = spawnSync(BASH, ['-c', ['. "$1"', DSHADOWS, body].join('\n'), 'ccrc-under-test', CCRC_SRC],
+      { env: e, encoding: 'utf8', timeout: 45_000 });
+    expect(poisonFiles(b)).toEqual([]);
+    const j = JSON.parse(readFileSync(join(b.home, '.ccrc', 'update.json'), 'utf8')) as Record<string, unknown>;
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', j };
+  }
+  const KEYED = '<key>AbandonProcessGroup</key><true/>';
+
+  itLinux('D1 a job file with no AbandonProcessGroup records refused: job-file, and detail stays null', () => {
+    const r = sweepRecord({ [D1]: KEYED, [D2]: '<plist/>' }, []);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain('update: DEGRADED: the supervisor sweep did not run');
+    expect(r.j['phase']).toBe('done');
+    expect(r.j['detail']).toBeNull();
+    expect(r.j['sweep']).toBe('refused: job-file');
+  }, 60_000);
+
+  itLinux('D2 a start-limit-failed job is recorded as down, by id', () => {
+    const r = sweepRecord({ [D1]: KEYED, [D2]: KEYED }, [D2]);
+    expect(r.code).toBe(0);
+    expect(r.j['sweep']).toBe('down: 1: acct-b-demo');
+    expect(r.j['detail']).toBeNull();
+  }, 60_000);
+
+  itLinux('D3 a clean Darwin sweep records ok', () => {
+    const r = sweepRecord({ [D1]: KEYED, [D2]: KEYED }, []);
+    expect(r.code).toBe(0);
+    expect(r.j['sweep']).toBe('ok');
   }, 60_000);
 });

@@ -213,7 +213,7 @@ The first drafters' prototype missed this line *(prototype: applied in the proje
 
 ### Task 2: the update records its sweep (Reading 9's record half; W17-b; D-5314)
 
-- [ ] **Step 1: the red row** *(prototype)*. A bash row (B1) extracts `_upd_phase`, `_upd_redact`, `_upd_json_str`, `_tmp_guard` and `_upd_sweep_set_down` from `ccd/ccrc` (stubbing `_exit_add() { :; }`), sets `BOX_UPDATE_JSON` under a `mktemp -d` HOME, writes `_upd_phase restarting`, then `_upd_sweep_set_down claude-session@acct-a-demo.service claude-session@acct-b-demo.service` and `_upd_phase done`, and checks with `jq` that `.sweep == "down: 2: acct-a-demo acct-b-demo" and .detail == null` and that the first seven keys keep their order. Measured: RED before Step 2 (no `sweep` key), GREEN after; the restarting write carries no key. Output after:
+- [x] **Step 1: the red row** *(prototype)*. A bash row (B1) extracts `_upd_phase`, `_upd_redact`, `_upd_json_str`, `_tmp_guard` and `_upd_sweep_set_down` from `ccd/ccrc` (stubbing `_exit_add() { :; }`), sets `BOX_UPDATE_JSON` under a `mktemp -d` HOME, writes `_upd_phase restarting`, then `_upd_sweep_set_down claude-session@acct-a-demo.service claude-session@acct-b-demo.service` and `_upd_phase done`, and checks with `jq` that `.sweep == "down: 2: acct-a-demo acct-b-demo" and .detail == null` and that the first seven keys keep their order. Measured: RED before Step 2 (no `sweep` key), GREEN after; the restarting write carries no key. Output after:
 
 ```
 unset: {"target":"v1.2.3","phase":"restarting","startedAt":…,"updatedAt":…,"detail":null,"from":"cli","pid":4242}
@@ -222,7 +222,9 @@ B1 GREEN
 B1 order GREEN
 ```
 
-- [ ] **Step 2: the global and the writer.** In `ccd/ccrc`'s globals, immediately after `UPD_FAIL_PREFIX=""      # "provenance: " …` (NOT beside `BAK_KEEP_SNAP`, which #448 edits):
+  - As built: B1 (`b1.sh`, copied to the scratchpad, `TMPDIR=$HOME/.cc-tmp/w17q`) against the base `ccd/ccrc`: `set:` line carries no `sweep`, `B1 RED`, `B1 order GREEN`.
+
+- [x] **Step 2: the global and the writer.** In `ccd/ccrc`'s globals, immediately after `UPD_FAIL_PREFIX=""      # "provenance: " …` (NOT beside `BAK_KEEP_SNAP`, which #448 edits):
 
 ```bash
 UPD_SWEEP_WORD=""       # what `_upd_sweep` did, one word; `_upd_phase` writes it as update.json's `sweep` key while set (wave 17, D-5314)
@@ -242,9 +244,13 @@ In `_upd_phase`, the `local` line gains ` sw=""`; after `det="$(_upd_json_str "$
 
 and the `printf` format's `"pid":%s}\n` becomes `"pid":%s%s}\n`, with `"$sw"` appended after `"${UPD_REPORT_PID:-$$}"`.
 
-- [ ] **Step 3: the word helper, the record and the die** *(prototype, revised: `bash -n ccd/ccrc` green; Appendix `b1.sh` B1 GREEN, `row-cap2.sh` CAP GREEN and `row-die.sh` DIE GREEN against the revised projection, CAP RED and DIE RED against the first prototype)*. Immediately before `_upd_sweep() {`:
+  - As built: applied as written, anchored by content (the global after `UPD_FAIL_PREFIX=""`, `_upd_phase`'s `sw` local, the `sw` build and the `%s` before `}` in its printf). Against the new file `b1.sh` prints `"sweep":"down: 2: acct-a-demo acct-b-demo"`, `B1 GREEN`, `B1 order GREEN`.
+
+- [x] **Step 3: the word helper, the record and the die** *(prototype, revised: `bash -n ccd/ccrc` green; Appendix `b1.sh` B1 GREEN, `row-cap2.sh` CAP GREEN and `row-die.sh` DIE GREEN against the revised projection, CAP RED and DIE RED against the first prototype)*. Immediately before `_upd_sweep() {`:
 
 ```bash
+
+  - As built: applied as written, `bash -n ccd/ccrc` green; the Reading 9 naming loop is untouched. `row-cap2.sh`: RED on the base (`_upd_sweep_set_down: command not found`, `CAP RED`), GREEN after (`len=198 stored-last=acct-9-project-alpha`, `CAP GREEN`); `row-die.sh`: base `DIE RED`, after `DIE GREEN` (`"sweep":"died: sweep"`). The Darwin arm records `down+=("$u")` and calls `_upd_sweep_set_down` before its final `return 0`.
 # `_upd_sweep_set_down [<unit>...]` — sets UPD_SWEEP_WORD from the units the
 # sweep found already `activating` or `failed` before its restart, whatever
 # they read after it (Reading 9's doctor half, wave 17, D-5314): the sweep
@@ -295,7 +301,7 @@ Darwin arm: in the `[ "$(_svc_is_active "$u")" = failed ]` loop, after the `is F
 
 It is set before the report-ownership check, so a die whose report another run now owns writes nothing, as today.
 
-- [ ] **Step 4: the rows through a real update** *(unmeasured: the worker measures each)*. First the pin that CHANGES: `ccrc-update.test.ts`' `const REPORT_KEYS = ['target', 'phase', 'startedAt', 'updatedAt', 'detail', 'from', 'pid']` and the case `it('a moving run, a converged no-op and a refusal together write every wired phase, each by rename, seven keys in order …'`, which asserts `for (const l of raw) expect(Object.keys(JSON.parse(l) as object)).toEqual(REPORT_KEYS)` over every write of the `moved` box. That box sweeps (`restarting`, then `done`), so after this task its `done` line carries `sweep`. The case becomes: every write before the sweep keeps exactly `REPORT_KEYS`; every write after it is exactly `[...REPORT_KEYS, 'sweep']`, order asserted; the converged no-op and the refusal keep `REPORT_KEYS`. Its title's "seven keys in order", `REPORT_KEYS`' doc comment ("The seven keys, in the writer's order (D-3237 adds `pid`)") and that note gain "and an eighth, `sweep`, after a sweep (wave 17, D-5314)". The PR body names this pin beside P18 and D1c. Before that, widen the search for other whole-key pins: `grep -n "Object.keys(\|REPORT_KEYS\|toEqual({ target\|JSON.parse(readFileSync(.*update.json" server/test/*.test.ts`; the other two found by the reviser (`ccrc-update.test.ts`' watchdog rewrite in a fresh process, and `update-intent-cross-side.test.ts`' bare `_upd_phase`) never sweep and hold. Then, in `server/test/ccrc-sweep-window.test.ts` (with `sweepFixture.ts`) or `ccrc-update.test.ts` (the worker picks the file whose sweep fixture already plants a pre-restart `failed` unit: wave 16's Reading 9 rows do), on the Linux arm:
+- [x] **Step 4: the rows through a real update** *(unmeasured: the worker measures each)*. First the pin that CHANGES: `ccrc-update.test.ts`' `const REPORT_KEYS = ['target', 'phase', 'startedAt', 'updatedAt', 'detail', 'from', 'pid']` and the case `it('a moving run, a converged no-op and a refusal together write every wired phase, each by rename, seven keys in order …'`, which asserts `for (const l of raw) expect(Object.keys(JSON.parse(l) as object)).toEqual(REPORT_KEYS)` over every write of the `moved` box. That box sweeps (`restarting`, then `done`), so after this task its `done` line carries `sweep`. The case becomes: every write before the sweep keeps exactly `REPORT_KEYS`; every write after it is exactly `[...REPORT_KEYS, 'sweep']`, order asserted; the converged no-op and the refusal keep `REPORT_KEYS`. Its title's "seven keys in order", `REPORT_KEYS`' doc comment ("The seven keys, in the writer's order (D-3237 adds `pid`)") and that note gain "and an eighth, `sweep`, after a sweep (wave 17, D-5314)". The PR body names this pin beside P18 and D1c. Before that, widen the search for other whole-key pins: `grep -n "Object.keys(\|REPORT_KEYS\|toEqual({ target\|JSON.parse(readFileSync(.*update.json" server/test/*.test.ts`; the other two found by the reviser (`ccrc-update.test.ts`' watchdog rewrite in a fresh process, and `update-intent-cross-side.test.ts`' bare `_upd_phase`) never sweep and hold. Then, in `server/test/ccrc-sweep-window.test.ts` (with `sweepFixture.ts`) or `ccrc-update.test.ts` (the worker picks the file whose sweep fixture already plants a pre-restart `failed` unit: wave 16's Reading 9 rows do), on the Linux arm:
   - S1: a clean sweep's `done` report carries `sweep: 'ok'` and `detail: null`;
   - S2: wave 16's plant (one unit `failed` before and after) yields `sweep: 'down: 1: <id>'`, exit and stderr exactly as wave 16 pins them;
   - S2b: one unit `activating` before the restart and `active` after (wave 16's `pback` plant) yields `sweep: 'down: 1: <id>'`, not `ok`;
@@ -303,11 +309,15 @@ It is set before the report-ownership check, so a die whose report another run n
   - S4: a sweep whose verify fails its re-check (an existing die row's plant) writes `phase: 'failed'`, the die sentence as `detail`, and `sweep: 'died: sweep'`;
   - S5: `before` empty, one `prior` unit, and the post-restart listing failing: `sweep: 'down: 1: <id>'`; `before` and `prior` both empty with the same failure: `sweep: 'ok'`.
 
-- [ ] **Step 5: mutation rows.** Drop `"$sw"` from the printf (prototype: B1 RED). Make `_upd_sweep_set_down` write `ok` for a non-empty list (S2 reds; unmeasured). Restore the unbounded append (prototype: `row-cap2.sh` CAP RED). Drop the `died: sweep` line (prototype: `row-die.sh` DIE RED; S4 reds, unmeasured). Feed the record from the not-active-after set instead of `prior` (S2b reds; unmeasured). Drop the `UPD_SWEEP_WORD=""` reset at the top of `_upd_sweep` (a rollback after a refused update in one shell would carry the old word; unmeasured, and only a row that runs two sweeps in one shell can see it, so the worker states whether such a row is cheap or records the reset as unpinned).
+  - As built: the rows are in `server/test/ccrc-sweep-window.test.ts` (new describe `the sweep records what it did in update.json`, S1, S2, S2b, S2c, S4 as W5's extra assertion plus its own case, S5, S5b, S6; the shell writes `_upd_phase done` after the sweep via `tail`) and `ccrc-update.test.ts` (the `REPORT_KEYS` case now asserts seven keys on every write but the moved box's `done`, which is `[...REPORT_KEYS, 'sweep']`, exactly one write carries it, the converged no-op has no `sweep`; the restore and the refusal keep seven; the moved box's `sweep` is `refused: killmode` on Linux, its stub systemd answering no KillMode). RED on the base: all 9 new/changed sweep-window cases and the 7 update cases fail on `sweep` undefined; GREEN: 9 of 9 (`-t 'records what it did|W5 the die'`), ccrc-sweep-window whole 97 of 97 (42 s), ccrc-update `-t 'sweep|update.json|rollback'` 191 passed plus 2 failures: `_upd_phase redacts its OWN detail argument` (its extracted-function harness runs `set -u` and needs `UPD_SWEEP_WORD=""`, fixed in the harness) and one load flake (`killed-flip … control (condition 3)`, green on re-run alone). S3's no-op row is in the `REPORT_KEYS` case; the gate-failure restore is covered by the same loop (seven keys exactly).
+
+- [x] **Step 5: mutation rows.** Drop `"$sw"` from the printf (prototype: B1 RED). Make `_upd_sweep_set_down` write `ok` for a non-empty list (S2 reds; unmeasured). Restore the unbounded append (prototype: `row-cap2.sh` CAP RED). Drop the `died: sweep` line (prototype: `row-die.sh` DIE RED; S4 reds, unmeasured). Feed the record from the not-active-after set instead of `prior` (S2b reds; unmeasured). Drop the `UPD_SWEEP_WORD=""` reset at the top of `_upd_sweep` (a rollback after a refused update in one shell would carry the old word; unmeasured, and only a row that runs two sweeps in one shell can see it, so the worker states whether such a row is cheap or records the reset as unpinned).
+
+  - As built: measured on the sweep-window rows (describe plus W5): drop `"$sw"` from the printf, B1 RED and 9 of 9 rows red; `_upd_sweep_set_down` writing `ok` for a non-empty list, `b1.sh` B1 RED and rows S2, S2b, S2c, S5 red; unbounded append restored, `row-cap2.sh` `CAP RED` (`len=264 stored-last=a`; no suite row, the cap is pinned by that script); `died: sweep` line dropped, `DIE RED` and rows W5, S4 red; the record fed from the `failed` set instead of `prior`, rows S2b, S2c, S5 red. **The reset row is UNPINNED:** dropping `UPD_SWEEP_WORD=""` at the top of `_upd_sweep` leaves all 9 rows green, because every return path of `_upd_sweep` (four refusals/unverified, the Linux final `_upd_sweep_set_down`, the Darwin arm's refusal and final call) sets the word and the die exits, so no row can see a stale word; the reset is defence for a future return path that forgets to set one.
 
 ### Task 3: a refused or unverified sweep is recorded (R10k; W17-c; D-5315)
 
-- [ ] **Step 1: the change** *(prototype; `bash -n` green)*. Immediately before the `return 0` that follows each DEGRADED line in `_upd_sweep`, anchored by that line's text:
+- [x] **Step 1: the change** *(prototype; `bash -n` green)*. Immediately before the `return 0` that follows each DEGRADED line in `_upd_sweep`, anchored by that line's text:
 
 | DEGRADED line's text (anchor) | Added line |
 |---|---|
@@ -318,13 +328,19 @@ It is set before the report-ownership check, so a die whose report another run n
 
 The exit code, stdout, stderr and `phase: done`/`detail: null` stay exactly as pinned (review 196 item 1 holds).
 
-- [ ] **Step 2: rows** *(revised, unmeasured: the worker measures each)*. In `server/test/ccrc-update.test.ts`, find each case by its stderr or stdout text, never by line number:
+  - As built: the four lines applied by anchor; `bash -n` green.
+
+- [x] **Step 2: rows** *(revised, unmeasured: the worker measures each)*. In `server/test/ccrc-update.test.ts`, find each case by its stderr or stdout text, never by line number:
   - `refused: listing`: the case `itLinux('(a) the unfiltered pre-sweep listing fails — the sweep is REFUSED, not the old zero line …'` (the one whose comment reads "The refusal is the KillMode refusal's own exit code and update.json —"; it asserts the `list-units … failed (rc 93)` stderr and the "Once systemctl --user list-units … answers" DEGRADED line). Its `toMatchObject({ phase: 'done', detail: null, from: 'cli' })` stays and a second assertion adds `expect(report.sweep).toBe('refused: listing')`. The same on `itLinux('(a) on a rollback BY FLIP: the unfiltered pre-sweep listing fails …'`.
   - `refused: killmode`: the cases whose stderr matches `sweep REFUSED — claude-session@alpha\.service resolves to KillMode=control-group` (`'with KillMode not process, the rollback\'s sweep is REFUSED …'` and `'a rollback BY FLIP\'s sweep is behind its own KillMode=process preflight …'`; both are rollbacks). Add one on the UPDATE path if the worker finds none.
   - `unverified: relist`: the case asserting `update: DEGRADED: every live claude-session@ supervisor was restarted, and none of them was verified by this sweep.`
   - The Darwin job-file refusal is pinned by a fixture-only row if `ccrc-darwin-job-helpers.test.ts`' harness can force the Darwin arm on Linux; otherwise it is the macOS leg's, and the plan's as-built note says which.
 
-- [ ] **Step 3: mutation rows** *(unmeasured)*: delete each added line in turn; its row reds, the others stay green.
+  - As built: `ccrc-update.test.ts`: `refused: listing` asserted in both (a) cases (update and rollback by flip; `phase: done`, `detail: null` kept); `refused: killmode` in both rollback cases, in a NEW update-path case (no drop-in; `the update's sweep REFUSED over KillMode is recorded`) and in the `REPORT_KEYS` case; `unverified: relist` in case (b) and in sweep-window S6. The Darwin job-file row is a fixture-only row after all: `ccrc-darwin-job-helpers.test.ts` forces `CCD_OS=darwin` on Linux with the job lookups shadowed (new describe D1 `refused: job-file`, D2 `down: 1: acct-b-demo`, D3 `ok`; base RED 3 of 3, GREEN 3 of 3). Side fix the plan did not name: `ccrc-sweep-deliberate-stop.test.ts` X0c pinned the tree's `_upd_phase` as v0.0.84's, so v0.0.84's copy is now frozen below the sweep in `fixtures/upd-sweep-pre-wave11.bash` (that fixture's own instruction) and X0c reads it from there; 8 of 8 green.
+
+- [x] **Step 3: mutation rows** *(unmeasured)*: delete each added line in turn; its row reds, the others stay green.
+
+  - As built: each added line deleted in turn, `ccrc-update` six-case group plus S6: `refused: listing` red in 2 (both (a) cases); `refused: killmode` red in 4 (update-path case, `REPORT_KEYS` case, both rollback cases); `unverified: relist` red in case (b) and S6; `refused: job-file` red in D1 only; the Darwin `down+=("$u")` line red in D2 only, and the Darwin final `_upd_sweep_set_down` red in D2 and D3. The others stayed green each time.
 
 ### Task 4: `ccrc doctor` WARNs on the record, and never FAILs (Reading 9's doctor half, R10k's reader; W17-b, W17-c; D-5316)
 

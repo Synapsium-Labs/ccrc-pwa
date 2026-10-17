@@ -2915,8 +2915,27 @@ describe('ccrc update: the supervisor sweep (Task 7 — R1, granted 2026-08-21)'
     expect(existsSync(join(home, 'tmux-argv'))).toBe(false);
     // The refusal is the KillMode refusal's own exit code and update.json —
     // never a new failure (review 196's ruling, item 1).
+    const rep = JSON.parse(readFileSync(join(home, '.ccrc', 'update.json'), 'utf8')) as Record<string, unknown>;
+    expect(rep).toMatchObject({ phase: 'done', detail: null, from: 'cli' });
+    // R10k (wave 17, D-5315): the report says the sweep did not run, and why, in its eighth key.
+    expect(rep['sweep']).toBe('refused: listing');
+  });
+
+  // The UPDATE path's KillMode refusal (wave 17, D-5315): no drop-in, so the fixture's `show -p KillMode` answers
+  // systemd's control-group default; the sweep is refused, restarts nothing, and the update's own `done` records it.
+  itLinux('the update\'s sweep REFUSED over KillMode is recorded: exit 0, DEGRADED, no try-restart, phase done, detail null, sweep refused: killmode (R10k, D-5315)', () => {
+    const home = freshUpdateBox('ccrc-update-sweep-killmode-record-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    writeFileSync(join(home, 'fixture-sweep-units'), UNIT_LINES);
+    writeFileSync(join(home, 'fixture-sweep-active'), UNIT_LINES);
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stderr).toMatch(/^update: sweep REFUSED — claude-session@alpha\.service resolves to KillMode=control-group/m);
+    expect(r.stdout).toMatch(/^update: DEGRADED: the supervisor sweep did not run — every live claude-session@ supervisor keeps executing the PREVIOUS ccd until restarted/m);
+    expect(readFileSync(join(home, 'systemctl-calls'), 'utf8')).not.toMatch(/try-restart/);
     expect(JSON.parse(readFileSync(join(home, '.ccrc', 'update.json'), 'utf8')) as Record<string, unknown>)
-      .toMatchObject({ phase: 'done', detail: null, from: 'cli' });
+      .toMatchObject({ phase: 'done', detail: null, from: 'cli', sweep: 'refused: killmode' });
   });
 
   // (a) on the OTHER caller — a rollback by flip reaches `_upd_sweep` from
@@ -2943,7 +2962,7 @@ describe('ccrc update: the supervisor sweep (Task 7 — R1, granted 2026-08-21)'
     const calls = existsSync(join(home, 'systemctl-calls')) ? readFileSync(join(home, 'systemctl-calls'), 'utf8') : '';
     expect(calls).not.toMatch(/try-restart/);
     expect(JSON.parse(readFileSync(join(home, '.ccrc', 'update.json'), 'utf8')) as Record<string, unknown>)
-      .toMatchObject({ phase: 'done', from: 'rollback' });
+      .toMatchObject({ phase: 'done', from: 'rollback', sweep: 'refused: listing' });
   });
 
   // (b) the verify (`--state=active`) listing fails — DEGRADED in place of
@@ -2968,6 +2987,9 @@ describe('ccrc update: the supervisor sweep (Task 7 — R1, granted 2026-08-21)'
     expect(r.stdout).not.toContain('no claude-session@ supervisor was active when the sweep began');
     const calls = readFileSync(join(home, 'systemctl-calls'), 'utf8');
     expect(calls).toMatch(/--user try-restart claude-session@\*/);
+    // R10k (wave 17, D-5315): the report keeps `phase: done` and `detail: null` (review 196 item 1) and says so in `sweep`.
+    expect(JSON.parse(readFileSync(join(home, '.ccrc', 'update.json'), 'utf8')) as Record<string, unknown>)
+      .toMatchObject({ phase: 'done', detail: null, sweep: 'unverified: relist' });
   });
 
   // G1a with the verify listing ALSO failing: `before` measures truly empty
@@ -4043,7 +4065,7 @@ const reportWrites = (home: string): Array<Record<string, unknown>> =>
     : []);
 const lastReport = (home: string): Record<string, unknown> =>
   JSON.parse(readFileSync(join(home, '.ccrc', 'update.json'), 'utf8')) as Record<string, unknown>;
-/** The seven keys, in the writer's order (D-3237 adds `pid`). */
+/** The seven keys, in the writer's order (D-3237 adds `pid`), and an eighth, `sweep`, after a sweep (wave 17, D-5314). */
 const REPORT_KEYS = ['target', 'phase', 'startedAt', 'updatedAt', 'detail', 'from', 'pid'];
 /** The report's clock: unix SECONDS (`date +%s` on `_upd_phase`'s `now=`
  *  line) — the unit W2's `reportFrom` reads, converting once to ms and
@@ -4067,7 +4089,7 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     writeFileSync(join(home, '.ccrc', 'floor'), `${v}\n`);
   };
 
-  it('a moving run, a converged no-op and a refusal together write every wired phase, each by rename, seven keys in order (§18 "update.json at every phase")', () => {
+  it('a moving run, a converged no-op and a refusal together write every wired phase, each by rename, seven keys in order and an eighth, `sweep`, after the sweep (§18 "update.json at every phase"; wave 17, D-5314)', () => {
     // 1. A run that moves the box (STUB flavour: update's own logic).
     const moved = freshUpdateBox('ccrc-update-json-moved-');
     plantOldBox(moved, { version: 'v1.0.0' });
@@ -4077,6 +4099,12 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     // W4 Task 5: the gate writes `checking` BEFORE the sweep's `restarting`
     // (design §11 — the gate precedes the sweep; nothing reads the order).
     expect(phases(moved)).toEqual(['resolving', 'fetching', 'verifying', 'backing-up', 'installing', 'checking', 'restarting', 'done']);
+    // The stub box answers no KillMode, so its sweep is REFUSED, and the update's own `done` records that (R10k, D-5315):
+    // exit 0, `detail` null, the word in `sweep`. On Darwin the arm reads job files instead, so only its presence is pinned.
+    const movedSweep = lastReport(moved)['sweep'];
+    if (process.platform === 'darwin') expect(typeof movedSweep, 'the sweep is recorded on the write after it (wave 17, D-5314)').toBe('string');
+    else expect(movedSweep, 'the sweep is recorded on the write after it (wave 17, D-5314)').toBe('refused: killmode');
+    expect(lastReport(moved)['detail']).toBeNull();
 
     // 2. The converged no-op (the "already there" gate's three shas agree).
     const same = freshUpdateBox('ccrc-update-json-same-');
@@ -4089,6 +4117,7 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
     expect(phases(same)).toEqual(['resolving', 'fetching', 'verifying', 'done']);
     expect(lastReport(same)['detail']).toBe('already converged at v2.0.0');
+    expect(Object.keys(lastReport(same)), 'a converged no-op never swept, so it never records one').not.toContain('sweep');
 
     // 3. A refusal after the lock: a die is a `failed` report.
     const refused = freshUpdateBox('ccrc-update-json-refused-');
@@ -4124,7 +4153,15 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
 
     for (const home of [moved, same, refused, restoreHome, ...(process.platform === 'darwin' ? [] : [detached])]) {
       const raw = readFileSync(join(home, 'update-json-writes'), 'utf8').split('\n').filter((l) => l !== '');
-      for (const l of raw) expect(Object.keys(JSON.parse(l) as object)).toEqual(REPORT_KEYS);
+      // Wave 17 (D-5314): every write before the sweep keeps the seven keys; the sweep's own `done` is the one write that
+      // carries the eighth, after them. The converged no-op, the refusal and the restore never sweep, so they keep seven.
+      const swept = home === moved;
+      for (const l of raw) {
+        const w = JSON.parse(l) as { phase: string };
+        expect(Object.keys(w), `${home}: the ${w.phase} write`)
+          .toEqual(swept && w.phase === 'done' ? [...REPORT_KEYS, 'sweep'] : REPORT_KEYS);
+      }
+      if (swept) expect(raw.filter((l) => l.includes('"sweep"')), 'only the write after the sweep carries it').toHaveLength(1);
       // The file on disk IS the last rename, and no staged copy is left beside it.
       expect(readFileSync(join(home, '.ccrc', 'update.json'), 'utf8')).toBe(`${raw[raw.length - 1]}\n`);
       expect(readdirSync(join(home, '.ccrc')).filter((f) => f.startsWith('update.json.'))).toEqual([]);
@@ -4714,7 +4751,7 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
       pick(/^_tmp_guard\(\) \{.*\}$/m, '_tmp_guard'),
       pick(/^_upd_phase\(\) \{[\s\S]*?\n\}$/m, '_upd_phase'),
       `BOX_UPDATE_JSON=${JSON.stringify(jsonPath)}`,
-      'UPD_REPORT_TARGET=""', 'UPD_REPORT_STARTED=""', 'UPD_FROM=cli',
+      'UPD_REPORT_TARGET=""', 'UPD_REPORT_STARTED=""', 'UPD_FROM=cli', 'UPD_SWEEP_WORD=""',
       // The raw detail: never wrapped in _upd_redact by this harness — if
       // `_upd_phase` did not redact it either, the home would land as-is.
       `_upd_phase failed "unreadable: $HOME/.ccrc/ccrc.env is not a regular file"`,
@@ -6805,6 +6842,7 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
     expect(r.stdout).toMatch(/^update: DEGRADED: the supervisor sweep did not run — every live claude-session@ supervisor keeps executing the PREVIOUS ccd until restarted/m);
     expect(systemctlCalls(home)).not.toMatch(/try-restart/);
     expect(report(home)['phase']).toBe('done');
+    expect(report(home)['sweep']).toBe('refused: killmode');
   });
 
   itLinux('--allow-unsigned rides along ONLY when this box\'s own record says unsigned: an unverified box returns to a bundle-less release; a verified one refuses, with the provenance prefix (D-3263)', () => {
@@ -9902,7 +9940,7 @@ describe('ccrc rollback: by flip when the version is kept (W6 Task 4)', () => {
     expect(c, c.join('\n')).toContain('--user show -p KillMode claude-session@alpha.service');
     // …and nothing restarted a supervisor.
     expect(c.filter((l) => /--user try-restart/.test(l)), c.join('\n')).toEqual([]);
-    expect(lastReport(home)).toMatchObject({ phase: 'done', from: 'rollback' });
+    expect(lastReport(home)).toMatchObject({ phase: 'done', from: 'rollback', sweep: 'refused: killmode' });
   });
 
   it('an unverified kept version stays unverified: its own spine runs WITHOUT CCRC_UPDATE_VERIFIED when its kept record says unsigned — a flip never promotes it (§18 "arm 2 never silently unsigns", applied to the flip; D-3439)', () => {
