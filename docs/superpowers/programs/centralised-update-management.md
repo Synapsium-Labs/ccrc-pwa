@@ -1831,6 +1831,9 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       0 failed; server 26 passed. The same four pre-failed supervisors were named and skipped. v0.0.238 and v0.0.239
       released. STATUS: fleet and server v0.0.237, newest v0.0.239, intent dev/auto=stable, backups fleet 145M/server
       815M, disk free fleet 213G/work volume 85G/server 32G, no anomalies.
+    - **2026-10-17 21:58 UTC:** v0.0.240 (21:18, #510), v0.0.241 (21:23, #509) and v0.0.242 (21:51, #511) released and
+      stay unapplied under `auto=stable`. STATUS: fleet and server v0.0.237, newest v0.0.242, intent dev/auto=stable,
+      backups fleet 145M/server 815M, disk free fleet 214G/work volume 84G/server 32G, no anomalies.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
