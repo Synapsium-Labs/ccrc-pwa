@@ -481,7 +481,7 @@ describe('sweepAsks — late answer wins (D-5289)', () => {
     f.w.answeredLate(KID, askId, MESA);
     const tagged = sent.filter((p) => p.tag === askTag(KID));
     expect(tagged).toHaveLength(2);
-    expect(tagged[1]!.body).toBe(`answered by ${MESA}`);
+    expect(tagged[1]!.body).toBe(`Answered by ${MESA}`);
     expect(tagged[1]!.actions).toBeUndefined();
 
     // Once: the replacement is the lapse's, not a fresh notification per call.
