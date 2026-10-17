@@ -759,6 +759,10 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-surface)'],
     why: "child-reclamation wave 5's child-of-run label is a .sess-meta cell on an unselected .sess-line, whose ground is the project card, in the same ink-tertiary register as .sess-held next door. Its selector names no ancestor, so no route could ground it; without this entry it would join the uncovered census, which new rules may not do. The SELECTED row is answered by the achromatic group (--edge-strong), pinned separately in fleet-css.test.ts",
   },
+  '.sess-restart': {
+    under: ['var(--bg-surface)'],
+    why: "D-5237's restart cell (\"restarted · out of memory · 3m ago\") is a .sess-meta cell on an unselected .sess-line, whose ground is the project card, in the same ink-tertiary register as .sess-held next door. Its selector names no ancestor, so no route could ground it; without this entry it would join the uncovered census, which new rules may not do. The SELECTED row is answered by the achromatic group (--edge-strong), pinned separately in fleet-css.test.ts",
+  },
   '.sess-spawn': {
     under: ['var(--bg-surface)'],
     why: 'the spawn chip is a .sess-meta cell on an unselected .sess-line, whose ground is the project card. Its selector names no ancestor, so no route could ground it — without this entry it joins .sess-held/.sess-lifecycle in the uncovered census, which is exactly where the last unmeasured meta cell was shipping below AA. The SELECTED row is answered by the achromatic group (--edge-strong), pinned separately in fleet-css.test.ts',

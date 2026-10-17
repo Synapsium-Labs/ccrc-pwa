@@ -762,6 +762,9 @@ export async function assembleFleet(
         && hs.event !== null && BACKGROUND_CARRIER_EVENTS.has(hs.event)
         && hs.background !== undefined && hs.background.count > 0
         ? hs.background : null,
+      // D-5237: the registry's record of the last process end, carried as is;
+      // the PWA shows it for an hour (`recentLastEnd`).
+      lastEnd: r.lastEnd,
       // `?? null` and not `?? 0`: no hook data at all and a hook reporting
       // zero reads are two conditions, and `hookstate.ts` already keeps them
       // apart — collapsing them one layer out would undo that on the wire.
@@ -845,7 +848,8 @@ export async function assembleFleet(
       // display value on this wire — the bind gate re-reads the registry.
       child: r.child,
       // D-5301: the role, from `.child` and nothing else — `sessionRoleOf`,
-      // the one derivation, so the badge and the start card cannot disagree.
+      // the one derivation, so the badge and the start card agree on the
+      // `.child` axis only (the card is also silent for a held row; see there).
       role: sessionRoleOf(r.child),
       // Workspace lifecycle §5.1. `child` here is the registry's reading, `unreadable` counted as a child.
       releasedFrom: released.ok

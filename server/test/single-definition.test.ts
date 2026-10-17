@@ -6256,6 +6256,36 @@ describe('the turn verdict\'s reads and rule each have one home (D-5238)', () =>
   });
 });
 
+// D-5299 (plan docs/superpowers/plans/2026-10-17-coordinator-first-routing.md, Task 12). APPENDED at the very end, for
+// the reason the note above the 'tmux unreachable' block states. The approval classifier, its class map and the
+// command redactor each have one home: `server/src/coord/approvalguard.ts` (`approvalClass`, `APPROVAL_CLASS_MAP`)
+// and `server/src/coord/redact.ts` (`redactCommand`). The hook's bash copy of the `forbidden` match (Task 14) is a
+// documented second copy held equal by the shared corpus, not a TypeScript definition. Code lines only (`stallCode`).
+describe('the approval classifier, its class map and the redactor each have one home (D-5299)', () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+
+  it('CONTROL: the patterns see a definition and pass over a call and comment lines', () => {
+    expect(/\bfunction approvalClass\b|\bconst approvalClass\s*=/.test('export function approvalClass(tool: string) {')).toBe(true);
+    expect(/\bfunction approvalClass\b|\bconst approvalClass\s*=/.test("const c = approvalClass('Bash', input, ctx);")).toBe(false);
+    expect(/\bAPPROVAL_CLASS_MAP\s*=/.test('export const APPROVAL_CLASS_MAP = {')).toBe(true);
+    expect(stallCodeText('// function redactCommand( in prose\n * function redactCommand(\nconst x = 1;')).not.toMatch(/\bfunction redactCommand\b/);
+  });
+
+  it('approvalClass is defined once, in coord/approvalguard.ts', () => {
+    expect(holders(/\bfunction approvalClass\b|\bconst approvalClass\s*=/)).toEqual(['server/src/coord/approvalguard.ts']);
+  });
+
+  it('the class map is defined once, beside it, and its three words are quoted as a set nowhere else', () => {
+    expect(holders(/\bAPPROVAL_CLASS_MAP\s*=/)).toEqual(['server/src/coord/approvalguard.ts']);
+    // A hand-copied class list carries all three words quoted on one line.
+    expect(holders(/(['"`])forbidden\1[^\n]*(['"`])escalate\2[^\n]*(['"`])ordinary\3|(['"`])ordinary\4[^\n]*(['"`])escalate\5[^\n]*(['"`])forbidden\6/)).toEqual([]);
+  });
+
+  it('redactCommand is defined once, in coord/redact.ts', () => {
+    expect(holders(/\bfunction redactCommand\b|\bconst redactCommand\s*=/)).toEqual(['server/src/coord/redact.ts']);
+  });
+});
+
 // D-5232's mechanism (plan docs/superpowers/plans/2026-10-16-working-state-and-interruptions.md, Task 9b). APPENDED at
 // the very end, for the reason the notes above state. THE SERVER'S CAPABILITY WORDS (`SERVER_CAPS`, derived from
 // `SERVER_CAP_MAP`), the file they are recorded in (`SERVER_CAPS_FILE`) and its lease (`SERVER_CAPS_LEASE_S`) have one
@@ -6335,6 +6365,157 @@ describe('the ask push body is built once, in server/src/askbody.ts (D-5302)', (
     expect(askbody).not.toMatch(/\.summary\b|\bsummary\s*[,}]|\bhookAskSummary\b/);
     expect(stallCodeText('const { tool, summary } = a;')).toMatch(/\bsummary\s*[,}]/);   // CONTROL
     expect(holders(/permission requested/)).toEqual(['server/src/askbody.ts']);
+  });
+});
+
+// D-5290 (plan docs/superpowers/plans/2026-10-17-coordinator-first-routing.md, Task 5; spec §5.2). APPENDED. ONE
+// `tryHold` decides every ask hold: it is defined once, in `server/src/watch.ts`; it is the only caller of `hold` (the
+// mint) and the watcher's only reader of `parentOfSession`, so no raise site can hold on its own checks; and the
+// first sighting, the deferred first raise and the amendment branch all call it. Its parent-live check reads the
+// dead-coordinator sweep's own predicate, `claimantMeasuredDead`, defined once in `server/src/coord/reclaim.ts` and
+// read by both. Code lines only (`stallCode`).
+describe('one tryHold decides every ask hold (D-5290)', () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  const DEFINES_TRY = /\basync\s+tryHold\s*\(|\bfunction\s+tryHold\b|\btryHold\s*=\s*(?:async\s*)?\(/;
+  const DEFINES_DEAD = /\bfunction\s+claimantMeasuredDead\b|\bclaimantMeasuredDead\s*=\s*\(/;
+
+  it('CONTROL: the patterns see a definition and pass over a call and a comment line', () => {
+    expect(DEFINES_TRY.test('  private async tryHold(')).toBe(true);
+    expect(DEFINES_TRY.test('await this.tryHold(r, dialog, actions, recs)')).toBe(false);
+    expect(DEFINES_DEAD.test('export function claimantMeasuredDead(v: ClaimantVerdict): boolean {')).toBe(true);
+    expect(stallCodeText('// private async tryHold(\nconst x = 1;')).not.toMatch(DEFINES_TRY);
+  });
+
+  it('tryHold is defined in server/src/watch.ts and nowhere else', () => {
+    expect(holders(DEFINES_TRY)).toEqual(['server/src/watch.ts']);
+  });
+
+  it("watch.ts mints only inside tryHold, reads parentOfSession only there, and calls it from all three raise paths", () => {
+    const watch = stallCode(path.join(ccrcRoot, 'server/src/watch.ts'));
+    const start = watch.search(/\basync\s+tryHold\s*\(/);
+    const end = watch.indexOf('\n  }\n', start);
+    expect(start).toBeGreaterThan(-1);
+    const body = watch.slice(start, end);
+    const rest = watch.slice(0, start) + watch.slice(end);
+    expect(body.match(/\bthis\.hold\(/g) ?? []).toHaveLength(1);
+    expect(rest).not.toMatch(/\bthis\.hold\(/);
+    expect(body).toMatch(/\.parentOfSession\(/);
+    expect(rest).not.toMatch(/\.parentOfSession\(/);
+    expect(rest.match(/\bthis\.tryHold\(/g) ?? []).toHaveLength(3);
+    expect(body).toMatch(/\bclaimantMeasuredDead\(/);
+  });
+
+  it('claimantMeasuredDead is defined in server/src/coord/reclaim.ts and read by the dead-coordinator sweep', () => {
+    expect(holders(DEFINES_DEAD)).toEqual(['server/src/coord/reclaim.ts']);
+    const watch = stallCode(path.join(ccrcRoot, 'server/src/watch.ts'));
+    expect(watch).toMatch(/const dead = ids\.filter\(\(id\) => claimantMeasuredDead\(/);
+  });
+});
+
+// D-5293 (plan docs/superpowers/plans/2026-10-17-coordinator-first-routing.md, Task 8; spec §5.3). APPENDED. The
+// parent's hold and the operator's answer route read ONE eligibility rule, `answerableAsk` in `server/src/askkey.ts`:
+// `askActions` (the hold's sole gate, D-2173) reads it and spells none of its tests, and `answerAsk` reads it before
+// the pane. Both routes that press through `answerAsk` read their body with ONE reader, `readAskAnswer` in
+// `server/src/inject/ask.ts`, and neither route respells the `optionIndexes` check. Code lines only (`stallCode`).
+describe('one eligibility rule and one answer body for the parent and the operator (D-5293)', () => {
+  const definesFn = (name: string): RegExp =>
+    new RegExp(`\\bfunction\\s+${name}\\b|\\b${name}\\s*=\\s*(?:\\(|function\\b|async\\b)`);
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  const INDEX_CHECK = /typeof\s+\w+\s*===\s*'number'/;
+  const ELIGIBILITY_TESTS = /\.questions\.length|\bmultiSelect\b|\.options\.length|\.label\.trim\(\)/;
+  /** The code between two literal anchors, both asserted, the closing one after the opening one. */
+  const between = (name: string, text: string, from: string, to: string): string => {
+    const a = text.indexOf(from);
+    expect(a, `${name}: the opening anchor is gone`).toBeGreaterThan(-1);
+    const b = text.indexOf(to, a + from.length);
+    expect(b, `${name}: the closing anchor is gone`).toBeGreaterThan(a);
+    return text.slice(a, b);
+  };
+
+  it('CONTROL: the patterns see a definition, an index check and an eligibility test, and pass over comments', () => {
+    expect(definesFn('answerableAsk').test('export function answerableAsk(ask) {')).toBe(true);
+    expect(definesFn('readAskAnswer').test('const readAskAnswer = (b) => b;')).toBe(true);
+    expect(definesFn('answerableAsk').test('if (!answerableAsk(ask)) return null;')).toBe(false);
+    expect(INDEX_CHECK.test("optionIndexes.every((n) => typeof n === 'number')")).toBe(true);
+    expect(ELIGIBILITY_TESTS.test('if (ask.questions.length !== 1) return null;')).toBe(true);
+    expect(ELIGIBILITY_TESTS.test('if (q.multiSelect === true) return null;')).toBe(true);
+    expect(stallCodeText('// q.multiSelect === true\nconst x = 1;')).not.toMatch(ELIGIBILITY_TESTS);
+  });
+
+  it('answerableAsk is defined in server/src/askkey.ts and readAskAnswer in server/src/inject/ask.ts, nowhere else', () => {
+    expect(holders(definesFn('answerableAsk'))).toEqual(['server/src/askkey.ts']);
+    expect(holders(definesFn('readAskAnswer'))).toEqual(['server/src/inject/ask.ts']);
+  });
+
+  it('askActions reads answerableAsk and spells none of its tests', () => {
+    const body = between('askActions', stallCode(path.join(ccrcRoot, 'server/src/askkey.ts')),
+      'export function askActions(', '\n}\n');
+    expect(body).toMatch(/\banswerableAsk\(ask\)/);
+    expect(body).not.toMatch(ELIGIBILITY_TESTS);
+  });
+
+  it('answerAsk reads answerableAsk before it captures the pane', () => {
+    const body = between('answerAsk', stallCode(path.join(ccrcRoot, 'server/src/inject/ask.ts')),
+      'export async function answerAsk(', '\n}\n');
+    const gate = body.indexOf('answerableAsk(hs.ask)');
+    expect(gate, 'answerAsk reads answerableAsk').toBeGreaterThan(-1);
+    expect(gate, 'and before the capture').toBeLessThan(body.indexOf('d.tmux.capture('));
+  });
+
+  it('both answer routes read their body with readAskAnswer and neither respells the index check', () => {
+    const operator = between('POST /api/sessions/:id/ask', stallCode(path.join(ccrcRoot, 'server/src/server.ts')),
+      "app.post('/api/sessions/:id/ask'", "app.get('/api/sessions/:id/commands'");
+    const parent = between('POST /api/asks/:id/answer', stallCode(path.join(ccrcRoot, 'server/src/coord/routes.ts')),
+      "app.post('/api/asks/:id/answer'", "app.post('/api/asks/:id/release'");
+    for (const [name, code] of [['operator', operator], ['parent', parent]] as const) {
+      expect(code, name).toMatch(/\breadAskAnswer\(/);
+      expect(code, name).not.toMatch(INDEX_CHECK);
+      expect(code, name).not.toMatch(/Array\.isArray\(\s*(?:body\.)?optionIndexes\b/);
+    }
+  });
+});
+
+// D-5294, D-5295 (plan docs/superpowers/plans/2026-10-17-coordinator-first-routing.md, Task 6; spec §5.4, §5.5,
+// §6.7). APPENDED. The ask window has ONE home and ONE deadline computation: `ASK_GRACE_MS` (180 s) is defined in
+// `server/src/askwindow.ts` and read by name on a code line nowhere else in the source roots, so the hold's sweep
+// deadline and the brief's "notified at" both go through `askNotifyAt`, defined there too. The fence renderer for a
+// child's text in a coordinator's mail, `untrustedBlock`, is defined in `server/src/coord/untrusted.ts` alone, its
+// preface spelled there alone, and the brief calls it. Code lines only (`stallCode`).
+describe('the ask window, its deadline and the untrusted-data fence are each defined once (D-5294, D-5295)', () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  const defines = (name: string): RegExp =>
+    new RegExp(`\\bfunction\\s+${name}\\b|\\b(?:const|let|var)\\s+${name}\\s*=`);
+
+  it('CONTROL: the patterns see a definition and a read, and pass over comment lines', () => {
+    expect(defines('askNotifyAt').test('export function askNotifyAt(heldAt: number): number {')).toBe(true);
+    expect(defines('askNotifyAt').test('const askNotifyAt = (t) => t;')).toBe(true);
+    expect(/\bASK_GRACE_MS\b/.test('return { until: now + ASK_GRACE_MS };')).toBe(true);
+    expect(stallCodeText('// the window is ASK_GRACE_MS\nconst x = 1;')).not.toMatch(/\bASK_GRACE_MS\b/);
+  });
+
+  it('ASK_GRACE_MS is 180 000, defined in server/src/askwindow.ts', () => {
+    const src = stallCode(path.join(ccrcRoot, 'server/src/askwindow.ts'));
+    expect(src).toMatch(/export const ASK_GRACE_MS = 180_000;/);
+    expect(holders(defines('ASK_GRACE_MS'))).toEqual(['server/src/askwindow.ts']);
+  });
+
+  it('ASK_GRACE_MS is read on a code line in server/src/askwindow.ts and nowhere else', () => {
+    expect(holders(/\bASK_GRACE_MS\b/)).toEqual(['server/src/askwindow.ts']);
+  });
+
+  it('askNotifyAt is defined in server/src/askwindow.ts alone, and the hold reads it once for both uses', () => {
+    expect(holders(defines('askNotifyAt'))).toEqual(['server/src/askwindow.ts']);
+    const watch = stallCode(path.join(ccrcRoot, 'server/src/watch.ts'));
+    expect(watch.match(/\baskNotifyAt\(/g) ?? []).toHaveLength(1);
+    expect(watch).toMatch(/renderAskBrief\([^)]*\buntil\)/);
+    expect(watch).toMatch(/return \{ until, askId,/);
+  });
+
+  it('untrustedBlock and its preface live in server/src/coord/untrusted.ts alone, and the brief calls it', () => {
+    expect(holders(defines('untrustedBlock'))).toEqual(['server/src/coord/untrusted.ts']);
+    expect(holders(/untrusted data written by a model/)).toEqual(['server/src/coord/untrusted.ts']);
+    const watch = stallCode(path.join(ccrcRoot, 'server/src/watch.ts'));
+    expect(watch).toMatch(/\buntrustedBlock\(asked, UNTRUSTED_CAP_BYTES,/);
   });
 });
 

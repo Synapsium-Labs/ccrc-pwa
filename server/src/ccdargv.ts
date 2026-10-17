@@ -339,7 +339,9 @@ export const CCD_ARGV = {
    *  workspace, so the lifecycle log's `create` row names the operator's
    *  device rather than `declared: nothing`. It TRAILS the project, where
    *  `wsAddWorker` puts its own; `cmd_ws_add`'s strip loop parses both
-   *  positions. The route handler passes `pwaDec(req)`, which is `null` on a
+   *  positions. The route handler passes `pwaDec(req)` (D-5369: the device
+   *  actually used, `device:<label>` or `unmeasured`, not spec §8's literal
+   *  `--actor operator`), which is `null` on a
    *  box whose ccd does not advertise `actor-flags-v1` — and `null` is the
    *  argv this builder shipped before, token for token, because an old
    *  `cmd_ws_add` bound a flag's first token as the slug (D-410). */

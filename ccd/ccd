@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=d6bc59806e6d52e04e99717305a7d736845ec828b10da4edb9477e7cb0c43ed2
+# ccrc:generated 1 sha256=e2192ee7db804cf293a2cd6bbbfc570cc5bc44302e2915ae757518d6b3c59a6b
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -3134,8 +3134,8 @@ _reg_get() { [[ -f "$REG/$1.$2" && ! -L "$REG/$1.$2" ]] || return 1; local __rg_
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
-# and the reason is a count rather than a preference: this file makes 200
-# invocations across 169 non-comment lines.
+# and the reason is a count rather than a preference: this file makes 203
+# invocations across 172 non-comment lines.
 #
 # THE LAST MOVE WAS the tick diet's `_reg_get_to` conversions (D-4963), the −9 (`_session_hard_blocked` 2, `_auto_stale_check` 1, `_auto_swap_check` 2, `_auto_compact_check` 3, `_route_applied_get_to` 1: each hot read now fills its variable with builtins, no subshell); before it the forked-session transcript's review round 2 — the held-conversation wait (`_ci_held_wait` +3, `_supervised_start` +2, `_ci_bgwait_open`/`_ci_bgwait_close` +1 each — D-4944), the +7; before it its review round 1 (`_ci_bg_follow`, `_ci_chain_end`, `_ci_resume_follow` — D-4944/D-4945), the +3; before it the forked-session transcript's continued-in walk (`_sync_uuid`, `_follow_continued_in`), the +2; before it the read-back's lane gate (`_route_readback_transcript`), the +1; before it the read-back's transcript memo (`_route_readback_transcript`), the +1; before it the return gate's unarchive (workspace lifecycle wave 3b), the +2; before it the route read-back's uuid read (`_route_readback`), the +1; before it the EXPIRE region's reads (workspace lifecycle wave 3), the +10; before that the operator-choice reads (session-continuity wave 3), the +3; before that the rescue wait's reads (session-continuity wave 2), the +3;
 # then D-3526's carried-in verdict, the +6 (`_limit_dated`, `_limit_read`, `_never_came_up`, three in `_carried_in_note`); then the RECLAIM region's reads (CCR-15 wave 3, Task 5), `_child_tmpdir`'s and CCR-10's.
@@ -20521,6 +20521,7 @@ _route_escape() {   # id — leave the pane as we found it after an unacknowledg
   # (D-2808, D-2811 and the slice-4 picker probe); a loop would be a second,
   # unmeasured claim, and pressing Escape at a bare prompt is a no-op anyway.
   local t; t=$(_tmux_t "$1")
+  echo "$(date '+%F %T') route-escape $1" >> "$REG/swap.log"   # D-5237: every Escape ccd sends is on record
   tmux send-keys -t "$t" Escape; sleep 1
   return 0
 }
@@ -22383,8 +22384,153 @@ _tmux_new_session() {   # argv for `tmux new-session` -> runs it, PLACING the se
 # safe value — full fidelity, per the failure direction below.
 SPAWN_FROMSWAP=0
 
-_resume_env() {   # -> one line of KEY=value assignments for `env`, switching on Claude Code's interrupted-turn resume (D-2227)
-  local out="CLAUDE_CODE_RESUME_INTERRUPTED_TURN=$RESUME_INTERRUPTED_TURN CLAUDE_CODE_RESUME_PROMPT='$RESUME_PROMPT'"
+# ── RESTART CAUSES (D-5237, spec 2026-10-16 §5.6) ───────────────────────────
+# Every process end ccd sees is classified once and recorded in
+# `$REG/<id>.lastend` (`<epoch> <cause>`, the server's `parseLastEnd`) and in a
+# `swap.log` line, `ended <id>: <cause>`. The words are `shared/api.ts`'s
+# RESTART_CAUSES (`ccd-restart-cause.test.ts` loops over that list against the
+# prompts below). The supervise tick gains NOTHING (#387's budget): the scope a
+# pane runs in is read once per spawn, by `_panescope_record`, and the journal
+# only at the `gone` exit.
+# D-5237 — THE CAUSE CLAUSE. `_resume_prompt_for` swaps this exact substring of
+# RESUME_PROMPT for the recorded cause of the last end (`$REG/<id>.lastend`)
+# when that end is at most RESUME_CAUSE_MAX_AGE_S old, and keeps everything
+# else, the first sentence above all. Older or absent: RESUME_PROMPT as is.
+RESUME_CAUSE_GENERIC="an account swap or a supervisor revival"
+RESUME_CAUSE_MAX_AGE_S=600
+_panescope_proc_root() { printf '%s' /proc; }   # THE SEAM: a test names a planted tree
+_panescope_record() {   # id — once per spawn, after the pane exists: its scope unit -> $REG/<id>.panescope. Always rc 0.
+  # Linux only, by construction: macOS has no `/proc` (and no cgroups,
+  # `_plat_cgroup`'s argument), so the read finds nothing there. One
+  # `list-panes` and one `/proc` read. A pane whose cgroup names no `.scope`
+  # (tmux built without systemd, a pid gone already) leaves NO panescope, and a
+  # stale one from an earlier spawn is removed, so `_end_cause` never reads the
+  # journal of a scope this process never ran in.
+  local id="$1" pid cg unit
+  pid=$(tmux list-panes -t "$(_tmux_t "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
+  if [[ "$pid" =~ ^[0-9]+$ ]]; then
+    cg=$({ sed -n 's/^0:://p' "$(_panescope_proc_root)/$pid/cgroup" | head -1; } 2>/dev/null)
+    unit="${cg##*/}"
+    if [[ "$unit" == *.scope && "$unit" =~ ^[A-Za-z0-9@._:-]+$ ]]; then
+      _reg_set "$id" panescope "$unit" && return 0
+    fi
+  fi
+  rm -f -- "$REG/$id.panescope"
+  return 0
+}
+_end_cause() {   # id -> the cause word of the end just seen: oom | tmux-server | exited | unknown. Always rc 0.
+  # `oom` FIRST (D-5345): the pane scope's own journal naming an OOM kill in the 120 s
+  # before now is the most specific answer, and it holds when the tmux server
+  # also went (a box with one session). Bounded by `_plat_timeout 5`, with ONE
+  # argv spelling: a test plants `journalctl` as a program on PATH, so the
+  # bounded call is the one it runs. No recorded scope on Linux, or a journal
+  # read that fails (rc other than 0/1, 124 included), is `unknown` — unless
+  # tmux itself is gone. macOS records no scope and has no journal: its ends
+  # are `tmux-server` or `exited`. The `list-sessions` probe is bounded the
+  # `_session_probe` way (SUBSTRATE_PROBE_DEADLINE_S, D-310): a server that
+  # wedges at this exit must not keep the supervisor from exiting, and its
+  # timeout (124) is `unknown`, never `tmux-server`.
+  local id="$1" scope="" now out rc=0 journal=ok lsrc=0
+  scope=$(_reg_get "$id" panescope)   # absent or unreadable: empty, and both mean no scope to read
+  if [[ -n "$scope" || "$CCD_OS" != darwin ]]; then
+    if [[ -n "$scope" ]]; then
+      _now_s_to now
+      out=$(_plat_timeout 5 journalctl --user -u "$scope" --since "@$((now - 120))" -q -g 'killed by the OOM killer' -n 1 --no-pager 2>/dev/null) || rc=$?
+      if (( rc == 0 )) && [[ -n "$out" ]]; then printf 'oom'; return 0; fi
+      (( rc == 0 || rc == 1 )) || journal=failed
+    else
+      journal=failed
+    fi
+  fi
+  if declare -F tmux >/dev/null; then
+    tmux list-sessions >/dev/null 2>&1 || lsrc=$?
+  else
+    _plat_timeout "$SUBSTRATE_PROBE_DEADLINE_S" tmux list-sessions >/dev/null 2>&1 || lsrc=$?
+  fi
+  if (( lsrc == 124 )); then printf 'unknown'; return 0; fi
+  if (( lsrc != 0 )); then printf 'tmux-server'; return 0; fi
+  if [[ "$journal" == failed ]]; then printf 'unknown'; else printf 'exited'; fi
+  return 0
+}
+_end_record() {   # id cause — $REG/<id>.lastend, $REG/<id>.oomends (oom only) and one swap.log line. Always rc 0.
+  # `oomends` (D-5344) holds the epochs of this row's `oom` ends in the last
+  # RESUME_CAUSE_MAX_AGE_S, newest last, so the resume prompt can say how many
+  # there were: `lastend` keeps only the newest.
+  local id="$1" cause="$2" now e kept=""
+  _now_s_to now
+  _reg_set "$id" lastend "$now $cause"
+  if [[ "$cause" == oom ]]; then
+    if [[ -f "$REG/$id.oomends" && ! -L "$REG/$id.oomends" ]]; then
+      while IFS= read -r e || [[ -n "$e" ]]; do
+        [[ "$e" =~ ^[0-9]+$ ]] && (( now - e <= RESUME_CAUSE_MAX_AGE_S )) && kept+="$e"$'\n'
+      done < "$REG/$id.oomends"
+    fi
+    _reg_set "$id" oomends "$kept$now"
+  fi
+  echo "$(date '+%F %T') ended $id: $cause" >> "$REG/swap.log"
+  return 0
+}
+_end_note_gone() {   # id — the supervise loop's `gone` exit: classify and record, unless a swap just did
+  # A swap records its own cause before it stops this unit (`cmd_swap`), and a
+  # stop normally kills this supervisor before tmux pronounces the pane gone;
+  # should the loop still reach `gone`, a swap end of the last 60 s is the
+  # truer answer and is kept (D-5346).
+  local id="$1" le now
+  le=$(_reg_get "$id" lastend)   # absent or unreadable: empty, which is no swap end to keep
+  _now_s_to now
+  if [[ "$le" =~ ^([0-9]+)\ swap- ]] && (( now - BASH_REMATCH[1] >= 0 && now - BASH_REMATCH[1] <= 60 )); then return 0; fi
+  _end_record "$id" "$(_end_cause "$id")"
+}
+_swap_end_cause() {   # -> this swap's cause word: swap-manual | swap-auto-home | swap-auto-rescue | swap-auto
+  # CCD_SWAP_AUTO=1 is `_dispatch_swap`'s mark; CCD_SWAP_ARM names its arm
+  # (D-5240, Task 11): `affinity` (the move home) or `rescue`, the same two
+  # words `cmd_swap`'s act-time gates read. An automatic swap whose arm is not
+  # one of them is `swap-auto` (D-5348).
+  if [[ "${CCD_SWAP_AUTO:-}" != 1 ]]; then printf 'swap-manual'; return 0; fi
+  case "${CCD_SWAP_ARM:-}" in
+    affinity) printf 'swap-auto-home' ;;
+    rescue)   printf 'swap-auto-rescue' ;;
+    *)        printf 'swap-auto' ;;
+  esac
+}
+_resume_prompt_for() {   # id -> the resume prompt this spawn submits (D-5237). Always rc 0.
+  # RESUME_PROMPT with its cause clause replaced by the recorded cause of a
+  # `lastend` at most RESUME_CAUSE_MAX_AGE_S old; otherwise RESUME_PROMPT
+  # itself. NO SINGLE QUOTE in any clause: `_resume_env` single-quotes the
+  # result into the tmux command line. A cause word this build does not know
+  # reads as `unknown`.
+  local id="$1" le at now what extra="" n=0 e head tail
+  le=$(_reg_get "$id" lastend 2>/dev/null)   # absent or unreadable: empty, the generic prompt
+  if ! [[ "$le" =~ ^([0-9]+)\ ([a-z][a-z-]*)$ ]]; then printf '%s' "$RESUME_PROMPT"; return 0; fi
+  at="${BASH_REMATCH[1]}"; what="${BASH_REMATCH[2]}"
+  _now_s_to now
+  if (( now - at < 0 || now - at > RESUME_CAUSE_MAX_AGE_S )); then printf '%s' "$RESUME_PROMPT"; return 0; fi
+  case "$what" in
+    oom)
+      if [[ -f "$REG/$id.oomends" && ! -L "$REG/$id.oomends" ]]; then
+        while IFS= read -r e || [[ -n "$e" ]]; do
+          [[ "$e" =~ ^[0-9]+$ ]] && (( now - e >= 0 && now - e <= RESUME_CAUSE_MAX_AGE_S )) && n=$((n + 1))
+        done < "$REG/$id.oomends"
+      fi
+      (( n < 1 )) && n=1
+      what="its pane ran out of memory and the kernel killed a process in it, $n out-of-memory restart$([[ $n == 1 ]] || printf s) of this session in the last 10 minutes"
+      extra=" Before continuing: do not re-run the step that was running at the same parallelism, because that step ran out of memory." ;;
+    tmux-server)      what="the tmux server that held its pane went away" ;;
+    exited)           what="a supervisor revival after the process exited on its own" ;;
+    swap-auto-home)   what="an automatic account swap back to its home account" ;;
+    swap-auto-rescue) what="an automatic account swap off a blocked account" ;;
+    swap-auto)        what="an automatic account swap" ;;
+    swap-manual)      what="an account swap asked for by hand" ;;
+    *)                what="a supervisor revival whose cause could not be read" ;;
+  esac
+  head="${RESUME_PROMPT%%"$RESUME_CAUSE_GENERIC"*}"; tail="${RESUME_PROMPT#*"$RESUME_CAUSE_GENERIC"}"
+  printf '%s' "$head$what$tail$extra"
+}
+
+_resume_env() {   # [id] -> one line of KEY=value assignments for `env`, switching on Claude Code's interrupted-turn resume (D-2227); with an id, the prompt is that row's composed one (D-5237)
+  local prompt="$RESUME_PROMPT"
+  [[ -n "${1:-}" ]] && prompt=$(_resume_prompt_for "$1")
+  local out="CLAUDE_CODE_RESUME_INTERRUPTED_TURN=$RESUME_INTERRUPTED_TURN CLAUDE_CODE_RESUME_PROMPT='$prompt'"
   [[ -n "$RESUME_REDRIVE_MAX_AGE_MS" ]] && out="$out CLAUDE_CODE_RESUME_INTERRUPTED_TURN_MAX_AGE_MS=$RESUME_REDRIVE_MAX_AGE_MS"
   printf '%s' "$out"
 }
@@ -22703,7 +22849,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # `_redrive_after_spawn`'s own transcript measurement (`_transcript_path`,
   # which only ever names a Claude Code JSONL) fails closed there regardless —
   # so gating this line would buy nothing and cost a second home-ability check.
-  resenv=$(_resume_env)
+  resenv=$(_resume_env "$id")   # D-5237: the prompt names a recent end's cause
   # THE ROUTING RECORD (routing spec 2026-09-14 §5.2, §5.4 last paragraph):
   # `--model` from `class`, and the subagent floor into the SAME `env` line
   # `_resume_env` composes. Computed ONCE, here, above BOTH spawn lines —
@@ -23060,6 +23206,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
         "cd '$workdir' && exec env ${genenv}COLORTERM=truecolor $resenv '$WRAPPER_DIR/$wrapper' $launchflags --session-id '$uuid' --dangerously-skip-permissions"
     fi
   fi
+  _panescope_record "$id"   # D-5237: the pane's scope, once per spawn, never per tick
   # Make this window's terminal title = the tmux session name ("cc-<id>"), so a frontmost-window-
   # aware hotkey (ccclip) can target exactly the session you're looking at, even with many open.
   tmux set-option -t "$(_tmux_at "$tname")" set-titles on 2>/dev/null
@@ -23578,7 +23725,7 @@ _redrive_after_spawn() {   # id tmuxname fromswap — D-2231: type the resume pr
   _pane_box_has_content "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)" \
     && { echo "$(date '+%F %T') redrive-skip $id: input box not empty" >> "$REG/swap.log"; return 0; }
   echo "$(date '+%F %T') redrive $id: the transcript's newest turn is the unsubmitted resume pair after ${REDRIVE_WAIT_S}s; typing the prompt [wrapper=$(_reg_get "$id" wrapper)]" >> "$REG/swap.log"
-  tmux send-keys -t "$t" -l "$RESUME_PROMPT"; sleep 1; tmux send-keys -t "$t" Enter
+  tmux send-keys -t "$t" -l "$(_resume_prompt_for "$id")"; sleep 1; tmux send-keys -t "$t" Enter   # D-5237: the prompt the flag carried
   return 0
 }
 
@@ -24759,6 +24906,7 @@ cmd_supervise() {   # systemd ExecStart: ensure then block until the session die
     esac
     sleep "$tick"
   done
+  _end_note_gone "$id"   # D-5237: why it ended, in lastend and swap.log
   echo "session $id ended; exiting for systemd restart" >&2
   exit 1
 }
@@ -27477,6 +27625,10 @@ cmd_swap() {   # [--force] [--cross-pool] [--interrupt] id target-wrapper — mo
     fi
     rm -f -- "$REG/$id.rescueprev"
   fi
+  # D-5237: the end's cause, recorded BELOW every act-time gate (a refused or
+  # re-queued swap records no end) and before the stop; a gate added later
+  # goes above this line.
+  _end_record "$id" "$(_swap_end_cause)"
   [[ -e "$REG/$id.choicekept" ]] || _operator_choice_keep "$id"   # a stop the spawn below follows: the operator's own /model and /effort reach the record first; a session already stopped and read (a marker) is not read again (§5.7)
   _svc_stop "claude-session@$id" 2>/dev/null   # first, or Restart=always resurrects under the old wrapper
   tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || _operator_choice_unmark "$id"   # a kill that failed on a live session leaves no marker (§5.7)

@@ -1860,3 +1860,35 @@ describe('FleetSession.background (D-5231)', () => {
     expect((await row('2.1.296', hs)).background).toBeNull();
   });
 });
+
+// `interrupt-and-restart-causes-recorded` (D-5237; spec §5.6): the registry's `lastend` reaches the wire as
+// `FleetSession.lastEnd`, unchanged; absent is null.
+describe('FleetSession.lastEnd (D-5237)', () => {
+  const ID = 'lane-a-project-a';
+  const UUID = '00000000-0000-4000-8000-000000000001';
+  const ROSTER = { version: 1, accounts: [{
+    id: 'lane-a', label: 'lane-a', configDirSuffix: '.lane-a',
+    exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic',
+  }] };
+  const row = async (lastend: string | null): Promise<{ lastEnd: unknown }> => {
+    const home = mkTmp('ccrc-lastend-');
+    seedRoster(home, ROSTER);
+    const reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    const fields: Record<string, string> = { wrapper: 'lane-a', project: 'project-a', workdir: '/data/projects/project-a', uuid: UUID, started: '1' };
+    if (lastend !== null) fields['lastend'] = lastend;
+    for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${ID}.${k}`), v);
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return { code: args.includes(`=cc-${ID}:`) ? 0 : 1, stdout: '', stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1_784_600_000);
+    return fleet.find((x) => x.id === ID)!;
+  };
+  it('a recorded oom end rides the wire', async () => {
+    expect((await row('1784599820 oom')).lastEnd).toEqual({ at: 1_784_599_820_000, cause: 'oom' });
+  });
+  it('no lastend is null', async () => {
+    expect((await row(null)).lastEnd).toBeNull();
+  });
+});
