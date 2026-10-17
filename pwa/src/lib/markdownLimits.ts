@@ -92,9 +92,13 @@ export const MD_HIGHLIGHT_MAX_BLANK_CHARS = 2048;
  *  measured through the Docs pipeline (each page parsed as Docs parses it, then `detachUrls`, `highlightBlockCap` and
  *  the word, line and whitespace scans; 2026-10-15, at this wave's tip): 736 real fences of `docs/superpowers` are
  *  plain, on 78 pages, of 8 508 `typescript`, `javascript` and `rust` fences the 64 KiB cap, the general page budget
- *  and the word, line and whitespace bounds highlighted (532 over this cap, 204 refused by the scan page budget alone). The one page Docs never formats
- *  (refused as too wide) is excluded; review 460 F7 found that the 755 on 79 pages recorded before, counted by fence
- *  pattern, included it, and that the 8 582 beside them counted `typescript` and `javascript` fences only. Chat's
+ *  and the word, line and whitespace bounds highlighted (532 over this cap, 204 refused by the scan page budget alone). The walk
+ *  is all of `docs/superpowers` (324 pages), of which Docs serves the specs and plans (`DOC_SECTIONS`); it excluded
+ *  the one page Docs refuses as too wide, but not `programs/` and `research/` (34 pages), which Docs never serves.
+ *  7 of the 8 508 fences are on those (programs 5, research 2), so 8 501 are on pages Docs serves; all 736, their 78
+ *  pages and the markdown figures are in `plans/` (review 471 F3). Review 460 F7 found that the 755 on 79 pages
+ *  recorded before, counted by fence pattern, included the too-wide page, and that the 8 582 beside them counted
+ *  `typescript` and `javascript` fences only. Chat's
  *  corpus holds one `ts` fence, of 12 characters. */
 export const MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS = 8192;
 /** The longest code block, in characters, that is highlighted in `rust` (and its aliases, and any grammar that embeds
