@@ -179,9 +179,10 @@ export function loopbackCurlFront(realCurl: string): string {
 /** Where a bus env var points, as a path: the `path=` of a `unix:` address, or the bare value (XDG_RUNTIME_DIR).
  *  A value with `;` or `%` answers null, so `busUnder` is false and `assertNoRealTool` throws (wave 18, D-5257): a
  *  `;`-separated address list falls through to a LATER address (`unix:path=<home>/bus;unix:path=/run/user/1000/bus`),
- *  and D-Bus unescapes `%2e%2e` where `path.resolve` does not. The match below reads the first address only. */
+ *  and D-Bus unescapes `%2e%2e` where `path.resolve` does not. So does a value with more than one `path=` key
+ *  (D-5258): libdbus reads the FIRST, and the match below, which reads the first address only, takes the LAST. */
 function busPath(name: string, value: string): string | null {
-  if (/[;%]/.test(value)) return null;
+  if (/[;%]/.test(value) || (value.match(/(?:^unix:|,)path=/g) ?? []).length > 1) return null;
   if (name === 'XDG_RUNTIME_DIR') return value;
   const m = /^unix:(?:[^,]*,)*path=([^,]+)/.exec(value);
   return m ? m[1]! : null;
@@ -196,8 +197,9 @@ export function insideOf(home: string): (p: string) => boolean {
 
 /** True when BOTH bus variables are set and name paths inside `home`: a fixture bus the test made itself, which
  *  `ghContainedEnv` keeps (wave 18, D-5248). Exactly the condition `assertNoRealTool` refuses the negation of.
- *  A value with `;` or `%` is refused (`busPath`, D-5257). KNOWN LIMIT, not fixed: neither this nor `assertNoRealTool`
- *  takes a realpath of the bus value, so a path under HOME that is a SYMLINK to the real runtime dir passes. */
+ *  A value with `;`, `%` or a second `path=` is refused (`busPath`, D-5257, D-5258). KNOWN LIMIT, not fixed: neither
+ *  this nor `assertNoRealTool` takes a realpath of the bus value, so a path under HOME that is a SYMLINK to the real
+ *  runtime dir passes. */
 export function busUnder(env: NodeJS.ProcessEnv, home: string): boolean {
   const inside = insideOf(home);
   return (['XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS'] as const).every((name) => {
@@ -210,9 +212,9 @@ export function busUnder(env: NodeJS.ProcessEnv, home: string): boolean {
 /** THROWS unless, under `env`, every CONTAINED_TOOLS name resolves to NOTHING or to a file whose REALPATH is inside
  *  realpath(home) — a symlink from the fixture to a real binary fails — and unless XDG_RUNTIME_DIR and
  *  DBUS_SESSION_BUS_ADDRESS are both SET and name a path inside home. One `/bin/sh -c 'command -v …'` per name; the
- *  resolved file is never executed. A bus value with `;` or `%` is refused (D-5257), but a SYMLINK under home that
- *  points at the real runtime dir passes: the bus value is checked lexically, never by realpath (known limit, not
- *  fixed). It reads RESOLUTION: a stub under home that itself execs a real binary is that
+ *  resolved file is never executed. A bus value with `;`, `%` or a second `path=` is refused (D-5257, D-5258), but a
+ *  SYMLINK under home that points at the real runtime dir passes: the bus value is checked lexically, never by
+ *  realpath (known limit, not fixed). It reads RESOLUTION: a stub under home that itself execs a real binary is that
  *  stub's own contract (the rsync recorder's and the loopback curl front's are two), not this check's. */
 export function assertNoRealTool(env: NodeJS.ProcessEnv, home: string): void {
   const inside = insideOf(home);

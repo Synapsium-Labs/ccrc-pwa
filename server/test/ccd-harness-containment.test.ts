@@ -393,6 +393,20 @@ describe('the harness contains ssh, scp, curl and the user bus too (wave 18)', (
     expect(() => assertNoRealTool({ ...process.env, ...own }, h.home)).toThrow(/does not name a path inside the fixture HOME/);
   });
 
+  // D-5258: within the first address libdbus reads the FIRST `path=` key and the capture reads the last, so a value with
+  // two is refused by the same arm as `;` and `%`. The caller's LAST path is under HOME, which the capture alone accepts.
+  it('H18-12 a bus address with two `path=` keys is not kept: a client reads the first, a real runtime dir', () => {
+    expect(h.home).not.toMatch(/[;%]/);
+    const own = {
+      XDG_RUNTIME_DIR: path.join(h.home, 'xdg'),
+      DBUS_SESSION_BUS_ADDRESS: `unix:path=/run/user/${process.getuid?.() ?? 1000}/bus,path=${path.join(h.home, 'xdg', 'bus')}`,
+    };
+    expect(h.sh(PROBE, own)).toBe(BUS(h.home));
+    const env = ghContainedEnv(h.home, { PATH: '/usr/bin:/bin', ...own }, { systemd: true });
+    expect(`${env['XDG_RUNTIME_DIR']}|${env['DBUS_SESSION_BUS_ADDRESS']}`, 'the fixture pair wins').toBe(BUS(h.home));
+    expect(() => assertNoRealTool({ ...process.env, ...own }, h.home)).toThrow(/does not name a path inside the fixture HOME/);
+  });
+
   it('H18-9 stubContainedTool is the one named door: it writes into harnessBin and refuses a name it does not contain', () => {
     expect(() => stubContainedTool(h.home, 'git' as never, '#!/bin/sh\n')).toThrow(/not a contained tool/);
     // gh is contained, but its poison is rewritten on every ghContainedEnv call, so this door would not keep it (D-5254).

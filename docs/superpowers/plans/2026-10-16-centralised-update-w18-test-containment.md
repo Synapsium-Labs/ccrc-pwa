@@ -268,6 +268,10 @@ These are departures from the brief, the ledger, or what shipped text at `256b25
   - **Read by the review** (node against the real module): `unix:path=<home>/bus;unix:path=/run/user/<uid>/bus` was kept although a D-Bus client falls through to the second address, and `unix:path=<home>/%2e%2e/%2e%2e/run/user/<uid>/bus` was kept although D-Bus unescapes it and `path.resolve` does not. No test passes either today.
   - **The change:** one refusal in `busPath`, in a file this wave owns, and rows H18-10 (`;`) and H18-11 (`%`) in `ccd-harness-containment.test.ts`, each on a HOME holding neither character: the caller's pair is not kept, and `assertNoRealTool` throws on it.
   - **Named, not fixed:** a SYMLINK under HOME that points at the real runtime dir still passes both functions, because neither takes a realpath of the bus value. `busUnder`'s and `assertNoRealTool`'s docstrings say so, and so does Not in this wave.
+- **D-5258** — *`busPath` also refuses a bus value with more than one `path=` key, by the same arm as `;` and `%`, so the fixture pair wins* (the worker, fix round 2, from review 574's F4, as the coordinator ruled).
+  - **The plan:** D-5257's refusal covered a second ADDRESS (`;`) and an escape (`%`), but not a second KEY inside the first address.
+  - **Read by the review** (node, with the same regex): the capture `/^unix:(?:[^,]*,)*path=([^,]+)/` is greedy, so within the first address it reads the LAST `path=`, while libdbus's `dbus_address_entry_get_value` returns the FIRST. `unix:path=/run/user/1000/bus,path=<home>/xdg/bus` had neither `;` nor `%`, so with `XDG_RUNTIME_DIR` under HOME `busUnder` kept the caller's pair and `assertNoRealTool` passed it. Nothing passes such a value today, `systemctl` is poisoned anyway, and sd-bus rejects the repeated key.
+  - **The change:** `busPath` answers null when the value holds more than one `path=` key (at the address's start or after a `,`). Row H18-12 in `ccd-harness-containment.test.ts`, on a HOME with no `;` or `%`: the caller's pair is not kept, and `assertNoRealTool` throws on it. Mutation row T1-17.
 
 ## File structure
 
