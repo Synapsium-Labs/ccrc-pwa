@@ -4137,6 +4137,40 @@ describe('R110 to R112 (review 533 F1, F2): each arm of R109 holds alone, and th
   });
 });
 
+describe('R113 and R114 (review 544 P2, P1): the ready instant covers the boot recovery, and the late-return marks\' second move is pinned', () => {
+  it('R113 (P2): the ready instant set by a fresh lane\'s first pass is no earlier than the BOOT recovery\'s return: a creator call stamped inside a held-open DelegationDurability.open is held', async () => {
+    // A MOCKED timeline beyond the pass budget: the clock moves 180 s while the open is held, and the budget timer (real time) does not
+    // fire, so the pass is not cut. One arm (`appliedAt`, measured when the applier answers) covers both the pass that started the open
+    // and a later pass awaiting the cached applier after the first was cut: the cached promise resolves only after `open()` recovered.
+    // Measuring after the await carries the clock-skew allowance from the recovery's return: that covers a call made during the recovery
+    // by a hook clock running ahead of the server's; when the clocks agree, the pass budget (45 s) already keeps a recovery inside the
+    // skew (60 s), unless a starved event loop fires the budget timer late.
+    const w = world();
+    makeOwner(w, 'demo-a');
+    const realOpen = DelegationDurability.open.bind(DelegationDurability);
+    let openOpen!: () => void;
+    const openGate = new Promise<void>((resolve) => { openOpen = resolve; });
+    let opening = false;
+    vi.spyOn(DelegationDurability, 'open').mockImplementation(async (deps) => {
+      opening = true;
+      await openGate;
+      return realOpen(deps);
+    });
+    setNow(at(0));
+    setCensus(w, WITH_TREE, { 'demo-a': measured() }, at(0));
+    const first = pass(w);                                              // the lane's first pass: it starts the open, which recovers
+    await vi.waitFor(() => expect(opening, 'the open is held').toBe(true));
+    writeBucket(w, 'demo-a', BUCKET10,                                  // inside the boot recovery, more than the skew after the pass began
+      bashPre('demo-a', 'toolu_wt1', ['old-tree'], iso(at(0) + 120_000)), bashPost('demo-a', 'toolu_wt1', ['old-tree', 'raw-tree'], iso(at(0) + 123_000)));
+    setNow(at(0) + 180_000);                                            // the open returns 180 s after the pass began
+    openOpen();
+    await first;                                                        // the same pass reaches the owners and reconciles
+    for (let i = 4; i < 8; i++) await censusPass(w, at(i), WITH_TREE);
+    expect(leasesOf(w.home), 'the creator began inside the boot recovery').toEqual([]);
+    expect(w.watcher.delegationReport().lostEvidence.forced).toBe(1);
+  });
+});
+
 describe('R90 (W3, coordinator 5512): within one hour a loss word displaces a carve-out word, and a carve-out word never displaces a loss word', () => {
   const pair = [sessionOf('demo-a'), sessionOf('demo-x')];
   const T1 = '2026-10-15T10:31:00.000Z';

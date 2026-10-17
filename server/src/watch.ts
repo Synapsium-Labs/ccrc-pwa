@@ -8514,10 +8514,12 @@ function renderAskBrief(askId: number, childId: string, question: string, option
 //     - THE LATEST READY INSTANT (R88, `readyAt`). Set by the first pass of a process that reaches the owners, and again by the first
 //       pass to reach them after the lane was found NOT READY (no census, no applier, or an applier not `ready` or failed; and R103, a
 //       registry `tick()` could not list, which stops the tick before the census and this lane; and R109, a pass cut before the owners,
-//       which listed no one): to the instant the recovery of that
-//       same pass returned, or else to the pass's own clock. (A pass's clock alone would still move the instant past an earlier one;
-//       measuring after the recovery's await adds the recovery's OWN duration, from the pass's start to its return, in which nothing was
-//       listed, R112.) (No census and no applier can only be found before a process's first ready
+//       which listed no one): to the instant the recovery of that same pass returned (the in-process one, R112), or else to the
+//       instant the pass's applier answered (`appliedAt`, R113), which covers the BOOT recovery `open()` makes, for the pass that started
+//       the open and for a later one awaiting the cached applier alike, and is never earlier than the pass's own clock. (Measuring after
+//       the await carries the clock-skew allowance from the recovery's return: that covers a call made during the recovery by a hook
+//       clock running ahead of the server's. When the clocks agree, the pass budget (45 s) already keeps a recovery inside the skew
+//       (60 s), unless a starved event loop fires the budget timer late.) (No census and no applier can only be found before a process's first ready
 //       pass: the census is never unset and the applier is cached once opened; they stay as defence.) Correlation gets one lost window
 //       from the epoch to it plus the clock skew on every repository (`delegationNotReadyWindowOf`, R104): a stretch's start cannot be
 //       measured, so every rung-4 candidate whose creator began at or before it is held, and through X1 so is a rung-3 link whose creator
@@ -9324,13 +9326,19 @@ class DelegationLane {
   private async run(pass: LanePass): Promise<void> {
     this.noteSessions(pass);
     const durable = await this.applier();
+    /** R113 (review 544 P2): when the applier answered, so the boot recovery `open()` makes is covered like an in-process one (R112): for
+     *  the pass that started the open, and for a later pass awaiting the cached applier after the first was cut. Never earlier than
+     *  `pass.now`; the reason to measure after the await is the M1 sentence on `recoveredAt` below. */
+    const appliedAt = Date.now();
     if (durable === null) {
       this.notReady = true;                                            // R88: no applier, nothing is read
       return;
     }
     if (pass.signal.aborted) return;
-    /** R88, R112: the instant a recovery of THIS pass returned, measured after its await. A pass's clock alone would still move the ready
-     *  instant; what this adds is the recovery's own duration, from the pass's start to its return, in which nothing was listed. */
+    /** R88, R112: the instant a recovery of THIS pass returned, measured after its await. That carries the clock-skew allowance from the
+     *  recovery's return, which covers a call made during the recovery by a hook clock running ahead of the server's; when the clocks
+     *  agree, the pass budget (45 s) already keeps a recovery inside the skew (60 s), unless a starved event loop fires the budget timer
+     *  late. The same holds for the boot recovery, through `appliedAt` (R113). */
     let recoveredAt: number | null = null;
     if (durable.state().phase !== 'ready' || durable.failure() !== null) {
       this.notReady = true;                                            // R88: in recovery, or failed: what happens now is not read
@@ -9354,10 +9362,11 @@ class DelegationLane {
     pass.reachedOwners = true;                                         // R109: synchronously after the last check, before any await
 
     // R88: the first pass to reach the owners after a not-ready mark (and the first of a process) is the latest ready instant: the
-    // instant this pass's own recovery returned (so the recovery's own duration is covered, R112), else this pass's clock. Everything at
-    // or before it may hold a session nothing listed.
+    // instant this pass's own in-process recovery returned (R112), else the instant its applier answered, after the boot recovery
+    // `open()` makes (R113). Measured after the awaits, so the skew allowance runs from the recovery's return (the M1 reason above).
+    // Everything at or before it may hold a session nothing listed.
     if (this.notReady) {
-      this.readyAt = recoveredAt ?? pass.now;
+      this.readyAt = recoveredAt ?? appliedAt;
       this.notReady = false;
     }
     await this.expirePendingOwners(pass, durable);
