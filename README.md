@@ -4471,10 +4471,11 @@ row reads `stopped` (never crashed, to the dead-coordinator lane or the PWA), an
 `Worker stopped` row per stop. A re-dispatch onto the worker restarts it: the dispatch resume arm's `ccd ensure`
 re-supervises and resumes a stopped session. Switches: `$REG/stop-done-disabled` (this lane only; no writer in the
 tree — touch and remove it by hand on the fleet box) and `$REG/reclaim-paused` (every cleanup lane, above). Its holds
-carry hibernation's words (D-5242), and hibernation absorbs it when it lands; until then it is narrower in time and
-looser in a few facts — a page open in a hidden tab does not hold the worker (hibernation's open-socket presence does
-not exist yet), and nor do session crons, a terminal attached on the box or an opt-out marker — so the operator who
-comes back to such a page revives a stopped session (`ensure` resumes it; nothing is lost).
+carry hibernation's words (D-5242), and hibernation absorbs it when it lands; until then it acts earlier (10 minutes
+after the run's close, against hibernation's 6 h of idleness) and is looser in a few facts — it has no `recent` (N)
+hold, a page open in a hidden tab does not hold the worker (hibernation's open-socket presence does not exist yet),
+and nor do session crons, a terminal attached on the box or an opt-out marker — so the operator who comes back to such
+a page revives a stopped session (`ensure` resumes it; nothing is lost).
 
 **Landing order (landing-order wave 1).** Every merge of `main` into a branch restarts that branch's
 CI, so a session absorbs `main` only on a licence. Worker clause 16 names three, each read after one

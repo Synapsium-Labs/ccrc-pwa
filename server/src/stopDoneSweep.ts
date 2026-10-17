@@ -33,8 +33,9 @@ import {
  *     dispatch that is opening a run onto this worker, or a mail delivery typing into its pane, finishes first; inside
  *     them the registry record (and the row the frame assembles from it), the store, presence and the live state are read
  *     AGAIN and the verdict asked again — the tick's roster read alone is kept when the re-read row has none — and only
- *     `stop` composes
- *     `ccd stop <id> --surface agent` — the existing, already-granted `CCD_ARGV.stopId` (no new ccd verb).
+ *     `stop` composes `ccd stop <id> --surface agent` — the existing, already-granted `CCD_ARGV.stopId` (no new ccd
+ *     verb). The pane menu is the watcher's newest scrape, and the live reads use the tick's record: a uuid or wrapper
+ *     that changed since fails closed (the marker reads `foreign`, the live file `unmeasured`).
  *
  * WHY THE STOP READS AS DELIBERATE. `cmd_stop` journals a `stop` row with the declared surface before it unsupervises,
  * and writes `.stopped` with it, so the dead-coordinator lane (`DEAD_COORDINATOR_DELIBERATE_ACTS` names `stop`), the

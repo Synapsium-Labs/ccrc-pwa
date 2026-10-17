@@ -5,7 +5,7 @@ import { PRESENCE_TTL_MS, type FleetSession } from '../../shared/api.js';
 import type { SessionRecord } from '../src/registry.js';
 import type { FleetState } from '../src/fleetstate.js';
 import path from 'node:path';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
 import { loadConfig } from '../src/config.js';
@@ -15,6 +15,9 @@ import { buildServer } from '../src/server.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { RECLAIM_PAUSE_MARKER } from '../src/coord/rundefs.js';
+import { readSessionRecord } from '../src/registry.js';
+import { liveRowFor, turnReadDeps } from '../src/turnverdict.js';
+import type { Runner } from '../src/exec.js';
 
 // D-5370 (`stop-worker-at-run-done`): the lane. The verdict's holds are pinned in `stop-done-verdict.test.ts`; this
 // file pins what the PASS does with them — the kill switch, the serialiser, the per-pass bound, the act-time re-read,
@@ -329,6 +332,125 @@ describe('run by the watcher\'s tick (D-5370)', () => {
       expect(Array.isArray(sessions) && Array.isArray(records) && Array.isArray(names)).toBe(true);
     } finally {
       coord.db.close();
+    }
+  });
+});
+
+// The pass's own suite stubs `mark` and `rowAtAct`; this one runs the REAL `sweepStopDone`, so the closures the watcher
+// wires (`turnMarkFor` judged against the live process, the record re-read at the act) are what decides. A temp
+// registry, a real coordination store, a pane whose pid and live file the fixture writes, and one runner that answers
+// tmux and ccd, so a stop is one `stop` argv in its log.
+describe('the watcher\'s own pass, its deps unmocked (D-5370)', () => {
+  const WID = 'project-a-quiet-basin';
+  const WUUID = `u-${WID}`;
+  const WRAPPER = 'claude-a';
+  const PANE = 4242;
+
+  const harness = async () => {
+    const home = mkTmp('ccrc-stop-done-real-');
+    seedRoster(home);
+    const reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    const cfg = loadConfig({ CCRC_HOME: home, CCRC_PROJECTS_ROOT: mkTmp('ccrc-projects-') } as never);
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const opened = coord.openRun({ program: 'p', title: 't', project: 'project-a', wave: 1, waveOf: 1, claimedBy: 'c' });
+    if (!('id' in opened)) throw new Error(`fixture openRun refused: ${JSON.stringify(opened)}`);
+    coord.markDispatched(opened.id, WID, WID, `ws/${WID}`, false);
+    for (const to of ['dispatched', 'working'] as const) {
+      const a = coord.advance(opened.id, to, 'test');
+      if (!a.ok) throw new Error(`fixture advance to ${to} refused: ${JSON.stringify(a)}`);
+    }
+    const closed = coord.closeRun({ runId: opened.id, finalState: 'done', causedBy: 'test', handoffCommit: null,
+      program: 'p', viaClosing: true });
+    if (!closed.ok) throw new Error(`fixture closeRun refused: ${JSON.stringify(closed)}`);
+    coord.db.prepare('UPDATE runs SET closedAt = ? WHERE id = ?').run(Date.now() - STOP_DONE_GRACE_MS - 60_000, opened.id);
+    const fields: Record<string, string> = {
+      wrapper: WRAPPER, project: 'project-a', workdir: `/w/${WID}`, uuid: WUUID, started: '1',
+      workspace: WID, branch: `ws/${WID}`, base: 'origin/main', child: String(opened.id),
+    };
+    for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${WID}.${k}`), v);
+    const startedAt = Date.now() - 3_600_000;
+    const sessions = path.join(home, `.${WRAPPER}`, 'sessions');
+    mkdirSync(sessions, { recursive: true });
+    writeFileSync(path.join(sessions, `${PANE}.json`), JSON.stringify({
+      pid: PANE, sessionId: WUUID, status: 'idle', statusUpdatedAt: Date.now() - 20 * 60_000, startedAt }));
+    const markAt = Date.now() - 20 * 60_000;
+    const turnMark = (at: number): void => writeFileSync(path.join(reg, `${WID}.turn.json`), `${JSON.stringify({
+      v: 1, sessionId: WUUID, state: 'done', event: 'Stop', at, turnAt: at - 60_000, stopAt: at,
+      bg: 0, bgKinds: '', bgIds: '', err: null, restartAt: null, lostBg: 0, lostKinds: '', lostIds: '' })}\n`);
+    turnMark(markAt);
+    const calls: string[][] = [];
+    const run: Runner = async (_cmd, args) => {
+      calls.push(args);
+      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { code: 0, stdout: `${PANE}\n`, stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const deps = { ...testDeps(home, run), cfg, coord, fleetState: { ccdVerbs: ['stop-surface'] } };
+    const w = new FleetWatcher(deps as never, new Bus(), 10_000);
+    (w as unknown as { stopDoneStartedAt: number }).stopDoneStartedAt = startedAt;
+    w.useStopDoneSerialiser({ serial: async (fn: () => Promise<unknown>) => fn() } as never);
+    // The tick's rows and records, assembled now — before anything a case writes afterwards.
+    const tick = async () => {
+      const r = await readSessionRecord(deps.io, cfg, WID);
+      if (!r.found) throw new Error('fixture record not found');
+      const row = await liveRowFor(turnReadDeps(deps as never, w), r.record, WUUID);
+      if (row === null) throw new Error('fixture row not assembled');
+      return { rows: [row], records: [r.record] };
+    };
+    const stops = () => calls.filter((c) => c[0] === 'stop');
+    return { home, reg, coord, w, tick, stops, turnMark, startedAt };
+  };
+
+  it('control: an idle worker whose run is done, with a fresh `done` marker, is stopped', async () => {
+    const h = await harness();
+    try {
+      const t = await h.tick();
+      expect(t.rows[0]).toMatchObject({ held: null, bucket: 'idle', child: { kind: 'child' } });
+      await h.w.sweepStopDone(t.rows, t.records, []);
+      expect(h.stops()).toEqual([['stop', WID, '--surface', 'agent']]);
+    } finally {
+      h.coord.db.close();
+    }
+  });
+
+  it('a `.hold` written after the tick\'s rows were assembled holds at the act: the record is re-read there', async () => {
+    const h = await harness();
+    try {
+      const t = await h.tick();
+      expect(t.rows[0]!.held).toBeNull();
+      writeFileSync(path.join(h.reg, `${WID}.hold`), 'a program claimed it');
+      await h.w.sweepStopDone(t.rows, t.records, []);
+      expect(h.stops()).toEqual([]);
+    } finally {
+      h.coord.db.close();
+    }
+  });
+
+  it('a `.turn.json` older than the live process holds `marker`: the background it would have vouched for is unknown', async () => {
+    const h = await harness();
+    try {
+      h.turnMark(h.startedAt - 60_000);
+      const t = await h.tick();
+      await h.w.sweepStopDone(t.rows, t.records, []);
+      expect(h.stops()).toEqual([]);
+    } finally {
+      h.coord.db.close();
+    }
+  });
+
+  it('a live marker counting a background task holds: the real count reaches the verdict', async () => {
+    const h = await harness();
+    try {
+      const at = Date.now() - 20 * 60_000;
+      writeFileSync(path.join(h.reg, `${WID}.turn.json`), `${JSON.stringify({
+        v: 1, sessionId: WUUID, state: 'done', event: 'Stop', at, turnAt: at - 60_000, stopAt: at,
+        bg: 1, bgKinds: 'monitor', bgIds: 'b1', err: null, restartAt: null, lostBg: 0, lostKinds: '', lostIds: '' })}\n`);
+      const t = await h.tick();
+      await h.w.sweepStopDone(t.rows, t.records, []);
+      expect(h.stops()).toEqual([]);
+    } finally {
+      h.coord.db.close();
     }
   });
 });
