@@ -8513,7 +8513,8 @@ function renderAskBrief(askId: number, childId: string, question: string, option
 //   THE LANE NEVER LINKS ACROSS A STRETCH IT KNOWS IT DID NOT READ (W1, coordinator 5512; R88, R89). Lane memory only, both:
 //     - THE LATEST READY INSTANT (R88, `readyAt`). Set by the first pass of a process that reaches the owners, and again by the first
 //       pass to reach them after the lane was found NOT READY (no census, no applier, or an applier not `ready` or failed; and R103, a
-//       registry `tick()` could not list, which stops the tick before the census and this lane): to the instant the recovery of that
+//       registry `tick()` could not list, which stops the tick before the census and this lane; and R109, a pass cut before the owners,
+//       which listed no one): to the instant the recovery of that
 //       same pass returned, or else to the pass's own clock. (No census and no applier can only be found before a process's first ready
 //       pass: the census is never unset and the applier is cached once opened; they stay as defence.) Correlation gets one lost window
 //       from the epoch to it plus the clock skew on every repository (`delegationNotReadyWindowOf`, R104): a stretch's start cannot be
@@ -8523,7 +8524,8 @@ function renderAskBrief(askId: number, childId: string, question: string, option
 //       one observation of it COMPLETES in a pass that was not cut AND what it read is DURABLE (R101: after the pass's flush, which did
 //       not fail past its first byte and refused none of its buckets): so a pass cut before it reaches an owner, or whose read is lost
 //       at the flush, leaves that owner to a later pass, live or not, whatever the next census says. An owner the last pass listed and
-//       this one does not is pending again (R102), so its last lines are read once more after it ends. Until it is read its listed hours,
+//       this one does not is pending again (R102), so its last lines are read once more after it ends. A pass forgets nothing of an owner a
+//       NEWER pass has listed or re-pended (R107, the `listedBy` stamp): a cut pass's late flush can land after it. Until it is read its listed hours,
 //       and its measured hours not yet closed (R106), are lost windows. An hour that leaves the read horizon before the owner is read is
 //       recorded as a durable gap with a LOSS word (`hour-never-closed`, never a carve-out word), and the owner is forgotten once it has
 //       no listed hour left: so the memory is bounded by the read horizon (and `lastListed` by the live sessions).
@@ -8644,7 +8646,12 @@ interface LaneEvidenceIndex {
  *  `listedHours` are the hours (ms) a pass listed it in and no completed observation has covered yet, inside the read horizon (R89). */
 interface LaneOwner { id: string; incarnation: string | null; reason: string; live: boolean; listedHours: readonly number[] }
 /** R89: an owner a pass LISTED from the census, and the hours (ms) it was listed in, until one observation of it completes. */
-interface LanePendingOwner { id: string; incarnation: string | null; reason: string; hours: Set<number> }
+interface LanePendingOwner {
+  id: string; incarnation: string | null; reason: string; hours: Set<number>;
+  /** R107 (re-review N1): the sequence of the last pass that LISTED it alive or re-pended it (R102). A pass forgets only an owner no
+   *  newer pass has listed: a cut pass's late flush must not erase a later pass's listing of the same hour (the hours are one set). */
+  listedBy: number;
+}
 /** An owner's identity in a pass and in the pending memory: (id, incarnation or null). */
 const laneOwnerKey = (id: string, incarnation: string | null): string => JSON.stringify([id, incarnation]);
 /** The detail of an hour whose parent's incarnation could not be measured. */
@@ -8669,6 +8676,10 @@ interface LanePass {
   /** R101: the owners whose observation COMPLETED in this pass before any cut. Each leaves the pending memory only once what it staged
    *  is durable (`forgetRead`, after the flush), never when the observation merely returns. */
   completed: LaneOwner[];
+  /** R107: this pass's sequence (the lane counts the passes it starts), stamped on every owner it lists or re-pends. */
+  seq: number;
+  /** R109 (re-review N3): set, synchronously, once the pass is past its last check before the owners; a pass cut before it listed nothing. */
+  reachedOwners: boolean;
 }
 
 const laneTreeKey = delegationTreeKey;
@@ -8874,6 +8885,8 @@ class DelegationLane {
    *  the lane can still read. */
   private readonly refusedBuckets = new Set<string>();
   private passes = 0;
+  /** R107: the sequence of the last pass this lane started (each pass takes the next one). */
+  private passSeq = 0;
   private skipped = 0;
   /** R88 (W1 a): the LATEST READY INSTANT (epoch ms), or null before the first pass of this process reached the owners. Lane memory
    *  only: no durable fact bounds it, and a restart starts from none. */
@@ -9283,12 +9296,18 @@ class DelegationLane {
     timer.unref();
     const pass: LanePass = {
       now, signal: ac.signal, census, sessions, records, capability: delegationCapabilityState(this.deps.fleetState?.ccdVerbs), pending: [], settle: [], completed: [],
+      seq: ++this.passSeq, reachedOwners: false,
     };
     const work = this.run(pass).then(() => 'done' as const);
     work.catch(() => undefined);                                         // a late rejection of a cut pass is not an unhandled one
     try {
       const outcome = await Promise.race([work, cut]);
-      if (outcome === 'cut') console.warn(`ccrc-server: a delegation pass outran its ${DELEGATION_PASS_BUDGET_MS} ms budget and was cut; its late answers are discarded`);
+      if (outcome === 'cut') {
+        console.warn(`ccrc-server: a delegation pass outran its ${DELEGATION_PASS_BUDGET_MS} ms budget and was cut; its late answers are discarded`);
+        // R109 (re-review N3): cut before the owners (in the projects-root resolution or the evidence load), it listed no one: the lane is
+        // NOT READY, at once, so the next pass to reach the owners moves the ready instant past a session only this pass's census named.
+        if (!pass.reachedOwners) this.notReady = true;
+      }
     } catch (err) {
       console.warn(`ccrc-server: a delegation pass failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
@@ -9323,10 +9342,11 @@ class DelegationLane {
       if (durable.state().phase !== 'ready' || durable.failure() !== null || pass.signal.aborted) return;
     }
     await this.resolveProjectsRoot(pass);
-    if (pass.signal.aborted) return;
+    if (pass.signal.aborted) { this.notReady = true; return; }        // R109: cut before the owners, so nothing was listed
     this.passes += 1;
     await this.loadEvidence(durable, pass);
-    if (pass.signal.aborted) return;
+    if (pass.signal.aborted) { this.notReady = true; return; }        // R109: the same
+    pass.reachedOwners = true;                                         // R109: synchronously after the last check, before any await
 
     // R88: the first pass to reach the owners after a not-ready mark (and the first of a process) is the latest ready instant: the
     // instant this pass's own recovery returned, else this pass's clock. Everything at or before it may hold a session nothing listed.
@@ -9443,9 +9463,10 @@ class DelegationLane {
       const reason = inc.kind === 'measured' ? '' : inc.reason;
       const k = laneOwnerKey(s.id, incarnation);
       // R89: LISTED, so it stays an owner, live or not, until one observation of it completes (the loop in `run` forgets it then).
-      const pending = this.pendingOwners.get(k) ?? { id: s.id, incarnation, reason, hours: new Set<number>() };
+      const pending = this.pendingOwners.get(k) ?? { id: s.id, incarnation, reason, hours: new Set<number>(), listedBy: pass.seq };
       pending.reason = reason;
       pending.hours.add(nowHour);
+      pending.listedBy = pass.seq;                                       // R107
       this.pendingOwners.set(k, pending);
       out.set(k, { id: s.id, incarnation, reason, live: true, listedHours: [] });
       listed.set(k, { id: s.id, incarnation, reason, hourMs: nowHour });
@@ -9454,8 +9475,9 @@ class DelegationLane {
     // read: it is pending again, not live, with the hour it was last listed in, so it is read once more before it leaves.
     for (const [k, gone] of this.lastListed) {
       if (listed.has(k)) continue;
-      const pending = this.pendingOwners.get(k) ?? { id: gone.id, incarnation: gone.incarnation, reason: gone.reason, hours: new Set<number>() };
+      const pending = this.pendingOwners.get(k) ?? { id: gone.id, incarnation: gone.incarnation, reason: gone.reason, hours: new Set<number>(), listedBy: pass.seq };
       pending.hours.add(gone.hourMs);
+      pending.listedBy = pass.seq;                                       // R107
       this.pendingOwners.set(k, pending);
     }
     this.lastListed = listed;
@@ -9654,7 +9676,9 @@ class DelegationLane {
    * past the first byte nothing of the pass is durable, so every owner it read stays pending (and is read again once the applier
    * recovers, whether or not a census still names it); an owner one of whose buckets the applier REFUSED before writing (R82) stays
    * pending too, so its refused bucket is staged again. Otherwise the hours the observation covered (its listed hours) leave the owner's
-   * memory, and an owner with none left is forgotten: a later pass's listing (a cut pass's late flush can land after it) keeps its own.
+   * memory, and an owner with none left is forgotten. R107 (re-review N1): a cut pass's late flush can land after a LATER pass has listed
+   * or re-pended the same owner in the same hour, and the hours are one set, so a pass forgets nothing of an owner whose stamp
+   * (`listedBy`) is newer than its own: that later pass forgets it, once its own read is durable.
    */
   private forgetRead(pass: LanePass, flushed: { failed: boolean; refused: ReadonlySet<string> }): void {
     const done = pass.completed.splice(0);
@@ -9665,6 +9689,7 @@ class DelegationLane {
       const k = laneOwnerKey(owner.id, owner.incarnation);
       const pending = this.pendingOwners.get(k);
       if (pending === undefined) continue;
+      if (pending.listedBy > pass.seq) continue;                         // R107: a newer pass listed it; that pass decides
       for (const hourMs of owner.listedHours) pending.hours.delete(hourMs);
       if (pending.hours.size === 0) this.pendingOwners.delete(k);
     }

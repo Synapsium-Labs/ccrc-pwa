@@ -3941,6 +3941,84 @@ describe('R101, R102 and R106 (review F1, F2, F6): a listed owner leaves only on
   });
 });
 
+describe('R107 to R109 (re-review N1 to N3): a cut pass never forgets what a newer pass listed, and a pass cut before the owners is not ready', () => {
+  const trio = [sessionOf('demo-a'), sessionOf('demo-x'), sessionOf('demo-y')];
+  /** A pass at `t` over `sessions` that waits inside `entered` (a read held open) and is CUT at its budget; `release` then lets the late
+   *  answer through, and the pass's late work runs on. */
+  async function cutWhile(w: World, t: number, projects: Record<string, CensusView>, sessions: readonly Sess[], held: { reached: () => boolean; release: () => void }): Promise<void> {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    setNow(t);
+    setCensus(w, projects, Object.fromEntries(sessions.map((s) => [s.id, measured()])), t);
+    const cut = pass(w, sessions);
+    await vi.waitFor(() => expect(held.reached(), 'the pass reached the held read').toBe(true));
+    await vi.advanceTimersByTimeAsync(DELEGATION_PASS_BUDGET_MS + 1);
+    await cut;
+    held.release();
+    await vi.advanceTimersByTimeAsync(10);
+    vi.useRealTimers();
+  }
+
+  it('R107 (N1, probe P5): a cut pass\'s late flush, landing after the next pass re-pended the same owner in the same hour, does not forget it: the owner whose next read throws is read again', async () => {
+    const w = world();
+    for (const o of ['demo-a', 'demo-x', 'demo-y']) makeOwner(w, o);
+    await censusPass(w, at(-1), BEFORE_TREE, []);                       // ready; no owner yet
+    // pass k (at(1)) reads demo-a and demo-x (two new, empty hours) and is cut on demo-y's held listing; its application is held open
+    let openFlush!: () => void;
+    const flushGate = new Promise<void>((resolve) => { openFlush = resolve; });
+    let kApplied!: () => void;
+    const kDone = new Promise<void>((resolve) => { kApplied = resolve; });
+    const realApply = DelegationDurability.prototype.applyAcceptedBatch;
+    let gated = true;
+    vi.spyOn(DelegationDurability.prototype, 'applyAcceptedBatch').mockImplementation(async function (this: DelegationDurability, batches) {
+      if (!gated) return realApply.call(this, batches);
+      gated = false;
+      await flushGate;
+      try { return await realApply.call(this, batches); } finally { kApplied(); }
+    });
+    let releaseY!: () => void;
+    w.faults.hold.set('demo-y', new Promise<void>((resolve) => { releaseY = resolve; }));
+    await cutWhile(w, at(1), BEFORE_TREE, trio, { reached: () => w.calls.listings.includes('demo-y'), release: () => { w.faults.hold.delete('demo-y'); releaseY(); } });
+    // after pass k read it, demo-x's call overlaps demo-a's creator; then demo-x and demo-y end
+    creatorAfter(w, at(1), 'demo-x');
+    // pass k+1 (at(2)) re-pends demo-x (R102); when it reads demo-x, pass k's late flush lands first, and then that read throws
+    const realRange = w.io.readFileFromBytesMeasured;
+    let armed = true;
+    w.io.readFileFromBytesMeasured = async (p, o, m, t, sig) => {
+      if (armed && p.includes('/spool/demo-x/')) {
+        armed = false;
+        openFlush();
+        await kDone;
+        await new Promise((resolve) => setTimeout(resolve, 20));           // pass k's forgetting runs after its application resolves
+        throw new Error('agent socket dropped');
+      }
+      return realRange(p, o, m, t, sig);
+    };
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    for (let i = 2; i < 7; i++) await censusPass(w, at(i), WITH_TREE);    // demo-x and demo-y are in no census from here on
+    expect(armed, 'pass k+1 read demo-x').toBe(false);
+    expect(leasesOf(w.home), 'demo-x is read again: its overlapping call vetoes').toEqual([]);
+    expect(w.calls.ranges.filter((r) => r === `demo-x/${BUCKET10}.spool`).length, 'read after the throw').toBeGreaterThan(0);
+  });
+
+  it('R109 (N3): a pass cut before the owners (here in the projects-root resolution) lists no one, so the lane is not ready: a session only its census named, overlapping the creator, holds the call', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    await censusPass(w, at(-1), BEFORE_TREE);                           // ready
+    creatorAfter(w, at(0), 'demo-g');                                   // demo-g overlaps demo-a's creator, and is named only by at(1)'s census
+    const realRealpath = w.io.realpath;
+    let gate: Promise<void> | null = null;
+    let openRoot!: () => void;
+    let reached = false;
+    w.io.realpath = async (p) => { if (gate !== null) { reached = true; await gate; } return realRealpath(p); };
+    gate = new Promise<void>((resolve) => { openRoot = resolve; });
+    await cutWhile(w, at(1), WITH_TREE, [sessionOf('demo-a'), sessionOf('demo-g')], { reached: () => reached, release: () => { gate = null; openRoot(); } });
+    for (let i = 2; i < 7; i++) await censusPass(w, at(i), WITH_TREE);    // demo-g is gone
+    expect(w.calls.listings, 'no pass ever listed demo-g').not.toContain('demo-g');
+    expect(leasesOf(w.home), 'the pass that alone named it was cut before the owners').toEqual([]);
+    expect(w.watcher.delegationReport().lostEvidence.forced).toBe(1);
+  });
+});
+
 describe('R90 (W3, coordinator 5512): within one hour a loss word displaces a carve-out word, and a carve-out word never displaces a loss word', () => {
   const pair = [sessionOf('demo-a'), sessionOf('demo-x')];
   const T1 = '2026-10-15T10:31:00.000Z';
