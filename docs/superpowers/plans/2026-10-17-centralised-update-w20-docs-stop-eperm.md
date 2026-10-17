@@ -323,6 +323,15 @@ The coordinator's mail ruled on review 573's six findings at `97493f9b2`. F1: th
 | T20-M6 | the SIGKILL call passes `absorb_reaped=True` (absorb at both calls) | case 4: `kill` reads `returned` |
 
 T20-M4 now reds case 4 as well, because that mutant absorbs every EPERM at every call. No row is green.
+- [x] **Step 5 (the gate, measured, worker, 2026-10-17, at `86aef1b92`).** One file at a time, with `--pool=forks --maxWorkers=1` and a short TMPDIR. Slice anon read 20.8 to 21.3 GiB at each start, and one start waited until it fell below 22 GiB. Every file is green:
+  - `ccd-docs-tree` (whole): 188;
+  - `ownership` 14, `mark-check` 7;
+  - `macos-platform` 104 (11 skipped), `ccd-supervised-start` 28 (4 skipped);
+  - `archived-expiry-policy` 76;
+  - `session-hook -t 'the compaction card — every line citation is anchored'`: 13;
+  - `topology-clean` 55, `deviation-refs` 31 (after `git fetch origin main`, at `8462a70d6`), `dtbd` 1.
+
+  No merge of `main` in this round: #441 lands after #410 and #448, by one merge on the coordinator's mail.
 
 ## Readings (for the coordinator to rule)
 
