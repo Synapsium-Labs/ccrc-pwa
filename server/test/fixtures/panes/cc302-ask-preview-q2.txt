@@ -1,0 +1,50 @@
+
+
+⏺ DONE
+
+✻ Worked for 3s · done 22:19
+
+❯ Call the AskUserQuestion tool once with exactly these 2 single-select questions. Q1 header "Fruit", question "Which fruit?", options Apple, Pear. Q2 header "Drink", question "Which drink?", options Tea, Coffee. Short
+  descriptions. After the answers come back, reply with just the word DONE.
+
+⏺ User answered Claude's questions:
+  ⎿  · Which fruit? → Apple
+     · Which drink? → hot water with lemon
+
+⏺ DONE
+
+✻ Cooked for 3s · done 22:19
+
+❯ Call the AskUserQuestion tool once with exactly these 2 questions. Q1 header "Pet", question "Which pet?", single-select, options Cat, Dog. Q2 header "Toppings", question "Which toppings?", multiSelect true, options
+  Cheese, Olives, Basil. Short descriptions. After the answers come back, reply with just the word DONE.
+
+⏺ User answered Claude's questions:
+  ⎿  · Which pet? → Dog
+     · Which toppings? → Cheese, Basil
+
+⏺ DONE
+
+✻ Crunched for 2s · done 22:20
+
+❯ Call the AskUserQuestion tool once with exactly these 2 single-select questions. Q1 header "Lang", question "Which language?", options Python, Go. Q2 header "Layout", question "Which layout?", options Grid, List, each
+  option having a preview field containing a 4-line ASCII sketch of the layout. Short descriptions. After the answers come back, reply with just the word DONE.
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+←  ☒ Lang  ☐ Layout  ✔ Submit  →
+
+Which layout?
+
+❯ 1. Grid                         ┌──────────────────────────────────────────┐
+  2. List                         │ +------+------+------+                   │
+                                  │ |  A   |  B   |  C   |                   │
+                                  │ +------+------+------+                   │
+                                  │ |  D   |  E   |  F   |                   │
+                                  │ +------+------+------+                   │
+                                  └──────────────────────────────────────────┘
+
+                                  Notes: press n to add notes
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Chat about this
+
+Enter to select · ↑/↓ to navigate · n to add notes · Tab to switch questions · Esc to cancel

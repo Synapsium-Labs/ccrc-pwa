@@ -5,12 +5,31 @@
 import type { AccountsResponse, AckAnswer, ApplyUpdateBody, AutoMode, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, MoveSkipWhy, NotifyEvent, NotifyMode, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, RollbackUpdateBody, RouteField, RouteFields, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, UpdateChannel, UpdateRouteError, UpdatesView, WsAudit } from '../../../shared/api';
 import { raiseAuthLostFrom } from './auth';
 import { ARCHIVE_REFUSALS, isArchiveRefusal, type ArchiveAnswer, type ArchiveBody, type ArchiveRefusal } from '../../../shared/api';
+import type { Dialog, DialogAnswered, DialogTabRequest } from '../../../shared/api';
+
 import { isNodeRole } from '../../../shared/node-role';
 import { TOKEN_TRANSPORTS } from '../../../shared/agent-protocol';
 import {
   BOX_TOKEN_PHASES, OWED_REASONS, TOKEN_FILE_PROBLEMS, TOKEN_HOLDS, TOKEN_ORIGINS, TOKEN_ROTATE_PATH, type BoxTokenView,
   type RotateAnswer,
 } from '../../../shared/box-token';
+
+/** An answer route's 200 that could not be read: the answer landed, and the next screen is unknown (`next` absent). */
+const ANSWERED: DialogAnswered = { ok: true };
+
+/** An answer route's 200 body, read (decision `ask-answer-returns-next-screen`): `next` kept only when it is null or
+ *  looks like a Dialog (a string id, a boolean `parsed`, an options array). Anything else reads as absent, which leaves
+ *  the sheet on the session stream's next frame, as before. */
+function answered(body: unknown): DialogAnswered {
+  if (body === null || typeof body !== 'object' || !('next' in body)) return ANSWERED;
+  const next = (body as { next: unknown }).next;
+  if (next === null) return { ok: true, next: null };
+  const d = next as Partial<Dialog> | undefined;
+  return d !== undefined && typeof d === 'object' && typeof d.id === 'string' && typeof d.parsed === 'boolean'
+    && Array.isArray(d.options) && typeof d.raw === 'string' && typeof d.title === 'string'
+    ? { ok: true, next: d as Dialog }
+    : ANSWERED;
+}
 
 export class ApiError extends Error {
   readonly status: number;
@@ -1041,22 +1060,27 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
       // rather than spelled inline the way that door spells it (D-1150).
       return { queued: answer.queued !== false };
     },
-    answerDialog: (id: string, dialogId: string, optionIndex: number) =>
-      post(`${sid(id)}/dialog`, { dialogId, optionIndex }),
+    answerDialog: async (id: string, dialogId: string, optionIndex: number): Promise<DialogAnswered> =>
+      answered(await postRead<unknown>(`${sid(id)}/dialog`, ANSWERED, { dialogId, optionIndex })),
     /** Answer an AskUserQuestion in your own words, through its free-text ("Type something.") row (D-5047). The server
      *  types `text` only once a capture proves the cursor on the empty row, and presses Enter only once a capture
      *  proves the row holds exactly `text`. It refuses 400 `bad-text` for a text it will not type (`isDialogText`,
      *  `shared/api.ts`), and 409 with a `DialogTextRefuseCode` otherwise. Typing changes the dialog's id, and a retry
      *  with the same text, under the id the stream then shows, submits text a refused attempt left in the row. */
-    answerDialogText: (id: string, dialogId: string, optionIndex: number, text: string) =>
-      post(`${sid(id)}/dialog/text`, { dialogId, optionIndex, text }),
+    answerDialogText: async (id: string, dialogId: string, optionIndex: number, text: string): Promise<DialogAnswered> =>
+      answered(await postRead<unknown>(`${sid(id)}/dialog/text`, ANSWERED, { dialogId, optionIndex, text })),
     /** Answer a multiSelect AskUserQuestion question (D-5048): `optionIndexes` are the printed digits of the boxes to
      *  leave ticked (`Dialog.multi`'s options), the whole set, never a toggle. The server sends a digit only for each
      *  box whose tick differs on the live pane, proves the ticks on a fresh capture, then commits with Tab and proves
      *  the screen moved on. It refuses 400 `bad-indexes` for a set it will not send (`isDialogMultiIndexes`,
      *  `shared/api.ts`: empty, repeated, or outside 1..9), and 409 with a `DialogMultiRefuseCode` otherwise. */
-    answerDialogMulti: (id: string, dialogId: string, optionIndexes: readonly number[]) =>
-      post(`${sid(id)}/dialog/multi`, { dialogId, optionIndexes }),
+    answerDialogMulti: async (id: string, dialogId: string, optionIndexes: readonly number[]): Promise<DialogAnswered> =>
+      answered(await postRead<unknown>(`${sid(id)}/dialog/multi`, ANSWERED, { dialogId, optionIndexes })),
+    /** Move an AskUserQuestion's PANE to another tab (decision `ask-dialog-tab-route`): `prev`/`next` (the arrow keys),
+     *  `submit` (the review), or question tab k with the tab the sheet believes is up as `from`. Arrows only, each step
+     *  proved by the server. The 200 carries the screen the pane landed on as `next`, read like an answer's. */
+    answerDialogTab: async (id: string, req: DialogTabRequest): Promise<DialogAnswered> =>
+      answered(await postRead<unknown>(`${sid(id)}/dialog/tab`, ANSWERED, req)),
     /** Answer a hook-reported question by option index. `askKey` is minted
      *  server-side and carried verbatim: the server re-reads the CURRENT
      *  envelope and refuses unless the key still matches, so this can only ever
