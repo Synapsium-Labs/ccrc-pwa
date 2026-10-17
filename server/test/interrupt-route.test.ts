@@ -59,6 +59,8 @@ interface Box {
   gone?: boolean;
   /** The request body (D-5237: the optional `source`); absent sends `{}`. */
   payload?: Record<string, unknown>;
+  /** Send NO payload and NO content-type at all — the request an older PWA really makes (D-5237). */
+  bare?: boolean;
 }
 
 const box = async (b: Box) => {
@@ -106,7 +108,8 @@ const box = async (b: Box) => {
       notifyLog, push: { notify } as unknown as PushService },
     new Bus(), watcher);
   open.push(app);
-  const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/interrupt`, payload: b.payload ?? {} });
+  const url = `/api/sessions/${ID}/interrupt`;
+  const res = b.bare ? await app.inject({ method: 'POST', url }) : await app.inject({ method: 'POST', url, payload: b.payload ?? {} });
   const recorded = notifyLog.catchUp(notifyLog.epoch, 0).events.map((e) => ({ kind: e.kind, sessionId: e.sessionId, body: e.body }));
   return { res, keys: calls.filter((c) => c[0] === 'send-keys'), recorded, pushes: notify.mock.calls.length };
 };
@@ -244,6 +247,13 @@ describe('POST /api/sessions/:id/interrupt records its source and outcome (D-523
 
   it('no source is `unknown`', async () => {
     const { recorded } = await box({ live: { status: 'busy', at: T0 } });
+    expect(recorded).toEqual(rec('source=unknown outcome=sent'));
+  });
+
+  it('an older PWA\'s bare POST (no payload, no content-type) is answered 200 and recorded `unknown`', async () => {
+    const { res, keys, recorded } = await box({ live: { status: 'busy', at: T0 }, bare: true });
+    expect(res.statusCode).toBe(200);
+    expect(keys).toEqual(ESCAPE);
     expect(recorded).toEqual(rec('source=unknown outcome=sent'));
   });
 

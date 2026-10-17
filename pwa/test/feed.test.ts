@@ -154,13 +154,9 @@ describe('the interrupt kind (D-5237)', () => {
     expect(events[0]!.kind).toBe('interrupt');
   });
 
-  it('an OLDER client, whose kinds stop before it, degrades it to `unknown` and keeps the record', () => {
-    // The reviver an older build runs is today's minus this kind: the same `isNotifyKind` door over its own list.
-    const olderKinds = ['ask', 'done', 'merged', 'mail', 'run', 'coord', 'update', 'queue', 'unknown'];
-    const olderKind = (k: string) => (olderKinds.includes(k) ? k : 'unknown');
-    expect(olderKind('interrupt')).toBe('unknown');
-    // and today's door degrades a kind from a build newer still, the same way
-    const { events } = reviveNotifyEvents([{ ...e(), kind: 'interrupt-v2' }]);
+  it('a kind newer than this build (`interrupt-v2`) is revived as `unknown`, and the record is kept', () => {
+    const { events, dropped } = reviveNotifyEvents([{ ...e(), kind: 'interrupt-v2' }]);
+    expect(dropped).toBe(0);
     expect(events[0]!.kind).toBe('unknown');
   });
 
