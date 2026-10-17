@@ -77,7 +77,12 @@ export function SessionScreen({
   const fileMeasured = useStore((s) => s.fileMeasured);
   const file = useStore((s) => s.file);
   const tasks = useStore((s) => s.tasks);
-  const tasksTouchedAt = useStore((s) => s.tasksTouchedAt);
+  // D-5372: read beside `tasks`, not through its own selector. The reducer sets
+  // `tasksTouchedAt` only together with `tasks`, and every tasks frame brings a
+  // new array, so the `tasks` selector above already re-renders on each change.
+  // (A further `useStore(…)` call site adds one more CodeQL
+  // unvalidated-dynamic-method-call false positive on the route-keyed store.)
+  const tasksTouchedAt = useStore.getState().tasksTouchedAt;
   const mail = useStore((s) => s.mail);
   // Build 4 Task 18, spec §2.3: the ask card's second derivation source. A
   // live `ask` (hook envelope) and a live `dialog` (scraped pane menu) are
