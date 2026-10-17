@@ -2204,10 +2204,12 @@ describe('ccrc install: the executables and files it installs', () => {
       expect(r.stdout, `--role ${role}: the Darwin arm was not taken\n${r.stderr}`)
         .toMatch(/^install: units: .* in \$HOME\/Library\/LaunchAgents \(launchd\)$/m);
       const lane: string[] = role === 'server' ? [] : [...GPT_LANE_BINS];
+      // wave 17 (D-5313): `ccrc-api` is on the Darwin arm too, off server only, like the lane's four.
+      const api: string[] = role === 'server' ? [] : ['ccrc-api'];
       const bins = readdirSync(join(home, '.local', 'bin'))
         .filter((b) => !FIXTURE_BINS.includes(b) && b !== 'graphify').sort();
       expect(bins, `--role ${role}: what the Darwin arm of _inst_bins placed`)
-        .toEqual(['ccd', 'ccd-account-auth', ...lane, 'ccrc'].sort());
+        .toEqual(['ccd', 'ccd-account-auth', ...api, ...lane, 'ccrc'].sort());
       for (const name of lane) {
         const bin = join(home, '.local', 'bin', name);
         expect(readFileSync(bin), `${name} is not the placed tree's copy`).toEqual(readFileSync(placed(home, 'ccd', name)));
@@ -2218,8 +2220,10 @@ describe('ccrc install: the executables and files it installs', () => {
       expect(line!, `--role ${role}: not the Darwin closing line`).toContain('macOS has none');
       if (role === 'server') {
         expect(line!, 'the server-role Darwin closing line claims a GPT-lane executable').not.toMatch(/ccgpt|ccrc-codex/);
+        expect(line!, 'the server-role Darwin closing line names ccrc-api, which it never placed').not.toContain('ccrc-api');
       } else {
         expect(line!).toMatch(new RegExp(LANE_BINS_IN_LINE));
+        expect(line!, `--role ${role}: the Darwin closing line does not name ccrc-api`).toMatch(/(?<![\w-])ccrc-api(?![\w-])/);
       }
     }
   });

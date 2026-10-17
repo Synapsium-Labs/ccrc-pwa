@@ -716,6 +716,7 @@ Group A. `server/test/ccrc-darwin-job-helpers.test.ts` joins this wave's files.
   - As built: J1, J1b, J2 to J5 and the wave-17 Darwin-arm rows D1 to D3 are plain `it`; J6 (both `itLinux.each` rows) stays `itLinux` with its reason in a comment; the header now says which cases the macOS leg runs and that it is a reading until a full run measures it. `sweepFixture.ts` untouched.
 - [x] **Step 3: the proof.** Linux green, one run. The macOS proof is a dispatched full run: name it in the wave-done; the coordinator triggers it (`gh workflow run ci.yml --ref <branch> -f mode=full`) and reads `test-macos`. The worker runs no `gh` writes.
   - As built: Linux, `ccrc-darwin-job-helpers.test.ts` whole: 11 passed (6 J, 2 J6 rows, 3 D). The macOS proof is the dispatched full run, for the coordinator to trigger and read as `test-macos`.
+  - As built (macOS proof): macOS proof: full run 39077484519 at a695bde11, test-macos shard 1/4 ran ccrc-darwin-job-helpers.test.ts: 11 tests, 9 passed, 2 skipped (J6's two `itLinux` rows, /proc).
 
 ### Task 12: The gate and the PR
 
