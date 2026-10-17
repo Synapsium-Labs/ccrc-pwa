@@ -6337,3 +6337,33 @@ describe('the ask push body is built once, in server/src/askbody.ts (D-5302)', (
     expect(holders(/permission requested/)).toEqual(['server/src/askbody.ts']);
   });
 });
+
+// D-5370 (`stop-worker-at-run-done`). APPENDED, for the reason the stall-watch blocks above state. The stop-done lane
+// ships LIVE (the operator's ruling), and its kill switch `$REG/stop-done-disabled` is the operator's to touch and
+// remove BY HAND, beside `stall-watch-disabled` — so no line of shell names it, its one TS holder on a code line is its
+// definer (an L1 file that reaches no `node:` module and so cannot write it), and the files that name its constant are
+// the definer and the lane, neither of which reaches a write. Its numbers and its holds are spelled once, in the definer.
+describe('D-5370: the stop-done lane’s kill switch has no writer, and its constants one home', () => {
+  const NAME = 'stop-done-disabled';
+  const DEFINER = 'server/src/stopDone.ts';
+  it('no shell line names it, and its one TS holder is its definer, which reaches no node: module', () => {
+    expect(holdersOf(NAME), 'a line of shell names it — a writer, or a reader this design never had').toEqual([]);
+    expect(ALL.filter((f) => stallCode(f).includes(NAME)).map(rel).sort(), `spelled on a code line outside ${DEFINER}`)
+      .toEqual([DEFINER]);
+    expect(stallCode(path.join(ccrcRoot, DEFINER))).not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
+  });
+  it('the files that name STOP_DONE_DISABLED_MARKER are the definer and the lane, and neither reaches a write', () => {
+    const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
+    expect(WRITE.test('await deps.io.writeFile(`${dir}/${m}`, "");'), 'CONTROL: the pattern sees a write').toBe(true);
+    const holders = ALL.filter((f) => stallCode(f).includes('STOP_DONE_DISABLED_MARKER')).map(rel).sort();
+    expect(holders).toEqual([DEFINER, 'server/src/stopDoneSweep.ts']);
+    for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(WRITE);
+  });
+  it('each of its constants and its hold list is declared once, in the definer', () => {
+    for (const c of ['STOP_DONE_GRACE_MS', 'STOP_DONE_PER_PASS', 'STOP_DONE_MEASURES_PER_PASS', 'STOP_DONE_SWEEP_MS',
+      'STOP_DONE_RETRY_MS', 'STOP_DONE_DISABLED_MARKER', 'STOP_DONE_HOLDS', 'STOP_DONE_HOLD_MAP']) {
+      const decl = new RegExp(`\\b(?:const|let|var)\\s+${c}\\b`);
+      expect(ALL.filter((f) => decl.test(stallCode(f))).map(rel), c).toEqual([DEFINER]);
+    }
+  });
+});

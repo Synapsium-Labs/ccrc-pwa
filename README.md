@@ -4455,6 +4455,22 @@ the old licence by a licensed request, nor by any request on a ccd whose audit b
 older ccd an unlicensed request keeps the gap from the executor's re-read to the act, the spec's stated
 residual.
 
+**A finished run's worker is stopped once idle (D-5370).** A wave that is not the programme's last leaves its
+child workspace in place — the reclaim sweep above waits for the programme — and, until this lane, its Claude Code
+process too, holding its memory for as long as the programme ran. The server's stop-done lane (`stopDoneSweep.ts`,
+its verdict the pure `stopDone.ts`; once a minute on the watcher's tick, never inside the run's transition) stops
+such a worker with the already-granted `ccd stop <id> --surface agent`: only a dispatched child (a `.child` marker —
+never an operator's own session), whose newest run is `done` and closed at least 10 minutes ago, which no other open
+run names as worker or claimant, with no live claim, no outstanding mail, nobody viewing it, no hold, pane menu,
+background work or subagents, a bucket of `idle`, and a measured live word and fail-closed turn verdict of `idle`,
+re-read on the coordination serialiser immediately before the act. At most three stops a pass; a refused stop is
+not asked again for an hour. The stop journals a `stop` row with its declared surface and writes `.stopped`, so the
+row reads `stopped` (never crashed, to the dead-coordinator lane or the PWA), and the coordinator's feed gets one
+`Worker stopped` row per stop. A re-dispatch onto the worker restarts it: the dispatch resume arm's `ccd ensure`
+re-supervises and resumes a stopped session. Switches: `$REG/stop-done-disabled` (this lane only; no writer in the
+tree — touch and remove it by hand on the fleet box) and `$REG/reclaim-paused` (every cleanup lane, above). It is the
+subset of hibernation's rule (D-5242) that a finished run makes safe early; when hibernation lands it absorbs it.
+
 **Landing order (landing-order wave 1).** Every merge of `main` into a branch restarts that branch's
 CI, so a session absorbs `main` only on a licence. Worker clause 16 names three, each read after one
 `git fetch origin`: the branch conflicts —
