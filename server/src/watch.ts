@@ -39,7 +39,7 @@ import type {
 // ONE LINE, deliberately: `single-definition.test.ts` scans for `UNCHECKED_PR`
 // arriving from shared/api on a single import line, and a prettier multi-line
 // form is invisible to it.
-import { FLEET_SCOPE, LEDGER_STALE_MS, MAIL_MAX_ATTEMPTS, MAIL_REPLAY_MS, STALL_FOLLOW_LABEL, STALL_LEVEL_TEXT, TERMINAL_DELIVERY_STATES, UNCHECKED_PR, lifecycleIsDead, sessionLifecycle } from '../../shared/api.js';
+import { FLEET_SCOPE, LEDGER_STALE_MS, SERVER_CAPS, MAIL_MAX_ATTEMPTS, MAIL_REPLAY_MS, STALL_FOLLOW_LABEL, STALL_LEVEL_TEXT, TERMINAL_DELIVERY_STATES, UNCHECKED_PR, lifecycleIsDead, sessionLifecycle } from '../../shared/api.js';
 import { JournalMirror } from './coord/mirror.js';
 // The pause marker's ONE definition in the tree. `MAIL_DISABLED_MARKER` is
 // NOT imported beside it: this file holds its own module-local literal
@@ -131,6 +131,7 @@ import type { CoordRoutesHandle } from './coord/routes.js';
 import { localIO } from './io.js';
 import { measureFleetReadiness, type FleetReadiness } from './readiness.js';
 import { FLEET_LABEL, SERVER_LABEL, sweepInventory, type InventoryDeps, type SweepOutcome } from './update/inventory.js';
+import { SERVER_CAPS_WRITE_MS, writeServerCaps, type WriteServerCapsResult } from './update/serverCaps.js';
 import { resolveAndProject, type ProjectionOutcome } from './update/project.js';
 import { runDispatch, type DispatchRunResult } from './update/converge.js';
 import type { MoveFeedRecord } from './update/dispatch.js';
@@ -819,6 +820,14 @@ export class FleetWatcher {
    *  a `ready`-triggered sweep also defers the minute gate's next one. */
   private lastInventoryAt = 0;
   private inventoryRun: Promise<SweepOutcome[]> | null = null;
+  /** The server-caps beat's clock and its ONE write in flight (D-5232's mechanism, Task 9b). Starts at 0 so the first
+   *  tick after a start writes: that tick IS the boot write (`start()` ticks at once). Its own clock, never the
+   *  inventory lane's, so the file is rewritten whether or not this server has a coordination database. */
+  private lastServerCapsAt = 0;
+  private serverCapsRun: Promise<WriteServerCapsResult | null> | null = null;
+  /** The last server-caps write failure's stable key (`unwritable:<errno>`), so an unwritable ~/.ccrc warns once
+   *  per change of reason, not once a minute (`lastProjectionWhy`'s idiom); null after a success. */
+  private lastServerCapsWhy: string | null = null;
   /** C2 (final fix wave): the last inventory-sweep REJECTION message warned
    *  about, so a standing cause (a locked or corrupt coord.db held past one
    *  sweep) warns once, not every tick/ready — reset to null the moment a
@@ -1438,6 +1447,34 @@ export class FleetWatcher {
   }
 
   /**
+   * The server-caps write (D-5232's mechanism; plan 2026-10-16 Task 9b; spec §6.1): on a `server` or `both` node, the
+   * words this server advertises, at this process's clock, into `<ccrcDir>/server-caps`, the file the fleet's hook
+   * gates on. A `fleet`-role server writes nothing (`ccd-update-sync` is that node's writer) and answers null.
+   * Single-flight: a beat that finds a write in flight joins it. A failure warns once per change of `code`.
+   */
+  serverCapsNow(): Promise<WriteServerCapsResult | null> {
+    if (this.serverCapsRun !== null) return this.serverCapsRun;
+    this.lastServerCapsAt = Date.now();
+    const { role, ccrcDir } = this.deps.cfg;
+    if (role !== 'server' && role !== 'both') return Promise.resolve(null);
+    const run = writeServerCaps(ccrcDir, SERVER_CAPS, Math.floor(Date.now() / 1000)).then((r) => {
+      const key = r.ok ? null : `${r.why}:${r.code ?? 'none'}`;
+      if (!r.ok && key !== this.lastServerCapsWhy) {
+        console.warn(`ccrc-server: could not write ~/.ccrc/server-caps (the fleet hook's gated arms stay off until it is written): ${r.detail}`);
+      }
+      this.lastServerCapsWhy = key;
+      return r;
+    }).finally(() => { this.serverCapsRun = null; });
+    this.serverCapsRun = run;
+    return run;
+  }
+
+  /** Resolves once no server-caps write is in flight. For a caller that fired the beat and must read its result. */
+  async serverCapsSettled(): Promise<void> {
+    if (this.serverCapsRun !== null) await this.serverCapsRun;
+  }
+
+  /**
    * The inventory lane's ONE run (design 2026-09-20 §8). The minute gate in
    * `tick()`, the `ready` trigger in `index.ts` and `GET /api/updates`
    * (Task 13, before the first sweep) all JOIN the run in flight rather than
@@ -2008,6 +2045,14 @@ export class FleetWatcher {
       // above, never swallowed silently either way.
       if (this.deps.coord && Date.now() - this.lastInventoryAt >= UPDATE_INVENTORY_MS) {
         void this.dispatchInventorySweep();
+      }
+
+      // The server-caps beat (D-5232's mechanism, Task 9b) sits BESIDE the inventory lane, never inside it: that lane
+      // is `coord`-gated, and a coord-less server must still keep its fleet's file current. Above the registry's
+      // fail-shut return for the same reason as both update lanes (it reads nothing from the registry). NEVER
+      // awaited; `serverCapsNow` never rejects (`writeServerCaps` never throws, and its warning is its own).
+      if (Date.now() - this.lastServerCapsAt >= SERVER_CAPS_WRITE_MS) {
+        void this.serverCapsNow();
       }
 
       // Read once, share with the two lanes that would otherwise each read it
