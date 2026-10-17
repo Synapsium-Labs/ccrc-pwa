@@ -1,6 +1,6 @@
 import type { SendDeps } from './send.js';
 import type { AskRefuseCode, HookAsk, HookAskQuestion } from '../../../shared/api.js';
-import { askKey } from '../askkey.js';
+import { answerableAsk, askKey } from '../askkey.js';
 import { hasMenu, paneOptionRows } from '../pane/dialog.js';
 import { pairMatches } from '../transcript/ask.js';
 
@@ -11,6 +11,23 @@ export interface AskDeps extends SendDeps {
 }
 
 export type AskResult = { ok: true } | { ok: false; error: AskRefuseCode };
+
+/**
+ * D-5293: the body of an answer by option index, read ONCE for both routes
+ * that press through `answerAsk`: the operator's `POST /api/sessions/:id/ask`
+ * (`server.ts`) and the parent's `POST /api/asks/:id/answer`
+ * (`coord/routes.ts`). `optionIndexes` is an array of numbers (`answerAsk`
+ * judges each one); `askKey`, when present, is a string. The operator's route
+ * requires it; the parent's route compares it with the key its row was minted
+ * for. `null` is both routes' 400 `bad-request`.
+ */
+export function readAskAnswer(body: unknown): { askKey: string | undefined; optionIndexes: number[] } | null {
+  if (typeof body !== 'object' || body === null) return null;
+  const { askKey, optionIndexes } = body as Record<string, unknown>;
+  if (askKey !== undefined && typeof askKey !== 'string') return null;
+  if (!Array.isArray(optionIndexes) || !optionIndexes.every((n) => typeof n === 'number')) return null;
+  return { askKey, optionIndexes: optionIndexes as number[] };
+}
 
 /**
  * Answer a hook-reported single-select AskUserQuestion by option index, without
@@ -85,6 +102,14 @@ export async function answerAsk(
     // Enter toggles the cursor row and commits nothing (see the docstring). The
     // pane route `/dialog/multi` answers it. Before any capture or key.
     if (q.multiSelect === true) return { ok: false, error: 'multiselect' };
+    // D-5293: the eligibility rule itself, `answerableAsk` (`askkey.ts`), the
+    // one the parent's hold and the push's buttons read through `askActions`.
+    // The named refusals above say WHY for the hazards they name; this is the
+    // decision, last before the capture, so no envelope the rule refuses ever
+    // reaches the pane. What only it catches today is a blank option label,
+    // which can never match a row (`pairMatches` refuses ''), so it keeps the
+    // code the identity gate below would have answered, without the capture.
+    if (!answerableAsk(hs.ask)) return { ok: false, error: 'menu-mismatch' };
 
     // The LAST gates before a keystroke, and deliberately last: everything
     // above is about whether this ANSWER still makes sense; these are about

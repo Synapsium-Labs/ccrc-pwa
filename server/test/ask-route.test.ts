@@ -565,3 +565,83 @@ describe('answerAsk', () => {
     });
   });
 });
+
+// D-5293 (plan docs/superpowers/plans/2026-10-17-coordinator-first-routing.md, Task 8; spec §5.3). APPENDED. The
+// parent's hold and the operator's answer route read ONE eligibility rule, `answerableAsk` (`askkey.ts`): `askActions`
+// (the hold's sole gate, D-2173, and the push's buttons) is non-null exactly where it admits, and `answerAsk` answers
+// exactly where it admits and refuses everywhere else BEFORE it reads the pane or presses a key. The envelopes copy
+// committed real shapes: the single-select captures `ask-route` already answers, the 2.1.280 multiSelect capture, and
+// the three two-question asks the ask-sheet work (#491, #493) measured on 2.1.296 and 2.1.302 (their prompts are in
+// `cc302-ask-preview-q2.txt`; the hook copies no `description` or `preview`). The operator answers those last ones on
+// the pane routes (`/dialog`, `/dialog/multi`, `/dialog/text`, `/dialog/tab`), never on `answerAsk`'s envelope route,
+// so the lane, which presses through `answerAsk`, admits none of them either.
+import { answerableAsk, askActions } from '../src/askkey.js';
+import type { HookState } from '../src/hookstate.js';
+
+describe('one eligibility rule: askActions, answerableAsk and answerAsk agree on every envelope (D-5293)', () => {
+  type Env = { questions: { question: string; multiSelect?: boolean; options: { label: string }[] }[] };
+  const q = (question: string, labels: string[], multiSelect?: true) =>
+    ({ question, ...(multiSelect ? { multiSelect } : {}), options: labels.map((label) => ({ label })) });
+  // The menu a pane would paint for the envelope's first question: the best pane `answerAsk` could be shown, so a
+  // refusal below is the envelope's, never the pane's.
+  const menuOf = (e: Env | null): string =>
+    e === null || e.questions[0] === undefined ? NOT_A_MENU_PANE
+      : `${e.questions[0].options.map((o, i) => `${i === 0 ? '❯ ' : '  '}${i + 1}. ${o.label}`).join('\n')}\nEnter to select\n`;
+
+  const ROWS: { name: string; ask: Env | { approval: { tool: string; summary: string } } | null; pane?: string; answerable: boolean }[] = [
+    { name: 'single-select, one-column capture',
+      ask: { questions: [q('Which colour do you prefer?', ['Red', 'Green', 'Blue'])] },
+      pane: pane('ask-user-question-real.txt'), answerable: true },
+    { name: 'single-select, two-column capture', ask: askFromTranscript('transcript-ask-2col.jsonl'),
+      pane: pane('ask-2col-chat-about.txt'), answerable: true },
+    { name: 'single-select, ten options (digits reach nine)',
+      ask: { questions: [q('Pick one', Array.from({ length: 10 }, (_, i) => `Opt ${i}`))] }, answerable: true },
+    { name: 'two single-select questions (#491)',
+      ask: { questions: [q('Which fruit?', ['Apple', 'Pear']), q('Which drink?', ['Tea', 'Coffee'])] }, answerable: false },
+    { name: 'two questions, the second multiSelect (#493)',
+      ask: { questions: [q('Which pet?', ['Cat', 'Dog']), q('Which toppings?', ['Cheese', 'Olives', 'Basil'], true)] },
+      answerable: false },
+    { name: 'two questions, the second with previews (#493)',
+      ask: { questions: [q('Which language?', ['Python', 'Go']), q('Which layout?', ['Grid', 'List'])] }, answerable: false },
+    { name: 'a lone multiSelect question (2.1.280 capture)',
+      ask: { questions: [q('Which features do you want to enable?', ['Logging', 'Metrics', 'Tracing', 'Caching'], true)] },
+      pane: pane('cc280-multiselect.txt'), answerable: false },
+    { name: 'no options: only own words answer it', ask: { questions: [q('Say it in your own words', [])] }, answerable: false },
+    { name: 'a blank option label', ask: { questions: [q('Which colour?', ['   ', 'Blue'])] }, answerable: false },
+    { name: 'an approval envelope', ask: { approval: { tool: 'Bash', summary: 'ls' } }, answerable: false },
+    { name: 'no envelope', ask: null, answerable: false },
+  ];
+
+  it('CONTROL: the table holds both verdicts, and every two-question shape the ask sheets answer', () => {
+    expect(ROWS.filter((r) => r.answerable).length).toBeGreaterThan(0);
+    expect(ROWS.filter((r) => !r.answerable).length).toBeGreaterThan(0);
+    expect(ROWS.filter((r) => r.ask !== null && 'questions' in r.ask && r.ask.questions.length === 2)).toHaveLength(3);
+  });
+
+  for (const row of ROWS) {
+    it(`${row.name}: ${row.answerable ? 'every route admits it' : 'every route refuses it, before the pane'}`, async () => {
+      expect(answerableAsk(row.ask), 'answerableAsk').toBe(row.answerable);
+      const hs = { state: 'waiting', ask: row.ask } as unknown as HookState;
+      expect(askActions(hs) !== null, 'askActions').toBe(row.answerable);
+
+      let captures = 0;
+      const shown = row.pane ?? menuOf(row.ask !== null && 'questions' in row.ask ? row.ask : null);
+      const { keys, d } = deps({
+        readAsk: async () => ({ ask: row.ask, state: 'waiting' as const }),
+        tmux: {
+          capture: async () => { captures += 1; return shown; },
+          captureAnsi: async () => shown,
+          sendKey: async (_id: string, k: string) => { keys.push(k); },
+          sendLiteral: async () => {},
+        } as never,
+      });
+      const r = await answerAsk(d as never, 'cc-x', askKey(row.ask) ?? 'k', [0]);
+      expect(r.ok, `answerAsk: ${JSON.stringify(r)}`).toBe(row.answerable);
+      if (row.answerable) expect(keys).toEqual(['1']);
+      else {
+        expect(keys, 'no key for a refused envelope').toEqual([]);
+        expect(captures, 'refused from the envelope alone, before the pane is read').toBe(0);
+      }
+    });
+  }
+});

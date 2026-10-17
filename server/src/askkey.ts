@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { HookAsk } from '../../shared/api.js';
+import type { HookAsk, HookAskQuestion } from '../../shared/api.js';
 import type { HookState } from './hookstate.js';
 import type { PushPayload } from './push.js';
 
@@ -21,6 +21,28 @@ export function askKey(ask: HookAsk | null): string | null {
   if (q === undefined) return null;
   const material = JSON.stringify([q.question, q.options.map((o) => o.label)]);
   return createHash('sha256').update(material).digest('hex').slice(0, 16);
+}
+
+/**
+ * D-5293: the ONE eligibility rule for answering a hook-reported ask by option
+ * index — what `answerAsk` (`inject/ask.ts`) will press, and therefore what
+ * the parent's hold (`askActions` is its sole gate, D-2173) may hold and what
+ * a notification may offer. `answerAsk` refuses every envelope this refuses
+ * before it reads the pane; `askActions` is null for every one of them. Each
+ * `false` is a refusal named in `askActions`' docstring below: no question
+ * envelope, more than one question, a multiSelect question, no options, a
+ * blank option label anywhere in the envelope. Envelope only: whether the hook
+ * is `waiting`, and whether the key and the pane still match, are the callers'.
+ */
+export function answerableAsk(ask: HookAsk | null): boolean {
+  if (ask === null || !('questions' in ask)) return false;
+  if (ask.questions.length !== 1) return false;
+  const q = ask.questions[0]!;
+  if (q.multiSelect === true) return false;
+  if (q.options.length === 0) return false;
+  // The whole envelope, not just the two labels a push would ship: an
+  // unreadable label at index 5 refuses index 0 exactly as hard.
+  return !q.options.some((o) => o.label.trim() === '');
 }
 
 /** At most TWO notification actions. That is the platform ceiling on Android,
@@ -74,16 +96,12 @@ export const MAX_ASK_ACTIONS = 2;
 export function askActions(hs: HookState | null): PushPayload['actions'] | null {
   if (hs === null || hs.state !== 'waiting') return null;
   const ask = hs.ask;
-  if (ask === null || !('questions' in ask)) return null;
-  if (ask.questions.length !== 1) return null;
-  const q = ask.questions[0];
+  // D-5293: the envelope half of the rule is `answerableAsk`, the one the
+  // operator's route refuses on too, never a second copy of its tests.
+  if (!answerableAsk(ask)) return null;
+  const q = (ask as { questions: HookAskQuestion[] }).questions[0];
   const key = askKey(ask);
   if (q === undefined || key === null) return null;
-  if (q.multiSelect === true) return null;
-  if (q.options.length === 0) return null;
-  // The whole envelope, not just the two labels that would ship: an unreadable
-  // label at index 5 refuses index 0 exactly as hard.
-  if (q.options.some((o) => o.label.trim() === '')) return null;
   return q.options
     .slice(0, MAX_ASK_ACTIONS)
     .map((o, i) => ({ action: `ask:${key}:${i}`, title: o.label }));
