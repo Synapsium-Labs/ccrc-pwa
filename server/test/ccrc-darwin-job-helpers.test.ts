@@ -2,9 +2,15 @@
 // 16: R18(b) and R10j; D-5139, D-5140, D-5141). They serve three callers on a Mac: `_upd_sweep`'s Darwin arm,
 // `_inst_enable`'s stay-up check and the update's health gate. No macOS box is centrally managed (design decision 17),
 // so the cases run the helpers SOURCED out of the tree's `ccd/ccrc` on Linux, with `_svc_launchctl`, `_svc_domain` and
-// `_svc_label` shadowed by shell functions: what is under test is the helpers' own shell, not launchd. Every case is
-// `itLinux`: J6 reads `/proc` through `survivors`, and `sweepFixture.ts` has never run on the macOS leg, so this file
-// gives that leg no evidence (the plan's Reading 9).
+// `_svc_label` shadowed by shell functions: what is under test is the helpers' own shell, not launchd.
+//
+// WHICH LEG RUNS WHAT (wave 17, R35(d); D-5327). A case needs only bash, `sleep`, `date +%s`, `grep`, `sed -n`,
+// `tail -n 1`, `mv -f` and the shadowed `_svc_*` functions (the poison and stub tools are shell scripts), so it is a
+// plain `it` and the macOS leg runs it: J1, J1b, J2 to J5 and the Darwin-arm rows D1 to D3. None of them reads `/proc`,
+// a GNU-only option (`macos-platform.test.ts`' GNU-call corpus is the reference: no `stat -c`, `date -d`, `readlink -f`,
+// `sed -i`, `timeout`) or `setsid`. J6 stays `itLinux`: it finds the orphaned `sleep` through `survivors` and
+// `reapSurvivors`, which walk `/proc/<pid>/environ`, and macOS has no `/proc`. Until a dispatched full run says
+// otherwise this is a reading, not a measurement: `sweepFixture.ts` had never run on the macOS leg before these cases.
 //
 // SAFETY. `sweepFixture.ts`'s fixture HOME and env, built from scratch, with every tool that is not a stub a recording
 // POISON (`launchctl` among them), and `assertContained` on the spawn's final env before every spawn. The shadowed
@@ -12,7 +18,7 @@
 // by design: in a `finally`, so a failed assertion still does it, it kills the shell and REAPS any orphaned sleep, and it
 // asserts that none survives before any assertion on the run's outcome. It does not show that an orphan existed, only
 // that none is left behind.
-import { describe, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
@@ -65,7 +71,7 @@ const U1 = 'claude-session@demo-a.service';
 const U2 = 'claude-session@demo-b.service';
 
 describe('_ccrc_job_stayed_up: no unit is a refusal, never a vacuous pass (wave 16, R18(b); D-5140)', () => {
-  itLinux('J1 called with no unit, it answers 1 at once, with the globals empty, and never sleeps the settle', () => {
+  it('J1 called with no unit, it answers 1 at once, with the globals empty, and never sleeps the settle', () => {
     const b = box({});
     const r = run(b, `s=$SECONDS; _ccrc_job_stayed_up; rc=$?; el=$((SECONDS - s)); ${OUT}; echo "el=$el"`,
       { CCRC_VERIFY_SETTLE: '6', CCRC_VERIFY_WINDOW: '0' });
@@ -75,7 +81,7 @@ describe('_ccrc_job_stayed_up: no unit is a refusal, never a vacuous pass (wave 
     expect(poisonFiles(b)).toEqual([]);
   }, 60_000);
 
-  itLinux('J1b one unit keeps the contract the gate and _inst_enable read: rc 0 and the one detail', () => {
+  it('J1b one unit keeps the contract the gate and _inst_enable read: rc 0 and the one detail', () => {
     const b = box({ 'demo-a': ['0 4242'] });
     const r = run(b, `_ccrc_job_stayed_up ${U1}; rc=$?; ${OUT}`, { CCRC_VERIFY_SETTLE: '0', CCRC_VERIFY_WINDOW: '0' });
     expect(r.out).toMatchObject({ rc: '0', bad: '', detail: 'pid 4242 -> 4242 across 0s+0s' });
@@ -85,7 +91,7 @@ describe('_ccrc_job_stayed_up: no unit is a refusal, never a vacuous pass (wave 
 describe('_ccrc_job_pid: a failed launchctl print is not an unloaded job (wave 16, R10j; D-5141)', () => {
   const ENV = { CCRC_VERIFY_SETTLE: '0', CCRC_VERIFY_WINDOW: '0' };
 
-  itLinux('J2 a print that failed at both reads is UNMEASURED: the job did not stay up, and the detail says why', () => {
+  it('J2 a print that failed at both reads is UNMEASURED: the job did not stay up, and the detail says why', () => {
     const b = box({ 'demo-a': ['1 -'] });
     const r = run(b, `_ccrc_job_stayed_up ${U1}; rc=$?; ${OUT}`, ENV);
     expect(r.out['rc'], 'two equal failed reads must never read as one stable pid').toBe('1');
@@ -93,19 +99,19 @@ describe('_ccrc_job_pid: a failed launchctl print is not an unloaded job (wave 1
     expect(r.out['detail']).toBe('pid unmeasured (launchctl print exited 1) -> unmeasured (launchctl print exited 1) across 0s+0s');
   }, 60_000);
 
-  itLinux('J3 a job launchd does not hold (113) keeps its old detail: no pid at either read', () => {
+  it('J3 a job launchd does not hold (113) keeps its old detail: no pid at either read', () => {
     const b = box({ 'demo-a': ['113 -'] });
     const r = run(b, `_ccrc_job_stayed_up ${U1}; rc=$?; ${OUT}`, ENV);
     expect(r.out).toMatchObject({ rc: '1', bad: U1, detail: 'pid none -> none across 0s+0s' });
   }, 60_000);
 
-  itLinux('J4 a print that failed once, then answered, is still a job that did not stay up, named as unmeasured', () => {
+  it('J4 a print that failed once, then answered, is still a job that did not stay up, named as unmeasured', () => {
     const b = box({ 'demo-a': ['1 -', '0 4242'] });
     const r = run(b, `_ccrc_job_stayed_up ${U1}; rc=$?; ${OUT}`, ENV);
     expect(r.out).toMatchObject({ rc: '1', bad: U1, detail: 'pid unmeasured (launchctl print exited 1) -> 4242 across 0s+0s' });
   }, 60_000);
 
-  itLinux('J5 in a shared window, only the unmeasured job is listed', () => {
+  it('J5 in a shared window, only the unmeasured job is listed', () => {
     const b = box({ 'demo-a': ['1 -'], 'demo-b': ['0 5151'] });
     const r = run(b, `_ccrc_job_stayed_up ${U1} ${U2}; rc=$?; ${OUT}`, ENV);
     expect(r.out).toMatchObject({ rc: '1', bad: U1 });
@@ -119,6 +125,7 @@ describe('_ccrc_job_stayed_up: an INT to the shell alone ends it at once (wave 1
   // the fixture HOME, so `survivors` finds it and `reapSurvivors` ends it.
   const pause = (ms: number): Promise<void> => new Promise((res) => { setTimeout(res, ms); });
 
+  // `itLinux`: `survivors` and `reapSurvivors` walk `/proc/<pid>/environ`, which macOS does not have (the header).
   itLinux.each([
     ['the settle', 'start', { CCRC_VERIFY_SETTLE: '8', CCRC_VERIFY_WINDOW: '0' }],
     ['the window', 'called', { CCRC_VERIFY_SETTLE: '0', CCRC_VERIFY_WINDOW: '8' }],
@@ -191,7 +198,7 @@ describe('_upd_sweep, Darwin arm: the sweep records what it did in update.json (
   }
   const KEYED = '<key>AbandonProcessGroup</key><true/>';
 
-  itLinux('D1 a job file with no AbandonProcessGroup records refused: job-file, and detail stays null', () => {
+  it('D1 a job file with no AbandonProcessGroup records refused: job-file, and detail stays null', () => {
     const r = sweepRecord({ [D1]: KEYED, [D2]: '<plist/>' }, []);
     expect(r.code).toBe(0);
     expect(r.stdout).toContain('update: DEGRADED: the supervisor sweep did not run');
@@ -200,14 +207,14 @@ describe('_upd_sweep, Darwin arm: the sweep records what it did in update.json (
     expect(r.j['sweep']).toBe('refused: job-file');
   }, 60_000);
 
-  itLinux('D2 a start-limit-failed job is recorded as down, by id', () => {
+  it('D2 a start-limit-failed job is recorded as down, by id', () => {
     const r = sweepRecord({ [D1]: KEYED, [D2]: KEYED }, [D2]);
     expect(r.code).toBe(0);
     expect(r.j['sweep']).toBe('down: 1: acct-b-demo');
     expect(r.j['detail']).toBeNull();
   }, 60_000);
 
-  itLinux('D3 a clean Darwin sweep records ok', () => {
+  it('D3 a clean Darwin sweep records ok', () => {
     const r = sweepRecord({ [D1]: KEYED, [D2]: KEYED }, []);
     expect(r.code).toBe(0);
     expect(r.j['sweep']).toBe('ok');

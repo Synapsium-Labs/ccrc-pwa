@@ -708,9 +708,12 @@ Group A. Shares `prune_backups`' two remote lines with Task 7 Step 5; both stay 
 
 Group A. `server/test/ccrc-darwin-job-helpers.test.ts` joins this wave's files.
 
-- [ ] **Step 1: the read** *(unmeasured)*. For each of J1 to J5 and the `itLinux.each` table, read what it reaches in `sweepFixture.ts` and `ccd/ccrc`; a case that reaches `/proc`, a GNU-only option (`macos-platform.test.ts`' GNU-call corpus is the reference) or `setsid` stays `itLinux`, with the reason in its comment.
-- [ ] **Step 2: the change** *(unmeasured)*. The rest become plain `it`; J6 stays `itLinux`. The file's header comment, which says `sweepFixture.ts` has never run on the macOS leg, is updated to say which cases now do.
-- [ ] **Step 3: the proof.** Linux green, one run. The macOS proof is a dispatched full run: name it in the wave-done; the coordinator triggers it (`gh workflow run ci.yml --ref <branch> -f mode=full`) and reads `test-macos`. The worker runs no `gh` writes.
+- [x] **Step 1: the read** *(unmeasured)*. For each of J1 to J5 and the `itLinux.each` table, read what it reaches in `sweepFixture.ts` and `ccd/ccrc`; a case that reaches `/proc`, a GNU-only option (`macos-platform.test.ts`' GNU-call corpus is the reference) or `setsid` stays `itLinux`, with the reason in its comment.
+  - As built: read `_ccrc_job_pid`, `_ccrc_job_stayed_up`, `_upd_sweep`'s Darwin arm, `_upd_phase`, `_upd_redact` and `sweepFixture.ts`'s `makeBox`/`assertContained`: bash builtins plus `sleep`, `date +%s`, `grep -q`, `sed -n`, `tail -n 1`, `mv -f`, `chmod`; no `/proc`, `setsid`, `stat -c`, `date -d`, `readlink -f`, `sed -i` or `timeout`. Only `survivors`/`reapSurvivors` (J6) reach `/proc`.
+- [x] **Step 2: the change** *(unmeasured)*. The rest become plain `it`; J6 stays `itLinux`. The file's header comment, which says `sweepFixture.ts` has never run on the macOS leg, is updated to say which cases now do.
+  - As built: J1, J1b, J2 to J5 and the wave-17 Darwin-arm rows D1 to D3 are plain `it`; J6 (both `itLinux.each` rows) stays `itLinux` with its reason in a comment; the header now says which cases the macOS leg runs and that it is a reading until a full run measures it. `sweepFixture.ts` untouched.
+- [x] **Step 3: the proof.** Linux green, one run. The macOS proof is a dispatched full run: name it in the wave-done; the coordinator triggers it (`gh workflow run ci.yml --ref <branch> -f mode=full`) and reads `test-macos`. The worker runs no `gh` writes.
+  - As built: Linux, `ccrc-darwin-job-helpers.test.ts` whole: 11 passed (6 J, 2 J6 rows, 3 D). The macOS proof is the dispatched full run, for the coordinator to trigger and read as `test-macos`.
 
 ### Task 12: The gate and the PR
 
