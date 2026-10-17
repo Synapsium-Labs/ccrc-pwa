@@ -10151,63 +10151,20 @@ _models_refresh_one() {   # <id> <probe> <baseUrl> -> 0 iff the probe wrote a fr
   return "$rc"
 }
 
-# Where a box keeps LiteLLM's config, and the template it is rendered from.
-# TWO ARMS, and the CALLER picks (spec §8, D-3482):
-#   - no argument: the EXTERNAL lane's box-global file — byte for byte what
-#     this helper answered before it took one. The destination is the ONE
-#     thing `ccgpt` (another repository's live launcher) and this verb must
-#     agree about (`infra/handoff/ccgpt:20` reads
-#     `${CCGPT_CONFIG:-$HOME/.handoff/litellm-config.yaml}`), so the same
-#     override is honoured here.
-#   - an id: that CODEX-kind lane's own file, `_codex_litellm_yaml "$1"`
-#     (ruling PF-40 — one spelling, the same one `_codex_start_tier`'s
-#     `--config` and `_codex_litellm_ensure`'s presence check use).
-#     UNCONDITIONAL, on purpose: this helper never reads the roster, so no
-#     caller holding an id — a reap after the roster row is gone included —
-#     can ever be answered with the box-global path, which an identity check
-#     would then match against the OTHER repository's live LiteLLM. And
-#     CCGPT_CONFIG, that repository's variable, never redirects a lane ccrc
-#     owns. Which arm a lane takes is `_models_litellm_codex`'s question, not
-#     this helper's.
-_models_litellm_path() {   # [<codex accountId>] -> the LiteLLM config file
-  [ $# -eq 0 ] || { printf '%s' "$(_codex_litellm_yaml "$1")"; return 0; }
-  printf '%s' "${CCGPT_CONFIG:-$HOME/.handoff/litellm-config.yaml}"
+# Where a codex-kind lane keeps its LiteLLM config, and the template it is
+# rendered from (spec §8, D-3482). The config is that lane's own file,
+# `_codex_litellm_yaml "$1"` (ruling PF-40 — one spelling, the same one
+# `_codex_start_tier`'s `--config` and `_codex_litellm_ensure`'s presence
+# check use). UNCONDITIONAL, on purpose: this helper never reads the roster,
+# so a caller holding an id — a reap after the roster row is gone included —
+# is answered with that id's own path and nothing else. The helper's other
+# form, an external lane's box-global file, left with the other repository's
+# lane (Plan 4); which lanes get a config at all is the dispatcher's question
+# (`_models_litellm`, below), not this helper's.
+_models_litellm_path() {   # <codex accountId> -> that lane's LiteLLM config file
+  printf '%s' "$(_codex_litellm_yaml "$1")"
 }
 _models_litellm_template() { printf '%s' "$CCRC_HERE/../deploy/litellm-config.template.yaml"; }
-
-# The EXTERNAL arm's question only — a codex-kind lane asks `_codex_tier_ours` (`_models_litellm_lane_held`, below).
-# "Is LiteLLM up against this config?" — `pgrep -f`, matching the argv `ccgpt`
-# starts it with (`infra/handoff/ccgpt`'s own launch line: `litellm --config
-# "$CONFIG" …` — cited by shape, not by line number, because it lives in the
-# monorepo branch and drifts independently of this one). NOT a port check:
-# the port answering says something is listening, not that it
-# is listening on THESE bytes, and the question here is exactly whether the
-# process holds a config this run just replaced.
-_models_litellm_running() { pgrep -f "litellm .*$(_models_litellm_path)" >/dev/null 2>&1; }
-
-# THE BARE STOP'S PRECONDITION (Plan 3a Task 2, operator ruling Z4,
-# D-3753). The external arm's only stop is
-# another repository's bare `ccgpt stop`, which stops units BY NAME, and a
-# codex-kind lane's own tiers carry those names (`ccgpt-<id>-{litellm,shim}
-# .service`, spec §19.2). With no codex-kind row on the roster, today's shape,
-# that stop can reach only that repository's own units: rc 1, nothing printed,
-# and the arm runs exactly as before. Once ANY row is codex-kind, ccrc cannot
-# tell whose units that stop would name: rc 0, the reason as one clause on
-# stdout, and the arm refuses before it writes. A roster whose codex lanes
-# cannot be told (`_codex_lanes` rc 1 or rc 2) answers rc 0 too, because
-# undecidable is never "no codex lane". Asked of `_codex_lanes`, the lane
-# library's ONE reader of exec.kind.
-_models_litellm_stop_blocked() {   # -> rc 0 and one clause on stdout iff the external arm must not run the bare stop
-  local ids rc=0
-  ids="$(_codex_lanes 2>/dev/null)" || rc=$?
-  if [ "$rc" -ne 0 ]; then
-    printf 'which roster lanes are codex-kind cannot be read (the lane library answered rc %s)' "$rc"
-    return 0
-  fi
-  [ -n "$ids" ] || return 1
-  printf 'the roster names codex-kind lane(s) %s' "${ids//$'\n'/, }"
-  return 0
-}
 
 # WHICH ARM, AND WHETHER IT CAN BE TOLD (D-3482; Plan 3b Task A1, D-4046):
 # `exec.kind == "codex"` read off ~/.ccrc/accounts.json by the lane library's
@@ -10217,19 +10174,19 @@ _models_litellm_stop_blocked() {   # -> rc 0 and one clause on stdout iff the ex
 #   - 0: the row is codex-kind;
 #   - 1: the roster was read, and the row is not;
 #   - 3: there is no roster file at all (not a dangling link): nothing was read,
-#     and nothing is undecidable either, so it is its own answer. Only the
-#     dispatcher may read it as "not codex", because its external arm's own read
-#     then refuses `roster-absent` ("run ccrc install"); the probe seam refuses
-#     it, because there "not codex" means the external fetch (D-3706's class);
+#     and nothing is undecidable either, so it is its own answer. The
+#     dispatcher refuses it `roster-absent` ("run ccrc install") in its own
+#     sentence (Plan 4); the probe seam refuses it, because there "not codex"
+#     means the external fetch (D-3706's class);
 #   - 2: the roster cannot say: `_codex_lanes` rc 1 (`roster-invalid`) or rc 2
 #     (`missing-dependency`); any other non-zero reads `roster-invalid`, the
 #     library's word for a roster it could not read. The library's own
 #     `ccrc codex: <word>:` line is LEFT ON STDERR, never discarded, and
 #     MODELS_CODEX_UNTOLD names the word, MODELS_CODEX_UNTOLD_RC the rc.
-# Undecidable is never "not codex" (Z4's rule, `_models_litellm_stop_blocked`
-# above). Folded into 1, it sent a codex row's probe down the external
-# fetch's default token directory, and its LiteLLM render into the
-# box-global file another repository's proxy reads. Both readers refuse 2 in
+# Undecidable is never "not codex" (Z4's rule, D-3753). Folded into 1, it
+# sent a codex row's probe down the external fetch's default token directory,
+# and, until Plan 4 deleted the external LiteLLM arm, its render into the
+# box-global file another repository's proxy read. Both readers refuse 2 in
 # the library's word: `_models_probe_codex_env` and `_models_litellm`'s
 # dispatcher, the only two (Plan 3b Task A1's grep). Both call it in their
 # own shell, so the two names reach them.
@@ -10361,9 +10318,9 @@ _models_litellm_lane() {   # <codex accountId> -> prints exactly one JSON object
 # unit nor a pidfile … must be stopped by hand" — not just this arm's
 # generic sentence). Both refusals below append its last line.
 # START follows the write because this arm stopped a tier live sessions were
-# using; the external arm leaves that to the next session because it never
-# owned its tier. "Started" is the promise `_svc_run_supervised` keeps — the
-# job was created — not readiness, which is `ccrc codex start`'s question.
+# using, and that tier is ccrc's own. "Started" is the promise
+# `_svc_run_supervised` keeps — the job was created — not readiness, which is
+# `ccrc codex start`'s question.
 # A write that fails after the stop starts the tier again on the bytes still
 # on disk, so the box is back where it was and the next run retries. Both
 # `start-failed` details append `_codex_start_tier`'s own last stderr line
@@ -10413,7 +10370,7 @@ _models_litellm_lane_held() {   # <codex accountId> -> prints exactly one JSON o
     printf '%s\n' "$check"
     return 0
   fi
-  # THE TIER — asked only now, when the bytes differ, as the external arm asks.
+  # THE TIER — asked only now, when the bytes differ.
   # A 2 is NAMED in the same subshell as the measurement (CX_TIER_WHY lives
   # only there), through `_codex_foreign_what` (review A2), and that naming
   # runs in a subshell OF ITS OWN (fix wave, the Task 10 B1 shape): the rc of
@@ -10519,82 +10476,56 @@ _models_litellm_lane_held() {   # <codex accountId> -> prints exactly one JSON o
   return 0
 }
 
-# STOP-THEN-WRITE (fix round 1, this task's controller ruling). Restart is
-# owed only when BOTH halves are true: the bytes changed AND a proxy is
-# holding the old ones — but deciding that and acting on it has to happen
-# BEFORE the new bytes land on disk, or a stop that fails leaves the config
-# already rewritten: the next run compares equal bytes, reports "unchanged",
-# and never retries the restart, while the box keeps serving the stale
-# rendering with no operator signal. So this is TWO calls into the op, not
-# one: PHASE 1 asks it to render and compare only (never write); if a restart
-# is owed and cannot be had, this function REFUSES here, before PHASE 2 —
-# the write — is ever asked for, so the next run sees the same difference and
-# retries. In-flight gpt turns fail once and retry (§6.3), which is a cost
-# worth paying for a config that has changed and not one for a config that
-# has not.
-_models_litellm() {   # <accountId> -> prints exactly one JSON object: the op's final answer, or a refusal
-  # A codex-kind lane takes its own arm (`_models_litellm_lane`, above), and a
-  # roster that cannot say whether this row is one takes NEITHER (Plan 3b Task A1).
-  # Everything below is the EXTERNAL arm, unchanged byte for byte
-  # (D-3482) but for one guard (Plan 3a Task 2, D-3753): its bare stop is
-  # refused once any roster row is codex-kind. The live lanes are external, and
-  # another repository's LiteLLM reads that arm's file. Each lane leaves this
-  # arm at its own flip (Plan 3b), and Plan 4's ccrc PR deletes it (ruling Z8).
-  # WHICH ARM (Plan 3b Task A1, D-4046): a roster that cannot say is refused
-  # in the lane library's own word, as `_codex_row`'s refusals are propagated,
-  # and its own line is already on stderr. The external arm would render a
-  # codex row's model list into the box-global file another repository's
-  # LiteLLM reads; the codex arm would act on a row nobody read.
-  local kind=0
+# STOP-THEN-WRITE (fix round 1, this task's controller ruling; per lane since
+# D-3482). Restart is owed only when BOTH halves are true: the bytes changed
+# AND the lane's own LiteLLM tier is holding the old ones — but deciding that
+# and acting on it has to happen BEFORE the new bytes land on disk, or a stop
+# that fails leaves the config already rewritten: the next run compares equal
+# bytes, reports "unchanged", and never retries the restart, while the lane
+# keeps serving the stale rendering with no operator signal. So the codex arm
+# (`_models_litellm_lane_held`, above) makes TWO calls into the op, not one:
+# PHASE 1 asks it to render and compare only (never write); if a restart is
+# owed and cannot be had, it REFUSES there, before PHASE 2 — the write — is
+# ever asked for, so the next run sees the same difference and retries.
+# In-flight gpt turns fail once and retry (§6.3), which is a cost worth paying
+# for a config that has changed and not one for a config that has not.
+#
+# THE DISPATCHER (Plan 4): a codex-kind lane takes the codex arm, and every
+# other answer is a refusal, exit 1, before anything is rendered, stopped or
+# written: `no-such-account` for an id the roster lacks, `not-codex-kind` for a
+# row that is not codex-kind, `roster-absent` for no roster file at all, and,
+# for a roster that cannot say (Plan 3b Task A1, D-4046), the lane library's
+# own word, `roster-invalid` or `missing-dependency`, as `_codex_row`'s
+# refusals are propagated, with its line already on stderr. `not-codex-kind`
+# is this dispatcher's own word: models-op's `not-a-codex-lane` keeps its
+# meaning, a codex-kind row whose registry is absent or not a codex probe.
+# A row that is not codex-kind used to take the EXTERNAL arm, which rendered
+# its model list into the other repository's box-global config and stopped
+# that repository's proxy through that repository's own launcher. The arm left
+# with that repository's lane (Plan 4, ruling Z8).
+_models_litellm() {   # <accountId> -> prints exactly one JSON object: the codex arm's final answer, or a refusal
+  local kind=0 member=0
   _models_litellm_codex "$1" || kind=$?
   case "$kind" in
     0) _models_litellm_lane "$1"; return $? ;;
-    1) ;;
-    3) ;;   # no roster file: the external arm's own read refuses `roster-absent` (D-4046)
-    *) if [ "$MODELS_CODEX_UNTOLD" = missing-dependency ]; then
-         _models_refuse missing-dependency 1 "jq is not on PATH (the lane library's ccrc codex: missing-dependency line says so), so whether lane $1 is exec.kind \"codex\" cannot be told, and neither LiteLLM arm was taken: a codex lane's model list never goes to the box-global file, and an external lane's is never rendered as a codex one. Install jq, then re-run this command. Nothing was written and nothing was stopped."
-       fi
-       _models_refuse roster-invalid 1 "\$HOME/.ccrc/accounts.json could not be read as a roster (the lane library answered rc $MODELS_CODEX_UNTOLD_RC; its ccrc codex: roster-invalid line says why), so whether lane $1 is exec.kind \"codex\" cannot be told, and neither LiteLLM arm was taken: a codex lane's model list never goes to the box-global file, and an external lane's is never rendered as a codex one. Fix the roster ('ccrc wrappers' prints the validator's sentence), then re-run this command. Nothing was written and nothing was stopped." ;;
+    1) # The roster was read and names no codex lane by this id: either its row
+       # is some other kind, or there is no row at all. `_codex_lanes` lists
+       # codex ids only, so membership is a read of its own.
+       jq -e --arg id "$1" 'any((.accounts // [])[] | objects; .id == $id)' "$(_models_roster_path)" >/dev/null 2>&1 || member=$?
+       case "$member" in
+         0) _models_refuse not-codex-kind 1 "account $1 is not exec.kind \"codex\", so ccrc renders no LiteLLM config for it (an external lane's box-global config was retired by Plan 4). If it is a Codex lane, its roster row needs exec.kind \"codex\". Nothing was rendered, stopped or written." ;;
+         1) _models_refuse no-such-account 1 "\$HOME/.ccrc/accounts.json has no account \"$1\", so there is no lane to render a LiteLLM config for. 'ccrc status' lists the ids this box has. Nothing was rendered, stopped or written." ;;
+       esac
+       # Any other answer: the roster `_codex_lanes` just read could not be read
+       # again, so it cannot say after all. Refused below as `roster-invalid`.
+       MODELS_CODEX_UNTOLD=roster-invalid; MODELS_CODEX_UNTOLD_RC="$member" ;;
+    3) _models_refuse roster-absent 1 "\$HOME/.ccrc/accounts.json does not exist, so no lane's LiteLLM config can be rendered. Run 'ccrc install' — it seeds one and never overwrites an existing one." ;;
   esac
-  local file check crc
-  file="$(_models_roster_path)"
-  check="$(_models_answer litellm --file "$file" --id "$1" \
-             --template "$(_models_litellm_template)" --out "$(_models_litellm_path)")"; crc=$?
-  [ "$crc" -eq 0 ] || { printf '%s\n' "$check"; return "$crc"; }
-  if [ "$(printf '%s' "$check" | jq -r '.changed')" != "true" ]; then
-    printf '%s\n' "$check"
-    return 0
+  # 2, the roster cannot say (and the membership read's own failure, above).
+  if [ "$MODELS_CODEX_UNTOLD" = missing-dependency ]; then
+    _models_refuse missing-dependency 1 "jq is not on PATH (the lane library's ccrc codex: missing-dependency line says so), so whether lane $1 is exec.kind \"codex\" cannot be told, and no LiteLLM config was rendered. Install jq, then re-run this command. Nothing was written and nothing was stopped."
   fi
-  local restarted=false
-  if _models_litellm_running; then
-    # NEVER THE BARE STOP ONCE A CODEX-KIND LANE EXISTS (Plan 3a Task 2,
-    # operator ruling Z4, D-3753). Refused
-    # HERE, through this arm's own restart-failed path and before PHASE 2, so
-    # nothing is written and the next run sees the same difference again.
-    local blocked
-    if blocked="$(_models_litellm_stop_blocked)"; then
-      _models_refuse restart-failed 1 "the LiteLLM proxy is running on the PREVIOUS config, and ccrc will not stop it: $blocked, and the only stop this arm has is another repository's bare 'ccgpt stop', which stops units by name, the names a codex lane's own tiers carry. Stop that proxy by hand once you know which lane's units that stop would name, or flip lane $1 to codex (Plan 3b), then re-run this command — until then this box serves the old model list. Nothing was written and nothing was stopped."
-    fi
-    if command -v ccgpt >/dev/null 2>&1 && ccgpt stop >/dev/null 2>&1; then
-      restarted=true
-      echo "$PROG: stopped the running LiteLLM proxy — it was holding the previous rendering; the next gpt session starts it again on the new one." >&2
-    else
-      # Refuse HERE, before PHASE 2: nothing is written, so the bytes on disk
-      # stay exactly what they were, and the NEXT run sees the same
-      # difference and retries the whole decision rather than silently
-      # reporting "unchanged" forever after.
-      _models_refuse restart-failed 1 "the LiteLLM proxy is running on the PREVIOUS config and could not be stopped. Run 'ccgpt stop' by hand, then re-run this command — until then this box serves the old model list. Nothing was written."
-    fi
-  fi
-  local body
-  body="$(_models_answer litellm --file "$file" --id "$1" \
-            --template "$(_models_litellm_template)" --out "$(_models_litellm_path)" --commit true)"; crc=$?
-  if [ "$crc" -eq 0 ]; then
-    printf '%s\n' "$(printf '%s' "$body" | jq -c --argjson r "$restarted" '. + {restarted: $r}')"
-  else
-    printf '%s\n' "$body"
-  fi
-  return "$crc"
+  _models_refuse roster-invalid 1 "\$HOME/.ccrc/accounts.json could not be read as a roster (the lane library answered rc $MODELS_CODEX_UNTOLD_RC; its ccrc codex: roster-invalid line says why), so whether lane $1 is exec.kind \"codex\" cannot be told, and no LiteLLM config was rendered. Fix the roster ('ccrc wrappers' prints the validator's sentence), then re-run this command. Nothing was written and nothing was stopped."
 }
 
 # `ccrc codex start`'s config step (design contract `start`:
@@ -10602,11 +10533,9 @@ _models_litellm() {   # <accountId> -> prints exactly one JSON object: the op's 
 # arm"). PRESENCE only — staleness is `ccrc models refresh`'s question,
 # asked hourly by its timer. Rendered by the ONE writer, through the arm's
 # body `_models_litellm_lane_held` DIRECTLY rather than through
-# `_models_litellm`'s dispatch: this caller must never reach the external
-# arm, whose failure mode is the live box's box-global file and a bare
-# `ccgpt stop`. And never through `_models_litellm_lane`, which takes the
-# lane lock: THE CALLER HOLDS IT (`_codex_cmd_start` takes it before
-# this step). `_codex_lock` is RE-ENTRANT there (R38: a second call would
+# `_models_litellm`'s dispatch, whose codex arm is `_models_litellm_lane`,
+# which takes the lane lock: THE CALLER HOLDS IT (`_codex_cmd_start` takes it
+# before this step). `_codex_lock` is RE-ENTRANT there (R38: a second call would
 # return 0 at once, not wait), but this function still never calls it, to
 # keep the lock's scope to `_codex_cmd_start`'s own call and the fake's
 # call log honest. Its answer is CAPTURED, never
@@ -10615,7 +10544,7 @@ _models_litellm() {   # <accountId> -> prints exactly one JSON object: the op's 
 # refusal printer, carrying the op's own `.detail`, which names the specific
 # remedy (never-probed → refresh). PF-40: the presence check reads
 # `_codex_litellm_yaml <id>` directly — the same spelling
-# `_codex_start_tier`'s `--config` and `_models_litellm_path`'s id arm use.
+# `_codex_start_tier`'s `--config` and `_models_litellm_path` use.
 _codex_litellm_ensure() {   # <codex id> -> 0 iff ~/.ccrc/codex/<id>/litellm.yaml exists (rendered now when absent); else one stderr line, rc 1. The caller holds `_codex_lock <id>`.
   local path body rc=0 detail
   path="$(_codex_litellm_yaml "$1")"

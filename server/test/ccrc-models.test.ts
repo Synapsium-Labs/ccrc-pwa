@@ -221,8 +221,9 @@ function env(h: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   const inherited: NodeJS.ProcessEnv = { ...process.env };
   // Plan 3a Task 2 (operator ruling Z1): nor is `CCGPT_CONFIG`, the other
   // repository's override of the external arm's box-global path, which that
-  // arm still honours and a GPT-lane session can carry. Inherited, it would
-  // aim a case's render and its `pgrep -f` at a real config.
+  // arm honoured and a GPT-lane session can carry. Inherited, it would have
+  // aimed a case's render and its `pgrep -f` at a real config. Plan 4 deleted
+  // the arm and kept this drop: it costs nothing, and a return stays loud.
   for (const k of ['CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S', 'CCGPT_CONFIG']) delete inherited[k];
   const e = ghContainedEnv(h, { ...inherited, HOME: h, ...extra }, { systemd: true });
   const poison = (name: string, says: string): void =>
@@ -237,11 +238,12 @@ function env(h: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   poison('systemctl', 'ccrc tests must never query this box\'s real systemd');
   poison('systemd-run', 'ccrc tests must never start a real transient unit on this box\'s systemd');
   poison('launchctl', 'ccrc tests must never query this box\'s real launchd');
-  // Plan 3a Task 2 (operator ruling Z1): the external arm keeps its `pgrep -f`
-  // and its bare `ccgpt stop`, and on the fleet box a real `ccgpt stop` stops
-  // a live lane's units BY NAME, which the census cannot see. So a HOME that
-  // holds no stand-in of its own gets a poison. Only then: the functional
-  // stubs a describe writes before a run must survive that run's env().
+  // Plan 3a Task 2 (operator ruling Z1): the external arm ran `pgrep -f` and a
+  // bare `ccgpt stop`, and on the fleet box a real `ccgpt stop` stops a live
+  // lane's units BY NAME, which the census cannot see. So a HOME that holds no
+  // stand-in of its own gets a poison. Only then: the stand-ins a describe
+  // writes before a run must survive that run's env(). Plan 4 deleted the arm
+  // and kept these poisons, so a return of it is loud.
   for (const name of ['pgrep', 'ccgpt']) {
     if (!fs.existsSync(join(h, '.local', 'bin', name))) poison(name, `ccrc tests must never reach a real ${name}`);
   }
@@ -324,8 +326,8 @@ const writeCatalogue = (id: string, cat: unknown = CODEX): void => {
 
 // ── Task 6 (D-3482): the lane library, faked BY NAME ──────────
 // The codex arm of `_models_litellm` asks four bash FUNCTIONS (the lane
-// library and its lock), not two binaries on PATH, so the `pgrep`/`ccgpt` PATH stubs this
-// file uses for the external arm cannot reach it. It is faked the way
+// library and its lock), not two binaries on PATH, so the `pgrep`/`ccgpt` PATH poisons this
+// file plants cannot reach it. It is faked the way
 // `ccrc-account.test.ts`'s `sourceCall` reaches a function: `ccd/ccrc` is
 // SOURCED (the `BASH_SOURCE` guard at its foot exists for this), the named
 // functions are redefined, and one call is made. Not `plantSystemd`
@@ -466,6 +468,23 @@ const laneCalls = (): string[] => {
   const p = join(home, 'lane-calls');
   return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').split('\n').filter(Boolean) : [];
 };
+
+/** Plan 4 Task C1: the seat of every case that reaches the LiteLLM step for a
+ *  subject other than the dispatcher's own refusals. A row that is not
+ *  codex-kind now fails that step `not-codex-kind`, so these cases moved off
+ *  the external rows they were written on, onto `codex-a`, whose registry its
+ *  own `init codex` creates. */
+async function seatCodexA(): Promise<void> {
+  home = await codexBox(['codex-a']);
+  const r = run(['models', 'codex-a', 'init', 'codex']);
+  expect(r.code, r.stderr).toBe(0);
+}
+
+/** `ccrc models refresh <target>` with the codex arm's lane library faked by
+ *  name (`LANE_FAKES`), on the Codex fixture catalogue unless `extra` says
+ *  otherwise. */
+const refreshFaked = (target: string, extra: NodeJS.ProcessEnv = { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW }): Result =>
+  sourced(`cmd_models refresh ${target}`, ['lock', 'ours', 'stop', 'start'], extra);
 
 /** What `_fk_probe` saw of the lane lock, one `<fake> held|free` per call. */
 const lockProbe = (): string[] => {
@@ -1627,21 +1646,13 @@ describe('ccrc models <id> rm (§4.1 Lifecycle, §10, §11) — reap, not a muta
 });
 
 describe('ccrc models refresh', () => {
-  // Controller ruling on this task: a successfully-refreshed CODEX lane now
-  // runs the litellm step (§5), which shells out to `pgrep` (is the proxy
-  // running?) and, conditionally, `ccgpt stop`. The fixture HOME rule forbids
-  // reaching this box's real binaries, so every test in this describe gets a
-  // functional stub — not just the ones that name `gpt` explicitly — planted
-  // BEFORE each case, the same shape `describe('ccrc models litellm')`'s own
-  // `pgrep`/`ccgpt` helpers use. Harmless for a test that never refreshes a
-  // codex lane: the litellm step never runs there (§5, "non-codex lanes never
-  // trigger the litellm step"), so the stub just sits unused.
-  beforeEach(() => {
-    fs.writeFileSync(join(home, '.local', 'bin', 'pgrep'),
-      '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/pgrep-calls"\nexit 1\n', { mode: 0o755 });
-    fs.writeFileSync(join(home, '.local', 'bin', 'ccgpt'),
-      '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/ccgpt-calls"\nexit 0\n', { mode: 0o755 });
-  });
+  // A successfully-refreshed lane whose probe is `codex` runs the litellm step
+  // (§5). Plan 4 Task C1: a row that is not codex-kind now fails that step
+  // `not-codex-kind`, so every case here that reaches it is seated on a
+  // codex-kind lane, `codex-a`, with the codex arm's lane library faked by name
+  // (`LANE_FAKES`). Before Plan 4 they ran on an external row, whose arm shelled
+  // out to `pgrep` and `ccgpt`. Nothing here plants a stand-in for either any
+  // more, so env()'s poisons keep a return of that arm loud.
 
   it('with no argument is a usage error naming both forms', () => {
     const r = run(['models', 'refresh']);
@@ -1649,17 +1660,17 @@ describe('ccrc models refresh', () => {
     expect(String(oneObject(r)['detail'])).toContain('--all');
   });
 
-  it('refreshes one lane and writes its catalogue', () => {
-    seedCodex(LEGACY_EXTERNAL_ID);
-    const r = run(['models', 'refresh', 'gpt'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
-    expect(r.code).toBe(0);
+  it('refreshes one lane and writes its catalogue', async () => {
+    await seatCodexA();
+    const r = refreshFaked('codex-a');
+    expect(r.code, r.stderr).toBe(0);
     const b = oneObject(r);
     expect(b['ok']).toBe(true);
-    expect(b['refreshed']).toEqual([{ id: 'gpt', probe: 'codex', ok: true, count: 9, litellm: 'rendered' }]);
-    expect(fs.existsSync(join(home, '.ccrc', 'models', 'gpt.json'))).toBe(true);
+    expect(b['refreshed']).toEqual([{ id: 'codex-a', probe: 'codex', ok: true, count: 9, litellm: 'rendered' }]);
+    expect(fs.existsSync(join(home, '.ccrc', 'models', 'codex-a.json'))).toBe(true);
   });
 
-  it('re-materialises the lane it refreshed, so the effort file is freshly rewritten from the new catalogue', () => {
+  it('re-materialises the lane it refreshed, so the effort file is freshly rewritten from the new catalogue', async () => {
     // Fix round 1, Finding 3: the original version of this test set no
     // effort level of its own, so `SEEDS.codex`'s own `effort` map (written,
     // unvalidated, by `init`'s OWN materialise call, before any catalogue
@@ -1693,10 +1704,10 @@ describe('ccrc models refresh', () => {
     // with the mutation below (deleting the materialise call), the inode is
     // IDENTICAL before and after, because nothing touches the file during
     // refresh at all.
-    seedCodex(LEGACY_EXTERNAL_ID);
-    const effortPath = join(home, '.ccrc', 'models', 'gpt.effort.json');
+    await seatCodexA();
+    const effortPath = join(home, '.ccrc', 'models', 'codex-a.effort.json');
     const before = fs.statSync(effortPath).ino;
-    run(['models', 'refresh', 'gpt'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
+    refreshFaked('codex-a');
     const after = fs.statSync(effortPath).ino;
     expect(after).not.toBe(before);
     // The content itself is, correctly, unchanged (SEEDS.codex's own
@@ -1707,24 +1718,25 @@ describe('ccrc models refresh', () => {
       .toEqual({ byModel: { 'gpt-5.6-luna': 'high', 'gpt-5.6-terra': 'high', 'gpt-5.6-sol': 'max' } });
   });
 
-  it('re-materialises the TSV too, so a RETIRED class is visible to ccd', () => {
-    seedCodex(LEGACY_EXTERNAL_ID);
-    run(['models', 'gpt', 'set-class', 'sonnet', 'gpt-5.5-mini']);
-    run(['models', 'refresh', 'gpt'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
-    expect(fs.readFileSync(join(home, '.ccrc', 'models', 'gpt.classes.tsv'), 'utf8'))
+  it('re-materialises the TSV too, so a RETIRED class is visible to ccd', async () => {
+    await seatCodexA();
+    run(['models', 'codex-a', 'set-class', 'sonnet', 'gpt-5.5-mini']);
+    refreshFaked('codex-a');
+    expect(fs.readFileSync(join(home, '.ccrc', 'models', 'codex-a.classes.tsv'), 'utf8'))
       .toContain('sonnet\tgpt-5.5-mini\tretired\n');
   });
 
-  it('--all probes every lane that HAS a registry, and no others', () => {
+  it('--all probes every lane that HAS a registry, and no others', async () => {
     // The probe kind lives in the registry file (round-2 ruling 10), so a lane
     // without one has no probe to run — asking would be a question with no
     // answer. `router` is initialised too, so this run is a MIXED result:
-    // its normaliser refuses a Codex body.
-    seedCodex(LEGACY_EXTERNAL_ID);
+    // its normaliser refuses a Codex body. Rows come in roster order, and
+    // `codex-a` is the roster's last row.
+    await seatCodexA();
     run(['models', 'router', 'init', 'openrouter']);
-    const r = run(['models', 'refresh', '--all'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
+    const r = refreshFaked('--all');
     const refreshed = oneObject(r)['refreshed'] as { id: string }[];
-    expect(refreshed.map((x) => x.id)).toEqual(['gpt', 'router']);
+    expect(refreshed.map((x) => x.id)).toEqual(['router', 'codex-a']);
     expect(fs.existsSync(join(home, '.ccrc', 'models', 'claude-a.json'))).toBe(false);
     expect(fs.existsSync(join(home, '.ccrc', 'models', 'claude.json'))).toBe(false);
   });
@@ -1735,13 +1747,13 @@ describe('ccrc models refresh', () => {
     expect(oneObject(r)['refreshed']).toEqual([]);
   });
 
-  it('--all exits 1 when any lane failed, and still reports the ones that worked', () => {
-    seedCodex(LEGACY_EXTERNAL_ID);
+  it('--all exits 1 when any lane failed, and still reports the ones that worked', async () => {
+    await seatCodexA();
     run(['models', 'router', 'init', 'openrouter']);
-    const r = run(['models', 'refresh', '--all'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
+    const r = refreshFaked('--all');
     expect(r.code).toBe(1);
     const rows = oneObject(r)['refreshed'] as { id: string; ok: boolean }[];
-    expect(rows.find((x) => x.id === 'gpt')!.ok).toBe(true);
+    expect(rows.find((x) => x.id === 'codex-a')!.ok).toBe(true);
     expect(rows.find((x) => x.id === 'router')!.ok).toBe(false);
   });
 
@@ -1754,24 +1766,24 @@ describe('ccrc models refresh', () => {
   // TSV path it writes means its `renameSync(tmp, p)` throws (p is not a
   // file), the same failure shape a permissions or disk-full problem would
   // produce on a real box.
-  it('a lane whose re-materialise fails is a FAILED row, and litellm never runs (C7)', () => {
-    seedCodex(LEGACY_EXTERNAL_ID);
-    const tsvPath = join(home, '.ccrc', 'models', 'gpt.classes.tsv');
+  it('a lane whose re-materialise fails is a FAILED row, and litellm never runs (C7)', async () => {
+    await seatCodexA();
+    const tsvPath = join(home, '.ccrc', 'models', 'codex-a.classes.tsv');
     fs.rmSync(tsvPath, { force: true });
     fs.mkdirSync(tsvPath);
-    const r = run(['models', 'refresh', '--all'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
+    const r = refreshFaked('--all');
     expect(r.code).toBe(1);
     const b = oneObject(r);
     expect(b['ok']).toBe(false);
     const rows = b['refreshed'] as { id: string; ok: boolean; reason?: string; litellm?: string }[];
-    expect(rows).toEqual([{ id: 'gpt', ok: false, reason: expect.any(String) }]);
+    expect(rows).toEqual([{ id: 'codex-a', ok: false, reason: expect.any(String) }]);
     expect(rows[0]!.reason!.length).toBeGreaterThan(0);
     // The probe's own effect stands (§6.1 amendment: a failed materialise
     // does not undo a successful catalogue fetch) — only the derived files
     // and the LiteLLM step, which reads them, are what the failure gates.
-    expect(fs.existsSync(join(home, '.ccrc', 'models', 'gpt.json'))).toBe(true);
-    expect(fs.existsSync(join(home, '.handoff', 'litellm-config.yaml'))).toBe(false);
-    expect(fs.existsSync(join(home, 'ccgpt-calls')), 'the litellm step must never run when materialise failed').toBe(false);
+    expect(fs.existsSync(join(home, '.ccrc', 'models', 'codex-a.json'))).toBe(true);
+    expect(fs.existsSync(join(home, '.ccrc', 'codex', 'codex-a', 'litellm.yaml'))).toBe(false);
+    expect(laneCalls(), 'the litellm step must never run when materialise failed').toEqual([]);
   });
 
   it('refuses an id the roster does not have', () => {
@@ -1837,12 +1849,12 @@ describe('ccrc models refresh', () => {
     expect(r.stderr).not.toContain('lane-token');
   });
 
-  it('a single-lane failure exits 1 and leaves the previous catalogue stale, not deleted', () => {
-    seedCodex(LEGACY_EXTERNAL_ID);
-    run(['models', 'refresh', 'gpt'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
-    const r = run(['models', 'refresh', 'gpt'], { CCRC_MODELS_PROBE_FIXTURE: join(home, 'nope') });
+  it('a single-lane failure exits 1 and leaves the previous catalogue stale, not deleted', async () => {
+    await seatCodexA();
+    refreshFaked('codex-a');
+    const r = refreshFaked('codex-a', { CCRC_MODELS_PROBE_FIXTURE: join(home, 'nope') });
     expect(r.code).toBe(1);
-    const cat = JSON.parse(fs.readFileSync(join(home, '.ccrc', 'models', 'gpt.json'), 'utf8'));
+    const cat = JSON.parse(fs.readFileSync(join(home, '.ccrc', 'models', 'codex-a.json'), 'utf8'));
     expect(cat.stale).toBe(true);
     expect(cat.models).toHaveLength(9);
   });
@@ -1874,17 +1886,17 @@ describe('ccrc models refresh', () => {
   // names `ccrc models refresh <id>` as the remedy for. `readRegistry` now
   // always runs, so a valid registry behind a corrupt catalogue is still
   // found and still refreshed.
-  it('a lane whose catalogue is corrupt is still refreshed, and repaired (Fix round 1, Finding 2)', () => {
+  it('a lane whose catalogue is corrupt is still refreshed, and repaired (Fix round 1, Finding 2)', async () => {
     // `init` itself refuses on an already-broken catalogue file (the general
     // op path's early `cat.err` gate), so the registry has to be seeded
     // first, with no catalogue file yet, and the catalogue corrupted after.
-    seedCodex(LEGACY_EXTERNAL_ID);
-    fs.writeFileSync(join(home, '.ccrc', 'models', 'gpt.json'), '{"probe":"gemini"}');
-    const r = run(['models', 'refresh', 'gpt'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
-    expect(r.code).toBe(0);
+    await seatCodexA();
+    fs.writeFileSync(join(home, '.ccrc', 'models', 'codex-a.json'), '{"probe":"gemini"}');
+    const r = refreshFaked('codex-a');
+    expect(r.code, r.stderr).toBe(0);
     expect(oneObject(r)['refreshed'])
-      .toEqual([{ id: 'gpt', probe: 'codex', ok: true, count: 9, litellm: 'rendered' }]);
-    const cat = JSON.parse(fs.readFileSync(join(home, '.ccrc', 'models', 'gpt.json'), 'utf8'));
+      .toEqual([{ id: 'codex-a', probe: 'codex', ok: true, count: 9, litellm: 'rendered' }]);
+    const cat = JSON.parse(fs.readFileSync(join(home, '.ccrc', 'models', 'codex-a.json'), 'utf8'));
     expect(cat.models).toHaveLength(9);
   });
 
@@ -1920,331 +1932,21 @@ describe('ccrc models refresh', () => {
     expect(oneObject(r)['error']).toBe('registry-invalid');
     expect(String(oneObject(r)['detail'])).toContain('subagent');
   });
-
-  // Controller ruling on this task: the beforeEach's functional stubs prove
-  // the litellm step BEHAVES correctly; this proves it never falls through to
-  // whatever real `pgrep`/`ccgpt` this box happens to have on PATH if a stub
-  // were ever missing — the same poisoned-tools pattern `env()` uses for
-  // curl, systemctl and launchctl (`poisonLog`), applied here to the two
-  // binaries this step is new for. Poisoned rather than stubbed: both always
-  // exit 97 and log their argv, so `_models_litellm_running`'s nonzero-exit
-  // "not running" reading holds even under a poison, and the assertion is
-  // that `ccgpt`'s poison log — the restart step — stays EMPTY: a restart is
-  // not expected when nothing looks like it is running.
-  it('never reaches a real pgrep or ccgpt — poisoned, and no restart fires when neither looks running', () => {
-    fs.writeFileSync(join(home, '.local', 'bin', 'pgrep'),
-      '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/pgrep-poison"\n'
-      + 'echo "ccrc tests must never reach a real pgrep" >&2\nexit 97\n', { mode: 0o755 });
-    fs.writeFileSync(join(home, '.local', 'bin', 'ccgpt'),
-      '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/ccgpt-poison"\n'
-      + 'echo "ccrc tests must never reach a real ccgpt" >&2\nexit 97\n', { mode: 0o755 });
-    seedCodex(LEGACY_EXTERNAL_ID);
-    const r = run(['models', 'refresh', 'gpt'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
-    expect(r.code).toBe(0);
-    expect(poisonLog('ccgpt')).toEqual([]);
-  });
 });
 
 describe('ccrc models litellm', () => {
-  const configPath = (): string => join(home, '.handoff', 'litellm-config.yaml');
-
-  /** A `pgrep` that answers "LiteLLM is running" or "it is not", and records
-   *  its argv — the probe `ccrc` uses to decide whether a restart is owed. */
-  const pgrep = (running: boolean): void =>
-    fs.writeFileSync(join(home, '.local', 'bin', 'pgrep'),
-      `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/pgrep-calls"\n${running ? 'echo 4242\nexit 0' : 'exit 1'}\n`,
-      { mode: 0o755 });
-
-  /** A `ccgpt` that records its argv instead of stopping a real proxy. */
-  const ccgpt = (): void =>
-    fs.writeFileSync(join(home, '.local', 'bin', 'ccgpt'),
-      '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/ccgpt-calls"\nexit 0\n', { mode: 0o755 });
-
-  const calls = (name: string): string[] => {
-    const p = join(home, `${name}-calls`);
-    return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').split('\n').filter(Boolean) : [];
-  };
-
-  beforeEach(() => {
-    pgrep(false); ccgpt();
-    seedCodex(LEGACY_EXTERNAL_ID);
-    run(['models', 'refresh', 'gpt'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
-    fs.rmSync(join(home, 'ccgpt-calls'), { force: true });
-    fs.rmSync(configPath(), { force: true });
-    fs.rmSync(`${configPath()}.prev`, { force: true });
-  });
-
-  it('renders the config from the lane\'s catalogue, with no reasoning key', () => {
-    const r = run(['models', 'litellm', 'gpt']);
-    expect(r.code).toBe(0);
-    expect(oneObject(r)['changed']).toBe(true);
-    const yaml = fs.readFileSync(configPath(), 'utf8');
-    // Scoped to the GENERATED block, not the whole file — the shipped
-    // template's own header comment (carried verbatim) legitimately says
-    // "reasoning" explaining why there is none; `litellm-render.test.ts`'s
-    // own template-level case already bans a literal `reasoning:` key
-    // anywhere, including in a comment.
-    expect(yaml.slice(yaml.indexOf('model_list:'), yaml.indexOf('litellm_settings:'))).not.toContain('reasoning');
-    expect(yaml).toContain('  - model_name: gpt-6-astra');
-    // No `[1m]` alias in the GENERATED block (§6.3, amended 2026-09-08, Task
-    // 16c; scoped in fix round 1 — the template's own header comment, carried
-    // verbatim, now legitimately says `[1m]` explaining why there is none, so
-    // a whole-file ban would fail on that prose, same as the `reasoning` ban
-    // above). A fleet-host measurement found the catalogue's advertised
-    // context is not the usable one, so the generator stops emitting a name
-    // that would tell Claude Code it has 1M of room — the backend has no such
-    // NAME (the removed alias mapped to the real id all along); the client's
-    // window BELIEF was the lie (2026-07-26).
-    expect(yaml.slice(yaml.indexOf('model_list:'), yaml.indexOf('litellm_settings:'))).not.toMatch(/\[1m\]/);
-    expect(yaml).not.toContain('gpt-reserve');
-  });
-
-  it('is idempotent — a second run reports changed:false and touches nothing', () => {
-    run(['models', 'litellm', 'gpt']);
-    const before = fs.statSync(configPath()).mtimeMs;
-    const r = run(['models', 'litellm', 'gpt']);
-    expect(oneObject(r)['changed']).toBe(false);
-    expect(fs.statSync(configPath()).mtimeMs).toBe(before);
-  });
-
-  it('keeps the previous config beside the new one', () => {
-    fs.mkdirSync(join(home, '.handoff'), { recursive: true });
-    fs.writeFileSync(configPath(), 'model_list: []\n');
-    run(['models', 'litellm', 'gpt']);
-    expect(fs.readFileSync(`${configPath()}.prev`, 'utf8')).toBe('model_list: []\n');
-  });
-
-  it('does NOT restart LiteLLM when it is not running', () => {
-    run(['models', 'litellm', 'gpt']);
-    expect(calls('ccgpt')).toEqual([]);
-  });
-
-  it('restarts LiteLLM when it IS running and the config changed, and says it did', () => {
-    pgrep(true);
-    const r = run(['models', 'litellm', 'gpt']);
-    expect(r.code).toBe(0);
-    expect(calls('ccgpt')).toEqual(['stop']);
-    expect(r.stderr).toMatch(/stopped the running LiteLLM proxy/);
-  });
-
-  it('does NOT restart when the config did not change, even if it is running', () => {
-    run(['models', 'litellm', 'gpt']);
-    pgrep(true);
-    fs.rmSync(join(home, 'ccgpt-calls'), { force: true });
-    run(['models', 'litellm', 'gpt']);
-    expect(calls('ccgpt')).toEqual([]);
-  });
-
-  // Fix round 1 (this task, controller ruling): STOP-THEN-WRITE. A running
-  // proxy that will not stop must refuse BEFORE the op ever writes, so the
-  // next run sees the same difference and retries — writing first and only
-  // then discovering the stop failed would leave the new config already on
-  // disk, reporting "unchanged" forever after, while the box keeps serving
-  // the stale rendering with no operator signal.
-  it('refuses when a running proxy will not stop, and writes nothing', () => {
-    pgrep(true);
-    fs.writeFileSync(join(home, '.local', 'bin', 'ccgpt'),
-      '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/ccgpt-calls"\nexit 1\n', { mode: 0o755 });
-    const r = run(['models', 'litellm', 'gpt']);
-    expect(r.code).toBe(1);
-    const b = oneObject(r);
-    expect(b['ok']).toBe(false);
-    expect(b['error']).toBe('restart-failed');
-    expect(fs.existsSync(configPath())).toBe(false);
-    expect(fs.existsSync(`${configPath()}.prev`)).toBe(false);
-  });
-
-  it('restarts (a successful stop) and writes, reporting restarted:true', () => {
-    fs.mkdirSync(join(home, '.handoff'), { recursive: true });
-    fs.writeFileSync(configPath(), 'model_list: []\n');
-    pgrep(true);
-    const r = run(['models', 'litellm', 'gpt']);
-    expect(r.code).toBe(0);
-    const b = oneObject(r);
-    expect(b['changed']).toBe(true);
-    expect(b['restarted']).toBe(true);
-    expect(calls('ccgpt')).toEqual(['stop']);
-    expect(fs.readFileSync(`${configPath()}.prev`, 'utf8')).toBe('model_list: []\n');
-  });
-
-  it('a second run after a failed stop retries once the proxy can be stopped', () => {
-    pgrep(true);
-    fs.writeFileSync(join(home, '.local', 'bin', 'ccgpt'),
-      '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/ccgpt-calls"\nexit 1\n', { mode: 0o755 });
-    const r1 = run(['models', 'litellm', 'gpt']);
-    expect(r1.code).toBe(1);
-    expect(fs.existsSync(configPath())).toBe(false);
-    ccgpt();
-    const r2 = run(['models', 'litellm', 'gpt']);
-    expect(r2.code).toBe(0);
-    expect(oneObject(r2)['changed']).toBe(true);
-    expect(fs.existsSync(configPath())).toBe(true);
-  });
+  // Plan 4 Task C1: the external arm these cases were first written against
+  // left with the other repository's lane, and a codex-kind lane's own arm has
+  // its own describe below. What stays here is the verb's own, seated on a
+  // codex-kind lane, `codex-a`, with the lane library faked by name: its one
+  // argument, and a lane with no catalogue to render from.
+  beforeEach(seatCodexA);
 
   it('refuses a never-probed lane rather than rendering an empty list', () => {
-    fs.rmSync(join(home, '.ccrc', 'models', 'gpt.json'));
-    const r = run(['models', 'litellm', 'gpt']);
+    const r = sourced('cmd_models litellm codex-a', ['lock', 'ours', 'stop', 'start']);
     expect(r.code).toBe(1);
     expect(oneObject(r)['error']).toBe('never-probed');
-    expect(fs.existsSync(configPath())).toBe(false);
-  });
-
-  it('refuses a lane whose probe is not codex', () => {
-    run(['models', 'router', 'init', 'openrouter']);
-    const r = run(['models', 'litellm', 'router']);
-    expect(r.code).toBe(1);
-    expect(oneObject(r)['error']).toBe('not-a-codex-lane');
-  });
-
-  // D-3482: the EXTERNAL arm is the live lanes' — the other
-  // repository's LiteLLM reads its file — and this task leaves it byte for
-  // byte. Characterisation pins: GREEN before the change by design; their
-  // value is the mutation table (the dispatch sent the wrong way).
-  //
-  // R40: neither new case below names a live lane id. Each seeds its own
-  // catalogue on `router2` — the tree's existing non-live EXTERNAL row
-  // (`exec.kind: 'external'`, like the describe's own probed row above) —
-  // rather than reusing the describe's `beforeEach`, which probes only its
-  // own row.
-  it('the external arm is untouched: pgrep on the box-global path, a bare `ccgpt stop`, and the lane library never asked', () => {
-    writeCatalogue('router2');
-    seedCodex('router2');
-    fs.rmSync(join(home, 'pgrep-calls'), { force: true });
-    pgrep(true);
-    const r = sourced('cmd_models litellm router2', ['lock', 'ours', 'stop', 'start']);
-    expect(r.code, r.stderr).toBe(0);
-    const b = oneObject(r);
-    expect(b['path']).toBe(configPath());
-    expect(b['restarted']).toBe(true);
-    expect(calls('pgrep')).toEqual([`-f litellm .*${configPath()}`]);
-    expect(calls('ccgpt')).toEqual(['stop']);
-    expect(laneCalls()).toEqual([]);
-    expect(fs.existsSync(join(home, '.ccrc', 'codex'))).toBe(false);
-  });
-
-  it('the external arm still honours CCGPT_CONFIG — the other repository\'s override of that one path', () => {
-    writeCatalogue('router2');
-    seedCodex('router2');
-    const elsewhere = join(home, 'elsewhere', 'litellm-config.yaml');
-    fs.rmSync(join(home, 'pgrep-calls'), { force: true });
-    const r = run(['models', 'litellm', 'router2'], { CCGPT_CONFIG: elsewhere });
-    expect(r.code, r.stderr).toBe(0);
-    expect(oneObject(r)['path']).toBe(elsewhere);
-    expect(fs.existsSync(elsewhere)).toBe(true);
-    expect(fs.existsSync(configPath())).toBe(false);
-    expect(calls('pgrep')).toEqual([`-f litellm .*${elsewhere}`]);
-  });
-
-  // Plan 3a Task 2 (operator ruling Z4, D-3753).
-  // Once ANY roster row is codex-kind (lane A, after its flip), this arm's
-  // bare `ccgpt stop` could stop lane A's own tiers, which carry the unit
-  // names that stop uses. So for a still-external lane B with a registry, the
-  // arm refuses the stop, through its own restart-failed path, and writes
-  // nothing. Lane B is `ext-a` in the live Codex lanes' shape, lane A
-  // `codex-a`. Pure-parse ports: nothing in this describe connects to one.
-  describe('once a codex-kind lane exists, the bare stop is never run (Z4)', () => {
-    const flip = (rows: Record<string, unknown>[] = [codexRow('codex-a', 45010, 45011)]): void => {
-      const p = join(home, '.ccrc', 'accounts.json');
-      const roster = JSON.parse(fs.readFileSync(p, 'utf8')) as { accounts: unknown[] };
-      roster.accounts.push(...rows);
-      fs.writeFileSync(p, `${JSON.stringify(roster, null, 2)}\n`);
-    };
-
-    beforeEach(() => {
-      fs.rmSync(home, { recursive: true, force: true });
-      home = box({ ...ROSTER, accounts: [...ROSTER.accounts, EXT_A_ROW] });
-      pgrep(false); ccgpt();
-      writeCatalogue('ext-a');
-      seedCodex('ext-a');
-    });
-
-    it('on today\'s shape (no codex-kind row) the bare stop still runs, byte for byte (Z1)', () => {
-      pgrep(true);
-      const r = run(['models', 'litellm', 'ext-a']);
-      expect(r.code, r.stderr).toBe(0);
-      expect(oneObject(r)['restarted']).toBe(true);
-      expect(calls('ccgpt')).toEqual(['stop']);
-      expect(fs.existsSync(configPath())).toBe(true);
-    });
-
-    it('after a flip, a running proxy on a changed render is REFUSED restart-failed, naming why: nothing stopped, nothing written', () => {
-      flip(); pgrep(true);
-      const r = run(['models', 'litellm', 'ext-a']);
-      expect(r.code).toBe(1);
-      const b = oneObject(r);
-      expect(b['error']).toBe('restart-failed');
-      expect(String(b['detail'])).toContain('the roster names codex-kind lane(s) codex-a');
-      expect(String(b['detail'])).toContain('Nothing was written and nothing was stopped.');
-      expect(String(b['detail'])).not.toContain("Run 'ccgpt stop' by hand");
-      expect(r.stderr).toMatch(/^ccrc: the LiteLLM proxy is running on the PREVIOUS config, and ccrc will not stop it/m);
-      expect(calls('ccgpt')).toEqual([]);
-      expect(fs.existsSync(configPath())).toBe(false);
-      expect(fs.existsSync(`${configPath()}.prev`)).toBe(false);
-    });
-
-    // Plan 3a Task 2, fix round 1: every other case here flips ONE row, so
-    // the helper's join of several ids was pinned by nothing. The sentence
-    // names EVERY codex-kind lane, in roster order, joined by ", ", and the
-    // list ends where the sentence goes on.
-    it('after two flips, the refusal names BOTH codex-kind lanes, in roster order, joined by ", "', () => {
-      flip([codexRow('codex-a', 45010, 45011), codexRow('codex-b', 45020, 45021)]); pgrep(true);
-      const r = run(['models', 'litellm', 'ext-a']);
-      expect(r.code).toBe(1);
-      const b = oneObject(r);
-      expect(b['error']).toBe('restart-failed');
-      expect(String(b['detail'])).toContain('the roster names codex-kind lane(s) codex-a, codex-b, and the only stop');
-      expect(calls('ccgpt')).toEqual([]);
-      expect(fs.existsSync(configPath())).toBe(false);
-    });
-
-    it('after a flip, with nothing running, the render lands exactly as before: the guard binds the stop alone', () => {
-      flip();
-      const r = run(['models', 'litellm', 'ext-a']);
-      expect(r.code, r.stderr).toBe(0);
-      expect(oneObject(r)['changed']).toBe(true);
-      expect(oneObject(r)['restarted']).toBe(false);
-      expect(fs.existsSync(configPath())).toBe(true);
-      expect(calls('ccgpt')).toEqual([]);
-    });
-
-    it('after a flip, an unchanged render asks nothing, even with a proxy running', () => {
-      expect(run(['models', 'litellm', 'ext-a']).code).toBe(0);
-      flip(); pgrep(true);
-      const r = run(['models', 'litellm', 'ext-a']);
-      expect(r.code, r.stderr).toBe(0);
-      expect(oneObject(r)['changed']).toBe(false);
-      expect(calls('ccgpt')).toEqual([]);
-    });
-
-    it('a roster whose codex lanes cannot be told refuses the stop too: undecidable is never "no codex lane"', () => {
-      pgrep(true);
-      // Plan 3b Task A1: the dispatcher asks `_codex_lanes` FIRST now, and refuses
-      // an undecidable roster before either arm (its own cases are in the codex-kind
-      // describe below). This case keeps its subject, Z4's own undecidable arm, with a
-      // roster that turns unreadable BETWEEN the two reads: the first answers "no codex
-      // lane", the second rc 1. The count is a file, because each read runs in its own `$(…)`.
-      const counted = `_codex_lanes() { local n; n=$(( $(cat "$HOME/lanes-reads" 2>/dev/null || echo 0) + 1 )); printf '%s\\n' "$n" > "$HOME/lanes-reads"; [ "$n" -eq 1 ] && return 0; return 1; }`;
-      const r = sourced(`${counted}; cmd_models litellm ext-a`, []);
-      expect(fs.readFileSync(join(home, 'lanes-reads'), 'utf8'), 'the dispatcher and the stop guard each read once').toBe('2\n');
-      expect(r.code).toBe(1);
-      const b = oneObject(r);
-      expect(b['error']).toBe('restart-failed');
-      expect(String(b['detail'])).toContain('which roster lanes are codex-kind cannot be read (the lane library answered rc 1)');
-      expect(calls('ccgpt')).toEqual([]);
-      expect(fs.existsSync(configPath())).toBe(false);
-    });
-
-    it('the hourly refresh carries the refusal as a FAILED row, exits 1, and still stops nothing', () => {
-      flip(); pgrep(true);
-      const r = run(['models', 'refresh', '--all'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
-      expect(r.code).toBe(1);
-      const rows = oneObject(r)['refreshed'] as { id: string; ok: boolean; reason?: string }[];
-      const lane = rows.find((x) => x.id === 'ext-a');
-      expect(lane?.ok).toBe(false);
-      expect(String(lane?.reason)).toContain('the roster names codex-kind lane(s) codex-a');
-      expect(calls('ccgpt')).toEqual([]);
-      expect(fs.existsSync(configPath())).toBe(false);
-    });
+    expect(fs.existsSync(join(home, '.ccrc', 'codex', 'codex-a', 'litellm.yaml'))).toBe(false);
   });
 
   it('needs an id', () => {
@@ -2253,25 +1955,25 @@ describe('ccrc models litellm', () => {
 });
 
 describe('refresh runs the litellm step for a codex lane (§5)', () => {
-  const configPath = (): string => join(home, '.handoff', 'litellm-config.yaml');
-  beforeEach(() => {
-    fs.writeFileSync(join(home, '.local', 'bin', 'pgrep'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
-    fs.writeFileSync(join(home, '.local', 'bin', 'ccgpt'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-    seedCodex(LEGACY_EXTERNAL_ID);
-  });
+  // Plan 4 Task C1: seated on a codex-kind lane, `codex-a`, whose config is its
+  // own `~/.ccrc/codex/codex-a/litellm.yaml`, with the lane library faked by
+  // name. A row that is not codex-kind fails this step `not-codex-kind` (the
+  // codex-kind describe below holds that case).
+  const lanePath = (id: string): string => join(home, '.ccrc', 'codex', id, 'litellm.yaml');
+  beforeEach(seatCodexA);
 
-  it('a first refresh of the gpt lane renders the config', () => {
-    const r = run(['models', 'refresh', 'gpt'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
-    expect(r.code).toBe(0);
-    expect(fs.existsSync(configPath())).toBe(true);
+  it('a first refresh of a codex lane renders its own config', () => {
+    const r = refreshFaked('codex-a');
+    expect(r.code, r.stderr).toBe(0);
+    expect(fs.existsSync(lanePath('codex-a'))).toBe(true);
     expect((oneObject(r)['refreshed'] as { litellm: string }[])[0]!.litellm).toBe('rendered');
   });
 
   it('a second refresh with the same catalogue leaves it alone', () => {
-    run(['models', 'refresh', 'gpt'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
-    const before = fs.statSync(configPath()).mtimeMs;
-    const r = run(['models', 'refresh', 'gpt'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
-    expect(fs.statSync(configPath()).mtimeMs).toBe(before);
+    refreshFaked('codex-a');
+    const before = fs.statSync(lanePath('codex-a')).mtimeMs;
+    const r = refreshFaked('codex-a');
+    expect(fs.statSync(lanePath('codex-a')).mtimeMs).toBe(before);
     expect((oneObject(r)['refreshed'] as { litellm: string }[])[0]!.litellm).toBe('unchanged');
   });
 
@@ -2279,51 +1981,29 @@ describe('refresh runs the litellm step for a codex lane (§5)', () => {
     run(['models', 'router', 'init', 'openrouter']);
     const orRaw = join(here, 'fixtures', 'catalogues', 'openrouter-raw-page.json');
     run(['models', 'refresh', 'router'], { CCRC_MODELS_PROBE_FIXTURE: orRaw });
-    expect(fs.existsSync(configPath())).toBe(false);
-  });
-
-  // Fix round 1 (this task, controller ruling): a lane whose litellm step
-  // refuses (a running proxy that will not stop) is a FAILED row, and the
-  // whole run's exit code follows it — an `ok:true` row that quietly named a
-  // failure was exactly the bug (the hourly `refresh --all` exiting 0 while
-  // the box served the previous model list). The catalogue probe itself still
-  // succeeded and its effects stand — the lane's catalogue is on disk — but
-  // the LiteLLM config, having refused to write, is not.
-  it('a lane whose restart fails is a FAILED row, and the run exits 1', () => {
-    fs.writeFileSync(join(home, '.local', 'bin', 'pgrep'),
-      `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/pgrep-calls"\necho 4242\nexit 0\n`, { mode: 0o755 });
-    fs.writeFileSync(join(home, '.local', 'bin', 'ccgpt'),
-      '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/ccgpt-calls"\nexit 1\n', { mode: 0o755 });
-    const r = run(['models', 'refresh', 'gpt'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
-    expect(r.code).toBe(1);
-    const b = oneObject(r);
-    expect(b['ok']).toBe(false);
-    const rows = b['refreshed'] as { id: string; ok: boolean; reason?: string }[];
-    expect(rows).toEqual([{ id: 'gpt', ok: false, reason: expect.any(String) }]);
-    expect(rows[0]!.reason).toMatch(/could not be stopped/);
-    expect(fs.existsSync(join(home, '.ccrc', 'models', 'gpt.json'))).toBe(true);
-    expect(fs.existsSync(configPath())).toBe(false);
+    expect(fs.existsSync(lanePath('router'))).toBe(false);
   });
 
   // Plan 3b Task A4 (D-4051): a render that
   // FAILS with no `.detail` to read — no stdout at all (a killed subshell), an
   // envelope with no `detail`, or bytes that are not JSON — is a FAILED row
   // naming its exit, never `ok:true` with the `skipped` default and never the
-  // reason "null". Every case above reaches `_models_refuse`, which always prints
-  // a body, so none of them could see this. The function is redefined after
-  // `ccd/ccrc` is sourced, the idiom the Z4 case uses for `_codex_lanes`.
+  // reason "null". Every real refusal reaches `_models_refuse`, which always
+  // prints a body, so no real refusal can show this. The function is redefined
+  // after `ccd/ccrc` is sourced, the idiom the dispatcher's own
+  // undecidable-roster cases use for `_codex_lanes`.
   it.each([
     ['no stdout at all', '_models_litellm() { return 1; }', 1],
     ['an envelope with no detail', '_models_litellm() { printf \'%s\\n\' \'{"ok":false}\'; return 5; }', 5],
     ['bytes that are not JSON', '_models_litellm() { printf \'%s\\n\' \'not json\'; return 1; }', 1],
   ])('Plan 3b Task A4: a render that fails with %s is a FAILED row naming its exit, never ok:true with litellm "skipped"', (_what, stub, rc) => {
-    const r = sourced(`${stub}\ncmd_models refresh ${LEGACY_EXTERNAL_ID}`, [], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
+    const r = sourced(`${stub}\ncmd_models refresh codex-a`, ['lock', 'ours', 'stop', 'start'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
     expect(r.code, r.stderr).toBe(1);
     const b = oneObject(r);
     expect(b['ok']).toBe(false);
-    expect(b['refreshed']).toEqual([{ id: LEGACY_EXTERNAL_ID, ok: false, reason: `_models_litellm exited ${rc} with no answer` }]);
+    expect(b['refreshed']).toEqual([{ id: 'codex-a', ok: false, reason: `_models_litellm exited ${rc} with no answer` }]);
     expect(r.stderr, 'the block\'s own jq spoke on stderr').not.toMatch(/parse error/);
-    expect(fs.existsSync(join(home, '.ccrc', 'models', `${LEGACY_EXTERNAL_ID}.json`)), 'the probe\'s catalogue stands').toBe(true);
+    expect(fs.existsSync(join(home, '.ccrc', 'models', 'codex-a.json')), 'the probe\'s catalogue stands').toBe(true);
   });
 });
 
@@ -2407,6 +2087,65 @@ describe('ccrc models litellm — a codex-kind lane renders its own config and r
     }
   });
 
+  /** Plan 4 Task C1: the "C1 box". This describe's box, plus two rows that are
+   *  NOT codex-kind and still hold a codex registry, the shape the external arm
+   *  served until Plan 4 deleted it: `ext-a` (the old Codex lanes' external
+   *  shape) and `gen-a`, a generated row. Each carries `init codex`'s planted
+   *  bytes and the synthetic catalogue, so nothing but the dispatcher stands
+   *  between it and a render. One helper, because Plan 4 Task C2's `--all`
+   *  case runs on the same box. */
+  const GEN_A_ROW = {
+    id: 'gen-a', label: 'gen-a', configDirSuffix: '.claude-gen-a',
+    exec: { kind: 'generated' }, homeAble: false, telemetry: 'none',
+  } as const;
+  const c1Box = (): void => {
+    const p = join(home, '.ccrc', 'accounts.json');
+    const roster = JSON.parse(fs.readFileSync(p, 'utf8')) as { accounts: unknown[] };
+    roster.accounts.push(EXT_A_ROW, GEN_A_ROW);
+    fs.writeFileSync(p, `${JSON.stringify(roster, null, 2)}\n`);
+    for (const id of ['ext-a', 'gen-a']) {
+      writeCatalogue(id, SYNTHETIC_LITELLM_CATALOGUE);
+      seedCodex(id);
+    }
+  };
+
+  it.each(['ext-a', 'gen-a'])('a %s row that is not codex-kind gets no LiteLLM config: not-codex-kind, and nothing is rendered, stopped or written (Plan 4)', (id) => {
+    c1Box();
+    const r = run(['models', 'litellm', id]);
+    expect(r.code, r.stderr).toBe(1);
+    const b = oneObject(r);
+    expect(b['error']).toBe('not-codex-kind');
+    expect(String(b['detail'])).toContain(`account ${id} is not exec.kind "codex"`);
+    expect(fs.existsSync(boxGlobal()), 'the retired box-global file was rendered').toBe(false);
+    expect(fs.existsSync(lanePath(id)), 'a lane config was rendered for a row that is not codex-kind').toBe(false);
+    for (const name of ['pgrep', 'ccgpt', 'systemd-run']) expect(poisonLog(name), name).toEqual([]);
+  });
+
+  it('an id the roster does not have is the dispatcher\'s own no-such-account (Plan 4)', () => {
+    c1Box();
+    const r = run(['models', 'litellm', 'no-such-lane']);
+    expect(r.code, r.stderr).toBe(1);
+    const b = oneObject(r);
+    expect(b['error']).toBe('no-such-account');
+    expect(String(b['detail'])).toMatch(/has no account "no-such-lane", so there is no lane to render a LiteLLM config for/);
+    expect(fs.existsSync(boxGlobal())).toBe(false);
+    expect(fs.existsSync(lanePath('no-such-lane'))).toBe(false);
+  });
+
+  // Review Focus 3: the hourly refresh meets a non-codex row that still holds a
+  // codex registry. With a probe answer in hand, the dispatcher refuses, and the
+  // row carries the refusal's detail as its reason.
+  it('a non-codex row with a codex registry fails its hourly refresh row: not-codex-kind, never ok:true (Plan 4)', () => {
+    c1Box();
+    const r = run(['models', 'refresh', 'ext-a'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
+    expect(r.code, r.stderr).toBe(1);
+    const rows = oneObject(r)['refreshed'] as { id: string; ok: boolean; reason?: string }[];
+    expect(rows).toEqual([{ id: 'ext-a', ok: false, reason: expect.any(String) }]);
+    expect(rows[0]!.reason).toMatch(/^account ext-a is not exec\.kind "codex"/);
+    expect(fs.existsSync(boxGlobal())).toBe(false);
+    for (const name of ['pgrep', 'ccgpt', 'systemd-run']) expect(poisonLog(name), name).toEqual([]);
+  });
+
   it('renders to the lane\'s own litellm.yaml through the REAL library on an idle lane — never the box-global file, pgrep, ccgpt or systemd-run', () => {
     // The one case with no fakes: the real `_codex_tier_ours` must answer 1
     // (not running) for a lane with nothing on its port and no user manager,
@@ -2438,7 +2177,7 @@ describe('ccrc models litellm — a codex-kind lane renders its own config and r
       expect(r.code, r.stderr).toBe(1);
       const b = oneObject(r);
       expect(b['error']).toBe(word);
-      expect(String(b['detail'])).toContain('so whether lane codex-a is exec.kind "codex" cannot be told, and neither LiteLLM arm was taken');
+      expect(String(b['detail'])).toContain('so whether lane codex-a is exec.kind "codex" cannot be told, and no LiteLLM config was rendered');
       expect(String(b['detail'])).toMatch(/Nothing was written and nothing was stopped\.$/);
       expect(r.stderr).toMatch(new RegExp(`^ccrc codex: ${word}: fixture: which roster lanes are codex lanes cannot be told$`, 'm'));
       expect(fs.existsSync(boxGlobal()), 'the codex row was rendered into the box-global file').toBe(false);
@@ -2447,13 +2186,15 @@ describe('ccrc models litellm — a codex-kind lane renders its own config and r
     });
 
   // Final-review fix wave (MF4, D-4046): an ABSENT roster is not undecidable — with no roster, no row is codex —
-  // so it keeps the base's answer and remedy: the external arm's own read refuses `roster-absent` ("run ccrc
-  // install"), never `roster-invalid` ("fix the roster"). Two conditions, two remedies, two words.
-  it('an ABSENT roster is not undecidable: the dispatcher answers the external arm\'s roster-absent, never roster-invalid (Plan 3b Task A1)', () => {
+  // so it keeps its own answer and remedy: `roster-absent` ("run ccrc install"), never `roster-invalid` ("fix the
+  // roster"). Two conditions, two remedies, two words. Plan 4 Task C1: the external arm whose read answered it is
+  // gone, so the dispatcher refuses it itself, in its own sentence.
+  it('an ABSENT roster is refused by the dispatcher itself: roster-absent, never roster-invalid (Plan 4)', () => {
     fs.rmSync(join(home, '.ccrc', 'accounts.json'));
     const r = run(['models', 'litellm', 'codex-a']);
     expect(r.code, r.stderr).toBe(1);
     expect(oneObject(r)['error']).toBe('roster-absent');
+    expect(String(oneObject(r)['detail'])).toMatch(/no lane's LiteLLM config can be rendered/);
     expect(r.stderr, 'the lane library was asked about a roster that is not there').not.toMatch(/^ccrc codex: roster-invalid/m);
     expect(fs.existsSync(boxGlobal())).toBe(false);
     expect(fs.existsSync(lanePath('codex-a'))).toBe(false);

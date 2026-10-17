@@ -96,7 +96,7 @@ import {
   laneUnits, registerLaneCleanup, GPT_LANE_BINS, codexAuthDir, authDirOf, eventually, plantLiveShape,
   foreignSnapshot, externalCodexRow, REHEARSAL_REGISTRY, writeRehearsalCatalogue, doctorClasses, doctorTable,
   stateCallsNaming, liveShapeRefreshes, foreignCcgptCalls, foreignProbeCalls, assertForeignFront, FOREIGN_MARK,
-  withForeignProxyRunning, type ForeignEntry, type RefreshObservation, type StubRc, type LanePorts,
+  type ForeignEntry, type RefreshObservation, type StubRc, type LanePorts,
 } from './codexLaneFixture.js';
 import { docsProbeProgram } from './docsHelperPy.js';
 import { DOCS_INDEX_READY } from './docsIndexFixtures.js';
@@ -8858,48 +8858,6 @@ describeLinux('Plan 3a Task 10 — the cutover rehearsal', () => {
     for (const u of ['ccrc-codex-usage@.service', 'ccrc-codex-usage@.timer']) {
       expect(existsSync(unitDir(home, u)), `uninstall left ${u}`).toBe(false);
     }
-  }, 300_000);
-
-  it('ruling Z4: once a flip makes codex-a a codex lane, the external arm for a still-external lane with a registry refuses the stop it owes, writes nothing and runs no ccgpt; with nothing to stop it still renders', async () => {
-    const home = liveBox('ccrc-rehearsal-z4-', { systemd: true });
-    homes.push(home);
-    const i0 = runInstall(home, ['install', '--role', 'fleet'], REHEARSAL_ENV);
-    expect(i0.code, `${i0.stdout}\n${i0.stderr}`).toBe(0);
-    const f = await flipCodexA(home);
-    // codex-b stays external and carries a registry made before ruling Z3's
-    // guard existed (no `init codex` can make one now): the files a pre-3a
-    // init and refresh leave. Its render is the box-global config.
-    const models = join(home, '.ccrc', 'models');
-    writeFileSync(join(models, 'codex-b.classes.json'), `${JSON.stringify(REHEARSAL_REGISTRY, null, 2)}\n`);
-    writeRehearsalCatalogue(home, 'codex-b', epochS());
-    const cfg = join(home, '.handoff', 'litellm-config.yaml');
-    const planted = read(cfg);
-    const calls0 = argvOf(home).length;
-    assertForeignFront({ ...ccrcEnv(home), ...REHEARSAL_ENV }, home);
-    // the box-global config differs from the render, and that repository's
-    // proxy runs on it: the stop is owed, and a bare `ccgpt stop` would stop the
-    // lane-1 units by name, which are now codex-a's own tiers
-    const refused = await withForeignProxyRunning(home,
-      () => runInstall(home, ['models', 'litellm', 'codex-b'], REHEARSAL_ENV, { from: REPO_CCRC }));
-    expect(refused.code, `the external arm did not refuse:\n${refused.stdout}\n${refused.stderr}`).toBe(1);
-    const body = lastJson(refused.stdout);
-    expect(body, refused.stdout).toMatchObject({ ok: false, error: 'restart-failed' });
-    expect(body.detail ?? '', 'the refusal does not name the codex lane as its reason').toContain('the roster names codex-kind lane(s) codex-a');
-    expect(body.detail ?? '', 'the refusal sends the operator to the stop it refused').not.toMatch(/run 'ccgpt stop'/i);
-    expect(foreignCcgptCalls(home), 'ccrc ran the other repository\'s stop while a codex lane exists (ruling Z4)')
-      .toEqual([]);
-    expect(read(cfg), 'the refusal wrote the box-global config').toBe(planted);
-    expect(existsSync(`${cfg}.prev`), 'the refusal wrote a .prev').toBe(false);
-    expect(stateCallsNaming(argvOf(home).slice(calls0), /\bccgpt-/), 'the refusal changed a ccgpt- unit').toEqual([]);
-    const ans = await laneAnswer(f.lane.proxyPort);
-    expect(JSON.parse(ans!.body), 'codex-a\'s own shim stopped answering').toEqual({ lane: 'codex-a' });
-    // with nothing running on it there is nothing to stop, and the render lands
-    // as it does today (ruling Z1: Z4 guards the stop, never the render)
-    const rendered = runInstall(home, ['models', 'litellm', 'codex-b'], REHEARSAL_ENV, { from: REPO_CCRC });
-    expect(rendered.code, `${rendered.stdout}\n${rendered.stderr}`).toBe(0);
-    expect(lastJson(rendered.stdout)).toMatchObject({ ok: true, changed: true, restarted: false });
-    expect(read(cfg), 'the render did not land').not.toBe(planted);
-    expect(foreignCcgptCalls(home)).toEqual([]);
   }, 300_000);
 
   it('the flip, in Plan 3b\'s order: only codex-a\'s ccrc instance is enabled, codex-b and its foreign timer are untouched, and doctor answers PASS for the lane', async () => {

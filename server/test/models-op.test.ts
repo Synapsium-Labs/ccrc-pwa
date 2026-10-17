@@ -1526,6 +1526,19 @@ describe('litellm (§6.3) — the two-phase check-then-commit protocol', () => {
     expect(fs.existsSync(`${out()}.prev`)).toBe(true);
     expect(fs.readFileSync(`${out()}.prev`, 'utf8')).toBe('stale previous rendering\n');
   });
+
+  // Plan 4 Task C1: moved here from `ccrc-models.test.ts`, whose verb now
+  // answers a row that is not codex-kind in its own dispatcher
+  // (`not-codex-kind`) before this op is asked. This op's own guard still
+  // refuses a lane whose registry is not a codex probe, and this is its pin.
+  it('refuses a lane whose probe is not codex: not-a-codex-lane, naming its probe (Plan 4)', () => {
+    op('init', '--file', rosterPath(), '--id', 'router', '--probe', 'openrouter');
+    const r = op('litellm', '--file', rosterPath(), '--id', 'router', '--template', TEMPLATE, '--out', out());
+    expect(r.code).toBe(1);
+    expect(r.body['error']).toBe('not-a-codex-lane');
+    expect(String(r.body['detail'])).toMatch(/has probe "openrouter"/);
+    expect(fs.existsSync(out())).toBe(false);
+  });
 });
 
 describe('rm (§4.1 Lifecycle, §10, §11) — reap, not a mutation', () => {
