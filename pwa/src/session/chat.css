@@ -171,7 +171,8 @@ button.metachip:active {
    (contrast-check.mjs), under the 4.5 floor. ink-tertiary/raised is already
    gated at 4.5+ in both themes, so this chip reuses that pairing rather than
    a third un-gated one. */
-.chip--archived {
+.chip--archived,
+.chip--restart {
   color: var(--ink-tertiary);
   background: var(--bg-raised);
 }

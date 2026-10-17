@@ -887,6 +887,7 @@
    .sess-ask-state (Task 19) joins already knowing better — no new pair for
    design/contrast-check.mjs: it joins the pair this rule already declares. */
 .sess-line--active .sess-held,
+.sess-line--active .sess-restart,
 .sess-line--active .sess-lifecycle,
 .sess-line--active .sess-swapblocked,
 .sess-line--active .sess-stranded,
@@ -1383,6 +1384,21 @@
 .sess-child {
   color: var(--ink-tertiary);
   flex: none;
+}
+
+/* D-5237: "restarted · out of memory · 3m ago", for an hour after a recorded
+   process end. The .sess-held register (mono, ink-tertiary) and, like it, a
+   cell that truncates rather than pushing the row: `overflow: hidden` lets it
+   shrink below its text at phone width, the full words staying in `title`.
+   Its own rule, not a member of .sess-held's, so the grandfathered selector
+   stays as it is; design/audit.mjs grounds it on the project card. The
+   selected row is answered by the achromatic group above. */
+.sess-restart {
+  font-family: var(--family-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--ink-tertiary);
 }
 
 /* The program's claim, as its own meta cell — reuses .sess-ask's

@@ -140,6 +140,15 @@ describe('_redrive_after_spawn', () => {
     expect(typedPrompt(redrive())).toBe(true);
     expect(swapLog()).toMatch(/ redrive myid: /);
   });
+  it('types the composed prompt the flag carried: a recent oom end is named (D-5237)', () => {
+    writeTranscript([L.banner(), L.metaPrompt(), L.synthetic()]);
+    h.sh(`_reg_set ${ID} lastend "$(( $(date +%s) - 60 )) oom"`);
+    const keys = redrive();
+    expect(typedPrompt(keys)).toBe(true);
+    const typed = keys.find((k) => k.includes(' -l Continue from where you left off.'))!;
+    expect(typed).toContain('its pane ran out of memory');
+    expect(typed).toBe(`tmux send-keys -t =cc-test: -l ${h.sh(`_resume_prompt_for ${ID}`)}`);
+  });
   it('types nothing when the flag drove the turn', () => {
     writeTranscript([L.banner(), L.metaPrompt(), L.realAssistant()]);
     expect(redrive()).toEqual([]);
