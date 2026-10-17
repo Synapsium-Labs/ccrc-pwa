@@ -16,6 +16,8 @@ import type { FleetWatcher } from './watch.js';
 import type { SessionRecord } from './registry.js';
 import { readHookState } from './hookstate.js';
 import { readLiveStateMeasured } from './livestate.js';
+import { readTurnMarkMeasured } from './turnmark.js';
+import type { TurnMarkRead } from './coord/stall.js';
 import type { FleetSession } from '../../shared/api.js';
 import {
   stopVerdict, type LiveFileReading, type StopRowReading, type TurnVerdict,
@@ -119,4 +121,20 @@ export async function turnVerdictFor(d: TurnReadDeps, rec: SessionRecord, uuid: 
   if (r.pid === 'unread') return stopVerdict({ configDir: 'present', pane: 'live', pid: 'unread' });
   const row: StopRowReading = (await liveRowFor(d, rec, uuid)) ?? 'missing';
   return stopVerdict({ configDir: 'present', pane: 'live', pid: r.pid, liveFile: r.liveFile, row });
+}
+
+/**
+ * The session's turn marker (`$REG/<id>.turn.json`, spec §5.1), judged against the live process it would vouch for:
+ * the wrapper's config dir, the pane pid and the live file's `startedAt`, in `readPane`'s order, then
+ * `readTurnMarkMeasured`. Anything that could not be read is `unmeasured`, never a marker taken on trust. The
+ * stop-done lane's `marker` and `marker-background` reads (D-5370), hibernation's own (§5.11).
+ */
+export async function turnMarkFor(d: TurnReadDeps, rec: SessionRecord): Promise<TurnMarkRead> {
+  const cfgDir = configDirFor(d.cfg, rec.wrapper);
+  if (cfgDir === undefined) return { ok: false, reason: 'unmeasured' };
+  const pid = await d.tmux.panePid(rec.id);
+  if (pid === null) return { ok: false, reason: 'unmeasured' };
+  const live = await readLiveStateMeasured(d.io, cfgDir, pid);
+  if (!live.ok) return { ok: false, reason: 'unmeasured' };
+  return readTurnMarkMeasured(d.io, d.cfg.registryDir, rec.id, rec.uuid, { startedAt: live.state.startedAt });
 }

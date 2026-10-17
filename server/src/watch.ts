@@ -3,7 +3,7 @@ import type { Deps } from './server.js';
 import type { Bus } from './bus.js';
 import { assembleFleet, lifecycleInputFor, registrySecondsToMs } from './fleet.js';
 import { answeredByBody, askPushBody, withCoordinatorBody } from './askbody.js';
-import { measuredIdentity, readRegistry, readRegistryMeasured } from './registry.js';
+import { measuredIdentity, readRegistry, readRegistryMeasured, readSessionRecord } from './registry.js';
 import {
   accountPoolsEnforcement, poolsEnforcement, poolsWire, readObservedEpochFromRegistry, readPoolEpoch,
   readProjectPools,
@@ -144,6 +144,9 @@ import { CATALOGUE_POLL_INTERVAL_MS } from './update/catalogue.js';
 import { COLLECT_CAP } from './ccdargv.js';
 import type { ChildReclaimCollectInput } from './childReclaimSweep.js';
 import { NO_FLEET_IDENTITY } from './fleetidentity.js';
+import { stopDonePass, type StopDoneMemory } from './stopDoneSweep.js';
+import { STOP_DONE_SWEEP_MS } from './stopDone.js';
+import { liveRowFor, liveWordFor, turnMarkFor, turnReadDeps, turnVerdictFor } from './turnverdict.js';
 import {
   COLLECT_AUDITS_PER_PASS, COLLECT_FEED_TITLE, collectAfterAct, collectAfterAudit, collectAfterFoldFailed, collectAfterHold,
   collectAfterPresence, collectAfterWouldCollect, collectAttentionItems, collectAttentionViews, collectBoxAfterPopulation,
@@ -1347,6 +1350,14 @@ export class FleetWatcher {
    *  newer has already answered. A pass that finds another running returns at once — so at most one expiry act is
    *  ever in flight, fleet-wide, and every act's answer is folded onto the entry it was asked for. */
   private archivedExpirySweeping = false;
+  /** The stop-done lane (D-5370, `stopDoneSweep.ts`): its last pass, whether one runs, its one memory (a refused
+   *  stop's retry instant), the coordination serialiser `buildServer` hands it, and the process start it holds
+   *  `viewer` against (presence is never persisted). */
+  private lastStopDoneSweep = 0;
+  private stopDoneSweeping = false;
+  private readonly stopDoneMemory: StopDoneMemory = { retryAt: new Map() };
+  private stopDoneSerial: (<T>(fn: () => Promise<T>) => Promise<T>) | null = null;
+  private readonly stopDoneStartedAt = Date.now();
   /** `flock-unavailable`, once a box has answered it: the lane composes nothing more there (this process). */
   private archivedExpiryBoxRefused: string | null = null;
   /** THE DEAD-COORDINATOR LANE (workspace lifecycle wave 4): its clock; ONE PASS AT A TIME, the expiry lane's reason;
@@ -1995,6 +2006,48 @@ export class FleetWatcher {
     this.deadCoordinatorSerial = h.withSweepAbandon;
   }
 
+  /** `buildServer` hands the stop-done lane (D-5370) the coordination serialiser: its stop re-reads the store and acts
+   *  inside it. Until then the lane stops nothing. */
+  useStopDoneSerialiser(h: Pick<CoordRoutesHandle, 'serial'>): void {
+    this.stopDoneSerial = (fn) => h.serial(fn);
+  }
+
+  /**
+   * THE STOP-DONE LANE (D-5370): a finished run's dispatched worker is stopped once idle, and restarts on re-dispatch.
+   * A sibling on the tick, at its own cadence, on THIS tick's assembled rows and registry listing (the listing carries
+   * the kill switch). Never awaited by the tick; one pass at a time. The rule is `stopDoneVerdict` (L1), the pass
+   * `stopDonePass` (L4).
+   */
+  async sweepStopDone(sessions: readonly FleetSession[], records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
+    const coord = this.deps.coord;
+    if (!coord || this.stopDoneSweeping) return;
+    const now = Date.now();
+    if (this.lastStopDoneSweep !== 0 && now - this.lastStopDoneSweep < STOP_DONE_SWEEP_MS) return;
+    this.lastStopDoneSweep = now;
+    this.stopDoneSweeping = true;
+    try {
+      const reads = turnReadDeps(this.deps, this);
+      await stopDonePass({
+        coord, runCcd: this.deps.runCcd, fleetState: this.deps.fleetState, presence: this.deps.presence,
+        notifyLog: this.deps.notifyLog,
+        liveWord: (rec) => liveWordFor(reads, rec), turnVerdict: (rec, uuid) => turnVerdictFor(reads, rec, uuid),
+        mark: (rec) => turnMarkFor(reads, rec),
+        rowAtAct: async (rec) => {
+          const again = await readSessionRecord(this.deps.io, this.deps.cfg, rec.id);
+          if (!again.found) return { ok: false };
+          const row = await liveRowFor(reads, again.record, again.record.uuid);
+          return row === null ? { ok: false } : { ok: true, row };
+        },
+        serial: this.stopDoneSerial, queueRun: (id, fn) => this.deps.queue.run(id, fn),
+        startedAt: this.stopDoneStartedAt, now: Date.now,
+      }, this.stopDoneMemory, sessions, records, names);
+    } catch (err) {
+      console.warn(`ccrc-server: sweepStopDone failed (${err instanceof Error ? err.message : String(err)}) — no stops this pass`);
+    } finally {
+      this.stopDoneSweeping = false;
+    }
+  }
+
   /** The last measured project-pool sweep, or null if none has been taken yet
    *  — same reasoning as `currentCoord()`'s null. */
   currentPools(): ProjectPoolsWire | null {
@@ -2397,6 +2450,9 @@ export class FleetWatcher {
       // awaited: its reads are async, so it cannot sit in the claim pair's synchronous try-block. It gates itself
       // on `primed`, which is set below, so the priming tick never judges.
       void this.sweepStalls(sessions, registryRead.names, { panePids, records }).catch(() => { /* one bad sweep must not kill the poll */ });
+      // NEVER awaited, the stall watch's reasons: the STOP-DONE lane (D-5370) on THIS tick's rows and listing. Gated on
+      // `primed` like the stall watch, so the priming tick never stops anything.
+      if (this.primed) void this.sweepStopDone(sessions, records, registryRead.names).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as `sweepDivergences`: each is a
       // handful of io reads per PROJECT, on an hourly / 15-minute clock.
       void this.sweepLedgerFloor(records).catch(() => { /* one bad sweep must not kill the poll */ });
