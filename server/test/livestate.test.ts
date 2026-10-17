@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { liveSessionStatus, liveStatusCoversDelegation, readLiveState, readLiveStateMeasured } from '../src/livestate.js';
-import { localIO } from '../src/io.js';
+import { localIO, type FleetIO } from '../src/io.js';
 import { mkTmp } from './tmpHelpers.js';
 import { degradedReadIO } from './ioDoubles.js';
 
@@ -219,23 +219,63 @@ describe('readLiveStateMeasured — the distinction readLiveState folds', () => 
     },
   );
 
-  it('a half-written file and a record with no sessionId are no-state too — the fold this type KEEPS', async () => {
-    // Both are files this reader successfully looked at and rejected, and no
-    // consumer branches between them: a `<pid>.json` caught mid-write is the
-    // same "nothing published yet" a missing one is, one poll tick from
-    // healing. Splitting them would be a wider type, not a finer measurement
-    // (`limits.ts:310`/`commands.ts:73` are the tree's own precedent for
-    // leaving an indifferent fold alone).
+  // D-5234: Claude Code rewrites `<pid>.json` in place, so a body caught
+  // mid-write is a read that measured nothing, not a pane that published
+  // nothing. It is read once more after 50 ms; still torn, it is `unmeasured`.
+  // An absent file and a well-formed record naming no session stay `no-state`.
+  /** A `FleetIO` that answers the live file's reads from `bodies` in order
+   *  (the last one repeating), counting them. */
+  const sequencedLiveIO = (pid: number, bodies: string[]): { io: FleetIO; reads: () => number } => {
+    let n = 0;
+    const io: FleetIO = {
+      ...localIO,
+      readFileMeasured: async (p, t, sig) => {
+        if (!p.endsWith(path.join('sessions', `${pid}.json`))) return localIO.readFileMeasured(p, t, sig);
+        const body = bodies[Math.min(n, bodies.length - 1)]!;
+        n += 1;
+        return { ok: true, content: body };
+      },
+    };
+    return { io, reads: () => n };
+  };
+
+  it('D-5234: a truncated body read twice is unmeasured, not no-state', async () => {
+    const { configDir, pid } = seedLive(base);
+    const { io, reads } = sequencedLiveIO(pid, ['{"pid":1,"sessionId":"0000']);
+    expect(await readLiveStateMeasured(io, configDir, pid)).toEqual({ ok: false, reason: 'unmeasured' });
+    expect(reads()).toBe(2);
+  });
+
+  it('D-5234: a torn body then a whole one is ok — the retry reads the finished write', async () => {
+    const { configDir, pid } = seedLive(base);
+    const { io, reads } = sequencedLiveIO(pid, ['{"pid":1,"sessionId":"0000', JSON.stringify(base)]);
+    const r = await readLiveStateMeasured(io, configDir, pid);
+    expect(r.ok).toBe(true);
+    expect(r.ok && r.state.status).toBe('busy');
+    expect(reads()).toBe(2);
+  });
+
+  it('D-5234: an empty body read twice is unmeasured', async () => {
+    const { configDir, pid } = seedLive(base);
+    const { io } = sequencedLiveIO(pid, ['']);
+    expect(await readLiveStateMeasured(io, configDir, pid)).toEqual({ ok: false, reason: 'unmeasured' });
+  });
+
+  it('D-5234: a torn file on disk is unmeasured through localIO too', async () => {
     const truncated = path.join(mkTmp('ccrc-live-'), '.claude');
     mkdirSync(path.join(truncated, 'sessions'), { recursive: true });
     writeFileSync(path.join(truncated, 'sessions', '4242.json'), '{"pid":4242,"sessionId":"3');
     expect(await readLiveStateMeasured(localIO, truncated, 4242))
-      .toEqual({ ok: false, reason: 'no-state' });
+      .toEqual({ ok: false, reason: 'unmeasured' });
+  });
 
+  it('a well-formed record with no sessionId is still no-state, read once — the fold this type KEEPS', async () => {
     const { sessionId: _omitted, ...noSessionId } = base;
     const anon = seedLive(noSessionId);
-    expect(await readLiveStateMeasured(localIO, anon.configDir, anon.pid))
+    const { io, reads } = sequencedLiveIO(anon.pid, [JSON.stringify(noSessionId)]);
+    expect(await readLiveStateMeasured(io, anon.configDir, anon.pid))
       .toEqual({ ok: false, reason: 'no-state' });
+    expect(reads()).toBe(1);
   });
 
   it('readLiveState still folds all of them, so its three indifferent callers are untouched', async () => {

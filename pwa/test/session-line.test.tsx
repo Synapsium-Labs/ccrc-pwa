@@ -1553,3 +1553,52 @@ describe('a child workspace says which run minted it (wave 5)', () => {
     expect(childOfRunLabel(cast({ kind: 'grandchild' }))).toBeNull();
   });
 });
+
+// `background-aware-working` (D-5231; plan 2026-10-16-working-state-and-interruptions Task 1): a `working` row whose
+// last main Stop left delegated work running says so, and the wedge qualifier stands down on it — a long busy age
+// there is delegated time, not a wedge.
+describe('delegated background work (D-5231)', () => {
+  const chip = (): Element | null => document.querySelector('.sess-ctxpressure');
+  const bgRow = (over: Partial<FleetSession> = {}): FleetSession => s({
+    status: 'busy', bucket: 'working', hookState: 'done',
+    background: { count: 2, kinds: ['workflow'] }, ...over,
+  });
+
+  it('a working row with background reads `working · 2 in background`, the kinds in the title', () => {
+    render(<SessionLine session={bgRow()} onOpen={() => {}} onActions={() => {}} />);
+    const el = document.querySelector('.sess-state');
+    expect(el?.textContent).toBe('working · 2 in background');
+    expect(el?.getAttribute('title')).toBe('in background: workflow');
+  });
+
+  it('a working row without background reads plain `working`', () => {
+    render(<SessionLine session={bgRow({ background: null })} onOpen={() => {}} onActions={() => {}} />);
+    expect(document.querySelector('.sess-state')?.textContent).toBe('working');
+  });
+
+  it('a row the ladder filed `done` never shows the background words', () => {
+    render(<SessionLine session={bgRow({ status: 'idle', bucket: 'done' })} onOpen={() => {}} onActions={() => {}} />);
+    expect(document.querySelector('.sess-state')?.textContent).toBe('done');
+  });
+
+  it('the wedge qualifier does not render at high ctx and a long busy age while background is set', () => {
+    render(<SessionLine session={bgRow({ ctxPct: 91, statusUpdatedAt: Date.now() - 95 * 60_000 })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    const el = chip();
+    expect(el?.textContent).toBe('ctx 91%');
+    expect(el?.hasAttribute('data-wedge')).toBe(false);
+  });
+
+  it('the identical stall without background still escalates (the qualifier is only stood down, not removed)', () => {
+    render(<SessionLine session={bgRow({ background: null, ctxPct: 91, statusUpdatedAt: Date.now() - 95 * 60_000 })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(chip()?.getAttribute('data-wedge')).toBe('true');
+  });
+
+  it('an older server that omits the key reads as no background (the live frame is cast, not revived)', () => {
+    const row = bgRow() as Partial<FleetSession>;
+    delete row.background;
+    render(<SessionLine session={row as FleetSession} onOpen={() => {}} onActions={() => {}} />);
+    expect(document.querySelector('.sess-state')?.textContent).toBe('working');
+  });
+});

@@ -164,7 +164,7 @@ describe('the one Archive — a workspace', () => {
 
   // F7 (review 243, the coordinator's ruling): `interrupt` brings a STOP ahead of `ws-archive`'s own `_ws_status`, so
   // ccd cannot catch a pane nobody could read afterwards. The frame row folds tmux `unknown` to dead and leaves an
-  // unread pid or an absent live file idle — it would have stopped the pane. With `interrupt` the read is fail-closed
+  // absent live file idle (and, before D-5234, an unread pid) — it would have stopped the pane. With `interrupt` the read is fail-closed
   // for an ORDINARY workspace too (no runs, no `programme`): every unmeasured reading refuses before any verb.
   describe('an ordinary workspace archived with `interrupt` is read fail-closed before its stop (F7)', () => {
     it.each([
@@ -181,13 +181,30 @@ describe('the one Archive — a workspace', () => {
       expect(b.ccd()).toEqual([]);
     });
 
-    it('without `interrupt` the frame row and ccd decide, as before: an unreadable pid still archives through ws-archive alone', async () => {
-      const b = await box({ noPanePid: true });
+    it('without `interrupt` the frame row and ccd decide, as before: tmux `unknown` still archives through ws-archive alone', async () => {
+      const b = await box({ tmuxUnknown: true });
       seed(b.home, 'demo-amber');
       liveStatus(b.home, 'idle');
       const res = await post(b.app, 'demo-amber');
       expect(res.json()).toEqual({ ok: true, archived: true, stopped: false, ended: [] });
       expect(b.ccd()).toEqual([['ws-archive', '--session', 'demo-amber']]);
+    });
+
+    // D-5234: an unread pid is no longer folded toward rest by the frame row: it is `busy` AND `statusUnmeasured`
+    // (D-115's shape). D-5274: a row busy only because a read failed measured no turn, so it is `status-unknown` —
+    // never `session-busy`, whose `interrupt` retry the fail-closed read would refuse anyway — whatever the consent.
+    it.each([
+      ['no consent', {}],
+      ['interrupt', { interrupt: true }],
+      ['force', { force: true }],
+    ])('an unreadable pid is an UNMEASURED row (D-5274), %s: 409 status-unknown, nothing run', async (_n, body) => {
+      const b = await box({ noPanePid: true });
+      seed(b.home, 'demo-amber');
+      liveStatus(b.home, 'idle');
+      const res = await post(b.app, 'demo-amber', body);
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toEqual({ ok: false, error: 'status-unknown' });
+      expect(b.ccd()).toEqual([]);
     });
   });
 

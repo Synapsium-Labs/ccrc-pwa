@@ -69,7 +69,27 @@ export interface HookState {
    *  that has never met the gate as a fleet the gate never had to stop. */
   graphGateDenials: number | null;
   interrupted: boolean;
+  /** `background-aware-working` (D-5231): the hook's `bgDelegated` and
+   *  `bgDelegatedKinds` — the delegated background work a main Stop listed and
+   *  left running (the hook writes the pair on a main Stop whose
+   *  `background_tasks` is an array, and a subagent event carries it). Absent
+   *  when the file has no pair, or a malformed one: a bad pair never condemns a
+   *  file whose `updatedAt` is good (`aliveAt`'s rule). `fleet.ts` is the one
+   *  reader that turns it into `FleetSession.background`. */
+  background?: { count: number; kinds: string[] };
 }
+
+/** D-5231: the kinds string the hook writes — unique cleaned kinds, comma-joined, or empty. */
+const BG_KINDS_RE = /^(?:[a-z_-]+(?:,[a-z_-]+)*)?$/;
+const BG_KINDS_MAX_BYTES = 200;
+/** D-5231: the pair, or undefined for an absent or malformed one. */
+const reviveBackground = (raw: Record<string, unknown>): { count: number; kinds: string[] } | undefined => {
+  const count = raw['bgDelegated'];
+  const kinds = raw['bgDelegatedKinds'];
+  if (typeof count !== 'number' || !Number.isInteger(count) || count < 0) return undefined;
+  if (typeof kinds !== 'string' || kinds.length > BG_KINDS_MAX_BYTES || !BG_KINDS_RE.test(kinds)) return undefined;
+  return { count, kinds: kinds === '' ? [] : kinds.split(',') };
+};
 
 // Typed `readonly string[]`, not `readonly HookState['state'][]`, on purpose —
 // same reasoning as shared/api.ts's `STATUSES`/`CHECKS`: validating an
@@ -317,6 +337,7 @@ export async function readHookStateRawMeasured(io: FleetIO, registryDir: string,
     const askRaw = raw['ask'];
     const ask = askRaw === null || askRaw === undefined ? null : reviveAsk(askRaw);
     const subagents = reviveSubagents(raw['subagents']);
+    const background = reviveBackground(raw);
     return {
       ok: true,
       state: {
@@ -328,6 +349,7 @@ export async function readHookStateRawMeasured(io: FleetIO, registryDir: string,
         graphQueries: reviveGraphCount(raw, 'graphQueries'),
         graphGateDenials: reviveGraphCount(raw, 'graphGateDenials'),
         interrupted: interruptedRaw === true,
+        ...(background === undefined ? {} : { background }),
       },
       sessionId,
       identity: currentUuid === null ? 'unregistered' : sessionId === currentUuid ? 'current' : 'foreign',

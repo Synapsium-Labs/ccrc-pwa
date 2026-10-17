@@ -30,7 +30,13 @@ function seedWorkspace(): string {
  */
 async function app(stdout = '', code = 0, stderr = '', ccdVerbs?: string[] | null): Promise<{ app: FastifyInstance; calls: string[][] }> {
   const calls: string[][] = [];
-  const run: Runner = async (_cmd, args) => { calls.push(args); return { code, stdout, stderr }; };
+  // `list-panes` answers a real pane pid: since D-5234 a null pid on an alive pane is an unmeasured row, which the
+  // archive door refuses `status-unknown` (D-5274) ahead of the verbs these tests are about.
+  const run: Runner = async (_cmd, args) => {
+    calls.push(args);
+    if (args[0] === 'list-panes' && code === 0) return { code: 0, stdout: '4242\n', stderr: '' };
+    return { code, stdout, stderr };
+  };
   const deps = testDeps(seedWorkspace(), run);
   return {
     app: await buildServer(ccdVerbs === undefined

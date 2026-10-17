@@ -6163,10 +6163,89 @@ describe('the review screen\'s rows and last line are spelled once, in shared/as
 
   it('the sheet reads the L0 rules: askLive.ts imports and tests each review rule', () => {
     const live = stallCode(path.join(ccrcRoot, 'pwa/src/session/askLive.ts'));
-    for (const name of ['REVIEW_READY_RE', 'REVIEW_SUBMIT_ROW_RE', 'REVIEW_CANCEL_ROW_RE', 'REVIEW_HEADING_RE']) {
-      expect(live, `askLive.ts does not import ${name} from L0`)
-        .toMatch(new RegExp(`import\\s*\\{[^}]*\\b${name}\\b[^}]*\\}\\s*from\\s*'(?:\\.\\./)+shared/ask-menu(?:\\.js)?'`));
+    const fromL0 = (name: string): RegExp =>
+      new RegExp(`import\\s*\\{[^}]*\\b${name}\\b[^}]*\\}\\s*from\\s*'(?:\\.\\./)+shared/ask-menu(?:\\.js)?'`);
+    for (const name of ['REVIEW_READY_RE', 'REVIEW_HEADING_RE']) {
+      expect(live, `askLive.ts does not import ${name} from L0`).toMatch(fromL0(name));
       expect(live, `askLive.ts does not test ${name}`).toMatch(new RegExp(`\\b${name}\\.test\\(`));
     }
+    // Decision `ask-review-lenient-arm`: the two rows are told by ONE L0 reader, `reviewRows`, which the sheet and the
+    // server's frame log both call, so neither spells the row rules again. It tests each of them; askLive imports it.
+    expect(live, 'askLive.ts does not import reviewRows from L0').toMatch(fromL0('reviewRows'));
+    const menu = stallCode(path.join(ccrcRoot, 'shared/ask-menu.ts'));
+    for (const name of ['REVIEW_READY_RE', 'REVIEW_SUBMIT_ROW_RE', 'REVIEW_CANCEL_ROW_RE']) {
+      expect(menu, `reviewRows does not test ${name}`).toMatch(new RegExp(`\\b${name}\\.test\\(`));
+    }
+  });
+});
+
+// D-5231 (plan docs/superpowers/plans/2026-10-16-working-state-and-interruptions.md, Task 1). APPENDED at the very end,
+// for the reason the notes above state: `session-hook.test.ts` cites this file by line. THE DELEGATED-TASK RULE — the
+// six non-delegating kinds and the three terminal statuses — has one TypeScript home, `shared/api.ts`, which the
+// server's and the PWA's wording read. The hook's `jq` in `ccd/session-hook.sh` is the documented second spelling, held
+// equal by `session-hook-background.test.ts`, which iterates over these lists, not by this text scan. A second
+// TypeScript copy that drifts would let one reader call a task delegated that the other does not.
+describe('the delegated-task rule is declared once, in shared/api.ts (D-5231)', () => {
+  const VALUE_DEF = (name: string): RegExp => new RegExp(`^\\s*(?:export\\s+)?(?:const|let|var)\\s+${name}\\b`, 'm');
+  const FUNCTION_DEF = (name: string): RegExp =>
+    new RegExp(`^\\s*(?:export\\s+)?(?:function\\s+${name}\\b|(?:const|let|var)\\s+${name}\\s*=)`, 'm');
+  // The two rarest of the nine words, quoted: a hand-copied list carries them, and no other code names them.
+  const RARE = /(['"`])(?:auto-mode-scan|memory-import)\1/;
+
+  it('CONTROL: the patterns see a declaration and a quoted copy, and not an import, a use or prose', () => {
+    expect(VALUE_DEF('NON_DELEGATING_TASK_KINDS').test('const NON_DELEGATING_TASK_KINDS = [];')).toBe(true);
+    expect(VALUE_DEF('NON_DELEGATING_TASK_KINDS').test("import { NON_DELEGATING_TASK_KINDS } from '../../shared/api.js';")).toBe(false);
+    expect(VALUE_DEF('TERMINAL_TASK_STATUSES').test('for (const s of TERMINAL_TASK_STATUSES) {}')).toBe(false);
+    expect(FUNCTION_DEF('isDelegatedTask').test('const isDelegatedTask = (t) => true;')).toBe(true);
+    expect(FUNCTION_DEF('isDelegatedTask').test('if (isDelegatedTask(t)) n++;')).toBe(false);
+    expect(RARE.test("const K = ['shell', 'memory-import'];")).toBe(true);
+    expect(RARE.test('the `memory-import` kind never holds busy')).toBe(true);
+    expect(RARE.test('the memory-import kind, in prose')).toBe(false);
+  });
+
+  it('declares NON_DELEGATING_TASK_KINDS, TERMINAL_TASK_STATUSES and isDelegatedTask exactly once, in shared/api.ts', () => {
+    for (const name of ['NON_DELEGATING_TASK_KINDS', 'TERMINAL_TASK_STATUSES']) {
+      expect(ALL.filter((f) => VALUE_DEF(name).test(readFileSync(f, 'utf8'))).map(rel), name).toEqual(['shared/api.ts']);
+    }
+    expect(ALL.filter((f) => FUNCTION_DEF('isDelegatedTask').test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/api.ts']);
+  });
+
+  it('quotes the rare kinds on a code line in shared/api.ts and nowhere else across the four roots', () => {
+    expect(ALL.filter((f) => RARE.test(stallCode(f))).map(rel)).toEqual(['shared/api.ts']);
+  });
+});
+
+// D-5238 (plan docs/superpowers/plans/2026-10-16-working-state-and-interruptions.md, Task 9). APPENDED at the very end,
+// for the reason the note above the 'tmux unreachable' block states. The turn verdict's READS have one home,
+// `server/src/turnverdict.ts` (`turnVerdictFor`, `liveRowFor`, `liveWordFor`); the RULE has one home,
+// `server/src/coord/archiveDoor.ts` (`stopVerdict`). The dispatch gate reaches them through its required
+// `DispatchRunDeps.turnVerdict` port, never through a second copy of either. Code lines only (`stallCode`).
+describe('the turn verdict\'s reads and rule each have one home (D-5238)', () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+
+  it('CONTROL: the patterns see a definition and a call, and pass over comment lines', () => {
+    expect(/\bfunction stopVerdict\b/.test('export function stopVerdict(r: StopReadings): TurnVerdict {')).toBe(true);
+    expect(/\bstopVerdict\(/.test("return stopVerdict({ configDir: 'none' });")).toBe(true);
+    expect(stallCodeText('// stopVerdict( in prose\n * stopVerdict(\nconst x = 1;')).not.toMatch(/\bstopVerdict\(/);
+  });
+
+  it('the rule is defined once, in coord/archiveDoor.ts', () => {
+    expect(holders(/\bfunction stopVerdict\b|\bconst stopVerdict\b/)).toEqual(['server/src/coord/archiveDoor.ts']);
+  });
+
+  it('the rule is CALLED only from turnverdict.ts (its definition aside)', () => {
+    expect(holders(/(?<!function )\bstopVerdict\(/)).toEqual(['server/src/turnverdict.ts']);
+  });
+
+  it('the reads are defined once, in turnverdict.ts', () => {
+    for (const name of ['turnVerdictFor', 'liveRowFor', 'liveWordFor']) {
+      expect(holders(new RegExp(`\\bfunction ${name}\\b|\\bconst ${name}\\s*=`)), name).toEqual(['server/src/turnverdict.ts']);
+    }
+  });
+
+  it('dispatch.ts reads no live file of its own: it asks the turnVerdict port', () => {
+    const dispatch = stallCode(path.join(ccrcRoot, 'server/src/coord/dispatch.ts'));
+    expect(dispatch).toMatch(/deps\.turnVerdict\(/);
+    expect(dispatch).not.toMatch(/readLiveStateMeasured|readLiveState\b|panePid\(/);
   });
 });

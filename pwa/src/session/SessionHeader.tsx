@@ -11,7 +11,7 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
-  substrateFault,
+  backgroundWork, backgroundWords, substrateFault,
   type FleetSession, type RosterWire, type RouteField, type SessionBucket, type SessionStatus,
 } from '../../../shared/api';
 import {
@@ -211,6 +211,15 @@ export function SessionHeader({
     if (!finePointer || !busy) return;
     const onKey = (e: globalThis.KeyboardEvent): void => {
       if (e.key !== 'Escape') return;
+      // D-5235: AN ESCAPE THAT CLOSES A SHEET IS NOT AN INTERRUPT. Radix's
+      // dismiss (under every `@ccrc/ui` Sheet and dialog, the terminal drawer
+      // included) handles the key in its document capture listener and
+      // prevents the default without stopping propagation, so the same
+      // keystroke reached this window listener and killed the turn. Both
+      // checks: the first is the one Radix sets today; the second holds if a
+      // layer ever handles Escape without preventing it.
+      if (e.defaultPrevented) return;
+      if (document.querySelector('[role="dialog"][data-state="open"]') !== null) return;
       // Escape inside a text field dismisses autocomplete or clears the draft —
       // it must not reach through and kill the turn.
       const el = e.target as HTMLElement | null;
@@ -227,11 +236,17 @@ export function SessionHeader({
   // only this screen has — the live elapsed clock and the relative age —
   // spliced in; StatusDot supplies the glyph and the spoken label.
   const rel = relShort(now, at);
+  // D-5231: a `working` row whose last main Stop left delegated work running
+  // reads `working · N in background` (the kinds in the title), as the card does.
+  const bg = bucket === 'working' && session != null ? backgroundWork(session) : null;
+  const bgWords = bg === null ? null : backgroundWords(bg);
   const word =
     bucket === 'attention'
       ? 'waiting on you'
       : bucket === 'working'
-        ? at !== null
+        ? bgWords !== null
+          ? `working · ${bgWords.text}`
+          : at !== null
           ? `working · ${clock(now - at)}`
           : 'working…'
         : bucket === 'done'
@@ -313,7 +328,7 @@ export function SessionHeader({
           {bucket !== null && (
             <>
               <StatusDot status={bucket} />
-              <span className={`status-line status-line--${variant}`}>{word}</span>
+              <span className={`status-line status-line--${variant}`} title={bgWords?.title}>{word}</span>
             </>
           )}
           {wrapper !== '' && (

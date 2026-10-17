@@ -6,8 +6,9 @@ import WebSocket from 'ws';
 import type { FastifyInstance } from 'fastify';
 import { buildServer, type Deps } from '../src/server.js';
 import {
-  SessionStream, foreignConfigDirs, nextDialogFrame, registryCaughtUp, shouldRepoint, type DialogSeen,
+  SessionStream, dialogFrameLine, foreignConfigDirs, nextDialogFrame, registryCaughtUp, shouldRepoint, type DialogSeen,
 } from '../src/sessionws.js';
+import { parseDialog } from '../src/pane/dialog.js';
 import { RESOLVER_BACKOFF_MS, type TranscriptResolution, type TranscriptRung } from '../src/transcript/resolve.js';
 import { HOOKSTATE_FRESH_MS } from '../src/hookstate.js';
 import { askKey } from '../src/askkey.js';
@@ -419,12 +420,21 @@ const pollOnce = (s: SessionStream): Promise<void> =>
  */
 const streamWith = async (opts: {
   pane?: string;
-  paneSequence?: readonly string[];
+  /** `null`: that poll's capture fails (tmux exits non-zero, as a failed remote capture reads). */
+  paneSequence?: readonly (string | null)[];
   transcript?: string | null;
   transcriptSequence?: readonly (string | null)[];
   hookstate?: unknown | null;
   hookstateSequence?: readonly (unknown | null)[];
-}): Promise<{ frames: any[]; askReads: number }> => {
+  /** After the poll of step `after`, an answer route's `answered:<id>` with `next` (decision
+   *  `ask-answer-returns-next-screen`); `marks` records how many frames had been sent once each was handled. */
+  answered?: readonly { after: number; next: Dialog | null }[];
+  /** An answer route's `answered:<id>` handled WHILE the capture of poll `step` is in flight: that capture began
+   *  before the answer and returns after it (decision `ask-stale-poll-dropped`). */
+  answeredDuringCapture?: readonly { step: number; next: Dialog | null }[];
+  /** The same, handled while poll `step`'s stat of the transcript is in flight (the capture before it is older). */
+  answeredDuringStat?: readonly { step: number; next: Dialog | null }[];
+}): Promise<{ frames: any[]; askReads: number; marks: number[] }> => {
   const home = mkTmp('ccrc-ask-');
   seedRoster(home);
   seed(home);
@@ -443,12 +453,17 @@ const streamWith = async (opts: {
     writeFileSync(hookFile, JSON.stringify(v));
   };
   const panes = opts.paneSequence ?? [opts.pane ?? ''];
+  const bus = new Bus();
   let step = 0; // which poll we are on: 0 is start(), then one per tick
   const at = <T,>(xs: readonly T[], i: number): T => xs[Math.min(i, xs.length - 1)]!;
   const run: Runner = async (_cmd, args) => {
     if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
     if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
-    if (args[0] === 'capture-pane') return { code: 0, stdout: at(panes, step), stderr: '' };
+    if (args[0] === 'capture-pane') {
+      const pane = at(panes, step);
+      for (const a of opts.answeredDuringCapture ?? []) if (a.step === step) bus.emit(`answered:${ID}`, a.next);
+      return pane === null ? { code: 1, stdout: '', stderr: '' } : { code: 0, stdout: pane, stderr: '' };
+    }
     return { code: 0, stdout: '', stderr: '' };
   };
   // The tailer reads through io.tailFile, and `since` skips the backlog, so a
@@ -469,6 +484,10 @@ const streamWith = async (opts: {
       if (p === file) askReads += 1;
       return localIO.readFileFromMeasured(p, off);
     },
+    stat: (p) => {
+      if (p === file) for (const a of opts.answeredDuringStat ?? []) if (a.step === step) bus.emit(`answered:${ID}`, a.next);
+      return localIO.stat(p);
+    },
   };
   const cfg = loadConfig({ CCRC_HOME: home });
   const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue() };
@@ -483,19 +502,29 @@ const streamWith = async (opts: {
   // final review's follow-up an echo-less `since` past offset 0 is read as a
   // stale build and answered with a backlog — which here would mean a
   // `readFileFrom` that is not an ask read, silently inflating `askReads`.
-  const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m), { uuid: UUID_A, offset, file });
+  const marks: number[] = [];
+  const answerAfter = (n: number): void => {
+    for (const a of opts.answered ?? []) {
+      if (a.after !== n) continue;
+      bus.emit(`answered:${ID}`, a.next);
+      marks.push(frames.length);
+    }
+  };
+  const stream = new SessionStream(deps, bus, ID, (m) => frames.push(m), { uuid: UUID_A, offset, file });
   try {
     await stream.start();
+    answerAfter(0);
     for (step = 1; step < Math.max(seq.length, panes.length, hookSeq.length); step += 1) {
       put(at(seq, step));
       putHook(at(hookSeq, step));
       await pollOnce(stream);
+      answerAfter(step);
     }
   } finally {
     stream.stop();
     rmSync(home, { recursive: true, force: true });
   }
-  return { frames, askReads };
+  return { frames, askReads, marks };
 };
 
 /** A complete, valid hookstate body — `session-hook.sh`'s own shape, same
@@ -2679,6 +2708,44 @@ describe('chat header: an unmeasured live status file is not a session at rest (
     }
   });
 
+  // D-5275: the header mirrors `assembleFleet` (D-5234) for a pane that is alive but whose pid read FAILED — the card
+  // paints that `busy`, so the header must too (the mirror rule above); before, `if (pid)` left it at `idle`.
+  it('an alive pane whose pid read fails reads busy on the header, with no timestamp, and idle once it heals (D-5275)', async () => {
+    const home = mkTmp('ccrc-live-hdr-');
+    seedRoster(home);
+    seed(home);   // the live file says status: 'idle'
+    let pidFails = true;
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') {
+        return pidFails ? { code: 1, stdout: '', stderr: 'tmux: timeout' } : { code: 0, stdout: `${PID}\n`, stderr: '' };
+      }
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const deps: Deps = { ...mkLadderDeps(home, localIO), tmux: new Tmux(run) };
+    const frames: { type: string; status?: string; statusUpdatedAt?: number | null }[] = [];
+    const stream = new SessionStream(deps, new Bus(), ID,
+      (m) => frames.push(m as { type: string; status?: string; statusUpdatedAt?: number | null }));
+    try {
+      await stream.start();
+      const first = frames.filter((f) => f.type === 'status');
+      expect(first).toHaveLength(1);
+      expect(first[0]!.status).toBe('busy');
+      expect(first[0]!.statusUpdatedAt).toBeNull();
+
+      frames.length = 0;
+      pidFails = false;
+      await (stream as unknown as { tick: () => Promise<void> }).tick();
+      const back = frames.filter((f) => f.type === 'status');
+      expect(back).toHaveLength(1);
+      expect(back[0]!.status).toBe('idle');
+      expect(back[0]!.statusUpdatedAt).toBe(1784582728369);
+    } finally {
+      stream.stop();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it('… and an ABSENT live file still resolves idle — the positive control', async () => {
     // Same separation the fleet suite draws: this fix must not turn every
     // pane with no published `<pid>.json` into a busy header.
@@ -3241,5 +3308,145 @@ describe('outstanding mail push (Build 7 Task 6)', () => {
     } finally {
       await noCoordApp.close();
     }
+  });
+});
+
+
+// Decision `ask-answer-returns-next-screen` (the 2026-10-16 report): the last answer of a two-question ask landed, a
+// poll caught the pane with no menu and sent `dialog_cleared`, and until a later poll sent the review the envelope sheet
+// had nothing to match and showed "Open terminal to answer". The answer route now hands the screen it saw to every
+// open stream of the session (`answered:<id>`). Panes: a recorded Claude Code 2.1.296 ask in unrelated made-up content.
+describe('an answer route\'s next screen reaches the stream (decision ask-answer-returns-next-screen)', () => {
+  const q2 = fixture('cc296-ask-2q-long-q2.txt');
+  const review = fixture('cc296-ask-2q-long-review.txt');
+  // DERIVED from the review: the same screen caught before its cursor row repainted, which `hasMenu` reads as no menu.
+  const halfPainted = review.replace('❯ 1. Submit answers', '  1. Submit answers');
+  const dialogFrames = (frames: any[]): any[] => frames.filter((f) => f.type === 'dialog' || f.type === 'dialog_cleared');
+
+  it('a no-menu poll, then the answer\'s review: the review is sent at once, not on the next poll', async () => {
+    const { frames, marks } = await streamWith({
+      paneSequence: [q2, halfPainted, review],
+      answered: [{ after: 1, next: parseDialog(review) }],
+    });
+    const seq = dialogFrames(frames);
+    expect(seq.map((f) => f.type)).toEqual(['dialog', 'dialog_cleared', 'dialog']);
+    expect(seq[2].dialog.id).toBe(parseDialog(review)!.id);
+    // Sent when the answer was handled (before the poll of step 2), and the poll that then saw the review sent nothing.
+    expect(frames.slice(0, marks[0]!).filter((f) => f.type === 'dialog').map((f) => f.dialog.id))
+      .toContain(parseDialog(review)!.id);
+  });
+
+  it('the stream\'s record follows the answer: a later poll that finds no menu still clears it', async () => {
+    const { frames } = await streamWith({
+      paneSequence: [q2, halfPainted, halfPainted],
+      answered: [{ after: 1, next: parseDialog(review) }],
+    });
+    expect(dialogFrames(frames).map((f) => f.type)).toEqual(['dialog', 'dialog_cleared', 'dialog', 'dialog_cleared']);
+  });
+
+  it('an answer that saw the screen the client already has sends nothing', async () => {
+    const { frames } = await streamWith({ paneSequence: [review, review], answered: [{ after: 1, next: parseDialog(review) }] });
+    expect(dialogFrames(frames).map((f) => f.type)).toEqual(['dialog']);
+  });
+});
+
+// Decision `ask-failed-capture-holds`: a failed capture (tmux, or the remote call behind it, returned nothing) is NO
+// READING of the pane. It is not "no menu": sending `dialog_cleared` on it is what put the 2026-10-16 sheet on
+// "Open terminal to answer" with the review still on the pane. Only a measured no-menu reading clears, or a run of
+// FAILED_CAPTURES_CLEAR failed captures in a row (a pane tmux can no longer read, which an answer refuses anyway).
+describe('a failed capture holds the dialog (decision ask-failed-capture-holds)', () => {
+  const q2 = fixture('cc296-ask-2q-long-q2.txt');
+  const review = fixture('cc296-ask-2q-long-review.txt');
+  const dialogFrames = (frames: any[]): any[] => frames.filter((f) => f.type === 'dialog' || f.type === 'dialog_cleared');
+
+  it('Q2 answered, the answer\'s next is the review, then one failed capture: the review stays', async () => {
+    const { frames } = await streamWith({
+      paneSequence: [q2, q2, null, review],
+      answered: [{ after: 1, next: parseDialog(review) }],
+    });
+    const seq = dialogFrames(frames);
+    expect(seq.map((f) => f.type)).toEqual(['dialog', 'dialog']);
+    expect(seq[1].dialog.id).toBe(parseDialog(review)!.id);
+  });
+
+  it('a failed capture on a question neither clears it nor re-sends it when the pane reads again', async () => {
+    const { frames } = await streamWith({ paneSequence: [q2, null, null, q2] });
+    expect(dialogFrames(frames).map((f) => f.type)).toEqual(['dialog']);
+  });
+
+  it('a measured no-menu reading still clears', async () => {
+    const { frames } = await streamWith({ paneSequence: [q2, null, 'done\n❯ \n'] });
+    expect(dialogFrames(frames).map((f) => f.type)).toEqual(['dialog', 'dialog_cleared']);
+  });
+
+  it('three failed captures in a row clear it; two do not', async () => {
+    const two = await streamWith({ paneSequence: [q2, null, null] });
+    expect(dialogFrames(two.frames).map((f) => f.type)).toEqual(['dialog']);
+    const three = await streamWith({ paneSequence: [q2, null, null, null] });
+    expect(dialogFrames(three.frames).map((f) => f.type)).toEqual(['dialog', 'dialog_cleared']);
+  });
+
+  it('a reading between failures restarts the count', async () => {
+    const { frames } = await streamWith({ paneSequence: [q2, null, null, q2, null, null] });
+    expect(dialogFrames(frames).map((f) => f.type)).toEqual(['dialog']);
+  });
+});
+
+// Decision `ask-stale-poll-dropped`: a poll whose capture began before an answer's `answered:<id>` and came back after
+// it read the pane as it was BEFORE that answer. Framing it would send the answered question back over the screen the
+// answer reported, and a tap on it would be refused as stale. Such a reading is dropped; the next poll reads afresh.
+describe('a poll that began before an answer is dropped (decision ask-stale-poll-dropped)', () => {
+  const q2 = fixture('cc296-ask-2q-long-q2.txt');
+  const review = fixture('cc296-ask-2q-long-review.txt');
+  const dialogFrames = (frames: any[]): any[] => frames.filter((f) => f.type === 'dialog' || f.type === 'dialog_cleared');
+
+  it('the capture of Q2 resolves after the answer reported the review: Q2 is not sent back', async () => {
+    const { frames } = await streamWith({
+      paneSequence: [q2, q2, review],
+      answeredDuringCapture: [{ step: 1, next: parseDialog(review) }],
+    });
+    const seq = dialogFrames(frames);
+    expect(seq.map((f) => f.type)).toEqual(['dialog', 'dialog']);
+    expect(seq[1].dialog.id).toBe(parseDialog(review)!.id);
+  });
+
+  it('a no-menu grab whose capture began before the answer does not clear the review the answer reported', async () => {
+    const halfPainted = review.replace('❯ 1. Submit answers', '  1. Submit answers');
+    const { frames } = await streamWith({
+      paneSequence: [q2, halfPainted, review],
+      answeredDuringCapture: [{ step: 1, next: parseDialog(review) }],
+    });
+    expect(dialogFrames(frames).map((f) => f.type)).toEqual(['dialog', 'dialog']);
+  });
+
+  it('an answer handled during the poll\'s transcript stat drops that poll too', async () => {
+    const { frames } = await streamWith({
+      paneSequence: [q2, q2, review],
+      answeredDuringStat: [{ step: 1, next: parseDialog(review) }],
+    });
+    const seq = dialogFrames(frames);
+    expect(seq.map((f) => f.type)).toEqual(['dialog', 'dialog']);
+    expect(seq[1].dialog.id).toBe(parseDialog(review)!.id);
+  });
+
+  it('the next poll after it reads afresh and is framed', async () => {
+    const { frames } = await streamWith({
+      paneSequence: [q2, q2, 'done\n❯ \n'],
+      answeredDuringCapture: [{ step: 1, next: parseDialog(review) }],
+    });
+    expect(dialogFrames(frames).map((f) => f.type)).toEqual(['dialog', 'dialog', 'dialog_cleared']);
+  });
+});
+
+describe('dialogFrameLine (decision dialog-frame-log)', () => {
+  const review = parseDialog(fixture('cc296-ask-2q-long-review.txt'))!;
+  const q2 = parseDialog(fixture('cc296-ask-2q-long-q2.txt'))!;
+  it('names the session, the kind, the short id, where it came from and the tick time; never pane text', () => {
+    expect(dialogFrameLine('lane-a', { type: 'dialog', dialog: review }, 'poll', 37))
+      .toBe(`ccrc-server: dialog-frame lane-a review ${review.id.slice(0, 8)} from=poll tick=37`);
+    expect(dialogFrameLine('lane-a', { type: 'dialog', dialog: q2 }, 'answer', null))
+      .toBe(`ccrc-server: dialog-frame lane-a question ${q2.id.slice(0, 8)} from=answer tick=-`);
+    expect(dialogFrameLine('lane-a', { type: 'dialog_cleared' }, 'poll', 5)).toBe('ccrc-server: dialog-frame lane-a cleared - from=poll tick=5');
+    expect(dialogFrameLine('lane-a', { type: 'dialog', dialog: { ...q2, parsed: false } }, 'poll', 1)).toContain(' unparsed ');
   });
 });

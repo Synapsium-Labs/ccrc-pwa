@@ -175,7 +175,8 @@ populates one) rather than assuming a fixed field, and never branch on the
 client's exit status — it reports whether a response HAPPENED, never what the
 response said. The refusals you will actually meet are
 `paused`, `mail-disabled`, `cap-concurrency`, `cap-daily`, `ambiguous-dispatch`,
-`worker-busy`, `hookstate-unmeasurable`, `claimed-by-another`,
+`worker-busy`, `hookstate-unmeasurable`, `status-unmeasurable`,
+`worker-starting`, `claimed-by-another`,
 `project-mismatch`, `home-mismatch`, `claimant-is-a-worker`, `workspace-spent`,
 `spent-unmeasured`, `hold-oversize`, `hold-invalid`,
 `not-dispatched`, `prhistory-unreadable`, `bad-transition`, `stale-tip`,

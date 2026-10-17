@@ -3020,8 +3020,15 @@ case "$event" in
     state="done"
     # `is_interrupt` is not read: no installed lane's Stop carries it (spec §5.1); `interrupted` stays false here (the
     # Subagent branch carries an older value). This fork measures `background_tasks`: bg -1 unless it is an ARRAY (bg-kinds-only-from-an-array (D-3659)), each alias cleaned alone.
-    # Its regexes (and StopFailure's) feed the marker alone, and the program emits its three lines only together: a jq built without Oniguruma leaves bg -1 / err "", never a count without its kinds, and never the hookstate (the payload parse above is regex-free).
-    { read -r bg; read -r bgk; read -r bgi; } < <(jq -r '(if (.background_tasks|type) == "array" then .background_tasks else null end) as $a | [(if $a == null then -1 else ($a|length) end), ([$a[]? | objects | .type | strings | ascii_downcase | gsub(" "; "-") | gsub("[^a-z_-]"; "") | select(length > 0)] | join(",")), ([$a[]? | objects | .id | strings | select(test("^[A-Za-z0-9_-]{1,64}\\z"))] | .[0:8] | join(","))] | .[]' <<<"$payload" 2>/dev/null) ;;
+    # Its regexes (and StopFailure's) feed the marker and the delegated pair, and the program emits its five lines only together: a jq built without Oniguruma leaves bg -1 / err "", never a count without its kinds, and never the delegated pair (the payload parse above is regex-free).
+    # `background-aware-working` (D-5231): lines four and five are the DELEGATED count and its kinds (unique, sorted,
+    # comma-joined), over the tasks that pass the delegated-task rule. This `jq` is the documented second spelling of
+    # `NON_DELEGATING_TASK_KINDS` and `TERMINAL_TASK_STATUSES` (`shared/api.ts`), held equal by
+    # `session-hook-background.test.ts`, which iterates over the TypeScript lists: a task counts unless its CLEANED kind
+    # is one of the six, or its status is one of the three terminal words; an unseen kind or status counts.
+    { read -r bg; read -r bgk; read -r bgi; read -r bgd; read -r bgdk; } < <(jq -r '(if (.background_tasks|type) == "array" then .background_tasks else null end) as $a | def kind: (.type | if type == "string" then ascii_downcase | gsub(" "; "-") | gsub("[^a-z_-]"; "") else "" end); [$a[]? | objects | select((kind | IN("shell", "monitor", "mcp-task", "dream", "auto-mode-scan", "memory-import")) | not) | select((.status | IN("completed", "failed", "killed")) | not) | kind] as $d | [(if $a == null then -1 else ($a|length) end), ([$a[]? | objects | kind | select(length > 0)] | join(",")), ([$a[]? | objects | .id | strings | select(test("^[A-Za-z0-9_-]{1,64}\\z"))] | .[0:8] | join(",")), (if $a == null then -1 else ($d|length) end), ($d | map(select(length > 0)) | unique | join(","))] | .[]' <<<"$payload" 2>/dev/null)
+    # The pair reaches the hookstate only from an ARRAY (bg not -1) and as a plain count; anything else writes neither.
+    [[ "$bg" =~ ^[0-9]+$ && "$bgd" =~ ^[0-9]+$ ]] || { bgd="" bgdk=""; } ;;
   StopFailure) stopfail=1; err=$(jq -r '(.error // "") | tostring | gsub("[^a-z_]"; "") | .[0:64]' <<<"$payload" 2>/dev/null) ;;
   SessionEnd) sessend=1 ;;   # delegation broker §5.3: a termination HINT only — captured below in a -hookcap session, otherwise inert (no hookstate, no marker)
   SubagentStart|SubagentStop) state="" ;;   # subagent-set update only
@@ -3950,17 +3957,26 @@ waitby=""
 # `updatedAt` (today only `event`, unused while `fr_upd` is empty); it keeps a later field safe if one is ever added.
 # A jq that fails on its first output (a root that is neither an object nor null, or an unparseable file) prints nothing: every field comes up
 # empty, which both arms read as "nothing to carry". Lines printed before a later error still come out.
-fr_state="" fr_by="" fr_ask="" fr_int="" fr_upd="" fr_ev=""
+# `background-aware-working` (D-5231): two more lines, appended LAST, read D-5231's delegated pair for the subagent arm's
+# carry: `bgDelegated` prints only as a non-negative integer, `bgDelegatedKinds` only as a string of at most 200 bytes of
+# `a-z`, `_`, `-` and `,` (no regex, so a jq without Oniguruma reads it too); either one failing carries neither (the
+# count is dropped with a malformed kinds value, and the kinds with a malformed count).
+fr_state="" fr_by="" fr_ask="" fr_int="" fr_upd="" fr_ev="" fr_bgd="" fr_bgdk=""
 _hook_fresh_read() {
-  fr_state="" fr_by="" fr_ask="" fr_int="" fr_upd="" fr_ev=""
-  { read -r fr_state; read -r fr_by; read -r fr_ask; read -r fr_int; read -r fr_upd; read -r fr_ev; } < <(jq -r \
+  fr_state="" fr_by="" fr_ask="" fr_int="" fr_upd="" fr_ev="" fr_bgd="" fr_bgdk=""
+  { read -r fr_state; read -r fr_by; read -r fr_ask; read -r fr_int; read -r fr_upd; read -r fr_ev; read -r fr_bgd; read -r fr_bgdk; } < <(jq -r \
     'def keep(f): explode | map(select(f)) | implode; def alpha: (. >= 65 and . <= 90) or (. >= 97 and . <= 122);
      (.state | if . == "working" or . == "waiting" or . == "done" then . else "" end),
      (if .waitBy == "subagent" then "subagent" else "" end),
      (.ask // null | tojson),
      (if .interrupted == true then "true" else "false" end),
      (.updatedAt | if type == "number" then floor | tostring else "" end),
-     (.event | if type == "string" then keep(alpha) else "" end)' "$f" 2>/dev/null)
+     (.event | if type == "string" then keep(alpha) else "" end),
+     (.bgDelegated | if type == "number" and . >= 0 and . == floor then floor | tostring else "" end),
+     (.bgDelegatedKinds | if type == "string" and length <= 200 and (explode | all(. == 44 or . == 45 or . == 95 or (. >= 97 and . <= 122))) then "k" + . else "" end)' "$f" 2>/dev/null)
+  # Both or neither: a valid kinds value arrives behind a `k` marker (a measured zero's "" is valid and prints "k"),
+  # so a failed one (empty, no marker) is told apart from it and clears the count too.
+  if [[ "$fr_bgd" =~ ^[0-9]+$ && "$fr_bgdk" == k* ]]; then fr_bgdk="${fr_bgdk#k}"; else fr_bgd="" fr_bgdk=""; fi
 }
 # The stamp a carried wait keeps. A MAIN-thread wait (fresh state `waiting`, not raised by a subagent) that a subagent
 # event writes over keeps the file's own `updatedAt` and `event` (the wait's START, which the attention bucket, the ask
@@ -3999,6 +4015,8 @@ if [[ "$event" == SubagentStart || "$event" == SubagentStop ]]; then
   [[ "$fr_int" == true ]] && interrupted="true" || interrupted="false"
   waitby="$fr_by"
   _hook_keep_stamp
+  # D-5231: an agent event keeps the delegated pair the main Stop recorded (the carry); nothing else writes it.
+  if [[ -n "$fr_bgd" ]]; then bgd="$fr_bgd" bgdk="$fr_bgdk"; else bgd="" bgdk=""; fi
 fi
 
 # `subagent-tool-event-keeps-the-waiting-ask` (D-4039, finding 4063): a subagent's PreToolUse/PostToolUse never ends the
@@ -4026,6 +4044,10 @@ fi
 # stay sticky on the sheet.
 [[ "$state" == working || "$state" == done ]] && { [[ "$event" == SubagentStart || "$event" == SubagentStop ]] || ask_json="null"; }
 
+# D-5231: the delegated pair is written by a main Stop (from an array) and carried by a subagent event, and by nothing
+# else: a new main turn's first write leaves it out. A plain test, no fork, so the hot path pays nothing.
+[[ "$event" == Stop || "$event" == SubagentStart || "$event" == SubagentStop ]] || { bgd="" bgdk=""; }
+bgd="${bgd:-}" bgdk="${bgdk:-}"
 out=$(jq -cn \
   --argjson v 1 --arg state "$state" --arg event "${w_ev:-$event}" \
   --arg sessionId "${CLAUDE_CODE_SESSION_ID:-}" --argjson pid "${CLAUDE_PID:-0}" \
@@ -4033,13 +4055,15 @@ out=$(jq -cn \
   --argjson ask "$ask_json" --argjson subagents "$subs" --argjson graphQueries "$gq" \
   --argjson graphGateDenials "$gd" --arg waitBy "$waitby" --arg aliveAt "$w_alive" \
   --argjson ccrcPeerReads "$cp" --argjson ccrcClaims "$cc" \
+  --arg bgDelegated "$bgd" --arg bgDelegatedKinds "$bgdk" \
   '{v:$v, state:$state, event:$event, sessionId:$sessionId, pid:$pid,
     updatedAt:$updatedAt, ask:$ask, subagents:$subagents, graphQueries:$graphQueries,
     graphGateDenials:$graphGateDenials, ccrcPeerReads:$ccrcPeerReads,
     ccrcClaims:$ccrcClaims}
    + (if $interrupted then {interrupted:true} else {} end)
    + (if $waitBy == "subagent" then {waitBy:"subagent"} else {} end)
-   + (if $aliveAt != "" then {aliveAt: ($aliveAt | tonumber)} else {} end)') || exit 0
+   + (if $aliveAt != "" then {aliveAt: ($aliveAt | tonumber)} else {} end)
+   + (if $bgDelegated != "" then {bgDelegated: ($bgDelegated | tonumber), bgDelegatedKinds: $bgDelegatedKinds} else {} end)') || exit 0
 
 # 64KB cap: drop the questions envelope before anything else — a truncated
 # envelope is worse than none.
