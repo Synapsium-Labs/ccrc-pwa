@@ -17,12 +17,22 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { afterAll, describe, expect, it } from 'vitest';
 import { configDefaults } from 'vitest/config';
-import type { ConfigEnv, Plugin, PluginOption, UserConfig } from 'vite';
-import hermetic from '../vite.config';
-import browserConfig from '../vitest.browser.config';
+import { loadConfigFromFile, type ConfigEnv, type Plugin, type PluginOption, type UserConfig } from 'vite';
 import { DEFAULT_CHROME, resolveChrome } from '../browser/harness';
 
 const PWA = path.join(import.meta.dirname, '..');
+
+// The two configs are loaded as vite loads them, bundled and imported natively (`loadConfigFromFile`), never through
+// this run's own transform: vite's asset plugin rewrites a literal `new URL('../ui/src', import.meta.url)`, which is
+// how vite.config.ts resolves main's `@` alias, into an `http://localhost` URL under the jsdom environment, and
+// `fileURLToPath` then throws at import (measured: `The URL must be of scheme file`).
+async function loadConfig(file: string): Promise<UserConfig> {
+  const loaded = await loadConfigFromFile({ command: 'serve', mode: 'test' }, path.join(PWA, file), PWA);
+  if (loaded === null) throw new Error(`no config at ${file}`);
+  return loaded.config;
+}
+const hermetic = await loadConfig('vite.config.ts');
+const browserConfig = await loadConfig('vitest.browser.config.ts');
 const BROWSER_INCLUDE = 'browser/**/*.browser.test.{ts,tsx}';
 
 /** The test files vitest itself collects under `configFile` (null = the default, `vite.config.ts`), relative to the
