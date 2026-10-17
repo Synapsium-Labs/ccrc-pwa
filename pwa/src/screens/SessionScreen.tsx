@@ -6,7 +6,7 @@
 // DialogSheet and the TerminalDrawer mount at the bottom.
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { repoLabel, substrateFault, type RouteField } from '../../../shared/api';
+import { repoLabel, substrateFault, type FleetSession, type RouteField, type SessionStatus } from '../../../shared/api';
 import { ATTENTION_DOT, Button, MailStrip, Skeleton, TaskStrip, toast } from '@ccrc/ui';
 import { SwapSheet } from '../fleet/SwapSheet';
 import { ArchiveSheet, restoreSession } from '../fleet/ArchiveSheet';
@@ -38,6 +38,18 @@ import '../session/chat.css';
  *  named export — tests and later tasks import it from here). */
 export function useKeyboardInsets(): number {
   return useKeyboardInset({ pinTop: true });
+}
+
+/** `background-aware-working` (D-5231): does the chat wear its working pulse?
+ *  It reads the server's BUCKET once a snapshot row exists, and the live word
+ *  only before it, so card, header and chat cannot disagree: a wedged `busy`
+ *  that the ladder filed `done` stops pulsing, and delegated work after a Stop
+ *  keeps it. A dead session never pulses. */
+export function chatPulsing(
+  live: Pick<FleetSession, 'bucket'> | null, effectiveStatus: SessionStatus | null,
+): boolean {
+  if (effectiveStatus === 'dead') return false;
+  return live !== null ? live.bucket === 'working' : effectiveStatus === 'busy';
 }
 
 export function SessionScreen({
@@ -197,6 +209,7 @@ export function SessionScreen({
   // dead session is read-only and a busy one wears the caret from first paint.
   const effectiveStatus = status ?? live?.status ?? null;
   const dead = effectiveStatus === 'dead';
+  const pulsing = chatPulsing(live, effectiveStatus);
   const loading = uuid === null && missingFile === null;
   // An UNMEASURED absence is not an empty chat. When the resolver could not
   // finish looking (§5.2's `searchComplete: false`, which §5.5 makes routine
@@ -433,7 +446,7 @@ export function SessionScreen({
             id={id}
             events={events}
             pending={pending}
-            busy={effectiveStatus === 'busy'}
+            busy={pulsing}
             onRetry={(key) => useStore.getState().retry(key)}
             onDiscard={(key) => useStore.getState().discard(key)}
             askPending={askPending}

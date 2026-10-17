@@ -29,7 +29,7 @@
 // rule — the shape moves, the ground stays.
 import type { CSSProperties, ReactNode } from 'react';
 import {
-  ASK_OPERATOR_PRINCIPAL,
+  ASK_OPERATOR_PRINCIPAL, backgroundWork, backgroundWords,
   ctxPressure, graphGateCount, graphReadCount, sessionAsk, substrateFault, turnStall,
   unmeasuredFields,
   type FleetSession, type ProjectPoolWire, type RosterWire,
@@ -245,8 +245,18 @@ export function SessionMeta({
   // one shape a human answer DOES unblock, so it is excluded rather than
   // mislabeled. The quiet `ctx NN%` reading (no wedge escalation) still
   // renders for such a row when ctxHigh is true.
+  //
+  // `background-aware-working` (D-5231): and it stands down while the last
+  // main Stop left delegated work running (`background`), because a long busy
+  // age there is delegated time, not a wedge.
+  const background = dead ? null : backgroundWork(session);
   const wedged =
-    ctxHigh && !dead && session.status === 'busy' && !session.dialogPending && turnStall(session, now);
+    ctxHigh && !dead && session.status === 'busy' && !session.dialogPending && background === null
+    && turnStall(session, now);
+  // D-5231: `working · N in background`, the kinds in the title, only on a
+  // `working` row (N is "as listed at the last Stop" and never shown once the
+  // live file reads idle, which moves the bucket off `working`).
+  const bgWords = state === 'working' && background !== null ? backgroundWords(background) : null;
   const turnAge =
     wedged && session.statusUpdatedAt !== null ? elapsedWords(now - session.statusUpdatedAt) : null;
 
@@ -327,7 +337,9 @@ export function SessionMeta({
   // is no longer a grid).
   return (
         <span className="sess-meta">
-          <span className={`sess-state sess-state--${state}`}>{state}</span>
+          <span className={`sess-state sess-state--${state}`} title={bgWords?.title}>
+            {bgWords === null ? state : `${state} · ${bgWords.text}`}
+          </span>
 
           {/* Position 2, immediately after `.sess-state`. `.sess-meta` has no
               flex-wrap and no `order`, so DOM order IS visual order, and only

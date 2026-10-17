@@ -9,7 +9,7 @@ import { fleetSession as baseSession } from './fleetFixture';
 import { ToastHost } from '@ccrc/ui';
 import { api, ApiError } from '../src/lib/api';
 import { SessionHeader, type SessionHeaderProps } from '../src/session/SessionHeader';
-import { SessionScreen, useKeyboardInsets } from '../src/screens/SessionScreen';
+import { SessionScreen, chatPulsing, useKeyboardInsets } from '../src/screens/SessionScreen';
 import { createFleetStore } from '../src/stores/fleet';
 import { createSessionStore } from '../src/stores/session';
 import { TEST_ROSTER } from './rosterFixture';
@@ -983,5 +983,54 @@ describe('the Escape binding ignores every other key', () => {
     expect(p.onInterrupt, 'an ordinary keystroke interrupted the turn').not.toHaveBeenCalled();
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(p.onInterrupt, 'the control: Escape still interrupts').toHaveBeenCalledTimes(1);
+  });
+});
+
+// `background-aware-working` (D-5231; plan 2026-10-16-working-state-and-interruptions Task 1): the header says what
+// the card says about delegated work a main Stop left running, and the chat pulse follows the server's BUCKET, so a
+// wedged `busy` the ladder filed `done` stops pulsing and delegated work after a Stop keeps it.
+describe('delegated background work (D-5231)', () => {
+  const NEUTRAL = 'lane-a:project-a';
+  const row = (over: Partial<FleetSession> = {}): FleetSession => baseSession({
+    id: NEUTRAL, project: 'project-a', status: 'busy', bucket: 'working', hookState: 'done',
+    statusUpdatedAt: Date.now() - 95 * 60_000, background: { count: 2, kinds: ['workflow'] }, ...over,
+  });
+
+  it('a working row with background reads `working · 2 in background`, the kinds in the title', () => {
+    renderHeader({ status: 'busy', session: row() });
+    const line = screen.getByText('working · 2 in background');
+    expect(line.getAttribute('title')).toBe('in background: workflow');
+  });
+
+  it('the same row with no background keeps the elapsed clock', () => {
+    renderHeader({ status: 'busy', session: row({ background: null }) });
+    expect(screen.queryByText(/in background/)).not.toBeInTheDocument();
+    expect(screen.getByText(/^working · /)).toBeInTheDocument();
+  });
+
+  it('a row the ladder filed `done` never shows the background words', () => {
+    renderHeader({ status: 'busy', session: row({ bucket: 'done' }) });
+    expect(screen.queryByText(/in background/)).not.toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'finished' })).toBeInTheDocument();
+  });
+
+  // The pulse rule is tested directly: `ChatList` renders through Virtuoso, which cannot measure in jsdom, so a
+  // SessionScreen render never shows the trailing indicator whatever `busy` is (a vacuous assertion).
+  it('the chat does not pulse on a wedged busy row whose bucket is `done`', () => {
+    expect(chatPulsing(row({ bucket: 'done', background: null }), 'busy')).toBe(false);
+  });
+
+  it('the chat pulses on a busy row the ladder keeps `working` for its delegated work', () => {
+    expect(chatPulsing(row(), 'busy')).toBe(true);
+  });
+
+  it('the chat pulses on a `working` row while the live word already reads idle (the bucket decides)', () => {
+    expect(chatPulsing(row(), 'idle')).toBe(true);
+  });
+
+  it('before the snapshot row lands the live word decides, and a dead session never pulses', () => {
+    expect(chatPulsing(null, 'busy')).toBe(true);
+    expect(chatPulsing(null, 'idle')).toBe(false);
+    expect(chatPulsing(row(), 'dead')).toBe(false);
   });
 });
