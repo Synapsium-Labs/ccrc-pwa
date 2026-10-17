@@ -381,6 +381,11 @@ export const NOT_A_SKIN: Record<string, string> = {
     + 'confirm, and the three sheets that roll their own still want the same hooks for tests '
     + 'and for scoped rules (this file\'s own header says so).',
   QC_ACTIONS: 'the same hook, same reason as QC_CONSEQUENCE.',
+  PROSE:
+    "the prose hook class worn by the Docs reader's body, `<article className={cn('doc-body', PROSE)}>` "
+    + "(docs/DocMarkdown.tsx): the native Docs reader spec (2026-10-01, sections 4.4 and 4.12) makes a "
+    + "document body an <article>, a landmark `Prose`'s <div> cannot render, so the body wears prose's "
+    + "look through the hook class `Prose` itself exports it for; chat's MessageBubble uses <Prose>.",
 };
 
 /** `{CONSTANT: owning component}` for every class-string constant `@ccrc/ui`

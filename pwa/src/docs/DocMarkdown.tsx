@@ -7,8 +7,8 @@
 //   3. `worker-unavailable` on a text of at most `CHAT_SYNC_MAX_BYTES` parses here, on the main thread; a longer one
 //      is plain text with its own note;
 //   4. a tree is detached once per outcome (`detachUrls`: a copy, every URL moved into its map) and rendered with
-//      `renderHast(copy, {components: DOC_COMPONENTS})` and no url transform, in `<article className="doc-body
-//      msg-assist">`, inside the doc-body `RenderBoundary` keyed by the pin; every other outcome is `DocPlain`;
+//      `renderHast(copy, {components: DOC_COMPONENTS})` and no url transform, in an `<article>` of classes `doc-body`
+//      and @ccrc/ui's `PROSE`, inside the doc-body `RenderBoundary` keyed by the pin; every other outcome is `DocPlain`;
 //   5. each outcome but a tree has one note (`docsPlainNote`); a `timeout` under the normal budget offers **Format
 //      anyway**, a `worker-failed` offers **Retry**;
 //   6. a `.md` whose bytes arrived as base64 is decoded by `docMarkdownSource`: strict UTF-8 renders as Markdown, and
@@ -19,6 +19,7 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import type { Components } from 'react-markdown';
 import type { Element as HastElement, Root as HastRoot } from 'hast';
+import { PROSE, cn } from '@ccrc/ui';
 import type { DocsShowOk } from '../../../shared/docs';
 import { RenderBoundary } from '../components/RenderBoundary';
 import { PreHighlightContext, SHARED_COMPONENTS } from '../lib/markdown';
@@ -151,7 +152,10 @@ function DocTree(p: { readonly tree: HastRoot; readonly link: Omit<DocLinkContex
   return (
     <DocLinkContext value={ctx}>
       <PreHighlightContext value={budget}>
-        <article className="doc-body msg-assist">{renderHast(detached.tree, { components: DOC_COMPONENTS })}</article>
+        {/* `PROSE` is @ccrc/ui's prose hook class (`msg-assist`, whose rules live in its prose.css), named through the
+            export rather than spelled: main's design-system boundary refuses a hand-written owned class. An <article>,
+            not `Prose`'s <div>, so the document keeps its landmark; the rendered classes are unchanged. */}
+        <article className={cn('doc-body', PROSE)}>{renderHast(detached.tree, { components: DOC_COMPONENTS })}</article>
       </PreHighlightContext>
     </DocLinkContext>
   );
