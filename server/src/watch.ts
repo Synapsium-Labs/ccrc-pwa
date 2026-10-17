@@ -24,7 +24,7 @@ import { readHookState, readHookStateRawMeasured, type HookState, type HookState
 import { readUsageMeasured, USAGE_FRESH_S } from './usage.js';
 import { sendPrompt } from './inject/send.js';
 import {
-  decideIdleCompactNudge, idleNudgeDisabled, idleNudgeFeedBody, idleNudgeRowHold, readCompactionTail,
+  decideIdleCompactNudge, idleNudgeDisabled, idleNudgeFeedBody, idleNudgeRefusedBody, idleNudgeRowHold, readCompactionTail,
   type CompactionTail, type IdleNudgeRowFacts,
 } from './idlenudge.js';
 import { askActions, askKey } from './askkey.js';
@@ -6286,31 +6286,6 @@ export class FleetWatcher {
   }
 
   /**
-   * D13: the allocator SELF-SEEDS. Hourly, per registry-named project (the
-   * same bound `sweepDivergences` states: the fleet's active projects, never
-   * every checkout on the box): floor = max(D-<n>) + LEDGER_SEED_GAP, and
-   * THE FLOOR ONLY EVER RISES — `raiseLedgerFloor`'s conflict arm is the
-   * mechanism. `floorFromScan` owns the gap arithmetic and the evidence
-   * string; this lane only applies them. The 50-number gap is not
-   * decoration: numbers allocated but not yet written into any plan are
-   * invisible to this scan, and re-issuing one IS the bb47c9e failure.
-   *
-   * SEEDED FROM THE SAME branch-dependent working tree as reconcile, and unlike
-   * reconcile that is left alone DELIBERATELY. A floor that reads a plan on an
-   * unmerged branch raises the fleet's floor permanently and burns every number
-   * below it — measured 2026-09-02, this project's floor stood well above the
-   * highest number the allocator had ever issued, raised off a file on no merged
-   * ref. (No cardinal here: the floor rises on its own sweep, so any figure
-   * written down is false by the next tick.) That is WASTE, not corruption: the
-   * numbers are cheap and a conservative floor is exactly what prevents a
-   * reissue, which is the failure this lane exists to make impossible.
-   * Reconcile's looseness was different in kind — it wrote a false fact into a
-   * TERMINAL column — which is why only that one was tightened.
-   *
-   * PUBLIC for the reason `sweepDivergences` is: `tick()` dispatches it with
-   * `void`, so a test that awaits `tick()` has not awaited this.
-   */
-  /**
    * `idle-compact-nudge` (D-5373; operator ruling 2026-10-17, "Nudge if work is open"). After Claude Code's idle
    * compaction — which runs on a turn that had ENDED and starts none — type ONE "continue" prompt into a session whose
    * task list is fresh and has open items. L4: it gathers the facts and applies `decideIdleCompactNudge`'s answer
@@ -6381,7 +6356,7 @@ export class FleetWatcher {
     // Once, BEFORE the send: this process's set, then the durable row. A row that did not land types nothing.
     this.idleNudged.add(`${s.id}#${v.key}`);
     const body = idleNudgeFeedBody(v.key);
-    this.pushOne({ kind: 'nudge', sessionId: s.id, project: s.project, title: '↻ Nudged after idle compaction', body,
+    this.pushOne({ kind: 'nudge', sessionId: s.id, project: s.project, title: '↻ Nudging after idle compaction', body,
       recordAlways: true, recordOnly: true }, this.activeProjects);
     if (!coord.hasFeedEvent('nudge', s.id, body)) {
       console.warn(`ccrc-server: idle-compact-nudge ${s.id} compaction ${v.key}: the feed record did not land — nothing typed`);
@@ -6390,6 +6365,12 @@ export class FleetWatcher {
     const res = await sendPrompt({ tmux: this.deps.tmux, queue: this.deps.queue }, s.id, IDLE_COMPACT_NUDGE_PROMPT,
       { holdIfAutoContinueArmed: true, refuseIfTurnRunning: true });
     console.warn(`ccrc-server: idle-compact-nudge ${s.id} compaction ${v.key}: ${res.ok ? 'typed' : `refused (${res.error}), not retried`}`);
+    // The feed agrees with the log line: a refused send gets its own row, so "Nudging" is never the last word on a
+    // nudge that typed nothing.
+    if (!res.ok) {
+      this.pushOne({ kind: 'nudge', sessionId: s.id, project: s.project, title: '↻ Nudge not typed',
+        body: idleNudgeRefusedBody(v.key, res.error), recordAlways: true, recordOnly: true }, this.activeProjects);
+    }
   }
 
   /** The newest compaction in this session's transcript tail, re-read only when the file's size or mtime moved. An
@@ -6411,6 +6392,31 @@ export class FleetWatcher {
     return tail;
   }
 
+  /**
+   * D13: the allocator SELF-SEEDS. Hourly, per registry-named project (the
+   * same bound `sweepDivergences` states: the fleet's active projects, never
+   * every checkout on the box): floor = max(D-<n>) + LEDGER_SEED_GAP, and
+   * THE FLOOR ONLY EVER RISES — `raiseLedgerFloor`'s conflict arm is the
+   * mechanism. `floorFromScan` owns the gap arithmetic and the evidence
+   * string; this lane only applies them. The 50-number gap is not
+   * decoration: numbers allocated but not yet written into any plan are
+   * invisible to this scan, and re-issuing one IS the bb47c9e failure.
+   *
+   * SEEDED FROM THE SAME branch-dependent working tree as reconcile, and unlike
+   * reconcile that is left alone DELIBERATELY. A floor that reads a plan on an
+   * unmerged branch raises the fleet's floor permanently and burns every number
+   * below it — measured 2026-09-02, this project's floor stood well above the
+   * highest number the allocator had ever issued, raised off a file on no merged
+   * ref. (No cardinal here: the floor rises on its own sweep, so any figure
+   * written down is false by the next tick.) That is WASTE, not corruption: the
+   * numbers are cheap and a conservative floor is exactly what prevents a
+   * reissue, which is the failure this lane exists to make impossible.
+   * Reconcile's looseness was different in kind — it wrote a false fact into a
+   * TERMINAL column — which is why only that one was tightened.
+   *
+   * PUBLIC for the reason `sweepDivergences` is: `tick()` dispatches it with
+   * `void`, so a test that awaits `tick()` has not awaited this.
+   */
   async sweepLedgerFloor(records: SessionRecord[]): Promise<void> {
     const now = Date.now();
     if (this.lastLedgerFloor !== 0 && now - this.lastLedgerFloor < LEDGER_FLOOR_SWEEP_MS) return;

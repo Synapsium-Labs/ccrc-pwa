@@ -240,7 +240,14 @@ export function decideIdleCompactNudge(f: IdleNudgeFacts): IdleNudgeVerdict {
 }
 
 /** The feed row's body: derived from the compaction alone, so it is the durable "already nudged" key
- *  (`CoordStore.hasFeedEvent` matches the body exactly). */
+ *  (`CoordStore.hasFeedEvent` matches the body exactly). It is written BEFORE the send, so it says what is about to
+ *  happen, never that it happened: a refused send leaves it standing beside `idleNudgeRefusedBody`'s row. */
 export function idleNudgeFeedBody(key: string): string {
-  return `Typed a "continue" prompt after an idle compaction left open tasks (compaction ${key})`;
+  return `Nudging with a "continue" prompt after an idle compaction left open tasks (compaction ${key})`;
+}
+
+/** The second feed row when `sendPrompt` refused: nothing was typed, and the feed says so with the refusal reason,
+ *  as the server log line does. A different body, so it is never read as the "already nudged" key. */
+export function idleNudgeRefusedBody(key: string, reason: string): string {
+  return `Nothing typed: the pane refused the nudge (${reason}); not retried (compaction ${key})`;
 }

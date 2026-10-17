@@ -16,7 +16,7 @@ import { CoordStore } from '../src/coord/store.js';
 import { NotifyLog } from '../src/notifylog.js';
 import { configDirFor } from '../src/config.js';
 import { transcriptPath } from '../src/transcript/resolve.js';
-import { IDLE_NUDGE_DISABLED_MARKER, idleNudgeFeedBody } from '../src/idlenudge.js';
+import { IDLE_NUDGE_DISABLED_MARKER, idleNudgeFeedBody, idleNudgeRefusedBody } from '../src/idlenudge.js';
 import { IDLE_COMPACT_NUDGE_PROMPT, type FleetSession } from '../../shared/api.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -55,6 +55,9 @@ const harness = (fixed?: string): Harness => {
   };
   return { home, calls, run };
 };
+
+/** EVERY key press, not only literal text: a refusal must come before any keystroke (no C-u over a draft either). */
+const anySends = (calls: string[][]): string[][] => calls.filter((a) => a[0] === 'send-keys');
 
 const literalSends = (calls: string[][]): string[] =>
   calls.filter((a) => a[0] === 'send-keys' && a[3] === '-l').map((a) => a[5]!);
@@ -164,7 +167,7 @@ describe('sweepIdleCompactNudge: the happy path types once, journaled (D-5373)',
     const { h, coord, w } = await rig();
     await w.sweepIdleCompactNudge([fleetRow()], [], TICK);
     expect(literalSends(h.calls)).toEqual([IDLE_COMPACT_NUDGE_PROMPT]);
-    expect(nudgeRows(coord)).toEqual([{ sessionId: ID, title: '↻ Nudged after idle compaction', body: idleNudgeFeedBody('b1') }]);
+    expect(nudgeRows(coord)).toEqual([{ sessionId: ID, title: '↻ Nudging after idle compaction', body: idleNudgeFeedBody('b1') }]);
     expect(warned(`idle-compact-nudge ${ID} compaction b1: typed`)).toBe(1);
   });
   it('the notice row is not required: trigger auto after a finished turn qualifies', async () => {
@@ -192,14 +195,26 @@ describe('sweepIdleCompactNudge: at most once per compaction (D-5373)', () => {
     expect(literalSends(first.h.calls)).toHaveLength(1);
     expect(nudgeRows(first.coord)).toHaveLength(1);
   });
-  it('a send that was refused (a draft in the box) is never retried', async () => {
+  it('a send that was refused (a draft in the box) is never retried, and the feed says nothing was typed', async () => {
     const { h, coord, w } = await rig({ fixed: '❯ half-typed draft\n' });
     await w.sweepIdleCompactNudge([fleetRow()], [], TICK);
     at(NOW + IDLE_NUDGE_SWEEP_MS);
     await w.sweepIdleCompactNudge([fleetRow()], [], TICK);
-    expect(literalSends(h.calls)).toEqual([]);
-    expect(nudgeRows(coord)).toHaveLength(1);
-    expect(warned('not retried')).toBe(1);
+    // No key press at all: not the text, and not a C-u over the operator's draft.
+    expect(anySends(h.calls)).toEqual([]);
+    expect(warned('refused (draft-present), not retried')).toBe(1);
+    expect(nudgeRows(coord)).toEqual([
+      { sessionId: ID, title: '↻ Nudging after idle compaction', body: idleNudgeFeedBody('b1') },
+      { sessionId: ID, title: '↻ Nudge not typed', body: idleNudgeRefusedBody('b1', 'draft-present') },
+    ]);
+  });
+  it('the durable row pruned (FEED_RETENTION): this process\'s own set still stops a second send', async () => {
+    const { h, coord, w } = await rig();
+    await w.sweepIdleCompactNudge([fleetRow()], [], TICK);
+    coord.db.prepare("DELETE FROM feed_events WHERE kind = 'nudge'").run();
+    at(NOW + IDLE_NUDGE_SWEEP_MS);
+    await w.sweepIdleCompactNudge([fleetRow()], [], TICK);
+    expect(literalSends(h.calls)).toEqual([IDLE_COMPACT_NUDGE_PROMPT]);
   });
   it('a NEW idle compaction later is its own key and is nudged once more', async () => {
     const { h, w } = await rig();
@@ -246,15 +261,41 @@ describe('sweepIdleCompactNudge: the holds, read from the real files (D-5373)', 
     expect(literalSends(r.h.calls)).toEqual([]);
     expect(nudgeRows(r.coord)).toEqual([]);
   });
-  it('HOLD: no notify log, so no durable record can land — nothing typed', async () => {
+  it('HOLD: no notify log, so no durable record can land — nothing typed, held before any record is tried', async () => {
     const r = await rig({ notifyLog: false });
     await r.w.sweepIdleCompactNudge([fleetRow()], [], TICK);
-    expect(literalSends(r.h.calls)).toEqual([]);
+    expect(anySends(r.h.calls)).toEqual([]);
+    // Held as a row fact (`durable`), not caught later by the record-must-land check.
+    expect(warned('did not land')).toBe(0);
+  });
+  it('HOLD: the notify log is present but the coord.db row throws (full disk, write lock) — nothing typed', async () => {
+    const r = await rig();
+    vi.spyOn(r.coord, 'recordFeedEvent').mockImplementation(() => { throw new Error('database is locked'); });
+    await r.w.sweepIdleCompactNudge([fleetRow()], [], TICK);
+    expect(anySends(r.h.calls)).toEqual([]);
+    expect(warned('the feed record did not land — nothing typed')).toBe(1);
   });
   it('CONTROL: the same rig with nothing arranged does type (the holds above are not vacuous)', async () => {
     const r = await rig();
     await r.w.sweepIdleCompactNudge([fleetRow()], [], TICK);
     expect(literalSends(r.h.calls)).toEqual([IDLE_COMPACT_NUDGE_PROMPT]);
+  });
+});
+
+describe('sweepIdleCompactNudge: the send-time pane guards (D-5373)', () => {
+  // Every fact read idle, but the pane itself says otherwise between the decision and the keystrokes. `sendPrompt`
+  // refuses before any key press; the lane logs the reason and records the refusal row. Pane rows are the measured
+  // shapes `send.test.ts` pins.
+  const panes: [string, string, string][] = [
+    ['a turn running on the pane', '✳ Cerebrating… (12s · esc to interrupt)\n❯ \n', 'turn-running'],
+    ['an armed auto-continue', 'Usage limit reached · continuing automatically at 11:50am · esc or type to cancel\n❯ \n', 'auto-continue-armed'],
+  ];
+  it.each(panes)('REFUSED: %s — no key press, the reason logged and in the feed', async (_name, pane, reason) => {
+    const { h, coord, w } = await rig({ fixed: pane });
+    await w.sweepIdleCompactNudge([fleetRow()], [], TICK);
+    expect(anySends(h.calls)).toEqual([]);
+    expect(warned(`compaction b1: refused (${reason}), not retried`)).toBe(1);
+    expect(nudgeRows(coord).map((r) => r.body)).toEqual([idleNudgeFeedBody('b1'), idleNudgeRefusedBody('b1', reason)]);
   });
 });
 
