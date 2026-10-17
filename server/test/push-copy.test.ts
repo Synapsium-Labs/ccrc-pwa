@@ -557,6 +557,7 @@ describe('ask notifications carry actions only where the route would accept them
     showMenu: (text?: string) => void;
     clearMenu: () => void;
     writeAsk: (ask: unknown, state?: string) => void;
+    child: (runId: number, parent: string, project: string) => void;
     coord?: CoordStore;
   } {
     const spec = opts.spec ?? 'ccrc-pwa/cc-a';
