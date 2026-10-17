@@ -9,7 +9,10 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { AccountUsage, FleetSession, ProjectPoolsWire } from '../../shared/api';
 import { fleetSession as baseSession } from './fleetFixture';
-import { api } from '../src/lib/api';
+import { useState } from 'react';
+import { ToastHost } from '@ccrc/ui';
+import { SWAP_REFUSALS } from '../../shared/api';
+import { api, ApiError } from '../src/lib/api';
 import { SwapSheet } from '../src/fleet/SwapSheet';
 import { leastLoaded } from '../src/fleet/accountPicker';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
@@ -810,5 +813,114 @@ describe('SwapSheet and the pool line', () => {
                       fleet={poolStore([s], { claude: 'pool-a' }, tagged('demo', 'pool-a'))} />);
     expect(screen.queryByRole('button', { name: /show other pools/ })).not.toBeInTheDocument();
     expect(screen.queryByText(/pool is not known from here/i)).not.toBeInTheDocument();
+  });
+});
+
+// D-5240 (spec §5.9): the swap route answers a measured turn `409 session-busy` and an unread one `409 status-unknown`.
+// The sheet answers the first with archive's shape, a second consent ("swap anyway") that sends `interrupt: true`, and
+// the second with a sentence, never a consent. The confirm arrives AFTER the sheet closed (`move()` closes on the tap,
+// as it always has), so it is mounted beside the sheet, keyed to the session it was raised for.
+describe('SwapSheet: a busy session asks "swap anyway" (D-5240)', () => {
+  const Harness = ({ s, fleet }: { s: FleetSession; fleet: FleetStore }) => {
+    const [open, setOpen] = useState(true);
+    return (<><ToastHost /><SwapSheet session={s} open={open} onClose={() => setOpen(false)} fleet={fleet} /></>);
+  };
+  const refused = (error: string) => new ApiError(409, { ok: false, error });
+
+  it('a 409 session-busy shows the confirm, and its primary sends interrupt: true', async () => {
+    const swap = vi.spyOn(api, 'swap')
+      .mockRejectedValueOnce(refused(SWAP_REFUSALS.sessionBusy))
+      .mockResolvedValueOnce(undefined);
+    const s = fleetSession({ wrapper: 'claude', home: 'claude' });
+    render(<Harness s={s} fleet={storeWith([s])} />);
+    fireEvent.click(await screen.findByRole('button', { name: /team·b/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Move' }));
+    expect(await screen.findByText("It's working — swap anyway?")).toBeInTheDocument();
+    expect(screen.getByText('The turn in progress and its background tasks are lost.')).toBeInTheDocument();
+    expect(screen.queryByText(/Couldn.t move|failed/i)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Swap anyway' }));
+    await waitFor(() => expect(swap).toHaveBeenCalledTimes(2));
+    expect(swap.mock.calls[0]).toEqual([s.id, 'claude-corp']);
+    expect(swap.mock.calls[1]).toEqual([s.id, 'claude-corp', { interrupt: true }]);
+  });
+
+  it('a crossing that comes back busy keeps the crossing beside the consent', async () => {
+    const swap = vi.spyOn(api, 'swap')
+      .mockRejectedValueOnce(refused(SWAP_REFUSALS.sessionBusy))
+      .mockResolvedValueOnce(undefined);
+    const s = fleetSession({ wrapper: 'claude', home: 'claude', project: 'demo' });
+    // The pool suite's `poolStore` shape: `claude2` (team·alt) is the one crossing for a pool-a project.
+    const byId: Record<string, string> = { claude: 'pool-a', claude2: 'pool-b', 'claude-corp': 'pool-a' };
+    const pools: ProjectPoolsWire = {
+      listed: true, byProject: { demo: { state: 'tagged', name: 'pool-a' } }, enforcement: 'enforced' };
+    const store = createFleetStore({ makeSocket: fakeSocket });
+    act(() => {
+      store.setState({ conn: 'open', sessions: [s], roster: TEST_ROSTER.map((a) => ({ ...a, pool: byId[a.id] ?? null })), pools });
+    });
+    render(<Harness s={s} fleet={store} />);
+    fireEvent.click(screen.getByRole('button', { name: /show other pools/ }));
+    fireEvent.click(screen.getByRole('button', { name: /team·alt/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Move' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Swap anyway' }));
+    await waitFor(() => expect(swap).toHaveBeenCalledTimes(2));
+    expect(swap.mock.calls[1]).toEqual([s.id, 'claude2', { crossPool: true, interrupt: true }]);
+  });
+
+  it('a 409 status-unknown says why in a toast and offers no consent', async () => {
+    vi.spyOn(api, 'swap').mockRejectedValueOnce(refused(SWAP_REFUSALS.statusUnknown));
+    const s = fleetSession({ wrapper: 'claude', home: 'claude' });
+    render(<Harness s={s} fleet={storeWith([s])} />);
+    fireEvent.click(await screen.findByRole('button', { name: /team·b/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Move' }));
+    expect(await screen.findByText(/status cannot be read, so it will not be moved on a guess/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Swap anyway' })).not.toBeInTheDocument();
+  });
+
+  it('the ask belongs to the session it was raised for: retargeted to another session, it is not shown', async () => {
+    const swap = vi.spyOn(api, 'swap').mockRejectedValueOnce(refused(SWAP_REFUSALS.sessionBusy));
+    const a = fleetSession({ wrapper: 'claude', home: 'claude' });
+    const b = fleetSession({ id: 'claude:other', project: 'other', wrapper: 'claude', home: 'claude' });
+    const store = storeWith([a, b]);
+    // The actions sheet's shape: one mounted SwapSheet whose `session` prop is retargeted while it stays closed.
+    const Retarget = ({ s }: { s: FleetSession }) => {
+      const [open, setOpen] = useState(true);
+      return (<><ToastHost /><SwapSheet session={s} open={open} onClose={() => setOpen(false)} fleet={store} /></>);
+    };
+    const { rerender } = render(<Retarget s={a} />);
+    fireEvent.click(await screen.findByRole('button', { name: /team·b/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Move' }));
+    expect(await screen.findByText("It's working — swap anyway?")).toBeInTheDocument();
+    rerender(<Retarget s={b} />);
+    await waitFor(() => expect(screen.queryByText("It's working — swap anyway?")).not.toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: 'Swap anyway' })).not.toBeInTheDocument();
+    expect(swap).toHaveBeenCalledTimes(1);
+  });
+
+  it('opening the sheet again drops a standing ask: the operator is choosing afresh', async () => {
+    vi.spyOn(api, 'swap').mockRejectedValueOnce(refused(SWAP_REFUSALS.sessionBusy));
+    const s = fleetSession({ wrapper: 'claude', home: 'claude' });
+    const store = storeWith([s]);
+    const Reopen = () => {
+      const [open, setOpen] = useState(true);
+      return (<><button type="button" onClick={() => setOpen(true)}>reopen</button>
+        <SwapSheet session={s} open={open} onClose={() => setOpen(false)} fleet={store} /></>);
+    };
+    render(<Reopen />);
+    fireEvent.click(await screen.findByRole('button', { name: /team·b/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Move' }));
+    expect(await screen.findByText("It's working — swap anyway?")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'reopen', hidden: true }));
+    await waitFor(() => expect(screen.queryByText("It's working — swap anyway?")).not.toBeInTheDocument());
+  });
+
+  it('Cancel on the confirm sends nothing more', async () => {
+    const swap = vi.spyOn(api, 'swap').mockRejectedValueOnce(refused(SWAP_REFUSALS.sessionBusy));
+    const s = fleetSession({ wrapper: 'claude', home: 'claude' });
+    render(<Harness s={s} fleet={storeWith([s])} />);
+    fireEvent.click(await screen.findByRole('button', { name: /team·b/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Move' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByText("It's working — swap anyway?")).not.toBeInTheDocument());
+    expect(swap).toHaveBeenCalledTimes(1);
   });
 });

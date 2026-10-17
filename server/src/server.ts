@@ -30,7 +30,7 @@ import { buildAgreement, defaultCachePath, derivedBuilds, loadSnapshot, rosterAg
 // include list and the ESM-emit invariant honest.
 import { generateAccountsSh } from '../../shared/generate.mjs';
 import { bodyDigest } from '../../shared/mark.mjs';
-import { ACTOR_FLAGS_CAP, CCD_ARGV, POOLS_CAP, ROUTE_APPLY_CAP, ROUTE_ARGV_CAP, capSupported, deviceActor,
+import { ACTOR_FLAGS_CAP, CCD_ARGV, POOLS_CAP, ROUTE_APPLY_CAP, ROUTE_ARGV_CAP, SWAP_BUSY_CAP, capSupported, deviceActor,
          stopSurfaceSupported, verbSupported, type ActorFlags, type CcdArgv } from './ccdargv.js';
 import { parsePrLines, prView, unknownView } from './prstate.js';
 import { parseAudit, parseReap } from './wsaudit.js';
@@ -95,13 +95,14 @@ import {
   type FloorState, type ProjectRow, type ProjectPoolsWire, type ProjectPoolWire, type ProjectRepoWire,
   parseRouteFields, programKickoffVerdict, routeFieldsOrNull, routeParseDetail, type RouteFields,
 } from '../../shared/api.js';
-import { ARCHIVE_REFUSALS, SERVER_CAPS } from '../../shared/api.js';
+import { ARCHIVE_REFUSALS, SERVER_CAPS, type SwapRefusal } from '../../shared/api.js';
 import type { Dialog } from '../../shared/api.js';
 import {
   archiveFlags, archiveOutcome, busyReadFailsClosed, decideArchive, frameRowVerdict, refusedAtStop, worktreeOf, type ArchiveMeasure,
   type TurnVerdict,
 } from './coord/archiveDoor.js';
 import { liveRowFor, liveRowWithHookFor, liveWordFor, turnReadDeps, turnVerdictFor } from './turnverdict.js';
+import { ccdSwapRefusal, swapTurnRefusal } from './swapguard.js';
 
 /**
  * A client frame off the per-session socket, or null if it isn't one.
@@ -3206,20 +3207,25 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
 
   app.post('/api/sessions/:id/swap', async (req, reply) => {
     const { id } = req.params as { id: string };
-    const body = (req.body ?? {}) as { wrapper?: unknown; crossPool?: unknown };
+    const body = (req.body ?? {}) as { wrapper?: unknown; crossPool?: unknown; interrupt?: unknown };
     if (typeof body.wrapper !== 'string' || body.wrapper.length === 0) {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
-    // ONE queued invocation for both arms (D-2177, below), but that is the only
+    // D-5240: `interrupt: true` is the operator's consent to lose a MEASURED turn ("swap anyway"). It reaches ccd as
+    // `--interrupt` only on a box that advertises `swap-busy-v1`; an older ccd gets the old argv, which refuses nothing.
+    const interrupt = body.interrupt === true;
+    const consentArgv = interrupt && capSupported(deps.fleetState, SWAP_BUSY_CAP);
+    // ONE queued invocation for both arms (D-2177, below), and since D-5240 one turn gate (below) — the only
     // server-side preflight they share. A declared crossing gets the 501 skew
-    // refusal and deliberately skips `readSessionRecord` plus the pool verdict;
+    // refusal and deliberately skips the pool verdict;
     // ccd re-measures session and tag on the fleet box. The ordinary arm owns
-    // the early 404/503 ladder and pool refusal. Every applicable refusal is
+    // the pool refusal; both own the early 404/503 ladder, the crossing since D-5240, whose turn gate needs the row.
+    // Every applicable refusal is
     // decided BEFORE queue entry. `lifecycle.test.ts` pins ordinary-arm queueing;
     // `swap-route-pool.test.ts` pins crossing-arm queueing and each arm's
-    // applicable held-slot refusals (D-1684, D-2468, D-2481).
-    let argv: CcdArgv;
-    if (body.crossPool === true) {
+    // applicable held-slot refusals (D-1684, D-2468, D-2481); `swap-route-busy.test.ts` the turn gate (D-5240).
+    const cross = body.crossPool === true;
+    if (cross) {
       // The declared crossing skips the verdict entirely — that IS the
       // override. It does not skip the SKEW gate: `capSupported` refuses on no
       // evidence, for the reason spelled out on `CCD_ARGV.swapCross`. An
@@ -3229,19 +3235,20 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       if (!capSupported(deps.fleetState, POOLS_CAP)) {
         return reply.code(501).send({ ok: false, error: 'unsupported' });
       }
-      argv = CCD_ARGV.swapCross(id, body.wrapper);
-    } else {
-      // The row, for its `project`, is a best-effort early refusal: it avoids
+    }
+    // The row: for the ordinary arm's `project` (the pool refusal) and for both arms' turn gate. `readSessionRecord`
+    // reads one id, not the fleet; the ladder is `/stop`'s because an unlistable registry proves nothing about THIS
+    // id and 404 would be a lie.
+    const read = await readSessionRecord(deps.io, deps.cfg, id);
+    if (!read.found) {
+      return reply.code(read.reason === 'unlistable' ? 503 : 404)
+        .send({ ok: false, error: read.reason === 'unlistable' ? 'registry-unmeasurable' : 'unknown-session' });
+    }
+    if (!cross) {
+      // The pool verdict is a best-effort early refusal: it avoids
       // queueing a swap that is already known to violate the pool rule. The
       // queue wait can stale this snapshot, so `cmd_swap` re-measures and is the
-      // authoritative gate at execution time. `readSessionRecord` reads one id,
-      // not the fleet; the ladder is `/stop`'s because an unlistable registry
-      // proves nothing about THIS id and 404 would be a lie.
-      const read = await readSessionRecord(deps.io, deps.cfg, id);
-      if (!read.found) {
-        return reply.code(read.reason === 'unlistable' ? 503 : 404)
-          .send({ ok: false, error: read.reason === 'unlistable' ? 'registry-unmeasurable' : 'unknown-session' });
-      }
+      // authoritative gate at execution time.
       const pool = poolFor(await readProjectPools(
         deps.io,
         deps.cfg,
@@ -3250,8 +3257,22 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       ), read.record.project);
       const refused = refusePool(reply, body.wrapper, pool);
       if (refused) return refused;
-      argv = CCD_ARGV.swap(id, body.wrapper);
     }
+    // D-5240: the turn gate, archive's fail-closed `turnVerdictFor` under archive's consent rule (`swapTurnRefusal`):
+    // `busy` without consent is `409 session-busy`, `unmeasured` is `409 status-unknown` with or without it. Read here,
+    // before the queue, and again inside the job, so a turn that began during the wait is refused the same way. An
+    // identity field that could not be read is `/archive`'s 503: the turn reads need the uuid.
+    const identity = measuredIdentity(read.record);
+    if (identity === null) return reply.code(503).send({ ok: false, error: 'registry-unmeasurable' });
+    const rec = read.record;
+    const turnRefusal = async (): Promise<SwapRefusal | null> =>
+      swapTurnRefusal(await turnVerdictFor(turnReads, rec, identity.uuid), interrupt);
+    const early = await turnRefusal();
+    if (early !== null) return reply.code(409).send({ ok: false, error: early });
+    const wrapper = body.wrapper;
+    const argv: CcdArgv = cross
+      ? (consentArgv ? CCD_ARGV.swapCrossInterrupt(id, wrapper) : CCD_ARGV.swapCross(id, wrapper))
+      : (consentArgv ? CCD_ARGV.swapInterrupt(id, wrapper) : CCD_ARGV.swap(id, wrapper));
     // D-2177: `cmd_swap` stops the supervisor unit and kills the tmux pane
     // (`remote/runner.ts`'s own comment on its budget), so it must never run
     // between `answerAsk`'s pane capture and its keystroke — it would tear the
@@ -3295,8 +3316,18 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // box-local case: it is what turns the auto-swap's keystroke loss into a
     // refusal instead of a false ok:true, and it is the only one of the two
     // halves that reaches it.
-    const res = await sendDeps.queue.run(id, () => deps.runCcd(argv));
-    return res.ok ? { ok: true } : reply.code(502).send({ ok: false, stderr: res.stderr });
+    const res = await sendDeps.queue.run(id, async () => {
+      const late = await turnRefusal();
+      return late !== null ? { refused: late } : { ran: await deps.runCcd(argv) };
+    });
+    if ('refused' in res) return reply.code(409).send({ ok: false, error: res.refused });
+    if (res.ran.ok) return { ok: true };
+    // ccd's own two refusals (D-5240: `cmd_swap`'s manual gate, after both reads above) are the same two 409s, so a
+    // turn that began between the in-queue read and ccd's act reaches the operator as `session-busy` with its "swap
+    // anyway". Every other ccd failure keeps the generic 502 with ccd's sentence.
+    const ccdRefused = ccdSwapRefusal(res.ran.stderr);
+    if (ccdRefused !== null) return reply.code(409).send({ ok: false, error: ccdRefused });
+    return reply.code(502).send({ ok: false, stderr: res.ran.stderr });
   });
 
   // ── PR lifecycle ────────────────────────────────────────────────

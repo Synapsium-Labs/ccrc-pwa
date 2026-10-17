@@ -25,7 +25,7 @@ import {
   ASK_STATES, isAskState, ASK_REFUSE_CODES, isAskRefuseCode, ROUTE_WRITABLE_FIELDS, UPDATE_CHANNELS, UPDATE_STATES, UPDATE_PHASES, INSTALL_STATES, PROVENANCE_STATES, AUTO_MODES, NOTIFY_MODES, REQUEST_KINDS, STAMP_READS, NODE_OSES, TAG_FILE_READS,
   SPAWN_VERDICTS,
 } from '../../shared/api.js'; import { NODE_ROLES } from '../../shared/node-role.js';
-import { ARCHIVE_REFUSALS } from '../../shared/api.js';
+import { ARCHIVE_REFUSALS, SWAP_REFUSALS } from '../../shared/api.js';
 import { PROVIDER_IDS } from '../../shared/providers.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 
@@ -6335,5 +6335,21 @@ describe('the ask push body is built once, in server/src/askbody.ts (D-5302)', (
     expect(askbody).not.toMatch(/\.summary\b|\bsummary\s*[,}]|\bhookAskSummary\b/);
     expect(stallCodeText('const { tool, summary } = a;')).toMatch(/\bsummary\s*[,}]/);   // CONTROL
     expect(holders(/permission requested/)).toEqual(['server/src/askbody.ts']);
+  });
+});
+
+// D-5240 (working-state spec §5.9): the swap route's refusal words are declared once, as `SWAP_REFUSALS` in L0, and
+// they ARE archive's two spellings for the same two facts (bound by reference there, so this row holds the binding).
+// The quoted-literal scan above already allows `session-busy` and `status-unknown` in `shared/api.ts` and the audit
+// alone, so the server's swap guard and the PWA's sheet cannot spell either; this row pins that ccd's two swap
+// refusals are read in one place, `ccdSwapRefusal` (`server/src/swapguard.ts`), off the declaration.
+describe('the swap route spells its refusal words once (D-5240)', () => {
+  it('SWAP_REFUSALS is exactly archive\'s session-busy and status-unknown', () => {
+    expect(SWAP_REFUSALS).toEqual({ sessionBusy: ARCHIVE_REFUSALS.sessionBusy, statusUnknown: ARCHIVE_REFUSALS.statusUnknown });
+  });
+  it('ccd\'s swap refusals are read only by ccdSwapRefusal, in swapguard.ts', () => {
+    const holders = ALL.filter((f) => /\bfunction ccdSwapRefusal\b/.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(holders).toEqual(['server/src/swapguard.ts']);
+    expect(ALL.filter((f) => /`ccd: \$\{code\}:`/.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['server/src/swapguard.ts']);
   });
 });
