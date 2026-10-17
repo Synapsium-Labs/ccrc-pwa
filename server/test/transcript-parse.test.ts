@@ -294,9 +294,9 @@ describe('the idle-compaction notice is a system event, not dropped (D-5371)', (
       kind: 'system', uuid: 'n1', ts: '2026-10-17T18:37:59.980Z', text: rows[4]!.content, origin: 'idle-compact',
     });
   });
-  it('the "after an hour idle" variant is the same event', () => {
+  it('the "after an hour idle" notice stays dropped: Claude Code yields it inside the turn the operator just started (compact_on_return), so "nothing was running" would be false (D-5371)', () => {
     const variant = { ...rows[4]!, content: 'Compacted after an hour idle, using a summary written while you were away · turn off with "idleCompaction": false in settings.json' };
-    expect(parse(variant).map((e) => e.kind === 'system' && e.origin)).toEqual(['idle-compact']);
+    expect(parse(variant)).toEqual([]);
   });
   it('every other system row stays dropped: the boundary, the turn duration, another informational row', () => {
     expect(parse(rows[1]!)).toEqual([]);

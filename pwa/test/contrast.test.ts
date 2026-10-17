@@ -257,6 +257,7 @@ const GRANDFATHERED_UNCOVERED = new Set([
   '.task-line',
   '.task-glyph',
   '.task-row--in_progress .task-glyph',
+  '.task-row--in_progress.task-row--stale .task-glyph',
   '.task-row--completed .task-subject',
   '.task-row--completed .task-glyph',
   '.task-detail',

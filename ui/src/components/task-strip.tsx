@@ -46,11 +46,13 @@ const GLYPH: Record<TaskItem['status'], string> = {
   completed: '✓',
 };
 
-function TaskRow({ task }: { task: TaskItem }): ReactNode {
+function TaskRow({ task, stale = false }: { task: TaskItem; stale?: boolean }): ReactNode {
   const [open, setOpen] = useState(false);
   const hasDetail = task.description.trim() !== '';
+  // D-5372: a stale list's in_progress rows keep their glyph but drop the busy
+  // accent, so the expanded rows agree with the head's "N open".
   return (
-    <li className={`task-row task-row--${task.status}`}>
+    <li className={`task-row task-row--${task.status}${stale ? ' task-row--stale' : ''}`}>
       <button
         type="button"
         className={`task-line ${FOCUS_RING}`}
@@ -118,7 +120,7 @@ export function TaskStrip({
       summary={summarize(tasks, { stale })}
     >
       {outstanding.map((t) => (
-        <TaskRow key={t.id} task={t} />
+        <TaskRow key={t.id} task={t} stale={stale} />
       ))}
       {done.length > 0 &&
         (showDone ? (

@@ -97,6 +97,17 @@ describe('TaskStrip — a stale list is a plan, not running work (D-5372)', () =
     expect(container.querySelector('.task-mark--running')).toBeNull();
     expect(screen.getByText('17/22')).toBeTruthy();
   });
+  it('expanded, a stale list\'s in_progress rows drop the busy accent; a live list\'s keep it', () => {
+    const stale = render(<TaskStrip tasks={STALE_PLAN} untouchedFor={72 * HOUR} />);
+    fireEvent.click(screen.getByRole('button', { expanded: false }));
+    const staleRows = stale.container.querySelectorAll('.task-row--in_progress');
+    expect(staleRows.length).toBeGreaterThan(0);
+    staleRows.forEach((r) => expect(r.classList.contains('task-row--stale')).toBe(true));
+    cleanup();
+    const live = render(<TaskStrip tasks={STALE_PLAN} />);
+    fireEvent.click(screen.getByRole('button', { expanded: false }));
+    expect(live.container.querySelector('.task-row--stale')).toBeNull();
+  });
   it('hours are named in hours below a day', () => {
     render(<TaskStrip tasks={STALE_PLAN} untouchedFor={7 * HOUR + 59 * 60 * 1000} />);
     expect(screen.getByText('Plan \u00b7 untouched 7h')).toBeTruthy();
@@ -184,5 +195,20 @@ describe('SessionScreen shows the plan', () => {
     render(<SessionScreen id="claude:demo" store={store} />);
     expect(screen.getByText('Plan \u00b7 untouched 3d')).toBeTruthy();
     expect(screen.queryByText('Building claude_spend_reader')).toBeNull();
+  });
+  it('a frame whose touchedAt is minutes old still reads as running work (D-5372)', () => {
+    const store = createSessionStore('claude:demo', {
+      makeSocket: () => ({ onopen: null, onmessage: null, onclose: null, onerror: null, close() {} }) as unknown as WebSocket,
+      api: { prompt: async () => {} },
+    });
+    act(() => {
+      store.getState().apply({ type: 'backlog', uuid: 'u1', events: [], offset: 0, file: '/t.jsonl', missing: false });
+      store.getState().apply({ type: 'tasks', tasks: PLAN, touchedAt: Date.now() - 5 * 60 * 1000 });
+    });
+    const { container } = render(<SessionScreen id="claude:demo" store={store} />);
+    expect(screen.getByText('Building claude_spend_reader')).toBeTruthy();
+    expect(screen.getByText('2 running \u00b7 1 left \u00b7 2 \u2713')).toBeTruthy();
+    expect(container.querySelector('.task-mark--running')).not.toBeNull();
+    expect(screen.queryByText(/Plan \u00b7 untouched/)).toBeNull();
   });
 });
