@@ -3801,6 +3801,11 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     sets are supersets, so the plan's T1 table records them as the landing-tip values in one prose commit, with a
     fresh wave-done. `typecheck-tests` timed out twice under load (CLAUDE.md lists it as a load flake). A direct
     `tsc` over the test config and `server/` exits 0, and PR CI 39050279614 is green.
+  - **17:08 UTC: D-5145 verified at `eee9001f1` (mail 5990).** One commit on `14839f785`, touching only
+    `dispatch-live-gate.test.ts` and the plan. Nothing under `server/src` changed, and no assertion was removed. The
+    new real-delay row passes, and it reds with the old flush, which also reds five old cases at load 107. The file is
+    17 of 17 three times in a row at load 49 to 65. Before the fix it failed 5 and 4 of 16 at load 42. The advance
+    is refused `review-in-flight` while review 568 is open, so that review reads the live tip `eee9001f1`.
 
 ## Carried constraints
 
