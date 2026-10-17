@@ -327,7 +327,8 @@ describe('sessionBucket', () => {
     writeFileSync(path.join(reg2, 'claude-demo.started'), '1');
     const idleRun: Runner = async (_cmd, args) => {
       if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '', stderr: '' };
+      // A real pane pid with no live file behind it (`no-state`, idle): since D-5234 a NULL pid is unmeasured `busy`.
+      if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
       return { code: 0, stdout: '', stderr: '' };
     };
     const fleetNoHookFile = await assembleFleet(
