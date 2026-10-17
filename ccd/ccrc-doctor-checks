@@ -8646,8 +8646,15 @@ _check_server-caps() {
       writer="this box's own ccrc server (it rewrites the file every minute)"
       remedy="$(_dr_restart_hint ccrc.service), then read its log for 'could not write ~/.ccrc/server-caps'" ;;
     *)
-      _dr_skip server-caps "this box records no CCRC_ROLE, so no writer of ~/.ccrc/server-caps is armed by configuration and the session hook's gated arms stay off (recording the role is part of the box's first move onto the release lane)"
-      return 3 ;;
+      # No recorded role: a server here derives its role (config.ts deriveRole), `both` on a local fleet, and then
+      # writes the file every minute, so a file that exists is read as on a `both` node. With none, the gated arms
+      # are off (the hook writes what it always wrote), which is the safe state, and nothing here is wrong.
+      if [ ! -e "$f" ] && [ ! -L "$f" ]; then
+        _dr_skip server-caps "this box records no CCRC_ROLE and has no ~/.ccrc/server-caps, so the session hook's gated arms are off here; a ccrc server on this box would derive the role both and write the file every minute, and on a fleet node ccd-update-sync writes it once CCRC_ROLE=fleet is recorded"
+        return 3
+      fi
+      writer="this box's own ccrc server (role derived both), if one runs here"
+      remedy="record CCRC_ROLE in the box env file; if this box runs the ccrc server, $(_dr_restart_hint ccrc.service) and read its log for 'could not write ~/.ccrc/server-caps'" ;;
   esac
   local -a lines=()
   local ln="" at="" words="" now

@@ -14849,7 +14849,8 @@ describe('T11 review A-6: docs-sw reads the worker byte-wise under a UTF-8 local
 // A `fleet` or `both` node's hook engages a gated arm only while `~/.ccrc/server-caps` is whole, current within
 // SERVER_CAPS_LEASE_S and lists the arm's word. This check reads that file read-only, with the reader's grammar, and
 // names the writer when it is not current: the update-sync timer on a `fleet` node, the server on a `both` node. A
-// `server` node runs no hook, and a box with no recorded role arms no writer by configuration: both SKIP.
+// `server` node runs no hook: SKIP. A box with no recorded role is read as a `both` node when the file exists (its
+// own server derives `both` on a local fleet and writes it), and SKIPs when it does not (the arms are then off).
 // `healthy()` records no role, which is why HEALTHY_SKIPS carries one more (deleting that `+ 1` reds the summary pins).
 import { SERVER_CAPS_LEASE_S } from '../../shared/api.js';
 describe('ccrc doctor: server-caps (D-5232\'s mechanism)', () => {
@@ -14919,11 +14920,29 @@ describe('ccrc doctor: server-caps (D-5232\'s mechanism)', () => {
     expect(r.code).toBe(3);
   });
 
-  it('SKIPs on a box that records no role (healthy()), which arms no writer', () => {
+  it('SKIPs on a box that records no role (healthy()) and has no file, saying the arms are off', () => {
     const home = healthy('ccrc-doctor-server-caps-norole-');
     const r = runCaps(home);
-    expect(r.stdout).toMatch(/^SKIP server-caps: /);
-    expect(r.stdout).toMatch(/no CCRC_ROLE/);
+    expect(r.stdout).toMatch(/^SKIP server-caps: this box records no CCRC_ROLE and has no ~\/\.ccrc\/server-caps, so the session hook's gated arms are off/);
+    expect(r.code).toBe(3);
+  });
+
+  it('reads the file on a box that records no role, naming its own server (role derived both) as the writer', () => {
+    const home = healthy('ccrc-doctor-server-caps-norole-pass-');
+    writeFileSync(capsFile(home), `at ${now()}\ncaps dispatch-live-gate-v1\nend\n`);
+    const r = runCaps(home);
+    expect(r.stdout, r.stderr).toMatch(/^PASS server-caps: .*by this box's own ccrc server \(role derived both\), if one runs here.*dispatch-live-gate-v1/);
+    expect(r.code).toBe(0);
+  });
+
+  it('WARNs on a stale file on a box that records no role, naming its own server', () => {
+    const home = healthy('ccrc-doctor-server-caps-norole-stale-');
+    writeFileSync(capsFile(home), `at ${now() - SERVER_CAPS_LEASE_S - 1}\ncaps dispatch-live-gate-v1\nend\n`);
+    const r = runCaps(home);
+    const lines = r.stdout.split('\n');
+    expect(lines[0], r.stdout + r.stderr).toMatch(/^WARN server-caps: .*stale.*until this box's own ccrc server \(role derived both\), if one runs here/);
+    expect(lines[1]).toMatch(/^ {2}remedy: record CCRC_ROLE/);
+    expect(r.code).toBe(2);
   });
 
   it('is read-only: a stale file is left byte for byte', () => {
