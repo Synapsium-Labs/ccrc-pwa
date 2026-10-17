@@ -8571,15 +8571,16 @@ function renderAskBrief(askId: number, childId: string, question: string, option
 //       instant): to the settle of the last recovery the lane started (`recoveredAt`, the in-process one, R112, R116), whichever pass
 //       started it, or else to the instant the pass's applier answered (`appliedAt`, R113), which covers the BOOT recovery `open()`
 //       makes, for the pass that started the open and for a later one awaiting the cached applier alike (R117); and never earlier than
-//       the setting pass's own clock, whatever the wall clock does (R115, one clamp for both arms). (Measuring after the await carries
-//       the clock-skew allowance from the settle: that covers a call made during the recovery by a hook clock running ahead of the
-//       server's. When the clocks agree, the pass budget (45 s) keeps a recovery whose pass is not cut inside the skew (60 s), unless a
-//       starved event loop fires the budget timer late; a recovery whose pass was cut runs on past the budget, and its settle covers that
-//       too.) (No census and no applier can only be found before a process's first ready
-//       pass: the census is never unset and the applier is cached once opened; they stay as defence.) Correlation gets one lost window
-//       from the epoch to it plus the clock skew on every repository (`delegationNotReadyWindowOf`, R104): a stretch's start cannot be
-//       measured, so every rung-4 candidate whose creator began at or before it is held, and through X1 so is a rung-3 link whose creator
-//       bracket reaches back to it. Cleared by nothing; only a later ready instant moves it, and a restart starts again from none.
+//       the setting pass's own clock, whatever the wall clock does (one clamp for both arms: R115 for the appliedAt arm, R120 for the
+//       recoveredAt arm). (Measuring after the await carries the clock-skew allowance from the settle: that covers a call made during
+//       the recovery by a hook clock running ahead of the server's. When the clocks agree, the pass budget (45 s) keeps a recovery
+//       whose pass is not cut inside the skew (60 s), unless a starved event loop fires the budget timer late; a recovery whose pass
+//       was cut runs on past the budget, and its settle covers that too.) (No census and no applier can only be found before a
+//       process's first ready pass: the census is never unset and the applier is cached once opened; they stay as defence.) Correlation
+//       gets one lost window from the epoch to it plus the clock skew on every repository (`delegationNotReadyWindowOf`, R104): a
+//       stretch's start cannot be measured, so every rung-4 candidate whose creator began at or before it is held, and through X1 so is
+//       a rung-3 link whose creator bracket reaches back to it. Cleared by nothing; only a later ready instant moves it, and a restart
+//       starts again from none.
 //     - THE OWNERS A PASS LISTED (R89, `pendingOwners`). Every owner a census lists is remembered, with the hours it was listed in, until
 //       one observation of it COMPLETES in a pass that was not cut AND what it read is DURABLE (R101: after the pass's flush, which did
 //       not fail past its first byte and refused none of its buckets): so a pass cut before it reaches an owner, or whose read is lost
@@ -9438,9 +9439,9 @@ class DelegationLane {
     // R88: the first pass to reach the owners after a not-ready mark (and the first of a process) is the latest ready instant: the
     // settle of the last recovery the lane started (`recoveredAt`, R112, R116), whichever pass started it, else the instant this pass's
     // applier answered, after the boot recovery `open()` makes (R113, R117); and never earlier than this pass's own clock, whatever the
-    // wall clock did during the awaits (R115: one clamp for both arms). Measured after the awaits, so the skew allowance runs from the
-    // settle (the reason on `recoveredAt`). The settle is consumed here. Everything at or before the instant may hold a session nothing
-    // listed.
+    // wall clock did during the awaits (one clamp for both arms: R115 for the appliedAt arm, R120 for the recoveredAt arm). Measured
+    // after the awaits, so the skew allowance runs from the settle (the reason on `recoveredAt`). The settle is consumed here. Everything
+    // at or before the instant may hold a session nothing listed.
     if (this.notReady) {
       this.readyAt = Math.max(pass.now, this.recoveredAt ?? appliedAt);
       this.recoveredAt = null;

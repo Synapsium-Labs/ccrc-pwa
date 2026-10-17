@@ -4129,8 +4129,10 @@ describe('R110 to R112 (review 533 F1, F2): each arm of R109 holds alone, and th
       bashPre('demo-a', 'toolu_wt1', ['old-tree'], iso(at(5) + 120_000)), bashPost('demo-a', 'toolu_wt1', ['old-tree', 'raw-tree'], iso(at(5) + 123_000)));
     // A MOCKED timeline beyond the pass budget: the recovery "returns" 180 s after the pass began while the budget timer (real time) does
     // not fire, so the recovering pass is not cut and sets the instant itself. The settle is measured in the recovery's `finally` (the
-    // lane's `recoveredAt`, consumed by the next instant), and the instant is no earlier than it, whichever pass sets it: R116 is the order
-    // in which the recovering pass is cut and a later pass sets it. Measuring at the settle carries the clock-skew allowance from it: that
+    // lane's `recoveredAt`, consumed by the next instant), and the instant is no earlier than it, whichever pass sets it. When the
+    // recovering pass itself sets the instant, as here, the settle binds on a forward clock. In R116's cut order a later pass sets it, and
+    // that pass's clock, later than the settle, binds (the clamp, R120): the carried settle decides only after a backward wall-clock step.
+    // Measuring at the settle carries the clock-skew allowance from it: that
     // covers a call made during the recovery by a hook clock running ahead of the server's; when the clocks agree, the pass budget (45 s)
     // keeps a recovery whose pass is not cut inside the skew (60 s), unless a starved event loop fires the budget timer late. Mutant G
     // (the recoveredAt arm removed, `readyAt = Math.max(pass.now, appliedAt)`): this row reds (a lease).
@@ -4215,7 +4217,7 @@ describe('R113 and R114 (review 544 P2, P1): the ready instant covers the boot r
   });
 });
 
-describe('R115 to R117 (review 556 F3, W1, F2): the ready instant is never earlier than the setting pass\'s clock, a recovery the lane started is not ready until it settles, and a pass awaiting the cached applier waits for the boot recovery', () => {
+describe('R115 to R117 and R120 (review 556 F3, W1, F2; review 563 F1): the ready instant is never earlier than the setting pass\'s clock on either arm, a recovery the lane started is not ready until it settles, and a pass awaiting the cached applier waits for the boot recovery', () => {
   /** A fresh lane's boot open (`DelegationDurability.open`), held before it starts: `release(atMs)` moves the mocked clock to `atMs`, then
    *  lets the real open (and its recovery) run, so the applier answers at `atMs`. */
   function holdOpen(): { held: () => boolean; release: (atMs: number) => void } {
@@ -4300,7 +4302,8 @@ describe('R115 to R117 (review 556 F3, W1, F2): the ready instant is never earli
     // `appliedAt` is at(0) - 180 s, earlier than the pass's clock. demo-a's creator call begins at at(0) + 20 s: within the skew after
     // the pass's clock, and more than the skew after `appliedAt`, so without the clamp the instant would be `appliedAt` and the call
     // would link. ONE clamp, `Math.max(pass.now, recoveredAt ?? appliedAt)`, covers both arms, the boot recovery's `appliedAt` and an
-    // in-process recovery's `recoveredAt`, so no separate row pins the recoveredAt arm. Mutant: the clamp removed
+    // in-process recovery's `recoveredAt`. This row pins it on the appliedAt arm; R120 pins it on the recoveredAt arm, on a forward
+    // clock after a cut recovery. Mutant: the clamp removed
     // (`readyAt = recoveredAt ?? appliedAt`), W1's mechanism kept: this row reds (a lease).
     const w = world();
     makeOwner(w, 'demo-a');
@@ -4320,7 +4323,9 @@ describe('R115 to R117 (review 556 F3, W1, F2): the ready instant is never earli
   it('R116 (a) (W1): a pass that runs while a recovery the lane started has not settled reads nothing, even once recover() reports ready: a creator call more than the skew after its clock, and within the skew after the recovery\'s return, is held', async () => {
     // W1's order (`cutInHeldRepair`). C runs during the held repair: it reads no owner, reconciles nothing and sets no instant. The
     // creator call begins at at(6) + 120 s (more than the skew after C's clock) and the recovery returns at at(6) + 180 s; the timeline is
-    // mocked (a repair that outlives a cut pass). The first pass after the settle (at(10)) sets an instant no earlier than the settle.
+    // mocked (a repair that outlives a cut pass). The first pass after the settle (at(10)) sets the instant. After a cut recovery, on a
+    // forward clock, that instant is the setting pass's clock, which is later than the settle, and the clamp holds that stretch (R120).
+    // This row's call is held by either bound, so it does not tell them apart (mutant G leaves it green).
     // Mutant: W1's check removed (the `if (this.recovering) …` line deleted): C sets the instant to its own clock, and the call links.
     const w = world();
     makeOwner(w, 'demo-a');
@@ -4351,6 +4356,26 @@ describe('R115 to R117 (review 556 F3, W1, F2): the ready instant is never earli
     creatorAfter(w, at(11));
     for (let i = 12; i < 16; i++) await censusPass(w, at(i), WITH_TREE);
     expect(leasedOf(w), 'after the settle, the lane reads again and links').toEqual([['raw-tree', 'raw', 'demo-a']]);
+  });
+
+  it('R120 (review 563 F1): after a cut recovery, on a forward clock, the instant is the setting pass\'s clock, not the earlier settle: a creator call within the skew after that clock is held', async () => {
+    // R116's order: the recovery settles at at(9), and the first pass after it, at at(10), sets the instant. On a forward clock that
+    // pass's clock is later than the settle, so it is the clamp, `Math.max(pass.now, recoveredAt ?? appliedAt)`, that holds the stretch
+    // from the settle to the setting pass, which no pass read. demo-a's creator call begins at at(10) + 20 s: more than the skew after the
+    // settle, within the skew after the setting pass's clock. This row pins the clamp on the recoveredAt arm (R115 pins it on the
+    // appliedAt arm). Mutant: the appliedAt arm clamped only (`readyAt = recoveredAt ?? Math.max(pass.now, appliedAt)`): the instant is
+    // the settle, and the call links.
+    const w = world();
+    makeOwner(w, 'demo-a');
+    await censusPass(w, at(-1), BEFORE_TREE);                           // ready
+    const held = await cutInHeldRepair(w);
+    await held.settle(at(6) + 180_000);                                 // the recovery returns at at(9)
+    await held.c;
+    await censusPass(w, at(10), BEFORE_TREE);                           // the first pass after the settle: the instant
+    creatorAfter(w, at(10));                                            // at(10) + 20 s
+    for (let i = 12; i < 16; i++) await censusPass(w, at(i), WITH_TREE);
+    expect(leasesOf(w.home), 'the creator began within the skew after the setting pass\'s clock').toEqual([]);
+    expect(w.watcher.delegationReport().lostEvidence.forced, 'held by lost evidence: the full evidence links it').toBe(1);
   });
 
   it('R117 (F2): a pass that awaits the CACHED applier after the opening pass was cut inside the boot open sets an instant no earlier than the open\'s return: a creator call between its clock plus the skew and the open\'s return plus the skew is held', async () => {
