@@ -24,7 +24,8 @@ import { COORDINATOR_PAUSE_MARKER } from '../src/coord/rundefs.js';
 import { configDirFor } from '../src/config.js';
 import type { Runner } from '../src/exec.js';
 import type { CcdResult } from '../src/lifecycle.js';
-import { SERVER_CAPS } from '../../shared/api.js';
+import { SERVER_CAPS, SERVER_CAPS_FILE, renderServerCaps } from '../../shared/api.js';
+import { execFileSync } from 'node:child_process';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -477,5 +478,37 @@ describe('the bound has a basis in code (D-5238)', () => {
 describe('the gate\'s capability word (D-5238, advertised through D-5232\'s mechanism)', () => {
   it('SERVER_CAPS lists dispatch-live-gate-v1', () => {
     expect(SERVER_CAPS).toContain('dispatch-live-gate-v1');
+  });
+});
+
+// `compactions-write-no-hookstate` (D-5239): behind this gate's word the fleet's hook leaves a Stop's `done` standing
+// through an idle compaction, while the live file reads `busy` (it does during a compaction). The carry is safe only
+// because this gate reads the live word: the real hook writes the file, and the dispatch still refuses.
+describe('a hook done carried through an idle compaction, live busy, is worker-busy (D-5239 behind D-5238)', () => {
+  it('Stop, then PreCompact and PostCompact manual behind dispatch-live-gate-v1 → hook still done/Stop, worker-busy, no /clear', async () => {
+    const b = await box();
+    const bin = path.join(b.home, 'bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(path.join(bin, 'tmux'), `#!/bin/sh\necho "cc-${ID}"\n`, { mode: 0o755 });
+    mkdirSync(path.join(b.home, '.ccrc'), { recursive: true });
+    writeFileSync(path.join(b.home, '.ccrc', SERVER_CAPS_FILE), renderServerCaps(SERVER_CAPS, Math.floor(Date.now() / 1000)));
+    const stopPayload = { ...(JSON.parse(readFileSync(path.join(here, 'fixtures/hook/stop-bg-five-kinds.json'), 'utf8')) as object),
+      session_id: UUID, background_tasks: [] };
+    const compact = (ev: string): object => ({ session_id: UUID, transcript_path: '/rig/fixhome/cfg/projects/-rig-repo/x.jsonl',
+      cwd: '/rig/repo', prompt_id: '00000000-0000-4000-8000-0000000000c1', hook_event_name: ev, trigger: 'manual',
+      ...(ev === 'PreCompact' ? { custom_instructions: null } : { compact_summary: 'fixture summary' }) });
+    for (const p of [stopPayload, compact('PreCompact'), compact('PostCompact')]) {
+      execFileSync('bash', [path.join(ccrcRoot, 'ccd', 'session-hook.sh')], { input: JSON.stringify(p), encoding: 'utf8',
+        env: { ...process.env, HOME: b.home, PATH: `${bin}:${process.env['PATH'] ?? ''}`, TMUX_PANE: '%1',
+          CLAUDE_CODE_SESSION_ID: UUID, CLAUDE_PID: String(PANE) } });
+    }
+    const hs = JSON.parse(readFileSync(path.join(b.home, '.cc-sessions', `${ID}.hookstate.json`), 'utf8')) as Record<string, unknown>;
+    expect(hs).toMatchObject({ state: 'done', event: 'Stop', sessionId: UUID });
+    live(b.home, 'busy');
+    const res = await b.dispatch();
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, refused: 'worker-busy' });
+    expect(b.cleared()).toBe(false);
+    expect(b.acts()).toEqual([]);
   });
 });
