@@ -15088,6 +15088,7 @@ describe('oom-policy: the victim policy\'s two scope drop-ins, on disk and appli
     expect(verdict(home).line).toBe('PASS oom-policy: both OOMPolicy=continue drop-ins are in place; no tmux scope is running to read');
   });
 
+  // PLATFORM-ONLY: OOMPolicy is a systemd unit property; the Linux arm is every itLinux case above, and launchd has no counterpart to assert.
   itDarwin('SKIP on macOS: launchd has no OOMPolicy', () => {
     const home = healthy('ccrc-doctor-oom-darwin-');
     expect(verdict(home).line).toBe('SKIP oom-policy: OOMPolicy is a systemd mechanism, and this box runs launchd');

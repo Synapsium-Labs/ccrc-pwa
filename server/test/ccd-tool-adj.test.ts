@@ -12,6 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
 import { itLinux } from './platformFixtures.js';
+import { ghContainedEnv } from './ccdWsHelpers.js';
 
 const ADJ = path.resolve(__dirname, '../../ccd/ccd-tool-adj');
 
@@ -20,12 +21,15 @@ beforeEach(() => { dir = mkTmp('ccrc-tool-adj-'); });
 afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }); });
 
 /** Run the prefix the way Claude Code's Bash tool does: `<shell> -c -l "<prefix> '<snippet>'"` — here without
- *  `-l`, so no login profile of the test host is read. `start` is the score the caller sets first. */
+ *  `-l`, so no login profile of the test host is read. `start` is the score the caller sets first. The child's
+ *  PATH goes through `ghContainedEnv` with the systemd and tmux poisons, like every bash spawn in a ccd test file
+ *  (ccd-workspaces.test.ts's scan): ccd-tool-adj reaches none of them, and a snippet that did would red here. */
 const viaShell = (snippet: string, env: Record<string, string> = {}, start?: number): string => {
   const q = `'${snippet.replace(/'/g, "'\\''")}'`;
   const pre = start === undefined ? '' : `echo ${start} > /proc/self/oom_score_adj && `;
   return execFileSync('bash', ['-c', `${pre}exec '${ADJ}' ${q}`], {
-    encoding: 'utf8', env: { PATH: process.env['PATH'] ?? '', ...env },
+    encoding: 'utf8',
+    env: ghContainedEnv(dir, { PATH: process.env['PATH'] ?? '', HOME: dir, ...env }, { systemd: true, tmux: true }),
   });
 };
 /** The Bash tool's snippet in the shape 2.1.302 builds it ([B]; Task 13 step 7 measured one): a snapshot source,
