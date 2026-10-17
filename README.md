@@ -5420,13 +5420,32 @@ killed and nothing logged.
 runtime `set-property` drop-in can reinstate one), checks the value systemd actually enforces with
 `deploy/assert-slice-policy.sh` after `daemon-reload`, and gives `ccrc-agent.service` `MemoryMin=192M`,
 `MemoryLow=384M`, `CPUWeight=5000` (`ccrc-agent.service.d/protect.conf`) so the control plane still
-answers under pressure; `ccrc install` and `ccrc update` place only the two `limits.conf` files — none of
-the three above. The numbers were sized for a 30 GB fleet host — tune them to yours with a drop-in of your
+answers under pressure; `ccrc install` and `ccrc update` place only the two `limits.conf` files (and the two
+victim-policy drop-ins below) — none of the three above. The numbers were sized for a 30 GB fleet host — tune them to yours with a drop-in of your
 own that sorts after `limits.conf` (an install or update rewrites `limits.conf` itself); leave the slice's
 `MemoryHigh` at `infinity`, which `deploy.sh agent` refuses to deploy over; the pane values are literals in
 `ccd-cap-scopes`. Doctor's `scopes` check warns when a pane scope has a process parked in memory reclaim
 across two samples (a throttled scope, not merely one over its `MemoryHigh`), and its `services` check
 warns when `ccd-cap-scopes.timer` is installed and stopped.
+
+**The victim policy** (D-5241). Under the user manager's default `OOMPolicy=stop`, one OOM kill of any
+process in a scope makes systemd stop the whole scope: a test run that outgrew memory took its session
+with it, and one kill inside the tmux server's scope stopped every pane on the box. So `ccrc install`,
+`ccrc update` and `deploy.sh agent` place two `OOMPolicy=continue` drop-ins:
+`tmux-spawn-.scope.d/50-oom-continue.conf` (systemd's prefix form, trailing hyphen and all, which reaches
+every `tmux-spawn-<uuid>.scope`) and `ccrc-tmux-server.scope.d/50-oom-continue.conf`. A `daemon-reload`
+applies them to running scopes as well as new ones. And on Linux `ccd` spawns each session with
+`CLAUDE_CODE_SHELL_PREFIX` naming `ccd-tool-adj`, which runs every Bash tool command (and what it starts) at
+`oom_score_adj` 800 while Claude Code stays at 200, so the kernel picks the tool that outgrew memory rather
+than the session. Hooks, the statusline and MCP servers also run through the prefix, but unraised: at 800 a
+tiny hook would be killed first and free nothing. The trade: a test run that outgrows memory now fails as a
+test run, and the session stays and sees why; a half-killed pane (a dead MCP server, say) can linger.
+Doctor's `oom-policy` check warns when either drop-in is missing or a live scope does not read `continue`.
+**Rolling back** below this release is by hand, because an older installer never deletes a file it does not
+know: remove `~/.config/systemd/user/tmux-spawn-.scope.d/50-oom-continue.conf` (and, only if you want the
+old tmux-server behaviour, `~/.config/systemd/user/ccrc-tmux-server.scope.d/50-oom-continue.conf`), run
+`systemctl --user daemon-reload`, then roll `ccd` back; a session drops the prefix at its next respawn, and
+`ccd-tool-adj` left in `~/.local/bin` is inert. `ccrc uninstall` removes both files.
 
 ### Session history: lossless recall (`ccrc history`)
 
