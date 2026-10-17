@@ -14862,10 +14862,23 @@ describe('ccrc doctor: server-caps (D-5232\'s mechanism)', () => {
     return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
   };
   const capsFile = (home: string): string => join(home, '.ccrc', 'server-caps');
-  const role = (home: string, r: string): void => writeCcrcEnv(home, `CCRC_ROLE=${r}\n`);
   const now = (): number => Math.floor(Date.now() / 1000);
+  // The writer's unit file, aged by `ageS`: the first-write grace (D-4168) runs from its mtime, so every case that is
+  // not about the grace places it OLDER than one lease, and an absent file there is the real fault.
+  const writerUnit = (home: string, unit: string, ageS: number): void => {
+    writeUnitFile(home, unit);
+    const t = now() - ageS;
+    utimesSync(join(unitDirOf(home), unitFileOf(unit)), t, t);
+  };
+  const role = (home: string, r: string): void => {
+    writeCcrcEnv(home, `CCRC_ROLE=${r}\n`);
+    if (r === 'fleet') writerUnit(home, 'ccd-update-sync.timer', SERVER_CAPS_LEASE_S + 60);
+    if (r === 'both') writerUnit(home, 'ccrc.service', SERVER_CAPS_LEASE_S + 60);
+  };
 
-  it('PASSes a current file on a fleet node, listing its words', () => {
+  // macOS ships no ccd-update-sync (its timers are systemd-only), so a fleet node there SKIPs, as `update-sync` does:
+  // the cases that read the file on a fleet node are Linux's, and the SKIP below is asserted on both platforms.
+  itLinux('PASSes a current file on a fleet node, listing its words', () => {
     const home = healthy('ccrc-doctor-server-caps-pass-');
     role(home, 'fleet');
     writeFileSync(capsFile(home), `at ${now()}\ncaps dispatch-live-gate-v1\nend\n`);
@@ -14876,7 +14889,7 @@ describe('ccrc doctor: server-caps (D-5232\'s mechanism)', () => {
 
   it('PASSes a file inside the lease (the bash copy of SERVER_CAPS_LEASE_S)', () => {
     const home = healthy('ccrc-doctor-server-caps-pass-lease-');
-    role(home, 'fleet');
+    role(home, 'both');
     writeFileSync(capsFile(home), `at ${now() - SERVER_CAPS_LEASE_S + 5}\ncaps dispatch-live-gate-v1\nend\n`);
     expect(runCaps(home).stdout).toMatch(/^PASS server-caps: /);
   });
@@ -14898,7 +14911,7 @@ describe('ccrc doctor: server-caps (D-5232\'s mechanism)', () => {
     ['stale on a both node', 'both', (h) => writeFileSync(capsFile(h), `at ${now() - 4000}\ncaps\nend\n`), /stale/],
   ];
   for (const [name, r, arrange, why] of warns) {
-    it(`WARNs on ${name}, naming the writer`, () => {
+    (r === 'fleet' ? itLinux : it)(`WARNs on ${name}, naming the writer`, () => {
       const home = healthy('ccrc-doctor-server-caps-warn-');
       role(home, r);
       arrange(home);
@@ -14911,6 +14924,39 @@ describe('ccrc doctor: server-caps (D-5232\'s mechanism)', () => {
       expect(out.code).toBe(2);
     });
   }
+
+  // A FRESH INSTALL ENDS GREEN (D-4168, D-139; `ccrc-install.test.ts` pins it): within one lease of the writer's unit
+  // file landing, an ABSENT file is a writer that has not had its first beat, and PASSes on its grace word.
+  for (const [r, unit, writer] of [['fleet', 'ccd-update-sync.timer', /until ccd-update-sync /], ['both', 'ccrc.service', /until this box's own ccrc server /]] as const) {
+    (r === 'fleet' ? itLinux : it)(`PASSes first-write-pending on a ${r} node whose ${unit} landed inside one lease, with no file yet`, () => {
+      const home = healthy(`ccrc-doctor-server-caps-grace-${r}-`);
+      role(home, r);
+      writerUnit(home, unit, 5);
+      const out = runCaps(home);
+      expect(out.stdout, out.stderr).toMatch(new RegExp(`^PASS server-caps: first-write-pending: ${unit.replace('.', '\\.')} was installed \\d+s ago`));
+      expect(out.stdout).toMatch(writer);
+      expect(out.code).toBe(0);
+    });
+  }
+
+  it('gives the grace to ABSENCE only: a torn file inside the lease of a fresh writer unit still WARNs', () => {
+    const home = healthy('ccrc-doctor-server-caps-grace-torn-');
+    role(home, 'both');
+    writerUnit(home, 'ccrc.service', 5);
+    writeFileSync(capsFile(home), `at ${now()}\ncaps dispatch-live-gate-v1\n`);
+    const out = runCaps(home);
+    expect(out.stdout, out.stderr).toMatch(/^WARN server-caps: .*torn/);
+    expect(out.code).toBe(2);
+  });
+
+  it('SKIPs on a fleet node with no ccd-update-sync.timer installed: nothing here records the words', () => {
+    const home = healthy('ccrc-doctor-server-caps-fleet-notimer-');
+    role(home, 'fleet');
+    removeUnitFile(home, 'ccd-update-sync.timer');
+    const r = runCaps(home);
+    expect(r.stdout).toMatch(/^SKIP server-caps: ccd-update-sync\.timer is not installed on this box/);
+    expect(r.code).toBe(3);
+  });
 
   it('SKIPs on a server node, which runs no hook', () => {
     const home = healthy('ccrc-doctor-server-caps-server-');
@@ -14947,7 +14993,7 @@ describe('ccrc doctor: server-caps (D-5232\'s mechanism)', () => {
 
   it('is read-only: a stale file is left byte for byte', () => {
     const home = healthy('ccrc-doctor-server-caps-ro-');
-    role(home, 'fleet');
+    role(home, 'both');
     const text = `at ${now() - 999}\ncaps dispatch-live-gate-v1\nend\n`;
     writeFileSync(capsFile(home), text);
     runCaps(home);
