@@ -140,8 +140,9 @@ async function codexBox(ids: readonly string[], extra: readonly Record<string, u
     ...ids.map((id, i) => codexRow(id, ports[2 * i]!, ports[2 * i + 1]!)), ...extra] });
 }
 
-/** An EXTERNAL lane in the live Codex lanes' SHAPE (exec.kind "external",
- *  provider openai, telemetry "codex"), under a fixture id. */
+/** An EXTERNAL lane in the SHAPE of the other repository's Codex lanes
+ *  (exec.kind "external", provider openai, telemetry "codex"; retired by
+ *  Plan 4), under a fixture id. */
 const EXT_A_ROW = {
   id: 'ext-a', label: 'ext-a', configDirSuffix: '.claude-ext-a',
   exec: { kind: 'external', provider: 'openai' }, homeAble: false, telemetry: 'codex',
@@ -158,12 +159,13 @@ const LEGACY_SECRETS_EXTERNAL_ID = ROSTER.accounts[5]!.id;
 
 /** Plan 3a Task 2 (operator ruling Z3, D-3706): `ccrc models <id> init codex`
  *  no longer CREATES a codex registry on a row that is not exec.kind "codex",
- *  and this file's external rows are the live Codex lanes' kind before their
- *  flip. A case that needs such a row WITH a codex registry is the live
- *  shape, a registry that predates the refusal, which the refusal leaves
- *  untouched. So it is planted in `init codex`'s own bytes
- *  (`SEEDED_REGISTRY_BYTES`, bound to the op in `models-op.test.ts`), 0600,
- *  and the box's own `materialise` then writes what `init` writes after them. */
+ *  and this file's external rows are the kind the other repository's Codex
+ *  lanes had before their flip (retired by Plan 4). A case that needs such a
+ *  row WITH a codex registry is that old shape, a registry that predates the
+ *  refusal, which the refusal leaves untouched. So it is planted in `init
+ *  codex`'s own bytes (`SEEDED_REGISTRY_BYTES`, bound to the op in
+ *  `models-op.test.ts`), 0600, and the box's own `materialise` then writes what
+ *  `init` writes after them. */
 function seedCodex(id: string): void {
   fs.mkdirSync(join(home, '.ccrc', 'models'), { recursive: true });
   fs.writeFileSync(join(home, '.ccrc', 'models', `${id}.classes.json`), SEEDED_REGISTRY_BYTES, { mode: 0o600 });
@@ -239,8 +241,9 @@ function env(h: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   poison('systemd-run', 'ccrc tests must never start a real transient unit on this box\'s systemd');
   poison('launchctl', 'ccrc tests must never query this box\'s real launchd');
   // Plan 3a Task 2 (operator ruling Z1): the external arm ran `pgrep -f` and a
-  // bare `ccgpt stop`, and on the fleet box a real `ccgpt stop` stops a live
-  // lane's units BY NAME, which the census cannot see. So a HOME that holds no
+  // bare `ccgpt stop`, and a real `ccgpt stop` on a box that still carries one
+  // stops a live lane's units BY NAME, which the census cannot see (the fleet
+  // box's copy was removed by Plan 4). So a HOME that holds no
   // stand-in of its own gets a poison. Only then: the stand-ins a describe
   // writes before a run must survive that run's env(). Plan 4 deleted the arm
   // and kept these poisons, so a return of it is loud.
@@ -1337,7 +1340,7 @@ describe('ccrc models <id> discovery', () => {
       'a scrubbed CHATGPT_TOKEN_DIR leaves the codex fetch no directory, so it refuses no-token-dir; a leaked one would refuse runtime-absent')
       .toBe(true);
     expect(fs.existsSync(join(home, 'python-poison')),
-      'a scrubbed CHATGPT_TOKEN_DIR leaves no auth.json for the codex fetch to find, so it must refuse before the interpreter ever runs')
+      'a scrubbed CHATGPT_TOKEN_DIR leaves the codex fetch no directory, so it must refuse before any interpreter runs')
       .toBe(false);
     expect(r.stdout).not.toContain(poisonedDir);
     expect(r.stdout).not.toContain('leaked-account-id');
@@ -1408,7 +1411,9 @@ describe('ccrc models <id> discovery', () => {
 // exec.kind "codex" row, after the scrub and after any secrets file. Every
 // other row is handed no interpreter and whatever directory its secrets file
 // sets, and meets the probe's one codex arm with that (Plan 4): the two
-// CHATGPT_TOKEN_DIR scrub cases in the describe above hold the scrub.
+// CHATGPT_TOKEN_DIR scrub cases in the describe above hold the scrub. (The
+// title's "today's probe environment" is that scrubbed one, interpreter
+// withheld: since Plan 4 no row of this kind reaches a fetch of its own.)
 // CONTAINMENT FIRST: every case poisons a PATH `litellm` and the `python`
 // beside it, so no old or mutated probe can reach the runner's own LiteLLM.
 describe.skipIf(pythonOrSkip() === null)('each codex lane\'s probe reads its OWN authDir through its OWN runtime, with no default; every other row keeps today\'s probe environment (Plan 3a Task 1)', () => {
@@ -1555,9 +1560,10 @@ describe.skipIf(pythonOrSkip() === null)('each codex lane\'s probe reads its OWN
 
   // Plan 3b Task A1 (D-4046): a roster whose codex rows the lane library cannot
   // tell is refused HERE, in that library's own word, line and rc, and the probe
-  // never runs. Read as "not codex", an exec.kind "codex" row went down the
-  // external fetch, whose token directory has a default: another lane's
-  // (D-3706's class).
+  // never runs. Read as "not codex", an exec.kind "codex" row would be handed no
+  // directory and refuse `no-token-dir`, a remedy that is not its own. (Before
+  // Plan 4 it went down the external fetch, whose token directory had a
+  // default: another lane's, D-3706's class.)
   it.each([[1, 'roster-invalid'], [2, 'missing-dependency']] as const)(
     'a roster whose codex lanes cannot be told (the lane library answers rc %i) is refused at the probe-input seam with its own %s line and rc — never "not codex", and the probe never runs (Plan 3b Task A1)',
     async (rc, word) => {
@@ -1568,9 +1574,10 @@ describe.skipIf(pythonOrSkip() === null)('each codex lane\'s probe reads its OWN
       expect(r.stdout, 'the probe ran').toBe('');
     });
 
-  // Residual round (R-2): an ABSENT roster is "not codex" only at the dispatcher, whose external arm then refuses
-  // roster-absent. At THIS seam it would hand a would-be codex lane to the external fetch and its default token
-  // directory (D-3706's class), so it is refused, in the remedy's own word, and the probe never runs.
+  // Residual round (R-2): the dispatcher refuses an ABSENT roster `roster-absent` in its own sentence (Plan 4). At
+  // THIS seam, read as "not codex", it would hand a would-be codex lane no directory and refuse it `no-token-dir`, a
+  // remedy that is not its own (before Plan 4: the external fetch and its default token directory, D-3706's class),
+  // so it is refused, in the remedy's own word, and the probe never runs.
   it('an ABSENT roster at the probe-input seam is refused roster-absent with its remedy — never "not codex", and the probe never runs (Plan 3b Task A1)', async () => {
     home = await codexBox(['codex-a']);
     fs.rmSync(join(home, '.ccrc', 'accounts.json'));
@@ -2093,11 +2100,11 @@ describe('ccrc models litellm — a codex-kind lane renders its own config and r
     fs.rmSync(home, { recursive: true, force: true });
     home = box({ ...ROSTER, accounts: [...ROSTER.accounts,
       codexRow('codex-a', pa!, la!), codexRow('codex-b', pb!, lb!)] });
-    // The external arm's two tools, POISONED: a codex lane's render
-    // reaches neither. `systemctl` and `systemd-run` (the platform's unit
-    // starter) are already poisoned by env() on every run in this file
-    // (finding, this round: a describe-scoped poison left every OTHER case
-    // that can now reach the lane library — any codex-kind roster row,
+    // The two tools the external arm used (retired by Plan 4), POISONED: a
+    // codex lane's render reaches neither. `systemctl` and `systemd-run` (the
+    // platform's unit starter) are already poisoned by env() on every run in
+    // this file (finding, this round: a describe-scoped poison left every OTHER
+    // case that can now reach the lane library — any codex-kind roster row,
     // anywhere in this file — walking up to a real systemd-run; env()'s
     // file-level poison contains all of them, not only this describe's).
     for (const name of ['pgrep', 'ccgpt']) {
@@ -2208,10 +2215,10 @@ describe('ccrc models litellm — a codex-kind lane renders its own config and r
     for (const name of ['pgrep', 'ccgpt', 'systemd-run']) expect(poisonLog(name), name).toEqual([]);
   });
 
-  // Plan 3b Task A1: the dispatcher takes NEITHER arm on a roster whose codex
-  // rows cannot be told. Before it, this row fell through to the external arm,
-  // which asked pgrep and rendered codex-a's model list into the box-global
-  // file another repository's LiteLLM reads.
+  // Plan 3b Task A1: the dispatcher refuses a roster whose codex rows cannot be
+  // told, before anything is rendered. Before it, this row fell through to the
+  // external arm (deleted by Plan 4), which asked pgrep and rendered codex-a's
+  // model list into the box-global file another repository's LiteLLM read.
   it.each([[1, 'roster-invalid'], [2, 'missing-dependency']] as const)(
     'a roster whose codex lanes cannot be told (the lane library answers rc %i) is refused %s before either arm — never the box-global file, pgrep, ccgpt or systemd-run (Plan 3b Task A1)',
     (rc, word) => {
@@ -2257,7 +2264,7 @@ describe('ccrc models litellm — a codex-kind lane renders its own config and r
 
   // Plan 3b Task A1: the refresh row of such a roster is a FAILED row whose reason
   // is the lane library's own forwarded line. The probe never runs, so the row is
-  // never fetched down the external path, and neither LiteLLM arm is taken.
+  // never fetched, and the dispatcher takes no arm.
   it('refresh over a roster whose codex lanes cannot be told: the row is ok:false with the lane library\'s roster-invalid line as its reason, exit 1, and no pgrep, ccgpt or systemd-run call (Plan 3b Task A1)', () => {
     const r = sourced('_codex_lanes() { _codex_say roster-invalid "fixture: which roster lanes are codex lanes cannot be told"; return 1; }; cmd_models refresh codex-a', [],
       { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
@@ -2922,7 +2929,7 @@ describe('ccrc models litellm — a codex-kind lane renders its own config and r
 
     it('never takes the EXTERNAL arm, even handed an id that is not a codex lane', () => {
       // `_codex_cmd_start` gates on `_codex_row` first, so this is belt and braces —
-      // but the external arm's failure mode is the live box's box-global
+      // but the deleted external arm's failure mode was the box-global
       // file and a bare `ccgpt stop`, so the braces are measured. R40: the
       // non-codex id here is `router2`, the tree's existing external row —
       // never a live lane id.

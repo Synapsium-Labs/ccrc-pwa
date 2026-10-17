@@ -104,12 +104,12 @@ const LEGACY_EXTERNAL_ID = ROSTER.accounts[2]!.id;
 
 /** Plan 3a Task 2 (operator ruling Z3, D-3706): `init codex` no longer CREATES
  *  a codex registry on a row that is not exec.kind "codex", and this file's
- *  external rows are the live Codex lanes' kind before their flip. A case
- *  that needs such a row WITH a codex registry is the live shape, a registry
- *  that predates the refusal, which the refusal leaves untouched. So it is
- *  planted in `init codex`'s own bytes (`SEEDED_REGISTRY_BYTES`), 0600 as
- *  `writeRegistry` writes it, and the op's own `materialise` then writes what
- *  `init` writes after them. */
+ *  external rows are the kind the other repository's Codex lanes had before
+ *  their flip (retired by Plan 4). A case that needs such a row WITH a codex
+ *  registry is that old shape, a registry that predates the refusal, which the
+ *  refusal leaves untouched. So it is planted in `init codex`'s own bytes
+ *  (`SEEDED_REGISTRY_BYTES`), 0600 as `writeRegistry` writes it, and the op's
+ *  own `materialise` then writes what `init` writes after them. */
 function plantCodex(id: string): void {
   fs.mkdirSync(path.join(home, '.ccrc', 'models'), { recursive: true });
   fs.writeFileSync(regPath(id), SEEDED_REGISTRY_BYTES, { mode: 0o600 });
@@ -423,10 +423,10 @@ describe('init (§10, §13.1)', () => {
       .toEqual({ byModel: { [haiku!]: 'high', [sonnet!]: 'high', [opus!]: 'max' } });
   });
 
-  // Z3's refusal, on every row that is not codex-kind. The live Codex lanes'
-  // shape first (`ext-a`); `ext-b` drops its provider, and `gen-a` is the
-  // other kind a registry can sit on. Together they say the gate is the row's
-  // KIND, never its telemetry or its provider.
+  // Z3's refusal, on every row that is not codex-kind. The other repository's
+  // Codex lanes' shape first (`ext-a`; retired by Plan 4); `ext-b` drops its
+  // provider, and `gen-a` is the other kind a registry can sit on. Together
+  // they say the gate is the row's KIND, never its telemetry or its provider.
   it.each([
     ['ext-a', { exec: { kind: 'external', provider: 'openai' }, telemetry: 'codex' }],
     ['ext-b', { exec: { kind: 'external' }, telemetry: 'codex' }],
@@ -927,12 +927,14 @@ describe('discovery scope transitions (Fix round 1, Finding 2 — ruling 2026-09
 });
 
 describe('the ownership whitelist gates on the LANE, not the flag (Fix round 1, Finding 1 — ruling 2026-09-08, spec §10)', () => {
-  it('openrouter discovery add without --endpoints refuses', () => {
+  it('openrouter discovery add without --endpoints refuses, and the remedy names the verb that runs the probe (Plan 4)', () => {
     op('init', '--file', rosterPath(), '--id', 'router', '--probe', 'openrouter');
     const r = op('discovery', '--file', rosterPath(), '--id', 'router', '--action', 'add', '--model', 'gpt-5.5');
     expect(r.code).toBe(1);
     expect(r.body['error']).toBe('endpoints-required');
-    expect(String(r.body['detail'])).toMatch(/ccrc-models-probe/);
+    const detail = String(r.body['detail']);
+    expect(detail).toContain('ccrc models router discovery add');
+    expect(/Run 'ccrc-models-probe /.test(detail)).toBe(false);
     expect(registryOf('router')['discovery']).toEqual([]);
   });
 
@@ -1212,10 +1214,10 @@ describe('lane.json (spec §5.4) — the codex lane manifest', () => {
     },
     homeAble: false, telemetry: 'codex',
   };
-  // The shape spec §1 measured for today's LIVE Codex lanes: `external`, yet
-  // naming provider `openai` and reporting `telemetry: 'codex'`. The row that
-  // tells the kind gate from a gate on either of those two fields — `router`
-  // above carries neither, so it cannot.
+  // The shape spec §1 measured for the other repository's Codex lanes (retired
+  // by Plan 4): `external`, yet naming provider `openai` and reporting
+  // `telemetry: 'codex'`. The row that tells the kind gate from a gate on
+  // either of those two fields — `router` above carries neither, so it cannot.
   const CODEX_EXTERNAL = {
     id: 'codex-b', label: 'codex-b', configDirSuffix: '.claude-codex-b',
     exec: { kind: 'external', provider: 'openai' },

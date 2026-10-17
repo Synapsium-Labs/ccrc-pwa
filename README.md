@@ -1762,8 +1762,8 @@ classed on its own. OpenRouter starts with an empty discovery list — its publi
 `discovery add` the ones you want (`discovery catalogue` is refused on an OpenRouter lane) — while `codex` and
 `compatible` start from the whole catalogue. `init codex` is refused (`codex-registry-needs-codex-lane`) on a
 lane whose `exec.kind` is not `codex`: only a codex lane declares the `authDir` its probe reads, so a codex
-registry anywhere else would be probed with another lane's OAuth (a registry that already exists is left as it
-is). On a codex lane `ccrc-models-probe` runs under the isolated runtime's interpreter with that lane's own
+registry anywhere else fails its probe (`no-token-dir`) on every hourly refresh (a registry that already exists
+is left as it is). On a codex lane `ccrc-models-probe` runs under the isolated runtime's interpreter with that lane's own
 `exec.authDir` and no default, and refuses with the remedy first — `ccrc install` when no runtime is current,
 `ccrc codex login <id>` when the authDir holds no `auth.json` or a token that can be neither used nor refreshed;
 it never starts a device-code sign-in. `show` says when no class on a lane is available, and a Codex

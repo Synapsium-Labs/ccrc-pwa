@@ -155,8 +155,10 @@ trap 'rm -rf "$TMPD"; rm -f "$NORM"' EXIT
 # exec.kind "codex" row's was marked by a lane-kind marker, and every other
 # caller's carried a default token directory and read an `auth.json` itself.
 # That arm served another repository's lane and left with it, and the marker
-# with it. A row that is not codex-kind is handed no directory and no
-# interpreter by `ccrc`'s `_models_run_probe`, so it refuses here.
+# with it. A row that is not codex-kind is handed no interpreter by `ccrc`'s
+# `_models_run_probe`, and no directory unless its secrets file sets
+# CHATGPT_TOKEN_DIR, so it refuses here: `no-token-dir`, or `runtime-absent`
+# when its secrets file set one.
 # This arm is handed two values and reads nothing else:
 #   CHATGPT_TOKEN_DIR  the row's own exec.authDir, under $HOME;
 #   CCRC_CODEX_PYTHON  the interpreter `ccgpt-runtime python` resolved (the
@@ -515,7 +517,9 @@ def compatible_models(raw):
         # A bare /v1/models says the id and nothing more. Everything else is
         # null rather than guessed: a fabricated context window would be sized
         # against by Claude Code's auto-compaction, which is exactly the class
-        # of lie the [1m] suffix incident was (infra/handoff/ccgpt:108-113).
+        # of lie the [1m] suffix incident was (spec §8's "No `[1m]`-suffixed
+        # context-window alias" bullet, in
+        # docs/superpowers/specs/2026-09-20-gpt-lane-ownership-design.md).
         out.append({
             "id": mid, "label": mid, "context": None, "maxContext": None,
             "efforts": [], "hidden": False, "priceIn": None, "priceOut": None,
