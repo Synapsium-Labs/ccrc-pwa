@@ -1787,6 +1787,12 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       26/0/0); the fleet sweep skipped the same four failed supervisors. v0.0.218 released at 11:52:45 (#484, a PWA
       fix) and stays unapplied under `auto=stable`. STATUS: fleet and server v0.0.217, newest v0.0.218, intent
       dev/auto=stable, backups fleet 187M/server 778M, disk free fleet 216G/work volume 116G/server 32G, no anomalies.
+    - **2026-10-17 12:58 UTC:** a tap moved both boxes from v0.0.217 to v0.0.218, read from the feed as "requested
+      update" (fleet 12:13:50 to 12:15:49, doctor 34/6/0; server 12:16:36 to 12:17:01, restarted at 12:16:48, doctor
+      26/0/0); the fleet sweep skipped the same four failed supervisors. v0.0.219 to v0.0.222 released between 12:13
+      and 12:51 (#487, #488, #485 and #489) and stay unapplied under `auto=stable`. STATUS: fleet and server
+      v0.0.218, newest v0.0.222, intent dev/auto=stable, backups fleet 188M/server 786M, disk free fleet 216G/work
+      volume 114G/server 32G, no anomalies.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
