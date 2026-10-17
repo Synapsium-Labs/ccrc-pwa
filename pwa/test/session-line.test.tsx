@@ -1505,6 +1505,77 @@ describe('the repo label (board-placement wave 2, Task 6)', () => {
   });
 });
 
+// ── D-5301: the coordinator badge ───────────────────────────────────────────
+//
+// Every session the operator creates is its project's coordinator (coordinator-
+// first spec §8); the server derives `FleetSession.role` from `.child` alone. The
+// row shows a quiet `coordinator` badge beside the label, in `.sess-repo`'s
+// ink register, before any run exists. A child, a row with no role (an older
+// server: the live frame is cast, so the key may be absent) and an unknown word
+// show nothing.
+describe('the coordinator badge (D-5301)', () => {
+  const badge = (): HTMLElement | null => document.querySelector('.sess-role');
+
+  it("shows 'coordinator' beside the label, inside the row button's accessible name", () => {
+    render(<SessionLine session={s({ role: 'coordinator' })} onOpen={() => {}} onActions={() => {}} />);
+    expect(badge()?.textContent).toBe('coordinator');
+    expect(screen.getByRole('button', { name: /^quiet-mesa.*coordinator$/ })).toBeInTheDocument();
+    expect(badge()!.closest('.sess-open')).not.toBeNull();
+  });
+
+  it('shows nothing for a child', () => {
+    render(<SessionLine session={s({ role: 'child', child: { kind: 'child', runId: 7 } })} onOpen={() => {}} onActions={() => {}} />);
+    expect(badge()).toBeNull();
+  });
+
+  it('shows nothing for a row from an older server (null, or the key absent) or an unknown word', () => {
+    render(<SessionLine session={s({ role: null })} onOpen={() => {}} onActions={() => {}} />);
+    expect(badge()).toBeNull();
+    cleanup();
+    const absent: Record<string, unknown> = { ...s() };
+    delete absent['role'];
+    render(<SessionLine session={absent as unknown as FleetSession} onOpen={() => {}} onActions={() => {}} />);
+    expect(badge()).toBeNull();
+    cleanup();
+    render(<SessionLine session={s({ role: 'parent' as unknown as FleetSession['role'] })} onOpen={() => {}} onActions={() => {}} />);
+    expect(badge()).toBeNull();
+  });
+
+  it('sits beside the repo label when both render, the label first', () => {
+    render(<SessionLine session={s({ role: 'coordinator' })} repo="project-a" onOpen={() => {}} onActions={() => {}} />);
+    const cells = [...document.querySelector('.sess-open')!.children].map((c) => c.className);
+    expect(cells).toEqual(['sess-label', 'sess-repo', 'sess-role']);
+  });
+
+  // jsdom lays nothing out, so "at every width" is held where width is decided:
+  // the stylesheet. The badge keeps its own width (`flex: none`) while the label
+  // ellipsises, and no rule at any breakpoint, skin or theme hides or restyles
+  // it — the phone, laptop and wide rows are the same cell.
+  it('renders at every width: it never shrinks, and no media, skin or theme rule hides it', () => {
+    // Comments stripped first: the rule's own note says `flex: none` in prose.
+    const bare = (t: string): string => t.replace(/\/\*[\s\S]*?\*\//g, '');
+    const css = bare(readFileSync(path.join(__dirname, '../src/fleet/fleet.css'), 'utf8'));
+    const own = [...css.matchAll(/(?:^|\})\s*\.sess-role\s*\{([^}]*)\}/g)].map((m) => m[1]!);
+    expect(own).toHaveLength(1);
+    expect(own[0]).toMatch(/(?:^|;|\s)flex:\s*none\s*;/);
+    const roots = [path.join(__dirname, '../src'), path.join(__dirname, '../../ui/src')];
+    const sheets: string[] = [];
+    const walk = (d: string): void => {
+      for (const e of readdirSync(d, { withFileTypes: true })) {
+        const p = path.join(d, e.name);
+        if (e.isDirectory()) walk(p);
+        else if (p.endsWith('.css')) sheets.push(bare(readFileSync(p, 'utf8')));
+      }
+    };
+    roots.forEach(walk);
+    for (const sheet of sheets) {
+      for (const rule of sheet.match(/[^{}]*\.sess-role\b[^{}]*\{[^}]*\}/g) ?? []) {
+        expect(rule).not.toMatch(/display:\s*none|visibility:\s*hidden/);
+      }
+    }
+  });
+});
+
 // ── child-reclamation wave 5: the child-of-run label ────────────────────────
 //
 // `.sess-held`'s ink register: a short fact, no action. Three answers, never two

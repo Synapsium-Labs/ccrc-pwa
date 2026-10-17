@@ -52,7 +52,7 @@ const session = (id: string): FleetSession => ({
   branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, background: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null,
   unmeasured: [], statusUnmeasured: false, lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null,
-  started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: null,
+  started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, role: 'coordinator', releasedFrom: null,
 });
 
 /** The digest the SERVER computes for its own roster — derived through the
@@ -263,7 +263,9 @@ describe('GET /api/fleet — degraded mode', () => {
     expect(body.sessions[0]?.subagents).toBeNull();
     expect(body.sessions[0]?.graphQueries).toBeNull();
     expect(body).toEqual({
-      sessions: [session('claude-Cached')],
+      // D-5301: an older cache says nothing about the role, so it revives null —
+      // never re-derived from the defaulted `child` (`reviveSessionRole`).
+      sessions: [{ ...session('claude-Cached'), role: null }],
       stale: true,
       downSince: 1700000000000,
     });

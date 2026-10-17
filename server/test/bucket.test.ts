@@ -596,7 +596,7 @@ describe('a Stop that leaves delegated work running (D-5231)', () => {
       branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
       hookState: 'done', askSummary: null, subagents: null, background: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'working', bucketSince: 1000,
       unmeasured: [], statusUnmeasured: false, lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null,
-      started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: null,
+      started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, role: 'coordinator', releasedFrom: null,
     };
     const cached = JSON.parse(JSON.stringify(row)) as Record<string, unknown>;
     delete cached['background'];

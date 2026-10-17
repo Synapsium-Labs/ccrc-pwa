@@ -333,8 +333,18 @@ export const CCD_ARGV = {
   /** `route`, defaulted `null`: the PWA's ordinary add, from an operator who
    *  may have tapped a routing picker before creating the workspace — the
    *  `start`/`enable` rule above for the same reason (flags lead, the
-   *  default keeps every existing call site's argv unchanged). */
-  wsAdd:     (p: string, route: RouteFields | null = null) => argv(['ws-add', ...routeFlags(route), p]),
+   *  default keeps every existing call site's argv unchanged).
+   *
+   *  `dec` (D-5301, coordinator-first spec §8): the PWA "+" says who made the
+   *  workspace, so the lifecycle log's `create` row names the operator's
+   *  device rather than `declared: nothing`. It TRAILS the project, where
+   *  `wsAddWorker` puts its own; `cmd_ws_add`'s strip loop parses both
+   *  positions. The route handler passes `pwaDec(req)`, which is `null` on a
+   *  box whose ccd does not advertise `actor-flags-v1` — and `null` is the
+   *  argv this builder shipped before, token for token, because an old
+   *  `cmd_ws_add` bound a flag's first token as the slug (D-410). */
+  wsAdd:     (p: string, route: RouteFields | null = null, dec: ActorFlags | null = null) =>
+               argv(['ws-add', ...routeFlags(route), p, ...decFlags(dec)]),
   /** The dispatch path's ws-add: a dispatched program worker spawns WITHOUT
    *  --remote-control (the 2026-08-13 ruling, task #37) — declared at
    *  creation, the only moment worker-ness is known (`hold` is written after

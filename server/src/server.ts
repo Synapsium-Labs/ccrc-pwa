@@ -2760,7 +2760,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const body = (req.body ?? {}) as { route?: unknown };
     const routed = parseOperatorRoute(reply, body.route);
     if (routed.reply !== null) return routed.reply;
-    return runCcdOr502(reply, CCD_ARGV.wsAdd(project, routed.route));
+    // The operator's create declares who made it (D-5301): `pwaDec`, the
+    // human-driven routes' one dec, cap-gated so an old ccd gets the bare argv.
+    return runCcdOr502(reply, CCD_ARGV.wsAdd(project, routed.route, pwaDec(req)));
   });
 
   /**
