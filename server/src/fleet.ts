@@ -762,6 +762,9 @@ export async function assembleFleet(
         && hs.event !== null && BACKGROUND_CARRIER_EVENTS.has(hs.event)
         && hs.background !== undefined && hs.background.count > 0
         ? hs.background : null,
+      // D-5237: the registry's record of the last process end, carried as is;
+      // the PWA shows it for an hour (`recentLastEnd`).
+      lastEnd: r.lastEnd,
       // `?? null` and not `?? 0`: no hook data at all and a hook reporting
       // zero reads are two conditions, and `hookstate.ts` already keeps them
       // apart — collapsing them one layer out would undo that on the wire.
