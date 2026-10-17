@@ -184,7 +184,8 @@ describe('POST /api/sessions/:id/interrupt over background-only work (D-5236)', 
 });
 
 // The rule itself, on reads the route cannot assemble: `fleet.ts` ships `background` only on a `done`, so a `working`
-// row that still carries it is reachable only here — the hook-state check must hold on its own, not lean on that.
+// row that still carries it is reachable only here — the hook-state check must hold on its own, not lean on that
+// (D-5343: this case, not the route's `working` one, is what the plan's "ignores the hook state" mutant turns red).
 describe('interruptVerdict (D-5236)', () => {
   const BG = { count: 2, kinds: ['workflow'] };
   const busy = { ok: true as const, word: 'busy', since: T0 };
