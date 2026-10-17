@@ -639,8 +639,8 @@ diff --git a/server/test/ccdWsHelpers.ts b/server/test/ccdWsHelpers.ts
   | T1-12 | the bus keyed on `opts.systemd \|\| opts.tmux` | H18-7, its tmux-only case ("no systemd, no bus") |
   | T1-13 | `stubContainedTool`'s refusal removed | H18-9 ("expected [Function] to throw") |
   | T1-14 | `stubContainedTool`'s `gh` refusal removed (D-5254) | H18-9 only, 1 of 25: "expected [Function] to throw an error" *(worker, measured)* |
-  | T1-15 | `busPath`'s refusal of `;` removed (D-5257, fix round 1) | H18-10 only: the caller's address list is kept *(expected; vitest pending the landing tip)* |
-  | T1-16 | `busPath`'s refusal of `%` removed (D-5257, fix round 1) | H18-11 only: the caller's escaped path is kept *(expected; vitest pending the landing tip)* |
+  | T1-15 | `busPath`'s refusal of `;` removed (D-5257, fix round 1) | H18-10 only, 1 of 27 *(worker, measured at the fix-round tip)* |
+  | T1-16 | `busPath`'s refusal of `%` removed (D-5257, fix round 1) | H18-11 only, 1 of 27 *(worker, measured at the fix-round tip)* |
 
 - [ ] **Step 5: Commit** `test(update): the ccd harness poisons ssh, scp and curl, the user bus under HOME rides systemd, and one door for a functional stub (wave 18, D-5247, D-5248, D-5249)`.
 
@@ -845,8 +845,8 @@ diff --git a/server/test/pool-accounts-route.test.ts b/server/test/pool-accounts
   | T2-3 | `syncInto` reverted to `<home>/bin` | `pool-accounts-route`'s three C1/W1 rows (Step 1's set). [prototype, as the red-first: the same three] |
   | T2-4 | `run()`'s `net: true` dropped | the new row only ("the poison answered the curl: expected false to be true"). The host's curl runs against `example.invalid`, which does not resolve, so nothing is contacted |
   | T2-5 | T2-1 with the `afterEach` guard removed (the control) | only the stub tests that assert a positive side effect: the absence-only rows go green, which is what the guard exists for |
-  | T2-6 | `runFull` drops `net` (fix round 1, review 535 F10) | every `runFull` row, by `assertNoRealTool: ssh resolved to …` *(expected; vitest pending the landing tip)* |
-  | T2-7 | the strays listing drops `net` (F10) | that row only, by `assertNoRealTool: ssh resolved to …` *(expected; vitest pending the landing tip)* |
+  | T2-6 | `runFull` drops `net` (fix round 1, review 535 F10) | the ten `runFull` rows, 10 of 41, by `assertNoRealTool: ssh resolved to /usr/bin/ssh, outside the fixture HOME` *(worker, measured at the fix-round tip)* |
+  | T2-7 | the strays listing drops `net` with an `assertNoRealTool` on its env (F10) | nothing: 41 of 41 green, because the poisons `run()` planted earlier in the same test stay on PATH. So the ruling's other option was taken: the listing asks no `net` (it runs no curl) and carries no assertion *(worker, measured at the fix-round tip)* |
 
 - [ ] **Step 5: Commit** `test(update): the pool-sync curl stubs go through stubContainedTool, and ccd-pool-sync's runners ask net (wave 18, D-5249)`.
 
@@ -1835,7 +1835,7 @@ index 98588f683..78b7d1959 100644
   | T3-8 | either `projected-home` call site reverted to `env: { ...process.env, HOME: … }` | row 2, naming that line. [prototype, on the inline form: the census reddened its line] |
   | T3-9 | `phEnv` drops `net` | `projected-home`'s new row: "assertNoRealTool: ssh resolved to …". The census stays green (a helper call) |
   | T3-10 | `phEnv` drops `systemd` | `projected-home`'s new row: the bus pair and `systemctl` are no longer under HOME |
-  | T3-6b | `runDrRcState`'s env reverted to `{ ...process.env, HOME: home }` (fix round 1, review 535 F11) | every `runbook-holds` row that calls `runDrRcState`, by `assertNoRealTool`; the census stays green, the doctor checks being outside its names *(expected; vitest pending the landing tip)* |
+  | T3-6b | `runDrRcState`'s env reverted to `{ ...process.env, HOME: home }` (fix round 1, review 535 F11) | the two `runbook-holds` rows that call `runDrRcState`, 2 of 23, by `assertNoRealTool: XDG_RUNTIME_DIR=/run/user/<uid> does not name a path inside the fixture HOME`; the census stays green, the doctor checks being outside its names *(worker, measured at the fix-round tip)* |
 
   Fix round 1's census rows (D-5256), each measured standalone *(worker, standalone: node type stripping and a minimal `describe`/`it`/`expect` shim, at the fix-round tip; row numbers: 1 found, 2 ALLOWED, 3 SLICED_ALLOWED, 4 placement, 5 reasons, 6 R14(b)'s spawn, 7 corpus)*. Unmutated: 7 of 7. On `git archive 0a06ebb9a`: row 2 only, the seven predicted hits plus the `ALLOWED` one.
 

@@ -378,11 +378,11 @@ describe('ccd-pool-sync', () => {
     // twelve-line-window reason — this call site inherited the PARENT's HOME
     // and the parent's `gh` credentials before, for a listing that needs
     // neither.
+    // No `net` (review 535 F10, as ruled): the listing runs no curl, and the
+    // poisons `run()` just planted stay on PATH, so an assertion here could
+    // not red on its loss (measured green with `net` dropped).
     const env = ghContainedEnv(h.home, { ...process.env, HOME: h.home },
-      { systemd: true, tmux: true, net: true });
-    // On the binding it spawns with (review 535 F10): the listing runs no curl, but the env it carries
-    // still must not resolve a real one, so dropping `net` above reds here.
-    assertNoRealTool(env, h.home);
+      { systemd: true, tmux: true });
     const strays = execFileSync('bash', ['-c', `ls -a ${reg} | grep -c 'pool-epoch\\.' || true`],
       { encoding: 'utf8', env }).trim();
     expect(strays).toBe('0');
