@@ -249,7 +249,14 @@ These are departures from the ruling or the brief, or from what shipped text at 
   - **Pinned** (`deploy-verify`): D3 runs the prune for real on a fixture `~/ccrc-backups` with three timestamped directories and one hand-made one. With KEEP `0`, `00` or `0000`, nothing is sent, nothing is removed, the newest directory survives, and the run returns 1 with the warning. D3b: KEEP=1 still prunes to the newest directory and leaves the hand-made one. D1b's `0` row (`head -n -0`) became a `1` row.
   - **Measured:** deleting the new statement reds D3 ×3, and nothing else (109 cases).
 
-Reserve: numbers **5144 to 5148**, the worker's, in order, each defined here in the commit that first cites it. 5144 is defined above (the landing round); 5145 to 5148 are unused. Numbers 5149 to 5154 are not used.
+- **D-5145** — *dispatch-live-gate's harness waits for the route's own timer: fake time moves only while the code under test is parked on a fake timer.*
+  - **Ruled** (the operator, 2026-10-17, about 16:50 UTC; see "Added task" under the rulings): this programme fixes a stable-gate risk that is not its own code. The change is test-only, and no file under `server/src` changes.
+  - **The defect:** `server/test/dispatch-live-gate.test.ts` (#489) stepped fake time 100 ms at a time after a FIXED 40 `setImmediate` turns. Under load, the route's real I/O (fs reads, the coordination database, the stubbed `ccd` calls) was still in flight when those turns ended, so fake time ran ahead of the code under test, and the interleaving with the test's own writes moved. The route was not the cause: `waitForMeasuredVerdict` counts its own fake `setTimeout` steps and reads no clock.
+  - **Now:** before every fake step, `advance` and `settle` turn the real event loop until a fake timer is pending (`vi.getTimerCount() > 0`) or the awaited request has settled. Each wait is bounded by 20 s of REAL time (`Date` is not faked) and fails past it. `settle`'s `elapsed` counts only the fake milliseconds really advanced. The lock case waits for its close by the same real-time bound instead of 50 × 40 turns. Every existing assertion is byte-unchanged.
+  - **Pinned:** a new row runs the "absent past the bound" case with every call of the box's `io` delayed by 40 ms of real time (`slowIoMs`). It gets the same 409 `worker-starting`, the same single `ensure` and the same elapsed bounds.
+  - **Measured:** with the fixed 40-turn flush put back, the new row reds ("did not settle within 60000 ms of fake time"), along with five existing cases, at load 107. At load 42 to 43 the original file failed 5 of 16 and then 4 of 16. The fixed file passed 17 of 17 three times in a row, at loads 65, 57 and 49 (and twice more, at load 93).
+
+Reserve: numbers **5144 to 5148**, the worker's, in order, each defined here in the commit that first cites it. 5144 (the landing round) and 5145 (the added task) are defined above; 5146 to 5148 are unused. Numbers 5149 to 5154 are not used.
 
 ## File structure
 
@@ -1554,6 +1561,8 @@ Reserve: numbers **5144 to 5148**, the worker's, in order, each defined here in 
 - **Fences.** The delegation programme's consent (mail 5255) is quoted in the Global Constraints. Its claim is now
   1472, on the same paths plus `deploy/coordination-snapshot.mjs`, `ccd/ccrc-doctor-checks` and the two test files.
   The fences are unchanged. Task 8's wait for run 360 stands.
+
+**Added task (2026-10-17).** By the operator's ruling of 2026-10-17, at about 16:50 UTC, this programme fixes a stable-gate risk that is not its own code. `server/test/dispatch-live-gate.test.ts` (#489) is load-sensitive: its describe "a pane this dispatch started is waited for outside coordMutex" failed in a server shard on both attempts of a full run on `main`. The coordinator added the fix to wave 16 before its scoped review, as a test-only task with no change under `server/src`. It is D-5145.
 
 ## What the worker measured (run 484, 2026-10-16)
 
