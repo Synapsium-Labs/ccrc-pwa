@@ -544,31 +544,45 @@ describe('ask notifications carry actions only where the route would accept them
   /** One session, one watcher, a pane the test drives — so a test can put the
    *  menu up and the envelope down in whichever ORDER it needs, and tick as
    *  many times as it needs. */
-  function askFixture(): {
+  function askFixture(opts: {
+    /** D-5302: the session under test (default `ccrc-pwa/cc-a`, every older case's). */
+    spec?: string;
+    /** D-5302: a real `CoordStore` over the fixture home's `coord.db`, so the HOLD raise site can be reached. */
+    coord?: boolean;
+    notifyLog?: NotifyLog;
+  } = {}): {
     sent: PushPayload[];
     tick: () => Promise<void>;
     showMenu: (text?: string) => void;
     clearMenu: () => void;
     writeAsk: (ask: unknown, state?: string) => void;
+    coord?: CoordStore;
   } {
+    const spec = opts.spec ?? 'ccrc-pwa/cc-a';
+    const id = spec.split('/')[1]!;
     const sent: PushPayload[] = [];
     const push = { notify: async (p: PushPayload) => { sent.push(p); } };
     let pane = 'ready\n❯ \n';
     const home = mkTmp('ccrc-');
-    const info = seedSessions(home, ['ccrc-pwa/cc-a']);
+    const info = seedSessions(home, [spec]);
     const runner: Runner = async (_cmd, args) => {
       if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: `${info.get('cc-a')!.pid}\n`, stderr: '' };
+      if (args[0] === 'list-panes') return { code: 0, stdout: `${info.get(id)!.pid}\n`, stderr: '' };
       if (args[0] === 'capture-pane') return { code: 0, stdout: pane, stderr: '' };
       return { code: 0, stdout: '', stderr: '' };
     };
-    const w = new FleetWatcher({ ...testDeps(home, runner), push: push as never }, new Bus(), 10_000);
+    const coord = opts.coord ? new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db'))) : undefined;
+    const w = new FleetWatcher({
+      ...testDeps(home, runner), push: push as never,
+      ...(coord ? { coord } : {}), ...(opts.notifyLog ? { notifyLog: opts.notifyLog } : {}),
+    }, new Bus(), 10_000, path.join(home, 'state-cache.json'));
     return {
       sent,
       tick: () => w.tick(),
       showMenu: (text: string = MENU_PANE) => { pane = text; },
       clearMenu: () => { pane = 'ready\n❯ \n'; },
-      writeAsk: (ask: unknown, state?: string) => writeHookState(home, 'cc-a', ask, state),
+      writeAsk: (ask: unknown, state?: string) => writeHookState(home, id, ask, state),
+      ...(coord ? { coord } : {}),
     };
   }
 
@@ -744,6 +758,62 @@ describe('ask notifications carry actions only where the route would accept them
     await f.tick();                                   // RC-off: both on screen at once
     expect(f.sent).toHaveLength(1);
     expect(f.sent[0]!.title).toBe('❓ Question');
+  });
+
+  // D-5302 (plan 2026-10-17-coordinator-first-routing, Task 3): 14 of 36 measured ask pushes carried a lone border
+  // glyph as their body, because both raise sites pushed `dialog.title || …` and the scrape's nearest line above the
+  // options was the dialog's box edge. The pane below is that shape: the parsed title is `│`.
+  const GLYPH_MENU_PANE = 'Which colour?\n │\n❯ 1. Red\n  2. Blue\n  3. Green\nEnter to select\n';
+  const GLYPHS = /^[\s\u2500-\u259f]*$/u;
+
+  it('D-5302: a raised ask whose parsed title is `│` and has no envelope carries the fallback body, not the glyph', async () => {
+    const f = askFixture({ spec: 'project-a/project-a-quiet-basin' });
+    await f.tick();                                  // priming: no menu
+    f.showMenu(GLYPH_MENU_PANE);
+    await f.tick();                                  // the menu appears → one ask push
+    expect(f.sent).toHaveLength(1);
+    expect(f.sent[0]!.body).not.toMatch(GLYPHS);
+    expect(f.sent[0]!.body).toBe('Claude has a question');
+  });
+
+  it('D-5302: a raised ask with a question envelope carries the first question, whatever the scraped title', async () => {
+    const f = askFixture({ spec: 'project-a/project-a-quiet-basin' });
+    await f.tick();
+    f.writeAsk({ questions: [{ question: 'Which colour should the badge be?', header: 'Badge', multiSelect: false,
+      options: [{ label: 'Red' }, { label: 'Blue' }] }] });
+    f.showMenu(GLYPH_MENU_PANE);
+    await f.tick();
+    expect(f.sent).toHaveLength(1);
+    expect(f.sent[0]!.body).toBe('Which colour should the badge be?');
+  });
+
+  it('D-5302: a raised ask with an approval envelope carries `tool: summary`', async () => {
+    const f = askFixture({ spec: 'project-a/project-a-quiet-basin' });
+    await f.tick();
+    f.writeAsk({ approval: { tool: 'Bash', summary: 'rm -rf scratch' } });
+    f.showMenu(GLYPH_MENU_PANE);
+    await f.tick();
+    expect(f.sent).toHaveLength(1);
+    expect(f.sent[0]!.body).toBe('Bash: rm -rf scratch');
+  });
+
+  it('D-5302: the HELD raise site builds the same body — the recorded held ask carries the question, not the glyph', async () => {
+    const log = new NotifyLog(path.join(await dir(), 'n.json'));
+    await log.load();
+    const f = askFixture({ spec: 'project-a/project-a-quiet-basin', coord: true, notifyLog: log });
+    const run = f.coord!.openRun({
+      program: 'prog', title: 'Prog', project: 'project-a',
+      wave: 1, waveOf: null, claimedBy: 'project-a-calm-mesa',
+    }) as { id: number };
+    f.coord!.setSession(run.id, 'project-a-quiet-basin');
+    await f.tick();                                  // priming: no menu
+    f.writeAsk(oneQuestion([{ label: 'Red' }, { label: 'Blue' }]));
+    f.showMenu(GLYPH_MENU_PANE);
+    await f.tick();                                  // eligible, has a parent → held, recorded, not pushed
+    expect(f.sent).toEqual([]);
+    const recorded = log.catchUp(log.epoch, 0).events.filter((e) => e.kind === 'ask');
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]!.body).toBe('Which colour?');
   });
 });
 
