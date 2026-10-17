@@ -4056,8 +4056,32 @@ export interface SlashCommand {
  *  was ignored" (the 2026-09-09 clip). Additive, optional: an older reader
  *  ignores it, an older writer omits it.
  *  'limit' — the assistant row Claude Code appends on a 429
- *  (`isApiErrorMessage:true, error:"rate_limit"`; D-2365). */
-export type SystemOrigin = 'resume-prompt' | 'no-response' | 'limit';
+ *  (`isApiErrorMessage:true, error:"rate_limit"`; D-2365).
+ *  'idle-compact' — Claude Code's notice after an idle compaction that
+ *  started no turn (D-5371). */
+export type SystemOrigin = 'resume-prompt' | 'no-response' | 'limit' | 'idle-compact';
+/** `stale-task-strip` (D-5372): a task list whose newest file is older than
+ *  this is a plan left open, not running work — the strip says "N open" and
+ *  "Plan · untouched <age>" rather than "N running". Claude Code rewrites a task
+ *  file on every status change, so a live plan is seconds or minutes old; 6 h
+ *  outlasts any one turn measured. */
+export const TASKS_STALE_MS = 6 * 60 * 60 * 1000;
+/** `idle-compact-marker` (D-5371): the notice Claude Code writes after its
+ *  idle ("sleep") compaction — a `type:"system"`, `subtype:"informational"`
+ *  row whose TOP-LEVEL `content` starts with this sentence (Claude Code
+ *  2.1.302, `igs`, appended by the idle host's own compact callback, outside
+ *  any turn), followed by "turn off with "idleCompaction": false in
+ *  settings.json". That compaction runs on a turn that had already ended and
+ *  starts none, so the row is what says the session is waiting for the
+ *  operator rather than stalled (110 of 111 measured post-compaction
+ *  "stalls", 2026-10-17). Deliberately NOT "Compacted after an hour idle"
+ *  (`ags`): Claude Code yields that one inside the query loop when the
+ *  operator returns (compact_on_return), so it lands inside a turn the
+ *  operator just started and stays dropped as before. The parser matches the
+ *  prefix; a reworded notice degrades to today's drop, never to a false pill. */
+export const IDLE_COMPACT_NOTICE_PREFIXES = [
+  'Compacted while idle',
+] as const;
 /** The sentence Claude Code's default resume prompt is, and every variant —
  *  including ccd's RESUME_PROMPT — begins with. The parser matches the prefix. */
 export const RESUME_PROMPT_PREFIX = 'Continue from where you left off.';
@@ -4288,7 +4312,11 @@ export type SessionStreamMsg =
    *  when both are present. */
   | { type: 'ask'; ask: HookAsk; key: string | null }   // key: answerable via POST /api/sessions/:id/ask; null for approval envelopes
   | { type: 'ask_cleared' }                       // the hook's ask went null, stale, or its hookstate file is gone
-  | { type: 'tasks'; tasks: TaskItem[] }          // the session's task list changed (or first read)
+  | { type: 'tasks'; tasks: TaskItem[];          // the session's task list changed (or first read)
+      /** D-5372: the newest task file `mtimeMs`, epoch ms. OPTIONAL: absent when
+       *  the list has no open item, no stat answered, or the server is older;
+       *  absence renders the strip as it always did. */
+      touchedAt?: number }
   /** This session's own OUTSTANDING mail — `state` restricted server-side to
    *  `queued` or `delivered`, never `acked`/`rejected` (`sessionws.ts`'s
    *  `checkMail`). Read directly off `CoordStore.outstandingMailFor` in-process,
@@ -4363,8 +4391,8 @@ export interface NotifyEvent {
    *  attribution row would land in `run_events` and be seen by nobody (D-1163). Additive: an
    *  older client degrades it to `unknown` through `reviveNotifyEvent`, which is the
    *  degradation this union was given `unknown` for. `update` is a move the update dispatcher
-   *  leased (wave 8 item A) — about no session and no run, recorded, never pushed; `queue` is the landing lane's dequeue notice. */
-  kind: 'ask' | 'done' | 'merged' | 'mail' | 'run' | 'coord' | 'update' | 'queue' | 'unknown';
+   *  leased (wave 8 item A) — about no session and no run, recorded, never pushed; `queue` is the landing lane's dequeue notice; `interrupt` is an Escape or Ctrl-C the console sent, with its source and outcome (D-5237, `INTERRUPT_SOURCES`), recorded, never pushed. */
+  kind: 'ask' | 'done' | 'merged' | 'mail' | 'run' | 'coord' | 'update' | 'queue' | 'interrupt' | 'unknown';
   sessionId: string; title: string; body: string;
   /**
    * WHICH RUN this notification is about, or `null` when it is about none.
@@ -4403,7 +4431,7 @@ export interface CatchUp { epoch: string; seq: number; resync: boolean; events: 
 /** The recognised `NotifyEvent.kind` tokens. Kept private; the door in is
  *  `isNotifyKind` below, the same split `PR_PHASES`/`isPrPhase` use and for
  *  the identical reason (that function's own docstring has the argument). */
-const NOTIFY_KINDS: readonly NotifyEvent['kind'][] = ['ask', 'done', 'merged', 'mail', 'run', 'coord', 'update', 'queue', 'unknown'];
+const NOTIFY_KINDS: readonly NotifyEvent['kind'][] = ['ask', 'done', 'merged', 'mail', 'run', 'coord', 'update', 'queue', 'interrupt', 'unknown'];
 
 /**
  * Use THIS, never `NOTIFY_KINDS.includes(x as NotifyEvent['kind'])` — the
@@ -10453,4 +10481,73 @@ export function parseServerCaps(text: string, nowS: number): ServerCapsParse {
   if (at > nowS) return { ok: false, why: 'future' };
   if (nowS - at > SERVER_CAPS_LEASE_S) return { ok: false, why: 'stale' };
   return { ok: true, at, words };
+}
+
+/** Why an ask row was MINTED `released` rather than held (D-5290,
+ *  coordinator-first routing spec §5.2) — the row's `releaseReason`, `null`
+ *  on every row the hold minted. Rides `GET /api/asks` as an additive field.
+ *
+ *  `parent-not-live`          the parent has no registry row, is archived or
+ *                             stopped, or the dead-coordinator predicate
+ *                             measures it dead.
+ *  `parent-project-mismatch`  the run's claimant is a session of another
+ *                             project (a run opened before the attributed
+ *                             binding, spec §6.4).
+ *  `unknown`                  a token this build does not know, read off disk;
+ *                             never written. */
+export type AskReleaseReason = 'parent-not-live' | 'parent-project-mismatch' | 'unknown';
+
+export const ASK_RELEASE_REASON_MAP: Record<AskReleaseReason, true> = {
+  'parent-not-live': true, 'parent-project-mismatch': true, unknown: true,
+};
+
+export function isAskReleaseReason(v: unknown): v is AskReleaseReason {
+  return typeof v === 'string' && (Object.keys(ASK_RELEASE_REASON_MAP) as string[]).includes(v);
+}
+
+// ── Interrupt sources (D-5237's first half; plan 2026-10-16, Task 7; spec §5.5) ────────────────────────────────────
+// APPENDED at the very end, for the reason the block above gives (README and the specs cite this file by line).
+//
+// Every Escape (or Ctrl-C) the console sends is recorded as a `NotifyEvent` of kind `interrupt`, recorded and never
+// pushed, whose body is `source=<InterruptSource> outcome=<InterruptOutcome>` (`interruptEventBody`, the one writer;
+// `parseInterruptEventBody`, the one reader). The route's three sources are the PWA's controls; the drawer's two are
+// raw pty input frames that are exactly ESC or exactly Ctrl-C (`server/src/interruptlog.ts`); `unknown` is what any
+// other or absent route `source` degrades to, and what a reader makes of a token it does not know.
+
+/** Who sent the interrupt, and through which door. The value says which door may claim it: `route` sources arrive as
+ *  `POST /api/sessions/:id/interrupt`'s optional `source`, `drawer` sources are only ever minted by the pty relay,
+ *  and `unknown` is the degrade. */
+const INTERRUPT_SOURCE_MAP = {
+  keycap: 'route', 'escape-key': 'route', deny: 'route',
+  'drawer-escape': 'drawer', 'drawer-ctrl-c': 'drawer',
+  unknown: 'degrade',
+} as const satisfies Record<string, 'route' | 'drawer' | 'degrade'>;
+export type InterruptSource = keyof typeof INTERRUPT_SOURCE_MAP;
+export const INTERRUPT_SOURCES: readonly InterruptSource[] = Object.keys(INTERRUPT_SOURCE_MAP) as InterruptSource[];
+/** The sources a client may name in the interrupt route's body. */
+export type InterruptRouteSource = { [K in InterruptSource]: (typeof INTERRUPT_SOURCE_MAP)[K] extends 'route' ? K : never }[InterruptSource];
+export function isInterruptSource(v: unknown): v is InterruptSource {
+  return typeof v === 'string' && Object.prototype.hasOwnProperty.call(INTERRUPT_SOURCE_MAP, v);
+}
+/** The route's reader of its body's `source`: a route source is kept, anything else (absent, another type, a token
+ *  this build does not know, or a drawer source no client may claim) is `unknown`, never a 400. */
+export function interruptRouteSource(v: unknown): InterruptSource {
+  return isInterruptSource(v) && INTERRUPT_SOURCE_MAP[v] === 'route' ? v : 'unknown';
+}
+
+/** What the interrupt did: `sent` (the key was pressed), or the route's refusal code (zero keys). */
+export type InterruptOutcome = 'sent' | InterruptRefusal;
+export function isInterruptOutcome(v: unknown): v is InterruptOutcome {
+  return v === 'sent' || (typeof v === 'string' && (INTERRUPT_REFUSALS as readonly string[]).includes(v));
+}
+/** The one writer of an `interrupt` event's body. */
+export function interruptEventBody(source: InterruptSource, outcome: InterruptOutcome): string {
+  return `source=${source} outcome=${outcome}`;
+}
+/** The one reader of an `interrupt` event's body: null off its grammar; a token this build does not know is
+ *  `unknown` (a newer server's source or outcome on an older client). */
+export function parseInterruptEventBody(body: string): { source: InterruptSource; outcome: InterruptOutcome | 'unknown' } | null {
+  const m = /^source=(\S+) outcome=(\S+)$/.exec(body);
+  if (m === null) return null;
+  return { source: isInterruptSource(m[1]) ? m[1] : 'unknown', outcome: isInterruptOutcome(m[2]) ? m[2] : 'unknown' };
 }
