@@ -57,11 +57,12 @@
 // And (D-5256, named after review 535, none of them in the tree today): a script path followed by its arguments
 // inside one string (`` `bash ${ROOT}/ccd/ccrc version` ``, `` `. ${ROOT}/ccd/ccrc; fn` ``), which a looser match
 // would confuse with the sibling scripts sharing that prefix; a directory binding joined in a template
-// (`` `${SCRIPTS_DIR}/ccrc` ``); the namespace spellings `require('node:child_process')`, `await import(…)` and a
-// combined default-and-named import (`import cp, { spawnSync as s }`); and scope. A name resolves by text, not by
-// lexical scope, and a destructured binding (`const { env } = setup(…)`) is never seen, so a contained destructured
-// env read after an unrelated bare `const env` in another function is a false hit, and the mirror case, a bare
-// destructured env read after an unrelated contained `const env`, is missed.
+// (`` `${SCRIPTS_DIR}/ccrc` ``); a joined array concatenated further (`[…].join('\n') + '\n'`); the namespace
+// spellings `require('node:child_process')`, `await import(…)` and a combined default-and-named import (`import cp,
+// { spawnSync as s }`); and scope. A name resolves by text, not by lexical scope, and a destructured binding (`const
+// { env } = setup(…)`) is never seen, so a contained destructured env read after an unrelated bare `const env` in
+// another function is a false hit, and the mirror case, a bare destructured env read after an unrelated contained
+// `const env`, is missed.
 //
 // The script names are built from fragments below, never written as two quoted adjacent segments:
 // `single-definition.test.ts`'s scan allows exactly one file to spell the ccd script's path that way.
@@ -326,15 +327,17 @@ function joinLike(code: string): boolean {
 
 /** The bindings a file decides are a script path or the scripts' directory, closed over aliases within the file, and
  *  the `for … of` variables over a list naming a script, each with its loop body's extent. A name resolves PER
- *  BINDING, as `slicedAt`'s do: to its nearest earlier binding, else (a function declared above a module-level
- *  `const`) the first binding of that name in the file, else an import (D-5256). So a second, unrelated binding that
+ *  BINDING, as `slicedAt`'s do: to its nearest earlier binding, else an import, else (a function declared above a
+ *  module-level `const`) the first binding of that name in the file (D-5256). So a second, unrelated binding that
  *  reuses a script binding's name is judged on its own initialiser. */
 function namesOf(s: Src, imported: Paths): Names {
   const bs = bindingsOf(s);
   const scriptAt = new Set<number>();
   const dirAt = new Set<number>();
-  const bindingOf = (name: string, at: number): Binding | undefined =>
-    nearest(bs, name, at) ?? bs.find((x) => x.name === name);
+  // With no earlier binding, an IMPORTED name is the import: an import and a module-level `const` of one name cannot
+  // coexist, so a later binding of it sits in an inner scope and must not blind the uses before it.
+  const bindingOf = (name: string, at: number): Binding | undefined => nearest(bs, name, at)
+    ?? (imported.scripts.has(name) || imported.dirs.has(name) ? undefined : bs.find((x) => x.name === name));
   const isScript = (name: string, at: number): boolean => {
     const b = bindingOf(name, at);
     return b ? scriptAt.has(b.at) : imported.scripts.has(name);
@@ -550,7 +553,6 @@ function parentWins(inner: string, parent: RegExp): boolean {
 function bareEnv(s: Src, a: number, b: number, bs: Binding[], hops = 0): Shape | null {
   const expr = stripCast(s.code.slice(a, b));
   if (expr === 'process.env') return 'env: process.env';
-  if (expr === 'undefined') return 'no env'; // node reads `env: undefined` as the parent's env (D-5256)
   if (/^Object\s*\.\s*assign\s*\(/.test(expr)) {
     const o = s.code.indexOf('(', s.code.indexOf('assign', a));
     const inner = s.code.slice(o, closeOf(s.code, o) + 1);
@@ -602,38 +604,60 @@ function identEnv(s: Src, name: string, at: number, bs: Binding[], hops: number)
  *  cannot erase a bare `env:` before it (D-5256). The initial `no env` is a default, not a verdict. A followed spread
  *  that names no env changes nothing. */
 function optsEnv(s: Src, a: number, b: number, bs: Binding[], hops: number): Shape | null {
-  if (hops > 3) return null;
+  return optsVerdict(s, a, b, bs, hops).shape;
+}
+/** `optsEnv` with whether the env was DECIDED (an `env` key or shorthand, at any depth of followed spreads) or is
+ *  only the `no env` default or undecided, so a followed spread that decided nothing keeps an outer verdict too. */
+function optsVerdict(
+  s: Src, a: number, b: number, bs: Binding[], hops: number,
+): { shape: Shape | null; decided: boolean } {
+  if (hops > 3) return { shape: null, decided: false };
   const opt = stripCast(s.code.slice(a, b));
   if (IDENT.test(opt)) {
     const bind = nearest(bs, opt, a);
-    return bind ? optsEnv(s, bind.init[0], bind.init[1], bs, hops + 1) : null; // a parameter: its caller's to pin
+    // A parameter: its caller's to pin.
+    return bind ? optsVerdict(s, bind.init[0], bind.init[1], bs, hops + 1) : { shape: null, decided: false };
   }
-  if (!opt.startsWith('{')) return opt.startsWith('[') || /^['"`]/.test(opt) ? 'no env' : null;
+  if (!opt.startsWith('{')) {
+    return { shape: opt.startsWith('[') || /^['"`]/.test(opt) ? 'no env' : null, decided: false };
+  }
   const o = s.code.indexOf('{', a);
   let result: Shape | null = 'no env';
   let decided = false;
   for (const [pa, pb] of partsOf(s.code, o, closeOf(s.code, o))) {
     const p = s.code.slice(pa, pb).trim();
-    if (/^env\s*:/.test(p)) { result = bareEnv(s, pa + s.code.slice(pa, pb).indexOf(':') + 1, pb, bs); decided = true; }
-    else if (p === 'env') { result = identEnv(s, 'env', pa, bs, 0); decided = true; }
+    if (/^env\s*:/.test(p)) {
+      const v = pa + s.code.slice(pa, pb).indexOf(':') + 1;
+      // node reads `env: undefined` as the parent's env (D-5256); only as the key's own value, never a spread's.
+      result = stripCast(s.code.slice(v, pb)) === 'undefined' ? 'no env' : bareEnv(s, v, pb, bs);
+      decided = true;
+    } else if (p === 'env') { result = identEnv(s, 'env', pa, bs, 0); decided = true; }
     else if (p.startsWith('...')) {
       const name = p.slice(3).trim();
       const bind = IDENT.test(name) ? nearest(bs, name, pa) : undefined;
-      if (!bind) { if (!decided) result = null; continue; }
-      const r = optsEnv(s, bind.init[0], bind.init[1], bs, hops + 1);
-      if (r !== 'no env') { result = r; decided = true; }
+      const r = bind ? optsVerdict(s, bind.init[0], bind.init[1], bs, hops + 1) : { shape: null, decided: false };
+      if (r.decided) { result = r.shape; decided = true; } else if (r.shape === null && !decided) result = null;
     }
   }
-  return result;
+  return { shape: result, decided };
 }
 /** A callback argument: an arrow function or a `function` expression. */
 const CALLBACK = /^(?:async\s+)?(?:function\b|(?:\([^()]*\)|[A-Za-z_$][\w$]*)\s*(?::[^=]*)?=>)/;
-/** The env of a spawn call: its last argument when it has two or more, else none. A trailing callback is not the
- *  options (`exec(cmd, cb)`, `execFile('bash', [s], cb)`): it is dropped first, so no options reads as no env
- *  (D-5256). */
+/** A callback, inline or named: an identifier bound to an arrow or `function` expression, or a declared function. */
+function isCallback(s: Src, a: number, b: number, bs: Binding[]): boolean {
+  const arg = s.code.slice(a, b).trim();
+  if (CALLBACK.test(arg)) return true;
+  if (!IDENT.test(arg)) return false;
+  const bind = nearest(bs, arg, a);
+  if (bind) return CALLBACK.test(s.code.slice(...bind.init).trim());
+  return new RegExp(`\\bfunction\\s*\\*?\\s*${pat(arg)}\\s*\\(`).test(s.code);
+}
+/** The env of a spawn call: its last argument when it has two or more, else none. A trailing callback, inline or
+ *  named, is not the options (`exec(cmd, cb)`, `execFile('bash', [s], cb)`): it is dropped first, so no options reads
+ *  as no env (D-5256). */
 function envOf(s: Src, open: number, close: number, bs: Binding[]): Shape | null {
   let parts = partsOf(s.code, open, close);
-  if (parts.length >= 2 && CALLBACK.test(s.code.slice(...parts[parts.length - 1]!).trim())) parts = parts.slice(0, -1);
+  if (parts.length >= 2 && isCallback(s, ...parts[parts.length - 1]!, bs)) parts = parts.slice(0, -1);
   if (parts.length < 2) return 'no env';
   const [a, b] = parts[parts.length - 1]!;
   return optsEnv(s, a, b, bs, 0);
@@ -775,6 +799,17 @@ const CORPUS: Src[] = [
     'exec(`bash ${CCRC}`, (e) => {}); // expect: script no env',
     "execFile('bash', [CCRC], (e) => {}); // expect: script no env",
     "spawnSync('bash', [CCRC], { env: undefined }); // expect: script no env",
+    "const cb = (e) => {}; exec(`bash ${CCRC}`, cb); // expect: script no env",
+    "function cb2() {} execFile('bash', [CCRC], cb2); // expect: script no env",
+    "const o2 = { timeout: 5, ...(c ? {} : { x }) }; spawnSync('bash', [CCRC], { env: process.env, ...o2 }); // expect: script env: process.env",
+    "let e3 = undefined; spawnSync('bash', [CCRC], { env: { ...ghContainedEnv(d), ...e3 } });",
+  ]),
+  // An imported script name stays the import before a later, inner binding of the same name (D-5256).
+  fixture('fixture/test/shadow.test.ts', [
+    "import { spawnSync } from 'node:child_process';",
+    "import { CCRC } from './paths.js';",
+    "spawnSync('bash', [CCRC], { env: process.env }); // expect: script env: process.env",
+    "function later() { const CCRC = 'x'; return CCRC; }",
   ]),
   // Per binding, not per name (D-5256): the second `script` is not a script, so its bare spawn is no hit.
   fixture('fixture/test/rebind.test.ts', [

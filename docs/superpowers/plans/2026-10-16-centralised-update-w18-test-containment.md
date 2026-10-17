@@ -261,7 +261,8 @@ These are departures from the brief, the ledger, or what shipped text at `256b25
   - **The plan:** Task 3's census, D-5250's spellings, and the header's claim of "every spawn of the real ccd or ccrc script".
   - **Read by the review** (standalone): each shape above was missed on a synthetic input, and F1's shape and F7's are live in the tree on contained spawns (six and four sites), so a revert of any of them to the parent's env would not red. Four detector arms had no corpus line, so deleting them redded nothing (F2).
   - **The change:** the rules above, a corpus line for each, and for each of F2's arms, and a pin on the corpus's unplaced list for the PROGRAM rule's "the script itself" arm (kept, not deleted). `bashPath` joins `RUNNERS`. Rows T3-11 to T3-26, measured standalone. The ten new script spawns are all contained, and `ALLOWED` and `SLICED_ALLOWED` are unchanged.
-  - **Named, not fixed** (the header's blind spots): a script path followed by its arguments in one string (F8(3)), a directory binding joined in a template, the three namespace spellings (F8(4)), and lexical scope and destructuring, both ways (F9).
+  - **From the Opus per-task review of this round** (none live in the tree): the first-binding fallback blinded an imported name used before a later, inner binding of it (M1), so an import now wins when no binding precedes the use; only an inline callback was dropped (M2), so a named one is too; a followed spread that decided nothing could still overwrite a decided env (M3), so the verdict now carries whether it was decided; and reading `undefined` as bare inside `bareEnv` made a spread of an `undefined` binding after a builder a false hit (M4), so it is read only as the `env` key's own value. Rows T3-27 to T3-30. A joined array concatenated further (M5) is named.
+  - **Named, not fixed** (the header's blind spots): a script path followed by its arguments in one string (F8(3)), a directory binding joined in a template, a joined array concatenated further (M5), the three namespace spellings (F8(4)), and lexical scope and destructuring, both ways (F9).
 - **D-5257** — *`busPath` refuses a bus value that holds `;` or `%`, so `busUnder` answers false (the fixture pair wins in `ghContainedEnv`) and `assertNoRealTool` throws* (the worker, fix round 1, from review 535's F4, as the coordinator ruled).
   - **The plan:** Task 1 made `busUnder` a GATE (a caller pair it accepts is kept), but it inherited `busPath`'s grammar, which reads only the first `unix:` address and resolves the path lexically.
   - **Read by the review** (node against the real module): `unix:path=<home>/bus;unix:path=/run/user/<uid>/bus` was kept although a D-Bus client falls through to the second address, and `unix:path=<home>/%2e%2e/%2e%2e/run/user/<uid>/bus` was kept although D-Bus unescapes it and `path.resolve` does not. No test passes either today.
@@ -1853,10 +1854,14 @@ index 98588f683..78b7d1959 100644
   | T3-20 | `namesAt` drops the inline directory join (F7) | row 7 only |
   | T3-21 | the object-literal arm returns null on any builder again (F5) | row 7 only: the spread after the builder is missed |
   | T3-22 | the object-literal arm follows a spread before the builder (F5) | row 7 only: `{ ...e2, ...ghContainedEnv(d) }` becomes a hit |
-  | T3-23 | an unfollowable spread erases a decided verdict again (F6) | row 7 only |
-  | T3-24 | `envOf` no longer drops a trailing callback (F8(1)) | row 7 only |
-  | T3-25 | `env: undefined` no longer bare (F8(2)) | row 7 only |
+  | T3-23 | a spread that decided nothing erases a decided verdict again (F6) | row 7 only |
+  | T3-24 | `envOf` no longer drops a trailing callback, inline or named (F8(1)) | row 7 only |
+  | T3-25 | `env: undefined` as the key's value no longer bare (F8(2)) | row 7 only |
   | T3-26 | `'sh'` added to `RUNNERS` (the unplaced pin) | rows 4 and 7: "'sh' is placed but no spawn uses it", and the corpus's unplaced list |
+  | T3-27 | with no earlier binding, a name falls back to the file's first binding before its import (M1) | row 7 only: the corpus `shadow` line |
+  | T3-28 | a NAMED callback is no longer recognised (M2) | row 7 only |
+  | T3-29 | a followed spread that decided nothing overwrites a decided verdict (M3) | row 7 only |
+  | T3-30 | `undefined` read as bare anywhere `bareEnv` looks, a spread included (M4) | row 7 only: `{ ...ghContainedEnv(d), ...e3 }` becomes a false hit |
 
   The whole tree, `b5b83ad66` against the fix-round tip *(worker, standalone)*: 854 sources and 1215 spawns both times; script spawns 181 → 191, sliced 24 → 24, hits 1 → 1 (`ccrc-doctor.test.ts:8375`), sliced hits 12 → 12, unplaced 0 → 0. The ten new script spawns are all contained: `ccrc-doctor.test.ts:4260`, `:5201`, `:5389` (F1, an array `.join`), `:13878`, `:14545`, `:14791`, `:14819` (F7), `ccrc-models.test.ts:461`, `ccrc-token-sync.test.ts:847` (program `bashPath`, now in `RUNNERS`) and `doctor-box-token.test.ts:76` (F1). No site stopped being one (`runbook-holds.test.ts`' spawn moved from `:158` to `:160`). No `ALLOWED` or `SLICED_ALLOWED` entry changed.
 
