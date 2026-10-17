@@ -74,7 +74,8 @@ export const CLAIM_DATA_LINE_ERE = String.raw`^data = "\{\\"code\\":\\"[A-Za-z0-
  *    each line starting `header = "`, the name `[A-Za-z0-9-]+`, the value holding no `"`, no `\` and no control
  *    character; an EMPTY config passes too. Nothing in-tree sends one now (notify.sh exits 0 before curl when it has no token, D-4393,
  *    and ccrc-api, ccrc-token-sync and the sync scripts always send a header or a data line); the allowance is kept
- *    because an empty config can name nothing, and a closed stdin reads as one. Since the box-token lifecycle
+ *    because an empty config can name nothing (a CLOSED stdin reads as one under dash; under bash, macOS's /bin/sh,
+ *    `cfg=$(cat)` hangs instead: it never passes, and leaves no refusal record — wave 18, R23(a)). Since the box-token lifecycle
  *    (wave 1, Task B1) ONE more line shape passes: `ccrc token sync`'s claim body, `CLAIM_DATA_LINE_ERE` above — a
  *    `data = "…"` line that is exactly `{"code":<43 base64url>,"nodeId":<lowercase uuid>}` with its quotes escaped,
  *    so it names no file (no leading `@`), no URL and no other field. Any other key (`url`, `proxy`,
@@ -135,7 +136,9 @@ export function loopbackCurlFront(realCurl: string): string {
     // only newlines reads as the empty config. An EMPTY config passes (nothing in-tree sends one now: notify.sh exits before curl
     // when it has no token; it is allowed because it can name nothing), and a second `-K -` is refused. The config is never logged: a refusal records argv only.
     // `cat`'s own status is deliberately not a verdict: what the check sees is exactly what is re-fed, so a read that
-    // fails part-way checks and feeds the same prefix (a closed stdin is an empty config, and passes).
+    // fails part-way checks and feeds the same prefix (a closed stdin is an empty config under dash, and passes; under
+    // bash the substitution's pipe lands on fd 0, `cat` blocks reading a pipe whose only writer is itself, and the
+    // front hangs: it never passes, and leaves no refusal record).
     'cfg=; have_cfg=',
     // FAILS CLOSED (wave 13 fix round 1, review 294 F1): grep -qv exits 1 only when NO line falls outside the rule, and
     // that is the one status that passes. 0 is a line outside the rule; 2 (an error) and 127 (no grep on PATH) are a
@@ -173,21 +176,46 @@ export function loopbackCurlFront(realCurl: string): string {
   ].join('\n') + '\n';
 }
 
-/** Where a bus env var points, as a path: the `path=` of a `unix:` address, or the bare value (XDG_RUNTIME_DIR). */
+/** Where a bus env var points, as a path: the `path=` of a `unix:` address, or the bare value (XDG_RUNTIME_DIR).
+ *  A value with `;` or `%` answers null, so `busUnder` is false and `assertNoRealTool` throws (wave 18, D-5257): a
+ *  `;`-separated address list falls through to a LATER address (`unix:path=<home>/bus;unix:path=/run/user/1000/bus`),
+ *  and D-Bus unescapes `%2e%2e` where `path.resolve` does not. The match below reads the first address only. */
 function busPath(name: string, value: string): string | null {
+  if (/[;%]/.test(value)) return null;
   if (name === 'XDG_RUNTIME_DIR') return value;
   const m = /^unix:(?:[^,]*,)*path=([^,]+)/.exec(value);
   return m ? m[1]! : null;
 }
 
+/** The one "inside the fixture HOME" predicate: the path itself or under it, for HOME as given or its realpath
+ *  (macOS's `/var` is `/private/var`). `assertNoRealTool` and `busUnder` both read it (wave 18). */
+export function insideOf(home: string): (p: string) => boolean {
+  const homes = [path.resolve(home), fs.realpathSync(home)];
+  return (p) => homes.some((h) => p === h || p.startsWith(h + path.sep));
+}
+
+/** True when BOTH bus variables are set and name paths inside `home`: a fixture bus the test made itself, which
+ *  `ghContainedEnv` keeps (wave 18, D-5248). Exactly the condition `assertNoRealTool` refuses the negation of.
+ *  A value with `;` or `%` is refused (`busPath`, D-5257). KNOWN LIMIT, not fixed: neither this nor `assertNoRealTool`
+ *  takes a realpath of the bus value, so a path under HOME that is a SYMLINK to the real runtime dir passes. */
+export function busUnder(env: NodeJS.ProcessEnv, home: string): boolean {
+  const inside = insideOf(home);
+  return (['XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS'] as const).every((name) => {
+    const v = env[name];
+    const p = v === undefined || v === '' ? null : busPath(name, v);
+    return p !== null && inside(path.resolve(p));
+  });
+}
+
 /** THROWS unless, under `env`, every CONTAINED_TOOLS name resolves to NOTHING or to a file whose REALPATH is inside
  *  realpath(home) — a symlink from the fixture to a real binary fails — and unless XDG_RUNTIME_DIR and
  *  DBUS_SESSION_BUS_ADDRESS are both SET and name a path inside home. One `/bin/sh -c 'command -v …'` per name; the
- *  resolved file is never executed. It reads RESOLUTION: a stub under home that itself execs a real binary is that
+ *  resolved file is never executed. A bus value with `;` or `%` is refused (D-5257), but a SYMLINK under home that
+ *  points at the real runtime dir passes: the bus value is checked lexically, never by realpath (known limit, not
+ *  fixed). It reads RESOLUTION: a stub under home that itself execs a real binary is that
  *  stub's own contract (the rsync recorder's and the loopback curl front's are two), not this check's. */
 export function assertNoRealTool(env: NodeJS.ProcessEnv, home: string): void {
-  const homes = [path.resolve(home), fs.realpathSync(home)];
-  const inside = (p: string): boolean => homes.some((h) => p === h || p.startsWith(h + path.sep));
+  const inside = insideOf(home);
   for (const name of ['XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS']) {
     const v = env[name];
     if (v === undefined || v === '') {
