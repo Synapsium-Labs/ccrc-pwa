@@ -2995,8 +2995,32 @@ case "$event" in
     # shape this file can fail in, since the server reads the state it writes.
     CARD_GRAPH=""; CARD_HOLD=""; CARD_CCRC=""; CARD_COMPACT=""; CARD=""
     COMPACT_SERVE_FD=""; COMPACT_SERVE_NONCE=""
+    # THE ROLE SUBJECT (manual-sessions-are-coordinators, D-5301; spec 2026-10-17 §8). Every session that is
+    # not a dispatched child is its project's coordinator. THE ROLE IS DERIVED, NEVER MARKED: `.child` is
+    # written only by a dispatch (`ws-add --no-rc --child <run>`), so every path the operator creates a
+    # session by (the PWA "+", the create-session and start-programme sheets, the CLI) leaves a row without
+    # it. It reads exactly two names, `$REG/<id>.child` and `$REG/<id>.hold`, writes none and quotes no
+    # registry byte. EXISTENCE, NOT CONTENT: a directory or an unreadable file still counts as present (the
+    # reading the merge deny and `cmd_ws_rm` give them), so doubt is silence and a child never reads it.
+    # ONCE PER CONTEXT, BY SOURCE: a `resume` or `fork` carries the transcript that already received it, so
+    # it says nothing there (no "shown" marker exists or is added); startup, clear, compact and a
+    # source-less start are fresh or rebuilt contexts. Mutually exclusive with every held sentence, so
+    # `CARD_MAX_CHARS`'s structural worst case (graphify + held case A + co-tenant) is unchanged.
+    # DEFINED HERE, in the arm, not beside `_hook_hold_card`: nothing new goes above the tail line
+    # (D-3615), and every line added up there moves the frozen compaction-card corpus's anchors.
+    _hook_role_card() {
+      CARD_ROLE=""
+      [ -e "$CCRC_CARD_OFF" ] && return 0
+      case "$src" in resume|fork) return 0 ;; esac
+      [ -e "$REG/$id.child" ] && return 0
+      [ -e "$REG/$id.hold" ] && return 0
+      CARD_ROLE="ccrc-role: You are a coordinator for this project. For work worth splitting, run the \`ccrc-coordinator\` skill and dispatch; your children's questions and permission prompts come to you first; your own go to the operator."
+      return 0
+    }
+    CARD_ROLE=""
     _hook_graph_card || true
     _hook_hold_card  || true
+    _hook_role_card  || true
     _hook_ccrc_card  || true
     # THE FOURTH SUBJECT, compact only (compaction-card spec §3.3): a card
     # describes the compacted context and nothing else, so startup, resume
@@ -3005,6 +3029,7 @@ case "$event" in
     [[ "$src" == compact ]] && { _hook_compact_card || true; }
     CARD="$CARD_GRAPH"
     [ -z "$CARD_HOLD" ] || CARD="${CARD:+$CARD }$CARD_HOLD"
+    [ -z "$CARD_ROLE" ] || CARD="${CARD:+$CARD }$CARD_ROLE"
     [ -z "$CARD_CCRC" ] || CARD="${CARD:+$CARD }$CARD_CCRC"
     # The stamp follows the PRINT, never the intent: only an emitter that
     # returned 0 with a compact subject in hand records `served`.
