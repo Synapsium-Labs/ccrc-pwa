@@ -348,9 +348,9 @@ describe('Task 7: the migrated readers and the six production assembleFleet call
     expect(calls.map((c) => `${c.file} ${c.records}`).sort()).toEqual([
       'coord/routes.ts reg.listed ? reg.records : []',   // the claims conflict
       'coord/routes.ts reg.records',                     // GET /api/peers
-      'server.ts [rec]',                                 // liveRowFor, the archive door's busy read
       'server.ts reg.records',                           // GET /api/fleet
       'server.ts reg.records',                           // the ws cold start
+      'turnverdict.ts [rec]',                            // liveRowFor, the archive door's busy read
       'watch.ts records',                                // tick
     ]);
     expect(calls.filter((c) => c.records === 'undefined' || c.records === '<absent>'),

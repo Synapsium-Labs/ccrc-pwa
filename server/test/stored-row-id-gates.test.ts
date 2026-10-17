@@ -73,7 +73,7 @@ const direct = (home: string, run: Runner) => {
   const closeDeps: CloseRunDeps = { coord, io, cfg: base.cfg, runCcd: base.runCcd };
   const dispatchDeps: DispatchRunDeps = {
     coord, io, cfg: base.cfg, runCcd: base.runCcd, tmux: base.tmux, queue: base.queue,
-    configDir: (w: string) => configDirFor(base.cfg, w),
+    configDir: (w: string) => configDirFor(base.cfg, w), turnVerdict: async () => 'idle' as const,
   };
   return { base, coord, closeDeps, dispatchDeps, listings: (): number => listings };
 };

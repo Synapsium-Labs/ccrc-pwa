@@ -332,7 +332,7 @@ describe('one refused row wedges nothing fleet-wide (Review Focus 3)', () => {
       return { code: 0, stdout: '', stderr: '' };
     };
     const base = testDeps(home, run);
-    const deps = { ...base, coord, configDir: (w: string) => configDirFor(base.cfg, w) } as DispatchRunDeps;
+    const deps = { ...base, coord, configDir: (w: string) => configDirFor(base.cfg, w), turnVerdict: async () => 'idle' as const } as DispatchRunDeps;
 
     expect(await dispatchRun(deps, opened.id, 'go', undefined))
       .toMatchObject({ ok: true, resumed: true, sessionId: GOOD });
