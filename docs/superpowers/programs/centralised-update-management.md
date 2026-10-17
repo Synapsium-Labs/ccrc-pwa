@@ -1793,6 +1793,11 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       and 12:51 (#487, #488, #485 and #489) and stay unapplied under `auto=stable`. STATUS: fleet and server
       v0.0.218, newest v0.0.222, intent dev/auto=stable, backups fleet 188M/server 786M, disk free fleet 216G/work
       volume 114G/server 32G, no anomalies.
+    - **2026-10-17 13:58 UTC:** a tap moved both boxes from v0.0.218 to v0.0.221, read from the feed as "requested
+      update" (fleet 13:14:46 to 13:16:50, doctor 34/6/0; server 13:17:16 to 13:17:42, restarted at 13:17:29, doctor
+      26/0/0); the fleet sweep skipped the same four failed supervisors. v0.0.223 released at 13:21:30 (#429, B1's
+      fix) and stays unapplied under `auto=stable`. STATUS: fleet and server v0.0.221, newest v0.0.223, intent
+      dev/auto=stable, backups fleet 189M/server 794M, disk free fleet 215G/work volume 113G/server 32G, no anomalies.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
