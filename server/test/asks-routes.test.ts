@@ -416,7 +416,7 @@ describe('POST /api/asks/:id/release', () => {
       options: QUESTION.options.map((o) => o.label), now,
     });
     heldMap(built.w).set(CHILD, {
-      until: now + 120_000, askId: id, answeringSince: null,
+      until: now + 180_000, askId: id, answeringSince: null,
       ev: { kind: 'ask', sessionId: CHILD, project: 'demo', title: 'question needs you',
         body: QUESTION.question, tag: `ask-${CHILD}` },
     });
