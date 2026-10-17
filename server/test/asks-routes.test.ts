@@ -1005,4 +1005,53 @@ describe('late answer wins; declined (D-5289)', () => {
     expect((await by(id, 'answer', { optionIndexes: [0] })).statusCode).toBe(200);
     expect(sent.filter((p) => p.tag === `ask-${KID}`)).toEqual([]);
   });
+
+  // The refused-press rollback after a lapse goes back to `'released'`, where
+  // the take found it (`untakeAsk(id, taken.from)`), not to `'held'`: a
+  // lapsed row in `'held'` has no `heldAsks` entry, so the sweep would never
+  // settle it and the chip would offer a pre-emption whose push already fired.
+  it('a refused late press goes back to released, and a good answer then succeeds and replaces the notification', async () => {
+    const { coord, w, id, sent, calls } = await setup(Date.now());
+    await w.sweepAsks();
+    expect(okAsk(coord.askById(id))!.state).toBe('released');
+
+    // Out of range for a 2-option question: `answerAsk` refuses before any key.
+    const bad = await by(id, 'answer', { optionIndexes: [5] });
+    expect(bad.statusCode).toBe(409);
+    expect(bad.json()).toEqual({ ok: false, error: 'range' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+    expect(okAsk(coord.askById(id))!.state).toBe('released');
+
+    const good = await by(id, 'answer', { optionIndexes: [1] });
+    expect(good.statusCode).toBe(200);
+    expect(okAsk(coord.askById(id))).toMatchObject({ state: 'answered', answeredBy: MESA });
+    const tagged = sent.filter((p) => p.tag === `ask-${KID}`);
+    expect(tagged).toHaveLength(2);
+    expect(tagged[1]!.body).toBe(`answered by ${MESA}`);
+  });
+
+  const operator = (body: Record<string, unknown>) =>
+    app!.inject({ method: 'POST', url: `/api/sessions/${KID}/ask`, payload: body });
+
+  it("a refused operator press after the lapse goes back to released, not held", async () => {
+    const { coord, w, id, calls } = await setup(Date.now());
+    await w.sweepAsks();
+    const bad = await operator({ askKey: ASK_KEY, optionIndexes: [5] });
+    expect(bad.statusCode).toBe(409);
+    expect(sendKeysCalls(calls)).toEqual([]);
+    expect(okAsk(coord.askById(id))!.state).toBe('released');
+  });
+
+  it("the operator's answer after the lapse closes the row, and the parent is then refused 409 already-answered", async () => {
+    const { coord, w, id, calls } = await setup(Date.now());
+    await w.sweepAsks();
+    const res = await operator({ askKey: ASK_KEY, optionIndexes: [1] });
+    expect(res.statusCode).toBe(200);
+    expect(okAsk(coord.askById(id))).toMatchObject({ state: 'answered', answeredBy: 'operator', answer: 'Blue' });
+
+    const parent = await by(id, 'answer', { optionIndexes: [0] });
+    expect(parent.statusCode).toBe(409);
+    expect(parent.json()).toEqual({ ok: false, error: 'already-answered' });
+    expect(sendKeysCalls(calls)).toHaveLength(1);
+  });
 });

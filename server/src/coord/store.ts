@@ -7207,7 +7207,7 @@ export class CoordStore {
     });
   }
 
-  /** answering -> held, CAS (fix round 1, finding 3).
+  /** answering -> held, or -> released after a lapse (D-5289), CAS (fix round 1, finding 3).
    *  The rollback `takeAskForAnswer`'s caller reaches for when the take
    *  succeeded but the press itself was refused — a refusal there means no
    *  digit was pressed and the question is still live. CORRECTED (D-2177
@@ -7232,8 +7232,10 @@ export class CoordStore {
    *  this call finds, which sat in `'answering'`. Returns whether THIS call
    *  moved it, the same "I did it" vs. "someone else already did" shape as
    *  `releaseAsk`/`staleAsk`. */
-  untakeAsk(id: number, to: AskTakeSource = 'held'): boolean {
-    // D-5289: back to where the take found it (`AskTakeResult.from`).
+  untakeAsk(id: number, to: AskTakeSource): boolean {
+    // D-5289: back to where the take found it (`AskTakeResult.from`). `to` is
+    // required, with no `'held'` default: a caller that forgot it would send
+    // a lapsed row back to `'held'` with no `heldAsks` entry, silently.
     const res = this.db.prepare(
       "UPDATE asks SET state = ? WHERE id = ? AND state = 'answering'",
     ).run(to, id);

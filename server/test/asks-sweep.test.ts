@@ -277,7 +277,7 @@ describe('sweepAsks — the release sweep (Task 7)', () => {
     // The principal gives up — `answering -> held` — and the VERY NEXT sweep
     // (own clock, past ASK_SWEEP_MS) fires the still-live hold. This is only
     // possible because the entry survived the sweep above.
-    f.coord.untakeAsk(askId);
+    f.coord.untakeAsk(askId, 'held');
     at(T0 + ASK_GRACE_MS + 1 + ASK_SWEEP_MS + 1);
     await f.w.sweepAsks();
 
@@ -418,7 +418,7 @@ describe('sweepAsks — the release sweep (Task 7)', () => {
     // `releaseAsk` is stubbed to report a beaten CAS anyway, the only way to
     // reach the 'held' arm of the switch in a single-threaded process (a
     // real CAS against a genuinely-held row would simply succeed).
-    f.coord.untakeAsk(askId);
+    f.coord.untakeAsk(askId, 'held');
     const realReleaseAsk = f.coord.releaseAsk.bind(f.coord);
     f.coord.releaseAsk = () => false;
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -459,13 +459,6 @@ describe('sweepAsks — the release sweep (Task 7)', () => {
   });
 });
 
-// Task 8: staleness off `dialog_cleared`. A held ask's dialog can go away
-// with NOTHING to answer it — the operator hit escape at the terminal, the
-// session was interrupted, cleared, swapped, or died. `detectDialogs`'s own
-// `else if (last !== undefined)` clear branch is the only place this can be
-// caught: the pane is the one signal a `cmd_swap` (which does not rotate the
-// session uuid) cannot lie to, where hookstate's identity gate would stay
-// blind and keep reading `waiting` behind a pane that's gone.
 // D-5289 (coordinator-first routing, Task 4; spec §5.1): the lapse still
 // pushes at the deadline, but the row stays answerable by its parent; a late
 // parent answer replaces the operator's notification under the SAME tag.
@@ -526,6 +519,13 @@ describe('sweepAsks — late answer wins (D-5289)', () => {
   });
 });
 
+// Task 8: staleness off `dialog_cleared`. A held ask's dialog can go away
+// with NOTHING to answer it — the operator hit escape at the terminal, the
+// session was interrupted, cleared, swapped, or died. `detectDialogs`'s own
+// `else if (last !== undefined)` clear branch is the only place this can be
+// caught: the pane is the one signal a `cmd_swap` (which does not rotate the
+// session uuid) cannot lie to, where hookstate's identity gate would stay
+// blind and keep reading `waiting` behind a pane that's gone.
 describe('detectDialogs — staleness off dialog_cleared (Task 8)', () => {
   it('marks a held ask stale when its dialog goes away unanswered, no push', async () => {
     const sent: PushPayload[] = [];

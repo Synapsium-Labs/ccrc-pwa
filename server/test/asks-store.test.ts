@@ -139,7 +139,7 @@ describe('ask store methods', () => {
     const id = s.insertAsk({ childId: 'c', parentId: 'p', runId: null, askKey: 'k',
       askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: 1 });
     expect(s.takeAskForAnswer(id, 1000).ok).toBe(true);
-    expect(s.untakeAsk(id)).toBe(true);
+    expect(s.untakeAsk(id, 'held')).toBe(true);
     expect(okAsk(s.askById(id))!.state).toBe('held');
     expect(s.takeAskForAnswer(id, 1000).ok).toBe(true);
   });

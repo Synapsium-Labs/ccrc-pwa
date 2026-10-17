@@ -8256,6 +8256,13 @@ export class FleetWatcher {
    * Only for the lapse this watcher snapshotted for THIS row (`askId`), and
    * once: a restart, a cleared dialog or another row's answer replaces nothing.
    * PUBLIC for the same reason `releaseHeldAsk` is: the route's only door in.
+   *
+   * A known race, benign: a tick that captures the pane while the route is
+   * still awaiting `sendKey` can see the dialog already cleared and drop the
+   * `lapsedAsks` entry before this runs, so the operator keeps the lapse's
+   * original notification (today's behaviour). Open follow-up, not this
+   * method's: a `'released'` row whose dialog clears with nobody answering
+   * never moves to `'stale'` (`staleAsk` takes `held`/`answering` only).
    */
   answeredLate(childId: string, askId: number, parent: string): void {
     const lapsed = this.lapsedAsks.get(childId);
