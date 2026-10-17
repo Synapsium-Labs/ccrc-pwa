@@ -9,6 +9,7 @@ import type { HookState } from '../src/hookstate.js';
 import {
   askPushBody, ASK_PUSH_FALLBACK_BODY, withCoordinatorBody, answeredByBody, approvalRuledBody,
 } from '../src/askbody.js';
+import { ASK_SUMMARY_MAX_LEN } from '../src/fleet.js';
 
 const hookState = (ask: HookAsk | null, state: HookState['state'] = 'waiting'): HookState => ({
   state, updatedAt: 1, event: 'PreToolUse', ask, subagents: [], graphQueries: null, graphGateDenials: null,
@@ -32,9 +33,33 @@ describe('askPushBody (D-5302)', () => {
     }), { title: '│' })).toBe('First?');
   });
 
-  it('an approval envelope gives `tool: summary`, through hookAskSummary', () => {
+  // D-5356 (coordinator ruling `approval-push-body-tool-only-until-redactor`): until Task 12's redactor is applied
+  // where the approval summary enters the wire (Task 16), an approval's body is the tool name and a fixed phrase.
+  it('an approval envelope gives the tool name and a fixed phrase, never the command (D-5356)', () => {
     expect(askPushBody(hookState({ approval: { tool: 'Bash', summary: 'rm -rf scratch' } }), { title: '│' }))
-      .toBe('Bash: rm -rf scratch');
+      .toBe('Bash — permission requested');
+    const token = 'sentinel-token-not-a-secret-7f3a9c';
+    const body = askPushBody(hookState({
+      approval: { tool: 'Bash', summary: `curl -H "Authorization: Bearer ${token}" https://example.invalid/x` },
+    }), { title: 'Bash command' });
+    expect(body).toBe('Bash — permission requested');
+    expect(body).not.toContain(token);
+    expect(body).not.toContain('curl');
+    // No tool name: the fallback, never the scraped title (on a permission dialog that can be a command line).
+    expect(askPushBody(hookState({ approval: { tool: '', summary: `echo ${token}` } }), { title: `echo ${token}` }))
+      .toBe(ASK_PUSH_FALLBACK_BODY);
+    // A tool name is cut to the same ceiling (an MCP tool's name is a server and tool pair, unbounded here).
+    expect(askPushBody(hookState({ approval: { tool: 'T'.repeat(5000), summary: '' } }), { title: '│' }))
+      .toBe(`${'T'.repeat(ASK_SUMMARY_MAX_LEN)} — permission requested`);
+  });
+
+  it('a question text is cut to ASK_SUMMARY_MAX_LEN (D-5356)', () => {
+    const long = 'Q'.repeat(5000);
+    const body = askPushBody(hookState(question(long)), { title: '│' });
+    expect(body.length).toBeLessThanOrEqual(ASK_SUMMARY_MAX_LEN);
+    expect(body).toBe('Q'.repeat(ASK_SUMMARY_MAX_LEN));
+    expect(askPushBody(hookState(question('  ', 'H'.repeat(5000))), { title: '│' }).length)
+      .toBeLessThanOrEqual(ASK_SUMMARY_MAX_LEN);
   });
 
   it('a title of only box-drawing and block characters and spaces gives the fallback', () => {

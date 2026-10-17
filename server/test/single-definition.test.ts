@@ -6281,4 +6281,14 @@ describe('the ask push body is built once, in server/src/askbody.ts (D-5302)', (
     expect(watch.match(/body:\s*askPushBody\(/g) ?? []).toHaveLength(2);
     expect(watch).not.toMatch(/body:\s*dialog\.title/);
   });
+
+  // D-5356 (coordinator ruling `approval-push-body-tool-only-until-redactor`): until the redactor is applied where
+  // the approval summary enters the wire (Task 16), the push body module reads no approval `summary` (the command),
+  // directly or through `hookAskSummary`, and the fixed phrase is spelled there only.
+  it('D-5356: askbody.ts never reads an approval summary, and the fixed phrase is spelled there only', () => {
+    const askbody = stallCode(path.join(ccrcRoot, 'server/src/askbody.ts'));
+    expect(askbody).not.toMatch(/\.summary\b|\bsummary\s*[,}]|\bhookAskSummary\b/);
+    expect(stallCodeText('const { tool, summary } = a;')).toMatch(/\bsummary\s*[,}]/);   // CONTROL
+    expect(holders(/permission requested/)).toEqual(['server/src/askbody.ts']);
+  });
 });

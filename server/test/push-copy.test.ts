@@ -787,14 +787,39 @@ describe('ask notifications carry actions only where the route would accept them
     expect(f.sent[0]!.body).toBe('Which colour should the badge be?');
   });
 
-  it('D-5302: a raised ask with an approval envelope carries `tool: summary`', async () => {
+  it('D-5356: a raised ask with an approval envelope carries the tool name and a fixed phrase', async () => {
     const f = askFixture({ spec: 'project-a/project-a-quiet-basin' });
     await f.tick();
     f.writeAsk({ approval: { tool: 'Bash', summary: 'rm -rf scratch' } });
     f.showMenu(GLYPH_MENU_PANE);
     await f.tick();
     expect(f.sent).toHaveLength(1);
-    expect(f.sent[0]!.body).toBe('Bash: rm -rf scratch');
+    expect(f.sent[0]!.body).toBe('Bash — permission requested');
+  });
+
+  // D-5356: every push body is also kept in the NotifyLog ring and archived in coord.db's `feed_events`; until the
+  // redactor lands (Task 16) an approval's command must reach none of the three.
+  it('D-5356: an approval whose command carries a token never puts the command in the push, the NotifyLog or feed_events', async () => {
+    const token = 'sentinel-token-not-a-secret-7f3a9c';
+    const command = `curl -H "Authorization: Bearer ${token}" https://example.invalid/x`;
+    const log = new NotifyLog(path.join(await dir(), 'n.json'));
+    await log.load();
+    const f = askFixture({ spec: 'project-a/project-a-quiet-basin', coord: true, notifyLog: log });
+    await f.tick();                                  // priming: no menu
+    f.writeAsk({ approval: { tool: 'Bash', summary: command } });
+    f.showMenu(GLYPH_MENU_PANE);
+    await f.tick();                                  // no parent → pushed, recorded, archived
+    expect(f.sent).toHaveLength(1);
+    expect(f.sent[0]!.body).toBe('Bash — permission requested');
+    const recorded = log.catchUp(log.epoch, 0).events;
+    const archived = f.coord!.feedEvents(10);
+    expect(recorded.filter((e) => e.kind === 'ask')).toHaveLength(1);
+    expect(archived.filter((e) => e.kind === 'ask')).toHaveLength(1);
+    for (const [where, value] of [['push', f.sent], ['NotifyLog', recorded], ['feed_events', archived]] as const) {
+      const text = JSON.stringify(value);
+      expect(text, where).not.toContain(token);
+      expect(text, where).not.toContain('example.invalid');
+    }
   });
 
   it('D-5302: the HELD raise site builds the same body — the recorded held ask carries the question, not the glyph', async () => {
