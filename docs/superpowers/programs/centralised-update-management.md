@@ -1802,6 +1802,11 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     - **2026-10-17 14:58 UTC:** v0.0.224 to v0.0.226 released (14:21:03, 14:24:41, 14:48:05; #486, #491, #493) and
       stay unapplied under `auto=stable`. STATUS: fleet and server v0.0.221, newest v0.0.226, intent dev/auto=stable,
       backups fleet 189M/server 794M, disk free fleet 215G/work volume 114G/server 32G, no anomalies.
+    - **2026-10-17 15:58 UTC:** a tap moved both boxes from v0.0.221 to v0.0.226, read from the feed as "requested
+      update" (fleet 15:24:52 to 15:26:48, doctor 34/6/0; server 15:27:34 to 15:28:00, restarted at 15:27:47, doctor
+      26/0/0). The fleet sweep skipped the same four failed supervisors, and the fleet's prune took its backups from
+      189M to 175M. STATUS: fleet and server v0.0.226, newest v0.0.226, intent dev/auto=stable, backups fleet
+      175M/server 801M, disk free fleet 214G/work volume 111G/server 32G, no anomalies.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
@@ -3724,6 +3729,18 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     landed, or until the side that started says it has stopped. #444's current round merges `main` without
     #448, so it is not an absorb. Review 563's ruling is expected between 16:30 and 17:30. #435's coordinator says
     review 489 is closed failed and gives no restart date (mail 5955), so wave 15 stays ahead of #435.
+  - **16:05 UTC.** This session restarted at about 16:03, and again at 16:06 a minute after both plan workflows
+    resumed: the session slice sits at its 24 GiB cap with 88 pane scopes, and the out-of-memory killer took this
+    session as the largest process once its in-process agents grew. Both drafters died with prototypes in their
+    worktrees and no plan file. Until the slice has headroom, wave 20's plan is written by the coordinator from its
+    drafter's prototype, and wave 17's plan waits; wave 17 cannot land before #448, #482 and #444 anyway. The Docs
+    reader programme's coordinator sent its runner evidence (mail 5958). On macOS 26.6.2 with CPython 3.15.0, the
+    first `killpg(SIGTERM)` raised EPERM after an overflow, and the error escaped as "spawn: Operation not
+    permitted". Why EPERM, and whether any member was live, was not measured, so the plan treats the zombie cause as a
+    hypothesis. Path identity's coordinator is still waiting on the holder of claim 1557 before it consents to the
+    `ccd/ccd` edits (mail 5962). The full run on `main` failed one shard, `dispatch-live-gate.test.ts`'s D-5238
+    pair (an elapsed bound of 18000 against 17000, then an `ok:true`). #489's own PR run passed that file, so its
+    failed jobs re-run once the macOS legs finish.
 
 ## Carried constraints
 
