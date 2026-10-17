@@ -8515,7 +8515,9 @@ function renderAskBrief(askId: number, childId: string, question: string, option
 //       pass to reach them after the lane was found NOT READY (no census, no applier, or an applier not `ready` or failed; and R103, a
 //       registry `tick()` could not list, which stops the tick before the census and this lane; and R109, a pass cut before the owners,
 //       which listed no one): to the instant the recovery of that
-//       same pass returned, or else to the pass's own clock. (No census and no applier can only be found before a process's first ready
+//       same pass returned, or else to the pass's own clock. (A pass's clock alone would still move the instant past an earlier one;
+//       measuring after the recovery's await adds the recovery's OWN duration, from the pass's start to its return, in which nothing was
+//       listed, R112.) (No census and no applier can only be found before a process's first ready
 //       pass: the census is never unset and the applier is cached once opened; they stay as defence.) Correlation gets one lost window
 //       from the epoch to it plus the clock skew on every repository (`delegationNotReadyWindowOf`, R104): a stretch's start cannot be
 //       measured, so every rung-4 candidate whose creator began at or before it is held, and through X1 so is a rung-3 link whose creator
@@ -8527,8 +8529,10 @@ function renderAskBrief(askId: number, childId: string, question: string, option
 //       this one does not is pending again (R102), so its last lines are read once more after it ends. A pass forgets nothing of an owner a
 //       NEWER pass has listed or re-pended (R107, the `listedBy` stamp): a cut pass's late flush can land after it. Until it is read its listed hours,
 //       and its measured hours not yet closed (R106), are lost windows. An hour that leaves the read horizon before the owner is read is
-//       recorded as a durable gap with a LOSS word (`hour-never-closed`, never a carve-out word), and the owner is forgotten once it has
-//       no listed hour left: so the memory is bounded by the read horizon (and `lastListed` by the live sessions).
+//       STAGED as a gap with a LOSS word (`hour-never-closed`, never a carve-out word) for the pass's flush, and leaves the memory then;
+//       the owner is forgotten once it has no listed hour left: so the memory is bounded by the read horizon (and `lastListed` by the live
+//       sessions). A failed flush is covered by the next recovery's not-ready window; an R82 pre-write refusal of that gap's own bucket
+//       would drop it unrecorded, and nothing known produces one.
 //
 //   REPORT-ONLY EFFECTS. Attempts are made durable through one checkpoint-only change BEFORE any lease is journaled (so the next pass
 //   sees them), then each lease request goes through `createLease` (which deduplicates on the identity key, so a request re-emitted
@@ -9325,7 +9329,8 @@ class DelegationLane {
       return;
     }
     if (pass.signal.aborted) return;
-    /** R88: the instant a recovery of THIS pass returned, measured after its await (so an in-process recovery moves the ready instant). */
+    /** R88, R112: the instant a recovery of THIS pass returned, measured after its await. A pass's clock alone would still move the ready
+     *  instant; what this adds is the recovery's own duration, from the pass's start to its return, in which nothing was listed. */
     let recoveredAt: number | null = null;
     if (durable.state().phase !== 'ready' || durable.failure() !== null) {
       this.notReady = true;                                            // R88: in recovery, or failed: what happens now is not read
@@ -9349,7 +9354,8 @@ class DelegationLane {
     pass.reachedOwners = true;                                         // R109: synchronously after the last check, before any await
 
     // R88: the first pass to reach the owners after a not-ready mark (and the first of a process) is the latest ready instant: the
-    // instant this pass's own recovery returned, else this pass's clock. Everything at or before it may hold a session nothing listed.
+    // instant this pass's own recovery returned (so the recovery's own duration is covered, R112), else this pass's clock. Everything at
+    // or before it may hold a session nothing listed.
     if (this.notReady) {
       this.readyAt = recoveredAt ?? pass.now;
       this.notReady = false;
@@ -9503,9 +9509,11 @@ class DelegationLane {
 
   /**
    * R89: a listed hour of a pending owner that has LEFT THE READ HORIZON before any observation of it completed can never be read: it is
-   * recorded as a durable gap with a LOSS word, never `directory-absent` or `capability-absent` (nothing measured either), under the
-   * owner's incarnation (the stand-in for an unmeasured one, whose own word it keeps), and leaves the memory; an owner with no listed
-   * hour left is forgotten. So the memory is bounded by the read horizon.
+   * STAGED as a gap with a LOSS word for the pass's flush, never `directory-absent` or `capability-absent` (nothing measured either),
+   * under the owner's incarnation (the stand-in for an unmeasured one, whose own word it keeps), and leaves the memory then; an owner
+   * with no listed hour left is forgotten. So the memory is bounded by the read horizon. The two edges: a flush that fails is covered by
+   * the next recovery's not-ready window, and an R82 pre-write refusal of that gap's own bucket would drop it unrecorded (nothing known
+   * produces one).
    */
   private async expirePendingOwners(pass: LanePass, durable: DelegationDurability): Promise<void> {
     for (const [k, p] of [...this.pendingOwners]) {
