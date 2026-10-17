@@ -39,7 +39,7 @@ numbers; the spec wave each one implements is named beside it.
 | 15 | — (`ccd/ccd`) | `--no-reload` for `_svc_enable`, alone | fleet-first | — | **Reviewed and accepted** (2026-10-16): PR #441 at `9888457bc`; review 510 found one prose minor (R31); lands after #410, run 360 and #435. Was: **cleared to dispatch** (2026-10-16): both consents in; plan `527296ffc` + `ca3abb150`. Was: **planned; dispatch on consent** (2026-10-15 22:11): claim 1396 (run 308) holds `ccd/ccd`, claim 1423 (run 360) holds `ccd/ccrc`; Reading 7 re-ruled; lands last among the `ccd/ccd` landers; adds R25(c) and R25(a)'s code-comment half. Was: **planned; dispatch held on three claims.** Plan `527296ffc` (workflow `wf_f9c94b88-140`; 2 tasks; it defines D-4286, and the reserve is numbers 4287 to 4291). It waits until claims 1057 (`ccd/ccd`), 1058 (`macos-platform.test.ts`) and 1055 (`ccd/ccrc`) have ended (Reading 7). Was: **Run 300 open, planned** 2026-10-06 16:07 UTC. Deviation block 4286 to 4295 (bare until defined). To plan. `ccd/ccd` is unclaimed, but open PRs #299, #301 and #303 also edit it, so whichever lands later rebases and restamps. |
 | 16 | — (sweep and verify; before stable) | R18(e) (item 3's false "is FAILED" warning, the stale-pid comment), Reading 9's sweep half (warn only), the pgid clause's comment, T6-INT-W closed, R18(a), R18(b), R10j, R8c, R10c(3), R8g | fleet-first; auto moves it, the coordinator watches | — | **Fix round 1** (2026-10-16): PR #444 at `e2c48be75`, review 512: F3 and F4 fixed now, then the run-360 merge and one scoped review. Was: run 484, plan `0f07ddcb9` |
 | 17 | — (install, doctor, backup prune) | `ccrc-api` placed by the install spine and removed by uninstall (README's `ccrc-api` lines), Reading 9's doctor half (WARN only), R10k, R8f, R14(a), R10i, R34 (both KEEP spellings; D1c pins them equal), R25(a)'s code-comment half, R35(b) | fleet-first; auto moves it, the coordinator watches | — | waits for run 360 to land (claims 1388, 1410, 1423) and claim 1403 (run 468, #425) on README (2026-10-15 22:11) |
-| 18 | — (test containment) | `makeCcdHarness` containment parity, R14(b)'s raw-spawn census, R23(a), R23(b), R23(d) | none (tests) | — | **FIX ROUND 1** 2026-10-17 03:45 UTC: review 535 (18 findings) ruled in plan `3098b03ea`, mail 5698; then the landing round and one scoped review; lands after run 360. Was: **IN REVIEW** 2026-10-17 02:55 UTC: wave-done at `b5b83ad66` (PR #482), run 517 awaiting-review, review run 535. Was: **DISPATCHED** 2026-10-17 00:50 UTC (run 517, worker still-delta): plan `f9abdcc0e` (D-5247 to D-5253, reserve 5254 to 5258), readings ruled; lands after run 360. Was: **PLANNING** 2026-10-16 18:00 UTC: run 517 opened (planned), block 5247 to 5266; the plan workflow runs (`wf_21fbd9dc-804`). `ccdWsHelpers.ts` is unclaimed since claim 1396 ended. Was: to plan; `ccdWsHelpers.ts` held by claim 1396 (run 308); R14(b) and R23 can go first (2026-10-15 22:11) |
+| 18 | — (test containment) | `makeCcdHarness` containment parity, R14(b)'s raw-spawn census, R23(a), R23(b), R23(d) | none (tests) | — | **FIX ROUND 1 DONE** 2026-10-17 04:35 UTC: verified at `81bf1f135` (PR #482), run 517 awaiting-review, held for #448; then the landing round and one scoped review. Was: **FIX ROUND 1** 2026-10-17 03:45 UTC: review 535 (18 findings) ruled in plan `3098b03ea`, mail 5698. Was: **IN REVIEW** 2026-10-17 02:55 UTC: wave-done at `b5b83ad66` (PR #482), run 517 awaiting-review, review run 535. Was: **DISPATCHED** 2026-10-17 00:50 UTC (run 517, worker still-delta): plan `f9abdcc0e` (D-5247 to D-5253, reserve 5254 to 5258), readings ruled; lands after run 360. Was: **PLANNING** 2026-10-16 18:00 UTC: run 517 opened (planned), block 5247 to 5266; the plan workflow runs (`wf_21fbd9dc-804`). `ccdWsHelpers.ts` is unclaimed since claim 1396 ended. Was: to plan; `ccdWsHelpers.ts` held by claim 1396 (run 308); R14(b) and R23 can go first (2026-10-15 22:11) |
 | 19 | — (PWA and server residue) | R24(a), (b), (d), R26(a)-(d), R27(a), R27(b)'s test half; B5, the `update-inventory.test.ts` stable flake | server | — | **MERGED** `a6b2606c9` (PR #443, 2026-10-16 12:54 UTC, run 483 done); tree equals merge-tree of the reviewed tip `95aa8f3bf`; review 511 found 4 minor (R33) |
 | — | — | docs PR: R22, R24(e), R23(c), (e), R27(b)'s plan half, R27(c), R25(a), (b), R35(c), README's Reading 9 clause, the closure sentences | none (docs) | — | to write; README half waits for claim 1403 (#425) (2026-10-15 22:11) |
 | — | — | final rollout: promote to `stable` (the coordinator, ruling 2026-10-15), auto convergence and a read-only `ccrc rollout --check` (no hand `ccrc rollout`, ruling 2026-09-30), the exit criteria measured live (the operator taps the rehearsal) | — | — | planned; stable waits on B1, B2, B5 and wave 16 |
@@ -3606,6 +3606,25 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   - **The order:** fix round 1, a wave-done, then held for #448. Then the landing round (merge `main`, the single
     re-measure, a fresh wave-done), and one scoped review of the round and the merge. That review checks only the
     ruled fixes, the new rows and any new real-tree hit, so it converges.
+
+- **2026-10-17 04:35 UTC: wave 18's fix round 1 done (mail 5726), verified, and held for #448 (mail 5727).**
+  - **The claim:** `81bf1f135`, seven commits on `b5b83ad66`. The rulings' cherry-pick, then F4 (number 5257), F10
+    and F11, the census (number 5256: F1, F2, F5 to F8, the header narrowed to the spellings it lists), the prose,
+    the strays listing, and four fixes from the worker's own review of the round. Number 5258 is unspent.
+  - **Measured by the worker:**
+    - The census, run standalone, passes all 7 rows. Each new mutation row reds as recorded. Over the whole tree,
+      script spawns go from 181 to 191, all ten new ones contained. Hits and the allow lists are unchanged, and no
+      claimed file was edited.
+    - Vitest, one file per call: the harness, pool-sync, runbook-holds, ccrc-containment, tmux-anchor and census
+      files are green. `ccd-workspaces` is 80 of 81: one case timed out at load 20 and passes alone. The vitest
+      mutation rows red as ruled.
+    - The strays listing took the ruling's second option (no `net`, no assertion), because an assertion there
+      measured green.
+  - **Pending the landing tip,** because the memory bar never reopened: `typecheck-tests`, `tsc`, the three
+    ledger guards, `single-definition`, and the census under vitest.
+  - **Re-measured by the coordinator:** the tip and the handoff commit match. The diff is the same 11 files, with
+    nothing outside them. It merges cleanly onto `main` at `0a06ebb9a`. Nothing private appears in it. Numbers 5256
+    and 5257 are defined. The server accepted `working` to `awaiting-review`.
 
 ## Carried constraints
 
