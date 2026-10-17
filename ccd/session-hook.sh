@@ -2774,25 +2774,25 @@ payload=$(cat 2>/dev/null) || exit 0
 # the uuid (`_sync_uuid`); this only reports against it.
 id=""
 if [[ -n "${TMUX_PANE:-}" ]]; then
-  # BOUNDED, and for a sharper reason than the statusline's (`ccd/statusline-command.sh`,
-  # D-2791): this question is asked once per HOOK EVENT inside every live session on the
-  # box, not once per render in one pane. `tmux display-message` talks to the tmux SERVER
-  # over its socket, and a server that is SIGSTOPped, swapping, or wedged answers nothing
-  # and never returns — so an unbounded call here hangs the hook, and the hook is on the
-  # hot path of every tool call in ~20 sessions. The bound is the whole fleet's, not this
-  # pane's.
+  # BOUNDED, and for a sharper reason than the statusline's (`ccd/statusline-command.sh`, D-2791):
+  # this question is asked once per HOOK EVENT inside every live session on the box, not once per
+  # render in one pane. `tmux display-message` talks to the tmux SERVER over its socket, and a
+  # server that is SIGSTOPped, swapping, or wedged answers nothing and never returns, so an unbounded
+  # call hangs the hook, on the hot path of every tool call in ~20 sessions: the bound is the fleet's.
+  # THE PLATFORM SPELLING, copied from the statusline fix: bare `timeout` is GNU and a macOS box
+  # carries Homebrew's `gtimeout`. NEITHER present means the question is SKIPPED, not asked unbounded:
+  # `$tname` stays empty, the guard below exits 0 and nothing is written, the honest degrade for a
+  # file whose header makes exit 0 absolute: a hook that cannot bound its own tmux call must not make it.
   #
-  # THE PLATFORM SPELLING, copied from the statusline fix: bare `timeout` is GNU and a
-  # macOS box carries Homebrew's `gtimeout`. NEITHER present means the question is SKIPPED,
-  # not asked unbounded — `$tname` stays empty, the guard below exits 0, and the hook
-  # writes nothing at all. That is the honest degrade for a file whose header makes exit 0
-  # on every path absolute: a hook that cannot bound its own tmux call must not make it.
+  # EXACT PANE, `-t "$TMUX_PANE"` (delegation broker wave 3): untargeted, tmux resolves the client's pane only while it is
+  # alive, and once it is gone answers for the most recently active session, which need not be this hook's own: a
+  # pane torn down beside a live ccrc one was attributed to that other session. A failed lookup leaves `$tname` empty: exit 0.
   hooktmo=""
   for hooktmo_bin in timeout gtimeout; do
     if command -v "$hooktmo_bin" >/dev/null 2>&1; then hooktmo="$hooktmo_bin"; break; fi
   done
   tname=""
-  [[ -n "$hooktmo" ]] && tname=$("$hooktmo" 2 tmux display-message -p '#S' 2>/dev/null)
+  [[ -n "$hooktmo" ]] && tname=$("$hooktmo" 2 tmux display-message -p -t "$TMUX_PANE" '#S' 2>/dev/null)
   [[ "$tname" == cc-?* ]] && id="${tname#cc-}"
 # THE FALLBACK, AND ONLY FOR A FORK (D-4953). The `elif` is the no-pane half of
 # the gate: a process with a pane is answered by the pane or by nobody, and the
@@ -2875,8 +2875,8 @@ fi
 [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] || exit 0
 [[ -d "$REG" ]] || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
-
-{ read -r event; read -r psid; read -r paid; } < <(jq -r 'def keep(f): explode | map(select(f)) | implode; def alpha: (. >= 65 and . <= 90) or (. >= 97 and . <= 122); (.hook_event_name // "" | tostring | keep(alpha)), (.session_id // "" | tostring | keep(alpha or (. >= 48 and . <= 57) or . == 95 or . == 45)), (if ((.agent_id // "") | tostring | length) > 0 then "1" else "" end)' <<<"$payload" 2>/dev/null) || exit 0   # no regex builtin: every event runs it, and a jq built without Oniguruma (an optional build dependency) must not skip the write
+DSP_DEFS='def maxline: 4096; def maxlabel: 128; def maxpath: 512; def isid: type == "string" and length >= 1 and length <= idmax and (explode | all(idch)); def nbytes: explode | map(if . < 128 then 1 elif . < 2048 then 2 elif . < 65536 then 3 else 4 end) | add // 0; def fits($m): type == "string" and length <= $m and nbytes <= $m; def chk($m): if type != "string" then [null, false] elif fits($m) then [., false] else [null, true] end; def req($m): if type == "string" and . != "" and fits($m) then . else null end; def over($m): type == "string" and (fits($m) | not); def obj: if type == "object" then . else {} end; def outcome: if . == "async_launched" then "async-launched" elif . == "completed" then "completed" elif . == "failed" or . == "error" then "failed" else "unknown" end; def word: type == "string" and length >= 1 and length <= 32 and (explode | all((. >= 97 and . <= 122) or . == 95 or . == 45)); def tagv($o; $c): if type == "string" and startswith($o) and endswith($c) then .[($o | length):(length - ($c | length))] else null end; def note: if type == "string" and startswith("<task-notification>\n") and contains("</task-notification>") then (ltrimstr("<task-notification>\n") | split("\n")) as $l | ($l[0] | tagv("<task-id>"; "</task-id>")) as $a | ($l[1] | tagv("<tool-use-id>"; "</tool-use-id>")) as $b | ($l[if ($l[2] | type) == "string" and ($l[2] | startswith("<output-file>")) then 3 else 2 end] | tagv("<status>"; "</status>")) as $d | if ($a | isid) and ($b | isid) and ($d | word) then {taskId: $a, toolUseId: $b, status: (if $d == "completed" then "completed" elif $d == "failed" then "failed" elif $d == "killed" or $d == "cancelled" or $d == "canceled" or $d == "stopped" then "cancelled" else "unknown" end)} else null end else null end; def spool: . as $p | ($p.hook_event_name // "" | tostring | keep(alpha)) as $ev | ($p.tool_name | if type == "string" then . else "" end) as $tn | ($p.tool_use_id | if isid then . else null end) as $tu | ($p.session_id | if isid then . else null end) as $cs | (($p.agent_id // "") | tostring | length > 0) as $hasa | ($p.agent_id | if isid then . else "" end) as $aid | ($p.agent_type | chk(maxlabel)) as [$at, $ato] | ($p.cwd | chk(maxpath)) as [$cwd, $cwdo] | ($p.transcript_path | chk(maxpath)) as [$tp, $tpo] | ($p.tool_input | obj) as $ti | ($p.tool_response) as $r | ($r | obj) as $o | ($o.status | outcome) as $oc | ($ti.command | type == "string" and contains("worktree")) as $wt | (if $ev == "SessionStart" then ($p.source | if req(maxlabel) != null then {b: {source: .}} else null end) elif $ev == "SessionEnd" then ($p.reason | if req(maxlabel) != null then {b: {reason: .}} else null end) elif $ev == "SubagentStart" then (if $aid != "" then {b: {}} else null end) elif $ev == "SubagentStop" then (if $aid != "" then ($p.agent_transcript_path | chk(maxpath)) as [$ap, $apo] | {b: {agentTranscriptPath: $ap}, o: $apo} else null end) elif $ev == "UserPromptSubmit" then ($p.prompt | note | if . != null then {b: {notification: .}} else null end) elif $ev == "PreToolUse" and $tu != null then (if $tn == "Agent" or $tn == "Task" or $tn == "Workflow" then ($ti.isolation | chk(maxlabel)) as [$iso, $isoo] | {b: {toolName: $tn, toolUseId: $tu, isolation: $iso}, o: $isoo} elif $tn == "Bash" then {b: {toolName: "Bash", toolUseId: $tu}, w: $wt} else null end) elif $ev == "PostToolUse" and $tu != null then (if $tn == "Agent" or $tn == "Task" then {b: {toolName: $tn, toolUseId: $tu, outcome: $oc, launch: (if ($oc == "async-launched" or $oc == "completed") and ($o.agentId | isid) then {status: $oc, agentId: $o.agentId, isAsync: (if ($o.isAsync | type) == "boolean" then $o.isAsync else $oc == "async-launched" end)} else null end)}} elif $tn == "Workflow" then ($o.taskType | req(maxlabel)) as $tt | ($o.workflowName | req(maxlabel)) as $wn | ($o.transcriptDir | req(maxpath)) as $td | ($o.scriptPath | req(maxpath)) as $sp | {b: {toolName: "Workflow", toolUseId: $tu, outcome: $oc, launch: (if ($oc == "async-launched" or $oc == "completed") and ($o.taskId | isid) and ($o.runId | isid) and $tt != null and $wn != null and $td != null and $sp != null then {status: $oc, taskId: $o.taskId, taskType: $tt, workflowName: $wn, runId: $o.runId, transcriptDir: $td, scriptPath: $sp} else null end)}, o: (($o.taskType | over(maxlabel)) or ($o.workflowName | over(maxlabel)) or ($o.transcriptDir | over(maxpath)) or ($o.scriptPath | over(maxpath)))} elif $tn == "Bash" then {b: {toolName: "Bash", toolUseId: $tu, outcome: (if ($r | type) == "object" and $r.interrupted == true then "failed" elif ($r | type) == "object" and ($r.stdout | type) == "string" then "completed" else "unknown" end)}, w: $wt} else null end) else null end) as $v | if $cs != null and ($hasa | not or $aid != "") and $v != null then (($cwdo or $tpo or $ato or ($v.o // false))) as $ov | (($v.w // false) and $cwd != null and ($cwd | startswith("/")) and ($cwd | explode | all(. >= 32 and . != 127))) as $trig | (if $trig then 17 else 0 end) as $rs | (now * 1000 | floor) as $ms | ($ms / 1000 | floor) as $s | (($s | strftime("%Y-%m-%dT%H:%M:%S")) + "." + (($ms % 1000) | tostring | ("00" + .) | .[-3:]) + "Z") as $t | def L($n): {v: 1, eventKind: $ev, observedAt: $t, sessionId: $sid, parentIncarnation: $gen, claudeSessionId: $cs} + (if $ver != "" and $n < 1 then {claudeVersion: $ver} else {} end) + (if $cwd != null and $n < 2 then {cwd: $cwd} else {} end) + (if $aid != "" then {agentId: $aid} else {} end) + (if $ev == "SubagentStart" or $ev == "SubagentStop" then {agentType: (if $n < 3 then $at else null end)} elif $aid != "" and $at != null and $n < 3 then {agentType: $at} else {} end) + (if $tp != null and $n < 4 then {transcriptPath: $tp} else {} end) + $v.b + (if $n > 0 or $ov then {truncated: true} else {} end); (first(range(0; 5) | L(.) | select(((tojson | nbytes) + 1 + $rs) < maxline)) // null) as $line | if $line == null then ["", "", "", ""] else [($s | strftime("%Y%m%d%H")), (($s - 86400) | strftime("%Y%m%d%H")), (if $trig then $cwd else "" end), ($line | tojson)] end else ["", "", "", ""] end;'; dsp_dir="$REG/delegation/spool/$id" dsp_gen="" dsp_ver="" dsp_defs="" dsp_out=', "", "", "", ""'; [[ "$id" != .* && ${#id} -le CCRC_ID_MAX && -d "$dsp_dir" && ! -L "$dsp_dir" && ! -L "${dsp_dir%/*}" && ! -L "${dsp_dir%/*/*}" && -f "$REG/$id.generation" && ! -L "$REG/$id.generation" ]] && { IFS= read -r -N 37 dsp_gen < "$REG/$id.generation"; } 2>/dev/null; if [[ "$dsp_gen" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ && ( -z "${CCRC_SESSION_GENERATION:-}" || "${CCRC_SESSION_GENERATION:-}" == "$dsp_gen" ) ]]; then case "$payload" in *'"Bash"'*|*'"Agent"'*|*'"Task"'*|*'"Workflow"'*|*'"SessionStart"'*|*'"SessionEnd"'*|*'"SubagentStart"'*|*'"SubagentStop"'*|*'task-notification>'*) dsp_ver="${CLAUDE_CODE_EXECPATH:-}"; dsp_ver="${dsp_ver##*/}"; [[ "$dsp_ver" =~ ^[0-9][0-9A-Za-z.+-]{0,31}$ ]] || dsp_ver=""; dsp_defs="$DSP_DEFS"; dsp_out=', ((try spool catch ["", "", "", ""]) | .[])' ;; esac; else dsp_gen=""; fi   # THE DELEGATION SPOOL's gate, builtins only (see the block after the history spool): the owner's directory and a sound, unchanged-so-far incarnation must exist, else the parse below builds no line; the spool's jq text is added only for a payload that carries the QUOTED name of a delegation tool or event or the notification tag, so every other event compiles the parse alone
+{ read -r event; read -r psid; read -r paid; read -r aid; read -r dsp_bucket; read -r dsp_cut; read -r dsp_cwd; read -r dsp_line; } < <(jq -r --arg sid "$id" --arg gen "$dsp_gen" --arg ver "$dsp_ver" 'def keep(f): explode | map(select(f)) | implode; def alpha: (. >= 65 and . <= 90) or (. >= 97 and . <= 122); def idch: alpha or (. >= 48 and . <= 57) or . == 95 or . == 45; def idmax: 64; '"$dsp_defs"'(.hook_event_name // "" | tostring | keep(alpha)), (.session_id // "" | tostring | keep(idch)), (if ((.agent_id // "") | tostring | length) > 0 then "1" else "" end), (.agent_id | if type == "string" and length >= 1 and length <= idmax and (explode | all(idch)) then . else "" end)'"$dsp_out" <<<"$payload" 2>/dev/null) || exit 0   # no regex builtin: every event runs it, and a jq built without Oniguruma (an optional build dependency) must not skip the write. The first four lines are the cleaned event, session id, any-agent-id flag and raw agent id; the last four are the delegation spool's bucket, prune cutoff, listing cwd and line, all empty when no line is due
 [[ -n "$event" ]] || exit 0
 
 state="" ask_json="null" interrupted="false" src="" gcmd="" stopfail="" bg="-1" bgk="" bgi="" err="" hts="" msid="" sessend=""
@@ -3014,8 +3014,12 @@ case "$event" in
     # THE RETAINED SERVE LOCK ENDS HERE, on every path through this arm — the
     # marker, when one was published, was the last act inside it.
     _hook_compact_serve_end || true
-    [[ "$src" == compact ]] && exit 0
-    state="done" ;;
+    # COMPACT EXITS BELOW, NOT HERE (delegation broker wave 3): the delegation spool records every SessionStart, compact included,
+    # and its append is in the tail. `sessend`, the flag that makes a SessionEnd inert, carries the early exit past the writers that
+    # must still not see a compact start (the capture arm and the turn marker each test `$src` for it, and the history spool's own
+    # source list already leaves it out) to the one exit just after the spool, which is before the hookstate write, so a compact
+    # start still stamps nothing (D-306).
+    if [[ "$src" == compact ]]; then sessend=1; else state="done"; fi ;;
   Stop)
     state="done"
     # `is_interrupt` is not read: no installed lane's Stop carries it (spec §5.1); `interrupted` stays false here (the
@@ -3030,7 +3034,7 @@ esac
 # THE CAPTURE ARM (worker stall watch §5.1's first task; capture-arm-keyed-on-hookcap (D-3612),
 # capture-arm-is-permanent (D-3613), capture-file-carries-a-meta-line (D-3669)). Only a session whose
 # ccd id ends `-hookcap` pays more than this one test. Every registered event that
-# reaches this line (all but SessionStart `compact`, which exits in its arm, and an
+# reaches this line (all but SessionStart `compact`, which this test leaves out, and an
 # unknown event) is copied to one 0600 file in a 0700 per-id directory OUTSIDE the
 # registry. Line 1 is a meta line naming this pane's own session id, sanitised; the
 # rest is the payload as sent. It stops at 200 files, prints nothing, and no failure
@@ -3040,7 +3044,7 @@ esac
 # `hcat` is reset on every run, so a later reuse of the stamp (`${hcat:-…}`) can
 # never take it from the environment.
 hcat=""
-if [[ "$id" == *-hookcap ]]; then
+if [[ "$id" == *-hookcap && "$src" != compact ]]; then
   hcdir="$HOME/.ccrc/hook-capture/$id"
   ( umask 077; mkdir -p "$hcdir" ) 2>/dev/null
   hcn=( "$hcdir"/*.cap )
@@ -3057,11 +3061,21 @@ fi
 # case, because README anchors this file at :2900 and nothing new may land above
 # that line (marker-logic-in-the-tail (D-3615)).
 #
-# WHO WRITES: main-thread events only. `paid` is the payload parse's flag for a
-# non-empty `agent_id`. It is set by that one read and never re-declared, so a
-# subagent's event reaches here with it set and touches nothing. And only on a row
-# ccd created: a plain `-e` on `.generation`, no fork (`_hook_generation_ok` forks
-# `link`+`rm` and belongs to the compaction arms).
+# WHO WRITES: main-thread events only. A subagent's event is one whose `agent_id`
+# has a QUALIFYING JOIN: a SubagentStart for that id, recorded in THIS owner's join
+# file `$REG/<id>.joined` (below). A bare `agent_id` is not one: real lanes sent a
+# main-checkout tool event with an `agent_id` that no launch response, SubagentStart
+# or SubagentStop ever named, and treating any id as a subagent left the parent's own
+# turn unrecorded (delegation broker wave 3, amendment
+# `tool-agent-id-alone-is-unjoined-evidence`). A join is a fact, not liveness:
+# SubagentStop does not take it back, and a Stop with no Start never gives one
+# (`post-turn-subagentstop-is-unpaired`). Never decided by `agent_type`, a display
+# name or a path. `paid` (the payload parse's flag for ANY non-empty `agent_id`) is
+# NOT the test here and is not narrowed: the history spool, the role-skill guard and
+# the wait rules still read it as "any id". `aid` is the id itself, and only when it
+# is already a plain id (below). And only on a row ccd created: a plain `-e` on
+# `.generation`, no fork (`_hook_generation_ok` forks `link`+`rm` and belongs to the
+# compaction arms).
 #
 # WHICH SESSION: the env id first, the same source hookstate's `sessionId` uses, so
 # the two files agree. The payload's cleaned `session_id` is used only when the env
@@ -3119,7 +3133,85 @@ _hook_turn_mark() {   # <kind: working|done|failed|restart|clear> -> 0 written; 
   _hook_write_atomic "$mf" "turn-$hts" "$out"
 }
 msid="${CLAUDE_CODE_SESSION_ID:-$psid}"
-if [[ -z "$paid" && -e "$REG/$id.generation" ]]; then
+# THE JOIN RECORD (delegation broker wave 3): `$REG/<id>.joined`, one agent id per line, APPENDED by this hook on a
+# SubagentStart and by nobody else. It is a file of its own and NOT a key of hookstate.json, because every event
+# rewrites hookstate.json whole (a read at the top, a write at the bottom, forks between), so a join kept there was lost
+# whenever another hook's write landed last: the captures put a SubagentStart within a few ms of the parent's Agent
+# launch event, and a fixture probe lost 20-37% of joins that way, each loss turning that subagent's later events into a
+# phantom main-thread `working`. One `printf` of a short line to an O_APPEND descriptor is one write(2), so concurrent
+# hooks never erase each other's joins. Exactly one copy of membership.
+# THE ID: `aid` (the payload parse) is the RAW `agent_id` when it is already a string of 1 to `idmax` characters of
+# `idch` ([A-Za-z0-9_-], spelled once, in that jq program), else empty. Cleaning an id first would let a lookalike
+# (`a-1;`) ride a real join, so such an id is unjoinable: never recorded here, never suppressing the marker below.
+# WHEN: the row is live (`<id>.generation`, the witness `_reg_purge` removes just before the join record, which goes last) when the append starts, for the pane
+# this hook owns (the exact-pane lookup above has already exited otherwise), and whether or not a hookstate exists yet.
+# The suffix is DOT-FREE so `_reg_purge`'s glob loop unlinks it with the row.
+# NO WINDOW ORPHANS THE FILE, by one line on each side, because this hook takes no lock and a purge can run while it
+# writes. An orphan is a dot-free field: it would hold the slug for ever (`_ws_slug_free` returns 1 on any such field and
+# `ws-gc` never clears it). (a) AFTER the write, and after a rotation's rename, the hook looks at `<id>.generation` once
+# more and, if the row is gone, removes BOTH names (`joined`, `joinedprev`). (b) `_reg_purge` removes both once more AFTER
+# it removes `generation`. An append that lands while `generation` still stands is taken by (b); one that lands or
+# finishes after it is gone is taken by (a): whichever side of the generation's removal the write falls on, one of the two
+# sees it. NOT closed: a hook killed between its write and its re-check, after a purge that had already finished.
+# A REGULAR FILE OR NOTHING, as the history spool's append: a symlink, directory or FIFO at either path is neither read nor
+# written (builtin tests; a FIFO read would block the hook), and a `joinedprev` that is not one stops the rotation.
+# BOUNDED, BY RENAME: past JOIN_ROTATE_AT lines the Start that notices opens the file on its own fd, takes `flock -n` on it,
+# confirms the path still names that inode (`-ef /dev/fd/N`) and still holds more than the cap, then `mv -f`s it whole to
+# `<id>.joinedprev` (dot-free too), replacing the last one. Nothing is rewritten, so NO APPEND IS LOST: a writer whose
+# descriptor opened the old inode writes into joinedprev, a later one creates a fresh `joined`, and a second rotator fails
+# `flock -n`, finds the path renamed or finds a short new file, and skips. Membership is the union: the last
+# JOIN_ROTATE_AT + 1 to 2 * JOIN_ROTATE_AT + 1 ids (129 to 257). Still lost: an append in flight to an inode after TWO rotations (JOIN_ROTATE_AT Starts during
+# one write). No `flock` (stock macOS) means no rotation: the file outgrows JOIN_READ_MAX and its newest ids go unread,
+# which fails toward the main turn like everything else here, as does a torn short write fused with the next line.
+# The file is written only by this block, one id per line, and read back whole-line only (below).
+JOIN_ROTATE_AT=128 JOIN_READ_MAX=16384
+_hook_join_record() {   # $aid -> 0 appended; 1 refused (never fatal: the caller says `|| true`)
+  local jf="$REG/$id.joined" jp="$REG/$id.joinedprev" cur="" nl="" fd=""
+  [[ ! -L "$jf" && ( -f "$jf" || ! -e "$jf" ) ]] || return 1
+  if ! { printf '%s\n' "$aid" >> "$jf"; } 2>/dev/null; then
+    # A FAILED WRITE STILL CREATED THE FILE (ENOSPC after O_CREAT leaves an empty `joined`), so it gets the same look at the row
+    # as a landed one: a row purged under it must not keep an orphan, and an empty file is an orphan like any other.
+    [[ -e "$REG/$id.generation" ]] || rm -f "$jf" "$jp"
+    return 1
+  fi
+  { IFS= read -r -N "$JOIN_READ_MAX" cur < "$jf"; } 2>/dev/null
+  nl="${cur//[!$'\n']/}"
+  if (( ${#nl} > JOIN_ROTATE_AT )) && command -v flock >/dev/null 2>&1 \
+     && [[ ! -L "$jp" && ( -f "$jp" || ! -e "$jp" ) ]] && { exec {fd}<"$jf"; } 2>/dev/null; then
+    if flock -n "$fd" 2>/dev/null && [[ ! -L "$jf" && "$jf" -ef "/dev/fd/$fd" ]]; then   # `-ef` follows a symlink to the same inode, so the link test is its own conjunct
+      cur=""; { IFS= read -r -N "$JOIN_READ_MAX" cur <&"$fd"; } 2>/dev/null
+      nl="${cur//[!$'\n']/}"
+      # BOTH PATHS ARE LOOKED AT AGAIN IMMEDIATELY BEFORE THE RENAME: GNU `mv -f` onto a DIRECTORY moves the file INTO it and
+      # answers 0, and onto a symlink it replaces the link; a `joinedprev` that became either since the check at the top, or a
+      # `joined` that became a link since the `-ef`, is not something to rename. The window that remains is the one between this
+      # test and the rename(2) itself; there is no atomic rename-if-regular in a shell. GNU `mv -fT` would close the directory case
+      # atomically (it refuses to move INTO a directory), but it is NOT used: this hook runs on macOS boxes too (the epoch
+      # fallback at the top, the probe-macos leg), BSD `mv` has no `-T`, and an `mv` that errors there would leave a rotation that never
+      # happens where Homebrew supplies `flock`. The re-test narrows the window instead, and the stock-macOS box has no `flock` at all.
+      (( ${#nl} > JOIN_ROTATE_AT )) && [[ ! -L "$jf" && ! -L "$jp" && ( -f "$jp" || ! -e "$jp" ) ]] && mv -f "$jf" "$jp" 2>/dev/null
+    fi
+    { exec {fd}<&-; } 2>/dev/null
+  fi
+  [[ -e "$REG/$id.generation" ]] || rm -f "$jf" "$jp"   # (a) of "no window orphans the file" above: the row was purged under the write
+  return 0
+}
+if [[ "$event" == SubagentStart && -n "$aid" && -e "$REG/$id.generation" ]]; then _hook_join_record || true; fi
+# THE MEMBERSHIP TEST, on the hot path of every subagent tool event: a builtin `read` of `joined` and, only if the id is not
+# there, one of `joinedprev`, each under JOIN_READ_MAX characters (129 ids of 64 fill about 8 K), then a whole-line match:
+# the id between two newlines, the last line only if its newline arrived. An absent, unreadable or non-regular file joins
+# nobody and the main turn is stamped. A payload with no id pays nothing. No fork.
+tmsub="" hsl="" jfile="$REG/$id.joined" jprev="$REG/$id.joinedprev"
+if [[ -n "$paid" && -n "$aid" ]]; then
+  if [[ ! -L "$jfile" && -f "$jfile" ]]; then
+    { IFS= read -r -N "$JOIN_READ_MAX" hsl < "$jfile"; } 2>/dev/null
+    [[ $'\n'"$hsl" == *$'\n'"$aid"$'\n'* ]] && tmsub=1
+  fi
+  if [[ -z "$tmsub" && ! -L "$jprev" && -f "$jprev" ]]; then
+    hsl=""; { IFS= read -r -N "$JOIN_READ_MAX" hsl < "$jprev"; } 2>/dev/null
+    [[ $'\n'"$hsl" == *$'\n'"$aid"$'\n'* ]] && tmsub=1
+  fi
+fi
+if [[ -z "$tmsub" && -e "$REG/$id.generation" ]]; then
   tmkind=""
   case "$event" in
     UserPromptSubmit) tmkind=working ;;   # a new prompt is a new turn, even over a working line (a-prompt-always-opens-a-turn (D-3675))
@@ -3128,7 +3220,7 @@ if [[ -z "$paid" && -e "$REG/$id.generation" ]]; then
       [[ "$tmline" == *'"state":"working"'* && "$tmline" == *"\"sessionId\":\"$msid\""* ]] || tmkind=working ;;
     Stop) tmkind=done ;;
     StopFailure) tmkind=failed ;;
-    SessionStart) [[ "$src" == clear ]] && tmkind=clear || tmkind=restart ;;   # compact exited in its arm (D-306); absent or unknown is a restart (D-1248)
+    SessionStart) if [[ "$src" == compact ]]; then :; elif [[ "$src" == clear ]]; then tmkind=clear; else tmkind=restart; fi ;;   # compact is inert (D-306: PreCompact/PostCompact own that transition); absent or unknown is a restart (D-1248)
   esac
   if [[ -n "$tmkind" ]]; then hts="${hcat:-$(_hook_epoch_ms)}"; _hook_turn_mark "$tmkind" || true; fi
 fi
@@ -3201,9 +3293,141 @@ if [[ -z "$paid" && -d "$HOME/.ccrc/history/spool" && ! -L "$HOME/.ccrc/history/
   fi
 fi
 # <<< history-spool
+# >>> delegation-spool (delegation broker wave 3, spec 2026-10-04 §5.3)
+# THE DELEGATION SPOOL: one bounded, owner-scoped evidence line per delegation event, appended to
+# `$REG/delegation/spool/<id>/<YYYYMMDDHH>.spool` (the UTC hour of the line's own `observedAt`). Evidence, never authority: the hook
+# decides nothing about parentage, and a line it cannot write is a line the census backstops. The server reads these files by byte
+# range and trusts nothing in them beyond `DelegationSpoolLineV1` (`shared/api.ts`); every bound below is `DELEGATION_SPOOL_BOUNDS`
+# there, spelled again here because a hook cannot import it, and `delegation-spool.test.ts` fails on any drift.
+#
+# THE LINE IS BUILT IN THE PAYLOAD PARSE (the one `jq -r` above; its two lines are single physical lines because nothing may be added above
+# the `_hook_emit_context "$CARD" "$CARD_COMPACT"` line, whose number README cites; `DSP_DEFS`, the spool's jq text, opens the first, the one form the merge-deny scan reads). That is the hook's existing single jq call, so the spool adds no fork on
+# any path: the same events fork jq as often with the directory as without it (`session-hook-turnmark.test.ts`). Its COST is
+# compile time, about 11 ms of CPU for the extra jq text (measured on jq 1.7), so the text (`dsp_defs`) is added only when the
+# raw payload contains the QUOTED name of a delegation tool or event, or the tag of a task notification (`"Bash"`, `"SessionStart"`,
+# `task-notification>`, which a `<` escaped as `\u003c` matches too, ...). A JSON string value is delimited by unescaped quotes, while a string's content
+# carries its quotes as `\"`, so text that merely mentions Bash, Task or Agent (a Read result, an Edit string, a prompt) does not
+# match. The list is a NECESSARY condition: a delegation event cannot lack its own name, and Node's JSON.stringify escapes neither
+# ASCII letters nor `<` (every delegation-relevant payload in the captured corpus carries these quoted forms verbatim, and
+# `delegation-spool.test.ts` replays the corpus). That file pins the list against the event and tool vocabulary too; a false
+# positive costs only the compile, a false negative would drop evidence silently. A Read, an Edit, a Stop or an ordinary prompt
+# compiles the parse alone, as it always did. It reads the payload ONCE and keeps only closed fields:
+#   SessionStart (source; compact included), SessionEnd (reason), SubagentStart and SubagentStop (agent id and type; the stop's
+#   transcript path), PreToolUse and PostToolUse for Agent, Task, Workflow and Bash only (tool, tool-use id, isolation; the
+#   response normalised to an outcome and, for a launch, its closed launch fields), and a UserPromptSubmit that is a syntactically
+#   valid task notification (task id, tool-use id, terminal status, read from the block's header in order, never from its body).
+# Everything else writes no line, and nothing free-form is ever kept: no prompt, result, diagnostics, tool input or output, Agent
+# `outputFile` or `scratchpad_dir`. Workflow `transcriptDir` and `scriptPath` are the only launch paths kept. An id outside
+# `[A-Za-z0-9_-]{1,64}` is never cleaned into one: a SubagentStart/Stop with such an agent id, and any event whose agent id is such,
+# writes NO line (a line without the id would read as the main thread's). A required field that is missing or over its bound writes
+# no line; an optional one that is over its bound is dropped, never cut, and marks the line `truncated`.
+# THE CAP: a line plus its LF is under DSP_LINE_BELOW bytes, measured on the serialized text (escapes count). When it is not, optional
+# fields go in this order until it is: `listing`, `claudeVersion`, `cwd`, `agentType`, `transcriptPath`; `truncated: true` is set. A
+# line that cannot fit with only its required fields is not written. One `printf` of a line under 4 KiB to an O_APPEND descriptor is
+# one write(2), so hooks racing on one bucket never interleave; no fence is written before it, because an empty line would be an
+# unparseable complete line to the reader (a torn tail after a full disk is the reader's `unmeasured`, spec §5.3).
+#
+# GATES, all builtins and all before the jq (the statement on the line above the parse): the owner's directory exists and is not a
+# link (ccd makes it at spawn; THE HOOK NEVER MAKES IT, so a missing directory is a skip), neither are its two parents, the id is
+# not dot-leading and at most CCRC_ID_MAX (the hook's own id bound), and `<id>.generation` is a regular file holding a lowercase UUID of exactly 36
+# bytes (a 37th byte, an LF, is read and refused). That value is the line's `parentIncarnation`, read at write time and read AGAIN
+# here just before the append: a value that changed between the two, or an environment generation (`CCRC_SESSION_GENERATION`,
+# what this pane was spawned with) that is not the file's, means the row was reused under a pane that outlived it, and no line
+# is written. Missing, malformed, changing or unreadable is unmeasured. `claudeVersion` is the version directory that
+# `CLAUDE_CODE_EXECPATH` names (`.../versions/2.1.296`), kept only when it has a version's shape; the path itself is never kept.
+#
+# THE LISTING (Bash only, when the command text contains `worktree`): the names under `<git-common-dir>/worktrees/`, read here
+# with builtins (the common directory comes from the `.git` entry found walking up from the cwd: a directory, or a file
+# `gitdir: <common>/worktrees/<name>`), spliced in as the line's last key. Names only, in C-locale order, each of
+# `[A-Za-z0-9._@+-]` and at most DSP_NAME_BYTES; more than DSP_LIST_NAMES names or one that fails that drops the WHOLE listing (a
+# partial listing reads as complete) and marks the line `truncated`; a directory that cannot be read or a repository that cannot
+# be found leaves no `listing` key (unmeasured), and a repository with no `worktrees/` has a measured `[]`. It is added only when the
+# line shed nothing else (listing goes first), and the jq reserved the 17 bytes `,"truncated":true` would need.
+#
+# PRUNE: the first write of an hour (the bucket did not exist) removes this owner's regular `<10 digits>.spool` files older than the
+# cutoff hour (24 hours before now) from THIS directory and nothing else, by exact names it listed from it. That is at most once an
+# hour per owner without any state to keep; two first writers racing both prune, harmlessly. It is the one fork on this path (one
+# `rm`, and only when a stale bucket exists). THE HOOK PRUNES ONLY A LIVE OWNER, FROM ITS OWN WRITE: a removed owner, or one whose
+# session never runs again, keeps its last 24 to 25 hourly buckets for good, because nothing in wave 3 removes them (no ccd purge,
+# no server delete); the plan's "hooks retain only their own 24-hour buckets" holds for an owner that keeps writing.
+#
+# SessionStart `compact` is recorded here, before the hook's one early exit below (it used to exit in its arm; `sessend` carries it).
+DSP_LINE_BELOW=4096 DSP_LIST_NAMES=256 DSP_NAME_BYTES=64
+_hook_spool_listing() {   # <cwd> -> DSP_LIST ('["a","b"]'; empty = unmeasured) and DSP_DROP (1 = a listing exists but cannot be kept)
+  local LC_ALL=C d="${1-}" line="" g="" common="" w="" p="" name="" out="" n=0 cnt=0 dg=0 ng=0
+  DSP_LIST="" DSP_DROP=""
+  [[ "$d" == /* ]] || return 0
+  while (( n++ < 64 )); do
+    if [[ -d "$d/.git" && ! -L "$d/.git" ]]; then common="$d/.git"; break
+    elif [[ -f "$d/.git" && ! -L "$d/.git" ]]; then
+      { IFS= read -r -N 1024 line < "$d/.git"; } 2>/dev/null
+      g="${line%%$'\n'*}"
+      [[ "$g" == "gitdir: "* ]] || return 0
+      g="${g#gitdir: }"
+      [[ "$g" == /* ]] || g="$d/$g"
+      [[ "$g" == */worktrees/?* && "${g##*/worktrees/}" != */* ]] || return 0
+      common="${g%/worktrees/*}"; break
+    fi
+    [[ "$d" == */* && "$d" != / ]] || return 0
+    d="${d%/*}"; [[ -n "$d" ]] || d=/
+  done
+  [[ -n "$common" && -d "$common" ]] || return 0
+  w="$common/worktrees"
+  if [[ ! -e "$w" && ! -L "$w" ]]; then DSP_LIST="[]"; return 0; fi
+  [[ -d "$w" && -r "$w" && -x "$w" ]] || return 0
+  shopt -q dotglob && dg=1; shopt -q nullglob && ng=1
+  shopt -s dotglob nullglob
+  for p in "$w"/*; do
+    name="${p##*/}"
+    [[ "$name" == . || "$name" == .. || ! -d "$p" ]] && continue
+    if (( ++cnt > DSP_LIST_NAMES || ${#name} > DSP_NAME_BYTES )) || [[ ! "$name" =~ ^[A-Za-z0-9._@+-]+$ ]]; then DSP_DROP=1; break; fi
+    out+="${out:+,}\"$name\""
+  done
+  (( dg )) || shopt -u dotglob
+  (( ng )) || shopt -u nullglob
+  [[ -n "$DSP_DROP" ]] || DSP_LIST="[$out]"
+  return 0
+}
+_hook_spool_prune() {   # <owner dir> <cutoff bucket> -> removes this directory's regular <10 digits>.spool files older than the cutoff
+  local LC_ALL=C d="${1-}" cut="${2-}" f="" b="" old=()
+  [[ "$cut" =~ ^[0-9]{10}$ ]] || return 1
+  for f in "$d"/[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].spool; do
+    [[ -f "$f" && ! -L "$f" ]] || continue
+    b="${f##*/}"; b="${b%.spool}"
+    (( 10#$b < 10#$cut )) && old+=("$f")
+  done
+  (( ${#old[@]} )) && rm -f -- "${old[@]}" 2>/dev/null
+  return 0
+}
+_hook_spool_append() {   # $dsp_line, with $dsp_bucket $dsp_cut $dsp_cwd from the parse -> 0 appended | 1 not (never fatal: the caller says `|| true`)
+  local LC_ALL=C f="" g2="" fresh="" cand=""
+  if [[ -n "$dsp_cwd" && "$dsp_line" != *'"truncated":true}' ]]; then
+    _hook_spool_listing "$dsp_cwd"
+    if [[ -n "$DSP_LIST" ]]; then
+      cand="${dsp_line%\}},\"listing\":$DSP_LIST}"
+      if (( ${#cand} + 1 < DSP_LINE_BELOW )); then dsp_line="$cand"; else DSP_DROP=1; fi
+    fi
+    [[ -z "$DSP_DROP" ]] || dsp_line="${dsp_line%\}},\"truncated\":true}"
+  fi
+  (( ${#dsp_line} + 1 < DSP_LINE_BELOW )) || return 1
+  [[ "$dsp_bucket" =~ ^[0-9]{10}$ && -n "$dsp_gen" ]] || return 1
+  [[ -f "$REG/$id.generation" && ! -L "$REG/$id.generation" ]] || return 1
+  { IFS= read -r -N 37 g2 < "$REG/$id.generation"; } 2>/dev/null
+  [[ "$g2" == "$dsp_gen" ]] || return 1
+  [[ -d "$dsp_dir" && ! -L "$dsp_dir" ]] || return 1
+  f="$dsp_dir/$dsp_bucket.spool"
+  [[ ! -L "$f" && ( -f "$f" || ! -e "$f" ) ]] || return 1
+  [[ -e "$f" ]] || fresh=1
+  { printf '%s\n' "$dsp_line" >> "$f"; } 2>/dev/null || return 1
+  [[ -z "$fresh" ]] || _hook_spool_prune "$dsp_dir" "$dsp_cut" || true
+  return 0
+}
+[[ -n "$dsp_line" ]] && { _hook_spool_append || true; }
+# <<< delegation-spool
 # StopFailure (§5.1) leaves hookstate.json alone and prints nothing: its arm raised
 # the flag and read `err` for the marker above (stopfailure-sets-a-flag (D-3611)), and nothing
-# below may run for it. SessionEnd is a termination hint, captured above in a -hookcap session and otherwise inert.
+# below may run for it. SessionEnd is a termination hint, captured above in a -hookcap session and otherwise inert; so is a
+# compact SessionStart (it set `sessend` in its arm, D-306), which only the spool above records.
 [[ -n "$stopfail$sessend" ]] && exit 0
 
 f="$REG/$id.hookstate.json"

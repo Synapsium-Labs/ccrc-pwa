@@ -2761,6 +2761,13 @@ describe('one absent/unreadable read vocabulary', () => {
     expect(registry).toMatch(/import\s+type\s*\{[^}]*\bReadFailure\b[^}]*\}\s*from\s*'\.\/io\.js'/);
   });
 
+  it('is what delegation-model.ts derives a census record\'s state from, not a third copy (ruling R43)', () => {
+    const model = readFileSync(path.join(ccrcRoot, 'server/src/coord/delegation-model.ts'), 'utf8');
+    expect(model).not.toMatch(PAIR);
+    expect(model).toMatch(/state: 'present' \| ReadFailure;/);
+    expect(model).toMatch(/import\s+type\s*\{[^}]*\bReadFailure\b[^}]*\}\s*from\s*'\.\.\/\.\.\/\.\.\/shared\/agent-protocol\.js'/);
+  });
+
   it('server/src/io.ts re-exports ReadFailure rather than restating it', () => {
     const io = readFileSync(path.join(ccrcRoot, 'server/src/io.ts'), 'utf8');
     expect(io).not.toMatch(PAIR);
@@ -2788,6 +2795,133 @@ describe('one absent/unreadable read vocabulary', () => {
     // 'absent'` must stay invisible, which is the whole reason the fingerprint
     // is a PAIR (see this describe's own header).
     expect(PAIR.test("type WsAuditUnit = 'enabled' | 'loaded' | 'absent';")).toBe(false);
+  });
+});
+
+// Delegation broker wave 3, Task 4 (docs/superpowers/plans/2026-10-08-
+// delegation-broker-wave3-observe.md, "Shared event and state vocabulary"):
+// eleven closed vocabularies, each an `as const` array in `shared/api.ts` with
+// its type DERIVED from it. Same family as the block above, and the same
+// reason: a second spelling of a closed set is how a vocabulary drifts, and
+// nothing but a red suite stops the copy. This scans only the arrays and the
+// types derived from them. The interfaces around them are shapes, not sets.
+//
+// The fingerprint for a hand-typed copy is a union whose members are EXACTLY a
+// vocabulary's, in any order. A superset or subset is not a copy — the
+// workspace and attempt-verdict sets overlap `FleetHealth`-style fields that
+// say something else (`'present' | 'absent' | 'unmeasured'`) — so the compare
+// is set EQUALITY, never "contains three of them".
+describe('delegation wave 3: the closed vocabularies are declared once, in shared/api.ts, and their types derived', () => {
+  const VOCABS = [
+    ['DELEGATION_EVENT_KINDS', 'DelegationEventKind',
+      ['SessionStart', 'PreToolUse', 'PostToolUse', 'SubagentStart', 'SubagentStop', 'UserPromptSubmit', 'SessionEnd']],
+    ['DELEGATION_ACTIVITY_SOURCE_KINDS', 'DelegationActivitySourceKind', ['agent', 'workflow', 'bash-worktree']],
+    ['DELEGATION_LEASE_SOURCE_KINDS', 'DelegationLeaseSourceKind', ['agent', 'workflow', 'raw', 'attached']],
+    ['DELEGATION_EXECUTION_STATES', 'DelegationExecutionState', ['active', 'ended', 'unknown']],
+    ['DELEGATION_PARENTAGE_STATES', 'DelegationParentageState', ['linked', 'unresolved', 'conflicting', 'unmeasured']],
+    ['DELEGATION_WORKSPACE_STATES', 'DelegationWorkspaceState', ['none', 'provisioning', 'present', 'absent', 'unmeasured']],
+    ['DELEGATION_DISPOSITIONS', 'DelegationDisposition', ['ephemeral', 'adopted', 'retained', 'promoted']],
+    ['DELEGATION_CLEANUP_STATES', 'DelegationCleanupState',
+      ['not-due', 'pending', 'running', 'refused', 'reclaimed', 'unmeasured']],
+    ['DELEGATION_CLEANUP_POPULATIONS', 'DelegationCleanupPopulation', ['ephemeral-lease']],
+    ['DELEGATION_INTENT_SOURCES', 'DelegationIntentSource', ['explicit', 'run-owner', 'delegation-inferred', 'retained-lineage']],
+    ['DELEGATION_ATTEMPT_VERDICTS', 'DelegationAttemptVerdict', ['linked', 'unresolved', 'conflicting', 'unmeasured']],
+  ] as const;
+  const apiText = (): string => readFileSync(path.join(ccrcRoot, 'shared', 'api.ts'), 'utf8');
+  const declaredIn = (decl: RegExp): string[] => ALL.filter((f) => decl.test(readFileSync(f, 'utf8'))).map(rel);
+
+  it('finds the vocabularies it scans (a scan over nothing passes everything)', () => {
+    expect(VOCABS.length).toBe(11);
+    expect(apiText()).toContain('DELEGATION_EVENT_KINDS');
+  });
+
+  for (const [arr, type, members] of VOCABS) {
+    it(`${arr} is declared exactly once, in shared/api.ts, with the plan's members in the plan's order`, async () => {
+      const DEF = new RegExp(`^\\s*(?:export\\s+)?(?:const|let|var)\\s+${arr}\\b`, 'm');
+      expect(declaredIn(DEF), arr).toEqual(['shared/api.ts']);
+      const api = (await import('../../shared/api.js')) as unknown as Record<string, unknown>;
+      expect(api[arr], `${arr} is exported`).toEqual(members);
+    });
+
+    it(`${type} is declared exactly once, in shared/api.ts, DERIVED from ${arr}`, () => {
+      const DEF = new RegExp(`^\\s*(?:export\\s+)?(?:declare\\s+)?(?:type\\s+${type}\\b\\s*(?:<[^>\\n]*>)?\\s*=|interface\\s+${type}\\b)`, 'm');
+      expect(declaredIn(DEF), type).toEqual(['shared/api.ts']);
+      expect(apiText()).toMatch(new RegExp(`^export type ${type} =\\s*\\(typeof ${arr}\\)\\[number\\];$`, 'm'));
+    });
+  }
+
+  // Union runs: `'a' | 'b' | 'c'`, however the lines wrap.
+  const UNION_RUN = /'[^'\n]+'(?:\s*\|\s*'[^'\n]+')+/g;
+  const unionSets = (text: string): Array<ReadonlySet<string>> =>
+    (text.match(UNION_RUN) ?? []).map((run) => new Set([...run.matchAll(/'([^'\n]+)'/g)].map((m) => m[1]!)));
+  const equalsSet = (set: ReadonlySet<string>, members: readonly string[]): boolean =>
+    set.size === members.length && members.every((m) => set.has(m));
+
+  it('the union fingerprint is order-insensitive, set-EQUAL, and leaves overlapping non-copies alone', () => {
+    const parentage = VOCABS[4][2];
+    const spelled = (text: string): boolean => unionSets(text).some((set) => equalsSet(set, parentage));
+    expect(spelled("type X = 'linked' | 'unresolved' | 'conflicting' | 'unmeasured';")).toBe(true);
+    expect(spelled("type X = 'unmeasured' | 'conflicting' | 'linked' | 'unresolved';"), 'any order').toBe(true);
+    expect(spelled("type X =\n  | 'linked'\n  | 'unresolved'\n  | 'conflicting'\n  | 'unmeasured';"), 'wrapped').toBe(true);
+    expect(spelled("type X = 'linked' | 'unresolved' | 'conflicting';"), 'a subset is not a copy').toBe(false);
+    expect(spelled("type X = 'linked' | 'unresolved' | 'conflicting' | 'unmeasured' | 'extra';"), 'a superset is not a copy').toBe(false);
+    expect(spelled("capabilityState: 'present' | 'absent' | 'unmeasured';"), 'an overlapping other set').toBe(false);
+  });
+
+  for (const [arr, type, members] of VOCABS) {
+    if (members.length < 2) continue;   // a union of one word states no set
+    it(`no source hand-types a union equal to ${arr} — ${type} comes from the array`, () => {
+      const holders = ALL.filter((f) => unionSets(readFileSync(f, 'utf8')).some((set) => equalsSet(set, members))).map(rel);
+      expect(holders).toEqual([]);
+    });
+  }
+});
+
+// Delegation broker wave 3, Task 4: `ReadFailure` stays declared ONCE, in
+// `shared/agent-protocol.ts` (D-1438), and the two consumer shapes this task
+// adds to the seam carry it by NAME. A `{ok:false; reason: 'absent' |
+// 'unreadable'}` spelled inline in either would be the pair's third copy, and
+// the pair scan above already refuses it in io.ts by its fingerprint; these
+// pin the same fact by the names the new shapes are supposed to use.
+describe('delegation wave 3: the measured directory and byte-range reads carry ReadFailure by name', () => {
+  const read = (relPath: string): string => readFileSync(path.join(ccrcRoot, relPath), 'utf8');
+  const declaredIn = (decl: RegExp): string[] => ALL.filter((f) => decl.test(readFileSync(f, 'utf8'))).map(rel);
+
+  it('ReadFailure is declared in exactly one file, shared/agent-protocol.ts, and server/src/io.ts only re-exports it', () => {
+    expect(declaredIn(/^\s*(?:export\s+)?type\s+ReadFailure\b\s*=/m)).toEqual(['shared/agent-protocol.ts']);
+    const io = read('server/src/io.ts');
+    expect(io).toMatch(/^export type \{ ReadFailure \};$/m);
+    expect(io).not.toMatch(/^\s*(?:export\s+)?type\s+ReadFailure\b\s*=/m);
+  });
+
+  it.each([
+    ['MeasuredDirectoryRead', 'entries: readonly string[]'],
+    ['MeasuredByteRangeRead', 'bytes: Uint8Array; size: number'],
+  ])('%s is declared once, in server/src/io.ts, and its failure arm is { ok: false; reason: ReadFailure }', (name, okArm) => {
+    expect(declaredIn(new RegExp(`^\\s*(?:export\\s+)?type\\s+${name}\\b\\s*=`, 'm'))).toEqual(['server/src/io.ts']);
+    const io = read('server/src/io.ts');
+    const at = io.indexOf(`export type ${name} =`);
+    expect(at, `${name}'s declaration`).toBeGreaterThan(-1);
+    // To the blank line that ends the declaration: its arms hold `;` inside braces.
+    const rest = io.slice(at);
+    const body = rest.slice(0, rest.indexOf('\n\n'));
+    expect(body).toContain(okArm);
+    expect(body).toMatch(/\{ ok: false; reason: ReadFailure \}/);
+    expect(body).not.toMatch(/'absent'|'unreadable'/);
+  });
+
+  it('the new consumers import ReadFailure rather than restating it', () => {
+    // fileops.ts is already pinned by the pair scan above; the new agent-side
+    // directory result lives in the same file and names the type, and the
+    // remote adapter takes it from the seam it implements.
+    const fileops = read('agent/src/fileops.ts');
+    const at = fileops.indexOf('export type ListDirResult =');
+    expect(at, 'ListDirResult\'s declaration').toBeGreaterThan(-1);
+    const rest = fileops.slice(at);
+    expect(rest.slice(0, rest.indexOf('\n\n'))).toMatch(/\{ ok: false; reason: ReadFailure \}/);
+    expect(read('server/src/remote/io.ts')).toMatch(
+      /import\s+type\s*\{[^}]*\bReadFailure\b[^}]*\}\s*from\s*'\.\.\/io\.js'/,
+    );
   });
 });
 

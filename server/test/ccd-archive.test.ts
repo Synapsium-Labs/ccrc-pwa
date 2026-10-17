@@ -151,7 +151,7 @@ describe('ccd caps', () => {
   // still fail loudly on anything ELSE that drifts: a THIRD capability token
   // added without updating this list is exactly as much a silent hole as an
   // undispatched verb would be.
-  const KNOWN_CAPABILITY_TOKENS = ['account-pools', 'account-v1', 'actor-flags-v1', 'child-argv-v1', 'collect-v1', 'docs-v1', 'expire-v1', 'lifecycle-v1', 'pools-v1', 'reclaim-pause-v1', 'reclaim-v1', 'route-apply-v1', 'route-argv-v1', 'route-v1', 'stop-surface', 'win-size-v1'];
+  const KNOWN_CAPABILITY_TOKENS = ['account-pools', 'account-v1', 'actor-flags-v1', 'child-argv-v1', 'collect-v1', 'delegation-events-v1', 'docs-v1', 'expire-v1', 'lifecycle-v1', 'pools-v1', 'reclaim-pause-v1', 'reclaim-v1', 'route-apply-v1', 'route-argv-v1', 'route-v1', 'stop-surface', 'win-size-v1'];
 
   it('advertises exactly the verbs the dispatcher implements, plus the known capability tokens', () => {
     // The THIRD spelling of this token, closing the parity gap `ccdargv.ts`'s
@@ -192,6 +192,10 @@ describe('ccd caps', () => {
     // The native Docs reader's token (docs W2): the third spelling of `docs-v1`, held equal to the constant the docs
     // adapter's gate reads (`capSupported`) and to ccd's own `echo docs-v1` (W1).
     expect(KNOWN_CAPABILITY_TOKENS).toContain(DOCS_CAP);
+    // The delegation broker's wave-3 token: the spool grammar plus ccd making each session's spool directory. The server-side constant
+    // that gates ingestion arrives with the ingestion task; until then this list and ccd's own `echo delegation-events-v1` are the two
+    // spellings, and `delegation-spool.test.ts` pins that the token is advertised exactly once.
+    expect(KNOWN_CAPABILITY_TOKENS).toContain('delegation-events-v1');
     // The deployed ~/.local/bin/ccd is a COPY, not a symlink to the repo, so a
     // verb can pass the agent whitelist and still not exist on the box. This
     // list is what the agent reports; a list that drifts from the dispatcher

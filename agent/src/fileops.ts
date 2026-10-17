@@ -124,12 +124,18 @@ export async function readB64Measured(p: string): Promise<ReadB64Result> {
 
 /** `readFromMeasured`'s result. The EOF arm is `ok`, NOT a failure: an offset
  *  at or past the file's size means "the cursor is at the end and there are
- *  no new bytes", which is a measurement, not a miss. */
+ *  no new bytes", which is a measurement, not a miss.
+ *
+ *  `dataB64` is ADDITIVE and present ONLY when the caller passed `maxBytes`:
+ *  the canonical base64 of exactly the bytes read, beside `data`, which is
+ *  still the lossy UTF-8 decode of those same bytes (a character split by the
+ *  bound decodes to U+FFFD there and survives byte-exact here). An older
+ *  caller never sees the key. */
 export type ReadFromResult =
-  | { ok: true; data: string; size: number }
+  | { ok: true; data: string; size: number; dataB64?: string }
   | { ok: false; reason: ReadFailure };
 
-export async function readFromMeasured(p: string, offset: number): Promise<ReadFromResult> {
+export async function readFromMeasured(p: string, offset: number, maxBytes?: number): Promise<ReadFromResult> {
   // Stream only [offset, size) — never load the whole file. A transcript backlog
   // read of a tens-of-MB file used to slurp the whole thing here, ballooning the
   // agent's memory and stalling its event loop.
@@ -140,16 +146,41 @@ export async function readFromMeasured(p: string, offset: number): Promise<ReadF
     return { ok: false, reason: failureFor(e) };
   }
   const from = Math.max(0, Math.min(offset, size));
-  if (from >= size) return { ok: true, data: '', size };
+  // No `maxBytes`: the remainder, exactly as this function has always read it —
+  // NO default bound, because a caller that omitted the field is an old one
+  // and its answer must not change. `maxBytes`: at most that many bytes.
+  const bounded = maxBytes !== undefined;
+  const end = bounded ? Math.min(size, from + maxBytes) : size;
+  if (from >= end) return bounded ? { ok: true, data: '', dataB64: '', size } : { ok: true, data: '', size };
   try {
-    return { ok: true, data: (await readRange(p, from, size)).toString('utf8'), size };
+    const bytes = await readRange(p, from, end);
+    const data = bytes.toString('utf8');
+    return bounded ? { ok: true, data, dataB64: bytes.toString('base64'), size } : { ok: true, data, size };
   } catch (e) {
     return { ok: false, reason: failureFor(e) };
   }
 }
 
+/** `listDirMeasured`'s result: a listing — an EMPTY one is a listing, a positive
+ *  answer — or one of the two `ReadFailure` words. Same fail-shut rule as every
+ *  other read here: only a proven ENOENT is `absent`. */
+export type ListDirResult =
+  | { ok: true; names: string[] }
+  | { ok: false; reason: ReadFailure };
+
+export async function listDirMeasured(p: string): Promise<ListDirResult> {
+  try {
+    return { ok: true, names: await readdir(p) };
+  } catch (e) {
+    return { ok: false, reason: failureFor(e) };
+  }
+}
+
+/** The old `string[] | null` collapse, kept for any caller that does not need the
+ *  distinction; it derives from `listDirMeasured`, so the two cannot disagree. */
 export async function listDir(p: string): Promise<string[] | null> {
-  try { return await readdir(p); } catch { return null; }
+  const r = await listDirMeasured(p);
+  return r.ok ? r.names : null;
 }
 
 /** `statMeasured`'s result — the `stat` op's half of `ReadResult` above, and
