@@ -145,8 +145,9 @@ const box = async (cfg: BoxCfg = {}) => {
 // or the awaited request has settled. A fixed number of turns let fake time run ahead of the route's real I/O on a
 // loaded box: the route's read was still in flight, so the test stepped on, and the interleaving with its writes moved.
 
-/** Real wall time any one wait on the code under test may take before the case fails. */
-const REAL_BOUND_MS = 20_000;
+/** Real wall time any one wait on the code under test may take before the case fails. Below `vitest.config.ts`'s Linux
+ *  `testTimeout` (20 000 ms), so the named error below surfaces before vitest's own `Test timed out`. */
+const REAL_BOUND_MS = 10_000;
 const turn = (): Promise<void> => new Promise<void>((r) => { setImmediate(r); });
 /** Wait `ms` of REAL time, through event-loop turns (the faked `setTimeout` cannot). */
 const realDelay = async (ms: number): Promise<void> => {
