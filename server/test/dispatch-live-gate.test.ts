@@ -24,6 +24,7 @@ import { COORDINATOR_PAUSE_MARKER } from '../src/coord/rundefs.js';
 import { configDirFor } from '../src/config.js';
 import type { Runner } from '../src/exec.js';
 import type { CcdResult } from '../src/lifecycle.js';
+import { SERVER_CAPS } from '../../shared/api.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -388,5 +389,14 @@ describe('the bound has a basis in code (D-5238)', () => {
     const cap = Math.min(...caps);
     expect(2 * DISPATCH_SPAWN_WAIT_MS).toBeLessThanOrEqual(cap * 1000);
     expect(DISPATCH_SPAWN_POLL_MS).toBeLessThan(DISPATCH_SPAWN_WAIT_MS);
+  });
+});
+
+// D-5232's mechanism (plan 2026-10-16, Task 9b): a server carrying this gate advertises `dispatch-live-gate-v1`, and the
+// fleet's hook engages D-5239's compaction skip only behind a server that does. The word is pinned HERE, beside the
+// gate's own cases, so a change that removes the gate meets the word it would leave advertising a promise it broke.
+describe('the gate\'s capability word (D-5238, advertised through D-5232\'s mechanism)', () => {
+  it('SERVER_CAPS lists dispatch-live-gate-v1', () => {
+    expect(SERVER_CAPS).toContain('dispatch-live-gate-v1');
   });
 });

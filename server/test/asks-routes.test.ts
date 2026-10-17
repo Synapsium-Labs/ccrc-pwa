@@ -987,7 +987,7 @@ describe('late answer wins; declined (D-5289)', () => {
     expect(okAsk(coord.askById(id))).toMatchObject({ state: 'answered', answeredBy: MESA, answer: 'Blue' });
     const tagged = sent.filter((p) => p.tag === `ask-${KID}`);
     expect(tagged).toHaveLength(2);
-    expect(tagged[1]!.body).toBe(`answered by ${MESA}`);
+    expect(tagged[1]!.body).toBe(`Answered by ${MESA}`);
     expect(tagged[1]!.actions).toBeUndefined();
   });
 
@@ -1027,7 +1027,7 @@ describe('late answer wins; declined (D-5289)', () => {
     expect(okAsk(coord.askById(id))).toMatchObject({ state: 'answered', answeredBy: MESA });
     const tagged = sent.filter((p) => p.tag === `ask-${KID}`);
     expect(tagged).toHaveLength(2);
-    expect(tagged[1]!.body).toBe(`answered by ${MESA}`);
+    expect(tagged[1]!.body).toBe(`Answered by ${MESA}`);
   });
 
   const operator = (body: Record<string, unknown>) =>

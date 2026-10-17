@@ -10257,3 +10257,130 @@ export interface DialogTabMoved {
   readonly ok: true;
   readonly next: Dialog;
 }
+
+/** `POST /api/sessions/:id/interrupt`'s refusal codes, each a `409` with zero keys pressed (`interrupt`,
+ *  `server/src/inject/send.ts`):
+ *  - `not-alive`: no pane to press a key in.
+ *  - `not-busy`: no turn measured — an idle live word, or one that could not be read (D-115's asymmetry: an unread
+ *    word withholds the key).
+ *  - `background-only` (D-5236): the main loop is idle over background work Escape would not stop — the live word
+ *    `busy` after a main Stop that left delegated work running (the body carries its `count` and `kinds`), or the
+ *    live word `shell` (`count: null`, no kinds). Never with a pane menu pending. */
+export type InterruptRefusal = 'not-alive' | 'not-busy' | 'background-only';
+const INTERRUPT_REFUSAL_MAP: Readonly<Record<InterruptRefusal, true>> = {
+  'not-alive': true, 'not-busy': true, 'background-only': true,
+};
+export const INTERRUPT_REFUSALS: readonly InterruptRefusal[] = Object.keys(INTERRUPT_REFUSAL_MAP) as InterruptRefusal[];
+/** The interrupt route's refusal body. */
+export type InterruptRefusalBody =
+  | { ok: false; error: 'not-alive' | 'not-busy' }
+  | { ok: false; error: 'background-only'; count: number | null; kinds: string[] };
+/** D-5236: the ONE reader of a `background-only` refusal body, for the PWA. Anything else — another code, an older
+ *  server's body, a malformed count or kinds — is null, and the caller keeps its generic 409 words. */
+export function backgroundOnlyRefusal(body: unknown): { count: number | null; kinds: string[] } | null {
+  if (typeof body !== 'object' || body === null) return null;
+  const b = body as Record<string, unknown>;
+  if (b['error'] !== 'background-only') return null;
+  const count = b['count'];
+  const kinds = b['kinds'];
+  if (count !== null && !(typeof count === 'number' && Number.isInteger(count) && count > 0)) return null;
+  if (!Array.isArray(kinds) || !kinds.every((k) => typeof k === 'string')) return null;
+  return { count, kinds: kinds as string[] };
+}
+
+// ── The server's capability words (D-5232's mechanism; plan 2026-10-16, Task 9b; spec §6.1) ─────────────────────
+// APPENDED at the very end, because README and the specs cite this file by line.
+//
+// A fleet-side change that alters what an EXISTING hookstate field means is safe only behind the server half that
+// reads the new meaning (D-5232's carry, D-5239's compaction skip). No rollout form holds that order for every mover
+// (the `auto` dispatcher and the one-tap move fleet nodes first, `deploy.sh` and a hand-run `ccrc update` follow no
+// order, a server can be rolled back or restore itself after a failed health gate). So the server ADVERTISES what it
+// reads, as words in `GET /health`'s additive `caps`; the fleet box records them in `~/.ccrc/<SERVER_CAPS_FILE>`
+// (written every minute by `ccd/ccd-update-sync` on a `fleet` node, by the server process itself on a `server` or
+// `both` node, `server/src/update/serverCaps.ts`); and the hook engages a gated arm only while that file is whole,
+// current within `SERVER_CAPS_LEASE_S` by its own clock and lists the arm's word. Absent, stale, torn or unlisted
+// reads as "not advertised", and the arm writes exactly what it writes today.
+//
+// A WORD IS ADDED BY THE CHANGE THAT BUILDS WHAT IT NAMES (or, for what was built before this list existed, by the
+// change that creates the list), cut after everything the word promises, so a server cannot advertise a word without
+// all of it. A word is never reused for a different promise: a changed promise is a new word (`-v2`).
+//
+// The bash spellings are documented second copies, held equal by tests that iterate over these values: the word
+// grammar and the file's name in `ccd/ccd-update-sync` (`server-caps.test.ts`, `ccd-update-sync.test.ts`), and,
+// from Tasks 2 and 10, the file's name, the lease and the grammar in `ccd/session-hook.sh`.
+
+/** One capability word the server advertises. Spelled once, as the keys of `SERVER_CAP_MAP`. */
+export type ServerCap = 'dispatch-live-gate-v1';
+
+/** Every word, with what it promises. The value is `true`; the promise is the comment, which a word's reader may
+ *  rely on and nothing weaker. `PR_REASON_MAP`'s idiom: a word added to `ServerCap` and not here is TS2741. */
+const SERVER_CAP_MAP: Readonly<Record<ServerCap, true>> = {
+  /** D-5238 (Task 9): the dispatch resume arm types `/clear` only when the fail-closed turn verdict
+   *  (`turnVerdictFor`, `server/src/turnverdict.ts`) reads `idle`, at the gate and again immediately before the act;
+   *  `busy` refuses `worker-busy`, `unmeasured` refuses `status-unmeasurable` (or `worker-starting` after an `ensure`
+   *  that started the pane). So a hook `done` standing over a busy pane (D-5239's compaction skip) can never be read
+   *  by this server as a session safe to `/clear`. Added by Task 9b (the change that creates this list), cut after
+   *  Task 9 merged; `dispatch-live-gate.test.ts` pins the word beside the gate it names. */
+  'dispatch-live-gate-v1': true,
+};
+
+/** The words this server advertises, in `GET /health`'s `caps`, and in the file a `server` or `both` node writes. */
+export const SERVER_CAPS: readonly ServerCap[] = Object.keys(SERVER_CAP_MAP) as ServerCap[];
+
+/** The file's name, under `~/.ccrc` (the node's ccrc directory). */
+export const SERVER_CAPS_FILE = 'server-caps';
+
+/** How old the file's `at` may be, in seconds by the READER's clock, before it reads as not advertised: three
+ *  periods of the one-minute writers, so one missed write never turns an arm off. A server rolled back below a word
+ *  turns its arm off within this lease on a `server` or `both` node (an older server never rewrites the file). */
+export const SERVER_CAPS_LEASE_S = 180;
+
+/** One word's grammar. The file is three `\n`-terminated lines: `at <1–11 digits>` (unix seconds, the writer's
+ *  clock), `caps` followed by zero or more words separated by single spaces, `end`. */
+const SERVER_CAP_WORD_RE = /^[a-z0-9-]{1,64}$/;
+const SERVER_CAPS_AT_RE = /^at ([0-9]{1,11})$/;
+const SERVER_CAPS_CAPS_RE = /^caps((?: [a-z0-9-]{1,64})*)$/;
+
+/** Is `w` a word the file's grammar admits? */
+export function isServerCapWord(w: string): boolean {
+  return SERVER_CAP_WORD_RE.test(w);
+}
+
+/** The file's three lines. Pure. Throws `RangeError` on a word the grammar refuses or an `atS` that is not a whole
+ *  number of 1–11 digits: a document the reader would refuse is never rendered. */
+export function renderServerCaps(words: readonly string[], atS: number): string {
+  if (!Number.isSafeInteger(atS) || atS < 0 || String(atS).length > 11) {
+    throw new RangeError(`server-caps: at ${String(atS)} is not unix seconds of 1 to 11 digits`);
+  }
+  for (const w of words) {
+    if (!isServerCapWord(w)) throw new RangeError(`server-caps: ${JSON.stringify(w)} is not a capability word`);
+  }
+  return `at ${atS}\ncaps${words.map((w) => ` ${w}`).join('')}\nend\n`;
+}
+
+/** `parseServerCaps`'s answer. Each refusal is its own reason, never folded into another:
+ *  - `torn`: fewer than three whole lines, every whole line on its grammar (a write cut short, `end` missing);
+ *  - `malformed`: a whole line off its grammar (a bad word, a 12-digit `at`), or anything after `end`;
+ *  - `stale`: `at` more than `SERVER_CAPS_LEASE_S` before `nowS`;
+ *  - `future`: `at` after `nowS`. */
+export type ServerCapsParse =
+  | { ok: true; at: number; words: string[] }
+  | { ok: false; why: 'torn' | 'malformed' | 'stale' | 'future' };
+
+/** The reader of the file's grammar, by `nowS` (unix seconds, the reader's own clock). Pure. */
+export function parseServerCaps(text: string, nowS: number): ServerCapsParse {
+  const parts = text.split('\n');
+  const whole = parts.slice(0, -1);          // every line that ended in `\n`
+  const rest = parts[parts.length - 1]!;     // what follows the last `\n` ('' in a whole document)
+  if (whole.length > 3 || (whole.length === 3 && rest !== '')) return { ok: false, why: 'malformed' };
+  const grammar = [SERVER_CAPS_AT_RE, SERVER_CAPS_CAPS_RE, /^end$/];
+  for (let i = 0; i < whole.length; i++) {
+    if (!grammar[i]!.test(whole[i]!)) return { ok: false, why: 'malformed' };
+  }
+  if (whole.length < 3) return { ok: false, why: 'torn' };
+  const at = Number(SERVER_CAPS_AT_RE.exec(whole[0]!)![1]);
+  const words = SERVER_CAPS_CAPS_RE.exec(whole[1]!)![1]!.split(' ').filter((w) => w !== '');
+  if (at > nowS) return { ok: false, why: 'future' };
+  if (nowS - at > SERVER_CAPS_LEASE_S) return { ok: false, why: 'stale' };
+  return { ok: true, at, words };
+}

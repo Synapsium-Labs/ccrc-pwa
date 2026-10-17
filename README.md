@@ -841,6 +841,25 @@ predates `update --check`. `deploy.sh` never writes a role, so **the first move 
 hand, once per box (D-3106):** add the `CCRC_ROLE=` line to that box's `~/.ccrc/ccrc.env`, then
 `ssh <box> ccrc update --to vX.Y.Z`, fleet box first. Every release after that is `ccrc rollout`.
 
+**The server's capability words (D-5232's mechanism).** Some fleet-side changes alter what an existing hookstate
+field means and are safe only behind a server that reads the new meaning. No rollout form can hold that order for
+every mover (the one-tap and the `auto` dispatcher move fleet nodes first, `deploy.sh` and a hand-run `ccrc update`
+follow no order, and a server can be rolled back or restore itself after a failed health gate), so the hook gates
+itself on its server instead. The server advertises words in `GET /health`'s additive `caps` (`SERVER_CAPS`,
+`shared/api.ts`; a word is added by the change that builds what it names and never reused for another promise;
+the first is `dispatch-live-gate-v1`, D-5238's dispatch gate). The fleet box records them in `~/.ccrc/server-caps`
+(`SERVER_CAPS_FILE`): three lines, `at <unix seconds>`, `caps` and the words, `end`, whole by rename at mode 0600.
+On a `fleet` node `ccd-update-sync` writes it every minute from a second request of its own to `/health` (no token;
+placed before its node-id and box-token checks, and its failures write nothing and never stop the intent pull); on a
+`server` or `both` node the server process writes it at its first tick and then on a minute beat of its own, which
+does not need a coordination database. A hook arm that changes a field's meaning engages only while the file is
+whole, at most `SERVER_CAPS_LEASE_S` (180 s) old by the hook's clock, not in the future, and lists the arm's word;
+otherwise it writes exactly what it wrote before, which every server reads correctly. So no rollout order is needed
+for such an arm: a fleet that moves first runs with the arm off until its server lists the word, and a server rolled
+back below the word turns the arm off within a minute on a fleet node and within the 180 s lease on a `server` or
+`both` node, whose file the older server never rewrites. `ccrc doctor`'s `server-caps` check reads the file on a
+`fleet` or `both` node and WARNs, naming the writer, when it is absent, torn, malformed, stale or in the future.
+
 **Control plane (update-management W2).** The server now measures and records the fleet's update state; what moves
 a node is the one-tap, below. `coord.db` (migration 14) holds a **release catalogue** — the repo's GitHub releases
 listing, read every 30 minutes with `If-None-Match` and no token (owner and repo come from the installed tree's
@@ -5112,7 +5131,7 @@ things at that moment: it builds a SECOND card — the files this context was wo
 community and dependents read out of the same graph — and it MEASURES the compaction, writing one line to a
 per-session journal. Three arms of `ccd/session-hook.sh` do it, and **none of them opens a new output
 channel**: the card rides the one `additionalContext` envelope `SessionStart` already prints — the compact
-arm calls `_hook_emit_context "$CARD" "$CARD_COMPACT"` (`ccd/session-hook.sh:3012`), which appends the second
+arm calls `_hook_emit_context "$CARD" "$CARD_COMPACT"` (`ccd/session-hook.sh:3037`), which appends the second
 subject under its own `COMPACT_CARD_MAX_CHARS` ceiling (`:97`) before the single `jq -cn` print (`:103-105`) — and `PreCompact` and
 `PostCompact` print nothing at all. `PreCompact` decides whose transcript is compacting and publishes the
 working set, `SessionStart(compact)` serves the card once beside the graph card in that one envelope, and
@@ -6241,9 +6260,9 @@ Known real-format subtleties already encoded:
   (`'sandbox request'`, `'input needed'`, `'dialog open'`, or the top dialog's
   own label). `liveSessionStatus` still collapses everything but `idle` to
   `busy` on purpose — the fleet card and the session socket must never paint a
-  human-blocked session as at rest, and the interrupt route's `liveStatus`
-  reads the same collapse — and `waiting` reaches the attention bucket through
-  `dialogPending` instead. The mail gate no longer reads that collapse:
+  human-blocked session as at rest — and `waiting` reaches the attention bucket
+  through `dialogPending` instead. The interrupt route no longer reads that
+  collapse (D-5236: `shell` is `409 background-only`). Nor does the mail gate:
   `mailTurnIdle` (`server/src/turnidle.ts`) takes the raw word and, by default,
   delivers on `idle` and on `shell` (an idle main loop over a background shell),
   and holds `waiting`, `busy` and any word it does not know; `mail-gate-strict`
