@@ -49,8 +49,8 @@ interface BoxCfg {
   /** Real wall time added before EVERY call of the box's `io` (the turn verdict's and the live file's reads among
    *  them): a loaded box, where the route's own I/O is still running when a fixed number of event-loop turns ends. */
   slowIoMs?: number;
-  /** Real wall time an `onRequest` hook spends before the route runs: event-loop turns in which the dispatch has begun
-   *  but has nothing of the box in flight yet. */
+  /** Real wall time an `onRequest` hook spends before the route runs (D-5378): event-loop turns in which the
+   *  dispatch has begun but has nothing of the box in flight yet. */
   requestDelayMs?: number;
 }
 
@@ -177,12 +177,12 @@ const untilReal = async (ok: () => boolean, what: string): Promise<void> => {
     await turn();
   }
 };
-/** What the newest `box` has seen of its own io reads (D-5145): whether one has begun, and how many are in flight. */
+/** What the newest `box` has seen of its own io reads (D-5378): whether one has begun, and how many are in flight. */
 interface ParkProbe { started: boolean; inflight: number }
 let parkProbe: ParkProbe | null = null;
-/** Turn the real event loop until the code under test is parked on ITS OWN fake timer, or `isDone()`. A pending fake
- *  timer alone is not that: one the route did not arm (the server's, or a case's own) is pending while the route is
- *  still deciding. Parked is a pending timer, once the box has begun a read, with none of the box's io reads
+/** Turn the real event loop until the code under test is parked on ITS OWN fake timer, or `isDone()` (D-5378).
+ *  A pending fake timer alone is not that: one the route did not arm (for example a case's own) is pending while the
+ *  route is still deciding. Parked is a pending timer, once the box has begun a read, with none of the box's io reads
  *  in flight. Every real wait the route makes on its way to its wait is one of those reads (the box's runner answers
  *  within microtasks), so between its first read and its wait no event-loop turn ends with nothing in flight. */
 const untilParked = (isDone: () => boolean = () => false): Promise<void> =>
@@ -394,8 +394,8 @@ describe('a pane this dispatch started is waited for outside coordMutex (D-5238)
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const b = await box({ ensure: [`ensured ${ID}\n`], requestDelayMs: 50 });
     hookDone(b.home);
-    // A fake timer that is not the route's, pending the whole case: the pause must still land during the WAIT. Were
-    // "parked" any pending timer, the harness would step on while the first decision is still reading, the pause and
+    // A fake timer that is not the route's, pending the whole case (D-5378): the pause must still land during the
+    // WAIT. Were "parked" any pending timer, the harness would step on while the first decision is still reading, the pause and
     // the `idle` would land between its pause check and its verdict, and that first decision would clear (`ok: true`).
     setTimeout(() => {}, 10 * DISPATCH_SPAWN_WAIT_MS);
     // And real turns before the route's first read (`requestDelayMs`): a harness that took "nothing in flight" as
