@@ -8357,6 +8357,9 @@ export class FleetWatcher {
     try {
       const parent = coord.parentOfSession(r.id);
       if (parent === null || parent === r.id) return none;
+      // D-5362: the binding is "the parent is the claimant of the run the
+      // mark names", not "the mark names the newest open run": a wave N>=2
+      // run resumes the same workspace, whose `.child` still names wave 1.
       const minting = coord.run(mark.runId);
       if (!minting.ok || minting.run === null || minting.run.claimedBy !== parent) return none;
       const row = recs.find((x) => x.id === parent) ?? null;

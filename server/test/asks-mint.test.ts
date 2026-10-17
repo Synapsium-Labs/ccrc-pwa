@@ -870,6 +870,43 @@ describe('the first-sighting race and a parent that is not live (D-5290)', () =>
     });
   }
 
+  const amendmentReleased: [string, string, (f: ReturnType<typeof fixture>) => number][] = [
+    ['a parent with no registry row', 'parent-not-live', (f) => {
+      const runId = dispatch(f, CHILD, PARENT);
+      writeFileSync(path.join(f.home, '.cc-sessions', `${CHILD}.child`), String(runId));
+      return runId;
+    }],
+    ['a parent of another project', 'parent-project-mismatch', (f) => {
+      const runId = dispatch(f, CHILD, FAR, 'project-a');
+      f.child(CHILD, runId);
+      return runId;
+    }],
+  ];
+  for (const [name, reason, arrange] of amendmentReleased) {
+    it(`released from the amendment branch (${name}): the envelope on tick 2 mints released (${reason}) and pushes the answerable notification once`, async () => {
+      const sent: PushPayload[] = [];
+      const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+      const f = fixture({ push, sessions: [`project-a/${CHILD}`, `project-b/${FAR}`] });
+      arrange(f);
+      await f.tick();                                 // priming
+      f.writeAsk(CHILD, null, 'waiting');
+      f.showMenu(CHILD);
+      await f.tick();                                 // first sighting: actionless
+      expect(pushesFor(sent, CHILD).map((p) => p.actions === undefined)).toEqual([true]);
+      f.writeAsk(CHILD, ENVELOPE);
+      await f.tick();                                 // the amendment branch: tryHold releases at once
+      const rows = asksRows(f);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ childId: CHILD, state: 'released', releaseReason: reason });
+      expect(mailTo(f, PARENT) + mailTo(f, FAR)).toBe(0);
+      // Exactly one answerable push after the actionless one: `tryHold`'s own.
+      // The amendment arm must not raise a second (and record a duplicate).
+      expect(pushesFor(sent, CHILD).map((p) => p.actions === undefined)).toEqual([true, false]);
+      await f.tick();
+      expect(pushesFor(sent, CHILD)).toHaveLength(2);
+    });
+  }
+
   it("a top-level session's late envelope raises to the operator as today", async () => {
     const sent: PushPayload[] = [];
     const push = { notify: async (p: PushPayload) => { sent.push(p); } };
