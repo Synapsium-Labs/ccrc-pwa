@@ -1413,7 +1413,7 @@ describe('ccrc models <id> discovery', () => {
 // sets, and meets the probe's one codex arm with that (Plan 4): the two
 // CHATGPT_TOKEN_DIR scrub cases in the describe above hold the scrub. (The
 // title's "today's probe environment" is that scrubbed one, interpreter
-// withheld: since Plan 4 no row of this kind reaches a fetch of its own.)
+// withheld: since Plan 4 no such row's codex probe reaches a fetch.)
 // CONTAINMENT FIRST: every case poisons a PATH `litellm` and the `python`
 // beside it, so no old or mutated probe can reach the runner's own LiteLLM.
 describe.skipIf(pythonOrSkip() === null)('each codex lane\'s probe reads its OWN authDir through its OWN runtime, with no default; every other row keeps today\'s probe environment (Plan 3a Task 1)', () => {
@@ -1561,9 +1561,9 @@ describe.skipIf(pythonOrSkip() === null)('each codex lane\'s probe reads its OWN
   // Plan 3b Task A1 (D-4046): a roster whose codex rows the lane library cannot
   // tell is refused HERE, in that library's own word, line and rc, and the probe
   // never runs. Read as "not codex", an exec.kind "codex" row would be handed no
-  // directory and refuse `no-token-dir`, a remedy that is not its own. (Before
-  // Plan 4 it went down the external fetch, whose token directory had a
-  // default: another lane's, D-3706's class.)
+  // directory (`no-token-dir`), or only one its secrets file sets (`runtime-absent`),
+  // a remedy that is not its own. (Before Plan 4 it went down the external fetch,
+  // whose token directory had a default: another lane's, D-3706's class.)
   it.each([[1, 'roster-invalid'], [2, 'missing-dependency']] as const)(
     'a roster whose codex lanes cannot be told (the lane library answers rc %i) is refused at the probe-input seam with its own %s line and rc — never "not codex", and the probe never runs (Plan 3b Task A1)',
     async (rc, word) => {
@@ -1575,9 +1575,9 @@ describe.skipIf(pythonOrSkip() === null)('each codex lane\'s probe reads its OWN
     });
 
   // Residual round (R-2): the dispatcher refuses an ABSENT roster `roster-absent` in its own sentence (Plan 4). At
-  // THIS seam, read as "not codex", it would hand a would-be codex lane no directory and refuse it `no-token-dir`, a
-  // remedy that is not its own (before Plan 4: the external fetch and its default token directory, D-3706's class),
-  // so it is refused, in the remedy's own word, and the probe never runs.
+  // THIS seam, read as "not codex", it would hand a would-be codex lane no directory (`no-token-dir`), or only one its
+  // secrets file sets (`runtime-absent`), a remedy that is not its own (before Plan 4: the external fetch and its
+  // default token directory, D-3706's class), so it is refused, in the remedy's own word, and the probe never runs.
   it('an ABSENT roster at the probe-input seam is refused roster-absent with its remedy — never "not codex", and the probe never runs (Plan 3b Task A1)', async () => {
     home = await codexBox(['codex-a']);
     fs.rmSync(join(home, '.ccrc', 'accounts.json'));
