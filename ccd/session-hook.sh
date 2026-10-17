@@ -3000,19 +3000,19 @@ case "$event" in
     # written only by a dispatch (`ws-add --no-rc --child <run>`), so every path the operator creates a
     # session by (the PWA "+", the create-session and start-programme sheets, the CLI) leaves a row without
     # it. It reads exactly two names, `$REG/<id>.child` and `$REG/<id>.hold`, writes none and quotes no
-    # registry byte. EXISTENCE, NOT CONTENT: a directory or an unreadable file still counts as present (the
-    # reading the merge deny and `cmd_ws_rm` give them), so doubt is silence and a child never reads it.
-    # ONCE PER CONTEXT, BY SOURCE: a `resume` or `fork` carries the transcript that already received it, so
+    # registry byte. EXISTENCE, NOT CONTENT: a directory, an unreadable file or a dangling `.child` link (D-5301,
+    # `_ws_expire_not_child`'s `-e`/`-L` reading) still counts as present, so doubt is silence for a child.
+    # ONCE PER CONTEXT, BY SOURCE (D-5359): a `resume` or `fork` carries the transcript that already received it, so
     # it says nothing there (no "shown" marker exists or is added); startup, clear, compact and a
     # source-less start are fresh or rebuilt contexts. Mutually exclusive with every held sentence, so
     # `CARD_MAX_CHARS`'s structural worst case (graphify + held case A + co-tenant) is unchanged.
-    # DEFINED HERE, in the arm, not beside `_hook_hold_card`: nothing new goes above the tail line
+    # DEFINED HERE (D-5358), in the arm, not beside `_hook_hold_card`: nothing new goes above the tail line
     # (D-3615), and every line added up there moves the frozen compaction-card corpus's anchors.
     _hook_role_card() {
       CARD_ROLE=""
       [ -e "$CCRC_CARD_OFF" ] && return 0
       case "$src" in resume|fork) return 0 ;; esac
-      [ -e "$REG/$id.child" ] && return 0
+      { [ -e "$REG/$id.child" ] || [ -L "$REG/$id.child" ]; } && return 0
       [ -e "$REG/$id.hold" ] && return 0
       CARD_ROLE="ccrc-role: You are a coordinator for this project. For work worth splitting, run the \`ccrc-coordinator\` skill and dispatch; your children's questions and permission prompts come to you first; your own go to the operator."
       return 0

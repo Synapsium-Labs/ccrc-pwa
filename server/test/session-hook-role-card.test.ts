@@ -15,7 +15,10 @@
 // `fixtures/delegation/2.1.289/swap-resume.json` (startup: cwd,
 // hook_event_name, model, session_id, source, transcript_path; resume adds
 // context_tokens, estimated_cache_write_usd, prompt_cache_likely_expired,
-// seconds_since_last_response), with neutral values.
+// seconds_since_last_response), with neutral values. The `compact` payload
+// copies the SessionStart(compact) key set session-hook.test.ts records from
+// 2.1.266 (measured 2026-09-09: cwd, hook_event_name, model, prompt_id,
+// session_id, source, transcript_path).
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -60,7 +63,9 @@ const withSource = (source: string): object =>
   source === 'resume'
     ? { ...startup(), source, context_tokens: 1200, estimated_cache_write_usd: 0.01,
         prompt_cache_likely_expired: false, seconds_since_last_response: 30 }
-    : { ...startup(), source };
+    : source === 'compact'
+      ? { ...startup(), source, prompt_id: 'p1' }
+      : { ...startup(), source };
 
 /** The hook's stdout, with the header contract's exit 0 asserted here. */
 const run = (payload: object): string => {
@@ -101,6 +106,12 @@ describe('the role card (D-5301): a row with no `.child` and no hold is its proj
     expect(context(run(noSource))).toContain(SENTENCE);
   });
 
+  it('renders on a compact SessionStart: compaction rebuilt the context, so the role is told again', () => {
+    const c = context(run(withSource('compact')));
+    expect(c).toContain(SENTENCE);
+    expect(c.split(SENTENCE)).toHaveLength(2);   // once, not twice
+  });
+
   it('says nothing for a dispatched child (`.child` present)', () => {
     useId('project-a-quiet-basin');
     fs.writeFileSync(path.join(reg(), `${id}.child`), 'run-a\n');
@@ -112,6 +123,15 @@ describe('the role card (D-5301): a row with no `.child` and no hold is its proj
     useId('project-a-quiet-basin');
     fs.mkdirSync(path.join(reg(), `${id}.child`));
     expect(context(run(startup()))).not.toContain('coordinator for this project');
+  });
+
+  it('a dangling `.child` symlink still reads as a child (D-5301): doubt is silence', () => {
+    // `[ -e ]` is false for a dangling symlink; `_ws_expire_not_child` (ccd/ccd) reads
+    // this same shape as a child (`! -e && ! -L`), and so does the card.
+    useId('project-a-quiet-basin');
+    fs.symlinkSync(path.join(home, 'nowhere', 'run-a'), path.join(reg(), `${id}.child`));
+    expect(context(run(startup()))).not.toContain('coordinator for this project');
+    expect(hookstate()).toMatchObject({ state: 'done' });   // control: the arm ran
   });
 
   it('says nothing for a held row, whatever the hold carries', () => {
