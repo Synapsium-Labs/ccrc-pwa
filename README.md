@@ -6351,13 +6351,13 @@ red if a door of those waves opens in this tree.
 before- and after-listings differ by exactly that admin record, so what the lane does not hold is negative evidence. Lost evidence
 makes such a link `unmeasured` (retried, counted on the warning line), never made: a Bash call of any session (the creator's too) whose
 listing the hook shed to fit its line (`truncated: true`, no `listing`) and whose window overlaps the creator's; a session-hour
-recorded `unmeasured`, or whose bucket ends in a torn line, read as a window on every repository from the hour's start to 20 minutes
-after its end, and still after the checkpoint prunes the hour; until a listed session is read, each of its hours not yet closed, alike;
-after a restart, recovery or outage, a creator that began by the lane's ready instant plus the clock skew; and, when rung 4 has no
-candidate, an eviction or a lost window reaching back to the census that first listed the tree, keeping that tree's rung-3 link
-`unmeasured`. After a restart that first sighting is unknown: a tree listed before it links at rung 3 only once a measured census shows
-it gone and it is listed anew. A call counts for its session's project and the repository its working directory lists (the nearest tree
-the census lists or the lane remembers, else the resolved projects root); a directory neither names counts for every repository, and
+recorded `unmeasured`, or whose bucket ends in a torn line, read as a window on every repository from the hour's start to 20 minutes after
+its end, and still after the checkpoint prunes the hour; until a listed session is read, each hour it was listed in, and each measured hour
+not yet closed, alike; after a restart, recovery or outage, a creator that began by the lane's ready instant plus the clock skew; and, when
+rung 4 has no candidate, an eviction or a lost window reaching back to the census that first listed the tree, keeping that tree's rung-3
+link `unmeasured`. After a restart that first sighting is unknown: a tree listed before it links at rung 3 only once a measured census
+shows it gone and it is listed anew. A call counts for its session's project and the repository its working directory lists (the nearest
+tree the census lists or the lane remembers, else the resolved projects root); a directory neither names counts for every repository, and
 while the root does not resolve (remote mode) that includes every main checkout, because the census lists linked worktrees only.
 
 - **What rung 4 cannot see**, carried to the operator: a `run_in_background` Bash call or a Monitor (its window closes before the job
