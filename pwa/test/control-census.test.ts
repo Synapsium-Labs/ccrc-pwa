@@ -247,6 +247,7 @@ const CONTROLS: Record<string, string> = {
   'session/Composer.tsx <button> draft-cancel': 'TOKEN. The draft cancel.',
   'session/Composer.tsx <button> send-btn': 'TOKEN. Send.',
   'session/Composer.tsx <button> slash-item': 'TOKEN. A slash-command row — one of the six floors this wave converted from a literal.',
+  'session/AskParts.tsx <button> ask-tab': 'TOKEN. A tab-strip chip (AskTabs, decision ask-tab-strip), one per question and Submit, which both ask sheets render.',
   'session/AskParts.tsx <button> dlg-reply-send': 'TOKEN. Send, beside the own-words field (OwnWords, D-5090), which both ask sheets render.',
   'session/DialogSheet.tsx <button> dlg-details-toggle': 'TOKEN. The details disclosure.',
   'session/EnvelopeSheet.tsx <button> dlg-later': 'TOKEN. Both "Not now" rows, rendered by TerminalCta — which lives beside the envelope sheet and is imported back by the controller.',
