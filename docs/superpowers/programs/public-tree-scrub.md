@@ -13,7 +13,7 @@ shipped code. One PR sweeps them out line-neutrally and adds a hashed ratchet cl
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | Plan Tasks 1-7: the hashed class red-first, the sweep to green | none (tests, comments, docs) | - | run 561, dispatching; departures D-5277..D-5288 |
+| 1 | Plan Tasks 1-7: the hashed class red-first, the sweep to green | none (tests, comments, docs) | - | run 561, dispatching |
 
 ## Decisions & deviations
 
@@ -28,7 +28,9 @@ shipped code. One PR sweeps them out line-neutrally and adds a hashed ratchet cl
   through the REST API. GitHub keeps their old revisions until the operator removes them in the UI.
 - The plan's Decisions table holds the defaults the operator may overrule.
 - 2026-10-17: the operator approved the plan as written, so every default in its Decisions table stands. Wave 1 opened
-  as run 561 with the departure block D-5277..D-5288, issued at run-open.
+  as run 561, with a block of twelve departure numbers issued at run-open. The allocator holds the block, and a
+  number appears here only once the plan defines it: a tracked mention of a number not yet defined raises the
+  ledger floor (`deviation-refs.test.ts`).
 
 ## Carried constraints
 
