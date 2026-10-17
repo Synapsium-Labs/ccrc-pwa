@@ -1532,7 +1532,7 @@ const anyVerdictFor = (out: string, name: string): string | undefined =>
  *  way: with the check in the table and this `+ 1` absent, "every line is
  *  exactly PASS|WARN|FAIL|SKIP" and "prints a summary count LAST" red, and so
  *  does every `(N skipped)` pin that reads this constant. */
-const HEALTHY_SKIPS = (process.platform === 'darwin' ? 2 : 0) + 6;
+const HEALTHY_SKIPS = (process.platform === 'darwin' ? 2 : 0) + 7;   // +1 server-caps (no role): its block at the end
 
 // ── the table itself ──────────────────────────────────────────────────────
 
@@ -14844,3 +14844,95 @@ describe('T11 review A-6: docs-sw reads the worker byte-wise under a UTF-8 local
     expect(r.code).toBe(0);
   });
 });
+
+// ── server-caps: the server's capability words reach this box (D-5232's mechanism; plan 2026-10-16, Task 9b) ──────
+// A `fleet` or `both` node's hook engages a gated arm only while `~/.ccrc/server-caps` is whole, current within
+// SERVER_CAPS_LEASE_S and lists the arm's word. This check reads that file read-only, with the reader's grammar, and
+// names the writer when it is not current: the update-sync timer on a `fleet` node, the server on a `both` node. A
+// `server` node runs no hook, and a box with no recorded role arms no writer by configuration: both SKIP.
+// `healthy()` records no role, which is why HEALTHY_SKIPS carries one more (deleting that `+ 1` reds the summary pins).
+import { SERVER_CAPS_LEASE_S } from '../../shared/api.js';
+describe('ccrc doctor: server-caps (D-5232\'s mechanism)', () => {
+  const runCaps = (home: string): Result => {
+    const ccd = join(home, 'ccrc', 'ccd');
+    const r = spawnSync(BASH, ['-c',
+      `set -uo pipefail; . ${shq(join(ccd, 'ccrc'))}; . ${shq(join(ccd, 'ccrc-doctor-checks'))}; _check_server-caps`],
+    { env: doctorEnv(home), encoding: 'utf8' });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  };
+  const capsFile = (home: string): string => join(home, '.ccrc', 'server-caps');
+  const role = (home: string, r: string): void => writeCcrcEnv(home, `CCRC_ROLE=${r}\n`);
+  const now = (): number => Math.floor(Date.now() / 1000);
+
+  it('PASSes a current file on a fleet node, listing its words', () => {
+    const home = healthy('ccrc-doctor-server-caps-pass-');
+    role(home, 'fleet');
+    writeFileSync(capsFile(home), `at ${now()}\ncaps dispatch-live-gate-v1\nend\n`);
+    const r = runCaps(home);
+    expect(r.stdout, r.stderr).toMatch(/^PASS server-caps: .*dispatch-live-gate-v1/);
+    expect(r.code).toBe(0);
+  });
+
+  it('PASSes a file inside the lease (the bash copy of SERVER_CAPS_LEASE_S)', () => {
+    const home = healthy('ccrc-doctor-server-caps-pass-lease-');
+    role(home, 'fleet');
+    writeFileSync(capsFile(home), `at ${now() - SERVER_CAPS_LEASE_S + 5}\ncaps dispatch-live-gate-v1\nend\n`);
+    expect(runCaps(home).stdout).toMatch(/^PASS server-caps: /);
+  });
+
+  it('PASSes a current file with no words on a both node, saying it lists none', () => {
+    const home = healthy('ccrc-doctor-server-caps-pass-empty-');
+    role(home, 'both');
+    writeFileSync(capsFile(home), `at ${now()}\ncaps\nend\n`);
+    const r = runCaps(home);
+    expect(r.stdout, r.stderr).toMatch(/^PASS server-caps: .*no words/);
+  });
+
+  const warns: Array<[string, string, (home: string) => void, RegExp]> = [
+    ['absent', 'fleet', () => { /* no file */ }, /absent/],
+    ['torn', 'fleet', (h) => writeFileSync(capsFile(h), `at ${now()}\ncaps dispatch-live-gate-v1\n`), /torn/],
+    ['malformed', 'fleet', (h) => writeFileSync(capsFile(h), `at ${now()}\ncaps Bad_Word\nend\n`), /malformed/],
+    ['stale', 'fleet', (h) => writeFileSync(capsFile(h), `at ${now() - SERVER_CAPS_LEASE_S - 1}\ncaps dispatch-live-gate-v1\nend\n`), /stale/],
+    ['future', 'fleet', (h) => writeFileSync(capsFile(h), `at ${now() + 600}\ncaps dispatch-live-gate-v1\nend\n`), /future/],
+    ['stale on a both node', 'both', (h) => writeFileSync(capsFile(h), `at ${now() - 4000}\ncaps\nend\n`), /stale/],
+  ];
+  for (const [name, r, arrange, why] of warns) {
+    it(`WARNs on ${name}, naming the writer`, () => {
+      const home = healthy('ccrc-doctor-server-caps-warn-');
+      role(home, r);
+      arrange(home);
+      const out = runCaps(home);
+      const lines = out.stdout.split('\n');
+      expect(lines[0], out.stdout + out.stderr).toMatch(/^WARN server-caps: /);
+      expect(lines[0]).toMatch(why);
+      expect(lines[1]).toMatch(/^ {2}remedy: /);
+      expect(lines[0]).toMatch(r === 'fleet' ? /until ccd-update-sync / : /until this box's own ccrc server /);
+      expect(out.code).toBe(2);
+    });
+  }
+
+  it('SKIPs on a server node, which runs no hook', () => {
+    const home = healthy('ccrc-doctor-server-caps-server-');
+    role(home, 'server');
+    const r = runCaps(home);
+    expect(r.stdout).toMatch(/^SKIP server-caps: this box records CCRC_ROLE=server/);
+    expect(r.code).toBe(3);
+  });
+
+  it('SKIPs on a box that records no role (healthy()), which arms no writer', () => {
+    const home = healthy('ccrc-doctor-server-caps-norole-');
+    const r = runCaps(home);
+    expect(r.stdout).toMatch(/^SKIP server-caps: /);
+    expect(r.stdout).toMatch(/no CCRC_ROLE/);
+  });
+
+  it('is read-only: a stale file is left byte for byte', () => {
+    const home = healthy('ccrc-doctor-server-caps-ro-');
+    role(home, 'fleet');
+    const text = `at ${now() - 999}\ncaps dispatch-live-gate-v1\nend\n`;
+    writeFileSync(capsFile(home), text);
+    runCaps(home);
+    expect(readFileSync(capsFile(home), 'utf8')).toBe(text);
+  });
+});
+

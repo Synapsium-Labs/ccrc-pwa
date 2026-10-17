@@ -23,12 +23,13 @@
 // with it (Task 8's derives `lease` from an overridden `issued`).
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
 import { itLinux } from './platformFixtures.js';
+import { SERVER_CAPS, SERVER_CAPS_FILE, isServerCapWord, parseServerCaps } from '../../shared/api.js';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SYNC = join(REPO, 'ccd', 'ccd-update-sync');
@@ -88,6 +89,18 @@ const box = (prefix: string, o: { url?: string; nodeId?: string | null } = {}): 
   mkdirSync(bin, { recursive: true });
   writeFileSync(join(bin, 'curl'), [
     '#!/usr/bin/env bash',
+    // D-5232's mechanism (Task 9b): the second, independent pull asks `<url>/health`. It answers from its OWN
+    // fixtures (`fixture-health-*`, default a 200 whose `caps` is empty) and records to its OWN files, so every
+    // intent-pull case below measures exactly what it measured before the caps pull existed.
+    'for a in "$@"; do case "$a" in */health)',
+    '  printf \'%s\\n\' "$*" > "$HOME/curl-health.argv"; cat > "$HOME/curl-health.stdin"; env > "$HOME/curl-health.env"',
+    '  if [ -f "$HOME/fixture-health-curl-rc" ]; then IFS= read -r rc < "$HOME/fixture-health-curl-rc"; exit "$rc"; fi',
+    '  hout=""; hprev=""; for b in "$@"; do [ "$hprev" = "-o" ] && hout="$b"; hprev="$b"; done',
+    '  hbody=\'{"ok":true,"build":null,"caps":[]}\'; [ -f "$HOME/fixture-health-body" ] && hbody="$(cat "$HOME/fixture-health-body")"',
+    '  printf \'%s\' "$hbody" > "$hout"',
+    '  hstatus=200; [ -f "$HOME/fixture-health-status" ] && IFS= read -r hstatus < "$HOME/fixture-health-status"',
+    '  printf \'%s\' "$hstatus"; exit 0 ;;',
+    'esac; done',
     'printf \'%s\\n\' "$*" > "$HOME/curl.argv"',
     'cat > "$HOME/curl.stdin"',
     'env > "$HOME/curl.env"',
@@ -726,3 +739,146 @@ describe('ccd-update-sync → the real reader (`ccrc channel`, Task 8)', () => {
     expect(r.stdout).toMatch(/^channel: state=stale /m);
   });
 });
+
+// ── the server's capability words: a second, independent pull (D-5232's mechanism; plan 2026-10-16, Task 9b) ──────
+// `GET <CCRC_SERVER_URL>/health`, no token (the route is auth-exempt), placed right after the URL is read and BEFORE
+// the node-id and box-token checks, each of which exits 1; every failure arm writes nothing and falls through to the
+// intent pull, so neither pull can stop the other. The file is the three lines `parseServerCaps` reads, `at` from the
+// node's own clock. Each case below is red against the arm it names in the plan's mutation table.
+describe('ccd-update-sync: the server-caps pull (D-5232\'s mechanism)', () => {
+  const capsFile = (home: string): string => join(home, '.ccrc', SERVER_CAPS_FILE);
+  const health = (home: string, body: string, status = '200'): void => {
+    writeFileSync(join(home, 'fixture-health-body'), body);
+    writeFileSync(join(home, 'fixture-health-status'), `${status}\n`);
+  };
+  const capsResidue = (home: string): string[] =>
+    readdirSync(join(home, '.ccrc')).filter((n) => n.startsWith('.server-caps.'));
+  /** Run the puller and read the caps file back, `at` bounded by the clock either side of the run. */
+  const pulled = (home: string): { r: Run; text: string | null; lo: number; hi: number } => {
+    const lo = nowS();
+    const r = sync(home);
+    const hi = nowS();
+    return { r, text: existsSync(capsFile(home)) ? readFileSync(capsFile(home), 'utf8') : null, lo, hi };
+  };
+
+  it('a /health listing dispatch-live-gate-v1 writes the three lines at 0600, `at` by the node\'s clock', () => {
+    const home = box('upd-sync-caps-ok-');
+    answer(home, intentDoc());
+    health(home, JSON.stringify({ ok: true, build: null, caps: ['dispatch-live-gate-v1'] }));
+    const { r, text, lo, hi } = pulled(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stderr).toBe('');
+    expect(text).toMatch(/^at \d{1,11}\ncaps dispatch-live-gate-v1\nend\n$/);
+    const at = Number(/^at (\d+)/.exec(text!)![1]);
+    expect(at).toBeGreaterThanOrEqual(lo);
+    expect(at).toBeLessThanOrEqual(hi);
+    expect(parseServerCaps(text!, hi)).toEqual({ ok: true, at, words: ['dispatch-live-gate-v1'] });
+    expect(statSync(capsFile(home)).mode & 0o777, 'the caps file is not 0600').toBe(0o600);
+    expect(capsResidue(home)).toEqual([]);
+  });
+
+  it('a /health with no `caps` (an older server) writes `caps` with no words: the whole answer named nothing', () => {
+    const home = box('upd-sync-caps-older-');
+    answer(home, intentDoc());
+    health(home, JSON.stringify({ ok: true, build: null }));
+    const { r, text, hi } = pulled(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(text).toMatch(/^at \d+\ncaps\nend\n$/);
+    expect(parseServerCaps(text!, hi)).toMatchObject({ ok: true, words: [] });
+  });
+
+  // Each failure: nothing written over a file already there, and the intent pull still runs and installs.
+  const failures: Array<[string, (home: string) => void]> = [
+    ['a 500', (h) => health(h, JSON.stringify({ ok: true, caps: ['dispatch-live-gate-v1'] }), '500')],
+    ['a non-JSON body', (h) => health(h, '<html>not json</html>')],
+    ['a JSON body that is not an object', (h) => health(h, '["dispatch-live-gate-v1"]')],
+    ['a `caps` holding a non-word', (h) => health(h, JSON.stringify({ ok: true, caps: ['dispatch-live-gate-v1', 'Not A Word'] }))],
+    ['a `caps` that is not a list', (h) => health(h, JSON.stringify({ ok: true, caps: 'dispatch-live-gate-v1' }))],
+    ['curl exit 28', (h) => writeFileSync(join(h, 'fixture-health-curl-rc'), '28\n')],
+  ];
+  for (const [name, arrange] of failures) {
+    it(`${name} writes nothing, and the intent pull still runs and writes its document`, () => {
+      const home = box('upd-sync-caps-fail-');
+      const before = 'at 1\ncaps keep-me\nend\n';
+      writeFileSync(capsFile(home), before);
+      const doc = intentDoc();
+      answer(home, doc);
+      arrange(home);
+      const r = sync(home);
+      expect(r.code, r.stderr).toBe(0);
+      expect(readFileSync(capsFile(home), 'utf8'), 'a refused /health answer touched the caps file').toBe(before);
+      expect(capsResidue(home)).toEqual([]);
+      expect(readFileSync(dest(home), 'utf8'), 'the intent pull did not run after the caps pull failed').toBe(doc);
+      expect(r.stderr).toMatch(/server-caps/);
+    });
+  }
+
+  it('an intent pull that fails still leaves the caps written', () => {
+    const home = box('upd-sync-caps-intent-fails-');
+    answer(home, 'not a document\n', '500');
+    health(home, JSON.stringify({ ok: true, caps: ['dispatch-live-gate-v1'] }));
+    const { r, text } = pulled(home);
+    expect(r.code).toBe(1);
+    expect(text).toMatch(/\ncaps dispatch-live-gate-v1\n/);
+  });
+
+  it('with no ~/.ccrc/node-id the caps file is still written before the script exits 1', () => {
+    const home = box('upd-sync-caps-no-node-', { nodeId: null });
+    health(home, JSON.stringify({ ok: true, caps: ['dispatch-live-gate-v1'] }));
+    const { r, text } = pulled(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/no node id/);
+    expect(text).toMatch(/\ncaps dispatch-live-gate-v1\n/);
+  });
+
+  it('with no readable box token the caps file is still written before the script exits 1', () => {
+    const home = box('upd-sync-caps-no-token-');
+    rmSync(join(home, '.cc-secrets', 'ccrc-mail.token'));
+    health(home, JSON.stringify({ ok: true, caps: ['dispatch-live-gate-v1'] }));
+    const { r, text } = pulled(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/no readable box token/);
+    expect(text).toMatch(/\ncaps dispatch-live-gate-v1\n/);
+  });
+
+  it('asks <url>/health with no box token in argv, stdin or environ, bounded like the intent pull', () => {
+    const home = box('upd-sync-caps-no-token-sent-', { url: 'ws://203.0.113.7:7788/' });
+    answer(home, intentDoc());
+    health(home, JSON.stringify({ ok: true, caps: [] }));
+    expect(sync(home, { CCRC_UPDATE_SYNC_TIMEOUT: '5' }).code).toBe(0);
+    const argv = readFileSync(join(home, 'curl-health.argv'), 'utf8');
+    expect(argv).toContain('http://203.0.113.7:7788/health');
+    expect(argv).not.toContain('//health');
+    expect(argv).toContain('--max-time 5');
+    expect(argv).toContain('--max-filesize 65536');
+    expect(argv).not.toMatch(/(?:^|\s)-K(?:\s|$)/);   // a whole argument: a temp path may hold the letters
+    expect(argv).not.toContain(TOKEN);
+    expect(readFileSync(join(home, 'curl-health.stdin'), 'utf8')).toBe('');
+    expect(readFileSync(join(home, 'curl-health.env'), 'utf8')).not.toContain(TOKEN);
+    // …while the intent pull still carries it, on stdin (its own case above).
+    expect(readFileSync(join(home, 'curl.stdin'), 'utf8')).toContain(TOKEN);
+  });
+
+  // The bash grammar (`ccd-update-sync`'s python block) and the TypeScript one (`isServerCapWord`,
+  // `parseServerCaps`) agree on every case: the puller accepts a `caps` exactly when every word is one the
+  // TypeScript grammar admits, and what it writes parses back to the same words.
+  const TABLE: unknown[] = [
+    [...SERVER_CAPS], [], ['dispatch-live-gate-v1', 'hook-main-state-v1'], ['a'], ['0-9'], ['a'.repeat(64)],
+    ['a'.repeat(65)], [''], ['UPPER'], ['under_score'], ['sp ace'], ['tab\tword'], ['dot.word'], ['ünïcode'],
+    ['ok', 7], [null], 'a-string', 7, null, { a: 1 },
+  ];
+  it('the bash grammar and the TypeScript one agree on every case of a shared table', () => {
+    for (const caps of TABLE) {
+      const home = box('upd-sync-caps-table-');
+      answer(home, intentDoc());
+      health(home, JSON.stringify({ ok: true, caps }));
+      const { r, text, hi } = pulled(home);
+      expect(r.code, r.stderr).toBe(0);
+      const tsAccepts = Array.isArray(caps) && caps.every((w) => typeof w === 'string' && isServerCapWord(w));
+      expect(text !== null, `${JSON.stringify(caps)}: bash ${text !== null ? 'accepted' : 'refused'}, TS ${tsAccepts ? 'accepts' : 'refuses'}`)
+        .toBe(tsAccepts);
+      if (text !== null) expect(parseServerCaps(text, hi), JSON.stringify(caps)).toMatchObject({ ok: true, words: caps });
+    }
+  });
+});
+
