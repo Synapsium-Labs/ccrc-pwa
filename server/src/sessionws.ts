@@ -608,7 +608,13 @@ export class SessionStream {
     if (await this.deps.tmux.hasSession(this.id)) {
       status = 'idle';
       const pid = await this.deps.tmux.panePid(this.id);
-      if (pid) {
+      if (pid === null) {
+        // D-5275: mirror `assembleFleet` (D-5234). The pane is alive and its
+        // pid read FAILED, which measured nothing about the session; the card
+        // paints that `busy`, so the header does too — the D-115 mirror rule
+        // below. `statusUpdatedAt` stays null and `cwd` at the registry's.
+        status = 'busy';
+      } else {
         // D-115, the chat half of the same fix `assembleFleet` takes (see its
         // block in fleet.ts for the full argument). The folded read answered
         // ONE null for four conditions and this block spent it as "leave
@@ -631,8 +637,9 @@ export class SessionStream {
           // `statusUpdatedAt` stays null: an unmeasured read has no fields to
           // report, and `statusUpdatedAt` is what the header renders as the
           // `· 1m ago` beside the word — a fabricated one would put a fresh
-          // timestamp under a status nobody measured. `no-state` (absent,
-          // half-written, naming no session) still leaves this at `idle`,
+          // timestamp under a status nobody measured. `no-state` (absent, or a
+          // well-formed record naming no session — a torn body is unmeasured
+          // since D-5234) still leaves this at `idle`,
           // which is the ordinary shape for a pane that has published
           // nothing yet.
           status = 'busy';

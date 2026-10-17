@@ -2679,6 +2679,44 @@ describe('chat header: an unmeasured live status file is not a session at rest (
     }
   });
 
+  // D-5275: the header mirrors `assembleFleet` (D-5234) for a pane that is alive but whose pid read FAILED — the card
+  // paints that `busy`, so the header must too (the mirror rule above); before, `if (pid)` left it at `idle`.
+  it('an alive pane whose pid read fails reads busy on the header, with no timestamp, and idle once it heals (D-5275)', async () => {
+    const home = mkTmp('ccrc-live-hdr-');
+    seedRoster(home);
+    seed(home);   // the live file says status: 'idle'
+    let pidFails = true;
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') {
+        return pidFails ? { code: 1, stdout: '', stderr: 'tmux: timeout' } : { code: 0, stdout: `${PID}\n`, stderr: '' };
+      }
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const deps: Deps = { ...mkLadderDeps(home, localIO), tmux: new Tmux(run) };
+    const frames: { type: string; status?: string; statusUpdatedAt?: number | null }[] = [];
+    const stream = new SessionStream(deps, new Bus(), ID,
+      (m) => frames.push(m as { type: string; status?: string; statusUpdatedAt?: number | null }));
+    try {
+      await stream.start();
+      const first = frames.filter((f) => f.type === 'status');
+      expect(first).toHaveLength(1);
+      expect(first[0]!.status).toBe('busy');
+      expect(first[0]!.statusUpdatedAt).toBeNull();
+
+      frames.length = 0;
+      pidFails = false;
+      await (stream as unknown as { tick: () => Promise<void> }).tick();
+      const back = frames.filter((f) => f.type === 'status');
+      expect(back).toHaveLength(1);
+      expect(back[0]!.status).toBe('idle');
+      expect(back[0]!.statusUpdatedAt).toBe(1784582728369);
+    } finally {
+      stream.stop();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it('… and an ABSENT live file still resolves idle — the positive control', async () => {
     // Same separation the fleet suite draws: this fix must not turn every
     // pane with no published `<pid>.json` into a busy header.

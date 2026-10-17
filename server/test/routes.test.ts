@@ -1504,8 +1504,11 @@ describe('POST /api/sessions/:id/archive — and an open run', () => {
     writeFileSync(path.join(home, '.cc-sessions', `${id}.workdir`), worktree);
     return home;
   };
+  // A real pane pid for `list-panes`, as `makeApp`'s runner gives: since D-5234 a null pid on an alive pane is an
+  // UNMEASURED row (`status-unknown`, D-5274), and these tests are about the coordination checks behind it.
   const recording = (calls: string[][]): Runner => async (_cmd, args) => {
     calls.push(args);
+    if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
     return { code: 0, stdout: '', stderr: '' };
   };
 

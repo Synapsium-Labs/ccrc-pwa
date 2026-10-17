@@ -190,15 +190,20 @@ describe('the one Archive — a workspace', () => {
       expect(b.ccd()).toEqual([['ws-archive', '--session', 'demo-amber']]);
     });
 
-    // D-5234: an unread pid is no longer folded toward rest by the frame row. It is `busy` and `statusUnmeasured`
-    // (D-115's shape), so `archiveInterrupts` reads a turn in progress, exactly as for an unreadable live file.
-    it('without `interrupt`, an unreadable pid is the frame row\'s `busy` (D-5234): 409 session-busy, nothing run', async () => {
+    // D-5234: an unread pid is no longer folded toward rest by the frame row: it is `busy` AND `statusUnmeasured`
+    // (D-115's shape). D-5274: a row busy only because a read failed measured no turn, so it is `status-unknown` —
+    // never `session-busy`, whose `interrupt` retry the fail-closed read would refuse anyway — whatever the consent.
+    it.each([
+      ['no consent', {}],
+      ['interrupt', { interrupt: true }],
+      ['force', { force: true }],
+    ])('an unreadable pid is an UNMEASURED row (D-5274), %s: 409 status-unknown, nothing run', async (_n, body) => {
       const b = await box({ noPanePid: true });
       seed(b.home, 'demo-amber');
       liveStatus(b.home, 'idle');
-      const res = await post(b.app, 'demo-amber');
+      const res = await post(b.app, 'demo-amber', body);
       expect(res.statusCode).toBe(409);
-      expect(res.json()).toEqual({ ok: false, error: 'session-busy' });
+      expect(res.json()).toEqual({ ok: false, error: 'status-unknown' });
       expect(b.ccd()).toEqual([]);
     });
   });

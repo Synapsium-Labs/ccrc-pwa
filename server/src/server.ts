@@ -94,9 +94,9 @@ import {
   type FloorState, type ProjectRow, type ProjectPoolsWire, type ProjectPoolWire, type ProjectRepoWire,
   parseRouteFields, programKickoffVerdict, routeFieldsOrNull, routeParseDetail, type RouteFields,
 } from '../../shared/api.js';
-import { ARCHIVE_REFUSALS, archiveInterrupts } from '../../shared/api.js';
+import { ARCHIVE_REFUSALS } from '../../shared/api.js';
 import {
-  archiveFlags, archiveOutcome, busyReadFailsClosed, decideArchive, refusedAtStop, stopVerdict, worktreeOf, type ArchiveMeasure,
+  archiveFlags, archiveOutcome, busyReadFailsClosed, decideArchive, frameRowVerdict, refusedAtStop, stopVerdict, worktreeOf, type ArchiveMeasure,
   type TurnVerdict,
   type LiveFileReading, type StopRowReading,
 } from './coord/archiveDoor.js';
@@ -3407,12 +3407,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // WHICH read is `busyReadFailsClosed`'s to say (D-3877): the fail-closed `stopVerdictFor` for a main checkout (its
       // stop's only guard), for a workspace whose programme is about to END, `interrupt` or not (3881), and for a
       // workspace archived with `interrupt`, whose stop runs ahead of ccd's own read (F7); otherwise the frame's own
-      // row, with `ws-archive`'s fail-closed `_ws_status` behind it — two-valued, busy or idle. No row
-      // would be no measurement, read as busy — unreachable by construction (`assembleFleet` maps its records 1:1),
-      // kept rather than pinned.
+      // row (`frameRowVerdict`), with `ws-archive`'s fail-closed `_ws_status` behind it — busy or idle, and unmeasured
+      // for a row whose status was not measured (D-5274).
       turn: busyReadFailsClosed(rec.workspace !== null, flags)
         ? await stopVerdictFor(rec, identity.uuid)
-        : await liveRowFor(rec, identity.uuid).then((live): TurnVerdict => (live === null || archiveInterrupts(live) ? 'busy' : 'idle')),
+        : frameRowVerdict(await liveRowFor(rec, identity.uuid)), // D-5274: an unmeasured row is refused, never busy
       // In remote mode this stat is outside the agent's read roots and answers `unmeasured`, which proceeds — ccd's
       // own `[[ -d $workdir ]]` refusal measures it there (`ArchiveMeasure.worktree`).
       worktree: rec.workspace === null ? 'present' : worktreeOf(await deps.io.statMeasured(rec.workdir)),

@@ -607,8 +607,8 @@ export async function assembleFleet(
           // them is the same defect one field over — `statusUpdatedAt` in
           // particular renders as the `· 1m ago` beside the word, so a
           // fabricated one would put a fresh timestamp under a status nobody
-          // measured. `no-state` — absent, half-written, or naming no session
-          // — is untouched and still leaves the whole block at `idle`: that
+          // measured. `no-state` — absent, or a well-formed record naming no
+          // session (a torn body is unmeasured since D-5234) — is untouched and still leaves the whole block at `idle`: that
           // is a real measurement of a pane that has published nothing yet,
           // the ordinary shape in the seconds after `ccd ws-add`.
           status = 'busy';
