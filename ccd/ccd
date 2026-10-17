@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=cf93a6c1355130d651222cc18679dd7196797a8e67a4d5f088c04f61c5088790
+# ccrc:generated 1 sha256=08dedfdd1a789f4899fef9db24991bb35b2da7422383b42462aeb77288916d7e
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1842,7 +1842,7 @@ _authdead() {   # wrapper -> success iff a well-formed auth-dead marker stands f
   # a `<id>.<field>` path, which is exactly why the first census — named by the
   # FIELD-path grammar — could not contain it.
   [[ -f "$f" && ! -L "$f" ]] || return 1
-  t=$(cat "$f" 2>/dev/null); t="${t%% *}"
+  _file_read_to t "$f"; t="${t%% *}"
   [[ "$t" =~ ^[0-9]+$ ]] && ! _authdead_expired "$1" "$t"   # D-3524: a verdict about a credential no longer on disk is not one
 }
 # THE GRAMMAR IS ASCII, AND `LC_ALL=C` IS WHAT MAKES IT SO (D-2522). `[a-z]`
@@ -17686,12 +17686,12 @@ _home_for() { local h; h=$(_reg_get "$1" home); [[ -n "$h" ]] && echo "$h" || _i
 # CAN match one when it should not, keeping a crossing alive on a value nobody
 # measured. ABSENT and EMPTY stay DECIDED here: a row that never had a `.home`
 # (pre-2026-07-28) is old, not unmeasurable, and the fallback is its answer.
-_home_measured() {   # id -> stdout the effective home; rc 0 decided, rc 2 unreadable
-  local h rc
-  h=$(_reg_read "$1" home); rc=$?
+_home_measured_to() {   # var id -> var = the effective home; rc 0 decided, rc 2 unreadable (D-4963)
+  local __hm_out="$1"; shift; local h rc; printf -v "$__hm_out" ''
+  _reg_read_to h "$1" home; rc=$?
   [[ "$rc" -eq 2 ]] && return 2
-  [[ -n "$h" ]] && { printf '%s' "$h"; return 0; }
-  _id_wrapper "$1"
+  [[ -n "$h" ]] && { printf -v "$__hm_out" '%s' "$h"; return 0; }
+  printf -v "$__hm_out" '%s' "$(_id_wrapper "$1")"
 }
 
 _avail() {   # wrapper -> success if it has included-usage headroom (rate score under the ceiling).
@@ -18731,7 +18731,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # that failed — C1's whole point), the pool re-seed is skipped, and
   # `_swap_target` is told so explicitly through `hrc` rather than through an
   # empty string it would mistake for an account.
-  home=$(_home_measured "$id"); hrc=$?
+  _home_measured_to home "$id"; hrc=$?
   # SAID BY THE VERDICT BELOW, NOT HERE (#69 review round 3, R1). This line
   # used to call `_tick_undecidable "$id" home` itself. Four callers each
   # writing the stamp for their own field, with a fifth clearing it in the
@@ -24488,6 +24488,8 @@ _route_applied_get() { local __w; _route_applied_get_to __w "$@"; printf '%s' "$
 _route_effort_for() { local __w; _route_effort_for_to __w "$@"; printf '%s' "$__w"; return 0; }
 _route_wanted() { local __w; _route_wanted_to __w "$@"; printf '%s' "$__w"; return 0; }
 _route_pending_word() { local __w; _route_pending_word_to __w "$@"; printf '%s' "$__w"; return 0; }
+# D-4963 (tick-diet spec §6.4): the printing form of the home read, renamed in place as its out-var form above.
+_home_measured() { local __hmw_v __hmw_rc; _home_measured_to __hmw_v "$@"; __hmw_rc=$?; printf '%s' "$__hmw_v"; return "$__hmw_rc"; }
 
 cmd_supervise() {   # systemd ExecStart: ensure then block until the session dies
   local id="${1:?usage: ccd supervise <id>}"
@@ -26748,7 +26750,7 @@ _crosspool_tick() {   # id wrapper home pool-state -> 0 a crossing stands / 1 no
   # this function could never have closed, because `_crosspool_valid` above
   # consumes `home` four lines before any guard here would run. Both directions
   # are closed by measuring `home` at the top of `_auto_swap_check` instead
-  # (`grep -n '^_home_measured()' ccd/ccd`), which is why no `.home` guard
+  # (`grep -n '^_home_measured_to()' ccd/ccd`), which is why no `.home` guard
   # appears in this function at all. `ccd-crosspool.test.ts` pins the
   # substitution itself, and pins that an ABSENT `.home` still decides.
   #

@@ -123,17 +123,25 @@ import {
  *    idle-home 104/33 -> 92/33 · busy 104/33 -> 92/33 · narrow 62/17 -> 51/17 · away-over-ceiling 104/33 -> 92/33 ·
  *    hard-blocked 142/37 -> 129/37 · cooldown 78/24 -> 67/24 · fable 106/34 -> 94/34 · leaving 127/43 -> 115/43 ·
  *    fable-leaving 135/47 -> 123/47.
+ *
+ *  LOWERED BY W3 Task 16 (D-4963, `_auto_swap_check`'s home read through `_home_measured_to`): the call lost its
+ *  `$( )` and `_home_measured`'s own `$(_reg_read …)` became `_reg_read_to`, so -2 forks on every fixture whose
+ *  steady tick reaches the home read, and none on narrow, which returns before it. Execs do not move (Task 13 took the
+ *  `cat`). `_authdead`'s `cat` is reached by no fixture's steady tick. Before -> after:
+ *    idle-home 92/33 -> 90/33 · busy 92/33 -> 90/33 · narrow 51/17 -> 51/17 · away-over-ceiling 92/33 -> 90/33 ·
+ *    hard-blocked 129/37 -> 127/37 · cooldown 67/24 -> 65/24 · fable 94/34 -> 92/34 · leaving 115/43 -> 113/43 ·
+ *    fable-leaving 123/47 -> 121/47.
  */
 const TICK_BUDGET: Record<FixtureName, { forks: number; execs: number }> = {
-  'idle-home': { forks: 92, execs: 33 },
-  busy: { forks: 92, execs: 33 },
+  'idle-home': { forks: 90, execs: 33 },
+  busy: { forks: 90, execs: 33 },
   narrow: { forks: 51, execs: 17 },
-  'away-over-ceiling': { forks: 92, execs: 33 },
-  'hard-blocked': { forks: 129, execs: 37 },
-  cooldown: { forks: 67, execs: 24 },
-  fable: { forks: 94, execs: 34 },
-  leaving: { forks: 115, execs: 43 },
-  'fable-leaving': { forks: 123, execs: 47 },
+  'away-over-ceiling': { forks: 90, execs: 33 },
+  'hard-blocked': { forks: 127, execs: 37 },
+  cooldown: { forks: 65, execs: 24 },
+  fable: { forks: 92, execs: 34 },
+  leaving: { forks: 113, execs: 43 },
+  'fable-leaving': { forks: 121, execs: 47 },
 };
 
 /** `_plat_timeout`'s `-k` probe, per tick inside the loop. On `main` at

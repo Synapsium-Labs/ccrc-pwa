@@ -31,6 +31,10 @@
 //    forms, their `_to` forms and `_route_apply_pending`'s rc, each side asserting the quiet chain left the registry
 //    (`swap.log`, the floor markers) byte-unchanged; and the `_to` forms into the names their call sites pass. (E9 also
 //    sits above E4 in the file.)
+//  - E10, W3 Task 16's rows (D-4963), per locale: every `HOME_ROWS` row through `$(_home_measured)` and
+//    `_home_measured_to`, the latter also into `home`; the printing form's one stated edge, its raw stdout on the
+//    fallback arm, with the static census that says no call site reads it (E10d); and every `AUTHDEAD_ROWS` marker
+//    through `_authdead`, whose `cat` became `_file_read_to`. (E10 also sits above E4 in the file.)
 //  - E4, the corpus module: deterministic, and every row plants the shape it names.
 //
 // RED FIRST, AND STILL A GREEN COMMIT. A row whose live helper has not landed yet is PENDING: its live side must fail,
@@ -57,6 +61,7 @@ import { inheritedEnv } from './gitEnvStrip.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import {
+  AUTHDEAD_ROWS, HOME_ROWS,
   FILE_ROW_SETS, LIMIT_KEYS, LIMITS_IN_CAP_SIGPIPE, LIMITS_REWRITE, LIMITS_ROWS, LIMITS_TS, RANDOM_ALPHABET, REGISTRY_ROWS, ROUTE_ROWS,
   blocksByName, inLimitsDomain, needsNonRoot, randomRows, type FileRow, type RouteRow,
 } from './tickDietCorpus.js';
@@ -118,11 +123,13 @@ const PLANNED_FORMS: Readonly<Record<string, string>> = {
  *  `_limit_num_in_to` and `_limit_json_num_to`; W2 Task 9 (D-4962) landed `_limit_pick_to` and `_limit_field_to`;
  *  W2 Task 10 (D-4962) landed `_share_pct_to`; W3 Task 13 (D-4963) landed `_file_read_to`, `_reg_get_to` and
  *  `_reg_read_to`; W3 Task 15 (D-4963) landed `_route_peek_to`, `_route_effort_for_to`, `_route_applied_get_to`,
- *  `_route_wanted_to` and `_route_pending_word_to`; the rest of W3 removes its own. */
+ *  `_route_wanted_to` and `_route_pending_word_to`; W3 Task 16 (D-4963) landed `_home_measured_to`; the rest of W3 removes
+ *  its own. */
 const LANDED: ReadonlySet<string> = new Set([
   '_now_s_to', '_now_s', '_cfg_dir_to', '_limit_text_to', '_limit_num_in_to', '_limit_json_num_to',
   '_limit_pick_to', '_limit_field_to', '_share_pct_to', '_file_read_to', '_reg_get_to', '_reg_read_to',
   '_route_peek_to', '_route_effort_for_to', '_route_applied_get_to', '_route_wanted_to', '_route_pending_word_to',
+  '_home_measured_to',
 ]);
 const PENDING: ReadonlySet<string> = new Set(
   [...Object.keys(PLANNED_FORMS), '_now_s'].filter((n) => !LANDED.has(n)),
@@ -2153,6 +2160,161 @@ describe.each(LOCALES)('E9 W3 Task 15 under $name: the route chain\'s out-var fo
     expect(val('_route_peek_to cls class: class=valid,degraded=absent,effort=valid,inert=absent,routeapplied=both')).toBe('opus');
     expect(val('_route_peek_to cls class: class=absent,degraded=absent,effort=absent,inert=absent,routeapplied=absent')).toBe('');
     expect(val('_route_pending_word_to w: class=valid,degraded=valid,effort=auto,inert=effort,routeapplied=class-only')).toBe('class=sonnet');
+  });
+});
+
+// ── E10: W3 Task 16's rows — `_home_measured_to` and `_authdead`'s builtin read (D-4963) ───────────────────────────
+
+/** Where every `.home` row plants its field: `$REG/diet.home`, so the home read asks for id `diet`, which names no
+ *  account, so the fallback arm answers `_id_wrapper`'s default. */
+const HOME_AT = '"$REG/diet.home"';
+/** The wrapper every authdead row plants its marker for: a harness roster id. */
+const AD_WRAPPER = DEFAULT_TEST_ROSTER.accounts[1]!.id;
+const AD_AT = `"$REG/${AD_WRAPPER}-authdead"`;
+const HM_ROWS: readonly FileRow[] = HOME_ROWS.filter((r) => !(AS_ROOT && needsNonRoot(r)));
+const AD_ROWS: readonly FileRow[] = AUTHDEAD_ROWS.filter((r) => !(AS_ROOT && needsNonRoot(r)));
+const HM_NEEDS: readonly string[] = ['_home_measured_to'];
+
+/** One side over one `.home` row: the printing form through `$( )` (how `_auto_swap_check` read it before this task),
+ *  and the `_to` form into `hv`, set to `__P` first, so a form that does not empty its out-var on the rc-2 arm shows. */
+const hm2 = (get: string, to: string): string => [
+  '__hm2() {',
+  '  local r hv',
+  `  v=__P; v=$(${get} diet); r=$?; printf '[get %s|%s]\\n' "$v" "$r"`,
+  `  hv=__P; ${to}; r=$?; printf '[to %s|%s]\\n' "$hv" "$r"`,
+  '}',
+  '__diet_caller v __hm2',
+].join('\n');
+const HM2_LEGACY = hm2('_legacy_home_measured', 'hv=$(_legacy_home_measured diet)');
+const HM2_LIVE = hm2('_home_measured', '_home_measured_to hv diet');
+
+/** Every W3 Task 16 row (plan Task 16 Step 1, tick-diet spec §6.4):
+ *  - `home`: each `HOME_ROWS` row through `hm2`, against the legacy;
+ *  - `named`: `_home_measured_to` into `home`, the name `_auto_swap_check` passes, one call per row;
+ *  - `raw`: structural, the printing form's raw stdout against the legacy's raw bytes and its captured value (E10c);
+ *  - `authdead`: each `AUTHDEAD_ROWS` row, `_authdead <wrapper>` against `_legacy_authdead <wrapper>`. */
+function w3HomeRows(): { home: Row[]; named: Row[]; raw: DomainRow[]; authdead: Row[] } {
+  return {
+    home: HM_ROWS.map((r): Row => ({
+      id: `home, two calls: ${r.id}`, setup: plant(r, HOME_AT), needs: HM_NEEDS,
+      sides: [{ label: 'legacy', body: HM2_LEGACY }, { label: 'live', body: HM2_LIVE }],
+    })),
+    named: HM_ROWS.map((r) => toRow(`_home_measured_to home ${r.id}`, '_legacy_home_measured', '_home_measured_to', ['diet'], plant(r, HOME_AT), 'home')),
+    raw: HM_ROWS.map((r): DomainRow => ({
+      id: `_home_measured raw: ${r.id}`, row: r, setup: plant(r, HOME_AT), needs: HM_NEEDS,
+      sides: [{
+        label: 'raw',
+        body: [
+          '_home_measured diet > "$PWD/live.raw"; __a=$?',
+          '_legacy_home_measured diet > "$PWD/legacy.raw"; __b=$?',
+          '__v=$(_legacy_home_measured diet) 2>/dev/null; printf \'%s\' "$__v" > "$PWD/legacy.cap"',
+          'if command cmp -s "$PWD/live.raw" "$PWD/legacy.raw"; then __r=raw-equal; else __r=raw-differs; fi',
+          'if command cmp -s "$PWD/live.raw" "$PWD/legacy.cap"; then __c=captured; else __c=not-captured; fi',
+          'if command cmp -s "$PWD/legacy.raw" "$PWD/legacy.cap"; then __l=legacy-raw-is-captured; else __l=legacy-raw-differs; fi',
+          'printf \'%s %s %s %s %s\' "$__r" "$__c" "$__a" "$__b" "$__l" > "$PWD/note"',
+        ].join('\n'),
+      }],
+    })),
+    authdead: AD_ROWS.map((r): Row => ({
+      id: `authdead: ${r.id}`, setup: plant(r, AD_AT), needs: ['_file_read_to'],
+      sides: [
+        { label: 'legacy', body: `__diet_caller v ${q(`_legacy_authdead ${AD_WRAPPER}; printf '<authdead rc=%s>' "$?"`)}` },
+        { label: 'live', body: `__diet_caller v ${q(`_authdead ${AD_WRAPPER}; printf '<authdead rc=%s>' "$?"`)}` },
+      ],
+    })),
+  };
+}
+
+/** Every call to the printing `_home_measured` in `src`'s code that is NOT the first word of a command substitution,
+ *  as `line: text` — E8d's census (`rawRegGetCalls`) for this name: such a caller would see E10c's raw-stdout edge. */
+function rawHomeMeasuredCalls(src: string): string[] {
+  const out: string[] = [];
+  stripShellComments(src).split('\n').forEach((l, i) => {
+    for (const m of l.matchAll(/(^|[^A-Za-z0-9_])_home_measured(?![A-Za-z0-9_])/g)) {
+      const at = (m.index ?? 0) + m[1]!.length;
+      if (/^_home_measured\(\)/.test(l.slice(at))) continue;
+      if (!/(?:\$\(\s*|`)$/.test(l.slice(0, at))) out.push(`${i + 1}: ${l.trim()}`);
+    }
+  });
+  return out;
+}
+
+describe('E10d no call site reads `_home_measured`\'s raw stdout: every call is the head of a `$( )` (D-4963)', () => {
+  it('E10d ccd/ccd calls the printing `_home_measured` only as `$(_home_measured …)`, and the census names a planted raw call', () => {
+    const src = fs.readFileSync(CCD, 'utf8');
+    expect(/^_home_measured\(\)/m.test(stripShellComments(src)), 'the census\'s name no longer defines a function in ccd/ccd')
+      .toBe(true);
+    expect(rawHomeMeasuredCalls(src), 'a `_home_measured` call outside a `$( )` reads the printing form\'s raw stdout, '
+      + 'which drops the fallback arm\'s trailing newline (E10c) — capture it, or call `_home_measured_to`').toEqual([]);
+    const planted = `${src}\n_diet_raw() { _home_measured "$1" > "$2"; x=$(LC_ALL=C _home_measured "$1"); y=$(_home_measured "$1"); }\n`;
+    const at = planted.split('\n').length - 1;
+    const line = `${at}: _diet_raw() { _home_measured "$1" > "$2"; x=$(LC_ALL=C _home_measured "$1"); y=$(_home_measured "$1"); }`;
+    expect(rawHomeMeasuredCalls(planted)).toEqual([line, line]);
+  });
+});
+
+describe.each(LOCALES)('E10 W3 Task 16 under $name: `_home_measured_to` and `_authdead`\'s builtin read (tick-diet spec §6.4, D-4963)', ({ locale }) => {
+  const rows = w3HomeRows();
+  let h: CcdHarness;
+  let batch: Batch | null = null;
+  beforeAll(() => {
+    h = makeCcdHarness('ccrc-diet-e10-');
+    if (locale !== null) batch = runBatch(h, [...rows.home, ...rows.named, ...rows.raw, ...rows.authdead], locale, 600);
+  }, 700_000);
+  afterAll(() => h.cleanup());
+  const got = (ctx: { skip: (note?: string) => never }): Batch => {
+    if (locale === null) {
+      if (process.platform === 'darwin') ctx.skip(NO_UTF8);
+      throw new Error(`${NO_UTF8} — the supervisors run under one, so this half cannot be skipped here`);
+    }
+    return batch!;
+  };
+  const out = (id: string): string => batch!.results.get(id)![0]!.out.toString('latin1');
+
+  it('E10x the batch ran every row to the end, inside its deadline', (ctx) => {
+    const b = got(ctx);
+    expect(b.hung, `a row never finished: ${b.stderr.slice(0, 2000)}`).toBeNull();
+    expect(b.status).toBe(0);
+  });
+
+  it('E10a every `.home` row: `$(_home_measured)` and `_home_measured_to` answer as the legacy did (D-4963)', (ctx) => {
+    const b = got(ctx);
+    for (const row of rows.home) expectEquivalent(row, b.results.get(row.id)!, locale!);
+    // Non-vacuity: the legacy answered each arm — decided from `.home`, the fallback, and rc 2 for an unreadable one.
+    expect(out('home, two calls: valid-newline')).toBe('[get claude-a|0]\n[to claude-a|0]\n');
+    expect(out('home, two calls: absent')).toMatch(/^\[get [^|\n]+\|0\]\n/);
+    expect(out('home, two calls: symlink-regular')).toBe('[get |2]\n[to |2]\n');
+    if (!AS_ROOT) expect(out('home, two calls: reg-unsearchable')).toBe('[get |2]\n[to |2]\n');
+  });
+
+  it('E10b `_home_measured_to` into `home`, the name `_auto_swap_check` passes, one call per row (D-4963)', (ctx) => {
+    const b = got(ctx);
+    for (const row of rows.named) expectEquivalent(row, b.results.get(row.id)!, locale!);
+    expect(b.results.get('_home_measured_to home valid')![0]!.val!.toString('latin1')).toBe('claude-a');
+    expect(b.results.get('_home_measured_to home symlink-regular')![0]!.rc).toBe(2);
+  });
+
+  it('E10c the printing form\'s raw stdout is what `$( )` leaves: the legacy\'s bytes, except the fallback arm\'s trailing newline (D-4963)', (ctx) => {
+    const b = got(ctx);
+    for (const row of rows.raw) {
+      const s = b.results.get(row.id)![0]!;
+      expect(s.setupRc, `${row.id}: the setup failed: ${s.setupLog}`).toBe(0);
+      const [r, c, a, l, leg] = s.note.split(' ');
+      expect({ c, a }, `${row.id}: the printing form prints the captured value with the legacy's rc`).toEqual({ c: 'captured', a: l });
+      expect(r, `${row.id}: raw stdout differs exactly where the legacy's raw stdout was not its captured value`)
+        .toBe(leg === 'legacy-raw-differs' ? 'raw-differs' : 'raw-equal');
+    }
+    // Non-vacuity: the edge is real, both ways.
+    expect(b.results.get('_home_measured raw: absent')![0]!.note).toMatch(/^raw-differs /);
+    expect(b.results.get('_home_measured raw: valid')![0]!.note).toMatch(/^raw-equal /);
+  });
+
+  it('E10e every authdead marker: `_authdead` answers as the legacy did, its `cat` now a builtin read (D-4963)', (ctx) => {
+    const b = got(ctx);
+    for (const row of rows.authdead) expectEquivalent(row, b.results.get(row.id)!, locale!);
+    expect(out('authdead: absent')).toBe('<authdead rc=1>');
+    expect(out('authdead: malformed')).toBe('<authdead rc=1>');
+    expect(out('authdead: symlink-regular')).toBe('<authdead rc=1>');
   });
 });
 
