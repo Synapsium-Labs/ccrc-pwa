@@ -1364,6 +1364,46 @@ describe('_upd_sweep, Linux arm: a unit that did not come back active is named t
     noPoison(box);
   }, 60_000);
 
+  // Review 568 F1 (wave 17, D-5324): the shipped behaviour, pinned. A unit the pre-restart listing does NOT show but the
+  // post-restart active listing does is IN `units`, so it is verified; it is never "was already" (it has no pre-restart
+  // word) and never "was active before" (it was not).
+  itLinux('W24g absent from the pre-restart listing, listed active after: verified, and never named "was already" or "was active before"', () => {
+    const box = makeBox({
+      units: [stable(A, 0), { unit: X, active: ['active'], mainPid: ['4100'], listed: 'active', preRestart: null }],
+    });
+    const r = runSweep(box);
+    expect(r.code, ctx(r)).toBe(0);
+    expect(count(box, act(X)), 'a unit listed active after the restart is verified, whatever it was before').toBeGreaterThanOrEqual(1);
+    expect(r.stderr.split('\n').filter((l) => l.includes(X) && (l.includes('was already') || l.includes('was active before'))), ctx(r)).toEqual([]);
+    expect(r.stdout).toContain(SWEEP_OK);
+    noPoison(box);
+  }, 60_000);
+
+  // Wave 17 (D-5323): item G's loop and Reading 9's naming loop run BEFORE the die, so a run that dies names every unit
+  // it can name first. One unit fails its verify and its re-check (the die); another was `failed` before the restart and
+  // reads inactive after it (Reading 9's line); a third was active before and is in neither post-restart listing (item
+  // G's line). Both lines precede the die's own, which stays the last line.
+  itLinux('W24h a die is preceded by the lines naming the units the sweep did not verify', () => {
+    const box = makeBox({
+      units: [churn(B),
+        { unit: X, active: ['inactive'], mainPid: [], listed: 'gone', preRestart: 'failed' },
+        { unit: F, active: ['inactive'], mainPid: [], listed: 'gone' }],
+    });
+    const r = runSweep(box);
+    expect(r.code, ctx(r)).toBe(1);
+    const err = r.stderr.split('\n');
+    const die = err.findIndex((l) => l.startsWith('ccrc: sweep:'));
+    const prior = err.indexOf(PRIOR(X, 'failed'));
+    const unseen = err.findIndex((l) => l.includes(UNSEEN(F)));
+    expect(die, ctx(r)).toBeGreaterThan(-1);
+    expect(prior, `Reading 9's line for ${X} before the die:\n${ctx(r)}`).toBeGreaterThan(-1);
+    expect(prior, ctx(r)).toBeLessThan(die);
+    expect(unseen, `item G's line for ${F} before the die:\n${ctx(r)}`).toBeGreaterThan(-1);
+    expect(unseen, ctx(r)).toBeLessThan(die);
+    expect(dieOf(r.stderr), ctx(r)).toBe(dieLine(1, 1, 0, B));
+    noPoison(box);
+  }, 60_000);
+
   itLinux('W24d a pre-restart word other than active, activating or failed is not named (inactive, deactivating)', () => {
     const box = makeBox({
       units: [stable(A, 0),

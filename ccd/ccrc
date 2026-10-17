@@ -21494,11 +21494,6 @@ _upd_sweep() {
     [ -z "$vdir" ] || rm -rf -- "$vdir"
   fi
   after=(${units[@]+"${units[@]}"})
-  if [ -n "$rfail" ]; then
-    _upd_sweep_die "sweep: $kc of ${#units[@]} supervisors did not stay up on a first verify; a re-check failed, $mn left un-re-checked — install complete, nothing was rolled back (first failed re-check: $rfail); read: systemctl --user status $rfail"
-  elif [ "${#ncfail[@]}" -gt 0 ]; then
-    _upd_sweep_die "sweep: ${#ncfail[@]} of ${#units[@]} supervisors exited non-zero after a 'stopped on purpose' line, never re-checked — install complete, nothing was rolled back (first: ${ncfail[0]}); read: systemctl --user status ${ncfail[0]}"
-  fi
   # Wave 8 item G: a claim that "every … now runs the ccd this update
   # installed" is false for a unit that WAS active before try-restart and is
   # neither active nor failed after it — this sweep did not verify it, and
@@ -21525,6 +21520,11 @@ _upd_sweep() {
       *) echo "update: warning: $b was already '${priorw[pi]}' before try-restart and is not active after it — it is named, not verified, and does not fail this update (a supervisor already 'activating' or 'failed' before the restart is never verified; wave 16, D-5136). On the box: systemctl --user status $b" >&2 ;;
     esac
   done
+  if [ -n "$rfail" ]; then
+    _upd_sweep_die "sweep: $kc of ${#units[@]} supervisors did not stay up on a first verify; a re-check failed, $mn left un-re-checked — install complete, nothing was rolled back (first failed re-check: $rfail); read: systemctl --user status $rfail"
+  elif [ "${#ncfail[@]}" -gt 0 ]; then
+    _upd_sweep_die "sweep: ${#ncfail[@]} of ${#units[@]} supervisors exited non-zero after a 'stopped on purpose' line, never re-checked — install complete, nothing was rolled back (first: ${ncfail[0]}); read: systemctl --user status ${ncfail[0]}"
+  fi
   # The record (wave 17, D-5314): every unit already `activating` or `failed`
   # before the restart, read from the PRE-restart listing, so it needs no
   # post-restart one (with `before` non-empty an unread one returned above).
