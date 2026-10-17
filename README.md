@@ -5131,7 +5131,7 @@ things at that moment: it builds a SECOND card — the files this context was wo
 community and dependents read out of the same graph — and it MEASURES the compaction, writing one line to a
 per-session journal. Three arms of `ccd/session-hook.sh` do it, and **none of them opens a new output
 channel**: the card rides the one `additionalContext` envelope `SessionStart` already prints — the compact
-arm calls `_hook_emit_context "$CARD" "$CARD_COMPACT"` (`ccd/session-hook.sh:3012`), which appends the second
+arm calls `_hook_emit_context "$CARD" "$CARD_COMPACT"` (`ccd/session-hook.sh:3037`), which appends the second
 subject under its own `COMPACT_CARD_MAX_CHARS` ceiling (`:97`) before the single `jq -cn` print (`:103-105`) — and `PreCompact` and
 `PostCompact` print nothing at all. `PreCompact` decides whose transcript is compacting and publishes the
 working set, `SessionStart(compact)` serves the card once beside the graph card in that one envelope, and
@@ -6260,9 +6260,9 @@ Known real-format subtleties already encoded:
   (`'sandbox request'`, `'input needed'`, `'dialog open'`, or the top dialog's
   own label). `liveSessionStatus` still collapses everything but `idle` to
   `busy` on purpose — the fleet card and the session socket must never paint a
-  human-blocked session as at rest, and the interrupt route's `liveStatus`
-  reads the same collapse — and `waiting` reaches the attention bucket through
-  `dialogPending` instead. The mail gate no longer reads that collapse:
+  human-blocked session as at rest — and `waiting` reaches the attention bucket
+  through `dialogPending` instead. The interrupt route no longer reads that
+  collapse (D-5236: `shell` is `409 background-only`). Nor does the mail gate:
   `mailTurnIdle` (`server/src/turnidle.ts`) takes the raw word and, by default,
   delivers on `idle` and on `shell` (an idle main loop over a background shell),
   and holds `waiting`, `busy` and any word it does not know; `mail-gate-strict`
