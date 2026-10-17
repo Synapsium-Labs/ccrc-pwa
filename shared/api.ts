@@ -4066,7 +4066,7 @@ export const RESTART_CAUSE_WORDS = {
   exited: 'process exited',
   'swap-auto-home': 'swapped home',
   'swap-auto-rescue': 'swapped off a blocked account',
-  'swap-auto': 'swapped automatically',
+  'swap-auto': 'swapped automatically',   // D-5348: an automatic swap whose arm is not named
   'swap-manual': 'swapped by hand',
   unknown: 'cause unknown',
 } as const;

@@ -39,7 +39,7 @@ function buildRecordFieldReadCount(src: string): number {
   const mapCalls = [...text.matchAll(/ROUTE_WRITABLE_FIELDS\.map\(/g)].length;
   // A read guarded by the listing (`names.includes(...) ? field(...) :
   // Promise.resolve(null)`, D-5237's `lastend`) fires only for a row whose
-  // listing names the file, so it is not part of the cost every row pays.
+  // listing names the file, so it is not part of the cost every row pays (D-5347).
   const listedOnly = [...text.matchAll(/names\.includes\([^)]*\)\s*\?\s*field(?:Measured)?\(/g)].length;
   return bareCalls + mapCalls * (ROUTE_WRITABLE_FIELDS.length - 1) - listedOnly;
 }

@@ -731,7 +731,7 @@ function noteWholeFleetListing(listable: boolean, now: number): void {
  *
  * Plus one LISTED-ONLY read (D-5237): `.lastend`, read only when the listing
  * names it, so a row that has never recorded a process end pays nothing and
- * one that has pays one read more. The census counts the reads every row pays.
+ * one that has pays one read more. The census counts the reads every row pays (D-5347).
  *
  * Returns null for a DROPPED registry entry — narrowed (architecture doc,
  * increment 1's second half) from the old "missing wrapper/workdir/uuid"

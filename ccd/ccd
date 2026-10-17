@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=5451610421e06c3d5d070b77440d6a43c88d6ae9ba8002951ae1faa026b299b3
+# ccrc:generated 1 sha256=75ab5fb7fb9802b32c4c3e90fe3ff06d8eb43d973a6d0ad548ae95e1824378c1
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -22366,34 +22366,41 @@ _panescope_record() {   # id — once per spawn, after the pane exists: its scop
   return 0
 }
 _end_cause() {   # id -> the cause word of the end just seen: oom | tmux-server | exited | unknown. Always rc 0.
-  # `oom` FIRST: the pane scope's own journal naming an OOM kill in the 120 s
+  # `oom` FIRST (D-5345): the pane scope's own journal naming an OOM kill in the 120 s
   # before now is the most specific answer, and it holds when the tmux server
-  # also went (a box with one session). Bounded by `timeout 5`. No recorded
-  # scope on Linux, or a journal read that fails (rc other than 0/1, 124
-  # included), is `unknown` — unless tmux itself is gone. macOS records no
-  # scope and has no journal: its ends are `tmux-server` or `exited`.
-  local id="$1" scope="" now out rc=0 journal=ok
+  # also went (a box with one session). Bounded by `_plat_timeout 5`, with ONE
+  # argv spelling: a test plants `journalctl` as a program on PATH, so the
+  # bounded call is the one it runs. No recorded scope on Linux, or a journal
+  # read that fails (rc other than 0/1, 124 included), is `unknown` — unless
+  # tmux itself is gone. macOS records no scope and has no journal: its ends
+  # are `tmux-server` or `exited`. The `list-sessions` probe is bounded the
+  # `_session_probe` way (SUBSTRATE_PROBE_DEADLINE_S, D-310): a server that
+  # wedges at this exit must not keep the supervisor from exiting, and its
+  # timeout (124) is `unknown`, never `tmux-server`.
+  local id="$1" scope="" now out rc=0 journal=ok lsrc=0
   scope=$(_reg_get "$id" panescope)   # absent or unreadable: empty, and both mean no scope to read
   if [[ -n "$scope" || "$CCD_OS" != darwin ]]; then
     if [[ -n "$scope" ]]; then
       _now_s_to now
-      if declare -F journalctl >/dev/null; then
-        out=$(journalctl --user -u "$scope" --since "@$((now - 120))" -q -g 'killed by the OOM killer' -n 1 --no-pager 2>/dev/null) || rc=$?
-      else
-        out=$(_plat_timeout 5 journalctl --user -u "$scope" --since "@$((now - 120))" -q -g 'killed by the OOM killer' -n 1 --no-pager 2>/dev/null) || rc=$?
-      fi
+      out=$(_plat_timeout 5 journalctl --user -u "$scope" --since "@$((now - 120))" -q -g 'killed by the OOM killer' -n 1 --no-pager 2>/dev/null) || rc=$?
       if (( rc == 0 )) && [[ -n "$out" ]]; then printf 'oom'; return 0; fi
       (( rc == 0 || rc == 1 )) || journal=failed
     else
       journal=failed
     fi
   fi
-  if ! tmux list-sessions >/dev/null 2>&1; then printf 'tmux-server'; return 0; fi
+  if declare -F tmux >/dev/null; then
+    tmux list-sessions >/dev/null 2>&1 || lsrc=$?
+  else
+    _plat_timeout "$SUBSTRATE_PROBE_DEADLINE_S" tmux list-sessions >/dev/null 2>&1 || lsrc=$?
+  fi
+  if (( lsrc == 124 )); then printf 'unknown'; return 0; fi
+  if (( lsrc != 0 )); then printf 'tmux-server'; return 0; fi
   if [[ "$journal" == failed ]]; then printf 'unknown'; else printf 'exited'; fi
   return 0
 }
 _end_record() {   # id cause — $REG/<id>.lastend, $REG/<id>.oomends (oom only) and one swap.log line. Always rc 0.
-  # `oomends` holds the epochs of this row's `oom` ends in the last
+  # `oomends` (D-5344) holds the epochs of this row's `oom` ends in the last
   # RESUME_CAUSE_MAX_AGE_S, newest last, so the resume prompt can say how many
   # there were: `lastend` keeps only the newest.
   local id="$1" cause="$2" now e kept=""
@@ -22414,7 +22421,7 @@ _end_note_gone() {   # id — the supervise loop's `gone` exit: classify and rec
   # A swap records its own cause before it stops this unit (`cmd_swap`), and a
   # stop normally kills this supervisor before tmux pronounces the pane gone;
   # should the loop still reach `gone`, a swap end of the last 60 s is the
-  # truer answer and is kept.
+  # truer answer and is kept (D-5346).
   local id="$1" le now
   le=$(_reg_get "$id" lastend)   # absent or unreadable: empty, which is no swap end to keep
   _now_s_to now
@@ -22423,7 +22430,7 @@ _end_note_gone() {   # id — the supervise loop's `gone` exit: classify and rec
 }
 _swap_end_cause() {   # -> this swap's cause word: swap-manual | swap-auto-home | swap-auto-rescue | swap-auto
   # CCD_SWAP_AUTO=1 is `_dispatch_swap`'s mark; CCD_SWAP_ARM names its arm
-  # (D-5240, Task 11). An automatic swap whose arm is not named is `swap-auto`.
+  # (D-5240, Task 11). An automatic swap whose arm is not named is `swap-auto` (D-5348).
   if [[ "${CCD_SWAP_AUTO:-}" != 1 ]]; then printf 'swap-manual'; return 0; fi
   case "${CCD_SWAP_ARM:-}" in
     home)   printf 'swap-auto-home' ;;
@@ -22451,10 +22458,10 @@ _resume_prompt_for() {   # id -> the resume prompt this spawn submits (D-5237). 
         done < "$REG/$id.oomends"
       fi
       (( n < 1 )) && n=1
-      what="its pane ran out of memory and the kernel killed a process in it, $n out-of-memory restarts of this session in the last 10 minutes"
+      what="its pane ran out of memory and the kernel killed a process in it, $n out-of-memory restart$([[ $n == 1 ]] || printf s) of this session in the last 10 minutes"
       extra=" Before continuing: do not re-run the step that was running at the same parallelism, because that step ran out of memory." ;;
     tmux-server)      what="the tmux server that held its pane went away" ;;
-    exited)           what="its previous process exited on its own and the supervisor revived it" ;;
+    exited)           what="a supervisor revival after the process exited on its own" ;;
     swap-auto-home)   what="an automatic account swap back to its home account" ;;
     swap-auto-rescue) what="an automatic account swap off a blocked account" ;;
     swap-auto)        what="an automatic account swap" ;;

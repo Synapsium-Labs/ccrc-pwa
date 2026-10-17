@@ -13,15 +13,19 @@
  *   composed prompt, which names a cause at most 10 minutes old;
  * - `_route_escape` logs each Escape before it sends it.
  *
- * Fixture HOME only (`makeCcdHarness`); tmux, systemctl and journalctl are
- * shell functions, and `/proc` is a planted tree behind `_panescope_proc_root`.
+ * Fixture HOME only (`makeCcdHarness`); tmux and systemctl are shell
+ * functions, and `/proc` is a planted tree behind `_panescope_proc_root`.
+ * `journalctl` is a PROGRAM on PATH, never a function: `_end_cause` reads the
+ * journal through `_plat_timeout 5`, which runs a binary, so a function stub
+ * would test a call the fleet never makes. A case that needs a bounded `tmux`
+ * plants one the same way.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { RESTART_CAUSES, RESUME_PROMPT_PREFIX } from '../../shared/api.js';
-import { makeCcdHarness, ghContainedEnv, CCD, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, ghContainedEnv, harnessBin, CCD, type CcdHarness } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-restart-cause-'); });
@@ -62,16 +66,28 @@ const run = (snippet: string): { code: number; stderr: string } => {
 const seq = (...v: string[]): string =>
   `_i=0; _seq=(${v.map((x) => `'${x}'`).join(' ')}); _session_probe() {
      local x="\${_seq[$_i]:-gone}"; _i=$((_i+1)); PROBE_VERDICT="$x"; PROBE_DETAIL=""; PROBE_SUBSTRATE=present; }`;
+/** A program on PATH (the harness bin, ahead of every other entry): logs
+ *  `<name> <argv>` to `ccd-calls`, then either `exec sleep 30` (a wedged read:
+ *  `exec`, so the TERM reaches the sleep and the pipe closes) or prints `out`
+ *  and exits `rc`. */
+const plantProgram = (name: string, o: { out?: string; rc?: number; hang?: boolean }): void => {
+  fs.writeFileSync(path.join(h.home, `${name}-out`), o.out ?? '');
+  fs.writeFileSync(path.join(harnessBin(h.home), name),
+    `#!/bin/sh\nprintf '${name} %s\\n' "$*" >> "$HOME/ccd-calls"\n`
+    + (o.hang ? 'exec sleep 30\n' : `cat "$HOME/${name}-out"\nexit ${o.rc ?? 0}\n`), { mode: 0o755 });
+};
 /** The loop's collaborators, quiet. `tmux list-sessions` answers `$LS_RC`;
- *  `journalctl` records its argv and prints `$JOURNAL_OUT`, exiting `$JOURNAL_RC`. */
-const LOOP = (o: { lsRc?: number; journalOut?: string; journalRc?: number } = {}): string =>
-  `systemctl() { :; }; launchctl() { :; }; sleep() { :; }
+ *  the planted `journalctl` program records its argv and prints `journalOut`,
+ *  exiting `journalRc` (or hangs, `journalHang`). */
+const LOOP = (o: { lsRc?: number; journalOut?: string; journalRc?: number; journalHang?: boolean } = {}): string => {
+  plantProgram('journalctl', { out: o.journalOut, rc: o.journalRc, hang: o.journalHang });
+  return `systemctl() { :; }; launchctl() { :; }; sleep() { :; }
    cmd_ensure() { :; }; _sync_uuid() { :; }; _auto_stale_check() { :; }; _auto_swap_check() { :; }
    _auto_compact_check() { :; }; _route_apply_check() { :; }
    tmux() { case "$1" in -V) echo 'tmux 3.4' ;; list-sessions) return ${o.lsRc ?? 0} ;;
      list-panes) echo ${PANE_PID} ;; *) return 1 ;; esac; }
-   journalctl() { echo "journalctl $*" >> "$HOME/ccd-calls"; printf '%s' ${JSON.stringify(o.journalOut ?? '')}; return ${o.journalRc ?? 0}; }
    ${PROC}`;
+};
 const OOM_LINE = `Oct 15 22:15:01 host systemd[1]: ${SCOPE}: A process of this unit has been killed by the OOM killer.`;
 const supervise = (o: Parameters<typeof LOOP>[0] = {}, pre = ''): ReturnType<typeof run> => {
   fs.writeFileSync(reg('panescope'), SCOPE);
@@ -88,7 +104,7 @@ describe('the supervise loop classifies the end it exits on (D-5237)', () => {
     expect(swapLog()).toMatch(new RegExp(`ended ${ID}: oom\\n`));
     const j = h.calls().find((l) => l.startsWith('journalctl'))!;
     expect(j).toContain(`--user -u ${SCOPE}`);
-    expect(j).toMatch(/--since @\d+ -q -g killed by the OOM killer -n 1 --no-pager/);
+    expect(j).toMatch(new RegExp(`^journalctl --user -u ${SCOPE.replace(/\./g, '\\.')} --since @\\d+ -q -g killed by the OOM killer -n 1 --no-pager$`));
     const since = Number(/--since @(\d+)/.exec(j)![1]);
     expect(Math.abs(nowS() - 120 - since)).toBeLessThan(30);
   });
@@ -105,6 +121,15 @@ describe('the supervise loop classifies the end it exits on (D-5237)', () => {
     supervise({ journalRc: 124 });
     expect(lastEnd()).toMatch(/^\d+ unknown$/);
   });
+  it('a journalctl that hangs is bounded: the supervisor exits inside the 5 s deadline plus the kill grace, as unknown', () => {
+    const t0 = Date.now();
+    const r = supervise({ journalHang: true });
+    const took = Date.now() - t0;
+    expect(r.stderr).toContain('ended; exiting for systemd restart');
+    expect(lastEnd()).toMatch(/^\d+ unknown$/);
+    expect(h.calls().some((l) => l.startsWith('journalctl --user'))).toBe(true);
+    expect(took).toBeLessThan(12000);
+  }, 20000);
   it('no recorded scope reads unknown on Linux (no journal to read) and exited on macOS (none to have)', () => {
     const cause = (os: string): string =>
       h.sh(`${LOOP()} CCD_OS=${os}; _end_cause ${ID}`);
@@ -132,6 +157,22 @@ describe('the supervise loop classifies the end it exits on (D-5237)', () => {
     expect(lines[0]).toBe(String(n - 300));
     expect(Math.abs(Number(lines[1]) - nowS())).toBeLessThan(30);
   });
+  it('the tmux probe at the exit is bounded: a wedged list-sessions reads unknown, a failed one tmux-server', () => {
+    fs.writeFileSync(reg('panescope'), SCOPE);
+    plantProgram('journalctl', { rc: 1 });   // the journal answers: no OOM line
+    const cause = (o: Parameters<typeof plantProgram>[1]): { cause: string; took: number } => {
+      plantProgram('tmux', o);
+      const t0 = Date.now();
+      const c = h.sh(`unset -f tmux; SUBSTRATE_PROBE_DEADLINE_S=1; _end_cause ${ID}`);
+      return { cause: c, took: Date.now() - t0 };
+    };
+    const wedged = cause({ hang: true });
+    expect(wedged.cause).toBe('unknown');
+    expect(wedged.took).toBeLessThan(9000);
+    expect(h.calls()).toContain('tmux list-sessions');
+    expect(cause({ rc: 1 }).cause).toBe('tmux-server');
+    expect(cause({ rc: 0 }).cause).toBe('exited');
+  }, 20000);
   it('the tick reads no /proc: the scope is read once per spawn, never per tick (#387)', () => {
     supervise();
     expect(procReads()).toBe(0);
@@ -225,6 +266,10 @@ describe('the resume prompt names a recent cause (D-5237)', () => {
     const p = prompt(`${n - 120} oom`, `${n - 900}\n${n - 500}\n${n - 300}\n${n - 120}`);
     expect(p).toContain('out of memory');
     expect(p).toMatch(/\b3 out-of-memory restarts\b/);
+  });
+  it('one oom end in the window is one restart, singular', () => {
+    const p = prompt(`${nowS() - 60} oom`, `${nowS() - 60}`);
+    expect(p).toMatch(/\b1 out-of-memory restart of this session\b/);
     expect(p).toContain('do not re-run the step that was running at the same parallelism');
     expect(p).not.toContain('an account swap or a supervisor revival');
   });
