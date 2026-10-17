@@ -1,12 +1,17 @@
 // Task 12 — TerminalDrawer: a full-height sheet holding an xterm bound to
 // `/ws/pty/:id?cols=&rows=` — raw frames flow into term.write, typed data and
-// the mobile quick-keys flow back as {type:'input'} frames, refits that change
-// the grid send {type:'resize'}, a connection overlay narrates attach/loss,
-// and closing the drawer closes the socket (the server then restores the
-// session's canonical window size).
+// the mobile quick-keys flow back as {type:'input'} frames, the attach dials
+// the window's own size and a refit sends nothing (D-5005), a connection
+// overlay narrates attach/loss, and closing the drawer closes the socket (the
+// server then restores the session's canonical window size).
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { TerminalDrawer, type DrawerTerm } from '../src/session/TerminalDrawer';
+import { TerminalDrawer } from '../src/session/TerminalDrawer';
+import type { DrawerTerm } from '../src/session/terminalFactory';
+import { PINNED_WINDOW_COLS, PINNED_WINDOW_ROWS, TMUX_STATUS_ROWS } from '../../shared/api';
+
+/** What every attach dials: the window's own size plus tmux's status row. */
+const WINDOW_URL = `cols=${PINNED_WINDOW_COLS}&rows=${PINNED_WINDOW_ROWS + TMUX_STATUS_ROWS}`;
 
 afterEach(() => {
   cleanup();
@@ -14,7 +19,7 @@ afterEach(() => {
   FakeSocket.instances.length = 0;
 });
 
-const ID = 'claude:OpenClawHetzner';
+const ID = 'lane-a:project-a';
 
 // — fakes —
 
@@ -44,24 +49,33 @@ class FakeSocket {
 }
 const makeSocket = (url: string): WebSocket => new FakeSocket(url) as unknown as WebSocket;
 
-/** Scripted DrawerTerm — the measured grid is settable so fits are provable. */
+/** Scripted DrawerTerm — the measured grid is settable, so a test can show
+ *  that what the glass measures never reaches the socket. */
 const fakeTermFactory = (cols = 48, rows = 20) => {
   const write = vi.fn<(data: string) => void>();
   const dispose = vi.fn<() => void>();
   let grid = { cols, rows };
   let dataCb: ((data: string) => void) | null = null;
   const hosts: HTMLElement[] = [];
-  const makeTerm = (host: HTMLElement): DrawerTerm => {
-    hosts.push(host);
+  const makeTerm = (): DrawerTerm => {
+    let opened = false;
     return {
       write: (d) => write(d),
       onData: (cb) => {
         dataCb = cb;
       },
       onWheel: () => {},
-      fit: () => ({ ...grid }),
+      pin: () => {},
       propose: () => ({ ...grid }),
-      setFontSize: () => ({ ...grid }),
+      setFontSize: () => {},
+      open: (host) => {
+        hosts.push(host);
+        opened = true;
+      },
+      isOpen: () => opened,
+      model: () => [],
+      statusRow: () => [],
+      onParsed: () => () => {},
       focus: () => {},
       dispose,
     };
@@ -98,10 +112,12 @@ const opened = () => {
 // — wiring —
 
 describe('TerminalDrawer wiring', () => {
-  it('opening measures the terminal and dials /ws/pty/:id with the fitted cols/rows', () => {
+  // INVERTED, NOT DELETED (D-5005): the attach dialled the measured grid; it
+  // now dials the window's own size, whatever the glass measures.
+  it('opening attaches the terminal and dials /ws/pty/:id at the window\'s own size, never the measured grid', () => {
     const { ws, t } = renderDrawer();
     expect(t.hosts).toHaveLength(1); // xterm attached to the drawer host
-    expect(ws.url).toContain(`/ws/pty/${encodeURIComponent(ID)}?cols=48&rows=20`);
+    expect(ws.url).toContain(`/ws/pty/${encodeURIComponent(ID)}?${WINDOW_URL}`);
   });
 
   it('incoming raw frames reach term.write', () => {
@@ -116,13 +132,16 @@ describe('TerminalDrawer wiring', () => {
     expect(ws.lastFrame()).toEqual({ type: 'input', data: 'ls\r' });
   });
 
-  it('a refit that changes the grid sends {type:"resize"}', () => {
+  // INVERTED, NOT DELETED (D-5005): this was "a refit that changes the grid
+  // sends {type:"resize"}". The client is the window's size, so a glass that
+  // measures differently changes the type and sends the pane nothing.
+  it('a refit sends no frame', () => {
     const { ws, t } = opened();
     t.setGrid(60, 18);
     act(() => {
       window.dispatchEvent(new Event('resize'));
     });
-    expect(ws.lastFrame()).toEqual({ type: 'resize', cols: 60, rows: 18 });
+    expect(ws.sent, 'a refit sent the pane a frame').toEqual([]);
   });
 
   it('closing the drawer closes the socket and disposes the term', () => {
@@ -187,7 +206,9 @@ describe('TerminalDrawer connection overlay', () => {
     expect(screen.getByRole('button', { name: 'Reconnect' })).toBeInTheDocument();
   });
 
-  it('Reconnect dials a fresh socket with freshly measured cols/rows', () => {
+  // INVERTED, NOT DELETED (D-5005): the re-attach dialled a fresh
+  // measurement; it dials the window's own size again, whatever the glass is now.
+  it('Reconnect dials a fresh socket at the window\'s own size, whatever the glass now measures', () => {
     const { ws, t } = opened();
     act(() => ws.onclose?.());
 
@@ -196,6 +217,6 @@ describe('TerminalDrawer connection overlay', () => {
 
     expect(FakeSocket.instances).toHaveLength(2);
     const next = FakeSocket.instances.at(-1);
-    expect(next?.url).toContain(`/ws/pty/${encodeURIComponent(ID)}?cols=100&rows=30`);
+    expect(next?.url).toContain(`/ws/pty/${encodeURIComponent(ID)}?${WINDOW_URL}`);
   });
 });

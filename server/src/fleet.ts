@@ -29,6 +29,9 @@ import { ASK_HELD_CHIP_MAX_MS } from './askwindow.js';
 
 /** `FleetSession.askSummary`'s ceiling — a fleet card row, not a transcript. */
 const ASK_SUMMARY_MAX_LEN = 80;
+/** D-5231, D-5272: the hook events whose `done` can hold the delegated pair —
+ *  the main `Stop` that writes it, and the two subagent events that carry it. */
+const BACKGROUND_CARRIER_EVENTS: ReadonlySet<string> = new Set(['Stop', 'SubagentStart', 'SubagentStop']);
 
 /**
  * The fleet card's one-line summary of a `waiting` hook state.
@@ -435,7 +438,7 @@ export async function assembleFleet(
   cfg: CcrcConfig,
   tmux: Tmux,
   now = Math.floor(Date.now() / 1000),
-  pendingDialogs?: Set<string>,
+  pendingDialogs?: ReadonlySet<string>,
   statuslines?: Map<string, Statusline>,
   taskProgress?: Map<string, TaskProgress>,
   /** Last-swept PR state per session id (FleetWatcher's third lane). Absent on
@@ -547,7 +550,18 @@ export async function assembleFleet(
       const pid = await tmux.panePid(r.id);
       panePids?.set(r.id, pid);
       const cfgDir = configDirFor(cfg, r.wrapper);
-      if (pid && cfgDir) {
+      if (pid === null) {
+        // D-5234: the pane is alive and its pid read FAILED (`list-panes`
+        // answered non-zero or nothing parseable — a loaded tmux server, a
+        // dropped round trip). That measured nothing about the session, so
+        // it takes the unreadable-live-file arm's shape below (D-115): `busy`
+        // on this display surface, declared unmeasured so `watch.ts` keeps
+        // the row's previous status instead of spending an edge — an overload
+        // tick that failed six busy rows' reads used to push six "Finished".
+        // `liveStatus` keeps answering `idle` here for the interrupt route.
+        status = 'busy';
+        statusUnmeasured = true;
+      } else if (cfgDir) {
         // D-115: `readLiveStateMeasured`, not `readLiveState`. The folded read
         // answered ONE null for four conditions, and this block spent it as
         // "leave `status` at the `alive` default" — which is `'idle'`. So a
@@ -596,8 +610,8 @@ export async function assembleFleet(
           // them is the same defect one field over — `statusUpdatedAt` in
           // particular renders as the `· 1m ago` beside the word, so a
           // fabricated one would put a fresh timestamp under a status nobody
-          // measured. `no-state` — absent, half-written, or naming no session
-          // — is untouched and still leaves the whole block at `idle`: that
+          // measured. `no-state` — absent, or a well-formed record naming no
+          // session (a torn body is unmeasured since D-5234) — is untouched and still leaves the whole block at `idle`: that
           // is a real measurement of a pane that has published nothing yet,
           // the ordinary shape in the seconds after `ccd ws-add`.
           status = 'busy';
@@ -735,6 +749,19 @@ export async function assembleFleet(
       // `assembleFleet`, which neither caller wraps.
       ask: fleetAsk(asksByChild.get(r.id) ?? null, nowMs),
       subagents: hs?.subagents ?? null,
+      // `background-aware-working` (D-5231): the delegated work a main Stop
+      // left running, and ONLY when the live file's own word covers that work
+      // (2.1.277 on, `liveCoversWorkflows`) — below that floor D-75 answers as
+      // before — and only while the hook state is that Stop's `done` with a
+      // count above zero. Null everywhere else, which is the ladder's old answer.
+      // A subagent event after that Stop carries the pair but, until D-5232's
+      // gated arm keeps the main event, rewrites `event`: so the `done` may
+      // read `SubagentStart`/`SubagentStop`, the two events that carry it
+      // (`BACKGROUND_CARRIER_EVENTS`, D-5272); no other event writes the pair.
+      background: liveCoversWorkflows && hs !== null && hs.state === 'done'
+        && hs.event !== null && BACKGROUND_CARRIER_EVENTS.has(hs.event)
+        && hs.background !== undefined && hs.background.count > 0
+        ? hs.background : null,
       // `?? null` and not `?? 0`: no hook data at all and a hook reporting
       // zero reads are two conditions, and `hookstate.ts` already keeps them
       // apart — collapsing them one layer out would undo that on the wire.

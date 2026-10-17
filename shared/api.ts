@@ -230,6 +230,15 @@ export interface FleetSession {
    *  subagents running — same null-vs-empty-array discipline as `WsAudit`'s
    *  array fields above. */
   subagents: { name: string; startedAt: number }[] | null;
+  /** `background-aware-working` (D-5231): the DELEGATED background work the
+   *  last main Stop listed and left running — `count` tasks, of the unique
+   *  `kinds` (sorted). Set only when the live file's build covers delegation
+   *  (`liveCoversWorkflows`), the hook state is a `Stop`'s `done`, and the
+   *  count is above zero (`fleet.ts`); null everywhere else, an older peer's
+   *  snapshot included (`reviveFleetSession`). While set, the bucket ladder
+   *  keeps a live `busy` on `working` (`sessionBucket`'s `!delegated`) and the
+   *  wedge qualifier stands down. ADDITIVE: no `FLEET_PROTO` bump. */
+  background: { count: number; kinds: string[] } | null;
   /** How many graph READS this session has made — `hookstate.ts`'s
    *  `graphQueries`, carried through unchanged. ADDITIVE: no `FLEET_PROTO`
    *  bump, and an older peer that omits it revives as `null` below.
@@ -1366,8 +1375,48 @@ export interface WsTombstone {
  *  without any of them needing to be the whole shape. */
 export type BucketInput = Pick<
   FleetSession,
-  'status' | 'statusUpdatedAt' | 'dialogPending' | 'hookState' | 'archivedAt' | 'pr'
+  'status' | 'statusUpdatedAt' | 'dialogPending' | 'hookState' | 'archivedAt' | 'pr' | 'background'
 >;
+
+/** `background-aware-working` (D-5231) — THE DELEGATED-TASK RULE, its one home.
+ *  A task listed in a Stop's `background_tasks` is DELEGATED work (it can hold
+ *  Claude Code's live file `busy` after the main turn ended) unless its cleaned
+ *  kind is one of these six labels — Claude Code's own type labels, after the
+ *  hook's cleaning (lower-cased, spaces to `-`, anything outside `a-z_-`
+ *  dropped) — whose work never holds the live file `busy`: an idle main loop
+ *  over only shells or monitors writes `shell` or `idle`, and the other four are
+ *  outside the live file's delegation set. The hook's `jq` in
+ *  `ccd/session-hook.sh` is the documented second spelling, held equal by
+ *  `session-hook-background.test.ts`, which iterates over this list. */
+export const NON_DELEGATING_TASK_KINDS = ['shell', 'monitor', 'mcp-task', 'dream', 'auto-mode-scan', 'memory-import'] as const;
+/** D-5231: the terminal words of Claude Code's task code. A task whose status
+ *  is one of them is finished, whatever its kind; `running`, `pending` and any
+ *  status no build has shown count as running. The builder already leaves
+ *  finished tasks out, so this is a second wall: a finished task some later
+ *  build lists must not keep a wedged `busy` on `working`. */
+export const TERMINAL_TASK_STATUSES = ['completed', 'failed', 'killed'] as const;
+/** D-5231: is this listed task delegated work that is still running? `type` is
+ *  the CLEANED kind (as the hook records it); an unseen kind or status counts. */
+export function isDelegatedTask(t: { type: string; status: string }): boolean {
+  return !(NON_DELEGATING_TASK_KINDS as readonly string[]).includes(t.type)
+    && !(TERMINAL_TASK_STATUSES as readonly string[]).includes(t.status);
+}
+/** D-5231: the ONE reader of `FleetSession.background` for display. The live
+ *  `fleet` frame is cast, not revived, so a server predating the field omits
+ *  the key at runtime: `undefined` reads as null here, never as a TypeError.
+ *  A count of zero is no background work. */
+export function backgroundWork(s: Partial<Pick<FleetSession, 'background'>>): { count: number; kinds: string[] } | null {
+  const b = s.background;
+  return b != null && b.count > 0 ? b : null;
+}
+/** D-5231: the words `working · N in background` add, and the title naming
+ *  the kinds, for the card and the header alike. */
+export function backgroundWords(b: { count: number; kinds: string[] }): { text: string; title: string } {
+  return {
+    text: `${b.count} in background`,
+    title: b.kinds.length > 0 ? `in background: ${b.kinds.join(', ')}` : 'in background',
+  };
+}
 
 /**
  * One session → one bucket, plus when it entered.
@@ -1506,8 +1555,16 @@ export function sessionBucket(
   // finished", so it is not evidence that a turn ENDED and must not unseat a
   // live `busy` — a resuming session is legitimately working while that write
   // is the newest hook fact on disk.
+  //
+  // `background-aware-working` (D-5231): nor is a Stop that left DELEGATED
+  // work running (`background`, set only on a `Stop`'s `done` on a build whose
+  // live file covers delegation). From 2.1.277 Claude Code keeps the live file
+  // `busy` through delegated work, so after such a Stop a live `busy` is that
+  // work, not a wedge: the session stays `working` until the live file writes
+  // `idle`. D-75's wedge recovery is kept for a Stop with no delegated work.
+  const delegated = s.background !== null && s.background.count > 0;
   const finishedAfterStatus =
-    hookNewer && s.hookState === 'done' && hookEvent !== 'SessionStart';
+    hookNewer && s.hookState === 'done' && hookEvent !== 'SessionStart' && !delegated;
   // NOT the hook's timestamp: the hook rewrites `updatedAt` on every
   // PostToolUse, so a busy session would report a continuously-refreshed
   // "since" — permanently new, and permanently badged. That holds for the
@@ -1529,7 +1586,14 @@ export function sessionBucket(
     // the bucket a virgin session would report if `SessionStart` had never
     // touched `state` at all, which is the honest fact on the ground.
     if (hookEvent === 'SessionStart') return { bucket: 'idle', bucketSince: s.statusUpdatedAt };
-    return { bucket: 'done', bucketSince: hookUpdatedAt ?? s.statusUpdatedAt };
+    // D-5231: after a Stop that left delegated work running, `done` is reached
+    // only once the live file writes `idle` (the rung above held `working`
+    // until then), so it is dated from THAT write when it is the later one —
+    // the badge fires when the work ends, not at the Stop already seen.
+    const since = delegated
+      ? Math.max(hookUpdatedAt ?? 0, s.statusUpdatedAt ?? 0) || null
+      : hookUpdatedAt ?? s.statusUpdatedAt;
+    return { bucket: 'done', bucketSince: since };
   }
   return { bucket: 'idle', bucketSince: s.statusUpdatedAt };
 }
@@ -2793,6 +2857,18 @@ const optSubagents = (o: RawObj, k: string): SubagentEntry[] | null => {
   return (v as unknown[]).map((item, i) => reviveSubagentEntry(item, `${k}[${i}]`));
 };
 
+/** `FleetSession.background` (D-5231) — absent or malformed → null. */
+const reviveBackground = (o: RawObj, k: string): { count: number; kinds: string[] } | null => {
+  const v = o[k];
+  if (v === null || typeof v !== 'object' || Array.isArray(v)) return null;
+  const b = v as Record<string, unknown>;
+  const count = b['count'];
+  const kinds = b['kinds'];
+  if (typeof count !== 'number' || !Number.isInteger(count) || count < 0) return null;
+  if (!Array.isArray(kinds) || !kinds.every((x) => typeof x === 'string')) return null;
+  return { count, kinds: kinds as string[] };
+};
+
 const IDENTITY_FIELDS: readonly string[] = ['uuid', 'wrapper', 'workdir'];
 
 /** `FleetSession.unmeasured` — split from every OTHER array field above on
@@ -3010,6 +3086,11 @@ export function reviveFleetSession(raw: unknown, unnamedSpawnWord: UnnamedSpawnW
       // the full argument.
       ask: reviveAsk(o, 'ask'),
       subagents: optSubagents(o, 'subagents'),
+      // D-5231. Absent → null: an older snapshot predates the field, and null
+      // is the ladder's old answer. Malformed also degrades to null
+      // (`reviveAsk`'s rule): the field is a display chip and one ladder
+      // conjunct, and a cached row is bucketed with no hook stamp anyway.
+      background: reviveBackground(o, 'background'),
       // Absent → null, exactly as `optSubagents` degrades: a snapshot written
       // before this field existed is ignorant of the count, not a witness to
       // its being zero. Present-but-not-a-finite-number throws inside
@@ -4019,6 +4100,31 @@ export interface Dialog {
    *  transcript could be matched to it. Absent for scraped confirms (/model,
    *  /effort, permission prompts), which render exactly as they do today. */
   ask?: DialogAsk;
+  /** D-5048: a multiSelect AskUserQuestion question, read off the pane (`DialogMulti`). Present only on such a menu,
+   *  which keeps `parsed: false`, so a PWA that predates this field keeps its raw view and its terminal door and never
+   *  offers a box as a one-tap answer. ADDITIVE, absence-permits: an older server never sends it. */
+  multi?: DialogMulti;
+}
+
+/**
+ * A multiSelect AskUserQuestion question as `parseDialog` reads it off the pane (D-5048), the shape
+ * `POST /api/sessions/:id/dialog/multi` answers. Measured on Claude Code 2.1.300 (2.1.280 paints the same): rows
+ * `k. [ ] Label`, then `n+1. [ ] Type something`, then an unnumbered `Next` row (`Submit` on the last question), a
+ * rule, and `n+2. Chat about this`. A box reads `[✔]` once ticked. The dialog's id does not change as boxes are ticked
+ * or the cursor moves, so it names the question, never its ticks: a reader takes the ticks from here, fresh.
+ */
+export interface DialogMulti {
+  /** The question's own options, in screen order: the digit that toggles each (`index`), its label (box stripped), its
+   *  description, and whether its box is ticked. Never the free-text row or `Chat about this`. */
+  options: { index: number; label: string; description?: string; checked: boolean }[];
+  /** The free-text row: its printed index, its label (`Type something` while empty, else the text it holds), and
+   *  whether its box is ticked (typing ticks it). Null when the menu paints none. */
+  freeText: { index: number; label: string; checked: boolean } | null;
+  /** The unnumbered row that commits the question, as painted: `Next`, or `Submit` on the last question. */
+  commit: string;
+  /** Where the `❯` cursor rests: the printed index of a numbered row (an option, the free-text row, or
+   *  `Chat about this`), `'commit'` on the commit row, or null when no cursor is on screen. */
+  cursor: number | 'commit' | null;
 }
 
 /** One AskUserQuestion question, as `session-hook.sh` copies it VERBATIM from
@@ -5604,13 +5710,25 @@ export function routeFieldsOrNull(r: RouteFields): RouteFields | null {
  * evidence could not be read; retry, and do NOT drop the `sessionId` on this
  * account", because an unreadable marker or ledger is not a spent one. A
  * workspace with no marker is refused only when the registry cannot be listed.
+ *
+ * `status-unmeasurable` and `worker-starting` are the dispatch resume arm's
+ * live gate (D-5238): the `/clear` is typed only when the fail-closed turn
+ * verdict (`turnVerdictFor`, `server/src/turnverdict.ts`) reads `idle`.
+ * `status-unmeasurable` — the session's live file (or its pane) could not be
+ * read, so whether it is mid-turn was never measured: `hookstate-unmeasurable`'s
+ * twin one read further, with the same retry-once-then-report rule.
+ * `worker-starting` — the pane THIS dispatch's `ensure` just started has not
+ * published its live file yet, within the server's bounded wait: nothing was
+ * held, cleared or sent and the run is untouched, so the dispatch is simply
+ * sent again (the only way a spawn slower than the wait completes).
  */
 export type RunRefuseCode =
   | 'claimed-by-another' | 'paused' | 'mail-disabled' | 'cap-concurrency' | 'cap-daily'
   | 'ambiguous-dispatch' | 'worker-busy' | 'hookstate-unmeasurable' | 'not-dispatched'
   | 'prhistory-unreadable' | 'bad-transition' | 'unknown-item' | 'item-terminal'
   | 'project-mismatch' | 'home-mismatch' | 'hold-oversize' | 'hold-invalid' | 'review-in-flight'
-  | 'claimant-is-a-worker' | 'workspace-spent' | 'spent-unmeasured';
+  | 'claimant-is-a-worker' | 'workspace-spent' | 'spent-unmeasured'
+  | 'status-unmeasurable' | 'worker-starting';
 
 const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'claimed-by-another': true, paused: true, 'mail-disabled': true, 'cap-concurrency': true,
@@ -5620,6 +5738,7 @@ const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'project-mismatch': true, 'home-mismatch': true, 'hold-oversize': true, 'hold-invalid': true,
   'review-in-flight': true, 'claimant-is-a-worker': true,
   'workspace-spent': true, 'spent-unmeasured': true,
+  'status-unmeasurable': true, 'worker-starting': true,
 };
 export const RUN_REFUSE_CODES: readonly RunRefuseCode[] = Object.keys(RUN_REFUSE_CODE_MAP) as RunRefuseCode[];
 
@@ -8590,15 +8709,16 @@ export const PANE_HISTORY_LINES = 2000;
  * smaller than the window is not a smaller window, it is a VIEWPORT INTO one,
  * and tmux pans that viewport to follow the cursor — so a line's beginning
  * scrolls off the left while the reader is typing. `TerminalDrawer` answers by
- * shrinking its type, down to a floor, until its grid is at least this wide,
- * and says so in its header when even the floor cannot get there.
+ * attaching at the window's own size, so there is nothing to pan, and shows the
+ * grid where 220 columns fit at 11px or more and a re-wrapped view where they
+ * do not.
  *
- * THIS IS TODAY'S ANSWER, NOT THE LAST ONE. The drawer program's wave 3 lets a
- * phone-width drawer narrow the window deliberately, under a guard that only
- * allows a width the pane's own history can absorb. When that lands the window
- * stops being one constant and starts being a measurement, and every reader of
- * this value becomes a reader of that measurement. In the PWA those readers
- * are `TerminalDrawer`'s `fitToWindow` and the clip notice it raises.
+ * THE WINDOW RESTS AT THIS SIZE. The drawer attaches a client exactly this size
+ * plus tmux's status row (`TMUX_STATUS_ROWS`, below), so no glass pans it (spec
+ * 2026-10-14 §5.1, D-5005). A wide glass may later have the window follow it,
+ * never below `READER_MIN_COLS`, under that spec's guarded sizer (§6, stage 2).
+ * In the PWA the readers of this value are the drawer's attach and its view
+ * chooser.
  *
  * `ccd/ccd` spawns with the same pair and cannot import this file (bash), so it
  * carries its own copy — the same shape `READER_MIN_COLS` already has. Holding
@@ -8607,6 +8727,16 @@ export const PANE_HISTORY_LINES = 2000;
  */
 export const PINNED_WINDOW_COLS = 220;
 export const PINNED_WINDOW_ROWS = 50;
+
+/**
+ * The rows tmux takes from every attached client for its status line. A client
+ * of R rows views a window of R − TMUX_STATUS_ROWS rows exactly (spec 2026-10-14
+ * W8), so a drawer that attaches at PINNED_WINDOW_ROWS + TMUX_STATUS_ROWS is the
+ * window's size and tmux has nothing to pan (W6). True while `ccd/tmux.conf`
+ * leaves tmux's default single status line; `drawer-status-rows.test.ts` reds
+ * the day it does not.
+ */
+export const TMUX_STATUS_ROWS = 1;
 
 /**
  * ONE MEASUREMENT OF A PANE, and its failures told apart.
@@ -8632,8 +8762,9 @@ export const PINNED_WINDOW_ROWS = 50;
  * numbers at attach predict — nothing scrolls into history while a full-screen
  * app holds the pane (F9, measured: 1852 -> 11359 in one step at alt-exit).
  *
- * Wave 3 reads `limit`, `width` and `height` off THIS probe and adds no second
- * reader — one reader per field is the wire rule.
+ * Stage 2 of the 2026-10-14 drawer design reads `limit`, `width` and `height`
+ * off THIS probe (its fit target) and adds no second reader — one reader per
+ * field is the wire rule.
  */
 export type PaneProbe =
   | { ok: true; history: number; limit: number; width: number; height: number; alternate: boolean }
@@ -8659,8 +8790,9 @@ export type PaneProbe =
  * THE PROBE'S FINER VOCABULARY IS ADAPTER-LOCAL AND DOES NOT REACH THE WIRE.
  * `PaneProbe` tells `unreadable` from `unparseable` because the adapter must not
  * narrow a distinction it received, but nothing here carries that pair: the
- * probe exists to SIZE the capture and, from wave 3, to feed the fit floor —
- * both server-side, where all four arms are intact. So the CAPTURE alone decides
+ * probe exists to SIZE the capture and, from stage 2 of the 2026-10-14 drawer
+ * design, to feed its fit target (`PaneProbe`, above) — both server-side, where
+ * all four arms are intact. So the CAPTURE alone decides
  * this reply's status, and a probe that failed while the capture succeeded is a
  * 200 with the three measured fields simply absent. Absent is the whole of what
  * the client is told, and it is enough: the drawer's behaviour on a failed probe
@@ -9306,9 +9438,9 @@ export interface MoveSkip { nodeId: string; why: MoveSkipWhy }
 export interface MoveRequestAnswer { ok: true; requested: string[]; skipped: MoveSkip[] }
 
 /** The word a `failed` node's detail begins with when the node refuses a RELEASE, not a fault of its own: a verdict
- *  on the tag, recorded beside the row (`node_release_refusals`, D-3378) and NOT a halt. Spelled ONCE: `isHalting`
- *  (update/dispatch.ts) reads it in JS, the store's `haltingRowSql` in SQL (D-3412), and `sweepPlanFor` decides
- *  the refusal by it. */
+ *  on the tag, recorded beside the row (`node_release_refusals`, D-3378) and NOT a halt. Spelled ONCE: the halt rule
+ *  `isHaltingUpdate` (shared/update-move.ts; `isHalting`, `rowHalts` and the PWA's `haltingNodes` ask it) reads it in
+ *  JS, the store's `haltingRowSql` in SQL (D-3412), and `sweepPlanFor` (update/inventory.ts) decides the refusal. */
 export const PROVENANCE_DETAIL_PREFIX = 'provenance:';
 
 /** Wave 8 item C: a ROLLBACK the node is known to refuse, decidable from the inventory alone, or null. THE one
@@ -9840,3 +9972,276 @@ export const COLLECT_BOX_LABELS = {
 } as const;
 export type CollectBoxLine = keyof typeof COLLECT_BOX_LABELS;
 export const COLLECT_BOX_LINES: readonly CollectBoxLine[] = Object.keys(COLLECT_BOX_LABELS) as CollectBoxLine[];
+
+/* ── child-workspace reclamation wave 10: the collector switch in Settings (path-identity spec 2026-10-12 §5) ──────
+ * APPENDED at the foot for wave 8's and wave 9's reason above: README and the frozen spec and plan corpus cite this
+ * file by line, and an insertion above them moves every anchor under it. Declarations only; the block imports
+ * nothing. No code line here spells the fleet box's legacy switch file: its one spelling is L1's. */
+
+/** The stored choices (path-identity spec 2026-10-12 §5.2). Only an exact `live` arms the lane through Settings. Any
+ *  other stored token reads, and arms nothing. Spelled once, as a total table's keys; the runtime list is derived. */
+export type CollectLaneChoice = 'off' | 'live';
+const COLLECT_LANE_CHOICE_TABLE: Readonly<Record<CollectLaneChoice, true>> = { off: true, live: true };
+export const COLLECT_LANE_CHOICES: readonly CollectLaneChoice[] =
+  Object.keys(COLLECT_LANE_CHOICE_TABLE) as CollectLaneChoice[];
+/** The one choice guard (§5.2), for the route's body and the PWA's reader. Its body is pinned. It never uses `in` or
+ *  `MAP[v]`, because `'toString' in` any object literal is true. `toString`, `LIVE` and `shadowed` are not choices. */
+export function isCollectLaneChoice(v: unknown): v is CollectLaneChoice {
+  return typeof v === 'string' && (COLLECT_LANE_CHOICES as readonly string[]).includes(v);
+}
+
+/** What armed the lane, as the resolver measured it (§5.5, §5.7): Settings, the fleet box's legacy file, both during
+ *  the hand transition, or neither. Only a live lane is armed by anything. */
+export type CollectArmedBy = 'settings' | 'legacy-marker' | 'both' | 'neither';
+
+/** `POST /api/coord/collect-lane`'s body (§5.6). `confirm`, when present, is the key of 8 lowercase hex characters
+ *  that a 409 answered with. The route refuses any other key, and any other shape of `confirm`, with a 400. */
+export interface CollectLaneRequest { readonly choice: CollectLaneChoice; readonly confirm?: string }
+
+/** Every refusal word `POST /api/coord/collect-lane` answers with (§5.6), and the one guard that narrows to one.
+ *  Spelled once, as a total table's keys; the runtime list is derived. */
+export type CollectLaneRefusal =
+  | 'bad-request' | 'not-configured' | 'sign-in-unarmed' | 'confirm-required' | 'confirm-stale'
+  | 'marker-still-controls' | 'conflict' | 'state-unmeasurable' | 'write-failed';
+const COLLECT_LANE_REFUSAL_TABLE: Readonly<Record<CollectLaneRefusal, true>> = {
+  'bad-request': true, 'not-configured': true, 'sign-in-unarmed': true, 'confirm-required': true,
+  'confirm-stale': true, 'marker-still-controls': true, conflict: true, 'state-unmeasurable': true,
+  'write-failed': true,
+};
+export const COLLECT_LANE_REFUSALS: readonly CollectLaneRefusal[] =
+  Object.keys(COLLECT_LANE_REFUSAL_TABLE) as CollectLaneRefusal[];
+/** The refusal guard: the choice guard's `includes` form, never `in`, for the same reason. Its body is pinned. */
+export function isCollectLaneRefusal(v: unknown): v is CollectLaneRefusal {
+  return typeof v === 'string' && (COLLECT_LANE_REFUSALS as readonly string[]).includes(v);
+}
+
+/** `GET /api/coord/collect-lane`'s answer, and a 200 POST's re-read (§5.6). No field is a path.
+ *  - `stored` is the singleton row as read, and `choice` is its RAW token. An absent row never reaches a view: the
+ *    route answers 503 for it. A malformed row and an unreadable one are never folded into each other.
+ *  - `journal` is the server-owned generation journal as read. `control` is the row and the journal together (§5.2).
+ *    `mismatch` is a parseable pair, the journal ahead of or behind the row, which a fresh operator write repairs.
+ *    `unmeasurable` cannot be repaired from the route. `bootstrap` means the untouched seed beside no journal.
+ *  - `effective` is the resolver's answer (Figure 5). `armedBy` is `neither` unless `state` is `live`.
+ *  - `marker` is the legacy file as the registry listing showed it, and its retirement latch as the row holds it.
+ *  - `node` is the fleet node measured on the current connection, and how the stored node compares with it.
+ *  - `attention` holds the server's own counts. Null means no population has been measured yet. The PWA counts nothing.
+ *  - `remedy` is a bounded sentence or null. `notice` is null on a GET. On a 200 POST it is the sentence saying that
+ *    the choice applies from the collector's next check. */
+export interface CollectLaneView {
+  readonly stored:
+    | { readonly read: 'row'; readonly choice: string; readonly fleetNodeId: string | null;
+        readonly markerRetiredAt: number | null; readonly generation: number; readonly updatedAt: number }
+    | { readonly read: 'malformed' | 'unreadable' };
+  readonly journal:
+    | { readonly read: 'ok'; readonly max: number }
+    | { readonly read: 'missing' | 'malformed' | 'unreadable' | 'not-regular' };
+  readonly control:
+    | { readonly state: 'coherent'; readonly bootstrap: boolean }
+    | { readonly state: 'mismatch'; readonly journal: 'ahead' | 'behind' }
+    | { readonly state: 'unmeasurable' };
+  readonly effective: {
+    readonly state: 'live' | 'shadowed' | 'paused' | 'safety-stopped' | 'not-running' | 'unknown-fleet';
+    readonly armedBy: CollectArmedBy;
+  };
+  readonly marker: { readonly listing: 'stands' | 'absent' | 'unmeasured'; readonly latch: 'set' | 'unset' | 'unmeasured' };
+  readonly node:
+    | { readonly state: 'known'; readonly nodeId: string; readonly measuredAt: number;
+        readonly stored: 'none' | 'this' | 'other' | 'unread' }
+    | { readonly state: 'unmeasured' | 'collision'; readonly stored: 'none' | 'set' | 'unread' };
+  readonly caps: { readonly collect: boolean; readonly reclaimPause: boolean };
+  readonly attention: { readonly wouldCollect: number; readonly held: number; readonly boxLines: number } | null;
+  readonly remedy: string | null;
+  readonly notice: string | null;
+}
+
+/** The 409 confirm body (§5.6): the facts the confirm sheet names, and the key a re-POST sends back as `confirm`.
+ *  `confirm-stale` carries FRESH facts and a fresh key. The key also covers the server's boot nonce and the connection
+ *  epoch, which the wire never carries. `repair` names a journal that disagrees with the database, which a confirmed
+ *  Live repairs. */
+export interface CollectLaneConfirmRequired {
+  readonly ok: false;
+  readonly error: 'confirm-required' | 'confirm-stale';
+  readonly confirmKey: string;
+  readonly facts: {
+    readonly node: { readonly nodeId: string; readonly measuredAt: number };
+    readonly caps: { readonly collect: boolean; readonly reclaimPause: boolean };
+    readonly paused: boolean;
+    readonly marker: 'stands' | 'absent';
+    readonly repair: 'journal-ahead' | 'journal-behind' | null;
+    readonly attention: { readonly wouldCollect: number; readonly held: number; readonly boxLines: number } | null;
+  };
+}
+
+/** The 200 answer of the three answer routes (`POST /api/sessions/:id/dialog`, `/dialog/text`, `/dialog/multi`):
+ *  the screen the pane settled on after the answer's last key (decision `ask-answer-returns-next-screen`).
+ *  - `next` a Dialog: the pane moved to that menu (the next question, or the review screen an ask ends on);
+ *  - `next: null`: no menu is on screen any more (the ask was submitted or declined);
+ *  - `next` absent: the pane had not settled on another screen within the route's budget, or the route predates this
+ *    field. The caller then waits for the session stream's next `dialog` frame, as it always did.
+ *  Additive: a client that ignores it keeps the old behaviour. The answering sheet applies it at once, so the next
+ *  screen never waits on the stream's 2 s poll, or on a poll that captured nothing (the 2026-10-16 report). */
+export interface DialogAnswered {
+  readonly ok: true;
+  readonly next?: Dialog | null;
+}
+
+/** Every refusal `POST /api/sessions/:id/dialog` answers with (`answerDialog`, `server/src/inject/send.ts`), each a 409.
+ *  Spelled once, as a total table's keys, and the list derived: a code that leaves the union and stays here, or joins it
+ *  without a row here, is a compile error.
+ *  - `not-alive`: the pane could not be captured.
+ *  - `stale-dialog`: no menu is on screen, or not the one the caller was shown.
+ *  - `walk-failed`: the re-captured pane does not show the cursor on the requested row, so no Enter was sent.
+ *  - `free-text-row` (D-5045): the requested row is an AskUserQuestion's free-text row (`shared/ask-menu.ts`, read by
+ *    `freeTextRow`). Enter on it while it is empty rejects the whole ask, so it is refused before any key, and again on
+ *    the screen the walk lands on, before Enter. A row that already holds text is refused too: this route never submits
+ *    typed text.
+ *  - `unparsed-dialog`: the menu on screen (before the walk, or where it landed) did not parse (`parsed: false`), so
+ *    nothing proves where the cursor is. A multiSelect AskUserQuestion is one: Enter there toggles or commits rather
+ *    than answering, so it is refused with no key; `POST /api/sessions/:id/dialog/multi` answers it (D-5048). */
+export type DialogRefuseCode = 'not-alive' | 'stale-dialog' | 'walk-failed' | 'free-text-row' | 'unparsed-dialog';
+const DIALOG_REFUSE_CODE_MAP: Readonly<Record<DialogRefuseCode, true>> = {
+  'not-alive': true, 'stale-dialog': true, 'walk-failed': true, 'free-text-row': true, 'unparsed-dialog': true,
+};
+export const DIALOG_REFUSE_CODES: readonly DialogRefuseCode[] =
+  Object.keys(DIALOG_REFUSE_CODE_MAP) as DialogRefuseCode[];
+
+/** The longest answer `POST /api/sessions/:id/dialog/text` types (D-5047), in UTF-16 code units (`String.length`).
+ *  Measured on Claude Code 2.1.300 at 220x50: a 1000-character single-line answer, sent as one literal, arrived byte for
+ *  byte, painted as 5 rows with the question still inside the 50-row capture, so its echo could be proved. Nothing
+ *  longer was measured. A taller row can push the question out of the capture, and then no echo proves anything. */
+export const DIALOG_TEXT_MAX = 1000;
+
+/** A character the free-text route will not type. A control character types a KEY into the row, not text: the C0
+ *  range (newline, Tab, Escape, and ctrl+g, which opens the external editor), DEL, and the C1 range, whose U+009B is an
+ *  8-bit CSI. U+2028 and U+2029 are line breaks, and the answer is one line. */
+const DIALOG_TEXT_CONTROL_RE = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
+
+/** Will `POST /api/sessions/:id/dialog/text` type `text` (D-5047)? Not blank once trimmed, one line, no control
+ *  character, at most `DIALOG_TEXT_MAX`. The route answers 400 `bad-text` otherwise, before it captures the pane. */
+export function isDialogText(text: string): boolean {
+  return text.trim() !== '' && text.length <= DIALOG_TEXT_MAX && !DIALOG_TEXT_CONTROL_RE.test(text);
+}
+
+/** Every refusal `POST /api/sessions/:id/dialog/text` answers with (`answerDialogText`, `server/src/inject/send.ts`,
+ *  D-5047). `bad-text` is a 400; the rest are 409s. Spelled once, as a total table's keys, and the list derived.
+ *  - `bad-text`: `isDialogText` refuses the text. Nothing was captured or pressed.
+ *  - `not-alive`: the pane could not be captured.
+ *  - `stale-dialog`: no menu is on screen, or not the one the caller was shown. Typing changes a dialog's id (it hashes
+ *    the labels, and the row's label becomes the text), so a retry names the id the stream shows after the typing.
+ *  - `not-free-text`: the requested row is not a single-select AskUserQuestion's free-text row, or it already holds
+ *    text other than this text (typing would append to it). A row holding exactly this text is not refused: the route
+ *    proves it and presses Enter without typing, which recovers a send that typed but never proved its echo.
+ *  - `focus-failed`: after the walk, a capture did not show the same title, the cursor on the row, the row still empty
+ *    (or still holding exactly this text), and the footer's edit hint. Nothing was typed.
+ *  - `echo-failed`: the text was sent, but no capture showed the same title, the cursor still on the row, and the row
+ *    holding exactly this text. Enter was NOT pressed, because Enter on an empty free-text row rejects the whole ask.
+ *    The text may be left in the row, and a retry with the same text submits it. */
+export type DialogTextRefuseCode =
+  'bad-text' | 'not-alive' | 'stale-dialog' | 'not-free-text' | 'focus-failed' | 'echo-failed';
+const DIALOG_TEXT_REFUSE_CODE_MAP: Readonly<Record<DialogTextRefuseCode, true>> = {
+  'bad-text': true, 'not-alive': true, 'stale-dialog': true, 'not-free-text': true, 'focus-failed': true,
+  'echo-failed': true,
+};
+export const DIALOG_TEXT_REFUSE_CODES: readonly DialogTextRefuseCode[] =
+  Object.keys(DIALOG_TEXT_REFUSE_CODE_MAP) as DialogTextRefuseCode[];
+
+/** The highest digit `POST /api/sessions/:id/dialog/multi` sends (D-5048). A box is toggled by its own digit, and an
+ *  AskUserQuestion question has at most four options, so 9 is never the binding limit. */
+const DIALOG_MULTI_MAX_INDEX = 9;
+
+/** Will `POST /api/sessions/:id/dialog/multi` send `indexes` (D-5048)? A non-empty list of distinct whole numbers, each
+ *  from 1 to 9: the printed digits of the boxes to leave ticked. Empty is refused because Tab on a question with no box
+ *  ticked skips it (measured), which is not an answer. The route answers 400 `bad-indexes` otherwise, before it captures
+ *  the pane. Whether each index is one of the question's own options is the pane's to say (409 `not-an-option`). */
+export function isDialogMultiIndexes(indexes: readonly number[]): boolean {
+  return indexes.length > 0 &&
+    new Set(indexes).size === indexes.length &&
+    indexes.every((i) => Number.isInteger(i) && i >= 1 && i <= DIALOG_MULTI_MAX_INDEX);
+}
+
+/** Every refusal `POST /api/sessions/:id/dialog/multi` answers with (`answerDialogMulti`, `server/src/inject/send.ts`,
+ *  D-5048). `bad-indexes` is a 400; the rest are 409s. Spelled once, as a total table's keys, and the list derived.
+ *  - `bad-indexes`: `isDialogMultiIndexes` refuses the set. Nothing was captured or pressed.
+ *  - `not-alive`: the pane could not be captured.
+ *  - `stale-dialog`: no menu is on screen, or not the one the caller was shown.
+ *  - `not-multiselect`: the menu is not a multiSelect question this route can read (`Dialog.multi` absent): a
+ *    single-select menu, the review screen, or a multi-select painted with no `Next`/`Submit` row.
+ *  - `not-an-option`: an index is not one of the question's own options: the free-text row (free text inside a
+ *    multiSelect question is not answered here in v1), `Chat about this`, or a row past the menu.
+ *  - `free-text-ticked`: the free-text row's box is ticked. Tab would commit it with the options, so nothing is sent.
+ *  - `cursor-not-on-option`: the cursor is not on one of the question's options, or the footer shows the edit hint.
+ *    Measured: with the cursor on the free-text row a digit is TYPED into it, and Tab on the `Next` row after a walk
+ *    through the free-text row was swallowed. Nothing was pressed.
+ *  - `ticks-failed`: digits were sent, but no capture showed the same question with exactly the wanted boxes ticked,
+ *    the free-text box clear, the cursor where it was and no edit hint. Tab was NOT pressed. Boxes may be left part
+ *    toggled; a retry with the same set sends only the digits still needed.
+ *  - `commit-failed`: Tab was pressed after the ticks were proved, but no capture showed the screen move on. */
+export type DialogMultiRefuseCode =
+  | 'bad-indexes' | 'not-alive' | 'stale-dialog' | 'not-multiselect' | 'not-an-option' | 'free-text-ticked'
+  | 'cursor-not-on-option' | 'ticks-failed' | 'commit-failed';
+const DIALOG_MULTI_REFUSE_CODE_MAP: Readonly<Record<DialogMultiRefuseCode, true>> = {
+  'bad-indexes': true, 'not-alive': true, 'stale-dialog': true, 'not-multiselect': true, 'not-an-option': true,
+  'free-text-ticked': true, 'cursor-not-on-option': true, 'ticks-failed': true, 'commit-failed': true,
+};
+export const DIALOG_MULTI_REFUSE_CODES: readonly DialogMultiRefuseCode[] =
+  Object.keys(DIALOG_MULTI_REFUSE_CODE_MAP) as DialogMultiRefuseCode[];
+
+/** The most tabs `POST /api/sessions/:id/dialog/tab` will count to (decision `ask-dialog-tab-route`). Claude Code's
+ *  AskUserQuestion takes at most four questions; this is slack for a build that takes more, not a measured limit. */
+export const DIALOG_TAB_MAX = 16;
+
+/** Where `POST /api/sessions/:id/dialog/tab` moves the pane: one tab back or on (`prev`/`next`, the arrow keys), to the
+ *  review screen (`submit`, the `✔ Submit` tab), or to question tab `k` (1-based, a tab-strip chip). */
+export type DialogTabTarget = 'prev' | 'next' | 'submit' | number;
+
+/** The body of `POST /api/sessions/:id/dialog/tab`. `from` is the 1-based tab the caller believes is up, sent with a
+ *  numbered target: the pane marks its active tab by colour alone, so a plain capture cannot say. The server ignores it
+ *  on the review screen, which it can tell, and every step it takes is proved by a new screen either way. */
+export interface DialogTabRequest {
+  readonly dialogId: string;
+  readonly to: DialogTabTarget;
+  readonly from?: number;
+}
+
+const isTabNumber = (n: unknown): n is number =>
+  typeof n === 'number' && Number.isInteger(n) && n >= 1 && n <= DIALOG_TAB_MAX;
+
+/** Is `body` a `DialogTabRequest` the route will act on? A numbered target needs `from`, unless the pane is on the
+ *  review (the route checks that once it has captured). The route answers 400 `bad-request` otherwise. */
+export function isDialogTab(body: unknown): body is DialogTabRequest {
+  if (typeof body !== 'object' || body === null) return false;
+  const { dialogId, to, from } = body as Record<string, unknown>;
+  if (typeof dialogId !== 'string' || dialogId === '') return false;
+  if (from !== undefined && !isTabNumber(from)) return false;
+  return to === 'prev' || to === 'next' || to === 'submit' || isTabNumber(to);
+}
+
+/** Every refusal `POST /api/sessions/:id/dialog/tab` answers with (`moveDialogTab`, `server/src/inject/send.ts`), each a
+ *  409 except `bad-request` (400). No refusal ever pressed Enter: a tab move sends arrows only.
+ *  - `bad-request`: `isDialogTab` refuses the body, or a numbered target came with no `from` on a question screen, or
+ *    names a tab the row does not have. Nothing was pressed.
+ *  - `not-alive`: the pane could not be captured.
+ *  - `stale-dialog`: no menu is on screen, or not the one the caller was shown. Nothing was pressed.
+ *  - `no-tabs`: the screen paints no tab row (`parseAskTabs`): a one-question single-select ask, or no ask at all.
+ *  - `unparsed-dialog`: the screen did not parse and is no multiSelect question either, so nothing proves where the
+ *    cursor is. Nothing was pressed.
+ *  - `walk-failed`: the cursor sat on the free-text row or below it, where Claude Code swallows ←/→ (measured on 2.1.296
+ *    and 2.1.302), and a walk Up did not land it on row 1. No arrow across tabs was pressed.
+ *  - `no-move`: an arrow was pressed and no capture showed another screen within the budget: an edge (← on the first
+ *    question, measured as a no-op), a pane that ignored it, or two tabs that read exactly alike.
+ *  - `menu-gone`: a capture after an arrow showed no menu at all. */
+export type DialogTabRefuseCode =
+  | 'bad-request' | 'not-alive' | 'stale-dialog' | 'no-tabs' | 'unparsed-dialog' | 'walk-failed' | 'no-move'
+  | 'menu-gone';
+const DIALOG_TAB_REFUSE_CODE_MAP: Readonly<Record<DialogTabRefuseCode, true>> = {
+  'bad-request': true, 'not-alive': true, 'stale-dialog': true, 'no-tabs': true, 'unparsed-dialog': true,
+  'walk-failed': true, 'no-move': true, 'menu-gone': true,
+};
+export const DIALOG_TAB_REFUSE_CODES: readonly DialogTabRefuseCode[] =
+  Object.keys(DIALOG_TAB_REFUSE_CODE_MAP) as DialogTabRefuseCode[];
+
+/** The 200 answer of `POST /api/sessions/:id/dialog/tab`: the screen the pane settled on, always a menu. */
+export interface DialogTabMoved {
+  readonly ok: true;
+  readonly next: Dialog;
+}

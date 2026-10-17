@@ -18,7 +18,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
@@ -146,9 +146,169 @@ describe('ci.yml: the required checks cannot go missing (design 2026-09-23 §4.2
       expect(s.length, `${id} parsed no steps`).toBeGreaterThan(0);
       for (const st of s) {
         // `if:` either on the step's own dash line or as its first-level key.
-        expect(st, `${id}: a step runs even on a refresh:\n${st}`).toMatch(/^(?: {6}- | {8})if: env\.CCRC_LEG == 'run'$/m);
+        //
+        // A FURTHER `&&` IS ALLOWED, and nothing else is. A conjunct can only
+        // narrow — `env.CCRC_LEG == 'run' && matrix.package == 'pwa'` still
+        // skips on a refresh, which is the whole claim — so refusing it was
+        // the regex being stricter than the rule it enforces. The three
+        // @ccrc/ui steps on the pwa leg are exactly that shape, and this test
+        // was red from the moment they landed. An `||` is NOT allowed: it
+        // widens, and a step gated `|| true` would run on a refresh.
+        expect(st, `${id}: a step runs even on a refresh:\n${st}`)
+          .toMatch(/^(?: {6}- | {8})if: env\.CCRC_LEG == 'run'(?: && [^|\n]+)?$/m);
       }
     }
+  });
+
+  // storybook-a11y is advisory, so it skips WHOLE (a job-level `if:`) where
+  // the required legs skip step by step — but on the very predicate their
+  // `CCRC_LEG` switch reads, so a push to main runs no test leg of any kind.
+  // Derived from the `test` leg's own switch: change one predicate without the
+  // other and this goes red.
+  it('storybook-a11y skips on the required legs\' own refresh/rebuild predicate, and never on a merge-queue run', () => {
+    const m = /\n {6}CCRC_LEG: \$\{\{ \((.+)\) && 'skip' \|\| 'run' \}\}\n/.exec(job('test'));
+    expect(m, 'the test leg no longer spells its CCRC_LEG switch').not.toBeNull();
+    expect(jobKey(job('storybook-a11y'), 'if'))
+      .toBe(`github.event_name != 'merge_group' && !(${m![1]})`);
+  });
+
+  it('storybook-a11y runs only locked binaries — no npx, which fetches whatever is newest', () => {
+    const s = steps(job('storybook-a11y'));
+    expect(s.length, 'storybook-a11y parsed no steps').toBeGreaterThan(0);
+    // Comment lines are not calls: the job's own comments name `npx` to say why it is absent.
+    const code = (st: string): string => st.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    for (const st of s) expect(code(st), `storybook-a11y: an npx call:\n${st}`).not.toMatch(/\bnpx\b/);
+    expect(job('storybook-a11y'), 'the checkout leaves its token in .git/config')
+      .toMatch(/^ {6}- uses: actions\/checkout@v4\n {8}with:\n {10}persist-credentials: false$/m);
+  });
+
+  // WHEREVER pwa IS INSTALLED, ui MUST BE TOO (PR #346's red run).
+  //
+  // pwa consumes @ccrc/ui as SOURCE — `exports['.']` points at
+  // `src/index.ts` — so anything that typechecks or bundles pwa reads
+  // `../ui/src/**`. A bare specifier there is resolved from the IMPORTING
+  // file's directory: Node and vite walk up from `ui/src/primitives/`, reach
+  // `ui/`, and never look inside `pwa/node_modules`. No `ui/node_modules`,
+  // no `react`, no `class-variance-authority` — reported as a type error or
+  // an unresolvable import, never as the missing install it is.
+  //
+  // THREE PLACES needed it and only one had it, which is the shape of bug a
+  // census catches and a comment does not. A developer box hides it
+  // completely: `ui/node_modules` is already there.
+  //
+  // DERIVED, not listed: every workflow and every composite action is read,
+  // so a fourth workflow that installs pwa is in the census the day it lands
+  // (the release workflows install nothing themselves — build-release.sh
+  // does, and the script census below holds it).
+  it('every CI install of pwa is accompanied by an install of ui', () => {
+    const installsPwa = (b: string): boolean =>
+      /^ {6,8}working-directory: pwa$/m.test(b) && /npm ci/.test(b);
+    const installsUi = (b: string): boolean =>
+      /^ {6,8}working-directory: ui$/m.test(b) && /npm ci/.test(b);
+
+    const workflows = readdirSync(join(REPO, '.github', 'workflows'))
+      .filter((f) => /\.ya?ml$/.test(f)).sort();
+    expect(workflows, 'the workflow scan went vacuous').toContain('ci.yml');
+    const actions = readdirSync(join(REPO, '.github', 'actions'))
+      .map((d) => `.github/actions/${d}/action.yml`)
+      .filter((f) => existsSync(join(REPO, f)));
+    expect(actions, 'the composite-action scan went vacuous').toContain(DEPS);
+
+    const missing: string[] = [];
+    let pwaInstalls = 0;
+    for (const wf of workflows) {
+      for (const [id, body] of jobs(read(`.github/workflows/${wf}`))) {
+        if (!installsPwa(body)) continue;
+        pwaInstalls += 1;
+        if (!installsUi(body)) missing.push(`${wf} ${id}`);
+      }
+    }
+    for (const action of actions) {
+      const body = read(action);
+      if (!installsPwa(body)) continue;
+      pwaInstalls += 1;
+      if (!installsUi(body)) missing.push(action);
+    }
+
+    // ci.yml's build-pwa and server-deps, at least (the matrix `test` job
+    // installs `${{ matrix.package }}`, which this matcher cannot see — the
+    // ordering test below holds that one): a census that finds no pwa install
+    // at all is measuring nothing.
+    expect(pwaInstalls, 'found no CI install of pwa — the matcher drifted from the YAML').toBeGreaterThanOrEqual(2);
+    expect(missing, 'pwa reads ui SOURCE — install ui in the same job, before anything typechecks or bundles pwa')
+      .toEqual([]);
+  });
+
+  // THE SAME RULE FOR EVERY SCRIPT THAT BUILDS pwa OUTSIDE CI — the omission
+  // PR #346 actually shipped. The census above read the YAML and nothing
+  // else, so it was green while `deploy/build-release.sh` (the release
+  // builder both release workflows call), `deploy/deploy.sh`'s server lane
+  // and `install.sh`'s checkout mode all ran `npm ci` in pwa with no ui
+  // beside it: a clean release machine failed pwa's `tsc --noEmit && vite
+  // build` on ui's first bare import, and every merge's prerelease stalled.
+  //
+  // Derived: every TRACKED shell script (a `.sh`, or a `#!` naming sh/bash) is
+  // read, so a fifth script that installs pwa is in the census on arrival.
+  // For each line that installs pwa (`cd <…>pwa && npm ci|install`), the ui
+  // install (`cd <…>ui && npm ci`) must come EARLIER IN THE SAME LANE: the
+  // backward walk stops, red, at a function header or at an `else`/`elif`/
+  // `fi` LESS indented than the pwa line — the boundary of the branch that
+  // holds it, so a ui install sitting in deploy.sh's agent lane cannot answer
+  // for the server lane's pwa build. A nested if/fi between the two, at the
+  // pwa line's own depth or deeper, is not a boundary.
+  it('every SCRIPT that installs pwa installs ui first, in the same lane — the release builder, deploy.sh, install.sh', () => {
+    const PWA = /\bcd\s+["']?(?:\$\{?ROOT\}?\/|\.\.\/|~\/[\w.-]+\/)?pwa["']?\s*&&\s*npm\s+(?:ci|install|i)\b/;
+    const UI = /\bcd\s+["']?(?:\$\{?ROOT\}?\/|\.\.\/|~\/[\w.-]+\/)?ui["']?\s*&&\s*npm\s+ci\b/;
+    const indent = (l: string): number => /^\s*/.exec(l)![0].length;
+    const isComment = (l: string): boolean => /^\s*#/.test(l);
+
+    const tracked = execFileSync('git', ['ls-files', '-z'], { cwd: REPO, encoding: 'utf8' })
+      .split('\0').filter(Boolean);
+    const scripts = tracked.filter((f) => {
+      if (f.endsWith('.sh')) return true;
+      if (/\.(?:[cm]?[jt]sx?|json|md|ya?ml|css|html|svg|png|py)$/.test(f)) return false;
+      const abs = join(REPO, f);
+      if (!existsSync(abs) || !statSync(abs).isFile()) return false;
+      const head = readFileSync(abs, 'utf8').slice(0, 64);
+      return /^#!.*\b(?:ba)?sh\b/.test(head);
+    });
+
+    const withPwa: string[] = [];
+    const missing: string[] = [];
+    for (const f of scripts) {
+      const lines = read(f).split('\n');
+      lines.forEach((l, i) => {
+        if (isComment(l) || !PWA.test(l)) return;
+        if (!withPwa.includes(f)) withPwa.push(f);
+        const depth = indent(l);
+        for (let j = i - 1; j >= 0; j -= 1) {
+          const p = lines[j]!;
+          if (p.trim() === '' || isComment(p)) continue;
+          if (UI.test(p)) return;
+          if (/^\s*(?:function\s+)?[\w-]+\s*\(\)\s*\{?\s*$/.test(p)) break;
+          if (/^\s*(?:else|elif\b|fi\b)/.test(p) && indent(p) < depth) break;
+        }
+        missing.push(`${f}:${i + 1}`);
+      });
+    }
+
+    expect(withPwa, 'the script scan went vacuous — the three known pwa builders were not found')
+      .toEqual(expect.arrayContaining(['deploy/build-release.sh', 'deploy/deploy.sh', 'install.sh']));
+    expect(missing, 'pwa reads ui SOURCE — `cd ui && npm ci` must precede this pwa install, in the same lane')
+      .toEqual([]);
+  });
+
+  // The other half: in the `test` job the ORDER matters, not just the
+  // presence. Installing ui after the suite has already run is what PR #346
+  // actually did, and it fails exactly as if the step were absent.
+  it('installs ui BEFORE the pwa suite runs, not after it', () => {
+    const b = jobs(read(CI)).get('test') ?? '';
+    const ui = b.indexOf('working-directory: ui');
+    const test = b.indexOf('./node_modules/.bin/vitest run');
+    expect(ui, 'the test job installs ui').toBeGreaterThan(-1);
+    expect(test, 'the test job runs vitest').toBeGreaterThan(-1);
+    expect(ui, 'ui is installed after the suite — every pwa file fails at import')
+      .toBeLessThan(test);
   });
 
   it('test (server) is a summary that fails closed: always() over select, the shards and the typecheck', () => {

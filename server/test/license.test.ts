@@ -325,3 +325,38 @@ describe('third-party code: the lossless-claw MIT notice travels with the copied
     }
   });
 });
+
+// ── third-party code: Tailwind CSS's preflight (PR #346 review) ─────────────
+// `ui/src/styles/reset.css` is a modified copy of tailwindcss's preflight.css,
+// MIT, and it shipped with no notice: the licence travelled only inside
+// node_modules, which is not a copy anyone receives from this repository. Same
+// arrangement as lossless-claw's: the upstream LICENSE byte for byte beside the
+// file, the file's opening comment pointing at it, and README saying where.
+// (The BUILT css needs nothing from here: Tailwind's compiler prepends its own
+// `/*! tailwindcss v… | MIT License | … */` banner, and the minifier keeps it —
+// measured 2026-10-15 in the Storybook production build's css, beside the
+// reset's own rules.)
+
+/** sha256 of tailwindcss's LICENSE as published in its npm package at 4.3.3
+ *  (1,071 bytes, MIT, "Copyright (c) Tailwind Labs, Inc."). Changing this
+ *  constant is a deliberate legal act, not a test fix. */
+const TAILWIND_MIT_SHA256 = '60e0b68c0f35c078eef3a5d29419d0b03ff84ec1df9c3f9d6e39a519a5ae7985';
+
+describe('third-party code: the Tailwind MIT notice travels with the vendored preflight', () => {
+  it('ui/src/styles/LICENSE.tailwindcss is the upstream LICENSE, byte for byte', () => {
+    const bytes = readFileSync(join(REPO, 'ui', 'src', 'styles', 'LICENSE.tailwindcss'));
+    expect(bytes.length).toBe(1071);
+    expect(createHash('sha256').update(bytes).digest('hex'),
+      'LICENSE.tailwindcss no longer matches tailwindcss\'s LICENSE').toBe(TAILWIND_MIT_SHA256);
+  });
+
+  it('reset.css says where it came from, and README\'s License section says where the notice is', () => {
+    expect(read('ui/src/styles/reset.css').slice(0, 600))
+      .toMatch(/Derived from tailwindcss preflight\.css @ v\d+\.\d+\.\d+, MIT,\s+see LICENSE\.tailwindcss/);
+    const readme = read('README.md');
+    const lic = readme.slice(readme.indexOf('\n## License\n'));
+    for (const s of ['`ui/src/styles/reset.css`', 'Copyright (c) Tailwind Labs, Inc.', '`ui/src/styles/LICENSE.tailwindcss`']) {
+      expect(lic, `README's License section does not name ${s}`).toContain(s);
+    }
+  });
+});

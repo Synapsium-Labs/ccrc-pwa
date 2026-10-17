@@ -10,7 +10,7 @@
 // the caller that no longer contains the arithmetic and would otherwise have
 // no way to notice.
 import { describe, it, expect } from 'vitest';
-import { elapsedWords } from '../src/lib/elapsed';
+import { elapsedWords } from '@ccrc/ui';
 
 /** FleetHostBanner's `elapsedSince`, EXACTLY as it read before the extraction
  *  (pwa/src/fleet/FleetHostBanner.tsx, pre-6d6d42f8). Not imported — copied,

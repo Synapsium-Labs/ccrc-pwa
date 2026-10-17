@@ -8,6 +8,8 @@ import {
 } from '../registry.js';
 import { answerAsk, type AskDeps } from '../inject/ask.js';
 import { assembleFleet } from '../fleet.js';
+import { turnReadDeps, turnVerdictFor } from '../turnverdict.js';
+import type { TurnVerdict } from './archiveDoor.js';
 import { configDirFor } from '../config.js';
 import { peerDeliverable, archiveContradicted } from './peers.js';
 import { claimMailHint } from './claims.js';
@@ -38,6 +40,12 @@ import {
   stallStages, stallUnheldBoxOf, stallWriteEffect, type StallBoxArming, type StallResolved,
 } from './stallsettings.js';
 import { childBindGate } from './childBind.js';
+import { collectControlNow, collectLaneCaps, collectSwitches } from './collectTempRoot.js';
+import {
+  COLLECT_LANE_APPLIES_TEXT, COLLECT_SETTING_FEED_TITLE, collectLaneSettingChange, collectLaneView,
+  collectLaneWriteProved, decideCollectLaneBody, decideCollectLanePost, type CollectLaneControl,
+} from '../collectLane.js';
+import { NO_FLEET_IDENTITY } from '../fleetidentity.js';
 import {
   CLAIM_INTENT_MAX_BYTES, CLAIM_PATHS_MAX, CLAIM_PATH_MAX_BYTES, isAskState,
   isPositiveDecimalSafeInteger, isRunState, isSendableMailKind,
@@ -50,6 +58,7 @@ import {
   type MirroredLifecycleEvent, type PeerDeliverable, type PeerSummary, type RunState, type RunSummary,
   type FailureKind, type RouteField, type RunRouteBody, type RouteMode,
   type StallConfirmRequired, type StallWatchEffective, type StallWatchStages, type StallWatchView, type StallWriteEffect,
+  type CollectLaneRefusal,
 } from '../../../shared/api.js';
 
 /**
@@ -115,6 +124,36 @@ class CoordMutex {
       release();
     }
   }
+}
+
+/**
+ * D-5238: the dispatch route's wait for a pane its own `ensure` just started. The route (L4) owns the timer and
+ * decides nothing: it leaves `coordMutex`, polls the same `turnVerdict` port every `DISPATCH_SPAWN_POLL_MS` for at
+ * most `DISPATCH_SPAWN_WAIT_MS`, and only a MEASURED verdict re-runs `dispatchRun`, once, inside the mutex again.
+ *
+ * THE BOUND HAS A BASIS IN CODE: the coordinator's only client, `ccd/ccrc-api`, caps every request at 30 s
+ * (`curl -m 30`), and a dispatch the server completed after its caller gave up would read to the coordinator as a
+ * transport failure (its retry then meets `bad-transition`). So the wait is at most HALF that cap, leaving the other
+ * half for the two decisions around it (the `ensure`, the registry reads, the hold, `sendPrompt`'s `/clear` with its
+ * echo polling, and any queueing behind other dispatches on the mutex). `dispatch-live-gate.test.ts` reads `-m` from
+ * `ccd/ccrc-api` and holds `2 × DISPATCH_SPAWN_WAIT_MS` within it. The rule is judged on the resumed path's measured
+ * latency, the only path that waits (D-5276).
+ */
+export const DISPATCH_SPAWN_WAIT_MS = 15_000;
+export const DISPATCH_SPAWN_POLL_MS = 2_000;
+const WORKER_STARTING_DETAIL =
+  'the pane this dispatch started is not up yet; nothing was held, cleared or sent and the run is untouched — send the dispatch again';
+
+/** Poll `read` every `DISPATCH_SPAWN_POLL_MS` until it answers anything but `unmeasured`, for at most
+ *  `DISPATCH_SPAWN_WAIT_MS` in all. `true` = a measured verdict came back; `false` = the bound ran out. */
+async function waitForMeasuredVerdict(read: () => Promise<TurnVerdict>): Promise<boolean> {
+  for (let waited = 0; waited < DISPATCH_SPAWN_WAIT_MS;) {
+    const step = Math.min(DISPATCH_SPAWN_POLL_MS, DISPATCH_SPAWN_WAIT_MS - waited);
+    await new Promise<void>((resolve) => { setTimeout(resolve, step); });
+    waited += step;
+    if ((await read()) !== 'unmeasured') return true;
+  }
+  return false;
 }
 
 /**
@@ -216,6 +255,10 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
         ...(r.detail === undefined ? {} : { detail: r.detail }),
         unbound: r.unbound });
     case 'unsupported': return reply.code(501).send({ ok: false, error: 'unsupported' });
+    // D-5238: the `poll` target is the route's own business and never rides the wire; the sentence is what the
+    // coordinator needs to act — dispatch again, nothing to undo.
+    case 'worker-starting':
+      return reply.code(409).send({ ok: false, refused: 'worker-starting', detail: WORKER_STARTING_DETAIL });
     case 'fleetFailed': return reply.code(502).send({ ok: false, stderr: r.stderr });
     case 'advanceFailed': return reply.code(409).send(r.adv);
     default: {
@@ -528,6 +571,8 @@ export function registerCoordRoutes(
   // One instance for this server (see `CoordMutex`'s own docstring) —
   // serialises the WRITE routes' bodies below: open, dispatch, close, advance.
   const coordMutex = new CoordMutex();
+  // The turn reads' deps (D-5238), built once from the watcher this function receives.
+  const turnReads = turnReadDeps(deps, watcher);
 
   /** `closeRun`'s abandon arm exactly as `POST /api/runs/:id/abandon` runs it — `{intent:'abandon'}` built here and
    *  never read off a body (D-280), `causedBy:'operator'`, CCR-15 wave 3's `childReclaim` port onto the session's own
@@ -1594,8 +1639,25 @@ export function registerCoordRoutes(
       // importing `configDirFor` itself, because `config.ts` imports
       // `./coord/db.js` and a value import would drag the store's module graph
       // into a policy module (D-1015).
-      configDir: (wrapper: string) => configDirFor(deps.cfg, wrapper) };
-    const outcome = await coordMutex.run(() => dispatchRun(dispatchDeps, id, body.brief, body.items, body.route));
+      configDir: (wrapper: string) => configDirFor(deps.cfg, wrapper),
+      // D-5238: the live `/clear` gate's reads — `turnverdict.ts`, their one home, over the watcher this function
+      // already receives (thunks: each call reads the watcher's newest pane-scraped pieces).
+      turnVerdict: (rec, uuid) => turnVerdictFor(turnReads, rec, uuid) };
+    const run = () => coordMutex.run(() => dispatchRun(dispatchDeps, id, body.brief, body.items, body.route));
+    const outcome = await run();
+    // D-5238: a pane this dispatch STARTED and has not published a live file. The wait is HERE, outside
+    // `coordMutex` (close, reclaim, settle and the dead-coordinator lane's abandons share it), and only a measured
+    // verdict re-runs the WHOLE decision, once — pause, caps, transition, the child gate, `ensure`, the verdict are
+    // re-checked against whatever happened meanwhile. A poll that runs out answers `worker-starting` at once (a re-run
+    // would read the same `unmeasured` after an `alive:` ensure, `status-unmeasurable`, which nobody retries); a
+    // second `worker-starting` is answered as it stands, never waited for twice.
+    if (!outcome.ok && outcome.kind === 'worker-starting') {
+      const { record, uuid } = outcome.poll;
+      if (!(await waitForMeasuredVerdict(() => dispatchDeps.turnVerdict(record, uuid)))) {
+        return sendDispatchOutcome(reply, outcome);
+      }
+      return sendDispatchOutcome(reply, await run());
+    }
     return sendDispatchOutcome(reply, outcome);
   });
 
@@ -2741,6 +2803,173 @@ export function registerCoordRoutes(
     return reply.code(200).send({ ok: true, ...stallWatchView(coord, names, Date.now(), watcher?.stallFallback() ?? null) });
   });
 
+  /** `GET`/`POST /api/coord/collect-lane` — the temp-root collector's switch on the Settings page (path-identity spec
+   *  2026-10-12 §5.6). One path serves both verbs, as the caps and stall-watch doors do, so one `SESSION_ONLY` entry
+   *  covers the door.
+   *
+   *  NOT BOX-TOKEN, AND NOT `UNGATED`, for the caps dial's two reasons.
+   *  - No machine lane calls it, so the fleet's shared secret is the wrong key.
+   *  - Arming starts a deleting lane rather than releasing a wedge, so the release-valve argument does not apply.
+   *  It is session-gated when `CCRC_AUTH` is armed (no row in `auth/gate.ts`'s EXEMPT table) and open dark, with one
+   *  stricter refusal. The POST answers 403 `sign-in-unarmed` to `live` while sign-in is dark, because arming unattended
+   *  deletion needs a signed-in operator. It refuses only after the body parses, so an empty body answers the same dark
+   *  and armed, which the gate's property sweep holds. No skill names this door.
+   *
+   *  THE HANDLERS MEASURE AND MAP; L1 DECIDES (`collectLane.ts`). L1 owns the body, the confirm key over every safety
+   *  fact, the POST's order of answers, the change sentence, the write proof and the view.
+   *  - Each verb reads the connection epoch and lists the registry (its ONE `await`). Then it reads the epoch again,
+   *    the node, the row, the journal, both capabilities and the counts. From the listing's return to the reply there
+   *    is no `await`. So every fact a key binds is read after the listing, and a write that landed during it makes an
+   *    earlier key stale: Off wins over a concurrent Live. One synchronous transaction, so no `coordMutex`, for the
+   *    stall-watch door's reason.
+   *  - The one writer is `CoordStore.setCollectLane`. It appends the generation to the journal before it updates the
+   *    row, inside one transaction. A refusal or a no-op consumes no generation (§5.2).
+   *  - A 200 follows only a synchronous re-read that proves the requested state. When the store answered written and
+   *    the re-read does not prove it, the feed row stands and the answer is 503 `write-failed`.
+   *  - A throw from the store before its append (a defect, or `BEGIN IMMEDIATE` still busy past `busy_timeout`) is
+   *    caught around the one store call and answers 503 `write-failed` too, never a 500. The store keeps propagating
+   *    it; only the answer is mapped here, and the driver's message stays in the log line, off the wire.
+   *  - A refusal carries `{ok, error, detail?}` and never a path or an errno. The two confirm answers carry the sheet's
+   *    facts and the key. A failed write, an unproved write and a store `not-coherent` each log one bounded line
+   *    through `console.warn`. A refusal over a standing control fault logs nothing more here: the GET's latch below
+   *    and the lane's own warn latches already log that fault once.
+   *  - The GET answers 503 `state-unmeasurable` for an absent row alone, because the server never inserts one. Every
+   *    other unmeasurable state is a 200 with a safety-stopped view, warned once per standing fault.
+   *
+   *  THE COUNTS are `watcher.currentCollectCounts()`. A server registered with no watcher reads as "not measured yet"
+   *  (`attention: null`). That is the same answer as a watcher whose lane has not been populated: one null for both,
+   *  said here.
+   *
+   *  THE FEED ROW is written on a change only. Its `kind` is coord and its title is `COLLECT_SETTING_FEED_TITLE`, never
+   *  the lane's own transition title. Its actor is the session's when the gate is armed and `flag-off` dark. The
+   *  session's label is only handed to `deviceActor`, never branched on; `collect-lane-route.test.ts` holds that.
+   *
+   *  An Off accepted after an act's argv was handed to ccd cannot stop that act. The 200's notice says the choice
+   *  applies from the collector's next check. */
+  const collectViewWarned = new Set<string>();
+  /** The collector door's log line: prefixed, bounded, and never a failure of the reply. */
+  const collectWarn = (line: string): void => {
+    try {
+      console.warn(`ccrc-server: collect-lane: ${line.slice(0, 300)}`);
+    } catch { /* a log line must not fail the reply */ }
+  };
+  /** One line per standing fault in one part of the view, re-armed when that part next reads clean. This is the
+   *  stall-watch view's latch, so a page polling every minute does not repeat the line. */
+  const collectViewNote = (part: string, fault: string | null): void => {
+    if (fault === null) { collectViewWarned.delete(part); return; }
+    if (collectViewWarned.has(part)) return;
+    collectViewWarned.add(part);
+    collectWarn(`view: ${part} is ${fault}`);
+  };
+  /** The control state's fault, as a bounded log phrase: null when coherent. */
+  const collectControlFault = (c: CollectLaneControl): string | null =>
+    c.kind === 'coherent' ? null
+      : c.kind === 'mismatch' ? `a mismatch (journal maximum ${c.journalMax}, database generation ${c.rowGeneration})`
+        : `unmeasurable (${c.why})`;
+  /** A refusal body, `{ok, error, detail?}`: never a path, never an errno. */
+  const collectRefuse = (reply: FastifyReply, status: number, error: CollectLaneRefusal, detail?: string) =>
+    reply.code(status).send(detail === undefined ? { ok: false, error } : { ok: false, error, detail });
+
+  app.get('/api/coord/collect-lane', async (_req, reply) => {
+    if (!deps.coord || !deps.collectLane) return notConfigured(reply);
+    const coord = deps.coord;
+    const lane = deps.collectLane;
+    const link = deps.fleetIdentity ?? NO_FLEET_IDENTITY;
+    const before = link.epochNow();
+    const switches = await collectSwitches(deps.io, deps.cfg.registryDir);
+    // From the listing's return to the reply there is no `await`.
+    const read = collectControlNow({ coord, journal: lane.journal });
+    collectViewNote('the control state', collectControlFault(read.control));
+    const row = read.row;
+    if (row.kind === 'absent') {
+      return collectRefuse(reply, 503, 'state-unmeasurable',
+        'the collector setting row is absent, and the server never inserts one');
+    }
+    const journal = read.journal;
+    // `not-configured` is the lane's word for a server built without the journal, which answered 501 above. The view
+    // admits no such read (`CollectLaneViewInput`), so it is narrowed here, never folded.
+    if (journal.kind === 'not-configured') return notConfigured(reply);
+    return reply.code(200).send({ ok: true, ...collectLaneView({
+      row, journal, switches, epoch: { before, after: link.epochNow() }, node: link.current(),
+      caps: collectLaneCaps(deps.fleetState), counts: watcher?.currentCollectCounts() ?? null, notice: null,
+    }) });
+  });
+
+  app.post('/api/coord/collect-lane', async (req, reply) => {
+    const parsed = decideCollectLaneBody(req.body);
+    if (!parsed.ok) return collectRefuse(reply, 400, 'bad-request', parsed.detail);
+    if (!deps.coord || !deps.collectLane) return notConfigured(reply);
+    const coord = deps.coord;
+    const lane = deps.collectLane;
+    const request = parsed.request;
+    if (request.choice === 'live' && !(deps.cfg.authEnabled && sessionAuth(req).reason === 'session')) {
+      return collectRefuse(reply, 403, 'sign-in-unarmed');
+    }
+    const link = deps.fleetIdentity ?? NO_FLEET_IDENTITY;
+    const before = link.epochNow();
+    const switches = await collectSwitches(deps.io, deps.cfg.registryDir);
+    // From the listing's return to the reply there is no `await`: every fact below is read after the listing.
+    const epoch = { before, after: link.epochNow() };
+    const node = link.current();
+    const read = collectControlNow({ coord, journal: lane.journal });
+    const caps = collectLaneCaps(deps.fleetState);
+    const counts = watcher?.currentCollectCounts() ?? null;
+    const decided = decideCollectLanePost({
+      request, row: read.row, journal: read.journal, switches, epoch, node, caps, boot: lane.bootNonce, counts,
+    });
+    if (decided.kind === 'unmeasurable') return collectRefuse(reply, 503, 'state-unmeasurable', decided.detail);
+    if (decided.kind === 'marker') return collectRefuse(reply, 409, 'marker-still-controls');
+    if (decided.kind === 'confirm') return reply.code(409).send(decided.body);
+    let w: ReturnType<typeof coord.setCollectLane>;
+    try {
+      w = coord.setCollectLane(decided.request, Date.now(), lane.journal);
+    } catch (err) {
+      collectWarn(`the ${decided.request.kind} write could not begin (${err instanceof Error ? err.message : String(err)})`);
+      return collectRefuse(reply, 503, 'write-failed', 'the write could not begin');
+    }
+    if (w.kind === 'refused') {
+      if (w.code === 'conflict') return collectRefuse(reply, 409, 'conflict', w.detail);
+      if (w.code === 'marker-still-controls') return collectRefuse(reply, 409, 'marker-still-controls', w.detail);
+      // `not-coherent` is the answer to the latch's retire, which this door never sends. It is logged, and refused
+      // as unmeasurable.
+      if (w.code === 'not-coherent') {
+        collectWarn(`the store refused a ${decided.request.kind} write as not coherent: ${w.detail}`);
+      }
+      return collectRefuse(reply, 503, 'state-unmeasurable', w.detail);
+    }
+    if (w.kind === 'failed') {
+      collectWarn(`the ${decided.request.kind} write failed at its ${w.phase} step (${w.code}); nothing is proved written`);
+      return collectRefuse(reply, 503, 'write-failed', `the write failed at its ${w.phase} step`);
+    }
+    const change = w.kind === 'written' ? collectLaneSettingChange(w.before, w.after, w.journalBefore) : null;
+    const log = deps.notifyLog;
+    if (change !== null && log) {
+      const actor = deps.cfg.authEnabled ? deviceActor(sessionAuth(req).device) : 'flag-off';
+      try {
+        const ev = log.record({ kind: 'coord', sessionId: '', title: COLLECT_SETTING_FEED_TITLE, body: `${change}; by ${actor}`, runId: null });
+        coord.recordFeedEvent(log.epoch, ev);
+      } catch (err) {
+        console.warn('ccrc-server: recordFeedEvent failed ' +
+          `(${err instanceof Error ? err.message : String(err)}) — collector setting written, feed archive degraded`);
+      } finally {
+        // The caps door's reason: `record()` minted the seq, so its persistence follows `record()`.
+        void log.flush();
+      }
+    }
+    const proof = collectControlNow({ coord, journal: lane.journal });
+    const proofRow = proof.row;
+    const proofJournal = proof.journal;
+    // `not-configured` cannot be reached here (501 above); the view admits no such read, so it is narrowed, never folded.
+    if (!collectLaneWriteProved(decided.request, w.kind === 'written' ? w.generation : null, proofRow, proofJournal)
+      || proofRow.kind === 'absent' || proofJournal.kind === 'not-configured') {
+      collectWarn(`a ${decided.request.kind} write answered ${w.kind}, and the re-read after it does not show the requested state`);
+      return collectRefuse(reply, 503, 'write-failed', 'the re-read after the write does not show the requested state');
+    }
+    return reply.code(200).send({ ok: true, ...collectLaneView({
+      row: proofRow, journal: proofJournal, switches, epoch, node, caps, counts, notice: COLLECT_LANE_APPLIES_TEXT,
+    }) });
+  });
+
   /**
    * Child-reclamation wave 5 (spec §5.9): each row's `childReclaim`, composed
    * over the rows `GET /api/runs` already read. The DECISION is
@@ -3702,11 +3931,12 @@ export function registerCoordRoutes(
    * ever touches the pane. A refused press (`answerAsk` returning
    * `ok:false`) rolls back with `untakeAsk`, NOT `releaseAsk`: a refusal
    * here means no digit was pressed and the question is still live and
-   * still pre-emptible — not because every one of `answerAsk`'s twelve
-   * pre-send guards plus its two post-send `sendKey` checks (D-2177)
-   * precedes the loop, but because a row here only ever exists for a
-   * SINGLE-SELECT ask (`askActions` returns null on `multiSelect`, the sole
-   * eligibility gate `hold` checks before minting one — D-2173), which
+   * still pre-emptible — not because every one of `answerAsk`'s thirteen
+   * pre-send guards (D-5048 added the multiSelect refusal) plus its
+   * post-send `sendKey` check (D-2177) precedes the loop, but because a row
+   * here only ever exists for a SINGLE-SELECT ask (`askActions` returns null
+   * on `multiSelect`, the sole eligibility gate `hold` checks before minting
+   * one — D-2173), which
    * makes exactly one `sendKey` call and no Enter — see `untakeAsk`'s own
    * docstring (`store.ts`) for the full argument. `releaseAsk`'s CAS source
    * is `'held'`, and this row sits in `'answering'`, so it cannot even

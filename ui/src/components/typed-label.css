@@ -1,0 +1,30 @@
+/* `@layer components` — NOT unlayered, and that is load-bearing.
+   A stylesheet imported from a .tsx is injected unlayered, which beats EVERY
+   layer including `@layer utilities`. The first component whose own CSS sets a
+   property a Tailwind utility also sets would then win over a `className` the
+   call site passed, and tailwind-merge cannot see a stylesheet to resolve it.
+   Layering also keeps the other direction right: the app's own sheets are
+   imported unlayered, so scoped overrides like `.block-screen .btn-primary`
+   still beat this. The layer is declared in ../styles/theme.css. */
+@layer components {
+  /* ------------------------------------------------------------------ *
+   *  Typing caret (typed-label.tsx) — a plain glyph, never a blinking   *
+   *  stylesheet rule: an animated one would owe KEYFRAME_TROUGHS a      *
+   *  registered opacity trough for a mark on screen for at most a few   *
+   *  hundred ms (see the component's own comment for why). This rule    *
+   *  exists so the glyph's rendering is a decision recorded once,       *
+   *  rather than an accident of whichever mount point's ancestor it     *
+   *  happens to inherit from — it paints in the ambient ink and         *
+   *  (`user-select: none`) never joins a copy of the label text.        *
+   *                                                                     *
+   *  It moved here with the component in the composite-migration wave:  *
+   *  it lived in fleet.css only because fleet was its one consumer, and *
+   *  that stopped being true the moment the component became the        *
+   *  design system's. A rule that travels with its component cannot be  *
+   *  left behind by a later move.                                       *
+   * ------------------------------------------------------------------ */
+  .typed-caret {
+    color: currentColor;
+    user-select: none;
+  }
+}

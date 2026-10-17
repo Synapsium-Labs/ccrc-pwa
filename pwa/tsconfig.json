@@ -21,5 +21,5 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src", "test", "browser", "vite.config.ts", "vitest.browser.config.ts", "../shared"]
+  "include": ["src", "test", "browser", "spike", "vite.config.ts", "vitest.browser.config.ts", "../shared"]
 }

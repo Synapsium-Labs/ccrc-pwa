@@ -251,3 +251,55 @@ describe('FleetScreen — the epoch/observed lag indicator (staleness, not healt
     expect(screen.queryByTestId('pool-epoch-lag')).toBeNull();
   });
 });
+
+// — the three states nothing rendered, and the one the bundle cannot know —
+describe('the chip for a pool this box could not decide', () => {
+  const acct = (over: Partial<AccountUsage> = {}): AccountUsage => ({
+    wrapper: 'acct-a', five: 0, seven: 0, ts: null,
+    fiveResetAt: null, sevenResetAt: null,
+    fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false, ...over,
+  });
+  const stub = (resolved: AccountPoolWire): void => {
+    vi.spyOn(api, 'accounts').mockResolvedValue({
+      accounts: [acct()], projected: null,
+      roster: rosterWithResolved('acct-a', resolved, null),
+    });
+  };
+
+  // THREE UNDECIDABLE STATES, THREE SENTENCES, and the distinction is the
+  // whole of §5.7's ruling: `malformed` is a tag nobody can read, `unreadable`
+  // is a file this box could not open, and `stale` is a projection the
+  // control-plane link has not refreshed. They have three different remedies —
+  // fix the tag, fix the permissions, look at the link — so folding them into
+  // one "pool unknown" would send the operator to the wrong one twice out of
+  // three times. Each had no case.
+  it.each([
+    ['malformed', 'pool malformed', /malformed/],
+    ['unreadable', 'pool unreadable', /check permissions on the fleet host/],
+    ['stale', 'pool stale', /control-plane link may be down/],
+  ] as const)('renders %s with its own word and its own remedy', async (state, word, remedy) => {
+    stub({ state } as unknown as AccountPoolWire);
+    render(<AccountsScreen />);
+    const chip = await screen.findByTestId('acct-pool-chip-acct-a');
+    expect(chip).toHaveTextContent(word);
+    expect(chip.getAttribute('aria-label') ?? '').toMatch(remedy);
+    // No origin: none of the three is a decided tag, so claiming a carrier
+    // would be claiming a decision nobody made.
+    expect(chip).not.toHaveAttribute('data-origin');
+  });
+
+  it('renders a state this bundle has never heard of as unrecognised, and says to reload', async () => {
+    // THE EXHAUSTIVENESS ARM, which is not decoration here: the fleet host and
+    // the app are updated separately (`ccrc rollout` moves the fleet box
+    // first, deliberately), so a browser holding a cached bundle CAN be shown
+    // a pool state its own union does not have. The `never` assignment makes
+    // a new state a compile error for whoever adds it; this says what the
+    // operator sees in the window before they reload.
+    stub({ state: 'quarantined', pools: ['pool-x'] } as unknown as AccountPoolWire);
+    render(<AccountsScreen />);
+    const chip = await screen.findByTestId('acct-pool-chip-acct-a');
+    expect(chip).toHaveTextContent('pool unrecognised');
+    expect(chip.getAttribute('aria-label') ?? '').toMatch(/older than the fleet; reload/);
+    expect(chip).toHaveAttribute('data-pool', 'unrecognised');
+  });
+});

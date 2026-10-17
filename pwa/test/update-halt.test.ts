@@ -197,3 +197,25 @@ describe('skewRemedy — what the skew banner advises (R15(c))', () => {
     expect(skewRemedy(movable, undefined)).toEqual({ kind: 'cli' });
   });
 });
+
+// Centralised-update wave 19, R24(b): while a later poll's failure stands, the view is the last answer that landed, so
+// the console cannot vouch that auto will move the lagging box. The halt is still said (the Ack is still the door), and
+// what follows the ack is the terminal.
+describe('skewRemedy — a standing poll failure never vouches for auto (wave 19, R24(b))', () => {
+  const movable = [node(), server()];
+  it('stale: the console\'s own move becomes the terminal verbs', () => {
+    expect(skewRemedy(movable, [intent('channel')]), 'CONTROL: the same rows, fresh').toEqual({ kind: 'auto' });
+    expect(skewRemedy(movable, [intent('channel')], true)).toEqual({ kind: 'cli' });
+  });
+
+  it('stale: a halt still outranks everything, and what follows the ack is the terminal', () => {
+    const halted = [node({ update: lease('failed', 'x') }), server()];
+    expect(skewRemedy(halted, [intent('channel')]), 'CONTROL: fresh').toEqual({ kind: 'halt', halting: [halted[0]], then: 'auto' });
+    expect(skewRemedy(halted, [intent('channel')], true)).toEqual({ kind: 'halt', halting: [halted[0]], then: 'cli' });
+  });
+
+  it('fresh (false) answers exactly as with no third argument', () => {
+    expect(skewRemedy(movable, [intent('channel')], false)).toEqual({ kind: 'auto' });
+    expect(skewRemedy(null, [intent('channel')], true)).toEqual({ kind: 'cli' });
+  });
+});

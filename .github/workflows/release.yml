@@ -50,6 +50,7 @@ jobs:
             server/package-lock.json
             agent/package-lock.json
             pwa/package-lock.json
+            ui/package-lock.json
 
       # The script owns the build: refuses dirty/untagged (CI never passes
       # --untagged), installs and builds each package itself, assembles

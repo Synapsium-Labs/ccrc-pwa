@@ -22,7 +22,7 @@ const s = (over: Partial<FleetSession> = {}): FleetSession => ({
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null,
   bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
   lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null,
-  ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: null, ...over,
+  ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: null, background: null, ...over,
 });
 
 const headerProps = (session: FleetSession): SessionHeaderProps => ({

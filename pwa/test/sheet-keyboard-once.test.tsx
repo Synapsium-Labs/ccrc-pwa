@@ -13,7 +13,7 @@
 // handler: a sheet that keeps `repositionInputs` IS resized here.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
-import { Sheet } from '../src/components/Sheet';
+import { Sheet } from '@ccrc/ui';
 
 class FakeViewport extends EventTarget {
   width = 412;

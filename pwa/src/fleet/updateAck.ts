@@ -9,7 +9,7 @@
 // updateErrorText's sentence. The caller re-polls either way.
 import type { NodeWire, ReleaseWire } from '../../../shared/api';
 import { SETTLED_UPDATE_STATES } from '../../../shared/api';
-import { toast } from '../components/Toast';
+import { toast } from '@ccrc/ui';
 import { ApiError, api, updateErrorText } from '../lib/api';
 
 export const ACK_UNREADABLE_TEXT = "Acknowledged — the server's answer could not be read; the screen will re-check.";
@@ -48,4 +48,13 @@ export function sendAck(nodeId: string): Promise<AckOutcome> {
       return err instanceof ApiError && err.status >= 400 && err.status < 500 ? 'refused' : 'unanswered';
     },
   );
+}
+
+/** Before an Ack disables itself (wave 19, R26(a)): a focused control that becomes disabled drops focus to <body>.
+ *  So when focus is inside the Ack's row, the row takes it first. The row is `tabIndex={-1}`, focusable from script
+ *  only, and its text names what the Ack was for. Focus anywhere else is left where it is. Both Ack surfaces call
+ *  this, before they set their busy flag. */
+export function keepFocusInRow(row: HTMLElement | null): void {
+  const active = document.activeElement;
+  if (row !== null && active !== null && row.contains(active)) row.focus();
 }

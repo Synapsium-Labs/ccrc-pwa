@@ -31,7 +31,7 @@ import { api } from '../lib/api';
 import { onAuthRegained } from '../lib/auth';
 import { docsRunner, type MarkdownParser } from '../lib/markdownRunner';
 import { navigate } from '../lib/router';
-import { useNow } from '../lib/useNow';
+import { useNow } from '@ccrc/ui';
 import '../docs/docs.css';
 
 /** The defaults are module-scope constants (spec 4.3, the `MailScreen` idiom), so their identities are stable across

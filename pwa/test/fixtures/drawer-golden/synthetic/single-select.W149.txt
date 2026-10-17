@@ -1,0 +1,20 @@
+ ❯ add a cache to project-a
+
+ ● I'll pick a storage backend for project-a first.
+
+──
+  ☐ Storage
+
+ Which storage backend should project-a use for its cache?
+
+ ❯ 1. SQLite
+      A single file beside the app; no server to run.
+   2. Shared server
+      Shared across lanes; needs a running service.
+   3. In memory
+      Lost on restart; the fastest.
+   4. Type something.
+──
+   5. Chat about this
+
+ Enter to select · ↑/↓ to navigate · Esc to cancel

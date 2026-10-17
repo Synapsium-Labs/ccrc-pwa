@@ -70,3 +70,13 @@ server/src/__boot_control_mutant__.ts
 # the operator's real home directory in a repo that is public.
 __pycache__/
 *.pyc
+
+# design-sync (claude.ai/design). Durable set under .design-sync/ IS committed —
+# config.json, NOTES.md, conventions.md, previews/, overrides/. These are not:
+# build artifact, transient scratch, verification working state, staged scripts.
+.design-sync/sb-reference/
+.design-sync/learnings/
+.design-sync/.cache/
+.design-sync/node_modules
+.ds-sync/
+ds-bundle/

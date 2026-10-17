@@ -14,7 +14,7 @@ import { formatAge } from '../fleet/formatReset';
 import { openExternal } from '../lib/markdown';
 import { navigate } from '../lib/router';
 import { useMediaQuery } from '../lib/useMediaQuery';
-import { useNow } from '../lib/useNow';
+import { useNow } from '@ccrc/ui';
 import { docsLocation } from './docsLinks';
 import {
   DOCS_HEAD_TEXT, ENTRY_BADGE_TEXT, GITHUB_REFUSAL_TEXT, VIA_SENTENCE,

@@ -2,9 +2,11 @@
 // WebSocket streams; every WRITE goes through here. Each function throws
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
-import type { AccountsResponse, AckAnswer, ApplyUpdateBody, AutoMode, CatalogueState, CatchUp, ClaimSummary, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, MoveSkipWhy, NotifyEvent, NotifyMode, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, RollbackUpdateBody, RouteField, RouteFields, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, UpdateChannel, UpdateRouteError, UpdatesView, WsAudit } from '../../../shared/api';
+import type { AccountsResponse, AckAnswer, ApplyUpdateBody, AutoMode, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, MoveSkipWhy, NotifyEvent, NotifyMode, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, RollbackUpdateBody, RouteField, RouteFields, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, UpdateChannel, UpdateRouteError, UpdatesView, WsAudit } from '../../../shared/api';
 import { raiseAuthLostFrom } from './auth';
 import { ARCHIVE_REFUSALS, isArchiveRefusal, type ArchiveAnswer, type ArchiveBody, type ArchiveRefusal } from '../../../shared/api';
+import type { Dialog, DialogAnswered, DialogTabRequest } from '../../../shared/api';
+
 import { isNodeRole } from '../../../shared/node-role';
 import { TOKEN_TRANSPORTS } from '../../../shared/agent-protocol';
 import {
@@ -18,6 +20,23 @@ import {
 import {
   declaredRaster, docsAnswerFromError, readDocsEnvelope, readDocsRaster, type DocsAnswer, type DocsLoaders,
 } from '../docs/failures';
+
+/** An answer route's 200 that could not be read: the answer landed, and the next screen is unknown (`next` absent). */
+const ANSWERED: DialogAnswered = { ok: true };
+
+/** An answer route's 200 body, read (decision `ask-answer-returns-next-screen`): `next` kept only when it is null or
+ *  looks like a Dialog (a string id, a boolean `parsed`, an options array). Anything else reads as absent, which leaves
+ *  the sheet on the session stream's next frame, as before. */
+function answered(body: unknown): DialogAnswered {
+  if (body === null || typeof body !== 'object' || !('next' in body)) return ANSWERED;
+  const next = (body as { next: unknown }).next;
+  if (next === null) return { ok: true, next: null };
+  const d = next as Partial<Dialog> | undefined;
+  return d !== undefined && typeof d === 'object' && typeof d.id === 'string' && typeof d.parsed === 'boolean'
+    && Array.isArray(d.options) && typeof d.raw === 'string' && typeof d.title === 'string'
+    ? { ok: true, next: d as Dialog }
+    : ANSWERED;
+}
 
 export class ApiError extends Error {
   readonly status: number;
@@ -62,6 +81,9 @@ const SEND_ERROR_TEXT: Record<string, string> = {
   // the same string — the two failures are different (nothing came back at
   // all, versus it came back and then would not go).
   'verify-failed': 'Typed it, but the session never echoed it back.',
+  // D-5046: tmux refused a line of the message, so nothing was submitted, but
+  // the lines before it may be sitting in the box (Retry sees them as a draft).
+  'type-failed': "Couldn't type the whole message, so it wasn't sent.",
   'draft-clear-failed': "Couldn't clear the existing draft — open the terminal.",
   // The box is TALLER THAN THE PANE, so its `❯` row has scrolled out of the
   // capture the server reads and nothing in the box can be read at all
@@ -142,6 +164,26 @@ const UPLOAD_ERROR_TEXT: Record<string, string> = {
 
 export const uploadErrorText = (code: string): string => UPLOAD_ERROR_TEXT[code] ?? code;
 
+/**
+ * THE APP'S ONE SENTENCE FOR A WRITE THAT DID NOT GO THROUGH, written out
+ * thirteen times across seven files before this.
+ *
+ * It sat under every census's floor: `literal-census` reads strings of 25+
+ * characters and `Couldn't stop — ` is sixteen, so nothing could see that the
+ * app's whole failure voice was being re-typed per call site. One reword, or
+ * one call site that said "failed to" instead, and the voice drifts with no
+ * suite between.
+ *
+ * `apiErrorText`, never `err.message`: the runCcd routes fail as
+ * 502 `{ok, stderr}` with no `error` key, so `err.message` yields the generic
+ * "request failed (502)" and ccd's own refusal never reaches anyone.
+ *
+ * The VERB is the caller's and stays at the call site — it is the one half of
+ * the sentence that is about what the operator just tried to do.
+ */
+export const failedTo = (verb: string, err: unknown): string =>
+  `Couldn't ${verb} — ${apiErrorText(err)}`;
+
 /** Origin-qualified on purpose: MessageBubble's `absolute()` turns a bare
  *  `/api/...` into `https:///api/...` (empty host), so a root-relative href
  *  would make every thumbnail tap dead. `/api/` is in navigateFallbackDenylist,
@@ -198,6 +240,23 @@ export const UNSUPPORTED_VERB_TEXT =
  * `UNSUPPORTED_VERB_TEXT` reaches a toast.
  */
 export const COORD_UNSUPPORTED_TEXT = 'the fleet host needs the newer ccd';
+
+/**
+ * The 404 both the abandon and the reclaim doors answer with: the run the tap
+ * named is not on the board any more.
+ *
+ * TWO MAPS, ONE SENTENCE. `ABANDON_COPY` and `RECLAIM_COPY` each spelled it,
+ * and the literal census is what found them — a copy inside a `Record` is
+ * invisible to a census that reads `className=` attributes or JSX trees.
+ * Those two maps stay separate and SHOULD: every other member differs, and
+ * `RECLAIM_COPY`'s own comment argues one of the differences. This is the one
+ * member they agree on, and it agrees for a reason — the same 404, about the
+ * same board, with the same remedy (wait).
+ *
+ * Lower-case and un-terminated, `COORD_UNSUPPORTED_TEXT`'s rule: both sites
+ * render it as inline refusal copy inside their own surface.
+ */
+export const UNKNOWN_RUN_TEXT = 'that run is gone — the board will catch up';
 
 /**
  * ccd's own refusal for an empty hold reason (`cmd_ws_hold`, `ccd/ccd`),
@@ -1013,8 +1072,27 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
       // rather than spelled inline the way that door spells it (D-1150).
       return { queued: answer.queued !== false };
     },
-    answerDialog: (id: string, dialogId: string, optionIndex: number) =>
-      post(`${sid(id)}/dialog`, { dialogId, optionIndex }),
+    answerDialog: async (id: string, dialogId: string, optionIndex: number): Promise<DialogAnswered> =>
+      answered(await postRead<unknown>(`${sid(id)}/dialog`, ANSWERED, { dialogId, optionIndex })),
+    /** Answer an AskUserQuestion in your own words, through its free-text ("Type something.") row (D-5047). The server
+     *  types `text` only once a capture proves the cursor on the empty row, and presses Enter only once a capture
+     *  proves the row holds exactly `text`. It refuses 400 `bad-text` for a text it will not type (`isDialogText`,
+     *  `shared/api.ts`), and 409 with a `DialogTextRefuseCode` otherwise. Typing changes the dialog's id, and a retry
+     *  with the same text, under the id the stream then shows, submits text a refused attempt left in the row. */
+    answerDialogText: async (id: string, dialogId: string, optionIndex: number, text: string): Promise<DialogAnswered> =>
+      answered(await postRead<unknown>(`${sid(id)}/dialog/text`, ANSWERED, { dialogId, optionIndex, text })),
+    /** Answer a multiSelect AskUserQuestion question (D-5048): `optionIndexes` are the printed digits of the boxes to
+     *  leave ticked (`Dialog.multi`'s options), the whole set, never a toggle. The server sends a digit only for each
+     *  box whose tick differs on the live pane, proves the ticks on a fresh capture, then commits with Tab and proves
+     *  the screen moved on. It refuses 400 `bad-indexes` for a set it will not send (`isDialogMultiIndexes`,
+     *  `shared/api.ts`: empty, repeated, or outside 1..9), and 409 with a `DialogMultiRefuseCode` otherwise. */
+    answerDialogMulti: async (id: string, dialogId: string, optionIndexes: readonly number[]): Promise<DialogAnswered> =>
+      answered(await postRead<unknown>(`${sid(id)}/dialog/multi`, ANSWERED, { dialogId, optionIndexes })),
+    /** Move an AskUserQuestion's PANE to another tab (decision `ask-dialog-tab-route`): `prev`/`next` (the arrow keys),
+     *  `submit` (the review), or question tab k with the tab the sheet believes is up as `from`. Arrows only, each step
+     *  proved by the server. The 200 carries the screen the pane landed on as `next`, read like an answer's. */
+    answerDialogTab: async (id: string, req: DialogTabRequest): Promise<DialogAnswered> =>
+      answered(await postRead<unknown>(`${sid(id)}/dialog/tab`, ANSWERED, req)),
     /** Answer a hook-reported question by option index. `askKey` is minted
      *  server-side and carried verbatim: the server re-reads the CURRENT
      *  envelope and refuses unless the key still matches, so this can only ever
@@ -1175,6 +1253,23 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  read" may well have stored the value, and is not "the request never happened". */
     setStallWatch: (body: StallWatchRequest) =>
       postJsonOr<StallWatchView | 'unreadable'>('/api/coord/stall-watch', 'unreadable', body),
+    /** `GET /api/coord/collect-lane` (path-identity spec 2026-10-12 §5.6, §5.7): the Settings page's Temp root
+     *  collector section reads it through `useCollectLaneView`, whose `asCollectLaneView` is the wire guard, so the
+     *  type here is what the server promises, not what arrived. `getJson`, as `stallWatch` is: a read changes
+     *  nothing, so its failure is only a failure, which the hook classifies (404 and 501 through
+     *  `settingsReadFailure`, a 503 `state-unmeasurable` as its own kind). Session-gated when armed, open dark; no
+     *  box token. */
+    collectLane: () => getJson<CollectLaneView>('/api/coord/collect-lane'),
+    /** `POST /api/coord/collect-lane`: `{choice}`, plus `confirm` only as the key a 409 `confirm-required` or
+     *  `confirm-stale` answered with. The server decides the confirm, so a 409 rejects with `ApiError` like every
+     *  non-2xx, and the section reads its body through `collectLanePostRefusal`. Session-gated when armed, open dark,
+     *  with `live` refused while sign-in is dark; no box token.
+     *
+     *  `postJsonOr`, not `postJson`, for `setCoordCaps`' reason, stated in `postJsonOr`'s own docstring: after a
+     *  write, "the answer could not be read" may well have stored the choice, and is not "the request never
+     *  happened". */
+    setCollectLane: (body: CollectLaneRequest) =>
+      postJsonOr<CollectLaneView | 'unreadable'>('/api/coord/collect-lane', 'unreadable', body),
     commands: (id: string) =>
       getJson<{ builtins: SlashCommand[]; skills: SlashCommand[] }>(`${sid(id)}/commands`),
     upload: async (id: string, file: File): Promise<StagedClip> => {

@@ -18,6 +18,13 @@
 //     reading and every write's effect come from the wire, and every word is an L0 STALL_* constant (apart from
 //     the shared `UNCONFIRMED_TEXT` (§13 step 3)), filled by `fillStallText`. There is no viewport,
 //     pointer or user-agent branch.
+//
+// The controls are `@ccrc/ui`'s. The skin this section first wrote by hand (`.settings-fieldset`, `.settings-legend`,
+// `.settings-option` and its sentence, `.route-select`) left fleet.css with the design system, and every declaration
+// of it was layout: the level rows are `Radio`, both sets wear `RADIO_FIELDSET` and `RADIO_LEGEND` (the one fieldset
+// and legend shape the radio sets and this quiet-time set always shared — the theme picker's arrangement, rows and
+// all), the chooser is `Select`, and the confirm is `QuickConfirm`, whose `consequence` takes the list of lines the
+// sheet says. The counts heading wears the legend register too, as it did.
 import { useId, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
@@ -29,14 +36,14 @@ import {
   type StallStage, type StallWatchEffective, type StallWatchRequest, type StallWatchView, type StallWriteEffect,
 } from '../../../shared/api';
 import { stallDurationText } from '../../../shared/stall-watch';
-import { QuickConfirm } from '../components/QuickConfirm';
-import { Skeleton } from '../components/Skeleton';
-import { toast } from '../components/Toast';
+import {
+  QuickConfirm, RADIO_FIELDSET, RADIO_LEGEND, Radio, Select, Skeleton, toast,
+} from '@ccrc/ui';
 import {
   asStallWatchView, stallWriteRefusal, useStallWatchView, type StallWatchPoll,
 } from '../fleet/useStallWatchView';
 import { api } from '../lib/api';
-import { UNCONFIRMED_TEXT } from './settingsText';
+import { SETTINGS_AMBER_NOTE, SETTINGS_NOW_CLASS, UNCONFIRMED_TEXT } from './settingsText';
 
 /** Fill each `{name}` slot of an L0 text from `slots`. A slot it was not given stays as written; a value is
  *  inserted literally (a replacer function, so a `$` in a server's detail is never a replacement pattern). */
@@ -258,11 +265,7 @@ export function StallWatchSection(): ReactNode {
  *  server's effect and key. */
 interface PendingConfirm { request: StallWatchRequest; confirm: StallConfirmRequired }
 
-const NOW_CLASS: Record<StallNowTone, string> = {
-  head: 'settings-catalogue',
-  note: 'settings-note',
-  warn: 'settings-catalogue settings-catalogue--amber',
-};
+const NOW_CLASS: Readonly<Record<StallNowTone, string>> = SETTINGS_NOW_CLASS;
 /** The select's value for the built-in, and for a stored value the list does not hold (an unreadable one): an
  *  empty option, drawn blank, so the select never shows a value the server did not answer. A stored NUMBER equal to
  *  the view's built-in is not the built-in: the server reports it as a pinned choice (`chosen`), a `default` write
@@ -354,7 +357,7 @@ function StallWatchBody({ view, stale, poll }: { view: StallWatchView; stale: bo
 
   return (
     <>
-      {stale && <p className="settings-note settings-catalogue--amber">{STALL_SECTION_TEXT.stale}</p>}
+      {stale && <p className={SETTINGS_AMBER_NOTE}>{STALL_SECTION_TEXT.stale}</p>}
       {now.map((line, i) => <p key={i} className={NOW_CLASS[line.tone]}>{line.text}</p>)}
       {next !== null && <p className="settings-catalogue">{next.lead}</p>}
       {next !== null && next.waitsOn.length > 0 && (
@@ -363,39 +366,37 @@ function StallWatchBody({ view, stale, poll }: { view: StallWatchView; stale: bo
           <ul className="settings-note">{next.waitsOn.map((gate) => <li key={gate}>{gate}</li>)}</ul>
         </>
       )}
-      <fieldset className="settings-fieldset" disabled={locked}>
-        <legend className="settings-legend">{STALL_SECTION_TEXT.level}</legend>
+      <fieldset className={RADIO_FIELDSET} disabled={locked}>
+        <legend className={RADIO_LEGEND}>{STALL_SECTION_TEXT.level}</legend>
         {levelOptions(view).map(({ value, label }) => (
-          <label key={value} className="settings-option">
-            <input
-              type="radio"
-              name="settings-stall-level"
-              value={value}
-              checked={view.chosen.level === value}
-              onChange={() => choose({ level: value })}
-            />
-            <span className="settings-option-sentence">{label}</span>
-          </label>
+          <Radio
+            key={value}
+            name="settings-stall-level"
+            value={value}
+            checked={view.chosen.level === value}
+            onChange={() => choose({ level: value })}
+          >
+            {label}
+          </Radio>
         ))}
       </fieldset>
-      <fieldset className="settings-fieldset" disabled={locked}>
-        <legend className="settings-legend">{STALL_SECTION_TEXT.quiet}</legend>
+      <fieldset className={RADIO_FIELDSET} disabled={locked}>
+        <legend className={RADIO_LEGEND}>{STALL_SECTION_TEXT.quiet}</legend>
         <p className="settings-catalogue">{quietLine}</p>
         <p className="settings-note">{range}</p>
-        <select
-          className="route-select"
+        <Select
           aria-label={STALL_SECTION_TEXT.quiet}
           value={quietValue}
           onChange={(e) => choose({ quietMs: e.target.value === QUIET_BUILT_IN ? 'default' : Number(e.target.value) })}
         >
           {quietValue === QUIET_NONE && <option value={QUIET_NONE} disabled hidden />}
           {shown.map((c) => <option key={String(c.value)} value={String(c.value)}>{c.label}</option>)}
-        </select>
+        </Select>
         <p className="settings-note">{STALL_QUIET_NOTE}</p>
       </fieldset>
       {view.notices.ok ? (
         <>
-          <h3 className="settings-legend">
+          <h3 className={RADIO_LEGEND}>
             {fillStallText(STALL_SECTION_TEXT.counts, { window: quietText(view.notices.windowMs) })}
           </h3>
           <ul className="settings-note">

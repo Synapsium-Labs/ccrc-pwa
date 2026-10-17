@@ -2,541 +2,72 @@
 // from --bg-well (the drawer keeps its dark glass in BOTH themes) holding a
 // real xterm attached to the session's tmux window over `/ws/pty/:id`. Raw
 // utf8 frames stream into term.write; keystrokes — and the mobile quick-key
-// bar's control sequences — flow back as {type:'input'} frames; the fit on
-// open dials the measured cols/rows into the URL and later refits ride
-// {type:'resize'}. Closing the drawer closes the socket, after which the
+// bar's control sequences — flow back as {type:'input'} frames, and nothing
+// else ever does. A paste is taken before xterm sees it and goes back as
+// `typedFrame(text)`, sanitised, so a clipboard cannot end its own brackets
+// (D-5007), and text a keyboard inserts goes the same way unless it is one key's
+// bytes (D-5114). The attach dials the window's own size plus tmux's status
+// row, 220x51, at every glass width, and the terminal is pinned there (D-5005,
+// spec 2026-10-14 §5.1): a client exactly the window's size is one tmux has
+// nothing to pan and nothing to fill, so the glass changes the type size and
+// never the grid. Closing the drawer closes the socket, after which the
 // server restores the session's canonical tmux window size.
+//
+// TWO VIEWS OF THE ONE TERMINAL (D-5005, D-5006, spec 2026-10-14 §5.2). Where
+// the window's 220 columns fit at 11px or more the glass shows the GRID, the
+// terminal itself; everywhere else the WRAPPED view, its screen re-wrapped to
+// the glass as text (`WrappedView`). Which one is `chooseView`'s answer over the
+// type fit, beaten by a per-device chip in the header. The terminal has ONE
+// host in two positions — visible for the grid, moved off-screen for the
+// wrapped view with the glass's own box — and is opened on every pointer, so a
+// tap on the wrapped view types live into xterm's textarea (operator ruling
+// R-LIVE, 2026-10-15). This file decides nothing of that itself: it measures,
+// asks `drawerView.ts`, and places what it was told.
 //
 // THE WHEEL IS NOT PART OF THAT CONVERSATION. tmux attaches this client on the
 // alternate screen, where xterm has no scrollback and turns a wheel notch into
 // arrow keys aimed at the pane — so the wheel is swallowed here and scrolls the
 // pane's own history instead, read over `GET /api/sessions/:id/pane/history`
 // (tmux `capture-pane`, which mutates nothing on the box).
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Terminal } from '@xterm/xterm';
-import { FitAddon } from '@xterm/addon-fit';
-import '@xterm/xterm/css/xterm.css';
-import { Sheet } from '../components/Sheet';
-import { api, ApiError } from '../lib/api';
+import {
+  ATTACH, defaultMakeTerm, historyFailureSentence,
+  type DrawerTerm, type HistoryTerm, type MakeHistoryTerm, type MakeTerm,
+} from './terminalFactory';
+import { attachHistoryPane } from './historyPane';
+import { attachReachForHistory } from './reachForHistory';
+import { histFromPane, histFromReadError, type Hist } from './historyRead';
+import { Button, Chip, Keycap, Sheet } from '@ccrc/ui';
+import { api } from '../lib/api';
 import { checkAuth, onAuthRegained } from '../lib/auth';
 import { useKeyboardInset } from '../lib/keyboard';
 import { wsUrl } from '../lib/ws';
 import { PINNED_WINDOW_COLS } from '../../../shared/api';
-import { BASE_CONSOLE_FONT_PX, consoleFit } from './consoleFit';
+import { BASE_CONSOLE_FONT_PX, consoleFit, type ConsoleFit } from './consoleFit';
+import { rowText } from './drawerModel';
+import {
+  chooseView, readViewOverride, viewChip, writeViewOverride,
+  type DrawerViewKind, type StorageLike,
+} from './drawerView';
+import { KeyBar, useKeyInput } from './KeyBarView';
+import { insertedFrame, inputLetter, keyLetter, typedFrame } from './typedFrame';
+import { WrappedView } from './WrappedView';
 import './chat.css';
-
-/** The slice of xterm the drawer drives — injectable so tests can script it. */
-export interface DrawerTerm {
-  write(data: string): void;
-  onData(cb: (data: string) => void): void;
-  /** Install the wheel handler. `false` means "xterm must not process this" —
-   *  the return value xterm's own `attachCustomWheelEventHandler` takes. */
-  onWheel(cb: (ev: WheelEvent) => boolean): void;
-  /** Fit the grid to the host element; returns the measured cols/rows. */
-  fit(): { cols: number; rows: number };
-  /**
-   * The grid the host WOULD show at this type size (CSS px), measured by the
-   * terminal itself, or null when the host cannot be measured.
-   *
-   * IT DOES NOT RESIZE THE LIVE GRID, and that is its whole contract. tmux
-   * attaches this client on the alternate screen, where shrinking the grid
-   * drops rows and clamps the cursor and growing it back restores neither, so
-   * a measurement taken by resizing damages the screen it measures. The
-   * terminal's own type size is put back before it returns.
-   */
-  propose(px: number): { cols: number; rows: number } | null;
-  /** Render at this type size (CSS px) and fit, once; returns the grid. A fit
-   *  that lands on the grid the terminal already has leaves the buffer alone.
-   *  The drawer shrinks the type so the whole pinned tmux window lands on the
-   *  glass; see `consoleFit`. */
-  setFontSize(px: number): { cols: number; rows: number };
-  focus(): void;
-  dispose(): void;
-}
-export type MakeTerm = (host: HTMLElement) => DrawerTerm;
-
-/** The history view's terminal: written once, never typed into. Separate from
- *  `DrawerTerm` because it is a different job — it has no pty behind it, and
- *  it is the one of the two that HAS scrollback (the live one is on tmux's
- *  alternate screen, where xterm keeps none). */
-export interface HistoryTerm {
-  /** `done` fires when the data is PARSED, not merely queued — xterm's own
-   *  `write(data, cb)` contract. The opening scroll has to wait for it: a
-   *  `scrollLines` against a buffer that has not grown yet moves nothing, and
-   *  the reader is then sitting at the bottom with the bottom latch unarmed. */
-  write(data: string, done?: () => void): void;
-  fit(): { cols: number; rows: number };
-  /** Render at this type size and refit: the live pane's size changed while
-   *  the history was up, and the layer follows it. Optional, so a terminal
-   *  that cannot offer it keeps the size it was built at. */
-  setFontSize?(px: number): void;
-  /** One row's height in CSS pixels, or 0 when it cannot be measured yet — the
-   *  drag needs it to turn a finger's travel into lines, and 0 means "do not
-   *  guess", not "zero". */
-  rowHeight(): number;
-  /** Scroll the view; negative is up, in lines. */
-  scrollLines(amount: number): void;
-  /**
-   * Shift the rendered rows by a SUB-ROW amount, in CSS pixels, positive
-   * downward — the fraction of a row that `scrollLines` cannot express.
-   *
-   * A terminal scrolls in whole rows, and at speed that is invisible: at
-   * 4 px/ms a row goes past every four milliseconds. It stops being invisible
-   * exactly where a throw ends, because the time between whole-row steps is
-   * the row height divided by the speed — so as the glide decays the steps
-   * spread out, the last ones arrive hundreds of milliseconds apart, and the
-   * final one is the longest of all. That is the stutter, and no amount of
-   * tuning the curve removes it: it is the quantum, not the speed.
-   *
-   * So the remainder is rendered rather than merely remembered. Optional on
-   * the interface because a terminal that cannot offer it still scrolls
-   * correctly — it just scrolls in steps.
-   */
-  offset?(px: number): void;
-  /** Called when the reader, having scrolled up, comes back down to the newest
-   *  line — the gesture that means "I'm done with the history". NOT called for
-   *  the arrival at the bottom that writing the history itself causes. */
-  onBottom(cb: () => void): void;
-  dispose(): void;
-}
-/** What the server measured about the pane this history came out of — the two
- *  numbers the reader needs to size its own buffer. Absent when the probe was
- *  not `ok`, and absent is not zero. */
-export interface HistoryPane {
-  history: number;
-  width: number;
-}
-
-/**
- * HOW MANY ROWS THE READER MUST BE ABLE TO HOLD.
- *
- * `capture-pane -J` returns LOGICAL lines, and the reader re-wraps each of them
- * at its own width: a line stored at `pane.width` columns becomes at most
- * `ceil(pane.width / cols)` rows here. `-S -N` also returns the visible screen
- * along with the history above it, so the screen's own rows are added (F13's
- * shape, one layer up: the screen counts).
- *
- * `lines * 3` was the old rule and it was derived from ONE pane at 220 columns
- * read on ONE phone. The fleet census of 2026-09-14 holds a 302-column window,
- * where a 43-column reader needs 8 rows per stored line — and xterm answers an
- * under-provisioned scrollback by silently dropping the oldest history, which
- * is the half of the read the reader scrolled up for.
- *
- * AND THE WIDTH THIS DIVIDES BY IS THE READER'S, NOT THE PANE'S HELD STILL.
- * The comment this replaces claimed the factor was safe because a stored line
- * keeps the width it was written at — that tmux leaves it alone across a
- * resize. That is FALSE and F1 measured it false on a private tmux 3.4 socket:
- * `resize-window -x 43` on a 220-column pane holding 1853 stored lines took
- * `history_size` to 9460, and at `history-limit 2000` the next output shed the
- * overflow permanently. What actually holds the pane's width still is the
- * server's own pin at the canonical grid before any client attaches
- * (`GET /ws/pty/:id`, spec §5.1) — not tmux's good manners. This arithmetic is
- * about the READER re-wrapping a logical line at its own width, which is a
- * different question and stays true either way.
- *
- * PURE, and exported for its own tests: jsdom cannot measure a row, so the
- * arithmetic is what can be held still.
- */
-export function historyScrollback(
-  lines: number,
-  cols: number,
-  rows: number,
-  pane?: HistoryPane,
-): number {
-  if (pane === undefined) return lines * 3;
-  const wrap = cols > 0 ? Math.max(1, Math.ceil(pane.width / cols)) : 1;
-  return pane.history * wrap + rows;
-}
-
-/**
- * WHY THERE IS NO HISTORY, as a sentence rather than as a wire token.
- *
- * The route answers three distinct failures and PR #96 rendered all three raw —
- * `no history · gone`, `· unmeasured`, `· unreachable` — on the one layer whose
- * entire job is to explain a missing history. `detail` was discarded outright,
- * which is the half that says WHICH tmux refusal it was.
- *
- * Anything that is not one of the three tokens is already a sentence (the two
- * MEASURED-empty reasons the success path writes) and is returned untouched, so
- * this never has to know about them.
- */
-export function historyFailureSentence(error: string, detail?: string): string {
-  if (error === 'gone') return 'this session is gone — there is no pane to read';
-  if (error === 'unreachable') return 'could not reach the box to read this pane';
-  if (error === 'bad-session-id') return 'that is not a session id this box will read';
-  if (error === 'unmeasured') {
-    return detail !== undefined && detail !== ''
-      ? `could not read this pane — ${detail}`
-      : 'could not read this pane';
-  }
-  // ALREADY A SENTENCE, OR A TOKEN NOBODY TAUGHT THIS FUNCTION — and it cannot
-  // tell them apart, so it decides by SHAPE rather than by hope. The success
-  // path writes real sentences here ("nothing has scrolled off this pane yet"),
-  // and every wire token in `PaneHistoryReply['error']` is a single lower-case
-  // hyphenated word. Returning an unhandled token raw is how `bad-session-id`
-  // reached the glass as `no history · bad-session-id` — a declared member of
-  // the union with no branch, reachable from a hand-typed URL.
-  return /^[a-z][a-z0-9-]*$/.test(error)
-    ? `could not read this pane — the box answered ${error}`
-    : error;
-}
-
-/** `fontSize` is the size the LIVE pane settled on after its fit. The two
- *  terminals sit one over the other and a reader moves between them with one
- *  key, so a history rendered at a different size reads as the console having
- *  changed rather than the layer having. Optional and last, so a test that
- *  scripts this factory keeps working without knowing about it. */
-export type MakeHistoryTerm =
-  (host: HTMLElement, lines: number, pane?: HistoryPane, fontSize?: number) => HistoryTerm;
-
-/** A token's resolved value at attach time — xterm paints to canvas and
- *  cannot read CSS custom properties itself. `undefined` (token missing)
- *  falls back to xterm's own default rather than hardcoding a color here. */
-const tokenValue = (name: string): string | undefined => {
-  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-  return v === '' ? undefined : v;
-};
-
-/** Voice and glass from the tokens: the mono face, well background, on-well
- *  ink, phosphor cursor. --bg-well stays dark under [data-theme='light'], so
- *  the terminal is dark regardless of theme. Both terminals start at the base
- *  size (xterm takes a number); the drawer may then shrink the live one so the
- *  whole tmux window fits, and the history one follows it (`consoleFit`).
- *  Spelled once, worn by both terminals — the
- *  live one and the history one have to read as the same glass or scrolling
- *  back would look like leaving the session. */
-const glass = () => ({
-  fontFamily: tokenValue('--font-mono') ?? 'monospace',
-  fontSize: BASE_CONSOLE_FONT_PX,
-  theme: {
-    background: tokenValue('--bg-well'),
-    foreground: tokenValue('--ink-on-well'),
-    cursor: tokenValue('--accent'),
-    cursorAccent: tokenValue('--bg-well'),
-    // On-brand ANSI palette (Phosphor & Ink) so 16-colour content reads
-    // cohesively. 256/truecolor content bypasses this and paints direct —
-    // Claude emits truecolor once COLORTERM+tmux RGB are in place (ccd spawn).
-    black: '#1B1F1D', red: '#F08A78', green: '#57E08B', yellow: '#F2B84B',
-    blue: '#96B4F4', magenta: '#C7A7F4', cyan: '#6FD6EA', white: '#ADB6AE',
-    brightBlack: '#5A635C', brightRed: '#FF9E8A', brightGreen: '#7BEDA6',
-    brightYellow: '#FFD27A', brightBlue: '#B3C8FF', brightMagenta: '#DDC2FF',
-    brightCyan: '#93E6F5', brightWhite: '#EDF1EE',
-  },
-});
-
-/**
- * THE ROWS AND THE PIXELS DO NOT LAND TOGETHER, and this is what holds them
- * together anyway.
- *
- * The drag moves the history two ways at once: whole rows through
- * `scrollLines`, and the leftover fraction of a row through a transform. The
- * transform is a style write and is on the glass at the next paint; the rows
- * are not. xterm's `scrollLines` updates the buffer and then asks its render
- * debouncer for a repaint, which it schedules with its OWN
- * `requestAnimationFrame` — and a frame callback registered from inside a
- * frame callback runs in the NEXT frame. So on the step that crosses a row
- * boundary, the transform snaps back by a row while the rows it was standing
- * in for are still one frame away.
- *
- * At speed that is invisible: a dozen rows go past per frame and a one-row
- * error is a fraction of the motion. As a throw decelerates it becomes the
- * whole motion, and the rows shake — which is exactly where the operator saw
- * it ("під час замедлення строки скачуть вверх-вниз").
- *
- * So the transform stands in for the rows until they are actually painted.
- * `scrolled` records a displacement asked for and not yet seen, `painted`
- * clears it on xterm's own `onRender`, and the invariant across all of it is
- * one line: what is on the glass — painted rows plus transform — is always
- * exactly what was asked for. Exported for its own tests, because that
- * invariant is the whole of the fix and jsdom cannot see a pixel.
- */
-export interface PaintLag {
-  /** The terminal scrolled — `rows` is the displacement the VIEWPORT actually
-   *  made, and `rowPx` the row height at that moment.
-   *
-   *  MEASURED, NOT REQUESTED, and that distinction is the whole of one fix:
-   *  xterm CLAMPS `scrollLines` at both ends of the buffer, so a throw that
-   *  reaches the oldest line goes on asking for rows for the rest of its curve.
-   *  Crediting the ASK made the transform stand in for a displacement the rows
-   *  were never going to make, and the view slid and snapped back for the whole
-   *  tail of the throw. The call site reads `term.buffer.active.viewportY`
-   *  either side of the scroll and hands the difference here.
-   *
-   *  The sign lives HERE rather than at the call site: a viewport moving toward
-   *  OLDER output is a negative `viewportY` delta and the content moves DOWN,
-   *  so a helper that took "px, downward" would put that flip in an adapter no
-   *  test can reach. */
-  scrolled(rows: number, rowPx: number): void;
-  /** The sub-row remainder the drag wants shown, positive downward. */
-  sub(px: number): void;
-  /** xterm says the rows are on the glass. */
-  painted(): void;
-  /** What the transform must be right now. */
-  transform(): number;
-}
-export function paintLag(): PaintLag {
-  let pending = 0;
-  let subPx = 0;
-  return {
-    scrolled: (rows, rowPx) => { pending += -rows * rowPx; },
-    sub: (px) => { subPx = px; },
-    painted: () => { pending = 0; },
-    transform: () => subPx + pending,
-  };
-}
-
-/** `fit()` over a FitAddon, with the one failure both terminals share. */
-const fitter = (term: Terminal, fit: FitAddon) => () => {
-  try {
-    fit.fit();
-  } catch {
-    /* host not measurable yet — keep the current grid */
-  }
-  return { cols: term.cols, rows: term.rows };
-};
-
-const defaultMakeTerm: MakeTerm = (host) => {
-  const term = new Terminal({
-    ...glass(),
-    cursorBlink: true,
-    // INERT ON THIS TERMINAL, and kept for the one case where it is not:
-    // `tmux attach` puts the client on the ALTERNATE screen (every attach
-    // begins ESC[?1049h, measured off a real pty), and xterm keeps no
-    // scrollback there. The history the reader wants is tmux's, not this
-    // buffer's — see `openHistory`.
-    scrollback: 4000,
-  });
-  const fit = new FitAddon();
-  term.loadAddon(fit);
-  term.open(host);
-  return {
-    write: (d) => term.write(d),
-    onData: (cb) => {
-      term.onData(cb);
-    },
-    onWheel: (cb) => term.attachCustomWheelEventHandler(cb),
-    fit: fitter(term, fit),
-    // MEASURED, NOT RESIZED. xterm 6.0.0 re-measures its cell synchronously
-    // when the type size changes (CharSizeService measures on the option
-    // change and RenderService hands the new cell to the renderer in the same
-    // tick), so `proposeDimensions` reads the new size's grid at once, and it
-    // never touches the buffer. `fit()` would: it resizes whenever the grid
-    // differs. The size is put back before returning, which re-renders the
-    // rows but does not move them.
-    propose: (px) => {
-      const was = term.options.fontSize;
-      if (was !== px) term.options.fontSize = px;
-      try {
-        const dims = fit.proposeDimensions();
-        return dims !== undefined && Number.isFinite(dims.cols) && Number.isFinite(dims.rows)
-          ? { cols: dims.cols, rows: dims.rows }
-          : null;
-      } catch {
-        return null;   // host not measurable yet
-      } finally {
-        if (was !== px) term.options.fontSize = was;
-      }
-    },
-    setFontSize: (px) => {
-      if (term.options.fontSize !== px) term.options.fontSize = px;
-      return fitter(term, fit)();
-    },
-    focus: () => term.focus(),
-    dispose: () => term.dispose(),
-  };
-};
-
-/** The history terminal: the same glass, no cursor, no keyboard, and a real
- *  scrollback — this one is in the NORMAL buffer, so the wheel scrolls it and a
- *  touch-drag scrolls it, exactly as a console does. */
-export const defaultMakeHistoryTerm: MakeHistoryTerm = (host, lines, pane, fontSize) => {
-  const term = new Terminal({
-    ...glass(),
-    ...(fontSize === undefined ? {} : { fontSize }),
-    cursorBlink: false,
-    disableStdin: true,
-    // ZERO, EXPLICITLY, because a measurement leans on it: the call site below
-    // reads `viewportY` either side of `scrollLines`, and a smooth scroll would
-    // not have arrived when the second read happens. xterm's own default is
-    // already 0; saying it here keeps a future default change from silently
-    // un-synchronising the read. This terminal is dragged and thrown by hand at
-    // 60 Hz and wants none of xterm's easing either way.
-    smoothScrollDuration: 0,
-    // A FIRST GUESS, replaced by a measurement below. xterm needs some
-    // scrollback at construction and `term.cols` does not exist until the addon
-    // has fitted against a mounted host, so the real number is set once both
-    // facts are in hand. See `historyScrollback` for what it means, and for the
-    // reflow claim the comment this replaces got wrong.
-    scrollback: lines * 3,
-  });
-  const fit = new FitAddon();
-  term.loadAddon(fit);
-  term.open(host);
-  const fitTo = fitter(term, fit);
-  /** Fit, then re-derive the buffer at the width that fit produced — so a
-   *  rotation re-sizes the scrollback as well as the grid. */
-  const sized = (): { cols: number; rows: number } => {
-    const grid = fitTo();
-    term.options.scrollback = historyScrollback(lines, grid.cols, grid.rows, pane);
-    return grid;
-  };
-  sized();
-  const cellHeight = (): number => {
-    const screen = host.querySelector('.xterm-screen');
-    const px = screen === null ? 0 : screen.getBoundingClientRect().height;
-    return px > 0 && term.rows > 0 ? px / term.rows : 0;
-  };
-  const lag = paintLag();
-  const paint = (): void => {
-    const el = host.querySelector('.xterm');
-    if (!(el instanceof HTMLElement)) return;
-    const px = lag.transform();
-    el.style.transform = px === 0 ? '' : `translateY(${px}px)`;
-  };
-  // xterm's own word for "the rows are on the glass". Until it comes, the
-  // transform is carrying them — see `paintLag`.
-  term.onRender(() => {
-    lag.painted();
-    paint();
-  });
-  return {
-    write: (d, done) => term.write(d, done),
-    fit: sized,
-    setFontSize: (px) => {
-      if (term.options.fontSize === px) return;
-      term.options.fontSize = px;
-      sized();
-    },
-    // THE ROW HEIGHT, BY IDENTITY RATHER THAN BY ESTIMATE. The DOM renderer
-    // sets `.xterm-screen`'s height to `css.cell.height * rows` exactly, so
-    // dividing it back out IS xterm's own cell height — no private API, and no
-    // reliance on the HOST's height, which `rows` was floored from and which
-    // therefore over-states a row by up to a whole cell. `getBoundingClientRect`
-    // rather than `clientHeight` so the answer is in the same visual pixels a
-    // PointerEvent's `clientY` speaks, under whatever transform the sheet has
-    // the panel in mid-animation.
-    rowHeight: cellHeight,
-    // The TERMINAL element, not the host: `.term-host` is the one with
-    // `overflow: hidden`, so it is what must stay put and clip while its child
-    // slides. A transform is cosmetic to xterm — it lays its rows out inside
-    // this element and never measures against the page — and it costs a
-    // compositor layer rather than a relayout, which is what a per-frame shift
-    // beside a repainting terminal needs.
-    scrollLines: (n) => {
-      // ROW HEIGHT FIRST: after the scroll the buffer has moved, and this
-      // reads the rendered cell, which must be the one the rows were standing
-      // at when they were asked to move.
-      const px = cellHeight();
-      // AND THE DISPLACEMENT IS MEASURED, NOT ASSUMED. xterm clamps at both
-      // ends of the buffer, so `n` is a REQUEST and `viewportY`'s delta is the
-      // answer — see `PaintLag.scrolled`. NOTE FOR ANYONE TESTING THIS:
-      // `viewportY` does not move under jsdom at all (measured — 60 lines
-      // written, rows 24, baseY 37, viewportY 37 before, after, and 50 ms
-      // later), because jsdom has no layout and xterm's scroll is a virtual
-      // re-render off it. So the guard on this line is a source scan in
-      // `terminal-scrollback.test.tsx` — it can see that this call site reads
-      // the viewport either side, not that it computes the right number.
-      //
-      // THE NUMBER IS PINNED TOO, against a FAKE Terminal that clamps the way
-      // xterm clamps: `history-term-viewport.test.tsx` (spec §11 ruling 11). An
-      // earlier version of this comment said a behavioural proof was "its own
-      // work" and still to come; it arrived in this same branch. Crediting `n`
-      // reds three of its four cases and crediting the constant ZERO reds two
-      // — the word `constant` alone was wrong, because a non-zero constant (5)
-      // reds all four — and the partially-clamped case, asked for 10 and moved
-      // 2, reds either way.
-      const before = term.buffer.active.viewportY;
-      term.scrollLines(n);
-      lag.scrolled(term.buffer.active.viewportY - before, px);
-      paint();
-    },
-    offset: (px) => {
-      lag.sub(px);
-      paint();
-    },
-    onBottom: (cb) => {
-      // LATCHED, and that is the whole of it: writing the history scrolls the
-      // view to the newest line, which is a bottom arrival nobody asked for.
-      // Only a reader who has been AWAY from the bottom can come back to it.
-      let away = false;
-      term.onScroll(() => {
-        const b = term.buffer.active;
-        if (b.viewportY < b.baseY) away = true;
-        else if (away) cb();
-      });
-    },
-    dispose: () => term.dispose(),
-  };
-};
-
-// The phone keyboard's missing keys, with the exact control sequences a tmux
-// pane expects: Esc \x1b · arrows CSI A/B/D/C · Tab \t · Shift+Tab CSI Z ·
-// Enter \r. Legends are mono keycaps (DIRECTION); labels name them for AT.
-const QUICK_KEYS: { legend: string; label: string; seq: string }[] = [
-  { legend: 'esc', label: 'Escape', seq: '\x1b' },
-  { legend: '↑', label: 'Arrow up', seq: '\x1b[A' },
-  { legend: '↓', label: 'Arrow down', seq: '\x1b[B' },
-  { legend: '←', label: 'Arrow left', seq: '\x1b[D' },
-  { legend: '→', label: 'Arrow right', seq: '\x1b[C' },
-  { legend: 'tab', label: 'Tab', seq: '\t' },
-  { legend: '⇧tab', label: 'Shift Tab', seq: '\x1b[Z' },
-  { legend: '⏎', label: 'Enter', seq: '\r' },
-];
 
 /** Lines one wheel notch moves — xterm's own default step, and the amount the
  *  history view opens by so the gesture reads as a scroll rather than a jump. */
-/** How far a finger must travel DOWN the live glass before it counts as a
- *  reach for the history, in CSS pixels. About a row and a half: smaller reads
- *  as a tap that moved, and the reader gets a history they did not ask for. */
-const TOUCH_OPEN_PX = 24;
-const WHEEL_LINES = 3;
-
-/* — the throw, which a console on a phone is expected to have —
- *
- * A drag that stops dead the instant the finger lifts does not read as
- * scrolling; every list on the device keeps moving and slows down. The history
- * is not a native scroller (xterm's viewport is an empty leftover and the real
- * scroll is a virtual re-render), so the deceleration has to be written here
- * too. These are the four numbers it takes, in CSS pixels and milliseconds.
- */
-/** A flick, not a placement: the least speed that keeps the history moving
- *  after the finger has gone. Below it the reader was positioning the view. */
-const FLING_MIN_PX_MS = 0.25;
-/** A finger that rested this long before lifting is placing the view, not
- *  throwing it — so the speed it had before the pause is not its speed now. */
-const FLING_IDLE_MS = 80;
-/** How much of the newest sample the smoothed speed takes. Raw per-move speed
- *  is far too noisy on a phone: one 2 ms gap between moves turns an ordinary
- *  drag into a fling. */
-const FLING_SMOOTH = 0.35;
-/** What is left of the speed one 60 Hz frame later — the decay, expressed per
- *  frame and applied per elapsed millisecond so a slow frame does not slow the
- *  glide down with it. */
-const GLIDE_DECAY = 0.95;
-/** Below this there is nothing left to SHOW — half a pixel per 60 Hz frame.
- *  Stated in pixels rather than in rows on purpose: since the remainder is
- *  rendered (`HistoryTerm.offset`), the end of a throw is a sub-pixel creep
- *  rather than a row waiting to drop, and the question the threshold answers
- *  is "can the eye still see this move", not "is another step coming". */
-const GLIDE_STOP_PX_MS = 0.5 / (1000 / 60);
-const FRAME_MS = 1000 / 60;
-/** The longest gap a single glide frame may account for. A drawer that was
- *  backgrounded mid-throw comes back with a gap of seconds, and without this
- *  the history would jump the whole distance in one frame. */
-const GLIDE_MAX_STEP_MS = 50;
 
 type Conn = 'connecting' | 'open' | 'down';
+
+/** keyCode 229: a key an input method is handling, whose text xterm reads back
+ *  out of its textarea a task later rather than from the key. */
+const IME_KEY = 229;
 
 /** Where the reader is. `live` is the attached pane; the other three are the
  *  one history read, in its three states. They are four VALUES rather than a
  *  pair of booleans because the view renders differently for each, and
  *  "reading" must not be mistakable for "there is nothing here". */
-type Hist =
-  | { at: 'live' }
-  | { at: 'reading' }
-  | { at: 'history'; text: string; lines: number; pane?: HistoryPane }
-  | { at: 'empty'; why: string; detail?: string };
 
 export interface TerminalDrawerProps {
   id: string;
@@ -545,6 +76,9 @@ export interface TerminalDrawerProps {
   makeSocket?: (url: string) => WebSocket; // injectable for tests
   makeTerm?: MakeTerm; // injectable for tests
   makeHistoryTerm?: MakeHistoryTerm; // injectable for tests
+  /** Where the view chip's per-device choice is kept; `localStorage` by
+   *  default. Injectable for tests, which hand it a store that throws. */
+  viewStorage?: () => StorageLike;
 }
 
 export function TerminalDrawer({
@@ -554,6 +88,7 @@ export function TerminalDrawer({
   makeSocket,
   makeTerm,
   makeHistoryTerm,
+  viewStorage,
 }: TerminalDrawerProps): ReactNode {
   const [conn, setConn] = useState<Conn>('connecting');
   // Bumped by Reconnect — re-runs the attach effect for a fresh fit + dial.
@@ -568,7 +103,6 @@ export function TerminalDrawer({
   const connRef = useRef<Conn>('connecting');
   const sockRef = useRef<WebSocket | null>(null);
   const termRef = useRef<DrawerTerm | null>(null);
-  const gridRef = useRef({ cols: 80, rows: 24 });
   /** The type size the live glass is rendering at, which is the size a history
    *  layer is built at. The fit does NOT reason from it: every fit starts from
    *  the base size, so the answer depends on the box alone (`consoleFit`). */
@@ -576,10 +110,38 @@ export function TerminalDrawer({
   /** The history layer's terminal while one is up, so a live refit that moves
    *  the type size can move the history's with it. */
   const histTermRef = useRef<HistoryTerm | null>(null);
-  /** True while the live grid is narrower than the pinned window, which is
-   *  the state in which tmux pans the pane, and the reader deserves to be told
-   *  why their lines begin off-screen. */
+  /** True while the glass cannot show the window's 220 columns even at the
+   *  type's floor: the last MEASURED fit's verdict. It chooses the wrapped view
+   *  unless the chip forced the grid, which then scrolls sideways and says so
+   *  (`grid · scrolls`). */
   const [clipped, setClipped] = useState(false);
+  /** The last measured fit, or null before one: what the view would be with
+   *  no override, which is what the chip's flip compares against. */
+  const fitRef = useRef<ConsoleFit | null>(null);
+  /** The per-device override: read once, at mount, from a store that may
+   *  throw (`readViewOverride`), and held here for this drawer whatever the
+   *  store does with a write. */
+  const store = viewStorage ?? ((): StorageLike => window.localStorage);
+  const [storedOverride] = useState(() => readViewOverride(store));
+  const overrideRef = useRef<DrawerViewKind | null>(storedOverride);
+  /** While the not-Claude offer's grid is standing in for the device's own
+   *  override: the override it replaced, to put back when the drawer closes.
+   *  null when no offer was taken (or a chip flip has since made a choice). */
+  const offerRef = useRef<{ device: DrawerViewKind | null } | null>(null);
+  /** The view showing. null only until something is measured or chosen: it is
+   *  placed as the grid is (the host visible), and has no chip. */
+  const [view, setView] = useState<DrawerViewKind | null>(() => chooseView(null, storedOverride, null));
+  const viewRef = useRef<DrawerViewKind | null>(view);
+  const showView = (v: DrawerViewKind | null): void => {
+    viewRef.current = v;
+    setView(v);
+  };
+  /** The live terminal while one is attached, for the wrapped view to read. */
+  const [liveTerm, setLiveTerm] = useState<DrawerTerm | null>(null);
+  /** What the wrapped view reports: a selection holding its rows still, and
+   *  a screen that has shown no prompt glyph for two seconds. */
+  const [paused, setPaused] = useState(false);
+  const [notClaude, setNotClaude] = useState(false);
   const refitRef = useRef<(() => void) | null>(null);
   const histRef = useRef<Hist>({ at: 'live' });
   /** WHICH READ, not merely "a read is running". `reading` is a state and two
@@ -619,118 +181,130 @@ export function TerminalDrawer({
         // all — and the identity check is what keeps a stale answer from
         // standing in for a newer one.
         if (req !== reqRef.current || histRef.current.at !== 'reading') return;
-        // NOTHING ABOVE THE SCREEN IS NOT A HISTORY. `capture-pane` answers
-        // with the visible screen even when no line has ever scrolled off, so
-        // a successful read alone would put up a second copy of what the
-        // reader is already looking at — with an empty scrollbar on it and a
-        // wheel that moves nothing. Measured on this fleet: four of ten live
-        // panes hold no scrollback at all.
-        //
-        // The COUNT decides, never the screen the pane is on: a pane on the
-        // alternate screen keeps the scrollback it already had (measured on a
-        // private socket — 453 stored lines still captured at
-        // `alternate_on=1`), so refusing on that flag would hide a real
-        // history behind a full-screen app. The flag only says a zero will
-        // stay zero while the app is up.
-        //
-        // `=== 0` and not `!r.scrollback`: an older server omits the field and
-        // an unmeasurable pane sends nothing, and neither is a zero. Both keep
-        // the behaviour this drawer shipped with.
-        if (r.scrollback === 0) {
-          goHist({
-            at: 'empty',
-            why: r.alternate === true
-              ? 'a full-screen app is up — nothing scrolls off while it is'
-              : 'nothing has scrolled off this pane yet',
-          });
-          return;
-        }
-        // ABSENT IS NOT ZERO, one last time: only a probe that answered `ok`
-        // gives the reader two numbers to size itself by, and an older server
-        // or an unmeasurable pane leaves it on the `lines * 3` fallback that
-        // shipped before either field existed.
-        const pane = typeof r.scrollback === 'number' && typeof r.width === 'number'
-          ? { history: r.scrollback, width: r.width }
-          : undefined;
-        goHist({ at: 'history', text: r.text, lines: r.lines, pane });
+        goHist(histFromPane(r));
       },
       (e: unknown) => {
         if (req !== reqRef.current) return;
-        // WHY, not just "failed": a dead pane, a tmux that could not answer and
-        // an unreachable box are three different facts to the reader, and the
-        // server already told them apart. `ApiError.body` carries the route's
-        // own word for it AND, for a 502, the tmux message underneath.
-        const body = e instanceof ApiError ? (e.body as { error?: unknown; detail?: unknown }) : null;
-        const why = typeof body?.error === 'string' ? body.error : 'unreachable';
-        const detail = typeof body?.detail === 'string' ? body.detail : undefined;
-        if (histRef.current.at === 'reading') goHist({ at: 'empty', why, detail });
+        if (histRef.current.at === 'reading') goHist(histFromReadError(e));
       },
     );
   };
 
   /**
-   * THE GLASS MEETS THE WINDOW, because the window cannot meet the glass.
+   * THE TYPE MEETS THE GLASS; THE GRID IS THE WINDOW'S (D-5005).
    *
-   * A tmux client smaller than its window is a VIEWPORT, which tmux pans to
-   * follow the cursor — so on any glass narrower than `PINNED_WINDOW_COLS` a
-   * line's beginning slides off to the left while its owner is typing. The
-   * window is pinned and may not be narrowed to suit: tmux reflows stored lines
-   * on a width change, destructively at this fleet's `history-limit` (the
-   * measurement is in `PINNED_WINDOW_COLS`' own docstring). So the type shrinks
-   * until the whole window is on screen. Where even the floor cannot fit it, a
-   * phone above all, the console stays at the base size, which is exactly the
-   * console `main` shows, and the drawer's header says the window is clipped.
+   * The terminal is pinned at the window's own size, 220 columns by 50 rows
+   * plus tmux's status row, and nothing here resizes it. A client exactly the
+   * window's size is one tmux has nothing to pan and nothing to fill (spec
+   * 2026-10-14 §5.1, W6) — where a client narrower than the window was a
+   * viewport tmux panned to follow the cursor, and a line's beginning slid off
+   * to the left while its owner typed. The window is not narrowed to suit the
+   * glass either: tmux reflows stored lines on a width change, destructively at
+   * this fleet's `history-limit` (the measurement is in `PINNED_WINDOW_COLS`'
+   * own docstring).
    *
-   * MEASURE, THEN FIT ONCE. Every candidate size is measured with
-   * `DrawerTerm.propose`, which does not resize the live grid, and only the
-   * chosen size is applied, with one `fit()`. That matters because of where
-   * this terminal lives: tmux attaches it on the alternate screen, and xterm's
-   * alternate buffer does not survive a shrink. Rows below the cursor are
-   * dropped, rows are trimmed off the top, and the cursor is clamped, and
-   * growing back restores none of it. An earlier revision measured the base
-   * size by resizing to it and back, so a refit that landed on the grid it
-   * started from had quietly rearranged the screen. It sent no resize frame,
-   * because the grid had not changed, so tmux never repainted, and typed
-   * text echoed rows away from the prompt. Measured in
-   * `console-window-fit-xterm.test.tsx` against the real terminal. Now a refit
-   * whose grid is unchanged leaves the buffer alone and sends nothing, as
-   * `main`'s plain `fit()` did.
+   * So the glass changes the TYPE SIZE and the VIEW, never the grid. The type
+   * shrinks, down to the floor, until all 220 columns are on screen, and the
+   * glass shows the grid. Where even the floor cannot fit them, a phone above
+   * all, the glass shows the wrapped view instead: the same screen re-wrapped
+   * to its width (D-5006). Only a grid the reader forced there with the chip
+   * scrolls sideways, and its chip says so.
    *
-   * THE ROWS FOLLOW THE TYPE, and that is left alone on purpose. A smaller
-   * size fits more rows as well as more columns, so a shrunk client can be
-   * taller than the 50-row window. tmux draws the window from the client's top
-   * row, keeps its status line on the client's last row, and leaves the rows
-   * between unused. Nothing in the window moves. A client SHORTER than the
-   * window is what moves content: tmux pans it vertically to follow the cursor,
-   * which is what a 14px console on a short glass has always done.
+   * MEASURED, NEVER RESIZED. Every candidate size is measured with
+   * `DrawerTerm.propose`, which does not touch the live grid, and only the chosen
+   * size is applied. tmux attaches this client on the alternate screen, and
+   * xterm's alternate buffer does not survive a shrink: rows below the cursor
+   * are dropped, rows are trimmed off the top, the cursor is clamped, and
+   * growing back restores none of it. An earlier revision measured by resizing
+   * to a size and back, and typed text then echoed rows away from the prompt
+   * (`console-window-fit-xterm.test.tsx` measures it against the real
+   * terminal). A pinned grid ends that hazard rather than stepping around it:
+   * no fit moves the grid at all.
+   *
+   * THE ROWS ARE FIXED TOO. A glass taller than the 51 rows leaves a margin
+   * below them; on a shorter one the host scrolls vertically, held at its
+   * bottom where the box is (`keepBottom`, in the attach).
    *
    * The search is `consoleFit`'s, and lives there so it can be tested without a
    * DOM. What is here is only the application of it.
    */
-  const fitToWindow = (t: DrawerTerm): { cols: number; rows: number } => {
+  const fitToWindow = (t: DrawerTerm): void => {
     // A HOST WITH NO LAYOUT IS UNMEASURED, NOT NARROW. The sheet portals its
     // content and animates in, so the first fit can land on an element with no
-    // width at all — and xterm answers that with the grid it was constructed
-    // with, not with a measurement. Taken as one, it would size the type for a
-    // glass that does not exist; the later fit recovers, but the reader has
-    // already seen the jump. Nothing to measure means nothing to change.
-    if (host === null || host.clientWidth <= 0) return t.fit();
-    const want = consoleFit((px) => t.propose(px)?.cols ?? null, PINNED_WINDOW_COLS);
-    if (want === null) return t.fit();   // unmeasurable: keep the size we have
-    const grid = t.setFontSize(want.fontSize);
-    fontRef.current = want.fontSize;
-    histTermRef.current?.setFontSize?.(want.fontSize);
-    // FROM THE GRID THE TERMINAL SETTLED ON, not from the search's own flag:
-    // the window is clipped exactly when the client is narrower than it.
-    setClipped(grid.cols < PINNED_WINDOW_COLS);
-    return grid;
+    // width at all. Taken as a measurement, it would size the type for a glass
+    // that does not exist; the later fit recovers, but the reader has already
+    // seen the jump. Nothing measured means nothing changes: the type, the clip
+    // and the view stay as they are, and the first measured fit decides.
+    //
+    // ONE MEASUREMENT FOR BOTH POSITIONS. The host keeps the glass's own box
+    // off-screen as well as on it (`.term-host--off` only translates it), and
+    // the terminal is open in it on every pointer, so `propose` measures the
+    // same glass whichever view is showing — and a verdict cannot flip the
+    // view, re-measure a different box and flip it back.
+    const want = host === null || host.clientWidth <= 0
+      ? null
+      : consoleFit((px) => t.propose(px)?.cols ?? null, PINNED_WINDOW_COLS);
+    if (want !== null) {
+      t.setFontSize(want.fontSize);
+      fontRef.current = want.fontSize;
+      histTermRef.current?.setFontSize?.(want.fontSize);
+      // The search's own verdict, and a measured one: it answers "fits" only
+      // for a size whose grid it measured at 220 columns or more. The grid the
+      // terminal has says nothing here — it is 220 wide whatever the glass shows.
+      setClipped(want.clipped);
+      fitRef.current = want;
+    }
+    // THE VIEW IS THE CHOOSER'S (D-5005): the grid where 220 fit, the wrapped
+    // view where they do not, the override over both, and an unmeasured glass
+    // keeping what it shows.
+    showView(chooseView(want, overrideRef.current, viewRef.current));
   };
+
+  /**
+   * THE VIEW CHIP's flip, kept per device (spec §5.2). Flipping BACK to what
+   * the glass would choose by itself clears the override rather than pinning
+   * it, so a device keeps following its glass until the reader overrules it.
+   * The write may throw away the choice (a private window); the drawer keeps
+   * it all the same, for as long as it is open.
+   */
+  const flipView = (): void => {
+    // A flip is the device's own choice, so it ends the offer (below) rather
+    // than being undone with it when the drawer closes.
+    offerRef.current = null;
+    const next: DrawerViewKind = viewRef.current === 'wrapped' ? 'grid' : 'wrapped';
+    const fit = fitRef.current;
+    const ov = fit !== null && chooseView(fit, null, null) === next ? null : next;
+    overrideRef.current = ov;
+    writeViewOverride(store, ov);
+    showView(chooseView(fit, ov, viewRef.current));
+  };
+
+  /** The not-Claude chip's offer: the grid, for this drawer only. A pane in vim
+   *  is a passing state, and a device that keeps it would open every later
+   *  session in a grid it does not fit. So it is never written to the store,
+   *  and the device's own override it stood in for comes back when the drawer
+   *  closes (the effect below): the drawer stays mounted with its session's
+   *  screen, so "for this drawer" has to be put back by hand. */
+  const gridForNow = (): void => {
+    offerRef.current ??= { device: overrideRef.current };
+    overrideRef.current = 'grid';
+    showView('grid');
+  };
+  useEffect(() => {
+    if (open) return;
+    const taken = offerRef.current;
+    if (taken === null) return;
+    offerRef.current = null;
+    overrideRef.current = taken.device;
+  }, [open]);
 
   // Frames are inert until the socket reports open — quick keys pressed
   // during attach are dropped, never queued blind into a dead pipe.
-  const sendFrame = (
-    frame: { type: 'input'; data: string } | { type: 'resize'; cols: number; rows: number },
-  ): void => {
+  //
+  // INPUT IS THE ONLY FRAME THIS DRAWER SENDS (D-5005), and the type says so:
+  // a resize frame would hand the client's size back to the glass, which is
+  // the panning this design ends, so it no longer compiles.
+  const sendFrame = (frame: { type: 'input'; data: string }): void => {
     const ws = sockRef.current;
     if (!ws || connRef.current !== 'open') return;
     ws.send(JSON.stringify(frame));
@@ -739,12 +313,29 @@ export function TerminalDrawer({
   /** A keystroke — from the keyboard or from the quick-key bar. It RETURNS TO
    *  LIVE first, the way a console jumps to the bottom when you type: the keys
    *  reach the session either way, and watching them land is the whole reason
-   *  to type. The resize frame deliberately does not go through here — a
-   *  rotation is not a keystroke and must not throw away the history. */
+   *  to type. A refit deliberately does not go through here — a rotation is
+   *  not a keystroke and must not throw away the history. */
   const typed = (data: string): void => {
     if (histRef.current.at !== 'live') goHist({ at: 'live' });
     sendFrame({ type: 'input', data });
   };
+
+  /** The live screen as text, one string per window row, read off the model
+   *  WHEN IT IS CALLED: the ^C/^D guard reads it at the moment of the tap,
+   *  because the exit notice it looks for appears after the first Ctrl-C. */
+  const screenNow = (): readonly string[] => termRef.current?.model().map(rowText) ?? [];
+  /** The bar's TAPS go through the ^C/^D guard, the latch's included (D-5007).
+   *  Keys typed into the terminal do not: `term.onData` reaches `typed` with
+   *  nothing but the latch's one-letter drop in between (in the attach), so a
+   *  physical Ctrl-C reaches the session exactly as it always has. */
+  const keys = useKeyInput(typed, screenNow);
+  const cancelHeldKey = keys.guard.cancel;
+  /** The latch as the textarea's listeners see it. They are installed once per
+   *  attach, and the bar's latch is a new object every render. */
+  const latchRef = useRef(keys.latch);
+  useLayoutEffect(() => {
+    latchRef.current = keys.latch;
+  });
 
   useEffect(() => {
     if (!open || host === null) return undefined;
@@ -755,17 +346,59 @@ export function TerminalDrawer({
     };
     setState('connecting');
 
-    const term = (makeTerm ?? defaultMakeTerm)(host);
+    const term = (makeTerm ?? defaultMakeTerm)();
     termRef.current = term;
+    setLiveTerm(term);
+    // THE GRID IS THE WINDOW'S, FIRST AND ONCE (D-5005). Pinned before the
+    // socket exists, so the first byte tmux sends lands in a grid of the size
+    // it was told; and never again, because nothing the glass does is a reason
+    // to move it.
+    term.pin(ATTACH.cols, ATTACH.rows);
+    // ONE HOST, opened into once, ON EVERY POINTER (operator ruling R-LIVE,
+    // 2026-10-15). Whichever position the view puts it in, the terminal is
+    // there before the first fit: its own `propose` is the measurement, and
+    // its textarea is what a tap on the wrapped view focuses. So the cell
+    // probe spec §5.2 gave `colsAt` for a terminal never opened has nothing to
+    // serve; the wrapped view's probe sets its width W alone.
+    term.open(host);
     // A NEW TERMINAL STARTS AT THE BASE SIZE, whatever the last one settled
     // on, and nothing is known about its clip until it has been measured.
     fontRef.current = BASE_CONSOLE_FONT_PX;
     setClipped(false);
-    gridRef.current = fitToWindow(term); // fit-on-open → measured grid rides the URL
+    fitRef.current = null;
+    // AND NOTHING ABOUT ITS VIEW: the last terminal's was chosen for a glass
+    // this one has not measured (a reopened sheet's is still sliding in). The
+    // override alone stands until the first measured fit decides, which on a
+    // glass that has layout is the fit just below, in this same render.
+    showView(chooseView(null, overrideRef.current, null));
+
+    /**
+     * THE BOX IS AT THE BOTTOM, and so is the host's scroll. The grid's 51
+     * rows are fixed, so a glass shorter than them scrolls the host — in the
+     * browser; tmux pans nothing — and Claude Code's input box is on the last
+     * rows. So the host is held at its bottom through every refit (a keyboard
+     * opening, a rotation, the type changing size) UNLESS the operator has
+     * scrolled it: a reader who went up to read the top rows keeps their place
+     * until they scroll back down. `atBottom` is read off the host on every
+     * scroll, the drawer's own included, so a scroll that ends at the bottom
+     * re-arms it whoever made it.
+     */
+    let atBottom = true;
+    const onHostScroll = (): void => {
+      atBottom = host.scrollHeight - host.scrollTop - host.clientHeight <= 1;
+    };
+    const keepBottom = (): void => {
+      if (atBottom) host.scrollTop = host.scrollHeight - host.clientHeight;
+    };
+    host.addEventListener('scroll', onHostScroll, { passive: true });
+
+    fitToWindow(term);   // the type, measured at open where the glass allows
+    keepBottom();
 
     const make = makeSocket ?? ((u: string) => new WebSocket(u));
-    const { cols, rows } = gridRef.current;
-    const ws = make(wsUrl(`/ws/pty/${encodeURIComponent(id)}?cols=${cols}&rows=${rows}`));
+    // THE CONSTANTS, NEVER A MEASUREMENT: whatever the glass, the client the
+    // server attaches is the window's size.
+    const ws = make(wsUrl(`/ws/pty/${encodeURIComponent(id)}?cols=${ATTACH.cols}&rows=${ATTACH.rows}`));
     sockRef.current = ws;
 
     // The SECOND websocket path, and it needs the same treatment as
@@ -805,16 +438,115 @@ export function TerminalDrawer({
     // The gate runs at UPGRADE time, so an open pty survives an auth-lost
     // episode raised anywhere else — a REST 401, or the fleet socket's own
     // probe. Unconditionally bumping `attempt` would close a live terminal and
-    // re-attach it for nothing the moment the operator signed back in, and the
-    // server restores the session's canonical tmux window size on the way past,
-    // so the reader would watch their pane resize for no reason. This is
+    // re-attach it for nothing the moment the operator signed back in: the
+    // reader would watch their pane drop to `attaching…` and repaint for no
+    // reason, and lose a ^C held for a confirm and a latched `ctrl`. This is
     // `ReconnectingSocket.nudge()`'s own early return (`ws.ts`: inert unless
     // started AND down), which the two paths were asymmetric on.
     const unsubAuth = onAuthRegained(() => {
       if (connRef.current !== 'open') setAttempt((a) => a + 1);
     });
 
-    term.onData(typed);
+    /**
+     * THE LATCH'S LETTER (D-5007, plan Task 12; operator ruling R-LIVE,
+     * 2026-10-15). With the bar's `ctrl` latched, the next ASCII letter typed
+     * into the terminal is sent as its control code, through the ^C/^D guard
+     * (`latch.take` sends through it), and the letter itself is not typed.
+     * Where the letter arrives decides how it is stopped:
+     *
+     * - A PHONE'S KEYBOARD hands it over as a `beforeinput` on xterm's textarea
+     *   (`inputLetter`). An `insertText` is cancelled, so it never reaches the
+     *   textarea or xterm. The letter that OPENS a composition (Gboard composes
+     *   every word) comes as an `insertCompositionText`, which a browser does
+     *   not let be cancelled: xterm will still send that composition when it
+     *   ends, so the next chunk it sends is dropped if it is the letter. One
+     *   chunk: the drop is spent on it either way, and never waits to eat a
+     *   letter typed later.
+     * - A KEYBOARD THAT REPORTS REAL KEYS (a physical one; an on-screen one not
+     *   composing) never fires a `beforeinput` for a letter: xterm sends it at
+     *   keydown and cancels the event (`keyLetter`). So the keydown is taken
+     *   here first and stopped, before xterm's own listener on its textarea.
+     *
+     * Both listeners are on the HOST, in the capture phase: the only place that
+     * runs before xterm's listeners on its own textarea. Unlatched, neither
+     * touches anything, and typing reaches the socket exactly as xterm sends it.
+     */
+    let dropOnce: string | null = null;
+    /**
+     * WHILE THE KEYBOARD IS INSERTING TEXT (D-5114, I5).
+     * A keyboard inserts as well as reporting keys: an `input` event's
+     * `insertText`, which xterm sends at once; a composition's commit, which it
+     * reads back a task later; the textarea's growth after a keyCode-229
+     * keydown, also a task later (or at once, when a key ends a composition).
+     * None is a `paste` event, so the paste guard sees none of them, and a
+     * keyboard's clipboard chip or suggestion may well arrive by one. Each opens
+     * a window here, in the capture phase on the host — ahead of xterm's own
+     * listeners on its textarea — and what xterm sends inside it goes out as
+     * `insertedFrame` says: one key's bytes as they are, anything longer as a
+     * paste. Outside a window nothing is touched, so a key, and every reply the
+     * terminal sends of its own (a DCS or OSC report tmux asked for), reaches
+     * the session exactly as xterm sends it.
+     *
+     * TWO TURNS OF THE TASK QUEUE: xterm's own read is a `setTimeout(0)` queued
+     * by its listener, which runs after this one, so a window that closed on
+     * the first turn would close before the text it was opened for.
+     */
+    let inserting = 0;
+    const insertion = (): void => {
+      inserting += 1;
+      setTimeout(() => {
+        setTimeout(() => {
+          inserting -= 1;
+        }, 0);
+      }, 0);
+    };
+    const onInsertKeyDown = (ev: KeyboardEvent): void => {
+      if (ev.keyCode === IME_KEY || ev.isComposing) insertion();
+    };
+    term.onData((data) => {
+      if (dropOnce !== null) {
+        const drop = data === dropOnce;
+        dropOnce = null;
+        if (drop) return;
+      }
+      const out = inserting > 0 ? insertedFrame(data) : data;
+      if (out !== '') typed(out);
+    });
+    const onBeforeInput = (ev: InputEvent): void => {
+      const letter = inputLetter(ev.inputType, ev.data);
+      if (letter === null || !latchRef.current.take(letter)) return;
+      ev.preventDefault();
+      if (!ev.defaultPrevented) dropOnce = letter;
+    };
+    const onKeyDown = (ev: KeyboardEvent): void => {
+      const letter = keyLetter(ev);
+      if (letter === null || !latchRef.current.take(letter)) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+    };
+    /**
+     * THE PASTE GUARD (D-5007, plan Refinement 11; P3 ruled yes: both views).
+     * xterm 6.0.0's own paste brackets the clipboard's text without removing an
+     * end marker inside it, so a clipboard holding `\e[201~` would close the
+     * brackets early and TYPE what follows, Enter included. Every paste in the
+     * host is taken here, in the capture phase, because xterm's own handler on
+     * its textarea stops the event there: a listener that waited for it to
+     * bubble would never run. The browser inserts nothing, xterm never sees it,
+     * and the text goes out as `typedFrame(text)`: sanitised, and bracketed
+     * exactly as xterm would bracket it when it holds a newline.
+     */
+    const onPaste = (ev: ClipboardEvent): void => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const data = typedFrame(ev.clipboardData?.getData('text/plain') ?? '');
+      if (data !== '') typed(data);
+    };
+    host.addEventListener('beforeinput', onBeforeInput, true);
+    host.addEventListener('keydown', onKeyDown, true);
+    host.addEventListener('paste', onPaste, true);
+    host.addEventListener('input', insertion, true);
+    host.addEventListener('compositionend', insertion, true);
+    host.addEventListener('keydown', onInsertKeyDown, true);
 
     // THE WHEEL IS NOT AN ARROW KEY. `tmux attach` puts this client on the
     // ALTERNATE screen (every attach starts ESC[?1049h, measured off a real
@@ -842,102 +574,29 @@ export function TerminalDrawer({
       // the alternate buffer would put arrow keys on the pty, which is the
       // whole defect this handler exists to stop.
       if (!ev.ctrlKey && ev.deltaY < 0) openHistory();
+      // AND THE HOST DOES NOT SCROLL ON IT EITHER (D-5005). The host scrolls
+      // now — the grid's 51 rows are fixed and a short glass shows part of
+      // them — and `false` above stops xterm, not the browser, which would
+      // otherwise scroll the host under the history it just asked for. The
+      // vertical wheel keeps the one meaning it has had; the host's scrollbar
+      // is how a short glass reaches its top rows. A pinch stays the browser's
+      // zoom, and a sideways scroll stays the host's own.
+      if (!ev.ctrlKey && ev.deltaY !== 0 && Math.abs(ev.deltaY) >= Math.abs(ev.deltaX)) {
+        ev.preventDefault();
+      }
       return false;
     });
 
-    /**
-     * THE DOOR A FINGER CAN OPEN. A phone has no wheel, and on this glass there
-     * is nothing to scroll anyway — tmux attaches the client on the alternate
-     * screen, where xterm keeps no scrollback — so the key bar was the only way
-     * in. The gesture still has one obvious meaning, and it is the wheel's:
-     * reach for what is above the screen.
-     *
-     * NOTHING IS PREVENTED HERE. A tap must still reach xterm's textarea, so
-     * the press is only watched, never claimed; the history opens on the move
-     * that crosses the threshold and the pointer is left to xterm either way.
-     *
-     * AND IT IS WATCHED TWICE, because on the phone the pointer half cannot
-     * work alone. vaul installs `preventScrollMobileSafari` while a drawer is
-     * open — `document`, capture phase, `passive: false` — and it calls
-     * `preventDefault()` on touchmove for any touch whose scroll parent is the
-     * document, which on this glass is every touch (`.term-host` and every
-     * xterm element inside it are `overflow: hidden`). Safari answers a
-     * prevented touchmove by tearing down the POINTER stream for that gesture,
-     * so `pointermove` never arrives and the drag that opens the history could
-     * never have fired on an iPhone. It never did: measured on the operator's
-     * own phone across four builds, "не реагує зовсім".
-     *
-     * The touch listeners are not affected by that — `preventDefault` stops
-     * the default action, not the other listeners, and vaul never calls
-     * `stopPropagation`. One finger is still counted once: a touch gesture
-     * takes ownership for its duration and the pointer echo stands down.
-     */
-    let from: { x: number; y: number } | null = null;
-    let openViaTouch = false;
-    const reach = (x: number, y: number): void => {
-      if (from === null) return;
-      const dy = y - from.y;
-      const dx = x - from.x;
-      // DOWN, and more down than sideways: a swipe across the glass is not a
-      // reach for older output, and a wobble is not a swipe. The threshold is
-      // about a row and a half, which is the smallest travel that reads as
-      // deliberate on a phone rather than as a tap that moved.
-      if (dy < TOUCH_OPEN_PX || Math.abs(dx) > Math.abs(dy)) return;
-      from = null;
-      openHistory();
-    };
-    const openDown = (ev: PointerEvent): void => {
-      if (openViaTouch) return;                           // the finger owns this
-      // THE MOUSE IS SELECTING TEXT, NOT REACHING FOR HISTORY — the same
-      // stand-down the history layer's own drag makes one level down, and for
-      // the same reason. xterm starts a selection on mousedown and follows it
-      // with a document-level mousemove; a reader dragging across the live pane
-      // to copy a line got a history layer over their selection, and the
-      // selection with it. The mouse loses nothing by standing down: its
-      // gesture for this is the wheel, which opens the history already.
-      if (ev.pointerType === 'mouse') { from = null; return; }
-      if (ev.defaultPrevented) { from = null; return; }   // xterm's own scrollbar
-      from = { x: ev.clientX, y: ev.clientY };
-    };
-    const openMove = (ev: PointerEvent): void => {
-      if (openViaTouch) return;
-      reach(ev.clientX, ev.clientY);
-    };
-    const openEnd = (): void => { if (!openViaTouch) from = null; };
-    const openTouchStart = (ev: TouchEvent): void => {
-      openViaTouch = true;
-      if (ev.touches.length !== 1) { from = null; return; }  // a pinch, not a reach
-      from = { x: ev.touches[0]!.clientX, y: ev.touches[0]!.clientY };
-    };
-    const openTouchMove = (ev: TouchEvent): void => {
-      if (ev.touches.length !== 1) { from = null; return; }
-      reach(ev.touches[0]!.clientX, ev.touches[0]!.clientY);
-    };
-    const openTouchEnd = (): void => { from = null; openViaTouch = false; };
-    host.addEventListener('pointerdown', openDown);
-    host.addEventListener('pointermove', openMove);
-    host.addEventListener('pointerup', openEnd);
-    host.addEventListener('pointercancel', openEnd);
-    // CAPTURE for the touch pair, and it is insurance rather than a measured
-    // need: xterm 6.0.0 binds no touch listener at all (measured — nothing in
-    // `browser/` listens for one), but it DOES call `stopPropagation()`
-    // unconditionally in its paste handler one level below this host, which is
-    // how the clipboard fix was lost for a day. A listener that must not be
-    // taken away belongs above the elements that could take it.
-    host.addEventListener('touchstart', openTouchStart, { passive: true, capture: true });
-    host.addEventListener('touchmove', openTouchMove, { passive: true, capture: true });
-    host.addEventListener('touchend', openTouchEnd, { passive: true, capture: true });
-    host.addEventListener('touchcancel', openTouchEnd, { passive: true, capture: true });
+    const detachReach = attachReachForHistory(host, openHistory);
 
-    // Later size changes (rotation, keyboard, desktop resize) → refit; only a
-    // changed grid is worth a resize frame.
+    // Later size changes (rotation, keyboard, desktop resize) → refit: the
+    // type follows the glass and the host keeps its bottom. Nothing is SENT —
+    // the client is the window's size whatever the glass does (D-5005).
     const refit = (): void => {
       const t = termRef.current;
       if (!t) return;
-      const next = fitToWindow(t);
-      if (next.cols === gridRef.current.cols && next.rows === gridRef.current.rows) return;
-      gridRef.current = next;
-      sendFrame({ type: 'resize', cols: next.cols, rows: next.rows });
+      fitToWindow(t);
+      keepBottom();
     };
     refitRef.current = refit;
     window.addEventListener('resize', refit);
@@ -946,14 +605,14 @@ export function TerminalDrawer({
     return () => {
       window.removeEventListener('resize', refit);
       window.visualViewport?.removeEventListener('resize', refit);
-      host.removeEventListener('pointerdown', openDown);
-      host.removeEventListener('pointermove', openMove);
-      host.removeEventListener('pointerup', openEnd);
-      host.removeEventListener('pointercancel', openEnd);
-      host.removeEventListener('touchstart', openTouchStart, true);
-      host.removeEventListener('touchmove', openTouchMove, true);
-      host.removeEventListener('touchend', openTouchEnd, true);
-      host.removeEventListener('touchcancel', openTouchEnd, true);
+      host.removeEventListener('scroll', onHostScroll);
+      host.removeEventListener('beforeinput', onBeforeInput, true);
+      host.removeEventListener('keydown', onKeyDown, true);
+      host.removeEventListener('paste', onPaste, true);
+      host.removeEventListener('input', insertion, true);
+      host.removeEventListener('compositionend', insertion, true);
+      host.removeEventListener('keydown', onInsertKeyDown, true);
+      detachReach();
       unsubAuth();
       refitRef.current = null;
       // Detach handlers first so our own close() can't echo a 'down' overlay.
@@ -968,10 +627,17 @@ export function TerminalDrawer({
         /* already closed */
       }
       termRef.current = null;
+      setLiveTerm(null);
       term.dispose();
       // A re-attach is a fresh pane read: a history captured before the drop
       // is a snapshot of a session that has moved on since.
       goHist({ at: 'live' });
+      // So is a ^C held for a confirm: it was asked about the screen this
+      // attach showed, and must not be sent into the next one on a stale Send.
+      cancelHeldKey();
+      // And so is a latch: it was set against this attach's screen, and the
+      // next attach starts unlatched, as it starts with nothing held.
+      latchRef.current.setLatched(false);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sendFrame reads refs only
   }, [open, host, attempt, id, makeSocket, makeTerm]);
@@ -981,364 +647,170 @@ export function TerminalDrawer({
   // coming back to it lands on the pane's newest line, not on a stale screen.
   useEffect(() => {
     if (hist.at !== 'history' || histHost === null) return undefined;
-    const term = (makeHistoryTerm ?? defaultMakeHistoryTerm)(
-      histHost, hist.lines, hist.pane, fontRef.current,
+    // Every gesture, the throw and the terminal itself are `attachHistoryPane`'s
+    // (`historyPane.ts`); this effect is the lifetime and the one way back. The
+    // layer is built at the live pane's type size, and held in `histTermRef`
+    // while it is up so `fitToWindow` can move it with the live one.
+    return attachHistoryPane(
+      histHost, hist, makeHistoryTerm, () => goHist({ at: 'live' }),
+      fontRef.current, histTermRef,
     );
-    // Held so the live pane's next fit can move this layer's type size with
-    // its own (`fitToWindow`); this layer's own refit below only re-fits.
-    histTermRef.current = term;
-    // THE LATCH, AND THE READER'S OWN GESTURE IS WHY IT EXISTS. xterm's
-    // `write(data, done)` parses ASYNCHRONOUSLY, so `done` can land after this
-    // effect has been torn down and has called `dispose()` — and `scrollLines`
-    // on a disposed Terminal throws, out of a callback nothing catches, into
-    // React's commit. A blank drawer and a TypeError.
-    //
-    // THE TEAR-DOWN THAT ACTUALLY RACES IT is a keystroke: the history lands,
-    // xterm starts parsing, and the reader types to go back to live — which is
-    // the drawer's own documented way out and runs this cleanup mid-parse.
-    //
-    // NOT STRICTMODE, and saying so is the point of this paragraph. An earlier
-    // version of this comment named StrictMode's double mount as the hazard.
-    // React double-invokes an effect only on a component's INITIAL mount commit,
-    // and this effect returns early until `hist` flips to 'history' — which
-    // happens later, on a state change of an already-mounted component — so it
-    // is never double-invoked. Measured: with the guard below deleted, a
-    // StrictMode-shaped test stays GREEN. Anyone writing a test for this latch
-    // should reach for the keystroke race; `terminal-scrollback.test.tsx` has it.
-    //
-    // A flag rather than a try/catch: swallowing the throw would also swallow a
-    // real one, and what this needs to express is "the terminal this callback
-    // was written for is gone", which is a fact the effect knows and the
-    // callback does not.
-    let alive = true;
-    term.fit();
-    // AND AGAIN WHENEVER THE GLASS CHANGES SHAPE. Fitted once, the history kept
-    // whatever grid it was born with: a phone rotated while reading went on
-    // wrapping against columns it no longer had, and the keyboard opening did
-    // the same thing a softer way. The live terminal has refit on both events
-    // since it shipped (`refit`, in the attach effect); this is the same pair,
-    // for the layer that exists to be read.
-    //
-    // No grid comparison here, unlike the live one: there is no resize frame to
-    // send and nothing downstream to spare, so a fit that changes nothing is
-    // cheaper than the bookkeeping to avoid it.
-    const refitHistory = (): void => { term.fit(); };
-    window.addEventListener('resize', refitHistory);
-    window.visualViewport?.addEventListener('resize', refitHistory);
-    // ARMED BEFORE THE DEPARTURE IT LATCHES. `onBottom` fires only for a
-    // reader who has been AWAY from the newest line, and the opening scroll
-    // below is that departure. Registered after it, the latch never saw it, so
-    // the first scroll DOWN read as an arrival nobody had left — and returning
-    // to live cost two notches up and two back instead of one each way, which
-    // is exactly what the operator measured.
-    term.onBottom(() => goHist({ at: 'live' }));
-    // A capture is LF-separated; a terminal needs the carriage return too, or
-    // every line starts where the last one ended. Done HERE rather than with
-    // xterm's `convertEol` so the bytes a `HistoryTerm` receives are the same
-    // whoever implements it.
-    term.write(hist.text.replace(/\r?\n/g, '\r\n'), () => {
-      // One notch up, so the gesture that opened this visibly did something —
-      // and so the bottom latch is armed by a reader who is genuinely above
-      // it. INSIDE the parse callback: xterm writes asynchronously, and a
-      // scroll issued beside the write runs against the buffer as it stood
-      // BEFORE the history landed, which moves nothing and arms nothing.
-      //
-      // AND GUARDED, because "asynchronously" includes "after this effect was
-      // torn down" — see the `alive` note above.
-      if (!alive) return;
-      term.scrollLines(-WHEEL_LINES);
-    });
-
-    /**
-     * THE FINGER, because xterm has nothing for it to pan.
-     *
-     * `.xterm-viewport` still carries `overflow-y: scroll`, but it is an empty
-     * leftover — measured on a real Terminal: zero children, empty innerHTML —
-     * and the actual scroll is a virtual VS Code `Scrollable` that re-renders
-     * rows, whose only input is a `wheel` listener. A touch drag across the
-     * glass left `viewportY` exactly where it was and put nothing on the pty,
-     * and so did its pointer-event twin. On top of that the sheet computes
-     * `touch-action: none` over the whole panel, so even a real scroller would
-     * not have been panned. The drag is ours to write or the phone has none.
-     *
-     * `defaultPrevented` IS THE GUARD, and it is not decoration: xterm binds
-     * `pointerdown` on its own scrollbar slider and takes the pointer capture
-     * through `GlobalPointerMoveMonitor`, but calls only `preventDefault()` —
-     * never `stopPropagation()`. The press therefore reaches this element too,
-     * and capturing it here would steal the capture xterm took an instant
-     * earlier and break dragging the scrollbar. Reading the flag rather than
-     * the target's class survives xterm renaming its internals.
-     */
-    let dragging = false;
-    let lastY = 0;
-    /** Sub-row travel, kept across moves: a slow drag is many fractions of a
-     *  row, and truncating each one on its own swallows the whole gesture. */
-    let carry = 0;
-    /** MEASURED ONCE PER GESTURE. A cell cannot change height mid-drag, and
-     *  `getBoundingClientRect` forces layout — reading it on every move is a
-     *  synchronous relayout per frame, beside a terminal that repaints on every
-     *  scroll. 0 means "not measurable yet", so the first move that can measure
-     *  fills it in rather than dividing by a number nobody gave us. */
-    let rowPx = 0;
-
-    /** When the last move was seen, and how fast the finger was going then —
-     *  smoothed, because raw per-move speed on a phone is noise. */
-    let lastT = 0;
-    let vel = 0;
-    /** The running throw, if there is one. */
-    let raf = 0;
-    const stopGlide = (): void => {
-      if (raf !== 0) { cancelAnimationFrame(raf); raf = 0; }
-    };
-
-    /** Turn travel into rows and scroll by them, keeping the sub-row
-     *  remainder. Shared by the finger and by the throw that follows it, so
-     *  the two cannot disagree about which way is older or about what happens
-     *  to the fraction of a row between them. */
-    const advance = (travel: number): number => {
-      const rows = Math.trunc(travel / rowPx);
-      // The content follows the finger: dragging DOWN reaches older output,
-      // which is a scroll UP.
-      if (rows !== 0) term.scrollLines(-rows);
-      const rest = travel - rows * rowPx;
-      // AND THE REMAINDER IS SHOWN, not just carried. Without this the view
-      // only ever moves in whole rows, which is fine at speed and is the whole
-      // of what a decelerating throw looks wrong doing — see `offset`'s own
-      // note. Nothing is snapped back when the motion stops: a view resting
-      // part of a row off its grid is what every pixel-smooth scroller on the
-      // device leaves behind, and snapping to the grid would put back a
-      // hitch at the exact moment this is meant to remove one.
-      term.offset?.(rest);
-      return rest;
-    };
-
-    /**
-     * THE THROW. Everything on a phone keeps moving when the finger leaves and
-     * slows to a stop; a view that halts dead does not read as a scroll at all,
-     * which is what the operator met — "працює виключно поки ведеш пальцем".
-     * The history cannot borrow the platform's deceleration because it is not a
-     * native scroller: xterm's `.xterm-viewport` is an empty leftover and the
-     * real scroll is a virtual re-render. So the curve is written here.
-     *
-     * It carries the finger's own remainder in rather than starting from zero,
-     * so the hand-off is continuous — the throw picks up mid-row exactly where
-     * the drag left off.
-     *
-     * IT DOES NOT KNOW WHERE THE EDGES ARE, deliberately: a throw that runs
-     * past the oldest line simply scrolls nothing for the rest of its curve,
-     * which is invisible and costs one short animation. Asking the terminal for
-     * its viewport position every frame to stop a few hundred milliseconds
-     * earlier would buy a new method on the seam for nothing anyone can see.
-     * The other end needs no such care — arriving at the newest line is what
-     * `onBottom` latches, and it takes the whole layer down with it.
-     */
-    const glide = (v0: number): void => {
-      let v = v0;
-      // Seeded from the same clock the drag measured its speed with —
-      // `requestAnimationFrame`'s argument and `performance.now()` are one
-      // timeline — so the first frame of the throw carries the gap since the
-      // finger left rather than being spent establishing one.
-      let prev = performance.now();
-      const frame = (now: number): void => {
-        const dt = Math.min(now - prev, GLIDE_MAX_STEP_MS);
-        prev = now;
-        carry = advance(v * dt + carry);
-        v *= GLIDE_DECAY ** (dt / FRAME_MS);
-        if (Math.abs(v) < GLIDE_STOP_PX_MS) { raf = 0; return; }
-        raf = requestAnimationFrame(frame);
-      };
-      raf = requestAnimationFrame(frame);
-    };
-
-    const begin = (y: number): void => {
-      // A touch during a throw stops it where it is — the one thing every
-      // scroller on the device does, and the only way to catch a line going
-      // past.
-      stopGlide();
-      dragging = true;
-      lastY = y;
-      lastT = performance.now();
-      vel = 0;
-      carry = 0;
-      rowPx = term.rowHeight();
-    };
-    const step = (y: number): void => {
-      if (!dragging) return;
-      if (rowPx <= 0) {
-        rowPx = term.rowHeight();
-        if (rowPx <= 0) { lastY = y; lastT = performance.now(); return; }
-      }
-      const now = performance.now();
-      const dy = y - lastY;
-      const dt = now - lastT;
-      lastY = y;
-      lastT = now;
-      // A pause discards the speed rather than averaging it away: a finger that
-      // rested and then lifted is placing the view, and the flick it made on
-      // the way in is not what it is asking for now.
-      if (dt > 0) vel = dt > FLING_IDLE_MS ? 0 : vel * (1 - FLING_SMOOTH) + (dy / dt) * FLING_SMOOTH;
-      carry = advance(dy + carry);
-    };
-    const finish = (): void => {
-      dragging = false;
-      if (rowPx > 0 && Math.abs(vel) >= FLING_MIN_PX_MS) glide(vel);
-      // Spent either way: a second `finish` for the same gesture — the pointer
-      // echo of a touch that already ended — must not throw the view twice.
-      vel = 0;
-    };
-
-    /**
-     * TWO INPUT PATHS, AND THE TOUCH ONE IS NOT A LUXURY. The ask picker and
-     * this drawer are siblings that can be open over the same session, and
-     * every open vaul sheet installs a document-level capturing `touchmove`
-     * with `preventDefault` on iOS. Preventing a touch there cancels the
-     * POINTER stream, so a drag driven by pointer events alone dies the moment
-     * another sheet is up — which is how the operator met it: with a picker
-     * raised, the console would not scroll at all. Touch listeners keep
-     * running regardless; `preventDefault` stops the default action, not the
-     * other listeners.
-     *
-     * ONE FINGER IS COUNTED ONCE. A browser fires both families for the same
-     * finger, so a touch gesture takes ownership for its duration and the
-     * pointer echo is ignored until it lifts.
-     */
-    const pointers = new Set<number>();
-    let active: number | null = null;
-    let viaTouch = false;
-
-    const down = (ev: PointerEvent): void => {
-      pointers.add(ev.pointerId);
-      if (viaTouch) return;                       // the finger already owns this
-      // THE MOUSE IS NOT DRAGGING THE VIEW, IT IS SELECTING TEXT. xterm starts
-      // a selection on `mousedown` and follows it with a document-level
-      // `mousemove`; this handler captures the pointer and calls
-      // `preventDefault()` on every move, which suppresses exactly those
-      // compatibility mouse events. Left in, a mouse drag across the history
-      // scrolls it and selects nothing — so the one way to copy a line out of
-      // the console stops working, on the layer that exists for reading.
-      //
-      // The mouse loses nothing by standing down: the history terminal is in
-      // the NORMAL buffer with a real scrollback and no custom wheel handler,
-      // so xterm's own wheel scrolls it. The wheel is the mouse's gesture and
-      // the drag is the finger's.
-      if (ev.pointerType === 'mouse') return;
-      if (ev.defaultPrevented) return;            // xterm's own scrollbar took it
-      // A pinch is not a scroll. Abandon rather than follow one of the two.
-      if (pointers.size > 1) { active = null; finish(); return; }
-      active = ev.pointerId;
-      begin(ev.clientY);
-      try {
-        histHost.setPointerCapture(ev.pointerId);
-      } catch { /* jsdom, or a pointer someone else already holds */ }
-    };
-    const move = (ev: PointerEvent): void => {
-      if (viaTouch || active !== ev.pointerId) return;
-      step(ev.clientY);
-      ev.preventDefault();
-    };
-    const end = (ev: PointerEvent): void => {
-      pointers.delete(ev.pointerId);
-      // AND THIS IS THE HALF THAT MATTERS. When another sheet preventDefaults
-      // the touch at document level, iOS answers by CANCELLING the pointer
-      // stream — a `pointercancel` arrives for a gesture the finger is still
-      // making. Ending the drag on it would kill exactly the drag the touch
-      // path exists to keep alive.
-      if (viaTouch) return;
-      if (active === ev.pointerId || pointers.size === 0) { active = null; finish(); }
-    };
-
-    const touchStart = (ev: TouchEvent): void => {
-      viaTouch = true;
-      if (ev.touches.length !== 1) { finish(); return; }   // a pinch, not a scroll
-      begin(ev.touches[0]!.clientY);
-    };
-    const touchMove = (ev: TouchEvent): void => {
-      if (ev.touches.length !== 1) { finish(); return; }
-      step(ev.touches[0]!.clientY);
-    };
-    const touchEnd = (): void => {
-      finish();
-      viaTouch = false;
-    };
-
-    histHost.addEventListener('pointerdown', down);
-    histHost.addEventListener('pointermove', move);
-    histHost.addEventListener('pointerup', end);
-    histHost.addEventListener('pointercancel', end);
-    // The pointer pair stays in the BUBBLE phase on purpose: `down` reads
-    // `defaultPrevented`, which only carries xterm's scrollbar claim once
-    // xterm's own handler has run. The touch pair goes in the CAPTURE phase,
-    // where nothing below can take it away.
-    histHost.addEventListener('touchstart', touchStart, { passive: true, capture: true });
-    histHost.addEventListener('touchmove', touchMove, { passive: true, capture: true });
-    histHost.addEventListener('touchend', touchEnd, { passive: true, capture: true });
-    histHost.addEventListener('touchcancel', touchEnd, { passive: true, capture: true });
-    return () => {
-      histHost.removeEventListener('pointerdown', down);
-      histHost.removeEventListener('pointermove', move);
-      histHost.removeEventListener('pointerup', end);
-      histHost.removeEventListener('pointercancel', end);
-      histHost.removeEventListener('touchstart', touchStart, true);
-      histHost.removeEventListener('touchmove', touchMove, true);
-      histHost.removeEventListener('touchend', touchEnd, true);
-      histHost.removeEventListener('touchcancel', touchEnd, true);
-      window.removeEventListener('resize', refitHistory);
-      window.visualViewport?.removeEventListener('resize', refitHistory);
-      stopGlide();
-      // Before `dispose()` because that is the order that states the intent — but
-      // the ordering carries NO mechanism, and saying so here is the honest half:
-      // both statements run in this one synchronous block and the parse callback
-      // fires strictly after it returns (measured, xterm 6.0.0 — `dispose()` does
-      // not flush the write queue early), so `alive` is false by then either way.
-      // What is load-bearing is the FLAG, and `terminal-scrollback.test.tsx` reds
-      // when its check is removed. Do not add a test for this line's position; no
-      // test can distinguish the two orderings.
-      alive = false;
-      if (histTermRef.current === term) histTermRef.current = null;
-      term.dispose();
-    };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- goHist writes a ref + state only
   }, [hist, histHost, makeHistoryTerm]);
 
-  // The keyboard inset changes the drawer's inner height — refit after paint.
-  // So can the clip notice: it sits in the header above the glass, and on a
-  // narrow phone it can take the header onto a second line.
+  // The keyboard inset changes the drawer's inner height — refit after paint,
+  // so the host keeps its bottom on the glass that is left. So can the chips:
+  // they sit in the header above the glass, and on a narrow phone they can
+  // take the header onto a second line. And a view that changed has moved the
+  // host: back on the glass, the grid keeps its bottom where the box is.
   useEffect(() => {
     if (!open) return undefined;
     const raf = requestAnimationFrame(() => refitRef.current?.());
     return () => cancelAnimationFrame(raf);
-  }, [kbInset, open, clipped]);
+  }, [kbInset, open, clipped, view, paused, notClaude]);
+
+  // A LATCH THE VIEW NO LONGER SHOWS IS CLEARED. The `ctrl` cap lives on the
+  // wrapped view's overflow row and the grid's strip has none, while the
+  // latch's listeners serve the host in both views: carried into the grid, a
+  // latch would turn the reader's next letter into a control code with nothing
+  // on the glass to say so. Closing the row that holds the cap unlatches it for
+  // the same reason (`KeyBar`).
+  useEffect(() => {
+    if (view !== 'wrapped') latchRef.current.setLatched(false);
+  }, [view]);
 
   /**
-   * THE CLIP NOTICE, in the drawer's header and not on the glass.
+   * THE CHIPS, in the drawer's header and not on the glass (D-5005).
    *
-   * A clip is a standing condition rather than an event, and on a phone it
-   * lasts the whole session. A strip laid over the live terminal would cover
-   * its top row for as long as the drawer is open, so it goes in the header
-   * line above the glass, beside the session it describes. The visible words
-   * are short enough for a 360px phone; the full sentence is the accessible
-   * name.
+   * The view chip replaced the `pans` notice: it names the view, and its
+   * accessible name says why and what a tap does. A view is a standing
+   * condition, and on a phone it lasts the whole session, so it goes in the
+   * header line beside the session it describes rather than over the glass's
+   * top row. Before anything is measured or chosen there is no view to name,
+   * and no chip.
+   *
+   * Beside it, only while the wrapped view reports them: `paused`, while a
+   * selection holds its rows still, and the offer of the grid on a screen that
+   * has shown no Claude Code prompt for two seconds (vim, less). Neither sends
+   * a byte; a tap on a chip keeps the keyboard where it is.
    */
+  const chip = view === null ? null : viewChip(view, clipped);
   const eyebrow = (
     <span className="term-eyebrow">
       <span>{`terminal · ${id}`}</span>
-      {clipped && (
-        <span
-          className="term-clip"
-          role="status"
-          aria-label={`The session window is ${PINNED_WINDOW_COLS} columns wide, wider than this screen, so the view pans to follow the cursor`}
-        >
-          {`window ${PINNED_WINDOW_COLS} cols · pans`}
-        </span>
-      )}
+      <span className="term-chips">
+        {view === 'wrapped' && paused && (
+          <Chip className="term-paused" role="status" aria-label="Updates paused while text is selected">
+            paused
+          </Chip>
+        )}
+        {view === 'wrapped' && notClaude && (
+          <button
+            type="button"
+            className="term-view"
+            aria-label="This screen shows no Claude Code prompt, so the grid may read better. Show the grid"
+            onPointerDown={(e) => e.preventDefault()}
+            onClick={gridForNow}
+          >
+            <Chip className="term-view-pill">not claude code? grid</Chip>
+          </button>
+        )}
+        {chip !== null && (
+          <button
+            type="button"
+            className="term-view"
+            aria-label={chip.label}
+            onPointerDown={(e) => e.preventDefault()}
+            onClick={flipView}
+          >
+            <Chip className="term-view-pill">{`${chip.legend} ⇄`}</Chip>
+          </button>
+        )}
+      </span>
     </span>
   );
 
+  /**
+   * P4 (operator ruling, 2026-10-15): A PHYSICAL ESCAPE GOES TO CLAUDE CODE.
+   * Radix's dismissable layer, under vaul's sheet, catches Escape on the
+   * document in the capture phase, so with nothing in the way one Esc sent
+   * `\e` to the session AND closed the drawer (measured in every engine on the
+   * spike). While xterm's textarea has focus the dismissal is cancelled; the
+   * keydown still reaches xterm, which sends the `\e`. With focus anywhere else
+   * in the sheet, Escape closes it as it always has.
+   */
+  const keepEscapeInTerminal = (e: KeyboardEvent): void => {
+    const ae = document.activeElement;
+    if (host !== null && ae instanceof HTMLTextAreaElement && host.contains(ae)) e.preventDefault();
+  };
+
+  /*
+   * THE HISTORY DOOR, beside the bar's keys and never one of them.
+   *
+   * A phone has no wheel, and MEASURED against the real Terminal, a touch drag
+   * over xterm emits nothing to the pty in either buffer — so touch has no
+   * gesture to fix and no gesture that opens this. This key IS its door, which
+   * is why `KeyBar` renders it in the bar's tail, OUTSIDE both halves of keys,
+   * and why the bar wraps where it does not fit rather than scrolling: the one
+   * affordance touch has must never be the thing that went off the edge.
+   *
+   * An ACTION, not a sequence — outside KEY_SEQ so that table goes on meaning
+   * "bytes the pane receives". The legend is a word rather than a glyph for the
+   * same reason: every other legend here IS the key it transmits, and `⇞` would
+   * promise a PageUp this button never sends.
+   */
+  const histDoor = (
+    <Keycap
+      className="keycap--act"
+      aria-label={atLive ? 'Scroll back' : 'Back to live'}
+      /* A real toggle, not two buttons: one key in, the same key out.
+         `aria-pressed` is what carries the engaged state to AT and,
+         through the attribute selector, to the inverted fill in CSS —
+         one fact, one source, with no `data-` twin to drift from it.
+         ENGAGED MEANS A LAYER IS UP, so it reads the history state
+         itself and not `!atLive`: `reading` and `empty` are also "not
+         live", but in neither has anything been entered, and `empty` is
+         where every reader lands after a swap re-creates the pane with
+         no scrollback. A pressed cap over the live pane tells them they
+         are somewhere they are not. The LEGEND still names the
+         destination in those states, because the cap's job there is to
+         dismiss the notice — engaged and useful are different claims. */
+      aria-pressed={hist.at === 'history'}
+      onPointerDown={(e) => e.preventDefault()} // keep focus in the terminal
+      onClick={() => (atLive ? openHistory() : goHist({ at: 'live' }))}
+    >
+      {/* The legend names the destination, the way every other cap here
+          names what it sends: from live it offers `hist`, and from the
+          history it offers the way back. */}
+      <span aria-hidden="true">{atLive ? 'hist' : 'live'}</span>
+    </Keycap>
+  );
+
   return (
-    <Sheet open={open} onClose={onClose} full title="Terminal" eyebrow={eyebrow}>
+    <Sheet
+      open={open} onClose={onClose} full title="Terminal" eyebrow={eyebrow}
+      onEscapeKeyDown={keepEscapeInTerminal}
+    >
       <div className="term" style={kbInset > 0 ? { paddingBottom: kbInset } : undefined}>
         <div className="term-screen">
-          <div ref={setHost} className="term-host" />
+          {/* The live terminal's ONE host, in one of two positions (D-5005):
+              visible for the grid, where it scrolls if the pinned grid is
+              larger than the glass; off-screen for the wrapped view, keeping
+              the glass's own box, never `display: none`, so xterm still
+              measures, renders and takes the keyboard there. */}
+          <div
+            ref={setHost}
+            className={`term-host ${view === 'wrapped' ? 'term-host--off' : 'term-host--grid'}`}
+          />
+          {view === 'wrapped' && liveTerm !== null && host !== null && (
+            <WrappedView
+              term={liveTerm}
+              host={host}
+              srcCols={ATTACH.cols}
+              onPaused={setPaused}
+              onNotClaude={setNotClaude}
+            />
+          )}
           {/* The history layer sits OVER the live one rather than replacing it:
               the live terminal keeps its socket, its grid and its scroll
               position, so leaving the history is not a re-attach. */}
@@ -1370,79 +842,20 @@ export function TerminalDrawer({
                   <span className="term-overlay-word term-overlay-word--lost">
                     connection lost
                   </span>
-                  <button
-                    type="button"
-                    className="btn-ghost term-retry"
+                  <Button
+                    variant="ghost" className="term-retry"
                     onClick={() => setAttempt((a) => a + 1)}
                   >
                     Reconnect
-                  </button>
+                  </Button>
                 </>
               )}
             </div>
           )}
         </div>
-        <div className="term-keys" role="toolbar" aria-label="Terminal keys">
-          {/* The sequence caps are the half allowed to scroll away. MEASURED:
-              nine caps at --tap-min plus eight gaps and this bar's padding
-              come to 9x44 + 8x8 + 2x12 = 484px before a legend is laid out,
-              and `.sheet-panel--full` drops the drawer's side padding to zero
-              — so on a 390px phone the ninth cap starts at x=428, entirely off
-              the right edge. Survivable while every cap was a key the phone's
-              own keyboard also lacks; not survivable once the strip holds the
-              only door touch has to the console history. */}
-          <div className="term-keys-seq">
-            {QUICK_KEYS.map((k) => (
-              <button
-                key={k.label}
-                type="button"
-                className="keycap"
-                aria-label={k.label}
-                onPointerDown={(e) => e.preventDefault()} // keep focus in the terminal
-                onClick={() => typed(k.seq)}
-              >
-                <span aria-hidden="true">{k.legend}</span>
-              </button>
-            ))}
-          </div>
-          {/* A phone has no wheel, and MEASURED against the real Terminal, a
-              touch drag over xterm emits nothing to the pty in either buffer —
-              so touch has no gesture to fix and no gesture that opens this.
-              This key IS its door, which is why it sits OUTSIDE the scroller
-              above: the one affordance touch has must never be the thing that
-              scrolled off the edge.
-
-              An ACTION, not a sequence — outside QUICK_KEYS so that table goes
-              on meaning "bytes the pane receives". The legend is a word rather
-              than a glyph for the same reason: every other legend here IS the
-              key it transmits, and `⇞` would promise a PageUp this button
-              never sends. */}
-          <button
-            type="button"
-            className="keycap keycap--act"
-            aria-label={atLive ? 'Scroll back' : 'Back to live'}
-            /* A real toggle, not two buttons: one key in, the same key out.
-               `aria-pressed` is what carries the engaged state to AT and,
-               through the attribute selector, to the inverted fill in CSS —
-               one fact, one source, with no `data-` twin to drift from it.
-               ENGAGED MEANS A LAYER IS UP, so it reads the history state
-               itself and not `!atLive`: `reading` and `empty` are also "not
-               live", but in neither has anything been entered, and `empty` is
-               where every reader lands after a swap re-creates the pane with
-               no scrollback. A pressed cap over the live pane tells them they
-               are somewhere they are not. The LEGEND still names the
-               destination in those states, because the cap's job there is to
-               dismiss the notice — engaged and useful are different claims. */
-            aria-pressed={hist.at === 'history'}
-            onPointerDown={(e) => e.preventDefault()} // keep focus in the terminal
-            onClick={() => (atLive ? openHistory() : goHist({ at: 'live' }))}
-          >
-            {/* The legend names the destination, the way every other cap here
-                names what it sends: from live it offers `hist`, and from the
-                history it offers the way back. */}
-            <span aria-hidden="true">{atLive ? 'hist' : 'live'}</span>
-          </button>
-        </div>
+        {view === 'wrapped'
+          ? <KeyBar view="wrapped" guard={keys.guard} latch={keys.latch} action={histDoor} />
+          : <KeyBar view="grid" guard={keys.guard} action={histDoor} />}
       </div>
     </Sheet>
   );

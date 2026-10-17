@@ -10,23 +10,25 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { ProjectRow } from '../../../shared/api';
 import { CLASSES, type ModelClass } from '../../../shared/models';
-import { Sheet } from '../components/Sheet';
-import { Skeleton } from '../components/Skeleton';
-import { toast } from '../components/Toast';
+import { Button, Select, Sheet, toast } from '@ccrc/ui';
 import { accountLabel, accountPool, accountPoolState } from '../lib/accounts';
-import { api, apiErrorText } from '../lib/api';
+import { api, apiErrorText, failedTo } from '../lib/api';
 import { effortOptions, modelOptions } from '../lib/models';
 import { poolSide } from '../lib/pools';
 import { declaredAccountPool } from '../../../shared/poolrule';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
+import { AccountRow } from './AccountRow';
+import { PoolTag } from './PoolTag';
+import { ProjectRowShell } from './ProjectRowShell';
+import { OtherPoolsDisclosure } from './chips';
 import {
-  AccountRow,
   disabledWrappers,
   factsFor,
   pickableWrappers,
   pickerEmptiness,
-} from './SwapSheet';
+} from './accountPicker';
 import { useAccountUsage } from './useProjectedHome';
+import { ProjectPicker } from './ProjectPicker';
 import './fleet.css';
 
 function ProjectRowButton({ row, selected, pool, onPick }: {
@@ -35,22 +37,11 @@ function ProjectRowButton({ row, selected, pool, onPick }: {
   pool: string | null;
   onPick: (project: ProjectRow) => void;
 }): ReactNode {
-  const poolLabel = `pool · ${pool ?? ''}`;
   return (
-    <button
-      type="button"
-      className={selected ? 'proj-row proj-row--selected' : 'proj-row'}
-      onClick={() => onPick(row)}
-    >
-      <span className="proj-glyph" aria-hidden="true">{selected ? '❯' : ''}</span>
-      <span className="proj-name">{row.name}</span>
-      {pool !== null && (
-        <span className="acct-pool" aria-label={poolLabel} title={poolLabel}>
-          {poolLabel}
-        </span>
-      )}
+    <ProjectRowShell selected={selected} name={row.name} onPick={() => onPick(row)}>
+      <PoolTag pool={pool} />
       <span className="proj-dir">{row.workdir}</span>
-    </button>
+    </ProjectRowShell>
   );
 }
 
@@ -75,6 +66,34 @@ export interface NewSessionSheetProps {
   onClose: () => void;
   /** Injectable for tests; defaults to the app-wide fleet store. */
   fleet?: FleetStore;
+}
+
+/** One field of the optional routing row: a label over a select.
+ *
+ *  THREE CALL SITES, all in this sheet. The markup census pairs only two of
+ *  them — the third renders a different NUMBER of literal `<option>`s and an
+ *  exact structural match cannot see past that, which is the limit documented
+ *  in the census itself rather than tuned away. Reading found the third.
+ *
+ *  The options stay `children`: every one of them is derived at render time
+ *  from `CLASSES` or `effortOptions`, and a `options={[...]}` prop would make
+ *  this component decide how a route value is spelled. It should not. */
+function RouteField(
+  { label, value, onChange, children }: {
+    label: string;
+    value: string;
+    onChange: (value: string) => void;
+    children: ReactNode;
+  },
+): ReactNode {
+  return (
+    <label className="route-field">
+      <span className="route-field-label">{label}</span>
+      <Select value={value} onChange={(e) => onChange(e.target.value)}>
+        {children}
+      </Select>
+    </label>
+  );
 }
 
 export function NewSessionSheet({
@@ -262,7 +281,7 @@ export function NewSessionSheet({
       toast(`Starting ${project.name} on ${accountLabel(roster, wrapper)}…`);
       onClose();
     } catch (err) {
-      toast(`Couldn't start — ${apiErrorText(err)}`, 'error');
+      toast(failedTo('start', err), 'error');
     } finally {
       setStarting(false);
     }
@@ -312,22 +331,13 @@ export function NewSessionSheet({
           >
             <span aria-hidden="true">‹</span> on {accountLabel(roster, wrapper)} — change
           </button>
-          <input
-            className="proj-search"
-            type="search"
-            placeholder="Search projects"
-            aria-label="Search projects"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-          {list === null && listError === null ? (
-            <Skeleton lines={4} className="proj-skel" />
-          ) : listError !== null ? (
-            <p className="proj-error" role="alert">
-              Couldn't load the project list — {listError}
-            </p>
-          ) : (
-            <div className="proj-list">
+          <ProjectPicker
+            query={query}
+            onQuery={setQuery}
+            list={list}
+            listError={listError}
+            empty={inPool.length === 0 && otherPool.length === 0}
+          >
               {inPool.map((candidate) => (
                 <ProjectRowButton
                   key={candidate.workdir}
@@ -344,14 +354,11 @@ export function NewSessionSheet({
               )}
               {otherPool.length > 0 && (
                 <>
-                  <button
-                    type="button"
-                    className="acct-disclosure"
-                    aria-expanded={showOther}
-                    onClick={() => setShowOther((shown) => !shown)}
-                  >
-                    show other pools ({otherPool.length})
-                  </button>
+                  <OtherPoolsDisclosure
+                    count={otherPool.length}
+                    shown={showOther}
+                    onToggle={() => setShowOther((shown) => !shown)}
+                  />
                   {showOther && otherPool.map((candidate) => (
                     <ProjectRowButton
                       key={candidate.workdir}
@@ -363,11 +370,7 @@ export function NewSessionSheet({
                   ))}
                 </>
               )}
-              {inPool.length === 0 && otherPool.length === 0 && (
-                <p className="proj-none">No project matches "{query}"</p>
-              )}
-            </div>
-          )}
+          </ProjectPicker>
           {/* The optional routing row (routing spec, slice 4, Task 6): every
               option is derived from `CLASSES`/`effortOptions` at render time,
               never a hand-typed list, so a class or effort rung this build
@@ -375,53 +378,31 @@ export function NewSessionSheet({
               sends no `route` key at all — the coordinator row an ordinary
               start has always landed on. */}
           <div className="route-row">
-            <label className="route-field">
-              <span className="route-field-label">Class</span>
-              <select
-                className="route-select"
-                value={routeClass}
-                onChange={(e) => setRouteClass(e.target.value)}
-              >
-                <option value="">Coordinator row</option>
-                <option value="default">Default</option>
-                {[...CLASSES].reverse().map((c) => (
-                  <option key={c} value={c}>{classDisplayLabel(wrapper, c)}</option>
-                ))}
-              </select>
-            </label>
-            <label className="route-field">
-              <span className="route-field-label">Effort</span>
-              <select
-                className="route-select"
-                value={routeEffort}
-                onChange={(e) => setRouteEffort(e.target.value)}
-              >
-                <option value="">Unset</option>
-                {effortOptions(wrapper, null, false).map((o) => (
-                  <option key={o.route.value} value={o.route.value}>{o.label}</option>
-                ))}
-              </select>
-            </label>
-            <label className="route-field">
-              <span className="route-field-label">Workflows</span>
-              <select
-                className="route-select"
-                value={routeWorkflow}
-                onChange={(e) => setRouteWorkflow(e.target.value)}
-              >
-                <option value="">Unset</option>
-                <option value="on">on</option>
-                <option value="off">off</option>
-              </select>
-            </label>
+            <RouteField label="Class" value={routeClass} onChange={setRouteClass}>
+              <option value="">Coordinator row</option>
+              <option value="default">Default</option>
+              {[...CLASSES].reverse().map((c) => (
+                <option key={c} value={c}>{classDisplayLabel(wrapper, c)}</option>
+              ))}
+            </RouteField>
+            <RouteField label="Effort" value={routeEffort} onChange={setRouteEffort}>
+              <option value="">Unset</option>
+              {effortOptions(wrapper, null, false).map((o) => (
+                <option key={o.route.value} value={o.route.value}>{o.label}</option>
+              ))}
+            </RouteField>
+            <RouteField label="Workflows" value={routeWorkflow} onChange={setRouteWorkflow}>
+              <option value="">Unset</option>
+              <option value="on">on</option>
+              <option value="off">off</option>
+            </RouteField>
           </div>
           <p className="sheet-copy route-note">
             Unset fields take the coordinator row (Opus · ultracode, Sonnet subagents, workflows on).
             If the account can't serve the class today, ccd starts one rung down and restores it when it can.
           </p>
-          <button
-            type="button"
-            className="btn-primary sheet-confirm"
+          <Button
+            variant="primary" className="sheet-confirm"
             disabled={project === null || starting}
             onClick={() => void start()}
           >
@@ -430,7 +411,7 @@ export function NewSessionSheet({
               : project === null
                 ? 'Choose a project'
                 : `Start ${project.name} on ${accountLabel(roster, wrapper)}`}
-          </button>
+          </Button>
         </>
       )}
     </Sheet>

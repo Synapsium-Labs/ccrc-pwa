@@ -1,0 +1,50 @@
+
+ ▐▛███▛█   Claude Code v2.1.300
+▝▜██████▀  Haiku 5.5 · Claude Max
+ ▝▝   ▝▝   <projects-root>/project-a
+
+⚠ Safe mode: all customizations are disabled (CLAUDE.md, skills, plugins, hooks, MCP, agents, and more)
+  Restart without --safe-mode to re-enable
+
+▎ [✻] [✻] [✻] · Share Claude Code and earn $10 in usage credits · /passes
+
+❯ Call AskUserQuestion exactly once with TWO single-select questions. Q1: header "Caching", question "Enable caching?", options Yes, No. Q2: header "Tracing", question "Enable tracing?", options Yes, No. Short
+  descriptions. Afterwards reply with the raw answers only.
+
+⏺ User declined to answer questions
+  ⎿  · Enable caching? (Yes / No)
+     · Enable tracing? (Yes / No)
+
+✻ Worked for 1s · done 4:04
+
+❯ Call AskUserQuestion exactly once with FOUR single-select questions, two options each with short descriptions. Copy each question text EXACTLY, keeping backticks and asterisks. Q1 header "Engine" question "Should the
+  ledger table use Postgres or SQLite?" options Postgres, SQLite. Q2 header "Order" question "When the new release is ready, in which order should the two machines be updated, given that the second machine reads files
+  the first machine writes and caches its settings at start-up, so a change that widens a reader must land before any writer that relies on it?" options "First machine first", "Second machine first". Q3 header "Notes"
+  question "Any notes for the reviewer?" options None, Later. Q4 header "Region" question "Which region?" options EU, US. Afterwards reply with the raw answers only.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+←  ☒ Engine  ☐ Order  ☐ Notes  ☐ Region  ✔ Submit  →
+
+│ When the new release is ready, in which order should the two machines be updated, given that the second machine reads files the first machine writes and caches its settings at start-up, so a change that widens a reader
+│ must land before any writer that relies on it?
+
+❯ 1. First machine first
+     Update the writer machine before the reader
+  2. Second machine first
+     Update the reader machine before the writer
+  3. Type something.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · Tab/Arrow keys to navigate · Esc to cancel
+
+
+
+
+
+
+
+
+
+
+
+

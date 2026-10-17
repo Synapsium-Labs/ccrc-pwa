@@ -1,7 +1,12 @@
 import type { Tmux } from '../exec.js';
-import { autoContinueArmed, hasMenu, parseDialog, turnRunning } from '../pane/dialog.js';
+import { autoContinueArmed, editHintShown, freeTextRow, hasMenu, parseDialog, turnRunning } from '../pane/dialog.js';
 import type { KeyedQueue } from './queue.js';
-import { composePrompt, MAIL_ENVELOPE_FENCE } from '../../../shared/api.js';
+import {
+  composePrompt, isDialogMultiIndexes, isDialogTab, isDialogText, MAIL_ENVELOPE_FENCE,
+  type Dialog, type DialogAnswered, type DialogMultiRefuseCode, type DialogRefuseCode, type DialogTabMoved,
+  type DialogTabRefuseCode, type DialogTextRefuseCode,
+} from '../../../shared/api.js';
+import { CHAT_ABOUT_ROW_RE, FREE_TEXT_PLACEHOLDER_RE, parseAskTabs, reviewRows } from '../../../shared/ask-menu.js';
 
 export interface SendDeps {
   tmux: Tmux;
@@ -41,7 +46,12 @@ export type SendResult =
         // ("esc to interrupt"), and nothing was pressed. This is reachable only
         // when the caller opted in via `refuseIfTurnRunning`; see that option's
         // own docstring.
-        | 'turn-running';
+        | 'turn-running'
+        // D-5046. tmux refused one line's literal send, so the loop stopped
+        // there and pressed no Enter. Not `not-alive`: the session may be
+        // alive, with the lines typed before it still in its box. Before this
+        // the refusal was ignored and the message submitted without the line.
+        | 'type-failed';
       draft?: string;
       pane?: string;
       /**
@@ -56,7 +66,9 @@ export type SendResult =
        * meanings across the failure arms and only two of them support the claim
        * above:
        *  - OUR OWN ECHOED TEXT — `enter-ignored`. The echo loop proved the box
-       *    holds it; both Enters were swallowed. Earns the flag.
+       *    holds it; both Enters were swallowed. Earns the flag, unless the
+       *    marker row is blank, which a row-capped box can show
+       *    (D-5088): a rescue cannot name a blank row.
        *  - OUR OWN MESSAGE, COLLAPSED INTO A PASTE CHIP — the ordinary
        *    `verify-failed`. Earns the flag; see that arm for the provenance
        *    argument, and `PASTE_CHIP` for what the widget is doing.
@@ -86,6 +98,12 @@ export type SendResult =
        * the arm refused with the text sitting complete in the box and the PWA
        * offering no button at all. A FOURTH shape reaches it, and it is exactly
        * the deserving one. The first three still withhold the flag.
+       *
+       * AND THE FOURTH NO LONGER WAITS FOR THE TAP when the server can prove the
+       * chip is its own (D-5087, `ownPasteChip`): it presses
+       * the Enter itself, so that send answers `ok` or, Enter swallowed twice,
+       * `enter-ignored` with this flag. Only a chip-led row that fails one of
+       * `ownPasteChip`'s guards still reaches `verify-failed` with the flag.
        */
       submittable?: boolean };
 
@@ -201,7 +219,7 @@ async function submitted(
   d: SendDeps,
   id: string,
   sleep: (ms: number) => Promise<void>,
-  needle: string,
+  still: StillInBox,
 ): Promise<boolean> {
   for (let i = 0; i < SUBMIT_TRIES; i++) {
     await sleep(SUBMIT_POLL_MS);
@@ -216,11 +234,23 @@ async function submitted(
     // window between the echo poll and this one. Skip the poll instead; if every
     // poll is blind the loop falls out below and the caller refuses.
     if (read.box === 'absent') continue;
-    const draft = read.draft;
-    if (needle === '' ? draft === '' : !draft.startsWith(needle)) return true;
+    if (!still(pane, read.draft)) return true;
   }
   return false;
 }
+
+/**
+ * What says OUR TEXT is still in the box, read from one capture that has a box
+ * (`pane`, and `draft`, its marker row). `submitted` polls it after Enter and
+ * calls the turn taken on the first capture where it is false.
+ */
+type StillInBox = (pane: string, draft: string) => boolean;
+
+/** The proof every send has used: the marker row still starts with `needle`
+ *  (the prefix the echo check proved landed), or, when `needle` is '', the
+ *  marker row is still non-empty. See `submitted`. */
+const stillStartsWith = (needle: string): StillInBox => (_pane, draft) =>
+  needle === '' ? draft !== '' : draft.startsWith(needle);
 
 /**
  * Press Enter (up to twice — the SAME one-retry-after-an-overlay budget
@@ -235,12 +265,12 @@ async function pressEnterAndConfirm(
   d: SendDeps,
   id: string,
   sleep: (ms: number) => Promise<void>,
-  needle: string,
+  still: StillInBox,
 ): Promise<SendResult> {
   await d.tmux.sendKey(id, 'Enter');
-  if (await submitted(d, id, sleep, needle)) return { ok: true };
+  if (await submitted(d, id, sleep, still)) return { ok: true };
   await d.tmux.sendKey(id, 'Enter');
-  if (await submitted(d, id, sleep, needle)) return { ok: true };
+  if (await submitted(d, id, sleep, still)) return { ok: true };
   const stuck = await d.tmux.capture(id);
   const last = draftOfMeasured(await d.tmux.captureAnsi(id) ?? '');
   // THE NAME STAYS `enter-ignored` — we pressed twice and the text never left,
@@ -259,7 +289,13 @@ async function pressEnterAndConfirm(
     pane: (stuck ?? '').slice(-PANE_TAIL),
     // We typed it, we watched it echo, and nothing has cleared it: the box row
     // IS the message and Enter would send exactly it. See `SendResult`.
-    submittable: true,
+    //
+    // EXCEPT ON A BLANK MARKER ROW, which only a row-capped box reaches here
+    // (D-5088: the first row in view can be a blank line of our
+    // message). `submitEnter` refuses a blank row and its route a blank
+    // `expect`, so a flag over `draft: ''` would be a rescue with no subject.
+    // The diagnosis stays.
+    ...(last.draft !== '' ? { submittable: true } : {}),
   };
 }
 
@@ -503,6 +539,214 @@ export function isMailResidue(draft: string): boolean {
   return false;
 }
 
+/**
+ * ONE chip and nothing else on the row, in the two shapes Claude Code 2.1.300
+ * was measured drawing (fixtures `cc300-paste-chip-1000.txt`,
+ * `cc300-paste-chip-lines.txt`): `[Pasted text #N]`, and `[Pasted text #N +M
+ * lines]` when the collapsed read held M newlines. Anchored at BOTH ends, unlike
+ * `PASTE_CHIP`, because the question here is "is this row exactly one chip" and
+ * not "does it start like one": `[Pasted text #3][Pasted text #4]` (one line split
+ * across two reads) and `[Pasted text #8] amet…` (a chip with typed text after
+ * it) both start like one and neither is one.
+ */
+const LONE_PASTE_CHIP = /^\[Pasted text #\d+(?: \+(\d+) lines)?\]$/;
+
+/**
+ * Claude Code collapses a terminal read into a chip only when it holds MORE than
+ * this many characters. Measured on 2.1.300, macOS and Linux alike: 800 is typed
+ * as text, 801 collapses. Characters, not bytes: 801 Cyrillic characters (about
+ * 1.6 KB) typed in one call were drawn as text on macOS, whose reads are about
+ * 1 KB, so no read held more than 800 of them. A read cannot hold more characters
+ * than the call that typed it, so a chip over a line of 800 or fewer is not that
+ * line. If a later version lowers the threshold, a shorter line's chip falls back
+ * to the tap, which is the safe direction.
+ */
+const PASTE_COLLAPSE_FLOOR = 800;
+
+/**
+ * What `sendPrompt` PROVED about the box before its type loop, the provenance
+ * half of D-5087. `proven-empty`: the clobber guard read an
+ * empty box (no marker-row text, no rows below it). `cleared-by-us`: the box
+ * held something and this call's own clear emptied it (`replaceDraft`,
+ * `clearMailResidue`, `ownStrandedClear`). `unproven` is the starting value, so a
+ * path that forgets to establish the proof submits nothing.
+ */
+export type TypeProvenance = 'unproven' | 'proven-empty' | 'cleared-by-us';
+
+/**
+ * D-5087. Is the box holding OUR whole message, collapsed into a
+ * paste chip, so that one Enter sends exactly it? Answers the chip row (the
+ * needle `submitted()` proves departure with) or `null`, and `null` keeps the
+ * ordinary `verify-failed` refusal, `submittable` and all.
+ *
+ * The operator report this answers: a long paragraph pasted into the PWA
+ * composer came back `verify-failed` with the text sitting complete in the box
+ * behind `[Pasted text #N]`, and the send needed a second act, a tap or an Enter
+ * at the terminal, carrying no information the server did not have. A human
+ * looking at `[Pasted text #1]` cannot see what it holds either.
+ *
+ * Four guards, every one required:
+ *  1. PROVENANCE. The box was proven empty, or emptied by this call, before the
+ *     type loop, and this call has held the session's queue slot since. So the
+ *     chip arrived after our own `sendLiteral`. No property of the string says
+ *     it is ours; the sequence does (the same argument `ownStrandedClear`
+ *     makes).
+ *  2. ONE CHIP, AND NOTHING ELSE IN THE BOX. The marker row is exactly one chip
+ *     and there is no box row below it. Two chips (a line split across two
+ *     reads), a chip with typed text after it, or a chip with more rows below
+ *     are all refused: each is either not provably the whole message or not
+ *     provably only ours.
+ *  3. THE LINE COUNT CORRESPONDS. A chip that states `+M lines` holds M newlines,
+ *     so M must be the newlines we typed. A chip that states none holds one line,
+ *     so we must have typed one.
+ *  4. IT COULD HAVE COLLAPSED. The collapsed read holds over
+ *     `PASTE_COLLAPSE_FLOOR` characters, so the line (or, with a line count, the
+ *     message) we typed must too.
+ *
+ * WHAT IT DOES NOT PROVE: that Claude Code kept every character behind the chip.
+ * The tap it replaces did not prove that either; it pressed the same Enter on
+ * the same row. Shapes that DO show a loss, such as macOS's lost head (only the
+ * tail of a long line drawn, no chip), fail guard 2 and keep their refusal.
+ */
+export function ownPasteChip(ansiPane: string, parts: readonly string[], provenance: TypeProvenance): string | null {
+  if (provenance === 'unproven') return null;
+  const read = draftOfMeasured(ansiPane);
+  if (read.box === 'absent') return null;
+  const chip = LONE_PASTE_CHIP.exec(read.draft);
+  if (chip === null || continuationRows(ansiPane).length > 0) return null;
+  const stated = chip[1] === undefined ? 0 : Number(chip[1]);
+  if (stated !== parts.length - 1) return null;
+  const collapsed = chip[1] === undefined ? parts[0]! : parts.join('\n');
+  if (collapsed.length <= PASTE_COLLAPSE_FLOOR) return null;
+  return read.draft;
+}
+
+/** A row that is exactly one chip with no line count: what one typed line over
+ *  `PASTE_COLLAPSE_FLOOR` draws (`cc300-paste-tall-with-chip.txt`,
+ *  `cc300-paste-chip-first-rows-below.txt`). */
+const BARE_PASTE_CHIP = /^\[Pasted text #\d+\]$/;
+/** Any chip anywhere in a row, so a shape `BARE_PASTE_CHIP` does not vouch for
+ *  (two chips, a chip with text after it, a counted chip) refuses rather than
+ *  being read as typed text. */
+const ANY_PASTE_CHIP = /\[Pasted text #\d+/;
+
+/**
+ * The most box rows Claude Code 2.1.300 shows before it scrolls the box inside
+ * itself, for a pane `paneRows` tall: (rows - 10) / 2, wrapped rows counted.
+ * Measured by the investigations at 30, 40, 50 and 70 rows (10, 15, 20, 30) and
+ * here at 50 (`cc300-paste-tall-*.txt`). The fleet pins its windows at 50 rows
+ * (`PINNED_WINDOW_ROWS`), so 20 there. A version that changes it makes a hidden
+ * head unprovable, and the send falls back to today's refusal.
+ */
+const boxRowCap = (paneRows: number): number => Math.floor((paneRows - 10) / 2);
+
+/** Whitespace removed. Claude Code wraps a long line at spaces, and a row is
+ *  read trimmed, so only the non-space characters of a line survive the
+ *  rendering in order; comparing those is comparing what was typed. */
+const squash = (s: string): string => s.replace(/\s+/g, '');
+
+/**
+ * Every row of the box, the marker row first (read as `draftOf` reads it) and
+ * then every row down to the closing rule, BLANK ROWS INCLUDED (a blank row is a
+ * blank line of the message), each with dim spans and SGR stripped and trimmed.
+ * `null` when the capture has no marker row, or no rule closes the box: a box
+ * whose bottom is not on screen cannot be read whole.
+ */
+function boxRows(ansiPane: string): string[] | null {
+  const lines = ansiPane.split('\n');
+  let marker = -1;
+  for (let i = 0; i < lines.length; i++) if (lines[i]!.replace(SGR, '').startsWith('❯')) marker = i;
+  if (marker === -1) return null;
+  const rows = [lines[marker]!.replace(DIM_SPAN, '').replace(SGR, '').slice(1).trim()];
+  for (let i = marker + 1; i < lines.length; i++) {
+    const row = lines[i]!.replace(DIM_SPAN, '').replace(SGR, '');
+    if (isRuleRow(row)) return rows;
+    rows.push(row.trim());
+  }
+  return null;
+}
+
+/**
+ * D-5088. Is the box the RENDERING of what we typed, read whole?
+ * Answers the last `ECHO_NEEDLE` non-space characters in view (the tail
+ * `stillContains` proves departure with), or `null`, which keeps the refusal.
+ *
+ * Reached only when the echo needle never matched, and built for two measured
+ * shapes the needle cannot see (Claude Code 2.1.300, 220x50):
+ *  - THE ROW CAP (`cc300-paste-tall-*.txt`). The box shows at most
+ *    `boxRowCap` rows, keeps the LAST rows in view and draws `❯` on the first
+ *    of them, so a message taller than 20 rows has a later line, or a blank
+ *    one, on the marker row. Today that is `verify-failed` with no
+ *    `submittable`, and one Enter at the terminal sent the whole text intact.
+ *  - A LONG FIRST LINE with lines below it (`cc300-paste-chip-first-rows-below.txt`):
+ *    a chip on the marker row and our own rows under it, which
+ *    `ownPasteChip`'s one-chip guard rightly refuses.
+ *
+ * The box is split into runs at its chip rows, and so is what we typed (every
+ * line over `PASTE_COLLAPSE_FLOOR` is a chip, every other line is text), the
+ * text of each run whitespace-free (`squash`). Guards, all required:
+ *  1. PROVENANCE, exactly as `ownPasteChip`'s.
+ *  2. THE BOX CLOSES, and every chip in it is a bare one (`ANY_PASTE_CHIP` on a
+ *     row that is not `BARE_PASTE_CHIP` refuses).
+ *  3. EVERY CHIP IN VIEW. As many chips on screen as lines we typed over the
+ *     floor. A long line hidden above the window could have lost its head
+ *     (measured on macOS for lines of 1023 to about 1821 characters: only the
+ *     tail is drawn, with no chip), and only a chip in view shows it did not.
+ *     It also refuses the AUTO-SUBMIT SPLIT (measured: M-Enter straight after
+ *     a long first line submitted that line alone, and the rest landed in a
+ *     fresh box), because the sent part's chip is not on screen.
+ *  4. THE TEXT MATCHES. Every run after the first chip in view equals ours;
+ *     the run before it is a SUFFIX of ours (the window may start mid-line).
+ *  5. A HIDDEN HEAD NEEDS A FULL BOX. When that first run is not the whole of
+ *     ours, the box has exactly `boxRowCap` rows for this pane's height: the
+ *     cap is the one measured reason for a head to be out of view.
+ *  6. SOMETHING IN VIEW. Not a box of blank rows.
+ *
+ * WHAT IT DOES NOT PROVE: the characters above the window, which nothing on
+ * screen shows. They are lines of 800 characters or fewer (guard 3), which are
+ * typed as text and never collapse; the echo the ordinary path accepts proves
+ * the first 24 characters of a message and nothing below them.
+ */
+export function ownRenderedBox(ansiPane: string, parts: readonly string[], provenance: TypeProvenance): string | null {
+  if (provenance === 'unproven') return null;
+  const rows = boxRows(ansiPane);
+  if (rows === null) return null;
+  const seen: string[] = [''];
+  for (const row of rows) {
+    if (BARE_PASTE_CHIP.test(row)) seen.push('');
+    else if (ANY_PASTE_CHIP.test(row)) return null;
+    else seen[seen.length - 1] += squash(row);
+  }
+  const typed: string[] = [''];
+  for (const part of parts) {
+    if (part.length > PASTE_COLLAPSE_FLOOR) typed.push('');
+    else typed[typed.length - 1] += squash(part);
+  }
+  if (seen.length !== typed.length) return null;
+  for (let i = 1; i < seen.length; i++) if (seen[i] !== typed[i]) return null;
+  if (!typed[0]!.endsWith(seen[0]!)) return null;
+  const paneRows = ansiPane.replace(/\n$/, '').split('\n').length;
+  if (seen[0] !== typed[0] && rows.length !== boxRowCap(paneRows)) return null;
+  const inView = squash(rows.join(''));
+  if (inView === '') return null;
+  // Trailing backslashes are left out of the tail: Claude Code 2.1.300 turns `\` + Enter into a NEWLINE (measured),
+  // consuming the backslash and submitting nothing, so a tail that included it would vanish from a box still holding
+  // our whole message.
+  return inView.replace(/\\+$/, '').slice(-ECHO_NEEDLE);
+}
+
+/** `ownRenderedBox`'s submit proof: the box, read whole, still CONTAINS the tail
+ *  that was in view (anywhere, not only at its end). False on an emptied box, on
+ *  the queue hint (dim, so stripped), and on anything else typed after our turn
+ *  left. A box whose closing rule is not on the capture counts as still holding
+ *  it: a frame that cannot be read whole is not proof that the turn left. Both
+ *  found by the branch verifier: `\` + Enter adds a row instead of submitting,
+ *  and an "ends with" proof read that as gone. */
+const stillContains = (tail: string): StillInBox => (pane) => {
+  const rows = boxRows(pane);
+  return rows === null || squash(rows.join('')).includes(tail);
+};
+
 /** The exact text `dispatch.ts` types into a resumed worker's box before a
  *  wave brief (`sendPrompt(..., '/clear')`) — the one draft `ownStrandedClear`
  *  can ever be about. */
@@ -665,6 +909,12 @@ export function sendPrompt(
     // any more. The two producers that remain are a HUMAN typing Enter first
     // into the box, and any pre-402 client still on the wire. Both are enough:
     // this guard is what stands between them and a silent concatenation.
+    //
+    // `provenance` records which proof let the type loop run, for the paste-chip
+    // arm below (`ownPasteChip`). It starts `unproven` and only the two proofs
+    // set it: this guard reading an empty box, or one of this call's own clears
+    // returning `cleared`.
+    let provenance: TypeProvenance = 'unproven';
     if (draft || hasContentBelowMarker(pane)) {
       // `resumeIfOwn`'s discrimination: `needle` is derived from THIS call's
       // OWN `text`, and `submitEnter`'s own correspondence gate already
@@ -699,7 +949,7 @@ export function sendPrompt(
       // untouched: F2 (never type over a human mid-sentence) is unaffected,
       // because this branch only ever PRESSES ENTER, never clears or types.
       if (opts.resumeIfOwn && needle !== '' && draft.startsWith(needle) && matchesOwnDraft(pane, parts)) {
-        return pressEnterAndConfirm(d, id, sleep, needle);
+        return pressEnterAndConfirm(d, id, sleep, stillStartsWith(needle));
       }
       // `clearMailResidue`: the box holds MACHINE residue this system's OLD
       // typed-envelope lane left behind (a paste-chip collapse or a stranded
@@ -727,6 +977,7 @@ export function sendPrompt(
         if (cleared.state === 'unreadable') return { ok: false, error: 'box-unreadable' };
         if (cleared.state === 'residue') return { ok: false, error: 'draft-clear-failed', draft: cleared.draft };
         // cleared.state === 'cleared' → fall through to the type loop below.
+        provenance = 'cleared-by-us';
       } else if (!opts.replaceDraft) {
         // `boxText`, not `draft`: the operator is being shown what this refusal
         // is protecting, and every row of it is at stake — the conflict sheet
@@ -751,11 +1002,23 @@ export function sendPrompt(
         // built from a scan that found no box.
         if (cleared.state === 'unreadable') return { ok: false, error: 'box-unreadable' };
         if (cleared.state === 'residue') return { ok: false, error: 'draft-clear-failed', draft: cleared.draft };
+        provenance = 'cleared-by-us';
       }
+    } else {
+      provenance = 'proven-empty';
     }
+    // D-5046: every line's send is CHECKED, and the first refusal stops the
+    // loop before another key. The echo proof below reads the first line's
+    // needle only, so a line tmux refused used to leave a hole in the middle
+    // of the message while the echo still matched and Enter still went: the
+    // session got the message without that line, and the caller got `ok`.
+    // What was typed so far stays in the box. The attachment lane's failed-echo
+    // clear below is NOT run on this arm: with `--` in place, what is left to
+    // make tmux refuse a literal is the session or the link failing (inferred,
+    // not measured), and a clear would meet the same failure.
     for (let i = 0; i < parts.length; i++) {
       if (i > 0) await d.tmux.sendKey(id, 'M-Enter');
-      await d.tmux.sendLiteral(id, parts[i]!);
+      if (!(await d.tmux.sendLiteral(id, parts[i]!))) return { ok: false, error: 'type-failed' };
     }
 
     // Wait for the box to echo what we typed. This POLLS rather than taking one
@@ -883,11 +1146,16 @@ export function sendPrompt(
       // for "a live pane whose box read empty" and so could not be read back
       // safely at all; the measured reading carries that distinction itself.
       let lastBox: BoxRead | null = null;
+      // The capture `lastBox` was read from, set in the same breath, so it is
+      // null exactly when `lastBox` is: the paste-chip arm below reads the
+      // whole box from it, not just the marker row `lastBox` carries.
+      let lastPane: string | null = null;
       for (let i = 0; i < ECHO_TRIES && !echoed; i++) {
         await sleep(ECHO_POLL_MS);
         const ansi = await d.tmux.captureAnsi(id);
         if (ansi === null) continue;
         lastBox = draftOfMeasured(ansi);
+        lastPane = ansi;
         if (lastBox.box === 'absent') continue;
         if (lastBox.draft.startsWith(needle)) echoed = true;
       }
@@ -898,7 +1166,26 @@ export function sendPrompt(
         // made a dead pane byte-identical to a live one that never rendered.
         // The attachment path's own clear reports `dead` for exactly this and
         // returns `not-alive`; this is the same question and the same answer.
-        if (lastBox === null) return { ok: false, error: 'not-alive' };
+        if (lastBox === null || lastPane === null) return { ok: false, error: 'not-alive' };
+        // D-5087: the box holds OUR whole message behind ONE
+        // paste chip, proven by `ownPasteChip`'s four guards. Then the needle
+        // never matching is the widget's rendering, not a failed send, and the
+        // Enter the operator would otherwise press (a tap, or at the terminal)
+        // is pressed here, with the same submit proof every send gets: the chip
+        // row must leave the box (`submitted`). An Enter swallowed twice comes
+        // back `enter-ignored` with `submittable`, the chip as its draft. Any
+        // other shape, chips that fail a guard included, falls through to the
+        // refusal below exactly as before.
+        const ownChip = ownPasteChip(lastPane, parts, provenance);
+        if (ownChip !== null) return pressEnterAndConfirm(d, id, sleep, stillStartsWith(ownChip.slice(0, ECHO_NEEDLE)));
+        // D-5088: the box is the RENDERING of what we typed, read
+        // whole: a row-capped box whose marker row is a later line (or a blank
+        // one), or long lines drawn as chips among our own rows. Proven by
+        // `ownRenderedBox`'s guards, and submitted with the proof that OUR TAIL
+        // (the last characters in view) left the box, since the marker row of a
+        // row-capped box is no part of the message we can name in advance.
+        const ownTail = ownRenderedBox(lastPane, parts, provenance);
+        if (ownTail !== null) return pressEnterAndConfirm(d, id, sleep, stillContains(ownTail));
         // THE TEXT STAYS IN THE BOX — no clearBox, no C-u (operator ruling:
         // refuse, never destroy). That was already true; what was missing was
         // saying so. Hand back the box row, FOR DISPLAY, exactly as the
@@ -910,7 +1197,9 @@ export function sendPrompt(
         // fragment, which is the one shape this flag was invented to keep a
         // rescue away from. The case that would deserve it cannot arrive here:
         // a box holding our whole message sets `echoed`. See
-        // `SendResult.submittable`.
+        // `SendResult.submittable`. (Two corrections stand below and above
+        // this paragraph: a chip-led row is the FOURTH SHAPE, and a box the two
+        // arms above can read whole as ours never reaches here at all.)
         //
         // The pane tail is a PLAIN capture, taken once, here — it is display
         // for a human, and the escape codes would only make it unreadable.
@@ -946,9 +1235,12 @@ export function sendPrompt(
         // read, so a chip verifies as a chip. Nothing downstream needs to learn
         // about paste chips; this arm only stops withholding the flag.
         //
-        // It stays a REFUSAL, deliberately: the operator taps Send it. The
-        // machine does not submit a box it could not read, which is the whole
-        // of §4.1's argument and is untouched.
+        // It stays a REFUSAL HERE, for every chip `ownPasteChip` above would not
+        // vouch for (two chips on the row, a chip with rows below it, a line
+        // count that is not ours, a line too short to have collapsed): the
+        // operator taps Send it. The machine does not submit a box it could not
+        // read, which is the whole of §4.1's argument and is untouched. The one
+        // shape it now submits itself is the one it CAN read whole.
         return {
           ok: false, error: 'verify-failed', pane: (after ?? '').slice(-PANE_TAIL),
           draft: lastDraft,
@@ -968,7 +1260,7 @@ export function sendPrompt(
     // it landed. (`pressEnterAndConfirm` — shared with the `resumeIfOwn`
     // branch above, which presses Enter on text already sitting in the box
     // instead of reaching this point at all.)
-    return pressEnterAndConfirm(d, id, sleep, needle);
+    return pressEnterAndConfirm(d, id, sleep, stillStartsWith(needle));
   });
 }
 
@@ -1134,10 +1426,76 @@ export function submitEnter(
     // The same proof sendPrompt uses: OUR TEXT left the box, not "the box is
     // empty" — a busy session swaps the row for its queue hint instead.
     const needle = draft.slice(0, ECHO_NEEDLE);
-    return (await submitted(d, id, sleep, needle))
+    return (await submitted(d, id, sleep, stillStartsWith(needle)))
       ? { ok: true as const }
       : { ok: false, error: 'enter-ignored' as const };
   });
+}
+
+/** `answerDialog`'s answer. The refusals are `DialogRefuseCode` (`shared/api.ts`), where each is described. */
+export type DialogResult = DialogAnswered | { ok: false; error: DialogRefuseCode };
+
+/** `settleNext`'s pause between captures, and its wall-clock budget from the answer's last key. */
+const SETTLE_POLL_MS = 100;
+const SETTLE_BUDGET_MS = 1500;
+
+/** What a capture shows, as the session stream would frame it: the menu `parseDialog` reads, or null for no menu
+ *  (the same `hasMenu` gate as `sessionws.ts`'s `checkDialog`, SGR stripped). */
+function screenOf(pane: string): Dialog | null {
+  return hasMenu(pane.replace(SGR, '')) ? parseDialog(pane) : null;
+}
+
+/**
+ * The screen an answer moved the pane to (decision `ask-answer-returns-next-screen`): captured every 100 ms after the
+ * answer's last key, for at most 1.5 s of wall-clock time (`d.now`; each capture is raced against what is left of it,
+ * so a slow remote capture cannot hold the session's keyboard queue past it), until the pane shows a screen other than
+ * the one answered (`still` says which screens are still that one) TWICE IN A ROW, so a capture taken mid-repaint is never returned as the next screen. The
+ * screen is a Dialog, or null for no menu at all (the ask was submitted or declined). Absent (`{}`) when the pane did
+ * not settle on another screen within the budget, which leaves the caller on the session stream's next frame, as before.
+ *
+ * Why it exists (the 2026-10-16 report): the sheet that answered the last question learned of the review screen only
+ * from the stream's 2 s poll. One poll that saw no menu sent `dialog_cleared`, and until a later poll sent the review,
+ * the envelope sheet had nothing to match and showed "Open terminal to answer". The answer's own route has the
+ * keyboard queue and the pane: it can say where the pane went.
+ *
+ * A failed capture (null) is no reading: it neither moves nor settles. Reads only; it never sends a key.
+ */
+async function settleNext(
+  d: SendDeps, id: string, still: (dialog: Dialog) => boolean, sleep: (ms: number) => Promise<void>,
+): Promise<{ next?: Dialog | null }> {
+  const now = d.now ?? Date.now;
+  const deadline = now() + SETTLE_BUDGET_MS;
+  let seen: { next: Dialog | null; key: string } | null = null;
+  for (;;) {
+    if (now() >= deadline) return {};
+    await sleep(Math.min(SETTLE_POLL_MS, deadline - now()));
+    if (now() >= deadline) return {};
+    const pane = await captureWithin(d, id, deadline - now());
+    if (now() >= deadline || pane === OUT_OF_TIME) return {};
+    if (pane === null) continue;
+    const next = screenOf(pane);
+    if (next !== null && still(next)) {
+      seen = null;
+      continue;
+    }
+    const key = next === null ? '' : `${next.id}\n${next.parsed ? '' : next.raw}`;
+    if (seen !== null && seen.key === key) return { next };
+    seen = { next, key };
+  }
+}
+
+const OUT_OF_TIME = Symbol('out-of-time');
+
+/** One capture, given up on after `ms` of real time. On the fleet a capture is a remote call that can wait 15 s, and
+ *  `settleNext` runs inside the session's keyboard queue: the budget has to bound the wait, not only the count. A
+ *  capture given up on is left to finish on its own; nothing reads it. */
+function captureWithin(d: SendDeps, id: string, ms: number): Promise<string | null | typeof OUT_OF_TIME> {
+  let timer: NodeJS.Timeout | undefined;
+  const out = new Promise<typeof OUT_OF_TIME>((resolve) => {
+    timer = setTimeout(() => resolve(OUT_OF_TIME), Math.max(0, ms));
+    timer.unref?.();
+  });
+  return Promise.race([d.tmux.capture(id), out]).finally(() => clearTimeout(timer));
 }
 
 /**
@@ -1145,34 +1503,382 @@ export function submitEnter(
  * confirming. Refuses when the on-screen dialog no longer matches `dialogId`
  * (stale) and never presses Enter unless the re-captured pane proves the
  * marker landed on the requested option.
+ *
+ * Never on an AskUserQuestion's free-text row (D-5045): Enter there while it
+ * is empty rejects the WHOLE ask, every answered question with it, and a row
+ * that holds text would be submitted as an answer the caller never typed here.
+ * `freeTextRow` is asked twice. First on the screen the request was checked
+ * against, before any key. Then on the screen the walk landed on, before
+ * Enter, because the pane can move on between the two captures and put the
+ * free-text row under the requested index. `walk-failed` cannot see that: the
+ * cursor IS on that index. Walking THROUGH the row to "Chat about this" stays
+ * allowed. Up and Down never select or submit, and Enter on Chat after such a
+ * walk was measured to give Chat's own outcome.
+ *
+ * Never on an unparsed menu (`unparsed-dialog`), checked on both screens: its `selectedIndex` is a constant 1 that
+ * proves nothing about the cursor. A multiSelect question is one (D-5048 keeps it `parsed: false`, its rows on
+ * `Dialog.multi`), and Enter there toggles a box, ticks the empty free-text box, or commits the question from
+ * Next/Submit, measured on 2.1.300. `/dialog/multi` answers it.
  */
 export function answerDialog(
   d: SendDeps,
   id: string,
   dialogId: string,
   optionIndex: number,
-): Promise<{ ok: true } | { ok: false; error: 'not-alive' | 'stale-dialog' | 'walk-failed' }> {
+): Promise<DialogResult> {
   const sleep = d.sleep ?? defaultSleep;
-  return d.queue.run(id, async (): Promise<{ ok: true } | { ok: false; error: 'not-alive' | 'stale-dialog' | 'walk-failed' }> => {
+  return d.queue.run(id, async (): Promise<DialogResult> => {
     const pane = await d.tmux.capture(id);
     if (pane === null) return { ok: false, error: 'not-alive' };
 
     const dialog = parseDialog(pane);
     if (!dialog || dialog.id !== dialogId) return { ok: false, error: 'stale-dialog' };
+    if (freeTextRow(pane) === optionIndex) return { ok: false, error: 'free-text-row' };
+    if (!dialog.parsed) return { ok: false, error: 'unparsed-dialog' };
 
-    const delta = optionIndex - dialog.selectedIndex;
-    const key = delta > 0 ? 'Down' : 'Up';
-    for (let i = 0; i < Math.abs(delta); i++) {
-      await d.tmux.sendKey(id, key);
-      await sleep(150);
-    }
+    await walkCursor(d, id, dialog.selectedIndex, optionIndex, sleep);
 
     const after = await d.tmux.capture(id);
     const landed = after === null ? null : parseDialog(after);
-    if (!landed || landed.selectedIndex !== optionIndex) return { ok: false, error: 'walk-failed' };
+    if (after === null || !landed) return { ok: false, error: 'walk-failed' };
+    if (!landed.parsed) return { ok: false, error: 'unparsed-dialog' };
+    if (landed.selectedIndex !== optionIndex) return { ok: false, error: 'walk-failed' };
+    if (freeTextRow(after) === optionIndex) return { ok: false, error: 'free-text-row' };
 
     await d.tmux.sendKey(id, 'Enter');
-    return { ok: true };
+    return { ok: true, ...(await settleNext(d, id, (now) => now.id === dialogId, sleep)) };
+  });
+}
+
+/** The pause after each walk key, so the TUI has repainted the cursor before the next key or the landing capture. */
+const WALK_STEP_MS = 150;
+
+/**
+ * Walk a menu's ❯ cursor from row `from` to row `to`: one Down (or Up) per row, with a pause after each. Up and Down
+ * only move the cursor. They never select, submit or type, which is why a walk is safe across any row, the free-text
+ * row included. The one walk `answerDialog` and `answerDialogText` (D-5047) both send. Each caller re-captures
+ * afterwards and proves where the cursor landed before it presses anything else.
+ */
+async function walkCursor(
+  d: SendDeps, id: string, from: number, to: number, sleep: (ms: number) => Promise<void>,
+): Promise<void> {
+  const delta = to - from;
+  const key = delta > 0 ? 'Down' : 'Up';
+  for (let i = 0; i < Math.abs(delta); i++) {
+    await d.tmux.sendKey(id, key);
+    await sleep(WALK_STEP_MS);
+  }
+}
+
+/** `answerDialogText`'s answer. The refusals are `DialogTextRefuseCode` (`shared/api.ts`), where each is described. */
+export type DialogTextResult = DialogAnswered | { ok: false; error: DialogTextRefuseCode };
+
+/** Whitespace runs collapsed and the ends trimmed: how a row's text and the caller's text are compared. The pane keeps
+ *  no run: `leftCol` cuts a label at two spaces, and a wrapped answer's rows are joined back with one space. */
+const collapse = (s: string): string => s.replace(/\s+/g, ' ').trim();
+
+/** What a parsed menu row shows: its label, then its description. A typed answer longer than one screen row is read
+ *  as its first row (the label) and the rest (the description), so the two together are the whole text (measured
+ *  exact for a 1000-character answer, `cc300-ask-freetext-1000.txt`). */
+const rowText = (row: Dialog['options'][number]): string =>
+  collapse(row.description === undefined ? row.label : `${row.label} ${row.description}`);
+
+/**
+ * Type `text` into an AskUserQuestion's free-text ("Type something.") row and submit it as the answer (D-5047,
+ * `POST /api/sessions/:id/dialog/text`). Enter on that row while it is EMPTY rejects the WHOLE ask and discards every
+ * question already answered (measured on Claude Code 2.1.300 and 2.1.291), so each step is proved on a fresh capture:
+ *
+ *  1. `isDialogText` (`shared/api.ts`) or `bad-text`, before the pane is touched.
+ *  2. The menu is the one the caller was shown (`stale-dialog`), and the row is its free-text row (`freeTextRow`), read
+ *     off a parsed menu (`not-free-text`). An unparsed multiSelect question has no parsed rows, so free text inside a
+ *     multiSelect is refused here (not in v1). The row is either the empty placeholder, which is typed into, or it
+ *     already holds exactly this text, the retry arm below. Any other text in it is `not-free-text`: typing appends.
+ *  3. The walk (`walkCursor`, shared with `answerDialog`).
+ *  4. FOCUS: a capture shows the same title, the cursor on the row, the row still as step 2 read it, and the footer's
+ *     edit hint (`editHintShown`). Measured: the hint outlives the row after a walk through it, so it never proves
+ *     focus alone. Otherwise `focus-failed`, with nothing typed.
+ *  5. The text, after tmux's `--` (D-5046). A literal send tmux refuses is `echo-failed`, with no Enter.
+ *  6. ECHO, polled as `sendPrompt` polls its own: a capture shows the same title, the cursor still on the row, and the
+ *     row holding exactly the text. The dialog id is NOT compared: typing changes it, since it hashes the labels and
+ *     the row's label is now the text. A row that still reads as the placeholder proves nothing, even when the text
+ *     is those very words. Otherwise `echo-failed`, and NO Enter.
+ *  7. Enter.
+ *
+ * The retry arm: a send that typed but never proved its echo leaves the text in the row. Measured: the text survives
+ * stepping off and back on, the hint returns on the held row, and Enter there submits the text. So a row that holds
+ * exactly this text is walked to and proved at step 4 (which then proves the echo too), and submitted without typing.
+ */
+export function answerDialogText(
+  d: SendDeps,
+  id: string,
+  dialogId: string,
+  optionIndex: number,
+  text: string,
+): Promise<DialogTextResult> {
+  if (!isDialogText(text)) return Promise.resolve({ ok: false, error: 'bad-text' });
+  const sleep = d.sleep ?? defaultSleep;
+  const want = collapse(text);
+  return d.queue.run(id, async (): Promise<DialogTextResult> => {
+    const pane = await d.tmux.capture(id);
+    if (pane === null) return { ok: false, error: 'not-alive' };
+
+    const dialog = parseDialog(pane);
+    if (!dialog || dialog.id !== dialogId) return { ok: false, error: 'stale-dialog' };
+    const row = dialog.options.find((o) => o.index === optionIndex);
+    if (row === undefined || freeTextRow(pane) !== optionIndex) return { ok: false, error: 'not-free-text' };
+    const held = !FREE_TEXT_PLACEHOLDER_RE.test(row.label);
+    if (held && rowText(row) !== want) return { ok: false, error: 'not-free-text' };
+
+    /** Is `screen` this request's row: the same title, the cursor on it, and holding what this arm needs? */
+    const onRow = (screen: Dialog | null, holds: 'empty' | 'text'): boolean => {
+      if (screen === null || screen.title !== dialog.title || screen.selectedIndex !== optionIndex) return false;
+      const at = screen.options.find((o) => o.index === optionIndex);
+      if (at === undefined) return false;
+      const placeholder = FREE_TEXT_PLACEHOLDER_RE.test(at.label);
+      return holds === 'empty' ? placeholder : !placeholder && rowText(at) === want;
+    };
+
+    await walkCursor(d, id, dialog.selectedIndex, optionIndex, sleep);
+
+    const after = await d.tmux.capture(id);
+    if (after === null || !onRow(parseDialog(after), held ? 'text' : 'empty') || !editHintShown(after)) {
+      return { ok: false, error: 'focus-failed' };
+    }
+
+    if (!held) {
+      if (!(await d.tmux.sendLiteral(id, text))) return { ok: false, error: 'echo-failed' };
+      let echoed = false;
+      for (let i = 0; i < ECHO_TRIES && !echoed; i++) {
+        await sleep(ECHO_POLL_MS);
+        const seen = await d.tmux.capture(id);
+        echoed = seen !== null && onRow(parseDialog(seen), 'text');
+      }
+      if (!echoed) return { ok: false, error: 'echo-failed' };
+    }
+
+    await d.tmux.sendKey(id, 'Enter');
+    // Typing changed this screen's id (it hashes the row's label), so "still this question" is its title and every
+    // other row's label, the pwa's `questionKey` rule.
+    const others = (screen: Dialog): string[] => screen.options.filter((o) => o.index !== optionIndex).map((o) => o.label);
+    const same = (screen: Dialog): boolean =>
+      screen.parsed && screen.title === dialog.title && others(screen).join('\n') === others(dialog).join('\n');
+    return { ok: true, ...(await settleNext(d, id, same, sleep)) };
+  });
+}
+
+/** `answerDialogMulti`'s answer. The refusals are `DialogMultiRefuseCode` (`shared/api.ts`), where each is described. */
+export type DialogMultiResult = DialogAnswered | { ok: false; error: DialogMultiRefuseCode };
+
+/**
+ * Answer a multiSelect AskUserQuestion question (D-5048, `POST /api/sessions/:id/dialog/multi`): leave exactly the
+ * boxes `optionIndexes` names ticked, then commit the question. Measured on Claude Code 2.1.300 (2.1.280 agrees):
+ *  - a digit k toggles box k, ticking or unticking it, and the cursor does not move;
+ *  - Enter TOGGLES the cursor row and commits nothing, which is why `answerAsk` refuses this question;
+ *  - Tab from an option row commits the ticks and moves on, to the next question or the review screen;
+ *  - with the cursor on the free-text row a digit is TYPED into it, and Tab on the `Next` row after a walk through the
+ *    free-text row was swallowed, the screen byte-identical;
+ *  - the answer lists the boxes in the order they were ticked, and a revisited question keeps its ticks.
+ *
+ * So, each step on a fresh capture:
+ *  1. `isDialogMultiIndexes` (`shared/api.ts`) or `bad-indexes`, before the pane is touched.
+ *  2. The menu is the one the caller was shown (`stale-dialog`; the id holds across ticks and cursor moves), and it is
+ *     a multiSelect question `parseDialog` reads into `Dialog.multi` (`not-multiselect`).
+ *  3. Every index is one of the question's own options (`not-an-option`): never the free-text row, which v1 does not
+ *     answer, nor `Chat about this`.
+ *  4. The free-text box is clear (`free-text-ticked`), since Tab would commit it with the options.
+ *  5. The cursor rests on an option row and the footer shows no edit hint (`cursor-not-on-option`). Nothing walks it
+ *     there: on the free-text row a digit is typed, and below it Tab was swallowed.
+ *  6. A digit for each box whose tick differs from the wanted set: those to untick first, in screen order, then those
+ *     to tick, in the order asked, so the answer lists them that way after any box already ticked.
+ *  7. TICKS, polled as `sendPrompt` polls its echo: a capture shows the same dialog id, exactly the wanted boxes
+ *     ticked, the free-text box clear, the cursor on the row it was on, and no edit hint. Else `ticks-failed`, NO Tab.
+ *  8. Tab.
+ *  9. MOVED, polled the same way: a capture shows a menu under another TITLE, the next question or the review screen
+ *     (a multiSelect question is always followed by one of them). Not the id: text typed into the free-text row
+ *     changes the id under the same title, and that is no commit. Else `commit-failed`.
+ *
+ * Every proof is a capture, never a key's exit code: a digit that did not land fails step 7, a Tab that did not land
+ * fails step 9.
+ */
+export function answerDialogMulti(
+  d: SendDeps,
+  id: string,
+  dialogId: string,
+  optionIndexes: readonly number[],
+): Promise<DialogMultiResult> {
+  if (!isDialogMultiIndexes(optionIndexes)) return Promise.resolve({ ok: false, error: 'bad-indexes' });
+  const sleep = d.sleep ?? defaultSleep;
+  const want = new Set(optionIndexes);
+  return d.queue.run(id, async (): Promise<DialogMultiResult> => {
+    const pane = await d.tmux.capture(id);
+    if (pane === null) return { ok: false, error: 'not-alive' };
+
+    const dialog = parseDialog(pane);
+    if (!dialog || dialog.id !== dialogId) return { ok: false, error: 'stale-dialog' };
+    const multi = dialog.multi;
+    if (multi === undefined) return { ok: false, error: 'not-multiselect' };
+    const option = (i: number) => multi.options.find((o) => o.index === i);
+    if (optionIndexes.some((i) => option(i) === undefined)) return { ok: false, error: 'not-an-option' };
+    if (multi.freeText?.checked === true) return { ok: false, error: 'free-text-ticked' };
+    const cursor = multi.cursor;
+    if (typeof cursor !== 'number' || option(cursor) === undefined || editHintShown(pane)) {
+      return { ok: false, error: 'cursor-not-on-option' };
+    }
+
+    const untick = multi.options.filter((o) => o.checked && !want.has(o.index)).map((o) => o.index);
+    const tick = optionIndexes.filter((i) => !option(i)!.checked);
+    for (const k of [...untick, ...tick]) {
+      await d.tmux.sendKey(id, String(k));
+      await sleep(WALK_STEP_MS);
+    }
+
+    /** Does `screen` show this question with exactly the wanted ticks, the cursor where it was, and no hint? */
+    const ticked = (screen: string | null): boolean => {
+      if (screen === null || editHintShown(screen)) return false;
+      const now = parseDialog(screen);
+      if (now === null || now.id !== dialogId || now.multi === undefined) return false;
+      return now.multi.cursor === cursor && now.multi.freeText?.checked !== true &&
+        now.multi.options.every((o) => o.checked === want.has(o.index));
+    };
+    let proved = false;
+    for (let i = 0; i < ECHO_TRIES && !proved; i++) {
+      await sleep(ECHO_POLL_MS);
+      proved = ticked(await d.tmux.capture(id));
+    }
+    if (!proved) return { ok: false, error: 'ticks-failed' };
+
+    await d.tmux.sendKey(id, 'Tab');
+
+    let moved = false;
+    for (let i = 0; i < ECHO_TRIES && !moved; i++) {
+      await sleep(ECHO_POLL_MS);
+      const seen = await d.tmux.capture(id);
+      const next = seen === null ? null : parseDialog(seen);
+      moved = next !== null && next.title !== dialog.title;
+    }
+    if (!moved) return { ok: false, error: 'commit-failed' };
+    return { ok: true, ...(await settleNext(d, id, (now) => now.title === dialog.title, sleep)) };
+  });
+}
+
+/** `moveDialogTab`'s answer. The refusals are `DialogTabRefuseCode` (`shared/api.ts`), where each is described. */
+export type DialogTabResult = DialogTabMoved | { ok: false; error: DialogTabRefuseCode };
+
+/** Where a screen's ❯ cursor rests: the printed row on a single-select question or the review, `Dialog.multi`'s
+ *  reading on a multiSelect one. */
+const cursorOf = (dialog: Dialog): number | 'commit' | null =>
+  dialog.multi !== undefined ? dialog.multi.cursor : dialog.selectedIndex;
+
+/**
+ * Is the cursor somewhere Claude Code swallows ←/→? Measured on 2.1.296 and 2.1.302: on the free-text row, empty or
+ * holding text, the arrows move its text caret (the screen stays byte for byte), and on `Chat about this` they do
+ * nothing either. On a multiSelect question, anything but one of its own boxes (the free-text box, the commit row,
+ * Chat), where only the boxes were measured to pass → on.
+ */
+function cursorOffOptions(pane: string, dialog: Dialog): boolean {
+  if (dialog.multi !== undefined) {
+    const at = dialog.multi.cursor;
+    return typeof at !== 'number' || !dialog.multi.options.some((o) => o.index === at);
+  }
+  const free = freeTextRow(pane);
+  if (free !== null && dialog.selectedIndex >= free) return true;
+  const row = dialog.options.find((o) => o.index === dialog.selectedIndex);
+  return row !== undefined && CHAT_ABOUT_ROW_RE.test(row.label.trim());
+}
+
+/**
+ * Walk the cursor Up to row 1, one key at a time, capturing after each: the free-text row and Chat sit below the
+ * options, and a multiSelect question's commit row is unnumbered, so the count is read off the screen rather than worked
+ * out. Up only moves the cursor (typed text survives stepping off, 2.1.300 `walk-4-stepped-off`, and 2.1.296), and it is
+ * never pressed on row 1, where it would wrap to the free-text row. The landing is the proof: the same question
+ * (`title`) with the cursor on row 1. The returned screen is that landing, or null when the walk did not get there.
+ */
+async function walkToFirstRow(
+  d: SendDeps, id: string, title: string, steps: number, sleep: (ms: number) => Promise<void>,
+): Promise<Dialog | null> {
+  for (let i = 0; i <= steps; i++) {
+    const pane = await d.tmux.capture(id);
+    const now = pane === null ? null : parseDialog(pane);
+    if (now === null || now.title !== title) return null;
+    if (cursorOf(now) === 1) return now;
+    if (i === steps) return null;
+    await d.tmux.sendKey(id, 'Up');
+    await sleep(WALK_STEP_MS);
+  }
+  return null;
+}
+
+/**
+ * Move an AskUserQuestion's PANE to another tab (decision `ask-dialog-tab-route`, `POST /api/sessions/:id/dialog/tab`):
+ * ←/→ as Claude Code's own keys, so the sheet's arrows and its tab strip move the one thing that can answer, and the
+ * sheet follows the screen it lands on. Measured on 2.1.296 (220x50) and 2.1.302: → from the last question is the
+ * review (even with a question skipped, which the review then warns about); ← on question 1 and → on the review do
+ * nothing; a revisited question marks its earlier answer ✔ and puts the cursor back on row 1.
+ *
+ * Each step on a fresh capture, and never Enter, Tab or a digit (Enter on an empty free-text row declines the whole ask):
+ *  1. `isDialogTab` or `bad-request`, before the pane is touched.
+ *  2. The menu is the one the caller was shown (`stale-dialog`), it paints a tab row (`parseAskTabs`, `no-tabs`), and it
+ *     is a screen whose cursor can be read: parsed, or a multiSelect question (`unparsed-dialog`).
+ *  3. The presses. The review is told by its own rows (`reviewRows`), so there the current tab is known: one past the
+ *     last question. On a question it is not (colour alone marks it), so a numbered target takes the caller's `from`.
+ *     → on the review is refused `no-move` with no key; a target already up answers ok with no key.
+ *  4. Off the free-text row first: where the cursor rests on it or below it, ←/→ are swallowed, so it is walked Up to
+ *     row 1 and the landing proved (`walk-failed` otherwise, with no arrow pressed).
+ *  5. One arrow at a time, each proved by `settleNext`: a screen with another id, seen twice in a row. None within the
+ *     budget is `no-move`, no menu at all is `menu-gone`. `submit` presses → until the review, at most once per tab.
+ */
+export function moveDialogTab(d: SendDeps, id: string, body: unknown): Promise<DialogTabResult> {
+  if (!isDialogTab(body)) return Promise.resolve({ ok: false, error: 'bad-request' });
+  const { dialogId, to, from } = body;
+  const sleep = d.sleep ?? defaultSleep;
+  return d.queue.run(id, async (): Promise<DialogTabResult> => {
+    const pane = await d.tmux.capture(id);
+    if (pane === null) return { ok: false, error: 'not-alive' };
+    const dialog = parseDialog(pane);
+    if (!dialog || dialog.id !== dialogId) return { ok: false, error: 'stale-dialog' };
+    const row = parseAskTabs(pane);
+    if (row === null) return { ok: false, error: 'no-tabs' };
+    const onReview = reviewRows(dialog) !== null;
+    if (!onReview && !dialog.parsed && dialog.multi === undefined) return { ok: false, error: 'unparsed-dialog' };
+
+    const review = row.tabs.length + 1;
+    let key: 'Left' | 'Right';
+    let count: number;
+    if (to === 'prev') {
+      key = 'Left';
+      count = 1;
+    } else if (to === 'next' || to === 'submit') {
+      if (onReview) return to === 'submit' ? { ok: true, next: dialog } : { ok: false, error: 'no-move' };
+      key = 'Right';
+      count = to === 'next' ? 1 : row.tabs.length;
+    } else {
+      const at = onReview ? review : from;
+      if (to > row.tabs.length || at === undefined || at > review) return { ok: false, error: 'bad-request' };
+      if (to === at) return { ok: true, next: dialog };
+      key = to < at ? 'Left' : 'Right';
+      count = Math.abs(to - at);
+    }
+
+    let now: Dialog = dialog;
+    if (!onReview && cursorOffOptions(pane, dialog)) {
+      // A multiSelect reading's numbered rows are its boxes (`Dialog.options` is empty there): below them sit the
+      // free-text box, the commit row and Chat, so the walk from Chat is at most boxes + 2 Ups.
+      const rows = dialog.multi !== undefined ? dialog.multi.options.length : dialog.options.length;
+      const landed = await walkToFirstRow(d, id, dialog.title, rows + 3, sleep);
+      if (landed === null) return { ok: false, error: 'walk-failed' };
+      now = landed;
+    }
+
+    for (let i = 0; i < count; i++) {
+      await d.tmux.sendKey(id, key);
+      const prev = now.id;
+      const moved = await settleNext(d, id, (s) => s.id === prev, sleep);
+      if (moved.next === undefined) return { ok: false, error: 'no-move' };
+      if (moved.next === null) return { ok: false, error: 'menu-gone' };
+      now = moved.next;
+      if (to === 'submit' && reviewRows(now) !== null) return { ok: true, next: now };
+    }
+    return to === 'submit' ? { ok: false, error: 'no-move' } : { ok: true, next: now };
   });
 }
 

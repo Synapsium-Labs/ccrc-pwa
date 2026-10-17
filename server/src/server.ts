@@ -5,6 +5,7 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import fastifyWebsocket from '@fastify/websocket';
 import fastifyMultipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
+import { pwaStaticOptions } from './pwaStatic.js';
 import { configDirFor, type CcrcConfig } from './config.js';
 import type { BuildInfo } from './buildinfo.js';
 import type { Tmux } from './exec.js';
@@ -38,7 +39,9 @@ import { Bus, type Notice } from './bus.js';
 import type { FleetWatcher } from './watch.js';
 import { SessionStream, parseSince } from './sessionws.js';
 import { KeyedQueue } from './inject/queue.js';
-import { sendPrompt, answerDialog, interrupt, submitEnter, type SendDeps } from './inject/send.js';
+import {
+  sendPrompt, answerDialog, answerDialogMulti, answerDialogText, interrupt, moveDialogTab, submitEnter, type SendDeps,
+} from './inject/send.js';
 import { answerAsk, type AskDeps } from './inject/ask.js';
 import { freshAskAt, measuredIdentity, readRegistry, readSessionRecord } from './registry.js';
 import type { SessionRecord } from './registry.js';
@@ -51,6 +54,7 @@ import type { SpawnPty } from './pty.js';
 import type { PushService } from './push.js';
 import type { NotifyLog } from './notifylog.js';
 import { Presence } from './presence.js';
+import type { FleetIdentityCell } from './fleetidentity.js';
 import type { ChildReclaimOutcome, ChildReclaimRequest } from './coord/childReclaim.js';
 import { MAIL_TOKEN_HEADER, checkMailToken, type BoxTokenHolder } from './coord/token.js';
 import { registerCoordRoutes } from './coord/routes.js';
@@ -65,6 +69,7 @@ import { buildInfoOfRow } from './update/inventory.js';
 import type { PoolEdgeLog } from './coord/pooledgelog.js';
 import type { CataloguePoller } from './update/catalogue.js';
 import type { UpdateIntentLog } from './coord/updateintentlog.js';
+import type { CollectLaneJournal } from './collectLane.js';
 import { AuthSecretUnusable, readAuthSecret, verifyPassphrase, type AuthSecret } from './auth/secret.js';
 import { ABSOLUTE_TTL_MS, SessionStore } from './auth/sessions.js';
 import { LoginRateLimiter, PASSKEY_MAX_FAILURES } from './auth/ratelimit.js';
@@ -89,13 +94,13 @@ import {
   type FloorState, type ProjectRow, type ProjectPoolsWire, type ProjectPoolWire, type ProjectRepoWire,
   parseRouteFields, programKickoffVerdict, routeFieldsOrNull, routeParseDetail, type RouteFields,
 } from '../../shared/api.js';
-import { ARCHIVE_REFUSALS, archiveInterrupts } from '../../shared/api.js';
+import { ARCHIVE_REFUSALS } from '../../shared/api.js';
+import type { Dialog } from '../../shared/api.js';
 import {
-  archiveFlags, archiveOutcome, busyReadFailsClosed, decideArchive, refusedAtStop, stopVerdict, worktreeOf, type ArchiveMeasure,
+  archiveFlags, archiveOutcome, busyReadFailsClosed, decideArchive, frameRowVerdict, refusedAtStop, worktreeOf, type ArchiveMeasure,
   type TurnVerdict,
-  type LiveFileReading, type StopRowReading,
 } from './coord/archiveDoor.js';
-import { readLiveStateMeasured } from './livestate.js';
+import { liveRowFor, turnReadDeps, turnVerdictFor } from './turnverdict.js';
 
 /**
  * A client frame off the per-session socket, or null if it isn't one.
@@ -241,6 +246,12 @@ function anonymousAssertStart(full: PasskeyAssertStart): Partial<PasskeyAssertSt
   ) as Partial<PasskeyAssertStart>;
 }
 
+/** The collector switch's composition (path-identity spec 2026-10-12 §5.2, §5.6), built once in `index.ts`: the ONE
+ *  generation journal `CoordStore.setCollectLane` appends to inside its transaction, and this process's boot nonce,
+ *  which only the switch route's confirm key reads. One object, so "no journal" has one spelling: `Deps.collectLane`
+ *  absent. */
+export interface CollectLaneDeps { readonly journal: CollectLaneJournal; readonly bootNonce: string }
+
 export interface Deps {
   cfg: CcrcConfig;
   /** The deploy's build stamp (buildinfo.ts, read once at boot from
@@ -275,6 +286,15 @@ export interface Deps {
    *  its absence is still the local/remote mode test for THIS field, even
    *  though `fleetState` itself is no longer the same tell. */
   refreshCaps?: () => Promise<void>;
+  /** The connection-bound fleet node identity (path-identity spec 2026-10-12 §5.2).
+   *  - Remote mode: the agent client's own cell (`fleet.identity`). It is invalidated on every ready and close, and
+   *    only the inventory's fleet sweep publishes into it, under the epoch it captured.
+   *  - Local mode: a cell nothing invalidates (epoch 0). The server row's own sweep publishes into it, because this
+   *    box is the fleet node.
+   *  It is optional so that the hand-built Deps in tests stay valid. A reader of an absent cell uses
+   *  `NO_FLEET_IDENTITY`, which is never known, so nothing arms through it. Production carries it in both arms
+   *  (text pins over index.ts). */
+  fleetIdentity?: FleetIdentityCell;
   /** The ONE per-session write queue for the process. Built in `index.ts` and
    *  handed to both `buildServer` and `FleetWatcher`, because the naming
    *  sweep's `ws-rename` has to serialise against `POST /workspace/reap` — and
@@ -344,6 +364,11 @@ export interface Deps {
    *  `index.ts` beside `coord`. Optional the same way `coord` is: absent, the
    *  intent route answers `501 not-configured`. */
   updateIntentLog?: UpdateIntentLog;
+  /** The collector switch's journal and boot nonce (`CollectLaneDeps`), `updateIntentLog`'s twin for the journal's
+   *  reason: the route and the collector's latch share the process's one instance. Optional the way `coord` is.
+   *  Absent: `GET` and `POST /api/coord/collect-lane` answer `501 not-configured`, and the collector reads its control
+   *  state as `journal-not-configured`, never as a missing journal, which would be the bootstrap. */
+  collectLane?: CollectLaneDeps;
   /** Design 2026-09-20 §10 (wave 5): the SERVER-role node's own move, spawned on this box with the same absolute
    *  argv the agent uses. A two-template capability, never a raw `Runner` — a runner here would give every
    *  route a way around `runCcd` (D-3397). `localUpdateSpawnFor(realRunner, cfg.home)` in
@@ -1747,7 +1772,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const rows = dim(q.rows, 24);
     // THE LATCH, AND IT GOES BEFORE THE ATTACH (spec §5.1, F3, F14).
     //
-    // ccd spawns every session `window-size latest` (`ccd/ccd:14790`), and
+    // ccd spawns every session `window-size latest` (`_spawn_start` in
+    // `ccd/ccd`), and
     // tmux's own default is `latest` too — so the window follows whichever
     // client most recently typed. A phone's pty client is a full tmux client
     // (F6), so the first phone attach NARROWS the window, tmux REFLOWS the
@@ -1800,8 +1826,17 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // NO PER-CLIENT GRID MAP rides with it (§5.1): the window is one fixed size
     // for every drawer, so a second drawer closing restores nothing anyone was
     // depending on, and the close handler's own 220x50 becomes a no-op rather
-    // than the defect PR #96's handoff was built to cure. The deliberate
-    // un-pin is wave 3, under the fit guard, through an advertised ccd verb.
+    // than the defect PR #96's handoff was built to cure.
+    //
+    // THE DRAWER NO LONGER LEANS ON THIS PIN. It attaches a client the
+    // window's own size, 220 columns by 50 rows plus tmux's status row (spec
+    // 2026-10-14 §5.1, D-5005), and a client that size moves nothing under
+    // `latest`. So the pin is no longer how a drawer keeps its own client from
+    // narrowing the window: it repairs a window something else moved, and it
+    // holds against a client that is not the window's size — an older bundle,
+    // which still dials its own grid (spec 2026-10-14 §8, I7). A wide drawer
+    // may later have the window follow it, never below `READER_MIN_COLS`,
+    // through that spec's guarded sizer (§6, stage 2).
     void deps.tmux.resizeWindow(id, PINNED_WINDOW_COLS, PINNED_WINDOW_ROWS);
     const p = spawnPty(id, cols, rows);
     const sub = p.onData((data) => socket.send(data));   // server->client: raw utf8 frames
@@ -1899,7 +1934,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // `sendDeps`/`askDeps` themselves are built ABOVE, ahead of
   // `registerCoordRoutes` — see that call site's own comment.
   //
-  // C0.2: `knownId` gates 18 request-id routes (14 POST, 4 GET — every one of
+  // C0.2: `knownId` gates 21 request-id routes (17 POST, 4 GET — every one of
   // them a per-request check, not a periodic sweep) plus the constructed-id
   // revival probe below, and previously called `readRegistry` — a 24-session
   // fleet's baseline is 745 agent-WS operations [registry-read-census:fleet]
@@ -2096,6 +2131,19 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return { ok: true, queued: out.queued };
   });
 
+  /** After an answer route (decisions `ask-answer-returns-next-screen`, `dialog-frame-log`): a refusal is logged by its
+   *  code, since until now nothing recorded one; an answer that saw the pane move hands that screen to every open
+   *  stream of the session (`answered:<id>`, `SessionStream`'s `onAnswered`). */
+  const answeredFrame = (
+    id: string, route: string, res: { ok: true; next?: Dialog | null } | { ok: false; error: string },
+  ): void => {
+    if (!res.ok) {
+      console.log(`ccrc-server: dialog-refused ${id} ${route} ${res.error}`);
+      return;
+    }
+    if (res.next !== undefined) bus.emit(`answered:${id}`, res.next);
+  };
+
   app.post('/api/sessions/:id/dialog', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
@@ -2104,7 +2152,64 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
     const res = await answerDialog(sendDeps, id, body.dialogId, body.optionIndex);
+    answeredFrame(id, 'dialog', res);
     return res.ok ? res : reply.code(409).send(res);
+  });
+
+  /**
+   * D-5047: type an answer into an AskUserQuestion's free-text row ("Type something.") and submit it, proved focused
+   * before typing and echoed before Enter (`answerDialogText`, `inject/send.ts`). A NEW route, deliberately not a
+   * `text` field on `/dialog` above: an older server would ignore that field, walk onto the empty row and press Enter,
+   * which rejects the whole ask. An older server answers this route 404 instead. `bad-text` (`isDialogText`,
+   * `shared/api.ts`) is the caller's to fix, so it is a 400 like a malformed body; every other refusal is a 409.
+   */
+  app.post('/api/sessions/:id/dialog/text', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
+    const body = (req.body ?? {}) as { dialogId?: unknown; optionIndex?: unknown; text?: unknown };
+    if (typeof body.dialogId !== 'string' || typeof body.optionIndex !== 'number' || typeof body.text !== 'string') {
+      return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    const res = await answerDialogText(sendDeps, id, body.dialogId, body.optionIndex, body.text);
+    answeredFrame(id, 'dialog/text', res);
+    if (res.ok) return res;
+    return reply.code(res.error === 'bad-text' ? 400 : 409).send(res);
+  });
+
+  /**
+   * D-5048: answer a multiSelect AskUserQuestion question, leaving exactly `optionIndexes` ticked and committing it
+   * with Tab, each step proved on a fresh capture (`answerDialogMulti`, `inject/send.ts`). A NEW route, like
+   * `/dialog/text`: an older server answers it 404, where a field on `/dialog` would have walked and pressed Enter,
+   * which on a multiSelect question toggles a box and commits nothing. `bad-indexes` (`isDialogMultiIndexes`,
+   * `shared/api.ts`) is the caller's to fix, so it is a 400 like a malformed body; every other refusal is a 409.
+   */
+  app.post('/api/sessions/:id/dialog/multi', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
+    const body = (req.body ?? {}) as { dialogId?: unknown; optionIndexes?: unknown };
+    if (typeof body.dialogId !== 'string' || !Array.isArray(body.optionIndexes) ||
+        !body.optionIndexes.every((n) => typeof n === 'number')) {
+      return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    const res = await answerDialogMulti(sendDeps, id, body.dialogId, body.optionIndexes as number[]);
+    answeredFrame(id, 'dialog/multi', res);
+    if (res.ok) return res;
+    return reply.code(res.error === 'bad-indexes' ? 400 : 409).send(res);
+  });
+
+  /**
+   * Decision `ask-dialog-tab-route`: move an AskUserQuestion's pane to another tab with ←/→ (the sheet's arrow keys and
+   * its tab strip), each step proved by the screen it lands on, never Enter (`moveDialogTab`, `inject/send.ts`). The
+   * screen it lands on goes back as `next` and to every open stream (`answeredFrame`), as an answer's does. A malformed
+   * body is the caller's to fix (400 `bad-request`); every other refusal is a 409.
+   */
+  app.post('/api/sessions/:id/dialog/tab', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
+    const res = await moveDialogTab(sendDeps, id, req.body ?? null);
+    answeredFrame(id, 'dialog/tab', res);
+    if (res.ok) return res;
+    return reply.code(res.error === 'bad-request' ? 400 : 409).send(res);
   });
 
   /**
@@ -2139,9 +2244,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
    * is the authority this row exists to protect against being locked out
    * of, not a third party mediated by it, so losing the CAS only means this
    * request cannot claim the record; the press still goes through on its
-   * own merits (`answerAsk`'s own twelve pre-send guards plus its two
-   * post-send `sendKey` checks, D-2177, are the only refusal that still
-   * applies).
+   * own merits (`answerAsk`'s own thirteen pre-send guards plus its
+   * post-send `sendKey` check, D-2177, are the only refusal that still
+   * applies; D-5048 added the thirteenth, the multiSelect refusal, and took
+   * away the commit Enter and its check).
    */
   app.post('/api/sessions/:id/ask', async (req, reply) => {
     const { id } = req.params as { id: string };
@@ -2953,44 +3059,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return CCD_ARGV.stopPair(originalWrapper, rec.project, surface);
   }
 
-  /**
-   * The row the fleet frame would assemble for ONE session, measured on the request — the archive door's busy read
-   * (workspace lifecycle §5.2: "read from the same live state the fleet frame uses: status/hookState, re-read on the
-   * request, for both kinds of row"). `assembleFleet` over this one registry row, so its tmux and live-file reads and
-   * its bucket ladder are the frame's own, with this session's hook state read from disk now rather than taken from
-   * the watcher's last sweep. The pane-scraped pieces (a dialog menu, a Workflow row) are the watcher's newest. No
-   * `coord`: no field `archiveInterrupts` reads comes from it.
-   */
-  const liveRowFor = async (rec: SessionRecord, uuid: string): Promise<FleetSession | null> => {
-    const hs = await readHookState(deps.io, deps.cfg.registryDir, rec.id, uuid, Date.now());
-    const [row] = await assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(),
-      watcher?.currentStatuslines(), undefined, undefined, new Map(hs === null ? [] : [[rec.id, hs]]), [rec]);
-    return row ?? null;
-  };
-
-  /**
-   * The READS behind "what turn would a STOP lose?" (`stopVerdict`, `coord/archiveDoor.ts`, D-3878, holds the rule and
-   * its reasoning, and since 3881 answers idle, busy or unmeasured): the wrapper's config dir FIRST (a pure config
-   * lookup, in ccd's order — F2), then the tmux verdict, then — only for a `live` pane — its pid and its live file, then
-   * the frame's row. A read a verdict makes impossible is skipped, never faked; which reads MATTER is the rule's to say,
-   * so none is skipped for being redundant. Read FAIL-CLOSED because `cmd_stop` refuses nothing: for a main checkout
-   * this is the only guard there is. Its second caller is a workspace whose programme is to end or that is archived with
-   * `interrupt` (`busyReadFailsClosed`, D-3877, F7), where it is the only read that can refuse before that end or stop;
-   * every other workspace keeps `ws-archive`'s own fail-closed `_ws_status` behind the door. `liveRowFor` cannot answer
-   * it alone: the frame folds what it could not measure towards rest.
-   */
-  const stopVerdictFor = async (rec: SessionRecord, uuid: string): Promise<TurnVerdict> => {
-    const cfgDir = configDirFor(deps.cfg, rec.wrapper);
-    if (cfgDir === undefined) return stopVerdict({ configDir: 'none' });
-    const v = await deps.tmux.sessionVerdict(rec.id);
-    if (v.verdict !== 'live') return stopVerdict({ configDir: 'present', pane: v.verdict });
-    const pid = await deps.tmux.panePid(rec.id);
-    if (pid === null) return stopVerdict({ configDir: 'present', pane: 'live', pid: 'unread' });
-    const read = await readLiveStateMeasured(deps.io, cfgDir, pid);
-    const liveFile: LiveFileReading = read.ok ? { read: 'ok', status: read.state.status } : { read: read.reason };
-    const row: StopRowReading = (await liveRowFor(rec, uuid)) ?? 'missing';
-    return stopVerdict({ configDir: 'present', pane: 'live', pid, liveFile, row });
-  };
+  /** The turn reads' deps — `liveRowFor` and `turnVerdictFor` live in `turnverdict.ts`, their one home (D-5238), and
+   *  read the watcher's newest pane-scraped pieces through thunks at call time. */
+  const turnReads = turnReadDeps(deps, watcher);
 
   app.post('/api/sessions/:id/stop', async (req, reply) => {
     const { id } = req.params as { id: string };
@@ -3284,7 +3355,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
    * refuses inside `ws-archive`, before ITS act; `archiveOutcome` carries `ended` on that answer. This handler
    * measures, hands the measurements over, and does what the decision says, in its order: end the programme (inside
    * the decision), stop (`{interrupt}`, or a main checkout), archive (a workspace). A main checkout's turn is read
-   * fail-closed (`stopVerdictFor`) — and so is a workspace's, when the programme is to end or it is archived with
+   * fail-closed (`turnVerdictFor`) — and so is a workspace's, when the programme is to end or it is archived with
    * `interrupt` (`busyReadFailsClosed`, D-3877, 3881) — into THREE words (3881): a turn measured in progress is
    * `409 session-busy`, which `interrupt` consents to; one nobody could measure is `409 status-unknown`, whatever the
    * consents. A stop nobody
@@ -3329,15 +3400,14 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const archiveArgv = rec.workspace === null ? null : CCD_ARGV.wsArchive(id, pwaDec(req));
     const measure: ArchiveMeasure = {
       workspace: rec.workspace !== null,
-      // WHICH read is `busyReadFailsClosed`'s to say (D-3877): the fail-closed `stopVerdictFor` for a main checkout (its
+      // WHICH read is `busyReadFailsClosed`'s to say (D-3877): the fail-closed `turnVerdictFor` for a main checkout (its
       // stop's only guard), for a workspace whose programme is about to END, `interrupt` or not (3881), and for a
       // workspace archived with `interrupt`, whose stop runs ahead of ccd's own read (F7); otherwise the frame's own
-      // row, with `ws-archive`'s fail-closed `_ws_status` behind it — two-valued, busy or idle. No row
-      // would be no measurement, read as busy — unreachable by construction (`assembleFleet` maps its records 1:1),
-      // kept rather than pinned.
+      // row (`frameRowVerdict`), with `ws-archive`'s fail-closed `_ws_status` behind it — busy or idle, and unmeasured
+      // for a row whose status was not measured (D-5274).
       turn: busyReadFailsClosed(rec.workspace !== null, flags)
-        ? await stopVerdictFor(rec, identity.uuid)
-        : await liveRowFor(rec, identity.uuid).then((live): TurnVerdict => (live === null || archiveInterrupts(live) ? 'busy' : 'idle')),
+        ? await turnVerdictFor(turnReads, rec, identity.uuid)
+        : frameRowVerdict(await liveRowFor(turnReads, rec, identity.uuid)), // D-5274: an unmeasured row is refused, never busy
       // In remote mode this stat is outside the agent's read roots and answers `unmeasured`, which proceeds — ccd's
       // own `[[ -d $workdir ]]` refusal measures it there (`ArchiveMeasure.worktree`).
       worktree: rec.workspace === null ? 'present' : worktreeOf(await deps.io.statMeasured(rec.workdir)),
@@ -3368,7 +3438,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // Re-read at the act, fail-closed, unless the operator consented to lose the turn. A turn measured in progress
       // is `session-busy`, a state nobody could read `status-unknown` — the word is `refusedAtStop`'s (3881).
       if (!flags.interrupt) {
-        const verdict = await stopVerdictFor(rec, identity.uuid);
+        const verdict = await turnVerdictFor(turnReads, rec, identity.uuid);
         if (verdict !== 'idle') {
           const refused = refusedAtStop(verdict, plan.ended);
           return reply.code(refused.status).send(refused.body);
@@ -3384,13 +3454,13 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // stopped NOTHING — a row archived earlier whose pane came back without a spawn path clearing the stamp (a pre-#143
     // pane). Read as `archived:true` alone, the door said a session was put away that tmux still runs. A pane tmux
     // PROVES up is stopped here, as the archive's own act would have — but only after the turn is re-read at the act,
-    // fail-closed (`stopVerdictFor`, the rule for a stop nobody agreed to: this branch is never `interrupt`'s, whose
+    // fail-closed (`turnVerdictFor`, the rule for a stop nobody agreed to: this branch is never `interrupt`'s, whose
     // stop has already run), because `ws-archive`'s own fail-closed `_ws_status` is skipped on `already archived` and
     // the turn the door measured came from the frame's row. Only an `idle` answer stops; a busy or unreadable turn, a
     // pane gone, or one tmux cannot be asked about, is left as before — archived, not stopped.
     if (archived.ok && !stopped && /^already archived /m.test(archived.stdout)
         && (await deps.tmux.sessionVerdict(id)).verdict === 'live'
-        && (await stopVerdictFor(rec, identity.uuid)) === 'idle') {
+        && (await turnVerdictFor(turnReads, rec, identity.uuid)) === 'idle') {
       const res = await deps.runCcd(stopArgvFor(id, rec, identity));
       if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr, ...endedSpread });
       stopped = true;
@@ -3566,7 +3636,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // fallback to index.html; absent -> skip (API-only mode).
   const pwaRoot = findPwaRoot();
   if (pwaRoot) {
-    await app.register(fastifyStatic, { root: pwaRoot });
+    // No size/mtime validators: a release's sw.js kept the same weak ETag, so no deploy reached a
+    // browser with the worker installed (pwaStatic.ts).
+    await app.register(fastifyStatic, pwaStaticOptions(pwaRoot));
     app.setNotFoundHandler((req, reply) => {
       if (req.method === 'GET' && !req.url.startsWith('/api') && !req.url.startsWith('/ws')) {
         return reply.type('text/html').sendFile('index.html');

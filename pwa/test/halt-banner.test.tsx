@@ -13,15 +13,18 @@ import type { NodeWire, ReleaseWire, UpdatesView } from '../../shared/api';
 import { UPDATE_STATES } from '../../shared/api';
 import { isHaltingUpdate } from '../../shared/update-move';
 import { ApiError, api, updateErrorText } from '../src/lib/api';
-import { ToastHost } from '../src/components/Toast';
+import { buttonVariants, ToastHost } from '@ccrc/ui';
 import { HALT_LEAD_TEXT, HaltBanner } from '../src/fleet/HaltBanner';
-import { useUpdatesView } from '../src/fleet/useUpdatesView';
+import { UPDATES_STALE_TEXT, useUpdatesView } from '../src/fleet/useUpdatesView';
 import { ACK_UNREADABLE_TEXT, canAck, sendAck } from '../src/fleet/updateAck';
-import * as settings from '../src/screens/SettingsScreen';
+import * as updates from '../src/screens/updates';
 import { declValue, ruleIn } from './cssRule';
 
 // canAck through a pass-through spy, so ONE case can drive the rendered gate (T4-1) while every other case runs the
-// real function. SettingsScreen re-exports from the same module, so `settings.canAck === canAck` still holds.
+// real function. `screens/updates.tsx` re-exports from the same module, so
+// `updates.canAck === canAck` still holds — the assertion is about the
+// IDENTITY, not about which file carries the re-export (it moved out of
+// SettingsScreen with `NodeItem`, its consumer).
 vi.mock('../src/fleet/updateAck', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/fleet/updateAck')>();
   return { ...actual, canAck: vi.fn(actual.canAck) };
@@ -29,9 +32,15 @@ vi.mock('../src/fleet/updateAck', async (importOriginal) => {
 
 const SRC = path.join(import.meta.dirname, '..', 'src');
 const haltCss = readFileSync(path.join(SRC, 'fleet', 'fleet.css'), 'utf8');
-const primitivesCss = readFileSync(path.join(SRC, 'components', 'primitives.css'), 'utf8');
 const bannerSrc = readFileSync(path.join(SRC, 'fleet', 'HaltBanner.tsx'), 'utf8');
-const settingsSrc = readFileSync(path.join(SRC, 'screens', 'SettingsScreen.tsx'), 'utf8');
+// `screens/updates.tsx`, not SettingsScreen: the node inventory — and so
+// `NodeItem`, the Ack's one caller — moved to a file of its own when
+// SettingsScreen was split. D-4267's claim is unchanged (Settings holds no
+// COPY of canAck/ackUpdateNode and calls the shared `sendAck`); what moved is
+// which file carries it, so both files are read and the claim is made of the
+// pair.
+const settingsSrc = readFileSync(path.join(SRC, 'screens', 'SettingsScreen.tsx'), 'utf8')
+  + readFileSync(path.join(SRC, 'screens', 'updates.tsx'), 'utf8');
 
 afterEach(() => {
   cleanup();
@@ -166,12 +175,12 @@ describe('HaltBanner — the Ack in place is the Settings Ack', () => {
   });
 
   it('Settings re-exports the same function and text, and holds no copy of either (D-4267)', () => {
-    expect(settings.canAck).toBe(canAck);
-    expect(settings.ACK_UNREADABLE_TEXT).toBe(ACK_UNREADABLE_TEXT);
+    expect(updates.canAck).toBe(canAck);
+    expect(updates.ACK_UNREADABLE_TEXT).toBe(ACK_UNREADABLE_TEXT);
     expect(settingsSrc).not.toMatch(/function canAck\b/);
     expect(settingsSrc).not.toMatch(/api\.ackUpdateNode\(/);
     expect(settingsSrc).toMatch(/void sendAck\(n\.nodeId\)/);
-    expect(bannerSrc).toMatch(/import \{ canAck, sendAck \} from '\.\/updateAck';/);
+    expect(bannerSrc).toMatch(/import \{ canAck, keepFocusInRow, sendAck \} from '\.\/updateAck';/);   // + R26(a)'s focus hand-off (wave 19)
     // The gate is canAck on every row, though a halting row passes it by construction: no behaviour can red for it.
     expect(bannerSrc).toContain('disabled={!canAck(n, releases) || acking || held}');
     expect(bannerSrc).toContain('void sendAck(n.nodeId).then(');
@@ -313,9 +322,10 @@ describe('HaltBanner — an Ack with no answer holds until a read issued after t
   });
 });
 
-// Ruling G (D-4273): a parent that issues no read (the injected mode: `reload()` answers 0) gives the hold nothing to
-// date a read by, so the hold falls back to the LEASE. No mode can re-arm on a read it cannot date.
-describe('HaltBanner — a parent that issues no read holds on the lease (D-4273, ruling G)', () => {
+// Round 2's FIX item 1 (D-4273; `useUpdatesView(0)`, the injected mode, whose `reload()` answers 0): a parent that
+// issues no read gives the hold nothing to date a read by, so the hold falls back to the LEASE. No mode can re-arm on
+// a read it cannot date.
+describe('HaltBanner — a parent that issues no read holds on the lease (D-4273, round 2 FIX item 1)', () => {
   const ENDINGS: ReadonlyArray<readonly [string, () => void]> = [
     ['unanswered', () => { vi.spyOn(api, 'ackUpdateNode').mockRejectedValueOnce(new ApiError(502, { ok: false, error: 'bad gateway' })); }],
     ['unreadable', () => { vi.spyOn(api, 'ackUpdateNode').mockResolvedValueOnce('unreadable'); }],
@@ -488,11 +498,20 @@ describe('HaltBanner — a class of its own, a tap floor, and text only', () => 
   });
 
   it('keeps the shared button at the tap floor: the banner override resizes its width, never its height', () => {
-    expect(declValue(ruleIn(primitivesCss, '.btn-primary'), 'min-height')).toBe('var(--tap-min)');
-    const rule = ruleIn(haltCss, '.halt-banner-node .btn-primary');
-    expect(declValue(rule, 'width')).toBe('auto');
-    expect(declValue(rule, 'min-height')).toBeNull();
-    expect(declValue(rule, 'height')).toBeNull();
+    // The shared button's own floor moved into @ccrc/ui with the component.
+    // Asserted through the cva rather than through its source text: a scrape
+    // of button.tsx would also match the sentence in its comment, and pass
+    // with the utility deleted. `min-h-tap` is `var(--tap-min)` —
+    // theme.css's `--spacing-tap`, pinned by theme-bridge.test.ts.
+    expect(buttonVariants({ variant: 'primary' })).toContain('min-h-tap');
+    // The width override was `.halt-banner-node .btn-primary` in fleet.css and
+    // is now Button's `fit`; the rule is gone. `fit` sets width and padding and
+    // nothing else, so the tap floor in the base survives it.
+    const fit = buttonVariants({ variant: 'primary', size: 'fit' });
+    expect(fit).toContain('w-auto');
+    expect(fit).toContain('min-h-tap');
+    expect(fit).not.toMatch(/\bh-\d|max-h-/);
+    expect(() => ruleIn(haltCss, '.halt-banner-node .btn-primary')).toThrow();
   });
 
   it('no rule but the banner\'s own sets a colour, so every child inherits the measured pair', () => {
@@ -503,5 +522,74 @@ describe('HaltBanner — a class of its own, a tap floor, and text only', () => 
 
   it('puts wire text into the DOM only as text children', () => {
     expect(bannerSrc).not.toMatch(/dangerouslySetInnerHTML/);
+  });
+});
+
+// Centralised-update wave 19, R24(b): a later poll failed, so the rows are the last answer that landed, and the
+// banner says so in the update plane's own sentence (UPDATES_STALE_TEXT, Settings' words), under its lead. It is
+// shown, not announced: the fleet screen's one status region says it once (D-5124).
+describe('HaltBanner — a stale view says so (wave 19, R24(b))', () => {
+  it('stale: one line under the lead, in the update plane\'s own sentence, hidden from assistive tech; fresh or absent: none', () => {
+    render(<HaltBanner updates={view([failed()])} seq={1} onAcked={() => 2} stale />);
+    expect(UPDATES_STALE_TEXT).toBe('The latest read failed — this is the last answer that landed.');
+    const msgs = [...banner()!.querySelectorAll('.halt-banner-msg')].map((e) => e.textContent);
+    expect(msgs).toEqual([HALT_LEAD_TEXT, UPDATES_STALE_TEXT]);
+    expect(screen.getByText(UPDATES_STALE_TEXT)).toHaveAttribute('aria-hidden', 'true');
+    cleanup();
+    render(<HaltBanner updates={view([failed()])} seq={1} onAcked={() => 2} stale={false} />);
+    expect(screen.queryByText(UPDATES_STALE_TEXT)).toBeNull();
+    cleanup();
+    mount(view([failed()]));
+    expect(screen.queryByText(UPDATES_STALE_TEXT)).toBeNull();
+  });
+});
+
+// Centralised-update wave 19, R26(a): the tap disables the Ack it was made on (in flight, then held after a clean
+// 200), and a focused control that disables drops focus to <body>. The row takes it first: it is focusable from
+// script only (tabIndex -1), and it names the node, its state, its target and its detail. jsdom does not run the
+// browser's focus fix-up, so without the move document.activeElement stays the disabled button, which is the red.
+// A clean ack returns the row to idle, so the next poll drops it; while another row still halts, focus goes to the
+// banner's list rather than <body>.
+describe('HaltBanner — focus survives the Ack disabling (wave 19, R26(a))', () => {
+  it('a focused Ack that disables hands focus to its own row, in flight and while held', async () => {
+    vi.spyOn(api, 'ackUpdateNode').mockResolvedValue({ ok: true, node: node() });
+    const { onAcked } = mount(view([server({ update: { state: 'reverted', target: 'v0.0.84', startedAt: 1, detail: null } }), failed()]));
+    const btn = screen.getByRole('button', { name: 'Ack fleet' });
+    const row = btn.closest('li.halt-banner-node') as HTMLElement;
+    btn.focus();
+    fireEvent.click(btn);
+    expect(btn).toBeDisabled();
+    expect(document.activeElement, 'in flight: the row holds focus, not the disabled button').toBe(row);
+    expect(row).toHaveAttribute('tabindex', '-1');
+    await waitFor(() => expect(onAcked).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole('button', { name: 'Acked fleet' })).toBeDisabled();
+    expect(document.activeElement, 'held after the 200: still the row').toBe(row);
+  });
+
+  it('CONTROL: an Ack tapped while focus is elsewhere leaves focus where it was', async () => {
+    vi.spyOn(api, 'ackUpdateNode').mockResolvedValue({ ok: true, node: node() });
+    const { onAcked } = mount(view([server({ update: { state: 'reverted', target: 'v0.0.84', startedAt: 1, detail: null } }), failed()]));
+    const other = screen.getByRole('button', { name: 'Ack server' });
+    other.focus();
+    fireEvent.click(screen.getByRole('button', { name: 'Ack fleet' }));
+    await waitFor(() => expect(onAcked).toHaveBeenCalledTimes(1));
+    expect(document.activeElement).toBe(other);
+  });
+
+  it('the poll that drops the acked row hands focus to the banner\'s list while another row still halts', async () => {
+    vi.spyOn(api, 'ackUpdateNode').mockResolvedValue({ ok: true, node: node() });
+    const reverted = server({ update: { state: 'reverted', target: 'v0.0.84', startedAt: 1, detail: null } });
+    const onAcked = vi.fn(() => 2);
+    const { rerender } = render(<><ToastHost /><HaltBanner updates={view([reverted, failed()])} seq={1} onAcked={onAcked} /></>);
+    const btn = screen.getByRole('button', { name: 'Ack fleet' });
+    btn.focus();
+    fireEvent.click(btn);
+    await waitFor(() => expect(onAcked).toHaveBeenCalledTimes(1));
+    // The re-poll's answer: fleet went back to idle on the ack, server still halts, so the banner stays.
+    rerender(<><ToastHost /><HaltBanner updates={view([reverted, node()])} seq={2} onAcked={onAcked} /></>);
+    expect(screen.queryByRole('button', { name: /^Ack(ed)? fleet$/ }), 'the acked row is gone').toBeNull();
+    const list = screen.getByRole('list', { name: 'Halted nodes' });
+    expect(list).toHaveAttribute('tabindex', '-1');
+    expect(document.activeElement, 'the list, not <body>').toBe(list);
   });
 });

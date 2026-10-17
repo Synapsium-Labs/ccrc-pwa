@@ -258,6 +258,14 @@ describe('knownId route census', () => {
       { method: 'POST', routePath: '/api/sessions/:id/prompt', args: 'id' },
       { method: 'POST', routePath: '/api/sessions/:id/route', args: 'id' },
       { method: 'POST', routePath: '/api/sessions/:id/dialog', args: 'id' },
+      // D-5047: the free-text row's own route, NOT a `text` field on `/dialog`. An older server that ignored such a
+      // field would walk onto the empty row and press Enter, rejecting the whole ask; it answers 404 to a new route.
+      { method: 'POST', routePath: '/api/sessions/:id/dialog/text', args: 'id' },
+      // D-5048: a multiSelect question's own route, for the same reason: an older server answers it 404, never with a
+      // keystroke into a menu whose Enter only toggles.
+      { method: 'POST', routePath: '/api/sessions/:id/dialog/multi', args: 'id' },
+      // Decision `ask-dialog-tab-route`: moving the pane between an ask's tabs, arrows only, never Enter.
+      { method: 'POST', routePath: '/api/sessions/:id/dialog/tab', args: 'id' },
       { method: 'POST', routePath: '/api/sessions/:id/ask', args: 'id' },
       { method: 'GET', routePath: '/api/sessions/:id/commands', args: 'id' },
       { method: 'POST', routePath: '/api/sessions/:id/interrupt', args: 'id' },
@@ -274,8 +282,8 @@ describe('knownId route census', () => {
       { method: 'GET', routePath: '/api/sessions/:id/workspace/audit', args: 'id' },
       { method: 'POST', routePath: '/api/sessions/:id/workspace/reap', args: 'id' },
     ]);
-    expect(requestGates).toHaveLength(18);
-    expect(requestGates.filter(({ method }) => method === 'POST')).toHaveLength(14);
+    expect(requestGates).toHaveLength(21);
+    expect(requestGates.filter(({ method }) => method === 'POST')).toHaveLength(17);
     expect(requestGates.filter(({ method }) => method === 'GET')).toHaveLength(4);
 
     const revivalProbes = calls.filter(({ args }) => args !== 'id');
@@ -308,7 +316,7 @@ describe('write routes', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([
-      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, '-l', 'hello'],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, '-l', '--', 'hello'],
       ['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Enter'],
     ]);
     await app.close();
@@ -411,6 +419,231 @@ describe('write routes', () => {
     await app.close();
   });
 
+  it('POST dialog onto an AskUserQuestion\'s empty free-text row returns 409 free-text-row and sends no key (D-5045)', async () => {
+    // A recorded Claude Code 2.1.300 screen: "3. Type something." under Yes / No. Enter there would reject the whole ask.
+    const pane = readFileSync(path.join(import.meta.dirname, 'fixtures', 'panes', 'cc300-ask-same-labels-q2.txt'), 'utf8');
+    const { app, calls } = await makeApp([pane]);
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${ID}/dialog`,
+      payload: { dialogId: parseDialog(pane)!.id, optionIndex: 3 },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'free-text-row' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+    await app.close();
+  });
+
+  // D-5047. Recorded Claude Code 2.1.300 screens: "Enable tracing?" with the cursor on "1. Yes", the same screen with the
+  // cursor on the empty "3. Type something." row (the footer gains "ctrl+g to edit in Vim"), and the row holding the text.
+  const askPane = (name: string): string =>
+    readFileSync(path.join(import.meta.dirname, 'fixtures', 'panes', name), 'utf8');
+  const ASK_OPEN = askPane('cc300-ask-same-labels-q2.txt');
+  const ASK_TEXT = '- only in staging, sampled 10%';
+
+  it('POST dialog/text walks onto the empty free-text row, types after --, proves the echo, then presses Enter (D-5047)', async () => {
+    const { app, calls } = await makeApp([
+      ASK_OPEN, askPane('cc300-ask-freetext-walk-2-focused.txt'), askPane('cc300-ask-freetext-walk-3-typed.txt'),
+    ]);
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${ID}/dialog/text`,
+      payload: { dialogId: parseDialog(ASK_OPEN)!.id, optionIndex: 3, text: ASK_TEXT },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    expect(sendKeysCalls(calls)).toEqual([
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Down'],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Down'],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, '-l', '--', ASK_TEXT],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Enter'],
+    ]);
+    await app.close();
+  });
+
+  it('POST dialog/text answers 400 bad-text for a text it will not type, before any capture or key (D-5047)', async () => {
+    const { app, calls } = await makeApp([ASK_OPEN]);
+    for (const text of ['', '   ', 'a\nb', '\x1b[31mred', 'x'.repeat(1001)]) {
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/sessions/${ID}/dialog/text`,
+        payload: { dialogId: parseDialog(ASK_OPEN)!.id, optionIndex: 3, text },
+      });
+      expect(res.statusCode, JSON.stringify(text.slice(0, 12))).toBe(400);
+      expect(res.json()).toEqual({ ok: false, error: 'bad-text' });
+    }
+    expect(calls.filter((c) => c[1] === 'capture-pane' || c[1] === 'send-keys')).toEqual([]);
+    await app.close();
+  });
+
+  it('POST dialog/text answers 400 bad-request for a missing or mistyped field (D-5047)', async () => {
+    const { app, calls } = await makeApp([ASK_OPEN]);
+    const id = parseDialog(ASK_OPEN)!.id;
+    for (const payload of [
+      { dialogId: id, optionIndex: 3 },
+      { dialogId: id, optionIndex: 3, text: 42 },
+      { dialogId: id, optionIndex: '3', text: ASK_TEXT },
+      { optionIndex: 3, text: ASK_TEXT },
+    ]) {
+      const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/dialog/text`, payload });
+      expect(res.statusCode, JSON.stringify(payload)).toBe(400);
+      expect(res.json()).toEqual({ ok: false, error: 'bad-request' });
+    }
+    expect(sendKeysCalls(calls)).toEqual([]);
+    await app.close();
+  });
+
+  it('POST dialog/text answers a refusal as 409 with its code, and sends no key (D-5047)', async () => {
+    const { app, calls } = await makeApp([ASK_OPEN]);
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${ID}/dialog/text`,
+      payload: { dialogId: parseDialog(ASK_OPEN)!.id, optionIndex: 2, text: ASK_TEXT },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'not-free-text' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+    await app.close();
+  });
+
+  // Decision `ask-answer-returns-next-screen` (the 2026-10-16 report). A recorded Claude Code 2.1.296 ask in unrelated made-up content:
+  // its last question answered, the pane moves to the review, and the route answers with that screen and hands it to
+  // every open stream of the session (`answered:<id>`).
+  it('POST dialog answers with the screen the pane moved to, and hands it to the session\'s streams', async () => {
+    const q2 = askPane('cc296-ask-2q-long-q2.txt');
+    const review = askPane('cc296-ask-2q-long-review.txt');
+    const { app, bus } = await makeApp([q2, q2, review]);
+    const seen: unknown[] = [];
+    bus.on(`answered:${ID}`, (next) => seen.push(next));
+    const res = await app.inject({
+      method: 'POST', url: `/api/sessions/${ID}/dialog`, payload: { dialogId: parseDialog(q2)!.id, optionIndex: 1 },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true, next: parseDialog(review) });
+    expect(seen).toEqual([parseDialog(review)]);
+    // A refusal hands nothing on.
+    const stale = await app.inject({
+      method: 'POST', url: `/api/sessions/${ID}/dialog`, payload: { dialogId: 'deadbeef', optionIndex: 1 },
+    });
+    expect(stale.statusCode).toBe(409);
+    expect(seen).toHaveLength(1);
+    await app.close();
+  });
+
+  // D-5048. Recorded Claude Code 2.1.300 screens: "Which features do you want?" with Logging ticked, then with Logging
+  // and Tracing ticked (the cursor on row 1 both times), then the next question, "Which tools?", once Tab committed it.
+  const MULTI_1 = askPane('cc300-ask-multiselect-digit1.txt');
+
+  it('POST dialog/multi ticks the boxes that differ, proves the ticks, then Tab (D-5048)', async () => {
+    const { app, calls } = await makeApp([
+      MULTI_1, askPane('cc300-ask-multiselect-digit1-3.txt'), askPane('cc300-ask-multiselect-submit-open.txt'),
+    ]);
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${ID}/dialog/multi`,
+      payload: { dialogId: parseDialog(MULTI_1)!.id, optionIndexes: [1, 3] },
+    });
+    expect(res.statusCode).toBe(200);
+    // Decision `ask-answer-returns-next-screen`: the 200 carries the screen the commit moved to.
+    expect(res.json()).toEqual({ ok: true, next: parseDialog(askPane('cc300-ask-multiselect-submit-open.txt')) });
+    expect(sendKeysCalls(calls)).toEqual([
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, '3'],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Tab'],
+    ]);
+    await app.close();
+  });
+
+  it('POST dialog/multi answers 400 bad-indexes for a set it will not send, before any capture or key (D-5048)', async () => {
+    const { app, calls } = await makeApp([MULTI_1]);
+    for (const optionIndexes of [[], [1, 1], [0], [10], [1.5]]) {
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/sessions/${ID}/dialog/multi`,
+        payload: { dialogId: parseDialog(MULTI_1)!.id, optionIndexes },
+      });
+      expect(res.statusCode, JSON.stringify(optionIndexes)).toBe(400);
+      expect(res.json()).toEqual({ ok: false, error: 'bad-indexes' });
+    }
+    expect(calls.filter((c) => c[1] === 'capture-pane' || c[1] === 'send-keys')).toEqual([]);
+    await app.close();
+  });
+
+  it('POST dialog/multi answers 400 bad-request for a missing or mistyped field (D-5048)', async () => {
+    const { app, calls } = await makeApp([MULTI_1]);
+    const id = parseDialog(MULTI_1)!.id;
+    for (const payload of [
+      { dialogId: id },
+      { dialogId: id, optionIndexes: 1 },
+      { dialogId: id, optionIndexes: ['1'] },
+      { optionIndexes: [1] },
+      { dialogId: id, optionIndex: 1 },
+    ]) {
+      const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/dialog/multi`, payload });
+      expect(res.statusCode, JSON.stringify(payload)).toBe(400);
+      expect(res.json()).toEqual({ ok: false, error: 'bad-request' });
+    }
+    expect(sendKeysCalls(calls)).toEqual([]);
+    await app.close();
+  });
+
+  it('POST dialog/multi answers a refusal as 409 with its code, and sends no key (D-5048)', async () => {
+    // The cursor sits on "4. [ ] Type something": a digit there is typed into the row, not a tick.
+    const onText = askPane('cc300-ask-multiselect-on-freetext.txt');
+    const { app, calls } = await makeApp([onText]);
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${ID}/dialog/multi`,
+      payload: { dialogId: parseDialog(onText)!.id, optionIndexes: [1, 3] },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'cursor-not-on-option' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+    await app.close();
+  });
+
+  // Decision `ask-dialog-tab-route`. The recorded 2.1.296 ask (neutral text): → on the last question lands on the
+  // review, which comes back as `next` and goes to every open stream of the session, as an answer's screen does.
+  it('POST dialog/tab presses Right, answers with the review, and hands it to the session\'s streams', async () => {
+    const q2 = askPane('cc296-ask-2q-long-q2.txt');
+    const review = askPane('cc296-ask-2q-long-review.txt');
+    const { app, bus, calls } = await makeApp([q2, review]);
+    const seen: unknown[] = [];
+    bus.on(`answered:${ID}`, (next) => seen.push(next));
+    const res = await app.inject({
+      method: 'POST', url: `/api/sessions/${ID}/dialog/tab`, payload: { dialogId: parseDialog(q2)!.id, to: 'next' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true, next: parseDialog(review) });
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Right']]);
+    expect(seen).toEqual([parseDialog(review)]);
+    await app.close();
+  });
+
+  it('POST dialog/tab answers 400 bad-request for a body it will not act on, before any capture or key', async () => {
+    const q2 = askPane('cc296-ask-2q-long-q2.txt');
+    const { app, calls } = await makeApp([q2]);
+    const id = parseDialog(q2)!.id;
+    for (const payload of [{ dialogId: id }, { dialogId: id, to: 'up' }, { dialogId: id, to: 0 }, { to: 'next' }]) {
+      const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/dialog/tab`, payload });
+      expect(res.statusCode, JSON.stringify(payload)).toBe(400);
+      expect(res.json()).toEqual({ ok: false, error: 'bad-request' });
+    }
+    expect(calls.filter((c) => c[1] === 'capture-pane' || c[1] === 'send-keys')).toEqual([]);
+    await app.close();
+  });
+
+  it('POST dialog/tab answers a refusal as 409 with its code, and sends no key', async () => {
+    const one = askPane('cc300-ask-1q-open.txt');
+    const { app, calls } = await makeApp([one]);
+    const res = await app.inject({
+      method: 'POST', url: `/api/sessions/${ID}/dialog/tab`, payload: { dialogId: parseDialog(one)!.id, to: 'next' },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'no-tabs' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+    await app.close();
+  });
+
   it('POST interrupt on a busy session (live status) sends Escape', async () => {
     const { app, calls } = await makeApp(['generation…\n❯ \n'], { status: 'busy' });
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/interrupt`, payload: {} });
@@ -428,11 +661,14 @@ describe('write routes', () => {
     await app.close();
   });
 
-  it('unknown session id returns 404 on all five routes', async () => {
+  it('unknown session id returns 404 on all seven routes', async () => {
     const { app } = await makeApp(['❯ \n']);
     for (const [url, payload] of [
       ['/api/sessions/nope/prompt', { text: 'hi' }],
       ['/api/sessions/nope/dialog', { dialogId: 'x', optionIndex: 1 }],
+      ['/api/sessions/nope/dialog/text', { dialogId: 'x', optionIndex: 1, text: 'hi' }],
+      ['/api/sessions/nope/dialog/multi', { dialogId: 'x', optionIndexes: [1] }],
+      ['/api/sessions/nope/dialog/tab', { dialogId: 'x', to: 'next' }],
       ['/api/sessions/nope/interrupt', {}],
       ['/api/sessions/nope/ask', { askKey: 'k', optionIndexes: [0] }],
       ['/api/sessions/nope/submit', {}],
@@ -669,9 +905,9 @@ describe('prompt route attachment handling', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([
-      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, '-l', clip],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, '-l', '--', clip],
       ['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'M-Enter'],
-      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, '-l', 'what is this'],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, '-l', '--', 'what is this'],
       ['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Enter'],
     ]);
     await app.close();
@@ -691,7 +927,7 @@ describe('prompt route attachment handling', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([
-      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, '-l', clip],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, '-l', '--', clip],
       ['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Enter'],
     ]);
     await app.close();
@@ -1339,8 +1575,11 @@ describe('POST /api/sessions/:id/archive — and an open run', () => {
     writeFileSync(path.join(home, '.cc-sessions', `${id}.workdir`), worktree);
     return home;
   };
+  // A real pane pid for `list-panes`, as `makeApp`'s runner gives: since D-5234 a null pid on an alive pane is an
+  // UNMEASURED row (`status-unknown`, D-5274), and these tests are about the coordination checks behind it.
   const recording = (calls: string[][]): Runner => async (_cmd, args) => {
     calls.push(args);
+    if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
     return { code: 0, stdout: '', stderr: '' };
   };
 

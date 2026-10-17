@@ -6,6 +6,7 @@
 //
 // Two cues per row, always: the word is the fact and the glyph is the shape, so
 // no state has to be read out of colour (StatusDot.tsx's own discipline).
+import { WARN_GLYPH } from '@ccrc/ui';
 import { KICKOFF_UNACKED_MS, MAIL_REPLAY_WARN_COUNT, SPAWN_STALL_MS, isChildReclaimWord, isRunState,
   type ChildMark, type ChildReclaimStatus, type ChildReclaimWord, type RunHealth, type RunItemTally, type RunKind, type RunState, type RunSummary } from '../../../shared/api';
 import { formatAge } from './formatReset';
@@ -196,7 +197,7 @@ export function dispatchWindow(
  *  instead of a cell that silently renders nothing. */
 export const DISPATCH_GLYPH: Record<Exclude<DispatchWindow['phase'], 'none'>, string> = {
   'in-flight': '⟳',
-  stalled: '⚠',
+  stalled: WARN_GLYPH,
 };
 
 /** Is THIS row inside a dispatch window at all — i.e. is there a spawn to

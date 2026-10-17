@@ -25,7 +25,25 @@
 import { audit, contrast, resolveColor } from './audit.mjs';
 
 const report = audit();
-const { DARK, LIGHT } = report.themes;
+const { DARK, LIGHT, byName } = report.themes;
+
+/** EVERY palette, for the token-pair half too.
+ *
+ *  This half used to run for DARK and LIGHT alone while the stylesheet half
+ *  already looped every palette — so the gate's own headline count grew with
+ *  each new theme and looked like coverage. It was not. The token pairs are
+ *  the DEFENSIVE floors: combinations the design system promises to hold
+ *  wherever they are used, including where no rule uses them yet. Skipping
+ *  them for ten palettes meant skipping exactly the checks that have no
+ *  stylesheet to catch them.
+ *
+ *  Measured when this was fixed: three light palettes had shipped
+ *  `--status-busy`, `--status-attention` and `--status-dead` as #000000 —
+ *  pure black status dots, hue gone, the two-cue rule broken — and the gate
+ *  printed ALL PASS, because no rule pairs a raw dot token against the well,
+ *  only this contract does. */
+const ALL_PALETTES = [['DARK ', DARK], ...Object.entries(byName)
+  .map(([n, t]) => [n.toUpperCase(), t])];
 
 /** A token pair is named by its tokens.css custom property; the hex is looked
  *  up per theme, so there is no second copy of the palette to keep in sync. */
@@ -58,6 +76,9 @@ const palette = (theme) => {
     // --pr-merged (tokens.css) aliases --acct-violet, so it resolves to that
     // same hex per theme rather than being a second colour to keep in sync.
     prMerged: of('--pr-merged'),
+    // The scrollbar thumb (D-5159), derived in :root and re-resolved here per
+    // palette like every other token.
+    thumb: of('--scrollbar-thumb'),
   };
 };
 
@@ -79,8 +100,16 @@ const pairs = (T, name) => [
   // off surface by design), nowhere near the 3:1 non-text floor, and no
   // token substitution fixes that without inventing a new one — every
   // other raised+edge-subtle affordance in this file (.proj-search,
-  // .account-gauge, .notice, .acct-list .acct-row) is exempt for the same
+  // .account-gauge, .notice, the account picker's .acct-pick row) is exempt for the same
   // reason tokens.css gives hairlines: "decorative — no contrast claim".
+  // The back chevron on every detail screen. @ccrc/ui's `BackButton` paints
+  // --ink-secondary and grounds on body's --bg-page, through a .shell-detail /
+  // .*-head / .*-screen chain that paints nothing. FIVE stylesheet rules said
+  // this before; only `.settings-back` was ever measured (an INHERITED_GROUNDS
+  // entry whose own `why:` called the other four "grandfathered debt"), so
+  // stating it once here measures four rules that nothing measured before.
+  // Also `.settings-title`'s <h1> and the `···` glyph, same ink, same ground.
+  [`${name} ink-secondary / page`, T.inkS, T.page, 4.5],
   [`${name} ink-secondary / raised`, T.inkS, T.raised, 4.5],
   [`${name} ink-secondary / sheet`, T.inkS, T.sheet, 4.5],
   [`${name} ink-tertiary / surface`, T.inkT, T.surface, 4.5],
@@ -174,8 +203,15 @@ const pairs = (T, name) => [
   [`${name} limit ok / track (UI 3:1)`, T.lOk, T.track, 3],
   [`${name} limit warn / track (UI 3:1)`, T.lWarn, T.track, 3],
   [`${name} limit crit / track (UI 3:1)`, T.lCrit, T.track, 3],
+  // THE FOURTH BAND IS DELIBERATELY ABSENT FROM THIS CONTRACT. `off` measures
+  // 1.02-1.10 against the track in all twelve palettes — it is not a quiet
+  // fill, it is an invisible one. That is a PRESERVED defect, not an accepted
+  // floor: stating it here as a pair would red the gate for a pixel this
+  // branch is not allowed to change. It is pinned instead by
+  // `pwa/test/limit-off-band.test.ts`, which measures the same numbers and
+  // reds if they move in either direction.
   // The ask sheet's two accent-on-quiet-ground texts. Both are 11px
-  // (--text-2xs), so both are body text at 4.5 — not the 3:1 UI threshold.
+  // (--fs-2xs), so both are body text at 4.5 — not the 3:1 UI threshold.
   [`${name} ask header chip / accent-tint`, T.accent, T.accentTint, 4.5],
   [`${name} preview toggle / sheet`, T.accent, T.sheet, 4.5],
   [`${name} diff-add / well`, T.diffAdd, T.well, 4.5],
@@ -184,7 +220,7 @@ const pairs = (T, name) => [
   // light one is tuned for paper, so on a well — which is dark in BOTH themes —
   // it read 3.03:1 and shipped that way. --accent-on-well is the well spelling
   // of the accent; both floors are the 4.5 body floor because the label is 11px
-  // (--text-2xs), not a glyph. Two grounds, because the affordance is on the
+  // (--fs-2xs), not a glyph. Two grounds, because the affordance is on the
   // BAR and the bar is on the well.
   [`${name} accent-on-well / well`, T.accentOnWell, T.well, 4.5],
   [`${name} accent focus ring / page (UI 3:1)`, T.accent, T.page, 3],
@@ -200,17 +236,146 @@ const pairs = (T, name) => [
   // would redden the gate for a state that cannot occur — the plate is what
   // they actually sit on.
   [`${name} selected-row meta ink / slab`, T.edgeStrong, T.inkP, 4.5],
+
+  // A GHOST BUTTON'S LABEL ON A TINTED BANNER. Button's ghost variant paints
+  // its own --ink-primary and its background is transparent, so it is neither
+  // self-grounded (utility-pairs.test.ts derives bg+text on ONE element) nor
+  // visible to the stylesheet scan (it writes no rule). Both halves of the gate
+  // look straight past it.
+  //
+  // These two pairs WERE measured, by accident: chat.css carried
+  // `.chat-banner--dead .btn-ghost { color: var(--ink-primary) }` and a twin
+  // one banner over, each registered as an "undo" of the banner's own colour.
+  // They were undoing nothing — an element that declares its own colour never
+  // inherits one — so deleting them cost no pixels and 24 gate checks. Stated
+  // here instead, where the claim is the contract rather than a redundant rule
+  // nobody meant to rely on.
+  [`${name} ink-primary / dead banner tint`, T.inkP, T.deadTintSolid, 4.5],
+  [`${name} ink-primary / attention tint`, T.inkP, T.attTint, 4.5],
+
+  // THE SCROLLBAR THUMB (D-5159). base.css paints `scrollbar-color:
+  // var(--scrollbar-thumb) transparent` on `html`, and the stylesheet half
+  // never reads it (`scrollbar-color` is not `color`). Its track is
+  // transparent, so its ground is whatever the scroll container paints —
+  // these five, the well included: dark in every palette, so a light
+  // palette's thumb must clear white AND near-black. A non-text mark, 3:1.
+  [`${name} scrollbar thumb / page (UI 3:1)`, T.thumb, T.page, 3],
+  [`${name} scrollbar thumb / surface (UI 3:1)`, T.thumb, T.surface, 3],
+  [`${name} scrollbar thumb / raised (UI 3:1)`, T.thumb, T.raised, 3],
+  [`${name} scrollbar thumb / sheet (UI 3:1)`, T.thumb, T.sheet, 3],
+  [`${name} scrollbar thumb / well (UI 3:1)`, T.thumb, T.well, 3],
 ];
 
 let fail = 0, n = 0;
 
 console.log(`# token pairs — the design system's standing contract`);
-for (const [label, fg, bg, min] of [...pairs(palette(DARK), 'DARK '), ...pairs(palette(LIGHT), 'LIGHT')]) {
+for (const [label, fg, bg, min] of ALL_PALETTES.flatMap(([n, t]) => pairs(palette(t), n))) {
   const r = contrast(fg, bg);
   const ok = r >= min;
   if (!ok) fail++;
   n++;
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${r.toFixed(2).padStart(6)}  (min ${min})  ${label}  ${hex(fg)} on ${hex(bg)}`);
+}
+
+// ── ink tiers (D-5097) ──────────────────────────────────────────────────────
+// THREE TOKENS ARE NOT THREE INKS UNLESS SOMETHING MEASURES THE DISTANCE.
+// Every pair above holds a FLOOR, and a floor is satisfied just as well by
+// one ink wearing three names: the generator once fitted primary, secondary
+// and tertiary from the same seed against the same floor, and wherever the
+// seed already cleared it all three came out equal — ten of twelve palettes,
+// measured ΔL(primary, tertiary) 0.000 to 0.085, with this gate printing ALL
+// PASS. So the tiers are measured as a SEPARATION, in OKLab lightness (the
+// axis a reader perceives as "quieter"), signed toward the ground: tertiary
+// must sit at least 0.12 nearer the card than primary, and secondary strictly
+// between, at least 0.04 from each. The generator's quiet tiers aim at 0.14
+// (ui/design/make-themes.mjs), the generator-and-gate split of every floor
+// above — but primary is held to the palette's own ink (D-5155), so where the
+// aim is out of reach the band sits nearer this floor, and below it this file
+// is what says so, for every palette but the two named exceptions below. The
+// maths is the generator's, restated here because this file is the authority
+// and must not import what it rules on.
+const TIER_FLOOR = 0.12;
+const TIER_STEP = 0.04;
+/** THE ΔL FLOOR'S NAMED EXCEPTIONS (D-5155): exactly two palettes, each with
+ *  its reason. Primary is held within ΔEOK 0.02 of each palette's own ink, and
+ *  on these two light palettes that cap binds before the band reaches 0.12.
+ *  Their dark ink sits low on the lightness axis, where the same contrast span
+ *  is a shorter OKLab distance, and tertiary is already at the 4.5 text floor
+ *  on its binding ground. Both palettes are low-contrast by design and keep
+ *  their character, so the gate holds each to its measured band rounded DOWN
+ *  to 0.10 (0.100 and 0.105 when this was ruled). That is still a floor: a
+ *  drift below it reds.
+ *
+ *  Only the ΔL row is excepted. Both step rows keep 0.04, and every other
+ *  palette keeps 0.12. Two-way, like the audit's registries: an entry whose
+ *  palette clears 0.12 again is stale, and an entry that names no palette is
+ *  a typo or a leftover. An entry with a blank reason is a ruling nobody can
+ *  read. All three are FAIL rows. `pwa/test/ink-tiers.test.ts` pins the list
+ *  to exactly these two, at exactly these floors, so a third entry reds there
+ *  even for a palette that measures under 0.12, and so does a floor nudged
+ *  inside its rounding (0.105, 0.119): widening the exception is a ruling,
+ *  not an edit. */
+const TIER_FLOOR_EXCEPTIONS = {
+  'SOLARIZED-LIGHT': {
+    floor: 0.10,
+    why: 'light palette, low-contrast by design: primary held within ΔEOK 0.02 of its own ink, tertiary at the 4.5 floor on the accent tint',
+  },
+  'CATPPUCCIN-LATTE': {
+    floor: 0.10,
+    why: 'light palette, low-contrast by design: primary held within ΔEOK 0.02 of its own ink, tertiary at the 4.5 floor on raised',
+  },
+};
+const linear = (c) => {
+  const s = c / 255;
+  return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+};
+/** OKLab L of an sRGB triple (0–255). */
+const oklabL = (c) => {
+  const [r, g, b] = [c[0], c[1], c[2]].map(linear);
+  const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+  const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+  const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+  return 0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s;
+};
+
+console.log(`\n# ink tiers — OKLab lightness, signed from primary toward the ground`);
+const tierBand = new Map();
+for (const [name, theme] of ALL_PALETTES) {
+  const T = palette(theme);
+  const [p, s, t] = [T.inkP, T.inkS, T.inkT].map(oklabL);
+  // Toward the ground: down on a dark palette, up on a light one. An unsigned
+  // distance would pass a tertiary LOUDER than primary.
+  const toward = Math.sign(oklabL(T.surface) - p) || 1;
+  const excepted = Object.hasOwn(TIER_FLOOR_EXCEPTIONS, name.trim()) ? TIER_FLOOR_EXCEPTIONS[name.trim()] : undefined;
+  tierBand.set(name.trim(), (t - p) * toward);
+  for (const [label, d, min, a, b, note] of [
+    ['ΔL primary → tertiary', (t - p) * toward, excepted?.floor ?? TIER_FLOOR, T.inkP, T.inkT,
+      excepted ? `  — exception (D-5155): ${excepted.why}` : ''],
+    ['step primary → secondary', (s - p) * toward, TIER_STEP, T.inkP, T.inkS, ''],
+    ['step secondary → tertiary', (t - s) * toward, TIER_STEP, T.inkS, T.inkT, ''],
+  ]) {
+    const ok = d >= min;
+    if (!ok) fail++;
+    n++;
+    // The floor is printed EXACTLY, as the pair rows above print theirs: a
+    // floor rounded for display hides a wrong one (0.119 and 0.1201 both
+    // printed 0.12, and 0.098 and 0.104 both printed 0.10), and the tests read
+    // these rows.
+    console.log(`${ok ? 'PASS' : 'FAIL'}  ${d.toFixed(3).padStart(6)}  (min ${min})  TIER ${name.trim()}  ${label}  ${hex(a)} → ${hex(b)}${note}`);
+  }
+}
+// The exceptions' own two-way check, and their reasons. A FAIL row each,
+// never a PASS row: a registry that is in order adds nothing to the count.
+for (const [name, { floor, why }] of Object.entries(TIER_FLOOR_EXCEPTIONS)) {
+  const d = tierBand.get(name);
+  let problem = null;
+  if (d === undefined) problem = `names no palette: remove it`;
+  else if (d >= TIER_FLOOR) problem = `is stale: ${name} measures ${d.toFixed(3)}, which clears ${TIER_FLOOR} without it — remove it`;
+  else if (typeof why !== 'string' || !/\S/.test(why)) problem = `gives no reason: an exception is a ruling, and its row says why`;
+  if (problem === null) continue;
+  fail++;
+  n++;
+  console.log(`FAIL  ------  (tier)  TIER_FLOOR_EXCEPTIONS entry ${name} (floor ${floor}) ${problem}`);
 }
 
 console.log(`\n# stylesheets — ${report.sheets.join(', ')}`);

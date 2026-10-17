@@ -461,12 +461,14 @@ describe('autoGateBlockers (§9: the intent route\'s advisory 409)', () => {
 });
 
 describe('the ring (design 2026-09-20 D-3187)', () => {
-  it('resolve.ts imports only shared/api and shared/semver — no fs, no store, no fastify', () => {
+  // Wave 19 (R26(b)) adds shared/update-move: autoGateBlockers asks carriesUpdateGate, the L0 gate read. It is L0
+  // (it imports only shared/api and shared/agent-protocol), so the ring holds.
+  it('resolve.ts imports only shared/api, shared/semver and shared/update-move — no fs, no store, no fastify', () => {
     const src = readFileSync(path.join(here, '..', 'src', 'update', 'resolve.ts'), 'utf8');
     const specs = [...src.matchAll(/^\s*(?:import|export)\b[^;]*?\bfrom\s+'([^']+)'|^\s*import\s+'([^']+)'/gm)]
       .map((m) => m[1] ?? m[2]);
     expect(specs.length).toBeGreaterThan(0);
-    expect(new Set(specs)).toEqual(new Set(['../../../shared/api.js', '../../../shared/semver.js']));
+    expect(new Set(specs)).toEqual(new Set(['../../../shared/api.js', '../../../shared/semver.js', '../../../shared/update-move.js']));
     expect(/\brequire\(|import\(/.test(src)).toBe(false);
   });
 });

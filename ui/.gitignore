@@ -1,0 +1,5 @@
+node_modules/
+# Every Storybook build, the per-skin ones included (storybook-static-instrument/): D-5244.
+storybook-static*/
+dist/
+.shots/

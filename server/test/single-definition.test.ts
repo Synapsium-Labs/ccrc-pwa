@@ -18,6 +18,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import path from 'node:path';
+import { componentFamily } from './sourceScan.js';
 import { fileURLToPath } from 'node:url';
 import {
   AUTH_VERDICTS, PR_REASONS, isPrReason, LIFECYCLE_ACTS, LC_ACT_UNKNOWN,
@@ -690,7 +691,7 @@ describe('Build 7 nouns', () => {
     // call shape rather than its line: this sentence used to say "line 167",
     // and the very commit that wrote that number had already pushed the guard
     // off it.
-    const strip = readFileSync(path.join(ccrcRoot, 'pwa/src/session/MailStrip.tsx'), 'utf8');
+    const strip = readFileSync(path.join(ccrcRoot, 'ui/src/components/mail-strip.tsx'), 'utf8');
     expect(strip).toMatch(
       /if \(\(TERMINAL_DELIVERY_STATES as readonly string\[\]\)\.includes\(item\.state\)\) return null;/);
   });
@@ -2701,7 +2702,14 @@ describe('Build 8 vocabularies — one definition each, all derived from their m
       // deliberately not scanned: those members answer "who sent this", a
       // different question from "who pressed the key".
       expect(read('server/src/server.ts')).not.toMatch(/'operator'/);
-      expect(read('pwa/src/fleet/SessionLine.tsx')).not.toMatch(/'operator'/);
+      // THE ROW'S FAMILY, not one path. This was `read('…/SessionLine.tsx')`
+      // until the row's meta line — the half that renders the ask chip and so
+      // the half this negative is about — moved to `SessionMeta.tsx`. A
+      // negative assertion against a file the code has left does not go red;
+      // it goes VACUOUS, which is worse. `componentFamily` follows what the
+      // row renders.
+      expect(componentFamily(ccrcRoot, 'pwa/src/fleet/SessionLine.tsx'))
+        .not.toMatch(/'operator'/);
     });
   });
 });
@@ -3487,8 +3495,9 @@ describe('ROUTE_WRITABLE_FIELDS — one list, one home (routing spec §5.3, slic
 
 describe('the pane read is declared once, in L0', () => {
   // PANE_HISTORY_LINES is echoed back to the PWA in every history response and
-  // will be read by wave 3's fit floor beside READER_MIN_COLS and
-  // STALL_BUDGET_LINES. A second copy is a second number to keep in step.
+  // will be read by stage 2's fit target (spec 2026-10-14 §6.2) beside
+  // READER_MIN_COLS and STALL_BUDGET_LINES. A second copy is a second number
+  // to keep in step.
   it('PANE_HISTORY_LINES is defined in shared/api.ts and nowhere else', () => {
     const holders = ALL.filter((f) => /^\s*export const PANE_HISTORY_LINES\b/m.test(readFileSync(f, 'utf8'))).map(rel);
     expect(holders).toEqual(['shared/api.ts']);
@@ -5729,8 +5738,8 @@ describe('child reclamation wave 9: the collector lane’s live switch has no wr
 
   // THE WIDER WRITER, the expiry pin's argument: a file that imports the ONE spelling and holds an `io` could write it
   // without spelling its name. The files whose code names the constant are the definer and the executor, which reads
-  // it from the registry listing alone, and neither reaches a write. The lane's feed and attention writes live in
-  // watch.ts, which never names the constant.
+  // it from the registry listing alone; neither reaches a FILE write, and since wave 10 the executor's one write is
+  // the latch, through the store's setCollectLane. The lane's feed and attention writes live in watch.ts, never naming it.
   it('the files that name its constant are the definer and the executor, and neither reaches a write', () => {
     const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
     expect(WRITE.test('await deps.io.writeFile(`${dir}/${m}`, "");'), 'CONTROL: the pattern sees a write').toBe(true);
@@ -5757,6 +5766,212 @@ describe('child reclamation wave 9: the collector’s lane and executor call the
   });
 });
 
+// CHILD RECLAMATION WAVE 10 (path-identity spec 2026-10-12 §5.9: "Exactly one database writer and one journal append
+// adapter exist; only POST and automatic latch call the writer"). APPENDED, for the reason the blocks above state:
+// `session-hook.test.ts`'s citation audit cites this file by line. Settings now arms the temp-root collector beside the
+// hand-touched legacy file, so what may move the switch is pinned as text:
+// - the store's one writer is called by the route's POST and the one latch helper, and by nothing else;
+// - the generation journal is appended by one adapter, from inside that writer only, and its basename is spelled once;
+// - the resolver that turns the switch into a licence is called by the executor and the GET's view composer alone;
+// - the latch helper is called by the executor and the lane's pass alone.
+// The call census reads server/src only: the PWA's client method of the same name posts to the route and is not the
+// store's writer, and the PWA cannot import server/src. Code lines only (`stallCode`): a sentence about a call is never a
+// call. KNOWN WIDTH: a call spelled inside a string on a code line counts, which errs toward red. A call through an
+// alias (`const w = store.setCollectLane; w(…)`) is not seen; the bar is the ordinary call.
+describe('child reclamation wave 10: the collector switch has one writer, one journal and one resolver', () => {
+  const STORE = 'server/src/coord/store.ts';
+  const ROUTES = 'server/src/coord/routes.ts';
+  const EXECUTOR = 'server/src/coord/collectTempRoot.ts';
+  const LANE = 'server/src/collectLane.ts';
+  const ADAPTER = 'server/src/coord/collectLaneJournal.ts';
+  const WATCH = 'server/src/watch.ts';
+  const SERVER = ALL.filter((f) => rel(f).startsWith('server/src/'));
+  const code = (r: string): string => stallCode(path.join(ccrcRoot, r));
+  /** A call or a method head: the name and its paren, never after `function ` (a declaration). */
+  const CALL = (n: string): RegExp => new RegExp(`(?<!function\\s+)\\b${n}\\s*\\(`, 'g');
+  const count = (text: string, re: RegExp): number => [...text.matchAll(re)].length;
+  /** `file:n` for every server/src file whose code lines match `re` (global) n times, sorted. */
+  const sitesOf = (re: RegExp): string[] => SERVER.flatMap((f) => {
+    const n = count(stallCode(f), re);
+    return n === 0 ? [] : [`${rel(f)}:${n}`];
+  }).sort();
+  const DEF_FN = (n: string): RegExp => new RegExp(`^\\s*(?:export\\s+)?(?:async\\s+)?function\\s+${n}\\b`, 'm');
+  const DEF_VAL = (n: string): RegExp => new RegExp(`^\\s*(?:export\\s+)?(?:const|let|var)\\s+${n}\\b`, 'm');
+  const definers = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  /** Quoted strings and template literals blanked to spaces, newlines kept: a brace inside a quote never moves a
+   *  body's end. */
+  const unquoted = (t: string): string =>
+    t.replace(/'(?:\\.|[^\\'\n])*'|"(?:\\.|[^\\"\n])*"|`(?:\\[\s\S]|[^\\`])*`/g, (m) => m.replace(/[^\n]/g, ' '));
+  /** The `{…}` body that opens at the first brace after the first match of `head`; '' when `head` matches nothing. */
+  const bodyAfter = (text: string, head: RegExp): string => {
+    const at = text.search(head);
+    if (at < 0) return '';
+    const flat = unquoted(text);
+    const open = flat.indexOf('{', at);
+    if (open < 0) return '';
+    let depth = 0;
+    for (let i = open; i < flat.length; i++) {
+      if (flat[i] === '{') depth += 1;
+      else if (flat[i] === '}') {
+        depth -= 1;
+        if (depth === 0) return text.slice(open, i + 1);
+      }
+    }
+    return text.slice(open);
+  };
+  /** The route's POST, from its registration to its handler's own closing brace (`bodyAfter`), never on to the next
+   *  registration: a helper declared between the two is not the handler. '' when the registration is gone. */
+  const postSlice = (text: string): string => {
+    const at = text.indexOf("app.post('/api/coord/collect-lane'");
+    const rest = at < 0 ? '' : text.slice(at);
+    const body = bodyAfter(rest, /^/);
+    return body === '' ? '' : rest.slice(0, rest.indexOf(body) + body.length);
+  };
+
+  it('CONTROL: the scanners see a call, a method head and a body, and not a declaration, a comment line or a quoted brace', () => {
+    expect(count('    const w = deps.coord.setCollectLane(req, at, deps.collectLane.journal);', CALL('setCollectLane'))).toBe(1);
+    expect(count('  setCollectLane(req: CollectLaneWriteRequest, at: number, journal: CollectLaneJournal): CollectLaneWrite {',
+      CALL('setCollectLane')), 'a method head is a site').toBe(1);
+    expect(count('export function collectLaneEffective(i: CollectLaneInputs): CollectLaneEffective {', CALL('collectLaneEffective')))
+      .toBe(0);
+    expect(count('export async function collectRetireLatch(c: CollectControlDeps): CollectLatchOutcome {', CALL('collectRetireLatch')))
+      .toBe(0);
+    expect(count(stallCodeText('  // c.coord.setCollectLane(req, at, journal)\n   * collectLaneEffective(i) is called here'),
+      CALL('setCollectLane')), 'a comment line is not a call').toBe(0);
+    expect(DEF_FN('collectRetireLatch').test(
+      'export function collectRetireLatch(c: CollectControlDeps, switches: CollectSwitches, epoch: CollectEpochPair): CollectLatchOutcome {'))
+      .toBe(true);
+    expect(DEF_FN('collectRetireLatch').test('    const out = collectRetireLatch(deps.control, sw, pair);')).toBe(false);
+    const planted = "export function f(): void {\n  const s = '}';\n  g(`${'{'}`);\n  if (x) { h(); }\n}\nexport function k(): void { h(); }\n";
+    expect(bodyAfter(planted, /^export function f\(/m), 'the body ends at its own brace, past a quoted one')
+      .toBe("{\n  const s = '}';\n  g(`${'{'}`);\n  if (x) { h(); }\n}");
+    expect(bodyAfter(planted, /^export function absent\(/m), 'an absent head reads as no body').toBe('');
+    const routes = "app.get('/api/coord/collect-lane', a);\napp.post('/api/coord/collect-lane', async () => { w(); });\nconst below = () => s.setCollectLane(r);\napp.get('/api/runs', b);\n";
+    expect(postSlice(routes), 'the slice ends at the handler’s brace, short of a helper below it').toBe("app.post('/api/coord/collect-lane', async () => { w(); }");
+    expect(SERVER.length, 'the walk reached server/src').toBeGreaterThan(30);
+    expect(SERVER.map(rel)).toContain(STORE);
+  });
+
+  it('setCollectLane is defined in store.ts and called only in the route’s POST and collectRetireLatch', () => {
+    expect(sitesOf(/\bsetCollectLane\s*\(/g), 'a second caller, or a second definition')
+      .toEqual([`${EXECUTOR}:1`, `${ROUTES}:1`, `${STORE}:1`]);
+    expect(code(STORE), 'the store’s one spelling is not the single-line method head')
+      .toMatch(/^[ \t]*setCollectLane\s*\([^)]*\)\s*:\s*CollectLaneWrite\s*\{[ \t]*$/m);
+    const post = postSlice(code(ROUTES));
+    expect(post, 'the POST registration is gone — this scan is over nothing').toContain("app.post('/api/coord/collect-lane'");
+    expect(count(post, /\bsetCollectLane\s*\(/g), 'the routes.ts call is not in the POST handler').toBe(1);
+    expect(count(bodyAfter(code(EXECUTOR), /^export function collectRetireLatch\(/m), /\bsetCollectLane\s*\(/g),
+      'the executor file’s call is not in the latch helper').toBe(1);
+  });
+
+  it('appendGeneration is defined once, in the adapter, and called once, in setCollectLane', () => {
+    expect(sitesOf(/\.appendGeneration\s*\(/g), 'a second caller of the append').toEqual([`${STORE}:1`]);
+    expect(count(bodyAfter(code(STORE), /^[ \t]*setCollectLane\s*\(/m), /\.appendGeneration\s*\(/g),
+      'the store’s append is not inside setCollectLane').toBe(1);
+    expect(SERVER.filter((f) => /\bappendGeneration\b/.test(stallCode(f))).map(rel).sort(),
+      'a second file defines or names the append').toEqual([LANE, ADAPTER, STORE]);
+    const lane = code(LANE);
+    const port = bodyAfter(lane, /^export interface CollectLaneJournal\b/m);
+    expect(count(port, /\bappendGeneration\b/g), 'the L1 port no longer declares the append').toBe(1);
+    expect(count(lane, /\bappendGeneration\b/g), 'collectLane.ts names the append outside the port it declares').toBe(1);
+    expect(count(code(STORE), /\bappendGeneration\b/g), 'the store names the append other than by its one call').toBe(1);
+    expect(count(code(ADAPTER), /\bappendGeneration\b/g), 'the adapter does not name the append exactly once').toBe(1);
+  });
+
+  it('COLLECT_LANE_JOURNAL_BASENAME has one definer, and the quoted basename stands on no other TS or TSX code line', () => {
+    const BASENAME = 'collect-lane-generation.log';
+    expect(stallCodeText(`  // ~/.ccrc/${BASENAME}\n   * ${BASENAME}`).includes(BASENAME), 'CONTROL: a comment line is not a spelling')
+      .toBe(false);
+    expect(stallCodeText(`const p = '${BASENAME}';`).includes(BASENAME), 'CONTROL: a code line is').toBe(true);
+    expect(definers(DEF_VAL('COLLECT_LANE_JOURNAL_BASENAME')), 'a second definer').toEqual([ADAPTER]);
+    expect(ALL.filter((f) => stallCode(f).includes(BASENAME)).map(rel).sort(), 'the basename spelled outside its definer')
+      .toEqual([ADAPTER]);
+    expect(code(ADAPTER).split(BASENAME).length - 1, 'the definer spells it more than once').toBe(1);
+    expect(code(ADAPTER)).toMatch(/^export const COLLECT_LANE_JOURNAL_BASENAME = 'collect-lane-generation\.log';$/m);
+  });
+
+  it('collectLaneEffective is defined in collectLane.ts and called only in collectTempRoot and collectLaneView', () => {
+    expect(definers(DEF_FN('collectLaneEffective')), 'a second definition').toEqual([LANE]);
+    expect(definers(DEF_VAL('collectLaneEffective')), 'a definition as a value').toEqual([]);
+    const calls = CALL('collectLaneEffective');
+    expect(sitesOf(calls).map((s) => s.slice(0, s.lastIndexOf(':'))), 'a caller outside the executor and the view')
+      .toEqual([LANE, EXECUTOR]);
+    const lane = code(LANE);
+    const view = bodyAfter(lane, /^export function collectLaneView\(/m);
+    expect(count(view, calls), 'collectLaneView does not resolve the switch').toBeGreaterThan(0);
+    expect(count(lane, calls), 'collectLane.ts calls the resolver outside collectLaneView').toBe(count(view, calls));
+    const exec = code(EXECUTOR);
+    const job = bodyAfter(exec, /^export async function collectTempRoot\(/m);
+    expect(count(job, calls), 'the executor does not resolve the switch').toBeGreaterThan(0);
+    expect(count(exec, calls), 'collectTempRoot.ts calls the resolver outside the executor').toBe(count(job, calls));
+  });
+
+  it('collectRetireLatch is called only by the executor and the pass', () => {
+    expect(definers(DEF_FN('collectRetireLatch')), 'a second definition').toEqual([EXECUTOR]);
+    const calls = CALL('collectRetireLatch');
+    expect(sitesOf(calls), 'a third caller, or a second call').toEqual([`${EXECUTOR}:1`, `${WATCH}:1`]);
+    expect(count(bodyAfter(code(EXECUTOR), /^export async function collectTempRoot\(/m), calls),
+      'the executor file’s call is not in collectTempRoot').toBe(1);
+    expect(count(bodyAfter(code(WATCH), /^[ \t]*private async collectPass\(/m), calls),
+      'watch.ts’s call is not in the pass').toBe(1);
+  });
+
+  it('the marker’s holders are still exactly the definer and the executor', () => {
+    const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
+    expect(ALL.filter((f) => stallCode(f).includes('collect-lane-live')).map(rel).sort(), 'the marker spelled outside its definer')
+      .toEqual([LANE]);
+    expect(ALL.filter((f) => stallCode(f).includes('COLLECT_LANE_LIVE_MARKER')).map(rel).sort(), 'a third holder of its constant')
+      .toEqual([LANE, EXECUTOR]);
+    expect(code(EXECUTOR), 'the executor reaches a file write').not.toMatch(WRITE);
+    expect(count(code(EXECUTOR), /\.setCollectLane\s*\(/g), 'the executor’s one write is the latch, through the store').toBe(1);
+    expect(code(EXECUTOR), 'the executor appends to the journal itself').not.toMatch(/\.appendGeneration\s*\(/);
+  });
+});
+
+// CHILD RECLAMATION WAVE 10 (path-identity spec 2026-10-12 §5.3). APPENDED, for the reason the blocks above state:
+// `session-hook.test.ts`'s citation audit cites this file by line. The temp-root collector's generation journal only
+// moves forward: no backup copies it, and no restore, rollback or watchdog arm moves it back, so a database snapshot
+// restored without it reads as a mismatch and stops the lane. The one shell file that names it is `ccd/ccrc`, and only
+// in what it TELLS the operator: the usage text and the downgrade report's one echo. The name is read off its one TS
+// definer, so a rename on either side reds here.
+describe('child reclamation wave 10: only ccrc\'s wording names the journal in shell', () => {
+  const DEFINER = 'server/src/coord/collectLaneJournal.ts';
+  const NAME = /^export const COLLECT_LANE_JOURNAL_BASENAME = '([^']+)';$/m
+    .exec(readFileSync(path.join(ccrcRoot, DEFINER), 'utf8'))?.[1] ?? '';
+  /** A shell act on a path: copy, move, removal, link, install, tee, truncate, dd, rsync, or any redirect. */
+  const ACT = /\b(?:rm|cp|mv|ln|install|tee|truncate|dd|rsync)\b|>/;
+
+  it('CONTROL: the name was read off its definer, and the act pattern sees a removal and a redirect but not the echo', () => {
+    expect(NAME, `${DEFINER} no longer declares COLLECT_LANE_JOURNAL_BASENAME as one quoted literal`)
+      .toMatch(/^[a-z][a-z0-9.-]*\.log$/);
+    expect(ACT.test(`  rm -f "$HOME/.ccrc/${NAME}"`)).toBe(true);
+    expect(ACT.test(`  printf '%s\\n' x >> "$HOME/.ccrc/${NAME}"`)).toBe(true);
+    expect(ACT.test(`      echo "update: rollback:   (leave ~/.ccrc/${NAME} in place: no backup holds it"`)).toBe(false);
+  });
+
+  it('its holders are exactly ccd/ccrc', () => {
+    expect(holdersOf(NAME), 'a line of shell outside ccd/ccrc names the journal, or ccd/ccrc no longer does').toEqual(['ccd/ccrc']);
+  });
+
+  it('every holder line is an echo or usage line, none a copy, move, removal or redirect aimed at it', () => {
+    const lines = readFileSync(path.join(ccrcRoot, 'ccd/ccrc'), 'utf8').split('\n');
+    const open = lines.indexOf('usage() {');
+    const close = lines.indexOf('EOF', open);
+    expect(open, 'ccd/ccrc has no usage() {').toBeGreaterThan(-1);
+    expect(close, 'the usage heredoc has no closing EOF').toBeGreaterThan(open);
+    const held = lines.flatMap((l, i) => (!isBashComment(l) && l.includes(NAME) ? [i] : []));
+    expect(held.length, 'the two usage paragraphs and the downgrade echo: at least three lines').toBeGreaterThanOrEqual(3);
+    const echoes = held.filter((i) => /^\s*echo "update: rollback: {3}\(leave ~\/\.ccrc\//.test(lines[i]!));
+    expect(echoes, 'the downgrade report says it exactly once').toHaveLength(1);
+    for (const i of held) {
+      const l = lines[i]!;
+      expect((i > open && i < close) || echoes.includes(i),
+        `ccd/ccrc:${i + 1} names the journal outside the usage text and the downgrade echo: ${l.trim()}`).toBe(true);
+      expect(l, `ccd/ccrc:${i + 1} acts on the journal`).not.toMatch(ACT);
+    }
+  });
+});
+
 // ── ccrc history W1-B2 Task 34: the hook spools exactly SPOOL_SOURCES on SessionStart (spec 2026-10-05 §5.1, S14;
 // ruled Q16). APPENDED, with no import line, for the reason the blocks above state.
 describe('ccrc history: the hook spools exactly SPOOL_SOURCES on SessionStart (spec 2026-10-05 §5.1, S14; W1-B2, ruled Q16)', () => {
@@ -5773,6 +5988,265 @@ describe('ccrc history: the hook spools exactly SPOOL_SOURCES on SessionStart (s
     const m = /case "\$src" in ([a-z|]+)\)/.exec(arms[0]!);
     expect(m, 'the arm spells its sources as one alternation').not.toBeNull();
     expect(m![1]!.split('|').sort()).toEqual([...members].sort());
+  });
+});
+
+// D-5045 (plan docs/superpowers/plans/2026-10-15-ask-server-half.md, Task 1). APPENDED, for the reason the blocks above
+// state: `session-hook.test.ts`'s citation audit cites this file by line. An AskUserQuestion's free-text row is named by
+// ONE placeholder rule, in `shared/ask-menu.ts`. `answerDialog`'s guard reads it through `pane/dialog.ts`'s
+// `freeTextRow`, and the free-text route (D-5047) and the drawer's menu taps (D-5008) are to import it, never spell it:
+// a second spelling that drifts reads the free-text row as an ordinary option, and Enter on it while it is empty
+// rejects the whole ask. The structural backstop's "Chat about this" rule shares that home. Code lines only
+// (`stallCode`): prose names both rows in quotes. KNOWN WIDTH: a spelling assembled from pieces is not seen.
+describe('the free-text row\'s placeholder is spelled once, in shared/ask-menu.ts (D-5045)', () => {
+  const PLACEHOLDER = /type\s+something/i;
+  const CHAT = /chat\s+about\s+this/i;
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+
+  it('CONTROL: the patterns see a regex literal and a string, and pass over comment lines', () => {
+    expect(PLACEHOLDER.test('const FREE = /^Type something\\.?$/i;')).toBe(true);
+    expect(PLACEHOLDER.test("if (label === 'type something') return 3;")).toBe(true);
+    expect(CHAT.test("const CHAT = /chat about this/i;")).toBe(true);
+    expect(stallCodeText('// the empty "Type something." row\n * Chat about this\nconst x = 1;')).not.toMatch(PLACEHOLDER);
+    expect(stallCodeText('// the empty "Type something." row\n * Chat about this\nconst x = 1;')).not.toMatch(CHAT);
+  });
+
+  it('the placeholder is spelled on a code line in shared/ask-menu.ts and nowhere else', () => {
+    expect(holders(PLACEHOLDER)).toEqual(['shared/ask-menu.ts']);
+  });
+
+  it('the Chat row is spelled in shared/ask-menu.ts and nowhere else: the sheet half deleted its older copy (D-5090)', () => {
+    // `DialogSheet.tsx`'s `CHAT_ABOUT_RE` drove the "answer in your own words" path that answered Chat about this and
+    // declined the whole ask (diagnosis root cause 5). The sheet half deleted it with `respond()` (D-5090): own words go
+    // through the free-text row, and the sheet reads the Chat row through `CHAT_ABOUT_ROW_RE`, as every reader does.
+    expect(holders(CHAT)).toEqual(['shared/ask-menu.ts']);
+  });
+
+  it('the guard reads the L0 rules: pane/dialog.ts imports and tests both, and answerDialog asks freeTextRow', () => {
+    const dialog = stallCode(path.join(ccrcRoot, 'server/src/pane/dialog.ts'));
+    for (const name of ['FREE_TEXT_PLACEHOLDER_RE', 'CHAT_ABOUT_ROW_RE']) {
+      expect(dialog, `pane/dialog.ts does not import ${name} from L0`)
+        .toMatch(new RegExp(`import\\s*\\{[^}]*\\b${name}\\b[^}]*\\}\\s*from\\s*'(?:\\.\\./)+shared/ask-menu\\.js'`));
+      expect(dialog, `pane/dialog.ts does not test ${name}`).toMatch(new RegExp(`\\b${name}\\.test\\(`));
+    }
+    expect(stallCode(path.join(ccrcRoot, 'server/src/inject/send.ts'))).toMatch(/\bfreeTextRow\s*\(/);
+  });
+
+  it('shared/ask-menu.ts is L0: it imports nothing', () => {
+    expect(readFileSync(path.join(ccrcRoot, 'shared/ask-menu.ts'), 'utf8')).not.toMatch(/^\s*import\b|\brequire\s*\(/m);
+  });
+});
+
+// D-5047 (plan docs/superpowers/plans/2026-10-15-ask-server-half.md, Task 3). APPENDED, as the D-5045 block above. The
+// free-text route types nothing until the menu's footer shows the external-editor hint ("ctrl+g to edit in Vim"), which
+// Claude Code paints while the cursor is on a free-text row. The hint is ONE rule, in `shared/ask-menu.ts`, read through
+// `pane/dialog.ts`'s `editHintShown`; D-5048's multiSelect route reads the same predicate. A second spelling that
+// drifts would let one route type into a row the other calls unfocused. Code lines only (`stallCode`).
+describe('the free-text row\'s edit hint is spelled once, in shared/ask-menu.ts (D-5047)', () => {
+  const HINT = /to\s+edit\s+in/i;
+  const holders = (): string[] => ALL.filter((f) => HINT.test(stallCode(f))).map(rel).sort();
+
+  it('CONTROL: the pattern sees a regex literal, and passes over comment lines', () => {
+    expect(HINT.test('const HINT = /to edit in/;')).toBe(true);
+    expect(stallCodeText('// the footer gains "ctrl+g to edit in Vim"\nconst x = 1;')).not.toMatch(HINT);
+  });
+
+  it('the hint is spelled on a code line in shared/ask-menu.ts and nowhere else', () => {
+    expect(holders()).toEqual(['shared/ask-menu.ts']);
+  });
+
+  it('the focus proof reads it: pane/dialog.ts imports and tests the L0 rule, and answerDialogText asks editHintShown', () => {
+    const dialog = stallCode(path.join(ccrcRoot, 'server/src/pane/dialog.ts'));
+    expect(dialog).toMatch(/import\s*\{[^}]*\bEDIT_HINT_RE\b[^}]*\}\s*from\s*'(?:\.\.\/)+shared\/ask-menu\.js'/);
+    expect(dialog).toMatch(/\bEDIT_HINT_RE\.test\(/);
+    expect(stallCode(path.join(ccrcRoot, 'server/src/inject/send.ts'))).toMatch(/\beditHintShown\s*\(/);
+  });
+});
+
+// D-5048 (plan docs/superpowers/plans/2026-10-15-ask-server-half.md, Task 4). APPENDED, as the blocks above. A
+// multiSelect question is read into `Dialog.multi`, and so answered by `POST /api/sessions/:id/dialog/multi`, only when
+// the unnumbered row that commits it (`Next`, or `Submit` on the last question) is on screen: that row marks the layout
+// whose keys were measured. ONE rule, `COMMIT_ROW_RE` in `shared/ask-menu.ts`, read by `pane/dialog.ts`'s `multiMenu`.
+// A second spelling that drifts would let one reader call a menu answerable that the other does not. Code lines only
+// (`stallCode`). KNOWN WIDTH: only the two words as one alternation are seen; a bare 'Next' or 'Submit' string is
+// common UI copy and is not scanned.
+describe('the multiSelect commit row is spelled once, in shared/ask-menu.ts (D-5048)', () => {
+  const COMMIT = /\bnext\s*\|\s*submit\b|\bsubmit\s*\|\s*next\b/i;
+  const holders = (): string[] => ALL.filter((f) => COMMIT.test(stallCode(f))).map(rel).sort();
+
+  it('CONTROL: the pattern sees a regex literal either way round, and passes over comment lines', () => {
+    expect(COMMIT.test('const ROW = /^(?:next|submit)$/i;')).toBe(true);
+    expect(COMMIT.test("const ROW = /^(Submit|Next)$/;")).toBe(true);
+    expect(stallCodeText('// the row reads Next|Submit\nconst x = 1;')).not.toMatch(COMMIT);
+  });
+
+  it('the commit row is spelled on a code line in shared/ask-menu.ts and nowhere else', () => {
+    expect(holders()).toEqual(['shared/ask-menu.ts']);
+  });
+
+  it('the parse reads it: pane/dialog.ts imports and tests the L0 rule, and answerDialogMulti reads Dialog.multi', () => {
+    const dialog = stallCode(path.join(ccrcRoot, 'server/src/pane/dialog.ts'));
+    expect(dialog).toMatch(/import\s*\{[^}]*\bCOMMIT_ROW_RE\b[^}]*\}\s*from\s*'(?:\.\.\/)+shared\/ask-menu\.js'/);
+    expect(dialog).toMatch(/\bCOMMIT_ROW_RE\.test\(/);
+    expect(stallCode(path.join(ccrcRoot, 'server/src/inject/send.ts'))).toMatch(/\bdialog\.multi\b/);
+  });
+});
+
+// APPENDED AT THE END OF THE FILE, DELIBERATELY. `session-hook.test.ts` pins a
+// measured census of how many line citations in two frozen corpus documents
+// fail to anchor, grouped by the file they cite — and this file is one of
+// them. Inserting a describe block in the MIDDLE shifts every line below it
+// and moved that census from 8 to 15 (measured, on CI and locally). The
+// citations are frozen by design and Task 11 owns repairing them; a new guard
+// is not a reason to re-measure someone else's debt, so it goes where it
+// shifts nothing.
+
+describe("one 'tmux unreachable' sentence (design-system wave)", () => {
+  // SEVEN COPIES, and three of them carried a comment saying the string was
+  // "SessionLine's chip's own `tmux unreachable — <reason>`, never a second
+  // copy". Every one of those was the second copy. The sentence is operator
+  // COPY, so it lives in the PWA (`pwa/src/fleet/substrateWords.ts`) rather
+  // than beside `substrateFault` in L0, and this is what keeps it there.
+  //
+  // Invisible to every census on this branch by construction: it is not a
+  // stylesheet rule, not an element, not a two-word class literal and not a
+  // leaf's attribute set — one template literal, in seven files.
+  const SENTENCE = /`tmux unreachable — \$\{/;
+
+  it('is composed in exactly one file, and that file is substrateWords.ts', () => {
+    const holders = ALL.filter((f) => SENTENCE.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(holders).toEqual(['pwa/src/fleet/substrateWords.ts']);
+  });
+
+  it('and every surface that showed it still reaches it', () => {
+    // The other direction: a fold that deleted the callers instead of pointing
+    // them at the word would satisfy the test above and lose the tooltip.
+    for (const f of [
+      'pwa/src/fleet/SessionActionsSheet.tsx', 'pwa/src/fleet/ArchiveSheet.tsx',
+      'pwa/src/fleet/SessionMeta.tsx', 'pwa/src/screens/SessionScreen.tsx',
+      'pwa/src/session/SessionHeader.tsx', 'pwa/src/session/PrSheet.tsx',
+    ]) {
+      expect(readFileSync(path.join(ccrcRoot, f), 'utf8'), f)
+        .toMatch(/substrateFaultT(ext|itle)\(/);
+    }
+  });
+});
+
+// D-5089 (plan docs/superpowers/plans/2026-10-15-ask-sheet-half.md, Task 1). APPENDED at the very end, for the reason
+// the note above the 'tmux unreachable' block states: `session-hook.test.ts` cites this file by line. The sheet tells
+// AskUserQuestion's review screen by its last line ("Ready to submit your answers?") and its two rows, and reads its
+// summary up to that line (`pwa/src/session/askLive.ts`'s `isAskReview` and `reviewSummary`). Those are screen facts,
+// so each is ONE rule in `shared/ask-menu.ts` beside the server half's four, and the sheet imports them. A second
+// spelling that drifts would let one reader call a screen the review that the other does not. Code lines only
+// (`stallCode`): prose names the screen in quotes. KNOWN WIDTH: `Cancel` is common copy and is not scanned, and nor is
+// the heading "Review your answers", whose words are also the sheet's own title for the screen.
+describe('the review screen\'s rows and last line are spelled once, in shared/ask-menu.ts (D-5089)', () => {
+  const READY = /ready\s+to\s+submit/i;
+  const SUBMIT = /submit\s+answers/i;
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+
+  it('CONTROL: the patterns see a regex literal and a string, and pass over comment lines', () => {
+    expect(READY.test('const READY = /ready to submit your answers\\?$/i;')).toBe(true);
+    expect(SUBMIT.test("if (label === 'Submit answers') return 1;")).toBe(true);
+    const prose = '// the "Ready to submit your answers?" line\n * 1. Submit answers\nconst x = 1;';
+    expect(stallCodeText(prose)).not.toMatch(READY);
+    expect(stallCodeText(prose)).not.toMatch(SUBMIT);
+  });
+
+  it('the ready line is spelled on a code line in shared/ask-menu.ts and nowhere else', () => {
+    expect(holders(READY)).toEqual(['shared/ask-menu.ts']);
+  });
+
+  it('the Submit answers row is spelled on a code line in shared/ask-menu.ts and nowhere else', () => {
+    expect(holders(SUBMIT)).toEqual(['shared/ask-menu.ts']);
+  });
+
+  it('the sheet reads the L0 rules: askLive.ts imports and tests each review rule', () => {
+    const live = stallCode(path.join(ccrcRoot, 'pwa/src/session/askLive.ts'));
+    const fromL0 = (name: string): RegExp =>
+      new RegExp(`import\\s*\\{[^}]*\\b${name}\\b[^}]*\\}\\s*from\\s*'(?:\\.\\./)+shared/ask-menu(?:\\.js)?'`);
+    for (const name of ['REVIEW_READY_RE', 'REVIEW_HEADING_RE']) {
+      expect(live, `askLive.ts does not import ${name} from L0`).toMatch(fromL0(name));
+      expect(live, `askLive.ts does not test ${name}`).toMatch(new RegExp(`\\b${name}\\.test\\(`));
+    }
+    // Decision `ask-review-lenient-arm`: the two rows are told by ONE L0 reader, `reviewRows`, which the sheet and the
+    // server's frame log both call, so neither spells the row rules again. It tests each of them; askLive imports it.
+    expect(live, 'askLive.ts does not import reviewRows from L0').toMatch(fromL0('reviewRows'));
+    const menu = stallCode(path.join(ccrcRoot, 'shared/ask-menu.ts'));
+    for (const name of ['REVIEW_READY_RE', 'REVIEW_SUBMIT_ROW_RE', 'REVIEW_CANCEL_ROW_RE']) {
+      expect(menu, `reviewRows does not test ${name}`).toMatch(new RegExp(`\\b${name}\\.test\\(`));
+    }
+  });
+});
+
+// D-5231 (plan docs/superpowers/plans/2026-10-16-working-state-and-interruptions.md, Task 1). APPENDED at the very end,
+// for the reason the notes above state: `session-hook.test.ts` cites this file by line. THE DELEGATED-TASK RULE — the
+// six non-delegating kinds and the three terminal statuses — has one TypeScript home, `shared/api.ts`, which the
+// server's and the PWA's wording read. The hook's `jq` in `ccd/session-hook.sh` is the documented second spelling, held
+// equal by `session-hook-background.test.ts`, which iterates over these lists, not by this text scan. A second
+// TypeScript copy that drifts would let one reader call a task delegated that the other does not.
+describe('the delegated-task rule is declared once, in shared/api.ts (D-5231)', () => {
+  const VALUE_DEF = (name: string): RegExp => new RegExp(`^\\s*(?:export\\s+)?(?:const|let|var)\\s+${name}\\b`, 'm');
+  const FUNCTION_DEF = (name: string): RegExp =>
+    new RegExp(`^\\s*(?:export\\s+)?(?:function\\s+${name}\\b|(?:const|let|var)\\s+${name}\\s*=)`, 'm');
+  // The two rarest of the nine words, quoted: a hand-copied list carries them, and no other code names them.
+  const RARE = /(['"`])(?:auto-mode-scan|memory-import)\1/;
+
+  it('CONTROL: the patterns see a declaration and a quoted copy, and not an import, a use or prose', () => {
+    expect(VALUE_DEF('NON_DELEGATING_TASK_KINDS').test('const NON_DELEGATING_TASK_KINDS = [];')).toBe(true);
+    expect(VALUE_DEF('NON_DELEGATING_TASK_KINDS').test("import { NON_DELEGATING_TASK_KINDS } from '../../shared/api.js';")).toBe(false);
+    expect(VALUE_DEF('TERMINAL_TASK_STATUSES').test('for (const s of TERMINAL_TASK_STATUSES) {}')).toBe(false);
+    expect(FUNCTION_DEF('isDelegatedTask').test('const isDelegatedTask = (t) => true;')).toBe(true);
+    expect(FUNCTION_DEF('isDelegatedTask').test('if (isDelegatedTask(t)) n++;')).toBe(false);
+    expect(RARE.test("const K = ['shell', 'memory-import'];")).toBe(true);
+    expect(RARE.test('the `memory-import` kind never holds busy')).toBe(true);
+    expect(RARE.test('the memory-import kind, in prose')).toBe(false);
+  });
+
+  it('declares NON_DELEGATING_TASK_KINDS, TERMINAL_TASK_STATUSES and isDelegatedTask exactly once, in shared/api.ts', () => {
+    for (const name of ['NON_DELEGATING_TASK_KINDS', 'TERMINAL_TASK_STATUSES']) {
+      expect(ALL.filter((f) => VALUE_DEF(name).test(readFileSync(f, 'utf8'))).map(rel), name).toEqual(['shared/api.ts']);
+    }
+    expect(ALL.filter((f) => FUNCTION_DEF('isDelegatedTask').test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/api.ts']);
+  });
+
+  it('quotes the rare kinds on a code line in shared/api.ts and nowhere else across the four roots', () => {
+    expect(ALL.filter((f) => RARE.test(stallCode(f))).map(rel)).toEqual(['shared/api.ts']);
+  });
+});
+
+// D-5238 (plan docs/superpowers/plans/2026-10-16-working-state-and-interruptions.md, Task 9). APPENDED at the very end,
+// for the reason the note above the 'tmux unreachable' block states. The turn verdict's READS have one home,
+// `server/src/turnverdict.ts` (`turnVerdictFor`, `liveRowFor`, `liveWordFor`); the RULE has one home,
+// `server/src/coord/archiveDoor.ts` (`stopVerdict`). The dispatch gate reaches them through its required
+// `DispatchRunDeps.turnVerdict` port, never through a second copy of either. Code lines only (`stallCode`).
+describe('the turn verdict\'s reads and rule each have one home (D-5238)', () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+
+  it('CONTROL: the patterns see a definition and a call, and pass over comment lines', () => {
+    expect(/\bfunction stopVerdict\b/.test('export function stopVerdict(r: StopReadings): TurnVerdict {')).toBe(true);
+    expect(/\bstopVerdict\(/.test("return stopVerdict({ configDir: 'none' });")).toBe(true);
+    expect(stallCodeText('// stopVerdict( in prose\n * stopVerdict(\nconst x = 1;')).not.toMatch(/\bstopVerdict\(/);
+  });
+
+  it('the rule is defined once, in coord/archiveDoor.ts', () => {
+    expect(holders(/\bfunction stopVerdict\b|\bconst stopVerdict\b/)).toEqual(['server/src/coord/archiveDoor.ts']);
+  });
+
+  it('the rule is CALLED only from turnverdict.ts (its definition aside)', () => {
+    expect(holders(/(?<!function )\bstopVerdict\(/)).toEqual(['server/src/turnverdict.ts']);
+  });
+
+  it('the reads are defined once, in turnverdict.ts', () => {
+    for (const name of ['turnVerdictFor', 'liveRowFor', 'liveWordFor']) {
+      expect(holders(new RegExp(`\\bfunction ${name}\\b|\\bconst ${name}\\s*=`)), name).toEqual(['server/src/turnverdict.ts']);
+    }
+  });
+
+  it('dispatch.ts reads no live file of its own: it asks the turnVerdict port', () => {
+    const dispatch = stallCode(path.join(ccrcRoot, 'server/src/coord/dispatch.ts'));
+    expect(dispatch).toMatch(/deps\.turnVerdict\(/);
+    expect(dispatch).not.toMatch(/readLiveStateMeasured|readLiveState\b|panePid\(/);
   });
 });
 

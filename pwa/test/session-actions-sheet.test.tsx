@@ -3,23 +3,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { FleetSession } from '../../shared/api';
+import { fleetSession } from './fleetFixture';
 import { READER_MIN_COLS } from '../../shared/api';
-import { ToastHost } from '../src/components/Toast';
+import { ToastHost } from '@ccrc/ui';
 import { SessionActionsSheet } from '../src/fleet/SessionActionsSheet';
 import { createFleetStore } from '../src/stores/fleet';
-import { ApiError, type api } from '../src/lib/api';
+import { ApiError, HOLD_EMPTY_REASON_TEXT, type api } from '../src/lib/api';
 import { TEST_ROSTER } from './rosterFixture';
 
-const s = (over: Partial<FleetSession> = {}): FleetSession => ({
-  id: 'demo-quiet-mesa', wrapper: 'claude', home: 'claude', project: 'demo',
-  workdir: '/w/demo/quiet-mesa', workspace: 'quiet-mesa', name: null,
-  status: 'idle', statusUpdatedAt: null, limits: null, dialogPending: false,
-  version: null, model: null, effort: null, ultracode: false, branch: null,
-  ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null, held: null,
-  hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null,
-  bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: null, ...over,
-});
+const s = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ id: 'demo-quiet-mesa', workdir: '/w/demo/quiet-mesa', workspace: 'quiet-mesa', ...over }));
 
 /** The REAL server failure shape: runCcd routes answer 502 with `stderr` and
  *  no `error` key. A mocked rejection would not catch an err.message regression;
@@ -443,6 +435,46 @@ describe('hold and release', () => {
     expect(heldCalls).toHaveLength(0);   // typing is not sending
   });
 
+  // THE RESET HAD A LONG COMMENT AND NO TEST — measured: deleting the effect
+  // that clears the composer left all 60 tests in this file green. The sheet
+  // is mounted at screen level and never unmounts on close, and
+  // `FleetScreen`'s `openActionsFor` retargets it while `open` stays true, so
+  // nothing else clears a half-typed reason. Both halves of the reset key get
+  // their own case below.
+  it('a reason half-typed for session A does NOT follow a retarget to session B', () => {
+    const a = f({ id: 'demo-quiet-mesa', held: null });
+    const b = f({ id: 'demo-still-ridge', workspace: 'still-ridge', held: null });
+    const { rerender } = render(<SessionActionsSheet session={a} {...sheetProps} />);
+    fireEvent.click(screen.getByRole('button', { name: /^hold$/i }));
+    fireEvent.change(screen.getByLabelText('Hold reason'), { target: { value: 'program:a wave:1/4' } });
+
+    rerender(<SessionActionsSheet session={b} {...sheetProps} />);
+    // Back to the opener: session B's operator is not handed A's sentence,
+    // and cannot send it by tapping Confirm.
+    expect(screen.getByRole('button', { name: /^hold$/i })).toBeInTheDocument();
+    expect(screen.queryByLabelText('Hold reason')).toBeNull();
+    expect(heldCalls).toHaveLength(0);
+  });
+
+  // THE BEHAVIOUR, NOT THE MECHANISM — said out loud because the measurement
+  // says so: with the reset effect deleted entirely this case stays GREEN,
+  // because `Sheet open={false}` unmounts the composer and the state dies
+  // with it. It is kept as the behavioural claim (a closed-and-reopened sheet
+  // offers an empty box, however that is achieved); the retarget case above
+  // is the one that pins the effect, and it is the only one that reds.
+  it('a reason half-typed survives nothing on a close either', () => {
+    const session = f({ held: null });
+    const props = { onClose: () => {}, onReap: () => {} };
+    const { rerender } = render(<SessionActionsSheet session={session} open {...props} />);
+    fireEvent.click(screen.getByRole('button', { name: /^hold$/i }));
+    fireEvent.change(screen.getByLabelText('Hold reason'), { target: { value: 'program:a' } });
+
+    rerender(<SessionActionsSheet session={session} open={false} {...props} />);
+    rerender(<SessionActionsSheet session={session} open {...props} />);
+    expect(screen.getByRole('button', { name: /^hold$/i })).toBeInTheDocument();
+    expect(screen.queryByLabelText('Hold reason')).toBeNull();
+  });
+
   it('Hold sends the typed reason and closes the sheet on success', async () => {
     const onClose = vi.fn();
     render(<SessionActionsSheet session={f({ held: null })} open onClose={onClose} onReap={() => {}} />);
@@ -768,5 +800,124 @@ describe('the spawn-state note (§1.6b)', () => {
     const t = notes().join(' ');
     expect(t).toContain('Restart session');
     expect(t).not.toContain('Nothing is watching');
+  });
+});
+
+// — the refusals the three fire-and-forget doors say, and the swap's own exit —
+describe('a door that fails still says so, in ccd’s own words', () => {
+  it('Restore reports ccd’s refusal rather than closing in silence', async () => {
+    // `restoreNow`'s catch, and the sheet stays open: a restore that failed
+    // leaves the row exactly as it was, so closing would read as success.
+    // 502 `{stderr}` with no `error` key is the REAL shape every runCcd route
+    // fails as, which is why `apiErrorText` and not `err.message`.
+    stubFetch({ ok: false, stderr: 'ws-restore: worktree is gone' });
+    renderSheet(s({ status: 'dead', archivedAt: 1785300000, bucket: 'archived' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Restore' }));
+    expect(await screen.findByText(/ws-restore: worktree is gone/)).toBeInTheDocument();
+  });
+
+  it('“Stop only” reports a /stop that failed, after the sheet has already closed', async () => {
+    // Fire-and-forget by design — QuickConfirm already ran the consequence
+    // past the operator — so the toast is the ONLY thing left that can carry
+    // a failure. Without it a stop that never landed looks like one that did.
+    const archive = vi.fn().mockRejectedValue(new ApiError(409, { ok: false, error: 'worktree-gone' }));
+    renderSheet(workspaceSession(), { archive: archive as unknown as typeof api.archive });
+    fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
+    await waitFor(() => expect(document.querySelector('.archive-conflict-sheet .btn-primary')).not.toBeNull());
+    fireEvent.click(document.querySelector('.archive-conflict-sheet .btn-primary')!);
+    const stopOnly = await screen.findByRole('button', { name: 'Stop only' });
+
+    // Only now make the box refuse, so the archive path above is unaffected.
+    stubFetch({ ok: false, stderr: 'tmux: no server running' });
+    fireEvent.click(stopOnly);
+    expect(await screen.findByText(/tmux: no server running/)).toBeInTheDocument();
+  });
+
+  it('Release reports a /release that failed the same way', async () => {
+    // The third fire-and-forget door. A held session whose release 502s is
+    // still held, and the board will show it — but the operator tapped a
+    // button, and a button that reports nothing is a button that lied.
+    stubFetch({ ok: false, stderr: 'hold: file is gone' });
+    renderSheet(heldSession());
+    fireEvent.click(screen.getByRole('button', { name: /release/i }));
+    const confirm = document.querySelector('.qc-actions .btn-primary');
+    if (!(confirm instanceof HTMLElement)) throw new Error('no release confirm');
+    fireEvent.click(confirm);
+    expect(await screen.findByText(/hold: file is gone/)).toBeInTheDocument();
+  });
+});
+
+describe('the swap sheet this one mounts', () => {
+  it('opens from Swap account and closes on its own scrim', async () => {
+    // `onClose` was an uncovered function: every case that opens the swap
+    // sheet leaves it open. A sheet that cannot be dismissed covers the
+    // actions sheet that raised it.
+    renderSheet(workspaceSession());
+    fireEvent.click(screen.getByRole('button', { name: /swap account/i }));
+    await waitFor(() => expect(screen.queryAllByTestId('sheet-overlay').length).toBeGreaterThan(1));
+
+    const scrims = screen.getAllByTestId('sheet-overlay');
+    fireEvent.click(scrims[scrims.length - 1]!);
+    await waitFor(() => expect(screen.queryAllByTestId('sheet-overlay').length).toBe(1));
+  });
+});
+
+describe('the spawn notes, one per state', () => {
+  it('a VANISHED pane says the conversation is resumed from the transcript', () => {
+    // The third of three spawn-state notes and the only one with no case. It
+    // is the one that answers the reader's actual question — the pane is gone,
+    // so is my work? — and silence there is the worst of the three.
+    renderSheet(s({ spawnState: 'vanished', status: 'dead', bucket: 'dead' }));
+    expect(screen.getByText(/tmux session disappeared/)).toBeInTheDocument();
+    expect(screen.getByText(/resumed\s+from the transcript, not from that pane/)).toBeInTheDocument();
+  });
+});
+
+// — the hold composer's remaining three arms —
+//
+// MOST OF IT WAS ALREADY HERE, and finding that out was the measurement: the
+// empty-reason refusal, its clear-on-keystroke and the `oversize` detail
+// sentence all have cases further up this file, and the first drafts of the
+// three below were duplicates of them (the mutation run named both copies).
+// What was genuinely unreached is the whitespace-only reason, the `oversize`
+// that carries NO detail, and what Cancel forgets.
+describe('the hold composer, past the arms already covered', () => {
+  const openComposer = (): void => {
+    renderSheet(workspaceSession());
+    fireEvent.click(screen.getByRole('button', { name: 'Hold' }));
+  };
+
+  it('a reason of only whitespace is empty too', () => {
+    // `reason.trim()`. A hold whose reason is three spaces is a row nobody
+    // can read later, and the box would refuse it — so the refusal is here,
+    // where it costs no round trip.
+    openComposer();
+    fireEvent.change(screen.getByLabelText('Hold reason'), { target: { value: '   ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    expect(screen.getByText(HOLD_EMPTY_REASON_TEXT)).toBeInTheDocument();
+  });
+
+  it('an `oversize` with no detail falls back to the ordinary translator', async () => {
+    // The guard is on `typeof detail === 'string'`: the case above this one
+    // in the file proves the detail is PREFERRED, and this proves its absence
+    // is survivable — a 413 with nothing more specific to say must not render
+    // an empty sentence.
+    stubFetch({ ok: false, error: 'oversize' }, 413);
+    openComposer();
+    fireEvent.change(screen.getByLabelText('Hold reason'), { target: { value: 'program:build9' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    expect(await screen.findByText(/Couldn't hold —/)).toBeInTheDocument();
+  });
+
+  it('Cancel closes the composer and forgets what was typed', () => {
+    // The reason is not a draft: reopening Hold for a row must not offer the
+    // program name from a hold the operator abandoned.
+    openComposer();
+    fireEvent.change(screen.getByLabelText('Hold reason'), { target: { value: 'program:gone' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByLabelText('Hold reason')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Hold' }));
+    expect(screen.getByLabelText('Hold reason')).toHaveValue('');
   });
 });

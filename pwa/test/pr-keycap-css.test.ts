@@ -14,7 +14,7 @@ import { declValue, ruleIn } from './cssRule';
 const chatCss = readFileSync(
   path.join(import.meta.dirname, '..', 'src', 'session', 'chat.css'), 'utf8');
 const tokensCss = readFileSync(
-  path.join(import.meta.dirname, '..', 'src', 'styles', 'tokens.css'), 'utf8');
+  path.join(import.meta.dirname, '..', '..', 'ui', 'src', 'styles', 'tokens.css'), 'utf8');
 
 // Shared rule reader (test/cssRule.ts), not a third hand-rolled copy — fix
 // round 3, verifier P5. chat.css and tokens.css belong to the ui-css lane and
@@ -32,8 +32,8 @@ describe('the PR keycap CSS', () => {
   });
 
   it('sizes the legend and glyph off the shared 2xs scale, not a one-off literal', () => {
-    expect(rule('.keycap--pr .pr-legend')).toContain('var(--text-2xs)');
-    expect(rule('.keycap--pr .pr-glyph')).toContain('font-size: var(--text-2xs)');
+    expect(rule('.keycap--pr .pr-legend')).toContain('var(--fs-2xs)');
+    expect(rule('.keycap--pr .pr-glyph')).toContain('font-size: var(--fs-2xs)');
   });
 
   it('draws the dot from currentColor, so every phase/checks rule below only ever sets `color`', () => {
