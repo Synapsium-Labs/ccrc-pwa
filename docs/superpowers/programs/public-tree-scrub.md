@@ -13,7 +13,7 @@ shipped code. One PR sweeps them out line-neutrally and adds a hashed ratchet cl
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | Plan Tasks 1-7: the hashed class red-first, the sweep to green | none (tests, comments, docs) | - | plan in review by the operator |
+| 1 | Plan Tasks 1-7: the hashed class red-first, the sweep to green | none (tests, comments, docs) | - | run 561, dispatching; departures D-5277..D-5288 |
 
 ## Decisions & deviations
 
@@ -27,6 +27,8 @@ shipped code. One PR sweeps them out line-neutrally and adds a hashed ratchet cl
 - Done by the coordinator on 2026-10-15: three merged PR descriptions that named a private repository were edited
   through the REST API. GitHub keeps their old revisions until the operator removes them in the UI.
 - The plan's Decisions table holds the defaults the operator may overrule.
+- 2026-10-17: the operator approved the plan as written, so every default in its Decisions table stands. Wave 1 opened
+  as run 561 with the departure block D-5277..D-5288, issued at run-open.
 
 ## Carried constraints
 
@@ -39,6 +41,6 @@ shipped code. One PR sweeps them out line-neutrally and adds a hashed ratchet cl
 
 ## Next-wave brief
 
-Dispatch after the operator approves the plan. Brief: the plan path, Tasks 1-7, the local list's path, the
+Wave 1 is dispatched on the merge of this ledger. Brief: the plan path, Tasks 1-7, the local list's path, the
 claims to wait on, the routing (implementers Sonnet high, per-task reviewer Opus high, workflows on), and the
 run's issued departure block.
