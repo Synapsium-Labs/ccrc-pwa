@@ -2912,7 +2912,8 @@ edge pushes as before. Delegated background work keeps its push for the moment t
   idle-gated lane, and holds **only your notification** for up to 120 s (`ASK_GRACE_MS`, `server/src/askwindow.ts`).
   The coordinator may answer from what it can read — `POST /api/asks/:id/answer`, box token plus registry
   attribution, accepted only from that worker's own parent, which re-proves the question is still the live one
-  before it presses one digit — or decline anything that would be a new decision with
+  before it presses one digit; its body is the operator's own (`readAskAnswer`, D-5293), so an `askKey` it sends must
+  be the row's (`409 ask-mismatch`, D-5368), and what it may hold is what your route answers (`answerableAsk`) — or decline anything that would be a new decision with
   `POST /api/asks/:id/release`, which fires your push at once (coordinator clause 11). Your own answer from the
   lock screen takes the same ask row, so the record names whoever ruled. A multi-select or multi-question ask, a
   session with no parent, a run this box could not read, or `$REG/asks-disabled` (touched by hand on the fleet
@@ -5157,8 +5158,8 @@ working set, `SessionStart(compact)` serves the card once beside the graph card 
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:8130-8132`), each with an operator sentence of its own at `:8182`,
-`:8190` and `:8203`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:8158-8160`), each with an operator sentence of its own at `:8210`,
+`:8218` and `:8231`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 

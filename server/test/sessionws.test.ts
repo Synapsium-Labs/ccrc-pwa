@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
@@ -3448,5 +3448,77 @@ describe('dialogFrameLine (decision dialog-frame-log)', () => {
       .toBe(`ccrc-server: dialog-frame lane-a question ${q2.id.slice(0, 8)} from=answer tick=-`);
     expect(dialogFrameLine('lane-a', { type: 'dialog_cleared' }, 'poll', 5)).toBe('ccrc-server: dialog-frame lane-a cleared - from=poll tick=5');
     expect(dialogFrameLine('lane-a', { type: 'dialog', dialog: { ...q2, parsed: false } }, 'poll', 1)).toContain(' unparsed ');
+  });
+});
+
+// D-5372: the tasks frame carries `touchedAt` (the newest task file mtime) as
+// an OPTIONAL field, so the strip can tell a live plan from one left open days
+// ago. Absent when nothing answered — an older PWA ignores it either way.
+describe('the tasks frame carries touchedAt (D-5372)', () => {
+  let home: string;
+  beforeEach(() => {
+    home = mkTmp('ccrc-sws-tasks-');
+    seedRoster(home);
+    seed(home);
+  });
+  afterEach(() => rmSync(home, { recursive: true, force: true }));
+
+  const startFrames = async (): Promise<SessionStreamMsg[]> => {
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() };
+    const frames: SessionStreamMsg[] = [];
+    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m));
+    try { await stream.start(); } finally { stream.stop(); }
+    return frames;
+  };
+  const seedTasks = (statuses: string[], at: Date): void => {
+    const dir = path.join(home, '.claude-a', 'tasks', UUID_A);
+    mkdirSync(dir, { recursive: true });
+    statuses.forEach((status, i) => {
+      const f = path.join(dir, `${i + 1}.json`);
+      writeFileSync(f, JSON.stringify({ id: String(i + 1), subject: `task ${i + 1}`, description: '', activeForm: `Doing ${i + 1}`, status }));
+      utimesSync(f, at, at);
+    });
+  };
+
+  it('an open list sends touchedAt = the newest task file mtime', async () => {
+    const at = new Date('2026-10-14T11:53:34Z');
+    seedTasks(['completed', 'in_progress', 'pending'], at);
+    const frame = (await startFrames()).find((f) => f.type === 'tasks');
+    expect(frame).toEqual({ type: 'tasks', tasks: expect.any(Array), touchedAt: at.getTime() });
+  });
+  it('a rewrite that leaves the rows equal still sends the new touchedAt — it is in the dedupe key', async () => {
+    const at = new Date('2026-10-14T11:53:34Z');
+    seedTasks(['in_progress'], at);
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() };
+    const frames: SessionStreamMsg[] = [];
+    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m));
+    try {
+      await stream.start();
+      const later = new Date('2026-10-17T18:00:00Z');
+      utimesSync(path.join(home, '.claude-a', 'tasks', UUID_A, '1.json'), later, later);
+      await (stream as unknown as { checkTasks(c: string, u: string): Promise<void> }).checkTasks(path.join(home, '.claude-a'), UUID_A);
+    } finally {
+      stream.stop();
+    }
+    const sent = frames.filter((f) => f.type === 'tasks').map((f) => (f as { touchedAt?: number }).touchedAt);
+    expect(sent).toEqual([at.getTime(), Date.parse('2026-10-17T18:00:00Z')]);
+  });
+  it('a list with nothing open sends no touchedAt — the frame is what it was', async () => {
+    seedTasks(['completed'], new Date('2026-10-14T11:53:34Z'));
+    const frame = (await startFrames()).find((f) => f.type === 'tasks');
+    expect(frame).toBeDefined();
+    expect('touchedAt' in frame!).toBe(false);
   });
 });

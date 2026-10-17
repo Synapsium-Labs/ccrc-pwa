@@ -6,7 +6,7 @@ import type { FleetWatcher } from '../watch.js';
 import {
   UNMEASURED_ASK_AT, fieldMeasured, freshAskAt, measuredIdentity, readRegistry, readRegistryMeasured,
 } from '../registry.js';
-import { answerAsk, type AskDeps } from '../inject/ask.js';
+import { answerAsk, readAskAnswer, type AskDeps } from '../inject/ask.js';
 import { assembleFleet } from '../fleet.js';
 import { turnReadDeps, turnVerdictFor } from '../turnverdict.js';
 import type { TurnVerdict } from './archiveDoor.js';
@@ -3949,18 +3949,21 @@ export function registerCoordRoutes(
     if (!requireMailToken(req, reply, 'POST /api/asks/:id/answer')) return;
 
     const body = (req.body ?? {}) as Record<string, unknown>;
-    const { fromId, fromUuid, optionIndexes } = body;
-    // `optionIndexes`, never a singular `optionIndex`: under `askActions`
-    // eligibility only single-select asks are ever held, so this array
-    // carries one element today — and that is the point. A singular field is
-    // what re-opens the multi-select commit hazard, silently, on the day
-    // someone widens eligibility. The wire shape must not be the thing to
-    // remember.
-    if (typeof fromId !== 'string' || typeof fromUuid !== 'string' ||
-        !Array.isArray(optionIndexes) || !optionIndexes.every((n) => typeof n === 'number')) {
+    const { fromId, fromUuid } = body;
+    // `optionIndexes`, never a singular `optionIndex`: under `answerableAsk`
+    // eligibility (D-5293, read through `askActions`) only single-select asks
+    // are ever held, so this array carries one element today — and that is
+    // the point. A singular field is what re-opens the multi-select commit
+    // hazard, silently, on the day someone widens eligibility. The wire shape
+    // must not be the thing to remember. D-5293: the answer half of this body
+    // is the operator route's, read by the one reader both routes import
+    // (`readAskAnswer`), never respelled here.
+    const answerBody = readAskAnswer(body);
+    if (typeof fromId !== 'string' || typeof fromUuid !== 'string' || answerBody === null) {
       return reply.code(400).send({ ok: false, error: 'bad-request',
-        detail: 'fromId/fromUuid strings, optionIndexes an array of numbers' });
+        detail: 'fromId/fromUuid strings, optionIndexes an array of numbers, askKey a string when given' });
     }
+    const optionIndexes = answerBody.optionIndexes;
 
     // The box token proves "a process on this box", one shared secret
     // identical for every session on the fleet host — it cannot prove "this
@@ -3985,6 +3988,20 @@ export function registerCoordRoutes(
     if (ask.parentId !== fromId) {
       return reply.code(403).send({ ok: false, error: 'not-parent',
         detail: 'only this child\'s derived parent may pre-empt its question' });
+    }
+    // D-5290, D-5363: a row MINTED released (`releaseReason` set — the parent was not
+    // live, or of another project) was never held and never mailed: the
+    // operator owned it from the first tick, so late answer wins (D-5289),
+    // which reaches a row the LAPSE released, does not reach this one. No new
+    // word: `not-held` is "the row is no longer pre-emptible".
+    if (ask.releaseReason !== null) {
+      return reply.code(409).send({ ok: false, error: 'not-held' });
+    }
+    // D-5293, D-5368: the operator's body names the question it answers (`askKey`).
+    // A parent that sends it is answering the question it was shown, or
+    // nothing is pressed and the row is untouched.
+    if (answerBody.askKey !== undefined && answerBody.askKey !== ask.askKey) {
+      return reply.code(409).send({ ok: false, error: 'ask-mismatch' });
     }
 
     // D-2170: re-read the child's hookstate and prove the menu on screen is
