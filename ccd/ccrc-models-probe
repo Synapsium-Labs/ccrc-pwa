@@ -150,57 +150,13 @@ trap 'rm -rf "$TMPD"; rm -f "$NORM"' EXIT
 # Each arm writes the provider's RAW body to $RAW and returns non-zero when it
 # could not. Nothing here interprets the body; that is the normaliser's job, in
 # one place, for all three.
-_fetch_codex() {
-  # `ccgpt-usage`'s own preamble, verbatim in intent: the venv python beside the
-  # litellm binary, falling back to the system one, and the token directory the
-  # wrapper exports. `Authenticator().get_access_token()` REFRESHES an expired
-  # token, which is the whole reason this arm goes through LiteLLM rather than
-  # reading auth.json itself.
-  local venv_py token_dir
-  venv_py="$(dirname "$(readlink -f "$(command -v litellm)" 2>/dev/null)")/python"
-  [ -x "$venv_py" ] || venv_py="python3"
-  token_dir="${CHATGPT_TOKEN_DIR:-$HOME/.handoff/chatgpt-auth}"
-  [ -f "$token_dir/auth.json" ] || { echo "$PROG: not logged in ($token_dir)" >&2; return 1; }
-  CHATGPT_TOKEN_DIR="$token_dir" CODEX_CLIENT_VERSION="$CODEX_CLIENT_VERSION" \
-    "$venv_py" - > "$RAW" <<'PY'
-import json, os, sys, urllib.request
-from litellm.llms.chatgpt.authenticator import Authenticator
-
-token_dir = os.environ["CHATGPT_TOKEN_DIR"]
-account_id = json.load(open(os.path.join(token_dir, "auth.json"))).get("account_id", "")
-token = Authenticator().get_access_token()
-# The Authorization/originator/user-agent/session_id headers below match
-# ccd/ccgpt-usage.py's own request (task-10-fix-rulings.md C-2, which
-# restored them there too) — what the backend expects from a real Codex CLI
-# caller. NOT a verbatim match, though: ccd/ccgpt-usage.py deliberately does
-# NOT send ChatGPT-Account-Id, because deriving it means reading auth.json's
-# CONTENTS (account_id, above), which spec line ~497 forbids — this arm
-# does exactly that read. That is a pre-existing violation of the same rule
-# D-3160 rests on, recorded as D-3161 (the plan's `## Deviations found`):
-# out of this plan's scope to fix, not unnoticed. Read ccd/ccgpt-usage.py
-# directly for what it actually sends rather than treating this comment as
-# its mirror.
-headers = {
-    "Authorization": f"Bearer {token}",
-    "originator": "codex_cli_rs",
-    "user-agent": "codex_cli_rs/0.0.0 (Unknown 0; unknown) unknown",
-    "session_id": "00000000-0000-0000-0000-000000000000",
-}
-if account_id:
-    headers["ChatGPT-Account-Id"] = account_id
-url = ("https://chatgpt.com/backend-api/codex/models?client_version="
-       + os.environ["CODEX_CLIENT_VERSION"])
-req = urllib.request.Request(url, headers=headers)
-sys.stdout.write(urllib.request.urlopen(req, timeout=30).read().decode("utf-8"))
-PY
-}
-
-# THE CODEX LANE'S FETCH (spec §9.1; Plan 3a Task 1, D-3706). `_fetch`
-# takes this arm only when `ccrc`'s `_models_run_probe` marked the call
-# CCRC_PROBE_LANE_KIND=codex, which it does for an exec.kind "codex" roster
-# row and for no other. `_fetch_codex` above is every other caller's arm,
-# byte for byte as it was, default directory and all, until that lane's own
-# flip (Plan 3b); Plan 4 deletes it.
+# THE CODEX FETCH (spec §9.1; Plan 3a Task 1, D-3706), the ONLY codex arm
+# (Plan 4). `_fetch` takes it for every caller. It was one of two: an
+# exec.kind "codex" row's was marked by a lane-kind marker, and every other
+# caller's carried a default token directory and read an `auth.json` itself.
+# That arm served another repository's lane and left with it, and the marker
+# with it. A row that is not codex-kind is handed no directory and no
+# interpreter by `ccrc`'s `_models_run_probe`, so it refuses here.
 # This arm is handed two values and reads nothing else:
 #   CHATGPT_TOKEN_DIR  the row's own exec.authDir, under $HOME;
 #   CCRC_CODEX_PYTHON  the interpreter `ccgpt-runtime python` resolved (the
@@ -237,11 +193,10 @@ _fetch_codex_lane() {
   #     reason: the authenticator os.path.join()s CHATGPT_AUTH_FILE onto the
   #     token dir, so an ambient absolute value would move the credential it
   #     reads.
-  # The unattended guard inside covers THIS program only. `_fetch_codex`
-  # keeps its own program, unguarded, as it was (Z1).
+  # The unattended guard inside covers THIS program only.
   (
     for v in ${!CHATGPT_@} ${!LITELLM_@} ${!OPENAI_@}; do unset "$v"; done
-    unset CCRC_CODEX_PYTHON CCRC_PROBE_LANE_KIND
+    unset CCRC_CODEX_PYTHON
     export CHATGPT_TOKEN_DIR="$token_dir" LITELLM_LOCAL_MODEL_COST_MAP=True \
       CODEX_CLIENT_VERSION="$CODEX_CLIENT_VERSION" CCRC_PROBE_ACCOUNT="$ACCOUNT" CCRC_PROBE_PROG="$PROG"
     exec "$py" -I -
@@ -329,8 +284,8 @@ def refuse(code, sentence):
 # above makes sure it never goes further than a refresh.
 # ChatGPT-Account-Id comes from `get_account_id()`, the call LiteLLM's own
 # chatgpt transformations make for the same header, so this program never
-# opens auth.json itself (spec §9: existence and mode only). That closes
-# D-3161 for a codex lane; `_fetch_codex` keeps its read until Plan 4.
+# opens auth.json itself (spec §9: existence and mode only). With the other
+# arm gone (Plan 4), no code this probe ships opens one: D-3161 is closed.
 # Both calls run `_silenced()`, so no line of litellm's own goes ahead of
 # this program's refusal, or carries the token endpoint's answer into it.
 try:
@@ -405,10 +360,9 @@ _fetch() {
   # THE ONE READ OF THE SEAM. Everything below it is the real network.
   if [ -n "${CCRC_MODELS_PROBE_FIXTURE:-}" ]; then cat "$CCRC_MODELS_PROBE_FIXTURE" > "$RAW"; return; fi
   case "$PROBE_KIND" in
-    # Plan 3a Task 1 (D-3706): ONE marker picks the Codex arm, and only
-    # `ccrc`'s `_models_run_probe` sets it, for an exec.kind "codex" roster
-    # row. Every other caller gets `_fetch_codex`, byte for byte as it was.
-    codex) if [ "${CCRC_PROBE_LANE_KIND:-}" = codex ]; then _fetch_codex_lane; else _fetch_codex; fi ;;
+    # ONE arm for every caller (Plan 4): there is no marker to pick between
+    # two, and the arm refuses `no-token-dir` for a caller handed no directory.
+    codex) _fetch_codex_lane ;;
     openrouter)
       # The whole-catalogue LIST needs no credential (§5) — it is public. The
       # ENDPOINTS route is different: "which providers serve this model" is

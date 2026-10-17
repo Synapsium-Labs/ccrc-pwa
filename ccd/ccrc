@@ -9863,10 +9863,10 @@ _models_class_ok() {   # <class>
 # `[ -r "$HOME/${secrets}" ] && . "$HOME/${secrets}"`. BOTH branches unset the
 # credential names `ccrc-models-probe` actually reads: ANTHROPIC_AUTH_TOKEN
 # (the two arms that send it — openrouter --endpoints and compatible; the
-# codex arms send their own bearer header too, but via `_fetch_codex`'s or `_fetch_codex_lane`'s
+# codex arm sends its own bearer header too, but via `_fetch_codex_lane`'s
 # litellm `Authenticator`, driven by CHATGPT_TOKEN_DIR, never this
-# variable) and, on the codex arms only,
-# CHATGPT_TOKEN_DIR (it names the directory either codex arm's `Authenticator` reads `auth.json`
+# variable) and, on the codex arm only,
+# CHATGPT_TOKEN_DIR (it names the directory the codex arm's `Authenticator` reads `auth.json`
 # from) — measured fix, C3 of the final wave: without this, a lane with no
 # secrets file ran the probe against whatever this shell already had,
 # which on this fleet is ordinarily the CALLING lane's own key (every
@@ -9905,19 +9905,21 @@ _models_run_probe() {   # <accountId> <probe argv…> -> the argv's own exit cod
 
 # THE CODEX LANE'S PROBE INPUTS (spec §9.1; Plan 3a Task 1, D-3706).
 #   - An exec.kind "codex" row: this exports the row's own `exec.authDir`,
-#     under $HOME, as CHATGPT_TOKEN_DIR; the interpreter `ccgpt-runtime
+#     under $HOME, as CHATGPT_TOKEN_DIR, and the interpreter `ccgpt-runtime
 #     python` resolves as CCRC_CODEX_PYTHON, EMPTY when none resolves, so the
-#     probe refuses `runtime-absent` rather than inheriting a caller's value;
-#     and CCRC_PROBE_LANE_KIND=codex, the one marker that sends the probe
-#     down its codex-lane fetch, which has no default directory.
-#   - Every other row: it UNSETS CCRC_CODEX_PYTHON and CCRC_PROBE_LANE_KIND
-#     and touches nothing else. That row's CHATGPT_TOKEN_DIR is exactly what
-#     it was before this function existed (scrubbed above, then whatever its
-#     secrets file sets), so an external lane's fetch keeps today's bytes,
-#     default directory included, until its own flip (Plan 3b).
+#     probe refuses `runtime-absent` rather than inheriting a caller's value.
+#     The probe has one codex fetch for every caller (Plan 4), and it has no
+#     default directory.
+#   - Every other row: it UNSETS CCRC_CODEX_PYTHON and touches nothing else.
+#     That row's CHATGPT_TOKEN_DIR is whatever the scrub above and its secrets
+#     file leave. None, and the probe refuses `no-token-dir`; or a secrets
+#     file's, and it refuses `runtime-absent`, because the interpreter is
+#     withheld. Either way the probe reads no directory and fetches nothing.
+#     Before Plan 4 this row met the external fetch, with its default
+#     directory.
 # Called ONLY inside `_models_run_probe`'s two subshells, after the scrub and
 # the source line: neither a caller nor a secrets file can choose a lane's
-# arm, directory or interpreter, and none of it reaches the verb's own shell.
+# directory or interpreter, and none of it reaches the verb's own shell.
 # The row is read through the lane library's one reader of `exec.kind`
 # (`_models_litellm_codex`, that is `_codex_lanes`) and its one reader of a
 # row (`_codex_row`). A codex row that does not validate is refused with
@@ -9925,27 +9927,27 @@ _models_run_probe() {   # <accountId> <probe argv…> -> the argv's own exit cod
 # A ROSTER THAT CANNOT SAY (Plan 3b Task A1, D-4046): `_models_litellm_codex`
 # rc 2 is refused the same way. The lane library's own `ccrc codex:
 # roster-invalid:` or `missing-dependency:` line is already on stderr, its rc
-# is returned, and the probe never runs. Never "not codex": that arm hands an
-# exec.kind "codex" row to the external fetch, whose token directory has a
-# default, which is another lane's (D-3706's class). NO ROSTER FILE AT ALL
-# (rc 3, the final review's residual round) is refused too, `roster-absent` with
-# the install remedy, for the same reason: here "not codex" is that fetch.
+# is returned, and the probe never runs. Never "not codex": a codex row taken
+# for another kind is handed no directory and no interpreter, and would
+# refuse `no-token-dir`, a remedy that is not its own. NO ROSTER FILE AT ALL
+# (rc 3, the final review's residual round) is refused too, `roster-absent`
+# with the install remedy, for the same reason: its word and remedy are the
+# ones this operator needs.
 _models_probe_codex_env() {   # <accountId> -> 0; _codex_row's rc for a codex row that does not validate; the lane library's rc for a roster that cannot say; 1, roster-absent, for no roster file
   local kind=0
   _models_litellm_codex "$1" || kind=$?
   case "$kind" in
     0) ;;
-    1) unset CCRC_CODEX_PYTHON CCRC_PROBE_LANE_KIND
+    1) unset CCRC_CODEX_PYTHON
        return 0 ;;
-    3) unset CCRC_CODEX_PYTHON CCRC_PROBE_LANE_KIND
-       _codex_say roster-absent "\$HOME/.ccrc/accounts.json does not exist, so whether lane $1 is exec.kind \"codex\" cannot be told, and its probe does not run: a codex lane taken for an external one would be fetched with the external path's default token directory, another lane's. Run 'ccrc install' — it seeds one and never overwrites an existing one."
+    3) unset CCRC_CODEX_PYTHON
+       _codex_say roster-absent "\$HOME/.ccrc/accounts.json does not exist, so whether lane $1 is exec.kind \"codex\" cannot be told, and its probe does not run: a lane nobody read is never probed. Run 'ccrc install' — it seeds one and never overwrites an existing one."
        return "$MODELS_CODEX_UNTOLD_RC" ;;
-    *) unset CCRC_CODEX_PYTHON CCRC_PROBE_LANE_KIND
+    *) unset CCRC_CODEX_PYTHON
        return "$MODELS_CODEX_UNTOLD_RC" ;;
   esac
   _codex_row "$1" || return $?
   export CHATGPT_TOKEN_DIR="$HOME/$CX_AUTH"
-  export CCRC_PROBE_LANE_KIND=codex
   CCRC_CODEX_PYTHON="$("$(_codex_runtime_cli)" python 2>/dev/null)" || CCRC_CODEX_PYTHON=''
   export CCRC_CODEX_PYTHON
   return 0

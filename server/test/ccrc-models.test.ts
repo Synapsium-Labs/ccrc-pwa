@@ -1311,19 +1311,17 @@ describe('ccrc models <id> discovery', () => {
   });
 
   // Item 3 of the final wave's round 2: `_models_run_probe` unsets
-  // CHATGPT_TOKEN_DIR now too — the codex arm's own credential
-  // (`ccrc-models-probe`'s `_fetch_codex` reads it to find `auth.json`), for
-  // the same reason as ANTHROPIC_AUTH_TOKEN above: a lane with no secrets
-  // file must not inherit whatever CHATGPT_TOKEN_DIR the calling shell
-  // happens to carry, e.g. another lane's real token directory. `litellm` and
-  // the venv `python` beside it are poisoned so a leak would be OBSERVABLE
-  // without this test ever making a real network call: `_fetch_codex`
-  // resolves its interpreter off `command -v litellm`, so the poisoned
-  // `litellm` on PATH redirects it to the poisoned `python` right beside it,
-  // which never runs at all when the scrub holds — the bash-level `[ -f
-  // "$token_dir/auth.json" ]` guard refuses first, against the DEFAULT
-  // directory, because the ambient one never reached `$token_dir`.
-  it('an ambient CHATGPT_TOKEN_DIR pointing at a poisoned auth.json never reaches a codex lane\'s fetch', () => {
+  // CHATGPT_TOKEN_DIR now too — the codex arm's own credential, which the probe
+  // reads to find `auth.json` — for the same reason as ANTHROPIC_AUTH_TOKEN
+  // above: a lane with no secrets file must not inherit whatever
+  // CHATGPT_TOKEN_DIR the calling shell happens to carry, e.g. another lane's
+  // real token directory. `litellm` and the `python` beside it are poisoned so
+  // a leak would be OBSERVABLE without this test ever making a real network
+  // call. Plan 4: there is one codex arm now, and a non-codex row is handed no
+  // interpreter, so the refusal word is the proof. A row that nothing hands a
+  // directory refuses `no-token-dir`; a leaked ambient value would pass that
+  // test and refuse `runtime-absent` instead.
+  it('an ambient CHATGPT_TOKEN_DIR pointing at a poisoned auth.json never reaches a non-codex row\'s codex fetch: the row refuses no-token-dir (Plan 4)', () => {
     const poisonedDir = join(home, 'someone-elses-chatgpt-auth');
     fs.mkdirSync(poisonedDir, { recursive: true });
     fs.writeFileSync(join(poisonedDir, 'auth.json'), JSON.stringify({ account_id: 'leaked-account-id' }));
@@ -1333,6 +1331,11 @@ describe('ccrc models <id> discovery', () => {
     seedCodex(LEGACY_EXTERNAL_ID);
     const r = run(['models', 'refresh', 'gpt'], { CHATGPT_TOKEN_DIR: poisonedDir });
     expect(r.code).toBe(1);
+    const [row] = oneObject(r)['refreshed'] as { id: string; ok: boolean; reason?: string }[];
+    expect(row).toMatchObject({ id: 'gpt', ok: false });
+    expect(/no-token-dir/.test(String(row!.reason)),
+      'a scrubbed CHATGPT_TOKEN_DIR leaves the codex fetch no directory, so it refuses no-token-dir; a leaked one would refuse runtime-absent')
+      .toBe(true);
     expect(fs.existsSync(join(home, 'python-poison')),
       'a scrubbed CHATGPT_TOKEN_DIR leaves no auth.json for the codex fetch to find, so it must refuse before the interpreter ever runs')
       .toBe(false);
@@ -1348,11 +1351,12 @@ describe('ccrc models <id> discovery', () => {
   // ANTHROPIC_AUTH_TOKEN, so this drives the `if` branch (`_models_run_probe`'s `if [ -n "$secrets" ]` branch)
   // instead: the secrets file it sources never mentions CHATGPT_TOKEN_DIR, so
   // the only thing that can keep an ambient one out is that branch's own
-  // `unset`. MEASURED: deleting that `unset` (leaving the `[ -r ]`-and-source
-  // line as the branch's first statement) reds this case — the poisoned
-  // `python` runs and records the ambient directory — while the test above
-  // stays green, because it never touches this branch at all.
-  it('a codex lane with a secrets file that sets only ANTHROPIC_AUTH_TOKEN still scrubs an ambient CHATGPT_TOKEN_DIR', () => {
+  // `unset`. MEASURED (Plan 4, mutation m10): deleting that `unset` (leaving
+  // the `[ -r ]`-and-source line as the branch's first statement) reds this
+  // case alone — the ambient directory reaches the probe, so the row no longer
+  // refuses `no-token-dir` — while the test above stays green, because it
+  // never touches this branch at all.
+  it('a non-codex row with a secrets file that sets only ANTHROPIC_AUTH_TOKEN still scrubs an ambient CHATGPT_TOKEN_DIR: it refuses no-token-dir (Plan 4)', () => {
     fs.mkdirSync(join(home, '.secrets'), { recursive: true });
     fs.writeFileSync(join(home, '.secrets', 'gpt2.env'), 'export ANTHROPIC_AUTH_TOKEN=lane-token\n');
     const poisonedDir = join(home, 'someone-elses-chatgpt-auth-2');
@@ -1364,9 +1368,12 @@ describe('ccrc models <id> discovery', () => {
     seedCodex(LEGACY_SECRETS_EXTERNAL_ID);
     const r = run(['models', 'refresh', 'gpt2'], { CHATGPT_TOKEN_DIR: poisonedDir });
     expect(r.code).toBe(1);
-    expect(fs.existsSync(join(home, 'python-poison')),
+    const [row] = oneObject(r)['refreshed'] as { id: string; ok: boolean; reason?: string }[];
+    expect(row).toMatchObject({ id: 'gpt2', ok: false });
+    expect(/no-token-dir/.test(String(row!.reason)),
       'a secrets file that sets a different credential must not leave CHATGPT_TOKEN_DIR for the codex fetch to inherit from the calling shell')
-      .toBe(false);
+      .toBe(true);
+    expect(fs.existsSync(join(home, 'python-poison'))).toBe(false);
     expect(r.stdout).not.toContain(poisonedDir);
     expect(r.stderr).not.toContain(poisonedDir);
   });
@@ -1397,13 +1404,13 @@ describe('ccrc models <id> discovery', () => {
 });
 
 // ── Plan 3a Task 1 (spec §9.1, D-3706): each codex lane's probe reads its OWN
-// OAuth through its OWN runtime. `_models_run_probe` exports the inputs and the
-// codex-lane marker for an exec.kind "codex" row, after the scrub and after
-// any secrets file. Every other row keeps today's probe environment exactly
-// (operator ruling Z1): the two CHATGPT_TOKEN_DIR scrub cases in the describe
-// above still hold it, unchanged. CONTAINMENT FIRST: every case poisons a PATH
-// `litellm` and the `python` beside it, so no old or mutated probe can reach
-// the runner's own LiteLLM.
+// OAuth through its OWN runtime. `_models_run_probe` exports the inputs for an
+// exec.kind "codex" row, after the scrub and after any secrets file. Every
+// other row is handed no interpreter and whatever directory its secrets file
+// sets, and meets the probe's one codex arm with that (Plan 4): the two
+// CHATGPT_TOKEN_DIR scrub cases in the describe above hold the scrub.
+// CONTAINMENT FIRST: every case poisons a PATH `litellm` and the `python`
+// beside it, so no old or mutated probe can reach the runner's own LiteLLM.
 describe.skipIf(pythonOrSkip() === null)('each codex lane\'s probe reads its OWN authDir through its OWN runtime, with no default; every other row keeps today\'s probe environment (Plan 3a Task 1)', () => {
   const poisonedDir = (): string => join(home, 'someone-elses-token-dir');
   const poisonRan = (): boolean => fs.existsSync(join(home, 'python-poison'));
@@ -1485,31 +1492,49 @@ describe.skipIf(pythonOrSkip() === null)('each codex lane\'s probe reads its OWN
     expect(poisonRan()).toBe(false);
   });
 
-  it('_models_run_probe hands a codex row its own authDir, runtime and marker; every other row gets neither marker nor runtime, and today\'s CHATGPT_TOKEN_DIR', async () => {
+  it('_models_run_probe hands a codex row its own authDir and runtime and no row any lane-kind marker; a non-codex row\'s codex probe refuses at the one arm, its runtime withheld (Plan 4)', async () => {
     home = await codexBox(['codex-a']);
     plantCodexBins(home);
-    const rt = plantFakeRuntime(home);
+    const pr = probeRuntime(home, CODEX_RAW);
+    const rt = plantFakeRuntime(home, { python: pr.python });
     fs.mkdirSync(join(home, '.secrets'), { recursive: true });
+    // The secrets file hands the probe the runtime's own recorder: were it not
+    // withheld from a non-codex row, the probe below would run it.
     fs.writeFileSync(join(home, '.secrets', 'router.env'), 'export ANTHROPIC_AUTH_TOKEN=lane-token\n'
-      + `export CHATGPT_TOKEN_DIR=${join(home, 'from-a-secrets-file')}\nexport CCRC_CODEX_PYTHON=${join(home, 'from-a-secrets-file-py')}\n`
-      + 'export CCRC_PROBE_LANE_KIND=codex\n');
-    // The ambient marker is a value no row would get, so a codex row's own
+      + `export CHATGPT_TOKEN_DIR=${join(home, 'from-a-secrets-file')}\nexport CCRC_CODEX_PYTHON=${rt.python}\n`);
+    // The ambient interpreter is a value no row would get, so a codex row's own
     // export is what the first expectation reads, never an inherited one.
-    const ambient = { CHATGPT_TOKEN_DIR: join(home, 'ambient-dir'), CCRC_CODEX_PYTHON: join(home, 'ambient-py'), CCRC_PROBE_LANE_KIND: 'ambient' };
+    const ambient = { CHATGPT_TOKEN_DIR: join(home, 'ambient-dir'), CCRC_CODEX_PYTHON: join(home, 'ambient-py') };
     const seen = (id: string): Record<string, string> => {
       const r = sourced(`_models_run_probe ${id} env`, [], ambient);
       expect(r.code, r.stderr).toBe(0);
+      expect(r.stdout.split('\n').some((l) => l.startsWith('CCRC_PROBE_LANE_KIND=')), `${id}'s child carries the lane-kind marker`).toBe(false);
       return Object.fromEntries(r.stdout.split('\n')
-        .filter((l) => /^(CHATGPT_TOKEN_DIR|CCRC_CODEX_PYTHON|CCRC_PROBE_LANE_KIND)=/.test(l))
+        .filter((l) => /^(CHATGPT_TOKEN_DIR|CCRC_CODEX_PYTHON)=/.test(l))
         .map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]));
     };
-    expect(seen('codex-a')).toEqual({
-      CHATGPT_TOKEN_DIR: authDirOf(home, 'codex-a'), CCRC_CODEX_PYTHON: rt.python, CCRC_PROBE_LANE_KIND: 'codex' });
-    // Z1: what the probe got before this task, and nothing more. The scrub
-    // keeps an ambient CHATGPT_TOKEN_DIR out; a secrets file's value still
-    // reaches the probe; the marker and the interpreter never do.
+    expect(seen('codex-a')).toEqual({ CHATGPT_TOKEN_DIR: authDirOf(home, 'codex-a'), CCRC_CODEX_PYTHON: rt.python });
+    // What a non-codex row's probe got before the lane-kind marker went, and
+    // nothing more. The scrub keeps an ambient CHATGPT_TOKEN_DIR out; a secrets
+    // file's value still reaches the probe; the interpreter never does.
     expect(seen('router'), 'a row with a secrets file').toEqual({ CHATGPT_TOKEN_DIR: join(home, 'from-a-secrets-file') });
     expect(seen('router2'), 'a row with none').toEqual({});
+    // The probe itself, with no fixture. There is one codex arm now, so a
+    // non-codex row meets its refusals in order: a row nothing hands a
+    // directory is no-token-dir; a row whose secrets file sets one is
+    // runtime-absent, because the interpreter it was handed is withheld. The
+    // ambient and secrets-file values both name the runtime's recorder, which
+    // must never run.
+    const probed = (id: string): Result =>
+      sourced(`_models_run_probe ${id} "$CCRC_HERE/ccrc-models-probe" ${id} codex`, [],
+        { ...ambient, CCRC_CODEX_PYTHON: rt.python, CCRC_MODELS_PROBE_FIXTURE: '' });
+    const withDir = probed('router');
+    expect(withDir.code, 'a row whose secrets file sets a directory').toBe(1);
+    expect(/runtime-absent/.test(withDir.stderr), 'router\'s refusal word').toBe(true);
+    const bare = probed('router2');
+    expect(bare.code, 'a row nothing hands a directory').toBe(1);
+    expect(/no-token-dir/.test(bare.stderr), 'router2\'s refusal word').toBe(true);
+    expect(probeArgv0(pr.rec), 'the runtime recorder ran for a non-codex row').toEqual([]);
   });
 
   // Fix round 1: a codex row `_codex_row` refuses is refused HERE, with that
@@ -1524,7 +1549,7 @@ describe.skipIf(pythonOrSkip() === null)('each codex lane\'s probe reads its OWN
     const r = sourced('_models_run_probe codex-a env', []);
     expect(r.code, r.stderr).toBe(1);
     expect(r.stderr).toMatch(/^ccrc codex: roster-invalid: account 'codex-a''s codex row does not validate \(exec\.authDir\)/m);
-    expect(r.stdout.split('\n').filter((x) => /^(CHATGPT_TOKEN_DIR|CCRC_PROBE_LANE_KIND|CCRC_CODEX_PYTHON)=/.test(x)),
+    expect(r.stdout.split('\n').filter((x) => /^(CHATGPT_TOKEN_DIR|CCRC_CODEX_PYTHON)=/.test(x)),
       'the probe ran with codex inputs').toEqual([]);
   });
 
@@ -2143,6 +2168,23 @@ describe('ccrc models litellm — a codex-kind lane renders its own config and r
     expect(rows).toEqual([{ id: 'ext-a', ok: false, reason: expect.any(String) }]);
     expect(rows[0]!.reason).toMatch(/^account ext-a is not exec\.kind "codex"/);
     expect(fs.existsSync(boxGlobal())).toBe(false);
+    for (const name of ['pgrep', 'ccgpt', 'systemd-run']) expect(poisonLog(name), name).toEqual([]);
+  });
+
+  // Review Focus 3: the probe runs first on the live flow, and with no answer to
+  // hand it refuses before the dispatcher is asked anything. A row that nothing
+  // hands a directory refuses no-token-dir; the hourly refresh over the whole
+  // box exits 1 and renders, stops and writes nothing.
+  it('a non-codex row with a codex registry fails the hourly refresh at the probe, and --all exits 1 (Plan 4)', () => {
+    c1Box();
+    const r = run(['models', 'refresh', '--all']);
+    expect(r.code, r.stderr).toBe(1);
+    const rows = oneObject(r)['refreshed'] as { id: string; probe?: string; ok: boolean; reason?: string }[];
+    const ext = rows.find((x) => x.id === 'ext-a');
+    expect(ext).toEqual({ id: 'ext-a', probe: 'codex', ok: false, reason: expect.any(String) });
+    expect(/no-token-dir/.test(ext!.reason!), 'the probe\'s own refusal word').toBe(true);
+    expect(fs.existsSync(boxGlobal()), 'the retired box-global file was rendered').toBe(false);
+    expect(fs.existsSync(lanePath('ext-a')), 'a lane config was rendered for a row that is not codex-kind').toBe(false);
     for (const name of ['pgrep', 'ccgpt', 'systemd-run']) expect(poisonLog(name), name).toEqual([]);
   });
 
