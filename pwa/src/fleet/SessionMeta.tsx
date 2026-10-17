@@ -36,6 +36,7 @@ import {
 } from '../../../shared/api';
 import { accountColorVar, accountLabel, accountPool } from '../lib/accounts';
 import { elapsedWords, useNow, WARN_GLYPH } from '@ccrc/ui';
+import { restartWords } from '../lib/restart';
 import { humanBytes } from '../screens/ArchiveScreen';
 import { lifecycleQualifier } from './lifecycleWords';
 import { childOfRunLabel } from './runWords';
@@ -257,6 +258,8 @@ export function SessionMeta({
   // `working` row (N is "as listed at the last Stop" and never shown once the
   // live file reads idle, which moves the bucket off `working`).
   const bgWords = state === 'working' && background !== null ? backgroundWords(background) : null;
+  // D-5237: the card's qualifier for an hour after a process end.
+  const restart = dead ? null : restartWords(session, now);
   const turnAge =
     wedged && session.statusUpdatedAt !== null ? elapsedWords(now - session.statusUpdatedAt) : null;
 
@@ -347,6 +350,15 @@ export function SessionMeta({
               `flex: none` in fleet.css: §2.4 lengthens the hold reason in the
               same build and the two changes compound. */}
           <LastSpawnChip chip={chip} />
+
+          {/* D-5237: "restarted · out of memory · 3m ago", for an hour after a
+              recorded process end; the time in `title`. Same quiet truncating
+              mono register as `.sess-held`. */}
+          {restart !== null && (
+            <span className="sess-restart" data-restart={restart.cause} title={restart.title}>
+              {restart.text}
+            </span>
+          )}
 
           {/* Registry ladder (architecture doc, increment 1's second half —
               Task 2): this row's identity triple could not be fully measured

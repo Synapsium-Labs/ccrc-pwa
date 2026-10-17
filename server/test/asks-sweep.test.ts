@@ -22,7 +22,7 @@
 // test that only awaits `tick()` has not awaited it — every assertion below
 // calls `w.sweepAsks()` directly, the same reason it is PUBLIC.
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { Bus } from '../src/bus.js';
 import type { Runner } from '../src/exec.js';
@@ -158,6 +158,20 @@ function fixture(opts: {
 
 const askTag = (id: string): string => `ask-${id}`;
 
+/** D-5290: only a dispatched child under a live parent is held — so make
+ *  `childId` one, as `ws-add --child <run>` leaves it (its `.child` marker
+ *  naming the run), and give `parentId` a registry row in the child's project
+ *  unless the fixture already seeded it. */
+function markChild(f: ReturnType<typeof fixture>, childId: string, runId: number, parentId: string): void {
+  writeFileSync(path.join(f.reg, `${childId}.child`), String(runId));
+  if (existsSync(path.join(f.reg, `${parentId}.uuid`))) return;
+  const project = readFileSync(path.join(f.reg, `${childId}.project`), 'utf8');
+  const fields: Record<string, string> = {
+    wrapper: 'claude', project, workdir: `/w/${parentId}`, uuid: `u-${parentId}`, started: '1',
+  };
+  for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(f.reg, `${parentId}.${k}`), v);
+}
+
 /** Opens a run claimed by `parentId`, dispatches to `childId`, primes, then
  *  shows an eligible single-question menu and ticks once more — the mint
  *  edge (`detectDialogs`'s `last !== dialog.id` branch). Returns the minted,
@@ -168,6 +182,7 @@ async function mintHold(f: ReturnType<typeof fixture>, childId: string, parentId
     wave: 1, waveOf: null, claimedBy: parentId,
   }) as { id: number };
   f.coord.setSession(run.id, childId);
+  markChild(f, childId, run.id, parentId);
   await f.tick();                                          // priming
   f.writeAsk(childId, oneQuestion);
   f.showMenu(childId);
@@ -229,6 +244,7 @@ describe('sweepAsks — the release sweep (Task 7)', () => {
       wave: 1, waveOf: null, claimedBy: 'coord-1',
     }) as { id: number };
     f.coord.setSession(run.id, 'cc-a');
+    markChild(f, 'cc-a', run.id, 'coord-1');           // a hold in every respect but the switch
 
     // Armed BEFORE any sweep runs, so `tick()`'s own auto-dispatched
     // `sweepAsks()` (fired during the priming tick below) already sees it —

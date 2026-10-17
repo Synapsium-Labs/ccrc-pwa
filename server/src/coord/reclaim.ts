@@ -206,6 +206,16 @@ export async function measureClaimant(
     : { state: 'alive', why: `the pane is gone but the lifecycle reads ${lc}` };
 }
 
+/** THE DEAD PREDICATE, one function (D-5290): the dead-coordinator sweep's
+ *  "which claimants are dead" (`sweepDeadCoordinators`) and the ask hold's
+ *  "is this parent live" (`tryHold`, coordinator-first routing spec §5.2) read
+ *  it, so the hold never calls live a parent the sweep would end. Only a
+ *  `dead` verdict is dead: `unmeasurable` is doubt, not evidence, here as in
+ *  the ladder above. */
+export function claimantMeasuredDead(v: ClaimantVerdict): boolean {
+  return v.state === 'dead';
+}
+
 /**
  * `registry-unmeasurable` has TWO producers and they are the same answer to the
  * caller: the incoming coordinator's read would not list, or the ladder could not

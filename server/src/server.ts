@@ -43,7 +43,7 @@ import {
   sendPrompt, answerDialog, answerDialogMulti, answerDialogText, interrupt, interruptVerdict, moveDialogTab, submitEnter,
   type InterruptVerdict, type SendDeps,
 } from './inject/send.js';
-import { answerAsk, type AskDeps } from './inject/ask.js';
+import { answerAsk, readAskAnswer, type AskDeps } from './inject/ask.js';
 import { freshAskAt, measuredIdentity, readRegistry, readSessionRecord } from './registry.js';
 import type { SessionRecord } from './registry.js';
 import { readHookState } from './hookstate.js';
@@ -2256,13 +2256,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   app.post('/api/sessions/:id/ask', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
-    const body = (req.body ?? {}) as { askKey?: unknown; optionIndexes?: unknown };
-    if (typeof body.askKey !== 'string' ||
-        !Array.isArray(body.optionIndexes) ||
-        !body.optionIndexes.every((n) => typeof n === 'number')) {
+    // D-5293: one reader for this body and the parent's (`readAskAnswer`).
+    const body = readAskAnswer(req.body ?? {});
+    if (body === null || body.askKey === undefined) {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
-    const optionIndexes = body.optionIndexes as number[];
+    const optionIndexes = body.optionIndexes;
     // Narrowed to `string` by the guard above, but that narrowing does not
     // cross into `pressPlain`'s own closure below — a fresh `const` of the
     // narrowed type carries it there.

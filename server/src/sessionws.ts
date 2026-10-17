@@ -506,21 +506,24 @@ export class SessionStream {
    *  status and no activeForm, so there is no row to send and no honest count
    *  to fold into a summary built out of rows. The surface that DOES show a
    *  denominator is the fleet card's `done/total`, and that one comes from
-   *  `taskProgress` in `watch.ts`, where the count lands. The frame stays
-   *  exactly as wide as it was: additive-only means a new field is allowed,
-   *  not that an unrendered one earns its place. */
+   *  `taskProgress` in `watch.ts`, where the count lands. Additive-only means
+   *  a new field is allowed, not that an unrendered one earns its place: the
+   *  one field added since, `touchedAt` (D-5372), is rendered — it is how the
+   *  strip tells a live plan from one left open days ago. */
   private async checkTasks(cfgDir: string, uuid: string): Promise<void> {
     if (this.stopped) return;
-    const { tasks } = await readTasks(this.deps.io, cfgDir, uuid);
+    // D-5372: `touchedAt` rides the frame (optional) and joins the dedupe key,
+    // so a rewrite that leaves the rows equal still refreshes the strip's age.
+    const { tasks, touchedAt } = await readTasks(this.deps.io, cfgDir, uuid, { touchedAt: true });
     if (this.stopped) return;
-    const json = JSON.stringify(tasks);
+    const json = JSON.stringify([tasks, touchedAt ?? null]);
     if (json === this.lastTasksJson) return;
     if (this.lastTasksJson === null && tasks.length === 0) {
       this.lastTasksJson = json;
       return;
     }
     this.lastTasksJson = json;
-    this.send({ type: 'tasks', tasks });
+    this.send({ type: 'tasks', tasks, ...(typeof touchedAt === 'number' ? { touchedAt } : {}) });
   }
 
   /**

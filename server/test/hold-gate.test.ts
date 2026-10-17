@@ -250,7 +250,7 @@ describe('sweepMerged — a held merge is announced, never acted on', () => {
       started: true, home: null, pool: null, lastswap: null,
       workspace: 'quiet-basin', branch: 'ws/quiet-basin', branchEvidence: 'named', base: 'origin/main',
       prPhase: null, prNumber: null, prCheckedAt: null, archivedAt: null, archivedBytes: null, held: null,
-      substrate: null, stopped: null, supervisedAt: null, swapBlocked: null, stranded: null, spawn: null, lifecycleUnmeasured: [],
+      substrate: null, stopped: null, supervisedAt: null, swapBlocked: null, stranded: null, spawn: null, lastEnd: null, lifecycleUnmeasured: [],
       unmeasured: ['wrapper'], route: null, child: { kind: 'none' },
     };
     const merged: PrState = { phase: 'merged', number: 42, url: null, title: null, checks: null,

@@ -49,7 +49,8 @@ export const ASK_GRACE_MS = 180_000;
  *  "with coordinator" state (plan Task 7) all read it, so the time the mail
  *  states is the time the sweep acts. `heldAt` is the mint time, the asks
  *  row's `at` (the clock `sweepAsks` counts from), NOT its `askAt`, which is
- *  hookstate's `updatedAt` and serves as the instance guard (D-2170). */
+ *  hookstate's `updatedAt` and serves as the instance guard (D-2170); the
+ *  plan's `askNotifyAt(askAt)` departs here (D-5364). */
 export function askNotifyAt(heldAt: number): number {
   return heldAt + ASK_GRACE_MS;
 }
@@ -125,3 +126,11 @@ export const ASK_ANSWERING_MAX_MS = 60_000;
  * nothing, while a chip that never goes away is the defect this closes.
  */
 export const ASK_HELD_CHIP_MAX_MS = ASK_GRACE_MS + ASK_ANSWERING_MAX_MS;
+
+/** D-5290 (coordinator-first routing spec §5.2): how many ticks the FIRST
+ *  actionless raise of a dialog waits while the child's hookstate is not yet
+ *  `waiting`. `tick()` sweeps hookstate before `detectDialogs` captures the
+ *  panes, so a menu that paints after that read is seen with no envelope; one
+ *  or two ticks later the envelope is there and the question can be held
+ *  instead of pushed. Counted per `dialog.id`; the third sighting raises. */
+export const ASK_SETTLE_TICKS = 2;

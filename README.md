@@ -52,7 +52,7 @@ spec  →  plan  →  waves of subagents  →  per-PR review lenses  →  whole-
 | **Sessions that stay out of each other's way** | A session claims the paths it is about to edit, all or nothing, and a conflict names the holder to mail. A dispatched worker is denied `gh pr merge` — the coordinator lands work — and deviation numbers are issued by the server, never guessed. |
 | **Hook-first session state** | Each session reports its own state through a Claude Code hook; scraping the tmux pane is the ranked fallback, not the source. |
 | **A code graph for every tree** | graphify keeps an AST-derived knowledge graph fresh per git tree on the fleet host, and a ccrc session that searches a freshly graphed tree before querying it is turned back, at most three times (`touch ~/.ccrc/graph-gate-off` lifts the gate). |
-| **Answer from the lock screen** | A session asks a question; your phone gets a push and you answer it from the notification, without opening a terminal. A worker's question goes to its coordinator first, and reaches you when the coordinator passes on it or two minutes go by. |
+| **Answer from the lock screen** | A session asks a question; your phone gets a push and you answer it from the notification, without opening a terminal. A worker's question goes to its coordinator first, and reaches you when the coordinator passes on it or three minutes go by. |
 | **A terminal, a transcript and a PR in the browser** | The transcript streams as it is written, agent mail rendered as cards; a terminal drawer attaches to the real tmux pane; type, interrupt or attach a screenshot from the phone, and open a PR or a draft — there is no merge button, by design. |
 | **Workspace holds** | A program declares a claim on a worktree. No timeout, no expiry — the reason string *is* the display, and the verbs that delete, rename or reclaim the workspace refuse or defer while it stands. |
 | **Two-phase workspace destruction** | Nothing irreversible happens on one tap, and every precondition is re-proved at the moment it matters. |
@@ -2253,6 +2253,25 @@ line, `message.model === '<synthetic>'` for the padding — each narrowed by the
 (`RESUME_PROMPT_PREFIX` / `NO_RESPONSE_TEXT`, `shared/api.ts`); ccd's `RESUME_PROMPT` must keep
 starting with that prefix, which `server/test/ccd-resume-flag.test.ts` pins (D-2228).
 
+**Every process end is recorded, and the prompt names it (D-5237).** `_spawn_start` reads the pane's
+scope unit once, after the pane exists, into `$REG/<id>.panescope` (one `/proc` read per spawn,
+none per supervise tick). When tmux pronounces the session `gone`, the supervise loop classifies the
+end: `oom` when that scope's journal names an OOM kill in the last 120 s (`journalctl --user -u
+<scope>`, bounded by `timeout 5`), `tmux-server` when `tmux list-sessions` fails, `exited`
+otherwise, and `unknown` when the journal read fails or no scope was recorded on Linux. `cmd_swap`
+records `swap-manual`, `swap-auto-home`, `swap-auto-rescue` or `swap-auto` after its act-time gates
+and before it stops the unit, so a refused swap records no end. Each goes to `$REG/<id>.lastend`
+(`<epoch> <cause>`; an `oom` also appends to `$REG/<id>.oomends`, kept to the last 10 minutes) and
+to `swap.log` as `ended <id>: <cause>`. `_resume_prompt_for` composes the prompt per spawn: a
+`lastend` at most 10 minutes old replaces RESUME_PROMPT's "an account swap or a supervisor revival"
+with the cause, and for `oom` adds how many out-of-memory restarts the last 10 minutes held and that
+the step that was running must not be re-run at the same parallelism. `_resume_env <id>` carries it
+and `_redrive_after_spawn` types the same text; no clause holds a single quote. The server reads
+`lastend` only when the registry listing names it, into `FleetSession.lastEnd` (`parseLastEnd`;
+an unknown cause reads `unknown`), and the card and the session header show "restarted · out of
+memory · 3m ago" for an hour. `_route_escape` writes `route-escape <id>` to `swap.log` before each
+Escape it sends.
+
 ### A limit is measured on the transcript, and Claude Code's own recovery is left alone (D-2360–D-2370)
 
 The follow-ups to the restart re-drive, measured on 2026-09-10 after 53 landings
@@ -2893,7 +2912,8 @@ edge pushes as before. Delegated background work keeps its push for the moment t
   idle-gated lane, and holds **only your notification** for up to 180 s (`ASK_GRACE_MS`, `server/src/askwindow.ts`).
   The coordinator may answer from what it can read — `POST /api/asks/:id/answer`, box token plus registry
   attribution, accepted only from that worker's own parent, which re-proves the question is still the live one
-  before it presses one digit — or decline anything that would be a new decision with
+  before it presses one digit; its body is the operator's own (`readAskAnswer`, D-5293), so an `askKey` it sends must
+  be the row's (`409 ask-mismatch`, D-5368), and what it may hold is what your route answers (`answerableAsk`) — or decline anything that would be a new decision with
   `POST /api/asks/:id/release`, which fires your push at once (coordinator clause 11). Your own answer from the
   lock screen takes the same ask row, so the record names whoever ruled. A multi-select or multi-question ask, a
   session with no parent, a run this box could not read, or `$REG/asks-disabled` (touched by hand on the fleet
@@ -5138,8 +5158,8 @@ working set, `SessionStart(compact)` serves the card once beside the graph card 
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:8060-8062`), each with an operator sentence of its own at `:8112`,
-`:8120` and `:8133`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:8158-8160`), each with an operator sentence of its own at `:8210`,
+`:8218` and `:8231`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 
