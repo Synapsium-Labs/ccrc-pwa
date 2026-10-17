@@ -2251,3 +2251,118 @@ for f in sorted(set(b) & set(a)):
 - **Memory.** The memory rules in Global Constraints stand as written. The slice read 23.0 GB at the ruling, so
   expect waits. When the 30-minute cap is reached, use CI, and the wave-done names every batch that did not run
   locally, with the readings.
+
+## Coordinator rulings on review 535 (2026-10-17)
+
+Review run 535 read this branch at `b5b83ad66` and reported 18 findings, F1 to F18. These rulings govern fix round 1
+and the landing round. Three critics checked the draft of them first, for rigour, proportion and factual premises,
+and their corrections are folded in.
+
+**The line between fixing and naming.** It applies to every census finding here, and to any the re-review finds.
+- **Fix now** when the shape is live in the tree on a `ccd` or `ccrc` script spawn (F1, F6, F7). Also fix now when
+  it breaks a promise the census header makes and the fix is local to an existing rule (F2, F5, F8(1) and (2)), or
+  when it is a gate this wave created in its own file (F4's `;` and `%`).
+- **Name it** in the header's blind-spot paragraph when no instance exists in the tree and it is a new spelling or
+  needs a new resolution mechanism: F8(3), F8(4), F9, a symlinked bus, a helper's returned env, lexical scope and
+  destructuring.
+- **The cap:** a fix that would force an edit to a claimed file, or a new `ALLOWED` entry, is named instead, and
+  its sites go to wave 17.
+- **The contract.** The header's opening claim changes from "every spawn of the real ccd or ccrc script" to every
+  spawn in the spellings it lists. The listed rules plus the blind-spot paragraph are the contract.
+
+**Every new or changed detector arm, and every new guard, gets a measured mutation row** in the mutation table,
+with its red set. Census rows may be measured standalone (node type stripping and a shim, as the reviser and the
+reviewer did), marked standalone. Rows in other files are measured with vitest, one file per call.
+
+**Per finding:**
+- **F1: fix.** A `.join(…)` or `+` initialiser that names a script binding or a script-path literal makes that one
+  binding a script binding. Resolve a spawn's identifier to its nearest earlier binding, as `slicedAt` does, not by
+  file-wide name. Otherwise `ccrc-doctor.test.ts`'s second `script` binding (a sibling script spawned with no env)
+  becomes a false hit in a claimed file.
+  - Corpus rows: both spellings as hits; and two same-name bindings in one source, the second not a script and
+    spawned bare, with no hit.
+  - Place the `bashPath` program in `ccrc-token-sync.test.ts`, or the placement row reds.
+  - Report whole-tree totals before and after: hits per file, unplaced, script and sliced counts (181 script spawns
+    at `b5b83ad66`), and every site that becomes a script spawn.
+- **F2: fix.** A corpus line and a mutation row each for the script-name `as` alias, `for … of` over an
+  identifier-bound list, `stripCast`'s paren unwrap, and a spawn inside a comment and inside a string. For the
+  PROGRAM rule's "or the script itself" arm, either pin it with a corpus assertion on the `unplaced` list (the hit
+  comparison cannot see it), or delete the arm. Either way, with a measured row.
+- **F3: the after-phase reach-spy run is not a merge gate, and CI is not claimed to stand in for it.**
+  - Its safety half (no harness spawn reaches a real tool) is pinned by rows H18-1 to H18-9, T1-1, T1-2 and the
+    `assertNoRealTool` rows. Under `net`, the poisons sit first on PATH, before any spy.
+  - Its coverage half is lost for this wave: which tests met a real tool at the base, or meet a poison now, and stay
+    green. The PR body and the plan's residue name it. The coordinator records a standing check for a later test
+    wave: a harness cleanup that reports any poison record left behind.
+  - Optional, never a gate: if the bar opens in the landing round, run one bounded spy batch. It covers the harness
+    users that name ssh, scp, curl or the bus, plus #448's two new harness users, with a
+    `strace -f -e trace=execve` log if strace runs. The wave-done reports what ran.
+- **F4: fix.** `busPath` and `busUnder` refuse a value with `;` or `%`, so the fixture pair wins. One row and one
+  mutation row per refusal, on a HOME with neither character. Name the symlink case in `busUnder`'s and
+  `assertNoRealTool`'s docstrings and in the residue.
+- **F5: fix.** Follow only top-level identifier spreads after the last builder's closing paren. A spread inside a
+  builder's arguments, or before the builder, stays contained. Corpus rows both ways, and a mutation row.
+- **F6: fix.** An unfollowable spread keeps a verdict already decided by an `env:` key, the `env` shorthand or a
+  followed spread. The initial "no env" default is not a decided verdict. Corpus rows for both cases, and a mutation
+  row.
+- **F7: fix.** Apply `under(dir)` to the spawn's own argument text. The four `ccrc-doctor.test.ts` sites become
+  script spawns, all contained. Measure that row 4 (placement) stays green. If it reds in a way only an edit to the
+  claimed file could cure, name the spelling and give wave 17 the sites. A mutation row.
+- **F8: fix (1),** a callback with no options, **and (2),** `env: undefined`, each with a corpus line and a mutation
+  row. **Name (3),** a script path followed by arguments: it is a new spelling, and a loose match would catch the
+  sibling scripts that share the prefix. **Name (4),** the three namespace spellings.
+- **F9: name it,** with the false-negative mirror case: a bare destructured env read after an unrelated contained
+  `const env`.
+- **F10:** add `assertNoRealTool(env, h.home)` in `runFull`, with a mutation row (drop its `net`). At the strays
+  listing, either the same line and row, or drop its `net`, since it runs no curl.
+- **F11:** hoist the env that `runDrRcState` spawns with, call `assertNoRealTool` on that same binding, and spawn
+  with it. A mutation row: revert it to `{ ...process.env, HOME: home }`.
+- **F12: the mutation table is re-measured once, at the landing tip.** Census rows are also measured standalone at
+  the fix tip. At the landing tip, re-measure every row whose mutated file or red-row file changed in the fix round
+  or the merge: the T1 rows (`containedTools.ts` changes), T1-14 by vitest, T2-4 and F10's rows, T3-6 and F11's
+  row, and every T3 row. Carry the rest, marked "carried from 51baba484". Task 7 Step 1 says T1-1 to T1-14, and
+  T3-6's citation is corrected.
+- **F13:** amend the entries of numbers 5254 and 5255 to cover the prose departures: the `harnessBin` docstring and
+  the systemd-boundary comment, and R23(a)'s wording.
+- **F14:** reconcile the PR body's not-in-this-wave list and the plan's residue, both ways. Narrow "one stub door"
+  to the ccd harness: `sweepFixture.ts` writes its functional stubs into `harnessBin` through `ccrcContainedEnv`.
+  Check the added PR-body text for private names before patching it.
+- **F15 and F17:** correct the prose. `runbook-holds` gains inline `assertNoRealTool` calls, not rows. The PR's
+  selection ran 305 of 714 server files, all 280 harness reachers among them.
+- **F16, and the gate:**
+  - The BEFORE for this tip is daily 38845767044 on `0b3ff2f62`, with the reviewer's per-file comparison (+15,
+    exactly where expected).
+  - At landing, the BEFORE is the latest trusted full run on `main` at or after the merge base, and the AFTER a
+    `mode=full` dispatch on the post-merge tip. The per-file comparison is re-run, and both run ids go in the PR
+    body.
+  - That comparison settles the 282-file importer census's pass/fail. The full runs stand in for Task 7 Step 5's
+    local sharded gate. The entry for number 5252 is amended to say so.
+- **F18:** no action.
+
+**D-numbers.** This round's census widenings (F1, F5 to F8, and F2's arm if it is deleted) take number 5256
+together. The bus refusal (F4) takes number 5257. Number 5258 is the spare.
+
+**The landing round, after #448.**
+- Merge `main`. Run the census (standalone if vitest cannot run).
+- Run `delegation-spool` and `delegation-wave3.integration` with vitest, one per call.
+- Everything else is CI's selection, after checking that its summary lists #448's 19 harness-reaching files.
+- The census lists change only if a count changes. The plan's prose citations of `ccrc-doctor.test.ts:8375` may
+  move.
+
+**Memory.** Single-file vitest runs use a 22.5 GiB bar, the worker's own, which ran 28 files tonight. Batches keep
+the plan's 21 GiB. Each wait is bounded at 30 minutes. A required single-file run that misses its window is
+reported at once and held, and the coordinator re-triggers it in the next window. CI never stands in for a
+mutation row.
+
+**A correction to the earlier rulings of 2026-10-17.** "Not in this wave, corrected" said `sweepFixture.ts` is not
+on `main`. It is: wave 11 (#287) added it. The item stays residue for another reason: wave 16 (#444) edits the
+file.
+
+**The order.**
+1. Fix round 1 now, with the census rows measured standalone. Push it with a wave-done that marks each vitest-bound
+   row as pending the landing tip.
+2. The coordinator re-measures it and holds the run for #448.
+3. The landing round: the merge, the single re-measure, and a fresh wave-done.
+4. One scoped review of fix round 1, the merge and the measurements. It checks three things only: the ruled fixes
+   do what these rulings say; each new row is measured; and no widening created a new hit or false positive in the
+   real tree. A new spelling found there is named by default.
