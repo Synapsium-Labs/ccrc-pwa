@@ -4088,11 +4088,12 @@ bgd="${bgd:-}" bgdk="${bgdk:-}"
 _hook_server_cap() {   # <word> -> 0 advertised and current; 1 otherwise
   local want="$1" l1="" l2="" l3="" l4="" at now
   { { IFS= read -r l1 && IFS= read -r l2 && IFS= read -r l3 && ! IFS= read -r l4; } < "$HOME/.ccrc/server-caps"; } 2>/dev/null || return 1
-  [[ -z "$l4" && "$l3" == end && "$l1" =~ ^at\ ([0-9]{1,11})$ ]] || return 1
+  [[ -z "$l4" && "$l3" == end && "$l1" =~ ^at\ ([0123456789]{1,11})$ ]] || return 1
   at=$(( 10#${BASH_REMATCH[1]} ))
-  [[ "$l2" =~ ^caps(\ [a-z0-9-]{1,64})*$ ]] || return 1
+  # The word class is spelled out, never a range: under a UTF-8 locale `a-z` may collate non-ASCII letters into it.
+  [[ "$l2" =~ ^caps(\ [abcdefghijklmnopqrstuvwxyz0123456789-]{1,64})*$ ]] || return 1
   if [[ -n "${EPOCHREALTIME:-}" ]]; then now="${EPOCHREALTIME%%[.,]*}"; else printf -v now '%(%s)T' -1; fi
-  [[ "$now" =~ ^[0-9]+$ ]] || return 1
+  [[ "$now" =~ ^[0123456789]+$ ]] || return 1
   (( at <= now && now - at <= 180 )) || return 1
   [[ " ${l2#caps} " == *" $want "* ]]
 }

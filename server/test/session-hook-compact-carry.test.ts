@@ -45,8 +45,8 @@ const hookEnv = (): NodeJS.ProcessEnv => ({
   CCRC_SESSION_GENERATION: GENERATION,
 });
 /** One hook run; the header contract's exit 0 and silence asserted on every run. */
-const run = (payload: object): void => {
-  const r = spawnSync('bash', [HOOK], { input: JSON.stringify(payload), encoding: 'utf8', env: hookEnv() });
+const run = (payload: object, env: NodeJS.ProcessEnv = {}): void => {
+  const r = spawnSync('bash', [HOOK], { input: JSON.stringify(payload), encoding: 'utf8', env: { ...hookEnv(), ...env } });
   expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
   expect(r.stdout, 'a compaction prints nothing').toBe('');
 };
@@ -130,6 +130,16 @@ describe('the skip engages only behind the server\'s word (D-5239, spec §6.1)',
     expect(s['updatedAt'] as number).toBeGreaterThan(T0 + 30 * 60_000);
     run(postCompact('auto'));
     expect(readState()).toMatchObject({ state: 'working', event: 'PostCompact' });
+  });
+
+  // The word class is spelled letter by letter, not as a range: under a UTF-8 locale a bash range such as `a-z` may
+  // collate a non-ASCII lowercase letter into it, and the TypeScript grammar (ASCII only) refuses such a word.
+  it('a non-ASCII lowercase word beside it, under LC_ALL=en_US.UTF-8 → the gate stays closed (today\'s bytes)', () => {
+    writeCapsText(`at ${nowS()}\ncaps ${WORD} caf\u00e9\nend\n`);
+    const before = doneAt(T0);
+    run(preCompact('manual'), { LC_ALL: 'en_US.UTF-8' });
+    expect(stateBytes().equals(before)).toBe(false);
+    expect(readState()).toMatchObject({ state: 'working', event: 'PreCompact' });
   });
 
   it('control: the word listed in a current file (lease − 1 s, beside another word) → the skip', () => {
@@ -281,6 +291,13 @@ describe('behind the word, a compaction writes no hookstate (D-5239, spec §5.8)
     run(postCompact('manual'));
     expect(fs.readFileSync(markFile()).equals(mark)).toBe(true);
   });
+});
+
+// The full real sequence of an idle `/compact` is Stop, PreCompact, SubagentStop, PostCompact. Behind this word alone
+// the SubagentStop between the two compaction events still rewrites the hookstate (a fresh `bucketSince`), so the
+// visible effect needs Task 2's no-file agent event behind its own word `hook-main-state-v1`. Task 2 inherits this.
+describe('the full real /compact sequence (Task 2 lands the SubagentStop half)', () => {
+  it.todo('both words advertised: Stop at T0, PreCompact, SubagentStop, PostCompact(manual) → the file byte-identical');
 });
 
 // Measured first (plan Task 10): a typed `/compact` fires PreCompact, a SubagentStop (the compaction's own agent)
