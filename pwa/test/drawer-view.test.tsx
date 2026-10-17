@@ -98,6 +98,9 @@ import type { DrawerTerm, MakeTerm } from '../src/session/terminalFactory';
 import { PINNED_WINDOW_COLS, PINNED_WINDOW_ROWS, TMUX_STATUS_ROWS } from '../../shared/api';
 import { SYNTHETIC_SCREENS, STATUS_TEXT } from './fixtures/drawer/synthetic';
 import { declaredValues } from './cssRule';
+import { SessionHeader, type SessionHeaderProps } from '../src/session/SessionHeader';
+import { fleetSession } from './fleetFixture';
+import { TEST_ROSTER } from './rosterFixture';
 
 const made = vi.hoisted(() => ({ terms: [] as unknown[] }));
 // The real Terminal, remembered as it is made, so a case can reach the one the
@@ -979,6 +982,88 @@ describe('P4: a physical Escape goes to Claude Code while the terminal has focus
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  // D-5235 (spec 2026-10-16 §5.5; plan Task 5): the drawer meets the session
+  // header on the same keystroke. The header's desktop Escape binding is a
+  // window listener; P4 sends the terminal's Escape through the pty, and a
+  // dismissal must not also reach the interrupt route. RED FIRST, measured
+  // 2026-10-16 against origin/main 0a06ebb9: the focus-elsewhere case failed
+  // (onInterrupt called once); the terminal-focused case passed before and
+  // after. The plan expected the header's textarea skip to hold that case;
+  // measured, xterm itself does: it handles the Escape and calls
+  // `cancel(e, true)`, which stops the keydown's propagation, so the window
+  // listener never sees it (it stays green with the textarea skip and both
+  // D-5235 checks removed). The case pins the outcome, one `\e` and no
+  // interrupt, whatever holds it.
+  describe('beside the session header (busy, fine pointer)', () => {
+    const fine = (): void => {
+      vi.spyOn(window, 'matchMedia').mockImplementation((q: string) => ({
+        matches: q.includes('pointer: fine'), media: q, onchange: null,
+        addListener: () => {}, removeListener: () => {},
+        addEventListener: () => {}, removeEventListener: () => {}, dispatchEvent: () => false,
+      }) as unknown as MediaQueryList);
+    };
+    const headerProps = (): SessionHeaderProps => ({
+      session: fleetSession({ id: 'project-a-quiet-basin', project: 'project-a', status: 'busy', bucket: 'working' }),
+      status: 'busy', statusUpdatedAt: null,
+      onInterrupt: vi.fn(), onOpenTerminal: vi.fn(), onBack: vi.fn(), onChangeModel: vi.fn(),
+      onChangeEffort: vi.fn(), onMoveAccount: vi.fn(), onArchive: vi.fn(), onRestore: vi.fn(),
+      onOpenHistory: vi.fn(), onReapWorkspace: vi.fn(), roster: TEST_ROSTER,
+    });
+
+    it('Escape in the focused live terminal: \\e once through the pty, and no interrupt from the header', () => {
+      fine();
+      const store = memStore();
+      store.map.set(VIEW_OVERRIDE_KEY, 'grid');
+      const onClose = vi.fn();
+      const hp = headerProps();
+      render(
+        <>
+          <SessionHeader {...hp} />
+          <TerminalDrawer id={ID} open onClose={onClose} makeSocket={makeSocket} viewStorage={() => store} />
+        </>,
+      );
+      const ws = FakeSocket.instances.at(-1)!;
+      act(() => ws.onopen?.());
+      const ta = (made.terms.at(-1) as XTerm).textarea!;
+      act(() => ta.focus());
+      expect(document.activeElement).toBe(ta);
+      escape(ta);
+      expect(onClose, 'Escape typed into the terminal closed the drawer').not.toHaveBeenCalled();
+      expect(ws.frames(), 'Escape did not reach the session exactly once').toEqual([{ type: 'input', data: '\x1b' }]);
+      expect(hp.onInterrupt, 'the header interrupted as well as the pty').not.toHaveBeenCalled();
+    });
+
+    // The plan names "the drawer's close control"; the full sheet has none
+    // (vaul's handle is not focusable, and the scrim is a click target), so
+    // the focus is on the view chip, the control the focus-elsewhere case
+    // above uses: any focus in the drawer that is not the live terminal.
+    it('Escape with focus on another control in the drawer: the drawer closes, nothing is sent, nothing is interrupted', () => {
+      fine();
+      glass.width = 390;
+      const t = fakeTerm();
+      const onClose = vi.fn();
+      const hp = headerProps();
+      render(
+        <>
+          <SessionHeader {...hp} />
+          <TerminalDrawer
+            id={ID} open onClose={onClose} makeSocket={makeSocket} makeTerm={t.makeTerm}
+            viewStorage={() => memStore()}
+          />
+        </>,
+      );
+      const ws = FakeSocket.instances.at(-1)!;
+      act(() => ws.onopen?.());
+      const chip = viewChipEl();
+      act(() => chip.focus());
+      expect(document.activeElement).toBe(chip);
+      escape(chip);
+      expect(onClose, 'the control: Escape closes the drawer').toHaveBeenCalledTimes(1);
+      expect(ws.frames()).toEqual([]);
+      expect(hp.onInterrupt, 'dismissing the drawer interrupted the turn').not.toHaveBeenCalled();
+    });
   });
 
   it('a sheet without the prop dismisses on Escape as it always has', () => {
