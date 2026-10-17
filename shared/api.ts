@@ -10482,3 +10482,25 @@ export function parseServerCaps(text: string, nowS: number): ServerCapsParse {
   if (nowS - at > SERVER_CAPS_LEASE_S) return { ok: false, why: 'stale' };
   return { ok: true, at, words };
 }
+
+/** Why an ask row was MINTED `released` rather than held (D-5290,
+ *  coordinator-first routing spec §5.2) — the row's `releaseReason`, `null`
+ *  on every row the hold minted. Rides `GET /api/asks` as an additive field.
+ *
+ *  `parent-not-live`          the parent has no registry row, is archived or
+ *                             stopped, or the dead-coordinator predicate
+ *                             measures it dead.
+ *  `parent-project-mismatch`  the run's claimant is a session of another
+ *                             project (a run opened before the attributed
+ *                             binding, spec §6.4).
+ *  `unknown`                  a token this build does not know, read off disk;
+ *                             never written. */
+export type AskReleaseReason = 'parent-not-live' | 'parent-project-mismatch' | 'unknown';
+
+export const ASK_RELEASE_REASON_MAP: Record<AskReleaseReason, true> = {
+  'parent-not-live': true, 'parent-project-mismatch': true, unknown: true,
+};
+
+export function isAskReleaseReason(v: unknown): v is AskReleaseReason {
+  return typeof v === 'string' && (Object.keys(ASK_RELEASE_REASON_MAP) as string[]).includes(v);
+}
