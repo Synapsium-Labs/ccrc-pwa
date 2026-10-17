@@ -2642,7 +2642,10 @@ describe('Build 8 vocabularies — one definition each, all derived from their m
     });
 
     it('round-trips every member and refuses non-members', () => {
-      expect(ASK_STATES.length).toBe(6);
+      // SEVEN since D-5289: `declined`, a parent's own release, terminal,
+      // apart from the lapse's `released`, which stays answerable.
+      expect(ASK_STATES.length).toBe(7);
+      expect(ASK_STATES).toContain('declined');
       expect(new Set(ASK_STATES).size).toBe(ASK_STATES.length);
       for (const s of ASK_STATES) expect(isAskState(s)).toBe(true);
       expect(isAskState('nope')).toBe(false);
@@ -2674,7 +2677,10 @@ describe('Build 8 vocabularies — one definition each, all derived from their m
       // split "this box could not read the child" back out of `ask-moved`,
       // which had been carrying both — a narrowing that reached the shipped
       // coordinator contract, not merely a taxonomy.
-      expect(ASK_REFUSE_CODES.length).toBe(15);
+      // SEVENTEEN since D-5289: `declined` (the parent released the question
+      // itself) and `already-answered` (a principal already ruled), which a
+      // take used to fold onto `not-held`.
+      expect(ASK_REFUSE_CODES.length).toBe(17);
       for (const c of ASK_REFUSE_CODES) expect(isAskRefuseCode(c)).toBe(true);
       expect(isAskRefuseCode('nope')).toBe(false);
       expect(isAskRefuseCode(null)).toBe(false);

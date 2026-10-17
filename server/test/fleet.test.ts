@@ -1172,6 +1172,23 @@ describe('the ask chip (Task 19)', () => {
     expect(fleet.find((x) => x.id === 'claude-demo')!.ask).toBeNull();
   });
 
+  it('folds DECLINED to no chip — the parent handed it over and the operator was pushed (D-5289)', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'claude-demo', 'claude');
+    const coord = mkCoord();
+    const id = coord.insertAsk({
+      childId: 'claude-demo', parentId: 'coord-1', runId: null, askKey: 'k',
+      askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: NOW_MS - 1000,
+    });
+    expect(coord.declineAsk(id, 2000)).toBe(true); // held -> declined
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, 1784600000,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    expect(fleet.find((x) => x.id === 'claude-demo')!.ask).toBeNull();
+  });
+
   it('folds STALE to no chip — the dialog itself is gone, nothing left to explain', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);

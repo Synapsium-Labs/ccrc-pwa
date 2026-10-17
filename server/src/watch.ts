@@ -2,7 +2,7 @@ import { performance } from 'node:perf_hooks';
 import type { Deps } from './server.js';
 import type { Bus } from './bus.js';
 import { assembleFleet, lifecycleInputFor, registrySecondsToMs } from './fleet.js';
-import { askPushBody } from './askbody.js';
+import { answeredByBody, askPushBody } from './askbody.js';
 import { measuredIdentity, readRegistry, readRegistryMeasured } from './registry.js';
 import {
   accountPoolsEnforcement, poolsEnforcement, poolsWire, readObservedEpochFromRegistry, readPoolEpoch,
@@ -720,6 +720,15 @@ export class FleetWatcher {
    *  see `ASK_ANSWERING_MAX_MS`'s own docstring). */
   private heldAsks = new Map<string, { until: number; askId: number;
     ev: Parameters<FleetWatcher['pushOne']>[0]; answeringSince: number | null }>();
+  /** D-5289, late answer wins: the push the lapse fired, per child, kept so a
+   *  parent's answer after the deadline can replace that notification under
+   *  the same tag (`answeredLate`). Set only by `sweepAsks`'s own lapse (a
+   *  parent's `declined` never lands here: its push is the parent's own act),
+   *  dropped when replaced and whenever the child's dialog clears or is
+   *  replaced (`detectDialogs`), so it holds at most one entry per child
+   *  sitting on a lapsed question. Its loss on a restart is free: the operator
+   *  keeps the lapse's notification, today's behaviour. */
+  private lapsedAsks = new Map<string, { askId: number; ev: Parameters<FleetWatcher['pushOne']>[0] }>();
   /** Fail-shut kill switch for the hold, `$REG/asks-disabled`. Declared in
    *  Task 6 (RULING F2) so the mint fork below compiled before this method
    *  existed; now SET by `sweepAsks` below, off the same registry listing
@@ -7889,6 +7898,9 @@ export class FleetWatcher {
           // scope), is the only place left that can still name it — done
           // unconditionally, before eligibility is even asked for the NEW
           // dialog, because the OLD one is gone from the pane either way.
+          // D-5289: a lapsed question this child replaced is no longer one a
+          // late parent answer could land in, so its notification is final.
+          this.lapsedAsks.delete(r.id);
           const orphaned = this.heldAsks.get(r.id);
           if (orphaned !== undefined && last !== undefined) {
             // The map entry is dropped unconditionally, BEFORE the guarded
@@ -8026,6 +8038,9 @@ export class FleetWatcher {
         // different dialog minted later on the same session. Settling the
         // held ask on the way out, in THIS branch, means there is nothing
         // left for that guard to miss.
+        // D-5289: a lapsed question whose dialog cleared was acted on (or went
+        // away); no late parent answer can land in it, so its notification is final.
+        this.lapsedAsks.delete(r.id);
         const held = this.heldAsks.get(r.id);
         if (held !== undefined) {
           // Dropped unconditionally, BEFORE the guarded write below — same
@@ -8117,8 +8132,9 @@ export class FleetWatcher {
    *     mid-call — strand the question forever, silently. Past
    *     `ASK_ANSWERING_MAX_MS` since first observed `'answering'`, this
    *     degrades exactly like the missing-row arm below: push, drop.
-   *   - `'answered'` | `'released'` | `'stale'` — somebody already resolved
-   *     it (an answer landed, an explicit `POST /api/asks/:id/release`, or
+   *   - `'answered'` | `'released'` | `'declined'` | `'stale'` — somebody
+   *     already resolved it (an answer landed, an explicit `POST
+   *     /api/asks/:id/release`, which is `'declined'` since D-5289, or
    *     `detectDialogs`'s own orphan-settle). Drop the entry, no push — the
    *     question is already closed.
    *   - `'held'` — the CAS above just failed against this exact state, so
@@ -8171,6 +8187,7 @@ export class FleetWatcher {
       }
       if (released) {
         this.heldAsks.delete(id);
+        this.lapsedAsks.set(id, { askId: held.askId, ev: held.ev });
         this.pushOne(held.ev, this.activeProjects);
         continue;
       }
@@ -8214,6 +8231,7 @@ export class FleetWatcher {
         }
         case 'answered':
         case 'released':
+        case 'declined':
         case 'stale':
           this.heldAsks.delete(id);    // settled by someone else — no push
           continue;
@@ -8272,6 +8290,30 @@ export class FleetWatcher {
     if (held === undefined) return;
     this.heldAsks.delete(childId);
     this.pushOne(held.ev, this.activeProjects);
+  }
+
+  /**
+   * D-5289, late answer wins: `POST /api/asks/:id/answer` settled a row it
+   * took from `'released'`, so the lapse already notified the operator. Replace
+   * that notification under the same tag (`pushOne`'s default
+   * `${kind}-${sessionId}`, the lapse's own) with `answeredByBody(parent)`, and
+   * no actions: the question is answered, so the lock-screen buttons must go.
+   * Only for the lapse this watcher snapshotted for THIS row (`askId`), and
+   * once: a restart, a cleared dialog or another row's answer replaces nothing.
+   * PUBLIC for the same reason `releaseHeldAsk` is: the route's only door in.
+   *
+   * A known race, benign: a tick that captures the pane while the route is
+   * still awaiting `sendKey` can see the dialog already cleared and drop the
+   * `lapsedAsks` entry before this runs, so the operator keeps the lapse's
+   * original notification (today's behaviour). Open follow-up, not this
+   * method's: a `'released'` row whose dialog clears with nobody answering
+   * never moves to `'stale'` (`staleAsk` takes `held`/`answering` only).
+   */
+  answeredLate(childId: string, askId: number, parent: string): void {
+    const lapsed = this.lapsedAsks.get(childId);
+    if (lapsed === undefined || lapsed.askId !== askId) return;
+    this.lapsedAsks.delete(childId);
+    this.pushOne({ ...lapsed.ev, body: answeredByBody(parent), actions: undefined }, this.activeProjects);
   }
 
   /**
