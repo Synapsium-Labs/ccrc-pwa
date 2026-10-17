@@ -237,12 +237,19 @@ These are departures from the ruling or the brief, or from what shipped text at 
 - **D-5142** — *`deploy.sh`'s `prune_backups` refuses a `CCRC_BACKUP_KEEP` outside `^[0-9]{1,4}$` before any `ssh`, with `_keep_why`'s sentence shape: a second spelling of `ccd/ccrc`'s `_keep_ok`, by design, held equal by a test.*
   - **The ledger** (R8): "`deploy.sh`'s `prune_backups` reads `CCRC_BACKUP_KEEP` unvalidated." Measured: the value is spliced into the remote command (`head -n -$keep`), so `1; <cmd>` would run `<cmd>` on the box (the operator's own variable), and `abc` errors harmlessly.
   - **Why a second spelling:** `deploy.sh` runs on the operator's machine and never sources `ccd/ccrc`. `single-definition.test.ts` has no scan this trips (measured green: 571; 585 after #384). D1c holds the two regexes equal, so a later widening of either side is a red suite. `_keep_ok`'s header still calls it "the ONE validator for every KEEP knob"; that sentence is in the fenced region and passes to wave 17 (Not in this wave) *(revised)*.
-  - **Line-neutral, by the consent's fence and the frozen census:** one line replaces line 242, carrying this number in a trailing comment; line 240 is not touched *(revised)*. The directory selection and the delete line are byte-identical. KEEP=0 still means "keep none" (Reading 7).
+  - **Line-neutral, by the consent's fence and the frozen census:** one line replaces line 242, carrying this number in a trailing comment; line 240 is not touched *(revised)*. The directory selection and the delete line are byte-identical. KEEP=0 still meant "keep none" here (Reading 7); D-5144 now refuses it.
 - **D-5143** — *`deploy.sh`'s `SWEEP_CMD` captures its listing, and a listing that fails refuses the sweep before any KillMode query or restart.*
   - **The ledger** (R10c(3)): "`deploy.sh`'s sweep still restarts behind the template probe alone when its listing fails." Measured (D2 red-first): the loop saw only the template probe, KillMode passed, `try-restart claude-session@*` ran, nothing was verified, exit 0.
   - **Now:** `listing=$(…) || { …; exit 1; }`, then the loop reads `printf "%s\n" "$listing"`. The success path's call order is unchanged (the existing `SWEEP_CMD` cases stay green), and the KillMode guard still precedes `try-restart`. It is `ccrc update`'s D-3599 refusal, spelled for the fallback.
 
-Reserve: numbers **5144 to 5148**, the worker's, in order, each defined here in the commit that first cites it. Numbers 5149 to 5154 are not used.
+- **D-5144** — *`prune_backups` refuses an all-zeros `CCRC_BACKUP_KEEP` (`0`, `00`, `0000`): a second, separate test, `[[ "$keep" =~ ^0+$ ]]`, with its own warning, which prunes nothing and returns 1.*
+  - **Ruled** (the coordinator, 2026-10-16 21:15, reversing Reading 7): `head -n -0` prints every line, so KEEP=0 handed every timestamped backup to `rm -rf`. A KEEP that keeps nothing is refused like an invalid one.
+  - **Why a separate test:** D-5142's test stays byte-equal to `_keep_ok`, so D1c is unchanged. `_keep_ok` is in another programme's region and still accepts 0, so ruling on that is wave 17's.
+  - **The same line, not the next:** the ruling said "the next line". The new test is a separate statement on line 242 instead, after D-5142's, under the same trailing comment, so `deploy.sh` keeps its 1296 lines. The reason is D-5142's own constraint, the consent's fence and the frozen census: `ccd/ccrc` and four test files outside this wave cite `deploy.sh` lines after 242 (274 to 810), and a new line would move every one of them. The directory selection and the delete line are byte-identical.
+  - **Pinned** (`deploy-verify`): D3 runs the prune for real on a fixture `~/ccrc-backups` with three timestamped directories and one hand-made one. With KEEP `0`, `00` or `0000`, nothing is sent, nothing is removed, the newest directory survives, and the run returns 1 with the warning. D3b: KEEP=1 still prunes to the newest directory and leaves the hand-made one. D1b's `0` row (`head -n -0`) became a `1` row.
+  - **Measured:** deleting the new statement reds D3 ×3, and nothing else (109 cases).
+
+Reserve: numbers **5144 to 5148**, the worker's, in order, each defined here in the commit that first cites it. 5144 is defined above (the landing round); 5145 to 5148 are unused. Numbers 5149 to 5154 are not used.
 
 ## File structure
 

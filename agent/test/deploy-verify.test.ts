@@ -2871,7 +2871,7 @@ describe('deploy.sh refuses what it cannot measure: the prune KEEP and the sweep
   }, 30_000);
 
   it.each([
-    [undefined, '10'], ['3', '3'], ['0', '0'], ['9999', '9999'],
+    [undefined, '10'], ['3', '3'], ['1', '1'], ['9999', '9999'],
   ])('D1b: CCRC_BACKUP_KEEP=%j reaches the remote prune as `head -n -%s`, unchanged (D-5142)', (keep, n) => {
     const r = runPrune(keep);
     expect(r.code, r.stderr).toBe(0);
@@ -2894,6 +2894,52 @@ describe('deploy.sh refuses what it cannot measure: the prune KEEP and the sweep
     expect(theirs, '_keep_ok no longer tests a regex').toBeTruthy();
     expect(ours![1]).toBe(theirs![1]);
     expect(ours![1]).toBe('^[0-9]{1,4}$');
+  }, 30_000);
+
+  /** `prune_backups` run for real against a fixture `~/ccrc-backups`: the stub `ssh` records the remote command and
+   *  then runs it with `bash -c` under the fixture HOME, so `cd ~/ccrc-backups`, the listing and the delete act on
+   *  three timestamped directories and one hand-made one, and the rows read what is left. */
+  const STAMPS = ['20261001-010101', '20261002-020202', '20261003-030303'];
+  const runPruneOnDisk = (keep: string): { code: number; stderr: string; remote: string | null; left: string[] } => {
+    const fn = /prune_backups\(\) \{([\s\S]*?)\n\}/.exec(deploySh);
+    expect(fn, 'deploy.sh has no prune_backups() helper').toBeTruthy();
+    const home = mkTmp('ccrc-agent-prunedisk-');
+    const backups = path.join(home, 'ccrc-backups');
+    for (const d of [...STAMPS, 'pre-flip-hand-made']) mkdirSync(path.join(backups, d), { recursive: true });
+    const rec = path.join(home, 'remote');
+    const script = [
+      `ssh_stub() { printf '%s' "$2" > ${JSON.stringify(rec)}; bash -c "$2"; }`,
+      'SSH=(ssh_stub); BOX=box.invalid',
+      `prune_backups() {${fn![1]!}\n}`,
+      'prune_backups',
+    ].join('\n');
+    const env: NodeJS.ProcessEnv = { PATH: process.env.PATH ?? '', HOME: home, LANG: 'C', CCRC_BACKUP_KEEP: keep };
+    const r = spawnSync('bash', ['-c', script], { encoding: 'utf8', timeout: 15_000, env });
+    return {
+      code: r.status ?? -1, stderr: r.stderr ?? '',
+      remote: existsSync(rec) ? readFileSync(rec, 'utf8') : null,
+      left: readdirSync(backups).sort(),
+    };
+  };
+
+  it.each(['0', '00', '0000'])('D3: CCRC_BACKUP_KEEP=%j keeps no backup, so it is refused: nothing removed, rc 1 (D-5144)', (keep) => {
+    // `head -n -0` prints every line, so an all-zeros KEEP would hand every timestamped backup to `rm -rf`. It passes
+    // D-5142's whole-number test, so a second test refuses it, with a warning of its own.
+    const r = runPruneOnDisk(keep);
+    expect(r.code, r.stderr).toBe(1);
+    expect(r.remote, 'the remote prune ran with an all-zeros KEEP').toBeNull();
+    expect(r.left, 'a backup was removed').toEqual([...STAMPS, 'pre-flip-hand-made']);
+    expect(r.left, 'the newest backup did not survive').toContain(STAMPS[2]);
+    expect(r.stderr).toContain(
+      `deploy: warning: CCRC_BACKUP_KEEP='${keep}' keeps no backup, so the prune would remove every one — nothing pruned`);
+  }, 30_000);
+
+  it('D3b: CCRC_BACKUP_KEEP=1 still prunes to the one newest backup, and never a hand-made directory (D-5144)', () => {
+    const r = runPruneOnDisk('1');
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stderr).toBe('');
+    expect(r.remote).toContain('| sort | head -n -1 | xargs -r rm -rf --');
+    expect(r.left).toEqual([STAMPS[2], 'pre-flip-hand-made']);
   }, 30_000);
 
   it('D2: the sweep refuses, and restarts nothing, when `list-units claude-session@*` fails (D-5143)', () => {
