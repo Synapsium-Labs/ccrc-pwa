@@ -368,6 +368,8 @@ describe('the harness contains ssh, scp, curl and the user bus too (wave 18)', (
 
   it('H18-9 stubContainedTool is the one named door: it writes into harnessBin and refuses a name it does not contain', () => {
     expect(() => stubContainedTool(h.home, 'git' as never, '#!/bin/sh\n')).toThrow(/not a contained tool/);
+    // gh is contained, but its poison is rewritten on every ghContainedEnv call, so this door would not keep it (D-5254).
+    expect(() => stubContainedTool(h.home, 'gh' as never, '#!/bin/sh\n')).toThrow(/GH_STUB/);
     const p = stubContainedTool(h.home, 'ssh', '#!/bin/sh\necho stub-ssh\n');
     expect(p).toBe(path.join(harnessBin(h.home), 'ssh'));
     expect(h.sh('ssh')).toBe('stub-ssh');

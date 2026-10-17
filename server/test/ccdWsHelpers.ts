@@ -291,8 +291,9 @@ export const WS_ADD_REAL_SPAWN = `
  *  what broke five `ccrc status` tests: a consumer that never runs ccd
  *  (`ccrc-doctor.test.ts`) keeps its own `<home>/stub-bin`, and only the
  *  poisons this file actually plants can shadow what is in it. That set is `gh`
- *  for every caller, plus systemd for a caller that ASKS — see
- *  `ghContainedEnv`. */
+ *  for every caller, plus systemd, tmux and the net tools (ssh, scp, curl) for a
+ *  caller that ASKS — see `ghContainedEnv`. Since wave 18 a functional stub of a
+ *  contained tool is written through `stubContainedTool` (D-5249). */
 export function harnessBin(home: string): string {
   const bin = path.join(home, '.local', 'bin');
   fs.mkdirSync(bin, { recursive: true });
@@ -355,10 +356,17 @@ const NET_TOOLS = ['ssh', 'scp', 'curl'] as const;
 /** THE named door for a test that needs a FUNCTIONAL contained tool under the harness, a curl stub above all (wave
  *  18, D-5249): writes `body` as `<harnessBin(home)>/<name>`, REPLACING the poison `net` (or `systemd`, `tmux`)
  *  plants there. A poison is create-if-absent, so every later plant keeps the stub. Refuses a name outside
- *  CONTAINED_TOOLS, so the call site names the tool it takes over. Returns the stub's path. */
-export function stubContainedTool(home: string, name: (typeof CONTAINED_TOOLS)[number], body: string): string {
+ *  CONTAINED_TOOLS, so the call site names the tool it takes over, and refuses `gh` (D-5254): `ghContainedEnv`
+ *  REWRITES the gh poison on every call, so a gh stub here would be overwritten by the next `sh()` — a function
+ *  stub (`GH_STUB`) is gh's door. Returns the stub's path. */
+export function stubContainedTool(
+  home: string, name: Exclude<(typeof CONTAINED_TOOLS)[number], 'gh'>, body: string,
+): string {
   if (!(CONTAINED_TOOLS as readonly string[]).includes(name)) {
     throw new Error(`stubContainedTool: ${String(name)} is not a contained tool`);
+  }
+  if ((name as string) === 'gh') {
+    throw new Error('stubContainedTool: gh is re-poisoned on every ghContainedEnv call; stub it with GH_STUB');
   }
   const p = path.join(harnessBin(home), name);
   fs.writeFileSync(p, body, { mode: 0o755 });
@@ -373,8 +381,8 @@ export function ghContainedEnv(
   fs.writeFileSync(path.join(bin, 'gh'),
     '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/gh-poison"\n'
     + 'echo "ccd tests must never reach the real gh" >&2\nexit 97\n', { mode: 0o755 });
-  // Everything below is the SYSTEMD boundary, and it happens only for a caller
-  // that asked. OPT-IN, not opt-out: a default-on poison is invisible to the
+  // Everything below is the SYSTEMD boundary and the tmux poison (since wave 18
+  // also the net poisons and the bus), and it happens only for a caller that asked. OPT-IN, not opt-out: a default-on poison is invisible to the
   // consumer it hurts, because the damage shows up as a wrong ANSWER in a file
   // that never mentioned systemd (see the header). Opt-in makes the widening
   // land at the call site, where the reviewer of that call site can see it.

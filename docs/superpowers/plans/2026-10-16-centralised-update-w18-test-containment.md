@@ -238,6 +238,10 @@ These are departures from the brief, the ledger, or what shipped text at `256b25
 - **D-5253** — *The census's BARE is exactly R14(b)'s three shapes, in every spelling the revised reader knows. Any builder call after the parent's env, an env member, a parameter with no default, and a helper-function call are outside it. The "second ring" (thin builders) is a named non-goal.*
   - **Why:** a stricter "must be `ccrcContainedEnv`" rule would hit about 35 spawns in 10 `ccrc-*` files whose own builders are `ghContainedEnv(process.env)` with at most a `gh` poison, and the allow-list would become the wave. Those builders are their own files' pins (Not in this wave).
   - **Measured limit** (row T3-7): reverting `ccrc-memory`'s `memEnv` to `({ ...process.env, HOME: home, ...extra })` is NOT seen by the census, because every spawn there passes `memEnv(…)`, a call. The file's own `assertNoRealTool(memEnv(), home)` row is what reds *(prototype)*. `projected-home`'s `phEnv` is the second such builder, with its own row (T3-9). The census header says so, and the fixture corpus pins `memEnv()` as not a hit.
+- **D-5254** — *`stubContainedTool` refuses `gh`, in its type and at runtime: of the `CONTAINED_TOOLS` names it is the one this door cannot keep* (the worker, from the Opus per-task review of Task 1).
+  - **The plan:** Task 1 Step 3's `stubContainedTool` refuses only a name outside `CONTAINED_TOOLS`, and its docstring says "every later plant keeps the stub".
+  - **Measured by reading:** `ghContainedEnv` REWRITES the `gh` poison with `writeFileSync` on every call (its first statement after `harnessBin`), so a `gh` stub written through the door is overwritten by the next `sh()`. A test asserting only that its stub's log is empty would then pass on the poison: the silent displacement D-5249's door exists to rule out. `gh`'s functional stub is a bash function (`GH_STUB`), which wins over PATH.
+  - **The change:** the `name` parameter is `Exclude<(typeof CONTAINED_TOOLS)[number], 'gh'>`, a runtime refusal names `GH_STUB`, and H18-9 gains a `gh` case that reds without the refusal (row T1-14).
 
 ## File structure
 
@@ -609,6 +613,7 @@ diff --git a/server/test/ccdWsHelpers.ts b/server/test/ccdWsHelpers.ts
   | T1-11 | the rejected H3 shape: `net` planted for every `systemd` caller (`if (opts.net \|\| opts.systemd)`), run on `ccd-update-sync`, `ccrc-api`, `ccd-pool-sync`, `pool-accounts-route` and `ccrc-token-sync` | `ccd-update-sync` 37, `ccrc-api` 53, `ccrc-token-sync` 1; the two pool files 0 (D-5247). [prototype, with `bus` on as well: 91 of 312, first assertion "ccd-update-sync: unmeasured — curl exited 97"] |
   | T1-12 | the bus keyed on `opts.systemd \|\| opts.tmux` | H18-7, its tmux-only case ("no systemd, no bus") |
   | T1-13 | `stubContainedTool`'s refusal removed | H18-9 ("expected [Function] to throw") |
+  | T1-14 | `stubContainedTool`'s `gh` refusal removed (D-5254) | H18-9 only, 1 of 25: "expected [Function] to throw an error" *(worker, measured)* |
 
 - [ ] **Step 5: Commit** `test(update): the ccd harness poisons ssh, scp and curl, the user bus under HOME rides systemd, and one door for a functional stub (wave 18, D-5247, D-5248, D-5249)`.
 
