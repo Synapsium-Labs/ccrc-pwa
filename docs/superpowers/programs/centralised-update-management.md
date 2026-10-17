@@ -1818,6 +1818,12 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       `dispatch-live-gate.test.ts`; #444 still merges clean (measured). STATUS: fleet and server v0.0.226, newest
       v0.0.232, intent dev/auto=stable, backups fleet 175M/server 801M, disk free fleet 214G/work volume 87G/server
       32G, no anomalies.
+    - **2026-10-17 19:59 UTC:** both boxes moved v0.0.226 → v0.0.234 by the operator's console requests (feed rows
+      23210 and 23211: fleet 19:47:12, server 19:49:57; `from: pwa`, phase `done` on both). Doctor: fleet 35 passed,
+      6 warned, 0 failed; server 26 passed. The fleet sweep named four supervisors FAILED and skipped; each was
+      already failed (5 restarts) since 2026-10-12 or 06:38 today, so the warning is true (Reading 9's case).
+      v0.0.233 (19:15, #503) and v0.0.235 (19:39, #504) released. STATUS: fleet and server v0.0.234, newest v0.0.235, intent
+      dev/auto=stable, backups fleet 144M/server 809M, disk free fleet 214G/work volume 84G/server 32G, no anomalies.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
