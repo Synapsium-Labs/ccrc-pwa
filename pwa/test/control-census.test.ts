@@ -394,6 +394,31 @@ const CONTROLS: Record<string, string> = {
     + 'session header up to 53px. An overlay stays barred: it would overhang the '
     + 'OTHER chip, and both are live choosers. The citation is REQUIRED because '
     + 'the class is computed: see CITES_A_RULE.',
+  // ── native Docs reader W5 part 1 (docs/ and the fleet header's door), which landed after this census ────────
+  // Every Docs control carries `min-height: var(--tap-min)` in its own docs.css rule (docs.css's TAP FLOOR header;
+  // tap-targets.test.tsx pins each rule and its rendered class); the exemption is a link in running text.
+  'fleet/FleetHead.tsx <button> docs-door': "TOKEN. The fleet header's door to /docs, a plain button whose box is docs.css's `.docs-door`, not `Door`.",
+  'docs/DocsHead.tsx <button> docs-back': 'TOKEN. The Docs header\'s up-one-level chevron.',
+  'docs/DocsHead.tsx <button> docs-crumbs-more': "TOKEN. The phone's leading … in the crumbs, which opens the full path.",
+  'docs/DocsHead.tsx <button> docs-fresh': "TOKEN. The freshness chip at the truth line's end, which fetches from origin.",
+  'docs/DocsHead.tsx <button> docs-copy': 'TOKEN. Copy commit, on the truth line.',
+  'docs/DocsHead.tsx <a> docs-action': 'TOKEN. View on GitHub and Open committed version, standalone links in the header.',
+  'docs/DocsIndexView.tsx <button> docs-row': 'TOKEN. A project row of the Docs index, one button per row (spec 4.4).',
+  'docs/DocsTreeView.tsx <button> docs-row': 'TOKEN. A section or entry row of a Docs directory, the same rule.',
+  'docs/DocsTreeView.tsx <a> (computed)':
+    'SELECTOR .docs-action, .docs-hint-link, .docs-owner-link. `DocsPageLink`, the in-app <a> every Docs view navigates through, takes its class from '
+    + 'the call site: each standalone use passes one whose rule carries the floor (`.docs-crumb`, `.docs-action`, '
+    + '`.docs-owner-link`, `.docs-hint-link`), and the one use with none is the failure view\'s "Did you mean …?" '
+    + 'link inside its sentence (`.docs-fail-suggest a`), the inline exception docs.css states.',
+  'docs/DocsLeaf.tsx <button> docs-leaf-action': "TOKEN. A leaf's Source and Download.",
+  'docs/DocMarkdown.tsx <button> doc-gate-btn': "TOKEN. The large-document gate's two choices.",
+  'docs/DocMarkdown.tsx <button> doc-plain-action': "TOKEN. Plain text's Format anyway or Retry.",
+  'docs/DocImage.tsx <button> doc-img-load': 'TOKEN. Load image, for an image the page budget held back.',
+  'docs/DocImage.tsx <button> doc-img-action': "TOKEN. A refused image's Open externally or Open in the viewer.",
+  'docs/DocImage.tsx <button> doc-img-link': "TOKEN. A loaded image's own button, which opens its leaf.",
+  'docs/DocLink.tsx <a> (none)':
+    'INLINE. The links inside a rendered document, react-markdown\'s `a` for Docs (in-app, fragment and external). '
+    + 'WCAG 2.2 SC 2.5.8 exempts a target in a sentence or block of text, as for chat\'s `lib/markdown.tsx <a> (none)`.',
 };
 
 /** OVERLAY entries name the pseudo-rule that reaches the floor. */
