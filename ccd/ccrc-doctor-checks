@@ -203,7 +203,7 @@ CCRC_DOCTOR_CHECKS=(
   pools
   pool-sync
   transcripts
-  update-sync
+  update-sync server-caps   # one line, as `flock timeout`: _check_server-caps is at the END of this file
   graphify
   graphify-path
   build
@@ -8617,4 +8617,107 @@ _check_docs-sw() {
     return 1
   fi
   _dr_pass docs-sw "$sw keeps $p on the app shell: its one denylist holds $k entries ($list), none of them $p or under it"
+}
+
+# ── server-caps: the server's capability words reach this box's hook ─────
+# (D-5232's mechanism; plan 2026-10-16 Task 9b; spec §6.1.) A session hook arm
+# that changes what an existing hookstate field means engages only while
+# `~/.ccrc/server-caps` is whole, at most SERVER_CAPS_LEASE_S (180 s, shared/
+# api.ts) old by this box's clock, not in the future, and lists the arm's word;
+# otherwise the hook writes what it always wrote. This check reads the file
+# READ-ONLY with that grammar (`at <1-11 digits>`, `caps` and zero or more words
+# of `[a-z0-9-]{1,64}`, `end`, each line newline-terminated) and names its
+# writer when it is not current: `ccd-update-sync` on a `fleet` node, this
+# box's own server process on a `both` node. A `server` node runs no hook; a
+# box with no recorded role arms no writer by configuration. Both SKIP.
+# Appended at the END of this file: lines above are cited by number elsewhere.
+_check_server-caps() {
+  local LC_ALL=C
+  local role="" f="$HOME/.ccrc/server-caps" writer remedy why="" lease=180 writer_unit=""
+  [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  case "$role" in
+    server)
+      _dr_skip server-caps "this box records CCRC_ROLE=server, so it hosts no sessions and runs no session hook to gate"
+      return 3 ;;
+    fleet)
+      writer_unit=ccd-update-sync.timer
+      if [ ! -f "$CCRC_UNIT_DIR/$(_dr_unit_file "$writer_unit")" ]; then
+        _dr_skip server-caps "ccd-update-sync.timer is not installed on this box, so nothing here records the server's words and the session hook's gated arms stay off (only a --role fleet install places it, and macOS ships no systemd timer)"
+        return 3
+      fi
+      writer="ccd-update-sync (it asks the server's /health every minute)"
+      remedy="run systemctl --user start ccd-update-sync.service and read its log ($(_dr_log_hint ccd-update-sync.service)); the server CCRC_SERVER_URL names in ~/.ccrc/agent.env must answer /health" ;;
+    both)
+      writer_unit=ccrc.service
+      writer="this box's own ccrc server (it rewrites the file every minute)"
+      remedy="$(_dr_restart_hint ccrc.service), then read its log for 'could not write ~/.ccrc/server-caps'" ;;
+    *)
+      # No recorded role: a server here derives its role (config.ts deriveRole), `both` on a local fleet, and then
+      # writes the file every minute, so a file that exists is read as on a `both` node. With none, the gated arms
+      # are off (the hook writes what it always wrote), which is the safe state, and nothing here is wrong.
+      if [ ! -e "$f" ] && [ ! -L "$f" ]; then
+        _dr_skip server-caps "this box records no CCRC_ROLE and has no ~/.ccrc/server-caps, so the session hook's gated arms are off here; a ccrc server on this box would derive the role both and write the file every minute, and on a fleet node ccd-update-sync writes it once CCRC_ROLE=fleet is recorded"
+        return 3
+      fi
+      writer="this box's own ccrc server (role derived both), if one runs here"
+      remedy="record CCRC_ROLE in the box env file; if this box runs the ccrc server, $(_dr_restart_hint ccrc.service) and read its log for 'could not write ~/.ccrc/server-caps'" ;;
+  esac
+  local -a lines=()
+  local ln="" at="" words="" now
+  local re_at='^at ([0-9]{1,11})$' re_caps='^caps(( [a-z0-9-]{1,64})*)$'
+  if [ ! -e "$f" ] && [ ! -L "$f" ]; then
+    why="absent"
+    # FIRST WRITE PENDING (D-4168's fresh-install ruling, as `history`'s first-tick-pending): within one lease of the
+    # writer's unit file landing, an absent file is a writer that has not had its first beat yet, not a fault, and
+    # absence is already the safe state (the hook writes what it always wrote). Only ABSENCE gets the grace: a file
+    # that exists and is torn, malformed, stale or future was written and is wrong, so it WARNs at any age.
+    local unit_mtime unit_age
+    if [ -n "$writer_unit" ] && [ -f "$CCRC_UNIT_DIR/$(_dr_unit_file "$writer_unit")" ]; then
+      unit_mtime="$(_plat_mtime "$CCRC_UNIT_DIR/$(_dr_unit_file "$writer_unit")" 2>/dev/null)"
+      if [[ "$unit_mtime" =~ ^[0-9]+$ ]]; then
+        unit_age=$(($(date +%s) - unit_mtime))
+        if [ "$unit_age" -ge 0 ] && [ "$unit_age" -lt "$lease" ]; then
+          _dr_pass server-caps "first-write-pending: $writer_unit was installed ${unit_age}s ago and ~/.ccrc/server-caps has not been written yet, so the session hook's gated arms are off (the safe state) until $writer writes it, within ${lease}s"
+          return 0
+        fi
+      fi
+    fi
+  elif [ ! -f "$f" ] || [ ! -r "$f" ]; then
+    why="unreadable"
+  else
+    while IFS= read -r ln; do lines+=("$ln"); done < "$f"
+    # `ln` now holds what followed the last newline ('' in a whole document).
+    if [ "${#lines[@]}" -gt 3 ] || { [ "${#lines[@]}" -eq 3 ] && [ -n "$ln" ]; }; then
+      why="malformed (more than its three lines)"
+    elif [ "${#lines[@]}" -ge 1 ] && [[ ! ${lines[0]} =~ $re_at ]]; then
+      why="malformed (its first line is not at <unix seconds>)"
+    elif [ "${#lines[@]}" -ge 2 ] && [[ ! ${lines[1]} =~ $re_caps ]]; then
+      why="malformed (its second line is not caps followed by capability words)"
+    elif [ "${#lines[@]}" -ge 3 ] && [ "${lines[2]}" != end ]; then
+      why="malformed (its third line is not end)"
+    elif [ "${#lines[@]}" -lt 3 ]; then
+      why="torn (no end line: a write cut short)"
+    else
+      [[ ${lines[0]} =~ $re_at ]] && at="${BASH_REMATCH[1]}"
+      [[ ${lines[1]} =~ $re_caps ]] && words="${BASH_REMATCH[1]# }"
+      now="$(date +%s)"
+      at=$((10#$at))
+      if [ "$at" -gt "$now" ]; then
+        why="future (written at $at, $((at - now))s ahead of this box's clock)"
+      elif [ $((now - at)) -gt "$lease" ]; then
+        why="stale (written $((now - at))s ago, past its ${lease}s lease)"
+      fi
+    fi
+  fi
+  if [ -n "$why" ]; then
+    _dr_warn server-caps "~/.ccrc/server-caps is $why, so the session hook's gated arms are off on this box (it writes what it always wrote, which is safe) until $writer rewrites it" \
+      "$remedy"
+    return 2
+  fi
+  if [ -n "$words" ]; then
+    _dr_pass server-caps "~/.ccrc/server-caps is current (written $((now - at))s ago by $writer) and lists: $words"
+  else
+    _dr_pass server-caps "~/.ccrc/server-caps is current (written $((now - at))s ago by $writer) and lists no words, so the server advertises nothing and the hook's gated arms stay off"
+  fi
+  return 0
 }

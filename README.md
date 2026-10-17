@@ -52,7 +52,7 @@ spec  →  plan  →  waves of subagents  →  per-PR review lenses  →  whole-
 | **Sessions that stay out of each other's way** | A session claims the paths it is about to edit, all or nothing, and a conflict names the holder to mail. A dispatched worker is denied `gh pr merge` — the coordinator lands work — and deviation numbers are issued by the server, never guessed. |
 | **Hook-first session state** | Each session reports its own state through a Claude Code hook; scraping the tmux pane is the ranked fallback, not the source. |
 | **A code graph for every tree** | graphify keeps an AST-derived knowledge graph fresh per git tree on the fleet host, and a ccrc session that searches a freshly graphed tree before querying it is turned back, at most three times (`touch ~/.ccrc/graph-gate-off` lifts the gate). |
-| **Answer from the lock screen** | A session asks a question; your phone gets a push and you answer it from the notification, without opening a terminal. A worker's question goes to its coordinator first, and reaches you when the coordinator passes on it or two minutes go by. |
+| **Answer from the lock screen** | A session asks a question; your phone gets a push and you answer it from the notification, without opening a terminal. A worker's question goes to its coordinator first, and reaches you when the coordinator passes on it or three minutes go by. |
 | **A terminal, a transcript and a PR in the browser** | The transcript streams as it is written, agent mail rendered as cards; a terminal drawer attaches to the real tmux pane; type, interrupt or attach a screenshot from the phone, and open a PR or a draft — there is no merge button, by design. |
 | **Workspace holds** | A program declares a claim on a worktree. No timeout, no expiry — the reason string *is* the display, and the verbs that delete, rename or reclaim the workspace refuse or defer while it stands. |
 | **Two-phase workspace destruction** | Nothing irreversible happens on one tap, and every precondition is re-proved at the moment it matters. |
@@ -840,6 +840,25 @@ fleet box records `fleet` and the server box `server` (one box: `both`), and it 
 predates `update --check`. `deploy.sh` never writes a role, so **the first move onto the release lane is by
 hand, once per box (D-3106):** add the `CCRC_ROLE=` line to that box's `~/.ccrc/ccrc.env`, then
 `ssh <box> ccrc update --to vX.Y.Z`, fleet box first. Every release after that is `ccrc rollout`.
+
+**The server's capability words (D-5232's mechanism).** Some fleet-side changes alter what an existing hookstate
+field means and are safe only behind a server that reads the new meaning. No rollout form can hold that order for
+every mover (the one-tap and the `auto` dispatcher move fleet nodes first, `deploy.sh` and a hand-run `ccrc update`
+follow no order, and a server can be rolled back or restore itself after a failed health gate), so the hook gates
+itself on its server instead. The server advertises words in `GET /health`'s additive `caps` (`SERVER_CAPS`,
+`shared/api.ts`; a word is added by the change that builds what it names and never reused for another promise;
+the first is `dispatch-live-gate-v1`, D-5238's dispatch gate). The fleet box records them in `~/.ccrc/server-caps`
+(`SERVER_CAPS_FILE`): three lines, `at <unix seconds>`, `caps` and the words, `end`, whole by rename at mode 0600.
+On a `fleet` node `ccd-update-sync` writes it every minute from a second request of its own to `/health` (no token;
+placed before its node-id and box-token checks, and its failures write nothing and never stop the intent pull); on a
+`server` or `both` node the server process writes it at its first tick and then on a minute beat of its own, which
+does not need a coordination database. A hook arm that changes a field's meaning engages only while the file is
+whole, at most `SERVER_CAPS_LEASE_S` (180 s) old by the hook's clock, not in the future, and lists the arm's word;
+otherwise it writes exactly what it wrote before, which every server reads correctly. So no rollout order is needed
+for such an arm: a fleet that moves first runs with the arm off until its server lists the word, and a server rolled
+back below the word turns the arm off within a minute on a fleet node and within the 180 s lease on a `server` or
+`both` node, whose file the older server never rewrites. `ccrc doctor`'s `server-caps` check reads the file on a
+`fleet` or `both` node and WARNs, naming the writer, when it is absent, torn, malformed, stale or in the future.
 
 **Control plane (update-management W2).** The server now measures and records the fleet's update state; what moves
 a node is the one-tap, below. `coord.db` (migration 14) holds a **release catalogue** — the repo's GitHub releases
@@ -2235,6 +2254,25 @@ line, `message.model === '<synthetic>'` for the padding — each narrowed by the
 (`RESUME_PROMPT_PREFIX` / `NO_RESPONSE_TEXT`, `shared/api.ts`); ccd's `RESUME_PROMPT` must keep
 starting with that prefix, which `server/test/ccd-resume-flag.test.ts` pins (D-2228).
 
+**Every process end is recorded, and the prompt names it (D-5237).** `_spawn_start` reads the pane's
+scope unit once, after the pane exists, into `$REG/<id>.panescope` (one `/proc` read per spawn,
+none per supervise tick). When tmux pronounces the session `gone`, the supervise loop classifies the
+end: `oom` when that scope's journal names an OOM kill in the last 120 s (`journalctl --user -u
+<scope>`, bounded by `timeout 5`), `tmux-server` when `tmux list-sessions` fails, `exited`
+otherwise, and `unknown` when the journal read fails or no scope was recorded on Linux. `cmd_swap`
+records `swap-manual`, `swap-auto-home`, `swap-auto-rescue` or `swap-auto` after its act-time gates
+and before it stops the unit, so a refused swap records no end. Each goes to `$REG/<id>.lastend`
+(`<epoch> <cause>`; an `oom` also appends to `$REG/<id>.oomends`, kept to the last 10 minutes) and
+to `swap.log` as `ended <id>: <cause>`. `_resume_prompt_for` composes the prompt per spawn: a
+`lastend` at most 10 minutes old replaces RESUME_PROMPT's "an account swap or a supervisor revival"
+with the cause, and for `oom` adds how many out-of-memory restarts the last 10 minutes held and that
+the step that was running must not be re-run at the same parallelism. `_resume_env <id>` carries it
+and `_redrive_after_spawn` types the same text; no clause holds a single quote. The server reads
+`lastend` only when the registry listing names it, into `FleetSession.lastEnd` (`parseLastEnd`;
+an unknown cause reads `unknown`), and the card and the session header show "restarted · out of
+memory · 3m ago" for an hour. `_route_escape` writes `route-escape <id>` to `swap.log` before each
+Escape it sends.
+
 ### A limit is measured on the transcript, and Claude Code's own recovery is left alone (D-2360–D-2370)
 
 The follow-ups to the restart re-drive, measured on 2026-09-10 after 53 landings
@@ -2872,10 +2910,11 @@ edge pushes as before. Delegated background work keeps its push for the moment t
 - **A parent answers first** (the ask pre-emption lane). When the worker of an open run blocks on a
   single-question, single-select `AskUserQuestion`, the server does not push to you at once: it records the ask,
   mails the run's coordinator (the newest open run's `claimedBy`) an `ask:<id>` nudge through the ordinary
-  idle-gated lane, and holds **only your notification** for up to 120 s (`ASK_GRACE_MS`, `server/src/askwindow.ts`).
+  idle-gated lane, and holds **only your notification** for up to 180 s (`ASK_GRACE_MS`, `server/src/askwindow.ts`).
   The coordinator may answer from what it can read — `POST /api/asks/:id/answer`, box token plus registry
   attribution, accepted only from that worker's own parent, which re-proves the question is still the live one
-  before it presses one digit — or decline anything that would be a new decision with
+  before it presses one digit; its body is the operator's own (`readAskAnswer`, D-5293), so an `askKey` it sends must
+  be the row's (`409 ask-mismatch`, D-5368), and what it may hold is what your route answers (`answerableAsk`) — or decline anything that would be a new decision with
   `POST /api/asks/:id/release`, which fires your push at once (coordinator clause 11). Your own answer from the
   lock screen takes the same ask row, so the record names whoever ruled. A multi-select or multi-question ask, a
   session with no parent, a run this box could not read, or `$REG/asks-disabled` (touched by hand on the fleet
@@ -5113,15 +5152,15 @@ things at that moment: it builds a SECOND card — the files this context was wo
 community and dependents read out of the same graph — and it MEASURES the compaction, writing one line to a
 per-session journal. Three arms of `ccd/session-hook.sh` do it, and **none of them opens a new output
 channel**: the card rides the one `additionalContext` envelope `SessionStart` already prints — the compact
-arm calls `_hook_emit_context "$CARD" "$CARD_COMPACT"` (`ccd/session-hook.sh:3012`), which appends the second
+arm calls `_hook_emit_context "$CARD" "$CARD_COMPACT"` (`ccd/session-hook.sh:3037`), which appends the second
 subject under its own `COMPACT_CARD_MAX_CHARS` ceiling (`:97`) before the single `jq -cn` print (`:103-105`) — and `PreCompact` and
 `PostCompact` print nothing at all. `PreCompact` decides whose transcript is compacting and publishes the
 working set, `SessionStart(compact)` serves the card once beside the graph card in that one envelope, and
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:8048-8050`), each with an operator sentence of its own at `:8100`,
-`:8108` and `:8121`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:8158-8160`), each with an operator sentence of its own at `:8210`,
+`:8218` and `:8231`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 
@@ -6242,9 +6281,9 @@ Known real-format subtleties already encoded:
   (`'sandbox request'`, `'input needed'`, `'dialog open'`, or the top dialog's
   own label). `liveSessionStatus` still collapses everything but `idle` to
   `busy` on purpose — the fleet card and the session socket must never paint a
-  human-blocked session as at rest, and the interrupt route's `liveStatus`
-  reads the same collapse — and `waiting` reaches the attention bucket through
-  `dialogPending` instead. The mail gate no longer reads that collapse:
+  human-blocked session as at rest — and `waiting` reaches the attention bucket
+  through `dialogPending` instead. The interrupt route no longer reads that
+  collapse (D-5236: `shell` is `409 background-only`). Nor does the mail gate:
   `mailTurnIdle` (`server/src/turnidle.ts`) takes the raw word and, by default,
   delivers on `idle` and on `shell` (an idle main loop over a background shell),
   and holds `waiting`, `busy` and any word it does not know; `mail-gate-strict`

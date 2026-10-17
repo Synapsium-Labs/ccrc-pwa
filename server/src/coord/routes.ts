@@ -6,7 +6,7 @@ import type { FleetWatcher } from '../watch.js';
 import {
   UNMEASURED_ASK_AT, fieldMeasured, freshAskAt, measuredIdentity, readRegistry, readRegistryMeasured,
 } from '../registry.js';
-import { answerAsk, type AskDeps } from '../inject/ask.js';
+import { answerAsk, readAskAnswer, type AskDeps } from '../inject/ask.js';
 import { assembleFleet } from '../fleet.js';
 import { turnReadDeps, turnVerdictFor } from '../turnverdict.js';
 import type { TurnVerdict } from './archiveDoor.js';
@@ -3949,18 +3949,21 @@ export function registerCoordRoutes(
     if (!requireMailToken(req, reply, 'POST /api/asks/:id/answer')) return;
 
     const body = (req.body ?? {}) as Record<string, unknown>;
-    const { fromId, fromUuid, optionIndexes } = body;
-    // `optionIndexes`, never a singular `optionIndex`: under `askActions`
-    // eligibility only single-select asks are ever held, so this array
-    // carries one element today — and that is the point. A singular field is
-    // what re-opens the multi-select commit hazard, silently, on the day
-    // someone widens eligibility. The wire shape must not be the thing to
-    // remember.
-    if (typeof fromId !== 'string' || typeof fromUuid !== 'string' ||
-        !Array.isArray(optionIndexes) || !optionIndexes.every((n) => typeof n === 'number')) {
+    const { fromId, fromUuid } = body;
+    // `optionIndexes`, never a singular `optionIndex`: under `answerableAsk`
+    // eligibility (D-5293, read through `askActions`) only single-select asks
+    // are ever held, so this array carries one element today — and that is
+    // the point. A singular field is what re-opens the multi-select commit
+    // hazard, silently, on the day someone widens eligibility. The wire shape
+    // must not be the thing to remember. D-5293: the answer half of this body
+    // is the operator route's, read by the one reader both routes import
+    // (`readAskAnswer`), never respelled here.
+    const answerBody = readAskAnswer(body);
+    if (typeof fromId !== 'string' || typeof fromUuid !== 'string' || answerBody === null) {
       return reply.code(400).send({ ok: false, error: 'bad-request',
-        detail: 'fromId/fromUuid strings, optionIndexes an array of numbers' });
+        detail: 'fromId/fromUuid strings, optionIndexes an array of numbers, askKey a string when given' });
     }
+    const optionIndexes = answerBody.optionIndexes;
 
     // The box token proves "a process on this box", one shared secret
     // identical for every session on the fleet host — it cannot prove "this
@@ -3985,6 +3988,20 @@ export function registerCoordRoutes(
     if (ask.parentId !== fromId) {
       return reply.code(403).send({ ok: false, error: 'not-parent',
         detail: 'only this child\'s derived parent may pre-empt its question' });
+    }
+    // D-5290, D-5363: a row MINTED released (`releaseReason` set — the parent was not
+    // live, or of another project) was never held and never mailed: the
+    // operator owned it from the first tick, so late answer wins (D-5289),
+    // which reaches a row the LAPSE released, does not reach this one. No new
+    // word: `not-held` is "the row is no longer pre-emptible".
+    if (ask.releaseReason !== null) {
+      return reply.code(409).send({ ok: false, error: 'not-held' });
+    }
+    // D-5293, D-5368: the operator's body names the question it answers (`askKey`).
+    // A parent that sends it is answering the question it was shown, or
+    // nothing is pressed and the row is untouched.
+    if (answerBody.askKey !== undefined && answerBody.askKey !== ask.askKey) {
+      return reply.code(409).send({ ok: false, error: 'ask-mismatch' });
     }
 
     // D-2170: re-read the child's hookstate and prove the menu on screen is
@@ -4011,9 +4028,10 @@ export function registerCoordRoutes(
     if (!res.ok) {
       // The refused-press rollback: `untakeAsk`, NOT `releaseAsk` — see this
       // route's own docstring. `answerAsk` never pressed a digit on this
-      // path, so the row goes back to `'held'` rather than being abandoned
-      // in `'answering'` with no exit.
-      if (!coord.untakeAsk(id)) {
+      // path, so the row goes back to where the take found it (`'held'`, or
+      // `'released'` after a lapse — D-5289) rather than being abandoned in
+      // `'answering'` with no exit.
+      if (!coord.untakeAsk(id, taken.from)) {
         // Unexpected (fix round 1, item 5): `untakeAsk`'s CAS source is
         // `'answering'`, and THIS request is the one that put the row there
         // (`takeAskForAnswer` above, this same request). Nothing else should
@@ -4081,6 +4099,13 @@ export function registerCoordRoutes(
         "'answering'; the feed record above (if it landed) is the surviving audit trace");
     }
 
+    // D-5289, late answer wins: the lapse already notified the operator, so
+    // that notification is replaced, under the same tag, with who answered.
+    // Only after a take from `'released'` — inside the window nothing was
+    // pushed and there is nothing to replace. The watcher decides whether its
+    // snapshot of the lapse is still this row's (`answeredLate`).
+    if (taken.from === 'released') watcher?.answeredLate(ask.childId, id, fromId);
+
     return { ok: true };
   });
 
@@ -4102,11 +4127,14 @@ export function registerCoordRoutes(
    * decline any other session's ask, exactly the reason `/answer` layers the
    * same check on top of the box token.
    *
-   * `releaseAsk`'s CAS is the row acting as its own mutex, the same shape
+   * `declineAsk`'s CAS is the row acting as its own mutex, the same shape
    * `/answer`'s `takeAskForAnswer` uses: its source state is `'held'`, so a
    * decline of a row that is already `'answering'`/`'answered'`/`'released'`/
-   * `'stale'` refuses `not-held` rather than pretending to succeed — a
-   * decline that finds nothing held must not lie about what it did.
+   * `'declined'`/`'stale'` refuses `not-held` rather than pretending to
+   * succeed — a decline that finds nothing held must not lie about what it
+   * did. It moves the row to `'declined'`, NOT the lapse's `'released'`
+   * (D-5289): a parent that handed the question over may not answer it later
+   * (`/answer` refuses `409 declined`), where a lapsed row stays answerable.
    *
    * `watcher.releaseHeldAsk` is the ONLY way this route touches the
    * watcher's in-memory hold (F12's own argument, `watch.ts`'s docstring on
@@ -4161,13 +4189,13 @@ export function registerCoordRoutes(
     // A decline is not a failure — it is the parent saying "the operator
     // should see this now", and it is what makes the grace window a CEILING
     // rather than a tax on every ask the parent cannot rule on.
-    if (!coord.releaseAsk(id, Date.now())) {
+    if (!coord.declineAsk(id, Date.now())) {
       return reply.code(409).send({ ok: false, error: 'not-held' });
     }
     // Fix round 1, item 1: `watcher` is undefined for every non-test caller
     // of `buildServer` today (`src/index.ts` always builds one) — but the
-    // row above has ALREADY moved `'held' -> 'released'` by the time this
-    // line runs, and the response below is unconditionally `{ok:true}`.
+    // row above has ALREADY moved `'held' -> 'declined'` (D-5289) by the time
+    // this line runs, and the response below is unconditionally `{ok:true}`.
     // With no watcher there is no `heldAsks` entry to drop and no snapshotted
     // push to fire, so the decline is real (the row genuinely released) but
     // the operator's buzz — the entire reason this lane exists — silently
@@ -4176,7 +4204,7 @@ export function registerCoordRoutes(
     // a worse lie than a log line nobody reads until they go looking.
     if (watcher === undefined) {
       console.warn(`ccrc-server: POST /api/asks/:id/release released ask ${id} (child ` +
-        `${ask.childId}) with no watcher configured — the row is released but the operator's ` +
+        `${ask.childId}) with no watcher configured — the row is declined but the operator's ` +
         'push was never fired');
     } else {
       watcher.releaseHeldAsk(ask.childId);

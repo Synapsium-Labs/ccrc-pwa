@@ -782,6 +782,21 @@ describe('ask chip', () => {
       unmount();
     }
   });
+
+  // D-5289: `declined` (a parent's own release) gets no words of its own — the
+  // operator's push fired at once and the parent may no longer answer, so the
+  // chip has nothing true to explain. Pinned through the reader too: this
+  // build's `sessionAsk` must pass the member through (it is vocabulary), and
+  // the fold to "no chip" is SessionMeta's, as for `released`.
+  it('renders no chip for declined, and sessionAsk passes declined through as vocabulary (D-5289)', () => {
+    expect(sessionAsk({ ask: { state: 'declined', parentId: 'project-a-calm-mesa', answeredBy: null } }))
+      .toEqual({ state: 'declined', parentId: 'project-a-calm-mesa', answeredBy: null });
+    const { container } = render(
+      <SessionLine session={s({ ask: { state: 'declined', parentId: 'project-a-calm-mesa', answeredBy: null } })}
+                   onOpen={() => {}} onActions={() => {}} />,
+    );
+    expect(container.querySelector('.sess-ask-state')).not.toBeInTheDocument();
+  });
 });
 
 // Registry ladder (Task 2): a degraded row's small, honest note — the
@@ -1590,7 +1605,7 @@ describe('delegated background work (D-5231)', () => {
   });
 
   it('the identical stall without background still escalates (the qualifier is only stood down, not removed)', () => {
-    render(<SessionLine session={bgRow({ background: null, ctxPct: 91, statusUpdatedAt: Date.now() - 95 * 60_000 })}
+    render(<SessionLine session={bgRow({ background: null, lastEnd: null, ctxPct: 91, statusUpdatedAt: Date.now() - 95 * 60_000 })}
                         onOpen={() => {}} onActions={() => {}} />);
     expect(chip()?.getAttribute('data-wedge')).toBe('true');
   });
@@ -1600,5 +1615,44 @@ describe('delegated background work (D-5231)', () => {
     delete row.background;
     render(<SessionLine session={row as FleetSession} onOpen={() => {}} onActions={() => {}} />);
     expect(document.querySelector('.sess-state')?.textContent).toBe('working');
+  });
+});
+
+// `interrupt-and-restart-causes-recorded` (D-5237; plan 2026-10-16-working-state-and-interruptions Task 8): for an
+// hour after a recorded process end the card says "restarted · <cause> · <age> ago", the time in the title.
+describe('a recent restart is named (D-5237)', () => {
+  const cell = (): Element | null => document.querySelector('.sess-restart');
+  const at = (agoMs: number): number => Date.now() - agoMs;
+
+  it('an oom end 3 minutes ago reads `restarted · out of memory · 3m ago`', () => {
+    render(<SessionLine session={s({ lastEnd: { at: at(3 * 60_000 + 5_000), cause: 'oom' } })} onOpen={() => {}} onActions={() => {}} />);
+    expect(cell()?.textContent).toBe('restarted · out of memory · 3m ago');
+    expect(cell()?.getAttribute('data-restart')).toBe('oom');
+    expect(cell()?.getAttribute('title')).toMatch(/^The previous process ended at .+: out of memory\.$/);
+  });
+
+  it('under a minute reads `just now`', () => {
+    render(<SessionLine session={s({ lastEnd: { at: at(10_000), cause: 'swap-manual' } })} onOpen={() => {}} onActions={() => {}} />);
+    expect(cell()?.textContent).toBe('restarted · swapped by hand · just now');
+  });
+
+  it('after an hour it is gone', () => {
+    render(<SessionLine session={s({ lastEnd: { at: at(61 * 60_000), cause: 'oom' } })} onOpen={() => {}} onActions={() => {}} />);
+    expect(cell()).toBeNull();
+  });
+
+  it('no end, and an older server that omits the key, render nothing', () => {
+    render(<SessionLine session={s({ lastEnd: null })} onOpen={() => {}} onActions={() => {}} />);
+    expect(cell()).toBeNull();
+    const row = s() as Partial<FleetSession>;
+    delete row.lastEnd;
+    render(<SessionLine session={row as FleetSession} onOpen={() => {}} onActions={() => {}} />);
+    expect(cell()).toBeNull();
+  });
+
+  it('an unknown cause on the wire reads `cause unknown`', () => {
+    const row = s({ lastEnd: { at: at(120_000), cause: 'cosmic-ray' as never } });
+    render(<SessionLine session={row} onOpen={() => {}} onActions={() => {}} />);
+    expect(cell()?.textContent).toBe('restarted · cause unknown · 2m ago');
   });
 });

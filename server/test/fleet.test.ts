@@ -1172,6 +1172,23 @@ describe('the ask chip (Task 19)', () => {
     expect(fleet.find((x) => x.id === 'claude-demo')!.ask).toBeNull();
   });
 
+  it('folds DECLINED to no chip — the parent handed it over and the operator was pushed (D-5289)', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'claude-demo', 'claude');
+    const coord = mkCoord();
+    const id = coord.insertAsk({
+      childId: 'claude-demo', parentId: 'coord-1', runId: null, askKey: 'k',
+      askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: NOW_MS - 1000,
+    });
+    expect(coord.declineAsk(id, 2000)).toBe(true); // held -> declined
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, 1784600000,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    expect(fleet.find((x) => x.id === 'claude-demo')!.ask).toBeNull();
+  });
+
   it('folds STALE to no chip — the dialog itself is gone, nothing left to explain', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
@@ -1779,5 +1796,37 @@ describe('FleetSession.background (D-5231)', () => {
     const hs = hook();
     delete hs.background;
     expect((await row('2.1.296', hs)).background).toBeNull();
+  });
+});
+
+// `interrupt-and-restart-causes-recorded` (D-5237; spec §5.6): the registry's `lastend` reaches the wire as
+// `FleetSession.lastEnd`, unchanged; absent is null.
+describe('FleetSession.lastEnd (D-5237)', () => {
+  const ID = 'lane-a-project-a';
+  const UUID = '00000000-0000-4000-8000-000000000001';
+  const ROSTER = { version: 1, accounts: [{
+    id: 'lane-a', label: 'lane-a', configDirSuffix: '.lane-a',
+    exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic',
+  }] };
+  const row = async (lastend: string | null): Promise<{ lastEnd: unknown }> => {
+    const home = mkTmp('ccrc-lastend-');
+    seedRoster(home, ROSTER);
+    const reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    const fields: Record<string, string> = { wrapper: 'lane-a', project: 'project-a', workdir: '/data/projects/project-a', uuid: UUID, started: '1' };
+    if (lastend !== null) fields['lastend'] = lastend;
+    for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${ID}.${k}`), v);
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return { code: args.includes(`=cc-${ID}:`) ? 0 : 1, stdout: '', stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1_784_600_000);
+    return fleet.find((x) => x.id === ID)!;
+  };
+  it('a recorded oom end rides the wire', async () => {
+    expect((await row('1784599820 oom')).lastEnd).toEqual({ at: 1_784_599_820_000, cause: 'oom' });
+  });
+  it('no lastend is null', async () => {
+    expect((await row(null)).lastEnd).toBeNull();
   });
 });

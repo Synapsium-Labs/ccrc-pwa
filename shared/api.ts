@@ -159,7 +159,7 @@ export interface FleetSession {
    * this one through an HTTP call to the server's own route would be a new
    * pattern for no gain (ruling F5).
    *
-   * Only two of `AskState`'s six members ever reach this field: `held`
+   * Only two of `AskState`'s seven members ever reach this field: `held`
    * while a parent may still pre-empt the child's live question, and
    * `answered` once one has ruled AND recently (`fleet.ts`'s
    * `ASK_ANSWERED_CHIP_WINDOW_MS`, fix round 1 item 4 — past that window
@@ -172,12 +172,12 @@ export interface FleetSession {
    * may answer" and "ruled by <parent>" — and F1 made the second three,
    * because the OPERATOR can settle the same row from their own phone: see
    * `answeredBy` below, and `SessionLine.tsx`'s `askWords` for the wording
-   * of each. `assembleFleet` folds the other four
-   * (`answering`, `released`, `stale`, `unknown`) to `null` rather than
+   * of each. `assembleFleet` folds the other five
+   * (`answering`, `released`, `declined`, `stale`, `unknown`) to `null` rather than
    * pass them through raw: `answering` is the between-tick sliver while a
    * digit is in flight, so it is folded onto `held` (still, functionally,
    * "may answer") rather than shown as a state the design doc gives no
-   * words for; `released` and `stale` both mean the operator's own ordinary
+   * words for; `released`, `declined` and `stale` all mean the operator's own ordinary
    * push has already fired or the dialog itself is gone, so a chip
    * explaining why they were not asked would be explaining something no
    * longer true; `unknown` is an out-of-vocabulary token this build cannot
@@ -239,6 +239,13 @@ export interface FleetSession {
    *  keeps a live `busy` on `working` (`sessionBucket`'s `!delegated`) and the
    *  wedge qualifier stands down. ADDITIVE: no `FLEET_PROTO` bump. */
   background: { count: number; kinds: string[] } | null;
+  /** `interrupt-and-restart-causes-recorded` (D-5237): when and why this
+   *  session's previous process ended, from `$REG/<id>.lastend` through
+   *  `parseLastEnd`; null when the registry holds none or it is malformed.
+   *  Read on a live frame through `recentLastEnd` (an older server omits the
+   *  key), which shows it for `LAST_END_SHOWN_MS`. ADDITIVE: no `FLEET_PROTO`
+   *  bump. */
+  lastEnd: LastEnd | null;
   /** How many graph READS this session has made — `hookstate.ts`'s
    *  `graphQueries`, carried through unchanged. ADDITIVE: no `FLEET_PROTO`
    *  bump, and an older peer that omits it revives as `null` below.
@@ -637,7 +644,7 @@ export function graphGateCount(s: { graphGateDenials?: number | null }): number 
  * stance every sibling tolerant reader above takes.
  *
  * A present-but-broken shape (not an object, `parentId` not a non-empty
- * string, `state` not one of `AskState`'s six tokens) degrades to `null`
+ * string, `state` not one of `AskState`'s seven tokens) degrades to `null`
  * whole: unlike `substrateFault`'s per-half tolerance, the `(state,
  * parentId)` pair only means something TOGETHER — a state with no parent to
  * name, or a parent with a state this build cannot read, has nothing honest
@@ -648,7 +655,7 @@ export function graphGateCount(s: { graphGateDenials?: number | null }): number 
  * any later surface cannot drift onto two different fallbacks.
  * `SessionLine.tsx` then renders content for exactly `held`/`answered` —
  * the two the design doc gives words to (`FleetSession.ask`'s own
- * docstring) — so the other four valid-but-unrendered tokens read as "no
+ * docstring) — so the other five valid-but-unrendered tokens read as "no
  * chip" here too, the same fold `assembleFleet` already applies
  * server-side, now doubled client-side for a server ahead of this build.
  */
@@ -1889,15 +1896,23 @@ export function isReadyVerdict(v: unknown): v is ReadyVerdict {
  *  `held`      the push is deferred; the parent may answer.
  *  `answering` a principal has taken the row and is pressing a key (D-2171).
  *  `answered`  a digit landed. `answeredBy` says which principal.
- *  `released`  the parent declined, or the window lapsed. The push has fired.
+ *  `released`  the window lapsed. The push has fired, but the row is still
+ *              answerable by either principal until one of them acts (late
+ *              answer wins, D-5289): `takeAskForAnswer` and `heldAskFor` take
+ *              `held` or `released`, under the same `askAt` instance guard.
+ *  `declined`  the parent released the question itself (`POST
+ *              /api/asks/:id/release`): it handed the question over, the push
+ *              fired at once, and the parent's later answer is refused
+ *              `declined` (D-5289). Terminal. An older build reads this token
+ *              as `unknown` through `isAskState`.
  *  `stale`     the dialog went away unanswered — interrupted, cleared, swapped.
  *  `unknown`   a token this build does not know, read off disk after a deploy
  *              rollback. Never accepted at ingress; a writer claiming it is
  *              refused `bad-state`. */
-export type AskState = 'held' | 'answering' | 'answered' | 'released' | 'stale' | 'unknown';
+export type AskState = 'held' | 'answering' | 'answered' | 'released' | 'declined' | 'stale' | 'unknown';
 
 export const ASK_STATE_MAP: Record<AskState, true> = {
-  held: true, answering: true, answered: true, released: true, stale: true, unknown: true,
+  held: true, answering: true, answered: true, released: true, declined: true, stale: true, unknown: true,
 };
 
 export const ASK_STATES: readonly AskState[] = Object.keys(ASK_STATE_MAP) as AskState[];
@@ -1925,9 +1940,12 @@ export function isAskState(v: unknown): v is AskState {
  */
 export const ASK_OPERATOR_PRINCIPAL = 'operator';
 
-/** `answerAsk`'s ten typed refusals, plus the five route-level refusals the
+/** `answerAsk`'s ten typed refusals, plus the seven route-level refusals the
  *  ask pre-emption routes (server/src/coord) emit as their own literals —
- *  `unknown-ask`, `not-held`, `ask-moved`, `not-parent`, `child-unmeasurable`.
+ *  `unknown-ask`, `not-held`, `ask-moved`, `not-parent`, `child-unmeasurable`,
+ *  and D-5289's two: `declined` (the parent released this question itself and
+ *  may not answer it later) and `already-answered` (a principal already
+ *  answered it; late answer wins only until one of them acts).
  *  Both groups are the same refusal family (reasons an ask answer was
  *  refused), so they share this one union rather than splitting into two
  *  (D-2174, the `ReadFailure` precedent of D-1438). Map idiom: a code that
@@ -1948,7 +1966,7 @@ export const ASK_REFUSE_CODE_MAP: Record<AskRefuseCode, true> = {
   'multi-question': true, range: true, multiselect: true, 'duplicate-index': true,
   'no-menu': true, 'menu-mismatch': true,
   'unknown-ask': true, 'not-held': true, 'ask-moved': true, 'not-parent': true,
-  'child-unmeasurable': true,
+  'child-unmeasurable': true, declined: true, 'already-answered': true,
 };
 
 export const ASK_REFUSE_CODES: readonly AskRefuseCode[] =
@@ -1957,7 +1975,8 @@ export const ASK_REFUSE_CODES: readonly AskRefuseCode[] =
 export type AskRefuseCode =
   | 'not-alive' | 'not-waiting' | 'stale-ask' | 'ask-mismatch' | 'multi-question'
   | 'range' | 'multiselect' | 'duplicate-index' | 'no-menu' | 'menu-mismatch'
-  | 'unknown-ask' | 'not-held' | 'ask-moved' | 'not-parent' | 'child-unmeasurable';
+  | 'unknown-ask' | 'not-held' | 'ask-moved' | 'not-parent' | 'child-unmeasurable'
+  | 'declined' | 'already-answered';
 
 export function isAskRefuseCode(v: unknown): v is AskRefuseCode {
   return typeof v === 'string' && (ASK_REFUSE_CODES as readonly string[]).includes(v);
@@ -2869,6 +2888,19 @@ const reviveBackground = (o: RawObj, k: string): { count: number; kinds: string[
   return { count, kinds: kinds as string[] };
 };
 
+/** D-5237. Absent → null (an older snapshot or server predates the field);
+ *  malformed → null too (`reviveBackground`'s rule: a display line, it gates
+ *  nothing); an unknown cause word → `unknown`. */
+const reviveLastEnd = (o: RawObj, k: string): LastEnd | null => {
+  const v = o[k];
+  if (v === null || typeof v !== 'object' || Array.isArray(v)) return null;
+  const e = v as Record<string, unknown>;
+  const at = e['at'];
+  const cause = e['cause'];
+  if (typeof at !== 'number' || !Number.isSafeInteger(at) || at <= 0 || typeof cause !== 'string') return null;
+  return { at, cause: isRestartCause(cause) ? cause : 'unknown' };
+};
+
 const IDENTITY_FIELDS: readonly string[] = ['uuid', 'wrapper', 'workdir'];
 
 /** `FleetSession.unmeasured` — split from every OTHER array field above on
@@ -3091,6 +3123,9 @@ export function reviveFleetSession(raw: unknown, unnamedSpawnWord: UnnamedSpawnW
       // (`reviveAsk`'s rule): the field is a display chip and one ladder
       // conjunct, and a cached row is bucketed with no hook stamp anyway.
       background: reviveBackground(o, 'background'),
+      // D-5237. Absent → null (an older snapshot predates the field);
+      // malformed → null (`reviveLastEnd`); an unknown cause → `unknown`.
+      lastEnd: reviveLastEnd(o, 'lastEnd'),
       // Absent → null, exactly as `optSubagents` degrades: a snapshot written
       // before this field existed is ignorant of the count, not a witness to
       // its being zero. Present-but-not-a-finite-number throws inside
@@ -4021,11 +4056,82 @@ export interface SlashCommand {
  *  was ignored" (the 2026-09-09 clip). Additive, optional: an older reader
  *  ignores it, an older writer omits it.
  *  'limit' — the assistant row Claude Code appends on a 429
- *  (`isApiErrorMessage:true, error:"rate_limit"`; D-2365). */
-export type SystemOrigin = 'resume-prompt' | 'no-response' | 'limit';
+ *  (`isApiErrorMessage:true, error:"rate_limit"`; D-2365).
+ *  'idle-compact' — Claude Code's notice after an idle compaction that
+ *  started no turn (D-5371). */
+export type SystemOrigin = 'resume-prompt' | 'no-response' | 'limit' | 'idle-compact';
+/** `stale-task-strip` (D-5372): a task list whose newest file is older than
+ *  this is a plan left open, not running work — the strip says "N open" and
+ *  "Plan · untouched <age>" rather than "N running". Claude Code rewrites a task
+ *  file on every status change, so a live plan is seconds or minutes old; 6 h
+ *  outlasts any one turn measured. */
+export const TASKS_STALE_MS = 6 * 60 * 60 * 1000;
+/** `idle-compact-marker` (D-5371): the notice Claude Code writes after its
+ *  idle ("sleep") compaction — a `type:"system"`, `subtype:"informational"`
+ *  row whose TOP-LEVEL `content` starts with this sentence (Claude Code
+ *  2.1.302, `igs`, appended by the idle host's own compact callback, outside
+ *  any turn), followed by "turn off with "idleCompaction": false in
+ *  settings.json". That compaction runs on a turn that had already ended and
+ *  starts none, so the row is what says the session is waiting for the
+ *  operator rather than stalled (110 of 111 measured post-compaction
+ *  "stalls", 2026-10-17). Deliberately NOT "Compacted after an hour idle"
+ *  (`ags`): Claude Code yields that one inside the query loop when the
+ *  operator returns (compact_on_return), so it lands inside a turn the
+ *  operator just started and stays dropped as before. The parser matches the
+ *  prefix; a reworded notice degrades to today's drop, never to a false pill. */
+export const IDLE_COMPACT_NOTICE_PREFIXES = [
+  'Compacted while idle',
+] as const;
 /** The sentence Claude Code's default resume prompt is, and every variant —
  *  including ccd's RESUME_PROMPT — begins with. The parser matches the prefix. */
 export const RESUME_PROMPT_PREFIX = 'Continue from where you left off.';
+/** `interrupt-and-restart-causes-recorded` (D-5237, second half): how a
+ *  session's previous process ended, as `ccd` records it in
+ *  `$REG/<id>.lastend` (`<epoch seconds> <cause>`) and in `swap.log`
+ *  (`ended <id>: <cause>`). `oom` is the pane scope's journal naming an OOM
+ *  kill in the 120 s before the end; `tmux-server` the tmux server itself not
+ *  answering; `exited` neither; `unknown` a journal read that failed, and the
+ *  degrade for a word this build does not know. The swap words are written by
+ *  `cmd_swap` once its act-time gates have passed; `swap-auto` is the
+ *  automatic swap whose arm the dispatcher did not name. The value is the
+ *  PWA's words for the cause. ccd spells the same words in bash (it cannot
+ *  import this); `ccd-restart-cause.test.ts` loops over this list against it. */
+export const RESTART_CAUSE_WORDS = {
+  oom: 'out of memory',
+  'tmux-server': 'tmux server gone',
+  exited: 'process exited',
+  'swap-auto-home': 'swapped home',
+  'swap-auto-rescue': 'swapped off a blocked account',
+  'swap-auto': 'swapped automatically',   // D-5348: an automatic swap whose arm is not named
+  'swap-manual': 'swapped by hand',
+  unknown: 'cause unknown',
+} as const;
+export type RestartCause = keyof typeof RESTART_CAUSE_WORDS;
+export const RESTART_CAUSES = Object.keys(RESTART_CAUSE_WORDS) as RestartCause[];
+/** `FleetSession.lastEnd`: when (epoch ms) and why the previous process ended. */
+export interface LastEnd { at: number; cause: RestartCause }
+/** How long the header and the card name a restart (spec §5.6: an hour). */
+export const LAST_END_SHOWN_MS = 3_600_000;
+const isRestartCause = (v: string): v is RestartCause => Object.prototype.hasOwnProperty.call(RESTART_CAUSE_WORDS, v);
+/** `$REG/<id>.lastend`'s ONE parser: `<epoch seconds> <cause>` on one line.
+ *  Null for an absent file and for any line that is not that shape (the row
+ *  still parses); a well-formed line whose cause this build does not know
+ *  degrades to `unknown`, never to null — an end happened. */
+export function parseLastEnd(raw: string | null): LastEnd | null {
+  if (raw === null) return null;
+  const m = /^(\d{1,12}) ([a-z][a-z-]{0,39})$/.exec(raw.trim());
+  if (m === null) return null;
+  const at = Number(m[1]) * 1000;
+  if (!Number.isSafeInteger(at) || at <= 0) return null;
+  return { at, cause: isRestartCause(m[2]!) ? m[2]! as RestartCause : 'unknown' };
+}
+/** The one reader of a LIVE frame's `lastEnd`: null when absent (an older
+ *  server), malformed, or older than `LAST_END_SHOWN_MS`; otherwise the end. */
+export function recentLastEnd(s: Pick<FleetSession, 'lastEnd'>, now: number): LastEnd | null {
+  const e = reviveLastEnd(s as unknown as RawObj, 'lastEnd');
+  if (e === null || now - e.at > LAST_END_SHOWN_MS || now - e.at < -60_000) return null;
+  return e;
+}
 export const NO_RESPONSE_TEXT = 'No response requested.';
 export const SYNTHETIC_MODEL = '<synthetic>';
 /** The `error` Claude Code writes on the assistant row it appends for a 429
@@ -4206,7 +4312,11 @@ export type SessionStreamMsg =
    *  when both are present. */
   | { type: 'ask'; ask: HookAsk; key: string | null }   // key: answerable via POST /api/sessions/:id/ask; null for approval envelopes
   | { type: 'ask_cleared' }                       // the hook's ask went null, stale, or its hookstate file is gone
-  | { type: 'tasks'; tasks: TaskItem[] }          // the session's task list changed (or first read)
+  | { type: 'tasks'; tasks: TaskItem[];          // the session's task list changed (or first read)
+      /** D-5372: the newest task file `mtimeMs`, epoch ms. OPTIONAL: absent when
+       *  the list has no open item, no stat answered, or the server is older;
+       *  absence renders the strip as it always did. */
+      touchedAt?: number }
   /** This session's own OUTSTANDING mail — `state` restricted server-side to
    *  `queued` or `delivered`, never `acked`/`rejected` (`sessionws.ts`'s
    *  `checkMail`). Read directly off `CoordStore.outstandingMailFor` in-process,
@@ -10244,4 +10354,153 @@ export const DIALOG_TAB_REFUSE_CODES: readonly DialogTabRefuseCode[] =
 export interface DialogTabMoved {
   readonly ok: true;
   readonly next: Dialog;
+}
+
+/** `POST /api/sessions/:id/interrupt`'s refusal codes, each a `409` with zero keys pressed (`interrupt`,
+ *  `server/src/inject/send.ts`):
+ *  - `not-alive`: no pane to press a key in.
+ *  - `not-busy`: no turn measured — an idle live word, or one that could not be read (D-115's asymmetry: an unread
+ *    word withholds the key).
+ *  - `background-only` (D-5236): the main loop is idle over background work Escape would not stop — the live word
+ *    `busy` after a main Stop that left delegated work running (the body carries its `count` and `kinds`), or the
+ *    live word `shell` (`count: null`, no kinds). Never with a pane menu pending. */
+export type InterruptRefusal = 'not-alive' | 'not-busy' | 'background-only';
+const INTERRUPT_REFUSAL_MAP: Readonly<Record<InterruptRefusal, true>> = {
+  'not-alive': true, 'not-busy': true, 'background-only': true,
+};
+export const INTERRUPT_REFUSALS: readonly InterruptRefusal[] = Object.keys(INTERRUPT_REFUSAL_MAP) as InterruptRefusal[];
+/** The interrupt route's refusal body. */
+export type InterruptRefusalBody =
+  | { ok: false; error: 'not-alive' | 'not-busy' }
+  | { ok: false; error: 'background-only'; count: number | null; kinds: string[] };
+/** D-5236: the ONE reader of a `background-only` refusal body, for the PWA. Anything else — another code, an older
+ *  server's body, a malformed count or kinds — is null, and the caller keeps its generic 409 words. */
+export function backgroundOnlyRefusal(body: unknown): { count: number | null; kinds: string[] } | null {
+  if (typeof body !== 'object' || body === null) return null;
+  const b = body as Record<string, unknown>;
+  if (b['error'] !== 'background-only') return null;
+  const count = b['count'];
+  const kinds = b['kinds'];
+  if (count !== null && !(typeof count === 'number' && Number.isInteger(count) && count > 0)) return null;
+  if (!Array.isArray(kinds) || !kinds.every((k) => typeof k === 'string')) return null;
+  return { count, kinds: kinds as string[] };
+}
+
+// ── The server's capability words (D-5232's mechanism; plan 2026-10-16, Task 9b; spec §6.1) ─────────────────────
+// APPENDED at the very end, because README and the specs cite this file by line.
+//
+// A fleet-side change that alters what an EXISTING hookstate field means is safe only behind the server half that
+// reads the new meaning (D-5232's carry, D-5239's compaction skip). No rollout form holds that order for every mover
+// (the `auto` dispatcher and the one-tap move fleet nodes first, `deploy.sh` and a hand-run `ccrc update` follow no
+// order, a server can be rolled back or restore itself after a failed health gate). So the server ADVERTISES what it
+// reads, as words in `GET /health`'s additive `caps`; the fleet box records them in `~/.ccrc/<SERVER_CAPS_FILE>`
+// (written every minute by `ccd/ccd-update-sync` on a `fleet` node, by the server process itself on a `server` or
+// `both` node, `server/src/update/serverCaps.ts`); and the hook engages a gated arm only while that file is whole,
+// current within `SERVER_CAPS_LEASE_S` by its own clock and lists the arm's word. Absent, stale, torn or unlisted
+// reads as "not advertised", and the arm writes exactly what it writes today.
+//
+// A WORD IS ADDED BY THE CHANGE THAT BUILDS WHAT IT NAMES (or, for what was built before this list existed, by the
+// change that creates the list), cut after everything the word promises, so a server cannot advertise a word without
+// all of it. A word is never reused for a different promise: a changed promise is a new word (`-v2`).
+//
+// The bash spellings are documented second copies, held equal by tests that iterate over these values: the word
+// grammar and the file's name in `ccd/ccd-update-sync` (`server-caps.test.ts`, `ccd-update-sync.test.ts`), and,
+// from Tasks 2 and 10, the file's name, the lease and the grammar in `ccd/session-hook.sh`.
+
+/** One capability word the server advertises. Spelled once, as the keys of `SERVER_CAP_MAP`. */
+export type ServerCap = 'dispatch-live-gate-v1';
+
+/** Every word, with what it promises. The value is `true`; the promise is the comment, which a word's reader may
+ *  rely on and nothing weaker. `PR_REASON_MAP`'s idiom: a word added to `ServerCap` and not here is TS2741. */
+const SERVER_CAP_MAP: Readonly<Record<ServerCap, true>> = {
+  /** D-5238 (Task 9): the dispatch resume arm types `/clear` only when the fail-closed turn verdict
+   *  (`turnVerdictFor`, `server/src/turnverdict.ts`) reads `idle`, at the gate and again immediately before the act;
+   *  `busy` refuses `worker-busy`, `unmeasured` refuses `status-unmeasurable` (or `worker-starting` after an `ensure`
+   *  that started the pane). So a hook `done` standing over a busy pane (D-5239's compaction skip) can never be read
+   *  by this server as a session safe to `/clear`. Added by Task 9b (the change that creates this list), cut after
+   *  Task 9 merged; `dispatch-live-gate.test.ts` pins the word beside the gate it names. */
+  'dispatch-live-gate-v1': true,
+};
+
+/** The words this server advertises, in `GET /health`'s `caps`, and in the file a `server` or `both` node writes. */
+export const SERVER_CAPS: readonly ServerCap[] = Object.keys(SERVER_CAP_MAP) as ServerCap[];
+
+/** The file's name, under `~/.ccrc` (the node's ccrc directory). */
+export const SERVER_CAPS_FILE = 'server-caps';
+
+/** How old the file's `at` may be, in seconds by the READER's clock, before it reads as not advertised: three
+ *  periods of the one-minute writers, so one missed write never turns an arm off. A server rolled back below a word
+ *  turns its arm off within this lease on a `server` or `both` node (an older server never rewrites the file). */
+export const SERVER_CAPS_LEASE_S = 180;
+
+/** One word's grammar. The file is three `\n`-terminated lines: `at <1–11 digits>` (unix seconds, the writer's
+ *  clock), `caps` followed by zero or more words separated by single spaces, `end`. */
+const SERVER_CAP_WORD_RE = /^[a-z0-9-]{1,64}$/;
+const SERVER_CAPS_AT_RE = /^at ([0-9]{1,11})$/;
+const SERVER_CAPS_CAPS_RE = /^caps((?: [a-z0-9-]{1,64})*)$/;
+
+/** Is `w` a word the file's grammar admits? */
+export function isServerCapWord(w: string): boolean {
+  return SERVER_CAP_WORD_RE.test(w);
+}
+
+/** The file's three lines. Pure. Throws `RangeError` on a word the grammar refuses or an `atS` that is not a whole
+ *  number of 1–11 digits: a document the reader would refuse is never rendered. */
+export function renderServerCaps(words: readonly string[], atS: number): string {
+  if (!Number.isSafeInteger(atS) || atS < 0 || String(atS).length > 11) {
+    throw new RangeError(`server-caps: at ${String(atS)} is not unix seconds of 1 to 11 digits`);
+  }
+  for (const w of words) {
+    if (!isServerCapWord(w)) throw new RangeError(`server-caps: ${JSON.stringify(w)} is not a capability word`);
+  }
+  return `at ${atS}\ncaps${words.map((w) => ` ${w}`).join('')}\nend\n`;
+}
+
+/** `parseServerCaps`'s answer. Each refusal is its own reason, never folded into another:
+ *  - `torn`: fewer than three whole lines, every whole line on its grammar (a write cut short, `end` missing);
+ *  - `malformed`: a whole line off its grammar (a bad word, a 12-digit `at`), or anything after `end`;
+ *  - `stale`: `at` more than `SERVER_CAPS_LEASE_S` before `nowS`;
+ *  - `future`: `at` after `nowS`. */
+export type ServerCapsParse =
+  | { ok: true; at: number; words: string[] }
+  | { ok: false; why: 'torn' | 'malformed' | 'stale' | 'future' };
+
+/** The reader of the file's grammar, by `nowS` (unix seconds, the reader's own clock). Pure. */
+export function parseServerCaps(text: string, nowS: number): ServerCapsParse {
+  const parts = text.split('\n');
+  const whole = parts.slice(0, -1);          // every line that ended in `\n`
+  const rest = parts[parts.length - 1]!;     // what follows the last `\n` ('' in a whole document)
+  if (whole.length > 3 || (whole.length === 3 && rest !== '')) return { ok: false, why: 'malformed' };
+  const grammar = [SERVER_CAPS_AT_RE, SERVER_CAPS_CAPS_RE, /^end$/];
+  for (let i = 0; i < whole.length; i++) {
+    if (!grammar[i]!.test(whole[i]!)) return { ok: false, why: 'malformed' };
+  }
+  if (whole.length < 3) return { ok: false, why: 'torn' };
+  const at = Number(SERVER_CAPS_AT_RE.exec(whole[0]!)![1]);
+  const words = SERVER_CAPS_CAPS_RE.exec(whole[1]!)![1]!.split(' ').filter((w) => w !== '');
+  if (at > nowS) return { ok: false, why: 'future' };
+  if (nowS - at > SERVER_CAPS_LEASE_S) return { ok: false, why: 'stale' };
+  return { ok: true, at, words };
+}
+
+/** Why an ask row was MINTED `released` rather than held (D-5290,
+ *  coordinator-first routing spec §5.2) — the row's `releaseReason`, `null`
+ *  on every row the hold minted. Rides `GET /api/asks` as an additive field.
+ *
+ *  `parent-not-live`          the parent has no registry row, is archived or
+ *                             stopped, or the dead-coordinator predicate
+ *                             measures it dead.
+ *  `parent-project-mismatch`  the run's claimant is a session of another
+ *                             project (a run opened before the attributed
+ *                             binding, spec §6.4).
+ *  `unknown`                  a token this build does not know, read off disk;
+ *                             never written. */
+export type AskReleaseReason = 'parent-not-live' | 'parent-project-mismatch' | 'unknown';
+
+export const ASK_RELEASE_REASON_MAP: Record<AskReleaseReason, true> = {
+  'parent-not-live': true, 'parent-project-mismatch': true, unknown: true,
+};
+
+export function isAskReleaseReason(v: unknown): v is AskReleaseReason {
+  return typeof v === 'string' && (Object.keys(ASK_RELEASE_REASON_MAP) as string[]).includes(v);
 }

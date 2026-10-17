@@ -48,7 +48,8 @@ const frontmatter = skill.slice(4, skill.indexOf('\n---', 4));
 // paraphrase failure that reads like a mystery.
 //
 // D-104, the operative constraint both files live under: NO clause in this
-// skill may contain a `"` character, and a curly apostrophe pasted into
+// skill may contain a `"` character (one exception: clause 5's `rm -rf "$X"`,
+// D-5292, the measured shape itself, escaped below), and a curly apostrophe pasted into
 // SKILL.md reds this pin without looking like a change. SKILL.md's contract
 // section states the same rule where an editor of the prose will see it.
 const CONTRACT = [
@@ -58,7 +59,7 @@ const CONTRACT = [
   // PRE-DELIVERY budget only; a delivered-but-unacked nudge has its own.
   "Ack before you act, and key the ack on the row's DELIVERY id, never the mail row's own `id` — a brief that never landed retries `MAIL_MAX_ATTEMPTS` (6) times and then parks unread, while a delivered nudge you leave unacked replays `MAIL_REPLAY_MAX_ATTEMPTS` (20) times and then parks read-but-unanswered. Reply to the coordinator through mail (`toId:'coordinator'`), never by typing into your own pane.",
   "Keep your input box empty. A half-typed draft makes the delivery lane refuse `draft-present`, only you can clear your own text, and a parked delivery means your brief was never read.",
-  "Every question rides the AskUserQuestion tool — the structured ask the session hook captures — never free text in your pane. If this session has a parent, that parent may answer it before the operator is notified; ask as if a colleague who has read the plan will answer, because one may.",
+  "Every question rides the AskUserQuestion tool — the structured ask the session hook captures — never free text in your pane. If this session has a parent, that parent may answer it before the operator is notified; ask as if a colleague who has read the plan will answer, because one may. In a shell script, never delete through a variable (`rm -rf \"$X\"`): use a literal path under your scratch directory, or leave temp directories to the reaper; such deletes stop your work on a permission prompt the operator must answer. Subagents never read this skill, and they raise almost all of these prompts: every subagent brief you write carries this rule, word for word. Ask one question per AskUserQuestion call, single-select, so your parent can rule it; split independent decisions into separate calls.",
   "Your requirements are the brief plus the plan file it names, including that plan's deviation ledger, and the plan's text governs over your recollection of the spec. Invoke the execution skill the brief names rather than improvising one.",
   "Large payloads travel as files: write the file, then name its ABSOLUTE path in the mail's `artifacts` (a relative entry is refused `bad-kind`). Never ask for content to be pasted into your pane (F7).",
   "Never run `ws-rm`, `ws-reap`, `ws-gc`, `ws-archive` or `ws-restore`. This workspace's lifecycle belongs to ccd and to the human, at any wave, for any reason.",
@@ -93,6 +94,21 @@ describe('the worker skill: its contract', () => {
     for (const clause of CONTRACT) {
       expect(skill, `missing contract clause: ${clause.slice(0, 48)}…`).toContain(clause);
     }
+  });
+
+  // D-5292 (coordinator-first routing, Task 1): subagents never read this
+  // skill, and they raised 25 of the 26 measured child permission prompts, so
+  // the no-variable-rm rule reaches them only if this session carries it into
+  // every brief it writes. That sentence is pinned as its OWN literal, against
+  // SKILL.md's clause 5 line itself, so dropping it reds by name rather than
+  // only as a whole-clause mismatch above.
+  it('clause 5 carries the no-variable-rm rule into every subagent brief (D-5292)', () => {
+    const SUBAGENT_BRIEF = 'every subagent brief you write carries this rule';
+    const line = skill.split('\n').find((l) => l.startsWith('5. '));
+    expect(line, 'SKILL.md has no clause 5').toBeTruthy();
+    expect(CONTRACT[4]).toContain(SUBAGENT_BRIEF);
+    expect(line, 'clause 5 no longer carries the rule into subagent briefs').toContain(SUBAGENT_BRIEF);
+    expect(line, 'clause 5 no longer forbids deletes through a variable').toContain('never delete through a variable (`rm -rf "$X"`)');
   });
 
   // ── the COUNT, which the verbatim pin above structurally cannot see ──────
