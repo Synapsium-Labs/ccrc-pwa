@@ -19,12 +19,17 @@
 // D-5093's verification clause: the initial skin comes from `STORYBOOK_SKIN`
 // through the catalogue, so a build made with it runs axe over every story in
 // that skin, and the viewport presets are the widths every PR is checked at.
+// And the per-device default's pure half (D-5096): what `AUTO` resolves to on
+// which device, with the catalogue injected so the case can see the world W2's
+// flag flip makes.
 import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { compile } from 'tailwindcss';
-import { SKINS, REFINED, INSTRUMENT, applySkin, resolveSkin } from '@ccrc/ui';
+import {
+  SKINS, REFINED, INSTRUMENT, AUTO, DEVICE_QUERY, applySkin, resolveSkin, skinPreference, type SkinChoice,
+} from '@ccrc/ui';
 
 const UI = path.join(import.meta.dirname, '..', '..', 'ui');
 const STYLES = path.join(UI, 'src', 'styles');
@@ -120,6 +125,103 @@ describe('resolving and stamping a skin', () => {
     applySkin(INSTRUMENT, el);
     applySkin(REFINED, el);
     expect(el.getAttribute('data-skin')).toBe(REFINED);
+  });
+});
+
+/** The catalogue as the W2 PR that lands Instrument's shell will ship it:
+ *  Instrument no longer a preview. INJECTED into `resolveSkin`, never
+ *  committed — the shipped flag is what keeps `AUTO` on Refined today. */
+const asW2Ships = (): readonly SkinChoice[] =>
+  SKINS.map((s) => (s.id === INSTRUMENT ? { ...s, preview: false } : s));
+
+/** Primary-input profiles (Media Queries 4, `hover` and `pointer`), each with
+ *  the skin `AUTO` gives it once Instrument is no longer a preview. A tablet's
+ *  primary pointer is coarse, so it is Refined (spec §12, O1). The rule is a
+ *  CONJUNCTION, and each half has a row that only it decides:
+ *  - a stylus-first device points finely but cannot hover, so it is a tablet
+ *    too: that row tells the rule from `(pointer: fine)` alone;
+ *  - a coarse pointer that can hover is not a desk either, because its
+ *    pointer is coarse: that row tells the rule from `(hover: hover)` alone.
+ *  So narrowing DEVICE_QUERY to either half — in skins.ts and the snippet
+ *  together, which no binding between the two can see — reds here. */
+const DEVICES: readonly { readonly name: string; readonly hover: string; readonly pointer: string; readonly skin: string }[] = [
+  { name: 'a phone', hover: 'none', pointer: 'coarse', skin: REFINED },
+  { name: 'a tablet', hover: 'none', pointer: 'coarse', skin: REFINED },
+  { name: 'a stylus-first tablet', hover: 'none', pointer: 'fine', skin: REFINED },
+  { name: 'a coarse pointer that can hover', hover: 'hover', pointer: 'coarse', skin: REFINED },
+  { name: 'a device with no pointer', hover: 'none', pointer: 'none', skin: REFINED },
+  { name: 'a desktop with a mouse', hover: 'hover', pointer: 'fine', skin: INSTRUMENT },
+  { name: 'a touch laptop driven by its trackpad', hover: 'hover', pointer: 'fine', skin: INSTRUMENT },
+];
+
+/** Does `query` match a device with these primary-input features? Reads only
+ *  the form DEVICE_QUERY may take — `(feature: value)` terms joined by `and` —
+ *  and THROWS on anything else, so a query this cannot read reds the case
+ *  rather than being read as something it is not. */
+function matchesDevice(query: string, device: { readonly hover: string; readonly pointer: string }): boolean {
+  const features: Record<string, string> = { hover: device.hover, pointer: device.pointer };
+  return query.split(/\s+and\s+/).every((term) => {
+    const m = /^\(\s*([a-z-]+)\s*:\s*([a-z-]+)\s*\)$/.exec(term.trim());
+    if (m === null) throw new Error(`a DEVICE_QUERY term this case cannot read: ${term}`);
+    const have = features[m[1] as string];
+    if (have === undefined) throw new Error(`DEVICE_QUERY reads a feature no profile states: ${m[1]}`);
+    return have === m[2];
+  });
+}
+
+describe('the per-device default (D-5096)', () => {
+  it('AUTO is a stored value, never a skin: no block, no catalogue entry, never a resolution', () => {
+    expect(SKINS.map((s) => s.id)).not.toContain(AUTO);
+    expect(skinIdsInCss()).not.toContain(AUTO);
+    for (const catalogue of [SKINS, asW2Ships()]) {
+      for (const desk of [true, false]) {
+        expect(resolveSkin(AUTO, desk, catalogue)).not.toBe(AUTO);
+      }
+    }
+  });
+
+  it('skinPreference: a known id asks for itself, and anything else asks for AUTO', () => {
+    // What the picker shows (Task 12b): an unreadable, missing, unknown or
+    // stale value means "Match this device" (spec §7), never a pinned skin.
+    for (const s of SKINS) expect(skinPreference(s.id)).toBe(s.id);
+    for (const junk of [null, undefined, '', AUTO, 'soft-glass', 'Instrument']) {
+      expect(skinPreference(junk), String(junk)).toBe(AUTO);
+    }
+  });
+
+  it('AUTO on a hover-and-fine device resolves refined while Instrument is a preview, and instrument when it is not', () => {
+    const desk = DEVICES.find((d) => d.name === 'a desktop with a mouse')!;
+    expect(matchesDevice(DEVICE_QUERY, desk), 'a desktop is not a desk').toBe(true);
+    // As shipped: Instrument is a preview, so nobody's screen changes (§7).
+    expect(SKINS.find((s) => s.id === INSTRUMENT)?.preview).toBe(true);
+    expect(resolveSkin(AUTO, true)).toBe(REFINED);
+    expect(resolveSkin(AUTO, true, SKINS)).toBe(REFINED);
+    // As W2 ships it: the same desk boots into Instrument.
+    expect(resolveSkin(AUTO, true, asW2Ships())).toBe(INSTRUMENT);
+    // Nothing stored, an empty value, an unknown one and a stale one all take
+    // the device rule — "an unknown value means AUTO" — in both catalogues.
+    for (const v of [AUTO, null, undefined, '', 'soft-glass']) {
+      expect(resolveSkin(v, true), String(v)).toBe(REFINED);
+      expect(resolveSkin(v, true, asW2Ships()), String(v)).toBe(INSTRUMENT);
+      expect(resolveSkin(v, false, asW2Ships()), String(v)).toBe(REFINED);
+    }
+    // An explicit choice is itself on every device, in both catalogues.
+    for (const catalogue of [SKINS, asW2Ships()]) {
+      for (const d of [true, false]) {
+        for (const s of SKINS) expect(resolveSkin(s.id, d, catalogue), `${s.id} desk=${d}`).toBe(s.id);
+      }
+    }
+  });
+
+  it('AUTO on a coarse device resolves refined (tablets, O1)', () => {
+    // By primary input, never by width: the profiles carry no width at all.
+    // Each is evaluated against DEVICE_QUERY itself, then resolved against the
+    // catalogue W2 ships — the one in which the device rule decides anything.
+    for (const d of DEVICES) {
+      const isDesk = matchesDevice(DEVICE_QUERY, d);
+      expect(resolveSkin(AUTO, isDesk, asW2Ships()), d.name).toBe(d.skin);
+      expect(resolveSkin(AUTO, isDesk), `${d.name}, while Instrument is a preview`).toBe(REFINED);
+    }
   });
 });
 
