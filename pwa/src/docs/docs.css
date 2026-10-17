@@ -23,7 +23,7 @@
    (`.docs-action`, `.docs-hint-link`, `.docs-owner-link`) carries the floor. The two `btn-ghost` controls take the
    floor from `.btn-ghost` (components/primitives.css) and restate it here beside the width they give back. */
 
-/* — the Docs door, in the fleet header before `.accounts-door` (section 4.8): `.settings-door`'s box — */
+/* — the Docs door, in the fleet header before `.accounts-door` (section 4.8): the box `.settings-door` had before `Door` — */
 .docs-door {
   display: inline-flex; align-items: center; gap: var(--sp-1); min-height: var(--tap-min);
   padding: 0 var(--sp-1);
@@ -34,7 +34,7 @@
   transition: transform var(--dur-press) var(--ease-swift), color var(--dur-fast) var(--ease-swift);
 }
 .docs-door:active { transform: scale(0.88); color: var(--ink-primary); }
-/* The glyph is decoration beside the word, aria-hidden in the markup, sized in the UI font as `.settings-door-glyph`. */
+/* The glyph is decoration beside the word, aria-hidden in the markup, sized in the UI font as `Door`'s glyph is. */
 .docs-door-glyph { font-family: var(--font-ui); font-size: var(--text-xs); line-height: 1; }
 
 /* — the session links (section 4.8): overflow only. The tap floor stays the shared class's (`.btn-ghost`, `.menu-item`),

@@ -2045,8 +2045,10 @@ describe('the child-of-run label is measured, not left in the blind spot (wave 5
 // ── native Docs reader W5 part 1, Task 11: the Docs door and the Docs screen's chrome (M4.S1, its docs-chrome form) ──
 // Every rule in docs/docs.css that sets a colour is measured in both themes, on the ground it paints itself, through
 // a painted ancestor its selector names, or on a ground registered in INHERITED_GROUNDS with its reason; none joins
-// the frozen census and none is grandfathered. The door has two grounds, as `.settings-door` does: registered on the
-// page, and measured here on `.shell-nav`'s --bg-surface off the rule's own ink, so a retint re-measures both.
+// the frozen census and none is grandfathered. Every palette is measured (THEME_COUNT rows a rule, as its siblings
+// above), and a rule's key is its selector alone (`ruleKey`). The door has two grounds, as the retired `.settings-door`
+// entry did: registered on the page, and measured here on `.shell-nav`'s --bg-surface off the rule's own ink, so a
+// retint re-measures both (the `.build-line` precedent above, in the other direction).
 describe('the Docs chrome is measured, not left in the blind spot (M4.S1)', () => {
   const docsRules = rulesOf(ROOT, 'src/docs/docs.css');
   const NOT_A_COLOUR = /^(inherit|currentColor|unset|initial|revert)$/i;
@@ -2057,7 +2059,7 @@ describe('the Docs chrome is measured, not left in the blind spot (M4.S1)', () =
   /** The measured rows of one rule: the rule as a pair of its own (painted, or registered), or as a descendant
    *  measured through the painter its selector names. */
   const rowsOf = (key: string): typeof report.measured => report.measured.filter((m) => {
-    const label = m.label.replace(/^(DARK|LIGHT)\s+/, '');
+    const label = m.label.replace(/^\S+\s+/, '');
     return label === key || label.startsWith(`${key} [in `);
   });
   const inkOf = (key: string): string => {
@@ -2078,14 +2080,17 @@ describe('the Docs chrome is measured, not left in the blind spot (M4.S1)', () =
       const key = ruleKey(r);
       expect(report.uncovered, key).not.toContain(key);
       const rows = rowsOf(key);
-      expect(rows.map((m) => m.label.split(/\s+/)[0]).sort(), key).toEqual(['DARK', 'LIGHT']);
+      expect(rows.map((m) => m.label.split(/\s+/)[0]), key).toContain('DARK');
+      expect(rows.map((m) => m.label.split(/\s+/)[0]), key).toContain('LIGHT');
+      expect(rows, key).toHaveLength(THEME_COUNT);
       for (const row of rows) expect(row.ratio, row.label).toBeGreaterThanOrEqual(row.floor);
     }
   });
 
   it('grandfathers nothing from docs.css, and every docs registration is on the page with a reason', () => {
-    expect([...GRANDFATHERED_UNCOVERED].filter((k) => k.startsWith('docs.css '))).toEqual([]);
-    const registered = Object.entries(INHERITED_GROUNDS).filter(([k]) => k.startsWith('docs.css '));
+    const docsKeys = new Set(docsRules.map(ruleKey));
+    expect([...GRANDFATHERED_UNCOVERED].filter((k) => docsKeys.has(k))).toEqual([]);
+    const registered = Object.entries(INHERITED_GROUNDS).filter(([k]) => docsKeys.has(k));
     expect(registered.length).toBeGreaterThanOrEqual(20);
     for (const [key, entry] of registered) {
       expect(entry.under, key).toEqual(['var(--bg-page)']);
@@ -2095,8 +2100,8 @@ describe('the Docs chrome is measured, not left in the blind spot (M4.S1)', () =
   });
 
   it.each([
-    ['docs.css .docs-door'],
-    ['docs.css .docs-door:active'],
+    ['.docs-door'],
+    ['.docs-door:active'],
   ])('%s is registered on the page and also clears AA on the desktop sidebar it sits on', (key) => {
     expect(INHERITED_GROUNDS[key]?.under).toEqual(['var(--bg-page)']);
     for (const row of rowsOf(key)) expect(row.detail, row.label).toContain(`${inkOf(key)} on var(--bg-page)`);
