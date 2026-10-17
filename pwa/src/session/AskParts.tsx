@@ -15,10 +15,12 @@
 // D-5091 (Task 4) adds a multiSelect question's boxes (`MultiPick`), which both sheets render in place of the option
 // rows when the pane carries `Dialog.multi`. Their state, the operator's set and the commit's call, lives in
 // `DialogSheet` for the same reason.
-import { useEffect, useId, type ReactNode } from 'react';
+import { useEffect, useId, useRef, type ReactNode } from 'react';
 import type { Dialog, DialogMulti, HookAskQuestion } from '../../../shared/api';
-import { Button, EYEBROW, OptionRow } from '@ccrc/ui';
-import { reviewRows } from '../../../shared/ask-menu';
+import { Button, EYEBROW, FOCUS_RING, OptionRow } from '@ccrc/ui';
+import { reviewRows, type AskTab } from '../../../shared/ask-menu';
+import { rowKey } from './askKeys';
+import type { AskKeys } from './useAskKeys';
 import {
   commitsToReview, paneTicks, reviewSummary, slotHolds, slotHoldsPart, wantedTicks, type FreeTextSlot,
 } from './askLive';
@@ -72,13 +74,26 @@ export function AskEyebrow({
   );
 }
 
-/** Is a key event's target a place the operator types into (an input, a textarea, an editable)? Digits pressed there
- *  are text, never an answer. */
-function typingInto(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  return target.isContentEditable || target.tagName === 'INPUT' || target.tagName === 'TEXTAREA'
-    || target.tagName === 'SELECT';
+/**
+ * Decision `ask-sheet-escape-never-interrupts`: Escape on an ask sheet HIDES it and does nothing else. Radix handles the
+ * key in a document capture listener (its dismiss runs after this, and is not prevented), so stopping the event there
+ * keeps it from the window, where the session header's desktop Escape binding would interrupt the turn. The header half
+ * of the same rule is its own guard (D-5235), which ignores an Escape a sheet handled; either half alone holds it.
+ */
+export const escapeHidesOnly = (e: KeyboardEvent): void => e.stopPropagation();
+
+/** A row's keyboard wiring (decision `ask-sheet-keyboard-model`): its element and roving tab stop when the sheet's keys
+ *  are on, and the digit that answers it. */
+export function keyed(
+  keys: AskKeys | undefined, k: number,
+): { ref?: (el: HTMLElement | null) => void; tabIndex?: number; keyShortcut?: string } {
+  return keys === undefined ? {} : { ...keys.bind(rowKey(k)), keyShortcut: k <= 9 ? String(k) : undefined };
 }
+
+/** Is printed row `k` the highlighted one: the keyboard's highlight when the sheet's keys are on, else the pane's
+ *  cursor (`selectedIndex`), or never when the sheet shows no cursor. */
+export const lit = (keys: AskKeys | undefined, k: number, selectedIndex?: number): boolean =>
+  keys !== undefined ? keys.hl === rowKey(k) : selectedIndex === k;
 
 /**
  * The review screen an ask ends on: the pane's summary, then the pane's own two rows. `Submit answers` is `answer(1)`
@@ -93,6 +108,7 @@ export function AskReview({
   answering,
   locked,
   onAnswer,
+  keys,
 }: {
   dialog: Dialog;
   /** The option index whose answer is in flight, as the sheet's own rows read it. */
@@ -100,6 +116,8 @@ export function AskReview({
   /** Another send is in flight (an own-words call, D-5090), so no row may start one. */
   locked: boolean;
   onAnswer: (optionIndex: number) => void;
+  /** The sheet's keyboard (`useAskKeys`), whose digits include this screen's `1` and `2`. */
+  keys?: AskKeys;
 }): ReactNode {
   const summary = reviewSummary(dialog);
   // Submit and Cancel by LABEL (`reviewRows`, decision `ask-review-lenient-arm`), and only those two: a review with
@@ -109,31 +127,19 @@ export function AskReview({
   const disabled = locked || answering !== null;
   // Claude Code's own keys on this screen (decision `ask-review-digit-keys`, the operator's ruling "Match Claude Code"):
   // `1` submits every answer and `2` cancels AT ONCE, which declines the whole ask, exactly as in the terminal. The
-  // Cancel row keeps saying so (`CANCEL_DECLINES_ALL`). Bound only while this review is mounted (the sheet is open),
-  // and never while a text field or editable has focus, so a digit typed into the composer stays the composer's.
-  useEffect(() => {
-    if (rows === null || disabled) return undefined;
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.defaultPrevented || e.repeat || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
-      if (e.key !== '1' && e.key !== '2') return;
-      if (typingInto(e.target)) return;
-      e.preventDefault();
-      e.stopPropagation();
-      onAnswer(e.key === '1' ? rows.submit : rows.cancel);
-    };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [rows?.submit, rows?.cancel, disabled, onAnswer]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Cancel row keeps saying so (`CANCEL_DECLINES_ALL`). They are the sheet's keyboard now (`useAskKeys`, decision
+  // `ask-sheet-keyboard-model`), with ↑/↓ wrapping between the two rows and ← back to the last question.
   return (
     <>
       {summary.length > 0 && <p className="dlg-body">{summary.join('\n')}</p>}
       <div className="opts">
         {shown.map((o) => {
-          const selected = o.index === dialog.selectedIndex;
+          const selected = lit(keys, o.index, dialog.selectedIndex);
           const waiting = answering === o.index;
           return (
             <OptionRow
               key={`${dialog.id}:${o.index}`}
+              {...keyed(keys, o.index)}
               selected={selected}
               glyph={selected ? '❯' : ''}
               index={o.index}
@@ -281,6 +287,7 @@ export function OwnWords({
   chat,
   words,
   locked,
+  keys,
 }: {
   slot: FreeTextSlot;
   /** The label of the pane's Chat row (`chatRow`), which the `none` line points to; null when the pane paints none. */
@@ -288,6 +295,8 @@ export function OwnWords({
   words: Words;
   /** An option's answer is in flight. */
   locked: boolean;
+  /** The sheet's keyboard: the field is its `words` row (↑/↓ leave it; ←/→ stay its caret's). */
+  keys?: AskKeys;
 }): ReactNode {
   const { text, call, onText, onSend } = words;
   const countId = useId();
@@ -319,6 +328,7 @@ export function OwnWords({
         }}
       >
         <input
+          ref={keys?.bind('words').ref}
           className="dlg-reply-input"
           type="text"
           value={text}
@@ -385,6 +395,7 @@ export function ChatRow({
   answering,
   disabled,
   onAnswer,
+  keys,
 }: {
   row: Dialog['options'][number];
   /** The pane's cursor row, when the sheet shows the cursor (the scraped sheet does, the envelope's does not). */
@@ -392,14 +403,17 @@ export function ChatRow({
   answering: number | null;
   disabled: boolean;
   onAnswer: (optionIndex: number) => void;
+  /** The sheet's keyboard: Chat's digit only highlights it, since it declines the whole ask. */
+  keys?: AskKeys;
 }): ReactNode {
   const waiting = answering === row.index;
-  const selected = selectedIndex === row.index;
+  const selected = lit(keys, row.index, selectedIndex);
   return (
     <div className="opts">
       <OptionRow
+        {...keyed(keys, row.index)}
         selected={selected}
-        glyph={selectedIndex === undefined ? undefined : selected ? '❯' : ''}
+        glyph={selectedIndex === undefined && keys === undefined ? undefined : selected ? '❯' : ''}
         index={row.index}
         label={row.label}
         sublabel={CHAT_DECLINES}
@@ -467,6 +481,7 @@ export function MultiPick({
   copy,
   picks,
   locked,
+  keys,
 }: {
   multi: DialogMulti;
   /** The live dialog's id: a call committed to another question shows nothing of its set here. */
@@ -477,6 +492,8 @@ export function MultiPick({
   picks: Picks;
   /** Another send is in flight (an option's answer, or own words). */
   locked: boolean;
+  /** The sheet's keyboard: a digit toggles its box, ↑/↓ run the boxes then the commit. */
+  keys?: AskKeys;
 }): ReactNode {
   const { picked, call, onToggle, onCommit } = picks;
   const busy = picksBusy(call);
@@ -491,6 +508,7 @@ export function MultiPick({
           return (
             <OptionRow
               key={`${dialogId}:${o.index}`}
+              {...keyed(keys, o.index)}
               checked={ticked.includes(o.index)}
               index={o.index}
               label={c?.label ?? o.label}
@@ -506,6 +524,7 @@ export function MultiPick({
       {multi.freeText !== null && <p className="dlg-copy">{MULTI_OWN_WORDS}</p>}
       <div className="dlg-actions">
         <Button
+          {...(keys === undefined ? {} : keys.bind('commit'))}
           variant="primary"
           // A flex box drops the marker's leading space (`Nextanswering…`); the gap keeps the two apart.
           className="gap-2"
@@ -517,6 +536,88 @@ export function MultiPick({
           {busy && <span className="opt-wait"> answering…</span>}
         </Button>
       </div>
+    </>
+  );
+}
+
+/** Why ←/→ and the tab strip wait on a multiSelect question: a tab move leaves the pane's ticks as they are, so boxes
+ *  changed here and not committed would be lost. */
+export const TABS_HELD = 'Commit your picks with Next first, or untick them, to move to another question.';
+
+/**
+ * The ask's tab strip (decision `ask-tab-strip`): one chip per question, its header and whether the pane marks it
+ * answered (`☒`) or not yet (`☐`), then `✔ Submit`, read off the pane's own tab row (`parseAskTabs`). The chip of the
+ * screen showing is marked current. A chip MOVES THE PANE there (`POST /dialog/tab`), the same move the arrow keys make,
+ * and the sheet follows the screen the pane lands on: a sheet-local view of another question could not answer it, since
+ * answers are positional on the live menu. Each chip is named `Go to …` for a screen reader: `✔ Submit` reaches the
+ * review, where `Submit answers` submits, and must not be heard as a submit itself.
+ *  - A question chip needs to know which tab is up (`active`), since only colour marks it on the pane; where the sheet
+ *    cannot tell (the scraped sheet on an unnamed question), the question chips wait and `✔ Submit` still works.
+ *  - Every chip waits while a send or a move is under way, and while picks are uncommitted (`TABS_HELD`).
+ *  - It replaces nothing: the `n of N` kicker and the other-questions list stay.
+ * At every width it is one row; a phone scrolls the chips sideways inside the strip, never the page, and each chip is
+ * 44px tall. The same component in both skins, which colour it through their own tokens.
+ */
+export function AskTabs({
+  tabs,
+  active,
+  onReview,
+  held,
+  busy,
+  onGo,
+}: {
+  tabs: readonly AskTab[];
+  /** The question showing (0-based), or null when the sheet cannot tell or the review is showing. */
+  active: number | null;
+  onReview: boolean;
+  held: boolean;
+  busy: boolean;
+  onGo: (to: number | 'submit') => void;
+}): ReactNode {
+  // A phone scrolls the chips sideways; the chip of the screen showing is scrolled into the strip's view whenever it
+  // changes, so question 4 of 4 is never the one chip out of sight. `nearest` on both axes: the strip only.
+  const strip = useRef<HTMLDivElement | null>(null);
+  const at = onReview ? 'submit' : active;
+  useEffect(() => {
+    const chip = strip.current?.querySelector<HTMLElement>('[aria-current="step"]');
+    chip?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+  }, [at]);
+  // One chip per question, then Submit, drawn by ONE block: the two kinds differ only in what they say and where they go.
+  const chips = [
+    ...tabs.map((t, i) => ({
+      key: `q${i}`,
+      mark: t.answered ? '☒' : '☐',
+      label: t.header,
+      name: `Go to ${t.header}, ${t.answered ? 'answered' : 'not answered yet'}`,
+      current: !onReview && active === i,
+      // A question chip needs the tab showing as `from`, which only the review or a known question gives.
+      waits: !onReview && active === null,
+      to: i + 1 as number | 'submit',
+    })),
+    {
+      key: 'submit', mark: '✔', label: 'Submit', name: 'Go to Submit', current: onReview, waits: false,
+      to: 'submit' as const,
+    },
+  ];
+  return (
+    <>
+      <div ref={strip} className="ask-tabs" role="group" aria-label="Questions in this ask">
+        {chips.map((c) => (
+          <button
+            key={c.key}
+            type="button"
+            className={`ask-tab ${FOCUS_RING}`}
+            aria-label={c.name}
+            aria-current={c.current ? 'step' : undefined}
+            disabled={busy || held || c.current || c.waits}
+            onClick={() => onGo(c.to)}
+          >
+            <span aria-hidden="true">{c.mark}</span>
+            <span>{c.label}</span>
+          </button>
+        ))}
+      </div>
+      {held && <p className="dlg-copy">{TABS_HELD}</p>}
     </>
   );
 }

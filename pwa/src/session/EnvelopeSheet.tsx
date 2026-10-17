@@ -17,16 +17,19 @@
 // consumers. The shape moves, the ground stays.
 import { useState } from 'react';
 import type { ReactNode } from 'react';
-import type { Dialog, HookAsk } from '../../../shared/api';
+import type { Dialog, DialogTabTarget, HookAsk } from '../../../shared/api';
+import { parseAskTabs, reviewRows } from '../../../shared/ask-menu';
 import { Button, OptionRow, Sheet, toast } from '@ccrc/ui';
 import { api, ApiError, failedTo } from '../lib/api';
 // C1's correspondence check lives in `askLive.ts` (D-5089), beside the rules that choose which question is live:
 // `liveQuestion` applies it to EVERY question of the envelope, and the title only breaks a tie.
 import { chatRow, freeTextSlot, isAskReview, liveQuestion, namedQuestion } from './askLive';
 import {
-  AskEyebrow, AskReview, ChatRow, MultiPick, OtherQuestions, OwnWords, REVIEW_TITLE, SEVERAL_ANSWERS, picksBusy,
-  wordsBusy, type Picks, type Words,
+  AskEyebrow, AskReview, AskTabs, ChatRow, MultiPick, OtherQuestions, OwnWords, REVIEW_TITLE, SEVERAL_ANSWERS,
+  escapeHidesOnly, keyed, lit, ownWordsRow, picksBusy, wordsBusy, type Picks, type Words,
 } from './AskParts';
+import { keyTabs, multiKeys, questionKeys, reviewKeys, rowKey, type KeyScreen } from './askKeys';
+import { useAskKeys } from './useAskKeys';
 import './chat.css';
 
 /** The way out of a question this app cannot render: open the terminal, or
@@ -90,6 +93,9 @@ export function EnvelopeSheet({
   onHide,
   onSelectOption,
   onOpenTerminal,
+  tabbing = false,
+  picksHeld = false,
+  onTab,
 }: {
   id: string;
   ask: HookAsk;
@@ -109,6 +115,12 @@ export function EnvelopeSheet({
   onHide: () => void;
   onSelectOption: (optionIndex: number) => void;
   onOpenTerminal?: () => void;
+  /** Decision `ask-dialog-tab-route`: a tab move is under way (held by the parent, which sends it). */
+  tabbing?: boolean;
+  /** The boxes were changed here and not committed, so a tab move waits (`picksUncommitted`). */
+  picksHeld?: boolean;
+  /** Move the pane to another tab: `prev`/`next`, `submit`, or question tab k with `from` the tab showing (1-based). */
+  onTab?: (to: DialogTabTarget, from?: number) => void;
 }): ReactNode {
   // Deny's own busy flag: interrupt is not "answering an option" (there is no
   // optionIndex for Escape), so it can't reuse `answering` — but it disables
@@ -121,7 +133,7 @@ export function EnvelopeSheet({
   // multiSelect commit (D-5091).
   const sendingWords = wordsBusy(words.call);
   const picking = picksBusy(picks.call);
-  const busy = answering !== null || denying || sendingWords || picking;
+  const busy = answering !== null || denying || sendingWords || picking || tabbing;
   // D-5089: WHICH question, before anything about it. The hook writes every question of an ask at once and keeps the
   // envelope until the tool call ends, while the pane paints one question at a time and then the review screen. So
   // the sheet answers the question the PANE is painting (`liveQuestion`: labels first, a unique correspondence winning
@@ -229,11 +241,56 @@ export function EnvelopeSheet({
     <TerminalCta onOpen={openTerminal} onLater={close} />
   );
 
+  // D-5090/D-5091: the live question's free-text row, Chat row and boxes, read only while it IS the live menu.
+  const pane = questions !== null && live !== null && dialog !== null ? dialog : null;
+  const shownOptions = questions === null ? 0 : questions.questions[shown]!.options.length;
+  const slot = pane !== null ? freeTextSlot(pane, shownOptions) : { kind: 'none' as const };
+  const chat = pane !== null ? chatRow(pane) : undefined;
+  const boxes = pane?.multi;
+  // `n of N` only for a question the pane is painting (live) or names (its title): the fallback to question 1 is a
+  // display, not a position, and a pane on another ask entirely would make "1 of N" a guess (D-5089).
+  const placed = live ?? named;
+  // Decisions `ask-sheet-keyboard-model` and `ask-tab-strip`: the pane's tab row, where the sheet is on it (the review,
+  // or the question it is showing by the pane), and the keys over the screen showing. Worked out before any branch
+  // returns, since the hook runs on every render. Nothing is keyed while the sheet cannot answer what it shows.
+  const tabRow = questions !== null && dialog !== null ? parseAskTabs(dialog.raw) : null;
+  const tabs = keyTabs(tabRow?.tabs.length ?? null, review !== null ? null : placed, review !== null, picksHeld);
+  const reviewAt = review === null ? null : reviewRows(review);
+  const keyScreen: KeyScreen | null = reviewAt !== null ? reviewKeys(reviewAt.submit, reviewAt.cancel, tabs)
+    : pane === null ? null
+      : boxes !== undefined ? multiKeys(boxes.options.map((o) => o.index), tabs)
+        : questionKeys(
+          Array.from({ length: shownOptions }, (_, k) => k + 1),
+          ownWordsRow(slot, words.text, words.call),
+          chat?.index ?? null,
+          tabs,
+        );
+  const cursor = dialog === null ? null : dialog.multi !== undefined ? dialog.multi.cursor : dialog.selectedIndex;
+  const keys = useAskKeys({
+    screenId: dialog === null ? null : `${dialog.id}:${shown}`,
+    screen: keyScreen,
+    start: typeof cursor === 'number' ? rowKey(cursor) : cursor === 'commit' ? 'commit' : null,
+    open,
+    onAnswer: onSelectOption,
+    onToggle: picks.onToggle,
+    onTab: (to) => onTab?.(to),
+  });
+  const strip = tabRow !== null && onTab !== undefined && (
+    <AskTabs
+      tabs={tabRow.tabs}
+      active={review !== null ? null : placed}
+      onReview={review !== null}
+      held={picksHeld}
+      busy={busy}
+      onGo={(to) => onTab(to, placed === null ? undefined : placed + 1)}
+    />
+  );
+
   if ('approval' in ask) {
     const { tool, summary } = ask.approval;
     const allowing = answering === 1;
     return (
-      <Sheet open={open} onClose={close} eyebrow="claude is asking" title={tool}>
+      <Sheet open={open} onClose={close} onEscapeKeyDown={escapeHidesOnly} eyebrow="claude is asking" title={tool}>
         <div data-source="hook" className="ask-envelope">
           <p className="dlg-copy">{summary}</p>
           {!canAnswer && (
@@ -276,13 +333,15 @@ export function EnvelopeSheet({
   // the review is the whole ask's.
   if (review !== null) {
     return (
-      <Sheet open={open} onClose={close} eyebrow={<AskEyebrow />} title={REVIEW_TITLE}>
-        <div data-source="hook" className="ask-envelope">
+      <Sheet open={open} onClose={close} onEscapeKeyDown={escapeHidesOnly} eyebrow={<AskEyebrow />} title={REVIEW_TITLE}>
+        <div data-source="hook" className="ask-envelope" ref={keys.root}>
+          {strip}
           <AskReview
             dialog={review}
             answering={answering}
-            locked={sendingWords || picking}
+            locked={sendingWords || picking || tabbing}
             onAnswer={onSelectOption}
+            keys={keys}
           />
         </div>
       </Sheet>
@@ -296,25 +355,19 @@ export function EnvelopeSheet({
   // sheet has no way to route safely; each becomes tappable when the pane paints it.
   const q = ask.questions[shown]!; // isUsableAsk (the caller's guard) proves question 1 exists
   const count = ask.questions.length;
-  // D-5090: the live question's free-text row, at n + 1 under its n options, and the pane's `Chat about this` row. Read
-  // only while the question IS the live menu: an unmatched one is answered in the terminal (the CTA above says so).
-  const pane = live !== null && dialog !== null ? dialog : null;
-  const slot = pane !== null ? freeTextSlot(pane, q.options.length) : { kind: 'none' as const };
-  const chat = pane !== null ? chatRow(pane) : undefined;
-  // D-5091: the live question's boxes, when it is a multiSelect one the pane carries as `Dialog.multi`. They take the
-  // option rows' place; such a question has no own-words region here (its free text is the terminal's in v1) and no
-  // Chat row (`Dialog.multi` carries none).
-  const boxes = pane?.multi;
-  // `n of N` only for a question the pane is painting (live) or names (its title): the fallback to question 1 is a
-  // display, not a position, and a pane on another ask entirely would make "1 of N" a guess (D-5089).
-  const placed = live ?? named;
+  // D-5090: the live question's free-text row, at n + 1 under its n options, and the pane's `Chat about this` row (`slot`
+  // and `chat`, above), read only while the question IS the live menu: an unmatched one is answered in the terminal
+  // (the CTA above says so). D-5091: its boxes (`boxes`) take the option rows' place when it is a multiSelect question
+  // the pane carries as `Dialog.multi`; such a question has no own-words region here (its free text is the terminal's
+  // in v1) and no Chat row (`Dialog.multi` carries none).
   const eyebrow = (
     <AskEyebrow header={q.header} progress={count > 1 && placed !== null ? { n: placed + 1, of: count } : undefined} />
   );
 
   return (
-    <Sheet open={open} onClose={close} eyebrow={eyebrow} title={q.question}>
-      <div data-source="hook" className="ask-envelope">
+    <Sheet open={open} onClose={close} onEscapeKeyDown={escapeHidesOnly} eyebrow={eyebrow} title={q.question}>
+      <div data-source="hook" className="ask-envelope" ref={keys.root}>
+        {strip}
         {/* Three different dead ends, and the copy must not confuse them. An
             unmatched question is TRANSIENT — the pane can catch up, and then
             the rows below become tappable — so "wait" is honest advice. An
@@ -361,7 +414,8 @@ export function EnvelopeSheet({
             dialogId={pane.id}
             copy={q.options}
             picks={picks}
-            locked={answering !== null || sendingWords}
+            locked={answering !== null || sendingWords || tabbing}
+            keys={keys}
           />
         ) : (
           <>
@@ -369,13 +423,20 @@ export function EnvelopeSheet({
               {q.options.map((o, oi) => {
                 const idx = oi + 1;
                 const waiting = answering === idx;
+                // The keyboard's highlight wears the cursor, as on the pane (decision `ask-sheet-keyboard-model`); a
+                // question the sheet cannot answer shows none.
+                const selected = keyScreen !== null && lit(keys, idx);
                 return (
                   <OptionRow
                     key={`${shown}:${oi}`}
+                    {...(keyScreen === null ? {} : keyed(keys, idx))}
+                    selected={selected}
+                    glyph={keyScreen === null ? undefined : selected ? '❯' : ''}
+                    enter={!waiting && selected ? '↵' : undefined}
                     index={idx}
                     label={o.label}
                     sublabel={o.description}
-                    disabled={!canAnswer || answering !== null || sendingWords || picking}
+                    disabled={!canAnswer || answering !== null || sendingWords || picking || tabbing}
                     busy={waiting}
                     onClick={() => onSelectOption(idx)}
                     marker={waiting ? <span className="opt-wait">answering…</span> : undefined}
@@ -386,10 +447,22 @@ export function EnvelopeSheet({
             {/* Own words, through the pane's free-text row (D-5090), then the pane's Chat row, saying what it does. A
                 send under way stays on screen even if the pane stops matching mid-call. */}
             {(pane !== null || sendingWords) && (
-              <OwnWords slot={slot} chat={chat?.label ?? null} words={words} locked={answering !== null || picking} />
+              <OwnWords
+                slot={slot}
+                chat={chat?.label ?? null}
+                words={words}
+                locked={answering !== null || picking || tabbing}
+                keys={keyScreen === null ? undefined : keys}
+              />
             )}
             {chat && (
-              <ChatRow row={chat} answering={answering} disabled={busy} onAnswer={onSelectOption} />
+              <ChatRow
+                row={chat}
+                answering={answering}
+                disabled={busy}
+                onAnswer={onSelectOption}
+                keys={keyScreen === null ? undefined : keys}
+              />
             )}
           </>
         )}

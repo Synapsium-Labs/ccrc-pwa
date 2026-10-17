@@ -81,6 +81,46 @@ export const REVIEW_HEADING_RE = /^review your answers$/i;
  *  capture cannot say which tab is up. */
 export const ASK_TAB_ROW_RE = /^←.*→$/;
 
+/** One question's tab on that row: its header, and whether it is answered (`☒`) or not yet (`☐`). */
+export interface AskTab {
+  readonly header: string;
+  readonly answered: boolean;
+}
+
+/** The tab row an ask paints (`parseAskTabs`): its question tabs in order, and the `✔ Submit` tab after them. */
+export interface AskTabs {
+  readonly tabs: readonly AskTab[];
+}
+
+/** One tab on the tab row: a box, one space, the header. */
+const ASK_TAB_RE = /^([☐☒]) (.+)$/;
+
+/** The row's last tab, which reaches the review screen. */
+const ASK_SUBMIT_TAB = '✔ Submit';
+
+/**
+ * The tab row of the ask on screen (decision `ask-dialog-tab-route`), read off a plain capture: `←`, one `☐`/`☒ header`
+ * per question, `✔ Submit`, `→`, the tabs two or more spaces apart (measured on 2.1.296 at 220, 80 and 49 columns, and
+ * on 2.1.302). Null when the screen paints no such row: a one-question single-select ask paints none (2.1.296,
+ * `ask-user-question-real`), and a row that does not read exactly this way (wrapped, cut, or another `← … →` line) is
+ * no tab row, so nothing is moved on a guess. The LAST such row counts, since the live menu sits at the foot of the pane.
+ * The active tab is marked by colour alone, so this never says which tab is up.
+ */
+export function parseAskTabs(raw: string): AskTabs | null {
+  const lines = raw.split('\n').map((l) => l.trim()).filter((l) => ASK_TAB_ROW_RE.test(l));
+  const row = lines.at(-1);
+  if (row === undefined) return null;
+  const cells = row.slice(1, -1).split(/\s{2,}/).map((c) => c.trim()).filter((c) => c !== '');
+  if (cells.at(-1) !== ASK_SUBMIT_TAB) return null;
+  const tabs: AskTab[] = [];
+  for (const cell of cells.slice(0, -1)) {
+    const m = ASK_TAB_RE.exec(cell);
+    if (m === null) return null;
+    tabs.push({ header: m[2]!, answered: m[1] === '☒' });
+  }
+  return tabs.length > 0 ? { tabs } : null;
+}
+
 /** The review screen's two rows, as the option indexes the pane printed them under (`Submit answers`, `Cancel`). */
 export interface ReviewRows {
   readonly submit: number;

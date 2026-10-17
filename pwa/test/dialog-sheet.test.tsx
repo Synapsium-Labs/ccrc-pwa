@@ -3013,10 +3013,12 @@ describe('the sheet can always submit (the 2026-10-16 report)', () => {
     field.remove();
   });
 
-  it('digits on a question screen are not the review\'s keys', () => {
+  // Decision `ask-sheet-keyboard-model` (PR 2) supersedes this case's first form ("digits on a question are not the
+  // review's keys"): on a question a digit answers that option at once, as Claude Code's does.
+  it('a digit on a question answers that option, as in Claude Code', () => {
     const spy = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
     render296(q2());
     fireEvent.keyDown(document.body, { key: '2' });
-    expect(spy).not.toHaveBeenCalled();
+    expect(spy).toHaveBeenCalledWith(SESSION_ID, q2().id, 2);
   });
 });

@@ -5,7 +5,7 @@
 import type { AccountsResponse, AckAnswer, ApplyUpdateBody, AutoMode, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, MoveSkipWhy, NotifyEvent, NotifyMode, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, RollbackUpdateBody, RouteField, RouteFields, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, UpdateChannel, UpdateRouteError, UpdatesView, WsAudit } from '../../../shared/api';
 import { raiseAuthLostFrom } from './auth';
 import { ARCHIVE_REFUSALS, isArchiveRefusal, type ArchiveAnswer, type ArchiveBody, type ArchiveRefusal } from '../../../shared/api';
-import type { Dialog, DialogAnswered } from '../../../shared/api';
+import type { Dialog, DialogAnswered, DialogTabRequest } from '../../../shared/api';
 
 import { isNodeRole } from '../../../shared/node-role';
 import { TOKEN_TRANSPORTS } from '../../../shared/agent-protocol';
@@ -1076,6 +1076,11 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  `shared/api.ts`: empty, repeated, or outside 1..9), and 409 with a `DialogMultiRefuseCode` otherwise. */
     answerDialogMulti: async (id: string, dialogId: string, optionIndexes: readonly number[]): Promise<DialogAnswered> =>
       answered(await postRead<unknown>(`${sid(id)}/dialog/multi`, ANSWERED, { dialogId, optionIndexes })),
+    /** Move an AskUserQuestion's PANE to another tab (decision `ask-dialog-tab-route`): `prev`/`next` (the arrow keys),
+     *  `submit` (the review), or question tab k with the tab the sheet believes is up as `from`. Arrows only, each step
+     *  proved by the server. The 200 carries the screen the pane landed on as `next`, read like an answer's. */
+    answerDialogTab: async (id: string, req: DialogTabRequest): Promise<DialogAnswered> =>
+      answered(await postRead<unknown>(`${sid(id)}/dialog/tab`, ANSWERED, req)),
     /** Answer a hook-reported question by option index. `askKey` is minted
      *  server-side and carried verbatim: the server re-reads the CURRENT
      *  envelope and refuses unless the key still matches, so this can only ever

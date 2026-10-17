@@ -27,6 +27,7 @@ import {
   REVIEW_HEADING_RE,
   REVIEW_READY_RE,
   reviewRows,
+  type AskTab,
 } from '../../../shared/ask-menu';
 
 /** The questions of an AskUserQuestion envelope (`HookAsk`'s question arm). */
@@ -313,4 +314,21 @@ export function wantedTicks(multi: DialogMulti, ticked: readonly number[]): numb
  *  (`COMMIT_LAST_RE` on the commit row's word)? */
 export function commitsToReview(multi: DialogMulti): boolean {
   return COMMIT_LAST_RE.test(multi.commit.trim());
+}
+
+/** Which tab of the pane's tab row is the question with this `header` (decision `ask-tab-strip`): its 0-based place when
+ *  exactly one tab carries it, else null. The pane marks its active tab by colour alone, so the scraped sheet knows its
+ *  place only through the transcript's header for the question, and two tabs with one header say nothing. */
+export function headerTab(tabs: readonly AskTab[], header: string | undefined): number | null {
+  if (header === undefined || header.trim() === '') return null;
+  const at = tabs.flatMap((t, i) => (t.header === header.trim() ? [i] : []));
+  return at.length === 1 ? at[0]! : null;
+}
+
+/** Has the sheet changed this multiSelect question's boxes without committing them (`picked` against the pane's
+ *  ticks)? A tab move leaves the pane's ticks as they are, so it would lose them: ←/→ and the tab strip wait. */
+export function picksUncommitted(multi: DialogMulti, picked: readonly number[] | null): boolean {
+  if (picked === null) return false;
+  const pane = paneTicks(multi);
+  return picked.length !== pane.length || picked.some((k) => !pane.includes(k));
 }

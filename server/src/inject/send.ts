@@ -2,10 +2,11 @@ import type { Tmux } from '../exec.js';
 import { autoContinueArmed, editHintShown, freeTextRow, hasMenu, parseDialog, turnRunning } from '../pane/dialog.js';
 import type { KeyedQueue } from './queue.js';
 import {
-  composePrompt, isDialogMultiIndexes, isDialogText, MAIL_ENVELOPE_FENCE,
-  type Dialog, type DialogAnswered, type DialogMultiRefuseCode, type DialogRefuseCode, type DialogTextRefuseCode,
+  composePrompt, isDialogMultiIndexes, isDialogTab, isDialogText, MAIL_ENVELOPE_FENCE,
+  type Dialog, type DialogAnswered, type DialogMultiRefuseCode, type DialogRefuseCode, type DialogTabMoved,
+  type DialogTabRefuseCode, type DialogTextRefuseCode,
 } from '../../../shared/api.js';
-import { FREE_TEXT_PLACEHOLDER_RE } from '../../../shared/ask-menu.js';
+import { CHAT_ABOUT_ROW_RE, FREE_TEXT_PLACEHOLDER_RE, parseAskTabs, reviewRows } from '../../../shared/ask-menu.js';
 
 export interface SendDeps {
   tmux: Tmux;
@@ -1757,6 +1758,127 @@ export function answerDialogMulti(
     }
     if (!moved) return { ok: false, error: 'commit-failed' };
     return { ok: true, ...(await settleNext(d, id, (now) => now.title === dialog.title, sleep)) };
+  });
+}
+
+/** `moveDialogTab`'s answer. The refusals are `DialogTabRefuseCode` (`shared/api.ts`), where each is described. */
+export type DialogTabResult = DialogTabMoved | { ok: false; error: DialogTabRefuseCode };
+
+/** Where a screen's ❯ cursor rests: the printed row on a single-select question or the review, `Dialog.multi`'s
+ *  reading on a multiSelect one. */
+const cursorOf = (dialog: Dialog): number | 'commit' | null =>
+  dialog.multi !== undefined ? dialog.multi.cursor : dialog.selectedIndex;
+
+/**
+ * Is the cursor somewhere Claude Code swallows ←/→? Measured on 2.1.296 and 2.1.302: on the free-text row, empty or
+ * holding text, the arrows move its text caret (the screen stays byte for byte), and on `Chat about this` they do
+ * nothing either. On a multiSelect question, anything but one of its own boxes (the free-text box, the commit row,
+ * Chat), where only the boxes were measured to pass → on.
+ */
+function cursorOffOptions(pane: string, dialog: Dialog): boolean {
+  if (dialog.multi !== undefined) {
+    const at = dialog.multi.cursor;
+    return typeof at !== 'number' || !dialog.multi.options.some((o) => o.index === at);
+  }
+  const free = freeTextRow(pane);
+  if (free !== null && dialog.selectedIndex >= free) return true;
+  const row = dialog.options.find((o) => o.index === dialog.selectedIndex);
+  return row !== undefined && CHAT_ABOUT_ROW_RE.test(row.label.trim());
+}
+
+/**
+ * Walk the cursor Up to row 1, one key at a time, capturing after each: the free-text row and Chat sit below the
+ * options, and a multiSelect question's commit row is unnumbered, so the count is read off the screen rather than worked
+ * out. Up only moves the cursor (typed text survives stepping off, 2.1.300 `walk-4-stepped-off`, and 2.1.296), and it is
+ * never pressed on row 1, where it would wrap to the free-text row. The landing is the proof: the same question
+ * (`title`) with the cursor on row 1. The returned screen is that landing, or null when the walk did not get there.
+ */
+async function walkToFirstRow(
+  d: SendDeps, id: string, title: string, steps: number, sleep: (ms: number) => Promise<void>,
+): Promise<Dialog | null> {
+  for (let i = 0; i <= steps; i++) {
+    const pane = await d.tmux.capture(id);
+    const now = pane === null ? null : parseDialog(pane);
+    if (now === null || now.title !== title) return null;
+    if (cursorOf(now) === 1) return now;
+    if (i === steps) return null;
+    await d.tmux.sendKey(id, 'Up');
+    await sleep(WALK_STEP_MS);
+  }
+  return null;
+}
+
+/**
+ * Move an AskUserQuestion's PANE to another tab (decision `ask-dialog-tab-route`, `POST /api/sessions/:id/dialog/tab`):
+ * ←/→ as Claude Code's own keys, so the sheet's arrows and its tab strip move the one thing that can answer, and the
+ * sheet follows the screen it lands on. Measured on 2.1.296 (220x50) and 2.1.302: → from the last question is the
+ * review (even with a question skipped, which the review then warns about); ← on question 1 and → on the review do
+ * nothing; a revisited question marks its earlier answer ✔ and puts the cursor back on row 1.
+ *
+ * Each step on a fresh capture, and never Enter, Tab or a digit (Enter on an empty free-text row declines the whole ask):
+ *  1. `isDialogTab` or `bad-request`, before the pane is touched.
+ *  2. The menu is the one the caller was shown (`stale-dialog`), it paints a tab row (`parseAskTabs`, `no-tabs`), and it
+ *     is a screen whose cursor can be read: parsed, or a multiSelect question (`unparsed-dialog`).
+ *  3. The presses. The review is told by its own rows (`reviewRows`), so there the current tab is known: one past the
+ *     last question. On a question it is not (colour alone marks it), so a numbered target takes the caller's `from`.
+ *     → on the review is refused `no-move` with no key; a target already up answers ok with no key.
+ *  4. Off the free-text row first: where the cursor rests on it or below it, ←/→ are swallowed, so it is walked Up to
+ *     row 1 and the landing proved (`walk-failed` otherwise, with no arrow pressed).
+ *  5. One arrow at a time, each proved by `settleNext`: a screen with another id, seen twice in a row. None within the
+ *     budget is `no-move`, no menu at all is `menu-gone`. `submit` presses → until the review, at most once per tab.
+ */
+export function moveDialogTab(d: SendDeps, id: string, body: unknown): Promise<DialogTabResult> {
+  if (!isDialogTab(body)) return Promise.resolve({ ok: false, error: 'bad-request' });
+  const { dialogId, to, from } = body;
+  const sleep = d.sleep ?? defaultSleep;
+  return d.queue.run(id, async (): Promise<DialogTabResult> => {
+    const pane = await d.tmux.capture(id);
+    if (pane === null) return { ok: false, error: 'not-alive' };
+    const dialog = parseDialog(pane);
+    if (!dialog || dialog.id !== dialogId) return { ok: false, error: 'stale-dialog' };
+    const row = parseAskTabs(pane);
+    if (row === null) return { ok: false, error: 'no-tabs' };
+    const onReview = reviewRows(dialog) !== null;
+    if (!onReview && !dialog.parsed && dialog.multi === undefined) return { ok: false, error: 'unparsed-dialog' };
+
+    const review = row.tabs.length + 1;
+    let key: 'Left' | 'Right';
+    let count: number;
+    if (to === 'prev') {
+      key = 'Left';
+      count = 1;
+    } else if (to === 'next' || to === 'submit') {
+      if (onReview) return to === 'submit' ? { ok: true, next: dialog } : { ok: false, error: 'no-move' };
+      key = 'Right';
+      count = to === 'next' ? 1 : row.tabs.length;
+    } else {
+      const at = onReview ? review : from;
+      if (to > row.tabs.length || at === undefined || at > review) return { ok: false, error: 'bad-request' };
+      if (to === at) return { ok: true, next: dialog };
+      key = to < at ? 'Left' : 'Right';
+      count = Math.abs(to - at);
+    }
+
+    let now: Dialog = dialog;
+    if (!onReview && cursorOffOptions(pane, dialog)) {
+      // A multiSelect reading's numbered rows are its boxes (`Dialog.options` is empty there): below them sit the
+      // free-text box, the commit row and Chat, so the walk from Chat is at most boxes + 2 Ups.
+      const rows = dialog.multi !== undefined ? dialog.multi.options.length : dialog.options.length;
+      const landed = await walkToFirstRow(d, id, dialog.title, rows + 3, sleep);
+      if (landed === null) return { ok: false, error: 'walk-failed' };
+      now = landed;
+    }
+
+    for (let i = 0; i < count; i++) {
+      await d.tmux.sendKey(id, key);
+      const prev = now.id;
+      const moved = await settleNext(d, id, (s) => s.id === prev, sleep);
+      if (moved.next === undefined) return { ok: false, error: 'no-move' };
+      if (moved.next === null) return { ok: false, error: 'menu-gone' };
+      now = moved.next;
+      if (to === 'submit' && reviewRows(now) !== null) return { ok: true, next: now };
+    }
+    return to === 'submit' ? { ok: false, error: 'no-move' } : { ok: true, next: now };
   });
 }
 
