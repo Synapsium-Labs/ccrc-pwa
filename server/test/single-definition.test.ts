@@ -6249,3 +6249,42 @@ describe('the turn verdict\'s reads and rule each have one home (D-5238)', () =>
     expect(dispatch).not.toMatch(/readLiveStateMeasured|readLiveState\b|panePid\(/);
   });
 });
+
+// D-5232's mechanism (plan docs/superpowers/plans/2026-10-16-working-state-and-interruptions.md, Task 9b). APPENDED at
+// the very end, for the reason the notes above state. THE SERVER'S CAPABILITY WORDS (`SERVER_CAPS`, derived from
+// `SERVER_CAP_MAP`), the file they are recorded in (`SERVER_CAPS_FILE`) and its lease (`SERVER_CAPS_LEASE_S`) have one
+// TypeScript home, `shared/api.ts`: `/health` advertises the list and `server/src/update/serverCaps.ts` writes it. The
+// bash spellings (`ccd/ccd-update-sync`'s grammar and file name; from Tasks 2 and 10, `ccd/session-hook.sh`'s file
+// name, lease and grammar) are documented second copies held equal by tests that iterate over these values
+// (`ccd-update-sync.test.ts`'s shared table), not by this text scan.
+describe('the server\'s capability words, their file and its lease are declared once, in shared/api.ts (D-5232)', () => {
+  const VALUE_DEF = (name: string): RegExp => new RegExp(`^\\s*(?:export\\s+)?(?:const|let|var)\\s+${name}\\b`, 'm');
+  // The seed word, quoted on a code line: a hand-copied list carries it.
+  const WORD = /(['"`])dispatch-live-gate-v1\1/;
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+
+  it('CONTROL: the patterns see a declaration and a quoted copy, and not an import, a use or prose', () => {
+    expect(VALUE_DEF('SERVER_CAPS').test('export const SERVER_CAPS: readonly ServerCap[] = [];')).toBe(true);
+    expect(VALUE_DEF('SERVER_CAPS').test("import { SERVER_CAPS } from '../../shared/api.js';")).toBe(false);
+    expect(VALUE_DEF('SERVER_CAPS').test('const SERVER_CAPS_FILE = 1;')).toBe(false);
+    expect(VALUE_DEF('SERVER_CAPS_LEASE_S').test('if (age > SERVER_CAPS_LEASE_S) return;')).toBe(false);
+    expect(WORD.test("const caps = ['dispatch-live-gate-v1'];")).toBe(true);
+    expect(stallCodeText('// the dispatch-live-gate-v1 word, in prose\nconst x = 1;')).not.toMatch(WORD);
+  });
+
+  it('declares SERVER_CAP_MAP, SERVER_CAPS, SERVER_CAPS_FILE and SERVER_CAPS_LEASE_S exactly once, in shared/api.ts', () => {
+    for (const name of ['SERVER_CAP_MAP', 'SERVER_CAPS', 'SERVER_CAPS_FILE', 'SERVER_CAPS_LEASE_S']) {
+      expect(ALL.filter((f) => VALUE_DEF(name).test(readFileSync(f, 'utf8'))).map(rel), name).toEqual(['shared/api.ts']);
+    }
+  });
+
+  it('quotes the seed word on a code line in shared/api.ts and nowhere else across the four roots', () => {
+    expect(holders(WORD)).toEqual(['shared/api.ts']);
+  });
+
+  it('the grammar\'s three functions are defined once, in shared/api.ts', () => {
+    for (const name of ['renderServerCaps', 'parseServerCaps', 'isServerCapWord']) {
+      expect(holders(new RegExp(`\\bfunction ${name}\\b|\\bconst ${name}\\s*=`)), name).toEqual(['shared/api.ts']);
+    }
+  });
+});
