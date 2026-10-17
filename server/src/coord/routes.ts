@@ -136,7 +136,8 @@ class CoordMutex {
  * transport failure (its retry then meets `bad-transition`). So the wait is at most HALF that cap, leaving the other
  * half for the two decisions around it (the `ensure`, the registry reads, the hold, `sendPrompt`'s `/clear` with its
  * echo polling, and any queueing behind other dispatches on the mutex). `dispatch-live-gate.test.ts` reads `-m` from
- * `ccd/ccrc-api` and holds `2 × DISPATCH_SPAWN_WAIT_MS` within it.
+ * `ccd/ccrc-api` and holds `2 × DISPATCH_SPAWN_WAIT_MS` within it. The rule is judged on the resumed path's measured
+ * latency, the only path that waits (D-5276).
  */
 export const DISPATCH_SPAWN_WAIT_MS = 15_000;
 export const DISPATCH_SPAWN_POLL_MS = 2_000;
