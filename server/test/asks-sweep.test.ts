@@ -52,7 +52,8 @@ const T0 = 1_785_400_000_000;
 // production constant fails THIS test. Importing `ASK_GRACE_MS`/
 // `ASK_ANSWERING_MAX_MS` now that they are exported would make the test
 // track whatever `askwindow.ts` says rather than pin what it must say.
-const ASK_GRACE_MS = 120_000;
+// D-5295: 180 s by the operator's ruling of 2026-10-17 ("180 s, late answer wins").
+const ASK_GRACE_MS = 180_000;
 const ASK_SWEEP_MS = 10_000;
 const ASK_ANSWERING_MAX_MS = 60_000;
 
@@ -192,6 +193,22 @@ async function mintHold(f: ReturnType<typeof fixture>, childId: string, parentId
 }
 
 describe('sweepAsks — the release sweep (Task 7)', () => {
+  // D-5295 (plan Task 6): the window is 180 s, counted from the mint. A sweep at 179 s keeps the hold; a sweep
+  // at exactly 180 s fires it (`held.until > now` keeps, so the deadline itself releases). Two fixtures, one sweep
+  // each: the sweep's own `ASK_SWEEP_MS` throttle would skip a second sweep one second after the first.
+  it('does not release at 179 s and does at 180 s (D-5295)', async () => {
+    for (const [offset, fires] of [[179_000, 0], [180_000, 1]] as const) {
+      const sent: PushPayload[] = [];
+      const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+      at(T0);
+      const f = fixture({ push, sessions: ['ccrc-pwa/cc-a'] });
+      await mintHold(f, 'cc-a', 'coord-1');
+      at(T0 + offset);
+      await f.w.sweepAsks();
+      expect(sent.filter((p) => p.tag === askTag('cc-a')), `swept at +${offset} ms`).toHaveLength(fires);
+    }
+  });
+
   it('fires the held payload verbatim once the window lapses', async () => {
     const sent: PushPayload[] = [];
     const push = { notify: async (p: PushPayload) => { sent.push(p); } };
