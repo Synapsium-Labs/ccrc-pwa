@@ -1825,6 +1825,12 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       v0.0.233 (19:15, #503) and v0.0.235 (19:39, #504) released. STATUS: fleet and server v0.0.234, newest
       v0.0.235, intent dev/auto=stable, backups fleet 144M/server 809M, disk free fleet 214G/work volume 84G/server
       32G, no anomalies.
+    - **2026-10-17 20:58 UTC:** both boxes moved v0.0.234 → v0.0.237 by the operator's console requests (fleet
+      20:50:10, server 20:51:42; `from: pwa`, `done`). v0.0.236 is #444 (wave 16), so both boxes now carry it; the
+      sweep that ran was v0.0.234's, so wave 16's sweep first runs on the next move. Doctor: fleet 35 passed, 6 warned,
+      0 failed; server 26 passed. The same four pre-failed supervisors were named and skipped. v0.0.238 and v0.0.239
+      released. STATUS: fleet and server v0.0.237, newest v0.0.239, intent dev/auto=stable, backups fleet 145M/server
+      815M, disk free fleet 213G/work volume 85G/server 32G, no anomalies.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
