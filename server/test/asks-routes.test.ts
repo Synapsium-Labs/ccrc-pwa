@@ -320,6 +320,36 @@ describe('POST /api/asks/:id/answer', () => {
     expect(good.json()).toEqual({ ok: true });
     expect(okAsk(coord.askById(id))!.state).toBe('answered');
   });
+
+  // D-5293: the parent's route reads the operator's body shape (`readAskAnswer`, `inject/ask.ts`, the reader
+  // `POST /api/sessions/:id/ask` reads), so `askKey`, the key the operator's route requires, is understood here too:
+  // the key the parent was shown must be the row's, or nothing is pressed.
+  it("accepts the operator's body shape: the row's own askKey beside optionIndexes presses the digit (D-5293)", async () => {
+    const { coord, id, calls } = await setup(Date.now());
+    const res = await answer(app!, id, { fromId: PARENT, fromUuid: PARENT_UUID, askKey: ASK_KEY, optionIndexes: [1] });
+    expect(res.statusCode).toBe(200);
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `=cc-${CHILD}:`, '2']]);
+    expect(okAsk(coord.askById(id))!.state).toBe('answered');
+  });
+
+  it('refuses ask-mismatch for an askKey that is not the row\'s, before any key, and the row stays held (D-5293, D-5368)', async () => {
+    const { coord, id, calls } = await setup(Date.now());
+    const res = await answer(app!, id,
+      { fromId: PARENT, fromUuid: PARENT_UUID, askKey: 'deadbeefdeadbeef', optionIndexes: [1] });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'ask-mismatch' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+    expect(okAsk(coord.askById(id))!.state).toBe('held');
+  });
+
+  it("400s an askKey that is not a string, as the operator's route does (D-5293)", async () => {
+    const { coord, id, calls } = await setup(Date.now());
+    const res = await answer(app!, id, { fromId: PARENT, fromUuid: PARENT_UUID, askKey: 7, optionIndexes: [1] });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, error: 'bad-request' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+    expect(okAsk(coord.askById(id))!.state).toBe('held');
+  });
 });
 
 /**

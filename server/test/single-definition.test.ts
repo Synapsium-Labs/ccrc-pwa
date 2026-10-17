@@ -6411,3 +6411,66 @@ describe('one tryHold decides every ask hold (D-5290)', () => {
     expect(watch).toMatch(/const dead = ids\.filter\(\(id\) => claimantMeasuredDead\(/);
   });
 });
+
+// D-5293 (plan docs/superpowers/plans/2026-10-17-coordinator-first-routing.md, Task 8; spec §5.3). APPENDED. The
+// parent's hold and the operator's answer route read ONE eligibility rule, `answerableAsk` in `server/src/askkey.ts`:
+// `askActions` (the hold's sole gate, D-2173) reads it and spells none of its tests, and `answerAsk` reads it before
+// the pane. Both routes that press through `answerAsk` read their body with ONE reader, `readAskAnswer` in
+// `server/src/inject/ask.ts`, and neither route respells the `optionIndexes` check. Code lines only (`stallCode`).
+describe('one eligibility rule and one answer body for the parent and the operator (D-5293)', () => {
+  const definesFn = (name: string): RegExp =>
+    new RegExp(`\\bfunction\\s+${name}\\b|\\b${name}\\s*=\\s*(?:\\(|function\\b|async\\b)`);
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  const INDEX_CHECK = /typeof\s+\w+\s*===\s*'number'/;
+  const ELIGIBILITY_TESTS = /\.questions\.length|\bmultiSelect\b|\.options\.length|\.label\.trim\(\)/;
+  /** The code between two literal anchors, both asserted, the closing one after the opening one. */
+  const between = (name: string, text: string, from: string, to: string): string => {
+    const a = text.indexOf(from);
+    expect(a, `${name}: the opening anchor is gone`).toBeGreaterThan(-1);
+    const b = text.indexOf(to, a + from.length);
+    expect(b, `${name}: the closing anchor is gone`).toBeGreaterThan(a);
+    return text.slice(a, b);
+  };
+
+  it('CONTROL: the patterns see a definition, an index check and an eligibility test, and pass over comments', () => {
+    expect(definesFn('answerableAsk').test('export function answerableAsk(ask) {')).toBe(true);
+    expect(definesFn('readAskAnswer').test('const readAskAnswer = (b) => b;')).toBe(true);
+    expect(definesFn('answerableAsk').test('if (!answerableAsk(ask)) return null;')).toBe(false);
+    expect(INDEX_CHECK.test("optionIndexes.every((n) => typeof n === 'number')")).toBe(true);
+    expect(ELIGIBILITY_TESTS.test('if (ask.questions.length !== 1) return null;')).toBe(true);
+    expect(ELIGIBILITY_TESTS.test('if (q.multiSelect === true) return null;')).toBe(true);
+    expect(stallCodeText('// q.multiSelect === true\nconst x = 1;')).not.toMatch(ELIGIBILITY_TESTS);
+  });
+
+  it('answerableAsk is defined in server/src/askkey.ts and readAskAnswer in server/src/inject/ask.ts, nowhere else', () => {
+    expect(holders(definesFn('answerableAsk'))).toEqual(['server/src/askkey.ts']);
+    expect(holders(definesFn('readAskAnswer'))).toEqual(['server/src/inject/ask.ts']);
+  });
+
+  it('askActions reads answerableAsk and spells none of its tests', () => {
+    const body = between('askActions', stallCode(path.join(ccrcRoot, 'server/src/askkey.ts')),
+      'export function askActions(', '\n}\n');
+    expect(body).toMatch(/\banswerableAsk\(ask\)/);
+    expect(body).not.toMatch(ELIGIBILITY_TESTS);
+  });
+
+  it('answerAsk reads answerableAsk before it captures the pane', () => {
+    const body = between('answerAsk', stallCode(path.join(ccrcRoot, 'server/src/inject/ask.ts')),
+      'export async function answerAsk(', '\n}\n');
+    const gate = body.indexOf('answerableAsk(hs.ask)');
+    expect(gate, 'answerAsk reads answerableAsk').toBeGreaterThan(-1);
+    expect(gate, 'and before the capture').toBeLessThan(body.indexOf('d.tmux.capture('));
+  });
+
+  it('both answer routes read their body with readAskAnswer and neither respells the index check', () => {
+    const operator = between('POST /api/sessions/:id/ask', stallCode(path.join(ccrcRoot, 'server/src/server.ts')),
+      "app.post('/api/sessions/:id/ask'", "app.get('/api/sessions/:id/commands'");
+    const parent = between('POST /api/asks/:id/answer', stallCode(path.join(ccrcRoot, 'server/src/coord/routes.ts')),
+      "app.post('/api/asks/:id/answer'", "app.post('/api/asks/:id/release'");
+    for (const [name, code] of [['operator', operator], ['parent', parent]] as const) {
+      expect(code, name).toMatch(/\breadAskAnswer\(/);
+      expect(code, name).not.toMatch(INDEX_CHECK);
+      expect(code, name).not.toMatch(/Array\.isArray\(\s*(?:body\.)?optionIndexes\b/);
+    }
+  });
+});
