@@ -1810,6 +1810,9 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     - **2026-10-17 16:58 UTC:** v0.0.227 released at 16:14:29 (#495, docs) and stays unapplied under `auto=stable`.
       STATUS: fleet and server v0.0.226, newest v0.0.227, intent dev/auto=stable, backups fleet 175M/server 801M,
       disk free fleet 214G/work volume 111G/server 32G, no anomalies.
+    - **2026-10-17 17:58 UTC:** v0.0.228 released at 17:38:41 (#497) and stays unapplied under `auto=stable`.
+      STATUS: fleet and server v0.0.226, newest v0.0.228, intent dev/auto=stable, backups fleet 175M/server 801M,
+      disk free fleet 214G/work volume 108G/server 32G, no anomalies.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
@@ -3806,6 +3809,12 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     new real-delay row passes, and it reds with the old flush, which also reds five old cases at load 107. The file is
     17 of 17 three times in a row at load 49 to 65. Before the fix it failed 5 and 4 of 16 at load 42. The advance
     is refused `review-in-flight` while review 568 is open, so that review reads the live tip `eee9001f1`.
+  - **17:15 UTC:** wave 18's prose commit `1065b9994` (mail 5992) records the T1 sets as ruled. It touches only the
+    plan, and run 517 is advanced at that tip.
+  - **18:00 UTC: B2 is proven on macOS.** On the full run on #441's branch (39050387114), `test-macos 3/4` is
+    green, so row 64 passes with D-5333. The run's other reds all come from the branch's base, which predates two
+    fixes on `main`: `pools-prose`'s README-size ratchet (`server 7/12`, `test-macos 1/4`; fixed by #440) and B1's
+    row-generation case (`test-macos 2/4`; fixed by #429). The merge after #410 takes both.
 
 ## Carried constraints
 
