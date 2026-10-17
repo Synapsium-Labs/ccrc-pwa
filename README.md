@@ -6367,8 +6367,8 @@ while the root does not resolve (remote mode) that includes every main checkout,
   no-spool class includes the lost-hour rule's one carve-out: an hour recorded `directory-absent` for a session the lane never read a
   spool of (no cursor row, no measured hour), and any `capability-absent` hour, vetoes nothing, so rung 4 links across both.
   A session born and gone between two census passes (one census interval, which a loaded box or a stalled tick stretches) is never
-  listed or read, so rung 4 links across it; the operator placed closing that, by listing the spool root, in wave 4. The lane holds
-  what it knows it missed: after a restart, recovery or outage, a candidate whose creator began by its ready instant is unmeasured.
+  listed or read, so rung 4 links across it; the operator placed closing that, by listing the spool root, in wave 4. After a restart,
+  recovery or outage, a candidate whose creator began by the lane's ready instant, or within the clock skew after it, is unmeasured.
 - **Three more limits the soak reader must know.**
   - *An owner with no generation file* (`$REG/<id>.generation` absent) writes no spool, because the hook needs that file, but the
     carve-out does not reach it: its hours read `incarnation-unmeasured` with the reason `absent`, so each one vetoes every repository.
