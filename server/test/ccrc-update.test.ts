@@ -57,7 +57,7 @@ import { reportFrom, type NodeFileRead } from '../src/update/inventory.js';
 import { COLLECT_LANE_JOURNAL_BASENAME } from '../src/coord/collectLaneJournal.js';
 import {
   SPINE_CONTAINMENT_PROBE, spineRunCalls, adoptPlantedSystemd, assertSpineFrontContained, spineSystemctlArms,
-  spineSystemdRun, plantLiveShape, foreignSnapshot, stateCallsNaming,
+  spineSystemdRun, codexRoster, externalCodexRow, plantExternalLauncher, stateCallsNaming,
 } from './codexLaneFixture.js';
 import { docsProbeProgram } from './docsHelperPy.js';
 import { DOCS_INDEX_READY } from './docsIndexFixtures.js';
@@ -13050,33 +13050,27 @@ describe('ccrc update: the codex steps ride the staged spine (Plan 2b-2 Task 10)
   });
 });
 
-// Plan 3a Task 10 — the merge is itself an inert rollout: the REAL update onto
-// this tree, over the fleet box's live shape (codexLaneFixture's `plantLiveShape`),
-// on the box the "codex steps ride the staged spine" describe above uses.
-describe('Plan 3a Task 10 — ccrc update onto this tree over today\'s live shape', () => {
-  itLinux('a real update leaves every foreign byte and link, names no ccgpt- unit in a state-changing verb, and builds nothing', () => {
-    const home = freshUpdateBox('ccrc-update-rehearsal-live-');
+// Plan 3a Task 10, re-seated by Plan 4: the merge is itself an inert rollout. The REAL update onto this tree, on a box
+// whose roster has no codex lane — its one GPT-shaped row, `ext-a`, is `external` (the shape the GPT lanes had before
+// their flip) and has the launcher such a row owes — on the box the "codex steps ride the staged spine" describe above
+// uses. The other repository's files it once ran over (`plantLiveShape`) are retired with that repository's lane, and
+// so is the snapshot of them.
+describe('Plan 3a Task 10 — ccrc update onto this tree on a box with no codex lane (Plan 4)', () => {
+  itLinux('a real update on a box with no codex lane names no ccgpt- unit in a state-changing verb, and builds nothing (Plan 4)', () => {
+    const home = freshUpdateBox('ccrc-update-no-codex-lane-');
     plantOldBox(home, { version: 'v1.0.0' });
     plantCoordDb(home);
-    plantLiveShape(home, (argv) => {
-      const env: NodeJS.ProcessEnv = { ...updateEnv(home), CCGPT_CONFIG: undefined };   // REHEARSAL_ENV's reason
-      assertSpineFrontContained(env, home);
-      assertNoRealTool(env, home);   // wave 9 R10d: a spawn of the whole ccd/ccrc passes the checker on its final env
-      const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), ...argv], { env, encoding: 'utf8' });
-      return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
-    });
-    const s0 = foreignSnapshot(home);
+    codexRoster(home, [], [externalCodexRow('ext-a')]);
+    plantExternalLauncher(home, 'ext-a');
     packRelease(home, fullTree(home, { version: 'v2.0.0', sha: 'newsha0000000000000000000000000000000000' }), { tag: 'v2.0.0' });
     const r = runUpdate(home);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
-    expect(foreignSnapshot(home), 'the update changed a byte, mode or link another repository owns').toEqual(s0);
     const calls = existsSync(join(home, 'systemctl-calls'))
       ? readFileSync(join(home, 'systemctl-calls'), 'utf8').split('\n').filter(Boolean) : [];
     expect(stateCallsNaming(calls, /\bccgpt-/), 'a state-changing systemctl verb named a ccgpt- unit').toEqual([]);
     expect(calls.filter((a) => /^--user enable --now ccrc-codex-usage@/.test(a)),
       'an instance was enabled on a box with no codex lane').toEqual([]);
     expect(spineRunCalls(home)).toEqual([]);
-    expect(existsSync(join(home, 'foreign-ccgpt-calls')), 'ccrc ran the other repository\'s launcher').toBe(false);
     expect(existsSync(join(home, '.ccrc', 'runtime', 'codex')), 'a runtime was built').toBe(false);
     expect(existsSync(join(home, '.ccrc', 'codex')), 'lane state was written').toBe(false);
     expect(r.stdout.split('\n').filter((l) => l.startsWith('SKIP codex: ')), 'the staged spine\'s closing doctor')
