@@ -957,9 +957,10 @@ function pathWithout(home: string, missing: string): string {
     'node', 'git', 'npm', 'rsync', 'bash', 'sleep', 'jq', 'mktemp', 'basename',
     'diff', 'tmux', 'python3', 'flock', 'timeout', 'stat', 'grep', 'awk', 'realpath',
     'ln', 'readlink', SHA256_TOOL,
-    // `head` (wave 17 R8f, D-5317): `_inst_stamp_shipped` reads the release tag
-    // as `git tag --points-at HEAD | grep -E … | head -n1`, so a farm without it
-    // stamps no `version` at all, silently, in every case built on this list.
+    // `head` (wave 17 R8f, D-5317): `_inst_stamp` reads the release tag as
+    // `git tag --points-at HEAD | grep -E … | head -n1`, so a farm without it
+    // stamps no `version` at all, without failing the install (only a `command
+    // not found` line on stderr), in every case built on this list.
     'head',
     // macOS: the service manager, its plist linter, and `uname`. The last one
     // is not decoration — `ccd`'s platform detection prefers bash's own
@@ -4063,7 +4064,8 @@ describe('ccrc install: the build stamp', () => {
   });
 
   // Wave 17 R8f (D-5317): `pathWithout`'s farm of real tools carries `head`, because the stamp's release-tag read
-  // pipes through it; without it the version is dropped silently ("head: command not found" into /dev/null).
+  // pipes through it; without it the version is dropped without failing the install, with only a "command not found"
+  // line on stderr.
   it('H1: pathWithout links a runnable head into its farm, and omits it when head is the named absence (wave 17 R8f, D-5317)', () => {
     const farmOf = (path: string): string => path.split(':')[1] ?? '';
     const runnable = (dir: string): boolean => {
@@ -4084,6 +4086,7 @@ describe('ccrc install: the build stamp', () => {
     if (t.status !== 0) throw new Error(`fixture git tag failed: ${t.stderr}`);
     // No tool is the subject here: a name no farm entry carries leaves the whole farm linked.
     const r = runInstall(home, ['install'], { PATH: pathWithout(home, 'nothing-is-missing') });
+    expect(r.code, r.stderr).toBe(0);
     expect(r.stdout, r.stderr).toMatch(/^install: stamp: [0-9a-f]{40} \(fixture-branch, v9\.9\.9\)$/m);
     const stamp = stampOf(home);
     expect(stamp['sha']).toBe(sha);

@@ -5,8 +5,8 @@
 // `_svc_label` shadowed by shell functions: what is under test is the helpers' own shell, not launchd.
 //
 // WHICH LEG RUNS WHAT (wave 17, R35(d); D-5327). A case needs only bash, `sleep`, `date +%s`, `grep`, `sed -n`,
-// `tail -n 1`, `mv -f` and the shadowed `_svc_*` functions (the poison and stub tools are shell scripts), so it is a
-// plain `it` and the macOS leg runs it: J1, J1b, J2 to J5 and the Darwin-arm rows D1 to D3. None of them reads `/proc`,
+// `tail -n 1`, `mkdir -p`, `mv -f`, `chmod`, `rm -f` and the shadowed `_svc_*` functions (the poison and stub tools
+// are shell scripts), so it is a plain `it` and the macOS leg runs it: J1, J1b, J2 to J5 and the Darwin-arm rows D1 to D3. None of them reads `/proc`,
 // a GNU-only option (`macos-platform.test.ts`' GNU-call corpus is the reference: no `stat -c`, `date -d`, `readlink -f`,
 // `sed -i`, `timeout`) or `setsid`. J6 stays `itLinux`: it finds the orphaned `sleep` through `survivors` and
 // `reapSurvivors`, which walk `/proc/<pid>/environ`, and macOS has no `/proc`. Until a dispatched full run says
