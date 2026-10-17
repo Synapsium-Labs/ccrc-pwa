@@ -11,8 +11,8 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { FEED_CAP, mergeBySeq, reviveNotifyEvents } from '../src/lib/feed';
-import type { NotifyEvent } from '../../shared/api';
+import { FEED_CAP, interruptLine, mergeBySeq, reviveNotifyEvents } from '../src/lib/feed';
+import { isNotifyKind, type NotifyEvent } from '../../shared/api';
 
 const e = (over: Partial<NotifyEvent> = {}): NotifyEvent => ({
   seq: 1, at: 1_000, kind: 'mail', sessionId: 'cc-a', title: 't', body: 'b', runId: null, ...over,
@@ -142,5 +142,41 @@ describe('mergeBySeq', () => {
     const out = mergeBySeq(durable, live);
     expect(out).toHaveLength(1);
     expect(out[0]!.title).toBe('same record, from catch-up'); // later source wins
+  });
+});
+
+// D-5237 (plan Task 7): a recorded interrupt is a feed event of its own kind, and its scrollback line names the source.
+describe('the interrupt kind (D-5237)', () => {
+  it('is a kind this build knows, kept as it arrived', () => {
+    expect(isNotifyKind('interrupt')).toBe(true);
+    const { events, dropped } = reviveNotifyEvents([{ ...e(), kind: 'interrupt', body: 'source=keycap outcome=sent' }]);
+    expect(dropped).toBe(0);
+    expect(events[0]!.kind).toBe('interrupt');
+  });
+
+  it('an OLDER client, whose kinds stop before it, degrades it to `unknown` and keeps the record', () => {
+    // The reviver an older build runs is today's minus this kind: the same `isNotifyKind` door over its own list.
+    const olderKinds = ['ask', 'done', 'merged', 'mail', 'run', 'coord', 'update', 'queue', 'unknown'];
+    const olderKind = (k: string) => (olderKinds.includes(k) ? k : 'unknown');
+    expect(olderKind('interrupt')).toBe('unknown');
+    // and today's door degrades a kind from a build newer still, the same way
+    const { events } = reviveNotifyEvents([{ ...e(), kind: 'interrupt-v2' }]);
+    expect(events[0]!.kind).toBe('unknown');
+  });
+
+  it('a sent interrupt reads "⎋ interrupted · <source>"', () => {
+    expect(interruptLine(e({ kind: 'interrupt', body: 'source=keycap outcome=sent' }))).toBe('⎋ interrupted · keycap');
+    expect(interruptLine(e({ kind: 'interrupt', body: 'source=drawer-ctrl-c outcome=sent' }))).toBe('⎋ interrupted · drawer-ctrl-c');
+  });
+
+  it('a refused one says it interrupted nothing, and why', () => {
+    expect(interruptLine(e({ kind: 'interrupt', body: 'source=escape-key outcome=background-only' })))
+      .toBe('⎋ not interrupted · escape-key · background-only');
+  });
+
+  it('a source or outcome it does not know reads `unknown`; another kind, or a body off its grammar, is null', () => {
+    expect(interruptLine(e({ kind: 'interrupt', body: 'source=x outcome=y' }))).toBe('⎋ not interrupted · unknown · unknown');
+    expect(interruptLine(e({ kind: 'interrupt', body: 'garbage' }))).toBeNull();
+    expect(interruptLine(e({ kind: 'mail', body: 'source=keycap outcome=sent' }))).toBeNull();
   });
 });
