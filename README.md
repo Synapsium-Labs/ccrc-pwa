@@ -2860,6 +2860,12 @@ replies, the watch's `orphaned:` and `failed:` self-wake mail, and a run's move 
 and never pushed. Nothing is pushed for a session a client has on screen;
 mail and run records still land in the feed.
 
+A `✓ Finished` push means a main turn ended inside the busy stretch that just went idle (D-5233): the session's turn
+marker records a Stop at or after the stretch began (2 s of slack), with no newer turn opened after it. A stretch of
+compaction only, a restart, an overload tick, and a turn ended by Escape or a kill push nothing. A session whose hook
+writes no turn marker falls back to its hook state (`done` from a `Stop` inside the stretch); with neither file, the
+edge pushes as before. Delegated background work keeps its push for the moment that work ends (D-5231).
+
 - **Unseen watermark** (`pwa/src/lib/seen.ts`): a session is unseen when it
   entered a human-wanting bucket (`attention`, `done`, `cleanup`) after this
   device last acknowledged it. Per-device in `localStorage` on purpose — ccrc
@@ -5126,8 +5132,8 @@ working set, `SessionStart(compact)` serves the card once beside the graph card 
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:7962-7964`), each with an operator sentence of its own at `:8014`,
-`:8022` and `:8035`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:7975-7977`), each with an operator sentence of its own at `:8027`,
+`:8035` and `:8048`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 
