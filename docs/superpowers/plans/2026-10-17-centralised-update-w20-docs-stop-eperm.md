@@ -66,7 +66,7 @@ The operator ruled on 2026-10-17 at 15:50 UTC that this programme repairs stable
 
 ### Task 1: the red row first
 
-- [ ] **Step 1.** Take the claims (Global Constraints). Append the describe below to the end of `server/test/ccd-docs-tree.test.ts`, exactly:
+- [x] **Step 1.** Take the claims (Global Constraints). Append the describe below to the end of `server/test/ccd-docs-tree.test.ts`, exactly:
 
 ```ts
 // ---------------------------------------------------------------------------------------------------------------
@@ -190,7 +190,7 @@ describe.skipIf(process.platform !== 'linux')('row 64 on Darwin: killpg answers 
 });
 ```
 
-- [ ] **Step 2.** Run only the new describe on unchanged `ccd/ccd`. Expected *(unmeasured: the worker measures it)*:
+- [x] **Step 2.** Run only the new describe on unchanged `ccd/ccd`. Expected *(unmeasured: the worker measures it)*:
   - case 1 is red, with state `unreadable`;
   - case 2 is red, because `_stop` raises EPERM;
   - case 3 is green, because both of its refusals raise on `main` too.
@@ -200,6 +200,11 @@ describe.skipIf(process.platform !== 'linux')('row 64 on Darwin: killpg answers 
 ```bash
 cd server && TMPDIR=~/.cc-tmp/w20 ./node_modules/.bin/vitest run test/ccd-docs-tree.test.ts -t 'row 64 on Darwin' --pool=forks --maxWorkers=1
 ```
+
+  **Measured (worker, 2026-10-17, on this branch's unchanged Docs helper (base `0b3ff2f62` plus wave 15); slice anon 20.96 GiB):** `Tests 2 failed | 1 passed | 184 skipped (187)`, exactly the expected split.
+  - Case 1 is red: `expected { state: 'unreadable', …(4) } to match object { state: 'too-many', …(2) }`.
+  - Case 2 is red: `docs helper unit exited 1: PermissionError: [Errno 1] Operation not permitted`, raised out of `_stop`.
+  - Case 3 is green.
 
 ### Task 2: the change in `ccd/ccd`
 

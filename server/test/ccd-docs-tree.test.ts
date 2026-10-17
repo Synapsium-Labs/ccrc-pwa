@@ -3462,3 +3462,123 @@ describe('docs-tree: a spent deadline degrades the drafts, never the tree (D-416
     expect(subsOf(rec.calls())).toContain('worktree list');
   }, 120000);
 });
+
+// ---------------------------------------------------------------------------------------------------------------
+// Row 64 on Darwin, replayed on Linux (centralised update wave 20, stable blocker B2). On macOS the overflow row 64
+// above read `unreadable`, never `too-many`: Sys._stop's first killpg(SIGTERM) met EPERM and raised before Spawned
+// returned. Darwin answers EPERM, not ESRCH, while every member of the group is a zombie, and a git that has exited
+// but is not yet reaped is one; Linux signals that group with rc 0, so row 64 is green here and only the macOS leg
+// can see it. These units replay Darwin's answer through the helper's own seam: the helper's `os` is the unit's
+// `os`, so the unit swaps `os.killpg` for one that reads the group's members from /proc and answers as XNU's
+// killpg does (no member: ESRCH; every member a zombie: EPERM; else the real call). Linux only (/proc); row 64
+// itself stays byte-unchanged as the macOS proof. Its first answer waits (bounded) for the leader to have exited,
+// so the zombie leader is a fact of the run, not a race won. Every answer is logged to $HOME/killpg.log, so a green
+// row shows that the EPERM was met.
+const T20_DARWIN_KILLPG: string[] = [
+  'import errno as _t20_errno',
+  'import os as _t20_os',
+  'import time as _t20_time',
+  '_t20_real = _t20_os.killpg',
+  '_t20_log = _t20_os.path.join(_t20_os.environ["HOME"], "killpg.log")',
+  'def _t20_members(pgid):',
+  '    got = []',
+  '    for d in _t20_os.listdir("/proc"):',
+  '        if d.isdigit():',
+  '            try:',
+  '                with open("/proc/" + d + "/stat") as f:',
+  '                    s = f.read()',
+  '            except OSError:',
+  '                continue',
+  '            rest = s[s.rindex(")") + 2:].split()',
+  '            if int(rest[2]) == pgid:',
+  '                got.append(rest[0])',
+  '    return got',
+  'def _t20_answer(sig, word):',
+  '    with open(_t20_log, "a") as f:',
+  '        f.write("%d %s\\n" % (sig, word))',
+  'def _t20_killpg(pgid, sig):',
+  '    if not _t20_os.path.exists(_t20_log):',
+  '        end = _t20_time.monotonic() + 5',
+  '        while _t20_time.monotonic() < end and "Z" not in _t20_members(pgid):',
+  '            _t20_time.sleep(0.01)',
+  '    m = _t20_members(pgid)',
+  '    if not m:',
+  '        _t20_answer(sig, "ESRCH")',
+  '        raise OSError(_t20_errno.ESRCH, "No such process")',
+  '    if all(st == "Z" for st in m):',
+  '        _t20_answer(sig, "EPERM")',
+  '        raise OSError(_t20_errno.EPERM, "Operation not permitted")',
+  '    _t20_answer(sig, "ok")',
+  '    return _t20_real(pgid, sig)',
+  '_t20_os.killpg = _t20_killpg',
+];
+const t20log = (): string[] => {
+  const p = t14path.join(h.home, 'killpg.log');
+  return t14fs.existsSync(p) ? t14fs.readFileSync(p, 'utf8').trim().split('\n') : [];
+};
+
+describe.skipIf(process.platform !== 'linux')('row 64 on Darwin: killpg answers EPERM for a group of zombies (wave 20, B2)', () => {
+  it('row 64, Darwin answer injected: a status overflow whose git exited unreaped is too-many, never unreadable', () => {
+    const { wt, head } = t14holder({ [`${T14_S}a.md`]: 'aaaa\n' });
+    for (let i = 0; i < 20; i++) t14fs.writeFileSync(t14path.join(wt, T14_S, `long-name-${i}-${'x'.repeat(40)}.md`), 'n\n');
+    const o = t14phase({ served: head, kw: 'stdout_cap=200', pre: T20_DARWIN_KILLPG });
+    expect(o.facts).toMatchObject({ state: 'too-many', branch: 'ws/a', worktree: wt });
+    expect(o.facts['bytes']).toBe(200);
+    expect(o.entries).toBe(1);
+    // Non-vacuity: the stop met Darwin's EPERM first, then found the group empty.
+    expect(t20log()).toEqual(['15 EPERM', '0 ESRCH']);
+  }, 60000);
+
+  it('_stop: a leader that exited before the stop, or between the reap and the signal, is reaped and the call returns', () => {
+    const got = unitJson<Record<string, unknown>>(h.home, [
+      ...T20_DARWIN_KILLPG,
+      'import signal, subprocess',
+      'res = {}',
+      "p = subprocess.Popen(['true'], start_new_session=True)",
+      'H.SYS._stop(p)',
+      "res['exited'] = p.returncode",
+      "q = subprocess.Popen(['sleep', '30'], start_new_session=True)",
+      'def _t20_racing(pgid, sig):',
+      '    _t20_real(pgid, signal.SIGKILL)   # the leader dies after the stop began, before this signal lands',
+      '    _t20_os.killpg = _t20_killpg',
+      '    return _t20_killpg(pgid, sig)',
+      '_t20_os.killpg = _t20_racing',
+      'H.SYS._stop(q)',
+      "res['raced'] = q.returncode",
+      'out(res)',
+    ].join('\n'), { timeoutMs: 60_000 });
+    expect(got).toEqual({ exited: 0, raced: -9 });
+    expect(t20log()).toEqual(['15 EPERM', '0 ESRCH', '15 EPERM', '0 ESRCH']);
+  }, 60000);
+
+  it('EPERM stays loud: a live leader that refuses, and a leader already reaped that refuses, both raise EPERM', () => {
+    const got = unitJson<Record<string, string>>(h.home, [
+      'import errno, os, signal, subprocess',
+      'real = os.killpg',
+      'def refuse(pgid, sig):',
+      '    raise OSError(errno.EPERM, "Operation not permitted")',
+      'def stop(p):',
+      '    os.killpg = refuse',
+      '    try:',
+      '        H.SYS._stop(p)',
+      "        return 'returned'",
+      '    except OSError as e:',
+      "        return 'raised ' + errno.errorcode[e.errno]",
+      '    finally:',
+      '        os.killpg = real',
+      'res = {}',
+      "live = subprocess.Popen(['sleep', '3'], start_new_session=True)",
+      "res['live'] = stop(live)",
+      'try:',
+      '    real(live.pid, signal.SIGKILL)',
+      'except OSError:',
+      '    pass',
+      'live.wait()',
+      "done = subprocess.Popen(['true'], start_new_session=True)",
+      'done.wait()',
+      "res['reaped'] = stop(done)",
+      'out(res)',
+    ].join('\n'), { timeoutMs: 60_000 });
+    expect(got).toEqual({ live: 'raised EPERM', reaped: 'raised EPERM' });
+  }, 60000);
+});
