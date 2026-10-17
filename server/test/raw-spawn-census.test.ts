@@ -22,8 +22,10 @@
 //     concatenation, and READS nothing); one imported under that name or an `as` alias, or reached as `<ns>.<name>`
 //     through a namespace import, from a module that exports one; or a `for … of` variable over a list naming one
 //     (inline, or bound to an identifier), inside that loop's body. A name resolves PER BINDING: to its nearest
-//     earlier binding in the file, else the first one (a function declared above a module-level `const`), else an
-//     import, so a second binding that reuses a script binding's name is judged on its own initialiser (D-5256).
+//     earlier binding in the file, else an import of that name, else the file's first binding of it (a function
+//     declared above a module-level `const`), so a second binding that reuses a script binding's name is judged on
+//     its own initialiser (D-5256). A directory binding resolves the same way, and a `const`/`let` whose whole
+//     initialiser is a directory binding's name is one too.
 //   * It runs SLICED text when it executes no script file but its argument text names a binding derived from a READ
 //     of a script (its text read, then sliced, matched or handed to a helper). Those are counted on their own
 //     (D-5251): a BARE one is listed in `SLICED_ALLOWED` with its reason and exact count.
@@ -38,7 +40,8 @@
 //     builder's own file's to pin.
 //   * The PROGRAM (the first argument; for `exec`/`execSync`, the command line's first word) of every script-naming
 //     spawn is a runner, a reader or the script itself, or the census reds until it is placed. The corpus pins the
-//     unplaced list itself, so the "script itself" arm, which no real spawn uses, reds when it is deleted.
+//     unplaced list itself, so the "script itself" arm, which no real spawn uses, reds when either half of it is
+//     deleted: a script binding as the program, or a `for … of` variable over scripts inside its loop.
 //   * A BARE spawn that EXECUTES a script is a HIT. Every hit is fixed, or listed in `ALLOWED` with its reason and its
 //     exact count. Both lists are pinned both ways: an unlisted hit reds, and so does a listed file whose count no
 //     longer matches (a stale entry).
@@ -63,6 +66,13 @@
 // { env } = setup(…)`) is never seen, so a contained destructured env read after an unrelated bare `const env` in
 // another function is a false hit, and the mirror case, a bare destructured env read after an unrelated contained
 // `const env`, is missed.
+//
+// And (review 574, none of them in the tree today): a directory alias through a namespace member (`const D =
+// P.SCRIPTS_DIR`), which the alias arm would take but a binding's shape test never lets through, because its
+// identifier alternative takes no `.`; a `+` command line with an operand that is not a string, a template or a
+// (dotted) name, such as `'. ' + shq(CCRC) + '; fn'`; a `.join` whose argument holds parentheses; and an `env: x`
+// whose binding is `let x = undefined`, which reads undecided although node inherits the parent env as it does for
+// `env: undefined`.
 //
 // The script names are built from fragments below, never written as two quoted adjacent segments:
 // `single-definition.test.ts`'s scan allows exactly one file to spell the ccd script's path that way.
@@ -803,18 +813,26 @@ const CORPUS: Src[] = [
     "function cb2() {} execFile('bash', [CCRC], cb2); // expect: script no env",
     "const o2 = { timeout: 5, ...(c ? {} : { x }) }; spawnSync('bash', [CCRC], { env: process.env, ...o2 }); // expect: script env: process.env",
     "let e3 = undefined; spawnSync('bash', [CCRC], { env: { ...ghContainedEnv(d), ...e3 } });",
+    // Review 574 (F2, F3): the directory-alias arm, and a `for … of` script variable used as the program.
+    "const D2 = SCRIPTS_DIR; spawnSync('bash', [path.join(D2, 'ccrc')], { env: process.env }); // expect: script env: process.env",
+    "for (const s3 of [CCRC]) spawnSync(s3, [], { env: process.env }); // expect: script env: process.env",
   ]),
-  // An imported script name stays the import before a later, inner binding of the same name (D-5256).
+  // An imported script or directory name stays the import before a later, inner binding of the same name (D-5256).
   fixture('fixture/test/shadow.test.ts', [
     "import { spawnSync } from 'node:child_process';",
-    "import { CCRC } from './paths.js';",
+    "import { CCRC, SCRIPTS_DIR } from './paths.js';",
     "spawnSync('bash', [CCRC], { env: process.env }); // expect: script env: process.env",
+    "spawnSync('bash', [path.join(SCRIPTS_DIR, 'ccrc')], { env: process.env }); // expect: script env: process.env",
     "function later() { const CCRC = 'x'; return CCRC; }",
+    "function later2() { const SCRIPTS_DIR = 'x'; return SCRIPTS_DIR; }",
   ]),
-  // Per binding, not per name (D-5256): the second `script` is not a script, so its bare spawn is no hit.
+  // Per binding, not per name (D-5256): the second `script` is not a script, and the second `D` is not the scripts'
+  // directory, so neither bare spawn is a hit.
   fixture('fixture/test/rebind.test.ts', [
     "import { spawnSync } from 'node:child_process';",
-    "import { CCRC } from './paths.js';",
+    "import { CCRC, SCRIPTS_DIR } from './paths.js';",
+    "function c() { const D = SCRIPTS_DIR; return spawnSync('bash', [path.join(D, 'ccrc')], { env: ghContainedEnv(d) }); }",
+    "function e() { const D = path.join(d, 'x'); return spawnSync('bash', [path.join(D, 'ccrc')], { env: process.env }); }",
     "function a() { const script = ['set -u', `. ${CCRC}`].join('\\n'); return spawnSync('bash', ['-c', script], { env: ghContainedEnv(d) }); }",
     "function b() { const script = ['set -u', 'echo hi'].join('\\n'); return spawnSync('bash', ['-c', script], { env: process.env }); }",
   ]),
