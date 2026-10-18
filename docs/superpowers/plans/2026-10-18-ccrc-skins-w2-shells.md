@@ -904,7 +904,7 @@ This task lands before S9 so those tasks add rules, not palette values.
   - "a dead session still dialogPending is in Dead, not Needs you";
   - "rows keep sortFleet's order within a group";
   - "every SessionBucket has a group and a label" (derived from the record's keys against a list the test builds from the type's values, never a second hand-kept list);
-  - "needsReason reads ask, allow, fault and sign-in from their fields, and null for an attention session no field explains";
+  - "needsReason reads ask, allow, fault and sign-in from their fields, and null for an attention session no field explains"; (reworded by D-5497)
   - "each group's unseen count equals BucketBar's for its bucket" (one fixture through both, including a never-acked idle session: `BucketBar` and `groupFleet` count with `isUnseen(s, acks)`, which puts the BADGED precondition (attention, done and cleanup only) in front of `isUnseenAt`, so an Idle, Working or Dead row never badges).
 - [ ] **Step 2: Green.** Implement.
 - [ ] **Step 3: Mutation table, RUN.**
@@ -1428,6 +1428,8 @@ Mark it ✓, or write the defect and its fix. Screenshots are evidence for the r
 - **D-5479** — `flip-after-parity` (Task S18): Instrument's `preview: false` lands as its own PR, after the parity test, and not in "the W2 PR that lands Instrument's shell" as D-5096 says, because that shell lands across eight PRs and a flip inside any of them would make a partial shell every desktop's default. It also waits for the picker (F12b), axe in both skins (F3b), and `Sheet`'s desktop arm unless the coordinator rules otherwise.
 
 Issued and unused: 5480. It is the one spare for a departure a worker meets while executing a task here; it is defined here, once, in the PR that introduces it, and the coordinator asks the allocator for more if one is not enough.
+
+D-5497 was not drawn from that block: the coordinator issued it to Task S10a from the allocator, as that task's one spare, in the task's dispatch. It is defined once, below. 5480 is untouched by it.
 
 ### Found while executing Task S10a
 

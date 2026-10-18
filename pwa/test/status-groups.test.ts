@@ -108,6 +108,12 @@ describe('needsReason (D-5473, D-5497)', () => {
     // ask: a held row on the ask lane, which only questions mint today.
     expect(needsReason(attention({ ask: { state: 'held', parentId: 'p-coord', answeredBy: null } }))).toBe('ask');
     expect(needsReason(attention({ ask: { state: 'answering', parentId: 'p-coord', answeredBy: null } }))).toBe('ask');
+    // A malformed ask (cast, not checked, off the live frame) goes through the
+    // single reader `sessionAsk`, which rejects it: no reason, never 'ask'.
+    expect(needsReason(attention({ ask: { state: 'held', parentId: '', answeredBy: null } }))).toBeNull();
+    expect(needsReason(attention({
+      ask: { state: 'bogus', parentId: 'p-coord', answeredBy: null } as unknown as FleetSession['ask'],
+    }))).toBeNull();
     // A fault outranks the ask: the console cannot re-measure the row.
     expect(needsReason(attention({
       substrate: { at: 1, text: 'x' }, ask: { state: 'held', parentId: 'p-coord', answeredBy: null },
