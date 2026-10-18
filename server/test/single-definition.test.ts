@@ -6712,8 +6712,9 @@ describe('idle-compact-nudge: the kill switch has no writer, and the prompt is s
 // alone, so the server's swap guard and the PWA's sheet cannot spell either; this row pins that ccd's two swap
 // refusals are read in one place, `ccdSwapRefusal` (`server/src/swapguard.ts`), off the declaration.
 describe('the swap route spells its refusal words once (D-5240)', () => {
-  it('SWAP_REFUSALS is exactly archive\'s session-busy and status-unknown', () => {
-    expect(SWAP_REFUSALS).toEqual({ sessionBusy: ARCHIVE_REFUSALS.sessionBusy, statusUnknown: ARCHIVE_REFUSALS.statusUnknown });
+  it('SWAP_REFUSALS is exactly archive\'s session-busy and status-unknown, and hibernation\'s hibernated (D-5242)', () => {
+    expect(SWAP_REFUSALS).toEqual({ sessionBusy: ARCHIVE_REFUSALS.sessionBusy, statusUnknown: ARCHIVE_REFUSALS.statusUnknown,
+      hibernated: 'hibernated' });
   });
   it('ccd\'s swap refusals are read only by ccdSwapRefusal, in swapguard.ts', () => {
     const holders = ALL.filter((f) => /\bfunction ccdSwapRefusal\b/.test(readFileSync(f, 'utf8'))).map(rel);
@@ -6932,5 +6933,31 @@ describe('D-5242: hibernation’s markers have no writer, and its holds one home
   it('PRESENCE_OPEN_TTL_MS is declared once, in shared/api.ts beside PRESENCE_TTL_MS', () => {
     const decl = /\b(?:const|let|var)\s+PRESENCE_OPEN_TTL_MS\b/;
     expect(ALL.filter((f) => decl.test(stallCode(f))).map(rel)).toEqual(['shared/api.ts']);
+  });
+});
+
+// D-5242 (plan Task 17b). APPENDED, for the reason the stall-watch blocks above state. The wake budget has one home
+// (`coord/wakeBudget.ts`, its rule and its two figures) and ONE list it is applied to (`FleetWatcher.admitWake`, the only
+// caller of `wakeAdmit`); the live act's constants are hibernation's definer's, and each lane's declared actor is
+// spelled once, in its own L1 file.
+describe('D-5242: the wake budget and the live act have one home each (Task 17b)', () => {
+  const decl = (c: string): RegExp => new RegExp(`\\b(?:const|let|var)\\s+${c}\\b`);
+  it.each([
+    ['WAKE_BURST', 'server/src/coord/wakeBudget.ts'], ['WAKE_WINDOW_MS', 'server/src/coord/wakeBudget.ts'],
+    ['HIBERNATE_PER_SWEEP', 'server/src/coord/hibernate.ts'], ['HIBERNATE_ACT_LINE_MS', 'server/src/coord/hibernate.ts'],
+    ['HIBERNATE_SWEEP_ACTOR', 'server/src/coord/hibernate.ts'], ['STOP_DONE_ACTOR', 'server/src/stopDone.ts'],
+    ['MAIL_WAKE_FLOOR_MS', 'server/src/watch.ts'],
+  ])('%s is declared once, in %s', (c, home) => {
+    expect(ALL.filter((f) => decl(c).test(stallCode(f))).map(rel), c).toEqual([home]);
+  });
+  it('wakeAdmit is defined once and applied by the watcher alone: one window for the server', () => {
+    expect(ALL.filter((f) => /\bexport function wakeAdmit\b/.test(stallCode(f))).map(rel)).toEqual(['server/src/coord/wakeBudget.ts']);
+    expect(ALL.filter((f) => /\bwakeAdmit\(/.test(stallCode(f)) && !/\bexport function wakeAdmit\b/.test(stallCode(f))).map(rel))
+      .toEqual(['server/src/watch.ts']);
+  });
+  it('the lanes\' actor words are code-line literals in their definers alone', () => {
+    for (const [word, home] of [['sweep:hibernate', 'server/src/coord/hibernate.ts'], ['sweep:stop-done', 'server/src/stopDone.ts']] as const) {
+      expect(ALL.filter((f) => stallCode(f).includes(`'${word}'`)).map(rel), word).toEqual([home]);
+    }
   });
 });

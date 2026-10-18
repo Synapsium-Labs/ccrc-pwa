@@ -13,17 +13,18 @@ import type { FleetSession } from '../../shared/api.js';
  *
  * L1: decisions only, over what the sweep (`stopDoneSweep.ts`, L4) measured. It imports L0 alone.
  *
- * ABSORBED BY HIBERNATION LATER (D-5242, plan Tasks 16 to 19, spec §5.11), on purpose: every hold below that
- * hibernation also has carries hibernation's own word (`HIBERNATE_HOLDS`, Task 17a) — `marker` and
- * `marker-background` included — so when hibernation lands it can absorb this lane, with `hibernate` (which a
- * viewer's open screen wakes) in place of `stop` (which a re-dispatch's `ensure` wakes). It is NOT yet a strict
- * subset: the population is a subset of hibernation's only once N (6 h idle, against this lane's 10 minutes from the
- * close) has passed, and until Task 17b it holds strictly fewer facts — 17b adds `recent`, `opted-out`, `scheduled`
- * and `attached`. Its `viewer` is already hibernation's (Task 17a, D-5242's presence contract): `Presence.isOpen`, a
- * hidden but open tab included, with the post-start hold on `PRESENCE_OPEN_TTL_MS`. The words that are this lane's alone say why it is narrower: only a dispatched child
- * (`not-a-child`), only once its newest run is `done` (`no-run`, `not-done`, `close-unplaced`) and a grace has passed
- * (`grace`), and only through a declared stop (`no-surface`); `reviewing` is the archived-expiry lane's
- * (`expiryReviewing`).
+ * ABSORBED BY HIBERNATION (D-5242, spec §5.11; stop-done-composes-hibernate (D-5427), plan Task 17b): the lane
+ * composes `ccd hibernate`, never `ccd stop`, so a finished worker it puts down wakes like any sleeping session — mail
+ * (under the fleet-wide wake budget), a re-dispatch's `ensure`, a Restart — and it holds every fact hibernation
+ * holds, in hibernation's words (`HIBERNATE_HOLDS`): `recent` (N, `$REG/hibernate-after-hours` or six hours, from the
+ * turn marker's newest stamp), `opted-out` (`$REG/<id>.no-hibernate`), `scheduled` (the marker's `crons` not exactly
+ * 0) and, at the act, ccd's own `attached`. Its population is therefore a subset of hibernation's. It is NOT retired:
+ * hibernation's own sweep acts only once the operator arms it (`$REG/hibernate-live`, plan Task 19), and this lane is
+ * the operator's live ruling for finished workers; it stays live under its own switches, and `hibernate-disabled` stops
+ * it too. The words that are this lane's alone say why it is narrower: only a dispatched child (`not-a-child`), only
+ * once its newest run is `done` (`no-run`, `not-done`, `close-unplaced`) and a grace has passed (`grace`), only on a
+ * box whose ccd has the verb (`no-verb`), and only with the fail-closed turn verdict idle (`turn`); `reviewing` is the
+ * archived-expiry lane's (`expiryReviewing`).
  */
 
 /** Every reason the lane leaves a session running this pass — a `Record`, so the list below is derived and a word
@@ -53,12 +54,15 @@ const STOP_DONE_HOLD_MAP = {
   bucket: 'its bucket is not `idle` (a `done` row is badged: its result may be unread)',
   background: 'background work is running',
   roster: 'subagents are running',
-  'no-surface': 'this box\'s ccd cannot record a declared stop surface',
+  'no-verb': 'this box\'s ccd does not list `hibernate` in its caps',
+  'opted-out': 'the operator opted it out (`$REG/<id>.no-hibernate`)',
   pane: 'no live pane to stop',
   'live-word': 'its live word is not `idle`',
   turn: 'the fail-closed turn verdict is not `idle`',
   marker: 'its turn marker does not read a finished turn (`done`), or could not be read, or is not this process\'s',
   'marker-background': 'its turn marker\'s last Stop listed background work, or could not say (`bg` not exactly 0; −1 holds)',
+  scheduled: 'its last Stop listed a session cron or wakeup, or the marker cannot say (`crons` not exactly 0; absent holds)',
+  recent: 'its last main event is not yet more than N hours old (or the marker carries no stamp to age)',
 } as const satisfies Record<string, string>;
 
 export type StopDoneHold = keyof typeof STOP_DONE_HOLD_MAP;
@@ -81,6 +85,9 @@ export const STOP_DONE_SWEEP_MS = 60_000;
 
 /** After a stop the box refused, the lane does not ask again for this long. In memory only: a restart asks once more. */
 export const STOP_DONE_RETRY_MS = 60 * 60_000;
+
+/** The actor the lane's act declares (`sweepDec`), as every unattended server lane names itself. */
+export const STOP_DONE_ACTOR = 'sweep:stop-done';
 
 /** The kill switch: while `$REG/stop-done-disabled` is listed the lane does nothing at all. The operator's to touch and
  *  remove BY HAND — nothing in the tree writes it (`single-definition.test.ts`). */
@@ -106,10 +113,14 @@ export type StopDoneStoreRead =
     readonly reviewing: boolean;
   };
 
-/** The turn marker, as `turnMarkFor` (`turnverdict.ts`) reads it, judged against the live process — the two fields the
- *  verdict reads, structurally, so this L1 file still imports L0 alone. Any `ok: false` reason holds. */
+/** The turn marker, as `turnMarkFor` (`turnverdict.ts`) reads it, judged against the live process — the fields the
+ *  verdict reads (hibernation's `HibernateMark`), structurally, so this L1 file still imports L0 alone. Any `ok: false`
+ *  reason holds. */
 export type StopDoneMark =
-  | { readonly ok: true; readonly state: string; readonly bg: number }
+  | {
+    readonly ok: true; readonly state: string; readonly bg: number; readonly crons: number | null;
+    readonly turnAt: number | null; readonly stopAt: number | null; readonly restartAt: number | null;
+  }
   | { readonly ok: false; readonly reason: string };
 
 /** The live reads, made only for a session every other hold has passed. `unread` asks the sweep to make them. */
@@ -134,21 +145,25 @@ export interface StopDoneInput {
    *  reads as none for one open-claim TTL (`PRESENCE_OPEN_TTL_MS`) after a start. */
   readonly sinceStartMs: number;
   readonly presenceTtlMs: number;
-  /** `stopSurfaceSupported`: the box's ccd records `--surface`, so the stop is journaled as declared. */
-  readonly surface: boolean;
+  /** `verbSupported` for `CCD_ARGV.hibernate`: the box's ccd lists `hibernate` in its caps. */
+  readonly verb: boolean;
+  /** `$REG/<id>.no-hibernate` is listed. */
+  readonly optedOut: boolean;
+  /** N: hibernation's `hibernateAfterMs` over `$REG/hibernate-after-hours`. */
+  readonly afterMs: number;
   readonly live: StopDoneLive;
   readonly now: number;
   readonly graceMs: number;
 }
 
 export type StopDoneVerdict =
-  | { readonly act: 'stop'; readonly runId: number }
+  | { readonly act: 'hibernate'; readonly runId: number; readonly idleMs: number }
   | { readonly act: 'measure' }
   | { readonly act: 'hold'; readonly reason: StopDoneHold };
 
 /**
- * Stop this worker? The holds run cheapest first, and the live reads come last: `measure` asks the sweep to read them
- * for a session nothing else holds. Every read the verdict could not make HOLDS — never an unmeasured stop.
+ * Put this worker to sleep? The holds run cheapest first, and the live reads come last: `measure` asks the sweep to read
+ * them for a session nothing else holds. Every read the verdict could not make HOLDS — never an unmeasured act.
  */
 export function stopDoneVerdict(i: StopDoneInput): StopDoneVerdict {
   const hold = (reason: StopDoneHold): StopDoneVerdict => ({ act: 'hold', reason });
@@ -158,6 +173,7 @@ export function stopDoneVerdict(i: StopDoneInput): StopDoneVerdict {
   if (r.archivedAt !== null) return hold('archived');
   if (r.stoppedBy !== null) return hold('stopped');
   if (r.unmeasured.length > 0 || r.statusUnmeasured) return hold('unmeasured');
+  if (i.optedOut) return hold('opted-out');
   if (r.held !== null) return hold('held');
   if (r.stranded !== null) return hold('stranded');
   if (r.swapBlocked !== null) return hold('swap-blocked');
@@ -178,7 +194,7 @@ export function stopDoneVerdict(i: StopDoneInput): StopDoneVerdict {
   if (r.bucket !== 'idle') return hold('bucket');
   if (r.background !== null) return hold('background');
   if (r.subagents !== null && r.subagents.length > 0) return hold('roster');
-  if (!i.surface) return hold('no-surface');
+  if (!i.verb) return hold('no-verb');
   if (i.live.kind === 'unread') return { act: 'measure' };
   const w = i.live.word;
   if (!w.ok) return hold(w.reason === 'unmeasured' ? 'unmeasured' : 'pane');
@@ -189,5 +205,11 @@ export function stopDoneVerdict(i: StopDoneInput): StopDoneVerdict {
   const m = i.live.mark;
   if (!m.ok || m.state !== 'done') return hold('marker');
   if (m.bg !== 0) return hold('marker-background');
-  return { act: 'stop', runId: s.last.runId };
+  // Hibernation's last two, in its words and its order (`hibernateVerdict`): nothing scheduled, and N past.
+  if (m.crons !== 0) return hold('scheduled');
+  const stamps = [m.turnAt, m.stopAt, m.restartAt].filter((t): t is number => t !== null);
+  if (stamps.length === 0) return hold('recent');
+  const idleMs = i.now - Math.max(...stamps);
+  if (idleMs <= i.afterMs) return hold('recent');
+  return { act: 'hibernate', runId: s.last.runId, idleMs };
 }

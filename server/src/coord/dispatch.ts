@@ -110,6 +110,9 @@ export interface DispatchRunDeps {
    * `unmeasured` on a healthy fleet for ever.
    */
   turnVerdict: (rec: SessionRecord, uuid: string) => Promise<TurnVerdict>;
+  /** The fleet-wide wake budget's one list (D-5242, `FleetWatcher.admitWake`): a resume onto a hibernated worker records
+   *  an ASKED wake there beside its `ensure`, and is never refused for it. Absent (no watcher): nothing is recorded. */
+  admitWake?: (kind: 'asked', id: string) => boolean;
 }
 
 /** What the dispatch route polls while a pane this dispatch's `ensure` started comes up (D-5238): the registry row
@@ -774,6 +777,12 @@ export async function dispatchRun(
     // every workspace wave 1 did not mint.
     const childGate = await childBindGate(deps, coord, sessionId);
     if (!childGate.ok) return refuseSpentChild(deps, { id: run.id, sessionId }, childGate, dispatchDec);
+    // D-5242: resuming a hibernated worker WAKES it. The coordinator asked, so the wake budget never refuses it (its
+    // answer is not read), but the wake is recorded in the window the mail lane's automatic wakes are bounded by.
+    if (deps.admitWake !== undefined) {
+      const names = await deps.io.readdir(deps.cfg.registryDir);
+      if (names !== null && names.includes(`${sessionId}.hibernated`)) deps.admitWake('asked', sessionId);
+    }
     const argv = CCD_ARGV.ensure(sessionId);
     const res = await deps.runCcd(argv);
     if (!res.ok) return { ok: false, kind: 'fleetFailed', stderr: res.stderr };
