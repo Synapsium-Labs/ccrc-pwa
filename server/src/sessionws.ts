@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { wireHookAsk } from './fleet.js';
 import type { Deps } from './server.js';
 import type { Bus, Notice } from './bus.js';
 import { configDirFor, type CcrcConfig } from './config.js';
@@ -592,7 +593,8 @@ export class SessionStream {
     const json = ask === null ? null : JSON.stringify(ask);
     if (json === this.lastAskJson) return;
     this.lastAskJson = json;
-    this.send(ask === null ? { type: 'ask_cleared' } : { type: 'ask', ask, key: askKey(ask) });
+    // D-5298 (spec §6.7): an approval's summary leaves redacted (`wireHookAsk`); the key is the envelope's own.
+    this.send(ask === null ? { type: 'ask_cleared' } : { type: 'ask', ask: wireHookAsk(ask), key: askKey(ask) });
   }
 
   stop(): void {

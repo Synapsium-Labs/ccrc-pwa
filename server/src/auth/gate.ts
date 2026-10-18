@@ -345,6 +345,29 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
     'fleet-host session through `ccrc-api` and has no cookie jar, so the route is dead the moment the flag arms ' +
     'unless exempted, the argument `POST /api/claims` makes for itself. It is identity, not a restriction, and it ' +
     "is not a release valve: it writes one row's declaration into the delegation checkpoint and nothing else"],
+  // The approvals lane (coordinator-first routing spec 2026-10-17 §6.3, plan Task 16, D-5298). Every caller is a
+  // fleet-host process through `ccrc-api` with no cookie jar — a child's PermissionRequest hook (request, ruling, key)
+  // or its claimant (rule, release, show) — so each route is dead the moment the flag arms unless exempted, the
+  // argument `POST /api/claims` makes for itself. Each is box-token gated (`requireMailToken`), and every one a
+  // session acts through checks attribution against the registry; none is a release valve.
+  ['POST /api/approvals',
+    "a dispatched child's permission hook asks for a ruling — box-token gated, the child attributed by its own " +
+    '`.uuid` (`sessionUuid`), and refused before anything is minted unless every gate of spec §6.3 server step 1 holds'],
+  ['GET /api/approvals/:id/ruling',
+    "the child's hook polls for the signed ruling — box-token gated; the hook's per-request nonce is the " +
+    'capability, and another nonce reads as no row'],
+  ['GET /api/approvals/key',
+    "the server's public signing key, which the fleet box's install spine pins once — box-token gated, " +
+    'and only the public half: the private key never leaves the server box'],
+  ['POST /api/approvals/:id/rule',
+    "the child's claimant rules — box-token gated, attribution checked against the registry, and only the " +
+    'claimant the row was held for (403 for anyone else, wherever it sits); the guard runs again before signing'],
+  ['POST /api/approvals/:id/release',
+    "the child's claimant hands the prompt over to the operator — box-token gated, the same attribution and " +
+    'the same held-for check as the rule route'],
+  ['GET /api/approvals/:id',
+    "the claimant reads one row it holds, redacted — box-token gated, attributed by `?fromId=`/`?fromUuid=`, " +
+    'and refused for a row held for anyone else'],
 
   ['POST /api/token/claim',
     'a door that authenticates by a single-use code it issued itself: the fleet box trades a code ' +

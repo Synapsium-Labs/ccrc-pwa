@@ -70,6 +70,31 @@ import {
 } from '../../../shared/api.js';
 import { REFUSAL_STATUS, type CollectLaneRouteRefusal, type MailRouteRefusal } from '../../../shared/refusal.js';
 import { refuseRoute, refuseRun } from '../refuse.js';
+import { createHash } from 'node:crypto';
+import { appendFileSync } from 'node:fs';
+import type { SessionRecord } from '../registry.js';
+import { readLiveStateMeasured } from '../livestate.js';
+import { approvalWindowMs } from '../askwindow.js';
+import { approvalClass, rootsForChild } from './approvalguard.js';
+import { redactedStored } from './redact.js';
+import { renderApprovalBrief } from './approvalbrief.js';
+import { approvalNudgeSubject } from './rundefs.js';
+import { heldFor } from './heldFor.js';
+import {
+  APPROVALS_DISABLED_FILE, loadOrCreateApprovalSigner, rulingsAllowedHere, serverApprovalsDisabled, type ApprovalSigner,
+} from './approvalsign.js';
+import {
+  APPROVAL_CHILD_SHELL, APPROVAL_CWD_TRUSTED, APPROVAL_HOOK_VERSIONS, APPROVAL_REASON_MAX_CHARS, APPROVAL_REFUSALS_LOG,
+  APPROVAL_REQUEST_MAX_BYTES, CHILD_DENY_SETTINGS_FILE, approvalDigestBytes, canonicalJson,
+  type ApprovalKeyAnswer, type ApprovalMintReleaseReason, type ApprovalRequestAccepted, type ApprovalRulingAnswer,
+  type ApprovalRulingRecord, type ApprovalView,
+} from '../../../shared/api.js';
+
+/** The approval request's id shapes (plan Task 16): a registry id as `ccrc-api`'s `SAFE_RE` admits it, a lowercase
+ *  sha256, and the hook's 128-bit nonce. */
+const SESSION_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
+const SHA256_HEX = /^[0-9a-f]{64}$/;
+const NONCE_HEX = /^[0-9a-f]{32}$/;
 
 /**
  * `POST /api/runs/:id/route`'s routable run states (review finding #6,
@@ -602,7 +627,7 @@ export function registerCoordRoutes(
    * what they are doing, and "claimant" is only true of one of them.
    */
   const attributionVerdict = async (
-    whoId: string, whoUuid: string, uuidField: 'byUuid' | 'fromUuid' | 'claimedByUuid',
+    whoId: string, whoUuid: string, uuidField: 'byUuid' | 'fromUuid' | 'claimedByUuid' | 'sessionUuid',
   ): Promise<AttributionRead> => {
     const names = await deps.io.readdir(deps.cfg.registryDir);
     if (names === null) {
@@ -634,7 +659,7 @@ export function registerCoordRoutes(
   // the verdict to `POST /api/runs`' `attribution` gate as a fact — one check,
   // two callers, the same words and statuses as the inline sends it replaced.
   const requireAttribution = async (
-    reply: FastifyReply, whoId: string, whoUuid: string, uuidField: 'byUuid' | 'fromUuid',
+    reply: FastifyReply, whoId: string, whoUuid: string, uuidField: 'byUuid' | 'fromUuid' | 'sessionUuid',
   ): Promise<boolean> => {
     const v = await attributionVerdict(whoId, whoUuid, uuidField);
     if (!v.ok) refuseRoute(reply, v.error, { detail: v.detail });
@@ -4211,6 +4236,378 @@ export function registerCoordRoutes(
       return reply.code(503).send({ ok: false, error: 'ask-unreadable', detail: read.detail });
     }
     return reply.code(200).send({ ok: true, asks: read.asks });
+  });
+
+  // ── approvals: the server half (coordinator-first routing spec 2026-10-17 §6.3, plan Task 16, D-5298) ───────────
+  //
+  // A dispatched child's PermissionRequest hook asks (`POST /api/approvals`), the server mints a row held for the
+  // child's run's attributed claimant (D-5530, D-5531: wherever it sits, no project compared) and mails it, the
+  // claimant rules (`POST /api/approvals/:id/rule`), the server signs the ruling with a key that never leaves this box,
+  // and the hook fetches it (`GET /api/approvals/:id/ruling?nonce=`) and verifies it with the pinned public key. Every
+  // refusal answers through `refuseRoute` (D-5381): the hook prints nothing on any of them, so the prompt stays the
+  // operator's (spec §12 invariant 4).
+
+  /** The signer, created on this server's first start with a coordination store (spec §6.4). A failure to create or
+   *  read it is warned once and leaves every signing route refusing `internal`, never a key made up elsewhere. */
+  let approvalSigner: ApprovalSigner | null = null;
+  const signerFor = (): ApprovalSigner | null => {
+    if (approvalSigner !== null) return approvalSigner;
+    try {
+      approvalSigner = loadOrCreateApprovalSigner(deps.cfg.ccrcDir);
+    } catch (err) {
+      console.warn(`ccrc-server: the approval signing key could not be loaded (${err instanceof Error ? err.message : String(err)}) — approvals refuse until it can`);
+    }
+    return approvalSigner;
+  };
+  if (deps.coord) signerFor();
+
+  /** The unredacted input a held row was classified from, kept ONLY in memory and only for the row's window (spec
+   *  §6.7: the server holds the unredacted input only for the request), so the rule route can run the guard again
+   *  (spec §6.3 server step 5). A server restarted mid-window has none, and then an allow is refused `guard-escalate`
+   *  (the guard cannot be re-run, and unknown means escalate); a deny still lands. */
+  const approvalInputs = new Map<number, { tool: string; input: Record<string, unknown>; cwd: string | null; until: number }>();
+  const forgetExpiredInputs = (now: number): void => {
+    for (const [k, v] of approvalInputs) if (v.until <= now) approvalInputs.delete(k);
+  };
+
+  /** Either kill switch (spec §6.8): the fleet box's `$REG/approvals-disabled`, read off the registry listing as the
+   *  hold reads `asks-disabled` (an unlistable registry reads as ON, fail shut), and the server box's own
+   *  `~/.ccrc/approvals-disabled`. Both are the operator's; nothing in this tree writes either. */
+  const approvalsKilled = async (): Promise<boolean> => {
+    if (serverApprovalsDisabled(deps.cfg.ccrcDir)) return true;
+    const listing = await deps.io.readdir(deps.cfg.registryDir);
+    return listing === null || listing.includes(APPROVALS_DISABLED_FILE);
+  };
+
+  /** Task 15's two spawn fields (spec §6.6, D-5360's requirement, D-5391): the child's `.deny-settings` equals the
+   *  managed deny file's CURRENT sha256, read off the fleet box, and its `.childshell` shows the bash pin. Anything
+   *  else, including a deny file this box cannot read, is not engaged. */
+  const denyEngaged = async (rec: SessionRecord): Promise<boolean> => {
+    const deny = rec.denySettings ?? { kind: 'none' };
+    const shell = rec.childShell ?? { kind: 'none' };
+    if (deny.kind !== 'digest' || shell.kind !== 'pinned' || shell.shell !== APPROVAL_CHILD_SHELL) return false;
+    const managed = await deps.io.readFileMeasured(path.join(deps.cfg.registryDir, CHILD_DENY_SETTINGS_FILE));
+    return managed.ok && createHash('sha256').update(managed.content, 'utf8').digest('hex') === deny.sha256;
+  };
+
+  /** The child's live Claude Code version, from its pane's live state file (the read `assembleFleet` makes), or null. */
+  const liveVersionOf = async (rec: SessionRecord): Promise<string | null> => {
+    const cfgDir = configDirFor(deps.cfg, rec.wrapper);
+    if (!cfgDir) return null;
+    const pid = await deps.tmux.panePid(rec.id);
+    if (pid === null) return null;
+    const read = await readLiveStateMeasured(deps.io, cfgDir, pid);
+    return read.ok ? read.state.version : null;
+  };
+
+  /** Doctor's `approval-digest-mismatch` reads this journal (spec §6.3: "a divergence is never silent"): one line per
+   *  `409 digest-mismatch`, `<epoch ms> digest-mismatch <session id>`, in the server box's state directory (D-5490). */
+  const journalDigestMismatch = (sessionId: string, now: number): void => {
+    try {
+      appendFileSync(path.join(deps.cfg.ccrcDir, APPROVAL_REFUSALS_LOG), `${now} digest-mismatch ${sessionId}\n`, { mode: 0o600 });
+    } catch (err) {
+      console.warn(`ccrc-server: the approval refusals journal could not be appended (${err instanceof Error ? err.message : String(err)})`);
+    }
+  };
+
+  /**
+   * `POST /api/approvals` — a child's hook asks for a ruling (spec §6.3 server steps 1 to 3). The ladder, cheapest
+   * refusal first, nothing minted on any refusal above the mint: box token (401), body shape (400), a kill switch
+   * (`approvals-disabled`), attribution of `sessionId` by `sessionUuid` (the registry gate every lane uses), the
+   * single-box opt-in (`single-box`), the registry's `ChildMark` (`not-a-child`), Task 15's spawn fields
+   * (`deny-not-engaged`), the live version (`version-unverified`), the digest and the re-canonicalisation
+   * (`digest-mismatch`, journaled), and the claimant rule (`heldFor`, D-5530): `not-a-child` with nothing minted, or a
+   * row minted `released` with its reason (`approval-released`), or held. A held request whose class is `forbidden` is
+   * minted `released` too, never mailed. Then the mint, the mail, and `201 {id, waitS}`, the window in seconds (D-5441).
+   */
+  app.post('/api/approvals', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    if (!requireMailToken(req, reply, 'POST /api/approvals')) return;
+
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const { sessionId, sessionUuid, digest, nonce, canonical, truncated } = body;
+    if (body['v'] !== 1 || typeof sessionId !== 'string' || !SESSION_ID_RE.test(sessionId)
+        || typeof sessionUuid !== 'string' || typeof digest !== 'string' || !SHA256_HEX.test(digest)
+        || typeof nonce !== 'string' || !NONCE_HEX.test(nonce)
+        || (canonical === undefined) === (truncated === undefined)
+        || (canonical !== undefined && (typeof canonical !== 'string' || Buffer.byteLength(canonical, 'utf8') > APPROVAL_REQUEST_MAX_BYTES))
+        || (truncated !== undefined && truncated !== true)) {
+      return refuseRoute(reply, 'bad-request', { detail: 'v 1, sessionId, sessionUuid, digest (64 hex), nonce (32 hex), and exactly one of canonical (a string) or truncated (true)' });
+    }
+    if (await approvalsKilled()) return refuseRoute(reply, 'approvals-disabled');
+    if (!(await requireAttribution(reply, sessionId, sessionUuid, 'sessionUuid'))) return;
+    if (!rulingsAllowedHere(deps.cfg.role, deps.cfg.ccrcDir)) {
+      return refuseRoute(reply, 'single-box', { detail: 'this server shares one box with the sessions; place ~/.ccrc/approvals-single-box to opt in' });
+    }
+    const signer = signerFor();
+    if (signer === null) return refuseRoute(reply, 'internal', { detail: 'the approval signing key is not loaded' });
+
+    const recs = await readRegistry(deps.io, deps.cfg);
+    const rec = recs.find((r) => r.id === sessionId) ?? null;
+    if (rec === null || rec.child.kind !== 'child') return refuseRoute(reply, 'not-a-child');
+    if (!(await denyEngaged(rec))) return refuseRoute(reply, 'deny-not-engaged');
+    const version = await liveVersionOf(rec);
+    if (version === null || !APPROVAL_HOOK_VERSIONS.includes(version)) {
+      return refuseRoute(reply, 'version-unverified', { detail: `this child's live Claude Code version (${version ?? 'unread'}) is not one the rig verified` });
+    }
+
+    const now = Date.now();
+    // The digest, then the re-canonicalisation: the server's own sha256 over the string sent, and that string parsed and
+    // canonicalised again by `approvalDigestBytes`, the one home of the form (spec §6.3 "The canonical form, exactly").
+    let request: { sessionId: unknown; agentId: unknown; tool: unknown; cwd: unknown; input: unknown } | null = null;
+    if (typeof canonical === 'string') {
+      let parsed: unknown = undefined;
+      try { parsed = JSON.parse(canonical); } catch { parsed = undefined; }
+      const arr = Array.isArray(parsed) && parsed.length === 5 ? parsed : null;
+      const again = arr === null ? null : approvalDigestBytes({
+        session_id: arr[0], agent_id: arr[1], tool_name: arr[2], cwd: arr[3], tool_input: arr[4],
+      });
+      if (createHash('sha256').update(canonical, 'utf8').digest('hex') !== digest || again !== canonical || arr === null) {
+        journalDigestMismatch(sessionId, now);
+        return refuseRoute(reply, 'digest-mismatch');
+      }
+      request = { sessionId: arr[0], agentId: arr[1], tool: arr[2], cwd: arr[3], input: arr[4] };
+    }
+
+    let verdict: Awaited<ReturnType<typeof heldFor>>;
+    try {
+      verdict = await heldFor({ coord, io: deps.io, cfg: deps.cfg, tmux: deps.tmux }, rec.id, rec.child, recs, now);
+    } catch (err) {
+      return refuseRoute(reply, 'run-unreadable', { detail: err instanceof Error ? err.message : String(err) });
+    }
+    if (verdict.kind === 'not-a-child') return refuseRoute(reply, 'not-a-child');
+
+    // The request's own shape: a truncated request has no input to judge, and a canonical array whose fields are not a
+    // request's is unparseable. Both are minted `released` (the operator has them), never held.
+    const shaped = request !== null && typeof request.agentId === 'string' && typeof request.tool === 'string'
+      && (request.cwd === null || typeof request.cwd === 'string')
+      && request.input !== null && typeof request.input === 'object' && !Array.isArray(request.input);
+    const agentId = shaped ? request!.agentId as string : '';
+    const tool = shaped ? request!.tool as string : '';
+    const input = shaped ? request!.input as Record<string, unknown> : {};
+    const cwd = shaped ? request!.cwd as string | null : null;
+    const cwdTrusted = APPROVAL_CWD_TRUSTED.includes(version);
+    const roots = rootsForChild(rec, deps.cfg.home) ?? { worktree: null, tmpRoot: null, scratch: null, home: deps.cfg.home };
+    const cls = shaped ? approvalClass(tool, input, { ...roots, cwd: cwdTrusted ? cwd : null }) : 'escalate';
+    const shown = shaped ? (typeof input['command'] === 'string' ? input['command'] : (canonicalJson(input) ?? '')) : '';
+    const releaseReason: ApprovalMintReleaseReason | null = truncated === true ? 'truncated'
+      : !shaped ? 'unparseable'
+      : verdict.kind === 'released' ? verdict.reason
+      : cls === 'forbidden' ? 'forbidden'
+      : null;
+    const parent = verdict.parent;
+    const notifyAt = now + approvalWindowMs(agentId);
+    const id = coord.insertApproval({
+      childId: rec.id, parentId: parent, runId: verdict.runId, digest, nonce, agentId, tool,
+      inputRedacted: redactedStored(shown), truncated: truncated === true, class: cls, askAt: now, notifyAt,
+      ...(releaseReason === null ? {} : { releaseReason }),
+    });
+    if (releaseReason !== null) {
+      // Released at once: the hook prints nothing, the menu stays with the operator, and nobody is mailed.
+      return refuseRoute(reply, 'approval-released', { id, releaseReason });
+    }
+    approvalInputs.set(id, { tool, input, cwd: cwdTrusted ? cwd : null, until: notifyAt });
+    queueSystemMail(coord, null, {
+      fromId: 'operator', toId: parent, runId: null, kind: 'question', subject: approvalNudgeSubject(id),
+      body: renderApprovalBrief({ id, childId: rec.id, tool, agentId, inputRedacted: redactedStored(shown), class: cls, digest, notifyAt }),
+    });
+    const accepted: ApprovalRequestAccepted = { id, waitS: Math.floor((notifyAt - now) / 1000) };
+    return reply.code(201).send(accepted);
+  });
+
+  /**
+   * `GET /api/approvals/:id/ruling?nonce=` — the hook's poll (spec §6.3 hook step 4). Box token; the nonce is the
+   * capability: another nonce, or a malformed one, reads as no row (`unknown-approval`, 404), on which the hook stops.
+   * `200 {state}` while the row is held; `200 {state, ruling}` once it is `allowed` or `denied`; and a row that is
+   * `declined`, `released`, `operator` or `stale` answers its state and no ruling, which the hook stops on (D-5440).
+   */
+  app.get('/api/approvals/:id/ruling', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    if (!requireMailToken(req, reply, 'GET /api/approvals/:id/ruling')) return;
+    const id = parseCanonicalPositiveSafeInteger((req.params as { id: string }).id);
+    if (id === null) return refuseRoute(reply, 'bad-request');
+    const nonce = (req.query as { nonce?: unknown }).nonce;
+    const read = coord.approvalById(id);
+    if (!read.ok) return refuseRoute(reply, 'approval-unreadable', { detail: read.detail });
+    const row = read.row;
+    if (row === null || typeof nonce !== 'string' || !NONCE_HEX.test(nonce) || nonce !== row.nonce) {
+      return refuseRoute(reply, 'unknown-approval');
+    }
+    const answer: ApprovalRulingAnswer = (row.state === 'allowed' || row.state === 'denied') && row.ruling !== null
+      ? { state: row.state, ruling: JSON.parse(row.ruling) as NonNullable<ApprovalRulingAnswer['ruling']> }
+      : { state: row.state };
+    return reply.code(200).send(answer);
+  });
+
+  /** `GET /api/approvals/key` — the server's public key, which the fleet box's install spine pins once (spec §6.4,
+   *  D-5487). Box token, so the pin is read by the fleet box's own client. */
+  app.get('/api/approvals/key', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    if (!requireMailToken(req, reply, 'GET /api/approvals/key')) return;
+    const signer = signerFor();
+    if (signer === null) return refuseRoute(reply, 'internal', { detail: 'the approval signing key is not loaded' });
+    const answer: ApprovalKeyAnswer = { v: 1, alg: 'ed25519', publicKey: signer.publicKeyPem() };
+    return reply.code(200).send(answer);
+  });
+
+  /**
+   * `POST /api/approvals/:id/rule` — the held-for claimant rules (spec §6.3 server steps 5 and 6, amended by D-5441
+   * and D-5530). Box token; `{fromId, fromUuid, verdict, reason}` and nothing that could widen a ruling (`permanent`,
+   * `updatedPermissions`, `mode` are 400); attribution; the row; the kill switches and the single-box gate (nothing is
+   * signed under either); the caller is the row's stored parent (`403 not-parent` for anyone else, wherever they sit:
+   * no project is compared, D-5530); a row minted released is the operator's (`approval-released`); the row's own
+   * state (`declined`, `already-ruled`, `hook-gone`); the window (`hook-gone` at or after `notifyAt`, D-5441); the
+   * child's mark still names the row's run (`not-a-child`) and the claimant rule still holds the row for the caller
+   * (`parent-changed`); the guard again for an allow (`guard-forbidden`, `guard-escalate`); then the signature, and
+   * the CAS that stores it.
+   */
+  app.post('/api/approvals/:id/rule', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    if (!requireMailToken(req, reply, 'POST /api/approvals/:id/rule')) return;
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    for (const k of ['permanent', 'updatedPermissions', 'mode']) {
+      if (Object.prototype.hasOwnProperty.call(body, k)) {
+        return refuseRoute(reply, 'bad-request', { detail: `a ruling allows once only; ${k} is never accepted` });
+      }
+    }
+    const { fromId, fromUuid, verdict, reason } = body;
+    if (typeof fromId !== 'string' || typeof fromUuid !== 'string' || (verdict !== 'allow' && verdict !== 'deny')
+        || typeof reason !== 'string' || reason.trim() === '' || reason.length > APPROVAL_REASON_MAX_CHARS) {
+      return refuseRoute(reply, 'bad-request', { detail: `fromId/fromUuid strings, verdict allow or deny, and a reason of 1 to ${APPROVAL_REASON_MAX_CHARS} characters` });
+    }
+    if (!(await requireAttribution(reply, fromId, fromUuid, 'fromUuid'))) return;
+    const id = parseCanonicalPositiveSafeInteger((req.params as { id: string }).id);
+    if (id === null) return refuseRoute(reply, 'bad-request');
+    const read = coord.approvalById(id);
+    if (!read.ok) return refuseRoute(reply, 'approval-unreadable', { detail: read.detail });
+    const row = read.row;
+    if (row === null) return refuseRoute(reply, 'unknown-approval');
+    if (await approvalsKilled()) return refuseRoute(reply, 'approvals-disabled');
+    if (!rulingsAllowedHere(deps.cfg.role, deps.cfg.ccrcDir)) return refuseRoute(reply, 'single-box');
+    if (row.parentId !== fromId) {
+      return refuseRoute(reply, 'not-parent', { detail: 'only the claimant this prompt was held for may rule on it' });
+    }
+    if (row.releaseReason !== null) return refuseRoute(reply, 'approval-released', { releaseReason: row.releaseReason });
+    if (row.state === 'declined') return refuseRoute(reply, 'declined');
+    if (row.state === 'allowed' || row.state === 'denied' || row.state === 'operator') return refuseRoute(reply, 'already-ruled');
+    const now = Date.now();
+    if (row.state !== 'held' && row.state !== 'released') return refuseRoute(reply, 'hook-gone');
+    if (now >= row.notifyAt) {
+      return refuseRoute(reply, 'hook-gone', { detail: 'the window has passed: the child\'s hook has returned and the operator has the prompt' });
+    }
+    const recs = await readRegistry(deps.io, deps.cfg);
+    const rec = recs.find((r) => r.id === row.childId) ?? null;
+    if (rec === null || rec.child.kind !== 'child' || rec.child.runId !== row.runId) return refuseRoute(reply, 'not-a-child');
+    let binding: Awaited<ReturnType<typeof heldFor>>;
+    try {
+      binding = await heldFor({ coord, io: deps.io, cfg: deps.cfg, tmux: deps.tmux }, rec.id, rec.child, recs, now);
+    } catch (err) {
+      return refuseRoute(reply, 'run-unreadable', { detail: err instanceof Error ? err.message : String(err) });
+    }
+    if (binding.kind === 'not-a-child') return refuseRoute(reply, 'not-a-child');
+    if (binding.kind !== 'held' || binding.parent !== fromId) return refuseRoute(reply, 'parent-changed');
+    if (verdict === 'allow') {
+      // The guard again (spec §6.3 server step 5): the class stored at mint, and the classifier run once more over the
+      // input held in memory for the window. Unknown — no input held — is escalate.
+      if (row.class === 'forbidden') return refuseRoute(reply, 'guard-forbidden');
+      forgetExpiredInputs(now);
+      const held = approvalInputs.get(id);
+      const again = held === undefined ? 'escalate'
+        : approvalClass(held.tool, held.input, { ...(rootsForChild(rec, deps.cfg.home) ?? { worktree: null, tmpRoot: null, scratch: null, home: deps.cfg.home }), cwd: held.cwd });
+      if (again === 'forbidden') return refuseRoute(reply, 'guard-forbidden');
+      if (row.class !== 'ordinary' || again !== 'ordinary') return refuseRoute(reply, 'guard-escalate');
+    }
+    const signer = signerFor();
+    if (signer === null) return refuseRoute(reply, 'internal', { detail: 'the approval signing key is not loaded' });
+    const record: ApprovalRulingRecord = {
+      v: 1, rowId: row.id, sessionId: row.childId, agentId: row.agentId, digest: row.digest, nonce: row.nonce,
+      class: row.class, verdict, reason, expiresAt: row.notifyAt,
+    };
+    const sig = signer.signRuling(record);
+    if (sig === null) return refuseRoute(reply, 'internal', { detail: 'the ruling has no canonical form' });
+    const taken = coord.takeApprovalForRule(id, { by: fromId, verdict, reason, ruling: JSON.stringify({ record, sig }), now });
+    if (!taken.ok) {
+      return refuseRoute(reply, taken.why === 'already-ruled' ? 'already-ruled' : taken.why === 'declined' ? 'declined'
+        : taken.why === 'unknown-approval' ? 'unknown-approval' : 'not-held');
+    }
+    approvalInputs.delete(id);
+    // The journal's second record, beside the row: who ruled, and what, in the operator's name.
+    const log = deps.notifyLog;
+    if (log) {
+      try {
+        const ev = log.record({
+          kind: 'ask', sessionId: row.childId, runId: null, title: 'permission ruled',
+          body: `${fromId} ${verdict === 'allow' ? 'allowed' : 'denied'} ${row.childId}'s ${row.tool} call: ${reason}`,
+        });
+        coord.recordFeedEvent(log.epoch, ev);
+      } catch (err) {
+        console.warn(`ccrc-server: recordFeedEvent failed (${err instanceof Error ? err.message : String(err)}) — ruling stored, feed archive degraded`);
+      } finally {
+        void log.flush();
+      }
+    }
+    watcher?.approvalRuled(row.childId, fromId, verdict);
+    return { ok: true, state: verdict === 'allow' ? 'allowed' : 'denied' };
+  });
+
+  /** `POST /api/approvals/:id/release` — the held-for claimant hands the prompt over (`held -> declined`, D-5440): the
+   *  hook stops on its next poll, and the operator's push fires at once. Box token, attribution, the stored parent. */
+  app.post('/api/approvals/:id/release', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    if (!requireMailToken(req, reply, 'POST /api/approvals/:id/release')) return;
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const { fromId, fromUuid } = body;
+    if (typeof fromId !== 'string' || typeof fromUuid !== 'string') {
+      return refuseRoute(reply, 'bad-request', { detail: 'fromId/fromUuid strings' });
+    }
+    if (!(await requireAttribution(reply, fromId, fromUuid, 'fromUuid'))) return;
+    const id = parseCanonicalPositiveSafeInteger((req.params as { id: string }).id);
+    if (id === null) return refuseRoute(reply, 'bad-request');
+    const read = coord.approvalById(id);
+    if (!read.ok) return refuseRoute(reply, 'approval-unreadable', { detail: read.detail });
+    const row = read.row;
+    if (row === null) return refuseRoute(reply, 'unknown-approval');
+    if (row.parentId !== fromId) {
+      return refuseRoute(reply, 'not-parent', { detail: 'only the claimant this prompt was held for may hand it over' });
+    }
+    if (!coord.declineApproval(id, fromId, Date.now())) return refuseRoute(reply, 'not-held');
+    approvalInputs.delete(id);
+    watcher?.releaseHeldApproval(row.childId);
+    return { ok: true };
+  });
+
+  /** `GET /api/approvals/:id?fromId=&fromUuid=` — one row, redacted, for the claimant it was held for (spec §6.7:
+   *  "the full input is on the row"). Box token and attribution, as `GET /api/asks` scopes a box-token caller: a
+   *  session reads only a row held for it (`403` otherwise, and a row minted released was held for nobody). */
+  app.get('/api/approvals/:id', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    if (!requireMailToken(req, reply, 'GET /api/approvals/:id')) return;
+    const q = req.query as { fromId?: unknown; fromUuid?: unknown };
+    if (typeof q.fromId !== 'string' || typeof q.fromUuid !== 'string') {
+      return refuseRoute(reply, 'bad-request', { detail: '?fromId= and ?fromUuid= prove which claimant is reading' });
+    }
+    if (!(await requireAttribution(reply, q.fromId, q.fromUuid, 'fromUuid'))) return;
+    const id = parseCanonicalPositiveSafeInteger((req.params as { id: string }).id);
+    if (id === null) return refuseRoute(reply, 'bad-request');
+    const read = coord.approvalById(id);
+    if (!read.ok) return refuseRoute(reply, 'approval-unreadable', { detail: read.detail });
+    const row = read.row;
+    if (row === null) return refuseRoute(reply, 'unknown-approval');
+    if (row.parentId !== q.fromId || row.releaseReason !== null) {
+      return refuseRoute(reply, 'not-parent', { detail: 'a session reads only the rows held for it' });
+    }
+    const view: ApprovalView = {
+      id: row.id, childId: row.childId, parentId: row.parentId, runId: row.runId, agentId: row.agentId, tool: row.tool,
+      input: row.inputRedacted, truncated: row.truncated, class: row.class, state: row.state,
+      releaseReason: row.releaseReason, askAt: row.askAt, notifyAt: row.notifyAt, ruledAt: row.ruledAt,
+      verdict: row.verdict, reason: row.reason, answeredBy: row.answeredBy, toolUseId: row.toolUseId,
+    };
+    return reply.code(200).send({ ok: true, approval: view });
   });
 
   /**
