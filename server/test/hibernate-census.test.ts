@@ -84,6 +84,10 @@ const CENSUS: readonly Row[] = [
     why: '`hasSession`: whether a pane is live, which a sleeper\'s is not' },
   { source: 'tmux-verdict', file: 'server/src/server.ts', hits: 1, stances: ['true-of-pane'],
     why: 'the archive door\'s stop-after-archive arm acts only on a live pane; `ccd ws-archive` removes `.hibernated`' },
+  { source: 'tmux-verdict', file: 'server/src/sessionws.ts', hits: 1, stances: ['true-of-pane', 'held-awake'],
+    why: 'the session socket\'s `resolve()` (D-5561): `gone` rules the session\'s workflow runs interrupted, so none '
+      + 'shows as running — true of a sleeper, whose pane runs nothing; and a running workflow is background work, '
+      + 'which the verdict\'s holds keep from ever being put to sleep' },
   { source: 'tmux-verdict', file: 'server/src/turnverdict.ts', hits: 1, stances: ['wakes-first'],
     why: 'the fail-closed turn verdict reads a sleeper `unmeasured`; dispatch\'s `/clear` gate meets it only after '
       + 'its `ensure` woke it (D-5238\'s `worker-starting`), and the swap route answers `409 hibernated` before reading it' },
