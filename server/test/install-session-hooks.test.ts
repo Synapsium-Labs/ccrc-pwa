@@ -5,6 +5,7 @@ import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { seedAccountsSh } from './ccdWsHelpers.js';
+import { CHILD_DENY_RULES } from '../../shared/api.js';
 
 const INSTALLER = path.resolve(__dirname, '../../ccd/install-session-hooks.sh');
 
@@ -367,5 +368,44 @@ describe('every managed hook entry but SessionEnd\'s carries HOOK_TIMEOUT_S, a b
     const bytes = fs.readFileSync(cfg('.claude'), 'utf8');
     runScrubbed();
     expect(fs.readFileSync(cfg('.claude'), 'utf8')).toBe(bytes);
+  });
+});
+
+describe('the children\'s deny file (spec §6.6, plan Task 15, D-5299)', () => {
+  const denyFile = (): string => path.join(home, '.cc-sessions', 'child-deny.settings.json');
+  it('holds exactly CHILD_DENY_RULES, iterated, and nothing else', () => {
+    run();
+    const doc = JSON.parse(fs.readFileSync(denyFile(), 'utf8'));
+    expect(Object.keys(doc)).toEqual(['permissions']);
+    expect(Object.keys(doc.permissions)).toEqual(['deny']);
+    expect(doc.permissions.deny).toHaveLength(CHILD_DENY_RULES.length);
+    CHILD_DENY_RULES.forEach((rule, i) => expect(doc.permissions.deny[i], `rule ${i}`).toBe(rule));
+  });
+  it('touches no home\'s own settings.json: no permissions key, and a home\'s own deny list survives as it was', () => {
+    const own = { ...EXISTING, permissions: { deny: ['Bash(rm -rf /:*)'] } };
+    fs.writeFileSync(cfg('.claude-personal'), JSON.stringify(own, null, 2));
+    run();
+    expect(JSON.parse(fs.readFileSync(cfg('.claude'), 'utf8')).permissions).toBeUndefined();
+    expect(JSON.parse(fs.readFileSync(cfg('.claude-personal'), 'utf8')).permissions).toEqual(own.permissions);
+  });
+  it('re-running keeps the file\'s bytes (so every recorded digest still matches)', () => {
+    run();
+    const bytes = fs.readFileSync(denyFile());
+    const ino = fs.statSync(denyFile()).ino;
+    run();
+    expect(fs.readFileSync(denyFile()).equals(bytes)).toBe(true);
+    expect(fs.statSync(denyFile()).ino).toBe(ino);
+  });
+  // D-5392: the file is the BOX's, not a home's. `ccrc account remove` runs
+  // `--remove --homes <that one home>`; deleting the file there stripped every
+  // other account's children of the deny layer until the next install. Only
+  // `ccrc uninstall`'s `_uninst_cc_sessions` removes it (ccrc-uninstall.test.ts).
+  it('--remove, scoped to one home or roster-wide, leaves the file byte-identical (D-5392)', () => {
+    run();
+    const bytes = fs.readFileSync(denyFile());
+    execFileSync('bash', [INSTALLER, '--remove', '--homes', path.join(home, '.claude')], { env: { ...process.env, HOME: home } });
+    expect(fs.readFileSync(denyFile()).equals(bytes)).toBe(true);
+    execFileSync('bash', [INSTALLER, '--remove', '--homes', path.join(home, '.claude'), path.join(home, '.claude-personal')], { env: { ...process.env, HOME: home } });
+    expect(fs.readFileSync(denyFile()).equals(bytes)).toBe(true);
   });
 });
