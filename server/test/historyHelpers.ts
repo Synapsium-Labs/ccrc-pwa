@@ -297,6 +297,10 @@ export interface DriverDeps {
   /** The word an --op pass's store open answers instead of opening (FU4 M28), handed to sweep.mjs as deps.openStore. */
   openStoreWord?: string;
   extraMigrations?: string[]; heavy?: number[]; managedSettings?: string[];
+  /** A path suffix: every fs.readSync on a descriptor that names such a file throws EIO (D-4340's read error on one admitted copy). */
+  eioOnRead?: string;
+  /** A text: a sha256 hash fed bytes that hold it throws, so the transcript parser crashes on the chunk that holds it (D-5061's crash arm). */
+  parserCrashOn?: string;
   /** W1-B2 Task 25: the run budget's wall-clock limit in ms, handed to sweep.mjs as deps.budget.maxMs (default lib's RUN_BUDGET_MS). */
   budgetMs?: number;
   /** W1-B2 Task 25: the run budget's byte limit, handed to sweep.mjs as deps.budget.maxBytes (default lib's RUN_BUDGET_BYTES). */
