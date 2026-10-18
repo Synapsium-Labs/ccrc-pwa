@@ -4073,6 +4073,11 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     Opus verifier, 12 kept and 11 corrected, none dropped. I added four: R22's two source cites by content, and
     the wave 14 plan's `acked` flag, which shipped as `held`, in two places. Guards green, private-name scan clean.
     Left alone, as outside R22: the spec's other `file:line` cites in §1 and §13, which are snapshots of the base.
+  - **06:05 UTC: run 561's coordinator consents (mail 6207) to my editing `README.md` and `ccrc-account.test.ts`**
+    beside its claims 1627 and 1623. The fence: its edits there are line-neutral name swaps, the second PR to land
+    keeps both by content, and my lines carry no private name. So R24(e)'s README half and R35(c)'s seven
+    `ccrc-account.test.ts` citations join #584 (workflow `wf_be83ff87-7bc`). README's Reading 9 clause and its
+    `ccrc-api` lines still wait for wave 17.
 
 ## Carried constraints
 
