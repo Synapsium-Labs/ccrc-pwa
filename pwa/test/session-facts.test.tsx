@@ -194,6 +194,9 @@ describe('the rendered card is a glance, and the rendered header holds all of it
         const meta = card.querySelector('.sess-meta')!;
         // The glance: a status, at most one context, at most one marker — nothing else on the meta line.
         expect(meta.children.length).toBeLessThanOrEqual(3);
+        // …and across the whole card: one marker at most, one context line at most.
+        expect(card.querySelectorAll('[data-marker], .sess-spawn').length).toBeLessThanOrEqual(1);
+        expect(card.querySelectorAll('.sess-meta').length).toBeLessThanOrEqual(2);
         expect(card.querySelector('.sess-acct')).toBeNull();
         expect(card.querySelector('.sess-ask')).toBeNull();
         expect(card.textContent).not.toMatch(/run #\d|run:\d|program:|wave:\d/);
