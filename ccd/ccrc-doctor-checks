@@ -8630,7 +8630,7 @@ _check_docs-sw() {
 # writer when it is not current: `ccd-update-sync` on a `fleet` node, this
 # box's own server process on a `both` node. A `server` node runs no hook; a
 # box with no recorded role arms no writer by configuration. Both SKIP.
-# Appended at the END of this file: lines above are cited by number elsewhere.
+# Appended near the END of this file: lines above are cited by number elsewhere.
 _check_server-caps() {
   local LC_ALL=C
   local role="" f="$HOME/.ccrc/server-caps" writer remedy why="" lease=180 writer_unit=""

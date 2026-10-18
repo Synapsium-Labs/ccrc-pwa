@@ -4360,11 +4360,12 @@ describe('R115 to R117 and R120 (review 556 F3, W1, F2; review 563 F1): the read
 
   it('R120 (review 563 F1): after a cut recovery, on a forward clock, the instant is the setting pass\'s clock, not the earlier settle: a creator call within the skew after that clock is held', async () => {
     // R116's order: the recovery settles at at(9), and the first pass after it, at at(10), sets the instant. On a forward clock that
-    // pass's clock is later than the settle, so it is the clamp, `Math.max(pass.now, recoveredAt ?? appliedAt)`, that holds the stretch
-    // from the settle to the setting pass, which no pass read. demo-a's creator call begins at at(10) + 20 s: more than the skew after the
-    // settle, within the skew after the setting pass's clock. This row pins the clamp on the recoveredAt arm (R115 pins it on the
-    // appliedAt arm). Mutant: the appliedAt arm clamped only (`readyAt = recoveredAt ?? Math.max(pass.now, appliedAt)`): the instant is
-    // the settle, and the call links.
+    // pass's clock is later than the settle, so it is the clamp, `Math.max(pass.now, recoveredAt ?? appliedAt)`, that holds calls up to
+    // the setting pass's clock plus the skew. In this fixture the gap from the settle to the setting pass is one STEP, which equals the
+    // skew, so the row tells apart only the skew tail past the setting pass's clock. demo-a's creator call begins at at(10) + 20 s: more
+    // than the skew after the settle, within the skew after the setting pass's clock. This row pins the clamp on the recoveredAt arm (R115
+    // pins it on the appliedAt arm). Mutant: the appliedAt arm clamped only (`readyAt = recoveredAt ?? Math.max(pass.now, appliedAt)`):
+    // the instant is the settle, and the call links.
     const w = world();
     makeOwner(w, 'demo-a');
     await censusPass(w, at(-1), BEFORE_TREE);                           // ready
