@@ -99,7 +99,7 @@ const CASES: Record<string, FactInput> = {
   },
   'an unreachable pane with every other marker too': {
     session: s({ substrate: { at: NOW - 60_000, text: 'tmux socket gone' }, limits: { five: 99, seven: null },
-      swapBlocked: { at: NOW, reason: 'no headroom' }, unmeasured: ['status'] }),
+      swapBlocked: { at: NOW, reason: 'no headroom' }, unmeasured: ['uuid'] }),
     now: NOW,
   },
 };

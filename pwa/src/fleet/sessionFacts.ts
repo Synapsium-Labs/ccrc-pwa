@@ -13,7 +13,7 @@
 //     (`shortenByToken`), never mid-token, and the full text rides `title`.
 //   • The HEADER is the full set — a SUPERSET of the card: every card fact under
 //     the same key, with its full text, plus everything the card leaves out.
-//     `cardFacts(f)` ⊆ `headerFacts(f)` is pinned by `session-facts.test.ts`.
+//     `cardFacts(f)` ⊆ `headerFacts(f)` is pinned by `card-header-facts.test.tsx`.
 //
 // Measured before this file (390px, both skins): a child's card read `idle ·
 // program:… · run not on the board · lane-a` with a second line under it

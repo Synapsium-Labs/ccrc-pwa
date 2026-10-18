@@ -305,7 +305,7 @@ describe('the row says which kind of dead it is', () => {
   // (M9 — a notice raised with no socket open is gone). Kills rendering it as
   // a toast, and kills a cell that clears itself on the next fleet tick.
   // D-5545: the row says `swap blocked` (its one marker) with the reason in the title, every render; the header's
-  // details state it in full (`markers`, `session-facts.test.tsx`).
+  // details state it in full (`markers`, `card-header-facts.test.tsx`).
   it('a blocked swap says so on the row with its reason in the title, and keeps saying it', () => {
     const reason = 'no transcript found for uuid b7001948';
     const blocked = s({ swapBlocked: { at: Date.now() - 5 * MIN, reason } });
