@@ -89,6 +89,13 @@ describe('Presence: the open claim', () => {
     expect(p.isOpen(ID)).toBe(false);
   });
 
+  it('at exactly PRESENCE_OPEN_TTL_MS with no frame it has lapsed, as the visible claim does at its own TTL', () => {
+    const { c, p } = clocked();
+    p.markOpen(Symbol('a'), ID);
+    c.t = T0 + PRESENCE_OPEN_TTL_MS;
+    expect(p.isOpen(ID)).toBe(false);
+  });
+
   it('touch re-stamps: a beat at 9 minutes keeps it open at 18', () => {
     const { c, p } = clocked();
     const tok = Symbol('a');

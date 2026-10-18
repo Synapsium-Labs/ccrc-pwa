@@ -33,6 +33,7 @@ import {
 export interface HibernateSweepDeps {
   /** Undefined without a coordination store: every row then holds `runs-unreadable`. */
   readonly coord: Pick<CoordStore, 'openRunsForSession' | 'openRunsClaimedBy' | 'activeClaims' | 'outstandingMailFor'> | undefined;
+  /** Undefined: every row holds `viewer` (fail closed): a screen nothing measured is never an empty one. */
   readonly presence: Pick<Presence, 'isOpen'> | undefined;
   /** `turnverdict.ts`'s `liveWordFor`, over the watcher's thunks. */
   readonly liveWord: (rec: SessionRecord) => Promise<
@@ -101,9 +102,11 @@ export async function hibernateShadowPass(
     const rec = byId.get(s.id);
     if (rec === undefined) continue;
     const row: HibernateRow = s;
+    // Built again for each ask: the store and presence are re-read AFTER the live reads, which take real time (Task
+    // 17b's act-time re-measure keeps this order).
     const input = (live: HibernateLive, at: number): HibernateInput => ({
       row, optedOut: names.includes(`${s.id}.${NO_HIBERNATE_SUFFIX}`), store: storeRead(deps.coord, claimants, s.id),
-      viewer: deps.presence?.isOpen(s.id) ?? false, sinceStartMs: at - deps.startedAt, live,
+      viewer: deps.presence?.isOpen(s.id) ?? true, sinceStartMs: at - deps.startedAt, live,
     });
     let now = deps.now();
     let v = hibernateVerdict(input({ kind: 'unread' }, now), now, afterMs);

@@ -349,3 +349,40 @@ describe('the watcher\'s own shadow pass, its deps unmocked', () => {
     }
   });
 });
+
+describe('hibernateShadowPass: the store and presence are read again after the live reads', () => {
+  // The live reads take real time (a tmux call, two file reads). What the store or a screen said BEFORE them is not
+  // what holds AFTER them: Task 17b's act-time re-measure reuses this order, so a pass that read them once is red.
+  it('a viewer who opens the session while the live reads run holds viewer', async () => {
+    let calls = 0;
+    const f = fake({ presence: { isOpen: () => { calls += 1; return calls > 1; } } });
+    const out = await pass(f);
+    expect(out).toEqual([{ id: ID, verdict: { act: 'hold', reason: 'viewer' } }]);
+    expect(f.lines).toEqual([]);
+  });
+
+  it('a run opened for the session while the live reads run holds run-worker', async () => {
+    const f = fake();
+    let calls = 0;
+    const real = f.deps.coord!;
+    const coord: NonNullable<HibernateSweepDeps['coord']> = {
+      ...real,
+      openRunsForSession: (id) => {
+        calls += 1;
+        return calls > 1 ? { ok: true, siblings: [{ id: 1, program: 'program-a', wave: 1, waveOf: 1 }] } : real.openRunsForSession(id);
+      },
+    } as NonNullable<HibernateSweepDeps['coord']>;
+    const out = await pass({ ...f, deps: { ...f.deps, coord } });
+    expect(out).toEqual([{ id: ID, verdict: { act: 'hold', reason: 'run-worker' } }]);
+    expect(f.lines).toEqual([]);
+  });
+});
+
+describe('hibernateShadowPass: no presence port at all', () => {
+  it('holds viewer (fail closed): an unmeasured screen is never an empty one', async () => {
+    const f = fake();
+    const out = await pass({ ...f, deps: { ...f.deps, presence: undefined } });
+    expect(out).toEqual([{ id: ID, verdict: { act: 'hold', reason: 'viewer' } }]);
+    expect(f.lines).toEqual([]);
+  });
+});

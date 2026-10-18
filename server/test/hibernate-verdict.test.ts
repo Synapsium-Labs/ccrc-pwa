@@ -10,6 +10,7 @@ import {
   type HibernateStoreRead,
 } from '../src/coord/hibernate.js';
 import { PRESENCE_OPEN_TTL_MS, PRESENCE_TTL_MS, RUN_STATES, TERMINAL_RUN_STATES } from '../../shared/api.js';
+import { TURN_MARK_STATES } from '../src/coord/stall.js';
 
 const NOW = 1_800_000_000_000;
 const MIN = 60_000;
@@ -61,6 +62,7 @@ const CASES: readonly (readonly [HibernateHold, Partial<HibernateInput>, string]
   ['menu', { row: row({ dialogPending: true }) }, 'a pane menu'],
   ['background', { row: row({ background: { count: 1, kinds: ['subagent'] } }) }, 'background set'],
   ['roster', { row: row({ subagents: [{ name: 'a0000000000000001', startedAt: NOW - MIN }] }) }, 'roster non-empty'],
+  ['marker', { live: live({ mark: { state: 'working' } }) }, 'marker working (mid-turn, or an Esc that never fired Stop) over an idle live word'],
   ['marker', { live: live({ mark: { state: 'failed' } }) }, 'marker failed'],
   ['marker', { live: live({ mark: { ok: false, reason: 'stale' } }) }, 'marker stale (not this process)'],
   ['marker', { live: live({ mark: { ok: false, reason: 'absent' } }) }, 'marker absent (an older hook)'],
@@ -95,6 +97,18 @@ describe('hibernateVerdict: every hold, one case each', () => {
 
   it('the cases cover HIBERNATE_HOLDS exactly: a hold with no case, or a case with no hold, is red', () => {
     expect([...new Set(CASES.map(([r]) => r))].sort()).toEqual([...HIBERNATE_HOLDS].sort());
+  });
+});
+
+describe('hibernateVerdict: every marker state but done holds marker', () => {
+  // Generated from TURN_MARK_STATES, plus a word off that list, so no `marker` hold can be narrowed to one state
+  // silently: a check that tests for `failed` alone lets `working` (a turn in flight, or one Esc interrupted) sleep.
+  const NOT_DONE = [...TURN_MARK_STATES.filter((s) => s !== 'done'), 'some-later-state'];
+  it('the list is not empty, and names working', () => {
+    expect(NOT_DONE).toContain('working');
+  });
+  it.each(NOT_DONE)('marker %s, live word idle → hold marker', (state) => {
+    expect(verdict({ live: live({ mark: { state } }) })).toEqual(held('marker'));
   });
 });
 
