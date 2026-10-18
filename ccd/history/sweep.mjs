@@ -6165,6 +6165,14 @@ function managedReadables(list) {
   return out;
 }
 
+/** The last retention measured for `home`, in days: the positive integer retentionCensus kept in meta `retention:<home>`,
+ *  or null when the home was never measured or the stored text is not one. The ONE reader of that key: the census
+ *  feeds it to the harness reader as `lastDays`, and the export pass reads the same number through exportHomeDays. */
+function lastRetentionDays(db, home) {
+  const raw = getMeta(db, `retention:${home}`);
+  return raw !== null && /^[1-9][0-9]*$/.test(raw) ? Number(raw) : null;
+}
+
 /** §9.15 "The horizon, per source harness": each rostered home's retention through HARNESS_TABLE's
  *  claude-code reader. A measured value is kept per home in meta; an unreadable file or a value that is not a
  *  positive integer is `retention_unmeasured`, and that home keeps its LAST measured value — 30 only when it
@@ -6173,8 +6181,7 @@ export function retentionCensus(db, homes, managedList) {
   const managed = managedReadables(managedList);
   const days = {};
   for (const h of homes) {
-    const lastRaw = getMeta(db, `retention:${h}`);
-    const last = lastRaw !== null && /^[1-9][0-9]*$/.test(lastRaw) ? Number(lastRaw) : null;
+    const last = lastRetentionDays(db, h);
     const r = HARNESS_TABLE['claude-code'].retention({ home: readable(join(h, 'settings.json')), managed, lastDays: last });
     if (r.state === 'unmeasured') bump(db, 'retention_unmeasured');
     else setMeta(db, `retention:${h}`, String(r.days));
@@ -6234,6 +6241,29 @@ function transcriptFiles(db, homes, homeDays) {
   return byTranscript;
 }
 
+/** RD1's ONE file clock: the holding files of every transcript, as the export census (exportCensus) and the export pass
+ *  (exportSelect) both read them, so neither keeps a copy that could drift from the other. Answers
+ *  - `files`: transcriptFiles' map, transcript_pk to the files' homes, presence and mtime (B1's census clock: a row's
+ *    holding files are its TRANSCRIPT's, not its own copies through memberships, D-4248
+ *    history-export-holding-files-by-transcript; each file's home is the shortest-retention rostered home containing it,
+ *    B2's D-4612 history-export-file-home-shortest-of-containing);
+ *  - `filesOf(pk)`: one transcript's files as lib's ExportFile, a file under no rostered home read against the SHORTEST
+ *    rostered home (the early side); `minDays` is that home's retention, shortestRetention's answer;
+ *  - `transcripts`: EVERY transcript, a file-less one included (no clock: due at once), `{ key, files }`, ready for lib's
+ *    dueTranscriptKeys, the default per-copy rule's prefilter (B2's D-4735 history-export-due-per-copy).
+ *  `homeDays` is home to retention days; with no home at all, a file's home is undefined, which fileDueMs reads as the
+ *  harness default, as it reads null. */
+function exportFileClock(db, homeDays) {
+  const homes = Object.keys(homeDays);
+  const minDays = shortestRetention(homeDays);
+  const minHome = homes.find((h) => homeDays[h] === minDays);
+  const files = transcriptFiles(db, homes, homeDays);
+  const filesOf = (pk) => (files.get(pk) ?? []).map((f) => ({ home: f.home ?? minHome, mtimeMs: f.mtimeMs, present: f.present }));
+  const transcripts = db.prepare('SELECT transcript_pk FROM transcripts ORDER BY transcript_pk').all()
+    .map((r) => ({ key: r.transcript_pk, files: filesOf(r.transcript_pk) }));
+  return { minDays, files, filesOf, transcripts };
+}
+
 /** The candidate blobs of one chunk: unexported, unpruned, past the cursor, with at least one referrer whose
  *  transcript the default rule makes due now (the JSON array of lib's dueTranscriptKeys, bound once per clause).
  *  A blob is due only when EVERY referrer is, which planExport decides; this is only the prefilter, and it is exact
@@ -6273,15 +6303,8 @@ const EXPORT_HOLDERS_SQL = 'SELECT t.transcript_pk AS pk, '
 export function exportCensus(db, nowMs, budget) {
   const state = stepCursorGet(db, 'export-census');
   if (state === null) return true;
-  const homes = Object.keys(state.homeDays);
-  const minDays = Math.min(...Object.values(state.homeDays));
-  const minHome = homes.find((h) => state.homeDays[h] === minDays);
-  const files = transcriptFiles(db, homes, state.homeDays);
-  /** A transcript's holding files as lib's ExportFile; a file under no rostered home reads against the shortest. */
-  const filesOf = (pk) => (files.get(pk) ?? []).map((f) => ({ home: f.home ?? minHome, mtimeMs: f.mtimeMs, present: f.present }));
-  // Every transcript, a file-less one included (no clock: due at once), through the default rule.
-  const transcripts = db.prepare('SELECT transcript_pk FROM transcripts').all()
-    .map((r) => ({ key: r.transcript_pk, files: filesOf(r.transcript_pk) }));
+  // The file clock and every transcript (a file-less one included: no clock, due at once), shared with the export pass.
+  const { files, filesOf, transcripts } = exportFileClock(db, state.homeDays);
   const dueKeys = JSON.stringify(dueTranscriptKeys({ nowMs, homeRetentionDays: state.homeDays, transcripts }));
   const candidates = db.prepare(EXPORT_CANDIDATES_SQL);
   const referrers = db.prepare(EXPORT_REFERRERS_SQL);
@@ -7507,7 +7530,6 @@ function exportStmts(db) {
     dueEntries: db.prepare(EXPORT_DUE_ENTRIES_SQL),
     nullTsEntries: db.prepare(EXPORT_NULL_TS_ENTRIES_SQL),
     transcriptEntries: db.prepare(EXPORT_TRANSCRIPT_ENTRIES_SQL),
-    transcriptPks: db.prepare('SELECT transcript_pk FROM transcripts ORDER BY transcript_pk'),
     unlinked: db.prepare(EXPORT_UNLINKED_SQL),
     rowBlobs: db.prepare('SELECT blob_id FROM entries WHERE entry_id = ? UNION SELECT blob_id FROM entry_variants WHERE entry_id = ? '
       + 'UNION SELECT kept_blob_id FROM boundaries WHERE entry_id = ? AND kept_blob_id IS NOT NULL'),
@@ -7546,10 +7568,7 @@ function segInt(v) {
  *  here: the census reads the files once, and the pass and doctor read the same numbers. */
 function exportHomeDays(db, homes) {
   const days = {};
-  for (const h of homes) {
-    const raw = getMeta(db, `retention:${h}`);
-    days[h] = raw !== null && /^[1-9][0-9]*$/.test(raw) ? Number(raw) : CLAUDE_CODE_DEFAULT_RETENTION_DAYS;
-  }
+  for (const h of homes) days[h] = lastRetentionDays(db, h) ?? CLAUDE_CODE_DEFAULT_RETENTION_DAYS;
   return days;
 }
 
@@ -7571,17 +7590,13 @@ function ensureExportDirs(P, storeId) {
  *  the cutoff, and `complete`: false when the bound or the run's budget stopped the selection with due rows left. */
 function exportSelect(db, ctx, nowMs, homeDays, boundBytes) {
   const s = exportStmts(db);
-  const homes = Object.keys(homeDays);
-  // The shortest rostered home decides two things here and no due verdict: the ts prefilter's cutoff, and the home a
-  // file outside every rostered home is measured against (the census's mapping, B1: the early side). planSegment's
-  // per-copy default measures every other file against its own home (B2's D-4735 (history-export-due-per-copy)).
-  const minDays = shortestRetention(homeDays);
-  const minHome = homes.find((h) => homeDays[h] === minDays) ?? null;
-  const cutoffMs = nowMs - exportHorizonDays(minDays) * DAY_MS;
   // A candidate's holding files are its TRANSCRIPT's, B1's census clock, not its own copies through memberships: the
-  // export and the census read one clock (D-4248).
-  const files = transcriptFiles(db, homes, homeDays);   // each file's home: the shortest-retention rostered home containing it (B2's D-4612)
-  const filesOf = (pk) => (files.get(pk) ?? []).map((f) => ({ home: f.home ?? minHome, mtimeMs: f.mtimeMs, present: f.present }));
+  // export and the census read one clock (RD1; D-4248), and exportFileClock is that one clock, shared with the census,
+  // down to the home a file outside every rostered home is measured against (the early side). The shortest rostered
+  // home's horizon decides here no due verdict, only the ts prefilter's cutoff below; planSegment's per-copy default
+  // measures every file against its own home (B2's D-4735 (history-export-due-per-copy)).
+  const { minDays, filesOf, transcripts } = exportFileClock(db, homeDays);
+  const cutoffMs = nowMs - exportHorizonDays(minDays) * DAY_MS;
   // Rows per page: EXPORT_PAGE_ROWS, or an in-process test's ctx.deps.exportPageRows (D-4247).
   const pageRows = Number.isSafeInteger(ctx.deps?.exportPageRows) && ctx.deps.exportPageRows > 0 ? ctx.deps.exportPageRows : EXPORT_PAGE_ROWS;
   const sel = { taken: [], carry: new Set(), stubs: new Set(), transcripts: new Set(), linked: new Map(), cutoffMs, complete: true };
@@ -7659,7 +7674,6 @@ function exportSelect(db, ctx, nowMs, homeDays, boundBytes) {
   // due at one instant whatever its own time, so the ts prefilter below would pass over the young ones: a transcript
   // with no holding file left on disk, and one whose young rows outlived the files that held them while an older file
   // of it stays on disk (B2's D-4735 (history-export-due-per-copy)). planSegment still decides each row.
-  const transcripts = s.transcriptPks.all().map((t) => ({ key: Number(t.transcript_pk), files: filesOf(Number(t.transcript_pk)) }));
   for (const pk of dueTranscriptKeys({ nowMs, homeRetentionDays: homeDays, transcripts })) {
     for (let ts = cutoffMs, after = 0; ;) {
       const page = s.transcriptEntries.all(pk, cutoffMs, ts, ts, after, pageRows);

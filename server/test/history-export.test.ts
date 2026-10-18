@@ -316,6 +316,36 @@ describe('the export pass, in-process (W1-B4 Task 5; spec §9.15 "What is due", 
     expect(segmentRows(seg, 'blobs').map((b) => b['sha256'])).toContain(side['sha']);
   }, 120_000);
 
+  it('an unlinked sidecar whose blob prune tombstoned is no candidate: a stub alone is never offered, so no pass publishes a segment holding only that stub', async () => {
+    const { box, ids } = ingestedBox('ccrc-history-export-sidecar-pruned-', [row(1, 'a prompt', DAY)], {
+      passes: 3,
+      plant: (b) => {
+        const dir = path.join(b.accountHome['claude-a']!, 'projects', SLUG, U, 'tool-results');
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, 'b9x0-orphan.txt'), 'output no tool_result names');
+      },
+    });
+    expect(q(box, 'SELECT name, entry_id FROM sidecars'), 'the fixture must leave one unlinked sidecar')
+      .toEqual([{ name: 'b9x0-orphan.txt', entry_id: null }]);
+    const NOW = Date.now();
+    const name = `1.${ids.writer}.db`;
+    const r = await onStore(box, (db) => {
+      // B2 Task 20's tombstone on that sidecar's blob, as prune --apply writes it
+      db.prepare("UPDATE blobs SET z = NULL, pruned_ms = ?, fts_indexed = 0 WHERE blob_id = (SELECT blob_id FROM sidecars WHERE name = 'b9x0-orphan.txt')")
+        .run(NOW - MIN);
+      return SW.exportPass(db, exportCtx(box, ids, () => NOW));
+    });
+    expect(r, 'the prompt row alone: the pruned sidecar blob is not a candidate').toMatchObject({ state: 'written', segment: name, rows: 1, blobs: 1, complete: true });
+    const seg = path.join(exportDirOf(box), name);
+    expect(segmentRows(seg, 'blobs').map((b) => b['pruned']), 'no stub of the sidecar\'s blob').toEqual([0]);
+    expect(segmentRows(seg, 'sidecars')).toEqual([]);
+    expect(marks(box)).toEqual({ [rid(1)]: name });
+    // The stub is never marked exported, so a candidate that offered it would be offered again by every later pass.
+    const again = await onStore(box, (db) => SW.exportPass(db, exportCtx(box, ids, () => NOW + HOUR)));
+    expect(again, 'a second pass finds nothing').toEqual({ state: 'nothing-due', segment: null, rows: 0, blobs: 0, bytes: 0, complete: true });
+    expect(segmentsOf(box), 'and publishes no further segment').toEqual([name]);
+  }, 120_000);
+
   it('the bound: a segment takes at least one row even past it, stops there, and the rest go into the next pass\'s segment', async () => {
     const { box, ids } = ingestedBox('ccrc-history-export-bound-', [
       row(1, 'oldest', 3 * DAY), row(2, 'middle', 2 * DAY), row(3, 'newest', DAY),
