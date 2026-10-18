@@ -359,7 +359,7 @@
      step for its role without moving a pixel in Refined. The closed list a
      skin may override is SKIN_TOKENS in skins.ts. Two of these change with
      the width; their wider values are in the ROLES BY WIDTH block at the end
-     of this file. Nothing reads a role until Task 14. */
+     of this file. The shared primitives read them (role-census.test.ts). */
   --fs-ui:      var(--fs-base);   /* controls and rows */
   --fs-prose:   var(--fs-base);   /* chat and Markdown */
   --fs-meta:    var(--fs-xs);     /* timestamps, chips */
