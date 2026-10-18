@@ -465,6 +465,9 @@ export function hitsIn(line, file, entries) {
   return hits.length === 0 ? [] : [...new Set(hits.filter(exempt(file)).map((x) => x.h8))];
 }
 
+const TRAILING_BLANKS = /[\s\u00ad\u200b-\u200d\u2060\ufeff]+$/u;
+const CONTINUATION = /^\s*(?:\/\/+|\*+|#+|>+|--|;+)?\s*/;
+
 /** A `words` phrase broken across a line break: the hits in the facing ends of
  *  two adjacent lines that neither line holds alone. Reported against the
  *  first line. @param {string} prev @param {string} line @param {string} file @param {Entry[]} entries */
@@ -477,25 +480,33 @@ export function pairHits(prev, line, file, entries) {
   if (prev !== lastLine || entries !== lastEntries) hitsAt(prev, entries);
   if (!lastStarts) return [];
   // Only whitespace may sit between a phrase's words, so the previous line must
-  // end on a letter or digit and this one start on one.
-  if (!/[\p{L}\p{N}]\s*$/u.test(prev) || !/^\s*[\p{L}\p{N}]/u.test(line)) return [];
-  const tail = prev.slice(-80), head = line.slice(0, 80);
+  // end on a letter or digit (trailing blanks and invisibles aside) and this one
+  // start on one, once the marker a wrapped comment or quote repeats (`//`, ` * `,
+  // `#`, `>`, `--`, `;`) is set aside.
+  const before = prev.replace(TRAILING_BLANKS, '');
+  const after = line.replace(CONTINUATION, '');
+  if (!/[\p{L}\p{N}]$/u.test(before) || !/^[\p{L}\p{N}]/u.test(after)) return [];
+  const tail = before.slice(-80), head = after.slice(0, 80);
   const alone = new Set([...hitsIn(tail, file, words), ...hitsIn(head, file, words)]);
   return hitsIn(`${tail}\n${head}`, file, words).filter((h) => !alone.has(h));
 }
 
 /** `text` with every hit replaced by its `#h8` — how a path is printed, since a
  *  file named after an entry would otherwise put the name into the log that
- *  reports it. @param {string} text @param {Entry[]} entries */
+ *  reports it. Overlapping hits are one span, masked whole: masking one and
+ *  skipping the other would leave part of a name readable.
+ *  @param {string} text @param {Entry[]} entries */
 export function maskText(text, entries) {
-  const hits = hitsAt(text, entries).sort((a, b) => b.origStart - a.origStart);
-  let out = text;
-  let floor = Infinity;
-  for (const h of hits) {
-    if (h.origEnd > floor) continue;
-    out = `${out.slice(0, h.origStart)}#${h.h8}${out.slice(h.origEnd)}`;
-    floor = h.origStart;
+  const spans = [...hitsAt(text, entries)].sort((a, b) => a.origStart - b.origStart || b.origEnd - a.origEnd);
+  /** @type {{ start: number, end: number, h8: string }[]} */
+  const merged = [];
+  for (const h of spans) {
+    const last = merged[merged.length - 1];
+    if (last && h.origStart < last.end) last.end = Math.max(last.end, h.origEnd);
+    else merged.push({ start: h.origStart, end: h.origEnd, h8: h.h8 });
   }
+  let out = text;
+  for (const m of merged.reverse()) out = `${out.slice(0, m.start)}#${m.h8}${out.slice(m.end)}`;
   return out;
 }
 

@@ -48,7 +48,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  CANARY, EXEMPTIONS, MODES, PRIVATE_NAMES, entryKey, entryOf, hitsIn, maskText, pairHits,
+  CANARY, EXEMPTIONS, MODES, PRIVATE_NAMES, entriesOf, entryKey, entryOf, hitsIn, maskText, pairHits,
 } from './private-names.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -782,7 +782,14 @@ describe('the hashed class: its entries, its exemptions, its branch corpus', () 
     const found = violationsOf(cls, synthetic);
     expect(found).toEqual([`server/#${CANARY_H8}.md:1 #${CANARY_H8}`]);
     expect(found.join('\n')).not.toContain(CANARY);
-    expect(typeof cls.matchPair).toBe('function');
+    // The scan reads a phrase across a line break through `violationsOf`: the
+    // class with a synthetic phrase in place of its entries, so a deleted
+    // pair loop reds here.
+    const phrase = entriesOf('zed quux', 'words');
+    const probe: ForbiddenClass = { ...cls, match: (line, file) => hitsIn(line, file, phrase),
+      matchPair: (prev, line, file) => pairHits(prev, line, file, phrase) };
+    expect(violationsOf(probe, [{ file: 'server/synthetic.md', lines: ['written by Zed', 'Quux on Monday'] }]))
+      .toEqual([`server/synthetic.md:1 #${phrase[0]!.h.slice(0, 8)}`]);
   });
 
   it('keeps its exemptions at three or fewer', () => {

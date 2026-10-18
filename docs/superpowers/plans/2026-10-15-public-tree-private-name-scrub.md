@@ -330,8 +330,9 @@ Run 561 was issued D-5277 to D-5288 at dispatch. Each number is defined here whe
   `--all` reaches refs that were never published (local-only tags, the stash), and a fixed-string `-G` counts a token
   inside an unrelated longer word, which would commit a hash for a name whose private sense was never public. A row
   whose base64 copy is in that history counts as present: the two base64-literal classes this plan removes published
-  those names in decodable form, so hashing them reveals nothing new. Result: 80 rows `pub`, 17 `local` (8 already
-  local, 9 measured absent); no `local` row has a hit in the tree. A first pass that matched each row in its own mode
+  those names in decodable form, so hashing them reveals nothing new. Result: 80 rows `pub`, 17 `local`: 9 measured absent, and 8 the list already marked `local`, which stay
+  local by Step 6's rule whatever history holds (one of them is in a commit trailer); no `local` row has a hit in the
+  tree. A first pass that matched each row in its own mode
   marked one row `local` that the tree speaks joined another way; the Task 1 review found it.
 - **D-5278** — `no-product-passes` (Task 1 Step 7): class 9's `passes` carry no product run. The tree speaks product
   vocabulary containing a `run` entry's tokens for one row only, and committing that vocabulary beside the class,
@@ -349,8 +350,8 @@ Run 561 was issued D-5277 to D-5288 at dispatch. Each number is defined here whe
   tree writes a name in, found by the independent `grep -F` cross-check and by the Task 1 review. A list row commits
   up to three entries (`entriesOf`): its tokens split at camelCase boundaries, its camelCase pieces merged, and all
   its tokens run together. A line is read split; then, where it has a camelCase boundary, every run of two to four
-  consecutive camelCase pieces is read as one token against the one-token entries (a name inside `useXxx` or
-  `XxxClient`), and its pieces merged. An upper-case run splits before its last capital when a lower-case letter
+  consecutive camelCase pieces, at most 40 characters, is read as one token against the one-token `part` entries
+  (a name inside `useXxx` or `XxxClient`), and its pieces merged. An upper-case run splits before its last capital when a lower-case letter
   follows. A line is folded one code point at a time: NFKC, Unicode hyphens to `-`, soft hyphens and zero-width
   characters dropped. The old classes matched substrings, so a name with a letter or digit appended still scored;
   class 9 matches whole tokens, and such a form is caught only where it is another listed row.
@@ -361,8 +362,9 @@ Run 561 was issued D-5277 to D-5288 at dispatch. Each number is defined here whe
   one to `exact`, eight from `run` to `part`, where `part` loses nothing and also catches a name inside a branch or
   workspace slug.
 - **D-5282** — `the-class-reads-like-the-scan` (Task 1, Review Focus 3 and 4): class 9 prints a path with each hit
-  replaced by its `#h8`, since a file named after an entry would otherwise put the name into a public CI log, and it
-  reads a `words` phrase broken across two lines, which the plan left to the local scan. The branch corpus reads a
+  replaced by its `#h8` (overlapping hits masked as one span), since a file named after an entry would otherwise put
+  the name into a public CI log, and it reads a `words` phrase broken across two lines (through a repeated comment or
+  quote marker), which the plan left to the local scan. The branch corpus reads a
   path git decorates in a diff header (a trailing TAB after a space, C-quoting with octal escapes).
 - **D-5283** — `commercial-work-list` (Task 2 Step 3): `info/ccrc-scrub/crit-text.txt` is the inventory critic's list of
   text paths, not the commercial and legal work list. The work list was the critic's commercial entry, re-measured at

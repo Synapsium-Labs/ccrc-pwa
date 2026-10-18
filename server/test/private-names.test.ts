@@ -8,7 +8,7 @@
 // `-`, plus the first token's own hash and the token count — so a pin that
 // passes here passes for the committed entries too.
 import { describe, it, expect } from 'vitest';
-import { hashEntry, matchLine, tokens, entryOf, entriesOf, hitsIn, maskText, pairHits } from './private-names.mjs';
+import { EXEMPTIONS, hashEntry, matchLine, tokens, entryOf, entriesOf, hitsIn, maskText, pairHits } from './private-names.mjs';
 
 const e = (text: string, mode: 'part' | 'exact' | 'run' | 'words') => {
   const ts = tokens(text).map((x) => x.t);
@@ -141,10 +141,40 @@ describe('the class and scan helpers', () => {
     expect(maskText('nothing here', rows)).toBe('nothing here');
   });
 
+  it('maskText masks overlapping hits as one span, whatever their order', () => {
+    const zz = entriesOf('zz', 'part');
+    const pair = entriesOf('zz-alpha', 'part');
+    for (const rows of [[...zz, ...pair], [...pair, ...zz]]) {
+      const out = maskText('docs/zz-alpha-notes.md', rows);
+      expect(out).toMatch(/^docs\/#[0-9a-f]{8}-notes\.md$/);
+    }
+    const tail = entriesOf('alpha-beta', 'part');
+    const out = maskText('a zz-alpha-beta b', [...pair, ...tail]);
+    expect(out).toMatch(/^a #[0-9a-f]{8} b$/);
+  });
+
   it('pairHits finds a phrase broken across two lines, and only that', () => {
     const rows = entriesOf('zed quux', 'words');
     expect(pairHits('written by Zed', 'Quux on Monday', 'x.md', rows)).toEqual([h8(rows[0]!)]);
     expect(pairHits('by Zed Quux', 'on Monday', 'x.md', rows)).toEqual([]);
+  });
+
+  it('pairHits reads through a wrapped comment or quote marker and trailing blanks', () => {
+    const rows = entriesOf('zed quux', 'words');
+    for (const [a, b] of [['// written by Zed', '// Quux on Monday'], [' * written by Zed', ' * Quux on Monday'],
+      ['# written by Zed', '# Quux on Monday'], ['> written by Zed', '> Quux on Monday'],
+      [`written by Zed${' '.repeat(100)}`, 'Quux on Monday'], ['written by Zed\u00ad', 'Quux on Monday']]) {
+      expect(pairHits(a, b, 'x.md', rows), JSON.stringify([a.slice(0, 20), b])).toEqual([h8(rows[0]!)]);
+    }
+  });
+
+  it('the exemptions hold only in a history-programme document under docs/', () => {
+    // The upstream entry's own h8, exactly as private-names.mjs names it; the hit
+    // object stands in for one the matcher would build on `<name>@abcdef01`.
+    const hit = { h8: '4dda1e70', start: 0, end: 4, folded: 'xxxx@abcdef01', origStart: 0, origEnd: 4 };
+    expect(EXEMPTIONS.some((x) => x.applies('docs/superpowers/specs/x-ccrc-history-y.md', hit))).toBe(true);
+    for (const f of ['server/src/ccrc-history.ts', 'ccd/ccrc-history-x', 'docs/superpowers/specs/x-design.md'])
+      expect(EXEMPTIONS.some((x) => x.applies(f, hit)), f).toBe(false);
   });
 
   it('the exemptions are the upstream citation only: any other entry is a hit even there', () => {
