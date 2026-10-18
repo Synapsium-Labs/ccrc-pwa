@@ -11,8 +11,14 @@
 //
 // WHAT IT NEVER DOES (D-5475):
 //  - carry a path's directories: an object is a file name only, cut to
-//    `SUMMARY_OBJECT_MAX` with an ellipsis. The full input stays in the
-//    `ToolCard`, one tap away;
+//    `SUMMARY_OBJECT_MAX` code points with an ellipsis, and a path-like word
+//    in an Agent description goes to its file name too. A Grep pattern is the
+//    one exception: it is a regex, where a slash is a character, so it stays
+//    whole. The full input stays in the `ToolCard`, one tap away;
+//  - count by the words it shows: a group's clause counts distinct calls by
+//    their full input (the whole path, the whole command), so two different
+//    `index.ts` files are two files and `git status` and `git diff` are two
+//    commands;
 //  - fold an ask, a failed entry or a live entry: each ends the run it would
 //    have joined and stays its own `tool` item, so nothing that wants the
 //    reader's eye is hidden inside a fold.
@@ -60,6 +66,8 @@ interface Verb {
   many: (count: number) => string;
   /** When the object cannot be read (an input cut upstream, a missing field). */
   bare: string;
+  /** A 'text' object that is prose, whose path-like words go to file names. */
+  prose?: boolean;
 }
 
 const READ: Verb = {
@@ -79,7 +87,7 @@ const searched = (shape: Shape): Verb => ({
   one: (o) => `Searched for ${o}`, many: (c) => `Searched for ${c} patterns`, bare: 'Searched',
 });
 const DELEGATED: Verb = {
-  verb: 'Delegated', field: 'description', shape: 'text',
+  verb: 'Delegated', field: 'description', shape: 'text', prose: true,
   one: (o) => `Delegated: ${o}`, many: (c) => `Delegated ${c} tasks`, bare: 'Delegated a task',
 };
 const TASK_LIST: Verb = {
@@ -133,18 +141,53 @@ function baseName(path: string): string {
   return parts[parts.length - 1] ?? '';
 }
 
+/** Cut by code points, so an astral character (an emoji) is never split. */
 function cut(s: string): string {
-  return s.length > SUMMARY_OBJECT_MAX ? `${s.slice(0, SUMMARY_OBJECT_MAX - 1)}…` : s;
+  const points = Array.from(s);
+  return points.length > SUMMARY_OBJECT_MAX ? `${points.slice(0, SUMMARY_OBJECT_MAX - 1).join('')}…` : s;
+}
+
+/** One shell word: quoted, or up to the next space. */
+const WORD = String.raw`(?:"[^"]*"|'[^']*'|[^\s;&|]+)`;
+/** A leading `cd <dir> &&` or `cd <dir>;`, and a leading `VAR=value`. */
+const CD_PREFIX = new RegExp(String.raw`^cd\s+${WORD}\s*(?:&&|;)\s*`);
+const ENV_PREFIX = new RegExp(String.raw`^[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S*)\s+`);
+
+/** The command a Bash call runs: its first word once any leading `cd <dir>`
+ *  step and `VAR=value` words are gone. */
+function commandWord(raw: string): string {
+  let rest = raw;
+  for (;;) {
+    const next = rest.replace(CD_PREFIX, '').replace(ENV_PREFIX, '');
+    if (next === rest) break;
+    rest = next;
+  }
+  // The first word is often a path itself (./node_modules/.bin/vitest).
+  return baseName(rest.split(/\s+/, 1)[0] ?? '');
+}
+
+/** A prose description with each path-like word reduced to its file name. */
+function proseOf(raw: string): string {
+  return raw
+    .split(/\s+/)
+    .map((w) => (/[\\/]/.test(w) ? baseName(w) : w))
+    .filter((w) => w !== '')
+    .join(' ');
+}
+
+/** The raw field an object comes from: '' when there is none or it is unreadable. */
+function rawOf(v: Verb, input: string): string {
+  if (v.shape === 'none' || v.field === undefined) return '';
+  return field(input, v.field)?.trim() ?? '';
 }
 
 function objectOf(v: Verb, input: string): string {
-  if (v.shape === 'none' || v.field === undefined) return '';
-  const raw = field(input, v.field)?.trim() ?? '';
+  const raw = rawOf(v, input);
   if (raw === '') return '';
-  // A command's first word is often a path itself (./node_modules/.bin/vitest).
   const lifted =
     v.shape === 'file' ? baseName(raw)
-    : v.shape === 'word' ? baseName(raw.split(/\s+/, 1)[0] ?? '')
+    : v.shape === 'word' ? commandWord(raw)
+    : v.prose === true ? proseOf(raw)
     : raw.replace(/\s+/g, ' ');
   return cut(lifted);
 }
@@ -185,25 +228,32 @@ function standsAlone(item: ToolItem): boolean {
 }
 
 /** The counted sentence for a group: one clause per verb (per tool name, for a
- *  tool outside the table), in the order each first appears. */
+ *  tool outside the table), in the order each first appears. A clause counts
+ *  distinct calls by their full input — the whole path, the whole command —
+ *  never by the cut object it shows (D-5475). */
 function groupSentence(entries: ToolItem[]): string {
-  const clauses = new Map<string, { verb: Verb | undefined; name: string; objects: Set<string>; count: number }>();
+  const clauses = new Map<
+    string,
+    { verb: Verb | undefined; name: string; calls: Set<string>; object: string; count: number }
+  >();
   for (const e of entries) {
     const v = VERBS[e.use.name];
     // Keyed on the clause the reader sees: Edit and Write both say "Edited".
     const key = v ? `v:${v.verb}:${v.many(2)}` : `n:${e.use.name}`;
-    const c = clauses.get(key) ?? { verb: v, name: e.use.name, objects: new Set<string>(), count: 0 };
+    const c = clauses.get(key) ?? { verb: v, name: e.use.name, calls: new Set<string>(), object: '', count: 0 };
     c.count += 1;
-    if (v) c.objects.add(objectOf(v, e.use.input));
+    if (v) {
+      c.calls.add(rawOf(v, e.use.input));
+      c.object = objectOf(v, e.use.input);
+    }
     clauses.set(key, c);
   }
   return [...clauses.values()]
-    .map(({ verb, name, objects, count }) => {
+    .map(({ verb, name, calls, object, count }) => {
       if (verb === undefined) return count > 1 ? `${name} ×${count}` : name;
       if (verb.shape === 'none') return verb.one('');
-      if (objects.size > 1) return verb.many(objects.size);
-      const [only = ''] = objects;
-      return only === '' ? verb.bare : verb.one(only);
+      if (calls.size > 1) return verb.many(calls.size);
+      return object === '' ? verb.bare : verb.one(object);
     })
     .join(' · ');
 }

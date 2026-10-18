@@ -46,6 +46,15 @@ describe('toolSummary', () => {
     expect(sentence(done('Task', { description: 'Audit the palette', prompt: 'long' }))).toBe('Delegated: Audit the palette');
     expect(sentence(done('TodoWrite', { todos: [] }))).toBe('Updated the task list');
     expect(sentence(done('TaskCreate', { subject: 'x' }))).toBe('Updated the task list');
+    // A command's leading `cd <dir> &&` (or `;`) and its VAR=value words are
+    // not the command: the first word after them is (D-5475).
+    expect(sentence(done('Bash', { command: 'cd /a/pwa && npm test' }))).toBe('Ran npm');
+    expect(sentence(done('Bash', { command: 'cd "/a b/pwa"; git status' }))).toBe('Ran git');
+    expect(sentence(done('Bash', { command: 'cd /a && cd pwa && npx vitest run' }))).toBe('Ran npx');
+    expect(sentence(done('Bash', { command: 'PATH=/usr/bin:/bin npm test' }))).toBe('Ran npm');
+    expect(sentence(done('Bash', { command: 'GITHUB_TOKEN=x A="b c" gh pr list' }))).toBe('Ran gh');
+    // A Grep pattern is a regex and stays whole: its slash is a character.
+    expect(sentence(done('Grep', { pattern: 'a/b' }))).toBe('Searched for a/b');
 
     const unknown = toolSummary(done('mcp__linear__get_issue', { id: 'ABC-1' }));
     expect(unknown.sentence).toBe('mcp__linear__get_issue');
@@ -75,6 +84,11 @@ describe('toolSummary', () => {
     const agent = toolSummary(done('Agent', { description: desc })).object;
     expect(agent.length).toBe(SUMMARY_OBJECT_MAX);
     expect(agent.endsWith('…')).toBe(true);
+    // The cut counts code points, so an astral character is never split.
+    const astral = toolSummary(done('Agent', { description: '\u{1F600}'.repeat(SUMMARY_OBJECT_MAX + 5) })).object;
+    expect(Array.from(astral)).toHaveLength(SUMMARY_OBJECT_MAX);
+    expect(astral).toBe('\u{1F600}'.repeat(SUMMARY_OBJECT_MAX - 1) + '…');
+    expect(astral).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
 
     // An input cut at TOOL_INPUT_MAX upstream is not JSON; the field is still read.
     const u = use('Edit', null, '{"file_path":"/a/b/c/ChatList.tsx","old_string":"' + 'x'.repeat(50));
@@ -142,7 +156,7 @@ describe('groupToolRun', () => {
     const g = at(groups(out), 0);
     expect(g.entries).toHaveLength(6);
     expect(g.entries.map((e) => e.use.name)).toEqual(['Read', 'Read', 'Read', 'Edit', 'Bash', 'Bash']);
-    expect(g.sentence).toBe('Read 3 files · Edited chat.css · Ran npm');
+    expect(g.sentence).toBe('Read 3 files · Edited chat.css · Ran 2 commands');
     expect(g.key).toBe(`group-${at(g.entries, 0).key}`);
 
     // Plurals per verb, in the order each verb first appears.
@@ -172,6 +186,39 @@ describe('groupToolRun', () => {
     // Nothing else is touched: same items, same order, same objects.
     const plain = items([msg('hi', 'user'), msg('there')]);
     expect(groupToolRun(plain)).toEqual(plain);
+  });
+
+  it('a clause counts distinct calls by their full input, not by the words it shows', () => {
+    const sentenceOf = (es: ChatEvent[]): string => at(groups(groupToolRun(items(es))), 0).sentence;
+    // Three commands, two first words: three ran.
+    expect(sentenceOf([
+      ...pair('Bash', { command: 'git status' }),
+      ...pair('Bash', { command: 'npm test' }),
+      ...pair('Bash', { command: 'git diff' }),
+    ])).toBe('Ran 3 commands');
+    // Two files sharing a base name are two files.
+    expect(sentenceOf([
+      ...pair('Read', { file_path: '/a/pwa/src/index.ts' }),
+      ...pair('Read', { file_path: '/a/server/src/index.ts' }),
+    ])).toBe('Read 2 files');
+    // Edit and Write are one clause, counted by full path.
+    expect(sentenceOf([
+      ...pair('Edit', { file_path: '/a/pwa/index.ts' }),
+      ...pair('Write', { file_path: '/b/index.ts' }),
+      ...pair('Edit', { file_path: '/c/x.ts' }),
+    ])).toBe('Edited 3 files');
+    // The same file read twice is one file; the same command twice, one command.
+    expect(sentenceOf([
+      ...pair('Read', { file_path: '/a/index.ts' }),
+      ...pair('Read', { file_path: '/a/index.ts' }),
+      ...pair('Bash', { command: 'npm test' }),
+      ...pair('Bash', { command: 'npm test' }),
+    ])).toBe('Read index.ts · Ran npm');
+    // Patterns and tasks count by their full strings too.
+    expect(sentenceOf([
+      ...pair('Agent', { description: 'Audit the palette for contrast' }),
+      ...pair('Agent', { description: 'Audit the palette for motion' }),
+    ])).toBe('Delegated 2 tasks');
   });
 
   it('an ask, a failed entry and a live entry each stand alone', () => {
@@ -212,7 +259,12 @@ describe('groupToolRun', () => {
       done('Write', { file_path: winDeep }),
       done('Bash', { command: '/usr/local/bin/node scripts/x.mjs' }),
       done('Glob', { pattern: 'pwa/src/**/deep/*.css' }),
+      done('Bash', { command: 'cd /a/pwa/src/session && npm test' }),
+      // An Agent description is prose: a path-like word in it goes to its file name.
+      done('Agent', { description: 'Fix pwa/src/session/ChatList.tsx and C:\\x\\session\\y.ts' }),
     ];
+    // Grep is the one exception (D-5475): its pattern is a regex, kept whole,
+    // so it is not in this list.
     for (const e of entries) {
       const s = sentence(e);
       expect(s).not.toMatch(/[\\/]/);
