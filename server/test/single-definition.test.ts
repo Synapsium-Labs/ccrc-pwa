@@ -6838,7 +6838,9 @@ describe('ccrc history card line: the hook and lib spell one grammar, one cap an
     const l = await lib();
     const code = codeLines(HOOK_SH);
     expect(assigned(code, 'HISTORY_CARD_MAX')).toEqual([String(l['CARD_LINE_MAX'])]);
-    expect(code.filter((x) => /(?<![\w.])51[23](?![\w.])/.test(x)), 'a hand-kept 512 or 513').toEqual([`HISTORY_CARD_MAX=${String(l['CARD_LINE_MAX'])}`]);
+    // The delegation spool's jq definitions (#448) spell its own 512-character path bound, `def maxpath: 512;`, a different
+    // quantity: that one token is set aside, and any other 512 or 513 on any line, that one included, still counts.
+    expect(code.filter((x) => /(?<![\w.])51[23](?![\w.])/.test(x.replace('def maxpath: 512;', ''))), 'a hand-kept 512 or 513').toEqual([`HISTORY_CARD_MAX=${String(l['CARD_LINE_MAX'])}`]);
     const spelled = code.filter((x) => x.includes('HISTORY_CARD_MAX + 1'));
     expect(spelled.length, 'the read and the reserve').toBe(2);
     expect(spelled.some((x) => /\bread -r -N "\$\(\( HISTORY_CARD_MAX \+ 1 \)\)"/.test(x)), 'the read').toBe(true);

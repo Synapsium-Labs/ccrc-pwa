@@ -12134,7 +12134,10 @@ describe('history scope marker: PreCompact records whose context is compacting (
     expect(early, 'one early invalidation line').toHaveLength(1);
     const at = src.indexOf(`\n${early[0]!}\n`);
     expect(at, 'below the event case').toBeGreaterThan(src.indexOf('\nesac\n'));
-    expect(at, 'above the hookstate compose and every exit after it').toBeLessThan(src.indexOf('\nout=$(jq -cn'));
+    // The hookstate compose, wherever it is indented (main's dispatch-live gate wraps it in `if [[ -z "$hs_skip" ]]`).
+    const compose = src.search(/\n[ \t]*out=\$\(jq -cn \\\n[ \t]*--argjson v 1 --arg state /);
+    expect(compose, 'the hookstate compose').toBeGreaterThan(-1);
+    expect(at, 'above the hookstate compose and every exit after it').toBeLessThan(compose);
     expect(early[0], 'the invalidation forks').not.toMatch(/\$\(|`/);
     // B1's S1 form (its FR2a): a `${…@…}` transformation forks too, since `@P` runs prompt expansion and so command
     // substitution. The early line, the gate and `_hook_history_scope`'s body spell none (past the gates the body may
@@ -12172,6 +12175,9 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
   beforeEach(async () => {
     lib = await import('../../ccd/history/lib.mjs');
     LINE = lib.cardLine({ leaf: 'L03a9c1', parent: 'N7c1e2f' });
+    // A child row (the stub pane names `demo-quiet-basin`): the D-5301 role subject is silent, so what each case reads is
+    // the card line alone, as main's compact-card cases measure their subject (it rides the standing card, not the line's clip).
+    fs.writeFileSync(path.join(home, '.cc-sessions', `${ID}.child`), '');
   });
   const histDir = (...p: string[]): string => path.join(home, '.ccrc', 'history', ...p);
   const reg = (f: string): string => path.join(home, '.cc-sessions', f);
@@ -12179,6 +12185,7 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
   const plantDirs = (id = ID): void => {
     fs.mkdirSync(histDir('scope'), { recursive: true, mode: 0o700 });
     fs.mkdirSync(histDir('card', id), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(reg(`${id}.child`), '');   // the id's own child row: the D-5301 role subject stays silent (beforeEach above)
   };
   /** What Task 8's marker writes, planted directly: `<scope> <psid> <ms>`. */
   const mark = (text = `main ${SID} ${Date.now()}`, id = ID): void => fs.writeFileSync(histDir('scope', id), `${text}\n`);
