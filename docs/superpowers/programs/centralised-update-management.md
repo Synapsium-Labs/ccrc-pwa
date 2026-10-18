@@ -4011,6 +4011,10 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     `NRestarts` by name, because `--value` prints them in the manager's order; that fit is D-5328, and the ruled
     outcomes stand. The `mode=full` run it asks for goes out after #482's landing runs, so the two don't compete for
     runners; it covers the Darwin rows D5, D6 and D13.
+  - **04:15 UTC: #425 now lands before #397 and #410 (mail 6171, its coordinator).** No PR of ours shares a file
+    with #425; the docs PR's README half waits for #425's claim, so this frees it sooner. Path identity's review
+    run 575 dispatched at 03:11. Told #425's coordinator (mail 6172): wave 17 waits for #482, not #425, and nothing
+    on our side asks #410 to wait for #425.
 
 ## Carried constraints
 
