@@ -58,9 +58,8 @@ import {
   type MirroredLifecycleEvent, type PeerDeliverable, type PeerSummary, type RunState, type RunSummary,
   type FailureKind, type RouteField, type RunRouteBody, type RouteMode,
   type StallConfirmRequired, type StallWatchEffective, type StallWatchStages, type StallWatchView, type StallWriteEffect,
-  type CollectLaneRefusal,
 } from '../../../shared/api.js';
-import { REFUSAL_STATUS, type MailRouteRefusal } from '../../../shared/refusal.js';
+import { REFUSAL_STATUS, type CollectLaneRouteRefusal, type MailRouteRefusal } from '../../../shared/refusal.js';
 import { refuseRoute } from '../refuse.js';
 
 /**
@@ -2872,8 +2871,8 @@ export function registerCoordRoutes(
       : c.kind === 'mismatch' ? `a mismatch (journal maximum ${c.journalMax}, database generation ${c.rowGeneration})`
         : `unmeasurable (${c.why})`;
   /** A refusal body, `{ok, error, detail?}`: never a path, never an errno. */
-  const collectRefuse = (reply: FastifyReply, status: number, error: CollectLaneRefusal, detail?: string) =>
-    reply.code(status).send(detail === undefined ? { ok: false, error } : { ok: false, error, detail });
+  const collectRefuse = (reply: FastifyReply, error: CollectLaneRouteRefusal, detail?: string) =>   // D-5381: REFUSAL_STATUS's
+    reply.code(REFUSAL_STATUS[error]).send(detail === undefined ? { ok: false, error } : { ok: false, error, detail });
 
   app.get('/api/coord/collect-lane', async (_req, reply) => {
     if (!deps.coord || !deps.collectLane) return notConfigured(reply);
@@ -2887,7 +2886,7 @@ export function registerCoordRoutes(
     collectViewNote('the control state', collectControlFault(read.control));
     const row = read.row;
     if (row.kind === 'absent') {
-      return collectRefuse(reply, 503, 'state-unmeasurable',
+      return collectRefuse(reply, 'state-unmeasurable',
         'the collector setting row is absent, and the server never inserts one');
     }
     const journal = read.journal;
@@ -2902,13 +2901,13 @@ export function registerCoordRoutes(
 
   app.post('/api/coord/collect-lane', async (req, reply) => {
     const parsed = decideCollectLaneBody(req.body);
-    if (!parsed.ok) return collectRefuse(reply, 400, 'bad-request', parsed.detail);
+    if (!parsed.ok) return collectRefuse(reply, 'bad-request', parsed.detail);
     if (!deps.coord || !deps.collectLane) return notConfigured(reply);
     const coord = deps.coord;
     const lane = deps.collectLane;
     const request = parsed.request;
     if (request.choice === 'live' && !(deps.cfg.authEnabled && sessionAuth(req).reason === 'session')) {
-      return collectRefuse(reply, 403, 'sign-in-unarmed');
+      return collectRefuse(reply, 'sign-in-unarmed');
     }
     const link = deps.fleetIdentity ?? NO_FLEET_IDENTITY;
     const before = link.epochNow();
@@ -2922,29 +2921,29 @@ export function registerCoordRoutes(
     const decided = decideCollectLanePost({
       request, row: read.row, journal: read.journal, switches, epoch, node, caps, boot: lane.bootNonce, counts,
     });
-    if (decided.kind === 'unmeasurable') return collectRefuse(reply, 503, 'state-unmeasurable', decided.detail);
-    if (decided.kind === 'marker') return collectRefuse(reply, 409, 'marker-still-controls');
+    if (decided.kind === 'unmeasurable') return collectRefuse(reply, 'state-unmeasurable', decided.detail);
+    if (decided.kind === 'marker') return collectRefuse(reply, 'marker-still-controls');
     if (decided.kind === 'confirm') return reply.code(409).send(decided.body);
     let w: ReturnType<typeof coord.setCollectLane>;
     try {
       w = coord.setCollectLane(decided.request, Date.now(), lane.journal);
     } catch (err) {
       collectWarn(`the ${decided.request.kind} write could not begin (${err instanceof Error ? err.message : String(err)})`);
-      return collectRefuse(reply, 503, 'write-failed', 'the write could not begin');
+      return collectRefuse(reply, 'write-failed', 'the write could not begin');
     }
     if (w.kind === 'refused') {
-      if (w.code === 'conflict') return collectRefuse(reply, 409, 'conflict', w.detail);
-      if (w.code === 'marker-still-controls') return collectRefuse(reply, 409, 'marker-still-controls', w.detail);
+      if (w.code === 'conflict') return collectRefuse(reply, 'conflict', w.detail);
+      if (w.code === 'marker-still-controls') return collectRefuse(reply, 'marker-still-controls', w.detail);
       // `not-coherent` is the answer to the latch's retire, which this door never sends. It is logged, and refused
       // as unmeasurable.
       if (w.code === 'not-coherent') {
         collectWarn(`the store refused a ${decided.request.kind} write as not coherent: ${w.detail}`);
       }
-      return collectRefuse(reply, 503, 'state-unmeasurable', w.detail);
+      return collectRefuse(reply, 'state-unmeasurable', w.detail);
     }
     if (w.kind === 'failed') {
       collectWarn(`the ${decided.request.kind} write failed at its ${w.phase} step (${w.code}); nothing is proved written`);
-      return collectRefuse(reply, 503, 'write-failed', `the write failed at its ${w.phase} step`);
+      return collectRefuse(reply, 'write-failed', `the write failed at its ${w.phase} step`);
     }
     const change = w.kind === 'written' ? collectLaneSettingChange(w.before, w.after, w.journalBefore) : null;
     const log = deps.notifyLog;
@@ -2968,7 +2967,7 @@ export function registerCoordRoutes(
     if (!collectLaneWriteProved(decided.request, w.kind === 'written' ? w.generation : null, proofRow, proofJournal)
       || proofRow.kind === 'absent' || proofJournal.kind === 'not-configured') {
       collectWarn(`a ${decided.request.kind} write answered ${w.kind}, and the re-read after it does not show the requested state`);
-      return collectRefuse(reply, 503, 'write-failed', 'the re-read after the write does not show the requested state');
+      return collectRefuse(reply, 'write-failed', 'the re-read after the write does not show the requested state');
     }
     return reply.code(200).send({ ok: true, ...collectLaneView({
       row: proofRow, journal: proofJournal, switches, epoch, node, caps, counts, notice: COLLECT_LANE_APPLIES_TEXT,
