@@ -1981,6 +1981,9 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         of about 212M replaced two of 85M, so 10 kept dirs. That is the delegation journal growth already ruled.
         STATUS: fleet and server v0.0.287, newest v0.0.288, intent dev/auto=stable, backups fleet 188M/server
         1588M, disk free fleet 206G/work volume 89G/server 31G, no anomalies.
+      - 19:55: v0.0.289 (#626), v0.0.290 (#630) and v0.0.291 (#632) followed, unapplied. STATUS: fleet and server
+        v0.0.287, newest v0.0.291, intent dev/auto=stable, backups fleet 188M/server 1588M, disk free fleet
+        209G/work volume 84G/server 31G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
