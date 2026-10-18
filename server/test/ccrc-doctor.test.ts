@@ -16071,7 +16071,8 @@ describe('oom-policy: the victim policy\'s two scope drop-ins, on disk and appli
 // and on Linux (coordinator ruling 12) reads NRestarts too, because one `active` read is what a crash-looping unit
 // shows between its restarts. The rows plant `$HOME/.ccrc/update.json` and a per-unit `fixture-show-<unit>` file the
 // fixture `systemctl` answers `show -p ActiveState -p NRestarts` from; the `down` rows are Linux-only (PLATFORM-ONLY:
-// the Darwin arm is one `_svc_is_active` read, measured by the row script in the plan's Task 4 as-built note).
+// the Darwin arm is one `_svc_is_active` read, measured by the row script in the plan's Task 4 as-built note), EXCEPT the
+// itDarwin D5/D6/D13 rows, which are green on macOS (full run 39096832066).
 describe('update-sweep: the last update\'s sweep, read from its report, WARN never FAIL (wave 17, D-5316)', () => {
   const REPORT = { target: 'v1.2.3', startedAt: 1, updatedAt: 2, detail: null, from: 'cli' };
   const plantReport = (home: string, report: object | string): void => {
@@ -16287,6 +16288,16 @@ describe('update-sweep: the last update\'s sweep, read from its report, WARN nev
     plantSweep(home, 'died: sweep', 'failed');
     const r = runUs(home);
     expect(verdict(r)).toMatch(/^WARN update-sweep: .*supervisor sweep died partway/);
+    expect(r.code).toBe(2);
+  });
+
+  it('D16b: WARNs, never FAILs, on a failed update the watchdog closed as `died: abandoned`, with its own text, not the generic died-partway one (D-5329, review 589 F1)', () => {
+    const home = sweepBox('ccrc-doctor-us-abandoned-');
+    plantSweep(home, 'died: abandoned', 'failed');
+    const r = runUs(home);
+    expect(verdict(r)).toBe("WARN update-sweep: the last update's updater was closed by the watchdog during or right after its supervisor sweep, so its outcome was never recorded and some supervisors may run the previous ccd");
+    expect(verdict(r)).not.toContain('died partway');
+    expect(remedy(r)).toMatch(/^  remedy: ccrc status lists each session's state; restart any that is not running with ccd start <id>; this WARN clears at the next ccrc update or rollback, which writes a new report$/);
     expect(r.code).toBe(2);
   });
 

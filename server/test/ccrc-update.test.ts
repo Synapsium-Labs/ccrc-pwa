@@ -8391,6 +8391,49 @@ describe('ccrc watchdog: a re-measurement, never a timestamp alone (design §11)
     expect(lockFree(home)).toBe(true);
   });
 
+  itLinux('D-5329 (review 589 F1): a stale `restarting` report the watchdog closes on a passing probe carries `"sweep":"died: abandoned"`; a stale pre-sweep report closes with NO sweep key', () => {
+    // The one phase the supervisor sweep runs in: an updater closed there died
+    // during or right after its sweep, and the doctor's update-sweep WARN reads
+    // the word. Converged arm first.
+    const home = watchBox('ccrc-watchdog-sweep-converged-');
+    report(home, { phase: 'restarting', ageS: 90 });
+    let r = runWatchdog(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    let now = readReport(home);
+    expect(Object.keys(now)).toEqual(['target', 'phase', 'startedAt', 'updatedAt', 'detail', 'from', 'pid', 'sweep']);
+    expect(now.phase).toBe('failed');
+    expect(now.detail).toBe('abandoned by its updater; box measures converged at v2.0.0');
+    expect(now.sweep).toBe('died: abandoned');
+    // The "healthy on the target, install never completed" arm, same phase.
+    const home2 = watchBox('ccrc-watchdog-sweep-incomplete-');
+    writeFileSync(join(home2, '.ccrc', 'installed'), 'a-record-for-some-other-build\n');
+    report(home2, { phase: 'restarting', ageS: 90 });
+    r = runWatchdog(home2);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    now = readReport(home2);
+    expect(now.phase).toBe('failed');
+    expect(String(now.detail)).toMatch(/^abandoned by its updater; box answers healthy on v2\.0\.0 but its install never completed/);
+    expect(now.sweep).toBe('died: abandoned');
+    // A stale pre-sweep report closes keyless, on both arms.
+    for (const phase of ['installing', 'backing-up']) {
+      const h = watchBox(`ccrc-watchdog-nosweep-converged-${phase}-`);
+      report(h, { phase, ageS: 90 });
+      r = runWatchdog(h);
+      expect(r.code, `${phase}: ${r.stderr}`).toBe(0);
+      now = readReport(h);
+      expect(now.phase, phase).toBe('failed');
+      expect(Object.keys(now), phase).toEqual(['target', 'phase', 'startedAt', 'updatedAt', 'detail', 'from', 'pid']);
+      const h2 = watchBox(`ccrc-watchdog-nosweep-incomplete-${phase}-`);
+      writeFileSync(join(h2, '.ccrc', 'installed'), 'a-record-for-some-other-build\n');
+      report(h2, { phase, ageS: 90 });
+      r = runWatchdog(h2);
+      expect(r.code, `${phase}: ${r.stderr}`).toBe(0);
+      now = readReport(h2);
+      expect(now.phase, phase).toBe('failed');
+      expect(Object.keys(now), phase).toEqual(['target', 'phase', 'startedAt', 'updatedAt', 'detail', 'from', 'pid']);
+    }
+  });
+
   itLinux('stale, no holder, healthy but NOT converged: rewritten with what the box IS, never a rollback (D-3246, D-3268)', () => {
     // The updater died before the tree moved: healthy on the OLD build.
     const home = watchBox('ccrc-watchdog-healthy-old-', { version: 'v1.0.0' });

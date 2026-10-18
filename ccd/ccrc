@@ -18337,7 +18337,14 @@ cmd_watchdog() {
     attempt=$(( attempt + 1 ))
   done
   if [ "$prc" -eq 0 ]; then
+    # D-5329 (review 589 F1): the one phase the supervisor sweep runs in is
+    # `restarting`, so an updater the watchdog closes there died during or right
+    # after its sweep. The closed report carries `died: abandoned`, or the doctor's
+    # update-sweep WARN is lost at the next tick (the report would read as no sweep
+    # recorded, a SKIP naming three causes that are not the true one). Only the two
+    # arms below that close a `restarting` report set it; every pre-sweep phase stays keyless.
     if [ -n "$tgt" ] && [ "$cur_v" = "$tgt" ] && [ -n "$cur_sha" ] && [ "$rec" = "$cur_sha" ]; then
+      [ "$phase" != restarting ] || UPD_SWEEP_WORD='died: abandoned'
       _upd_phase failed "abandoned by its updater; box measures converged at $cur_v"
       echo "watchdog: stale report ($phase, ${age}s) on a box that measures converged at $cur_v and answers healthy — recorded as abandoned; nothing was reverted"
     elif [ -n "$tgt" ] && [ "$cur_v" = "$tgt" ]; then
@@ -18350,6 +18357,7 @@ cmd_watchdog() {
       hint="$(UPD_VERSION="$cur_v" _upd_rerun_hint)"
       # No path in the sentence: single-definition allows one non-comment
       # line naming the record's path, and it is the declaration.
+      [ "$phase" != restarting ] || UPD_SWEEP_WORD='died: abandoned'   # D-5329, as above
       _upd_phase failed "abandoned by its updater; box answers healthy on $cur_v but its install never completed (the completed-install record does not name its stamp); rerun: $hint"
       echo "watchdog: stale report ($phase, ${age}s) on a box that answers healthy on $cur_v, but its install never completed — recorded as abandoned; nothing was reverted. Rerun: $hint"
     else

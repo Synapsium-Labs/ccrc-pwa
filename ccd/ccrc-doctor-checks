@@ -9319,6 +9319,11 @@ _check_update-sweep() {
       _dr_warn update-sweep "the last update's post-restart listing was not read (${sw#unverified: }), so no supervisor's state after its restart is known" \
         "ccrc status lists each session's state; restart any that is not running with ccd start <id>${clears}"
       return 2 ;;
+    'died: abandoned')
+      # D-5329 (review 589 F1): `cmd_watchdog` closes a stale `restarting` report with this word.
+      _dr_warn update-sweep "the last update's updater was closed by the watchdog during or right after its supervisor sweep, so its outcome was never recorded and some supervisors may run the previous ccd" \
+        "ccrc status lists each session's state; restart any that is not running with ccd start <id>${clears}"
+      return 2 ;;
     'died: '*)
       _dr_warn update-sweep "the last update's supervisor sweep died partway (${sw#died: }; the report's detail says where), so some supervisors may run the previous ccd and the rest the new one" \
         "read the detail in ~/.ccrc/update.json and follow its read: line; ccrc status lists each session's state${clears}"
