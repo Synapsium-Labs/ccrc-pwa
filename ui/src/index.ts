@@ -41,6 +41,8 @@ export { CoverScreen, COVER_SCREEN, type CoverScreenProps } from './primitives/c
 export { BareRow, BARE_ROW, type BareRowProps } from './primitives/bare-row';
 export { CountBadge, COUNT_BADGE, type CountBadgeProps } from './primitives/count-badge';
 export { Keycap, KEYCAP, type KeycapProps } from './primitives/keycap';
+// The `❯ ccrc` mark, the identity core's first item (D-5094, D-5470).
+export { Wordmark, WORDMARK, type WordmarkProps } from './primitives/wordmark';
 // Two constants with no component of their own: each is a handful of
 // utilities that two or three app rules spelled identically, and wrapping
 // either in a `<span>` would add an element nobody asked for.
