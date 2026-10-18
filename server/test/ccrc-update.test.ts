@@ -13092,22 +13092,16 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
     });
   });
 
-  // fix round 1 item 9 (review 196 F10): a timestamp-named SYMLINK is a
-  // timestamped backup for this prune (the glob matches the name; `_bak_list`
-  // accepts it because `[ -d ]` follows a symlink to a directory) — so it is
-  // counted and REMOVED AS A LINK, and its target must survive untouched.
-  // Two link cases (a fixture dir outside ~/ccrc-backups, and onKeptV1's real
-  // kept v1.0.0 — this box carries no v0.0.50) plus a plain timestamp-named
-  // file, which is not a timestamped backup at all and must survive
-  // unpruned. CCRC_BACKUP_KEEP=0 and every planted name below the run's lock
-  // second (2025…) put both links squarely in the removal set; the plain file is
-  // never listed (`_bak_list` admits directories only); neither target
-  // holds a coord.db, server-dist or agent-dist, so neither can be chosen as
-  // the protected newest-earlier snap or tree keep. Assertions read the
-  // FILESYSTEM (lstat for the links, a content digest for their targets),
-  // never the `pruned` echo — a `rm -rf -- "$d/"` on a symlink would empty
-  // the target and still print it.
-  it('P18: a timestamp-named symlink is pruned as a link, its target untouched; a timestamp-named plain file is not a backup and survives', () => {
+  // fix round 1 item 9 (review 196 F10), REVERSED by wave 17 (R10i, D-5319): a timestamp-named SYMLINK is NOT a timestamped
+  // backup. The glob matches its name, but `_bak_list` now lists directories that are not links (`[ -d ]` follows one), so a
+  // link is never counted in the newest-N window, never holds a keep through its target, and is never pruned. It used to be
+  // counted and REMOVED AS A LINK (its target untouched); that was the wrong half of the rule, because a link in the window
+  // pushed a real backup out of it. Two link cases (a fixture dir outside ~/ccrc-backups, and onKeptV1's real kept v1.0.0 —
+  // this box carries no v0.0.50) plus a plain timestamp-named file, which is not a timestamped backup either; all three must
+  // survive. CCRC_BACKUP_KEEP=0 and every planted name below the run's lock second (2025…) would put each of them in the
+  // removal set if it were listed. Assertions read the FILESYSTEM (lstat for the links, a content digest for their targets),
+  // never the `pruned` echo — a `rm -rf -- "$d/"` on a symlink would empty the target and still print it.
+  it('P18: a timestamp-named symlink is not a backup: never listed, never pruned, its target untouched; a timestamp-named plain file is not a backup and survives (R10i reversed, D-5319)', () => {
     const home = onKeptV1('ccrc-fx-b-p18-');
     const v1 = join(home, 'ccrc-versions', 'v1.0.0');
     packRelease(home, fullTree(home, { version: 'v2.0.0', sha: V2_SHA }), { tag: 'v2.0.0' });
@@ -13131,13 +13125,62 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
     const r = rollbackRun(home, [], { CCRC_BACKUP_KEEP: '0' });
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
     const linkGone = (p: string): boolean => { try { lstatSync(p); return false; } catch { return true; } };
-    expect(linkGone(linkToOutside), 'the link to the outside target must be gone').toBe(true);
-    expect(linkGone(linkToKept), 'the link to the kept version must be gone').toBe(true);
+    expect(linkGone(linkToOutside), 'the link to the outside target is not a backup: it survives').toBe(false);
+    expect(lstatSync(linkToOutside).isSymbolicLink(), 'and it is still a link').toBe(true);
+    expect(linkGone(linkToKept), 'the link to the kept version is not a backup: it survives').toBe(false);
+    expect(lstatSync(linkToKept).isSymbolicLink(), 'and it is still a link').toBe(true);
     expect(treeDigest(outside), 'the outside target\'s content must survive untouched').toEqual(outsideBefore);
     expect(treeDigest(v1), 'the kept version\'s content must survive untouched').toEqual(keptBefore);
     expect(existsSync(plainFile), 'the plain timestamp-named file is not a timestamped backup').toBe(true);
     expect(fileText(plainFile)).toBe(plainBefore);
   }, 60_000);   // a move onto v2.0.0 plus a rollback: 13.7-17 s alone, timed out 3 of 6 at load 30-50 (final review)
+
+  // P18b/P18c (wave 17, D-5319): the harm a listed link did, through the sourced `_bak_prune` so that no other dir is listed
+  // (a full update or rollback adds the run's own backup and the prior move's holds, which take newest-N slots of their own).
+  // KEEP=1 and a floor in 2030 put every planted dir below the floor, so only the window and the keeps decide.
+  const pruneSourced = (home: string): Result =>
+    sourcedCcrc(home, 'UPD_BAK_FLOOR=20300101-000000; UPD_BACKUP_DIR=""; CCRC_BACKUP_KEEP=1; _bak_prune');
+  const isLink = (p: string): boolean => { try { return lstatSync(p).isSymbolicLink(); } catch { return false; } };
+
+  it('P18b: a PLAIN real backup older than a timestamp-named link to a plain target: at KEEP=1 the real one is kept (the link takes no newest-N slot), the link and its target stay', () => {
+    const home = freshUpdateBox('ccrc-fx-b-p18b-');
+    const real = join(backupRoot(home), '20250101-000000');
+    mkdirSync(real, { recursive: true });
+    writeFileSync(join(real, 'some-file'), 'a plain real backup: no tree entry, no snapshot name\n');
+    const target = join(home, 'plain-target');
+    mkdirSync(target, { recursive: true });
+    writeFileSync(join(target, 'marker.txt'), 'the link\'s target\n');
+    const link = join(backupRoot(home), '20250102-000000');
+    symlinkSync(target, link);
+    const targetBefore = treeDigest(target);
+    const r = pruneSourced(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(existsSync(real) && !isLink(real), 'the real backup is the newest-1 by the one rule: a link is not counted').toBe(true);
+    expect(isLink(link), 'the link is not a backup: it stays').toBe(true);
+    expect(treeDigest(target), 'its target is untouched').toEqual(targetBefore);
+    expect(r.stdout).not.toMatch(/^backup: pruned/m);
+  });
+
+  it('P18c: a link whose target holds server-dist, newer than a real tree backup outside the newest-N window: the real one stays protected as the tree keep', () => {
+    const home = freshUpdateBox('ccrc-fx-b-p18c-');
+    const tree = join(backupRoot(home), '20250101-000000');
+    mkdirSync(join(tree, 'server-dist'), { recursive: true });
+    const plain = join(backupRoot(home), '20250102-000000');
+    mkdirSync(plain, { recursive: true });
+    writeFileSync(join(plain, 'some-file'), 'a plain real backup, the newest-1\n');
+    const target = join(home, 'tree-target');
+    mkdirSync(join(target, 'server-dist'), { recursive: true });
+    writeFileSync(join(target, 'server-dist', 'marker.txt'), 'the link\'s target holds a tree entry\n');
+    const link = join(backupRoot(home), '20250103-000000');
+    symlinkSync(target, link);
+    const targetBefore = treeDigest(target);
+    const r = pruneSourced(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(existsSync(tree), 'the real tree backup is the newest earlier tree backup: a link\'s target is never the tree keep').toBe(true);
+    expect(existsSync(plain), 'the newest real dir holds the one newest-N slot').toBe(true);
+    expect(isLink(link), 'the link stays').toBe(true);
+    expect(treeDigest(target), 'its target is untouched').toEqual(targetBefore);
+  });
 });
 
 // ── Delegation broker wave 3, Task 8B: the coordination snapshot's callers ──────────────────────────────────────────────

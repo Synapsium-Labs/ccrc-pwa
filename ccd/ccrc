@@ -22286,7 +22286,10 @@ _bak_list() {
   shopt -q nullglob && had_nullglob=1
   shopt -s nullglob
   for d in "$BOX_BACKUP_ROOT"/$BAK_TS_PAT; do   # $BAK_TS_PAT unquoted: it is the glob
-    [ -d "$d" ] && BAK_DIRS+=("$d")
+    # A link is never a backup (R10i, D-5319): `[ -d ]` follows one, so a
+    # timestamp-named link was counted in the newest-N window and could hold a
+    # keep through its target. `_ver_list` applies the same rule to versions.
+    { [ -d "$d" ] && [ ! -L "$d" ]; } && BAK_DIRS+=("$d")
   done
   [ "$had_nullglob" -eq 1 ] || shopt -u nullglob
   return 0
@@ -22357,7 +22360,7 @@ _bak_prune() {
 # snapshot), BAK_KEEP_DATA (the newest earlier valid one that holds data) and BAK_KEEP_TREE (the newest earlier tree backup), ""
 # when none. rc 1 when UPD_BAK_FLOOR is not a timestamp, WITHOUT touching an out-param; rc 2 when the classifier itself FAILED
 # (`_bak_snap_class`; BAK_SNAP_WHY says why), all out-params "" — the caller prunes NOTHING and says why. It declares its
-# own floor and n: the callers' locals are not its to read. Links are counted as `_bak_list` counts them (R10i, deferred).
+# own floor and n: the callers' locals are not its to read. A link is never a backup: `_bak_list` lists none (R10i, D-5319).
 _bak_keepset() {
   local floor n i d name src
   [[ "$UPD_BAK_FLOOR" =~ ^[0-9]{8}-[0-9]{6}$ ]] || return 1
@@ -22455,7 +22458,7 @@ _bak_snap_class() {
 # rollback never get here. It NEVER DIES and never writes update.json: a `_ccrc_die` here would turn a completed
 # update into a `failed` report. rc 0 done or nothing to do; rc 1 skipped or a removal failed; every caller writes
 # `|| :`. It keeps the newest $CCRC_BACKUP_KEEP timestamped dirs of any origin (the ONE bounded validator,
-# `_keep_ok`, D-3423; counted as `ccrc backup` and deploy.sh count them; read from the process env only), and four
+# `_keep_ok`, D-3423; counted as `ccrc backup` and deploy.sh count them (neither counts a link, D-5319); read from the process env only), and four
 # more that can only LEAVE the removal set: this run's own backup by its exact path; every dir named at or after
 # this run's lock second (UPD_BAK_FLOOR) — both D-3593; and, among the dirs neither of those protects, the newest tree backup (D-3594; a
 # `server-dist` or `agent-dist` entry: another run's, a deploy's, or the previous update's) and the newest VALID coordination
