@@ -8,7 +8,9 @@
 //      instead (the 2026-10-12 spec's A16; W5 Task 4): built here, never parsed, so nothing else is markup;
 //   4. one walk drops `position` and measures the tree: deeper than `MD_MAX_TREE_DEPTH` is `too-deep`, more than
 //      `DOCS_MAX_RENDER_ELEMENTS` elements is `too-wide`, an inline `code` counting the chips its component draws
-//      (`inlineCodeExtraElements`, W5 bound 2-2), so the cap bounds the DOM before anything renders;
+//      (`inlineCodeExtraElements`, W5 bound 2-2). The cap bounds the parsed tree's elements, not the whole DOM: a
+//      fenced block counts as its `pre` and `code`, while CodeBlock draws its chrome around them and highlight.js
+//      adds a span per token, which are bounded instead by the highlight page budgets (`markdownLimits.ts`);
 //   5. any exception is `threw`, carrying the error's name only.
 // Steps 3 and 4 are explicit-stack walks: a tree that reached them is not yet known to be shallow.
 //

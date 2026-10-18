@@ -903,6 +903,10 @@ describe('the Docs controls (docs W5 part 1, spec 4.14)', () => {
       expect(declValue(ruleIn(docsCss, '.docs-back'), 'min-width')).toBe('var(--tap-min)');
       expect(floorIn(docsCss, '.docs-crumb')).toBe('var(--tap-min)');
       expect(floorIn(docsCss, '.docs-crumbs-more')).toBe('var(--tap-min)');
+      // D-5502: one tap wide too. The … button drew 16 px wide at 360 and 390, and a short crumb about 39 px.
+      expect(declValue(ruleIn(docsCss, '.docs-crumbs-more'), 'min-width')).toBe('var(--tap-min)');
+      expect(declValue(ruleIn(docsCss, '.docs-crumbs-more'), 'justify-content')).toBe('center');
+      expect(declValue(ruleIn(docsCss, '.docs-crumb'), 'min-width')).toBe('var(--tap-min)');
     });
     it('are the classes the rendered back button, crumb and … button carry (a phone folds the crumbs)', async () => {
       openDocs('/docs/demo/specs', fakeLoaders());

@@ -21,7 +21,7 @@ import {
   BACK_BUTTON, BARE_ROW, DOOR, KEYCAP, LIST_ROW, buttonVariants,
 } from '@ccrc/ui';
 import { cn } from '../../ui/src/lib/cn';
-import { declValue, ruleIn, stripComments } from './cssRule';
+import { declValue, ruleIn, selectorsOf, stripComments } from './cssRule';
 
 const ROOT = path.join(import.meta.dirname, '..', '..');
 const read = (rel: string): string => readFileSync(path.join(ROOT, rel), 'utf8');
@@ -285,14 +285,41 @@ describe('the gate measures each new ground with exactly the inks drawn on it', 
 describe('the Docs chrome lifts, sinks and brightens as the primitives do (D-5501)', () => {
   const docsCss = stripComments(read('pwa/src/docs/docs.css'));
   const squash = (v: string | null): string => (v ?? '').replace(/\s+/g, '');
+  const BORDERED = ['.docs-copy', '.docs-fresh', '.docs-leaf-action', '.doc-img-load', '.doc-img-action', '.doc-plain-action', '.doc-gate-btn'];
 
   it('a link row lifts to --bg-hover and a door or chevron brightens, inside (hover: hover) only', () => {
     const rules = hoverRules(docsCss);
     expect(rules.map((r) => r.selector).sort())
-      .toEqual(['.docs-door:hover, .docs-back:hover', '.docs-row:not(.docs-row-off):hover'].sort());
+      .toEqual([
+        '.docs-door:hover, .docs-back:hover, .docs-crumb:hover, .docs-crumbs-more:hover',
+        '.docs-row:not(.docs-row-off):hover',
+        BORDERED.map((c) => `${c}:enabled:hover`).join(', '),
+      ].sort());
     expect(rules.every((r) => r.guarded)).toBe(true);
     expect(docsCss).toMatch(/\.docs-row:not\(\.docs-row-off\):hover\s*\{\s*background:\s*var\(--bg-hover\);\s*color:\s*var\(--ink-primary\);/);
-    expect(docsCss).toMatch(/\.docs-door:hover,\s*\.docs-back:hover\s*\{\s*color:\s*var\(--ink-primary\);/);
+    expect(docsCss).toMatch(/\.docs-door:hover,\s*\.docs-back:hover,\s*\.docs-crumb:hover,\s*\.docs-crumbs-more:hover\s*\{\s*color:\s*var\(--ink-primary\);/);
+  });
+
+  // D-5502: the bordered controls (twins of the ghost Button) and the freshness chip lift and sink as the ghost
+  // Button does; a disabled one (the chip while fetching) and the no-origin span do neither.
+  it('the bordered controls and the chip lift to --bg-hover and sink to --bg-pressed, the press after the hover (D-5502)', () => {
+    const hoverSel = BORDERED.map((c) => `${c}:enabled:hover`).join(', ');
+    const pressSel = BORDERED.map((c) => `${c}:enabled:active`).join(', ');
+    for (const c of BORDERED) {
+      expect(declValue(ruleIn(docsCss, `${c}:enabled:hover`), 'background'), c).toBe('var(--bg-hover)');
+      expect(declValue(ruleIn(docsCss, `${c}:enabled:active`), 'background'), c).toBe('var(--bg-pressed)');
+    }
+    expect(selectorsOf(docsCss, '.docs-copy:enabled:hover')).toEqual(BORDERED.map((c) => `${c}:enabled:hover`));
+    expect(selectorsOf(docsCss, '.docs-copy:enabled:active')).toEqual(BORDERED.map((c) => `${c}:enabled:active`));
+    const hover = docsCss.indexOf(hoverSel + ' {');
+    const press = docsCss.indexOf(pressSel + ' {');
+    expect(hover, 'the hover rule').toBeGreaterThan(-1);
+    expect(press, 'the press must come after the hover').toBeGreaterThan(hover);
+    expect(hoverRules(docsCss).find((r) => r.selector === hoverSel)?.guarded).toBe(true);
+    for (const sel of ['.docs-copy', '.docs-fresh']) {
+      expect(squash(declValue(ruleIn(docsCss, sel), 'transition')), sel)
+        .toBe('background-colorvar(--dur-fast)var(--ease-swift)');
+    }
   });
 
   it('a held link row sinks to --bg-pressed, declared after the hover at the same specificity', () => {
@@ -310,6 +337,6 @@ describe('the Docs chrome lifts, sinks and brightens as the primitives do (D-550
       .toBe('background-colorvar(--dur-fast)var(--ease-swift)');
     const block = docsCss.match(/@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{([^@]*)\}\s*$/);
     expect(block, 'a reduced-motion block at the end of docs.css').not.toBeNull();
-    expect(block![1]).toMatch(/\.docs-door,\s*\.docs-back,\s*\.docs-row\s*\{\s*transition:\s*none;/);
+    expect(block![1]).toMatch(/\.docs-door,\s*\.docs-back,\s*\.docs-row,\s*\.docs-fresh,\s*\.docs-copy,\s*\.docs-leaf-action,\s*\.doc-img-load,\s*\.doc-img-action,\s*\.doc-plain-action,\s*\.doc-gate-btn\s*\{\s*transition:\s*none;/);
   });
 });

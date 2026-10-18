@@ -970,9 +970,9 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-page)'],
     why: 'the pressed state of the same chevron, same ground; registered separately because it overrides `color` directly',
   },
-  '.docs-door:hover, .docs-back:hover': {
+  '.docs-door:hover, .docs-back:hover, .docs-crumb:hover, .docs-crumbs-more:hover': {
     under: ['var(--bg-page)'],
-    why: "the hover ink of the door and the chevron (D-5501, the skins' D-5101 hover restated for the hand-drawn twins of Door and BackButton), inside `@media (hover: hover)`, on the same unpainted grounds as the two rules above; the door's second ground, the desktop sidebar's --bg-surface, is measured off this rule's own ink in contrast.test.ts as it is for .docs-door and .docs-door:active",
+    why: "the hover ink of the door and the chevron (D-5501, the skins' D-5101 hover restated for the hand-drawn twins of Door and BackButton) and of the crumb links and the … button (D-5502), inside `@media (hover: hover)`, on the same unpainted grounds as the two rules above and .docs-crumb; the door's second ground, the desktop sidebar's --bg-surface, is measured off this rule's own ink in contrast.test.ts as it is for .docs-door and .docs-door:active",
   },
   '.docs-crumb, .docs-crumbs-more': {
     under: ['var(--bg-page)'],

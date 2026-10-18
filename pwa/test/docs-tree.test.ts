@@ -31,7 +31,12 @@ describe('the section tables are derived from DOC_SECTION_SLUGS', () => {
 
   it('a null count renders ?, never 0', () => {
     expect(sectionCountsText({ specs: null, plans: 1, 'product-design': null, conventions: 0 }))
-      .toBe('? specs · 1 plans · ? design · 0 conventions');
+      .toBe('? specs · 1 plan · ? design · 0 conventions');
+  });
+
+  it('a count of one takes the singular noun (D-5502)', () => {
+    expect(sectionCountsText({ specs: 1, plans: 1, 'product-design': 1, conventions: 1 }))
+      .toBe('1 spec · 1 plan · 1 design · 1 convention');
   });
 });
 

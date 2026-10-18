@@ -8,7 +8,7 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState, type C
 import type { Element as HastElement } from 'hast';
 import {
   DOCS_CLASS_CAP, DOCS_MAX_IMAGES_PER_PAGE, contentClass, docsApi, docsPageUrl, resolveDocRef,
-  type DocPin, type DocsPageLocation, type RasterMime,
+  type DocPin, type DocsEntry, type DocsPageLocation, type RasterMime,
 } from '../../../shared/docs';
 import { onAuthRegained } from '../lib/auth';
 import { openExternal } from '../lib/markdown';
@@ -61,6 +61,22 @@ function leafOf(ctx: DocLinkContextValue): Leaf {
 }
 
 /** The one decision for an image (spec 4.11, "Markdown `img`"), from the `src` `detachUrls` moved off it. */
+/** The tree's entries by section and path, built once per entries array (D-5502): a page of many images on a large
+ *  tree looked each one up with a linear scan. The first entry of a key wins, as `Array.prototype.find` did. */
+const ENTRY_INDEX = new WeakMap<readonly DocsEntry[], Map<string, DocsEntry>>();
+function entryAt(entries: readonly DocsEntry[], section: string, path: string): DocsEntry | undefined {
+  let index = ENTRY_INDEX.get(entries);
+  if (index === undefined) {
+    index = new Map();
+    for (const e of entries) {
+      const key = `${e.section}\u0000${e.path}`;
+      if (!index.has(key)) index.set(key, e);
+    }
+    ENTRY_INDEX.set(entries, index);
+  }
+  return index.get(`${section}\u0000${path}`);
+}
+
 function planImage(ctx: DocLinkContextValue, node: HastElement | undefined): ImagePlan {
   const recorded = node === undefined ? undefined : ctx.urls.get(node);
   const r = resolveDocRef({ section: ctx.section, path: ctx.path }, recorded?.attrs['src'] ?? '');
@@ -85,7 +101,7 @@ function planImage(ctx: DocLinkContextValue, node: HastElement | undefined): Ima
   if (cls !== 'raster' && cls !== 'svg') {
     return refused('not-image', cls === 'html' ? { kind: 'viewer', href: leafHref } : null);
   }
-  const e = ctx.tree.entries.find((x) => x.section === r.section && x.path === r.path);
+  const e = entryAt(ctx.tree.entries, r.section, r.path);
   const ip = imagePinFor(e, ctx.tree, page);
   if (!ip.ok) return refused(ip.why);
   const size = ip.pin.kind === 'draft' ? e?.draft?.size : e?.committed?.size;

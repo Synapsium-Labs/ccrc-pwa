@@ -68,7 +68,7 @@ export function DocsBanners(p: {
       }
       if (mode === 'ref' && !d.baseEqual && n > 0) {
         const text = fillSentence(DOCS_BANNER_TEXT.baseHint, {
-          n, s: pluralS(n), label, branch: d.branch, short: shortCommit(d.worktree.head), served: servedRefText(tree.ref),
+          n, s: pluralS(n), be: n === 1 ? 'is' : 'are', label, branch: d.branch, short: shortCommit(d.worktree.head), served: servedRefText(tree.ref),
         });
         out.push(
           <Banner key="base-hint" id="base-hint" tone="info" text={text}>

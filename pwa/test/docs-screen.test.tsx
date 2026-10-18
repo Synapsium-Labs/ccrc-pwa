@@ -347,7 +347,7 @@ describe('the index (spec 4.4, refinement (r))', () => {
     expect(b).toHaveTextContent('fetched 5m ago');
     expect(b).toHaveTextContent('same repository as a');
     const a = screen.getByText('a', { selector: '.docs-row-name' }).closest('.docs-row') as HTMLElement;
-    expect(a).toHaveTextContent('? specs · 1 plans · 0 design · 0 conventions');
+    expect(a).toHaveTextContent('? specs · 1 plan · 0 design · 0 conventions');
     expect(a).toHaveTextContent('never fetched');
     expect(a).toHaveTextContent('same repository as b');
     expect(document.body).not.toHaveTextContent('1234');
@@ -379,6 +379,8 @@ describe('the index (spec 4.4, refinement (r))', () => {
   it('the filter narrows the rows by name', async () => {
     openIndex();
     await screen.findByText('pc');
+    // D-5502: the box says what it is on screen too (WCAG 3.3.2), not only to a screen reader.
+    expect(screen.getByRole('searchbox', { name: 'Filter projects' })).toHaveAttribute('placeholder', 'Filter projects');
     fireEvent.change(screen.getByRole('searchbox', { name: 'Filter projects' }), { target: { value: 'pla' } });
     expect(mainRowNames()).toEqual(['plain']);
   });
@@ -466,6 +468,7 @@ describe('section and directory pages (spec 4.4)', () => {
   it('the filter narrows the listing', async () => {
     open('/docs/demo/specs', fakeLoaders({ tree: okTree(treeOk({ entries })) }));
     await screen.findByText('old/');
+    expect(screen.getByRole('searchbox', { name: 'Filter this listing' })).toHaveAttribute('placeholder', 'Filter this listing');
     fireEvent.change(screen.getByRole('searchbox', { name: 'Filter this listing' }), { target: { value: '-b.' } });
     expect([...document.querySelectorAll('.docs-listing .docs-row-name')].map((n) => n.textContent)).toEqual(['2026-02-01-b.md']);
   });

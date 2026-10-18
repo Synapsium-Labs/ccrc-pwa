@@ -78,8 +78,8 @@
 .docs-crumbs li { display: inline-flex; align-items: center; gap: var(--sp-1); min-width: 0; }
 .docs-crumbs li + li::before { content: '/'; }
 .docs-crumb, .docs-crumbs-more {
-  display: inline-flex; align-items: center;
-  min-height: var(--tap-min); padding: 0 var(--sp-1);
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: var(--tap-min); min-height: var(--tap-min); padding: 0 var(--sp-1);
   border: 0; border-radius: var(--r-sm);
   background: none; color: var(--ink-secondary);
   font: var(--weight-regular) var(--text-sm) / var(--leading-tight) var(--font-mono);
@@ -103,6 +103,7 @@
   background: none; color: var(--ink-secondary);
   font: var(--weight-medium) var(--text-2xs) / var(--leading-tight) var(--font-mono);
   text-align: left; cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease-swift);
 }
 .docs-fresh[data-state='failed'] { color: var(--status-dead-text); }
 .docs-fresh[data-state='none'], .docs-fresh[data-state='fetching'] { color: var(--ink-tertiary); cursor: default; }
@@ -116,6 +117,7 @@
   background: none; color: var(--ink-secondary);
   font: var(--weight-medium) var(--text-xs) / var(--leading-tight) var(--font-mono);
   cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease-swift);
 }
 
 /* The link controls: View on GitHub, Open committed version, a banner's hint, the index's owner. Their ink is their
@@ -149,6 +151,9 @@
   background: var(--bg-surface); color: var(--ink-primary);
   font: var(--weight-regular) var(--text-input) / 1 var(--font-ui);
 }
+/* The filter's visible label (D-5502): the placeholder says what the box is; the preflight's half-strength
+   default is replaced by the tertiary ink, which design/contrast-check.mjs holds on --bg-surface. */
+.docs-filter::placeholder { color: var(--ink-tertiary); opacity: 1; }
 .docs-rows { display: grid; margin: 0; padding: 0; list-style: none; min-width: 0; }
 .docs-row {
   display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-1) var(--sp-2);
@@ -169,9 +174,18 @@
    design/contrast-check.mjs in every palette; the badge inside a row paints its own. — */
 @media (hover: hover) {
   .docs-row:not(.docs-row-off):hover { background: var(--bg-hover); color: var(--ink-primary); }
-  .docs-door:hover, .docs-back:hover { color: var(--ink-primary); }
+  .docs-door:hover, .docs-back:hover, .docs-crumb:hover, .docs-crumbs-more:hover { color: var(--ink-primary); }
 }
 .docs-row:not(.docs-row-off):active { background: var(--bg-pressed); color: var(--ink-primary); }
+/* — the bordered controls and the freshness chip (D-5502): twins of the ghost Button, so they lift to --bg-hover
+   under the mouse and sink to --bg-pressed while held, as it does (enabled:hover, enabled:active). A disabled chip
+   (a fetch in flight) and the no-origin <span> do neither (`:enabled`). Each keeps its own ink, so the failed
+   chip's --status-dead-text sits on both grounds; design/contrast-check.mjs holds it there in every palette
+   (HOVER_INKS, PRESSED_INKS), with the neutral tiers the other controls draw. — */
+@media (hover: hover) {
+  .docs-copy:enabled:hover, .docs-fresh:enabled:hover, .docs-leaf-action:enabled:hover, .doc-img-load:enabled:hover, .doc-img-action:enabled:hover, .doc-plain-action:enabled:hover, .doc-gate-btn:enabled:hover { background: var(--bg-hover); }
+}
+.docs-copy:enabled:active, .docs-fresh:enabled:active, .docs-leaf-action:enabled:active, .doc-img-load:enabled:active, .doc-img-action:enabled:active, .doc-plain-action:enabled:active, .doc-gate-btn:enabled:active { background: var(--bg-pressed); }
 .docs-row-name { min-width: 0; font-weight: var(--weight-medium); overflow-wrap: anywhere; }
 .docs-row-glyph { flex: none; font-family: var(--font-ui); }
 .docs-row-path, .docs-row-count, .docs-row-note, .docs-row-age, .docs-row-size, .docs-row-ref, .docs-row-state,
@@ -263,8 +277,9 @@
   font: var(--weight-regular) var(--text-sm) / var(--leading-mono) var(--font-mono);
 }
 
-/* — reduced motion (D-5501): the door, the back chevron and a row each declare a transition, so each is named here,
-   after every rule it governs (motion-reduced.test.ts reads both halves). — */
+/* — reduced motion (D-5501, D-5502): the door, the back chevron, a row, the chip and the bordered controls each
+   declare a transition, so each is named here, after every rule it governs (motion-reduced.test.ts reads both
+   halves). — */
 @media (prefers-reduced-motion: reduce) {
-  .docs-door, .docs-back, .docs-row { transition: none; }
+  .docs-door, .docs-back, .docs-row, .docs-fresh, .docs-copy, .docs-leaf-action, .doc-img-load, .doc-img-action, .doc-plain-action, .doc-gate-btn { transition: none; }
 }

@@ -100,7 +100,7 @@ export function DocsIndexView(p: { readonly answer: DocsProjectsResponse }): Rea
     <div className="docs-index">
       <p className="docs-index-head">{DOCS_VIEW_TEXT.indexHead}</p>
       <input
-        type="search" className="docs-filter" aria-label={DOCS_VIEW_TEXT.filterProjects} value={filter}
+        type="search" className="docs-filter" aria-label={DOCS_VIEW_TEXT.filterProjects} placeholder={DOCS_VIEW_TEXT.filterProjects} value={filter}
         onChange={(e) => setFilter(e.target.value)}
       />
       <ul className="docs-rows">{ready.map(item)}{rest.map(item)}</ul>

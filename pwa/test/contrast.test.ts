@@ -2104,7 +2104,7 @@ describe('the Docs chrome is measured, not left in the blind spot (M4.S1)', () =
   it.each([
     ['.docs-door'],
     ['.docs-door:active'],
-    ['.docs-door:hover, .docs-back:hover'],
+    ['.docs-door:hover, .docs-back:hover, .docs-crumb:hover, .docs-crumbs-more:hover'],
   ])('%s is registered on the page and also clears AA on the desktop sidebar it sits on', (key) => {
     expect(INHERITED_GROUNDS[key]?.under).toEqual(['var(--bg-page)']);
     for (const row of rowsOf(key)) expect(row.detail, row.label).toContain(`${inkOf(key)} on var(--bg-page)`);

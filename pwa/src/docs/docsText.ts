@@ -462,11 +462,12 @@ export const GITHUB_REFUSAL_TEXT: Record<Extract<GithubLink, { ok: false }>['why
   'bad-target': 'this branch or path cannot be linked',
 };
 
-/** The banners' words (spec 4.5's table, verbatim; W5 part 1 Task 10). `{s}` is `pluralS`'s; `{label}` is
+/** The banners' words (spec 4.5's table, verbatim but for `{be}`; W5 part 1 Task 10). `{s}` is `pluralS`'s; `{be}`
+ *  is `is` for one draft and `are` otherwise (D-5502); `{label}` is
  *  `worktreeLabel`'s; `{served}` is `servedRefText`'s; `{why}` in `skipped` is the distinct reasons joined by `, `. */
 export const DOCS_BANNER_TEXT = {
   defaultHint: '{n} uncommitted doc{s} in {label} on {branch}',
-  baseHint: '{n} uncommitted doc{s} in {label} are based on local {branch} at {short}; this page shows {served}',
+  baseHint: '{n} uncommitted doc{s} in {label} {be} based on local {branch} at {short}; this page shows {served}',
   openLocalView: 'Open the local view',
   ambiguous: 'Two or more worktrees hold {branch}, so drafts are not shown:',
   untrusted: 'The worktree holding {branch} failed the ownership check ({why}); drafts are not shown.',

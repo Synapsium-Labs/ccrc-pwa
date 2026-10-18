@@ -976,8 +976,9 @@ function servedRefIsLocalOnly(ref: DocsTreeOk['ref']): boolean {
 
 /** THE one assembler of a GitHub URL (spec 3.11, "One assembler"): private, called by both builders, and the only
  *  place this file spells GitHub's address. It refuses, in this order:
- *   1. a slug segment that is `.` or `..`, or an owner (the first segment) that starts with `.`: `bad-slug`. A
- *      repository name may start with a dot, so `org/.github` passes;
+ *   1. a slug that is not exactly two segments (owner/name, as ccd's GH_SLUG_RE requires), a slug segment that
+ *      is empty, `.` or `..`, or an owner (the first segment) that starts with `.`: `bad-slug` (the empty-segment
+ *      and shape halves are D-5502's). A repository name may start with a dot, so `org/.github` passes;
  *   2. a segment of `at` or of the repo path that is empty, `.` or `..`: `bad-target`. encodeURIComponent leaves
  *      `.` and `..` as they are, and a browser would resolve such a URL to another page.
  *  Otherwise the URL is `/blob/<at>/<repo path>` for a leaf or a `repo` target, `/tree/<at>/<repo path>` for a
@@ -987,7 +988,9 @@ function servedRefIsLocalOnly(ref: DocsTreeOk['ref']): boolean {
 function githubUrlAt(slug: string, at: string, target: GithubTarget):
   { ok: true; url: string } | { ok: false; why: 'bad-slug' | 'bad-target' } {
   const slugParts = slug.split('/');
-  if (slug.startsWith('.') || slugParts.some((s) => s === '.' || s === '..')) return { ok: false, why: 'bad-slug' };
+  if (slugParts.length !== 2 || slug.startsWith('.') || slugParts.some((s) => s === '' || s === '.' || s === '..')) {
+    return { ok: false, why: 'bad-slug' };
+  }
   const repoPath = target.kind === 'root' ? null
     : target.kind === 'repo' ? target.repoPath
       : target.kind === 'section' ? DOC_SECTIONS[target.section]

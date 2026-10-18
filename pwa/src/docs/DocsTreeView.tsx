@@ -110,7 +110,7 @@ function ListingPage(p: {
   return (
     <div className="docs-listing">
       <input
-        type="search" className="docs-filter" aria-label={DOCS_VIEW_TEXT.filterEntries} value={filter}
+        type="search" className="docs-filter" aria-label={DOCS_VIEW_TEXT.filterEntries} placeholder={DOCS_VIEW_TEXT.filterEntries} value={filter}
         onChange={(e) => setFilter(e.target.value)}
       />
       {listing.folders.length + listing.files.length === 0 && <p className="docs-note">{DOCS_VIEW_TEXT.emptyListing}</p>}

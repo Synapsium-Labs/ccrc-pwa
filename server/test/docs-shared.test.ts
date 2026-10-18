@@ -1213,6 +1213,19 @@ describe('docs section H: entryView, admitDraft and githubBlobUrl', () => {
         .toEqual({ ok: false, why: 'no-github-origin' });
     });
 
+    // D-5502 (the takeover's security review): the slug must be exactly owner/name, two non-empty segments, as
+    // ccd's GH_SLUG_RE requires upstream. An empty segment built `https://github.com//evil.example/...`.
+    it('a slug that is not exactly two non-empty segments gives bad-slug (D-5502)', () => {
+      const ref = refOf('origin', 'equal', 'origin');
+      for (const slug of ['', '/', '/evil.example', 'example-org/', 'example-org//x', 'example-org', 'a/b/c']) {
+        expect(docsH.githubBlobUrl({ state: 'named', slug }, ref, TARGETS.leaf), JSON.stringify(slug))
+          .toEqual({ ok: false, why: 'bad-slug' });
+        expect(docsH.githubBlobUrl({ state: 'named', slug }, ref, TARGETS.root), JSON.stringify(slug))
+          .toEqual({ ok: false, why: 'bad-slug' });
+      }
+      expect(docsH.githubBlobUrl({ state: 'named', slug: 'example-org/.github' }, ref, TARGETS.root).ok).toBe(true);
+    });
+
     it('local-only, default:local-main and default:local-master give not-on-origin, even when the relation reads equal', () => {
       const refused = { ok: false, why: 'not-on-origin' };
       expect(docsH.githubBlobUrl(NAMED, refOf('local', 'local-only', 'local'), TARGETS.leaf)).toEqual(refused);

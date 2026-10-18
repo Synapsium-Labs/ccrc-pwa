@@ -87,6 +87,15 @@ describe('the default view never overlays; its hint is qualified (M4.T2, row 67)
 });
 
 describe('a ref view overlays only when the base is equal (M4.T3, row 67)', () => {
+  it('one draft: the base hint says "is based", in agreement with n (D-5502)', async () => {
+    const drafts = holderOnBranch(COMMIT_B, false);
+    const f = fakeLoaders({ tree: okTree(treeOk({ entries: THREE.slice(0, 1), drafts })) });
+    navigate('/docs/demo/specs?ref=main');
+    render(<Routed loaders={f.loaders} />);
+    expect(await screen.findByText(
+      '1 uncommitted doc in main checkout is based on local ws/a at bbbbbbbb; this page shows origin/main')).toBeInTheDocument();
+  });
+
   it('baseEqual false: the base hint linking refs/heads/<b>, and no overlay', async () => {
     const drafts = holderOnBranch(COMMIT_B, false);
     const f = fakeLoaders({ tree: okTree(treeOk({ entries: THREE, drafts })) });

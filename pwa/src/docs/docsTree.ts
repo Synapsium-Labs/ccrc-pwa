@@ -75,10 +75,21 @@ export function listDir(
   };
 }
 
+/** A count of one's noun (D-5502): `1 spec`, never `1 specs`. */
+const SECTION_LABEL_ONE: Readonly<Record<DocSectionSlug, string>> = {
+  specs: 'spec',
+  plans: 'plan',
+  'product-design': 'design',
+  conventions: 'convention',
+};
+
 /** The four section counts in `DOC_SECTION_SLUGS` order, joined by ` · ` (spec 4.4). A `null` count renders `?`:
- *  the count is not known, never zero. */
+ *  the count is not known, never zero. A count of one takes the singular noun (D-5502). */
 export function sectionCountsText(counts: Readonly<Record<DocSectionSlug, number | null>>): string {
-  return DOC_SECTION_SLUGS.map((slug) => `${counts[slug] ?? '?'} ${SECTION_LABEL[slug]}`).join(' · ');
+  return DOC_SECTION_SLUGS.map((slug) => {
+    const n = counts[slug];
+    return `${n ?? '?'} ${n === 1 ? SECTION_LABEL_ONE[slug] : SECTION_LABEL[slug]}`;
+  }).join(' · ');
 }
 
 /** What a `path` page is, from the tree answer, never from the URL's shape (spec 3.1, 4.4): `leaf` when an entry has
