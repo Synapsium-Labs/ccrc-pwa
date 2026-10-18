@@ -1,12 +1,14 @@
 # Settings, sectioned: five sections by kind, a plain-language line for every setting, and a rollback list of three (design)
 
-**Status:** approved by the operator 2026-10-18. Rev 2: the operator ruled every decision in §15 as recommended and
-let the three visual calls stand as mocked (§15.2). Rev 1 applied two reviews of rev 0 (the log is §16).
+**Status:** approved by the operator 2026-10-18. Rev 3 applies a review of rev 2 against the release-notes change
+and the Accounts spec's rev 2 (the log is §16). Rev 2: the operator ruled every decision in §15 as
+recommended and let the three visual calls stand as mocked (§15.2). Rev 1 applied two reviews of rev 0.
 It answers the operator's ask of 2026-10-18 (§1.1) and is the W3 Settings item the two-skins programme already names
 (audit U9, two-skins spec §5.3 "Settings"). The decisions only the operator could make are in §15, each now ruled.
 Nothing in it is built yet.
-**Date:** 2026-10-18 · **Base:** `origin/main` `537b6a41` (#626, the command palette; rev 0 measured `6702ce2e`, and
-nothing between them touches a Settings file). Read-only; nothing edited.
+**Date:** 2026-10-18 · **Base:** `origin/main` `f2852dc4` (#636) plus the release-notes branch
+`feat/release-notes-whats-new` (`cc058514`, not yet a PR), which edits Settings files (§13). Rev 0 measured `6702ce2e`
+and rev 1 `537b6a41`. Read-only; nothing edited.
 **Branch:** chosen by the coordinator at plan time, from `origin/main` as measured then.
 **Inputs.**
 - A measured inventory of today's Settings screen: all 28 controls and readouts with route, scope, help text, cadence
@@ -23,7 +25,7 @@ and cites the code for each, by file and by function, constant or selector. Line
 - `2026-10-15-ccrc-two-skins-design.md`: §5.1 (one data model), §5.3 (Settings: "sectioned (W3)"), §6, §7 (the
   picker, D-5096), §9 (the verification matrix) and §10 (waves).
 - `docs/superpowers/plans/2026-10-15-ccrc-skins-foundations.md`: Ftask 11 `PageScaffold`/`Section` (D-5102),
-  Ftask 12b `SkinFieldset`, and Ftask 6 danger variants (D-5099).
+  Ftask 12b `SkinFieldset` (merged, #632), Ftask 6 danger variants (D-5099) and its note on Revoke (§11.1).
 - `docs/superpowers/plans/2026-10-18-ccrc-skins-w2-shells.md`: S2b `routes.ts`, the door table (`go-settings`,
   `switch-layout`, `switch-theme`), S4b (Refined's frame, sidebar `clamp(320px, 24vw, 400px)`), S5 (D-5471: on a
   Refined phone the Bell lives in Settings), S9/S11 (Instrument's list column and tab bar) and S17 (parity).
@@ -32,8 +34,16 @@ and cites the code for each, by file and by function, constant or selector. Line
 - `2026-10-12-path-identity-design.md` §5.7. The temp root collector is its section. Its one-resume-door rule
   stands.
 - `2026-10-07-box-token-lifecycle-design.html` (rev 5): the box token card. Its G3 ("no 401 window") governs §5.5.
-- The Accounts redesign, written beside this one. It removes `AuthSection` from Accounts and this spec receives it.
-  D-5508 here is the one definition of that move; the Accounts spec cites it (§11.1).
+- The Accounts redesign, `2026-10-18-accounts-connect-design.md` (rev 2), written beside this one. It removes
+  `AuthSection` from Accounts and this spec receives it. D-5508 here is the one definition of that move, and the
+  Accounts spec is asked to cite it (§11.1, §15.3 C4). Its §3.6 defers the audit read, so Security hosts no account
+  changes in v1 (§5.5). Its D-5512 step-up routes are what D8 uses (§5.5, wave R2s).
+- The release-notes change, `docs/superpowers/plans/2026-10-18-release-notes-whats-new.md` on
+  `feat/release-notes-whats-new`. Its §A: notes generated at release time, the format written once in
+  `shared/release-notes.ts`, and the notes step in `release-main.sh` as well as `release.yml`. Its §B: "See what's new"
+  opens `WhatsNewSheet` in place, `UpdatesView.source`, and `@ccrc/ui`'s `TextLink`. Settings reuses its
+  `ReleaseNotes` and `WhatsNewSheet` (§4.1, §7.4). This spec cites that plan by part, not by its four D-numbers,
+  until the plan is on `main`: the deviation-refs floor test refuses a tracked ref above the ledger's high-water.
 
 **Deviation numbers.** This spec defines D-5503 to D-5508, once each, in §14. D-5509 and D-5510 were reserved for this
 work and are unused.
@@ -45,7 +55,7 @@ work and are unused.
   - **Appearance**, for this device.
   - **Notifications**, split into "this browser" and "whole fleet".
   - **Automation**, for the whole fleet: stall watch, the temp root collector and the cleanup pause.
-  - **Security**: the sign-in gate, your passkeys and session, recent account changes, and the box token.
+  - **Security**: the sign-in gate, your passkeys and session, and the box token.
 
   Each section has a one-line purpose. Each setting has a plain-language line saying what it actually does and when you
   would change it. Every one of those lines is taken from the measured effect in §2 and the code it cites, never
@@ -73,14 +83,17 @@ work and are unused.
   that asked.
 - **Security comes home** (D-5508). Sign-in, passkeys and sign-out move from Accounts into Settings › Security, beside
   the box token and the sign-in gate, so Accounts holds only lanes.
-- **The "what's new" doors land on Updates.** The update banner's "See what's new" and the release push open
-  `/settings/updates`, with the waiting release's notes open.
+- **"What's new" is one sheet.** The update banner's "See what's new" keeps opening `WhatsNewSheet` in place (the notes plan's §B).
+  Updates' Fleet version card gains the same "See what's new", opening the same sheet. Only the release push moves to
+  `/settings/updates`, because a push needs a URL.
 - **Waves** (§13):
-  - **R1a, now:** the release window. Only `updates.tsx` and its tests.
-  - **R1b, now:** the danger confirms. **R1c, now:** the label renames and result lines.
-  - **R2, after #402/#627 and Ftasks 11 and 12b:** the sections and routes, in Refined, with the Security move.
+  - **R1a, after the release-notes PR merges:** the release window, in `updates.tsx`, `SettingsScreen.tsx` and their
+    tests.
+  - **R1b, after R1a:** the danger confirms. **R1c, after R1b:** the label renames and result lines.
+  - **R2, after #402/#627, Ftask 11 and W2 S2b:** the sections and routes, in Refined, with the Security move.
+  - **R2s, after the Accounts spec's cut 1:** the step-up before Revoke and Add a passkey.
   - **R3, after W2 S9 to S11 and the shared list-column seam:** Instrument's master-detail.
-  - **R4, after #397 and #597:** the "ran here" record.
+  - **R4, after #397, #597 and the release-notes PR:** the "ran here" record.
 
 ## 1. The ask, the rulings and the goals
 
@@ -133,7 +146,10 @@ work and are unused.
 ### 1.4 Non-goals
 
 - **Accounts:** adding, minting, re-authenticating or removing lanes. That is the Accounts redesign. This spec only
-  receives `AuthSection` from it and hosts its "Recent account changes" card (§5.5).
+  receives `AuthSection` from it. The audit's read view is deferred by the Accounts spec (§3.6), so no "Recent account
+  changes" card ships here in v1 (§15.3 residue).
+- **Provider keys** (the Accounts spec's OpenRouter management key, its §8.7) stay on Accounts, with their expiry
+  warnings there. Security shows no line for them in v1 (§15.3 residue).
 - **New settings.** No setting is added, except the Layout picker, which is Ftask 12b's and only hosted here. Nothing
   that is CLI-only today (`ccrc.env` knobs, the sign-in gate itself) gains a control.
 - **Fleet operations** (audit F11: coordination pause, caps, account moves, maintenance) and **Box health** (audit
@@ -155,8 +171,10 @@ Notifications, Stall watch, Temp root collector. A test pins that order (`settin
 - `.settings-screen` pads by `--sp-2` (8 px). Section titles are `--fs-sm` semibold, which is smaller than the radio
   labels under them.
 - `app.tsx` ≈:72 routes it by `/^\/settings\/?$/`, so there are no sub-routes.
-- Two doors open it: the update banner's primary "See what's new" (`pwa/src/fleet/UpdateBanner.tsx` ≈:156,
-  `navigate('/settings')`) and the release push (`server/src/update/notify.ts` ≈:104, `RELEASE_PUSH_URL = '/settings'`).
+- Two doors opened it at `537b6a41`: the update banner's primary "See what's new" (`pwa/src/fleet/UpdateBanner.tsx`
+  ≈:156, `navigate('/settings')`) and the release push (`server/src/update/notify.ts` ≈:104,
+  `RELEASE_PUSH_URL = '/settings'`). The release-notes branch (its plan's §B) turns the banner's door into `WhatsNewSheet`,
+  opened in place over the fleet screen, so after it only the push lands here.
 
 Height in the fixture (px):
 
@@ -217,13 +235,15 @@ The inventory lists 26. These are the ones that shape the design:
    - Readouts mix mono and sans.
 9. **Width.** At 1280 and 1920 nothing has a max-width. The quiet-time select runs about 1,500 px, and help lines run
    to about 180 characters. The phone gutter is 8 px, not 16.
-10. **No Layout picker.** The skin is reachable only through storage (`ccrc-skin`).
+10. **No Layout picker** at `537b6a41`: the skin was reachable only through storage (`ccrc-skin`). #632 (`5aad2509`)
+    has since merged `SkinFieldset` into Appearance, so this spec only places it (§5.2).
 11. **Pause's undo lives elsewhere.** Resume is on Runs. While paused the card renders `COLLECT_PAUSE_TEXT.paused`, but
     it never names where the pause is lifted.
 12. **A lagging Mac disables auto-install fleet-wide** (`autoGateMissing` and the route count darwin nodes, which the PWA
     never moves). This is a non-goal here (§1.4) and goes to §15's residue.
-13. **The "what's new" doors land on a long page.** Both doors of §2.1 open `/settings` at its top, above Channel and
-    Auto-install, so the notes of the waiting release are a scroll away.
+13. **The release push lands on a long page.** It opens `/settings` at its top, above Channel and Auto-install, so the
+    notes of the waiting release are a scroll away. (The banner's door had the same defect; the notes plan's §B fixes it with
+    `WhatsNewSheet`.)
 
 ### 2.3 What works and is kept
 
@@ -246,7 +266,11 @@ The inventory lists 26. These are the ones that shape the design:
 - **The halt line's rule** (Wave 19 UI-4): a `HaltedLine` shows only where it gates a control on screen, and it is
   that control's `aria-describedby` target.
 - **TEXT IS TEXT.** Release notes, labels and details reach the DOM as text children only (the `updates.tsx`
-  source-scan pin).
+  source-scan pin). After the notes plan's §A and §B, notes render through `pwa/src/fleet/ReleaseNotes.tsx` (`ReleaseNotes`,
+  `NoteText`) in the row and in `pwa/src/fleet/WhatsNewSheet.tsx`. The one link allowed in a note is the `TextLink`
+  built by `pullUrl` from a `#NNN` number and the server's `UpdatesView.source`, never a URL taken from the text.
+- **One rendering of notes.** `ReleaseNotes`: the groups New, Fixed and Faster open, "Behind the scenes" folded, and a
+  plain body as text. Settings draws no second notes renderer.
 
 ## 3. Information architecture (D-5503)
 
@@ -257,11 +281,11 @@ or, for passkeys, sign-out and account changes, the Accounts screen and the Acco
 
 | # | Section (route) | Purpose line (shown under the name) | Scope | Holds |
 |---|---|---|---|---|
-| 1 | **Updates** `/settings/updates` | Which ccrc release the fleet runs, and how new releases reach it. | Whole fleet | the halt line (8); Check now and the catalogue line (6, 7); the release window (9–12, §7); the nodes (13–16); Channel and Auto-install (4, 5) |
+| 1 | **Updates** `/settings/updates` | Which ccrc release the fleet runs, and how new releases reach it. | Whole fleet | Back (1, through `PageScaffold`); the stale line (3); the halt line (8); Check now and the catalogue line (6, 7); "See what's new" (the notes plan's §B sheet); the release window (9–12, §7); the nodes (13–16); Channel and Auto-install (4, 5) |
 | 2 | **Appearance** `/settings/appearance` | How ccrc looks on this device. Other devices keep their own choice. | This device | Layout (Ftask 12b) above Theme (17); the fonts licence line |
 | 3 | **Notifications** `/settings/notifications` | What this browser is told, and which releases the server announces to everyone. | Two cards: "This browser" and "Whole fleet" | the Bell (20); Release notifications (21) |
-| 4 | **Automation** `/settings/automation` | What the server does to the fleet by itself: checking on quiet workers, and clearing what dead sessions leave behind. | Whole fleet | Stall watch (22–25); Temp root collector (26, 27); Cleanup pause (28) |
-| 5 | **Security** `/settings/security` | Who can open this console, what changed on your accounts, and the key the fleet box uses to call this server. | Cards labelled "This box", "You" and "This browser" | the sign-in gate (2); Your sign-in: passkeys; This session: Sign out (both from Accounts, D-5508); Recent account changes (the Accounts spec's audit); Box token (18, 19) |
+| 4 | **Automation** `/settings/automation` | What the server does to the fleet by itself: checking on quiet workers, and clearing what dead sessions leave behind. | Whole fleet | Stall watch (22–25, the 48 h counts footnote of 25 included); Temp root collector (26 in full: its counts and its warn and remedy lines; 27, "Confirm Live again" included); Cleanup pause (28) |
+| 5 | **Security** `/settings/security` | Who can open this console, and the key the fleet box uses to call this server. | Cards labelled "This box", "You" and "This browser" | the sign-in gate (2); Your sign-in: passkeys; This session: Sign out (both from Accounts, D-5508); Box token (18, 19) |
 
 **The order** keeps today's (Updates, then Appearance, then the rest) and puts Security last. Security is set once and
 visited rarely, but its status line is on the index, so a broken state is never buried. An open sign-in gate is also a
@@ -315,14 +339,20 @@ A section page is a stack of `Section` cards (Ftask 11). Each card has:
 - **Instrument:** one head line. The title is in primary ink at the left, and the scope is a small mono tag at the
   right. Instrument's section titles are already mono caps, and two stacked mono-caps lines blur together.
 
+The primitive carries both: Ftask 11's `Section` takes `{ scope, title, purpose, children }`, and CSS draws `scope` per
+skin (Refined: the eyebrow; Instrument: the right-aligned tag). F11's plan today defines `Section({ eyebrow, title,
+children })` with no purpose slot, so §15.3 C3 asks for the change before F11 is built. If F11 ships first without it,
+R2 extends the primitive in `ui/` (§13).
+
 Cards per section:
 - **Updates:** Fleet version, which holds the halt line, the status, Check now and the release window (§7). Then Nodes.
   Then Update policy (Channel, Auto-install).
 - **Appearance:** one card, holding Layout, Theme and the fonts line.
 - **Notifications:** This browser. Then Whole fleet: release announcements.
 - **Automation:** Stall watch. Then Temp root collector. Then Cleanup pause.
-- **Security:** Sign-in gate (This box). Then Your sign-in (You: passkeys). Then This session (This browser: Sign out).
-  Then Recent account changes (This box). Then Box token (This box).
+- **Security:** four cards. Sign-in gate (This box). Then Your sign-in (You: passkeys). Then This session (This
+  browser: Sign out). Then Box token (This box). The slot order is fixed with one reserved place: a later "Recent
+  account changes" card, once the Accounts audit read ships, goes before Box token, so adding it reshuffles nothing.
 
 **Updates puts the versions first and the policy last.** Today's order inside Updates is Channel, Auto-install, Check
 now, then the releases. That order makes the operator scroll past set-once policy every time they open the page to
@@ -341,7 +371,12 @@ Each section is its own route at every width, in both skins, rather than one lon
 
 **Routes.** `/settings` is the index, and `/settings/<id>` is a section, for `id` in `updates`, `appearance`,
 `notifications`, `automation` and `security`. W2's `pwa/src/lib/routes.ts` (S2b) gains the five as entries with
-`top: false`, so the palette derives "Go to Settings › Updates" and the others (S-14). `app.tsx`'s regex becomes a
+`top: false`, so the palette derives "Go to Settings › Updates" and the others (S-14), and they give the titles.
+It also gains a **sixth entry**, `{ id: 'settings-section', pattern: /^\/settings\/([^/]+)\/?$/, top: false }`, which
+matches any id and is left out of the palette's Go-to derivation. `SettingsScreen` resolves the id against the five.
+That keeps W2 S2b's both-way ROUTES test true ("every ROUTES pattern renders its own screen, and a path outside ROUTES
+renders the fallback"): `/settings/bogus` is inside ROUTES and renders Settings, never `ScreenFallback`. The entry and
+the derivation's exclusion amend W2's plan, so they go to the coordinator (§15.3 C1). `app.tsx`'s regex becomes a
 route-table match, after #402 (reconciled as #627). `document.title` reads `Updates · Settings · ccrc`.
 
 **What bare `/settings` and an unknown id show:**
@@ -355,10 +390,17 @@ route-table match, after #402 (reconciled as #627). `document.title` reads `Upda
 
 Nothing 404s.
 
-**The doors that land here.** The update banner's "See what's new" (`UpdateBanner.tsx` ≈:156) and the release push
-(`RELEASE_PUSH_URL`, `server/src/update/notify.ts` ≈:104) both move to `/settings/updates`, in R2. There, the waiting
-release's notes (the Newer group's first row, `pendingTag`'s tag) render open and the rest stay collapsed (§7.2), so
-"what's new" is the first thing the operator reads at every width.
+**What's new, and the one door that lands here.**
+- **The update banner's "See what's new"** (`UpdateBanner.tsx`) keeps the notes plan's behaviour (its §B): it opens `WhatsNewSheet` in
+  place over the fleet screen, and does not navigate. This spec does not touch the banner.
+- **Updates' own "See what's new".** The Fleet version card puts a "See what's new" button beside its "vX available"
+  status, shown exactly when `pendingTag` names a tag. It opens the same `WhatsNewSheet`: the same component, the same
+  tag (`pendingTag`'s), the same range rule (`whatsNewReleases`), and the same footer "Update all" that hands over to
+  the move sheet. So Settings draws no second what's-new surface.
+- **The release push** (`RELEASE_PUSH_URL`, `server/src/update/notify.ts` ≈:104) moves to `/settings/updates`, in R2,
+  because a push needs a URL and cannot open a sheet. The notes branch leaves `notify.ts` untouched. There, the waiting
+  release's notes (the Newer group's first row, `pendingTag`'s tag) render open and the rest stay collapsed (§7.2), so
+  "what's new" is the first thing the operator reads at every width.
 
 **Headings.** The `<h1>` is "Settings" on every Settings route. That keeps the pin "titles itself Settings, as the one
 level-1 heading" (≈:85). The section's name is the page's `<h2>`, each card title is an `<h3>`, and a card's sub-group
@@ -420,14 +462,24 @@ registers its own. R3 (§13) depends on W3-LC; it does not build it.
 The list column is a sibling grid item rendered by the shell (W2 S9), not a child of the detail pane where a section
 mounts. A skin part may not call the network (the W2 S4a guard). So a frame inside the detail cannot feed the list
 column through props or context. Instead:
-- **`SettingsDataProvider`** mounts in `app.tsx` *above the shell* whenever the route matches `/settings*`, the same
-  place `app.tsx` already holds app-wide data (its `useFleetStore` connect and reads, ≈:39–56). It stays mounted while
-  the operator moves between sections and unmounts when they leave Settings, as today.
+- **`SettingsDataProvider`** mounts in `app.tsx` *above the frame*, **unconditionally**, in the place `app.tsx` already
+  holds app-wide data (its `useFleetStore` connect and reads, ≈:39–56). It takes an `active` prop, true while the route
+  matches `/settings*`. Its hooks start their reads when `active` turns true and stop when it turns false, and the
+  context value is `null` while inactive. It must not be mounted only on Settings routes: `.app-shell` holds the
+  always-mounted `FleetScreen` sidebar, and `app.tsx` keeps the sidebar's scroll position across navigations on purpose
+  ("THE SIDEBAR IS DELIBERATELY LEFT ALONE", D-161). A provider that appears and disappears above the shell changes the
+  element tree there, so React would remount the whole frame on every entry to and exit from Settings, and break W2
+  S2b's frame identity ("the detail section is the same DOM node"). A tiny store that `SettingsIndex` and the detail
+  both subscribe to is an acceptable alternative with the same rule.
 - It owns the reads, once per mount (table below), and publishes one `SettingsView` by context. The shell sits inside
   it, so both the list-column part (`SettingsIndex`, through W3-LC) and the detail read the same context. Neither
   imports a network hook. The skin parts read only the context.
-- A test pins it: one `useUpdatesView` poll serves both the list-column index and the detail, across a walk of all
-  five sections, in Instrument at 1280.
+- Tests pin it:
+  - one `useUpdatesView` poll serves both the list-column index and the detail, across a walk of all five sections,
+    in Instrument at 1280;
+  - navigating `/`, then `/settings/updates`, then `/` keeps the same `.app-shell` and sidebar DOM nodes, and the
+    sidebar's `scrollTop` is preserved;
+  - S2b's "same DOM node" assertion for the detail section holds across an entry to Settings.
 
 | Read | Source | Cadence | Fed to |
 |---|---|---|---|
@@ -437,16 +489,15 @@ column through props or context. Instead:
 | the cleanup pause | `useFleetStore`'s coord frame (`childReclaimMarker`), a WebSocket frame and not a poll | as frames arrive | Automation's Cleanup pause card, the index status (a skeleton until the first frame) |
 | the auth status | `readAuthStatus()` (`GET /api/auth/status`), once per mount | once | Security, the index status, the gate banner |
 | the passkey list | `api.passkeys()`, once per mount, only when the status read says the gate is armed (`mode` not `off`), as `AuthSection` does today | once | Security › Your sign-in |
-| recent account changes | the Accounts spec's `GET /api/accounts/audit`, first page, once per mount (added by the Accounts plan with the route; a 404 draws nothing) | once | Security › Recent account changes |
 
-Today's single page makes all of these but the last at once, so the provider adds no request beyond today's.
+Today's single page makes all of these at once, so the provider adds no request beyond today's.
 Moving between sections refetches nothing.
 
 ### 4.5 The inspector (Instrument), where useful
 
 | Section | Selecting… | The inspector shows |
 |---|---|---|
-| Updates | a release row | the tag, the channel, the release date, "Ran here" (D-5506), the full notes in a `<pre>` (TEXT IS TEXT), refusals by node, and the node list that a move to it would touch, in dispatch order |
+| Updates | a release row | the tag, the channel, the release date, "Ran here" (D-5506), the full notes through `<ReleaseNotes notes source/>` (TEXT IS TEXT), refusals by node, and the node list that a move to it would touch, in dispatch order |
 | Updates | a node row | the node's measured lines today (version, request, state, reachability, finished), `previousVersion`, its floor (`highestVersion`), and its refusals |
 | Security | the Box token card | every key/value line of today's card (`readBoxTokenView`), which the card itself folds behind "Details" (§5.5) |
 | others | — | "Nothing selected" |
@@ -463,7 +514,8 @@ In Refined, and on an Instrument phone, the same content is the card's "Details"
 - `go-settings` goes to `/settings`. The five Go-to entries come from `routes.ts`. S17(a) walks only `top: true`
   routes, so the `top: false` section routes are not bound by it.
 - The literal `<NotificationBell/>` is on `/settings/notifications` (D-5471).
-- The update banner's "See what's new" and the release push open `/settings/updates` (§4.1).
+- The update banner's "See what's new" opens `WhatsNewSheet` in place (the notes plan's §B, unchanged), and so does Updates' own
+  "See what's new". The release push opens `/settings/updates` (§4.1).
 
 ## 5. Every setting: what it does, and when you would change it
 
@@ -481,6 +533,8 @@ note, or the card's purpose line. Labels are sentence case throughout. Where a l
 | Halt line (when shown) | readout, amber, first on the page | today's `updateAllHaltedText(haltingNodes(nodes))` sentence, plus one added line: "Clear it with Ack on that node, under Nodes, after you have fixed what made it fail." Today's two `HaltedLine`s (in `ReleaseList` and `NodeList`) become this one line, under the UI-4 rule: it shows only while a control it gates is on screen, and it stays the `aria-describedby` target of every Install and Update button it gates. | — |
 | Status line | readout | "The fleet runs v0.4.21" (every managed node), or "Nodes run v0.4.20 to v0.4.21", plus "macOS nodes are updated on the Mac itself" when one differs (`releaseRunningText`'s facts). It names an unmeasured node: "server has not reported its version yet." | — |
 | Catalogue line | readout | "Release list checked 4 min ago", amber when the last check failed (`catalogueLine`). Explanation: "The server checks GitHub for new releases every 30 minutes." (`CATALOGUE_POLL_INTERVAL_MS`) | — |
+| Stale line (when shown) | readout | today's stale line (inventory row 3): the last answer is kept and the line says how old it is | — |
+| **See what's new** (when a release is waiting) | safe action, beside the "vX available" status | "Shows what the waiting release changes, and every release between it and what the fleet runs." It opens `WhatsNewSheet` with `pendingTag`'s tag (the notes plan's §B), whose footer "Update all" opens the move sheet. | A release is waiting and you want to know what it brings. |
 | **Check now** | safe action | "Asks GitHub for new releases now, instead of waiting for the next check." (`POST /api/updates/refresh`). A 429 is said in place: "Checked too recently. Try again in *n* s." | You know a release just shipped. |
 | Release window | §7 | — | — |
 
@@ -559,6 +613,7 @@ confirm, its 48 h counts and its words. Three things change:
     focused one while the keyboard moves through them. That is U9's one live explanation.
   - It stays a radio group. Choosing a level still writes on choice, and anything that turns something on still asks
     (the 409 confirm).
+- **The 48 h counts** (inventory row 25) keep their place and their footnote, unchanged.
 - **Quiet time:** the 60-word paragraph becomes one line, "How long a worker may be silent before stall watch checks
   on it. Shorter means more check mail.", plus "Built-in: 2 h · Range: 30 min to 12 h" in tertiary ink. Lowering it
   still asks. The select is capped at 320 px.
@@ -572,6 +627,8 @@ No string names a device (P6).
 | Purpose line | "Each session gets its own temporary directory. When the session's workspace is gone, the directory is left behind. The collector finds these leftovers on the fleet box. Live lets it delete one, only after two audits, at least an idle period apart, have found it unused." (path-identity §5.7; `ws-collect`) | — |
 | **Collector** (was "Choice") | **Off**: "Watches and reports what it would remove, and removes nothing." (the server's effective state is `shadowed`, `server/src/collectLane.ts` ≈:2027; `COLLECT_STATE_TEXT.shadowed`) · **Live**: "Removes a leftover temporary directory only after two idle audits have found it unused." Live asks first, naming the node and the caps (today's `QuickConfirm`). Off stays disabled while the fleet box's legacy file arms it, with today's line. | Turn it Live once its reports look right. Turn it Off if a removal surprised you. |
 | Now and armed-by lines | today's `COLLECT_STATE_TEXT` and `COLLECT_ARMED_BY_TEXT`, with "licensed observations" glossed once in the purpose line ("two audits") | — |
+| Counts, warn and remedy lines | inventory row 26 in full: today's counts, and its warn and remedy lines, unchanged in words and conditions | — |
+| **Confirm Live again** (when shown) | inventory row 27: today's control, shown when Live is stored for another node, with its words and its server-decided confirm unchanged | When the collector's node changed and you still want Live. |
 
 **Card: Cleanup pause.** This card is moved out of the collector card, because it stops more than the collector.
 - **Status:** "Cleanup runs normally." or "Cleanup is paused for the whole fleet", amber with the pause glyph, from the
@@ -598,9 +655,9 @@ the Accounts inventory's A4–A6, the passkey-list defects that leave with it.
 
 | `AuthStatus.mode`, and reach | Cards |
 |---|---|
-| `passphrase` | all five cards |
-| `locked-out` | all five. The gate card reads "Sign-in is locked: too many failed attempts. It reopens by itself shortly." (the login rate limiter's window, `shared/api.ts` ≈:7350) |
-| `off`, reachable from other machines (`unarmedExposure`) | the gate card in the danger tone, Recent account changes, and Box token. The gate card adds: "Passkeys and sign-out appear here once sign-in is on." |
+| `passphrase` | all four cards |
+| `locked-out` | all four. The gate card reads "Sign-in is locked: too many failed attempts. It reopens by itself shortly." (the login rate limiter's window, `shared/api.ts` ≈:7350) |
+| `off`, reachable from other machines (`unarmedExposure`) | the gate card in the danger tone, and Box token. The gate card adds: "Passkeys and sign-out appear here once sign-in is on." |
 | `off`, on loopback only (`unarmedExposure` false for a loopback host) | the same cards. The gate card reads "Sign-in is off. This console is reachable from this machine only." in neutral ink. |
 | status unreadable | the gate card reads "Sign-in state could not be read." Your sign-in and This session are absent, with that reason in the gate card. Never "on". |
 
@@ -622,22 +679,26 @@ the Accounts inventory's A4–A6, the passkey-list defects that leave with it.
   - Each row keeps today's words: "added 5 min ago", and ", last used three weeks ago" when the server has a use.
   - **Revoke** is danger-ghost, at the row's end (§6.3), and asks first: "Revoke the passkey *label*? It will not
     sign in again." When it is the last passkey, the confirm adds: "This is your last passkey. After it, only the
-    passphrase signs in." Revoke also needs a recent passkey step-up once its guard exists (§15 D8, ruled).
+    passphrase signs in."
 - **Add a passkey on this device** stays primary. Its note: "Adds this device's passkey, so you can sign in here
   without the passphrase."
+- **Step-up before Revoke and Add** (§15 D8, ruled; wave R2s). Once the Accounts spec's cut 1 ships its step-up routes
+  and `assertedAt` (D-5512), both acts need a step-up from the last 5 minutes on the same session. Add is the stronger
+  threat: `POST /api/auth/passkey/register/*` is gated by the session alone today (`server.ts` ≈:844–:875), so a
+  browser left open could enroll an attacker's passkey and keep access after the session ends. Revoking passkeys is
+  the weaker one.
+  - **Server:** `DELETE /api/auth/passkey/:id` and `POST /api/auth/passkey/register/start` call D-5512's
+    `requireRecentAssertion(5 min)`, only while the gate is armed. The fallback is the passphrase step-up when no passkey
+    is enrolled, so the first enrollment on a fresh box still works.
+  - **PWA:** Your sign-in shows "Confirm it's you" (D-5512's step) before Revoke's confirm and before Add's ceremony,
+    only when `stepUpFreshUntil` has passed.
+  - Until R2s, Revoke has the confirm only and Add has none, as today.
 - The unreadable-store sentence is kept verbatim (D-153).
 
 **Card: This session** (scope "This browser")
 - **Sign out** stays ghost with no confirm (D-5099 #611): signing in again undoes it.
 - Its note: "Signs this browser out. Other signed-in browsers stay signed in." Then today's sentence, kept: "To end
   every session at once, rotate the passphrase with `ccrc passwd` on the box."
-
-**Card: Recent account changes** (scope "This box")
-- The Accounts spec's §3.6 audit: the last 10 rows of `GET /api/accounts/audit`, newest first, each "*when* · *what*
-  · *lane*", and a link "All account changes" to the Accounts screen's full record.
-- **What it does:** "Every account added, signed in again, changed or removed, and from which session."
-- **Gated:** the card ships with the Accounts plan, after R2, in the same PR as the audit route. A 404 from a server
-  older than the PWA draws no card and no error. A failed read says "Account changes could not be read."
 
 **Card: Box token** (scope "This box"), as a status card with Details (audit U9)
 - **Definition (purpose line):** "The key that sessions and tools on the fleet box use to call this server, for mail
@@ -665,7 +726,7 @@ the Accounts inventory's A4–A6, the passkey-list defects that leave with it.
 | Choose a look | the swatch preview grid (§5.2), with radio semantics | Theme | The swatches are real palettes. |
 | Choose a value on a scale | native `<select>`, max 320 px. It becomes an `OptionRow` trigger once W1's Popover lands (audit B13) | Quiet time | The range and the built-in value are shown beside it. |
 | Turn this browser on or off | the literal `NotificationBell` | Push | Never copied (pin ≈:1832). |
-| Safe action | `Button variant="ghost"` (Add a passkey: `primary`) | Check now, Rotate now, Pause all cleanup, Add a passkey, Sign out | No confirm. Rotate now and Pause sit at the foot of their card after a hairline, because each is the card's one action. |
+| Safe action | `Button variant="ghost"` (Add a passkey: `primary`) | Check now, See what's new, Rotate now, Pause all cleanup, Add a passkey, Sign out | No confirm. Rotate now and Pause sit at the foot of their card after a hairline, because each is the card's one action. |
 | Move | `Button variant="ghost"` (today's), which opens `UpdateMoveSheet` | Install, Update, "Update all to vX" | The sheet names the nodes. |
 | Danger action | `Button variant="danger-ghost"`, which opens a confirm (§6.3) | Roll back (release and node), Ack, Revoke | §6.3 |
 | Readout | sans key and mono value (`<dl>`); a sans sentence leads | every status line and Details | More than three lines fold behind "Details" (`<details>`). |
@@ -769,7 +830,10 @@ Let *hi* be the newest managed node's version and *lo* the oldest. A uniform fle
    placed first. Withdrawn rows are left out of Newer because the server refuses to install one (`moveRefusal`
    `unknown-tag` needs a listed, unyanked row).
    - Under them, when more exist: "*n* more newer releases on this channel are not shown. Installing the newest brings
-     in every change they made."
+     in every change they made." followed by a link, **"See every change since v*running*"**, that opens
+     `WhatsNewSheet` for `pendingTag`'s tag. The sheet lists the whole range uncapped (`whatsNewReleases`), so the cap
+     of three hides no note. On a mixed fleet, *running* is the oldest behind node's version, the sheet's own range
+     rule.
    - **A row at or below a node's floor.** After a rollback, the release the node left is newer than *hi* but not
      newer than that node's floor, so dispatch refuses it (`not-newer`). Such a row keeps its place, its Install is
      disabled for that node, and it reads: "*label* was rolled back from this release. The server will not reinstall
@@ -822,13 +886,23 @@ Each row is compact: a two-column grid, with the facts on the left and the row's
 underneath across both columns (ruled, §15.2). The grid keeps a row from wrapping at 390 px, because no date shares the
 action's line.
 - **First line:** the tag (mono) and the channel as a word.
-- **Second line, what it was:** the first non-empty line of its notes, in sans, ellipsised to one line.
+- **Second line, what it was:** a one-line summary built from `parseReleaseNotes()` (`shared/release-notes.ts`), in
+  sans, ellipsised to one line, rendered through `NoteText` so a `#NNN` stays the one allowed link. The header line
+  ("Changes since v…" or "First release") is never the summary, because after the notes plan's §A every generated release opens
+  with it.
+  - **Grouped notes:** the first item of the first non-empty group, in `RELEASE_NOTE_GROUPS` order (New, Fixed,
+    Faster, Behind the scenes). A grouped body with no items (an empty range) reads "No changes.", the component's
+    own words.
+  - **Plain notes** (a body in any other shape): its first non-empty line.
+  - **No notes:** "No notes for this release", `WhatsNewSheet`'s `NO_NOTES_TEXT`. That is the one wording for empty
+    notes, here and in the sheet.
 - **The meta line, when:** "Released 2026-10-09" (`releaseDate(publishedAt)`), then, joined by " · ", **when it ran
   here** from D-5506 (the table below), then any role word such as "Ran before the last update". For example: "Released
   2026-10-02 · Ran here 2 Oct to 9 Oct · Ran before the last update".
-- **Notes:** a `<details>` that opens today's `<pre>` (TEXT IS TEXT). The waiting release's "Notes" (Newer's first row)
-  is open by default (§4.1). In Instrument, selecting the row also puts the notes in the inspector (§4.5). A row with
-  no notes reads "No release notes."
+- **Notes:** a `<details>` that wraps `<ReleaseNotes notes source/>` (the notes plan's component, with `UpdatesView.source`),
+  not a `<pre>` (TEXT IS TEXT). The waiting release's "Notes" (Newer's first row) is open by default (§4.1). In
+  Instrument, selecting the row also puts the same component in the inspector (§4.5). A row with no notes draws no
+  disclosure, and its summary line says "No notes for this release".
 
 What the meta line says after "Released", from D-5506:
 
@@ -879,7 +953,9 @@ hover.
 where `mixed` is `{ lo, hi } | null` and `rule` is `'stable' | 'dev'` (for the lead line). It is built only from
 `sortReleases`, `releaseDirection`, `pendingTag`, `nodeVersion`, `previousVersion`, `highestVersion`, each row's
 `channel` and `yanked`, and the fleet channel, so the window, the banner and the button label cannot disagree.
-`ReleaseList` renders the window. The server and the wire are unchanged for the cap: the slice is the PWA's.
+`ReleaseList` renders the window, and `releaseWindow`'s rows carry `source` (`UpdatesView.source`, the notes plan's §B) through
+to each `ReleaseItem`, the prop the notes branch adds. The server and the wire are unchanged for the cap: the slice is
+the PWA's.
 
 ## 8. "Ran here": the install record (D-5506)
 
@@ -911,8 +987,9 @@ The only honest date today is the release date.
   last 50 tags.
 
 **Gate.** This edits `shared/api.ts`, which both #397 (Path identity W1a) and #597 (the delegation wave-3 follow-up)
-hold open. It lands after both merge, per the freeze rule. No open PR holds `inventory.ts`, `coord/schema.ts` or
-`coord/store.ts` at `537b6a41`. The release window (§7) does not wait for it.
+hold open, and the release-notes branch edits too (`UpdatesView.source`). It lands after all three merge, per the
+freeze rule. No open PR holds `inventory.ts`, `coord/schema.ts` or `coord/store.ts` at `f2852dc4`. The release window
+(§7) does not wait for it.
 
 ## 9. Failure modes
 
@@ -966,17 +1043,17 @@ hold open. It lands after both merge, per the freeze rule. No open PR holds `inv
 
 | From | To | Note |
 |---|---|---|
-| `AuthSection` at the foot of `AccountsScreen.tsx` ≈:420 | Settings › Security, split into `YourSignInCard` and `ThisSessionCard` (§5.5) | D-5508, defined here once. **Settings R2 owns the move and the removal of `AccountsScreen`'s import, in one PR.** The Accounts redesign lands after it and cites D-5508 for the move; its own D-5522 keeps the door's placement and the rename. The words are kept, including "last used …" and the `ccrc passwd` sentence. |
+| `AuthSection` at the foot of `AccountsScreen.tsx` ≈:420 | Settings › Security, split into `YourSignInCard` and `ThisSessionCard` (§5.5) | D-5508, defined here once. **The order on `AccountsScreen.tsx` is F11, then Settings R2, then the Accounts spec's cut 0 and later** (§15.3 C4). R2 owns the move, the removal of `AccountsScreen`'s import, and Revoke's conversion to `danger-ghost` inside `YourSignInCard`, in one PR; that retires the foundations plan's F6 note giving `.accounts-session`'s Revoke to W1. The Accounts spec is asked to cite D-5508 for the move and drop the move clause from its D-5522, which keeps the door's placement and the rename. The words are kept, including "last used …" and the `ccrc passwd` sentence. |
 | The unarmed banner at the top of Settings | the Security › Sign-in gate card, plus a compact banner on every Settings route | the lead sentence is added (§5.5) |
 | Box token section | Security › Box token, as a status card with Details | the definition is corrected (§5.5); facts unchanged |
-| — | Security › Recent account changes | the Accounts plan's card, hosted here (§5.5) |
 | Release notifications, inside Notifications | Notifications › Whole fleet card | labelled as fleet-wide |
 | Stall watch and Temp root collector sections | Automation | bodies unchanged except §5.4 |
 | "Pause all cleanup", inside the collector card | Automation › Cleanup pause card | gains a status line and the Runs link; stays one tap |
 | Channel and Auto-install, at the top of Updates | Updates › Update policy (last card) | §3.3 |
 | Node inventory, mid-page | Updates › Nodes card | — |
 | The halt line, above the release list and in the node list | the top of Updates › Fleet version, one line | U9; keeps the UI-4 rule (§5.1) |
-| The "what's new" doors, `/settings` | `/settings/updates` | `UpdateBanner.tsx` ≈:156 and `RELEASE_PUSH_URL` |
+| The release push, `/settings` | `/settings/updates` | `RELEASE_PUSH_URL` only. The banner's door is the notes plan's sheet (§B) and does not move. |
+| — | "See what's new" in Updates › Fleet version | opens the notes plan's `WhatsNewSheet` (§4.1) |
 
 ### 11.2 What is renamed (label, old to new)
 
@@ -1006,8 +1083,8 @@ The enum values on the wire are unchanged. Only the PWA's word tables change (`A
 ### 11.3 What is removed
 
 - The unbounded release list: every row beyond the window of §7, in every fleet state.
-- Every release row's always-open `<pre>` notes, which now sit behind the "Notes" disclosure (the waiting release's
-  open by default).
+- Every release row's always-open notes (`<ReleaseNotes>` after the notes plan's §B), which now sit behind the "Notes" disclosure
+  (the waiting release's open by default).
 - The rows between two nodes' versions in a mixed fleet, which were mislabelled as one direction.
 - One-tap Ack and Revoke, and the Install-toned rollback sheet.
 - The toasts that answered a control still on screen (§11.4).
@@ -1066,8 +1143,11 @@ Nothing is removed from the server, the wire or the CLI.
 - The `NOTIFY_LABELS`, `AUTO_LABELS`, `CHANNEL_SENTENCES` and collector legend tests: §11.2's words.
 - `auth-passkey.test.tsx` renders Security instead of `AccountsScreen`.
 - `danger-buttons.test.tsx` gains the moved Revoke and Ack as `danger-ghost`.
-- `UpdateBanner`'s "See what's new" test: it navigates to `/settings/updates`. The server's `notify` test:
-  `RELEASE_PUSH_URL` is `/settings/updates`.
+- `update-banner.test.tsx`'s door case stays the notes branch's (the sheet opens in place). The server's `notify`
+  test: `RELEASE_PUSH_URL` is `/settings/updates`.
+- `whats-new-sheet.test.tsx`'s "Settings → Updates renders a release row's notes the same way" case: in R1a it opens
+  the row's "Notes" disclosure first (or reads the waiting release's, open by default), and asserts the same groups,
+  fold and links.
 
 **New:**
 - `releaseWindow`:
@@ -1093,12 +1173,22 @@ Nothing is removed from the server, the wire or the CLI.
 - One `useUpdatesView` poll serves the list-column index and the detail across a walk of all five sections
   (Instrument 1280), and refetches nothing between sections.
 - The Updates index status leads with "available" exactly when `pendingTag` names a tag.
-- The banner's door lands on Updates with the waiting release's notes open.
+- Updates' "See what's new" opens `WhatsNewSheet` with `pendingTag`'s tag, and is absent when no tag is pending.
+- The Newer count line's "See every change since v*running*" opens the same sheet.
+- `RELEASE_PUSH_URL` is `/settings/updates`, and the push lands with the waiting release's notes open.
+- The row summary: grouped notes give the first item of the first non-empty group, never "Changes since …"; plain
+  notes give their first line; none gives "No notes for this release".
 - Security per gate state (§5.5's table), including `locked-out` and off-on-loopback.
 - Revoke of the last passkey adds the passphrase line.
-- Routes: `routes.ts` holds the five, with `top: false`.
+- Routes: `routes.ts` holds the five, with `top: false`, plus the `settings-section` catch-all, which the palette's
+  Go-to list leaves out; `/settings/bogus` renders Settings with the not-found line, never `ScreenFallback`.
+- Frame identity: `/` → `/settings/updates` → `/` keeps the `.app-shell` and sidebar nodes and the sidebar's
+  `scrollTop` (§4.4).
 - Headings: h1, then h2, then h3, then h4.
-- The source scan for TEXT IS TEXT is extended to the notes disclosure.
+- The source scan for TEXT IS TEXT names `pwa/src/fleet/ReleaseNotes.tsx` and `pwa/src/fleet/WhatsNewSheet.tsx` as
+  well as `updates.tsx`, and allows exactly one link: the `TextLink` whose `href` is built by `pullUrl`.
+- R2s, server: `DELETE /api/auth/passkey/:id` and `POST /api/auth/passkey/register/start` refuse without a fresh
+  step-up while armed, accept with one, and accept the first enrollment through the passphrase step-up.
 - The markup census: no `danger-ghost` before a `ghost` in a `.settings-move` group.
 - D-5506, server:
   - the sweep upserts first and last seen for a measured managed node only;
@@ -1115,7 +1205,7 @@ Instrument's detail is 560 to 680 (§4.2, §4.3); W2 S4b already verifies "no ho
 
 Each capture checks:
 - no horizontal scroll;
-- the 16 px phone gutter;
+- the phone gutter read from `--gutter`, never a literal: 16 px in Refined, 12 px in Instrument (F11's plan);
 - the column at or under 760 (Refined) and 960 (Instrument);
 - the nav's current row, or, under a 760 pane, the index-then-section pattern;
 - release rows that wrap rather than overflow at 900;
@@ -1132,18 +1222,26 @@ taps and a section is three. Goal 6 states it that way. §15 C1 asks W2's door t
 
 ## 13. Waves
 
-Each R1 PR is one review. At `537b6a41` no open PR holds `updates.tsx`, `SettingsScreen.tsx`, `UpdateMoveSheet.tsx`,
-`ui/src/primitives/confirm.tsx`, `CollectLaneSection.tsx`, `StallWatchSection.tsx`, `updateAck.ts`, `HaltBanner.tsx`,
-`UpdateBanner.tsx` or `server/src/update/notify.ts` (re-checked against every open PR's file list).
+Each R1 PR is one review. Re-measured for rev 3 against `origin/main` `f2852dc4` plus the release-notes branch
+(`feat/release-notes-whats-new`, `cc058514`). **The notes branch holds Settings files:** `pwa/src/screens/updates.tsx`
+(`ReleaseItem` and `ReleaseList` gain a `source` prop and render `<ReleaseNotes>`), `pwa/src/screens/SettingsScreen.tsx`
+(passes `view.source`), `pwa/src/fleet/UpdateBanner.tsx`, `pwa/src/fleet/fleet.css` (`.whats-new-panel`) and
+`shared/api.ts` (`UpdatesView.source`), and it adds `pwa/test/whats-new-sheet.test.tsx`, whose "Settings → Updates
+renders a release row's notes the same way" case pins the rows' reuse of its rendering. Other holders: W2 S2b edits
+`SettingsScreen.tsx` (`doorMark('switch-theme')`, and `doorMark('switch-layout')` now that #632 merged), and F14b
+(`feat/skins-t14b-roles-sheets`, branched at `f2852dc4`) rewrites `fleet.css`'s font roles. No open PR holds
+`UpdateMoveSheet.tsx`, `ui/src/primitives/confirm.tsx`, `CollectLaneSection.tsx`, `StallWatchSection.tsx`,
+`updateAck.ts`, `HaltBanner.tsx` or `server/src/update/notify.ts`. The plan re-measures this paragraph at plan time.
 
 | Wave | Contents | Gate | Files |
 |---|---|---|---|
-| **R1a — now** | §7 the release window: `releaseWindow`, the three states, the groups, the closing line, words instead of badges, notes collapsed. In R1 the window sits where the list sits today. This answers the operator's "latest 3". | none | `pwa/src/screens/updates.tsx`, `pwa/test/settings-screen.test.tsx` (the window, badge and release-row pins), a new `pwa/test/release-window.test.ts` |
-| **R1b — now, after R1a** | §6.3 danger confirms: release and node Roll back in the danger tone, `AckConfirm` on the node row and `HaltBanner`, `QuickConfirm`'s opt-in `defaultFocus`, the row-placement rule, and the `.btn-danger-ghost.settings-move` rule | none; if a census entry must change and that census is still #627's (#402 reconciled), that hunk waits for #627 | `pwa/src/screens/updates.tsx`, `pwa/src/fleet/UpdateMoveSheet.tsx` (`tone`), `pwa/src/fleet/updateAck.ts` (`AckConfirm`), `pwa/src/fleet/HaltBanner.tsx`, `ui/src/primitives/confirm.tsx` (`defaultFocus`), `pwa/src/fleet/fleet.css` (holds `.settings-move`), `pwa/test/settings-screen.test.tsx`, `pwa/test/halt-banner.test.tsx`, `pwa/test/danger-buttons.test.tsx`, a `ui` confirm test, `pwa/test/markup-census.test.ts` (after #627) |
-| **R1c — now, after R1b** | §11.2's label renames, §5's explanations that fit today's page (option notes, the corrected collector and box-token words, Ack's per-branch note), and §6.4's result lines replacing the toasts of §11.4 | none | `pwa/src/screens/SettingsScreen.tsx`, `pwa/src/screens/updates.tsx`, `pwa/src/screens/StallWatchSection.tsx`, `pwa/src/fleet/CollectLaneSection.tsx`, `pwa/src/fleet/collectLaneWords.ts`, `pwa/src/fleet/updateAck.ts` (drops its toast), `pwa/src/fleet/HaltBanner.tsx` (writes its line), `pwa/test/settings-screen.test.tsx`, `pwa/test/collect-lane-section.test.tsx`, `pwa/test/collect-lane-words.test.ts`, `pwa/test/halt-banner.test.tsx`, `pwa/test/box-token-card.test.tsx` |
-| **R2 — after #402/#627, Ftask 11, Ftask 12b and W2 S2b** | the sections and routes (§3, §4.1, §4.2, §4.4) in Refined, at every width: `SettingsDataProvider`, the index, the subpages, the pane-width rule, the desktop nav, Security receiving `AuthSection` split into two cards (D-5508), the gate banner, the Layout fieldset hosted, the five icons, and the two doors moved to `/settings/updates` | #402/#627 (`app.tsx`, `lib/api.ts`, the censuses), Ftask 11 (`PageScaffold`, `Section`), Ftask 12b (`SkinFieldset`), W2 S2b (`routes.ts`), §15 C1 | `pwa/src/app.tsx`, `pwa/src/lib/routes.ts`, new `pwa/src/screens/settings/*` (provider, index, five section pages), `pwa/src/screens/SettingsScreen.tsx` (retired into them), `pwa/src/screens/AuthSection.tsx` (split), `pwa/src/screens/AccountsScreen.tsx` (one import removed), `pwa/src/fleet/UpdateBanner.tsx`, `server/src/update/notify.ts`, `ui/design/make-icons.mjs` and `ui/src/icons/lucide.ts`, the tests of §11.4 |
+| **R1a — after the release-notes PR merges** (rebased onto it) | §7 the release window: `releaseWindow` (its rows carry `source` through to each `ReleaseItem`), the three states, the groups, the closing line, the Newer count line's "See every change since v*running*", the row summary from `parseReleaseNotes()`, words instead of badges, notes collapsed behind "Notes" with the waiting release's open by default through the same `ReleaseNotes` component, and Updates' "See what's new" opening `WhatsNewSheet`. In R1 the window sits where the list sits today. This answers the operator's "latest 3". | the release-notes PR (the notes plan's §A and §B), which holds `updates.tsx`, `SettingsScreen.tsx` and adds `whats-new-sheet.test.tsx` | `pwa/src/screens/updates.tsx`, `pwa/src/screens/SettingsScreen.tsx` (the "See what's new" button and the sheet's mount), `pwa/test/settings-screen.test.tsx` (the window, badge and release-row pins), `pwa/test/whats-new-sheet.test.tsx` (the Settings-row case), a new `pwa/test/release-window.test.ts` |
+| **R1b — now, after R1a** | §6.3 danger confirms: release and node Roll back in the danger tone, `AckConfirm` on the node row and `HaltBanner`, `QuickConfirm`'s opt-in `defaultFocus`, the row-placement rule, and the `.btn-danger-ghost.settings-move` rule | R1a; ordered after F14b, which rewrites `fleet.css`'s font roles (or the plan names the expected `fleet.css` conflict and who rebases); if a census entry must change and that census is still #627's (#402 reconciled), that hunk waits for #627 | `pwa/src/screens/updates.tsx`, `pwa/src/fleet/UpdateMoveSheet.tsx` (`tone`), `pwa/src/fleet/updateAck.ts` (`AckConfirm`), `pwa/src/fleet/HaltBanner.tsx`, `ui/src/primitives/confirm.tsx` (`defaultFocus`), `pwa/src/fleet/fleet.css` (holds `.settings-move`), `pwa/test/settings-screen.test.tsx`, `pwa/test/halt-banner.test.tsx`, `pwa/test/danger-buttons.test.tsx`, a `ui` confirm test, `pwa/test/markup-census.test.ts` (after #627) |
+| **R1c — after R1b** | §11.2's label renames, §5's explanations that fit today's page (option notes, the corrected collector and box-token words, Ack's per-branch note), and §6.4's result lines replacing the toasts of §11.4 | R1b. W2 S2b also edits `SettingsScreen.tsx` (its `doorMark` hunks); whichever lands second rebases over the other's small hunks, and the plan names which | `pwa/src/screens/SettingsScreen.tsx`, `pwa/src/screens/updates.tsx`, `pwa/src/screens/StallWatchSection.tsx`, `pwa/src/fleet/CollectLaneSection.tsx`, `pwa/src/fleet/collectLaneWords.ts`, `pwa/src/fleet/updateAck.ts` (drops its toast), `pwa/src/fleet/HaltBanner.tsx` (writes its line), `pwa/test/settings-screen.test.tsx`, `pwa/test/collect-lane-section.test.tsx`, `pwa/test/collect-lane-words.test.ts`, `pwa/test/halt-banner.test.tsx`, `pwa/test/box-token-card.test.tsx` |
+| **R2 — after #402/#627, Ftask 11 and W2 S2b** | the sections and routes (§3, §4.1, §4.2, §4.4) in Refined, at every width: `SettingsDataProvider` (unconditional, with `active`), the index, the subpages, the six route entries, the pane-width rule, the desktop nav, Security receiving `AuthSection` split into two cards with Revoke as `danger-ghost` (D-5508), the gate banner, the Layout fieldset hosted (`SkinFieldset`, merged in #632: `pwa/src/screens/SkinFieldset.tsx`, drawn in Appearance beside `AppearanceRow.tsx`'s Theme rows), the five icons, and the release push moved to `/settings/updates` | #402/#627 (`app.tsx`, `lib/api.ts`, the censuses), Ftask 11 (`PageScaffold`, `Section`, with §15.3 C3's slots), W2 S2b (`routes.ts`), §15 C1 and C4 | `pwa/src/app.tsx`, `pwa/src/lib/routes.ts`, new `pwa/src/screens/settings/*` (provider, index, five section pages), `pwa/src/screens/SettingsScreen.tsx` (retired into them), `pwa/src/screens/AuthSection.tsx` (split), `pwa/src/screens/AccountsScreen.tsx` (one import removed), `server/src/update/notify.ts`, `ui/design/make-icons.mjs` and `ui/src/icons/lucide.ts`; if F11 shipped without C3's slots, also `ui/src/primitives/section.tsx` and `ui/src/primitives/page-scaffold.tsx` with their stories and the role census; the tests of §11.4. `UpdateBanner.tsx` is not touched. |
+| **R2s — after R2 and the Accounts spec's cut 1** | §5.5's step-up before Revoke and Add a passkey: the two server guards and "Confirm it's you" in Your sign-in | the Accounts spec's cut 1 (D-5512's `/api/auth/step-up/*`, `assertedAt`, `requireRecentAssertion`) | `server/src/server.ts` (the two passkey routes), `pwa/src/screens/settings/` (Your sign-in), `server/test/` and `pwa/test/` auth tests |
 | **R3 — after W2 S9 to S11 and W3-LC** | Instrument's master-detail (§4.3): `SettingsIndex` registered in the list column, the inspector content (§4.5) | W2 S9 to S11; W3-LC, the shared list-column seam (§4.3), owned by the coordinator and shared with Accounts | `pwa/src/skins/instrument/*` registration only, `instrument.css`, the Settings inspector parts |
-| **R4 — after #397 and #597** | D-5506: the migration, the sweep writer, the wire field and the row line | #397 and #597 (both hold `shared/api.ts`) | `server/src/coord/schema.ts`, `server/src/coord/store.ts`, `server/src/update/inventory.ts`, `shared/api.ts`, `pwa/src/screens/updates.tsx`, their tests |
+| **R4 — after #397, #597 and the release-notes PR** | D-5506: the migration, the sweep writer, the wire field and the row line | #397, #597 and the release-notes PR (each holds `shared/api.ts`) | `server/src/coord/schema.ts`, `server/src/coord/store.ts`, `server/src/update/inventory.ts`, `shared/api.ts`, `pwa/src/screens/updates.tsx`, their tests |
 
 R1a answers the operator's most concrete ask (the three) on today's single page, before any structure lands. R2 moves
 the window into Updates' first card.
@@ -1153,11 +1251,11 @@ the window into Updates' first card.
 | Number | Slug | Section |
 |---|---|---|
 | D-5503 | `settings-five-sections`: the five sections by kind, their order, the scope eyebrows, the index status lines, and every setting's purpose and when-line | §3, §5 |
-| D-5504 | `settings-one-section-per-route`: `/settings/<id>`, the Refined sections list on a phone and in a pane under 760, the vertical nav above it, Instrument master-detail with the index in the list column, `SettingsDataProvider` above the shell, and the "what's new" doors on `/settings/updates` | §4 |
-| D-5505 | `release-window-of-three`: the three fleet states; at most three Newer on the fleet's channel; the mixed-fleet line; at most three Roll back to on the fleet's channel, withdrawn included and marked, the fleet's previous version kept; the closing line naming the CLI; blocked rows kept | §7 |
+| D-5504 | `settings-one-section-per-route`: `/settings/<id>`, the Refined sections list on a phone and in a pane under 760, the vertical nav above it, Instrument master-detail with the index in the list column, the `settings-section` catch-all route, `SettingsDataProvider` mounted unconditionally above the frame with `active`, the release push on `/settings/updates`, and Updates' "See what's new" reusing the notes plan's §B `WhatsNewSheet` (the banner's door stays the notes plan's §B) | §4 |
+| D-5505 | `release-window-of-three`: the three fleet states; at most three Newer on the fleet's channel, with the count line opening `WhatsNewSheet`; the row summary from `parseReleaseNotes()` and notes through `ReleaseNotes`; the mixed-fleet line; at most three Roll back to on the fleet's channel, withdrawn included and marked, the fleet's previous version kept; the closing line naming the CLI; blocked rows kept | §7 |
 | D-5506 | `release-ran-here`: the `release_seen` record written by `sweepInventory`, and the optional `seen` on `ReleaseWire` | §8 |
 | D-5507 | `settings-danger-confirmed`: danger-ghost plus a confirm for Roll back, Ack (both surfaces) and Revoke; the row-placement rule; Rotate now and Pause kept one tap; results in words under the control | §6.3, §6.4 |
-| D-5508 | `security-in-settings`: `AuthSection` split into two cards in Settings › Security, beside the gate, recent account changes and the box token; Accounts holds only lanes. The one definition of the sign-in move; the Accounts spec's D-5522 cites it. | §5.5, §11.1 |
+| D-5508 | `security-in-settings`: `AuthSection` split into two cards in Settings › Security, beside the gate and the box token (four cards); Revoke as `danger-ghost`; Accounts holds only lanes; and, once D-5512's step-up exists, the step-up guard on `DELETE /api/auth/passkey/:id` and `POST /api/auth/passkey/register/start` (R2s). The one definition of the sign-in move; the Accounts spec is asked to cite it in place of its D-5522 move clause. | §5.5, §11.1 |
 
 Unused: D-5509, D-5510.
 
@@ -1177,7 +1275,7 @@ builds; the alternatives are kept so the reasons stay readable, and none of them
 | D5 | Is a fleet Roll back a danger action (red)? | **Yes** (D-5507), because it moves every managed node and a failed one is not restored. | The move tone, like Install. |
 | D6 | Ack's confirm on the home screen's halt banner | **Yes, the same confirm on both surfaces**, so the one Ack stays one. Ack forgets every release the node refused, and with auto-install on it can bring back the same bad release. | Confirm in Settings only, and keep the banner's one-tap Ack as the incident door. |
 | D7 | Updates' card order | **Versions first, policy last** (Channel and Auto-install at the foot). You open Updates to act, not to re-read set-once policy. | Policy first, as today. |
-| D8 | Revoke passkey: a recent passkey step-up as well as the confirm | **Yes**, the Accounts spec's 5-minute step-up (D-5512), once its guard exists. A browser left open could otherwise revoke your passkeys. Until then, the confirm only. The Accounts spec records the same answer. | Confirm only. |
+| D8 | Revoke passkey: a recent passkey step-up as well as the confirm | **Yes**, the Accounts spec's 5-minute step-up (D-5512), once its guard exists. A browser left open could otherwise revoke your passkeys. Rev 3 applies the same guard to Add a passkey, the stronger threat (a left-open browser enrolling an attacker's passkey), and plans both as wave R2s (§5.5, §13). Until then, the confirm only. The route list is defined here (D-5508); the Accounts spec is asked to cite it beside D-5512 (C4). | Confirm only. |
 | D9 | Security moves into Settings (D-5508) | **Yes**, as audits U8 and U9 already say. | Keep sign-in on Accounts. |
 | D10 | No "Danger zone" section | **Agreed**: danger is isolated in each card or row (§3.1). | A separate section. |
 | D11 | Build the "ran here" record (D-5506) | **Yes**: rows can then say when a release ran here, which is half of your "what each was and when it was installed". It is a small server table, and it lands last (after #397 and #597). | Release dates only. |
@@ -1201,8 +1299,20 @@ place rather than in a section (D10).
 **For the coordinator, not the operator:**
 - **C1. W2's door table.** Amend it so `switch-layout` and `switch-theme` name `/settings/appearance` as their route,
   and S17(b) evaluates them there. That is W2's plan, so it needs the coordinator's ack before R2.
+  It also adds the sixth ROUTES entry, `settings-section` (§4.1), and excludes it from the palette's Go-to derivation,
+  so S2b's both-way ROUTES test still holds.
 - **C2. W3-LC**, the shared list-column seam (§4.3): a per-route list and inspector slot, owned once, used by Settings
   R3 and the Accounts redesign.
+- **C3. Ftask 11's primitives.** `Section` takes `{ scope, title, purpose, children }`, with `scope` drawn per skin by
+  CSS (Refined: the eyebrow above the title; Instrument: a right-aligned mono tag, §15.2 call 2). `PageScaffold` gains
+  a `nav` slot (or `wide` with an inner column capped at `--page-max`), so Refined's 200 to 220 px sticky nav sits
+  beside a 760 px column on a pane of 760 or more, which is wider than `--page-max`. F11 is not built, so this is
+  cheap now. If F11 ships first without them, R2 extends the primitives (§13).
+- **C4. Who edits `AccountsScreen.tsx` and `AuthSection`, in order:** F11 (`PageScaffold`), then Settings R2 (the
+  move, the import removal, and Revoke as `danger-ghost` inside `YourSignInCard`, which retires the foundations F6
+  note giving that Revoke to W1), then the Accounts spec's cut 0 and later. The Accounts spec is asked to state the
+  same order, to cite D-5508 for the move and drop the move clause from its D-5522, and to cite D-5508's two passkey
+  routes beside D-5512's step-up list.
 
 **Residue (not this spec):**
 - **Server retention of `releases`,** for example the last 50 per channel, so `GET /api/updates` stops carrying every
@@ -1212,8 +1322,36 @@ place rather than in a section (D10).
   a field the passkey list does not carry.
 - **Fleet operations (audit F11) and Box health (F12)** fill Automation and a new card later.
 - **A drawn select trigger** for Quiet time, once W1's Popover lands.
+- **Recent account changes**, hosted in Security before Box token once the Accounts audit read ships (Accounts §3.6
+  and §17 "Later"). The slot is reserved (§3.3).
+- **A provider-key line in Security.** Once the Accounts spec's cut 3b ships the OpenRouter management key, Security's
+  status line could carry one read-only line, such as "Provider keys: OpenRouter management key expires in 9 d →
+  Accounts", with no control here. Until a ruling, provider keys stay on Accounts (§1.4).
 
 ## 16. Review log
+
+**Rev 2 to rev 3 (2026-10-18): a review of rev 2, "needs revision"** (13 findings: 4 high, 5 medium, 4 low). Rev 2
+was written before the release-notes change and the Accounts spec's rev 2. Every finding above low
+severity and every cheap low one was applied. Re-measured against `origin/main` `f2852dc4` plus the notes branch
+(`cc058514`). No D-number is added: the changes fall inside D-5504, D-5505 and D-5508. The notes plan's four
+D-numbers are cited by part (§A, §B) until that plan is on `main`, because the deviation-refs floor test refuses a
+tracked ref above the ledger's high-water.
+
+| # | Severity | Found | Resolution |
+|---|---|---|---|
+| 1 | high | The banner's "See what's new" was moved to `/settings/updates`, undoing the notes plan's in-place `WhatsNewSheet` (its §B). | The banner keeps the notes plan's sheet and leaves R2's file list. Only the release push moves, because a push needs a URL. Updates' Fleet version card gains a "See what's new" that opens the same sheet (§4.1, §5.1, §11.1, D-5504). §11.4's tests rewritten. |
+| 2 | high | The row summary would read "Changes since vX" on every generated release, notes were drawn in a `<pre>`, the empty wording diverged, and the cap of three dropped notes the sheet shows. | §7.4: the summary comes from `parseReleaseNotes()` (first item of the first non-empty group, or the first plain line, or "No notes for this release"), through `NoteText`. "Notes" and the inspector wrap `<ReleaseNotes>`. The Newer count line links "See every change since v*running*" to the sheet. §2.3 and §11.4's source scan name `ReleaseNotes.tsx` and `WhatsNewSheet.tsx` and allow only the `pullUrl` `TextLink`. |
+| 3 | high | "Recent account changes" and `GET /api/accounts/audit` were built, though Accounts rev 2 §3.6 defers them. | Removed from v1: Security has four cards, a new purpose line, and §4.4 drops the read. The card goes to §15.3's residue, with its slot reserved before Box token (§3.3). |
+| 4 | high | The wave gates ignored the notes branch, which edits `updates.tsx`, `SettingsScreen.tsx`, `UpdateBanner.tsx`, `fleet.css` and `shared/api.ts`, and adds `whats-new-sheet.test.tsx`. | §13 re-measured. R1a is gated on the notes PR and lists `SettingsScreen.tsx` and `whats-new-sheet.test.tsx`; `releaseWindow` carries `source`; the waiting release's notes open through `ReleaseNotes`. R4 also waits for it. the notes plan's §A and §B are in Related. |
+| 5 | medium | A `SettingsDataProvider` mounted only on Settings routes would remount the frame and lose the sidebar's scroll. | §4.4: mounted unconditionally with an `active` prop (or a tiny store), with frame-identity and `scrollTop` tests. |
+| 6 | medium | `/settings/<unknown>` would fail W2 S2b's both-way ROUTES test. | §4.1: a sixth catch-all entry, `settings-section`, left out of the palette's Go-to list; added to C1. |
+| 7 | medium | F11's `Section` and `PageScaffold` had no slot for the purpose line, the Instrument scope tag or Refined's wide nav. | §15.3 C3 asks for `Section({ scope, title, purpose, children })` and a `PageScaffold` `nav` slot; R2 extends the primitives if F11 ships first (§3.3, §13). |
+| 8 | medium | Three owners for `AccountsScreen.tsx` and two for Revoke; the Accounts spec did not cite D-5508. | §15.3 C4 and §11.1: F11, then Settings R2 (move, import removal, Revoke as `danger-ghost`, retiring F6's W1 note), then Accounts cut 0. The Accounts spec is asked to cite D-5508 and drop its D-5522 move clause. |
+| 9 | medium | D8's step-up had no server wave, and Add a passkey was the stronger, unguarded threat. | §5.5 and wave R2s: `DELETE /api/auth/passkey/:id` and `POST /api/auth/passkey/register/start` need D-5512's 5-minute step-up while armed, with the passphrase fallback; "Confirm it's you" in Your sign-in. D8 and D-5508 updated; C4 asks Accounts to cite the routes. |
+| 10 | low | R2 was gated on Ftask 12b (merged as #632); S2b and R1c both edit `SettingsScreen.tsx`; F14b and R1b both edit `fleet.css`. | 12b dropped from R2's gate, #632 cited (§2.2 item 10, §13). R1c names the S2b rebase, R1b is ordered after F14b. |
+| 11 | low | §12 checked a 16 px phone gutter in Instrument, whose gutter is 12. | §12 reads `--gutter`: 16 Refined, 12 Instrument. |
+| 12 | low | Inventory rows 1, 3, 25's footnote, 26's lines and 27's "Confirm Live again" were only implied. | Named in §3.1's Holds, with one line each in §5.1 and §5.4. |
+| 13 | low | Security said nothing of the OpenRouter management key's expiry. | Recorded in §1.4 that provider keys stay on Accounts; the optional read-only line is in §15.3's residue. |
 
 **Rev 1 to rev 2 (2026-10-18): the operator's rulings.** The operator ruled §15's D1 to D11 as recommended and let the
 three visual calls stand as mocked (§15.2). Two calls change the text: the release row's date moves from the tag's line
