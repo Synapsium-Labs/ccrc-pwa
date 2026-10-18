@@ -453,7 +453,7 @@ const REGISTERED_LEAVES: Record<string, string> = {
     + 'inside its own `.doc-img-link` button that opens the image\'s leaf. '
     + 'The `<img>` is the same; what wraps it is the decision, and the '
     + 'wrapper is the part that differs.',
-  'input.docs-filter[aria-label,onChange,type,value]':
+  'input.docs-filter[aria-label,onChange,placeholder,type,value]':
     'DIFFERENT LISTS, one control: the Docs index filters projects and a '
     + 'directory view filters its entries, each a search input with its own '
     + 'label (DOCS_VIEW_TEXT.filterProjects, filterEntries) and its own '
