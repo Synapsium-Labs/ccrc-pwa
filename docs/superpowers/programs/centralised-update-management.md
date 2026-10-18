@@ -4462,6 +4462,17 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     - Dispatched: full run 39170871363 on `main` at `c1453e422` (`gh workflow run ci.yml --ref main -f
       mode=full`). On a green `full-suite` I fast-forward `stable` to that commit. On a red one I measure each red
       against the flake list: a recorded flake gets one job re-run, anything else is reported first.
+  - **22:40 UTC: full run 39170871363 red on one new macOS case, not on the flake list.** Every Linux leg and
+    three of the four macOS shards are green. The red: `session-hook-compact-carry.test.ts`, the grammar table's
+    first row (job 117803869004): `parseServerCaps` answered ok and listed `dispatch-live-gate-v1`, yet the hook
+    rewrote the hookstate, so the hook and the TypeScript grammar disagreed once. 1 failed of 6279 in the shard.
+    - Measured: the file ran on macOS in 11 earlier full runs since #568 merged and never failed; it is 1 of 12.
+      Linux green at `c1453e422` here. So it is intermittent. Its live direction is the fail-safe one: when
+      the gate reads not advertised, a compaction writes what it wrote before #568.
+    - Owner: the working-state-and-interruptions plan (#568, #575), not this programme.
+    - Acts: the failed job is re-run (evidence, and the promotion if it is green and the cause is a test-timing
+      class); a diagnosis workflow is running (three Opus investigators, a Sonnet refuter per claim, an Opus
+      judge). The promotion waits for both, and the owner gets the finding.
 
 ## Carried constraints
 
