@@ -445,14 +445,16 @@ describe('Chip', () => {
 
   it('is a mono micro-label that sets no colour of its own', () => {
     expect(CHIP).toContain('font-mono');
-    expect(CHIP).toContain('text-xs');
+    // The meta role (D-5093): Refined 12px, the `text-xs` it replaced, and
+    // Instrument's 11 (D-5460: this pin follows the role).
+    expect(CHIP).toContain('text-meta');
     expect(CHIP).toContain('font-medium');
     expect(CHIP).toContain('leading-none');
     // THE POINT OF THE EXTRACTION. An account hue is ccrc routing vocabulary,
     // so it arrives from outside — inline style, or chat.css's three
     // colour-only modifiers. A `text-`/`bg-` here would be a second place
     // that decides what a chip means.
-    expect(CHIP).not.toMatch(/(^|\s)(text|bg)-(?!xs)[a-z]/);
+    expect(CHIP).not.toMatch(/(^|\s)(text|bg)-(?!meta(\s|$))[a-z]/);
   });
 
   it('restores what the `font` shorthand reset, so an ancestor cannot leak in', () => {

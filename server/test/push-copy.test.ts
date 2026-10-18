@@ -850,7 +850,7 @@ describe('ask notifications carry actions only where the route would accept them
     const f = askFixture({ spec: 'project-a/project-a-quiet-basin', coord: true, notifyLog: log });
     const run = f.coord!.openRun({
       program: 'prog', title: 'Prog', project: 'project-a',
-      wave: 1, waveOf: null, claimedBy: 'project-a-calm-mesa',
+      wave: 1, waveOf: null, claimedBy: 'project-a-calm-mesa', coordProject: 'project-a',
     }) as { id: number };
     f.coord!.setSession(run.id, 'project-a-quiet-basin');
     f.child(run.id, 'project-a-calm-mesa', 'project-a');
