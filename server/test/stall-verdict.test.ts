@@ -804,6 +804,7 @@ type OkMark = Extract<TurnMarkRead, { ok: true }>;
 function markOf(over: Partial<OkMark> = {}): TurnMarkRead {
   const stopAt = NOW - 3 * H;
   return {
+    crons: null,
     ok: true, sessionId: UUID, state: 'done', event: 'Stop', at: stopAt, turnAt: stopAt - 10 * MIN, stopAt,
     bg: 0, bgKinds: [], bgIds: [], err: null, restartAt: null, lostBg: 0, lostKinds: [], lostIds: [], graceUntil: null,
     ...over,

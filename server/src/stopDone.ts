@@ -18,9 +18,9 @@ import type { FleetSession } from '../../shared/api.js';
  * `marker-background` included — so when hibernation lands it can absorb this lane, with `hibernate` (which a
  * viewer's open screen wakes) in place of `stop` (which a re-dispatch's `ensure` wakes). It is NOT yet a strict
  * subset: the population is a subset of hibernation's only once N (6 h idle, against this lane's 10 minutes from the
- * close) has passed, and until Task 17b it holds strictly fewer facts — 17b adds `recent`, `viewer` through
- * `Presence.isOpen` (a hidden but open tab) with its post-start hold on `PRESENCE_OPEN_TTL_MS`, `opted-out`,
- * `scheduled` and `attached`. The words that are this lane's alone say why it is narrower: only a dispatched child
+ * close) has passed, and until Task 17b it holds strictly fewer facts — 17b adds `recent`, `opted-out`, `scheduled`
+ * and `attached`. Its `viewer` is already hibernation's (Task 17a, D-5242's presence contract): `Presence.isOpen`, a
+ * hidden but open tab included, with the post-start hold on `PRESENCE_OPEN_TTL_MS`. The words that are this lane's alone say why it is narrower: only a dispatched child
  * (`not-a-child`), only once its newest run is `done` (`no-run`, `not-done`, `close-unplaced`) and a grace has passed
  * (`grace`), and only through a declared stop (`no-surface`); `reviewing` is the archived-expiry lane's
  * (`expiryReviewing`).
@@ -48,7 +48,7 @@ const STOP_DONE_HOLD_MAP = {
   claim: 'it holds a live claim',
   mail: 'mail to it is outstanding',
   reviewing: 'it reviews a run that is still open: the coordinator may come back to it for a re-review',
-  viewer: 'somebody has it on screen, or the server started too recently to know',
+  viewer: 'somebody has it open (on screen or in a hidden tab), or the server started too recently to know',
   menu: 'a pane menu is pending',
   bucket: 'its bucket is not `idle` (a `done` row is badged: its result may be unread)',
   background: 'background work is running',
@@ -128,10 +128,10 @@ export type StopDoneLive =
 export interface StopDoneInput {
   readonly row: StopDoneRow;
   readonly store: StopDoneStoreRead;
-  /** `Presence.isVisible` for this id. */
+  /** `Presence.isOpen` for this id (D-5242's presence contract): an open screen, visible or hidden. */
   readonly viewer: boolean;
   /** Milliseconds since the server started: presence is never persisted, so a viewer that has not reconnected yet
-   *  reads as none for one presence TTL after a start. */
+   *  reads as none for one open-claim TTL (`PRESENCE_OPEN_TTL_MS`) after a start. */
   readonly sinceStartMs: number;
   readonly presenceTtlMs: number;
   /** `stopSurfaceSupported`: the box's ccd records `--surface`, so the stop is journaled as declared. */
