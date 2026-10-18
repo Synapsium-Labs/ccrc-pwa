@@ -892,7 +892,7 @@ PLIST
 
 # `systemctl --user enable --now` — install the unit AND start it now.
 # On launchd those are one verb (`bootstrap` both loads and, with RunAtLoad,
-# starts), which is why `_svc_enable` below is the same call minus the start:
+# starts), which is why `_svc_enable` below drops the start (and, on systemd, the reload):
 # a plist in ~/Library/LaunchAgents IS boot persistence, exactly as an enable
 # symlink is under systemd.
 _svc_enable_now() {   # <unit>
@@ -907,8 +907,8 @@ _svc_enable_now() {   # <unit>
   _svc_launchctl bootstrap "$d" "$(_svc_plist "$1")" 2>/dev/null
   _svc_launchctl kickstart "$d/$(_svc_label "$1")" >/dev/null 2>&1
 }
-_svc_enable() {   # <unit> — boot persistence only, no start
-  if [ "$CCD_OS" != darwin ]; then systemctl --user enable "$1" 2>/dev/null; return $?; fi
+_svc_enable() {   # <unit> — boot persistence only, no start, no reload
+  if [ "$CCD_OS" != darwin ]; then systemctl --user enable --no-reload "$1" 2>/dev/null; return $?; fi
   case "$1" in claude-session@*) _svc_write_session_plist "$1" || return 1 ;; esac
   _svc_launchctl enable "$(_svc_domain)/$(_svc_label "$1")" 2>/dev/null
   return 0
@@ -1921,6 +1921,7 @@ UPD_REPORT_PID=""       # overrides a report's `pid` (empty = this process)
 # forger's export never survives to be read.
 unset UPD_FROM_CALLER_PID
 UPD_FAIL_PREFIX=""      # "provenance: " for a die that is a verdict on the RELEASE (plan D-3239)
+UPD_SWEEP_WORD=""       # what `_upd_sweep` did (or `died: abandoned`, cmd_watchdog's close, D-5329), one word; `_upd_phase` writes it as update.json's `sweep` key while set (wave 17, D-5314)
 UPD_LOCK_FD=""          # the descriptor _upd_lock holds; "" when not held, or when inherited
 UPD_LOCK_INHERITED=0    # 1 = a restore child under its parent's lock — measured by _upd_lock_probe, never assumed
 UPD_PREV_TAG=""      # _upd_read_previous: line 1 of ~/.ccrc/previous (a tag, or `untagged`)
@@ -14223,6 +14224,20 @@ _inst_bins() {   # what has to be ON PATH: ccrc's own executables, and the launc
   # that is the DEFAULT path on a platform is not the no-op `ccd-cap-scopes`'
   # own comment warns about.
   _inst_atomic "$tree/ccd/ccd-account-auth" "$bin/ccd-account-auth" 755
+  # `ccrc-api`, the closed client every coordinator, worker and reviewer skill
+  # calls for its mail, runs, claims and ledger (wave 17, D-5313), on BOTH arms
+  # (it is portable: macos-platform.test.ts reads it in the GNU-call corpus)
+  # and ROLE-gated by a ONE-LINE `||` test, the history sweep's shape below,
+  # never a second `!= server` block (install-census.test.ts's gptGateBlock()
+  # requires exactly one): its callers are sessions, and a server-role box
+  # hosts none (D-3111). Until wave 17 the spine placed nothing here: a box
+  # carrying README's link to the tree followed every update, an unlinked one
+  # kept whatever copy the last fallback deploy left. On a linked box the source
+  # IS the link's target, so `_inst_atomic`'s `cmp` branch keeps the link.
+  # `_uninst_tree_bins` removes it on every role, as it does every name here.
+  local api_bin=""
+  [ "$INST_ROLE" = server ] || _inst_atomic "$tree/ccd/ccrc-api" "$bin/ccrc-api" 755
+  [ "$INST_ROLE" = server ] || api_bin=", ccrc-api"
   # The GPT lane's four common executables, BEFORE the platform `if` below, so
   # on BOTH arms — but ROLE-gated by this function's ONE `if [ "$INST_ROLE"
   # != server ]` block (spec §11 says so, and why). The history sweep's shim
@@ -14350,9 +14365,9 @@ _inst_bins() {   # what has to be ON PATH: ccrc's own executables, and the launc
   _inst_atomic "$gen" "$bin/ccrc" 755
   rm -f -- "$gen"
   if [ "$CCD_OS" = darwin ]; then
-    echo "install: bins: ccd, ccd-account-auth${lane_bins} and the ccrc launcher in \$HOME/.local/bin${lane_note} (no ccd-cap-scopes — it caps cgroup scopes, and macOS has none; no ccd-graph-sweep, no ccd-account-health, no ccd-telemetry-keepalive, no ccd-usage-sweep, no ccd-tmp-sweep, no ccd-scope-sweep, no ccd-tool-adj, no ccd-history-sweep, no ccd-pool-sync and no ccd-update-sync — their timers are systemd-only)"
+    echo "install: bins: ccd, ccd-account-auth${api_bin}${lane_bins} and the ccrc launcher in \$HOME/.local/bin${lane_note} (no ccd-cap-scopes — it caps cgroup scopes, and macOS has none; no ccd-graph-sweep, no ccd-account-health, no ccd-telemetry-keepalive, no ccd-usage-sweep, no ccd-tmp-sweep, no ccd-scope-sweep, no ccd-tool-adj, no ccd-history-sweep, no ccd-pool-sync and no ccd-update-sync — their timers are systemd-only)"
   else
-    echo "install: bins: ccd, ccd-account-auth, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-usage-sweep, ccd-tmp-sweep, ccd-scope-sweep, ccd-tool-adj, ccd-pool-sync, ccd-update-sync${hist_bin}${lane_bins} and the ccrc launcher in \$HOME/.local/bin${lane_note}"
+    echo "install: bins: ccd, ccd-account-auth, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-usage-sweep, ccd-tmp-sweep, ccd-scope-sweep, ccd-tool-adj, ccd-pool-sync, ccd-update-sync${hist_bin}${api_bin}${lane_bins} and the ccrc launcher in \$HOME/.local/bin${lane_note}"
   fi
 }
 
@@ -18322,7 +18337,14 @@ cmd_watchdog() {
     attempt=$(( attempt + 1 ))
   done
   if [ "$prc" -eq 0 ]; then
+    # D-5329 (review 589 F1): the one phase the supervisor sweep runs in is
+    # `restarting`, so an updater the watchdog closes there died during or right
+    # after its sweep. The closed report carries `died: abandoned`, or the doctor's
+    # update-sweep WARN is lost at the next tick (the report would read as no sweep
+    # recorded, a SKIP naming three causes that are not the true one). Only the two
+    # arms below that close a `restarting` report set it; every pre-sweep phase stays keyless.
     if [ -n "$tgt" ] && [ "$cur_v" = "$tgt" ] && [ -n "$cur_sha" ] && [ "$rec" = "$cur_sha" ]; then
+      [ "$phase" != restarting ] || UPD_SWEEP_WORD='died: abandoned'
       _upd_phase failed "abandoned by its updater; box measures converged at $cur_v"
       echo "watchdog: stale report ($phase, ${age}s) on a box that measures converged at $cur_v and answers healthy — recorded as abandoned; nothing was reverted"
     elif [ -n "$tgt" ] && [ "$cur_v" = "$tgt" ]; then
@@ -18335,6 +18357,7 @@ cmd_watchdog() {
       hint="$(UPD_VERSION="$cur_v" _upd_rerun_hint)"
       # No path in the sentence: single-definition allows one non-comment
       # line naming the record's path, and it is the declaration.
+      [ "$phase" != restarting ] || UPD_SWEEP_WORD='died: abandoned'   # D-5329, as above
       _upd_phase failed "abandoned by its updater; box answers healthy on $cur_v but its install never completed (the completed-install record does not name its stamp); rerun: $hint"
       echo "watchdog: stale report ($phase, ${age}s) on a box that answers healthy on $cur_v, but its install never completed — recorded as abandoned; nothing was reverted. Rerun: $hint"
     else
@@ -18620,7 +18643,7 @@ _upd_detach() {
 # rc 0, and it never calls `_ccrc_die` (which calls it). A directory at the
 # name is refused rather than moved INTO, which `mv` would do silently.
 _upd_phase() {
-  local phase="$1" detail="${2:-}" now target="null" det tmp
+  local phase="$1" detail="${2:-}" now target="null" det tmp sw=""
   now="$(date +%s 2>/dev/null)"
   [[ "$now" =~ ^[1-9][0-9]{0,10}$ ]] || now=""
   [[ "$UPD_REPORT_STARTED" =~ ^[1-9][0-9]{0,10}$ ]] || UPD_REPORT_STARTED="$now"
@@ -18633,13 +18656,21 @@ _upd_phase() {
   # `_ccrc_die` the choke point for dies.
   detail="$(_upd_redact "$detail")"
   det="$(_upd_json_str "$detail")"
+  # The sweep's record (wave 17, D-5314, D-5315): an ADDITIVE eighth key, written
+  # only while `_upd_sweep` (or cmd_watchdog's close of an abandoned `restarting`
+  # report, `died: abandoned`, D-5329) has set UPD_SWEEP_WORD, so it is absent on every
+  # phase before the sweep, on every path that never swept, and in every report
+  # an older build wrote. Absent means NOT MEASURED, never "nothing was down";
+  # `ccrc doctor`'s update-sweep check reads it that way. The server's
+  # `reportFrom` reads keys by name and ignores this one.
+  [ -z "$UPD_SWEEP_WORD" ] || sw=",\"sweep\":$(_upd_json_str "$(_upd_redact "$UPD_SWEEP_WORD")")"
   tmp="$BOX_UPDATE_JSON.tmp.$$"
   _tmp_guard "$tmp"
   if [ -n "$now" ] \
      && { [ -d "${BOX_UPDATE_JSON%/*}" ] || mkdir -p "${BOX_UPDATE_JSON%/*}"; } 2>/dev/null \
      && [ ! -d "$BOX_UPDATE_JSON" ] \
-     && { printf '{"target":%s,"phase":"%s","startedAt":%s,"updatedAt":%s,"detail":%s,"from":"%s","pid":%s}\n' \
-            "$target" "$phase" "$UPD_REPORT_STARTED" "$now" "$det" "$UPD_FROM" "${UPD_REPORT_PID:-$$}" > "$tmp"; } 2>/dev/null \
+     && { printf '{"target":%s,"phase":"%s","startedAt":%s,"updatedAt":%s,"detail":%s,"from":"%s","pid":%s%s}\n' \
+            "$target" "$phase" "$UPD_REPORT_STARTED" "$now" "$det" "$UPD_FROM" "${UPD_REPORT_PID:-$$}" "$sw" > "$tmp"; } 2>/dev/null \
      && chmod 644 "$tmp" 2>/dev/null \
      && mv -f -- "$tmp" "$BOX_UPDATE_JSON" 2>/dev/null; then
     return 0
@@ -21113,6 +21144,7 @@ _ccrc_job_stayed_up() {   # <unit>... -> 0 iff ONE pid held across ONE shared wi
 # pipeline or `( … )`: `_ccrc_die` reports only from the run's own shell (`$BASHPID = $$`), so a die there would end
 # that subshell alone and the sweep would print its success line over a failed unit (the R12 critic's I8).
 _upd_sweep_die() {
+  UPD_SWEEP_WORD="died: sweep"   # R10k's record of a die (wave 17, D-5315): the failed report carries it; the detail says where
   if [ "${UPD_REPORTING:-0}" = 1 ] && ! _upd_report_is_mine; then
     echo "update: report: skipped — ~/.ccrc/update.json no longer names this run's pid (${UPD_REPORT_PID:-$$}); a newer update took the lock this run released before the sweep, and this run's failed report would have overwritten its in-flight one"
     UPD_REPORTING=0
@@ -21198,7 +21230,29 @@ _upd_sweep_spo() {
   while IFS= read -r l || [ -n "$l" ]; do case "$l" in 'stopped on purpose: '*) return 0 ;; esac; done < "$1"
   return 1
 }
+# `_upd_sweep_set_down [<unit>...]` — sets UPD_SWEEP_WORD from the units the
+# sweep found already `activating` or `failed` before its restart, whatever
+# they read after it (Reading 9's doctor half, wave 17, D-5314): the sweep
+# never verifies one of them, and one that reads `active` after try-restart is
+# usually a crash-looping Type=simple unit caught between restarts. `ok` when
+# there are none, else `down: <n>: <id> ...`, the COUNT first and WHOLE ids
+# only, as many as fit in `_upd_json_str`'s 200 characters, so the report never
+# carries a cut id that would read as a unit of its own. Ids are the unit names
+# without `claude-session@` and `.service`.
+_upd_sweep_set_down() {
+  local u id word
+  if [ "$#" -eq 0 ]; then UPD_SWEEP_WORD="ok"; return 0; fi
+  word="down: $#:"
+  for u in "$@"; do
+    id="${u#claude-session@}"; id="${id%.service}"
+    [ $(( ${#word} + 1 + ${#id} )) -le 200 ] || break
+    word="$word $id"
+  done
+  UPD_SWEEP_WORD="$word"
+}
 _upd_sweep() {
+  UPD_SWEEP_WORD=""   # wave 17, D-5314: set at each return below, and by `_upd_sweep_die` (`died: sweep`, D-5315)
+  local -a down=()    # Darwin: the start-limit units the sweep skipped (Linux records `prior` itself)
   # ── THE DARWIN ARM ──────────────────────────────────────────────────────
   # Same job, same guard, different observable — and the verify is not quite the
   # Linux one: no deliberate-stop classifier (D-3949), and a re-check of each
@@ -21237,6 +21291,7 @@ _upd_sweep() {
       # clean update. The remedy tail names the per-session fix the same way
       # the Linux line names its try-restart.
       echo "update: DEGRADED: the supervisor sweep did not run — every live claude-session@ supervisor keeps executing the PREVIOUS ccd until restarted. Fix the job files above (ccd start <id> rewrites each), then restart per session: launchctl kickstart -k $(_svc_domain)/<label>"
+      UPD_SWEEP_WORD="refused: job-file"   # R10k, D-5315
       return 0
     fi
     # `_svc_try_restart`'s `_svc_is_loaded || return 0` skips a job launchd no
@@ -21252,6 +21307,7 @@ _upd_sweep() {
       if [ "$(_svc_is_active "$u")" = failed ]; then
         sid="${u#claude-session@}"; sid="${sid%.service}"
         echo "update: warning: $u is FAILED (start-limit stamp) — the sweep skipped it and did not verify it. On the box: ccd start $sid (it clears the stamp and re-bootstraps the job)" >&2
+        down+=("$u")
         continue
       fi
       _svc_is_loaded "$u" || continue
@@ -21295,6 +21351,7 @@ _upd_sweep() {
     else
       echo "update: sweep: every live claude-session@ supervisor now runs the ccd this update installed (AbandonProcessGroup verified in every job file; ${#kicked[@]} restarted and re-measured still up)"
     fi
+    _upd_sweep_set_down ${down[@]+"${down[@]}"}
     return 0
   fi
   # The bus contingency `_inst_enable` carries, for the same reason: without
@@ -21315,6 +21372,7 @@ _upd_sweep() {
   if [ "$lrc" -ne 0 ]; then
     echo "update: sweep REFUSED — systemctl --user list-units \"claude-session@*\" --plain --no-legend failed (rc $lrc), so the supervisors to be checked could not be listed." >&2
     echo "update: DEGRADED: the supervisor sweep did not run — every live claude-session@ supervisor keeps executing the PREVIOUS ccd until restarted. Once systemctl --user list-units 'claude-session@*' answers, confirm KillMode=process on each unit, then restart them."
+    UPD_SWEEP_WORD="refused: listing"   # R10k, D-5315
     return 0
   fi
   # Wave 8 item G: the supervisors the restart below can touch are the ones
@@ -21333,6 +21391,7 @@ _upd_sweep() {
     if [ "$km" != "KillMode=process" ]; then
       echo "update: sweep REFUSED — $u resolves to ${km:-no answer from systemd}, and the sweep needs KillMode=process: systemds default is control-group, and whenever the tmux server placement falls back to a bare create every session on this box is a child of ONE tmux server sitting in a claude-session@ cgroup, so try-restart would kill the lot. A drop-in under $BOX_UNIT_DIR/claude-session@.service.d/ can set this without the base unit changing a byte." >&2
       echo "update: DEGRADED: the supervisor sweep did not run — every live claude-session@ supervisor keeps executing the PREVIOUS ccd until restarted. Fix the KillMode above, then: systemctl --user try-restart 'claude-session@*'"
+      UPD_SWEEP_WORD="refused: killmode"   # R10k, D-5315
       return 0
     fi
   done
@@ -21383,6 +21442,7 @@ _upd_sweep() {
   if [ "$arc" -ne 0 ] && [ "${#before[@]}" -gt 0 ]; then
     echo "update: warning: the post-restart set could not be listed (systemctl --user list-units \"claude-session@*\" --state=active --plain --no-legend failed, rc $arc) — no supervisor was verified." >&2
     echo "update: DEGRADED: every live claude-session@ supervisor was restarted, and none of them was verified by this sweep."
+    UPD_SWEEP_WORD="unverified: relist"   # R10k, D-5315
     return 0
   fi
   local -a units=() missing=() crash=() unrec=() ncfail=()
@@ -21506,11 +21566,6 @@ _upd_sweep() {
     [ -z "$vdir" ] || rm -rf -- "$vdir"
   fi
   after=(${units[@]+"${units[@]}"})
-  if [ -n "$rfail" ]; then
-    _upd_sweep_die "sweep: $kc of ${#units[@]} supervisors did not stay up on a first verify; a re-check failed, $mn left un-re-checked — install complete, nothing was rolled back (first failed re-check: $rfail); read: systemctl --user status $rfail"
-  elif [ "${#ncfail[@]}" -gt 0 ]; then
-    _upd_sweep_die "sweep: ${#ncfail[@]} of ${#units[@]} supervisors exited non-zero after a 'stopped on purpose' line, never re-checked — install complete, nothing was rolled back (first: ${ncfail[0]}); read: systemctl --user status ${ncfail[0]}"
-  fi
   # Wave 8 item G: a claim that "every … now runs the ccd this update
   # installed" is false for a unit that WAS active before try-restart and is
   # neither active nor failed after it — this sweep did not verify it, and
@@ -21537,6 +21592,15 @@ _upd_sweep() {
       *) echo "update: warning: $b was already '${priorw[pi]}' before try-restart and is not active after it — it is named, not verified, and does not fail this update (a supervisor already 'activating' or 'failed' before the restart is never verified; wave 16, D-5136). On the box: systemctl --user status $b" >&2 ;;
     esac
   done
+  if [ -n "$rfail" ]; then
+    _upd_sweep_die "sweep: $kc of ${#units[@]} supervisors did not stay up on a first verify; a re-check failed, $mn left un-re-checked — install complete, nothing was rolled back (first failed re-check: $rfail); read: systemctl --user status $rfail"
+  elif [ "${#ncfail[@]}" -gt 0 ]; then
+    _upd_sweep_die "sweep: ${#ncfail[@]} of ${#units[@]} supervisors exited non-zero after a 'stopped on purpose' line, never re-checked — install complete, nothing was rolled back (first: ${ncfail[0]}); read: systemctl --user status ${ncfail[0]}"
+  fi
+  # The record (wave 17, D-5314): every unit already `activating` or `failed`
+  # before the restart, read from the PRE-restart listing, so it needs no
+  # post-restart one (with `before` non-empty an unread one returned above).
+  _upd_sweep_set_down ${prior[@]+"${prior[@]}"}
   if [ "${#before[@]}" -eq 0 ]; then
     echo "update: sweep: no claude-session@ supervisor was active when the sweep began, so try-restart had nothing running to restart (KillMode=process verified before the restart; panes untouched)"
     return 0
@@ -22195,18 +22259,26 @@ cmd_coordination_snapshot() {
 }
 
 # `_keep_ok <value>` and `_keep_why <knob> <value>` — the ONE validator for
-# every KEEP knob (review 179 F6; D-3423): `CCRC_BACKUP_KEEP` below,
+# every KEEP knob in this file (review 179 F6; D-3423; `deploy/deploy.sh`'s
+# `prune_backups` spells the same DIGIT test a second time on purpose, held
+# equal by deploy-verify's D1c, D-5142; deploy.sh alone also refuses an
+# all-zeros KEEP, because its remote prune has no keeps, D-5144, wave 17's
+# Reading 4): `CCRC_BACKUP_KEEP` below,
 # `CCRC_VERSIONS_KEEP` in `_ver_gc` and `cmd_versions`. A whole number of one
 # to four digits, `0` to `9999`, and nothing else. `^[0-9]+$` let
 # `99999999999999999999` through, and there `[ -le ]`, `[ -lt ]` and bash
 # arithmetic fail or WRAP (`18446744073709551615` is -1), which read as "remove
 # everything" — an operator who meant "keep everything" got the opposite. Four
 # digits is far past any number of trees or backups a box keeps, and no value
-# that long can overflow anything. `_keep_why` is the refusal's own sentence:
+# that long can overflow anything. The class is ENUMERATED, `[0123456789]`, never
+# the range `[0-9]`: under a UTF-8 locale bash's `=~` range accepts non-ASCII
+# decimal digits (U+0663, U+FF15), which then fail as an arithmetic error
+# instead of this sentence (R34, D-5320); the enumeration needs no locale.
+# `_keep_why` is the refusal's own sentence:
 # it names the knob and the value, the value sanitised as `_upd_validate_timeout`
 # does (a non-printable byte becomes `?`) and capped at 32 characters, so a hostile
 # or absurd value cannot fill a line or drive a terminal.
-_keep_ok() { [[ "$1" =~ ^[0-9]{1,4}$ ]]; }
+_keep_ok() { [[ "$1" =~ ^[0123456789]{1,4}$ ]]; }
 _keep_why() {   # <knob> <value>
   local val="$2"
   [ "${#val}" -le 32 ] || val="${val:0:32}..."
@@ -22223,7 +22295,10 @@ _bak_list() {
   shopt -q nullglob && had_nullglob=1
   shopt -s nullglob
   for d in "$BOX_BACKUP_ROOT"/$BAK_TS_PAT; do   # $BAK_TS_PAT unquoted: it is the glob
-    [ -d "$d" ] && BAK_DIRS+=("$d")
+    # A link is never a backup (R10i, D-5319): `[ -d ]` follows one, so a
+    # timestamp-named link was counted in the newest-N window and could hold a
+    # keep through its target. `_ver_list` applies the same rule to versions.
+    { [ -d "$d" ] && [ ! -L "$d" ]; } && BAK_DIRS+=("$d")
   done
   [ "$had_nullglob" -eq 1 ] || shopt -u nullglob
   return 0
@@ -22260,7 +22335,7 @@ _bak_prune() {
     *) echo "backup: prune skipped — ~/.ccrc/update.lock could not be measured; nothing was pruned"; return 0 ;;
   esac
   _bak_list
-  local floor=$((10#${UPD_BAK_FLOOR//-/})) n=${#BAK_DIRS[@]} i d name
+  local n=${#BAK_DIRS[@]} i d
   local krc=0
   _bak_keepset || krc=$?   # rc 1 cannot happen here (the floor was checked above); rc 2 is the classifier failing
   if [ "$krc" -ne 0 ]; then
@@ -22269,12 +22344,8 @@ _bak_prune() {
     return 0
   fi
   for ((i = 0; i < n - keep; i++)); do
-    d="${BAK_DIRS[$i]}"; name="${d##*/}"
-    [ "$d" = "$UPD_BACKUP_DIR" ] && continue
-    [ "$((10#${name//-/}))" -ge "$floor" ] && continue
-    [ "$d" = "$BAK_KEEP_SNAP" ] && continue
-    [ "$d" = "$BAK_KEEP_DATA" ] && continue
-    [ "$d" = "$BAK_KEEP_TREE" ] && continue
+    d="${BAK_DIRS[$i]}"
+    _bak_removable "$d" || continue
     rm -rf -- "${BAK_DIRS[$i]}" \
       || _ccrc_die "could not prune ${BAK_DIRS[$i]} — the newer backups above it are all intact"
     echo "backup: pruned ${BAK_DIRS[$i]} (keeping the newest $keep timestamped backups; hand-made siblings are never touched)"
@@ -22287,7 +22358,7 @@ _bak_prune() {
 # The ONE spelling of the extra keeps' SELECTION, shared by `_bak_gc` and `_bak_prune`: which earlier coordination snapshot,
 # which earlier snapshot that holds data, and which earlier tree backup are kept, and the own-dir and floor pair that selection
 # skips over. That is all that is shared (fix round 1, F4). The removal filter that APPLIES the keeps — own dir, floor, snapshot,
-# data snapshot, tree — is written twice, once in each pruner's loop, and nothing pins the two copies to each other.
+# data snapshot, tree — is spelled ONCE, in `_bak_removable` below (R14(a), D-5318), and both pruners' loops call it.
 # The extra keeps are chosen among dirs NOT already protected (below the floor, not this run's own): the protected
 # ones are kept anyway, so picking one of them would protect nothing. They are INDEPENDENT of each other and of the newest-N keep
 # (delegation broker wave 3, O3): a dir is "the newest snapshot" by what the classifier says of its coordination snapshot,
@@ -22298,7 +22369,7 @@ _bak_prune() {
 # snapshot), BAK_KEEP_DATA (the newest earlier valid one that holds data) and BAK_KEEP_TREE (the newest earlier tree backup), ""
 # when none. rc 1 when UPD_BAK_FLOOR is not a timestamp, WITHOUT touching an out-param; rc 2 when the classifier itself FAILED
 # (`_bak_snap_class`; BAK_SNAP_WHY says why), all out-params "" — the caller prunes NOTHING and says why. It declares its
-# own floor and n: the callers' locals are not its to read. Links are counted as `_bak_list` counts them (R10i, deferred).
+# own floor and n: the callers' locals are not its to read. A link is never a backup: `_bak_list` lists none (R10i, D-5319).
 _bak_keepset() {
   local floor n i d name src
   [[ "$UPD_BAK_FLOOR" =~ ^[0-9]{8}-[0-9]{6}$ ]] || return 1
@@ -22322,6 +22393,25 @@ _bak_keepset() {
     if [ -z "$BAK_KEEP_TREE" ] && { [ -e "$d/server-dist" ] || [ -e "$d/agent-dist" ]; }; then BAK_KEEP_TREE="$d"; fi
     [ -n "$BAK_KEEP_DATA" ] && [ -n "$BAK_KEEP_TREE" ] && break
   done
+  return 0
+}
+
+# `_bak_removable <dir>` — rc 0 when a pruner may remove <dir>, rc 1 when it
+# must keep it (R14(a), D-5318): the ONE spelling of the removal filter that
+# `_bak_prune` and `_bak_gc` apply after `_bak_keepset` has chosen the keeps.
+# Kept: this run's own backup dir, every dir named at or after this run's
+# lock time, and the three keeps. It reads UPD_BAK_FLOOR itself (the callers'
+# locals are not its to read) and fails CLOSED: an unparsable floor keeps
+# everything, though both callers refuse before their loop anyway.
+_bak_removable() {
+  local d="$1" name="${1##*/}" floor
+  [[ "$UPD_BAK_FLOOR" =~ ^[0-9]{8}-[0-9]{6}$ ]] || return 1
+  floor=$((10#${UPD_BAK_FLOOR//-/}))
+  [ "$d" = "$UPD_BACKUP_DIR" ] && return 1
+  [ "$((10#${name//-/}))" -ge "$floor" ] && return 1
+  [ "$d" = "$BAK_KEEP_SNAP" ] && return 1
+  [ "$d" = "$BAK_KEEP_DATA" ] && return 1
+  [ "$d" = "$BAK_KEEP_TREE" ] && return 1
   return 0
 }
 
@@ -22377,7 +22467,8 @@ _bak_snap_class() {
 # rollback never get here. It NEVER DIES and never writes update.json: a `_ccrc_die` here would turn a completed
 # update into a `failed` report. rc 0 done or nothing to do; rc 1 skipped or a removal failed; every caller writes
 # `|| :`. It keeps the newest $CCRC_BACKUP_KEEP timestamped dirs of any origin (the ONE bounded validator,
-# `_keep_ok`, D-3423; counted as `ccrc backup` and deploy.sh count them; read from the process env only), and four
+# `_keep_ok`, D-3423; counted as `ccrc backup` and deploy.sh count them (neither counts a link, D-5319);
+# read from the process env only), and four
 # more that can only LEAVE the removal set: this run's own backup by its exact path; every dir named at or after
 # this run's lock second (UPD_BAK_FLOOR) — both D-3593; and, among the dirs neither of those protects, the newest tree backup (D-3594; a
 # `server-dist` or `agent-dist` entry: another run's, a deploy's, or the previous update's) and the newest VALID coordination
@@ -22406,7 +22497,7 @@ _bak_gc() {   # <lead word: update|rollback>
     *) echo "$lead: backups: WARN: ~/.ccrc/update.lock could not be measured — nothing pruned"; return 1 ;;
   esac
   _bak_list
-  local floor=$((10#${UPD_BAK_FLOOR//-/})) n=${#BAK_DIRS[@]} i d name shown rc=0
+  local n=${#BAK_DIRS[@]} i d shown rc=0
   local krc=0
   _bak_keepset || krc=$?   # wave 9 R10g: the selection of the two extra keeps, shared with `_bak_prune`; the floor was checked above
   if [ "$krc" -ne 0 ]; then
@@ -22415,12 +22506,8 @@ _bak_gc() {   # <lead word: update|rollback>
     return 1
   fi
   for ((i = 0; i < n - keep; i++)); do
-    d="${BAK_DIRS[$i]}"; name="${d##*/}"
-    [ "$d" = "$UPD_BACKUP_DIR" ] && continue   # D-3593
-    [ "$((10#${name//-/}))" -ge "$floor" ] && continue   # D-3593
-    [ "$d" = "$BAK_KEEP_SNAP" ] && continue
-    [ "$d" = "$BAK_KEEP_DATA" ] && continue
-    [ "$d" = "$BAK_KEEP_TREE" ] && continue
+    d="${BAK_DIRS[$i]}"
+    _bak_removable "$d" || continue   # D-3593's own-dir and floor clauses live there now
     shown="$d"; case "$d" in "$HOME"/*) shown="\$HOME${d#"$HOME"}" ;; esac
     if rm -rf -- "$d" 2>/dev/null; then
       echo "$lead: backups: pruned $shown (kept: the newest $keep timestamped backups, every one named at or after this run took its lock, this run's own, the newest earlier tree backup, the newest earlier valid coordination snapshot and the newest earlier one that holds data; hand-made siblings are never touched)"
@@ -23680,7 +23767,7 @@ _uninst_wrappers() {
     # is another repository's unmarked launcher, which the marker test below
     # already keeps, and nothing here places it (D-3478). `ccd-update-sync`
     # joins on the same terms as the timer-bound binary from programme wave 4.
-    case "$name" in ccd|ccrc|ccd-cap-scopes|ccd-graph-sweep|ccd-account-health|ccd-telemetry-keepalive|ccd-account-auth|ccd-usage-sweep|ccd-tmp-sweep|ccd-scope-sweep|ccd-tool-adj|ccd-history-sweep|ccd-pool-sync|ccd-update-sync|ccgpt-runtime|ccrc-codex) continue ;; esac
+    case "$name" in ccd|ccrc|ccd-cap-scopes|ccd-graph-sweep|ccd-account-health|ccd-telemetry-keepalive|ccd-account-auth|ccd-usage-sweep|ccd-tmp-sweep|ccd-scope-sweep|ccd-tool-adj|ccd-history-sweep|ccd-pool-sync|ccd-update-sync|ccgpt-runtime|ccrc-codex|ccrc-api) continue ;; esac
     [[ "$name" =~ $WRAPPER_ID_RE ]] || continue
     verdict="$(node --no-warnings --input-type=module -e '
 import { readFileSync, statSync } from "node:fs";
@@ -23715,15 +23802,17 @@ _uninst_cc_sessions() {
     echo "uninstall: ~/.cc-sessions: not present — nothing of ccrc's to remove there"
     return 0
   fi
+  # `child-deny.settings.json` is the box's one children's deny file (D-5299); this is its
+  # ONE remover (D-5392): `install-session-hooks.sh --remove` runs per account and leaves it.
   rm -f -- "$reg/session-hook.sh" "$reg/install-session-hooks.sh" "$reg/notify.sh" \
     "$reg/compact-card.mjs" \
     "$reg/install-coordinator-skill.sh" "$reg/install-worker-skill.sh" \
     "$reg/install-reviewer-skill.sh" "$reg/install-history-skill.sh" \
-    "$reg/install-graphify-skill.sh" \
+    "$reg/install-graphify-skill.sh" "$reg/child-deny.settings.json" \
     || _ccrc_die "removing ccrc's files under $reg failed"
   rm -rf -- "$reg/coordinator-skill" "$reg/worker-skill" "$reg/reviewer-skill" "$reg/history-skill" \
     || _ccrc_die "removing the skill trees under $reg failed"
-  echo "uninstall: ~/.cc-sessions: ccrc's own artifacts removed (hooks, notify, the four skill trees); the registry rows and operator switches stay"
+  echo "uninstall: ~/.cc-sessions: ccrc's own artifacts removed (hooks, notify, the children's deny file, the four skill trees); the registry rows and operator switches stay"
 }
 
 # ── _uninst_graphify_skills — the per-home graphify skill directories ─────
@@ -23884,6 +23973,12 @@ _uninst_tree_bins() {
   # `ccd-tool-adj` (D-5241, the tool-child priority's shell prefix) joins on
   # `ccd-scope-sweep`'s terms: `_inst_bins` places it on every non-Darwin role.
   #
+  # `ccrc-api` (wave 17, D-5313), the closed client the role skills call, joins
+  # on the GPT lane's terms: `_inst_bins` places it on both platform
+  # arms and every role but server, so it is removed here on every role (a
+  # no-op on a server box). Whatever is at the path goes, README's link to the
+  # tree or a copy deploy.sh or the spine placed: each is ccrc's own file.
+  #
   # THE ORDINALS ARE GONE, and that is the fix, not an omission. This census
   # was hand-kept and was caught stale THREE times (D-1347; again at the
   # account wave's merge, where main added `ccd-telemetry-keepalive` to the
@@ -23904,6 +23999,7 @@ _uninst_tree_bins() {
     "$HOME/.local/bin/ccd-update-sync" \
     "$HOME/.local/bin/ccgpt-proxy.py" "$HOME/.local/bin/ccgpt-usage.py" \
     "$HOME/.local/bin/ccgpt-runtime" "$HOME/.local/bin/ccrc-codex" \
+    "$HOME/.local/bin/ccrc-api" \
     || _ccrc_die "removing the executables from \$HOME/.local/bin failed"
   # ccd's BODY (D-3696), the other half of the pair the launcher above named,
   # and its directory only if that leaves it empty — anything else an operator
@@ -23911,7 +24007,7 @@ _uninst_tree_bins() {
   rm -f -- "$HOME/.local/libexec/ccrc/ccd" \
     || _ccrc_die "removing ccd's body from \$HOME/.local/libexec/ccrc failed"
   rmdir -- "$HOME/.local/libexec/ccrc" 2>/dev/null || :
-  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-scope-sweep, ccd-tool-adj, ccd-history-sweep, ccd-pool-sync, ccd-update-sync, ccgpt-proxy.py, ccgpt-usage.py, ccgpt-runtime, ccrc-codex and the ccrc launcher removed from \$HOME/.local/bin, and ccd's body from \$HOME/.local/libexec/ccrc; the completed-install record and the node's update state (~/.ccrc/previous, install-step, update.json, update.lock, update-intent) removed$vsaid$msaid$nsaid"
+  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-scope-sweep, ccd-tool-adj, ccd-history-sweep, ccd-pool-sync, ccd-update-sync, ccgpt-proxy.py, ccgpt-usage.py, ccgpt-runtime, ccrc-codex, ccrc-api and the ccrc launcher removed from \$HOME/.local/bin, and ccd's body from \$HOME/.local/libexec/ccrc; the completed-install record and the node's update state (~/.ccrc/previous, install-step, update.json, update.lock, update-intent) removed$vsaid$msaid$nsaid"
   echo "uninstall: tree: the box token's node records (~/.ccrc/box-token-generation, token-sync.json) removed; its value and state files stay with ~/.ccrc/mail.token, and ~/.cc-secrets/ccrc-mail.token is not touched"
   # ── the one entry that is not ccrc's own binary ─────────────────────────
   # `_inst_graphify_engine` converges `$HOME/.local/bin/graphify` onto the

@@ -151,7 +151,7 @@ Reviewers: do not raise these.
   - the `ccd/ccd` harness containment and the dotted-id reverse maps;
   - `_bak_prune`/`_bak_gc`'s shared filter (R14a), the raw-spawn census (R14b), the six parked minors (R14c) and the Linux per-key line number (R14e).
 - **`--no-reload` in `_svc_enable`, which is wave-12 residue (13:58, F3).**
-  - Each restarted supervisor runs `systemctl --user enable` (`ccd/ccd:882`, called by `cmd_ensure`, `:21947`), so the user manager reloads once per supervisor, one reload after another. At 71 units that is 27 s.
+  - Each restarted supervisor runs `systemctl --user enable` (`_svc_enable` in `ccd/ccd`, called from `cmd_supervise`, the unit's `ExecStart`), so the user manager reloads once per supervisor, one reload after another. At 71 units that is 27 s.
   - Passing `--no-reload` would remove that storm. It is a `ccd/ccd` change, outside this wave.
 - **`deploy/deploy.sh`'s per-unit loop does NOT change, and gets no re-check.** It still runs `bash ~/ccrc/deploy/verify-service.sh "$u" || exit 1` serially (`deploy/deploy.sh:1108-1109`). The reasons:
   1. It is the fallback, not the update path. It writes no `update.json`, so it cannot halt the fleet. A false failure there costs a re-run.
@@ -311,7 +311,7 @@ Each premise below is measured at `00f8a193` unless it says otherwise. Where a r
   - So a dispatch overlaps the 8 s window with probability about (8 + downtime)/121, and the re-check, 8 or more seconds later, gives the swap's carry a second chance.
   - `swap.log` shows 0 dispatches within 130 s of any of the 24 recorded sweeps, against a fleet rate of 0.36/h. No mitigation beyond the re-check, and ruling 3 is untouched.
 - **The reload storm (attack F3).**
-  - Each restarted supervisor's `systemctl --user enable` reloads the user manager (`ccd/ccd:882`, `:21947`), one reload after another, about 0.33–0.38 s each. Measured in every one of the 24 sweeps:
+  - Each restarted supervisor's `systemctl --user enable` reloads the user manager (`_svc_enable` in `ccd/ccd`, called from `cmd_supervise`), one reload after another, about 0.33–0.38 s each. Measured in every one of the 24 sweeps:
     - 71 units took 27 s (12:23:45 sweep: 71 "Reloading finished" lines, 12:23:45.9–12:24:13.0);
     - 62–71 units took 23–27 s, and 36–45 units 10–13 s.
   - The post-restart listing returns 21.6–24.3 s after the restart at 62–71 units, about 3 s before the storm ends. Method calls queue in order, so the verify's first reads wait at most the storm's tail.

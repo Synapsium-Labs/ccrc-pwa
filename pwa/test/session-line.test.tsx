@@ -5,7 +5,7 @@ import path from 'node:path';
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ASK_OPERATOR_PRINCIPAL, graphGateCount, READER_MIN_COLS, sessionAsk, type AskState, type ChildMark, type FleetSession } from '../../shared/api';
-import { fleetSession } from './fleetFixture';
+import { fleetSession, hibernatedSession } from './fleetFixture';
 import { SessionLine } from '../src/fleet/SessionLine';
 import { childMarkOf, childOfRunLabel, type ChildMarkRead } from '../src/fleet/runWords';
 import { TEST_ROSTER } from './rosterFixture';
@@ -326,18 +326,19 @@ describe('the selected row', () => {
     expect(button).not.toHaveAttribute('aria-current');
   });
 
-  it('DROPS the inline account hue rather than overriding it', () => {
-    // Inline styles beat every selector short of !important, so
-    // .sess-line--active's achromatic override could never win against this
-    // one — and the hue measures 1.46:1 on the dark slab. The account
-    // survives as its mono name. Fails the moment acctStyle goes back to a
-    // plain CSSProperties.
+  it('KEEPS the inline account hue on the selected row (D-5455)', () => {
+    // It used to be dropped there: the reverse-video slab put the hue at
+    // 1.46:1. The selected row is the accent tint now, on which the gate
+    // measures every lane hue, so the meta keeps its identity colour — the
+    // same inline hue as the unselected row.
+    // With the roster, so the colour is the lane's own hue and not the
+    // no-roster fallback both renders would share.
     const { container, rerender } = render(
-      <SessionLine session={s()} selected onOpen={() => {}} onActions={() => {}} />);
-    const acct = container.querySelector<HTMLElement>('.sess-acct')!;
-    expect(acct.style.color).toBe('');
-    rerender(<SessionLine session={s()} onOpen={() => {}} onActions={() => {}} />);
-    expect(container.querySelector<HTMLElement>('.sess-acct')!.style.color).not.toBe('');
+      <SessionLine session={s()} roster={TEST_ROSTER} onOpen={() => {}} onActions={() => {}} />);
+    const unselected = container.querySelector<HTMLElement>('.sess-acct')!.style.color;
+    expect(unselected).toMatch(/^var\(--acct-[a-z]+\)$/);
+    rerender(<SessionLine session={s()} roster={TEST_ROSTER} selected onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector<HTMLElement>('.sess-acct')!.style.color).toBe(unselected);
   });
 });
 
@@ -1813,5 +1814,34 @@ describe('the quiet "with coordinator" state (D-5296)', () => {
       <SessionLine session={held({ withCoordinator: { ...WC, parentId: 'wrapper-two-project-a' } })} onOpen={() => {}} onActions={() => {}} />,
     );
     expect(container.querySelector('.sess-state')?.textContent).toBe('with coordinator · wrapper-two-project-a');
+  });
+});
+
+// D-5242 (plan Task 18): a row `ccd hibernate` put to sleep reads as asleep, never as a death.
+describe('a hibernated row (D-5242)', () => {
+  const AT = Date.now() - 6 * 3_600_000;
+  it('reads `hibernated · 6h` with a calm dot, never exited or a stop stamp', () => {
+    const { container } = render(<SessionLine session={hibernatedSession(AT, { id: 'demo-quiet-mesa', workspace: 'quiet-mesa' })}
+                                              onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.sess-state')?.textContent).toBe('hibernated · 6h');
+    expect(screen.queryByText('exited')).toBeNull();
+    expect(container.querySelector('.sess-lifecycle'), 'no "stopped by agent" beside it').toBeNull();
+    const dot = screen.getByRole('img', { name: 'hibernated' });
+    expect(dot.className).toMatch(/dot--idle/);
+    expect(dot.className).not.toMatch(/dot--dead/);
+  });
+
+  it('a dead row with no hibernatedAt still reads exited with the dead dot', () => {
+    const { container } = render(<SessionLine session={s({ status: 'dead', bucket: 'dead', lifecycle: 'orphan' })}
+                                              onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.sess-state')?.textContent).toBe('exited');
+    expect(screen.getByRole('img', { name: 'not running' })).toBeInTheDocument();
+  });
+
+  it('a live row with a stale hibernatedAt reads its own state', () => {
+    const { container } = render(<SessionLine session={s({ status: 'idle', bucket: 'idle', hibernatedAt: AT })}
+                                              onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.sess-state')?.textContent).toBe('idle');
+    expect(screen.queryByRole('img', { name: 'hibernated' })).toBeNull();
   });
 });

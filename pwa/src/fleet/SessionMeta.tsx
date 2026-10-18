@@ -39,6 +39,7 @@ import { elapsedWords, useNow, WARN_GLYPH } from '@ccrc/ui';
 import { restartWords } from '../lib/restart';
 import { humanBytes } from '../screens/ArchiveScreen';
 import { lifecycleQualifier } from './lifecycleWords';
+import { hibernatedWords } from './hibernated';
 import { childOfRunLabel } from './runWords';
 import { spawnChip } from './spawnWords';
 import { GraphChip, LastSpawnChip, UnmeasuredChip } from './chips';
@@ -124,13 +125,14 @@ export interface SessionMetaProps {
   roster: readonly RosterWire[];
   projectPool: ProjectPoolWire | null;
   onOpenRun: (() => void) | null;
-  /** The desktop sidebar's open row. Only reaches the account cell, which
-   *  drops its inline hue there — see `acctStyle`. */
-  selected: boolean;
   /** ONE reading of the wire, taken by `SessionLine`. */
   state: string;
   /** The same. */
   dead: boolean;
+  /** D-5242: when this dead row went to sleep (`hibernatedSince`), or null. A sleeping row reads
+   *  `hibernated · 6h` in place of `state`, and its stop stamp is not shown: `ccd hibernate` writes
+   *  `.stopped`, so the lifecycle qualifier would otherwise call a sleep a stop. Optional: absent is awake. */
+  asleepAt?: number | null;
   /** The disclosure this row's toggle owns. The LIST is rendered by
    *  `SessionLine`, outside this row, so the three of these cross the seam
    *  together: the toggle is here, the content is there. */
@@ -166,7 +168,7 @@ const markerNote = (
 };
 
 export function SessionMeta({
-  session, roster, projectPool, onOpenRun, selected, state, dead,
+  session, roster, projectPool, onOpenRun, state, dead, asleepAt = null,
   subagentList, subagentsOpen, subagentsId, onToggleSubagents,
 }: SessionMetaProps): ReactNode {
   // The cleanup bucket's own facts — the merged PR number and the size
@@ -184,7 +186,7 @@ export function SessionMeta({
   // The row's lifecycle qualifier (§4.4) and the swap refusal's durable
   // marker (§2.4). Neither touches `state` above: the bucket ladder is
   // untouched, a dead row stays `exited`, and these are cells beside it.
-  const qualifier = lifecycleQualifier(session);
+  const qualifier = asleepAt !== null ? null : lifecycleQualifier(session);
 
   // Child-reclamation wave 5: which run minted this workspace, when it is a
   // child. `childOfRunLabel` is the one reader of `session.child`.
@@ -316,15 +318,13 @@ export function SessionMeta({
 
   // Identity stays in the name; a dead line's account drains to gray.
   const acctVar = accountColorVar(roster, session.wrapper);
-  // Inline styles beat every selector short of !important, so the account hue
-  // has to be dropped HERE on the selected row: .sess-line--active's achromatic
-  // override could never win against it, and the hue measures 1.46:1 on the
-  // dark slab. The account survives as its mono name.
-  const acctStyle: CSSProperties | undefined = selected
-    ? undefined
-    : dead
-      ? { color: 'var(--ink-secondary)' }
-      : { color: `var(${acctVar})` };
+  // The account keeps its lane hue on EVERY row, the selected one included
+  // (D-5455). It used to be dropped on the selected row, because the reverse-
+  // video slab put it at 1.46:1; the selected row is the accent tint now, and
+  // design/contrast-check.mjs measures every lane hue on that tint.
+  const acctStyle: CSSProperties = dead
+    ? { color: 'var(--ink-secondary)' }
+    : { color: `var(${acctVar})` };
 
   // Running somewhere other than its pinned account — ccd's _auto_swap_check
   // moved it when `home` crossed the swap threshold. Dead sessions are exempt:
@@ -352,7 +352,9 @@ export function SessionMeta({
             </span>
           ) : (
             <span className={`sess-state sess-state--${state}`} title={bgWords?.title}>
-              {bgWords === null ? state : `${state} · ${bgWords.text}`}
+              {asleepAt !== null
+                ? hibernatedWords(asleepAt, now)
+                : bgWords === null ? state : `${state} · ${bgWords.text}`}
             </span>
           )}
 
@@ -586,11 +588,10 @@ export function SessionMeta({
           {/* Context-window pressure (D-2011), escalated to the wedge
               reading (D-2016) — one cell, not two, same idiom `.sess-spawn`
               already uses for its own variants: a stable className the
-              achromatic-group census can answer, and a `data-wedge`
-              attribute (not a class) carrying the louder state, so a
-              selected+wedged row is answered by ITS OWN higher-specificity
-              rule rather than losing a tie to source order (see the matching
-              `.sess-ctxpressure[data-wedge]` rule in fleet.css). `title`
+              row's ink census can read, and a `data-wedge` attribute (not a
+              class) carrying the louder state, which keeps its own ink on
+              the selected row's tint as everywhere else (D-5101; see the
+              matching `.sess-ctxpressure[data-wedge]` rule in fleet.css). `title`
               carries the reading's own caveat — this is what CLAUDE CODE
               believes its window is, not this account's real usable wall —
               verbatim, never parsed, same contract as `.sess-held`. */}

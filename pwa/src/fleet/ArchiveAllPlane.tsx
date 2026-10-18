@@ -98,6 +98,7 @@ export function ArchiveAllConfirm({
       title="Archive released workspaces?"
       consequence={`Archives ${count} released ${count === 1 ? 'workspace' : 'workspaces'} in ${project ?? ''}, one at a time. ${live} of them ${live === 1 ? 'still has a live pane' : 'still have a live pane'}, which is stopped. Restore brings any of them back; once automatic cleanup is on, each is cleaned up seven days after its archive. Child workspaces are skipped, and so is any row that stops being released before its turn.`}
       confirmLabel={`Archive ${count}`}
+      tone="danger"
       onConfirm={() => {
         if (project !== null) onConfirm(project);
       }}

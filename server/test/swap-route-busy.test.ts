@@ -16,7 +16,8 @@ import { localIO } from '../src/io.js';
 import { ccdRunner } from '../src/lifecycle.js';
 import { KeyedQueue } from '../src/inject/queue.js';
 import { POOLS_CAP, SWAP_BUSY_CAP } from '../src/ccdargv.js';
-import { SWAP_REFUSALS } from '../../shared/api.js';
+import { SWAP_REFUSALS, SWAP_REFUSAL_CODES } from '../../shared/api.js';
+import { REFUSAL_STATUS } from '../../shared/refusal.js';
 import { seedRoster } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -307,5 +308,41 @@ describe("ccd's own refusals reach the operator as the same two 409s (D-5240)", 
     const res = await post(b.app, { wrapper: 'lane-b' });
     expect(res.statusCode).toBe(502);
     expect(res.json()).toEqual({ ok: false, stderr: 'boom' });
+  });
+});
+
+// TASK 17b (D-5242): a hibernated row has no running session to move — `cmd_swap` refuses it (`ccd: hibernated:`)
+// while `.hibernated` stands. The route answers that before any turn read (an asleep row's turn reads `unmeasured`,
+// which would otherwise answer the misleading `status-unknown`), and maps ccd's own word to the same 409.
+describe('a hibernated row is 409 hibernated (D-5242)', () => {
+  const sleep = (home: string): void => {
+    const reg = path.join(home, '.cc-sessions');
+    writeFileSync(path.join(reg, `${ID}.stopped`), '1799974800 ccd');
+    writeFileSync(path.join(reg, `${ID}.hibernated`), '1799974800 7');
+  };
+
+  it('on both arms, with or without consent: 409 hibernated, and ccd is never called', async () => {
+    for (const payload of [{ wrapper: 'lane-b' }, { wrapper: 'lane-b', interrupt: true }, { wrapper: 'lane-b', crossPool: true }]) {
+      const b = await box({ caps: ALL_CAPS });
+      sleep(b.home);
+      const res = await post(b.app, payload);
+      expect(res.statusCode, JSON.stringify(payload)).toBe(409);
+      expect(res.json()).toEqual({ ok: false, error: SWAP_REFUSALS.hibernated });
+      expect(b.ccd()).toEqual([]);
+    }
+  });
+
+  it('`ccd: hibernated:` (the row fell asleep after the route read it) is 409 hibernated, never 502', async () => {
+    const b = await box({ caps: ALL_CAPS,
+      swap: { code: 1, stderr: `ccd: hibernated: ${ID} is asleep — wake it first (ccd ensure); nothing was touched\n` } });
+    liveStatus(b.home, 'idle');
+    const res = await post(b.app, { wrapper: 'lane-b' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: SWAP_REFUSALS.hibernated });
+  });
+
+  it('the word is the refusal table\'s: hibernated answers 409 through REFUSAL_STATUS', () => {
+    expect(REFUSAL_STATUS[SWAP_REFUSALS.hibernated]).toBe(409);
+    for (const code of SWAP_REFUSAL_CODES) expect(REFUSAL_STATUS[code], code).toBe(409);
   });
 });

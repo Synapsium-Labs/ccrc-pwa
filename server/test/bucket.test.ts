@@ -590,6 +590,7 @@ describe('a Stop that leaves delegated work running (D-5231)', () => {
 
   it('(e) reviveFleetSession of a cached row with no background → null, and the ladder\'s old answers', () => {
     const row: FleetSession = {
+      hibernatedAt: null,
       id: 'lane-a-project-a', wrapper: 'lane-a', home: '/home/fixture', project: 'project-a', workdir: '/data/projects/project-a',
       workspace: null, name: null, status: 'busy', statusUpdatedAt: 1000, limits: null,
       dialogPending: false, version: null, model: null, effort: null, ultracode: false,
@@ -811,6 +812,7 @@ describe('the quiet "with coordinator" state (D-5296)', () => {
 
   it('reviveFleetSession of a cached row without the field, or with it, → null and attention', () => {
     const row: FleetSession = {
+      hibernatedAt: null,
       id: 'project-a-quiet-basin', wrapper: 'lane-a', home: '/home/fixture', project: 'project-a', workdir: '/data/projects/project-a',
       workspace: 'quiet-basin', name: null, status: 'idle', statusUpdatedAt: 1000, limits: null,
       dialogPending: false, version: null, model: null, effort: null, ultracode: false,

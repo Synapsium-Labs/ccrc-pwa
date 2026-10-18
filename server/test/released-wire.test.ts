@@ -9,6 +9,7 @@ const REL: ReleasedFrom = {
 };
 
 const session: FleetSession = {
+  hibernatedAt: null,
   id: 'demo-amber', wrapper: 'claude', home: '/home/u', project: 'demo', workdir: '/data/projects/demo',
   workspace: 'amber', name: null, status: 'idle', statusUpdatedAt: null, limits: null,
   dialogPending: false, version: null, model: null, effort: null, ultracode: false,

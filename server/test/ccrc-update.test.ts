@@ -2918,8 +2918,27 @@ describe('ccrc update: the supervisor sweep (Task 7 — R1, granted 2026-08-21)'
     expect(existsSync(join(home, 'tmux-argv'))).toBe(false);
     // The refusal is the KillMode refusal's own exit code and update.json —
     // never a new failure (review 196's ruling, item 1).
+    const rep = JSON.parse(readFileSync(join(home, '.ccrc', 'update.json'), 'utf8')) as Record<string, unknown>;
+    expect(rep).toMatchObject({ phase: 'done', detail: null, from: 'cli' });
+    // R10k (wave 17, D-5315): the report says the sweep did not run, and why, in its eighth key.
+    expect(rep['sweep']).toBe('refused: listing');
+  });
+
+  // The UPDATE path's KillMode refusal (wave 17, D-5315): no drop-in, so the fixture's `show -p KillMode` answers
+  // systemd's control-group default; the sweep is refused, restarts nothing, and the update's own `done` records it.
+  itLinux('the update\'s sweep REFUSED over KillMode is recorded: exit 0, DEGRADED, no try-restart, phase done, detail null, sweep refused: killmode (R10k, D-5315)', () => {
+    const home = freshUpdateBox('ccrc-update-sweep-killmode-record-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    writeFileSync(join(home, 'fixture-sweep-units'), UNIT_LINES);
+    writeFileSync(join(home, 'fixture-sweep-active'), UNIT_LINES);
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stderr).toMatch(/^update: sweep REFUSED — claude-session@alpha\.service resolves to KillMode=control-group/m);
+    expect(r.stdout).toMatch(/^update: DEGRADED: the supervisor sweep did not run — every live claude-session@ supervisor keeps executing the PREVIOUS ccd until restarted/m);
+    expect(readFileSync(join(home, 'systemctl-calls'), 'utf8')).not.toMatch(/try-restart/);
     expect(JSON.parse(readFileSync(join(home, '.ccrc', 'update.json'), 'utf8')) as Record<string, unknown>)
-      .toMatchObject({ phase: 'done', detail: null, from: 'cli' });
+      .toMatchObject({ phase: 'done', detail: null, from: 'cli', sweep: 'refused: killmode' });
   });
 
   // (a) on the OTHER caller — a rollback by flip reaches `_upd_sweep` from
@@ -2946,7 +2965,7 @@ describe('ccrc update: the supervisor sweep (Task 7 — R1, granted 2026-08-21)'
     const calls = existsSync(join(home, 'systemctl-calls')) ? readFileSync(join(home, 'systemctl-calls'), 'utf8') : '';
     expect(calls).not.toMatch(/try-restart/);
     expect(JSON.parse(readFileSync(join(home, '.ccrc', 'update.json'), 'utf8')) as Record<string, unknown>)
-      .toMatchObject({ phase: 'done', from: 'rollback' });
+      .toMatchObject({ phase: 'done', from: 'rollback', sweep: 'refused: listing' });
   });
 
   // (b) the verify (`--state=active`) listing fails — DEGRADED in place of
@@ -2971,6 +2990,9 @@ describe('ccrc update: the supervisor sweep (Task 7 — R1, granted 2026-08-21)'
     expect(r.stdout).not.toContain('no claude-session@ supervisor was active when the sweep began');
     const calls = readFileSync(join(home, 'systemctl-calls'), 'utf8');
     expect(calls).toMatch(/--user try-restart claude-session@\*/);
+    // R10k (wave 17, D-5315): the report keeps `phase: done` and `detail: null` (review 196 item 1) and says so in `sweep`.
+    expect(JSON.parse(readFileSync(join(home, '.ccrc', 'update.json'), 'utf8')) as Record<string, unknown>)
+      .toMatchObject({ phase: 'done', detail: null, sweep: 'unverified: relist' });
   });
 
   // G1a with the verify listing ALSO failing: `before` measures truly empty
@@ -4046,7 +4068,7 @@ const reportWrites = (home: string): Array<Record<string, unknown>> =>
     : []);
 const lastReport = (home: string): Record<string, unknown> =>
   JSON.parse(readFileSync(join(home, '.ccrc', 'update.json'), 'utf8')) as Record<string, unknown>;
-/** The seven keys, in the writer's order (D-3237 adds `pid`). */
+/** The seven keys, in the writer's order (D-3237 adds `pid`), and an eighth, `sweep`, after a sweep (wave 17, D-5314). */
 const REPORT_KEYS = ['target', 'phase', 'startedAt', 'updatedAt', 'detail', 'from', 'pid'];
 /** The report's clock: unix SECONDS (`date +%s` on `_upd_phase`'s `now=`
  *  line) — the unit W2's `reportFrom` reads, converting once to ms and
@@ -4070,7 +4092,7 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     writeFileSync(join(home, '.ccrc', 'floor'), `${v}\n`);
   };
 
-  it('a moving run, a converged no-op and a refusal together write every wired phase, each by rename, seven keys in order (§18 "update.json at every phase")', () => {
+  it('a moving run, a converged no-op and a refusal together write every wired phase, each by rename, seven keys in order and an eighth, `sweep`, after the sweep (§18 "update.json at every phase"; wave 17, D-5314)', () => {
     // 1. A run that moves the box (STUB flavour: update's own logic).
     const moved = freshUpdateBox('ccrc-update-json-moved-');
     plantOldBox(moved, { version: 'v1.0.0' });
@@ -4080,6 +4102,12 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     // W4 Task 5: the gate writes `checking` BEFORE the sweep's `restarting`
     // (design §11 — the gate precedes the sweep; nothing reads the order).
     expect(phases(moved)).toEqual(['resolving', 'fetching', 'verifying', 'backing-up', 'installing', 'checking', 'restarting', 'done']);
+    // The stub box answers no KillMode, so its sweep is REFUSED, and the update's own `done` records that (R10k, D-5315):
+    // exit 0, `detail` null, the word in `sweep`. On Darwin the arm reads job files instead, so only its presence is pinned.
+    const movedSweep = lastReport(moved)['sweep'];
+    if (process.platform === 'darwin') expect(typeof movedSweep, 'the sweep is recorded on the write after it (wave 17, D-5314)').toBe('string');
+    else expect(movedSweep, 'the sweep is recorded on the write after it (wave 17, D-5314)').toBe('refused: killmode');
+    expect(lastReport(moved)['detail']).toBeNull();
 
     // 2. The converged no-op (the "already there" gate's three shas agree).
     const same = freshUpdateBox('ccrc-update-json-same-');
@@ -4092,6 +4120,7 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
     expect(phases(same)).toEqual(['resolving', 'fetching', 'verifying', 'done']);
     expect(lastReport(same)['detail']).toBe('already converged at v2.0.0');
+    expect(Object.keys(lastReport(same)), 'a converged no-op never swept, so it never records one').not.toContain('sweep');
 
     // 3. A refusal after the lock: a die is a `failed` report.
     const refused = freshUpdateBox('ccrc-update-json-refused-');
@@ -4127,7 +4156,15 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
 
     for (const home of [moved, same, refused, restoreHome, ...(process.platform === 'darwin' ? [] : [detached])]) {
       const raw = readFileSync(join(home, 'update-json-writes'), 'utf8').split('\n').filter((l) => l !== '');
-      for (const l of raw) expect(Object.keys(JSON.parse(l) as object)).toEqual(REPORT_KEYS);
+      // Wave 17 (D-5314): every write before the sweep keeps the seven keys; the sweep's own `done` is the one write that
+      // carries the eighth, after them. The converged no-op, the refusal and the restore never sweep, so they keep seven.
+      const swept = home === moved;
+      for (const l of raw) {
+        const w = JSON.parse(l) as { phase: string };
+        expect(Object.keys(w), `${home}: the ${w.phase} write`)
+          .toEqual(swept && w.phase === 'done' ? [...REPORT_KEYS, 'sweep'] : REPORT_KEYS);
+      }
+      if (swept) expect(raw.filter((l) => l.includes('"sweep"')), 'only the write after the sweep carries it').toHaveLength(1);
       // The file on disk IS the last rename, and no staged copy is left beside it.
       expect(readFileSync(join(home, '.ccrc', 'update.json'), 'utf8')).toBe(`${raw[raw.length - 1]}\n`);
       expect(readdirSync(join(home, '.ccrc')).filter((f) => f.startsWith('update.json.'))).toEqual([]);
@@ -4717,7 +4754,7 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
       pick(/^_tmp_guard\(\) \{.*\}$/m, '_tmp_guard'),
       pick(/^_upd_phase\(\) \{[\s\S]*?\n\}$/m, '_upd_phase'),
       `BOX_UPDATE_JSON=${JSON.stringify(jsonPath)}`,
-      'UPD_REPORT_TARGET=""', 'UPD_REPORT_STARTED=""', 'UPD_FROM=cli',
+      'UPD_REPORT_TARGET=""', 'UPD_REPORT_STARTED=""', 'UPD_FROM=cli', 'UPD_SWEEP_WORD=""',
       // The raw detail: never wrapped in _upd_redact by this harness — if
       // `_upd_phase` did not redact it either, the home would land as-is.
       `_upd_phase failed "unreadable: $HOME/.ccrc/ccrc.env is not a regular file"`,
@@ -4728,6 +4765,48 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     const rep = JSON.parse(readFileSync(jsonPath, 'utf8')) as Record<string, unknown>;
     expect(String(rep['detail']), JSON.stringify(rep)).not.toContain(home);
     expect(rep['detail']).toBe('unreadable: ~/.ccrc/ccrc.env is not a regular file');
+  });
+
+  // Wave 17 (D-5314): `_upd_json_str` cuts a value at 200 characters, which would split the last unit id into a fragment
+  // the doctor reads as a unit of its own. `_upd_sweep_set_down` therefore appends WHOLE ids only while the word stays
+  // within 200, count first. Run through the real `_upd_phase`, so the STORED `sweep` is what is read. Without the cap
+  // line twelve of these names give 264 characters and a stored last token `a` (measured).
+  it('_upd_sweep_set_down keeps the recorded word within 200 characters and cuts only between WHOLE ids, the count first (wave 17, D-5314)', () => {
+    const src = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
+    const pick = (re: RegExp, what: string): string => {
+      const m = re.exec(src);
+      expect(m, `ccd/ccrc has no ${what}`).not.toBeNull();
+      return m![0];
+    };
+    const home = mkTmp('ccrc-update-sweep-word-cap-');
+    const jsonPath = join(home, '.ccrc', 'update.json');
+    const ids = Array.from({ length: 12 }, (_, i) => `acct-${i + 1}-project-alpha`);
+    const harness = [
+      'set -uo pipefail',
+      pick(/^_upd_redact\(\) \{[\s\S]*?\n\}$/m, '_upd_redact'),
+      pick(/^_upd_json_str\(\) \([\s\S]*?\n\)$/m, '_upd_json_str'),
+      pick(/^_EXIT_CHAIN=\(\)$/m, '_EXIT_CHAIN'),
+      pick(/^_exit_run\(\) \{[\s\S]*?\n\}$/m, '_exit_run'),
+      pick(/^_exit_add\(\) \{[\s\S]*?\n\}$/m, '_exit_add'),
+      pick(/^_tmp_guard\(\) \{.*\}$/m, '_tmp_guard'),
+      pick(/^_upd_phase\(\) \{[\s\S]*?\n\}$/m, '_upd_phase'),
+      pick(/^_upd_sweep_set_down\(\) \{[\s\S]*?\n\}$/m, '_upd_sweep_set_down'),
+      `BOX_UPDATE_JSON=${JSON.stringify(jsonPath)}`,
+      'UPD_REPORT_TARGET=""', 'UPD_REPORT_STARTED=""', 'UPD_FROM=cli', 'UPD_SWEEP_WORD=""',
+      `_upd_sweep_set_down ${ids.map((id) => `claude-session@${id}.service`).join(' ')}`,
+      '_upd_phase done',
+    ].join('\n');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    const r = spawnSync(BASH, ['-c', harness], { env: { HOME: home }, encoding: 'utf8' });
+    expect(r.status, r.stderr).toBe(0);
+    const word = String((JSON.parse(readFileSync(jsonPath, 'utf8')) as Record<string, unknown>)['sweep']);
+    expect(word.startsWith('down: 12: '), word).toBe(true);
+    expect(word.length, word).toBeLessThanOrEqual(200);
+    const named = word.slice('down: 12: '.length).split(' ');
+    expect(named.length, 'a long list loses names, never the whole list').toBeGreaterThan(0);
+    expect(named.length, 'twelve of these names do not fit in 200 characters').toBeLessThan(12);
+    // Every name after the count is an input id, whole, and in input order from the first.
+    expect(named, word).toEqual(ids.slice(0, named.length));
   });
 
   // Wave 9 M1-M3 (D-3808): five harnesses run functions extracted from ccd/ccrc
@@ -6808,6 +6887,7 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
     expect(r.stdout).toMatch(/^update: DEGRADED: the supervisor sweep did not run — every live claude-session@ supervisor keeps executing the PREVIOUS ccd until restarted/m);
     expect(systemctlCalls(home)).not.toMatch(/try-restart/);
     expect(report(home)['phase']).toBe('done');
+    expect(report(home)['sweep']).toBe('refused: killmode');
   });
 
   itLinux('--allow-unsigned rides along ONLY when this box\'s own record says unsigned: an unverified box returns to a bundle-less release; a verified one refuses, with the provenance prefix (D-3263)', () => {
@@ -8309,6 +8389,54 @@ describe('ccrc watchdog: a re-measurement, never a timestamp alone (design §11)
     expect(existsSync(join(home, 'launcher-argv'))).toBe(false);
     // …and it let go: a later update is never refused by a watchdog that ended.
     expect(lockFree(home)).toBe(true);
+  });
+
+  itLinux('D-5329 (review 589 F1): a stale `restarting` report the watchdog closes on a passing probe carries `"sweep":"died: abandoned"`; a stale report in any other in-flight phase closes with NO sweep key', () => {
+    // The one phase the supervisor sweep runs in: an updater closed there died
+    // during or right after its sweep, and the doctor's update-sweep WARN reads
+    // the word. Converged arm first.
+    const home = watchBox('ccrc-watchdog-sweep-converged-');
+    report(home, { phase: 'restarting', ageS: 90 });
+    let r = runWatchdog(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    let now = readReport(home);
+    expect(Object.keys(now)).toEqual(['target', 'phase', 'startedAt', 'updatedAt', 'detail', 'from', 'pid', 'sweep']);
+    expect(now.phase).toBe('failed');
+    expect(now.detail).toBe('abandoned by its updater; box measures converged at v2.0.0');
+    expect(now.sweep).toBe('died: abandoned');
+    // The "healthy on the target, install never completed" arm, same phase.
+    const home2 = watchBox('ccrc-watchdog-sweep-incomplete-');
+    writeFileSync(join(home2, '.ccrc', 'installed'), 'a-record-for-some-other-build\n');
+    report(home2, { phase: 'restarting', ageS: 90 });
+    r = runWatchdog(home2);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    now = readReport(home2);
+    expect(now.phase).toBe('failed');
+    expect(String(now.detail)).toMatch(/^abandoned by its updater; box answers healthy on v2\.0\.0 but its install never completed/);
+    expect(now.sweep).toBe('died: abandoned');
+    // A stale report in every other in-flight phase closes keyless, on both arms.
+    // Every in-flight phase but `restarting`, read from ccd/ccrc's own array (not a hand copy), so a phase added there
+    // is covered, and a condition widened to `checking` or `restoring` reds (review 593 F1).
+    const inFlight = /^UPD_IN_FLIGHT_PHASES=\(([^)]*)\)/m.exec(readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8'))?.[1]?.trim().split(/\s+/) ?? [];
+    expect(inFlight, 'ccd/ccrc\'s UPD_IN_FLIGHT_PHASES was not read').toContain('restarting');
+    expect(inFlight.length, 'the nine in-flight phases').toBe(9);
+    for (const phase of inFlight.filter((p) => p !== 'restarting')) {
+      const h = watchBox(`ccrc-watchdog-nosweep-converged-${phase}-`);
+      report(h, { phase, ageS: 90 });
+      r = runWatchdog(h);
+      expect(r.code, `${phase}: ${r.stderr}`).toBe(0);
+      now = readReport(h);
+      expect(now.phase, phase).toBe('failed');
+      expect(Object.keys(now), phase).toEqual(['target', 'phase', 'startedAt', 'updatedAt', 'detail', 'from', 'pid']);
+      const h2 = watchBox(`ccrc-watchdog-nosweep-incomplete-${phase}-`);
+      writeFileSync(join(h2, '.ccrc', 'installed'), 'a-record-for-some-other-build\n');
+      report(h2, { phase, ageS: 90 });
+      r = runWatchdog(h2);
+      expect(r.code, `${phase}: ${r.stderr}`).toBe(0);
+      now = readReport(h2);
+      expect(now.phase, phase).toBe('failed');
+      expect(Object.keys(now), phase).toEqual(['target', 'phase', 'startedAt', 'updatedAt', 'detail', 'from', 'pid']);
+    }
   });
 
   itLinux('stale, no holder, healthy but NOT converged: rewritten with what the box IS, never a rollback (D-3246, D-3268)', () => {
@@ -9905,7 +10033,7 @@ describe('ccrc rollback: by flip when the version is kept (W6 Task 4)', () => {
     expect(c, c.join('\n')).toContain('--user show -p KillMode claude-session@alpha.service');
     // …and nothing restarted a supervisor.
     expect(c.filter((l) => /--user try-restart/.test(l)), c.join('\n')).toEqual([]);
-    expect(lastReport(home)).toMatchObject({ phase: 'done', from: 'rollback' });
+    expect(lastReport(home)).toMatchObject({ phase: 'done', from: 'rollback', sweep: 'refused: killmode' });
   });
 
   it('an unverified kept version stays unverified: its own spine runs WITHOUT CCRC_UPDATE_VERIFIED when its kept record says unsigned — a flip never promotes it (§18 "arm 2 never silently unsigns", applied to the flip; D-3439)', () => {
@@ -12695,6 +12823,22 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
     assertNoExtras(home);
   });
 
+  // R34 (wave 17, D-5320): `_keep_ok`'s class is enumerated, so a non-ASCII decimal digit is refused under a UTF-8
+  // locale as well (a `[0-9]` range accepted U+0663 there, and the prune then died on an arithmetic error). The
+  // row measures its own premise first and skips, with the reason, where this bash and locale do not reproduce the range.
+  const rangeAcceptsNonAscii = spawnSync(BASH, ['-c', `[[ $'\\xd9\\xa3' =~ ^[0-9]{1,4}$ ]]`], { env: { LC_ALL: 'en_US.UTF-8', PATH: process.env.PATH ?? '' } }).status === 0;
+  it.skipIf(!rangeAcceptsNonAscii)('P11b: a non-ASCII digit in CCRC_BACKUP_KEEP (U+0663) only WARNs and prunes nothing under en_US.UTF-8 (D-5320)', () => {
+    const home = freshUpdateBox('ccrc-fx-b-p11b-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    plantDir(home, '20250101-000000');
+    const r = runUpdate(home, [], { CCRC_BACKUP_KEEP: '٣', LC_ALL: 'en_US.UTF-8' });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(/^update: backups: WARN: CCRC_BACKUP_KEEP='٣' is not a whole number from 0 to 9999 — nothing pruned$/m);
+    expect(existsSync(join(backupRoot(home), '20250101-000000'))).toBe(true);
+    assertNoExtras(home);
+  });
+
   // Fix round 2 (controller ruling): itLinux — this fixture's `fixture-sweep-hold-lock` knob lives only in the systemctl stub's try-restart arm (Darwin's launchctl sweep never reaches it), and its `flock -F` is util-linux only.
   itLinux('P12: another ccrc holding ~/.ccrc/update.lock at prune time — skipped, nothing removed', () => {
     const home = freshUpdateBox('ccrc-fx-b-p12-');
@@ -12979,24 +13123,52 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
       expect(src.split('[ -f "$d/coord.db" ]').length - 1, 'a bare coord.db test would discard a sidecar-only snapshot').toBe(0);
       expect(src.split('_bak_snap_class "$d"').length - 1, 'the classifier is asked in one place').toBe(1);
     });
+
+    it('_bak_gc and _bak_prune spell no keep clause of their own: each calls _bak_removable, and the filter is written once (R14(a), D-5318)', () => {
+      const src = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
+      const body = (name: string): string => {
+        const m = new RegExp(`^${name}\\(\\) \\{[\\s\\S]*?\\n\\}$`, 'm').exec(src);
+        expect(m, `ccd/ccrc has no ${name}`).not.toBeNull();
+        return m![0];
+      };
+      for (const fn of ['_bak_gc', '_bak_prune']) {
+        expect(body(fn), `${fn} calls the one filter`).toMatch(/^ +_bak_removable "\$d" \|\| continue/m);
+        expect(body(fn), `${fn} spells no keep clause`).not.toContain('[ "$d" = "$BAK_KEEP_');
+      }
+      expect(src.split('[ "$d" = "$BAK_KEEP_').length - 1, 'the three keep clauses are spelled once, in _bak_removable').toBe(3);
+      expect(body('_bak_removable'), 'the helper fails closed on an unparsable floor').toMatch(/\[\[ "\$UPD_BAK_FLOOR" =~ \^\[0-9\]\{8\}-\[0-9\]\{6\}\$ \]\] \|\| return 1/);
+    });
+
+    // E2/E3 (R14(a), D-5318): the helper's ANSWERS, not its spelling. The own dir (20250109) sits BELOW the floor, so the own-dir
+    // clause alone keeps it; 20250110 and 20250111 are kept by the floor clause alone; each keep by its own clause.
+    it('_bak_removable answers removable for exactly the unprotected names, and nothing at all on an unparsable floor (E2, E3; D-5318)', () => {
+      const home = freshUpdateBox('ccrc-fx-e2-removable-');
+      const names = ['20250101', '20250102', '20250103', '20250104', '20250105', '20250109', '20250110', '20250111'];
+      const row = (floor: string): string => [
+        'R="$HOME/ccrc-backups"',
+        `UPD_BAK_FLOOR='${floor}'; UPD_BACKUP_DIR="$R/20250109-000000"`,
+        'BAK_KEEP_SNAP="$R/20250102-000000"; BAK_KEEP_DATA="$R/20250103-000000"; BAK_KEEP_TREE="$R/20250104-000000"',
+        `for n in ${names.join(' ')}; do _bak_removable "$R/$n-000000" && printf '%s ' "$n"; done; echo`,
+      ].join('\n');
+      const e2 = sourcedCcrc(home, row('20250110-000000'));
+      expect(e2.code, `stderr: ${e2.stderr}`).toBe(0);
+      expect(e2.stdout.trim().split(/\s+/), 'removable: neither own, at or after the floor, nor any of the three keeps').toEqual(['20250101', '20250105']);
+      const e3 = sourcedCcrc(home, row('garbage'));
+      expect(e3.code, `stderr: ${e3.stderr}`).toBe(0);
+      expect(e3.stdout.trim(), 'an unparsable floor keeps everything').toBe('');
+    });
   });
 
-  // fix round 1 item 9 (review 196 F10): a timestamp-named SYMLINK is a
-  // timestamped backup for this prune (the glob matches the name; `_bak_list`
-  // accepts it because `[ -d ]` follows a symlink to a directory) — so it is
-  // counted and REMOVED AS A LINK, and its target must survive untouched.
-  // Two link cases (a fixture dir outside ~/ccrc-backups, and onKeptV1's real
-  // kept v1.0.0 — this box carries no v0.0.50) plus a plain timestamp-named
-  // file, which is not a timestamped backup at all and must survive
-  // unpruned. CCRC_BACKUP_KEEP=0 and every planted name below the run's lock
-  // second (2025…) put both links squarely in the removal set; the plain file is
-  // never listed (`_bak_list` admits directories only); neither target
-  // holds a coord.db, server-dist or agent-dist, so neither can be chosen as
-  // the protected newest-earlier snap or tree keep. Assertions read the
-  // FILESYSTEM (lstat for the links, a content digest for their targets),
-  // never the `pruned` echo — a `rm -rf -- "$d/"` on a symlink would empty
-  // the target and still print it.
-  it('P18: a timestamp-named symlink is pruned as a link, its target untouched; a timestamp-named plain file is not a backup and survives', () => {
+  // fix round 1 item 9 (review 196 F10), REVERSED by wave 17 (R10i, D-5319): a timestamp-named SYMLINK is NOT a timestamped
+  // backup. The glob matches its name, but `_bak_list` now lists directories that are not links (`[ -d ]` follows one), so a
+  // link is never counted in the newest-N window, never holds a keep through its target, and is never pruned. It used to be
+  // counted and REMOVED AS A LINK (its target untouched); that was the wrong half of the rule, because a link in the window
+  // pushed a real backup out of it. Two link cases (a fixture dir outside ~/ccrc-backups, and onKeptV1's real kept v1.0.0 —
+  // this box carries no v0.0.50) plus a plain timestamp-named file, which is not a timestamped backup either; all three must
+  // survive. CCRC_BACKUP_KEEP=0 and every planted name below the run's lock second (2025…) would put each of them in the
+  // removal set if it were listed. Assertions read the FILESYSTEM (lstat for the links, a content digest for their targets),
+  // never the `pruned` echo — a `rm -rf -- "$d/"` on a symlink would empty the target and still print it.
+  it('P18: a timestamp-named symlink is not a backup: never listed, never pruned, its target untouched; a timestamp-named plain file is not a backup and survives (R10i reversed, D-5319)', () => {
     const home = onKeptV1('ccrc-fx-b-p18-');
     const v1 = join(home, 'ccrc-versions', 'v1.0.0');
     packRelease(home, fullTree(home, { version: 'v2.0.0', sha: V2_SHA }), { tag: 'v2.0.0' });
@@ -13020,13 +13192,64 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
     const r = rollbackRun(home, [], { CCRC_BACKUP_KEEP: '0' });
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
     const linkGone = (p: string): boolean => { try { lstatSync(p); return false; } catch { return true; } };
-    expect(linkGone(linkToOutside), 'the link to the outside target must be gone').toBe(true);
-    expect(linkGone(linkToKept), 'the link to the kept version must be gone').toBe(true);
+    expect(linkGone(linkToOutside), 'the link to the outside target is not a backup: it survives').toBe(false);
+    expect(lstatSync(linkToOutside).isSymbolicLink(), 'and it is still a link').toBe(true);
+    expect(linkGone(linkToKept), 'the link to the kept version is not a backup: it survives').toBe(false);
+    expect(lstatSync(linkToKept).isSymbolicLink(), 'and it is still a link').toBe(true);
     expect(treeDigest(outside), 'the outside target\'s content must survive untouched').toEqual(outsideBefore);
     expect(treeDigest(v1), 'the kept version\'s content must survive untouched').toEqual(keptBefore);
     expect(existsSync(plainFile), 'the plain timestamp-named file is not a timestamped backup').toBe(true);
     expect(fileText(plainFile)).toBe(plainBefore);
   }, 60_000);   // a move onto v2.0.0 plus a rollback: 13.7-17 s alone, timed out 3 of 6 at load 30-50 (final review)
+
+  // P18b/P18c (wave 17, D-5319): the harm a listed link did, through the sourced `_bak_prune` so that no other dir is listed
+  // (a full update or rollback adds the run's own backup and the prior move's holds, which take newest-N slots of their own).
+  // KEEP=1 and a floor in 2030 put every planted dir below the floor, so only the window and the keeps decide.
+  const pruneSourced = (home: string): Result =>
+    sourcedCcrc(home, 'UPD_BAK_FLOOR=20300101-000000; UPD_BACKUP_DIR=""; CCRC_BACKUP_KEEP=1; _bak_prune');
+  const isLink = (p: string): boolean => { try { return lstatSync(p).isSymbolicLink(); } catch { return false; } };
+
+  it('P18b: a PLAIN real backup older than a timestamp-named link to a plain target: at KEEP=1 the real one is kept (the link takes no newest-N slot), the link and its target stay', () => {
+    const home = freshUpdateBox('ccrc-fx-b-p18b-');
+    const real = join(backupRoot(home), '20250101-000000');
+    mkdirSync(real, { recursive: true });
+    writeFileSync(join(real, 'some-file'), 'a plain real backup: no tree entry, no snapshot name\n');
+    const target = join(home, 'plain-target');
+    mkdirSync(target, { recursive: true });
+    writeFileSync(join(target, 'marker.txt'), 'the link\'s target\n');
+    const link = join(backupRoot(home), '20250102-000000');
+    symlinkSync(target, link);
+    const targetBefore = treeDigest(target);
+    const r = pruneSourced(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout, 'the prune ran: a skipped prune would leave every dir and prove nothing').not.toMatch(/prune skipped/);
+    expect(existsSync(real) && !isLink(real), 'the real backup is the newest-1 by the one rule: a link is not counted').toBe(true);
+    expect(isLink(link), 'the link is not a backup: it stays').toBe(true);
+    expect(treeDigest(target), 'its target is untouched').toEqual(targetBefore);
+    expect(r.stdout).not.toMatch(/^backup: pruned/m);
+  });
+
+  it('P18c: a link whose target holds server-dist, newer than a real tree backup outside the newest-N window: the real one stays protected as the tree keep', () => {
+    const home = freshUpdateBox('ccrc-fx-b-p18c-');
+    const tree = join(backupRoot(home), '20250101-000000');
+    mkdirSync(join(tree, 'server-dist'), { recursive: true });
+    const plain = join(backupRoot(home), '20250102-000000');
+    mkdirSync(plain, { recursive: true });
+    writeFileSync(join(plain, 'some-file'), 'a plain real backup, the newest-1\n');
+    const target = join(home, 'tree-target');
+    mkdirSync(join(target, 'server-dist'), { recursive: true });
+    writeFileSync(join(target, 'server-dist', 'marker.txt'), 'the link\'s target holds a tree entry\n');
+    const link = join(backupRoot(home), '20250103-000000');
+    symlinkSync(target, link);
+    const targetBefore = treeDigest(target);
+    const r = pruneSourced(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout, 'the prune ran: a skipped prune would leave every dir and prove nothing').not.toMatch(/prune skipped/);
+    expect(existsSync(tree), 'the real tree backup is the newest earlier tree backup: a link\'s target is never the tree keep').toBe(true);
+    expect(existsSync(plain), 'the newest real dir holds the one newest-N slot').toBe(true);
+    expect(isLink(link), 'the link stays').toBe(true);
+    expect(treeDigest(target), 'its target is untouched').toEqual(targetBefore);
+  });
 });
 
 // ── Delegation broker wave 3, Task 8B: the coordination snapshot's callers ──────────────────────────────────────────────
@@ -13480,6 +13703,32 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       expect(has(home, '20250101-000000'), 'the newest with data').toBe(true);
       expect(has(home, '20250100-000000'), 'the newest tree backup').toBe(true);
       expect(has(home, '20250102-000000'), 'an empty snapshot that is neither').toBe(false);
+    });
+
+    it('one filter, two pruners (R14(a), D-5318): `ccrc backup` and an update\'s `_bak_gc` leave the IDENTICAL set of planted dirs — own dir, floor, snapshot, data and tree keeps', () => {
+      const plant = (home: string): void => {
+        plantDir(home, '20250101-000000', 'plain');          // removable
+        plantDir(home, '20250102-000000', 'tree');           // the newest earlier tree backup
+        plantDir(home, '20250103-000000', 'v1-sidecars');    // the newest earlier snapshot that holds data
+        plantDir(home, '20250104-000000', 'v1-empty');       // the newest earlier valid snapshot
+        plantDir(home, '20250105-000000', 'plain');          // removable
+        plantDir(home, '29991231-000000', 'plain');          // named at or after this run's lock second: the floor keeps it
+      };
+      const planted = ['20250101-000000', '20250102-000000', '20250103-000000', '20250104-000000', '20250105-000000', '29991231-000000'];
+      const left = (home: string): string[] => planted.filter((n) => has(home, n));
+      const viaBackup = home0('ccrc-fx-8b-diff-backup-');
+      plant(viaBackup);
+      const b = runBackup(viaBackup, [], { CCRC_BACKUP_KEEP: '0' });
+      expect(b.code, `stderr: ${b.stderr}\nstdout: ${b.stdout}`).toBe(0);
+      expect(existsSync(ownDir(b)), 'the backup\'s own dir is kept').toBe(true);
+      const viaUpdate = home0('ccrc-fx-8b-diff-update-');
+      packRelease(viaUpdate, stubTree(viaUpdate, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+      plant(viaUpdate);
+      const u = runUpdate(viaUpdate, [], { CCRC_BACKUP_KEEP: '0' });
+      expect(u.code, `stderr: ${u.stderr}\nstdout: ${u.stdout}`).toBe(0);
+      expect(existsSync(announcedBackupDir(u.stdout, viaUpdate)), 'the update\'s own backup dir is kept, as the backup\'s is').toBe(true);
+      expect(left(viaBackup), 'ccrc backup keeps the three keeps and the floor').toEqual(['20250102-000000', '20250103-000000', '20250104-000000', '29991231-000000']);
+      expect(left(viaUpdate), 'an update\'s _bak_gc leaves the same set').toEqual(left(viaBackup));
     });
 
     it('the prune message names what it kept', () => {

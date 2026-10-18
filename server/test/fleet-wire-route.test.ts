@@ -27,6 +27,7 @@ import { seedRoster } from './helpers.js';
 import { degradedReadIO, unreadableField } from './ioDoubles.js';
 
 const session = (id: string): FleetSession => ({
+  hibernatedAt: null,
   id, wrapper: 'claude', home: '/home/u', project: id, workdir: `/data/projects/${id}`,
   workspace: null, name: null, status: 'idle', statusUpdatedAt: null, limits: null,
   dialogPending: false, version: null, model: null, effort: null, ultracode: false,

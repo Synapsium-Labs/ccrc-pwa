@@ -371,6 +371,12 @@ button.metachip:active {
   flex: 1;
   min-width: 0;
 }
+/* D-5242: a sleeping session. Nothing went wrong, so the banner keeps the base
+   banner's calm raised ground and secondary ink — never the dead tint. */
+.chat-banner--asleep .banner-copy {
+  flex: 1;
+  min-width: 0;
+}
 .chat-banner--missing {
   align-items: flex-start;
   flex-direction: column;

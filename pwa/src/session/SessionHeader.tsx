@@ -28,6 +28,7 @@ import { PrKeycap } from './PrKeycap';
 import { PrSheet } from './PrSheet';
 import './chat.css';
 import { substrateFaultText } from '../fleet/substrateWords';
+import { hibernatedSince } from '../fleet/hibernated';
 import { chipTone, metaChipTone } from './chipTones';
 
 export interface SessionHeaderProps {
@@ -194,6 +195,10 @@ export function SessionHeader({
     st === 'dead' && session != null && session.archivedAt == null
       ? 'dead'
       : snapshotBucket ?? (st === null ? null : st === 'busy' ? 'working' : st);
+  // D-5242: a `dead` row `ccd hibernate` put to sleep reads `hibernated` beside the calm dot, never "✕ not running":
+  // this screen wakes it on open (SessionScreen), and "not running" above "Waking…" would contradict it. Read off the
+  // ROW (`hibernatedSince`, both halves), the same fact the wake trigger reads; the dead override above stays.
+  const asleepAt = bucket === 'dead' && session != null ? hibernatedSince(session) : null;
 
   // `working` drives the visible clock's tempo; `busy` (the LIVE status, not
   // the snapshot's bucket) stays the gate on interrupting, because stopping a
@@ -250,7 +255,9 @@ export function SessionHeader({
   // D-5237: "restarted · out of memory · 3m ago" for an hour after a process end.
   const restart = session != null ? restartWords(session, now) : null;
   const word =
-    bucket === 'attention'
+    asleepAt !== null
+      ? 'hibernated'
+      : bucket === 'attention'
       ? 'waiting on you'
       : bucket === 'working'
         ? bgWords !== null
@@ -280,7 +287,7 @@ export function SessionHeader({
   // distinction colour must not carry alone. done/cleanup/archived take idle's
   // matte ink, exactly as their dots do (StatusDot's table).
   const variant =
-    bucket === 'attention' ? 'attention' : wcWords !== null ? 'idle' : working ? 'busy' : bucket === 'dead' ? 'dead' : 'idle';
+    bucket === 'attention' ? 'attention' : wcWords !== null || asleepAt !== null ? 'idle' : working ? 'busy' : bucket === 'dead' ? 'dead' : 'idle';
 
   // The substrate gate (spec §4): under a standing fault the console cannot
   // SEE this session, so Archive (and a main checkout's Restore) — an offer to act on a pane nobody can measure
@@ -336,7 +343,7 @@ export function SessionHeader({
         <div className="chat-meta">
           {bucket !== null && (
             <>
-              <StatusDot status={bucket} />
+              <StatusDot status={bucket} asleep={asleepAt !== null} />
               <span className={cn('status-line', `status-line--${variant}`, wcWords !== null && 'status-line--coordinator')} title={wcWords?.title ?? bgWords?.title}>
                 {wcWords !== null ? (
                   // D-5390: the phrase yields width before the parent's name does.

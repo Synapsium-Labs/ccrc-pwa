@@ -3,7 +3,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { FleetSession } from '../../shared/api';
-import { fleetSession } from './fleetFixture';
+import { fleetSession, hibernatedSession } from './fleetFixture';
 import { READER_MIN_COLS } from '../../shared/api';
 import { ToastHost } from '@ccrc/ui';
 import { SessionActionsSheet } from '../src/fleet/SessionActionsSheet';
@@ -184,8 +184,9 @@ describe('cleanup, guarded', () => {
 describe('archive and restore (workspace lifecycle §5.2: one Archive, Restore on the fold)', () => {
   /** The archive sheet's own confirm — its primary button, beside the actions sheet's same-named opener. */
   const confirmArchive = async (): Promise<void> => {
-    await waitFor(() => expect(document.querySelector('.archive-conflict-sheet .btn-primary')).not.toBeNull());
-    fireEvent.click(document.querySelector('.archive-conflict-sheet .btn-primary')!);
+    // The archive confirm is the danger variant now (D-5099); its hook class follows (D-5449).
+    await waitFor(() => expect(document.querySelector('.archive-conflict-sheet .btn-danger')).not.toBeNull());
+    fireEvent.click(document.querySelector('.archive-conflict-sheet .btn-danger')!);
   };
   const posted = (suffix: string) => vi.mocked(fetch).mock.calls.some((c) => String(c[0]).endsWith(suffix));
 
@@ -625,8 +626,8 @@ describe('the substrate gate — destructive affordances refuse a session nobody
     const session = s({ workspace: 'quiet-basin', archivedAt: null });
     renderSheet(session, { archive });
     fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
-    await waitFor(() => expect(document.querySelector('.archive-conflict-sheet .btn-primary')).not.toBeNull());
-    fireEvent.click(document.querySelector('.archive-conflict-sheet .btn-primary')!);
+    await waitFor(() => expect(document.querySelector('.archive-conflict-sheet .btn-danger')).not.toBeNull());
+    fireEvent.click(document.querySelector('.archive-conflict-sheet .btn-danger')!);
     const stop = await screen.findByRole('button', { name: 'Stop only' });
     expect(stop).toBeEnabled();
     (session as { substrate: FleetSession['substrate'] }).substrate = { at: 1, text: 'x' };
@@ -823,8 +824,8 @@ describe('a door that fails still says so, in ccd’s own words', () => {
     const archive = vi.fn().mockRejectedValue(new ApiError(409, { ok: false, error: 'worktree-gone' }));
     renderSheet(workspaceSession(), { archive: archive as unknown as typeof api.archive });
     fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
-    await waitFor(() => expect(document.querySelector('.archive-conflict-sheet .btn-primary')).not.toBeNull());
-    fireEvent.click(document.querySelector('.archive-conflict-sheet .btn-primary')!);
+    await waitFor(() => expect(document.querySelector('.archive-conflict-sheet .btn-danger')).not.toBeNull());
+    fireEvent.click(document.querySelector('.archive-conflict-sheet .btn-danger')!);
     const stopOnly = await screen.findByRole('button', { name: 'Stop only' });
 
     // Only now make the box refuse, so the archive path above is unaffected.
@@ -919,5 +920,50 @@ describe('the hold composer, past the arms already covered', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Hold' }));
     expect(screen.getByLabelText('Hold reason')).toHaveValue('');
+  });
+});
+
+// D-5242 (plan Task 18): `ccd forget` refuses a hibernated row (`hibernated`, D-5423), so the sheet never offers it
+// there; it offers Wake, which is the same `/ensure` the Restart button posts.
+describe('a hibernated row (D-5242)', () => {
+  const AT = Date.now() - 6 * 3_600_000;
+  const sleeper = (over: Partial<FleetSession> = {}): FleetSession =>
+    hibernatedSession(AT, { id: 'lane-a-project-a', wrapper: 'lane-a', home: 'lane-a', project: 'project-a', workspace: null, ...over });
+  const notes = () => [...document.querySelectorAll('.sess-sheet-note')].map((n) => n.textContent ?? '');
+
+  it('hides Forget and offers Wake, which posts /ensure', async () => {
+    renderSheet(sleeper());
+    expect(screen.queryByRole('button', { name: /forget session/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Restart session' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Wake session' }));
+    await waitFor(() => {
+      const calls = (fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.map((c) => String(c[0]));
+      expect(calls.some((u) => u.includes('/api/sessions/lane-a-project-a/ensure'))).toBe(true);
+    });
+  });
+
+  it('a failed wake says "Couldn\'t wake", never "Couldn\'t restart"', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (u: unknown) => (String(u).endsWith('/ensure')
+      ? new Response(JSON.stringify({ ok: false, stderr: 'tmux: no server running' }),
+        { status: 502, headers: { 'content-type': 'application/json' } })
+      : accountsRoute())));
+    renderSheet(sleeper());
+    fireEvent.click(screen.getByRole('button', { name: 'Wake session' }));
+    expect(await screen.findByText(/Couldn't wake/)).toBeInTheDocument();
+    expect(screen.queryByText(/Couldn't restart/)).toBeNull();
+  });
+
+  it('still offers Forget on a dead row with no hibernatedAt', () => {
+    renderSheet(sleeper({ hibernatedAt: null }));
+    expect(screen.getByRole('button', { name: /forget session/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Restart session' })).toBeInTheDocument();
+  });
+
+  it('the narrow-spawn note is absent on a hibernated narrow row and present on a dead one', () => {
+    renderSheet(sleeper({ spawnState: 'narrow' }));
+    expect(notes().join(' ')).not.toContain('that pane is gone');
+    cleanup();
+    renderSheet(sleeper({ spawnState: 'narrow', hibernatedAt: null }));
+    expect(notes().join(' ')).toContain('that pane is gone');
   });
 });

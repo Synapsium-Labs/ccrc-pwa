@@ -74,9 +74,10 @@ const ccrcIn = (home: string): string => join(home, 'ccrc', 'ccd', 'ccrc');
  *  instead, and there the closure has to be listed file by file — Task 33.)
  *
  *  IT ALSO MATERIALISES THE CONTAINMENT BINS, and that last line is not
- *  housekeeping. `ghContainedEnv` → `harnessBin` (ccdWsHelpers.ts:123-127) does
+ *  housekeeping. `ghContainedEnv` → `harnessBin` (ccdWsHelpers.ts) does
  *  `mkdirSync(<home>/.local/bin)` and then writes the `gh` poison
- *  (:177-179), and `env()` below writes its own poisons beside it — so
+ *  (`ghContainedEnv`'s first `fs.writeFileSync`), and `env()` below writes its
+ *  own poisons beside it — so
  *  `~/.local/bin` goes from ABSENT to one entry per poison the first time anything
  *  calls `run()`. A test that brackets a run with a directory snapshot — the
  *  shape "leaves the box alone" (below) checks with `existsSync`, not a
@@ -172,14 +173,15 @@ function buildEnv(home: string): NodeJS.ProcessEnv {
   // ever wants those to answer, and the two manager poisons are written on
   // every `run()` until a case plants Task 4's fake manager (above).
   // `ghContainedEnv` draws exactly this
-  // line for exactly this reason (ccdWsHelpers.ts:192-200, the guard at :233).
+  // line for exactly this reason (`ghContainedEnv`'s CREATE-IF-ABSENT comment and
+  // its guard `if (fs.existsSync(p)) continue;`).
   // Without it `_acct_live` (Task 28) reaches the DEVELOPER's tmux server: this
   // runner keeps the real PATH, and a box that happens to have a server running
   // would answer `measured` where a box that does not would answer `null`.
   //
   // IT IS THIS FILE'S OWN POISON RATHER THAN `ghContainedEnv(…, {tmux:true})`,
   // and the difference is the LOG NAME. That one records into `$HOME/tmux-calls`
-  // (ccdWsHelpers.ts:229), which is also where `plantTmux` below records — so
+  // (`ghContainedEnv`'s `tmux` row), which is also where `plantTmux` below records — so
   // "the poison answered" and "the fixture's own tmux answered" would be the
   // same file, and the case that asserts tmux was never asked could not tell a
   // silent poison from an absent stub. `$HOME/tmux-poison` keeps the two
@@ -627,7 +629,7 @@ describe('ccrc account candidates: doctor\'s own rule, and sizes only', () => {
     //
     // POISONING `stat` IS THE WAY IN. `_plat_size` shells out to it
     // (ccd/ccrc:150), and `ghContainedEnv` puts `<home>/.local/bin` FIRST on
-    // PATH (ccdWsHelpers.ts:185), so a shim there outranks the real one — the
+    // PATH (its returned `PATH: ${bin}:…`), so a shim there outranks the real one — the
     // same mechanism as this file's `env()` poisons for curl/systemctl/launchctl.
     // It is planted per-CASE rather than in `env()` because a box with no
     // working `stat` is this one case's subject and every other case's broken
@@ -737,7 +739,7 @@ describe('ccrc account candidates: doctor\'s own rule, and sizes only', () => {
 
   it('a bin directory with nothing account-shaped in it answers an empty list, not a refusal', () => {
     // NOT an empty directory, and the name says so: `ghContainedEnv` +
-    // `harnessBin` (ccdWsHelpers.ts:123-127) create `<home>/.local/bin` and
+    // `harnessBin` (ccdWsHelpers.ts) create `<home>/.local/bin` and
     // plant `gh`, and this file's own `env()` plants curl/systemctl/launchctl,
     // tmux (since Task 28) and systemd-run (since Plan 2b-2) beside it. All SIX
     // are id-shaped `#!`
@@ -8401,7 +8403,7 @@ describe('ccrc account check: auth status', () => {
     // No `linkReal` is needed and none exists in this file: unlike
     // `ccrc-doctor.test.ts`, this suite's `env()` KEEPS the real PATH
     // (`ghContainedEnv` PREPENDS the fixture bin rather than replacing PATH,
-    // ccdWsHelpers.ts:185), so `_plat_timeout` finds the box's own `timeout`
+    // its returned `PATH: ${bin}:…`), so `_plat_timeout` finds the box's own `timeout`
     // and the stub finds `sleep`. `ccrc-cli.test.ts:80-86` says the same thing
     // about the same runner, from the other side.
     const home = box('ccrc-account-check-authslow-');
@@ -8703,7 +8705,7 @@ describe('ccrc account check: why there was no verdict, and what bounds the answ
         // value timeout(1) would reject, BEFORE the call. What is left is
         // timeout(1) failing for one of its OWN reasons, which is the condition
         // GNU documents 125 for — stood in for by a shim on the fixture PATH,
-        // which `ghContainedEnv` PREPENDS (ccdWsHelpers.ts:185) so it wins over
+        // which `ghContainedEnv` PREPENDS (its returned `PATH: ${bin}:…`) so it wins over
         // the box's real coreutils. Without this the branch would ship
         // unmeasured, which is the thing this wave is counting.
         writeFileSync(join(home, '.local', 'bin', 'timeout'),

@@ -1083,7 +1083,7 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
     W3: ['history-steer-files'],
   } as const;
   type HistoryPr = keyof typeof HISTORY_ROWS_BY_PR;
-  const HISTORY_LANDED: readonly HistoryPr[] = ['B1', 'B2'];
+  const HISTORY_LANDED: readonly HistoryPr[] = ['B1', 'B2', 'B3'];
 
   it('the history classes are §9.4\'s thirteen, each declared by the PR its Lands-in column names, and none before it (O17)', () => {
     const all: string[] = Object.values(HISTORY_ROWS_BY_PR).flat();
@@ -1208,6 +1208,63 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
     expect(c!.collector).toContain('run-tmp.globalsetup.mjs');
     expect(c!.collector).toContain('RUN_QUIET_S');
     expect(`${c!.collector} ${c!.bound}`, 'the row carries a copy of RUN_QUIET_S\'s number').not.toContain(String(RUN_QUIET_S));
+  });
+
+  // ── ccrc history W1-B3 (spec 2026-10-05 §9.4, O17's B3 half) ────────────
+  // The card line's two classes. Both are rolling (R):
+  //   - the hook rewrites a session's scope marker on every PreCompact;
+  //   - the sweep rewrites, consumes, withdraws and collects the card predictions.
+  // Each collector promise has its own case in history-card.test.ts:
+  //   - consumption: consumeAndWriteCards, counters card_consumed:<scope>;
+  //   - withdrawal on a pass that runs no card step: withdrawCards, counters card_withdrawn:<reason>;
+  //   - the 7-day purge: collectPurgedHistoryFiles, counters scope_files_purged and card_files_purged.
+  // A collector promise with no test can go false without a red, which is why each one names its case here.
+  it('declares history-scope-markers: an R class the hook writes and the sweep collects once its session is purged', () => {
+    const c = LIFECYCLE.find((x) => x.name === 'history-scope-markers');
+    expect(c, 'shared/lifecycle.ts declares no history-scope-markers class').toBeTruthy();
+    expect(c!.pattern).toBe('R');
+    expect(c!.creators).toEqual(['ccd/session-hook.sh']);
+    expect(c!.collector).toContain('ccd-history-sweep');
+    expect(c!.collector).toContain('the files of purged sessions after 7 days');
+    expect(c!.root).toBe('~/.ccrc/history/scope/<id>');
+    expect(c!.tier).toBe('<=64 B per session');
+    expect(c!.ruling).toBeNull();
+  });
+
+  it('declares history-card-files: an R class the sweep writes through card.mjs, deletes on consumption, withdraws on a pass that runs no card step and collects once its session is purged', () => {
+    const c = LIFECYCLE.find((x) => x.name === 'history-card-files');
+    expect(c, 'shared/lifecycle.ts declares no history-card-files class').toBeTruthy();
+    expect(c!.pattern).toBe('R');
+    expect(c!.creators).toEqual(['ccd/history/sweep.mjs (through card.mjs)']);
+    expect(c!.collector).toContain('ccd-history-sweep');
+    expect(c!.collector).toContain('deleted on consumption');
+    expect(c!.collector).toContain('withdrawn by a pass that runs no card step');
+    expect(c!.collector).toContain('the files of purged sessions after 7 days');
+    // §9.4: the record goes with its session's files.
+    expect(c!.collector).toContain('the record included');
+    expect(c!.root).toContain('~/.ccrc/history/card/<id>/<uuid>.txt');
+    // R-recalloff-parity: the generation record Task 5 writes beside each prediction is in the same class, and
+    // §9.4 names it in the root column.
+    expect(c!.root, 'the class names no generation record').toContain('generation record <uuid>.gen');
+    expect(c!.tier).toBe('<=512 B per session');
+    expect(c!.ruling).toBeNull();
+  });
+
+  it("the B3 rows' numbers are the code's own: 7 days is PURGED_FILES_GRACE_MS, 512 B is CARD_LINE_MAX", async () => {
+    // The manifest is L0 and imports nothing, so its prose numbers are bound here instead. The writer prints only
+    // a grammar-valid line (at most 145 characters, 152 bytes with its LF), so the reader's CARD_LINE_MAX
+    // character cap is the file's bound; with its generation record (37 B, R-recalloff-parity) a session holds at
+    // most 189 B there.
+    const { PURGED_FILES_GRACE_MS, CARD_LINE_MAX } = await import('../../ccd/history/lib.mjs');
+    const days = PURGED_FILES_GRACE_MS / 86_400_000;
+    expect(Number.isInteger(days), 'PURGED_FILES_GRACE_MS is not a whole number of days').toBe(true);
+    for (const n of ['history-scope-markers', 'history-card-files']) {
+      const c = LIFECYCLE.find((x) => x.name === n);
+      expect(c, `shared/lifecycle.ts declares no ${n} class`).toBeTruthy();
+      expect(c!.collector, `${n}'s collector names another grace than the sweep's`)
+        .toContain(`the files of purged sessions after ${days} days`);
+    }
+    expect(LIFECYCLE.find((x) => x.name === 'history-card-files')!.tier).toBe(`<=${CARD_LINE_MAX} B per session`);
   });
 });
 

@@ -314,6 +314,13 @@ export const CCD_ARGV = {
    *  plain sessions never had. ccd re-proves every gate on the box (not a
    *  workspace, not held, not alive); this argv carries nothing but the id. */
   forget:    (id: string) => argv(['forget', id]),
+  /** Put a long-idle session to sleep (`hibernate-long-idle-sessions` (D-5242)): ccd re-measures box-local idle at the
+   *  act (the live word, the pane, a draft, the turn marker's `bg` and `crons`, a hold, an opt-out, a fresh swap and an
+   *  attached terminal) and refuses `session-busy: <reason>` at exit 3 otherwise, touching nothing. ONE positional, the
+   *  id, then the dec — stripped by ccd before its arity rule, as `ws-archive`'s are (`ccdargv-dec-parity.test.ts`;
+   *  `hibernate-verb-dec-and-idempotence` (D-5424)).
+   *  Sent only behind `verbSupported` (the box's `ccd caps` lists `hibernate`); `ensure` wakes it. */
+  hibernate: (id: string, dec: ActorFlags | null) => argv(['hibernate', id, ...decFlags(dec)]),
   swap:      (id: string, w: string) => argv(['swap', id, w]),
   /** THE DELIBERATE CROSSING (account pools, spec §5.7). A SEPARATE ENTRY, not
    *  a parameter of `swap` above — `start`/`enable`'s rule, for its reason: a

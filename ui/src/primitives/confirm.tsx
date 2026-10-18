@@ -12,8 +12,8 @@
 //
 // `qc-consequence` and `qc-actions` are structural hooks, not styling — see
 // button.tsx's note. Callers and tests reach the confirm button through
-// `.qc-actions .btn-primary`, because the opener button behind the sheet
-// matches the same role and name.
+// `.qc-actions .btn-primary` (`.btn-danger` under `tone="danger"`), because
+// the opener button behind the sheet matches the same role and name.
 import type { ReactNode } from 'react';
 import { Button } from './button';
 import { Sheet } from './sheet';
@@ -48,6 +48,12 @@ export interface QuickConfirmProps {
   onConfirm: () => void;
   open: boolean;
   onClose: () => void;
+  /** What the confirm does (D-5099). `commit` (the default) is the phosphor
+   *  `primary`; `danger` is the filled red `danger` button, for a confirm that
+   *  destroys something (the fleet host's reboot, Archive all). Cancel is the
+   *  ghost either way. A caller reaching the confirm by its hook class reads
+   *  `.qc-actions .btn-danger` under `danger`. */
+  tone?: 'commit' | 'danger';
 }
 
 export function QuickConfirm({
@@ -57,6 +63,7 @@ export function QuickConfirm({
   onConfirm,
   open,
   onClose,
+  tone = 'commit',
 }: QuickConfirmProps): ReactNode {
   const lines = typeof consequence === 'string' ? [consequence] : consequence;
   return (
@@ -68,6 +75,7 @@ export function QuickConfirm({
       ))}
       <div className={QC_ACTIONS}>
         <Button
+          variant={tone === 'danger' ? 'danger' : 'primary'}
           onClick={() => {
             onConfirm();
             onClose();

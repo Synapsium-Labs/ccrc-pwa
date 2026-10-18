@@ -38,6 +38,8 @@ describe('seen watermark', () => {
     expect(isUnseen(s({ bucket: 'working' }), {})).toBe(false);
     expect(isUnseen(s({ bucket: 'idle' }), {})).toBe(false);
     expect(isUnseen(s({ bucket: 'dead' }), {})).toBe(false);
+    // D-5242: a hibernated row is `dead` with `hibernatedAt`, so it is never badged — asleep is not news.
+    expect(isUnseen(s({ bucket: 'dead', status: 'dead', hibernatedAt: 1000 }), {})).toBe(false);
     expect(isUnseen(s({ bucket: 'archived' }), {})).toBe(false);
   });
 

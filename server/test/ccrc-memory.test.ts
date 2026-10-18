@@ -3,6 +3,8 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
+import { ccrcContainedEnv } from './ccrcContainment.js';
+import { assertNoRealTool } from './containedTools.js';
 // The scratch vocabulary has ONE home: server/test/scratchSlugs.ts. Its
 // comment carries the rule, why /var/tmp is the negative control, and why
 // the Darwin spelling of that control is the one a Linux-only pin misses.
@@ -13,10 +15,15 @@ let home: string;
 beforeEach(() => { home = mkTmp('ccrc-memory-'); });
 afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
 
+/** The env every spawn of ccrc in this file runs under (wave 18, R14(b)): the fixture HOME and bus, and a recording
+ *  poison for every CONTAINED_TOOLS name first on PATH. `extra` lands last, as the old literal's did. */
+const memEnv = (extra: Record<string, string> = {}): NodeJS.ProcessEnv =>
+  ({ ...ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' }), ...extra });
+
 const run = (args: string[], extraEnv: Record<string, string> = {})
   : { code: number; out: string } => {
   const r = spawnSync('bash', [CCRC, ...args],
-    { env: { ...process.env, HOME: home, ...extraEnv }, encoding: 'utf8' });
+    { env: memEnv(extraEnv), encoding: 'utf8' });
   return { code: r.status ?? -1, out: `${r.stdout ?? ''}${r.stderr ?? ''}` };
 };
 
@@ -26,6 +33,12 @@ function seed(homeSuffix: string, slug: string, files: Record<string, string>): 
   fs.mkdirSync(d, { recursive: true });
   for (const [n, c] of Object.entries(files)) fs.writeFileSync(path.join(d, n), c);
 }
+
+describe('ccrc memory runs contained (wave 18, R14(b))', () => {
+  it('the env every spawn here uses passes assertNoRealTool', () => {
+    expect(() => assertNoRealTool(memEnv(), home)).not.toThrow();
+  });
+});
 
 describe('ccrc memory — the census', () => {
   it('names a home that holds a plain memory directory', () => {
@@ -275,7 +288,8 @@ describe('ccrc memory --apply — the union', () => {
       + 'for a in "$@"; do [ "$a" = "$RACE_LINK" ] && ln -s "$RACE_STORE" "$RACE_LINK" 2>/dev/null; done\n'
       + 'exit $rc\n', { mode: 0o755 });
     const r = run(['memory', '--apply'], {
-      PATH: `${bin}:${process.env['PATH'] ?? ''}`,
+      // Ahead of the contained PATH (its poisons stay ahead of the system's), never of the parent's.
+      PATH: `${bin}:${memEnv()['PATH'] ?? ''}`,
       RACE_LINK: link, RACE_STORE: store,
     });
     expect(r.code, r.out).toBe(0);
@@ -405,7 +419,7 @@ describe('ccrc memory --apply — the union', () => {
     const r = spawnSync('bash', ['-c',
       'source "$1"; left=$(_mem_absorb "$2" "$2" corp) && printf \'left=%s\\n\' "$left"',
       'wrapper', CCRC, store],
-      { env: { ...process.env, HOME: home }, encoding: 'utf8' });
+      { env: memEnv(), encoding: 'utf8' });
     expect(r.status, `stderr: ${r.stderr}`).toBe(0);
     expect(r.stdout.trim()).toBe('left=0');
     // nothing in the store was touched by the self-absorb
@@ -932,7 +946,7 @@ describe('ccrc memory --apply — the union', () => {
     const r = spawnSync(
       'bash',
       ['-c', 'ulimit -c 0; ulimit -f 1; exec bash "$1" memory --apply', 'wrapper', CCRC],
-      { env: { ...process.env, HOME: home }, encoding: 'utf8' },
+      { env: memEnv(), encoding: 'utf8' },
     );
     const out = `${r.stdout ?? ''}${r.stderr ?? ''}`;
     expect(r.status).not.toBe(0);
@@ -960,7 +974,7 @@ describe('ccrc memory --apply — the union', () => {
     const r = spawnSync(
       'bash',
       ['-c', 'ulimit -c 0; ulimit -f 1; exec bash "$1" memory --apply', 'wrapper', CCRC],
-      { env: { ...process.env, HOME: home }, encoding: 'utf8' },
+      { env: memEnv(), encoding: 'utf8' },
     );
     const out = `${r.stdout ?? ''}${r.stderr ?? ''}`;
     expect(r.status).not.toBe(0);

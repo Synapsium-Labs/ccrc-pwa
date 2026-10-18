@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import type { FleetSession } from '../../shared/api';
-import { fleetSession as baseSession } from './fleetFixture';
+import { fleetSession as baseSession, hibernatedSession } from './fleetFixture';
 import { Sheet, ToastHost } from '@ccrc/ui';
 import { api, ApiError } from '../src/lib/api';
 import { SessionHeader, type SessionHeaderProps } from '../src/session/SessionHeader';
@@ -643,8 +643,9 @@ describe('the substrate gate — Archive, Restart and Restore refuse a session n
     // The sheet's own confirm button — by wrapper class, since the menu's
     // same-named opener may still be unmounting behind it (the actions-sheet
     // suite's Release idiom).
-    await waitFor(() => expect(document.querySelector('.archive-conflict-sheet .btn-primary')).not.toBeNull());
-    fireEvent.click(document.querySelector('.archive-conflict-sheet .btn-primary')!);
+    // The archive confirm is the danger variant now (D-5099); its hook class follows (D-5449).
+    await waitFor(() => expect(document.querySelector('.archive-conflict-sheet .btn-danger')).not.toBeNull());
+    fireEvent.click(document.querySelector('.archive-conflict-sheet .btn-danger')!);
     expect(spy).not.toHaveBeenCalled();
     expect(await screen.findByText(/tmux unreachable — x/)).toBeInTheDocument();
   });
@@ -1271,5 +1272,32 @@ describe('the quiet "with coordinator" state (D-5296)', () => {
   it('the chat does not pulse while the parent holds the question', () => {
     expect(chatPulsing(held(), 'idle')).toBe(false);
     expect(chatPulsing(held({ withCoordinator: null }), 'idle')).toBe(true);
+  });
+});
+
+// D-5242 (plan Task 18): the session's own screen never shows "not running" above "Waking…".
+describe('the header of a hibernated row (D-5242)', () => {
+  const AT = Date.now() - 6 * 3_600_000;
+  it('a dead row with hibernatedAt reads `hibernated` with the calm dot, never "not running"', () => {
+    renderHeader({ status: 'dead', session: hibernatedSession(AT, { id: 'project-a-quiet-basin', project: 'project-a' }) });
+    expect(screen.getByText('hibernated')).toBeInTheDocument();
+    expect(screen.queryByText('not running')).toBeNull();
+    const dot = screen.getByRole('img', { name: 'hibernated' });
+    expect(dot.className).toMatch(/dot--idle/);
+    // The word wears the calm ink too, not the dead tone: colour must not contradict "Waking…" below.
+    const line = screen.getByText('hibernated').closest('.status-line');
+    expect(line?.className).toMatch(/status-line--idle/);
+    expect(line?.className).not.toMatch(/status-line--dead/);
+  });
+
+  it('the stream saying dead over a sleeping row still reads hibernated', () => {
+    renderHeader({ status: 'dead', session: hibernatedSession(AT, { id: 'project-a-quiet-basin', project: 'project-a' }) });
+    expect(screen.queryByRole('img', { name: 'not running' })).toBeNull();
+  });
+
+  it('a dead row without hibernatedAt still reads "not running"', () => {
+    renderHeader({ status: 'dead', session: fleetSession({ status: 'dead', bucket: 'dead' }) });
+    expect(screen.getByText('not running')).toBeInTheDocument();
+    expect(screen.queryByText('hibernated')).toBeNull();
   });
 });

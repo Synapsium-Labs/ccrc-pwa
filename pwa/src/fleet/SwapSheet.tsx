@@ -14,13 +14,14 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { FleetSession } from '../../../shared/api';
 import { SWAP_REFUSALS, isSwapRefusal, type SwapRefusal } from '../../../shared/api';
-import { QuickConfirm, Sheet, toast } from '@ccrc/ui';
+import { Button, QuickConfirm, Sheet, toast } from '@ccrc/ui';
 import { accountLabel, accountPool } from '../lib/accounts';
 import { ApiError, SWAP_REFUSAL_TEXT, api, failedTo } from '../lib/api';
 import { projectPoolOf, splitByPool } from '../lib/pools';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { useAccountUsage } from './useProjectedHome';
 import { AccountRow } from './AccountRow';
+import { hibernatedSince } from './hibernated';
 import { OtherPoolsDisclosure } from './chips';
 import {
   disabledWrappers, factsFor, leastLoaded, pickableWrappers, pickerEmptiness,
@@ -73,7 +74,7 @@ export interface SwapSheetProps {
    *      below and nowhere else. */
   session: Pick<FleetSession, 'id' | 'wrapper' | 'project'>
     & { home: string | null }
-    & Partial<Pick<FleetSession, 'held'>>;
+    & Partial<Pick<FleetSession, 'held' | 'status' | 'hibernatedAt'>>;
   open: boolean;
   onClose: () => void;
   /** Injectable for tests; defaults to the app-wide fleet store. */
@@ -87,6 +88,7 @@ export function SwapSheet({
   fleet = useFleetStore,
 }: SwapSheetProps): ReactNode {
   const sessions = fleet((s) => s.sessions);
+  const asleep = session.status !== undefined && hibernatedSince({ status: session.status, hibernatedAt: session.hibernatedAt }) !== null;
   const roster = fleet((s) => s.roster);
   const pools = fleet((s) => s.pools);
   // The target awaiting its consequence confirm (null = still browsing).
@@ -193,7 +195,10 @@ export function SwapSheet({
         if (refusal === SWAP_REFUSALS.sessionBusy && !interrupt && id === shownId.current) {
           return setBusyAsk({ id, project, wrapper, cross });
         }
-        toast(refusal !== null ? `Couldn't move ${project} — ${SWAP_REFUSAL_TEXT[refusal]}` : failedTo('move', err), 'error');
+        // D-5242: a row that went to sleep between the sheet's frame and the tap is refused `409 hibernated`; the toast's
+        // action is the remedy, the same `ensure` the sheet's own Wake posts.
+        const action = refusal === SWAP_REFUSALS.hibernated ? { label: 'Wake', onClick: () => wakeSession(id, project) } : undefined;
+        toast(refusal !== null ? `Couldn't move ${project} — ${SWAP_REFUSAL_TEXT[refusal]}` : failedTo('move', err), 'error', action);
       }
     })();
     onClose();
@@ -247,6 +252,18 @@ export function SwapSheet({
   return (
     <>
       <Sheet open={open} onClose={onClose} eyebrow="move session" title="Move to another account">
+        {asleep ? (
+          // D-5242: a sleeping session has no process to move (the swap route refuses it `409 hibernated`), so the
+          // sheet offers the one act that applies: wake it, then move it.
+          <>
+            <p className="sheet-copy">
+              {session.project} is asleep, so there is nothing running to move. Wake it, then move it.
+            </p>
+            <Button variant="ghost" onClick={() => { wakeSession(session.id, session.project); onClose(); }}>
+              Wake session
+            </Button>
+          </>
+        ) : (<>
         <p className="sheet-copy">
           {session.project} runs on {accountLabel(roster, session.wrapper)} now.{' '}
           {sheetCopy}{' '}
@@ -295,6 +312,7 @@ export function SwapSheet({
             )}
           </>
         ) : null}
+        </>)}
       </Sheet>
       <QuickConfirm
         open={target !== null}
@@ -332,6 +350,11 @@ export function SwapSheet({
       />
     </>
   );
+}
+
+/** D-5242: wake a sleeping session (`POST /api/sessions/:id/ensure`), saying so only when it fails. */
+function wakeSession(id: string, project: string): void {
+  api.ensure(id).catch((err: unknown) => { toast(failedTo(`wake ${project}`, err), 'error'); });
 }
 
 /** The swap route's refusal code a failure carries (`409 {error}`, D-5240), or `null` for any other failure. */

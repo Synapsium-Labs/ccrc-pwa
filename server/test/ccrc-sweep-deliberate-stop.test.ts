@@ -164,9 +164,11 @@ describe('the move INTO wave 11: the pre-wave-11 _upd_sweep (frozen, v0.0.60–v
 
   itLinux('X0c the frozen sweep\'s helpers are v0.0.84\'s', () => {
     const ccrc = readFileSync(CCRC_SRC, 'utf8');
+    // `_upd_phase` gained its eighth key in wave 17 (D-5314), so v0.0.84's copy is frozen in the fixture, below the sweep.
+    const frozen = readFileSync(FROZEN_SWEEP, 'utf8');
     for (const [name, want] of HELPER_SHAS) {
-      const text = extractHelper(ccrc, name);
-      expect(text, `${name} not found in ccd/ccrc`).not.toBeNull();
+      const text = extractHelper(name === '_upd_phase' ? frozen : ccrc, name);
+      expect(text, `${name} not found in ${name === '_upd_phase' ? 'the frozen fixture' : 'ccd/ccrc'}`).not.toBeNull();
       expect(sha256(text!), `${name} differs from v0.0.84's copy — freeze v0.0.84's copy into `
         + 'fixtures/upd-sweep-pre-wave11.bash (below the function) before changing it').toBe(want);
     }

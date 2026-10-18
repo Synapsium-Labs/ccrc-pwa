@@ -93,18 +93,28 @@ export const RESET_LIST = 'list-none m-0 p-0 grid';
 // there is that a state is never read out of colour alone. These three are not
 // per-state: they are one idea with one spelling, and the reason they are here
 // rather than in a `Record` is that both packages draw them.
+//
+// U+FE0E, TEXT PRESENTATION (D-5100). Each of the three is an emoji-capable
+// character, and some platforms draw a bare one as a colour emoji: the
+// platform's colours, not the palette's. The variation selector asks for the
+// text glyph, in the surrounding ink. Where the mark is a drawn icon instead
+// (`MailBadge`, `MailCard`, `MailStrip`) it is `Icon mail`; these constants
+// stay for the places that are text (MailScreen's kind column, `runWords`'
+// dispatch glyphs, SessionMeta's warning). A comparison reads the constant,
+// never a literal, so the selector never splits a test from the code.
 // ---------------------------------------------------------------------------
 
-/** Mail. Drawn by `MailBadge` (app), `MailCard` and `MailStrip` (this
- *  package) — three production sites across the two packages, each with its own
- *  copy of the character before this. */
-export const MAIL_GLYPH = '✉';
+/** Mail, as text: MailScreen's kind column. `MailBadge` (app), `MailCard` and
+ *  `MailStrip` (this package) drew it too, three sites across the two packages
+ *  each with its own copy of the character, until they became `Icon mail`
+ *  (D-5100). */
+export const MAIL_GLYPH = '✉\uFE0E';
 
 /** A warning the surface has no room to spell out. `SessionLine`'s own header
  *  carries the argument: on a phone the sentence becomes this mark, and the
  *  full text lives in the actions sheet where there is room for it. Also
  *  `DISPATCH_GLYPH.stalled`. */
-export const WARN_GLYPH = '⚠';
+export const WARN_GLYPH = '⚠\uFE0E';
 
 /** Settings — the door's glyph, and the feed's word for a coordination event. */
-export const SETTINGS_GLYPH = '⚙';
+export const SETTINGS_GLYPH = '⚙\uFE0E';

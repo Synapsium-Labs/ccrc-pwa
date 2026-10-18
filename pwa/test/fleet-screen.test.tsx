@@ -364,6 +364,42 @@ describe('FleetScreen', () => {
     expect(screen.getByRole('button', { name: /mail — 1 unread/i })).toBeInTheDocument();
   });
 
+  // D-5431 (operator ruling 2026-10-18): an `interrupt` record stays in Mail but never raises the door's count, and
+  // ONLY that kind changes — the other record-only kinds (`coord`, `update`, `queue`, `nudge`) still count. The rows
+  // copy the server's own shape (`server/src/interruptlog.ts`: title `interrupt · <source>`, body
+  // `interruptEventBody`, no run), every one of them past the ack.
+  it("an interrupt record never raises the mail door's count; every other record-only kind still does (D-5431)", () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    const stamp = Date.now();
+    act(() => { ack(FEED_ACK_KEY, stamp); });
+    const after = stamp + 60_000;
+    seed(store, {
+      conn: 'open',
+      sessions: [],
+      feed: [
+        { seq: 1, at: after, kind: 'interrupt', sessionId: 'proj-a-s1', title: 'interrupt · keycap', body: 'source=keycap outcome=sent', runId: null },
+        { seq: 2, at: after + 1, kind: 'interrupt', sessionId: 'proj-a-s1', title: 'interrupt · escape-key', body: 'source=escape-key outcome=not-busy', runId: null },
+        { seq: 3, at: after + 2, kind: 'interrupt', sessionId: 'proj-a-s1', title: 'interrupt · drawer-escape', body: 'source=drawer-escape outcome=sent', runId: null },
+      ],
+    });
+    expect(screen.getByRole('button', { name: /mail — nothing unread/i })).toBeInTheDocument();
+
+    seed(store, {
+      conn: 'open',
+      sessions: [],
+      feed: [
+        { seq: 1, at: after, kind: 'interrupt', sessionId: 'proj-a-s1', title: 'interrupt · keycap', body: 'source=keycap outcome=sent', runId: null },
+        { seq: 2, at: after + 1, kind: 'coord', sessionId: '', title: 'caps changed', body: 'workers 3 → 5, per day 12 → 12', runId: null },
+        { seq: 3, at: after + 2, kind: 'update', sessionId: '', title: 'update fleet: auto update to v0.0.10', body: 'auto update from v0.0.9 to v0.0.10', runId: null },
+        { seq: 4, at: after + 3, kind: 'queue', sessionId: 'proj-a-s1', title: 'dequeued proj-a-s1', body: 'PR #42 left the merge queue without landing', runId: null },
+        { seq: 5, at: after + 4, kind: 'nudge', sessionId: 'proj-a-s1', title: '↻ Nudging after idle compaction', body: 'Nudging with a "continue" prompt after an idle compaction left open tasks (compaction k1)', runId: null },
+        { seq: 6, at: after + 5, kind: 'mail', sessionId: 'proj-a-s1', title: 'unread', body: '', runId: null },
+      ],
+    });
+    expect(screen.getByRole('button', { name: /mail — 5 unread/i })).toBeInTheDocument();
+  });
+
   it('renders notices as dismissible banners', () => {
     const store = makeStore();
     render(<FleetScreen store={store} />);

@@ -1519,7 +1519,9 @@ export function registerCoordRoutes(
       configDir: (wrapper: string) => configDirFor(deps.cfg, wrapper),
       // D-5238: the live `/clear` gate's reads — `turnverdict.ts`, their one home, over the watcher this function
       // already receives (thunks: each call reads the watcher's newest pane-scraped pieces).
-      turnVerdict: (rec, uuid) => turnVerdictFor(turnReads, rec, uuid) };
+      turnVerdict: (rec, uuid) => turnVerdictFor(turnReads, rec, uuid),
+      // D-5242: the wake budget's one list, the watcher's (optional: a test's stand-in watcher may carry none).
+      ...(watcher?.admitWake === undefined ? {} : { admitWake: (kind: 'asked', sid: string) => watcher.admitWake(kind, sid) }) };
     const run = () => coordMutex.run(() => dispatchRun(dispatchDeps, id, body.brief, body.items, body.route));
     const outcome = await run();
     // D-5238: a pane this dispatch STARTED and has not published a live file. The wait is HERE, outside
@@ -3331,7 +3333,7 @@ export function registerCoordRoutes(
         // a degraded row is `unmeasurable`, never absent (it is in the list).
         const deliverable = peerDeliverable({
           registry: s.unmeasured.length > 0 ? 'unmeasurable' : 'measured',
-          tmux: 'live', panePid: 0, lifecycle,
+          tmux: 'live', panePid: 0, lifecycle, hibernated: s.hibernatedAt !== null,
         });
         const rec = recById.get(s.id);
         return {
@@ -3342,6 +3344,7 @@ export function registerCoordRoutes(
           lifecycle, deliverable,
           archivedAt: s.archivedAt,
           archivedStale: archiveContradicted(s.archivedAt, lifecycle),
+          hibernatedAt: s.hibernatedAt,
           held: s.held,
           intent: byHolder.get(s.id)?.intent ?? null,
           claimedPaths: byHolder.get(s.id)?.paths ?? [],
@@ -3465,16 +3468,16 @@ export function registerCoordRoutes(
           if (row) {
             return peerDeliverable({
               registry: row.unmeasured.length > 0 ? 'unmeasurable' : 'measured',
-              tmux: 'live', panePid: 0, lifecycle: row.lifecycle ?? 'unmeasurable',
+              tmux: 'live', panePid: 0, lifecycle: row.lifecycle ?? 'unmeasurable', hibernated: row.hibernatedAt !== null,
             });
           }
           if (names === null) {
             return peerDeliverable({ registry: 'unmeasurable', tmux: 'unknown',
-              panePid: null, lifecycle: 'unmeasurable' });
+              panePid: null, lifecycle: 'unmeasurable', hibernated: false });
           }
           return peerDeliverable({
             registry: names.includes(`${id}.uuid`) ? 'unmeasurable' : 'absent',
-            tmux: 'unknown', panePid: null, lifecycle: 'unmeasurable',
+            tmux: 'unknown', panePid: null, lifecycle: 'unmeasurable', hibernated: false,
           });
         };
         const conflicts: ClaimConflict[] = r.conflicts.map((c) => {

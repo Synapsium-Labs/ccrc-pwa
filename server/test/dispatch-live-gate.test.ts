@@ -53,6 +53,8 @@ interface BoxCfg {
   /** Real wall time an `onRequest` hook spends before the route runs (D-5378): event-loop turns in which the
    *  dispatch has begun but has nothing of the box in flight yet. */
   requestDelayMs?: number;
+  /** The watcher's wake budget (D-5242): every `admitWake` call is recorded here as `<kind>:<id>`, answered `admit`. */
+  wakes?: { calls: string[]; admit: boolean };
 }
 
 let open: FastifyInstance[] = [];
@@ -134,8 +136,11 @@ const box = async (cfg: BoxCfg = {}) => {
       return (f as (...x: unknown[]) => unknown).apply(base0.io, a);
     })])) as unknown as typeof base0.io,
   };
+  const wakes = cfg.wakes;
   const watcher = { currentPending: () => new Set(cfg.pending ?? []), currentStatuslines: () => new Map(),
-    stop: () => {} } as unknown as FleetWatcher;
+    stop: () => {},
+    ...(wakes === undefined ? {} : { admitWake: (k: string, id: string) => { wakes.calls.push(`${k}:${id}`); return wakes.admit; } }),
+  } as unknown as FleetWatcher;
   const app = await buildServer({ ...base, mailToken: TOKEN, coord }, new Bus(), watcher);
   open.push(app);
   const requestDelay = cfg.requestDelayMs;
@@ -161,8 +166,9 @@ const box = async (cfg: BoxCfg = {}) => {
 // interleaving with its writes moved. A pending timer alone is no better a sign: any fake timer the route did not arm
 // reads as parked, and a case's write lands inside the first decision (the pause case pins this with one).
 
-/** Real wall time any one wait on the code under test may take before the case fails. */
-const REAL_BOUND_MS = 20_000;
+/** Real wall time any one wait on the code under test may take before the case fails. Below `vitest.config.ts`'s Linux
+ *  `testTimeout` (20 000 ms), so the named error below surfaces before vitest's own `Test timed out`. */
+const REAL_BOUND_MS = 10_000;
 const turn = (): Promise<void> => new Promise<void>((r) => { setImmediate(r); });
 /** Wait `ms` of REAL time, through event-loop turns (the faked `setTimeout` cannot). */
 const realDelay = async (ms: number): Promise<void> => {
@@ -263,6 +269,31 @@ describe('the dispatch /clear gate needs the live file measured idle (D-5238)', 
     expect(res.json()).toEqual({ ok: false, refused: 'status-unmeasurable' });
     expect(elapsed).toBeLessThan(DISPATCH_SPAWN_POLL_MS);
     expect(b.n['ensure']).toBe(1);
+  });
+
+  // D-5242: a resume whose row is hibernated is an ASKED wake — recorded in the fleet-wide wake budget's window beside
+  // its `ensure`, and never refused for it (a full window answers admit:false; the dispatch goes ahead regardless).
+  it('a resume onto a hibernated worker records an asked wake beside its ensure, and is never refused for the budget', async () => {
+    for (const admit of [true, false]) {
+      const wakes = { calls: [] as string[], admit };
+      const b = await box({ wakes });
+      writeFileSync(path.join(b.home, '.cc-sessions', `${ID}.hibernated`), '1799974800 7');
+      hookDone(b.home);
+      live(b.home, 'idle');
+      const res = await b.dispatch();
+      expect(res.statusCode, res.body).toBe(200);
+      expect(wakes.calls, `admit ${admit}`).toEqual([`asked:${ID}`]);
+      expect(b.n['ensure'], `admit ${admit}`).toBe(1);
+    }
+  });
+
+  it('a resume onto a worker that is not hibernated records no wake', async () => {
+    const wakes = { calls: [] as string[], admit: true };
+    const b = await box({ wakes });
+    hookDone(b.home);
+    live(b.home, 'idle');
+    expect((await b.dispatch()).statusCode).toBe(200);
+    expect(wakes.calls).toEqual([]);
   });
 
   it('the teammate caveat: bg 21 teammates listed at the Stop, live `idle`, hook `done` → proceeds', async () => {

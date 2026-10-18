@@ -117,14 +117,15 @@ function run(args: string[], input?: string,
 const runBoth = run;
 
 /** A tmux that ANSWERS, planted where `ghContainedEnv`'s poison cannot displace
- *  it: `ccdWsHelpers.ts:233` is `if (fs.existsSync(p)) continue;`, so the stub
+ *  it: `ghContainedEnv` has `if (fs.existsSync(p)) continue;`, so the stub
  *  loop SKIPS a file already there, and `harnessBin` is the first PATH entry
- *  (`ccdWsHelpers.ts:109-122, :245`). Every test plants before it calls `run`,
- *  so this is the tmux the client meets — NOT a vacuous fixture.
+ *  (`ghContainedEnv` prepends it to `PATH`). Every test plants before it
+ *  calls `run`, so this is the tmux the client meets — NOT a vacuous fixture.
  *
  *  It logs argv to the SAME `$HOME/tmux-calls` the poison stub uses
- *  (`ccdWsHelpers.ts:229`), so `tmuxArgv()` reads one file whichever stub is in
- *  place, and a test can prove the pane was passed as an explicit target. */
+ *  (`ghContainedEnv`'s `tmux` row), so `tmuxArgv()` reads one file whichever
+ *  stub is in place, and a test can prove the pane was passed as an explicit
+ *  target. */
 const plantPane = (id: string, uuid = 'u-1234'): void => {
   fs.writeFileSync(path.join(harnessBin(home), 'tmux'),
     `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/tmux-calls"\nprintf 'cc-${id}\\n'\n`,
@@ -863,7 +864,8 @@ describe('whoami: the pane is the proof', () => {
 
   it('says tmux could not answer FOR THIS PANE, not that there is no session', async () => {
     // No plantPane: the harness's own poisoned tmux answers rc 97 and prints
-    // nothing (`ccdWsHelpers.ts:229,235-239`), which is the "tmux refused" case.
+    // nothing (`ghContainedEnv`'s `tmux` row and the stub loop that writes it),
+    // which is the "tmux refused" case.
     const r = await run(['whoami'], undefined, { TMUX_PANE: '%7' });
     expect(r.status).not.toBe(0);
     expect(r.stdout).toContain('could not answer for this pane');

@@ -38,6 +38,8 @@ import { readFileSync, mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'nod
 import { tmpdir } from 'node:os';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ccrcContainedEnv } from './ccrcContainment.js';
+import { assertNoRealTool } from './containedTools.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const CCRC = join(root, 'ccd/ccrc');
@@ -98,8 +100,13 @@ const runDrRcState = (body: string | undefined): string => {
       mkdirSync(join(home, '.ccrc'), { recursive: true });
       writeFileSync(join(home, '.ccrc', 'remote-control'), body);
     }
-    const r = spawnSync('bash', ['-c', `. "$1"; _dr_rc_state`, 'bash', DOCTOR_CHECKS],
-      { env: { ...process.env, HOME: home }, encoding: 'utf8' });
+    // Contained like the spawn below (wave 18, D-5255): the doctor checks are outside the raw-spawn census's names, so
+    // no census row sees this env. The assertion reads the SAME binding the spawn takes (review 535 F11). The checks'
+    // path rides that env, not argv, so the command text stays constant (fix round 3, D-5259: CodeQL reads every argv
+    // element of a `bash -c` as part of the command).
+    const env = { ...ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' }), DOCTOR_CHECKS };
+    assertNoRealTool(env, home);
+    const r = spawnSync('bash', ['-c', '. "$DOCTOR_CHECKS"; _dr_rc_state'], { env, encoding: 'utf8' });
     expect(r.status, r.stderr).toBe(0);
     return r.stdout;
   } finally {
@@ -140,15 +147,18 @@ const runExposureCheck = (fn: string, stubs?: Record<string, string>): string =>
       'CCRC_DDNS_TOKEN=fixture-token-not-real',
       '',
     ].join('\n'), { mode: 0o600 });
-    let env: NodeJS.ProcessEnv = { ...process.env, HOME: home };
+    // Contained (wave 18, R14(b)): the fixture HOME, the fixture bus, and a recording poison for every
+    // CONTAINED_TOOLS name, first on PATH. The stubs go ahead of the poisons; none of them is a contained tool.
+    let env: NodeJS.ProcessEnv = ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' });
     if (stubs) {
       const bin = join(home, 'stub-bin');
       mkdirSync(bin);
       for (const [name, body] of Object.entries(stubs)) {
         writeFileSync(join(bin, name), `#!/usr/bin/env bash\n${body}\n`, { mode: 0o755 });
       }
-      env = { ...env, PATH: `${bin}:${process.env.PATH}` };
+      env = { ...env, PATH: `${bin}:${env['PATH'] ?? ''}` };
     }
+    assertNoRealTool(env, home);
     const r = spawnSync('bash', ['-c', `. "$1"; . "$2"; ${fn}`, 'bash', CCRC, DOCTOR_CHECKS],
       { env, encoding: 'utf8' });
     expect(r.status, r.stderr).toBe(0);

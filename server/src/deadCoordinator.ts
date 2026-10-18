@@ -59,9 +59,15 @@ export type ClaimantReading =
 
 /** The acts that put a session down ON PURPOSE (spec §5.4): ccd's `stop`, `archive`, `reap`, `destroy`, `purge` and
  *  `forget` (`_LC_ACTS`), #166's `reclaim` and stage 3's `expire`. An `unsupervise` counts when it carries a
- *  DECLARED surface — `_ws_unsupervise`'s `dec.surface`, which reads `none` when ccd acted on its own account. */
+ *  DECLARED surface — `_ws_unsupervise`'s `dec.surface`, which reads `none` when ccd acted on its own account.
+ *
+ *  `hibernate` (`hibernate-long-idle-sessions` (D-5242)): `ccd hibernate` journals it BEFORE its own `_ws_unsupervise`
+ *  row, and that row's surface reads `none` (ccd acts on its own account), which alone would read as a crash. The
+ *  sleeping row itself reads `stopped` and is never counted; the `hibernate` row matters after a wake that failed
+ *  (`ensure` cleared `.stopped`, the spawn did not come up, the row reads `orphan`). An older server parses the act as
+ *  `unknown`, which `isDeliberate` already counts ("doubt never reads as a crash"), so the skew is safe both ways. */
 export const DEAD_COORDINATOR_DELIBERATE_ACTS: readonly LifecycleAct[] =
-  ['stop', 'archive', 'reap', 'destroy', 'purge', 'forget', 'reclaim', 'expire'];
+  ['stop', 'archive', 'reap', 'destroy', 'purge', 'forget', 'reclaim', 'expire', 'hibernate'];
 
 /** Every act the clause reads — the deliberate ones, `unsupervise`, `spawn` (the start) and the we-do-not-know
  *  `unknown` — for the store's ONE read (`CoordStore.deadCoordinatorJournalRows`), so its SQL and this file's reading

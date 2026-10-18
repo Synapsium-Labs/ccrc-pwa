@@ -775,6 +775,10 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-surface)'],
     why: 'D-5296: the quiet "with coordinator" state word is the first .sess-meta cell on an unselected .sess-line, whose ground is the project card. Its selector names no ancestor, so the auditor cannot recover that ground from CSS alone. The SELECTED row is answered by the achromatic group (.sess-line--active .sess-state, --edge-strong), pinned separately in fleet-css.test.ts',
   },
+  '.sess-state--asleep': {
+    under: ['var(--bg-surface)'],
+    why: 'D-5242: a hibernated row\'s state word (`hibernated · 6h`) is the first .sess-meta cell on an unselected .sess-line, whose ground is the project card, in exited\'s quiet secondary ink. Its selector names no ancestor, so the auditor cannot recover that ground from CSS alone. The SELECTED row is answered by the achromatic group (.sess-line--active .sess-state, --edge-strong), pinned separately in fleet-css.test.ts',
+  },
   '.sess-offpool': {
     under: ['var(--bg-surface)'],
     why: 'the visible off-pool cue is a .sess-meta cell on an unselected .sess-line, whose ground is the project card. Its selector names no ancestor, so the auditor cannot recover that ground from CSS alone. The SELECTED row is answered by the achromatic group with --edge-strong, pinned separately in fleet-css.test.ts',

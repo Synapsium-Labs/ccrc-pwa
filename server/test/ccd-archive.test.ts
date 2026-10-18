@@ -690,6 +690,15 @@ describe('ws-archive', () => {
     expect(h.calls().some((c) => c.startsWith('tmux kill-session'))).toBe(true);
   });
 
+  it('ends a HIBERNATION: a hibernated workspace row loses .hibernated, so the mail lane never wakes it (D-5242)', () => {
+    workspace('demo', 'quiet-basin');
+    // A sleeping row, as `ccd hibernate` leaves it: stopped, its marker beside it.
+    h.sh(`_reg_set demo-quiet-basin stopped "1 ccd"; _reg_set demo-quiet-basin hibernated "1 7"`);
+    expect(h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`)).toMatch(/^archived demo-quiet-basin/);
+    expect(h.reg('demo-quiet-basin', 'archived')).toMatch(/^\d+$/);
+    expect(h.reg('demo-quiet-basin', 'hibernated'), 'the marker survived the archive').toBeNull();
+  });
+
   it('archives a DIRTY tree — it destroys nothing, and refusing would strand it', () => {
     const wt = workspace('demo', 'quiet-basin');
     fs.writeFileSync(path.join(wt, 'README.md'), 'edited\n');

@@ -993,7 +993,9 @@ only when a node runs that tag and its bundle verified — a listed bundle alone
 notes as plain text, never markup) and the node inventory (what each node runs and should run, its request
 and its state; **Ack** returns a settled node to idle and clears its request and refusals). Every control
 that would move a node — Install, Roll back, Update, Update all — opens one confirm sheet
-(below). A red banner warns when the sign-in gate is off and the page was reached over a non-loopback
+(below); while a node halts the fleet, Install and Update are disabled under a line naming the nodes
+to Ack first, as Update all is.
+A red banner warns when the sign-in gate is off and the page was reached over a non-loopback
 address. A **Box token** card follows, read from the same answer's `boxToken` field: the current value's
 generation and age, the last rotation, the state (idle, rotating, grace, held with the server's reason,
 failed with its word), whether a rotation is owed and why, whether the fleet confirmed the current
@@ -1036,7 +1038,16 @@ is a clean versioned release, and `—` when that node's stamp cannot be stated 
 node unreachable). On the fleet screen an update banner (`vX is out on <channel> — …`, with a door to
 `/settings`) and a `→ vX` on that node's side of `BuildLine` appear while a measured node with a channel,
 whose stamp was read, that is not a macOS node, has a newer desired tag; the banner also waits until GitHub
-has answered since the server started. A `server` or `both` box sends at most one Web Push per release tag,
+has answered since the server started. While a node halts the fleet (below), a halt banner above that one
+names each halting node — `<label>: <state> (last tried <target>) — <detail>` — with that node's own **Ack**
+in place, the same Ack as its row in Settings, which reads **Acked** after a clean ack until a poll shows a
+new lease; Update all is disabled meanwhile, under a line naming the nodes to Ack first. The amber banner for
+two boxes on different builds names its remedy from the same rows: while a halt stands, the halt banner's
+Ack first, then whichever of the next two would apply; when auto-install is on and would move every lagging
+box, so that every node ends on one release tag, the console's own move, followed in Settings; otherwise —
+no inventory answer, a lease that cannot be read, or a poll that failed since the last answer —
+`ccrc rollout` from the deploying machine, or `ccrc update` on the lagging box, fleet box first. A `server`
+or `both` box sends at most one Web Push per release tag,
 for the newest tag its release-notification setting (on my channel, stable only, off) selects, recorded in
 `coord.db` before it is sent: a restart never repeats it, a failed send is not retried, and a tag every
 measured node already runs is recorded without a push. It has no session, so an open app does not suppress
@@ -1052,7 +1063,9 @@ agent that predates the op, an unknown or refused tag, a rollback to a release t
 a verified node, no previous version, no desired tag); `{all: true}` always answers `202`, writing a request only for a node
 the tag takes forward and the dispatcher could move, and naming every other live node as skipped, with its word: a node whose
 own lease is busy, or that is itself halting, is skipped, and while a fleet node is skipped for either, so is every server-role
-node (`waiting-for-fleet`); a halt caused by another row still writes the request. What is written is a **request** on the
+node (`waiting-for-fleet`); a halt caused by another row still writes the request, and the sheet says each `halted`
+skip, even of a node it did not list, in the `halted` sentence, which names both places the Ack is. What is written
+is a **request** on the
 node's row, never a command. On a `server` or `both` box the dispatcher reads the rows after every inventory sweep, every
 intent write and every request write, and moves at most one node at a time across the fleet: fleet-role nodes before
 server-role ones, and the server node waits while any fleet node's request is outstanding. A fleet node is moved over the agent
@@ -2757,8 +2770,9 @@ unseen count) and the bell (push for this browser, below). **Banners** under it 
 session: the fleet host unreachable (remote mode; **Reboot**, which needs the Hetzner token "Remote fleet mode"
 describes, behind a confirm that names the collateral), the two boxes projecting different rosters or running
 different builds, a fleet `ccd` too old for project pools, tmux unreachable on every watched row ("How a
-session's state is known"), a release out, the socket reconnecting, a dismissible swap notice and — on an armed
-box with no passkey — *Passphrase only — add a passkey*. `Runs · N active` opens `/runs`, beside the **Class**
+session's state is known"), an update halt (each halting node with its own **Ack**), a release out, the
+socket reconnecting, a dismissible swap notice and — on an armed box with no passkey — *Passphrase only —
+add a passkey*. `Runs · N active` opens `/runs`, beside the **Class**
 chooser (next section); a **Hot files** strip appears only while some session holds a file claim (read-only;
 "Fleet coordination" says what a claim is).
 
@@ -4471,27 +4485,52 @@ the old licence by a licensed request, nor by any request on a ccd whose audit b
 older ccd an unlicensed request keeps the gap from the executor's re-read to the act, the spec's stated
 residual.
 
-**A finished run's worker is stopped once idle (D-5370).** A wave that is not the programme's last leaves its
-child workspace in place — the reclaim sweep above waits for the programme — and, until this lane, its Claude Code
-process too, holding its memory for as long as the programme ran. The server's stop-done lane (`stopDoneSweep.ts`,
-its verdict the pure `stopDone.ts`; once a minute on the watcher's tick, never inside the run's transition) stops
-such a worker with the already-granted `ccd stop <id> --surface agent`: only a dispatched child (a `.child` marker —
-never an operator's own session), whose newest run is `done` and closed at least 10 minutes ago, which no other open
-run names as worker or claimant, with no live claim, no outstanding mail, no open run it reviews, nobody viewing it, no hold, pane menu,
-background work or subagents, a bucket of `idle`, a measured live word and fail-closed turn verdict of `idle`, and a
-turn marker that reads `done` with no background task listed at its last Stop (`bg` exactly 0, so a shell or Monitor
-left running is never killed with the pane). Immediately before the act, on the coordination serialiser, the
-registry record and its row, the store, presence and the live state are read again. At most three stops a pass; a refused stop is
-not asked again for an hour. The stop journals a `stop` row with its declared surface and writes `.stopped`, so the
-row reads `stopped` (never crashed, to the dead-coordinator lane or the PWA), and the coordinator's feed gets one
-`Worker stopped` row per stop. A re-dispatch onto the worker restarts it: the dispatch resume arm's `ccd ensure`
-re-supervises and resumes a stopped session. Switches: `$REG/stop-done-disabled` (this lane only; no writer in the
-tree — touch and remove it by hand on the fleet box) and `$REG/reclaim-paused` (every cleanup lane, above). Its holds
-carry hibernation's words (D-5242), and hibernation absorbs it when it lands; until then it acts earlier (10 minutes
-after the run's close, against hibernation's 6 h of idleness) and is looser in a few facts — it has no `recent` (N)
-hold, a page open in a hidden tab does not hold the worker (hibernation's open-socket presence does not exist yet),
-and nor do session crons, a terminal attached on the box or an opt-out marker — so the operator who comes back to such
-a page revives a stopped session (`ensure` resumes it; nothing is lost).
+**A finished run's worker is put to sleep once idle (D-5370, D-5427).** A wave that is not the programme's last
+leaves its child workspace in place — the reclaim sweep above waits for the programme — and, until this lane, its
+Claude Code process too, holding its memory for as long as the programme ran. The server's stop-done lane
+(`stopDoneSweep.ts`, its verdict the pure `stopDone.ts`; once a minute on the watcher's tick, never inside the run's
+transition) puts such a worker to sleep with `ccd hibernate <id>`, declared as the lane `sweep:stop-done`: only a
+dispatched child (a `.child` marker — never an operator's own session), whose newest run is `done` and closed at least
+10 minutes ago, which no other open run names as worker or claimant, with no live claim, no outstanding mail, no open
+run it reviews, nobody viewing it, no hold, pane menu, background work or subagents, a bucket of `idle`, a measured live
+word and fail-closed turn verdict of `idle`, and a turn marker that reads `done` with no background task (`bg` exactly
+0, so a shell or Monitor left running is never killed with the pane) and nothing scheduled (`crons` exactly 0) at its
+last Stop, more than N ago (hibernation's N, below), and no `$REG/<id>.no-hibernate`. Immediately before the act, on
+the coordination serialiser, the registry record and its row, the store, presence and the live state are read again,
+and `ccd` re-measures the box-local half (a terminal attached included). At most three acts a pass; a refused one is not
+asked again for an hour. The coordinator's feed gets one `Worker asleep` row per act. Since Task 17b it is hibernation
+for this population, not a separate stop (D-5427): it holds everything hibernation holds, and a worker it puts down
+wakes as any sleeping session does — mail, a re-dispatch's `ccd ensure`, a Restart. It stays live under its own
+switches while hibernation's own sweep waits for the operator to arm it: `$REG/stop-done-disabled` (this lane only; no
+writer in the tree — touch and remove it by hand on the fleet box), `$REG/reclaim-paused` (every cleanup lane, above)
+and `$REG/hibernate-disabled` (every act that puts a session to sleep). A box whose `ccd caps` lacks `hibernate` is left
+alone (`no-verb`).
+
+**Hibernation (D-5242).** A long-idle session is put to sleep — its process stopped, journaled as a deliberate
+`hibernate`, and woken by `ccd ensure` — and the server decides which (`hibernateVerdict`,
+`server/src/coord/hibernate.ts`): a live pane whose raw live word is `idle`, bucket `idle` (a `done` row is badged and
+stays awake), no pane menu, background work or subagents, a turn marker that reads `done` with no background task (`bg`
+exactly 0) and nothing scheduled (`crons` exactly 0; an older hook's marker, with no `crons`, holds) whose latest main
+event is more than N ago (6 h; `$REG/hibernate-after-hours`, 1 to 168, overrides), no hold, no open run naming it as
+worker or claimant in any non-terminal state, no claim, no outstanding mail, nobody with it open, not stranded,
+swap-blocked, under a substrate fault or archived, and no `$REG/<id>.no-hibernate`. The sweep (`hibernateSweep.ts`,
+every 5 minutes) logs a `ccrc-server: hibernate-shadow <id> idle=<h>h` line, at most once per session an hour, until the
+operator ARMS it with `$REG/hibernate-live`; armed, on a box whose `ccd caps` lists `hibernate`, it composes `ccd
+hibernate <id>` for at most three sessions a sweep, each on the coordination serialiser and the session's queue after
+everything is read again there (D-5428); ccd's `session-busy` refusal is a quiet skip, one line per session an hour.
+`$REG/hibernate-disabled` wins over everything. None of these markers has a writer in the tree. **Waking.** A sleeping
+session's row carries `hibernatedAt` and stays bucket `dead`. Mail to it is gated `hibernated` (never `session-dead`,
+and never counted toward a park): the mail lane wakes it with `ccd ensure`, at most once per session per 10 minutes,
+oldest delivery first, and a kickoff, which is system mail, wakes its coordinator the same way. **Automatic wakes are
+bounded fleet-wide** (`server/src/coord/wakeBudget.ts`): at most two in any 60 s; the rest stay outstanding under the
+same gate. A wake somebody asked for — `POST /api/sessions/:id/ensure`, a dispatch resuming its worker — is never
+refused but counts in the window. A manual swap refuses a sleeping row `409 hibernated`; `GET /api/peers` answers it
+deliverable, with `hibernatedAt`; the reclaim door treats a sleeping claimant as alive; a sleeping main checkout stays
+out of the archived fold. **The presence contract:** beside the visible claim that suppresses pushes, every
+`/ws/session/:id` connection holds an *open* claim, stamped at connect and by every frame, visible or hidden, believed
+for `PRESENCE_OPEN_TTL_MS` (10 minutes) and dropped at close; the PWA's heartbeat now beats while hidden too
+(`visible:false`, which leaves notifications as they were), and for that long after a server start every session counts
+as viewed.
 
 **Landing order (landing-order wave 1).** Every merge of `main` into a branch restarts that branch's
 CI, so a session absorbs `main` only on a licence. Worker clause 16 names three, each read after one
@@ -5188,15 +5227,15 @@ things at that moment: it builds a SECOND card — the files this context was wo
 community and dependents read out of the same graph — and it MEASURES the compaction, writing one line to a
 per-session journal. Three arms of `ccd/session-hook.sh` do it, and **none of them opens a new output
 channel**: the card rides the one `additionalContext` envelope `SessionStart` already prints — the compact
-arm calls `_hook_emit_context "$CARD" "$CARD_COMPACT"` (`ccd/session-hook.sh:3037`), which appends the second
+arm calls `_hook_emit_context "$CARD" "$CARD_COMPACT"` (`ccd/session-hook.sh:3160`), which appends the second
 subject under its own `COMPACT_CARD_MAX_CHARS` ceiling (`:97`) before the single `jq -cn` print (`:103-105`) — and `PreCompact` and
 `PostCompact` print nothing at all. `PreCompact` decides whose transcript is compacting and publishes the
 working set, `SessionStart(compact)` serves the card once beside the graph card in that one envelope, and
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:8324-8326`), each with an operator sentence of its own at `:8376`,
-`:8384` and `:8397`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:8344-8346`), each with an operator sentence of its own at `:8396`,
+`:8404` and `:8417`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 
@@ -5509,6 +5548,15 @@ stored but not searched. Exit 3 is "not found on this box" (for grep, not found 
 server-role box, or a box history was never installed on). The `ccrc-history` skill, installed
 into every rostered home beside the coordinator's, carries the whole exit table and tells a session
 when to recall.
+
+**The card line.** After a compaction of a session's main thread, its `SessionStart` context gains one
+line, directly above any compaction card, naming the leaf that compaction becomes and, when known, its parent:
+`History: node L03a9c1… (this compaction) · parent N7c1e2f… · ~/.local/bin/ccrc history describe L03a9c1`.
+The sweep writes that prediction under `~/.ccrc/history/card/` once it has read the session's transcript
+to its end, and the hook only reads it, so `describe` answers exit 3 until the sweep has indexed that
+compaction. A subagent's compaction, `~/.ccrc/history-off` and a session whose recall is switched off
+get no line. On a box with history the compaction card renders 513 characters shorter, to leave the
+line its room, and the sweep counts from each transcript whether the line arrived and named its leaf.
 
 **Box verbs and operator verbs.** `ccrc history status` reports the store, its lag, size, cap, free
 space and journal; doctor's `history` check reads it. Its `spool-planted` warning counts each node at

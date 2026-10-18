@@ -18,6 +18,7 @@ import { unreadableField as withUnreadableField } from './ioDoubles.js';
 import { okRun } from './coordReadHelpers.js';
 import { isChildReclaimKebab } from '../src/coord/childReclaim.js';
 import { isStallKebab } from '../src/coord/stall.js';
+import { isHibernateKebab } from '../src/coord/hibernate.js';
 import { isArchivedExpiryKebab } from '../src/archivedExpiry.js';
 import { isStallSettingsKebab } from '../src/coord/stallsettings.js';
 import { isDeadCoordinatorKebab } from '../src/deadCoordinator.js';
@@ -897,8 +898,14 @@ describe('the rejection table is total, in both directions', () => {
         // collector switch's route refusals, spelled there as literals. They are L0's own vocabulary, the words the
         // PWA reads off the wire. Admitted through the exported guard, derived from `shared/api.ts`'s table, never
         // NOT_CODES, for the reason every union above gives.
-        || isCollectLaneRefusal(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word or collector-switch route refusal`).toBe(true);
+        || isCollectLaneRefusal(tok)
+        // HIBERNATION (D-5242, plan Task 17a): the next union, checked together and never merged, on the standing rule
+        // `enter-ignored` above states. `coord/hibernate.ts` spells its holds, its four operator settings and the live
+        // read's reasons as literals. None is a mail rejection or a run refusal: they ride a verdict and a log line,
+        // never a `refused` or `reject.code`. Admitted through the exported guard, derived from that file's tables,
+        // never NOT_CODES, for the reason every union above gives.
+        || isHibernateKebab(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal or hibernation word`).toBe(true);
     }
   });
 });
