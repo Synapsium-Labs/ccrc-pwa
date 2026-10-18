@@ -1351,3 +1351,18 @@ describe('the Accounts screen keeps its voices (the audit\'s quick wins)', () =>
       .toEqual(['var(--family-mono)']);
   });
 });
+
+// D-5528: the programme slug is variable-length; at 360 it ellipsises and the
+// wave — the fact the operator asked for — stays whole.
+describe('the programme-and-wave label shrinks by its programme, never its wave (D-5528)', () => {
+  it('the wave half never shrinks', () => {
+    expect(declaredValues(css, '.sess-pw-wave', 'flex')).toEqual(['none']);
+  });
+  it('the programme half ellipsises', () => {
+    expect(declaredValues(css, '.sess-pw-prog', 'text-overflow')).toEqual(['ellipsis']);
+    expect(declaredValues(css, '.sess-pw-prog', 'overflow')).toEqual(['hidden']);
+  });
+  it('the cell that carries it can shrink below its text', () => {
+    expect(ruleFor('.sess-held:has(> .sess-pw)')).toMatch(/min-width:\s*0/);
+  });
+});
