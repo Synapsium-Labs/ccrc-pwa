@@ -13,14 +13,13 @@ import path from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import {
   makeHistoryBox, runSweep, skipOnDarwin, openStoreRO, counters, journalRecords, plantSession, plantTranscript,
-  exportDirOf, segmentsOf, segmentRows, runDriver, recoverRow, PRELOADS, CLI, preloadOptions, type HistoryBox,
+  exportDirOf, segmentsOf, segmentRows, runDriver, recoverRow, PRELOADS, CLI, runOnPty, type HistoryBox,
 } from './historyHelpers.js';
 import { userRow, toolResultRow } from './historyFixtures.js';
 import { removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { EXPORT_ROW_META_BYTES, HEALTH_META, historyPaths } from '../../ccd/history/lib.mjs';
 import { closeWriter, openSegment, openWriter, pruneDryRun, segmentMeta, setMeta } from '../../ccd/history/store.mjs';
 import { syncBuiltinESMExports } from 'node:module';
-import * as pty from 'node-pty';
 
 skipOnDarwin();
 removeTmpFixturesEachTest();
@@ -873,31 +872,10 @@ describe('crash and collision safety (W1-B4 Task 7; spec §9.15 "Write", "Mark",
   }, 120_000);
 });
 
-/** `ccrc history doctor --adopt` on a REAL terminal (node-pty): the irreversible forms refuse without one (§8.4). A pty
- *  child leads its own process group, so the safety timer kills the whole group, the shim and the sweep under it too
- *  (W1-B2 Task 25's onPty idiom). A pty merges stdout and stderr. */
-function adoptOnPty(box: HistoryBox): Promise<{ code: number; out: string }> {
-  const env: Record<string, string> = {};
-  const merged: NodeJS.ProcessEnv = { ...box.env, HISTORY_TEST_STATFS: 'plenty', NODE_OPTIONS: preloadOptions([PRELOADS.statfs]) };
-  for (const [k, v] of Object.entries(merged)) if (v !== undefined) env[k] = v;
-  return new Promise((resolve) => {
-    const p = pty.spawn(process.execPath, ['--no-warnings', CLI, 'doctor', '--adopt'], { name: 'xterm-color', cols: 200, rows: 40, cwd: box.home, env });
-    let out = '';
-    let done = false;
-    const finish = (code: number): void => {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      resolve({ code, out });
-    };
-    const timer = setTimeout(() => {
-      try { process.kill(-p.pid, 'SIGKILL'); } catch { p.kill(); }
-      finish(-1);
-    }, 40_000);
-    p.onData((d) => { out += d; });
-    p.onExit(({ exitCode }) => finish(exitCode));
-  });
-}
+/** `ccrc history doctor --adopt` on a REAL terminal (historyHelpers' runOnPty, shared with history-recover.test.ts): the
+ *  irreversible forms refuse without one (§8.4). Its safety timer kills the pty's whole process group. */
+const adoptOnPty = (box: HistoryBox): Promise<{ code: number; out: string }> =>
+  runOnPty(box, [process.execPath, '--no-warnings', CLI, 'doctor', '--adopt'], { timeoutMs: 40_000 });
 
 describe('marks that move (W1-B4 Task 8; spec §9.15 "Mark", "After a bind")', () => {
   it('O39: a variant first seen after its entry was exported clears that entry\'s marks, and the next pass writes the entry again with both variants', () => {
@@ -1004,29 +982,48 @@ describe('marks that move (W1-B4 Task 8; spec §9.15 "Mark", "After a bind")', (
     expect(counters(box)['export_segment_missing']).toBe(1);
   }, 120_000);
 
-  it('a check that cannot list export/<store_id>/ is counted and retried, never thrown out of the tick: the marks stay, and the next step checks again', async () => {
-    const { box, ids } = ingestedBox('ccrc-history-export-bindlist-', [row(1, 'one', DAY), row(2, 'two', DAY)]);
-    const NOW = Date.now();
-    const at = (ms: number) => (): number => NOW + ms;
-    const name = `1.${ids.writer}.db`;
-    await onStore(box, (db) => SW.exportPass(db, exportCtx(box, ids, at(0))));
-    const dir = exportDirOf(box);
-    fs.renameSync(dir, `${dir}.kept`);
-    fs.writeFileSync(dir, 'a stray file under the directory\'s name');   // listing it fails ENOTDIR
-    // the cadence waits inside the hour after the pass at NOW, so only the check runs
-    await onStore(box, async (db) => {
-      setMeta(db, `bound:${NOW + MIN}`, 'adopt');
-      await SW.exportStep(db, exportCtx(box, ids, at(2 * MIN)));   // resolves: the step never throws it
-    });
-    expect(counters(box)['export_marks_check_failed']).toBe(1);
-    expect(Object.values(marks(box)), 'a check that could not list cleared marks').toEqual([name, name]);
-    expect(metaOf(box, 'export_marks_checked_ms'), 'a failed check is not a check').toBeNull();
-    fs.rmSync(dir);
-    fs.renameSync(`${dir}.kept`, dir);
-    await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, at(3 * MIN))));
-    expect(metaOf(box, 'export_marks_checked_ms'), 'the next step checks again').toBe(String(NOW + 3 * MIN));
-    expect(Object.values(marks(box))).toEqual([name, name]);
-  }, 120_000);
+  // The check lists export/<store_id>/. A listing that fails for any reason but ENOENT is "unreadable", never "absent":
+  // only a proven absence (the adopt case above) clears the marks. A regular file where the directory must be, at the
+  // directory itself or at its parent export/, fails the listing with ENOTDIR, which an existsSync guard would have read
+  // as an absent directory and cleared every mark on (review of Task 8).
+  for (const where of ['export/<store_id>', 'export'] as const) {
+    it(`a check that cannot list export/<store_id>/ (a regular file where ${where} must be a directory) is counted and retried, never thrown out of the tick and never read as an absent directory: the marks stay, and the next step checks again`, async () => {
+      const { box, ids } = ingestedBox('ccrc-history-export-bindlist-', [row(1, 'one', DAY), row(2, 'two', DAY)]);
+      const NOW = Date.now();
+      const at = (ms: number) => (): number => NOW + ms;
+      const name = `1.${ids.writer}.db`;
+      await onStore(box, (db) => SW.exportPass(db, exportCtx(box, ids, at(0))));
+      const dir = exportDirOf(box);
+      const planted = where === 'export' ? path.dirname(dir) : dir;
+      fs.renameSync(planted, `${planted}.kept`);
+      fs.writeFileSync(planted, 'a stray file under the directory\'s name');   // listing under it fails ENOTDIR
+      // the cadence waits inside the hour after the pass at NOW, so only the check runs
+      const err = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+      let lines: string[] = [];
+      try {
+        await onStore(box, async (db) => {
+          setMeta(db, `bound:${NOW + MIN}`, 'adopt');
+          await SW.exportStep(db, exportCtx(box, ids, at(2 * MIN)));   // resolves: the step never throws it
+        });
+        lines = err.mock.calls.map((c) => String(c[0])).filter((l) => l.startsWith('history-sweep: the export marks could not be checked'));
+      } finally {
+        err.mockRestore();
+      }
+      expect(lines, 'one stderr line, naming the directory').toHaveLength(1);
+      expect(lines[0]).toContain(`against ${dir}: `);
+      expect(lines[0]).toContain('ENOTDIR');
+      expect(counters(box)['export_marks_check_failed']).toBe(1);
+      expect(Object.values(marks(box)), 'a check that could not list cleared marks').toEqual([name, name]);
+      expect(counters(box)['export_segment_missing'], 'an unreadable directory is not a missing segment').toBeUndefined();
+      expect(metaOf(box, 'export_marks_checked_ms'), 'a failed check is not a check').toBeNull();
+      expect(metaOf(box, 'export_marks_checked_binds'), 'a failed check covers no bind fact').toBeNull();
+      fs.rmSync(planted);
+      fs.renameSync(`${planted}.kept`, planted);
+      await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, at(3 * MIN))));
+      expect(metaOf(box, 'export_marks_checked_ms'), 'the next step checks again').toBe(String(NOW + 3 * MIN));
+      expect(Object.values(marks(box))).toEqual([name, name]);
+    }, 120_000);
+  }
 
   // Beyond the brief's list (flagged in the Task 8 report): the check's `if (isBusy(e)) throw e` had no case. The
   // test's own writer connection answers its next BEGIN IMMEDIATE with SQLITE_BUSY (errcode 5), once, the stand-in for

@@ -7991,8 +7991,9 @@ export async function exportPass(db, ctx) {
  *  A refusal, or a probe that does not settle, skips the pass: counted export_paused_low_disk and kept in meta for doctor
  *  (HEALTH_META.exportPaused, planExportRoom's word) until a preflight admits. Capture is unaffected, and the next tick
  *  retries: a pause is not a pass. A stale temp is removed before the probe, so a pause never keeps one. A pass that
- *  fails with a caught error counts for the cadence (Task 5's attempt clock), so it retries hourly. Null when the
- *  cadence waits. */
+ *  fails with a caught error counts for the cadence (Task 5's attempt clock), so it retries hourly. First of all, and
+ *  outside the cadence, the step checks the export marks against the segments on this box once per new bind fact
+ *  (checkSegmentMarks; §9.15 "After a bind"). Null when the cadence waits. */
 export async function exportStep(db, ctx) {
   // §9.15 "After a bind": first, and outside the cadence, on the first step after an adopt, a restore or a rebuild. lib
   // decideMarkCheck decides it from WHICH bind facts the last check covered, never their clocks (RD2). A check that
@@ -8067,12 +8068,14 @@ function bindFactKeys(db) {
  *  the verb avoids the re-export (§8.4). Which names are missing is lib missingSegmentNames' answer over the marked
  *  names and the listing measured here. One NORMAL transaction; when anything was cleared, export_segment_missing +1
  *  and HEALTH_META.exportSegmentMissing holds how many marks, which doctor WARNs on until a complete pass resets it.
- *  Either way it records its clock and `record`, the bind facts lib decideMarkCheck says it covers. One DISTINCT scan
- *  of exported_seg per bind; the column has no index and gets none. A listing that fails for any reason but ENOENT
- *  throws (listSegments), before anything is cleared or recorded; exportStep counts it and the next step tries again. */
+ *  Either way it records its clock and `record`, the bind facts lib decideMarkCheck says it covers. Two DISTINCT scans
+ *  of exported_seg per bind, blobs then entries; neither column has an index and none is added. A directory that is
+ *  absent (ENOENT) lists as none, so every mark naming a segment is missing; one that cannot be listed for any other
+ *  reason (ENOTDIR, EACCES) is NOT absent: listSegments throws, before anything is cleared or recorded, and exportStep
+ *  counts it and tries again next step. */
 export function checkSegmentMarks(db, ctx, record) {
   const dir = exportDirFor(ctx.paths, ctx.ids.storeId);
-  const present = existsSync(dir) ? listSegments(dir).map((x) => x.name) : [];
+  const present = listSegments(dir).map((x) => x.name);   // [] only for a proven ENOENT; ENOTDIR, EACCES and the rest throw
   const named = new Set();
   for (const r of db.prepare('SELECT DISTINCT exported_seg AS seg FROM blobs WHERE exported_seg IS NOT NULL').all()) named.add(String(r.seg));
   for (const r of db.prepare('SELECT DISTINCT exported_seg AS seg FROM entries WHERE exported_seg IS NOT NULL').all()) named.add(String(r.seg));

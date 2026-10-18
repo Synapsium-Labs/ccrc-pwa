@@ -15,11 +15,10 @@ import { randomBytes, createHash } from 'node:crypto';
 import path from 'node:path';
 import { brotliDecompressSync as rrUnbrotli } from 'node:zlib';
 import { DatabaseSync } from 'node:sqlite';
-import * as pty from 'node-pty';
 import {
   makeHistoryBox, runSweep, runShim, runDriver, skipOnDarwin, openStoreRO, counters, journalRecords, plantSession,
   plantTranscript, spoolLine, preloadOptions, PRELOADS, CLI, recoverRow, boundEmptyStore,
-  runCli, withPane, seedFamily, journalDirOf, REPO, rewindStoreToV1, type HistoryBox, type SpawnOpts,
+  runCli, withPane, seedFamily, journalDirOf, REPO, rewindStoreToV1, runOnPty, type HistoryBox, type SpawnOpts,
 } from './historyHelpers.js';
 import { userRow, assistantRow, boundaryRow, summaryRow } from './historyFixtures.js';
 import { removeTmpFixturesEachTest, mkTmp } from './tmpHelpers.js';
@@ -174,34 +173,10 @@ function ccrcSnapshot(box: HistoryBox): string[] {
   return out.sort();
 }
 
-/** A command on a REAL terminal (node-pty), so stdin IS a TTY: the irreversible forms refuse without one (§8.4). A
- *  pty merges stdout and stderr. The timer is a safety net, never the assertion. A pty child leads its own process
- *  group, so the timer kills the whole group: the shim and the sweep under it die too, and none outlives its case
- *  holding the history lock. */
-function onPty(box: HistoryBox, argv: string[], env: Record<string, string> = {}): Promise<{ code: number; out: string }> {
-  const full: Record<string, string> = {};
-  const merged: NodeJS.ProcessEnv = {
-    ...box.env, HISTORY_TEST_STATFS: 'plenty', NODE_OPTIONS: preloadOptions([PRELOADS.statfs]), ...env,
-  };
-  for (const [k, v] of Object.entries(merged)) if (v !== undefined) full[k] = v;
-  return new Promise((resolve) => {
-    const p = pty.spawn(argv[0]!, argv.slice(1), { name: 'xterm-color', cols: 200, rows: 40, cwd: box.home, env: full });
-    let out = '';
-    let done = false;
-    const finish = (code: number): void => {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      resolve({ code, out });
-    };
-    const timer = setTimeout(() => {
-      try { process.kill(-p.pid, 'SIGKILL'); } catch { p.kill(); }
-      finish(-1);
-    }, HEAVY / 3);
-    p.onData((d) => { out += d; });
-    p.onExit(({ exitCode }) => finish(exitCode));
-  });
-}
+/** A command on a REAL terminal (historyHelpers' runOnPty), so stdin IS a TTY: the irreversible forms refuse without one
+ *  (§8.4). The timer is a safety net, never the assertion. */
+const onPty = (box: HistoryBox, argv: string[], env: Record<string, string> = {}): Promise<{ code: number; out: string }> =>
+  runOnPty(box, argv, { env, timeoutMs: HEAVY / 3 });
 /** `ccrc history <args>` (the CLI door) and the shim's `--op` (the direct door), each on a terminal. */
 const cliOnPty = (box: HistoryBox, args: string[], env: Record<string, string> = {}): Promise<{ code: number; out: string }> =>
   onPty(box, [process.execPath, '--no-warnings', CLI, ...args], env);

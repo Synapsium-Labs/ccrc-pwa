@@ -606,3 +606,37 @@ export function segmentRows(file: string, table: string): Array<Record<string, u
     db.close();
   }
 }
+
+// ── W1-B4 Task 8 (review): one terminal runner for the verbs that need a TTY ─────────────────────────────────────
+/** A command on a REAL terminal (node-pty), so stdin IS a TTY: the irreversible history forms refuse without one (§8.4).
+ *  It runs in the box's env (HOME is the fixture) with `cwd` the box's home, the statfs preload answering 'plenty' and
+ *  `o.env` laid over that. A pty merges stdout and stderr. A pty child leads its own process group, so the safety timer
+ *  (`o.timeoutMs`, never the assertion) kills the group by `-pid`, the shim and the sweep under it too, and none outlives
+ *  its case holding the history lock; it never kills by pattern. Answers the exit code, or -1 when the timer fired.
+ *  node-pty is loaded on first use: most history cases never need a terminal. (Was history-recover.test.ts's `onPty`,
+ *  W1-B2 Task 25, and history-export.test.ts's `adoptOnPty`.) */
+export async function runOnPty(box: HistoryBox, argv: string[], o: { timeoutMs: number; env?: Record<string, string> }): Promise<{ code: number; out: string }> {
+  const pty = await import('node-pty');
+  const full: Record<string, string> = {};
+  const merged: NodeJS.ProcessEnv = {
+    ...box.env, HISTORY_TEST_STATFS: 'plenty', NODE_OPTIONS: preloadOptions([PRELOADS.statfs]), ...o.env,
+  };
+  for (const [k, v] of Object.entries(merged)) if (v !== undefined) full[k] = v;
+  return new Promise((resolve) => {
+    const p = pty.spawn(argv[0]!, argv.slice(1), { name: 'xterm-color', cols: 200, rows: 40, cwd: box.home, env: full });
+    let out = '';
+    let done = false;
+    const finish = (code: number): void => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve({ code, out });
+    };
+    const timer = setTimeout(() => {
+      try { process.kill(-p.pid, 'SIGKILL'); } catch { p.kill(); }
+      finish(-1);
+    }, o.timeoutMs);
+    p.onData((d) => { out += d; });
+    p.onExit(({ exitCode }) => finish(exitCode));
+  });
+}
