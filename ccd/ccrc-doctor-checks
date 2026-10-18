@@ -9369,9 +9369,15 @@ _check_approval-verifier-runnable() {
   fi
   # `node` is looked up on doctor's own PATH. A session runs under claude-session@'s environment, whose PATH holds the
   # same install's bin directories, so a box where doctor finds node is one where the hook finds it; a hand-edited unit
-  # PATH is the case this cannot see (named in the PR's follow-ups).
+  # PATH is the case this cannot see (D-5487).
   command -v node >/dev/null 2>&1 || missing="${missing:+$missing, }node (not on PATH)"
   [ -f "$HOME/.cc-sessions/approval-verify.mjs" ] || missing="${missing:+$missing, }the verifier (\$HOME/.cc-sessions/approval-verify.mjs)"
+  # A key not pinned yet, with node and the verifier in place, is the rollout's expected state (D-5487 (1)): the server
+  # had not served one when this box last updated. Nothing is broken, so it SKIPs and a fresh install ends green (D-139).
+  if [ -z "$missing" ] && [ ! -f "$HOME/.ccrc/approval-signing.pub" ]; then
+    _dr_skip approval-verifier-runnable "no approval key is pinned yet (\$HOME/.ccrc/approval-signing.pub): the server had not served one when this box last updated, so every prompt goes to the operator, as today; the next ccrc update after the server serves one pins it"
+    return 3
+  fi
   [ -f "$HOME/.ccrc/approval-signing.pub" ] || missing="${missing:+$missing, }the pinned key (\$HOME/.ccrc/approval-signing.pub)"
   if [ -n "$missing" ]; then
     _dr_warn approval-verifier-runnable "a child's permission hook cannot verify a ruling, so coordinator rulings never engage on this box and every prompt goes to the operator; missing: $missing" \

@@ -135,10 +135,19 @@ describe('doctor: approval-verifier-runnable names each missing piece', () => {
     expect(r.out).not.toMatch(/pinned key \(/);
     expect(r.out).not.toMatch(/node \(not on PATH\)/);
   });
-  it('no pinned key: a WARN naming the key', () => {
+  it('no pinned key alone: a SKIP, not a WARN, so a fresh install still ends green (D-139)', () => {
+    // A key not pinned yet is the rollout's expected state (D-5487 (1)): the server had not served one when this box
+    // last updated. Nothing here is broken, and every prompt goes to the operator as today.
     ready();
     fs.rmSync(path.join(home, '.ccrc', 'approval-signing.pub'));
-    expect(run('_check_approval-verifier-runnable').out).toMatch(/^WARN approval-verifier-runnable: .*missing: the pinned key/m);
+    const r = run('_check_approval-verifier-runnable');
+    expect(r.out).toMatch(/^SKIP approval-verifier-runnable: no approval key is pinned yet/m);
+    expect(r.code).toBe(3);
+  });
+  it('no verifier and no pinned key: a WARN naming both', () => {
+    fs.mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    const r = run('_check_approval-verifier-runnable');
+    expect(r.out).toMatch(/^WARN approval-verifier-runnable: .*missing: the verifier .*, the pinned key/m);
   });
   it('node not on PATH: a WARN naming node', () => {
     ready();
