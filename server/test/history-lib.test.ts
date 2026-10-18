@@ -8013,6 +8013,46 @@ describe('W1-B4: the hourly cadence, the room verdict and the dead-file key (spe
     expect(libSeg.decideExportPass({ nowMs: T, lastPassMs: T + 24 * H, firstTickMs: T - 10 * H })).toBe('run');
     expect(libSeg.decideExportPass({ nowMs: T, lastPassMs: null, firstTickMs: T + 1 })).toBe('run');
   });
+  it('decideExportPass: the wait runs from the LATER of the last pass and the last caught-failure attempt (RD2: lib decides which clock governs); a null is absent', () => {
+    // an attempt after the pass, within the hour: the attempt governs, so the pass waits
+    expect(libSeg.decideExportPass({ nowMs: T, lastPassMs: T - 3 * H, lastAttemptMs: T - H + 1, firstTickMs: T - 10 * H }), 'attempt later, within the hour').toBe('wait');
+    // a pass after the attempt, the attempt over an hour old and the pass not: the pass governs
+    expect(libSeg.decideExportPass({ nowMs: T, lastPassMs: T - H + 1, lastAttemptMs: T - 3 * H, firstTickMs: T - 10 * H }), 'pass later, within the hour').toBe('wait');
+    // both over an hour old: run, from the later of the two (the boundary is the later one's)
+    expect(libSeg.decideExportPass({ nowMs: T, lastPassMs: T - 3 * H, lastAttemptMs: T - 2 * H, firstTickMs: T - 10 * H }), 'both over an hour').toBe('run');
+    expect(libSeg.decideExportPass({ nowMs: T, lastPassMs: T - 2 * H, lastAttemptMs: T - H, firstTickMs: T - 10 * H }), 'the later is exactly an hour old').toBe('run');
+    expect(libSeg.decideExportPass({ nowMs: T, lastPassMs: T - 2 * H, lastAttemptMs: T - H + 1, firstTickMs: T - 10 * H }), 'the later is a ms short of an hour').toBe('wait');
+    expect(libSeg.decideExportPass({ nowMs: T, lastPassMs: T - H, lastAttemptMs: T - 2 * H, firstTickMs: T - 10 * H }), 'the pass is the later, exactly an hour old').toBe('run');
+    // an attempt with no pass at all anchors the wait in place of the first tick; a null attempt leaves the pass alone
+    expect(libSeg.decideExportPass({ nowMs: T, lastPassMs: null, lastAttemptMs: T - H + 1, firstTickMs: T - 10 * H }), 'attempt alone, within the hour').toBe('wait');
+    expect(libSeg.decideExportPass({ nowMs: T, lastPassMs: null, lastAttemptMs: T - H, firstTickMs: T - 10 * H }), 'attempt alone, an hour old').toBe('run');
+    expect(libSeg.decideExportPass({ nowMs: T, lastPassMs: T - H + 1, lastAttemptMs: null, firstTickMs: T - 10 * H }), 'pass alone').toBe('wait');
+    // the other rules hold over the later clock: a clock that went backwards runs, and intervalMs is the wait
+    expect(libSeg.decideExportPass({ nowMs: T, lastPassMs: T - 3 * H, lastAttemptMs: T + H, firstTickMs: T - 10 * H }), 'an attempt dated after now runs').toBe('run');
+    expect(libSeg.decideExportPass({ nowMs: T, lastPassMs: T - 5 * H, lastAttemptMs: T - 2 * H + 1, firstTickMs: null, intervalMs: 2 * H }), 'a two-hour interval from the attempt').toBe('wait');
+    expect(libSeg.decideExportPass({ nowMs: T, lastPassMs: T - 5 * H, lastAttemptMs: T - 2 * H, firstTickMs: null, intervalMs: 2 * H })).toBe('run');
+  });
+  it('decideExportPass: with lastAttemptMs omitted (or null) the answers are exactly those of the pass clock and the first tick alone', () => {
+    const old = (lastPassMs: number | null, firstTickMs: number | null, intervalMs: number): 'run' | 'wait' => {
+      const since = lastPassMs ?? firstTickMs;
+      if (since === null) return 'wait';
+      const age = T - since;
+      return age < 0 || age >= intervalMs ? 'run' : 'wait';
+    };
+    let n = 0;
+    for (const lastPassMs of [null, T - 2 * H, T - H, T - H + 1, T, T + H]) {
+      for (const firstTickMs of [null, T - 10 * H, T - H, T - H + 1, T + 1]) {
+        for (const intervalMs of [H, 2 * H]) {
+          const want = old(lastPassMs, firstTickMs, intervalMs);
+          const at = `${lastPassMs === null ? 'null' : lastPassMs - T} ${firstTickMs === null ? 'null' : firstTickMs - T} ${intervalMs}`;
+          expect(libSeg.decideExportPass({ nowMs: T, lastPassMs, firstTickMs, intervalMs }), `omitted: ${at}`).toBe(want);
+          expect(libSeg.decideExportPass({ nowMs: T, lastPassMs, firstTickMs, lastAttemptMs: null, intervalMs }), `null: ${at}`).toBe(want);
+          n += 1;
+        }
+      }
+    }
+    expect(n, 'the grid ran').toBe(60);
+  });
   it('exportPassIntervalMs: an hour, doubled for each pass in a row that published and could not mark, at most a day; decideExportPass waits that interval', () => {
     expect([0, 1, 2, 3, 4, 5, 99].map((n) => libSeg.exportPassIntervalMs(n))).toEqual([H, 2 * H, 4 * H, 8 * H, 16 * H, 24 * H, 24 * H]);
     for (const bad of [-1, 1.5, Number.NaN]) expect(libSeg.exportPassIntervalMs(bad), String(bad)).toBe(H);

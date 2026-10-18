@@ -7935,17 +7935,20 @@ export async function exportStep(db, ctx) {
     const v = getMeta(db, k);
     return v !== null && /^[0-9]{1,16}$/.test(v) ? Number(v) : null;
   };
-  const lastPass = msOf(HEALTH_META.exportPassMs);
-  const lastAttempt = msOf(EXPORT_ATTEMPT_META);
+  // The meta text is measured here; which of the two clocks governs the wait is lib's decision (RD2).
   const first = db.prepare('SELECT ts_ms FROM ticks ORDER BY tick_id LIMIT 1').get();
   const verdict = decideExportPass({
     nowMs,
-    lastPassMs: lastPass === null ? lastAttempt : lastAttempt === null ? lastPass : Math.max(lastPass, lastAttempt),
+    lastPassMs: msOf(HEALTH_META.exportPassMs),
+    lastAttemptMs: msOf(EXPORT_ATTEMPT_META),
     firstTickMs: first === undefined ? null : Number(first.ts_ms),
   });
   if (verdict === 'wait') return null;
-  // A directory that cannot be made (EACCES, EROFS, ENOSPC on the home filesystem) is a pause, never a throw out of the
-  // tick: the probe below then fails on the missing directory, and planExportRoom answers low-disk.
+  // A directory that cannot be made never throws out of the tick (a planted entry would otherwise fail every tick): the
+  // failure is swallowed here and the probe decides. When export/ itself is missing (EACCES, EROFS, ENOSPC on the home
+  // filesystem), the probe below fails on it (ENOENT) and planExportRoom answers low-disk: a pause. When only
+  // export/<store_id> cannot be made, or export/ is not a directory, statfs on export/ still answers and the probe admits,
+  // and exportPass's own ensureExportDirs then fails and is counted export_write_failed ('failed').
   try { ensureExportDirs(ctx.paths, ctx.ids.storeId); } catch { /* the probe decides */ }
   // Every temp is stale here: only a pass under the shim's lock writes one (the lifecycle row's "the writer removes a
   // stale .tmp itself"). It goes BEFORE the probe, so a pause never keeps a killed pass's temp on the filesystem whose

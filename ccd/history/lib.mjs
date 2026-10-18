@@ -8168,9 +8168,15 @@ export function nextSegmentSeq({ onDisk, recorded }) {
  *  an early segment costs nothing, a late one widens the window in which the store is the only copy
  *  (D-4756 (history-export-cadence-clock-backwards)). No clock at all waits: the tick that asks has recorded its own
  *  ticks row, so the next tick has one. `intervalMs` is exportPassIntervalMs' answer: an hour, or longer after
- *  passes that published and could not mark (D-4757 (history-export-mark-failure-backs-off)). */
-export function decideExportPass({ nowMs, lastPassMs, firstTickMs, intervalMs = EXPORT_PASS_INTERVAL_MS }) {
-  const since = lastPassMs ?? firstTickMs;
+ *  passes that published and could not mark (D-4757 (history-export-mark-failure-backs-off)).
+ *  `lastAttemptMs` is the clock of a pass that failed with a caught error: it counts as a pass for the wait, so such a pass
+ *  retries hourly, never every tick, while `lastPassMs` (doctor's last-pass clock) does not move. Which of the two clocks governs
+ *  is this function's decision (RD2): the later one, a null being absent, so an attempt after the last pass keeps the wait
+ *  running from the attempt, and a pass after the last attempt from the pass. Omitted, it is null, and the answers are exactly
+ *  those of the pass clock alone. */
+export function decideExportPass({ nowMs, lastPassMs, firstTickMs, lastAttemptMs = null, intervalMs = EXPORT_PASS_INTERVAL_MS }) {
+  const last = lastPassMs === null ? lastAttemptMs : lastAttemptMs === null ? lastPassMs : Math.max(lastPassMs, lastAttemptMs);
+  const since = last ?? firstTickMs;
   if (since === null) return 'wait';
   const age = nowMs - since;
   return age < 0 || age >= intervalMs ? 'run' : 'wait';

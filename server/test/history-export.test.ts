@@ -7,7 +7,7 @@
 //     past the store's first hour), with the test-only preloads for faults.
 // Every store lives in a mkTmp fixture HOME (makeHistoryBox); nothing reads or writes the live ~/.ccrc, and each test's
 // fixture HOMEs are removed when it ends (removeTmpFixturesEachTest).
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
@@ -549,4 +549,72 @@ describe('the export in the tick (W1-B4 Task 6; spec §9.2 step 6, §9.15 "Prefl
     passAt(box, 66);
     expect(segmentsOf(box)).toEqual([`1.${ids.writer}.db`]);
   }, 300_000);
+
+  it('the cadence waits from the later of the last pass and the last caught-failure attempt, whichever clock is older; lib decides, the step passes both (RD2)', async () => {
+    const { box, ids } = ingestedBox('ccrc-history-export-clocks-', [row(1, 'one', DAY), row(2, 'two', DAY)]);
+    const later = Date.now() + 5 * HOUR;
+    const seen: string[] = [];
+    const roomy = async (p: string): Promise<{ bsize: number; bavail: number; blocks: number }> => {
+      seen.push(p);
+      return { bsize: 1, bavail: 4 * TIB, blocks: 8 * TIB };
+    };
+    const stepWith = (pass: number | null, attempt: number | null): Promise<PassResult | null> => onStore(box, (db) => {
+      for (const [k, v] of [[HEALTH_META.exportPassMs, pass], ['export_attempt_ms', attempt]] as const) {
+        db.prepare('DELETE FROM meta WHERE k = ?').run(k);
+        if (v !== null) setMeta(db, k, String(v));
+      }
+      return SW.exportStep(db, exportCtx(box, ids, () => later, { deps: { statfs: roomy } }));
+    });
+    expect(await stepWith(later - 3 * HOUR, later - 10 * MIN), 'a failed attempt ten minutes ago, the last pass hours ago').toBeNull();
+    expect(await stepWith(later - 10 * MIN, later - 3 * HOUR), 'a pass ten minutes ago, the last failed attempt hours ago').toBeNull();
+    expect(await stepWith(null, later - 10 * MIN), 'a failed attempt ten minutes ago and no pass ever: the attempt, not the first tick, anchors the wait').toBeNull();
+    expect(seen, 'a waiting step probes nothing').toEqual([]);
+    expect(segmentsOf(box)).toEqual([]);
+    expect(await stepWith(later - 3 * HOUR, later - 2 * HOUR), 'both over an hour old').toMatchObject({ state: 'written', segment: `1.${ids.writer}.db` });
+    expect(seen).toEqual([path.join(box.root, 'export')]);
+  }, 120_000);
+
+  // A planted entry where an export directory belongs must never throw out of every tick. exportStep swallows two things before its
+  // probe: ensureExportDirs (the probe then decides) and removeStaleSegmentTemps (counted export_write_failed, the step goes on).
+  for (const where of ['export', 'export/<store_id>'] as const) {
+    it(`a regular file where ${where} must be a directory: exportStep resolves, both swallows count or hold, the planted file is left alone, and the pass fails and is counted`, async () => {
+      const { box, ids } = ingestedBox('ccrc-history-export-planted-', [row(1, 'one', DAY), row(2, 'two', DAY)]);
+      const planted = where === 'export' ? path.join(box.root, 'export') : path.join(box.root, 'export', ids.storeId);
+      fs.mkdirSync(path.dirname(planted), { recursive: true, mode: 0o700 });
+      fs.writeFileSync(planted, 'a planted file');
+      const later = Date.now() + 2 * HOUR;
+      const roomy = async (): Promise<{ bsize: number; bavail: number; blocks: number }> => ({ bsize: 1, bavail: 4 * TIB, blocks: 8 * TIB });
+      const err = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+      let r: PassResult | null;
+      try {
+        r = await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, () => later, { deps: { statfs: roomy } })));
+      } finally {
+        err.mockRestore();
+      }
+      // statfs on export/ answers (a file there is on the filesystem too), so the preflight admits and exportPass meets the entry itself.
+      expect(r).toEqual({ state: 'failed', segment: null, rows: 0, blobs: 0, bytes: 0, complete: false });
+      expect(counters(box)['export_write_failed'], 'the stale-temp removal (ENOTDIR on the listing) and the pass itself, one each').toBe(2);
+      expect(counters(box)['export_paused_low_disk'], 'a planted entry is a failed pass, not a pause').toBeUndefined();
+      expect(fs.readFileSync(planted, 'utf8'), 'the planted file is never removed or replaced').toBe('a planted file');
+      expect(metaOf(box, 'export_attempt_ms'), 'the failed pass counts for the cadence').toBe(String(later));
+      expect(metaOf(box, HEALTH_META.exportPassMs), 'and is not a pass').toBeNull();
+    }, 120_000);
+  }
+
+  it.skipIf(process.getuid?.() === 0)('export/ cannot be made at all: the swallowed mkdir leaves the probe to fail on the missing directory, which is a low-disk pause and not a throw', async () => {
+    const { box, ids } = ingestedBox('ccrc-history-export-nomkdir-', [row(1, 'one', DAY), row(2, 'two', DAY)]);
+    const later = Date.now() + 2 * HOUR;
+    fs.chmodSync(box.root, 0o500);   // no entry can be added under ~/.ccrc/history: mkdir of export/ fails EACCES
+    try {
+      // the real statfs, in-process: it answers ENOENT on the missing export/
+      const r = await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, () => later)));
+      expect(r).toEqual({ state: 'paused', segment: null, rows: 0, blobs: 0, bytes: 0, complete: false });
+    } finally {
+      fs.chmodSync(box.root, 0o700);
+    }
+    expect(fs.existsSync(path.join(box.root, 'export'))).toBe(false);
+    expect(counters(box)['export_paused_low_disk']).toBe(1);
+    expect(counters(box)['export_write_failed'], 'a missing directory is not a failed removal').toBeUndefined();
+    expect(metaOf(box, HEALTH_META.exportPaused)).toBe('low-disk');
+  }, 120_000);
 });
