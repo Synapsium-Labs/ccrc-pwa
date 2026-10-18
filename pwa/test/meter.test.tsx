@@ -158,7 +158,7 @@ describe('the meter is on the palette', () => {
     const meter = row.querySelector(".acct-meter[data-band='crit']");
     expect(meter).not.toBeNull();
     const fill = meter!.querySelector('.acct-fill');
-    expect(fill).toHaveClass('limit-fill--off', 'bg-edge-subtle');
+    expect(fill).toHaveClass('limit-fill--off', 'bg-ink-tertiary');
     expect(fill).not.toHaveClass('bg-limit-critical');
   });
 });

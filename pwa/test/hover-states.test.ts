@@ -39,6 +39,9 @@ describe('every interactive primitive carries a hover and a pressed state', () =
     BareRow: BARE_ROW,
     'Button ghost': buttonVariants({ variant: 'ghost' }),
     'Button quiet': buttonVariants({ variant: 'quiet', size: 'fit' }),
+    // `ghost`'s twin on the dead hue (D-5099) takes its lift and its press
+    // too (D-5495): it was the one hairline button that did neither.
+    'Button danger-ghost': buttonVariants({ variant: 'danger-ghost', size: 'fit' }),
   };
   it.each(Object.entries(grounded))('%s lifts to --bg-hover and sinks to --bg-pressed', (_name, cls) => {
     expect(has(cls, 'hover:bg-hover'), `${_name}: no hover ground`).toBe(true);
@@ -154,6 +157,9 @@ describe('a lifted ground fades in at --dur-fast, the per-skin duration', () => 
     BareRow: BARE_ROW,
     'Button ghost': buttonVariants({ variant: 'ghost' }),
     'Button quiet': buttonVariants({ variant: 'quiet', size: 'fit' }),
+    // `ghost`'s twin on the dead hue (D-5099) takes its lift and its press
+    // too (D-5495): it was the one hairline button that did neither.
+    'Button danger-ghost': buttonVariants({ variant: 'danger-ghost', size: 'fit' }),
   };
   it.each(Object.entries(grounded))('%s transitions background-color at var(--dur-fast), and nothing races it', (_name, cls) => {
     expect(cls, `${_name}: the hover ground snaps`).toMatch(FADES_GROUND);
@@ -276,6 +282,19 @@ describe('the selected row is tint plus rail, not reverse video', () => {
     expect(declValue(rule, 'color')).toBeNull();
   });
 
+  it("a folded card's name says it holds the selection in the row's own idiom, not an inverted chip (D-5495)", () => {
+    // The fold hides the selected row, so the card name stands in for it. It
+    // was the retired slab at chip scale; it now wears the row's tint and rail.
+    const chip = ruleIn(fleet, '.proj-card[data-holds-selection] .proj-card-name');
+    const row = ruleIn(fleet, '.sess-line--active');
+    expect(declValue(chip, 'background')).toBe(declValue(row, 'background'));
+    expect(declValue(chip, 'box-shadow')).toBe(declValue(row, 'box-shadow'));
+    expect(chip).not.toMatch(/var\(--ink-primary\)|var\(--bg-page\)/);
+    expect(declValue(chip, 'color')).toBeNull();
+    // The rail is 2px inside the chip's left edge, so the name starts past it.
+    expect(declValue(chip, 'padding')).toMatch(/^0 var\(--sp-1\)\s*0 calc\(var\(--sp-1\)\s*\+\s*2px\)$/);
+  });
+
   it('keeps the label semibold, the non-colour channel', () => {
     expect(declValue(ruleIn(fleet, '.sess-line--active .sess-label'), 'font-weight'))
       .toBe('var(--weight-semibold)');
@@ -317,6 +336,13 @@ describe('the gate measures each new ground with exactly the inks drawn on it', 
 
   it('pressed carries the neutral inks and the danger menu label, and nothing else (D-5454)', () => {
     expect(gateList('PRESSED_INKS').sort()).toEqual([...NEUTRAL, '--status-dead-text'].sort());
+  });
+
+  it("the danger-ghost's hairline is gated on the grounds it lifts and sinks to (D-5495)", () => {
+    // Its label, --status-dead-text, is already in HOVER_INKS and PRESSED_INKS;
+    // the hairline is a non-text boundary, so it gets its own 3:1 pairs.
+    expect(gate).toMatch(/danger hairline \/ hover \(UI 3:1\)`, T\.dead, T\.hover, 3\]/);
+    expect(gate).toMatch(/danger hairline \/ pressed \(UI 3:1\)`, T\.dead, T\.pressed, 3\]/);
   });
 
   it('the slab pair is retired with the slab', () => {

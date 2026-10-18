@@ -1703,16 +1703,16 @@ button.sess-held {
 }
 
 /* A fold hides the selected row exactly as it would hide a pending dialog, so
-   the card name wears an inverted chip, "the one you are in", on the folded
-   card. It was the row's slab at chip scale; since D-5101 the row itself is
-   the accent tint plus a rail, and this chip is left as it was (it is not
-   Task 9's to retune). Costs 8px of a nowrap+ellipsis name, on one card,
-   only while folded. */
+   the card name says "the one you are in" on the folded card, in the selected
+   row's own idiom (D-5101, D-5495): the accent tint plus a 2px accent rail,
+   with the name keeping the card's ink and its semibold. It was the row's
+   retired slab at chip scale (an inverted chip). The left padding clears the
+   rail. Costs 10px of a nowrap+ellipsis name, on one card, only while folded. */
 .proj-card[data-holds-selection] .proj-card-name {
-  background: var(--ink-primary);
-  color: var(--bg-page);
+  background: var(--accent-tint);
+  box-shadow: inset 2px 0 0 var(--accent);
   border-radius: var(--r-sm);
-  padding: 0 var(--sp-1);
+  padding: 0 var(--sp-1) 0 calc(var(--sp-1) + 2px);
 }
 
 /* Pinned account — mono like every other machine value on this screen, and
