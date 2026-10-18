@@ -7620,7 +7620,7 @@ export type LifecycleAct =
                     // carry who and why, `detail` carries "<field>: <from> ->
                     // <to>" (no new dec key — the dec vocabulary is pinned at
                     // four). Additive on the wire, as every act is.
-  | 'start' | 'ensure' | 'swap' | 'enable' | 'stop' | 'forget'
+  | 'start' | 'ensure' | 'swap' | 'enable' | 'stop' | 'forget' | 'hibernate'   // `hibernate` (D-5242): `ccd hibernate`, a DELIBERATE stop of a long-idle session journalled before its own `unsupervise` row (surface `none`, which alone reads as a crash); its own act so the journal never needs a filter to tell a sleep from a stop; `ensure` wakes it
   | 'unarchive'     // a return verb's gate (wave 3b) or `_spawn_start` cleared
                     // an archive stamp because a pane was asked for. DISTINCT
                     // FROM `restore`: that is the deliberate way back; this is
@@ -7636,7 +7636,7 @@ const LIFECYCLE_ACT_MAP: Record<LifecycleAct, true> = {
   create: true, claim: true, purge: true, supervise: true, unsupervise: true,
   destroy: true, rename: true, hold: true, release: true, archive: true, restore: true,
   'attic-drop': true, reap: true, reclaim: true, expire: true, collect: true, rehome: true, gc: true, spawn: true, route: true, start: true, ensure: true,
-  swap: true, enable: true, stop: true, forget: true, unarchive: true,
+  swap: true, enable: true, stop: true, forget: true, hibernate: true, unarchive: true,
   unknown: true,
 };
 export const LIFECYCLE_ACTS: readonly LifecycleAct[] =
@@ -8319,7 +8319,7 @@ export type LcRefusalToken =
   | 'lock-unopenable'          // the reap lock could not be opened
   | 'is-a-workspace'           // forget, aimed at a workspace: use the audited path
   | 'session-live'             // forget, on a running session
-  | 'session-verdict-unknown'  // tmux did not answer: fail-shut, nothing removed
+  | 'session-verdict-unknown' | 'hibernated'  // tmux did not answer: fail-shut, nothing removed; `hibernated` (D-5242): forget on a sleeping row, wake or stop it first
   | 'spawn-failed'             // _lc_fail: the undo landed, the session did not come back
   | 'purge-refused'            // D-2605: the row's compaction mutex was unavailable, so the registry row stands
   | 'purge-incomplete'         // D-2605: the purge RAN — the row is gone, the fact is journaled — and something beside it would not unlink
@@ -8476,6 +8476,9 @@ export const LC_REFUSAL_WORD: Record<LcRefusalToken, string> = {
     'A workspace with this id, or what one left behind, still stands in the registry, so ccrc treats the temporary directory there as that workspace’s and will not clean it up. Nothing was removed; ccrc looks again once the id is free.',
   'changed-recently':
     'Something in this temporary directory changed recently, so ccrc leaves it alone for now. Nothing was removed; ccrc looks again once it has stayed unchanged long enough.',
+  // D-5242: a hibernated row is asleep, not dead — `ccd ensure` (or mail, a dispatch, an open screen) wakes it (D-5423).
+  'hibernated':
+    'This session is asleep, not gone: it wakes when it is opened, mailed or dispatched. Wake it (ccd ensure) or stop it (ccd stop) first. Nothing was removed.',
 };
 
 /** Derived from the map — the `PR_REASON_MAP` idiom, so a member added to the

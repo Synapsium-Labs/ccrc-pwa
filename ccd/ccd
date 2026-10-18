@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=e029f8746a7a49d2e6282beb0415c3f04bf48cd23caaae4b53e41dc2a9dbb404
+# ccrc:generated 1 sha256=d300e6ac3b39db0a2d2b4921569eec43d777809744cb1cc3a31ae1b5875996ea
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -4366,7 +4366,7 @@ _LC_OBS=""
 # `badact` field, which is what makes the equality hold by construction rather
 # than by everyone remembering.
 _LC_ACTS=(archive attic-drop claim collect create destroy enable ensure expire forget gc
-          hold purge reap reclaim rehome release rename restore route spawn start stop
+          hibernate hold purge reap reclaim rehome release rename restore route spawn start stop
           supervise swap unarchive unsupervise)
 # The vocabulary is the set of ACCEPTABLE INPUTS; the degrade word is the
 # OUTPUT `_lc_emit` produces when an input is not in that set — the same rule
@@ -8686,7 +8686,7 @@ EOF
   echo docs-fetch
   echo docs-index
   echo docs-v1; echo delegation-events-v1   # delegation broker wave 3: the spool grammar and ccd-made spool directories (`_delegation_spool_dir`); the hook's registration is the doctor's to measure, not this token's
-  echo swap-busy-v1   # cmd_swap re-measures at the act and takes --interrupt (D-5240): the server sends the flag only behind this word
+  echo swap-busy-v1; echo hibernate   # cmd_swap re-measures at the act and takes --interrupt (D-5240): the server sends the flag only behind this word; `hibernate` (D-5242) is a verb, sent only behind `verbSupported`
 }
 
 cmd_version() {   # what THIS box runs, per the deploy's own stamp — never a guess.
@@ -9963,7 +9963,7 @@ cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
   elif [[ "$ahead" == 0 ]]; then reason="empty"
   else reason="manual"; fi
   _reg_set "$id" archived "$(date +%s)"
-  _reg_set "$id" archivedreason "$reason"
+  _reg_set "$id" archivedreason "$reason"; rm -f -- "$REG/$id.hibernated"   # an archive ENDS a hibernation (D-5242): the mail lane never wakes an archived row
   # AFTER both markers, so `reason` is the value that actually landed. It is one
   # of exactly three words (ccd:4702-4704): merged:#N | empty | manual.
   # `.archived` is the one registry field carrying a WHY, and it is measurably
@@ -19246,6 +19246,12 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # `-e` not `-f`, matching the four existing hold readers: an unreadable hold
   # defers too, because doubt reads as HELD.
   [[ -e "$REG/$id.hold" ]] && return 0
+  # A WOKEN ROW TAKES NO COSMETIC SWAP for SWAP_COOLDOWN (D-5242): it has just
+  # paid a cold `--resume`, and a relocation now would pay another. A builtin
+  # test and read, no fork; `-f` first, so a FIFO here cannot block the tick.
+  local woke=""
+  [[ -f "$REG/$id.woke" ]] && { IFS= read -r woke < "$REG/$id.woke"; } 2>/dev/null
+  [[ "$woke" =~ ^[0-9]+$ && $(( now - woke )) -lt "$SWAP_COOLDOWN" ]] && return 0
   # Otherwise (returning home, or leaving at the rate ceiling): relocate only at a clean turn
   # boundary — never mid-turn or mid-subagent. The idle gate reads the live process status file;
   # pane heuristics alone miss running subagents (learned 2026-07-03).
@@ -24361,6 +24367,7 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   # someone tried and it didn't come up — instead of a stale `stopped` that
   # hides the attempt and tells the operator to do the thing they just did.
   rm -f "$REG/$id.stopped"
+  _hib_wake_clear "$id"   # a start ends a hibernation: `.hibernated` goes beside `.stopped`, `.woke` records it (D-5242)
   # ONE EMIT, AT THE TOP, because this verb has FIVE exits — the supervised
   # arm's (ccd:11916 `return "$rc"`, ccd:11918 `return 0`), the in-unit arm's
   # (ccd:11927's `|| return $?`, ccd:11935 `return "$rc"`, and falling off the end
@@ -24466,6 +24473,7 @@ cmd_ensure() {   # id — idempotent; used by systemd. arg is the id directly.
   # unconditionally — `ensure` is `POST /api/sessions/:id/ensure`'s actual
   # revive route, so this is the case the spec sentence was written for.
   rm -f "$REG/$id.stopped"
+  _hib_wake_clear "$id"   # the WAKE (D-5242): `.hibernated` goes beside `.stopped`, `.woke` holds cosmetic swaps for SWAP_COOLDOWN
   # The Restart=always hot path, which is exactly why `_spawn_settle`'s
   # change-only rule exists one function up. This line is cheap — no fork beyond
   # the emitter's own — and it is what tells a respawn from a human's
@@ -27462,6 +27470,9 @@ cmd_swap() {   # [--force] [--cross-pool] [--interrupt] id target-wrapper — mo
   _is_valid_wrapper "$target" || die "unknown wrapper '$target' (valid: ${CCRC_ACCOUNTS[*]})"
   [[ -f "$REG/$id.uuid" ]] || die "no registry for '$id'"
   _ws_expire_refuse_return "$id" swap   # a return during an expiry refuses, before anything is journaled (EXPIRE region)
+  # A HIBERNATED ROW IS NOT SWAPPED (D-5242): it has no pane to move, and a swap
+  # would respawn it on another account behind the wake paths' budget.
+  [[ -e "$REG/$id.hibernated" ]] && die "hibernated: $id is asleep — wake it first (ccd ensure); nothing was touched"
   local cur; cur=$(_reg_get "$id" wrapper)
   [[ "$target" != "$cur" ]] || die "'$id' is already on $cur"
   [[ -x "$WRAPPER_DIR/$target" ]] || die "wrapper missing: $WRAPPER_DIR/$target"
@@ -28044,8 +28055,126 @@ cmd_stop() {   # [--surface <word>] <id>  |  [--surface <word>] <wrapper> <proje
   _lc_done stop "$id" "" dec.surface "$(_lc_surface_norm "$declared")"
   [[ -e "$REG/$id.choicekept" ]] || _operator_choice_keep "$id"   # `ccd start`/`enable` respawn from the record: the operator's own /model and /effort reach it first; a session already stopped and read is not read again (§5.7)
   _ws_unsupervise "$id" "$surface" "$declared"
+  rm -f -- "$REG/$id.hibernated"   # a stop ENDS a hibernation (D-5242): an ordinary stopped row, which mail never wakes
   tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || _operator_choice_unmark "$id"   # a kill that failed on a live session leaves no marker (§5.7)
   echo "stopped $id"
+}
+
+# ── HIBERNATE (`hibernate-long-idle-sessions` (D-5242); spec 2026-10-16 §5.11) ──
+# The server decides (`hibernateVerdict`); this verb ACTS, and only after
+# re-measuring at the act every box-local fact the decision read, plus the one
+# the server cannot see (an attached terminal). Any doubt refuses
+# `session-busy: <reason>` at exit 3 and touches NOTHING, the journal included:
+# a refusal writes no `hibernate` row, so the dead-coordinator lane can never
+# read a sleep that did not happen as a deliberate stop. The reasons are a
+# closed set: busy, draft, marker, background, scheduled, held, opted-out,
+# recent-swap, attached.
+_hib_refuse() {   # reason detail — EXITS 3 with `ccd: session-busy: <reason> — <detail>` on stderr. Never returns.
+  echo "ccd: session-busy: $1 — $2; nothing was touched" >&2
+  exit 3
+}
+
+_hib_wake_clear() {   # id — a start or an ensure ends a hibernation: `.hibernated` goes, `.woke` records the wake (epoch). Always 0.
+  # `-e` or `-L`: a marker that cannot be read is still a marker that must go.
+  [[ -e "$REG/$1.hibernated" || -L "$REG/$1.hibernated" ]] || return 0
+  rm -f -- "$REG/$1.hibernated"
+  local now; _now_s_to now
+  _reg_set "$1" woke "$now" || true
+  return 0
+}
+
+cmd_hibernate() {   # [--surface <word>] [--actor <text>] [--reason <text>] <id> — stop a long-idle session cleanly; `ccd ensure` wakes it.
+  # ONE POSITIONAL, AND THAT IS `cmd_ensure`'s SECURITY BOUNDARY: the agent
+  # grants the bare `['hibernate']` prefix, after which tokens are
+  # unconstrained, so the arity rule below is the only bound on what a caller
+  # can put here. The dec flags are stripped BEFORE it, exactly as
+  # `cmd_ws_archive`'s are (grep `FLAGS ARE STRIPPED BEFORE THE ARITY RULE`),
+  # and land on the `hibernate` row (`hibernate-verb-dec-and-idempotence` (D-5424)).
+  local lc_surface=none lc_actor='' lc_reason='' lc_gs=0 lc_ga=0 lc_gr=0 lc_args=()
+  local usage="usage: ccd hibernate [--surface <word>] [--actor <text>] [--reason <text>] <id>"
+  while (( $# )); do
+    case "$1" in
+      --surface)   [[ $# -ge 2 ]] || die "$usage"; lc_gs=1; lc_surface="$2"; shift 2 ;;
+      --surface=*) lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
+      --actor)     [[ $# -ge 2 ]] || die "$usage"; lc_ga=1; lc_actor="$2"; shift 2 ;;
+      --actor=*)   lc_ga=1; lc_actor="${1#--actor=}"; shift ;;
+      --reason)    [[ $# -ge 2 ]] || die "$usage"; lc_gr=1; lc_reason="$2"; shift 2 ;;
+      --reason=*)  lc_gr=1; lc_reason="${1#--reason=}"; shift ;;
+      *)           lc_args+=("$1"); shift ;;
+    esac
+  done
+  set -- "${lc_args[@]}"
+  if (( lc_gs )); then local lc_w; lc_w=$(_lc_surface_norm "$lc_surface"); lc_surface=${lc_w:-unknown}; fi
+  if (( lc_ga )); then
+    [[ -n "${lc_actor//[[:space:]]/}" ]] || die "--actor must be non-blank"
+    _lc_dec_ok "$lc_actor" || die "--actor is longer than $_LC_DEC_MAX bytes"
+  fi
+  if (( lc_gr )); then
+    [[ -n "${lc_reason//[[:space:]]/}" ]] || die "--reason must be non-blank"
+    _lc_dec_ok "$lc_reason" || die "--reason is longer than $_LC_DEC_MAX bytes"
+  fi
+  [[ $# -eq 1 ]] || die "$usage"
+  local id="$1"
+  [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
+  [[ -f "$REG/$id.uuid" ]] || die "no such session: $id"
+  # Idempotent on a row already asleep: no pane, the marker standing (D-5424: a sweep may retry a lost answer).
+  if [[ -e "$REG/$id.hibernated" && "$(_session_verdict "$id")" == gone ]]; then echo "already hibernated $id"; return 0; fi
+  # ── the re-measure, cheapest first ──
+  # `-e` not `-f`, the hold readers' polarity: a hold or an opt-out that cannot be read still holds.
+  [[ -e "$REG/$id.hold" ]] && _hib_refuse held "$id is held: a program has declared it is mid-flight here"
+  [[ -e "$REG/$id.no-hibernate" ]] && _hib_refuse opted-out "$id carries a no-hibernate marker"
+  local now last
+  _now_s_to now; _reg_get_to last "$id" lastswap
+  [[ "$last" =~ ^[0-9]+$ && $(( now - last )) -lt $(( SWAP_JITTER + 60 )) ]] \
+    && _hib_refuse recent-swap "a swap was dispatched $(( now - last ))s ago and may still be landing"
+  # THE TURN MARKER (`$REG/<id>.turn.json`, one line, the hook's jq writes it
+  # with fixed keys). Builtin reads only. `bg` and `crons` must be EXACTLY 0:
+  # -1 is a Stop whose list was absent or not an array, which says nothing
+  # about what runs or what is scheduled, so it refuses like a positive count.
+  # A marker with no `crons` (an older hook) refuses `scheduled` the same way:
+  # a session's crons and wakeups die with its process and nothing else shows them.
+  local mf="$REG/$id.turn.json" line="" mst="" mbg="" mcr="" re
+  [[ -f "$mf" ]] && { IFS= read -r line < "$mf"; } 2>/dev/null
+  re='"state":"([a-z]+)"';   [[ "$line" =~ $re ]] && mst="${BASH_REMATCH[1]}"
+  re='"bg":(-?[0-9]+)';      [[ "$line" =~ $re ]] && mbg="${BASH_REMATCH[1]}"
+  re='"crons":(-?[0-9]+)';   [[ "$line" =~ $re ]] && mcr="${BASH_REMATCH[1]}"
+  [[ "$mst" == done ]] || _hib_refuse marker "the turn marker reads ${mst:-nothing readable}, not done"
+  [[ "$mbg" == 0 ]] || _hib_refuse background "the last Stop's background tasks read ${mbg:-absent} (only exactly 0 is nothing running)"
+  [[ "$mcr" == 0 ]] || _hib_refuse scheduled "the last Stop's session crons read ${mcr:-absent} (only exactly 0 is nothing scheduled)"
+  # The live half: `_idle_for_keystroke`'s checks (width, no `esc to
+  # interrupt`, a prompt, live `idle`, COMPACT_QUIET of quiet, an empty box).
+  _pane_for_keystroke "$id" || _hib_refuse busy "${KS_WHY}${KS_DETAIL:+: $KS_DETAIL}"
+  if ! _idle_for_keystroke "$id" "$KS_PANE" ""; then
+    [[ "$KS_WHY" == drafting ]] && _hib_refuse draft "a message is half-typed in the input box"
+    _hib_refuse busy "${KS_WHY}${KS_DETAIL:+: $KS_DETAIL}"
+  fi
+  # NOBODY ATTACHED: a terminal attach, `cc`, or the PWA drawer's `tmux attach`
+  # pty. The one hold the server cannot see; an unreadable answer refuses.
+  local att=""
+  att=$(tmux display-message -p -t "$(_tmux_t "$id")" '#{session_attached}' 2>/dev/null) || att=""
+  [[ "$att" =~ ^[0-9]+$ ]] || _hib_refuse attached "tmux did not say whether a terminal is attached"
+  [[ "$att" == 0 ]] || _hib_refuse attached "$att terminal(s) attached to the pane"
+  # The idle age, for the marker and the log: the latest main event the marker records.
+  local k v latest=0 hours=0
+  for k in turnAt stopAt restartAt; do
+    re="\"$k\":([0-9]+)"; [[ "$line" =~ $re ]] || continue
+    v="${BASH_REMATCH[1]}"; (( v > latest )) && latest=$v
+  done
+  (( latest > 0 && now * 1000 > latest )) && hours=$(( (now * 1000 - latest) / 3600000 ))
+  # ── the act, in this order ──
+  # 1. The journal row FIRST: it is what makes the act deliberate to the
+  #    dead-coordinator lane (`DEAD_COORDINATOR_DELIBERATE_ACTS`), because the
+  #    `_ws_unsupervise` row below carries surface `none`. A kill that ended
+  #    this shell before it would leave a stop the journal reads as a crash.
+  _lc_done hibernate "$id" "" dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
+  [[ -e "$REG/$id.choicekept" ]] || _operator_choice_keep "$id"   # the wake respawns from the record: the operator's own /model and /effort reach it first (§5.7)
+  # 2. The marker BEFORE the stop, so a row that reads stopped is never a
+  #    sleeping one nobody knows to wake.
+  _reg_set "$id" hibernated "$now $hours" || die "could not write $REG/$id.hibernated — nothing was stopped"
+  _ws_unsupervise "$id" ccd
+  tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || _operator_choice_unmark "$id"   # a kill that failed on a live session leaves no marker (§5.7)
+  echo "$(date '+%F %T') hibernate $id: idle ${hours}h" >> "$REG/swap.log"
+  echo "hibernated $id"
 }
 
 cmd_forget() {   # <id> — remove a DEAD non-workspace session's registry entry.
@@ -28115,6 +28244,12 @@ cmd_forget() {   # <id> — remove a DEAD non-workspace session's registry entry
     _lc_refuse forget "$id" held \
       "held: $_hold_reason — release first: ccd ws-release --session $id" dec.reason "$reason"
   fi
+  # A HIBERNATED ROW IS ASLEEP, NOT DEAD (D-5242): mail, a dispatch or an open
+  # screen wakes it, so forgetting it would drop a session somebody can still
+  # reach. `-e`: a marker that cannot be read still refuses. Its own journal
+  # token (`hibernated-forget-refusal-token` (D-5423)).
+  [[ -e "$REG/$id.hibernated" ]] && _lc_refuse forget "$id" hibernated \
+    "hibernated: wake it (ccd ensure) or stop it (ccd stop) first — nothing was removed" dec.reason "$reason"
   # Deadness is a precondition, not an effect: forget is for a row whose
   # session is already gone. Stopping a live one is `ccd stop`'s job, and
   # collapsing the two into one verb turns a cleanup into a kill.
@@ -40217,6 +40352,7 @@ case "${1:-}" in
   enable)    shift; cmd_enable "$@" ;;
   stop)      shift; cmd_stop "$@" ;;
   forget)    shift; cmd_forget "$@" ;;
+  hibernate) shift; cmd_hibernate "$@" ;;
   swap)      shift; cmd_swap "$@" ;;
   swap-self) shift; cmd_swap_self "$@" ;;
   prefer)    shift; cmd_prefer "$@" ;;
@@ -40252,6 +40388,6 @@ case "${1:-}" in
   docs-show)  shift; cmd_docs_show "$@" ;;
   docs-fetch) shift; cmd_docs_fetch "$@" ;;
   version)   shift; cmd_version "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-hold|ws-release|coord-pause|reclaim-pause|win-size|account-pane|project-pool|route|pr-open|pr-state|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-hold|ws-release|coord-pause|reclaim-pause|win-size|account-pane|project-pool|route|pr-open|pr-state|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
 esac
 fi

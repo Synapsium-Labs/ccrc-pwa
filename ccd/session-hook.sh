@@ -3002,7 +3002,7 @@ _hook_history_card() {   # folds the history line into CARD_COMPACT; silent; bui
   return 0
 }
 
-state="" ask_json="null" interrupted="false" src="" gcmd="" stopfail="" bg="-1" bgk="" bgi="" err="" hts="" msid="" sessend=""
+state="" ask_json="null" interrupted="false" src="" gcmd="" stopfail="" bg="-1" crons="-1" bgk="" bgi="" err="" hts="" msid="" sessend=""
 case "$event" in
   UserPromptSubmit) state="working" ;;
   PostToolUse)
@@ -3178,8 +3178,10 @@ case "$event" in
     # `NON_DELEGATING_TASK_KINDS` and `TERMINAL_TASK_STATUSES` (`shared/api.ts`), held equal by
     # `session-hook-background.test.ts`, which iterates over the TypeScript lists: a task counts unless its CLEANED kind
     # is one of the six, or its status is one of the three terminal words; an unseen kind or status counts.
-    { read -r bg; read -r bgk; read -r bgi; read -r bgd; read -r bgdk; } < <(jq -r '(if (.background_tasks|type) == "array" then .background_tasks else null end) as $a | def kind: (.type | if type == "string" then ascii_downcase | gsub(" "; "-") | gsub("[^a-z_-]"; "") else "" end); [$a[]? | objects | select((kind | IN("shell", "monitor", "mcp-task", "dream", "auto-mode-scan", "memory-import")) | not) | select((.status | IN("completed", "failed", "killed")) | not) | kind] as $d | [(if $a == null then -1 else ($a|length) end), ([$a[]? | objects | kind | select(length > 0)] | join(",")), ([$a[]? | objects | .id | strings | select(test("^[A-Za-z0-9_-]{1,64}\\z"))] | .[0:8] | join(",")), (if $a == null then -1 else ($d|length) end), ($d | map(select(length > 0)) | unique | join(","))] | .[]' <<<"$payload" 2>/dev/null)
+    { read -r bg; read -r bgk; read -r bgi; read -r bgd; read -r bgdk; read -r crons; } < <(jq -r '(if (.background_tasks|type) == "array" then .background_tasks else null end) as $a | def kind: (.type | if type == "string" then ascii_downcase | gsub(" "; "-") | gsub("[^a-z_-]"; "") else "" end); [$a[]? | objects | select((kind | IN("shell", "monitor", "mcp-task", "dream", "auto-mode-scan", "memory-import")) | not) | select((.status | IN("completed", "failed", "killed")) | not) | kind] as $d | [(if $a == null then -1 else ($a|length) end), ([$a[]? | objects | kind | select(length > 0)] | join(",")), ([$a[]? | objects | .id | strings | select(test("^[A-Za-z0-9_-]{1,64}\\z"))] | .[0:8] | join(",")), (if $a == null then -1 else ($d|length) end), ($d | map(select(length > 0)) | unique | join(",")), (if (.session_crons|type) == "array" then (.session_crons|length) else -1 end)] | .[]' <<<"$payload" 2>/dev/null)
     # The pair reaches the hookstate only from an ARRAY (bg not -1) and as a plain count; anything else writes neither.
+    # `hibernate-long-idle-sessions` (D-5242): line six is `crons`, the length of `session_crons` (session-scoped crons and wakeups, which no live word, background list or roster shows), -1 unless it is an ARRAY; only the marker reads it.
+    [[ "$crons" =~ ^[0-9]+$ ]] || crons=-1
     [[ "$bg" =~ ^[0-9]+$ && "$bgd" =~ ^[0-9]+$ ]] || { bgd="" bgdk=""; } ;;
   StopFailure) stopfail=1; err=$(jq -r '(.error // "") | tostring | gsub("[^a-z_]"; "") | .[0:64]' <<<"$payload" 2>/dev/null) ;;
   SessionEnd) sessend=1 ;;   # delegation broker §5.3: a termination HINT only — captured below in a -hookcap session, otherwise inert (no hookstate, no marker)
@@ -3265,6 +3267,7 @@ fi
 # half an alias or a trailing comma, which the reader refuses
 # (alias-list-fits-whole-aliases (D-3658)). `fiti` keeps at most 8 ids.
 # restart: a same-session done moves bg* into lost* (a union, lost-kinds-accumulate (D-3660)); clear: a fresh line.
+# `crons` (D-5242): set on done, carried on every other kind for the same session, -1 on clear and for a foreign line.
 TURN_MARK_PROGRAM='
 def csv: split(",") | map(select(length > 0));
 def fitk: reduce .[] as $k (""; if (length + (if length > 0 then 1 else 0 end) + ($k|length)) <= 200 then (if length > 0 then . + "," + $k else $k end) else . end);
@@ -3282,21 +3285,23 @@ def fiti: .[0:8] | join(",");
    restartAt: (if $same then $p.restartAt else null end),
    lostBg: (if $same then ($p.lostBg // 0) else 0 end),
    lostKinds: (if $same then ($p.lostKinds // "") else "" end),
-   lostIds: (if $same then ($p.lostIds // "") else "" end)} as $b
+   lostIds: (if $same then ($p.lostIds // "") else "" end),
+   crons: (if $same then ($p.crons // -1) else -1 end)} as $b
 | if $kind == "working" then $b + {state: "working", turnAt: $at, lostBg: 0, lostKinds: "", lostIds: ""}
-  elif $kind == "done" then $b + {stopAt: $at, bg: $bg, bgKinds: ($bgk | csv | unique | fitk), bgIds: ($bgi | csv | fiti)}
+  elif $kind == "done" then $b + {stopAt: $at, bg: $bg, bgKinds: ($bgk | csv | unique | fitk), bgIds: ($bgi | csv | fiti), crons: $crons}
   elif $kind == "failed" then $b + {state: "failed", stopAt: $at, err: $err}
   elif $kind == "restart" then $b
     + (if $same and $p.state == "done" then {lostBg: (($p.lostBg // 0) + ([($p.bg // -1), 0] | max)), lostKinds: ((($p.lostKinds // "") + "," + ($p.bgKinds // "")) | csv | unique | fitk), lostIds: ((($p.lostIds // "") + "," + ($p.bgIds // "")) | csv | fiti)} else {} end)
     + {restartAt: $at, bg: 0, bgKinds: "", bgIds: ""}
-  elif $kind == "clear" then {v: 1, sessionId: $sid, state: "done", event: $ev, at: $at, turnAt: null, stopAt: null, bg: -1, bgKinds: "", bgIds: "", err: null, restartAt: null, lostBg: 0, lostKinds: "", lostIds: ""}
+  elif $kind == "clear" then {v: 1, sessionId: $sid, state: "done", event: $ev, at: $at, turnAt: null, stopAt: null, bg: -1, bgKinds: "", bgIds: "", err: null, restartAt: null, lostBg: 0, lostKinds: "", lostIds: "", crons: -1}
   else empty end'
 _hook_turn_mark() {   # <kind: working|done|failed|restart|clear> -> 0 written; 1 not written (never fatal)
   local kind="$1" mf="$REG/$id.turn.json" prev="" out
   [[ "$bg" =~ ^-?[0-9]+$ ]] || bg=-1
+  [[ "$crons" =~ ^-?[0-9]+$ ]] || crons=-1
   { IFS= read -r prev < "$mf"; } 2>/dev/null   # braces: a missing file's redirection error stays silent (D-1691)
   out=$(jq -cn --arg prev "$prev" --arg kind "$kind" --arg sid "$msid" --arg ev "$event" --argjson at "$hts" \
-    --argjson bg "$bg" --arg bgk "$bgk" --arg bgi "$bgi" --arg err "$err" "$TURN_MARK_PROGRAM" 2>/dev/null) || return 1
+    --argjson bg "$bg" --argjson crons "$crons" --arg bgk "$bgk" --arg bgi "$bgi" --arg err "$err" "$TURN_MARK_PROGRAM" 2>/dev/null) || return 1
   [[ -n "$out" ]] || return 1
   _hook_write_atomic "$mf" "turn-$hts" "$out"
 }
