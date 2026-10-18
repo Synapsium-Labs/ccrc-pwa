@@ -1973,6 +1973,14 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       - 17:55: v0.0.284 (#616) and v0.0.285 (#608) followed, unapplied. STATUS: fleet and server v0.0.281, newest
         v0.0.285, intent dev/auto=stable, backups fleet 170M/server 1331M, disk free fleet 211G/work volume
         93G/server 32G, no anomalies.
+      - **2026-10-18 18:55 UTC: two console taps, both clean.** v0.0.285 (#608): fleet 18:17:48 to 18:19:05, server
+        18:19:14 to 18:19:46. v0.0.287 (#620): fleet 18:26:05 to 18:27:21, server 18:27:28 to 18:28:08; both reports
+        `done`, `from: pwa`, sweep `down: 3` on the fleet and `ok` on the server. Each fleet doctor 36 passed, 7
+        warned, 0 failed; each server doctor 27 passed; each server gate answered the staged version. v0.0.286
+        (#619) was skipped; v0.0.288 (#621) followed, unapplied. Server backups rose 1331M to 1588M: two snapshots
+        of about 212M replaced two of 85M, so 10 kept dirs. That is the delegation journal growth already ruled.
+        STATUS: fleet and server v0.0.287, newest v0.0.288, intent dev/auto=stable, backups fleet 188M/server
+        1588M, disk free fleet 206G/work volume 89G/server 31G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
