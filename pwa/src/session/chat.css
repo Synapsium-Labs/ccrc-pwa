@@ -72,6 +72,26 @@
   font: var(--weight-regular) var(--fs-2xs) / 1 var(--family-mono);
   font-variant-numeric: tabular-nums;
 }
+/* D-5296, D-5390: `with coordinator · <parent>` is longer than the row's other
+   words. Left alone it wrapped mid-name ("calm-/mesa") with the dot stranded
+   on a row of its own (header 80 -> 104 px at 360 and 390, both skins, the
+   same growth `working · N in background` has on main). Clamping it to one
+   line kept 80 px but cut the phrase to "with…" at 360. So: it stays beside
+   the dot (`max-width` caps its size before the row wraps, and the title
+   column's grid track may shrink to the column), and it may break only before
+   `· <parent>`, never inside the name: two short lines at phone width, one at
+   laptop and wide. The full sentence is on `title`. */
+.chat-meta:has(.status-line--coordinator) {
+  min-width: 0;
+}
+.chat-meta .status-line--coordinator {
+  min-width: 0;
+  max-width: calc(100% - 8px - var(--sp-2)); /* the dot's 8 px box (StatusDot's min-w-2) and the row gap */
+  line-height: 1.2;
+}
+.chat-meta .status-line-name {
+  white-space: nowrap;
+}
 .chat .status-line--busy {
   color: var(--status-busy-text);
 }

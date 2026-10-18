@@ -253,9 +253,7 @@ export function SessionHeader({
     bucket === 'attention'
       ? 'waiting on you'
       : bucket === 'working'
-        ? wcWords !== null
-          ? wcWords.text
-          : bgWords !== null
+        ? bgWords !== null
           ? `working · ${bgWords.text}`
           : at !== null
           ? `working · ${clock(now - at)}`
@@ -339,7 +337,15 @@ export function SessionHeader({
           {bucket !== null && (
             <>
               <StatusDot status={bucket} />
-              <span className={`status-line status-line--${variant}`} title={wcWords?.title ?? bgWords?.title}>{word}</span>
+              <span className={cn('status-line', `status-line--${variant}`, wcWords !== null && 'status-line--coordinator')} title={wcWords?.title ?? bgWords?.title}>
+                {wcWords !== null ? (
+                  // D-5390: the phrase yields width before the parent's name does.
+                  <>
+                    <span className="status-line-lead">with coordinator</span>
+                    {' '}<span className="status-line-name">{`· ${wcWords.short}`}</span>
+                  </>
+                ) : word}
+              </span>
             </>
           )}
           {wrapper !== '' && (

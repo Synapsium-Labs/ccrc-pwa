@@ -1186,6 +1186,22 @@ describe('the quiet "with coordinator" state (D-5296)', () => {
     });
   }
 
+  // Layout is not measurable in jsdom: the widths above prove the words, and
+  // these rules are what the Playwright measurements (PR body) depend on. The
+  // name never breaks; the word sits beside the dot; the title column may
+  // shrink to the column instead of pushing the name under the keycaps.
+  it('the header rules: the name never breaks, the word stays beside the dot', async () => {
+    const { readFileSync } = await import('node:fs');
+    const path = await import('node:path');
+    const { ruleIn, declValue, stripComments } = await import('./cssRule');
+    const css = stripComments(readFileSync(path.join(import.meta.dirname, '..', 'src', 'session', 'chat.css'), 'utf8'));
+    expect(declValue(ruleIn(css, '.chat-meta .status-line-name'), 'white-space')).toBe('nowrap');
+    expect(declValue(ruleIn(css, '.chat-meta .status-line--coordinator'), 'max-width')).toBe('calc(100% - 8px - var(--sp-2))');
+    expect(declValue(ruleIn(css, '.chat-meta:has(.status-line--coordinator)'), 'min-width')).toBe('0');
+    renderHeader({ session: held(), status: 'idle' });
+    expect(document.querySelector('.status-line--coordinator .status-line-name')?.textContent).toBe('· calm-mesa');
+  });
+
   it('without the field the header reads the ordinary working word', () => {
     renderHeader({ session: held({ withCoordinator: null }), status: 'idle' });
     expect(document.querySelector('.status-line')?.textContent).not.toContain('with coordinator');
