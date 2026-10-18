@@ -3603,8 +3603,8 @@ describe.skipIf(process.platform !== 'linux')('row 64 on Darwin: killpg answers 
   // T20-M3 pin the SIGTERM call's predicate, not end-to-end loudness: under a refusal that holds at every signal, as a
   // real one does, either mutant still raises the same EPERM, KILL_GRACE_S later, at the SIGKILL.
   it('EPERM stays loud: a live leader that refuses the SIGTERM, and a leader already reaped that refuses it, both raise EPERM; any other errno raises even against an exited, unreaped leader', () => {
-    const got = unitJson<Record<string, string>>(h.home, [
-      'import errno, os, signal, subprocess',
+    const got = unitJson<{ live: string; reaped: string; einval: string; liveS: number }>(h.home, [
+      'import errno, os, signal, subprocess, time',
       'real = os.killpg',
       'def at_term(err):',
       '    def fake(pgid, sig):',
@@ -3623,7 +3623,9 @@ describe.skipIf(process.platform !== 'linux')('row 64 on Darwin: killpg answers 
       '        os.killpg = real',
       'res = {}',
       "live = subprocess.Popen(['sleep', '10'], start_new_session=True)   # outlives the absorb's wait, KILL_GRACE_S (D-5339)",
+      't0 = time.monotonic()',
       "res['live'] = stop(live)",
+      "res['liveS'] = time.monotonic() - t0",
       'try:',
       '    real(live.pid, signal.SIGKILL)',
       'except OSError:',
@@ -3638,7 +3640,12 @@ describe.skipIf(process.platform !== 'linux')('row 64 on Darwin: killpg answers 
       'odd.wait()',
       'out(res)',
     ].join('\n'), { timeoutMs: 60_000 });
-    expect(got).toEqual({ live: 'raised EPERM', reaped: 'raised EPERM', einval: 'raised EINVAL' });
+    const { liveS, ...arms } = got;
+    expect(arms).toEqual({ live: 'raised EPERM', reaped: 'raised EPERM', einval: 'raised EINVAL' });
+    // The live leader's refusal raises when the absorb's wait runs out, at the stop's own grace deadline (D-5339):
+    // never at once, and never at a deadline of its own past that grace.
+    expect(liveS).toBeGreaterThanOrEqual(1.9);
+    expect(liveS).toBeLessThan(4);
   }, 60000);
 
   it('the absorb is the SIGTERM call\'s alone: at the SIGKILL, an EPERM against an exited, unreaped leader raises (D-5335)', () => {
@@ -3684,5 +3691,41 @@ describe.skipIf(process.platform !== 'linux')('row 64 on Darwin: killpg answers 
     const log = t20log();
     expect(log[0]).toMatch(/^15 EPERM leader=[RS]$/);
     expect(log.slice(1)).toEqual(['0 ESRCH']);
+  }, 60000);
+
+  // One deadline for the whole stop (D-5339): an absorb that waited for the leader leaves the grace loop what is left of
+  // KILL_GRACE_S, never a fresh one. The leader exits on its own 1.2 s after a SIGTERM that Darwin's EPERM refused, and
+  // leaves a member alive in its group, so that member gets the SIGKILL at the grace deadline, 2 s after the SIGTERM.
+  it('a late absorb keeps the stop\'s one grace: a member left alive after the leader exits is SIGKILLed KILL_GRACE_S after the SIGTERM, not later (D-5339)', () => {
+    const got = unitJson<{ rc: number; signals: number[]; s: number }>(h.home, [
+      'import errno, os, signal, subprocess, time',
+      'real = os.killpg',
+      'seen = []',
+      'def darwin_exiting(pgid, sig):',
+      '    if sig != 0:',
+      '        seen.append(sig)',
+      '    if sig == signal.SIGTERM:',
+      '        raise OSError(errno.EPERM, "Operation not permitted")   # nothing signalled: the leader is still exiting',
+      '    return real(pgid, sig)',
+      "p = subprocess.Popen(['sh', '-c', 'sleep 30 & sleep 1.2'], start_new_session=True,",
+      '                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)',
+      'os.killpg = darwin_exiting',
+      't0 = time.monotonic()',
+      'try:',
+      '    H.SYS._stop(p)',
+      'finally:',
+      '    os.killpg = real',
+      '    s = time.monotonic() - t0',
+      '    try:',
+      '        real(p.pid, signal.SIGKILL)',
+      '    except OSError:',
+      '        pass',
+      "out({'rc': p.returncode, 'signals': seen, 's': s})",
+    ].join('\n'), { timeoutMs: 60_000 });
+    const { s, ...rest } = got;
+    // The leader exited by itself (rc 0, never signalled); its group still had a live member, so the SIGKILL went out.
+    expect(rest).toEqual({ rc: 0, signals: [15, 9] });
+    expect(s).toBeGreaterThanOrEqual(1.9);
+    expect(s).toBeLessThan(2.7);
   }, 60000);
 });

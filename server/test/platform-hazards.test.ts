@@ -375,6 +375,13 @@ describe('R14(i): the UTF-8 locale bash takes here, and whether D-3833/D-3979\'s
 // A stop that raised also records how long the leader took to become reapable. `os.killpg` is wrapped through the
 // helper's own `os` seam; the shipped helper is unchanged. Like R14(i), the Darwin arm asserts only that the probe
 // ran, because a red here is a `full-suite` red; the answer is read from the `probe-macos` and `test-macos` logs.
+//
+// ANSWERED, 2026-10-18 (macOS 26.6.2, CPython 3.15.0, git 2.56.0). Before the fix (probe-macos job 117707283076):
+// every first SIGTERM of all 92 stops met EPERM. In 42, a non-reaping waitid said the leader had not exited while
+// kill(pid, 0) answered ok, and the stop raised; each such leader was reapable 0.6 to 3.8 ms later (36 of the 40
+// `git status` stops). So the hypothesis held. D-5339 makes the SIGTERM's absorb wait for the reap, inside the stop's
+// grace. After it (job 117709790251): all 92 stops overflow and return, 37 of the 40 `git status` stops through an
+// EPERM met while waitid still said not exited.
 type B2Pass = { label: string; n: number; tally: Record<string, number>; reapAfterRaise: string[] };
 type B2Report = { python: string; mac: string; git: string; passes: B2Pass[] };
 
