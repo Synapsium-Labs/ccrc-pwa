@@ -2057,8 +2057,9 @@ export function segmentBlobsAfter(db, rowid, maxBytes) {
  *  replay's row pass. */
 export function segmentRowsAfter(db, ord, limit) {
   const all = [];
-  for (const [kind, { table }] of Object.entries(SEGMENT_ROW_TABLES)) {
-    const st = db.prepare(`SELECT * FROM ${table} WHERE ord > ? ORDER BY ord LIMIT ?`);
+  for (const [kind, { table, cols }] of Object.entries(SEGMENT_ROW_TABLES)) {
+    // Named columns, never a star (C43; the server/src/coord/db.ts rule): the table's own list, `ord` first.
+    const st = db.prepare(`SELECT ord, ${cols.map(([c]) => c).join(', ')} FROM ${table} WHERE ord > ? ORDER BY ord LIMIT ?`);
     st.setReadBigInts(true);
     for (const r of st.all(ord, limit)) {
       const row = {};
