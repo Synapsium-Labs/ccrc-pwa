@@ -1427,6 +1427,30 @@ describe('only an agent id with a qualifying join is a subagent to the turn mark
         expect([...batch, ...planted].filter((id) => !have.has(id)), `trial ${t}: no id vanished`).toEqual([]);
       }
     }, 120_000);
+
+    // A SOURCE PIN: no BASH_ENV shadow can split one `[[ ]]`, and a many-round race would be flaky. "Absent or regular" is two reads, and
+    // a creation (`>>`) or a rotation's removal (`mv -f`) between them refused a plain append: measured against a create-and-rename loop for 4 s
+    // each: 315 refusals in 127k checks (-f then ! -e), 416 in 136k (! -e then -f), 0 in 73k for positive type tests (D-5434).
+    it('the entry guard refuses only on positive non-regular type tests, never on absence or regularity, so neither a creation nor a rotation race refuses an append (D-5434)', () => {
+      const src = fs.readFileSync(HOOK, 'utf8');
+      const open = src.indexOf('_hook_join_record() {');
+      expect(open, 'the hook defines _hook_join_record').toBeGreaterThan(-1);
+      const guard = src.slice(open).split('\n').slice(1).find((line) => line.includes('-L "$jf"'));
+      expect(guard, 'the function has an entry guard that tests `-L "$jf"`').toBeDefined();
+      expect(guard).toContain('return 1');
+      expect(guard, 'no regularity read').not.toContain('-f "$jf"');
+      expect(guard, 'no absence read').not.toContain('! -e "$jf"');
+      expect(guard, 'and no negated type test, which is "regular or absent" again').not.toMatch(/! -[LdpSbc] "\$jf"/);
+      for (const t of ['-L', '-d', '-p', '-S', '-b', '-c']) expect(guard, `it refuses on ${t}`).toContain(`${t} "$jf"`);
+      // Every code line from the opening to the append, not only the guard: a second two-read refusal there would bring the race back.
+      const body = src.slice(open).split('\n');
+      const append = body.findIndex((line) => line.includes('>> "$jf"'));
+      expect(append, 'the function appends with `>> "$jf"`').toBeGreaterThan(0);
+      for (const line of body.slice(1, append + 1).filter((l) => !l.trimStart().startsWith('#'))) {
+        expect(line, 'no regularity read before the append').not.toContain('-f "$jf"');
+        expect(line, 'no absence read before the append').not.toContain('! -e "$jf"');
+      }
+    });
   });
 
   it('hookstate.json no longer carries the join: after a Start with an id its keys are the base shape', () => {
