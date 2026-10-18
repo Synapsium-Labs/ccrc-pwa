@@ -4015,6 +4015,11 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     with #425; the docs PR's README half waits for #425's claim, so this frees it sooner. Path identity's review
     run 575 dispatched at 03:11. Told #425's coordinator (mail 6172): wave 17 waits for #482, not #425, and nothing
     on our side asks #410 to wait for #425.
+  - **04:24 UTC: F16 starts, and wave 17's full run is out.** Every server shard has finished in both runs. AFTER
+    39094213607 reds one server file, `ccrc-account.test.ts` C3 ("the supervisor recorded no tier pid"). That file
+    is 357 of 357 green at the same tip in #482's PR run 39093501177, and in the wave's earlier full run
+    38996557605, so I read it as a flake. The worker classifies it in the comparison and re-runs its describe alone
+    (mail 6177). Wave 17's `mode=full` run 39096832066 at `dcb9ec8f5` was dispatched (mail 6178).
 
 ## Carried constraints
 
