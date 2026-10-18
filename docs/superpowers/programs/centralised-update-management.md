@@ -1920,6 +1920,26 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         before this move; so a slow answer past the probe's 5 s cap, not the update mechanism. Nothing to fix.
       - v0.0.275 (#566) followed at 14:01, unapplied. STATUS: fleet and server v0.0.274, newest v0.0.275, intent
         dev/auto=stable, backups fleet 150M/server 1010M, disk free fleet 211G/work volume 87G/server 32G.
+    - **2026-10-18 15:00 UTC: both boxes moved to v0.0.275 (#566, wave 17) by the operator's console tap**
+      (`from: pwa`). Fleet first, 14:12:09 to 14:13:25, then the server, 14:13:41 to 14:14:20; both reports `done`.
+      Wave 17's first live install:
+      - doctor runs 53 checks: fleet 36 passed, 7 warned, 0 failed; server 27 passed;
+      - `update-sweep` SKIPs on the fleet, since its post-install doctor read the report at `installing`;
+      - `ccrc-api` is in the spine's bins line;
+      - the `done` report carries no `sweep` key yet, because the v0.0.274 updater drove this move. The next
+        move is the first to record it.
+      - The sweep named the same 3 pre-failed supervisors. Each box pruned one backup and one kept tree.
+      - **One ANOMALY: the server's `~/ccrc-backups` is 1108M (probe threshold 1G).** The pruner works: it keeps
+        the newest 10 timestamped backups and pruned one at each move. What grew is each snapshot. They were 83M
+        to 86M from 10-17 15:27 to 10-18 06:30, then 105M at 08:03, 142M at 11:18, 176M at 13:38 and 180M at
+        14:13; `coord.db` is 137M. Measured read-only (dbstat, hourly counts), `delegation_events` holds 51.1M:
+        20,288 rows of about 2.5K, the first at 06:00, at 1,100 to 3,200 rows an hour (about 6M an hour), none
+        removed. That is the delegation broker's journal (#448). Its coordinator has the numbers and the
+        question of a retention bound (mail 6418). The update mechanism did not misbehave. The probe's rule
+        said "never pruned", which is stale since wave 16, so its threshold is now 3G and its message names the
+        snapshot's growth.
+      - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
+        dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
