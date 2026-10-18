@@ -475,17 +475,19 @@ describe('the ink tiers are three inks (D-5097)', () => {
     const { byName } = loadThemes(ROOT);
     const generated = generatedPalettes();
     expect(generated.length).toBeGreaterThan(5);
-    // The pressed recipe is Task 9's `--bg-pressed`: ink-primary at 9% over
-    // surface, mixed in sRGB. It is computed here from the palette's own two
-    // tokens because the token does not exist yet — which is the point: the
-    // walk had to hold it before the gate could.
+    // The pressed ground is Task 9's `--bg-pressed`: ink-primary at 9% over
+    // surface, mixed in sRGB. Task 4 computed it here from the palette's own
+    // two tokens because the token did not exist yet. It does now, and each
+    // generated palette carries it PRE-COMPOSITED to the 8-bit hex it is
+    // painted as, which is also what the walk measures (D-5454) — so this
+    // reads the token, and the replay and the walk agree on the ground.
     const GROUNDS: [string, string][] = [
       ['surface', 'var(--bg-surface)'],
       ['raised', 'var(--bg-raised)'],
       ['page', 'var(--bg-page)'],
       ['sheet', 'var(--bg-sheet)'],
       ['accent-tint', 'var(--accent-tint)'],
-      ['pressed', 'color-mix(in srgb, var(--ink-primary) 9%, var(--bg-surface))'],
+      ['pressed', 'var(--bg-pressed)'],
     ];
     const failures: string[] = [];
     for (const name of generated) {

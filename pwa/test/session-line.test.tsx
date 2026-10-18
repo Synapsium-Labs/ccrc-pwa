@@ -326,18 +326,19 @@ describe('the selected row', () => {
     expect(button).not.toHaveAttribute('aria-current');
   });
 
-  it('DROPS the inline account hue rather than overriding it', () => {
-    // Inline styles beat every selector short of !important, so
-    // .sess-line--active's achromatic override could never win against this
-    // one — and the hue measures 1.46:1 on the dark slab. The account
-    // survives as its mono name. Fails the moment acctStyle goes back to a
-    // plain CSSProperties.
+  it('KEEPS the inline account hue on the selected row (D-5455)', () => {
+    // It used to be dropped there: the reverse-video slab put the hue at
+    // 1.46:1. The selected row is the accent tint now, on which the gate
+    // measures every lane hue, so the meta keeps its identity colour — the
+    // same inline hue as the unselected row.
+    // With the roster, so the colour is the lane's own hue and not the
+    // no-roster fallback both renders would share.
     const { container, rerender } = render(
-      <SessionLine session={s()} selected onOpen={() => {}} onActions={() => {}} />);
-    const acct = container.querySelector<HTMLElement>('.sess-acct')!;
-    expect(acct.style.color).toBe('');
-    rerender(<SessionLine session={s()} onOpen={() => {}} onActions={() => {}} />);
-    expect(container.querySelector<HTMLElement>('.sess-acct')!.style.color).not.toBe('');
+      <SessionLine session={s()} roster={TEST_ROSTER} onOpen={() => {}} onActions={() => {}} />);
+    const unselected = container.querySelector<HTMLElement>('.sess-acct')!.style.color;
+    expect(unselected).toMatch(/^var\(--acct-[a-z]+\)$/);
+    rerender(<SessionLine session={s()} roster={TEST_ROSTER} selected onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector<HTMLElement>('.sess-acct')!.style.color).toBe(unselected);
   });
 });
 

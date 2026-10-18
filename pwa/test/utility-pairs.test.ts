@@ -341,8 +341,7 @@ describe('every class string survives the merge that renders it', () => {
     .filter(([, v]) => /(^|\s)(bg|text|border|font|min-h|w)-[a-z0-9]/.test(v));
   // `buttonVariants()` is deliberately NOT a source: a cva composes BASE then
   // VARIANT, and a variant overriding the base is the mechanism working —
-  // `ghost` replaces the base's `transition-transform`, `quiet` its `font-ui`
-  // and its press scale. A check over the composed string would read every
+  // `quiet` replaces the base's `font-ui` and its press scale. A check over the composed string would read every
   // intended override as a loss. What is checked here is each string ALONE.
   const strings: [string, string][] = [
     ...componentFiles(UI_SRC).flatMap((f) =>
