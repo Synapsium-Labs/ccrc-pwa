@@ -680,6 +680,16 @@ function stubSystemctl(home: string): void {
     + '  if [ -f "$f" ]; then while IFS= read -r l; do echo "$l"; done < "$f"; fi\n'
     + '  exit 0\n'
     + 'fi\n'
+    + 'if [ "$1" = "--user" ] && [ "$2" = "show" ] && [ "$3" = "-p" ] && [ "$4" = "ActiveState" ]; then\n'
+    // D-5316 (ruling 12): `update-sweep` asks `show -p ActiveState -p NRestarts <unit>` and reads the two lines BY NAME. The
+    // answer is the file's own text (a planted `ActiveState=` and `NRestarts=` line, in the order the test chose), and an
+    // ABSENT file prints nothing, the manager not answering. The bus is part of the question: with `fixture-bus-required`
+    // present the stub answers only when XDG_RUNTIME_DIR is set, as a real user manager does from a bare context.
+    + '  if [ -f "$HOME/fixture-bus-required" ] && [ -z "${XDG_RUNTIME_DIR:-}" ]; then exit 1; fi\n'
+    + '  f="$HOME/fixture-show-$7"\n'
+    + '  if [ -f "$f" ]; then while IFS= read -r l; do echo "$l"; done < "$f"; fi\n'
+    + '  exit 0\n'
+    + 'fi\n'
     + 'if [ "$1" = "--user" ] && [ "$2" = "show" ]; then\n'
     // D-5241: `-p OOMPolicy` answers from its own file, so the oom-policy check can never read a ControlGroup.
     + '  f="$HOME/fixture-cgroup-of-$3"; [ "$5" = OOMPolicy ] && f="$HOME/fixture-oompolicy-of-$3"\n'
@@ -1645,8 +1655,13 @@ const anyVerdictFor = (out: string, name: string): string | undefined =>
  *  no OOMPolicy). On Linux `healthy()` plants both scope drop-ins and a pane
  *  reading `continue`, so it PASSes and the count is unchanged there. Measured:
  *  without this, the macOS run reds `counts BOTH lines in the summary` and
- *  `every line is exactly PASS|WARN|FAIL|SKIP` (`expected 10 to be 9`). */
-const HEALTHY_SKIPS = (process.platform === 'darwin' ? 3 : 0) + 7;   // +1 server-caps (no role): its block at the end
+ *  `every line is exactly PASS|WARN|FAIL|SKIP` (`expected 10 to be 9`).
+ *
+ *  RAISED BY ONE AGAIN, on every platform (wave 17, D-5316): `update-sweep`
+ *  SKIPs - `healthy()` writes no `~/.ccrc/update.json`, so there is no last
+ *  update to read a sweep from. The `update-sweep` describe at the end of this
+ *  file plants one where it answers. */
+const HEALTHY_SKIPS = (process.platform === 'darwin' ? 3 : 0) + 8;   // +1 server-caps (no role): its block at the end; +1 update-sweep (no update.json on a healthy box)
 
 // ── the table itself ──────────────────────────────────────────────────────
 
@@ -15483,10 +15498,10 @@ CCRC_DOCTOR_CHECKS=(delegation-hooks)
   });
 
   describe('in the whole table', () => {
-    it('is in the check table, just before docs-sw (which stays the table\'s last name), and a healthy box answers PASS for it in a full run', () => {
+    it('is in the check table, two before docs-sw (which stays the table\'s last name), and a healthy box answers PASS for it in a full run', () => {
       const names = tableNames();
       expect(names.filter((n) => n === 'delegation-hooks')).toHaveLength(1);
-      expect(names[names.length - 2]).toBe('delegation-hooks');
+      expect(names[names.length - 3]).toBe('delegation-hooks');   // update-sweep (wave 17) sits between it and docs-sw
       const r = runDoctor(dhBox('ccrc-doctor-dh-table-'));
       expect(anyVerdictFor(r.stdout, 'delegation-hooks')).toMatch(/^PASS delegation-hooks: 1\/1 rostered homes/);
     });
@@ -16041,5 +16056,271 @@ describe('oom-policy: the victim policy\'s two scope drop-ins, on disk and appli
   itDarwin('SKIP on macOS: launchd has no OOMPolicy', () => {
     const home = healthy('ccrc-doctor-oom-darwin-');
     expect(verdict(home).line).toBe('SKIP oom-policy: OOMPolicy is a systemd mechanism, and this box runs launchd');
+  });
+});
+
+// ── Wave 17 Task 4: `update-sweep`, the last update's supervisor sweep read from its report (D-5316) ───────────────
+// `ccrc update` and `ccrc rollback` record what their supervisor sweep did as update.json's `sweep` key (D-5314,
+// D-5315). This check reads it and WARNs, never FAILs: Reading 9 was ruled "warn only" (2026-10-15), and a FAIL would
+// turn a state the update already recorded into exit 1 for every bare doctor and install. An absent key is NOT
+// MEASURED (SKIP), and the `down` arm keeps the service manager's three answers apart (active, EMPTY, any other word),
+// and on Linux (coordinator ruling 12) reads NRestarts too, because one `active` read is what a crash-looping unit
+// shows between its restarts. The rows plant `$HOME/.ccrc/update.json` and a per-unit `fixture-show-<unit>` file the
+// fixture `systemctl` answers `show -p ActiveState -p NRestarts` from; the `down` rows are Linux-only (PLATFORM-ONLY:
+// the Darwin arm is one `_svc_is_active` read, measured by the row script in the plan's Task 4 as-built note).
+describe('update-sweep: the last update\'s sweep, read from its report, WARN never FAIL (wave 17, D-5316)', () => {
+  const REPORT = { target: 'v1.2.3', startedAt: 1, updatedAt: 2, detail: null, from: 'cli' };
+  const plantReport = (home: string, report: object | string): void => {
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'update.json'), typeof report === 'string' ? `${report}\n` : `${JSON.stringify(report)}\n`);
+  };
+  const plantSweep = (home: string, sweep: string | undefined, phase = 'done'): void =>
+    plantReport(home, { ...REPORT, pid: 7, phase, ...(sweep === undefined ? {} : { sweep }) });
+  /** What `systemctl --user show -p ActiveState -p NRestarts claude-session@<id>.service` prints: the two lines in the
+   *  manager's own order (NRestarts before ActiveState, as systemd prints them), or nothing at all when `lines` is []. */
+  const plantShow = (home: string, id: string, lines: string[]): void =>
+    writeFileSync(join(home, `fixture-show-claude-session@${id}.service`), lines.length === 0 ? '' : `${lines.join('\n')}\n`);
+  const up = (home: string, id: string, restarts = 0): void => plantShow(home, id, [`NRestarts=${restarts}`, 'ActiveState=active']);
+  /** `_check_update-sweep` alone, as `cmd_doctor` runs it (`runDh`'s shape). */
+  const runUs = (home: string, extraEnv: NodeJS.ProcessEnv = {}): Result => {
+    const ccd = join(home, 'ccrc', 'ccd');
+    const r = spawnSync(BASH, ['-c',
+      `set -uo pipefail; . ${shq(join(ccd, 'ccrc'))}; . ${shq(join(ccd, 'ccrc-doctor-checks'))}; _check_update-sweep`],
+    { env: { ...doctorEnv(home), ...extraEnv }, encoding: 'utf8' });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  };
+  const out = (r: Result): string[] => r.stdout.split('\n').filter((l) => l !== '');
+  const verdict = (r: Result): string => out(r).find((l) => /^(PASS|WARN|FAIL|SKIP) update-sweep: /.test(l)) ?? '';
+  const remedy = (r: Result): string => out(r).find((l) => l.startsWith('  remedy: ')) ?? '';
+  const sweepBox = (prefix: string): string => healthy(prefix);
+
+  it('D1: SKIPs when there is no update report, saying so, rc 3', () => {
+    const r = runUs(sweepBox('ccrc-doctor-us-absent-'));
+    expect(verdict(r)).toMatch(/^SKIP update-sweep: no update report on this box \(~\/\.ccrc\/update\.json is absent\)/);
+    expect(r.code).toBe(3);
+  });
+
+  it('D2: SKIPs a report at a phase that is not a final one (an update\'s own install tail reads its in-flight report)', () => {
+    const home = sweepBox('ccrc-doctor-us-inflight-');
+    plantSweep(home, undefined, 'installing');
+    const r = runUs(home);
+    expect(verdict(r)).toMatch(/^SKIP update-sweep: .*phase 'installing', not a final one/);
+    expect(r.code).toBe(3);
+  });
+
+  it('D2b: WARNs when the report stopped at `restarting` and its updater pid is gone (an updater killed mid-sweep leaves it for good)', () => {
+    const home = sweepBox('ccrc-doctor-us-restarting-dead-');
+    plantReport(home, { ...REPORT, pid: 999999999, phase: 'restarting' });
+    const r = runUs(home);
+    expect(verdict(r)).toMatch(/^WARN update-sweep: .*updater \(pid 999999999\) is gone/);
+    expect(remedy(r)).toMatch(/clears at the next ccrc update or rollback/);
+    expect(r.code).toBe(2);
+  });
+
+  it('D2c: SKIPs a `restarting` report whose updater is alive (a sweep in flight)', () => {
+    const home = sweepBox('ccrc-doctor-us-restarting-live-');
+    plantReport(home, { ...REPORT, pid: process.pid, phase: 'restarting' });
+    const r = runUs(home);
+    expect(verdict(r)).toMatch(/^SKIP update-sweep: .*restarting its supervisors now/);
+    expect(r.code).toBe(3);
+  });
+
+  it('D3: SKIPs a final report with no `sweep` key as not measured, never as "nothing was down"', () => {
+    const home = sweepBox('ccrc-doctor-us-nokey-');
+    plantSweep(home, undefined);
+    const r = runUs(home);
+    expect(verdict(r)).toMatch(/^SKIP update-sweep: .*records no sweep.*not measured/);
+    expect(r.code).toBe(3);
+  });
+
+  it('D4: PASSes on `ok`', () => {
+    const home = sweepBox('ccrc-doctor-us-ok-');
+    plantSweep(home, 'ok');
+    const r = runUs(home);
+    expect(verdict(r)).toMatch(/^PASS update-sweep: the last update's sweep found no supervisor already activating or failed before its restart$/);
+    expect(r.code).toBe(0);
+  });
+
+  describe('the `down` word (Linux: ActiveState and NRestarts from `systemctl --user show`)', () => {
+    itLinux('D5: WARNs on a unit that still reads failed, quoting the manager\'s word and naming the fix; a unit that is back is not named', () => {
+      const home = sweepBox('ccrc-doctor-us-down-');
+      plantSweep(home, 'down: 2: acct-a-demo acct-b-demo');
+      up(home, 'acct-a-demo'); plantShow(home, 'acct-b-demo', ['NRestarts=0', 'ActiveState=failed']);
+      const r = runUs(home);
+      expect(verdict(r)).toBe('WARN update-sweep: 1 supervisor(s) were already down before the last update\'s restart and are still not active: acct-b-demo (failed) — the update did not verify them and did not fail for them');
+      expect(remedy(r)).toMatch(/^ {2}remedy: systemctl --user reset-failed claude-session@<id>\.service, then ccd start <id>; read: systemctl --user status/);
+      expect(r.code).toBe(2);
+    });
+
+    itLinux('D6: PASSes when every recorded unit reads active with no restart since, wording it as one read', () => {
+      const home = sweepBox('ccrc-doctor-us-down-back-');
+      plantSweep(home, 'down: 1: acct-a-demo');
+      up(home, 'acct-a-demo');
+      const r = runUs(home);
+      expect(verdict(r)).toBe('PASS update-sweep: the 1 supervisor(s) the last update found already down before its restart each read active at this read, with no restart by their manager since');
+      expect(r.code).toBe(0);
+    });
+
+    itLinux('D7: says so when the word names fewer units than its count (an older or hand-cut word)', () => {
+      const home = sweepBox('ccrc-doctor-us-down-short-');
+      plantSweep(home, 'down: 3: acct-a-demo acct-b-demo');
+      plantShow(home, 'acct-a-demo', ['NRestarts=0', 'ActiveState=inactive']); up(home, 'acct-b-demo');
+      expect(verdict(runUs(home))).toMatch(/^WARN update-sweep: .*still not active: acct-a-demo \(inactive\) \(the report names 2 of 3; the rest did not fit in it\)/);
+    });
+
+    itLinux('D13: SKIPs, never WARNs, when the manager does not answer for the one recorded unit (no show answer is not "down")', () => {
+      const home = sweepBox('ccrc-doctor-us-down-unasked-');
+      plantSweep(home, 'down: 1: acct-c-demo');   // no fixture-show file: `show` prints nothing
+      const r = runUs(home);
+      expect(verdict(r)).toMatch(/^SKIP update-sweep: the service manager did not answer for acct-c-demo, .*not measured$/);
+      expect(r.code).toBe(3);
+    });
+
+    itLinux('D14: WARNs on the unit that is down and names the unit the manager did not answer for only as not measured', () => {
+      const home = sweepBox('ccrc-doctor-us-down-mixed-');
+      plantSweep(home, 'down: 2: acct-b-demo acct-c-demo');
+      plantShow(home, 'acct-b-demo', ['NRestarts=0', 'ActiveState=failed']);
+      const r = runUs(home);
+      expect(verdict(r)).toMatch(/still not active: acct-b-demo \(failed\); not measured \(the service manager did not answer\): acct-c-demo — /);
+      expect(verdict(r)).not.toContain('acct-c-demo (');
+      expect(r.code).toBe(2);
+    });
+
+    itLinux('D15: quotes a word that is neither active nor failed back as the manager said it', () => {
+      const home = sweepBox('ccrc-doctor-us-down-activating-');
+      plantSweep(home, 'down: 1: acct-d-demo');
+      plantShow(home, 'acct-d-demo', ['NRestarts=0', 'ActiveState=activating']);
+      expect(verdict(runUs(home))).toMatch(/still not active: acct-d-demo \(activating\) — /);
+    });
+
+    itLinux('D17 (ruling 12): active with NRestarts above 0 WARNs as restarted by its manager since, and is never called "still not active"', () => {
+      const home = sweepBox('ccrc-doctor-us-down-restarted-');
+      plantSweep(home, 'down: 1: acct-e-demo');
+      up(home, 'acct-e-demo', 3);
+      const r = runUs(home);
+      expect(verdict(r)).toMatch(/^WARN update-sweep: 1 supervisor\(s\) the last update found already down before its restart read active, but their manager has restarted them since .*: acct-e-demo \(active at this read, but restarted 3 times by its manager since\) — /);
+      expect(verdict(r)).not.toContain('still not active');
+      expect(r.code).toBe(2);
+    });
+
+    itLinux('D17: a restarted unit and a failed one are two named sets in one WARN', () => {
+      const home = sweepBox('ccrc-doctor-us-down-restarted-and-failed-');
+      plantSweep(home, 'down: 2: acct-e-demo acct-b-demo');
+      up(home, 'acct-e-demo', 2); plantShow(home, 'acct-b-demo', ['NRestarts=0', 'ActiveState=failed']);
+      const v = verdict(runUs(home));
+      expect(v).toContain('still not active: acct-b-demo (failed)');
+      expect(v).toContain('acct-e-demo (active at this read, but restarted 2 times by its manager since)');
+    });
+
+    itLinux('D17: `active` with no readable NRestarts is not measured, never back', () => {
+      const home = sweepBox('ccrc-doctor-us-down-norestarts-');
+      plantSweep(home, 'down: 2: acct-a-demo acct-d-demo');
+      plantShow(home, 'acct-a-demo', ['ActiveState=active']); plantShow(home, 'acct-d-demo', ['NRestarts=x', 'ActiveState=active']);
+      const r = runUs(home);
+      expect(verdict(r)).toMatch(/^SKIP update-sweep: the service manager did not answer for acct-a-demo acct-d-demo, /);
+      expect(r.code).toBe(3);
+    });
+
+    itLinux('reads ActiveState and NRestarts BY NAME, in whichever order the manager prints them', () => {
+      const home = sweepBox('ccrc-doctor-us-down-order-');
+      plantSweep(home, 'down: 2: acct-a-demo acct-e-demo');
+      plantShow(home, 'acct-a-demo', ['ActiveState=active', 'NRestarts=0']); plantShow(home, 'acct-e-demo', ['ActiveState=active', 'NRestarts=1']);
+      expect(verdict(runUs(home))).toMatch(/^WARN update-sweep: .*acct-e-demo \(active at this read, but restarted 1 times by its manager since\)/);
+    });
+
+    itLinux('sets the bus defaults a bare context lacks: a manager that answers only with XDG_RUNTIME_DIR set is still asked', () => {
+      const home = sweepBox('ccrc-doctor-us-down-bus-');
+      writeFileSync(join(home, 'fixture-bus-required'), '');
+      plantSweep(home, 'down: 1: acct-a-demo');
+      up(home, 'acct-a-demo');
+      const r = runUs(home);   // doctorEnv carries no XDG_RUNTIME_DIR, as a cron or a nested `$( )` does not
+      expect(verdict(r)).toMatch(/^PASS update-sweep: the 1 supervisor\(s\)/);
+      expect(r.code).toBe(0);
+    });
+  });
+
+  it('D8: WARNs on a refused sweep, saying every supervisor still ran the old ccd and nothing re-sweeps', () => {
+    const home = sweepBox('ccrc-doctor-us-refused-');
+    plantSweep(home, 'refused: killmode');
+    const r = runUs(home);
+    expect(verdict(r)).toMatch(/^WARN update-sweep: the last update's supervisor sweep was REFUSED \(killmode\)/);
+    expect(r.code).toBe(2);
+  });
+
+  it('D8b: a refusal\'s remedy ends by saying when it clears', () => {
+    const home = sweepBox('ccrc-doctor-us-refused-listing-');
+    plantSweep(home, 'refused: listing');
+    expect(remedy(runUs(home))).toMatch(/; this WARN clears at the next ccrc update or rollback, which writes a new report$/);
+  });
+
+  it('D9: WARNs on an unverified relist as "no supervisor\'s state known", never as restarted', () => {
+    const home = sweepBox('ccrc-doctor-us-unverified-');
+    plantSweep(home, 'unverified: relist');
+    const r = runUs(home);
+    expect(verdict(r)).toMatch(/^WARN update-sweep: .*no supervisor's state after its restart is known/);
+    expect(verdict(r)).not.toContain('restarted every');
+    expect(r.code).toBe(2);
+  });
+
+  it('D10: SKIPs a sweep word this build does not know', () => {
+    const home = sweepBox('ccrc-doctor-us-unknown-');
+    plantSweep(home, 'later-word');
+    const r = runUs(home);
+    expect(verdict(r)).toMatch(/^SKIP update-sweep: .*not one this build knows/);
+    expect(r.code).toBe(3);
+  });
+
+  it('D11: SKIPs a report that is not JSON', () => {
+    const home = sweepBox('ccrc-doctor-us-garbage-');
+    plantReport(home, 'not json');
+    const r = runUs(home);
+    expect(verdict(r)).toMatch(/^SKIP update-sweep: .*does not parse as one report/);
+    expect(r.code).toBe(3);
+  });
+
+  it('D16: WARNs on a failed update whose sweep died partway', () => {
+    const home = sweepBox('ccrc-doctor-us-died-');
+    plantSweep(home, 'died: sweep', 'failed');
+    const r = runUs(home);
+    expect(verdict(r)).toMatch(/^WARN update-sweep: .*supervisor sweep died partway/);
+    expect(r.code).toBe(2);
+  });
+
+  it('D12: the function has no FAIL arm and no `return 1` (a structural pin: Reading 9 was ruled warn only)', () => {
+    const src = readFileSync(CHECKS_SRC, 'utf8');
+    const m = /^_check_update-sweep\(\) \{\n[\s\S]*?^\}$/m.exec(src);
+    expect(m, 'the function was not found by its column-0 opening and closing lines').not.toBeNull();
+    expect(m![0].length).toBeGreaterThan(1000);   // the CONTROL: a scan over a truncated body passes everything
+    expect(m![0]).not.toMatch(/_dr_fail/);
+    expect(m![0]).not.toMatch(/return 1(?![0-9])/);
+  });
+
+  describe('in the whole table, through cmd_doctor', () => {
+    it('is in the check table once, just before docs-sw, and a healthy box (no update.json) SKIPs it in a full run', () => {
+      const names = tableNames();
+      expect(names.filter((n) => n === 'update-sweep')).toHaveLength(1);
+      expect(names[names.length - 2]).toBe('update-sweep');
+      expect(names[names.length - 1]).toBe('docs-sw');
+      const r = runDoctor(sweepBox('ccrc-doctor-us-table-'));
+      expect(anyVerdictFor(r.stdout, 'update-sweep')).toMatch(/^SKIP update-sweep: no update report on this box/);
+    });
+
+    itLinux('a WARN on a recorded down unit never changes doctor\'s exit: the run still exits 0 and the summary counts it as a warning', () => {
+      const home = sweepBox('ccrc-doctor-us-table-warn-');
+      plantSweep(home, 'down: 2: acct-a-demo acct-b-demo');
+      up(home, 'acct-a-demo'); plantShow(home, 'acct-b-demo', ['NRestarts=0', 'ActiveState=failed']);
+      const r = runDoctor(home);
+      expect(r.stdout).toMatch(/^WARN update-sweep: 1 supervisor\(s\) were already down .* still not active: acct-b-demo \(failed\)/m);
+      expect(r.stdout).toMatch(/^summary: \d+ checks \(\d+ skipped\), \d+ verdicts — \d+ passed, 1 warned, 0 failed$/m);
+      expect(r.code, r.stdout).toBe(0);
+    });
+
+    it('a sweep REFUSED word WARNs through the whole run and the run exits 0', () => {
+      const home = sweepBox('ccrc-doctor-us-table-refused-');
+      plantSweep(home, 'refused: killmode');
+      const r = runDoctor(home);
+      expect(r.stdout).toMatch(/^WARN update-sweep: the last update's supervisor sweep was REFUSED \(killmode\)/m);
+      expect(r.code, r.stdout).toBe(0);
+    });
   });
 });
