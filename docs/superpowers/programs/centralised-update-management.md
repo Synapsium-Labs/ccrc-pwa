@@ -1893,6 +1893,16 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       Its coordinator will mail when doctor is clean again.
     - **2026-10-18 11:35 UTC: that lag has cleared** (mail 6339): 12,086 s down to 270 s within a few ticks, and
       no FAIL word at 11:36:51. A fleet update no longer meets that FAIL.
+    - **2026-10-18 11:55 UTC: both boxes moved to v0.0.269 by the operator's console tap** (`from: pwa`, a
+      prerelease; `stable` unchanged). Fleet first, 11:16:14 to 11:17:50, then the server, 11:18:46 to 11:19:18;
+      both reports `done`. The fleet move ran while the backfill still held the sweep lock, so its doctor read
+      `history: op-running` as a WARN, not a FAIL: 52 checks, 35 passed, 8 warned, 0 failed. Its sweep named 3
+      pre-failed supervisors with their fix (4 at the last move), and the rest run the new ccd. The server's gate
+      saw `/health` answer v0.0.269; doctor 27 passed, 0 warned; it pruned the kept tree v0.0.237 and one backup,
+      after taking its own (server backups 857M to 916M). The watchdog has run clean since. v0.0.270 (#588) and
+      v0.0.271 (#595) followed, unapplied. STATUS: fleet and server v0.0.269, newest v0.0.271, intent
+      dev/auto=stable, backups fleet 134M/server 916M, disk free fleet 211G/work volume 90G/server 32G, no
+      anomalies. On `main` at `43efd63c8`, #441 and #410 still conflict only on the stamp line; #566 merges clean.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
