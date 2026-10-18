@@ -336,7 +336,7 @@ describe('SessionScreen interrupt wiring', () => {
   });
 });
 
-// Fix round 1, finding 1: the dev0-in-cyan bug (see SessionScreen.tsx's own
+// Fix round 1, finding 1: the lab0-in-cyan bug (see SessionScreen.tsx's own
 // comment on `acct`) had NO regression coverage — `grep -rn "data-acct"
 // pwa/test` returned nothing before this block existed. Pins both the general
 // case (a non-cyan account stamps its OWN hue, not cyan) and finding 4's

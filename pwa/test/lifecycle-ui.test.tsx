@@ -110,7 +110,7 @@ const stubAccounts = (accounts: AccountUsage[]): void => {
 const PROJECTS = {
   roots: ['/root/projects'],
   projects: [
-    { name: 'project-o', workdir: '/root/projects/project-o' },
+    { name: 'project-e', workdir: '/root/projects/project-e' },
     { name: 'project-f', workdir: '/root/projects/project-f' },
     { name: 'ProjectC', workdir: '/root/projects/ProjectC' },
   ],
@@ -190,8 +190,8 @@ describe('NewSessionSheet', () => {
     const names = [...container.ownerDocument.querySelectorAll('.proj-name')].map(
       (el) => el.textContent,
     );
-    // ProjectC (active 2m ago) → project-f (30m) → project-o (unregistered).
-    expect(names).toEqual(['ProjectC', 'project-f', 'project-o']);
+    // ProjectC (active 2m ago) → project-f (30m) → project-e (unregistered).
+    expect(names).toEqual(['ProjectC', 'project-f', 'project-e']);
   });
 
   it('a failed start stays open and toasts the ccd stderr', async () => {

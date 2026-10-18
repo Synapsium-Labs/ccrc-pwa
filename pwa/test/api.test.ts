@@ -1480,8 +1480,8 @@ describe('api client — each door sends exactly its own request', () => {
     };
   };
 
-  const ID = 'claude:Open Claw';            // a space, so encoding is proved too
-  const ENC = 'claude%3AOpen%20Claw';
+  const ID = 'claude:Proj F';            // a space, so encoding is proved too
+  const ENC = 'claude%3AProj%20F';
 
   it('POSTs the fleet reboot with no body at all', async () => {
     await api.rebootFleet();
