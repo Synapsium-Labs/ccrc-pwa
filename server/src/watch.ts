@@ -9132,7 +9132,7 @@ export interface DelegationLaneSeams {
   unbatched?: boolean;
 }
 
-type LaneSession = Pick<FleetSession, 'id' | 'project' | 'status'>;
+type LaneSession = Pick<FleetSession, 'id' | 'project' | 'status' | 'stoppedBy' | 'archivedAt'>;
 type LaneRecord = Pick<SessionRecord, 'id' | 'project' | 'child'>;
 type DelegationVerdictCounts = { unresolved: number; conflicting: number; unmeasured: number };
 
@@ -9967,13 +9967,27 @@ class DelegationLane {
   }
 
   /** Who died since the last pass, by what this process watched: a parent first seen DEAD is not a fresh death (a restart is not a
-   *  mass-death event), one seen alive and then dead is, and one seen alive again is not dead. */
+   *  mass-death event), one seen alive and then dead is, and one seen alive again is not dead. D-5433: a deliberate stop or archive is
+   *  not a fresh death either. A dead row carrying stop evidence (`stoppedBy`, epoch ms, or `archivedAt`, epoch SECONDS, read when there
+   *  is no stamp) is not counted, and a death already recorded for it is erased, when that instant is no later than the recorded death
+   *  plus `DELEGATION_CLOCK_SKEW_MS` (this pass's instant plus the skew when none is recorded): the stamp is the fleet box's clock, and
+   *  the torn tick (`assembleFleet` reads the registry before it probes tmux) lets a stop read as a crash for one pass and show its stamp
+   *  on the next. A stop stamped later than that leaves the death counted (an operator cleaning up after a crash). Residual: a crash
+   *  followed by a stop or an archive within one pass, or within the skew of its recorded death, is not counted; the 60 s cadence and
+   *  the clocks' sync bound it. Every other dead row (`restarting`, unmeasurable) counts as before. */
   private noteSessions(pass: LanePass): void {
     for (const r of pass.records) this.sessionProject.set(r.id, r.project);
     for (const s of pass.sessions) this.sessionProject.set(s.id, s.project);
     const alive = new Set(pass.sessions.filter((s) => s.status !== 'dead').map((s) => s.id));
     if (this.aliveSeen) {
       for (const s of pass.sessions) {
+        const stopAt = s.stoppedBy !== null ? s.stoppedBy.at : s.archivedAt !== null ? s.archivedAt * 1000 : null;
+        const recorded = this.firstDead.get(s.id);
+        if (s.status === 'dead' && stopAt !== null && recorded !== undefined) {
+          if (stopAt <= recorded + DELEGATION_CLOCK_SKEW_MS) { this.firstDead.delete(s.id); continue; }
+        } else if (s.status === 'dead' && stopAt !== null) {
+          if (stopAt <= pass.now + DELEGATION_CLOCK_SKEW_MS) continue;
+        }
         if (s.status === 'dead' && this.lastAlive.has(s.id) && !this.firstDead.has(s.id)) this.firstDead.set(s.id, pass.now);
       }
     }

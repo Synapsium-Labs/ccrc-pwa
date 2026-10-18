@@ -1343,6 +1343,14 @@ describe('the circuit breaker is the policy\'s, fed by deaths this process watch
     await censusPass(w, at(2), census, everyone([stopped('demo-x', future), stopped('demo-y', future)]));
     expect(w.watcher.delegationReport().breaker).toBe('suspended');
   });
+
+  it('stamps 30 s past this pass\'s own instant (the fleet clock ahead), on parents first seen dying, are inside the skew: neither counts', async () => {
+    const w = await rawTreeWorld();
+    await censusPass(w, at(0), census, everyone(extras));
+    await censusPass(w, at(1), census, everyone(extras));
+    await censusPass(w, at(2), census, everyone([stopped('demo-x', at(2) + 30_000), stopped('demo-y', at(2) + 30_000)]));
+    expect(w.watcher.delegationReport().breaker).toBe('clear');
+  });
 });
 
 // ── rung 2: the positive meta read ──────────────────────────────────────────────────────────────────────────────────────
