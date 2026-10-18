@@ -829,6 +829,10 @@
   min-height: var(--tap-min); /* thumb target — the row is a tap surface, not a label */
   padding: var(--sp-1) var(--sp-2);
   border-radius: var(--r-md);
+  /* The hover ground fades in at the skin's --dur-fast (180ms Refined, 120ms
+     Instrument; Task 9 Step 4) rather than snapping. Stilled under reduced
+     motion by the block at the end of this file. */
+  transition: background-color var(--dur-fast) var(--curve-swift);
 }
 
 /* ── HOVER (D-5101) ───────────────────────────────────────────────
@@ -3182,7 +3186,8 @@ button.proj-card-pool::before {
    motion-reduced.test.ts checks BOTH halves now: that a moving rule is
    named, and that the naming block is positioned to win. */
 @media (prefers-reduced-motion: reduce) {
-  .acct-fill {
+  .acct-fill,
+  .sess-line {
     transition: none;
   }
 }

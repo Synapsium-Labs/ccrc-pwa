@@ -48,3 +48,18 @@ export const PRESS_TRANSFORM =
  *  drifts (`literal-census.test.ts`). The ghost and quiet buttons spell the
  *  same two utilities inside their cva variants. */
 export const PRESS_GROUND = 'enabled:hover:bg-hover enabled:active:bg-pressed';
+
+/** THE MOTION BEHIND THAT GROUND (D-5101, Task 9 Step 4): `transform` at
+ *  `--dur-press`, as every press moves, and `background-color` at `--dur-fast`,
+ *  the one per-skin duration — 180ms in Refined, 120ms in Instrument
+ *  (skins.css) — so a row lifting under the mouse fades rather than snaps.
+ *  `PRESS_FEEDBACK`'s shape with `background-color` where it has `color`.
+ *
+ *  ONE CLASS, NEVER BESIDE ANOTHER TRANSITION UTILITY. The shorthand and a
+ *  `transition-transform` / `duration-press` would race in the cascade, and
+ *  `cn` cannot dedupe them (it does not know the custom `duration-press`), so
+ *  every carrier wears this INSTEAD of `PRESS_TRANSFORM`: `ListRow`, `BareRow`
+ *  and the `Button` base (`hover-states.test.ts` reds a rival). */
+export const GROUND_MOTION =
+  '[transition:transform_var(--dur-press)_var(--curve-swift),background-color_var(--dur-fast)_var(--curve-swift)]'
+  + ' motion-reduce:transition-none';

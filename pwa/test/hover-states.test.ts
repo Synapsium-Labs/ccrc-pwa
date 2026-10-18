@@ -90,6 +90,54 @@ describe('every interactive primitive carries a hover and a pressed state', () =
   });
 });
 
+// ── the hover fades at the skin's --dur-fast (Task 9 Step 4) ─────────────────
+
+/** The background half of a two-property `[transition:…]` shorthand at the
+ *  skin's fast duration: 180ms in Refined, 120ms in Instrument (skins.css). */
+const FADES_GROUND = /(^|\s)\[transition:[^\s\]]*background-color_var\(--dur-fast\)[^\s\]]*\](\s|$)/;
+/** Any OTHER transition utility. Beside the shorthand it would race it in the
+ *  cascade, and `cn` cannot dedupe the custom `duration-press`. */
+const RIVAL_TRANSITION = /(^|\s)(transition-(transform|colors|all|\[)|transition(?=\s|$)|duration-)/;
+
+describe('a lifted ground fades in at --dur-fast, the per-skin duration', () => {
+  const grounded: Record<string, string> = {
+    ListRow: LIST_ROW,
+    BareRow: BARE_ROW,
+    'Button ghost': buttonVariants({ variant: 'ghost' }),
+    'Button quiet': buttonVariants({ variant: 'quiet', size: 'fit' }),
+  };
+  it.each(Object.entries(grounded))('%s transitions background-color at var(--dur-fast), and nothing races it', (_name, cls) => {
+    expect(cls, `${_name}: the hover ground snaps`).toMatch(FADES_GROUND);
+    expect(cls, `${_name}: a second transition utility races the shorthand`).not.toMatch(RIVAL_TRANSITION);
+    expect(has(cls, 'motion-reduce:transition-none'), `${_name}: ignores reduced motion`).toBe(true);
+  });
+
+  it('the fleet row fades its hover ground at var(--dur-fast), and reduced motion stills it', () => {
+    const fleetCss = read('pwa/src/fleet/fleet.css');
+    const squash = (v: string | null): string => (v ?? '').replace(/\s+/g, '');
+    expect(squash(declValue(ruleIn(fleetCss, '.sess-line'), 'transition')))
+      .toBe('background-colorvar(--dur-fast)var(--curve-swift)');
+    // motion-reduced.test.ts holds the block's position; this holds the name.
+    expect(stripComments(fleetCss)).toMatch(/prefers-reduced-motion:\s*reduce\)\s*\{[^@]*\.sess-line\s*\{\s*transition:\s*none;/);
+  });
+
+  it('the duration differs by skin: 180ms in Refined, 120ms in Instrument', () => {
+    expect(declValue(ruleIn(read('ui/src/styles/tokens.css'), ':root'), '--dur-fast')).toBe('180ms');
+    expect(read('ui/src/styles/skins.css'))
+      .toMatch(/:root\[data-skin='instrument'\]\s*\{[^}]*--dur-fast:\s*120ms;/);
+  });
+
+  it('an anchor wearing the ghost lifts and sinks without enabled:, which never matches an <a>', () => {
+    const sheet = read('pwa/src/session/PrSheet.tsx');
+    const at = sheet.match(/<a className=\{([^}]*\}\)[^}]*)\}/);
+    expect(at, 'the Open on GitHub anchor').not.toBeNull();
+    const expr = at![1]!;
+    expect(expr).toMatch(/buttonVariants\(\{ variant: 'ghost' \}\)/);
+    expect(expr).toMatch(/(^|['\s])hover:bg-hover(\s|')/);
+    expect(expr).toMatch(/(^|['\s])active:bg-pressed(\s|')/);
+  });
+});
+
 // ── no sticky hover ──────────────────────────────────────────────────────────
 
 /** Every rule whose selector names `:hover`, with whether an enclosing block is

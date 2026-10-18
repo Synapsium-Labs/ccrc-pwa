@@ -17,9 +17,10 @@ import { cva, type VariantProps } from 'class-variance-authority';
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
 import { cn } from '../lib/cn';
 import { FOCUS_RING } from '../lib/focus';
+import { GROUND_MOTION } from '../lib/press';
 
 export const buttonVariants = cva(
-  `flex min-h-tap cursor-pointer items-center justify-center rounded-md font-ui transition-transform duration-press ease-swift motion-reduce:transition-none enabled:active:scale-[0.97] disabled:cursor-default ${FOCUS_RING}`,
+  `flex min-h-tap cursor-pointer items-center justify-center rounded-md font-ui ${GROUND_MOTION} enabled:active:scale-[0.97] disabled:cursor-default ${FOCUS_RING}`,
   {
     variants: {
       variant: {
@@ -48,7 +49,7 @@ export const buttonVariants = cva(
         'danger-ghost':
           'btn-danger-ghost border border-status-dead bg-transparent text-status-dead-text text-base leading-none font-medium disabled:text-ink-disabled disabled:border-edge-subtle',
         ghost:
-          'btn-ghost border border-edge-strong bg-transparent text-ink-primary text-base leading-none font-medium transition-[transform,background-color] motion-reduce:transition-none enabled:hover:bg-hover enabled:active:bg-pressed disabled:text-ink-disabled disabled:border-edge-subtle',
+          'btn-ghost border border-edge-strong bg-transparent text-ink-primary text-base leading-none font-medium enabled:hover:bg-hover enabled:active:bg-pressed disabled:text-ink-disabled disabled:border-edge-subtle',
         /** `quiet` — the raised mono control. FOUR app rules declared the same
          *  eleven declarations: `.coord-toggle`, `.child-reclaim-toggle` and
          *  `.caps-save` were byte-identical, and `.program-start-door`

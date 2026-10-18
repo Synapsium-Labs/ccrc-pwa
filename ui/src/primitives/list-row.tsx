@@ -36,7 +36,7 @@
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
 import { cn } from '../lib/cn';
 import { FOCUS_RING } from '../lib/focus';
-import { PRESS_GROUND, PRESS_TRANSFORM } from '../lib/press';
+import { GROUND_MOTION, PRESS_GROUND } from '../lib/press';
 
 /** The shared row, token for token as both rules declared it.
  *
@@ -47,8 +47,9 @@ import { PRESS_GROUND, PRESS_TRANSFORM } from '../lib/press';
 export const LIST_ROW =
   'flex w-full items-center gap-3 min-h-[52px] px-1 py-2'
   + ' border-x-0 border-t-0 border-b border-edge-subtle bg-transparent text-left'
-  + ` ${PRESS_TRANSFORM} active:scale-[0.97]`
-  // D-5101: the row lifts under the mouse and sinks while held.
+  + ` cursor-pointer ${GROUND_MOTION} active:scale-[0.97]`
+  // D-5101: the row lifts under the mouse and sinks while held, fading in
+  // at the skin's --dur-fast (GROUND_MOTION replaces PRESS_TRANSFORM).
   + ` ${PRESS_GROUND}`
   + ` ${FOCUS_RING}`;
 
