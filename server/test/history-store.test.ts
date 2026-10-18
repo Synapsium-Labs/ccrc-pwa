@@ -2449,9 +2449,11 @@ describe('store.mjs: export segments (W1-B4; spec 9.15 "Write", "Who reads it"; 
     const db = segStore.openSegment(path.join(dir, name));
     try {
       expect(segStore.segmentMeta(db)).toEqual(meta(1));
-      const blobs = segStore.segmentBlobsAfter(db, 0, 1 << 20);
-      expect(blobs.map((b) => [b.rowid, b.raw_len, b.pruned, b.z === null ? null : [...b.z]])).toEqual([[1, 11, false, [1, 2, 3]], [2, 40, true, null]]);
+      const blobs = segStore.segmentBlobsAfter(db, 0, 1 << 20, 'bytes');
+      expect(blobs.map((b) => [b.rowid, b.raw_len, b.pruned, b.z === null ? null : [...b.z]])).toEqual([[1, 11, false, [1, 2, 3]]]);
       expect([...blobs[0]!.sha256]).toEqual([...sha(1)]);
+      const stubs = segStore.segmentBlobsAfter(db, 0, 1 << 20, 'stubs');
+      expect(stubs.map((b) => [b.rowid, b.raw_len, b.pruned, b.z === null ? null : [...b.z]]), 'the stub is the other kind\'s (D-5397)').toEqual([[2, 40, true, null]]);
       const rows = segStore.segmentRowsAfter(db, 0, 100);
       expect(rows.map((r) => [r.ord, r.kind])).toEqual([[1, 'family'], [2, 'transcript'], [3, 'epoch'], [4, 'file'], [5, 'entry'],
         [6, 'variant'], [7, 'boundary'], [8, 'sidecar'], [9, 'membership']]);
@@ -2484,9 +2486,40 @@ describe('store.mjs: export segments (W1-B4; spec 9.15 "Write", "Who reads it"; 
       expect(segStore.segmentRowsAfter(db, 0, 10).map((r) => [r.ord, r.kind])).toEqual([[1, 'entry'], [2, 'membership'], [3, 'entry'], [4, 'membership']]);
       expect(segStore.segmentRowsAfter(db, 1, 2).map((r) => r.ord)).toEqual([2, 3]);
       expect(segStore.segmentRowsAfter(db, 4, 10)).toEqual([]);
-      expect(segStore.segmentBlobsAfter(db, 0, 25).map((b) => b.rowid)).toEqual([1, 2]);
-      expect(segStore.segmentBlobsAfter(db, 2, 25).map((b) => b.rowid)).toEqual([3]);
-      expect(segStore.segmentBlobsAfter(db, 0, 1).map((b) => b.rowid), 'the first blob whatever its size').toEqual([1]);
+      expect(segStore.segmentBlobsAfter(db, 0, 25, 'bytes').map((b) => b.rowid)).toEqual([1, 2]);
+      expect(segStore.segmentBlobsAfter(db, 2, 25, 'bytes').map((b) => b.rowid)).toEqual([3]);
+      expect(segStore.segmentBlobsAfter(db, 0, 1, 'bytes').map((b) => b.rowid), 'the first blob whatever its size').toEqual([1]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('D-5397: a blob page is one kind, bytes or stubs, in rowid order whatever sits between them; a stub counts no bytes against the bound; any other kind throws', () => {
+    const dir = freshDir();
+    const name = nameOf(1);
+    const seg = segStore.createSegment(dir, name, meta(1));
+    const ins = segStore.segmentInserts(seg);
+    // rowids: 1 bytes, 2 stub, 3 bytes, 4 stub, 5 stub, 6 bytes
+    ins.blob({ sha256: sha(1), codec: 'br5', raw_len: 10, z: new Uint8Array(10).fill(1), pruned: false });
+    ins.blob({ sha256: sha(2), codec: 'br5', raw_len: 10, z: null, pruned: true });
+    ins.blob({ sha256: sha(3), codec: 'br5', raw_len: 10, z: new Uint8Array(10).fill(3), pruned: false });
+    ins.blob({ sha256: sha(4), codec: 'br5', raw_len: 10, z: null, pruned: true });
+    ins.blob({ sha256: sha(5), codec: 'br5', raw_len: 10, z: null, pruned: true });
+    ins.blob({ sha256: sha(6), codec: 'br5', raw_len: 10, z: new Uint8Array(10).fill(6), pruned: false });
+    expect(segStore.publishSegment(seg, dir, name)).toBe('linked');
+    const db = segStore.openSegment(path.join(dir, name));
+    try {
+      expect(segStore.segmentBlobsAfter(db, 0, 1 << 20, 'bytes').map((b) => b.rowid)).toEqual([1, 3, 6]);
+      expect(segStore.segmentBlobsAfter(db, 0, 1 << 20, 'stubs').map((b) => b.rowid)).toEqual([2, 4, 5]);
+      expect(segStore.segmentBlobsAfter(db, 1, 1 << 20, 'bytes').map((b) => b.rowid), 'past a rowid, of its own kind').toEqual([3, 6]);
+      expect(segStore.segmentBlobsAfter(db, 2, 1 << 20, 'stubs').map((b) => b.rowid)).toEqual([4, 5]);
+      expect(segStore.segmentBlobsAfter(db, 0, 15, 'bytes').map((b) => b.rowid), 'bytes count against the bound: one more would pass it').toEqual([1]);
+      expect(segStore.segmentBlobsAfter(db, 0, 0, 'stubs').map((b) => b.rowid), 'a stub counts none: the bound never stops a page of stubs').toEqual([2, 4, 5]);
+      expect(segStore.segmentBlobsAfter(db, 6, 1 << 20, 'bytes')).toEqual([]);
+      expect(segStore.segmentBlobsAfter(db, 5, 1 << 20, 'stubs')).toEqual([]);
+      for (const kind of ['all', '', undefined, 'toString', 'constructor']) {
+        expect(() => (segStore.segmentBlobsAfter as (...a: unknown[]) => unknown)(db, 0, 1 << 20, kind), String(kind)).toThrow(/segmentBlobsAfter: kind is bytes or stubs/);
+      }
     } finally {
       db.close();
     }

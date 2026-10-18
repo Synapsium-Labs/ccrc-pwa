@@ -1319,6 +1319,52 @@ describe('marks that move (W1-B4 Task 8; spec §9.15 "Mark", "After a bind")', (
     expect(strandedBlobs(box)).toEqual([]);
   }, 600_000);
 
+  // D-5397 (history-export-replay-bytes-before-stubs). The exporter's real order: a row that fell due after prune travels with a
+  // stub (D-4759); ingest's revival on recapture clears its mark (D-5395); the next pass carries the recaptured bytes in a later
+  // segment. A rebuild from those two segments must give the text back, though the stub comes first.
+  it('D-5397, end to end: a row due after prune travels with a stub in segment 1, a swap copy revives the body and segment 2 carries its bytes; then a rebuild from the two segments alone returns the text, marked by segment 2, and expand prints it', async () => {
+    const { box, transcript, ids } = ingestedBox('ccrc-history-export-f2-', [row(1, 'zqf2kept text', 2 * DAY), row(2, 'zqf2pruned then revived text', 2 * DAY)]);
+    const s1 = `1.${ids.writer}.db`;
+    const s2 = `2.${ids.writer}.db`;
+    await onStore(box, (db) => {   // prune took row 2's body before its export
+      db.prepare('UPDATE blobs SET z = NULL, pruned_ms = ?, fts_indexed = 0 WHERE blob_id = (SELECT blob_id FROM entries WHERE uuid = ?)').run(Date.now(), rid(2));
+    });
+    const body = String(q(box, 'SELECT lower(hex(b.sha256)) AS sha FROM entries e JOIN blobs b ON b.blob_id = e.blob_id WHERE e.uuid = ?', rid(2))[0]!['sha']);
+    passAt(box, 65);
+    const copy = path.join(box.accountHome['claude-b']!, 'projects', SLUG, `${U}.jsonl`);   // the swap copy that stores the body again
+    fs.mkdirSync(path.dirname(copy), { recursive: true });
+    fs.copyFileSync(transcript, copy);
+    passAt(box, 100);
+    passAt(box, 130);
+    expect(segmentsOf(box)).toEqual([s1, s2]);
+    const bodyIn = (seg: string): Array<Record<string, unknown>> => segmentRows(path.join(exportDirOf(box), seg), 'blobs').filter((b) => b['sha256'] === body).map(pick(['pruned']));
+    expect([bodyIn(s1), bodyIn(s2)], 'CONTROL: segment 1 carries the body as a stub, segment 2 as bytes').toEqual([[{ pruned: 1 }], [{ pruned: 0 }]]);
+    expect(marks(box), 'CONTROL: the revival cleared row 2\'s mark and segment 2 re-marked it').toEqual({ [rid(1)]: s1, [rid(2)]: s2 });
+    // The loss: both copies of the text and history.db are gone; the journal and the export directory stay.
+    fs.rmSync(transcript);
+    fs.rmSync(copy);
+    const P = historyPaths(box.home);
+    for (const f of [P.dbFile, P.wal, P.shm]) fs.rmSync(f, { force: true });
+    const rebuilt = await runOnPty(box, [process.execPath, '--no-warnings', CLI, 'doctor', '--rebuild'], { timeoutMs: 120_000 });
+    expect(rebuilt.code, rebuilt.out).toBe(0);
+    for (let i = 0; i < 12 && recoverRow(box)?.completed_ms == null; i += 1) {
+      const r = runShim(box);
+      expect(r.code, `rebuild tick ${i + 1}:\n${r.stdout}\n${r.stderr}`).toBe(0);
+    }
+    expect(recoverRow(box)?.completed_ms, 'the recovery step finished').not.toBeNull();
+    expect(q(box, 'SELECT z IS NULL AS stub, pruned_ms IS NOT NULL AS pruned, exported_seg FROM blobs WHERE lower(hex(sha256)) = ?', body),
+      'the body holds its bytes, and segment 2 marked them').toEqual([{ stub: 0, pruned: 0, exported_seg: s2 }]);
+    expect(marks(box), 'row 2 is marked by the first segment that carries it').toEqual({ [rid(1)]: s1, [rid(2)]: s1 });
+    expect(counters(box)['export_row_blob_missing'] ?? 0).toBe(0);
+    expect(counters(box)['export_row_unplaced'] ?? 0).toBe(0);
+    expect(counters(box)['export_blob_tombstone_kept'] ?? 0, 'no tombstone was held before the replay').toBe(0);
+    const ex = runCli(box, ['expand', rid(2)], { env: withPane(box, ID) });
+    expect(ex.code, `${ex.stdout}\n${ex.stderr}`).toBe(0);
+    expect(ex.stdout, 'expand prints the text the stub would have hidden').toContain('zqf2pruned then revived text');
+    expect(ex.stdout).not.toContain('content pruned on');
+    expect(strandedBlobs(box)).toEqual([]);
+  }, 900_000);
+
   it('D-5395, a revived tombstone (ingestSidecar): a linked sidecar whose blob prune tombstoned before the export went with a stub; the same bytes under another name store the blob again and clear the entry that links the first; the next pass carries the bytes', async () => {
     const tr = toolResultRow({
       uuid: rid(2), ts: new Date(Date.now() - 2 * DAY).toISOString(), sessionId: U, cwd: WORK, toolUseId: 'toolu_01B4REVIVE',

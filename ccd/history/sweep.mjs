@@ -2009,8 +2009,12 @@ export function discoverAndPlan(db, c, uuids) {
 //              (D-4347); a set-aside file is kept (D-4728 (history-replay-keeps-set-aside-files)).
 //            It never reads $REG and writes no journal record.
 //   reindex  W1-B2 Task 29's FTS re-derivation, for pairs the index pass added. A no-op until then.
-//   export-blobs  W1-B4, between apply and reindex: every segment's blobs, insert-or-ignore by sha256, before any
-//                 segment's rows, so no row waits on a blob in a later segment (§9.14 "Export replay").
+//   export-blobs  W1-B4, between apply and reindex: every segment's blobs that carry bytes, insert-or-ignore by
+//                 sha256, before any segment's stubs and rows, so no row waits on a blob in a later segment
+//                 (§9.14 "Export replay").
+//   export-stubs  W1-B4: every segment's stubs (blobs prune tombstoned before their export), insert-or-ignore, after
+//                 every segment's bytes, so a stub an earlier segment carries never swallows bytes a later one carries
+//                 (D-5397 (history-export-replay-bytes-before-stubs)).
 //   export-rows   W1-B4: every segment's rows in (seq, writer) order, filling only what the journal lacks
 //                 (B2's D-4700 (history-b4-after-b2)).
 //
@@ -2617,12 +2621,18 @@ async function recoverReindexChunk(db, run, cursor) {
   return { cursor: r.cur, moved: r.moved, phaseDone: r.done };
 }
 
-// ── W1-B4 Task 10: export replay, the recovery step's two export phases (spec §9.14 "Export replay", §9.15) ─────
+// ── W1-B4 Task 10: export replay, the recovery step's three export phases (spec §9.14 "Export replay", §9.15) ───
 //
-// After the journal (index, apply), the step replays this store's export segments in two passes, so no row ever
-// waits on a blob in a later segment (BK21):
-//   export-blobs  every segment's blobs, insert-or-ignore by sha256; each replayed blob that holds bytes is marked
-//                 with its segment, so it is never exported again;
+// After the journal (index, apply), the step replays this store's export segments in three passes, so no row ever
+// waits on a blob in a later segment (BK21), and no stub swallows bytes (D-5397 (history-export-replay-bytes-before-stubs)):
+//   export-blobs  every segment's blobs that carry bytes, insert-or-ignore by sha256; each replayed blob is marked with
+//                 its segment, so it is never exported again. A body ignored over a prune tombstone the store held
+//                 before the replay began is counted export_blob_tombstone_kept: every tombstone this phase meets was held
+//                 before the replay began, because only the stubs phase, which comes after, makes one;
+//   export-stubs  every segment's stubs (D-4759), insert-or-ignore, dated by the replay: a blob the store already holds,
+//                 whole or pruned, keeps its row. Bytes first and stubs after decides one thing only: a stub an older
+//                 segment carries can no longer swallow bytes a later segment carries. Both stay insert-or-ignore, so a
+//                 tombstone the store held before the replay began never takes bytes from any segment;
 //   export-rows   every segment's rows in their write order (ord), through the ingest's named columns:
 //                 - families and epochs fill only what the journal lacks, through merged_into;
 //                 - a gone file becomes a dead-file ingest_files row keyed 'exported:' + hex(sha256(path ∖0 dev ∖0
@@ -2640,7 +2650,7 @@ async function recoverReindexChunk(db, run, cursor) {
 // only a newer format is skippable, and the failure line names the way out
 // (D-4765 (history-export-segment-unreadable-stalls), NEW).
 // THE CURSOR is lib's RecoverCursor at its phase: `file` the segment's name, `offset` the last blobs rowid
-// (export-blobs) or the last row ord (export-rows) applied. It is committed in the chunk's own NORMAL transaction
+// (export-blobs, export-stubs) or the last row ord (export-rows) applied. It is committed in the chunk's own NORMAL transaction
 // with what it applied, and `pairsAdded` rides along as the step holds it (run.pairsAdded: an export phase learns no
 // pair itself), so Task 29's reindex phase still sees a learned pair. It carries no group size: only a journal phase
 // has one, and lib formatRecoverCursor refuses one beside an export phase. Replay writes no journal record (O36) and
@@ -2659,6 +2669,8 @@ function replayStmts(db) {
   s = {
     blobIns: db.prepare('INSERT INTO blobs (sha256, codec, z, raw_len, pruned_ms) VALUES (?, ?, ?, ?, ?) ON CONFLICT (sha256) DO NOTHING'),
     blobMark: db.prepare('UPDATE blobs SET exported_ms = ?, exported_seg = ? WHERE sha256 = ? AND z IS NOT NULL AND exported_ms IS NULL'),
+    // D-5397: asked only when a body's insert answered 0 changes, to tell a prune tombstone from a blob that holds bytes.
+    blobTombstone: db.prepare('SELECT 1 AS x FROM blobs WHERE sha256 = ? AND z IS NULL'),
     blobId: db.prepare('SELECT blob_id FROM blobs WHERE sha256 = ?'),
     familySel: db.prepare('SELECT session_pk, merged_into FROM sessions WHERE ccrc_id = ? AND generation = ?'),
     familyFill: db.prepare("UPDATE sessions SET project = ? WHERE session_pk = ? AND project = ''"),
@@ -2920,8 +2932,9 @@ function openForReplay(run, dir, name) {
   }
 }
 
-/** A segment the export-blobs walk skips, once per walk: a newer format joins meta export_segment_newer (doctor FAIL
- *  export-segment-newer, naming it); another store's is counted export_segment_foreign. Each prints one line. */
+/** A segment the export-blobs walk skips, once per replay: a newer format joins meta export_segment_newer (doctor FAIL
+ *  export-segment-newer, naming it); another store's is counted export_segment_foreign. Each prints one line. The
+ *  export-stubs and export-rows walks skip such a segment silently, by the verdict they read: only this walk notes it. */
 function noteSkippedSegment(db, name, verdict) {
   if (verdict.word === 'newer') {
     let listed = [];
@@ -2939,18 +2952,23 @@ function noteSkippedSegment(db, name, verdict) {
   process.stderr.write(`history-sweep: export segment ${name} names store ${verdict.meta.storeId}, not this one; it was not replayed\n`);
 }
 
-/** One page of one segment's blobs past `after` (a rowid), bounded by the chunk's bytes. insert-or-ignore by sha256
- *  (§9.14): a blob the store already holds, whole or pruned, keeps its row; one with bytes is marked with its
- *  segment. A stub (no bytes) goes in pruned (D-4759 (history-export-pruned-row-stub)). An empty page ends the segment. */
-function replayBlobPage(db, run, sdb, dir, name, after) {
-  const page = readSegmentPage(dir, name, () => segmentBlobsAfter(sdb, after, run.budget.chunkBytes));
+/** One page of one kind of one segment's blobs past `after` (a rowid), bounded by the chunk's bytes: `stubs` false is
+ *  export-blobs' page (the blobs that carry bytes), true export-stubs' (D-5397 (history-export-replay-bytes-before-stubs)).
+ *  insert-or-ignore by sha256 (§9.14) in both: a blob the store already holds, whole or pruned, keeps its row; one with
+ *  bytes is marked with its segment. A body ignored over a prune tombstone is counted export_blob_tombstone_kept; the
+ *  probe runs only when the insert answered 0 changes, so a fresh blob costs no statement more, and no read's answer
+ *  changes. A stub (no bytes) goes in pruned (D-4759 (history-export-pruned-row-stub)), dated by the replay. An empty
+ *  page ends the segment. */
+function replayBlobPage(db, run, sdb, dir, name, after, stubs) {
+  const page = readSegmentPage(dir, name, () => segmentBlobsAfter(sdb, after, run.budget.chunkBytes, stubs ? 'stubs' : 'bytes'));
   if (page.length === 0) return { pos: after, done: true, bytes: 0 };
   const s = replayStmts(db);
   const markMs = run.now();
   let bytes = 0;
   for (const b of page) {
-    s.blobIns.run(b.sha256, b.codec, b.z, b.raw_len, b.z === null ? markMs : null);
+    const ins = s.blobIns.run(b.sha256, b.codec, b.z, b.raw_len, b.z === null ? markMs : null);
     if (b.z !== null) {
+      if (Number(ins.changes) === 0 && s.blobTombstone.get(b.sha256) !== undefined) bump(db, 'export_blob_tombstone_kept');
       s.blobMark.run(markMs, name, b.sha256);
       bytes += b.z.length;
     }
@@ -2978,8 +2996,10 @@ function replayRowPage(db, run, sdb, dir, name, meta, after) {
 }
 
 /** One bounded chunk of an export phase: one page of one segment, applied with the cursor past it in one NORMAL
- *  transaction (B2's executor contract). `blobs` picks the phase's page. */
-function exportPhaseChunk(db, run, cursor, blobs) {
+ *  transaction (B2's executor contract). `kind` picks the phase's page: `bytes` (export-blobs), `stubs` (export-stubs) or
+ *  `rows` (export-rows). Each walks every segment in (seq, writer) order, so a replay that resumes across chunks, passes and
+ *  a kill finishes every segment's bytes before it starts any segment's stubs (D-5397). */
+function exportPhaseChunk(db, run, cursor, kind) {
   const { dir, names } = exportReplayListing(run);
   // A cursor naming a segment this listing does not hold resumes at the first listed segment that orders after it, from its
   // start. The sweep never removes a segment, but D-4765's way out for one that cannot be read is to move it aside, and the
@@ -2998,12 +3018,12 @@ function exportPhaseChunk(db, run, cursor, blobs) {
   let next;
   try {
     next = withTx(db, 'NORMAL', () => {
-      if (blobs && cursor.file === null) setMeta(db, HEALTH_META.exportSegmentNewer, '[]');
+      if (kind === 'bytes' && cursor.file === null) setMeta(db, HEALTH_META.exportSegmentNewer, '[]');
       if (opened.verdict !== null && opened.verdict.word === 'replay') {
-        page = blobs
-          ? replayBlobPage(db, run, opened.sdb, dir, name, after)
-          : replayRowPage(db, run, opened.sdb, dir, name, opened.verdict.meta, after);
-      } else if (opened.verdict !== null && blobs) {
+        page = kind === 'rows'
+          ? replayRowPage(db, run, opened.sdb, dir, name, opened.verdict.meta, after)
+          : replayBlobPage(db, run, opened.sdb, dir, name, after, kind === 'stubs');
+      } else if (opened.verdict !== null && kind === 'bytes') {
         noteSkippedSegment(db, name, opened.verdict);
       }
       const c = name === null ? position(null, 0)
@@ -3023,14 +3043,19 @@ function exportPhaseChunk(db, run, cursor, blobs) {
   };
 }
 
-/** export-blobs: every segment's blobs, before any segment's rows (BK21). */
+/** export-blobs: every segment's blobs that carry bytes, before any segment's stubs and rows (BK21, D-5397). */
 function recoverExportBlobsChunk(db, run, cursor) {
-  return exportPhaseChunk(db, run, cursor, true);
+  return exportPhaseChunk(db, run, cursor, 'bytes');
+}
+
+/** export-stubs: every segment's stubs, after every segment's bytes and before any segment's rows (D-5397). */
+function recoverExportStubsChunk(db, run, cursor) {
+  return exportPhaseChunk(db, run, cursor, 'stubs');
 }
 
 /** export-rows: every segment's rows, in (seq, writer) order. */
 function recoverExportRowsChunk(db, run, cursor) {
-  return exportPhaseChunk(db, run, cursor, false);
+  return exportPhaseChunk(db, run, cursor, 'rows');
 }
 
 /** One executor per RECOVER_PHASES phase, keyed by its name. The contract each keeps:
@@ -3044,6 +3069,7 @@ export const RECOVER_EXECUTORS = Object.freeze({
   index: recoverIndexChunk,
   apply: recoverApplyChunk,
   'export-blobs': recoverExportBlobsChunk,
+  'export-stubs': recoverExportStubsChunk,
   'export-rows': recoverExportRowsChunk,
   reindex: recoverReindexChunk,
 });

@@ -19,7 +19,7 @@ import {
   makeHistoryBox, runSweep, runShim, runDriver, skipOnDarwin, openStoreRO, counters, journalRecords, plantSession,
   plantTranscript, spoolLine, preloadOptions, PRELOADS, CLI, recoverRow, boundEmptyStore,
   runCli, withPane, seedFamily, journalDirOf, REPO, rewindStoreToV1, runOnPty, type HistoryBox, type SpawnOpts,
-  plantSegment, segmentSha, segmentsOf, segmentRows, exportDirOf, type PlantSegmentRow, strandedBlobs, strandedBlobsOn,
+  plantSegment, segmentSha, segmentsOf, segmentRows, exportDirOf, type PlantSegmentRow, type PlantSegmentBlob, strandedBlobs, strandedBlobsOn,
 } from './historyHelpers.js';
 import { userRow, assistantRow, boundaryRow, summaryRow, toolResultRow } from './historyFixtures.js';
 import { removeTmpFixturesEachTest, mkTmp } from './tmpHelpers.js';
@@ -3535,15 +3535,15 @@ describe('W1-B4: the export phases in the recovery step (spec §9.14)', () => {
     }
   };
 
-  it('a step stored at apply+pairs walks export-blobs then export-rows, through the shipped executors, to reindex with +pairs kept', async () => {
+  it('a step stored at apply+pairs walks export-blobs, export-stubs then export-rows (D-5397), through the shipped executors, to reindex with +pairs kept', async () => {
     await withStep('apply+pairs', async (db, box, ids) => {
       const seen: string[] = [];
       const executors = {
-        index: stopHere(seen), apply: finished, 'export-blobs': shipped('export-blobs', seen), 'export-rows': shipped('export-rows', seen),
-        reindex: stopHere(seen),
+        index: stopHere(seen), apply: finished, 'export-blobs': shipped('export-blobs', seen), 'export-stubs': shipped('export-stubs', seen),
+        'export-rows': shipped('export-rows', seen), reindex: stopHere(seen),
       };
       expect(await SW.recoveryStep(db, stepCtx(box, ids), executors)).toEqual({ moved: true, done: false, held: false });
-      expect(seen).toEqual(['export-blobs+pairs', 'export-rows+pairs', 'reindex+pairs']);
+      expect(seen).toEqual(['export-blobs+pairs', 'export-stubs+pairs', 'export-rows+pairs', 'reindex+pairs']);
       expect(cursorOn(db)).toBe('reindex+pairs');
     });
   });
@@ -3552,11 +3552,24 @@ describe('W1-B4: the export phases in the recovery step (spec §9.14)', () => {
     await withStep('export-rows:7.0a1b2c3d.db:12+pairs', async (db, box, ids) => {
       const seen: string[] = [];
       const executors = {
-        index: stopHere(seen), apply: stopHere(seen), 'export-blobs': stopHere(seen), 'export-rows': shipped('export-rows', seen),
-        reindex: stopHere(seen),
+        index: stopHere(seen), apply: stopHere(seen), 'export-blobs': stopHere(seen), 'export-stubs': stopHere(seen),
+        'export-rows': shipped('export-rows', seen), reindex: stopHere(seen),
       };
       expect(await SW.recoveryStep(db, stepCtx(box, ids), executors)).toEqual({ moved: true, done: false, held: false });
       expect(seen).toEqual(['export-rows:7.0a1b2c3d.db:12+pairs', 'reindex+pairs']);
+      expect(countersOn(db, 'recover_chunk_failed')).toEqual({ recover_chunk_failed: 0 });
+    });
+  });
+
+  it('a step stored inside the stubs phase resumes there, and goes on to the rows phase (D-5397): its cursor parses, and no chunk is counted failed', async () => {
+    await withStep('export-stubs:7.0a1b2c3d.db:12+pairs', async (db, box, ids) => {
+      const seen: string[] = [];
+      const executors = {
+        index: stopHere(seen), apply: stopHere(seen), 'export-blobs': stopHere(seen), 'export-stubs': shipped('export-stubs', seen),
+        'export-rows': stopHere(seen), reindex: stopHere(seen),
+      };
+      expect(await SW.recoveryStep(db, stepCtx(box, ids), executors)).toEqual({ moved: true, done: false, held: false });
+      expect(seen).toEqual(['export-stubs:7.0a1b2c3d.db:12+pairs', 'export-rows+pairs']);
       expect(countersOn(db, 'recover_chunk_failed')).toEqual({ recover_chunk_failed: 0 });
     });
   });
@@ -4595,6 +4608,233 @@ describe('W1-B4 whole-branch review: export replay resumes after a segment moved
       expect(x10Count(db, 'entries') - entriesBefore, 'and the last segment\'s two rows were applied').toBe(2);
     } finally {
       closeWriter(db);
+    }
+  });
+});
+
+// ── W1-B4 review 614, F2: replay applies every segment's carried bytes before any segment's stubs (D-5397) ──────────
+// An exporter writes a stub (D-4759) in one segment and, once ingest's revival on recapture (B2's D-4589) has cleared the
+// entry's mark (D-5395), the same blob's bytes in a later one. Replay is insert-or-ignore by sha256, so the order decides
+// which of the two lands: bytes first means the stub an earlier segment carries can never swallow them. The cases are
+// in-process on planted segments (the real exporter flow, and `expand` after a rebuild, is history-export.test.ts's).
+describe('D-5397: export replay applies every segment\'s bytes before any segment\'s stubs, both insert-or-ignore, on the recovery cursor (W1-B4 review 614, F2)', () => {
+  const segName = (seq: number): string => `${seq}.${X10_WRITER}.db`;
+  const stubOf = (text: string): PlantSegmentBlob => ({ text: null, sha256: segmentSha(text), rawLen: Buffer.byteLength(text, 'utf8') });
+  /** The blob of `text` as the store holds it: body-less or not, dated or not, and the segment that marked it. */
+  const blobOf = (db: DatabaseSync, text: string): Record<string, unknown> => ({ ...(db.prepare(
+    'SELECT z IS NULL AS stub, pruned_ms IS NOT NULL AS pruned, exported_seg AS seg FROM blobs WHERE sha256 = ?').get(segmentSha(text)) as object) });
+  /** What a read of the blob answers: its text, decoded from the stored body, or null for a body-less blob. */
+  const bodyOf = (db: DatabaseSync, text: string): string | null => {
+    const r = db.prepare('SELECT z FROM blobs WHERE sha256 = ?').get(segmentSha(text)) as { z: Uint8Array | null } | undefined;
+    return r === undefined || r.z === null ? null : rrUnbrotli(Buffer.from(r.z)).toString('utf8');
+  };
+  const markOf = (db: DatabaseSync, uuid: string): string | null =>
+    (db.prepare('SELECT exported_seg AS seg FROM entries WHERE uuid = ?').get(uuid) as { seg: string | null }).seg;
+  type Chunk = (db: DatabaseSync, run: unknown, c: recExport.RecoverCursor) => unknown;
+  /** The shipped executors, each recording the cursor it is called with. */
+  const recording = (seen: string[]): Readonly<Record<string, unknown>> => Object.fromEntries(Object.entries(SW.RECOVER_EXECUTORS).map(([phase, fn]) =>
+    [phase, (db: DatabaseSync, run: unknown, c: recExport.RecoverCursor): unknown => {
+      seen.push(recExport.formatRecoverCursor(c));
+      return (fn as Chunk)(db, run, c);
+    }]));
+  /** A family of `n` rows, and the segment rows that place any subset of them. */
+  const family = (base: number, n: number, word: string): { fam: X10Family; texts: X10Text[] } => {
+    const texts = x10Texts(base, n, word, Date.now() - 400 * X10_DAY);
+    return { texts, fam: { uuid: x10U(base >> 4), path: `/home/u/gone/${word}.jsonl`, ino: 9000 + base, texts } };
+  };
+
+  it('a stub in an earlier segment and the same blob\'s bytes in a later one, the two in separate passes: the bytes land, marked by the later segment; the entry is marked by the first segment that carries it; the text reads', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-d5397a-');
+    try {
+      const { fam, texts } = family(0x1100, 2, 'zqd5397a');
+      // The exporter's order: segment 1 carries row 0 with a stub of its pruned body and row 1 with its bytes; ingest's
+      // revival on recapture clears row 0's mark; segment 2 carries row 0 again, now with the bytes.
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: [stubOf(texts[0]!.text), { text: texts[1]!.text }], rows: x10Rows(fam) });
+      plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, blobs: [{ text: texts[0]!.text }], rows: x10Rows({ ...fam, texts: [texts[0]!] }) });
+      // A budget of one byte ends a pass after the first chunk that carries any: the bytes of segment 1, then those of segment 2.
+      const seen: string[] = [];
+      const passOf: number[] = [];
+      let r = { moved: false, done: false, held: false };
+      for (let i = 0; i < 40 && !r.done; i += 1) {
+        const before = seen.length;
+        r = await SW.recoveryStep(db, stepCtx(box, ids, { maxBytes: 1, chunkBytes: 1 }), recording(seen));
+        for (let k = before; k < seen.length; k += 1) passOf.push(i);
+      }
+      expect(r.done, `the step completed: ${seen.join(' | ')}`).toBe(true);
+      expect(blobOf(db, texts[0]!.text), 'the bytes of segment 2 landed, and segment 2 marked them').toEqual({ stub: 0, pruned: 0, seg: segName(2) });
+      expect(bodyOf(db, texts[0]!.text), 'a read of the blob answers its text').toBe(texts[0]!.text);
+      expect(markOf(db, texts[0]!.uuid), 'replay\'s first-wins entry mark is unchanged: the first segment that carries the row').toBe(segName(1));
+      expect(markOf(db, texts[1]!.uuid)).toBe(segName(1));
+      const phases = seen.map((c) => c.replace(/[:+].*$/, ''));
+      const lastBytes = phases.lastIndexOf('export-blobs');
+      const firstStubs = phases.indexOf('export-stubs');
+      expect(lastBytes, `the bytes phase ran: ${seen.join(' | ')}`).toBeGreaterThanOrEqual(0);
+      expect(firstStubs, `and the stubs phase after its last chunk: ${seen.join(' | ')}`).toBeGreaterThan(lastBytes);
+      const bytesOfSeg2 = seen.indexOf(`export-blobs:${segName(2)}:0`);   // the chunk that applied segment 2's bytes, and ended its pass on the budget
+      expect(bytesOfSeg2, `segment 2's bytes page is its own chunk: ${seen.join(' | ')}`).toBeGreaterThan(0);
+      expect(passOf[firstStubs], `the stubs phase began in a later pass than that chunk's (${seen.join(' | ')})`).toBeGreaterThan(passOf[bytesOfSeg2]!);
+      expect(countersOn(db, 'export_blob_tombstone_kept', 'export_row_blob_missing', 'export_row_unplaced'), 'no tombstone was held, so none was kept')
+        .toEqual({ export_blob_tombstone_kept: 0, export_row_blob_missing: 0, export_row_unplaced: 0 });
+      expect(strandedBlobsOn(db)).toEqual([]);
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('the bytes in an earlier segment and a stub of the same blob in a later one: the bytes stay, and the stub changes nothing', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-d5397b-');
+    try {
+      const { fam, texts } = family(0x1200, 2, 'zqd5397b');
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(fam) });
+      plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, blobs: [stubOf(texts[0]!.text)], rows: x10Rows({ ...fam, texts: [texts[0]!] }) });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(blobOf(db, texts[0]!.text), 'segment 1\'s bytes stay, marked by it').toEqual({ stub: 0, pruned: 0, seg: segName(1) });
+      expect(bodyOf(db, texts[0]!.text), 'a read of the blob answers its text').toBe(texts[0]!.text);
+      expect(markOf(db, texts[0]!.uuid)).toBe(segName(1));
+      expect(countersOn(db, 'export_blob_tombstone_kept', 'export_row_blob_missing')).toEqual({ export_blob_tombstone_kept: 0, export_row_blob_missing: 0 });
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('CONTROL: a tombstone the store held before the replay stays one when a segment carries its bytes, and the body replay ignores over it is counted export_blob_tombstone_kept; a body ignored over a blob the replay itself stored is not', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-d5397c-');
+    try {
+      const { fam, texts } = family(0x1300, 2, 'zqd5397c');
+      // The store pruned row 0's body before the replay: a tombstone, with its date.
+      db.prepare('INSERT INTO blobs (sha256, codec, z, raw_len, pruned_ms) VALUES (?, ?, NULL, ?, 12345)')
+        .run(segmentSha(texts[0]!.text), 'br5', Buffer.byteLength(texts[0]!.text, 'utf8'));
+      // Segment 1 carries both bodies; segment 2 carries row 1's again, over the live blob segment 1 just stored.
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(fam) });
+      plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, blobs: [{ text: texts[1]!.text }], rows: x10Rows({ ...fam, texts: [texts[1]!] }) });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(blobOf(db, texts[0]!.text), 'the tombstone keeps its date, gains no body and no mark').toEqual({ stub: 1, pruned: 1, seg: null });
+      expect(db.prepare('SELECT pruned_ms FROM blobs WHERE sha256 = ?').get(segmentSha(texts[0]!.text))).toEqual({ pruned_ms: 12345 });
+      expect(bodyOf(db, texts[0]!.text), 'a read of it answers no text').toBeNull();
+      expect(blobOf(db, texts[1]!.text)).toEqual({ stub: 0, pruned: 0, seg: segName(1) });
+      expect(countersOn(db, 'export_blob_tombstone_kept'), 'one body met the tombstone; row 1\'s repeat met a blob the replay stored').toEqual({ export_blob_tombstone_kept: 1 });
+    } finally {
+      closeWriter(db);
+    }
+  });
+  it('a replay that resumes across chunks, passes and a kill applies all bytes before any stub: a cursor stored inside the bytes phase resumes there, and no stubs chunk runs before the last bytes chunk', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-d5397d-');
+    let w = db;
+    try {
+      const { fam, texts } = family(0x1400, 3, 'zqd5397d');
+      // The stub of row 0 is in segment 1 and its bytes in segment 3; row 1 has its bytes in segment 1 and a stub after them in
+      // segment 2; row 2 has bytes in segment 2. The bytes phase spans three segments, and a stub is carried by two of them.
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: [stubOf(texts[0]!.text), { text: texts[1]!.text }], rows: x10Rows(fam) });
+      plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, blobs: [{ text: texts[2]!.text }, stubOf(texts[1]!.text)], rows: x10Rows({ ...fam, texts: [texts[1]!, texts[2]!] }) });
+      plantSegment(box, ids.storeId, { seq: 3, writer: X10_WRITER, blobs: [{ text: texts[0]!.text }], rows: x10Rows({ ...fam, texts: [texts[0]!] }) });
+      const first: string[] = [];
+      expect(await SW.recoveryStep(w, stepCtx(box, ids, { maxBytes: 1, chunkBytes: 1 }), recording(first))).toEqual({ moved: true, done: false, held: false });
+      const stored = cursorOn(w);
+      expect(stored, 'CONTROL: the pass ended inside the bytes phase, after segment 1\'s bytes').toMatch(new RegExp(`^export-blobs:${segName(1)}:[1-9][0-9]*$`));
+      closeWriter(w);   // the kill: nothing of the first pass but the committed rows and the cursor survives
+      w = openWriter(historyPaths(box.home).dbFile);
+      const rest: string[] = [];
+      let r = { moved: false, done: false, held: false };
+      for (let i = 0; i < 60 && !r.done; i += 1) r = await SW.recoveryStep(w, stepCtx(box, ids, { maxBytes: 1, chunkBytes: 1 }), recording(rest));
+      expect(r.done, `the step completed: ${rest.join(' | ')}`).toBe(true);
+      expect(rest[0], 'the first chunk after the kill is the stored cursor\'s').toBe(stored);
+      const phases = [...first, ...rest].map((c) => c.replace(/[:+].*$/, ''));
+      const order = ['index', 'apply', 'export-blobs', 'export-stubs', 'export-rows', 'reindex'];
+      expect(phases.map((p) => order.indexOf(p)), `the phases never go back: ${[...first, ...rest].join(' | ')}`)
+        .toEqual([...phases.map((p) => order.indexOf(p))].sort((a, b) => a - b));
+      expect(rest.filter((c) => c.includes(`:${segName(1)}:`) && c.startsWith('export-blobs')), 'the bytes of segment 1 are not applied again').toEqual([stored]);
+      expect(phases.indexOf('export-stubs'), 'and the stubs phase runs').toBeGreaterThan(phases.lastIndexOf('export-blobs'));
+      expect(blobOf(w, texts[0]!.text), 'segment 3\'s bytes beat segment 1\'s stub').toEqual({ stub: 0, pruned: 0, seg: segName(3) });
+      expect(blobOf(w, texts[1]!.text), 'segment 1\'s bytes beat segment 2\'s stub').toEqual({ stub: 0, pruned: 0, seg: segName(1) });
+      expect(blobOf(w, texts[2]!.text)).toEqual({ stub: 0, pruned: 0, seg: segName(2) });
+      expect(countersOn(w, 'recover_chunk_failed', 'export_row_blob_missing', 'export_row_unplaced')).toEqual({ recover_chunk_failed: 0, export_row_blob_missing: 0, export_row_unplaced: 0 });
+    } finally {
+      closeWriter(w);
+    }
+  });
+
+  it('the stubs phase obeys the resume rule of the others: a cursor naming a segment moved aside goes on at the next segment that orders after it, and walks no earlier segment again; a newer-format segment\'s stub is never applied', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-d5397e-', `export-stubs:${segName(2)}:0`);
+    try {
+      const { fam, texts } = family(0x1500, 3, 'zqd5397e');
+      // Segment 1's stub is behind the cursor and so is not applied; segment 2 is gone; segment 3's stub is applied; segment 4 is
+      // a newer format whose stub must not be.
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: [stubOf(texts[0]!.text)], rows: [] });
+      plantSegment(box, ids.storeId, { seq: 3, writer: X10_WRITER, blobs: [stubOf(texts[1]!.text)], rows: x10Rows({ ...fam, texts: [texts[1]!] }) });
+      plantSegment(box, ids.storeId, { seq: 4, writer: X10_WRITER, format: 2, blobs: [stubOf(texts[2]!.text)], rows: [] });
+      const seen: string[] = [];
+      expect(await SW.recoveryStep(db, stepCtx(box, ids), recording(seen))).toEqual({ moved: true, done: true, held: false });
+      const stubs = seen.filter((c) => c.startsWith('export-stubs'));
+      expect(stubs[0], 'the first chunk is the stored cursor\'s').toBe(`export-stubs:${segName(2)}:0`);
+      expect(stubs.filter((c) => c.includes(`:${segName(1)}:`)), 'no chunk walks segment 1').toEqual([]);
+      expect(blobOf(db, texts[0]!.text), 'the stub behind the cursor was never applied').toEqual({});
+      expect(blobOf(db, texts[1]!.text), 'segment 3\'s was, dated by the replay and never marked').toEqual({ stub: 1, pruned: 1, seg: null });
+      expect(blobOf(db, texts[2]!.text), 'a newer-format segment\'s stub never').toEqual({});
+      expect(getMeta(db, HEALTH_META.exportSegmentNewer), 'the stubs walk does not note the newer segment (the bytes walk did not run in this step)').toBeNull();
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('a segment replay skips is noted once per replay, by the bytes walk alone: the stubs and rows walks reach it again and say nothing', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-d5397f-');
+    try {
+      const { fam, texts } = family(0x1600, 1, 'zqd5397f');
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, metaStoreId: '0189abcd-1234-4678-9abc-0000000010ff', blobs: [stubOf('zqd5397f theirs')], rows: [] });
+      plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, format: 2, blobs: [stubOf('zqd5397f newer')], rows: [] });
+      plantSegment(box, ids.storeId, { seq: 3, writer: X10_WRITER, blobs: [stubOf(texts[0]!.text)], rows: x10Rows(fam) });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(countersOn(db, 'export_segment_foreign'), 'the foreign segment is counted by the bytes walk and by no other').toEqual({ export_segment_foreign: 1 });
+      expect(getMeta(db, HEALTH_META.exportSegmentNewer)).toBe(JSON.stringify([segName(2)]));
+      expect(blobOf(db, texts[0]!.text), 'and the stub of the segment that replays is applied').toEqual({ stub: 1, pruned: 1, seg: null });
+      expect([x10Count(db, 'entries'), countersOn(db, 'export_row_blob_missing')], 'before its row, which finds the blob').toEqual([1, { export_row_blob_missing: 0 }]);
+      expect([blobOf(db, 'zqd5397f theirs'), blobOf(db, 'zqd5397f newer')], 'neither skipped segment\'s stub').toEqual([{}, {}]);
+    } finally {
+      closeWriter(db);
+    }
+  });
+  it('the tombstone probe runs only where an insert was ignored: a fresh blob costs no statement more; a body over a live blob is probed and not counted; a body over a tombstone is probed and counted', async () => {
+    const probes = (ran: string[]): number => ran.filter((t) => /FROM blobs WHERE sha256 = \? AND z IS NULL/.test(t)).length;
+    /** `db` with the text of every statement it runs recorded (history-export.test.ts's counting idiom). */
+    const counting = (target: DatabaseSync, ran: string[]): DatabaseSync => {
+      const wrap = (text: string, st: object): object => new Proxy(st, {
+        get(t, k) {
+          const v: unknown = Reflect.get(t, k, t);
+          if (k === 'run' || k === 'get' || k === 'all' || k === 'iterate') return (...a: unknown[]): unknown => { ran.push(text); return (v as (...x: unknown[]) => unknown).apply(t, a); };
+          return typeof v === 'function' ? (v as (...x: unknown[]) => unknown).bind(t) : v;
+        },
+      });
+      return new Proxy(target, {
+        get(t, k) {
+          if (k === 'prepare') return (text: string): object => wrap(text, t.prepare(text));
+          const v: unknown = Reflect.get(t, k, t);
+          return typeof v === 'function' ? (v as (...x: unknown[]) => unknown).bind(t) : v;
+        },
+      });
+    };
+    const fresh = x10Store('ccrc-history-b4-d5397g-');
+    try {
+      const { fam, texts } = family(0x1700, 1, 'zqd5397g');
+      plantSegment(fresh.box, fresh.ids.storeId, { seq: 1, writer: X10_WRITER, blobs: [{ text: texts[0]!.text }], rows: x10Rows(fam) });
+      const ran: string[] = [];
+      expect(await SW.recoveryStep(counting(fresh.db, ran), stepCtx(fresh.box, fresh.ids))).toEqual({ moved: true, done: true, held: false });
+      expect(ran.filter((t) => /INSERT INTO blobs/.test(t)).length, 'CONTROL: the blob went in through the insert').toBeGreaterThan(0);
+      expect(probes(ran), 'a fresh blob is not probed').toBe(0);
+    } finally {
+      closeWriter(fresh.db);
+    }
+    const held = x10Store('ccrc-history-b4-d5397h-');
+    try {
+      const { fam, texts } = family(0x1800, 2, 'zqd5397h');
+      held.db.prepare('INSERT INTO blobs (sha256, codec, z, raw_len) VALUES (?, ?, ?, ?)').run(segmentSha(texts[0]!.text), 'br5', Buffer.from('stored body'), 11);   // live
+      held.db.prepare('INSERT INTO blobs (sha256, codec, z, raw_len, pruned_ms) VALUES (?, ?, NULL, ?, 12345)').run(segmentSha(texts[1]!.text), 'br5', 11);   // a tombstone
+      plantSegment(held.box, held.ids.storeId, { seq: 1, writer: X10_WRITER, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(fam) });
+      const ran: string[] = [];
+      expect(await SW.recoveryStep(counting(held.db, ran), stepCtx(held.box, held.ids))).toEqual({ moved: true, done: true, held: false });
+      expect(probes(ran), 'the two ignored bodies are probed, once each').toBe(2);
+      expect(countersOn(held.db, 'export_blob_tombstone_kept'), 'and only the one over the tombstone is counted').toEqual({ export_blob_tombstone_kept: 1 });
+    } finally {
+      closeWriter(held.db);
     }
   });
 });

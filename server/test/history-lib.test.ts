@@ -5995,8 +5995,8 @@ function rpJournal() {
 }
 
 describe('RecoverCursor: the recovery step cursor grammar (spec 9.14; B4 adds export phases)', () => {
-  it('RECOVER_PHASES is index, apply, export-blobs, export-rows, reindex, frozen', () => {
-    expect([...libReplay.RECOVER_PHASES]).toEqual(['index', 'apply', 'export-blobs', 'export-rows', 'reindex']);
+  it('RECOVER_PHASES is index, apply, export-blobs, export-stubs, export-rows, reindex, frozen (D-5397)', () => {
+    expect([...libReplay.RECOVER_PHASES]).toEqual(['index', 'apply', 'export-blobs', 'export-stubs', 'export-rows', 'reindex']);
     expect(Object.isFrozen(libReplay.RECOVER_PHASES)).toBe(true);
   });
   it('H-95: the phases that read the journal are lib\'s one list, in RECOVER_PHASES\' order, and the cursor grammar parses exactly those', () => {
@@ -8416,31 +8416,36 @@ import * as libReplayExport from '../../ccd/history/lib.mjs';
 
 describe('W1-B4: the export phases\' cursor and the segment replay verdict (spec 9.14; O44 pure half)', () => {
   const STORE = '0189abcd-1234-4678-9abc-0000000000e1';
-  it('the export phases sit between apply and reindex, in that order', () => {
+  it('the export phases sit between apply and reindex, in that order: every segment\'s bytes, then every segment\'s stubs (D-5397), then the rows', () => {
     const p = [...libReplayExport.RECOVER_PHASES];
     expect(p.indexOf('export-blobs')).toBe(p.indexOf('apply') + 1);
-    expect(p.indexOf('export-rows')).toBe(p.indexOf('export-blobs') + 1);
+    expect(p.indexOf('export-stubs')).toBe(p.indexOf('export-blobs') + 1);
+    expect(p.indexOf('export-rows')).toBe(p.indexOf('export-stubs') + 1);
     expect(p.indexOf('reindex')).toBe(p.indexOf('export-rows') + 1);
   });
   it('round-trips an export phase at its start, inside a segment, and with +pairs', () => {
-    for (const s of ['export-blobs', 'export-blobs:7.0a1b2c3d.db:0', 'export-rows:12.0a1b2c3d.db:4096+pairs', 'export-rows+pairs', 'export-blobs+pairs']) {
+    for (const s of ['export-blobs', 'export-blobs:7.0a1b2c3d.db:0', 'export-rows:12.0a1b2c3d.db:4096+pairs', 'export-rows+pairs', 'export-blobs+pairs',
+      'export-stubs', 'export-stubs:7.0a1b2c3d.db:0', 'export-stubs:12.0a1b2c3d.db:4096+pairs', 'export-stubs+pairs']) {
       const c = libReplayExport.parseRecoverCursor(s);
       expect(c, s).not.toBeNull();
       expect(libReplayExport.formatRecoverCursor(c!), s).toBe(s);
     }
     expect(libReplayExport.parseRecoverCursor('export-rows:12.0a1b2c3d.db:4096+pairs'))
       .toEqual({ phase: 'export-rows', file: '12.0a1b2c3d.db', offset: 4096, blobId: null, groupSize: null, pairsAdded: true });
+    expect(libReplayExport.parseRecoverCursor('export-stubs:12.0a1b2c3d.db:4096+pairs'))
+      .toEqual({ phase: 'export-stubs', file: '12.0a1b2c3d.db', offset: 4096, blobId: null, groupSize: null, pairsAdded: true });
   });
   it('an export phase names a segment, never a journal file; a journal phase never names a segment; anything else is null', () => {
     for (const s of ['export-rows:2026-10.0a1b2c3d.jsonl:1', 'export-blobs:01.0a1b2c3d.db:1', 'export-rows:notes.db:1',
       'export-blobs:7.0a1b2c3d.db:01', 'export-blobs:7.0a1b2c3d.db', 'export-rows:7.0a1b2c3d.db:9999999999999999',
-      'index:7.0a1b2c3d.db:0', 'apply:7.0a1b2c3d.db:0', 'reindex:7.0a1b2c3d.db', 'export-segments', 'export-blobs:.7.0a1b2c3d.db.tmp:0']) {
+      'index:7.0a1b2c3d.db:0', 'apply:7.0a1b2c3d.db:0', 'reindex:7.0a1b2c3d.db', 'export-segments', 'export-blobs:.7.0a1b2c3d.db.tmp:0',
+      'export-stubs:2026-10.0a1b2c3d.jsonl:1', 'export-stubs:01.0a1b2c3d.db:1', 'export-stubs:7.0a1b2c3d.db', 'export-stubs:7.0a1b2c3d.db:01']) {
       expect(libReplayExport.parseRecoverCursor(s), s).toBeNull();
     }
   });
   it('formatRecoverCursor writes a group size only beside a journal phase: beside an export phase (or reindex) it throws, because the cursor it would print is one parseRecoverCursor refuses (H-182)', () => {
     const at = { file: '7.0a1b2c3d.db', offset: 12, blobId: null, pairsAdded: false };
-    for (const phase of ['export-blobs', 'export-rows']) {
+    for (const phase of ['export-blobs', 'export-stubs', 'export-rows']) {
       expect(() => libReplayExport.formatRecoverCursor({ ...at, phase, groupSize: 2 }), `${phase} with a size`).toThrow(TypeError);
       // CONTROL: with no size (null or absent) it prints, and the text reads back to the cursor it was made from.
       for (const c of [{ ...at, phase, groupSize: null }, { ...at, phase }]) {

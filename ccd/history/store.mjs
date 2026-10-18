@@ -2038,12 +2038,22 @@ export function segmentMeta(db) {
   return out;
 }
 
-/** The first blobs after `rowid`, in rowid order, until the next one's bytes would pass `maxBytes` (the first is
- *  always taken): one bounded chunk of the replay's blob pass. A stub (pruned) has `z` null and counts 0 bytes. */
-export function segmentBlobsAfter(db, rowid, maxBytes) {
+/** The two blob pages of a segment, named columns each (C43): the blobs that carry bytes, and the stubs (D-4759: a blob prune
+ *  tombstoned before its export, with `z` NULL). Replay applies every segment's first kind before any segment's second
+ *  (D-5397), so a page is one kind. */
+const SEGMENT_BLOBS_AFTER = Object.freeze({
+  bytes: 'SELECT rowid AS rowid, sha256, codec, raw_len, z, pruned FROM blobs WHERE rowid > ? AND z IS NOT NULL ORDER BY rowid',
+  stubs: 'SELECT rowid AS rowid, sha256, codec, raw_len, z, pruned FROM blobs WHERE rowid > ? AND z IS NULL ORDER BY rowid',
+});
+
+/** The first blobs of one kind after `rowid`, in rowid order, until the next one's bytes would pass `maxBytes` (the first is
+ *  always taken): one bounded chunk of the replay's blob passes. `kind` is `bytes` (blobs that carry bytes, export-blobs) or
+ *  `stubs` (blobs prune tombstoned, `z` null, counting 0 bytes, export-stubs); anything else throws (D-5397). */
+export function segmentBlobsAfter(db, rowid, maxBytes, kind) {
+  if (!Object.hasOwn(SEGMENT_BLOBS_AFTER, kind)) throw new TypeError(`segmentBlobsAfter: kind is bytes or stubs: ${String(kind)}`);
   const out = [];
   let bytes = 0;
-  for (const r of db.prepare('SELECT rowid AS rowid, sha256, codec, raw_len, z, pruned FROM blobs WHERE rowid > ? ORDER BY rowid').iterate(rowid)) {
+  for (const r of db.prepare(SEGMENT_BLOBS_AFTER[kind]).iterate(rowid)) {
     const n = r.z === null ? 0 : r.z.length;
     if (out.length > 0 && bytes + n > maxBytes) break;
     bytes += n;

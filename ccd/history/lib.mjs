@@ -5773,9 +5773,11 @@ export function decideReparse({ targets, prunedSpans }) {
 
 /** The recovery step's phases, in order (§9.14). `index` applies the redact records and indexes drain-time
  *  verdicts and drained files; `apply` replays the journal; `reindex` re-runs the FTS derivation when the index
- *  pass learned a pair the store lacked. `export-blobs` and `export-rows` (W1-B4) replay the export's segments
- *  between `apply` and `reindex` (§9.14 "Export replay"): this list is that seam. D-4700 (history-b4-after-b2) */
-export const RECOVER_PHASES = Object.freeze(['index', 'apply', 'export-blobs', 'export-rows', 'reindex']);
+ *  pass learned a pair the store lacked. `export-blobs`, `export-stubs` and `export-rows` (W1-B4) replay the export's
+ *  segments between `apply` and `reindex` (§9.14 "Export replay"): this list is that seam. `export-blobs` applies every
+ *  segment's blobs that carry bytes and `export-stubs` every segment's stubs (D-5397), both insert-or-ignore, so a stub an
+ *  earlier segment carries can never swallow bytes a later one carries. D-4700 (history-b4-after-b2) */
+export const RECOVER_PHASES = Object.freeze(['index', 'apply', 'export-blobs', 'export-stubs', 'export-rows', 'reindex']);
 
 /** The phases that read the journal, and so carry a journal file and position in their cursor: the first two of
  *  RECOVER_PHASES. The sweep's executor fails these while a journal file cannot be read (D-4592), and the cursor grammar
@@ -5786,15 +5788,16 @@ const RECOVER_JOURNAL_CURSOR_RE = new RegExp(
   `^(${RECOVER_JOURNAL_PHASES.join('|')})(?::([0-9]{4}-(?:0[1-9]|1[0-2])\\.[0-9a-f]{8}\\.jsonl):(0|[1-9][0-9]{0,15})(?:\\/([1-9][0-9]{0,15}))?)?(\\+pairs)?$`);
 const RECOVER_REINDEX_CURSOR_RE = /^reindex(?::(0|[1-9][0-9]{0,15}))?(\+pairs)?$/;
 // W1-B4: an export phase names a segment (lib parseSegmentName's grammar, checked apart so it is spelled once) and a
-// position in it: a blobs rowid in export-blobs, a row ord in export-rows (§9.14 "Recovery": "then an export phase
-// and segment").
-const RECOVER_EXPORT_CURSOR_RE = /^(export-blobs|export-rows)(?::([^:+]+):(0|[1-9][0-9]{0,15}))?(\+pairs)?$/;
+// position in it: a blobs rowid in export-blobs and export-stubs, a row ord in export-rows (§9.14 "Recovery": "then an
+// export phase and segment"; D-5397 for export-stubs).
+const RECOVER_EXPORT_CURSOR_RE = /^(export-blobs|export-stubs|export-rows)(?::([^:+]+):(0|[1-9][0-9]{0,15}))?(\+pairs)?$/;
 
 /** The recovery step's cursor as derivation_state ('recover', <bind ms>) keeps it and status prints it (§9.14):
  *  `<phase>` at a phase's start, `index:<YYYY-MM>.<writer>.jsonl:<position>/<n>` or `apply:…` inside the journal,
- *  `export-blobs:<seq>.<writer>.db:<blobs rowid>` or `export-rows:<seq>.<writer>.db:<row ord>` inside the export's
- *  segments (W1-B4: `file` is the segment's name, `offset` the last blobs rowid applied in export-blobs and the last
- *  row `ord` applied in export-rows, and there is no `/<n>`), `reindex:<blob_id>` inside the FTS re-derivation, then
+ *  `export-blobs:<seq>.<writer>.db:<blobs rowid>`, `export-stubs:<seq>.<writer>.db:<blobs rowid>` or
+ *  `export-rows:<seq>.<writer>.db:<row ord>` inside the export's segments (W1-B4: `file` is the segment's name, `offset`
+ *  the last blobs rowid applied in export-blobs and export-stubs and the last row `ord` applied in export-rows, and there
+ *  is no `/<n>`), `reindex:<blob_id>` inside the FTS re-derivation, then
  *  `+pairs` once the index pass learned a pair the store lacked. It is advanced in the same transaction as the records
  *  it applies.
  *  D-4607 (history-recover-cursor-records-group-shape): the position is a byte offset into a group of one file and an
