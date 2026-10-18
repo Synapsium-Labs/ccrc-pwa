@@ -3874,11 +3874,14 @@ export function registerCoordRoutes(
       return reply.code(403).send({ ok: false, error: 'not-parent',
         detail: 'only this child\'s derived parent may pre-empt its question' });
     }
-    // D-5290, D-5363: a row MINTED released (`releaseReason` set — the parent was not
-    // live, or of another project) was never held and never mailed: the
-    // operator owned it from the first tick, so late answer wins (D-5289),
-    // which reaches a row the LAPSE released, does not reach this one. No new
-    // word: `not-held` is "the row is no longer pre-emptible".
+    // D-5290, D-5363: a row MINTED released (`releaseReason` set — D-5530's
+    // fail-closed reasons, or an older build's `parent-project-mismatch`) was
+    // never held and never mailed: the operator owned it from the first tick,
+    // so late answer wins (D-5289), which reaches a row the LAPSE released,
+    // does not reach this one. No new word: `not-held` is "the row is no
+    // longer pre-emptible". With the `parentId` check above, this route admits
+    // exactly the claimant the row was HELD for, wherever it sits (D-5530: no
+    // project is compared; a cross-project coordinator answers its children).
     if (ask.releaseReason !== null) {
       return reply.code(409).send({ ok: false, error: 'not-held' });
     }
@@ -4128,6 +4131,12 @@ export function registerCoordRoutes(
    * already run (`requireAttribution`; no separate `fromId` — the `parent`
    * being asked about IS the identity under proof). A missing or mismatched
    * `fromUuid` refuses `400`/`403`, exactly as it does on those routes.
+   *
+   * HELD FOR IT, NOT MERELY ADDRESSED TO IT (D-5530): `asksForParent` lists
+   * only rows held for the parent. A row minted `released` was held for
+   * nobody — its parent was never mailed it and may not answer it (D-5363) —
+   * so its question text is not that parent's to read, from either
+   * credential; the operator already has it as a push.
    *
    * THIS IS FRESHNESS, NOT FORGERY-PROOFNESS — `requireAttribution`'s own
    * honesty, `POST /api/mail`'s docstring above (:427-433), applies unchanged

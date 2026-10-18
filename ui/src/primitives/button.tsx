@@ -29,10 +29,13 @@ export const buttonVariants = cva(
            `text-base` also sets `line-height: var(--tw-leading,
            var(--text-base--line-height))`, the Tailwind default of 1.5 — a 15px
            line box became 22.5px, invisible on a one-line label inside
-           `min-h-tap` and +50% per line on a wrapped one.
+           `min-h-tap` and +50% per line on a wrapped one. The size is the
+           `text-ui` role (D-5093): Refined's `--fs-ui` is `--fs-base`, the
+           15px these said before, and Instrument sets 13 at ≥900
+           (`role-census.test.ts`).
            `button-line-height.test.ts` derives every Button the app renders. */
         primary:
-          'btn-primary border-0 bg-phosphor text-ink-on-phosphor text-base leading-none font-semibold disabled:bg-edge-subtle disabled:text-ink-disabled',
+          'btn-primary border-0 bg-phosphor text-ink-on-phosphor text-ui leading-none font-semibold disabled:bg-edge-subtle disabled:text-ink-disabled',
         /** `danger` and `danger-ghost` (D-5099) — the commit that destroys
          *  something, and its quieter twin. `danger` is `primary`'s shape on
          *  the dead hue: a fill of `--status-dead` with `--ink-on-danger`, a
@@ -45,11 +48,11 @@ export const buttonVariants = cva(
          *  too (D-5448). Both are gated per palette in
          *  `pwa/design/contrast-check.mjs`. */
         danger:
-          'btn-danger border-0 bg-status-dead text-ink-on-danger text-base leading-none font-semibold disabled:bg-edge-subtle disabled:text-ink-disabled',
+          'btn-danger border-0 bg-status-dead text-ink-on-danger text-ui leading-none font-semibold disabled:bg-edge-subtle disabled:text-ink-disabled',
         'danger-ghost':
-          'btn-danger-ghost border border-status-dead bg-transparent text-status-dead-text text-base leading-none font-medium disabled:text-ink-disabled disabled:border-edge-subtle',
+          'btn-danger-ghost border border-status-dead bg-transparent text-status-dead-text text-ui leading-none font-medium disabled:text-ink-disabled disabled:border-edge-subtle',
         ghost:
-          'btn-ghost border border-edge-strong bg-transparent text-ink-primary text-base leading-none font-medium enabled:hover:bg-hover enabled:active:bg-pressed disabled:text-ink-disabled disabled:border-edge-subtle',
+          'btn-ghost border border-edge-strong bg-transparent text-ink-primary text-ui leading-none font-medium enabled:hover:bg-hover enabled:active:bg-pressed disabled:text-ink-disabled disabled:border-edge-subtle',
         /** `quiet` — the raised mono control. FOUR app rules declared the same
          *  eleven declarations: `.coord-toggle`, `.child-reclaim-toggle` and
          *  `.caps-save` were byte-identical, and `.program-start-door`

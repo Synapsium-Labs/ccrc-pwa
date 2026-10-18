@@ -292,9 +292,10 @@ export type ReclaimOutcome =
  *      may sit in any project. It still fails closed (a row recording no
  *      project is `project-mismatch`; an unreadable field is
  *      `registry-unmeasurable`) and costs one field read, before the tmux
- *      measurement. A cross-project heir leaves the programme's EXISTING
- *      children's asks released to the operator (`parent-project-mismatch`,
- *      watch.ts `tryHold`) — fail-safe, and the operator's own door;
+ *      measurement. A cross-project heir is then held the programme's
+ *      EXISTING children's next asks like any other claimant (D-5530:
+ *      watch.ts `tryHold` compares no project; `parentOfSession` follows the
+ *      move);
  *    • the HEIR RUNG, deliberately UNNUMBERED so rungs 4 and 5 keep the
  *      numbers this file's comments and its suite already cite: `to` is not
  *      the worker of somebody ELSE's open run — else `heir-is-a-worker`
