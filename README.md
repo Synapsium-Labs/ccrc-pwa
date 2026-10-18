@@ -993,7 +993,9 @@ only when a node runs that tag and its bundle verified — a listed bundle alone
 notes as plain text, never markup) and the node inventory (what each node runs and should run, its request
 and its state; **Ack** returns a settled node to idle and clears its request and refusals). Every control
 that would move a node — Install, Roll back, Update, Update all — opens one confirm sheet
-(below). A red banner warns when the sign-in gate is off and the page was reached over a non-loopback
+(below); while a node halts the fleet, Install and Update are disabled under a line naming the nodes
+to Ack first, as Update all is.
+A red banner warns when the sign-in gate is off and the page was reached over a non-loopback
 address. A **Box token** card follows, read from the same answer's `boxToken` field: the current value's
 generation and age, the last rotation, the state (idle, rotating, grace, held with the server's reason,
 failed with its word), whether a rotation is owed and why, whether the fleet confirmed the current
@@ -1036,7 +1038,16 @@ is a clean versioned release, and `—` when that node's stamp cannot be stated 
 node unreachable). On the fleet screen an update banner (`vX is out on <channel> — …`, with a door to
 `/settings`) and a `→ vX` on that node's side of `BuildLine` appear while a measured node with a channel,
 whose stamp was read, that is not a macOS node, has a newer desired tag; the banner also waits until GitHub
-has answered since the server started. A `server` or `both` box sends at most one Web Push per release tag,
+has answered since the server started. While a node halts the fleet (below), a halt banner above that one
+names each halting node — `<label>: <state> (last tried <target>) — <detail>` — with that node's own **Ack**
+in place, the same Ack as its row in Settings, which reads **Acked** after a clean ack until a poll shows a
+new lease; Update all is disabled meanwhile, under a line naming the nodes to Ack first. The amber banner for
+two boxes on different builds names its remedy from the same rows: while a halt stands, the halt banner's
+Ack first, then whichever of the next two would apply; when auto-install is on and would move every lagging
+box, so that every node ends on one release tag, the console's own move, followed in Settings; otherwise —
+no inventory answer, a lease that cannot be read, or a poll that failed since the last answer —
+`ccrc rollout` from the deploying machine, or `ccrc update` on the lagging box, fleet box first. A `server`
+or `both` box sends at most one Web Push per release tag,
 for the newest tag its release-notification setting (on my channel, stable only, off) selects, recorded in
 `coord.db` before it is sent: a restart never repeats it, a failed send is not retried, and a tag every
 measured node already runs is recorded without a push. It has no session, so an open app does not suppress
@@ -1052,7 +1063,9 @@ agent that predates the op, an unknown or refused tag, a rollback to a release t
 a verified node, no previous version, no desired tag); `{all: true}` always answers `202`, writing a request only for a node
 the tag takes forward and the dispatcher could move, and naming every other live node as skipped, with its word: a node whose
 own lease is busy, or that is itself halting, is skipped, and while a fleet node is skipped for either, so is every server-role
-node (`waiting-for-fleet`); a halt caused by another row still writes the request. What is written is a **request** on the
+node (`waiting-for-fleet`); a halt caused by another row still writes the request, and the sheet says each `halted`
+skip, even of a node it did not list, in the `halted` sentence, which names both places the Ack is. What is written
+is a **request** on the
 node's row, never a command. On a `server` or `both` box the dispatcher reads the rows after every inventory sweep, every
 intent write and every request write, and moves at most one node at a time across the fleet: fleet-role nodes before
 server-role ones, and the server node waits while any fleet node's request is outstanding. A fleet node is moved over the agent
@@ -2757,8 +2770,9 @@ unseen count) and the bell (push for this browser, below). **Banners** under it 
 session: the fleet host unreachable (remote mode; **Reboot**, which needs the Hetzner token "Remote fleet mode"
 describes, behind a confirm that names the collateral), the two boxes projecting different rosters or running
 different builds, a fleet `ccd` too old for project pools, tmux unreachable on every watched row ("How a
-session's state is known"), a release out, the socket reconnecting, a dismissible swap notice and — on an armed
-box with no passkey — *Passphrase only — add a passkey*. `Runs · N active` opens `/runs`, beside the **Class**
+session's state is known"), an update halt (each halting node with its own **Ack**), a release out, the
+socket reconnecting, a dismissible swap notice and — on an armed box with no passkey — *Passphrase only —
+add a passkey*. `Runs · N active` opens `/runs`, beside the **Class**
 chooser (next section); a **Hot files** strip appears only while some session holds a file claim (read-only;
 "Fleet coordination" says what a claim is).
 
