@@ -1947,6 +1947,46 @@ describe('the selection reaches the due rows within its budget (W1-B4 whole-bran
     }, 300_000);
   }
 
+  // `complete` is false only when due rows were left behind. planSegment takes a pass's first row whatever its size, so with
+  // a small room that one row can leave nothing of the bound; if it was the only due row, nothing is left and the pass is
+  // complete, and a bind check's export_segment_missing resets at that pass instead of one interval later.
+  for (const room of ['the first row forced past a small room', 'a room the first row fills exactly'] as const) {
+    it(`(f) ${room}, and no other row due: the pass reads complete, so the WARN a bind check set resets to 0 at that pass`, async () => {
+      const { box, ids } = ingestedBox('ccrc-history-export-complete-', [row(1, 'the only due row', DAY)]);
+      const z = Number(q(box, 'SELECT length(b.z) AS n FROM entries e JOIN blobs b ON b.blob_id = e.blob_id WHERE e.uuid = ?', rid(1))[0]!['n']);
+      const maxBytes = room === 'a room the first row fills exactly' ? EXPORT_ROW_META_BYTES + z : 1;
+      const NOW = Date.now();
+      const name = `1.${ids.writer}.db`;
+      await onStore(box, (db) => SW.exportPass(db, exportCtx(box, ids, () => NOW)));
+      expect(marks(box)).toEqual({ [rid(1)]: name });
+      // the segment stays on the box it came from, and a restore's bind fact makes the next step check the marks
+      fs.rmSync(path.join(exportDirOf(box), name));
+      const T = NOW + 2 * HOUR;
+      const r = await onStore(box, (db) => {
+        setMeta(db, `bound:${NOW + MIN}`, 'restore');
+        return SW.exportStep(db, exportCtx(box, ids, () => T, { deps: { statfs: roomy }, limits: { maxBytes } }));
+      });
+      expect(counters(box)['export_segment_missing'], 'the check ran in this step and cleared the marks').toBe(1);
+      expect(r, 'the row went into the second segment, and nothing was left behind').toMatchObject({ state: 'written', segment: `2.${ids.writer}.db`, rows: 1, complete: true });
+      expect(marks(box)).toEqual({ [rid(1)]: `2.${ids.writer}.db` });
+      expect(metaOf(box, HEALTH_META.exportSegmentMissing), 'the pass left no due row behind, so the WARN resets at this pass').toBe('0');
+    }, 300_000);
+  }
+
+  it('(f) CONTROL: a due row left behind on a later page still reads incomplete, and the WARN stands until a complete pass', async () => {
+    const { box, ids } = ingestedBox('ccrc-history-export-incomplete-', [row(1, 'one', 3 * DAY), row(2, 'two', 2 * DAY), row(3, 'three', DAY)]);
+    await onStore(box, (db) => { setMeta(db, HEALTH_META.exportSegmentMissing, '4'); });
+    // room 1 and one row a page: the first page's row is forced and leaves nothing of the room, and it is the NEXT page that
+    // holds the due row left behind, which the selection reads to tell
+    const r = await onStore(box, (db) => SW.exportPass(db, exportCtx(box, ids, () => Date.now(), { limits: { maxBytes: 1 }, deps: { exportPageRows: 1 } })));
+    expect(r).toMatchObject({ state: 'written', segment: `1.${ids.writer}.db`, rows: 1, complete: false });
+    expect(marks(box)).toEqual({ [rid(1)]: `1.${ids.writer}.db`, [rid(2)]: null, [rid(3)]: null });
+    expect(metaOf(box, HEALTH_META.exportSegmentMissing), 'due rows were left behind: the WARN stands').toBe('4');
+    const next = await onStore(box, (db) => SW.exportPass(db, exportCtx(box, ids, () => Date.now() + HOUR)));
+    expect(next).toMatchObject({ state: 'written', segment: `2.${ids.writer}.db`, rows: 2, complete: true });
+    expect(metaOf(box, HEALTH_META.exportSegmentMissing), 'a complete pass resets it').toBe('0');
+  }, 300_000);
+
   /** `db` as a pass sees it, every `.all()` recorded with its statement's text: the pass is the real one, the handle its own. */
   const watched = (db: DatabaseSync, calls: Array<{ sql: string; args: unknown[] }>): DatabaseSync => new Proxy(db, {
     get(target, prop) {

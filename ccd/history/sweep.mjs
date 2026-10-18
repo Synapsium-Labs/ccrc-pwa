@@ -8166,7 +8166,10 @@ function ensureExportDirs(P, storeId) {
 /** Phase 1 (§9.15 "What is due"): the candidates this segment takes, in order, decided page by page by lib's
  *  planSegment under what is left of `boundBytes`. Answers the taken candidates, the blob ids whose bytes travel
  *  (`carry`), the pruned blob ids that travel as stubs, the transcripts they name, each transcript's linked sidecars,
- *  the cutoff, and `complete`: false when the bound or the run's budget stopped the selection with due rows left. */
+ *  the cutoff, and `complete`: false only when due rows were left behind, planSegment's leftDue on a page the bound
+ *  stopped, or the run's budget ended the scan before it could tell there were none. A bound used up by the last due
+ *  row (it may be the forced first one, past a small room) leaves the selection complete: the scan reads on, and a
+ *  later due row, which no room is left to take, is what makes it incomplete. */
 function exportSelect(db, ctx, nowMs, homeDays, boundBytes) {
   const s = exportStmts(db);
   // A candidate's holding files are its TRANSCRIPT's, B1's census clock, not its own copies through memberships: the
@@ -8234,9 +8237,9 @@ function exportSelect(db, ctx, nowMs, homeDays, boundBytes) {
     return { kind: 'sidecar', id, pks, cand: { key: `s${id}`, tsMs: null, files: pks.flatMap(filesOf), blobs: blobsFor([id]) } };
   };
   let left = boundBytes;
-  /** One page through planSegment. False when the bound or the run's budget ends the selection. Once an earlier page
-   *  took a row, this page's first row must fit what is left (takenBefore): only the pass's first row is taken
-   *  whatever its size. No reducer is passed: planSegment's default is the census's (B2's per-copy reducer), so the
+  /** One page through planSegment. False when a due row is left behind (the bound) or the run's budget ends the selection.
+   *  Once an earlier page took a row, this page's first row must fit what is left (takenBefore): only the pass's first row
+   *  is taken whatever its size. No reducer is passed: planSegment's default is the census's (B2's per-copy reducer), so the
    *  pass and the census answer one clock (RD1). */
   const decide = (cands) => {
     if (cands.length > 0) {
@@ -8250,7 +8253,14 @@ function exportSelect(db, ctx, nowMs, homeDays, boundBytes) {
       for (const k of plan.carry) sel.carry.add(Number(k));
       for (const k of plan.stubs) sel.stubs.add(Number(k));
       left -= plan.bytes;
-      if (plan.leftDue > 0 || left <= 0) { sel.complete = false; return false; }
+      // Only a due row left behind (planSegment's leftDue) makes the selection incomplete. A page can use up the room, or pass
+      // it with the pass's forced first row, and leave no due row behind it on that page: the pass took the last due row it
+      // could see. The scan then reads on, and the next page or phase tells: with no room left planSegment takes nothing from
+      // it and counts every due row in it as left. The probe costs one more page (at most the page size, each candidate with
+      // its blob and sidecar lookups) when a pass ends a page exactly at its bound, and ends at the first page holding a due
+      // row; a pass that left a due row on the page it filled never probes. Where nothing else is due it reads what a pass
+      // with room left reads anyway, to the end of the phases. Lib's leftDue decides; this only delivers (RD2).
+      if (plan.leftDue > 0) { sel.complete = false; return false; }
     }
     if (!budgetLeft(ctx.budget)) { sel.complete = false; return false; }
     return true;
