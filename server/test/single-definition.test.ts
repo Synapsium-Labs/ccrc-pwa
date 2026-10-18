@@ -6961,3 +6961,25 @@ describe('D-5242: the wake budget and the live act have one home each (Task 17b)
     }
   });
 });
+
+// D-5297 / D-5299 (plan docs/superpowers/plans/2026-10-17-coordinator-first-routing.md, Task 14). APPENDED. The
+// approval wait's constants and the two canonical forms have one TypeScript home, `shared/api.ts`. Their documented
+// second copies are held equal by iteration, never by this text scan: the hook's bash copies of the wait ceiling,
+// the stop states and the digest's jq program (`session-hook-approval-wait.test.ts`, over `digest-corpus.json`), the
+// hook's forbidden match (`session-hook-approval-deny.test.ts`, over Task 12's corpus), and the verifier's canonical
+// form (`approval-verify.test.ts`, over a record corpus).
+describe('the approval wait\'s constants and canonical forms each have one home (D-5297, D-5299)', () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  const decl = (c: string): RegExp => new RegExp(`\\b(?:const|let|var|function)\\s+${c}\\b`);
+  it('CONTROL: the pattern sees a declaration and passes over a use', () => {
+    expect(decl('approvalDigestBytes').test('export function approvalDigestBytes(hookInput) {')).toBe(true);
+    expect(decl('approvalDigestBytes').test('const c = approvalDigestBytes(payload);')).toBe(false);
+  });
+  it('each is declared once, in shared/api.ts', () => {
+    for (const c of ['APPROVAL_HOOK_WAIT_S', 'APPROVAL_HOOK_VERSIONS', 'APPROVAL_CWD_TRUSTED', 'APPROVAL_HOOK_STOP_STATES',
+      'APPROVAL_SIGNING_PUB_FILE', 'APPROVAL_SIGNING_KEY_FILE', 'APPROVAL_REQUEST_MAX_BYTES', 'canonicalJson',
+      'approvalDigestBytes', 'approvalRulingBytes']) {
+      expect(holders(decl(c)), c).toEqual(['shared/api.ts']);
+    }
+  });
+});

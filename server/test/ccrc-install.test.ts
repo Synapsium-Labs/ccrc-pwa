@@ -8500,6 +8500,11 @@ describeLinux('ccrc install: a timer systemd refuses is a COUNTED degraded step 
  *  three maps each gained `"update-sweep": "SKIP"` (an install writes no `update.json`, so the
  *  install tail's doctor has no last update to read) and nothing else moved: all three codes
  *  and both refreshes equal, `codex` aside as above.
+ *  RE-MEASURED again when doctor gained `approval-verifier-runnable` and `approval-key` (coordinator-first
+ *  routing, plan Task 14, D-5487), by the live-shape cases on Linux CI on that PR's merged tree: the three maps
+ *  each gained `"approval-key": "SKIP"` (no key is pinned: no server serves one yet) and
+ *  `"approval-verifier-runnable": "SKIP"` (no key pinned yet, the rollout's expected state, or no registry yet), and nothing else
+ *  moved.
  *  It is a golden: nothing re-measures
  *  it, so a merge-up that moves a doctor check's class on the live shape reds
  *  the live-shape case until Step 3 is re-run on a disposable copy of the new
@@ -8518,6 +8523,8 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
       "code": 0,
       "classes": {
         "accounts": "PASS",
+        "approval-key": "SKIP",
+        "approval-verifier-runnable": "SKIP",
         "auth": "SKIP",
         "box-token": "PASS",
         "build": "PASS",
@@ -8575,6 +8582,8 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
       "code": 0,
       "classes": {
         "accounts": "PASS",
+        "approval-key": "SKIP",
+        "approval-verifier-runnable": "SKIP",
         "auth": "SKIP",
         "box-token": "PASS",
         "build": "PASS",
@@ -8702,6 +8711,8 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
     "code": 0,
     "classes": {
       "accounts": "PASS",
+      "approval-key": "SKIP",
+      "approval-verifier-runnable": "SKIP",
       "auth": "SKIP",
       "box-token": "PASS",
       "build": "PASS",

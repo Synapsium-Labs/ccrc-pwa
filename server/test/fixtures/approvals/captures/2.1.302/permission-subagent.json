@@ -1,0 +1,2061 @@
+{
+ "v": 1,
+ "version": "2.1.302",
+ "scenario": "permission-subagent",
+ "labels": [
+  "probe-literal-var-rm-no-prompt",
+  "sub-shell-home-probe",
+  "cwd-sibling-then-prompt",
+  "cwd-inproject-then-prompt",
+  "hook-allow-20s",
+  "hook-allow-20s-frames",
+  "hook-deny-message"
+ ],
+ "notes": [
+  "rig: Claude Code 2.1.302 on macOS (darwin arm64), --model haiku, --dangerously-skip-permissions, spawned the Task 15 way: CLAUDE_CODE_SHELL=/bin/bash, TMPDIR=$HOME/.cc-tmp/<id>, --settings <child deny file merged with the rig hooks>",
+  "rig: auth failed under the fixture HOME (Not logged in); every session ran with the real HOME (mapped to /rig/fixhome here), cwd and every target inside the fixture dir (/rig)",
+  "rig: /rig/tmp stands for the macOS private temp root (the realpath of the system temp dir); envSid is null because the rig hook had no session-id env var",
+  "rig: the hook scripts log stdin; PermissionRequest hook sleeps 20 s then prints allow or deny (mode file), PreToolUse optionally prints allow, SubagentStart prints additionalContext",
+  "sub: on 2.1.302 in a terminal every Agent call is forced into the background (the Agent tool offers no run_in_background); these are background subagents",
+  "sub: the dangerousRemoval prompt reproduces in the subagent (menu titled Bash command from the general-purpose agent, no auto-deny countdown) when the hook gives no decision",
+  "sub: with the hook sleeping 20 s the menu is NOT painted during the wait (12 frames at 2 s); the hook allow resolves the prompt; subagent transcript records hook_permission_decision allow",
+  "sub: so no pane answer during the wait is possible for a background subagent",
+  "sub: hook deny with message -> the subagent receives tool_result is_error true whose content is exactly the hook message; transcript records hook_permission_decision deny",
+  "sub: the subagent Bash tool does not keep cwd across calls (each call starts in the session cwd); the hook cwd equals the later call pwd",
+  "sub: SubagentStart additionalContext reached the subagent (attachment hook_additional_context, rendered as a system-reminder)",
+  "sub: Bash tool ran /bin/bash 3.2.57, ZSH_VERSION none, HOME equal to the start HOME, POSIXLY_CORRECT unset",
+  "Task 14 (public corpus): every id field re-minted neutral (session, prompt and message ids, agent ids, tool-use ids), one tmp-root spelling (/rig/tmp/claude-1000), every last_assistant_message and every task-notification result stubbed; three rig commands respelt bash-equivalently for the corpus scan (a dirname substitution read through a variable D, and one quoted variable joined to its suffix inside the quotes) and the paste wrapper reduced to a plain tag"
+ ],
+ "events": [
+  {
+   "seq": 1,
+   "dtMs": 0,
+   "event": "SubagentStop",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000002",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000001",
+    "agent_type": "",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001/subagents/agent-a0000000000000001.jsonl",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 2,
+   "dtMs": 21164,
+   "event": "PreToolUse",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000003",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Agent",
+    "tool_input": {
+     "description": "Run sib/c2 cleanup probe",
+     "prompt": "You are running a cleanup script. Run exactly this one command with the Bash tool, verbatim: X=\"/rig/sib/c2\"; rm -rf \"$X\"; echo done-sub-probe  -- then report its output and the exact text of any context line you were given that starts with RIG-CTX-TOKEN (or say none).",
+     "subagent_type": "general-purpose"
+    },
+    "tool_use_id": "toolu_000000000000000000000001"
+   }
+  },
+  {
+   "seq": 3,
+   "dtMs": 21193,
+   "event": "SubagentStart",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000003",
+    "agent_id": "a0000000000000002",
+    "agent_type": "general-purpose",
+    "hook_event_name": "SubagentStart"
+   }
+  },
+  {
+   "seq": 4,
+   "dtMs": 21193,
+   "event": "PostToolUse",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000003",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Agent",
+    "tool_input": {
+     "description": "Run sib/c2 cleanup probe",
+     "prompt": "You are running a cleanup script. Run exactly this one command with the Bash tool, verbatim: X=\"/rig/sib/c2\"; rm -rf \"$X\"; echo done-sub-probe  -- then report its output and the exact text of any context line you were given that starts with RIG-CTX-TOKEN (or say none).",
+     "subagent_type": "general-purpose"
+    },
+    "tool_response": {
+     "isAsync": true,
+     "status": "async_launched",
+     "agentId": "a0000000000000002",
+     "description": "Run sib/c2 cleanup probe",
+     "resolvedModel": "claude-haiku-5-5",
+     "prompt": "You are running a cleanup script. Run exactly this one command with the Bash tool, verbatim: X=\"/rig/sib/c2\"; rm -rf \"$X\"; echo done-sub-probe  -- then report its output and the exact text of any context line you were given that starts with RIG-CTX-TOKEN (or say none).",
+     "outputFile": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/tasks/a0000000000000002.output",
+     "canReadOutputFile": true,
+     "canContinueAgent": true
+    },
+    "tool_use_id": "toolu_000000000000000000000001",
+    "duration_ms": 6
+   }
+  },
+  {
+   "seq": 5,
+   "dtMs": 24191,
+   "event": "SubagentStop",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000003",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000003",
+    "agent_type": "",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001/subagents/agent-a0000000000000003.jsonl",
+    "background_tasks": [
+     {
+      "id": "a0000000000000002",
+      "type": "subagent",
+      "status": "running",
+      "description": "Run sib/c2 cleanup probe",
+      "agent_type": "general-purpose"
+     }
+    ],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 6,
+   "dtMs": 24602,
+   "event": "PreToolUse",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000003",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000002",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "X=\"/rig/sib/c2\"; rm -rf \"$X\"; echo done-sub-probe",
+     "description": "Run the cleanup command verbatim"
+    },
+    "tool_use_id": "toolu_000000000000000000000002"
+   }
+  },
+  {
+   "seq": 7,
+   "dtMs": 24640,
+   "event": "PostToolUse",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000003",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000002",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "X=\"/rig/sib/c2\"; rm -rf \"$X\"; echo done-sub-probe",
+     "description": "Run the cleanup command verbatim"
+    },
+    "tool_response": {
+     "stdout": "done-sub-probe",
+     "stderr": "",
+     "interrupted": false,
+     "isImage": false,
+     "noOutputExpected": false
+    },
+    "tool_use_id": "toolu_000000000000000000000002",
+    "duration_ms": 11
+   }
+  },
+  {
+   "seq": 8,
+   "dtMs": 26711,
+   "event": "SubagentStop",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000003",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000002",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001/subagents/agent-a0000000000000002.jsonl",
+    "last_assistant_message": "<model prose, stubbed for the public corpus>",
+    "background_tasks": [
+     {
+      "id": "a0000000000000002",
+      "type": "subagent",
+      "status": "running",
+      "description": "Run sib/c2 cleanup probe",
+      "agent_type": "general-purpose"
+     }
+    ],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 9,
+   "dtMs": 31124,
+   "event": "SubagentStop",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000004",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000004",
+    "agent_type": "",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001/subagents/agent-a0000000000000004.jsonl",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 10,
+   "dtMs": 66125,
+   "event": "PreToolUse",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000005",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Agent",
+    "tool_input": {
+     "description": "Run sib/c3 cleanup step",
+     "prompt": "Cleanup step. Run exactly this one command with the Bash tool, verbatim: X=\"/rig/sib/c3\"; rm -rf \"$X\"; echo done-sub-fg -- then report its output.",
+     "subagent_type": "general-purpose"
+    },
+    "tool_use_id": "toolu_000000000000000000000003"
+   }
+  },
+  {
+   "seq": 11,
+   "dtMs": 66151,
+   "event": "SubagentStart",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000005",
+    "agent_id": "a0000000000000005",
+    "agent_type": "general-purpose",
+    "hook_event_name": "SubagentStart"
+   }
+  },
+  {
+   "seq": 12,
+   "dtMs": 66151,
+   "event": "PostToolUse",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000005",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Agent",
+    "tool_input": {
+     "description": "Run sib/c3 cleanup step",
+     "prompt": "Cleanup step. Run exactly this one command with the Bash tool, verbatim: X=\"/rig/sib/c3\"; rm -rf \"$X\"; echo done-sub-fg -- then report its output.",
+     "subagent_type": "general-purpose"
+    },
+    "tool_response": {
+     "isAsync": true,
+     "status": "async_launched",
+     "agentId": "a0000000000000005",
+     "description": "Run sib/c3 cleanup step",
+     "resolvedModel": "claude-haiku-5-5",
+     "prompt": "Cleanup step. Run exactly this one command with the Bash tool, verbatim: X=\"/rig/sib/c3\"; rm -rf \"$X\"; echo done-sub-fg -- then report its output.",
+     "outputFile": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/tasks/a0000000000000005.output",
+     "canReadOutputFile": true,
+     "canContinueAgent": true
+    },
+    "tool_use_id": "toolu_000000000000000000000003",
+    "duration_ms": 5
+   }
+  },
+  {
+   "seq": 13,
+   "dtMs": 68502,
+   "event": "PreToolUse",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000005",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000005",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "X=\"/rig/sib/c3\"; rm -rf \"$X\"; echo done-sub-fg",
+     "description": "Run the cleanup command verbatim and report output"
+    },
+    "tool_use_id": "toolu_000000000000000000000004"
+   }
+  },
+  {
+   "seq": 14,
+   "dtMs": 68542,
+   "event": "PostToolUse",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000005",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000005",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "X=\"/rig/sib/c3\"; rm -rf \"$X\"; echo done-sub-fg",
+     "description": "Run the cleanup command verbatim and report output"
+    },
+    "tool_response": {
+     "stdout": "done-sub-fg",
+     "stderr": "",
+     "interrupted": false,
+     "isImage": false,
+     "noOutputExpected": false
+    },
+    "tool_use_id": "toolu_000000000000000000000004",
+    "duration_ms": 12
+   }
+  },
+  {
+   "seq": 15,
+   "dtMs": 69078,
+   "event": "SubagentStop",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000005",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000006",
+    "agent_type": "",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001/subagents/agent-a0000000000000006.jsonl",
+    "background_tasks": [
+     {
+      "id": "a0000000000000005",
+      "type": "subagent",
+      "status": "running",
+      "description": "Run sib/c3 cleanup step",
+      "agent_type": "general-purpose"
+     }
+    ],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 16,
+   "dtMs": 69686,
+   "event": "SubagentStop",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000005",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000005",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001/subagents/agent-a0000000000000005.jsonl",
+    "last_assistant_message": "<model prose, stubbed for the public corpus>",
+    "background_tasks": [
+     {
+      "id": "a0000000000000005",
+      "type": "subagent",
+      "status": "running",
+      "description": "Run sib/c3 cleanup step",
+      "agent_type": "general-purpose"
+     }
+    ],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 17,
+   "dtMs": 72455,
+   "event": "SubagentStop",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000006",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000007",
+    "agent_type": "",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001/subagents/agent-a0000000000000007.jsonl",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 18,
+   "dtMs": 205608,
+   "event": "PreToolUse",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000007",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000008",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "D=$(dirname \"$PWD\"); ls -la \"$D/sib/\" 2>&1",
+     "description": "List sib directory to check remaining probe dirs"
+    },
+    "tool_use_id": "toolu_000000000000000000000005"
+   }
+  },
+  {
+   "seq": 19,
+   "dtMs": 207145,
+   "event": "SubagentStop",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000007",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000008",
+    "agent_type": "",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001/subagents/agent-a0000000000000008.jsonl",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 20,
+   "dtMs": 227123,
+   "event": "PreToolUse",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000008",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000009",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "ls -la \"$(cd ../sib 2>/dev/null && pwd)\" 2>/dev/null; echo done-check",
+     "description": "List remaining entries in sibling sib directory"
+    },
+    "tool_use_id": "toolu_000000000000000000000006"
+   }
+  },
+  {
+   "seq": 21,
+   "dtMs": 229028,
+   "event": "SubagentStop",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000008",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000009",
+    "agent_type": "",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001/subagents/agent-a0000000000000009.jsonl",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 22,
+   "dtMs": 299199,
+   "event": "SubagentStop",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000009",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000010",
+    "agent_type": "",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001/subagents/agent-a0000000000000010.jsonl",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 23,
+   "dtMs": 358070,
+   "event": "SubagentStop",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000010",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000011",
+    "agent_type": "",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001/subagents/agent-a0000000000000011.jsonl",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 24,
+   "dtMs": 394622,
+   "event": "SubagentStop",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj/sub",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000011",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000012",
+    "agent_type": "",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001/subagents/agent-a0000000000000012.jsonl",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 25,
+   "dtMs": 412901,
+   "event": "PreToolUse",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000012",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Agent",
+    "tool_input": {
+     "description": "Run five sequenced shell probes",
+     "prompt": "Make exactly these five separate Bash tool calls in order, one per call, each verbatim, then report every output exactly. CALL1: echo \"${BASH_VERSION:-none} ${ZSH_VERSION:-none}\"; printf \"%s\\n\" \"$HOME\"; echo \"PC=${POSIXLY_CORRECT-unset}\"; pwd   CALL2: cd ../sib && pwd   CALL3: pwd; cd c9 && X=$(pwd) && cd .. && rm -rf \"$X\"; pwd; echo done-sub-cwd1   CALL4: cd /rig/proj/sub && pwd   CALL5: pwd; cd c10 && X=$(pwd) && cd .. && rm -rf \"$X\"; pwd; echo done-sub-cwd2 . Also quote any context line you were given starting RIG-CTX-TOKEN.",
+     "subagent_type": "general-purpose"
+    },
+    "tool_use_id": "toolu_000000000000000000000007"
+   }
+  },
+  {
+   "seq": 26,
+   "dtMs": 412932,
+   "event": "SubagentStart",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000012",
+    "agent_id": "a0000000000000013",
+    "agent_type": "general-purpose",
+    "hook_event_name": "SubagentStart"
+   }
+  },
+  {
+   "seq": 27,
+   "dtMs": 412932,
+   "event": "PostToolUse",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000012",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Agent",
+    "tool_input": {
+     "description": "Run five sequenced shell probes",
+     "prompt": "Make exactly these five separate Bash tool calls in order, one per call, each verbatim, then report every output exactly. CALL1: echo \"${BASH_VERSION:-none} ${ZSH_VERSION:-none}\"; printf \"%s\\n\" \"$HOME\"; echo \"PC=${POSIXLY_CORRECT-unset}\"; pwd   CALL2: cd ../sib && pwd   CALL3: pwd; cd c9 && X=$(pwd) && cd .. && rm -rf \"$X\"; pwd; echo done-sub-cwd1   CALL4: cd /rig/proj/sub && pwd   CALL5: pwd; cd c10 && X=$(pwd) && cd .. && rm -rf \"$X\"; pwd; echo done-sub-cwd2 . Also quote any context line you were given starting RIG-CTX-TOKEN.",
+     "subagent_type": "general-purpose"
+    },
+    "tool_response": {
+     "isAsync": true,
+     "status": "async_launched",
+     "agentId": "a0000000000000013",
+     "description": "Run five sequenced shell probes",
+     "resolvedModel": "claude-haiku-5-5",
+     "prompt": "Make exactly these five separate Bash tool calls in order, one per call, each verbatim, then report every output exactly. CALL1: echo \"${BASH_VERSION:-none} ${ZSH_VERSION:-none}\"; printf \"%s\\n\" \"$HOME\"; echo \"PC=${POSIXLY_CORRECT-unset}\"; pwd   CALL2: cd ../sib && pwd   CALL3: pwd; cd c9 && X=$(pwd) && cd .. && rm -rf \"$X\"; pwd; echo done-sub-cwd1   CALL4: cd /rig/proj/sub && pwd   CALL5: pwd; cd c10 && X=$(pwd) && cd .. && rm -rf \"$X\"; pwd; echo done-sub-cwd2 . Also quote any context line you were given starting RIG-CTX-TOKEN.",
+     "outputFile": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/tasks/a0000000000000013.output",
+     "canReadOutputFile": true,
+     "canContinueAgent": true
+    },
+    "tool_use_id": "toolu_000000000000000000000007",
+    "duration_ms": 5
+   }
+  },
+  {
+   "seq": 28,
+   "dtMs": 416013,
+   "event": "SubagentStop",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000012",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000014",
+    "agent_type": "",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001/subagents/agent-a0000000000000014.jsonl",
+    "background_tasks": [
+     {
+      "id": "a0000000000000013",
+      "type": "subagent",
+      "status": "running",
+      "description": "Run five sequenced shell probes",
+      "agent_type": "general-purpose"
+     }
+    ],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 29,
+   "dtMs": 417011,
+   "event": "PreToolUse",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000012",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000013",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "echo \"${BASH_VERSION:-none} ${ZSH_VERSION:-none}\"; printf \"%s\\n\" \"$HOME\"; echo \"PC=${POSIXLY_CORRECT-unset}\"; pwd",
+     "description": "Print shell versions, HOME, POSIXLY_CORRECT, and cwd"
+    },
+    "tool_use_id": "toolu_000000000000000000000008"
+   }
+  },
+  {
+   "seq": 30,
+   "dtMs": 417044,
+   "event": "PostToolUse",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000012",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000013",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "echo \"${BASH_VERSION:-none} ${ZSH_VERSION:-none}\"; printf \"%s\\n\" \"$HOME\"; echo \"PC=${POSIXLY_CORRECT-unset}\"; pwd",
+     "description": "Print shell versions, HOME, POSIXLY_CORRECT, and cwd"
+    },
+    "tool_response": {
+     "stdout": "3.2.57(1)-release none\n/rig/fixhome\nPC=unset\n/rig/proj",
+     "stderr": "",
+     "interrupted": false,
+     "isImage": false,
+     "noOutputExpected": false
+    },
+    "tool_use_id": "toolu_000000000000000000000008",
+    "duration_ms": 8
+   }
+  },
+  {
+   "seq": 31,
+   "dtMs": 418250,
+   "event": "PreToolUse",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000012",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000013",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "cd ../sib && pwd",
+     "description": "Change to sibling directory sib and print cwd"
+    },
+    "tool_use_id": "toolu_000000000000000000000009"
+   }
+  },
+  {
+   "seq": 32,
+   "dtMs": 418281,
+   "event": "PostToolUse",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000012",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000013",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "cd ../sib && pwd",
+     "description": "Change to sibling directory sib and print cwd"
+    },
+    "tool_response": {
+     "stdout": "/rig/sib",
+     "stderr": "",
+     "interrupted": false,
+     "isImage": false,
+     "noOutputExpected": false
+    },
+    "tool_use_id": "toolu_000000000000000000000009",
+    "duration_ms": 7
+   }
+  },
+  {
+   "seq": 33,
+   "dtMs": 420040,
+   "event": "PreToolUse",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000012",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000013",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "pwd; cd c9 && X=$(pwd) && cd .. && rm -rf \"$X\"; pwd; echo done-sub-cwd1",
+     "description": "Delete the c9 subdirectory and print cwd markers"
+    },
+    "tool_use_id": "toolu_000000000000000000000010"
+   }
+  },
+  {
+   "seq": 34,
+   "dtMs": 420070,
+   "event": "PermissionRequest",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000012",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000013",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PermissionRequest",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "pwd; cd c9 && X=$(pwd) && cd .. && rm -rf \"$X\"; pwd; echo done-sub-cwd1",
+     "description": "Delete the c9 subdirectory and print cwd markers"
+    },
+    "permission_suggestions": []
+   }
+  },
+  {
+   "seq": 35,
+   "dtMs": 444031,
+   "event": "SubagentStop",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000012",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000015",
+    "agent_type": "",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001/subagents/agent-a0000000000000015.jsonl",
+    "last_assistant_message": "<model prose, stubbed for the public corpus>",
+    "background_tasks": [
+     {
+      "id": "a0000000000000013",
+      "type": "subagent",
+      "status": "running",
+      "description": "Run five sequenced shell probes",
+      "agent_type": "general-purpose"
+     }
+    ],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 36,
+   "dtMs": 446215,
+   "event": "PostToolUse",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000012",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000013",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "pwd; cd c9 && X=$(pwd) && cd .. && rm -rf \"$X\"; pwd; echo done-sub-cwd1",
+     "description": "Delete the c9 subdirectory and print cwd markers"
+    },
+    "tool_response": {
+     "stdout": "/rig/proj\n/bin/bash: line 0: cd: c9: No such file or directory\n/rig/proj\ndone-sub-cwd1",
+     "stderr": "",
+     "interrupted": false,
+     "isImage": false,
+     "noOutputExpected": false
+    },
+    "tool_use_id": "toolu_000000000000000000000010",
+    "duration_ms": 31
+   }
+  },
+  {
+   "seq": 37,
+   "dtMs": 447447,
+   "event": "PreToolUse",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000012",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000013",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "cd /rig/proj/sub && pwd",
+     "description": "Change to proj/sub and print cwd"
+    },
+    "tool_use_id": "toolu_000000000000000000000011"
+   }
+  },
+  {
+   "seq": 38,
+   "dtMs": 447480,
+   "event": "PostToolUse",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000012",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000013",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "cd /rig/proj/sub && pwd",
+     "description": "Change to proj/sub and print cwd"
+    },
+    "tool_response": {
+     "stdout": "/rig/proj/sub",
+     "stderr": "",
+     "interrupted": false,
+     "isImage": false,
+     "noOutputExpected": false
+    },
+    "tool_use_id": "toolu_000000000000000000000011",
+    "duration_ms": 8
+   }
+  },
+  {
+   "seq": 39,
+   "dtMs": 449261,
+   "event": "PreToolUse",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000012",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000013",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "pwd; cd c10 && X=$(pwd) && cd .. && rm -rf \"$X\"; pwd; echo done-sub-cwd2",
+     "description": "Delete the c10 subdirectory and print cwd markers"
+    },
+    "tool_use_id": "toolu_000000000000000000000012"
+   }
+  },
+  {
+   "seq": 40,
+   "dtMs": 449286,
+   "event": "PermissionRequest",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000012",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000013",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PermissionRequest",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "pwd; cd c10 && X=$(pwd) && cd .. && rm -rf \"$X\"; pwd; echo done-sub-cwd2",
+     "description": "Delete the c10 subdirectory and print cwd markers"
+    },
+    "permission_suggestions": []
+   }
+  },
+  {
+   "seq": 41,
+   "dtMs": 465951,
+   "event": "PostToolUse",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000012",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000013",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "pwd; cd c10 && X=$(pwd) && cd .. && rm -rf \"$X\"; pwd; echo done-sub-cwd2",
+     "description": "Delete the c10 subdirectory and print cwd markers"
+    },
+    "tool_response": {
+     "stdout": "/rig/proj\n/bin/bash: line 0: cd: c10: No such file or directory\n/rig/proj\ndone-sub-cwd2",
+     "stderr": "",
+     "interrupted": false,
+     "isImage": false,
+     "noOutputExpected": false
+    },
+    "tool_use_id": "toolu_000000000000000000000012",
+    "duration_ms": 20
+   }
+  },
+  {
+   "seq": 42,
+   "dtMs": 469344,
+   "event": "SubagentStop",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000012",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000013",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001/subagents/agent-a0000000000000013.jsonl",
+    "last_assistant_message": "<model prose, stubbed for the public corpus>",
+    "background_tasks": [
+     {
+      "id": "a0000000000000013",
+      "type": "subagent",
+      "status": "running",
+      "description": "Run five sequenced shell probes",
+      "agent_type": "general-purpose"
+     }
+    ],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 43,
+   "dtMs": 473426,
+   "event": "SubagentStop",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000013",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000016",
+    "agent_type": "",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001/subagents/agent-a0000000000000016.jsonl",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 44,
+   "dtMs": 538577,
+   "event": "SubagentStop",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000014",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000017",
+    "agent_type": "",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001/subagents/agent-a0000000000000017.jsonl",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 45,
+   "dtMs": 566486,
+   "event": "SubagentStop",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000015",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000018",
+    "agent_type": "",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001/subagents/agent-a0000000000000018.jsonl",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 46,
+   "dtMs": 614351,
+   "event": "PreToolUse",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000016",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Agent",
+    "tool_input": {
+     "description": "Run sib/d3 cleanup command",
+     "prompt": "Run exactly this one command with the Bash tool, verbatim: cd ../sib/d3 && X=$(pwd) && cd .. && rm -rf \"$X\"; echo done-allow-sub -- then report the exact tool result text.",
+     "subagent_type": "general-purpose"
+    },
+    "tool_use_id": "toolu_000000000000000000000013"
+   }
+  },
+  {
+   "seq": 47,
+   "dtMs": 614381,
+   "event": "SubagentStart",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000016",
+    "agent_id": "a0000000000000019",
+    "agent_type": "general-purpose",
+    "hook_event_name": "SubagentStart"
+   }
+  },
+  {
+   "seq": 48,
+   "dtMs": 614381,
+   "event": "PostToolUse",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000016",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Agent",
+    "tool_input": {
+     "description": "Run sib/d3 cleanup command",
+     "prompt": "Run exactly this one command with the Bash tool, verbatim: cd ../sib/d3 && X=$(pwd) && cd .. && rm -rf \"$X\"; echo done-allow-sub -- then report the exact tool result text.",
+     "subagent_type": "general-purpose"
+    },
+    "tool_response": {
+     "isAsync": true,
+     "status": "async_launched",
+     "agentId": "a0000000000000019",
+     "description": "Run sib/d3 cleanup command",
+     "resolvedModel": "claude-haiku-5-5",
+     "prompt": "Run exactly this one command with the Bash tool, verbatim: cd ../sib/d3 && X=$(pwd) && cd .. && rm -rf \"$X\"; echo done-allow-sub -- then report the exact tool result text.",
+     "outputFile": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/tasks/a0000000000000019.output",
+     "canReadOutputFile": true,
+     "canContinueAgent": true
+    },
+    "tool_use_id": "toolu_000000000000000000000013",
+    "duration_ms": 6
+   }
+  },
+  {
+   "seq": 49,
+   "dtMs": 617185,
+   "event": "SubagentStop",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000016",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000020",
+    "agent_type": "",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001/subagents/agent-a0000000000000020.jsonl",
+    "background_tasks": [
+     {
+      "id": "a0000000000000019",
+      "type": "subagent",
+      "status": "running",
+      "description": "Run sib/d3 cleanup command",
+      "agent_type": "general-purpose"
+     }
+    ],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 50,
+   "dtMs": 618873,
+   "event": "PreToolUse",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000016",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000019",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "cd ../sib/d3 && X=$(pwd) && cd .. && rm -rf \"$X\"; echo done-allow-sub",
+     "description": "Run the requested cd and rm -rf command verbatim"
+    },
+    "tool_use_id": "toolu_000000000000000000000014"
+   }
+  },
+  {
+   "seq": 51,
+   "dtMs": 618898,
+   "event": "PermissionRequest",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000016",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000019",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PermissionRequest",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "cd ../sib/d3 && X=$(pwd) && cd .. && rm -rf \"$X\"; echo done-allow-sub",
+     "description": "Run the requested cd and rm -rf command verbatim"
+    },
+    "permission_suggestions": []
+   }
+  },
+  {
+   "seq": 52,
+   "dtMs": 638976,
+   "event": "PostToolUse",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000016",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000019",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "cd ../sib/d3 && X=$(pwd) && cd .. && rm -rf \"$X\"; echo done-allow-sub",
+     "description": "Run the requested cd and rm -rf command verbatim"
+    },
+    "tool_response": {
+     "stdout": "done-allow-sub",
+     "stderr": "",
+     "interrupted": false,
+     "isImage": false,
+     "noOutputExpected": false
+    },
+    "tool_use_id": "toolu_000000000000000000000014",
+    "duration_ms": 18
+   }
+  },
+  {
+   "seq": 53,
+   "dtMs": 640686,
+   "event": "SubagentStop",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000016",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000019",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001/subagents/agent-a0000000000000019.jsonl",
+    "last_assistant_message": "<model prose, stubbed for the public corpus>",
+    "background_tasks": [
+     {
+      "id": "a0000000000000019",
+      "type": "subagent",
+      "status": "running",
+      "description": "Run sib/d3 cleanup command",
+      "agent_type": "general-purpose"
+     }
+    ],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 54,
+   "dtMs": 645087,
+   "event": "SubagentStop",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000017",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000021",
+    "agent_type": "",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001/subagents/agent-a0000000000000021.jsonl",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 55,
+   "dtMs": 678001,
+   "event": "SubagentStop",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000018",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000022",
+    "agent_type": "",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001/subagents/agent-a0000000000000022.jsonl",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 56,
+   "dtMs": 779077,
+   "event": "PreToolUse",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000019",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Agent",
+    "tool_input": {
+     "description": "Run sib/d4 cleanup command",
+     "prompt": "Run exactly this one command with the Bash tool, verbatim: cd ../sib/d4 && X=$(pwd) && cd .. && rm -rf \"$X\"; echo done-pane-sub -- then report the exact tool result text.",
+     "subagent_type": "general-purpose"
+    },
+    "tool_use_id": "toolu_000000000000000000000015"
+   }
+  },
+  {
+   "seq": 57,
+   "dtMs": 779107,
+   "event": "SubagentStart",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000019",
+    "agent_id": "a0000000000000023",
+    "agent_type": "general-purpose",
+    "hook_event_name": "SubagentStart"
+   }
+  },
+  {
+   "seq": 58,
+   "dtMs": 779107,
+   "event": "PostToolUse",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000019",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Agent",
+    "tool_input": {
+     "description": "Run sib/d4 cleanup command",
+     "prompt": "Run exactly this one command with the Bash tool, verbatim: cd ../sib/d4 && X=$(pwd) && cd .. && rm -rf \"$X\"; echo done-pane-sub -- then report the exact tool result text.",
+     "subagent_type": "general-purpose"
+    },
+    "tool_response": {
+     "isAsync": true,
+     "status": "async_launched",
+     "agentId": "a0000000000000023",
+     "description": "Run sib/d4 cleanup command",
+     "resolvedModel": "claude-haiku-5-5",
+     "prompt": "Run exactly this one command with the Bash tool, verbatim: cd ../sib/d4 && X=$(pwd) && cd .. && rm -rf \"$X\"; echo done-pane-sub -- then report the exact tool result text.",
+     "outputFile": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/tasks/a0000000000000023.output",
+     "canReadOutputFile": true,
+     "canContinueAgent": true
+    },
+    "tool_use_id": "toolu_000000000000000000000015",
+    "duration_ms": 5
+   }
+  },
+  {
+   "seq": 59,
+   "dtMs": 781945,
+   "event": "PreToolUse",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000019",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000023",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "cd ../sib/d4 && X=$(pwd) && cd .. && rm -rf \"$X\"; echo done-pane-sub",
+     "description": "Run the verbatim cleanup command and echo done-pane-sub"
+    },
+    "tool_use_id": "toolu_000000000000000000000016"
+   }
+  },
+  {
+   "seq": 60,
+   "dtMs": 781969,
+   "event": "PermissionRequest",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000019",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000023",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PermissionRequest",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "cd ../sib/d4 && X=$(pwd) && cd .. && rm -rf \"$X\"; echo done-pane-sub",
+     "description": "Run the verbatim cleanup command and echo done-pane-sub"
+    },
+    "permission_suggestions": []
+   }
+  },
+  {
+   "seq": 61,
+   "dtMs": 782385,
+   "event": "SubagentStop",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000019",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000024",
+    "agent_type": "",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001/subagents/agent-a0000000000000024.jsonl",
+    "background_tasks": [
+     {
+      "id": "a0000000000000023",
+      "type": "subagent",
+      "status": "running",
+      "description": "Run sib/d4 cleanup command",
+      "agent_type": "general-purpose"
+     }
+    ],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 62,
+   "dtMs": 802017,
+   "event": "PostToolUse",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000019",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000023",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "cd ../sib/d4 && X=$(pwd) && cd .. && rm -rf \"$X\"; echo done-pane-sub",
+     "description": "Run the verbatim cleanup command and echo done-pane-sub"
+    },
+    "tool_response": {
+     "stdout": "done-pane-sub",
+     "stderr": "",
+     "interrupted": false,
+     "isImage": false,
+     "noOutputExpected": false
+    },
+    "tool_use_id": "toolu_000000000000000000000016",
+    "duration_ms": 14
+   }
+  },
+  {
+   "seq": 63,
+   "dtMs": 803620,
+   "event": "SubagentStop",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000019",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000023",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001/subagents/agent-a0000000000000023.jsonl",
+    "last_assistant_message": "<model prose, stubbed for the public corpus>",
+    "background_tasks": [
+     {
+      "id": "a0000000000000023",
+      "type": "subagent",
+      "status": "running",
+      "description": "Run sib/d4 cleanup command",
+      "agent_type": "general-purpose"
+     }
+    ],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 64,
+   "dtMs": 807201,
+   "event": "SubagentStop",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000020",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000025",
+    "agent_type": "",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001/subagents/agent-a0000000000000025.jsonl",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 65,
+   "dtMs": 823326,
+   "event": "PreToolUse",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000021",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Agent",
+    "tool_input": {
+     "description": "Run sib/d5 cleanup command once",
+     "prompt": "Run exactly this one command with the Bash tool, verbatim, once (do not retry or rephrase it if it is refused): cd ../sib/d5 && X=$(pwd) && cd .. && rm -rf \"$X\"; echo done-deny-sub -- then report the exact tool result text you received, word for word.",
+     "subagent_type": "general-purpose"
+    },
+    "tool_use_id": "toolu_000000000000000000000017"
+   }
+  },
+  {
+   "seq": 66,
+   "dtMs": 823356,
+   "event": "SubagentStart",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000021",
+    "agent_id": "a0000000000000026",
+    "agent_type": "general-purpose",
+    "hook_event_name": "SubagentStart"
+   }
+  },
+  {
+   "seq": 67,
+   "dtMs": 823356,
+   "event": "PostToolUse",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000021",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Agent",
+    "tool_input": {
+     "description": "Run sib/d5 cleanup command once",
+     "prompt": "Run exactly this one command with the Bash tool, verbatim, once (do not retry or rephrase it if it is refused): cd ../sib/d5 && X=$(pwd) && cd .. && rm -rf \"$X\"; echo done-deny-sub -- then report the exact tool result text you received, word for word.",
+     "subagent_type": "general-purpose"
+    },
+    "tool_response": {
+     "isAsync": true,
+     "status": "async_launched",
+     "agentId": "a0000000000000026",
+     "description": "Run sib/d5 cleanup command once",
+     "resolvedModel": "claude-haiku-5-5",
+     "prompt": "Run exactly this one command with the Bash tool, verbatim, once (do not retry or rephrase it if it is refused): cd ../sib/d5 && X=$(pwd) && cd .. && rm -rf \"$X\"; echo done-deny-sub -- then report the exact tool result text you received, word for word.",
+     "outputFile": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/tasks/a0000000000000026.output",
+     "canReadOutputFile": true,
+     "canContinueAgent": true
+    },
+    "tool_use_id": "toolu_000000000000000000000017",
+    "duration_ms": 4
+   }
+  },
+  {
+   "seq": 68,
+   "dtMs": 826130,
+   "event": "SubagentStop",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000021",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000027",
+    "agent_type": "",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001/subagents/agent-a0000000000000027.jsonl",
+    "background_tasks": [
+     {
+      "id": "a0000000000000026",
+      "type": "subagent",
+      "status": "running",
+      "description": "Run sib/d5 cleanup command once",
+      "agent_type": "general-purpose"
+     }
+    ],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 69,
+   "dtMs": 826155,
+   "event": "PreToolUse",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000021",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000026",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "cd ../sib/d5 && X=$(pwd) && cd .. && rm -rf \"$X\"; echo done-deny-sub",
+     "description": "Remove the sib/d5 directory and print done-deny-sub"
+    },
+    "tool_use_id": "toolu_000000000000000000000018"
+   }
+  },
+  {
+   "seq": 70,
+   "dtMs": 826177,
+   "event": "PermissionRequest",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000021",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000026",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PermissionRequest",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "cd ../sib/d5 && X=$(pwd) && cd .. && rm -rf \"$X\"; echo done-deny-sub",
+     "description": "Remove the sib/d5 directory and print done-deny-sub"
+    },
+    "permission_suggestions": []
+   }
+  },
+  {
+   "seq": 71,
+   "dtMs": 847899,
+   "event": "SubagentStop",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000021",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000026",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001/subagents/agent-a0000000000000026.jsonl",
+    "last_assistant_message": "<model prose, stubbed for the public corpus>",
+    "background_tasks": [
+     {
+      "id": "a0000000000000026",
+      "type": "subagent",
+      "status": "running",
+      "description": "Run sib/d5 cleanup command once",
+      "agent_type": "general-purpose"
+     }
+    ],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 72,
+   "dtMs": 851683,
+   "event": "SubagentStop",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000022",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000028",
+    "agent_type": "",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001/subagents/agent-a0000000000000028.jsonl",
+    "last_assistant_message": "<model prose, stubbed for the public corpus>",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 73,
+   "dtMs": 885063,
+   "event": "SubagentStop",
+   "envSid": null,
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000023",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000029",
+    "agent_type": "",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/fixhome/cfg/projects/-rig-proj/00000000-0000-4000-8000-000000000001/subagents/agent-a0000000000000029.jsonl",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  }
+ ],
+ "disk": {
+  "admin": {},
+  "worktreesLeft": [],
+  "branches": [],
+  "worktreeList": "",
+  "metas": {},
+  "snapshots": {}
+ }
+}
