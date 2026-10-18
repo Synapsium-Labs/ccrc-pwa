@@ -1,7 +1,10 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { reviveFleetSessions, type BuildAgreement, type FleetSession, type NodeRole } from '../../shared/api.js';
+import {
+  RUNS_ATTRIBUTION_SINCE, isReleaseTag, reviveFleetSessions, type BuildAgreement, type FleetSession, type NodeRole,
+} from '../../shared/api.js';
+import { compareReleaseTags } from '../../shared/semver.js';
 import type { BuildInfo } from '../../shared/buildinfo.js';
 
 // One vocabulary for "the two boxes' builds", declared in `shared/api.ts`
@@ -240,6 +243,40 @@ export function buildAgreement(
   if (!fleet || !own) return 'unknown';
   if (fleet.dirty || own.dirty) return 'skewed';
   return fleet.sha === own.sha ? 'agreed' : 'skewed';
+}
+
+/**
+ * Whether the fleet box's `ccrc-api` sends `claimedByUuid` on `runs open`
+ * (coordinator-first Task 11a), so `POST /api/runs` may REQUIRE it (D-5298,
+ * spec 2026-10-17 §6.4's switch-over). Pure; the route reads it on every open.
+ *
+ *   - `role === 'both'` → true, BEFORE any stamp is read: one box is both
+ *     ends, so the client and this server are one build — and that build
+ *     carries 11a, because 11b merged after it. Read first because local mode
+ *     has no fleet stamp (`FleetState.build` is null there), so agreement would
+ *     answer `unknown` and a single box would never flip;
+ *   - `buildAgreement` answers `agreed` → true: the fleet runs this server's
+ *     own build;
+ *   - the fleet stamp's `version` is a release tag at or past
+ *     `RUNS_ATTRIBUTION_SINCE` → true. The server tree is a deployed tarball
+ *     with no git history, so "at or past 11a" is answered by these two
+ *     readings, never by ancestry; a tagless dev build relies on agreement;
+ *   - anything else — divergent, unknown, a version below the floor, a stamp
+ *     that is not a release tag → false: the open is accepted unattributed and
+ *     journaled.
+ *
+ * WHICH WAY IT FAILS. A wrong `true` refuses every unattributed open with the
+ * upgrade hint (availability, loud, fixed by the rollout it names); a wrong
+ * `false` accepts and journals one (the journal Task M counts). Neither admits
+ * a STALE claimant: a sent `claimedByUuid` is always checked.
+ */
+export function fleetCarriesRunsAttribution(
+  role: NodeRole, own: BuildInfo | null | undefined, fleet: BuildInfo | null | undefined,
+): boolean {
+  if (role === 'both') return true;
+  if (buildAgreement(fleet, own) === 'agreed') return true;
+  const v = fleet?.version;
+  return isReleaseTag(v) && compareReleaseTags(v, RUNS_ATTRIBUTION_SINCE) >= 0;
 }
 
 /** One inventory row's evidence for `derivedBuilds`: the row's role (`null` =

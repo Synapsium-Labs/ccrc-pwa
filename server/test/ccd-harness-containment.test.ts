@@ -14,9 +14,11 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  makeCcdHarness, harnessBin, ghContainedEnv, WS_ADD, SCAN_LOOKBACK_LINES, type ContainOpts, type CcdHarness,
+  makeCcdHarness, harnessBin, ghContainedEnv, stubContainedTool, WS_ADD, SCAN_LOOKBACK_LINES, type ContainOpts,
+  type CcdHarness,
 } from './ccdWsHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { CONTAINED_TOOLS, assertNoRealTool } from './containedTools.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-contain-'); });
@@ -281,5 +283,136 @@ describe('ghContainedEnv contains gh always, systemd only when asked', () => {
         `LACKING CONTAINMENT rather than as "the marker fell out of the window"`)
         .toBeLessThanOrEqual(SCAN_LOOKBACK_LINES);
     }
+  });
+});
+
+// ── WAVE 18 (centralised update management; D-5247, D-5248, D-5249): ssh, scp, curl and the user bus ──────────────
+// Wave 9 (R10d) made the ccrc builders' containment structural and left this harness's half as residue: every
+// `sh()` still inherited the operator's real `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`, and found the host's
+// own `ssh`, `scp` and `curl` on the PATH tail (measured at the wave's base: `/usr/bin/…` for all three, and the
+// real `/run/user/<uid>` pair). `ccd/ccd` calls none of the three tools and reads the bus only through the
+// poisoned managers, so it was a structural gap, not a live leak: the edit that adds a curl to ccd, or drops a
+// manager poison, would have reached the live machine with nothing red. These rows are what is red now.
+//
+// The harness ASKS for the network poisons (`net`); `ghContainedEnv` plants none for a caller that does not, because
+// suites run a functional curl outside `harnessBin` (unconditional, it measured 91 reds in three files). The bus
+// rides `systemd`: the managers are what read it. A functional stub goes through `stubContainedTool`.
+describe('the harness contains ssh, scp, curl and the user bus too (wave 18)', () => {
+  const BUS = (home: string): string =>
+    `${path.join(home, 'no-runtime-dir')}|unix:path=${path.join(home, 'no-bus')}`;
+  const PROBE = 'echo "$XDG_RUNTIME_DIR|$DBUS_SESSION_BUS_ADDRESS"';
+  const NET = ['ssh', 'scp', 'curl'] as const;
+
+  it('H18-1 makeCcdHarness plants every CONTAINED_TOOLS poison at creation, before any env() or sh()', () => {
+    // The creation-time plant is what a test that spawns with its OWN ghContainedEnv(h.home, …) inherits: it
+    // prepends the same harnessBin, so the poisons are already there (while that HOME lives).
+    const planted = fs.readdirSync(harnessBin(h.home)).filter((n) => (CONTAINED_TOOLS as readonly string[]).includes(n));
+    expect(planted.sort()).toEqual([...CONTAINED_TOOLS].sort());
+  });
+
+  it('H18-2 the env every sh() spawns with passes assertNoRealTool, whatever PATH the caller adds', () => {
+    expect(() => assertNoRealTool(h.env(), h.home)).not.toThrow();
+    expect(() => assertNoRealTool(h.env({ PATH: '/usr/bin:/bin' }), h.home)).not.toThrow();
+  });
+
+  it.each(NET)('H18-3 %s resolves to harnessBin, records its argv, and refuses with 97', (t) => {
+    expect(h.sh(`command -v ${t}`)).toBe(path.join(harnessBin(h.home), t));
+    expect(h.sh(`${t} -o x example.invalid 2>/dev/null; echo rc=$?`)).toBe('rc=97');
+    expect(fs.readFileSync(path.join(h.home, `${t}-poison`), 'utf8')).toBe('-o x example.invalid\n');
+  });
+
+  it('H18-4 every sh() re-plants a poison that is gone (a module-level harness after cleanup is that case)', () => {
+    fs.rmSync(path.join(harnessBin(h.home), 'ssh'), { force: true });
+    expect(h.sh('command -v ssh')).toBe(path.join(harnessBin(h.home), 'ssh'));
+  });
+
+  it('H18-5 a stub written through stubContainedTool REPLACES the curl poison and is kept across sh() calls', () => {
+    stubContainedTool(h.home, 'curl', '#!/bin/sh\necho "stub: $*" >> "$HOME/curl.argv"\nexit 0\n');
+    expect(h.sh('curl -s http://127.0.0.1:9/; echo rc=$?')).toBe('rc=0');
+    expect(h.sh('curl -s http://127.0.0.1:9/; echo rc=$?')).toBe('rc=0');
+    expect(fs.readFileSync(path.join(h.home, 'curl.argv'), 'utf8')).toBe('stub: -s http://127.0.0.1:9/\n'.repeat(2));
+    expect(fs.existsSync(path.join(h.home, 'curl-poison')), 'the poison ran').toBe(false);
+  });
+
+  it('H18-6 inside sh() the user bus is the fixture pair under HOME, even when the caller names the real one', () => {
+    expect(h.sh(PROBE)).toBe(BUS(h.home));
+    expect(h.sh(PROBE, { XDG_RUNTIME_DIR: '/run/user/0', DBUS_SESSION_BUS_ADDRESS: 'unix:path=/run/user/0/bus' }))
+      .toBe(BUS(h.home));
+  });
+
+  it('H18-7 ghContainedEnv plants the net poisons only for a caller that ASKS, and the fixture bus for every systemd caller', () => {
+    // Three homes, one per option set: a poison is create-if-absent, so a shared harnessBin would carry one case's
+    // plant into the next.
+    const [a, b, c] = ['ccrc-contain-tmux-only-', 'ccrc-contain-managers-', 'ccrc-contain-net-'].map((p) => mkTmp(p));
+    const real = { PATH: '/usr/bin:/bin', XDG_RUNTIME_DIR: '/run/user/0', DBUS_SESSION_BUS_ADDRESS: 'unix:path=/run/user/0/bus' };
+    const tmuxOnly = ghContainedEnv(a!, real, { tmux: true });
+    for (const t of NET) expect(fs.existsSync(path.join(harnessBin(a!), t)), t).toBe(false);
+    expect(tmuxOnly['XDG_RUNTIME_DIR'], 'no systemd, no bus').toBe('/run/user/0');
+    const managers = ghContainedEnv(b!, real, { systemd: true, tmux: true });
+    for (const t of NET) expect(fs.existsSync(path.join(harnessBin(b!), t)), t).toBe(false);
+    expect(`${managers['XDG_RUNTIME_DIR']}|${managers['DBUS_SESSION_BUS_ADDRESS']}`, 'the bus rides systemd').toBe(BUS(b!));
+    const net = ghContainedEnv(c!, real, { net: true });
+    for (const t of NET) expect(fs.existsSync(path.join(harnessBin(c!), t)), t).toBe(true);
+    expect(fs.existsSync(path.join(harnessBin(c!), 'systemctl')), 'net is not systemd').toBe(false);
+    expect(net['XDG_RUNTIME_DIR'], 'net is not the bus').toBe('/run/user/0');
+  });
+
+  it('H18-8 a bus pair the caller points under HOME stands; a pair only half under HOME does not', () => {
+    const own = {
+      XDG_RUNTIME_DIR: path.join(h.home, 'xdg'),
+      DBUS_SESSION_BUS_ADDRESS: `unix:path=${path.join(h.home, 'xdg', 'bus')}`,
+    };
+    expect(h.sh(PROBE, own)).toBe(`${own.XDG_RUNTIME_DIR}|${own.DBUS_SESSION_BUS_ADDRESS}`);
+    expect(h.sh(PROBE, { ...own, DBUS_SESSION_BUS_ADDRESS: 'unix:path=/run/user/0/bus' })).toBe(BUS(h.home));
+  });
+
+  // D-5257: `busPath` refuses a value with `;` or `%`, so `busUnder` is false and the fixture pair wins. The caller's
+  // FIRST path is under HOME in both rows, which is what a lexical check alone would accept. Each row runs on a HOME
+  // with neither character (an `mkTmp` name), so the refusal can only be the value's.
+  it('H18-10 a bus address LIST (`;`) whose first path is under HOME is not kept: a client falls through to the later address', () => {
+    expect(h.home).not.toMatch(/[;%]/);
+    const own = {
+      XDG_RUNTIME_DIR: path.join(h.home, 'xdg'),
+      DBUS_SESSION_BUS_ADDRESS: `unix:path=${path.join(h.home, 'xdg', 'bus')};unix:path=/run/user/1000/bus`,
+    };
+    expect(h.sh(PROBE, own)).toBe(BUS(h.home));
+    const env = ghContainedEnv(h.home, { PATH: '/usr/bin:/bin', ...own }, { systemd: true });
+    expect(`${env['XDG_RUNTIME_DIR']}|${env['DBUS_SESSION_BUS_ADDRESS']}`, 'the fixture pair wins').toBe(BUS(h.home));
+    expect(() => assertNoRealTool({ ...process.env, ...own }, h.home)).toThrow(/does not name a path inside the fixture HOME/);
+  });
+
+  it('H18-11 a bus path with `%` is not kept: D-Bus unescapes %2e%2e, path.resolve does not, so it climbs out of HOME', () => {
+    expect(h.home).not.toMatch(/[;%]/);
+    const own = {
+      XDG_RUNTIME_DIR: path.join(h.home, 'xdg'),
+      DBUS_SESSION_BUS_ADDRESS: `unix:path=${h.home}/%2e%2e/%2e%2e/run/user/1000/bus`,
+    };
+    expect(h.sh(PROBE, own)).toBe(BUS(h.home));
+    const env = ghContainedEnv(h.home, { PATH: '/usr/bin:/bin', ...own }, { systemd: true });
+    expect(`${env['XDG_RUNTIME_DIR']}|${env['DBUS_SESSION_BUS_ADDRESS']}`, 'the fixture pair wins').toBe(BUS(h.home));
+    expect(() => assertNoRealTool({ ...process.env, ...own }, h.home)).toThrow(/does not name a path inside the fixture HOME/);
+  });
+
+  // D-5258: within the first address libdbus reads the FIRST `path=` key and the capture reads the last, so a value with
+  // two is refused by the same arm as `;` and `%`. The caller's LAST path is under HOME, which the capture alone accepts.
+  it('H18-12 a bus address with two `path=` keys is not kept: a client reads the first, a real runtime dir', () => {
+    expect(h.home).not.toMatch(/[;%]/);
+    const own = {
+      XDG_RUNTIME_DIR: path.join(h.home, 'xdg'),
+      DBUS_SESSION_BUS_ADDRESS: `unix:path=/run/user/${process.getuid?.() ?? 1000}/bus,path=${path.join(h.home, 'xdg', 'bus')}`,
+    };
+    expect(h.sh(PROBE, own)).toBe(BUS(h.home));
+    const env = ghContainedEnv(h.home, { PATH: '/usr/bin:/bin', ...own }, { systemd: true });
+    expect(`${env['XDG_RUNTIME_DIR']}|${env['DBUS_SESSION_BUS_ADDRESS']}`, 'the fixture pair wins').toBe(BUS(h.home));
+    expect(() => assertNoRealTool({ ...process.env, ...own }, h.home)).toThrow(/does not name a path inside the fixture HOME/);
+  });
+
+  it('H18-9 stubContainedTool is the one named door: it writes into harnessBin and refuses a name it does not contain', () => {
+    expect(() => stubContainedTool(h.home, 'git' as never, '#!/bin/sh\n')).toThrow(/not a contained tool/);
+    // gh is contained, but its poison is rewritten on every ghContainedEnv call, so this door would not keep it (D-5254).
+    expect(() => stubContainedTool(h.home, 'gh' as never, '#!/bin/sh\n')).toThrow(/GH_STUB/);
+    const p = stubContainedTool(h.home, 'ssh', '#!/bin/sh\necho stub-ssh\n');
+    expect(p).toBe(path.join(harnessBin(h.home), 'ssh'));
+    expect(h.sh('ssh')).toBe('stub-ssh');
   });
 });

@@ -83,13 +83,17 @@ function makeRunner(home: string, cfg: RunnerCfg = {}): { run: Runner; calls: st
 }
 const openApp = async (home: string, run: Runner, over: Partial<Deps> = {}) => {
   mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+  // D-5298: the claimant every open names is an attributed registry row of the
+  // run's project (`seed`'s `u-<id>` uuid; the body sends it, `postOpen`).
+  seed(home, OPEN_BODY.claimedBy);
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const app = await buildServer({ ...testDeps(home, run), mailToken: TOKEN, coord, ...over });
   return { app, coord };
 };
 const headers = { 'x-ccrc-mail-token': TOKEN };
 const postOpen = (app: FastifyInstance, body: Record<string, unknown>) =>
-  app.inject({ method: 'POST', url: '/api/runs', headers, payload: body });
+  app.inject({ method: 'POST', url: '/api/runs', headers,
+    payload: { claimedByUuid: `u-${String(body.claimedBy)}`, ...body } });
 const verbsOf = (calls: string[][]): string[] => calls.map((c) => c[0] ?? '');
 
 describe('POST /api/runs — a spent child is refused before anything exists', () => {
@@ -133,19 +137,24 @@ describe('POST /api/runs — a spent child is refused before anything exists', (
     expect(verbsOf(calls)).not.toContain('ws-hold');
   });
 
-  it('an UNLISTABLE registry refuses spent-unmeasured for ANY sessionId — a NON-child too, because the gate cannot tell', async () => {
-    // The one place this wave changes the non-child path (spec §5.4's fail-shut
-    // exception): before the gate, the open never listed the registry and
-    // answered 200 here. Pinned rather than left to a moved counter, so the
-    // change is visible.
+  it('an UNLISTABLE registry refuses the open for ANY sessionId — since D-5298 at the attribution gate, which lists first', async () => {
+    // The one place this wave changed the non-child path (spec §5.4's
+    // fail-shut exception): before the gate, the open never listed the
+    // registry and answered 200 here. Since coordinator-first Task 11b
+    // (D-5298) the claimant's attribution lists the registry before any
+    // other gate reads the store, so it answers the unlistable registry
+    // itself — the transient 502 the claim lanes send — and rule 3's gate is
+    // never reached. Its own unlistable arm is still pinned at dispatch (the
+    // case below). Pinned rather than left to a moved counter.
     const home = mkTmp('ccrc-child-open-');
     seed(home, 'demo-plain');   // no marker: a non-child
     const { run, calls } = makeRunner(home);
     const unlistable: FleetIO = { ...localIO, readdir: async () => null };
     const w = await openApp(home, run, { io: unlistable }); app = w.app;
     const res = await postOpen(app, { ...OPEN_BODY, sessionId: 'demo-plain' });
-    expect(res.statusCode).toBe(409);
-    expect(res.json()).toEqual({ ok: false, refused: 'spent-unmeasured', detail: 'the registry could not be listed' });
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toEqual({ ok: false, error: 'registry-unmeasurable',
+      detail: 'the registry directory could not be listed — transient, not a fact about the sender' });
     expect(okRuns(w.coord.runs())).toHaveLength(0);
     expect(verbsOf(calls)).not.toContain('ws-hold');
   });
@@ -161,13 +170,19 @@ describe('POST /api/runs — a spent child is refused before anything exists', (
     expect(okRuns(w.coord.runs())[0]?.sessionId).toBe(CHILD);
   });
 
-  it('a workspace with NO marker binds as today, even one that has had a PR', async () => {
+  it('a workspace with NO marker is refused not-a-child (D-5298), before rule 3 asks pr-state', async () => {
+    // Before coordinator-first Task 11b this bound "as today" — rule 3 leaves
+    // non-children alone. Since D-5298 the open binds only a child (or a
+    // row-less id a dispatch is about to make one), so a session the operator
+    // created is never a child, whatever its PR history.
     const home = mkTmp('ccrc-child-open-');
     seed(home, CHILD, { prnumber: '42' });
     const { run, calls } = makeRunner(home);
     const w = await openApp(home, run); app = w.app;
     const res = await postOpen(app, { ...OPEN_BODY, sessionId: CHILD });
-    expect(res.statusCode).toBe(200);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ ok: false, refused: 'not-a-child' });
+    expect(okRuns(w.coord.runs())).toHaveLength(0);
     expect(verbsOf(calls)).not.toContain('pr-state');
   });
 });
@@ -427,17 +442,23 @@ describe('POST /api/runs/:id/dispatch — a child spent since its open', () => {
   it('an UNLISTABLE registry at dispatch refuses spent-unmeasured for a NON-child too — where the resume arm used to answer 502', async () => {
     // Spec §5.4's fail-shut exception, pinned at the second door: the gate's
     // listing fails, it cannot tell a child from any workspace, so it refuses
-    // retryably before `ensure`. Readdir calls: 1 the open's gate, 2 the
-    // dispatch pause check, 3 dispatch's gate — the one this fails.
+    // retryably before `ensure`. Since D-5298 the open route binds no
+    // non-child, so the binding is a run opened BEFORE that check: opened
+    // unbound and bound through the store, the way such a row already sits in
+    // a database. Readdir calls counted from then: 1 the dispatch pause check,
+    // 2 dispatch's gate — the one this fails.
     const home = mkTmp('ccrc-child-dispatch-');
     seed(home, 'demo-plain');   // no marker
     const { run, calls } = makeRunner(home);
-    let n = 0;
-    const io: FleetIO = { ...localIO, readdir: async (p) => { n += 1; return n === 3 ? null : localIO.readdir(p); } };
+    let n = 0, armed = false;
+    const io: FleetIO = { ...localIO,
+      readdir: async (p) => { if (armed) n += 1; return armed && n === 2 ? null : localIO.readdir(p); } };
     const w = await openApp(home, run, { io }); app = w.app;
-    const opened = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-plain' });
+    const opened = await postOpen(app, { ...OPEN_BODY, wave: 2 });
     expect(opened.statusCode, opened.body).toBe(200);
     const id = (opened.json() as { id: number }).id;
+    w.coord.setSession(id, 'demo-plain');
+    armed = true;
     const before = calls.length;
     const res = await postDispatch(app, id);
     expect(res.statusCode).toBe(409);

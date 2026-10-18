@@ -1600,6 +1600,22 @@ export const MIGRATIONS: readonly string[] = [
   CREATE INDEX delegation_events_by_observed
     ON delegation_events(observedAt);
   `,
+  // ── 23: user_version 22 -> 23 ─────────────────────────────────────────────
+  // D-5298 (coordinator-first routing spec 2026-10-17 §6.4, plan Task 11b): a run OPENED by a claimant that sent no
+  // `claimedByUuid` while the fleet did not yet carry Task 11a's `ccrc-api` (`fleetCarriesRunsAttribution` false) is
+  // accepted, and this column is its journal: 1 for such an open, 0 for every other row, including every row that
+  // existed before this entry (they predate the question, and 0 is "not recorded unattributed", never "proven
+  // attributed"). Task M reports the count, which should fall to zero after the fleet's rollout; once the fleet
+  // carries the client the same open is `409 attribution-required` and writes no row at all.
+  //
+  // ONE ADDITIVE COLUMN with a constant default, and nothing else: an older build opening a file at `user_version 23`
+  // takes rule 3 (it warns, reads as-is and migrates nothing) and its inserts, which never name the column, store 0.
+  // Every earlier entry is frozen. RE-MEASURE the slot immediately before the PR and before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE runs ADD COLUMN unattributed INTEGER NOT NULL DEFAULT 0;
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a
