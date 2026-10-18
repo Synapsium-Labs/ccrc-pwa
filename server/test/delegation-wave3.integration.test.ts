@@ -489,7 +489,11 @@ describe.skipIf(REAL_JQ === '')('3. a lost coord.db: the checkpoint and the jour
     expect(before.cp.leases).toHaveLength(1);
     loseDb(w.home);
     const again = world({ home: w.home });
-    await censusPass(again, at(4), { demo: [OLD, RAW] });
+    // The restart's pass stays in the UTC hour of the last pass before the loss. This case runs on the real clock, so at(3) and at(4) can
+    // straddle an hour (about one minute in sixty), and a pass in a later hour closes the earlier one: measuredSessionHours then moves from
+    // 0 to 1, which is the lane working, not a rebuild that lost anything.
+    const restart = Math.min(at(4), (Math.floor(at(3) / HOUR) + 1) * HOUR - 1);
+    await censusPass(again, restart, { demo: [OLD, RAW] });
     const after = disk(again.home);
     expect(ids(after.checkpoint!), 'the IDs live in the checkpoint and the journal, not in SQLite').toEqual(ids(before.cp));
     expect(after.journal, 'a restart appends nothing it already holds').toBe(before.journal);
