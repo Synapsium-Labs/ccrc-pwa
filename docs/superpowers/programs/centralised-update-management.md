@@ -4476,6 +4476,21 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     - Acts: the failed job is re-run (evidence, and the promotion if it is green and the cause is a test-timing
       class); a diagnosis workflow is running (three Opus investigators, a Sonnet refuter per claim, an Opus
       judge). The promotion waits for both, and the owner gets the finding.
+  - **23:25 UTC: the cause is a clock race in the test; the shipped hook has no defect.** Eight agents, none died;
+    every claim was put to a refuter. Verified by me in the job log:
+    - The failing row is the table's eleventh, "5 s inside the lease" (`at` = n - 175), not the first. Rows 1
+      to 10 carry the collection-time n, 1792362735; the failing row carries 1792362560.
+    - `n` is read once at collection (test:164). The row reads the clock again in `parseServerCaps(text,
+      nowS())` and a third time in the hook, after a Stop hook and the PreCompact prologue, about 0.1 s later.
+      On macOS the row runs about 5.8 s after collection, at the 180 s edge, so the two reads can straddle it.
+    - Reproduced three ways on Linux with a slowed `bash` start (5 of 35, 9 of 27, 2 of 22); a fixed copy that
+      reads `n` inside the row failed 0 of 35 and 0 of 16. Both grammars apply the same inclusive 180 s rule.
+    - Live direction: a caps file crossing 180 s during a hook run reads not advertised and the hook writes the
+      old bytes, the fail-safe arm. Writers refresh every 60 s.
+    - The fix, for the working-state plan's owner (its file, not this programme's): build the table's rows as
+      functions of `n` and read `n` inside the row (`server/test/session-hook-compact-carry.test.ts:164-192`).
+      That also stops the test names carrying a moving epoch.
+    - Ruling: a test-timing flake, so the job re-run decides the gate. If it is green, I promote.
 
 ## Carried constraints
 
