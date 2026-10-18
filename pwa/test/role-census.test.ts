@@ -108,7 +108,7 @@ const ROLE_BEARING: Readonly<Record<string, RoleBearing>> = {
 const NOT_ROLE_BEARING: Readonly<Record<string, string>> = {
   'banner.tsx': "a screen-level statement in sentence type, not a control or a row; outside Task 14's mapping",
   'collapsible-strip.tsx': "its head's height is a prop chosen per call site (tap, compact or content), not a list row's",
-  'command-palette.tsx': "an overlay summoned by a key, with its own option rows; outside Task 14's mapping, re-measured with W2's shells",
+  'command-palette.tsx': "an overlay summoned by a key; it inherits the row and meta roles through LIST_ROW and KEYCAP, and its own sizes are left for W2's re-measure",
   'confirm.tsx': "QuickConfirm's consequence is a sentence of copy, not a control's label; its buttons are Button",
   'control-row.tsx': 'a self-grounded mono status line whose shape the shape census owns; outside Task 14\'s mapping',
   'count-badge.tsx': 'a count on the 11px floor, sized against the glyph it badges',

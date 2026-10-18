@@ -105,7 +105,9 @@ and the contrast gate measures each palette once, for both skins.
   step only where the role's Refined value is that step (`--fs-ui` is
   `--fs-base`, `--fs-meta` is `--fs-xs`, `--row-h` is 52px), so Refined
   renders as it did. In Instrument, buttons set at 13px from 900px wide,
-  meta at 11px, and list rows 44px tall, 32px under a fine pointer. The app
+  meta at 11px. `--row-h` is a list row's minimum height (44px, or 32px
+  under a fine pointer), and the row's `py-2` plus its content set the drawn
+  height: 36px for a one-line row under a fine pointer (D-5461). The app
   sheets, `Sheet`'s body and `OptionRow` follow in a later change.
 
 ### The role census

@@ -12,7 +12,9 @@
 // value is 52px, the literal both rules spelled: eight pixels above the 44px
 // floor, because a row in a LIST is scrolled past as often as it is pressed,
 // and the extra height is what separates neighbours a thumb is dragging over.
-// Instrument sets 44, and 32 only inside `(pointer: fine)`. It is not
+// Instrument sets 44, and 32 only inside `(pointer: fine)`. It is the row's
+// MINIMUM height: `py-2` plus the content set the drawn height, so a
+// one-line row under a fine pointer draws 36px, not 32 (D-5461). It is not
 // `--tap-min` and does not move with it: the tap floor is a floor to clear,
 // and `--row-h` is held to it everywhere but under a fine pointer by
 // `skin-identity.test.ts`'s floor case (f2). `role-census.test.ts` holds this

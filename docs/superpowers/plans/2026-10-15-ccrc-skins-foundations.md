@@ -1507,7 +1507,7 @@ Issued and unused (Task 12b): none.
 
 ### Found while executing Task 14
 
-Task 14 was issued two spares, 2026-10-18; one is defined here.
+Task 14 was issued two spares, 2026-10-18; both are defined here.
 
 - **D-5460** — `role-pins-follow-the-role` (Task 14): two suites outside Task 14's file list pinned the scale steps the roles replace, and follow them.
   - **Why:** the task's header says the shape census reads no TSX class string, but `shape-census.test.ts` asserts `LIST_ROW` contains `min-h-[52px]`, and `primitives.test.tsx` asserts `CHIP` contains `text-xs` and refuses any other `text-*` on it. Both went red on the green edit. Drawer stage 1 (#428) and the ask sheet half (#427) have merged, and #402 does not edit either file, so neither is frozen.
@@ -1515,4 +1515,11 @@ Task 14 was issued two spares, 2026-10-18; one is defined here.
   - **Also measured on this base:** `Radio`'s input keeps `h-[18px]` (the native input inside the tap-floored row), and `BackButton` keeps `text-[26px]` (the chevron's optical size); both are on the census's allowlist with that reason. `Select` spells no size of its own: it wears `TEXT_INPUT`, whose `text-input` is `TextInput`'s entry.
   - **Departs** Task 14's file list, which names neither suite nor the story, nor `tokens.css`, whose roles comment ("Nothing reads a role until Task 14") now points at the census; a comment only, outside the generated block.
 
-Issued and unused (Task 14): 5461.
+- **D-5461** — `row-role-is-a-floor` (Task 14): `--row-h` sets a list row's minimum height, not its drawn height, and Step 4's "list rows 32px tall" in Instrument with a mouse is amended to the measured heights.
+  - **Why:** the task's own mapping keeps `ListRow`'s `px-1 py-2 gap-3` as the row's inner rhythm, so a row draws at its content plus 16px whenever that is more than `--row-h`. Under a fine pointer `min-h-row` resolves to 32, but a one-line row's content (about 20px) plus `py-2` is 36. The app's pickers hold tap-floored content of their own, so they stay at the 44px that content sets whatever the row's padding is.
+  - **Measured** (dist build, fine pointer, 1280 and 1920, Phosphor & Ink and Phosphor Daylight): the session actions menu 35.8px; the swap sheet's account picker and the new-session project picker 44px; the command palette, which wears `LIST_ROW`, 39.5 and 41px. Storybook's `ListRow` AMenu 35.8px and AnAccountPicker 41px. Under a coarse pointer at 360, 390 and 438, every row is 44px. Refined is pixel-identical at every width.
+  - **Not taken:** putting the row's vertical padding on a density role, or dropping it where `min-h-row` governs. Dropping it moves Refined's two-line rows (content plus 16 is over 52 today), and a padding role is a new generated token outside Task 14's mapping. Neither reaches 32 for the pickers, whose nested content is tap-floored.
+  - **Moves:** drawing a list row at 32px with a mouse goes to Task 14b (option rows and the sheet body) and W2's dense rows (S10, whose `SessionLine` table is driven by `--row-h`), each with the row's padding and the pickers' nested content re-measured together. `ListRow`'s header, its story's CHECK note and `ui/README.md` say that the role is the minimum height.
+  - **Departs** Task 14 Step 4's second bullet ("list rows … 32px tall").
+
+Issued and unused (Task 14): none.
