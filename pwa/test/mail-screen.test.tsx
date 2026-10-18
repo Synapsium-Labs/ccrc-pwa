@@ -13,6 +13,7 @@ import { act, cleanup, render, screen, fireEvent, waitFor } from '@testing-libra
 import type { NotifyEvent, RunSummary } from '../../shared/api';
 import { MailScreen } from '../src/screens/MailScreen';
 import { MailBadge } from '../src/fleet/MailBadge';
+import { SETTINGS_GLYPH } from '@ccrc/ui';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { api } from '../src/lib/api';
 import { ack, FEED_ACK_KEY, acksSnapshot, resetAcks } from '../src/lib/seen';
@@ -231,7 +232,7 @@ describe('the mail feed', () => {
     expect(await screen.findByText('caps changed')).toBeInTheDocument();
     const kind = container.querySelector('.mail-kind');
     expect(kind, 'the coord row rendered no kind cell at all').not.toBeNull();
-    expect(kind!.querySelector('.mail-kind-glyph')!.textContent, 'no glyph for coord').toBe('⚙');
+    expect(kind!.querySelector('.mail-kind-glyph')!.textContent, 'no glyph for coord').toBe(SETTINGS_GLYPH);
     expect(kind!.textContent, 'no word for coord').toContain('config');
   });
 
@@ -368,6 +369,14 @@ describe('the door', () => {
     render(<MailBadge unread={412} />);
     expect(screen.getByText('99+')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /mail — 412 unread/i })).toBeInTheDocument();
+  });
+
+  it('draws Icon mail in its glyph span, stroked in the door\'s ink (D-5100)', () => {
+    render(<MailBadge unread={0} />);
+    const glyph = document.querySelector('.mail-badge-glyph')!;
+    expect(glyph).toHaveAttribute('aria-hidden', 'true');
+    expect(glyph.textContent).toBe('');
+    expect(glyph.querySelector('svg')).toHaveAttribute('stroke', 'currentColor');
   });
 });
 

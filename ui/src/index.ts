@@ -27,6 +27,7 @@ export {
 } from './primitives/radio';
 export { BackButton, BACK_BUTTON, type BackButtonProps } from './primitives/back-button';
 export { Door, DOOR, DOOR_GLYPH, type DoorProps } from './primitives/door';
+export { Icon, type IconName, type IconProps, type IconSize } from './primitives/icon';
 export { Well, WELL, type WellProps } from './primitives/well';
 export { Chip, CHIP, CHIP_DOT, type ChipProps } from './primitives/chip';
 export {
