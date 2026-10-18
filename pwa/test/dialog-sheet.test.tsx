@@ -2712,10 +2712,13 @@ describe('the own-words region and the busy commits keep their shape (D-5090, D-
     expect(declValue(ruleIn(css, '.dlg-reply-input'), 'font')).toBe(norm('var(--weight-regular) var(--fs-input) / 1.3 var(--family-ui)'));
     expect(declValue(ruleIn(css, '.dlg-reply-send'), 'font')).toBe(norm('var(--weight-medium) var(--fs-sm) / 1 var(--family-ui)'));
 
-    // The sheet's gutter: every sheet but the full one pads `px-4`, which theme.css maps to `--sp-4`.
+    // The sheet's gutter: every sheet but the full one pads `px-card`, the card role (D-5093, Task 14b;
+    // D-5463), which theme.css maps to `--pad-card`. Refined's is `--sp-4`, the widest a skin sets it
+    // (Instrument's `--sp-3` leaves the field more room), so the floor is measured on Refined's.
     const sheet = readFileSync(path.join(UI, 'primitives', 'sheet.tsx'), 'utf8');
-    expect(sheet).toMatch(/'z-sheet [^']*\bpx-4\b/);
-    expect(readFileSync(path.join(UI, 'styles', 'theme.css'), 'utf8')).toMatch(/--spacing-4:\s*var\(--sp-4\)/);
+    expect(sheet).toMatch(/'z-sheet [^']*\bpx-card\b/);
+    expect(readFileSync(path.join(UI, 'styles', 'theme.css'), 'utf8')).toMatch(/--spacing-card:\s*var\(--pad-card\)/);
+    expect(tokens).toMatch(/--pad-card:\s*var\(--sp-4\);/);
     const gutter = px('var(--sp-4)');
     // Send: its inline padding and border around the wider of its faces. The busy face draws dots only.
     const busyFace = dots * px(words('.dlg-reply-wait i', 'width')[0]) + (dots - 1) * px(words('.dlg-reply-wait', 'gap')[0]);

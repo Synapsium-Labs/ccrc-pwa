@@ -17,9 +17,10 @@
 //
 // No rows and nothing unreadable → nothing at all, so an ordinary session
 // never pays a line for it.
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { FOCUS_RING } from '../lib/focus';
+import { useNow } from '../lib/use-now';
 import { CollapsibleStrip } from '../primitives/collapsible-strip';
 import { Meter } from '../primitives/meter';
 import type { WorkflowAgentView, WorkflowView } from '../../../shared/workflows';
@@ -76,18 +77,6 @@ function meterOf(w: WorkflowView): { pct: number | null; band: 'ok' | 'warn' | '
   const band = w.state === 'failed' || w.state === 'killed' ? 'crit' : (w.failed ?? 0) > 0 ? 'warn' : 'ok';
   if (w.done === null || w.total === null) return { pct: null, band };
   return { pct: w.total === 0 ? 0 : (w.done / w.total) * 100, band };
-}
-
-/** Ticks once a second while a running row has a start to count from. */
-function useNow(active: boolean): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!active) return undefined;
-    setNow(Date.now());
-    const t = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(t);
-  }, [active]);
-  return now;
 }
 
 /** The collapsed strip's lines: a glance, so a few; the head counts them all
@@ -212,7 +201,8 @@ export function WorkflowStrip({
   unreadable?: boolean;
 }): ReactNode {
   const ticking = workflows.some((w) => w.state === 'running' && w.startedAt !== null);
-  const now = useNow(ticking);
+  // Ticks once a second while a running row has a start to count from.
+  const now = useNow(1000, ticking);
   if (workflows.length === 0 && !unreadable) return null;
   // Running rows first: a finished one (gone in 30 s) never pushes a running
   // one behind the "+N more".

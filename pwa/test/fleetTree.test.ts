@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import type { FleetSession, RunSummary } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
 import { cardsOf, coordinationLine, coordinationOf, fleetTree, workingOn } from '../src/fleet/fleetTree';
+import { STATE_WORD } from '../src/fleet/sessionFacts';
 import { childOfRunLabel } from '../src/fleet/runWords';
 
 const COORD = 'lane-a-project-a';
@@ -147,14 +148,17 @@ describe('the indicator — whose code a row works on (acceptance 2)', () => {
 describe('coordinationOf — the session header\'s facts', () => {
   it('a cross-project child: working on its project, coordinated from its coordinator, with the run that says so', () => {
     const c = coordinationOf(crossChild('project-a'), [coordinator, crossChild('project-a')], runs);
-    expect(c).toEqual({ workingOn: 'project-b', coordinator: 'the coordinator', card: 'project-a', run: runs[1] });
+    expect(c).toEqual({ workingOn: 'project-b', coordinator: 'the coordinator', card: 'project-a', run: runs[1],
+      // D-5545: the header links to the coordinator and says its state in the row's own words.
+      coordinatorId: COORD, coordinatorState: STATE_WORD[coordinator.bucket] });
     expect(coordinationLine(c!).text)
       .toBe('working on project-b · coordinated from the coordinator · port-api · wave 5 of 7 · run #41');
   });
 
   it('a same-project child carries its run and its coordinator, and no working-on', () => {
     expect(coordinationOf(sameChild, [coordinator, sameChild], runs))
-      .toEqual({ workingOn: null, coordinator: 'the coordinator', card: 'project-a', run: runs[0] });
+      .toEqual({ workingOn: null, coordinator: 'the coordinator', card: 'project-a', run: runs[0],
+        coordinatorId: COORD, coordinatorState: STATE_WORD[coordinator.bucket] });
     expect(coordinationLine(coordinationOf(sameChild, [coordinator, sameChild], runs)!).text)
       .toBe('coordinated from the coordinator · tidy-docs · wave 1 of 2 · run #40');
   });
@@ -162,7 +166,8 @@ describe('coordinationOf — the session header\'s facts', () => {
   it('a coordinator the fleet does not carry is named by the project it sits in, never guessed', () => {
     const r = [run({ id: 41, sessionId: 'lane-b-project-b-quiet-river', claimedBy: 'lane-c-gone' })];
     const c = coordinationOf(crossChild('project-a'), [crossChild('project-a')], r)!;
-    expect(c).toEqual({ workingOn: 'project-b', coordinator: null, card: 'project-a', run: r[0] });
+    expect(c).toEqual({ workingOn: 'project-b', coordinator: null, card: 'project-a', run: r[0],
+      coordinatorId: null, coordinatorState: null });
     expect(coordinationLine(c).text).toBe('working on project-b · coordinated from project-a · port-api · wave 5 of 7 · run #41');
   });
 

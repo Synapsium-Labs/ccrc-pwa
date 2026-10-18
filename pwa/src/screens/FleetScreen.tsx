@@ -405,7 +405,6 @@ export function FleetScreen({
                 projected={projected}
                 placement={projects.placementFor(g.project)}
                 poolFor={projects.poolFor}
-                repoFor={projects.repoFor}
                 adding={projects.adding.has(g.project)}
                 collapsed={folded.has(g.project)}
                 onToggle={toggleFold}

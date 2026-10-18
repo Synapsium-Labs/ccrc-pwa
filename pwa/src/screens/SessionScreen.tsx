@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
 import { backgroundOnlyRefusal, repoLabel, sessionWithCoordinator, substrateFault, type FleetSession, type RouteField, type SessionStatus } from '../../../shared/api';
-import { ATTENTION_DOT, Button, MailStrip, Skeleton, TaskStrip, WorkflowStrip, toast } from '@ccrc/ui';
+import { ATTENTION_DOT, Button, MailStrip, Skeleton, TaskStrip, WorkflowStrip, toast, useNow } from '@ccrc/ui';
 import { staleFor } from '../session/taskStaleness';
 import { SwapSheet } from '../fleet/SwapSheet';
 import { ArchiveSheet, restoreSession } from '../fleet/ArchiveSheet';
@@ -27,7 +27,11 @@ import { useQueuedRoute } from '../session/useQueuedRoute';
 import { routeView } from '../session/routeView';
 import { substrateFaultTitle } from '../fleet/substrateWords';
 import { SessionHeader } from '../session/SessionHeader';
-import { coordinationLine, coordinationOf } from '../fleet/fleetTree';
+import { childRunContext, coordinationOf, parentIdOf } from '../fleet/fleetTree';
+import { sessionFacts } from '../fleet/sessionFacts';
+import { coordPresence } from '../fleet/coordWords';
+import { orphanGuidance } from '../fleet/orphanWords';
+import { placementOfRow, poolOfPlacement } from '../fleet/placementWords';
 import { isRunClosed } from '../fleet/runWords';
 import { HistoryTab } from '../session/HistoryTab';
 import { TerminalDrawer } from '../session/TerminalDrawer';
@@ -182,6 +186,7 @@ export function SessionScreen({
   // the same sessions and active runs the fleet's rows are drawn from.
   const fleetSessions = useFleet((s) => s.sessions);
   const fleetRuns = useFleet((s) => s.runs);
+  const fleetFrameSeen = useFleet((s) => s.fleetFrameSeen);
 
   const kbInset = useKeyboardInsets();
   const [restarting, setRestarting] = useState(false);
@@ -256,9 +261,24 @@ export function SessionScreen({
   // for this project in that read, or a row whose `repo` is not `named` —
   // all three collapse deliberately at `repoLabel`, the one reader.
   const repo = repoLabel(projects?.find((r) => r.name === project)?.repo);
-  const coordinated = live === null ? null
-    : coordinationOf(live, fleetSessions, fleetRuns.filter((r) => !isRunClosed(r)));
-  const coordination = coordinated === null ? null : coordinationLine(coordinated);
+  const activeRuns = fleetRuns.filter((r) => !isRunClosed(r));
+  const coordination = live === null ? null : coordinationOf(live, fleetSessions, activeRuns);
+  // D-5545: the header's facts, from the model the fleet card reads, over the same inputs the card is given —
+  // the active run and coordinator (`childRunContext`), whose code (`coordinationOf`), the project's pool
+  // (`placementOfRow`, the cards' own spelling) and the coordinator's presence (`coordPresence`, the orphan
+  // marker's) — so the header can never know less than the card.
+  const lookup = (sid: string): FleetSession | null => fleetSessions.find((x) => x.id === sid) ?? null;
+  const parentId = live === null ? null : parentIdOf(live, activeRuns);
+  const factsNow = useNow(30_000);
+  const presence = parentId === null ? null : coordPresence(parentId, lookup(parentId), fleetFrameSeen);
+  const facts = live === null ? null : sessionFacts({
+    session: live, now: factsNow, roster,
+    projectPool: poolOfPlacement(placementOfRow(projects?.find((r) => r.name === live.project))),
+    childRun: childRunContext(live, activeRuns, lookup),
+    workingOn: coordination?.workingOn ?? null,
+    coordinator: presence,
+    coordinatorTitle: parentId === null || presence === null ? null : orphanGuidance(parentId, presence),
+  });
 
   // Routing slice 6, Task 4: once `live.route` rides the wire, the pickers'
   // active row and the header's queued badge are DERIVED from it instead of
@@ -450,6 +470,7 @@ export function SessionScreen({
         roster={roster}
         repo={repo}
         coordination={coordination}
+        facts={facts}
         onInterrupt={(source) => void interrupt(source)}
         onOpenTerminal={openTerminal}
         onBack={() => navigate('/')}

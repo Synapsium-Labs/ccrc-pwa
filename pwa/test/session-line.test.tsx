@@ -9,11 +9,27 @@ import { fleetSession, hibernatedSession } from './fleetFixture';
 import { SessionLine } from '../src/fleet/SessionLine';
 import { childMarkOf, childOfRunLabel, type ChildMarkRead } from '../src/fleet/runWords';
 import { TEST_ROSTER } from './rosterFixture';
+import { SessionDetails } from '../src/session/SessionDetails';
+import { sessionFacts, type FactInput } from '../src/fleet/sessionFacts';
 
 // vitest runs without globals, so RTL's auto-cleanup never registers itself
 // (see test/message-links.test.tsx et al.) — without this, rerender/multi-render
 // tests below leak DOM across `it` blocks.
 afterEach(cleanup);
+
+// D-5545: a row is a GLANCE now — its name, its state word, one context fact and at most one marker. Every other
+// fact moved to the session header's details, which read the same model (`sessionFacts`). `header()` renders those
+// details as a wide header does (the details row always open), so a fact's own cases pin it where it lives now.
+let wideSpy: { mockRestore: () => void } | null = null;
+afterEach(() => { wideSpy?.mockRestore(); wideSpy = null; });
+const header = (session: FleetSession, more: Omit<FactInput, 'session' | 'now'> & { now?: number } = {}) => {
+  wideSpy ??= vi.spyOn(window, 'matchMedia').mockImplementation((q: string) => ({
+    matches: q.includes('min-width: 900px'), media: q, onchange: null,
+    addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+  }) as unknown as MediaQueryList);
+  const { now, ...rest } = more;
+  return render(<SessionDetails facts={sessionFacts({ session, now: now ?? Date.now(), ...rest })} coordination={null} />);
+};
 
 const s = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ id: 'demo-quiet-mesa', workdir: '/w/demo/quiet-mesa', workspace: 'quiet-mesa', ...over }));
 
@@ -79,23 +95,28 @@ describe('state', () => {
   });
 
   it('renders the cleanup bucket with its merge facts and no destructive control', () => {
-    render(<SessionLine session={s({
-      bucket: 'cleanup', archivedBytes: 1_200_000_000,
-      pr: { phase: 'merged', number: 157 } as never,
-    })} onOpen={() => {}} onActions={() => {}} />);
-    expect(screen.getByText(/#157/)).toBeTruthy();
+    const session = s({ bucket: 'cleanup', archivedBytes: 1_200_000_000, pr: { phase: 'merged', number: 157 } as never });
+    render(<SessionLine session={session} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('merged')).toBeTruthy();
+    expect(screen.getByText('PR #157')).toBeTruthy();
+    cleanup();
+    header(session);
+    // The merged PR is named once in the details (its keycap aside) — no second bare `#157` cleanup cell.
+    expect(screen.getByText('PR #157')).toBeTruthy();
     expect(screen.getByText(/1\.2 GB/)).toBeTruthy();
     expect(screen.queryByRole('button', { name: /remove|delete/i })).toBeNull();
   });
 
   it('shows the task tally, and hides it on a dead session', () => {
     const tasks = { done: 4, total: 7, running: 0, active: null };
-    const { rerender } = render(
-      <SessionLine session={s({ tasks })} onOpen={() => {}} onActions={() => {}} />);
-    expect(screen.getByText('4/7')).toBeInTheDocument();
-    rerender(<SessionLine session={s({ tasks, status: 'dead' })}
-                          onOpen={() => {}} onActions={() => {}} />);
-    expect(screen.queryByText('4/7')).not.toBeInTheDocument();
+    render(<SessionLine session={s({ tasks })} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.queryByText(/4\/7/)).not.toBeInTheDocument(); // D-5545: a header fact, not a card one
+    cleanup();
+    header(s({ tasks }));
+    expect(screen.getByText('4/7 tasks')).toBeInTheDocument();
+    cleanup();
+    header(s({ tasks, status: 'dead' }));
+    expect(screen.queryByText('4/7 tasks')).not.toBeInTheDocument();
   });
 
   it('omits the tally and warn cells entirely when there is nothing to show', () => {
@@ -113,10 +134,10 @@ describe('state', () => {
     const limits = { five: 82, seven: 10 };
     const { rerender } = render(
       <SessionLine session={s({ limits })} onOpen={() => {}} onActions={() => {}} />);
-    expect(screen.getByLabelText('account limit near')).toBeInTheDocument();
+    expect(screen.getByTitle('account limit near')).toHaveTextContent('limit 82%');
     rerender(<SessionLine session={s({ limits, status: 'dead' })}
                           onOpen={() => {}} onActions={() => {}} />);
-    expect(screen.queryByLabelText('account limit near')).not.toBeInTheDocument();
+    expect(screen.queryByTitle('account limit near')).not.toBeInTheDocument();
   });
 
   // The 5h-critical case above never exercises the `seven` half of the `||` —
@@ -125,7 +146,7 @@ describe('state', () => {
   it('warns when only the 7d window is critical', () => {
     render(<SessionLine session={s({ limits: { five: 10, seven: 82 } })}
                         onOpen={() => {}} onActions={() => {}} />);
-    expect(screen.getByLabelText('account limit near')).toBeInTheDocument();
+    expect(screen.getByTitle('account limit near')).toBeInTheDocument();
   });
 });
 
@@ -326,86 +347,71 @@ describe('the selected row', () => {
     expect(button).not.toHaveAttribute('aria-current');
   });
 
-  it('KEEPS the inline account hue on the selected row (D-5455)', () => {
-    // It used to be dropped there: the reverse-video slab put the hue at
-    // 1.46:1. The selected row is the accent tint now, on which the gate
-    // measures every lane hue, so the meta keeps its identity colour — the
-    // same inline hue as the unselected row.
-    // With the roster, so the colour is the lane's own hue and not the
-    // no-roster fallback both renders would share.
+  it('carries no account cell, selected or not — the lane is a header fact now (D-5545)', () => {
+    // D-5455 kept the lane hue on the selected row; D-5545 moved the lane off the card altogether (the header's
+    // lane chip carries the hue), so neither row has an account cell to colour.
     const { container, rerender } = render(
       <SessionLine session={s()} roster={TEST_ROSTER} onOpen={() => {}} onActions={() => {}} />);
-    const unselected = container.querySelector<HTMLElement>('.sess-acct')!.style.color;
-    expect(unselected).toMatch(/^var\(--acct-[a-z]+\)$/);
+    expect(container.querySelector('.sess-acct')).toBeNull();
     rerender(<SessionLine session={s()} roster={TEST_ROSTER} selected onOpen={() => {}} onActions={() => {}} />);
-    expect(container.querySelector<HTMLElement>('.sess-acct')!.style.color).toBe(unselected);
+    expect(container.querySelector('.sess-acct')).toBeNull();
   });
 });
 
+// D-5545: the lane left the card. Away from its pinned account, the header's details say where it runs and
+// where it is pinned, in words (assistive tech cannot see a colour), and the header's lane chip carries the same
+// sentence as its title.
 describe('away from home', () => {
-  it('marks the account chip when the session is not on its pinned account', () => {
-    const { container } = render(
-      <SessionLine session={s({ wrapper: 'claude2', home: 'claude' })}
-                   onOpen={() => {}} onActions={() => {}} />);
-    expect(container.querySelector('.sess-acct')).toHaveAttribute('data-away');
+  it('says where it runs and where it is pinned when the session is not on its pinned account', () => {
+    header(s({ wrapper: 'claude2', home: 'claude' }), { roster: TEST_ROSTER });
+    expect(screen.getByText('running on team·alt, pinned to team·max')).toBeInTheDocument();
   });
 
-  it('does not mark it when the session is home', () => {
-    const { container } = render(
-      <SessionLine session={s({ wrapper: 'claude', home: 'claude' })}
-                   onOpen={() => {}} onActions={() => {}} />);
-    expect(container.querySelector('.sess-acct')).not.toHaveAttribute('data-away');
+  it('says nothing when the session is home', () => {
+    header(s({ wrapper: 'claude', home: 'claude' }), { roster: TEST_ROSTER });
+    expect(screen.queryByText(/pinned to/)).not.toBeInTheDocument();
   });
 
-  it('says so for assistive tech, which cannot see a colour', () => {
-    render(<SessionLine session={s({ wrapper: 'claude2', home: 'claude' })}
-                        onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER} />);
-    expect(screen.getByLabelText('running on team·alt, pinned to team·max')).toBeInTheDocument();
-  });
-
-  it('never marks a dead session — it is not running anywhere', () => {
-    const { container } = render(
-      <SessionLine session={s({ wrapper: 'claude2', home: 'claude', status: 'dead' })}
-                   onOpen={() => {}} onActions={() => {}} />);
-    expect(container.querySelector('.sess-acct')).not.toHaveAttribute('data-away');
+  it('never says so for a dead session — it is not running anywhere', () => {
+    header(s({ wrapper: 'claude2', home: 'claude', status: 'dead' }), { roster: TEST_ROSTER });
+    expect(screen.queryByText(/pinned to/)).not.toBeInTheDocument();
   });
 });
 
 // Task 7: the passive `⑂ N` glyph became a disclosure — tap it to see WHICH
 // subagents and for how long, rather than only how many.
+// D-5545: the disclosure is a header fact — the session header's details row carries it.
 describe('subagent disclosure', () => {
   it('renders a collapsed toggle with the count and a singular aria-label for one', () => {
-    render(<SessionLine session={s({ subagents: [{ name: 'reviewer', startedAt: 1 }] })}
-                        onOpen={() => {}} onActions={() => {}} />);
+    header(s({ subagents: [{ name: 'reviewer', startedAt: 1 }] }));
     const toggle = screen.getByRole('button', { name: '1 subagent' });
-    expect(toggle).toHaveTextContent('⑂ 1');
+    expect(toggle).toHaveTextContent('⑂ 1 subagent');
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
   });
 
   it('pluralizes the aria-label for more than one', () => {
-    render(<SessionLine session={s({
+    header(s({
       subagents: [{ name: 'a', startedAt: 1 }, { name: 'b', startedAt: 2 }],
-    })} onOpen={() => {}} onActions={() => {}} />);
-    expect(screen.getByRole('button', { name: '2 subagents' })).toHaveTextContent('⑂ 2');
+    }));
+    expect(screen.getByRole('button', { name: '2 subagents' })).toHaveTextContent('⑂ 2 subagents');
   });
 
   it('renders no disclosure when subagents is null — no fresh hook data', () => {
-    render(<SessionLine session={s({ subagents: null })} onOpen={() => {}} onActions={() => {}} />);
+    header(s({ subagents: null }));
     expect(screen.queryByRole('button', { name: /subagent/ })).toBeNull();
   });
 
   // `[]` is a MEASUREMENT — fresh hook data, nothing running — and `null` is
   // no hook data. Both render nothing; neither is an error.
   it('shows no subagent disclosure when the hook reported an empty set', () => {
-    render(<SessionLine session={s({ subagents: [] })} onOpen={() => {}} onActions={() => {}} />);
+    header(s({ subagents: [] }));
     expect(screen.queryByRole('button', { name: /subagent/ })).toBeNull();
   });
 
   it('expands the subagent tally into named rows with elapsed time', async () => {
     const now = Date.now();
-    render(<SessionLine session={s({ bucket: 'working',
-      subagents: [{ name: 'code-reviewer', startedAt: now - 65_000 }] })}
-      onOpen={() => {}} onActions={() => {}} />);
+    header(s({ bucket: 'working',
+      subagents: [{ name: 'code-reviewer', startedAt: now - 65_000 }] }));
 
     expect(screen.queryByText('code-reviewer')).toBeNull();
     await userEvent.click(screen.getByRole('button', { name: /1 subagent/ }));
@@ -424,9 +430,7 @@ describe('subagent disclosure', () => {
   // VoiceOver the whole row is one element and the disclosure is unreachable.
   // getByRole cannot see that, so these assert the DOM shape directly.
   it('is a real <button>, not a control nested inside another control', () => {
-    const { container } = render(
-      <SessionLine session={s({ subagents: [{ name: 'reviewer', startedAt: 1 }] })}
-                   onOpen={() => {}} onActions={() => {}} />);
+    const { container } = header(s({ subagents: [{ name: 'reviewer', startedAt: 1 }] }));
     const toggle = screen.getByRole('button', { name: '1 subagent' });
     expect(toggle.tagName).toBe('BUTTON');
     expect(toggle).not.toHaveAttribute('tabindex');
@@ -441,8 +445,7 @@ describe('subagent disclosure', () => {
   // for exactly this. Round 1 had neither, and the list was not even a DOM
   // sibling of the toggle.
   it('points aria-controls at the list it opens', async () => {
-    render(<SessionLine session={s({ subagents: [{ name: 'reviewer', startedAt: 1 }] })}
-                        onOpen={() => {}} onActions={() => {}} />);
+    header(s({ subagents: [{ name: 'reviewer', startedAt: 1 }] }));
     const toggle = screen.getByRole('button', { name: '1 subagent' });
     await userEvent.click(toggle);
     const id = toggle.getAttribute('aria-controls');
@@ -458,8 +461,7 @@ describe('subagent disclosure', () => {
   // state a user would follow it from — the collapsed row. `aria-expanded`
   // carries the whole contract there.
   it('carries no aria-controls while the list it would name does not exist', () => {
-    render(<SessionLine session={s({ subagents: [{ name: 'reviewer', startedAt: 1 }] })}
-                        onOpen={() => {}} onActions={() => {}} />);
+    header(s({ subagents: [{ name: 'reviewer', startedAt: 1 }] }));
     const toggle = screen.getByRole('button', { name: '1 subagent' });
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
     expect(toggle).not.toHaveAttribute('aria-controls');
@@ -472,10 +474,8 @@ describe('subagent disclosure', () => {
   // is native — and the click it dispatches bubbles into `.sess-body`'s
   // forwarder exactly as a tap does, which is what this also pins: pressing
   // Enter must toggle the disclosure and NOT navigate to the session.
-  it('toggles on Enter and on Space, without opening the session', async () => {
-    const onOpen = vi.fn();
-    render(<SessionLine session={s({ subagents: [{ name: 'reviewer', startedAt: 1 }] })}
-                        onOpen={onOpen} onActions={() => {}} />);
+  it('toggles on Enter and on Space', async () => {
+    header(s({ subagents: [{ name: 'reviewer', startedAt: 1 }] }));
     const toggle = screen.getByRole('button', { name: '1 subagent' });
     toggle.focus();
 
@@ -486,18 +486,16 @@ describe('subagent disclosure', () => {
     await userEvent.keyboard(' ');
     expect(screen.queryByText('reviewer')).toBeNull();
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
-
-    expect(onOpen).not.toHaveBeenCalled();
   });
 
   it('lists every subagent, not just the first', async () => {
     const now = Date.now();
-    render(<SessionLine session={s({
+    header(s({
       subagents: [
         { name: 'code-reviewer', startedAt: now - 65_000 },
         { name: 'test-runner', startedAt: now - 5_000 },
       ],
-    })} onOpen={() => {}} onActions={() => {}} />);
+    }));
 
     await userEvent.click(screen.getByRole('button', { name: /2 subagents/ }));
     expect(screen.getByText('code-reviewer')).toBeInTheDocument();
@@ -509,23 +507,10 @@ describe('subagent disclosure', () => {
   // would be a claim this row cannot source — a row is exactly two children,
   // the name and the elapsed time, never a third.
   it('shows no invented state — a name and an elapsed time, nothing else', async () => {
-    render(<SessionLine session={s({ subagents: [{ name: 'reviewer', startedAt: Date.now() }] })}
-                        onOpen={() => {}} onActions={() => {}} />);
+    header(s({ subagents: [{ name: 'reviewer', startedAt: Date.now() }] }));
     await userEvent.click(screen.getByRole('button', { name: /1 subagent/ }));
     const row = screen.getByText('reviewer').closest('.sess-subagent-row')!;
     expect(row.children).toHaveLength(2);
-  });
-
-  // `.sess-body` (the block the row's tap surface now lives on) forwards a
-  // click to `open()` only when no real control was hit — drop its
-  // `closest('button')` guard and tapping the toggle navigates away instead
-  // of expanding.
-  it('does not open the session when the toggle is tapped', async () => {
-    const onOpen = vi.fn();
-    render(<SessionLine session={s({ subagents: [{ name: 'reviewer', startedAt: Date.now() }] })}
-                        onOpen={onOpen} onActions={() => {}} />);
-    await userEvent.click(screen.getByRole('button', { name: /1 subagent/ }));
-    expect(onOpen).not.toHaveBeenCalled();
   });
 
   // The other half of that guard: the dead space between meta cells still
@@ -540,33 +525,15 @@ describe('subagent disclosure', () => {
     expect(onOpen).toHaveBeenCalledWith('demo-quiet-mesa');
   });
 
-  // …and the list itself is not dead space. It renders INSIDE .sess-body, so
-  // the forwarder used to navigate for any tap on it: the operator opened the
-  // disclosure, reached for a name, and lost the fleet screen. A truncated
-  // name also had no way to be read — you could not even select it.
-  it('does not open the session when a subagent row is tapped', async () => {
-    const onOpen = vi.fn();
-    render(<SessionLine session={s({ subagents: [{ name: 'code-reviewer', startedAt: Date.now() }] })}
-                        onOpen={onOpen} onActions={() => {}} />);
-    await userEvent.click(screen.getByRole('button', { name: /1 subagent/ }));
-    onOpen.mockClear();
-
-    await userEvent.click(screen.getByText('code-reviewer'));
-    await userEvent.click(document.querySelector('.sess-subagent-row')!);
-    expect(onOpen).not.toHaveBeenCalled();
-  });
-
   it('carries the full name in a title, since the row ellipsises it', async () => {
-    render(<SessionLine session={s({ subagents: [{ name: 'a-very-long-subagent-name', startedAt: 1 }] })}
-                        onOpen={() => {}} onActions={() => {}} />);
+    header(s({ subagents: [{ name: 'a-very-long-subagent-name', startedAt: 1 }] }));
     await userEvent.click(screen.getByRole('button', { name: /1 subagent/ }));
     expect(screen.getByText('a-very-long-subagent-name'))
       .toHaveAttribute('title', 'a-very-long-subagent-name');
   });
 
   it('collapses again on a second tap', async () => {
-    render(<SessionLine session={s({ subagents: [{ name: 'reviewer', startedAt: Date.now() }] })}
-                        onOpen={() => {}} onActions={() => {}} />);
+    header(s({ subagents: [{ name: 'reviewer', startedAt: Date.now() }] }));
     const toggle = screen.getByRole('button', { name: /1 subagent/ });
     await userEvent.click(toggle);
     expect(screen.getByText('reviewer')).toBeInTheDocument();
@@ -575,9 +542,8 @@ describe('subagent disclosure', () => {
   });
 
   it('never shows the disclosure on a dead session, even with stale hook data', () => {
-    render(<SessionLine session={s({ status: 'dead', bucket: 'dead',
-      subagents: [{ name: 'reviewer', startedAt: 1 }] })}
-      onOpen={() => {}} onActions={() => {}} />);
+    header(s({ status: 'dead', bucket: 'dead',
+      subagents: [{ name: 'reviewer', startedAt: 1 }] }));
     expect(screen.queryByRole('button', { name: /subagent/ })).toBeNull();
   });
 });
@@ -590,8 +556,7 @@ describe('subagent elapsed time', () => {
   /** Render one subagent started `ageMs` ago, expand, return its elapsed cell. */
   const elapsedFor = async (startedAt: number): Promise<string> => {
     cleanup();
-    render(<SessionLine session={s({ subagents: [{ name: 'sub', startedAt }] })}
-                        onOpen={() => {}} onActions={() => {}} />);
+    header(s({ subagents: [{ name: 'sub', startedAt }] }));
     await userEvent.click(screen.getByRole('button', { name: /1 subagent/ }));
     return document.querySelector('.sess-subagent-elapsed')!.textContent!;
   };
@@ -631,11 +596,16 @@ describe('subagent elapsed time', () => {
 });
 
 describe('ask summary', () => {
-  it('shows the muted ask line when waiting and a summary is present', () => {
-    render(<SessionLine session={s({ hookState: 'waiting', askSummary: 'Deploy now?' })}
-                        onOpen={() => {}} onActions={() => {}} />);
-    const line = screen.getByText('Deploy now?');
-    expect(line).toHaveClass('sess-ask');
+  // D-5545: the question left the card (it was a third line, clipped to an ellipsis); the card's marker says
+  // `needs you` and the session header's details carry the question itself.
+  it('puts the question in the header, never on the card', () => {
+    const session = s({ bucket: 'attention', hookState: 'waiting', askSummary: 'Deploy now?' });
+    render(<SessionLine session={session} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.queryByText(/Deploy now\?/)).toBeNull();
+    expect(screen.getByText('needs you')).toBeInTheDocument();
+    cleanup();
+    header(session);
+    expect(screen.getByText('asks: Deploy now?')).toBeInTheDocument();
   });
 
   it('is absent when waiting but no summary has landed yet', () => {
@@ -654,10 +624,15 @@ describe('ask summary', () => {
 });
 
 describe('held chip', () => {
-  it('shows the held chip with the reason verbatim', () => {
+  // D-5545: a hold no run explains reads `held` on the card — the reason is bookkeeping text, verbatim in the
+  // cell's title and in the header's details.
+  it('shows `held` on the card and the reason verbatim in the header', () => {
     render(<SessionLine session={s({ held: 'program:agent-evals wave:2/4' })}
                         onOpen={() => {}} onActions={() => {}} />);
-    expect(screen.getByText('program:agent-evals wave:2/4')).toBeInTheDocument();
+    expect(document.querySelector('[data-held]')).toHaveTextContent(/^held$/);
+    cleanup();
+    header(s({ held: 'program:agent-evals wave:2/4' }));
+    expect(screen.getByText('held: program:agent-evals wave:2/4')).toBeInTheDocument();
   });
 
   it('shows no chip when unheld — null is the wire default, not a state to render', () => {
@@ -678,16 +653,15 @@ describe('held chip', () => {
 // The ask pre-emption lane's chip (design doc §2.8, Task 19). Same
 // `data-*`/`title` pattern as the held chip above, and deliberately the same
 // KIND of cell — a short, verbatim fact, informational only.
+// D-5545: the ask chip is a header fact (the card's marker says `with coordinator` while a parent holds it).
 describe('ask chip', () => {
   it('shows "held — <parent> may answer" while a parent may still pre-empt', () => {
-    render(<SessionLine session={s({ ask: { state: 'held', parentId: 'coord-1', answeredBy: null } })}
-                        onOpen={() => {}} onActions={() => {}} />);
+    header(s({ ask: { state: 'held', parentId: 'coord-1', answeredBy: null } }));
     expect(screen.getByText('held — coord-1 may answer')).toBeInTheDocument();
   });
 
   it('shows "ruled by <parent>" once a parent has answered', () => {
-    render(<SessionLine session={s({ ask: { state: 'answered', parentId: 'coord-1', answeredBy: 'coord-1' } })}
-                        onOpen={() => {}} onActions={() => {}} />);
+    header(s({ ask: { state: 'answered', parentId: 'coord-1', answeredBy: 'coord-1' } }));
     expect(screen.getByText('ruled by coord-1')).toBeInTheDocument();
   });
 
@@ -699,9 +673,9 @@ describe('ask chip', () => {
   // inside the same grace window — and that case rendered "ruled by
   // <parent-session-id>", naming a session that did not answer.
   it('shows "answered by you" when the OPERATOR answered their own held ask (F1)', () => {
-    render(<SessionLine session={s({
+    header(s({
       ask: { state: 'answered', parentId: 'coord-1', answeredBy: ASK_OPERATOR_PRINCIPAL },
-    })} onOpen={() => {}} onActions={() => {}} />);
+    }));
     expect(screen.getByText('answered by you')).toBeInTheDocument();
     // …and NEVER the parent's name: the parent is still on the row (it is who
     // MAY have answered), and it is not who did.
@@ -714,9 +688,9 @@ describe('ask chip', () => {
     // The general property, not the two shipped principals: the cell reads
     // the field that MEANS "who ruled". A chip built from `parentId` renders
     // `coord-1` here and passes nothing.
-    render(<SessionLine session={s({
+    header(s({
       ask: { state: 'answered', parentId: 'coord-1', answeredBy: 'coord-2' },
-    })} onOpen={() => {}} onActions={() => {}} />);
+    }));
     expect(screen.getByText('ruled by coord-2')).toBeInTheDocument();
     expect(screen.queryByText('ruled by coord-1')).toBeNull();
   });
@@ -725,9 +699,9 @@ describe('ask chip', () => {
     // Reachable, not hypothetical: `settleAsk` is guarded on BOTH answer
     // routes precisely because it can throw after the digit has landed,
     // leaving `answeredBy` null on an `answered` row.
-    render(<SessionLine session={s({
+    header(s({
       ask: { state: 'answered', parentId: 'coord-1', answeredBy: null },
-    })} onOpen={() => {}} onActions={() => {}} />);
+    }));
     expect(screen.getByText('answered')).toBeInTheDocument();
     expect(screen.queryByText(/ruled by/)).toBeNull();
     expect(document.querySelector('[data-ask-state]')).toHaveAttribute(
@@ -737,16 +711,14 @@ describe('ask chip', () => {
   });
 
   it('renders neither chip when the session carries no ask — byte-identical to today', () => {
-    const { container } = render(<SessionLine session={s({ ask: null })}
-                                                onOpen={() => {}} onActions={() => {}} />);
+    const { container } = header(s({ ask: null }));
     expect(container.querySelector('.sess-ask-state')).not.toBeInTheDocument();
     expect(screen.queryByText(/may answer/)).toBeNull();
     expect(screen.queryByText(/ruled by/)).toBeNull();
   });
 
   it('marks the chip data-ask-state for tests, and carries the full sentence as a title', () => {
-    render(<SessionLine session={s({ ask: { state: 'held', parentId: 'coord-1', answeredBy: null } })}
-                        onOpen={() => {}} onActions={() => {}} />);
+    header(s({ ask: { state: 'held', parentId: 'coord-1', answeredBy: null } }));
     const chip = document.querySelector('[data-ask-state]');
     expect(chip).not.toBeNull();
     expect(chip).toHaveAttribute('data-ask-state', 'held');
@@ -759,11 +731,11 @@ describe('ask chip', () => {
     // collision risk: `.sess-ask` already exists as the askSummary third line
     // (`describe('ask summary')` above). Both can render on the same row at
     // once, and neither may shadow the other's class or text.
-    render(<SessionLine session={s({
+    header(s({
       hookState: 'waiting', askSummary: 'Deploy now?',
       ask: { state: 'held', parentId: 'coord-1', answeredBy: null },
-    })} onOpen={() => {}} onActions={() => {}} />);
-    expect(screen.getByText('Deploy now?')).toHaveClass('sess-ask');
+    }));
+    expect(screen.getByText('asks: Deploy now?')).toHaveClass('chat-fact');
     expect(screen.getByText('held — coord-1 may answer')).toHaveClass('sess-ask-state');
   });
 
@@ -807,7 +779,7 @@ describe('degraded (unmeasured identity) note', () => {
   it('shows no note on a fully-measured row — the wire default, not a state to render', () => {
     render(<SessionLine session={s({ unmeasured: [] })} onOpen={() => {}} onActions={() => {}} />);
     expect(screen.queryByText('unreadable')).toBeNull();
-    expect(document.querySelector('[data-unmeasured]')).toBeNull();
+    expect(document.querySelector('[data-marker="unreadable"]')).toBeNull();
   });
 
   it('shows the note when the row carries an unmeasured identity field', () => {
@@ -817,7 +789,7 @@ describe('degraded (unmeasured identity) note', () => {
 
   it('marks the note data-unmeasured for tests, and carries which field(s) as a title', () => {
     render(<SessionLine session={s({ unmeasured: ['wrapper', 'workdir'] })} onOpen={() => {}} onActions={() => {}} />);
-    const note = document.querySelector('[data-unmeasured]');
+    const note = document.querySelector('[data-marker="unreadable"]');
     expect(note).not.toBeNull();
     expect(note).toHaveAttribute('title', 'registry wrapper/workdir temporarily unreadable — retrying');
   });
@@ -826,7 +798,7 @@ describe('degraded (unmeasured identity) note', () => {
     render(<SessionLine session={s({ unmeasured: ['uuid'], held: 'program:x wave:1/4' })}
                         onOpen={() => {}} onActions={() => {}} />);
     expect(screen.getByText('unreadable')).toBeInTheDocument();
-    expect(screen.getByText('program:x wave:1/4')).toBeInTheDocument();
+    expect(document.querySelector('[data-held]')).toHaveTextContent('held');
   });
 
   // Blocking review finding 2: a LIVE `fleet` frame is cast, not revived
@@ -843,7 +815,7 @@ describe('degraded (unmeasured identity) note', () => {
       <SessionLine session={raw as unknown as FleetSession} onOpen={() => {}} onActions={() => {}} />,
     )).not.toThrow();
     expect(screen.queryByText('unreadable')).toBeNull();
-    expect(document.querySelector('[data-unmeasured]')).toBeNull();
+    expect(document.querySelector('[data-marker="unreadable"]')).toBeNull();
   });
 });
 
@@ -898,44 +870,43 @@ describe('substrate chip — the console cannot see this session, and says so (s
 });
 
 // `WORD` was exported "so FleetScreen's bucket-section headers use the
-// identical words" — FleetScreen imports nothing from this file and renders
+// identical words" — FleetScreen imported nothing from that file and renders
 // its own SECTION_LABEL ('Attention'/'Cleanup'/'Dead'), so the export had zero
 // importers and the comment pointed a maintainer retitling a HEADING at the
-// table that spells every ROW's word. Checked by reading, the way
-// seen.test.ts checks its own rationale block.
+// table that spells every ROW's word. D-5545 moved the table to the facts model
+// (`sessionFacts.ts`'s `STATE_WORD`), which the card and the header both read,
+// and gave it exactly one other reader — the coordinator's state in the header's
+// coordination row (`fleetTree.ts`). Checked by reading.
 describe('the row\'s state vocabulary', () => {
   const srcDir = path.join(import.meta.dirname, '..', 'src');
-  const src = readFileSync(path.join(srcDir, 'fleet', 'SessionLine.tsx'), 'utf8');
-  const doc = /\/\*\*((?:(?!\*\/)[\s\S])*)\*\/\s*(?:export )?const WORD/
+  const src = readFileSync(path.join(srcDir, 'fleet', 'sessionFacts.ts'), 'utf8');
+  const doc = /\/\*\*((?:(?!\*\/)[\s\S])*)\*\/\s*export const STATE_WORD/
     .exec(src)![1]!
     .replace(/^[ \t]*\*[ \t]?/gm, '')
     .replace(/\s+/g, ' ');
 
-  /** Every .ts/.tsx under src that imports the name WORD from this module. */
+  /** Every .ts/.tsx under src that imports the name STATE_WORD. */
   const importers = (function walk(dir: string): string[] {
     return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
       const full = path.join(dir, e.name);
       if (e.isDirectory()) return walk(full);
       if (!/\.tsx?$/.test(e.name)) return [];
       const text = readFileSync(full, 'utf8');
-      return /import\s*\{[^}]*\bWORD\b[^}]*\}\s*from\s*['"][^'"]*SessionLine['"]/.test(text)
-        ? [path.relative(srcDir, full)]
-        : [];
+      return /import\s*\{[^}]*\bSTATE_WORD\b[^}]*\}\s*from/.test(text) ? [path.relative(srcDir, full)] : [];
     });
   })(srcDir);
 
-  it('is private, because nothing outside this file reads it', () => {
-    expect(importers).toEqual([]);
-    expect(src).not.toMatch(/export\s+const\s+WORD\b/);
+  it('lives in the facts model, and only the coordination row reads it from outside', () => {
+    expect(importers).toEqual([path.join('fleet', 'fleetTree.ts')]);
+    expect(readFileSync(path.join(srcDir, 'fleet', 'SessionLine.tsx'), 'utf8')).not.toMatch(/const WORD\b/);
   });
 
   it('does not name the fleet screen\'s section headings as its consumer', () => {
     // They are a different vocabulary on purpose — 'Cleanup' the heading vs
-    // `merged` the row word — and FleetScreen does not import this file.
+    // `merged` the row word — and FleetScreen does not import this table.
     expect(doc).not.toMatch(/identical words/i);
     expect(doc).not.toMatch(/bucket-section headers/i);
-    expect(readFileSync(path.join(srcDir, 'screens', 'FleetScreen.tsx'), 'utf8'))
-      .not.toMatch(/from '\.\.\/fleet\/SessionLine'/);
+    expect(readFileSync(path.join(srcDir, 'screens', 'FleetScreen.tsx'), 'utf8')).not.toMatch(/STATE_WORD/);
   });
 });
 
@@ -1066,14 +1037,16 @@ describe('the spawn chip (§1.6b)', () => {
     expect(cells[1]?.className).toContain('sess-spawn');
   });
 
-  it('does not clip the hold reason away — .sess-held is the one shrinkable cell', () => {
-    // §2.4 LENGTHENS the hold reason (` run:<id>`) in the same build, and
-    // `.sess-held` is the only cell with `overflow: hidden`/`text-overflow:
-    // ellipsis` and no `flex: none`. The two changes compound: a new cell that
-    // is not `flex: none` steals room from it first.
-    render(<SessionLine session={s({ spawnState: 'blocked', started: true, held: 'program:build8 wave:2/4 run:17' })}
-                        onOpen={() => {}} onActions={() => {}} />);
-    expect(document.querySelector('.sess-held')?.textContent).toBe('program:build8 wave:2/4 run:17');
+  it('keeps the hold beside a failed spawn — `held` on the card, the reason whole in the header (D-5545)', () => {
+    // §2.4 lengthened the hold reason (` run:<id>`), and on one squeezed line a spawn chip stole its room. The card
+    // now says `held` (the reason is bookkeeping) and the header's details carry it whole.
+    const session = s({ spawnState: 'blocked', started: true, held: 'program:build8 wave:2/4 run:17' });
+    render(<SessionLine session={session} onOpen={() => {}} onActions={() => {}} />);
+    expect(document.querySelector('.sess-held')?.textContent).toBe('held');
+    expect(chip()?.textContent).toBe('blocked');
+    cleanup();
+    header(session);
+    expect(document.querySelector('.sess-held')?.textContent).toBe('held: program:build8 wave:2/4 run:17');
   });
 
   it('reads both fields DEFENSIVELY — a live `fleet` frame is CAST, never revived', () => {
@@ -1159,19 +1132,20 @@ describe('the held cell is a door only when there is somewhere to go (Task 5)', 
   });
 });
 
+// D-5545: a header fact.
 describe('the graph chip', () => {
   it('renders graph N when the hook counted reads', () => {
-    render(<SessionLine session={s({ graphQueries: 4 })} onOpen={() => {}} onActions={() => {}} />);
+    header(s({ graphQueries: 4 }));
     expect(screen.getByText('graph 4')).toBeInTheDocument();
   });
 
   it('renders graph 0 — a measured zero is the finding, not the absence of one', () => {
-    render(<SessionLine session={s({ graphQueries: 0 })} onOpen={() => {}} onActions={() => {}} />);
+    header(s({ graphQueries: 0 }));
     expect(screen.getByText('graph 0')).toBeInTheDocument();
   });
 
   it('renders NO chip when the count is null — nothing was measured', () => {
-    render(<SessionLine session={s({ graphQueries: null })} onOpen={() => {}} onActions={() => {}} />);
+    header(s({ graphQueries: null }));
     expect(screen.queryByText(/^graph /)).toBeNull();
   });
 
@@ -1218,8 +1192,7 @@ describe('the graph chip', () => {
     // is about what to DO with the corpse, and a live-session read count is
     // not that. The count is non-null and non-zero here so that only the
     // `!dead` guard can be what hides it.
-    render(<SessionLine session={s({ graphQueries: 4, status: 'dead', bucket: 'dead' })}
-      onOpen={() => {}} onActions={() => {}} />);
+    header(s({ graphQueries: 4, status: 'dead', bucket: 'dead' }));
     expect(screen.queryByText(/^graph /)).toBeNull();
   });
 
@@ -1229,8 +1202,7 @@ describe('the graph chip', () => {
   // next reading is denials BESIDE queries — so the suffix rides the existing
   // chip rather than claiming a second one.
   it('appends · gated k when the gate has denied search calls', () => {
-    render(<SessionLine session={s({ graphQueries: 0, graphGateDenials: 3 })}
-      onOpen={() => {}} onActions={() => {}} />);
+    header(s({ graphQueries: 0, graphGateDenials: 3 }));
     expect(screen.getByText('graph 0 · gated 3')).toBeInTheDocument();
   });
 
@@ -1240,15 +1212,13 @@ describe('the graph chip', () => {
     // first. Rendering `· gated 0` on it would put a permanent suffix on every
     // healthy row and make the k>0 rows unfindable — the chip's job is the
     // exception, not the census.
-    render(<SessionLine session={s({ graphQueries: 2, graphGateDenials: 0 })}
-      onOpen={() => {}} onActions={() => {}} />);
+    header(s({ graphQueries: 2, graphGateDenials: 0 }));
     expect(screen.getByText('graph 2')).toBeInTheDocument();
     expect(screen.queryByText(/gated/)).toBeNull();
   });
 
   it('appends nothing when the denial count is null — a hook too old to have a gate', () => {
-    render(<SessionLine session={s({ graphQueries: 5, graphGateDenials: null })}
-      onOpen={() => {}} onActions={() => {}} />);
+    header(s({ graphQueries: 5, graphGateDenials: null }));
     expect(screen.getByText('graph 5')).toBeInTheDocument();
     expect(screen.queryByText(/gated/)).toBeNull();
   });
@@ -1262,9 +1232,7 @@ describe('the graph chip', () => {
     // `graphGateCount` (shared/api.ts) rather than the raw field.
     const raw = s({ graphQueries: 5 }) as unknown as Record<string, unknown>;
     delete raw['graphGateDenials'];
-    expect(() => render(
-      <SessionLine session={raw as unknown as FleetSession} onOpen={() => {}} onActions={() => {}} />,
-    )).not.toThrow();
+    expect(() => header(raw as unknown as FleetSession)).not.toThrow();
     const chip = document.querySelector('.sess-graph');
     expect(chip?.textContent, `a gated suffix rendered: ${chip?.outerHTML}`).toBe('graph 5');
   });
@@ -1276,8 +1244,7 @@ describe('the graph chip', () => {
     // would render `· gated 3` off a string the wire type forbids.
     for (const bad of ['3', Number.NaN, Number.POSITIVE_INFINITY]) {
       cleanup();
-      render(<SessionLine session={{ ...s({ graphQueries: 5 }), graphGateDenials: bad } as unknown as FleetSession}
-                          onOpen={() => {}} onActions={() => {}} />);
+      header({ ...s({ graphQueries: 5 }), graphGateDenials: bad } as unknown as FleetSession);
       const chip = document.querySelector('.sess-graph');
       expect(chip?.textContent, `${String(bad)} rendered a gated suffix: ${chip?.outerHTML}`)
         .toBe('graph 5');
@@ -1285,8 +1252,7 @@ describe('the graph chip', () => {
   });
 
   it('the title names the denials too, so the number has a sentence behind it', () => {
-    render(<SessionLine session={s({ graphQueries: 0, graphGateDenials: 3 })}
-      onOpen={() => {}} onActions={() => {}} />);
+    header(s({ graphQueries: 0, graphGateDenials: 3 }));
     const chip = document.querySelector('.sess-graph');
     expect(chip?.getAttribute('title')).toContain('0 graphify read(s) this session');
     expect(chip?.getAttribute('title')).toContain('3 search call(s) denied by the graphify gate');
@@ -1383,11 +1349,16 @@ describe('sessionAsk — the live (cast) frame\'s tolerant reader, pinned direct
 // is stuck; the other is in transit. Rendering them as one cell would lose the
 // difference the operator acts on.
 describe('the strand cell', () => {
-  it('renders the reason verbatim and repeats it in the title', () => {
-    render(<SessionLine session={s({ stranded: { at: 1, reason: 'no account in pool pool-a can take it' } })}
-                        onOpen={() => {}} onActions={() => {}} />);
-    const cell = screen.getByText('stranded — no account in pool pool-a can take it');
+  // D-5545: the card says `stranded` (its one marker); the reason, verbatim, is in the marker's title and in full
+  // in the header's details.
+  it('says `stranded` on the card and the reason verbatim in the title and the header', () => {
+    const session = s({ stranded: { at: 1, reason: 'no account in pool pool-a can take it' } });
+    render(<SessionLine session={session} onOpen={() => {}} onActions={() => {}} />);
+    const cell = screen.getByText('stranded');
     expect(cell).toHaveAttribute('title', 'no account in pool pool-a can take it');
+    cleanup();
+    header(session);
+    expect(screen.getByText('stranded — no account in pool pool-a can take it')).toBeInTheDocument();
   });
 
   it('keeps the marker when the reason is missing or unreadable — presence is the durable fact', () => {
@@ -1395,12 +1366,10 @@ describe('the strand cell', () => {
     // not read arrives with `at: 0` and a stand-in reason. Dropping the half it
     // does not have and keeping the half it does is `.sess-swapblocked`'s own
     // contract, restated.
-    const { rerender } = render(
-      <SessionLine session={s({ stranded: { at: 0, reason: '' } })} onOpen={() => {}} onActions={() => {}} />);
+    render(<SessionLine session={s({ stranded: { at: 0, reason: '' } })} onOpen={() => {}} onActions={() => {}} />);
     expect(screen.getByText('stranded')).toBeInTheDocument();
-
-    rerender(<SessionLine session={s({ stranded: { at: 0, reason: 'registry field unreadable' } })}
-                          onOpen={() => {}} onActions={() => {}} />);
+    cleanup();
+    header(s({ stranded: { at: 0, reason: 'registry field unreadable' } }));
     expect(screen.getByText('stranded — registry field unreadable')).toBeInTheDocument();
   });
 
@@ -1424,18 +1393,25 @@ describe('the strand cell', () => {
   });
 });
 
+// D-5545: the account cell left the card, so off-pool is a MARKER now — `off-pool` on the card (when nothing
+// outranks it), the sentence in its title, and the same marker in the header's details.
 describe('the off-pool marker', () => {
   const pooled = (byId: Record<string, string>) =>
     TEST_ROSTER.map((a) => ({ ...a, pool: byId[a.id] ?? null }));
+  const SENTENCE = 'running on team·alt (pool pool-b), project is pool pool-a';
 
-  it('marks the account cell and shows one visible cue when both pools are known and differ', () => {
+  it('shows one `off-pool` marker, the sentence in its title, when both pools are known and differ', () => {
     render(<SessionLine session={s({ wrapper: 'claude2', home: 'claude2' })}
                         roster={pooled({ claude2: 'pool-b' })}
                         projectPool={{ state: 'tagged', name: 'pool-a' }}
                         onOpen={() => {}} onActions={() => {}} />);
-    const acct = screen.getByLabelText('running on team·alt (pool pool-b), project is pool pool-a');
-    expect(acct).toHaveAttribute('data-offpool', 'true');
     expect(screen.getAllByText('off-pool')).toHaveLength(1);
+    expect(screen.getByText('off-pool')).toHaveAttribute('title', SENTENCE);
+    cleanup();
+    header(s({ wrapper: 'claude2', home: 'claude2' }), {
+      roster: pooled({ claude2: 'pool-b' }), projectPool: { state: 'tagged', name: 'pool-a' },
+    });
+    expect(screen.getByText('off-pool')).toHaveAttribute('title', SENTENCE);
   });
 
   it('says nothing when only one side is known — an untagged account is not off-pool', () => {
@@ -1443,14 +1419,11 @@ describe('the off-pool marker', () => {
       <SessionLine session={s({ wrapper: 'claude2', home: 'claude2' })}
                    roster={pooled({})} projectPool={{ state: 'tagged', name: 'pool-a' }}
                    onOpen={() => {}} onActions={() => {}} />);
-    expect(screen.getByText('team·alt').closest('.sess-acct')).not.toHaveAttribute('data-offpool');
     expect(screen.queryByText('off-pool')).not.toBeInTheDocument();
-
     // …and the mirror: the account is tagged, the project is not.
     rerender(<SessionLine session={s({ wrapper: 'claude2', home: 'claude2' })}
                           roster={pooled({ claude2: 'pool-b' })} projectPool={{ state: 'untagged' }}
                           onOpen={() => {}} onActions={() => {}} />);
-    expect(screen.getByText('team·alt').closest('.sess-acct')).not.toHaveAttribute('data-offpool');
     expect(screen.queryByText('off-pool')).not.toBeInTheDocument();
   });
 
@@ -1459,13 +1432,10 @@ describe('the off-pool marker', () => {
       <SessionLine session={s({ wrapper: 'claude2', home: 'claude2' })}
                    roster={pooled({ claude2: 'pool-a' })} projectPool={{ state: 'tagged', name: 'pool-a' }}
                    onOpen={() => {}} onActions={() => {}} />);
-    expect(screen.getByText('team·alt').closest('.sess-acct')).not.toHaveAttribute('data-offpool');
     expect(screen.queryByText('off-pool')).not.toBeInTheDocument();
-
     rerender(<SessionLine session={s({ wrapper: 'claude2', home: 'claude2' })}
                           roster={pooled({ claude2: 'pool-b' })}
                           onOpen={() => {}} onActions={() => {}} />);
-    expect(screen.getByText('team·alt').closest('.sess-acct')).not.toHaveAttribute('data-offpool');
     expect(screen.queryByText('off-pool')).not.toBeInTheDocument();
   });
 
@@ -1474,35 +1444,26 @@ describe('the off-pool marker', () => {
                         roster={pooled({ claude2: 'pool-b' })}
                         projectPool={{ state: 'tagged', name: 'pool-a' }}
                         onOpen={() => {}} onActions={() => {}} />);
-    expect(screen.getByText('team·alt').closest('.sess-acct')).not.toHaveAttribute('data-offpool');
     expect(screen.queryByText('off-pool')).not.toBeInTheDocument();
   });
 
-  it('outranks the away arrow\'s aria sentence, and leaves the arrow itself alone', () => {
-    // A session can be BOTH away from its pin and off-pool — a retag is
-    // exactly how that happens. One element, one accessible name: off-pool is
-    // the sharper fact and already names the account it is running on, so it
-    // is the sentence that wins. `data-away` and the ↗ are untouched.
-    render(<SessionLine session={s({ wrapper: 'claude2', home: 'claude' })}
-                        roster={pooled({ claude2: 'pool-b' })}
-                        projectPool={{ state: 'tagged', name: 'pool-a' }}
-                        onOpen={() => {}} onActions={() => {}} />);
-    const acct = screen.getByLabelText('running on team·alt (pool pool-b), project is pool pool-a');
-    expect(acct).toHaveAttribute('data-away', 'true');
-    expect(acct).toHaveAttribute('data-offpool', 'true');
+  it('outranks the away sentence in the header: off-pool already names the account it runs on', () => {
+    header(s({ wrapper: 'claude2', home: 'claude' }), {
+      roster: pooled({ claude2: 'pool-b' }), projectPool: { state: 'tagged', name: 'pool-a' },
+    });
+    expect(screen.getByText('off-pool')).toHaveAttribute('title', SENTENCE);
+    expect(screen.queryByText(/pinned to/)).not.toBeInTheDocument();
   });
 });
 
+// D-5545: the repo label left the row. A row whose repo differs from its card's always works on another project,
+// so it carries the cross-project chip (D-5527) inside its button — which keeps two same-slug rows two names —
+// and the session header names the repository.
 describe('the repo label (board-placement wave 2, Task 6)', () => {
-  it('sits INSIDE the row button\'s accessible name, so two same-slug rows are two names', () => {
-    render(<SessionLine session={s()} repo="Synapsium-Labs/custom-tools" onOpen={() => {}} onActions={() => {}} />);
-    expect(screen.getByRole('button', { name: /quiet-mesa.*Synapsium-Labs\/custom-tools/ })).toBeInTheDocument();
-    expect(document.querySelector('.sess-repo')?.textContent).toBe('Synapsium-Labs/custom-tools');
-  });
-  it('renders nothing when the card already implies the repo', () => {
-    render(<SessionLine session={s()} onOpen={() => {}} onActions={() => {}} />);
+  it('is not on the card: the cross-project chip is, inside the row button\'s accessible name', () => {
+    render(<SessionLine session={s({ project: 'project-b' })} workingOn="project-b" onOpen={() => {}} onActions={() => {}} />);
     expect(document.querySelector('.sess-repo')).toBeNull();
-    expect(screen.getByRole('button', { name: 'quiet-mesa' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /quiet-mesa.*works on.*project-b/ })).toBeInTheDocument();
   });
 });
 
@@ -1531,66 +1492,37 @@ describe('whose code a row works on (D-5527)', () => {
   });
 });
 
+// D-5545: on nearly every operator-made row the badge said the same word, so it moved to the session header's
+// details, where it names the role of the one session being read. The card carries no badge.
 describe('the coordinator badge (D-5301)', () => {
-  const badge = (): HTMLElement | null => document.querySelector('.sess-role');
+  const role = (): HTMLElement | null =>
+    [...document.querySelectorAll<HTMLElement>('.chat-fact')].find((e) => e.textContent === 'coordinator') ?? null;
 
-  it("shows 'coordinator' beside the label, inside the row button's accessible name", () => {
+  it("is a header fact: 'coordinator' in the details, never a badge on the row", () => {
     render(<SessionLine session={s({ role: 'coordinator' })} onOpen={() => {}} onActions={() => {}} />);
-    expect(badge()?.textContent).toBe('coordinator');
-    expect(screen.getByRole('button', { name: /^quiet-mesa.*coordinator$/ })).toBeInTheDocument();
-    expect(badge()!.closest('.sess-open')).not.toBeNull();
+    expect(document.querySelector('.sess-role')).toBeNull();
+    expect(screen.getByRole('button', { name: /^quiet-mesa$/ })).toBeInTheDocument();
+    cleanup();
+    header(s({ role: 'coordinator' }));
+    expect(role()).not.toBeNull();
   });
 
   it('shows nothing for a child', () => {
-    render(<SessionLine session={s({ role: 'child', child: { kind: 'child', runId: 7 } })} onOpen={() => {}} onActions={() => {}} />);
-    expect(badge()).toBeNull();
+    header(s({ role: 'child', child: { kind: 'child', runId: 7 } }));
+    expect(role()).toBeNull();
   });
 
   it('shows nothing for a row from an older server (null, or the key absent) or an unknown word', () => {
-    render(<SessionLine session={s({ role: null })} onOpen={() => {}} onActions={() => {}} />);
-    expect(badge()).toBeNull();
+    header(s({ role: null }));
+    expect(role()).toBeNull();
     cleanup();
     const absent: Record<string, unknown> = { ...s() };
     delete absent['role'];
-    render(<SessionLine session={absent as unknown as FleetSession} onOpen={() => {}} onActions={() => {}} />);
-    expect(badge()).toBeNull();
+    header(absent as unknown as FleetSession);
+    expect(role()).toBeNull();
     cleanup();
-    render(<SessionLine session={s({ role: 'parent' as unknown as FleetSession['role'] })} onOpen={() => {}} onActions={() => {}} />);
-    expect(badge()).toBeNull();
-  });
-
-  it('sits beside the repo label when both render, the label first', () => {
-    render(<SessionLine session={s({ role: 'coordinator' })} repo="project-a" onOpen={() => {}} onActions={() => {}} />);
-    const cells = [...document.querySelector('.sess-open')!.children].map((c) => c.className);
-    expect(cells).toEqual(['sess-label', 'sess-repo', 'sess-role']);
-  });
-
-  // jsdom lays nothing out, so "at every width" is held where width is decided:
-  // the stylesheet. The badge keeps its own width (`flex: none`) while the label
-  // ellipsises, and no rule at any breakpoint, skin or theme hides or restyles
-  // it — the phone, laptop and wide rows are the same cell.
-  it('renders at every width: it never shrinks, and no media, skin or theme rule hides it', () => {
-    // Comments stripped first: the rule's own note says `flex: none` in prose.
-    const bare = (t: string): string => t.replace(/\/\*[\s\S]*?\*\//g, '');
-    const css = bare(readFileSync(path.join(__dirname, '../src/fleet/fleet.css'), 'utf8'));
-    const own = [...css.matchAll(/(?:^|\})\s*\.sess-role\s*\{([^}]*)\}/g)].map((m) => m[1]!);
-    expect(own).toHaveLength(1);
-    expect(own[0]).toMatch(/(?:^|;|\s)flex:\s*none\s*;/);
-    const roots = [path.join(__dirname, '../src'), path.join(__dirname, '../../ui/src')];
-    const sheets: string[] = [];
-    const walk = (d: string): void => {
-      for (const e of readdirSync(d, { withFileTypes: true })) {
-        const p = path.join(d, e.name);
-        if (e.isDirectory()) walk(p);
-        else if (p.endsWith('.css')) sheets.push(bare(readFileSync(p, 'utf8')));
-      }
-    };
-    roots.forEach(walk);
-    for (const sheet of sheets) {
-      for (const rule of sheet.match(/[^{}]*\.sess-role\b[^{}]*\{[^}]*\}/g) ?? []) {
-        expect(rule).not.toMatch(/display:\s*none|visibility:\s*hidden/);
-      }
-    }
+    header(s({ role: 'parent' as unknown as FleetSession['role'] }));
+    expect(role()).toBeNull();
   });
 });
 
@@ -1667,7 +1599,7 @@ describe('a child workspace names its programme and wave (wave 5; operator rulin
   describe('a held child whose active run explains the hold (D-5528)', () => {
     const run = { program: 'port-api', programTitle: 'Port the API', wave: 5, waveOf: 7, kind: 'work' as const };
     const held = 'program:port-api wave:5/7 run:41';
-    const meta = (): HTMLElement => document.querySelector('.sess-meta') as HTMLElement;
+    const meta = (): HTMLElement => document.querySelector('.sess-body') as HTMLElement;
 
     it('shows no run number and states the programme and wave once', () => {
       render(<SessionLine session={s({ child: { kind: 'child', runId: 39 }, held })} onOpenRun={() => {}}
@@ -1690,24 +1622,38 @@ describe('a child workspace names its programme and wave (wave 5; operator rulin
       expect(onOpenRun).toHaveBeenCalledTimes(1);
     });
 
-    it('keeps the wave whole and ellipsises only the programme name', () => {
+    // D-5545: the programme is shortened by whole tokens (never an ellipsis cutting mid-token); the wave is whole.
+    it('keeps the wave whole and shortens only the programme name, by whole tokens', () => {
       render(<SessionLine session={s({ child: { kind: 'child', runId: 39 }, held })} onOpenRun={() => {}}
                           onOpen={() => {}} onActions={() => {}}
                           childRun={{ run: { ...run, program: 'migrate-legacy-billing-reconciliation-pipeline', wave: 12, waveOf: 14 }, coordinator: null }} />);
-      expect(document.querySelector('.sess-pw-prog')?.textContent).toBe('migrate-legacy-billing-reconciliation-pipeline');
+      // Both forms are drawn; fleet.css's container query shows the short one only in a phone-narrow column.
+      expect(document.querySelector('.sess-pw-prog .fit-short')?.textContent).toBe('migrate-legacy…');
+      expect(document.querySelector('.sess-pw-prog .fit-full')?.textContent).toBe('migrate-legacy-billing-reconciliation-pipeline');
       expect(document.querySelector('.sess-pw-wave')?.textContent).toBe(' · wave 12 of 14');
+      cleanup();
+      header(s({ child: { kind: 'child', runId: 39 }, held }),
+        { childRun: { run: { ...run, program: 'migrate-legacy-billing-reconciliation-pipeline', wave: 12, waveOf: 14 }, coordinator: null } });
+      expect(screen.getByText('held: program:port-api wave:5/7 run:41')).toBeInTheDocument();
     });
 
-    it('a hold no active run explains stays the raw text, as today', () => {
+    it('a hold no active run explains reads `held` on the card and the raw text in the header', () => {
       render(<SessionLine session={s({ held })} onOpenRun={null} onOpen={() => {}} onActions={() => {}} />);
-      expect(document.querySelector('[data-held]')?.textContent).toBe(held);
+      expect(document.querySelector('[data-held]')?.textContent).toBe('held');
+      cleanup();
+      header(s({ held }));
+      expect(document.querySelector('[data-held]')?.textContent).toBe(`held: ${held}`);
     });
 
-    it('an unreadable marker keeps both cells: its hedge, and the raw hold', () => {
+    it('an unreadable marker is the card\'s context; the header keeps both cells: its hedge, and the raw hold', () => {
       render(<SessionLine session={s({ child: { kind: 'unreadable' }, held })} onOpenRun={() => {}}
                           onOpen={() => {}} onActions={() => {}} childRun={{ run, coordinator: null }} />);
       expect(cell()?.textContent).toBe('child marker unreadable');
-      expect(document.querySelector('[data-held]')?.textContent).toBe(held);
+      expect(document.querySelector('[data-held]')).toBeNull();
+      cleanup();
+      header(s({ child: { kind: 'unreadable' }, held }), { childRun: { run, coordinator: null } });
+      expect(cell()?.textContent).toBe('child marker unreadable');
+      expect(document.querySelector('[data-held]')?.textContent).toBe(`held: ${held}`);
     });
   });
 
@@ -1773,16 +1719,19 @@ describe('a recent restart is named (D-5237)', () => {
   const cell = (): Element | null => document.querySelector('.sess-restart');
   const at = (agoMs: number): number => Date.now() - agoMs;
 
+  // D-5545: the card's marker says `restarted` (cause and time in its title); the full words are the header's.
+  const words = (row: FleetSession): string | undefined => sessionFacts({ session: row, now: Date.now() }).restart?.text;
+
   it('an oom end 3 minutes ago reads `restarted · out of memory · 3m ago`', () => {
-    render(<SessionLine session={s({ lastEnd: { at: at(3 * 60_000 + 5_000), cause: 'oom' } })} onOpen={() => {}} onActions={() => {}} />);
-    expect(cell()?.textContent).toBe('restarted · out of memory · 3m ago');
-    expect(cell()?.getAttribute('data-restart')).toBe('oom');
+    const row = s({ lastEnd: { at: at(3 * 60_000 + 5_000), cause: 'oom' } });
+    render(<SessionLine session={row} onOpen={() => {}} onActions={() => {}} />);
+    expect(cell()?.textContent).toBe('restarted');
     expect(cell()?.getAttribute('title')).toMatch(/^The previous process ended at .+: out of memory\.$/);
+    expect(words(row)).toBe('restarted · out of memory · 3m ago');
   });
 
   it('under a minute reads `just now`', () => {
-    render(<SessionLine session={s({ lastEnd: { at: at(10_000), cause: 'swap-manual' } })} onOpen={() => {}} onActions={() => {}} />);
-    expect(cell()?.textContent).toBe('restarted · swapped by hand · just now');
+    expect(words(s({ lastEnd: { at: at(10_000), cause: 'swap-manual' } }))).toBe('restarted · swapped by hand · just now');
   });
 
   it('after an hour it is gone', () => {
@@ -1800,9 +1749,7 @@ describe('a recent restart is named (D-5237)', () => {
   });
 
   it('an unknown cause on the wire reads `cause unknown`', () => {
-    const row = s({ lastEnd: { at: at(120_000), cause: 'cosmic-ray' as never } });
-    render(<SessionLine session={row} onOpen={() => {}} onActions={() => {}} />);
-    expect(cell()?.textContent).toBe('restarted · cause unknown · 2m ago');
+    expect(words(s({ lastEnd: { at: at(120_000), cause: 'cosmic-ray' as never } }))).toBe('restarted · cause unknown · 2m ago');
   });
 });
 
@@ -1843,7 +1790,11 @@ describe('the quiet "with coordinator" state (D-5296)', () => {
       <SessionLine session={held({ withCoordinator: undefined as never })} onOpen={() => {}} onActions={() => {}} />,
     );
     expect(container.querySelector('.sess-state')?.textContent).toBe('working');
-    expect(container.querySelector('.sess-ask-state')?.textContent).toBe('held — project-a-calm-mesa may answer');
+    // D-5545: the card's marker says it; the header's ask chip names the parent.
+    expect(container.querySelector('[data-marker="with-coordinator"]')?.textContent).toBe('with coordinator');
+    cleanup();
+    header(held({ withCoordinator: undefined as never }));
+    expect(document.querySelector('.sess-ask-state')?.textContent).toBe('held — project-a-calm-mesa may answer');
   });
 
   it('Needs-you does not list it: the bucket bar has no Attention chip for it, and does for the lapsed row', async () => {
