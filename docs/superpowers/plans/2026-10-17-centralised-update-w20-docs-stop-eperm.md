@@ -59,6 +59,7 @@ The operator ruled on 2026-10-17 at 15:50 UTC that this programme repairs stable
 - Numbers 5336 to 5342 are the 2026-10-18 follow-up's own (the coordinator's brief for it, which replaced the split this line once gave: 5336 to 5338 the coordinator's, 5339 to 5342 the worker's reserve). Each is defined here in the commit that first cites it.
 - **D-5336** (follow-up 2026-10-18). Row 64's first assertion carries the whole facts as its message: `expect(o.facts, JSON.stringify(o.facts))`. Its assertions are unchanged. This departs from "Row 64 itself stays byte-unchanged" above, on the coordinator's brief. Why: `toMatchObject`'s diff prints only the keys it was asked about, so the macOS red at `b51a2e20d` showed `state: 'unreadable'` and hid the `step` and `detail` that say which call raised.
 - **D-5337** (follow-up 2026-10-18). The Darwin probe lives in `server/test/platform-hazards.test.ts`, a file outside this wave's two. Why: `probe-macos` runs on every pull request, but only the files on its allow-list, and that file is on it; `ccd-docs-tree.test.ts` is not, and runs on macOS only in a full run. The probe drives the shipped helper's own `Sys.spawn` and changes nothing in it. Its Darwin arm records, and asserts only that it ran (R14(i)'s rule: a red there is a `full-suite` red). Its Linux arm is the control.
+- **D-5338** (follow-up 2026-10-18). Case 5 of the `row 64 on Darwin` describe replays Darwin's second EPERM, the one the B2 probe measured: the first SIGTERM meets EPERM while the leader is still exiting, so `poll()` is None, and the leader becomes reapable a few milliseconds later. The replay holds the leader alive behind a release file that the fake's first answer writes, so a live, unreaped, unsignalled leader at the EPERM is a fact of each run, not a race won. Why: `T20_DARWIN_KILLPG` replays only the zombie answer, which wave 20's absorb already covers, so no Linux row could see this red.
 
 ## File structure
 
@@ -352,7 +353,22 @@ The coordinator re-dispatched run 566 on 2026-10-18. Wave 20 made row 64 green o
 - [x] **Step 1 (D-5336).** Row 64's first assertion carries the facts as its message. No assertion changes.
 - [x] **Step 2 (D-5337).** The probe: `platform-hazards.test.ts`, describe `B2: what killpg answers while an overflowed leader exits`. It drives the shipped `Sys.spawn` 92 times against two writers that overflow 200 bytes and exit at once (`git status` over 20 long untracked names, then `printf`). It wraps `os.killpg` through the helper's `os` seam and records every answer. At each EPERM it records `kill(pid, 0)` and a non-reaping `waitid` of the leader, and in its last 12 stops `ps`'s state too. A stop that raised also records how long the leader took to become reapable.
   **Measured on Linux (worker, 2026-10-18), the control:** all 92 stops read `overflow <- 15:ok 0:ESRCH`. The SIGTERM is delivered every time, and no stop meets an EPERM.
-- [ ] **Step 3.** Push, read the pull request's `probe-macos`, and ask the coordinator for a full run on the branch, whose `test-macos` reads row 64's facts.
+- [x] **Step 3.** Push, read the pull request's `probe-macos`, and ask the coordinator for a full run on the branch, whose `test-macos` reads row 64's facts. Pushed at `b6141d6f1` as draft PR #607; the coordinator dispatched full run 39138363782 on it.
+  **Measured on Darwin: the hypothesis holds.** PR #607's `probe-macos` (run 39138303835, job 117707283076; macOS 26.6.2, CPython 3.15.0, git 2.56.0), against the unchanged helper:
+
+  | Pass | Stops | What the stops read |
+  |---|---|---|
+  | `git status` | 40 | 36 `raised EPERM <- 15:EPERM(kill0=ok,waitid=unexited)`; 4 `overflow <- 15:EPERM(kill0=ok,waitid=exited) 0:ESRCH` |
+  | `printf` | 40 | 6 `raised EPERM` (`waitid=unexited`); 32 absorbed (`waitid=exited`); 2 absorbed although `waitid` said unexited a moment before the helper's own `poll()` |
+  | `git status`, `ps` at each EPERM | 12 | 12 absorbed. `ps`, run after the `waitid` read, shows `Z<` every time, and 8 of the 12 `waitid` reads before it said unexited |
+
+  - Every first SIGTERM met EPERM on Darwin, in all 92 stops. Linux delivered all 92.
+  - When the stop raised, the leader had not exited by `waitid`'s account (WNOHANG, WNOWAIT), yet `kill(pid, 0)` answered `ok`. So the group held no member Darwin's `killpg` would signal, and the leader was still in the kernel's exit path, not yet a zombie a wait can reap.
+  - Each of the 42 leaders whose stop raised was reapable 0.6 to 3.8 ms later.
+  - The `ps` pass shows the window from the other side: the few milliseconds `ps` costs were enough for every leader to become a zombie, so the helper's own `poll()` reaped it and every stop was absorbed.
+  - So wave 20's absorb was right about the zombie and too strict about the instant: it needs `poll()` to reap the leader at the moment of the EPERM, and on Darwin the EPERM usually comes a few milliseconds earlier. Row 64's one green on macOS, at `97493f9b2`, was the minority case.
+- [x] **Step 4 (red first, D-5338).** Case 5 of the describe `row 64 on Darwin`, `row 64, Darwin's exiting answer injected: a status overflow whose leader is not yet reapable at the SIGTERM is too-many, never unreadable (D-5338)`. A PATH git (`t20lingeringGit`) answers `status` in full, then lingers, alive and unreaped, until a release file exists. The fake `killpg` (`t20exiting`) answers the first SIGTERM EPERM with nothing signalled, logs the leader's `/proc` state, and writes the release file; every later answer is `T20_DARWIN_KILLPG`'s. So `poll()` is None at that EPERM, and the leader exits on its own after it, as Darwin's exiting leader does a few milliseconds later.
+  **Measured (worker, 2026-10-18) on the unchanged helper:** `1 failed | 4 passed | 184 skipped`. Case 5 is red with `{"state":"unreadable","branch":"ws/a",…,"step":"status","detail":"spawn: Operation not permitted"}`, the macOS failure's shape. Cases 1 to 4 stay green.
 
 ## Readings (for the coordinator to rule)
 

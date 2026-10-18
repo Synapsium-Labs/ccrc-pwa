@@ -3475,6 +3475,9 @@ describe('docs-tree: a spent deadline degrades the drafts, never the tree (D-416
 // itself stays byte-unchanged as the macOS proof. Its first answer, and case 2's racing kill, each wait (bounded)
 // for the leader to be a zombie, so a zombie leader at the first signal is a fact of each run, not a race won. Every
 // answer is logged to $HOME/killpg.log, so a green row shows that the EPERM was met.
+import { REAL_GIT as t20realGit } from './ccdDocsHelpers.js';
+import { harnessBin as t20bin } from './ccdWsHelpers.js';
+
 const T20_DARWIN_KILLPG: string[] = [
   'import errno as _t20_errno',
   'import os as _t20_os',
@@ -3519,6 +3522,46 @@ const t20log = (): string[] => {
   const p = t14path.join(h.home, 'killpg.log');
   return t14fs.existsSync(p) ? t14fs.readFileSync(p, 'utf8').trim().split('\n') : [];
 };
+
+/** Darwin's other EPERM, measured by the B2 probe in `platform-hazards.test.ts` on macOS 26.6.2 (follow-up
+ *  2026-10-18, D-5338): killpg also answers EPERM while the leader is still EXITING, before a wait can reap it (36 of
+ *  40 overflowed `git status` stops; a non-reaping waitid said "not exited", and each leader was reapable 0.6 to
+ *  3.8 ms later). The replay: the first answer is EPERM with nothing signalled, it logs the leader's /proc state (a
+ *  live one, so poll() is None at that EPERM), and it releases the lingering leader, which then exits on its own.
+ *  Every later answer is `T20_DARWIN_KILLPG`'s. */
+const t20exiting = (release: string): string[] => [
+  `_t20_release = ${JSON.stringify(release)}`,
+  'def _t20_state(pid):',
+  '    try:',
+  '        with open("/proc/%d/stat" % pid) as f:',
+  '            s = f.read()',
+  '    except OSError:',
+  '        return "gone"',
+  '    return s[s.rindex(")") + 2:].split()[0]',
+  'def _t20_exiting(pgid, sig):',
+  '    _t20_answer(sig, "EPERM leader=" + _t20_state(pgid))',
+  '    _t20_os.killpg = _t20_killpg',
+  '    open(_t20_release, "w").close()',
+  '    raise OSError(_t20_errno.EPERM, "Operation not permitted")',
+  '_t20_os.killpg = _t20_exiting',
+];
+/** A PATH git whose `status` answers in full, then lingers, alive and unreaped, until `release` exists (bounded at
+ *  10 s), so the overflow's SIGTERM meets a leader that has not exited. Every other call is the real git. */
+function t20lingeringGit(release: string): void {
+  const q = (v: string): string => `'${v.replace(/'/g, "'\\''")}'`;
+  t14fs.writeFileSync(t14path.join(t20bin(h.home), 'git'), [
+    '#!/bin/sh',
+    'case " $* " in',
+    '  *" status "*)',
+    `    ${q(t20realGit)} "$@"; rc=$?`,
+    '    i=0',
+    `    while [ ! -e ${q(release)} ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i + 1)); done`,
+    '    exit $rc ;;',
+    'esac',
+    `exec ${q(t20realGit)} "$@"`,
+    '',
+  ].join('\n'), { mode: 0o755 });
+}
 
 describe.skipIf(process.platform !== 'linux')('row 64 on Darwin: killpg answers EPERM for a group of zombies (wave 20, B2)', () => {
   it('row 64, Darwin answer injected: a status overflow whose git exited unreaped is too-many, never unreadable', () => {
@@ -3626,5 +3669,20 @@ describe.skipIf(process.platform !== 'linux')('row 64 on Darwin: killpg answers 
       'out(res)',
     ].join('\n'), { timeoutMs: 60_000 });
     expect(got).toEqual({ kill: 'raised EPERM', signals: [15, 9] });
+  }, 60000);
+
+  it('row 64, Darwin\'s exiting answer injected: a status overflow whose leader is not yet reapable at the SIGTERM is too-many, never unreadable (D-5338)', () => {
+    const { wt, head } = t14holder({ [`${T14_S}a.md`]: 'aaaa\n' });
+    for (let i = 0; i < 20; i++) t14fs.writeFileSync(t14path.join(wt, T14_S, `long-name-${i}-${'x'.repeat(40)}.md`), 'n\n');
+    const release = t14path.join(h.home, 't20-release');
+    t20lingeringGit(release);
+    const o = t14phase({ served: head, kw: 'stdout_cap=200', pre: [...T20_DARWIN_KILLPG, ...t20exiting(release)] });
+    expect(o.facts, JSON.stringify(o.facts)).toMatchObject({ state: 'too-many', branch: 'ws/a', worktree: wt });
+    expect(o.facts['bytes']).toBe(200);
+    expect(o.entries).toBe(1);
+    // Non-vacuity: the EPERM met a live leader, neither a zombie nor gone, and the stop then found the group empty.
+    const log = t20log();
+    expect(log[0]).toMatch(/^15 EPERM leader=[RS]$/);
+    expect(log.slice(1)).toEqual(['0 ESRCH']);
   }, 60000);
 });
