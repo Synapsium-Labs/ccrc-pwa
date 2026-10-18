@@ -5770,9 +5770,9 @@ export function decideReparse({ targets, prunedSpans }) {
 
 /** The recovery step's phases, in order (§9.14). `index` applies the redact records and indexes drain-time
  *  verdicts and drained files; `apply` replays the journal; `reindex` re-runs the FTS derivation when the index
- *  pass learned a pair the store lacked. B4 inserts its export phases between `apply` and `reindex` (§9.14
- *  "Export replay"): this list is that seam. D-4700 (history-b4-after-b2) */
-export const RECOVER_PHASES = Object.freeze(['index', 'apply', 'reindex']);
+ *  pass learned a pair the store lacked. `export-blobs` and `export-rows` (W1-B4) replay the export's segments
+ *  between `apply` and `reindex` (§9.14 "Export replay"): this list is that seam. D-4700 (history-b4-after-b2) */
+export const RECOVER_PHASES = Object.freeze(['index', 'apply', 'export-blobs', 'export-rows', 'reindex']);
 
 /** The phases that read the journal, and so carry a journal file and position in their cursor: the first two of
  *  RECOVER_PHASES. The sweep's executor fails these while a journal file cannot be read (D-4592), and the cursor grammar
@@ -5782,6 +5782,10 @@ export const RECOVER_JOURNAL_PHASES = Object.freeze(['index', 'apply']);
 const RECOVER_JOURNAL_CURSOR_RE = new RegExp(
   `^(${RECOVER_JOURNAL_PHASES.join('|')})(?::([0-9]{4}-(?:0[1-9]|1[0-2])\\.[0-9a-f]{8}\\.jsonl):(0|[1-9][0-9]{0,15})(?:\\/([1-9][0-9]{0,15}))?)?(\\+pairs)?$`);
 const RECOVER_REINDEX_CURSOR_RE = /^reindex(?::(0|[1-9][0-9]{0,15}))?(\+pairs)?$/;
+// W1-B4: an export phase names a segment (lib parseSegmentName's grammar, checked apart so it is spelled once) and a
+// position in it: a blobs rowid in export-blobs, a row ord in export-rows (§9.14 "Recovery": "then an export phase
+// and segment").
+const RECOVER_EXPORT_CURSOR_RE = /^(export-blobs|export-rows)(?::([^:+]+):(0|[1-9][0-9]{0,15}))?(\+pairs)?$/;
 
 /** The recovery step's cursor as derivation_state ('recover', <bind ms>) keeps it and status prints it (§9.14):
  *  `<phase>` at a phase's start, `index:<YYYY-MM>.<writer>.jsonl:<position>/<n>` or `apply:…` inside the journal,
@@ -5827,6 +5831,13 @@ export function parseRecoverCursor(s) {
     const blobId = r[1] === undefined ? null : Number(r[1]);
     if (blobId !== null && !Number.isSafeInteger(blobId)) return null;
     return { phase: 'reindex', file: null, offset: 0, blobId, groupSize: null, pairsAdded: r[2] !== undefined };
+  }
+  const x = RECOVER_EXPORT_CURSOR_RE.exec(s);
+  if (x !== null) {
+    if (x[2] !== undefined && parseSegmentName(x[2]) === null) return null;
+    const offset = x[3] === undefined ? 0 : Number(x[3]);
+    if (!Number.isSafeInteger(offset)) return null;
+    return { phase: x[1], file: x[2] ?? null, offset, blobId: null, groupSize: null, pairsAdded: x[4] !== undefined };
   }
   return null;
 }
@@ -8359,4 +8370,24 @@ export function planSegment({ nowMs, homeRetentionDays, rows, boundBytes, reduce
     }
   }
   return { take, carry, stubs, bytes, leftDue, oldestLeftDueSinceMs };
+}
+
+// ===========================================================================
+// Export replay's decisions (spec §9.14 "Export replay"; W1-B4 Task 3). Pure:
+// the recovery step reads each segment's meta through store.mjs and passes
+// what it saw; which segments replay, and in what order (lib
+// orderSegmentNames), is taken here.
+// B2's D-4699 (history-recovery-replay)
+// ===========================================================================
+
+/** What export replay does with one segment, from the two meta facts every format keeps (store.mjs segmentMeta):
+ *  - `foreign` when its store_id is not this store's, whatever its format: another store's text is skipped and
+ *    counted, never applied, and never a FAIL of this store's;
+ *  - `newer` when its format is past the one this build reads: refused loudly (export-segment-newer, doctor FAIL)
+ *    and skipped, never read through tables it may not have;
+ *  - `replay` otherwise. A build that bumps EXPORT_SEGMENT_FORMAT adds here the arm for each older format it still
+ *    reads. */
+export function decideSegmentReplay({ meta, storeId }) {
+  if (meta.storeId !== storeId) return 'foreign';
+  return meta.format > EXPORT_SEGMENT_FORMAT ? 'newer' : 'replay';
 }

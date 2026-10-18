@@ -2004,7 +2004,10 @@ export function discoverAndPlan(db, c, uuids) {
 //              (D-4347); a set-aside file is kept (D-4728 (history-replay-keeps-set-aside-files)).
 //            It never reads $REG and writes no journal record.
 //   reindex  W1-B2 Task 29's FTS re-derivation, for pairs the index pass added. A no-op until then.
-// W1-B4 inserts its export phases between apply and reindex, in RECOVER_PHASES and here (D-4700 (history-b4-after-b2)).
+//   export-blobs  W1-B4, between apply and reindex: every segment's blobs, insert-or-ignore by sha256, before any
+//                 segment's rows, so no row waits on a blob in a later segment (§9.14 "Export replay").
+//   export-rows   W1-B4: every segment's rows in (seq, writer) order, filling only what the journal lacks
+//                 (B2's D-4700 (history-b4-after-b2)).
 //
 // THE CURSOR is lib's RecoverCursor, kept in derivation_state.cursor. It advances in the SAME transaction as the
 // records it covers, so a kill never re-applies or skips a chunk (DI4). Within a phase it names the first file of the
@@ -2609,16 +2612,31 @@ async function recoverReindexChunk(db, run, cursor) {
   return { cursor: r.cur, moved: r.moved, phaseDone: r.done };
 }
 
+/** export-blobs: the first pass of segment replay (§9.14 "Export replay": every segment's blobs, insert-or-ignore by
+ *  sha256, before any segment's rows). W1-B4 Task 10 replaces this body; until then it answers its own phase done
+ *  with the cursor it was given, so a step moves through it and keeps its +pairs. */
+function recoverExportBlobsChunk(_db, _run, cursor) {
+  return { cursor, moved: false, phaseDone: true };
+}
+
+/** export-rows: the second pass (every segment's rows in (seq, writer) order, filling only what the journal lacks).
+ *  W1-B4 Task 10 replaces this body; until then it answers its own phase done. */
+function recoverExportRowsChunk(_db, _run, cursor) {
+  return { cursor, moved: false, phaseDone: true };
+}
+
 /** One executor per RECOVER_PHASES phase, keyed by its name. The contract each keeps:
  *  - it is `(db, run, cursor) => { cursor, moved, phaseDone }`, or a Promise of it, and does ONE bounded chunk;
  *  - it commits its cursor, at its own phase, in the transaction that applies the chunk;
  *  - `phaseDone` hands the move to the next phase to recoveryStep;
  *  - `{ moved: false, phaseDone: false }` ends the step for this pass: recoveryStep calls it no more until the next
  *    pass, which counts toward recovery-stalled.
- *  W1-B4 adds its export phases here and to RECOVER_PHASES together; history-recover.test.ts holds the two equal. */
+ *  W1-B4's export phases are here and in RECOVER_PHASES, in one order; history-recover.test.ts holds the two equal. */
 export const RECOVER_EXECUTORS = Object.freeze({
   index: recoverIndexChunk,
   apply: recoverApplyChunk,
+  'export-blobs': recoverExportBlobsChunk,
+  'export-rows': recoverExportRowsChunk,
   reindex: recoverReindexChunk,
 });
 

@@ -3518,3 +3518,69 @@ describe('F12: the node fast path is bounded by the slice and the budget, and wh
     } finally { closeWriter(again.db); }
   }, HEAVY);
 });
+
+// ===========================================================================
+// W1-B4 Task 3: the export phases in the recovery step (spec §9.14 "Recovery",
+// "Export replay"). In-process on a real store, through B2's recoveryStep and
+// its executors seam, with the SHIPPED export executors (placeholders until
+// W1-B4 Task 10 gives them bodies) wrapped so the test sees each call. The
+// import is namespaced, so this block binds no name the file already binds;
+// ESM hoists it.
+// ===========================================================================
+import * as recExport from '../../ccd/history/lib.mjs';
+
+describe('W1-B4: the export phases in the recovery step (spec §9.14)', () => {
+  type ExportChunkAnswer = { cursor: recExport.RecoverCursor; moved: boolean; phaseDone: boolean };
+  type ExportChunk = (db: DatabaseSync, run: unknown, c: recExport.RecoverCursor) => ExportChunkAnswer | Promise<ExportChunkAnswer>;
+  /** An executor that records its cursor and ends the step for the pass. */
+  const stopHere = (seen: string[]): ExportChunk => (_db, _run, c) => {
+    seen.push(recExport.formatRecoverCursor(c));
+    return { cursor: c, moved: false, phaseDone: false };
+  };
+  /** An executor whose phase is already done. */
+  const finished: ExportChunk = (_db, _run, c) => ({ cursor: c, moved: false, phaseDone: true });
+  /** The shipped executor of `phase`, recording the cursor it is called with. */
+  const shipped = (phase: string, seen: string[]): ExportChunk => (db, run, c) => {
+    seen.push(recExport.formatRecoverCursor(c));
+    return (SW.RECOVER_EXECUTORS[phase] as ExportChunk)(db, run, c);
+  };
+  /** A fresh store with one recovery step registered at `cursor`, and the writer handle `body` runs on. */
+  const withStep = async (cursor: string,
+    body: (db: DatabaseSync, box: HistoryBox, ids: { storeId: string; writer: string }) => Promise<void>): Promise<void> => {
+    const box = makeHistoryBox('ccrc-history-recover-b4-phases-');
+    const ids = createStore(box.home);
+    const db = openWriter(historyPaths(box.home).dbFile);
+    try {
+      db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', ?, ?, NULL)").run(Date.now(), cursor);
+      await body(db, box, ids);
+    } finally {
+      closeWriter(db);
+    }
+  };
+
+  it('a step stored at apply+pairs walks export-blobs then export-rows, through the shipped executors, to reindex with +pairs kept', async () => {
+    await withStep('apply+pairs', async (db, box, ids) => {
+      const seen: string[] = [];
+      const executors = {
+        index: stopHere(seen), apply: finished, 'export-blobs': shipped('export-blobs', seen), 'export-rows': shipped('export-rows', seen),
+        reindex: stopHere(seen),
+      };
+      expect(await SW.recoveryStep(db, stepCtx(box, ids), executors)).toEqual({ moved: true, done: false, held: false });
+      expect(seen).toEqual(['export-blobs+pairs', 'export-rows+pairs', 'reindex+pairs']);
+      expect(cursorOn(db)).toBe('reindex+pairs');
+    });
+  });
+
+  it('a step stored inside an export phase resumes there: its cursor parses, and no chunk is counted failed', async () => {
+    await withStep('export-rows:7.0a1b2c3d.db:12+pairs', async (db, box, ids) => {
+      const seen: string[] = [];
+      const executors = {
+        index: stopHere(seen), apply: stopHere(seen), 'export-blobs': stopHere(seen), 'export-rows': shipped('export-rows', seen),
+        reindex: stopHere(seen),
+      };
+      expect(await SW.recoveryStep(db, stepCtx(box, ids), executors)).toEqual({ moved: true, done: false, held: false });
+      expect(seen).toEqual(['export-rows:7.0a1b2c3d.db:12+pairs', 'reindex+pairs']);
+      expect(countersOn(db, 'recover_chunk_failed')).toEqual({ recover_chunk_failed: 0 });
+    });
+  });
+});

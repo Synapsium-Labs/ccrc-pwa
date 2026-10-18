@@ -957,3 +957,6 @@ export function planSegment(i: {
   nowMs: number; homeRetentionDays: Readonly<Record<string, number>>; rows: readonly SegmentCandidate[]; boundBytes: number; reducer?: ExportReducer;
   takenBefore?: boolean;
 }): SegmentPlan;
+
+// --- W1-B4 Task 3: export replay's decisions (spec §9.14 "Export replay")
+export function decideSegmentReplay(i: { meta: { storeId: string; format: number }; storeId: string }): 'replay' | 'newer' | 'foreign';

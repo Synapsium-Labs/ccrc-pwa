@@ -5995,8 +5995,8 @@ function rpJournal() {
 }
 
 describe('RecoverCursor: the recovery step cursor grammar (spec 9.14; B4 adds export phases)', () => {
-  it('RECOVER_PHASES is index, apply, reindex, frozen', () => {
-    expect([...libReplay.RECOVER_PHASES]).toEqual(['index', 'apply', 'reindex']);
+  it('RECOVER_PHASES is index, apply, export-blobs, export-rows, reindex, frozen', () => {
+    expect([...libReplay.RECOVER_PHASES]).toEqual(['index', 'apply', 'export-blobs', 'export-rows', 'reindex']);
     expect(Object.isFrozen(libReplay.RECOVER_PHASES)).toBe(true);
   });
   it('H-95: the phases that read the journal are lib\'s one list, in RECOVER_PHASES\' order, and the cursor grammar parses exactly those', () => {
@@ -6051,12 +6051,12 @@ describe('RecoverCursor: the recovery step cursor grammar (spec 9.14; B4 adds ex
     expect(libReplay.parseRecoverCursor(null)).toEqual({ phase: 'index', file: null, offset: 0, blobId: null, groupSize: null, pairsAdded: false });
   });
   it('anything else is null, never a guess', () => {
-    for (const s of ['journal:120', 'index:2026-13.0a1b2c3d.jsonl:1', 'index:notes.jsonl:1', 'apply:2026-10.0a1b2c3d.jsonl:01', 'reindex:-1', 'export-blobs', '', 'index:2026-10.0a1b2c3d.jsonl:99999999999999999',
+    for (const s of ['journal:120', 'index:2026-13.0a1b2c3d.jsonl:1', 'index:notes.jsonl:1', 'apply:2026-10.0a1b2c3d.jsonl:01', 'reindex:-1', 'export-segments', '', 'index:2026-10.0a1b2c3d.jsonl:99999999999999999',
       'apply:2026-10.0a1b2c3d.jsonl:5/0', 'apply:2026-10.0a1b2c3d.jsonl:5/02', 'apply:2026-10.0a1b2c3d.jsonl:5/', 'apply:2026-10.0a1b2c3d.jsonl:5/x',
       'apply:2026-10.0a1b2c3d.jsonl:5/99999999999999999', 'apply:2026-10.0a1b2c3d.jsonl/2', 'apply/2', 'reindex:8/2']) {
       expect(libReplay.parseRecoverCursor(s), s).toBeNull();
     }
-    expect(() => libReplay.formatRecoverCursor({ phase: 'export-blobs', file: null, offset: 0, blobId: null, pairsAdded: false })).toThrow(TypeError);
+    expect(() => libReplay.formatRecoverCursor({ phase: 'export-segments', file: null, offset: 0, blobId: null, pairsAdded: false })).toThrow(TypeError);
   });
 });
 
@@ -8275,5 +8275,45 @@ describe('W1-B4: planExport\'s oldest due-since, the census input of doctor\'s w
     // The dated blob first, so an undated one met after it must not overwrite it.
     expect(census([{ key: 'b-early', referrers: [ref(190)] }, { key: 'b-clockless', referrers: [ref(null)] }]).oldestDueSinceMs)
       .toBe(NOW - 40 * DAY);
+  });
+});
+
+// ===========================================================================
+// W1-B4 Task 3: the recovery step's export phases, their cursor, and the
+// segment replay verdict (spec §9.14 "Recovery", "Export replay"; O44's pure
+// half). Pure, on lib.mjs alone.
+// ===========================================================================
+import * as libReplayExport from '../../ccd/history/lib.mjs';
+
+describe('W1-B4: the export phases\' cursor and the segment replay verdict (spec 9.14; O44 pure half)', () => {
+  const STORE = '0189abcd-1234-4678-9abc-0000000000e1';
+  it('the export phases sit between apply and reindex, in that order', () => {
+    const p = [...libReplayExport.RECOVER_PHASES];
+    expect(p.indexOf('export-blobs')).toBe(p.indexOf('apply') + 1);
+    expect(p.indexOf('export-rows')).toBe(p.indexOf('export-blobs') + 1);
+    expect(p.indexOf('reindex')).toBe(p.indexOf('export-rows') + 1);
+  });
+  it('round-trips an export phase at its start, inside a segment, and with +pairs', () => {
+    for (const s of ['export-blobs', 'export-blobs:7.0a1b2c3d.db:0', 'export-rows:12.0a1b2c3d.db:4096+pairs', 'export-rows+pairs', 'export-blobs+pairs']) {
+      const c = libReplayExport.parseRecoverCursor(s);
+      expect(c, s).not.toBeNull();
+      expect(libReplayExport.formatRecoverCursor(c!), s).toBe(s);
+    }
+    expect(libReplayExport.parseRecoverCursor('export-rows:12.0a1b2c3d.db:4096+pairs'))
+      .toEqual({ phase: 'export-rows', file: '12.0a1b2c3d.db', offset: 4096, blobId: null, groupSize: null, pairsAdded: true });
+  });
+  it('an export phase names a segment, never a journal file; a journal phase never names a segment; anything else is null', () => {
+    for (const s of ['export-rows:2026-10.0a1b2c3d.jsonl:1', 'export-blobs:01.0a1b2c3d.db:1', 'export-rows:notes.db:1',
+      'export-blobs:7.0a1b2c3d.db:01', 'export-blobs:7.0a1b2c3d.db', 'export-rows:7.0a1b2c3d.db:9999999999999999',
+      'index:7.0a1b2c3d.db:0', 'apply:7.0a1b2c3d.db:0', 'reindex:7.0a1b2c3d.db', 'export-segments', 'export-blobs:.7.0a1b2c3d.db.tmp:0']) {
+      expect(libReplayExport.parseRecoverCursor(s), s).toBeNull();
+    }
+  });
+  it('decideSegmentReplay: another store\'s segment is foreign whatever its format; this store\'s newer format is newer; format 1 replays', () => {
+    const other = '0189abcd-1234-4678-9abc-0000000000e9';
+    expect(libReplayExport.decideSegmentReplay({ meta: { storeId: STORE, format: 1 }, storeId: STORE })).toBe('replay');
+    expect(libReplayExport.decideSegmentReplay({ meta: { storeId: STORE, format: 2 }, storeId: STORE })).toBe('newer');
+    expect(libReplayExport.decideSegmentReplay({ meta: { storeId: other, format: 1 }, storeId: STORE })).toBe('foreign');
+    expect(libReplayExport.decideSegmentReplay({ meta: { storeId: other, format: 2 }, storeId: STORE })).toBe('foreign');
   });
 });
