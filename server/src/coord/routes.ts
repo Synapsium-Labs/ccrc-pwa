@@ -1283,9 +1283,7 @@ export function registerCoordRoutes(
       sessionId, opened.holdReason,
       sweepDec(deps.fleetState, `run:${opened.id} open`),
     );
-    if (!verbSupported(deps.fleetState, argv)) {
-      return reply.code(501).send({ ok: false, error: 'unsupported' });
-    }
+    if (!verbSupported(deps.fleetState, argv)) return refuseRoute(reply, 'unsupported');  // D-5384
     const res = await deps.runCcd(argv);
     if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr });
     tx(coord.db, () => {

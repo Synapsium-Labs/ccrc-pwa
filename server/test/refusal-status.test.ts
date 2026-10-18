@@ -97,7 +97,7 @@ const HELPER_WORD = /\brefuseRoute\(\s*reply\s*,\s*'([^']+)'/g;
  *  literal-status refusal send, whatever its body's key order or headers. */
 const INLINE_SEND_PINS: Readonly<Record<string, number>> = {
   'auth/gate.ts': 2,
-  'coord/routes.ts': 154,  // D-5384: the open route's 23 precondition, child-gate and openRun-conflict sends answer through refuseRoute/refuseRun
+  'coord/routes.ts': 153,  // D-5384: the open route's 24 precondition, child-gate, openRun-conflict and hold-verb sends answer through refuseRoute/refuseRun
   'server.ts': 130,
   'token/routes.ts': 2,   // the rotate route's 501, a `RotateAnswer`; the claim door's oversized-body 413
 };

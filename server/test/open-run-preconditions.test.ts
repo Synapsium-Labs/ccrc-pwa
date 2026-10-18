@@ -221,6 +221,55 @@ describe('openRunPreconditions — the gate-order table (D-5384)', () => {
   });
 });
 
+/** The shape gate, clause by clause: each row breaks ONE clause of the body
+ *  shape and nothing else, so dropping any clause turns its row red (the PR
+ *  body's V-rows). Every answer is the bare `bad-request`, no `detail` key. */
+const SHAPE_CLAUSES: { name: string; body: Record<string, unknown> }[] = [
+  { name: 'a non-string program', body: { ...WORK, program: 5 } },
+  { name: 'a whitespace-only title', body: { ...WORK, title: ' ' } },
+  { name: 'a whitespace-only project on a work run', body: { ...WORK, project: ' ' } },
+  { name: 'a non-string project on a review run', body: { ...REVIEW, project: 7 } },
+  { name: 'a whitespace-only claimedBy', body: { ...WORK, claimedBy: ' ' } },
+  { name: 'a string wave on a work run', body: { ...WORK, wave: '2' } },
+  { name: 'a string wave on a review run', body: { ...REVIEW, wave: '2' } },
+  { name: 'a string waveOf', body: { ...WORK, waveOf: '3' } },
+  { name: 'a numeric sessionId', body: { ...WORK, sessionId: 4 } },
+  { name: 'an empty sessionId', body: { ...WORK, sessionId: '' } },
+  { name: 'a whitespace-only sessionId', body: { ...WORK, sessionId: ' ' } },
+  { name: 'a numeric homeProject', body: { ...WORK, homeProject: 5 } },
+];
+
+describe('openRunPreconditions — the shape gate, one row per clause (D-5384)', () => {
+  for (const r of SHAPE_CLAUSES) {
+    it(`shape: ${r.name}`, () => {
+      expect(openRunPreconditions(facts(r.body))).toStrictEqual({ ok: false, refusal: { gate: 'shape', error: 'bad-request' } });
+    });
+  }
+
+  it('a null waveOf on a review is admitted, and the plan takes the reviewed run\'s waveOf', () => {
+    expect(openRunPreconditions(facts({ ...REVIEW, waveOf: null })))
+      .toMatchObject({ ok: true, open: { kind: 'review', waveOf: 3 } });
+  });
+});
+
+describe('openRunPreconditions — what the fact lookups receive (D-5384)', () => {
+  it('programKnown and programHome are asked with the SHAPED slug, so a padded slug cannot skip home-mismatch', () => {
+    const programKnown = vi.fn((s: string) => s === 'demo-program');
+    const programHome = vi.fn((s: string) => (s === 'demo-program' ? 'other-home' : null));
+    expect(openRunPreconditions(facts({ ...WORK, program: ' demo-program ' }, { programKnown, programHome })))
+      .toStrictEqual({ ok: false, refusal: { gate: 'homeVerdict', refused: 'home-mismatch', by: 'other-home' } });
+    expect(programKnown).toHaveBeenCalledWith('demo-program');
+    expect(programHome).toHaveBeenCalledWith('demo-program');
+  });
+
+  it('F1 compares the body project UNTRIMMED, as the inline handler did', () => {
+    const sessionProject = vi.fn(() => 'demo');
+    expect(openRunPreconditions(facts({ ...WORK, project: ' demo ', sessionId: 'ws-1' }, { sessionProject })))
+      .toStrictEqual({ ok: false, refusal: { gate: 'projectMismatch', refused: 'project-mismatch', by: 'demo' } });
+    expect(sessionProject).toHaveBeenCalledWith('ws-1');
+  });
+});
+
 describe('openRunPreconditions — the admitted opens (D-5384)', () => {
   it('a work open: its plan is the body\'s, the slug shaped, the home trimmed, the verdict a first write', () => {
     const v = openRunPreconditions(facts({ ...WORK, program: ' demo-program ', homeProject: ' demo ', sessionId: 'ws-1' }));
