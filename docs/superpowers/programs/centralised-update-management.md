@@ -4065,6 +4065,10 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     at `main`, by a workflow of read-only drafters and an Opus verifier per group (`wf_c582546b-f9e`); I apply only
     verified edits. Part 2 carries README, R25(a) and (c) (true only once #441's `--no-reload` lands), the two held
     test files' citations and the closure.
+  - **06:05 UTC: consent to the public-tree scrub (run 561) beside wave 17 (mail 6204, answered 6206).** For
+    `ccd/ccrc` and `ccd/ccrc-doctor-checks` the scrub waits for #566. For `ccrc-doctor`, `ccrc-uninstall` and
+    `ccrc-update` tests it may edit now, fenced to line-neutral comment or fixture swaps on lines #566 does not
+    change. Whichever lands second keeps both by content, and the scrub sweeps #566's new lines after it merges.
 
 ## Carried constraints
 
