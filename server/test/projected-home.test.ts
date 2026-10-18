@@ -21,7 +21,8 @@ import { parseRoster } from '../../shared/roster.js';
 import { leastLoadedCases, type LeastLoadedCase } from './fixtures/leastLoaded.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster, DEFAULT_TEST_ROSTER } from './helpers.js';
-import { CCD, plantPoolEpoch, seedAccountsSh } from './ccdWsHelpers.js';
+import { CCD, ghContainedEnv, plantPoolEpoch, seedAccountsSh } from './ccdWsHelpers.js';
+import { assertNoRealTool } from './containedTools.js';
 
 let home: string;
 
@@ -43,9 +44,15 @@ const NO_EDGES = new Map<string, readonly string[]>();
 /** ccd reads the clock itself, so fixtures live against real now. */
 const now = (): number => Math.floor(Date.now() / 1000);
 
+/** The env both `source CCD` helpers below spawn with (wave 18, R14(b)): the fixture HOME; the manager, tmux, gh and
+ *  net poisons first on PATH; and the fixture user bus that rides `systemd` (D-5248). One builder, so the row below
+ *  pins what both helpers get. */
+const phEnv = (h: string): NodeJS.ProcessEnv =>
+  ghContainedEnv(h, { ...process.env, HOME: h }, { systemd: true, tmux: true, net: true });
+
 const sh = (snippet: string): string =>
   execFileSync('bash', ['-c', `source "${CCD}"; ${snippet}`],
-    { encoding: 'utf8', env: { ...process.env, HOME: home } }).trim();
+    { encoding: 'utf8', env: phEnv(home) }).trim();
 
 beforeEach(() => {
   home = mkTmp('ccrc-projected-');
@@ -64,6 +71,12 @@ beforeEach(() => {
 });
 
 afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
+
+describe('projected-home spawns ccd contained (wave 18, R14(b))', () => {
+  it('the env both ccd helpers here use passes assertNoRealTool', () => {
+    expect(() => assertNoRealTool(phEnv(home), home)).not.toThrow();
+  });
+});
 
 const seed = (files: Record<string, string>): void => {
   for (const name of fs.readdirSync(path.join(home, '.cc-limits'))) {
@@ -656,7 +669,7 @@ describe('ccd and projectHome agree about telemetry, not only about limits files
 
   const shH = (snippet: string): string =>
     execFileSync('bash', ['-c', `source "${CCD}"; ${snippet}`],
-      { encoding: 'utf8', env: { ...process.env, HOME: h } }).trim();
+      { encoding: 'utf8', env: phEnv(h) }).trim();
 
   afterEach(() => { if (h !== undefined) fs.rmSync(h, { recursive: true, force: true }); });
 
