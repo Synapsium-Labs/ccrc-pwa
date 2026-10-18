@@ -201,6 +201,9 @@ export const TREE_FILES = [
   // `_inst_atomic` dies naming the missing source and every describe here goes
   // red for a fixture reason.
   'ccd/compact-card.mjs',
+  // The approval verifier (coordinator-first routing, plan Task 14, D-5297): `_inst_files` places it beside the hook
+  // and before it, as the card's helper above, so a tree without it dies the same way.
+  'ccd/approval-verify.mjs',
   'ccd/session-hook.sh',
   'ccd/install-session-hooks.sh',
   'ccd/tmux.conf',

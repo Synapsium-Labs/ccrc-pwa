@@ -157,6 +157,12 @@ describe('doctor: approval-verifier-runnable names each missing piece', () => {
     const r = run('_check_approval-verifier-runnable', { BOX_ENV_FILE: path.join(home, '.ccrc', 'box.env') });
     expect(r.out).toMatch(/^SKIP approval-verifier-runnable:/m);
   });
+  it('a box with no session registry: SKIP, not a WARN, even with the key pinned', () => {
+    put('.ccrc/approval-signing.pub', KEY_A);
+    const r = run('_check_approval-verifier-runnable');
+    expect(r.out).toMatch(/^SKIP approval-verifier-runnable: .*no session registry/m);
+    expect(r.code).toBe(3);
+  });
   it('approval-key: PASS when no other key was offered, SKIP with none pinned', () => {
     expect(run('_check_approval-key').out).toMatch(/^SKIP approval-key:/m);
     put('.ccrc/approval-signing.pub', KEY_A);
