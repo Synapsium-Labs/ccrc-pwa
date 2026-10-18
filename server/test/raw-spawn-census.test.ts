@@ -861,6 +861,14 @@ describe('every spawn of the real ccd or ccrc script gets a contained env (wave 
       && src.slice(x.line - 30, x.line).some((l) => l.includes('/^_inst_installed\\(\\) \\{')));
     expect(inst.length, 'the _inst_installed harness spawn').toBe(1);
     expect(inst[0]!.shape, 'it is contained: a builder env, so not bare').toBeNull();
+    // `shape === null` also holds for a literal env such as `env: { HOME: home }`, which is no builder (review 589 F3):
+    // so the env the spawn names must resolve, through the census's own binding reader, to a `ccrcContainedEnv(` call.
+    const ownSrc = SOURCES.find((s) => s.rel === 'server/test/ccrc-install.test.ts')!;
+    const spawnEnd = ownSrc.raw.split('\n').slice(0, inst[0]!.line).join('\n').length;
+    const inline = /\benv\s*:\s*([\s\S]*)\}\s*\)$/.exec(inst[0]!.argText);
+    const shorthand = /[{,]\s*env\s*[,}]/.test(inst[0]!.argText) ? nearest(bindingsOf(ownSrc), 'env', spawnEnd) : undefined;
+    const envExpr = shorthand ? ownSrc.text.slice(shorthand.init[0], shorthand.init[1]).trim() : (inline?.[1] ?? '').trim();
+    expect(envExpr, 'the spawn\'s env resolves to a ccrcContainedEnv( call, not a literal').toMatch(/^ccrcContainedEnv\(/);
     expect(inst[0]!.kind, 'it runs text sliced from the script').toBe('sliced');
     expect(c.slicedHits.filter((x) => x.file === 'server/test/ccrc-install.test.ts' && x.line === inst[0]!.line),
       'it is no sliced hit').toEqual([]);
