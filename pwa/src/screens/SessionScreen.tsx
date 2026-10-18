@@ -6,7 +6,7 @@
 // DialogSheet and the TerminalDrawer mount at the bottom.
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { backgroundOnlyRefusal, repoLabel, substrateFault, type FleetSession, type RouteField, type SessionStatus } from '../../../shared/api';
+import { backgroundOnlyRefusal, repoLabel, sessionWithCoordinator, substrateFault, type FleetSession, type RouteField, type SessionStatus } from '../../../shared/api';
 import { ATTENTION_DOT, Button, MailStrip, Skeleton, TaskStrip, toast } from '@ccrc/ui';
 import { staleFor } from '../session/taskStaleness';
 import { SwapSheet } from '../fleet/SwapSheet';
@@ -48,9 +48,13 @@ export function useKeyboardInsets(): number {
  *  that the ladder filed `done` stops pulsing, and delegated work after a Stop
  *  keeps it. A dead session never pulses. */
 export function chatPulsing(
-  live: Pick<FleetSession, 'bucket'> | null, effectiveStatus: SessionStatus | null,
+  live: (Pick<FleetSession, 'bucket'> & { withCoordinator?: unknown }) | null, effectiveStatus: SessionStatus | null,
 ): boolean {
   if (effectiveStatus === 'dead') return false;
+  // D-5296: while the parent holds the question the ladder files the row
+  // `working`, but nothing runs; the header reads it in the calm tint, so the
+  // chat does not pulse either (D-5390).
+  if (live !== null && sessionWithCoordinator(live) !== null) return false;
   return live !== null ? live.bucket === 'working' : effectiveStatus === 'busy';
 }
 
