@@ -383,10 +383,10 @@ describe('the children\'s deny file (spec §6.6, plan Task 15, D-5299)', () => {
   });
   it('touches no home\'s own settings.json: no permissions key, and a home\'s own deny list survives as it was', () => {
     const own = { ...EXISTING, permissions: { deny: ['Bash(rm -rf /:*)'] } };
-    fs.writeFileSync(cfg('.claude-personal'), JSON.stringify(own, null, 2));
+    fs.writeFileSync(cfg('.claude-home'), JSON.stringify(own, null, 2));
     run();
     expect(JSON.parse(fs.readFileSync(cfg('.claude'), 'utf8')).permissions).toBeUndefined();
-    expect(JSON.parse(fs.readFileSync(cfg('.claude-personal'), 'utf8')).permissions).toEqual(own.permissions);
+    expect(JSON.parse(fs.readFileSync(cfg('.claude-home'), 'utf8')).permissions).toEqual(own.permissions);
   });
   it('re-running keeps the file\'s bytes (so every recorded digest still matches)', () => {
     run();
@@ -405,7 +405,7 @@ describe('the children\'s deny file (spec §6.6, plan Task 15, D-5299)', () => {
     const bytes = fs.readFileSync(denyFile());
     execFileSync('bash', [INSTALLER, '--remove', '--homes', path.join(home, '.claude')], { env: { ...process.env, HOME: home } });
     expect(fs.readFileSync(denyFile()).equals(bytes)).toBe(true);
-    execFileSync('bash', [INSTALLER, '--remove', '--homes', path.join(home, '.claude'), path.join(home, '.claude-personal')], { env: { ...process.env, HOME: home } });
+    execFileSync('bash', [INSTALLER, '--remove', '--homes', path.join(home, '.claude'), path.join(home, '.claude-home')], { env: { ...process.env, HOME: home } });
     expect(fs.readFileSync(denyFile()).equals(bytes)).toBe(true);
   });
 });
