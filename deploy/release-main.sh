@@ -11,8 +11,9 @@
 #              $OUT_DIR/release-main.state.
 #   publish  — read the state, copy the attest step's bundle
 #              ($CCRC_BUNDLE_PATH) to the name every `ccrc update` fetches,
-#              refuse without it, push the tag, `gh release create` naming
-#              ALL THREE artifacts `--prerelease`, delete the tag again if
+#              refuse without it, write the notes (release-notes.mjs,
+#              D-5548), push the tag, `gh release create` naming ALL THREE
+#              artifacts `--prerelease --notes-file`, delete the tag again if
 #              the publish never completes.
 #
 # NOTHING REACHES ORIGIN BEFORE publish's push — so a failed attest step, a
@@ -147,6 +148,17 @@ publish() {
     die "origin already holds $tag — another run published it between prepare and publish; the local tag was removed, nothing was pushed"
   fi
 
+  # THE NOTES (D-5548, D-5551): what changed since the previous release tag, written
+  # by release-notes.mjs from the local tag — commit text goes from git to that
+  # file and from the file to gh, and never through this shell. A writer that
+  # fails costs the release its body, never the release itself: patch-per-
+  # merge must not stall on a sentence.
+  local notes="$OUT_DIR/release-notes.txt"
+  if ! node "$ROOT/deploy/release-notes.mjs" --repo "$ROOT" --tag "$tag" --out "$notes"; then
+    echo "release-main.sh: could not write the release notes for $tag — publishing with an empty body (re-run deploy/release-notes-backfill.mjs for it later)" >&2
+    : > "$notes"
+  fi
+
   # Push BEFORE publish (gh --verify-tag checks the remote); from here the
   # cleanup trap owns the tag until the publish completes.
   if ! git -C "$ROOT" push origin "refs/tags/$tag"; then
@@ -159,7 +171,8 @@ publish() {
   # All three artifacts NAMED, not globbed: a glob's order follows the
   # locale's collation, and the test pins the argv. `--prerelease` trailing:
   # this release is born on `dev` (decision 2); release-stable.sh promotes it.
-  gh release create "$tag" "$tarball" "$sums" "$bundle" --verify-tag --prerelease
+  # `--notes-file` last: the body is the file the notes step wrote (D-5548).
+  gh release create "$tag" "$tarball" "$sums" "$bundle" --verify-tag --prerelease --notes-file "$notes"
   PUBLISHED=true
   echo "release-main.sh: published $tag as a prerelease (dev) — promotion to stable is a fast-forward push of this commit to the stable branch (deploy/release-stable.sh)"
 }

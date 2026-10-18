@@ -1114,7 +1114,10 @@ adds no scroll logic of its own. Two sections — the approved scope, no more:
    release list: version · date · `dev`/`stable` badge · **`verified` only when some node's measured `provenance`
    is `verified` at that tag — never from `bundleListed`, which renders as `bundle listed`** · `refused by 1 of 2
    nodes` from `refused[]` · notes, **rendered as plain text** (no markdown, no HTML, no link auto-detection; a
-   `<pre>`-like block with wrapping) · **Install** (or **Roll back** when every live node runs a newer one), each
+   `<pre>`-like block with wrapping; amended 2026-10-18 by D-5548 and D-5549, plan
+   `2026-10-18-release-notes-whats-new.md`: a body in the release-notes format renders as its groups, and each `#NNN`
+   links to the release source's pull request, built from the number alone, so no URL is ever taken from the text) ·
+   **Install** (or **Roll back** when every live node runs a newer one), each
    opening a confirm sheet naming the nodes it moves, in order, and sending `apply {tag}` or `rollback {to}` by
    direction. The node inventory: label · role · os · current (amber when unversioned, unverified, incomplete or
    `stampRead ≠ ok`) · desired (or `resolveDetail` when `desiredTag` or `channel` is null — no badge, no arrow) ·
