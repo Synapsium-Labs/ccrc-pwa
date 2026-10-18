@@ -367,6 +367,14 @@
   --page-max-wide: 1120px;        /* a wide screen's column (Runs) */
   --measure-chat:  780px;         /* the transcript's reading column (820 at ≥1600) */
 
+  /* The METER's shape (D-5098), read by @ccrc/ui's Meter (meter.css). One
+     segment with no gap is the continuous bar: Refined's, at 5px, which is
+     what the accounts strip and screen drew before. A skin may set all three
+     (SKIN_TOKENS' meter class): lengths and a count, never a colour. */
+  --meter-h:        5px;
+  --meter-segments: 1;
+  --meter-gap:      0px;
+
   /* ------------------------------------------------------------------ *
    *  ELEVATION & GLOW                                                   *
    * ------------------------------------------------------------------ */

@@ -1271,6 +1271,7 @@ Mark it ✓, or write the defect and its fix.
   - **Shape is a skin token:** `--meter-h`, `--meter-segments` and `--meter-gap`, through a mask built from `currentColor` and `transparent` only. Refined is continuous at 5px; Instrument is 10 LED segments at 8px, everywhere.
   - **Kept for the frozen census:** the hook classes `acct-meter`, `acct-fill` and `data-band` stay on the rendered elements.
   - **Later:** carrying the band on the number is W1-gated.
+  - **Measured on the branch (Task 5),** against a fixture build at 360 to 1920 in both skins and both modes: the phone strip's meter is about 56px wide at 360 (the plan guessed 120), so an Instrument segment there is about 4px; the Accounts screen's is 231px at 360; a picker gauge is 88px (segments about 7px); and the wide top strip's is 758px at 1920 (the plan guessed 230), segments about 74px. Each still reads as ten segments. The height is `h-(--meter-h)`, an arbitrary-value utility on the custom property, so no bridge key and no `cn.ts` group was added. The fill's motion is `Meter`'s own `motion-reduce:transition-none`, so `fleet.css`'s second reduced-motion block, which named only `.acct-fill`, went with the rule it governed.
 - **D-5099** — `danger-variants` (Task 6): `Button` gains `danger` (a fill of `--status-dead` with a new `--ink-on-danger`) and `danger-ghost` (a `--status-dead` hairline with `--status-dead-text`). `QuickConfirm` gains `tone`.
   - **The token:** `--ink-on-danger` is hand-set in Phosphor (5.74 dark, 5.73 Daylight) and generated elsewhere as the first plain ink clearing 4.6 on `--status-dead` (measured: all ten, the tightest 4.63). It is gated by new token pairs.
   - **Call sites now:** Abandon, Archive, the forced archive, archive-all and Reap's Remove become `danger` (Remove keeps `reap-go`). The fleet host's Reboot, which restarts the whole fleet box, becomes `danger-ghost` inside its dead-tone banner, with a `danger` confirm. Sign out becomes `ghost`.
@@ -1412,3 +1413,22 @@ A worker never allocates: it names a departure by slug in its report, and the co
 - **D-5451** — `mockup-stacks-follow` (Task 7): `pwa/design/mockup.html`'s copied `:root` block leads its two stacks with `"Geist"` and `"Geist Mono"` too. `contrast.test.ts`'s "design/mockup.html's copied token block still equals tokens.css" compares every declared token, the families included, so the copy follows the change (it redded with `mockup.html :root --family-ui` before the edit). The mockup loads no font file, so it renders the system faces behind the pair, as before. Departs Task 7's file list, which does not name `mockup.html`. Nothing in flight edits it.
 
 Issued and unused (Task 7): none. Both spares, D-5450 and D-5451, are defined above.
+
+### Found while executing Task 5
+
+The coordinator issued two spares for Task 5's departures, 2026-10-18. Both are defined here.
+
+- **D-5446** — `meter-vocabulary-moves-with-it` (Task 5): `limitBand`, `TRACK` and `fillVariants` are DEFINED in `ui/src/primitives/meter.tsx`, and `limit-bar.tsx` re-exports them, so the one meter owns the vocabulary it draws with and `ui/src/index.ts`'s `LimitBar` line stays byte for byte.
+  - **Two files outside Task 5's list follow it.** `pwa/test/limit-off-band.test.ts` reads `meter.tsx` for the `off` variant's literal (`limit-fill--off bg-edge-subtle`), which is where it now lives. `ui/src/primitives/limit-bar.stories.tsx`'s `OffBand` story draws its two rows as `<Meter>` instead of `TRACK` plus `fillVariants`, because `meter.test.tsx`'s one-implementation scan reads `ui/src`, stories included.
+  - **`NOT_A_SKIN`'s `LIMIT_TRACK` reason** in `design-system-boundary.test.ts` (a listed file) is rewritten: no app file assembles a meter from the track any more.
+  - **Held by** `meter.test.tsx`'s "one implementation" case, red when `AccountRow`'s `Gauge` goes back to `LIMIT_TRACK` and `fillVariants`, and by `limit-off-band.test.ts`'s first case, which reads the moved literal.
+  - **Departs** Task 5's file list, which names neither `limit-off-band.test.ts` nor `limit-bar.stories.tsx`.
+
+- **D-5447** — `meter-scan-reads-hand-drawn-hooks` (Task 5): `meter.test.tsx` holds two things the plan's case list left open, both found by review.
+  - **The hand-drawn meter.** Step 3's row "`AccountMeterRow` draws its own `<span className="acct-fill" style=…>`" expects "one implementation" to red, but that case scanned only `LIMIT_TRACK`, `fillVariants(`, `bg-limit-` and `limit-fill`, so the mutant was caught only by the disabled-lane case. The scan now also refuses a lowercase `className=` that names `acct-meter` or `acct-fill` outside `meter.tsx`. `Meter`'s own `trackClassName` / `fillClassName` props, which hand it the hooks, do not match.
+  - **The height.** No case held the track to `h-(--meter-h)`, so a literal `h-[5px]` kept every suite green and would have dropped Instrument's 8px meter back to 5px. "the meter's track is --limit-track" now asserts the class.
+  - **Held by** the mutants `h-(--meter-h)` → `h-[5px]` in `meter.tsx` (red: "the meter's track is --limit-track") and the hand-drawn `AccountMeterRow` (red: "one implementation", and the disabled-lane case).
+  - **Departs** Step 2's text for the one-implementation case, which lists four patterns.
+- **The `off` band reaches the Accounts screen** (D-5098, not a departure): main drew a disabled or sign-in-expired lane's `--edge-subtle` fill on `--bg-well`, where its frozen extent showed in both modes. Through `Meter` it sits on `--limit-track` at the off band's registered 1.02 to 1.10, so the row reads its last percentage with almost no bar. That is the result this task's text asks for; `limit-off-band.test.ts` now names the surface. The remedy (one line, `--ink-tertiary`) stays the operator's call.
+
+Issued and unused (Task 5): none; both spares are defined above.

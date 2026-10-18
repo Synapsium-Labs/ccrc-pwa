@@ -522,11 +522,10 @@
   color: var(--ink-tertiary);
   text-align: right;
 }
-/* Greying a condemned row's gauge fills is `.accounts-row[data-disabled='true']
-   .acct-fill`'s rule, one surface over, for its exact reason: nothing runs on
-   the lane to refresh its statusline, so a frozen crit-red bar keeps reading as
-   live pressure on an account the same row calls expired. Scoped to `.acct-list`
-   like every other picker-row rule in this block. */
+/* A condemned row's gauge fills grey through `Meter`'s `off` (AccountRow
+   passes it), for the reason AccountsScreen greys its own: nothing runs on the
+   lane to refresh its statusline, so a frozen crit-red bar keeps reading as
+   live pressure on an account the same row calls expired (D-5098). */
 /* A picker with nothing to offer says which emptiness it is (SwapSheet's
    `pickerEmptiness`), rather than rendering a bare empty list under "Pick where
    it should live meanwhile". Same treatment as `.proj-none`, the sibling
@@ -777,32 +776,15 @@
   font-size: var(--fs-2xs);
 }
 .acct-win { color: var(--ink-tertiary); }
-.acct-meter {
-  height: 5px;
-  border-radius: var(--r-full);
-  background: var(--bg-well);
-  overflow: hidden;
-}
-.acct-fill {
-  display: block;
-  height: 100%;
-  border-radius: var(--r-full);
-  background: var(--limit-ok);
-  transition: width var(--dur-base) var(--curve-swift);
-}
-/* THE CRIT FILL IS MAIN'S RENDERED RED, `#f85149`, on purpose — and it is a
-   known defect, kept. Main writes `var(--limit-crit, #f85149)`; the token is
-   spelled `--limit-critical`, so the fallback is what every build has painted,
-   identical in both themes and belonging to no palette. Spelling the token
-   right is a VISIBLE change (#E06A55 dark, #B2402C light), and the operator
-   ruled this PR ships none beyond the Appearance section and two defect fixes
-   (2026-10-15). So the value main renders is written as what it is — a literal
-   — rather than through a var() that names a token that does not exist
-   (`css-vars.test.ts` refuses that shape). The fix is one line, for its own
-   change: `background: var(--limit-critical)`. */
-.acct-meter[data-band='warn'] .acct-fill { background: var(--limit-warn); }
-.acct-meter[data-band='crit'] .acct-fill { background: #f85149; }
-.acct-meter[data-band='none'] .acct-fill { background: var(--edge-subtle); }
+/* The meter between the window and the percentage is `Meter` (@ccrc/ui,
+   D-5098), and it owns its whole box: height, radius, track, overflow, and
+   the fill's display, height, radius and colour. No rule here sizes, rounds
+   or paints `.acct-meter` or `.acct-fill` — this sheet is unlayered and would
+   beat the meter's utilities, keeping a skin's meter shape off the strip and
+   the Accounts screen (pwa/test/meter.test.tsx). The two classes stay on the
+   elements as hooks. The crit fill was `#f85149`, a red no palette owned, on
+   a `--bg-well` track that was black in Daylight; the meter's are the
+   palette's `--limit-critical` and `--limit-track`. */
 .acct-pct { color: var(--ink-secondary); text-align: right; min-width: 2.6em; }
 .acct-reset { color: var(--ink-tertiary); white-space: nowrap; }
 
@@ -2197,16 +2179,12 @@ button.proj-card-pool::before {
 /* A sentence ("disabled on the fleet host"), so the UI face — see
    `.accounts-projection`. */
 .accounts-disabled-note { font-family: var(--family-ui); font-size: var(--fs-2xs); color: var(--ink-tertiary); }
-/* A disabled lane greys the WHOLE row, not just its label: without this, a
-   lane disabled while its 5h/7d telemetry sat at crit keeps a solid red bar
-   forever (nothing runs there to refresh it), which reads as live pressure
-   on an account the same row calls switched off. Same specificity as the
-   band rules above (.acct-meter[data-band=…] .acct-fill) — this wins on
-   source order (it comes later in the file) regardless of which band a
-   frozen reading happened to land in. Also the only CSS consumer of
-   data-disabled; the two test files' row selector was previously the
-   attribute's only reason to exist. */
-.accounts-row[data-disabled='true'] .acct-fill { background: var(--edge-subtle); }
+/* A disabled lane's meters grey through `Meter`'s `off`, which AccountsScreen
+   passes for the row — not through a rule here reaching into the fill. A lane
+   disabled while its telemetry sat at crit would otherwise keep a solid red
+   bar forever (nothing runs there to refresh it), live pressure on an account
+   the same row calls switched off; `data-band` keeps the frozen reading. The
+   row's `data-disabled` stays for the tests that select the row. */
 /* Freshness ("last reported …") and the disabled note share the same muted
    tertiary ink already vetted elsewhere (.sess-held uses it identically) —
    no new token, no opacity fade to register with the contrast gate. */
@@ -3272,29 +3250,11 @@ button.proj-card-pool::before {
   height: 22px;
 }
 
-/* ── reduced motion, part two ──────────────────────────────────────────
-   A SECOND block, and its POSITION is the whole point. A media query adds
-   no specificity, so the block near the top of this file can only beat a
-   rule declared BEFORE it — every selector it names is, which is why it
-   works. `.acct-fill` is declared later, so naming it up there sets
-   `transition: none` and then the rule's own `transition` re-declares it a
-   thousand lines down and wins. Measured: adding it to the first block
-   changed nothing.
-
-   `.program-start-door` and `.program-start-go` were the other two, and both
-   left when they became `<Button variant="quiet">`: the component carries
-   `motion-reduce:transition-none` itself, which is a utility on the element
-   rather than a rule in this sheet, so no position argument applies to them.
-
-   .acct-fill animates its WIDTH as a usage window fills. The first block's
-   `.acct-list .acct-row` entry never covered it — `transition` does not
-   inherit, and that row declares none of its own. The two program-start
-   controls are ordinary press transforms that were simply missed.
-
-   motion-reduced.test.ts checks BOTH halves now: that a moving rule is
-   named, and that the naming block is positioned to win. */
-@media (prefers-reduced-motion: reduce) {
-  .acct-fill {
-    transition: none;
-  }
-}
+/* ── reduced motion, part two: retired ────────────────────────────────
+   This file once carried a SECOND reduced-motion block at its end, for
+   `.acct-fill`, whose own `transition` sat a thousand lines below the first
+   block (a media query adds no specificity, so only a later block wins). The
+   fill's motion is now `Meter`'s, which carries
+   `motion-reduce:transition-none` on the element itself (D-5098), so no rule
+   in this sheet moves it and the block went with the rule it governed.
+   motion-reduced.test.ts still checks both halves for whatever moves next. */

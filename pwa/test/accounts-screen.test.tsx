@@ -147,17 +147,17 @@ describe('AccountsScreen — every account, never hidden', () => {
   // row's loudest element reported live pressure on an account the same row
   // calls switched off. `limitBand`/`data-band` are untouched on purpose —
   // the frozen reading is real data, not something to hide — only the
-  // row-level override neutralizes its COLOR.
+  // meter's `off` neutralizes its COLOR.
   it('mutes a disabled lane\'s meter fill even when its frozen reading is crit-red', async () => {
     stubAccounts([acct({ wrapper: 'claude', five: 92, disabled: true })]);
     render(<AccountsScreen />);
     const claudeRow = (await screen.findByText('team·max')).closest('[data-disabled]') as HTMLElement;
     expect(claudeRow).toHaveAttribute('data-disabled', 'true');
-    // The band itself still reports crit (proves this is a row-level CSS
-    // override, not a change to limitBand's own classification).
+    // The band itself still reports crit (the greying is the meter's `off`,
+    // not a change to limitBand's own classification). That the fill really
+    // is off is meter.test.tsx's case, which replaced this file's read of a
+    // fleet.css override the meter made unnecessary (D-5098).
     expect(claudeRow.querySelector(".acct-meter[data-band='crit']")).not.toBeNull();
-    expect(declValue(ruleIn(fleetCss, ".accounts-row[data-disabled='true'] .acct-fill"), 'background'))
-      .toBe('var(--edge-subtle)');
   });
 });
 
