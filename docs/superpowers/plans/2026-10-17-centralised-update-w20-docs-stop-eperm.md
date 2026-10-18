@@ -60,6 +60,11 @@ The operator ruled on 2026-10-17 at 15:50 UTC that this programme repairs stable
 - **D-5336** (follow-up 2026-10-18). Row 64's first assertion carries the whole facts as its message: `expect(o.facts, JSON.stringify(o.facts))`. Its assertions are unchanged. This departs from "Row 64 itself stays byte-unchanged" above, on the coordinator's brief. Why: `toMatchObject`'s diff prints only the keys it was asked about, so the macOS red at `b51a2e20d` showed `state: 'unreadable'` and hid the `step` and `detail` that say which call raised.
 - **D-5337** (follow-up 2026-10-18). The Darwin probe lives in `server/test/platform-hazards.test.ts`, a file outside this wave's two. Why: `probe-macos` runs on every pull request, but only the files on its allow-list, and that file is on it; `ccd-docs-tree.test.ts` is not, and runs on macOS only in a full run. The probe drives the shipped helper's own `Sys.spawn` and changes nothing in it. Its Darwin arm records, and asserts only that it ran (R14(i)'s rule: a red there is a `full-suite` red). Its Linux arm is the control.
 - **D-5338** (follow-up 2026-10-18). Case 5 of the `row 64 on Darwin` describe replays Darwin's second EPERM, the one the B2 probe measured: the first SIGTERM meets EPERM while the leader is still exiting, so `poll()` is None, and the leader becomes reapable a few milliseconds later. The replay holds the leader alive behind a release file that the fake's first answer writes, so a live, unreaped, unsignalled leader at the EPERM is a fact of each run, not a race won. Why: `T20_DARWIN_KILLPG` replays only the zombie answer, which wave 20's absorb already covers, so no Linux row could see this red.
+- **D-5339** (follow-up 2026-10-18). The SIGTERM's absorb waits for the leader. `_signal_group(proc, sig, absorb_until=None)` replaces `absorb_reaped`. `_stop` takes its grace deadline before the SIGTERM and passes it, and an EPERM met while the leader was unreaped polls until the leader is reaped, raising if that deadline passes first. Once the leader is reaped, the grace loop judges what is left under the same deadline, so the stop is still bounded by one `KILL_GRACE_S` plus the SIGKILL.
+  - This amends D-5333's predicate: "`poll()` reaps it now" becomes "`poll()` reaps it before the grace ends".
+  - Every other rule holds. ESRCH is absorbed. The absorb is the SIGTERM call's alone (D-5335): Darwin's red came at the SIGTERM, 536 ms in, so review 573's rule did not cause it and stands. An already-reaped leader's EPERM raises, and so does any errno but EPERM.
+  - The one change in behaviour: a live leader that refuses the SIGTERM still raises EPERM, but `KILL_GRACE_S` later instead of at once. Case 3's `live` arm therefore runs `sleep 10`, not `sleep 3`, so it outlives that wait.
+  - Why: measured on Darwin, the EPERM usually comes 0.6 to 3.8 ms before the leader can be reaped (Step 3), and nothing a stop can read at that instant tells an exiting leader from a live one that refuses. A bounded wait can.
 
 ## File structure
 
@@ -369,6 +374,24 @@ The coordinator re-dispatched run 566 on 2026-10-18. Wave 20 made row 64 green o
   - So wave 20's absorb was right about the zombie and too strict about the instant: it needs `poll()` to reap the leader at the moment of the EPERM, and on Darwin the EPERM usually comes a few milliseconds earlier. Row 64's one green on macOS, at `97493f9b2`, was the minority case.
 - [x] **Step 4 (red first, D-5338).** Case 5 of the describe `row 64 on Darwin`, `row 64, Darwin's exiting answer injected: a status overflow whose leader is not yet reapable at the SIGTERM is too-many, never unreadable (D-5338)`. A PATH git (`t20lingeringGit`) answers `status` in full, then lingers, alive and unreaped, until a release file exists. The fake `killpg` (`t20exiting`) answers the first SIGTERM EPERM with nothing signalled, logs the leader's `/proc` state, and writes the release file; every later answer is `T20_DARWIN_KILLPG`'s. So `poll()` is None at that EPERM, and the leader exits on its own after it, as Darwin's exiting leader does a few milliseconds later.
   **Measured (worker, 2026-10-18) on the unchanged helper:** `1 failed | 4 passed | 184 skipped`. Case 5 is red with `{"state":"unreadable","branch":"ws/a",…,"step":"status","detail":"spawn: Operation not permitted"}`, the macOS failure's shape. Cases 1 to 4 stay green.
+
+- [x] **Step 5 (the fix, D-5339).** `_signal_group(self, proc, sig, absorb_until=None)` replaces `absorb_reaped=False`. `_stop` computes its grace deadline `until` before the SIGTERM, not after it, and passes it as `absorb_until`; the SIGKILL call passes nothing. In `_signal_group`, ESRCH returns. An EPERM with `absorb_until` set, while the leader was unreaped before the call, polls `proc.poll()` every `GROUP_POLL_S` until the leader is reaped, and is then no error. If `absorb_until` passes first, it raises. Every other OSError raises. The docstring keeps review 576's sentences where the behaviour did not change, and says what the wait adds. Line 2 is restamped with `ccrc restamp ccd/ccd`. `--check` reads `ccrc-unmodified`, with one marker line. `git diff --numstat` against `main` reads `21 14 ccd/ccd`: line 2, `_stop`'s two reordered lines, and `_signal_group`. `_group_alive` is untouched, and `_signal_group` has no caller but `_stop`'s two.
+  Case 3's `live` arm now runs `sleep 10`, not `sleep 3`, because a live leader that refuses the SIGTERM now raises after the wait, `KILL_GRACE_S` later, and has to outlive it. Its answer is unchanged.
+  **Measured (worker, 2026-10-18):** the describe gives `5 passed | 184 skipped`.
+- [x] **Step 6 (mutation rows, measured, worker, 2026-10-18).** Each mutant is applied by exact string to the fixed `ccd/ccd` (not restamped). The describe then runs with `-t 'row 64 on Darwin'`, the file is restored with `cp`, and `cmp` matches. `--check` read `ccrc-unmodified` after the last restore. The rows of fix round 1 are restated for the new code. T20-M7 and T20-M8 are new.
+
+| Row | Mutant | Measured red |
+|---|---|---|
+| T20-M1 | the SIGTERM call passes no `absorb_until` (only ESRCH absorbed) | cases 1, 2 and 5 |
+| T20-M2 | drop `or proc.returncode is not None` | case 3: `reaped` reads `returned` |
+| T20-M3 | the wait loop becomes `return` (any EPERM absorbed while the leader is unreaped) | case 3: `live` reads `returned` |
+| T20-M4 | `if e.errno in (errno.ESRCH, errno.EPERM): return` | case 3 (`live` and `reaped` read `returned`) and case 4 (`kill` reads `returned`) |
+| T20-M5 | drop `or e.errno != errno.EPERM` | case 3: `einval` reads `returned` |
+| T20-M6 | the SIGKILL call passes `absorb_until=until` | case 4: `kill` reads `returned` |
+| T20-M7 | no wait: `if proc.poll() is None: raise` (wave 20's instant predicate) | case 5 alone, reading `unreadable` {`step: status`, `detail: spawn: Operation not permitted`} |
+| T20-M8 | the wait never checks `absorb_until` | case 3: `live` reads `returned`, once its `sleep 10` has exited |
+
+`ownership.test.ts` is red under every unrestamped mutant. That red belongs to no row.
 
 ## Readings (for the coordinator to rule)
 

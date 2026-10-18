@@ -3622,7 +3622,7 @@ describe.skipIf(process.platform !== 'linux')('row 64 on Darwin: killpg answers 
       '    finally:',
       '        os.killpg = real',
       'res = {}',
-      "live = subprocess.Popen(['sleep', '3'], start_new_session=True)",
+      "live = subprocess.Popen(['sleep', '10'], start_new_session=True)   # outlives the absorb's wait, KILL_GRACE_S (D-5339)",
       "res['live'] = stop(live)",
       'try:',
       '    real(live.pid, signal.SIGKILL)',

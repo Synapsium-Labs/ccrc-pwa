@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=b5eb42750547e8e34d2f721b310ab3fa83e921f67cde9cfe94db650f2ddfe380
+# ccrc:generated 1 sha256=19c7a89f50a8d05b2a6c15eaef27ea13efe9de3a19890e6186014d3189382935
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -37416,8 +37416,8 @@ class Sys(Sys):
         later gets SIGKILL. The leader is reaped as it goes, so a group that
         has emptied answers ESRCH, which ends the wait early."""
         pgid = proc.pid
-        self._signal_group(proc, signal.SIGTERM, absorb_reaped=True)
         until = self.monotonic() + KILL_GRACE_S
+        self._signal_group(proc, signal.SIGTERM, absorb_until=until)
         while self.monotonic() < until:
             if proc.poll() is not None and not self._group_alive(pgid):
                 break
@@ -37426,23 +37426,30 @@ class Sys(Sys):
             self._signal_group(proc, signal.SIGKILL)
         proc.wait()
 
-    def _signal_group(self, proc, sig, absorb_reaped=False):
+    def _signal_group(self, proc, sig, absorb_until=None):
         """killpg the leader's group. ESRCH, a group already empty, is no
-        error. Darwin answers EPERM, not ESRCH, while every member left is a
-        zombie, and an exited leader not yet reaped is one. With absorb_reaped,
-        which only _stop's SIGTERM passes, an EPERM met while the leader was
-        unreaped reaps it (poll) and is no error either: the grace loop that
-        follows judges whatever is left. At the SIGKILL no wait follows but
-        the leader's, so every EPERM the SIGKILL call meets raises. Any other
-        EPERM, a leader already reaped included, is a refusal and raises; on
-        Linux, which signals a zombie leader's group with rc 0, that is the
-        only kind."""
+        error. Darwin answers EPERM, not ESRCH, while no member left is one it
+        would signal: a zombie, and an exited leader not yet reaped is one, or
+        a leader still exiting that no wait can reap yet (measured on macOS:
+        reapable 0.6 to 3.8 ms later). With absorb_until, which only _stop's
+        SIGTERM passes, an EPERM met while the leader was unreaped polls until
+        the leader is reaped, and reaped by absorb_until it is no error either:
+        the grace loop that follows judges whatever is left. At the SIGKILL no
+        wait follows but the leader's, so every EPERM the SIGKILL call meets
+        raises. Any other EPERM, a leader already reaped or one still unreaped
+        at absorb_until included, is a refusal and raises; on Linux, which
+        signals a zombie leader's group with rc 0, that is the only kind."""
         try:
             os.killpg(proc.pid, sig)
         except OSError as e:
-            reaped = absorb_reaped and e.errno == errno.EPERM and proc.returncode is None and proc.poll() is not None
-            if e.errno != errno.ESRCH and not reaped:
+            if e.errno == errno.ESRCH:
+                return
+            if absorb_until is None or e.errno != errno.EPERM or proc.returncode is not None:
                 raise
+            while proc.poll() is None:
+                if self.monotonic() >= absorb_until:
+                    raise
+                time.sleep(GROUP_POLL_S)
 
     def _group_alive(self, pgid):
         try:
