@@ -11374,3 +11374,29 @@ describe('ccrc history: the recall CLI is not search-gated (spec 2026-10-05 §8.
     expect(readState().graphGateDenials, 'a recall call was counted as a denial').toBe(1);
   });
 });
+
+describe('the hot-path budget through the shell prefix (D-5241)', () => {
+  // AT THE END OF THIS FILE, not beside the PostToolUse pin it mirrors: this file's lines are cited
+  // by number (the citation census above), and an insertion above them moves that census.
+  // D-5241: on Linux every hook command runs through `CLAUDE_CODE_SHELL_PREFIX`
+  // (`ccd-tool-adj`), as ONE string (plan Task 13 step 7), so the same budget
+  // holds with the prefix in front. The hook is not a Bash tool snippet, so the
+  // prefix runs it unchanged (no score raise); what it adds is its own start
+  // and one `bash -c`. Measured 2026-10-17 on a workstation (macOS), 20 runs
+  // each, the two tests in one run: this PostToolUse hook 56 ms a run bare, 58
+  // ms through the prefix (a bare `bash -c true` 6.1 ms p50, 17.9 ms through it).
+  it('p95 of 20 runs through the ccd-tool-adj prefix stays under the same budget (D-5241)', () => {
+    const prefix = path.resolve(__dirname, '../../ccd/ccd-tool-adj');
+    const times: number[] = [];
+    for (let i = 0; i < 20; i++) {
+      const t0 = Date.now();
+      execFileSync(prefix, [`bash ${sh(HOOK)}`], {
+        input: JSON.stringify({ hook_event_name: 'PostToolUse', tool_name: 'Bash' }),
+        encoding: 'utf8', env: hookEnv(),
+      });
+      times.push(Date.now() - t0);
+    }
+    times.sort((a, b) => a - b);
+    expect(times[Math.floor(times.length * 0.95) - 1]).toBeLessThan(150);
+  }, 30000);
+});

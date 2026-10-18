@@ -10,7 +10,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, type CcdHarness, toolAdjToken as adj } from './ccdWsHelpers.js';
 import { eventsOf, decOf } from './lifecycleHelpers.js';
 
 let h: CcdHarness;
@@ -46,7 +46,7 @@ const spawnBoth = (id: string): string[] => {
   return lines.map(composed);
 };
 const today = (sidflag: string): string =>
-  `cd '${h.home}' && exec env COLORTERM=truecolor ${h.sh('_resume_env')} '${h.home}/.local/bin/claude'  ${sidflag} --dangerously-skip-permissions`;
+  `cd '${h.home}' && exec env COLORTERM=truecolor ${h.sh('_resume_env')}${adj(h)} '${h.home}/.local/bin/claude'  ${sidflag} --dangerously-skip-permissions`;
 
 // Fixture helpers, ccd-swap-target-class.test.ts's style.
 const now = (): number => Math.floor(Date.now() / 1000);

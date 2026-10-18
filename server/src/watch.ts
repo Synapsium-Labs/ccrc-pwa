@@ -23,6 +23,10 @@ import { finishedAfter } from './coord/finished.js';
 import { readHookState, readHookStateRawMeasured, type HookState, type HookStateRawRead } from './hookstate.js';
 import { readUsageMeasured, USAGE_FRESH_S } from './usage.js';
 import { sendPrompt } from './inject/send.js';
+import {
+  decideIdleCompactNudge, idleNudgeDisabled, idleNudgeFeedBody, idleNudgeRefusedBody, idleNudgeRowHold, readCompactionTail,
+  type CompactionTail, type IdleNudgeRowFacts,
+} from './idlenudge.js';
 import { askActions, askKey } from './askkey.js';
 // The ask lane's two WINDOWS moved out of this file (whole-branch review
 // F2(b)): `fleet.ts`'s chip is their second reader and cannot import this
@@ -40,7 +44,7 @@ import type {
 // ONE LINE, deliberately: `single-definition.test.ts` scans for `UNCHECKED_PR`
 // arriving from shared/api on a single import line, and a prettier multi-line
 // form is invisible to it.
-import { FLEET_SCOPE, LEDGER_STALE_MS, SERVER_CAPS, MAIL_MAX_ATTEMPTS, MAIL_REPLAY_MS, STALL_FOLLOW_LABEL, STALL_LEVEL_TEXT, TERMINAL_DELIVERY_STATES, UNCHECKED_PR, lifecycleIsDead, sessionLifecycle } from '../../shared/api.js';
+import { FLEET_SCOPE, IDLE_COMPACT_NUDGE_PROMPT, LEDGER_STALE_MS, SERVER_CAPS, MAIL_MAX_ATTEMPTS, MAIL_REPLAY_MS, STALL_FOLLOW_LABEL, STALL_LEVEL_TEXT, TERMINAL_DELIVERY_STATES, UNCHECKED_PR, lifecycleIsDead, sessionLifecycle } from '../../shared/api.js';
 import { JournalMirror } from './coord/mirror.js';
 // The pause marker's ONE definition in the tree. `MAIL_DISABLED_MARKER` is
 // NOT imported beside it: this file holds its own module-local literal
@@ -290,6 +294,12 @@ const CLAIM_SWEEP_MS = 60_000;
  *  constant's reason: a threshold of the quiet time (2 h built-in, 30 min at the least, stall watch settings §7)
  *  does not need the 2 s tick. EXPORTED for its suite, as `LC_SWEEP_MS` and `READINESS_SWEEP_MS` are. */
 export const STALL_SWEEP_MS = CLAIM_SWEEP_MS;
+/** `idle-compact-nudge` (D-5373): the lane's own clock. A nudge waits out `IDLE_NUDGE_SETTLE_MS` (30 s) anyway, so a
+ *  10 s beat costs at most one beat of extra delay; the transcript tail is re-read only when the file changed. */
+export const IDLE_NUDGE_SWEEP_MS = 10_000;
+/** How much of a transcript's end the nudge lane reads: the compaction summary (~14 KB measured) and the attachments
+ *  Claude Code re-injects after it sit well inside 1 MiB, the backlog's own window. */
+const IDLE_NUDGE_TAIL_BYTES = 1024 * 1024;
 /** The gap rule's threshold (slug `stall-clocks-drop-on-an-unobserved-gap` (D-3750)): between one missed sweep (~120 s, clocks survive) and two (~180 s, clocks drop). */
 const STALL_CLOCK_GAP_MS = STALL_SWEEP_MS * 5 / 2;
 
@@ -1241,6 +1251,14 @@ export class FleetWatcher {
    *  row on a 10 s clock; without the memo, every row with no transcript at its
    *  exact address would run a full uuid search on every sweep, forever. */
   private readonly transcripts: TranscriptResolver;
+  /** `idle-compact-nudge` (D-5373): `<id>#<compaction key>` pairs this process has nudged or begun to nudge, written
+   *  BEFORE the send, so a send in flight or a failed one is never retried. The durable half is the `nudge` feed row. */
+  private readonly idleNudged = new Set<string>();
+  /** The newest compaction read off each session's transcript tail, keyed by the file's path, size and mtime, so an
+   *  idle session waiting on the operator costs one stat per beat, not a 1 MiB read. */
+  private readonly idleNudgeTails = new Map<string, { sig: string; tail: CompactionTail }>();
+  private idleNudgeRunning = false;
+  private lastIdleNudgeAt = 0;
   /** The set of projects with at least one non-dead session, as of the last
    *  completed `tick()` — feeds `pushOne`'s "name the project only when more
    *  than one is active" rule. `detectDialogs` and `sweepPr`/`sweepMerged`
@@ -2453,6 +2471,12 @@ export class FleetWatcher {
       // NEVER awaited, the stall watch's reasons: the STOP-DONE lane (D-5370) on THIS tick's rows and listing. Gated on
       // `primed` like the stall watch, so the priming tick never stops anything.
       if (this.primed) void this.sweepStopDone(sessions, records, registryRead.names).catch(() => { /* one bad sweep must not kill the poll */ });
+      // D-5373: NEVER awaited, `sweepMail`'s reason — it can call `sendPrompt` through the per-session queue. Own clock.
+      if (Date.now() - this.lastIdleNudgeAt >= IDLE_NUDGE_SWEEP_MS) {
+        this.lastIdleNudgeAt = Date.now();
+        void this.sweepIdleCompactNudge(sessions, registryRead.names, { panePids, records })
+          .catch(() => { /* one bad sweep must not kill the poll */ });
+      }
       // NEVER awaited, same reasoning as `sweepDivergences`: each is a
       // handful of io reads per PROJECT, on an hourly / 15-minute clock.
       void this.sweepLedgerFloor(records).catch(() => { /* one bad sweep must not kill the poll */ });
@@ -6316,6 +6340,113 @@ export class FleetWatcher {
       kind: route.kind, sessionId: id, project, title: text.title, body: text.body,
       tag: route.tag, recordAlways: true,
     }, this.activeProjects);
+  }
+
+  /**
+   * `idle-compact-nudge` (D-5373; operator ruling 2026-10-17, "Nudge if work is open"). After Claude Code's idle
+   * compaction — which runs on a turn that had ENDED and starts none — type ONE "continue" prompt into a session whose
+   * task list is fresh and has open items. L4: it gathers the facts and applies `decideIdleCompactNudge`'s answer
+   * (`idlenudge.ts`, L1), which holds on every fact it could not read.
+   *
+   * The reads are staged cheapest first and each stops at the first hold: the fleet row (no read), then the live
+   * status, the turn marker, the task list, and last the transcript tail (a stat, and a read only when the file
+   * changed). At most once per compaction: the `<id>#<key>` pair is added to `idleNudged` and the `nudge` feed row is
+   * recorded BEFORE `sendPrompt` runs, and that row (`hasFeedEvent`, exact body) is what a restarted server reads. A
+   * row that did not land types nothing. The send is `sendPrompt` with its echo proofs, never over a draft, a menu,
+   * an armed limit recovery or a pane that shows a turn running. The nudge then reads as the `idle-compact-nudge` pill
+   * in the chat (`transcript/parse.ts`), and its user row is itself a hold for this compaction.
+   */
+  async sweepIdleCompactNudge(sessions: readonly FleetSession[], names: readonly string[], tick: StallTick): Promise<void> {
+    if (!this.primed || this.idleNudgeRunning) return;
+    this.idleNudgeRunning = true;
+    try {
+      const disabled = idleNudgeDisabled(names);
+      const coord = this.deps.coord;
+      const durable = coord !== undefined && this.deps.notifyLog !== undefined;
+      for (const s of sessions) {
+        const row: IdleNudgeRowFacts = {
+          disabled, durable, unmeasured: s.unmeasured.length > 0 || s.statusUnmeasured,
+          lifecycle: s.lifecycle, archived: s.archivedAt !== null, status: s.status,
+          dialogPending: s.dialogPending, askSummary: s.askSummary, ask: s.ask?.state ?? null,
+        };
+        if (idleNudgeRowHold(row) !== null || coord === undefined) continue;
+        await this.idleNudgeOne(s, row, coord, tick);
+      }
+    } finally {
+      this.idleNudgeRunning = false;
+    }
+  }
+
+  /** One session past the row holds: the staged reads, the decision, and the send. */
+  private async idleNudgeOne(s: FleetSession, row: IdleNudgeRowFacts, coord: CoordStore, tick: StallTick): Promise<void> {
+    const rec = tick.records.find((r) => r.id === s.id);
+    const ident = rec === undefined ? null : measuredIdentity(rec);
+    const cfgDir = ident === null ? null : configDirFor(this.deps.cfg, ident.wrapper);
+    const pid = tick.panePids.get(s.id) ?? null;
+    if (ident === null || !cfgDir || !pid) return;
+    const liveRead = await readLiveStateMeasured(this.deps.io, cfgDir, pid);
+    const live = liveRead.ok
+      ? { ok: true as const, word: liveRead.state.status, since: liveRead.state.statusUpdatedAt }
+      : { ok: false as const };
+    const base = { ...row, now: Date.now(), live, mark: { ok: false as const }, tasks: { ok: false as const },
+      compaction: { kind: 'none' as const }, alreadyNudged: () => false };
+    // Stage 1: everything but the marker, the tasks and the tail. A hold here costs no further read.
+    let v = decideIdleCompactNudge(base);
+    if (v.act === 'hold' && v.reason !== 'no-marker') return;
+    const markRead = await readTurnMarkMeasured(this.deps.io, this.deps.cfg.registryDir, s.id, ident.uuid,
+      liveRead.ok ? { startedAt: liveRead.state.startedAt } : null);
+    const mark = markRead.ok ? { ok: true as const, state: markRead.state, bg: markRead.bg } : { ok: false as const };
+    v = decideIdleCompactNudge({ ...base, mark });
+    if (v.act === 'hold' && v.reason !== 'tasks-unread') return;
+    const taskRead = await readTasks(this.deps.io, cfgDir, ident.uuid, { touchedAt: true });
+    const tasks = taskRead.listed
+      ? { ok: true as const, open: taskRead.tasks.filter((t) => t.status === 'in_progress' || t.status === 'pending').length,
+        touchedAt: taskRead.touchedAt ?? null }
+      : { ok: false as const };
+    v = decideIdleCompactNudge({ ...base, mark, tasks });
+    if (v.act === 'hold' && v.reason !== 'no-compaction') return;
+    const compaction = await this.idleNudgeTail(s.id, cfgDir, ident);
+    const alreadyNudged = (key: string): boolean =>
+      this.idleNudged.has(`${s.id}#${key}`) || coord.hasFeedEvent('nudge', s.id, idleNudgeFeedBody(key));
+    v = decideIdleCompactNudge({ ...base, now: Date.now(), mark, tasks, compaction, alreadyNudged });
+    if (v.act !== 'nudge') return;
+    // Once, BEFORE the send: this process's set, then the durable row. A row that did not land types nothing.
+    this.idleNudged.add(`${s.id}#${v.key}`);
+    const body = idleNudgeFeedBody(v.key);
+    this.pushOne({ kind: 'nudge', sessionId: s.id, project: s.project, title: '↻ Nudging after idle compaction', body,
+      recordAlways: true, recordOnly: true }, this.activeProjects);
+    if (!coord.hasFeedEvent('nudge', s.id, body)) {
+      console.warn(`ccrc-server: idle-compact-nudge ${s.id} compaction ${v.key}: the feed record did not land — nothing typed`);
+      return;
+    }
+    const res = await sendPrompt({ tmux: this.deps.tmux, queue: this.deps.queue }, s.id, IDLE_COMPACT_NUDGE_PROMPT,
+      { holdIfAutoContinueArmed: true, refuseIfTurnRunning: true });
+    console.warn(`ccrc-server: idle-compact-nudge ${s.id} compaction ${v.key}: ${res.ok ? 'typed' : `refused (${res.error}), not retried`}`);
+    // The feed agrees with the log line: a refused send gets its own row, so "Nudging" is never the last word on a
+    // nudge that typed nothing.
+    if (!res.ok) {
+      this.pushOne({ kind: 'nudge', sessionId: s.id, project: s.project, title: '↻ Nudge not typed',
+        body: idleNudgeRefusedBody(v.key, res.error), recordAlways: true, recordOnly: true }, this.activeProjects);
+    }
+  }
+
+  /** The newest compaction in this session's transcript tail, re-read only when the file's size or mtime moved. An
+   *  unreadable or absent file answers `none`, which holds. */
+  private async idleNudgeTail(id: string, cfgDir: string, ident: { uuid: string; workdir: string }): Promise<CompactionTail> {
+    const file = (await this.transcripts.resolve({
+      configDir: cfgDir, dir: ident.workdir, registryWorkdir: ident.workdir, uuid: ident.uuid,
+    })).path;
+    const st = await this.deps.io.statMeasured(file);
+    if (!st.ok) return { kind: 'none' };
+    const sig = `${file}:${st.size}:${st.mtimeMs}`;
+    const memo = this.idleNudgeTails.get(id);
+    if (memo !== undefined && memo.sig === sig) return memo.tail;
+    const start = Math.max(0, st.size - IDLE_NUDGE_TAIL_BYTES);
+    const res = await this.deps.io.readFileFromMeasured(file, start);
+    if (!res.ok) return { kind: 'none' };
+    const tail = readCompactionTail(res.data);
+    this.idleNudgeTails.set(id, { sig, tail });
+    return tail;
   }
 
   /**

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=e2192ee7db804cf293a2cd6bbbfc570cc5bc44302e2915ae757518d6b3c59a6b
+# ccrc:generated 1 sha256=1b81659572590b98c24cdc59559ea2d9e93f0aa0f28c55e34bbe2ad4962f7006
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -22535,6 +22535,28 @@ _resume_env() {   # [id] -> one line of KEY=value assignments for `env`, switchi
   printf '%s' "$out"
 }
 
+# ── THE TOOL-CHILD PRIORITY (D-5241, spec 2026-10-16 §5.10) ─────────────────
+# Linux only: `CLAUDE_CODE_SHELL_PREFIX` names `ccd-tool-adj`, which runs a Bash
+# tool command at oom_score_adj 800 (Claude Code stays at 200), so an OOM in the
+# pane kills the tool that outgrew memory rather than the session. Hooks, the
+# statusline and MCP servers pass through it unraised (its header says why).
+# The value the pane would otherwise have had is handed on as
+# CCD_TOOL_ADJ_INNER, EXPANDED BY THE PANE'S SHELL (hence the escaped `$`), so
+# an existing prefix is wrapped, not replaced. Empty on macOS: no
+# /proc/self/oom_score_adj. A path Claude Code would split (it cuts a prefix at
+# its last " -") or one that breaks the single quotes spawns without it, said
+# on stderr.
+_tool_adj_env() {   # -> one line of KEY=value assignments for `env`, or nothing
+  [[ "$CCD_OS" == linux ]] || return 0
+  local p="$HOME/.local/bin/ccd-tool-adj"
+  case "$p" in
+    *" -"*|*"'"*)
+      echo "ccd: warn: $p cannot be a CLAUDE_CODE_SHELL_PREFIX (it contains \" -\" or a quote); spawning without the tool-child priority" >&2
+      return 0 ;;
+  esac
+  printf '%s' "CCD_TOOL_ADJ_INNER=\"\${CLAUDE_CODE_SHELL_PREFIX-}\" CLAUDE_CODE_SHELL_PREFIX='$p'"
+}
+
 # ── A CHILD'S TEMP ROOT (child-workspace reclamation, spec §5.2) ─────────────
 # A workspace minted by `ws-add --child <runId>` carries `$REG/<id>.child`, and
 # ONLY such a workspace spawns with TMPDIR pointed at `$HOME/.cc-tmp/<id>` — a
@@ -23078,7 +23100,9 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # uncontained; the spawn proceeds either way.
   local tmpenv="" ctmp
   ctmp=$(_child_tmpdir "$id") && tmpenv="TMPDIR='$ctmp'"
-  resenv="$resenv${routeenv:+ $routeenv}${tmpenv:+ $tmpenv}"
+  # D-5241: the tool-child priority, on both spawn lines for `$tmpenv`'s reason.
+  local adjenv; adjenv=$(_tool_adj_env)
+  resenv="$resenv${adjenv:+ $adjenv}${routeenv:+ $routeenv}${tmpenv:+ $tmpenv}"
   local launchflags="$rcflag${routeflags:+${rcflag:+ }$routeflags}"
   # COLORTERM=truecolor so Claude Code emits 24-bit colour (it otherwise quantises
   # to 256, collapsing its palette). tmux passes it through to the terminal-drawer
