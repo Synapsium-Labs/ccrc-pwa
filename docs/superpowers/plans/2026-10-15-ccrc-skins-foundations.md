@@ -131,9 +131,9 @@ Every task's requirements include this section. `CLAUDE.md` is the authority; th
 | `ui/src/styles/skins.ts` | **Create** | the skin catalogue (`SKINS`, ids, `preview`), `SKIN_STORAGE_KEY`, `SKIN_TOKENS` (with each tap-bearing density token marked), `resolveSkin`, `applySkin`; `AUTO` and `DEVICE_QUERY` in Task 12a | 1, 2, 5, 12a |
 | `ui/src/styles/skins.css` | **Create** | `:root[data-skin='instrument']` and its media blocks: Instrument's token values, no colour | 1, 5, 11 |
 | `ui/src/styles/tokens.css` | Modify | `:root` gains the role tokens with Refined's values, `--fs-md` and `--ls-tight` (Task 1); meter tokens (5); `--ink-on-danger` (6); the Geist stacks (7); `--bg-hover` and `--bg-pressed` (9); Refined's radii (11). The generated block is regenerated in Tasks 4, 6 and 9. | 1, 4–7, 9, 11 |
-| `ui/src/styles/theme.css` | Modify | imports `skins.css` (1) and `fonts.css` (7) after `tokens.css`; maps the new tokens | 1, 6, 7, 9 |
+| `ui/src/styles/theme.css` | Modify | imports `skins.css` (1) and `fonts.css` (7: none, D-5450) after `tokens.css`; maps the new tokens | 1, 6, 7, 9 |
 | `ui/src/lib/cn.ts` | Modify | the merge learns the new utilities: the font-size group gains `md`, `ui`, `prose`, `meta`, `title` and `section`; the spacing scale gains `gutter`, `row`, `card` and `section` | 1 |
-| `ui/src/styles/fonts.css` | **Create** | the two `@font-face` rules | 7 |
+| `ui/src/styles/fonts.css` | **Create** | the two `@font-face` rules (not created: D-5450) | 7 |
 | `ui/src/fonts/Geist-Variable.woff2`, `GeistMono-Variable.woff2`, `OFL.txt` | **Create** | the vendored Geist pair and its licence | 7 |
 | `pwa/public/licenses/Geist-OFL.txt` | **Create** | the licence as shipped with the app (a bound copy) | 7 |
 | `ui/src/icons/lucide.ts`, `ui/src/icons/LICENSE.lucide` | **Create** | the vendored lucide icon nodes in use, and the ISC licence | 8 |
@@ -1251,6 +1251,7 @@ Mark it ✓, or write the defect and its fix.
   - **The licence:** `OFL.txt` sits beside the fonts, and a bound copy ships at `/licenses/Geist-OFL.txt` through `pwa/public/`. The service worker's denylist gains `/licenses/`, so an installed client reaches the file rather than the app shell. After #384 the Layout fieldset carries one line naming the fonts and linking the notice (Task 12b).
   - **No external request:** a test forbids any external font host in every stylesheet, `index.html` and source file.
   - **Offline precache:** the workbox `globPatterns` gains `woff2` in Step 7b, after #402, which edits `pwa/vite.config.ts`. Until then an offline first load uses the system stack, which is today's behaviour.
+  - **As landed (Task 7):** the files come from `geist@1.8.1`, their SHA-256s recorded in `tokens.css` and held by `pwa/test/fonts.test.ts`. The two `@font-face` rules sit atop `ui/src/styles/tokens.css`, not in a `fonts.css` of their own (D-5450), and `swDenylist`'s own list is `/api/`, `/ws/` and `/licenses/`. Step 7b is not in Task 7's PR.
 - **D-5096** — `skin-default-and-picker` (Tasks 12a and 12b): first-run default by primary input, never by width. `AUTO` resolves `(hover: hover) and (pointer: fine)` to Instrument and everything else to Refined, so tablets get Refined (the spec's O1 ruling), and resizing never flips the skin: a narrow desktop window keeps its device's skin and shows that skin's phone layout (O2).
   - **Once per page load:** the device fact is read at `initSkin()` and never subscribed to (O2). This departs from `initTheme`, which follows the colour scheme live, because W2's shell is the skin's own component and a live re-resolve would remount it under the person using it.
   - **Preview:** `SkinChoice.preview` keeps `AUTO` on Refined everywhere while Instrument is a preview. The W2 PR that lands Instrument's shell sets it false, and that flip is what turns the desktop default on. Instrument is selectable as a labelled preview from ⌘K before then, and before Task 10 by the stored value and a reload (O6).
@@ -1398,6 +1399,19 @@ Task 6's two spares, issued 2026-10-18, are both defined here.
   - **Departs** Task 6's file list. None of the three is in an in-flight table or in #402's file list (re-read 2026-10-18).
 
 Issued and unused (Task 6): none.
+
+### Found while executing Task 7
+
+A worker never allocates: it names a departure by slug in its report, and the coordinator allocates through `POST /api/ledger/deviations` and defines it here, once, in the PR that introduces it. Task 7 used both of its two spares, issued 2026-10-18.
+
+- **D-5450** — `font-faces-in-tokens-css` (Task 7): the two `@font-face` rules are declared at the top of `ui/src/styles/tokens.css`, beside the stacks that name them, and no `ui/src/styles/fonts.css` is created. `theme.css` therefore gains no import.
+  - **Why:** `pwa/test/contrast.test.ts` walks every stylesheet under `ui/src` (`stylesheets()` in `pwa/design/audit.mjs`) and requires each to yield at least one style rule ("parses rules out of %s"). `rulesOf` skips at-rules, so a sheet holding only `@font-face` reds it (measured: `expected 0 to be greater than 0` for `ui/src/styles/fonts.css`). Both files are frozen while #402 is in flight, and a filler rule added only to satisfy the census would be a rule nobody needs.
+  - **Census-neutral:** an `@font-face` is not a rule `rulesOf` reports, so the colour census and every grounds registry read as before. `contrast.test.ts` passes alone with no edit.
+  - **Held by** `pwa/test/fonts.test.ts`'s case (6): both faces sit at brace depth 0 in `tokens.css` (a face nested in `:root` is dropped), `theme.css` imports `tokens.css` before its first rule, and no other stylesheet under `ui/src`, `ui/.storybook`, `pwa/src` or `pwa/public` declares a face. Two mutants are red when run: a face moved inside `:root`, and a second face planted in `reset.css`.
+  - **Departs** Task 7's file list and shape (`fonts.css`, `@import './fonts.css'` after `skins.css`), its test (6) ("theme.css imports fonts.css before any rule") and its sixth mutant, and the spec's §4 load-order sentence, which is amended to match. A later task that unfreezes `contrast.test.ts` may move the faces into a sheet of their own.
+- **D-5451** — `mockup-stacks-follow` (Task 7): `pwa/design/mockup.html`'s copied `:root` block leads its two stacks with `"Geist"` and `"Geist Mono"` too. `contrast.test.ts`'s "design/mockup.html's copied token block still equals tokens.css" compares every declared token, the families included, so the copy follows the change (it redded with `mockup.html :root --family-ui` before the edit). The mockup loads no font file, so it renders the system faces behind the pair, as before. Departs Task 7's file list, which does not name `mockup.html`. Nothing in flight edits it.
+
+Issued and unused (Task 7): none. Both spares, D-5450 and D-5451, are defined above.
 
 ### Found while executing Task 8
 

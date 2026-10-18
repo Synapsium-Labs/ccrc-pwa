@@ -6,24 +6,27 @@ import { swDenylist } from '../src/lib/sw-denylist';
 
 // ── The service worker's navigation denylist is the BUILDER's knob (S6) ────
 //
-// The built-in list is ccrc's own truth only: /api/ and /ws/ must never be
-// answered by the SPA shell. Co-tenant paths (a box may park other services
+// The built-in list is ccrc's own truth only: /api/, /ws/ and /licenses/ must
+// never be answered by the SPA shell. Co-tenant paths (a box may park other services
 // at the same web root) are NOT ccrc's to know — they arrive at build time
 // via CCRC_SW_DENYLIST, and a release-tarball install that sets nothing gets
 // the clean default. swDenylist is the single seam vite.config consumes, so
-// this suite pins both halves: the default stays two entries, and the knob
+// this suite pins both halves: the default stays three entries, and the knob
 // appends prefix-anchored patterns rather than replacing ccrc's own.
 //
 // Tested at all because the failure mode is invisible in development: the
 // service worker is not installed there, so a co-tenant path works perfectly
 // until the bundle ships.
 
+/** ccrc's own list, in order: server state, then the shipped licences (D-5095). */
+const OWN: readonly RegExp[] = [/^\/api\//, /^\/ws\//, /^\/licenses\//];
+
 /** Does this denylist claim the given navigation? */
 const denies = (list: RegExp[], url: string): boolean => list.some((re) => re.test(url));
 
 describe('swDenylist', () => {
-  it('default: ccrc’s own truth only — /api/ and /ws/', () => {
-    expect(swDenylist(undefined).map(String)).toEqual([/^\/api\//, /^\/ws\//].map(String));
+  it('default: ccrc’s own truth only — /api/, /ws/ and /licenses/', () => {
+    expect(swDenylist(undefined).map(String)).toEqual(OWN.map(String));
   });
 
   it('every empty-shaped knob is the same as unset', () => {
@@ -42,6 +45,18 @@ describe('swDenylist', () => {
     expect(denies(list, '/ws/fleet')).toBe(true);
   });
 
+  it('ccrc’s own list denies /licenses/ and everything under it, with no CCRC_SW_DENYLIST set', () => {
+    // D-5095: the fonts' licence ships as a file at /licenses/Geist-OFL.txt.
+    // Answered with the shell, an installed client would render ccrc where the
+    // licence should be, so the notice would be unreachable exactly where the
+    // fonts are cached.
+    const list = swDenylist(undefined);
+    for (const under of ['/licenses/', '/licenses/Geist-OFL.txt', '/licenses/a/b.txt']) {
+      expect(denies(list, under), under).toBe(true);
+    }
+    expect(denies(list, '/licensesx'), 'a sibling is still ccrc’s').toBe(false);
+  });
+
   it('still answers ccrc’s own routes with the shell', () => {
     const list = swDenylist(undefined);
     for (const own of ['/', '/fleet-view', '/settings', '/session/claude-b']) {
@@ -51,7 +66,7 @@ describe('swDenylist', () => {
 
   it('appends co-tenant prefixes after the built-ins', () => {
     expect(swDenylist('/wiki,/fleet').map(String)).toEqual(
-      [/^\/api\//, /^\/ws\//, /^\/wiki(\/|$)/, /^\/fleet(\/|$)/].map(String),
+      [...OWN, /^\/wiki(\/|$)/, /^\/fleet(\/|$)/].map(String),
     );
   });
 
@@ -198,10 +213,10 @@ describe('M7.2: the build refuses an entry covering /docs; the default never den
     expect(denies(list, '/api/docs/p/tree')).toBe(true);
   });
 
-  it('/docs is never on the worker\'s own list (C5): every list leads with exactly the two built-ins', () => {
+  it('/docs is never on the worker\'s own list (C5): every list leads with exactly the three built-ins', () => {
     for (const extra of [undefined, '', '/wiki', '/wiki,/fleet']) {
       const list = swDenylist(extra);
-      expect(list.slice(0, 2).map(String), JSON.stringify(extra)).toEqual([/^\/api\//, /^\/ws\//].map(String));
+      expect(list.slice(0, OWN.length).map(String), JSON.stringify(extra)).toEqual(OWN.map(String));
       expect(denies(list, '/docs/p/specs/a.md'), JSON.stringify(extra)).toBe(false);
     }
   });
