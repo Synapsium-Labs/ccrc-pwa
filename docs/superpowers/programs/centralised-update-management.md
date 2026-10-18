@@ -1938,6 +1938,12 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         question of a retention bound (mail 6418). The update mechanism did not misbehave. The probe's rule
         said "never pruned", which is stale since wave 16, so its threshold is now 3G and its message names the
         snapshot's growth.
+      - **15:05: owned, by design (mail 6419).** Wave 3 keeps the whole journal on purpose. Its bound, journal
+        compaction with the checkpoint-size bound that rides it, is on the delegation broker's wave 4 list, not yet
+        ruled. Its coordinator has put the soak timing to the operator: bound it in wave 4 and watch disk, or
+        before the soak. Sizes on the server at 15:03 (mail 6420): the journal 40.0M, the checkpoint 4.5M,
+        `coord.db` 143M plus a 7.7M WAL. The 14:13 backup holds `coord.db` 131M, the journal 35M and the
+        checkpoint 4M. With 10 backups kept, `~/ccrc-backups` carries about ten copies of that data.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
