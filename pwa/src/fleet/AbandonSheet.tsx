@@ -269,7 +269,7 @@ export function AbandonSheet({
           {abandonConsequence(run, workspaceChild)}
         </p>
         <div className={QC_ACTIONS}>
-          <Button variant="primary" disabled={busy} onClick={confirm}>
+          <Button variant="danger" disabled={busy} onClick={confirm}>
             {busy ? 'Abandoning…' : 'Abandon'}
           </Button>
           <Button variant="ghost" disabled={busy} onClick={onClose}>
