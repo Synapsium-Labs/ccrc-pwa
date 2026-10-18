@@ -2299,6 +2299,24 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec �
     }
   });
 
+  // D-5523 (#601; the operator's ruling of 2026-10-18): a coordinator may sit
+  // in ANY project. The crossing section and wave-lifecycle's refusal row say
+  // so, and the superseded sentence — a coordinator in neither the home nor
+  // the run's project refused — may not come back.
+  it('says a coordinator may coordinate from any project, and no longer refuses one outside the home and the run (D-5523)', () => {
+    const start = skill.indexOf('## When a wave crosses into another project');
+    expect(start, 'the crossing section is gone').toBeGreaterThanOrEqual(0);
+    const end = skill.indexOf('\n## ', start + 1);
+    const section = flat(skill.slice(start, end === -1 ? undefined : end));
+    expect(section).toMatch(/You may coordinate from ANY project/);
+    expect(section).toMatch(/crossing \(you sit outside the run's project\) binds only a fresh spawn/);
+    expect(section).not.toMatch(/neither the home nor the run's project is refused/);
+    const row = refs('wave-lifecycle.md').split('\n').find((l) => l.startsWith('| `project-mismatch` |'));
+    expect(row, 'wave-lifecycle has no project-mismatch row').toBeDefined();
+    expect(row).toMatch(/a coordinator may sit in ANY project and run a programme whose home and runs are elsewhere/);
+    expect(row).toMatch(/you sit outside that project; `by` names YOUR project/);
+  });
+
   // D-2686's caps paragraph tells a refused coordinator which numbers to read.
   // It named `running` for BOTH codes for one round, and only `cap-concurrency`
   // carries one — so the sentence sent a `cap-daily` reader after a field its
