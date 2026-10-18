@@ -107,11 +107,19 @@ export function AccountRow({
       data-disabled={off ? 'true' : 'false'}
       onClick={() => onPick(wrapper)}
     >
-      <Chip dot style={chipStyle}>
-        {accountLabel(roster, wrapper)}
-      </Chip>
-      {suggested && <span className="acct-suggested">suggested</span>}
-      <PoolTag pool={poolChip} />
+      {/* D-5570: the name and its secondary tags are ONE group, the part of
+          the row that gives way at phone width. The group wraps, so the
+          suggested pill and the pool tag drop under the name instead of
+          crushing it, and only the pool tag truncates, past the group's own
+          width. The name is what the operator chooses by: it wraps in an
+          extreme case, never ellipses. fleet.css's `.acct-ident` says how. */}
+      <span className="acct-ident">
+        <Chip dot style={chipStyle}>
+          {accountLabel(roster, wrapper)}
+        </Chip>
+        {suggested && <span className="acct-suggested">suggested</span>}
+        <PoolTag pool={poolChip} />
+      </span>
       <span className="acct-gauges">
         {/* Above the gauges, not instead of them: the numbers are still true of
             the last moment anything ran there, and this is the sentence that

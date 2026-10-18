@@ -1560,3 +1560,16 @@ The follow-ups PR was issued two spares, 2026-10-18; both are defined here.
   - **Not skipped for #402:** none of the items needed a file #402 edits.
 
 Issued and unused (the follow-ups): none.
+
+### Follow-ups after the review polish (#661)
+
+The review polish's lander measured one defect it did not own: the new-session sheet's account rows ran past the sheet body at phone width. Its fix was issued two spares, 2026-10-19; one is defined here.
+
+- **D-5570** — `account-row-fits-the-sheet` (the follow-up): the account picker's row fits `.sheet-body` at every width, in both skins.
+  - **Measured before** (dist build, both Phosphor palettes, the right edge of the rows against the right edge of the sheet body): 51.8px over at 360 and 21.8px at 390 in Refined, 37.8px and 7.8px in Instrument. The keyboard ring's right side was cut by 55.8, 25.8, 41.8 and 11.8px there. At 1280 and 1920 the rows fitted. The swap picker fitted at every width.
+  - **The cause was the list, not a row.** `.acct-list` is a grid whose one column was `auto`, which sizes to its widest item's min-content. A row's pool tag is `white-space: nowrap`, and its `flex: 1 1 0` with `min-width: 0` does not take it out of the row's min-content, so the spare row's tag widened the column to about 384px against a 328px list and pushed every row past the body. The swap picker draws no pool tag on those rows, which is the only reason it fitted; a row with the "suggested" pill would have overflowed it too.
+  - **The fix, in `fleet.css` and `AccountRow.tsx`.** The column is `minmax(0, 1fr)`, so no row can widen the list. The name chip, the suggested pill and the pool tag move into one group, `.acct-ident` (`flex: 1 1 0`, `min-width: 0`, wrapping, `overflow-wrap: anywhere`), which is the part of the row that gives way. Inside it the pool tag takes `flex: 0 1 auto` and `max-width: 100%`: it drops under the name when the line is full and ellipses only when it is longer than the whole group, with its title still carrying the full name. The name is never cut: a label longer than the group wraps inside its pill. The gauges and the chevron keep their fixed column. The group's column gap is the row's own 12px, so a row with room draws as before; the base `.acct-pool` rule, which project rows wear, is unchanged.
+  - **Moves pixels** only where the row was overflowing: in the new-session sheet at 360 and 390 the spare lane's pool tag now sits under its name. Every 1280 and 1920 render, and the swap picker at every width, are pixel-identical to `main`. Rows keep `--row-h` (52px Refined, 44px Instrument under a coarse pointer). Held by `pwa/test/account-row-fit.test.tsx` and by the PR's Playwright measure.
+  - **Not skipped for #402:** the fix needed no file #402 or #627 edits; `fleet-css.test.ts`'s pool-tag pin keeps the base rule as it was.
+
+Issued and unused (the follow-up after #661): 5571.
