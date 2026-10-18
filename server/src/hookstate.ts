@@ -271,9 +271,13 @@ export async function readHookStateMeasured(
  * this file's.
  *
  * `aliveAt` (D-4041, `a-carried-wait-keeps-its-stamp`) is the hook's additive liveness stamp. A subagent's tool event
- * over a main-thread wait keeps that wait's `updatedAt` (its start) and writes `aliveAt` = now. It is present only when the
+ * over a main-thread wait keeps that wait's `updatedAt` (its start) and writes `aliveAt` = now. Since D-5232
+ * (`agent-events-keep-the-main-state`) it is no longer only a carried wait's: behind the server's word
+ * `hook-main-state-v1`, EVERY agent event (a subagent's tool event, SubagentStart, SubagentStop) keeps the main
+ * thread's `updatedAt` and `event`, whatever its state, and writes `aliveAt` = now. It is present only when the
  * file's value is a finite number; an absent or malformed one is ABSENT here, never `malformed`. It is not on
- * `HookState`: the one reader that needs it is the age cut (`foldHookStateRead`), which reads the later of the two.
+ * `HookState`: its readers are the age cut (`foldHookStateRead`), which reads the later of the two, and the stall
+ * watch's raw fact (`stallHookFactOf` in `watch.ts`, read by `stallHookActivityAt` in `coord/stall.ts`).
  */
 export type HookStateRawRead =
   | { ok: true; state: HookState; sessionId: string; identity: 'current' | 'foreign' | 'unregistered'; aliveAt?: number }

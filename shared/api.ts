@@ -10424,7 +10424,7 @@ export function backgroundOnlyRefusal(body: unknown): { count: number | null; ki
 // from Tasks 2 and 10, the file's name, the lease and the grammar in `ccd/session-hook.sh`.
 
 /** One capability word the server advertises. Spelled once, as the keys of `SERVER_CAP_MAP`. */
-export type ServerCap = 'dispatch-live-gate-v1';
+export type ServerCap = 'dispatch-live-gate-v1' | 'hook-main-state-v1';
 
 /** Every word, with what it promises. The value is `true`; the promise is the comment, which a word's reader may
  *  rely on and nothing weaker. `PR_REASON_MAP`'s idiom: a word added to `ServerCap` and not here is TS2741. */
@@ -10436,6 +10436,16 @@ const SERVER_CAP_MAP: Readonly<Record<ServerCap, true>> = {
    *  by this server as a session safe to `/clear`. Added by Task 9b (the change that creates this list), cut after
    *  Task 9 merged; `dispatch-live-gate.test.ts` pins the word beside the gate it names. */
   'dispatch-live-gate-v1': true,
+  /** D-5232 (Task 2): this server reads a hook `done` that stands through delegated work, which is what the fleet's
+   *  hook writes once it sees this word (an agent event keeps the main state and writes `aliveAt`). It promises three
+   *  readers together, on this server: Task 1's `!delegated` rung (D-5231: a `done` over delegated background work
+   *  shows `working · N in background`, never idle), Task 9's live dispatch gate (D-5238: such a `done` over a busy
+   *  pane is never `/clear`ed), and Task 2's stall clocks (`stallHookActivityAt`, `server/src/coord/stall.ts`: the
+   *  frozen arm and the `delegates` hold read `aliveAt`, so subagent activity still counts once agent events stop
+   *  moving `updatedAt`). The promise holds because the change adding this word is cut after Tasks 1 and 9 merged
+   *  (it edits `bucket.test.ts` on Task 1's `background` and Task 9's `dispatch-live-gate.test.ts`) and carries the
+   *  stall clocks itself; `stall-verdict.test.ts` pins them beside the word. */
+  'hook-main-state-v1': true,
 };
 
 /** The words this server advertises, in `GET /health`'s `caps`, and in the file a `server` or `both` node writes. */
