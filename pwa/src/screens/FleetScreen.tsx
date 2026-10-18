@@ -19,13 +19,13 @@ import { UPDATES_STALE_TEXT, useUpdatesView } from '../fleet/useUpdatesView';
 import { SubstrateBanner } from '../fleet/SubstrateBanner';
 import { PasskeyNotice } from '../fleet/PasskeyNotice';
 import { HotFilesStrip } from '../fleet/HotFilesStrip';
-import { groupFleet } from '../fleet/groupFleet';
+import { fleetTree } from '../fleet/fleetTree';
 import { ArchiveAllConfirm, useArchiveAll } from '../fleet/ArchiveAllPlane';
 import { ProjectCard } from '../fleet/ProjectCard';
 import { SessionActionsSheet } from '../fleet/SessionActionsSheet';
 import { BucketBar } from '../fleet/BucketBar';
 import { FleetHead } from '../fleet/FleetHead';
-import { anyDispatchPending, isRunClosed, runCard, runHomeProject } from '../fleet/runWords';
+import { anyDispatchPending, isRunClosed } from '../fleet/runWords';
 import { useFolded } from '../fleet/foldState';
 import { useProjectedHome } from '../fleet/useProjectedHome';
 import { useProjectRows } from '../fleet/useProjectRows';
@@ -37,7 +37,6 @@ import { ReapSheet } from '../session/ReapSheet';
 import { archivedSizeText, archivedSummary } from './ArchiveScreen';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { CLASSES, type ModelClass } from '../../../shared/models';
-import { boardHome } from '../../../shared/api';
 import '../fleet/fleet.css';
 
 export function FleetScreen({
@@ -229,11 +228,10 @@ export function FleetScreen({
       ? `epoch ${epoch} / observed ${observedEpoch === null ? 'never synced' : observedEpoch}`
       : null;
 
-  // Task 4: which card each run belongs on — the card its WORKER renders on.
-  // Built ONCE here from the whole session list, because a card sees only
-  // its own rows and cannot answer it (`runCard`'s docstring has the two
-  // fallbacks and why each is load-bearing).
-  const cardOf = new Map(sessions.map((s) => [s.id, boardHome(s)] as const));
+  // Task 4: which card each run belongs on — the card its WORKER renders on —
+  // is decided with every row's card by `fleetTree` (D-5527), from the whole
+  // session list, because a card sees only its own rows and cannot answer it
+  // (`runCard`'s docstring has the two fallbacks and why each is load-bearing).
 
   return (
     <main className="fleet" data-conn={conn}>
@@ -397,7 +395,7 @@ export function FleetScreen({
           <BucketBar sessions={sessions} acks={acks} ackAll={ackAll} />
 
           <div className="fleet-list">
-            {groupFleet(sessions, projects.knownProjects, acks).map((g) => (
+            {fleetTree(sessions, projects.knownProjects, activeRuns, acks).map((g) => (
               <ProjectCard
                 key={g.project}
                 group={g}
@@ -418,8 +416,10 @@ export function FleetScreen({
                 /* Task 4 (wave 2): THIS card's runs are the runs whose WORKER
                    renders here — `runCard`, never `r.project`. A run kept on
                    its worker's OWN project's card after the row moved would be
-                   spec §1's pure regression: one end on each card, no edge. */
-                runs={activeRuns.filter((r) => runCard(r, cardOf) === g.project)}
+                   spec §1's pure regression: one end on each card, no edge.
+                   Both lists are computed by `fleetTree` (D-5527), over the
+                   same card map as the rows; the filters described here live there. */
+                runs={g.runs}
                 /* The SECOND list (spec §3 F4): the runs this project is the
                    HOME of, working somewhere else. NOT the exact complement of
                    the filter above (D-2582): a run homed on a third project
@@ -451,9 +451,7 @@ export function FleetScreen({
                    renders on this very card — that run is a bracketed row
                    here, and a second line for it would state the same wave
                    twice (spec §6). */
-                abroad={activeRuns.filter(
-                  (r) => runHomeProject(r) === g.project && r.project !== g.project
-                    && runCard(r, cardOf) !== g.project)}
+                abroad={g.abroad}
                 nowMs={nowMs}
                 /* Fleet-wide, unlike every other lookup this card is handed —
                    an orphan's coordinator is by construction NOT among this

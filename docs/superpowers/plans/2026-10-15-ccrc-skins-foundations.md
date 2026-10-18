@@ -82,6 +82,7 @@ Task 13 (quick wins), Task 15 (integrity data), Task 16 (session facts): need no
 Task 9b (grounds reasons): after #402, and after Task 9
 Task 11 (scaffold):        after #402 AND drawer stage 1, and after Tasks 2, 8, 9 and 14
 Task 12b (picker):         after #384, and after Tasks 7, 10 and 12a
+Task 12b remainder (licence link, D-5459): after #402 and #627 (both edit the control and markup censuses)
 Task 14b (role remainder): after the ask sheet half AND drawer stage 1, and after Task 14
 Task 17 (jump to latest):  after the ask sheet half AND drawer stage 1
 D-5104's UI halves:        after #402, in a later plan
@@ -1482,3 +1483,24 @@ Task 10 was issued two spares, 2026-10-18; both are defined here.
   - **Outside the file list:** `ui/design/make-icons.mjs`'s `NAMES` gains the three icons (the generated `lucide.ts` says to add a name there and re-run, and the run used lucide-static 1.59.0, the version in its header). `ui/README.md`'s "Reaching Instrument before there is a picker" now leads with the palette (spec §7 says the README documents both). `pwa/src/session/Composer.tsx` gains `data-page-keys` on its textarea, and its autofocus skips any dialog but a closing one (`[role="dialog"]:not([data-state="closed"])`), so arriving through the palette, which stays mounted at `data-state="closed"` while it animates out, still focuses the composer; the login cover, a dialog with no state, still holds focus.
 
 Issued and unused (Task 10): none.
+
+### Found while executing Task 12b
+
+Task 12b was issued two spares, 2026-10-18; both are defined here.
+
+- **D-5458** — `appearance-row-shared` (Task 12b): the Theme fieldset's row leaves `SettingsScreen.tsx` for `pwa/src/screens/AppearanceRow.tsx`, and the Layout fieldset draws it too.
+  - **Why a module:** the plan asks for the Layout rows "built like `ThemeRow`". Writing its markup a second time in `SkinFieldset.tsx` is the duplicate block `markup-census.test.ts` refuses, and that census is frozen while #402 is in flight. Importing it back from `SettingsScreen.tsx`, which mounts `SkinFieldset`, would be an import cycle. `AppearanceRow` is `ThemeRow` with its markup unchanged.
+  - **`group`, a new required prop:** the row hard-coded `name="settings-theme"`. Two fieldsets sharing a radio `name` are one radio group to the browser, so picking a layout would have unchecked the chosen theme. Theme passes `settings-theme`, Layout `settings-skin`. Held by `skin-picker.test.tsx`'s "is a radio group of its own" case (mutant: Layout passes `settings-theme`; red `expected true to be false`).
+  - **The frame came with it:** `AppearanceFieldset` (the fieldset and its legend) and `AppearanceGroup` (the Dark and Light headings). `RADIO_FIELDSET` and `RADIO_LEGEND` are `<Radio>`'s skin, and `design-system-boundary.test.ts` lets a file import them only beside `Radio`. With the row gone, `SettingsScreen.tsx` would have held them alone.
+  - **The radio rides the name's line:** `.settings-theme` (`fleet.css`) aligns on `baseline` instead of `center`. The plan's Step 4 asks for it at 360, where a note wraps to two lines and a centred radio floated beside the note. It changes one declaration in an existing rule, so the contrast census is unchanged, and the Theme rows get it too because they are the same row. Measured at 360, 390, 1280 and 1920 in both skins and both modes: the radio's centre sits 3px above the name's.
+  - **Outside the file list:** `pwa/test/theme-picker.test.tsx` counts the radios of the Theme group, not of the whole section, which now also holds Layout's three.
+  - **Departs** Task 12b's file list and its "one import, and `<SkinFieldset />`" edit to `SettingsScreen.tsx`.
+- **D-5459** — `licence-line-unlinked-until-402` (Task 12b): the fonts' licence line lands as text, and its link to `/licenses/Geist-OFL.txt` waits for #402.
+  - **Why:** an `<a href>` is a hand-drawn control to `control-census.test.ts`, which must register it with how it reaches a thumb. `@ccrc/ui` has no link primitive, and #402 edits that census, so it is frozen (§In flight). Run on the branch: the anchor reds "registers every one" with `screens/SkinFieldset.tsx <a> (computed)`. Per the freeze rule, that step STOPs rather than editing the census.
+  - **What lands:** "Fonts: Geist and Geist Mono, SIL Open Font License 1.1." under the Layout fieldset, above Theme. The build already ships the notice at `/licenses/Geist-OFL.txt`, and the service worker already keeps that path off the shell fallback (Task 7).
+  - **After #402 and #627 merge** (#627 takes over #402, and both edit `control-census.test.ts` and `markup-census.test.ts`; §Landing order carries the gated line): the line's licence name becomes `<a href="/licenses/Geist-OFL.txt" target="_blank" rel="noopener">` with an underline and `FOCUS_RING`, plus its census entry. It is a plain anchor, not `openExternal` from `lib/markdown.tsx`, whose `absolute()` would turn a path into `https:///licenses/…`. The plan's third test, "the fonts line links /licenses/Geist-OFL.txt", and its mutation row (`href` loses `/licenses/`) come with it.
+  - **Departs** Task 12b's shape (the linked line), its third Step 1 case and its third mutation row.
+
+- **D-5096, extended (Task 12b): the picker follows the choice wherever it is made.** The palette's "Switch layout" (Task 10) calls `setSkin` from any screen, so a picker holding a copy of the choice taken at mount went stale: after ⌘K → Instrument it still showed "Match this device" checked, and clicking that row fired no change, so AUTO could not be picked back. `pwa/src/lib/skin.ts` now keeps the stored choice beside the skin in force (`initSkin` reads it, `setSkin` sets it, the same listeners announce it) and exports `useSkinChoice()`, which `SkinFieldset` reads. It is named apart from `useSkin`, which answers the resolution, so `skin-identity.test.ts`'s `useSkin` registry stays empty. Held by `skin-picker.test.tsx`'s "follows a choice made outside it" case. **Outside the file list:** `pwa/src/lib/skin.ts`. The Theme picker has the same stale-row shape on `main` (Task 10 added the palette's "Switch theme"); it is left to its own follow-up.
+
+Issued and unused (Task 12b): none.

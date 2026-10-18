@@ -31,11 +31,13 @@ import {
 import { carriesUpdateGate } from '../../../shared/update-move';
 import { LOOPBACK_HOSTS } from '../../../shared/base-url';
 import {
-  BackButton, Button, PHOSPHOR, RADIO_FIELDSET, RADIO_LEGEND, Radio, RadioFieldset,
+  BackButton, Button, RadioFieldset,
   SYSTEM, Skeleton, THEMES, toast, useNow,
 } from '@ccrc/ui';
 import { NotificationBell } from '../fleet/NotificationBell';
 import { StallWatchSection } from './StallWatchSection';
+import { AppearanceFieldset, AppearanceGroup, AppearanceRow } from './AppearanceRow';
+import { SkinFieldset } from './SkinFieldset';
 import { CollectLaneSection } from '../fleet/CollectLaneSection';
 import { UNCONFIRMED_TEXT } from './settingsText';
 import { planMove, type MoveIntent, type PlannedMove } from '../fleet/movePlan';
@@ -144,64 +146,9 @@ function gateRefusalOf(err: unknown): string[] | null {
 // `clockTime`, `dayClock`, `releaseDate` — so there is exactly one place, shared by both surfaces, that
 // decides "this build's Date cannot place it".
 
-function ThemeRow({ choice, current, onPick, swatch = true }: {
-  /** Structural, not `ThemeChoice`: "Follow system" is not a palette and
-   *  carries no `mode`, but it IS this row — same label over the same note,
-   *  same radio, in the same group. It was written out a second time instead,
-   *  and the markup census found it. */
-  choice: { id: string; label: string; note: string };
-  current: string;
-  onPick: (id: string) => void;
-  /** "Follow system" draws none: there is no single palette to preview, and
-   *  five swatches of whichever one happens to be applied would be a preview
-   *  of the wrong thing. */
-  swatch?: boolean;
-}): ReactNode {
-  const active = current === choice.id;
-  return (
-    <Radio
-      className="settings-theme"
-      data-active={active}
-      name="settings-theme"
-      value={choice.id}
-      checked={active}
-      onChange={() => onPick(choice.id)}
-      bare
-    >
-      <span className="settings-theme-body">
-        {/* THE SWATCH RIDES THE NAME'S LINE, not the row's far edge. As the
-            row's last flex item behind a `flex: 1` body it sat at the right
-            edge of the section — about 1400px from its own name at a 1920px
-            window — so a palette and its preview read as two columns that
-            happened to share a stripe of tint. Beside the name it is that
-            palette's preview at every width, phone to wide. */}
-        <span className="settings-theme-head">
-          <span className="settings-theme-name">{choice.label}</span>
-          {/* `data-theme` on the swatch itself: tokens.css's blocks are plain
-              attribute selectors, so they resolve on ANY element, not just the
-              root. The preview is therefore the real palette rather than a
-              hand-copied approximation of it. `phosphor` carries no block — it
-              is :root — so it deliberately stamps nothing and inherits the
-              default. */}
-          {swatch && (
-            <span
-              className="settings-theme-swatch"
-              aria-hidden="true"
-              {...(choice.id === PHOSPHOR ? {} : { 'data-theme': choice.id })}
-            >
-              <i style={{ background: 'var(--bg-surface)' }} />
-              <i style={{ background: 'var(--ink-primary)' }} />
-              <i style={{ background: 'var(--accent)' }} />
-              <i style={{ background: 'var(--status-attention)' }} />
-              <i style={{ background: 'var(--status-dead)' }} />
-            </span>
-          )}
-        </span>
-        <span className="settings-note">{choice.note}</span>
-      </span>
-    </Radio>
-  );
-}
+// The row the Theme fieldset draws moved to `AppearanceRow.tsx` (D-5458): the
+// Layout fieldset draws it too, and two copies of its markup are what the
+// markup census refuses.
 
 /** Not a palette, and deliberately not in `THEMES`: the generator writes that
  *  list and `themes:check` rules on it. This is the row that says "whichever
@@ -227,17 +174,17 @@ export function AppearanceSection(): ReactNode {
   return (
     <section className="settings-section" aria-labelledby={titleId}>
       <h2 id={titleId} className="settings-section-title">Appearance</h2>
-      <fieldset className={RADIO_FIELDSET}>
-        <legend className={RADIO_LEGEND}>Theme</legend>
-        <ThemeRow choice={FOLLOW_SYSTEM} current={current} onPick={pick} swatch={false} />
+      <SkinFieldset />
+      <AppearanceFieldset legend="Theme">
+        <AppearanceRow choice={FOLLOW_SYSTEM} current={current} onPick={pick} group="settings-theme" swatch={false} />
         {/* Grouped by how the palette reads, because that is the first thing
             anyone is choosing between — and the ask was light AND dark, not a
             dark list with one light apology. */}
-        <p className={`${RADIO_LEGEND} settings-theme-group`}>Dark</p>
-        {dark.map((t) => <ThemeRow key={t.id} choice={t} current={current} onPick={pick} />)}
-        <p className={`${RADIO_LEGEND} settings-theme-group`}>Light</p>
-        {light.map((t) => <ThemeRow key={t.id} choice={t} current={current} onPick={pick} />)}
-      </fieldset>
+        <AppearanceGroup>Dark</AppearanceGroup>
+        {dark.map((t) => <AppearanceRow key={t.id} choice={t} current={current} onPick={pick} group="settings-theme" />)}
+        <AppearanceGroup>Light</AppearanceGroup>
+        {light.map((t) => <AppearanceRow key={t.id} choice={t} current={current} onPick={pick} group="settings-theme" />)}
+      </AppearanceFieldset>
     </section>
   );
 }

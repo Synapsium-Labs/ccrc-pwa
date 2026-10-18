@@ -32,6 +32,7 @@ const NAMES = [
   'command',
   'corner-down-left',
   'file-text',
+  'folder-code',
   'hand',
   'key-round',
   'mail',

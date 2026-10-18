@@ -24,6 +24,7 @@ import { formatElapsed } from './formatReset';
 import { releasedByProgramme, type FleetGroup } from './groupFleet';
 import { archivableReleased } from './archiveReleased';
 import { nestFleet, type FleetRow } from './nestFleet';
+import { childRunContext, workingOnCard, type FleetTreeGroup } from './fleetTree';
 import { ProjectCardHead } from './ProjectCardHead';
 import { CROSSING_GLYPH, DISPATCH_GLYPH, dispatchWindow, runForSession, waveLabel } from './runWords';
 import { SessionLine } from './SessionLine';
@@ -255,7 +256,10 @@ export function ProjectCard({
   // depth as a bracket plus an indent. Top-level order is `group.sessions`
   // verbatim — a child is lifted out of it and put back under its parent, and
   // nothing else moves.
-  const rows = nestFleet(group.sessions, runs);
+  // D-5527: the fleet tree's rows when the caller built them (`fleetTree`, the
+  // one model both skins read); a caller that hands a bare group still gets
+  // `nestFleet` over the same two inputs, which is the identical answer.
+  const rows = 'rows' in group ? (group as FleetTreeGroup).rows : nestFleet(group.sessions, runs);
   const rowKey = (row: FleetRow): string =>
     row.kind === 'session' ? row.session.id : `spawn:${row.run.id}`;
   // Task 5: the hold reason's door, decided HERE because this is the level that
@@ -321,6 +325,8 @@ export function ProjectCard({
       projectPool={poolOf(s)}
       onOpenRun={openRunFor(s)}
       repo={repoOf(s)}
+      workingOn={workingOnCard(s, group.project)}
+      childRun={childRunContext(s, runs, coordOf)}
     />
   );
 
