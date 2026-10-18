@@ -66,9 +66,15 @@ function readDevice(): boolean {
 let deskAtBoot = false;
 
 let current: SkinId = REFINED;
+/** The CHOICE in force — AUTO or a skin — as `initSkin` read it or `setSkin`
+ *  last made it, wherever it was made (Settings, or the palette's "Switch
+ *  layout"). The picker reads this, not a copy taken at mount, so its checked
+ *  row is never stale (D-5096). */
+let chosen: SkinPreference = AUTO;
 const listeners = new Set<() => void>();
 
-function stamp(id: SkinId): void {
+function stamp(choice: SkinPreference, id: SkinId): void {
+  chosen = choice;
   current = id;
   applySkin(id, document.documentElement);
   for (const l of listeners) l();
@@ -84,7 +90,7 @@ function stamp(id: SkinId): void {
  *  Instrument stops being a preview (D-5246). */
 export function setSkin(choice: string): void {
   const asked = skinPreference(choice);
-  stamp(resolveSkin(asked, deskAtBoot));
+  stamp(asked, resolveSkin(asked, deskAtBoot));
   rememberSkin(asked);
 }
 
@@ -95,7 +101,8 @@ export function setSkin(choice: string): void {
  *  runs. Called once per page load: the reading is never refreshed after. */
 export function initSkin(): void {
   deskAtBoot = readDevice();
-  stamp(resolveSkin(storedSkin(), deskAtBoot));
+  const stored = storedSkin();
+  stamp(stored, resolveSkin(stored, deskAtBoot));
 }
 
 function subscribe(onChange: () => void): () => void {
@@ -106,4 +113,12 @@ function subscribe(onChange: () => void): () => void {
 /** The skin in force: `'refined'` or `'instrument'`. Re-renders on `setSkin`. */
 export function useSkin(): SkinId {
   return useSyncExternalStore(subscribe, () => current, () => REFINED);
+}
+
+/** The stored CHOICE — AUTO or a skin — for the Settings picker, which shows
+ *  the choice rather than what it resolves to (D-5246). Re-renders on every
+ *  `setSkin`, wherever it is called (D-5096). Named apart from `useSkin`: it
+ *  answers which radio is checked, never which shell to draw. */
+export function useSkinChoice(): SkinPreference {
+  return useSyncExternalStore(subscribe, () => chosen, () => AUTO);
 }

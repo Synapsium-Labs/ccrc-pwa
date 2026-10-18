@@ -82,6 +82,7 @@ Task 13 (quick wins), Task 15 (integrity data), Task 16 (session facts): need no
 Task 9b (grounds reasons): after #402, and after Task 9
 Task 11 (scaffold):        after #402 AND drawer stage 1, and after Tasks 2, 8, 9 and 14
 Task 12b (picker):         after #384, and after Tasks 7, 10 and 12a
+Task 12b remainder (licence link, D-5459): after #402 and #627 (both edit the control and markup censuses)
 Task 14b (role remainder): after the ask sheet half AND drawer stage 1, and after Task 14
 Task 17 (jump to latest):  after the ask sheet half AND drawer stage 1
 D-5104's UI halves:        after #402, in a later plan
@@ -1497,7 +1498,9 @@ Task 12b was issued two spares, 2026-10-18; both are defined here.
 - **D-5459** — `licence-line-unlinked-until-402` (Task 12b): the fonts' licence line lands as text, and its link to `/licenses/Geist-OFL.txt` waits for #402.
   - **Why:** an `<a href>` is a hand-drawn control to `control-census.test.ts`, which must register it with how it reaches a thumb. `@ccrc/ui` has no link primitive, and #402 edits that census, so it is frozen (§In flight). Run on the branch: the anchor reds "registers every one" with `screens/SkinFieldset.tsx <a> (computed)`. Per the freeze rule, that step STOPs rather than editing the census.
   - **What lands:** "Fonts: Geist and Geist Mono, SIL Open Font License 1.1." under the Layout fieldset, above Theme. The build already ships the notice at `/licenses/Geist-OFL.txt`, and the service worker already keeps that path off the shell fallback (Task 7).
-  - **After #402 merges:** the line's licence name becomes `<a href="/licenses/Geist-OFL.txt" target="_blank" rel="noopener">` with an underline and `FOCUS_RING`, plus its census entry. It is a plain anchor, not `openExternal` from `lib/markdown.tsx`, whose `absolute()` would turn a path into `https:///licenses/…`. The plan's third test, "the fonts line links /licenses/Geist-OFL.txt", and its mutation row (`href` loses `/licenses/`) come with it.
+  - **After #402 and #627 merge** (#627 takes over #402, and both edit `control-census.test.ts` and `markup-census.test.ts`; §Landing order carries the gated line): the line's licence name becomes `<a href="/licenses/Geist-OFL.txt" target="_blank" rel="noopener">` with an underline and `FOCUS_RING`, plus its census entry. It is a plain anchor, not `openExternal` from `lib/markdown.tsx`, whose `absolute()` would turn a path into `https:///licenses/…`. The plan's third test, "the fonts line links /licenses/Geist-OFL.txt", and its mutation row (`href` loses `/licenses/`) come with it.
   - **Departs** Task 12b's shape (the linked line), its third Step 1 case and its third mutation row.
+
+- **D-5096, extended (Task 12b): the picker follows the choice wherever it is made.** The palette's "Switch layout" (Task 10) calls `setSkin` from any screen, so a picker holding a copy of the choice taken at mount went stale: after ⌘K → Instrument it still showed "Match this device" checked, and clicking that row fired no change, so AUTO could not be picked back. `pwa/src/lib/skin.ts` now keeps the stored choice beside the skin in force (`initSkin` reads it, `setSkin` sets it, the same listeners announce it) and exports `useSkinChoice()`, which `SkinFieldset` reads. It is named apart from `useSkin`, which answers the resolution, so `skin-identity.test.ts`'s `useSkin` registry stays empty. Held by `skin-picker.test.tsx`'s "follows a choice made outside it" case. **Outside the file list:** `pwa/src/lib/skin.ts`. The Theme picker has the same stale-row shape on `main` (Task 10 added the palette's "Switch theme"); it is left to its own follow-up.
 
 Issued and unused (Task 12b): none.

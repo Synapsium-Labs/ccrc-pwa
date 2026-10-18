@@ -7,14 +7,19 @@
 // never names a skin.
 //
 // IT SHOWS THE CHOICE, NOT THE SKIN. AUTO is a stored choice that resolves to
-// a skin; the picker opens on the choice (`storedSkin()`), so a desk on AUTO
+// a skin; the picker shows the choice (`useSkinChoice()`), so a desk on AUTO
 // sees "Match this device" checked rather than whatever AUTO gave it. That is
-// why this reads `storedSkin()` and not `useSkin()`, which answers with the
+// why this reads `useSkinChoice()` and not `useSkin()`, which answers with the
 // resolution: `skin-identity.test.ts`'s useSkin registry stays empty.
+//
+// IT FOLLOWS A CHOICE MADE ELSEWHERE (D-5096). The palette's "Switch layout"
+// calls `setSkin` from any screen; the radios read lib/skin.ts's store rather
+// than a copy taken at mount, so the checked row is never stale and "Match
+// this device" can be picked straight back.
 //
 // APPLY, THEN REMEMBER. `setSkin` stamps before it writes, so storage that
 // throws (a private window, a preview) still leaves the pick on screen for
-// the session; the radio follows local state, not a storage read, so it stays
+// the session; the radio follows the store, not a storage read, so it stays
 // on the pick too. Switching re-renders in place: before W2 a skin is tokens
 // only, so nothing remounts (spec §5.4), and the theme is a different axis.
 //
@@ -25,10 +30,9 @@
 // (#402 edits it), so the anchor and its entry land after #402 merges. Until
 // then the line names the faces and the licence, and the build still ships the
 // notice beside the app (Task 7, `fonts.test.ts`).
-import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { AUTO, INSTRUMENT, SKINS } from '@ccrc/ui';
-import { setSkin, storedSkin } from '../lib/skin';
+import { setSkin, useSkinChoice } from '../lib/skin';
 import { AppearanceFieldset, AppearanceRow } from './AppearanceRow';
 
 /** "Match this device", in words true to THIS build: while Instrument is a
@@ -42,8 +46,7 @@ function matchDeviceNote(): string {
 }
 
 export function SkinFieldset(): ReactNode {
-  const [current, setCurrent] = useState<string>(() => storedSkin());
-  const pick = (id: string): void => { setSkin(id); setCurrent(id); };
+  const current = useSkinChoice();
   const choices = [
     { id: AUTO, label: 'Match this device', note: matchDeviceNote() },
     ...SKINS.map((s) => ({ id: s.id, label: s.preview ? `${s.label} (preview)` : s.label, note: s.note })),
@@ -53,7 +56,7 @@ export function SkinFieldset(): ReactNode {
     <>
       <AppearanceFieldset legend="Layout">
         {choices.map((c) => (
-          <AppearanceRow key={c.id} choice={c} current={current} onPick={pick} group="settings-skin" swatch={false} />
+          <AppearanceRow key={c.id} choice={c} current={current} onPick={setSkin} group="settings-skin" swatch={false} />
         ))}
       </AppearanceFieldset>
       {/* Unlinked until #402 frees the control census (D-5459). */}
