@@ -328,7 +328,7 @@ export function exportHorizonDays(retentionDays: number): number;
 export function planExport(i: {
   nowMs: number; homeRetentionDays: Readonly<Record<string, number>>;
   blobs: readonly { key: string; referrers: readonly ExportCandidate[] }[]; reducer?: ExportReducer;
-}): { horizonDays: number; due: string[]; overdue: string[] };
+}): { horizonDays: number; due: string[]; overdue: string[]; oldestDueSinceMs: number | null };
 export function exportDates(i: {
   homeRetentionDays: Readonly<Record<string, number>>; holders: readonly ExportCandidate[]; files: readonly ExportFile[];
   reducer?: ExportReducer;
@@ -948,3 +948,12 @@ export type ExportMarkOutcome = 'marked' | 'mark-failed' | 'mark-busy' | 'write-
 export function decideMarkOutcome(i: { outcome: ExportMarkOutcome; recorded: string | null }): { markFails: number; write: string | null; intervalMs: number };
 export function decideMarkCheck(i: { metaKeys: readonly string[]; checkedRecord: string | null }): { check: boolean; facts: string[]; record: string };
 export function missingSegmentNames(i: { named: Iterable<string>; present: Iterable<string> }): string[];
+// --- W1-B4 Task 2: what one export segment carries (spec §9.15 "What is due", "Write")
+export interface SegmentBlob { key: string; zBytes: number; exported: boolean; pruned: boolean }
+export interface SegmentCandidate extends ExportCandidate { key: string; blobs: readonly SegmentBlob[] }
+export interface SegmentPlan { take: string[]; carry: string[]; stubs: string[]; bytes: number; leftDue: number; oldestLeftDueSinceMs: number | null }
+export const EXPORT_ROW_META_BYTES: number;
+export function planSegment(i: {
+  nowMs: number; homeRetentionDays: Readonly<Record<string, number>>; rows: readonly SegmentCandidate[]; boundBytes: number; reducer?: ExportReducer;
+  takenBefore?: boolean;
+}): SegmentPlan;

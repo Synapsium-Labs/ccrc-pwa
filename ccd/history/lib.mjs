@@ -2860,15 +2860,27 @@ function perCopyDueMs(c, homeRetentionDays) {
 export function planExport({ nowMs, homeRetentionDays, blobs, reducer = EXPORT_REDUCERS.perCopy }) {
   const due = [];
   const overdue = [];
+  let oldestDueSinceMs = null;
   for (const blob of blobs) {
     if (blob.referrers.length === 0) continue;
     const isDue = blob.referrers.every((r) => reducer(r, homeRetentionDays) < nowMs);
     if (!isDue) continue;
     due.push(blob.key);
+    // W1-B4: when this blob fell due — when its LAST referrer fell due, by the reducer's own due time (B2's per-copy
+    // default, B2's D-4735 (history-export-due-per-copy)), a referrer due from the start dated by its recorded files — and the
+    // earliest over every DATED due blob, which doctor's wait rule reads from the census (§9.15 "The gap guard",
+    // "How long a due blob has waited"). A blob with an undated referrer dates by its dated ones (the early side);
+    // one with none stays due and counted, undated, and never stands in for the epoch.
+    let since = null;
+    for (const r of blob.referrers) {
+      const t = dueSinceMs(r, homeRetentionDays, reducer);
+      if (t !== null && (since === null || t > since)) since = t;
+    }
+    if (since !== null && (oldestDueSinceMs === null || since < oldestDueSinceMs)) oldestDueSinceMs = since;
     const gone = blob.referrers.every((r) => r.files.every((f) => !f.present || fileDeletionMs(f, homeRetentionDays) < nowMs));
     if (gone) overdue.push(blob.key);
   }
-  return { horizonDays: exportHorizonDays(shortestRetention(homeRetentionDays)), due, overdue };
+  return { horizonDays: exportHorizonDays(shortestRetention(homeRetentionDays)), due, overdue, oldestDueSinceMs };
 }
 
 /** The file clock (§9.15): when Claude Code's own cleanup deletes a holding file, its mtime plus ITS home's
@@ -8258,4 +8270,93 @@ export function decideMarkCheck({ metaKeys, checkedRecord }) {
 export function missingSegmentNames({ named, present }) {
   const here = new Set(present);
   return [...new Set(named)].filter((n) => !here.has(n)).sort();
+}
+
+// ===========================================================================
+// What one export segment carries (spec §9.15 "What is due", "Write"; W1-B4
+// Task 2). Pure: the sweep pages its candidate rows, oldest first, with each
+// row's time, its holding files and its blobs' export and prune state, and
+// writes what this answers. Due-ness is the reducer's, B2's per-copy one by
+// default (ruled Q15, rev 3.4), the census's own: one clock (RD1).
+// D-4758 (history-export-row-carries-blob) B2's D-4735 (history-export-due-per-copy)
+// D-4759 (history-export-pruned-row-stub) D-4760 (history-export-segment-bound-estimated)
+// ===========================================================================
+
+/** What one taken row is counted for in the segment bound, beside its new blob bytes: an estimate of its metadata in
+ *  the file (its entry's named columns, its memberships, its share of the family, transcript, epoch and file rows).
+ *  Chosen: a prototype of the format-1 tables measured 0.8–1.1 KiB per entry with one membership and about 0.2 KiB
+ *  per further membership, over a fixed 56 KiB of schema pages. Counting it keeps a segment near
+ *  EXPORT_SEGMENT_MAX_BYTES when rows are small beside their metadata, and bounds a segment's rows (at most about
+ *  EXPORT_SEGMENT_MAX_BYTES / EXPORT_ROW_META_BYTES, some 175,000), so rows that bring no new bytes cannot grow one,
+ *  or the pass's memory, without limit (D-4760 (history-export-segment-bound-estimated)). */
+export const EXPORT_ROW_META_BYTES = 1536;
+
+/** When a due candidate fell due, as a real clock, or null when it has none (W1-B4; §9.15 "How long a due blob has waited").
+ *  The reducer's due time when it names one, the one clock, so due-ness and due-since never disagree. A candidate the
+ *  reducer answers due from the start (-Infinity: under the per-copy rule, no holding file on disk) is dated by B2's
+ *  own W1-k rule, holderDueDateMs, never by a sentinel: the last write its RECORDED files saw (it cannot have fallen
+ *  due before that, so the date errs early, as the rule does), else its row's time. Null, undated, when it has
+ *  neither, or when the only clock is not after the epoch (B1's transcriptFiles reads a NULL mtime_ns as 0): the
+ *  candidate stays due and counted, and no 1970 due-since is ever answered for it (B2's D-4735 (history-export-due-per-copy)).
+ *  Called only for a due candidate. */
+function dueSinceMs(candidate, homeRetentionDays, reducer) {
+  const at = holderDueDateMs(candidate, homeRetentionDays, reducer);
+  return typeof at === 'number' && Number.isFinite(at) && at > 0 ? at : null;
+}
+
+/** One segment's contents (§9.15). A row is DUE when the reducer's due time for it is before nowMs: by default B2's
+ *  EXPORT_REDUCERS.perCopy, under which every file holding a copy of the row has passed its mtime plus its own home's
+ *  retention, minus 30 days (ruled Q15, rev 3.4; B2's D-4735 (history-export-due-per-copy)), whatever its blobs' other referrers
+ *  (rev 3.1 review, BK12; D-4758 (history-export-row-carries-blob)).
+ *  A due row is taken with:
+ *  - the bytes of every blob it references that is neither exported nor pruned (`carry`). A blob already exported
+ *    is never carried again, and one shared by several taken rows is carried once;
+ *  - a stub of every pruned blob it references that no segment carried before (`stubs`): its sha, codec and size
+ *    with no bytes, so a rebuild keeps the row's structure (entries.blob_id is NOT NULL). A stub is never exported
+ *    text and its size never counts toward the bound; its row's metadata does (D-4759 (history-export-pruned-row-stub)).
+ *  Rows are taken in input order, which the sweep makes oldest first, until the next due row's counted bytes (its new
+ *  blob bytes plus EXPORT_ROW_META_BYTES) would pass `boundBytes`; from there no later row is taken, so a segment is
+ *  a prefix of the backlog. The first due row of the PASS is taken whatever its size, so every pass moves the export
+ *  forward: `takenBefore` says an earlier call of the same pass (an earlier page) already took one, and then this
+ *  call's first row must fit too. The due rows left behind are counted, with the earliest time any of them fell
+ *  due. planExport's per-BLOB rule stays the census's; both ask the same reducer with the same default, so the pass
+ *  and the census read one clock (RD1), and a rule is still one reducer and no signature (rev 3.2 review, FE13). */
+export function planSegment({ nowMs, homeRetentionDays, rows, boundBytes, reducer = EXPORT_REDUCERS.perCopy, takenBefore = false }) {
+  const take = [];
+  const carry = [];
+  const stubs = [];
+  const carried = new Set();
+  const stubbed = new Set();
+  let bytes = 0;
+  let leftDue = 0;
+  let oldestLeftDueSinceMs = null;
+  let full = false;
+  for (const row of rows) {
+    const dueAt = reducer(row, homeRetentionDays);
+    if (!(dueAt < nowMs)) continue;
+    const fresh = new Map();
+    for (const b of row.blobs) if (!b.exported && !b.pruned && !carried.has(b.key)) fresh.set(b.key, b);
+    let add = EXPORT_ROW_META_BYTES;
+    for (const b of fresh.values()) add += b.zBytes;
+    if (full || ((take.length > 0 || takenBefore) && bytes + add > boundBytes)) {
+      full = true;
+      leftDue += 1;
+      const since = dueSinceMs(row, homeRetentionDays, reducer);
+      if (since !== null && (oldestLeftDueSinceMs === null || since < oldestLeftDueSinceMs)) oldestLeftDueSinceMs = since;
+      continue;
+    }
+    take.push(row.key);
+    for (const b of fresh.values()) {
+      carried.add(b.key);
+      carry.push(b.key);
+    }
+    bytes += add;
+    for (const b of row.blobs) {
+      if (b.pruned && !b.exported && !stubbed.has(b.key)) {
+        stubbed.add(b.key);
+        stubs.push(b.key);
+      }
+    }
+  }
+  return { take, carry, stubs, bytes, leftDue, oldestLeftDueSinceMs };
 }

@@ -8101,3 +8101,179 @@ describe('W1-B4: the mark-failure backoff and the check after a bind, decided in
     expect(libSeg.missingSegmentNames({ named: [`1.${W}.db`], present: [`1.${W}.db`, `9.${W}.db`] })).toEqual([]);
   });
 });
+
+// ===========================================================================
+// W1-B4 Task 2: what one export segment carries, and the census's oldest
+// due-since (spec §9.15 "What is due", "Write", "The gap guard"; O39's pure
+// halves, O58's B4 half, O41's B4 input). Pure, on lib.mjs alone. The due
+// rule is B2's per-copy reducer (ruled Q15, rev 3.4): a row is due when every
+// file holding a copy of it has passed its mtime plus its own home's
+// retention, minus 30 days, whatever the row's own time.
+// ===========================================================================
+import * as libCarry from '../../ccd/history/lib.mjs';
+
+describe('W1-B4: planSegment, the row-level due rule and what a segment carries (spec 9.15; O39 pure halves)', () => {
+  const DAY = 86_400_000;
+  const NOW = Date.UTC(2026, 11, 1);
+  const A = '/home/u/.claude-a';
+  const C = '/home/u/.claude-c';
+  const homes = { [A]: 180 };                          // home A's horizon: 150 days
+  const M = libCarry.EXPORT_ROW_META_BYTES;            // each taken row's metadata, counted beside its new blob bytes
+  const BOUND = 1_000 + 3 * M;                         // three rows' metadata and 1,000 blob bytes
+  /** A present holding file of home A, last written `ageDays` ago. */
+  const file = (ageDays: number): libCarry.ExportFile => ({ home: A, mtimeMs: NOW - ageDays * DAY, present: true });
+  /** The same in home C, which keeps Claude Code's 30-day default where a case rosters it: horizon 0. */
+  const inC = (ageDays: number): libCarry.ExportFile => ({ home: C, mtimeMs: NOW - ageDays * DAY, present: true });
+  const blob = (key: string, zBytes: number, o: { exported?: boolean; pruned?: boolean } = {}): libCarry.SegmentBlob =>
+    ({ key, zBytes, exported: o.exported ?? false, pruned: o.pruned ?? false });
+  /** A candidate row written `ageDays` ago and held, unless `files` says otherwise, by ONE file of home A last written
+   *  then: under the per-copy rule that file's clock decides, so a row's age here is its file's. */
+  const row = (key: string, ageDays: number | null, blobs: libCarry.SegmentBlob[], files: libCarry.ExportFile[] = [file(ageDays ?? 0)]): libCarry.SegmentCandidate =>
+    ({ key, tsMs: ageDays === null ? null : NOW - ageDays * DAY, files, blobs });
+  const plan = (rows: libCarry.SegmentCandidate[], boundBytes = BOUND) =>
+    libCarry.planSegment({ nowMs: NOW, homeRetentionDays: homes, rows, boundBytes });
+
+  it('BK12: a hot blob\'s old row is taken and carries the blob, while planExport still answers the blob not due', () => {
+    const hot = blob('b-hot', 40);
+    const r = plan([row('e-old', 151, [hot]), row('e-young', 1, [hot])]);
+    expect(r).toEqual({ take: ['e-old'], carry: ['b-hot'], stubs: [], bytes: 40 + M, leftDue: 0, oldestLeftDueSinceMs: null });
+    const census = libCarry.planExport({ nowMs: NOW, homeRetentionDays: homes, blobs: [{ key: 'b-hot', referrers: [row('e-old', 151, [hot]), row('e-young', 1, [hot])] }] });
+    expect(census.due).toEqual([]);
+  });
+  it('a row whose holding file has not passed its due date is neither taken nor counted', () => {
+    expect(plan([row('e-young', 149, [blob('b-1', 10)])])).toEqual({ take: [], carry: [], stubs: [], bytes: 0, leftDue: 0, oldestLeftDueSinceMs: null });
+  });
+  it('a blob already exported is never carried again, and one shared by several taken rows is carried and counted once', () => {
+    const shared = blob('b-shared', 300);
+    const r = plan([row('e-1', 160, [shared, blob('b-done', 500, { exported: true })]), row('e-2', 155, [shared])]);
+    expect(r).toEqual({ take: ['e-1', 'e-2'], carry: ['b-shared'], stubs: [], bytes: 300 + 2 * M, leftDue: 0, oldestLeftDueSinceMs: null });
+  });
+  it('a pruned blob is never carried and its size never counted: its row travels with a stub, once, and an exported one needs none', () => {
+    const pruned = blob('b-pruned', 900, { pruned: true });
+    const r = plan([row('e-1', 160, [pruned]), row('e-2', 159, [pruned, blob('b-gone', 700, { pruned: true, exported: true })])]);
+    expect(r).toEqual({ take: ['e-1', 'e-2'], carry: [], stubs: ['b-pruned'], bytes: 2 * M, leftDue: 0, oldestLeftDueSinceMs: null });
+  });
+  it('the bound: rows in input order until the next would pass it (its new blob bytes and its metadata); nothing after that is taken, not even a row that would fit; the rest are counted with their earliest due-since', () => {
+    const rows = [row('e-1', 170, [blob('b-1', 400)]), row('e-2', 165, [blob('b-2', 400)]), row('e-3', 160, [blob('b-3', 400)]),
+      row('e-4', 158, [blob('b-4', 1)])];
+    const r = plan(rows);
+    expect(r.take).toEqual(['e-1', 'e-2']);
+    expect(r.carry).toEqual(['b-1', 'b-2']);
+    expect(r.bytes).toBe(800 + 2 * M);
+    expect(r.leftDue).toBe(2);
+    expect(r.oldestLeftDueSinceMs).toBe(NOW - 160 * DAY + 150 * DAY);
+  });
+  it('the first due row of the pass is taken whatever its size, so every pass moves the export forward', () => {
+    expect(plan([row('e-big', 160, [blob('b-big', 5_000)]), row('e-next', 159, [blob('b-small', 1)])]))
+      .toEqual({ take: ['e-big'], carry: ['b-big'], stubs: [], bytes: 5_000 + M, leftDue: 1, oldestLeftDueSinceMs: NOW - 9 * DAY });
+  });
+  it('a later page\'s first due row is held to what is left of the bound: with takenBefore, a row past it is left due, never taken whatever its size', () => {
+    const big = [row('e-x', 160, [blob('b-x', 5_000)])];
+    expect(libCarry.planSegment({ nowMs: NOW, homeRetentionDays: homes, rows: big, boundBytes: 1, takenBefore: true }))
+      .toEqual({ take: [], carry: [], stubs: [], bytes: 0, leftDue: 1, oldestLeftDueSinceMs: NOW - 10 * DAY });
+    expect(libCarry.planSegment({ nowMs: NOW, homeRetentionDays: homes, rows: big, boundBytes: 1 }).take, 'the pass\'s first row still travels')
+      .toEqual(['e-x']);
+  });
+  it('each taken row counts EXPORT_ROW_META_BYTES beside its new blob bytes: rows that bring no new bytes (a stub, an exported blob) still fill a segment, so its row count is bounded', () => {
+    expect(M).toBe(1536);
+    const done = blob('b-done', 500, { exported: true });
+    const stub = blob('b-stub', 0, { pruned: true });
+    const rows = Array.from({ length: 10_000 }, (_, i) => row(`e-${i}`, 160, [i % 2 === 0 ? done : stub]));
+    const r = plan(rows, 10 * M);
+    expect(r.take).toHaveLength(10);
+    expect(r.carry).toEqual([]);
+    expect(r.bytes).toBe(10 * M);
+    expect(r.leftDue).toBe(9_990);
+  });
+  it('rows come back in input order, never re-sorted by age', () => {
+    expect(plan([row('e-c', 155, []), row('e-a', 170, []), row('e-b', 160, [])]).take).toEqual(['e-c', 'e-a', 'e-b']);
+  });
+  it('per copy: a row is due by its holding files, never by its own ts_ms; every file must pass; a file gone from disk has passed; a row with no holding file is due at once', () => {
+    const r = plan([
+      row('e-null-old', null, [], [file(200), file(160)]),            // both A copies past 150 days: due
+      row('e-null-young', null, [], [file(200), file(5)]),            // a copy written 5 days ago holds it back
+      row('e-long', 200, [], [file(1)]),                              // a 200-day-old row in an A file appended yesterday: not due
+      row('e-gone', 1, [], [{ ...file(1), present: false }, file(151)]), // its young copy is gone, its other passed: due
+      row('e-clockless', null, [], []),                               // no holding file on record: due at once
+    ]);
+    expect(r.take).toEqual(['e-null-old', 'e-gone', 'e-clockless']);
+  });
+  it('O58 (B4 half): with no reducer argument a row is due by its own copies (EXPORT_REDUCERS.perCopy): a 30-day home holding only swap copies brings no 180-day row forward, and its own rows are due from their file\'s last write; the reducer is one argument, never a signature', () => {
+    const lowered = { ...homes, [C]: 30 };                           // home C rostered on the 30-day default: horizon 0
+    const rows = [
+      row('e-swap', 1, [blob('b-1', 1)], [file(1), inC(1)]),          // a swap copy in C: A's copy waits 149 more days
+      row('e-a-only', 1, [blob('b-2', 1)]),                           // A alone: not due for 149 days
+      row('e-c-only', 1, [blob('b-3', 1)], [inC(1)]),                 // C alone: due from its file's last write
+    ];
+    expect(libCarry.planSegment({ nowMs: NOW, homeRetentionDays: lowered, rows, boundBytes: BOUND }).take).toEqual(['e-c-only']);
+    // The node-shortest reducer (B1's default, history since B2) would have taken all three: one home on the 30-day
+    // default set the whole node's horizon to 0. Passing it is one argument, and no signature changes.
+    expect(libCarry.planSegment({ nowMs: NOW, homeRetentionDays: lowered, rows, boundBytes: BOUND, reducer: libCarry.EXPORT_REDUCERS.shortestHome }).take)
+      .toEqual(['e-swap', 'e-a-only', 'e-c-only']);
+    const never: libCarry.ExportReducer = () => Number.POSITIVE_INFINITY;
+    expect(libCarry.planSegment({ nowMs: NOW, homeRetentionDays: lowered, rows, boundBytes: BOUND, reducer: never }).take).toEqual([]);
+  });
+  it('RD1\'s one clock: with no reducer argument, planSegment takes exactly the rows planExport (the census) answers due, each row a blob of its own', () => {
+    const lowered = { ...homes, [C]: 30 };
+    const rows = [
+      row('e-1', 151, []), row('e-2', 149, []), row('e-3', 1, [], [inC(1)]), row('e-4', 1, [], [file(1), inC(1)]),
+      row('e-5', 300, [], [file(2)]), row('e-6', null, [], []), row('e-7', 2, [], [{ ...file(2), present: false }]),
+    ];
+    const seg = libCarry.planSegment({ nowMs: NOW, homeRetentionDays: lowered, rows, boundBytes: 100 * M });
+    const census = libCarry.planExport({ nowMs: NOW, homeRetentionDays: lowered, blobs: rows.map((r) => ({ key: r.key, referrers: [r] })) });
+    expect(seg.take).toEqual(census.due);
+    expect(seg.take).toEqual(['e-1', 'e-3', 'e-6', 'e-7']);
+  });
+  it('a left-behind row due from the start dates by the last write its recorded files saw, never the epoch; one with no clock on record is counted but undated', () => {
+    const r = libCarry.planSegment({ nowMs: NOW, homeRetentionDays: homes, boundBytes: 1, rows: [
+      row('e-first', 160, [blob('b-first', 5_000)]),                                // the pass's first row: taken whatever its size
+      row('e-gone', 3, [blob('b-gone', 1)], [{ ...file(3), present: false }]),       // its one file deleted: due from the start, last written 3 days ago
+      row('e-clockless', null, [blob('b-none', 1)], []),                             // no file and no time on record: due, undated
+    ] });
+    expect(r.take).toEqual(['e-first']);
+    expect(r.leftDue).toBe(2);
+    expect(r.oldestLeftDueSinceMs, 'the recorded last write, never 0 (1970)').toBe(NOW - 3 * DAY);
+    const undated = libCarry.planSegment({ nowMs: NOW, homeRetentionDays: homes, boundBytes: 1, takenBefore: true,
+      rows: [row('e-clockless', null, [blob('b-none', 1)], [])] });
+    expect(undated).toMatchObject({ take: [], leftDue: 1, oldestLeftDueSinceMs: null });
+  });
+});
+
+describe('W1-B4: planExport\'s oldest due-since, the census input of doctor\'s wait rule (spec 9.15 "The gap guard"; O41 B4 input)', () => {
+  const DAY = 86_400_000;
+  const NOW = Date.UTC(2026, 11, 1);
+  const A = '/home/u/.claude-a';
+  const homes = { [A]: 180 };                          // home A's horizon: 150 days
+  /** A referrer written `ageDays` ago, held by ONE file of home A last written then (the per-copy clock reads that
+   *  file); null: no time and no holding file on record. */
+  const ref = (ageDays: number | null): libCarry.ExportCandidate =>
+    ({ tsMs: ageDays === null ? null : NOW - ageDays * DAY, files: ageDays === null ? [] : [{ home: A, mtimeMs: NOW - ageDays * DAY, present: true }] });
+  const census = (blobs: { key: string; referrers: libCarry.ExportCandidate[] }[]) =>
+    libCarry.planExport({ nowMs: NOW, homeRetentionDays: homes, blobs });
+  it('the earliest time any due blob fell due; a blob falls due when its LAST referrer does (its file\'s last write plus 150 days)', () => {
+    const r = census([
+      { key: 'b-late', referrers: [ref(200), ref(170)] },        // due since its 170-day referrer's file passed: 20 days ago
+      { key: 'b-early', referrers: [ref(190)] },                 // due 40 days ago
+      { key: 'b-young', referrers: [ref(190), ref(10)] },        // not due
+    ]);
+    expect(r.due).toEqual(['b-late', 'b-early']);
+    expect(r.oldestDueSinceMs).toBe(NOW - 40 * DAY);
+  });
+  it('null when nothing is due; a blob nothing on disk holds back is dated by the last write its recorded files saw, else its row\'s time, never the epoch (1970); one with no clock on record is due, counted and undated (null), and never hides a dated one', () => {
+    expect(census([{ key: 'b-young', referrers: [ref(1)] }])).toMatchObject({ due: [], oldestDueSinceMs: null });
+    /** Written `ageDays` ago, its one file of home A since deleted: due from the start under the per-copy rule. */
+    const gone = (ageDays: number): libCarry.ExportCandidate =>
+      ({ tsMs: NOW - ageDays * DAY, files: [{ home: A, mtimeMs: NOW - ageDays * DAY, present: false }] });
+    expect(libCarry.EXPORT_REDUCERS.perCopy(gone(3), homes), 'precondition: the reducer answers due from the start').toBe(Number.NEGATIVE_INFINITY);
+    expect(census([{ key: 'b-gone', referrers: [gone(3)] }])).toMatchObject({ due: ['b-gone'], oldestDueSinceMs: NOW - 3 * DAY });
+    expect(census([{ key: 'b-fileless', referrers: [{ tsMs: NOW - 2 * DAY, files: [] }] }]))
+      .toMatchObject({ due: ['b-fileless'], oldestDueSinceMs: NOW - 2 * DAY });
+    expect(census([{ key: 'b-clockless', referrers: [ref(null)] }])).toMatchObject({ due: ['b-clockless'], oldestDueSinceMs: null });
+    // A recorded mtime of 0 (B1's transcriptFiles reads a NULL mtime_ns as 0) is no clock either.
+    expect(census([{ key: 'b-zero', referrers: [{ tsMs: null, files: [{ home: A, mtimeMs: 0, present: false }] }] }]))
+      .toMatchObject({ due: ['b-zero'], oldestDueSinceMs: null });
+    // The dated blob first, so an undated one met after it must not overwrite it.
+    expect(census([{ key: 'b-early', referrers: [ref(190)] }, { key: 'b-clockless', referrers: [ref(null)] }]).oldestDueSinceMs)
+      .toBe(NOW - 40 * DAY);
+  });
+});
