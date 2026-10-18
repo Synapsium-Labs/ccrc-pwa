@@ -191,6 +191,28 @@ describe('the digest: APPROVAL_DIGEST_JQ is held equal to approvalDigestBytes ov
   });
 });
 
+describe('the digest, end to end: the request the real hook sends carries each corpus row\'s canonical array', () => {
+  const rows = (JSON.parse(fs.readFileSync(DIGEST_CORPUS, 'utf8')) as { rows: Array<{ name: string; inputText: string; canonical: string }> }).rows;
+  it('every row: the canonical string sent is the row\'s, and a "none" row sends nothing', () => {
+    const wrong: string[] = [];
+    for (const row of rows) {
+      for (const f of ['calls', 'request.body']) fs.rmSync(path.join(stub, f), { force: true });
+      put('stub/ruling.out', '{"state":"declined"}');
+      // The row's input text, raw (so 1.0 reaches jq as written), with the PermissionRequest event name the hook routes on.
+      const text = row.inputText.replace(/^\{/, '{"hook_event_name":"PermissionRequest",');
+      const r = spawnSync('bash', [HOOK], { input: text, encoding: 'utf8', env: ENV(), timeout: 30_000 });
+      expect(r.status).toBe(0);
+      const bodyFile = path.join(stub, 'request.body');
+      const sent = fs.existsSync(bodyFile) ? (JSON.parse(fs.readFileSync(bodyFile, 'utf8')) as { canonical: string; digest: string }) : null;
+      if (row.canonical === 'none') { if (sent !== null) wrong.push(`${row.name}: sent ${sent.canonical}`); continue; }
+      if (sent === null) { wrong.push(`${row.name}: nothing sent`); continue; }
+      if (sent.canonical !== row.canonical) wrong.push(`${row.name}: sent ${sent.canonical}`);
+      if (sent.digest !== sha(row.canonical)) wrong.push(`${row.name}: digest ${sent.digest}`);
+    }
+    expect(wrong).toEqual([]);
+  });
+});
+
 describe('a verified ruling is printed, once, and nothing else is', () => {
   it('a signed ordinary allow for this session, agent, digest and nonce: exactly one allow decision, no updatedPermissions or updatedInput', () => {
     const r = fire(payloadFor(MAIN));
@@ -457,6 +479,8 @@ describe('the request carries the canonical array, and the digest is its sha256'
   });
 });
 
+// D-5486: committed under fixtures/approvals/captures, not fixtures/delegation (whose census pins its own scenarios),
+// and normalised past Task 13's footnote 8 so the corpus scan passes and no model prose lands.
 describe('Task 13\'s captures, committed for this PR', () => {
   const versions = fs.readdirSync(CAPTURES).sort();
   it('one directory per captured version, each with the main and the subagent capture', () => {

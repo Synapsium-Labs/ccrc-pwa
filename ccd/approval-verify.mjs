@@ -9,7 +9,8 @@
 // key from `$HOME/.ccrc/approval-signing.pub` (PEM SPKI, pinned once by the install spine, spec §6.4). Prints exactly
 // one line, `allow <reason>` or `deny <reason>`, only when ALL of these hold:
 //   - the Ed25519 signature is good over the record's canonical bytes (`approvalRulingBytes`' second copy, below);
-//   - the record is v1 with exactly its ten fields, and names this session, agent, input digest, nonce and row;
+//   - the record is v1 with exactly its ten fields, and names this session (the REGISTRY id), agent, input digest,
+//     nonce and row (D-5488: the row too, so a ruling for another row of the same session never replays here);
 //   - it has not expired (`expiresAt` > now);
 //   - for an `allow`, its class is `ordinary` (an `escalate` or `forbidden` request is never allowed, D-5299).
 // Anything else prints NOTHING and exits 0: the hook then treats it as no ruling and the prompt stays with the

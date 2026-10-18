@@ -572,6 +572,7 @@ if [ "$TARGET" = "agent" ]; then
     && { [ ! -f ~/.cc-sessions/notify.sh ] || cp -a ~/.cc-sessions/notify.sh ~/ccrc-backups/$TS/notify.sh; } \
     && { [ ! -f ~/.cc-sessions/session-hook.sh ] || cp -a ~/.cc-sessions/session-hook.sh ~/ccrc-backups/$TS/session-hook.sh; } \
     && { [ ! -f ~/.cc-sessions/compact-card.mjs ] || cp -a ~/.cc-sessions/compact-card.mjs ~/ccrc-backups/$TS/compact-card.mjs; } \
+    && { [ ! -f ~/.cc-sessions/approval-verify.mjs ] || cp -a ~/.cc-sessions/approval-verify.mjs ~/ccrc-backups/$TS/approval-verify.mjs; } \
     && { [ ! -f ~/.config/systemd/user/ccrc-agent.service ] || cp -a ~/.config/systemd/user/ccrc-agent.service ~/ccrc-backups/$TS/ccrc-agent.service; } \
     && { [ ! -f ~/.config/systemd/user/claude-session@.service ] || cp -a ~/.config/systemd/user/claude-session@.service ~/ccrc-backups/$TS/claude-session@.service; }"
   # `--exclude 'ccrc-mail.token'`: a checkout may still hold a gitignored
@@ -650,6 +651,8 @@ if [ "$TARGET" = "agent" ]; then
   # scanning for it, and a comment carrying the same spelling shadows the real
   # invocation, the trap this file's other notes record springing twice.
   install_atomic ccd/compact-card.mjs .cc-sessions/compact-card.mjs 644
+  # The approval wait's ruling verifier (plan Task 14), placed like the helper above; the hook sends no request without it.
+  install_atomic ccd/approval-verify.mjs .cc-sessions/approval-verify.mjs 644
   # session-hook.sh + its installer ship every deploy too — the installer is
   # idempotent (it backs up settings.json itself before touching it) and
   # safe to re-run against homes it already converged.

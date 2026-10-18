@@ -11254,8 +11254,9 @@ export function approvalDigestBytes(hookInput: Readonly<Record<string, unknown>>
     field('cwd'), field('tool_input')]);
 }
 
-/** A signed ruling's record (spec §6.3 server half, step 5). `expiresAt` is epoch milliseconds, the request window's
- *  end (D-5441). */
+/** A signed ruling's record (spec §6.3 server half, step 5). `sessionId` is the child's REGISTRY id (the request
+ *  body's `sessionId`), not Claude Code's `session_id`; `rowId` is the row the `201` named, and the verifier checks
+ *  both (D-5488). `expiresAt` is epoch milliseconds, the request window's end (D-5441). */
 export interface ApprovalRulingRecord {
   readonly v: 1;
   readonly rowId: number;

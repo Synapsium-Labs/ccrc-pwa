@@ -1172,6 +1172,13 @@ function healthy(prefix: string): string {
   containedPath(home);   // plant the poisoned gh FIRST; ghStub overwrites it below
   writePkg(home, '>=1.0.0');
   stubNode(home, 'v22.20.0');
+  // The approval wait's two checks (coordinator-first routing, plan Task 14): a healthy fleet box has the verifier
+  // beside the hook and the server's key pinned, so `approval-verifier-runnable` and `approval-key` both PASS and
+  // `HEALTHY_SKIPS` is unchanged. `ccrc-approval-key.test.ts` breaks each piece.
+  mkdirSync(join(home, '.cc-sessions'), { recursive: true });
+  writeFileSync(join(home, '.cc-sessions', 'approval-verify.mjs'), '// the approval verifier\n');
+  mkdirSync(join(home, '.ccrc'), { recursive: true });
+  writeFileSync(join(home, '.ccrc', 'approval-signing.pub'), '-----BEGIN PUBLIC KEY-----\nfixture\n-----END PUBLIC KEY-----\n');
   stub(home, 'flock', 'exit 0');
   // `python3` is a presence stub, except for the box-token check's two JSON readers, which go to the real interpreter
   // by EXACT program text (read from the shipped checks file): a stub that prints nothing makes them read `state-unreadable`
