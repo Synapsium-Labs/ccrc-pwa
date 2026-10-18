@@ -1984,6 +1984,15 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       - 19:55: v0.0.289 (#626), v0.0.290 (#630) and v0.0.291 (#632) followed, unapplied. STATUS: fleet and server
         v0.0.287, newest v0.0.291, intent dev/auto=stable, backups fleet 188M/server 1588M, disk free fleet
         209G/work volume 84G/server 31G, no anomalies.
+      - **2026-10-18 20:55 UTC: both boxes moved to v0.0.291 (#632) by the operator's console tap**, fleet first
+        (20:18:12 to 20:19:30), then the server (20:19:38 to 20:20:17); both reports `done`, `from: pwa`, sweep
+        `down: 3` on the fleet and `ok` on the server. v0.0.292 (#633), v0.0.293 (#637) and v0.0.294 (#636)
+        followed, unapplied. **At 20:35:32 the operator set the `*` intent row's auto rule from `stable` to `off`**
+        (`setBy: pwa`; channel `dev` and no pin, unchanged). Since no release is stable yet, `stable` never moved a
+        box on its own, so the change alters no behaviour now. It means no box moves without a tap, even after
+        the promotion. Server backups rose 1588M to 1730M: a 227M snapshot replaced one of 85M, the ruled journal
+        growth. STATUS: fleet and server v0.0.291, newest v0.0.294, intent dev/auto=off, backups fleet
+        189M/server 1730M, disk free fleet 205G/work volume 83G/server 31G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
