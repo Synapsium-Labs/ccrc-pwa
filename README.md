@@ -5544,11 +5544,13 @@ least) and `reparse`, each a dry run unless `--apply`, and `doctor --backup`, `-
 session (`CLAUDECODE` set), and all but the three that bind a store refuse under `~/.ccrc/history-off`.
 `prune --apply`, `--repair`, `--adopt`, `--restore`, `--rebuild` and `import --session <id> --file
 <path> --apply` also need a terminal outside every `cc-*` pane. These are speed bumps, not walls: the
-store holds verbatim session text, secrets included, and past Claude Code's retention it is that text's
-only copy. `doctor --backup` writes `db/backups/<UTC time>.db`; `--restore <file>` puts one back,
-`--rebuild` remakes a lost store from the journal, and until the sweep has replayed it every other
-writing verb refuses (`recovering`), bar the `--migrate` an older restored store needs first and the
-`--adopt` an unbound one needs.
+store holds verbatim session text, secrets included, and past Claude Code's retention it and its
+export are that text's only copies. As text nears that retention, the sweep copies it into immutable
+SQLite segments under `~/.ccrc/history/export/` on the home filesystem, at most one segment an hour,
+pausing before that filesystem's free-space floor. `doctor --backup` writes `db/backups/<UTC time>.db`;
+`--restore <file>` puts one back, `--rebuild` remakes a lost store from the journal and the export, and
+until the sweep has replayed them every other writing verb refuses (`recovering`), bar the `--migrate`
+an older restored store needs first and the `--adopt` an unbound one needs.
 
 ---
 
