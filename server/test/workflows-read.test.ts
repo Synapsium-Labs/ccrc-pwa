@@ -138,7 +138,7 @@ describe('SessionWorkflows — what the session has, or that it could not be rea
     seedRun(RUN, RUNNING);
     const io = counted(localIO, (op, p) => op === 'range' && p.endsWith('journal.jsonl'));
     const r = await new SessionWorkflows(io, S).read(LIVE, T0 + 9000);
-    const [w] = (r as { workflows: Array<Record<string, unknown>> }).workflows;
+    const [w] = (r as unknown as { workflows: Array<Record<string, unknown>> }).workflows;
     expect([w!.done, w!.failed, w!.total]).toEqual([null, null, null]);
   });
 });
