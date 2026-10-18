@@ -66,7 +66,7 @@ const peers = (app: FastifyInstance, qs: string, headers: Record<string, string>
 
 interface PeerRow {
   id: string; deliverable: string; archivedAt: number | null; archivedStale: boolean;
-  lifecycle: string | null; intent: string | null; claimedPaths: string[];
+  lifecycle: string | null; intent: string | null; claimedPaths: string[]; hibernatedAt?: number | null;
 }
 const rows = (res: { body: string }): PeerRow[] =>
   (JSON.parse(res.body) as { peers: PeerRow[] }).peers;
@@ -101,6 +101,18 @@ describe('GET /api/peers', () => {
     // (D17: a skill reaches a home only once its installer has run there;
     // the route reaches every caller).
     expect(res.json().etiquette).toEqual([...PEER_ETIQUETTE]);
+  });
+
+  it('a hibernated peer is yes and carries hibernatedAt; every other row carries hibernatedAt null (D-5242)', async () => {
+    const home = mkTmp('ccrc-peers-');
+    seed(home, 'demo-quiet-mesa', UUID_A);
+    seed(home, 'demo-still-pond', UUID_B, { stopped: '1755700000 ccd', hibernated: '1755700000 7' });
+    const w = await openApp(home, tmuxRunner(['demo-still-pond'])); app = w.app;
+    const res = await peers(app, '?project=demo');
+    expect(res.statusCode).toBe(200);
+    const byId = new Map(rows(res).map((p) => [p.id, p]));
+    expect(byId.get('demo-still-pond')).toMatchObject({ deliverable: 'yes', lifecycle: 'stopped', hibernatedAt: 1755700000 * 1000 });
+    expect(byId.get('demo-quiet-mesa')?.hibernatedAt).toBeNull();
   });
 
   it('reports the archived-but-live row: archivedAt verbatim, archivedStale NAMED, deliverable yes', async () => {

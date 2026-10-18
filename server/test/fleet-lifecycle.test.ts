@@ -15,6 +15,7 @@ import { localIO } from '../src/io.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
 import { degradedReadIO } from './ioDoubles.js';
+import { inArchivedFold } from '../../shared/api.js';
 
 const NOW_SEC = 1785300000;
 const ID = 'demo-quiet-basin';
@@ -230,5 +231,31 @@ describe('the substrate axis reaches the wire — projected, not re-read (D-310 
     expect(s.bucket).toBe('dead');
     expect(s.lifecycle).toBe('stopped');
     expect(s.substrate).toEqual({ at: (NOW_SEC - 60) * 1000, text: 'wedged' });
+  });
+});
+
+// D-5242: a hibernated MAIN CHECKOUT is asleep, not put away. Its row is the stopped-main-checkout shape the archived
+// fold's second clause takes (no workspace, no pane, a stop stamp) — so that clause now excludes a row with
+// `hibernatedAt`, and the sleeper stays at the card's top level, where opening it wakes it. The first clause (the
+// `archived` bucket) is unchanged: an archived workspace with a stale `.hibernated` stays in the fold.
+describe('the archived fold and a hibernated row (D-5242)', () => {
+  it('a hibernated main checkout is NOT in the archived fold', async () => {
+    const s = await one({ stopped: `${NOW_SEC - 90} ccd`, started: '1', hibernated: `${NOW_SEC - 90} 7` }, false);
+    expect(s.status).toBe('dead');
+    expect(s.workspace).toBeNull();
+    expect(s.hibernatedAt).toBe((NOW_SEC - 90) * 1000);
+    expect(inArchivedFold(s)).toBe(false);
+  });
+
+  it('the same row without .hibernated is a stopped main checkout, in the fold as before', async () => {
+    const s = await one({ stopped: `${NOW_SEC - 90} ccd`, started: '1' }, false);
+    expect(inArchivedFold(s)).toBe(true);
+  });
+
+  it('an archived workspace with a stale .hibernated stays in the fold (its first clause)', async () => {
+    const s = await one({ stopped: `${NOW_SEC - 90} ccd`, started: '1', hibernated: `${NOW_SEC - 90} 7`,
+      workspace: ID, branch: `ws/${ID}`, base: 'origin/main', archived: String(NOW_SEC - 60) }, false);
+    expect(s.bucket).toBe('archived');
+    expect(inArchivedFold(s)).toBe(true);
   });
 });

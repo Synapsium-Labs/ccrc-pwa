@@ -7,7 +7,7 @@ import path from 'node:path';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
-  hibernateShadowPass, type HibernateShadowMemory, type HibernateSweepDeps,
+  hibernatePass, type HibernateSweepMemory, type HibernateSweepDeps,
 } from '../src/hibernateSweep.js';
 import {
   HIBERNATE_AFTER_HOURS_FILE, HIBERNATE_DISABLED_MARKER, HIBERNATE_LIVE_MARKER, HIBERNATE_SWEEP_MS,
@@ -27,6 +27,9 @@ import { liveRowFor, turnReadDeps } from '../src/turnverdict.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import type { Runner } from '../src/exec.js';
+import { ACTOR_FLAGS_CAP } from '../src/ccdargv.js';
+import type { HibernateActPort } from '../src/hibernateSweep.js';
+import type { CcdResult } from '../src/lifecycle.js';
 
 const NOW = 1_800_000_000_000;
 const MIN = 60_000;
@@ -69,14 +72,15 @@ function fake(o: { ageMs?: number; afterHours?: string | null; presence?: Pick<P
     log: (l) => { lines.push(l); },
     startedAt: STARTED,
     now: () => clock.now,
+    act: null,
   };
   return { deps, lines, coord, clock };
 }
-const mem = (): HibernateShadowMemory => ({ lastLine: new Map() });
+const mem = (): HibernateSweepMemory => ({ lastLine: new Map(), lastActLine: new Map() });
 const pass = (f: Fake, m = mem(), names: readonly string[] = [], rows = [row(ID)], recs = [rec(ID)]) =>
-  hibernateShadowPass(f.deps, m, rows, recs, names);
+  hibernatePass(f.deps, m, rows, recs, names);
 
-describe('hibernateShadowPass: the shadow line', () => {
+describe('hibernatePass: the shadow line', () => {
   it('a hibernate verdict logs one shadow line naming the id and its idle hours', async () => {
     const f = fake();
     const out = await pass(f);
@@ -90,23 +94,18 @@ describe('hibernateShadowPass: the shadow line', () => {
     expect(f.lines).toEqual([]);
   });
 
-  it('the deps carry no ccd runner: the pass has no way to act (17a has no live arm)', () => {
-    const src = readFileSync(fileURLToPath(new URL('../src/hibernateSweep.ts', import.meta.url)), 'utf8')
-      .split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join('\n');
-    expect(src).not.toMatch(/\brunCcd\b|\bCCD_ARGV\b|\bccdargv\b/);
-  });
-
-  it('with hibernate-live listed it still only logs: the live marker is 17b\'s', async () => {
+  it('with no act port the pass cannot act, whatever the markers say', async () => {
     const f = fake();
-    await pass(f, mem(), [HIBERNATE_LIVE_MARKER]);
-    expect(f.lines).toHaveLength(1);
+    const out = await pass(f, mem(), [HIBERNATE_LIVE_MARKER]);
+    expect(out).toEqual([{ id: ID, verdict: { act: 'hibernate', idleMs: 7 * HOUR } }]);
+    expect(f.lines).toEqual([`ccrc-server: hibernate-shadow ${ID} idle=7h`]);
   });
 
   it('hibernate-disabled: nothing is read and nothing is logged', async () => {
     const f = fake();
     const live = vi.fn(f.deps.liveWord);
     const after = vi.fn(f.deps.readAfterHours);
-    expect(await hibernateShadowPass({ ...f.deps, liveWord: live, readAfterHours: after }, mem(), [row(ID)], [rec(ID)],
+    expect(await hibernatePass({ ...f.deps, liveWord: live, readAfterHours: after }, mem(), [row(ID)], [rec(ID)],
       [HIBERNATE_DISABLED_MARKER, HIBERNATE_LIVE_MARKER])).toEqual([]);
     expect(f.lines).toEqual([]);
     expect(live).not.toHaveBeenCalled();
@@ -119,7 +118,7 @@ describe('hibernateShadowPass: the shadow line', () => {
     expect(two.lines).toEqual([`ccrc-server: hibernate-shadow ${ID} idle=3h`]);
     const unlisted = fake({ ageMs: 3 * HOUR, afterHours: '2' });
     const after = vi.fn(unlisted.deps.readAfterHours);
-    await hibernateShadowPass({ ...unlisted.deps, readAfterHours: after }, mem(), [row(ID)], [rec(ID)], []);
+    await hibernatePass({ ...unlisted.deps, readAfterHours: after }, mem(), [row(ID)], [rec(ID)], []);
     expect(unlisted.lines).toEqual([]);
     expect(after).not.toHaveBeenCalled();
   });
@@ -157,7 +156,7 @@ describe('hibernateShadowPass: the shadow line', () => {
   });
 });
 
-describe('hibernateShadowPass: after a server start, presence is unknown', () => {
+describe('hibernatePass: after a server start, presence is unknown', () => {
   it('an idle row with no open claim logs nothing inside PRESENCE_OPEN_TTL_MS of the start, and logs one sweep after', async () => {
     const f = fake();
     f.deps = { ...f.deps, startedAt: NOW };
@@ -173,7 +172,7 @@ describe('hibernateShadowPass: after a server start, presence is unknown', () =>
   });
 });
 
-describe('hibernateShadowPass: the store reads, on a real store', () => {
+describe('hibernatePass: the store reads, on a real store', () => {
   const OPEN = RUN_STATES.filter((s) => !(TERMINAL_RUN_STATES as readonly string[]).includes(s));
   let seq = 0;
   const openRun = (s: CoordStore, o: { worker?: string; claimedBy: string; state: RunState }): void => {
@@ -214,7 +213,7 @@ describe('hibernateShadowPass: the store reads, on a real store', () => {
     const bad = { ok: false as const, kind: 'run-unreadable' as const, detail: 'fixture' };
     for (const over of [{ openRunsClaimedBy: () => bad }, { openRunsForSession: () => bad },
       { activeClaims: () => { throw new Error('db gone'); } }, { outstandingMailFor: () => { throw new Error('db gone'); } }]) {
-      const out = await hibernateShadowPass({ ...f.deps, coord: port(f.coord, over) }, mem(), [row(ID)], [rec(ID)], []);
+      const out = await hibernatePass({ ...f.deps, coord: port(f.coord, over) }, mem(), [row(ID)], [rec(ID)], []);
       expect(out[0]!.verdict).toEqual({ act: 'hold', reason: 'runs-unreadable' });
     }
     expect(f.lines).toEqual([]);
@@ -222,22 +221,22 @@ describe('hibernateShadowPass: the store reads, on a real store', () => {
 
   it('no coordination store at all holds every row runs-unreadable', async () => {
     const f = fake();
-    expect((await hibernateShadowPass({ ...f.deps, coord: undefined }, mem(), [row(ID)], [rec(ID)], []))[0]!.verdict)
+    expect((await hibernatePass({ ...f.deps, coord: undefined }, mem(), [row(ID)], [rec(ID)], []))[0]!.verdict)
       .toEqual({ act: 'hold', reason: 'runs-unreadable' });
   });
 
   it('a claim held and outstanding mail each hold', async () => {
     const f = fake();
-    const claim = await hibernateShadowPass({ ...f.deps, coord: port(f.coord, { activeClaims: () => [{ heldBy: ID }] as never }) },
+    const claim = await hibernatePass({ ...f.deps, coord: port(f.coord, { activeClaims: () => [{ heldBy: ID }] as never }) },
       mem(), [row(ID)], [rec(ID)], []);
     expect(claim[0]!.verdict).toEqual({ act: 'hold', reason: 'claim' });
-    const mail = await hibernateShadowPass({ ...f.deps, coord: port(f.coord, { outstandingMailFor: (id) => (id === ID ? [{}] : []) as never }) },
+    const mail = await hibernatePass({ ...f.deps, coord: port(f.coord, { outstandingMailFor: (id) => (id === ID ? [{}] : []) as never }) },
       mem(), [row(ID)], [rec(ID)], []);
     expect(mail[0]!.verdict).toEqual({ act: 'hold', reason: 'mail' });
   });
 });
 
-describe('hibernateShadowPass: the viewer is Presence.isOpen', () => {
+describe('hibernatePass: the viewer is Presence.isOpen', () => {
   it('a connection that reported visible:false still holds its session (an open screen in a hidden tab)', async () => {
     let t = NOW;
     const presence = new Presence(() => t);
@@ -253,7 +252,7 @@ describe('hibernateShadowPass: the viewer is Presence.isOpen', () => {
   });
 });
 
-// The pass above is handed stubs; this one runs the watcher's REAL `sweepHibernateShadow`, so the closures it wires
+// The pass above is handed stubs; this one runs the watcher's REAL `sweepHibernate`, so the closures it wires
 // (the registry listing, `turnMarkFor` judged against the live process, the store) decide, and one runner that
 // answers tmux and ccd alike records every command: the shadow arm reaches ccd for nothing.
 describe('the watcher\'s own shadow pass, its deps unmocked', () => {
@@ -310,11 +309,28 @@ describe('the watcher\'s own shadow pass, its deps unmocked', () => {
     try {
       const t = await h.tick();
       expect(t.rows[0]).toMatchObject({ bucket: 'idle', status: 'idle' });
-      await h.w.sweepHibernateShadow(t.rows, t.records, [HIBERNATE_LIVE_MARKER]);
+      await h.w.sweepHibernate(t.rows, t.records, [HIBERNATE_LIVE_MARKER]);
       const shadow = warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('hibernate-shadow'));
       expect(shadow).toEqual([`ccrc-server: hibernate-shadow ${WID} idle=7h`]);
       expect(h.ccdCalls()).toEqual([]);
       expect(h.calls.some((c) => c.args.includes('hibernate') || c.args.includes('kill-session'))).toBe(false);
+    } finally {
+      warn.mockRestore();
+      h.coord.db.close();
+    }
+  });
+
+  it('armed, with the serialiser handed over: the real watcher composes one `ccd hibernate` through its own runner', async () => {
+    const h = await harness();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const order: string[] = [];
+      h.w.useStopDoneSerialiser({ serial: async <T>(fn: () => Promise<T>): Promise<T> => { order.push('serial'); return fn(); } } as never);
+      const t = await h.tick();
+      await h.w.sweepHibernate(t.rows, t.records, [HIBERNATE_LIVE_MARKER]);
+      expect(h.ccdCalls().map((c) => c.args.slice(-2))).toEqual([['hibernate', WID]]);
+      expect(order).toEqual(['serial']);
+      expect(warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('hibernat'))).toEqual([`ccrc-server: hibernated ${WID} idle=7h (D-5242)`]);
     } finally {
       warn.mockRestore();
       h.coord.db.close();
@@ -326,9 +342,9 @@ describe('the watcher\'s own shadow pass, its deps unmocked', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     try {
       const t = await h.tick();
-      await h.w.sweepHibernateShadow(t.rows, t.records, []);
+      await h.w.sweepHibernate(t.rows, t.records, []);
       const n = h.calls.length;
-      await h.w.sweepHibernateShadow(t.rows, t.records, []);
+      await h.w.sweepHibernate(t.rows, t.records, []);
       expect(h.calls.length).toBe(n);
     } finally {
       warn.mockRestore();
@@ -339,7 +355,7 @@ describe('the watcher\'s own shadow pass, its deps unmocked', () => {
   it('the tick runs the shadow pass, and not on the priming tick', async () => {
     const h = await harness();
     try {
-      const spy = vi.spyOn(h.w, 'sweepHibernateShadow').mockResolvedValue(undefined);
+      const spy = vi.spyOn(h.w, 'sweepHibernate').mockResolvedValue(undefined);
       await (h.w as unknown as { tick(): Promise<void> }).tick();
       expect(spy).not.toHaveBeenCalled();
       await (h.w as unknown as { tick(): Promise<void> }).tick();
@@ -350,7 +366,7 @@ describe('the watcher\'s own shadow pass, its deps unmocked', () => {
   });
 });
 
-describe('hibernateShadowPass: the store and presence are read again after the live reads', () => {
+describe('hibernatePass: the store and presence are read again after the live reads', () => {
   // The live reads take real time (a tmux call, two file reads). What the store or a screen said BEFORE them is not
   // what holds AFTER them: Task 17b's act-time re-measure reuses this order, so a pass that read them once is red.
   it('a viewer who opens the session while the live reads run holds viewer', async () => {
@@ -378,11 +394,132 @@ describe('hibernateShadowPass: the store and presence are read again after the l
   });
 });
 
-describe('hibernateShadowPass: no presence port at all', () => {
+describe('hibernatePass: no presence port at all', () => {
   it('holds viewer (fail closed): an unmeasured screen is never an empty one', async () => {
     const f = fake();
     const out = await pass({ ...f, deps: { ...f.deps, presence: undefined } });
     expect(out).toEqual([{ id: ID, verdict: { act: 'hold', reason: 'viewer' } }]);
     expect(f.lines).toEqual([]);
+  });
+});
+
+// TASK 17b: THE LIVE ARM. Armed only by `$REG/hibernate-live` (with `hibernate-disabled` unlisted), on a box whose
+// `ccd caps` lists `hibernate`, once the coordination serialiser is handed over; at most HIBERNATE_PER_SWEEP acts a
+// sweep; ccd's `session-busy` refusal is a quiet skip.
+describe('hibernatePass: the live act', () => {
+  const CAPS = { ccdVerbs: ['hibernate', 'ensure', ACTOR_FLAGS_CAP] };
+  const ok: CcdResult = { ok: true, stdout: '', stderr: '', killed: false, signal: null };
+  interface Live { f: Fake; argvs: string[][]; order: string[]; port: HibernateActPort }
+  const live = (o: { answer?: (argv: readonly string[]) => CcdResult; serial?: HibernateActPort['serial'] | 'none';
+    fleetState?: { ccdVerbs: string[] | null }; rowAtAct?: HibernateActPort['rowAtAct']; ageMs?: number;
+    presence?: Pick<Presence, 'isOpen'> } = {}): Live => {
+    const f = fake({ ageMs: o.ageMs, presence: o.presence });
+    const argvs: string[][] = [];
+    const order: string[] = [];
+    const port: HibernateActPort = {
+      runCcd: async (argv) => { order.push('ccd'); argvs.push([...argv]); return o.answer?.(argv) ?? ok; },
+      fleetState: (o.fleetState ?? CAPS) as never,
+      serial: o.serial === 'none' ? null : (o.serial ?? (async (fn) => { order.push('serial'); return fn(); })),
+      queueRun: async (_id, fn) => { order.push('queue'); return fn(); },
+      rowAtAct: o.rowAtAct ?? (async (r) => ({ ok: true, row: row(r.id) })),
+    };
+    return { f: { ...f, deps: { ...f.deps, act: port } }, argvs, order, port };
+  };
+  const ids = (n: number): string[] => Array.from({ length: n }, (_, i) => `project-a-basin-${i}`);
+  const passN = (l: Live, n: number, names: readonly string[], m = mem()) =>
+    hibernatePass(l.f.deps, m, ids(n).map((id) => row(id)), ids(n).map((id) => rec(id)), names);
+
+  it('no hibernate-live: shadow lines and no ccd call (17a\'s pin, kept)', async () => {
+    const l = live();
+    await passN(l, 2, []);
+    expect(l.argvs).toEqual([]);
+    expect(l.f.lines).toEqual(ids(2).map((id) => `ccrc-server: hibernate-shadow ${id} idle=7h`));
+  });
+
+  it('hibernate-live: one declared `ccd hibernate` per idle row, on the serialiser and then the session queue', async () => {
+    const l = live();
+    const out = await pass(l.f, mem(), [HIBERNATE_LIVE_MARKER]);
+    expect(l.argvs).toEqual([['hibernate', ID, '--surface', 'agent', '--actor', 'sweep:hibernate']]);
+    expect(l.order).toEqual(['serial', 'queue', 'ccd']);
+    expect(out).toEqual([{ id: ID, verdict: { act: 'hibernate', idleMs: 7 * HOUR }, act: { kind: 'hibernated' } }]);
+    expect(l.f.lines).toEqual([`ccrc-server: hibernated ${ID} idle=7h (D-5242)`]);
+  });
+
+  it('at most HIBERNATE_PER_SWEEP (3) acts a sweep, fleet-wide; the rest wait, unlogged, for the next sweep', async () => {
+    const l = live();
+    await passN(l, 5, [HIBERNATE_LIVE_MARKER]);
+    expect(l.argvs.map((a) => a[1])).toEqual(ids(3));
+    expect(l.f.lines.filter((x) => x.includes('hibernate-shadow'))).toEqual([]);
+  });
+
+  it('hibernate-disabled beside hibernate-live: nothing at all', async () => {
+    const l = live();
+    expect(await passN(l, 2, [HIBERNATE_LIVE_MARKER, HIBERNATE_DISABLED_MARKER])).toEqual([]);
+    expect(l.argvs).toEqual([]);
+    expect(l.f.lines).toEqual([]);
+  });
+
+  it('a box whose ccd caps do not list hibernate: no ccd call, shadow lines only', async () => {
+    const l = live({ fleetState: { ccdVerbs: ['ensure', ACTOR_FLAGS_CAP] } });
+    await pass(l.f, mem(), [HIBERNATE_LIVE_MARKER]);
+    expect(l.argvs).toEqual([]);
+    expect(l.f.lines).toEqual([`ccrc-server: hibernate-shadow ${ID} idle=7h`]);
+  });
+
+  it('no serialiser handed over yet: no ccd call, shadow lines only', async () => {
+    const l = live({ serial: 'none' });
+    await pass(l.f, mem(), [HIBERNATE_LIVE_MARKER]);
+    expect(l.argvs).toEqual([]);
+    expect(l.f.lines).toHaveLength(1);
+  });
+
+  it('ccd refusing session-busy (exit 3) is a quiet skip: one line per id per hour, never a warning per sweep', async () => {
+    const l = live({ answer: () => ({ ok: false, stdout: '', stderr: 'ccd: session-busy: attached — 1 terminal(s) attached to the pane\n', killed: false, signal: null }) });
+    const m = mem();
+    const first = await pass(l.f, m, [HIBERNATE_LIVE_MARKER]);
+    expect(first[0]!.act).toEqual({ kind: 'skipped', detail: 'attached' });
+    for (let i = 0; i < 3; i++) { l.f.clock.now += HIBERNATE_SWEEP_MS; await pass(l.f, m, [HIBERNATE_LIVE_MARKER]); }
+    expect(l.argvs, 'asked again every sweep: ccd re-measures cheaply').toHaveLength(4);
+    expect(l.f.lines).toEqual([`ccrc-server: hibernate-skip ${ID}: ccd re-measured it as attached — asked again next sweep`]);
+    l.f.clock.now = NOW + HOUR;
+    await pass(l.f, m, [HIBERNATE_LIVE_MARKER]);
+    expect(l.f.lines, 'and once more an hour later').toHaveLength(2);
+  });
+
+  it('any other failure is logged once per id per hour too, and the pass goes on', async () => {
+    const l = live({ answer: () => ({ ok: false, stdout: '', stderr: 'boom', killed: false, signal: null }) });
+    const m = mem();
+    const out = await pass(l.f, m, [HIBERNATE_LIVE_MARKER]);
+    expect(out[0]!.act).toEqual({ kind: 'failed', detail: 'boom' });
+    await pass(l.f, m, [HIBERNATE_LIVE_MARKER]);
+    expect(l.f.lines).toEqual([`ccrc-server: hibernate of ${ID} failed (boom) — asked again next sweep`]);
+  });
+
+  it('AT THE ACT, again: a screen opened inside the serialiser holds viewer and composes nothing', async () => {
+    let open = false;
+    const l = live({ presence: { isOpen: () => open } });
+    const port: HibernateActPort = { ...l.port, serial: async (fn) => { open = true; return fn(); } };
+    const out = await pass({ ...l.f, deps: { ...l.f.deps, act: port } }, mem(), [HIBERNATE_LIVE_MARKER]);
+    expect(out[0]!.act).toEqual({ kind: 'held-at-act', verdict: { act: 'hold', reason: 'viewer' } });
+    expect(l.argvs).toEqual([]);
+  });
+
+  it('AT THE ACT, again: the re-read row (a hold written since the tick) and an unreadable re-read both hold', async () => {
+    const held = live({ rowAtAct: async (r) => ({ ok: true, row: row(r.id, { held: { reason: 'fixture' } as never }) }) });
+    expect((await pass(held.f, mem(), [HIBERNATE_LIVE_MARKER]))[0]!.act)
+      .toEqual({ kind: 'held-at-act', verdict: { act: 'hold', reason: 'held' } });
+    const gone = live({ rowAtAct: async () => ({ ok: false }) });
+    expect((await pass(gone.f, mem(), [HIBERNATE_LIVE_MARKER]))[0]!.act)
+      .toEqual({ kind: 'held-at-act', verdict: { act: 'hold', reason: 'unmeasured' } });
+    expect([...held.argvs, ...gone.argvs]).toEqual([]);
+  });
+
+  it('AT THE ACT, again: a turn that started since the pass read the marker holds marker', async () => {
+    const l = live();
+    let n = 0;
+    const f = { ...l.f, deps: { ...l.f.deps, mark: async () => (++n > 1 ? { ok: true, state: 'working', bg: 0, crons: 0, turnAt: NOW, stopAt: null, restartAt: null } as HibernateMark : mark(7 * HOUR)) } };
+    expect((await pass(f, mem(), [HIBERNATE_LIVE_MARKER]))[0]!.act)
+      .toEqual({ kind: 'held-at-act', verdict: { act: 'hold', reason: 'marker' } });
+    expect(l.argvs).toEqual([]);
   });
 });

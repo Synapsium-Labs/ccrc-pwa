@@ -81,6 +81,7 @@ const seedRow = (home: string, row: DeliverabilityRow): void => {
     if (row.stoppedAgoSec !== null) {
       fields['stopped'] = `${Math.floor((PARITY_NOW - row.stoppedAgoSec * 1000) / 1000)} pwa`;
     }
+    if (row.hibernated === true) fields['hibernated'] = `${Math.floor(PARITY_NOW / 1000) - 7 * 3600} 7`;
     for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${ID}.${k}`), v);
     // A fresh, ask-free hookstate — the transient ask gate stays open.
     writeFileSync(path.join(reg, `${ID}.hookstate.json`), JSON.stringify({
@@ -98,8 +99,8 @@ const seedRow = (home: string, row: DeliverabilityRow): void => {
   }
 };
 
-/** Drives the REAL sweep for one row; answers "did it send". */
-const sweepArm = async (row: DeliverabilityRow): Promise<boolean> => {
+/** Drives the REAL sweep for one row; answers "did it send", "did it wake the peer" and the delivery's gate. */
+const sweepArm = async (row: DeliverabilityRow): Promise<{ sent: boolean; woke: boolean; gate: string | null; state: string }> => {
   const h = harness(row);
   const coord = new CoordStore(openCoordDb(path.join(h.home, '.ccrc', 'coord.db')));
   const io = row.registry === 'unmeasurable' ? unreadableField(ID, 'wrapper') : localIO;
@@ -109,9 +110,14 @@ const sweepArm = async (row: DeliverabilityRow): Promise<boolean> => {
   seedRow(h.home, row);
   const mail = coord.insertMail({ fromId: FROM_ID, fromUuid: FROM_UUID, toId: ID, runId: null,
     kind: 'finding', subject: 'parity', body: 'parity fixture', artifacts: [] });
-  coord.queueDelivery(mail.id, ID, 'parity fixture');
+  const d = coord.queueDelivery(mail.id, ID, 'parity fixture');
   await w.sweepMail();
-  return h.calls.some((a) => a[0] === 'send-keys' && a[3] === '-l');
+  const row2 = coord.db.prepare('SELECT lastGate, state FROM mail_deliveries WHERE id = ?').get(d.id) as { lastGate: string | null; state: string };
+  return {
+    sent: h.calls.some((a) => a[0] === 'send-keys' && a[3] === '-l'),
+    woke: h.calls.some((a) => a[0] === 'ensure' && a[1] === ID),
+    gate: row2.lastGate, state: row2.state,
+  };
 };
 
 beforeEach(() => {
@@ -139,8 +145,14 @@ describe('deliverability parity: sweepMail and peerDeliverable read one world', 
       const verdict = peerDeliverable(probeOf(row));
       expect(verdict).toBe(row.expect);
 
-      const sent = await sweepArm(row);
-      if (row.quiet) {
+      const { sent, woke, gate, state } = await sweepArm(row);
+      expect(woke, 'the sweep wakes exactly the hibernated rows').toBe(row.hibernated === true);
+      if (row.hibernated === true) {
+        // A wake requested, the delivery still outstanding under `hibernated`: the sweep's transient hold, mapped to yes.
+        expect(verdict).toBe('yes');
+        expect(sent).toBe(false);
+        expect({ gate, state }).toEqual({ gate: 'hibernated', state: 'queued' });
+      } else if (row.quiet) {
         // Every transient gate open: the ladders must agree exactly.
         expect(sent).toBe(verdict === 'yes');
       } else {

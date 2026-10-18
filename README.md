@@ -4485,43 +4485,52 @@ the old licence by a licensed request, nor by any request on a ccd whose audit b
 older ccd an unlicensed request keeps the gap from the executor's re-read to the act, the spec's stated
 residual.
 
-**A finished run's worker is stopped once idle (D-5370).** A wave that is not the programme's last leaves its
-child workspace in place — the reclaim sweep above waits for the programme — and, until this lane, its Claude Code
-process too, holding its memory for as long as the programme ran. The server's stop-done lane (`stopDoneSweep.ts`,
-its verdict the pure `stopDone.ts`; once a minute on the watcher's tick, never inside the run's transition) stops
-such a worker with the already-granted `ccd stop <id> --surface agent`: only a dispatched child (a `.child` marker —
-never an operator's own session), whose newest run is `done` and closed at least 10 minutes ago, which no other open
-run names as worker or claimant, with no live claim, no outstanding mail, no open run it reviews, nobody viewing it, no hold, pane menu,
-background work or subagents, a bucket of `idle`, a measured live word and fail-closed turn verdict of `idle`, and a
-turn marker that reads `done` with no background task listed at its last Stop (`bg` exactly 0, so a shell or Monitor
-left running is never killed with the pane). Immediately before the act, on the coordination serialiser, the
-registry record and its row, the store, presence and the live state are read again. At most three stops a pass; a refused stop is
-not asked again for an hour. The stop journals a `stop` row with its declared surface and writes `.stopped`, so the
-row reads `stopped` (never crashed, to the dead-coordinator lane or the PWA), and the coordinator's feed gets one
-`Worker stopped` row per stop. A re-dispatch onto the worker restarts it: the dispatch resume arm's `ccd ensure`
-re-supervises and resumes a stopped session. Switches: `$REG/stop-done-disabled` (this lane only; no writer in the
-tree — touch and remove it by hand on the fleet box) and `$REG/reclaim-paused` (every cleanup lane, above). Its holds
-carry hibernation's words (D-5242), and hibernation absorbs it when it lands; until then it acts earlier (10 minutes
-after the run's close, against hibernation's 6 h of idleness) and is looser in a few facts — it has no `recent` (N)
-hold, and session crons, a terminal attached on the box and an opt-out marker do not hold the worker — so the operator
-who comes back to such a session revives a stopped one (`ensure` resumes it; nothing is lost). Its viewer is
-hibernation's: any open session screen, a hidden tab included, under the presence contract below.
+**A finished run's worker is put to sleep once idle (D-5370, D-5427).** A wave that is not the programme's last
+leaves its child workspace in place — the reclaim sweep above waits for the programme — and, until this lane, its
+Claude Code process too, holding its memory for as long as the programme ran. The server's stop-done lane
+(`stopDoneSweep.ts`, its verdict the pure `stopDone.ts`; once a minute on the watcher's tick, never inside the run's
+transition) puts such a worker to sleep with `ccd hibernate <id>`, declared as the lane `sweep:stop-done`: only a
+dispatched child (a `.child` marker — never an operator's own session), whose newest run is `done` and closed at least
+10 minutes ago, which no other open run names as worker or claimant, with no live claim, no outstanding mail, no open
+run it reviews, nobody viewing it, no hold, pane menu, background work or subagents, a bucket of `idle`, a measured live
+word and fail-closed turn verdict of `idle`, and a turn marker that reads `done` with no background task (`bg` exactly
+0, so a shell or Monitor left running is never killed with the pane) and nothing scheduled (`crons` exactly 0) at its
+last Stop, more than N ago (hibernation's N, below), and no `$REG/<id>.no-hibernate`. Immediately before the act, on
+the coordination serialiser, the registry record and its row, the store, presence and the live state are read again,
+and `ccd` re-measures the box-local half (a terminal attached included). At most three acts a pass; a refused one is not
+asked again for an hour. The coordinator's feed gets one `Worker asleep` row per act. Since Task 17b it is hibernation
+for this population, not a separate stop (D-5427): it holds everything hibernation holds, and a worker it puts down
+wakes as any sleeping session does — mail, a re-dispatch's `ccd ensure`, an open screen. It stays live under its own
+switches while hibernation's own sweep waits for the operator to arm it: `$REG/stop-done-disabled` (this lane only; no
+writer in the tree — touch and remove it by hand on the fleet box), `$REG/reclaim-paused` (every cleanup lane, above)
+and `$REG/hibernate-disabled` (every act that puts a session to sleep). A box whose `ccd caps` lacks `hibernate` is left
+alone (`no-verb`).
 
-**Hibernation, the server's verdict (shadow only; D-5242).** A long-idle session is to be put to sleep — its process
-stopped, journaled as a deliberate `hibernate`, and woken by `ccd ensure` — and the server decides which
-(`hibernateVerdict`, `server/src/coord/hibernate.ts`): a live pane whose raw live word is `idle`, bucket `idle` (a
-`done` row is badged and stays awake), no pane menu, background work or subagents, a turn marker that reads `done` with
-no background task (`bg` exactly 0) and nothing scheduled (`crons` exactly 0; an older hook's marker, with no `crons`,
-holds) whose latest main event is more than N ago (6 h; `$REG/hibernate-after-hours`, 1 to 168, overrides), no hold, no
-open run naming it as worker or claimant in any non-terminal state, no claim, no outstanding mail, nobody with it open,
-not stranded, swap-blocked, under a substrate fault or archived, and no `$REG/<id>.no-hibernate`. Today the sweep
-(`hibernateSweep.ts`, every 5 minutes) ONLY LOGS a `ccrc-server: hibernate-shadow <id> idle=<h>h` line, at most once per
-session an hour; it holds no ccd runner, so no build of it can stop a session, whatever `$REG/hibernate-live` says.
-`$REG/hibernate-disabled` silences it. None of these markers has a writer in the tree. **The presence contract:**
-beside the visible claim that suppresses pushes, every `/ws/session/:id` connection holds an *open* claim, stamped at
-connect and by every frame, visible or hidden, believed for `PRESENCE_OPEN_TTL_MS` (10 minutes) and dropped at close;
-the PWA's heartbeat now beats while hidden too (`visible:false`, which leaves notifications as they were), and for that
-long after a server start every session counts as viewed. A sleeping session's row carries `hibernatedAt`.
+**Hibernation (D-5242).** A long-idle session is put to sleep — its process stopped, journaled as a deliberate
+`hibernate`, and woken by `ccd ensure` — and the server decides which (`hibernateVerdict`,
+`server/src/coord/hibernate.ts`): a live pane whose raw live word is `idle`, bucket `idle` (a `done` row is badged and
+stays awake), no pane menu, background work or subagents, a turn marker that reads `done` with no background task (`bg`
+exactly 0) and nothing scheduled (`crons` exactly 0; an older hook's marker, with no `crons`, holds) whose latest main
+event is more than N ago (6 h; `$REG/hibernate-after-hours`, 1 to 168, overrides), no hold, no open run naming it as
+worker or claimant in any non-terminal state, no claim, no outstanding mail, nobody with it open, not stranded,
+swap-blocked, under a substrate fault or archived, and no `$REG/<id>.no-hibernate`. The sweep (`hibernateSweep.ts`,
+every 5 minutes) logs a `ccrc-server: hibernate-shadow <id> idle=<h>h` line, at most once per session an hour, until the
+operator ARMS it with `$REG/hibernate-live`; armed, on a box whose `ccd caps` lists `hibernate`, it composes `ccd
+hibernate <id>` for at most three sessions a sweep, each on the coordination serialiser and the session's queue after
+everything is read again there (D-5428); ccd's `session-busy` refusal is a quiet skip, one line per session an hour.
+`$REG/hibernate-disabled` wins over everything. None of these markers has a writer in the tree. **Waking.** A sleeping
+session's row carries `hibernatedAt` and stays bucket `dead`. Mail to it is gated `hibernated` (never `session-dead`,
+and never counted toward a park): the mail lane wakes it with `ccd ensure`, at most once per session per 10 minutes,
+oldest delivery first, and a kickoff, which is system mail, wakes its coordinator the same way. **Automatic wakes are
+bounded fleet-wide** (`server/src/coord/wakeBudget.ts`): at most two in any 60 s; the rest stay outstanding under the
+same gate. A wake somebody asked for — `POST /api/sessions/:id/ensure`, a dispatch resuming its worker — is never
+refused but counts in the window. A manual swap refuses a sleeping row `409 hibernated`; `GET /api/peers` answers it
+deliverable, with `hibernatedAt`; the reclaim door treats a sleeping claimant as alive; a sleeping main checkout stays
+out of the archived fold. **The presence contract:** beside the visible claim that suppresses pushes, every
+`/ws/session/:id` connection holds an *open* claim, stamped at connect and by every frame, visible or hidden, believed
+for `PRESENCE_OPEN_TTL_MS` (10 minutes) and dropped at close; the PWA's heartbeat now beats while hidden too
+(`visible:false`, which leaves notifications as they were), and for that long after a server start every session counts
+as viewed.
 
 **Landing order (landing-order wave 1).** Every merge of `main` into a branch restarts that branch's
 CI, so a session absorbs `main` only on a licence. Worker clause 16 names three, each read after one

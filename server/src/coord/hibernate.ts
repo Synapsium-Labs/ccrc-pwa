@@ -6,9 +6,8 @@ import { PRESENCE_OPEN_TTL_MS, type FleetSession } from '../../../shared/api.js'
  * The server decides, because only it sees every fact the operator's ruling names — open runs, claims, outstanding
  * mail, a screen with the session open — and it already assembles the rest every tick. `ccd hibernate <id>` (plan
  * Task 16) acts, after re-measuring the box-local half at the act (and the one hold the server cannot see,
- * `attached`). THIS TASK (17a) ONLY DECIDES: its sweep (`hibernateSweep.ts`) logs a shadow line for a `hibernate`
- * answer and can do nothing else; the live act arrives in Task 17b, behind `$REG/hibernate-live`, together with every
- * path that wakes a session.
+ * `attached`). Its sweep (`hibernateSweep.ts`) logs a shadow line for a `hibernate` answer, and acts only once the
+ * operator arms it with `$REG/hibernate-live` (Task 17b, which brought every path that wakes a session with it).
  *
  * L1: decisions only, over what the sweep measured. It imports L0 alone.
  *
@@ -34,7 +33,8 @@ import { PRESENCE_OPEN_TTL_MS, type FleetSession } from '../../../shared/api.js'
  * (tmux and two file reads) only for a row nothing cheaper already holds.
  *
  * THE STOP-DONE LANE (D-5370) shares these words on purpose: every hold it has that this verdict also has is spelled
- * the same, so hibernation can absorb it in Task 17b.
+ * the same, and since Task 17b it composes `ccd hibernate` too, holding `recent`, `opted-out` and `scheduled` as this
+ * verdict does (stop-done-composes-hibernate (D-5427)).
  */
 
 /** Every reason a session is left awake — a `Record`, so the list below is derived and a word cannot be added without
@@ -80,11 +80,19 @@ export const HIBERNATE_AFTER_HOURS_MAX = 168;
 export const HIBERNATE_SWEEP_MS = 5 * 60_000;
 /** At most one shadow line per id this often, so a session that stays asleep-worthy is not logged every sweep. */
 export const HIBERNATE_SHADOW_LINE_MS = 60 * 60_000;
+/** ARMED (Task 17b): at most this many `ccd hibernate` acts a sweep, fleet-wide — a slower drain costs nothing, and a
+ *  herd of kills is a herd of wakes later. */
+export const HIBERNATE_PER_SWEEP = 3;
+/** At most one skip or failure line per id this often: ccd's `session-busy` refusal (exit 3) is the ordinary answer
+ *  for a session that turned busy between the verdict and the act, never a warning storm. */
+export const HIBERNATE_ACT_LINE_MS = 60 * 60_000;
+/** The actor the act declares (`sweepDec`): the lane's name, as every unattended server lane names itself. */
+export const HIBERNATE_SWEEP_ACTOR = 'sweep:hibernate';
 
 /** The operator's switches and settings, all in `$REG` (`~/.cc-sessions`), all touched and removed BY HAND — nothing in
  *  the tree writes any of them (`single-definition.test.ts`):
  *  - `hibernate-disabled`: the sweep does nothing at all; it wins over `hibernate-live`;
- *  - `hibernate-live`: arms the act — Task 17b's; THIS task's sweep logs whatever it says;
+ *  - `hibernate-live`: arms the act (Task 17b): a `hibernate` verdict then composes `ccd hibernate`;
  *  - `hibernate-after-hours`: N in whole hours (1 to 168), read only when listed; anything else is the default;
  *  - `<id>.no-hibernate`: that session is never put to sleep (`opted-out`). */
 export const HIBERNATE_DISABLED_MARKER = 'hibernate-disabled';

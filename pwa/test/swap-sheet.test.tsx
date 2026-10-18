@@ -876,6 +876,16 @@ describe('SwapSheet: a busy session asks "swap anyway" (D-5240)', () => {
     expect(screen.queryByRole('button', { name: 'Swap anyway' })).not.toBeInTheDocument();
   });
 
+  it('a 409 hibernated (D-5242) says it is asleep in a toast and offers no consent', async () => {
+    vi.spyOn(api, 'swap').mockRejectedValueOnce(refused(SWAP_REFUSALS.hibernated));
+    const s = fleetSession({ wrapper: 'claude', home: 'claude' });
+    render(<Harness s={s} fleet={storeWith([s])} />);
+    fireEvent.click(await screen.findByRole('button', { name: /team·b/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Move' }));
+    expect(await screen.findByText(/It is asleep, so there is nothing running to move/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Swap anyway' })).not.toBeInTheDocument();
+  });
+
   it('the ask belongs to the session it was raised for: retargeted to another session, it is not shown', async () => {
     const swap = vi.spyOn(api, 'swap').mockRejectedValueOnce(refused(SWAP_REFUSALS.sessionBusy));
     const a = fleetSession({ wrapper: 'claude', home: 'claude' });

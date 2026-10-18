@@ -186,7 +186,8 @@ import type { ChildReclaimCollectInput } from './childReclaimSweep.js';
 import { NO_FLEET_IDENTITY } from './fleetidentity.js';
 import { stopDonePass, type StopDoneMemory } from './stopDoneSweep.js';
 import { STOP_DONE_SWEEP_MS } from './stopDone.js';
-import { hibernateShadowPass, type HibernateShadowMemory } from './hibernateSweep.js';
+import { hibernatePass, type HibernateSweepMemory } from './hibernateSweep.js';
+import { wakeAdmit, type WakeKind } from './coord/wakeBudget.js';
 import { HIBERNATE_AFTER_HOURS_FILE, HIBERNATE_SWEEP_MS } from './coord/hibernate.js';
 import { liveRowFor, liveWordFor, turnMarkFor, turnReadDeps, turnVerdictFor } from './turnverdict.js';
 import {
@@ -552,6 +553,9 @@ const ASK_SWEEP_MS = 10_000;
  *  queued for it. A fan-out of six findings arriving as six prompts in ninety
  *  seconds is a denial of service dressed as coordination. */
 const MAIL_COOLDOWN_MS = 120_000;
+/** D-5242: the mail lane wakes a hibernated recipient at most this often (`ccd ensure` is a cold `--resume`); its
+ *  mail waits under the `hibernated` gate meanwhile. The fleet-wide bound is the wake budget (`coord/wakeBudget.ts`). */
+const MAIL_WAKE_FLOOR_MS = 10 * 60_000;
 
 /** The same two questions the pair above asks, asked of a COORDINATOR — a
  *  session whose id is the `claimedBy` of a non-terminal run.
@@ -1347,6 +1351,14 @@ export class FleetWatcher {
    *  was making it, and there is nothing left to guard once the process is
    *  gone. */
   private mailInFlight = new Set<string>();
+  /** THE WAKE BUDGET's window (D-5242, `coord/wakeBudget.ts`): every wake of a hibernated session this process asked
+   *  for or admitted, newest last, pruned to `WAKE_WINDOW_MS` by `wakeAdmit`. ONE list for the server: the mail lane's
+   *  automatic wakes and the routes' asked ones (`admitWake`) share it. In memory by design — a restart empties it,
+   *  which can let one extra burst through and no more. */
+  private wakeRecent: number[] = [];
+  /** The last wake per session (any kind), for the mail lane's own floor (`MAIL_WAKE_FLOOR_MS`). In memory, pruned
+   *  as it is read. */
+  private readonly lastWakeAt = new Map<string, number>();
   /** Delivery ids whose `mail-gate-busy-shadow` "would deliver" line has been
    *  logged (worker stall watch §5.1). Before `mail-gate-busy` is armed, the
    *  operator checks each line against the session's transcript for 48 h, so
@@ -1419,11 +1431,12 @@ export class FleetWatcher {
   private readonly stopDoneMemory: StopDoneMemory = { retryAt: new Map() };
   private stopDoneSerial: (<T>(fn: () => Promise<T>) => Promise<T>) | null = null;
   private readonly stopDoneStartedAt = Date.now();
-  /** Hibernation's SHADOW sweep (D-5242, `hibernateSweep.ts`): its last pass, whether one runs, its one memory (the
-   *  last shadow line per id), and the process start it holds `viewer` against (presence is never persisted). */
+  /** Hibernation's sweep (D-5242, `hibernateSweep.ts`): its last pass, whether one runs, its memory (the last shadow
+   *  line, and the last skip or failure line, per id), and the process start it holds `viewer` against (presence is
+   *  never persisted). Its act uses the stop-done lane's serialiser below, the one `CoordMutex`. */
   private lastHibernateSweep = 0;
   private hibernateSweeping = false;
-  private readonly hibernateMemory: HibernateShadowMemory = { lastLine: new Map() };
+  private readonly hibernateMemory: HibernateSweepMemory = { lastLine: new Map(), lastActLine: new Map() };
   private readonly hibernateStartedAt = Date.now();
   /** `flock-unavailable`, once a box has answered it: the lane composes nothing more there (this process). */
   private archivedExpiryBoxRefused: string | null = null;
@@ -2123,6 +2136,20 @@ export class FleetWatcher {
     this.deadCoordinatorSerial = h.withSweepAbandon;
   }
 
+  /**
+   * THE WAKE BUDGET (D-5242): record a wake of hibernated session `id` and answer whether it may go ahead. An `asked`
+   * wake (`POST /api/sessions/:id/ensure`, a dispatch resuming its worker) is ALWAYS admitted and counts in the window;
+   * an `auto` one (the mail lane's) only while fewer than `WAKE_BURST` were recorded in the last `WAKE_WINDOW_MS`. The
+   * rule is `wakeAdmit` (L1); this is the one list it is applied to.
+   */
+  admitWake(kind: WakeKind, id: string): boolean {
+    const now = Date.now();
+    const r = wakeAdmit(this.wakeRecent, now, kind);
+    this.wakeRecent = r.recent;
+    if (r.admit) this.lastWakeAt.set(id, now);
+    return r.admit;
+  }
+
   /** `buildServer` hands the stop-done lane (D-5370) the coordination serialiser: its stop re-reads the store and acts
    *  inside it. Until then the lane stops nothing. */
   useStopDoneSerialiser(h: Pick<CoordRoutesHandle, 'serial'>): void {
@@ -2149,13 +2176,9 @@ export class FleetWatcher {
         notifyLog: this.deps.notifyLog,
         liveWord: (rec) => liveWordFor(reads, rec), turnVerdict: (rec, uuid) => turnVerdictFor(reads, rec, uuid),
         mark: (rec) => turnMarkFor(reads, rec),
-        rowAtAct: async (rec) => {
-          const again = await readSessionRecord(this.deps.io, this.deps.cfg, rec.id);
-          if (!again.found) return { ok: false };
-          const row = await liveRowFor(reads, again.record, again.record.uuid);
-          return row === null ? { ok: false } : { ok: true, row };
-        },
+        rowAtAct: (rec) => this.rowAtAct(rec),
         serial: this.stopDoneSerial, queueRun: (id, fn) => this.deps.queue.run(id, fn),
+        readAfterHours: () => this.deps.io.readFile(`${this.deps.cfg.registryDir}/${HIBERNATE_AFTER_HOURS_FILE}`),
         startedAt: this.stopDoneStartedAt, now: Date.now,
       }, this.stopDoneMemory, sessions, records, names);
     } catch (err) {
@@ -2166,12 +2189,13 @@ export class FleetWatcher {
   }
 
   /**
-   * HIBERNATION, SHADOW ONLY (D-5242, plan Task 17a): every `HIBERNATE_SWEEP_MS`, on THIS tick's assembled rows and
-   * registry listing (the listing carries the switches), `hibernateShadowPass` asks `hibernateVerdict` about every row
-   * and logs a `hibernate-shadow` line for a `hibernate` answer. It is handed no ccd runner: nothing here can put a
-   * session to sleep. Never awaited by the tick; one pass at a time.
+   * HIBERNATION (D-5242, plan Tasks 17a and 17b): every `HIBERNATE_SWEEP_MS`, on THIS tick's assembled rows and
+   * registry listing (the listing carries the switches), `hibernatePass` asks `hibernateVerdict` about every row. Shadow
+   * (a `hibernate-shadow` line) unless the operator armed it with `$REG/hibernate-live`; armed, it composes
+   * `ccd hibernate` on the coordination serialiser (the stop-done lane's, handed over by `useStopDoneSerialiser`) and
+   * the session's queue, after re-reading everything there. Never awaited by the tick; one pass at a time.
    */
-  async sweepHibernateShadow(sessions: readonly FleetSession[], records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
+  async sweepHibernate(sessions: readonly FleetSession[], records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
     if (this.hibernateSweeping) return;
     const now = Date.now();
     if (this.lastHibernateSweep !== 0 && now - this.lastHibernateSweep < HIBERNATE_SWEEP_MS) return;
@@ -2179,18 +2203,32 @@ export class FleetWatcher {
     this.hibernateSweeping = true;
     try {
       const reads = turnReadDeps(this.deps, this);
-      await hibernateShadowPass({
+      await hibernatePass({
         coord: this.deps.coord, presence: this.deps.presence,
         liveWord: (rec) => liveWordFor(reads, rec), mark: (rec) => turnMarkFor(reads, rec),
         readAfterHours: () => this.deps.io.readFile(`${this.deps.cfg.registryDir}/${HIBERNATE_AFTER_HOURS_FILE}`),
         log: (line) => console.warn(line),
         startedAt: this.hibernateStartedAt, now: Date.now,
+        act: {
+          runCcd: this.deps.runCcd, fleetState: this.deps.fleetState, serial: this.stopDoneSerial,
+          queueRun: (id, fn) => this.deps.queue.run(id, fn), rowAtAct: (rec) => this.rowAtAct(rec),
+        },
       }, this.hibernateMemory, sessions, records, names);
     } catch (err) {
-      console.warn(`ccrc-server: sweepHibernateShadow failed (${err instanceof Error ? err.message : String(err)}) — no verdicts this pass`);
+      console.warn(`ccrc-server: sweepHibernate failed (${err instanceof Error ? err.message : String(err)}) — no verdicts this pass`);
     } finally {
       this.hibernateSweeping = false;
     }
+  }
+
+  /** At an unattended act (the stop-done lane's, hibernation's): the registry record read AGAIN and the frame's row
+   *  assembled from it, so a `.hold`, a stop stamp, an archive or a bucket that changed since the tick is seen. */
+  private async rowAtAct(rec: SessionRecord): Promise<{ ok: true; row: FleetSession } | { ok: false }> {
+    const reads = turnReadDeps(this.deps, this);
+    const again = await readSessionRecord(this.deps.io, this.deps.cfg, rec.id);
+    if (!again.found) return { ok: false };
+    const row = await liveRowFor(reads, again.record, again.record.uuid);
+    return row === null ? { ok: false } : { ok: true, row };
   }
 
   /** The last measured project-pool sweep, or null if none has been taken yet
@@ -2600,7 +2638,7 @@ export class FleetWatcher {
       // `primed` like the stall watch, so the priming tick never stops anything.
       if (this.primed) void this.sweepStopDone(sessions, records, registryRead.names).catch(() => { /* one bad sweep must not kill the poll */ });
       // D-5242: hibernation's SHADOW sweep, never awaited, gated on `primed` like the stop-done lane. It only logs.
-      if (this.primed) void this.sweepHibernateShadow(sessions, records, registryRead.names).catch(() => { /* one bad sweep must not kill the poll */ });
+      if (this.primed) void this.sweepHibernate(sessions, records, registryRead.names).catch(() => { /* one bad sweep must not kill the poll */ });
       // D-5373: NEVER awaited, `sweepMail`'s reason — it can call `sendPrompt` through the per-session queue. Own clock.
       if (Date.now() - this.lastIdleNudgeAt >= IDLE_NUDGE_SWEEP_MS) {
         this.lastIdleNudgeAt = Date.now();
@@ -7251,6 +7289,22 @@ export class FleetWatcher {
         // the herd valve: without it every due row re-spawns a doomed tmux
         // client each sweep against a component that is already unwell.
         const sv = await this.deps.tmux.sessionVerdict(d.toId);
+        if (sv.verdict === 'gone' && rec.hibernatedAt !== null) {
+          // D-5242: ASLEEP, NOT DEAD. `ccd hibernate` stamps `.stopped` beside `.hibernated`, which the lifecycle rung
+          // below reads as `stopped` — a dead lifecycle — and would park. The mail is held under its own gate, never
+          // counted toward a park, and the recipient is woken (`ccd ensure`): at most once per recipient per
+          // `MAIL_WAKE_FLOOR_MS`, and only when the fleet-wide wake budget admits it (`admitWake('auto', …)`, two in any
+          // 60 s); `due` is ordered oldest first, so the budget goes to the oldest deliveries. A delivery the budget or
+          // the floor defers stays outstanding under the same gate and is looked at again next sweep. `mail-disabled`
+          // returns before this loop, so it never wakes anything. A kickoff is system mail and wakes through here.
+          gated(d, 'hibernated');
+          const lastWake = this.lastWakeAt.get(d.toId);
+          if ((lastWake === undefined || now - lastWake >= MAIL_WAKE_FLOOR_MS) && this.admitWake('auto', d.toId)) {
+            const res = await this.deps.runCcd(CCD_ARGV.ensure(d.toId));
+            if (!res.ok) console.warn(`ccrc-server: mail: waking hibernated ${d.toId} failed (${res.stderr.trim() || 'no stderr'}) — its mail stays queued`);
+          }
+          continue;
+        }
         if (sv.verdict === 'gone') {
           // D-1066 — D-309 REFINED, not reversed (operator ruling 2026-08-30). Its
           // premise — "the mail waits for the session to come back" — is right
@@ -9132,7 +9186,9 @@ export interface DelegationLaneSeams {
   unbatched?: boolean;
 }
 
-type LaneSession = Pick<FleetSession, 'id' | 'project' | 'status'>;
+/** `hibernatedAt` optional (D-5242): absent reads as not asleep, the old behaviour, so a caller that never knew the field
+ *  is unchanged; the tick hands the assembled rows, which always carry it. */
+type LaneSession = Pick<FleetSession, 'id' | 'project' | 'status'> & Partial<Pick<FleetSession, 'hibernatedAt'>>;
 type LaneRecord = Pick<SessionRecord, 'id' | 'project' | 'child'>;
 type DelegationVerdictCounts = { unresolved: number; conflicting: number; unmeasured: number };
 
@@ -9974,7 +10030,10 @@ class DelegationLane {
     const alive = new Set(pass.sessions.filter((s) => s.status !== 'dead').map((s) => s.id));
     if (this.aliveSeen) {
       for (const s of pass.sessions) {
-        if (s.status === 'dead' && this.lastAlive.has(s.id) && !this.firstDead.has(s.id)) this.firstDead.set(s.id, pass.now);
+        // D-5242: a HIBERNATED row went down on purpose (`ccd hibernate`, journalled as deliberate) — it is asleep, not a
+        // death, so it never feeds the delegation breaker, which suspends at two fresh parent deaths in its window and
+        // would otherwise trip on every burst of sleeps (the sweeps put up to six down in one window).
+        if (s.status === 'dead' && (s.hibernatedAt ?? null) === null && this.lastAlive.has(s.id) && !this.firstDead.has(s.id)) this.firstDead.set(s.id, pass.now);
       }
     }
     for (const id of alive) this.firstDead.delete(id);

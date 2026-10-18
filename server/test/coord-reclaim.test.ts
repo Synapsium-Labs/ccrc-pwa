@@ -222,6 +222,23 @@ describe('measureClaimant — three answers, and the inputs that collapse into e
     expect(v.why).toContain('stopped');
   });
 
+  // D-5242: `ccd hibernate` stamps `.stopped` beside `.hibernated`. Asleep is not dead: the reclaim door must refuse
+  // a sleeping claimant as it refuses a live one, or a programme is handed away from a coordinator that mail would wake.
+  it('gone + a stop stamp + .hibernated is ALIVE, why hibernated', async () => {
+    const home = mkTmp('ccrc-reclaim-');
+    seedRow(home, DEAD, { stopped: `${SEC} ccd`, hibernated: `${SEC} 7` });
+    const v = await measureClaimant(depsFor(home, store(home), GONE), DEAD, NOW);
+    expect(v.state).toBe('alive');
+    expect(v.why).toContain('hibernated');
+  });
+
+  it('a .hibernated row whose pane is live is ALIVE on the tmux rung, as any live pane', async () => {
+    const home = mkTmp('ccrc-reclaim-');
+    seedRow(home, DEAD, { hibernated: `${SEC} 7` });
+    const v = await measureClaimant(depsFor(home, store(home), ALIVE), DEAD, NOW);
+    expect(v).toEqual({ state: 'alive', why: 'tmux reports the pane live' });
+  });
+
   it('gone + a FRESH supervisor heartbeat is ALIVE — the arm a bare !alive folds', async () => {
     // THE ARM THIS FILE EXISTS FOR. `supervised` is stamped at NOW, so
     // `nowMs - supervisedAt*1000 === 0`: fresh, and the lifecycle is `restarting`.
@@ -504,6 +521,20 @@ describe('reclaimRun — the order is the guard', () => {
     expect(r).toMatchObject({ ok: false, kind: 'claimant-alive', by: DEAD });
     if (r.ok) throw new Error('unreachable — narrowed above');
     expect(r.kind === 'claimant-alive' && r.detail).toContain('tmux');
+    expect(w.calls).toBe(0);
+    expect(okRun(s.run(id))!.claimedBy).toBe(DEAD);
+  });
+
+  it('claimant-alive when the current coordinator is HIBERNATED (D-5242) — refused as a live one, NOTHING written', async () => {
+    const home = mkTmp('ccrc-reclaim-');
+    const s = store(home);
+    const id = seedRun(s, DEAD);
+    seedRow(home, DEAD, { stopped: `${SEC} ccd`, hibernated: `${SEC} 7` }); seedRow(home, LIVE);
+    const w = watchCommit(s);
+    const r = await reclaimRun(depsFor(home, s, GONE), id, LIVE);
+    expect(r).toMatchObject({ ok: false, kind: 'claimant-alive', by: DEAD });
+    if (r.ok) throw new Error('unreachable — narrowed above');
+    expect(r.kind === 'claimant-alive' && r.detail).toContain('hibernated');
     expect(w.calls).toBe(0);
     expect(okRun(s.run(id))!.claimedBy).toBe(DEAD);
   });

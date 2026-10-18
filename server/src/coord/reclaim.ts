@@ -190,6 +190,13 @@ export async function measureClaimant(
   // (`SessionVerdict`'s own rule, exec.ts:75-84: `detail` exists only here).
   if (sv.verdict === 'unknown') return { state: 'unmeasurable', why: sv.detail };
   const lc = sessionLifecycle(lifecycleInputFor(read.record, false, nowMs));
+  // D-5242: ASLEEP, NOT DEAD. `ccd hibernate` stamps `.stopped` beside `.hibernated`; the lifecycle alone reads that as
+  // `stopped`, which this ladder would call dead and the reclaim door would act on, handing a programme away from a
+  // coordinator that its next mail wakes. The dead-coordinator lane and the ask hold read this same verdict, so a
+  // sleeping claimant is alive to all three.
+  if (lc === 'stopped' && read.record.hibernatedAt !== null) {
+    return { state: 'alive', why: 'the pane is gone but the session is hibernated (asleep, woken by mail or ensure)' };
+  }
   // D-1140 — THE `otherwise` IS TOTAL, AND ITS NAME IS NARROWER THAN ITS
   // CONTENTS. Three inputs reach it, not two: `running`/`unsupervised`/
   // `unclaimed` (a pane tmux lost track of but the registry still calls

@@ -5,12 +5,15 @@ import type { NotifyLog } from './notifylog.js';
 import type { SessionRecord } from './registry.js';
 import type { CoordStore } from './coord/store.js';
 import type { TurnVerdict } from './coord/archiveDoor.js';
-import { CCD_ARGV, stopSurfaceSupported } from './ccdargv.js';
+import { CCD_ARGV, sweepDec, verbSupported } from './ccdargv.js';
+import {
+  HIBERNATE_AFTER_HOURS_FILE, HIBERNATE_DISABLED_MARKER, NO_HIBERNATE_SUFFIX, hibernateAfterMs,
+} from './coord/hibernate.js';
 import { RECLAIM_PAUSE_MARKER } from './coord/rundefs.js';
 import { expiryReviewing } from './coord/expireArchived.js';
 import { PRESENCE_OPEN_TTL_MS, type FleetSession } from '../../shared/api.js';
 import {
-  STOP_DONE_DISABLED_MARKER, STOP_DONE_GRACE_MS, STOP_DONE_MEASURES_PER_PASS, STOP_DONE_PER_PASS, STOP_DONE_RETRY_MS,
+  STOP_DONE_ACTOR, STOP_DONE_DISABLED_MARKER, STOP_DONE_GRACE_MS, STOP_DONE_MEASURES_PER_PASS, STOP_DONE_PER_PASS, STOP_DONE_RETRY_MS,
   stopDoneVerdict, type StopDoneInput, type StopDoneLive, type StopDoneMark, type StopDoneRow, type StopDoneStoreRead,
   type StopDoneVerdict,
 } from './stopDone.js';
@@ -21,30 +24,39 @@ import {
  * waiting on ccd, and this lane finds the worker on a later pass (`FleetWatcher.sweepStopDone`, at
  * `STOP_DONE_SWEEP_MS`, on the tick's own assembled rows).
  *
+ * SINCE TASK 17b IT PUTS THE WORKER TO SLEEP (stop-done-composes-hibernate (D-5427)): its act is `ccd hibernate`, so a
+ * finished worker wakes as any sleeping session does (mail under the wake budget, a re-dispatch's `ensure`, an open
+ * screen), and it holds what hibernation holds — N from the turn marker (`recent`), the opt-out, scheduled work, and
+ * ccd's own `attached` at the act. It stays live under its own switches; hibernation's sweep acts only once armed.
+ *
  * ONE PASS:
- *  1. the switches, read from the tick's registry listing: `$REG/stop-done-disabled` (this lane's kill switch) or
- *     `$REG/reclaim-paused` (the fleet's one cleanup switch, which every cleanup lane honours) listed, nothing happens;
- *  2. the population is the rows the frame shows as dispatched children that are neither stopped nor archived, and the
- *     store is asked ONCE for all of them (`lastRunBySession`, `activeClaims`, and `outstandingMailFor` and
- *     `expiryReviewing` per candidate);
+ *  1. the switches, read from the tick's registry listing: `$REG/stop-done-disabled` (this lane's kill switch),
+ *     `$REG/reclaim-paused` (the fleet's one cleanup switch, which every cleanup lane honours) or
+ *     `$REG/hibernate-disabled` (hibernation's, which every act that puts a session to sleep honours) listed, nothing
+ *     happens; N is `$REG/hibernate-after-hours` when listed, else six hours (`hibernateAfterMs`, hibernation's reader);
+ *  2. the population is the rows the frame shows as dispatched children that are neither stopped nor archived (a
+ *     sleeping row carries the stop stamp `ccd hibernate` writes, so it is never asked twice), and the store is asked
+ *     ONCE for all of them (`lastRunBySession`, `activeClaims`, and `outstandingMailFor` and `expiryReviewing` per
+ *     candidate);
  *  3. the verdict runs on what is known; a row it answers `measure` for has its live word, its turn verdict and its turn
  *     marker read (at most `STOP_DONE_MEASURES_PER_PASS`), and the verdict runs again;
- *  4. at most `STOP_DONE_PER_PASS` stops, each ON THE COORDINATION SERIALISER and then the session's own queue, so a
+ *  4. at most `STOP_DONE_PER_PASS` acts, each ON THE COORDINATION SERIALISER and then the session's own queue, so a
  *     dispatch that is opening a run onto this worker, or a mail delivery typing into its pane, finishes first; inside
  *     them the registry record (and the row the frame assembles from it), the store, presence and the live state are read
  *     AGAIN and the verdict asked again — the tick's roster read alone is kept when the re-read row has none — and only
- *     `stop` composes `ccd stop <id> --surface agent` — the existing, already-granted `CCD_ARGV.stopId` (no new ccd
- *     verb). The pane menu is the watcher's newest scrape, and the live reads use the tick's record: a uuid or wrapper
- *     that changed since fails closed (the marker reads `foreign`, the live file `unmeasured`).
+ *     `hibernate` composes `ccd hibernate <id>` (`CCD_ARGV.hibernate`, declared by `sweepDec` as the lane
+ *     `sweep:stop-done`). ccd re-measures at the act; its `session-busy` refusal (exit 3) is remembered like any refusal.
+ *     The pane menu is the watcher's newest scrape, and the live reads use the tick's record: a uuid or wrapper that
+ *     changed since fails closed (the marker reads `foreign`, the live file `unmeasured`).
  *
- * WHY THE STOP READS AS DELIBERATE. `cmd_stop` journals a `stop` row with the declared surface before it unsupervises,
- * and writes `.stopped` with it, so the dead-coordinator lane (`DEAD_COORDINATOR_DELIBERATE_ACTS` names `stop`), the
- * PWA (`stoppedBy`, the row's `stopped` lifecycle) and child reclamation all read a stop, never a crash. A box whose ccd
- * cannot take `--surface` holds (`no-surface`): this lane never stops a session undeclared.
+ * WHY THE ACT READS AS DELIBERATE. `cmd_hibernate` journals a `hibernate` row before it unsupervises, and
+ * `DEAD_COORDINATOR_DELIBERATE_ACTS` names `hibernate`, so the dead-coordinator lane, the PWA (`hibernatedAt`) and
+ * child reclamation read a deliberate sleep, never a crash. A box whose ccd lacks the verb holds (`no-verb`).
  *
- * IDEMPOTENT ACROSS RESTARTS without a memory of its own: a stopped row carries `stoppedBy` and holds `stopped`; a
- * re-dispatch's `ensure` clears `.stopped` and opens a run, which holds `run-worker` until that run is `done` too.
- * The only memory is `retryAt`, after a stop the box refused — lost on a restart, which costs one more ask.
+ * IDEMPOTENT ACROSS RESTARTS without a memory of its own: a sleeping row carries `stoppedBy` and is outside the
+ * population; a re-dispatch's `ensure` clears `.stopped` and `.hibernated` and opens a run, which holds `run-worker`
+ * until that run is `done` too. The only memory is `retryAt`, after an act the box refused — lost on a restart, which
+ * costs one more ask.
  */
 
 export interface StopDoneSweepDeps {
@@ -70,6 +82,8 @@ export interface StopDoneSweepDeps {
   readonly serial: (<T>(fn: () => Promise<T>) => Promise<T>) | null;
   /** The process's per-session write queue. */
   readonly queueRun: <T>(id: string, fn: () => Promise<T>) => Promise<T>;
+  /** `$REG/hibernate-after-hours`'s body; called only when the listing names it. */
+  readonly readAfterHours: () => Promise<string | null>;
   readonly startedAt: number;
   readonly now: () => number;
 }
@@ -80,7 +94,8 @@ export interface StopDoneMemory {
 }
 
 export type StopDoneOutcome =
-  | { readonly id: string; readonly kind: 'stopped'; readonly runId: number }
+  | { readonly id: string; readonly kind: 'hibernated'; readonly runId: number }
+  | { readonly id: string; readonly kind: 'skipped'; readonly detail: string }
   | { readonly id: string; readonly kind: 'held-at-act'; readonly verdict: StopDoneVerdict }
   | { readonly id: string; readonly kind: 'failed'; readonly detail: string };
 
@@ -138,12 +153,12 @@ function recordFeed(deps: StopDoneSweepDeps, id: string, runId: number): void {
   if (!log) return;
   try {
     const ev = log.record({
-      kind: 'run', sessionId: id, runId, title: 'Worker stopped',
-      body: `${id} was stopped: its run ${runId} is done and it sat idle. A re-dispatch onto it restarts it.`,
+      kind: 'run', sessionId: id, runId, title: 'Worker asleep',
+      body: `${id} was put to sleep: its run ${runId} is done and it sat idle. Mail, a re-dispatch or opening it wakes it.`,
     });
     deps.coord.recordFeedEvent(log.epoch, ev);
   } catch (err) {
-    console.warn(`ccrc-server: stop-done: recordFeedEvent failed (${err instanceof Error ? err.message : String(err)}) — ${id}'s stop has no feed row`);
+    console.warn(`ccrc-server: stop-done: recordFeedEvent failed (${err instanceof Error ? err.message : String(err)}) — ${id}'s sleep has no feed row`);
   } finally {
     void log.flush();
   }
@@ -154,7 +169,8 @@ export async function stopDonePass(
   deps: StopDoneSweepDeps, mem: StopDoneMemory,
   sessions: readonly FleetSession[], records: readonly SessionRecord[], names: readonly string[],
 ): Promise<StopDoneOutcome[]> {
-  if (names.includes(STOP_DONE_DISABLED_MARKER) || names.includes(RECLAIM_PAUSE_MARKER)) return [];
+  if (names.includes(STOP_DONE_DISABLED_MARKER) || names.includes(RECLAIM_PAUSE_MARKER)
+    || names.includes(HIBERNATE_DISABLED_MARKER)) return [];
   const serial = deps.serial;
   if (serial === null) return [];
   const byId = new Map(records.map((r) => [r.id, r] as const));
@@ -166,10 +182,12 @@ export async function stopDonePass(
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   if (pop.length === 0) return [];
   const reads = storeReads(deps.coord, pop.map((s) => s.id));
-  const surface = stopSurfaceSupported(deps.fleetState);
+  const verb = verbSupported(deps.fleetState, CCD_ARGV.hibernate(pop[0]!.id, null));
+  const afterMs = hibernateAfterMs(names.includes(HIBERNATE_AFTER_HOURS_FILE) ? await deps.readAfterHours() : null);
   const inputFor = (row: StopDoneRow, store: StopDoneStoreRead, live: StopDoneLive, at: number): StopDoneInput => ({
     row, store, viewer: deps.presence?.isOpen(row.id) ?? false, sinceStartMs: at - deps.startedAt,
-    presenceTtlMs: PRESENCE_OPEN_TTL_MS, surface, live, now: at, graceMs: STOP_DONE_GRACE_MS,
+    presenceTtlMs: PRESENCE_OPEN_TTL_MS, verb, optedOut: names.includes(`${row.id}.${NO_HIBERNATE_SUFFIX}`), afterMs,
+    live, now: at, graceMs: STOP_DONE_GRACE_MS,
   });
   const due: FleetSession[] = [];
   let measured = 0;
@@ -181,7 +199,7 @@ export async function stopDonePass(
     if (measured >= STOP_DONE_MEASURES_PER_PASS) break;
     measured++;
     v = stopDoneVerdict(inputFor(row, store, await readLive(deps, byId.get(row.id)!), deps.now()));
-    if (v.act === 'stop') due.push(row);
+    if (v.act === 'hibernate') due.push(row);
   }
   const out: StopDoneOutcome[] = [];
   for (const row of due) {
@@ -196,14 +214,17 @@ export async function stopDonePass(
         const at = deps.now();
         const store = storeReads(deps.coord, [row.id]).get(row.id)!;
         const v = stopDoneVerdict(inputFor(again, store, await readLive(deps, rec), at));
-        if (v.act !== 'stop') return { id: row.id, kind: 'held-at-act', verdict: v };
-        const res = await deps.runCcd(CCD_ARGV.stopId(row.id, 'agent'));
+        if (v.act !== 'hibernate') return { id: row.id, kind: 'held-at-act', verdict: v };
+        const res = await deps.runCcd(CCD_ARGV.hibernate(row.id, sweepDec(deps.fleetState, STOP_DONE_ACTOR)));
         if (!res.ok) {
           mem.retryAt.set(row.id, deps.now() + STOP_DONE_RETRY_MS);
-          return { id: row.id, kind: 'failed', detail: res.stderr };
+          const busy = /ccd: session-busy: ?(\S*)/.exec(res.stderr);
+          return busy !== null
+            ? { id: row.id, kind: 'skipped', detail: busy[1] || 'busy' }
+            : { id: row.id, kind: 'failed', detail: res.stderr };
         }
         recordFeed(deps, row.id, v.runId);
-        return { id: row.id, kind: 'stopped', runId: v.runId };
+        return { id: row.id, kind: 'hibernated', runId: v.runId };
       })));
     } catch (err) {
       mem.retryAt.set(row.id, deps.now() + STOP_DONE_RETRY_MS);
@@ -211,8 +232,9 @@ export async function stopDonePass(
     }
   }
   for (const o of out) {
-    if (o.kind === 'stopped') console.warn(`ccrc-server: stop-done: stopped ${o.id} (run ${o.runId} done, idle; D-5370)`);
-    else if (o.kind === 'failed') console.warn(`ccrc-server: stop-done: the stop of ${o.id} failed (${o.detail}) — not asked again for an hour`);
+    if (o.kind === 'hibernated') console.warn(`ccrc-server: stop-done: put ${o.id} to sleep (run ${o.runId} done, idle; D-5370, D-5427)`);
+    else if (o.kind === 'skipped') console.warn(`ccrc-server: stop-done: ccd re-measured ${o.id} as ${o.detail} — not asked again for an hour`);
+    else if (o.kind === 'failed') console.warn(`ccrc-server: stop-done: the hibernate of ${o.id} failed (${o.detail}) — not asked again for an hour`);
   }
   return out;
 }
