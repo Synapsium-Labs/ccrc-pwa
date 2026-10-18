@@ -46,6 +46,7 @@ import path from 'node:path';
 import { loadThemes, ratio } from '../design/audit.mjs';
 import { cn } from '../../ui/src/lib/cn';
 import * as ui from '@ccrc/ui';
+import { colourStems } from './themeStems';
 
 const UI_SRC = path.join(import.meta.dirname, '..', '..', 'ui', 'src');
 
@@ -62,22 +63,7 @@ function componentFiles(dir: string): string[] {
   return out.sort();
 }
 
-/** theme.css's `@theme` block as `utility-stem -> css expression`, e.g.
- *  `accent -> var(--accent)`. This is the ONLY source of truth for whether a
- *  `text-*` names a colour or a font size: `--color-ink-primary` exists and
- *  `--color-base` does not, so `text-ink-primary` is ink and `text-base` is a
- *  size. A hand-kept exclusion list of size names would be the same drift
- *  this whole file exists to avoid. */
-function colourStems(): Map<string, string> {
-  const css = readFileSync(path.join(UI_SRC, 'styles', 'theme.css'), 'utf8')
-    .replace(/\/\*[\s\S]*?\*\//g, '');
-  const out = new Map<string, string>();
-  for (const m of css.matchAll(/--color-([\w-]+)\s*:\s*([^;]+);/g)) {
-    out.set(m[1] ?? '', (m[2] ?? '').trim());
-  }
-  return out;
-}
-
+// The stem map is shared with wordmark.test.tsx (themeStems.ts, D-5470).
 const STEMS = colourStems();
 
 /** Every class string literal in a component: cva bases, cva variant values,
