@@ -8335,13 +8335,36 @@ export function missingSegmentNames({ named, present }) {
  *  sidecars' blobs and its boundary's kept blob. It keeps its mark only while every one of them is `exported` (some
  *  segment holds its bytes) or `pruned` (a tombstone: a stub is all there is to export). A referenced blob that is
  *  neither is live and unmarked: its text is store-only, and a marked entry hides it from the pass, which offers only
- *  unmarked entries, so the census counts the blob due for good. The sweep asks it where it would set a mark (a
- *  replayed row) and clears the marks of the referrers of a blob it unmarks or revives (a bind check, a revived
- *  tombstone). No blob at all answers yes: nothing is owed, and it agrees with planSegment, which takes such a row
- *  carrying nothing and whose pass marks it (the schema gives every entry its own blob, so the sweep never asks it). */
+ *  unmarked entries, so the census counts the blob due for good. The ingest asks it where an entry that already exists
+ *  gains its boundary over a kept blob (no segment is in play there); replay asks segmentMayMarkEntry instead, which also
+ *  needs the segment it marks with to carry a pruned blob (D-5396). The sweep clears the marks of the referrers of a blob it
+ *  unmarks or revives (a bind check, a revived tombstone). No blob at all answers yes: nothing is owed, and it agrees with
+ *  planSegment, which takes such a row carrying nothing and whose pass marks it (the schema gives every entry its own blob,
+ *  so the sweep never asks it). */
 export function entryMayHoldMark({ blobs }) {
   if (!Array.isArray(blobs)) throw new TypeError(`entryMayHoldMark: blobs must be a list, got ${typeof blobs}`);
   return blobs.every((b) => b.exported === true || b.pruned === true);
+}
+
+/** Whether replay may mark an entry with the segment it is replaying (D-5396 (history-export-bind-clears-pruned-referrers),
+ *  refining D-5395), from the states of the blobs the entry references as the store holds them now, each with `carried`:
+ *  whether THAT segment's blobs hold the blob, as bytes or as a stub. entryMayHoldMark's rule, narrowed where a mark names a
+ *  segment. An `exported` blob has its bytes where its own mark names, so it licenses the mark whichever segment is replayed
+ *  (the entry is marked by the first segment that carries it), and the loss of that segment clears the blob's referrers with
+ *  it (a bind check). A `pruned` blob that is not exported has no mark of its own, and its stub is held only by the segments
+ *  that carry it: the entry's mark is the one thing that names a segment holding it, so the blob licenses the mark only when
+ *  this segment carries it, as the pass's does (planSegment stubs every pruned, unmarked blob the entry names in the segment
+ *  that marks the entry). Without that, a mark naming a segment that lacks the stub outlives the loss of the segment that
+ *  holds it, and a rebuild from the live segments cannot place the entry. A live, unmarked blob licenses nothing. `carried`
+ *  is read only of a pruned blob that is not exported: the caller measures it there and says false of any other, whose answer
+ *  does not depend on it, and a blob that does not say is refused rather than read as not carried. No blob at all answers
+ *  yes, as entryMayHoldMark does. */
+export function segmentMayMarkEntry({ blobs }) {
+  if (!Array.isArray(blobs)) throw new TypeError(`segmentMayMarkEntry: blobs must be a list, got ${typeof blobs}`);
+  for (const b of blobs) {
+    if (typeof b?.carried !== 'boolean') throw new TypeError(`segmentMayMarkEntry: every blob says whether the segment carries it, got ${typeof b?.carried}`);
+  }
+  return blobs.every((b) => b.exported === true || (b.pruned === true && b.carried === true));
 }
 
 // ===========================================================================

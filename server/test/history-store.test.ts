@@ -2525,6 +2525,28 @@ describe('store.mjs: export segments (W1-B4; spec 9.15 "Write", "Who reads it"; 
     }
   });
 
+  it('D-5396: segmentHasBlob answers whether a segment\'s blobs table holds a sha256, as bytes or as a stub, and throws on anything but a byte array', () => {
+    const dir = freshDir();
+    const name = nameOf(1);
+    const seg = segStore.createSegment(dir, name, meta(1));
+    const ins = segStore.segmentInserts(seg);
+    ins.blob({ sha256: sha(1), codec: 'br5', raw_len: 10, z: new Uint8Array(10).fill(1), pruned: false });
+    ins.blob({ sha256: sha(2), codec: 'br5', raw_len: 10, z: null, pruned: true });
+    expect(segStore.publishSegment(seg, dir, name)).toBe('linked');
+    const db = segStore.openSegment(path.join(dir, name));
+    try {
+      expect(segStore.segmentHasBlob(db, sha(1)), 'bytes').toBe(true);
+      expect(segStore.segmentHasBlob(db, sha(2)), 'a stub').toBe(true);
+      expect(segStore.segmentHasBlob(db, sha(3)), 'a blob the segment lacks').toBe(false);
+      expect(segStore.segmentHasBlob(db, sha(1)), 'asked again on the same handle').toBe(true);
+      for (const bad of [null, undefined, 'ab', 7, [1, 2]]) {
+        expect(() => (segStore.segmentHasBlob as (...a: unknown[]) => unknown)(db, bad), String(bad)).toThrow(/segmentHasBlob: sha256 is a byte array/);
+      }
+    } finally {
+      db.close();
+    }
+  });
+
   it('O39: an existing name answers exists and stays byte-identical; the temp, renumbered, publishes under the next number; a name off its meta is refused', () => {
     const dir = freshDir();
     const name = nameOf(1);

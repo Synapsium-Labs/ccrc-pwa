@@ -2062,6 +2062,21 @@ export function segmentBlobsAfter(db, rowid, maxBytes, kind) {
   return out;
 }
 
+const SEGMENT_HAS_BLOB = new WeakMap();
+/** Whether a segment's blobs table holds this sha256, as bytes or as a stub (D-5396 (history-export-bind-clears-pruned-referrers)):
+ *  replay asks it of a pruned blob no mark names, to know whether the segment it would mark an entry with carries the blob
+ *  (lib segmentMayMarkEntry). A point read by the table's primary key. A sha256 that is not a byte array is the caller's bug
+ *  and throws, never an answer of "no". */
+export function segmentHasBlob(db, sha256) {
+  if (!(sha256 instanceof Uint8Array)) throw new TypeError(`segmentHasBlob: sha256 is a byte array, got ${typeof sha256}`);
+  let st = SEGMENT_HAS_BLOB.get(db);
+  if (st === undefined) {
+    st = db.prepare('SELECT 1 AS x FROM blobs WHERE sha256 = ?');
+    SEGMENT_HAS_BLOB.set(db, st);
+  }
+  return st.get(sha256) !== undefined;
+}
+
 /** The first `limit` rows of every kind after `ord`, in write order: `{ ord, kind, row }`, `row` holding the kind's
  *  columns without `ord` (SEGMENT_BIGINT_COLS as BigInt, every other integer a number). One bounded chunk of the
  *  replay's row pass. */

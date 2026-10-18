@@ -152,6 +152,7 @@ export function setSegmentSeq(temp: string, seq: number): void;
 export function openSegment(path: string): DatabaseSync;
 export function segmentMeta(db: DatabaseSync): SegmentMeta;
 export function segmentBlobsAfter(db: DatabaseSync, rowid: number, maxBytes: number, kind: 'bytes' | 'stubs'): Array<SegmentBlobRow & { rowid: number }>;
+export function segmentHasBlob(db: DatabaseSync, sha256: Uint8Array): boolean;
 export function segmentRowsAfter(db: DatabaseSync, ord: number, limit: number): SegmentRowRead[];
 export function listSegments(dir: string): { name: string; seq: number; writer: string; bytes: number }[];
 export function removeStaleSegmentTemps(dir: string): string[];

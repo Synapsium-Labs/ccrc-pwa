@@ -1164,8 +1164,8 @@ describe('marks that move (W1-B4 Task 8; spec §9.15 "Mark", "After a bind")', (
   // W1-B4 whole-branch review, D-5395 (history-export-mark-needs-its-blobs): an entry keeps its mark only while every
   // blob it references is exported or pruned. Three ways the cases above left it marked over a live, unmarked blob.
   // D-5396 (history-export-bind-clears-pruned-referrers): the pruned arm used to keep the entry's mark ("a stub is all there is
-  // to export"); but a pruned blob's bytes or stub are held only by the segment its mark names, so with that segment gone the
-  // entry is cleared too and the next pass writes it again with a stub.
+  // to export"); but a pruned blob's bytes are held only by the segment its mark names (a stub is never marked), so with that segment
+  // gone the entry is cleared too and the next pass writes it again with a stub.
   for (const pruned of [false, true]) {
     it(`D-5395, a bind check: segment 1 moved aside, segment 2 present: ${pruned
       ? 'the entry segment 2 marked is cleared with the blob segment 1 marked although that blob has since been pruned, and the next pass writes the entry again with a stub of it (D-5396)'
@@ -1227,13 +1227,41 @@ describe('marks that move (W1-B4 Task 8; spec §9.15 "Mark", "After a bind")', (
     }, 600_000);
   }
 
-  // D-5396 (history-export-bind-clears-pruned-referrers), end to end on the real verbs. A pruned blob's bytes or stub are held
-  // only by the segment its mark names: an entry exported again into a later segment for a late variant does not carry that
+  /** The loss of history.db (the caller removes any transcript): a rebuild on a pty, ticked until the recovery step finishes. The
+   *  journal and the export directory stay. */
+  async function rebuildFromSegments(box: HistoryBox): Promise<void> {
+    const P = historyPaths(box.home);
+    for (const f of [P.dbFile, P.wal, P.shm]) fs.rmSync(f, { force: true });
+    const rebuilt = await runOnPty(box, [process.execPath, '--no-warnings', CLI, 'doctor', '--rebuild'], { timeoutMs: 120_000 });
+    expect(rebuilt.code, rebuilt.out).toBe(0);
+    for (let i = 0; i < 12 && recoverRow(box)?.completed_ms == null; i += 1) {
+      const r = runShim(box);
+      expect(r.code, `rebuild tick ${i + 1}:\n${r.stdout}\n${r.stderr}`).toBe(0);
+    }
+    expect(recoverRow(box)?.completed_ms, 'the recovery step finished').not.toBeNull();
+  }
+  /** `grep term` after a rebuild: the index is still being derived, so the verb answers 7 (fts-pending) until a few ticks have
+   *  built it; ticks (at most eight) until the answer is anything else, and returns that answer. */
+  function grepAfterRebuild(box: HistoryBox, term: string): ReturnType<typeof runCli> {
+    let r = runCli(box, ['grep', term], { env: withPane(box, ID) });
+    for (let i = 0; i < 8 && r.code === 7; i += 1) {
+      const t = runShim(box);
+      expect(t.code, `grep tick ${i + 1}:\n${t.stdout}\n${t.stderr}`).toBe(0);
+      r = runCli(box, ['grep', term], { env: withPane(box, ID) });
+    }
+    return r;
+  }
+
+  // D-5396 (history-export-bind-clears-pruned-referrers), end to end on the real verbs. A pruned blob's bytes are held
+  // only by the segment its mark names (a stub is never marked): an entry exported again into a later segment for a late variant does not carry that
   // blob again. With the first segment gone and the entry still marked with the second, a rebuild from the live segments
   // met the entry's first body nowhere (export_row_blob_missing) and so placed neither the entry nor its variants
   // (export_row_unplaced), the late body included. The check after a bind now clears the entry, and the next pass writes it
-  // again with a stub of the pruned body.
-  it('D-5396, end to end: a late variant re-marks row 1 into segment 2, prune tombstones its first body, segment 1 is moved aside, a bind and a pass; then a rebuild from the live segments alone places row 1 and its variant, carries the pruned body as a stub and still answers "content pruned"', async () => {
+  // again with a stub of the pruned body. The rebuild's own marks keep that true (F1b): replay marks an entry only from a segment
+  // that carries the stub, so when the segment that holds it is moved aside in turn, the entry is cleared and written again, and a
+  // second rebuild places it. Before, replay marked row 1 with the first segment that carries the row (segment 2, which lacks the
+  // stub), and nothing named segment 3 for it.
+  it('D-5396, end to end: a late variant re-marks row 1 into segment 2, prune tombstones its first body, segment 1 is moved aside, a bind and a pass; then a rebuild from the live segments alone places row 1 and its variant, marks row 1 with the segment that carries the pruned body as a stub, and still answers "content pruned"; and when that segment is moved aside in turn, a second rebuild places row 1 again (D-5396, refined)', async () => {
     const { box, transcript, ids } = ingestedBox('ccrc-history-export-f1-', [row(1, 'zqf1first body one', 2 * DAY), row(2, 'zqf1other row', 2 * DAY)]);
     const s1 = `1.${ids.writer}.db`;
     const s2 = `2.${ids.writer}.db`;
@@ -1259,19 +1287,16 @@ describe('marks that move (W1-B4 Task 8; spec §9.15 "Mark", "After a bind")', (
     expect(segmentsOf(box), 'the live segments').toEqual([s2, s3]);
     // The loss: the transcript and history.db are gone; the journal and the export directory stay.
     fs.rmSync(transcript);
-    const P = historyPaths(box.home);
-    for (const f of [P.dbFile, P.wal, P.shm]) fs.rmSync(f, { force: true });
-    const rebuilt = await runOnPty(box, [process.execPath, '--no-warnings', CLI, 'doctor', '--rebuild'], { timeoutMs: 120_000 });
-    expect(rebuilt.code, rebuilt.out).toBe(0);
-    for (let i = 0; i < 12 && recoverRow(box)?.completed_ms == null; i += 1) {
-      const r = runShim(box);
-      expect(r.code, `rebuild tick ${i + 1}:\n${r.stdout}\n${r.stderr}`).toBe(0);
-    }
-    expect(recoverRow(box)?.completed_ms, 'the recovery step finished').not.toBeNull();
+    await rebuildFromSegments(box);
     // the invariant: a rebuild from the live segments places every entry row they carry, each blob it names present as bytes or a stub
     expect(counters(box)['export_row_blob_missing'] ?? 0, 'no row met a blob no live segment holds').toBe(0);
     expect(counters(box)['export_row_unplaced'] ?? 0, 'and no row or variant was left unplaced').toBe(0);
     expect(q(box, 'SELECT uuid FROM entries ORDER BY uuid').map((e) => e['uuid']), 'both rows placed').toEqual([rid(1), rid(2)]);
+    // the late body through a read verb: right after a rebuild grep answers 7 (fts-pending) until the ticks have derived the index
+    const g1 = grepAfterRebuild(box, 'zqf1late');
+    expect(g1.code, `the late body is found by grep once the index is built:\n${g1.stdout}\n${g1.stderr}`).toBe(0);
+    expect(g1.stdout, 'and the hit names row 1').toContain(rid(1));
+    expect(g1.stdout).toContain('zqf1late body two');
     const stubs = segmentRows(path.join(exportDirOf(box), s3), 'blobs').filter((b) => b['z'] === null).map((b) => b['sha256']);
     expect(stubs, 'a live segment carries the pruned first body as a stub, with no bytes').toEqual([firstBody]);
     expect(q(box, 'SELECT z IS NULL AS stub, pruned_ms IS NOT NULL AS pruned FROM blobs WHERE lower(hex(sha256)) = ?', firstBody),
@@ -1284,7 +1309,44 @@ describe('marks that move (W1-B4 Task 8; spec §9.15 "Mark", "After a bind")', (
     expect(ex.code, `${ex.stdout}\n${ex.stderr}`).toBe(0);
     expect(ex.stdout, 'expand on the pruned first body still says so').toContain('content pruned on');
     expect(strandedBlobs(box), 'D-5395: no live blob is held only by marked entries').toEqual([]);
-  }, 900_000);
+    // D-5396 (refined): the rebuild marks row 1 with the segment that carries what it needs. Segment 2 holds row 1 but not the
+    // pruned first body (its stub is in segment 3 alone), so a mark naming segment 2 would outlive the loss of segment 3.
+    expect(marks(box), 'row 1 is marked by segment 3, which carries its pruned first body as a stub, not by segment 2 (the first that carries the row)')
+      .toEqual({ [rid(1)]: s3, [rid(2)]: s3 });
+    // The loss of segment 3 (moved aside), a bind, the check and a pass, then a second rebuild from what is left.
+    fs.renameSync(path.join(exportDirOf(box), s3), path.join(aside, s3));
+    await onStore(box, (db) => { setMeta(db, `bound:${Date.now() + 301 * MIN}`, 'restore'); });
+    passAt(box, 301);   // the bind check clears segment 3's marks, row 1's with them
+    passAt(box, 400);   // the pass writes both rows again
+    passAt(box, 500);
+    const again = segmentsOf(box);
+    expect(again, 'the live segments: segment 2 and the one the pass wrote').toHaveLength(2);
+    expect(again[0]).toBe(s2);
+    const s4 = again[1]!;
+    expect(segmentRows(path.join(exportDirOf(box), s4), 'entries').map((e) => e['uuid']).sort(), 'the new segment carries both rows, row 1 included').toEqual([rid(1), rid(2)]);
+    expect(segmentRows(path.join(exportDirOf(box), s4), 'blobs').filter((b) => b['z'] === null).map((b) => b['sha256']),
+      'with a stub of the pruned first body').toEqual([firstBody]);
+    expect(marks(box), 'both rows are marked by the new segment').toEqual({ [rid(1)]: s4, [rid(2)]: s4 });
+    await rebuildFromSegments(box);
+    expect(counters(box)['export_row_blob_missing'] ?? 0, 'no row met a blob no live segment holds').toBe(0);
+    expect(counters(box)['export_row_unplaced'] ?? 0, 'and no row or variant was left unplaced').toBe(0);
+    expect(q(box, 'SELECT uuid FROM entries ORDER BY uuid').map((e) => e['uuid']), 'both rows placed').toEqual([rid(1), rid(2)]);
+    const g2 = grepAfterRebuild(box, 'zqf1late');
+    expect(g2.code, `the late body is found by grep after the second rebuild:\n${g2.stdout}\n${g2.stderr}`).toBe(0);
+    expect(g2.stdout).toContain(rid(1));
+    expect(g2.stdout).toContain('zqf1late body two');
+    expect(q(box, 'SELECT z IS NULL AS stub, pruned_ms IS NOT NULL AS pruned FROM blobs WHERE lower(hex(sha256)) = ?', firstBody),
+      'the second rebuild holds the first body body-less and pruned').toEqual([{ stub: 1, pruned: 1 }]);
+    const late2 = q(box, `SELECT b.z AS z FROM entry_variants v JOIN entries e ON e.entry_id = v.entry_id JOIN blobs b ON b.blob_id = v.blob_id
+      WHERE e.uuid = ? AND b.blob_id <> e.blob_id`, rid(1));
+    expect(late2, 'row 1\'s late variant is placed again').toHaveLength(1);
+    expect(brotliDecompressSync(Buffer.from(late2[0]!['z'] as string, 'hex')).toString('utf8')).toContain('zqf1late body two');
+    expect(marks(box), 'both rows are marked by the segment that carries the stub').toEqual({ [rid(1)]: s4, [rid(2)]: s4 });
+    const ex2 = runCli(box, ['expand', rid(1)], { env: withPane(box, ID) });
+    expect(ex2.code, `${ex2.stdout}\n${ex2.stderr}`).toBe(0);
+    expect(ex2.stdout, 'expand on the pruned first body says so').toContain('content pruned on');
+    expect(strandedBlobs(box), 'D-5395: no live blob is held only by marked entries').toEqual([]);
+  }, 1_500_000);
 
   it('D-5395, a revived tombstone (writeChunk): a row whose blob prune tombstoned before its export went with a stub; a swap copy that stores the bytes again clears that row\'s mark, and an exported blob that was pruned and revived clears nothing; the next pass carries the bytes', async () => {
     const { box, transcript, ids } = ingestedBox('ccrc-history-export-revive-', [row(1, 'kept text', 2 * DAY), row(2, 'pruned text', 2 * DAY)]);
@@ -1995,6 +2057,40 @@ describe('D-5395: the mark invariant adds no statement for a fresh blob and read
     }
   });
 
+  it('D-5396: the replay lookup names a blob\'s sha256 only for a pruned blob no mark names, the one case where replay asks the segment whether it carries the blob: a live, an exported and an exported-then-pruned blob cost no lookup', () => {
+    const db = new MemDb(':memory:');
+    try {
+      for (const m of MIGRATIONS) db.exec(m);
+      db.exec('PRAGMA foreign_keys = OFF');
+      db.exec('BEGIN');
+      db.prepare("INSERT INTO transcripts (transcript_pk, cc_session_uuid, harness, agent_id) VALUES (1, 'u1', 'claude-code', '')").run();
+      // blob 1 live and unmarked (the entry's own), 2 live and exported (a variant), 3 pruned and unmarked (a variant), 4 pruned
+      // and exported (a linked sidecar), 5 pruned and unmarked (the boundary's kept blob)
+      const ib = db.prepare("INSERT INTO blobs (blob_id, sha256, codec, z, raw_len, exported_ms, exported_seg) VALUES (?, ?, 'raw', ?, 1, ?, ?)");
+      const sha = (n: number): Buffer => createHash('sha256').update(`d5396 lookup ${n}`).digest();
+      ib.run(1, sha(1), Buffer.from('z'), null, null);
+      ib.run(2, sha(2), Buffer.from('z'), 1, '9.0a1b2c3d.db');
+      ib.run(3, sha(3), null, null, null);
+      ib.run(4, sha(4), null, 1, '9.0a1b2c3d.db');
+      ib.run(5, sha(5), null, null, null);
+      db.prepare("INSERT INTO entries (entry_id, uuid, transcript_pk, type, provenance, prov_version, struct_rank_ns, struct_file_id, blob_id, ts_ms) VALUES (1, 'e1', 1, 'user', 'x', 1, 0, 1, 1, 1000)").run();
+      db.prepare('INSERT INTO entry_variants (entry_id, blob_id, first_file_id, first_seen_ms) VALUES (1, 2, 1, 1)').run();
+      db.prepare('INSERT INTO entry_variants (entry_id, blob_id, first_file_id, first_seen_ms) VALUES (1, 3, 1, 1)').run();
+      db.prepare("INSERT INTO sidecars (transcript_pk, name, blob_id, entry_id, first_seen_ms) VALUES (1, 's', 4, 1, 1)").run();
+      db.prepare('INSERT INTO boundaries (entry_id, transcript_pk, ord, kept_blob_id) VALUES (1, 1, 1, 5)').run();
+      db.exec('COMMIT');
+      const rows = db.prepare(gatherSql()).all(1, 1, 1, 1, 1) as Array<{ pruned: number; exported: number; sha: Uint8Array | null }>;
+      const key = (r: { pruned: number; exported: number }): string => `${r.pruned ? 'pruned' : 'live'}/${r.exported ? 'exported' : 'unmarked'}`;
+      expect(rows.map((r) => key(r)).sort(), 'the five blobs the entry references').toEqual(
+        ['live/exported', 'live/unmarked', 'pruned/exported', 'pruned/unmarked', 'pruned/unmarked']);
+      expect(rows.filter((r) => r.sha !== null).map((r) => key(r)), 'only the pruned, unmarked ones carry a sha256 to look up').toEqual(['pruned/unmarked', 'pruned/unmarked']);
+      expect(rows.filter((r) => r.sha !== null).map((r) => Buffer.from(r.sha as Uint8Array).toString('hex')).sort(),
+        'the sha256 of those two blobs').toEqual([sha(3).toString('hex'), sha(5).toString('hex')].sort());
+    } finally {
+      db.close();
+    }
+  });
+
   it('the bind check clears the entries that reference a blob whose mark it clears, through each of the four references (its own blob, a variant, a linked sidecar, a kept blob) and whether that blob is live or pruned since (D-5396), and keeps those whose blobs it did not clear', async () => {
     const { box, ids } = ingestedBox('ccrc-history-export-refs-', [row(1, 'a prompt', DAY)]);
     const S1 = `1.${ids.writer}.db`;                                                                // the segment this box no longer has
@@ -2194,6 +2290,38 @@ describe('a boundary that attaches a live kept blob to an exported entry clears 
     expect(out.markAfter, 'and loses its mark, the kept blob being live and unmarked').toEqual([{ exported_ms: null }]);
     expect(out.again, 'an entry whose boundary is already there inserts nothing and reads nothing').toBe(0);
     expect(out.fresh, 'a new entry with its boundary reads nothing: it holds no mark').toBe(0);
+  }, 120_000);
+
+  // D-5396: replay's rows now ask lib segmentMayMarkEntry (unmarkEntryOverBlobIn), so this is the case that holds the ingest's own
+  // arm (unmarkEntryOverBlob, lib entryMayHoldMark) to its state check: a kept blob a segment already carried licenses the mark.
+  // (A pruned kept blob cannot reach it: the chunk's blob loop revives a tombstone first, and a revived blob is live and unmarked.)
+  it('an existing entry that gains its boundary over a kept blob a segment already carried (live and exported) keeps its mark: the ingest\'s arm reads the blob\'s state, and an exported blob licenses the mark (D-5395)', async () => {
+    const { box } = ingestedBox('ccrc-history-export-boundary-exported-', [row(1, 'a prompt', DAY)]);
+    const sha = (n: number): Buffer => createHash('sha256').update(`boundary exported ${n}`).digest();
+    const body = Buffer.from('zz');
+    const E1 = rid(40);
+    const entry = (uuid: string) => ({ uuid, type: 'user', subtype: null, role: 'user', model: null, parentUuid: null, tsMs: 1, requestId: null,
+      apiBlockIndex: null, msgId: null, sourceToolUseId: null, toolName: null, isCompactSummary: 0 });
+    const rowOf = (kept: number | null): Record<string, unknown> => ({
+      kind: 'row', at: 1000, entry: entry(E1), provenance: 'x', sha: sha(1), json: '{}', ftsText: null, ftsOverCap: false,
+      boundary: kept === null ? null : { trigger: 'auto', headUuid: 'h', anchorUuid: 'a', tailUuid: 't', preTokens: 1, postTokens: 1, durationMs: 1, missing: [] },
+      kept: kept === null ? null : { sha: sha(kept) },
+    });
+    const chunkOf = (rows: Array<Record<string, unknown>>, blobs: number[]): Record<string, unknown> => ({
+      blobs: new Map(blobs.map((n) => [sha(n).toString('hex'), { sha: sha(n), z: body, rawLen: 4 }])), counts: new Map(), rows,
+      transcriptPk: 1, fileId: 1, rankNs: 0n, first: null, cursor: { offset: 0, tailSha: null }, size: 0, mtimeNs: 0n, rawError: null,
+      nowMs: Date.now(), pairIdx: null, ccUuid: U,
+    });
+    const after = await onStore(box, (raw) => {
+      SW.writeChunk(raw, chunkOf([rowOf(null)], [1]));   // the entry, no boundary yet
+      raw.prepare("UPDATE entries SET exported_ms = 1, exported_seg = '9.0a1b2c3d.db' WHERE uuid = ?").run(E1);
+      raw.prepare("UPDATE blobs SET exported_ms = 1, exported_seg = '9.0a1b2c3d.db' WHERE sha256 = ?").run(sha(1));   // the entry's own blob went with it, so the chunk's blob loop (storeBlob) clears no referrer
+      raw.prepare("INSERT INTO blobs (sha256, codec, z, raw_len, exported_ms, exported_seg) VALUES (?, 'br5', ?, 4, 1, '9.0a1b2c3d.db')").run(sha(2), body);
+      SW.writeChunk(raw, chunkOf([rowOf(2)], [1, 2]));   // it gains its boundary over the exported blob
+      return raw.prepare('SELECT e.exported_seg AS seg, (SELECT count(*) FROM boundaries b WHERE b.entry_id = e.entry_id) AS boundaries FROM entries e WHERE e.uuid = ?').get(E1) as Record<string, unknown>;
+    });
+    expect(after['boundaries'], 'CONTROL: the entry gained its boundary').toBe(1);
+    expect(after['seg'], 'and keeps its mark: the kept blob is exported, so the entry needs no pass for it').toBe('9.0a1b2c3d.db');
   }, 120_000);
 
   for (const variant of ['fresh', 'revived'] as const) {

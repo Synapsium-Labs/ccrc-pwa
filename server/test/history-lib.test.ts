@@ -8345,6 +8345,73 @@ describe('W1-B4 whole-branch review: entryMayHoldMark, an entry keeps its export
   });
 });
 
+describe('W1-B4 review 614, F1b: segmentMayMarkEntry, replay marks an entry with a segment only when that segment carries each of the entry\'s pruned blobs that no mark names (D-5396 (history-export-bind-clears-pruned-referrers), refining D-5395)', () => {
+  const DAY = 86_400_000;
+  const NOW = Date.UTC(2026, 11, 1);
+  const A = '/home/u/.claude-a';
+  const homes = { [A]: 180 };
+  const b = (exported: boolean, pruned: boolean, carried: boolean): { exported: boolean; pruned: boolean; carried: boolean } => ({ exported, pruned, carried });
+  const may = (...blobs: Array<ReturnType<typeof b>>): boolean => libCarry.segmentMayMarkEntry({ blobs });
+  it('a pruned blob no mark names licenses the mark only when the segment carries it, as a stub or as bytes: carried yes, not carried no', () => {
+    expect(may(b(false, true, true)), 'pruned and carried').toBe(true);
+    expect(may(b(false, true, false)), 'pruned and not carried').toBe(false);
+    expect(may(b(true, false, true), b(false, true, true)), 'beside an exported one').toBe(true);
+    expect(may(b(true, false, false), b(false, true, false)), 'beside an exported one, not carried').toBe(false);
+  });
+  it('an exported blob licenses the mark whether or not the segment carries it, pruned since or not: first wins stays for what is exported', () => {
+    expect(may(b(true, false, false)), 'exported, not carried').toBe(true);
+    expect(may(b(true, false, true)), 'exported, carried').toBe(true);
+    expect(may(b(true, true, false)), 'exported, then pruned, not carried').toBe(true);
+    expect(may(b(true, true, true)), 'exported, then pruned, carried').toBe(true);
+  });
+  it('a live, unmarked blob never licenses it, carried or not, beside whatever else', () => {
+    expect(may(b(false, false, false)), 'alone').toBe(false);
+    expect(may(b(false, false, true)), 'carried: its bytes would be marked, and then it is exported').toBe(false);
+    expect(may(b(true, false, true), b(false, false, false)), 'beside an exported one').toBe(false);
+    expect(may(b(false, true, true), b(false, false, true)), 'beside a pruned, carried one').toBe(false);
+  });
+  it('every blob must license it: one pruned blob the segment lacks refuses, in either order, among licensed ones', () => {
+    expect(may(b(false, true, true), b(false, true, false))).toBe(false);
+    expect(may(b(false, true, false), b(false, true, true))).toBe(false);
+    expect(may(b(true, false, false), b(false, true, false), b(true, true, false))).toBe(false);
+    expect(may(b(true, false, false), b(false, true, true), b(true, true, false))).toBe(true);
+  });
+  it('no blob at all: it may, as entryMayHoldMark answers (nothing is owed)', () => {
+    expect(may()).toBe(true);
+    expect(libCarry.entryMayHoldMark({ blobs: [] })).toBe(true);
+  });
+  it('it narrows entryMayHoldMark in one place only: a pruned blob no mark names and the segment lacks; every other state answers alike', () => {
+    for (const exported of [false, true]) for (const pruned of [false, true]) for (const carried of [false, true]) {
+      const narrower = !exported && pruned && !carried;
+      expect(may(b(exported, pruned, carried)), JSON.stringify({ exported, pruned, carried }))
+        .toBe(libCarry.entryMayHoldMark({ blobs: [{ exported, pruned }] }) && !narrower);
+    }
+  });
+  it('the pass\'s own output satisfies it: a taken row\'s blobs, once the segment is replayed, are all exported or pruned and carried by it (a stub is written in the segment that marks the row)', () => {
+    const file = { home: A, mtimeMs: NOW - 160 * DAY, present: true };
+    const blobs = [{ key: 'live', zBytes: 10, exported: false, pruned: false }, { key: 'done', zBytes: 10, exported: true, pruned: false },
+      { key: 'stub', zBytes: 0, exported: false, pruned: true }, { key: 'gone', zBytes: 0, exported: true, pruned: true }];
+    const seg = libCarry.planSegment({ nowMs: NOW, homeRetentionDays: homes, boundBytes: 100 * libCarry.EXPORT_ROW_META_BYTES,
+      rows: [{ key: 'e-1', tsMs: NOW - 160 * DAY, files: [file], blobs }] });
+    expect(seg).toMatchObject({ take: ['e-1'], carry: ['live'], stubs: ['stub'] });
+    const held = (x: { key: string; exported: boolean; pruned: boolean }): ReturnType<typeof b> =>
+      b(x.exported || seg.carry.includes(x.key), x.pruned, seg.carry.includes(x.key) || seg.stubs.includes(x.key));
+    expect(may(...blobs.map(held)), 'the replayed segment holds everything its row needs').toBe(true);
+    expect(may(...blobs.map((x) => b(x.exported, x.pruned, false))), 'before the segment carries the live one and the stub').toBe(false);
+    const withoutStub = blobs.map((x) => (x.key === 'stub' ? b(false, true, false) : held(x)));
+    expect(may(...withoutStub), 'a segment without the stub is refused').toBe(false);
+  });
+  it('a blob that does not say whether the segment carries it is refused, never read as "not carried"; a list is required', () => {
+    expect(() => libCarry.segmentMayMarkEntry({ blobs: [{ exported: true, pruned: false } as unknown as ReturnType<typeof b>] }))
+      .toThrow(/segmentMayMarkEntry: every blob says whether the segment carries it, got undefined/);
+    expect(() => libCarry.segmentMayMarkEntry({ blobs: [{ exported: false, pruned: true, carried: 1 } as unknown as ReturnType<typeof b>] }))
+      .toThrow(/segmentMayMarkEntry: every blob says whether the segment carries it, got number/);
+    expect(() => libCarry.segmentMayMarkEntry({ blobs: [null as unknown as ReturnType<typeof b>] })).toThrow(/every blob says whether the segment carries it, got undefined/);
+    expect(() => libCarry.segmentMayMarkEntry({ blobs: undefined as unknown as [] })).toThrow(/segmentMayMarkEntry: blobs must be a list, got undefined/);
+    expect(() => libCarry.segmentMayMarkEntry({ blobs: 'live' as unknown as [] })).toThrow(/segmentMayMarkEntry: blobs must be a list, got string/);
+  });
+});
+
 describe('W1-B4 whole-branch review: budgetHeldPass, a pass the run\'s budget cut short before it wrote a segment is recorded as an attempt (D-5394 (history-export-select-due-transcripts))', () => {
   const held = libCarry.budgetHeldPass;
   it('nothing taken and the selection did not run to its end: the budget ended it before the first row (the bound cannot, planSegment takes a pass\'s first row whatever its size)', () => {
