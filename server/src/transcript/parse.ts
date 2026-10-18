@@ -1,5 +1,5 @@
 import {
-  envelopeMembers, IDLE_COMPACT_NOTICE_PREFIXES, NO_RESPONSE_TEXT, RATE_LIMIT_ERROR, RESUME_PROMPT_PREFIX, SYNTHETIC_MODEL,
+  envelopeMembers, IDLE_COMPACT_NOTICE_PREFIXES, IDLE_COMPACT_NUDGE_PROMPT, NO_RESPONSE_TEXT, RATE_LIMIT_ERROR, RESUME_PROMPT_PREFIX, SYNTHETIC_MODEL,
   type ChatEvent,
 } from '../../../shared/api.js';
 
@@ -223,6 +223,12 @@ export function parseTranscriptLine(line: string): ChatEvent[] {
     // is the sentence Claude Code's default is; ccd's longer prompt starts with it.
     if (env.isMeta === true && flattenContent(content).trim().startsWith(RESUME_PROMPT_PREFIX)) {
       return [{ kind: 'system', uuid, ts, text: RESUME_PROMPT_PREFIX, origin: 'resume-prompt' }];
+    }
+    // D-5373: the server's own nudge after an idle compaction. A PLAIN user row
+    // (`sendPrompt` writes no `isMeta`), so it is matched on its WHOLE trimmed
+    // text: a sentence the operator types around it stays the operator's.
+    if (env.isMeta !== true && flattenContent(content).trim() === IDLE_COMPACT_NUDGE_PROMPT) {
+      return [{ kind: 'system', uuid, ts, text: IDLE_COMPACT_NUDGE_PROMPT, origin: 'idle-compact-nudge' }];
     }
     if (typeof content === 'string') {
       // Claude Code's caveat banner is nobody's speech, and stays a drop. It is

@@ -12,7 +12,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD, ghContainedEnv, makeCcdHarness, WS_ADD_REAL_SPAWN, type CcdHarness, WIDE_PANE, DEAD_PANE, WIDE_PANE_IF_UP } from './ccdWsHelpers.js';
+import { CCD, ghContainedEnv, makeCcdHarness, WS_ADD_REAL_SPAWN, type CcdHarness, WIDE_PANE, DEAD_PANE, WIDE_PANE_IF_UP, toolAdjToken as adj } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-split-'); });
@@ -759,7 +759,7 @@ describe('_spawn_start: --remote-control only when the box says on', () => {
    *  same mechanism every other suite in this file uses to read `ccd` state) —
    *  one definition, read twice. */
   const expectedCommand = (sidflag: string, rc: boolean): string =>
-    `cd '${h.home}' && exec env COLORTERM=truecolor ${h.sh('_resume_env')} '${h.home}/.local/bin/claude' `
+    `cd '${h.home}' && exec env COLORTERM=truecolor ${h.sh('_resume_env')}${adj(h)} '${h.home}/.local/bin/claude' `
     + `${rc ? "--remote-control 'myid' " : ' '}${sidflag} --dangerously-skip-permissions`;
 
   const UUID = 'deadbeef-0000-4000-8000-000000000000';

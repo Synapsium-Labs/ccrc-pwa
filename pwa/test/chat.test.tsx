@@ -842,6 +842,34 @@ describe('an idle compaction reads as waiting for you, not as a stall (D-5371)',
   });
 });
 
+// D-5373: after an idle compaction the server may type ONE "continue" prompt
+// (the operator's "Nudge if work is open" ruling). Its user row must read as
+// the server's act, never as the operator speaking, so a turn that starts with
+// no one typing says why it started.
+describe('the idle-compaction nudge reads as the server\'s act, not the operator (D-5373)', () => {
+  const PROMPT = "Continue with your open tasks. If you were waiting for the operator's answer, say so in one line and stop.";
+  const events: ChatEvent[] = [
+    { kind: 'assistant', uuid: 'a1', ts: '2026-10-17T17:43:12.000Z', text: 'Step two is next.' },
+    { kind: 'system', uuid: 'n1', ts: '2026-10-17T18:37:59.980Z', text: 'Compacted while idle, before the prompt cache expired', origin: 'idle-compact' },
+    { kind: 'system', uuid: 'u3', ts: '2026-10-17T18:38:40.000Z', text: PROMPT, origin: 'idle-compact-nudge' },
+    { kind: 'assistant', uuid: 'a2', ts: '2026-10-17T18:38:44.000Z', text: 'Continuing with step two.' },
+  ];
+  it('a pill names the nudge, the prompt is its tooltip, and no user bubble is drawn for it', () => {
+    const { container } = render(<ChatListInner id="s" events={events} pending={[]} />);
+    const pill = container.querySelector('.sys-divider--nudge');
+    expect(pill).not.toBeNull();
+    expect(pill!.textContent).toBe('nudged after idle compaction · ccrc typed “continue”');
+    expect(pill!.getAttribute('title')).toBe(PROMPT);
+    expect(container.querySelector('.msg-user')).toBeNull();
+    // document order: the idle pill, then the nudge pill, then the turn it started
+    const idle = container.querySelector('.sys-divider--idle:not(.sys-divider--nudge)');
+    expect(idle!.compareDocumentPosition(pill!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+  it('the nudge pill never folds', () => {
+    expect(foldsAway(events[2] as Extract<ChatEvent, { kind: 'system' }>)).toBe(false);
+  });
+});
+
 describe('a system row that carries a BODY folds — it never floods the scroll', () => {
   const TS = '2026-09-09T11:25:31.906Z';
   const sysRow = (uuid: string, text: string): ChatEvent => ({ kind: 'system', uuid, ts: TS, text });
