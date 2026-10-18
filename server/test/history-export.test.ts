@@ -15,7 +15,7 @@ import {
   makeHistoryBox, runSweep, skipOnDarwin, openStoreRO, counters, journalRecords, plantSession, plantTranscript,
   exportDirOf, segmentsOf, segmentRows, runDriver, recoverRow, PRELOADS, CLI, runOnPty, strandedBlobs, strandedBlobsOn, plantSegment, type HistoryBox,
 } from './historyHelpers.js';
-import { userRow, toolResultRow } from './historyFixtures.js';
+import { userRow, toolResultRow, boundaryRow } from './historyFixtures.js';
 import { removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { EXPORT_ROW_META_BYTES, HEALTH_META, historyPaths } from '../../ccd/history/lib.mjs';
 import { MIGRATIONS, closeWriter, openSegment, openWriter, pruneDryRun, segmentMeta, setMeta } from '../../ccd/history/store.mjs';
@@ -123,6 +123,26 @@ const byUuid = (a: Record<string, unknown>, b: Record<string, unknown>): number 
   const x = String(a['uuid']); const y = String(b['uuid']);
   return x < y ? -1 : x > y ? 1 : 0;
 };
+
+/** `db` with every statement it prepares counted when it runs, in order. */
+function counting(db: DatabaseSync): { db: DatabaseSync; ran: string[] } {
+  const ran: string[] = [];
+  const wrap = (text: string, st: object): object => new Proxy(st, {
+    get(t, p) {
+      const v: unknown = Reflect.get(t, p, t);
+      if (p === 'run' || p === 'get' || p === 'all') return (...a: unknown[]): unknown => { ran.push(text); return (v as (...x: unknown[]) => unknown).apply(t, a); };
+      return typeof v === 'function' ? (v as (...x: unknown[]) => unknown).bind(t) : v;
+    },
+  });
+  const proxy = new Proxy(db, {
+    get(target, prop) {
+      if (prop === 'prepare') return (text: string): object => wrap(text, target.prepare(text));
+      const v: unknown = Reflect.get(target, prop, target);
+      return typeof v === 'function' ? (v as (...x: unknown[]) => unknown).bind(target) : v;
+    },
+  });
+  return { db: proxy, ran };
+}
 
 describe('the export pass, in-process (W1-B4 Task 5; spec §9.15 "What is due", "The pass")', () => {
   it('O39: due rows go into ONE segment with their blobs as stored, their named columns, the family, epoch and transcript rows that place them and their memberships by file identity; the marks come after the link; nothing is journaled; a second pass writes nothing new', async () => {
@@ -1731,7 +1751,7 @@ describe('the selection reaches the due rows within its budget (W1-B4 whole-bran
     },
   });
 
-  it('(N3) the due set the pass binds and walks holds only the due transcripts that still hold an unexported row, so it is bounded by what the pass can take and not by the store\'s age; with nothing due the holders are not even asked', async () => {
+  it('(N3) the due set the pass binds and walks holds only the due transcripts that still hold an unexported row, so it is bounded by what the pass can take and not by the store\'s age; with nothing due the holders are not asked and phases 1 to 3 do not run', async () => {
     const U2 = '7d2e3f4a-5b6c-4d7e-8f90-a1b2c3d4e5f6';
     const { box, ids } = ingestedBox('ccrc-history-export-holders-', [row(1, 'one', 3 * DAY), row(2, 'two', 2 * DAY)], {
       plant: (b) => {
@@ -1756,14 +1776,18 @@ describe('the selection reaches the due rows within its budget (W1-B4 whole-bran
       const bound = calls.filter((c) => c.sql.includes('json_each(?)')).map((c) => JSON.parse(String(c.args.find((a) => typeof a === 'string' && a.startsWith('[')))) as number[]);
       const walked = calls.filter((c) => c.sql.startsWith('SELECT entry_id, ts_ms, transcript_pk FROM entries WHERE transcript_pk = ?')).map((c) => Number(c.args[0]));
       const asked = calls.filter((c) => c.sql.startsWith('SELECT DISTINCT transcript_pk FROM entries')).length;
-      return { r, bound, walked, asked };
+      const rowRuns = calls.filter((c) => c.sql.startsWith('SELECT entry_id, ts_ms, transcript_pk FROM entries')).length;   // phases 1, 2 and 3
+      const sidecarRuns = calls.filter((c) => c.sql.startsWith('SELECT DISTINCT s.blob_id AS blob_id FROM sidecars')).length;   // phase 4
+      return { r, bound, walked, asked, rowRuns, sidecarRuns };
     };
     // Nothing due (both homes at 180 days, both files fresh): the holders are not asked and nothing is bound or walked.
     const none = await run(T, { a: 180, b: 180 });
     expect(none.r).toEqual({ state: 'nothing-due', segment: null, rows: 0, blobs: 0, bytes: 0, complete: true });
     expect(none.asked, 'no due transcript, nothing to intersect').toBe(0);
-    expect(none.bound.every((l) => l.length === 0), 'phases 1 and 3 bind the empty list').toBe(true);
+    expect(none.rowRuns, 'and phases 1, 2 and 3 can offer nothing, so none of their statements runs').toBe(0);
+    expect(none.bound).toEqual([]);
     expect(none.walked).toEqual([]);
+    expect(none.sidecarRuns, 'the unlinked sidecars are no due transcript\'s rows: phase 4 still runs').toBeGreaterThanOrEqual(1);
     // U due (claude-a at 30 days), U2 not: both rows of U go, and the list was U alone.
     const first = await run(T + MIN, { a: 30, b: 180 });
     expect(first.r).toMatchObject({ state: 'written', rows: 2, complete: true });
@@ -1837,13 +1861,13 @@ describe('D-5395: the mark invariant adds no statement for a fresh blob and read
       }
       db.exec('COMMIT');
       db.exec('ANALYZE');   // the planner as a real store's statistics leave it
-      const plan = (sql: string, args: number[]): string => (db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...args) as Array<{ detail: string }>).map((r) => r.detail).join(' | ');
+      const plan = (sql: string, args: Array<number | string>): string => (db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...args) as Array<{ detail: string }>).map((r) => r.detail).join(' | ');
       const sqls = referrerSql();
       expect(sqls, 'one clear for each of the four references').toHaveLength(4);
       ['entries_blob', 'entry_variants_blob', 'sidecars_blob', 'boundaries_kept'].forEach((ix, k) => {
-        const p = plan(sqls[k]!, [0]);
+        const p = plan(sqls[k]!, ['[0]']);
         expect(p, `clear ${k + 1} searches ${ix}`).toMatch(new RegExp(`USING (COVERING )?INDEX ${ix}(_prov)? \\(`));   // schema v2 adds entries_blob_prov beside entries_blob, both keyed by blob_id
-        expect(p, `clear ${k + 1} scans nothing`).not.toMatch(/\bSCAN\b/);
+        expect(p, `clear ${k + 1} scans nothing but the list of blob ids it is given`).not.toMatch(/\bSCAN (?!json_each)/);
       });
       const gather = plan(gatherSql(), [5, 5, 6, 5, 5]);
       expect(gather, 'the replay lookup scans none of the tables it reads').not.toMatch(/\bSCAN\b/);
@@ -1852,26 +1876,6 @@ describe('D-5395: the mark invariant adds no statement for a fresh blob and read
       db.close();
     }
   });
-
-  /** `db` with every statement it prepares counted when it runs, in order. */
-  function counting(db: DatabaseSync): { db: DatabaseSync; ran: string[] } {
-    const ran: string[] = [];
-    const wrap = (text: string, st: object): object => new Proxy(st, {
-      get(t, p) {
-        const v: unknown = Reflect.get(t, p, t);
-        if (p === 'run' || p === 'get' || p === 'all') return (...a: unknown[]): unknown => { ran.push(text); return (v as (...x: unknown[]) => unknown).apply(t, a); };
-        return typeof v === 'function' ? (v as (...x: unknown[]) => unknown).bind(t) : v;
-      },
-    });
-    const proxy = new Proxy(db, {
-      get(target, prop) {
-        if (prop === 'prepare') return (text: string): object => wrap(text, target.prepare(text));
-        const v: unknown = Reflect.get(target, prop, target);
-        return typeof v === 'function' ? (v as (...x: unknown[]) => unknown).bind(target) : v;
-      },
-    });
-    return { db: proxy, ran };
-  }
 
   it('the bind check clears the entries that reference a blob whose mark it clears, through each of the four references (its own blob, a variant, a linked sidecar, a kept blob), and keeps those whose blobs it did not clear or that a prune left a stub', async () => {
     const { box, ids } = ingestedBox('ccrc-history-export-refs-', [row(1, 'a prompt', DAY)]);
@@ -1902,10 +1906,13 @@ describe('D-5395: the mark invariant adds no statement for a fresh blob and read
       db.prepare('INSERT INTO sidecars (transcript_pk, name, blob_id, entry_id, first_seen_ms) VALUES (?, ?, ?, ?, 1)').run(tp, 'linked.txt', lost.sidecar, eSide);
       db.prepare('INSERT INTO boundaries (entry_id, transcript_pk, ord, kept_blob_id) VALUES (?, ?, 1, ?)').run(eKept, tp, lost.kept);
       expect(strandedBlobsOn(db), 'CONTROL: marked blobs strand nobody').toEqual([]);
-      const out = SW.checkSegmentMarks(db, { paths: historyPaths(box.home), ids, now: () => Date.now() }, '["bound:1"]');
-      return { out, stranded: strandedBlobsOn(db) };
+      const watch = counting(db);
+      const out = SW.checkSegmentMarks(watch.db, { paths: historyPaths(box.home), ids, now: () => Date.now() }, '["bound:1"]');
+      return { out, stranded: strandedBlobsOn(db), ran: watch.ran };
     });
     expect(r.out.segments).toEqual([S1]);
+    expect(r.ran.filter((t) => /^UPDATE entries SET exported_ms = NULL, exported_seg = NULL WHERE exported_ms IS NOT NULL/.test(t)),
+      'the referrers of the four live blobs whose marks went are cleared set-wise: four statements, one for each reference, however many blobs').toHaveLength(4);
     const left = q(box, 'SELECT uuid, exported_seg FROM entries WHERE uuid >= ? ORDER BY uuid', rid(11)).map((e) => [e['uuid'], e['exported_seg']]);
     expect(left, 'the four that reference a blob whose mark went are cleared, and so is the one marked with the missing segment itself; the one with a blob in a present segment, and the one whose lost blob was pruned since, keep theirs').toEqual([
       [rid(11), null], [rid(12), null], [rid(13), null], [rid(14), null], [rid(15), S2], [rid(16), S2], [rid(17), null]]);
@@ -1946,4 +1953,92 @@ describe('D-5395: the mark invariant adds no statement for a fresh blob and read
     expect(ran.kept.filter((t) => /UPDATE entries SET exported_ms = NULL/.test(t))).toEqual([]);
     expect(q(box, 'SELECT count(*) AS n FROM blobs WHERE z IS NULL')[0]!['n'], 'all three are stored').toBe(0);
   }, 120_000);
+});
+
+// ── W1-B4 whole-branch review, FIX-C: a boundary that attaches a live kept blob to an exported entry (D-5395) ─────────
+// writeChunk's blob loop (storeBlob's revival clear) runs before its rows loop creates a reference, so an EXISTING entry that
+// gains its boundary over a kept blob the store holds live and unmarked would keep its mark. The reviewer's synthetic state:
+// a transcript with a user row and a compact_boundary row is exported whole (both entries and the kept blob with segment 1);
+// with foreign keys off, the entry's boundaries row goes and the kept blob is deleted ("fresh") or tombstoned unmarked
+// ("revived"); a swap copy of the transcript then gives the entry its boundary back.
+describe('a boundary that attaches a live kept blob to an exported entry clears its mark (W1-B4 whole-branch review, FIX-C; D-5395 (history-export-mark-needs-its-blobs))', () => {
+  it('the guard costs a statement only for an entry that existed and gains its boundary: a new entry, and an entry whose boundary is already there, run none (the hot path)', async () => {
+    const { box } = ingestedBox('ccrc-history-export-boundary-cost-', [row(1, 'a prompt', DAY)]);
+    const sha = (n: number): Buffer => createHash('sha256').update(`boundary cost ${n}`).digest();
+    const body = Buffer.from('zz');
+    const E1 = rid(30);
+    const E2 = rid(31);
+    const entry = (uuid: string) => ({ uuid, type: 'user', subtype: null, role: 'user', model: null, parentUuid: null, tsMs: 1, requestId: null,
+      apiBlockIndex: null, msgId: null, sourceToolUseId: null, toolName: null, isCompactSummary: 0 });
+    const rowOf = (uuid: string, own: number, at: number, kept: number | null): Record<string, unknown> => ({
+      kind: 'row', at, entry: entry(uuid), provenance: 'x', sha: sha(own), json: '{}', ftsText: null, ftsOverCap: false,
+      boundary: kept === null ? null : { trigger: 'auto', headUuid: 'h', anchorUuid: 'a', tailUuid: 't', preTokens: 1, postTokens: 1, durationMs: 1, missing: [] },
+      kept: kept === null ? null : { sha: sha(kept) },
+    });
+    const chunkOf = (rows: Array<Record<string, unknown>>, blobs: number[]): Record<string, unknown> => ({
+      blobs: new Map(blobs.map((n) => [sha(n).toString('hex'), { sha: sha(n), z: body, rawLen: 4 }])), counts: new Map(), rows,
+      transcriptPk: 1, fileId: 1, rankNs: 0n, first: null, cursor: { offset: 0, tailSha: null }, size: 0, mtimeNs: 0n, rawError: null,
+      nowMs: Date.now(), pairIdx: null, ccUuid: U,
+    });
+    const STATE = 'SELECT z IS NULL AS pruned, exported_ms IS NOT NULL AS exported FROM blobs WHERE blob_id = ?';
+    const states = (ran: string[]): number => ran.filter((t) => t === STATE).length;
+    const out = await onStore(box, (raw) => {
+      const write = (rows: Array<Record<string, unknown>>, blobs: number[]): string[] => { const w = counting(raw); SW.writeChunk(w.db, chunkOf(rows, blobs)); return w.ran; };
+      const created = write([rowOf(E1, 1, 1000, null)], [1]);                    // a new entry, no boundary yet
+      raw.prepare("UPDATE entries SET exported_ms = 1, exported_seg = '9.0a1b2c3d.db' WHERE uuid = ?").run(E1);
+      const gained = write([rowOf(E1, 1, 1000, 2)], [1, 2]);                     // the entry existed: it gains its boundary over a kept blob stored fresh
+      const markAfter = q(box, 'SELECT exported_ms FROM entries WHERE uuid = ?', E1);
+      const again = write([rowOf(E1, 1, 1000, 2)], [1, 2]);                      // the boundary is already there
+      const fresh = write([rowOf(E2, 3, 2000, 4)], [3, 4]);                      // a new entry with its boundary
+      return { created: states(created), gained: states(gained), again: states(again), fresh: states(fresh), markAfter };
+    });
+    expect(out.created, 'a new entry without a boundary').toBe(0);
+    expect(out.gained, 'an existing entry that gains its boundary reads the kept blob\'s state once').toBe(1);
+    expect(out.markAfter, 'and loses its mark, the kept blob being live and unmarked').toEqual([{ exported_ms: null }]);
+    expect(out.again, 'an entry whose boundary is already there inserts nothing and reads nothing').toBe(0);
+    expect(out.fresh, 'a new entry with its boundary reads nothing: it holds no mark').toBe(0);
+  }, 120_000);
+
+  for (const variant of ['fresh', 'revived'] as const) {
+    it(`${variant}: the swap copy re-inserts the boundary over a ${variant === 'fresh' ? 'kept blob that is stored again' : 'tombstoned kept blob that is revived'}; the entry loses its mark with it, the next pass carries the blob, and nothing is left stranded or due`, async () => {
+      const at = (agoMs: number): string => new Date(Date.now() - agoMs).toISOString();
+      const { box, transcript, ids } = ingestedBox(`ccrc-history-export-boundary-${variant}-`, [
+        row(1, 'a prompt', 3 * DAY),
+        boundaryRow({ uuid: rid(2), parentUuid: rid(1), ts: at(2 * DAY), trigger: 'auto', headUuid: rid(1), anchorUuid: rid(1), tailUuid: rid(1), allUuids: [rid(1)], sessionId: U, cwd: WORK }),
+      ]);
+      const s1 = `1.${ids.writer}.db`;
+      const s2 = `2.${ids.writer}.db`;
+      const kept = q(box, 'SELECT bd.kept_blob_id AS k, lower(hex(b.sha256)) AS sha FROM boundaries bd JOIN blobs b ON b.blob_id = bd.kept_blob_id JOIN entries e ON e.entry_id = bd.entry_id WHERE e.uuid = ?', rid(2));
+      expect(kept, 'the fixture must hold the boundary and its kept blob').toHaveLength(1);
+      const keptId = Number(kept[0]!['k']);
+      const keptSha = String(kept[0]!['sha']);
+      passAt(box, 65);
+      expect(marks(box), 'CONTROL: the export marks both entries').toEqual({ [rid(1)]: s1, [rid(2)]: s1 });
+      expect(q(box, 'SELECT exported_seg FROM blobs WHERE blob_id = ?', keptId), 'CONTROL: and the kept blob goes with segment 1').toEqual([{ exported_seg: s1 }]);
+      await onStore(box, (db) => {
+        db.exec('PRAGMA foreign_keys = OFF');
+        db.prepare('DELETE FROM boundaries WHERE entry_id = (SELECT entry_id FROM entries WHERE uuid = ?)').run(rid(2));
+        if (variant === 'fresh') db.prepare('DELETE FROM blobs WHERE blob_id = ?').run(keptId);
+        else db.prepare('UPDATE blobs SET z = NULL, pruned_ms = ?, exported_ms = NULL, exported_seg = NULL, fts_indexed = 0 WHERE blob_id = ?').run(Date.now(), keptId);
+      });
+      expect(q(box, 'SELECT count(*) AS n FROM boundaries')[0]!['n'], 'CONTROL: the entry has no boundary now').toBe(0);
+      // the swap copy: the same transcript, byte for byte, under another account's home
+      const copy = path.join(box.accountHome['claude-b']!, 'projects', SLUG, `${U}.jsonl`);
+      fs.mkdirSync(path.dirname(copy), { recursive: true });
+      fs.copyFileSync(transcript, copy);
+      passAt(box, 100);
+      const back = q(box, 'SELECT bd.kept_blob_id AS k, b.z IS NOT NULL AS live, b.exported_ms AS exported FROM boundaries bd JOIN blobs b ON b.blob_id = bd.kept_blob_id');
+      expect(back, 'the boundary is back over a live, unmarked kept blob').toEqual([{ k: back[0]!['k'], live: 1, exported: null }]);
+      expect(marks(box), 'the entry that gained it lost its mark; the other keeps its own').toEqual({ [rid(1)]: s1, [rid(2)]: null });
+      expect(strandedBlobs(box)).toEqual([]);
+      passAt(box, 130);
+      expect(segmentsOf(box)).toEqual([s1, s2]);
+      expect(marks(box)).toEqual({ [rid(1)]: s1, [rid(2)]: s2 });
+      const seg2 = path.join(exportDirOf(box), s2);
+      expect(segmentRows(seg2, 'entries').map((e) => e['uuid']), 'segment 2 carries the entry again').toEqual([rid(2)]);
+      expect(segmentRows(seg2, 'blobs').map(pick(['sha256', 'pruned'])), 'with the kept blob\'s bytes').toEqual([{ sha256: keptSha, pruned: 0 }]);
+      expect(metaOf(box, 'export_due'), 'nothing is left due').toBe('0');
+      expect(strandedBlobs(box)).toEqual([]);
+    }, 600_000);
+  }
 });

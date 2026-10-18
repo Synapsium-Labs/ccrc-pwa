@@ -4239,29 +4239,33 @@ function stmts(db) {
 
 /** The entries that reference a blob, and where each reference lives (D-5395 (history-export-mark-needs-its-blobs)): the
  *  entry's own blob, a variant's, a LINKED sidecar's and a boundary's kept blob. Each statement clears the mark of the
- *  entries one reference names, and only marked ones, through an index the schema already has (entries_blob,
- *  entry_variants_blob, sidecars_blob, boundaries_kept) and the entries' primary key. An unlinked sidecar references no
- *  entry. */
+ *  entries that any of a SET of blobs names (their ids bound once, as a JSON array through json_each, so the work stays in
+ *  SQLite and costs four statements however many blobs), and only marked ones, through an index the schema already has
+ *  (entries_blob, entry_variants_blob, sidecars_blob, boundaries_kept) and the entries' primary key. An unlinked sidecar
+ *  references no entry. */
 const REFERRER_CLEAR_SQL = Object.freeze([
-  'UPDATE entries SET exported_ms = NULL, exported_seg = NULL WHERE exported_ms IS NOT NULL AND blob_id = ?',
-  'UPDATE entries SET exported_ms = NULL, exported_seg = NULL WHERE exported_ms IS NOT NULL AND entry_id IN (SELECT entry_id FROM entry_variants WHERE blob_id = ?)',
-  'UPDATE entries SET exported_ms = NULL, exported_seg = NULL WHERE exported_ms IS NOT NULL AND entry_id IN (SELECT entry_id FROM sidecars WHERE blob_id = ? AND entry_id IS NOT NULL)',
-  'UPDATE entries SET exported_ms = NULL, exported_seg = NULL WHERE exported_ms IS NOT NULL AND entry_id IN (SELECT entry_id FROM boundaries WHERE kept_blob_id = ?)',
+  'UPDATE entries SET exported_ms = NULL, exported_seg = NULL WHERE exported_ms IS NOT NULL AND blob_id IN (SELECT value FROM json_each(?))',
+  'UPDATE entries SET exported_ms = NULL, exported_seg = NULL WHERE exported_ms IS NOT NULL AND entry_id IN (SELECT entry_id FROM entry_variants WHERE blob_id IN (SELECT value FROM json_each(?)))',
+  'UPDATE entries SET exported_ms = NULL, exported_seg = NULL WHERE exported_ms IS NOT NULL AND entry_id IN (SELECT entry_id FROM sidecars WHERE blob_id IN (SELECT value FROM json_each(?)) AND entry_id IS NOT NULL)',
+  'UPDATE entries SET exported_ms = NULL, exported_seg = NULL WHERE exported_ms IS NOT NULL AND entry_id IN (SELECT entry_id FROM boundaries WHERE kept_blob_id IN (SELECT value FROM json_each(?)))',
 ]);
 const REFERRER_CLEAR_STMTS = new WeakMap();
-/** Takes the export mark off every entry that references any of these blobs, and answers how many it cleared. Run in
- *  the caller's transaction, on the paths that leave a live blob unmarked under entries that may be marked: a bind check
- *  that cleared the marks of a missing segment's blobs, and a revived tombstone. An entry keeps its mark only while every
- *  blob it references is exported or pruned (lib entryMayHoldMark); the pass offers only unmarked entries, so without
- *  this the blob would never be carried. */
+/** Takes the export mark off every entry that references any of these blobs, and answers how many it cleared (each entry
+ *  once: a cleared entry is no longer marked for the next statement). Run in the caller's transaction, on the paths that
+ *  leave a live blob unmarked under entries that may be marked: a bind check that cleared the marks of a missing segment's
+ *  blobs, and a revived tombstone. An entry keeps its mark only while every blob it references is exported or pruned (lib
+ *  entryMayHoldMark); the pass offers only unmarked entries, so without this the blob would never be carried. No blob, no
+ *  statement. */
 function clearReferrerMarks(db, blobIds) {
+  if (blobIds.length === 0) return 0;
   let st = REFERRER_CLEAR_STMTS.get(db);
   if (st === undefined) {
     st = REFERRER_CLEAR_SQL.map((sql) => db.prepare(sql));
     REFERRER_CLEAR_STMTS.set(db, st);
   }
+  const json = JSON.stringify(blobIds);
   let cleared = 0;
-  for (const id of blobIds) for (const stmt of st) cleared += Number(stmt.run(id).changes);
+  for (const stmt of st) cleared += Number(stmt.run(json).changes);
   return cleared;
 }
 
@@ -4494,6 +4498,12 @@ export function writeChunk(db, chunk) {
         const bi = s.boundaryIns.run(entryId, chunk.transcriptPk, chunk.transcriptPk, b.trigger, b.headUuid,
           b.anchorUuid, b.tailUuid, keptId, b.preTokens, b.postTokens, b.durationMs);
         if (bi.changes === 1 && b.missing.length > 0) add('boundary_field_missing');
+        // D-5395 (history-export-mark-needs-its-blobs): an entry that already existed and gains its boundary over a kept blob
+        // the store holds live and unmarked loses its export mark, by replay's own rule (unmarkEntryOverBlob: lib's
+        // entryMayHoldMark). storeBlob's revival clear ran in the blob loop above, before this reference existed, and a fresh
+        // blob has no referrer to clear. A new entry is unmarked and an entry with its boundary already inserts nothing, so
+        // neither costs a statement.
+        if (bi.changes === 1 && before !== undefined && keptId !== null) unmarkEntryOverBlob(db, entryId, keptId);
       }
     }
     if (chunk.first !== null) {
@@ -8114,6 +8124,9 @@ function exportSelect(db, ctx, nowMs, homeDays, boundBytes) {
   const holding = dueAll.length === 0 ? null : new Set(s.unexportedTranscripts.all().map((r) => Number(r.transcript_pk)));
   const dueKeys = holding === null ? dueAll : dueAll.filter((k) => holding.has(k));
   const dueJson = JSON.stringify(dueKeys);
+  // With none left, phases 1 to 3 can offer nothing: they would scan the whole unexported index to return no row (about
+  // 170 ms per million rows, every pass), so they do not run. Phase 4 does: unlinked sidecars are no transcript's rows.
+  const offered = dueKeys.length > 0;
   // Rows per page: EXPORT_PAGE_ROWS, or an in-process test's ctx.deps.exportPageRows (D-4247).
   const pageRows = Number.isSafeInteger(ctx.deps?.exportPageRows) && ctx.deps.exportPageRows > 0 ? ctx.deps.exportPageRows : EXPORT_PAGE_ROWS;
   const sel = { taken: [], carry: new Set(), stubs: new Set(), transcripts: new Set(), linked: new Map(), cutoffMs, complete: true };
@@ -8180,7 +8193,7 @@ function exportSelect(db, ctx, nowMs, homeDays, boundBytes) {
     if (!budgetLeft(ctx.budget)) { sel.complete = false; return false; }
     return true;
   };
-  for (let after = 0; ;) {
+  for (let after = 0; offered;) {
     const page = s.nullTsEntries.all(after, dueJson, pageRows);
     if (page.length === 0) break;
     after = Number(page[page.length - 1].entry_id);
@@ -8200,7 +8213,7 @@ function exportSelect(db, ctx, nowMs, homeDays, boundBytes) {
       if (!decide(page.map(entryCand))) return sel;
     }
   }
-  for (let ts = Number.MIN_SAFE_INTEGER, after = 0; ;) {
+  for (let ts = Number.MIN_SAFE_INTEGER, after = 0; offered;) {
     const page = s.dueEntries.all(cutoffMs, ts, after, dueJson, pageRows);
     if (page.length === 0) break;
     ts = Number(page[page.length - 1].ts_ms);
@@ -8593,8 +8606,8 @@ function bindFactKeys(db) {
  *  names and the listing measured here. One NORMAL transaction; when anything was cleared, export_segment_missing +1
  *  and HEALTH_META.exportSegmentMissing holds how many marks, which doctor WARNs on until a complete pass resets it.
  *  Either way it records its clock and `record`, the bind facts lib decideMarkCheck says it covers. Two DISTINCT scans
- *  of exported_seg per bind, blobs then entries, and one more of the blobs' per missing segment (the live blobs its
- *  marks name); neither column has an index and none is added. An entry that references a live blob whose mark went
+ *  of exported_seg per bind, blobs then entries, and one more of the blobs and one of the entries for the missing segments
+ *  together (the live blobs their marks name, then the marks themselves); neither column has an index and none is added. An entry that references a live blob whose mark went
  *  loses its own mark with it, whichever segment marked it (D-5395 (history-export-mark-needs-its-blobs)), and
  *  those entries count in the number cleared. A directory that is
  *  absent (ENOENT) lists as none, so every mark naming a segment is missing; one that cannot be listed for any other
@@ -8609,16 +8622,20 @@ export function checkSegmentMarks(db, ctx, record) {
   const segments = missingSegmentNames({ named, present });
   let cleared = 0;
   withTx(db, 'NORMAL', () => {
-    // D-5395 (history-export-mark-needs-its-blobs): the live blobs whose marks name a missing segment, collected BEFORE their
-    // marks go. An entry that references one of them stays marked with a segment that IS here, and its blob is exported no
-    // more, so the entries get their marks cleared with the blobs' (a pruned blob owes nothing: a stub is all there is to export).
-    const lost = db.prepare('SELECT blob_id FROM blobs WHERE exported_seg = ? AND z IS NOT NULL');
-    const blobs = db.prepare('UPDATE blobs SET exported_ms = NULL, exported_seg = NULL WHERE exported_seg = ?');
-    const entries = db.prepare('UPDATE entries SET exported_ms = NULL, exported_seg = NULL WHERE exported_seg = ?');
-    for (const seg of segments) {
-      const ids = lost.all(seg).map((r) => Number(r.blob_id));
-      cleared += Number(blobs.run(seg).changes) + Number(entries.run(seg).changes);
-      cleared += clearReferrerMarks(db, ids);
+    if (segments.length > 0) {
+      // Set-wise, once for every missing segment (the names bound as one JSON array): one scan of the blobs for the live ones
+      // whose marks go, four statements for their referrers, then the two clears of the marks themselves. Per segment and
+      // per blob this took 6.7 s on 300,000 blobs and entries over 30 segments (measured), set-wise 1.7 to 2.0 s.
+      const names = JSON.stringify(segments);
+      // D-5395 (history-export-mark-needs-its-blobs): the live blobs whose marks name a missing segment, collected BEFORE their
+      // marks go. An entry that references one of them stays marked with a segment that IS here, and its blob is exported no
+      // more, so the entries get their marks cleared with the blobs' (a pruned blob owes nothing: a stub is all there is to
+      // export). Each entry is counted once, here or in the clear of its own segment's marks below.
+      const lost = db.prepare('SELECT blob_id FROM blobs WHERE exported_seg IN (SELECT value FROM json_each(?)) AND z IS NOT NULL')
+        .all(names).map((r) => Number(r.blob_id));
+      cleared += clearReferrerMarks(db, lost);
+      cleared += Number(db.prepare('UPDATE blobs SET exported_ms = NULL, exported_seg = NULL WHERE exported_seg IN (SELECT value FROM json_each(?))').run(names).changes);
+      cleared += Number(db.prepare('UPDATE entries SET exported_ms = NULL, exported_seg = NULL WHERE exported_seg IN (SELECT value FROM json_each(?))').run(names).changes);
     }
     if (cleared > 0) {
       bump(db, 'export_segment_missing');
