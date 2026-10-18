@@ -52,10 +52,9 @@ export const Exhausted: Story = { args: { five: 100, seven: 100 } };
  *  nothing is left to refresh it. Compare the two rows: same 91%, and only one
  *  of them is still claiming live pressure.
  *
- *  Its contrast against the track is 1.02–1.10 and that is a known defect,
- *  preserved deliberately and pinned by `pwa/test/limit-off-band.test.ts` —
- *  this story is where you can see what that number means. Both rows are a
- *  `Meter`, the one meter (D-5098, D-5446). */
+ *  The off fill is the tertiary ink, 3.99–5.04 against the track (D-5494),
+ *  pinned by `pwa/test/limit-off-band.test.ts`: the frozen extent stays
+ *  visible, in grey. Both rows are a `Meter`, the one meter (D-5098, D-5446). */
 export const OffBand: Story = {
   render: () => (
     <div className="grid w-[260px] gap-4">

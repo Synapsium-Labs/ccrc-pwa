@@ -2834,6 +2834,13 @@ and when the session is not running — the chat is then read-only, with **Resta
 questions and the answers given, and agent mail and harness task reports as cards of their own; a gap of ten
 minutes or more gets a timestamp divider, and scrolling up stops the auto-follow until **Jump to latest**. Above
 the composer sit the session's outstanding mail and its plan (the TUI's task list, collapsed to the running task).
+Between the two, while the session runs any dynamic workflow, sits the **workflow strip** (D-5560): one line per
+workflow (three collapsed, running ones first, the head counting all) with Claude Code's own facts — its name, a bar, agents done of those scheduled so far, the time since it
+started and `↓ N tokens` (the agents' current context, as Claude Code sums it) — and, opened, each workflow's phases
+and every agent's label and state. A finished workflow stays 30 s with its last word (`done`, `failed`,
+`stopped`), as in the terminal. It is read-only, read on the session socket's 2 s tick from the files Claude Code
+keeps under the session's transcript directory (`server/src/workflows/`, D-5561: the journal incrementally, each
+agent's transcript as one 64 KB tail), and a fact it could not read is said, never drawn as a zero.
 
 **The composer**: on a touch screen Enter is a newline and Cmd/Ctrl+Enter sends; with a physical keyboard Enter
 sends and any modifier with Enter is a newline. `/` completes Claude Code's built-in commands and the skills this
@@ -5240,8 +5247,8 @@ working set, `SessionStart(compact)` serves the card once beside the graph card 
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:8344-8346`), each with an operator sentence of its own at `:8396`,
-`:8404` and `:8417`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:8355-8357`), each with an operator sentence of its own at `:8407`,
+`:8415` and `:8428`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 

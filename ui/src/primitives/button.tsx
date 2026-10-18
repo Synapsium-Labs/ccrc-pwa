@@ -45,12 +45,14 @@ export const buttonVariants = cva(
          *  around a `--status-dead-text` label, for a trigger that sits on a
          *  ground already painted red (the fleet host's banner), where a red
          *  fill would be red on red. It takes `ghost`'s disabled stand-down
-         *  too (D-5448). Both are gated per palette in
-         *  `pwa/design/contrast-check.mjs`. */
+         *  too (D-5448), and `ghost`'s lift and press (D-5495): `bg-hover`
+         *  under the mouse and `bg-pressed` while held, the grounds Task 9
+         *  gave every hairline button (D-5101). Both are gated per palette in
+         *  `pwa/design/contrast-check.mjs`, the hairline on both grounds too. */
         danger:
           'btn-danger border-0 bg-status-dead text-ink-on-danger text-ui leading-none font-semibold disabled:bg-edge-subtle disabled:text-ink-disabled',
         'danger-ghost':
-          'btn-danger-ghost border border-status-dead bg-transparent text-status-dead-text text-ui leading-none font-medium disabled:text-ink-disabled disabled:border-edge-subtle',
+          'btn-danger-ghost border border-status-dead bg-transparent text-status-dead-text text-ui leading-none font-medium enabled:hover:bg-hover enabled:active:bg-pressed disabled:text-ink-disabled disabled:border-edge-subtle',
         ghost:
           'btn-ghost border border-edge-strong bg-transparent text-ink-primary text-ui leading-none font-medium enabled:hover:bg-hover enabled:active:bg-pressed disabled:text-ink-disabled disabled:border-edge-subtle',
         /** `quiet` — the raised mono control. FOUR app rules declared the same

@@ -14,6 +14,7 @@ import {
   type SessionStreamMsg,
   type TaskItem,
 } from '../../../shared/api';
+import type { WorkflowView } from '../../../shared/workflows';
 import { api, ApiError, sendErrorText, type Api } from '../lib/api';
 import { ReconnectingSocket, wsUrl } from '../lib/ws';
 
@@ -110,6 +111,11 @@ export interface SessionState {
   /** D-5372: the tasks frame's `touchedAt` (newest task file mtime, epoch ms);
    *  absent when the frame carried none. Replaced with every tasks frame. */
   tasksTouchedAt?: number;
+  /** D-5560: the workflows frame's rows — running, and finished inside Claude
+   *  Code's 30 s — replaced wholesale like `tasks`. */
+  workflows: WorkflowView[];
+  /** The workflows frame said its rows could not be re-read (`unreadable`). */
+  workflowsUnreadable: boolean;
   /** Outstanding mail for THIS session — queued or delivered, never acked or
    *  rejected (the server filters, `sessionws.ts`'s `checkMail`). Replaced
    *  wholesale like `tasks`, because the frame is a statement about the
@@ -170,6 +176,10 @@ export type SessionSnapshot = Pick<
   SessionState,
   'events' | 'offset' | 'uuid' | 'status' | 'statusUpdatedAt' | 'dialog' | 'ask' | 'tasks' | 'tasksTouchedAt' | 'mail'
 > & {
+  /** D-5560. Optional HERE only: `snapshotOf` always carries both, and a
+   *  snapshot built without them (the reducer's own suites) reads as no rows. */
+  workflows?: WorkflowView[];
+  workflowsUnreadable?: boolean;
   missingFile: string | null;
   strandedAccount: string | null;
   searchComplete: boolean;
@@ -212,6 +222,10 @@ function dedupeAppend(existing: ChatEvent[], incoming: ChatEvent[]): ChatEvent[]
   return fresh.length === 0 ? existing : [...existing, ...fresh];
 }
 
+/** Both files known and equal: the same session dir (D-5560). */
+const sameTranscript = (was: string | null | undefined, now: string | null | undefined): boolean =>
+  typeof was === 'string' && was !== '' && was === now;
+
 /** Pure reducer over the session stream — one message in, next snapshot out. */
 export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): SessionSnapshot {
   switch (msg.type) {
@@ -227,6 +241,13 @@ export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): Sess
         events: [...keep, ...msg.events],
         uuid: msg.uuid,
         offset: msg.offset,
+        // D-5560: the rows belong to the session dir — the transcript path
+        // minus `.jsonl` — so a backlog onto ANOTHER transcript drops them. A
+        // reconnect (or a rotation in place) onto the same one keeps them
+        // until the server's restated frame replaces them: clearing there
+        // unmounted the strip, collapsed it and jumped the conversation on
+        // every foregrounding of the PWA.
+        ...(sameTranscript(s.file, msg.file) ? {} : { workflows: [], workflowsUnreadable: false }),
         missingFile: msg.missing ? msg.file : null,
         // Unconditional, where `missingFile` above is gated: the file is the
         // address this `offset` is measured in, and a reconnect has to echo
@@ -258,6 +279,8 @@ export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): Sess
       return { ...s, dialog: null };
     case 'tasks':
       return { ...s, tasks: msg.tasks, tasksTouchedAt: msg.touchedAt };
+    case 'workflows':
+      return { ...s, workflows: msg.workflows, workflowsUnreadable: msg.unreadable === true };
     // Build 7 Task 6: the session's own outstanding mail, one row above the
     // plan (`@ccrc/ui` mail-strip.tsx). Same replace-wholesale rule as `tasks`
     // just above.
@@ -324,6 +347,8 @@ const snapshotOf = (s: SessionState): SessionSnapshot => ({
   ask: s.ask,
   tasks: s.tasks,
   tasksTouchedAt: s.tasksTouchedAt,
+  workflows: s.workflows,
+  workflowsUnreadable: s.workflowsUnreadable,
   mail: s.mail,
   missingFile: s.missingFile,
   strandedAccount: s.strandedAccount,
@@ -706,6 +731,8 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
       dialog: null,
       ask: null,
       tasks: [],
+      workflows: [],
+      workflowsUnreadable: false,
       mail: [],
       missingFile: null,
       strandedAccount: null,
@@ -837,7 +864,11 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
         // have nothing to state (a resolve that could not measure the
         // registry), where silence is the honest answer and a stale word
         // would be the lie.
-        set({ ask: null, mail: [], status: null, statusUpdatedAt: null });
+        //
+        // `workflows` too (D-5560): its server half states the first read on
+        // every connect (`lastWorkflowsJson`), and an explicit teardown clears
+        // the rows here so a finished workflow is never left on screen as running.
+        set({ ask: null, mail: [], status: null, statusUpdatedAt: null, workflows: [], workflowsUnreadable: false });
       },
 
       async send(text, opts = {}) {
