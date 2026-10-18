@@ -1878,6 +1878,9 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       clean since. v0.0.265 to v0.0.267 followed, unapplied. STATUS: fleet and server v0.0.264, newest v0.0.267,
       intent dev/auto=stable, backups fleet 133M/server 857M, disk free fleet 206G/work volume 93G/server 32G, no
       anomalies.
+    - **2026-10-18 09:55 UTC: v0.0.268 (#593) released at 09:46, unapplied.** STATUS: fleet and server v0.0.264,
+      newest v0.0.268, intent dev/auto=stable, backups fleet 133M/server 857M, disk free fleet 205G/work volume
+      91G/server 32G, no anomalies.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
