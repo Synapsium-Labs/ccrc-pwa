@@ -297,8 +297,11 @@ describe('the selected row is tint plus rail, not reverse video', () => {
   it("a folded card's name says it holds the selection in the row's own idiom, not an inverted chip (D-5495)", () => {
     // The fold hides the selected row, so the card name stands in for it. It
     // was the retired slab at chip scale; it now wears the row's tint and rail.
-    const chip = ruleIn(fleet, '.proj-card[data-holds-selection] .proj-card-name');
-    const row = ruleIn(fleet, '.sess-line--active');
+    // Both also carry a forced-colours outline; this is about the normal-colour
+    // rules, so read them with that block taken out.
+    const normal = fleet.replace(atBlock(fleet, '@media (forced-colors: active)'), '');
+    const chip = ruleIn(normal, '.proj-card[data-holds-selection] .proj-card-name');
+    const row = ruleIn(normal, '.sess-line--active');
     expect(declValue(chip, 'background')).toBe(declValue(row, 'background'));
     expect(declValue(chip, 'box-shadow')).toBe(declValue(row, 'box-shadow'));
     expect(chip).not.toMatch(/var\(--ink-primary\)|var\(--bg-page\)/);
