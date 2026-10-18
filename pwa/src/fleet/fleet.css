@@ -34,7 +34,7 @@
   margin-right: 0.4em;
 }
 .fleet-count {
-  font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono);
+  font: var(--weight-regular) var(--fs-meta) / 1 var(--family-mono);
   font-variant-numeric: tabular-nums;
   color: var(--ink-tertiary);
 }
@@ -54,7 +54,7 @@
    viewport (369px with no count) rather than holding everything on one line, as
    this note assumes — see the head-wrap override comment below.) */
 .pool-epoch-lag {
-  font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono);
+  font: var(--weight-regular) var(--fs-meta) / 1 var(--family-mono);
   font-variant-numeric: tabular-nums;
   color: var(--ink-tertiary);
   white-space: nowrap;
@@ -283,7 +283,7 @@
   border-radius: var(--r-md);
   background: var(--bg-raised);
   color: var(--ink-secondary);
-  font: var(--weight-medium) var(--fs-xs) / 1 var(--family-mono);
+  font: var(--weight-medium) var(--fs-meta) / 1 var(--family-mono);
   letter-spacing: var(--ls-caps);
 }
 /* The 6px dot is `ATTENTION_DOT` — the same five declarations
@@ -361,7 +361,7 @@
 /* Status line — mono readout beside the chip; tabular so ticking relative
    times never jitter sideways. */
 .status-line {
-  font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono);
+  font: var(--weight-regular) var(--fs-meta) / 1 var(--family-mono);
   font-variant-numeric: tabular-nums;
 }
 .status-line--busy {
@@ -438,7 +438,7 @@
  *  option grammar: 52px hairline-separated, mono machine voice.       *
  * ------------------------------------------------------------------ */
 .sheet-copy {
-  font-size: var(--fs-base);
+  font-size: var(--fs-ui);
   line-height: var(--lh-normal);
   color: var(--ink-secondary);
   margin-bottom: var(--sp-4);
@@ -543,7 +543,7 @@
 }
 .acct-chev {
   flex: none;
-  font: var(--weight-regular) var(--fs-base) / 1 var(--family-ui);
+  font: var(--weight-regular) var(--fs-ui) / 1 var(--family-ui);
   color: var(--ink-tertiary);
 }
 
@@ -556,7 +556,7 @@
   border: none;
   background: none;
   padding: 0;
-  font: var(--weight-medium) var(--fs-xs) / 1 var(--family-mono);
+  font: var(--weight-medium) var(--fs-meta) / 1 var(--family-mono);
   color: var(--ink-secondary);
   cursor: pointer;
   transition: color var(--dur-fast) var(--curve-swift);
@@ -602,7 +602,7 @@
 }
 .proj-glyph {
   grid-row: span 2;
-  font: var(--weight-semibold) var(--fs-base) / 1 var(--family-mono);
+  font: var(--weight-semibold) var(--fs-ui) / 1 var(--family-mono);
   color: var(--accent);
 }
 .proj-name {
@@ -1575,7 +1575,7 @@ button.sess-held {
 
 .sess-sheet-note {
   margin: 0;
-  font-size: var(--fs-xs);
+  font-size: var(--fs-meta);
   color: var(--ink-secondary);
 }
 
@@ -1604,7 +1604,7 @@ button.sess-held {
    its failed-fetch text (--status-dead-text), so this needs no new pair. */
 .sess-hold-error {
   margin: 0;
-  font-size: var(--fs-xs);
+  font-size: var(--fs-meta);
   color: var(--status-dead-text);
 }
 
@@ -1678,7 +1678,7 @@ button.sess-held {
 
 .proj-card-count {
   font-family: var(--family-mono);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-meta);
   font-variant-numeric: tabular-nums;
   color: var(--ink-secondary);
 }
@@ -1698,7 +1698,7 @@ button.sess-held {
 .proj-card-busy {
   flex: none;
   font-family: var(--family-mono);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-meta);
   color: var(--status-busy-text);
 }
 
@@ -1848,7 +1848,7 @@ button.proj-card-pool::before {
   margin-top: var(--sp-3);
 }
 .pool-new-label {
-  font-size: var(--fs-xs);
+  font-size: var(--fs-meta);
   color: var(--ink-tertiary);
 }
 /* `.pool-new-input` is `<TextInput>` wearing `TEXT_INPUT_INLINE` plus its own
@@ -1881,7 +1881,7 @@ button.proj-card-pool::before {
   background: none;
   border: 0;
   font-family: var(--family-mono);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-meta);
   color: var(--ink-secondary);
   text-align: left;
   cursor: pointer;
@@ -1890,7 +1890,7 @@ button.proj-card-pool::before {
 /* An unknown pool changes disclosure, not eligibility. */
 .pool-note {
   margin: 0;
-  font-size: var(--fs-xs);
+  font-size: var(--fs-meta);
   color: var(--ink-tertiary);
 }
 
@@ -1971,7 +1971,7 @@ button.proj-card-pool::before {
   gap: var(--sp-1);
   min-height: var(--tap-min);
   min-width: 0;
-  font-size: var(--fs-xs);
+  font-size: var(--fs-meta);
   color: var(--ink-secondary);
 }
 .proj-pending-glyph { flex: none; color: var(--ink-tertiary); }
@@ -2107,11 +2107,11 @@ button.proj-card-pool::before {
 .fleet-runs-row {
   padding: 0 var(--sp-2);
   font-family: var(--family-mono);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-meta);
   color: var(--ink-tertiary);
 }
 .archive-screen { display: grid; gap: var(--sp-1); padding: var(--sp-2); }
-.archive-total { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-secondary); }
+.archive-total { font-family: var(--family-mono); font-size: var(--fs-meta); color: var(--ink-secondary); }
 /* `.archive-row` is `<BareRow>` — five rules in this file declared the same six
    declarations. What stays is this row's own grid and ink — see `.fleet-archived-row`. */
 .archive-row {
@@ -2123,7 +2123,7 @@ button.proj-card-pool::before {
 }
 .archive-project { font-size: var(--fs-sm); color: var(--ink-secondary); }
 .archive-slug { font-family: var(--family-mono); font-size: var(--fs-sm); }
-.archive-size { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-tertiary); }
+.archive-size { font-family: var(--family-mono); font-size: var(--fs-meta); color: var(--ink-tertiary); }
 .archive-empty { padding: var(--sp-4); color: var(--ink-secondary); }
 
 /* — Task 6 (Build 3 PR G): AccountsScreen — */
@@ -2141,7 +2141,7 @@ button.proj-card-pool::before {
 /* Prose in the UI face, by the rule of voice: "Next workspace lands on … —
    least-loaded" is a sentence. `.accounts-fresh` ("last reported 5m ago") is a
    readout beside a gauge and stays mono; so do the percentages. */
-.accounts-projection { font-family: var(--family-ui); font-size: var(--fs-xs); color: var(--ink-secondary); }
+.accounts-projection { font-family: var(--family-ui); font-size: var(--fs-meta); color: var(--ink-secondary); }
 .accounts-list { display: grid; gap: var(--sp-3); }
 /* ONE CARD IDIOM, two places. `.auth-block` (the passkey block, further down
    this sheet) declared the identical six. Both are SELF-GROUNDED, which is what
@@ -2281,8 +2281,8 @@ button.proj-card-pool::before {
 .mail-screen { display: grid; gap: var(--sp-2); padding: var(--sp-2); }
 .mail-head { display: flex; align-items: center; gap: var(--sp-2); }
 .mail-title { font: var(--weight-medium) var(--fs-base) / var(--lh-tight) var(--family-mono); color: var(--ink-primary); }
-.mail-note { font-size: var(--fs-xs); color: var(--ink-secondary); }
-.mail-dropped { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-secondary); }
+.mail-note { font-size: var(--fs-meta); color: var(--ink-secondary); }
+.mail-dropped { font-family: var(--family-mono); font-size: var(--fs-meta); color: var(--ink-secondary); }
 .mail-empty { padding: var(--sp-4); color: var(--ink-secondary); }
 .mail-list { display: grid; gap: var(--sp-1); }
 .mail-row {
@@ -2308,7 +2308,7 @@ button.proj-card-pool::before {
   font-family: var(--family-mono); font-size: var(--fs-2xs);
   font-variant-numeric: tabular-nums; color: var(--ink-tertiary);
 }
-.mail-row .mail-body { grid-column: 1 / -1; font-size: var(--fs-xs); color: var(--ink-secondary); }
+.mail-row .mail-body { grid-column: 1 / -1; font-size: var(--fs-meta); color: var(--ink-secondary); }
 
 /* The programme filter and its headers. Chips take the same ground and the same
    inks the rest of this screen does — `--ink-secondary` for a chip that is off,
@@ -2389,7 +2389,7 @@ button.proj-card-pool::before {
   color: var(--ink-primary); font: inherit;
 }
 .run-row .run-glyph { color: var(--ink-tertiary); }
-.run-row .run-state { font-size: var(--fs-xs); color: var(--ink-secondary); }
+.run-row .run-state { font-size: var(--fs-meta); color: var(--ink-secondary); }
 .run-ws { font-size: var(--fs-sm); }
 /* F4 (cross-repo): which repo this run is in, and whether that is its
    programme's home. Scoped under `.run-row` — self-grounded above, background
@@ -2760,7 +2760,7 @@ button.proj-card-pool::before {
 .program-start-sheet .program-start-ledger,
 .program-start-sheet .program-start-note {
   margin: 0;
-  font-size: var(--fs-xs);
+  font-size: var(--fs-meta);
   color: var(--ink-tertiary);
 }
 /* `--ink-secondary` on `--bg-surface` — 8.67:1 DARK / 7.41:1 LIGHT: the
@@ -2831,8 +2831,8 @@ button.proj-card-pool::before {
   display: flex; flex-wrap: wrap; gap: var(--sp-2);
   padding: var(--sp-1) 0; border-top: 1px solid var(--edge-subtle);
 }
-.hotfiles-holder { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-secondary); }
-.hotfiles-expiry { margin-left: auto; color: var(--ink-tertiary); font-size: var(--fs-xs); }
+.hotfiles-holder { font-family: var(--family-mono); font-size: var(--fs-meta); color: var(--ink-secondary); }
+.hotfiles-expiry { margin-left: auto; color: var(--ink-tertiary); font-size: var(--fs-meta); }
 .hotfiles-intent { flex-basis: 100%; color: var(--ink-primary); }
 .hotfiles-paths { list-style: none; margin: 0; padding: 0; flex-basis: 100%; }
 
@@ -2907,7 +2907,7 @@ button.proj-card-pool::before {
    so nothing a contrast-gate entry names moved with them, and the tap floor
    the row carries is the component's rather than this file's. What stays
    below is the part that PAINTS: the theme picker's own rows. */
-.settings-note { font-size: var(--fs-xs); line-height: var(--lh-normal); color: var(--ink-secondary); }
+.settings-note { font-size: var(--fs-meta); line-height: var(--lh-normal); color: var(--ink-secondary); }
 /* `.btn-ghost` (primitives.css) supplies the tap floor, the border and the
    disabled ink; this only stops it filling the section's width. */
 .settings-section .settings-check { width: auto; justify-self: start; padding: 0 var(--sp-3); }
@@ -2942,7 +2942,7 @@ button.proj-card-pool::before {
 }
 .settings-release-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); min-width: 0; }
 .settings-release-tag { font: var(--weight-medium) var(--fs-sm) / 1 var(--family-mono); }
-.settings-release-date { font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono); color: var(--ink-tertiary); }
+.settings-release-date { font: var(--weight-regular) var(--fs-meta) / 1 var(--family-mono); color: var(--ink-tertiary); }
 .settings-badge {
   padding: 2px var(--sp-2);
   border: 1px solid var(--edge-subtle);
@@ -2959,7 +2959,7 @@ button.proj-card-pool::before {
 /* Green only for a MEASURED verdict — some node's provenance at this tag —
    never for `bundle listed`, which keeps the base badge's quiet ink. */
 .settings-badge--verified { background: var(--bg-raised); color: var(--status-busy-text); }
-.settings-release-refused { margin: 0; font-size: var(--fs-xs); color: var(--status-attention-text); }
+.settings-release-refused { margin: 0; font-size: var(--fs-meta); color: var(--status-attention-text); }
 /* Notes are untrusted same-user text, rendered as ONE text child: wrapping
    keeps a long line or an unbroken URL inside the phone's width, and there is
    no markdown, HTML or link pass anywhere on this path. */
@@ -2979,7 +2979,7 @@ button.proj-card-pool::before {
 .settings-node-actions,
 .update-banner-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
 /* Wave 8 item F2 (D-3591): the running row's words, in place of a button — quiet, not a badge or a warning. */
-.settings-release-running { font-size: var(--fs-xs); color: var(--ink-tertiary); }
+.settings-release-running { font-size: var(--fs-meta); color: var(--ink-tertiary); }
 /* `.btn-ghost` (primitives.css) supplies the tap floor, the border and the
    disabled ink; this only stops it filling the row. Compound on purpose: it
    wins .btn-ghost's `width: 100%` by SPECIFICITY (0,2,0 over 0,1,0), not by
@@ -3020,7 +3020,7 @@ button.proj-card-pool::before {
    same ink .build-line-side--warn uses for the same meaning. */
 .settings-node-current--amber { color: var(--status-attention-text); }
 .settings-node-desired { display: inline-flex; align-items: center; gap: var(--sp-1); }
-.settings-node-detail { margin: 0; font-size: var(--fs-xs); color: var(--ink-tertiary); overflow-wrap: anywhere; }
+.settings-node-detail { margin: 0; font-size: var(--fs-meta); color: var(--ink-tertiary); overflow-wrap: anywhere; }
 /* The three node buttons carry the `btn-ghost settings-move` pair: .btn-ghost
    (primitives.css) supplies the tap floor, the border and the disabled ink,
    and Task 8's compound .btn-ghost.settings-move already stops it filling the
@@ -3239,7 +3239,7 @@ button.proj-card-pool::before {
 }
 .settings-theme-name {
   font-family: var(--family-ui);
-  font-size: var(--fs-base);
+  font-size: var(--fs-ui);
   color: var(--ink-primary);
 }
 /* A group heading inside the fieldset — not a second <legend>, which would be

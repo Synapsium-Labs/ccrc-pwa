@@ -203,7 +203,7 @@ CCRC_DOCTOR_CHECKS=(
   pools
   pool-sync
   transcripts
-  update-sync server-caps   # one line, as `flock timeout`: _check_server-caps is APPENDED near the end of this file, just before _check_oom-policy
+  update-sync server-caps approval-verifier-runnable approval-key   # one line, as `flock timeout`: _check_server-caps is APPENDED near the end of this file, just before _check_oom-policy; the two approval checks are at the very END
   graphify
   graphify-path
   build
@@ -9343,4 +9343,67 @@ _check_update-sweep() {
       _dr_skip update-sweep "the last report's sweep word is not one this build knows ('$sw'), so it was not read"
       return 3 ;;
   esac
+}
+
+# ── the approval wait's two checks (coordinator-first routing, plan Task 14, spec §6.3 step 1 and §6.4, D-5297, D-5487) ──
+# A dispatched child's permission hook asks the server for a ruling only when it can VERIFY one: `node` on PATH, the
+# verifier installed beside the hook, and the server's public key pinned. `approval-verifier-runnable` names each
+# missing piece by name; any one missing means rulings never engage on this box (every prompt goes to the operator,
+# as before), which is a WARN and not a FAIL: nothing is broken that worked. A server-role box hosts no sessions.
+_dr_approval_role() {
+  local r=""
+  [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && r="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  printf '%s' "$r"
+}
+_check_approval-verifier-runnable() {
+  local missing=""
+  if [ "$(_dr_approval_role)" = server ]; then
+    _dr_skip approval-verifier-runnable "this box records CCRC_ROLE=server, so it hosts no sessions and no permission hook runs on it"
+    return 3
+  fi
+  # No registry, no sessions: `ccd` creates `~/.cc-sessions` before it starts one, so a box without it has no child
+  # whose hook could wait.
+  if [ ! -d "$HOME/.cc-sessions" ]; then
+    _dr_skip approval-verifier-runnable "this box has no session registry (\$HOME/.cc-sessions), so no child's permission hook runs on it"
+    return 3
+  fi
+  # `node` is looked up on doctor's own PATH. A session runs under claude-session@'s environment, whose PATH holds the
+  # same install's bin directories, so a box where doctor finds node is one where the hook finds it; a hand-edited unit
+  # PATH is the case this cannot see (D-5487).
+  command -v node >/dev/null 2>&1 || missing="${missing:+$missing, }node (not on PATH)"
+  # The registry as the bare directory, never `.cc-sessions/<name>` on a code line: pool-name-parity.test.ts pins those.
+  local areg="$HOME/.cc-sessions"
+  [ -f "$areg/approval-verify.mjs" ] || missing="${missing:+$missing, }the verifier (approval-verify.mjs in \$HOME/.cc-sessions)"
+  # A key not pinned yet, with node and the verifier in place, is the rollout's expected state (D-5487 (1)): the server
+  # had not served one when this box last updated. Nothing is broken, so it SKIPs and a fresh install ends green (D-139).
+  if [ -z "$missing" ] && [ ! -f "$HOME/.ccrc/approval-signing.pub" ]; then
+    _dr_skip approval-verifier-runnable "no approval key is pinned yet (\$HOME/.ccrc/approval-signing.pub): the server had not served one when this box last updated, so every prompt goes to the operator, as today; the next ccrc update after the server serves one pins it"
+    return 3
+  fi
+  [ -f "$HOME/.ccrc/approval-signing.pub" ] || missing="${missing:+$missing, }the pinned key (\$HOME/.ccrc/approval-signing.pub)"
+  if [ -n "$missing" ]; then
+    _dr_warn approval-verifier-runnable "a child's permission hook cannot verify a ruling, so coordinator rulings never engage on this box and every prompt goes to the operator; missing: $missing" \
+      "run ccrc update (it installs the verifier and pins the server's key once the server serves one); install Node if the 'node' check names it"
+    return 2
+  fi
+  _dr_pass approval-verifier-runnable "node, the verifier and the pinned approval key are present"
+}
+# `approval-key-changed`: the install spine pins the server's key ONCE and never replaces it; a later run offered a
+# different key records the offer in `~/.ccrc/approval-key-offered`. That is a FAIL until the operator decides.
+_check_approval-key() {
+  local pinned="$HOME/.ccrc/approval-signing.pub" offered="$HOME/.ccrc/approval-key-offered"
+  if [ "$(_dr_approval_role)" = server ]; then
+    _dr_skip approval-key "this box records CCRC_ROLE=server; the key it serves is pinned on the fleet box"
+    return 3
+  fi
+  if [ ! -f "$pinned" ]; then
+    _dr_skip approval-key "no approval key is pinned yet (\$HOME/.ccrc/approval-signing.pub); the 'approval-verifier-runnable' check owns that"
+    return 3
+  fi
+  if [ -f "$offered" ] && [ "$(cat -- "$offered" 2>/dev/null)" != "$(cat -- "$pinned" 2>/dev/null)" ]; then
+    _dr_fail approval-key "approval-key-changed: the server offered a different approval key than the one pinned in \$HOME/.ccrc/approval-signing.pub; the pinned key stays, so rulings signed by the new key are ignored" \
+      "if the server's key was rotated on purpose, remove \$HOME/.ccrc/approval-signing.pub and \$HOME/.ccrc/approval-key-offered by hand and run ccrc update; otherwise find out why the server's key changed"
+    return 1
+  fi
+  _dr_pass approval-key "the pinned approval key is the one the server last offered"
 }

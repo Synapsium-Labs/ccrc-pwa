@@ -1172,6 +1172,12 @@ function healthy(prefix: string): string {
   containedPath(home);   // plant the poisoned gh FIRST; ghStub overwrites it below
   writePkg(home, '>=1.0.0');
   stubNode(home, 'v22.20.0');
+  // The approval wait's two checks (coordinator-first routing, plan Task 14): the server's key is pinned, so
+  // `approval-key` PASSes. `healthy()` never creates `~/.cc-sessions` (the no-registry box the pools and transcripts
+  // describes rely on), so `approval-verifier-runnable` SKIPs, counted in `HEALTHY_SKIPS`. `ccrc-approval-key.test.ts`
+  // plants the registry and breaks each piece.
+  mkdirSync(join(home, '.ccrc'), { recursive: true });
+  writeFileSync(join(home, '.ccrc', 'approval-signing.pub'), '-----BEGIN PUBLIC KEY-----\nfixture\n-----END PUBLIC KEY-----\n');
   stub(home, 'flock', 'exit 0');
   // `python3` is a presence stub, except for the box-token check's two JSON readers, which go to the real interpreter
   // by EXACT program text (read from the shipped checks file): a stub that prints nothing makes them read `state-unreadable`
@@ -1661,8 +1667,12 @@ const anyVerdictFor = (out: string, name: string): string | undefined =>
  *  RAISED BY ONE AGAIN, on every platform (wave 17, D-5316): `update-sweep`
  *  SKIPs - `healthy()` writes no `~/.ccrc/update.json`, so there is no last
  *  update to read a sweep from. The `update-sweep` describe at the end of this
- *  file plants one where it answers. */
-const HEALTHY_SKIPS = (process.platform === 'darwin' ? 3 : 0) + 8;   // +1 server-caps (no role): its block at the end; +1 update-sweep (no update.json on a healthy box)
+ *  file plants one where it answers.
+ *
+ *  RAISED BY ONE AGAIN, on every platform (coordinator-first routing, plan Task 14):
+ *  `approval-verifier-runnable` SKIPs - `healthy()` creates no `~/.cc-sessions`, so
+ *  the box hosts no session whose hook could wait. */
+const HEALTHY_SKIPS = (process.platform === 'darwin' ? 3 : 0) + 9;   // +1 server-caps (no role): its block at the end; +1 update-sweep (no update.json on a healthy box); +1 approval-verifier-runnable (no registry)
 
 // ── the table itself ──────────────────────────────────────────────────────
 

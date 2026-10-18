@@ -116,7 +116,9 @@ export function Sheet({
                 // `.sheet-panel--full` only re-stated height, ground, padding
                 // and z-index over `.sheet-panel`, so it inherited both.
                 'sheet-panel--full z-drawer h-[calc(100dvh-var(--safe-top)-var(--sp-6))] rounded-t-xl bg-well shadow-sheet px-0 pt-2 pb-[calc(var(--sp-2)+var(--safe-bottom))]'
-              : 'z-sheet max-h-[calc(100dvh-var(--sp-12)-var(--safe-top))] rounded-t-xl bg-sheet shadow-sheet px-4 pt-2 pb-[calc(var(--sp-4)+var(--safe-bottom))]',
+              : // The sides pad with the card role (D-5093, Task 14b): 16px in
+                // Refined, the --sp-4 it used before, and 12px in Instrument.
+                'z-sheet max-h-[calc(100dvh-var(--sp-12)-var(--safe-top))] rounded-t-xl bg-sheet shadow-sheet px-card pt-2 pb-[calc(var(--sp-4)+var(--safe-bottom))]',
             className,
           )}
         >

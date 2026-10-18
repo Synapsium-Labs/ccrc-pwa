@@ -323,11 +323,13 @@ describe('the client stays closed', () => {
     // (delegation broker wave 3, Task 15), whose body `parse_intent` builds whole
     // from the pane's identity: it fills nothing, so the scan below does not see
     // it, and its row took the table from twenty-four to twenty-five on the merge.
+    // The three approvals rows (coordinator-first routing, plan Task 14) took it to
+    // twenty-eight; they fill nothing either: the hook builds its request body whole.
     const code = clientCode();
     const filled = [...code.matchAll(/^\s*if \[\[ "\$key" == '([a-z.-]+)' && -n "\$body" \]\]; then$/gm)]
       .map((m) => m[1]!).sort();
     expect(filled).toEqual(['ledger.allocate', 'runs.open']);
-    expect(routeKeys().size).toBe(25);
+    expect(routeKeys().size).toBe(28);
     // The claimant's identity is the PANE's, derived, never a value the caller
     // passes as a flag: the runs.open fill splices `$DERIVED_UUID` and nothing else.
     expect(code).toMatch(/splice_body_field 'claimedByUuid' "\$DERIVED_UUID"/);
