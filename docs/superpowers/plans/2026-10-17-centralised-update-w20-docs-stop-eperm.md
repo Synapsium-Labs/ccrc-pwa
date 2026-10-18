@@ -25,7 +25,7 @@ The operator ruled on 2026-10-17 at 15:50 UTC that this programme repairs stable
 
 ## Not in this wave
 
-- Any other change to the Docs helper, its caps, its deadline or its verbs. Row 64 itself stays **byte-unchanged**, because it is the macOS proof.
+- Any other change to the Docs helper, its caps, its deadline or its verbs. Row 64 itself stays **byte-unchanged**, because it is the macOS proof. *(Superseded 2026-10-18 by D-5336: row 64's first assertion carries its facts as its message, and its assertions are unchanged. The macOS proof is the follow-up's Step 12.)*
 - `_group_alive`'s EPERM reading. It still reads EPERM as alive. After `_signal_group` has reaped the leader, an empty group answers ESRCH and the wait ends. On Darwin the reaped leader's exited children can stay in the group as zombies until launchd reaps them, and through that window `_group_alive` reads EPERM as alive, which only keeps the loop polling. The window is transient, bounded by launchd's reap; if it outlasts `KILL_GRACE_S` the SIGKILL arm raises (loud, no leak). It stays unchanged for D-5335's reason: reading EPERM as gone would also read a live member with foreign credentials as stopped, and so hide a refusal. Reading 2 asks the coordinator to confirm this.
 - The Docs reader programme's diagnostic branch. It stays unlanded, by that programme's own ruling.
 
@@ -42,7 +42,7 @@ The operator ruled on 2026-10-17 at 15:50 UTC that this programme repairs stable
 - Is the EPERM absorbed **only** at the SIGTERM, and only when the leader had not been reaped before the signal and `poll()` now shows it exited? Linux EPERM, a live leader's EPERM, an already-reaped leader's EPERM and every EPERM at the SIGKILL must all still raise.
 - Does a live non-leader member still get SIGTERM and then, after `KILL_GRACE_S`, SIGKILL?
 - Does the injected row really discriminate: green with the change, and red on `main` and under each mutation row?
-- Is row 64 byte-unchanged, and is the stamp recomputed rather than copied?
+- Is row 64 byte-unchanged, and is the stamp recomputed rather than copied? *(Superseded 2026-10-18 for row 64 by D-5336, its assertions unchanged; the proof is the follow-up's Step 12.)*
 
 ## Risk notes
 
@@ -54,7 +54,7 @@ The operator ruled on 2026-10-17 at 15:50 UTC that this programme repairs stable
 ## Deviations found
 
 - **D-5333.** `Sys._signal_group` takes the `Popen` instead of its pgid. It absorbs an EPERM when the leader was unreaped before the call and `poll()` reaps it now, and raises every other EPERM. `_stop` passes the `Popen` to both of its signal calls. Why: the Docs reader programme measured EPERM from the first SIGTERM after an overflow on macOS, and the old function, which re-raised everything but ESRCH, turned it into `unreadable`. The cause is a hypothesis, so the arm keys on the one fact that makes the absorb safe, an exited leader, rather than on the platform.
-- **D-5334.** The test replays Darwin's `killpg` answer on Linux, through the helper's `os` seam, from `/proc`'s member states. It logs every answer to `$HOME/killpg.log` so a green row proves the EPERM was met. Row 64 stays byte-unchanged as the macOS proof. Why: a pull request skips `test-macos`, and a fix proved only on the platform it cannot reach would ship unpinned on Linux CI.
+- **D-5334.** The test replays Darwin's `killpg` answer on Linux, through the helper's `os` seam, from `/proc`'s member states. It logs every answer to `$HOME/killpg.log` so a green row proves the EPERM was met. Row 64 stays byte-unchanged as the macOS proof *(superseded 2026-10-18 by D-5336; the proof is the follow-up's Step 12)*. Why: a pull request skips `test-macos`, and a fix proved only on the platform it cannot reach would ship unpinned on Linux CI.
 - **D-5335** (the coordinator's ruling on review 573's F1). The absorb applies at `_stop`'s SIGTERM call only, asked for by an explicit argument (`_signal_group(proc, signal.SIGTERM, absorb_reaped=True)`); at the SIGKILL call an EPERM raises exactly as before D-5333, even with a leader that `poll()` would now reap. Why: at the SIGKILL no wait follows but the leader's, so an absorb there could hide a refusal to stop a live member with foreign credentials, and fail-loud (`unreadable`) is the safer error. Row 64's case meets the zombie leader at the first signal, which the SIGTERM absorb still covers. The cost: a leader that exits in the last poll gap before the SIGKILL, leaving a group of zombies, raises `unreadable` again; that is as rare, and loud. A fourth case pins it, and mutation row T20-M6 reds it.
 - Numbers 5336 to 5342 are the 2026-10-18 follow-up's own (the coordinator's brief for it, which replaced the split this line once gave: 5336 to 5338 the coordinator's, 5339 to 5342 the worker's reserve). Each is defined here in the commit that first cites it. D-5341 and D-5342 are unspent.
 - **D-5336** (follow-up 2026-10-18). Row 64's first assertion carries the whole facts as its message: `expect(o.facts, JSON.stringify(o.facts))`. Its assertions are unchanged. This departs from "Row 64 itself stays byte-unchanged" above, on the coordinator's brief. Why: `toMatchObject`'s diff prints only the keys it was asked about, so the macOS red at `b51a2e20d` showed `state: 'unreadable'` and hid the `step` and `detail` that say which call raised.
@@ -373,6 +373,7 @@ The coordinator re-dispatched run 566 on 2026-10-18. Wave 20 made row 64 green o
   - Each of the 42 leaders whose stop raised was reapable 0.6 to 3.8 ms later.
   - The `ps` pass shows the window from the other side: the few milliseconds `ps` costs were enough for every leader to become a zombie, so the helper's own `poll()` reaped it and every stop was absorbed.
   - So wave 20's absorb was right about the zombie and too strict about the instant: it needs `poll()` to reap the leader at the moment of the EPERM, and on Darwin the EPERM usually comes a few milliseconds earlier. Row 64's one green on macOS, at `97493f9b2`, was the minority case.
+  - **Row 64's own facts on macOS (D-5336's purpose):** full run 39138363782 at `b6141d6f1`, the unchanged helper, `test-macos 2/4` (job 117707535560): row 64 red in 394 ms with `{"state":"unreadable","branch":"ws/a",…,"step":"status","detail":"spawn: Operation not permitted"}`. That is the snapshot's OSError arm, from `_stop`'s SIGTERM EPERM, as the probe says. (That job finished after this section's last commit, so review 609's F3 asked for it here.)
 - [x] **Step 4 (red first, D-5338).** Case 5 of the describe `row 64 on Darwin`, `row 64, Darwin's exiting answer injected: a status overflow whose leader is not yet reapable at the SIGTERM is too-many, never unreadable (D-5338)`. A PATH git (`t20lingeringGit`) answers `status` in full, then lingers, alive and unreaped, until a release file exists. The fake `killpg` (`t20exiting`) answers the first SIGTERM EPERM with nothing signalled, logs the leader's `/proc` state, and writes the release file; every later answer is `T20_DARWIN_KILLPG`'s. So `poll()` is None at that EPERM, and the leader exits on its own after it, as Darwin's exiting leader does a few milliseconds later.
   **Measured (worker, 2026-10-18) on the unchanged helper:** `1 failed | 4 passed | 184 skipped`. Case 5 is red with `{"state":"unreadable","branch":"ws/a",…,"step":"status","detail":"spawn: Operation not permitted"}`, the macOS failure's shape. Cases 1 to 4 stay green.
 
@@ -415,10 +416,30 @@ The coordinator re-dispatched run 566 on 2026-10-18. Wave 20 made row 64 green o
 - [x] **Step 10 (Darwin after the fix).** PR #607's `probe-macos` on `a7cbb513e` (run 39139127063, job 117709790251) has the probe's 92 stops all reading `overflow <- 15:EPERM(…) 0:ESRCH`, and none raised. In 37 of the 40 `git status` stops and 25 of the 40 `printf` stops, the EPERM met a leader that `waitid` still said had not exited. Those are the stops the old predicate raised.
 
 - [x] **Step 11 (the gate at the final tree, measured, worker, 2026-10-18).** `ccd/ccd` is byte-identical to `a7cbb513e`'s, so Step 8's runs of the files that read only it stand. The files Steps 9 and 10 changed, re-run one at a time: `ccd-docs-tree` (whole) 190, `platform-hazards` 6 (6 skipped), and `topology-clean`, `deviation-refs` and `dtbd` on this text. `server/test/` typechecks clean under `test/tsconfig.tests.json`, apart from `agent/src` imports, which this checkout cannot resolve without `agent`'s modules.
-- [ ] **Step 12 (the macOS proof).** A full run on this tip, dispatched by the coordinator. `test-macos` must have row 64 and `ccd-docs-index`'s overflow case green, and the B2 probe's Darwin arm must record no raised stop. Its job ids go in the wave-done.
+- [x] **Step 12 (the macOS proof).** A full run on this tip, dispatched by the coordinator. `test-macos` must have row 64 and `ccd-docs-index`'s overflow case green, and the B2 probe's Darwin arm must record no raised stop. Its job ids go in the wave-done.
+  **Measured:** full run 39140769427 at `453170331`.
+  - Row 64 is green in `test-macos 2/4` (job 117716174711, 533 ms).
+  - `ccd-docs-index`'s `stdout past stdout_cap is overflow; a hard call answers too-many-entries` is green in `test-macos 4/4` (job 117716174649, 336 ms).
+  - The B2 probe's Darwin arm, in the same job, records all 92 stops returning and none raised.
+  - `full-suite` is red only on macOS, in delegation broker files this wave does not touch. `ccrc-doctor`'s delegation-hooks (3) and `session-hook-turnmark` (7) are red on `main` at `b51a2e20d` too. `delegation-spool`'s `lines near the cap do not interleave` (1) is green on that sample.
+
+### Follow-up fix round 1 (review 609, 2026-10-18)
+
+The coordinator accepted review 609 at `453170331` (5 minor findings, nothing in the stop path at any lens) and ruled on all five. `ccd/ccd` is not touched in this round: it stays byte-identical to `453170331`'s, so Step 12's macOS proof stands.
+
+- [x] **F1 (under D-5338, no new number).** Case 5's non-vacuity pin `/^15 EPERM leader=[RS]$/` went red on an unmutated tip under load in 1 of the reviewer's 6 runs, reading `leader=D`. `D` is a live, unreaped leader, which is what the row models. The pin now accepts any live `/proc` state and refuses only `Z`, `X` and `gone`: `/^15 EPERM leader=(?!(?:Z|X|gone)$)\S+$/`.
+  **Measured (worker, 2026-10-18), on 16 cores:**
+  - The describe ran green 10 times in a row, `6 passed | 184 skipped` each time, with the 1-minute load average between 12.1 and 13.4 at each start.
+  - T20-M7 on `ccd/ccd` still reds case 5, reading `unreadable` {`step: status`, `detail: spawn: Operation not permitted`}, and cases 3 and 6 as before. The file was restored and `cmp`-checked against `453170331`'s blob.
+  - A hand mutation of the test: the shim no longer lingers, and the fake's first answer waits for the leader to be a zombie. It reds the pin: `expected '15 EPERM leader=Z' to match /^15 EPERM leader=(?!(?:Z|X|gone)$)\S+$/`. Restored with `cp`, and `cmp` matched.
+- [x] **F2.** The describe's header names D-5336's change to row 64 and says that cases 5 and 6 replay Darwin's other EPERM. Its title now ends `killpg answers EPERM for a group of zombies, and for a leader still exiting (wave 20, B2)`. The `-t 'row 64 on Darwin'` filter still selects it.
+- [x] **F3.** Step 3 records job 117707535560's row 64 facts.
+- [x] **F4.** Reading 1 and the "row 64 byte-unchanged" sentences (Not in this wave, Review Focus, D-5334) carry superseded markers that point at D-5336 and Step 12.
+- [x] **F5.** PR #607's body, patched over REST. Of the 92 stops, waitid said unexited in 52: 42 of them raised and 10 were absorbed. The macOS proof line names run 39140769427's job ids. Step 12 is checked with them. Commit `5c4340d1c`'s message, which says 42 for the unexited count, is history and stays.
+- Left alone, by the ruling: the probe header's present tense, and case 6's margin. The coordinator records that margin as the likeliest load-flake candidate, and "the absorb never re-sends the SIGTERM" as residue for the next stop-path change.
 
 ## Readings (for the coordinator to rule)
 
-1. **The proof.** Is a green row 64 on the dispatched full run's macOS leg (`test-macos 2/4`, job 117447659194, on run 39050387114, where row 64 ran and passed) enough proof of the fix, given that the cause is a hypothesis? The coordinator proposes yes: row 64 is the measured failure, and it goes green or it does not.
+1. **The proof.** Is a green row 64 on the dispatched full run's macOS leg (`test-macos 2/4`, job 117447659194, on run 39050387114, where row 64 ran and passed) enough proof of the fix, given that the cause is a hypothesis? The coordinator proposes yes: row 64 is the measured failure, and it goes green or it does not. *(Superseded 2026-10-18 by the follow-up: that one green was the minority case (Step 3), and the proof is Step 12's: row 64 and `ccd-docs-index`'s overflow case green on full run 39140769427, with the B2 probe recording no raised stop.)*
 2. **`_group_alive`.** Leave it unchanged, by the argument in "Not in this wave"? The coordinator proposes yes.
 3. **No plan attack lenses ran.** The memory cap killed them. The held-out review panel reads this plan with the wave.

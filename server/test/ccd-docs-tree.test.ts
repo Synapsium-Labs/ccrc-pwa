@@ -3472,9 +3472,11 @@ describe('docs-tree: a spent deadline degrades the drafts, never the tree (D-416
 // can see it. These units replay Darwin's answer through the helper's own seam: the helper's `os` is the unit's
 // `os`, so the unit swaps `os.killpg` for one that reads the group's members from /proc and answers as XNU's
 // killpg does (no member: ESRCH; every member a zombie: EPERM; else the real call). Linux only (/proc); row 64
-// itself stays byte-unchanged as the macOS proof. Its first answer, and case 2's racing kill, each wait (bounded)
+// itself is the macOS proof, its assertions unchanged (since the 2026-10-18 follow-up its first one carries the whole
+// facts as its message, D-5336). Its first answer, and case 2's racing kill, each wait (bounded)
 // for the leader to be a zombie, so a zombie leader at the first signal is a fact of each run, not a race won. Every
-// answer is logged to $HOME/killpg.log, so a green row shows that the EPERM was met.
+// answer is logged to $HOME/killpg.log, so a green row shows that the EPERM was met. Cases 5 and 6 (the follow-up)
+// replay Darwin's other EPERM, for a leader that is still alive and exiting at the SIGTERM.
 import { REAL_GIT as t20realGit } from './ccdDocsHelpers.js';
 import { harnessBin as t20bin } from './ccdWsHelpers.js';
 
@@ -3563,7 +3565,7 @@ function t20lingeringGit(release: string): void {
   ].join('\n'), { mode: 0o755 });
 }
 
-describe.skipIf(process.platform !== 'linux')('row 64 on Darwin: killpg answers EPERM for a group of zombies (wave 20, B2)', () => {
+describe.skipIf(process.platform !== 'linux')('row 64 on Darwin: killpg answers EPERM for a group of zombies, and for a leader still exiting (wave 20, B2)', () => {
   it('row 64, Darwin answer injected: a status overflow whose git exited unreaped is too-many, never unreadable', () => {
     const { wt, head } = t14holder({ [`${T14_S}a.md`]: 'aaaa\n' });
     for (let i = 0; i < 20; i++) t14fs.writeFileSync(t14path.join(wt, T14_S, `long-name-${i}-${'x'.repeat(40)}.md`), 'n\n');
@@ -3687,9 +3689,10 @@ describe.skipIf(process.platform !== 'linux')('row 64 on Darwin: killpg answers 
     expect(o.facts, JSON.stringify(o.facts)).toMatchObject({ state: 'too-many', branch: 'ws/a', worktree: wt });
     expect(o.facts['bytes']).toBe(200);
     expect(o.entries).toBe(1);
-    // Non-vacuity: the EPERM met a live leader, neither a zombie nor gone, and the stop then found the group empty.
+    // Non-vacuity: the EPERM met a live leader, in any /proc state but a zombie (Z), dead (X) or gone, and the stop then
+    // found the group empty. Under load the lingering shim reads D as well as R and S (review 609's F1).
     const log = t20log();
-    expect(log[0]).toMatch(/^15 EPERM leader=[RS]$/);
+    expect(log[0]).toMatch(/^15 EPERM leader=(?!(?:Z|X|gone)$)\S+$/);
     expect(log.slice(1)).toEqual(['0 ESRCH']);
   }, 60000);
 
