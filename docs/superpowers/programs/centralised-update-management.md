@@ -4135,6 +4135,9 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       the evidence and asks who fixes them and when.
     - **So stable needs:** the operator's #397 and #410 decisions (or a ruling that #441 may land before #410),
       then #441, #448's two macOS files fixed, and a green `full-suite` on a released commit. Put to the operator.
+    - **Measured, 07:55 UTC:** on `main` (`59d940649`) merged with #441's head `7bc2d9015`, #410's head `4a75bff66`
+      conflicts only on `ccd/ccd`'s stamp line, as it does on `main` alone. #441 landing first costs #410 nothing
+      more than the restamp it already owes.
 
 ## Carried constraints
 
