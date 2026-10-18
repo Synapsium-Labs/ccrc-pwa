@@ -1921,7 +1921,7 @@ UPD_REPORT_PID=""       # overrides a report's `pid` (empty = this process)
 # forger's export never survives to be read.
 unset UPD_FROM_CALLER_PID
 UPD_FAIL_PREFIX=""      # "provenance: " for a die that is a verdict on the RELEASE (plan D-3239)
-UPD_SWEEP_WORD=""       # what `_upd_sweep` did, one word; `_upd_phase` writes it as update.json's `sweep` key while set (wave 17, D-5314)
+UPD_SWEEP_WORD=""       # what `_upd_sweep` did (or `died: abandoned`, cmd_watchdog's close, D-5329), one word; `_upd_phase` writes it as update.json's `sweep` key while set (wave 17, D-5314)
 UPD_LOCK_FD=""          # the descriptor _upd_lock holds; "" when not held, or when inherited
 UPD_LOCK_INHERITED=0    # 1 = a restore child under its parent's lock — measured by _upd_lock_probe, never assumed
 UPD_PREV_TAG=""      # _upd_read_previous: line 1 of ~/.ccrc/previous (a tag, or `untagged`)
@@ -18657,7 +18657,8 @@ _upd_phase() {
   detail="$(_upd_redact "$detail")"
   det="$(_upd_json_str "$detail")"
   # The sweep's record (wave 17, D-5314, D-5315): an ADDITIVE eighth key, written
-  # only while `_upd_sweep` has set UPD_SWEEP_WORD, so it is absent on every
+  # only while `_upd_sweep` (or cmd_watchdog's close of an abandoned `restarting`
+  # report, `died: abandoned`, D-5329) has set UPD_SWEEP_WORD, so it is absent on every
   # phase before the sweep, on every path that never swept, and in every report
   # an older build wrote. Absent means NOT MEASURED, never "nothing was down";
   # `ccrc doctor`'s update-sweep check reads it that way. The server's

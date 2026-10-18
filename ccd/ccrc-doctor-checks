@@ -9163,7 +9163,8 @@ _fix_delegation-hooks() {
 # ── update-sweep: the last update's supervisor sweep, as its report recorded it ──
 # Reading 9's doctor half (the operator, 2026-10-15: warn only) and R10k (wave 17,
 # D-5316). `ccrc update` and `ccrc rollback` record what their supervisor sweep did
-# as update.json's `sweep` key (D-5314, D-5315): `ok`, `down: <n>: <id> ...`,
+# as update.json's `sweep` key (D-5314, D-5315), and the watchdog's close of an
+# abandoned `restarting` report records `died: abandoned` (D-5329): `ok`, `down: <n>: <id> ...`,
 # `refused: <why>`, `unverified: <why>` or `died: <why>`. This check reads that
 # record and NEVER FAILS, by the operator's ruling (warn only): a FAIL would turn a
 # state the update already recorded and reported into exit 1 for every bare
