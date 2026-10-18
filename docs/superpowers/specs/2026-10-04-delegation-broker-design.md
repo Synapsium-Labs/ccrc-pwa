@@ -325,7 +325,7 @@ The watcher only schedules and performs IO.
 - **Closing a lease without cleanup** (`native-removed`): the admin record is absent from two consecutive
   successful listings, the lease branch has been measured, and no `lease-clean:<phase>` breadcrumb
   exists. Distinct from the cleanup outcome `reclaimed`.
-- **Circuit breaker:** two or more parents first measured dead within 10 minutes, or an unreadable
+- **Circuit breaker:** two or more parents first measured dead within 10 minutes (a deliberate stop or an archive is not a death, D-5433), or an unreadable
   registry, suspends adoption and cleanup decisions for that pass and raises one attention item.
 
 ### 5.6 Auto-adoption and guidance

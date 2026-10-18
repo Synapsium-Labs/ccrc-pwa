@@ -6442,13 +6442,13 @@ and an unmeasured hour is final: it is never read later as empty.
   complete UTC hours that ends at the start of the current hour; `measuredSessionHours` and `unmeasuredSessionHours` count its
   session-hours (a session-hour is unmeasured if any interval for it is); `unmeasuredRate` is a number only when `stageGate` has an
   answer and is `null` otherwise; `stageGate` is `eligible`, `ineligible` or `unmeasured`. `circuitBreaker` is `clear`, `suspended`
-  (the registry could not be listed, or two or more parents were first measured dead within ten minutes, so the pass makes no
-  ownership claim) or `unmeasured`, and `unresolved`, `conflicting` and `unmeasured` are the last reconciliation's
-  verdict counts, which read 0 and must be taken as unknown while the breaker is `unmeasured`. `lastJournalSequence`,
-  `lastCheckpointRevision` and `lastIngestedAt` are the checkpoint's own anchors. `lastTailHeal` (`at`, `bytes`, `quarantinePath`)
-  appears after this server process has healed a torn journal tail, and also at EVERY boot, with `foundAtBoot: true` and the kept file's
-  own time, for the newest tail an earlier process left in the quarantine (below), until an operator removes that file.
-  `tailQuarantineUnmeasured: true` appears when the quarantine, or a tail in it, could not be read (a time no instant can spell
+  (the registry could not be listed, or two or more parents were first measured dead within ten minutes, a deliberate stop or an archive
+  not being a death (D-5433), so the pass makes no ownership claim) or `unmeasured`, and `unresolved`, `conflicting` and `unmeasured` are
+  the last reconciliation's verdict counts, which read 0 and must be taken as unknown while the breaker is `unmeasured`.
+  `lastJournalSequence`, `lastCheckpointRevision` and `lastIngestedAt` are the checkpoint's own anchors. `lastTailHeal` (`at`, `bytes`,
+  `quarantinePath`) appears after this server process has healed a torn journal tail, and also at EVERY boot, with `foundAtBoot: true`
+  and the kept file's own time, for the newest tail an earlier process left in the quarantine (below), until an operator removes that
+  file. `tailQuarantineUnmeasured: true` appears when the quarantine, or a tail in it, could not be read (a time no instant can spell
   included), so whether a heal went unreported is unknown; recovery still proceeds. Nothing in the PWA reads any of it.
 - **A `ccrc-server:` warning line, once per UTC hour** while a project's dropped-evidence keys are held back or lost, the global flag is
   up, a mark held a verdict back, or lost evidence held a link back: it names the held-back and lost projects (names and counts, never a
