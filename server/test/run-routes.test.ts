@@ -253,21 +253,22 @@ describe('POST /api/runs', () => {
     expect(okRun(w.coord.run(id))?.state).toBe('planned');
   });
 
-  it('stamps the coordinator project read from the registry — and since D-5298 refuses one that is not the run\'s', async () => {
+  it('stamps the coordinator project read from the registry — of any project since D-5523', async () => {
     // `claimedBy`'s registry record names a DIFFERENT project than the run's
-    // own `project` field, deliberately: before D-5298 the stamp proved the
-    // route read the registry, not the run's column. Since coordinator-first
-    // Task 11b the same open is refused, and `by` names the REGISTRY value —
-    // the same proof. An admitted open's stamp is the MEASURED (trimmed)
-    // registry value.
+    // own `project` field and its home, deliberately: the stamp proves the
+    // route read the registry, not the run's column. D-5298 refused this open;
+    // since D-5523 (the operator's ruling of 2026-10-18, #601) a coordinator
+    // may sit in any project, so it is admitted and stamped with the REGISTRY
+    // value. An admitted open's stamp is the MEASURED (trimmed) registry value.
     const home = mkTmp('ccrc-runs-');
     seed(home, CLAIMED_BY, { project: 'intake-platform' });
     const { run } = makeRunner(home);
     const w = await openApp(home, run); app = w.app;
     const res = await postOpen(app, { ...OPEN_BODY, claimedBy: CLAIMED_BY });
-    expect([res.statusCode, res.json()]).toEqual([409, { ok: false, refused: 'project-mismatch', by: 'intake-platform' }]);
+    expect(res.statusCode).toBe(200);
+    expect(okRun(w.coord.run((res.json() as { id: number }).id))?.coordProject).toBe('intake-platform');
     seed(home, CLAIMED_BY, { project: `${PROJECT}\n` });
-    const ok = await postOpen(app, { ...OPEN_BODY, claimedBy: CLAIMED_BY });
+    const ok = await postOpen(app, { ...OPEN_BODY, wave: 2, claimedBy: CLAIMED_BY });
     expect(ok.statusCode).toBe(200);
     expect(okRun(w.coord.run((ok.json() as { id: number }).id))?.coordProject).toBe(PROJECT);
   });
@@ -327,7 +328,7 @@ describe('POST /api/runs', () => {
     const emptyRes = await postOpen(
       app, { ...OPEN_BODY, program: 'empty-project', claimedBy: EMPTY_PROJECT_COORD });
     expect([emptyRes.statusCode, emptyRes.json()]).toEqual([409, { ok: false, refused: 'project-mismatch',
-      detail: "the claimant's registry row records no project, so it cannot be the run's" }]);
+      detail: "the claimant's registry row records no project, so its project cannot be stamped" }]);
     expect(okRuns(w.coord.runs())).toHaveLength(0);
   });
 
