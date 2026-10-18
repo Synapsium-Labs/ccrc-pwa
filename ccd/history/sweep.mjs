@@ -7862,8 +7862,10 @@ export async function recoverReindex(db, ctx, cur, budget) {
 //   1. exportSelect: the candidate rows, page by page, in four runs: the rows with no ts_ms first, then the young rows
 //      (at or past the ts cutoff) of each transcript lib's dueTranscriptKeys makes due, then the older rows by time
 //      through entries' partial index entries_unexported, then the unlinked sidecars whose blob nothing has exported
-//      (D-4761 (history-export-unlinked-sidecar-with-blob)). Within a run the order is (ts_ms, entry_id), or blob id for
-//      the sidecars; across the runs it is not one time order. Every candidate carries its transcript's files, the
+//      (D-4761 (history-export-unlinked-sidecar-with-blob)). The first three offer only those due transcripts' rows, the
+//      set computed once a pass: a row is due exactly when its transcript is, so no row that could not be taken stands
+//      ahead of one that can (D-5394 (history-export-select-due-transcripts)). Within a run the order is (ts_ms, entry_id),
+//      or blob id for the sidecars; across the runs it is not one time order. Every candidate carries its transcript's files, the
 //      census's per-row set (D-4248), and lib's planSegment (L1), with its default
 //      reducer, the census's per-copy one (B2's D-4735 (history-export-due-per-copy); RD1's one clock), decides each page under
 //      what is left of the bound: EXPORT_SEGMENT_MAX_BYTES, or what the run's byte budget has left, each row counted at
@@ -7884,9 +7886,12 @@ export async function recoverReindex(db, ctx, cur, budget) {
 const EXPORT_PAGE_ROWS = 256;
 /** meta: the last segment number this store published. The next is past it AND past every name on disk (§9.15 "Write"). */
 const EXPORT_SEQ_META = 'export_seq';
-/** meta: when a pass last failed with a CAUGHT error. exportStep's cadence counts it as a pass, so a pass that keeps
- *  failing that way retries hourly, never every tick; doctor's last-pass clock (HEALTH_META.exportPassMs) does not, so
- *  it still reads stale. A killed pass writes nothing here, and the next tick retries it. */
+/** meta: when a pass last failed with a CAUGHT error, or was held by the run's budget before it took a row (D-5394
+ *  (history-export-select-due-transcripts)). exportStep's cadence counts it as a pass, so a pass that keeps failing or
+ *  holding that way retries hourly, never every tick; doctor's last-pass clock (HEALTH_META.exportPassMs) does not, so
+ *  it still reads stale. A pass that ran to its end deletes it (noteExportPassDone), so a clock dated in the future (the
+ *  wall clock stepped back after the attempt) never outlives the next completed pass. A killed pass writes nothing here,
+ *  and the next tick retries it. */
 const EXPORT_ATTEMPT_META = 'export_attempt_ms';
 /** Names tried past a taken one before the pass fails: a directory whose names keep appearing under the lock is a fault,
  *  never a loop (§9.15 "Write"). */
@@ -7902,19 +7907,29 @@ const EXPORT_MARK_FAILS_META = 'export_mark_fails';
  *  partial index entries_unexported orders them. `ts_ms < cutoff` (the shortest home's horizon) is only a prefilter;
  *  planSegment decides each row by its holding files. It hides no due row held by a file on disk: no file's horizon is
  *  shorter than the shortest home's (an unrostered file is mapped to that home), and a row is written no later than its
- *  file's last write. */
+ *  file's last write.
+ *  D-5394 (history-export-select-due-transcripts): only the rows of the transcripts lib's dueTranscriptKeys names (the
+ *  parameter before the page size, their JSON array, computed once a pass). The per-copy rule reads no row time, so a row is due exactly when its
+ *  transcript is, and a row of any other is never taken: offering it spent the run budget on rows that could not be
+ *  taken (measured: held with nothing taken at about half a million of them). The unary `+` keeps SQLite on
+ *  entries_unexported, which orders the page: without it the planner seeks entries_ts on the IN list and sorts. The
+ *  keyset is a row value, which seeks; `(ts_ms > ? OR (ts_ms = ? AND entry_id > ?))` reads every row from the start of the
+ *  index on each page (11 ms a 256-row page at 10% of a million rows, 125 ms at 99.9%, against 0.2-0.5 ms at any
+ *  position). */
 const EXPORT_DUE_ENTRIES_SQL = 'SELECT entry_id, ts_ms, transcript_pk FROM entries WHERE exported_ms IS NULL AND ts_ms IS NOT NULL '
-  + 'AND ts_ms < ? AND (ts_ms > ? OR (ts_ms = ? AND entry_id > ?)) ORDER BY ts_ms, entry_id LIMIT ?';
-/** Rows with no time: the prefilter cannot see them, so every one is a candidate; like every row, each is due by its
- *  transcript's files (§9.15 "A row is due"). */
+  + 'AND ts_ms < ? AND (ts_ms, entry_id) > (?, ?) AND +transcript_pk IN (SELECT value FROM json_each(?)) '
+  + 'ORDER BY ts_ms, entry_id LIMIT ?';
+/** Rows with no time: the prefilter cannot see them; like every row, each is due by its transcript's files (§9.15 "A row
+ *  is due"), so only the due transcripts' rows are offered (the parameter before the page size, as in EXPORT_DUE_ENTRIES_SQL;
+ *  D-5394 (history-export-select-due-transcripts)). */
 const EXPORT_NULL_TS_ENTRIES_SQL = 'SELECT entry_id, ts_ms, transcript_pk FROM entries WHERE exported_ms IS NULL AND ts_ms IS NULL '
-  + 'AND entry_id > ? ORDER BY entry_id LIMIT ?';
-/** One transcript's rows at or past the prefilter's cutoff, oldest first, keyset-paged by (ts_ms, entry_id) through
- *  entries_ts (transcript_pk, ts_ms). Asked only for a transcript lib's dueTranscriptKeys makes due now: under the
+  + 'AND entry_id > ? AND +transcript_pk IN (SELECT value FROM json_each(?)) ORDER BY entry_id LIMIT ?';
+/** One transcript's rows at or past the prefilter's cutoff, oldest first, keyset-paged by the row value (ts_ms, entry_id)
+ *  through entries_ts (transcript_pk, ts_ms). Asked only for a transcript lib's dueTranscriptKeys makes due now: under the
  *  per-copy rule every row of it is due at that instant, however young (B2's D-4735 (history-export-due-per-copy)). Its rows
  *  below the cutoff come through EXPORT_DUE_ENTRIES_SQL, never twice. */
 const EXPORT_TRANSCRIPT_ENTRIES_SQL = 'SELECT entry_id, ts_ms, transcript_pk FROM entries WHERE transcript_pk = ? AND exported_ms IS NULL '
-  + 'AND ts_ms >= ? AND (ts_ms > ? OR (ts_ms = ? AND entry_id > ?)) ORDER BY ts_ms, entry_id LIMIT ?';
+  + 'AND ts_ms >= ? AND (ts_ms, entry_id) > (?, ?) ORDER BY ts_ms, entry_id LIMIT ?';
 /** Blobs only an unlinked sidecar names, unexported and unpruned: schema v1 has no mark on a sidecar row, so the blob's
  *  mark is the row's (D-4761 (history-export-unlinked-sidecar-with-blob)). */
 const EXPORT_UNLINKED_SQL = 'SELECT DISTINCT s.blob_id AS blob_id FROM sidecars s JOIN blobs b ON b.blob_id = s.blob_id '
@@ -7999,6 +8014,11 @@ function exportSelect(db, ctx, nowMs, homeDays, boundBytes) {
   // measures every file against its own home (B2's D-4735 (history-export-due-per-copy)).
   const { minDays, filesOf, transcripts } = exportFileClock(db, homeDays);
   const cutoffMs = nowMs - exportHorizonDays(minDays) * DAY_MS;
+  // The transcripts the default rule makes due now: lib's dueTranscriptKeys over the one file clock, the census's own call,
+  // computed ONCE for the pass. Under the per-copy rule a row is due exactly when its transcript is, so the three runs below
+  // offer only these transcripts' rows, and planSegment still decides each one (D-5394 (history-export-select-due-transcripts)).
+  const dueKeys = dueTranscriptKeys({ nowMs, homeRetentionDays: homeDays, transcripts });
+  const dueJson = JSON.stringify(dueKeys);
   // Rows per page: EXPORT_PAGE_ROWS, or an in-process test's ctx.deps.exportPageRows (D-4247).
   const pageRows = Number.isSafeInteger(ctx.deps?.exportPageRows) && ctx.deps.exportPageRows > 0 ? ctx.deps.exportPageRows : EXPORT_PAGE_ROWS;
   const sel = { taken: [], carry: new Set(), stubs: new Set(), transcripts: new Set(), linked: new Map(), cutoffMs, complete: true };
@@ -8066,19 +8086,19 @@ function exportSelect(db, ctx, nowMs, homeDays, boundBytes) {
     return true;
   };
   for (let after = 0; ;) {
-    const page = s.nullTsEntries.all(after, pageRows);
+    const page = s.nullTsEntries.all(after, dueJson, pageRows);
     if (page.length === 0) break;
     after = Number(page[page.length - 1].entry_id);
     if (!decide(page.map(entryCand))) return sel;
   }
-  // The rows, at or past the cutoff, of every transcript the default rule makes due now: lib's dueTranscriptKeys, the
-  // census's own prefilter over the same file clock (RD1). Under the per-copy rule every row of one transcript falls
+  // The rows, at or past the cutoff, of every transcript the default rule makes due now (dueKeys above, the census's own
+  // prefilter over the same file clock; RD1). Under the per-copy rule every row of one transcript falls
   // due at one instant whatever its own time, so the ts prefilter below would pass over the young ones: a transcript
   // with no holding file left on disk, and one whose young rows outlived the files that held them while an older file
   // of it stays on disk (B2's D-4735 (history-export-due-per-copy)). planSegment still decides each row.
-  for (const pk of dueTranscriptKeys({ nowMs, homeRetentionDays: homeDays, transcripts })) {
+  for (const pk of dueKeys) {
     for (let ts = cutoffMs, after = 0; ;) {
-      const page = s.transcriptEntries.all(pk, cutoffMs, ts, ts, after, pageRows);
+      const page = s.transcriptEntries.all(pk, cutoffMs, ts, after, pageRows);
       if (page.length === 0) break;
       ts = Number(page[page.length - 1].ts_ms);
       after = Number(page[page.length - 1].entry_id);
@@ -8086,7 +8106,7 @@ function exportSelect(db, ctx, nowMs, homeDays, boundBytes) {
     }
   }
   for (let ts = Number.MIN_SAFE_INTEGER, after = 0; ;) {
-    const page = s.dueEntries.all(cutoffMs, ts, ts, after, pageRows);
+    const page = s.dueEntries.all(cutoffMs, ts, after, dueJson, pageRows);
     if (page.length === 0) break;
     ts = Number(page[page.length - 1].ts_ms);
     after = Number(page[page.length - 1].entry_id);
@@ -8248,11 +8268,25 @@ function discardSegment(seg) {
 }
 
 /** What a pass that ran to its end records, inside the caller's transaction: the last-pass clock doctor's export-due
- *  rule and the hourly cadence read. `complete` says every due row the pass found fit in its segment. */
+ *  rule and the hourly cadence read, and the end of the attempt clock (EXPORT_ATTEMPT_META: it stood for a pass that
+ *  failed or was held, which this one no longer is; D-5394 (history-export-select-due-transcripts)). `complete` says every
+ *  due row the pass found fit in its segment. */
 function noteExportPassDone(db, nowMs, complete) {
   setMeta(db, HEALTH_META.exportPassMs, String(nowMs));
+  db.prepare('DELETE FROM meta WHERE k = ?').run(EXPORT_ATTEMPT_META);
   // A complete pass left no due row behind: what a missing segment's cleared marks owed has exported again (Task 8).
   if (complete && (getMeta(db, HEALTH_META.exportSegmentMissing) ?? '0') !== '0') setMeta(db, HEALTH_META.exportSegmentMissing, '0');
+}
+
+/** A pass the run's budget held with nothing taken (D-5394 (history-export-select-due-transcripts)): one stderr line, and the
+ *  attempt clock in the small transaction a failure records it in, so exportStep's cadence waits its interval. It is not a
+ *  pass: doctor's last-pass clock does not move. A record that meets busy or a full disk is left: the next tick tries sooner,
+ *  and nothing is lost. */
+function noteExportPassHeld(db, ctx, nowMs) {
+  process.stderr.write(`history-sweep: the export pass was held by the run's budget (${ctx.budget.maxMs} ms) before it took a due row; it tries again at its next interval\n`);
+  try {
+    withTx(db, 'NORMAL', () => { setMeta(db, EXPORT_ATTEMPT_META, String(nowMs)); });
+  } catch { /* busy or full: the next tick retries sooner, nothing is lost */ }
 }
 
 /** Phase 4 (§9.15 "Mark"): ONE transaction, after the link: the blobs whose bytes the segment holds and the entries it
@@ -8288,7 +8322,13 @@ export async function exportPass(db, ctx) {
     if (room <= 0 || !budgetLeft(ctx.budget)) return stop('held');
     const sel = exportSelect(db, ctx, nowMs, exportHomeDays(db, ctx.homes), room);
     if (sel.taken.length === 0) {
-      if (!sel.complete) return stop('held');
+      if (!sel.complete) {
+        // The run's budget ended the selection before it took a row (never history-off, which stops the writer, and never a
+        // busy, which throws): the pass records its attempt like a failed one, so the next step waits its interval and not the
+        // next tick, and says so once (D-5394 (history-export-select-due-transcripts)).
+        noteExportPassHeld(db, ctx, nowMs);
+        return stop('held');
+      }
       withTx(db, 'NORMAL', () => { noteExportPassDone(db, nowMs, true); });
       return { ...stop('nothing-due'), complete: true };
     }

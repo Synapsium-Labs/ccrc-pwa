@@ -18,8 +18,9 @@ import {
 import { userRow, toolResultRow } from './historyFixtures.js';
 import { removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { EXPORT_ROW_META_BYTES, HEALTH_META, historyPaths } from '../../ccd/history/lib.mjs';
-import { closeWriter, openSegment, openWriter, pruneDryRun, segmentMeta, setMeta } from '../../ccd/history/store.mjs';
+import { MIGRATIONS, closeWriter, openSegment, openWriter, pruneDryRun, segmentMeta, setMeta } from '../../ccd/history/store.mjs';
 import { syncBuiltinESMExports } from 'node:module';
+import { DatabaseSync as MemDb } from 'node:sqlite';
 // ── W1-B4 Task 9: imports under x9 aliases, so no binding collides with Tasks 5–8 above ───────────────────────
 import * as x9Fs from 'node:fs';
 import * as x9Path from 'node:path';
@@ -394,6 +395,7 @@ describe('the export pass, in-process (W1-B4 Task 5; spec §9.15 "What is due", 
     const NOW = Date.now();
     const dir = path.join(box.root, 'export', ids.storeId);
     const off = historyPaths(box.home).off;
+    await onStore(box, (db) => { setMeta(db, 'export_attempt_ms', String(NOW - HOUR)); });   // a failed attempt an hour ago (D-5394)
     // The operator's switch appears once the segment's temp exists: the clock the writer reads before its first row
     // plants it, exactly between the temp's creation and that row.
     const clock = (): number => {
@@ -406,9 +408,11 @@ describe('the export pass, in-process (W1-B4 Task 5; spec §9.15 "What is due", 
     expect(segmentsOf(box), 'a temp or a segment was left').toEqual([]);
     expect(marks(box)).toEqual({ [rid(1)]: null, [rid(2)]: null });
     expect(metaOf(box, HEALTH_META.exportPassMs), 'a held pass is not a pass').toBeNull();
+    expect(metaOf(box, 'export_attempt_ms'), 'history-off is the operator\'s switch, not a pass the budget held: the attempt clock is neither written nor cleared (D-5394)').toBe(String(NOW - HOUR));
     fs.rmSync(off);
     const next = await onStore(box, (db) => SW.exportPass(db, exportCtx(box, ids, () => NOW)));
     expect(next).toMatchObject({ state: 'written', rows: 2 });
+    expect(metaOf(box, 'export_attempt_ms'), 'a pass that ran to its end clears the attempt clock (D-5394)').toBeNull();
   }, 120_000);
 
   it('no rostered home, no horizon: nothing is selected and no directory is made', async () => {
@@ -1384,4 +1388,170 @@ describe('a file with no path left (W1-B4 Task 10; D-5393 (history-export-pathle
     expect(segmentRows(seg, 'entries').map(pick(['uuid', 'struct_path'])).sort(byUuid),
       'and so does each entry\'s structural file').toEqual([{ uuid: rid(1), struct_path: keyA }, { uuid: rid(2), struct_path: keyA }, { uuid: rid(3), struct_path: keyB }]);
   }, 120_000);
+});
+
+// ── W1-B4 whole-branch review, FIX-A (D-5394 (history-export-select-due-transcripts)) ───────────────────────────────
+// The selection offered every unexported row older than the shortest home's cutoff, through a keyset that never seeks;
+// a node with one 30-day home beside 180-day homes spent the run budget on rows that could not be taken. A row is due
+// exactly when its transcript is (the per-copy rule reads no row time; D-4248), so the pass offers only the rows of
+// lib's dueTranscriptKeys, pages by a row value that seeks, and records a pass the budget held with nothing taken.
+describe('the selection reaches the due rows within its budget (W1-B4 whole-branch review; D-5394 (history-export-select-due-transcripts))', () => {
+  const sweepSrc = (): string => fs.readFileSync(new URL('../../ccd/history/sweep.mjs', import.meta.url), 'utf8');
+  /** The text of a module-private `const NAME = '…' + '…';` SQL string in sweep.mjs, without evaluating the source. */
+  const sqlOf = (name: string): string => {
+    const m = new RegExp(`^const ${name} = ([^;]*);$`, 'm').exec(sweepSrc());
+    if (m === null) throw new Error(`sweep.mjs declares no ${name}`);
+    return [...m[1]!.matchAll(/'([^']*)'/g)].map((x) => x[1]).join('');
+  };
+
+  it('(a) no export keyset spells the OR form: both time-ordered keysets seek by the row value (ts_ms, entry_id) > (?, ?)', () => {
+    // `(ts_ms > ? OR (ts_ms = ? AND entry_id > ?))` reads every row from the start of the index on each page: measured 11 ms
+    // a 256-row page at 10% of a million rows and 125 ms at 99.9%, against 0.2-0.5 ms at every position for the row value.
+    // The two spell one order, so no behaviour pins it; the source does.
+    const OR_KEYSET = /\bts_ms\s*>\s*\?\s*OR\s*\(\s*ts_ms\s*=\s*\?/;
+    const code = sweepSrc().replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');   // a comment may name the form it replaced
+    expect(OR_KEYSET.exec(code)?.[0] ?? null, 'the OR keyset never seeks').toBeNull();
+    const sqls = [...sweepSrc().matchAll(/^const (EXPORT_[A-Z_]+_SQL) = /gm)].map((m) => m[1]!);
+    expect(sqls, 'CONTROL: the scan reaches the keyset constants it names').toEqual(expect.arrayContaining(['EXPORT_DUE_ENTRIES_SQL', 'EXPORT_TRANSCRIPT_ENTRIES_SQL']));
+    for (const name of sqls) expect(OR_KEYSET.exec(sqlOf(name))?.[0] ?? null, `${name} spells no OR keyset`).toBeNull();
+    expect(sqlOf('EXPORT_DUE_ENTRIES_SQL'), 'the older rows by time').toContain('(ts_ms, entry_id) > (?, ?)');
+    expect(sqlOf('EXPORT_TRANSCRIPT_ENTRIES_SQL'), 'one transcript\'s rows').toContain('(ts_ms, entry_id) > (?, ?)');
+  });
+
+  it('(b) the time-ordered phases read entries_unexported through a unary-plus filter on the due transcripts, with no sort; the per-transcript phase reads entries_ts', () => {
+    // Without the unary plus SQLite takes the IN list for a seek on entries_ts (transcript_pk, ts_ms) and sorts the rows
+    // in a temp b-tree, measured on a table of 20 rows and on 50,000. The plan is the pin: the plus is not decoration.
+    const db = new MemDb(':memory:');
+    try {
+      for (const m of MIGRATIONS) db.exec(m);
+      db.exec('PRAGMA foreign_keys = OFF');
+      db.exec("INSERT INTO blobs (blob_id, sha256, codec, z, raw_len) VALUES (1, x'01', 'raw', x'00', 1)");
+      db.exec("INSERT INTO transcripts (transcript_pk, cc_session_uuid, harness, agent_id) VALUES (1, 'u1', 'claude-code', ''), (2, 'u2', 'claude-code', '')");
+      const ins = db.prepare("INSERT INTO entries (uuid, transcript_pk, type, provenance, prov_version, struct_rank_ns, struct_file_id, blob_id, ts_ms) "
+        + "VALUES (?, ?, 'user', 'x', 1, 0, 1, 1, ?)");
+      for (let i = 0; i < 300; i += 1) ins.run(`e${i}`, i < 298 ? 1 : 2, 1_700_000_000_000 + i * 1000);
+      const plan = (name: string): string => {
+        const sql = sqlOf(name);
+        const args = Array.from({ length: (sql.match(/\?/g) ?? []).length }, () => 0);
+        return (db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...args) as Array<{ detail: string }>).map((r) => r.detail).join(' | ');
+      };
+      for (const name of ['EXPORT_DUE_ENTRIES_SQL', 'EXPORT_NULL_TS_ENTRIES_SQL']) {
+        expect(plan(name), name).toContain('SEARCH entries USING INDEX entries_unexported');
+      }
+      expect(plan('EXPORT_DUE_ENTRIES_SQL'), 'the index orders the page: no sort').not.toContain('TEMP B-TREE');
+      for (const name of ['EXPORT_DUE_ENTRIES_SQL', 'EXPORT_NULL_TS_ENTRIES_SQL']) {
+        expect(sqlOf(name), `${name} filters to the due transcripts`).toContain('AND +transcript_pk IN (SELECT value FROM json_each(?))');
+      }
+      expect(plan('EXPORT_TRANSCRIPT_ENTRIES_SQL')).toContain('SEARCH entries USING INDEX entries_ts');
+      expect(plan('EXPORT_TRANSCRIPT_ENTRIES_SQL')).not.toContain('TEMP B-TREE');
+    } finally {
+      db.close();
+    }
+  });
+
+  // The refuter's prototype: a pass whose clock moves 1 ms a read, a 100 ms budget and one row a page, over 300 rows of a
+  // 180-day home's fresh file ahead of 2 rows of a 30-day home's file older than its horizon. A pass that offers every
+  // row spends the whole budget on the 300 before it reaches the 2; one that offers only due transcripts' rows takes them.
+  for (const kind of ['timed', 'untimed'] as const) {
+    it(`(b) ${kind} rows of a transcript not yet due never stand ahead of the due rows: 300 of them cost the budget nothing, and the 2 due rows are taken`, async () => {
+      const U2 = '7d2e3f4a-5b6c-4d7e-8f90-a1b2c3d4e5f6';
+      const N = 300;
+      const strip = (r: Record<string, unknown>): Record<string, unknown> => {
+        if (kind === 'timed') return r;
+        const { timestamp: _t, ...rest } = r;   // a row with no timestamp has no ts_ms: the first run of the selection
+        return rest;
+      };
+      const early = Array.from({ length: N }, (_, i) => strip(row(i + 1, `a prompt not yet due ${i}`, 20 * DAY + (N - i) * MIN)));
+      const { box, ids } = ingestedBox(`ccrc-history-export-starve-${kind}-`, early, {
+        plant: (b) => {
+          plantSession(b, 'claude-b-demo', { uuid: U2, generation: '0189abcd-1234-4678-9abc-0123456789ac', project: 'demo', workdir: WORK });
+          const f = plantTranscript(b, 'claude-b', SLUG, U2, [1, 2].map((k) => strip(
+            userRow({ uuid: rid(1000 + k), ts: new Date(Date.now() - DAY + k * MIN).toISOString(), text: `a due prompt ${k}`, sessionId: U2, cwd: WORK }))));
+          const old = new Date(Date.now() - 2 * DAY);
+          fs.utimesSync(f, old, old);   // last written two days ago: past a 30-day home's horizon (0)
+        },
+      });
+      expect(q(box, 'SELECT count(*) AS n FROM entries')[0]!['n'], 'the fixture must hold the 300 and the 2').toBe(N + 2);
+      expect(q(box, 'SELECT count(*) AS n FROM entries WHERE ts_ms IS NULL')[0]!['n']).toBe(kind === 'timed' ? 0 : N + 2);
+      const lastEarly = Number(q(box, 'SELECT max(entry_id) AS n FROM entries WHERE uuid < ?', rid(1000))[0]!['n']);
+      const firstDue = Number(q(box, 'SELECT min(entry_id) AS n FROM entries WHERE uuid > ?', rid(1000))[0]!['n']);
+      expect(firstDue, 'the due rows come after the others in entry_id order, as the untimed run pages').toBeGreaterThan(lastEarly);
+      const NOW = Date.now();
+      let t = NOW;
+      const clock = (): number => t++;   // 1 ms a read
+      const r = await onStore(box, (db) => {
+        setMeta(db, `retention:${box.accountHome['claude-a']!}`, '180');   // claude-a's copy waits 150 days; claude-b keeps the 30-day default
+        return SW.exportPass(db, exportCtx(box, ids, clock, { limits: { maxMs: 100 }, deps: { exportPageRows: 1 } }));
+      });
+      expect(r, 'the 2 due rows, not a pass held on the 300 that cannot be taken').toMatchObject({ state: 'written', segment: `1.${ids.writer}.db`, rows: 2, complete: true });
+      const marked = Object.entries(marks(box)).filter(([, v]) => v !== null).map(([k]) => k).sort();
+      expect(marked).toEqual([rid(1001), rid(1002)]);
+    }, 300_000);
+  }
+
+  /** A box whose only transcript is not due (a 180-day home, a fresh file) and holds an unlinked sidecar: phase 4 offers its
+   *  blob, which no pass takes before the file's date. */
+  const heldBox = (prefix: string) => ingestedBox(prefix, [row(1, 'a prompt', DAY)], {
+    passes: 3,
+    plant: (b) => {
+      const dir = path.join(b.accountHome['claude-a']!, 'projects', SLUG, U, 'tool-results');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'b9x0-orphan.txt'), 'output no tool_result names');
+    },
+  });
+  const roomy = async (): Promise<{ bsize: number; bavail: number; blocks: number }> => ({ bsize: 1, bavail: 4 * TIB, blocks: 8 * TIB });
+
+  it('(c) a pass the run budget ends before it takes a row records its attempt and says so once, so the next step waits its interval, not the next tick; a pass that runs to its end then clears the record', async () => {
+    const { box, ids } = heldBox('ccrc-history-export-held-');
+    expect(q(box, 'SELECT name, entry_id FROM sidecars'), 'the fixture must leave one unlinked sidecar').toEqual([{ name: 'b9x0-orphan.txt', entry_id: null }]);
+    const T = Date.now() + 2 * HOUR;   // past the store's first hour: the cadence would run a pass here
+    // The run's clock reads, in order: the budget's start, the pass's own, the check before the selection, and the check
+    // after the first page of candidates. From the fourth read on the 90 s budget is spent.
+    let reads = 0;
+    const clock = (): number => { reads += 1; return reads <= 3 ? T : T + 200_000; };
+    const err = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    let r: PassResult;
+    let lines: string[];
+    try {
+      r = await onStore(box, (db) => {
+        setMeta(db, `retention:${box.accountHome['claude-a']!}`, '180');
+        return SW.exportPass(db, exportCtx(box, ids, clock));
+      });
+      lines = err.mock.calls.map((c) => String(c[0])).filter((l) => l.startsWith('history-sweep:'));
+    } finally {
+      err.mockRestore();
+    }
+    expect(r, 'held: the budget ended the selection before a row was taken').toEqual({ state: 'held', segment: null, rows: 0, blobs: 0, bytes: 0, complete: false });
+    expect(reads, 'the fixture ran out of budget in the selection, not before it').toBeGreaterThanOrEqual(4);
+    expect(lines, 'one line, naming the held export pass and the budget').toHaveLength(1);
+    expect(lines[0]).toMatch(/^history-sweep: the export pass was held by the run's budget \(90000 ms\) before it took a due row/);
+    expect(metaOf(box, 'export_attempt_ms'), 'the attempt is recorded').toBe(String(T));
+    expect(metaOf(box, HEALTH_META.exportPassMs), 'and a held pass is still not a pass').toBeNull();
+    expect(segmentsOf(box)).toEqual([]);
+    expect(await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, () => T + 10 * MIN, { deps: { statfs: roomy } }))),
+      'ten minutes on, the cadence waits from the attempt, not from the first tick two hours back').toBeNull();
+    // CONTROL: the same box with a budget that lasts is complete, nothing due; that pass clears the record (D-5394 (e)).
+    const next = await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, () => T + 61 * MIN, { deps: { statfs: roomy } })));
+    expect(next, 'an hour after the attempt the step runs, and with room in its budget the sidecar is no row to take')
+      .toEqual({ state: 'nothing-due', segment: null, rows: 0, blobs: 0, bytes: 0, complete: true });
+    expect(metaOf(box, HEALTH_META.exportPassMs)).toBe(String(T + 61 * MIN));
+    expect(metaOf(box, 'export_attempt_ms'), 'a pass that ran to its end clears the attempt clock').toBeNull();
+  }, 300_000);
+
+  it('(e) a pass that ran to its end clears the attempt clock, so one dated in the future (the wall clock stepped back after a failed attempt) no longer keeps the cadence answering run', async () => {
+    const { box, ids } = ingestedBox('ccrc-history-export-attempt-', [row(1, 'one', 2 * DAY), row(2, 'two', DAY)]);
+    const T = Date.now() + 2 * HOUR;
+    const seed = (at: number) => onStore(box, (db) => { setMeta(db, 'export_attempt_ms', String(at)); });
+    await seed(T + 5 * HOUR);
+    const w = await onStore(box, (db) => SW.exportPass(db, exportCtx(box, ids, () => T)));
+    expect(w).toMatchObject({ state: 'written', rows: 2, complete: true });
+    expect(metaOf(box, 'export_attempt_ms'), 'a written pass clears it').toBeNull();
+    expect(await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, () => T + 10 * MIN, { deps: { statfs: roomy } }))),
+      'and the cadence waits from the pass: with the future attempt kept it would read a clock gone backwards and run').toBeNull();
+    await seed(T + 5 * HOUR);
+    const n = await onStore(box, (db) => SW.exportPass(db, exportCtx(box, ids, () => T + HOUR)));
+    expect(n).toEqual({ state: 'nothing-due', segment: null, rows: 0, blobs: 0, bytes: 0, complete: true });
+    expect(metaOf(box, 'export_attempt_ms'), 'a pass that finds nothing due is a completed pass too').toBeNull();
+    expect(metaOf(box, HEALTH_META.exportPassMs)).toBe(String(T + HOUR));
+  }, 300_000);
 });

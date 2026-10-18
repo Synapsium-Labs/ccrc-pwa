@@ -8175,15 +8175,18 @@ export function nextSegmentSeq({ onDisk, recorded }) {
 }
 
 /** Whether this tick runs the export pass (§9.15 "The pass": at most once an hour, chosen). The clock runs from the
- *  last pass or, before the first, from the store's first tick (D-4755 (history-export-cadence-from-first-tick)): a new
- *  store writes no segment in its first hour, and the pass and doctor's last-pass rule read one clock. A clock that
+ *  later of the last pass and the attempt clock (below) or, before either, from the store's first tick (D-4755
+ *  (history-export-cadence-from-first-tick)): a new store writes no segment in its first hour. This is the cadence's
+ *  clock alone: doctor's last-pass rule reads the last completed pass only (`lastPassMs`, which an attempt never moves),
+ *  and never the attempt clock or the first tick, so the two no longer read one clock. A clock that
  *  went backwards (a last pass or first tick after now) runs the pass rather than wait for the clock to catch up:
  *  an early segment costs nothing, a late one widens the window in which the store is the only copy
  *  (D-4756 (history-export-cadence-clock-backwards)). No clock at all waits: the tick that asks has recorded its own
  *  ticks row, so the next tick has one. `intervalMs` is exportPassIntervalMs' answer: an hour, or longer after
  *  passes that published and could not mark (D-4757 (history-export-mark-failure-backs-off)).
- *  `lastAttemptMs` is the clock of a pass that failed with a caught error: it counts as a pass for the wait, so such a pass
- *  retries hourly, never every tick, while `lastPassMs` (doctor's last-pass clock) does not move. Which of the two clocks governs
+ *  `lastAttemptMs` is the clock of a pass that failed with a caught error, or that the run's budget held before it took a
+ *  row (D-5394 (history-export-select-due-transcripts)): it counts as a pass for the wait, so such a pass
+ *  retries hourly, never every tick, while `lastPassMs` (doctor's last-pass clock) does not move. A completed pass deletes it. Which of the two clocks governs
  *  is this function's decision (RD2): the later one, a null being absent, so an attempt after the last pass keeps the wait
  *  running from the attempt, and a pass after the last attempt from the pass. Omitted, it is null, and the answers are exactly
  *  those of the pass clock alone. */
@@ -8326,10 +8329,12 @@ export function missingSegmentNames({ named, present }) {
 
 // ===========================================================================
 // What one export segment carries (spec §9.15 "What is due", "Write"; W1-B4
-// Task 2). Pure: the sweep pages its candidate rows, oldest first, with each
-// row's time, its holding files and its blobs' export and prune state, and
-// writes what this answers. Due-ness is the reducer's, B2's per-copy one by
-// default (ruled Q15, rev 3.4), the census's own: one clock (RD1).
+// Task 2). Pure: the sweep pages its candidate rows, in the runs its exportSelect
+// describes (the rows of the due transcripts, each run in time order; not one
+// order across them), with each row's time, its holding files and its blobs'
+// export and prune state, and writes what this answers. Due-ness is the
+// reducer's, B2's per-copy one by default (ruled Q15, rev 3.4), the census's
+// own: one clock (RD1).
 // D-4758 (history-export-row-carries-blob) B2's D-4735 (history-export-due-per-copy)
 // D-4759 (history-export-pruned-row-stub) D-4760 (history-export-segment-bound-estimated)
 // ===========================================================================
@@ -8366,9 +8371,14 @@ function dueSinceMs(candidate, homeRetentionDays, reducer) {
  *  - a stub of every pruned blob it references that no segment carried before (`stubs`): its sha, codec and size
  *    with no bytes, so a rebuild keeps the row's structure (entries.blob_id is NOT NULL). A stub is never exported
  *    text and its size never counts toward the bound; its row's metadata does (D-4759 (history-export-pruned-row-stub)).
- *  Rows are taken in input order, which the sweep makes oldest first, until the next due row's counted bytes (its new
- *  blob bytes plus EXPORT_ROW_META_BYTES) would pass `boundBytes`; from there no later row is taken, so a segment is
- *  a prefix of the backlog. The first due row of the PASS is taken whatever its size, so every pass moves the export
+ *  Rows are taken in input order, until the next due row's counted bytes (its new blob bytes plus EXPORT_ROW_META_BYTES)
+ *  would pass `boundBytes`; from there no later row is taken. The sweep's input order is its candidates' runs, in this
+ *  order: the rows with no time by entry id, the young rows (at or past the cutoff) of each due transcript by time, the
+ *  older rows by time, then the unlinked sidecars by blob id; the first three offer only the rows of the transcripts
+ *  dueTranscriptKeys names (D-5394 (history-export-select-due-transcripts)). It is one time order within a run and not
+ *  across them, so a segment holds a prefix of the due rows in that offered order, not of the backlog by age: a due row
+ *  left behind may be older than one taken (`oldestLeftDueSinceMs` is measured over the rows left, never assumed from
+ *  the order). The first due row of the PASS is taken whatever its size, so every pass moves the export
  *  forward: `takenBefore` says an earlier call of the same pass (an earlier page) already took one, and then this
  *  call's first row must fit too. The due rows left behind are counted, with the earliest time any of them fell
  *  due. planExport's per-BLOB rule stays the census's; both ask the same reducer with the same default, so the pass
