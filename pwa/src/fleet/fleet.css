@@ -3083,9 +3083,13 @@ button.proj-card-pool::before {
  *  and inside a stamped swatch the token resolves to the palette      *
  *  being previewed. That is why there is no list of hexes to drift.   *
  * ------------------------------------------------------------------ */
+/* The radio rides the NAME's line (D-5458): on a phone the note wraps to two
+   or three lines, and a radio centred on the whole row floated beside the
+   note, away from the word it chooses. `baseline` puts the radio on the
+   name's first line at every width, with or without a swatch. */
 .settings-theme {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: var(--sp-3);
   min-height: var(--tap-min);
   padding: var(--sp-2) var(--sp-2);

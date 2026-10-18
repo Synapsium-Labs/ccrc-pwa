@@ -442,13 +442,16 @@ session's workspace belongs to — at the open, and again at the dispatch resume
 the open ever let one through.
 
 **A crossing wave always spawns fresh, even into a project an earlier wave
-already reached.** The server admits your open when your OWN registry project is
-the run's project or the programme's home; a crossing (you sit in the home, the
-run is elsewhere) binds only a fresh spawn. Naming an EXISTING session of the
-target project from outside it is refused `project-mismatch` with `by:` your
-project and a `detail` that says so, so wave 3 into the same target as wave 2
-opens without `sessionId` too. A coordinator in neither the home nor the run's
-project is refused `project-mismatch` with `by:` its own project.
+already reached.** You may coordinate from ANY project: the server admits your
+open wherever your OWN registry project is — the run's project, the
+programme's home, or neither (the operator's ruling of 2026-10-18) — and
+stamps it on the run. A crossing (you sit outside the run's project) binds only
+a fresh spawn. Naming an EXISTING session of the target project from outside it
+is refused `project-mismatch` with `by:` your project and a `detail` that says
+so, so wave 3 into the same target as wave 2 opens without `sessionId` too.
+Where you sit never refuses an open; who you are still does (`claimedByUuid`,
+below), and so does a registry row of yours that records no project
+(`project-mismatch` with a `detail` and no `by` — stop and report).
 
 **Two more `POST /api/runs` refusals, both on `refused` (409).** `not-a-child`:
 the `sessionId` you named is an existing session with no child marker — one the

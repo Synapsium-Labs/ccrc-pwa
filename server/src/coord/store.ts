@@ -3997,15 +3997,6 @@ export class CoordStore {
    *  run already reads terminal inside its own transaction. `-1` when absent,
    *  an id AUTOINCREMENT never mints, so both are ONE query —
    *  `openRunsForSession`'s own idiom. */
-  /** D-5388: every NON-TERMINAL claimed run of `program`, id and project, by
-   *  id — the open bindings `reclaimProgram`'s UPDATE would hand to an heir,
-   *  read by the reclaim heir's project rung. */
-  programOpenClaimedRuns(program: string): { id: number; project: string }[] {
-    return this.db.prepare(
-      `SELECT id, project FROM runs WHERE program = ? AND claimedBy IS NOT NULL AND state NOT IN ${TERMINAL_RUN_STATES_SQL} ORDER BY id`,
-    ).all(program) as { id: number; project: string }[];
-  }
-
   programOpenRunCount(program: string, excludeRunId?: number): number {
     return (this.db.prepare(
       `SELECT count(*) AS c FROM runs WHERE program = ? AND state NOT IN ${TERMINAL_RUN_STATES_SQL} AND id != ?`,
