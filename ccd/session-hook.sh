@@ -3329,7 +3329,7 @@ msid="${CLAUDE_CODE_SESSION_ID:-$psid}"
 # A REGULAR FILE OR NOTHING, as the history spool's append: a symlink, directory or FIFO at either path is neither read nor
 # written (builtin tests; a FIFO read would block the hook), and a `joinedprev` that is not one stops the rotation.
 # BOUNDED, BY RENAME: past JOIN_ROTATE_AT lines the Start that notices opens the file on its own fd, takes `flock -n` on it,
-# confirms the path still names that inode (`-ef /dev/fd/N`) and still holds more than the cap, then `mv -f`s it whole to
+# confirms the path still names that inode (a second descriptor of the path, `-ef` the locked one, both read through `/dev/fd`) and still holds more than the cap, then `mv -f`s it whole to
 # `<id>.joinedprev` (dot-free too), replacing the last one. Nothing is rewritten, so NO APPEND IS LOST: a writer whose
 # descriptor opened the old inode writes into joinedprev, a later one creates a fresh `joined`, and a second rotator fails
 # `flock -n`, finds the path renamed or finds a short new file, and skips. Membership is the union: the last
@@ -3339,7 +3339,7 @@ msid="${CLAUDE_CODE_SESSION_ID:-$psid}"
 # The file is written only by this block, one id per line, and read back whole-line only (below).
 JOIN_ROTATE_AT=128 JOIN_READ_MAX=16384
 _hook_join_record() {   # $aid -> 0 appended; 1 refused (never fatal: the caller says `|| true`)
-  local jf="$REG/$id.joined" jp="$REG/$id.joinedprev" cur="" nl="" fd=""
+  local jf="$REG/$id.joined" jp="$REG/$id.joinedprev" cur="" nl="" fd="" fd2="" same=0
   [[ ! -L "$jf" && ( ! -e "$jf" || -f "$jf" ) ]] || return 1   # absence BEFORE regularity: a sibling's first `>>` between `-f` and `! -e` read as "exists, not regular" and lost this append (D-5434)
   if ! { printf '%s\n' "$aid" >> "$jf"; } 2>/dev/null; then
     # A FAILED WRITE STILL CREATED THE FILE (ENOSPC after O_CREAT leaves an empty `joined`), so it gets the same look at the row
@@ -3351,7 +3351,16 @@ _hook_join_record() {   # $aid -> 0 appended; 1 refused (never fatal: the caller
   nl="${cur//[!$'\n']/}"
   if (( ${#nl} > JOIN_ROTATE_AT )) && command -v flock >/dev/null 2>&1 \
      && [[ ! -L "$jp" && ( -f "$jp" || ! -e "$jp" ) ]] && { exec {fd}<"$jf"; } 2>/dev/null; then
-    if flock -n "$fd" 2>/dev/null && [[ ! -L "$jf" && "$jf" -ef "/dev/fd/$fd" ]]; then   # `-ef` follows a symlink to the same inode, so the link test is its own conjunct
+    # TWO DESCRIPTORS ARE COMPARED, not the path and one of them: `-ef` follows a symlink to the same inode, so the link test is its
+    # own conjunct; and on macOS `stat` of `/dev/fd/N` reports the real inode but the fdesc mount's device, so `"$jf" -ef /dev/fd/N`
+    # is never true there and the rotation never ran (measured, D-5435). Both sides through `/dev/fd` carry the same device on either
+    # platform, so the inode decides. A failed open (the path was renamed away) skips; fd2 is closed on every path.
+    same=0
+    if flock -n "$fd" 2>/dev/null && [[ ! -L "$jf" && -f "$jf" ]] && { exec {fd2}<"$jf"; } 2>/dev/null; then
+      [[ "/dev/fd/$fd2" -ef "/dev/fd/$fd" ]] && same=1
+      { exec {fd2}<&-; } 2>/dev/null
+    fi
+    if (( same )); then
       cur=""; { IFS= read -r -N "$JOIN_READ_MAX" cur <&"$fd"; } 2>/dev/null
       nl="${cur//[!$'\n']/}"
       # BOTH PATHS ARE LOOKED AT AGAIN IMMEDIATELY BEFORE THE RENAME: GNU `mv -f` onto a DIRECTORY moves the file INTO it and

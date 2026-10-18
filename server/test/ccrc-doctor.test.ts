@@ -15006,7 +15006,8 @@ describe('ccrc doctor: delegation-hooks', () => {
       expect(r.code).toBe(1);
     });
 
-    it('asks the service manager ONCE for all its pending units, in one is-active call', () => {
+    // Linux only: launchd has no batched is-active, so the darwin arm asks `launchctl print` once per unit.
+    it.skipIf(process.platform === 'darwin')('asks the service manager ONCE for all its pending units, in one is-active call', () => {
       const home = dhBox('ccrc-doctor-dh-spool-batch-');
       for (let i = 1; i <= 4; i++) plantSession(home, `lane-a-s${i}`, { live: true, recorded: true });
       plantSpoolDir(home, 'lane-a-s2');   // standing: not pending, so not asked about
@@ -15017,7 +15018,8 @@ describe('ccrc doctor: delegation-hooks', () => {
       expect(verdicts(r)).toEqual([expect.stringMatching(/^WARN delegation-hooks: 3 running sessions have no delegation spool directory yet.*: lane-a-s1 lane-a-s3 lane-a-s4$/)]);
     });
 
-    it('a short answer from the manager (fewer words than units) is never read as "not running"', () => {
+    // Linux only: the word count is the batched is-active reply, which launchd never gives (one `launchctl print` per unit).
+    it.skipIf(process.platform === 'darwin')('a short answer from the manager (fewer words than units) is never read as "not running"', () => {
       const home = dhBox('ccrc-doctor-dh-spool-short-');
       plantSession(home, 'lane-a-s1', { live: false, recorded: true });
       plantSession(home, 'lane-a-s2', { live: false, recorded: true });
@@ -15133,11 +15135,15 @@ describe('ccrc doctor: delegation-hooks', () => {
     it('a session the manager could not be asked about is a WARN, never a pass and never a missing directory', () => {
       const home = dhBox('ccrc-doctor-dh-unasked-');
       plantSession(home, 'lane-a-demo', { live: false, recorded: true });
-      stub(home, 'systemctl', 'exit 0');   // prints no word: the question was not answered
+      // The question goes unanswered per platform: systemctl printing no word, or launchctl failing for a reason other than 113 (an EMPTY fixture file).
+      if (process.platform === 'darwin') writeFileSync(join(home, 'fixture-unit-claude-session@lane-a-demo.service'), '');
+      else stub(home, 'systemctl', 'exit 0');   // prints no word: the question was not answered
       const r = runDh(home);
       expect(verdicts(r)).toEqual([
         'WARN delegation-hooks: the service manager gave no answer for 1 session, so whether it owes a delegation spool directory was not measured: lane-a-demo']);
-      expect(remedyOf(r, /^WARN /)).toMatch(/^ {2}remedy: ask the manager by hand \(systemctl --user status claude-session@lane-a-demo\.service\)/);
+      expect(remedyOf(r, /^WARN /)).toMatch(process.platform === 'darwin'
+        ? /^ {2}remedy: ask the manager by hand \(launchctl print gui\/\d+\/app\.ccrc\.session\.lane-a-demo\)/
+        : /^ {2}remedy: ask the manager by hand \(systemctl --user status claude-session@lane-a-demo\.service\)/);
       expect(r.code).toBe(2);
     });
   });
