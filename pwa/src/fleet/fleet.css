@@ -3120,6 +3120,34 @@ button.proj-card-pool::before {
   color: var(--status-dead-text);
 }
 
+/* — What's new (D-5549): the update banner's sheet (WhatsNewSheet.tsx) —
+   LAYOUT ONLY, NO COLOUR. The notes inside wear `.settings-release-notes`, the
+   self-grounded block the Settings rows already use, so every pair is one the
+   contrast gate already measures; the tag and date lines take the sheet's own
+   ink. In the sheet the notes read at the prose size rather than the Settings
+   row's compact one.
+   ≥900 the panel is a centred dialog (the skins rules' desktop arm for a sheet,
+   which the shared Sheet does not have yet): this rule is unlayered, so it
+   re-places the primitive's layered bottom-sheet utilities — all four insets
+   to 0, auto margins and a content height centre it, the corners all round. */
+.whats-new-sheet .settings-release-notes { font-size: var(--fs-sm); }
+@media (min-width: 900px) {
+  .whats-new-panel {
+    inset: 0;
+    margin: auto;
+    width: min(40rem, calc(100vw - 2 * var(--sp-8)));
+    height: fit-content;
+    max-height: calc(100dvh - 2 * var(--sp-8));
+    border-radius: var(--r-xl);
+  }
+  /* vaul draws an `::after` under a bottom drawer (`top: 100%; height: 200%`,
+     the panel's own ground) to cover an overscroll pull. Under a centred panel
+     it is a strip of sheet below the dialog. vaul injects that rule unlayered at
+     runtime, after this sheet, at higher specificity, so only importance removes
+     it — the handle-ground precedent in `sheet.tsx`. */
+  .whats-new-panel::after { content: none !important; }
+}
+
 /* HaltBanner (centralised-update programme wave 14, R15(a)): the home screen's halt, with each halting node's Ack
    in place. Self-grounded on the attention pair the fleet-host banner's warn arms and .substrate-banner already use
    (--status-attention-text on --status-attention-tint, both solid, floored at 4.5 by design/contrast-check.mjs), so

@@ -159,6 +159,7 @@ const NOT_ROLE_BEARING: Readonly<Record<string, string>> = {
   'meter.tsx': "its height is the meter's own token, --meter-h, which skins.css already varies",
   'skeleton.tsx': 'a placeholder sized by its caller',
   'status-dot.tsx': 'a lamp: part of the identity core, fixed across skins',
+  'text-link.tsx': 'an inline link inside a sentence: it inherits the type and colour of the text around it, and has no tap floor (the WCAG 2.5.8 in-text exemption)',
   'toast.tsx': 'a transient notice in sentence type over the page, not a row or a control of a sheet',
   'well.tsx': 'mono code in a dark well, sized by its content (the identity core)',
   'wordmark.tsx': 'the ❯ ccrc wordmark: the identity core, fixed across skins',

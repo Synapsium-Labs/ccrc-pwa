@@ -41,6 +41,8 @@ export { CoverScreen, COVER_SCREEN, type CoverScreenProps } from './primitives/c
 export { BareRow, BARE_ROW, type BareRowProps } from './primitives/bare-row';
 export { CountBadge, COUNT_BADGE, type CountBadgeProps } from './primitives/count-badge';
 export { Keycap, KEYCAP, type KeycapProps } from './primitives/keycap';
+// A link inside a line of text, opening another site (D-5550).
+export { TextLink, TEXT_LINK, type TextLinkProps } from './primitives/text-link';
 // The `❯ ccrc` mark, the identity core's first item (D-5094, D-5470).
 export { Wordmark, WORDMARK, type WordmarkProps } from './primitives/wordmark';
 // The ⌘K palette (D-5103): the overlay and its key hint. The commands are the
