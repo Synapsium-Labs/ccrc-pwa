@@ -1871,6 +1871,13 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       checks, 36 passed, 7 warned, 0 failed. v0.0.263 and v0.0.264 (#585, docs) followed. STATUS: fleet and server
       v0.0.262, newest v0.0.264, intent dev/auto=stable, backups fleet 117M/server 833M, disk free fleet 213G/work
       volume 93G/server 32G, no anomalies.
+    - **2026-10-18 08:55 UTC: both boxes moved to v0.0.264 by the operator's console tap** (`from: pwa`, a
+      prerelease; `stable` unchanged). Fleet first, 08:00:44 to 08:02:28, then the server, 08:03:25 to 08:03:53; both
+      reports `done`. The fleet sweep named the same 4 pre-failed supervisors with their fix, and the rest run the new
+      ccd. Doctor: fleet 52 checks, 36 passed, 7 warned, 0 failed; server 27 passed, 0 warned. The watchdog has run
+      clean since. v0.0.265 to v0.0.267 followed, unapplied. STATUS: fleet and server v0.0.264, newest v0.0.267,
+      intent dev/auto=stable, backups fleet 133M/server 857M, disk free fleet 206G/work volume 93G/server 32G, no
+      anomalies.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
