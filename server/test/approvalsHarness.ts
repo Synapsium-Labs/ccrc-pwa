@@ -75,6 +75,8 @@ export interface Approvals {
   request(body: Record<string, unknown>): Promise<LightMyRequestResponse>;
   rule(id: number, from: string, verdict: 'allow' | 'deny', extra?: Record<string, unknown>): Promise<LightMyRequestResponse>;
   release(id: number, from: string): Promise<LightMyRequestResponse>;
+  /** A server restart: a fresh server over the same store, registry and key; the old one is closed. */
+  restart(): Promise<void>;
   ruling(id: number, nonce: string): Promise<LightMyRequestResponse>;
   close(): Promise<void>;
 }
@@ -119,7 +121,7 @@ export async function approvalsFixture(over: { role?: 'server' | 'both' } = {}):
     push: { notify: async (p: PushPayload) => { sent.push(p); } } as never,
   };
   const watcher = new FleetWatcher(deps, new Bus(), 10_000);
-  const app = await buildServer(deps, new Bus(), watcher);
+  let app = await buildServer(deps, new Bus(), watcher);
   const put = (id: string, field: string, v: string): void => writeFileSync(path.join(reg, `${id}.${field}`), v);
   const f: Approvals = {
     home, coord, app, watcher, log, sent, panes, gone, unmeasured,
@@ -153,6 +155,7 @@ export async function approvalsFixture(over: { role?: 'server' | 'both' } = {}):
       if (o.coordProject === null) coord.db.prepare('UPDATE runs SET coordProject = NULL WHERE id = ?').run(r.id);
       return r.id as number;
     },
+    restart: async () => { await app.close(); app = await buildServer(deps, new Bus(), watcher); f.app = app; },
     request: (body) => app.inject({ method: 'POST', url: '/api/approvals', headers: TOK, payload: body }),
     rule: (id, from, verdict, extra = {}) => app.inject({
       method: 'POST', url: `/api/approvals/${id}/rule`, headers: TOK,
@@ -179,7 +182,7 @@ export async function standardFixture(over: { role?: 'server' | 'both' } = {}): 
   f.seed(FAR_C, 'project-c');
   const runId = f.run(PARENT, CHILD);
   f.child(CHILD, runId);
-  return { ...f, runId };
+  return Object.assign(f, { runId });
 }
 
 export const approvalCount = (coord: CoordStore): number =>

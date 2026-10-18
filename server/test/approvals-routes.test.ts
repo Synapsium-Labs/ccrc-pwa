@@ -153,6 +153,10 @@ describe('POST /api/approvals — the request (spec §6.3 server steps 1 and 2)'
     expect(res.json()).toMatchObject({ error: 'approval-released', releaseReason: 'parent-not-live' });
     expect(rowOf(f, id).state).toBe('released');
     expect(mailsTo(f, PARENT)).toEqual([]);
+    // The row was the operator's from its first tick: the claimant back alive still may not rule it.
+    f.gone.delete(PARENT);
+    expect((await f.rule(id, PARENT, 'deny')).json()).toMatchObject({ error: 'approval-released', releaseReason: 'parent-not-live' });
+    expect(rowOf(f, id).state).toBe('released');
   });
 
   it('a truncated request is minted released truncated', async () => {
@@ -217,6 +221,15 @@ describe('POST /api/approvals/:id/rule — the claimant rules, and the server si
     expect(rowOf(f, id).class).toBe('escalate');
     expect((await f.rule(id, PARENT, 'allow')).json()).toMatchObject({ error: 'guard-escalate' });
     expect((await f.rule(id, PARENT, 'deny')).json()).toEqual({ ok: true, state: 'denied' });
+  });
+
+  it('D-5491: a server restarted mid-window holds no input to run the guard again: an allow is guard-escalate, a deny lands', async () => {
+    f = await standardFixture();
+    const { id } = await ask(f);
+    const second = (await ask(f, hookInput({ command: 'rm -rf dist' }))).id;
+    await f.restart();
+    expect((await f.rule(id, PARENT, 'allow')).json()).toMatchObject({ error: 'guard-escalate' });
+    expect((await f.rule(second, PARENT, 'deny')).json()).toEqual({ ok: true, state: 'denied' });
   });
 
   it('a ruling after the operator answered the dialog is already-ruled', async () => {
@@ -291,6 +304,16 @@ describe('the claimant rule (D-5530, D-5531): held for the run\'s attributed cla
     expect(rowOf(f, id).parentId).toBe('operator');
     expect(mailsTo(f, PARENT)).toEqual([]);
     expect(mailsTo(f, FAR)).toEqual([]);
+  });
+
+  it('a mark naming an unclaimed run, under a newer run that is claimed, mints released run-unclaimed', async () => {
+    f = await standardFixture();
+    const unclaimed = f.run(null, CHILD2);
+    f.run(PARENT, CHILD2);
+    f.child(CHILD2, unclaimed);
+    const { res, id } = await ask(f, ORDINARY, CHILD2);
+    expect(res.json()).toMatchObject({ error: 'approval-released', releaseReason: 'run-unclaimed' });
+    expect(rowOf(f, id).parentId).toBe('operator');
   });
 
   it('a run with no claimant: run-unclaimed; journaled unattributed, or unstamped: run-unattributed; an unmeasurable parent: parent-unmeasured — each released, no mail', async () => {
