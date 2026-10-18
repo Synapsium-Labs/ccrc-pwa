@@ -3986,6 +3986,11 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     closed `done`. Ruled (mail 6087): the wording and a re-measure of T2-1, T2-2a to T2-2d and T2-5 (their file
     changed in fix round 1) ride part 2, which needs no review if the merge brings only `main`, the census stays
     green with no list change, and the rest is prose. Four pre-existing containment items go to R35(f).
+  - **03:05 UTC: #410's landing review has room to dispatch.** Path identity's review run 575 (of run 433, #410)
+    was refused `cap-daily` at 48 of 48 and is still planned; its coordinator does not retry on its own. The
+    rolling window measured 45 of 48, so path identity was told (mail 6155) that 575 can dispatch, that #441
+    lands only after #410, and that #410 at `4a75bff66` conflicts with `main` `9ce0d5310` on `ccd/ccd`'s stamp
+    line alone. Their dispatch and their merge stay theirs; they mail when #410 lands.
 
 ## Carried constraints
 
