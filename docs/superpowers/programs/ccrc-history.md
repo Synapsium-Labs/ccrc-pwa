@@ -190,6 +190,9 @@ than depended on (spec §11–§12). A replay eval (W2) decides whether W3 and W
     separate quantity, the spool's `pathBytes`, so there is no single-definition finding against main.
   A case for a manual (coordinator) session, which gets the role subject and the line together, was added. Before
   the merge, the coordinator re-ran the suites the merge with main `65f4b5ab4` could affect, and all were green.
+- **Operator ruling 2026-10-18: segment replay keeps the prune.** A blob the store holds as a prune tombstone stays
+  body-less when a segment carries its bytes: replay inserts blobs insert-or-ignore, as B4's plan and the spec read,
+  so a recovery never undoes an operator's prune. Ingest's revival on recapture (D-4589) is unchanged.
 - **Owed from B3** (wave 5h, errata only, from review 586):
   1. `single-definition.test.ts`'s comment over the set-aside token says "512-character path bound". It is 512
      bytes (`pathBytes`, pinned by `delegation-spool.test.ts`).
@@ -197,9 +200,6 @@ than depended on (spec §11–§12). A replay eval (W2) decides whether W3 and W
      `session-hook.test.ts`'s FIFO rows' comment) becomes "only a FIFO (or a device node, which only root can
      plant) changes the verdict". Ruled 2026-10-18.
 - **Later, for the operator.**
-  - Whether segment replay should revive a blob the store holds as a prune tombstone. B4's plan replays blobs
-    insert-or-ignore, as the spec reads, so a pruned blob stays body-less. B2's ingest revives one on recapture
-    (D-4589). Unruled; the default keeps an operator's prune.
   - A way to forget a mislearned secret pair. None exists: pairs are permanent by design (D-4587). My
     recommendation is to keep it that way.
   - Feeding retired box-token digests into redaction. It matters only for a store bound after a value retired;
