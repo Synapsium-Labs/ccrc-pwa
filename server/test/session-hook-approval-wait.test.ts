@@ -319,6 +319,12 @@ describe('the hook ends itself when the pane answered (D-5439)', () => {
     put(`stub/append-${slot}/line`, line);
     put(`stub/append-${slot}/to`, file);
   };
+  /** The wait really ran: the armed row was appended (on its `on`-th poll) before the hook exited, so an early exit is
+   *  the tie's, never a hook that did not wait at all. */
+  const landed = (r: Run, slot = 'a'): void => {
+    expect(fs.existsSync(path.join(stub, `append-${slot}`, 'done')), `the armed row ${slot} landed before the exit`).toBe(true);
+    expect(r.rulings, 'it polled up to the armed row').toBeGreaterThanOrEqual(Number(fs.readFileSync(path.join(stub, `append-${slot}`, 'on'), 'utf8')));
+  };
   it('main thread: the transcript gains the tool_result for this request: exit within one poll, nothing printed, no more polls', () => {
     put('stub/ruling.out', '{"state":"held"}');
     put('stub/request.out', '{"id":41,"waitS":3}');
@@ -328,6 +334,21 @@ describe('the hook ends itself when the pane answered (D-5439)', () => {
     expect(r.stdout).toBe('');
     expect(r.rulings, 'it stopped right after the row landed').toBeLessThanOrEqual(3);
     expect(r.ms).toBeLessThan(1500);
+    landed(r);
+  });
+  it('an earlier identical command already answered (a repeated `npm test`): the open one is tied, and its answer ends the wait', () => {
+    // The record's tie takes the last matching tool_use "which has no tool_result yet": the earlier, resolved twin is
+    // not a second candidate. A hook that counted it would call the tie ambiguous and run to its window.
+    put('stub/ruling.out', '{"state":"held"}');
+    put('stub/request.out', '{"id":41,"waitS":3}');
+    const earlier = 'toolu_000000000000000000000003';
+    fs.appendFileSync(transcript, assistantRow(earlier, MAIN.tool_input) + resultRow(earlier) + assistantRow(TOOLU, MAIN.tool_input));
+    arm(resultRow(TOOLU));
+    const r = fire(payloadFor(MAIN));
+    expect(r.stdout).toBe('');
+    expect(r.rulings, 'it stopped right after the row landed').toBeLessThanOrEqual(3);
+    expect(r.ms).toBeLessThan(1500);
+    landed(r);
   });
   it('a subagent: the watch reads <dir>/<session_id>/subagents/agent-<agent_id>.jsonl', () => {
     put('stub/ruling.out', '{"state":"held"}');
@@ -339,15 +360,22 @@ describe('the hook ends itself when the pane answered (D-5439)', () => {
     const r = fire(payloadFor(SUB));
     expect(r.stdout).toBe('');
     expect(r.ms).toBeLessThan(1500);
+    landed(r);
   });
   it('a row that lands after the hook started is still tied (re-scanned each tick)', () => {
     put('stub/ruling.out', '{"state":"held"}');
     put('stub/request.out', '{"id":41,"waitS":3}');
+    // A real transcript is never empty: earlier rows that match nothing are there when the hook starts, so its first
+    // look finds no match and must look again on every poll rather than give the tie up (Task 13's Linux record).
+    fs.appendFileSync(transcript, `${JSON.stringify({ type: 'user', promptId: 'p0', message: { role: 'user', content: 'start the task' } })}\n`
+      + assistantRow('toolu_000000000000000000000009', { command: 'ls' }) + resultRow('toolu_000000000000000000000009'));
     arm(assistantRow(TOOLU, MAIN.tool_input), transcript, 1, 'a');
     arm(resultRow(TOOLU), transcript, 3, 'b');
     const r = fire(payloadFor(MAIN));
     expect(r.stdout).toBe('');
     expect(r.ms).toBeLessThan(1500);
+    landed(r, 'a');
+    landed(r, 'b');
   });
   it('two concurrent requests with distinct commands: the other one\'s answer does not end this wait; its own does', () => {
     put('stub/ruling.out', '{"state":"held"}');
@@ -467,6 +495,16 @@ describe('the request carries the canonical array, and the digest is its sha256'
     expect(b.digest).toBe(sha(b.canonical));
     expect(b.nonce).toMatch(/^[0-9a-f]{32}$/);
     expect(JSON.parse(b.canonical)[3], 'the hook input\'s own cwd').toBe(MAIN['cwd']);
+  });
+  it('a canonical string over 64 KiB is sent truncated: no canonical field, the digest of the whole string, a nonce', () => {
+    const big = payloadFor(MAIN, { tool_input: { ...MAIN.tool_input, command: `echo ${'a'.repeat(70_000)}` } });
+    const r = fire(big);
+    expect(r.body).not.toBeNull();
+    const b = r.body as Record<string, unknown>;
+    expect(Object.keys(b).sort()).toEqual(['digest', 'nonce', 'sessionId', 'sessionUuid', 'truncated', 'v']);
+    expect(b['truncated']).toBe(true);
+    expect(b['digest']).toBe(sha(approvalDigestBytes(big)));
+    expect(b['nonce']).toMatch(/^[0-9a-f]{32}$/);
   });
   it('a change of cwd alone changes the digest', () => {
     const a = fire(payloadFor(MAIN)).body as { digest: string };
