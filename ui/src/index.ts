@@ -12,6 +12,9 @@
 export { Button, buttonVariants, type ButtonProps } from './primitives/button';
 export { StatusDot, dotVariants, type StatusDotProps, statusLabel } from './primitives/status-dot';
 export { LimitBar, limitBand, fillVariants, TRACK as LIMIT_TRACK, type LimitBand, type LimitBarProps } from './primitives/limit-bar';
+// The ONE usage meter (D-5098): LimitBar's rows, the accounts strip and screen,
+// and the pickers' gauges all draw through it.
+export { Meter, type MeterProps } from './primitives/meter';
 export { Skeleton, type SkeletonProps } from './primitives/skeleton';
 export { Sheet, type SheetProps } from './primitives/sheet';
 export { OptionRow, type OptionRowProps } from './primitives/option-row';

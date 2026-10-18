@@ -8,33 +8,40 @@
 // `crit` in one place and `warn` in the other at exactly 75); this is the same
 // class of defect one level up, closed the same way.
 //
-// Styling is fleet.css's `.acct-*` family, which the strip's responsive shell
-// rules (shell.css) also reach into — that is why this is not LimitBar: the
-// `.limit-*` primitive is a 3-column bar with no reset countdown, a different
-// component that happens to draw a bar too.
+// The ROW's layout is fleet.css's `.acct-*` family, which the strip's
+// responsive shell rules (shell.css) also reach into — that is why this is not
+// LimitBar, a 3-column bar with no reset countdown. The BAR is `Meter`, the one
+// meter every gauge draws through (D-5098): it owns its height, radius, track
+// and fill, so no sheet here sizes or paints it, and a skin's meter shape
+// reaches the strip and the Accounts screen. `acct-meter`, `acct-fill` and
+// `data-band` stay on the elements as hooks (fleet-screen.test.tsx counts
+// `.acct-fill`).
 import type { ReactNode } from 'react';
-import { limitBand } from '@ccrc/ui';
+import { Meter, limitBand } from '@ccrc/ui';
 import { formatReset } from './formatReset';
 import './fleet.css';
 
 /** Band for the meter, with the one state `limitBand` has no word for. */
-function band(pct: number | null): string {
+function band(pct: number | null): ReturnType<typeof limitBand> | 'none' {
   return pct === null ? 'none' : limitBand(pct);
 }
 
-export function AccountMeterRow({ label, pct, resetAt, nowSec, rolledOver }: {
+export function AccountMeterRow({ label, pct, resetAt, nowSec, rolledOver, off = false }: {
   label: string;
   pct: number | null;
   resetAt: number | null;
   nowSec: number;
   rolledOver: boolean;
+  /** The lane's readings stopped (disabled, or its sign-in expired): the fill
+   *  greys while `data-band` keeps the frozen classification. */
+  off?: boolean;
 }): ReactNode {
   return (
     <div className="acct-row">
       <span className="acct-win">{label}</span>
-      <span className="acct-meter" data-band={band(pct)}>
-        <span className="acct-fill" style={{ width: `${Math.min(100, Math.max(0, pct ?? 0))}%` }} />
-      </span>
+      {/* An unmeasured window draws no fill at all: "never measured" stays a
+          different picture from a measured 0%. */}
+      <Meter pct={pct} band={band(pct)} off={off} trackClassName="acct-meter" fillClassName="acct-fill" />
       {/* A three-way, never collapsed: "reset" (the window ended and nothing has
           measured the new one yet, so the zero is INFERRED from the reset
           timestamp) ≠ a measured "0%" (something ran, the account really is
