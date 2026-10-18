@@ -463,7 +463,7 @@ export function headerStatusWord(input: {
     case 'idle': return rel !== null ? `idle · ${rel} ago` : 'idle';
     // `statusLabel('cleanup')` is `merged, ready to clean up` — the card's `merged` and the reason it waits.
     case 'cleanup': return statusLabel('cleanup');
-    case 'archived': return STATE_WORD.archived;
+    case 'archived': return statusLabel('archived');
     case 'dead': return STATE_WORD.dead;
   }
 }

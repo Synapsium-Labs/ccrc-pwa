@@ -3291,6 +3291,9 @@ button.proj-card-pool::before {
    `.sess-body` already sits in a `minmax(0, 1fr)` track, so containing its
    inline size changes nothing about its layout. Layout only: no colour. */
 .sess-body { container: sess-body / inline-size; }
+/* The long name's two forms sit in one flex item that takes `.sess-label`'s
+   place in the row (the TypedLabels inside keep `.sess-label` itself). */
+.sess-label-fit { display: block; flex: 1 1 auto; min-width: 0; }
 .fit-full { display: none; }
 @container sess-body (min-width: 320px) {
   .fit-full { display: inline; }

@@ -204,10 +204,10 @@ export function SessionLine({
           {glance.name.short === undefined || glance.name.short === label ? (
             <TypedLabel className="sess-label" text={label} />
           ) : (
-            <span className="sess-label">
+            <span className="sess-label-fit">
               <span className="sr-only">{label}</span>
-              <span className="fit-full" aria-hidden="true"><TypedLabel text={label} /></span>
-              <span className="fit-short" aria-hidden="true">{glance.name.short}</span>
+              <span className="fit-full" aria-hidden="true"><TypedLabel className="sess-label" text={label} /></span>
+              <span className="fit-short" aria-hidden="true"><TypedLabel className="sess-label" text={glance.name.short} /></span>
             </span>
           )}
           {/* D-5527: whose code this row works on, when its card is another
