@@ -4049,14 +4049,14 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     no caller meets), F3 (two env properties unpinned). Run 585 closed `done`. Ruled (mail 6192): F3 is hygiene, not
     a guard, since the panel refuted its containment reading 2/1. So no pin; the comment says so. One comments-and-prose
     round, no review; I measure the diff, and then #482 merges.
-  - **05:42 UTC: #482 merged as `65f4b5ab4`; wave 18 is done.** The wording round `75a5af496` (mail 6193) changes
-    only `//` lines in `ccdWsHelpers.ts` and the plan's prose. CodeQL was clean with no open thread. `server 9/12`
-    failed once, on a vitest teardown error in `collect-switch-lane.test.ts` with all 2860 tests passing, and its
-    re-run was green. On the exact merge with `36d536c99`, the census, `single-definition`, containment, `runbook-holds` and the
+  - **05:42 UTC: #482 merged as `65f4b5ab4`; wave 18 is done.** The wording round `75a5af496` (mail 6193) changes only
+    `//` lines in `ccdWsHelpers.ts` and the plan's prose. CodeQL was clean with no open thread. `server 9/12` failed
+    once, on a vitest teardown error in `collect-switch-lane.test.ts` with all 2860 tests passing, and its re-run was
+    green. On the exact merge with `36d536c99`, the census, `single-definition`, containment, `runbook-holds` and the
     test `tsc` were green. Merged with `--match-head-commit`; the parent is `36d536c99` and the tree equals the tested
-    merge. Run 517 closed `done` (claim released, child reclaim queued). Wave 17 has Task 11 (mail 6197): merge
-    `main` (clean), run the census over its own new spawns first, contain any hit with no new allow entry, then
-    Task 11 and Task 12.
+    merge. Run 517 closed `done` (claim released, child reclaim queued). Wave 17 has Task 11 (mail 6197): merge `main`
+    (clean), run the census over its own new spawns first, contain any hit with no new allow entry, then Task 11 and
+    Task 12.
 
 ## Carried constraints
 
