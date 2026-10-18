@@ -889,7 +889,7 @@ This task lands before S9 so those tasks add rules, not palette values.
 
 ### Task S10a: status grouping and the needs-you reason, as a pure model (D-5473) — may land before #402
 
-**Routing:** band 1 once Step 0 has fixed the field map. **Needs:** nothing. **Frozen files touched:** none (new files only).
+**Routing:** band 1 once Step 0 has fixed the field map. **Needs:** nothing. **Frozen files touched:** none (new files only). Executing it found D-5497 (§Deviations and decisions, "Found while executing Task S10a").
 
 **Files:** Create `pwa/src/fleet/statusGroups.ts` and `pwa/test/status-groups.test.ts`.
 
@@ -904,7 +904,7 @@ This task lands before S9 so those tasks add rules, not palette values.
   - "a dead session still dialogPending is in Dead, not Needs you";
   - "rows keep sortFleet's order within a group";
   - "every SessionBucket has a group and a label" (derived from the record's keys against a list the test builds from the type's values, never a second hand-kept list);
-  - "needsReason reads ask, allow, fault and sign-in from their fields, and null for an attention session no field explains";
+  - "needsReason reads ask, allow, fault and sign-in from their fields, and null for an attention session no field explains"; (reworded by D-5497)
   - "each group's unseen count equals BucketBar's for its bucket" (one fixture through both, including a never-acked idle session: `BucketBar` and `groupFleet` count with `isUnseen(s, acks)`, which puts the BADGED precondition (attention, done and cleanup only) in front of `isUnseenAt`, so an Idle, Working or Dead row never badges).
 - [ ] **Step 2: Green.** Implement.
 - [ ] **Step 3: Mutation table, RUN.**
@@ -1428,6 +1428,16 @@ Mark it ✓, or write the defect and its fix. Screenshots are evidence for the r
 - **D-5479** — `flip-after-parity` (Task S18): Instrument's `preview: false` lands as its own PR, after the parity test, and not in "the W2 PR that lands Instrument's shell" as D-5096 says, because that shell lands across eight PRs and a flip inside any of them would make a partial shell every desktop's default. It also waits for the picker (F12b), axe in both skins (F3b), and `Sheet`'s desktop arm unless the coordinator rules otherwise.
 
 Issued and unused: 5480. It is the one spare for a departure a worker meets while executing a task here; it is defined here, once, in the PR that introduces it, and the coordinator asks the allocator for more if one is not enough.
+
+D-5497 was not drawn from that block: the coordinator issued it to Task S10a from the allocator, as that task's one spare, in the task's dispatch. It is defined once, below. 5480 is untouched by it.
+
+### Found while executing Task S10a
+
+- **D-5497** — `needs-reason-field-map` (Task S10a): Step 0's map found fields for two of `needsReason`'s four answers, so it answers `'fault'` and `'ask'` and never `'allow'` or `'sign-in'`, which stay in its type for W3's tags. The plan's Step 1 case ("reads ask, allow, fault and sign-in from their fields") assumed four fields; it is written instead as "reads ask and fault from their fields, never allow or sign-in that no field carries", plus a case that a session outside Needs you has no reason.
+  - **The map** (also in `pwa/src/fleet/statusGroups.ts`'s header). `fault`: `substrate`, through `substrateFault` (ccd's `cmd_supervise` writes `$REG/<id>.substrate`; `server/src/fleet.ts`'s `assembleFleet` carries it; an unreadable marker is still a fault). `ask`: `ask` in state `held` or `answering`, through `sessionAsk` (`assembleFleet` folds the newest `asks` row from `CoordStore`; those rows are minted for questions only today, which is why `fleetWithCoordinator` answers `kind: 'question'` for every one). `answered` is not an ask: it explains a ruling already made, not the dialog open now. A fault outranks an ask, because the console cannot re-measure a faulted row.
+  - **No field for `allow`.** A permission prompt reaches the wire only as `dialogPending`, `hookState: 'waiting'` and the `askSummary` string. The hook's ask envelope (questions or approval) and the live file's `waitingFor` word stay on the server. Reading `askSummary`'s `tool: summary` shape would be a guess, since a question's header can carry a colon. `withCoordinator.kind` does name an approval, but only on a held row, which the ladder files under `working`.
+  - **No field for `sign-in`.** Nothing on `FleetSession` says a session is blocked on its account's sign-in.
+  - **What closes it.** A server field that carries the open dialog's kind (from the hook envelope, and from `waitingFor`'s `sandbox request`), and one for a sign-in block, each additive on the wire. Either is a change to `shared/api.ts` and `server/src/fleet.ts`, outside S10a's new-files-only scope, and is for the coordinator to schedule. Until then every attention row those fields would explain answers `null`, as D-5473 requires.
 
 ## Review log
 
