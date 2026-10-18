@@ -1993,6 +1993,13 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         the promotion. Server backups rose 1588M to 1730M: a 227M snapshot replaced one of 85M, the ruled journal
         growth. STATUS: fleet and server v0.0.291, newest v0.0.294, intent dev/auto=off, backups fleet
         189M/server 1730M, disk free fleet 205G/work volume 83G/server 31G, no anomalies.
+      - **2026-10-18 21:55 UTC: both boxes moved to v0.0.294 (#636) by the operator's console tap**, fleet first
+        (20:58:34 to 20:59:54), then the server (21:00:22 to 21:01:03); both reports `done`, `from: pwa`, sweep
+        `down: 3` on the fleet and `ok` on the server. Fleet doctor 36 passed, 7 warned, 0 failed; server 27
+        passed; the server gate answered v0.0.294. v0.0.295 (#643) to v0.0.298 (#645) followed, unapplied.
+        Server backups rose 1730M to 1878M: a 233M snapshot replaced one of 86M, the ruled journal growth.
+        STATUS: fleet and server v0.0.294, newest v0.0.298, intent dev/auto=off, backups fleet 173M/server
+        1878M, disk free fleet 209G/work volume 82G/server 31G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
