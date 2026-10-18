@@ -11105,18 +11105,18 @@ export interface DelegationHealthInput {
 }
 
 /** The size and shape bounds of one delegation spool line (delegation broker wave 3, spec §5.3), declared ONCE. The hook's
- *  jq program and shell block spell the same numbers in `ccd/session-hook.sh` (`def idmax:`, `def maxline:`, `def maxlabel:` and
- *  `def maxpath:` in the jq text, `CCRC_ID_MAX` for the owner, and the `DSP_` constants beside the append) because a hook cannot
- *  import this file; `delegation-spool.test.ts` reads both and fails on any drift, and the server's reader imports THIS object.
+ *  jq program and shell block spell the same numbers in `ccd/session-hook.sh` (`def idmax:`, `def maxlabel:` and `def maxpath:` in
+ *  the jq text, `CCRC_ID_MAX` for the owner, `DSP_LINE_BELOW` and `DSP_LINE_SMALL`, the jq's `maxline` among their readers, and the
+ *  other `DSP_` constants beside the append) because a hook cannot import this file; `delegation-spool.test.ts` reads both and fails on any drift, and the server's reader imports THIS object.
  *  Every byte count is UTF-8 bytes, never characters.
  *
  *  Each value is chosen from measurement, on the fixture corpus (`fixtures/delegation/<version>/`: 14 versions, 2.1.280 to
  *  2.1.299, 193 measured cells; its paths are sanitised and shorter than a real fleet's) and on the fleet's own transcript
  *  trees, never from a guess:
- *   - `lineBytesBelow`: the plan says LESS than 4096 bytes, not less than or equal, counting the LF. A line that is built
- *     in one buffered `printf` and so reaches the file in ONE `write(2)` must fit one 4096-byte stdio block, and 4095 is the
- *     most that block holds. An O_APPEND write of one block is the only append the hook can make that two hooks racing on
- *     one bucket never interleave.
+ *   - `lineBytesBelow`, and `lineBytesBelowSmall` off glibc Linux (D-5436): LESS than the cap, counting the LF. A builtin `printf`
+ *     goes through bash's stdout buffer, so a line reaches the file in ONE `write(2)` only if it fits: glibc with a distro bash
+ *     sizes it from st_blksize (4096 on the usual filesystems), bash's own malloc 1008 or 2016, BSD and macOS libc and musl 1024. One
+ *     O_APPEND write is the only append two hooks racing on one bucket never interleave. The server's reader bounds every line at 4096.
  *   - `idBytes`: the longest id in the corpus is 36 (a Claude session UUID; agent ids 17, task ids 9, run ids 15); a real
  *     `tool_use_id` is about 30 (the corpus's are shorter placeholders). 64 is the
  *     bound the hook's own agent-id grammar already uses (`idmax`), so one number covers agent, tool-use, task, run and
@@ -11135,18 +11135,19 @@ export interface DelegationHealthInput {
  *   - `listingNameBytes`: the longest admin record name on the fleet is 37 bytes (the busiest repos' longest are 23 to 37;
  *     Claude Code's own `agent-<17 hex>` is 23, which is also the corpus's longest). A name longer than 64 bytes, or outside
  *     `[A-Za-z0-9._@+-]`, drops the listing.
- *   A listing of 93 real names is about 2.6 KiB, so the line cap (not the count) is what usually drops a listing: the
- *   cap is reached at about 130 names of the usual length, which is the ~3.9 KiB case the plan measures.
+ *   A listing of 93 real names is about 2.6 KiB, so the line cap (not the count) is what usually drops a listing: the 4096
+ *   cap is reached at about 130 names of the usual length (the plan's ~3.9 KiB case), the small one at about 15 to 20 (D-5436).
  *
- *  When a line is over `lineBytesBelow` its optional fields are dropped in this order until it fits, and `truncated: true`
+ *  When a line is over its cap its optional fields are dropped in this order until it fits, and `truncated: true`
  *  is set: `listing`, `claudeVersion`, `cwd`, `agentType` (omitted where optional, null where the variant requires the key),
  *  `transcriptPath`. The required identity fields, `agentTranscriptPath` and a launch among them, are never dropped (the
  *  required-but-nullable ones are not nulled to fit; a line they alone push over the cap is not written). With every bound
- *  above at its maximum and nothing escaped they sum to under 3.2 KiB; a line whose required fields alone pass the cap
- *  (a launch whose paths are inflated six-fold by control-character escapes) is not written at all, because a lost line can
- *  delay a link and an over-cap line could tear one. */
+ *  above at its maximum and nothing escaped they sum to under 3.2 KiB, which only the 4096 cap holds (on 1008 a deep-path
+ *  Workflow launch is not written, D-5436); a line whose required fields alone pass the cap is not written at all, because a lost
+ *  line can delay a link and an over-cap line could tear one, so "a line that cannot fit is a bug" holds on the 4096 cap only. */
 export const DELEGATION_SPOOL_BOUNDS = {
   lineBytesBelow: 4096,
+  lineBytesBelowSmall: 1008,
   idBytes: 64,
   ownerIdBytes: 128,
   labelBytes: 128,

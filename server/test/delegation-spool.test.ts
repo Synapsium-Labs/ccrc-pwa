@@ -34,6 +34,39 @@ const TRANSCRIPT = `/rig/fixhome/cfg/projects/-rig-repo/${CLAUDE_SID}.jsonl`;
 const B = DELEGATION_SPOOL_BOUNDS;
 const REAL_JQ = execFileSync('sh', ['-c', 'command -v jq'], { encoding: 'utf8' }).trim();
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// The cap is the platform's (D-5436): 4096 where bash's stdout buffer is glibc's st_blksize, 1008 everywhere else, so a line
+// is one write(2) wherever the hook runs. The rows learn the cap the hook picks by running the hook's OWN statement in the same
+// `bash` they spawn, never from `process.platform`; OSTYPE comes from the environment, so `SMALL` forces the small cap anywhere.
+// ═══════════════════════════════════════════════════════════════════════════════
+const CAP_STMT = ((): string => {
+  const m = fs.readFileSync(HOOK, 'utf8').match(/DSP_LINE_BELOW=\d+ DSP_LINE_SMALL=\d+;[^\n]*?(?= \[\[ "\$id" != )/);
+  // A hook without the statement (one from before D-5436) had the plan's one cap everywhere; the pin on its text reds on it, the rest
+  // of the rows run against what such a hook does.
+  return m ? m[0] : 'DSP_LINE_BELOW=4096;';
+})();
+const capMemo = new Map<string, number>();
+/** This process's environment WITHOUT an exported OSTYPE, so a run's own bash says what it is unless a row forces one. */
+const inherited = (): NodeJS.ProcessEnv => { const e = { ...process.env }; delete e['OSTYPE']; return e; };
+/** The cap the hook's statement picks under `env` (merged over `inherited()`, as `hookEnv` does). */
+const capOf = (env: Record<string, string> = {}): number => {
+  const key = JSON.stringify(env);
+  if (!capMemo.has(key)) {
+    const r = spawnSync('bash', ['-c', `${CAP_STMT} printf '%s' "$DSP_LINE_BELOW"`], { env: { ...inherited(), ...env }, encoding: 'utf8' });
+    capMemo.set(key, Number(r.stdout));
+  }
+  return capMemo.get(key)!;
+};
+const SMALL: Record<string, string> = { OSTYPE: 'darwin23' };
+/** This runner's own cap, with nothing forced: 4096 on a glibc Linux runner, 1008 on a darwin or musl one. */
+const NATIVE_CAP = capOf({});
+const NO_GLIBC_ARM = NATIVE_CAP === B.lineBytesBelow ? '' : `this bash picks a ${NATIVE_CAP}-byte cap, so the 4096 arm cannot run here (D-5436)`;
+/** The near-cap rows run once per cap: the small one on every platform (forced), the 4096 one only where this bash picks it. */
+const CAP_ARMS: Array<{ label: string; env: Record<string, string>; cap: number; skip: string }> = [
+  { label: 'the small cap (1008, forced by OSTYPE=darwin23)', env: SMALL, cap: B.lineBytesBelowSmall, skip: '' },
+  { label: 'the glibc cap (4096)', env: {}, cap: B.lineBytesBelow, skip: NO_GLIBC_ARM },
+];
+
 // ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 // The line grammar, written out. `DelegationSpoolLineV1` is a compile-time type; this is its runtime twin, closed.
 // ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════
@@ -152,7 +185,7 @@ const plantOwnerDir = (id = OWNER): void => { fs.mkdirSync(ownerDir(id), { recur
 let expectGen = GENERATION;
 /** `CLAUDE_CODE_EXECPATH` is blanked: the runner's own would put a `claudeVersion` in every line. */
 const hookEnv = (env: Record<string, string> = {}): NodeJS.ProcessEnv => ({
-  ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+  ...inherited(), HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
   TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION,
   CLAUDE_CODE_EXECPATH: '', ...env,
 });
@@ -179,13 +212,14 @@ const rawLines = (dir = ownerDir()): string[] => bucketFiles(dir).flatMap((f) =>
 const lines = (dir = ownerDir()): any[] => rawLines(dir).map((l) => JSON.parse(l));
 const allText = (dir = ownerDir()): string => bucketFiles(dir).map((f) => fs.readFileSync(path.join(dir, f), 'utf8')).join('');
 
-/** The lines this payload appended: none or one, each valid, and the strict cap held for each. */
+/** The lines this payload appended: none or one, each valid, and the strict cap held for each: the cap of the env it ran with. */
 const emitted = (payload: object | string, env: Record<string, string> = {}): any[] => {
   const before = rawLines().length;
   run(payload, env);
   const added = rawLines().slice(before);
+  const cap = capOf(env);
   for (const raw of added) {
-    expect(bytes(raw) + 1, `a line plus its LF is under ${B.lineBytesBelow} bytes`).toBeLessThan(B.lineBytesBelow);
+    expect(bytes(raw) + 1, `a line plus its LF is under ${cap} bytes`).toBeLessThan(cap);
     expect(() => new TextDecoder('utf-8', { fatal: true }).decode(Buffer.from(raw, 'utf8')), 'strict UTF-8').not.toThrow();
     expect(validate(JSON.parse(raw)), raw.slice(0, 300)).toEqual([]);
     // C5: the server's own parser accepts every line the real hook wrote (a drift would make a whole owner's hours unmeasured)
@@ -335,7 +369,12 @@ describe('the hook\'s literal bounds equal DELEGATION_SPOOL_BOUNDS', () => {
     return Number(m[1]);
   };
   it('the jq program\'s defs (idmax is the payload parse\'s own, shared by every id)', () => {
-    expect(lit(/def maxline: (\d+);/)).toBe(B.lineBytesBelow);
+    // D-5436: the jq's cap is not a literal of its own. The spool's definitions open on `maxline` read from `dspcap`, which the one
+    // splice that adds them defines from DSP_LINE_BELOW, the variable the listing splice and the final gate read: one cap, three checks.
+    expect(src, 'the spool definitions open on the cap they are handed').toContain("DSP_DEFS='def maxline: dspcap; ");
+    expect(src.match(/def maxline:/g), 'maxline is defined once').toHaveLength(1);
+    expect(src.match(/def dspcap:/g), 'dspcap is defined once').toHaveLength(1);
+    expect(src, 'and from the shell\'s own cap').toContain('dsp_defs="def dspcap: $DSP_LINE_BELOW; $DSP_DEFS";');
     expect(lit(/def idmax: (\d+);/)).toBe(B.idBytes);
     expect(lit(/def maxlabel: (\d+);/)).toBe(B.labelBytes);
     expect(lit(/def maxpath: (\d+);/)).toBe(B.pathBytes);
@@ -344,7 +383,9 @@ describe('the hook\'s literal bounds equal DELEGATION_SPOOL_BOUNDS', () => {
     expect(lit(/CCRC_ID_MAX=(\d+)/), 'the owner bound is the hook\'s own id bound, not a second literal').toBe(B.ownerIdBytes);
     expect(src, 'and the spool gate reads it by name').toMatch(/\$\{#id\} -le CCRC_ID_MAX &&/);
     expect(src).not.toContain('DSP_OWNER_BYTES');
-    expect(lit(/DSP_LINE_BELOW=(\d+)/)).toBe(B.lineBytesBelow);
+    expect(lit(/DSP_LINE_BELOW=(\d+)/), 'the glibc cap').toBe(B.lineBytesBelow);
+    expect(lit(/DSP_LINE_SMALL=(\d+)/), 'the small cap (D-5436)').toBe(B.lineBytesBelowSmall);
+    expect(src.match(/< DSP_LINE_BELOW \)\)/g), 'the listing splice and the final gate read the same variable').toHaveLength(2);
     expect(lit(/DSP_LIST_NAMES=(\d+)/)).toBe(B.listingNames);
     expect(lit(/DSP_NAME_BYTES=(\d+)/)).toBe(B.listingNameBytes);
   });
@@ -362,11 +403,24 @@ describe('the hook\'s literal bounds equal DELEGATION_SPOOL_BOUNDS', () => {
     const want = [...DELEGATION_EVENT_KINDS.filter((k) => !viaTool.has(k) && k !== 'UserPromptSubmit'), 'Agent', 'Task', 'Workflow', 'Bash', 'task-notification'].sort();
     expect(words).toEqual(want);
   });
-  it('every bound is a positive integer, and the cap is the plan\'s 4096', () => {
+  it('every bound is a positive integer, and the cap is the plan\'s 4096 on glibc Linux and 1008 elsewhere (D-5436)', () => {
     for (const [k, v] of Object.entries(B)) expect(Number.isInteger(v) && v > 0, k).toBe(true);
     expect(B.lineBytesBelow).toBe(4096);
+    expect(B.lineBytesBelowSmall, 'no larger than the smallest stdout buffer a bash has: 1008, a bash 4.4-5.1 built with its own malloc').toBe(1008);
   });
-  it('with every bound at its maximum, the REQUIRED fields of the largest variants still fit one line (so a line that cannot fit is a bug, not a case)', () => {
+  it('the cap is 4096 only where two builtins say glibc Linux, and 1008 on every other platform, chosen before the spool gate (D-5436)', () => {
+    // OSTYPE alone is not enough: it comes from the environment. BASH_VERSINFO[5] is compiled into the bash and read-only.
+    expect(CAP_STMT).toBe('DSP_LINE_BELOW=4096 DSP_LINE_SMALL=1008; [[ "${OSTYPE:-}" == linux-gnu* && "${BASH_VERSINFO[5]-}" == *-linux-gnu* ]] || DSP_LINE_BELOW=$DSP_LINE_SMALL;');
+    expect(src.split(CAP_STMT), 'spelled once').toHaveLength(2);
+    expect(capOf(SMALL), 'a darwin OSTYPE picks the small cap').toBe(B.lineBytesBelowSmall);
+    expect(capOf({ OSTYPE: 'linux-musl' }), 'so does musl').toBe(B.lineBytesBelowSmall);
+    expect([B.lineBytesBelow, B.lineBytesBelowSmall], 'and this runner picks one of the two').toContain(NATIVE_CAP);
+  });
+  it.runIf(!/-linux-gnu/.test(spawnSync('bash', ['-c', 'printf %s "${BASH_VERSINFO[5]}"'], { encoding: 'utf8' }).stdout))(
+    'on a bash that is not built for glibc Linux, an OSTYPE of linux-gnu still picks the small cap (runs on darwin and musl only, D-5436)', () => {
+      expect(capOf({ OSTYPE: 'linux-gnu' })).toBe(B.lineBytesBelowSmall);
+    });
+  it('with every bound at its maximum, the REQUIRED fields of the largest variants fit the 4096 cap (so a line that cannot fit there is a bug, not a case), and can pass the small one (D-5436)', () => {
     const id = 'x'.repeat(B.idBytes);
     const worst = {
       v: 1, eventKind: 'PostToolUse', observedAt: '2026-10-14T00:00:00.000Z', sessionId: 'o'.repeat(B.ownerIdBytes),
@@ -377,6 +431,14 @@ describe('the hook\'s literal bounds equal DELEGATION_SPOOL_BOUNDS', () => {
     const total = bytes(JSON.stringify(worst)) + 1;
     expect(total).toBeLessThan(B.lineBytesBelow);
     expect(total, 'and by a wide margin: the claim in the bounds comment (3.2 KiB) holds').toBeLessThan(3277);
+    // On the small cap the envelope is smaller than the bounds: such a launch's required fields alone pass 1008, so it writes no line.
+    expect(total, 'the small cap does not hold the worst launch').toBeGreaterThanOrEqual(B.lineBytesBelowSmall);
+    // What it does hold: a launch with typical ids and labels has about 480 bytes for its two paths together on the small cap.
+    const typical = (p: number): number => bytes(JSON.stringify({ ...worst, sessionId: 'o'.repeat(40), claudeSessionId: CLAUDE_SID,
+      toolUseId: 'toolu_01ABCDEFGHIJKLMNOPQRSTUVWX', launch: { status: 'async-launched', taskId: 'w1a2b3c4d', taskType: 'local_workflow',
+        workflowName: 'review-panel', runId: 'wf_1a2b3c4d-e5f', transcriptDir: '/'.padEnd(p, 'd'), scriptPath: '/'.padEnd(p, 's') } })) + 1;
+    expect(typical(240), 'two 240-byte paths fit the small cap').toBeLessThan(B.lineBytesBelowSmall);
+    expect(typical(250), 'two 250-byte paths do not').toBeGreaterThanOrEqual(B.lineBytesBelowSmall);
   });
 });
 
@@ -958,89 +1020,142 @@ describe('the delegation spool: the hook appends evidence to a directory ccd mad
   });
 
   // ── Step 3: the cap ──
-  describe('the strict line cap: less than 4096 bytes, LF included (W3-M04)', () => {
-    /** A SubagentStop whose three optional strings are inflated by `\u0001` (6 bytes serialized each). */
-    const big = (cwdRaw: string, tpRaw: string, atpRaw: string | null, type = 'general-purpose'): Record<string, unknown> =>
-      ev('SubagentStop', { agent_id: 'a1', agent_type: type, cwd: cwdRaw, transcript_path: tpRaw, ...(atpRaw === null ? {} : { agent_transcript_path: atpRaw }) });
+  // ── D-5436: the cap follows the platform's stdout buffer ──
+  // A builtin `printf` writes through bash's stdout buffer, which is glibc's st_blksize (4096) on Linux and BUFSIZ (1024) on
+  // macOS: a 3.9 KiB line reached a darwin bucket as four write(2)s, and a racing hook's line landed between them (job
+  // 117716174716: 4,947 = 1,024 + one whole 3,923-byte line). Off glibc Linux the cap is 1008, so every line is one write.
+  describe('the cap follows the platform: 4096 on glibc Linux, 1008 everywhere else (D-5436)', () => {
     const ctl = (n: number): string => '\u0001'.repeat(n);
+    const V = { CLAUDE_CODE_EXECPATH: '/x/versions/2.1.296' };
+    /** About 1.9 KiB whole: a 170-control-character cwd (1,021 bytes serialized), a 501-byte transcript path and a version. */
+    const twoKiB = (): Record<string, unknown> => pre('Agent', {}, 'toolu_cap', { cwd: `/${ctl(170)}`, transcript_path: `/${'x'.repeat(500)}` });
 
-    it('nothing over the cap is ever written: an inflated payload sheds optional fields in the declared order and marks the line truncated', () => {
-      // 500 control bytes serialize to 3000 bytes each: three of them cannot fit one line.
-      const l = one(big(`/${ctl(500)}`, `/${ctl(500)}`, `/${ctl(500)}`));
-      expect(l.truncated).toBe(true);
-      expect(l).toMatchObject({ agentId: 'a1', eventKind: 'SubagentStop' });
-    });
-
-    it('the shed order is listing, claudeVersion, cwd, agentType, transcriptPath: each goes only once the earlier ones did not suffice, and agentTranscriptPath is kept', () => {
-      const V = { CLAUDE_CODE_EXECPATH: '/x/versions/2.1.296' };
-      let l = one(big(`/${ctl(100)}`, `/${ctl(100)}`, `/${ctl(100)}`), V);     // 3 x 601 + base: fits whole
-      expect(l.truncated).toBeUndefined();
-      expect(l).toHaveProperty('claudeVersion');
-      l = one(big(`/${ctl(300)}`, `/${ctl(300)}`, `/${ctl(300)}`), V);          // 3 x 1801: over the cap by one path
-      expect(l.truncated).toBe(true);
+    it('(a) under the small cap a ~2 KiB line is written, shed in the declared order (claudeVersion, then cwd) and marked truncated', () => {
+      const l = one(twoKiB(), { ...SMALL, ...V });
+      expect(bytes(rawLines()[0]!) + 1).toBeLessThan(B.lineBytesBelowSmall);
+      expect(l.truncated, 'shed to fit 1008').toBe(true);
       expect('claudeVersion' in l, 'claudeVersion went first').toBe(false);
       expect('cwd' in l, 'cwd went next, and was enough').toBe(false);
-      expect(l.transcriptPath).toBe(`/${ctl(300)}`);
-      expect(l.agentTranscriptPath).toBe(`/${ctl(300)}`);
-      expect(l.agentType).toBe('general-purpose');
-      l = one(big(`/${ctl(500)}`, `/${ctl(500)}`, `/${ctl(500)}`), V);          // 3 x 3001: agentType and transcriptPath must go too
-      expect(l.truncated).toBe(true);
-      expect('cwd' in l).toBe(false);
-      expect(l.agentType, 'agentType (required, nullable) is shed to null before transcriptPath').toBeNull();
-      expect('transcriptPath' in l, 'transcriptPath went before the agent transcript path').toBe(false);
-      expect(l.agentTranscriptPath, 'the agent transcript path is a required field and stays').toBe(`/${ctl(500)}`);
+      expect(l.transcriptPath, 'so the transcript path stays').toBe(`/${'x'.repeat(500)}`);
+      expect(l).toMatchObject({ eventKind: 'PreToolUse', toolName: 'Agent', toolUseId: 'toolu_cap' });
     });
 
-    it('a line whose REQUIRED fields alone pass the cap (a workflow launch whose paths are inflated by escapes) is not written at all, and the hook still exits 0', () => {
-      const wf = { status: 'async_launched', taskId: 'wabc', taskType: 'local_workflow', workflowName: 'wf', runId: 'wf_1-aa', transcriptDir: `/${ctl(500)}`, scriptPath: `/${ctl(500)}` };
-      expect(run(post('Workflow', {}, wf, 'toolu_01WF'))).toEqual({ stdout: '', stderr: '' });
+    it('(b) under the small cap a Workflow launch whose required fields pass 1008 writes no line, and the hook exits 0', () => {
+      const wf = { status: 'async_launched', taskId: 'wabc', taskType: 'local_workflow', workflowName: 'wf', runId: 'wf_1-aa',
+        transcriptDir: `/${'d'.repeat(500)}`, scriptPath: `/${'s'.repeat(500)}` };
+      expect(run(post('Workflow', {}, wf, 'toolu_01WF'), SMALL)).toEqual({ stdout: '', stderr: '' });
       expect(rawLines()).toEqual([]);
+      // Control: the same launch with paths that fit is written, so it was the cap that refused it.
+      const short = { ...wf, transcriptDir: '/d', scriptPath: '/s' };
+      expect(one(post('Workflow', {}, short, 'toolu_02WF'), SMALL).launch).toMatchObject({ taskId: 'wabc', runId: 'wf_1-aa' });
     });
 
-    it('the strict boundary: a line that is 4095 bytes with its LF is kept whole; 4096 is shed (the cap is "less than", not "at most")', () => {
-      // The probe is a SubagentStop with three one-byte optional strings; every extra serialized byte beyond it is placed in
-      // two control-character runs (6 bytes each) and a plain run, so the target is hit exactly.
-      const mk = (cwd: string, tp: string, atp: string): Record<string, unknown> =>
-        ev('SubagentStop', { agent_id: 'a1', agent_type: 'general-purpose', cwd, transcript_path: tp, agent_transcript_path: atp });
-      one(mk('/', '/t', '/a'));
-      const probeLen = bytes(rawLines()[0]!) + 1;
-      fs.rmSync(path.join(ownerDir(), bucketFiles()[0]!));
-      const make = (target: number, cwdTail = ''): Record<string, unknown> => {
-        let extra = target - probeLen - bytes(cwdTail);
-        const k1 = Math.min(Math.floor(extra / 6), 500); extra -= 6 * k1;
-        const k2 = Math.min(Math.floor(extra / 6), 500); extra -= 6 * k2;
-        return mk(`/${cwdTail}${'c'.repeat(extra)}`, `/t${ctl(k1)}`, `/a${ctl(k2)}`);
-      };
-      const lineBytes = (): number => bytes(rawLines()[0]!) + 1;
-      const reset = (): void => fs.rmSync(path.join(ownerDir(), bucketFiles()[0]!));
-      for (const tail of ['', '€']) {
-        // With a euro sign in the payload the line holds FEWER characters than bytes: a cap on characters would keep the 4096.
-        const kept = one(make(4095, tail));
-        expect(lineBytes(), `${JSON.stringify(tail)}: kept at exactly 4095 bytes with its LF`).toBe(4095);
-        expect(kept.truncated).toBeUndefined();
-        expect(kept.cwd.startsWith(`/${tail}`)).toBe(true);
-        reset();
-        const shed = one(make(4096, tail));
-        expect(shed.truncated, `${JSON.stringify(tail)}: at 4096 the optional fields were shed`).toBe(true);
-        expect(lineBytes()).toBeLessThan(4096);
-        if (tail) expect(rawLines()[0]!.length, 'the rejected line had fewer characters than bytes in it').toBeLessThan(4095);
-        reset();
-        const over = make(4097, tail);
-        expect(one(over).truncated).toBe(true);
-        reset();
-      }
-    });
-
-    it('multibyte input is bounded in bytes: three euro-and-control paths whose serialized form passes the cap are shed to a line under it', () => {
-      const e = `${'€'.repeat(100)}${ctl(200)}`;                    // 301 + 200 raw bytes (under the path bound), 1500 serialized
-      const l = one(ev('SubagentStop', { agent_id: 'a1', agent_type: '€'.repeat(40), cwd: `/${e}`, transcript_path: `/${e}`, agent_transcript_path: `/${e}` }));
-      const raw = rawLines()[0]!;
-      expect(l.truncated).toBe(true);
-      expect(bytes(raw) + 1).toBeLessThan(4096);
-      expect(raw.length, 'fewer characters than bytes: the cap is on bytes').toBeLessThan(bytes(raw));
-      expect(l.agentId).toBe('a1');
+    it.skipIf(!!NO_GLIBC_ARM)(`(c) control: with nothing forced, a glibc Linux bash keeps the ~2 KiB line whole${NO_GLIBC_ARM ? ` (skipped: ${NO_GLIBC_ARM})` : ''}`, () => {
+      const l = one(twoKiB(), V);
+      expect('truncated' in l).toBe(false);
+      expect(l).toMatchObject({ cwd: `/${ctl(170)}`, transcriptPath: `/${'x'.repeat(500)}`, claudeVersion: '2.1.296' });
     });
   });
+
+  for (const arm of CAP_ARMS) {
+    describe.skipIf(!!arm.skip)(`the strict line cap under ${arm.label}: less than ${arm.cap} bytes, LF included (W3-M04)${arm.skip ? ` (skipped: ${arm.skip})` : ''}`, () => {
+      const cap = arm.cap;
+      const E = arm.env;
+      /** A SubagentStop whose three optional strings are inflated by `\u0001` (6 bytes serialized each). */
+      const big = (cwdRaw: string, tpRaw: string, atpRaw: string | null, type = 'general-purpose'): Record<string, unknown> =>
+        ev('SubagentStop', { agent_id: 'a1', agent_type: type, cwd: cwdRaw, transcript_path: tpRaw, ...(atpRaw === null ? {} : { agent_transcript_path: atpRaw }) });
+      const ctl = (n: number): string => '\u0001'.repeat(n);
+      const reset = (): void => { for (const f of bucketFiles()) fs.rmSync(path.join(ownerDir(), f)); };
+      /** The bytes (with its LF) of the line `payload` writes, which is then removed. */
+      const probe = (payload: Record<string, unknown>, env: Record<string, string> = E): number => {
+        one(payload, env);
+        const n = bytes(rawLines()[0]!) + 1;
+        reset();
+        return n;
+      };
+
+      it('nothing over the cap is ever written: an inflated payload sheds optional fields in the declared order and marks the line truncated', () => {
+        // Three paths of k control bytes serialize to 6k each: together they cannot fit, and the agent transcript path alone does.
+        const k = Math.min(500, Math.floor((cap - 400) / 6));
+        const l = one(big(`/${ctl(k)}`, `/${ctl(k)}`, `/${ctl(k)}`), E);
+        expect(l.truncated).toBe(true);
+        expect(l).toMatchObject({ agentId: 'a1', eventKind: 'SubagentStop' });
+      });
+
+      it('the shed order is listing, claudeVersion, cwd, agentType, transcriptPath: each goes only once the earlier ones did not suffice, and agentTranscriptPath is kept', () => {
+        const env = { ...E, CLAUDE_CODE_EXECPATH: '/x/versions/2.1.296' };
+        const base = probe(big('/', '/', '/'), env);            // three one-byte paths: each control byte adds 6, three paths 18
+        const kFit = Math.floor((cap - base - 20) / 18);
+        let l = one(big(`/${ctl(kFit)}`, `/${ctl(kFit)}`, `/${ctl(kFit)}`), env);     // fits whole
+        expect(l.truncated).toBeUndefined();
+        expect(l).toHaveProperty('claudeVersion');
+        reset();
+        const kOne = Math.ceil((cap - base) / 18) + 3;           // over the cap by more than the version's field: one path must go
+        l = one(big(`/${ctl(kOne)}`, `/${ctl(kOne)}`, `/${ctl(kOne)}`), env);
+        expect(l.truncated).toBe(true);
+        expect('claudeVersion' in l, 'claudeVersion went first').toBe(false);
+        expect('cwd' in l, 'cwd went next, and was enough').toBe(false);
+        expect(l.transcriptPath).toBe(`/${ctl(kOne)}`);
+        expect(l.agentTranscriptPath).toBe(`/${ctl(kOne)}`);
+        expect(l.agentType).toBe('general-purpose');
+        reset();
+        const kAll = Math.floor((cap - base) / 8);               // two paths pass the cap, one fits: agentType and transcriptPath go too
+        l = one(big(`/${ctl(kAll)}`, `/${ctl(kAll)}`, `/${ctl(kAll)}`), env);
+        expect(l.truncated).toBe(true);
+        expect('cwd' in l).toBe(false);
+        expect(l.agentType, 'agentType (required, nullable) is shed to null before transcriptPath').toBeNull();
+        expect('transcriptPath' in l, 'transcriptPath went before the agent transcript path').toBe(false);
+        expect(l.agentTranscriptPath, 'the agent transcript path is a required field and stays').toBe(`/${ctl(kAll)}`);
+      });
+
+      it('a line whose REQUIRED fields alone pass the cap (a workflow launch whose paths are inflated by escapes) is not written at all, and the hook still exits 0', () => {
+        const wf = { status: 'async_launched', taskId: 'wabc', taskType: 'local_workflow', workflowName: 'wf', runId: 'wf_1-aa', transcriptDir: `/${ctl(500)}`, scriptPath: `/${ctl(500)}` };
+        expect(run(post('Workflow', {}, wf, 'toolu_01WF'), E)).toEqual({ stdout: '', stderr: '' });
+        expect(rawLines()).toEqual([]);
+      });
+
+      it(`the strict boundary: a line that is ${cap - 1} bytes with its LF is kept whole; ${cap} is shed (the cap is "less than", not "at most")`, () => {
+        // The probe is a SubagentStop with three one-byte optional strings; every extra serialized byte beyond it is placed in
+        // two control-character runs (6 bytes each) and a plain run, so the target is hit exactly.
+        const mk = (cwd: string, tp: string, atp: string): Record<string, unknown> =>
+          ev('SubagentStop', { agent_id: 'a1', agent_type: 'general-purpose', cwd, transcript_path: tp, agent_transcript_path: atp });
+        const probeLen = probe(mk('/', '/t', '/a'));
+        const make = (target: number, cwdTail = ''): Record<string, unknown> => {
+          let extra = target - probeLen - bytes(cwdTail);
+          const k1 = Math.min(Math.floor(extra / 6), 500); extra -= 6 * k1;
+          const k2 = Math.min(Math.floor(extra / 6), 500); extra -= 6 * k2;
+          return mk(`/${cwdTail}${'c'.repeat(extra)}`, `/t${ctl(k1)}`, `/a${ctl(k2)}`);
+        };
+        const lineBytes = (): number => bytes(rawLines()[0]!) + 1;
+        for (const tail of ['', '€']) {
+          // With a euro sign in the payload the line holds FEWER characters than bytes: a cap on characters would keep the line at the cap.
+          const kept = one(make(cap - 1, tail), E);
+          expect(lineBytes(), `${JSON.stringify(tail)}: kept at exactly ${cap - 1} bytes with its LF`).toBe(cap - 1);
+          expect(kept.truncated).toBeUndefined();
+          expect(kept.cwd.startsWith(`/${tail}`)).toBe(true);
+          reset();
+          const shed = one(make(cap, tail), E);
+          expect(shed.truncated, `${JSON.stringify(tail)}: at ${cap} the optional fields were shed`).toBe(true);
+          expect(lineBytes()).toBeLessThan(cap);
+          if (tail) expect(rawLines()[0]!.length, 'the rejected line had fewer characters than bytes in it').toBeLessThan(cap - 1);
+          reset();
+          expect(one(make(cap + 1, tail), E).truncated).toBe(true);
+          reset();
+        }
+      });
+
+      it('multibyte input is bounded in bytes: three euro-and-control paths whose serialized form passes the cap are shed to a line under it', () => {
+        const [eu, cc] = cap >= B.lineBytesBelow ? [100, 200] : [24, 50];   // 3 bytes and 6 bytes serialized: three paths pass the cap, one fits
+        const e = `${'€'.repeat(eu)}${ctl(cc)}`;
+        const l = one(ev('SubagentStop', { agent_id: 'a1', agent_type: '€'.repeat(40), cwd: `/${e}`, transcript_path: `/${e}`, agent_transcript_path: `/${e}` }), E);
+        const raw = rawLines()[0]!;
+        expect(l.truncated).toBe(true);
+        expect(bytes(raw) + 1).toBeLessThan(cap);
+        expect(raw.length, 'fewer characters than bytes: the cap is on bytes').toBeLessThan(bytes(raw));
+        expect(l.agentId).toBe('a1');
+      });
+    });
+  }
 
   // ── Step 3: the Bash listing ──
   describe('the Bash listing: names of <git-common-dir>/worktrees, bounded, never paths', () => {
@@ -1161,7 +1276,8 @@ describe('the delegation spool: the hook appends evidence to a directory ccd mad
       expect('truncated' in l).toBe(false);
     });
 
-    it('more names than the count bound drops the whole listing; exactly the bound keeps it', () => {
+    // Under the small cap 256 names can never fit one line (the cap drops them first), so the count bound is reachable only on 4096 (D-5436).
+    it.skipIf(!!NO_GLIBC_ARM)(`more names than the count bound drops the whole listing; exactly the bound keeps it${NO_GLIBC_ARM ? ` (skipped: ${NO_GLIBC_ARM})` : ''}`, () => {
       mkRepo(Array.from({ length: B.listingNames }, (_, i) => `w${i}`));
       expect(one(pre('Bash', { command: WT }, 'toolu_01', { cwd: repo })).listing).toHaveLength(B.listingNames);
       admin('w-extra');
@@ -1170,128 +1286,135 @@ describe('the delegation spool: the hook appends evidence to a directory ccd mad
       expect(l.truncated).toBe(true);
     });
 
-    it('listing is dropped FIRST when it cannot fit: the other optional fields stay, truncated is set, the line is under the cap', () => {
-      // 160 names of 23 bytes are 3,680 bytes raw and 4,161 serialized (25 a quoted name, 159 commas, 2 brackets), over the 4,096
-      // cap on their own, so the drop never rests on the TMPDIR's length. The plan's measured ~3.9 KiB case (140 names) passed the
-      // cap by only 4 bytes under a short TMPDIR such as CI's /tmp.
-      mkRepo(Array.from({ length: 160 }, (_, i) => `agent-${String(i).padStart(4, '0')}-0123456789ab`));
-      const l = one(pre('Bash', { command: WT }, 'toolu_01', { cwd: repo }), { CLAUDE_CODE_EXECPATH: '/x/versions/2.1.296' });
-      expect('listing' in l).toBe(false);
-      expect(l.truncated).toBe(true);
-      expect(l).toMatchObject({ cwd: repo, transcriptPath: TRANSCRIPT, claudeVersion: '2.1.296' });
-      mkRepo(Array.from({ length: 100 }, (_, i) => `agent-${String(i).padStart(4, '0')}-0123456789ab`));
-      const kept = one(pre('Bash', { command: WT }, 'toolu_02', { cwd: repo }));
-      expect(kept.listing).toHaveLength(100);
-      expect('truncated' in kept).toBe(false);
-    });
+    for (const arm of CAP_ARMS) {
+      describe.skipIf(!!arm.skip)(`the listing against ${arm.label}${arm.skip ? ` (skipped: ${arm.skip})` : ''}`, () => {
+        const cap = arm.cap;
+        const E = arm.env;
+        it('listing is dropped FIRST when it cannot fit: the other optional fields stay, truncated is set, the line is under the cap', () => {
+          // 160 names of 23 bytes are 3,680 bytes raw and 4,161 serialized (25 a quoted name, 159 commas, 2 brackets), over the 4,096
+          // cap on their own, so the drop never rests on the TMPDIR's length. The plan's measured ~3.9 KiB case (140 names) passed the
+          // cap by only 4 bytes under a short TMPDIR such as CI's /tmp.
+          mkRepo(Array.from({ length: 160 }, (_, i) => `agent-${String(i).padStart(4, '0')}-0123456789ab`));
+          const l = one(pre('Bash', { command: WT }, 'toolu_01', { cwd: repo }), { ...E, CLAUDE_CODE_EXECPATH: '/x/versions/2.1.296' });
+          expect('listing' in l).toBe(false);
+          expect(l.truncated).toBe(true);
+          expect(l).toMatchObject({ cwd: repo, transcriptPath: TRANSCRIPT, claudeVersion: '2.1.296' });
+          const keep = cap >= B.lineBytesBelow ? 100 : 8;         // the small cap leaves room for about 15 to 20 such names (D-5436)
+          mkRepo(Array.from({ length: keep }, (_, i) => `agent-${String(i).padStart(4, '0')}-0123456789ab`));
+          const kept = one(pre('Bash', { command: WT }, 'toolu_02', { cwd: repo }), E);
+          expect(kept.listing).toHaveLength(keep);
+          expect('truncated' in kept).toBe(false);
+        });
 
-    it('when the listing is dropped the line is exactly the line it would have been with no listing, plus truncated:true', () => {
-      // 160 names of 23 bytes serialize to 4,161 bytes of listing on their own (3,680 raw; 25 a quoted name, 159 commas, 2
-      // brackets), so the line passes the cap wherever the run is: with 140, the drop rested on the rest of the line, which a
-      // short TMPDIR (CI's /tmp) kept under it.
-      mkRepo(Array.from({ length: 160 }, (_, i) => `agent-${String(i).padStart(4, '0')}-0123456789ab`));
-      const withDrop = one(pre('Bash', { command: WT }, 'toolu_01', { cwd: repo }));
-      const plain = one(pre('Bash', { command: 'git status' }, 'toolu_01', { cwd: repo }));
-      const strip = (l: any) => { const { observedAt: _o, truncated: _t, ...rest } = l; return rest; };
-      expect(strip(withDrop)).toEqual(strip(plain));
-    });
+        it('when the listing is dropped the line is exactly the line it would have been with no listing, plus truncated:true', () => {
+          // 160 names of 23 bytes serialize to 4,161 bytes of listing on their own (3,680 raw; 25 a quoted name, 159 commas, 2
+          // brackets), so the line passes the cap wherever the run is: with 140, the drop rested on the rest of the line, which a
+          // short TMPDIR (CI's /tmp) kept under it.
+          mkRepo(Array.from({ length: 160 }, (_, i) => `agent-${String(i).padStart(4, '0')}-0123456789ab`));
+          const withDrop = one(pre('Bash', { command: WT }, 'toolu_01', { cwd: repo }), E);
+          const plain = one(pre('Bash', { command: 'git status' }, 'toolu_01', { cwd: repo }), E);
+          const strip = (l: any) => { const { observedAt: _o, truncated: _t, ...rest } = l; return rest; };
+          expect(strip(withDrop)).toEqual(strip(plain));
+        });
 
-    // ── The listing against the cap (review 518, F1 and F2) ──
-    // The listing is spliced onto the jq's line as text, so two rules live in the splice and in the jq text beside it, and
-    // neither was pinned by a row that reaches them:
-    //   R96  the jq reserves 17 bytes (`,"truncated":true`) on a worktree-Bash line, because the splice adds exactly that
-    //        when it drops a listing, and a line that is then over the cap is not written at all;
-    //   R97  the splice adds a listing only to a line that shed nothing (the plan's "listing first" order).
-    // Both rows size their line from a MEASURED one (the same call with its padding at its smallest, not naming a worktree, so
-    // nothing is shed on account of a listing), so they land on the byte wherever the run's TMPDIR puts the cwd.
-    describe('the listing against the cap: the 17-byte reservation and the listing-first order (R96, R97)', () => {
-      const ctl = (n: number): string => '\u0001'.repeat(n);   // 6 bytes each in a JSON line, 1 raw
-      /** A path under the repo (its walk up finds the repo) with `n` more 200-byte components: all plain bytes, none shed before cwd. */
-      const deep = (n: number): string => `${repo}${`/${'d'.repeat(199)}`.repeat(n)}`;
-      /** A Bash call by a sub-agent (so `agentType` can carry padding, as the transcript path does) whose text is `command`. */
-      const call = (command: string, tp: string, at: string, cwd: string): Record<string, unknown> =>
-        pre('Bash', { command }, 'toolu_pad', { cwd, agent_id: 'a1', agent_type: at, transcript_path: tp });
-      const clear = (): void => { for (const f of bucketFiles()) fs.rmSync(path.join(ownerDir(), f)); };
-      const lastRaw = (): string => rawLines().at(-1)!;
-      /** The size of the line a call that does NOT name a worktree writes: it reserves nothing and never gets a listing, so it is the n=0 line. */
-      const measured = (tp: string, at: string, cwd: string): number => {
-        clear();
-        one(call('git status', tp, at, cwd));
-        const n = bytes(lastRaw());
-        clear();
-        return n;
-      };
-      /** Padding strings (the transcript path, from `/`, and the agent type, from `x`) that add exactly `extra` bytes to a measured line. */
-      const fill = (extra: number): { tp: string; at: string } => {
-        const plain = extra % 6;                                    // a plain character costs one byte, a control character six
-        const m = (extra - plain) / 6;
-        const k1 = Math.min(m, 511);                                // the path bound is 512 characters, and the probe's path is one
-        const k2 = m - k1;                                          // the type bound is 128 characters, and the probe's type is one
-        if (k2 + plain > 127) throw new Error(`cannot add ${extra} bytes to a line from its transcript path and agent type`);
-        return { tp: `/${ctl(k1)}`, at: `x${ctl(k2)}${'y'.repeat(plain)}` };
-      };
+        // ── The listing against the cap (review 518, F1 and F2) ──
+        // The listing is spliced onto the jq's line as text, so two rules live in the splice and in the jq text beside it, and
+        // neither was pinned by a row that reaches them:
+        //   R96  the jq reserves 17 bytes (`,"truncated":true`) on a worktree-Bash line, because the splice adds exactly that
+        //        when it drops a listing, and a line that is then over the cap is not written at all;
+        //   R97  the splice adds a listing only to a line that shed nothing (the plan's "listing first" order).
+        // Both rows size their line from a MEASURED one (the same call with its padding at its smallest, not naming a worktree, so
+        // nothing is shed on account of a listing), so they land on the byte wherever the run's TMPDIR puts the cwd.
+        describe('the listing against the cap: the 17-byte reservation and the listing-first order (R96, R97)', () => {
+          const ctl = (n: number): string => '\u0001'.repeat(n);   // 6 bytes each in a JSON line, 1 raw
+          /** A path under the repo (its walk up finds the repo) with `n` more 200-byte components: all plain bytes, none shed before cwd. */
+          const deep = (n: number): string => `${repo}${`/${'d'.repeat(199)}`.repeat(n)}`;
+          /** A Bash call by a sub-agent (so `agentType` can carry padding, as the transcript path does) whose text is `command`. */
+          const call = (command: string, tp: string, at: string, cwd: string): Record<string, unknown> =>
+            pre('Bash', { command }, 'toolu_pad', { cwd, agent_id: 'a1', agent_type: at, transcript_path: tp });
+          const clear = (): void => { for (const f of bucketFiles()) fs.rmSync(path.join(ownerDir(), f)); };
+          const lastRaw = (): string => rawLines().at(-1)!;
+          /** The size of the line a call that does NOT name a worktree writes: it reserves nothing and never gets a listing, so it is the n=0 line. */
+          const measured = (tp: string, at: string, cwd: string): number => {
+            clear();
+            one(call('git status', tp, at, cwd), E);
+            const n = bytes(lastRaw());
+            clear();
+            return n;
+          };
+          /** Padding strings (the transcript path, from `/`, and the agent type, from `x`) that add exactly `extra` bytes to a measured line. */
+          const fill = (extra: number): { tp: string; at: string } => {
+            const plain = extra % 6;                                    // a plain character costs one byte, a control character six
+            const m = (extra - plain) / 6;
+            const k1 = Math.min(m, 511);                                // the path bound is 512 characters, and the probe's path is one
+            const k2 = m - k1;                                          // the type bound is 128 characters, and the probe's type is one
+            if (k2 + plain > 127) throw new Error(`cannot add ${extra} bytes to a line from its transcript path and agent type`);
+            return { tp: `/${ctl(k1)}`, at: `x${ctl(k2)}${'y'.repeat(plain)}` };
+          };
 
-      it.each([
-        [4077, 'one byte below the band: the n=0 line itself passes the jq, the splice adds truncated to it, and the cwd stays'],
-        [4078, 'the first byte of the band'],
-        [4086, 'the middle of the band'],
-        [4094, 'the last byte that fits when nothing is reserved'],
-      ])('a worktree Bash line that is %i bytes at n=0 is written with truncated:true and no listing, never lost with it (R96): %s', (target) => {
-        const cwd = deep(1);
-        const { tp, at } = fill(target - measured('/', 'x', cwd));
-        // The sizing is exact: the same call, not naming a worktree, is not a trigger, reserves nothing and lands on `target`.
-        const plain = one(call('git status', tp, at, cwd));
-        expect(bytes(lastRaw()), 'the padding sized the n=0 line to the byte').toBe(target);
-        expect('truncated' in plain).toBe(false);
-        clear();
-        // The worktree call sees a listing it cannot fit (three names are 52 more bytes). The line without it, plus the 17 bytes
-        // of `,"truncated":true`, must still be under the cap: the jq left room for exactly that.
-        const l = one(call(WT, tp, at, cwd));
-        expect(l.truncated, 'the line says its listing was dropped').toBe(true);
-        expect('listing' in l).toBe(false);
-        expect(l).toMatchObject({ eventKind: 'PreToolUse', toolName: 'Bash', toolUseId: 'toolu_pad', sessionId: OWNER,
-          parentIncarnation: GENERATION, claudeSessionId: CLAUDE_SID, agentId: 'a1' });
-        expect(lastRaw().match(/"truncated"/g), 'one truncated key').toHaveLength(1);
-        if (target === 4077) expect(l.cwd, 'the reservation is no wider than 17 bytes: nothing was shed for it').toBe(cwd);
+          it.each([
+            [cap - 19, 'one byte below the band: the n=0 line itself passes the jq, the splice adds truncated to it, and the cwd stays'],
+            [cap - 18, 'the first byte of the band'],
+            [cap - 10, 'the middle of the band'],
+            [cap - 2, 'the last byte that fits when nothing is reserved'],
+          ])('a worktree Bash line that is %i bytes at n=0 is written with truncated:true and no listing, never lost with it (R96): %s', (target) => {
+            const cwd = deep(1);
+            const { tp, at } = fill(target - measured('/', 'x', cwd));
+            // The sizing is exact: the same call, not naming a worktree, is not a trigger, reserves nothing and lands on `target`.
+            const plain = one(call('git status', tp, at, cwd), E);
+            expect(bytes(lastRaw()), 'the padding sized the n=0 line to the byte').toBe(target);
+            expect('truncated' in plain).toBe(false);
+            clear();
+            // The worktree call sees a listing it cannot fit (three names are 52 more bytes). The line without it, plus the 17 bytes
+            // of `,"truncated":true`, must still be under the cap: the jq left room for exactly that.
+            const l = one(call(WT, tp, at, cwd), E);
+            expect(l.truncated, 'the line says its listing was dropped').toBe(true);
+            expect('listing' in l).toBe(false);
+            expect(l).toMatchObject({ eventKind: 'PreToolUse', toolName: 'Bash', toolUseId: 'toolu_pad', sessionId: OWNER,
+              parentIncarnation: GENERATION, claudeSessionId: CLAUDE_SID, agentId: 'a1' });
+            expect(lastRaw().match(/"truncated"/g), 'one truncated key').toHaveLength(1);
+            if (target === cap - 19) expect(l.cwd, 'the reservation is no wider than 17 bytes: nothing was shed for it').toBe(cwd);
+          });
+
+          const SHED = cap - 196;                                     // 3,900 on the 4096 cap, 812 on the small one
+          /** A worktree call whose n=0 and n=1 lines are over the cap and whose n=2 line (the cwd gone) is `SHED` bytes, well under it: three names would fit beside it. */
+          const shedCall = (): { l: any; raw: string } => {
+            // The transcript path and agent type are inflated and the cwd has one 200-byte component more (all of it shed with the
+            // cwd at n=2), so n=0 and n=1 are over the cap and n=2 is the first line that fits: n=0 is cap - 13 bytes plus the cwd's
+            // field, and n=1 (17 bytes more, with 17 reserved beside it) stops fitting at an n=0 of cap - 35, whatever the repository path.
+            const cwd = deep(1);
+            expect(bytes(cwd), 'this run\'s TMPDIR leaves room for the padded cwd').toBeLessThanOrEqual(B.pathBytes);
+            const base = measured('/', 'x', repo);
+            const { tp, at } = fill(SHED - 17 - (base - (7 + bytes(JSON.stringify(repo)))));   // everything but the cwd, plus `,"truncated":true`
+            clear();
+            const l = one(call(WT, tp, at, cwd), E);
+            return { l, raw: lastRaw() };
+          };
+
+          it('a line that already shed fields carries NO listing, even one that would fit, and has one truncated key (R97)', () => {
+            const control = one(call(WT, '/', 'x', repo), E);
+            expect(control.listing, 'control: a line that shed nothing gets the same repo\'s listing').toHaveLength(3);
+            expect('truncated' in control).toBe(false);
+            const { l, raw } = shedCall();
+            expect(l.truncated).toBe(true);
+            expect('cwd' in l, 'the premise: this line shed its cwd').toBe(false);
+            expect('listing' in l, 'listing goes first, and only onto a line that shed nothing').toBe(false);
+            expect(raw.match(/"truncated"/g), 'one truncated key').toHaveLength(1);
+            expect(bytes(raw), 'the premise: the n=2 line is the size the padding was cut for').toBe(SHED);
+          });
+
+          it('a line that already shed fields and meets a listing it cannot keep gets no second truncated key (R97)', () => {
+            admin('has space');                                  // a name outside the grammar: the whole listing is dropped
+            const { l, raw } = shedCall();
+            expect(l.truncated).toBe(true);
+            expect('cwd' in l, 'the premise: this line shed its cwd').toBe(false);
+            expect('listing' in l).toBe(false);
+            expect(raw.match(/"truncated"/g), 'one truncated key, not one spliced on again').toHaveLength(1);
+            expect(bytes(raw), 'the premise: the n=2 line is the size the padding was cut for').toBe(SHED);
+          });
+        });
       });
-
-      const SHED = 3900;
-      /** A worktree call whose n=0 and n=1 lines are over the cap and whose n=2 line (the cwd gone) is `SHED` bytes, well under it: three names would fit beside it. */
-      const shedCall = (): { l: any; raw: string } => {
-        // The transcript path and agent type are inflated and the cwd has one 200-byte component more (all of it shed with the
-        // cwd at n=2), so n=0 and n=1 are over the cap and n=2 is the first line that fits: n=0 is 4,083 bytes plus the cwd's
-        // field, and n=1 (17 bytes more, with 17 reserved beside it) stops fitting at an n=0 of 4,061, whatever the repository path.
-        const cwd = deep(1);
-        expect(bytes(cwd), 'this run\'s TMPDIR leaves room for the padded cwd').toBeLessThanOrEqual(B.pathBytes);
-        const base = measured('/', 'x', repo);
-        const { tp, at } = fill(SHED - 17 - (base - (7 + bytes(JSON.stringify(repo)))));   // everything but the cwd, plus `,"truncated":true`
-        clear();
-        const l = one(call(WT, tp, at, cwd));
-        return { l, raw: lastRaw() };
-      };
-
-      it('a line that already shed fields carries NO listing, even one that would fit, and has one truncated key (R97)', () => {
-        const control = one(call(WT, '/', 'x', repo));
-        expect(control.listing, 'control: a line that shed nothing gets the same repo\'s listing').toHaveLength(3);
-        expect('truncated' in control).toBe(false);
-        const { l, raw } = shedCall();
-        expect(l.truncated).toBe(true);
-        expect('cwd' in l, 'the premise: this line shed its cwd').toBe(false);
-        expect('listing' in l, 'listing goes first, and only onto a line that shed nothing').toBe(false);
-        expect(raw.match(/"truncated"/g), 'one truncated key').toHaveLength(1);
-        expect(bytes(raw), 'the premise: the n=2 line is the size the padding was cut for').toBe(SHED);
-      });
-
-      it('a line that already shed fields and meets a listing it cannot keep gets no second truncated key (R97)', () => {
-        admin('has space');                                  // a name outside the grammar: the whole listing is dropped
-        const { l, raw } = shedCall();
-        expect(l.truncated).toBe(true);
-        expect('cwd' in l, 'the premise: this line shed its cwd').toBe(false);
-        expect('listing' in l).toBe(false);
-        expect(raw.match(/"truncated"/g), 'one truncated key, not one spliced on again').toHaveLength(1);
-        expect(bytes(raw), 'the premise: the n=2 line is the size the padding was cut for').toBe(SHED);
-      });
-    });
+    }
   });
 
   // ── Step 3: the incarnation ──
@@ -1358,8 +1481,8 @@ describe('the delegation spool: the hook appends evidence to a directory ccd mad
 
   // ── Step 4: append and prune ──
   describe('append: one complete line per write, from any number of hooks at once', () => {
-    const racer = (payload: object): Promise<number | null> => new Promise((resolve, reject) => {
-      const child = spawn('bash', [HOOK], { env: hookEnv() });
+    const racer = (payload: object, env: Record<string, string> = {}): Promise<number | null> => new Promise((resolve, reject) => {
+      const child = spawn('bash', [HOOK], { env: hookEnv(env) });
       child.on('error', reject);
       child.on('close', (code) => resolve(code));
       child.stdin.end(JSON.stringify(payload));
@@ -1377,7 +1500,9 @@ describe('the delegation spool: the hook appends evidence to a directory ccd mad
       expect(new Set(ls.map((l) => l.toolUseId)).size).toBe(32);
     }, 180_000);
 
-    it('lines near the cap do not interleave: twelve hooks at once, each writing ~3.9 KiB', async () => {
+    // A line is one write(2) only while it fits bash's stdout buffer (D-5436): on darwin these 3.9 KiB lines were four writes each
+    // and one red in four runs interleaved two of them, so the 4096 arm runs only where this bash picks 4096.
+    it.skipIf(!!NO_GLIBC_ARM)(`lines near the 4096 cap do not interleave: twelve hooks at once, each writing ~3.9 KiB${NO_GLIBC_ARM ? ` (skipped: ${NO_GLIBC_ARM})` : ''}`, async () => {
       const filler = (n: number): string => '\u0001'.repeat(300).padEnd(300 + n, 'x');
       const ids = Array.from({ length: 12 }, (_, i) => `toolu_big${i}`);
       const codes = await Promise.all(ids.map((id, i) => racer(pre('Agent', {}, id, { cwd: `/${filler(i)}`, transcript_path: `/${filler(i)}` }))));
@@ -1385,6 +1510,23 @@ describe('the delegation spool: the hook appends evidence to a directory ccd mad
       const raws = rawLines();
       expect(raws).toHaveLength(12);
       for (const raw of raws) { expect(bytes(raw) + 1).toBeLessThan(4096); expect(validate(JSON.parse(raw))).toEqual([]); }
+      expect(new Set(raws.map((r) => JSON.parse(r).toolUseId)).size).toBe(12);
+    }, 180_000);
+
+    it('lines near the small cap do not interleave: twelve hooks at once, each writing just under 1008 bytes, on every platform (D-5436)', async () => {
+      // Two 54-control-character paths (325 bytes serialized each) and a short tail per hook: about 960 to 990 bytes a line, kept whole.
+      const filler = (n: number): string => '\u0001'.repeat(54).padEnd(54 + n, 'x');
+      const ids = Array.from({ length: 12 }, (_, i) => `toolu_near${i}`);
+      const codes = await Promise.all(ids.map((id, i) => racer(pre('Agent', {}, id, { cwd: `/${filler(i)}`, transcript_path: `/${filler(i)}` }), SMALL)));
+      expect(codes.every((c) => c === 0)).toBe(true);
+      const raws = rawLines();
+      expect(raws).toHaveLength(12);
+      for (const raw of raws) {
+        expect(bytes(raw) + 1).toBeLessThan(B.lineBytesBelowSmall);
+        expect(bytes(raw) + 1, 'the premise: the line is near the cap').toBeGreaterThan(900);
+        expect(validate(JSON.parse(raw))).toEqual([]);
+        expect('truncated' in JSON.parse(raw), 'and kept whole').toBe(false);
+      }
       expect(new Set(raws.map((r) => JSON.parse(r).toolUseId)).size).toBe(12);
     }, 180_000);
 
