@@ -3510,8 +3510,8 @@ fi
 # no line; an optional one that is over its bound is dropped, never cut, and marks the line `truncated`.
 # THE CAP: a line plus its LF is under DSP_LINE_BELOW bytes, counted serialized (escapes count): 4096 where OSTYPE and BASH_VERSINFO both say
 # glibc Linux, else 1008 (D-5436), and the jq sheds to the same value. Over it, `listing`, `claudeVersion`, `cwd`, `agentType`, `transcriptPath`
-# go in that order and `truncated: true` is set; a line its required fields alone pass is not written. One builtin `printf` is one write(2), so
-# racing hooks never interleave, only within bash's stdout buffer: st_blksize (4096 or more) on glibc with a distro bash, 1008 or 2016 with bash's
+# go in that order and `truncated: true` is set; a line its required fields alone pass is not written. One builtin `printf` is one write(2), and
+# racing hooks never interleave, only while the line fits bash's stdout buffer: st_blksize (4096 on the usual filesystems) on glibc, 1008 or 2016 with bash's
 # own malloc, 1024 on BSD, macOS or musl libc. No fence goes first (an empty line is unparseable); a full disk's torn tail, or bytes a failed builtin write left in stdout, is the reader's `unmeasured` (spec §5.3).
 #
 # GATES, all builtins and all before the jq (the statement on the line above the parse): the owner's directory exists and is not a

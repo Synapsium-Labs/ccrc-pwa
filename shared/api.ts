@@ -11075,7 +11075,7 @@ export interface DelegationHealthInput {
  *  trees, never from a guess:
  *   - `lineBytesBelow`, and `lineBytesBelowSmall` off glibc Linux (D-5436): LESS than the cap, counting the LF. A builtin `printf`
  *     goes through bash's stdout buffer, so a line reaches the file in ONE `write(2)` only if it fits: glibc with a distro bash
- *     sizes it from st_blksize (4096 or more), bash's own malloc gives 1008 or 2016, and BSD and macOS libc, and musl, give 1024. One
+ *     sizes it from st_blksize (4096 on the usual filesystems), bash's own malloc 1008 or 2016, BSD and macOS libc and musl 1024. One
  *     O_APPEND write is the only append two hooks racing on one bucket never interleave. The server's reader bounds every line at 4096.
  *   - `idBytes`: the longest id in the corpus is 36 (a Claude session UUID; agent ids 17, task ids 9, run ids 15); a real
  *     `tool_use_id` is about 30 (the corpus's are shorter placeholders). 64 is the

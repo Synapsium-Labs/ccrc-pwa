@@ -46,11 +46,13 @@ const CAP_STMT = ((): string => {
   return m ? m[0] : 'DSP_LINE_BELOW=4096;';
 })();
 const capMemo = new Map<string, number>();
-/** The cap the hook's statement picks under `env` (merged over this process's environment, as `hookEnv` does). */
+/** This process's environment WITHOUT an exported OSTYPE, so a run's own bash says what it is unless a row forces one. */
+const inherited = (): NodeJS.ProcessEnv => { const e = { ...process.env }; delete e['OSTYPE']; return e; };
+/** The cap the hook's statement picks under `env` (merged over `inherited()`, as `hookEnv` does). */
 const capOf = (env: Record<string, string> = {}): number => {
   const key = JSON.stringify(env);
   if (!capMemo.has(key)) {
-    const r = spawnSync('bash', ['-c', `${CAP_STMT} printf '%s' "$DSP_LINE_BELOW"`], { env: { ...process.env, ...env }, encoding: 'utf8' });
+    const r = spawnSync('bash', ['-c', `${CAP_STMT} printf '%s' "$DSP_LINE_BELOW"`], { env: { ...inherited(), ...env }, encoding: 'utf8' });
     capMemo.set(key, Number(r.stdout));
   }
   return capMemo.get(key)!;
@@ -183,7 +185,7 @@ const plantOwnerDir = (id = OWNER): void => { fs.mkdirSync(ownerDir(id), { recur
 let expectGen = GENERATION;
 /** `CLAUDE_CODE_EXECPATH` is blanked: the runner's own would put a `claudeVersion` in every line. */
 const hookEnv = (env: Record<string, string> = {}): NodeJS.ProcessEnv => ({
-  ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+  ...inherited(), HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
   TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION,
   CLAUDE_CODE_EXECPATH: '', ...env,
 });
@@ -431,6 +433,12 @@ describe('the hook\'s literal bounds equal DELEGATION_SPOOL_BOUNDS', () => {
     expect(total, 'and by a wide margin: the claim in the bounds comment (3.2 KiB) holds').toBeLessThan(3277);
     // On the small cap the envelope is smaller than the bounds: such a launch's required fields alone pass 1008, so it writes no line.
     expect(total, 'the small cap does not hold the worst launch').toBeGreaterThanOrEqual(B.lineBytesBelowSmall);
+    // What it does hold: a launch with typical ids and labels has about 480 bytes for its two paths together on the small cap.
+    const typical = (p: number): number => bytes(JSON.stringify({ ...worst, sessionId: 'o'.repeat(40), claudeSessionId: CLAUDE_SID,
+      toolUseId: 'toolu_01ABCDEFGHIJKLMNOPQRSTUVWX', launch: { status: 'async-launched', taskId: 'w1a2b3c4d', taskType: 'local_workflow',
+        workflowName: 'review-panel', runId: 'wf_1a2b3c4d-e5f', transcriptDir: '/'.padEnd(p, 'd'), scriptPath: '/'.padEnd(p, 's') } })) + 1;
+    expect(typical(240), 'two 240-byte paths fit the small cap').toBeLessThan(B.lineBytesBelowSmall);
+    expect(typical(250), 'two 250-byte paths do not').toBeGreaterThanOrEqual(B.lineBytesBelowSmall);
   });
 });
 
