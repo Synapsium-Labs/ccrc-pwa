@@ -45,7 +45,7 @@ import { cn } from '../lib/cn';
  *  tidying, and inventing half-step tokens for two paddings is worse. */
 export const CHIP =
   'chip inline-flex items-center gap-[6px] rounded-full px-[9px] py-1'
-  + ' font-mono text-xs font-medium leading-none not-italic normal-nums';
+  + ' font-mono text-meta font-medium leading-none not-italic normal-nums';
 
 /** The dot, when there is one. `currentColor`, so it needs no colour of its
  *  own — see the header. Rendered `aria-hidden`: the label carries the

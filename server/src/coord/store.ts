@@ -95,7 +95,7 @@ import {
   RUN_HOLD_NUMBER_MAX,
   IDLE_RUN_STATES, transitionsFor, TERMINAL_DELIVERY_STATES, TERMINAL_RUN_STATES, TMPROOT_ID_MAX_CHARS,
   WAVE_DONE_SUBJECT,
-  type AskReleaseReason, type AskState,
+  type AskMintReleaseReason, type AskReleaseReason, type AskState,
   type ClaimConflict, type ClaimState, type ClaimSummary,
   type CoordCaps, type DeviationAllocation, type DeviationAllocState,
   type LifecycleAct, type LifecycleGap, type LifecycleGapReason, type LifecycleOutcome,
@@ -150,6 +150,12 @@ export interface PrLineageEntry { pr: number; branch: string; phase: string; rec
 export interface RunRow extends RunSummary {
   prLineage: PrLineageEntry[]; coordProject: string | null;
   sessionBornAt: number | null; sessionBornFor: string | null;
+  /** Migration 23 (D-5298): the open was ACCEPTED with no `claimedByUuid`
+   *  (before the fleet carried the client) and journaled so — the claimant was
+   *  only shown to be listed, never attributed. Read through on
+   *  `coordProject`'s idiom and stripped off the wire by `toRunSummary`.
+   *  D-5531: the ask lane fails closed on it (`run-unattributed`). */
+  unattributed: boolean;
 }
 
 /** One open run naming a session. NOT a `RunRow`: these four columns are all
@@ -185,10 +191,10 @@ export type { CoordPlacementStamp };
  *  and the `runs` WS frame's own emitter (`watch.ts`'s `emitRuns`, Task 10)
  *  rather than each holding its own copy of the strip. Strips `sessionBornAt`
  *  and `sessionBornFor` (migration 16) on the same idiom: server-only
- *  measurements, never sent. */
+ *  measurements, never sent. And `unattributed` (migration 23), the same. */
 export const toRunSummary = (row: RunRow): RunSummary => {
   const { prLineage: _prLineage, coordProject: _coordProject, sessionBornAt: _sessionBornAt,
-          sessionBornFor: _sessionBornFor, ...summary } = row;
+          sessionBornFor: _sessionBornFor, unattributed: _unattributed, ...summary } = row;
   return summary;
 };
 
@@ -866,6 +872,7 @@ interface RunRowDb {
   coordProject: string | null;
   sessionBornAt: number | null;
   sessionBornFor: string | null;
+  unattributed: number;
 }
 
 /** CAST-to-TEXT rather than `setReadBigInts(true)` (D-2590, a deliberate
@@ -886,7 +893,7 @@ const RUN_ROW_COLUMNS =
   'r.resumed, r.clearedAt, r.openedAt, r.dispatchStartedAt, ' +
   'r.dispatchedAt, r.closedAt, ' +
   'r.handoffCommit, r.prLineage, r.briefQueued, r.clearError, r.coordProject, r.sessionBornAt, ' +
-  'r.sessionBornFor';
+  'r.sessionBornFor, r.unattributed';
 
 /** ONE persisted integer, read as TEXT and proven representable.
  *
@@ -4151,6 +4158,10 @@ export class CoordStore {
       // rebound (spec §5.3's recycled-slug hazard, extended across a
       // rollback).
       sessionBornFor: row.sessionBornFor,
+      // Migration 23's journal (D-5298), read through on the same idiom; 1 is
+      // "accepted unattributed", every other value (0, the column default every
+      // older row carries) is not. D-5531 reads it in the ask lane.
+      unattributed: row.unattributed === 1,
     };
   }
 
@@ -7029,8 +7040,9 @@ export class CoordStore {
   }
 
   /** Minted at hold time (Task 6), state `'held'` — or, with a
-   *  `releaseReason` (D-5290), `'released'` at once, for a child whose parent
-   *  is not live or of another project. Those are the only states an ask is
+   *  `releaseReason` (D-5290), `'released'` at once, for a child the hold
+   *  fails closed on (D-5530: a parent not live or not measurable, a run with
+   *  no claimant or of another programme). Those are the only states an ask is
    *  ever inserted in; nothing else writes a fresh row.
    *
    *  THE `runId` GUARD IS DEFENSIVE (D-2545) and unreachable by construction
@@ -7048,9 +7060,10 @@ export class CoordStore {
   insertAsk(a: {
     childId: string; parentId: string; runId: number | null; askKey: string;
     askAt: number; dialogId: string; question: string; options: string[]; now: number;
-    /** D-5290: present, the row is minted `released` at `now` with this reason
-     *  (the parent is not live, or of another project), never `held`. */
-    releaseReason?: Exclude<AskReleaseReason, 'unknown'>;
+    /** D-5290: present, the row is minted `released` at `now` with this reason,
+     *  never `held`. D-5530: one of the fail-closed words (`AskMintReleaseReason`);
+     *  `parent-project-mismatch` is read-only and never written again. */
+    releaseReason?: AskMintReleaseReason;
   }): number {
     if (a.runId !== null && !isPositiveDecimalSafeInteger(a.runId)) {
       // The COLUMN and nothing else — the offending value never leaves here.
@@ -7077,14 +7090,22 @@ export class CoordStore {
   }
 
   /** The parent's cross-sibling read (Task 11's `GET /api/asks`) — every ask
-   *  addressed to this parent, or only those in one `state` when given. */
+   *  HELD for this parent, or only those in one `state` when given.
+   *
+   *  D-5530: `releaseReason IS NULL` is the "held for it" half. A row minted
+   *  `released` (any `releaseReason`, the legacy `parent-project-mismatch`
+   *  included) was never held for anyone: the operator owned it from its first
+   *  tick, the parent was never mailed it and may not answer it (D-5363), so
+   *  its question text is not the parent's to read. A row the LAPSE released
+   *  keeps a NULL reason and stays listed, because it was held for this parent
+   *  and is still its to answer (D-5289). */
   asksForParent(parentId: string, state?: AskState): AsksReadResult {
     const rows = (state === undefined
       ? this.db.prepare(
-          `SELECT ${CoordStore.ASK_COLS} FROM asks WHERE parentId = ? ORDER BY id`,
+          `SELECT ${CoordStore.ASK_COLS} FROM asks WHERE parentId = ? AND releaseReason IS NULL ORDER BY id`,
         ).all(parentId)
       : this.db.prepare(
-          `SELECT ${CoordStore.ASK_COLS} FROM asks WHERE parentId = ? AND state = ? ORDER BY id`,
+          `SELECT ${CoordStore.ASK_COLS} FROM asks WHERE parentId = ? AND state = ? AND releaseReason IS NULL ORDER BY id`,
         ).all(parentId, state)) as Parameters<CoordStore['hydrateAsk']>[0][];
     const asks: AskRow[] = [];
     for (const r of rows) {

@@ -2317,6 +2317,30 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec Â
     expect(row).toMatch(/you sit outside that project; `by` names YOUR project/);
   });
 
+  // D-5530 (the operator's ruling of 2026-10-18): a cross-project coordinator
+  // receives its children's questions. The crossing section and the ask lane
+  // say so, and neither may say that another project's children's questions
+  // go to the operator.
+  it('says a cross-project coordinator receives its children\'s questions (D-5530)', () => {
+    const start = skill.indexOf('## When a wave crosses into another project');
+    expect(start, 'the crossing section is gone').toBeGreaterThanOrEqual(0);
+    const end = skill.indexOf('\n## ', start + 1);
+    const section = flat(skill.slice(start, end === -1 ? undefined : end));
+    expect(section).toMatch(/Your children's questions come to you wherever you sit/);
+    expect(section).toMatch(/held for the recorded claimant of the child's run, which is you, whatever project/);
+    const lifecycle = refs('wave-lifecycle.md');
+    const at = lifecycle.indexOf('## The ask lane');
+    expect(at, 'wave-lifecycle.md no longer carries the ask lane').toBeGreaterThanOrEqual(0);
+    const lane = flat(lifecycle.slice(at, lifecycle.indexOf('\n## ', at + 1)));
+    expect(lane).toMatch(/A cross-project coordinator receives its children's questions/);
+    expect(lane).toMatch(/no project is compared/);
+    expect(lane).toMatch(/any other caller, whatever its project, is `403 not-parent`/);
+    // D-5531: a run whose claimant was never attributed holds nothing.
+    expect(section).toMatch(/a run opened without your attribution/);
+    expect(lane).toMatch(/opened without your attribution \(D-5531\)/);
+    for (const text of [section, lane]) expect(text).not.toMatch(/parent-project-mismatch/);
+  });
+
   // D-2686's caps paragraph tells a refused coordinator which numbers to read.
   // It named `running` for BOTH codes for one round, and only `cap-concurrency`
   // carries one â€” so the sentence sent a `cap-daily` reader after a field its

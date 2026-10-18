@@ -3,17 +3,22 @@
 // TWELVE DECLARATIONS, IDENTICAL, IN TWO STYLESHEETS. `.menu-item`
 // (chat.css — the session header's overflow menu) and `.acct-list .acct-row`
 // (fleet.css — the swap sheet's account picker) agreed on every one: the flex
-// row, the 52px height, the `--sp-2`/`--sp-1` padding, the bottom hairline,
+// row, the 52px height (now Refined's `--row-h`), the `--sp-2`/`--sp-1` padding, the bottom hairline,
 // no chrome of its own, left-aligned, and the same press transform. Living in
 // two files is how this one survived every wave that read a single sheet —
 // the shape census found it by comparing declarations instead.
 //
-// 52px IS NOT `--tap-min` AND THAT IS THE POINT. Both rules spelled the
-// literal, eight pixels above the 44px floor, because a row in a LIST is
-// scrolled past as often as it is pressed: the extra height is what separates
-// neighbours a thumb is dragging over. It stays a literal here for the same
-// reason it was one there — `--tap-min` is a floor to clear, not a height to
-// adopt, and a `--list-row` token would imply the two numbers move together.
+// ITS HEIGHT IS `--row-h`, A DENSITY ROLE (D-5093, spec §4.2). Refined's
+// value is 52px, the literal both rules spelled: eight pixels above the 44px
+// floor, because a row in a LIST is scrolled past as often as it is pressed,
+// and the extra height is what separates neighbours a thumb is dragging over.
+// Instrument sets 44, and 32 only inside `(pointer: fine)`. It is the row's
+// MINIMUM height: `py-2` plus the content set the drawn height, so a
+// one-line row under a fine pointer draws 36px, not 32 (D-5461). It is not
+// `--tap-min` and does not move with it: the tap floor is a floor to clear,
+// and `--row-h` is held to it everywhere but under a fine pointer by
+// `skin-identity.test.ts`'s floor case (f2). `role-census.test.ts` holds this
+// row to the role, and Refined's role to 52.
 //
 // IT CLOSES ONE DIRECTION OF A HAZARD, NOT BOTH. `.acct-row` was TWO things
 // in this app: the row of the picker, and the 5h/7d gauge line of `AccountMeterRow`,
@@ -45,7 +50,7 @@ import { GROUND_MOTION, PRESS_GROUND } from '../lib/press';
  *  `border-width` before `border-bottom-width`, which is a sort order, not a
  *  promise. The long form says it in properties that cannot disagree. */
 export const LIST_ROW =
-  'flex w-full items-center gap-3 min-h-[52px] px-1 py-2'
+  'flex w-full items-center gap-3 min-h-row px-1 py-2'
   + ' border-x-0 border-t-0 border-b border-edge-subtle bg-transparent text-left'
   + ` cursor-pointer ${GROUND_MOTION} active:scale-[0.97]`
   // D-5101: the row lifts under the mouse and sinks while held, fading in

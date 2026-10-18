@@ -10719,18 +10719,47 @@ export function parseServerCaps(text: string, nowS: number): ServerCapsParse {
  *  coordinator-first routing spec §5.2) — the row's `releaseReason`, `null`
  *  on every row the hold minted. Rides `GET /api/asks` as an additive field.
  *
+ *  D-5530 (cross-project-claimant-holds-asks, the operator's ruling of
+ *  2026-10-18): an ask is held for the child's run's recorded claimant
+ *  wherever that claimant sits, so no reason compares projects. Every reason
+ *  below is a fail-closed release to the operator:
+ *
  *  `parent-not-live`          the parent has no registry row, is archived or
  *                             stopped, or the dead-coordinator predicate
  *                             measures it dead.
- *  `parent-project-mismatch`  the run's claimant is a session of another
- *                             project (a run opened before the attributed
- *                             binding, spec §6.4).
+ *  `parent-unmeasured`        the parent could not be measured (the claimant
+ *                             ladder answered `unmeasurable`): doubt, never a
+ *                             hold.
+ *  `run-unclaimed`            the child's run records no claimant (a
+ *                             reconstructed programme's), so nobody is held for.
+ *  `run-other-programme`      the run the child's mark names is claimed by
+ *                             someone other than the claimant of the newest
+ *                             open run naming the child: the child belongs to
+ *                             another programme's coordinator.
+ *  `run-unattributed`         D-5531: the run the child's mark names records
+ *                             a claimant nobody ATTRIBUTED — journaled
+ *                             `unattributed` (opened with no `claimedByUuid`
+ *                             before the fleet carried the client), or with no
+ *                             `coordProject` stamp (opened before the
+ *                             attributed binding). A recorded claimedBy alone
+ *                             is not a parent.
+ *  `parent-project-mismatch`  READ ONLY since D-5530: an older build wrote it
+ *                             when the claimant was a session of another
+ *                             project. Never written again; a row carrying it
+ *                             stays refused to the parent and unlisted.
  *  `unknown`                  a token this build does not know, read off disk;
  *                             never written. */
-export type AskReleaseReason = 'parent-not-live' | 'parent-project-mismatch' | 'unknown';
+export type AskReleaseReason =
+  | 'parent-not-live' | 'parent-unmeasured' | 'run-unclaimed' | 'run-other-programme'
+  | 'run-unattributed' | 'parent-project-mismatch' | 'unknown';
+
+/** The reasons a mint may WRITE (D-5530): every `AskReleaseReason` but the
+ *  read-only legacy word and the reader's degrade. */
+export type AskMintReleaseReason = Exclude<AskReleaseReason, 'parent-project-mismatch' | 'unknown'>;
 
 export const ASK_RELEASE_REASON_MAP: Record<AskReleaseReason, true> = {
-  'parent-not-live': true, 'parent-project-mismatch': true, unknown: true,
+  'parent-not-live': true, 'parent-unmeasured': true, 'run-unclaimed': true, 'run-other-programme': true,
+  'run-unattributed': true, 'parent-project-mismatch': true, unknown: true,
 };
 
 export function isAskReleaseReason(v: unknown): v is AskReleaseReason {
