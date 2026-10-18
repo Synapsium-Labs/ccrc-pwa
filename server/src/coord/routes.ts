@@ -40,6 +40,7 @@ import {
   stallStages, stallUnheldBoxOf, stallWriteEffect, type StallBoxArming, type StallResolved,
 } from './stallsettings.js';
 import { childBindGate } from './childBind.js';
+import { openRunPreconditions, type HomeProjectVerdict, type OpenRunRefusal } from './openRun.js';
 import { collectControlNow, collectLaneCaps, collectSwitches } from './collectTempRoot.js';
 import {
   COLLECT_LANE_APPLIES_TEXT, COLLECT_SETTING_FEED_TITLE, collectLaneSettingChange, collectLaneView,
@@ -60,7 +61,7 @@ import {
   type StallConfirmRequired, type StallWatchEffective, type StallWatchStages, type StallWatchView, type StallWriteEffect,
 } from '../../../shared/api.js';
 import { REFUSAL_STATUS, type CollectLaneRouteRefusal, type MailRouteRefusal } from '../../../shared/refusal.js';
-import { refuseRoute } from '../refuse.js';
+import { refuseRoute, refuseRun } from '../refuse.js';
 
 /**
  * `POST /api/runs/:id/route`'s routable run states (review finding #6,
@@ -389,86 +390,19 @@ function sendClaimEndOutcome(reply: FastifyReply, r: ClaimEndResult) {
  * `legacyAccepted` the route ever passes is this constant; it stays as the
  * record of what `true` did.
  *
- * Read ONCE, at the single call site below, and passed as an argument to
- * `homeProjectVerdict` rather than read inside it — which is what keeps the
+ * Read ONCE, at the single call site below, and passed as an argument —
+ * `openRunPreconditions`' `legacyAccepted` fact, which hands it to
+ * `homeProjectVerdict` (D-5384) — rather than read inside it, which is what keeps the
  * OTHER branch testable after the flip as it was before it.
  * `home-project.test.ts` drives both.
  */
 export const HOME_PROJECT_LEGACY_ACCEPTED = false;
 
-/** What the open route must DO about the body's `homeProject` and the
- *  programme's stored one. SIX answers, none folded into another: `write` and
- *  `agrees` both mean "nothing extra to do" but for different reasons and at
- *  different moments (a first insert versus a later open), and collapsing them
- *  would make the backfill event impossible to place correctly. */
-export type HomeProjectVerdict =
-  | { kind: 'write' }
-  | { kind: 'agrees' }
-  | { kind: 'backfill'; home: string }
-  | { kind: 'legacy' }
-  | { kind: 'required' }
-  | { kind: 'mismatch'; by: string };
-
-/**
- * The home decision, pure and independently testable — no store, no reply, no
- * clock — even though it is DEFINED here, in `server/src/coord/routes.ts`,
- * which is L4 delivery and by the ring's own rule (`CLAUDE.md`) is NOT allowed
- * to decide. It lives here anyway because the cross-wave contract fixes this
- * exact file as both the constant's home and this function's, so that wave
- * 3's flip stays the one-constant change the spec promises; moving the
- * function to an L1 module would break that promise for a ring compliance
- * this file's own text cannot buy back. Recorded as a further ring
- * compromise, not argued away (a deviation beside the other six). The only
- * L4 thing anywhere near this decision is the reply at the route's two call
- * sites below, which this function never touches.
- *
- * `known` and `stored` are TWO INPUTS and not one, because `programHome`
- * answers `null` both for a programme row with a NULL home and for a slug with
- * no row, and this function's caller acts on those differently: the first is a
- * BACKFILL that records an event, the second is a first insert that records
- * nothing. Establishing existence is the caller's job (`coord.programs()`), and
- * passing the answer in is what keeps that overloaded null out of the decision.
- *
- * An ABSENT body home is decided by `legacyAccepted` alone — never by `known`
- * or `stored` — because the column stays NULL either way: nothing is guessed
- * into it, so a later explicit home can backfill it instead of colliding.
- */
-export function homeProjectVerdict(input: {
-  body: string | undefined; known: boolean; stored: string | null; legacyAccepted: boolean;
-}): HomeProjectVerdict {
-  if (input.body === undefined) {
-    return input.legacyAccepted ? { kind: 'legacy' } : { kind: 'required' };
-  }
-  if (!input.known) return { kind: 'write' };
-  if (input.stored === null) return { kind: 'backfill', home: input.body };
-  return input.stored === input.body ? { kind: 'agrees' } : { kind: 'mismatch', by: input.stored };
-}
-
-/** What `POST /api/runs` accepts as a `homeProject`, decided ONCE at the door
- *  (PR #75 review round 1, F2 + F4). Two answers, never folded: an accepted
- *  value is TRIMMED — the same fold `fieldMeasured` applies to a registry
- *  field — and a refused one carries the sentence the caller is told. */
-export type HomeProjectShape = { ok: true; home: string } | { ok: false; detail: string };
-
-/**
- * A home is a single path segment under `projectsRoot`, and nothing else
- * (D-2349):
- * `ledgerAbsPath` joins it there, and the first non-NULL home a programme
- * stores is permanent (`setProgramHome` is `WHERE homeProject IS NULL`), so
- * a whitespace-wrapped spelling would home the programme at `'demo\n'` for
- * ever — every later open sending the clean spelling refused `home-mismatch`
- * against a value that RENDERS the same — and a `..` segment would name a
- * file outside the projects root. Pure, so `home-project.test.ts` drives
- * every branch; the route reads `detail` onto its 400 verbatim.
- */
-export function shapeHomeProject(raw: string): HomeProjectShape {
-  const home = raw.trim();
-  if (home === '') return { ok: false, detail: 'homeProject is empty' };
-  if (home === '.' || home === '..' || home.includes('/')) {
-    return { ok: false, detail: `homeProject must be a single path segment, not ${JSON.stringify(home)}` };
-  }
-  return { ok: true, home };
-}
+/** The home decision and the one home shaping are L1 since D-5384
+ *  (`coord/openRun.ts`), re-exported here so their importers are unchanged;
+ *  `HOME_PROJECT_LEGACY_ACCEPTED` above stays this file's, read once by the
+ *  open route and passed to the decider. */
+export { homeProjectVerdict, shapeHomeProject, type HomeProjectShape, type HomeProjectVerdict } from './openRun.js';
 
 /**
  * What `registerCoordRoutes` hands back to `buildServer` (workspace lifecycle spec §5.2): the coordination
@@ -1297,6 +1231,76 @@ export function registerCoordRoutes(
   // reopening three routes of it because a DIFFERENT, older surface is also
   // open is the redesign, not gating them.
 
+  /** A refusal `openRunPreconditions` decided (D-5384), answered through the
+   *  route refusal helpers with exactly the body the inline sends wrote; the
+   *  `gate` is the order table's, never sent. */
+  const sendOpenRunRefusal = (reply: FastifyReply, r: OpenRunRefusal): FastifyReply => {
+    if ('refused' in r) return refuseRun(reply, r.refused, { by: r.by });
+    return refuseRoute(reply, r.error, r.detail !== undefined ? { detail: r.detail } : {});
+  };
+
+  // The backfill is RECORDED, not merely done — and the legacy acceptance
+  // was too, while the constant was `true`, which is what let the flip be
+  // dated from `run_events` at all (it was ruled early instead, D-2867; the
+  // trail is in `docs/superpowers/programs/home-project-flip.md`).
+  // `recordRunEvent` writes `fromState === toState`, so the notify lane
+  // skips it and no push impersonates a transition.
+  const recordHomeVerdict = (coord: CoordStore, verdict: HomeProjectVerdict, programSlug: string, runId: number): void => {
+    if (verdict.kind === 'backfill') {
+      tx(coord.db, () => {
+        coord.setProgramHome(programSlug, verdict.home);
+        coord.recordRunEvent(runId, 'coordinator', 'home-project-backfilled');
+      });
+    }
+    if (verdict.kind === 'legacy') {
+      coord.recordRunEvent(runId, 'coordinator', 'legacy-home-project');
+    }
+  };
+
+  // `sessionId` names an existing workspace (wave N>=2, reclaiming what
+  // wave 1 held): place the external hold FIRST, then commit every related
+  // database write as one unit (D-2350, D-2505). `setSession` funnels into
+  // transaction-free `bindSession`, which on a RE-bind re-issues the
+  // predecessor's outstanding worker mail to the heir and parks the
+  // predecessor's rows. Keeping the transaction here avoids nesting at the
+  // dispatch caller while ensuring a late event failure rolls all of those
+  // writes back. A refused hold (501/502) still changes no database fact. The
+  // dispatch route later reads `run.sessionId` back to choose `ensure`
+  // over `ws-add` (deviation D-1; `CoordStore.setSession` is D-45).
+  //
+  // A re-bind is RECORDED on the run's own trail, naming both occupants and
+  // how many deliveries moved (D-2351; store-2): `openRun`'s dup arm keys on
+  // (program, wave, waveOf, claimedBy, planned) and not on `sessionId`, so
+  // a retried open naming a different session reaches this line with a
+  // predecessor — a live path, not a store-test-only one — and an occupant
+  // change must be attributable like every other run write.
+  //
+  // The refusal it answers, or null once the hold is placed and the bind committed.
+  const holdAndBindSession = async (
+    coord: CoordStore, reply: FastifyReply, opened: { id: number; holdReason: string }, sessionId: string,
+  ): Promise<FastifyReply | null> => {
+    const argv = CCD_ARGV.wsHold(
+      sessionId, opened.holdReason,
+      sweepDec(deps.fleetState, `run:${opened.id} open`),
+    );
+    if (!verbSupported(deps.fleetState, argv)) return refuseRoute(reply, 'unsupported');  // D-5384
+    const res = await deps.runCcd(argv);
+    if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr });
+    tx(coord.db, () => {
+      const predecessor = coord.resolveWorker(opened.id);
+      const bound = coord.setSession(opened.id, sessionId);
+      if (bound.rebound) {
+        // `bindSession` reports a rebound only when its pre-read found a
+        // non-null predecessor distinct from `sessionId`; keep that invariant
+        // visible rather than interpolating the impossible `null` silently.
+        if (predecessor === null) throw new Error('rebound reported without a predecessor');
+        coord.recordRunEvent(opened.id, 'coordinator',
+          'session-rebound' + `: ${predecessor} -> ${sessionId}, ${bound.reissued} re-issued`);
+      }
+    });
+    return null;
+  };
+
   /**
    * Open a run.
    *
@@ -1322,160 +1326,27 @@ export function registerCoordRoutes(
 
     return coordMutex.run(async () => {
     const body = (req.body ?? {}) as Record<string, unknown>;
-    const { program, title, claimedBy, sessionId, homeProject, kind, reviews } = body;
-    // Design 2026-09-14 §5.1 / D-2799. `kind` absent is 'work' — every caller
-    // that predates review runs. Checked BEFORE the shape guard below: that
-    // guard's own project/wave relaxation reads `kind !== 'review'` and would
-    // otherwise fold an invalid `kind` into "this is a work-shaped body" and
-    // answer the generic bare `bad-request` (no field named) rather than this
-    // one's own detail.
-    if (!(kind === undefined || kind === 'work' || kind === 'review')) {
-      return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'kind must be work or review' });
-    }
-    if (typeof program !== 'string' ||
-        typeof title !== 'string' || title.trim() === '' ||
-        (kind !== 'review' && (typeof body.project !== 'string' || body.project.trim() === '')) ||
-        (body.project !== undefined && typeof body.project !== 'string') ||
-        typeof claimedBy !== 'string' || claimedBy.trim() === '' ||
-        (kind !== 'review' && !isPositiveDecimalSafeInteger(body.wave)) ||
-        (body.wave !== undefined && !isPositiveDecimalSafeInteger(body.wave)) ||
-        !(body.waveOf === undefined || body.waveOf === null || isPositiveDecimalSafeInteger(body.waveOf)) ||
-        !(sessionId === undefined || (typeof sessionId === 'string' && sessionId.trim() !== '')) ||
-        // Present-and-not-a-string is a malformed body. The VALUE is shaped
-        // below, by `shapeHomeProject`, ONCE — trimmed, and refused unless it
-        // is a single path segment — because the first non-NULL home a
-        // programme stores is permanent and `ledgerAbsPath` joins it under
-        // `projectsRoot` (D-2349; PR #75 review round 1, F2 + F4).
-        !(homeProject === undefined || typeof homeProject === 'string')) {
-      return reply.code(400).send({ ok: false, error: 'bad-request' });
-    }
-    // `kind`'s own vocabulary was already proven above, before this guard.
-    // Each further refusal below names its field so the caller can tell
-    // "malformed JSON" from "you sent the wrong thing".
-    const runKind: 'work' | 'review' = kind === 'review' ? 'review' : 'work';
-    if (runKind === 'work' && reviews !== undefined) {
-      return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'reviews is only accepted with kind review' });
-    }
-    if (runKind === 'review' && !isPositiveDecimalSafeInteger(reviews)) {
-      return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'reviews must name the work run under review (a positive run id)' });
-    }
-    // A programme names one ledger file, so separators, dot components, and
-    // display-label punctuation are refused before the value reaches storage or
-    // `ledgerPath`. Every programme consumer below reads this one shaped value —
-    // MOVED above the review arm (Task 5 review I2): `program` compared raw
-    // against the reviewed run's own (already-shaped, since every open shapes
-    // it) `program` let a whitespace-padded slug pass a work open and fail an
-    // otherwise-identical review open of the same programme.
-    const programShape = shapeProgramSlug(program);
-    if (!programShape.ok) {
-      return reply.code(400).send({ ok: false, error: 'bad-request', detail: programShape.detail });
-    }
-    const programSlug = programShape.slug;
-
-    // A review run's project, wave and waveOf are the REVIEWED run's — read off
-    // its row, never off this body, which may only agree (D-2799). The body's
-    // own shape guard above already accepted `project`/`wave` as it always
-    // did; here the review arm overrides them with the measured values.
-    let project = body.project as string, wave = body.wave as number, waveOfBody = body.waveOf;
-    if (runKind === 'review') {
-      if (sessionId !== undefined) {
-        return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'sessionId is refused on a review run — it always spawns fresh on its own workspace' });
-      }
-      const target = coord.run(reviews as number);
-      if (!target.ok) return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: target.detail });
-      if (target.run === null) return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'reviews names no run' });
-      const t = target.run;
-      if (t.kind !== 'work') return reply.code(400).send({ ok: false, error: 'bad-request', detail: `reviews must name a work run, not one of kind ${t.kind}` });
-      if (t.state !== 'awaiting-review') return reply.code(400).send({ ok: false, error: 'bad-request', detail: `reviews must name a run at awaiting-review, not ${t.state}` });
-      if (t.program !== programSlug) return reply.code(400).send({ ok: false, error: 'bad-request', detail: `program must be the reviewed run's (${t.program})` });
-      if (t.claimedBy !== claimedBy) return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'claimedBy must be the reviewed run\'s coordinator' });
-      if (body.project !== undefined && body.project !== t.project) return reply.code(400).send({ ok: false, error: 'bad-request', detail: `project must be the reviewed run's (${t.project})` });
-      if (body.wave !== undefined && body.wave !== t.wave) return reply.code(400).send({ ok: false, error: 'bad-request', detail: `wave must be the reviewed run's (${t.wave})` });
-      if (body.waveOf !== undefined && body.waveOf !== null && body.waveOf !== t.waveOf) return reply.code(400).send({ ok: false, error: 'bad-request', detail: `waveOf must be the reviewed run's (${t.waveOf})` });
-      project = t.project; wave = t.wave; waveOfBody = t.waveOf;
-    }
-
-    // THE ONE HOME SHAPING. Every consumer below — the verdict, `openRun`,
-    // `setProgramHome` (through the verdict's own `home`), the response —
-    // reads `home`, never the raw body field.
-    let home: string | undefined;
-    if (typeof homeProject === 'string') {
-      const shaped = shapeHomeProject(homeProject);
-      if (!shaped.ok) return reply.code(400).send({ ok: false, error: 'bad-request', detail: shaped.detail });
-      home = shaped.home;
-    }
-    const waveOfVal = (waveOfBody ?? null) as number | null;
-
-    // F1 (design 2026-09-08 §3 F1) — a session's workspace is a worktree in ONE
-    // repository, and reusing it for a wave in another is the one crossing this
-    // build refuses. Measured from this store's own history, no I/O at all.
-    //
-    // HERE, AND NOT INSIDE `openRun`: the refusal must leave no `planned`
-    // orphan, so it runs after body validation and BEFORE the row exists. A
-    // null answer refuses nothing — absence permits, and `sessionProject`'s own
-    // docstring says which population that is.
-    if (typeof sessionId === 'string') {
-      const bound = coord.sessionProject(sessionId);
-      if (bound !== null && bound !== project) {
-        return reply.code(409).send({ ok: false, refused: 'project-mismatch', by: bound });
-      }
-    }
-
-    // F2 (design §3 F2) — the programme's home, decided BEFORE the row exists so
-    // a refusal leaves no `planned` orphan, exactly like the check above.
-    //
-    // `known` is measured separately from `stored` on purpose: `programHome`
-    // answers null for two conditions this route handles differently, and asking
-    // it only about a programme this box has proven exists is what keeps them
-    // apart. `programs()` is one read of a table with one row per programme.
-    const known = coord.programs().some((p) => p.slug === programSlug);
-    const homeVerdict = homeProjectVerdict({
-      body: home,
-      known, stored: known ? coord.programHome(programSlug) : null,
-      legacyAccepted: HOME_PROJECT_LEGACY_ACCEPTED,
+    // THE PRECONDITIONS ARE DECIDED IN L1 (D-5384, audit ticket ARCH-21):
+    // `coord/openRun.ts`'s `openRunPreconditions` runs the body shape, the
+    // review arm (D-2799), the slug and home shaping (D-2349), F1's
+    // `project-mismatch`, F2's home verdict and §12's `claimant-is-a-worker`,
+    // in that order, before any row exists — so a refusal leaves no `planned`
+    // orphan and places no hold. Every read it makes is a synchronous DB read
+    // handed in here, called only by the gate that needs it. This route answers
+    // its refusal and acts on its plan; it decides none of it.
+    const pre = openRunPreconditions({
+      body, legacyAccepted: HOME_PROJECT_LEGACY_ACCEPTED,
+      reviewed: (id) => { const r = coord.run(id); return r.ok ? r : { ok: false, detail: r.detail }; },
+      sessionProject: (s) => coord.sessionProject(s),
+      // `known` is measured apart from `stored`: `programHome` answers null for
+      // two conditions the verdict handles differently (design §3 F2).
+      programKnown: (slug) => coord.programs().some((p) => p.slug === slug),
+      programHome: (slug) => coord.programHome(slug),
+      openClaimantsOf: (s) => coord.openClaimantsOf(s),
     });
-    if (homeVerdict.kind === 'mismatch') {
-      return reply.code(409).send({ ok: false, refused: 'home-mismatch', by: homeVerdict.by });
-    }
-    if (homeVerdict.kind === 'required') {
-      // Its OWN sentence (D-2349), not the body-shape guard's bare
-      // `bad-request` above: "your JSON is malformed" and "this build
-      // requires a home" have different remedies and must not reach the
-      // caller as one value. LIVE since 2026-09-16 (D-2867): every
-      // otherwise well-formed open with no `homeProject` gets this — a
-      // malformed body still gets the shape guard's answer first, a session
-      // bound elsewhere `409 project-mismatch`. Pinned by
-      // `home-project.test.ts`'s scan and `home-project-required.test.ts`.
-      return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'homeProject is required' });
-    }
-
-    // §12 (spec 2026-09-16, addendum 2026-09-18) — a dispatched worker may not
-    // coordinate. The question is about ANY open run that names `claimedBy` as
-    // its worker and is claimed by SOMEBODY ELSE, so the read is
-    // `openClaimantsOf` — every coordinator this session currently works for —
-    // and not `parentOfSession`, which is `LIMIT 1` and answers only about the
-    // NEWEST such run (second fix round, D-3054). A session self-claimed on its newest
-    // run while still somebody's worker on an older open one used to walk
-    // straight through here; `runs_by_session` is non-unique and the
-    // coordinator protocol opens wave N+1 before closing wave N, so that state
-    // is protocol, not corruption.
-    //
-    // A SELF-CLAIMED RUN IS NOT SOMEBODY ELSE, and an ownerless open run (a
-    // reconstructed row, `claimedBy` NULL) is not an entry in the list at all —
-    // both ADMITTED, D-3012, because `by` is what this refusal is for and
-    // neither has one to name. Scope is any open run, `planned` through
-    // `closing`, and `unknown`, not only `dispatched`: a finished worker is not
-    // a worker (`[]`), an idle one still is. `by` names the FIRST offender the
-    // list carries, which is the newest, so the operator is sent to the most
-    // recent binding rather than the oldest.
-    //
-    // HERE, synchronous and DB-only, ahead of the awaited registry read and of
-    // `openRun`, so a refusal leaves no `planned` orphan and places no hold
-    // — F1's reason.
-    const workerOf = coord.openClaimantsOf(claimedBy).find((c) => c !== claimedBy);
-    if (workerOf !== undefined) {
-      return reply.code(409).send({ ok: false, refused: 'claimant-is-a-worker', by: workerOf });
-    }
+    if (!pre.ok) return sendOpenRunRefusal(reply, pre.refusal);
+    const { open, home: homeVerdict } = pre;
+    const { sessionId, claimedBy } = open;
 
     // Rule 3 (child-reclamation spec §5.4): a CHILD whose branch has had a PR
     // may not take another run. HERE, for F1's reason: a refusal must leave no
@@ -1488,13 +1359,12 @@ export function registerCoordRoutes(
     // record — a workspace with no marker costs one registry read. The two
     // codes are spelled here, not forwarded from the verdict: `mail-routes.
     // test.ts` requires every `RunRefuseCode` to be quoted in this directory.
-    if (typeof sessionId === 'string') {
-      const gate = await childBindGate(deps, coord, sessionId);
-      if (!gate.ok) {
-        return gate.code === 'workspace-spent'
-          ? reply.code(409).send({ ok: false, refused: 'workspace-spent', pr: gate.pr })
-          : reply.code(409).send({ ok: false, refused: 'spent-unmeasured', detail: gate.detail });
-      }
+    // Its refusals, like the decider's, answer through `refuseRun` (D-5384).
+    const gate = sessionId === undefined ? null : await childBindGate(deps, coord, sessionId);
+    if (gate !== null && !gate.ok) {
+      return gate.code === 'workspace-spent'
+        ? refuseRun(reply, 'workspace-spent', { pr: gate.pr })
+        : refuseRun(reply, 'spent-unmeasured', { detail: gate.detail });
     }
 
     // The coordinator's project, from the REGISTRY — never `sessionProject`,
@@ -1519,9 +1389,10 @@ export function registerCoordRoutes(
     // also now IDEMPOTENT for a retry naming the same (program, wave,
     // claimedBy) against an existing `planned` row (fix, review findings
     // 19/32) — see its own docstring.
-    const opened = coord.openRun({ program: programSlug, title, project, wave, waveOf: waveOfVal, claimedBy,
-      kind: runKind, reviews: runKind === 'review' ? (reviews as number) : null,
-      ...(home !== undefined ? { homeProject: home } : {}),
+    const opened = coord.openRun({ program: open.program, title: open.title, project: open.project,
+      wave: open.wave, waveOf: open.waveOf, claimedBy,
+      kind: open.kind, reviews: open.reviews,
+      ...(open.homeProject !== undefined ? { homeProject: open.homeProject } : {}),
       ...(coordProject !== undefined ? { coordProject } : {}) });
     if ('kind' in opened) {
       return reply.code(opened.kind === 'hold-oversize' ? 413 : 400).send({
@@ -1531,66 +1402,14 @@ export function registerCoordRoutes(
         detail: opened.detail,
       });
     }
-    if ('refused' in opened) {
-      return reply.code(409).send({ ok: false, refused: opened.refused, by: opened.by });
-    }
+    if ('refused' in opened) return refuseRun(reply, opened.refused, { by: opened.by });
 
-    // The backfill is RECORDED, not merely done — and the legacy acceptance
-    // was too, while the constant was `true`, which is what let the flip be
-    // dated from `run_events` at all (it was ruled early instead, D-2867; the
-    // trail is in `docs/superpowers/programs/home-project-flip.md`).
-    // `recordRunEvent` writes `fromState === toState`, so the notify lane
-    // skips it and no push impersonates a transition.
-    if (homeVerdict.kind === 'backfill') {
-      tx(coord.db, () => {
-        coord.setProgramHome(programSlug, homeVerdict.home);
-        coord.recordRunEvent(opened.id, 'coordinator', 'home-project-backfilled');
-      });
+    recordHomeVerdict(coord, homeVerdict, open.program, opened.id);
+    if (sessionId !== undefined) {
+      const held = await holdAndBindSession(coord, reply, opened, sessionId);
+      if (held !== null) return held;
     }
-    if (homeVerdict.kind === 'legacy') {
-      coord.recordRunEvent(opened.id, 'coordinator', 'legacy-home-project');
-    }
-
-    // `sessionId` names an existing workspace (wave N>=2, reclaiming what
-    // wave 1 held): place the external hold FIRST, then commit every related
-    // database write as one unit (D-2350, D-2505). `setSession` funnels into
-    // transaction-free `bindSession`, which on a RE-bind re-issues the
-    // predecessor's outstanding worker mail to the heir and parks the
-    // predecessor's rows. Keeping the transaction here avoids nesting at the
-    // dispatch caller while ensuring a late event failure rolls all of those
-    // writes back. A refused hold (501/502) still changes no database fact. The
-    // dispatch route later reads `run.sessionId` back to choose `ensure`
-    // over `ws-add` (deviation D-1; `CoordStore.setSession` is D-45).
-    //
-    // A re-bind is RECORDED on the run's own trail, naming both occupants and
-    // how many deliveries moved (D-2351; store-2): `openRun`'s dup arm keys on
-    // (program, wave, waveOf, claimedBy, planned) and not on `sessionId`, so
-    // a retried open naming a different session reaches this line with a
-    // predecessor — a live path, not a store-test-only one — and an occupant
-    // change must be attributable like every other run write.
-    if (typeof sessionId === 'string') {
-      const argv = CCD_ARGV.wsHold(
-        sessionId, opened.holdReason,
-        sweepDec(deps.fleetState, `run:${opened.id} open`),
-      );
-      if (!verbSupported(deps.fleetState, argv)) {
-        return reply.code(501).send({ ok: false, error: 'unsupported' });
-      }
-      const res = await deps.runCcd(argv);
-      if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr });
-      tx(coord.db, () => {
-        const predecessor = coord.resolveWorker(opened.id);
-        const bound = coord.setSession(opened.id, sessionId);
-        if (bound.rebound) {
-          // `bindSession` reports a rebound only when its pre-read found a
-          // non-null predecessor distinct from `sessionId`; keep that invariant
-          // visible rather than interpolating the impossible `null` silently.
-          if (predecessor === null) throw new Error('rebound reported without a predecessor');
-          coord.recordRunEvent(opened.id, 'coordinator',
-            'session-rebound' + `: ${predecessor} -> ${sessionId}, ${bound.reissued} re-issued`);
-        }
-      });
-    }
+    const programSlug = open.program;
 
     // Re-read rather than reasoned about: `openRun`'s first insert and the
     // backfill above are two different writers of this column, and the response
