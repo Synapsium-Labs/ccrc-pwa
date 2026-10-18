@@ -4803,10 +4803,13 @@ APPROVAL_HOOK_WAIT_S=540
 APPROVAL_HOOK_STOP_STATES="declined released operator stale"
 APPROVAL_REQUEST_MAX_BYTES=65536
 APPROVAL_DIGEST_JQ='walk(if type == "number" then (if . == floor and fabs <= 9007199254740991 then (if . == 0 then 0 else floor end) else error("non-integer") end) else . end) | [.session_id, (.agent_id // ""), .tool_name, .cwd, .tool_input]'
+# The hook is installed alone, with no platform block to source, so it spells no GNU-only tool (macos-platform.test.ts):
+# `shasum -a 256` ships on macOS and with perl on Linux, and node, which the wait needs anyway, is the fallback.
 _apr_sha256() {   # stdin -> 64 lowercase hex on stdout; rc 1 with no tool
   local s=""
-  if command -v sha256sum >/dev/null 2>&1; then s=$(sha256sum 2>/dev/null)
-  elif command -v shasum >/dev/null 2>&1; then s=$(shasum -a 256 2>/dev/null)
+  if command -v shasum >/dev/null 2>&1; then s=$(shasum -a 256 2>/dev/null)
+  elif command -v node >/dev/null 2>&1; then
+    s=$(node -e 'process.stdout.write(require("crypto").createHash("sha256").update(require("fs").readFileSync(0)).digest("hex"))' 2>/dev/null)
   else return 1; fi
   s="${s%% *}"; [[ "$s" =~ ^[0-9a-f]{64}$ ]] || return 1
   printf '%s' "$s"

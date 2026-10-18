@@ -13,6 +13,7 @@ import { generateKeyPairSync } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
+import { ghContainedEnv } from './ccdWsHelpers.js';
 
 const REPO = path.resolve(__dirname, '..', '..');
 const CCRC = path.join(REPO, 'ccd', 'ccrc');
@@ -46,7 +47,7 @@ const BASH = spawnSync('bash', ['-c', 'command -v bash'], { encoding: 'utf8' }).
 const run = (fn: string, vars: Record<string, string> = {}, env: Record<string, string> = {}): { code: number; out: string } => {
   const set = Object.entries({ INST_ROLE: 'fleet', ...vars }).map(([k, v]) => `${k}=${shq(v)}`).join('; ');
   const script = `source ${shq(CCRC)}; source ${shq(CHECKS)}; ${set}; ${fn}`;
-  const r = spawnSync(BASH, ['-c', script], { encoding: 'utf8', env: { ...process.env, HOME: home, ...env } });
+  const r = spawnSync(BASH, ['-c', script], { encoding: 'utf8', env: ghContainedEnv(home, { ...process.env, HOME: home, ...env }) });
   return { code: r.status ?? -1, out: `${r.stdout}${r.stderr}` };
 };
 const pinned = (): string | null => {

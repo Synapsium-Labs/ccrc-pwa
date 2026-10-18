@@ -503,7 +503,10 @@ describe('the request carries the canonical array, and the digest is its sha256'
     const b = r.body as Record<string, unknown>;
     expect(Object.keys(b).sort()).toEqual(['digest', 'nonce', 'sessionId', 'sessionUuid', 'truncated', 'v']);
     expect(b['truncated']).toBe(true);
-    expect(b['digest']).toBe(sha(approvalDigestBytes(big)));
+    const canon = approvalDigestBytes(big);
+    expect(canon, 'the payload has a canonical string').not.toBeNull();
+    expect((canon as string).length, 'over the cap').toBeGreaterThan(65_536);
+    expect(b['digest']).toBe(sha(canon as string));
     expect(b['nonce']).toMatch(/^[0-9a-f]{32}$/);
   });
   it('a change of cwd alone changes the digest', () => {
