@@ -309,6 +309,9 @@ describe('verifier round 1 — the gaps the first suite left open', () => {
     const btn = screen.getByRole('button', { name: /^an-exceptionally-long-session-name-that-will-not-fit-on-a-phone-screen/ });
     expect(btn.getAttribute('aria-current')).toBeNull();
     expect(screen.queryByRole('button', { name: /…/ })).toBeNull();
+    // From its CONTENT, not the `title` fallback (a description, and absent where the name fits).
+    btn.removeAttribute('title');
+    expect(screen.getByRole('button', { name: /^an-exceptionally-long-session-name-that-will-not-fit-on-a-phone-screen/ })).toBe(btn);
   });
 
   it('a wide card can show a long name and a 31-character programme whole: both forms render, CSS picks by width', () => {
