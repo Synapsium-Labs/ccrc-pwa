@@ -1944,6 +1944,15 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         before the soak. Sizes on the server at 15:03 (mail 6420): the journal 40.0M, the checkpoint 4.5M,
         `coord.db` 143M plus a 7.7M WAL. The 14:13 backup holds `coord.db` 131M, the journal 35M and the
         checkpoint 4M. With 10 backups kept, `~/ccrc-backups` carries about ten copies of that data.
+      - **16:15: the operator ruled "Soak, watch disk"** (about 15:10, relayed in mail 6451). The delegation
+        broker's seven-day soak starts once its run 600 merges; journal compaction goes first in its wave 4; the
+        operator decides again if the server's free disk falls under 15 GB. **I take the daily read-only
+        measurement** and mail it to that programme's coordinator. The fields: free disk, `coord.db`,
+        `delegation_events` by dbstat, the journal and checkpoint by size, the backups' total and the newest
+        backup. The scratch tool is `soak-measure.sh`; the hourly probe prints a NOTE once a day after 15:00 until
+        it is sent, and already flags server disk under 15G. Day 0 (16:15, mail 6452): 32G free, `coord.db` 147M,
+        `delegation_events` 56.8M in 21,758 rows, the journal 42.4M, the checkpoint 4.8M, backups 1217M, the
+        newest 193M.
       - **2026-10-18 15:55 UTC: both boxes moved to v0.0.279 (#611) by the operator's console tap**, fleet first
         (15:47:10 to 15:48:27), then the server (15:48:37 to 15:49:14); both reports `done`. This is the first move
         driven by wave 17's updater, and **wave 17's sweep record works live.** The fleet's `done` report carries
