@@ -191,7 +191,7 @@ describe('the hibernation census (D-5242)', () => {
     const t = task18();
     expect(t.length).toBeGreaterThan(200);
     for (const r of CENSUS.filter((x) => x.stances.includes('task-18'))) {
-      const named = (r.via ?? r.file).replace(/^pwa\//, 'pwa/');
+      const named = r.via ?? r.file;
       expect(t.includes(named), `${key(r)} (via ${named})`).toBe(true);
       if (r.via !== undefined) expect(read(r.file), `${r.file} reads through ${r.via}`).toMatch(/coordPresence|lifecycleQualifier/);
     }
