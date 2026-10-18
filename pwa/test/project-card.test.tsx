@@ -10,6 +10,7 @@ import { groupFleet, type FleetGroup } from '../src/fleet/groupFleet';
 import { NEST_BRACKET, POOL_UNAVAILABLE_TEXT, ProjectCard } from '../src/fleet/ProjectCard';
 import { CROSSING_GLYPH, waveLabel } from '../src/fleet/runWords';
 import { TEST_ROSTER } from './rosterFixture';
+import { WARN_GLYPH } from '@ccrc/ui';
 
 // vitest runs without globals, so RTL's auto-cleanup never registers itself —
 // without this, rerender/multi-render tests below leak DOM across `it` blocks.
@@ -519,7 +520,8 @@ describe('the pending child — a spawn the operator can watch arrive', () => {
     expect(container.querySelector('.proj-pending')?.getAttribute('data-phase')).toBe('stalled');
     expect(screen.getByText('spawn never completed')).toBeInTheDocument();
     expect(screen.queryByText('spawning a worker')).toBeNull();
-    expect(container.querySelector('.proj-pending-glyph')?.textContent).toBe('⚠');
+    // The constant, never a literal: it carries U+FE0E (D-5100).
+    expect(container.querySelector('.proj-pending-glyph')?.textContent).toBe(WARN_GLYPH);
   });
 
   it('renders nothing at all for a planned run nobody has dispatched', () => {
