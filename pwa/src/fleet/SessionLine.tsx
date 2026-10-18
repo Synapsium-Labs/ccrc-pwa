@@ -17,30 +17,20 @@
 //
 // There is no `inGroup` prop. A line is always inside a project card now, so
 // the conditional that made SessionCard mean two different things is gone.
-import { useId, useRef, useState } from 'react';
+import { useRef } from 'react';
 import type { ReactNode } from 'react';
-import type {
-  FleetSession, ProjectPoolWire, RosterWire, SessionBucket,
-} from '../../../shared/api';
-import { Icon, StatusDot, TypedLabel, elapsedShort } from '@ccrc/ui';
+import type { FleetSession, ProjectPoolWire, RosterWire } from '../../../shared/api';
+import { Icon, StatusDot, TypedLabel, useNow } from '@ccrc/ui';
 import type { ChildRunContext } from './runWords';
-import { sessionLabel } from './sessionLabel';
+import type { CoordPresence } from './coordWords';
 import { SessionMeta } from './SessionMeta';
-import { hibernatedSince } from './hibernated';
+import { cardFacts, sessionFacts } from './sessionFacts';
 import './fleet.css';
 
 
-/** The ROW's state word for every bucket — the mono word beside the dot, and
- *  the only place this particular vocabulary is spelled out. Deliberately not
- *  exported: it has no reader outside this file, and an exported table invites
- *  a caller to retitle a surface it does not actually feed. `StatusDot` has
- *  its own glyph/label table (the two-glyph rule's other half) and
- *  `FleetScreen` its own section nouns — three vocabularies over one field,
- *  none of them deciding which bucket a session is in. */
-const WORD: Record<SessionBucket, string> = {
-  attention: 'waiting', working: 'working', done: 'done', idle: 'idle',
-  cleanup: 'merged', archived: 'archived', dead: 'exited',
-};
+// The ROW's state word table moved to `sessionFacts.ts` (`STATE_WORD`, D-5545): the card and the header both
+// read it there, so the two can never call one bucket by two words.
+
 
 // The spawn verdict's table used to live HERE, private, on the stated grounds
 // that it had no reader outside this file. Task 5 gave it one — the run board
@@ -57,15 +47,6 @@ const WORD: Record<SessionBucket, string> = {
 // nodes are key-stable, so the previous holder has to be released here.
 let stamped: HTMLElement | null = null;
 
-/** '<1m' | '5m' | '3h' | '2d' since a subagent's hook-reported `startedAt`.
- *  The ladder is `elapsedShort`'s — the shared module whose absence this
- *  docstring used to cite as the reason for a local copy. What stays here is
- *  the under-a-minute word: unlike `PrKeycap`'s `rel()`, this never renders
- *  nothing — a subagent row always shows SOME elapsed time, even a fresh
- *  one. */
-function subagentElapsed(startedAt: number): string {
-  return elapsedShort(Date.now() - startedAt) ?? '<1m';
-}
 
 
 export function SessionLine({
@@ -76,9 +57,11 @@ export function SessionLine({
   roster = [],
   projectPool = null,
   onOpenRun = null,
-  repo = null,
   workingOn = null,
   childRun,
+  coordinator = null,
+  coordinatorTitle,
+  now,
 }: {
   session: FleetSession;
   onOpen: (id: string) => void;
@@ -106,14 +89,6 @@ export function SessionLine({
    *  deliberately does not. That division is also what keeps the hold string
    *  DISPLAY-ONLY — see the note at the cell itself. */
   onOpenRun?: (() => void) | null;
-  /** The repository this row works in, when the CARD it renders on would
-   *  otherwise imply another (spec §6, R3) — decided by `ProjectCard`, never
-   *  here: this row does not know which card it is on. Rendered INSIDE the
-   *  row button so it is part of the accessible name: workspace slugs are
-   *  unique per project only, and `still-river` is live on two projects
-   *  today — two rows on one card would otherwise be two identical buttons
-   *  in a screen-reader rotor. `null` renders nothing. */
-  repo?: string | null;
   /** D-5527: the project whose code this row works on, when the card it renders
    *  on is another project's — a coordinator's dispatched child from a different
    *  project (`fleetTree.ts`'s `workingOnCard`, decided by the card, never here).
@@ -122,46 +97,30 @@ export function SessionLine({
   workingOn?: string | null;
   /** The active run and coordinator name for the child label (`SessionMeta`). */
   childRun?: ChildRunContext;
+  /** D-5545: the presence of this row's coordinator when it is not a live row on this card (`orphanNote`):
+   *  `dead` puts "coordinator gone" on the row, its one marker — the line the card used to repeat under it. */
+  coordinator?: CoordPresence | null;
+  /** The orphan marker's guidance (`orphanNote`'s `title`). */
+  coordinatorTitle?: string;
+  /** The clock, for a test; the row ticks its own otherwise. */
+  now?: number;
 }): ReactNode {
-  const dead = session.status === 'dead';
-  // D-5242: a dead row `ccd hibernate` put to sleep is ASLEEP, not exited — the
-  // bucket stays `dead` (the server's), and only the word and the lamp change:
-  // `hibernated · 6h` (SessionMeta) beside a calm dot, never a death.
-  const asleepAt = hibernatedSince(session);
-  // THE authority: no local re-derivation of attention/busy/state survives
-  // here (nor in sortFleet.ts or groupFleet.ts) — the server decided which of
-  // the seven buckets this session is in, and shipped it as `session.bucket`.
-  const state = asleepAt !== null ? 'asleep' : WORD[session.bucket];
-
-
-  const label = sessionLabel(session);
-
-  // D-5301 (coordinator-first spec §8): every session the operator creates is
-  // its project's coordinator, and the server derives `role` from `.child`
-  // alone. THE ONE READER of `FleetSession.role` in `pwa/src`: the live `fleet`
-  // frame is CAST, never revived (`stores/fleet.ts`'s `asFleetMsg`), so a
-  // server older than the field omits the key, and only the exact word earns
-  // the badge — absent, `null`, `child` and a word this bundle never heard of
-  // all render nothing.
-  const role: unknown = (session as { role?: unknown }).role;
-  const coordinator = role === 'coordinator';
-
-
-  // Dead sessions stay silent about subagents too, same reasoning as limits
-  // above: nothing is running, so a hook-reported roster from before the
-  // exit would describe work that no longer exists. `null` is no fresh hook
-  // data (same discipline as `hookState`); `[]` is a measurement — fresh
-  // data, nothing running — so both leave nothing to disclose below. Left as
-  // `FleetSession['subagents'] | null` rather than hoisted into a plain
-  // boolean so every read of it stays a real `!== null` narrowing TS can
-  // verify, not a second, disconnected flag that could drift from it.
-  const subagentList = dead ? null : session.subagents;
-  const [subagentsOpen, setSubagentsOpen] = useState(false);
-  // Names the region the toggle owns, so `aria-expanded` is about something a
-  // screen reader can then be taken to — the same useId + aria-controls
-  // pairing DialogSheet's `OptionPreview` uses, including its conditional
-  // render of the controlled element.
-  const subagentsId = useId();
+  // D-5545: every fact this row shows is decided by `sessionFacts`, the model the session header reads too —
+  // so the card is a glance (the name, the state word, ONE context fact, at most ONE marker and the
+  // cross-project chip) and the header a superset of it. The state word, the hibernated reading (D-5242), the
+  // `role` read (D-5301 — THE ONE READER of `FleetSession.role` in `pwa/src` is `sessionFacts.ts` now) and the
+  // dead row's silence about subagents and limits all moved there with it. The role badge, the account lane,
+  // the task tally, the subagent disclosure and the waiting question's summary are header facts now
+  // (`SessionDetails`), each still one tap away.
+  const busy = session.status === 'busy';
+  const tick = useNow(30_000, busy && now === undefined);
+  const facts = sessionFacts({
+    session, now: now ?? tick, roster, projectPool, ...(childRun === undefined ? {} : { childRun }),
+    workingOn, coordinator, coordinatorTitle: coordinatorTitle ?? null,
+  });
+  const glance = cardFacts(facts);
+  const label = glance.name.text;
+  const asleep = facts.asleepAt !== null;
 
   // The tapped label is the shared element of the line->chat view transition:
   // stamping the name here (only on the line being opened) pairs it with the
@@ -179,9 +138,9 @@ export function SessionLine({
 
 
   return (
-    <div className={selected ? 'sess-line sess-line--active' : 'sess-line'} data-state={state}>
+    <div className={selected ? 'sess-line sess-line--active' : 'sess-line'} data-state={facts.state}>
       <span className="sess-lamp" data-status={session.bucket}>
-        <StatusDot status={session.bucket} asleep={asleepAt !== null} />
+        <StatusDot status={session.bucket} asleep={asleep} />
       </span>
 
       {/* The two-line block. A plain <div>, NOT the row's button: the subagent
@@ -235,9 +194,22 @@ export function SessionLine({
           type="button"
           className="sess-open"
           aria-current={selected ? 'page' : undefined}
+          title={glance.name.short === undefined || glance.name.short === label ? undefined : label}
           onClick={open}
         >
-          <TypedLabel className="sess-label" text={label} />
+          {/* D-5545: the full name wherever the column holds it (wrapping at a hyphen, never an ellipsis), and
+              shortened by whole tokens only in a phone-narrow column (`Fit`, fleet.css's container query). The
+              button's accessible name is the FULL name either way (verifier round 1): both drawn forms are
+              `aria-hidden`, and the name is spoken once. */}
+          {glance.name.short === undefined || glance.name.short === label ? (
+            <TypedLabel className="sess-label" text={label} />
+          ) : (
+            <span className="sess-label-fit">
+              <span className="sr-only">{label}</span>
+              <span className="fit-full" aria-hidden="true"><TypedLabel className="sess-label" text={label} /></span>
+              <span className="fit-short" aria-hidden="true"><TypedLabel className="sess-label" text={glance.name.short} /></span>
+            </span>
+          )}
           {/* D-5527: whose code this row works on, when its card is another
               project's. An icon beside a WORD (nothing is read out of shape
               alone); the hidden lead makes the accessible name a sentence. */}
@@ -248,58 +220,13 @@ export function SessionLine({
               <span className="sess-workson-name">{workingOn}</span>
             </span>
           )}
-          {repo !== null && <span className="sess-repo">{repo}</span>}
-          {/* Inside the button, after the label and the repo, like `.sess-repo`:
-              the role is part of what this row IS, so it rides the accessible
-              name ("quiet-mesa coordinator"), and on the label's own line it
-              costs no third line at any width — the label ellipsises first. */}
-          {coordinator && <span className="sess-role">coordinator</span>}
+          {/* D-5545: the repo label (spec §6, R3) and the role badge (D-5301) are header facts now — a row whose
+              repo differs from its card's always carries the cross-project chip above, which already keeps two
+              same-slug rows' accessible names apart. */}
         </button>
-        <SessionMeta
-          session={session}
-          roster={roster}
-          projectPool={projectPool}
-          onOpenRun={onOpenRun}
-          state={state}
-          dead={dead}
-          asleepAt={asleepAt}
-          subagentList={subagentList}
-          subagentsOpen={subagentsOpen}
-          subagentsId={subagentsId}
-          onToggleSubagents={() => setSubagentsOpen((v) => !v)}
-          childRun={childRun}
-        />
-
-        {/* A third line, only while the hook is actually waiting on an answer
-            AND a summary has landed for it (a hook can report waiting before
-            the ask write completes — askSummary stays null until then). Clipped
-            to one line like .sess-label; muted like .sess-acct's secondary
-            role, one step further (.proj-dir's ink-tertiary convention). */}
-        {!dead && session.hookState === 'waiting' && session.askSummary !== null && session.askSummary !== '' && (
-          <span className="sess-ask">{session.askSummary}</span>
-        )}
-
-        {/* The disclosure's own content, open only once the toggle above has
-            been tapped, and the element its `aria-controls` names. A real
-            `<ul>/<li>`, not `role="list"` spans: flow content is legal here
-            now that this is a <div> and not the row's <button> — the ARIA
-            stand-ins only ever existed to satisfy that button's
-            phrasing-content model. Name + elapsed time, nothing else; see the
-            toggle's own comment for why there is no third field to add. The
-            hook itself caps the set at 32; nothing here re-caps it. */}
-        {subagentsOpen && subagentList !== null && subagentList.length > 0 && (
-          <ul id={subagentsId} className="sess-subagent-list">
-            {subagentList.map((sa) => (
-              <li key={`${sa.name}-${sa.startedAt}`} className="sess-subagent-row">
-                {/* `title`, because .sess-subagent-name ellipsises: a long
-                    agent name is otherwise unreadable on this row and the
-                    row is not a link to anywhere that would show it. */}
-                <span className="sess-subagent-name" title={sa.name}>{sa.name}</span>
-                <span className="sess-subagent-elapsed">{subagentElapsed(sa.startedAt)}</span>
-              </li>
-            ))}
-          </ul>
-        )}
+        <SessionMeta facts={facts} mode="card" onOpenRun={onOpenRun} />
+        {/* D-5545: the waiting question's summary (it was a third line, clipped to an ellipsis) and the subagent
+            disclosure are the session header's now — the row says `needs you`, the header says what. */}
       </div>
 
       <button

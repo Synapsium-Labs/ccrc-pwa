@@ -71,6 +71,37 @@ describe('noteFor: one subject becomes one plain-English line', () => {
     expect(noteFor('fix: a thing (wave 3, D-1–D-4) (#1)').text).toBe('A thing (wave 3)');
   });
 
+  // v0.0.296 and v0.0.297 shipped `(D-5533..)` and `(D-5511 to D-5522)` verbatim.
+  it.each([
+    ['docs(spec): the Accounts connect design (D-5511 to D-5522) (#644)', 'The Accounts connect design'],
+    ['docs(spec): the binary lifecycle (D-5533..) (#642)', 'The binary lifecycle'],
+    ['docs: the open range, spelled out (D-5533…) (#1)', 'The open range, spelled out'],
+    ['docs: a closed range (D-5533..D-5544) (#1)', 'A closed range'],
+    ['docs: an ellipsis range (D-5533…D-5544) (#1)', 'An ellipsis range'],
+    ['docs: a slash pair (wave 2, D-2764/D-2765) (#1)', 'A slash pair (wave 2)'],
+    ['feat: a mixed list (D-5511 to D-5522, D-5533.., D-5533..D-5544, D-1–D-4) (#1)', 'A mixed list'],
+    ['feat: a mixed list among words (task 3; D-5511 to D-5522, D-5533..) (#1)', 'A mixed list among words (task 3)'],
+    ['docs: a ledger aside (B2; D-12; item 4 cites D-13; item 5 moves to W3) (#1)', 'A ledger aside (B2, item 5 moves to W3)'],
+    ['docs: a withdrawn one (D-12 withdrawn) (#1)', 'A withdrawn one'],
+  ])('strips a prose-style D-ref list: %s', (subject, text) => {
+    expect(noteFor(subject).text).toBe(text);
+  });
+
+  it('a D-ref mixed with a PR ref keeps the PR ref, in either order', () => {
+    expect(noteFor('fix: the claimant (D-5523, #601) (#630)')).toEqual({ group: 'Fixed', text: 'The claimant (#601)', pr: 630 });
+    expect(noteFor('fix: the claimant (D-5511 to D-5522; #601) (#630)').text).toBe('The claimant (#601)');
+  });
+
+  it('never strips what only looks like a D-ref: a version, a word, a range of versions', () => {
+    expect(noteFor('feat: install Claude Code (v2.1.302) (#1)').text).toBe('Install Claude Code (v2.1.302)');
+    expect(noteFor('feat: install Claude Code (v2.1.302, D-5533..) (#1)').text).toBe('Install Claude Code (v2.1.302)');
+    expect(noteFor('feat: the roll (v2.1.302..v2.1.305) (#1)').text).toBe('The roll (v2.1.302..v2.1.305)');
+    expect(noteFor('fix: the drill (D-day) (#1)').text).toBe('The drill (D-day)');
+    expect(noteFor('fix: the drill (D-day, D-12) (#1)').text).toBe('The drill (D-day)');
+    expect(noteFor('fix: read the disc (CD-ROM) (#1)').text).toBe('Read the disc (CD-ROM)');
+    expect(noteFor('fix: read the disc (CD-ROM2, D-12) (#1)').text).toBe('Read the disc (CD-ROM2)');
+  });
+
   it('keeps a non-deviation parenthetical, and strips a bare D-ref list wherever it sits', () => {
     // a segmented legacy-shaped ref, concatenated so this file carries no bare legacy form
     expect(noteFor(`fix: a (small) thing (D-1, ${'D-B'}4-9) works (#3)`).text).toBe('A (small) thing works');

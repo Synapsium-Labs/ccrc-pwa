@@ -4,10 +4,10 @@
 // transcript), the chat list, and the optimistic composer. The fleet store
 // (connected app-wide in app.tsx) supplies the header's live identity.
 // DialogSheet and the TerminalDrawer mount at the bottom.
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
 import { backgroundOnlyRefusal, repoLabel, sessionWithCoordinator, substrateFault, type FleetSession, type RouteField, type SessionStatus } from '../../../shared/api';
-import { ATTENTION_DOT, Button, MailStrip, Skeleton, TaskStrip, toast } from '@ccrc/ui';
+import { ATTENTION_DOT, Button, MailStrip, Skeleton, TaskStrip, WorkflowStrip, toast, useNow } from '@ccrc/ui';
 import { staleFor } from '../session/taskStaleness';
 import { SwapSheet } from '../fleet/SwapSheet';
 import { ArchiveSheet, restoreSession } from '../fleet/ArchiveSheet';
@@ -27,7 +27,11 @@ import { useQueuedRoute } from '../session/useQueuedRoute';
 import { routeView } from '../session/routeView';
 import { substrateFaultTitle } from '../fleet/substrateWords';
 import { SessionHeader } from '../session/SessionHeader';
-import { coordinationLine, coordinationOf } from '../fleet/fleetTree';
+import { childRunContext, coordinationOf, parentIdOf } from '../fleet/fleetTree';
+import { sessionFacts } from '../fleet/sessionFacts';
+import { coordPresence } from '../fleet/coordWords';
+import { orphanGuidance } from '../fleet/orphanWords';
+import { placementOfRow, poolOfPlacement } from '../fleet/placementWords';
 import { isRunClosed } from '../fleet/runWords';
 import { HistoryTab } from '../session/HistoryTab';
 import { TerminalDrawer } from '../session/TerminalDrawer';
@@ -156,6 +160,13 @@ export function SessionScreen({
   // unvalidated-dynamic-method-call false positive on the route-keyed store.)
   const tasksTouchedAt = useStore.getState().tasksTouchedAt;
   const mail = useStore((s) => s.mail);
+  // D-5560: subscribed through the store's own `subscribe`/`getState` rather
+  // than one more `useStore(…)` call site (D-5372's CodeQL false positive
+  // above); the reducer replaces the array on every workflows frame, so the
+  // snapshot is stable between frames. The flag is read beside it for
+  // D-5372's reason — the reducer sets it only together with a new array.
+  const workflows = useSyncExternalStore(useStore.subscribe, () => useStore.getState().workflows);
+  const workflowsUnreadable = useStore.getState().workflowsUnreadable;
   // Build 4 Task 18, spec §2.3: the ask card's second derivation source. A
   // live `ask` (hook envelope) and a live `dialog` (scraped pane menu) are
   // hosted by the SAME sheet, so either one makes a resultless ask card
@@ -175,6 +186,7 @@ export function SessionScreen({
   // the same sessions and active runs the fleet's rows are drawn from.
   const fleetSessions = useFleet((s) => s.sessions);
   const fleetRuns = useFleet((s) => s.runs);
+  const fleetFrameSeen = useFleet((s) => s.fleetFrameSeen);
 
   const kbInset = useKeyboardInsets();
   const [restarting, setRestarting] = useState(false);
@@ -249,9 +261,24 @@ export function SessionScreen({
   // for this project in that read, or a row whose `repo` is not `named` —
   // all three collapse deliberately at `repoLabel`, the one reader.
   const repo = repoLabel(projects?.find((r) => r.name === project)?.repo);
-  const coordinated = live === null ? null
-    : coordinationOf(live, fleetSessions, fleetRuns.filter((r) => !isRunClosed(r)));
-  const coordination = coordinated === null ? null : coordinationLine(coordinated);
+  const activeRuns = fleetRuns.filter((r) => !isRunClosed(r));
+  const coordination = live === null ? null : coordinationOf(live, fleetSessions, activeRuns);
+  // D-5545: the header's facts, from the model the fleet card reads, over the same inputs the card is given —
+  // the active run and coordinator (`childRunContext`), whose code (`coordinationOf`), the project's pool
+  // (`placementOfRow`, the cards' own spelling) and the coordinator's presence (`coordPresence`, the orphan
+  // marker's) — so the header can never know less than the card.
+  const lookup = (sid: string): FleetSession | null => fleetSessions.find((x) => x.id === sid) ?? null;
+  const parentId = live === null ? null : parentIdOf(live, activeRuns);
+  const factsNow = useNow(30_000);
+  const presence = parentId === null ? null : coordPresence(parentId, lookup(parentId), fleetFrameSeen);
+  const facts = live === null ? null : sessionFacts({
+    session: live, now: factsNow, roster,
+    projectPool: poolOfPlacement(placementOfRow(projects?.find((r) => r.name === live.project))),
+    childRun: childRunContext(live, activeRuns, lookup),
+    workingOn: coordination?.workingOn ?? null,
+    coordinator: presence,
+    coordinatorTitle: parentId === null || presence === null ? null : orphanGuidance(parentId, presence),
+  });
 
   // Routing slice 6, Task 4: once `live.route` rides the wire, the pickers'
   // active row and the header's queued badge are DERIVED from it instead of
@@ -443,6 +470,7 @@ export function SessionScreen({
         roster={roster}
         repo={repo}
         coordination={coordination}
+        facts={facts}
         onInterrupt={(source) => void interrupt(source)}
         onOpenTerminal={openTerminal}
         onBack={() => navigate('/')}
@@ -568,6 +596,11 @@ export function SessionScreen({
 
       {/* Above the plan, which stays the composer's neighbour. */}
       <MailStrip mail={mail} />
+
+      {/* D-5560: the workflows this session is running, between the mail and the
+          plan — one line each, the facts Claude Code's own row prints; the head
+          opens their phases and agents. Read-only. */}
+      <WorkflowStrip workflows={workflows} unreadable={workflowsUnreadable} />
 
       {/* Sits between the conversation and the composer — where the TUI puts it,
           directly above the prompt you're about to type into. */}

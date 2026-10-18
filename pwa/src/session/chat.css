@@ -62,13 +62,52 @@
    restated here so the contrast gate can measure the pair. */
 .chat-coord {
   margin: 0 0 2px;
-  font-size: var(--fs-xs);
+  font-size: var(--fs-meta);
   line-height: 1.35;
   color: var(--ink-secondary);
   background: var(--bg-surface);
   overflow-wrap: anywhere;
 }
 .chat-coord-part { display: inline-block; max-width: 100%; }
+/* D-5545: THE HEADER IS THE FULL SET. The title wraps instead of ellipsising, so
+   the whole name is readable at 360 — it breaks at the crumb's own separators
+   and, only for a single token wider than the column, inside it. The
+   coordination row is clause boxes in a wrapping flex row with a gap and NO
+   separator glyph, so a wrapped line never starts with, or holds, a lone `·`
+   (#633's leftover). The details row (`SessionDetails`) is the meta row's last,
+   full-width item: every fact the card dropped, each in full, its cells
+   wrapping at spaces; the fleet row's middots are dropped here for the same
+   reason the coordination row has none. Layout only — no colour declaration. */
+.chat-title { white-space: normal; overflow-wrap: break-word; text-overflow: clip; }
+.chat-crumb { overflow: visible; text-overflow: clip; }
+.chat-coord { display: flex; flex-wrap: wrap; align-items: center; column-gap: var(--sp-2); row-gap: 2px; }
+@media (pointer: fine) {
+  .chat-coord .chat-coord-link,
+  .chat-meta .chat-details-toggle { min-height: 0; }
+}
+.chat-facts {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: var(--sp-3);
+  row-gap: 2px;
+  font-size: var(--fs-2xs);
+  min-width: 0;
+}
+.chat-facts .sess-meta { display: contents; }
+.chat-facts .sess-meta > *::before { content: none; }
+.chat-fact { font-family: var(--family-mono); overflow-wrap: break-word; min-width: 0; }
+.chat-facts .sess-subagent-list { flex-basis: 100%; }
+/* D-5546, phone: the keycaps took ~170 of 360px beside the title, leaving the
+   name, the coordination row and the meta row a 140px column that ellipsised
+   the name and broke every clause. Below 900 the back button and the keycaps
+   share the first row and the title block takes the full width under them. */
+@media (max-width: 899px) {
+  .chat-head { flex-wrap: wrap; row-gap: var(--sp-1); }
+  .chat-head > .chat-back { margin-right: auto; }
+  .chat-head > .chat-title-wrap { order: 1; flex-basis: 100%; }
+}
 /* ONE wrapping row: status, account, model, effort, branch. It was two fixed
    rows, which spent a line of chat height on every screen to say what fits
    comfortably on one. Narrow screens wrap it rather than reintroducing the row. */
@@ -163,7 +202,7 @@ button.metachip:active {
 }
 .metachip-glyph {
   flex: none;
-  font-size: var(--fs-xs);
+  font-size: var(--fs-meta);
   line-height: 1;
 }
 .metachip-text {
@@ -229,12 +268,40 @@ button.metachip:active {
 /* `<Keycap>` carries the ten declarations this rule shared with
    `.term-keys .keycap` below — the grid, the mono caps, the heavier bottom
    border, the `--r-sm` corner and the 1px press. What stays is the GROUND:
-   chrome fill, strong hairline, primary ink, and the stand-down. */
-.chat-head .keycap {
-  flex: none;
-  color: var(--ink-primary);
-  background: var(--bg-raised);
-  border-color: var(--edge-strong);
+   chrome fill, strong hairline, the resting ink, and the stand-down.
+
+   THE ONE LAYERED RULE IN THIS SHEET (D-5462). `<Keycap>` brightens to the
+   primary ink under the mouse (`enabled:hover:text-ink-primary`, D-5101), a
+   utility in `@layer utilities`. Unlayered, this rule beat it at every
+   specificity, and it rested on that same primary ink besides, so the header
+   caps never lifted. In `@layer components` the primitive's hover outranks
+   it. Where a pointer can hover, the cap rests on the secondary ink, as a
+   Door does, so the lift is one tier, to the ink it rested on before. On
+   touch the hover never fires, so there the cap keeps the primary ink it
+   always had and a phone renders exactly as before. The stand-down below
+   stays unlayered: the hover is `enabled:`-gated, so nothing contests it.
+   The terminal's caps (`.term-keys .keycap`) stay unlayered on purpose: on
+   the well the primary ink would be dark glass on dark glass in the light
+   theme, so there the well's ink holds under the mouse
+   (hover-states.test.ts). */
+@layer components {
+  .chat-head .keycap {
+    flex: none;
+    color: var(--ink-primary);
+    background: var(--bg-raised);
+    border-color: var(--edge-strong);
+  }
+  /* The ground is restated with the ink on purpose: the contrast gate reads
+     a colour-only rule as a variant of every `.keycap` rule it can reach,
+     the terminal's caps on the well included, and measures it there. A rule
+     that brings its own ground is measured on that ground, the one the
+     header cap actually paints. */
+  @media (hover: hover) {
+    .chat-head .keycap {
+      color: var(--ink-secondary);
+      background: var(--bg-raised);
+    }
+  }
 }
 .chat-head .keycap:disabled {
   color: var(--ink-disabled);
@@ -267,8 +334,8 @@ button.metachip:active {
 .keycap--pr[data-checks='pending'] .pr-dot { color: var(--status-attention); }
 
 .pr-sheet { display: grid; gap: var(--sp-3); }
-.pr-lede { color: var(--ink-primary); font-size: var(--fs-base); line-height: var(--lh-normal); }
-.pr-facts { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-secondary); }
+.pr-lede { color: var(--ink-primary); font-size: var(--fs-ui); line-height: var(--lh-normal); }
+.pr-facts { font-family: var(--family-mono); font-size: var(--fs-meta); color: var(--ink-secondary); }
 .pr-warn { color: var(--status-attention-text); font-size: var(--fs-sm); }
 /* `.pr-title-input` is `<TextInput>` wearing `TEXT_INPUT_INLINE`: nine
    declarations that `.pool-new-input` in fleet.css spelled out identically.
@@ -289,20 +356,20 @@ button.metachip:active {
   border: 1px solid var(--edge-subtle); border-radius: var(--r-sm); padding: var(--sp-2);
 }
 .pr-check-names { color: var(--status-dead-text); font-size: var(--fs-sm); word-break: break-word; }
-.pr-label { font-size: var(--fs-xs); color: var(--ink-tertiary); }
-.pr-title { font-size: var(--fs-base); color: var(--ink-primary); }
+.pr-label { font-size: var(--fs-meta); color: var(--ink-tertiary); }
+.pr-title { font-size: var(--fs-ui); color: var(--ink-primary); }
 .pr-checkline { font-size: var(--fs-sm); color: var(--ink-secondary); }
 .pr-note { font-size: var(--fs-sm); color: var(--ink-secondary); line-height: var(--lh-normal); }
 
 .reap-sheet { display: grid; gap: var(--sp-3); }
 .reap-rows { display: grid; grid-template-columns: 6.5rem minmax(0, 1fr); gap: var(--sp-1) var(--sp-2); }
-.reap-rows dt { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-tertiary); }
+.reap-rows dt { font-family: var(--family-mono); font-size: var(--fs-meta); color: var(--ink-tertiary); }
 .reap-rows dd { font-size: var(--fs-sm); color: var(--ink-primary); margin: 0; word-break: break-word; }
-.reap-note { font-size: var(--fs-xs); color: var(--ink-secondary); }
+.reap-note { font-size: var(--fs-meta); color: var(--ink-secondary); }
 /* The refusal is the whole content when there is one: no button sits beside it,
    because there is no override. */
 .reap-refusal { color: var(--status-attention-text); font-size: var(--fs-sm); line-height: var(--lh-normal); }
-.reap-sensitive { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--status-dead-text); list-style: none; padding: 0; }
+.reap-sensitive { font-family: var(--family-mono); font-size: var(--fs-meta); color: var(--status-dead-text); list-style: none; padding: 0; }
 /* `.reap-size`, `.reap-ignored` and fleet.css's `.hotfiles-path` declared the
    same four — a path that may be long. All three are `MONO_PATH` now, and the
    two that lacked `word-break` inherit the one that had it. */
@@ -313,7 +380,7 @@ button.metachip:active {
    naming what happens to these checkouts), `.reap-children-list` carries the
    look the plain `<ul>` used to carry alone. */
 .reap-children { display: grid; gap: var(--sp-1); }
-.reap-children-list { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-secondary); list-style: none; padding: 0; display: grid; gap: var(--sp-1); }
+.reap-children-list { font-family: var(--family-mono); font-size: var(--fs-meta); color: var(--ink-secondary); list-style: none; padding: 0; display: grid; gap: var(--sp-1); }
 .reap-child { word-break: break-word; }
 .reap-go { min-height: var(--tap-min); }
 
@@ -329,7 +396,7 @@ button.metachip:active {
    also what `design/audit.mjs` measures this row through, so it is not
    decoration to tidy away. */
 .menu-item {
-  font: var(--weight-regular) var(--fs-base) / var(--lh-tight) var(--family-ui);
+  font: var(--weight-regular) var(--fs-ui) / var(--lh-tight) var(--family-ui);
   color: var(--ink-primary);
 }
 .menu-label {
@@ -338,7 +405,7 @@ button.metachip:active {
 }
 .menu-hint {
   flex: none;
-  font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono);
+  font: var(--weight-regular) var(--fs-meta) / 1 var(--family-mono);
   color: var(--ink-tertiary);
 }
 .menu-item--danger .menu-label {
@@ -364,7 +431,7 @@ button.metachip:active {
 .chat-banner--offline {
   justify-content: center;
   min-height: var(--sp-8);
-  font: var(--weight-medium) var(--fs-xs) / 1 var(--family-mono);
+  font: var(--weight-medium) var(--fs-meta) / 1 var(--family-mono);
   letter-spacing: var(--ls-caps);
 }
 /* The 6px dot is `ATTENTION_DOT` — see fleet.css's `.offline-banner::before`. */
@@ -401,7 +468,7 @@ button.metachip:active {
   color: var(--status-attention-text);
 }
 .chat-banner--missing .banner-path {
-  font: var(--weight-regular) var(--fs-xs) / var(--lh-mono) var(--family-mono);
+  font: var(--weight-regular) var(--fs-meta) / var(--lh-mono) var(--family-mono);
   color: var(--ink-secondary);
   overflow-wrap: anywhere;
 }
@@ -537,7 +604,7 @@ button.metachip:active {
 }
 .pending-error {
   justify-self: end;
-  font: var(--weight-regular) var(--fs-xs) / var(--lh-normal) var(--family-ui);
+  font: var(--weight-regular) var(--fs-meta) / var(--lh-normal) var(--family-ui);
   color: var(--status-dead-text);
   text-align: right;
   overflow-wrap: anywhere;
@@ -600,7 +667,7 @@ button.metachip:active {
    it is one quiet line; its ground is .chat's --bg-page (registered in design/audit.mjs INHERITED_GROUNDS). */
 .msg-plain { white-space: pre-wrap; overflow-wrap: anywhere; }
 .msg-assist .msg-plain { max-height: none; }
-.msg-plain-note { color: var(--ink-secondary); font-size: var(--fs-xs); }
+.msg-plain-note { color: var(--ink-secondary); font-size: var(--fs-meta); }
 
 /* COMPACTION CARD — a /compact recap ("This session is being continued…")
    folded to a quiet, expandable card so it doesn't bury the conversation. */
@@ -694,7 +761,7 @@ button.metachip:active {
   align-items: center;
   gap: var(--sp-2);
   padding: var(--sp-1) 0;
-  font: var(--weight-medium) var(--fs-xs) / 1 var(--family-mono);
+  font: var(--weight-medium) var(--fs-meta) / 1 var(--family-mono);
   color: var(--ink-tertiary);
   letter-spacing: var(--ls-caps);
 }
@@ -885,7 +952,7 @@ button.metachip:active {
    four declarations of the type ramp for the same kind of sentence. */
 .draft-copy,
 .dlg-copy {
-  font-size: var(--fs-base);
+  font-size: var(--fs-ui);
   line-height: var(--lh-normal);
   color: var(--ink-secondary);
   margin-bottom: var(--sp-3);
@@ -914,7 +981,7 @@ button.metachip:active {
   border: none;
   background: none;
   color: var(--ink-secondary);
-  font: var(--weight-medium) var(--fs-base) / 1 var(--family-ui);
+  font: var(--weight-medium) var(--fs-ui) / 1 var(--family-ui);
   cursor: pointer;
   transition: color var(--dur-fast) var(--curve-swift);
 }
@@ -1012,7 +1079,7 @@ button.metachip:active {
   color: var(--ink-tertiary);
 }
 .opt-wait {
-  font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono);
+  font: var(--weight-regular) var(--fs-meta) / 1 var(--family-mono);
   color: var(--status-busy-text);
   flex: none;
 }
@@ -1672,7 +1739,7 @@ button.metachip:active {
 }
 .slash-desc {
   font-family: var(--family-ui);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-meta);
   color: var(--ink-secondary);
   line-height: var(--lh-tight);
   overflow: hidden;
@@ -1765,17 +1832,17 @@ button.metachip:active {
   display: flex; flex-wrap: wrap; gap: var(--sp-2);
   padding: var(--sp-2) 0; border-top: 1px solid var(--edge-subtle);
 }
-.history-when { color: var(--ink-tertiary); font-variant-numeric: tabular-nums; font-size: var(--fs-xs); }
+.history-when { color: var(--ink-tertiary); font-variant-numeric: tabular-nums; font-size: var(--fs-meta); }
 .history-act { color: var(--ink-primary); }
 .history-verb { color: var(--ink-tertiary); }
-.history-outcome { color: var(--ink-secondary); font-size: var(--fs-xs); }
-.history-obs, .history-dec { flex-basis: 47%; color: var(--ink-secondary); font-family: var(--family-mono); font-size: var(--fs-xs); }
-.history-corr { color: var(--ink-tertiary); font-size: var(--fs-xs); border-radius: var(--r-sm); padding: 0 var(--sp-1); }
+.history-outcome { color: var(--ink-secondary); font-size: var(--fs-meta); }
+.history-obs, .history-dec { flex-basis: 47%; color: var(--ink-secondary); font-family: var(--family-mono); font-size: var(--fs-meta); }
+.history-corr { color: var(--ink-tertiary); font-size: var(--fs-meta); border-radius: var(--r-sm); padding: 0 var(--sp-1); }
 /* `disagrees` in its own colour (spec §2) — the attention pair, because a
    provenance mismatch is a fact for a human to read, not an error state. */
 .history-corr[data-corr='disagrees'] { color: var(--status-attention-text); background: var(--status-attention-tint); }
-.history-refusal { flex-basis: 100%; color: var(--status-dead-text); font-size: var(--fs-xs); }
-.history-row--gap, .history-gap { color: var(--status-dead-text); font-size: var(--fs-xs); }
+.history-refusal { flex-basis: 100%; color: var(--status-dead-text); font-size: var(--fs-meta); }
+.history-row--gap, .history-gap { color: var(--status-dead-text); font-size: var(--fs-meta); }
 .history-loading, .history-empty, .history-error { color: var(--ink-secondary); padding: var(--sp-3) 0; }
 
 

@@ -25,10 +25,11 @@
    `--dur-*` outside it would silently re-animate the app for a reader who
    asked for stillness.
 
-   NOTHING READS THE TYPE OR DENSITY ROLES YET. They are declared so the axis
-   exists; the shared primitives adopt them in Task 14, the app sheets in Task
-   14b. Until then Instrument differs from Refined in radii, card elevation,
-   motion and the meter's shape (D-5098, which Meter reads already).
+   WHAT READS THE TYPE AND DENSITY ROLES. The shared primitives (Task 14), the
+   sheet body, OptionRow and the app sheets' rows, chips and sheet copy (Task
+   14b); pwa/test/role-census.test.ts names every one. Beyond them Instrument
+   differs from Refined in radii, card elevation, motion and the meter's shape
+   (D-5098).
    ========================================================================== */
 
 :root[data-skin='instrument'] {
