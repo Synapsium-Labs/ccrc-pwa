@@ -1562,12 +1562,12 @@ describe('board placement on the wire (Task 3, fix round 1 coverage)', () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
     seedSession(home, 'ct-worker', 'claude', {
-      project: 'project-d', hold: 'program:qdrant wave:10/10',
+      project: 'project-d', hold: 'program:prog-d wave:10/10',
     });
     const coord = mkCoord();
     // The cross-repo worker: work in project-d, coordinator in ccrc-pwa.
     const crossRepo = coord.openRun({
-      program: 'qdrant', title: 'wave 10', project: 'project-d',
+      program: 'prog-d', title: 'wave 10', project: 'project-d',
       wave: 10, waveOf: 10, claimedBy: 'ccrc-pwa-amber-summit', coordProject: 'ccrc-pwa',
     }) as { id: number };
     coord.bindSession(crossRepo.id, 'ct-worker');
@@ -1622,12 +1622,12 @@ describe('board placement on the wire (Task 3, fix round 1 coverage)', () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
     seedSession(home, 'ct-worker2', 'claude', {
-      project: 'project-d', hold: 'program:qdrant wave:10/10',
+      project: 'project-d', hold: 'program:prog-d wave:10/10',
     });
     const coord = mkCoord();
     // This worker's coordinator lives in project-n.
     const mine = coord.openRun({
-      program: 'qdrant', title: 'wave 10', project: 'project-d',
+      program: 'prog-d', title: 'wave 10', project: 'project-d',
       wave: 10, waveOf: 10, claimedBy: 'project-n-keen-meadow', coordProject: 'project-n',
     }) as { id: number };
     coord.bindSession(mine.id, 'ct-worker2');

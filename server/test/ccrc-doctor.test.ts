@@ -11452,25 +11452,25 @@ describe('ccrc doctor: memory (spec 2026-09-08 §4, task 4)', () => {
     });
   }
 
-  // `.claude-preview` is NO LONGER special-cased (Minor, whole-branch
+  // `.claude-docs-preview` is NO LONGER special-cased (Minor, whole-branch
   // review round 3 — reached independently for this file's own reason, see
   // `_check_memory`'s comments in ccd/ccrc-doctor-checks): hard-coding a
   // single operator's box-local tool name into shipped, public-release-bound
   // source is the residue class CLAUDE.md bans, and on every measured box the
   // exclusion excluded nothing the generic `[ -d "${h}projects" ]` guard did
-  // not already exclude. So a `.claude-preview`-named directory is now
+  // not already exclude. So a `.claude-docs-preview`-named directory is now
   // examined like any other `.claude*` home — this test used to pin a PASS
   // here (the old guard test) and now pins the opposite: a `projects/` dir
   // under that name is real evidence, and doctor reports it like it would for
   // any other home.
-  it('no longer special-cases .claude-preview — a forked pair there is reported like any other home', () => {
+  it('no longer special-cases .claude-docs-preview — a forked pair there is reported like any other home', () => {
     const home = healthy('ccrc-doctor-mem-docserver-skip-');
-    const d = join(home, '.claude-preview', 'projects', '-p-demo', 'memory');
+    const d = join(home, '.claude-docs-preview', 'projects', '-p-demo', 'memory');
     mkdirSync(d, { recursive: true });
     writeFileSync(join(d, 'a.md'), 'x');
-    writeFileSync(join(home, '.claude-preview', 'settings.json'), HOOKED_SETTINGS);
+    writeFileSync(join(home, '.claude-docs-preview', 'settings.json'), HOOKED_SETTINGS);
     const r = runDoctor(home);
-    expect(r.stdout).toMatch(/^WARN memory: memory is forked across agent homes: .*\.claude-preview:-p-demo/m);
+    expect(r.stdout).toMatch(/^WARN memory: memory is forked across agent homes: .*\.claude-docs-preview:-p-demo/m);
   });
 
   // R21 (fix round 2, Important 2): round 1's "emit exactly one verdict line"

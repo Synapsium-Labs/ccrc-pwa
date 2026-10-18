@@ -169,7 +169,7 @@ const lineFor = (out: string, name: string): string | undefined =>
 
 /** The roster this fixture's `healthy()` seeds: the upstream account plus
  *  ONE generated account whose `configDirSuffix` is `.claude-home` — a
- *  real, documented production suffix (`shared/roster.ts`'s own
+ *  documented, production-shaped suffix (`shared/roster.ts`'s own
  *  `configDirSuffix` comment lists it alongside `.claude`, `.claude-acme`
  *  and `.claude-gpt`), and the one the brief's `graphifyHealthy()` fixture
  *  plants a skill stamp under. Without a roster entry naming it, condition

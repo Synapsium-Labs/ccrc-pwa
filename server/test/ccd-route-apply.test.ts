@@ -1341,7 +1341,7 @@ describe('the read-back\'s second witness — the transcript\'s own acknowledged
     sidecarAt(ACK + 3, 'claude-opus-5-5');   // the render the switch caused: model and uuid right, 22 h old
   });
 
-  it('the synapsium shape: recorded applied, the counters cleared, ONE line naming the ack and the spawn, nothing typed — and apply-gave-up stops', () => {
+  it('the project-k shape: recorded applied, the counters cleared, ONE line naming the ack and the spawn, nothing typed — and apply-gave-up stops', () => {
     writeTranscript([turn(ACK - 600), cmd(ACK, 'model', 'opus'), ack(ACK, SAVED('Opus 5.5')), turn(ACK + 30)]);
     tick();
     expect(h.reg(ID, 'routeapplied')).toBe('class=opus');
