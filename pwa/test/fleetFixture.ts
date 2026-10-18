@@ -36,3 +36,11 @@ export const fleetSession = (over: Partial<FleetSession> = {}): FleetSession => 
   boardProject: null, route: null, child: { kind: 'none' }, role: null, releasedFrom: null,
   ...over,
 });
+
+/** A row `ccd hibernate` put to sleep (D-5242), in the shape the server assembles it: `.stopped` (lifecycle `stopped`,
+ *  the sweep's declared `agent` stamp) plus `.hibernated` (`hibernatedAt`), and the pane gone, so status and bucket
+ *  `dead`. `at` is the marker's epoch MS; the caller names its own id, project and anything else its case is about. */
+export const hibernatedSession = (at: number, over: Partial<FleetSession> = {}): FleetSession => fleetSession({
+  status: 'dead', bucket: 'dead', lifecycle: 'stopped', stoppedBy: { at, surface: 'agent' }, hibernatedAt: at,
+  ...over,
+});

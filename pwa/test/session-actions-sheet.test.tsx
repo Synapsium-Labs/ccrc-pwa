@@ -3,7 +3,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { FleetSession } from '../../shared/api';
-import { fleetSession } from './fleetFixture';
+import { fleetSession, hibernatedSession } from './fleetFixture';
 import { READER_MIN_COLS } from '../../shared/api';
 import { ToastHost } from '@ccrc/ui';
 import { SessionActionsSheet } from '../src/fleet/SessionActionsSheet';
@@ -919,5 +919,39 @@ describe('the hold composer, past the arms already covered', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Hold' }));
     expect(screen.getByLabelText('Hold reason')).toHaveValue('');
+  });
+});
+
+// D-5242 (plan Task 18): `ccd forget` refuses a hibernated row (`hibernated`, D-5423), so the sheet never offers it
+// there; it offers Wake, which is the same `/ensure` the Restart button posts.
+describe('a hibernated row (D-5242)', () => {
+  const AT = Date.now() - 6 * 3_600_000;
+  const sleeper = (over: Partial<FleetSession> = {}): FleetSession =>
+    hibernatedSession(AT, { id: 'lane-a-project-a', wrapper: 'lane-a', home: 'lane-a', project: 'project-a', workspace: null, ...over });
+  const notes = () => [...document.querySelectorAll('.sess-sheet-note')].map((n) => n.textContent ?? '');
+
+  it('hides Forget and offers Wake, which posts /ensure', async () => {
+    renderSheet(sleeper());
+    expect(screen.queryByRole('button', { name: /forget session/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Restart session' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Wake session' }));
+    await waitFor(() => {
+      const calls = (fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.map((c) => String(c[0]));
+      expect(calls.some((u) => u.includes('/api/sessions/lane-a-project-a/ensure'))).toBe(true);
+    });
+  });
+
+  it('still offers Forget on a dead row with no hibernatedAt', () => {
+    renderSheet(sleeper({ hibernatedAt: null }));
+    expect(screen.getByRole('button', { name: /forget session/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Restart session' })).toBeInTheDocument();
+  });
+
+  it('the narrow-spawn note is absent on a hibernated narrow row and present on a dead one', () => {
+    renderSheet(sleeper({ spawnState: 'narrow' }));
+    expect(notes().join(' ')).not.toContain('that pane is gone');
+    cleanup();
+    renderSheet(sleeper({ spawnState: 'narrow', hibernatedAt: null }));
+    expect(notes().join(' ')).toContain('that pane is gone');
   });
 });

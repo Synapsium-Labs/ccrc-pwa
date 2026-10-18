@@ -5,15 +5,14 @@
 // and `pwa/src`, grouped by source and file with a hit count, so a new reader — or a new hit in a file already here —
 // is red until its row (or its count) is written. Each row's stance is argued from WHAT THAT READER READS, not only from
 // the verdict's holds (a run can be opened naming a sleeping session: `POST /api/runs` takes `claimedBy` from its body):
-//   - `consults`      it reads `hibernatedAt` (or `.hibernated`) itself — held: the file mentions it;
+//   - `consults`      it reads `hibernatedAt` (or `.hibernated`) itself, or through the PWA's `hibernatedSince` — held:
+//                     the file mentions it, or (`via`) the file it reads the dead answer through does (plan Task 18);
 //   - `wakes-first`   it meets a hibernated row only through a path that wakes it first (dispatch's `ensure`, the mail
 //                     lane);
 //   - `journal`       the lifecycle journal's `hibernate` row makes the sleep deliberate;
 //   - `held-awake`    the verdict's holds keep it from ever meeting one (no claim, no open run, no background work);
 //   - `other-meaning` the word means something else there;
 //   - `true-of-pane`  it counts a sleeping session's pane as not running, which is true, and says so;
-//   - `task-18`       the PWA half consults `hibernatedAt` (plan Task 18) — held: the file, or the one it reads through
-//                     (`via`), is named in Task 18's section of the plan;
 //   - `definition`    the vocabulary's own definition.
 // THE CENSUS IS THE SERVER TREE'S. The box-side sweeps keyed on a live process were audited by hand; `ccd-tmp-sweep` is
 // the only one, and Task 16 gave it its stance (a hibernated row's uuid is live). The rows by NAME below are the readers
@@ -29,11 +28,12 @@ import { Bus } from '../src/bus.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
-type Stance = 'consults' | 'wakes-first' | 'journal' | 'held-awake' | 'other-meaning' | 'true-of-pane' | 'task-18' | 'definition';
+type Stance = 'consults' | 'wakes-first' | 'journal' | 'held-awake' | 'other-meaning' | 'true-of-pane' | 'definition';
 interface Row {
   readonly source: CensusSource; readonly file: string; readonly hits: number;
   readonly stances: readonly Stance[]; readonly why: string;
-  /** For a `task-18` row whose file Task 18 does not name: the file it reads the dead answer through, which it does. */
+  /** For a `consults` row that reads the dead answer through another file (`coordPresence`, `lifecycleQualifier`): that
+   *  file, which is the one that consults the marker. */
   readonly via?: string;
 }
 
@@ -96,27 +96,34 @@ const CENSUS: readonly Row[] = [
       + 'sleep from a stop consults `hibernatedAt` (this table)' },
   { source: 'lifecycle-table', file: 'shared/api.ts', hits: 2, stances: ['definition'],
     why: '`SESSION_LIFECYCLE_MAP` and `LIFECYCLE_DEAD`: no new lifecycle member (the plan\'s wire discipline)' },
-  // ── pwa ────────────────────────────────────────────────────────────────────────────────────────────────────────
-  { source: 'dead-compare', file: 'pwa/src/session/SessionHeader.tsx', hits: 4, stances: ['task-18'],
-    why: 'forces bucket `dead` and paints "✕ not running"; Task 18 words a row with `hibernatedAt` `hibernated`' },
-  { source: 'dead-compare', file: 'pwa/src/fleet/SessionActionsSheet.tsx', hits: 6, stances: ['task-18', 'true-of-pane'],
-    why: 'the narrow-spawn note and Forget on a dead row (Task 18 hides both on a sleeper and offers Wake); the quota, '
-      + 'narrow and wrapper notes speak of a live pane only' },
-  { source: 'dead-compare', file: 'pwa/src/fleet/SessionLine.tsx', hits: 1, stances: ['task-18'],
-    why: 'a dead row\'s line; Task 18 reads `hibernated · 6h` with a calm dot and no restart affordance' },
-  { source: 'dead-compare', file: 'pwa/src/screens/SessionScreen.tsx', hits: 2, stances: ['task-18'],
-    why: 'a dead screen is read-only; Task 18 wakes it when opened, and disables the composer until it is alive' },
-  { source: 'dead-compare', file: 'pwa/src/fleet/coordWords.ts', hits: 1, stances: ['task-18'],
-    why: '`coordPresence` answers a dead coordinator `dead` ("coordinator gone"); Task 18 changes this word (≈:114). Until '
-      + 'then the reclaim door it points at refuses a sleeper (`claimant-alive`)' },
-  { source: 'dead-lifecycle', file: 'pwa/src/fleet/coordWords.ts', hits: 1, stances: ['task-18'],
-    why: 'the same `coordPresence` rung' },
-  { source: 'dead-compare', file: 'pwa/src/fleet/orphanWords.ts', hits: 2, stances: ['task-18'], via: 'pwa/src/fleet/coordWords.ts',
-    why: 'the orphan note reads `coordPresence`' },
-  { source: 'dead-compare', file: 'pwa/src/screens/RunRow.tsx', hits: 1, stances: ['task-18'], via: 'pwa/src/fleet/coordWords.ts',
-    why: 'the Resume button reads `coordPresence`' },
-  { source: 'stopped-compare', file: 'pwa/src/fleet/lifecycleWords.ts', hits: 1, stances: ['task-18'], via: 'pwa/src/fleet/SessionMeta.tsx',
-    why: '`lifecycleQualifier` words a stopped row "stopped by …"; `SessionMeta`, its one reader, reads `hibernated` (Task 18)' },
+  // ── pwa ── (plan Task 18 made each of these consult `hibernatedAt`, through `pwa/src/fleet/hibernated.ts`; the
+  // `task-18` stance they waited under is retired, `hibernated-census-stances-consult`, D-5429)
+  { source: 'dead-compare', file: 'pwa/src/fleet/hibernated.ts', hits: 1, stances: ['definition'],
+    why: '`hibernatedSince`, the PWA\'s one reader of `hibernatedAt`: a row is asleep only while it is `dead` with the '
+      + 'marker (both halves), so a crash is never woken and a stale marker on a live row is ignored' },
+  { source: 'dead-compare', file: 'pwa/src/session/SessionHeader.tsx', hits: 5, stances: ['consults'],
+    why: 'forces bucket `dead` for a dead stream and paints "✕ not running"; a dead row with `hibernatedAt` '
+      + '(`hibernatedSince`) reads `hibernated` with the calm dot instead, so "not running" never sits above "Waking…"' },
+  { source: 'dead-compare', file: 'pwa/src/fleet/SessionActionsSheet.tsx', hits: 6, stances: ['consults', 'true-of-pane'],
+    why: 'the narrow-spawn note and Forget on a dead row are hidden on a sleeper (`hibernatedSince`), which offers Wake '
+      + 'session (ccd forget refuses it, D-5423); the quota, narrow and wrapper notes speak of a live pane only' },
+  { source: 'dead-compare', file: 'pwa/src/fleet/SessionLine.tsx', hits: 1, stances: ['consults'],
+    why: 'a dead row\'s line; a sleeper (`hibernatedSince`) reads `hibernated · 6h` with a calm dot and no stop stamp' },
+  { source: 'dead-compare', file: 'pwa/src/screens/SessionScreen.tsx', hits: 2, stances: ['consults'],
+    why: 'a dead screen is read-only; a sleeper (`useWakeOnOpen`) is woken when shown, reads "Waking…" with Wake, and '
+      + 'keeps the composer shut until its row is alive; the dead banner\'s Restart is for a dead row with no marker' },
+  { source: 'dead-compare', file: 'pwa/src/fleet/coordWords.ts', hits: 1, stances: ['consults'],
+    why: '`coordPresence` answers a sleeping coordinator `hibernated` before its dead rung, so no Resume door and no '
+      + '"coordinator gone"; the reclaim door those point at refuses a sleeper too (`claimant-alive`)' },
+  { source: 'dead-lifecycle', file: 'pwa/src/fleet/coordWords.ts', hits: 1, stances: ['consults'],
+    why: 'the same `coordPresence` rung, reached only after the `hibernated` answer' },
+  { source: 'dead-compare', file: 'pwa/src/fleet/orphanWords.ts', hits: 2, stances: ['consults'],
+    why: 'the orphan note reads `coordPresence`, and says `coordinator hibernated` for a sleeper, never "coordinator gone"' },
+  { source: 'dead-compare', file: 'pwa/src/screens/RunRow.tsx', hits: 1, stances: ['consults'], via: 'pwa/src/fleet/coordWords.ts',
+    why: 'the Resume button reads `coordPresence`, which answers a sleeper `hibernated`, never `dead`' },
+  { source: 'stopped-compare', file: 'pwa/src/fleet/lifecycleWords.ts', hits: 1, stances: ['consults'], via: 'pwa/src/fleet/SessionMeta.tsx',
+    why: '`lifecycleQualifier` words a stopped row "stopped by …"; `SessionMeta`, its one reader, skips it on a sleeper '
+      + 'and reads `hibernated · 6h`' },
   { source: 'dead-compare', file: 'pwa/src/fleet/groupFleet.ts', hits: 2, stances: ['true-of-pane'],
     why: 'a dead row\'s rank on the card and the stranded count over live rows: a sleeper\'s pane is not running; '
       + '`inArchivedFold` keeps it at the top level' },
@@ -141,9 +148,10 @@ const NAMED: readonly { name: string; stances: readonly Stance[]; file: string; 
     why: 'removes `.hibernated`: a stopped row is never woken by mail' },
   { name: 'ccd cmd_ws_archive', stances: ['consults'], file: 'ccd/ccd', holds: (s) => /hibernat/.test(bashFn(s, 'cmd_ws_archive')),
     why: 'removes `.hibernated`: an archived row is never woken by mail' },
-  { name: 'the PWA\'s Forget', stances: ['task-18'], file: 'pwa/src/fleet/SessionActionsSheet.tsx',
-    holds: (s) => /Forget session/.test(s),
-    why: 'offered on a dead non-workspace row; Task 18 hides it on a sleeper and offers Wake (ccd forget refuses it)' },
+  { name: 'the PWA\'s Forget', stances: ['consults'], file: 'pwa/src/fleet/SessionActionsSheet.tsx',
+    holds: (s) => /const asleep = hibernatedSince\(session\) !== null/.test(s)
+      && /session\.workspace === null && session\.status === 'dead' && !asleep && \(\s*<Button[\s\S]*?Forget session/.test(s),
+    why: 'offered on a dead non-workspace row and hidden on a sleeper, which offers Wake (ccd forget refuses it)' },
   { name: 'the kickoff route', stances: ['wakes-first'], file: 'server/src/coord/kickoff.ts',
     holds: (s) => /export function queueProgramKickoff[\s\S]*?queueSystemMail\(/.test(s),
     why: 'queues system mail and never refuses a dead session: the mail lane wakes its recipient like any mail\'s' },
@@ -160,14 +168,6 @@ const key = (r: Pick<Row, 'source' | 'file'>): string => `${r.source} ${r.file}`
 const tableMap = (): Map<string, number> => new Map(CENSUS.map((r) => [key(r), r.hits] as const));
 const sorted = (m: Map<string, number>): [string, number][] => [...m].sort(([a], [b]) => (a < b ? -1 : 1));
 
-/** Task 18's section of the plan, the commitment a `task-18` stance rests on. */
-const task18 = (): string => {
-  const plan = read('docs/superpowers/plans/2026-10-16-working-state-and-interruptions.md');
-  const a = plan.indexOf('### Task 18:');
-  const b = plan.indexOf('### Task 19:', a);
-  return plan.slice(a, b);
-};
-
 describe('the hibernation census (D-5242)', () => {
   it('the derived reader list equals the table — a new reader, or a new hit in a listed file, needs its row', () => {
     expect(sorted(censusScan(censusFiles()))).toEqual(sorted(tableMap()));
@@ -181,18 +181,10 @@ describe('the hibernation census (D-5242)', () => {
     expect(new Set(CENSUS.map(key)).size, 'one row per source and file').toBe(CENSUS.length);
   });
 
-  it('a `consults` stance is real: the file reads hibernatedAt or .hibernated', () => {
+  it('a `consults` stance is real: the file (or the one it reads through) reads hibernatedAt or .hibernated', () => {
     for (const r of CENSUS.filter((x) => x.stances.includes('consults'))) {
-      expect(/hibernatedAt|\.hibernated|hibernated:|'hibernated'/.test(read(r.file)), key(r)).toBe(true);
-    }
-  });
-
-  it('a `task-18` stance rests on the plan: Task 18 names the file, or the file it reads through', () => {
-    const t = task18();
-    expect(t.length).toBeGreaterThan(200);
-    for (const r of CENSUS.filter((x) => x.stances.includes('task-18'))) {
-      const named = r.via ?? r.file;
-      expect(t.includes(named), `${key(r)} (via ${named})`).toBe(true);
+      const reader = r.via ?? r.file;
+      expect(/hibernatedAt|\.hibernated|hibernated:|'hibernated'|hibernatedSince|hibernatedWords/.test(read(reader)), `${key(r)} (via ${reader})`).toBe(true);
       if (r.via !== undefined) expect(read(r.file), `${r.file} reads through ${r.via}`).toMatch(/coordPresence|lifecycleQualifier/);
     }
   });
