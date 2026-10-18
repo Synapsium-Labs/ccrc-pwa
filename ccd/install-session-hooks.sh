@@ -141,4 +141,42 @@ for dir in "${homes[@]}"; do
   tmp="$f.tmp.$$"
   jq . <<<"$next" > "$tmp" && mv -f "$tmp" "$f" || { rm -f "$tmp"; rc=1; }
 done
+
+# THE CHILDREN'S DENY FILE (spec §6.6, plan Task 15, D-5299). ONE managed file per box,
+# `~/.cc-sessions/child-deny.settings.json`, whose `permissions.deny` is `CHILD_DENY_RULES`
+# (`shared/api.ts`); `ccd` passes it with `--settings` only when it spawns a row with
+# `.child`, so no home's own settings.json is touched and top-level sessions keep today's
+# settings ("Children only"). This is the documented second copy, held equal to the
+# TypeScript list by iteration in `install-session-hooks.test.ts`. The path-qualified
+# forms (`Bash(*/ccd ws-rm:*)` and the like) wait on plan Task 13's rig result:
+# CHILD_DENY_PATH_QUALIFIED is that one switch, twin of the TypeScript constant.
+CHILD_DENY_PATH_QUALIFIED=0
+CHILD_DENY_FILE="$HOME/.cc-sessions/child-deny.settings.json"
+_child_deny_json() {
+  local heads_ccd=(ccd) heads_ccrc=(ccrc) v h rules=()
+  if (( CHILD_DENY_PATH_QUALIFIED )); then
+    heads_ccd+=('*/ccd' '~/.local/bin/ccd'); heads_ccrc+=('*/ccrc' '~/.local/bin/ccrc')
+  fi
+  for v in ws-rm ws-reap 'ws-gc --prune' ws-archive ws-restore ws-reclaim ws-expire ws-collect; do
+    for h in "${heads_ccd[@]}"; do rules+=("Bash($h $v:*)"); done
+  done
+  for v in update rollback; do
+    for h in "${heads_ccrc[@]}"; do rules+=("Bash($h $v:*)"); done
+  done
+  printf '%s\n' "${rules[@]}" | jq -R . | jq -s '{permissions:{deny:.}}'
+}
+if [[ "$MODE" == remove ]]; then
+  rm -f -- "$CHILD_DENY_FILE"
+else
+  mkdir -p -- "$(dirname "$CHILD_DENY_FILE")" 2>/dev/null || :
+  if ! deny_next=$(_child_deny_json) || ! jq empty <<<"$deny_next"; then
+    echo "install-session-hooks: could not build $CHILD_DENY_FILE" >&2; rc=1
+  # Byte-level converge, as the homes above: an unchanged file keeps its bytes (and so
+  # its digest, which every child's `.deny-settings` was recorded against).
+  elif [[ -L "$CHILD_DENY_FILE" || ! -f "$CHILD_DENY_FILE" || "$(cat "$CHILD_DENY_FILE")" != "$deny_next" ]]; then
+    deny_tmp="$CHILD_DENY_FILE.tmp.$$"
+    printf '%s\n' "$deny_next" > "$deny_tmp" && mv -f "$deny_tmp" "$CHILD_DENY_FILE" \
+      || { rm -f "$deny_tmp"; echo "install-session-hooks: could not write $CHILD_DENY_FILE" >&2; rc=1; }
+  fi
+fi
 exit "$rc"
