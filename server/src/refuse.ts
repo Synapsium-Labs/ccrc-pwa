@@ -1,5 +1,5 @@
 import type { FastifyReply } from 'fastify';
-import { REFUSAL_STATUS, type RouteRefusal } from '../../shared/refusal.js';
+import { REFUSAL_STATUS, RUN_REFUSAL_STATUS, type OpenRunConflict, type RouteRefusal } from '../../shared/refusal.js';
 
 /**
  * The thin route refusal (D-5381, audit ticket #547, ARCH-11a): `{ ok: false, error,
@@ -18,3 +18,15 @@ export const refuseRoute = (
   reply: FastifyReply, error: RouteRefusal,
   extra: Readonly<Record<string, unknown>> & { ok?: never; error?: never } = {},
 ): FastifyReply => reply.code(REFUSAL_STATUS[error]).send({ ok: false, error, ...extra });
+
+/**
+ * `refuseRoute`'s sibling for the open route's `refused` words (D-5384, audit
+ * ticket ARCH-21): `{ ok: false, refused, ...extra }` at the one status
+ * `RUN_REFUSAL_STATUS` gives the code — the key order the inline sends wrote.
+ * `extra` may not carry `ok` or `refused`. L4: it owns the reply and decides
+ * nothing; `coord/openRun.ts` decides.
+ */
+export const refuseRun = (
+  reply: FastifyReply, refused: OpenRunConflict,
+  extra: Readonly<Record<string, unknown>> & { ok?: never; refused?: never } = {},
+): FastifyReply => reply.code(RUN_REFUSAL_STATUS[refused]).send({ ok: false, refused, ...extra });

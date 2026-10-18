@@ -85,8 +85,9 @@ function refusalSends(text: string): Send[] {
   }
   return out;
 }
-/** A computed status that IS the table: the helpers' own one send each. */
-const TABLE_STATUS = /^REFUSAL_STATUS\[/;
+/** A computed status that IS a table: the helpers' own one send each —
+ *  `refuseRun`'s `RUN_REFUSAL_STATUS` included (D-5384). */
+const TABLE_STATUS = /^(?:RUN_)?REFUSAL_STATUS\[/;
 /** A `refuseRoute` call naming its word as a literal. */
 const HELPER_WORD = /\brefuseRoute\(\s*reply\s*,\s*'([^']+)'/g;
 
@@ -96,7 +97,7 @@ const HELPER_WORD = /\brefuseRoute\(\s*reply\s*,\s*'([^']+)'/g;
  *  literal-status refusal send, whatever its body's key order or headers. */
 const INLINE_SEND_PINS: Readonly<Record<string, number>> = {
   'auth/gate.ts': 2,
-  'coord/routes.ts': 177,
+  'coord/routes.ts': 153,  // D-5384: the open route's 24 precondition, child-gate, openRun-conflict and hold-verb sends answer through refuseRoute/refuseRun
   'server.ts': 130,
   'token/routes.ts': 2,   // the rotate route's 501, a `RotateAnswer`; the claim door's oversized-body 413
 };
