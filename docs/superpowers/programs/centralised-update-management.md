@@ -1885,6 +1885,12 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       newest v0.0.269, intent dev/auto=stable, backups fleet 133M/server 857M, disk free fleet 207G/work volume
       92G/server 32G, no anomalies. Re-measured on `main` at `5af568316`: #441 and #410 still conflict only on
       `ccd/ccd`'s stamp line, and #566 merges clean.
+    - **2026-10-18 11:30 UTC: the fleet box's doctor reads `history: lag-high` (FAIL) for a while, a known
+      transient** (mail 6337 from the history programme's coordinator). The operator's history backfill ran 08:17
+      to 11:31 under the sweep lock, so scheduled capture waited. It was stopped at 11:31, capture resumed at
+      11:32 with about 3.3 h of lag, and the lag drains tick by tick. Until it clears, an update or rollout on the
+      fleet box ends under a failing doctor and exits 3 with the box on the new build; read such an exit 3 as this.
+      Its coordinator will mail when doctor is clean again.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
