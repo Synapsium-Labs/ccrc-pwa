@@ -78,7 +78,7 @@ const accountsRoute = (): Response =>
     status: 200, headers: { 'content-type': 'application/json' },
   });
 
-const session = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ id: 'claude:OpenClawHetzner', home: '/home/rc', project: 'OpenClawHetzner', workdir: '/home/rc/projects/OpenClawHetzner', statusUpdatedAt: Date.now() - 2 * MIN, limits: { five: 10, seven: 40 }, version: '2.1.0', ...over }));
+const session = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ id: 'claude:ProjectC', home: '/home/u', project: 'ProjectC', workdir: '/home/u/projects/ProjectC', statusUpdatedAt: Date.now() - 2 * MIN, limits: { five: 10, seven: 40 }, version: '2.1.0', ...over }));
 
 /** Store whose ReconnectingSocket gets an inert fake — connect() is harmless. */
 const makeStore = (): FleetStore =>
@@ -150,15 +150,15 @@ describe('FleetScreen', () => {
       roster: TEST_ROSTER,
       sessions: [
         session({
-          id: 'claude:OpenClawHetzner',
+          id: 'claude:ProjectC',
           status: 'busy',
           bucket: 'working',
           statusUpdatedAt: Date.now() - 4 * MIN,
         }),
         session({
-          id: 'claude2:mekwarlive',
-          wrapper: 'claude2',
-          project: 'mekwarlive',
+          id: 'claude9:project-f',
+          wrapper: 'claude9',
+          project: 'project-f',
           status: 'idle',
         }),
       ],
@@ -166,8 +166,8 @@ describe('FleetScreen', () => {
 
     // Both cards, titled by project, with jargon-free account labels. The
     // account label also appears once in the accounts strip, so allow multiples.
-    expect(screen.getByText('OpenClawHetzner')).toBeInTheDocument();
-    expect(screen.getByText('mekwarlive')).toBeInTheDocument();
+    expect(screen.getByText('ProjectC')).toBeInTheDocument();
+    expect(screen.getByText('project-f')).toBeInTheDocument();
     expect(screen.getAllByText('team·max').length).toBeGreaterThan(0);
     expect(screen.getAllByText('team·alt').length).toBeGreaterThan(0);
 
@@ -268,7 +268,7 @@ describe('FleetScreen', () => {
     seed(store, { conn: 'down', sessions: [session()] });
 
     expect(screen.getByText('Reconnecting…')).toBeInTheDocument();
-    expect(screen.getByText('OpenClawHetzner')).toBeInTheDocument();
+    expect(screen.getByText('ProjectC')).toBeInTheDocument();
   });
 
   it('renders the first-run block when the fleet is empty and connected', () => {
@@ -370,12 +370,12 @@ describe('FleetScreen', () => {
     seed(store, {
       conn: 'open',
       sessions: [session()],
-      notices: [{ id: 1, message: 'OpenClawHetzner moved to team·alt' }],
+      notices: [{ id: 1, message: 'ProjectC moved to team·alt' }],
     });
 
-    expect(screen.getByText('OpenClawHetzner moved to team·alt')).toBeInTheDocument();
+    expect(screen.getByText('ProjectC moved to team·alt')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
-    expect(screen.queryByText('OpenClawHetzner moved to team·alt')).not.toBeInTheDocument();
+    expect(screen.queryByText('ProjectC moved to team·alt')).not.toBeInTheDocument();
   });
 
   describe('project-specific placement refresh', () => {
@@ -383,7 +383,7 @@ describe('FleetScreen', () => {
 
     it('loads placements after the first pools frame and matches each row to its project card', async () => {
       vi.spyOn(api, 'projects').mockImplementation(() => projectRows([
-        { name: 'alpha', workdir: '/alpha', pool: { state: 'untagged' }, placement: { kind: 'projected', wrapper: 'claude2', score: 9 } },
+        { name: 'alpha', workdir: '/alpha', pool: { state: 'untagged' }, placement: { kind: 'projected', wrapper: 'claude9', score: 9 } },
         { name: 'beta', workdir: '/beta', pool: { state: 'untagged' }, placement: { kind: 'projected', wrapper: 'claude', score: 18 } },
       ]));
       const store = makeStore();
@@ -657,7 +657,7 @@ describe('FleetScreen', () => {
         conn: 'open',
         roster: TEST_ROSTER.map((account) => ({
           ...account,
-          pool: account.id === 'claude2' ? 'pool-b' : 'pool-a',
+          pool: account.id === 'claude9' ? 'pool-b' : 'pool-a',
         })),
         pools: {
           listed: true,
@@ -695,7 +695,7 @@ describe('FleetScreen', () => {
         conn: 'open',
         roster: TEST_ROSTER.map((account) => ({
           ...account,
-          pool: account.id === 'claude2' ? 'pool-b' : 'pool-a',
+          pool: account.id === 'claude9' ? 'pool-b' : 'pool-a',
         })),
         pools: {
           listed: true,
@@ -745,7 +745,7 @@ describe('FleetScreen', () => {
         conn: 'open',
         roster: TEST_ROSTER.map((account) => ({
           ...account,
-          pool: account.id === 'claude2' ? 'pool-b' : 'pool-a',
+          pool: account.id === 'claude9' ? 'pool-b' : 'pool-a',
         })),
         pools: {
           listed: true,
@@ -804,7 +804,7 @@ describe('FleetScreen', () => {
         conn: 'open',
         roster: TEST_ROSTER.map((account) => ({
           ...account,
-          pool: account.id === 'claude2' ? 'pool-b' : 'pool-a',
+          pool: account.id === 'claude9' ? 'pool-b' : 'pool-a',
         })),
         pools: {
           listed: true,
@@ -864,7 +864,7 @@ describe('FleetScreen', () => {
         conn: 'open',
         roster: TEST_ROSTER.map((account) => ({
           ...account,
-          pool: account.id === 'claude2' ? 'pool-b' : 'pool-a',
+          pool: account.id === 'claude9' ? 'pool-b' : 'pool-a',
         })),
         pools: {
           listed: true,
@@ -1225,7 +1225,7 @@ describe('FleetScreen', () => {
       const projects = vi.spyOn(api, 'projects')
         .mockResolvedValueOnce({ roots: [], projects: [{
           name: 'alpha', workdir: '/alpha', pool: { state: 'tagged', name: 'pool-a' },
-          placement: { kind: 'projected', wrapper: 'claude2', score: 9 },
+          placement: { kind: 'projected', wrapper: 'claude9', score: 9 },
         }] })
         .mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectRefresh = reject; }));
       const store = makeStore();
@@ -1237,7 +1237,7 @@ describe('FleetScreen', () => {
           pool: account.id === 'claude' ? 'pool-a' : 'pool-b',
         })),
         pools: { listed: true, byProject: { alpha: { state: 'tagged', name: 'pool-a' } }, enforcement: 'enforced' },
-        sessions: [session({ id: 'a', project: 'alpha', wrapper: 'claude2' })],
+        sessions: [session({ id: 'a', project: 'alpha', wrapper: 'claude9' })],
       });
 
       expect(await screen.findByLabelText('project pool pool-a')).toBeInTheDocument();
@@ -1256,7 +1256,7 @@ describe('FleetScreen', () => {
       let rejectRefresh!: (error: Error) => void;
       const projects = vi.spyOn(api, 'projects')
         .mockResolvedValueOnce({ roots: [], projects: [
-          { name: 'alpha', workdir: '/alpha', pool: { state: 'untagged' }, placement: { kind: 'projected', wrapper: 'claude2', score: 9 } },
+          { name: 'alpha', workdir: '/alpha', pool: { state: 'untagged' }, placement: { kind: 'projected', wrapper: 'claude9', score: 9 } },
         ] })
         .mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectRefresh = reject; }));
       vi.spyOn(api, 'accounts').mockResolvedValue({
@@ -1316,7 +1316,7 @@ describe('FleetScreen', () => {
       const projects = vi.spyOn(api, 'projects')
         .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }))
         .mockResolvedValueOnce({ roots: [], projects: [
-          { name: 'alpha', workdir: '/alpha', pool: { state: 'untagged' }, placement: { kind: 'projected', wrapper: 'claude2', score: 9 } },
+          { name: 'alpha', workdir: '/alpha', pool: { state: 'untagged' }, placement: { kind: 'projected', wrapper: 'claude9', score: 9 } },
         ] });
       const store = makeStore();
       render(<FleetScreen store={store} />);
@@ -1342,7 +1342,7 @@ describe('FleetScreen', () => {
       const projects = vi.spyOn(api, 'projects')
         .mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectFirst = reject; }))
         .mockResolvedValueOnce({ roots: [], projects: [
-          { name: 'alpha', workdir: '/alpha', pool: { state: 'untagged' }, placement: { kind: 'projected', wrapper: 'claude2', score: 9 } },
+          { name: 'alpha', workdir: '/alpha', pool: { state: 'untagged' }, placement: { kind: 'projected', wrapper: 'claude9', score: 9 } },
         ] });
       const store = makeStore();
       render(<FleetScreen store={store} />);
@@ -1364,15 +1364,15 @@ describe('FleetScreen', () => {
 
   it('renders a card for a known project with no session on it, once /api/projects lands (R5)', async () => {
     vi.spyOn(api, 'projects').mockResolvedValue({ roots: [], projects: [
-      { name: 'OpenClawHetzner', workdir: '/home/rc/projects/OpenClawHetzner' },
-      { name: 'ghost', workdir: '/home/rc/projects/ghost' },
+      { name: 'ProjectC', workdir: '/home/u/projects/ProjectC' },
+      { name: 'ghost', workdir: '/home/u/projects/ghost' },
     ] });
     const store = makeStore();
     render(<FleetScreen store={store} />);
     seed(store, { conn: 'open', sessions: [session()], pools: { listed: true, byProject: {}, enforcement: 'enforced' } });
     await waitFor(() => {
       const names = [...document.querySelectorAll('.proj-card-name')].map((n) => n.textContent);
-      expect(names).toEqual(['OpenClawHetzner', 'ghost']);
+      expect(names).toEqual(['ProjectC', 'ghost']);
     });
   });
 
@@ -2290,9 +2290,9 @@ const RUN_FROZEN = 1_800_000_000_499;
 
 const runRow = (over: Partial<RunSummary> = {}): RunSummary => ({
   id: 1, program: 'build9b', programTitle: 'Build 9b', wave: 1, waveOf: 3,
-  project: 'OpenClawHetzner', homeProject: null, sessionId: null, workspace: null, branch: null,
+  project: 'ProjectC', homeProject: null, sessionId: null, workspace: null, branch: null,
   state: 'dispatched', kind: 'work', reviews: null,
-  claimedBy: 'claude:OpenClawHetzner', resumed: false, clearedAt: null,
+  claimedBy: 'claude:ProjectC', resumed: false, clearedAt: null,
   openedAt: RUN_FROZEN - 1_000_000, dispatchStartedAt: null, dispatchedAt: null,
   closedAt: null, handoffCommit: null, items: { done: 0, total: 0 },
   unreadMail: 0,
@@ -2310,7 +2310,7 @@ describe('the programme tree on the fleet screen', () => {
     seed(store, {
       conn: 'open',
       sessions: [
-        session({ id: 'claude:OpenClawHetzner', workspace: 'quiet-mesa' }),
+        session({ id: 'claude:ProjectC', workspace: 'quiet-mesa' }),
         session({ id: 'claude:worker', workspace: 'still-cove' }),
       ],
       runs: [runRow({ id: 10, sessionId: 'claude:worker' })],
@@ -2350,7 +2350,7 @@ describe('the programme tree on the fleet screen', () => {
       render(<FleetScreen store={store} />);
       seed(store, {
         conn: 'open',
-        sessions: [session({ id: 'claude:OpenClawHetzner', workspace: 'quiet-mesa' })],
+        sessions: [session({ id: 'claude:ProjectC', workspace: 'quiet-mesa' })],
         runs: [runRow({ id: 12, wave: 2, state: 'planned', dispatchStartedAt: RUN_FROZEN - 42_000 })],
         runsFrameSeen: true,
       });
@@ -2417,7 +2417,7 @@ describe('the programme tree on the fleet screen', () => {
     render(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
-      sessions: [session({ id: 'claude:OpenClawHetzner', workspace: 'quiet-mesa' })],
+      sessions: [session({ id: 'claude:ProjectC', workspace: 'quiet-mesa' })],
       runs,
       runsFrameSeen: true,
     });
@@ -2453,7 +2453,7 @@ describe('the programme tree on the fleet screen', () => {
     render(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
-      sessions: [session({ id: 'claude:OpenClawHetzner', workspace: 'quiet-mesa' })],
+      sessions: [session({ id: 'claude:ProjectC', workspace: 'quiet-mesa' })],
       runs: [runRow({ id: 12, state: 'dispatched', dispatchStartedAt: Date.now() - 42_000 })],
       runsFrameSeen: true,
     });

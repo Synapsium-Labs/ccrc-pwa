@@ -118,7 +118,7 @@ describe('the + button', () => {
 
 describe('pinned account', () => {
   it('shows the account the project is pinned to', () => {
-    render(<ProjectCard group={grp({ pin: { state: 'shared', home: 'claude-corp' } })} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER} />);
+    render(<ProjectCard group={grp({ pin: { state: 'shared', home: 'claude-acme' } })} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER} />);
     expect(screen.getByText('team·b')).toBeInTheDocument();
   });
 
@@ -134,7 +134,7 @@ describe('pinned account', () => {
 });
 
 describe('the + is icon-only', () => {
-  const projected = { wrapper: 'claude2', score: 9 };
+  const projected = { wrapper: 'claude9', score: 9 };
 
   it('renders no visible projection text in the header', () => {
     const { container } = render(
@@ -710,7 +710,7 @@ describe('the pool chip', () => {
 describe('route-owned pool handoff to session rows', () => {
   const roster = TEST_ROSTER.map((account) => ({
     ...account,
-    pool: account.id === 'claude2' ? 'pool-b' : null,
+    pool: account.id === 'claude9' ? 'pool-b' : null,
   }));
   const placement: ProjectPlacementRead = {
     kind: 'measured',
@@ -724,7 +724,7 @@ describe('route-owned pool handoff to session rows', () => {
   };
 
   it('passes the route pool to an active row when the pools frame disagrees', () => {
-    const active = sess({ wrapper: 'claude2', home: 'claude2' });
+    const active = sess({ wrapper: 'claude9', home: 'claude9' });
     render(<ProjectCard group={grp({ sessions: [active] })} placement={placement}
                         pools={conflictingFrame} roster={roster}
                         onOpen={() => {}} onActions={() => {}} />);
@@ -739,7 +739,7 @@ describe('route-owned pool handoff to session rows', () => {
     // the route-owned prop is inert here. Its direct suite pins that policy;
     // the active case above independently pins ProjectCard's handoff.
     const archived = sess({
-      id: 'demo-quiet-basin', wrapper: 'claude2', home: 'claude2',
+      id: 'demo-quiet-basin', wrapper: 'claude9', home: 'claude9',
       workspace: 'quiet-basin', status: 'dead', bucket: 'archived',
       archivedAt: 1_785_300_000,
     });
@@ -770,14 +770,14 @@ describe('a moved row is judged against its OWN project\'s pool, never the card\
     project === 'beta' ? { state: 'tagged', name: 'pool-b' } : null;
   const moved = () => sess({
     id: 'beta-still-cove', project: 'beta', boardProject: 'demo',
-    wrapper: 'claude2', home: 'claude2', workspace: 'still-cove',
+    wrapper: 'claude9', home: 'claude9', workspace: 'still-cove',
   });
 
   it('no off-pool label when the moved row\'s account matches ITS OWN project\'s pool, though the card is tagged differently', () => {
-    // claude2 is in pool-b, the moved row's own project (beta) is pool-b:
+    // claude9 is in pool-b, the moved row's own project (beta) is pool-b:
     // they agree. Judged against the CARD's pool-a instead, this would be a
     // false off-pool warning — exactly the defect the finding named.
-    const roster = TEST_ROSTER.map((a) => ({ ...a, pool: a.id === 'claude2' ? 'pool-b' : null }));
+    const roster = TEST_ROSTER.map((a) => ({ ...a, pool: a.id === 'claude9' ? 'pool-b' : null }));
     render(<ProjectCard group={grp({ sessions: [moved()] })} placement={cardPlacement}
                         poolFor={poolFor} roster={roster}
                         onOpen={() => {}} onActions={() => {}} />);
@@ -786,11 +786,11 @@ describe('a moved row is judged against its OWN project\'s pool, never the card\
   });
 
   it('names the moved row\'s OWN project\'s pool when its account disagrees — never the card\'s pool', () => {
-    // claude2 is in pool-a, the moved row's own project (beta) is pool-b:
+    // claude9 is in pool-a, the moved row's own project (beta) is pool-b:
     // they disagree, and the label must name pool-b (beta's own tag), not
     // pool-a (the card's tag, which happens to equal the account's pool here
     // — a judgment against the card would swallow the warning entirely).
-    const roster = TEST_ROSTER.map((a) => ({ ...a, pool: a.id === 'claude2' ? 'pool-a' : null }));
+    const roster = TEST_ROSTER.map((a) => ({ ...a, pool: a.id === 'claude9' ? 'pool-a' : null }));
     render(<ProjectCard group={grp({ sessions: [moved()] })} placement={cardPlacement}
                         poolFor={poolFor} roster={roster}
                         onOpen={() => {}} onActions={() => {}} />);
@@ -801,8 +801,8 @@ describe('a moved row is judged against its OWN project\'s pool, never the card\
   it('CONTROL: a same-project row is still judged against the card\'s own pool, exactly as before', () => {
     // group.project === s.project here (both 'demo'), so poolOf must return
     // `pool` (the card's), never call `poolFor` at all.
-    const roster = TEST_ROSTER.map((a) => ({ ...a, pool: a.id === 'claude2' ? 'pool-b' : null }));
-    render(<ProjectCard group={grp({ sessions: [sess({ wrapper: 'claude2', home: 'claude2' })] })}
+    const roster = TEST_ROSTER.map((a) => ({ ...a, pool: a.id === 'claude9' ? 'pool-b' : null }));
+    render(<ProjectCard group={grp({ sessions: [sess({ wrapper: 'claude9', home: 'claude9' })] })}
                         placement={cardPlacement} poolFor={poolFor} roster={roster}
                         onOpen={() => {}} onActions={() => {}} />);
     const account = screen.getByLabelText('running on team·alt (pool pool-b), project is pool pool-a');
@@ -850,7 +850,7 @@ describe('the + names in-pool accounts, never "all accounts"', () => {
     render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} onAddWorkspace={() => {}}
                         projected={null}
                         placement={{ kind: 'measured', pool: { state: 'tagged', name: 'pool-b' }, placement: { kind: 'none', pool: 'pool-b' } }}
-                        roster={pooled({ claude: 'pool-a', claude2: 'pool-b', 'claude-corp': 'pool-a' })}
+                        roster={pooled({ claude: 'pool-a', claude9: 'pool-b', 'claude-acme': 'pool-a' })}
                         pools={{ listed: true, byProject: { demo: { state: 'tagged', name: 'pool-b' } }, enforcement: 'enforced' }} />);
     const btn = screen.getByRole('button', { name: /New workspace on demo/ });
     expect(btn.getAttribute('aria-label')).toContain('team·alt and team·d');
@@ -861,7 +861,7 @@ describe('the + names in-pool accounts, never "all accounts"', () => {
     render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} onAddWorkspace={() => {}}
                         projected={null}
                         placement={{ kind: 'measured', pool: { state: 'tagged', name: 'pool-b' }, placement: { kind: 'none', pool: 'pool-b' } }}
-                        roster={pooled({ claude: 'pool-a', claude2: 'pool-a', 'claude-corp': 'pool-a', 'claude-dev0': 'pool-a' })}
+                        roster={pooled({ claude: 'pool-a', claude9: 'pool-a', 'claude-acme': 'pool-a', 'claude-lab0': 'pool-a' })}
                         pools={{ listed: true, byProject: { demo: { state: 'tagged', name: 'pool-b' } }, enforcement: 'enforced' }} />);
     expect(screen.getByRole('button', { name: 'New workspace on demo — nothing is in pool pool-b' }))
       .toBeInTheDocument();
@@ -871,7 +871,7 @@ describe('the + names in-pool accounts, never "all accounts"', () => {
     render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} onAddWorkspace={() => {}}
                         projected={null}
                         placement={{ kind: 'measured', pool: { state: 'tagged', name: 'pool-b' }, placement: { kind: 'none', pool: 'pool-b', class: 'fable' } }}
-                        roster={pooled({ claude: 'pool-a', claude2: 'pool-a', 'claude-corp': 'pool-a', 'claude-dev0': 'pool-a' })}
+                        roster={pooled({ claude: 'pool-a', claude9: 'pool-a', 'claude-acme': 'pool-a', 'claude-lab0': 'pool-a' })}
                         pools={{ listed: true, byProject: { demo: { state: 'tagged', name: 'pool-b' } }, enforcement: 'enforced' }} />);
     expect(screen.getByRole('button', { name: 'New workspace on demo — no lane can serve fable' }))
       .toBeInTheDocument();
@@ -881,11 +881,11 @@ describe('the + names in-pool accounts, never "all accounts"', () => {
     const placement: ProjectPlacementRead = {
       kind: 'measured',
       pool: { state: 'tagged', name: 'pool-b' },
-      placement: { kind: 'projected', wrapper: 'claude2', score: 9 },
+      placement: { kind: 'projected', wrapper: 'claude9', score: 9 },
     };
     render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} onAddWorkspace={() => {}}
                         projected={{ wrapper: 'claude', score: 18 }} placement={placement}
-                        roster={pooled({ claude: 'pool-a', claude2: 'pool-b', 'claude-corp': 'pool-a' })}
+                        roster={pooled({ claude: 'pool-a', claude9: 'pool-b', 'claude-acme': 'pool-a' })}
                         pools={{ listed: true, byProject: { demo: { state: 'tagged', name: 'pool-b' } }, enforcement: 'enforced' }} />);
     const button = screen.getByRole('button', { name: /New workspace on demo/ });
     expect(button).toHaveAccessibleName('New workspace on demo — team·alt, 91% free');
@@ -900,7 +900,7 @@ describe('the + names in-pool accounts, never "all accounts"', () => {
     };
     render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} onAddWorkspace={() => {}}
                         projected={{ wrapper: 'claude', score: 18 }} placement={placement}
-                        roster={pooled({ claude: 'pool-a', claude2: 'pool-b', 'claude-corp': 'pool-a' })}
+                        roster={pooled({ claude: 'pool-a', claude9: 'pool-b', 'claude-acme': 'pool-a' })}
                         pools={{ listed: true, byProject: { demo: { state: 'tagged', name: 'pool-a' } }, enforcement: 'enforced' }} />);
 
     expect(screen.getByLabelText('project pool pool-b')).toHaveTextContent('pool-b');
@@ -914,7 +914,7 @@ describe('the + names in-pool accounts, never "all accounts"', () => {
     const common = {
       group: grp(), onOpen: () => {}, onActions: () => {}, onAddWorkspace: () => {},
       projected: { wrapper: 'claude', score: 18 },
-      roster: pooled({ claude: 'pool-a', claude2: 'pool-b', 'claude-corp': 'pool-a' }),
+      roster: pooled({ claude: 'pool-a', claude9: 'pool-b', 'claude-acme': 'pool-a' }),
       pools: { listed: true, byProject: { demo: { state: 'tagged' as const, name: 'pool-b' } }, enforcement: 'enforced' as const },
     };
     const { rerender } = render(
@@ -1306,10 +1306,10 @@ describe('the home card lists the waves running abroad', () => {
 
   it('renders the elsewhere lines as text with no control, and nothing when nothing moved', () => {
     const { container, rerender } = render(
-      <ProjectCard group={grp({ sessions: [], pin: { state: 'empty' }, elsewhere: [{ project: 'intake', count: 2 }] })}
+      <ProjectCard group={grp({ sessions: [], pin: { state: 'empty' }, elsewhere: [{ project: 'project-n', count: 2 }] })}
                    onOpen={() => {}} onActions={() => {}} />);
     const line = container.querySelector('.proj-elsewhere-line')!;
-    expect(line.textContent).toBe('2 workspaces under intake');
+    expect(line.textContent).toBe('2 workspaces under project-n');
     expect(container.querySelectorAll('.proj-elsewhere button, .proj-elsewhere a')).toHaveLength(0);
     rerender(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} />);
     expect(container.querySelector('.proj-elsewhere')).toBeNull();
@@ -1319,16 +1319,16 @@ describe('the home card lists the waves running abroad', () => {
 describe('the repo label appears only where the card stops implying it (spec §6, Task 6)', () => {
   const repos: Record<string, ProjectRepoWire> = {
     demo: { state: 'named', slug: 'o/demo' },
-    'custom-tools': { state: 'named', slug: 'o/custom-tools' },
+    'project-d': { state: 'named', slug: 'o/project-d' },
     twin: { state: 'named', slug: 'o/demo' },          // a second project on the SAME repo
     dark: { state: 'unmeasured' },
   };
   const repoFor = (p: string): ProjectRepoWire | undefined => repos[p];
-  const moved = sess({ id: 'custom-tools-still-river', project: 'custom-tools', workspace: 'still-river', boardProject: 'demo' });
+  const moved = sess({ id: 'project-d-still-river', project: 'project-d', workspace: 'still-river', boardProject: 'demo' });
 
   it('labels a row whose OWN project\'s repo differs from the card\'s', () => {
     render(<ProjectCard group={grp({ sessions: [sess(), moved] })} repoFor={repoFor} onOpen={() => {}} onActions={() => {}} />);
-    expect(screen.getByRole('button', { name: /still-river.*o\/custom-tools/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /still-river.*o\/project-d/ })).toBeInTheDocument();
     expect(document.querySelectorAll('.sess-repo')).toHaveLength(1);
   });
   it('does NOT label a moved row whose repo equals the card\'s — the name differs, the repo does not', () => {
@@ -1360,7 +1360,7 @@ describe('the repo label appears only where the card stops implying it (spec §6
     const own = sess({ id: 'demo-still-river', workspace: 'still-river' });
     render(<ProjectCard group={grp({ sessions: [own, moved] })} repoFor={repoFor} onOpen={() => {}} onActions={() => {}} />);
     expect(screen.getByRole('button', { name: 'still-river' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /still-river.*o\/custom-tools/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /still-river.*o\/project-d/ })).toBeInTheDocument();
   });
 });
 

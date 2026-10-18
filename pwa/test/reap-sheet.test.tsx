@@ -8,8 +8,8 @@ import { ReapSheet } from '../src/session/ReapSheet';
 
 const audit = (over: Partial<WsAudit> = {}): WsAudit => ({
   id: 'demo-quiet-basin', branch: 'ws/quiet-basin', registryBranch: 'ws/quiet-basin', drift: '',
-  base: 'origin/main', workdir: '/home/u/worktrees/custom-tools/quiet-basin',
-  project: 'custom-tools', repo: 'o/r', exists: true, headMatchesRegistry: true, reaping: null,
+  base: 'origin/main', workdir: '/home/u/worktrees/project-d/quiet-basin',
+  project: 'project-d', repo: 'o/r', exists: true, headMatchesRegistry: true, reaping: null,
   alive: true, started: true, unit: 'enabled',
   dirty: [], ignored: [
     { path: 'node_modules/', bytes: 412_000_000, sensitive: false },
@@ -25,7 +25,7 @@ const audit = (over: Partial<WsAudit> = {}): WsAudit => ({
   transcript: '/t.jsonl', children: [], verdict: 'reapable', detail: '', token: 'a'.repeat(64), sentence: '', ...over,
 });
 
-const sess = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ project: 'custom-tools', workspace: 'quiet-basin', branch: 'ws/quiet-basin', archivedAt: 1, ...over }));
+const sess = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ project: 'project-d', workspace: 'quiet-basin', branch: 'ws/quiet-basin', archivedAt: 1, ...over }));
 
 let auditBody: unknown;
 let reapBody: unknown;
@@ -111,7 +111,7 @@ describe('the manifest', () => {
     auditBody = audit({
       branch: 'feat/x', registryBranch: 'ws/quiet-basin', headMatchesRegistry: false,
       drift: "the registry recorded ws/quiet-basin; git's worktree record for "
-        + '/home/u/worktrees/custom-tools/quiet-basin says feat/x — feat/x is the branch this '
+        + '/home/u/worktrees/project-d/quiet-basin says feat/x — feat/x is the branch this '
         + 'cleanup evaluates and removes, and ws/quiet-basin is left alone',
       pr: { number: null, url: '', mergeCommit: '', headRefOid: '' },
       merge: { proof: 'contained', fetchedAt: Math.floor(Date.now() / 1000) },
@@ -178,7 +178,7 @@ describe('the manifest', () => {
     // title, the branch row and the button too, and a loose regex would match
     // four nodes and throw.
     open();
-    expect(await screen.findByText('/home/u/worktrees/custom-tools/quiet-basin')).toBeInTheDocument();
+    expect(await screen.findByText('/home/u/worktrees/project-d/quiet-basin')).toBeInTheDocument();
     expect(screen.getByText('1.2 GB')).toBeInTheDocument();
     expect(screen.getByText('uncommitted')).toBeInTheDocument();
     // Two rows legitimately read `none`: uncommitted and stashes.
@@ -882,9 +882,9 @@ describe('mutation-sweep closures', () => {
   // in this component's props the whole time; nothing about the audit had to
   // change for the sheet to say it first.
   it('an archived-and-held workspace offers no Remove at all, and says which program holds it', async () => {
-    render(<><ToastHost /><ReapSheet session={sess({ held: 'program:agent-evals wave:3/4' })}
+    render(<><ToastHost /><ReapSheet session={sess({ held: 'program:prog-j wave:3/4' })}
                                      open onClose={() => {}} onReaped={() => {}} /></>);
-    expect(await screen.findByText(/program:agent-evals wave:3\/4/)).toBeInTheDocument();
+    expect(await screen.findByText(/program:prog-j wave:3\/4/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^Remove / })).toBeNull();
   });
 

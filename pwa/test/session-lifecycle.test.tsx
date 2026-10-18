@@ -60,7 +60,7 @@ const line = (session: FleetSession): void => {
   render(<SessionLine session={session} onOpen={() => {}} onActions={() => {}} />);
 };
 
-const makeStore = (id = 'claude:OpenClawHetzner'): SessionStore =>
+const makeStore = (id = 'claude:ProjectC'): SessionStore =>
   createSessionStore(id, {
     makeSocket: () =>
       ({ onopen: null, onmessage: null, onclose: null, onerror: null, close(): void {} }) as unknown as WebSocket,
@@ -465,8 +465,8 @@ describe('a chat that had to look elsewhere says so', () => {
   // the UI. Field names are the wire's real ones (`shared/api.ts:2201-2212`)
   // — `foreignAccount`/`searchComplete`, not the brief's `account`/`complete`.
   //
-  // `foreignAccount: 'claude2'`, deliberately NOT `'claude'`: this session's
-  // id is `claude:OpenClawHetzner`, so its OWN wrapper is `claude` — a
+  // `foreignAccount: 'claude9'`, deliberately NOT `'claude'`: this session's
+  // id is `claude:ProjectC`, so its OWN wrapper is `claude` — a
   // foreign account of `'claude'` cannot distinguish "read from the OTHER
   // account" from "read from the banner's own account" and would pass just
   // as well under `accountLabel(roster, wrapper)` as under the correct
@@ -474,11 +474,11 @@ describe('a chat that had to look elsewhere says so', () => {
   it('a transcript found under ANOTHER account is bannered by name', () => {
     const store = makeStore();
     const fleet = makeFleet();
-    render(<SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />);
+    render(<SessionScreen id="claude:ProjectC" store={store} fleet={fleet} />);
     applyBacklog(store, {
       type: 'backlog', uuid: 'b7001948', offset: 120, missing: false,
-      file: '/home/rc/.claude/projects/-data-projects-x/b7001948.jsonl',
-      foreignAccount: 'claude2', searchComplete: true, events: [someEvent],
+      file: '/home/u/.claude/projects/-data-projects-x/b7001948.jsonl',
+      foreignAccount: 'claude9', searchComplete: true, events: [someEvent],
     });
     expect(screen.getByText(/Stranded history — read from team·alt/)).toBeInTheDocument();
     expect(screen.queryByText('No messages yet')).not.toBeInTheDocument();
@@ -487,10 +487,10 @@ describe('a chat that had to look elsewhere says so', () => {
   it('a transcript found on this session own account raises no banner', () => {
     const store = makeStore();
     const fleet = makeFleet();
-    render(<SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />);
+    render(<SessionScreen id="claude:ProjectC" store={store} fleet={fleet} />);
     applyBacklog(store, {
       type: 'backlog', uuid: 'u1', offset: 10, missing: false,
-      file: '/home/rc/.claude/projects/x/u1.jsonl',
+      file: '/home/u/.claude/projects/x/u1.jsonl',
       foreignAccount: null, searchComplete: true, events: [someEvent],
     });
     expect(screen.queryByText(/Stranded history/)).not.toBeInTheDocument();
@@ -501,10 +501,10 @@ describe('a chat that had to look elsewhere says so', () => {
   it("an unfinished search says the fleet host is unreadable — a DIFFERENT sentence from 'no messages'", () => {
     const store = makeStore();
     const fleet = makeFleet();
-    render(<SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />);
+    render(<SessionScreen id="claude:ProjectC" store={store} fleet={fleet} />);
     applyBacklog(store, {
       type: 'backlog', uuid: 'u1', offset: 0, missing: true,
-      file: '/home/rc/.claude/projects/x/u1.jsonl', searchComplete: false, events: [],
+      file: '/home/u/.claude/projects/x/u1.jsonl', searchComplete: false, events: [],
     });
     expect(screen.getByText("Can't read the fleet host right now")).toBeInTheDocument();
     expect(screen.queryByText("Can't find this session's transcript")).not.toBeInTheDocument();
@@ -516,10 +516,10 @@ describe('a chat that had to look elsewhere says so', () => {
   it('a COMPLETE search that found nothing keeps today sentence and today empty state', () => {
     const store = makeStore();
     const fleet = makeFleet();
-    render(<SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />);
+    render(<SessionScreen id="claude:ProjectC" store={store} fleet={fleet} />);
     applyBacklog(store, {
       type: 'backlog', uuid: 'u1', offset: 0, missing: true,
-      file: '/home/rc/.claude/projects/x/u1.jsonl', searchComplete: true, events: [],
+      file: '/home/u/.claude/projects/x/u1.jsonl', searchComplete: true, events: [],
     });
     expect(screen.getByText("Can't find this session's transcript")).toBeInTheDocument();
     expect(screen.queryByText("Can't read the fleet host right now")).not.toBeInTheDocument();
@@ -531,10 +531,10 @@ describe('a chat that had to look elsewhere says so', () => {
   it('an older server that sends neither field is a COMPLETE search', () => {
     const store = makeStore();
     const fleet = makeFleet();
-    render(<SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />);
+    render(<SessionScreen id="claude:ProjectC" store={store} fleet={fleet} />);
     applyBacklog(store, {
       type: 'backlog', uuid: 'u1', offset: 0, missing: true,
-      file: '/home/rc/.claude/projects/x/u1.jsonl', events: [],
+      file: '/home/u/.claude/projects/x/u1.jsonl', events: [],
     } as Backlog);
     expect(screen.getByText("Can't find this session's transcript")).toBeInTheDocument();
     expect(screen.queryByText("Can't read the fleet host right now")).not.toBeInTheDocument();
@@ -551,10 +551,10 @@ describe('a chat that had to look elsewhere says so', () => {
   it('a stranded banner names the raw account id before the roster has arrived', () => {
     const store = makeStore();
     const fleet = createFleetStore(); // roster: [] — nothing seeded, nothing polled
-    render(<SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />);
+    render(<SessionScreen id="claude:ProjectC" store={store} fleet={fleet} />);
     applyBacklog(store, {
       type: 'backlog', uuid: 'b7001948', offset: 120, missing: false,
-      file: '/home/rc/.claude/projects/-data-projects-x/b7001948.jsonl',
+      file: '/home/u/.claude/projects/-data-projects-x/b7001948.jsonl',
       foreignAccount: 'claude', searchComplete: true, events: [someEvent],
     });
     expect(screen.getByText(/Stranded history — read from claude,/)).toBeInTheDocument();
@@ -570,17 +570,17 @@ describe('a chat that had to look elsewhere says so', () => {
   it('a later backlog frame with no foreignAccount clears a stranded banner', () => {
     const store = makeStore();
     const fleet = makeFleet();
-    render(<SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />);
+    render(<SessionScreen id="claude:ProjectC" store={store} fleet={fleet} />);
     applyBacklog(store, {
       type: 'backlog', uuid: 'b7001948', offset: 120, missing: false,
-      file: '/home/rc/.claude/projects/-data-projects-x/b7001948.jsonl',
-      foreignAccount: 'claude2', searchComplete: true, events: [someEvent],
+      file: '/home/u/.claude/projects/-data-projects-x/b7001948.jsonl',
+      foreignAccount: 'claude9', searchComplete: true, events: [someEvent],
     });
     expect(screen.getByText(/Stranded history/)).toBeInTheDocument();
 
     applyBacklog(store, {
       type: 'backlog', uuid: 'b7001948', offset: 130, missing: false,
-      file: '/home/rc/.claude/projects/x/b7001948.jsonl',
+      file: '/home/u/.claude/projects/x/b7001948.jsonl',
       searchComplete: true, events: [someEvent],
     } as Backlog);
     expect(screen.queryByText(/Stranded history/)).not.toBeInTheDocument();
@@ -598,11 +598,11 @@ describe('a chat that had to look elsewhere says so', () => {
   it('a rotation takes the stranded banner with it', () => {
     const store = makeStore();
     const fleet = makeFleet();
-    render(<SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />);
+    render(<SessionScreen id="claude:ProjectC" store={store} fleet={fleet} />);
     applyBacklog(store, {
       type: 'backlog', uuid: 'b7001948', offset: 120, missing: false,
-      file: '/home/rc/.claude/projects/-data-projects-x/b7001948.jsonl',
-      foreignAccount: 'claude2', searchComplete: true, events: [someEvent],
+      file: '/home/u/.claude/projects/-data-projects-x/b7001948.jsonl',
+      foreignAccount: 'claude9', searchComplete: true, events: [someEvent],
     });
     expect(screen.getByText(/Stranded history — read from team·alt/)).toBeInTheDocument();
 
@@ -617,10 +617,10 @@ describe('a chat that had to look elsewhere says so', () => {
   it('a rotation takes the missing-transcript banner with it', () => {
     const store = makeStore();
     const fleet = makeFleet();
-    render(<SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />);
+    render(<SessionScreen id="claude:ProjectC" store={store} fleet={fleet} />);
     applyBacklog(store, {
       type: 'backlog', uuid: 'b7001948', offset: 0, missing: true,
-      file: '/home/rc/.claude/projects/x/b7001948.jsonl', searchComplete: false, events: [],
+      file: '/home/u/.claude/projects/x/b7001948.jsonl', searchComplete: false, events: [],
     });
     expect(screen.getByText("Can't read the fleet host right now")).toBeInTheDocument();
 
@@ -643,10 +643,10 @@ describe('a chat that had to look elsewhere says so', () => {
   it('a foreign account with no name still raises the banner, unnamed rather than blank', () => {
     const store = makeStore();
     const fleet = makeFleet();
-    render(<SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />);
+    render(<SessionScreen id="claude:ProjectC" store={store} fleet={fleet} />);
     applyBacklog(store, {
       type: 'backlog', uuid: 'b7001948', offset: 120, missing: false,
-      file: '/home/rc/.claude/projects/-data-projects-x/b7001948.jsonl',
+      file: '/home/u/.claude/projects/-data-projects-x/b7001948.jsonl',
       foreignAccount: '', searchComplete: true, events: [someEvent],
     });
     expect(screen.getByText(/Stranded history — read from another account,/)).toBeInTheDocument();
@@ -660,7 +660,7 @@ describe('a chat that had to look elsewhere says so', () => {
     // session's own account." Same frame, same degradation.
     applyBacklog(store, {
       type: 'backlog', uuid: 'b7001948', offset: 240, missing: false,
-      file: '/home/rc/.claude/projects/-data-projects-x/b7001948.jsonl',
+      file: '/home/u/.claude/projects/-data-projects-x/b7001948.jsonl',
       foreignAccount: '   ', searchComplete: true, events: [someEvent],
     });
     expect(screen.getByText(/Stranded history — read from another account,/)).toBeInTheDocument();
@@ -672,10 +672,10 @@ describe('a chat that had to look elsewhere says so', () => {
   it('an UNMEASURABLE transcript says the fleet host is unreadable, not "can\'t find it"', () => {
     const store = makeStore();
     const fleet = makeFleet();
-    render(<SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />);
+    render(<SessionScreen id="claude:ProjectC" store={store} fleet={fleet} />);
     applyBacklog(store, {
       type: 'backlog', uuid: 'u1', offset: 0, missing: true,
-      file: '/home/rc/.claude/projects/x/u1.jsonl',
+      file: '/home/u/.claude/projects/x/u1.jsonl',
       searchComplete: true, fileMeasured: false, events: [],
     } as Backlog);
     expect(screen.getByText("Can't read the fleet host right now")).toBeInTheDocument();
@@ -689,10 +689,10 @@ describe('a chat that had to look elsewhere says so', () => {
   it('a PRESENT transcript whose bytes could not be read is not an empty chat', () => {
     const store = makeStore();
     const fleet = makeFleet();
-    render(<SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />);
+    render(<SessionScreen id="claude:ProjectC" store={store} fleet={fleet} />);
     applyBacklog(store, {
       type: 'backlog', uuid: 'u1', offset: 4096, missing: false,
-      file: '/home/rc/.claude/projects/x/u1.jsonl',
+      file: '/home/u/.claude/projects/x/u1.jsonl',
       searchComplete: true, fileMeasured: false, events: [],
     } as Backlog);
     expect(screen.queryByText('No messages yet')).not.toBeInTheDocument();
@@ -704,10 +704,10 @@ describe('a chat that had to look elsewhere says so', () => {
   it('an older server that sends no fileMeasured has MEASURED the file', () => {
     const store = makeStore();
     const fleet = makeFleet();
-    render(<SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />);
+    render(<SessionScreen id="claude:ProjectC" store={store} fleet={fleet} />);
     applyBacklog(store, {
       type: 'backlog', uuid: 'u1', offset: 0, missing: true,
-      file: '/home/rc/.claude/projects/x/u1.jsonl', searchComplete: true, events: [],
+      file: '/home/u/.claude/projects/x/u1.jsonl', searchComplete: true, events: [],
     } as Backlog);
     expect(screen.getByText("Can't find this session's transcript")).toBeInTheDocument();
     expect(screen.queryByText("Can't read the fleet host right now")).not.toBeInTheDocument();

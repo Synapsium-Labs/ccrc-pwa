@@ -18,7 +18,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-const ID = 'claude:OpenClawHetzner';
+const ID = 'claude:ProjectC';
 
 /** The hidden file input backing the attach button. */
 const fileInput = (): HTMLInputElement => {

@@ -143,8 +143,8 @@ describe('attachments', () => {
   });
 
   it('builds an origin-qualified clip URL — a bare path breaks openExternal', () => {
-    expect(clipUrl('claude2-Proj', 'clip-1-a1b2.png'))
-      .toBe(`${location.origin}/api/sessions/claude2-Proj/clip/clip-1-a1b2.png`);
+    expect(clipUrl('claude9-Proj', 'clip-1-a1b2.png'))
+      .toBe(`${location.origin}/api/sessions/claude9-Proj/clip/clip-1-a1b2.png`);
   });
 });
 
@@ -928,13 +928,13 @@ describe('account pools', () => {
   it('swap(id, w) posts the complete ordinary swap request', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
     const api = createApi(fetchImpl as unknown as typeof fetch);
-    await api.swap('s1', 'claude2');
+    await api.swap('s1', 'claude9');
     expect(fetchImpl.mock.calls[0]).toEqual([
       '/api/sessions/s1/swap',
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ wrapper: 'claude2' }),
+        body: JSON.stringify({ wrapper: 'claude9' }),
       },
     ]);
   });
@@ -942,13 +942,13 @@ describe('account pools', () => {
   it('swap(id, w, {crossPool:false}) is the same complete ordinary request', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
     const api = createApi(fetchImpl as unknown as typeof fetch);
-    await api.swap('s1', 'claude2', { crossPool: false });
+    await api.swap('s1', 'claude9', { crossPool: false });
     expect(fetchImpl.mock.calls[0]).toEqual([
       '/api/sessions/s1/swap',
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ wrapper: 'claude2' }),
+        body: JSON.stringify({ wrapper: 'claude9' }),
       },
     ]);
   });
@@ -956,22 +956,22 @@ describe('account pools', () => {
   it('swap(id, w, {crossPool:true}) declares the crossing on the wire', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
     const api = createApi(fetchImpl as unknown as typeof fetch);
-    await api.swap('s1', 'claude2', { crossPool: true });
+    await api.swap('s1', 'claude9', { crossPool: true });
     const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
-    expect(JSON.parse(init.body as string)).toEqual({ wrapper: 'claude2', crossPool: true });
+    expect(JSON.parse(init.body as string)).toEqual({ wrapper: 'claude9', crossPool: true });
   });
 
   it('swap(id, w, {interrupt:true}) sends the consent, alone or beside the crossing (D-5240)', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
     const api = createApi(fetchImpl as unknown as typeof fetch);
-    await api.swap('s1', 'claude2', { interrupt: true });
-    await api.swap('s1', 'claude2', { crossPool: true, interrupt: true });
-    await api.swap('s1', 'claude2', { interrupt: false });
+    await api.swap('s1', 'claude9', { interrupt: true });
+    await api.swap('s1', 'claude9', { crossPool: true, interrupt: true });
+    await api.swap('s1', 'claude9', { interrupt: false });
     const bodies = fetchImpl.mock.calls.map((c) => JSON.parse((c as [string, RequestInit])[1].body as string));
     expect(bodies).toEqual([
-      { wrapper: 'claude2', interrupt: true },
-      { wrapper: 'claude2', crossPool: true, interrupt: true },
-      { wrapper: 'claude2' },
+      { wrapper: 'claude9', interrupt: true },
+      { wrapper: 'claude9', crossPool: true, interrupt: true },
+      { wrapper: 'claude9' },
     ]);
   });
 

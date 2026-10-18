@@ -488,7 +488,7 @@ describe('the /accounts auth blocks say whose they are (D-161)', () => {
     const title = await screen.findByText('Your sign-in');
     const block = title.closest('section');
     expect(block).not.toBeNull();
-    // `.accounts-row` + `.account-gauge-label` are what a claude2/gpt row
+    // `.accounts-row` + `.account-gauge-label` are what a claude9/gpt row
     // wears. Wearing them made "Passkeys" scan as a fifth fleet account.
     expect(block!.className).not.toContain('accounts-row');
     expect(title.className).not.toContain('account-gauge-label');

@@ -3,7 +3,7 @@ import { sortFleet } from '../src/fleet/sortFleet';
 import type { FleetSession } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
 
-const s = (over: Partial<FleetSession>): FleetSession => (fleetSession({ id: over.id ?? 'x', wrapper: 'claude2', home: 'claude2', project: over.id ?? 'x', ...over }));
+const s = (over: Partial<FleetSession>): FleetSession => (fleetSession({ id: over.id ?? 'x', wrapper: 'claude9', home: 'claude9', project: over.id ?? 'x', ...over }));
 
 describe('sortFleet', () => {
   // The server decides which bucket a session is in (`sessionBucket`,

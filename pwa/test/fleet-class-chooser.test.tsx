@@ -29,7 +29,7 @@ afterEach(() => {
 
 const MIN = 60_000;
 
-const session = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ id: 'claude:alpha', home: '/home/rc', project: 'alpha', workdir: '/home/rc/projects/alpha', statusUpdatedAt: Date.now() - 2 * MIN, limits: { five: 10, seven: 40 }, version: '2.1.0', ...over }));
+const session = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ id: 'claude:alpha', home: '/home/u', project: 'alpha', workdir: '/home/u/projects/alpha', statusUpdatedAt: Date.now() - 2 * MIN, limits: { five: 10, seven: 40 }, version: '2.1.0', ...over }));
 
 /** Store whose ReconnectingSocket gets an inert fake — connect() is harmless. */
 const makeStore = (): FleetStore =>
@@ -64,7 +64,7 @@ describe('the fleet screen class chooser (routing slice 5, Task 6)', () => {
       if (String(url).includes('/api/projects?class=fable')) {
         return new Response(JSON.stringify({
           roots: [], projects: [{
-            name: 'alpha', workdir: '/home/rc/projects/alpha',
+            name: 'alpha', workdir: '/home/u/projects/alpha',
             pool: { state: 'untagged' },
             placement: { kind: 'none', pool: null, class: 'fable' },
           }],

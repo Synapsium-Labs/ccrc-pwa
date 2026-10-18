@@ -33,7 +33,7 @@ const proj = (
   ...(placement === undefined ? {} : { placement }),
 });
 
-const POOLS = { claude: 'pool-a', claude2: 'pool-b' };
+const POOLS = { claude: 'pool-a', claude9: 'pool-b' };
 const UNKNOWN_POOL_NOTE =
   'One or more project pools are not known from here, so pool matching does not hide those projects.';
 
@@ -49,7 +49,7 @@ const openAtStepTwo = async (projects: ProjectRow[]): Promise<void> => {
 describe('NewSessionSheet step 2 and the pool line', () => {
   it('preserves a maximum-length crossing account pool in the shared row name and title', async () => {
     const maximumPool = `a${'z'.repeat(31)}`;
-    const roster = pooled({ claude: 'pool-a', claude2: maximumPool });
+    const roster = pooled({ claude: 'pool-a', claude9: maximumPool });
     vi.spyOn(api, 'projects').mockResolvedValue({ roots: ['/w'], projects: [] });
     vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: [], projected: null, roster });
     render(<NewSessionSheet open onClose={vi.fn()} fleet={storeWith(roster)} />);
@@ -181,7 +181,7 @@ describe('NewSessionSheet step 2 and the pool line', () => {
     fireEvent.click(await screen.findByText('demo'));
     expect(screen.getByRole('button', { name: /^Start demo/ })).toBeEnabled();
 
-    act(() => { store.setState({ roster: pooled({ claude: 'pool-b', claude2: 'pool-b' }) }); });
+    act(() => { store.setState({ roster: pooled({ claude: 'pool-b', claude9: 'pool-b' }) }); });
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'Choose a project' })).toBeDisabled());
     expect(screen.queryByText('demo')).not.toBeInTheDocument();
@@ -200,7 +200,7 @@ describe('NewSessionSheet step 2 and the pool line', () => {
     fireEvent.click(await screen.findByRole('button', { name: /team·max/ }));
     fireEvent.click(await screen.findByText('demo'));
 
-    act(() => { store.setState({ roster: pooled({ ...POOLS, 'claude-corp': 'pool-b' }) }); });
+    act(() => { store.setState({ roster: pooled({ ...POOLS, 'claude-acme': 'pool-b' }) }); });
 
     expect(await screen.findByRole('button', { name: /^Start demo/ })).toBeEnabled();
   });
@@ -216,7 +216,7 @@ describe('NewSessionSheet step 2 and the pool line', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'show other pools (1)' }));
     fireEvent.click(screen.getByText('quiet-basin'));
 
-    act(() => { store.setState({ roster: pooled({ ...POOLS, 'claude-corp': 'pool-a' }) }); });
+    act(() => { store.setState({ roster: pooled({ ...POOLS, 'claude-acme': 'pool-a' }) }); });
 
     expect(await screen.findByRole('button', { name: /^Start quiet-basin/ })).toBeEnabled();
   });

@@ -49,9 +49,9 @@ const fakeSocket = (): WebSocket =>
  *  that takes one. The reap tests below use it for the session, the audit
  *  fixture and the URL alike, because that is the only combination the
  *  server can actually serve (fix round 3, verifier P4). */
-const WS_ID = 'OpenClawHetzner-quiet-basin';
+const WS_ID = 'ProjectC-quiet-basin';
 
-const fleetSession = (patch: Partial<FleetSession> = {}): FleetSession => (baseSession({ id: 'claude:OpenClawHetzner', home: '/home/rc', project: 'OpenClawHetzner', workdir: '/root/projects/OpenClawHetzner', ...patch }));
+const fleetSession = (patch: Partial<FleetSession> = {}): FleetSession => (baseSession({ id: 'claude:ProjectC', home: '/home/u', project: 'ProjectC', workdir: '/root/projects/ProjectC', ...patch }));
 
 /** Full SessionHeaderProps with no-op callbacks — build it, don't render it,
  *  so tests that need to compose SessionHeader alongside sibling elements
@@ -202,26 +202,26 @@ describe('SessionHeader', () => {
     // Deep link, no session record yet: there IS no bucket, so the stream's
     // status is translated into the same vocabulary rather than guessed at.
     renderHeader({ session: null, status: 'busy', statusUpdatedAt: Date.now() - 1000,
-      fallback: { title: 'OpenClawHetzner', wrapper: 'claude' } });
+      fallback: { title: 'ProjectC', wrapper: 'claude' } });
     expect(screen.getByRole('img', { name: 'working' })).toBeInTheDocument();
   });
 
   it('shows the clean project name, ignoring the auto-derived session name', () => {
-    // Even when Claude Code supplies a derived name like "openclawhetzner-8f",
-    // the header shows the project ("OpenClawHetzner"), not the noisy name.
-    renderHeader({ session: fleetSession({ name: 'openclawhetzner-8f' }) });
-    expect(screen.getByRole('heading', { name: 'OpenClawHetzner' })).toBeInTheDocument();
+    // Even when Claude Code supplies a derived name like "projectc-8f",
+    // the header shows the project ("ProjectC"), not the noisy name.
+    renderHeader({ session: fleetSession({ name: 'projectc-8f' }) });
+    expect(screen.getByRole('heading', { name: 'ProjectC' })).toBeInTheDocument();
     cleanup();
     renderHeader({ session: fleetSession({ name: null }) });
-    expect(screen.getByRole('heading', { name: 'OpenClawHetzner' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'ProjectC' })).toBeInTheDocument();
   });
 
   it('falls back to the id-derived identity before the fleet snapshot lands', () => {
     renderHeader({
       session: null,
-      fallback: { title: 'OpenClawHetzner', wrapper: 'claude' },
+      fallback: { title: 'ProjectC', wrapper: 'claude' },
     });
-    expect(screen.getByRole('heading', { name: 'OpenClawHetzner' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'ProjectC' })).toBeInTheDocument();
     expect(screen.getByText('team·max')).toBeInTheDocument();
   });
 
@@ -295,7 +295,7 @@ describe('interrupt control', () => {
 
 describe('SessionScreen interrupt wiring', () => {
   const makeStores = () => {
-    const store = createSessionStore('claude:OpenClawHetzner', {
+    const store = createSessionStore('claude:ProjectC', {
       makeSocket: fakeSocket,
       api: { prompt: vi.fn().mockResolvedValue(undefined) },
     });
@@ -309,12 +309,12 @@ describe('SessionScreen interrupt wiring', () => {
   it('the stop keycap calls api.interrupt with the session id and its source (D-5237)', () => {
     const spy = vi.spyOn(api, 'interrupt').mockResolvedValue(undefined);
     const { store, fleet } = makeStores();
-    render(<SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />);
+    render(<SessionScreen id="claude:ProjectC" store={store} fleet={fleet} />);
     act(() => {
       store.setState({ uuid: 'u1', status: 'busy' });
     });
     fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
-    expect(spy).toHaveBeenCalledWith('claude:OpenClawHetzner', 'keycap');
+    expect(spy).toHaveBeenCalledWith('claude:ProjectC', 'keycap');
   });
 
   it('a 409 not-busy answer surfaces as a quiet toast', async () => {
@@ -324,7 +324,7 @@ describe('SessionScreen interrupt wiring', () => {
     const { store, fleet } = makeStores();
     render(
       <>
-        <SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />
+        <SessionScreen id="claude:ProjectC" store={store} fleet={fleet} />
         <ToastHost />
       </>,
     );
@@ -344,14 +344,14 @@ describe('SessionScreen interrupt wiring', () => {
 // that would leave `--acct-active` at its cyan default).
 describe('SessionScreen account accent (data-acct)', () => {
   const makeStores = (roster: typeof TEST_ROSTER | []) => {
-    const store = createSessionStore('claude2:OpenClawHetzner', {
+    const store = createSessionStore('claude9:ProjectC', {
       makeSocket: fakeSocket,
       api: { prompt: vi.fn().mockResolvedValue(undefined) },
     });
     const fleet = createFleetStore({ makeSocket: fakeSocket });
     act(() => {
       fleet.setState({
-        sessions: [fleetSession({ id: 'claude2:OpenClawHetzner', wrapper: 'claude2' })],
+        sessions: [fleetSession({ id: 'claude9:ProjectC', wrapper: 'claude9' })],
         conn: 'open',
         roster,
       });
@@ -362,9 +362,9 @@ describe('SessionScreen account accent (data-acct)', () => {
   it("stamps the session's own hue — a non-cyan account never renders in claude's cyan", () => {
     const { store, fleet } = makeStores(TEST_ROSTER);
     const { container } = render(
-      <SessionScreen id="claude2:OpenClawHetzner" store={store} fleet={fleet} />,
+      <SessionScreen id="claude9:ProjectC" store={store} fleet={fleet} />,
     );
-    // claude2 -> violet (rosterFixture.ts). Cyan would mean the old
+    // claude9 -> violet (rosterFixture.ts). Cyan would mean the old
     // string-parsed lookup (or its regression) is back.
     expect(container.querySelector('.chat')).toHaveAttribute('data-acct', 'violet');
   });
@@ -372,7 +372,7 @@ describe('SessionScreen account accent (data-acct)', () => {
   it("stamps 'unknown', never cyan, before the roster has arrived", () => {
     const { store, fleet } = makeStores([]);
     const { container } = render(
-      <SessionScreen id="claude2:OpenClawHetzner" store={store} fleet={fleet} />,
+      <SessionScreen id="claude9:ProjectC" store={store} fleet={fleet} />,
     );
     expect(container.querySelector('.chat')).toHaveAttribute('data-acct', 'unknown');
   });
@@ -383,7 +383,7 @@ describe('SessionScreen account accent (data-acct)', () => {
 // own — this exercises the store round trip `renderHeader` above cannot.
 describe('SessionScreen repo label (board-placement wave 2, Task 7, R3)', () => {
   const makeStores = () => {
-    const store = createSessionStore('claude:OpenClawHetzner', {
+    const store = createSessionStore('claude:ProjectC', {
       makeSocket: fakeSocket,
       api: { prompt: vi.fn().mockResolvedValue(undefined) },
     });
@@ -398,17 +398,17 @@ describe('SessionScreen repo label (board-placement wave 2, Task 7, R3)', () => 
     const { store, fleet } = makeStores();
     act(() => {
       fleet.getState().setProjects([
-        { name: 'OpenClawHetzner', workdir: '/root/projects/OpenClawHetzner', repo: { state: 'named', slug: 'Synapsium-Labs/OpenClawHetzner' } },
+        { name: 'ProjectC', workdir: '/root/projects/ProjectC', repo: { state: 'named', slug: 'example-org/example-repo' } },
       ]);
     });
-    render(<SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />);
-    expect(screen.getByText('Synapsium-Labs/OpenClawHetzner')).toBeInTheDocument();
+    render(<SessionScreen id="claude:ProjectC" store={store} fleet={fleet} />);
+    expect(screen.getByText('example-org/example-repo')).toBeInTheDocument();
     expect(document.querySelector('.chip--repo')).not.toBeNull();
   });
 
   it('renders no repo chip when the store has never read `/api/projects` (D-3013)', () => {
     const { store, fleet } = makeStores();
-    render(<SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />);
+    render(<SessionScreen id="claude:ProjectC" store={store} fleet={fleet} />);
     expect(document.querySelector('.chip--repo')).toBeNull();
   });
 });
@@ -432,15 +432,15 @@ describe('SessionScreen reap wiring (Task 17)', () => {
           //
           // Fix round 3, verifier P4: the previous note here justified the
           // change by calling the old `id: 'demo'` "a response ccd cannot
-          // produce" — while substituting 'claude:OpenClawHetzner', which ccd
+          // produce" — while substituting 'claude:ProjectC', which ccd
           // cannot produce either. `cmd_ws_audit` validates the id BEFORE
           // doing anything (`[[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die`, ccd:3416)
           // and a colon is not in that class, so that request dies and the
           // route 502s. Both this fixture and the session it describes now use
           // a real workspace session id: ccd builds them as `$project-$slug`
           // (ccd:738), and reap only ever applies to a workspace session.
-          id: 'OpenClawHetzner-quiet-basin', branch: 'ws/quiet-basin', base: 'origin/main', workdir: '/w/quiet-basin',
-          project: 'OpenClawHetzner', repo: 'o/r', exists: true, headMatchesRegistry: true, reaping: null,
+          id: 'ProjectC-quiet-basin', branch: 'ws/quiet-basin', base: 'origin/main', workdir: '/w/quiet-basin',
+          project: 'ProjectC', repo: 'o/r', exists: true, headMatchesRegistry: true, reaping: null,
           dirty: [], ignored: [], ignoredCount: 0, ignoredBytes: 0, sensitive: [], sensitiveFiltered: 0,
           clips: [], stashes: 0, worktreeBytes: 500_000_000, commitsAheadOfBase: 2,
           pr: { number: 7, url: 'u', mergeCommit: 'x', headRefOid: 'y' },
@@ -485,15 +485,15 @@ describe('SessionScreen reap wiring (Task 17)', () => {
           //
           // Fix round 3, verifier P4: the previous note here justified the
           // change by calling the old `id: 'demo'` "a response ccd cannot
-          // produce" — while substituting 'claude:OpenClawHetzner', which ccd
+          // produce" — while substituting 'claude:ProjectC', which ccd
           // cannot produce either. `cmd_ws_audit` validates the id BEFORE
           // doing anything (`[[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die`, ccd:3416)
           // and a colon is not in that class, so that request dies and the
           // route 502s. Both this fixture and the session it describes now use
           // a real workspace session id: ccd builds them as `$project-$slug`
           // (ccd:738), and reap only ever applies to a workspace session.
-          id: 'OpenClawHetzner-quiet-basin', branch: 'ws/quiet-basin', base: 'origin/main', workdir: '/w/quiet-basin',
-          project: 'OpenClawHetzner', repo: 'o/r', exists: true, headMatchesRegistry: true, reaping: null,
+          id: 'ProjectC-quiet-basin', branch: 'ws/quiet-basin', base: 'origin/main', workdir: '/w/quiet-basin',
+          project: 'ProjectC', repo: 'o/r', exists: true, headMatchesRegistry: true, reaping: null,
           dirty: [], ignored: [], ignoredCount: 0, ignoredBytes: 0, sensitive: [], sensitiveFiltered: 0,
           clips: [], stashes: 0, worktreeBytes: 500_000_000, commitsAheadOfBase: 2,
           pr: { number: 7, url: 'u', mergeCommit: 'x', headRefOid: 'y' },
@@ -598,7 +598,7 @@ describe('the substrate gate — Archive, Restart and Restore refuse a session n
 
   it("the dead banner's Restart is disabled and never posts /ensure", () => {
     const spy = vi.spyOn(api, 'ensure').mockResolvedValue(undefined);
-    const store = createSessionStore('claude:OpenClawHetzner', { makeSocket: fakeSocket });
+    const store = createSessionStore('claude:ProjectC', { makeSocket: fakeSocket });
     const fleet = createFleetStore({ makeSocket: fakeSocket });
     act(() => {
       fleet.setState({
@@ -606,7 +606,7 @@ describe('the substrate gate — Archive, Restart and Restore refuse a session n
         conn: 'open',
       });
     });
-    render(<SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />);
+    render(<SessionScreen id="claude:ProjectC" store={store} fleet={fleet} />);
     const btn = screen.getByRole('button', { name: /Restart session/ });
     expect(btn).toBeDisabled();
     expect(btn.getAttribute('title')).toContain('x');
@@ -620,7 +620,7 @@ describe('the substrate gate — Archive, Restart and Restore refuse a session n
     // send re-reads the fault at the moment of firing, and the refusal is
     // named rather than swallowed.
     const spy = vi.spyOn(api, 'archive').mockResolvedValue(null);
-    const store = createSessionStore('claude:OpenClawHetzner', {
+    const store = createSessionStore('claude:ProjectC', {
       makeSocket: fakeSocket,
       api: { prompt: vi.fn().mockResolvedValue(undefined) },
     });
@@ -630,7 +630,7 @@ describe('the substrate gate — Archive, Restart and Restore refuse a session n
     });
     render(
       <>
-        <SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />
+        <SessionScreen id="claude:ProjectC" store={store} fleet={fleet} />
         <ToastHost />
       </>,
     );
@@ -659,9 +659,9 @@ describe('breadcrumb', () => {
     // 'ws/quiet-basin' is ambiguous once the crumb exists too — scope to the
     // crumb span, which is what this test is actually about.
     const { container } = render(<SessionHeader {...props({ session: fleetSession({
-      project: 'custom-tools', workspace: 'quiet-basin', name: null, branch: 'ws/quiet-basin',
+      project: 'project-d', workspace: 'quiet-basin', name: null, branch: 'ws/quiet-basin',
     }) })} />);
-    expect(screen.getByText('custom-tools')).toBeInTheDocument();
+    expect(screen.getByText('project-d')).toBeInTheDocument();
     expect(container.querySelector('.chat-crumb')).toHaveTextContent('ws/quiet-basin');
   });
 
@@ -856,8 +856,8 @@ describe('archived chip', () => {
 
 describe('the repo label in the session view (board-placement wave 2, Task 7, R3)', () => {
   it('renders the repo unconditionally when it is known', () => {
-    renderHeader({ repo: 'Synapsium-Labs/custom-tools' });
-    expect(screen.getByText('Synapsium-Labs/custom-tools')).toBeInTheDocument();
+    renderHeader({ repo: 'example-org/example-repo' });
+    expect(screen.getByText('example-org/example-repo')).toBeInTheDocument();
     expect(document.querySelector('.chip--repo')).not.toBeNull();
   });
   it('renders nothing when it is not — an older server, or a deep link before any fleet read (D-3013)', () => {
@@ -928,8 +928,8 @@ describe('the header before the first fleet frame lands', () => {
     // `SessionScreen` passes `fallback={{ title: project, wrapper }}` — both
     // derived from the id — and those arms had no case: the title would read
     // `…` and the account accent would be blank on a screen that knows both.
-    renderHeader({ session: null, fallback: { title: 'OpenClawHetzner', wrapper: 'claude' } });
-    expect(screen.getByText('OpenClawHetzner')).toBeInTheDocument();
+    renderHeader({ session: null, fallback: { title: 'ProjectC', wrapper: 'claude' } });
+    expect(screen.getByText('ProjectC')).toBeInTheDocument();
   });
 
   it('and `…` when the caller has no fallback either', () => {

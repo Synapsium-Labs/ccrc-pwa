@@ -42,14 +42,14 @@ describe('AccountsStrip', () => {
     vi.spyOn(api, 'accounts').mockResolvedValue({
       accounts: [
         acct({ wrapper: 'claude', five: 0, fiveResetAt: nowSec - 60, fiveRolledOver: true, seven: 57, sevenRolledOver: false }),
-        acct({ wrapper: 'claude2', five: 0, fiveResetAt: nowSec + 9000, fiveRolledOver: false, seven: 93, sevenRolledOver: false }),
+        acct({ wrapper: 'claude9', five: 0, fiveResetAt: nowSec + 9000, fiveRolledOver: false, seven: 93, sevenRolledOver: false }),
       ],
       // The strip ignores it; the route always sends it (see useProjectedHome).
       projected: { wrapper: 'claude', score: 57 },
       roster: TEST_ROSTER,
     });
     render(<AccountsStrip />);
-    // claude's 5h rolled over; claude2's 5h was really measured at zero.
+    // claude's 5h rolled over; claude9's 5h was really measured at zero.
     expect(await screen.findByText('reset')).toBeTruthy();
     expect(screen.getByText('0%')).toBeTruthy();
     expect(screen.getByText('57%')).toBeTruthy();
@@ -72,7 +72,7 @@ describe('AccountsStrip', () => {
   // explains why the gauges are gone is the bug.
   describe('never disappears, even with nothing to gauge (Task 6 review fix)', () => {
     it('stays a tappable link when every reporting lane is disabled', async () => {
-      stubAccounts([acct({ wrapper: 'claude', disabled: true }), acct({ wrapper: 'claude2', disabled: true })]);
+      stubAccounts([acct({ wrapper: 'claude', disabled: true }), acct({ wrapper: 'claude9', disabled: true })]);
       render(<AccountsStrip />);
       const link = await screen.findByRole('link', { name: 'account usage — open accounts' });
       expect(screen.getByText(/all lanes disabled/i)).toBeInTheDocument();

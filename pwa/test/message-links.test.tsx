@@ -58,7 +58,7 @@ describe('MessageBubble link + image rendering', () => {
 //   Not cosmetic: `<img src="…/clip-x.md">` fails to decode and lands on the
 //   same onError fallback that exists for a clip DELETED off disk, so a file
 //   that is present and perfectly readable would render as "gone".
-const ID = 'claude2-demo-app-ts';
+const ID = 'claude9-demo-app-ts';
 const clip = (name: string) => `/home/you/.cc-clips/${ID}/${name}`;
 const userWith = (text: string) =>
   render(<MessageBubble id={ID} event={{ kind: 'user', uuid: 'u2', ts: '2026-07-21T20:00:00Z', text }} />);

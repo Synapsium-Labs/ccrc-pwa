@@ -8,7 +8,7 @@ const rel = (child = false): ReleasedFrom =>
 
 const s = (over: Partial<FleetSession>): FleetSession =>
   fleetSession({
-    id: 'x', wrapper: 'claude2', home: 'claude2', project: 'p', workdir: '/p',
+    id: 'x', wrapper: 'claude9', home: 'claude9', project: 'p', workdir: '/p',
     workspace: 'w', statusUpdatedAt: 0,
     // THE FIXTURE'S SUBJECT: a row that WAS released, since that is the one
     // fact every case here reads. The shared default is `null`.

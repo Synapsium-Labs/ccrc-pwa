@@ -9,11 +9,11 @@ import { useStagedImages } from '../src/session/useAttachImage';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
-const ID = 'claude2-Proj';
-const CLIP = { path: '/home/u/.cc-clips/claude2-Proj/clip-1-a1b2.png', name: 'clip-1-a1b2.png', bytes: 9 };
+const ID = 'claude9-Proj';
+const CLIP = { path: '/home/u/.cc-clips/claude9-Proj/clip-1-a1b2.png', name: 'clip-1-a1b2.png', bytes: 9 };
 const shot = (name = 'shot.png') => new File(['tiny'], name, { type: 'image/png' });
 const DOC_CLIP = {
-  path: '/home/u/.cc-clips/claude2-Proj/clip-1-a1b2-notes.md',
+  path: '/home/u/.cc-clips/claude9-Proj/clip-1-a1b2-notes.md',
   name: 'clip-1-a1b2-notes.md',
   bytes: 4,
 };

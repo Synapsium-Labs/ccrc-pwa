@@ -65,7 +65,7 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 // — fixtures —
 
-const sess = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ project: 'custom-tools', workspace: 'quiet-basin', branch: 'ws/quiet-basin', ...over }));
+const sess = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ project: 'project-d', workspace: 'quiet-basin', branch: 'ws/quiet-basin', ...over }));
 
 const prState = (over: Partial<PrState> = {}): PrState => ({
   phase: 'none', number: null, url: null, title: null, checks: null, checkNames: null,
@@ -75,7 +75,7 @@ const prState = (over: Partial<PrState> = {}): PrState => ({
 const wsAudit: WsAudit = {
   id: 'demo-quiet-basin', branch: 'ws/quiet-basin', registryBranch: 'ws/quiet-basin', drift: '',
   base: 'origin/main', workdir: '/w/quiet-basin',
-  project: 'custom-tools', repo: 'o/r', exists: true, headMatchesRegistry: true, reaping: null,
+  project: 'project-d', repo: 'o/r', exists: true, headMatchesRegistry: true, reaping: null,
   alive: true, started: true, unit: 'enabled',
   dirty: [], ignored: [], ignoredCount: 0, ignoredBytes: 0, sensitive: [], sensitiveFiltered: 0,
   clips: [], stashes: 0, worktreeBytes: 500_000_000, commitsAheadOfBase: 1,

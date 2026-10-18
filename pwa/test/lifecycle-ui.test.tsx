@@ -42,24 +42,24 @@ const fakeSocket = (): WebSocket =>
 
 const fleetSession = (patch: Partial<FleetSession> = {}): FleetSession =>
   baseSession({
-    id: 'claude:OpenClawHetzner',
+    id: 'claude:ProjectC',
     // An ACCOUNT ID, not a path. `assembleFleet` writes `r.home ?? idHomeWrapper(...)`
     // (server/src/fleet.ts) and every reader treats it as a wrapper id — SwapSheet
-    // now turns it into an account LABEL, which a `/home/rc` here would have
+    // now turns it into an account LABEL, which a `/home/u` here would have
     // rendered verbatim into the sheet copy. A fixture that encodes the wrong
     // assumption reads as coverage while measuring nothing. (The shared fixture's
     // own default is `'claude'` for the same reason; this restates it because
     // this file is where the mistake was made.)
     home: 'claude',
-    project: 'OpenClawHetzner',
-    workdir: '/root/projects/OpenClawHetzner',
+    project: 'ProjectC',
+    workdir: '/root/projects/ProjectC',
     statusUpdatedAt: Date.now() - 2 * MIN,
     limits: { five: 62, seven: 71 },
     ...patch,
   });
 
-/** Fleet store seeded with two live sessions: claude (62/71) and claude2
- *  (8/22, the least loaded); claude-corp and gpt have no live session. */
+/** Fleet store seeded with two live sessions: claude (62/71) and claude9
+ *  (8/22, the least loaded); claude-acme and gpt have no live session. */
 const makeFleet = (): FleetStore => {
   const store = createFleetStore({ makeSocket: fakeSocket });
   act(() => {
@@ -69,10 +69,10 @@ const makeFleet = (): FleetStore => {
       sessions: [
         fleetSession(),
         fleetSession({
-          id: 'claude2:mekwarlive',
-          wrapper: 'claude2',
-          project: 'mekwarlive',
-          workdir: '/root/projects/mekwarlive',
+          id: 'claude9:project-f',
+          wrapper: 'claude9',
+          project: 'project-f',
+          workdir: '/root/projects/project-f',
           statusUpdatedAt: Date.now() - 30 * MIN,
           limits: { five: 8, seven: 22 },
         }),
@@ -110,9 +110,9 @@ const stubAccounts = (accounts: AccountUsage[]): void => {
 const PROJECTS = {
   roots: ['/root/projects'],
   projects: [
-    { name: 'bt-rules', workdir: '/root/projects/bt-rules' },
-    { name: 'mekwarlive', workdir: '/root/projects/mekwarlive' },
-    { name: 'OpenClawHetzner', workdir: '/root/projects/OpenClawHetzner' },
+    { name: 'project-o', workdir: '/root/projects/project-o' },
+    { name: 'project-f', workdir: '/root/projects/project-f' },
+    { name: 'ProjectC', workdir: '/root/projects/ProjectC' },
   ],
 };
 
@@ -127,7 +127,7 @@ describe('NewSessionSheet', () => {
   it('renders all five account rows with labels and the polled account limits', async () => {
     stubAccounts([
       acct({ wrapper: 'claude', five: 62, seven: 71 }),
-      acct({ wrapper: 'claude2', five: 8, seven: 22 }),
+      acct({ wrapper: 'claude9', five: 8, seven: 22 }),
     ]);
     vi.spyOn(api, 'projects').mockResolvedValue(PROJECTS);
     render(<NewSessionSheet open onClose={vi.fn()} fleet={makeFleet()} />);
@@ -162,18 +162,18 @@ describe('NewSessionSheet', () => {
 
     // Step 2: the project list arrives; the confirm sits disarmed until a
     // project is chosen.
-    const projRow = await screen.findByRole('button', { name: /OpenClawHetzner/ });
+    const projRow = await screen.findByRole('button', { name: /ProjectC/ });
     expect(screen.getByRole('button', { name: /Choose a project/i })).toBeDisabled();
 
     fireEvent.click(projRow);
-    const confirm = screen.getByRole('button', { name: 'Start OpenClawHetzner on team·alt' });
+    const confirm = screen.getByRole('button', { name: 'Start ProjectC on team·alt' });
     expect(confirm).toBeEnabled();
 
     fireEvent.click(confirm);
     expect(create).toHaveBeenCalledWith({
-      wrapper: 'claude2',
-      project: 'OpenClawHetzner',
-      workdir: '/root/projects/OpenClawHetzner',
+      wrapper: 'claude9',
+      project: 'ProjectC',
+      workdir: '/root/projects/ProjectC',
     });
     await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
@@ -185,13 +185,13 @@ describe('NewSessionSheet', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: /team·alt/ }));
-    await screen.findByRole('button', { name: /OpenClawHetzner/ });
+    await screen.findByRole('button', { name: /ProjectC/ });
 
     const names = [...container.ownerDocument.querySelectorAll('.proj-name')].map(
       (el) => el.textContent,
     );
-    // OpenClawHetzner (active 2m ago) → mekwarlive (30m) → bt-rules (unregistered).
-    expect(names).toEqual(['OpenClawHetzner', 'mekwarlive', 'bt-rules']);
+    // ProjectC (active 2m ago) → project-f (30m) → project-o (unregistered).
+    expect(names).toEqual(['ProjectC', 'project-f', 'project-o']);
   });
 
   it('a failed start stays open and toasts the ccd stderr', async () => {
@@ -208,8 +208,8 @@ describe('NewSessionSheet', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: /team·alt/ }));
-    fireEvent.click(await screen.findByRole('button', { name: /OpenClawHetzner/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'Start OpenClawHetzner on team·alt' }));
+    fireEvent.click(await screen.findByRole('button', { name: /ProjectC/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Start ProjectC on team·alt' }));
 
     expect(await screen.findByText(/no such wrapper/)).toBeInTheDocument();
     expect(onClose).not.toHaveBeenCalled();
@@ -241,8 +241,8 @@ describe('NewSessionSheet', () => {
 describe('NewSessionSheet step 1 — the same eligibility ruling as the swap picker', () => {
   it('offers and MARKS an auth-dead lane, and never lets it be suggested', async () => {
     stubAccounts([
-      acct({ wrapper: 'claude2', authDead: true, five: 3, seven: 4 }),
-      acct({ wrapper: 'claude-corp', five: 62, seven: 71 }),
+      acct({ wrapper: 'claude9', authDead: true, five: 3, seven: 4 }),
+      acct({ wrapper: 'claude-acme', five: 62, seven: 71 }),
     ]);
     vi.spyOn(api, 'projects').mockResolvedValue(PROJECTS);
     render(<NewSessionSheet open onClose={vi.fn()} fleet={makeFleet()} />);
@@ -259,10 +259,10 @@ describe('NewSessionSheet step 1 — the same eligibility ruling as the swap pic
   it('ALL-CONDEMNED still offers every lane — one bad probe run cannot wedge a new session', async () => {
     stubAccounts([
       acct({ wrapper: 'claude', authDead: true }),
-      acct({ wrapper: 'claude2', authDead: true }),
-      acct({ wrapper: 'claude-corp', authDead: true }),
+      acct({ wrapper: 'claude9', authDead: true }),
+      acct({ wrapper: 'claude-acme', authDead: true }),
       acct({ wrapper: 'gpt', authDead: true }),
-      acct({ wrapper: 'claude-dev0', authDead: true }),
+      acct({ wrapper: 'claude-lab0', authDead: true }),
     ]);
     vi.spyOn(api, 'projects').mockResolvedValue(PROJECTS);
     render(<NewSessionSheet open onClose={vi.fn()} fleet={makeFleet()} />);
@@ -276,8 +276,8 @@ describe('NewSessionSheet step 1 — the same eligibility ruling as the swap pic
 
   it('an operator kill switch still removes the lane here too', async () => {
     stubAccounts([
-      acct({ wrapper: 'claude2', disabled: true }),
-      acct({ wrapper: 'claude-corp', five: 62, seven: 71 }),
+      acct({ wrapper: 'claude9', disabled: true }),
+      acct({ wrapper: 'claude-acme', five: 62, seven: 71 }),
     ]);
     vi.spyOn(api, 'projects').mockResolvedValue(PROJECTS);
     render(<NewSessionSheet open onClose={vi.fn()} fleet={makeFleet()} />);
@@ -291,10 +291,10 @@ describe('NewSessionSheet step 1 — the same eligibility ruling as the swap pic
     // `<div className="acct-list">` under "Pick the account it runs on".
     stubAccounts([
       acct({ wrapper: 'claude', disabled: true }),
-      acct({ wrapper: 'claude2', disabled: true }),
-      acct({ wrapper: 'claude-corp', disabled: true }),
+      acct({ wrapper: 'claude9', disabled: true }),
+      acct({ wrapper: 'claude-acme', disabled: true }),
       acct({ wrapper: 'gpt', disabled: true }),
-      acct({ wrapper: 'claude-dev0', disabled: true }),
+      acct({ wrapper: 'claude-lab0', disabled: true }),
     ]);
     vi.spyOn(api, 'projects').mockResolvedValue(PROJECTS);
     render(<NewSessionSheet open onClose={vi.fn()} fleet={makeFleet()} />);
@@ -335,7 +335,7 @@ describe('NewSessionSheet — a five-minute wait says so', () => {
     const clickStart = async () => {
       await act(async () => {
         fireEvent.click(
-          screen.getByRole('button', { name: 'Start OpenClawHetzner on team·alt' }),
+          screen.getByRole('button', { name: 'Start ProjectC on team·alt' }),
         );
       });
     };
@@ -345,7 +345,7 @@ describe('NewSessionSheet — a five-minute wait says so', () => {
         await act(async () => {});          // the project list lands
         fireEvent.click(screen.getByRole('button', { name: /team·alt/ }));
         await act(async () => {});
-        fireEvent.click(screen.getByRole('button', { name: /OpenClawHetzner/ }));
+        fireEvent.click(screen.getByRole('button', { name: /ProjectC/ }));
         await clickStart();
       },
       // `open` is the ONE prop the close-reset effect keys on
@@ -433,7 +433,7 @@ describe('SwapSheet', () => {
     // the only source that says whether a `0` was measured or inferred.
     stubAccounts([
       acct({ wrapper: 'claude', five: 62, seven: 71 }),
-      acct({ wrapper: 'claude2', five: 8, seven: 22 }),
+      acct({ wrapper: 'claude9', five: 8, seven: 22 }),
     ]);
     render(
       <SwapSheet session={fleetSession()} open onClose={vi.fn()} fleet={makeFleet()} />,
@@ -444,7 +444,7 @@ describe('SwapSheet', () => {
     for (const label of ['team·alt', 'team·b', 'gpt']) {
       expect(screen.getByRole('button', { name: new RegExp(label) })).toBeInTheDocument();
     }
-    // claude2 (8/22) is the least loaded of the accounts with measured limits.
+    // claude9 (8/22) is the least loaded of the accounts with measured limits.
     await waitFor(() =>
       expect(screen.getByRole('button', { name: /team·alt/ })).toHaveTextContent('suggested'));
   });
@@ -472,7 +472,7 @@ describe('SwapSheet', () => {
     expect(swap).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('button', { name: 'Move' }));
-    expect(swap).toHaveBeenCalledWith('claude:OpenClawHetzner', 'claude2');
+    expect(swap).toHaveBeenCalledWith('claude:ProjectC', 'claude9');
     await waitFor(() => expect(onClose).toHaveBeenCalled());
     // ADJUDICATION, cross-lane seam round. The ui-tsx lane reported this exact
     // path as leaving a stale confirm on screen ("`move()` calls the sheet's
@@ -613,9 +613,9 @@ describe('SwapSheet', () => {
   it('never suggests an account whose limits were not read — an unread window is not 0%', async () => {
     stubAccounts([
       acct({ wrapper: 'claude', five: 62, seven: 71 }),   // the current account: excluded as a target
-      acct({ wrapper: 'claude2', five: 8, seven: 22 }),
+      acct({ wrapper: 'claude9', five: 8, seven: 22 }),
       // The whole limits file failed to read: both windows unknown.
-      acct({ wrapper: 'claude-corp', five: null, seven: null }),
+      acct({ wrapper: 'claude-acme', five: null, seven: null }),
     ]);
     render(<SwapSheet session={fleetSession()} open onClose={vi.fn()} fleet={storeWith([])} />);
     await waitFor(() =>
@@ -631,8 +631,8 @@ describe('SwapSheet', () => {
     // maximum; one window cannot produce it.
     stubAccounts([
       acct({ wrapper: 'claude', five: 62, seven: 71 }),
-      acct({ wrapper: 'claude2', five: 8, seven: 22 }),
-      acct({ wrapper: 'claude-corp', five: 3, seven: null }),
+      acct({ wrapper: 'claude9', five: 8, seven: 22 }),
+      acct({ wrapper: 'claude-acme', five: 3, seven: null }),
     ]);
     render(<SwapSheet session={fleetSession()} open onClose={vi.fn()} fleet={storeWith([])} />);
     await waitFor(() =>
@@ -643,12 +643,12 @@ describe('SwapSheet', () => {
   it('suggests nobody at all when no account has both windows read', async () => {
     stubAccounts([
       acct({ wrapper: 'claude', five: 62, seven: 71 }),
-      acct({ wrapper: 'claude2', five: null, seven: null }),
-      // claude-corp has no row at all — telemetry has never mentioned it.
+      acct({ wrapper: 'claude9', five: null, seven: null }),
+      // claude-acme has no row at all — telemetry has never mentioned it.
     ]);
     render(<SwapSheet session={fleetSession()} open onClose={vi.fn()} fleet={storeWith([])} />);
     // Wait for the poll to land before asserting an ABSENCE, or this passes
-    // against the pre-poll state and measures nothing. claude2's row is the
+    // against the pre-poll state and measures nothing. claude9's row is the
     // sentinel: it has a ROW with both windows unread, so it renders two `—`
     // gauges, which no row renders before the poll arrives (they all say
     // "limits unknown" until then).
@@ -668,7 +668,7 @@ describe('SwapSheet', () => {
   });
 
   it('keeps every account when none is disabled', () => {
-    expect(pickableWrappers(TEST_ROSTER, [], [])).toEqual(['claude', 'claude2', 'claude-corp', 'gpt', 'claude-dev0']);
+    expect(pickableWrappers(TEST_ROSTER, [], [])).toEqual(['claude', 'claude9', 'claude-acme', 'gpt', 'claude-lab0']);
   });
 
   it('does not offer a disabled account in the rendered picker', async () => {
@@ -694,7 +694,7 @@ describe('SwapSheet', () => {
 
 describe('SessionScreen overflow menu', () => {
   const makeStores = () => {
-    const store = createSessionStore('claude:OpenClawHetzner', {
+    const store = createSessionStore('claude:ProjectC', {
       makeSocket: fakeSocket,
       api: { prompt: vi.fn().mockResolvedValue(undefined) },
     });
@@ -706,7 +706,7 @@ describe('SessionScreen overflow menu', () => {
     const { store, fleet } = makeStores();
     render(
       <>
-        <SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />
+        <SessionScreen id="claude:ProjectC" store={store} fleet={fleet} />
         <ToastHost />
       </>,
     );
@@ -728,7 +728,7 @@ describe('SessionScreen overflow menu', () => {
     fireEvent.click(screen.getByRole('button', { name: /Change model/ }));
     // The chooser is open now — tap a model row.
     fireEvent.click(screen.getByRole('button', { name: /Opus 5/ }));
-    expect(route).toHaveBeenCalledWith('claude:OpenClawHetzner', 'class', 'opus');
+    expect(route).toHaveBeenCalledWith('claude:ProjectC', 'class', 'opus');
     expect(prompt).not.toHaveBeenCalled();
   });
 
@@ -740,7 +740,7 @@ describe('SessionScreen overflow menu', () => {
     fireEvent.click(screen.getByRole('button', { name: 'More' }));
     fireEvent.click(screen.getByRole('button', { name: /Change effort/ }));
     fireEvent.click(screen.getByRole('button', { name: /^Ultracode/ }));
-    expect(route).toHaveBeenCalledWith('claude:OpenClawHetzner', 'effort', 'ultracode');
+    expect(route).toHaveBeenCalledWith('claude:ProjectC', 'effort', 'ultracode');
     expect(prompt).not.toHaveBeenCalled();
   });
 

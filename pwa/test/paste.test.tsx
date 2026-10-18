@@ -15,7 +15,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const ID = 'claude:OpenClawHetzner';
+const ID = 'claude:ProjectC';
 const STAGED_CLIP = { path: '/p/clip-1-a1b2.png', name: 'clip-1-a1b2.png', bytes: 9 };
 
 /** A DataTransfer-shaped clipboard carrying `files` plus optional text. */

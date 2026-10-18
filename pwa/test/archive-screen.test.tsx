@@ -53,7 +53,7 @@ describe('ArchiveScreen', () => {
   it('lists every archived workspace across projects, newest first', () => {
     render(<ArchiveScreen sessions={[
       s({ id: 'demo-quiet-basin', project: 'demo', archivedAt: 100 }),
-      s({ id: 'tools-still-cove', project: 'custom-tools', workspace: 'still-cove', archivedAt: 200 }),
+      s({ id: 'tools-still-cove', project: 'project-d', workspace: 'still-cove', archivedAt: 200 }),
     ]} onOpen={() => {}} />);
     const rows = screen.getAllByRole('button', { name: /workspace/i });
     expect(rows).toHaveLength(2);
@@ -90,14 +90,14 @@ describe('ArchiveScreen', () => {
     // cleanup that cannot happen with nothing on screen to say why.
     render(<ArchiveScreen sessions={[
       s({ id: 'demo-quiet-basin', workspace: 'quiet-basin', project: 'demo',
-        held: 'program:agent-evals wave:3/4' }),
+        held: 'program:prog-j wave:3/4' }),
     ]} onOpen={() => {}} />);
     // The accessible name carries the reason VERBATIM — a reader with no
     // hover gets the whole claim, not the word "held".
     expect(screen.getByRole('button',
-      { name: 'workspace quiet-basin in demo, held: program:agent-evals wave:3/4' })).toBeInTheDocument();
+      { name: 'workspace quiet-basin in demo, held: program:prog-j wave:3/4' })).toBeInTheDocument();
     expect(document.querySelector('.sess-held')?.getAttribute('title'))
-      .toBe('program:agent-evals wave:3/4');
+      .toBe('program:prog-j wave:3/4');
   });
 
   it('an UNHELD archived row gains no hold marker — the label is unchanged', () => {

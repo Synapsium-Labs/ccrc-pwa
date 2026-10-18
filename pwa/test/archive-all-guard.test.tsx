@@ -44,7 +44,7 @@ afterEach(() => {
 
 const MIN = 60_000;
 
-const session = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ id: 'claude:OpenClawHetzner', home: '/home/rc', project: 'OpenClawHetzner', workdir: '/home/rc/projects/OpenClawHetzner', statusUpdatedAt: Date.now() - 2 * MIN, limits: { five: 10, seven: 40 }, version: '2.1.0', ...over }));
+const session = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ id: 'claude:ProjectC', home: '/home/u', project: 'ProjectC', workdir: '/home/u/projects/ProjectC', statusUpdatedAt: Date.now() - 2 * MIN, limits: { five: 10, seven: 40 }, version: '2.1.0', ...over }));
 
 const makeStore = (): FleetStore =>
   createFleetStore({

@@ -36,8 +36,8 @@ const dialogFixture: Dialog = {
 
 const fleetSession = (id: string, wrapper: string): FleetSession =>
   baseSession({
-    id, wrapper, home: '/home/rc', project: 'OpenClawHetzner',
-    workdir: '/home/rc/projects/OpenClawHetzner',
+    id, wrapper, home: '/home/u', project: 'ProjectC',
+    workdir: '/home/u/projects/ProjectC',
     limits: { five: 10, seven: 40 }, version: '2.1.0',
   });
 
@@ -192,14 +192,14 @@ describe('applySessionMsg', () => {
   it('rotated drops every statement about the transcript it just left', () => {
     let s = applySessionMsg(emptySnap(), {
       type: 'backlog', uuid: 'u1', events: [user('a', 'hi')], offset: 90,
-      file: '/t/claude2/u1.jsonl', missing: true,
-      foreignAccount: 'claude2', searchComplete: false, fileMeasured: false,
+      file: '/t/claude9/u1.jsonl', missing: true,
+      foreignAccount: 'claude9', searchComplete: false, fileMeasured: false,
     });
-    expect(s.strandedAccount).toBe('claude2');
+    expect(s.strandedAccount).toBe('claude9');
     expect(s.searchComplete).toBe(false);
     expect(s.fileMeasured).toBe(false);            // NEW
-    expect(s.missingFile).toBe('/t/claude2/u1.jsonl');
-    expect(s.file).toBe('/t/claude2/u1.jsonl');
+    expect(s.missingFile).toBe('/t/claude9/u1.jsonl');
+    expect(s.file).toBe('/t/claude9/u1.jsonl');
 
     s = applySessionMsg(s, { type: 'rotated', uuid: 'u2' });
 
@@ -278,11 +278,11 @@ describe('applySessionMsg', () => {
   });
 
   it('notice appends a system divider carrying the message', () => {
-    const s = applySessionMsg(emptySnap(), { type: 'notice', message: 'cc swap: s1 moved claude -> claude2' });
+    const s = applySessionMsg(emptySnap(), { type: 'notice', message: 'cc swap: s1 moved claude -> claude9' });
     expect(s.events).toHaveLength(1);
     const e = s.events[0];
     expect(e?.kind).toBe('system');
-    expect(e && 'text' in e ? e.text : '').toBe('cc swap: s1 moved claude -> claude2');
+    expect(e && 'text' in e ? e.text : '').toBe('cc swap: s1 moved claude -> claude9');
   });
 
   // The new `default` arm (Rider E): an old client must shrug at a frame type
@@ -1099,15 +1099,15 @@ describe('session store connect()', () => {
 
     store.getState().apply({
       type: 'backlog', uuid: 'b7001948', events: [user('a', 'hi')], offset: 6620,
-      file: '/home/rc/.claude2/projects/-data-projects-x/b7001948.jsonl', missing: false,
-      foreignAccount: 'claude2', searchComplete: true,
+      file: '/home/u/.claude9/projects/-data-projects-x/b7001948.jsonl', missing: false,
+      foreignAccount: 'claude9', searchComplete: true,
     });
     store.getState().connect();
 
     const q = new URL(lastSocket().url).searchParams;
     expect(q.get('since')).toBe('b7001948:6620');
     expect(q.get('sinceFile'))
-      .toBe('/home/rc/.claude2/projects/-data-projects-x/b7001948.jsonl');
+      .toBe('/home/u/.claude9/projects/-data-projects-x/b7001948.jsonl');
     store.getState().disconnect();
   });
 
@@ -1181,13 +1181,13 @@ describe('fleet store', () => {
     lastSocket().open();
     expect(store.getState().conn).toBe('open');
 
-    lastSocket().message(JSON.stringify({ type: 'fleet', sessions: [fleetSession('s1', 'claude'), fleetSession('s2', 'claude2')] }));
+    lastSocket().message(JSON.stringify({ type: 'fleet', sessions: [fleetSession('s1', 'claude'), fleetSession('s2', 'claude9')] }));
     expect(store.getState().sessions.map((s) => s.id)).toEqual(['s1', 's2']);
 
-    lastSocket().message(JSON.stringify({ type: 'notice', message: 'cc swap: s1 moved claude -> claude2' }));
+    lastSocket().message(JSON.stringify({ type: 'notice', message: 'cc swap: s1 moved claude -> claude9' }));
     lastSocket().message(JSON.stringify({ type: 'notice', message: 'second notice' }));
     const notices = store.getState().notices;
-    expect(notices.map((n) => n.message)).toEqual(['cc swap: s1 moved claude -> claude2', 'second notice']);
+    expect(notices.map((n) => n.message)).toEqual(['cc swap: s1 moved claude -> claude9', 'second notice']);
 
     const first = notices[0];
     if (!first) throw new Error('expected a notice');

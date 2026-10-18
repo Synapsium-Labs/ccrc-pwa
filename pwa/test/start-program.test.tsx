@@ -180,8 +180,8 @@ describe('startedSessionFor — the wait arm, directly (B-2)', () => {
   it('skips a dead row, a workspace row, another wrapper and another project', () => {
     expect(startedSessionFor([main({ status: 'dead' })], 'claude', 'ccrc-pwa', NONE)).toBeNull();
     expect(startedSessionFor([main({ workspace: 'brisk-harbor' })], 'claude', 'ccrc-pwa', NONE)).toBeNull();
-    expect(startedSessionFor([main({ wrapper: 'claude3' })], 'claude', 'ccrc-pwa', NONE)).toBeNull();
-    expect(startedSessionFor([main({ project: 'rp-llm' })], 'claude', 'ccrc-pwa', NONE)).toBeNull();
+    expect(startedSessionFor([main({ wrapper: 'claude8' })], 'claude', 'ccrc-pwa', NONE)).toBeNull();
+    expect(startedSessionFor([main({ project: 'project-j' })], 'claude', 'ccrc-pwa', NONE)).toBeNull();
   });
 });
 
@@ -258,14 +258,14 @@ describe('StartProgramSheet', () => {
   });
 
   it('names the account it will place into BEFORE the tap (the projection, not a guess)', async () => {
-    vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude2', 40));
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude9', 40));
     render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     await fillAndPick();
 
     // Named on the confirm button's own label — before any tap on it.
-    expect(await screen.findByRole('button', { name: /start build9-demo on claude2/i })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /start build9-demo on claude9/i })).toBeInTheDocument();
   });
 
   // D-2694: `/api/projects` answers placement for THIS project, while
@@ -277,19 +277,19 @@ describe('StartProgramSheet', () => {
     const createSession = vi.fn(() => new Promise<void>(() => {}));
     const row = proj({
       pool: { state: 'tagged', name: 'pool-b' },
-      placement: { kind: 'projected', wrapper: 'claude2', score: 9 },
+      placement: { kind: 'projected', wrapper: 'claude9', score: 9 },
     });
     render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
       createSession={createSession}
       loadProjects={async () => ({ roots: [], projects: [row] })} />);
 
     await fillAndPick();
-    const go = await screen.findByRole('button', { name: /start build9-demo on claude2/i });
+    const go = await screen.findByRole('button', { name: /start build9-demo on claude9/i });
     fireEvent.click(go);
 
     expect(await screen.findByRole('button', { name: /^starting…$/i })).toBeDisabled();
     expect(createSession).toHaveBeenCalledWith({
-      wrapper: 'claude2', project: 'ccrc-pwa', workdir: row.workdir,
+      wrapper: 'claude9', project: 'ccrc-pwa', workdir: row.workdir,
     });
     expect(createSession.mock.calls[0]).toHaveLength(1);
   });
@@ -302,14 +302,14 @@ describe('StartProgramSheet', () => {
     vi.spyOn(api, 'accounts').mockImplementation(answer as typeof api.accounts);
     const row = proj({
       pool: { state: 'tagged', name: 'pool-b' },
-      placement: { kind: 'projected', wrapper: 'claude2', score: 9 },
+      placement: { kind: 'projected', wrapper: 'claude9', score: 9 },
     });
     render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
       loadProjects={async () => ({ roots: [], projects: [row] })} />);
 
     await fillAndPick();
 
-    expect(await screen.findByRole('button', { name: /start build9-demo on claude2/i })).not.toBeDisabled();
+    expect(await screen.findByRole('button', { name: /start build9-demo on claude9/i })).not.toBeDisabled();
     expect(screen.queryByText(/nothing is placeable/i)).toBeNull();
     expect(screen.queryByRole('button', { name: /checking placement/i })).toBeNull();
   });
@@ -321,14 +321,14 @@ describe('StartProgramSheet', () => {
     const store = makeStore();
     const row = proj({
       pool: { state: 'tagged', name: 'pool-b' },
-      placement: { kind: 'projected', wrapper: 'claude2', score: 9 },
+      placement: { kind: 'projected', wrapper: 'claude9', score: 9 },
     });
     render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
       createSession={async () => {}} queueKickoff={queueKickoff}
       loadProjects={async () => ({ roots: [], projects: [row] })} />);
 
     await fillAndPick();
-    fireEvent.click(await screen.findByRole('button', { name: /^start build9-demo on claude2/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /^start build9-demo on claude9/i }));
     await screen.findByRole('button', { name: /^starting…$/i });
 
     act(() => { store.setState({ sessions: [sess({ id: 'claude-ccrc-pwa', wrapper: 'claude' })] }); });
@@ -339,29 +339,29 @@ describe('StartProgramSheet', () => {
     act(() => {
       store.setState({ sessions: [
         sess({ id: 'claude-ccrc-pwa', wrapper: 'claude' }),
-        sess({ id: 'claude2-ccrc-pwa', wrapper: 'claude2' }),
+        sess({ id: 'claude9-ccrc-pwa', wrapper: 'claude9' }),
       ] });
     });
     await waitFor(() => expect(queueKickoff).toHaveBeenCalledWith(
-      'claude2-ccrc-pwa', { slug: 'build9-demo', title: 'Build 9 demo' },
+      'claude9-ccrc-pwa', { slug: 'build9-demo', title: 'Build 9 demo' },
     ));
-    await waitFor(() => expect(location.pathname).toBe('/s/claude2-ccrc-pwa'));
+    await waitFor(() => expect(location.pathname).toBe('/s/claude9-ccrc-pwa'));
   });
 
   it('still refuses a live-project collision when global placement says none', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: [], projected: null, roster: [] });
     const store = makeStore();
-    act(() => { store.setState({ sessions: [sess({ id: 'claude2-ccrc-pwa', wrapper: 'claude2' })] }); });
+    act(() => { store.setState({ sessions: [sess({ id: 'claude9-ccrc-pwa', wrapper: 'claude9' })] }); });
     const row = proj({
       pool: { state: 'tagged', name: 'pool-b' },
-      placement: { kind: 'projected', wrapper: 'claude2', score: 9 },
+      placement: { kind: 'projected', wrapper: 'claude9', score: 9 },
     });
     render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
       loadProjects={async () => ({ roots: [], projects: [row] })} />);
 
     await fillAndPick();
 
-    expect(await screen.findByText(/claude2-ccrc-pwa is already running/i)).toBeInTheDocument();
+    expect(await screen.findByText(/claude9-ccrc-pwa is already running/i)).toBeInTheDocument();
     expect(screen.queryByText(/nothing is placeable/i)).toBeNull();
     expect(screen.queryByRole('button', { name: /^start/i })).toBeNull();
   });
@@ -385,14 +385,14 @@ describe('StartProgramSheet', () => {
     [undefined, 'older server'],
     [{ state: 'untagged' } as const, 'measured untagged project'],
   ])('preserves the global projection when placement is absent for a $1', async (pool, _description) => {
-    vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude2'));
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude9'));
     const row = proj(pool === undefined ? {} : { pool });
     render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
       loadProjects={async () => ({ roots: [], projects: [row] })} />);
 
     await fillAndPick();
 
-    expect(await screen.findByRole('button', { name: /start build9-demo on claude2/i })).not.toBeDisabled();
+    expect(await screen.findByRole('button', { name: /start build9-demo on claude9/i })).not.toBeDisabled();
   });
 
   it.each([
@@ -413,10 +413,10 @@ describe('StartProgramSheet', () => {
   it('does not clear a route-target timeout when only the global projection changes', async () => {
     vi.spyOn(api, 'accounts')
       .mockResolvedValueOnce(projected('claude'))
-      .mockResolvedValue(projected('claude3'));
+      .mockResolvedValue(projected('claude8'));
     const row = proj({
       pool: { state: 'tagged', name: 'pool-b' },
-      placement: { kind: 'projected', wrapper: 'claude2', score: 9 },
+      placement: { kind: 'projected', wrapper: 'claude9', score: 9 },
     });
     render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
       createSession={async () => {}}
@@ -425,11 +425,11 @@ describe('StartProgramSheet', () => {
     await fillAndPick();
     vi.useFakeTimers();
     try {
-      fireEvent.click(screen.getByRole('button', { name: /^start build9-demo on claude2/i }));
+      fireEvent.click(screen.getByRole('button', { name: /^start build9-demo on claude9/i }));
       await act(async () => { await vi.advanceTimersByTimeAsync(START_PROGRAM_WAIT_MS + 1); });
 
       expect(screen.getByText(/board just hasn't shown it yet/i)).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: /start build9-demo on claude2/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /start build9-demo on claude9/i })).toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }
@@ -616,7 +616,7 @@ describe('StartProgramSheet', () => {
 
     // The fleet has MOVED under the sheet — a different session is now the live
     // main checkout for this project. A retry that re-measured would find it.
-    act(() => { store.setState({ sessions: [sess({ id: 'claude2-ccrc-pwa', wrapper: 'claude2' })] }); });
+    act(() => { store.setState({ sessions: [sess({ id: 'claude9-ccrc-pwa', wrapper: 'claude9' })] }); });
     fireEvent.click(screen.getByRole('button', { name: /queue the kickoff again/i }));
 
     await waitFor(() => expect(queueKickoff).toHaveBeenCalledTimes(2));
@@ -1371,7 +1371,7 @@ describe('StartProgramSheet', () => {
   // so a dead row simply resolves later, when it is alive. Deleting the test
   // would have lost the wrapper coverage it also carried, so it is REPLACED:
   // same shape, pinning the corrected rule, and still red if the wait's
-  // `wrapper` conjunct is dropped (the live `claude3-` row would be taken).
+  // `wrapper` conjunct is dropped (the live `claude8-` row would be taken).
   it('waits for its own row to be LIVE — a dead row does not resolve the wait, and does not end it either (B-2)', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude'));
     const queueKickoff = vi.fn().mockResolvedValue(undefined);
@@ -1391,7 +1391,7 @@ describe('StartProgramSheet', () => {
     act(() => {
       store.setState({ sessions: [
         sess({ id: 'claude-ccrc-pwa', wrapper: 'claude', status: 'dead' }),
-        sess({ id: 'claude3-ccrc-pwa', wrapper: 'claude3', status: 'idle' }),
+        sess({ id: 'claude8-ccrc-pwa', wrapper: 'claude8', status: 'idle' }),
       ] });
     });
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
@@ -1404,7 +1404,7 @@ describe('StartProgramSheet', () => {
     act(() => {
       store.setState({ sessions: [
         sess({ id: 'claude-ccrc-pwa', wrapper: 'claude', status: 'idle' }),
-        sess({ id: 'claude3-ccrc-pwa', wrapper: 'claude3', status: 'idle' }),
+        sess({ id: 'claude8-ccrc-pwa', wrapper: 'claude8', status: 'idle' }),
       ] });
     });
 
@@ -1414,18 +1414,18 @@ describe('StartProgramSheet', () => {
   });
 
   it('never resolves the wait onto a STALE main checkout that pre-dated the create (B-2)', async () => {
-    // The B-2 chain end to end: `claude-ccrc-pwa` was swapped to `claude2`
+    // The B-2 chain end to end: `claude-ccrc-pwa` was swapped to `claude9`
     // (`ccd/ccd:7630` moves the wrapper, keeps the id) and has since died, so
-    // the refusal skips it and Start is offered. The projection is `claude2`,
-    // so `cmd_start` spawns a NEW `claude2-ccrc-pwa` — and the next frame
+    // the refusal skips it and Start is offered. The projection is `claude9`,
+    // so `cmd_start` spawns a NEW `claude9-ccrc-pwa` — and the next frame
     // carries both in registry-id sort order, where `'claude-'` sorts BEFORE
-    // `'claude2'` (`-` 0x2D < `2` 0x32). Liveness alone stops this one; the
+    // `'claude9'` (`-` 0x2D < `9` 0x39). Liveness alone stops this one; the
     // ordering is what made it reachable rather than theoretical.
-    vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude2'));
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude9'));
     const queueKickoff = vi.fn().mockResolvedValue(undefined);
     const store = makeStore();
     history.pushState(null, '', '/runs');
-    const stale = sess({ id: 'claude-ccrc-pwa', wrapper: 'claude2', status: 'dead' });
+    const stale = sess({ id: 'claude-ccrc-pwa', wrapper: 'claude9', status: 'dead' });
     act(() => { store.setState({ sessions: [stale] }); });
     render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
       createSession={async () => {}} queueKickoff={queueKickoff}
@@ -1439,15 +1439,15 @@ describe('StartProgramSheet', () => {
     act(() => {
       store.setState({ sessions: [
         stale,                                                        // sorts first
-        sess({ id: 'claude2-ccrc-pwa', wrapper: 'claude2', status: 'idle' }),
+        sess({ id: 'claude9-ccrc-pwa', wrapper: 'claude9', status: 'idle' }),
       ] });
     });
 
     // The kickoff goes to the session that was actually started, never the
     // dead swapped row that merely satisfies the same three fields.
     await waitFor(() => expect(queueKickoff).toHaveBeenCalledTimes(1));
-    expect(queueKickoff).toHaveBeenCalledWith('claude2-ccrc-pwa', { slug: 'build9-demo', title: 'Build 9 demo' });
-    await waitFor(() => expect(location.pathname).toBe('/s/claude2-ccrc-pwa'));
+    expect(queueKickoff).toHaveBeenCalledWith('claude9-ccrc-pwa', { slug: 'build9-demo', title: 'Build 9 demo' });
+    await waitFor(() => expect(location.pathname).toBe('/s/claude9-ccrc-pwa'));
   });
 
   it('DOES resolve onto a dead row that its own create REVIVED — freshness is not "an id I had not seen" (B-2)', async () => {
@@ -1538,9 +1538,9 @@ describe('StartProgramSheet', () => {
     expect(await screen.findByText('ccd: start: boom')).toBeInTheDocument();
 
     // Someone else's session turns up in the same project afterwards.
-    act(() => { store.setState({ sessions: [sess({ id: 'claude3-ccrc-pwa', wrapper: 'claude3' })] }); });
+    act(() => { store.setState({ sessions: [sess({ id: 'claude8-ccrc-pwa', wrapper: 'claude8' })] }); });
 
-    expect(await screen.findByText(/claude3-ccrc-pwa is already running/i)).toBeInTheDocument();
+    expect(await screen.findByText(/claude8-ccrc-pwa is already running/i)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^start/i })).toBeNull();
   });
 
@@ -1549,17 +1549,17 @@ describe('StartProgramSheet', () => {
   // (`ccd/ccd:7630`) moves the field and keeps the id; `cmd_start` collides on
   // `_alive "$(_id "$wrapper" "$project")"` (`ccd/ccd:7525-7526`), i.e. on the
   // id. Measured on the live fleet: 5 of 10 main checkouts report a `wrapper`
-  // that differs from their own id prefix (`claude-rp-llm` → `wrapper=
-  // claude2`). —
+  // that differs from their own id prefix (`claude-project-j` → `wrapper=
+  // claude9`). —
   it('refuses for a SWAPPED main checkout the projection no longer names — cmd_swap moves the wrapper and keeps the id (C1-swap)', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude'));
     const store = makeStore();
-    // The live `claude-rp-llm` shape: id says `claude`, the registry now says
-    // `claude2`. `ccd start claude ccrc-pwa` still resolves `_id` to this very
+    // The live `claude-project-j` shape: id says `claude`, the registry now says
+    // `claude9`. `ccd start claude ccrc-pwa` still resolves `_id` to this very
     // session and finds it alive.
     act(() => {
       store.setState({ sessions: [sess({
-        id: 'claude-ccrc-pwa', wrapper: 'claude2', project: 'ccrc-pwa', workspace: null, status: 'idle',
+        id: 'claude-ccrc-pwa', wrapper: 'claude9', project: 'ccrc-pwa', workspace: null, status: 'idle',
       })] });
     });
     render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
@@ -1571,7 +1571,7 @@ describe('StartProgramSheet', () => {
     // matched row's wrapper is not the projected one, and the copy must not
     // claim otherwise).
     const refusal = await screen.findByText(/claude-ccrc-pwa is already running/i);
-    expect(refusal.textContent).not.toMatch(/claude2/);
+    expect(refusal.textContent).not.toMatch(/claude9/);
     expect(screen.queryByRole('button', { name: /^start/i })).toBeNull();
   });
 
@@ -1595,7 +1595,7 @@ describe('StartProgramSheet', () => {
 
     act(() => {
       store.setState({ sessions: [sess({
-        id: 'claude3-ccrc-pwa', wrapper: 'claude3', project: 'ccrc-pwa', workspace: null,
+        id: 'claude8-ccrc-pwa', wrapper: 'claude8', project: 'ccrc-pwa', workspace: null,
       })] });
     });
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
@@ -1672,7 +1672,7 @@ describe('StartProgramSheet', () => {
 
     act(() => {
       store.setState({ sessions: [sess({
-        id: 'claude-rp-llm', wrapper: 'claude', project: 'rp-llm', workspace: null,
+        id: 'claude-project-j', wrapper: 'claude', project: 'project-j', workspace: null,
       })] });
     });
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
@@ -1688,7 +1688,7 @@ describe('StartProgramSheet', () => {
   it("does not refuse its OWN attempt after a swap moves its wrapper — ownership is compared on project alone (C1-swap)", async () => {
     // `myAttemptRef` must agree with the (now wrapper-independent) refusal
     // arm. A session this sheet started at `claude` can be reported at
-    // `claude2` on any later frame; comparing wrappers there would render
+    // `claude9` on any later frame; comparing wrappers there would render
     // "…already running… two coordinators" for the sheet's OWN session — the
     // Important-2 defect, arriving through the swap path.
     vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude'));
@@ -1711,7 +1711,7 @@ describe('StartProgramSheet', () => {
       // It lands — swapped away from the wrapper it was started on.
       act(() => {
         store.setState({ sessions: [sess({
-          id: 'claude-ccrc-pwa', wrapper: 'claude2', project: 'ccrc-pwa', workspace: null,
+          id: 'claude-ccrc-pwa', wrapper: 'claude9', project: 'ccrc-pwa', workspace: null,
         })] });
       });
       await act(async () => { await vi.advanceTimersByTimeAsync(0); });
@@ -1732,7 +1732,7 @@ describe('StartProgramSheet', () => {
     const store = makeStore();
     act(() => {
       store.setState({ sessions: [sess({
-        id: 'claude3-beta', wrapper: 'claude3', project: 'beta', workspace: null,
+        id: 'claude8-beta', wrapper: 'claude8', project: 'beta', workspace: null,
       })] });
     });
     const createSession = vi.fn().mockResolvedValue(undefined);
@@ -1752,7 +1752,7 @@ describe('StartProgramSheet', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /beta/i }));
 
-    expect(await screen.findByText(/claude3-beta is already running/i)).toBeInTheDocument();
+    expect(await screen.findByText(/claude8-beta is already running/i)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^start/i })).toBeNull();
   });
 
@@ -1811,7 +1811,7 @@ describe('StartProgramSheet', () => {
       createSession={async () => {}}
       loadProjects={async () => ({
         roots: [],
-        projects: [proj(), proj({ name: 'MekWarLive', workdir: '/w/mek' })],
+        projects: [proj(), proj({ name: 'project-f', workdir: '/w/project-f' })],
       })} />);
 
     await fillAndPick();
@@ -1827,7 +1827,7 @@ describe('StartProgramSheet', () => {
     }
     expect(screen.getByText(/board just hasn't shown it yet/i)).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /MekWarLive/i }));
+    fireEvent.click(screen.getByRole('button', { name: /project-f/i }));
 
     await waitFor(() => expect(screen.queryByText(/board just hasn't shown it yet/i)).toBeNull());
   });
