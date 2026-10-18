@@ -23969,6 +23969,7 @@ _uninst_tree_bins() {
   #
   # `ccd-tool-adj` (D-5241, the tool-child priority's shell prefix) joins on
   # `ccd-scope-sweep`'s terms: `_inst_bins` places it on every non-Darwin role.
+  #
   # `ccrc-api` (wave 17, D-5313), the closed client the role skills call, joins
   # on the GPT lane's terms: `_inst_bins` places it on both platform
   # arms and every role but server, so it is removed here on every role (a
