@@ -8,7 +8,7 @@
 // The esc cap is touch-only: where a physical keyboard exists ((pointer:
 // fine)) it hides and the real Escape key takes over instead, guarded so it
 // never fires while focus is in a text field.
-import { Fragment, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   backgroundWork, backgroundWords, sessionWithCoordinator, substrateFault, withCoordinatorWords,
@@ -28,8 +28,11 @@ import { PrKeycap } from './PrKeycap';
 import { PrSheet } from './PrSheet';
 import './chat.css';
 import { substrateFaultText } from '../fleet/substrateWords';
-import { hibernatedSince } from '../fleet/hibernated';
+import { hibernatedSince, hibernatedWords } from '../fleet/hibernated';
 import { chipTone, metaChipTone } from './chipTones';
+import { SessionCoordination, SessionDetails } from './SessionDetails';
+import type { Coordination } from '../fleet/fleetTree';
+import type { SessionFactSet } from '../fleet/sessionFacts';
 
 export interface SessionHeaderProps {
   session: FleetSession | null;
@@ -77,10 +80,12 @@ export interface SessionHeaderProps {
    *  shown whenever known, there is no card here to imply it. `null`/absent
    *  renders nothing. */
   repo?: string | null;
-  /** D-5527: who this session works for, in words — `working on <project> ·
-   *  coordinated from <coordinator> · <programme> · wave N of M · run #N`
-   *  (`fleetTree.ts`'s `coordinationLine`). `null` renders nothing. */
-  coordination?: { text: string; parts: readonly string[]; title: string } | null;
+  /** D-5527: who this session works for (`fleetTree.ts`'s `coordinationOf`) — its coordinator's id and
+   *  state and the run number, which the session's facts do not carry. `null`: nobody's worker. */
+  coordination?: Coordination | null;
+  /** D-5545: the session's facts, from the same model the fleet card reads (`sessionFacts`), so the header
+   *  holds every fact the card shows and the rest beside it. `null` before the first fleet frame. */
+  facts?: SessionFactSet | null;
 }
 
 /** '04:12' (or '1:04:12') elapsed — rendered in tabular-nums mono. */
@@ -158,6 +163,7 @@ export function SessionHeader({
   queuedField = null,
   repo = null,
   coordination = null,
+  facts = null,
 }: SessionHeaderProps): ReactNode {
   const [menuOpen, setMenuOpen] = useState(false);
   const [prOpen, setPrOpen] = useState(false);
@@ -261,7 +267,7 @@ export function SessionHeader({
   const restart = session != null ? restartWords(session, now) : null;
   const word =
     asleepAt !== null
-      ? 'hibernated'
+      ? hibernatedWords(asleepAt, now) // D-5545: the card's own words, age included
       : bucket === 'attention'
       ? 'waiting on you'
       : bucket === 'working'
@@ -347,15 +353,7 @@ export function SessionHeader({
         </h1>
         {/* D-5527: under the name, because it says what this session IS for —
             whose code, whose programme — before the meta row says how it is. */}
-        {coordination !== null && (
-          <p className="chat-coord" title={coordination.title}>
-            {/* Each clause an inline block, so the line wraps BETWEEN clauses at 360 and a clause wider than the line still wraps inside.
-                The separator rides INSIDE the clause it introduces, so a wrapped line never starts with, or holds, a lone `·`. */}
-            {coordination.parts.map((part, i) => (
-              <Fragment key={i}>{i > 0 && ' '}<span className="chat-coord-part">{i > 0 && '· '}{part}</span></Fragment>
-            ))}
-          </p>
-        )}
+        {facts !== null && <SessionCoordination facts={facts} coordination={coordination} />}
         <div className="chat-meta">
           {bucket !== null && (
             <>
@@ -372,7 +370,7 @@ export function SessionHeader({
             </>
           )}
           {wrapper !== '' && (
-            <Chip dot className={chipTone('active')}>
+            <Chip dot className={chipTone('active')} title={facts?.lane.label}>
               {accountLabel(roster, wrapper)}
             </Chip>
           )}
@@ -430,6 +428,8 @@ export function SessionHeader({
             )}
             </>
           )}
+          {/* D-5545: every other fact, in full — a details row from 900px, behind one door on a phone. */}
+          {facts !== null && <SessionDetails facts={facts} coordination={coordination} />}
         </div>
       </div>
       <Keycap className="keycap--term" aria-label="Terminal" onClick={onOpenTerminal}>

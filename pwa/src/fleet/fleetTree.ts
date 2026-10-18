@@ -51,7 +51,9 @@ import { boardHome, type FleetSession, type RunSummary } from '../../../shared/a
 import type { Acks } from '../lib/seen';
 import { groupFleet, type FleetGroup } from './groupFleet';
 import { nestFleet, type FleetRow } from './nestFleet';
-import { programmeWave, runCard, runForSession, runHomeProject, type ChildRunContext } from './runWords';
+import { programmeWave, runCard, runForSession, runHomeProject, runSentence, type ChildRunContext } from './runWords';
+import { hibernatedSince } from './hibernated';
+import { STATE_WORD } from './sessionFacts';
 import { sessionLabel } from './sessionLabel';
 
 /** Rule 1: the session id that coordinates this one, from the active run bound
@@ -135,6 +137,11 @@ export interface Coordination {
   readonly workingOn: string | null;
   /** The coordinator's display name, when the fleet carries it. */
   readonly coordinator: string | null;
+  /** The coordinator's session id — the header links to it (D-5545) — when the fleet carries it. */
+  readonly coordinatorId: string | null;
+  /** The coordinator's state in the row's own words (`working`, `idle`, `exited`, `archived`, `hibernated`),
+   *  or `null` when the fleet does not carry it. */
+  readonly coordinatorState: string | null;
   /** The card the session renders on — the coordinator's project for a
    *  coordinated child, which names "where from" when the coordinator itself is
    *  not on the fleet. */
@@ -152,7 +159,14 @@ export function coordinationOf(
   const cards = cardsOf([s]);
   const on = workingOn(s, cards);
   if (ctx.run === null && on === null) return null;
-  return { workingOn: on, coordinator: ctx.coordinator, card: cards.get(s.id) ?? boardHome(s), run: runForSession(runs, s.id) };
+  const pid = parentIdOf(s, runs);
+  const parent = pid === null ? null : sessions.find((x) => x.id === pid) ?? null;
+  return {
+    workingOn: on, coordinator: ctx.coordinator,
+    coordinatorId: parent === null ? null : parent.id,
+    coordinatorState: parent === null ? null : hibernatedSince(parent) !== null ? 'hibernated' : STATE_WORD[parent.bucket],
+    card: cards.get(s.id) ?? boardHome(s), run: runForSession(runs, s.id),
+  };
 }
 
 /** The session header's line, in words (acceptance 2): `working on project-b ·
@@ -167,8 +181,9 @@ export function coordinationLine(c: Coordination): { text: string; parts: readon
   if (from !== null) parts.push(`coordinated from ${from}`);
   if (c.run !== null) parts.push(programmeWave(c.run), `run #${c.run.id}`);
   const whose = c.workingOn === null ? 'this project’s' : `${c.workingOn}’s`;
+  // ONE sentence with the fleet row's (`runSentence`, D-5545): a review run "reviews one wave" in both places.
   const title = c.run === null
     ? `this workspace works on ${whose} code and is shown under ${c.card}, its coordinator’s project; no open run names it`
-    : `this workspace ${c.run.kind === 'review' ? 'reviews' : 'does'} one wave of ${c.run.programTitle !== '' ? c.run.programTitle : c.run.program} on ${whose} code for ${c.coordinator ?? `a coordinator in ${c.card}`}; it is stopped or reclaimed when the wave is done`;
+    : runSentence(c.run, c.coordinator ?? `a coordinator in ${c.card}`, true, whose);
   return { text: parts.join(' · '), parts, title };
 }

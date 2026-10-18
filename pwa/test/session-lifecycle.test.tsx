@@ -12,6 +12,7 @@ import { fleetSession } from './fleetFixture';
 import { BUCKET_ORDER, RANK, sortFleet } from '../src/fleet/sortFleet';
 import { lifecycleQualifier } from '../src/fleet/lifecycleWords';
 import { SessionLine } from '../src/fleet/SessionLine';
+import { markers, sessionFacts } from '../src/fleet/sessionFacts';
 import { SessionActionsSheet } from '../src/fleet/SessionActionsSheet';
 import { SessionScreen } from '../src/screens/SessionScreen';
 import { createSessionStore, type SessionStore } from '../src/stores/session';
@@ -199,7 +200,7 @@ describe('the row says which kind of dead it is', () => {
     line(s({ lifecycle: 'unclaimed' }));
     const cell = document.querySelector('.sess-lifecycle');
     expect(cell).not.toBeNull();
-    expect(cell?.getAttribute('data-lifecycle')).toBe('unclaimed');
+    expect(cell?.getAttribute('data-marker')).toBe('lifecycle'); // D-5545: the row's one marker
     expect(cell?.textContent).toBe('unclaimed — a live pane with no claim');
     expect(cell?.textContent).not.toContain('nothing is watching');
   });
@@ -303,14 +304,18 @@ describe('the row says which kind of dead it is', () => {
   // §2.4: the refusal's DURABLE channel is a registry field, not the notice
   // (M9 — a notice raised with no socket open is gone). Kills rendering it as
   // a toast, and kills a cell that clears itself on the next fleet tick.
-  it('a blocked swap states its reason on the row, and keeps stating it', () => {
+  // D-5545: the row says `swap blocked` (its one marker) with the reason in the title, every render; the header's
+  // details state it in full (`markers`, `session-facts.test.tsx`).
+  it('a blocked swap says so on the row with its reason in the title, and keeps saying it', () => {
     const reason = 'no transcript found for uuid b7001948';
     const blocked = s({ swapBlocked: { at: Date.now() - 5 * MIN, reason } });
     const { rerender } = render(<SessionLine session={blocked} onOpen={() => {}} onActions={() => {}} />);
     expect(document.querySelector('.sess-swapblocked')?.getAttribute('title')).toBe(reason);
-    expect(screen.getByText(`swap blocked — ${reason}`)).toBeInTheDocument();
+    expect(screen.getByText('swap blocked')).toBeInTheDocument();
     rerender(<SessionLine session={blocked} onOpen={() => {}} onActions={() => {}} />);
-    expect(screen.getByText(`swap blocked — ${reason}`)).toBeInTheDocument();
+    expect(screen.getByText('swap blocked')).toBeInTheDocument();
+    expect(markers(sessionFacts({ session: blocked, now: Date.now() })).find((m) => m.key === 'swap-blocked')?.text)
+      .toBe(`swap blocked — ${reason}`);
   });
 
   it('says nothing about swaps when none was refused', () => {

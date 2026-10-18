@@ -168,8 +168,7 @@ describe('FleetScreen', () => {
     // account label also appears once in the accounts strip, so allow multiples.
     expect(screen.getByText('OpenClawHetzner')).toBeInTheDocument();
     expect(screen.getByText('mekwarlive')).toBeInTheDocument();
-    expect(screen.getAllByText('team·max').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('team·alt').length).toBeGreaterThan(0);
+    // D-5545: the account lane left the card (a header fact now).
 
     // Status is dot + word, never dot alone. SessionLine (unlike the SessionCard
     // it replaces) carries no relative timestamp — that's cut, not moved.
@@ -248,7 +247,8 @@ describe('FleetScreen', () => {
       sessions: [session({ subagents: [{ name: 'reviewer', startedAt: 1 }] })],
     });
 
-    expect(screen.getByLabelText('1 subagent')).toHaveTextContent('⑂ 1');
+    // D-5545: the subagent disclosure is a header fact; the card is a glance.
+    expect(screen.queryByLabelText('1 subagent')).toBeNull();
   });
 
   it('shows the muted ask summary line under a waiting session', () => {
@@ -259,7 +259,8 @@ describe('FleetScreen', () => {
       sessions: [session({ hookState: 'waiting', askSummary: 'Deploy now?' })],
     });
 
-    expect(screen.getByText('Deploy now?')).toBeInTheDocument();
+    // D-5545: the question is the header's; the card's marker says `needs you` on an attention row.
+    expect(screen.queryByText('Deploy now?')).toBeNull();
   });
 
   it("shows a persistent offline banner when conn is 'down', keeping last-known cards", () => {
@@ -2174,8 +2175,9 @@ describe('a chip never names rows that are not on the screen', () => {
 
     // No fold expanded, and yet:
     expect(screen.getByText('merged')).toBeInTheDocument();
-    expect(screen.getByText('#157')).toBeInTheDocument();
-    expect(screen.getByText('1.2 GB')).toBeInTheDocument();
+    expect(screen.getByText('PR #157')).toBeInTheDocument(); // D-5545: the row's one context fact
+    // D-5545: the reclaimable size is a header fact; the row's one context fact is its PR.
+    expect(screen.queryByText('1.2 GB')).toBeNull();
     expect(screen.getByRole('img', { name: 'merged, ready to clean up' })).toBeInTheDocument();
   });
 
@@ -2530,9 +2532,9 @@ describe('the programme tree on the fleet screen', () => {
     // …and the WORKING card (beta) does not: its own row is where that wave is.
     const beta = cards.find((c) => c.querySelector('.proj-card-name')?.textContent === 'beta');
     expect(beta!.querySelector('.proj-abroad')).toBeNull();
-    // And beta's own row carries the orphan marker (Task 6), because the
-    // coordinator is on alpha's card.
-    expect(beta!.querySelector('.proj-crossing')?.textContent).toContain('home alpha');
+    // D-5545: no second line under beta's row any more — the orphan marker rides the row, and only for a
+    // coordinator the frame has measured (the home clause is in its title; see the case below).
+    expect(beta!.querySelector('.proj-crossing')).toBeNull();
     // …and a card that is neither the home nor the work says nothing at all.
     const gamma = cards.find((c) => c.querySelector('.proj-card-name')?.textContent === 'gamma');
     expect(gamma, 'no card for gamma').toBeTruthy();
@@ -2591,8 +2593,8 @@ describe('the programme tree on the fleet screen', () => {
     });
     const cards = [...document.querySelectorAll('.proj-card')];
     const beta = cards.find((c) => c.querySelector('.proj-card-name')?.textContent === 'beta')!;
-    const marker = beta.querySelector('.proj-crossing')!;
-    expect(marker.getAttribute('data-presence')).toBe('dead');
+    // D-5545: the marker rides the row (`data-marker`), no longer a `.proj-crossing` line under it.
+    const marker = beta.querySelector('[data-marker="coordinator-gone"]')!;
     expect(marker.getAttribute('title')).toContain('reclaim');
     // …and in the TEXT, which is the half a phone can read (final fix round):
     // the wiring case owns this too, because `data-presence` reaching the

@@ -107,8 +107,9 @@ const CENSUS: readonly Row[] = [
   { source: 'dead-compare', file: 'pwa/src/fleet/SessionActionsSheet.tsx', hits: 6, stances: ['consults', 'true-of-pane'],
     why: 'the narrow-spawn note and Forget on a dead row are hidden on a sleeper (`hibernatedSince`), which offers Wake '
       + 'session (ccd forget refuses it, D-5423); the quota, narrow and wrapper notes speak of a live pane only' },
-  { source: 'dead-compare', file: 'pwa/src/fleet/SessionLine.tsx', hits: 1, stances: ['consults'],
-    why: 'a dead row\'s line; a sleeper (`hibernatedSince`) reads `hibernated · 6h` with a calm dot and no stop stamp' },
+  { source: 'dead-compare', file: 'pwa/src/fleet/sessionFacts.ts', hits: 1, stances: ['consults'],
+    why: 'the card\'s and the header\'s facts (D-5545) for a dead row; a sleeper (`hibernatedSince`) reads '
+      + '`hibernated · 6h` with a calm dot and no stop stamp' },
   { source: 'dead-compare', file: 'pwa/src/screens/SessionScreen.tsx', hits: 2, stances: ['consults'],
     why: 'a dead screen is read-only; a sleeper (`useWakeOnOpen`) is woken when shown, reads "Waking…" with Wake, and '
       + 'keeps the composer shut until its row is alive; the dead banner\'s Restart is for a dead row with no marker' },
@@ -117,13 +118,13 @@ const CENSUS: readonly Row[] = [
       + '"coordinator gone"; the reclaim door those point at refuses a sleeper too (`claimant-alive`)' },
   { source: 'dead-lifecycle', file: 'pwa/src/fleet/coordWords.ts', hits: 1, stances: ['consults'],
     why: 'the same `coordPresence` rung, reached only after the `hibernated` answer' },
-  { source: 'dead-compare', file: 'pwa/src/fleet/orphanWords.ts', hits: 2, stances: ['consults'],
-    why: 'the orphan note reads `coordPresence`, and says `coordinator hibernated` for a sleeper, never "coordinator gone"' },
+  { source: 'dead-compare', file: 'pwa/src/fleet/orphanWords.ts', hits: 1, stances: ['consults'],
+    why: 'the orphan marker reads `coordPresence`, and says `coordinator hibernated` for a sleeper, never "coordinator gone"' },
   { source: 'dead-compare', file: 'pwa/src/screens/RunRow.tsx', hits: 1, stances: ['consults'], via: 'pwa/src/fleet/coordWords.ts',
     why: 'the Resume button reads `coordPresence`, which answers a sleeper `hibernated`, never `dead`' },
-  { source: 'stopped-compare', file: 'pwa/src/fleet/lifecycleWords.ts', hits: 1, stances: ['consults'], via: 'pwa/src/fleet/SessionMeta.tsx',
-    why: '`lifecycleQualifier` words a stopped row "stopped by …"; `SessionMeta`, its one reader, skips it on a sleeper '
-      + 'and reads `hibernated · 6h`' },
+  { source: 'stopped-compare', file: 'pwa/src/fleet/lifecycleWords.ts', hits: 1, stances: ['consults'], via: 'pwa/src/fleet/sessionFacts.ts',
+    why: '`lifecycleQualifier` words a stopped row "stopped by …"; `sessionFacts`, its one reader (D-5545), skips it '
+      + 'on a sleeper and reads `hibernated · 6h`' },
   { source: 'dead-compare', file: 'pwa/src/fleet/groupFleet.ts', hits: 2, stances: ['true-of-pane'],
     why: 'a dead row\'s rank on the card and the stranded count over live rows: a sleeper\'s pane is not running; '
       + '`inArchivedFold` keeps it at the top level' },

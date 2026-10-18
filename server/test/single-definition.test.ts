@@ -6267,7 +6267,8 @@ describe("one 'tmux unreachable' sentence (design-system wave)", () => {
     // them at the word would satisfy the test above and lose the tooltip.
     for (const f of [
       'pwa/src/fleet/SessionActionsSheet.tsx', 'pwa/src/fleet/ArchiveSheet.tsx',
-      'pwa/src/fleet/SessionMeta.tsx', 'pwa/src/screens/SessionScreen.tsx',
+      // D-5545: the fleet row's and the header's facts are decided in `sessionFacts.ts` now, not `SessionMeta.tsx`.
+      'pwa/src/fleet/sessionFacts.ts', 'pwa/src/screens/SessionScreen.tsx',
       'pwa/src/session/SessionHeader.tsx', 'pwa/src/session/PrSheet.tsx',
     ]) {
       expect(readFileSync(path.join(ccrcRoot, f), 'utf8'), f)

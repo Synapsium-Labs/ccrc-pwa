@@ -3252,3 +3252,31 @@ button.proj-card-pool::before {
     transition: none;
   }
 }
+
+/* D-5545: THE CARD IS A GLANCE, and no fact on it is cut by an ellipsis. The
+   name and the programme are shortened by whole tokens in `sessionFacts.ts`
+   (`shortenByToken`), the context fact sits on a line of its own
+   (`.sess-meta--context`), and every cell that used to ellipsise wraps at a
+   space instead — never inside a token — so a fact is either whole or, in the
+   rare row that still does not fit, on two lines. The cross-project chip drops
+   under the name rather than squeezing it. The same cells in the session
+   header's details (`.chat-facts`, chat.css) wrap the same way. Layout only:
+   no colour declaration here, so the contrast gate's census is unchanged. */
+.sess-open { flex-wrap: wrap; row-gap: 2px; }
+.sess-label { white-space: normal; text-overflow: clip; overflow: visible; }
+.sess-workson { max-width: 100%; }
+.sess-meta > * { min-width: 0; }
+.sess-meta > .sess-held,
+.sess-meta > .sess-context,
+.sess-meta > .sess-marker,
+.sess-held:has(> .sess-pw),
+.sess-child:has(> .sess-pw) {
+  flex: 0 1 auto;
+  min-width: 0;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+.sess-meta > .sess-marker { font-family: var(--family-mono); }
+.sess-meta .sess-pw { display: inline; }
+.sess-meta .sess-pw-prog { white-space: normal; overflow: visible; text-overflow: clip; }
