@@ -236,18 +236,24 @@ button.metachip:active {
    utility in `@layer utilities`. Unlayered, this rule beat it at every
    specificity, and it rested on that same primary ink besides, so the header
    caps never lifted. In `@layer components` the primitive's hover outranks
-   it, and the cap rests on the secondary ink, as a Door does, so the lift is
-   one tier, to the ink it rested on before. The stand-down below stays
-   unlayered: the hover is `enabled:`-gated, so nothing contests it. The
-   terminal's caps (`.term-keys .keycap`) stay unlayered on purpose: on the
-   well the primary ink would be dark glass on dark glass in the light theme,
-   so there the well's ink holds under the mouse (hover-states.test.ts). */
+   it. Where a pointer can hover, the cap rests on the secondary ink, as a
+   Door does, so the lift is one tier, to the ink it rested on before. On
+   touch the hover never fires, so there the cap keeps the primary ink it
+   always had and a phone renders exactly as before. The stand-down below
+   stays unlayered: the hover is `enabled:`-gated, so nothing contests it.
+   The terminal's caps (`.term-keys .keycap`) stay unlayered on purpose: on
+   the well the primary ink would be dark glass on dark glass in the light
+   theme, so there the well's ink holds under the mouse
+   (hover-states.test.ts). */
 @layer components {
   .chat-head .keycap {
     flex: none;
-    color: var(--ink-secondary);
+    color: var(--ink-primary);
     background: var(--bg-raised);
     border-color: var(--edge-strong);
+  }
+  @media (hover: hover) {
+    .chat-head .keycap { color: var(--ink-secondary); }
   }
 }
 .chat-head .keycap:disabled {

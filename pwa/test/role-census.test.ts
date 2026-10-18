@@ -285,8 +285,12 @@ const SCALE_SIZE =
   /(?<=^|[\s'"`:])((?:min-)?h-(?:tap|\d+(?:\.\d+)?|\[[^\]\s]+\])|text-(?:2xs|xs|sm|base|md|lg|xl|2xl|3xl|input|\[\d+(?:\.\d+)?(?:px|rem|em)\]))(?=$|[\s'"`])/g;
 const ROLE_UTILITY = /(?<=^|[\s'"`:])(text-(?:ui|meta|prose|title|section)|(?:min-)?h-row|p[xy]?-card)(?=$|[\s'"`])/g;
 /** The same two scans in a stylesheet's spelling. `min-height: 52px` is
- *  normalised to `min-height:52px` so an allowlist entry has one spelling. */
+ *  normalised to `min-height:52px` so an allowlist entry has one spelling.
+ *  A literal size inside `font:` or `font-size:` is a scale size too, held to
+ *  the standard the TSX scan holds `text-[15px]` to: it comes back as
+ *  `font-size:15px`, whichever of the two properties spelled it. */
 const CSS_SCALE_SIZE = /var\(--fs-(?:2xs|xs|sm|base|md|lg|xl|2xl|3xl|input)\)|min-height:\s*\d+(?:\.\d+)?px/g;
+const CSS_LITERAL_FONT = /\bfont(?:-size)?\s*:[^;{}]*?(?<![\w.-])(\d+(?:\.\d+)?(?:px|rem|em))\b/g;
 const CSS_ROLE = /var\(--(?:fs-(?:ui|meta|prose|page|section)|row-h|pad-card)\)/g;
 const stripCssComments = (s: string): string => s.replace(/\/\*[\s\S]*?\*\//g, '');
 
@@ -300,7 +304,8 @@ const scaleSizes = (file: string): Set<string> => {
   const sheet = sheetOf(file);
   const tsx = sourceOf(file).match(SCALE_SIZE) ?? [];
   const css = sheet === undefined ? [] : (cssOf(sheet).match(CSS_SCALE_SIZE) ?? []).map((m) => m.replace(/:\s+/, ':'));
-  return new Set([...tsx, ...css]);
+  const literal = sheet === undefined ? [] : [...cssOf(sheet).matchAll(CSS_LITERAL_FONT)].map((m) => `font-size:${m[1]}`);
+  return new Set([...tsx, ...css, ...literal]);
 };
 const roleUtilities = (file: string): Set<string> => {
   const sheet = sheetOf(file);
