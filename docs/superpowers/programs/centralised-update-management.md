@@ -4504,6 +4504,14 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       --prerelease`, by hand.
     - Left: docs part 2 (after the scrub, run 561, lands), and the exit criteria measured live, with the
       operator's rehearsal tap. Then review 429's abandon is the operator's, and run 611 closes the programme.
+  - **23:25 UTC: the rehearsal's baseline, read-only, and the ask.**
+    - Both boxes: `~/ccrc -> ~/ccrc-versions/v0.0.294`; kept v0.0.294 (pointed-at, running), v0.0.291
+      (previous), v0.0.287, v0.0.285 and v0.0.281 (newest 3), all `complete`. Both reports `done` at v0.0.294.
+    - `ccrc rollout --check`: target v0.0.299 (the new stable); fleet and server v0.0.294 `behind`, rc 1.
+    - Asked of the operator, in a quiet window, fleet first each time: tap both nodes to v0.0.299 (the first
+      move onto stable, which also starts the delegation broker's soak); then on each node tap Rollback and then
+      forward; then set auto as wanted (the criteria say back on). I read `ccrc versions`, `update.json`,
+      `ccrc rollout --check` and the move's rows before and after each one.
 
 ## Carried constraints
 
