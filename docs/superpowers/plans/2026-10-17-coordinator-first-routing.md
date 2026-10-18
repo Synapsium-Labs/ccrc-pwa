@@ -430,16 +430,104 @@ A server-lane task changes nothing on the fleet box.
 
 **Spec:** §6.9. **Who:** a session, on a throwaway rig only: a fixture HOME with its own Claude Code config directory, on a development machine or a non-fleet Linux host, never the fleet box, never a live `$HOME`.
 
-- [ ] Reproduce a safety-check prompt inside a foreground subagent of a bypass-mode session, on each Claude Code version the fleet runs (read the set from `GET /api/fleet` versions, read-only). The investigation's shapes are the starting point (a subagent running a cleanup script with `rm -rf "$X"` outside its cwd).
-- [ ] With a PermissionRequest hook that sleeps 20 s and prints the allow: record that the menu is painted while the hook waits, that the allow dismisses it, that the transcript records the hook as the source, and that a pane answer during the wait wins and ends the hook. Repeat with the deny and a message, and record what the subagent receives.
-- [ ] With a `--settings` file carrying `permissions.deny: ["Bash(ccd ws-rm:*)"]` on a bypass-mode session: record that the denied command is refused even when the hook prints an allow (Task 15's premise). Then record whether a leading-wildcard form (`Bash(*/ccd ws-rm:*)`) matches `/some/path/ccd ws-rm x`; Task 15 adds the path-qualified forms only if it does. Record also whether `Bash(ccd ws-rm:*)` matches `cd x && ccd ws-rm y` and `FOO=1 ccd ws-rm y`. Neither result changes invariant 10, which rests on Task 14's PreToolUse deny; they say only how much the deny file adds.
-- [ ] **cwd trust (spec §6.5, §6.9).** On the main thread and in a subagent: run `cd <a sibling directory>` in one Bash call, then trigger a PermissionRequest with a relative target in a **later** Bash call, and record whether the hook input's `cwd` equals the shell's actual working directory (`pwd` printed by that later call). A version passes only if it holds on both; Task 14 lists the passing versions in `APPROVAL_CWD_TRUSTED`. On a version that fails or is not captured, relative targets escalate (the server classifies with `cwd = null`); it is not a stop-rule failure.
-- [ ] Record the exact shape of a session's Claude scratch directory on each version (Task 12's `scratch` root is derived only in a recorded shape).
-- [ ] **The children's shell (D-5360, round 7).** For a child spawned by Task 15's spawn line, record that its Bash tool runs bash (`echo "${BASH_VERSION:-none} ${ZSH_VERSION:-none}"` prints a bash version and `none`) on each version, on the main thread and in a subagent. Record also that the fleet's shell snapshot (Claude Code's `shell-snapshots/snapshot-*.sh` under the child's config directory) defines no alias or function for `rm`, `mkdir`, `touch`, `cd`, `true`, `:` or `mktemp` (Task 12's spawn-side accepted limit). A version where the pin does not hold is left out of `APPROVAL_HOOK_VERSIONS`.
-- [ ] **The children's home (D-5360, round 9).** For a child spawned by Task 15's spawn line, record on each version, on the main thread and in a subagent, that its Bash tool's `$HOME` (`printf '%s\n' "$HOME"`) equals the server's `home` (the classifier resolves `~` and `~/` through `ctx.home`, while bash uses the child's own `$HOME`; the fleet's per-session home affinity must not make them differ), and that `POSIXLY_CORRECT` is unset in it.
-- [ ] Record whether a SubagentStart hook's `additionalContext` reaches the subagent's context (Task 1's follow-up line).
-- [ ] Record each run with the capture recorder that produced `server/test/fixtures/delegation/` (its format), neutral ids and rig paths, as `server/test/fixtures/delegation/<version>/permission-main.json` and `permission-subagent.json`, for Task 14's PR to commit.
-- [ ] **Stop rule (spec §6.9):** a version that fails any check is left out of `APPROVAL_HOOK_VERSIONS` (the cwd-trust check alone instead leaves it out of `APPROVAL_CWD_TRUSTED`). Report the per-version table to the coordinator; if no version passes the subagent check, Task 16 ships for main-thread prompts only and this plan is amended to say so.
+- [x] Reproduce a safety-check prompt inside a foreground subagent of a bypass-mode session, on each Claude Code version the fleet runs (read the set from `GET /api/fleet` versions, read-only). The investigation's shapes are the starting point (a subagent running a cleanup script with `rm -rf "$X"` outside its cwd). **Done 2026-10-18** (record below).
+- [x] With a PermissionRequest hook that sleeps 20 s and prints the allow: record that the menu is painted while the hook waits, that the allow dismisses it, that the transcript records the hook as the source, and that a pane answer during the wait wins and ends the hook. Repeat with the deny and a message, and record what the subagent receives. **Done 2026-10-18** (record below).
+- [x] With a `--settings` file carrying `permissions.deny: ["Bash(ccd ws-rm:*)"]` on a bypass-mode session: record that the denied command is refused even when the hook prints an allow (Task 15's premise). Then record whether a leading-wildcard form (`Bash(*/ccd ws-rm:*)`) matches `/some/path/ccd ws-rm x`; Task 15 adds the path-qualified forms only if it does. Record also whether `Bash(ccd ws-rm:*)` matches `cd x && ccd ws-rm y` and `FOO=1 ccd ws-rm y`. Neither result changes invariant 10, which rests on Task 14's PreToolUse deny; they say only how much the deny file adds. **Done 2026-10-18** (record below).
+- [x] **cwd trust (spec §6.5, §6.9).** On the main thread and in a subagent: run `cd <a sibling directory>` in one Bash call, then trigger a PermissionRequest with a relative target in a **later** Bash call, and record whether the hook input's `cwd` equals the shell's actual working directory (`pwd` printed by that later call). A version passes only if it holds on both; Task 14 lists the passing versions in `APPROVAL_CWD_TRUSTED`. On a version that fails or is not captured, relative targets escalate (the server classifies with `cwd = null`); it is not a stop-rule failure. **Done 2026-10-18** (record below).
+- [x] Record the exact shape of a session's Claude scratch directory on each version (Task 12's `scratch` root is derived only in a recorded shape). **Done 2026-10-18** (record below).
+- [x] **The children's shell (D-5360, round 7).** For a child spawned by Task 15's spawn line, record that its Bash tool runs bash (`echo "${BASH_VERSION:-none} ${ZSH_VERSION:-none}"` prints a bash version and `none`) on each version, on the main thread and in a subagent. Record also that the fleet's shell snapshot (Claude Code's `shell-snapshots/snapshot-*.sh` under the child's config directory) defines no alias or function for `rm`, `mkdir`, `touch`, `cd`, `true`, `:` or `mktemp` (Task 12's spawn-side accepted limit). A version where the pin does not hold is left out of `APPROVAL_HOOK_VERSIONS`. **Done 2026-10-18** (record below).
+- [x] **The children's home (D-5360, round 9).** For a child spawned by Task 15's spawn line, record on each version, on the main thread and in a subagent, that its Bash tool's `$HOME` (`printf '%s\n' "$HOME"`) equals the server's `home` (the classifier resolves `~` and `~/` through `ctx.home`, while bash uses the child's own `$HOME`; the fleet's per-session home affinity must not make them differ), and that `POSIXLY_CORRECT` is unset in it. **Done 2026-10-18** (record below).
+- [x] Record whether a SubagentStart hook's `additionalContext` reaches the subagent's context (Task 1's follow-up line). **Done 2026-10-18** (record below).
+- [x] Record each run with the capture recorder that produced `server/test/fixtures/delegation/` (its format), neutral ids and rig paths, as `server/test/fixtures/delegation/<version>/permission-main.json` and `permission-subagent.json`, for Task 14's PR to commit. **Done 2026-10-18** (record below).
+- [x] **Stop rule (spec §6.9):** a version that fails any check is left out of `APPROVAL_HOOK_VERSIONS` (the cwd-trust check alone instead leaves it out of `APPROVAL_CWD_TRUSTED`). Report the per-version table to the coordinator; if no version passes the subagent check, Task 16 ships for main-thread prompts only and this plan is amended to say so. **Done 2026-10-18** (record below).
+
+#### Task 13 record: rig verification, per version (2026-10-18)
+
+**Rig.** One throwaway fixture directory per version (`<rig>/v<version>/`, holding `work/` for the project and sibling targets, `home/`, `bin/` with stub `ccd` and `ccrc` that only log argv, and `hooks/`), one shared rig config directory (`<rig>/cfg`), and a private tmux server per version. It ran on a macOS development machine, never the fleet box. Each child was spawned the Task 15 way: `CLAUDE_CODE_SHELL=/bin/bash`, `TMPDIR=<rig>/home/.cc-tmp/<leaf>`, `--dangerously-skip-permissions`, and ONE `--settings` holding `CHILD_DENY_RULES` (bare heads, `CHILD_DENY_PATH_QUALIFIED=0`) merged with the rig's capture hooks (D-5391). The rig drove a live model (haiku), not the recorder's mock API. Every PermissionRequest hook logged its start, its end and any TERM, INT or HUP it received (traps). Versions: 2.1.296, 2.1.299, 2.1.300, 2.1.301, 2.1.302.
+
+**Departures from the task text** (by slug; the coordinator allocates numbers):
+- `rig-real-home-auth-fallback`: under a fixture `HOME` the macOS keychain search list drops the login keychain, so every version showed `Not logged in`. The sessions ran with the operator's real `HOME`; the cwd, `TMPDIR` and every `rm` target stayed inside the fixture. Check 7 therefore proves only that Claude Code passes the start `HOME` through unchanged, not equality with a distinct per-session home. On 2.1.296 one extra run used the fixture `HOME`, driving the main thread through `!` bash mode: the Bash tool's `$HOME` was `<rig>/home`.
+- `rig-foreground-subagent-env`: on every version measured, an Agent call from a terminal session runs in the BACKGROUND, and the Agent tool offers no `run_in_background: false`. A foreground subagent needed `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`, which Task 15's spawn does not set. The checks were run on both kinds; **the background subagent is the one a fleet child gets**.
+- `rig-301-default-mode`: on 2.1.301 no shape tried raised a safety-check prompt or a PermissionRequest in bypass mode, on the main thread or in either kind of subagent. Checks 2 and 4 on 2.1.301 were therefore run in `--permission-mode default`.
+- `rig-shell-pin-not-isolated`: the rig also set `SHELL=/bin/bash`, so check 6 does not show the pin overriding a zsh login shell.
+
+**What triggers the safety check (check 1).** The investigation's literal shape (`X=<abs sibling>; rm -rf "$X"`) did NOT prompt on any version, on the main thread or in a subagent. A variable assigned a literal in the same command does not count as possibly empty. Shapes that did prompt (pane line `Dangerous rm operation on …`, bypass-immune):
+- 2.1.296: `X=$(mktemp -d <rig>/work/sibling/tmp.XXXXXX) && rm -rf "$X"/*`.
+- 2.1.299: `rm -rf "$TMPDIR/tmp"`, i.e. `$VAR/<system-dir name>`.
+- 2.1.300: `rm -rf "$(cd ../sib/build && pwd)"`, i.e. a target that is one command substitution.
+- 2.1.302: `cd ../sib/c6 && X=$(pwd) && cd .. && rm -rf "$X"`, i.e. a variable derived from `pwd`.
+- 2.1.301: none of these. The `possibly-empty variable` arm needs a variable that is really unset at run time, which the rig did not risk.
+
+##### Per-version table
+
+`pass` / `FAIL` = measured; `n.c.` = not captured; `fg` / `bg` = foreground / background subagent.
+
+| Check | 2.1.296 | 2.1.299 | 2.1.300 | 2.1.301 | 2.1.302 |
+|---|---|---|---|---|---|
+| 1. Safety-check prompt inside a bypass session's subagent | pass (fg and bg) | pass (fg; bg raised the PermissionRequest) | pass (fg and bg) | **n.c.** | pass (bg and fg) |
+| 2a. Menu painted while the hook waits: main | pass | pass | pass | pass | pass |
+| 2a. … fg subagent | pass | pass | pass | pass | pass |
+| 2a. … bg subagent (the fleet's spawn) | **FAIL** | **FAIL** ¹ | **FAIL** | **FAIL** | **FAIL** |
+| 2b. Hook allow dismisses the menu / resolves a subagent's prompt | pass | pass | pass | pass ² | pass |
+| 2c. Transcript records the hook as the source | pass | pass | pass | pass | pass |
+| 2d. A pane answer during the wait wins (main, fg) | pass | pass | pass | pass | pass |
+| 2e. A pane answer ends the hook (main, fg) | **FAIL** | **FAIL** | **FAIL** ³ | **FAIL** | **FAIL** |
+| 2f. Deny + message: the subagent gets it verbatim (`is_error: true`) | pass | pass | pass | pass | pass |
+| 3a. `Bash(ccd ws-rm:*)` refuses in bypass even when the hook allows | pass | pass | pass | pass | pass |
+| 3b. `Bash(*/ccd ws-rm:*)` matches `<abs>/ccd ws-rm x` | no | no | no | no ⁴ | no ⁵ |
+| 3c. Bare rule matches `cd x && ccd ws-rm y` / `FOO=1 ccd ws-rm y` / `<abs>/ccd ws-rm x` | yes / yes / no | yes / yes / no | yes / yes / no | yes / yes / no | yes / yes / no |
+| 4. cwd trust: hook `cwd` = later call's `pwd`, main and subagent | pass ⁶ | pass ⁶ | pass ⁶ | pass ⁶ ² | pass ⁶ |
+| 5. Scratch-directory shape | recorded | recorded | recorded | recorded | recorded |
+| 6. Bash tool runs bash (`3.2.57(1)-release none`), main and subagent; snapshot defines nothing for the listed names | pass | pass | pass | pass | pass |
+| 7. `$HOME` = start `HOME`; `POSIXLY_CORRECT` unset (main and subagent) | pass ⁷ | pass ⁷ | pass ⁷ | pass ⁷ | pass ⁷ |
+| 8. SubagentStart `additionalContext` reaches the subagent | pass | pass | pass | pass | pass |
+| 9. Fixtures in the recorder's format | ready | ready | ready | **re-neutralise** ⁸ | **scan not clean** ⁸ |
+| (not a listed check) Unattended auto-deny countdown on the safety-check menu (main, fg) | seen | seen | seen; measured 120 s | not observed ⁹ | seen |
+| **→ `APPROVAL_HOOK_VERSIONS`** | **out** (2a, 2e) | **out** (2a, 2e) | **out** (2a, 2e) | **out** (1 n.c., 2a, 2e) | **out** (2a, 2e) |
+| **→ `APPROVAL_CWD_TRUSTED`** | out ¹⁰ | out ¹⁰ | out ¹⁰ | out (not captured) | out ¹⁰ |
+
+1. On 2.1.299 two pane frames fell inside the 20 s wait (at about 5 s and about 19 s), both on the background subagent, and neither showed a menu. That matches the other four versions; 2.1.299's own run scored 2a on the foreground subagent alone.
+2. On 2.1.301 this was measured in default mode (`rig-301-default-mode`).
+3. On 2.1.300 a main-thread pane **No** sent the hook SIGTERM 0.6 s after the keypress, the only instance on any version. A foreground-subagent pane No on the same version left the hook running: it printed its allow 15.7 s later, and that allow was ignored. On every other version and surface the hook got no signal, ran its full 20 s, and printed a decision that Claude Code ignored.
+4. 2.1.301 warns at startup that `Bash(*/ccd ws-rm:*)` `mixes * with the trailing :* prefix syntax … will likely never match`. The spelling `Bash(*/ccd ws-rm*)` did deny `<abs>/ccd ws-rm x` there, but it also matches longer verbs.
+5. On 2.1.302 the spelling `Bash(*/ccd ws-rm *)` denied `<abs>/ccd ws-rm …` and `../<dir>/ccd ws-rm …`. It did not match bare `ccd ws-rm …`.
+6. The equality held in every capture. A `cd` out of the project is undone (`Shell cwd was reset to <proj>`), and a subagent's shell returns to its start cwd before every Bash call (in-project `cd`s included). Only the main thread's in-project `cd` (`cd sub`) persists, and there the hook `cwd` followed it (`<proj>/sub`). So the subagent case never shows the hook tracking a moved cwd; equality there comes from the reset.
+7. Measured against the real `HOME` only (`rig-real-home-auth-fallback`).
+8. 2.1.301: the ids were not neutralised. Raw agent ids (`a` + 16 hex, in `agent_id` and `agent_transcript_path`) remain in all four of its fixtures, 124 occurrences in all. `prompt_id` is raw in all four files (36 and 60 in `permission-main.json` and `permission-subagent.json`, 35 in `bypass-fg-rm.json`, 23 in `permission-subagent-fg.json`). The raw session id, with its `transcript_path` and `scratchpad_dir`, is in `permission-subagent.json` and `bypass-fg-rm.json`. `sanitize.mjs --scan` reports 2.1.301 clean only because its allowlist scan does not test for UUIDs or agent ids, so a clean scan is not proof of neutralisation here; Task 14 re-neutralises every id field on 2.1.301. 2.1.302: written by the rig's own builder in the recorder's output shape, not by `sanitize.mjs`. `sanitize.mjs --scan` reports 13 findings, all relative fragments of recorded commands (`../stubdir/ccd`, `"$X"/c5`); no absolute or private path remains. Across all five, the neutral tmp-root spelling differs (`/rig/private-tmp/claude-<uid>`, `/rig/tmp/claude-1000`, `/rig/tmp/claude-uid`, `/rig/tmp/claude-<uid>`, and no root at all on 2.1.301). On 2.1.302 the real home is spelled `/rig/fixhome`. All five versions' fixtures come from the live model, so the Stop and SubagentStop payloads' `last_assistant_message` fields hold real model prose (4 to 22 per fixture, 22 in 2.1.302's `permission-main.json`). The committed mock-API corpus has the same field, so the format is consistent, and a search found no host, account, address or private path in that prose; Task 14 still reviews or stubs it before committing (no transcript prose lands). Task 14's PR normalises all of this before it commits `server/test/fixtures/delegation/<version>/permission-{main,subagent}.json`.
+9. 2.1.301 raised no safety-check prompt, so its countdown could not be observed. Default-mode permission prompts showed none.
+10. The cwd check itself passed. The version is out only because `APPROVAL_CWD_TRUSTED` is a subset of `APPROVAL_HOOK_VERSIONS` (spec §6.9: it narrows only).
+
+##### Stop rule, applied (spec §6.9; this task's last checkbox)
+
+- **`APPROVAL_HOOK_VERSIONS = []`.** Every version fails two §6.9 criteria. First, "a pane answer wins **and ends the hook**": the answer wins, but the hook is not ended. Second, "the menu paints while the hook waits", in the background subagent every fleet child's subagent is. 2.1.301 is also not captured on check 1.
+- **`APPROVAL_CWD_TRUSTED = []`.** The cwd check passed on all five versions, but the list never admits a version `APPROVAL_HOOK_VERSIONS` leaves out. 2.1.301 is out of both anyway as not captured.
+- **The subagent check passes** on 2.1.296, 2.1.299, 2.1.300 and 2.1.302: the safety-check prompt reproduces in a bypass session's subagent, and a hook allow resolves it (subagent transcript `permissionDecision {decision: accept, source: hook}`). So the clause "Task 16 ships for main-thread prompts only" is **not** triggered. The record reports instead the stronger outcome the stop rule produces: with both lists empty, the server mints no approval request on any measured version (§6.3, step 1), and every child prompt goes to the operator as today.
+- **Task 15's path-qualified deny forms are NOT added** (`CHILD_DENY_PATH_QUALIFIED` stays 0). The leading wildcard `Bash(*/ccd ws-rm:*)` matched on no version, and no version passes. The bare rules still cover chained and env-prefixed forms on all five. A path-invoked `ccd` is covered only by Task 14's PreToolUse forbidden match (invariant 10, unchanged).
+
+**For the coordinator to decide** (none of these is a ruling of this record):
+1. Whether the two failing criteria are restated, and how:
+   - (a) "ends the hook": Task 14's hook would detect for itself that the prompt was resolved (it is never signalled and runs to `APPROVAL_HOOK_WAIT_S` otherwise), and an orphaned hook's late output is shown to be ignored. It was ignored on every version measured.
+   - (b) "menu paints while the hook waits", for background subagents: there the menu appears only after the hook returns without a decision, so the operator does not see the prompt during the wait.
+   - Without a restatement the permission half is inert on every measured version.
+2. **Unattended auto-deny, a conflict with the plan's timings** (`unattended-auto-deny-vs-window`). On 2.1.296, 2.1.299, 2.1.300 and 2.1.302, the safety-check menu on the main thread and in foreground subagents shows `Claude Code will automatically deny this request in ~1:5x, to avoid blocking progress on an unattended session`. On 2.1.300 a hook that slept 170 s saw the prompt auto-denied at about 120 s, with `permissionDecision {decision: reject, source: config, reasonType: safetyCheck}`; its later allow was ignored. A ruling later than about 2 min cannot resolve such a prompt, against the 180 s window (§5.5) and `APPROVAL_HOOK_WAIT_S = 540`. Background-subagent menus showed no countdown. The rig's tmux had focus events off, so the trigger may depend on focus reporting.
+
+##### Scratch-directory shape (for Task 12's `scratch` root)
+
+The same on all five versions:
+
+`<T>/claude-<uid>/<M>/<session_id>/scratchpad`, with a sibling `<T>/claude-<uid>/<M>/<session_id>/tasks/` (holding `<agent_id>.output`). The parts:
+- `<T>` is `$CLAUDE_CODE_TMPDIR` when set, else the literal `/tmp`. `TMPDIR` is **not** consulted: a child's `TMPDIR=~/.cc-tmp/<id>` leaf stayed unused. The binary reads `CLAUDE_CODE_TMPDIR` on 2.1.296 and 2.1.302 (read-only `strings`), and 2.1.300's run reports the same; it was not checked on 2.1.299 or 2.1.301, and no run set it. macOS reports the realpath `/private/tmp`; the committed Linux 2.1.285 fixtures show `/tmp/claude-1000/<M>/<sid>/tasks`.
+- `<uid>` is the numeric uid.
+- `<M>` is the session's original absolute cwd with every character outside `[A-Za-z0-9]` replaced by `-` (`/w/rig.d/v2.1.302/proj` becomes `-w-rig-d-v2-1-302-proj`).
+- `<session_id>` is the session's own id. A subagent uses its PARENT's directory, and `/clear` mints a new session id and so a new leaf (seen on 2.1.296).
+- Modes: `<M>`, `<session_id>/` and `scratchpad/` are 0700; `tasks/` is 0755.
+- On every version, every hook payload (PermissionRequest, SessionStart and SubagentStart included) carries this exact path as `scratchpad_dir`, and its `<session_id>` segment equals the payload's `session_id`.
+
+##### Platform caveats to re-check on a Linux host before any restatement ships
+- Bash 3.2.57 (macOS) rather than the fleet's bash 5.x. The snapshot was built from the real home's rc files, and a fleet home's rc files could add functions. Every version's snapshot started with `unalias -a`, had no aliases, and defined only `rg` (conditional), `find`, `grep` and `pkill`.
+- The hook process lifecycle (2e) and the auto-deny trigger were observed only on macOS under tmux.
+- BSD `mktemp -d` with no template ignores `TMPDIR`; GNU `mktemp` honours it.
+
 
 ### Task 14: approvals, fleet half — the hook's request, wait and verify; the key pin; the child's approval-surface and forbidden-verb deny (D-5297, D-5299)
 
