@@ -578,3 +578,31 @@ export function boundEmptyStore(box: HistoryBox, storeId: string, version = Date
   const got = createStore(box.home, { storeId, bind: { kind: 'rebuild', nowMs: version } });
   return { ...got, version };
 }
+
+// ── W1-B4 Task 5: the export's segments, read back ───────────────────────────────────────────────────────────────
+/** The bound store's export directory: `~/.ccrc/history/export/<store.id>` (spec §9.15 "Write"). */
+export function exportDirOf(box: HistoryBox): string {
+  return path.join(box.root, 'export', fs.readFileSync(path.join(box.root, 'store.id'), 'utf8').trim());
+}
+
+/** Every name in that directory, a writer's temp included, sorted; [] while the directory does not exist. */
+export function segmentsOf(box: HistoryBox): string[] {
+  const dir = exportDirOf(box);
+  return fs.existsSync(dir) ? fs.readdirSync(dir).sort() : [];
+}
+
+/** One table of a segment file, opened read-only, in write order (rowid: the shared `ord` of a row table, insertion
+ *  order for `blobs`). An integer comes back as a number when it is a safe integer and as a bigint otherwise (mtime_ns,
+ *  struct_rank_ns); a BLOB comes back as lowercase hex, so a sha256 compares with the store's `lower(hex(…))`. */
+export function segmentRows(file: string, table: string): Array<Record<string, unknown>> {
+  const db = new DatabaseSync(file, { readOnly: true });
+  try {
+    const st = db.prepare(`SELECT * FROM "${table}" ORDER BY rowid`);
+    st.setReadBigInts(true);
+    return (st.all() as Array<Record<string, unknown>>).map((r) => Object.fromEntries(Object.entries(r).map(([k, v]) => [k,
+      typeof v === 'bigint' && v >= BigInt(Number.MIN_SAFE_INTEGER) && v <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(v)
+        : v instanceof Uint8Array ? Buffer.from(v).toString('hex') : v])));
+  } finally {
+    db.close();
+  }
+}

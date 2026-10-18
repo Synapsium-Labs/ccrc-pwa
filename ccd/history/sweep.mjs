@@ -60,6 +60,8 @@ import {
   diffForeignKeys, ftsTablesHealthy, FTS_REBUILD_STEP, decideCounterResets, decideIntegrity,
   RECOVER_PHASES, RECOVER_JOURNAL_PHASES, formatRecoverCursor, parseRecoverCursor, orderJournalFiles, indexRecord, replayStep, nextUnmovedTicks, HEALTH_META,
   mergeJournalByTime, decideBind, restoreNameOk,
+  EXPORT_DIR, EXPORT_SEGMENT_MAX_BYTES, EXPORT_SEGMENT_FORMAT, segmentName, nextSegmentSeq, planSegment, CLAUDE_CODE_DEFAULT_RETENTION_DAYS,
+  shortestRetention, exportHorizonDays,
 } from './lib.mjs';
 import {
   MIGRATIONS, OWED_INDEX, StoreError, bump, clearDoneMarkers, closeWriter, createStore, dropPending, finishPending, getMeta,
@@ -69,6 +71,7 @@ import {
   pruneApply, pruneDryRun, writeBackup, removeStaleBackupTemps,
   integrityCheck, foreignKeyRows, ftsMeasure, dropFtsTables, getStep, setStep, setCounter, adoptStore,
   peekStoreId, stageRestore, commitRestore, abortRestore,
+  ensureSegmentDir, createSegment, segmentInserts, publishSegment, listSegments,
 } from './store.mjs';
 import { isBoundaryLine } from '../compact-card.mjs';
 import {
@@ -7436,6 +7439,462 @@ export async function recoverReindex(db, ctx, cur, budget) {
     return { cur, done: true, moved: true };
   }
   return { cur, done: false, moved: false };
+}
+
+// ── W1-B4 Task 5: the sole-copy export pass (spec §9.15 "What is due", "The pass"; D-4754 (history-sole-copy-export)) ──────
+// One pass writes ONE immutable segment, export/<store_id>/<seq>.<writer>.db, on the home filesystem and never under
+// db/, so a lost volume leaves it (D-4172). Four phases, one function each:
+//   1. exportSelect: the candidate rows, page by page, in four runs: the rows with no ts_ms first, then the young rows
+//      (at or past the ts cutoff) of each transcript lib's dueTranscriptKeys makes due, then the older rows by time
+//      through entries' partial index entries_unexported, then the unlinked sidecars whose blob nothing has exported
+//      (D-4761 (history-export-unlinked-sidecar-with-blob)). Within a run the order is (ts_ms, entry_id), or blob id for
+//      the sidecars; across the runs it is not one time order. Every candidate carries its transcript's files, the
+//      census's per-row set (D-4248), and lib's planSegment (L1), with its default
+//      reducer, the census's per-copy one (B2's D-4735 (history-export-due-per-copy); RD1's one clock), decides each page under
+//      what is left of the bound: EXPORT_SEGMENT_MAX_BYTES, or what the run's byte budget has left, each row counted at
+//      its new blob bytes and its metadata (D-4760 (history-export-segment-bound-estimated)).
+//   2. writeSegmentRows: through store.mjs, each row after what places it (its families, transcript, epochs and the
+//      files it names), then the entry, its variants, its boundary, its linked sidecars and its memberships by (path,
+//      dev, ino, line). The bytes of every blob it references that is not yet exported travel with it
+//      (D-4758 (history-export-row-carries-blob)), and a pruned blob as a stub with no bytes
+//      (D-4759 (history-export-pruned-row-stub)). No internal id is written.
+//   3. publishSegment (store.mjs): link(), never rename, so an existing name is never replaced.
+//   4. markExported: ONE transaction, after the link, sets exported_ms and exported_seg on the blobs and entries the
+//      segment holds. A crash before it leaves rows the next segment repeats, which replay absorbs (§9.15 "Mark").
+// The pass reads no segment and appends no journal record. It decides nothing: lib's planSegment and nextSegmentSeq do.
+// Its stops stay apart: 'written', 'nothing-due', 'no-horizon' (no rostered home to read a retention from), 'held'
+// (history-off, or the run's budget, before a row was published) and 'failed' (a throw, counted export_write_failed).
+
+/** Rows per page of the selection: a bound on one statement's work, not a rule. */
+const EXPORT_PAGE_ROWS = 256;
+/** meta: the last segment number this store published. The next is past it AND past every name on disk (§9.15 "Write"). */
+const EXPORT_SEQ_META = 'export_seq';
+/** meta: when a pass last failed with a CAUGHT error. exportStep's cadence counts it as a pass, so a pass that keeps
+ *  failing that way retries hourly, never every tick; doctor's last-pass clock (HEALTH_META.exportPassMs) does not, so
+ *  it still reads stale. A killed pass writes nothing here, and the next tick retries it. */
+const EXPORT_ATTEMPT_META = 'export_attempt_ms';
+/** Candidate rows with a time below the ts cutoff, oldest first within this run, keyset-paged by (ts_ms, entry_id): the
+ *  partial index entries_unexported orders them. `ts_ms < cutoff` (the shortest home's horizon) is only a prefilter;
+ *  planSegment decides each row by its holding files. It hides no due row held by a file on disk: no file's horizon is
+ *  shorter than the shortest home's (an unrostered file is mapped to that home), and a row is written no later than its
+ *  file's last write. */
+const EXPORT_DUE_ENTRIES_SQL = 'SELECT entry_id, ts_ms, transcript_pk FROM entries WHERE exported_ms IS NULL AND ts_ms IS NOT NULL '
+  + 'AND ts_ms < ? AND (ts_ms > ? OR (ts_ms = ? AND entry_id > ?)) ORDER BY ts_ms, entry_id LIMIT ?';
+/** Rows with no time: the prefilter cannot see them, so every one is a candidate; like every row, each is due by its
+ *  transcript's files (§9.15 "A row is due"). */
+const EXPORT_NULL_TS_ENTRIES_SQL = 'SELECT entry_id, ts_ms, transcript_pk FROM entries WHERE exported_ms IS NULL AND ts_ms IS NULL '
+  + 'AND entry_id > ? ORDER BY entry_id LIMIT ?';
+/** One transcript's rows at or past the prefilter's cutoff, oldest first, keyset-paged by (ts_ms, entry_id) through
+ *  entries_ts (transcript_pk, ts_ms). Asked only for a transcript lib's dueTranscriptKeys makes due now: under the
+ *  per-copy rule every row of it is due at that instant, however young (B2's D-4735 (history-export-due-per-copy)). Its rows
+ *  below the cutoff come through EXPORT_DUE_ENTRIES_SQL, never twice. */
+const EXPORT_TRANSCRIPT_ENTRIES_SQL = 'SELECT entry_id, ts_ms, transcript_pk FROM entries WHERE transcript_pk = ? AND exported_ms IS NULL '
+  + 'AND ts_ms >= ? AND (ts_ms > ? OR (ts_ms = ? AND entry_id > ?)) ORDER BY ts_ms, entry_id LIMIT ?';
+/** Blobs only an unlinked sidecar names, unexported and unpruned: schema v1 has no mark on a sidecar row, so the blob's
+ *  mark is the row's (D-4761 (history-export-unlinked-sidecar-with-blob)). */
+const EXPORT_UNLINKED_SQL = 'SELECT DISTINCT s.blob_id AS blob_id FROM sidecars s JOIN blobs b ON b.blob_id = s.blob_id '
+  + 'WHERE s.entry_id IS NULL AND b.exported_ms IS NULL AND b.z IS NOT NULL AND s.blob_id > ? ORDER BY s.blob_id LIMIT ?';
+
+const EXPORT_STMTS = new WeakMap();
+/** The export's prepared statements, one set per connection. Each names its columns. The ingest_files and entries reads
+ *  take integers as bigints: mtime_ns and struct_rank_ns pass 2^53, and node:sqlite throws a RangeError on such
+ *  a value read as a number. */
+function exportStmts(db) {
+  let s = EXPORT_STMTS.get(db);
+  if (s !== undefined) return s;
+  const big = (st) => { st.setReadBigInts(true); return st; };
+  s = {
+    dueEntries: db.prepare(EXPORT_DUE_ENTRIES_SQL),
+    nullTsEntries: db.prepare(EXPORT_NULL_TS_ENTRIES_SQL),
+    transcriptEntries: db.prepare(EXPORT_TRANSCRIPT_ENTRIES_SQL),
+    transcriptPks: db.prepare('SELECT transcript_pk FROM transcripts ORDER BY transcript_pk'),
+    unlinked: db.prepare(EXPORT_UNLINKED_SQL),
+    rowBlobs: db.prepare('SELECT blob_id FROM entries WHERE entry_id = ? UNION SELECT blob_id FROM entry_variants WHERE entry_id = ? '
+      + 'UNION SELECT kept_blob_id FROM boundaries WHERE entry_id = ? AND kept_blob_id IS NOT NULL'),
+    blobFact: db.prepare('SELECT length(z) AS zlen, z IS NULL AS pruned, exported_ms IS NOT NULL AS exported FROM blobs WHERE blob_id = ?'),
+    blobRow: db.prepare('SELECT sha256, codec, raw_len, z FROM blobs WHERE blob_id = ?'),
+    blobSha: db.prepare('SELECT sha256 FROM blobs WHERE blob_id = ?'),
+    sidecarsOf: db.prepare('SELECT name, blob_id, entry_id, first_seen_ms FROM sidecars WHERE transcript_pk = ? ORDER BY name, blob_id'),
+    unlinkedOf: db.prepare('SELECT transcript_pk, name, first_seen_ms FROM sidecars WHERE blob_id = ? AND entry_id IS NULL ORDER BY transcript_pk, name'),
+    entry: big(db.prepare(`SELECT uuid, transcript_pk, type, subtype, role, model, parent_uuid, ts_ms, request_id, api_block_index,
+        msg_id, source_tool_use_id, tool_name, is_compact_summary, provenance, prov_version, parse_state, struct_rank_ns,
+        struct_file_id, blob_id FROM entries WHERE entry_id = ?`)),
+    variants: db.prepare('SELECT blob_id, first_file_id, first_seen_ms, cause FROM entry_variants WHERE entry_id = ? ORDER BY blob_id'),
+    boundary: db.prepare(`SELECT transcript_pk, ord, trigger, head_uuid, anchor_uuid, tail_uuid, kept_blob_id, pre_tokens, post_tokens,
+        duration_ms FROM boundaries WHERE entry_id = ?`),
+    transcript: db.prepare('SELECT cc_session_uuid, harness, agent_id, parent_tool_use_id, workflow_run_id, agent_type FROM transcripts WHERE transcript_pk = ?'),
+    epochsOf: db.prepare(`SELECT s.ccrc_id, s.generation, s.project, s.first_seen_ms, e.seq, e.cause, e.declared_by, e.started_ms,
+        e.cwd, e.cwd_real, e.git_branch, e.confirmed_ms
+      FROM epochs e JOIN sessions s ON s.session_pk = e.session_pk WHERE e.cc_session_uuid = ? ORDER BY s.ccrc_id, s.generation, e.seq`),
+    file: big(db.prepare(`SELECT f.dev, f.ino, f.transcript_pk, f.size, f.mtime_ns, f.eof_ms,
+        (SELECT min(p.path) FROM file_paths p WHERE p.file_id = f.file_id) AS path FROM ingest_files f WHERE f.file_id = ?`)),
+    memberships: db.prepare('SELECT file_id, entry_id, line FROM memberships'),
+    markBlob: db.prepare('UPDATE blobs SET exported_ms = ?, exported_seg = ? WHERE blob_id = ? AND exported_ms IS NULL'),
+    markEntry: db.prepare('UPDATE entries SET exported_ms = ?, exported_seg = ? WHERE entry_id = ?'),
+  };
+  EXPORT_STMTS.set(db, s);
+  return s;
+}
+
+/** A bigint read whose value fits a number (an id, a size, a ms time), as a number; NULL stays null. */
+function segInt(v) {
+  return v === null || v === undefined ? null : Number(v);
+}
+
+/** Each rostered home's retention, the census's rule (§9.15): the last value retentionCensus kept in meta, or the
+ *  harness default for a home never measured (D-4210). Never read from settings.json
+ *  here: the census reads the files once, and the pass and doctor read the same numbers. */
+function exportHomeDays(db, homes) {
+  const days = {};
+  for (const h of homes) {
+    const raw = getMeta(db, `retention:${h}`);
+    days[h] = raw !== null && /^[1-9][0-9]*$/.test(raw) ? Number(raw) : CLAUDE_CODE_DEFAULT_RETENTION_DAYS;
+  }
+  return days;
+}
+
+/** export/<store_id>/ under the fixed root: lib's EXPORT_DIR is the one spelling, and historyPaths gains no key (B3,
+ *  merged, added none either: card.mjs spells `${historyPaths(home).root}/${CARD_DIR}` the same way). */
+function exportDirFor(P, storeId) {
+  return `${P.root}/${EXPORT_DIR}/${storeId}`;
+}
+
+/** Both export directories, 0700 whatever the umask, as §9.6's mode check wants every directory: store.mjs's
+ *  ensureSegmentDir (Task 4), the one directory maker, which also refuses a store id off its grammar. */
+function ensureExportDirs(P, storeId) {
+  ensureSegmentDir(`${P.root}/${EXPORT_DIR}`, storeId);
+}
+
+/** Phase 1 (§9.15 "What is due"): the candidates this segment takes, in order, decided page by page by lib's
+ *  planSegment under what is left of `boundBytes`. Answers the taken candidates, the blob ids whose bytes travel
+ *  (`carry`), the pruned blob ids that travel as stubs, the transcripts they name, each transcript's linked sidecars,
+ *  the cutoff, and `complete`: false when the bound or the run's budget stopped the selection with due rows left. */
+function exportSelect(db, ctx, nowMs, homeDays, boundBytes) {
+  const s = exportStmts(db);
+  const homes = Object.keys(homeDays);
+  // The shortest rostered home decides two things here and no due verdict: the ts prefilter's cutoff, and the home a
+  // file outside every rostered home is measured against (the census's mapping, B1: the early side). planSegment's
+  // per-copy default measures every other file against its own home (B2's D-4735 (history-export-due-per-copy)).
+  const minDays = shortestRetention(homeDays);
+  const minHome = homes.find((h) => homeDays[h] === minDays) ?? null;
+  const cutoffMs = nowMs - exportHorizonDays(minDays) * DAY_MS;
+  // A candidate's holding files are its TRANSCRIPT's, B1's census clock, not its own copies through memberships: the
+  // export and the census read one clock (D-4248).
+  const files = transcriptFiles(db, homes, homeDays);   // each file's home: the shortest-retention rostered home containing it (B2's D-4612)
+  const filesOf = (pk) => (files.get(pk) ?? []).map((f) => ({ home: f.home ?? minHome, mtimeMs: f.mtimeMs, present: f.present }));
+  // Rows per page: EXPORT_PAGE_ROWS, or an in-process test's ctx.deps.exportPageRows (D-4247).
+  const pageRows = Number.isSafeInteger(ctx.deps?.exportPageRows) && ctx.deps.exportPageRows > 0 ? ctx.deps.exportPageRows : EXPORT_PAGE_ROWS;
+  const sel = { taken: [], carry: new Set(), stubs: new Set(), transcripts: new Set(), linked: new Map(), cutoffMs, complete: true };
+  const facts = new Map();
+  const blobFact = (id) => {
+    let f = facts.get(id);
+    if (f === undefined) {
+      const r = s.blobFact.get(id);
+      f = { zBytes: Number(r.zlen ?? 0), pruned: Number(r.pruned) === 1, exported: Number(r.exported) === 1 };
+      facts.set(id, f);
+    }
+    return f;
+  };
+  // A blob this pass already carries is `exported` to every later page, so it is never counted or carried twice.
+  const blobsFor = (ids) => [...ids].sort((a, b) => a - b).map((id) => {
+    const f = blobFact(id);
+    return { key: String(id), zBytes: f.zBytes, exported: f.exported || sel.carry.has(id), pruned: f.pruned };
+  });
+  const linkedOf = (pk) => {
+    let m = sel.linked.get(pk);
+    if (m === undefined) {
+      m = new Map();
+      for (const r of s.sidecarsOf.all(pk)) {
+        if (r.entry_id === null) continue;
+        const list = m.get(Number(r.entry_id)) ?? [];
+        list.push({ name: r.name, blobId: Number(r.blob_id), firstSeenMs: Number(r.first_seen_ms) });
+        m.set(Number(r.entry_id), list);
+      }
+      sel.linked.set(pk, m);
+    }
+    return m;
+  };
+  const entryCand = (r) => {
+    const id = Number(r.entry_id);
+    const pk = Number(r.transcript_pk);
+    const ids = new Set(s.rowBlobs.all(id, id, id).map((b) => Number(b.blob_id)));
+    for (const sc of linkedOf(pk).get(id) ?? []) ids.add(sc.blobId);
+    return { kind: 'entry', id, pks: [pk], cand: { key: `e${id}`, tsMs: r.ts_ms === null ? null : Number(r.ts_ms), files: filesOf(pk), blobs: blobsFor(ids) } };
+  };
+  const sidecarCand = (r) => {
+    const id = Number(r.blob_id);
+    const pks = [...new Set(s.unlinkedOf.all(id).map((x) => Number(x.transcript_pk)))];
+    return { kind: 'sidecar', id, pks, cand: { key: `s${id}`, tsMs: null, files: pks.flatMap(filesOf), blobs: blobsFor([id]) } };
+  };
+  let left = boundBytes;
+  /** One page through planSegment. False when the bound or the run's budget ends the selection. Once an earlier page
+   *  took a row, this page's first row must fit what is left (takenBefore): only the pass's first row is taken
+   *  whatever its size. No reducer is passed: planSegment's default is the census's (B2's per-copy reducer), so the
+   *  pass and the census answer one clock (RD1). */
+  const decide = (cands) => {
+    if (cands.length > 0) {
+      const plan = planSegment({ nowMs, homeRetentionDays: homeDays, rows: cands.map((c) => c.cand), boundBytes: left, takenBefore: sel.taken.length > 0 });
+      const byKey = new Map(cands.map((c) => [c.cand.key, c]));
+      for (const k of plan.take) {
+        const c = byKey.get(k);
+        sel.taken.push(c);
+        for (const pk of c.pks) sel.transcripts.add(pk);
+      }
+      for (const k of plan.carry) sel.carry.add(Number(k));
+      for (const k of plan.stubs) sel.stubs.add(Number(k));
+      left -= plan.bytes;
+      if (plan.leftDue > 0 || left <= 0) { sel.complete = false; return false; }
+    }
+    if (!budgetLeft(ctx.budget)) { sel.complete = false; return false; }
+    return true;
+  };
+  for (let after = 0; ;) {
+    const page = s.nullTsEntries.all(after, pageRows);
+    if (page.length === 0) break;
+    after = Number(page[page.length - 1].entry_id);
+    if (!decide(page.map(entryCand))) return sel;
+  }
+  // The rows, at or past the cutoff, of every transcript the default rule makes due now: lib's dueTranscriptKeys, the
+  // census's own prefilter over the same file clock (RD1). Under the per-copy rule every row of one transcript falls
+  // due at one instant whatever its own time, so the ts prefilter below would pass over the young ones: a transcript
+  // with no holding file left on disk, and one whose young rows outlived the files that held them while an older file
+  // of it stays on disk (B2's D-4735 (history-export-due-per-copy)). planSegment still decides each row.
+  const transcripts = s.transcriptPks.all().map((t) => ({ key: Number(t.transcript_pk), files: filesOf(Number(t.transcript_pk)) }));
+  for (const pk of dueTranscriptKeys({ nowMs, homeRetentionDays: homeDays, transcripts })) {
+    for (let ts = cutoffMs, after = 0; ;) {
+      const page = s.transcriptEntries.all(pk, cutoffMs, ts, ts, after, pageRows);
+      if (page.length === 0) break;
+      ts = Number(page[page.length - 1].ts_ms);
+      after = Number(page[page.length - 1].entry_id);
+      if (!decide(page.map(entryCand))) return sel;
+    }
+  }
+  for (let ts = Number.MIN_SAFE_INTEGER, after = 0; ;) {
+    const page = s.dueEntries.all(cutoffMs, ts, ts, after, pageRows);
+    if (page.length === 0) break;
+    ts = Number(page[page.length - 1].ts_ms);
+    after = Number(page[page.length - 1].entry_id);
+    if (!decide(page.map(entryCand))) return sel;
+  }
+  for (let after = 0; ;) {
+    const page = s.unlinked.all(after, pageRows);
+    if (page.length === 0) break;
+    after = Number(page[page.length - 1].blob_id);
+    if (!decide(page.filter((r) => !sel.carry.has(Number(r.blob_id))).map(sidecarCand))) return sel;
+  }
+  return sel;
+}
+
+/** Phase 2: the taken candidates into the segment, each row after what places it. Before every row it reads the run's
+ *  clock and history-off; it stops at either, so what it wrote is whole rows. Answers the entry and blob ids written,
+ *  the rows and bytes, and why it stopped early ('budget' | 'off' | null). */
+function writeSegmentRows(db, ctx, seg, sel) {
+  const s = exportStmts(db);
+  const ins = segmentInserts(seg);
+  const out = { entries: [], blobs: [], rows: 0, bytes: 0, stopped: null };
+  // Every membership of the taken entries in ONE scan: schema v1 has no index led by memberships.entry_id, and one scan
+  // a segment costs less than one a row.
+  const want = new Set(sel.taken.filter((t) => t.kind === 'entry').map((t) => t.id));
+  const held = new Map();
+  for (const m of s.memberships.iterate()) {
+    const id = Number(m.entry_id);
+    if (!want.has(id)) continue;
+    const list = held.get(id) ?? [];
+    list.push({ fileId: Number(m.file_id), line: Number(m.line) });
+    held.set(id, list);
+  }
+  const keys = new Map();
+  const files = new Map();
+  const done = { families: new Set(), epochs: new Set(), blobs: new Set() };
+  const shaOf = (id) => s.blobSha.get(id).sha256;
+  // A transcript by its natural key, after its families and before its epochs: what placed the row, which the transcript
+  // alone gave and a rebuild could not re-derive once it is gone (§9.15, BK11).
+  const ensureTranscript = (pk) => {
+    let k = keys.get(pk);
+    if (k !== undefined) return k;
+    const t = s.transcript.get(pk);
+    k = { cc_session_uuid: t.cc_session_uuid, agent_id: t.agent_id };
+    const epochs = s.epochsOf.all(t.cc_session_uuid);
+    for (const e of epochs) {
+      const fk = `${e.ccrc_id}\0${e.generation}`;
+      if (done.families.has(fk)) continue;
+      done.families.add(fk);
+      ins.family({ ccrc_id: e.ccrc_id, generation: e.generation, project: e.project, first_seen_ms: e.first_seen_ms });
+    }
+    ins.transcript({ ...k, harness: t.harness, parent_tool_use_id: t.parent_tool_use_id, workflow_run_id: t.workflow_run_id, agent_type: t.agent_type });
+    for (const e of epochs) {
+      const ek = `${e.ccrc_id}\0${e.generation}\0${e.seq}`;
+      if (done.epochs.has(ek)) continue;
+      done.epochs.add(ek);
+      ins.epoch({
+        ccrc_id: e.ccrc_id, generation: e.generation, seq: e.seq, cc_session_uuid: t.cc_session_uuid, cause: e.cause,
+        declared_by: e.declared_by, started_ms: e.started_ms, cwd: e.cwd, cwd_real: e.cwd_real, git_branch: e.git_branch,
+        confirmed_ms: e.confirmed_ms,
+      });
+    }
+    keys.set(pk, k);
+    return k;
+  };
+  // A file by its identity (path, dev, ino), after its transcript. A file whose paths were all re-pointed (a retired
+  // row) has no path left: '' stands in, and replay keys its dead-file row by (dev, ino) alone (lib exportedSourceKey
+  // accepts '', Task 1).
+  const ensureFile = (fileId) => {
+    let f = files.get(fileId);
+    if (f !== undefined) return f;
+    const r = s.file.get(fileId);
+    if (r === undefined) throw new Error(`ingest_files row ${fileId} is gone and a row still names it`);
+    const k = ensureTranscript(segInt(r.transcript_pk));
+    f = { path: r.path ?? '', dev: r.dev, ino: r.ino };
+    ins.file({ ...f, ...k, size: segInt(r.size), mtime_ns: r.mtime_ns, eof_ms: segInt(r.eof_ms) });
+    files.set(fileId, f);
+    return f;
+  };
+  // A carried blob's bytes as stored, with every unlinked sidecar row naming it; a pruned blob as a stub. A blob already
+  // exported is in its own segment, which replay applies first (every segment's blobs before any rows, §9.14).
+  const ensureBlob = (id) => {
+    if (done.blobs.has(id)) return;
+    done.blobs.add(id);
+    if (sel.carry.has(id)) {
+      const b = s.blobRow.get(id);
+      ins.blob({ sha256: b.sha256, codec: b.codec, raw_len: b.raw_len, z: b.z, pruned: false });
+      ctx.budget.bytes += b.z.length;
+      out.bytes += b.z.length;
+      out.blobs.push(id);
+      for (const u of s.unlinkedOf.all(id)) {
+        const k = ensureTranscript(Number(u.transcript_pk));
+        ins.sidecar({ ...k, name: u.name, blob_sha256: b.sha256, uuid: null, first_seen_ms: u.first_seen_ms });
+      }
+    } else if (sel.stubs.has(id)) {
+      const b = s.blobRow.get(id);
+      ins.blob({ sha256: b.sha256, codec: b.codec, raw_len: b.raw_len, z: null, pruned: true });
+    }
+  };
+  const writeEntry = (id) => {
+    const e = s.entry.get(id);
+    const pk = segInt(e.transcript_pk);
+    const k = ensureTranscript(pk);
+    const struct = ensureFile(segInt(e.struct_file_id));
+    const variants = s.variants.all(id);
+    const firsts = variants.map((v) => ensureFile(Number(v.first_file_id)));
+    const copies = (held.get(id) ?? []).map((m) => ({ ...ensureFile(m.fileId), line: m.line }));
+    const bd = s.boundary.get(id);
+    const sidecars = sel.linked.get(pk)?.get(id) ?? [];
+    const keptId = bd !== undefined && bd.kept_blob_id !== null ? Number(bd.kept_blob_id) : null;
+    for (const b of [segInt(e.blob_id), ...variants.map((v) => Number(v.blob_id)), ...(keptId === null ? [] : [keptId]), ...sidecars.map((x) => x.blobId)]) {
+      ensureBlob(b);
+    }
+    ins.entry({
+      uuid: e.uuid, ...k, type: e.type, subtype: e.subtype, role: e.role, model: e.model, parent_uuid: e.parent_uuid,
+      ts_ms: segInt(e.ts_ms), request_id: e.request_id, api_block_index: segInt(e.api_block_index), msg_id: e.msg_id,
+      source_tool_use_id: e.source_tool_use_id, tool_name: e.tool_name, is_compact_summary: segInt(e.is_compact_summary),
+      provenance: e.provenance, prov_version: segInt(e.prov_version), parse_state: e.parse_state, struct_rank_ns: e.struct_rank_ns,
+      struct_path: struct.path, struct_dev: struct.dev, struct_ino: struct.ino, blob_sha256: shaOf(segInt(e.blob_id)),
+    });
+    variants.forEach((v, i) => {
+      ins.variant({
+        uuid: e.uuid, blob_sha256: shaOf(Number(v.blob_id)), first_path: firsts[i].path, first_dev: firsts[i].dev,
+        first_ino: firsts[i].ino, first_seen_ms: v.first_seen_ms, cause: v.cause,
+      });
+    });
+    if (bd !== undefined) {
+      const bk = ensureTranscript(Number(bd.transcript_pk));
+      ins.boundary({
+        uuid: e.uuid, ...bk, boundary_ord: bd.ord, trigger: bd.trigger, head_uuid: bd.head_uuid, anchor_uuid: bd.anchor_uuid,
+        tail_uuid: bd.tail_uuid, kept_sha256: keptId === null ? null : shaOf(keptId), pre_tokens: bd.pre_tokens,
+        post_tokens: bd.post_tokens, duration_ms: bd.duration_ms,
+      });
+    }
+    for (const sc of sidecars) ins.sidecar({ ...k, name: sc.name, blob_sha256: shaOf(sc.blobId), uuid: e.uuid, first_seen_ms: sc.firstSeenMs });
+    for (const c of copies) ins.membership({ path: c.path, dev: c.dev, ino: c.ino, uuid: e.uuid, line: c.line });
+  };
+  for (const t of sel.taken) {
+    if (!budgetLeft(ctx.budget)) { out.stopped = 'budget'; break; }
+    if (existsSync(ctx.paths.off)) { out.stopped = 'off'; break; }
+    if (t.kind === 'entry') {
+      writeEntry(t.id);
+      out.entries.push(t.id);
+    } else {
+      ensureBlob(t.id);
+    }
+    out.rows += 1;
+  }
+  return out;
+}
+
+/** A segment that will not be published: its handle closed (publishSegment may have closed it already) and its temp gone. */
+function discardSegment(seg) {
+  try { seg.db.close(); } catch { /* already closed */ }
+  removeEntry(seg.temp);   // B1's removal by type (review 316 F22); store.mjs owns the temp's name
+}
+
+/** What a pass that ran to its end records, inside the caller's transaction: the last-pass clock doctor's export-due
+ *  rule and the hourly cadence read. `complete` says every due row the pass found fit in its segment. */
+function noteExportPassDone(db, nowMs, complete) {
+  setMeta(db, HEALTH_META.exportPassMs, String(nowMs));
+}
+
+/** Phase 4 (§9.15 "Mark"): ONE transaction, after the link: the blobs whose bytes the segment holds and the entries it
+ *  holds take its name, and the counter takes its number. A stub is never marked: a pruned blob is never exported. */
+function markExported(db, m) {
+  const s = exportStmts(db);
+  withTx(db, 'NORMAL', () => {
+    for (const id of m.blobs) s.markBlob.run(m.nowMs, m.name, id);
+    for (const id of m.entries) s.markEntry.run(m.nowMs, m.name, id);
+    setMeta(db, EXPORT_SEQ_META, String(m.seq));
+    noteExportPassDone(db, m.nowMs, m.complete);
+  });
+}
+
+/** One export pass (§9.15 "The pass"). It never throws but for busy (O22): anything else that fails, from making the
+ *  directories to the mark, removes its temp, marks nothing, is counted export_write_failed with one stderr line, and
+ *  answers 'failed', so the tick goes on. */
+export async function exportPass(db, ctx) {
+  const stop = (state) => ({ state, segment: null, rows: 0, blobs: 0, bytes: 0, complete: false });
+  if (ctx.ids === null || ctx.rosterUnreadable === true || ctx.homes.length === 0) return stop('no-horizon');
+  const nowMs = ctx.now();
+  let seg = null;
+  try {
+    const { storeId, writer } = ctx.ids;
+    const dir = exportDirFor(ctx.paths, storeId);
+    ensureExportDirs(ctx.paths, storeId);
+    // A stale temp (a killed pass's) is removed by Task 6's exportStep before its preflight, so a pause never keeps it.
+    const room = Math.min(EXPORT_SEGMENT_MAX_BYTES, ctx.budget.maxBytes - ctx.budget.bytes);
+    if (room <= 0 || !budgetLeft(ctx.budget)) return stop('held');
+    const sel = exportSelect(db, ctx, nowMs, exportHomeDays(db, ctx.homes), room);
+    if (sel.taken.length === 0) {
+      if (!sel.complete) return stop('held');
+      withTx(db, 'NORMAL', () => { noteExportPassDone(db, nowMs, true); });
+      return { ...stop('nothing-due'), complete: true };
+    }
+    const s = exportStmts(db);
+    const recorded = getMeta(db, EXPORT_SEQ_META);
+    let seq = nextSegmentSeq({
+      onDisk: listSegments(dir).map((x) => x.seq),
+      recorded: recorded !== null && /^[1-9][0-9]{0,15}$/.test(recorded) ? Number(recorded) : null,
+    });
+    let name = segmentName({ seq, writer });
+    const harnesses = [...new Set([...sel.transcripts].map((pk) => s.transcript.get(pk).harness))].sort();
+    seg = createSegment(dir, name, { storeId, writer, seq, harnesses, cutoffMs: sel.cutoffMs, format: EXPORT_SEGMENT_FORMAT });
+    const w = writeSegmentRows(db, ctx, seg, sel);
+    if (w.stopped === 'off' || w.rows === 0) {
+      discardSegment(seg);
+      seg = null;
+      return stop('held');
+    }
+    const linked = publishSegment(seg, dir, name);
+    if (linked !== 'linked') throw new Error(`the segment name ${name} is already on disk`);
+    seg = null;
+    const complete = sel.complete && w.stopped === null;
+    markExported(db, { name, seq, nowMs, blobs: w.blobs, entries: w.entries, complete });
+    return { state: 'written', segment: name, rows: w.rows, blobs: w.blobs.length, bytes: w.bytes, complete };
+  } catch (e) {
+    if (seg !== null) discardSegment(seg);
+    if (isBusy(e)) throw e;
+    process.stderr.write(`history-sweep: an export segment write failed and nothing was marked: ${e && e.message ? e.message : String(e)}\n`);
+    countOutside(db, 'export_write_failed');
+    try { setMeta(db, EXPORT_ATTEMPT_META, String(nowMs)); } catch { /* busy: the next tick retries sooner, nothing is lost */ }
+    return stop('failed');
+  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
