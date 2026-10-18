@@ -8234,8 +8234,11 @@ function exportDecimal(v, what) {
  *  "Memberships of a gone file"): `exported:` plus hex(sha256(path ∖0 dev ∖0 ino)). It never equals a live row's
  *  key (''), so replay never lands on a live file, even one that now reuses that inode. dev and ino are rendered in
  *  decimal, so a BigInt past 2^53 keys exactly as the store holds it. A path holding a NUL could forge a separator,
- *  and no POSIX path holds one, so it throws. An empty path is a file the store knows no path for (a retired row
- *  keeps none; the export pass writes '' for it): it keys by (dev, ino) alone, and is still never a live key. */
+ *  and no POSIX path holds one, so it throws. An empty path is a file the store knows no path for AND no source_key: it keys
+ *  by (dev, ino) alone, and is still never a live key. It is NOT unique per (dev, ino) once generations accumulate: B1 retires
+ *  a row exactly when a new file reuses its inode, so two retired generations of one inode would share this key. A file with
+ *  no path left therefore exports with its store source_key as its path (B1's 'retired:<hex>', unique per generation), and
+ *  '' is left to a row with neither (D-5393 (history-export-pathless-file-identity)). */
 export function exportedSourceKey(path, dev, ino) {
   if (typeof path !== 'string' || path.includes('\0')) throw new TypeError(`exportedSourceKey: path must be a string without NUL, got ${JSON.stringify(path)}`);
   return `exported:${sha256Hex(`${path}\0${exportDecimal(dev, 'dev')}\0${exportDecimal(ino, 'ino')}`)}`;

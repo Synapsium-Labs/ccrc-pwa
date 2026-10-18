@@ -3866,6 +3866,41 @@ describe('W1-B4 Task 10: export replay in the recovery step (spec §9.14 "Export
     }
   });
 
+  it('two transcripts\' retired files that share one (dev, ino) and export under their own source_key each keep their own dead-file row, entries and memberships, so no leaf of one holds a row of the other', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-retired-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const [UA, UB] = [x10U(0xb1), x10U(0xb2)];
+      const a = x10Texts(0xb10, 3, 'zqretira', t0);
+      const b = x10Texts(0xb20, 2, 'zqretirb', t0);
+      // B1 retires a row when a NEW file reuses its (dev, ino) and re-points its paths. Two generations of one inode, each of
+      // a different transcript, have no path left; the export writes each under its own store source_key ('retired:<hex>', unique
+      // per generation) as its path identity (D-5393 (history-export-pathless-file-identity)), so their dead-file keys differ.
+      const [pathA, pathB] = [`retired:${'a1'.repeat(32)}`, `retired:${'b2'.repeat(32)}`];
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: a.map((x) => ({ text: x.text })),
+        rows: x10Rows({ uuid: UA, path: pathA, ino: 9701, texts: a, id: 'claude-a-retired', generation: '0189abcd-1234-4678-9abc-0000000010b1' }) });
+      plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, blobs: b.map((x) => ({ text: x.text })),
+        rows: x10Rows({ uuid: UB, path: pathB, ino: 9701, texts: b, id: 'claude-b-retired', generation: '0189abcd-1234-4678-9abc-0000000010b2' }) });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(x10Count(db, 'entries'), 'every entry is placed').toBe(5);
+      expect(countersOn(db, 'export_row_unplaced', 'export_row_blob_missing')).toEqual({ export_row_unplaced: 0, export_row_blob_missing: 0 });
+      const ofTranscript = (uuid: string): string[] => db.prepare(`SELECT e.uuid AS uuid FROM entries e JOIN transcripts t ON t.transcript_pk = e.transcript_pk
+          WHERE t.cc_session_uuid = ? ORDER BY e.entry_id`).all(uuid).map((r) => String((r as { uuid: string }).uuid));
+      expect(ofTranscript(UA)).toEqual(a.map((x) => x.uuid));
+      expect(ofTranscript(UB)).toEqual(b.map((x) => x.uuid));
+      // The files a transcript holds are its own, and each holds only that transcript's rows.
+      const heldBy = (uuid: string): string[][] => db.prepare(`SELECT f.file_id AS file_id FROM ingest_files f JOIN transcripts t ON t.transcript_pk = f.transcript_pk
+          WHERE t.cc_session_uuid = ? ORDER BY f.file_id`).all(uuid).map((f) => db.prepare(`SELECT e.uuid AS uuid FROM memberships m JOIN entries e ON e.entry_id = m.entry_id
+          WHERE m.file_id = ? ORDER BY m.line`).all((f as { file_id: number }).file_id).map((r) => String((r as { uuid: string }).uuid)));
+      expect(heldBy(UA), 'transcript A has a dead-file row holding exactly its rows').toEqual([a.map((x) => x.uuid)]);
+      expect(heldBy(UB), 'transcript B has a dead-file row holding exactly its rows').toEqual([b.map((x) => x.uuid)]);
+      expect(db.prepare(`SELECT count(*) AS n FROM entries e JOIN ingest_files f ON f.file_id = e.struct_file_id WHERE f.transcript_pk <> e.transcript_pk`).get(),
+        'no entry\'s structural file belongs to another transcript').toEqual({ n: 0 });
+    } finally {
+      closeWriter(db);
+    }
+  });
+
   it('the cursor: each chunk commits its segment and position with what it applied; a step split over many small budgets re-applies nothing and keeps +pairs through both export phases', async () => {
     const { box, ids, db } = x10Store('ccrc-history-b4-cursor-', 'index+pairs');
     try {

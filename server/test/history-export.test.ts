@@ -1339,3 +1339,49 @@ describe('W1-B4 Task 9: status --json reads the export pass and counts segments;
     expect(x9Status(stale.box).health.warn.find((i) => i.word === 'export-due')?.detail).toContain('3 unexported blob(s) are due, and the last export pass completed');
   }, 120_000);
 });
+
+// ── W1-B4 Task 10 (item g ruling): a file row with no path left exports under its store identity ─────────────────
+// B1 retires an ingest_files row exactly when a new file reuses its (dev, ino), and re-points the retired row's paths to
+// the new one. Retired generations of one inode therefore accumulate, each with no path and its own source_key.
+describe('a file with no path left (W1-B4 Task 10; D-5393 (history-export-pathless-file-identity))', () => {
+  it('two retired generations of one (dev, ino) in two transcripts export under their own source_key, never both as \'\': each file row, structural path and membership names its own file', async () => {
+    const U2 = '7d2e3f4a-5b6c-4d7e-8f90-a1b2c3d4e5f6';
+    const { box, ids } = ingestedBox('ccrc-history-export-pathless-', [row(1, 'a first prompt', 2 * DAY), row(2, 'a second prompt', DAY)], {
+      plant: (b) => {
+        plantSession(b, 'claude-b-demo', { uuid: U2, generation: '0189abcd-1234-4678-9abc-0123456789ac', project: 'demo', workdir: WORK });
+        plantTranscript(b, 'claude-b', SLUG, U2,
+          [userRow({ uuid: rid(3), ts: new Date(Date.now() - DAY).toISOString(), text: 'a prompt of the other transcript', sessionId: U2, cwd: WORK })]);
+      },
+    });
+    // B1's retire key is 'retired:' + a sha256 hex, per generation. The fixture makes the retired state directly: both
+    // rows take one (dev, ino), their own retired key, and lose their paths, as a re-point leaves them.
+    const keyA = `retired:${'a1'.repeat(32)}`;
+    const keyB = `retired:${'b2'.repeat(32)}`;
+    await onStore(box, (db) => {
+      const st = db.prepare('SELECT f.file_id AS id, f.dev AS dev, f.ino AS ino, t.cc_session_uuid AS u FROM ingest_files f '
+        + 'JOIN transcripts t ON t.transcript_pk = f.transcript_pk ORDER BY f.file_id');
+      st.setReadBigInts(true);
+      const files = st.all() as Array<{ id: bigint; dev: bigint; ino: bigint; u: string }>;
+      expect(files.map((f) => f.u), 'the fixture holds one file per transcript').toEqual([U, U2]);
+      for (const f of files) {
+        db.prepare("UPDATE ingest_files SET dev = ?, ino = ?, source_key = ?, status = 'retired' WHERE file_id = ?")
+          .run(files[0]!.dev, files[0]!.ino, f.u === U ? keyA : keyB, f.id);
+        db.prepare('DELETE FROM file_paths WHERE file_id = ?').run(f.id);
+      }
+    });
+    expect(q(box, 'SELECT count(DISTINCT dev || \':\' || ino) AS inodes, count(*) AS files, (SELECT count(*) FROM file_paths) AS paths FROM ingest_files'),
+      'CONTROL: two generations of one inode, and no path left on either').toEqual([{ inodes: 1, files: 2, paths: 0 }]);
+
+    const r = await onStore(box, (db) => SW.exportPass(db, exportCtx(box, ids)));
+    const name = `1.${ids.writer}.db`;
+    expect(r).toMatchObject({ state: 'written', segment: name, rows: 3, complete: true });
+    const seg = path.join(exportDirOf(box), name);
+    const byPath = (a: Record<string, unknown>, b: Record<string, unknown>): number => (String(a['path']) < String(b['path']) ? -1 : 1);
+    expect(segmentRows(seg, 'files').map(pick(['path', 'cc_session_uuid'])).sort(byPath),
+      'each file row carries its own non-empty source_key as its path').toEqual([{ path: keyA, cc_session_uuid: U }, { path: keyB, cc_session_uuid: U2 }]);
+    expect(segmentRows(seg, 'memberships').map(pick(['path', 'uuid'])).sort(byUuid),
+      'each membership names its own file\'s path').toEqual([{ path: keyA, uuid: rid(1) }, { path: keyA, uuid: rid(2) }, { path: keyB, uuid: rid(3) }]);
+    expect(segmentRows(seg, 'entries').map(pick(['uuid', 'struct_path'])).sort(byUuid),
+      'and so does each entry\'s structural file').toEqual([{ uuid: rid(1), struct_path: keyA }, { uuid: rid(2), struct_path: keyA }, { uuid: rid(3), struct_path: keyB }]);
+  }, 120_000);
+});

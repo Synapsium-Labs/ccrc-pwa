@@ -8075,7 +8075,7 @@ describe('W1-B4: the hourly cadence, the room verdict and the dead-file key (spe
     expect(libSeg.exportedSourceKey(p, 2049, 18446744073709551557n)).toBe(want);
     expect(libSeg.exportedSourceKey(p, 2049n, '18446744073709551557')).toBe(want);
     expect(libSeg.exportedSourceKey(p, 2049, 7)).not.toBe(libSeg.exportedSourceKey(p, 2049, 8));
-    // A retired file row keeps no path, and Task 5 writes '' for it: the key is still (dev, ino)'s, and never ''.
+    // '' is left to a file row with no path and no source_key (D-5393): its key is still (dev, ino)'s, and never ''.
     expect(libSeg.exportedSourceKey('', 2049, 7)).toMatch(/^exported:[0-9a-f]{64}$/);
     expect(libSeg.exportedSourceKey('', 2049, 7)).not.toBe(libSeg.exportedSourceKey('', 2049, 8));
     for (const [path, dev, ino] of [['/a\0b', 1, 2], ['/a', -1, 2], ['/a', 1, 2.5], ['/a', 1, '0x1f']] as const) {

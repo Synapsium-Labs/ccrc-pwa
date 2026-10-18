@@ -7928,7 +7928,7 @@ function exportStmts(db) {
     epochsOf: db.prepare(`SELECT s.ccrc_id, s.generation, s.project, s.first_seen_ms, e.seq, e.cause, e.declared_by, e.started_ms,
         e.cwd, e.cwd_real, e.git_branch, e.confirmed_ms
       FROM epochs e JOIN sessions s ON s.session_pk = e.session_pk WHERE e.cc_session_uuid = ? ORDER BY s.ccrc_id, s.generation, e.seq`),
-    file: big(db.prepare(`SELECT f.dev, f.ino, f.transcript_pk, f.size, f.mtime_ns, f.eof_ms,
+    file: big(db.prepare(`SELECT f.dev, f.ino, f.transcript_pk, f.size, f.mtime_ns, f.eof_ms, f.source_key,
         (SELECT min(p.path) FROM file_paths p WHERE p.file_id = f.file_id) AS path FROM ingest_files f WHERE f.file_id = ?`)),
     memberships: db.prepare('SELECT file_id, entry_id, line FROM memberships'),
     markBlob: db.prepare('UPDATE blobs SET exported_ms = ?, exported_seg = ? WHERE blob_id = ? AND exported_ms IS NULL'),
@@ -8129,16 +8129,20 @@ function writeSegmentRows(db, ctx, seg, sel) {
     keys.set(pk, k);
     return k;
   };
-  // A file by its identity (path, dev, ino), after its transcript. A file whose paths were all re-pointed (a retired
-  // row) has no path left: '' stands in, and replay keys its dead-file row by (dev, ino) alone (lib exportedSourceKey
-  // accepts '', Task 1).
+  // A file by its identity (path, dev, ino), after its transcript. A file whose paths were all re-pointed (a retired row)
+  // has no path left, and travels with its store source_key as its path identity: B1's 'retired:<hex>', set once at the
+  // retire and unique per retired generation (its hash holds dev, ino, transcript_pk and the retire time), or a replayed
+  // 'exported:<hex>' row exported again. Two generations of one (dev, ino) therefore never share a dead-file key at replay.
+  // '' remains only for a row with no path AND an empty source_key. Replay writes no file_paths row for it, so nothing
+  // reads the token as a path (D-5393 (history-export-pathless-file-identity)). The structural file, a variant's first file
+  // and a membership's file all come through this one result, so the three always agree.
   const ensureFile = (fileId) => {
     let f = files.get(fileId);
     if (f !== undefined) return f;
     const r = s.file.get(fileId);
     if (r === undefined) throw new Error(`ingest_files row ${fileId} is gone and a row still names it`);
     const k = ensureTranscript(segInt(r.transcript_pk));
-    f = { path: r.path ?? '', dev: r.dev, ino: r.ino };
+    f = { path: r.path ?? r.source_key, dev: r.dev, ino: r.ino };
     ins.file({ ...f, ...k, size: segInt(r.size), mtime_ns: r.mtime_ns, eof_ms: segInt(r.eof_ms) });
     files.set(fileId, f);
     return f;
