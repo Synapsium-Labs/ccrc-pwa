@@ -4252,9 +4252,10 @@ const REFERRER_CLEAR_SQL = Object.freeze([
 const REFERRER_CLEAR_STMTS = new WeakMap();
 /** Takes the export mark off every entry that references any of these blobs, and answers how many it cleared (each entry
  *  once: a cleared entry is no longer marked for the next statement). Run in the caller's transaction, on the paths that
- *  leave a live blob unmarked under entries that may be marked: a bind check that cleared the marks of a missing segment's
- *  blobs, and a revived tombstone. An entry keeps its mark only while every blob it references is exported or pruned (lib
- *  entryMayHoldMark); the pass offers only unmarked entries, so without this the blob would never be carried. No blob, no
+ *  leave a blob unmarked under entries that may be marked: a bind check that cleared the marks of a missing segment's
+ *  blobs, pruned ones too (a stub travels again, D-5396 (history-export-bind-clears-pruned-referrers)), and a revived
+ *  tombstone. An entry keeps its mark only while every blob it references is exported or pruned (lib entryMayHoldMark);
+ *  the pass offers only unmarked entries, so without this the blob, or its stub, would never be carried. No blob, no
  *  statement. */
 function clearReferrerMarks(db, blobIds) {
   if (blobIds.length === 0) return 0;
@@ -8612,8 +8613,9 @@ function bindFactKeys(db) {
  *  and HEALTH_META.exportSegmentMissing holds how many marks, which doctor WARNs on until a complete pass resets it.
  *  Either way it records its clock and `record`, the bind facts lib decideMarkCheck says it covers. Two DISTINCT scans
  *  of exported_seg per bind, blobs then entries, and one more of the blobs and one of the entries for the missing segments
- *  together (the live blobs their marks name, then the marks themselves); neither column has an index and none is added. An entry that references a live blob whose mark went
- *  loses its own mark with it, whichever segment marked it (D-5395 (history-export-mark-needs-its-blobs)), and
+ *  together (the blobs their marks name, then the marks themselves); neither column has an index and none is added. An entry
+ *  that references a blob whose mark went, pruned or live, loses its own mark with it, whichever segment marked it
+ *  (D-5395 (history-export-mark-needs-its-blobs), D-5396 (history-export-bind-clears-pruned-referrers)), and
  *  those entries count in the number cleared. A directory that is
  *  absent (ENOENT) lists as none, so every mark naming a segment is missing; one that cannot be listed for any other
  *  reason (ENOTDIR, EACCES) is NOT absent: listSegments throws, before anything is cleared or recorded, and exportStep
@@ -8628,19 +8630,24 @@ export function checkSegmentMarks(db, ctx, record) {
   let cleared = 0;
   withTx(db, 'NORMAL', () => {
     if (segments.length > 0) {
-      // Set-wise, once for every missing segment (the names bound as one JSON array): one scan of the blobs for the live ones
+      // Set-wise, once for every missing segment (the names bound as one JSON array): one scan of the blobs for the ones
       // whose marks go, four statements a batch of them for their referrers, then the two clears of the marks themselves. Per
       // segment and per blob this took 6.7 s on 300,000 blobs and entries over 30 segments (measured), set-wise 1.7 to 2.0 s.
       const names = JSON.stringify(segments);
-      // D-5395 (history-export-mark-needs-its-blobs): the live blobs whose marks name a missing segment, collected BEFORE their
-      // marks go. An entry that references one of them stays marked with a segment that IS here, and its blob is exported no
-      // more, so the entries get their marks cleared with the blobs' (a pruned blob owes nothing: a stub is all there is to
-      // export). Each entry is counted once, here or in the clear of its own segment's marks below.
+      // D-5395 (history-export-mark-needs-its-blobs), D-5396 (history-export-bind-clears-pruned-referrers): the blobs whose marks
+      // name a missing segment, pruned or live, collected BEFORE their marks go. An entry that references one of them stays
+      // marked with a segment that IS here, and its blob is exported no more, so the entries get their marks cleared with the
+      // blobs'. A pruned blob is no exception: its bytes are gone, but its stub, or its bytes before prune took them, are held
+      // only by the segment its mark names, and an entry exported again later into another segment does not carry it again
+      // (planSegment carries only a blob no segment carried). With that segment gone no live segment would hold the blob, and a
+      // rebuild from the live segments could not place the entry (export_row_blob_missing) or its variants. Clearing the entry
+      // lets the next pass write it again, with a stub of the pruned blob (D-4759). Each entry is counted once, here or in the
+      // clear of its own segment's marks below.
       // Iterated, never materialised, and handed to the clears a batch at a time: the referrer clears touch `entries` only and
       // the blobs' marks go after the last of them, so the cursor over `blobs` is never written under.
       const batch = Number.isSafeInteger(ctx.deps?.exportBindBatch) && ctx.deps.exportBindBatch > 0 ? ctx.deps.exportBindBatch : EXPORT_BIND_BATCH;
       let ids = [];
-      for (const r of db.prepare('SELECT blob_id FROM blobs WHERE exported_seg IN (SELECT value FROM json_each(?)) AND z IS NOT NULL').iterate(names)) {
+      for (const r of db.prepare('SELECT blob_id FROM blobs WHERE exported_seg IN (SELECT value FROM json_each(?))').iterate(names)) {
         ids.push(Number(r.blob_id));
         if (ids.length >= batch) {
           cleared += clearReferrerMarks(db, ids);

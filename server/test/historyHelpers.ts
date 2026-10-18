@@ -701,7 +701,10 @@ const ENTRY_BLOB_REFS_SQL = `SELECT blob_id, entry_id FROM entries
   UNION SELECT kept_blob_id, entry_id FROM boundaries WHERE kept_blob_id IS NOT NULL`;
 /** Live blobs no segment has carried (z held, exported_ms NULL) that some entry references and whose every referring
  *  entry is marked: the pass offers only unmarked entries, so no pass would ever carry such a blob, the census counts
- *  it due for good and its text stays store-only. The invariant (D-5395) is that there are none. */
+ *  it due for good and its text stays store-only. The invariant (D-5395) is that there are none. It reads live blobs only
+ *  (z held): a pruned blob has no text to strand, and its stub is never marked, so the store holds no mark to measure it
+ *  by. What a pruned blob owes (D-5396) is a stub in a live segment beside every row that names it, measured on a
+ *  rebuild from the live segments alone (history-export.test.ts's D-5396 case), not here. */
 const STRANDED_BLOBS_SQL = `WITH refs(blob_id, entry_id) AS (${ENTRY_BLOB_REFS_SQL})
   SELECT lower(hex(b.sha256)) AS sha FROM blobs b
   WHERE b.z IS NOT NULL AND b.exported_ms IS NULL

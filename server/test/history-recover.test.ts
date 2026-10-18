@@ -4357,6 +4357,67 @@ describe('D-5395: a restore replays an exported entry without marking it over a 
     expect(metaOf(box, 'export_due'), 'the census reads nothing due').toBe('0');
     expect(strandedBlobs(box)).toEqual([]);
   }, 2.5 * HEAVY);
+  // D-5396 (history-export-bind-clears-pruned-referrers). The backup is taken AFTER prune took row 1's first body, so the
+  // restored store holds that body as a tombstone whose mark names a segment this box no longer has. The check after the
+  // restore's bind clears the tombstone's referrers too, and the pass writes row 1 again with a stub of the body; replay
+  // never gives a tombstone its bytes back, from the stub or from anything else, so the body stays body-less throughout.
+  it('D-5396: a late variant, prune, doctor --backup, segment 1 moved aside, the loss of history.db and doctor --restore: the first body stays a tombstone through the bind, the pass and a second replay, row 1 travels again with a stub of it, and expand says "content pruned"', async () => {
+    const { box, transcript, segment, at } = d5395Built('ccrc-hist-d5396-');
+    fs.appendFileSync(transcript, `${JSON.stringify(userRow({ ...at(0), text: 'zqd5395 ask one, revised' }))}\n`);   // the same uuid and time, another body
+    lateTick(box);
+    expect([markOf(box, 1), markOf(box, 2)], 'CONTROL: the late variant cleared its entry\'s mark').toEqual([null, segment]);
+    const re = runDriver(box, { offsetMs: 4 * D_HOUR });
+    expect(re.code, `${re.stdout}\n${re.stderr}`).toBe(0);
+    const names = segmentsOf(box).map((n) => path.basename(n));
+    expect(names, 'row 1 was written again, with the late body').toHaveLength(2);
+    expect(names[0], 'CONTROL: the first segment is the original one').toBe(segment);
+    const second = names[1]!;
+    expect([markOf(box, 1), markOf(box, 2)], 'CONTROL: row 1 is marked by segment 2, row 2 by segment 1').toEqual([second, segment]);
+    const firstBody = rrQ<{ sha: string }>(box, 'SELECT lower(hex(b.sha256)) AS sha FROM entries e JOIN blobs b ON b.blob_id = e.blob_id WHERE e.uuid = ?', rrU(1))[0]!.sha;
+    const bodyOf = (): Array<{ stub: number; pruned: number }> =>
+      rrQ(box, 'SELECT z IS NULL AS stub, pruned_ms IS NOT NULL AS pruned FROM blobs WHERE lower(hex(sha256)) = ?', firstBody);
+    expect(bodyOf(), 'CONTROL: the first body is live before prune').toEqual([{ stub: 0, pruned: 0 }]);
+    const w = openWriter(rrRoot(box).dbFile);
+    try {   // prune took row 1's first body after segment 1 carried it
+      w.prepare('UPDATE blobs SET z = NULL, pruned_ms = ?, fts_indexed = 0 WHERE lower(hex(sha256)) = ?').run(Date.now(), firstBody);
+    } finally { closeWriter(w); }
+    const name = rrBackup(box);   // taken after the prune
+    expect(rrFileDb(path.join(rrRoot(box).backups, name), (d) => d.prepare('SELECT z IS NULL AS stub FROM blobs WHERE lower(hex(sha256)) = ?').all(firstBody)),
+      'CONTROL: the backup holds the first body as a tombstone').toEqual([{ stub: 1 }]);
+    const aside = path.join(box.home, 'export-aside');   // D-4765's own way out, to a place outside the store's export directory
+    fs.mkdirSync(aside);
+    fs.renameSync(path.join(exportDirOf(box), segment), path.join(aside, segment));
+    const rebound = async (): Promise<void> => {
+      rrLose(box, { binding: false, journal: false });
+      expect((await cliOnPty(box, ['doctor', '--restore', name])).code).toBe(0);
+      rrTickUntil(box, () => rrRecovered(box));
+    };
+    await rebound();
+    expect(bodyOf(), 'the restore replayed segment 2 without giving the tombstone its bytes').toEqual([{ stub: 1, pruned: 1 }]);
+    // the first tick after the bind cleared the tombstone's mark and, with it, row 1's (D-5396), whatever the export clock did
+    for (const hours of [6, 8]) {
+      const r = runDriver(box, { offsetMs: hours * D_HOUR });
+      expect(r.code, `${r.stdout}\n${r.stderr}`).toBe(0);
+      expect(bodyOf(), 'a pass never gives it bytes').toEqual([{ stub: 1, pruned: 1 }]);
+    }
+    const live = segmentsOf(box).map((n) => path.basename(n));
+    expect(live, 'the first segment is gone; the restore\'s pass wrote a later one').toHaveLength(2);
+    const last = live[live.length - 1]!;
+    expect(live).not.toContain(segment);
+    expect(markOf(box, 1), 'row 1 travels again').toBe(last);
+    const seg = path.join(exportDirOf(box), last);
+    expect(segmentRows(seg, 'entries').map((e) => e['uuid']).sort(), 'with both rows').toEqual([rrU(1), rrU(2)]);
+    expect(segmentRows(seg, 'blobs').filter((b) => b['z'] === null).map((b) => b['sha256']), 'and a stub of the first body, which holds no bytes').toEqual([firstBody]);
+    expect(strandedBlobs(box)).toEqual([]);
+    // a second replay of both live segments over the same backup
+    await rebound();
+    expect(bodyOf(), 'replay of the stub gives the tombstone nothing').toEqual([{ stub: 1, pruned: 1 }]);
+    const ex = runCli(box, ['expand', rrU(1)], { env: withPane(box, ID) });
+    expect(ex.code, `${ex.stdout}\n${ex.stderr}`).toBe(0);
+    expect(ex.stdout, 'expand on the pruned first body still says so').toContain('content pruned on');
+    expect(rrQ<{ n: number }>(box, "SELECT count(*) AS n FROM counters WHERE name IN ('export_row_blob_missing', 'export_row_unplaced') AND n > 0")[0]!.n,
+      'no row met a blob no live segment holds').toBe(0);
+  }, 3 * HEAVY);
 });
 
 // ── W1-B4 whole-branch review: replay's mark decisions, in-process on planted segments (D-5395) ─────────────────────
