@@ -18,7 +18,7 @@ import {
 } from './historyHelpers.js';
 import { userRow, toolResultRow, boundaryRow } from './historyFixtures.js';
 import { removeTmpFixturesEachTest } from './tmpHelpers.js';
-import { EXPORT_ROW_META_BYTES, HEALTH_META, historyPaths } from '../../ccd/history/lib.mjs';
+import { EXPORT_ROW_META_BYTES, HEALTH_META, RUN_BUDGET_BYTES, RUN_BUDGET_MS, historyPaths } from '../../ccd/history/lib.mjs';
 import { MIGRATIONS, closeWriter, openSegment, openWriter, pruneDryRun, segmentMeta, setMeta } from '../../ccd/history/store.mjs';
 import { syncBuiltinESMExports } from 'node:module';
 import { DatabaseSync as MemDb } from 'node:sqlite';
@@ -51,6 +51,11 @@ const rid = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart
 /** One typed prompt of session U, its timestamp `agoMs` before now. */
 const row = (n: number, text: string, agoMs: number): Record<string, unknown> =>
   userRow({ uuid: rid(n), ts: new Date(Date.now() - agoMs).toISOString(), text, sessionId: U, cwd: WORK });
+
+/** The one stderr line a pass the run's budget held writes (D-5394): it names BOTH limits of the budget, the time and the bytes, since
+ *  either holds a pass, so a hold by the bytes does not read as one by the clock. */
+const heldLine = (maxMs: number, maxBytes: number): string =>
+  `history-sweep: the export pass was held by the run's budget (${maxMs} ms, ${maxBytes} bytes) before it wrote a due row; it tries again at its next interval\n`;
 
 interface PassResult { state: string; segment: string | null; rows: number; blobs: number; bytes: number; complete: boolean }
 /** The slice of sweep.mjs these tests call. It grows task by task; every member is a real export. */
@@ -1348,6 +1353,82 @@ describe('marks that move (W1-B4 Task 8; spec §9.15 "Mark", "After a bind")', (
     expect(strandedBlobs(box), 'D-5395: no live blob is held only by marked entries').toEqual([]);
   }, 1_500_000);
 
+  // D-5396 (history-export-bind-clears-pruned-referrers), F1c: the rows of a segment that link a pruned blob to an entry ANOTHER
+  // segment marked. A late variant lands after segment 1 carried row 1, and prune takes that late body before the pass: segment 2
+  // holds row 1 again with its variants, the first body's (exported in segment 1, so not carried again) and the late one's, and a
+  // stub of the late body. A rebuild from both marked row 1 with segment 1 at its entry row, and segment 2's variant row on the
+  // pruned, unmarked late body kept that mark, because segment 2 carries the stub: but segment 1 does not. With segment 2 gone,
+  // nothing named it, no pass wrote row 1 again, and the (row 1, late body) link lived in the store alone: a later rebuild dropped it.
+  it('D-5396, F1c, end to end: a late variant pruned before the pass; a rebuild from segments 1 and 2 leaves row 1 unmarked (segment 2\'s variant row links the pruned late body, which segment 1 does not carry); with segment 2 moved aside a pass writes row 1 again with the link and a stub, and a second rebuild places the link', async () => {
+    const { box, transcript, ids } = ingestedBox('ccrc-history-export-f1c-', [row(1, 'zqf1cfirst body one', 2 * DAY), row(2, 'zqf1cother row', 2 * DAY)]);
+    const s1 = `1.${ids.writer}.db`;
+    const s2 = `2.${ids.writer}.db`;
+    passAt(box, 65);
+    fs.appendFileSync(transcript, `${JSON.stringify(row(1, 'zqf1clate body two', 2 * DAY))}\n`);   // the late variant clears row 1
+    passAt(box, 100);
+    const lateBody = String(q(box, `SELECT lower(hex(b.sha256)) AS sha FROM entry_variants v JOIN entries e ON e.entry_id = v.entry_id
+      JOIN blobs b ON b.blob_id = v.blob_id WHERE e.uuid = ? AND v.blob_id <> e.blob_id`, rid(1))[0]!['sha']);
+    await onStore(box, (db) => {   // prune took the late body before the pass
+      db.prepare('UPDATE blobs SET z = NULL, pruned_ms = ?, fts_indexed = 0 WHERE lower(hex(sha256)) = ?').run(Date.now(), lateBody);
+    });
+    passAt(box, 130);
+    expect(segmentsOf(box)).toEqual([s1, s2]);
+    expect(marks(box), 'CONTROL: row 1 is marked by segment 2, row 2 by segment 1').toEqual({ [rid(1)]: s2, [rid(2)]: s1 });
+    const seg2 = path.join(exportDirOf(box), s2);
+    expect(segmentRows(seg2, 'entries').map((e) => e['uuid']), 'CONTROL: segment 2 carries row 1 again').toEqual([rid(1)]);
+    expect(segmentRows(seg2, 'variants').length, 'CONTROL: with both its variants, the first body\'s and the late body\'s').toBe(2);
+    expect(segmentRows(seg2, 'blobs').map(pick(['sha256', 'pruned'])), 'CONTROL: and a stub of the late body alone: the first body was exported by segment 1')
+      .toEqual([{ sha256: lateBody, pruned: 1 }]);
+    const expectRowOneComplete = (what: string): void => {
+      expect(counters(box)['export_row_blob_missing'] ?? 0, `${what}: no row met a blob no live segment holds`).toBe(0);
+      expect(counters(box)['export_row_unplaced'] ?? 0, `${what}: and no row or variant was left unplaced`).toBe(0);
+      expect(q(box, 'SELECT uuid FROM entries ORDER BY uuid').map((e) => e['uuid']), `${what}: both rows placed`).toEqual([rid(1), rid(2)]);
+      expect(q(box, 'SELECT count(*) AS n FROM entry_variants v JOIN entries e ON e.entry_id = v.entry_id WHERE e.uuid = ?', rid(1))[0]!['n'],
+        `${what}: row 1 holds both its variants, the late body\'s link included`).toBe(2);
+      expect(q(box, 'SELECT z IS NULL AS stub, pruned_ms IS NOT NULL AS pruned FROM blobs WHERE lower(hex(sha256)) = ?', lateBody),
+        `${what}: the late body is body-less and pruned`).toEqual([{ stub: 1, pruned: 1 }]);
+      expect(strandedBlobs(box), `${what}: D-5395, no live blob is held only by marked entries`).toEqual([]);
+    };
+    // The loss: the transcript and history.db are gone; the journal and the export directory stay (both segments).
+    fs.rmSync(transcript);
+    await rebuildFromSegments(box);
+    expectRowOneComplete('the first rebuild');
+    expect(marks(box), 'D-5396, F1c: row 1 is NOT marked by segment 1 (the entry row marked it there, and segment 2\'s variant row then linked a pruned, unmarked blob that segment 1 does not carry); row 2 is')
+      .toEqual({ [rid(1)]: null, [rid(2)]: s1 });
+    // Segment 2 is moved aside (D-4765's own way out), a bind and a pass: nothing names segment 2, and row 1 is written again.
+    const aside = path.join(box.home, 'export-aside');
+    fs.mkdirSync(aside);
+    fs.renameSync(seg2, path.join(aside, s2));
+    await onStore(box, (db) => { setMeta(db, `bound:${Date.now() + 131 * MIN}`, 'restore'); });
+    passAt(box, 131);   // the bind check
+    passAt(box, 200);   // the pass
+    const live = segmentsOf(box);
+    expect(live, 'the live segments: segment 1 and the one the pass wrote').toHaveLength(2);
+    expect(live[0]).toBe(s1);
+    const again = path.join(exportDirOf(box), live[1]!);
+    expect(segmentRows(again, 'entries').map((e) => e['uuid']), 'the new segment carries row 1 again').toEqual([rid(1)]);
+    expect(segmentRows(again, 'variants').length, 'with both its variants').toBe(2);
+    expect(segmentRows(again, 'blobs').map(pick(['sha256', 'pruned'])), 'and a stub of the late body').toEqual([{ sha256: lateBody, pruned: 1 }]);
+    expect(marks(box), 'row 1 is marked by it').toEqual({ [rid(1)]: live[1], [rid(2)]: s1 });
+    await rebuildFromSegments(box);
+    expectRowOneComplete('the second rebuild');
+    // The cost of the rule, measured: only the segment being replayed is open, so segment 1 (which marked row 1 at its entry row)
+    // and the new segment's variant row on the pruned late body meet again, and row 1 reads unmarked once more. It is one more
+    // export, never a loss: the new segment still holds the link and the stub.
+    expect(marks(box), 'the second rebuild: the same shape again (the new segment\'s variant row, row 1 marked by segment 1), so row 1 is unmarked once more')
+      .toEqual({ [rid(1)]: null, [rid(2)]: s1 });
+    passAt(box, 270);   // the pass writes row 1 a third time; its entry row now meets an unmarked entry in the segment that carries the stub
+    const third = segmentsOf(box);
+    expect(third, 'the live segments: the two before and the third').toHaveLength(3);
+    expect(segmentRows(path.join(exportDirOf(box), third[2]!), 'entries').map((e) => e['uuid']), 'the third carries row 1 again').toEqual([rid(1)]);
+    await rebuildFromSegments(box);
+    expectRowOneComplete('the third rebuild');
+    expect(marks(box), 'the third rebuild marks row 1 with the third segment: its entry row meets the unmarked entry the second segment\'s variant row left, and every variant row of it names a blob it carries')
+      .toEqual({ [rid(1)]: third[2], [rid(2)]: s1 });
+    passAt(box, 340);
+    expect(segmentsOf(box), 'and the next pass finds nothing due: the cost was one export').toEqual(third);
+  }, 1_500_000);
+
   it('D-5395, a revived tombstone (writeChunk): a row whose blob prune tombstoned before its export went with a stub; a swap copy that stores the bytes again clears that row\'s mark, and an exported blob that was pruned and revived clears nothing; the next pass carries the bytes', async () => {
     const { box, transcript, ids } = ingestedBox('ccrc-history-export-revive-', [row(1, 'kept text', 2 * DAY), row(2, 'pruned text', 2 * DAY)]);
     const s1 = `1.${ids.writer}.db`;
@@ -1864,7 +1945,7 @@ describe('the selection reaches the due rows within its budget (W1-B4 whole-bran
     expect(r, 'held: the budget ended the selection before a row was taken').toEqual({ state: 'held', segment: null, rows: 0, blobs: 0, bytes: 0, complete: false });
     expect(reads, 'the fixture ran out of budget in the selection, not before it').toBeGreaterThanOrEqual(4);
     expect(lines, 'one line, naming the held export pass and the budget').toHaveLength(1);
-    expect(lines[0]).toMatch(/^history-sweep: the export pass was held by the run's budget \(90000 ms\) before it wrote a due row/);
+    expect(lines[0], 'the default budget: 90 s and 512 MiB, both named').toBe(heldLine(RUN_BUDGET_MS, RUN_BUDGET_BYTES));
     expect(metaOf(box, 'export_attempt_ms'), 'the attempt is recorded').toBe(String(T));
     expect(metaOf(box, HEALTH_META.exportPassMs), 'and a held pass is still not a pass').toBeNull();
     expect(segmentsOf(box)).toEqual([]);
@@ -1900,7 +1981,7 @@ describe('the selection reaches the due rows within its budget (W1-B4 whole-bran
     expect(segmentsOf(box), 'and no temp is left').toEqual([]);
     expect(marks(box)).toEqual({ [rid(1)]: null, [rid(2)]: null });
     expect(lines, 'one line, naming the held export pass and the budget').toHaveLength(1);
-    expect(lines[0]).toMatch(/^history-sweep: the export pass was held by the run's budget \(90000 ms\) before it wrote a due row/);
+    expect(lines[0], 'the default budget: 90 s and 512 MiB, both named').toBe(heldLine(RUN_BUDGET_MS, RUN_BUDGET_BYTES));
     expect(metaOf(box, 'export_attempt_ms'), 'the attempt is recorded').toBe(String(T));
     expect(metaOf(box, HEALTH_META.exportPassMs), 'and a held pass is still not a pass').toBeNull();
     expect(await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, () => T + 10 * MIN, { deps: { statfs: roomy } }))),
@@ -1932,7 +2013,8 @@ describe('the selection reaches the due rows within its budget (W1-B4 whole-bran
       }
       expect(r, 'held: the budget was spent before the selection began').toEqual({ state: 'held', segment: null, rows: 0, blobs: 0, bytes: 0, complete: false });
       expect(lines, 'one line, naming the held export pass and the budget').toHaveLength(1);
-      expect(lines[0]).toMatch(/^history-sweep: the export pass was held by the run's budget \(\d+ ms\) before it wrote a due row/);
+      expect(lines[0], `a budget spent by the ${spent}: the line names both limits as the run holds them, so a hold by the bytes does not read as one by the clock`)
+        .toBe(spent === 'bytes' ? heldLine(RUN_BUDGET_MS, 0) : heldLine(0, RUN_BUDGET_BYTES));
       expect(metaOf(box, 'export_attempt_ms'), 'the attempt is recorded').toBe(String(T));
       expect(metaOf(box, HEALTH_META.exportPassMs), 'and a held pass is still not a pass').toBeNull();
       expect(segmentsOf(box)).toEqual([]);

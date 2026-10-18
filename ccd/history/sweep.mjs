@@ -2643,9 +2643,12 @@ async function recoverReindexChunk(db, run, cursor) {
 //                   segmentMayMarkEntry says every blob it references, as the store holds them, is exported or is pruned and
 //                   carried by THIS segment (D-5395 (history-export-mark-needs-its-blobs), refined by D-5396
 //                   (history-export-bind-clears-pruned-referrers)): a live, unmarked blob licenses no mark, and a pruned blob no
-//                   mark names licenses one only in a segment that holds its stub or its bytes, as the pass writes them;
+//                   mark names licenses one only in a segment that holds its stub or its bytes, as the pass writes them; an
+//                   entry an earlier segment marked already is not marked again;
 //                 - variants, boundaries (their carried ord), sidecars and memberships, idempotently; one that links such a
-//                   blob to its entry takes the entry's mark off.
+//                   blob to its entry takes the entry's mark off, unless the entry is marked by THIS segment and this segment
+//                   carries a pruned blob (D-5396): an entry marked by another segment loses its mark over a pruned, unmarked
+//                   blob the row links, so the next pass writes it with the stub.
 // Segments go in (seq, writer) order (lib orderSegmentNames), whatever their writer, and lib decideSegmentReplay
 // judges each from its meta: a newer format is refused loudly (meta export_segment_newer lists it, doctor FAIL
 // export-segment-newer) and skipped; another store's is skipped and counted export_segment_foreign. A segment that
@@ -2697,7 +2700,9 @@ function replayStmts(db) {
         status, eof_ms, parser_version) VALUES (?, ?, ?, ?, ?, ?, 0, 'exported', ?, ?)
       ON CONFLICT (dev, ino, source_key) DO UPDATE SET eof_ms = coalesce(ingest_files.eof_ms, excluded.eof_ms)`),
     deadFileId: db.prepare('SELECT file_id FROM ingest_files WHERE dev = ? AND ino = ? AND source_key = ?'),
-    entrySel: db.prepare('SELECT entry_id, struct_file_id FROM entries WHERE uuid = ?'),
+    // exported_ms and exported_seg: an entry's mark, which replay reads where it would mark or unmark it (D-5396): an entry already
+    // marked is not marked again, and a row of another segment than the one that marks it can only take the mark off.
+    entrySel: db.prepare('SELECT entry_id, struct_file_id, exported_ms, exported_seg FROM entries WHERE uuid = ?'),
     entryMark: db.prepare('UPDATE entries SET exported_ms = ?, exported_seg = ? WHERE entry_id = ? AND exported_ms IS NULL'),
     // B1's boundaryIns draws ord itself; replay carries the exporter's. It meets two uniqueness rules, PRIMARY KEY
     // (entry_id) and UNIQUE (transcript_pk, ord), and absorbs both: a repeated entry (a second segment of it) is the
@@ -2807,15 +2812,22 @@ function replayEntryRow(db, seg, r) {
   // exported blob's bytes are where its own mark names, and a pruned blob no mark names has its stub only in the segments
   // that carry it, so a mark naming a segment without the stub would outlive the loss of the one that holds it (a rebuild
   // from the live segments could not place the entry). A segment that lacks the stub leaves the entry unmarked for a later
-  // segment that carries it, or for the next pass, which writes the stub.
-  const states = s.entryBlobStates.all(e.entry_id, e.entry_id, t, e.entry_id, e.entry_id).map((b) => blobStateIn(seg, b));
+  // segment that carries it, or for the next pass, which writes the stub. An entry an earlier segment already marked is not
+  // this segment's to mark whatever lib answers (entryMark leaves it: the first segment's mark wins), so its pruned blobs read
+  // as not carried and cost no lookup in this segment. The rows of this segment that link a pruned blob to such an entry are
+  // judged by unmarkEntryOverBlobIn.
+  const states = s.entryBlobStates.all(e.entry_id, e.entry_id, t, e.entry_id, e.entry_id).map((b) => blobStateIn(seg, b, e.exported_ms === null));
   if (segmentMayMarkEntry({ blobs: states })) s.entryMark.run(seg.markMs, seg.name, e.entry_id);
 }
-/** One blob's state as lib segmentMayMarkEntry reads it for the segment being replayed (`seg`): `carried` is measured, by a
- *  lookup in the segment's blobs table, only of a pruned blob no mark names (`b.sha` is set only for such a blob), and is
- *  false of any other, whose answer lib does not read from it. */
-function blobStateIn(seg, b) {
-  return { pruned: Number(b.pruned) === 1, exported: Number(b.exported) === 1, carried: b.sha !== null && segmentCarries(seg, b.sha) };
+/** One blob's state as lib segmentMayMarkEntry reads it for an entry's mark and the segment being replayed (`seg`): `carried`
+ *  is whether the segment THE ENTRY'S MARK NAMES holds the blob (D-5396). It is measured, by a lookup in `seg`'s blobs table,
+ *  only of a pruned blob no mark names (`b.sha` is set only for such a blob) and only where `seg` is that segment
+ *  (`markNamesSeg`: the entry's mark names `seg`, or, for an entry not marked yet, would). An entry marked by ANOTHER
+ *  segment names one this is not, and what that one carries is not measured here (it is not open): the blob reads as not
+ *  carried, so lib clears the mark and the next pass writes the entry with the stub, one more export in the worst case and
+ *  never a loss. `carried` is false of any other blob, whose answer lib does not read from it. */
+function blobStateIn(seg, b, markNamesSeg) {
+  return { pruned: Number(b.pruned) === 1, exported: Number(b.exported) === 1, carried: markNamesSeg && b.sha !== null && segmentCarries(seg, b.sha) };
 }
 /** Whether the segment being replayed holds a blob (its bytes or its stub). A read of the segment, so a segment whose pages
  *  read but whose table does not fails the chunk as any unreadable page does (readSegmentPage). */
@@ -2831,16 +2843,20 @@ function unmarkEntryOverBlob(db, entryId, blobId) {
     stmts(db).exportClear.run(entryId);
   }
 }
-/** D-5395, D-5396: a replayed row that links a blob to an entry takes the entry's mark off when lib says the entry may not
- *  hold it with the blob linked (segmentMayMarkEntry): the store holds the blob live and unmarked, or pruned with no mark and
- *  not carried by the segment being replayed. The entry then exports again, with the bytes or with a stub. The entry's own
- *  row marked it earlier in the segment, before this row linked what the segment's export had not carried. The pruned arm is
- *  no rarity: an entry's variant rows include its first body, so a segment written after a late variant names that body
- *  without carrying it (an earlier segment held it when the pass wrote), and a store without that earlier segment holds it
- *  pruned and unmarked, its stub being in a later segment alone. */
-function unmarkEntryOverBlobIn(db, seg, entryId, blobId) {
+/** D-5395, D-5396: a replayed row that links a blob to an entry (`entry`: entrySel's row) takes the entry's mark off when lib
+ *  says the entry may not hold it with the blob linked (segmentMayMarkEntry): the store holds the blob live and unmarked, or
+ *  pruned with no mark and not carried by the segment the entry's mark names. Only the segment being replayed is open, so a
+ *  pruned blob counts as carried only when the entry is marked by that very segment (blobStateIn); an entry marked by another
+ *  segment loses its mark over such a blob whether or not this segment carries it, and the next pass writes it again with
+ *  the stub (an unmarked entry has no mark to lose, and exportClear leaves it as it is). The entry then exports again, with
+ *  the bytes or with a stub. The entry's own row marked it earlier in the segment, or an earlier segment's did, before this
+ *  row linked what the export that wrote it had not carried. The pruned arm is no rarity: an entry's variant rows include its
+ *  first body, so a segment written after a late variant names that body without carrying it (an earlier segment held it when
+ *  the pass wrote), and a store without that earlier segment holds it pruned and unmarked, its stub being in a later segment
+ *  alone; and the entry itself is marked by whichever segment first carried its row. */
+function unmarkEntryOverBlobIn(db, seg, entry, blobId) {
   const b = replayStmts(db).blobStateIn.get(blobId);
-  if (b !== undefined && !segmentMayMarkEntry({ blobs: [blobStateIn(seg, b)] })) stmts(db).exportClear.run(entryId);
+  if (b !== undefined && !segmentMayMarkEntry({ blobs: [blobStateIn(seg, b, entry.exported_seg === seg.name)] })) stmts(db).exportClear.run(entry.entry_id);
 }
 /** A variant's first file is the dead-file row of the first file the segment names for it (first_path, first_dev,
  *  first_ino; the export pass writes that file row before the entry), else its entry's own dead-file row
@@ -2853,7 +2869,7 @@ function replayVariantRow(db, seg, r) {
   if (blobId === null) { bump(db, 'export_row_blob_missing'); return; }
   const first = deadFileIdOf(db, r.first_path, r.first_dev, r.first_ino) ?? Number(e.struct_file_id);
   stmts(db).variantIns.run(e.entry_id, blobId, first, r.first_seen_ms, r.cause);   // B1's own insert, byte for byte (ON CONFLICT (entry_id, blob_id) DO NOTHING)
-  unmarkEntryOverBlobIn(db, seg, e.entry_id, blobId);
+  unmarkEntryOverBlobIn(db, seg, e, blobId);
 }
 function replayBoundaryRow(db, seg, r) {
   const s = replayStmts(db);
@@ -2868,7 +2884,7 @@ function replayBoundaryRow(db, seg, r) {
   const ins = s.boundaryIns.run(e.entry_id, t, r.boundary_ord, r.trigger, r.head_uuid, r.anchor_uuid, r.tail_uuid, kept, r.pre_tokens, r.post_tokens, r.duration_ms);
   // Nothing inserted: the entry already has its boundary (a repeat, absorbed), or another entry holds this (transcript, ord).
   if (Number(ins.changes) === 0 && s.boundaryHas.get(e.entry_id) === undefined) bump(db, 'export_row_unplaced');
-  if (Number(ins.changes) === 1 && kept !== null) unmarkEntryOverBlobIn(db, seg, e.entry_id, kept);
+  if (Number(ins.changes) === 1 && kept !== null) unmarkEntryOverBlobIn(db, seg, e, kept);
 }
 function replaySidecarRow(db, seg, r) {
   const s = replayStmts(db);
@@ -2876,14 +2892,14 @@ function replaySidecarRow(db, seg, r) {
   if (t === null) { bump(db, 'export_row_unplaced'); return; }
   const blobId = blobIdOf(db, r.blob_sha256);
   if (blobId === null) { bump(db, 'export_row_blob_missing'); return; }
-  let entryId = null;
+  let entry = null;
   if (r.uuid !== null) {
     const e = s.entrySel.get(r.uuid);
     if (e === undefined) bump(db, 'export_row_unplaced');
-    else entryId = e.entry_id;
+    else entry = e;
   }
-  sideStmts(db).sidecarIns.run(t, r.name, blobId, entryId, r.first_seen_ms);   // B1's own insert, byte for byte (ON CONFLICT (transcript_pk, name, blob_id) DO NOTHING)
-  if (entryId !== null) unmarkEntryOverBlobIn(db, seg, entryId, blobId);
+  sideStmts(db).sidecarIns.run(t, r.name, blobId, entry === null ? null : entry.entry_id, r.first_seen_ms);   // B1's own insert, byte for byte (ON CONFLICT (transcript_pk, name, blob_id) DO NOTHING)
+  if (entry !== null) unmarkEntryOverBlobIn(db, seg, entry, blobId);
 }
 function replayMembershipRow(db, _seg, r) {
   const fileId = deadFileIdOf(db, r.path, r.dev, r.ino);
@@ -4315,9 +4331,10 @@ const REFERRER_CLEAR_STMTS = new WeakMap();
  *  once: a cleared entry is no longer marked for the next statement). Run in the caller's transaction, on the paths that
  *  leave a blob unmarked under entries that may be marked: a bind check that cleared the marks of a missing segment's
  *  blobs, pruned ones too (a stub travels again, D-5396 (history-export-bind-clears-pruned-referrers)), and a revived
- *  tombstone. An entry keeps its mark only while every blob it references is exported or pruned (lib entryMayHoldMark);
- *  the pass offers only unmarked entries, so without this the blob, or its stub, would never be carried. No blob, no
- *  statement. */
+ *  tombstone. An entry keeps its mark only while every blob it references is exported or pruned (the rule of lib
+ *  entryMayHoldMark; replay's narrower one, lib segmentMayMarkEntry, also needs a pruned, unmarked blob carried by the
+ *  segment the mark names: D-5396); the pass offers only unmarked entries, so without this the blob, or its stub, would never
+ *  be carried. No blob, no statement. */
 function clearReferrerMarks(db, blobIds) {
   if (blobIds.length === 0) return 0;
   let st = REFERRER_CLEAR_STMTS.get(db);
@@ -4561,8 +4578,9 @@ export function writeChunk(db, chunk) {
           b.anchorUuid, b.tailUuid, keptId, b.preTokens, b.postTokens, b.durationMs);
         if (bi.changes === 1 && b.missing.length > 0) add('boundary_field_missing');
         // D-5395 (history-export-mark-needs-its-blobs): an entry that already existed and gains its boundary over a kept blob
-        // the store holds live and unmarked loses its export mark, by replay's own rule (unmarkEntryOverBlob: lib's
-        // entryMayHoldMark). storeBlob's revival clear ran in the blob loop above, before this reference existed, and a fresh
+        // the store holds live and unmarked loses its export mark, by the ingest's arm of the rule (unmarkEntryOverBlob: lib's
+        // entryMayHoldMark; replay's rows ask lib's segmentMayMarkEntry instead, through unmarkEntryOverBlobIn, D-5396).
+        // storeBlob's revival clear ran in the blob loop above, before this reference existed, and a fresh
         // blob has no referrer to clear. A new entry is unmarked and an entry with its boundary already inserts nothing, so
         // neither costs a statement.
         if (bi.changes === 1 && before !== undefined && keptId !== null) unmarkEntryOverBlob(db, entryId, keptId);
@@ -8464,7 +8482,9 @@ function noteExportPassDone(db, nowMs, complete) {
  *  records it in, so exportStep's cadence waits its interval. It is not a pass: doctor's last-pass clock does not move. A
  *  record that meets busy or a full disk is left: the next tick tries sooner, and nothing is lost. */
 function noteExportPassHeld(db, ctx, nowMs) {
-  process.stderr.write(`history-sweep: the export pass was held by the run's budget (${ctx.budget.maxMs} ms) before it wrote a due row; it tries again at its next interval\n`);
+  // The run's budget is a time limit and a byte limit, and either holds a pass (lib budgetHeldPass is told only that the budget
+  // did): the line names both, so a hold by the bytes does not read as one by the clock.
+  process.stderr.write(`history-sweep: the export pass was held by the run's budget (${ctx.budget.maxMs} ms, ${ctx.budget.maxBytes} bytes) before it wrote a due row; it tries again at its next interval\n`);
   try {
     withTx(db, 'NORMAL', () => { setMeta(db, EXPORT_ATTEMPT_META, String(nowMs)); });
   } catch { /* busy or full: the next tick retries sooner, nothing is lost */ }

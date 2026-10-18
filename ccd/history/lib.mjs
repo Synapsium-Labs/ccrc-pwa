@@ -5807,8 +5807,9 @@ const RECOVER_EXPORT_CURSOR_RE = /^(export-blobs|export-stubs|export-rows)(?::([
  *  resumes only a group whose size still equals `n`; a cursor with no `/<n>` (written before the size was kept, or
  *  `groupSize` null or absent) restarts its group from its start. A `groupSize` that is none of null, absent or a positive safe
  *  integer throws a TypeError (H-182): parseRecoverCursor answers null to such a text, so it would stall the step for good.
- *  So does a `groupSize` set beside a phase outside RECOVER_JOURNAL_PHASES (W1-B4): only the journal phases' grammar has a
- *  `/<n>`, and an export or reindex cursor written with one would be a text parseRecoverCursor refuses, the same stall. */
+ *  So does a `groupSize` set beside a phase outside RECOVER_JOURNAL_PHASES (W1-B4; D-5398
+ *  (history-recover-cursor-group-only-in-journal)): only the journal phases' grammar has a `/<n>`, and an export or reindex
+ *  cursor written with one would be a text parseRecoverCursor refuses, the same stall. */
 export function formatRecoverCursor(c) {
   if (!RECOVER_PHASES.includes(c.phase)) throw new TypeError(`formatRecoverCursor: phase outside RECOVER_PHASES: ${String(c.phase)}`);
   let s = c.phase;
@@ -8359,8 +8360,11 @@ export function entryMayHoldMark({ blobs }) {
  *  that marks the entry). Without that, a mark naming a segment that lacks the stub outlives the loss of the segment that
  *  holds it, and a rebuild from the live segments cannot place the entry. A live, unmarked blob licenses nothing. `carried`
  *  is read only of a pruned blob that is not exported: the caller measures it there and says false of any other, whose answer
- *  does not depend on it, and a blob that does not say is refused rather than read as not carried. No blob at all answers
- *  yes, as entryMayHoldMark does. */
+ *  does not depend on it, and a blob that does not say is refused rather than read as not carried. The segment is the one
+ *  the entry's mark names, or would name: replay's row arms ask of an entry already marked, and measure `carried` only where
+ *  that mark names the segment being replayed (the only one open); an entry marked by another segment gets `carried` false
+ *  for such a blob, so its mark goes and the next pass writes it with the stub (D-5396). No blob at all answers yes, as
+ *  entryMayHoldMark does. */
 export function segmentMayMarkEntry({ blobs }) {
   if (!Array.isArray(blobs)) throw new TypeError(`segmentMayMarkEntry: blobs must be a list, got ${typeof blobs}`);
   for (const b of blobs) {
