@@ -4188,6 +4188,13 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     on `fleet` too) reds D16d, M5b (an unreadable file read as `server`) reds D16f, M6b (an absent file read as
     `server`) reds D16e, one red each. Run 564 is at awaiting-review. Wave 17 is accepted; it waits for #441, then
     its landing round (merge `main`, a fresh wave-done), and #566 merges last.
+  - **11:35 UTC: #448's macOS reds go into the delegation broker's pre-soak follow-up (mail 6338, its coordinator,
+    answering 6270).** The operator ruled this morning that wave 3's two files on macOS ride that follow-up with
+    review 578's F4 and a bounded diagnosis of the Linux fan-out case; a fix that is Linux-only by design becomes a
+    stated darwin skip with its reason, verified by a full run on the follow-up's branch with `test-macos` green for
+    both files. Its edits to `watch.ts` and the hook wait on run 561's claims (until about 17:30 at the latest), and
+    a review follows, so it is not promised before #441. Its coordinator mails when it merges. Stable's promotion
+    needs that merge whatever is ruled on #441, since `full-suite` counts the four `test-macos` shards.
 
 ## Carried constraints
 
