@@ -28,7 +28,7 @@ const SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   // D-5242: the dec rides after the one positional, as an unattended lane sends it; the bare `['hibernate']` grant
   // admits it with no widening.
   hibernate: ['demo-quiet-basin', { surface: 'agent', actor: 'sweep:hibernate', reason: null }],
-  forget: ['claude-acme-demo'],
+  swap: ['demo-quiet-basin', 'claude9'],
   /** THE DELIBERATE CROSSING (account pools, spec §5.7). Three separate
    *  ENTRIES rather than an option on the three above — `start`/`enable`'s own
    *  rule, for its reason: a route picks the ENTRY, so both spellings are
