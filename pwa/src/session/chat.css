@@ -252,8 +252,16 @@ button.metachip:active {
     background: var(--bg-raised);
     border-color: var(--edge-strong);
   }
+  /* The ground is restated with the ink on purpose: the contrast gate reads
+     a colour-only rule as a variant of every `.keycap` rule it can reach,
+     the terminal's caps on the well included, and measures it there. A rule
+     that brings its own ground is measured on that ground, the one the
+     header cap actually paints. */
   @media (hover: hover) {
-    .chat-head .keycap { color: var(--ink-secondary); }
+    .chat-head .keycap {
+      color: var(--ink-secondary);
+      background: var(--bg-raised);
+    }
   }
 }
 .chat-head .keycap:disabled {
