@@ -272,6 +272,20 @@ These are departures from the brief, the ledger, or what shipped text at `256b25
   - **The plan:** D-5257's refusal covered a second ADDRESS (`;`) and an escape (`%`), but not a second KEY inside the first address.
   - **Read by the review** (node, with the same regex): the capture `/^unix:(?:[^,]*,)*path=([^,]+)/` is greedy, so within the first address it reads the LAST `path=`, while libdbus's `dbus_address_entry_get_value` returns the FIRST. `unix:path=/run/user/1000/bus,path=<home>/xdg/bus` had neither `;` nor `%`, so with `XDG_RUNTIME_DIR` under HOME `busUnder` kept the caller's pair and `assertNoRealTool` passed it. Nothing passes such a value today, `systemctl` is poisoned anyway, and sd-bus rejects the repeated key.
   - **The change:** `busPath` answers null when the value holds more than one `path=` key (at the address's start or after a `,`). Row H18-12 in `ccd-harness-containment.test.ts`, on a HOME with no `;` or `%`: the caller's pair is not kept, and `assertNoRealTool` throws on it. Mutation row T1-17.
+- **D-5259** — *Fix round 3 meets CodeQL's three alerts on this PR in code: the census's `pat` escapes every regex metacharacter, and the harness's `sh` and `runbook-holds`' `_dr_rc_state` spawn carry their paths, and `sh` its caller's snippet, in the environment, so each `bash -c` command text is a constant* (the worker, fix round 3, as the coordinator ruled after the merge was refused on three unresolved CodeQL threads).
+  - **The plan:** Task 3 quotes `pat` escaping `$` only, and Task 1 quotes `sh` as `` execFileSync('bash', ['-c', `source "${CCD}"; ${snippet}`], …) ``.
+  - **Read by CodeQL** on `d7662ee11`:
+    - alert 118 (js/incomplete-sanitization): `pat` does not escape a backslash;
+    - alert 119 (js/shell-command-injection-from-environment): `sh`'s command depends on an uncontrolled file name and absolute path. Its flows run from `mkTmp`'s `realpathSync` through `h.home`, which callers interpolate into their snippets, not from `CCD`;
+    - alert 120 (the same rule): `runbook-holds`' `. "$1"` with `DOCTOR_CHECKS` in argv.
+
+    The same findings stand on `main` under older fingerprints (alerts 64 and 90). This wave's edits to those lines made CodeQL report them as new.
+  - **The change**, following #404's fix of alert 84 (`history-lib.test.ts`):
+    - `pat` escapes `[\\^$.*+?()[\]{}|]`. Its inputs are identifiers, so no verdict moves.
+    - `sh` passes `CCD_HARNESS_SRC` and `CCD_HARNESS_SNIPPET` after `env(extra)`, so no `extra` overrides them. The constant command copies them to shell variables, unsets both before sourcing ccd, so nothing ccd starts inherits them, then sources ccd and `eval`s the snippet.
+    - `runDrRcState` adds `DOCTOR_CHECKS` to the one binding it asserts on and spawns with, and runs `. "$DOCTOR_CHECKS"; _dr_rc_state`.
+
+    The census still counts both spawns as contained script spawns (199 in all), and `ALLOWED` and `SLICED_ALLOWED` are unchanged.
 
 ## File structure
 

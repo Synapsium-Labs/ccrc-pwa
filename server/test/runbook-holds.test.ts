@@ -101,10 +101,12 @@ const runDrRcState = (body: string | undefined): string => {
       writeFileSync(join(home, '.ccrc', 'remote-control'), body);
     }
     // Contained like the spawn below (wave 18, D-5255): the doctor checks are outside the raw-spawn census's names, so
-    // no census row sees this env. The assertion reads the SAME binding the spawn takes (review 535 F11).
-    const env = ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' });
+    // no census row sees this env. The assertion reads the SAME binding the spawn takes (review 535 F11). The checks'
+    // path rides that env, not argv, so the command text stays constant (fix round 3, D-5259: CodeQL reads every argv
+    // element of a `bash -c` as part of the command).
+    const env = { ...ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' }), DOCTOR_CHECKS };
     assertNoRealTool(env, home);
-    const r = spawnSync('bash', ['-c', `. "$1"; _dr_rc_state`, 'bash', DOCTOR_CHECKS], { env, encoding: 'utf8' });
+    const r = spawnSync('bash', ['-c', '. "$DOCTOR_CHECKS"; _dr_rc_state'], { env, encoding: 'utf8' });
     expect(r.status, r.stderr).toBe(0);
     return r.stdout;
   } finally {

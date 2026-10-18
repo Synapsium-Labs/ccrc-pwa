@@ -646,16 +646,23 @@ export function makeCcdHarness(prefix: string): CcdHarness {
   // committed newline-bearing paths. HOME is only the ONLY boundary this file
   // claims if the process starts inside it.
   //
-  // `env` is the ONE expression `sh` spawns with (wave 18), exposed so a test can
-  // hand it to `assertNoRealTool`. `CCD_MOUNTINFO` sits BEFORE `...extra` so a
-  // snippet can override it: see `FIXTURE_MOUNTINFO` for why the host's table
-  // never decides a verdict. A bus pair outside HOME cannot override the fixture's.
+  // `env` is the ONE expression `sh` spawns with (wave 18; `sh` adds only its two
+  // harness variables after it), exposed so a test can hand it to
+  // `assertNoRealTool`. `CCD_MOUNTINFO` sits BEFORE `...extra` so a snippet can
+  // override it: see `FIXTURE_MOUNTINFO` for why the host's table never decides
+  // a verdict. A bus pair outside HOME cannot override the fixture's.
   const env = (extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv =>
     ghContainedEnv(home, { ...inheritedEnv(), HOME: home,
       CCD_MOUNTINFO: path.join(home, FIXTURE_MOUNTINFO), ...extra }, { systemd: true, tmux: true, net: true });
+  // The ccd path and the caller's snippet ride the ENVIRONMENT, not argv (wave 18 fix round 3, D-5259): CodeQL reads
+  // every argv element of a `bash -c` as part of the command (js/shell-command-injection-from-environment), and a
+  // snippet often interpolates this fixture HOME. Both are set AFTER `env(extra)`, so no `extra` overrides them, and
+  // unset before ccd is sourced, so nothing ccd starts inherits them. `eval` runs the snippet as the old `-c` text did.
   const sh = (snippet: string, extra: NodeJS.ProcessEnv = {}): string =>
-    execFileSync('bash', ['-c', `source "${CCD}"; ${snippet}`],
-      { encoding: 'utf8', cwd: home, env: env(extra) }).trim();
+    execFileSync('bash', ['-c', 'ccd_h_src=$CCD_HARNESS_SRC ccd_h_snippet=$CCD_HARNESS_SNIPPET; '
+      + 'unset CCD_HARNESS_SRC CCD_HARNESS_SNIPPET; source "$ccd_h_src"; eval "$ccd_h_snippet"'],
+      { encoding: 'utf8', cwd: home,
+        env: { ...env(extra), CCD_HARNESS_SRC: CCD, CCD_HARNESS_SNIPPET: snippet } }).trim();
 
   return {
     home,

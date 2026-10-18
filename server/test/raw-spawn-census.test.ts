@@ -151,8 +151,11 @@ const READS_TEXT = /\b(?:readFileSync|readFile|read)\s*\(/;
 const PATHLIKE = new RegExp('^(?:(?:path\\.)?(?:join|resolve)\\s*\\(|`|[A-Za-z_$][\\w$]*\\s*$'
   + '|\\([^)]*\\)\\s*(?::\\s*[\\w.]+\\s*)?=>\\s*(?:(?:path\\.)?(?:join|resolve)\\s*\\(|`))');
 const IDENT = /^[A-Za-z_$][\w$]*$/;
-/** A name as a regex: `$` escaped, and a dotted name (`ns.CCD`) matched across optional spaces around its dots. */
-const pat = (name: string): string => name.split('.').map((x) => x.replace(/\$/g, '\\$')).join('\\s*\\.\\s*');
+/** A name as a regex: every regex metacharacter escaped (a name is an identifier, so only `$` occurs, but the escape
+ *  is whole: wave 18 fix round 3, D-5259), and a dotted name (`ns.CCD`) matched across optional spaces around its
+ *  dots. */
+const pat = (name: string): string =>
+  name.split('.').map((x) => x.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&')).join('\\s*\\.\\s*');
 const word = (name: string): RegExp => new RegExp(`(?<![\\w$.])${pat(name)}(?![\\w$])`);
 /** A script named as a segment under a directory binding: `join(<dir>, '<name>')`. */
 const under = (dir: string): RegExp => new RegExp(`\\(\\s*${pat(dir)}\\s*,\\s*${Q}${NAMES}${Q}\\s*\\)`);
