@@ -686,8 +686,11 @@ export function decideReparse(i: { targets: number; prunedSpans: number }): { ok
 // --- W1-B2 Task 7: recovery and repair decisions (spec §9.14, §9.6, §8.4 doctor --repair)
 export const RECOVER_PHASES: readonly string[];
 export const RECOVER_JOURNAL_PHASES: readonly string[];
-/** `groupSize` is the file count of the replay group `file` leads, which `offset` is a position in (a byte offset for a group of one, an ordinal for a
- *  merge group); null or absent means it was not recorded (D-4607). */
+/** `file` and `offset` name a position in the phase's input. In the journal phases (index, apply) `file` is a journal file's name and
+ *  `groupSize` is the file count of the replay group it leads, which `offset` is a position in (a byte offset for a group of one, an
+ *  ordinal for a merge group); null or absent means it was not recorded (D-4607). In the export phases `file` is a segment's name and
+ *  `offset` is the last blobs rowid applied (export-blobs) or the last row ord applied (export-rows). Only the journal phases carry a
+ *  `groupSize`: formatRecoverCursor throws a TypeError for one beside any other phase. */
 export interface RecoverCursor { phase: string; file: string | null; offset: number; blobId: number | null; groupSize?: number | null; pairsAdded: boolean }
 export function formatRecoverCursor(c: RecoverCursor): string;
 export function parseRecoverCursor(s: string | null): RecoverCursor | null;

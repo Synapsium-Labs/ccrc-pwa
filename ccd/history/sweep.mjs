@@ -62,7 +62,7 @@ import {
   mergeJournalByTime, decideBind, restoreNameOk,
   EXPORT_DIR, EXPORT_SEGMENT_MAX_BYTES, EXPORT_SEGMENT_FORMAT, segmentName, nextSegmentSeq, planSegment, CLAUDE_CODE_DEFAULT_RETENTION_DAYS,
   shortestRetention, exportHorizonDays, decideExportPass, planExportRoom, exportPassIntervalMs, exportMarkFailsOf, decideMarkOutcome,
-  decideMarkCheck, missingSegmentNames,
+  decideMarkCheck, missingSegmentNames, exportedSourceKey, decideSegmentReplay, orderSegmentNames,
 } from './lib.mjs';
 import {
   MIGRATIONS, OWED_INDEX, StoreError, bump, clearDoneMarkers, closeWriter, createStore, dropPending, finishPending, getMeta,
@@ -73,6 +73,7 @@ import {
   integrityCheck, foreignKeyRows, ftsMeasure, dropFtsTables, getStep, setStep, setCounter, adoptStore,
   peekStoreId, stageRestore, commitRestore, abortRestore,
   ensureSegmentDir, createSegment, segmentInserts, publishSegment, listSegments, removeStaleSegmentTemps, setSegmentSeq,
+  openSegment, segmentMeta, segmentBlobsAfter, segmentRowsAfter,
 } from './store.mjs';
 import { isBoundaryLine } from '../compact-card.mjs';
 import {
@@ -2616,17 +2617,365 @@ async function recoverReindexChunk(db, run, cursor) {
   return { cursor: r.cur, moved: r.moved, phaseDone: r.done };
 }
 
-/** export-blobs: the first pass of segment replay (§9.14 "Export replay": every segment's blobs, insert-or-ignore by
- *  sha256, before any segment's rows). W1-B4 Task 10 replaces this body; until then it answers its own phase done
- *  with the cursor it was given, so a step moves through it and keeps its +pairs. */
-function recoverExportBlobsChunk(_db, _run, cursor) {
-  return { cursor, moved: false, phaseDone: true };
+// ── W1-B4 Task 10: export replay, the recovery step's two export phases (spec §9.14 "Export replay", §9.15) ─────
+//
+// After the journal (index, apply), the step replays this store's export segments in two passes, so no row ever
+// waits on a blob in a later segment (BK21):
+//   export-blobs  every segment's blobs, insert-or-ignore by sha256; each replayed blob that holds bytes is marked
+//                 with its segment, so it is never exported again;
+//   export-rows   every segment's rows in their write order (ord), through the ingest's named columns:
+//                 - families and epochs fill only what the journal lacks, through merged_into;
+//                 - a gone file becomes a dead-file ingest_files row keyed 'exported:' + hex(sha256(path ∖0 dev ∖0
+//                   ino)), never a live row, even one that now reuses its inode (§9.15), and with no file_paths row,
+//                   so the live ingest can never find it;
+//                 - entries go through ENTRY_UPSERT's newest-rank rule, each marked with its segment;
+//                 - variants, boundaries (their carried ord), sidecars and memberships, idempotently.
+// Segments go in (seq, writer) order (lib orderSegmentNames), whatever their writer, and lib decideSegmentReplay
+// judges each from its meta: a newer format is refused loudly (meta export_segment_newer lists it, doctor FAIL
+// export-segment-newer) and skipped; another store's is skipped and counted export_segment_foreign. A segment that
+// cannot be opened or read fails its chunk (recover_chunk_failed) and the step waits for it, capture held with it:
+// only a newer format is skippable, and the failure line names the way out
+// (D-4765 (history-export-segment-unreadable-stalls), NEW).
+// THE CURSOR is lib's RecoverCursor at its phase: `file` the segment's name, `offset` the last blobs rowid
+// (export-blobs) or the last row ord (export-rows) applied. It is committed in the chunk's own NORMAL transaction
+// with what it applied, and `pairsAdded` rides along as the step holds it (run.pairsAdded: an export phase learns no
+// pair itself), so Task 29's reindex phase still sees a learned pair. It carries no group size: only a journal phase
+// has one, and lib formatRecoverCursor refuses one beside an export phase. Replay writes no journal record (O36) and
+// no segment.
+
+/** Rows read per page of one segment; a chunk applies them until run.budget.chunkBytes. */
+const EXPORT_REPLAY_PAGE = 256;
+
+const EXPORT_REPLAY_STMTS = new WeakMap();
+/** Export replay's prepared statements, one set per connection, each naming its columns (stmts(db)'s idiom). A variant
+ *  and a sidecar row go in through B1's own inserts (stmts(db).variantIns, sideStmts(db).sidecarIns), whose SQL replay
+ *  needs as it stands; an entry through stmts(db).entryUpsert and a membership through stmts(db).membership. */
+function replayStmts(db) {
+  let s = EXPORT_REPLAY_STMTS.get(db);
+  if (s !== undefined) return s;
+  s = {
+    blobIns: db.prepare('INSERT INTO blobs (sha256, codec, z, raw_len, pruned_ms) VALUES (?, ?, ?, ?, ?) ON CONFLICT (sha256) DO NOTHING'),
+    blobMark: db.prepare('UPDATE blobs SET exported_ms = ?, exported_seg = ? WHERE sha256 = ? AND z IS NOT NULL AND exported_ms IS NULL'),
+    blobId: db.prepare('SELECT blob_id FROM blobs WHERE sha256 = ?'),
+    familySel: db.prepare('SELECT session_pk, merged_into FROM sessions WHERE ccrc_id = ? AND generation = ?'),
+    familyFill: db.prepare("UPDATE sessions SET project = ? WHERE session_pk = ? AND project = ''"),
+    epochMine: db.prepare('SELECT seq FROM epochs WHERE session_pk = ? AND cc_session_uuid = ?'),
+    epochFill: db.prepare(`UPDATE epochs SET started_ms = coalesce(started_ms, ?), cwd = coalesce(cwd, ?),
+        git_branch = coalesce(git_branch, ?), cwd_real = coalesce(cwd_real, ?), confirmed_ms = coalesce(confirmed_ms, ?)
+      WHERE session_pk = ? AND seq = ?`),
+    epochElsewhere: db.prepare('SELECT 1 AS x FROM epochs WHERE cc_session_uuid = ? AND session_pk <> ? AND confirmed_ms IS NOT NULL LIMIT 1'),
+    epochSeqTaken: db.prepare('SELECT 1 AS x FROM epochs WHERE session_pk = ? AND seq = ?'),
+    epochIns: db.prepare(`INSERT INTO epochs (session_pk, seq, cc_session_uuid, cause, declared_by, started_ms, cwd,
+        git_branch, cwd_real, confirmed_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+    candidateDel: db.prepare(DELETE_CANDIDATE),
+    transcriptUpsert: db.prepare(`INSERT INTO transcripts (cc_session_uuid, agent_id, harness, parent_tool_use_id,
+        workflow_run_id, agent_type) VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT (cc_session_uuid, agent_id) DO UPDATE SET
+        parent_tool_use_id = coalesce(transcripts.parent_tool_use_id, excluded.parent_tool_use_id),
+        workflow_run_id = coalesce(transcripts.workflow_run_id, excluded.workflow_run_id),
+        agent_type = coalesce(transcripts.agent_type, excluded.agent_type)`),
+    transcriptPk: db.prepare('SELECT transcript_pk FROM transcripts WHERE cc_session_uuid = ? AND agent_id = ?'),
+    deadFileUpsert: db.prepare(`INSERT INTO ingest_files (dev, ino, source_key, transcript_pk, size, mtime_ns, offset,
+        status, eof_ms, parser_version) VALUES (?, ?, ?, ?, ?, ?, 0, 'exported', ?, ?)
+      ON CONFLICT (dev, ino, source_key) DO UPDATE SET eof_ms = coalesce(ingest_files.eof_ms, excluded.eof_ms)`),
+    deadFileId: db.prepare('SELECT file_id FROM ingest_files WHERE dev = ? AND ino = ? AND source_key = ?'),
+    entrySel: db.prepare('SELECT entry_id, struct_file_id FROM entries WHERE uuid = ?'),
+    entryMark: db.prepare('UPDATE entries SET exported_ms = ?, exported_seg = ? WHERE entry_id = ? AND exported_ms IS NULL'),
+    // B1's boundaryIns draws ord itself; replay carries the exporter's. The conflict target is NARROW on purpose: the one
+    // uniqueness replay means to absorb is a repeated entry (a second segment of it). A (transcript_pk, ord) collision
+    // with ANOTHER entry's boundary is not absorbed: it throws, so the chunk fails and the step waits, as it does for a
+    // segment it cannot read (D-4765 (history-export-segment-unreadable-stalls)); a bare ON CONFLICT DO NOTHING would
+    // drop that boundary without a word.
+    boundaryIns: db.prepare(`INSERT INTO boundaries (entry_id, transcript_pk, ord, trigger, head_uuid, anchor_uuid,
+        tail_uuid, kept_blob_id, pre_tokens, post_tokens, duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT (entry_id) DO NOTHING`),
+  };
+  EXPORT_REPLAY_STMTS.set(db, s);
+  return s;
 }
 
-/** export-rows: the second pass (every segment's rows in (seq, writer) order, filling only what the journal lacks).
- *  W1-B4 Task 10 replaces this body; until then it answers its own phase done. */
-function recoverExportRowsChunk(_db, _run, cursor) {
-  return { cursor, moved: false, phaseDone: true };
+const blobIdOf = (db, sha) => {
+  const b = replayStmts(db).blobId.get(sha);
+  return b === undefined ? null : Number(b.blob_id);
+};
+const transcriptPkOf = (db, uuid, agentId) => {
+  const t = replayStmts(db).transcriptPk.get(uuid, agentId);
+  return t === undefined ? null : Number(t.transcript_pk);
+};
+/** The family a segment row names, through merged_into (a re-keyed '' family answers with the one it merged into),
+ *  or null when the store has none: a row never creates a family the segment's own family row did not. */
+function familyPkOf(db, ccrcId, generation) {
+  const row = replayStmts(db).familySel.get(ccrcId, generation);
+  if (row === undefined) return null;
+  return row.merged_into === null ? Number(row.session_pk) : Number(row.merged_into);
+}
+/** The dead-file row of a gone file, made when absent (§9.15 "Memberships of a gone file"). Its eof_ms is the one the
+ *  segment carried, else the segment's cutoff (D-4764 (history-export-dead-file-eof), NEW): B2's leaf readiness reads it. */
+function ensureDeadFile(db, seg, path, dev, ino, transcriptPk, size, mtimeNs, eofMs) {
+  const s = replayStmts(db);
+  const key = exportedSourceKey(path, dev, ino);
+  s.deadFileUpsert.run(dev, ino, key, transcriptPk, size, mtimeNs, eofMs ?? seg.cutoffMs, PARSER_VERSION);
+  return Number(s.deadFileId.get(dev, ino, key).file_id);
+}
+const deadFileIdOf = (db, path, dev, ino) => {
+  const row = replayStmts(db).deadFileId.get(dev, ino, exportedSourceKey(path, dev, ino));
+  return row === undefined ? null : Number(row.file_id);
+};
+
+function replayFamilyRow(db, _seg, r) {
+  const f = ensureFamily(db, r.ccrc_id, r.generation, r.project, r.first_seen_ms);
+  if (!f.created && r.project !== '') replayStmts(db).familyFill.run(r.project, f.sessionPk);
+}
+function replayTranscriptRow(db, _seg, r) {
+  replayStmts(db).transcriptUpsert.run(r.cc_session_uuid, r.agent_id, r.harness, r.parent_tool_use_id, r.workflow_run_id, r.agent_type);
+}
+/** An epoch the journal holds (by uuid, in the family the row names after merged_into) keeps its seq, cause and
+ *  declared_by and gains only its NULL columns; one the journal lacks goes in at the segment's seq, unless that seq,
+ *  or the uuid confirmed in another family, is taken (export_epoch_conflict). */
+function replayEpochRow(db, _seg, r) {
+  const s = replayStmts(db);
+  const pk = familyPkOf(db, r.ccrc_id, r.generation);
+  if (pk === null) { bump(db, 'export_row_unplaced'); return; }
+  const mine = s.epochMine.get(pk, r.cc_session_uuid);
+  if (mine !== undefined) {
+    s.epochFill.run(r.started_ms, r.cwd, r.git_branch, r.cwd_real, r.confirmed_ms, pk, mine.seq);
+    if (r.confirmed_ms !== null) s.candidateDel.run(r.cc_session_uuid, r.ccrc_id);
+    return;
+  }
+  if (s.epochElsewhere.get(r.cc_session_uuid, pk) !== undefined || s.epochSeqTaken.get(pk, r.seq) !== undefined) {
+    bump(db, 'export_epoch_conflict');
+    return;
+  }
+  s.epochIns.run(pk, r.seq, r.cc_session_uuid, r.cause, r.declared_by, r.started_ms, r.cwd, r.git_branch, r.cwd_real, r.confirmed_ms);
+  if (r.confirmed_ms !== null) s.candidateDel.run(r.cc_session_uuid, r.ccrc_id);
+}
+function replayFileRow(db, seg, r) {
+  const t = transcriptPkOf(db, r.cc_session_uuid, r.agent_id);
+  if (t === null) { bump(db, 'export_row_unplaced'); return; }
+  ensureDeadFile(db, seg, r.path, r.dev, r.ino, t, r.size, r.mtime_ns, r.eof_ms);
+}
+function replayEntryRow(db, seg, r) {
+  const t = transcriptPkOf(db, r.cc_session_uuid, r.agent_id);
+  if (t === null) { bump(db, 'export_row_unplaced'); return; }
+  const blobId = blobIdOf(db, r.blob_sha256);
+  if (blobId === null) { bump(db, 'export_row_blob_missing'); return; }
+  const fileId = ensureDeadFile(db, seg, r.struct_path, r.struct_dev, r.struct_ino, t, null, null, null);
+  stmts(db).entryUpsert.run(r.uuid, t, r.type, r.subtype, r.role, r.model, r.parent_uuid, r.ts_ms, r.request_id,
+    r.api_block_index, r.msg_id, r.source_tool_use_id, r.tool_name, r.is_compact_summary, r.provenance, r.prov_version,
+    r.parse_state, r.struct_rank_ns, fileId, blobId);
+  const s = replayStmts(db);
+  const e = s.entrySel.get(r.uuid);
+  s.entryMark.run(seg.markMs, seg.name, e.entry_id);
+}
+/** A variant's first file is the dead-file row of the first file the segment names for it (first_path, first_dev,
+ *  first_ino; the export pass writes that file row before the entry), else its entry's own dead-file row
+ *  (D-4766 (history-export-variant-first-file), NEW). */
+function replayVariantRow(db, _seg, r) {
+  const s = replayStmts(db);
+  const e = s.entrySel.get(r.uuid);
+  if (e === undefined) { bump(db, 'export_row_unplaced'); return; }
+  const blobId = blobIdOf(db, r.blob_sha256);
+  if (blobId === null) { bump(db, 'export_row_blob_missing'); return; }
+  const first = deadFileIdOf(db, r.first_path, r.first_dev, r.first_ino) ?? Number(e.struct_file_id);
+  stmts(db).variantIns.run(e.entry_id, blobId, first, r.first_seen_ms, r.cause);   // B1's own insert, byte for byte (ON CONFLICT (entry_id, blob_id) DO NOTHING)
+}
+function replayBoundaryRow(db, _seg, r) {
+  const s = replayStmts(db);
+  const t = transcriptPkOf(db, r.cc_session_uuid, r.agent_id);
+  const e = s.entrySel.get(r.uuid);
+  if (t === null || e === undefined) { bump(db, 'export_row_unplaced'); return; }
+  let kept = null;
+  if (r.kept_sha256 !== null) {
+    kept = blobIdOf(db, r.kept_sha256);
+    if (kept === null) bump(db, 'export_row_blob_missing');
+  }
+  s.boundaryIns.run(e.entry_id, t, r.boundary_ord, r.trigger, r.head_uuid, r.anchor_uuid, r.tail_uuid, kept, r.pre_tokens, r.post_tokens, r.duration_ms);
+}
+function replaySidecarRow(db, _seg, r) {
+  const s = replayStmts(db);
+  const t = transcriptPkOf(db, r.cc_session_uuid, r.agent_id);
+  if (t === null) { bump(db, 'export_row_unplaced'); return; }
+  const blobId = blobIdOf(db, r.blob_sha256);
+  if (blobId === null) { bump(db, 'export_row_blob_missing'); return; }
+  let entryId = null;
+  if (r.uuid !== null) {
+    const e = s.entrySel.get(r.uuid);
+    if (e === undefined) bump(db, 'export_row_unplaced');
+    else entryId = e.entry_id;
+  }
+  sideStmts(db).sidecarIns.run(t, r.name, blobId, entryId, r.first_seen_ms);   // B1's own insert, byte for byte (ON CONFLICT (transcript_pk, name, blob_id) DO NOTHING)
+}
+function replayMembershipRow(db, _seg, r) {
+  const fileId = deadFileIdOf(db, r.path, r.dev, r.ino);
+  const e = replayStmts(db).entrySel.get(r.uuid);
+  if (fileId === null || e === undefined) { bump(db, 'export_row_unplaced'); return; }
+  stmts(db).membership.run(fileId, e.entry_id, r.line);
+}
+
+/** One applicator per row kind a format-1 segment holds (Task 4's segmentInserts keys). */
+const EXPORT_ROW_APPLY = Object.freeze({
+  family: replayFamilyRow,
+  transcript: replayTranscriptRow,
+  epoch: replayEpochRow,
+  file: replayFileRow,
+  entry: replayEntryRow,
+  variant: replayVariantRow,
+  boundary: replayBoundaryRow,
+  sidecar: replaySidecarRow,
+  membership: replayMembershipRow,
+});
+
+/** A row's size for the chunk bound: its strings' and byte arrays' lengths, eight bytes per other value. */
+function rowBytes(row) {
+  let n = 0;
+  for (const v of Object.values(row)) {
+    if (typeof v === 'string') n += Buffer.byteLength(v);
+    else if (v instanceof Uint8Array) n += v.length;
+    else n += 8;
+  }
+  return n;
+}
+
+/** This store's segment names in replay order, listed once per pass (the run object is the pass's). An absent
+ *  directory is no segment; a listing that throws fails the chunk. */
+function exportReplayListing(run) {
+  if (run.exportListing === undefined) {
+    const dir = `${run.P.root}/${EXPORT_DIR}/${run.storeId}`;
+    run.exportListing = { dir, names: orderSegmentNames(listSegments(dir).map((s) => s.name)) };
+  }
+  return run.exportListing;
+}
+
+/** A segment opened read-only and judged by lib from its meta, the judgement cached for the pass. Either read
+ *  failing throws, naming the segment and the way out: an unreadable segment fails its chunk and is never skipped,
+ *  and while the step waits for it no tick ingests (D-4765 (history-export-segment-unreadable-stalls)). */
+function openForReplay(run, dir, name) {
+  let sdb = null;
+  try {
+    sdb = openSegment(`${dir}/${name}`);
+    if (run.exportVerdicts === undefined) run.exportVerdicts = new Map();
+    let verdict = run.exportVerdicts.get(name);
+    if (verdict === undefined) {
+      const meta = segmentMeta(sdb);
+      verdict = { word: decideSegmentReplay({ meta: { storeId: meta.storeId, format: meta.format }, storeId: run.storeId }), meta };
+      run.exportVerdicts.set(name, verdict);
+    }
+    return { sdb, verdict };
+  } catch (e) {
+    if (sdb !== null) sdb.close();
+    throw new Error(`export segment ${dir}/${name} cannot be read (${e && e.message ? e.message : String(e)}); `
+      + 'recovery waits for it and capture is held. Move it aside under a non-segment name to skip it (its text is not '
+      + 'replayed), or put a good copy back');
+  }
+}
+
+/** A segment the export-blobs walk skips, once per walk: a newer format joins meta export_segment_newer (doctor FAIL
+ *  export-segment-newer, naming it); another store's is counted export_segment_foreign. Each prints one line. */
+function noteSkippedSegment(db, name, verdict) {
+  if (verdict.word === 'newer') {
+    let listed = [];
+    try {
+      const v = JSON.parse(getMeta(db, HEALTH_META.exportSegmentNewer) ?? '[]');
+      if (Array.isArray(v)) listed = v.filter((x) => typeof x === 'string');
+    } catch {
+      listed = [];
+    }
+    if (!listed.includes(name)) setMeta(db, HEALTH_META.exportSegmentNewer, JSON.stringify([...listed, name]));
+    process.stderr.write(`history-sweep: export segment ${name} is format ${verdict.meta.format}, newer than this build's ${EXPORT_SEGMENT_FORMAT}; it was not replayed\n`);
+    return;
+  }
+  bump(db, 'export_segment_foreign');
+  process.stderr.write(`history-sweep: export segment ${name} names store ${verdict.meta.storeId}, not this one; it was not replayed\n`);
+}
+
+/** One page of one segment's blobs past `after` (a rowid), bounded by the chunk's bytes. insert-or-ignore by sha256
+ *  (§9.14): a blob the store already holds, whole or pruned, keeps its row; one with bytes is marked with its
+ *  segment. A stub (no bytes) goes in pruned (D-4759 (history-export-pruned-row-stub)). An empty page ends the segment. */
+function replayBlobPage(db, run, sdb, name, after) {
+  const page = segmentBlobsAfter(sdb, after, run.budget.chunkBytes);
+  if (page.length === 0) return { pos: after, done: true, bytes: 0 };
+  const s = replayStmts(db);
+  const markMs = run.now();
+  let bytes = 0;
+  for (const b of page) {
+    s.blobIns.run(b.sha256, b.codec, b.z, b.raw_len, b.z === null ? markMs : null);
+    if (b.z !== null) {
+      s.blobMark.run(markMs, name, b.sha256);
+      bytes += b.z.length;
+    }
+  }
+  return { pos: Number(page[page.length - 1].rowid), done: false, bytes };
+}
+
+/** One page of one segment's rows past `after` (an ord), applied in order until the chunk's bytes; at least one. An
+ *  empty page ends the segment. A kind format 1 does not define fails the chunk. */
+function replayRowPage(db, run, sdb, name, meta, after) {
+  const page = segmentRowsAfter(sdb, after, EXPORT_REPLAY_PAGE);
+  if (page.length === 0) return { pos: after, done: true, bytes: 0 };
+  const seg = { name, markMs: run.now(), cutoffMs: meta.cutoffMs };
+  let bytes = 0;
+  let pos = after;
+  for (const r of page) {
+    if (pos !== after && bytes >= run.budget.chunkBytes) break;
+    const apply = Object.hasOwn(EXPORT_ROW_APPLY, r.kind) ? EXPORT_ROW_APPLY[r.kind] : undefined;
+    if (apply === undefined) throw new Error(`export segment ${name} holds a row of kind ${String(r.kind)}, which format ${meta.format} does not define`);
+    apply(db, seg, r.row);
+    bytes += rowBytes(r.row);
+    pos = Number(r.ord);
+  }
+  return { pos, done: false, bytes };
+}
+
+/** One bounded chunk of an export phase: one page of one segment, applied with the cursor past it in one NORMAL
+ *  transaction (B2's executor contract). `blobs` picks the phase's page. */
+function exportPhaseChunk(db, run, cursor, blobs) {
+  const { dir, names } = exportReplayListing(run);
+  // A cursor naming a segment this listing does not hold restarts the phase: segments are never removed by the sweep,
+  // and every insert here is idempotent.
+  const found = cursor.file === null ? -1 : names.indexOf(cursor.file);
+  const at = found === -1 ? 0 : found;
+  const after = found === -1 ? 0 : cursor.offset;
+  const name = at < names.length ? names[at] : null;
+  const position = (file, offset) => ({ phase: cursor.phase, file, offset, blobId: null, pairsAdded: run.pairsAdded });
+  // An unreadable segment throws here, before the transaction: the chunk fails and the step waits for it.
+  const opened = name === null ? { sdb: null, verdict: null } : openForReplay(run, dir, name);
+  let page = { pos: after, done: true, bytes: 0 };
+  let next;
+  try {
+    next = withTx(db, 'NORMAL', () => {
+      if (blobs && cursor.file === null) setMeta(db, HEALTH_META.exportSegmentNewer, '[]');
+      if (opened.verdict !== null && opened.verdict.word === 'replay') {
+        page = blobs
+          ? replayBlobPage(db, run, opened.sdb, name, after)
+          : replayRowPage(db, run, opened.sdb, name, opened.verdict.meta, after);
+      } else if (opened.verdict !== null && blobs) {
+        noteSkippedSegment(db, name, opened.verdict);
+      }
+      const c = name === null ? position(null, 0)
+        : page.done && at + 1 < names.length ? position(names[at + 1], 0)
+          : position(name, page.pos);
+      db.prepare(RECOVER_CURSOR_SQL).run(formatRecoverCursor(c), run.version);
+      return c;
+    });   // the chunk's one transaction: what it applied, and the cursor past it
+  } finally {
+    if (opened.sdb !== null) opened.sdb.close();
+  }
+  run.budget.bytes += page.bytes;
+  return {
+    cursor: next,
+    moved: formatRecoverCursor(next) !== formatRecoverCursor(cursor),
+    phaseDone: name === null || (page.done && at + 1 >= names.length),
+  };
+}
+
+/** export-blobs: every segment's blobs, before any segment's rows (BK21). */
+function recoverExportBlobsChunk(db, run, cursor) {
+  return exportPhaseChunk(db, run, cursor, true);
+}
+
+/** export-rows: every segment's rows, in (seq, writer) order. */
+function recoverExportRowsChunk(db, run, cursor) {
+  return exportPhaseChunk(db, run, cursor, false);
 }
 
 /** One executor per RECOVER_PHASES phase, keyed by its name. The contract each keeps:

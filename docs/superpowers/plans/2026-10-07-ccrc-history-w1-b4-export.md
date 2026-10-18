@@ -6420,7 +6420,7 @@ git commit -m "feat(history): export-due waits for a gap with the export writer 
 - **Replay keeps the store's floor** (B1's D-4179 (`history-free-space-floor`)): the export phases probe `db/` before each chunk as every recovery chunk does, with no exemption, and a probe below the floor pauses them with `capture_paused_low_disk`, the cursor where it was (the floor case below). The export's own floor, on the home filesystem, gates only the export pass (Tasks 1 and 6).
 - A row the segment cannot place is counted `export_row_unplaced` and skipped, never a foreign-key failure that stalls the step; a format-1 segment always places its rows, so only a damaged one meets it.
 - A replayed blob's and entry's `exported_ms` is the replay's time and `exported_seg` the segment's name; a stub never counts as exported text, so it is not marked.
-- A blob the store already holds as a prune tombstone (`z` NULL) stays a tombstone when a segment carries its bytes. Replay is insert-or-ignore by sha256 (§9.14), while B2's ingest revives a tombstone on recapture (B2's D-4589 (`history-prune-revives-a-tombstone-on-recapture`), `stmts(db).blobIns`). The coordinator rules whether replay should revive it too.
+- A blob the store already holds as a prune tombstone (`z` NULL) stays a tombstone when a segment carries its bytes. Replay is insert-or-ignore by sha256 (§9.14), while B2's ingest revives a tombstone on recapture (B2's D-4589 (`history-prune-revives-a-tombstone-on-recapture`), `stmts(db).blobIns`). Ruled: replay keeps the prune and does not revive it (operator ruling 2026-10-18 (ledger)).
 - An epoch the journal holds by uuid keeps its own `seq`, `cause` and `declared_by`; the segment fills its NULL launch facts, `cwd`, `cwd_real` and `confirmed_ms` (and drops the uuid's waiting candidate when it confirms one). An epoch the journal lacks is inserted at the segment's `seq`, unless that `seq` or that uuid is already taken (`export_epoch_conflict`).
 - A family the journal holds keeps its project; a segment fills an empty one.
 - A foreign segment is counted once per export-blobs walk of it; a walk restarted (its cursor's segment gone) counts it again.
@@ -7284,7 +7284,7 @@ Add every printed name to that module's existing import statement, one statement
 ```
 
 Expected: all green; tsc prints nothing.
-- `history-recover.test.ts` whole: this task's nine cases, and every B2 case, including `'RECOVER_EXECUTORS runs every RECOVER_PHASES phase, and only those'` (the literal is untouched), O44's journal case (no export directory: both export phases end at once), O35's drill and O47.
+- `history-recover.test.ts` whole: this task's ten cases, and every B2 case, including `'RECOVER_EXECUTORS runs every RECOVER_PHASES phase, and only those'` (the literal is untouched), O44's journal case (no export directory: both export phases end at once), O35's drill and O47.
 - `single-definition`: no `process.env` read, no `/history-off` spelling, RECOVER_PHASES still declared only in lib.
 
 - [ ] **Step 8: Measure every new guard red, then green.** From the repository root, with Task 9 Step 9's `mut` helper and `$SCRATCH` (define them again in a new shell). Each block mutates one file, runs one filter, shows it red, and restores with `cp`.

@@ -5792,20 +5792,30 @@ const RECOVER_EXPORT_CURSOR_RE = /^(export-blobs|export-rows)(?::([^:+]+):(0|[1-
 
 /** The recovery step's cursor as derivation_state ('recover', <bind ms>) keeps it and status prints it (§9.14):
  *  `<phase>` at a phase's start, `index:<YYYY-MM>.<writer>.jsonl:<position>/<n>` or `apply:…` inside the journal,
- *  `reindex:<blob_id>` inside the FTS re-derivation, then `+pairs` once the index pass learned a pair the store
- *  lacked. It is advanced in the same transaction as the records it applies.
+ *  `export-blobs:<seq>.<writer>.db:<blobs rowid>` or `export-rows:<seq>.<writer>.db:<row ord>` inside the export's
+ *  segments (W1-B4: `file` is the segment's name, `offset` the last blobs rowid applied in export-blobs and the last
+ *  row `ord` applied in export-rows, and there is no `/<n>`), `reindex:<blob_id>` inside the FTS re-derivation, then
+ *  `+pairs` once the index pass learned a pair the store lacked. It is advanced in the same transaction as the records
+ *  it applies.
  *  D-4607 (history-recover-cursor-records-group-shape): the position is a byte offset into a group of one file and an
  *  ordinal into a merge group's merged list, so the cursor records the group's file count `n` beside it. The executor
  *  resumes only a group whose size still equals `n`; a cursor with no `/<n>` (written before the size was kept, or
  *  `groupSize` null or absent) restarts its group from its start. A `groupSize` that is none of null, absent or a positive safe
- *  integer throws a TypeError (H-182): parseRecoverCursor answers null to such a text, so it would stall the step for good. */
+ *  integer throws a TypeError (H-182): parseRecoverCursor answers null to such a text, so it would stall the step for good.
+ *  So does a `groupSize` set beside a phase outside RECOVER_JOURNAL_PHASES (W1-B4): only the journal phases' grammar has a
+ *  `/<n>`, and an export or reindex cursor written with one would be a text parseRecoverCursor refuses, the same stall. */
 export function formatRecoverCursor(c) {
   if (!RECOVER_PHASES.includes(c.phase)) throw new TypeError(`formatRecoverCursor: phase outside RECOVER_PHASES: ${String(c.phase)}`);
   let s = c.phase;
-  // H-182 (D-4607): only a size parseRecoverCursor reads back is written, so a committed cursor is never one lib refuses.
+  // H-182 (D-4607): only a group size parseRecoverCursor reads back is written: a positive safe integer, and only beside
+  // a journal phase's position, the one grammar with a `/<n>` part. A size set beside an export or reindex phase would
+  // print a cursor the parser refuses, which the step then waits on for good.
   const g = c.groupSize;
   if (g !== undefined && g !== null && !(Number.isSafeInteger(g) && g >= 1)) {
     throw new TypeError(`formatRecoverCursor: groupSize is not a positive safe integer: ${String(g)}`);
+  }
+  if (g !== undefined && g !== null && !RECOVER_JOURNAL_PHASES.includes(c.phase)) {
+    throw new TypeError(`formatRecoverCursor: groupSize is set beside phase ${c.phase}, which has no group: ${String(g)}`);
   }
   if (c.phase === 'reindex') {
     if (c.blobId !== null) s += `:${c.blobId}`;

@@ -29,6 +29,9 @@ import { assertNoRealTool } from './containedTools.js';
 import { parseRoster } from '../../shared/roster.js';
 import { historyPaths } from '../../ccd/history/lib.mjs';
 import { createStore, V2_INDEXES } from '../../ccd/history/store.mjs';
+import * as b4SegStore from '../../ccd/history/store.mjs';
+import * as b4SegLib from '../../ccd/history/lib.mjs';
+import { createHash as b4SegHash } from 'node:crypto';
 
 export const REPO = path.resolve(__dirname, '..', '..');
 export const SWEEP = path.join(REPO, 'ccd', 'history', 'sweep.mjs');
@@ -639,4 +642,52 @@ export async function runOnPty(box: HistoryBox, argv: string[], o: { timeoutMs: 
     p.onData((d) => { out += d; });
     p.onExit(({ exitCode }) => finish(exitCode));
   });
+}
+
+// ── W1-B4 Task 10: export segments planted through store.mjs, for the replay cases ─────────────────────────────
+/** The kinds of row a format-1 segment holds: Task 4's segmentInserts keys. */
+export type SegmentRowKind = 'family' | 'transcript' | 'epoch' | 'file' | 'entry' | 'variant' | 'boundary' | 'sidecar' | 'membership';
+/** One row as a segment carries it: its table's columns by name, natural keys only (Task 10's contract table). */
+export interface PlantSegmentRow { kind: SegmentRowKind; row: Record<string, unknown> }
+/** A blob as a segment stores it: `text` compressed with the store's codec, or a stub (`text: null`) for a blob
+ *  prune tombstoned, which carries its sha256 and length and no bytes. */
+export interface PlantSegmentBlob { text: string | null; sha256?: Buffer; rawLen?: number }
+export interface PlantSegmentSpec {
+  seq: number; writer: string; blobs: PlantSegmentBlob[]; rows: PlantSegmentRow[];
+  /** a newer one to plant a segment this build must refuse; the build's own by default */
+  format?: number;
+  cutoffMs?: number;
+  /** another store's id, to plant a foreign segment in this store's directory */
+  metaStoreId?: string;
+}
+
+/** A blob's key as the store and a segment hold it: the sha256 of its raw bytes. */
+export function segmentSha(text: string): Buffer {
+  return b4SegHash('sha256').update(text, 'utf8').digest();
+}
+
+/** One published segment, ~/.ccrc/history/export/<storeId>/<seq>.<writer>.db, written through store.mjs's
+ *  createSegment, segmentInserts and publishSegment (Task 4), so a planted segment and the export pass's share one
+ *  DDL. Returns its path. Throws when the name is already on disk: a case never means to plant one twice. */
+export function plantSegment(box: HistoryBox, storeId: string, s: PlantSegmentSpec): string {
+  const dir = path.join(box.root, b4SegLib.EXPORT_DIR, storeId);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const name = b4SegLib.segmentName({ seq: s.seq, writer: s.writer });
+  const seg = b4SegStore.createSegment(dir, name, {
+    storeId: s.metaStoreId ?? storeId, writer: s.writer, seq: s.seq, harnesses: [...b4SegLib.HARNESSES],
+    cutoffMs: s.cutoffMs ?? Date.now(), format: s.format ?? b4SegLib.EXPORT_SEGMENT_FORMAT,
+  });
+  const ins = b4SegStore.segmentInserts(seg) as unknown as Record<string, (row: Record<string, unknown>) => void>;
+  for (const b of s.blobs) {
+    if (b.text === null) {
+      if (b.sha256 === undefined) throw new Error('plantSegment: a stub blob needs its sha256');
+      ins['blob']!({ sha256: b.sha256, codec: b4SegStore.CODEC, raw_len: b.rawLen ?? 0, z: null, pruned: true });
+      continue;
+    }
+    const raw = Buffer.from(b.text, 'utf8');
+    ins['blob']!({ sha256: b.sha256 ?? segmentSha(b.text), codec: b4SegStore.CODEC, raw_len: raw.length, z: b4SegStore.brotli(raw), pruned: false });
+  }
+  for (const r of s.rows) ins[r.kind]!(r.row);
+  if (b4SegStore.publishSegment(seg, dir, name) !== 'linked') throw new Error(`plantSegment: ${name} is already in ${dir}`);
+  return path.join(dir, name);
 }

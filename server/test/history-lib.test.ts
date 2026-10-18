@@ -8349,6 +8349,22 @@ describe('W1-B4: the export phases\' cursor and the segment replay verdict (spec
       expect(libReplayExport.parseRecoverCursor(s), s).toBeNull();
     }
   });
+  it('formatRecoverCursor writes a group size only beside a journal phase: beside an export phase (or reindex) it throws, because the cursor it would print is one parseRecoverCursor refuses (H-182)', () => {
+    const at = { file: '7.0a1b2c3d.db', offset: 12, blobId: null, pairsAdded: false };
+    for (const phase of ['export-blobs', 'export-rows']) {
+      expect(() => libReplayExport.formatRecoverCursor({ ...at, phase, groupSize: 2 }), `${phase} with a size`).toThrow(TypeError);
+      // CONTROL: with no size (null or absent) it prints, and the text reads back to the cursor it was made from.
+      for (const c of [{ ...at, phase, groupSize: null }, { ...at, phase }]) {
+        const text = libReplayExport.formatRecoverCursor(c);
+        expect(text).toBe(`${phase}:7.0a1b2c3d.db:12`);
+        expect(libReplayExport.parseRecoverCursor(text), text).toEqual({ ...at, phase, groupSize: null });
+      }
+    }
+    expect(() => libReplayExport.formatRecoverCursor({ phase: 'reindex', file: null, offset: 0, blobId: 5, groupSize: 2, pairsAdded: false }), 'reindex with a size').toThrow(TypeError);
+    // CONTROL: the journal phases still write theirs (H-93).
+    expect(libReplayExport.formatRecoverCursor({ phase: 'apply', file: '2026-10.0a1b2c3d.jsonl', offset: 7, blobId: null, groupSize: 2, pairsAdded: false }))
+      .toBe('apply:2026-10.0a1b2c3d.jsonl:7/2');
+  });
   it('decideSegmentReplay: another store\'s segment is foreign whatever its format; this store\'s newer format is newer; format 1 replays', () => {
     const other = '0189abcd-1234-4678-9abc-0000000000e9';
     expect(libReplayExport.decideSegmentReplay({ meta: { storeId: STORE, format: 1 }, storeId: STORE })).toBe('replay');

@@ -19,13 +19,14 @@ import {
   makeHistoryBox, runSweep, runShim, runDriver, skipOnDarwin, openStoreRO, counters, journalRecords, plantSession,
   plantTranscript, spoolLine, preloadOptions, PRELOADS, CLI, recoverRow, boundEmptyStore,
   runCli, withPane, seedFamily, journalDirOf, REPO, rewindStoreToV1, runOnPty, type HistoryBox, type SpawnOpts,
+  plantSegment, segmentSha, type PlantSegmentRow,
 } from './historyHelpers.js';
 import { userRow, assistantRow, boundaryRow, summaryRow } from './historyFixtures.js';
 import { removeTmpFixturesEachTest, mkTmp } from './tmpHelpers.js';
 import {
   HEALTH_META, RECOVER_PHASES, RECOVERY_STALL_TICKS, SCHEMA_VERSION, WRITING_FORMS, floorThreshold, historyPaths, journalRecord, mergeJournalByTime,
   REDACTED_MARK, BELT_VERSION, parseBeltState, beltWidth, type BeltState, planReplay,
-  NODE_PARSER_VERSION, makePairIndex, secretPairs, parentRollup, nodeIndexTexts,
+  NODE_PARSER_VERSION, makePairIndex, secretPairs, parentRollup, nodeIndexTexts, exportedSourceKey,
 } from '../../ccd/history/lib.mjs';
 import { V2_INDEXES, StoreError, abortRestore, closeWriter, createFtsTables, createStore, getMeta, getStep, openWriter, setMeta, setStep, stageRestore } from '../../ccd/history/store.mjs';
 
@@ -3497,8 +3498,8 @@ describe('F12: the node fast path is bounded by the slice and the budget, and wh
 // ===========================================================================
 // W1-B4 Task 3: the export phases in the recovery step (spec §9.14 "Recovery",
 // "Export replay"). In-process on a real store, through B2's recoveryStep and
-// its executors seam, with the SHIPPED export executors (placeholders until
-// W1-B4 Task 10 gives them bodies) wrapped so the test sees each call. The
+// its executors seam, with the SHIPPED export executors (Task 10's; a store
+// with no export directory ends each phase at once) wrapped so the test sees each call. The
 // import is namespaced, so this block binds no name the file already binds;
 // ESM hoists it.
 // ===========================================================================
@@ -3558,4 +3559,437 @@ describe('W1-B4: the export phases in the recovery step (spec §9.14)', () => {
       expect(countersOn(db, 'recover_chunk_failed')).toEqual({ recover_chunk_failed: 0 });
     });
   });
+});
+
+// ── W1-B4 Task 10: export replay, the recovery step's two export phases (spec §9.14 "Export replay", §9.15) ─────
+// Segments are planted through store.mjs (historyHelpers' plantSegment), never by hand, and every HOME is a fixture.
+// In-process cases run sweep.mjs's recoveryStep on a store createStore made; the O44 and rollback cases spawn the
+// real pass. Every name here is prefixed x10/X10, so nothing collides with B2's cases above.
+const X10_ID = 'claude-a-segment';
+const X10_G = '0189abcd-1234-4678-9abc-0000000010a1';
+const X10_WRITER = '0a1b2c3d';
+const X10_DEV = 64769;
+const X10_DAY = 86_400_000;
+const x10U = (n: number): string => `10101010-0000-4000-8000-${String(n).padStart(12, '0')}`;
+interface X10Text { uuid: string; text: string; tsMs: number; line: number }
+interface X10Family {
+  uuid: string; path: string; ino: number; texts: X10Text[];
+  id?: string; generation?: string; project?: string; seq?: number; cwd?: string; eofMs?: number | null;
+}
+/** `n` row texts of one transcript, old enough to be due anywhere, at byte offsets 0, 4096, … */
+const x10Texts = (base: number, n: number, word: string, t0: number): X10Text[] =>
+  Array.from({ length: n }, (_, i) => ({ uuid: x10U(base + i), text: `${word} row ${i} ${'x'.repeat(40)}`, tsMs: t0 + i * 1000, line: i * 4096 }));
+/** One family's rows as a format-1 segment carries them (Task 10's contract table): the family, its transcript, one
+ *  confirmed startup epoch launched in `cwd`, the gone file (path, dev, ino), then per text its entry and its
+ *  membership. */
+function x10Rows(o: X10Family): PlantSegmentRow[] {
+  const id = o.id ?? X10_ID;
+  const generation = o.generation ?? X10_G;
+  const t0 = o.texts[0]?.tsMs ?? Date.now() - 400 * X10_DAY;
+  const cwd = o.cwd ?? WORK;
+  const out: PlantSegmentRow[] = [
+    { kind: 'family', row: { ccrc_id: id, generation, project: o.project ?? 'demo', first_seen_ms: t0 } },
+    { kind: 'transcript', row: { cc_session_uuid: o.uuid, agent_id: '', harness: 'claude-code', parent_tool_use_id: null, workflow_run_id: null, agent_type: null } },
+    { kind: 'epoch', row: {
+      ccrc_id: id, generation, seq: o.seq ?? 1, cc_session_uuid: o.uuid, cause: 'startup', declared_by: 'hook',
+      started_ms: t0, cwd, git_branch: 'main', cwd_real: cwd, confirmed_ms: t0,
+    } },
+    { kind: 'file', row: {
+      path: o.path, dev: X10_DEV, ino: o.ino, cc_session_uuid: o.uuid, agent_id: '', size: 4096 * o.texts.length,
+      mtime_ns: BigInt(t0) * 1_000_000n, eof_ms: o.eofMs === undefined ? t0 + 60_000 : o.eofMs,
+    } },
+  ];
+  for (const x of o.texts) {
+    out.push({ kind: 'entry', row: {
+      uuid: x.uuid, cc_session_uuid: o.uuid, agent_id: '', type: 'user', subtype: null, role: 'user', model: null,
+      parent_uuid: null, ts_ms: x.tsMs, request_id: null, api_block_index: null, msg_id: null, source_tool_use_id: null,
+      tool_name: null, is_compact_summary: 0, provenance: 'operator', prov_version: 1, parse_state: 'ok',
+      struct_rank_ns: BigInt(t0) * 1_000_000n, struct_path: o.path, struct_dev: X10_DEV, struct_ino: o.ino,
+      blob_sha256: segmentSha(x.text),
+    } });
+    out.push({ kind: 'membership', row: { path: o.path, dev: X10_DEV, ino: o.ino, uuid: x.uuid, line: x.line } });
+  }
+  return out;
+}
+/** A store createStore made, its recovery step registered at `cursor` (null: the step's start), opened for writing. */
+function x10Store(prefix: string, cursor: string | null = null): { box: ReturnType<typeof makeHistoryBox>; ids: { storeId: string; writer: string }; db: DatabaseSync } {
+  const box = makeHistoryBox(prefix);
+  const ids = createStore(box.home);
+  const db = openWriter(historyPaths(box.home).dbFile);
+  db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', ?, ?, NULL)").run(Date.now(), cursor);
+  return { box, ids, db };
+}
+const x10Count = (db: DatabaseSync, table: string): number =>
+  Number((db.prepare(`SELECT count(*) AS n FROM ${table}`).get() as { n: number }).n);
+
+describe('W1-B4 Task 10: export replay in the recovery step (spec §9.14 "Export replay")', () => {
+  it('O44, the segment case: a format-2 segment beside a format-1 one, under a step larger than one pass\'s budget: the step completes, format 1 replays and is marked, format 2 is skipped and FAILs export-segment-newer naming it', () => {
+    const box = makeHistoryBox('ccrc-history-b4-o44seg-');
+    pass(box);
+    const storeId = fs.readFileSync(historyPaths(box.home).storeId, 'utf8').trim();
+    // 256 random hex characters each, so Brotli cannot shrink a blob below the chunk bound: the step spans passes.
+    const texts = x10Texts(0x100, 12, 'zqo44seg', Date.now() - 400 * X10_DAY).map((t) => ({ ...t, text: `${t.text} ${randomBytes(128).toString('hex')}` }));
+    const one = plantSegment(box, storeId, {
+      seq: 1, writer: X10_WRITER, blobs: texts.map((t) => ({ text: t.text })),
+      rows: x10Rows({ uuid: x10U(0x10), path: '/home/u/gone/o44.jsonl', ino: 9001, texts }),
+    });
+    const two = plantSegment(box, storeId, { seq: 2, writer: X10_WRITER, format: 2, blobs: [{ text: 'zqo44seg a newer build wrote this' }], rows: [] });
+    const kinds0 = rrJournalKinds(box);
+    const version = Date.now();
+    registerRecovery(box, version);
+    let passes = 0;
+    for (;;) {
+      const r = runDriver(box, { budgetBytes: 1200, chunkBytes: 400 });
+      expect(r.code, `${r.stdout}\n${r.stderr}`).toBe(0);
+      passes += 1;
+      if (recoverRow(box)!.completed_ms !== null) break;
+      expect(passes, 'the step never completed').toBeLessThan(60);
+    }
+    expect(passes, 'the step spans several passes').toBeGreaterThanOrEqual(2);
+    expect(rows(box, 'SELECT exported_seg AS seg, count(*) AS n FROM entries GROUP BY exported_seg')).toEqual([{ seg: path.basename(one), n: 12 }]);
+    expect(countOf(box, 'memberships')).toBe(12);
+    expect(rows(box, 'SELECT count(*) AS n FROM blobs WHERE exported_seg = ?', path.basename(one))).toEqual([{ n: 12 }]);
+    expect(rows(box, 'SELECT count(*) AS n FROM blobs WHERE lower(hex(sha256)) = ?', segmentSha('zqo44seg a newer build wrote this').toString('hex')),
+      'the newer segment\'s blob was never inserted').toEqual([{ n: 0 }]);
+    expect(metaOf(box, HEALTH_META.exportSegmentNewer)).toBe(JSON.stringify([path.basename(two)]));
+    const newer = (status(box).health.fail as Array<{ word: string; detail?: string }>).find((f) => f.word === 'export-segment-newer');
+    expect(newer?.detail, 'doctor FAILs export-segment-newer, naming the segment').toContain(path.basename(two));
+    expect(counters(box)['recover_chunk_failed'] ?? 0).toBe(0);
+    // O36's replay half for segments: the step journaled nothing.
+    expect(rrJournalKinds(box)).toEqual(kinds0);
+  }, 2.5 * HEAVY);
+
+  it('BK21: a row whose blob sits only in a LATER segment replays, because every segment\'s blobs go in before any segment\'s rows; replayed blobs and rows are marked with their own segments', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-bk21-');
+    try {
+      const texts = x10Texts(0x200, 1, 'zqbk21', Date.now() - 400 * X10_DAY);
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: [], rows: x10Rows({ uuid: x10U(0x20), path: '/home/u/gone/bk21.jsonl', ino: 9101, texts }) });
+      plantSegment(box, ids.storeId, { seq: 2, writer: 'feedface', blobs: [{ text: texts[0]!.text }], rows: [] });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(db.prepare('SELECT e.uuid AS uuid, b.exported_seg AS blobSeg, e.exported_seg AS rowSeg FROM entries e JOIN blobs b ON b.blob_id = e.blob_id')
+        .all().map((r) => ({ ...r }))).toEqual([{ uuid: texts[0]!.uuid, blobSeg: '2.feedface.db', rowSeg: `1.${X10_WRITER}.db` }]);
+      expect(countersOn(db, 'export_row_blob_missing', 'export_row_unplaced')).toEqual({ export_row_blob_missing: 0, export_row_unplaced: 0 });
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('a late-linked sidecar\'s second segment (the entry again, with its sidecar row and only the sidecar\'s bytes) replays beside the first with no duplicate row', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-latesc-');
+    try {
+      const texts = x10Texts(0xa00, 1, 'zqlatesc', Date.now() - 400 * X10_DAY);
+      const fam: X10Family = { uuid: x10U(0xa0), path: '/home/u/gone/latesc.jsonl', ino: 9951, texts };
+      const side = 'zqlatesc the tool output that landed after its row was exported';
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(fam) });
+      plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, blobs: [{ text: side }], rows: [
+        ...x10Rows(fam),
+        { kind: 'sidecar', row: { cc_session_uuid: fam.uuid, agent_id: '', name: 'b4late01.txt', blob_sha256: segmentSha(side), uuid: texts[0]!.uuid, first_seen_ms: texts[0]!.tsMs + 60_000 } },
+      ] });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(['entries', 'memberships', 'sidecars', 'blobs', 'epochs'].map((t) => x10Count(db, t))).toEqual([1, 1, 1, 2, 1]);
+      expect(db.prepare('SELECT s.name AS name, e.uuid AS uuid, b.exported_seg AS seg FROM sidecars s JOIN entries e ON e.entry_id = s.entry_id JOIN blobs b ON b.blob_id = s.blob_id')
+        .all().map((r) => ({ ...r }))).toEqual([{ name: 'b4late01.txt', uuid: texts[0]!.uuid, seg: `2.${X10_WRITER}.db` }]);
+      expect(countersOn(db, 'export_row_blob_missing', 'export_row_unplaced', 'export_epoch_conflict'))
+        .toEqual({ export_row_blob_missing: 0, export_row_unplaced: 0, export_epoch_conflict: 0 });
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('journal first: a segment\'s family and epoch rows fill only what the journal lacks, through merged_into; a seq the journal gave another uuid is skipped and counted export_epoch_conflict', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-jfirst-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const [U1, U2, U3] = [x10U(0x31), x10U(0x32), x10U(0x33)];
+      // The journal: (X10_ID, '') and (X10_ID, X10_G), both project demo, the '' family re-keyed into G, and an operator
+      // mapping that chains U1 into G at seq 1 with no launch facts.
+      plantJournalFile(box, ids.storeId, new Date(t0).toISOString().slice(0, 7), 'feedbeef', t0, [
+        journalRecord('verdict', t0 + 1, { event_key: 'none', kind: 'family', ccrc_id: X10_ID, generation: '', project: 'demo', first_seen_ms: t0 + 1 }),
+        journalRecord('verdict', t0 + 2, { event_key: 'none', kind: 'family', ccrc_id: X10_ID, generation: X10_G, project: 'demo', first_seen_ms: t0 + 2 }),
+        journalRecord('verdict', t0 + 3, { event_key: 'none', kind: 'rekeyed', ccrc_id: X10_ID, generation: X10_G }),
+        journalRecord('verdict', t0 + 4, {
+          event_key: 'none', kind: 'mapping', ccrc_id: X10_ID, generation: X10_G, cc_session_uuid: U1, declared_by: 'operator',
+          path: '/home/u/gone/j1.jsonl',
+        }),
+      ]);
+      const epoch = (generation: string, seq: number, uuid: string): PlantSegmentRow => ({ kind: 'epoch', row: {
+        ccrc_id: X10_ID, generation, seq, cc_session_uuid: uuid, cause: 'startup', declared_by: 'hook',
+        started_ms: t0, cwd: WORK, git_branch: 'main', cwd_real: WORK, confirmed_ms: t0,
+      } });
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: [], rows: [
+        // a family the journal merged: it lands in (X10_ID, X10_G), whose project the journal set
+        { kind: 'family', row: { ccrc_id: X10_ID, generation: '', project: 'elsewhere', first_seen_ms: t0 } },
+        epoch('', 1, U1),        // the journal's U1, named by its pre-merge family: launch facts filled, seq and cause kept
+        epoch(X10_G, 1, U2),     // seq 1 is U1's: skipped, counted
+        epoch(X10_G, 2, U3),     // the journal lacks it: inserted at its own seq
+      ] });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(db.prepare('SELECT generation, project, merged_into IS NOT NULL AS merged FROM sessions WHERE ccrc_id = ? ORDER BY generation')
+        .all(X10_ID).map((r) => ({ ...r }))).toEqual([
+        { generation: '', project: 'demo', merged: 1 },
+        { generation: X10_G, project: 'demo', merged: 0 },
+      ]);
+      expect(db.prepare(`SELECT e.seq AS seq, e.cc_session_uuid AS uuid, e.cause AS cause, e.declared_by AS by, e.cwd AS cwd,
+          e.started_ms AS started, e.confirmed_ms AS confirmed FROM epochs e JOIN sessions s ON s.session_pk = e.session_pk
+          WHERE s.ccrc_id = ? AND s.generation = ? ORDER BY e.seq`).all(X10_ID, X10_G).map((r) => ({ ...r }))).toEqual([
+        { seq: 1, uuid: U1, cause: 'import', by: 'operator', cwd: WORK, started: t0, confirmed: t0 + 4 },
+        { seq: 2, uuid: U3, cause: 'startup', by: 'hook', cwd: WORK, started: t0, confirmed: t0 },
+      ]);
+      expect(countersOn(db, 'export_epoch_conflict')).toEqual({ export_epoch_conflict: 1 });
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('a gone file\'s memberships land on its exported: row (status exported, eof carried, else the segment\'s cutoff), never on a live row that reuses its inode; a blob the store holds is kept and marked', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-dead-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const CUT = Date.now() - 200 * X10_DAY;
+      const [UA, UB] = [x10U(0x41), x10U(0x42)];
+      const [pa, pb] = ['/home/u/gone/a.jsonl', '/home/u/gone/b.jsonl'];
+      const a = x10Texts(0x410, 3, 'zqdeada', t0);
+      const b = x10Texts(0x420, 2, 'zqdeadb', t0);
+      // A live file of another transcript that now holds a's (dev, ino), and a's first blob already in the store.
+      const other = Number(db.prepare('INSERT INTO transcripts (cc_session_uuid) VALUES (?)').run(x10U(0x4f)).lastInsertRowid);
+      const live = Number(db.prepare("INSERT INTO ingest_files (dev, ino, source_key, transcript_pk, status, parser_version) VALUES (?, 9401, '', ?, 'live', 1)")
+        .run(X10_DEV, other).lastInsertRowid);
+      const raw0 = Buffer.from(a[0]!.text, 'utf8');
+      db.prepare('INSERT INTO blobs (sha256, codec, z, raw_len) VALUES (?, ?, ?, ?)').run(segmentSha(a[0]!.text), 'br5', segmentSha('a stored body'), raw0.length);
+      plantSegment(box, ids.storeId, {
+        seq: 1, writer: X10_WRITER, cutoffMs: CUT, blobs: [...a, ...b].map((x) => ({ text: x.text })),
+        rows: [
+          ...x10Rows({ uuid: UA, path: pa, ino: 9401, texts: a }),
+          ...x10Rows({ uuid: UB, path: pb, ino: 9402, texts: b, seq: 2, eofMs: null }),
+        ],
+      });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      const files = db.prepare('SELECT file_id, source_key, status, eof_ms FROM ingest_files WHERE file_id <> ? ORDER BY file_id').all(live)
+        .map((r) => ({ ...r })) as Array<{ file_id: number; source_key: string; status: string; eof_ms: number }>;
+      expect(files.map(({ source_key, status, eof_ms }) => ({ source_key, status, eof_ms }))).toEqual([
+        { source_key: exportedSourceKey(pa, X10_DEV, 9401), status: 'exported', eof_ms: a[0]!.tsMs + 60_000 },
+        { source_key: exportedSourceKey(pb, X10_DEV, 9402), status: 'exported', eof_ms: CUT },
+      ]);
+      const held = (fileId: number): string[] => db.prepare('SELECT e.uuid AS uuid FROM memberships m JOIN entries e ON e.entry_id = m.entry_id WHERE m.file_id = ? ORDER BY m.line')
+        .all(fileId).map((r) => String((r as { uuid: string }).uuid));
+      expect(held(live), 'the live row holds nothing of the gone file').toEqual([]);
+      expect(held(files[0]!.file_id)).toEqual(a.map((x) => x.uuid));
+      expect(held(files[1]!.file_id)).toEqual(b.map((x) => x.uuid));
+      expect(db.prepare('SELECT DISTINCT struct_file_id AS f FROM entries ORDER BY f').all().map((r) => Number((r as { f: number }).f)))
+        .toEqual(files.map((f) => f.file_id));
+      expect({ ...(db.prepare('SELECT count(*) AS n, max(exported_seg) AS seg FROM blobs WHERE sha256 = ?').get(segmentSha(a[0]!.text)) as object) },
+        'insert-or-ignore kept the store\'s blob, and marked it').toEqual({ n: 1, seg: `1.${X10_WRITER}.db` });
+      expect(x10Count(db, 'file_paths'), 'a gone file gets no path: the live ingest can never find it').toBe(0);
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('a blob the store holds as a prune tombstone stays one when a segment carries its bytes (operator ruling 2026-10-18); a stub replays as a tombstone dated by the replay and is never marked exported', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-prune-');
+    try {
+      const texts = x10Texts(0xc00, 2, 'zqprune', Date.now() - 400 * X10_DAY);
+      const rawLen = (text: string): number => Buffer.byteLength(text, 'utf8');
+      // The store pruned the first blob before the replay: a tombstone, with its date.
+      db.prepare('INSERT INTO blobs (sha256, codec, z, raw_len, pruned_ms) VALUES (?, ?, NULL, ?, 12345)').run(segmentSha(texts[0]!.text), 'br5', rawLen(texts[0]!.text));
+      plantSegment(box, ids.storeId, {
+        // the first blob's bytes travel (its exporter had not pruned it); the second is a stub (its exporter had)
+        seq: 1, writer: X10_WRITER, blobs: [{ text: texts[0]!.text }, { text: null, sha256: segmentSha(texts[1]!.text), rawLen: rawLen(texts[1]!.text) }],
+        rows: x10Rows({ uuid: x10U(0xc0), path: '/home/u/gone/prune.jsonl', ino: 9811, texts }),
+      });
+      const before = Date.now();
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      const blob = (text: string): Record<string, unknown> => ({ ...(db.prepare(
+        'SELECT z IS NULL AS pruned, pruned_ms, exported_ms, exported_seg FROM blobs WHERE sha256 = ?').get(segmentSha(text)) as object) });
+      expect(blob(texts[0]!.text), 'insert-or-ignore: the tombstone keeps its date, gains no body and no mark')
+        .toEqual({ pruned: 1, pruned_ms: 12345, exported_ms: null, exported_seg: null });
+      const stub = blob(texts[1]!.text);
+      expect([stub['pruned'], stub['exported_ms'], stub['exported_seg']], 'a stub is a tombstone and never exported text').toEqual([1, null, null]);
+      expect(Number(stub['pruned_ms']), 'dated by the replay, the time this store learned it').toBeGreaterThanOrEqual(before);
+      expect(x10Count(db, 'entries'), 'both rows place on their blobs').toBe(2);
+      expect(db.prepare('SELECT count(*) AS n FROM entries WHERE exported_seg = ?').get(`1.${X10_WRITER}.db`)).toEqual({ n: 2 });
+      expect(countersOn(db, 'export_row_blob_missing', 'export_row_unplaced')).toEqual({ export_row_blob_missing: 0, export_row_unplaced: 0 });
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('a boundary replays once however many segments carry its entry; a boundary whose (transcript, ord) another entry holds fails the chunk and waits, never dropped', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-bound-');
+    try {
+      const texts = x10Texts(0xd00, 2, 'zqbound', Date.now() - 400 * X10_DAY);
+      const fam = (t: X10Text): X10Family => ({ uuid: x10U(0xd0), path: '/home/u/gone/bound.jsonl', ino: 9821, texts: [t] });
+      const boundary = (uuid: string): PlantSegmentRow => ({ kind: 'boundary', row: {
+        uuid, cc_session_uuid: x10U(0xd0), agent_id: '', boundary_ord: 1, trigger: 'manual', head_uuid: null, anchor_uuid: null,
+        tail_uuid: null, kept_sha256: null, pre_tokens: 10, post_tokens: 5, duration_ms: 3,
+      } });
+      // The first entry and its boundary travel in two segments (a repeat replay absorbs); a second entry of the same
+      // transcript claims the same ord in a third.
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: [{ text: texts[0]!.text }], rows: [...x10Rows(fam(texts[0]!)), boundary(texts[0]!.uuid)] });
+      plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, blobs: [], rows: [...x10Rows(fam(texts[0]!)), boundary(texts[0]!.uuid)] });
+      plantSegment(box, ids.storeId, { seq: 3, writer: X10_WRITER, blobs: [{ text: texts[1]!.text }], rows: [...x10Rows(fam(texts[1]!)), boundary(texts[1]!.uuid)] });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: false, held: false });
+      expect(countersOn(db, 'recover_chunk_failed')).toEqual({ recover_chunk_failed: 1 });
+      expect(cursorOn(db), 'the step waits at the segment it cannot place').toBe(`export-rows:3.${X10_WRITER}.db:0`);
+      expect([x10Count(db, 'boundaries'), x10Count(db, 'entries')], 'segments 1 and 2 left one boundary; the failed chunk left nothing').toEqual([1, 1]);
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('a replayed variant\'s first file is the dead-file row of the identity the segment names for it, else its entry\'s own', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-variant-');
+    try {
+      const texts = x10Texts(0xe00, 1, 'zqvariant', Date.now() - 400 * X10_DAY);
+      const fam: X10Family = { uuid: x10U(0xe0), path: '/home/u/gone/v1.jsonl', ino: 9831, texts };
+      const [va, vb] = ['zqvariant a later copy rewrote this row', 'zqvariant another copy wrote it differently'];
+      const variant = (text: string, firstPath: string, firstIno: number): PlantSegmentRow => ({ kind: 'variant', row: {
+        uuid: texts[0]!.uuid, blob_sha256: segmentSha(text), first_path: firstPath, first_dev: X10_DEV, first_ino: firstIno,
+        first_seen_ms: texts[0]!.tsMs + 5000, cause: 'unknown',
+      } });
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: [{ text: texts[0]!.text }, { text: va }, { text: vb }], rows: [
+        ...x10Rows(fam),
+        // a second gone file of the transcript, which the first variant names as its first
+        { kind: 'file', row: { path: '/home/u/gone/v2.jsonl', dev: X10_DEV, ino: 9832, cc_session_uuid: fam.uuid, agent_id: '', size: 4096, mtime_ns: 1n, eof_ms: null } },
+        variant(va, '/home/u/gone/v2.jsonl', 9832),
+        // the second variant names a file the segment carries no row for
+        variant(vb, '/home/u/gone/none.jsonl', 9833),
+      ] });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      const dead = (p: string, ino: number): number => Number((db.prepare('SELECT file_id FROM ingest_files WHERE source_key = ?').get(exportedSourceKey(p, X10_DEV, ino)) as { file_id: number }).file_id);
+      expect(db.prepare('SELECT v.blob_id AS blob, v.first_file_id AS first FROM entry_variants v JOIN blobs b ON b.blob_id = v.blob_id ORDER BY b.blob_id')
+        .all().map((r) => ({ ...r })).map((r) => (r as { first: number }).first)).toEqual([dead('/home/u/gone/v2.jsonl', 9832), dead(fam.path, 9831)]);
+      expect(x10Count(db, 'ingest_files'), 'the unnamed file got no row of its own').toBe(2);
+      expect(countersOn(db, 'export_row_unplaced', 'export_row_blob_missing')).toEqual({ export_row_unplaced: 0, export_row_blob_missing: 0 });
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('the cursor: each chunk commits its segment and position with what it applied; a step split over many small budgets re-applies nothing and keeps +pairs through both export phases', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-cursor-', 'index+pairs');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const [U1, U2] = [x10U(0x51), x10U(0x52)];
+      plantJournalFile(box, ids.storeId, new Date(t0).toISOString().slice(0, 7), 'feedbeef', t0, [
+        journalRecord('verdict', t0 + 1, { event_key: 'none', kind: 'family', ccrc_id: X10_ID, generation: X10_G, project: 'demo', first_seen_ms: t0 + 1 }),
+        journalRecord('verdict', t0 + 2, {
+          event_key: 'none', kind: 'mapping', ccrc_id: X10_ID, generation: X10_G, cc_session_uuid: U1, declared_by: 'operator',
+          path: '/home/u/gone/c1.jsonl',
+        }),
+      ]);
+      const texts = x10Texts(0x500, 8, 'zqcursor', t0);
+      // U2's epoch claims seq 1, which the journal gave U1: one conflict, which a re-applied chunk would count twice.
+      plantSegment(box, ids.storeId, {
+        seq: 1, writer: X10_WRITER, blobs: texts.map((t) => ({ text: t.text })),
+        rows: x10Rows({ uuid: U2, path: '/home/u/gone/c2.jsonl', ino: 9501, texts }),
+      });
+      const seen: string[] = [];
+      let finished = false;
+      for (let i = 0; i < 200 && !finished; i += 1) {
+        const r = await SW.recoveryStep(db, stepCtx(box, ids, { maxBytes: 600, chunkBytes: 300 }));
+        const c = cursorOn(db);
+        if (c !== null) seen.push(c);
+        finished = r.done || (c !== null && c.startsWith('reindex'));
+      }
+      expect(finished, `the step reached reindex: ${seen.join(' | ')}`).toBe(true);
+      const exportCursors = seen.filter((c) => c.startsWith('export-'));
+      expect(exportCursors.some((c) => new RegExp(`^export-rows:1\\.${X10_WRITER}\\.db:[1-9][0-9]*\\+pairs$`).test(c)),
+        `a pass ended inside the rows of segment 1: ${seen.join(' | ')}`).toBe(true);
+      expect(exportCursors.filter((c) => !c.endsWith('+pairs')), '+pairs survives every export cursor').toEqual([]);
+      expect(countersOn(db, 'export_epoch_conflict')).toEqual({ export_epoch_conflict: 1 });
+      expect([x10Count(db, 'entries'), x10Count(db, 'memberships')]).toEqual([8, 8]);
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('the floor: a per-chunk probe below it pauses the export phases with capture_paused_low_disk, the cursor where it was', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-floor-');
+    try {
+      const texts = x10Texts(0x600, 6, 'zqfloor', Date.now() - 400 * X10_DAY);
+      plantSegment(box, ids.storeId, {
+        seq: 1, writer: X10_WRITER, blobs: texts.map((t) => ({ text: t.text })),
+        rows: x10Rows({ uuid: x10U(0x60), path: '/home/u/gone/floor.jsonl', ino: 9601, texts }),
+      });
+      let calls = 0;
+      const roomy = { bsize: 1, bavail: 4 * 2 ** 40, blocks: 8 * 2 ** 40 };
+      const low = { bsize: 1, bavail: 1024, blocks: 8 * 2 ** 40 };
+      // Probes 1-3 (index, apply, the first export-blobs chunk) have room; the fourth, before the next chunk, does not.
+      const ctx = { ...stepCtx(box, ids, { chunkBytes: 100 }), deps: { statfs: async () => (++calls <= 3 ? roomy : low) } };
+      expect(await SW.recoveryStep(db, ctx)).toEqual({ moved: true, done: false, held: true });
+      expect(countersOn(db, 'capture_paused_low_disk')).toEqual({ capture_paused_low_disk: 1 });
+      const at = cursorOn(db);
+      expect(at).toMatch(new RegExp(`^export-blobs:1\\.${X10_WRITER}\\.db:[1-9][0-9]*$`));
+      expect(x10Count(db, 'entries'), 'no row before every blob').toBe(0);
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(x10Count(db, 'entries')).toBe(6);
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('a segment whose meta names another store is skipped and counted export_segment_foreign, its rows never replayed', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-foreign-');
+    try {
+      const mine = x10Texts(0x700, 2, 'zqmine', Date.now() - 400 * X10_DAY);
+      const theirs = x10Texts(0x710, 2, 'zqtheirs', Date.now() - 400 * X10_DAY);
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: mine.map((t) => ({ text: t.text })),
+        rows: x10Rows({ uuid: x10U(0x70), path: '/home/u/gone/mine.jsonl', ino: 9701, texts: mine }) });
+      plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, metaStoreId: '0189abcd-1234-4678-9abc-0000000010ff',
+        blobs: theirs.map((t) => ({ text: t.text })), rows: x10Rows({ uuid: x10U(0x71), path: '/home/u/gone/theirs.jsonl', ino: 9702, texts: theirs, seq: 2 }) });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(db.prepare('SELECT uuid FROM entries ORDER BY uuid').all().map((r) => String((r as { uuid: string }).uuid))).toEqual(mine.map((t) => t.uuid));
+      expect(countersOn(db, 'export_segment_foreign')).toEqual({ export_segment_foreign: 1 });
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('a segment that cannot be read fails its chunk (recover_chunk_failed) and the step waits for it, never skipping it; removed, the step completes', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-unreadable-');
+    try {
+      const texts = x10Texts(0x800, 2, 'zqunread', Date.now() - 400 * X10_DAY);
+      const one = plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: texts.map((t) => ({ text: t.text })),
+        rows: x10Rows({ uuid: x10U(0x80), path: '/home/u/gone/unread.jsonl', ino: 9801, texts }) });
+      const broken = path.join(path.dirname(one), `3.${X10_WRITER}.db`);
+      fs.writeFileSync(broken, 'not a database, and not a newer format either\n', { mode: 0o600 });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: false, held: false });
+      expect(countersOn(db, 'recover_chunk_failed')).toEqual({ recover_chunk_failed: 1 });
+      expect(cursorOn(db), 'the step waits at the unreadable segment').toBe(`export-blobs:3.${X10_WRITER}.db:0`);
+      expect(await SW.recoveryStep(db, stepCtx(box, ids)), 'still unreadable: still waiting').toEqual({ moved: false, done: false, held: false });
+      fs.rmSync(broken);
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(x10Count(db, 'entries')).toBe(2);
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('a chunk that throws rolls back what it applied with its cursor; the next pass applies it once', () => {
+    const box = makeHistoryBox('ccrc-history-b4-rollback-');
+    pass(box);
+    const storeId = fs.readFileSync(historyPaths(box.home).storeId, 'utf8').trim();
+    const t0 = Date.now() - 400 * X10_DAY;
+    const [U1, U2] = [x10U(0x91), x10U(0x92)];
+    plantJournalFile(box, storeId, new Date(t0).toISOString().slice(0, 7), 'feedbeef', t0, [
+      journalRecord('verdict', t0 + 1, { event_key: 'none', kind: 'family', ccrc_id: X10_ID, generation: X10_G, project: 'demo', first_seen_ms: t0 + 1 }),
+      journalRecord('verdict', t0 + 2, {
+        event_key: 'none', kind: 'mapping', ccrc_id: X10_ID, generation: X10_G, cc_session_uuid: U1, declared_by: 'operator',
+        path: '/home/u/gone/r1.jsonl',
+      }),
+    ]);
+    const texts = x10Texts(0x900, 4, 'zqrollback', t0);
+    plantSegment(box, storeId, { seq: 1, writer: X10_WRITER, blobs: texts.map((t) => ({ text: t.text })),
+      rows: x10Rows({ uuid: U2, path: '/home/u/gone/r2.jsonl', ino: 9901, texts }) });
+    registerRecovery(box, Date.now());
+    // Every membership insert throws: the rows chunk (one chunk at the default budget) rolls back whole.
+    pass(box, { HISTORY_TEST_THROW_SQL: 'INTO memberships' }, [PRELOADS.faults]);
+    expect(counters(box)['recover_chunk_failed']).toBe(1);
+    expect([countOf(box, 'entries'), countOf(box, 'memberships'), counters(box)['export_epoch_conflict'] ?? 0], 'nothing of the failed chunk stayed').toEqual([0, 0, 0]);
+    expect(recoverRow(box)!.cursor).toBe('export-rows');
+    pass(box);
+    expect(recoverRow(box)!.completed_ms).not.toBeNull();
+    expect([countOf(box, 'entries'), countOf(box, 'memberships'), counters(box)['export_epoch_conflict']]).toEqual([4, 4, 1]);
+  }, HEAVY);
 });
