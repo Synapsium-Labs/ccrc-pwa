@@ -80,8 +80,21 @@ describe('noteFor: one subject becomes one plain-English line', () => {
     expect(n).toEqual({ group: 'New', text: '$(touch /tmp/x) `id` <b>bold</b> tabbed spaced', pr: 5 });
   });
 
+  it('strips bidi overrides/isolates and zero-width characters, so a title cannot reorder or hide text', () => {
+    const n = noteFor('feat: safe\u202Eevil\u202C \u2066x\u2069 zero\u200Bwidth\u200C\u200D\u200E\u200F\u2060\uFEFF end (#6)');
+    expect(n.text).not.toMatch(/[\u200B-\u200F\u202A-\u202E\u2060-\u2069\uFEFF]/);
+    expect(n.text).toBe('Safe evil x zero width end');
+  });
+
   it('a subject that is ONLY a prefix and refs still says something', () => {
     expect(noteFor('fix: (D-9) (#4)').text).toBe('fix: (D-9)');
+  });
+
+  it('caps by code point, never splitting a surrogate pair', () => {
+    const n = noteFor(`feat: ${'\u{1F600}'.repeat(400)} (#1)`);
+    expect(n.text.endsWith('…')).toBe(true);
+    expect(Array.from(n.text).length).toBeLessThanOrEqual(240);
+    expect(n.text).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
   });
 
   it('caps an absurdly long line', () => {
@@ -153,6 +166,15 @@ describe('the generator and the PWA parser speak one format', () => {
         { name: 'Behind the scenes', items: ['Words'] },
       ],
     });
+  });
+});
+
+describe('parseReleaseNotes: a hand-written body cannot spoof the display', () => {
+  it('drops bidi overrides/isolates and zero-width characters from a plain body and a grouped one', () => {
+    expect(parseReleaseNotes('safe\u202Elive\u202C \u2066x\u2069 a\u200Bb\uFEFF')).toEqual({ kind: 'plain', text: 'safelive x ab' });
+    const g = parseReleaseNotes('Changes since v0.0.1\n\nNew\n- A\u202Eb #3\n');
+    expect(JSON.stringify(g)).not.toMatch(/\\u202e|\u202E/i);
+    expect(g.kind).toBe('grouped');
   });
 });
 

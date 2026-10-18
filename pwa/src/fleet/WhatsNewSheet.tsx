@@ -63,7 +63,7 @@ function ReleaseBlock({ release: r, view }: { release: ReleaseWire; view: Update
         <span className="font-mono text-xs">{releaseDate(r.publishedAt)}</span>
       </p>
       {hasReleaseNotes(r.notes)
-        ? <ReleaseNotes notes={r.notes} source={view.source} />
+        ? <ReleaseNotes notes={r.notes} source={view.source} hideSince />
         : <p className={SHEET_LINE}>{NO_NOTES_TEXT}</p>}
     </li>
   );

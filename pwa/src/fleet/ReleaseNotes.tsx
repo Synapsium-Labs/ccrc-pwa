@@ -49,8 +49,10 @@ function Group({ name, items, source }: { name: string; items: readonly string[]
 
 /** `null` when there is nothing to show (no body). A caller that must say
  *  "no notes" asks `hasReleaseNotes` first. */
-export function ReleaseNotes({ notes, source }: {
+export function ReleaseNotes({ notes, source, hideSince = false }: {
   notes: string | null | undefined; source: ReleaseSourceWire | null | undefined;
+  /** The What's new sheet's title already says "since"; its blocks skip the line. */
+  hideSince?: boolean;
 }): ReactNode {
   const [unfolded, setUnfolded] = useState(false);
   const read = parseReleaseNotes(notes);
@@ -60,7 +62,7 @@ export function ReleaseNotes({ notes, source }: {
   }
   return (
     <div className="settings-release-notes grid gap-2">
-      {read.since !== null && <p className="m-0">{`Changes since ${read.since}`}</p>}
+      {!hideSince && read.since !== null && <p className="m-0">{`Changes since ${read.since}`}</p>}
       {read.empty && <p className="m-0">No changes.</p>}
       {read.groups.map((g) => g.name === FOLDED_NOTE_GROUP
         ? (

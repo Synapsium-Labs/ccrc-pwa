@@ -54,10 +54,16 @@ function isGroup(line: string): line is ReleaseNoteGroup {
   return (RELEASE_NOTE_GROUPS as readonly string[]).includes(line);
 }
 
+const SPOOF = /[\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/g;
+
 export function parseReleaseNotes(body: string | null | undefined): ReleaseNotesRead {
   if (typeof body !== 'string' || body.trim() === '') return { kind: 'none' };
-  const plain = { kind: 'plain', text: body } as const;
-  const lines = body.replace(/\r\n/g, '\n').split('\n');
+  // Bidi overrides/isolates/marks and zero-width characters go before
+  // anything else: a body (hand-written, or older than the generator's own
+  // strip) must not reorder or hide text in the rendered notes.
+  const text = body.replace(SPOOF, '');
+  const plain = { kind: 'plain', text } as const;
+  const lines = text.replace(/\r\n/g, '\n').split('\n');
   const head = lines[0] ?? '';
   const m = HEADER.exec(head);
   if (m === null && head !== FIRST) return plain;

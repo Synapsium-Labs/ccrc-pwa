@@ -49,9 +49,11 @@ const TRAILING_PR = /\s*\(#(\d{1,7})\)\s*$/;
 const DREF = 'D-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*';
 const DEVIATION = new RegExp(`^${DREF}(?:\\s*(?:\\.\\.|–|—)\\s*${DREF})?$`);
 
-/** Control characters out, runs of whitespace to one space. */
+/** Control characters, bidi overrides/isolates/marks and zero-width
+ *  characters out (a title must not reorder or hide text), runs of
+ *  whitespace to one space. */
 function clean(s) {
-  return s.replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ').replace(/\s+/g, ' ').trim();
+  return s.replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
 /** Each parenthetical loses its deviation refs; one left empty goes entirely. */
@@ -69,7 +71,8 @@ function capitalise(s) {
 }
 
 function capLine(s) {
-  return s.length <= LINE_MAX ? s : `${s.slice(0, LINE_MAX - 1).trimEnd()}…`;
+  const cps = Array.from(s);
+  return cps.length <= LINE_MAX ? s : `${cps.slice(0, LINE_MAX - 1).join('').trimEnd()}…`;
 }
 
 /** One subject → `{ group, text, pr }`. */

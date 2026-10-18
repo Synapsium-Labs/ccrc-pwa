@@ -6,7 +6,7 @@
 // gh is a recording stub planted first on PATH: no test reaches GitHub.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
@@ -46,6 +46,7 @@ function plantGh(home: string): string {
   writeFileSync(join(bin, 'gh'), [
     '#!/bin/sh',
     'printf \'%s\\n\' "$*" >> "$HOME/gh-argv"',
+    'pwd >> "$HOME/gh-cwd"',
     'if [ "$1 $2" = "release view" ]; then cat "$HOME/body-$3" 2>/dev/null; exit 0; fi',
     'if [ "$1 $2" = "release edit" ]; then',
     '  if grep -qx "$3" "$HOME/fail" 2>/dev/null; then echo "release not found" >&2; exit 1; fi',
@@ -59,7 +60,7 @@ function plantGh(home: string): string {
 function run(root: string, home: string, args: string[]): { code: number; stdout: string; stderr: string } {
   const bin = plantGh(home);
   const r = spawnSync(process.execPath, [SCRIPT, '--repo', root, ...args],
-    { env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH ?? ''}` }, encoding: 'utf8' });
+    { cwd: home, env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH ?? ''}` }, encoding: 'utf8' });
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 const ghCalls = (home: string): string[] =>
@@ -107,6 +108,16 @@ describe('release-notes-backfill.mjs', () => {
     expect(existsSync(join(home, 'notes-v0.0.3'))).toBe(true);
     expect(r.stderr).toMatch(/v0\.0\.4: gh release edit failed/);
     expect(r.stdout).toMatch(/1 edited, 0 left alone, 1 failed/);
+  });
+
+  it('gh runs IN the --repo checkout, so it acts on that repo\'s GitHub releases, not the caller\'s', () => {
+    const home = mkTmp('ccrc-backfill-cwd-');
+    const root = fixture(home);
+    const r = run(root, home, ['--last', '2']);
+    expect(r.code, r.stderr).toBe(0);
+    const cwds = readFileSync(join(home, 'gh-cwd'), 'utf8').split('\n').filter((l) => l !== '');
+    expect(cwds.length).toBe(4);
+    for (const c of cwds) expect(realpathSync(c)).toBe(realpathSync(root));
   });
 
   it('refuses a malformed --last, exit 2, nothing touched', () => {

@@ -147,6 +147,11 @@ describe('the notes, as plain text in groups', () => {
     expect(row.textContent).toContain('Tidy the docs');
   });
 
+  it('the sheet already says "since"; a release block does not repeat its "Changes since" line', () => {
+    open();
+    expect(releaseRow('v0.0.9').textContent).not.toContain('Changes since');
+  });
+
   it('each #NNN is a link to the source repo\'s pull request, built from the number alone', () => {
     open();
     const links = within(releaseRow('v0.0.9')).getAllByRole('link');
@@ -200,6 +205,7 @@ describe('Settings → Updates renders a release row\'s notes the same way', () 
     expect(within(row).getByText('Fixed')).toBeInTheDocument();
     expect(within(row).getByRole('button', { name: 'Behind the scenes (2)' })).toBeInTheDocument();
     expect(within(row).getAllByRole('link').map((a) => a.textContent)).toEqual(['#626', '#601', '#630']);
+    expect(row.textContent).toContain('Changes since');
   });
 });
 

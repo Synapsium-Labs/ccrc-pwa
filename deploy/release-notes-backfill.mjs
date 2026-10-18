@@ -15,6 +15,8 @@
 // if any failed. The server's catalogue picks the new bodies up on its next
 // poll (its upsert rewrites `notes`), so nothing else needs to move.
 //
+// gh runs IN the --repo checkout (cwd), so it edits that repo's releases,
+// never those of whatever checkout the caller stands in.
 // Commit text and release bodies are DATA here: gh and git are called with
 // an argv (execFileSync, never a shell), and a body travels in a file.
 import { execFileSync } from 'node:child_process';
@@ -79,7 +81,7 @@ function main(argv) {
       if (!force) {
         let body;
         try {
-          body = execFileSync(gh, ['release', 'view', tag, '--json', 'body', '--jq', '.body'], { encoding: 'utf8' });
+          body = execFileSync(gh, ['release', 'view', tag, '--json', 'body', '--jq', '.body'], { cwd: repo, encoding: 'utf8' });
         } catch {
           process.stderr.write(`release-notes-backfill: ${tag}: gh release view failed — skipped\n`);
           failed += 1;
@@ -94,7 +96,7 @@ function main(argv) {
       const file = join(dir, `${tag}.txt`);
       writeFileSync(file, releaseNotesFor({ repo, tag }));
       try {
-        execFileSync(gh, ['release', 'edit', tag, '--notes-file', file], { stdio: ['ignore', 'ignore', 'pipe'] });
+        execFileSync(gh, ['release', 'edit', tag, '--notes-file', file], { cwd: repo, stdio: ['ignore', 'ignore', 'pipe'] });
         process.stdout.write(`${tag}: notes written\n`);
         edited += 1;
       } catch {
