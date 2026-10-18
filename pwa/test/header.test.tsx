@@ -1229,4 +1229,47 @@ describe('the quiet "with coordinator" state (D-5296)', () => {
     expect(screen.getByText('Which branch?')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /release/ })).toBeInTheDocument();
   });
+
+  // The guard that keeps the words off any bucket but `working`: the server
+  // keeps the field on a dead row, or an idle one whose asks row is still held.
+  it('a dead row with the field set reads its dead word, never the coordinator words', () => {
+    renderHeader({ session: held({ status: 'dead', bucket: 'dead' }), status: 'dead' });
+    const line = document.querySelector('.status-line');
+    expect(line?.textContent).not.toContain('with coordinator');
+    expect(line?.className).not.toContain('status-line--coordinator');
+    expect(line?.className).toContain('status-line--dead');
+  });
+
+  it('an idle row with the field set reads its idle word, never the coordinator words', () => {
+    renderHeader({ session: held({ bucket: 'idle' }), status: 'idle' });
+    const line = document.querySelector('.status-line');
+    expect(line?.textContent).toMatch(/^idle/);
+    expect(line?.className).not.toContain('status-line--coordinator');
+  });
+
+  // D-5390: a `<wrapper>-<project>` main-checkout parent keeps its whole id,
+  // which at 360 and 390 px is wider than the column. The name ellipsises
+  // inside the status line (Playwright-measured, PR body); the full id stays
+  // on `title`.
+  it('a long `<wrapper>-<project>` parent ellipsises inside the line, the full id on title', async () => {
+    const { readFileSync } = await import('node:fs');
+    const path = await import('node:path');
+    const { ruleIn, declValue, stripComments } = await import('./cssRule');
+    const css = stripComments(readFileSync(path.join(import.meta.dirname, '..', 'src', 'session', 'chat.css'), 'utf8'));
+    const rule = ruleIn(css, '.chat-meta .status-line-name');
+    expect(declValue(rule, 'overflow')).toBe('hidden');
+    expect(declValue(rule, 'text-overflow')).toBe('ellipsis');
+    expect(declValue(rule, 'display')).toBe('inline-block');
+    expect(declValue(rule, 'max-width')).toBe('100%');
+    renderHeader({ session: held({ withCoordinator: { ...WC, parentId: 'wrapper-two-project-a' } }), status: 'idle' });
+    expect(document.querySelector('.status-line-name')?.textContent).toBe('· wrapper-two-project-a');
+    expect(document.querySelector('.status-line')?.getAttribute('title')).toContain('wrapper-two-project-a');
+  });
+
+  // The chat's working pulse stands down while the parent holds the question,
+  // so it agrees with the header's calm tint.
+  it('the chat does not pulse while the parent holds the question', () => {
+    expect(chatPulsing(held(), 'idle')).toBe(false);
+    expect(chatPulsing(held({ withCoordinator: null }), 'idle')).toBe(true);
+  });
 });

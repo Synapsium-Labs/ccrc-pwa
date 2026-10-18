@@ -724,7 +724,7 @@ describe('the quiet "with coordinator" state (D-5296)', () => {
   });
 
   it('a malformed value reads as null → attention', () => {
-    for (const bad of [{ ...WC, kind: 'x' }, { ...WC, parentId: '' }, { ...WC, since: 'x' }, { ...WC, notifyAt: Number.NaN }, 'x', [1]]) {
+    for (const bad of [{ ...WC, kind: 'x' }, { ...WC, parentId: '' }, { ...WC, since: 'x' }, { ...WC, since: Number.NaN }, { ...WC, notifyAt: Number.NaN }, 'x', [1]]) {
       expect(sessionBucket({ ...base, hookState: 'waiting', withCoordinator: bad as never }, 5000).bucket, JSON.stringify(bad)).toBe('attention');
     }
   });

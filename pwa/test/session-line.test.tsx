@@ -1705,4 +1705,32 @@ describe('the quiet "with coordinator" state (D-5296)', () => {
     const loud = render(<BucketBar sessions={[held({ withCoordinator: null, bucket: 'attention' })]} acks={{}} ackAll={() => {}} />);
     expect(loud.container.textContent).toContain('Attention');
   });
+
+  // The guard that keeps the state off any row but the `working` one the hold
+  // produces: the server keeps the field on a dead row, or on an idle one whose
+  // asks row is still `held` (a restart dropped the hold), until `notifyAt`.
+  it('a dead row with the field set reads exited, never the coordinator words', () => {
+    const { container } = render(
+      <SessionLine session={held({ status: 'dead', bucket: 'dead' })} onOpen={() => {}} onActions={() => {}} />,
+    );
+    expect(container.querySelector('.sess-state')?.textContent).toBe('exited');
+    expect(container.querySelector('.sess-state--coordinator')).not.toBeInTheDocument();
+  });
+
+  it('an idle row with the field set reads idle, never the coordinator words', () => {
+    const { container } = render(
+      <SessionLine session={held({ bucket: 'idle' })} onOpen={() => {}} onActions={() => {}} />,
+    );
+    expect(container.querySelector('.sess-state--coordinator')).not.toBeInTheDocument();
+    expect(container.querySelector('.sess-state')?.textContent).not.toContain('with coordinator');
+  });
+
+  // D-5301 makes a main-checkout session (`<wrapper>-<project>`) a coordinator
+  // too; its id carries no `<project>-` prefix, so the card names it in full.
+  it('a `<wrapper>-<project>` main-checkout parent is named in full', () => {
+    const { container } = render(
+      <SessionLine session={held({ withCoordinator: { ...WC, parentId: 'wrapper-two-project-a' } })} onOpen={() => {}} onActions={() => {}} />,
+    );
+    expect(container.querySelector('.sess-state')?.textContent).toBe('with coordinator · wrapper-two-project-a');
+  });
 });

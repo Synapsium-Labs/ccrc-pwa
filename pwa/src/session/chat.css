@@ -89,8 +89,17 @@
   max-width: calc(100% - 8px - var(--sp-2)); /* the dot's 8 px box (StatusDot's min-w-2) and the row gap */
   line-height: 1.2;
 }
+/* D-5390: the name never breaks, but a long parent id (a `<wrapper>-<project>`
+   main-checkout coordinator keeps its whole id) must not run past the column
+   under the keycaps either: it ellipsises inside the status line, whose
+   `title` carries the full id. */
 .chat-meta .status-line-name {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
+  vertical-align: top;
 }
 .chat .status-line--busy {
   color: var(--status-busy-text);
