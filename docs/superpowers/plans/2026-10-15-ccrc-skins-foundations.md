@@ -1460,3 +1460,22 @@ A worker never allocates: it names a departure by slug in its report, and the co
   - **Departs** Task 8's mapping (its first two rows) and its "Frozen files touched: none".
 
 Issued and unused: 5453.
+
+### Found while executing Task 10
+
+Task 10 was issued two spares, 2026-10-18; both are defined here.
+
+- **D-5456** — `escape-stop-measured-at-window` (Task 10): the palette's Escape propagation stop is held by a window listener, not by the interrupt alone.
+  - **Why:** since D-5235, `SessionHeader`'s Escape listener returns on `defaultPrevented` and while a dialog is open. Radix's dismiss layer prevents the default, so with the stop deleted the palette still closes and `onInterrupt` is still not called. Run on the mutant: "Escape with focus on an option does not interrupt" stayed green on its interrupt assertion. The header's guard is one listener's courtesy; the palette's contract is that the key goes no further.
+  - **The test:** that case also adds a plain `window` keydown listener and expects it never to see the Escape. That assertion is the mutation row's red line (`the Escape went on past the palette to the window`).
+  - **The phase**, confirmed on the versions in the lock (vaul 1.1.2, `@radix-ui/react-dismissable-layer` 1.1.16): Radix calls `onEscapeKeyDown` from a document listener in the capture phase, before the target, then prevents the default and closes. A stop there keeps the key from the target and from every bubble listener.
+- **D-5457** — `palette-as-built` (Task 10): the palette's shape departs Task 10's in six places, and two files outside its list change.
+  - **Key hints are `KEYCAP`'s shape on a `<kbd>`** (`KeyHint`), not the `Keycap` component. `Keycap` is a `<button>`, so it would put a tab stop inside an option, which the options' `tabIndex={-1}` rule exists to prevent. The palette hides hints on a coarse pointer. The shortcut sheet shows them on every pointer, because the sheet is the hint.
+  - **The palette sits on the `z-toast` layer** rather than a new z token: above a sheet (40) and the terminal drawer (50), below the block screen (100). A command's toast renders under an open palette.
+  - **vaul's `autoFocus` is set.** vaul 1.1 holds Radix's open auto-focus back by default, and the input must take focus on open (Step 4).
+  - **Single keys and chords also stay idle while a sheet or dialog is open,** so `]` never navigates under an open sheet. ⌘K is not held back by one: the palette opens over a sheet.
+  - **Its own motion, not the sheet's:** it enters at `--dur-base` on the swift curve and leaves at `--dur-fast`, rather than the sheet's 420ms overshoot spring. A palette is summoned by a key and read at once, so the input must not bounce. Instrument's skin retimes both steps to 120ms. (Copying the sheet's two motion strings also reds `literal-census.test.ts`, and folding them into one constant would need `sheet.tsx`, which drawer stage 1 holds.)
+  - **Pages:** "Open session…", "Switch layout →" and "Switch theme…" answer a second list (`CommandPage`) rather than running. Backspace in an empty input goes back.
+  - **Outside the file list:** `ui/design/make-icons.mjs`'s `NAMES` gains the three icons (the generated `lucide.ts` says to add a name there and re-run, and the run used lucide-static 1.59.0, the version in its header). `ui/README.md`'s "Reaching Instrument before there is a picker" now leads with the palette (spec §7 says the README documents both).
+
+Issued and unused (Task 10): none.

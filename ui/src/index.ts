@@ -41,6 +41,11 @@ export { CoverScreen, COVER_SCREEN, type CoverScreenProps } from './primitives/c
 export { BareRow, BARE_ROW, type BareRowProps } from './primitives/bare-row';
 export { CountBadge, COUNT_BADGE, type CountBadgeProps } from './primitives/count-badge';
 export { Keycap, KEYCAP, type KeycapProps } from './primitives/keycap';
+// The ⌘K palette (D-5103): the overlay and its key hint. The commands are the
+// app's registry; this draws them.
+export {
+  CommandPalette, KeyHint, COMMAND_KEY, type CommandPaletteProps, type CommandPaletteOption,
+} from './primitives/command-palette';
 // Two constants with no component of their own: each is a handful of
 // utilities that two or three app rules spelled identically, and wrapping
 // either in a `<span>` would add an element nobody asked for.
