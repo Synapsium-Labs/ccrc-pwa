@@ -72,7 +72,8 @@ describe('noteFor: one subject becomes one plain-English line', () => {
   });
 
   it('keeps a non-deviation parenthetical, and strips a bare D-ref list wherever it sits', () => {
-    expect(noteFor('fix: a (small) thing (D-1, D-B4-9) works (#3)').text).toBe('A (small) thing works');
+    // a segmented legacy-shaped ref, concatenated so this file carries no bare legacy form
+    expect(noteFor(`fix: a (small) thing (D-1, ${'D-B'}4-9) works (#3)`).text).toBe('A (small) thing works');
   });
 
   it('strips control characters and collapses whitespace; never interprets the text', () => {

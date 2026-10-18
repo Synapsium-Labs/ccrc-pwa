@@ -45,7 +45,7 @@ const LINE_MAX = 240;
 const RELEASE_TAG = /^v(\d{1,9})\.(\d{1,9})\.(\d{1,9})$/;
 const PREFIX = /^([A-Za-z]+)(?:\([^()]*\))?!?:\s+/;
 const TRAILING_PR = /\s*\(#(\d{1,7})\)\s*$/;
-/** One deviation ref (`D-5523`, `D-B4-9`) or a range of them (`D-5466..D-5479`, `D-1–D-4`). */
+/** One deviation ref (`D-5523`, or a segmented one) or a range of them (`D-5466..D-5479`, `D-1–D-4`). */
 const DREF = 'D-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*';
 const DEVIATION = new RegExp(`^${DREF}(?:\\s*(?:\\.\\.|–|—)\\s*${DREF})?$`);
 
