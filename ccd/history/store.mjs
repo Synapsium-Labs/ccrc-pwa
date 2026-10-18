@@ -24,7 +24,7 @@ import {
 import { basename, dirname, resolve } from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { brotliCompressSync, brotliDecompressSync, constants as Z, createBrotliCompress, createBrotliDecompress } from 'node:zlib';
-import { BUSY_TIMEOUT_MS, CONTROL_FILE_MAX, MAX_INTERRUPTED_ATTEMPTS, RECOVER_PHASES, SCHEMA_VERSION, SIDECAR_WHOLE_MAX, UUID_RE, WRITER_RE, backupNameOf, blobOverDecodeCap, FTS_REBUILD_STEP, FTS_SHADOWS, FTS_STEP, formatRecoverCursor, ftsTextOf, historyPaths, journalRecord, jsonWithinStructureBound, newSha256, restoreNameOk, sidecarIndexText } from './lib.mjs';
+import { BUSY_TIMEOUT_MS, CONTROL_FILE_MAX, MAX_INTERRUPTED_ATTEMPTS, RECOVER_PHASES, SCHEMA_VERSION, SIDECAR_WHOLE_MAX, UUID_RE, WRITER_RE, backupNameOf, blobOverDecodeCap, FTS_REBUILD_STEP, FTS_SHADOWS, FTS_STEP, formatRecoverCursor, ftsTextOf, historyPaths, journalRecord, jsonWithinStructureBound, newSha256, orderSegmentNames, parseSegmentName, restoreNameOk, segmentName, segmentTempName, sidecarIndexText } from './lib.mjs';
 
 /** The codec word every blob row records: Brotli at quality 5 (RV6). */
 export const CODEC = 'br5';
@@ -1775,4 +1775,342 @@ export function commitRestore(home, staged, { nowMs, pairs = [], belt = null }) 
 export function abortRestore(staged) {
   assertRestoreTemp(staged.tempPath, staged.dbDir);
   for (const s of ['', '-wal', '-shm', '-journal']) removeEntry(`${staged.tempPath}${s}`);
+}
+
+// ── export segments (spec §9.15 "Write", "Who reads it"; §9.14 "Export replay"; §6.4: store.mjs owns them; W1-B4) ──
+//
+// A segment is an immutable SQLite file, export/<store_id>/<seq>.<writer>.db on the home filesystem. It is BUILT in
+// a dot-temp beside its name (lib segmentTempName), O_CREAT|O_EXCL 0600, with no rollback journal and no fsync per
+// statement: a crash leaves only the temp, which the next pass removes, so nothing in it needs a journal. It is
+// PUBLISHED by link(), which fails on a name that exists, and never by rename, which would silently replace one;
+// then the temp is unlinked and the directory fsynced. Nothing ever writes a published segment again. It is READ
+// only by the recovery step, through openSegment's read-only handle; the CLI never opens one.
+//
+// THE FORMAT (EXPORT_SEGMENT_FORMAT, lib): `meta`, `blobs` keyed by sha256, and one typed table per row kind. Every
+// row table shares ONE write-order column, `ord`, drawn from one counter, so replay walks all of them with one cursor
+// (segment, ord) and meets each row after the rows it names, as the writer put them. No internal id of the store
+// (entry_id, blob_id, transcript_pk, file_id, session_pk) is written: rows name each other by natural keys only — a
+// blob by its sha256, an entry by its uuid, a transcript by (cc_session_uuid, agent_id), a file by (path, dev, ino),
+// a family by (ccrc_id, generation). Every later format keeps meta's six keys with their meaning, so a build reads
+// any segment's meta and can refuse a newer format by name (lib decideSegmentReplay); a format bump changes tables,
+// never meta. history-store.test.ts holds the built schema equal to its format-1 literal.
+// D-4754 (history-sole-copy-export) D-4226
+
+/** Each row kind's table and columns, in order, after the shared `ord INTEGER PRIMARY KEY`. The one declaration
+ *  of the format's rows: SEGMENT_DDL and segmentInserts are derived from it. */
+const SEGMENT_ROW_TABLES = Object.freeze({
+  family: Object.freeze({ table: 'families', cols: Object.freeze([
+    ['ccrc_id', 'TEXT NOT NULL'], ['generation', 'TEXT NOT NULL'], ['project', 'TEXT NOT NULL'], ['first_seen_ms', 'INTEGER NOT NULL'],
+  ]) }),
+  transcript: Object.freeze({ table: 'transcripts', cols: Object.freeze([
+    ['cc_session_uuid', 'TEXT NOT NULL'], ['agent_id', 'TEXT NOT NULL'], ['harness', 'TEXT NOT NULL'],
+    ['parent_tool_use_id', 'TEXT'], ['workflow_run_id', 'TEXT'], ['agent_type', 'TEXT'],
+  ]) }),
+  epoch: Object.freeze({ table: 'epochs', cols: Object.freeze([
+    ['ccrc_id', 'TEXT NOT NULL'], ['generation', 'TEXT NOT NULL'], ['seq', 'INTEGER NOT NULL'], ['cc_session_uuid', 'TEXT NOT NULL'],
+    ['cause', 'TEXT NOT NULL'], ['declared_by', 'TEXT NOT NULL'], ['started_ms', 'INTEGER'], ['cwd', 'TEXT'], ['cwd_real', 'TEXT'],
+    ['git_branch', 'TEXT'], ['confirmed_ms', 'INTEGER'],
+  ]) }),
+  file: Object.freeze({ table: 'files', cols: Object.freeze([
+    ['path', 'TEXT NOT NULL'], ['dev', 'INTEGER NOT NULL'], ['ino', 'INTEGER NOT NULL'], ['cc_session_uuid', 'TEXT NOT NULL'],
+    ['agent_id', 'TEXT NOT NULL'], ['size', 'INTEGER'], ['mtime_ns', 'INTEGER'], ['eof_ms', 'INTEGER'],
+  ]) }),
+  entry: Object.freeze({ table: 'entries', cols: Object.freeze([
+    ['uuid', 'TEXT NOT NULL'], ['cc_session_uuid', 'TEXT NOT NULL'], ['agent_id', 'TEXT NOT NULL'], ['type', 'TEXT NOT NULL'],
+    ['subtype', 'TEXT'], ['role', 'TEXT'], ['model', 'TEXT'], ['parent_uuid', 'TEXT'], ['ts_ms', 'INTEGER'], ['request_id', 'TEXT'],
+    ['api_block_index', 'INTEGER'], ['msg_id', 'TEXT'], ['source_tool_use_id', 'TEXT'], ['tool_name', 'TEXT'],
+    ['is_compact_summary', 'INTEGER NOT NULL'], ['provenance', 'TEXT NOT NULL'], ['prov_version', 'INTEGER NOT NULL'],
+    ['parse_state', 'TEXT NOT NULL'], ['struct_rank_ns', 'INTEGER NOT NULL'], ['struct_path', 'TEXT NOT NULL'],
+    ['struct_dev', 'INTEGER NOT NULL'], ['struct_ino', 'INTEGER NOT NULL'], ['blob_sha256', 'BLOB NOT NULL'],
+  ]) }),
+  variant: Object.freeze({ table: 'variants', cols: Object.freeze([
+    ['uuid', 'TEXT NOT NULL'], ['blob_sha256', 'BLOB NOT NULL'], ['first_path', 'TEXT NOT NULL'], ['first_dev', 'INTEGER NOT NULL'],
+    ['first_ino', 'INTEGER NOT NULL'], ['first_seen_ms', 'INTEGER NOT NULL'], ['cause', 'TEXT NOT NULL'],
+  ]) }),
+  boundary: Object.freeze({ table: 'boundaries', cols: Object.freeze([
+    ['uuid', 'TEXT NOT NULL'], ['cc_session_uuid', 'TEXT NOT NULL'], ['agent_id', 'TEXT NOT NULL'], ['boundary_ord', 'INTEGER NOT NULL'],
+    ['trigger', 'TEXT'], ['head_uuid', 'TEXT'], ['anchor_uuid', 'TEXT'], ['tail_uuid', 'TEXT'], ['kept_sha256', 'BLOB'],
+    ['pre_tokens', 'INTEGER'], ['post_tokens', 'INTEGER'], ['duration_ms', 'INTEGER'],
+  ]) }),
+  sidecar: Object.freeze({ table: 'sidecars', cols: Object.freeze([
+    ['cc_session_uuid', 'TEXT NOT NULL'], ['agent_id', 'TEXT NOT NULL'], ['name', 'TEXT NOT NULL'], ['blob_sha256', 'BLOB NOT NULL'],
+    ['uuid', 'TEXT'], ['first_seen_ms', 'INTEGER NOT NULL'],
+  ]) }),
+  membership: Object.freeze({ table: 'memberships', cols: Object.freeze([
+    ['path', 'TEXT NOT NULL'], ['dev', 'INTEGER NOT NULL'], ['ino', 'INTEGER NOT NULL'], ['uuid', 'TEXT NOT NULL'], ['line', 'INTEGER NOT NULL'],
+  ]) }),
+});
+
+/** The columns a reader gets back as BigInt (statSync's `bigint: true` values, as the store keeps them): a dev, an
+ *  ino or a nanosecond time can pass 2^53. Every other integer comes back a number. */
+const SEGMENT_BIGINT_COLS = Object.freeze(new Set(['dev', 'ino', 'mtime_ns', 'struct_rank_ns', 'struct_dev', 'struct_ino', 'first_dev', 'first_ino']));
+
+const SEGMENT_BLOB_COLS = Object.freeze(['sha256', 'codec', 'raw_len', 'z', 'pruned']);
+
+/** The format-1 schema, in creation order. A blob row is carried bytes (`pruned` 0, `z` set) or a stub of a pruned
+ *  blob (`pruned` 1, `z` NULL), never a mix. */
+export const SEGMENT_DDL = Object.freeze([
+  'CREATE TABLE meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)',
+  'CREATE TABLE blobs (sha256 BLOB PRIMARY KEY, codec TEXT NOT NULL, raw_len INTEGER NOT NULL, z BLOB, pruned INTEGER NOT NULL, CHECK (pruned IN (0, 1) AND (z IS NULL) = (pruned = 1)))',
+  ...Object.values(SEGMENT_ROW_TABLES).map(({ table, cols }) => `CREATE TABLE ${table} (ord INTEGER PRIMARY KEY, ${cols.map(([c, t]) => `${c} ${t}`).join(', ')})`),
+]);
+
+/** A row object with exactly `cols` as keys, bound in that order. A missing or an extra key is a caller's bug and
+ *  throws: a misspelt column must never write NULL where a value was meant. */
+function segmentBind(what, cols, row) {
+  const keys = Object.keys(row);
+  for (const c of cols) if (!Object.hasOwn(row, c)) throw new TypeError(`segment ${what}: missing column ${c}`);
+  if (keys.length !== cols.length) throw new TypeError(`segment ${what}: unknown column(s) ${keys.filter((k) => !cols.includes(k)).join(', ')}`);
+  return cols.map((c) => row[c]);
+}
+
+/** The segment's meta as the writer gives it, checked: every key, by the grammar segmentMeta reads it back with. */
+function checkSegmentMeta(meta) {
+  const ok = UUID_RE.test(String(meta.storeId)) && WRITER_RE.test(String(meta.writer))
+    && Number.isSafeInteger(meta.seq) && meta.seq > 0 && Number.isSafeInteger(meta.format) && meta.format > 0
+    && Number.isSafeInteger(meta.cutoffMs) && meta.cutoffMs >= 0
+    && Array.isArray(meta.harnesses) && meta.harnesses.every((h) => typeof h === 'string' && h !== '');
+  if (!ok) throw new TypeError(`createSegment: meta is not a segment's meta: ${JSON.stringify(meta)}`);
+}
+
+/** export/ and export/<store_id>/ exist, each 0700 (§9.6), whatever the umask or a hand-made export/ left; answers
+ *  the store's segment directory. `storeId` is a store id (UUID_RE), so no path is formed from anything else.
+ *  F23: every new directory entry is fsynced (mkdirDurable), so a published segment's directory survives a power
+ *  loss, and the marks committed after its link never name a segment the disk lost with its directory. */
+export function ensureSegmentDir(exportRoot, storeId) {
+  if (!UUID_RE.test(String(storeId))) throw new TypeError(`ensureSegmentDir: not a store id: ${JSON.stringify(storeId)}`);
+  const dir = `${exportRoot}/${storeId}`;
+  mkdirDurable(dir, 0o700);
+  chmodSync(exportRoot, 0o700);
+  chmodSync(dir, 0o700);
+  return dir;
+}
+
+/** A new segment, built in its temp `<dir>/.<name>.tmp` (§9.15 "Write"): created O_CREAT|O_EXCL 0600, so a temp left
+ *  behind is never reopened (the pass removes stale ones first, under the lock), then the format's schema and meta.
+ *  journal_mode OFF and synchronous OFF: the temp is discarded whole on any failure, and published only after the
+ *  one fsync publishSegment does. The name must be the one segmentName gives meta's seq and writer. */
+export function createSegment(dir, name, meta) {
+  checkSegmentMeta(meta);
+  if (name !== segmentName({ seq: meta.seq, writer: meta.writer })) throw new TypeError(`createSegment: ${JSON.stringify(name)} is not segment ${meta.seq} of ${meta.writer}`);
+  const temp = `${dir}/${segmentTempName(name)}`;
+  for (const s of ['-journal', '-wal', '-shm']) {
+    if (existsSync(`${temp}${s}`)) throw new Error(`${temp}${s} exists; a temp with sidecars is never opened`);
+  }
+  closeSync(openSync(temp, FS.O_CREAT | FS.O_EXCL | FS.O_WRONLY, 0o600));
+  let db;
+  try {
+    db = new DatabaseSync(temp);
+    db.exec('PRAGMA journal_mode = OFF');
+    db.exec('PRAGMA synchronous = OFF');
+    for (const sql of SEGMENT_DDL) db.exec(sql);
+    const put = db.prepare('INSERT INTO meta (k, v) VALUES (?, ?)');
+    put.run('store_id', meta.storeId);
+    put.run('writer', meta.writer);
+    put.run('seq', String(meta.seq));
+    put.run('harnesses', JSON.stringify(meta.harnesses));
+    put.run('cutoff_ms', String(meta.cutoffMs));
+    put.run('format', String(meta.format));
+    return { db, temp, name };
+  } catch (e) {
+    try { db?.close(); } catch { /* the throw below is the signal */ }
+    removeEntry(temp);   // by type (review 316 F22); the next pass's stale-temp removal takes what this leaves
+    throw e;
+  }
+}
+
+/** One insert per kind into an open segment, each taking an object with exactly its table's columns and answering
+ *  the `ord` it drew (blobs answer nothing: they are keyed by sha256 and replayed in their own pass). The counter
+ *  continues from the highest `ord` already in the segment. */
+export function segmentInserts(seg) {
+  const db = seg.db;
+  const top = db.prepare(`SELECT max(m) AS m FROM (${Object.values(SEGMENT_ROW_TABLES).map(({ table }) => `SELECT max(ord) AS m FROM ${table}`).join(' UNION ALL ')})`).get();
+  let ord = top.m === null ? 0 : Number(top.m);
+  const out = {};
+  const blobIns = db.prepare(`INSERT INTO blobs (${SEGMENT_BLOB_COLS.join(', ')}) VALUES (${SEGMENT_BLOB_COLS.map(() => '?').join(', ')})`);
+  out.blob = (row) => {
+    const v = segmentBind('blob', SEGMENT_BLOB_COLS, row);
+    if (typeof v[4] !== 'boolean') throw new TypeError('segment blob: pruned must be a boolean');
+    v[4] = v[4] ? 1 : 0;
+    blobIns.run(...v);
+  };
+  for (const [kind, { table, cols }] of Object.entries(SEGMENT_ROW_TABLES)) {
+    const names = cols.map(([c]) => c);
+    const ins = db.prepare(`INSERT INTO ${table} (ord, ${names.join(', ')}) VALUES (?, ${names.map(() => '?').join(', ')})`);
+    out[kind] = (row) => {
+      const v = segmentBind(kind, names, row);
+      ord += 1;
+      ins.run(ord, ...v);
+      return ord;
+    };
+  }
+  return out;
+}
+
+/** The meta a segment file carries, read back on a handle of its own (publishSegment's name check). */
+function tempMeta(temp) {
+  const db = new DatabaseSync(temp, { readOnly: true });
+  try { return segmentMeta(db); } finally { db.close(); }
+}
+
+/** Publish a built segment under `name` (§9.15 "Write"): close it, check the name is the one its meta's seq and
+ *  writer give (a renumbered temp is published under its new number only), fsync the temp, and link() it to
+ *  `<dir>/<name>`. A name that exists answers `exists` and keeps the temp, which the caller renumbers
+ *  (setSegmentSeq) and publishes again; it is never replaced. On `linked` the temp is unlinked and the directory
+ *  fsynced. */
+export function publishSegment(seg, dir, name) {
+  if (seg.db !== null) {
+    seg.db.close();
+    seg.db = null;
+  }
+  const m = tempMeta(seg.temp);
+  if (name !== segmentName({ seq: m.seq, writer: m.writer })) throw new TypeError(`publishSegment: ${JSON.stringify(name)} is not segment ${m.seq} of ${m.writer}`);
+  const fd = openSync(seg.temp, FS.O_RDONLY);
+  try { fsyncSync(fd); } finally { closeSync(fd); }
+  try {
+    linkSync(seg.temp, `${dir}/${name}`);
+  } catch (e) {
+    if (e && e.code === 'EEXIST') return 'exists';
+    throw e;
+  }
+  unlinkSync(seg.temp);
+  fsyncDir(dir);
+  return 'linked';
+}
+
+/** Renumber a closed temp's meta (the EEXIST retry, §9.15: "the pass then takes the next number"). */
+export function setSegmentSeq(temp, seq) {
+  if (!Number.isSafeInteger(seq) || seq < 1) throw new TypeError(`setSegmentSeq: seq must be a positive safe integer, got ${String(seq)}`);
+  const db = new DatabaseSync(temp);
+  try {
+    db.exec('PRAGMA journal_mode = OFF');
+    const r = db.prepare("UPDATE meta SET v = ? WHERE k = 'seq'").run(String(seq));
+    if (Number(r.changes) !== 1) throw new StoreError('segment-unreadable', `${temp} has no meta seq to renumber`);
+  } finally {
+    db.close();
+  }
+}
+
+/** The read-only handle on a published segment (§9.15 "Who reads it": the recovery step only). A path that is not a
+ *  non-empty regular file (a link, a directory, a truncated file) is refused, never followed or adopted. */
+export function openSegment(path) {
+  let st;
+  try { st = lstatSync(path); } catch (e) {
+    throw new StoreError('segment-unreadable', `${path} cannot be stat'ed: ${e && e.code ? e.code : String(e)}`);
+  }
+  if (!st.isFile() || st.size === 0) throw new StoreError('segment-unreadable', `${path} is not a non-empty regular file`);
+  let db;
+  try {
+    db = new DatabaseSync(path, { readOnly: true });
+    db.exec('PRAGMA query_only = ON');
+    return db;
+  } catch (e) {
+    try { db?.close(); } catch { /* the refusal below is the signal */ }
+    throw new StoreError('segment-unreadable', `${path} does not open as a segment: ${e && e.message ? e.message : String(e)}`);
+  }
+}
+
+const SEGMENT_INT_RE = /^(0|[1-9][0-9]{0,15})$/;
+const segmentInt = (v) => (typeof v === 'string' && SEGMENT_INT_RE.test(v) && Number.isSafeInteger(Number(v)) ? Number(v) : null);
+
+/** A segment's meta, every key by its grammar, or StoreError('segment-unreadable'): a file that is not a SQLite
+ *  database, has no meta, or holds a key off its grammar is never half-read. Every format keeps these six keys
+ *  (above), so this reads a newer format's meta too, and decideSegmentReplay refuses it by name. */
+export function segmentMeta(db) {
+  let rows;
+  try {
+    rows = db.prepare('SELECT k, v FROM meta').all();
+  } catch (e) {
+    throw new StoreError('segment-unreadable', `no segment meta: ${e && e.message ? e.message : String(e)}`);
+  }
+  const m = new Map(rows.map((r) => [String(r.k), String(r.v)]));
+  let harnesses = null;
+  try { harnesses = JSON.parse(m.get('harnesses') ?? 'null'); } catch { harnesses = null; }
+  const out = {
+    storeId: m.get('store_id') ?? '', writer: m.get('writer') ?? '', seq: segmentInt(m.get('seq')),
+    harnesses, cutoffMs: segmentInt(m.get('cutoff_ms')), format: segmentInt(m.get('format')),
+  };
+  try {
+    checkSegmentMeta(out);
+  } catch {
+    throw new StoreError('segment-unreadable', `segment meta is off its grammar: ${JSON.stringify([...m])}`);
+  }
+  return out;
+}
+
+/** The first blobs after `rowid`, in rowid order, until the next one's bytes would pass `maxBytes` (the first is
+ *  always taken): one bounded chunk of the replay's blob pass. A stub (pruned) has `z` null and counts 0 bytes. */
+export function segmentBlobsAfter(db, rowid, maxBytes) {
+  const out = [];
+  let bytes = 0;
+  for (const r of db.prepare('SELECT rowid AS rowid, sha256, codec, raw_len, z, pruned FROM blobs WHERE rowid > ? ORDER BY rowid').iterate(rowid)) {
+    const n = r.z === null ? 0 : r.z.length;
+    if (out.length > 0 && bytes + n > maxBytes) break;
+    bytes += n;
+    out.push({ rowid: Number(r.rowid), sha256: r.sha256, codec: String(r.codec), raw_len: Number(r.raw_len), z: r.z, pruned: Number(r.pruned) === 1 });
+  }
+  return out;
+}
+
+/** The first `limit` rows of every kind after `ord`, in write order: `{ ord, kind, row }`, `row` holding the kind's
+ *  columns without `ord` (SEGMENT_BIGINT_COLS as BigInt, every other integer a number). One bounded chunk of the
+ *  replay's row pass. */
+export function segmentRowsAfter(db, ord, limit) {
+  const all = [];
+  for (const [kind, { table }] of Object.entries(SEGMENT_ROW_TABLES)) {
+    const st = db.prepare(`SELECT * FROM ${table} WHERE ord > ? ORDER BY ord LIMIT ?`);
+    st.setReadBigInts(true);
+    for (const r of st.all(ord, limit)) {
+      const row = {};
+      for (const [k, v] of Object.entries(r)) {
+        if (k === 'ord') continue;
+        row[k] = typeof v === 'bigint' && !SEGMENT_BIGINT_COLS.has(k) ? Number(v) : v;
+      }
+      all.push({ ord: Number(r.ord), kind, row });
+    }
+  }
+  all.sort((a, b) => a.ord - b.ord);
+  return all.slice(0, limit);
+}
+
+/** The published segments in `dir`, as regular files whose names parse, in lib orderSegmentNames' (seq, writer)
+ *  order, each with its size (status counts them by name and size, and never opens one). An absent directory is
+ *  none; any other failure to list it throws, never folded into "none" (the removeStaleTemps rule). */
+export function listSegments(dir) {
+  let ents;
+  try {
+    ents = readdirSync(dir, { withFileTypes: true });
+  } catch (e) {
+    if (e && e.code === 'ENOENT') return [];
+    throw e;
+  }
+  const files = new Map();
+  for (const e of ents) if (e.isFile() && parseSegmentName(e.name) !== null) files.set(e.name, e);
+  return orderSegmentNames([...files.keys()]).map((name) => {
+    const p = parseSegmentName(name);
+    return { name, seq: p.seq, writer: p.writer, bytes: lstatSync(`${dir}/${name}`).size };
+  });
+}
+
+/** The temps a killed pass left in `dir` (`.<segment name>.tmp`, with any SQLite sidecar), removed; answers their
+ *  names. Only the pass holding the lock builds a temp, so every one found is stale. An absent directory answers
+ *  []; any other listing failure throws. A name is removed BY TYPE (B1's removeEntry): a file, link or FIFO is
+ *  unlinked and an empty directory rmdir'd; a non-empty directory planted at the name is kept, not listed, never
+ *  recursed into, and blocks nothing, so it cannot wedge the step that runs this before its preflight every tick
+ *  (review 316 F22; B1's history-planted-entries-never-wedge). */
+export function removeStaleSegmentTemps(dir) {
+  let names;
+  try {
+    names = readdirSync(dir);
+  } catch (e) {
+    if (e && e.code === 'ENOENT') return [];
+    throw e;
+  }
+  const removed = [];
+  for (const n of names.sort()) {
+    const m = /^\.(.+)\.tmp(?:-journal|-wal|-shm)?$/.exec(n);
+    if (m === null || parseSegmentName(m[1]) === null) continue;
+    if (removeEntry(`${dir}/${n}`) === 'removed') removed.push(n);   // a non-empty directory planted at the name is kept (review 316 F22)
+  }
+  return removed;
 }
