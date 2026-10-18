@@ -1560,3 +1560,16 @@ The follow-ups PR was issued two spares, 2026-10-18; both are defined here.
   - **Not skipped for #402:** none of the items needed a file #402 edits.
 
 Issued and unused (the follow-ups): none.
+
+### Follow-ups after the review polish (#661)
+
+Found by the foundations reviews after #661 merged, not a plan task. Two spares were issued, 2026-10-19; one is defined here.
+
+- **D-5572** — `theme-choice-store` (the follow-up): the Theme picker's checked row follows a theme chosen anywhere, the shape D-5096 gave the Layout picker in #632.
+  - **The defect:** `AppearanceSection` copied `storedTheme()` into `useState` at mount. A switch from the command palette ("Switch theme…", #626) stamped the document and stored the choice, but the Settings row stayed on the old palette, and clicking that still-checked row did nothing, because a checked radio fires no change.
+  - **The store:** `pwa/src/lib/theme.ts` keeps the choice in force beside what it stamps, as `lib/skin.ts` keeps the skin choice: `initTheme` reads it, `setTheme` sets it (to `resolveTheme(choice)`, what a reload would read back) after applying and storing, and the same listeners announce it. `useThemeChoice()` reads it, and the Theme fieldset reads that, so the picker and the palette are two callers of one setter. Storage that throws still leaves the chosen row checked for the session, since the store is not re-read from storage.
+  - **Held by** `pwa/test/theme-picker.test.tsx`'s "the Theme picker follows a choice made anywhere": a palette switch (through the real `baseCommands()` page) moves the checked row; the reverse, a row picked in Settings then switched away in the palette, is checked off and picks straight back; a pick in one mounted picker moves another; and blocked storage still moves the row. The suite now boots with `initTheme()` in `beforeEach`, as `main.tsx` does and as `skin-picker.test.tsx` boots with `initSkin()`.
+  - **Pixels:** none move. The section renders as before in both skins and both modes; only which row is checked after an outside switch changes.
+  - **Not skipped for #402:** the change needed none of the files #402 and #627 edit.
+
+Issued and unused (the follow-up after #661): 5573, written without the prefix so it seeds no floor.

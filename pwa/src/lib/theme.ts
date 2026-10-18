@@ -11,6 +11,13 @@
 // Phosphor palettes, which is exactly what the app did before any of this was
 // selectable. A pinned palette ignores the OS entirely — someone on a light
 // desktop who chose Nord gets Nord after dark too.
+//
+// It also keeps the CHOICE IN FORCE (D-5572), the shape `lib/skin.ts` gives
+// the skin (D-5096): `initTheme` reads it, `setTheme` sets it, and every
+// `useThemeChoice()` re-renders. The palette's "Switch theme…" and Settings'
+// Theme picker both call `setTheme`, so the picker's checked row follows a
+// choice made in either, never a copy taken at mount.
+import { useSyncExternalStore } from 'react';
 import { THEME_STORAGE_KEY, SYSTEM, applyTheme, resolveTheme } from '@ccrc/ui';
 
 /** The slice of MediaQueryList the theme needs — injectable for tests. */
@@ -51,15 +58,30 @@ function chrome(root: HTMLElement): void {
   if (bg !== '' && meta !== null) meta.content = bg;
 }
 
-/** Apply a choice now, and remember it. Used by the picker. */
+/** The choice in force — SYSTEM or a palette id — as `initTheme` read it or
+ *  `setTheme` last made it, wherever it was made (Settings, or the palette's
+ *  "Switch theme…"). Held here rather than re-read from storage, so a choice
+ *  made with storage blocked still shows as chosen for the session (D-5572). */
+let chosen: string = SYSTEM;
+const listeners = new Set<() => void>();
+
+function choose(choice: string): void {
+  chosen = choice;
+  for (const l of listeners) l();
+}
+
+/** Apply a choice now, remember it, and tell every `useThemeChoice()`.
+ *  Used by the Settings picker and the palette's "Switch theme…". */
 export function setTheme(
   choice: string,
   mq: ThemeMedia = window.matchMedia('(prefers-color-scheme: light)'),
 ): void {
   const root = document.documentElement;
-  applyTheme(resolveTheme(choice), root, mq.matches);
+  const asked = resolveTheme(choice);
+  applyTheme(asked, root, mq.matches);
   rememberTheme(choice);
   chrome(root);
+  choose(asked);
 }
 
 /** Wire the theme at boot (main.tsx).
@@ -72,10 +94,23 @@ export function initTheme(
   mq: ThemeMedia = window.matchMedia('(prefers-color-scheme: light)'),
 ): void {
   const root = document.documentElement;
-  applyTheme(storedTheme(), root, mq.matches);
+  const stored = storedTheme();
+  applyTheme(stored, root, mq.matches);
   chrome(root);
+  choose(stored);
   mq.addEventListener('change', (e) => {
     applyTheme(storedTheme(), root, e.matches);
     chrome(root);
   });
+}
+
+function subscribe(onChange: () => void): () => void {
+  listeners.add(onChange);
+  return () => { listeners.delete(onChange); };
+}
+
+/** The choice in force, for the Settings Theme picker's checked row. Re-renders
+ *  on every `setTheme`, wherever it is called (D-5572). */
+export function useThemeChoice(): string {
+  return useSyncExternalStore(subscribe, () => chosen, () => SYSTEM);
 }
