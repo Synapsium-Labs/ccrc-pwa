@@ -2657,6 +2657,92 @@ describe('store.mjs: export segments (W1-B4; spec 9.15 "Write", "Who reads it"; 
     expect(segStore.listSegments(dir).map((s) => s.seq), 'seq numerically, never 10 before 2').toEqual([1, 2, 10]);
   });
 
+  // Task 4 fix round 1 (review): checkSegmentMeta is the replay's only guard on a segment's format and store_id (lib's
+  // decideSegmentReplay answers 'replay' for any format <= 1, 0 and NaN included), and publishSegment's two fsyncs are
+  // what make a mark committed after the link safe. Each clause below is corrupted or removed ALONE in the mutants.
+  it('segmentMeta refuses a format and a store_id off their grammars, each corrupted alone in a published segment (the replay\'s only guard on both)', () => {
+    const dir = freshDir();
+    const corrupt: Array<[string, string]> = [
+      ['format', '0'], ['format', '-1'], ['format', '1.5'], ['format', 'one'], ['format', ''],
+      ['store_id', 'not-a-store-id'], ['store_id', ''], ['store_id', SID.toUpperCase()], ['store_id', `${SID}0`],
+    ];
+    corrupt.forEach(([key, value], i) => {
+      const p = publishOne(dir, i + 1);
+      const w = new DatabaseSync(p);
+      try { w.prepare('UPDATE meta SET v = ? WHERE k = ?').run(value, key); } finally { w.close(); }
+      const db = segStore.openSegment(p);
+      try {
+        expect(segWord(() => segStore.segmentMeta(db)), `${key} = ${JSON.stringify(value)}, every other key as written`).toBe('segment-unreadable');
+      } finally {
+        db.close();
+      }
+    });
+    const good = publishOne(dir, corrupt.length + 1);
+    const db = segStore.openSegment(good);
+    try { expect(segStore.segmentMeta(db), 'CONTROL: the same build untouched reads back whole').toEqual(meta(corrupt.length + 1)); } finally { db.close(); }
+    // The writer's side of the same grammar: createSegment refuses these before it creates a temp.
+    for (const bad of [{ format: 0 }, { format: 1.5 }, { format: Number.NaN }, { storeId: 'not-a-store-id' }]) {
+      expect(() => segStore.createSegment(dir, nameOf(99), meta(99, bad)), JSON.stringify(bad)).toThrow(TypeError);
+    }
+    expect(fs.existsSync(path.join(dir, segLib.segmentTempName(nameOf(99)))), 'and left no temp behind').toBe(false);
+  });
+
+  /** Every file or directory fsync, link and unlink `fn` makes in this process, in order, as `fsync-file <path>`,
+   *  `fsync-dir <path>`, `link <from> <to>` and `unlink <path>`. A minimal in-process patch of node:fs in
+   *  historyHelpers' recordDirFsyncs style (fd -> path from openSync), restored in `finally`;
+   *  syncBuiltinESMExports makes store.mjs's named imports see it. Plain node:fs, so it runs on macOS too. */
+  const recordPublishOps = <T>(fn: () => T): { out: T; ops: string[] } => {
+    const realOpen = fs.openSync; const realClose = fs.closeSync; const realFsync = fs.fsyncSync;
+    const realLink = fs.linkSync; const realUnlink = fs.unlinkSync;
+    const open = new Map<number, string>();
+    const ops: string[] = [];
+    fs.openSync = ((p: fs.PathLike, ...rest: unknown[]) => {
+      const fd = (realOpen as (...a: unknown[]) => number)(p, ...rest);
+      open.set(fd, String(p));
+      return fd;
+    }) as typeof fs.openSync;
+    fs.closeSync = ((fd: number) => { open.delete(fd); return realClose(fd); }) as typeof fs.closeSync;
+    fs.fsyncSync = ((fd: number) => {
+      const p = open.get(fd);
+      if (p !== undefined) ops.push(`${fs.fstatSync(fd).isDirectory() ? 'fsync-dir' : 'fsync-file'} ${p}`);
+      return realFsync(fd);
+    }) as typeof fs.fsyncSync;
+    fs.linkSync = ((from: fs.PathLike, to: fs.PathLike) => { ops.push(`link ${String(from)} ${String(to)}`); return realLink(from, to); }) as typeof fs.linkSync;
+    fs.unlinkSync = ((p: fs.PathLike) => { ops.push(`unlink ${String(p)}`); return realUnlink(p); }) as typeof fs.unlinkSync;
+    syncBuiltinESMExports();
+    try {
+      return { out: fn(), ops };
+    } finally {
+      fs.openSync = realOpen; fs.closeSync = realClose; fs.fsyncSync = realFsync; fs.linkSync = realLink; fs.unlinkSync = realUnlink;
+      syncBuiltinESMExports();
+    }
+  };
+
+  it('9.15 Write: publishSegment fsyncs the temp BEFORE it links it, then unlinks the temp and fsyncs the directory AFTER (what makes a mark after the link safe)', () => {
+    const dir = freshDir();
+    const name = nameOf(1);
+    const seg = segStore.createSegment(dir, name, meta(1));
+    fillAll(segStore.segmentInserts(seg));
+    const temp = seg.temp;
+    const r = recordPublishOps(() => segStore.publishSegment(seg, dir, name));
+    expect(r.out).toBe('linked');
+    expect(r.ops, 'the temp\'s bytes are durable before the name exists; the name\'s entry, and the temp\'s removal, are durable before the call answers').toEqual([
+      `fsync-file ${temp}`, `link ${temp} ${path.join(dir, name)}`, `unlink ${temp}`, `fsync-dir ${dir}`,
+    ]);
+    const db = segStore.openSegment(path.join(dir, name));
+    try { expect(segStore.segmentMeta(db), 'CONTROL: and what was published reads back').toEqual(meta(1)); } finally { db.close(); }
+  });
+
+  it('F23: a publish fsyncs the export store directory (recordDirFsyncs sees it) and no other, so the published name survives a power loss', () => {
+    const dir = freshDir();
+    const name = nameOf(1);
+    const seg = segStore.createSegment(dir, name, meta(1));
+    fillAll(segStore.segmentInserts(seg));
+    const r = recordDirFsyncs(() => segStore.publishSegment(seg, dir, name));
+    expect(r.out).toBe('linked');
+    expect(r.dirs).toEqual([dir]);
+  });
+
   it('every insert takes exactly its columns: a missing or an unknown one throws and writes nothing; createSegment refuses a name off its meta, a bad meta and a temp that exists', () => {
     const dir = freshDir();
     const seg = segStore.createSegment(dir, nameOf(1), meta(1));
