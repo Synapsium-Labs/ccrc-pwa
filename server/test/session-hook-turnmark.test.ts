@@ -1440,8 +1440,16 @@ describe('only an agent id with a qualifying join is a subagent to the turn mark
       expect(guard).toContain('return 1');
       expect(guard, 'no regularity read').not.toContain('-f "$jf"');
       expect(guard, 'no absence read').not.toContain('! -e "$jf"');
-      expect(guard, 'and no negated type test, which is "regular or absent" again').not.toMatch(/! -[Ldp] "\$jf"/);
-      for (const t of ['-L', '-d', '-p']) expect(guard, `it refuses on ${t}`).toContain(`${t} "$jf"`);
+      expect(guard, 'and no negated type test, which is "regular or absent" again').not.toMatch(/! -[LdpSbc] "\$jf"/);
+      for (const t of ['-L', '-d', '-p', '-S', '-b', '-c']) expect(guard, `it refuses on ${t}`).toContain(`${t} "$jf"`);
+      // Every code line from the opening to the append, not only the guard: a second two-read refusal there would bring the race back.
+      const body = src.slice(open).split('\n');
+      const append = body.findIndex((line) => line.includes('>> "$jf"'));
+      expect(append, 'the function appends with `>> "$jf"`').toBeGreaterThan(0);
+      for (const line of body.slice(1, append + 1).filter((l) => !l.trimStart().startsWith('#'))) {
+        expect(line, 'no regularity read before the append').not.toContain('-f "$jf"');
+        expect(line, 'no absence read before the append').not.toContain('! -e "$jf"');
+      }
     });
   });
 

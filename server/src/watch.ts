@@ -10023,18 +10023,18 @@ class DelegationLane {
     }
   }
 
-  /** Who died since the last pass, by what this process watched: a parent first seen DEAD is not a fresh death (a restart is not a
-   *  mass-death event), one seen alive and then dead is, and one seen alive again is not dead. D-5433: a deliberate stop or archive is
-   *  not a fresh death either. A dead row carrying stop evidence (`stoppedBy`, epoch ms, or `archivedAt`, epoch SECONDS, read when there
-   *  is no stamp) is not counted, and a death already recorded for it is erased, when that instant is no later than the recorded death
-   *  plus `DELEGATION_CLOCK_SKEW_MS` (this pass's instant plus the skew when none is recorded): the stamp is the fleet box's clock, and
-   *  the torn tick (`assembleFleet` reads the registry before it probes tmux) lets a stop read as a crash for one pass and show its stamp
-   *  on the next. A stop stamped later than that leaves the death counted (an operator cleaning up after a crash). Residual: a crash
-   *  followed by a stop or an archive within one pass, or within the skew of its recorded death, is not counted; the 60 s cadence and
-   *  the clocks' sync bound it. A hibernated row (D-5242) is excluded at any instant by its own conjunct; `ccd hibernate` writes
-   *  `.hibernated`, then `_ws_unsupervise` (the stop stamp), then kills the pane, so a torn tick can record a hibernation as a death
-   *  with neither field set, and the erasure above clears it on the next pass. Every other dead row (`restarting`, unmeasurable)
-   *  counts as before. */
+  /** Who died since the last pass, by what this process watched: a parent first seen DEAD is not a fresh death (a restart is not a mass-death
+   *  event), one seen alive and then dead is, and one seen alive again is not dead. D-5433: a deliberate stop or archive is not a fresh death
+   *  either. A dead row carrying stop evidence (`stoppedBy`, epoch ms, or `archivedAt`, epoch SECONDS, read when there is no stamp) is not counted,
+   *  and a death already recorded for it is erased, when that instant is no later than the recorded death plus `DELEGATION_CLOCK_SKEW_MS` (this
+   *  pass's instant plus the skew when none is recorded): the stamp is the fleet box's clock, and the torn tick (`assembleFleet` reads the registry
+   *  before it probes tmux) lets a stop read as a crash for one pass and show its stamp on the next. A stop stamped later than that leaves the
+   *  death counted (an operator cleaning up after a crash). Residual: a crash followed by a stop or an archive within one pass, or within the skew
+   *  of its recorded death, is not counted; the 60 s cadence and the clocks' sync bound it. The bound is from above only, so a stop stamp or an
+   *  archive marker that outlived its pane (a kill that failed after `_ws_unsupervise`) also hides that pane's later crash; a lower bound would be
+   *  a new ruling, and is not taken here. A hibernated row (D-5242) is excluded at any instant by its own conjunct; `ccd hibernate` writes
+   *  `.hibernated`, then `_ws_unsupervise` (the stop stamp), then kills the pane, so a torn tick can record a hibernation as a death with neither
+   *  field set, and the erasure above clears it on the next pass. Every other dead row (`restarting`, unmeasurable) counts as before. */
   private noteSessions(pass: LanePass): void {
     for (const r of pass.records) this.sessionProject.set(r.id, r.project);
     for (const s of pass.sessions) this.sessionProject.set(s.id, s.project);
