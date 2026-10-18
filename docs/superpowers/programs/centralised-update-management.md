@@ -4207,6 +4207,19 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     both files. Its edits to `watch.ts` and the hook wait on run 561's claims (until about 17:30 at the latest), and
     a review follows, so it is not promised before #441. Its coordinator mails when it merges. Stable's promotion
     needs that merge whatever is ruled on #441, since `full-suite` counts the four `test-macos` shards.
+  - **12:40 UTC: the operator ruled that #441 lands before #410** ("Option 1"; "Yes on merge order you have my
+    permission to do what's necessary"). This overrides path identity's 5967 condition (#410 first) for #441
+    only; path identity keeps its own order, #397 then #410. Measured on `main` at `43efd63c8`: #441 conflicts
+    only on `ccd/ccd`'s stamp line, and #410 after #441 still conflicts only there. #448 merged already
+    (`46c50a9a4`). So #441's landing round runs now, under 6034's and 5980's standing rulings:
+    - run 300 back at working; amber-cove merges `origin/main` once and resolves line 2 by the verb (either side,
+      `ccrc restamp`, `mark.mjs --check`, one marker line), checks `git grep '_signal_group('` for new callers,
+      and keeps 5974's fence (the three helper functions and the restamp; claim 1557 untouched);
+    - the gate: the session-hook citations, archived-expiry-policy, ownership, mark-check, ccd-docs-tree,
+      ccd-supervised-start, macos-platform, and both waves' gate files. `ccd-id-cap` lives only on #410's branch,
+      so it runs at #410's landing instead. Any other conflict stops for a narrow review;
+    - on a fresh wave-done I verify, run CI, and merge #441; then wave 17's landing round, and #566 last. I tell
+      path identity's coordinator of the ruling.
 
 ## Carried constraints
 
