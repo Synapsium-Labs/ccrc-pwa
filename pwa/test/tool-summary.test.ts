@@ -214,6 +214,12 @@ describe('groupToolRun', () => {
       ...pair('Bash', { command: 'npm test' }),
       ...pair('Bash', { command: 'npm test' }),
     ])).toBe('Read index.ts · Ran npm');
+    // A repeat inside a plural clause is still one call: two files, not three reads.
+    expect(sentenceOf([
+      ...pair('Read', { file_path: '/a/index.ts' }),
+      ...pair('Read', { file_path: '/a/index.ts' }),
+      ...pair('Read', { file_path: '/b/index.ts' }),
+    ])).toBe('Read 2 files');
     // Patterns and tasks count by their full strings too.
     expect(sentenceOf([
       ...pair('Agent', { description: 'Audit the palette for contrast' }),
