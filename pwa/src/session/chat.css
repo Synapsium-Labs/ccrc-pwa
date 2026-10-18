@@ -365,7 +365,9 @@ button.metachip:active {
 .reap-rows { display: grid; grid-template-columns: 6.5rem minmax(0, 1fr); gap: var(--sp-1) var(--sp-2); }
 .reap-rows dt { font-family: var(--family-mono); font-size: var(--fs-meta); color: var(--ink-tertiary); }
 .reap-rows dd { font-size: var(--fs-sm); color: var(--ink-primary); margin: 0; word-break: break-word; }
-.reap-note { font-size: var(--fs-meta); color: var(--ink-secondary); }
+/* A line of its own (D-5495): inside a `<dd>` the note is a span that follows
+   the row's figure directly, so inline it read "0 entries, 0 BThese are…". */
+.reap-note { display: block; font-size: var(--fs-meta); color: var(--ink-secondary); }
 /* The refusal is the whole content when there is one: no button sits beside it,
    because there is no override. */
 .reap-refusal { color: var(--status-attention-text); font-size: var(--fs-sm); line-height: var(--lh-normal); }

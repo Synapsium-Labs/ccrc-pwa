@@ -159,10 +159,16 @@ export function Sheet({
             </p>
           ) : null}
           {inBody ? null : heading}
+          {/* A box that scrolls on one axis clips on both, so the scrolling
+              body is a clip edge at its sides, flush with every full-width
+              row, and `FOCUS_RING` draws 4px outside its control (2px outline,
+              2px offset). `px-1 -mx-1` moves the clip edge out by that reach
+              and leaves the content box where it was (D-5495,
+              `pwa/test/sheet-ring-room.test.tsx`). */}
           <div
             className={cn(
               'sheet-body min-h-0',
-              full ? 'flex flex-1 flex-col overflow-hidden' : 'overflow-y-auto overscroll-contain',
+              full ? 'flex flex-1 flex-col overflow-hidden' : '-mx-1 px-1 overflow-y-auto overscroll-contain',
             )}
           >
             {inBody ? heading : null}

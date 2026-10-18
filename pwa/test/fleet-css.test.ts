@@ -599,6 +599,15 @@ describe('selection is tint plus rail, status is hue (D-5101)', () => {
     expect(declValue(ruleIn(forced, '.sess-line--active'), 'outline'))
       .toBe('2px solid CanvasText');
   });
+
+  it("a folded card's name keeps its selection mark under forced colours (D-5495)", () => {
+    // The fold hides the selected row and the name chip stands in for it with
+    // the same tint and rail, which forced colours drop; every card name is
+    // already semibold, so the row's inset outline is the channel left.
+    const forced = atBlock(css, '@media (forced-colors: active)');
+    expect(declValue(ruleIn(forced, '.proj-card[data-holds-selection] .proj-card-name'), 'outline'))
+      .toBe('2px solid CanvasText');
+  });
 });
 
 describe('shell-nav overflow backstop', () => {
