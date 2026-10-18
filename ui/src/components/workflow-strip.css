@@ -1,0 +1,234 @@
+/* `@layer components` — NOT unlayered; see typed-label.css for the full
+   argument and ../styles/theme.css for the layer declaration. */
+@layer components {
+  /* ------------------------------------------------------------------ *
+   *  Workflow strip (D-5560) — the session's dynamic workflows, one     *
+   *  line each, above the plan. Collapsed: the lines. Open: each        *
+   *  workflow's phases and agents.                                      *
+   * ------------------------------------------------------------------ */
+  /* SELF-GROUNDED — it sets its ink beside its ground, as `.mail-strip` does
+     (audit.mjs route 1) — so every `.workflow-strip .foo` below is measured
+     through the descendant route against `--bg-surface` and none needs a
+     registry entry. Capped like the task strip: a long agent list scrolls
+     inside itself rather than pushing the conversation off the screen. */
+  .workflow-strip {
+    flex: none;
+    margin: 0 var(--sp-4) var(--sp-2);
+    border: 1px solid var(--edge-subtle);
+    border-radius: var(--r-md);
+    background: var(--bg-surface);
+    color: var(--ink-primary);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    max-height: min(50vh, 420px);
+    container-type: inline-size;
+  }
+  .workflow-strip--open {
+    border-color: var(--edge-strong);
+  }
+  /* The head floors at the tap minimum, `CollapsibleStrip`'s default — a new
+     strip clears the floor (tap-targets.test.tsx pins each strip's head). */
+  .workflow-strip .workflow-head {
+    color: var(--ink-primary);
+  }
+  .workflow-strip .workflow-head:active {
+    background: var(--bg-raised);
+  }
+
+  /* The head's mark is neutral: each line's bullet below carries the running
+     ink. It does not breathe as the task strip's asterisk does — a fade is an
+     opacity the contrast gate composites, and its registries (design/audit.mjs)
+     are another change's to extend. */
+  .workflow-strip .workflow-mark {
+    flex: none;
+    font: var(--weight-regular) var(--fs-sm) / 1 var(--family-mono);
+    color: var(--ink-tertiary);
+  }
+  .workflow-strip .workflow-headline {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    font: var(--weight-medium) var(--fs-sm) / var(--lh-tight) var(--family-ui);
+  }
+  .workflow-strip .workflow-chevron {
+    flex: none;
+    font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono);
+    color: var(--ink-tertiary);
+  }
+
+  /* The lines — Claude Code's row, one per workflow. They WRAP rather than
+     truncate: name and bar on the first line of a phone, the facts under
+     them; one line where the strip is wide enough. */
+  .workflow-strip .workflow-summary {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-1);
+    margin: 0;
+    padding: 0 var(--sp-3) var(--sp-2) var(--sp-3);
+    font: var(--weight-regular) var(--fs-2xs) / var(--lh-tight) var(--family-mono);
+    font-variant-numeric: tabular-nums;
+    color: var(--ink-secondary);
+  }
+  .workflow-line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    column-gap: var(--sp-2);
+    row-gap: 2px;
+  }
+  .workflow-strip .workflow-bullet {
+    flex: none;
+    width: var(--sp-4);
+    text-align: center;
+    color: var(--status-busy-text);
+  }
+  .workflow-strip .workflow-line--completed .workflow-bullet {
+    color: var(--status-done-text);
+  }
+  .workflow-strip .workflow-line--failed .workflow-bullet,
+  .workflow-strip .workflow-line--killed .workflow-bullet {
+    color: var(--status-dead-text);
+  }
+  .workflow-strip .workflow-name {
+    flex: 1 1 9rem;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    color: var(--ink-primary);
+    font-family: var(--family-ui);
+    font-size: var(--fs-xs);
+  }
+  /* The bar's box, never the meter's: the meter owns its height, radius and
+     paint (meter.tsx); this only gives it a width to fill. */
+  .workflow-bar {
+    flex: 0 0 clamp(72px, 22%, 160px);
+    display: block;
+  }
+  .workflow-facts {
+    flex: 1 1 auto;
+    padding-left: calc(var(--sp-4) + var(--sp-2));
+  }
+  /* Wide enough for one line each: the lines become one grid, so the bars
+     and the facts line up down the strip — Claude Code's own list does. */
+  @container (min-width: 560px) {
+    .workflow-strip .workflow-summary {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) clamp(96px, 18cqw, 220px) auto;
+      align-items: center;
+      column-gap: var(--sp-3);
+      row-gap: var(--sp-1);
+    }
+    .workflow-line {
+      display: contents;
+    }
+    .workflow-bar {
+      flex: none;
+    }
+    .workflow-facts {
+      padding-left: 0;
+      white-space: nowrap;
+    }
+    .workflow-strip .workflow-note {
+      grid-column: 1 / -1;
+    }
+  }
+  .workflow-strip .workflow-note {
+    color: var(--ink-secondary);
+    font-style: italic;
+  }
+
+  /* The detail. */
+  .workflow-rows {
+    list-style: none;
+    margin: 0;
+    padding: 0 0 var(--sp-2);
+    overflow-y: auto;
+    border-top: 1px solid var(--edge-subtle);
+  }
+  .workflow-detail {
+    padding: var(--sp-2) var(--sp-3) 0;
+  }
+  .workflow-strip .workflow-detail-name {
+    display: block;
+    overflow-wrap: anywhere;
+    font: var(--weight-medium) var(--fs-xs) / var(--lh-tight) var(--family-ui);
+    color: var(--ink-primary);
+  }
+  .workflow-strip .workflow-detail-note {
+    margin: var(--sp-1) 0 0;
+    font: var(--weight-regular) var(--fs-xs) / var(--lh-normal) var(--family-ui);
+    color: var(--ink-secondary);
+  }
+  .workflow-phases {
+    list-style: none;
+    margin: var(--sp-1) 0 0;
+    padding: 0;
+  }
+  .workflow-phase {
+    padding: 2px 0;
+  }
+  .workflow-strip .workflow-phase-title {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    column-gap: var(--sp-2);
+    font: var(--weight-medium) var(--fs-2xs) / var(--lh-tight) var(--family-mono);
+    color: var(--ink-secondary);
+  }
+  .workflow-strip .workflow-phase[data-current] .workflow-phase-title {
+    color: var(--ink-primary);
+  }
+  .workflow-phase-count {
+    font-weight: var(--weight-regular);
+    font-variant-numeric: tabular-nums;
+  }
+  .workflow-agents {
+    list-style: none;
+    margin: 0;
+    padding: 0 0 0 var(--sp-3);
+  }
+  .workflow-strip .workflow-agent {
+    display: flex;
+    align-items: baseline;
+    gap: var(--sp-2);
+    padding: 1px 0;
+    font: var(--weight-regular) var(--fs-xs) / var(--lh-normal) var(--family-ui);
+    color: var(--ink-secondary);
+  }
+  .workflow-agent-glyph {
+    flex: none;
+    width: 1em;
+    font-family: var(--family-mono);
+  }
+  .workflow-agent-label {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .workflow-agent-state {
+    flex: none;
+    font: var(--weight-regular) var(--fs-2xs) / 1 var(--family-mono);
+  }
+  .workflow-strip .workflow-agent--running {
+    color: var(--ink-primary);
+  }
+  .workflow-strip .workflow-agent--running .workflow-agent-glyph {
+    color: var(--status-busy-text);
+  }
+  .workflow-strip .workflow-agent--failed .workflow-agent-glyph,
+  .workflow-strip .workflow-agent--failed .workflow-agent-state {
+    color: var(--status-dead-text);
+  }
+  .workflow-strip .workflow-agent[data-stopped] .workflow-agent-glyph,
+  .workflow-strip .workflow-agent[data-stopped] .workflow-agent-state {
+    color: var(--ink-secondary);
+  }
+  .workflow-strip .workflow-fold {
+    padding: var(--sp-1) 0;
+    background: none;
+    border: 0;
+    font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono);
+    color: var(--ink-secondary);
+    cursor: pointer;
+  }
+}

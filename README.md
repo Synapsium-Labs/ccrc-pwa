@@ -2828,6 +2828,13 @@ and when the session is not running — the chat is then read-only, with **Resta
 questions and the answers given, and agent mail and harness task reports as cards of their own; a gap of ten
 minutes or more gets a timestamp divider, and scrolling up stops the auto-follow until **Jump to latest**. Above
 the composer sit the session's outstanding mail and its plan (the TUI's task list, collapsed to the running task).
+Between the two, while the session runs any dynamic workflow, sits the **workflow strip** (D-5560): one line per
+workflow with Claude Code's own facts — its name, a bar, agents done of those scheduled so far, the time since it
+started and `↓ N tokens` (the agents' current context, as Claude Code sums it) — and, opened, each workflow's phases
+and every agent's label and state. A finished workflow stays 30 s with its last word (`done`, `failed`,
+`stopped`), as in the terminal. It is read-only, read on the session socket's 2 s tick from the files Claude Code
+keeps under the session's transcript directory (`server/src/workflows/`, D-5561: the journal incrementally, each
+agent's transcript as one 64 KB tail), and a fact it could not read is said, never drawn as a zero.
 
 **The composer**: on a touch screen Enter is a newline and Cmd/Ctrl+Enter sends; with a physical keyboard Enter
 sends and any modifier with Enter is a newline. `/` completes Claude Code's built-in commands and the skills this

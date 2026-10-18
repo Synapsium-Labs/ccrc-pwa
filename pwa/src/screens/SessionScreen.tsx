@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { backgroundOnlyRefusal, repoLabel, sessionWithCoordinator, substrateFault, type FleetSession, type RouteField, type SessionStatus } from '../../../shared/api';
-import { ATTENTION_DOT, Button, MailStrip, Skeleton, TaskStrip, toast } from '@ccrc/ui';
+import { ATTENTION_DOT, Button, MailStrip, Skeleton, TaskStrip, WorkflowStrip, toast } from '@ccrc/ui';
 import { staleFor } from '../session/taskStaleness';
 import { SwapSheet } from '../fleet/SwapSheet';
 import { ArchiveSheet, restoreSession } from '../fleet/ArchiveSheet';
@@ -156,6 +156,10 @@ export function SessionScreen({
   // unvalidated-dynamic-method-call false positive on the route-keyed store.)
   const tasksTouchedAt = useStore.getState().tasksTouchedAt;
   const mail = useStore((s) => s.mail);
+  const workflows = useStore((s) => s.workflows);
+  // D-5560: beside `workflows` for D-5372's reason above — the reducer sets the
+  // flag only together with a new `workflows` array.
+  const workflowsUnreadable = useStore.getState().workflowsUnreadable;
   // Build 4 Task 18, spec §2.3: the ask card's second derivation source. A
   // live `ask` (hook envelope) and a live `dialog` (scraped pane menu) are
   // hosted by the SAME sheet, so either one makes a resultless ask card
@@ -568,6 +572,11 @@ export function SessionScreen({
 
       {/* Above the plan, which stays the composer's neighbour. */}
       <MailStrip mail={mail} />
+
+      {/* D-5560: the workflows this session is running, between the mail and the
+          plan — one line each, the facts Claude Code's own row prints; the head
+          opens their phases and agents. Read-only. */}
+      <WorkflowStrip workflows={workflows} unreadable={workflowsUnreadable} />
 
       {/* Sits between the conversation and the composer — where the TUI puts it,
           directly above the prompt you're about to type into. */}

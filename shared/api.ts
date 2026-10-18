@@ -12,6 +12,7 @@ import type { Hue } from './roster.js';
 import type { AccountPoolWire } from './poolrule.js';
 import type { BuildInfo } from './buildinfo.js';
 import type { BoxTokenView } from './box-token.js';
+import type { WorkflowView } from './workflows.js';
 
 export type SessionStatus = 'busy' | 'idle' | 'dead';
 
@@ -4489,6 +4490,16 @@ export type SessionStreamMsg =
        *  the list has no open item, no stat answered, or the server is older;
        *  absence renders the strip as it always did. */
       touchedAt?: number }
+  /** D-5560: the workflows Claude Code is running in this session, plus any
+   *  that finished in the last `WORKFLOW_EVICT_MS` (`shared/workflows.ts`).
+   *  Sent on connect whenever the session has a workflow directory (an empty
+   *  list included, so a reconnecting client drops rows that finished while it
+   *  was away), then on change only; never for a session that has run none.
+   *  `unreadable: true` — this box could not list the session's workflow
+   *  directory this pass: `workflows` is then the last rows it DID read (or
+   *  none), and the panel says so rather than reading an empty list as "nothing
+   *  running". Absent from an older server: no frame, no panel. */
+  | { type: 'workflows'; workflows: WorkflowView[]; unreadable?: true }
   /** This session's own OUTSTANDING mail — `state` restricted server-side to
    *  `queued` or `delivered`, never `acked`/`rejected` (`sessionws.ts`'s
    *  `checkMail`). Read directly off `CoordStore.outstandingMailFor` in-process,

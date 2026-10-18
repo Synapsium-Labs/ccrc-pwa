@@ -11,6 +11,8 @@ import { readBacklog, TranscriptTailer } from './transcript/tail.js';
 import { hasMenu, parseDialog } from './pane/dialog.js';
 import { alignAsk, readPendingAsk } from './transcript/ask.js';
 import { readTasks } from './tasks/read.js';
+import { SessionWorkflows, sessionDirOf } from './workflows/read.js';
+import { workflowsFrame, type Proc } from './workflows/model.js';
 import { readHookState } from './hookstate.js';
 import { askKey } from './askkey.js';
 import type { Dialog, DialogAsk, SessionStatus, SessionStreamMsg } from '../../shared/api.js';
@@ -33,6 +35,11 @@ interface Resolved {
   cfgDir: string;
   status: SessionStatus;
   statusUpdatedAt: number | null;
+  /** D-5561: the session's Claude Code process as this resolve measured it —
+   *  the workflow reader's orphan rule needs `gone` apart from `unknown` (a
+   *  substrate fault is not a dead process) and the live file's `startedAt`.
+   *  `status` above keeps its own deliberate fold (D-309). */
+  proc: Proc;
 }
 
 /**
@@ -82,6 +89,28 @@ export class SessionStream {
   private askProbe: { file: string; id: string; size: number; mtimeMs: number } | null = null;
   /** Serialized last-sent task list — the change gate for the `tasks` frame. */
   private lastTasksJson: string | null = null;
+  /** D-5560: the workflow reader for the session dir now being tailed (a new
+   *  one when the transcript moves: /clear, compaction, an account swap), the
+   *  rows the client was last sent, and the change gate for the `workflows`
+   *  frame. `undefined` until the first read, for `lastMailJson`'s reason: a
+   *  `ReconnectingSocket` reconnect keeps the client's rows, so a workflow that
+   *  finished while it was away would stay on screen as running if an empty
+   *  first read were swallowed — so a session that HAS a workflow directory
+   *  states its first read, empty included. The one first read swallowed is
+   *  `absent` with no witness: this session dir never had a workflow, so a
+   *  client can hold no rows from it: the client drops its rows on every
+   *  `backlog` (`pwa/src/stores/session.ts`) — the frame that comes whenever the
+   *  session dir can have changed (a /clear, a swap, a reconnect onto another
+   *  file) — and `sendBacklogAndTail` resets this gate with it. */
+  private workflows: SessionWorkflows | null = null;
+  private shownWorkflows: SessionStreamMsg & { type: 'workflows' } = { type: 'workflows', workflows: [] };
+  private lastWorkflowsJson: string | undefined = undefined;
+  /** Whether this connection has sent a `workflows` frame yet (see above). */
+  private sentWorkflows = false;
+  /** The hook's last fresh Stop listed a `workflow` among its background kinds
+   *  (D-5231's pair, read by `checkHookAsk`). The one witness that a workflow
+   *  exists when its directory does not — see `checkWorkflows`. */
+  private hookWorkflowBackground = false;
   /** Serialized last-sent outstanding-mail list — the change gate for the
    *  `mail` frame. `undefined` (not `null`) until the first read, for the
    *  EXACT reason `lastAskJson` below is `undefined`: this instance is per
@@ -306,6 +335,8 @@ export class SessionStream {
     if (this.stopped) return;
     if (r.ok) await this.checkHookAsk(r.data.uuid); // and any hook ask already waiting
     if (this.stopped) return;
+    if (r.ok) await this.checkWorkflows(r.data.file, r.data.proc); // and the workflows running now
+    if (this.stopped) return;
     if (r.ok) await this.checkMail(); // and any outstanding mail addressed to this session
     if (this.stopped) return;
     // `absent` is terminal for this connection: a proven-gone session id
@@ -526,6 +557,34 @@ export class SessionStream {
     this.send({ type: 'tasks', tasks, ...(typeof touchedAt === 'number' ? { touchedAt } : {}) });
   }
 
+  /** D-5560/D-5561: read the session's workflows (`workflows/read.ts`) and
+   *  send them when they differ from what this client last saw. What a read
+   *  becomes is `workflowsFrame`'s decision (model.ts) — absent, unreadable and
+   *  read are three frames, never folded; this method only carries it.
+   *  Read-only: nothing here starts, stops or changes a workflow. */
+  private async checkWorkflows(file: string, proc: Proc): Promise<void> {
+    if (this.stopped) return;
+    const dir = sessionDirOf(file);
+    if (this.workflows?.sessionDir !== dir) {
+      this.workflows = new SessionWorkflows(this.deps.io, dir);
+      this.shownWorkflows = { type: 'workflows', workflows: [] };
+    }
+    const read = await this.workflows.read(proc, Date.now());
+    if (this.stopped) return;
+    const decided = workflowsFrame(read, this.hookWorkflowBackground, this.shownWorkflows.workflows);
+    const frame: SessionStreamMsg & { type: 'workflows' } = decided.unreadable
+      ? { type: 'workflows', workflows: decided.workflows, unreadable: true }
+      : { type: 'workflows', workflows: decided.workflows };
+    const json = JSON.stringify(frame);
+    if (json === this.lastWorkflowsJson) return;
+    const neverHad = read.kind === 'absent' && !decided.unreadable;
+    this.lastWorkflowsJson = json;
+    if (neverHad && this.sentWorkflows === false) return;
+    this.sentWorkflows = true;
+    if (frame.unreadable !== true) this.shownWorkflows = frame;
+    this.send(frame);
+  }
+
   /**
    * This session's own outstanding mail (Build 7 Task 6, PR J) — read
    * directly off `CoordStore.outstandingMailFor`, the SAME in-process call
@@ -588,6 +647,7 @@ export class SessionStream {
     if (this.stopped) return;
     const hs = await readHookState(this.deps.io, this.deps.cfg.registryDir, this.id, uuid, Date.now());
     if (this.stopped) return;
+    this.hookWorkflowBackground = hs?.background?.kinds.includes('workflow') === true;
     const ask = hs?.ask ?? null;
     const json = ask === null ? null : JSON.stringify(ask);
     if (json === this.lastAskJson) return;
@@ -656,10 +716,15 @@ export class SessionStream {
     let cwd = identity.workdir;
     let status: SessionStatus = 'dead';
     let statusUpdatedAt: number | null = null;
+    // D-5561: one `has-session`, as before — its verdict kept, because the
+    // workflow reader must not read a substrate fault (`unknown`) as a process
+    // that died mid-run. `status` folds it exactly as `hasSession` did.
+    const verdict = (await this.deps.tmux.sessionVerdict(this.id)).verdict;
+    let proc: Proc = verdict === 'gone' ? { kind: 'gone' } : { kind: 'unmeasured' };
     // D-309 (was D-B8-13): `unknown` deliberately reads as not-alive here, so the chat
     // header shows 'dead' during a substrate fault — display-only, and the
     // same deferred product decision as assembleFleet's (see fleet.ts).
-    if (await this.deps.tmux.hasSession(this.id)) {
+    if (verdict === 'live') {
       status = 'idle';
       const pid = await this.deps.tmux.panePid(this.id);
       if (pid === null) {
@@ -686,6 +751,7 @@ export class SessionStream {
           if (read.state.cwd) cwd = read.state.cwd;
           status = liveSessionStatus(read.state.status);
           statusUpdatedAt = read.state.statusUpdatedAt;
+          proc = { kind: 'live', startedAt: read.state.startedAt };
         } else if (read.reason === 'unmeasured') {
           // `status` ALONE moves. `cwd` stays at the registry's `workdir` and
           // `statusUpdatedAt` stays null: an unmeasured read has no fields to
@@ -711,7 +777,7 @@ export class SessionStream {
     });
     return {
       ok: true,
-      data: { uuid: identity.uuid, file: resolution.path, resolution, cfgDir, status, statusUpdatedAt },
+      data: { uuid: identity.uuid, file: resolution.path, resolution, cfgDir, status, statusUpdatedAt, proc },
     };
   }
 
@@ -728,6 +794,11 @@ export class SessionStream {
     const { events, offset, missing, measured } = await readBacklog(this.deps.io, r.file, BACKLOG_N);
     if (this.stopped) return;
     this.tailed = r.resolution;
+    // D-5560: the client drops its workflow rows on every backlog (a backlog is
+    // where the session dir can change under it), so the next workflows read
+    // is a FIRST read again and is stated — see `lastWorkflowsJson`.
+    this.lastWorkflowsJson = undefined;
+    this.sentWorkflows = false;
     this.send({
       type: 'backlog', uuid: r.uuid, events, offset, file: r.file, missing,
       fileMeasured: measured,
@@ -961,6 +1032,8 @@ export class SessionStream {
       await this.checkTasks(data.cfgDir, data.uuid);
       if (this.stopped) return;
       await this.checkHookAsk(data.uuid);
+      if (this.stopped) return;
+      await this.checkWorkflows(data.file, data.proc);
       if (this.stopped) return;
       await this.checkMail();
     } finally {
