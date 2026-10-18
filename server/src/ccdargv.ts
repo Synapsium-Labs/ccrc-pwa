@@ -330,6 +330,12 @@ export const CCD_ARGV = {
    *  gate that should stop it reaching an old box at all; this is the second
    *  lock. */
   swapCross: (id: string, w: string) => argv(['swap', '--cross-pool', id, w]),
+  /** `swap` and `swapCross` with the operator's consent to lose the turn in progress (D-5240). Separate entries, the
+   *  rule above, and the flag LEADS for its reason. Sent only behind `capSupported(state, SWAP_BUSY_CAP)`: an old ccd
+   *  would bind a leading `--interrupt` as the id and fail loudly, but it refuses nothing either, so the old argv is
+   *  the right one there. */
+  swapInterrupt: (id: string, w: string) => argv(['swap', '--interrupt', id, w]),
+  swapCrossInterrupt: (id: string, w: string) => argv(['swap', '--cross-pool', '--interrupt', id, w]),
   /** `route`, defaulted `null`: the PWA's ordinary add, from an operator who
    *  may have tapped a routing picker before creating the workspace — the
    *  `start`/`enable` rule above for the same reason (flags lead, the
@@ -905,6 +911,13 @@ export const DOCS_CAP = 'docs-v1';
  *  to a box with no evidence it exists is the failure the capability reader was built to prevent. The collector's lane
  *  asks it before every audit and again in the act's own scope (`verb-gate.test.ts`, `collect-temp-root.test.ts`). */
 export const COLLECT_CAP = 'collect-v1';
+
+/** The `ccd caps` token that says this box's `cmd_swap` re-measures the turn at the act and takes `--interrupt`
+ *  (D-5240, Task 11). It gates ONE decision: whether the swap route may send `CCD_ARGV.swapInterrupt` or
+ *  `swapCrossInterrupt`. Without it the route sends the old argv, which an old ccd parses and which refuses nothing —
+ *  the server's own read is then the only guard, as it was before. ccd's `echo swap-busy-v1` and
+ *  `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS` are the other two spellings. */
+export const SWAP_BUSY_CAP = 'swap-busy-v1';
 
 /**
  * Whether the DEPLOYED ccd advertised a CAPABILITY token — a verb-shaped string

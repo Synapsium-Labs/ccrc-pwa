@@ -25,7 +25,7 @@ import {
   ASK_STATES, isAskState, ASK_REFUSE_CODES, isAskRefuseCode, ROUTE_WRITABLE_FIELDS, UPDATE_CHANNELS, UPDATE_STATES, UPDATE_PHASES, INSTALL_STATES, PROVENANCE_STATES, AUTO_MODES, NOTIFY_MODES, REQUEST_KINDS, STAMP_READS, NODE_OSES, TAG_FILE_READS,
   SPAWN_VERDICTS,
 } from '../../shared/api.js'; import { NODE_ROLES } from '../../shared/node-role.js';
-import { ARCHIVE_REFUSALS } from '../../shared/api.js';
+import { ARCHIVE_REFUSALS, SWAP_REFUSALS } from '../../shared/api.js';
 import { PROVIDER_IDS } from '../../shared/providers.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 
@@ -6546,6 +6546,41 @@ describe('D-5370: the stop-done lane’s kill switch has no writer, and its cons
       const decl = new RegExp(`\\b(?:const|let|var)\\s+${c}\\b`);
       expect(ALL.filter((f) => decl.test(stallCode(f))).map(rel), c).toEqual([DEFINER]);
     }
+  });
+});
+
+// D-5373 `idle-compact-nudge`: APPENDED, the stall pins' reason. The lane's kill switch is a hand-touched registry
+// marker with no writer in the tree, on the `stall-watch-disabled` precedent; and the prompt the lane types is
+// compared by EQUALITY in the transcript parser, so a second literal would be a second rule.
+describe('idle-compact-nudge: the kill switch has no writer, and the prompt is spelled once (D-5373)', () => {
+  it('idle-compact-nudge-disabled: no shell line names it, and its one TS holder is its pure definer', () => {
+    const name = 'idle-compact-nudge-disabled';
+    const definer = 'server/src/idlenudge.ts';
+    expect(holdersOf(name), `${name}: a line of shell names it`).toEqual([]);
+    expect(ALL.filter((f) => stallCode(f).includes(name)).map(rel).sort(), `${name}: spelled on a code line outside ${definer}`)
+      .toEqual([definer]);
+    expect(stallCode(path.join(ccrcRoot, definer)), `${definer} reaches a node: module — it could write the marker`)
+      .not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
+  });
+  it("the nudge prompt's sentence is spelled on a code line in shared/api.ts alone", () => {
+    const needle = 'Continue with your open tasks.';
+    expect(ALL.filter((f) => stallCode(f).includes(needle)).map(rel).sort()).toEqual(['shared/api.ts']);
+  });
+});
+
+// D-5240 (working-state spec §5.9): the swap route's refusal words are declared once, as `SWAP_REFUSALS` in L0, and
+// they ARE archive's two spellings for the same two facts (bound by reference there, so this row holds the binding).
+// The quoted-literal scan above already allows `session-busy` and `status-unknown` in `shared/api.ts` and the audit
+// alone, so the server's swap guard and the PWA's sheet cannot spell either; this row pins that ccd's two swap
+// refusals are read in one place, `ccdSwapRefusal` (`server/src/swapguard.ts`), off the declaration.
+describe('the swap route spells its refusal words once (D-5240)', () => {
+  it('SWAP_REFUSALS is exactly archive\'s session-busy and status-unknown', () => {
+    expect(SWAP_REFUSALS).toEqual({ sessionBusy: ARCHIVE_REFUSALS.sessionBusy, statusUnknown: ARCHIVE_REFUSALS.statusUnknown });
+  });
+  it('ccd\'s swap refusals are read only by ccdSwapRefusal, in swapguard.ts', () => {
+    const holders = ALL.filter((f) => /\bfunction ccdSwapRefusal\b/.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(holders).toEqual(['server/src/swapguard.ts']);
+    expect(ALL.filter((f) => /`ccd: \$\{code\}:`/.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['server/src/swapguard.ts']);
   });
 });
 
