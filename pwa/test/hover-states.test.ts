@@ -29,7 +29,7 @@ const read = (rel: string): string => readFileSync(path.join(ROOT, rel), 'utf8')
 /** A utility present as a whole class, optionally behind `enabled:` — a
  *  disabled control neither lifts nor sinks, which is the stricter spelling. */
 const has = (cls: string, utility: string): boolean =>
-  new RegExp(`(^|\\s)(enabled:)?${utility.replace(/[[\]().]/g, '\\$&')}(\\s|$)`).test(cls);
+  new RegExp(`(^|\\s)(enabled:)?${utility.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\s|$)`).test(cls);
 
 describe('every interactive primitive carries a hover and a pressed state', () => {
   // Rows and buttons lift to a GROUND under the mouse and sink to a deeper one
