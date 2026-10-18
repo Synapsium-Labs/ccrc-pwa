@@ -8184,8 +8184,8 @@ export function nextSegmentSeq({ onDisk, recorded }) {
  *  (D-4756 (history-export-cadence-clock-backwards)). No clock at all waits: the tick that asks has recorded its own
  *  ticks row, so the next tick has one. `intervalMs` is exportPassIntervalMs' answer: an hour, or longer after
  *  passes that published and could not mark (D-4757 (history-export-mark-failure-backs-off)).
- *  `lastAttemptMs` is the clock of a pass that failed with a caught error, or that the run's budget held before it took a
- *  row (D-5394 (history-export-select-due-transcripts)): it counts as a pass for the wait, so such a pass
+ *  `lastAttemptMs` is the clock of a pass that failed with a caught error, or that the run's budget held before it wrote
+ *  a segment (budgetHeldPass; D-5394 (history-export-select-due-transcripts)): it counts as a pass for the wait, so such a pass
  *  retries hourly, never every tick, while `lastPassMs` (doctor's last-pass clock) does not move. A completed pass deletes it. Which of the two clocks governs
  *  is this function's decision (RD2): the later one, a null being absent, so an attempt after the last pass keeps the wait
  *  running from the attempt, and a pass after the last attempt from the pass. Omitted, it is null, and the answers are exactly
@@ -8343,12 +8343,15 @@ export function entryMayHoldMark({ blobs }) {
 
 // ===========================================================================
 // What one export segment carries (spec §9.15 "What is due", "Write"; W1-B4
-// Task 2). Pure: the sweep pages its candidate rows, in the runs its exportSelect
-// describes (the rows of the due transcripts, each run in time order; not one
-// order across them), with each row's time, its holding files and its blobs'
-// export and prune state, and writes what this answers. Due-ness is the
-// reducer's, B2's per-copy one by default (ruled Q15, rev 3.4), the census's
-// own: one clock (RD1).
+// Task 2). Pure: the sweep pages its candidate rows, in the four runs its
+// exportSelect describes: the rows with no time, by entry id; the young rows of
+// each due transcript, by time; the older rows, by time; the unlinked sidecars,
+// by blob id. The first three offer only the rows of the due transcripts (that
+// still hold an unexported row), and the sidecar run is NOT filtered to them. It
+// is one order within a run and not across them. Each candidate carries its
+// time, its holding files and its blobs' export and prune state, and the sweep
+// writes what this answers. Due-ness is the reducer's, B2's per-copy one by
+// default (ruled Q15, rev 3.4), the census's own: one clock (RD1).
 // D-4758 (history-export-row-carries-blob) B2's D-4735 (history-export-due-per-copy)
 // D-4759 (history-export-pruned-row-stub) D-4760 (history-export-segment-bound-estimated)
 // ===========================================================================
@@ -8389,7 +8392,8 @@ function dueSinceMs(candidate, homeRetentionDays, reducer) {
  *  would pass `boundBytes`; from there no later row is taken. The sweep's input order is its candidates' runs, in this
  *  order: the rows with no time by entry id, the young rows (at or past the cutoff) of each due transcript by time, the
  *  older rows by time, then the unlinked sidecars by blob id; the first three offer only the rows of the transcripts
- *  dueTranscriptKeys names (D-5394 (history-export-select-due-transcripts)). It is one time order within a run and not
+ *  dueTranscriptKeys names that still hold an unexported row, the sidecars are not filtered to them (D-5394
+ *  (history-export-select-due-transcripts)). It is one time order within a run and not
  *  across them, so a segment holds a prefix of the due rows in that offered order, not of the backlog by age: a due row
  *  left behind may be older than one taken (`oldestLeftDueSinceMs` is measured over the rows left, never assumed from
  *  the order). The first due row of the PASS is taken whatever its size, so every pass moves the export
@@ -8435,6 +8439,23 @@ export function planSegment({ nowMs, homeRetentionDays, rows, boundBytes, reduce
     }
   }
   return { take, carry, stubs, bytes, leftDue, oldestLeftDueSinceMs };
+}
+
+/** Whether a pass the run's budget cut short is recorded as an attempt and reported (D-5394
+ *  (history-export-select-due-transcripts)): the sweep writes the attempt clock and one stderr line, and the next step
+ *  waits its interval, not the next tick. Two shapes, both a pass that wrote no segment and so moved nothing:
+ *  - nothing taken and the selection did not run to its end (`taken` 0, `selectionComplete` false). The bound cannot end a
+ *    selection before its first row, since planSegment takes a pass's first row whatever its size, so the budget is all
+ *    that is left;
+ *  - rows taken and none written, the writer finding the budget spent before its first row (`written` 0, `writeStopped`
+ *    'budget'). The writer checks the budget before history-off, so a budget spent beside the operator's switch reads as
+ *    the budget.
+ *  Never history-off alone (`writeStopped` 'off': the operator's switch is not the budget's), never a selection that ran to
+ *  its end with nothing due (that pass completes: it is a pass), never a pass that wrote a row (its segment is published
+ *  and marked, whatever stopped the writer after that). Facts measured by the sweep, a decision made here (RD2). */
+export function budgetHeldPass({ taken, selectionComplete, written, writeStopped }) {
+  if (taken === 0) return selectionComplete === false;
+  return written === 0 && writeStopped === 'budget';
 }
 
 // ===========================================================================

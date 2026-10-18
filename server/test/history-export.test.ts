@@ -1579,6 +1579,11 @@ describe('the selection reaches the due rows within its budget (W1-B4 whole-bran
       }
       expect(plan('EXPORT_TRANSCRIPT_ENTRIES_SQL')).toContain('SEARCH entries USING INDEX entries_ts');
       expect(plan('EXPORT_TRANSCRIPT_ENTRIES_SQL')).not.toContain('TEMP B-TREE');
+      // The transcripts that still hold an unexported row: a scan of the partial index, which holds only unexported rows, so it
+      // is bounded by them and not by the store's age (the per-transcript probe through entries_ts reads every exported row of
+      // a transcript that has none left to find). Not a seek: no index is led by transcript_pk and exported_ms.
+      expect(plan('EXPORT_UNEXPORTED_TRANSCRIPTS_SQL'), 'only the partial index').toMatch(/^SCAN entries USING INDEX entries_unexported\b/);
+      expect(plan('EXPORT_UNEXPORTED_TRANSCRIPTS_SQL')).not.toContain('entries_ts');
     } finally {
       db.close();
     }
@@ -1659,7 +1664,7 @@ describe('the selection reaches the due rows within its budget (W1-B4 whole-bran
     expect(r, 'held: the budget ended the selection before a row was taken').toEqual({ state: 'held', segment: null, rows: 0, blobs: 0, bytes: 0, complete: false });
     expect(reads, 'the fixture ran out of budget in the selection, not before it').toBeGreaterThanOrEqual(4);
     expect(lines, 'one line, naming the held export pass and the budget').toHaveLength(1);
-    expect(lines[0]).toMatch(/^history-sweep: the export pass was held by the run's budget \(90000 ms\) before it took a due row/);
+    expect(lines[0]).toMatch(/^history-sweep: the export pass was held by the run's budget \(90000 ms\) before it wrote a due row/);
     expect(metaOf(box, 'export_attempt_ms'), 'the attempt is recorded').toBe(String(T));
     expect(metaOf(box, HEALTH_META.exportPassMs), 'and a held pass is still not a pass').toBeNull();
     expect(segmentsOf(box)).toEqual([]);
@@ -1671,6 +1676,109 @@ describe('the selection reaches the due rows within its budget (W1-B4 whole-bran
       .toEqual({ state: 'nothing-due', segment: null, rows: 0, blobs: 0, bytes: 0, complete: true });
     expect(metaOf(box, HEALTH_META.exportPassMs)).toBe(String(T + 61 * MIN));
     expect(metaOf(box, 'export_attempt_ms'), 'a pass that ran to its end clears the attempt clock').toBeNull();
+  }, 300_000);
+
+  it('(c) a pass that TOOK rows but wrote none because the budget ended records its attempt and says so once, like one that took nothing; history-off still records nothing', async () => {
+    const { box, ids } = ingestedBox('ccrc-history-export-held-taken-', [row(1, 'one', 2 * DAY), row(2, 'two', DAY)]);
+    const T = Date.now() + 2 * HOUR;   // past the store's first hour: the cadence would run a pass here
+    // The run's clock reads, in order: the budget's start, the pass's own, the check before the selection, the check after the
+    // first page of candidates (which took both rows), and the writer's check before its first row. From the fourth read on
+    // the 90 s budget is spent, so the selection ends with rows taken and the writer writes none.
+    let reads = 0;
+    const clock = (): number => { reads += 1; return reads <= 3 ? T : T + 200_000; };
+    const err = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    let r: PassResult;
+    let lines: string[];
+    try {
+      r = await onStore(box, (db) => SW.exportPass(db, exportCtx(box, ids, clock)));
+      lines = err.mock.calls.map((c) => String(c[0])).filter((l) => l.startsWith('history-sweep:'));
+    } finally {
+      err.mockRestore();
+    }
+    expect(reads, 'the writer\'s own check was reached: rows were taken, then the budget ended the write').toBeGreaterThanOrEqual(5);
+    expect(r, 'held: no segment was published').toEqual({ state: 'held', segment: null, rows: 0, blobs: 0, bytes: 0, complete: false });
+    expect(segmentsOf(box), 'and no temp is left').toEqual([]);
+    expect(marks(box)).toEqual({ [rid(1)]: null, [rid(2)]: null });
+    expect(lines, 'one line, naming the held export pass and the budget').toHaveLength(1);
+    expect(lines[0]).toMatch(/^history-sweep: the export pass was held by the run's budget \(90000 ms\) before it wrote a due row/);
+    expect(metaOf(box, 'export_attempt_ms'), 'the attempt is recorded').toBe(String(T));
+    expect(metaOf(box, HEALTH_META.exportPassMs), 'and a held pass is still not a pass').toBeNull();
+    expect(await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, () => T + 10 * MIN, { deps: { statfs: roomy } }))),
+      'ten minutes on, the cadence waits from the attempt, not from the first tick two hours back').toBeNull();
+    // CONTROL: with a budget that lasts, the same box writes both rows, and that pass clears the record.
+    const next = await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, () => T + 61 * MIN, { deps: { statfs: roomy } })));
+    expect(next, 'an hour after the attempt the step runs').toMatchObject({ state: 'written', rows: 2, complete: true });
+    expect(metaOf(box, 'export_attempt_ms'), 'a pass that ran to its end clears the attempt clock').toBeNull();
+  }, 300_000);
+
+  /** `db` as a pass sees it, every `.all()` recorded with its statement's text: the pass is the real one, the handle its own. */
+  const watched = (db: DatabaseSync, calls: Array<{ sql: string; args: unknown[] }>): DatabaseSync => new Proxy(db, {
+    get(target, prop) {
+      const v = Reflect.get(target, prop) as unknown;
+      if (typeof v !== 'function') return v;
+      if (prop !== 'prepare') return (v as (...a: unknown[]) => unknown).bind(target);
+      return (sql: string) => {
+        const st = target.prepare(sql);
+        return new Proxy(st, {
+          get(t, p) {
+            const f = Reflect.get(t, p) as unknown;
+            if (typeof f !== 'function') return f;
+            if (p !== 'all') return (f as (...a: unknown[]) => unknown).bind(t);
+            return (...args: unknown[]) => { calls.push({ sql, args }); return (f as (...a: unknown[]) => unknown).apply(t, args); };
+          },
+        });
+      };
+    },
+  });
+
+  it('(N3) the due set the pass binds and walks holds only the due transcripts that still hold an unexported row, so it is bounded by what the pass can take and not by the store\'s age; with nothing due the holders are not even asked', async () => {
+    const U2 = '7d2e3f4a-5b6c-4d7e-8f90-a1b2c3d4e5f6';
+    const { box, ids } = ingestedBox('ccrc-history-export-holders-', [row(1, 'one', 3 * DAY), row(2, 'two', 2 * DAY)], {
+      plant: (b) => {
+        plantSession(b, 'claude-b-demo', { uuid: U2, generation: '0189abcd-1234-4678-9abc-0123456789ac', project: 'demo', workdir: WORK });
+        plantTranscript(b, 'claude-b', SLUG, U2, [userRow({ uuid: rid(3), ts: new Date(Date.now() - DAY).toISOString(), text: 'the other transcript', sessionId: U2, cwd: WORK })]);
+      },
+    });
+    const pkOf = (u: string): number => Number(q(box, 'SELECT transcript_pk AS pk FROM transcripts WHERE cc_session_uuid = ?', u)[0]!['pk']);
+    const pkU = pkOf(U);
+    const pkU2 = pkOf(U2);
+    const homeA = `retention:${box.accountHome['claude-a']!}`;
+    const homeB = `retention:${box.accountHome['claude-b']!}`;
+    const T = Date.now() + 2 * HOUR;
+    /** One pass at `at`, the homes set to `days`; answers the result and what the pass bound, walked and asked. */
+    const run = async (at: number, days: { a: number; b: number }) => {
+      const calls: Array<{ sql: string; args: unknown[] }> = [];
+      const r = await onStore(box, (db) => {
+        setMeta(db, homeA, String(days.a));
+        setMeta(db, homeB, String(days.b));
+        return SW.exportPass(watched(db, calls), exportCtx(box, ids, () => at));
+      });
+      const bound = calls.filter((c) => c.sql.includes('json_each(?)')).map((c) => JSON.parse(String(c.args.find((a) => typeof a === 'string' && a.startsWith('[')))) as number[]);
+      const walked = calls.filter((c) => c.sql.startsWith('SELECT entry_id, ts_ms, transcript_pk FROM entries WHERE transcript_pk = ?')).map((c) => Number(c.args[0]));
+      const asked = calls.filter((c) => c.sql.startsWith('SELECT DISTINCT transcript_pk FROM entries')).length;
+      return { r, bound, walked, asked };
+    };
+    // Nothing due (both homes at 180 days, both files fresh): the holders are not asked and nothing is bound or walked.
+    const none = await run(T, { a: 180, b: 180 });
+    expect(none.r).toEqual({ state: 'nothing-due', segment: null, rows: 0, blobs: 0, bytes: 0, complete: true });
+    expect(none.asked, 'no due transcript, nothing to intersect').toBe(0);
+    expect(none.bound.every((l) => l.length === 0), 'phases 1 and 3 bind the empty list').toBe(true);
+    expect(none.walked).toEqual([]);
+    // U due (claude-a at 30 days), U2 not: both rows of U go, and the list was U alone.
+    const first = await run(T + MIN, { a: 30, b: 180 });
+    expect(first.r).toMatchObject({ state: 'written', rows: 2, complete: true });
+    expect(first.asked, 'the holders are asked once').toBe(1);
+    expect(first.bound.length, 'phases 1 and 3 each bound the list').toBeGreaterThanOrEqual(2);
+    expect(first.bound.every((l) => JSON.stringify(l) === JSON.stringify([pkU]))).toBe(true);
+    expect(first.walked).toEqual([pkU]);
+    // Both due, U fully exported: the due set is [U, U2] but U holds no unexported row, so the list is U2 alone.
+    const second = await run(T + 2 * MIN, { a: 30, b: 30 });
+    expect(second.r, 'U2\'s row goes; the exported U is no candidate however the list reads').toMatchObject({ state: 'written', rows: 1, complete: true });
+    expect(second.asked).toBe(1);
+    expect(second.bound.length).toBeGreaterThanOrEqual(2);
+    expect(second.bound.every((l) => JSON.stringify(l) === JSON.stringify([pkU2])), `the list bound: ${JSON.stringify(second.bound)}`).toBe(true);
+    expect(second.walked, 'and phase 2 walks U2 alone').toEqual([pkU2]);
+    expect(marks(box)[rid(3)]).toBe(`2.${ids.writer}.db`);
   }, 300_000);
 
   it('(e) a pass that ran to its end clears the attempt clock, so one dated in the future (the wall clock stepped back after a failed attempt) no longer keeps the cadence answering run', async () => {

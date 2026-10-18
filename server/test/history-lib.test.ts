@@ -8345,6 +8345,29 @@ describe('W1-B4 whole-branch review: entryMayHoldMark, an entry keeps its export
   });
 });
 
+describe('W1-B4 whole-branch review: budgetHeldPass, a pass the run\'s budget cut short before it wrote a segment is recorded as an attempt (D-5394 (history-export-select-due-transcripts))', () => {
+  const held = libCarry.budgetHeldPass;
+  it('nothing taken and the selection did not run to its end: the budget ended it before the first row (the bound cannot, planSegment takes a pass\'s first row whatever its size)', () => {
+    expect(held({ taken: 0, selectionComplete: false, written: 0, writeStopped: null })).toBe(true);
+  });
+  it('nothing taken and the selection ran to its end: nothing is due, which is a pass, not a hold', () => {
+    expect(held({ taken: 0, selectionComplete: true, written: 0, writeStopped: null })).toBe(false);
+  });
+  it('rows taken and none written because the writer found the budget spent before its first row: held, recorded like the nothing-taken shape', () => {
+    expect(held({ taken: 3, selectionComplete: false, written: 0, writeStopped: 'budget' })).toBe(true);
+    expect(held({ taken: 1, selectionComplete: true, written: 0, writeStopped: 'budget' }), 'whether or not the selection had finished').toBe(true);
+  });
+  it('rows taken and none written because history-off appeared: the operator\'s switch, never recorded', () => {
+    expect(held({ taken: 3, selectionComplete: true, written: 0, writeStopped: 'off' })).toBe(false);
+    expect(held({ taken: 3, selectionComplete: false, written: 0, writeStopped: 'off' })).toBe(false);
+  });
+  it('a segment written, whatever stopped the writer after its first row: the pass is published, marked and counted, never a hold', () => {
+    expect(held({ taken: 3, selectionComplete: false, written: 1, writeStopped: 'budget' })).toBe(false);
+    expect(held({ taken: 3, selectionComplete: true, written: 3, writeStopped: null })).toBe(false);
+    expect(held({ taken: 3, selectionComplete: true, written: 2, writeStopped: 'off' })).toBe(false);
+  });
+});
+
 describe('W1-B4: planExport\'s oldest due-since, the census input of doctor\'s wait rule (spec 9.15 "The gap guard"; O41 B4 input)', () => {
   const DAY = 86_400_000;
   const NOW = Date.UTC(2026, 11, 1);
