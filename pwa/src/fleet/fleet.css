@@ -1284,7 +1284,7 @@
 .sess-child:has(> .sess-pw) {
   display: flex;
   flex: 0 1 auto;
-  min-width: calc(var(--pw-wave, 0ch) + 1ch + 2 * var(--sp-1));
+  min-width: calc(var(--pw-wave) + 1ch + 2 * var(--sp-1));
   overflow: hidden;
   font-family: var(--family-mono);
 }
@@ -1294,6 +1294,11 @@
 .sess-held:has(> .sess-pw):has(~ .sess-ctxpressure),
 .sess-child:has(> .sess-pw):has(~ .sess-ctxpressure) {
   min-width: 0;
+}
+/* `--pw-wave`'s declared default; the row's inline style (SessionMeta.tsx)
+   outranks it with the wave's own width. */
+.sess-meta:has(> * > .sess-pw) {
+  --pw-wave: 0ch;
 }
 /* The lane gives way before the programme on a crowded phone row: the account
    is a hue and a name repeated in the row's title, the programme is the row's
