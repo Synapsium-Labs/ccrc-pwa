@@ -4320,6 +4320,20 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       claim 1557 ended; path identity's coordinator is told), with its block's unused numbers 5336 to 5342.
       Debugging row: Opus · xhigh, Sonnet · high refuters, workflows off. Its macOS proof is a full run on its
       branch, which I dispatch. Dispatched 14:43 to worker plain-delta (`ws/plain-delta`), 3 items.
+  - **15:15 UTC: B2's cause measured on Darwin, and a fix pushed (mail 6428; run 566, PR #607, draft).**
+    - The measurement: #607's `probe-macos` job 117707283076 ran the shipped helper unchanged, 92 overflowed stops.
+      Every stop met EPERM at the first SIGTERM `killpg`. In 42 the leader had not yet exited (a non-reaping
+      `waitid`; `kill(pid, 0)` answers), so the instant `poll()` reaped nothing and the EPERM raised. Each such
+      leader was reapable 0.6 to 3.8 ms later. The Linux control delivered all 92. The hypothesis holds.
+    - Attempt 2 of 39134142619 (job 117703895288): row 64 red again (470 ms), and `ccd-docs-index`'s "stdout past
+      stdout_cap is overflow" case too, with the same traceback. So it is not a flake, and wave 20's earlier green
+      was luck.
+    - The fix (`a7cbb513e`): `_stop` takes its grace deadline before the SIGTERM. At that call, an EPERM against
+      a leader not yet reaped polls until the leader is reaped, and raises only past the deadline. The SIGKILL
+      absorbs nothing, so review 573's rule stands. One behaviour moves: a live leader that refuses the SIGTERM
+      raises a grace period later, not at once. The worker reports its red row, M1 to M8 and the gate as measured.
+    - Next: a post-fix `probe-macos`, one record commit, then the full run on the final tip, which I dispatch, a
+      scoped review, and the merge.
 
 ## Carried constraints
 
