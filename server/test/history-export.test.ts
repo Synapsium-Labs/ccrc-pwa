@@ -13,12 +13,13 @@ import path from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import {
   makeHistoryBox, runSweep, skipOnDarwin, openStoreRO, counters, journalRecords, plantSession, plantTranscript,
-  exportDirOf, segmentsOf, segmentRows, runDriver, recoverRow, type HistoryBox,
+  exportDirOf, segmentsOf, segmentRows, runDriver, recoverRow, PRELOADS, type HistoryBox,
 } from './historyHelpers.js';
 import { userRow } from './historyFixtures.js';
 import { removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { EXPORT_ROW_META_BYTES, HEALTH_META, historyPaths } from '../../ccd/history/lib.mjs';
 import { closeWriter, openSegment, openWriter, pruneDryRun, segmentMeta, setMeta } from '../../ccd/history/store.mjs';
+import { syncBuiltinESMExports } from 'node:module';
 
 skipOnDarwin();
 removeTmpFixturesEachTest();
@@ -616,5 +617,257 @@ describe('the export in the tick (W1-B4 Task 6; spec §9.2 step 6, §9.15 "Prefl
     expect(counters(box)['export_paused_low_disk']).toBe(1);
     expect(counters(box)['export_write_failed'], 'a missing directory is not a failed removal').toBeUndefined();
     expect(metaOf(box, HEALTH_META.exportPaused)).toBe('low-disk');
+  }, 120_000);
+});
+
+describe('crash and collision safety (W1-B4 Task 7; spec §9.15 "Write", "Mark", §9.10)', () => {
+  const FAULTS = [PRELOADS.statfs, PRELOADS.faults];
+  /** Every blob and entry mark the store holds: none means nothing was marked. */
+  const marked = (box: HistoryBox): number =>
+    Number(q(box, 'SELECT (SELECT count(*) FROM blobs WHERE exported_ms IS NOT NULL) + (SELECT count(*) FROM entries WHERE exported_ms IS NOT NULL) AS n')[0]!['n']);
+
+  it('O39: a kill mid-write leaves only the temp; nothing is marked; the next pass removes it and writes the segment', () => {
+    const { box, ids } = ingestedBox('ccrc-history-export-killw-', [row(1, 'one', DAY), row(2, 'two', DAY)]);
+    const name = `1.${ids.writer}.db`;
+    const r = driverAt(box, 65, { preloads: FAULTS, env: { HISTORY_TEST_KILL_SQL: 'INTO families' } });
+    expect(r.signal, `${r.stdout}\n${r.stderr}`).toBe('SIGKILL');
+    expect(segmentsOf(box), 'a kill mid-write left more than its temp').toEqual([`.${name}.tmp`]);
+    expect(marked(box)).toBe(0);
+    passAt(box, 70);
+    expect(segmentsOf(box), 'the stale temp outlived the next pass').toEqual([name]);
+    expect(marks(box)).toEqual({ [rid(1)]: name, [rid(2)]: name });
+  }, 300_000);
+
+  it('O39: a kill just before the link leaves only the temp and nothing marked (CONTROL: marking before the link reds here)', () => {
+    const { box, ids } = ingestedBox('ccrc-history-export-killb-', [row(1, 'one', DAY), row(2, 'two', DAY)]);
+    const name = `1.${ids.writer}.db`;
+    const r = driverAt(box, 65, { preloads: FAULTS, env: { HISTORY_TEST_KILL: `linkSync:.${name}.tmp:1:before` } });
+    expect(r.signal, `${r.stdout}\n${r.stderr}`).toBe('SIGKILL');
+    expect(segmentsOf(box)).toEqual([`.${name}.tmp`]);
+    expect(marked(box), 'rows were marked with no segment to hold them').toBe(0);
+    passAt(box, 70);
+    expect(segmentsOf(box)).toEqual([name]);
+    expect(marks(box)).toEqual({ [rid(1)]: name, [rid(2)]: name });
+  }, 300_000);
+
+  it('O39: a kill between the link and the marks: the next pass writes the same rows into the next segment, and both hold them', () => {
+    const { box, ids } = ingestedBox('ccrc-history-export-killa-', [row(1, 'one', DAY), row(2, 'two', DAY)]);
+    const s1 = `1.${ids.writer}.db`;
+    const s2 = `2.${ids.writer}.db`;
+    const r = driverAt(box, 65, { preloads: FAULTS, env: { HISTORY_TEST_KILL: `linkSync:.${s1}.tmp:1:after` } });
+    expect(r.signal, `${r.stdout}\n${r.stderr}`).toBe('SIGKILL');
+    expect(segmentsOf(box), 'the link happened and the temp is still there').toEqual([`.${s1}.tmp`, s1]);
+    expect(marked(box)).toBe(0);
+    passAt(box, 70);
+    expect(segmentsOf(box)).toEqual([s1, s2]);
+    expect(marks(box)).toEqual({ [rid(1)]: s2, [rid(2)]: s2 });
+    expect(metaOf(box, 'export_seq')).toBe('2');
+    const uuidsOf = (n: string): unknown[] => segmentRows(path.join(exportDirOf(box), n), 'entries').map((e) => e['uuid']).sort();
+    expect(uuidsOf(s1)).toEqual([rid(1), rid(2)]);
+    expect(uuidsOf(s2), 'the repeated rows are not the same as the published ones').toEqual(uuidsOf(s1));
+  }, 300_000);
+
+  it('a counter behind the directory: the next number is past every name on disk, of any writer, and past meta\'s; the name on disk is untouched', async () => {
+    const { box, ids } = ingestedBox('ccrc-history-export-behind-', [row(1, 'one', DAY)]);
+    const dir = path.join(box.root, 'export', ids.storeId);
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const theirs = path.join(dir, '5.0badc0de.db');
+    fs.writeFileSync(theirs, 'a segment another writer of this store published', { mode: 0o600 });
+    await onStore(box, (db) => { setMeta(db, 'export_seq', '2'); });   // a restored store whose counter is behind
+    passAt(box, 65);
+    expect(segmentsOf(box)).toEqual(['5.0badc0de.db', `6.${ids.writer}.db`]);
+    expect(fs.readFileSync(theirs, 'utf8')).toBe('a segment another writer of this store published');
+    expect(metaOf(box, 'export_seq')).toBe('6');
+    expect(marks(box)).toEqual({ [rid(1)]: `6.${ids.writer}.db` });
+  }, 300_000);
+
+  it('an existing name is never replaced: a name taken between the listing and the link sends the pass to the next number (CONTROL: publishing by rename reds here)', async () => {
+    const { box, ids } = ingestedBox('ccrc-history-export-eexist-', [row(1, 'one', DAY), row(2, 'two', DAY)]);
+    const taken = `/export/${ids.storeId}/1.${ids.writer}.db`;
+    let planted = 0;
+    // The name appears between the pass's listing and its publish: whichever node:fs call publishes the segment, its
+    // target is planted first, exactly once. syncBuiltinESMExports() carries the patch to store.mjs's named imports.
+    const plant = (to: unknown): void => {
+      if (planted === 0 && String(to).endsWith(taken)) { fs.writeFileSync(String(to), 'planted by the test'); planted += 1; }
+    };
+    const realLink = fs.linkSync;
+    const realRename = fs.renameSync;
+    (fs as { linkSync: unknown }).linkSync = (from: fs.PathLike, to: fs.PathLike): void => { plant(to); realLink(from, to); };
+    (fs as { renameSync: unknown }).renameSync = (from: fs.PathLike, to: fs.PathLike): void => { plant(to); realRename(from, to); };
+    syncBuiltinESMExports();
+    let r: PassResult;
+    try {
+      r = await onStore(box, (db) => SW.exportPass(db, exportCtx(box, ids)));
+    } finally {
+      (fs as { linkSync: unknown }).linkSync = realLink;
+      (fs as { renameSync: unknown }).renameSync = realRename;
+      syncBuiltinESMExports();
+    }
+    expect(planted, 'the name was never taken: the publish reached neither link nor rename').toBe(1);
+    expect(fs.readFileSync(path.join(exportDirOf(box), `1.${ids.writer}.db`), 'utf8'), 'an existing name was written over')
+      .toBe('planted by the test');
+    expect(r).toMatchObject({ state: 'written', segment: `2.${ids.writer}.db` });
+    expect(segmentsOf(box)).toEqual([`1.${ids.writer}.db`, `2.${ids.writer}.db`]);
+    expect(marks(box)).toEqual({ [rid(1)]: `2.${ids.writer}.db`, [rid(2)]: `2.${ids.writer}.db` });
+    expect(counters(box)['export_seq_taken']).toBe(1);
+    expect(metaOf(box, 'export_seq')).toBe('2');
+    const h = openSegment(path.join(exportDirOf(box), `2.${ids.writer}.db`));
+    try {
+      expect(segmentMeta(h).seq, 'the segment\'s own number disagrees with its name').toBe(2);
+    } finally {
+      h.close();
+    }
+  }, 120_000);
+
+  it('the EEXIST retry is bounded: names that keep being taken fail the pass after eight tries past the first, one number each and never the same twice, and the temp goes', async () => {
+    const { box, ids } = ingestedBox('ccrc-history-export-bound-', [row(1, 'one', DAY), row(2, 'two', DAY)]);
+    const NOW = Date.now();
+    const tried: string[] = [];
+    const realLink = fs.linkSync;
+    // Every link meets a name that has just appeared (nothing is planted: the number the pass takes next can come only from
+    // what it tried). After 30 calls the real link goes through, so a pass with no bound ends written, never in a loop.
+    (fs as { linkSync: unknown }).linkSync = (from: fs.PathLike, to: fs.PathLike): void => {
+      if (tried.length >= 30) { realLink(from, to); return; }
+      tried.push(path.basename(String(to)));
+      throw Object.assign(new Error(`EEXIST: file already exists, link '${String(from)}' -> '${String(to)}'`), { code: 'EEXIST' });
+    };
+    syncBuiltinESMExports();
+    const err = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    let r: PassResult;
+    try {
+      r = await onStore(box, (db) => SW.exportPass(db, exportCtx(box, ids, () => NOW)));
+    } finally {
+      err.mockRestore();
+      (fs as { linkSync: unknown }).linkSync = realLink;
+      syncBuiltinESMExports();
+    }
+    expect(r, 'a pass with no bound goes on past eight tries').toEqual({ state: 'failed', segment: null, rows: 0, blobs: 0, bytes: 0, complete: false });
+    expect(tried, 'one publish, then eight retries, each under a number not tried before').toEqual(Array.from({ length: 9 }, (_, i) => `${i + 1}.${ids.writer}.db`));
+    expect(counters(box)['export_seq_taken']).toBe(8);
+    expect(counters(box)['export_write_failed']).toBe(1);
+    expect(segmentsOf(box), 'the failed pass left its temp or published a segment').toEqual([]);
+    expect(marks(box)).toEqual({ [rid(1)]: null, [rid(2)]: null });
+    expect(metaOf(box, 'export_attempt_ms'), 'the failed pass counts for the cadence').toBe(String(NOW));
+    expect(metaOf(box, 'export_mark_fails'), 'nothing was published, so this is no mark failure').toBeNull();
+  }, 120_000);
+
+  it('a failed segment write removes its temp, marks nothing, is counted, and the pass exits 0; the next tick ingests, and the export retries an hour later', () => {
+    const { box, transcript, ids } = ingestedBox('ccrc-history-export-fail-', [row(1, 'one', DAY), row(2, 'two', DAY)]);
+    const r = driverAt(box, 65, { preloads: FAULTS, env: { HISTORY_TEST_THROW_SQL: 'INTO families' } });
+    expect(r.code, `${r.stdout}\n${r.stderr}`).toBe(0);
+    expect(r.stderr).toContain('history-sweep: an export segment write failed and nothing was marked');
+    expect(segmentsOf(box)).toEqual([]);
+    expect(marked(box)).toBe(0);
+    expect(counters(box)['export_write_failed']).toBe(1);
+    expect(metaOf(box, HEALTH_META.exportPassMs), 'a failed pass is not a pass').toBeNull();
+    fs.appendFileSync(transcript, `${JSON.stringify(row(3, 'three', HOUR))}\n`);
+    passAt(box, 100);
+    expect(q(box, 'SELECT count(*) AS n FROM entries')[0]!['n'], 'the tick after a failed export still ingests').toBe(3);
+    expect(segmentsOf(box), 'a failed pass retried inside its hour').toEqual([]);
+    passAt(box, 130);
+    expect(segmentsOf(box)).toEqual([`1.${ids.writer}.db`]);
+    expect(marks(box)).toEqual({ [rid(1)]: `1.${ids.writer}.db`, [rid(2)]: `1.${ids.writer}.db`, [rid(3)]: `1.${ids.writer}.db` });
+  }, 300_000);
+
+  it('a stale temp goes before the preflight: a pass paused for room after a kill mid-write leaves no temp on the filesystem it measured (CONTROL: removing it only after an admit reds here)', () => {
+    const { box, ids } = ingestedBox('ccrc-history-export-killp-', [row(1, 'one', DAY), row(2, 'two', DAY)]);
+    const name = `1.${ids.writer}.db`;
+    const r = driverAt(box, 65, { preloads: FAULTS, env: { HISTORY_TEST_KILL_SQL: 'INTO families' } });
+    expect(r.signal, `${r.stdout}\n${r.stderr}`).toBe('SIGKILL');
+    expect(segmentsOf(box)).toEqual([`.${name}.tmp`]);
+    passAt(box, 70, { env: { HISTORY_TEST_STATFS_EXPORT: `1000:${10 * GIB}` } });
+    expect(counters(box)['export_paused_low_disk'], 'the follow-up pass must be paused for room').toBe(1);
+    expect(segmentsOf(box), 'the paused pass kept a dead segment\'s temp on the filesystem it measured').toEqual([]);
+  }, 300_000);
+
+  it('a pass that published its segment and could not mark it backs off: the next segment waits two hours, not one, so a store that cannot take its marks does not publish a copy every hour; a marked pass ends the backoff', () => {
+    const { box, ids } = ingestedBox('ccrc-history-export-markfail-', [row(1, 'one', DAY), row(2, 'two', DAY)]);
+    const s1 = `1.${ids.writer}.db`;
+    const s2 = `2.${ids.writer}.db`;
+    // the mark transaction's blob update throws, the stand-in for db/'s volume refusing the WAL growth (SQLITE_FULL)
+    const r = driverAt(box, 65, { preloads: FAULTS, env: { HISTORY_TEST_THROW_SQL: 'UPDATE blobs SET exported_ms = ?, exported_seg = ? WHERE blob_id' } });
+    expect(r.code, `${r.stdout}\n${r.stderr}`).toBe(0);
+    expect(r.stderr).toContain(`history-sweep: export segment ${s1} was published and could not be marked`);
+    expect(segmentsOf(box), 'the segment was published before its mark failed').toEqual([s1]);
+    expect(marked(box)).toBe(0);
+    expect(counters(box)['export_write_failed']).toBe(1);
+    expect(metaOf(box, 'export_mark_fails')).toBe('1');
+    passAt(box, 130);   // over an hour after the failed attempt: a second copy of the same rows would be published here
+    expect(segmentsOf(box), 'the pass after a mark failure came back within two hours of it').toEqual([s1]);
+    passAt(box, 190);   // over two hours after it
+    expect(segmentsOf(box)).toEqual([s1, s2]);
+    expect(marks(box)).toEqual({ [rid(1)]: s2, [rid(2)]: s2 });
+    expect(metaOf(box, 'export_mark_fails'), 'a marked pass ends the backoff').toBe('0');
+  }, 300_000);
+
+  // RD3: a busy error between the link and the marks. No preload throws a busy (B2's HISTORY_TEST_THROW_SQL throws
+  // ERR_SQLITE_ERROR with no errcode), so these two cases run exportPass in-process on the test's OWN writer connection:
+  // node:fs's linkSync is wrapped to see the link (the EEXIST case's idiom), and that connection's exec answers the next
+  // `n` BEGIN IMMEDIATEs after the link with SQLITE_BUSY (errcode 5, what B1's isBusy reads): the stand-in for another
+  // connection holding the write lock past busy_timeout. Every other statement runs as it would. Shipped code reads no seam.
+  const roomy = async (): Promise<{ bsize: number; bavail: number; blocks: number }> => ({ bsize: 1, bavail: 4 * TIB, blocks: 8 * TIB });
+  async function busyAfterLink(box: HistoryBox, ids: { storeId: string; writer: string }, nowMs: number, n: number): Promise<unknown> {
+    return onStore(box, async (db) => {
+      let linked = false;
+      let busied = 0;
+      const realLink = fs.linkSync;
+      (fs as { linkSync: unknown }).linkSync = (from: fs.PathLike, to: fs.PathLike): void => { realLink(from, to); linked = true; };
+      syncBuiltinESMExports();
+      const realExec = db.exec.bind(db);
+      (db as unknown as { exec: (sql: string) => void }).exec = (sql: string): void => {
+        if (linked && busied < n && sql === 'BEGIN IMMEDIATE') {
+          busied += 1;
+          throw Object.assign(new Error(`database is locked (BEGIN ${busied} after the link)`), { code: 'ERR_SQLITE_ERROR', errcode: 5, errstr: 'database is locked' });
+        }
+        realExec(sql);
+      };
+      try {
+        return await SW.exportPass(db, exportCtx(box, ids, () => nowMs)).then(() => null, (e: unknown) => e);
+      } finally {
+        (fs as { linkSync: unknown }).linkSync = realLink;
+        syncBuiltinESMExports();
+      }
+    });
+  }
+
+  it('a busy error between the link and the marks: the pass records the published segment\'s number and the attempt clock, then rethrows it, so the next step publishes nothing new; a busy is not a mark failure (RD3)', async () => {
+    const { box, ids } = ingestedBox('ccrc-history-export-busy-', [row(1, 'one', DAY), row(2, 'two', DAY)]);
+    const NOW = Date.now() + 2 * HOUR;   // past the store's first hour: only the attempt clock can hold the next step
+    const s1 = `1.${ids.writer}.db`;
+    const s2 = `2.${ids.writer}.db`;
+    const err = (await busyAfterLink(box, ids, NOW, 1)) as { errcode?: number; message?: string } | null;
+    expect(err?.errcode, 'the busy error was not rethrown').toBe(5);
+    expect(err?.message).toBe('database is locked (BEGIN 1 after the link)');
+    expect(segmentsOf(box), 'the segment was published before the busy mark').toEqual([s1]);
+    expect(marks(box)).toEqual({ [rid(1)]: null, [rid(2)]: null });
+    expect(metaOf(box, 'export_seq'), 'the published segment\'s number').toBe('1');
+    expect(metaOf(box, 'export_attempt_ms'), 'the attempt clock').toBe(String(NOW));
+    expect(metaOf(box, 'export_mark_fails'), 'a busy is the lock\'s, not the volume\'s: no backoff').toBeNull();
+    expect(counters(box)['export_write_failed'], 'a busy ends the tick; it is not a failed write').toBeUndefined();
+    const next = await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, () => NOW + 5 * MIN, { deps: { statfs: roomy } })));
+    expect(next, 'the next step published the same rows again').toBeNull();
+    expect(segmentsOf(box)).toEqual([s1]);
+    // an hour on, the unmarked rows go into the next segment, as after a kill between the link and the marks
+    const later = await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, () => NOW + 65 * MIN, { deps: { statfs: roomy } })));
+    expect(later).toMatchObject({ state: 'written', segment: s2 });
+    expect(marks(box)).toEqual({ [rid(1)]: s2, [rid(2)]: s2 });
+  }, 120_000);
+
+  it('RD3\'s residual: when that record meets busy too, the first error is the one rethrown, nothing is recorded, and the next pass repeats the rows into the next segment, which replay absorbs', async () => {
+    const { box, ids } = ingestedBox('ccrc-history-export-busy2-', [row(1, 'one', DAY), row(2, 'two', DAY)]);
+    const NOW = Date.now() + 2 * HOUR;
+    const s1 = `1.${ids.writer}.db`;
+    const s2 = `2.${ids.writer}.db`;
+    const err = (await busyAfterLink(box, ids, NOW, 2)) as { errcode?: number; message?: string } | null;
+    expect(err?.errcode, 'the busy error was not rethrown').toBe(5);
+    expect(err?.message, 'the record\'s own error escaped in place of the mark\'s').toBe('database is locked (BEGIN 1 after the link)');
+    expect(segmentsOf(box)).toEqual([s1]);
+    expect(metaOf(box, 'export_attempt_ms'), 'a record that met busy recorded nothing').toBeNull();
+    expect(metaOf(box, 'export_seq')).toBeNull();
+    const next = await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, () => NOW + 5 * MIN, { deps: { statfs: roomy } })));
+    expect(next).toMatchObject({ state: 'written', segment: s2 });
+    const uuidsOf = (n: string): unknown[] => segmentRows(path.join(exportDirOf(box), n), 'entries').map((e) => e['uuid']).sort();
+    expect(uuidsOf(s2), 'the residual: the same rows in two segments, which Task 10\'s replay absorbs').toEqual(uuidsOf(s1));
+    expect(marks(box)).toEqual({ [rid(1)]: s2, [rid(2)]: s2 });
   }, 120_000);
 });

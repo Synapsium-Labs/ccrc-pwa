@@ -61,7 +61,7 @@ import {
   RECOVER_PHASES, RECOVER_JOURNAL_PHASES, formatRecoverCursor, parseRecoverCursor, orderJournalFiles, indexRecord, replayStep, nextUnmovedTicks, HEALTH_META,
   mergeJournalByTime, decideBind, restoreNameOk,
   EXPORT_DIR, EXPORT_SEGMENT_MAX_BYTES, EXPORT_SEGMENT_FORMAT, segmentName, nextSegmentSeq, planSegment, CLAUDE_CODE_DEFAULT_RETENTION_DAYS,
-  shortestRetention, exportHorizonDays, decideExportPass, planExportRoom,
+  shortestRetention, exportHorizonDays, decideExportPass, planExportRoom, exportPassIntervalMs, exportMarkFailsOf, decideMarkOutcome,
 } from './lib.mjs';
 import {
   MIGRATIONS, OWED_INDEX, StoreError, bump, clearDoneMarkers, closeWriter, createStore, dropPending, finishPending, getMeta,
@@ -71,7 +71,7 @@ import {
   pruneApply, pruneDryRun, writeBackup, removeStaleBackupTemps,
   integrityCheck, foreignKeyRows, ftsMeasure, dropFtsTables, getStep, setStep, setCounter, adoptStore,
   peekStoreId, stageRestore, commitRestore, abortRestore,
-  ensureSegmentDir, createSegment, segmentInserts, publishSegment, listSegments, removeStaleSegmentTemps,
+  ensureSegmentDir, createSegment, segmentInserts, publishSegment, listSegments, removeStaleSegmentTemps, setSegmentSeq,
 } from './store.mjs';
 import { isBoundaryLine } from '../compact-card.mjs';
 import {
@@ -7502,6 +7502,16 @@ const EXPORT_SEQ_META = 'export_seq';
  *  failing that way retries hourly, never every tick; doctor's last-pass clock (HEALTH_META.exportPassMs) does not, so
  *  it still reads stale. A killed pass writes nothing here, and the next tick retries it. */
 const EXPORT_ATTEMPT_META = 'export_attempt_ms';
+/** Names tried past a taken one before the pass fails: a directory whose names keep appearing under the lock is a fault,
+ *  never a loop (§9.15 "Write"). */
+const EXPORT_SEQ_RETRIES = 8;
+/** meta: how many export passes in a row published their segment and then failed to mark it (§9.15 "Mark": the marks
+ *  are one transaction on db/, which the export's preflight never measures). Each such pass leaves its rows unmarked,
+ *  so the next pass publishes them again. lib decides the count after each outcome and the wait (decideMarkOutcome,
+ *  exportMarkFailsOf, exportPassIntervalMs; coordinator ruling RD2): the wait doubles per failure, at most a day, so a
+ *  store whose own volume refuses the marks does not publish a copy every hour until the home filesystem's floor
+ *  (D-4757 (history-export-mark-failure-backs-off), NEW). This module only writes what lib answers. */
+const EXPORT_MARK_FAILS_META = 'export_mark_fails';
 /** Candidate rows with a time below the ts cutoff, oldest first within this run, keyset-paged by (ts_ms, entry_id): the
  *  partial index entries_unexported orders them. `ts_ms < cutoff` (the shortest home's horizon) is only a prefilter;
  *  planSegment decides each row by its holding files. It hides no due row held by a file on disk: no file's horizon is
@@ -7861,6 +7871,9 @@ function markExported(db, m) {
     for (const id of m.blobs) s.markBlob.run(m.nowMs, m.name, id);
     for (const id of m.entries) s.markEntry.run(m.nowMs, m.name, id);
     setMeta(db, EXPORT_SEQ_META, String(m.seq));
+    // marked: lib decideMarkOutcome ends the backoff, writing '0' only over another value (RD2)
+    const ended = decideMarkOutcome({ outcome: 'marked', recorded: getMeta(db, EXPORT_MARK_FAILS_META) });
+    if (ended.write !== null) setMeta(db, EXPORT_MARK_FAILS_META, ended.write);
     noteExportPassDone(db, m.nowMs, m.complete);
   });
 }
@@ -7873,6 +7886,7 @@ export async function exportPass(db, ctx) {
   if (ctx.ids === null || ctx.rosterUnreadable === true || ctx.homes.length === 0) return stop('no-horizon');
   const nowMs = ctx.now();
   let seg = null;
+  let published = null;   // { name, seq } once the segment is linked: a failure after that is the mark's
   try {
     const { storeId, writer } = ctx.ids;
     const dir = exportDirFor(ctx.paths, storeId);
@@ -7901,18 +7915,57 @@ export async function exportPass(db, ctx) {
       seg = null;
       return stop('held');
     }
-    const linked = publishSegment(seg, dir, name);
-    if (linked !== 'linked') throw new Error(`the segment name ${name} is already on disk`);
+    // §9.15 "Write": link() fails on a name already on disk, and the pass takes the next number past every name there,
+    // of any writer, and past the one it tried. A name is never replaced (D-4226).
+    let linked = publishSegment(seg, dir, name);
+    for (let tries = 1; linked === 'exists'; tries += 1) {
+      if (tries > EXPORT_SEQ_RETRIES) throw new Error(`no free segment name in ${EXPORT_SEQ_RETRIES} tries past ${name}`);
+      countOutside(db, 'export_seq_taken');
+      seq = nextSegmentSeq({ onDisk: listSegments(dir).map((x) => x.seq), recorded: seq });
+      name = segmentName({ seq, writer });
+      setSegmentSeq(seg.temp, seq);
+      linked = publishSegment(seg, dir, name);
+    }
+    published = { name, seq };   // linked: from here a failure is the mark's, and these rows go into a later segment
     seg = null;
     const complete = sel.complete && w.stopped === null;
     markExported(db, { name, seq, nowMs, blobs: w.blobs, entries: w.entries, complete });
     return { state: 'written', segment: name, rows: w.rows, blobs: w.blobs.length, bytes: w.bytes, complete };
   } catch (e) {
     if (seg !== null) discardSegment(seg);
-    if (isBusy(e)) throw e;
-    process.stderr.write(`history-sweep: an export segment write failed and nothing was marked: ${e && e.message ? e.message : String(e)}\n`);
+    if (isBusy(e)) {
+      // RD3: SQLITE_BUSY after the link (another connection held the write lock through the marks). The segment is
+      // published and its rows are unmarked. Its number and the attempt clock are recorded before the error ends the
+      // tick (O22), so the next tick's cadence waits rather than publish the same rows again a minute later. lib says a
+      // busy is the lock's, not the volume's: the backoff stands as it is. If this record meets busy too, the first
+      // error still ends the tick, the next pass repeats these rows into a later segment, and replay absorbs the copy
+      // (insert-or-ignore by sha256): a residual the PR body names. A busy before the link records nothing.
+      if (published !== null) {
+        try {
+          withTx(db, 'NORMAL', () => {
+            setMeta(db, EXPORT_SEQ_META, String(published.seq));
+            setMeta(db, EXPORT_ATTEMPT_META, String(nowMs));
+            const held = decideMarkOutcome({ outcome: 'mark-busy', recorded: getMeta(db, EXPORT_MARK_FAILS_META) });
+            if (held.write !== null) setMeta(db, EXPORT_MARK_FAILS_META, held.write);
+          });
+        } catch { /* busy again: the residual above */ }
+      }
+      throw e;
+    }
+    const why = e && e.message ? e.message : String(e);
+    process.stderr.write(published === null
+      ? `history-sweep: an export segment write failed and nothing was marked: ${why}\n`
+      : `history-sweep: export segment ${published.name} was published and could not be marked; its rows go into a later segment: ${why}\n`);
     countOutside(db, 'export_write_failed');
-    try { setMeta(db, EXPORT_ATTEMPT_META, String(nowMs)); } catch { /* busy: the next tick retries sooner, nothing is lost */ }
+    try {
+      withTx(db, 'NORMAL', () => {
+        setMeta(db, EXPORT_ATTEMPT_META, String(nowMs));
+        // lib decides whether this pass backs off (RD2): one step more after a published, unmarked segment; as it stands
+        // after a failure before the link
+        const after = decideMarkOutcome({ outcome: published === null ? 'write-failed' : 'mark-failed', recorded: getMeta(db, EXPORT_MARK_FAILS_META) });
+        if (after.write !== null) setMeta(db, EXPORT_MARK_FAILS_META, after.write);
+      });
+    } catch { /* busy or full: the next tick retries sooner, nothing is lost */ }
     return stop('failed');
   }
 }
@@ -7942,6 +7995,7 @@ export async function exportStep(db, ctx) {
     lastPassMs: msOf(HEALTH_META.exportPassMs),
     lastAttemptMs: msOf(EXPORT_ATTEMPT_META),
     firstTickMs: first === undefined ? null : Number(first.ts_ms),
+    intervalMs: exportPassIntervalMs(exportMarkFailsOf(getMeta(db, EXPORT_MARK_FAILS_META))),   // Task 7: lib's wait after failed marks
   });
   if (verdict === 'wait') return null;
   // A directory that cannot be made never throws out of the tick (a planted entry would otherwise fail every tick): the
