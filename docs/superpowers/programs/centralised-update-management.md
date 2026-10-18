@@ -3968,6 +3968,9 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     and 4 of 28 with H18-12 added (recorded by the 17:05 superset ruling), the real tree unchanged, and the gate
     green. Review run 577 is open; the cap is 48 of 48 until 23:56, so a one-shot dispatches it at 23:57.
   - **23:57 UTC:** review run 577 dispatched in the slot that freed at 23:56 (reviewer plain-prairie), at `f5e311970`.
+  - **2026-10-18 00:11 UTC:** wave 17's Task 1 miss is fixed at `98bcb882c` (mail 6077): the Darwin-arm exact set
+    expects `ccrc-api` for both and fleet and not for server, a grep found no other such set, and Task 16 records
+    its macOS proof (run 39077484519, shard 1/4). The worker waits for #448 and #482.
 
 ## Carried constraints
 
