@@ -767,6 +767,10 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-surface)'],
     why: 'the stranded chip is a .sess-meta cell on an unselected .sess-line, whose ground is the project card. Its selector names no ancestor, so the auditor cannot recover that ground from CSS alone. The SELECTED row does not use this registered attention ink: .sess-line--active answers it through the achromatic group with --edge-strong, pinned separately in fleet-css.test.ts',
   },
+  '.sess-state--coordinator': {
+    under: ['var(--bg-surface)'],
+    why: 'D-5296: the quiet "with coordinator" state word is the first .sess-meta cell on an unselected .sess-line, whose ground is the project card. Its selector names no ancestor, so the auditor cannot recover that ground from CSS alone. The SELECTED row is answered by the achromatic group (.sess-line--active .sess-state, --edge-strong), pinned separately in fleet-css.test.ts',
+  },
   '.sess-offpool': {
     under: ['var(--bg-surface)'],
     why: 'the visible off-pool cue is a .sess-meta cell on an unselected .sess-line, whose ground is the project card. Its selector names no ancestor, so the auditor cannot recover that ground from CSS alone. The SELECTED row is answered by the achromatic group with --edge-strong, pinned separately in fleet-css.test.ts',
