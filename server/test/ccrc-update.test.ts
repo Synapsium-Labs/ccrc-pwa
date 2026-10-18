@@ -13075,6 +13075,21 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
       expect(src.split('[ -f "$d/coord.db" ]').length - 1, 'a bare coord.db test would discard a sidecar-only snapshot').toBe(0);
       expect(src.split('_bak_snap_class "$d"').length - 1, 'the classifier is asked in one place').toBe(1);
     });
+
+    it('_bak_gc and _bak_prune spell no keep clause of their own: each calls _bak_removable, and the filter is written once (R14(a), D-5318)', () => {
+      const src = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
+      const body = (name: string): string => {
+        const m = new RegExp(`^${name}\\(\\) \\{[\\s\\S]*?\\n\\}$`, 'm').exec(src);
+        expect(m, `ccd/ccrc has no ${name}`).not.toBeNull();
+        return m![0];
+      };
+      for (const fn of ['_bak_gc', '_bak_prune']) {
+        expect(body(fn), `${fn} calls the one filter`).toMatch(/^ +_bak_removable "\$d" \|\| continue/m);
+        expect(body(fn), `${fn} spells no keep clause`).not.toContain('[ "$d" = "$BAK_KEEP_');
+      }
+      expect(src.split('[ "$d" = "$BAK_KEEP_').length - 1, 'the three keep clauses are spelled once, in _bak_removable').toBe(3);
+      expect(body('_bak_removable'), 'the helper fails closed on an unparsable floor').toMatch(/\[\[ "\$UPD_BAK_FLOOR" =~ \^\[0-9\]\{8\}-\[0-9\]\{6\}\$ \]\] \|\| return 1/);
+    });
   });
 
   // fix round 1 item 9 (review 196 F10): a timestamp-named SYMLINK is a
@@ -13576,6 +13591,31 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       expect(has(home, '20250101-000000'), 'the newest with data').toBe(true);
       expect(has(home, '20250100-000000'), 'the newest tree backup').toBe(true);
       expect(has(home, '20250102-000000'), 'an empty snapshot that is neither').toBe(false);
+    });
+
+    it('one filter, two pruners (R14(a), D-5318): `ccrc backup` and an update\'s `_bak_gc` leave the IDENTICAL set of planted dirs — own dir, floor, snapshot, data and tree keeps', () => {
+      const plant = (home: string): void => {
+        plantDir(home, '20250101-000000', 'plain');          // removable
+        plantDir(home, '20250102-000000', 'tree');           // the newest earlier tree backup
+        plantDir(home, '20250103-000000', 'v1-sidecars');    // the newest earlier snapshot that holds data
+        plantDir(home, '20250104-000000', 'v1-empty');       // the newest earlier valid snapshot
+        plantDir(home, '20250105-000000', 'plain');          // removable
+        plantDir(home, '29991231-000000', 'plain');          // named at or after this run's lock second: the floor keeps it
+      };
+      const planted = ['20250101-000000', '20250102-000000', '20250103-000000', '20250104-000000', '20250105-000000', '29991231-000000'];
+      const left = (home: string): string[] => planted.filter((n) => has(home, n));
+      const viaBackup = home0('ccrc-fx-8b-diff-backup-');
+      plant(viaBackup);
+      const b = runBackup(viaBackup, [], { CCRC_BACKUP_KEEP: '0' });
+      expect(b.code, `stderr: ${b.stderr}\nstdout: ${b.stdout}`).toBe(0);
+      expect(existsSync(ownDir(b)), 'the backup\'s own dir is kept').toBe(true);
+      const viaUpdate = home0('ccrc-fx-8b-diff-update-');
+      packRelease(viaUpdate, stubTree(viaUpdate, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+      plant(viaUpdate);
+      const u = runUpdate(viaUpdate, [], { CCRC_BACKUP_KEEP: '0' });
+      expect(u.code, `stderr: ${u.stderr}\nstdout: ${u.stdout}`).toBe(0);
+      expect(left(viaBackup), 'ccrc backup keeps the three keeps and the floor').toEqual(['20250102-000000', '20250103-000000', '20250104-000000', '29991231-000000']);
+      expect(left(viaUpdate), 'an update\'s _bak_gc leaves the same set').toEqual(left(viaBackup));
     });
 
     it('the prune message names what it kept', () => {

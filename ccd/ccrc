@@ -22323,7 +22323,7 @@ _bak_prune() {
     *) echo "backup: prune skipped — ~/.ccrc/update.lock could not be measured; nothing was pruned"; return 0 ;;
   esac
   _bak_list
-  local floor=$((10#${UPD_BAK_FLOOR//-/})) n=${#BAK_DIRS[@]} i d name
+  local n=${#BAK_DIRS[@]} i d
   local krc=0
   _bak_keepset || krc=$?   # rc 1 cannot happen here (the floor was checked above); rc 2 is the classifier failing
   if [ "$krc" -ne 0 ]; then
@@ -22332,12 +22332,8 @@ _bak_prune() {
     return 0
   fi
   for ((i = 0; i < n - keep; i++)); do
-    d="${BAK_DIRS[$i]}"; name="${d##*/}"
-    [ "$d" = "$UPD_BACKUP_DIR" ] && continue
-    [ "$((10#${name//-/}))" -ge "$floor" ] && continue
-    [ "$d" = "$BAK_KEEP_SNAP" ] && continue
-    [ "$d" = "$BAK_KEEP_DATA" ] && continue
-    [ "$d" = "$BAK_KEEP_TREE" ] && continue
+    d="${BAK_DIRS[$i]}"
+    _bak_removable "$d" || continue
     rm -rf -- "${BAK_DIRS[$i]}" \
       || _ccrc_die "could not prune ${BAK_DIRS[$i]} — the newer backups above it are all intact"
     echo "backup: pruned ${BAK_DIRS[$i]} (keeping the newest $keep timestamped backups; hand-made siblings are never touched)"
@@ -22350,7 +22346,7 @@ _bak_prune() {
 # The ONE spelling of the extra keeps' SELECTION, shared by `_bak_gc` and `_bak_prune`: which earlier coordination snapshot,
 # which earlier snapshot that holds data, and which earlier tree backup are kept, and the own-dir and floor pair that selection
 # skips over. That is all that is shared (fix round 1, F4). The removal filter that APPLIES the keeps — own dir, floor, snapshot,
-# data snapshot, tree — is written twice, once in each pruner's loop, and nothing pins the two copies to each other.
+# data snapshot, tree — is spelled ONCE, in `_bak_removable` below (R14(a), D-5318), and both pruners' loops call it.
 # The extra keeps are chosen among dirs NOT already protected (below the floor, not this run's own): the protected
 # ones are kept anyway, so picking one of them would protect nothing. They are INDEPENDENT of each other and of the newest-N keep
 # (delegation broker wave 3, O3): a dir is "the newest snapshot" by what the classifier says of its coordination snapshot,
@@ -22385,6 +22381,25 @@ _bak_keepset() {
     if [ -z "$BAK_KEEP_TREE" ] && { [ -e "$d/server-dist" ] || [ -e "$d/agent-dist" ]; }; then BAK_KEEP_TREE="$d"; fi
     [ -n "$BAK_KEEP_DATA" ] && [ -n "$BAK_KEEP_TREE" ] && break
   done
+  return 0
+}
+
+# `_bak_removable <dir>` — rc 0 when a pruner may remove <dir>, rc 1 when it
+# must keep it (R14(a), D-5318): the ONE spelling of the removal filter that
+# `_bak_prune` and `_bak_gc` apply after `_bak_keepset` has chosen the keeps.
+# Kept: this run's own backup dir, every dir named at or after this run's
+# lock time, and the three keeps. It reads UPD_BAK_FLOOR itself (the callers'
+# locals are not its to read) and fails CLOSED: an unparsable floor keeps
+# everything, though both callers refuse before their loop anyway.
+_bak_removable() {
+  local d="$1" name="${1##*/}" floor
+  [[ "$UPD_BAK_FLOOR" =~ ^[0-9]{8}-[0-9]{6}$ ]] || return 1
+  floor=$((10#${UPD_BAK_FLOOR//-/}))
+  [ "$d" = "$UPD_BACKUP_DIR" ] && return 1
+  [ "$((10#${name//-/}))" -ge "$floor" ] && return 1
+  [ "$d" = "$BAK_KEEP_SNAP" ] && return 1
+  [ "$d" = "$BAK_KEEP_DATA" ] && return 1
+  [ "$d" = "$BAK_KEEP_TREE" ] && return 1
   return 0
 }
 
@@ -22469,7 +22484,7 @@ _bak_gc() {   # <lead word: update|rollback>
     *) echo "$lead: backups: WARN: ~/.ccrc/update.lock could not be measured — nothing pruned"; return 1 ;;
   esac
   _bak_list
-  local floor=$((10#${UPD_BAK_FLOOR//-/})) n=${#BAK_DIRS[@]} i d name shown rc=0
+  local n=${#BAK_DIRS[@]} i d shown rc=0
   local krc=0
   _bak_keepset || krc=$?   # wave 9 R10g: the selection of the two extra keeps, shared with `_bak_prune`; the floor was checked above
   if [ "$krc" -ne 0 ]; then
@@ -22478,12 +22493,8 @@ _bak_gc() {   # <lead word: update|rollback>
     return 1
   fi
   for ((i = 0; i < n - keep; i++)); do
-    d="${BAK_DIRS[$i]}"; name="${d##*/}"
-    [ "$d" = "$UPD_BACKUP_DIR" ] && continue   # D-3593
-    [ "$((10#${name//-/}))" -ge "$floor" ] && continue   # D-3593
-    [ "$d" = "$BAK_KEEP_SNAP" ] && continue
-    [ "$d" = "$BAK_KEEP_DATA" ] && continue
-    [ "$d" = "$BAK_KEEP_TREE" ] && continue
+    d="${BAK_DIRS[$i]}"
+    _bak_removable "$d" || continue   # D-3593's own-dir and floor clauses live there now
     shown="$d"; case "$d" in "$HOME"/*) shown="\$HOME${d#"$HOME"}" ;; esac
     if rm -rf -- "$d" 2>/dev/null; then
       echo "$lead: backups: pruned $shown (kept: the newest $keep timestamped backups, every one named at or after this run took its lock, this run's own, the newest earlier tree backup, the newest earlier valid coordination snapshot and the newest earlier one that holds data; hand-made siblings are never touched)"
