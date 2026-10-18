@@ -8592,6 +8592,11 @@ const EXPORT_MARKS_CHECKED_META = 'export_marks_checked_ms';
 /** meta: the bind facts the last check covered, as lib decideMarkCheck's `record` gives them (a JSON list of
  *  `bound:<ms>` keys). */
 const EXPORT_MARKS_CHECKED_BINDS_META = 'export_marks_checked_binds';
+/** Lost live blob ids the bind check hands the referrer clears at a time (D-5395 (history-export-mark-needs-its-blobs)):
+ *  bound as one JSON array a batch, so the check's memory is a batch and never every lost blob of a store (1,000,000 of them
+ *  cost 609 MB of rows and 3,000,000 over 1.3 GB, past the unit's memory cap; a smaller old-space limit aborted the process
+ *  inside the transaction). An in-process test's ctx.deps.exportBindBatch overrides it (D-4247). */
+const EXPORT_BIND_BATCH = 50_000;
 
 /** The meta keys that may be bind facts: every adopt, restore and rebuild writes `bound:<ms>` inside its binding
  *  transaction (B2's D-4724 (history-binding-facts-before-link)). A measurement only: lib decideMarkCheck says which are facts.
@@ -8624,16 +8629,25 @@ export function checkSegmentMarks(db, ctx, record) {
   withTx(db, 'NORMAL', () => {
     if (segments.length > 0) {
       // Set-wise, once for every missing segment (the names bound as one JSON array): one scan of the blobs for the live ones
-      // whose marks go, four statements for their referrers, then the two clears of the marks themselves. Per segment and
-      // per blob this took 6.7 s on 300,000 blobs and entries over 30 segments (measured), set-wise 1.7 to 2.0 s.
+      // whose marks go, four statements a batch of them for their referrers, then the two clears of the marks themselves. Per
+      // segment and per blob this took 6.7 s on 300,000 blobs and entries over 30 segments (measured), set-wise 1.7 to 2.0 s.
       const names = JSON.stringify(segments);
       // D-5395 (history-export-mark-needs-its-blobs): the live blobs whose marks name a missing segment, collected BEFORE their
       // marks go. An entry that references one of them stays marked with a segment that IS here, and its blob is exported no
       // more, so the entries get their marks cleared with the blobs' (a pruned blob owes nothing: a stub is all there is to
       // export). Each entry is counted once, here or in the clear of its own segment's marks below.
-      const lost = db.prepare('SELECT blob_id FROM blobs WHERE exported_seg IN (SELECT value FROM json_each(?)) AND z IS NOT NULL')
-        .all(names).map((r) => Number(r.blob_id));
-      cleared += clearReferrerMarks(db, lost);
+      // Iterated, never materialised, and handed to the clears a batch at a time: the referrer clears touch `entries` only and
+      // the blobs' marks go after the last of them, so the cursor over `blobs` is never written under.
+      const batch = Number.isSafeInteger(ctx.deps?.exportBindBatch) && ctx.deps.exportBindBatch > 0 ? ctx.deps.exportBindBatch : EXPORT_BIND_BATCH;
+      let ids = [];
+      for (const r of db.prepare('SELECT blob_id FROM blobs WHERE exported_seg IN (SELECT value FROM json_each(?)) AND z IS NOT NULL').iterate(names)) {
+        ids.push(Number(r.blob_id));
+        if (ids.length >= batch) {
+          cleared += clearReferrerMarks(db, ids);
+          ids = [];
+        }
+      }
+      cleared += clearReferrerMarks(db, ids);
       cleared += Number(db.prepare('UPDATE blobs SET exported_ms = NULL, exported_seg = NULL WHERE exported_seg IN (SELECT value FROM json_each(?))').run(names).changes);
       cleared += Number(db.prepare('UPDATE entries SET exported_ms = NULL, exported_seg = NULL WHERE exported_seg IN (SELECT value FROM json_each(?))').run(names).changes);
     }

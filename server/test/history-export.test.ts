@@ -1698,7 +1698,7 @@ describe('the selection reaches the due rows within its budget (W1-B4 whole-bran
     expect(metaOf(box, 'export_attempt_ms'), 'a pass that ran to its end clears the attempt clock').toBeNull();
   }, 300_000);
 
-  it('(c) a pass that TOOK rows but wrote none because the budget ended records its attempt and says so once, like one that took nothing; history-off still records nothing', async () => {
+  it('(c) a pass that TOOK rows but wrote none because the budget ended records its attempt and says so once, like one that took nothing', async () => {
     const { box, ids } = ingestedBox('ccrc-history-export-held-taken-', [row(1, 'one', 2 * DAY), row(2, 'two', DAY)]);
     const T = Date.now() + 2 * HOUR;   // past the store's first hour: the cadence would run a pass here
     // The run's clock reads, in order: the budget's start, the pass's own, the check before the selection, the check after the
@@ -1920,6 +1920,66 @@ describe('D-5395: the mark invariant adds no statement for a fresh blob and read
     expect(metaOf(box, HEALTH_META.exportSegmentMissing)).toBe('10');
     expect(r.stranded).toEqual([]);
   }, 120_000);
+
+  it('the bind check hands the referrer clears its lost blob ids in bounded batches (ctx.deps.exportBindBatch overrides the size): ceil(N/batch) rounds of four statements, and the same cleared count and end state as one unbounded batch', async () => {
+    /** One box with the same fixture every time: five live blobs lost across TWO missing segments (S1, S3), one pruned stub S1
+     *  marked, each lost blob referenced by an entry that a PRESENT segment (S2) marked through a different reference, and one
+     *  entry marked with the missing segment itself. */
+    const fixture = async (prefix: string, batch: number | undefined) => {
+      const { box, ids } = ingestedBox(prefix, [row(1, 'a prompt', DAY)]);
+      const S1 = `1.${ids.writer}.db`;
+      const S3 = `3.${ids.writer}.db`;
+      const S2 = path.basename(plantSegment(box, ids.storeId, { seq: 2, writer: ids.writer, blobs: [], rows: [] }));
+      const r = await onStore(box, async (db) => {
+        const one = (sql: string): number => Number((db.prepare(sql).get() as { n: number }).n);
+        const tp = one('SELECT transcript_pk AS n FROM transcripts');
+        const file = one('SELECT file_id AS n FROM ingest_files');
+        const blob = (name: string, seg: string, live: boolean): number => Number(db.prepare(
+          'INSERT INTO blobs (sha256, codec, z, raw_len, pruned_ms, exported_ms, exported_seg) VALUES (?, ?, ?, 4, ?, 1, ?)')
+          .run(createHash('sha256').update(name).digest(), 'br5', live ? Buffer.from('zz') : null, live ? null : 1, seg).lastInsertRowid);
+        const entry = (uuid: string, blobId: number, seg: string): number => Number(db.prepare(
+          "INSERT INTO entries (uuid, transcript_pk, type, provenance, prov_version, struct_rank_ns, struct_file_id, blob_id, ts_ms, exported_ms, exported_seg) VALUES (?, ?, 'user', 'x', 1, 0, ?, ?, 1, 1, ?)")
+          .run(uuid, tp, file, blobId, seg).lastInsertRowid);
+        const held = blob('held in a segment that is here', S2, true);
+        const lost = [blob('a', S1, true), blob('b', S1, true), blob('c', S1, true), blob('d', S3, true), blob('e', S3, true)];
+        blob('a stub', S1, false);
+        const own = entry(rid(21), lost[0]!, S2);                       // its own blob lost
+        const variant = entry(rid(22), held, S2);
+        const sidecar = entry(rid(23), held, S2);
+        const kept = entry(rid(24), held, S2);
+        const own2 = entry(rid(25), lost[4]!, S2);
+        entry(rid(26), held, S1);                                        // marked with a missing segment itself
+        entry(rid(27), held, S2);                                        // references nothing lost: keeps its mark
+        db.prepare('INSERT INTO entry_variants (entry_id, blob_id, first_file_id, first_seen_ms) VALUES (?, ?, ?, 1)').run(variant, lost[1]!, file);
+        db.prepare('INSERT INTO sidecars (transcript_pk, name, blob_id, entry_id, first_seen_ms) VALUES (?, ?, ?, ?, 1)').run(tp, 'linked.txt', lost[2]!, sidecar);
+        db.prepare('INSERT INTO boundaries (entry_id, transcript_pk, ord, kept_blob_id) VALUES (?, ?, 1, ?)').run(kept, tp, lost[3]!);
+        void own; void own2;
+        expect(strandedBlobsOn(db), 'CONTROL: marked blobs strand nobody').toEqual([]);
+        const watch = counting(db);
+        const out = SW.checkSegmentMarks(watch.db, { paths: historyPaths(box.home), ids, now: () => 1, deps: batch === undefined ? {} : { exportBindBatch: batch } }, '["bound:1"]');
+        return { out, stranded: strandedBlobsOn(db), ran: watch.ran };
+      });
+      const arms = r.ran.filter((t) => /^UPDATE entries SET exported_ms = NULL, exported_seg = NULL WHERE exported_ms IS NOT NULL/.test(t)).length;
+      const state = {
+        blobs: q(box, 'SELECT lower(hex(sha256)) AS sha, exported_ms, exported_seg FROM blobs WHERE z IS NOT NULL OR pruned_ms IS NOT NULL ORDER BY sha'),
+        entries: q(box, 'SELECT uuid, exported_ms, exported_seg FROM entries ORDER BY uuid'),
+      };
+      return { cleared: r.out.cleared, segments: r.out.segments, arms, stranded: r.stranded, state, S1, S2, S3 };
+    };
+    const one = await fixture('ccrc-history-export-batch-one-', undefined);
+    const two = await fixture('ccrc-history-export-batch-two-', 2);
+    expect(one.segments, 'two missing segments').toEqual([one.S1, one.S3]);
+    expect(one.arms, 'five ids fit one default batch: four statements, one for each reference').toBe(4);
+    expect(two.arms, 'five ids in batches of two: three batches, four statements each').toBe(12);
+    // blobs: five live + the stub = 6; entries: the five referrers (own x2, variant, sidecar, kept) + the one marked S1 itself = 6
+    expect(one.cleared).toBe(12);
+    expect(two.cleared, 'the batch size moves no count').toBe(one.cleared);
+    expect(two.stranded).toEqual([]);
+    // the end state, by content (the two boxes mint their own writer names, so compare with the names normalised)
+    const norm = (st: typeof one.state, who: typeof one): unknown => JSON.parse(JSON.stringify(st).replaceAll(who.S1, 'S1').replaceAll(who.S2, 'S2').replaceAll(who.S3, 'S3'));
+    expect(norm(two.state, two), 'the same end state as one unbounded batch').toEqual(norm(one.state, one));
+    expect((one.state.entries as Array<Record<string, unknown>>).filter((e) => e['exported_seg'] !== null).map((e) => e['uuid']).sort(), 'only the entry that references nothing lost keeps its mark, and the exported one').toContain(rid(27));
+  }, 300_000);
 
   it('the hot path: a chunk that stores a fresh blob runs the insert and the id read and nothing about marks; a revival adds the revive, one read, and the four referrer clears only when the blob is unmarked', async () => {
     const { box } = ingestedBox('ccrc-history-export-hotpath-', [row(1, 'a prompt', DAY)]);
