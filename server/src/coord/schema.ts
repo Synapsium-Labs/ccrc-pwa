@@ -1625,7 +1625,7 @@ export const MIGRATIONS: readonly string[] = [
   // (`approvalWindowMs`, D-5441). `state` is an `ApprovalState`, read through `isApprovalState`, never a cast;
   // `releaseReason` an `ApprovalReleaseReason`, set only on a row minted `released`. `ruling` is the signed record as
   // the hook fetches it (`{record, sig}` JSON). `toolUseId` and `corrected` are the journal's later joins (the
-  // PostToolUse that followed; Task 17's correction mail), NULL and 0 until then.
+  // PostToolUse that followed, not built yet, D-5491; Task 17's correction mail), NULL and 0 until then.
   //
   // A NEW TABLE AND NOTHING ELSE: an older build opening a file at `user_version 24` takes rule 3 (it warns, reads
   // as-is and migrates nothing) and never names it. Every earlier entry is frozen. RE-MEASURE the slot immediately

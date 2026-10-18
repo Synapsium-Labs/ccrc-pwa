@@ -5,7 +5,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
 import { buildServer } from '../src/server.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
@@ -56,7 +56,8 @@ export function hookInput(o: { cwd?: string | null; agentId?: string; command?: 
 export const sha256 = (s: string): string => createHash('sha256').update(s, 'utf8').digest('hex');
 
 /** The request body the hook sends for `input` (`ApprovalRequestBody`): the canonical array, its digest, a fresh nonce. */
-export function requestBody(input: Record<string, unknown>, id = CHILD): Record<string, unknown> {
+export type RequestBody = Record<string, unknown> & { canonical: string; digest: string; nonce: string };
+export function requestBody(input: Record<string, unknown>, id = CHILD): RequestBody {
   const canonical = approvalDigestBytes(input);
   if (canonical === null) throw new Error('the fixture input has no canonical form');
   return { v: 1, sessionId: id, sessionUuid: uuidOf(id), canonical, digest: sha256(canonical), nonce: randomBytes(16).toString('hex') };
@@ -71,10 +72,10 @@ export interface Approvals {
   child(id: string, runId: number, o?: { deny?: string | null; shell?: string | null }): void;
   /** Open a run claimed by `claimedBy` (attributed: stamped `coordProject`) naming `sessionId`. */
   run(claimedBy: string | null, sessionId: string, o?: { project?: string; coordProject?: string | null; unattributed?: boolean; program?: string }): number;
-  request(body: Record<string, unknown>): ReturnType<FastifyInstance['inject']>;
-  rule(id: number, from: string, verdict: 'allow' | 'deny', extra?: Record<string, unknown>): ReturnType<FastifyInstance['inject']>;
-  release(id: number, from: string): ReturnType<FastifyInstance['inject']>;
-  ruling(id: number, nonce: string): ReturnType<FastifyInstance['inject']>;
+  request(body: Record<string, unknown>): Promise<LightMyRequestResponse>;
+  rule(id: number, from: string, verdict: 'allow' | 'deny', extra?: Record<string, unknown>): Promise<LightMyRequestResponse>;
+  release(id: number, from: string): Promise<LightMyRequestResponse>;
+  ruling(id: number, nonce: string): Promise<LightMyRequestResponse>;
   close(): Promise<void>;
 }
 

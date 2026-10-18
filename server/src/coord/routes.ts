@@ -4264,7 +4264,7 @@ export function registerCoordRoutes(
   /** The unredacted input a held row was classified from, kept ONLY in memory and only for the row's window (spec
    *  §6.7: the server holds the unredacted input only for the request), so the rule route can run the guard again
    *  (spec §6.3 server step 5). A server restarted mid-window has none, and then an allow is refused `guard-escalate`
-   *  (the guard cannot be re-run, and unknown means escalate); a deny still lands. */
+   *  (the guard cannot be re-run, and unknown means escalate); a deny still lands (D-5491). */
   const approvalInputs = new Map<number, { tool: string; input: Record<string, unknown>; cwd: string | null; until: number }>();
   const forgetExpiredInputs = (now: number): void => {
     for (const [k, v] of approvalInputs) if (v.until <= now) approvalInputs.delete(k);

@@ -8809,7 +8809,8 @@ export class FleetWatcher {
   }
 
   /** A painted approval dialog went away (`detectDialogs`' clear branch): its deferred push is dropped, and its rows
-   *  that no principal ruled become `operator` — the prompt was answered in the pane (spec §6.3 server step 5). */
+   *  that no principal ruled become `operator` — the prompt was answered in the pane (spec §6.3 server step 5). Only the
+   *  rows its deferred push covered, so a background subagent's hidden wait (D-5440) is not ended by it (D-5491). */
   private settleClearedApproval(childId: string, dialogId: string): void {
     const entry = this.heldApprovals.get(childId);
     if (entry === undefined || entry.dialogId !== dialogId) return;

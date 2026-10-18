@@ -16,7 +16,7 @@ import { createPrivateKey, createPublicKey, generateKeyPairSync, sign, type KeyO
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import {
-  APPROVAL_SIGNING_KEY_FILE, approvalRulingBytes, type ApprovalRulingRecord,
+  APPROVAL_SIGNING_KEY_FILE, approvalRulingBytes, isApprovalRefusal, isApprovalReleaseReason, type ApprovalRulingRecord,
 } from '../../../shared/api.js';
 import type { NodeRole } from '../../../shared/node-role.js';
 
@@ -85,4 +85,12 @@ export function rulingsAllowedHere(role: NodeRole, ccrcDir: string): boolean {
 /** The server box's kill switch, read at each mint and each signing (spec §6.8). */
 export function serverApprovalsDisabled(ccrcDir: string): boolean {
   return existsSync(path.join(ccrcDir, APPROVALS_DISABLED_FILE));
+}
+
+/** The approvals lane's kebab words under `server/src/coord` (plan Task 16): its route refusals (`ApprovalRefusal`),
+ *  its release reasons (`ApprovalReleaseReason`, the asks lane's fail-closed words among them) and its two operator
+ *  files. `mail-routes.test.ts`'s scanner admits them through this guard, as every lane's own. */
+export function isApprovalKebab(tok: string): boolean {
+  return isApprovalRefusal(tok) || isApprovalReleaseReason(tok)
+    || tok === APPROVALS_SINGLE_BOX_FILE || tok === APPROVALS_DISABLED_FILE;
 }

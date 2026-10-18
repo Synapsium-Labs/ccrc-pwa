@@ -157,7 +157,7 @@ describe('POST /api/approvals — the request (spec §6.3 server steps 1 and 2)'
 
   it('a truncated request is minted released truncated', async () => {
     f = await standardFixture();
-    const b = requestBody(ORDINARY);
+    const b: Record<string, unknown> = { ...requestBody(ORDINARY) };
     delete b['canonical'];
     const res = await f.request({ ...b, truncated: true });
     expect(res.json()).toMatchObject({ error: 'approval-released', releaseReason: 'truncated' });

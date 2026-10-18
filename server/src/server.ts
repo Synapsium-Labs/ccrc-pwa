@@ -2178,7 +2178,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // D-5298 (spec §6.3 server step 7): an approval dialog records the operator on the child's open approval rows
     // BEFORE any key, so every approval has an answering principal and a claimant's later ruling is
     // `409 already-ruled`. Read off the watcher's hookstate; with none to read, the rows are marked anyway — the
-    // operator answering is the one principal that always wins.
+    // operator answering is the one principal that always wins (D-5491).
     const hs = watcher?.currentHookStates().get(id) ?? null;
     if (hs === null || (hs.ask !== null && 'approval' in hs.ask)) {
       try {

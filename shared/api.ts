@@ -11421,10 +11421,16 @@ export function isApprovalReleaseReason(v: unknown): v is ApprovalReleaseReason 
  *  `hook-gone`           the row's window has passed: the hook has returned and cannot print a ruling (D-5441).
  *  `already-ruled`       a principal (the claimant or the operator) already acted on the row.
  */
-export type ApprovalRefusal =
-  | 'not-a-child' | 'approvals-disabled' | 'single-box' | 'deny-not-engaged' | 'digest-mismatch'
-  | 'version-unverified' | 'approval-released' | 'unknown-approval' | 'approval-unreadable' | 'parent-changed'
-  | 'guard-forbidden' | 'guard-escalate' | 'declined' | 'hook-gone' | 'already-ruled';
+export const APPROVAL_REFUSALS = [
+  'not-a-child', 'approvals-disabled', 'single-box', 'deny-not-engaged', 'digest-mismatch',
+  'version-unverified', 'approval-released', 'unknown-approval', 'approval-unreadable', 'parent-changed',
+  'guard-forbidden', 'guard-escalate', 'declined', 'hook-gone', 'already-ruled',
+] as const;
+export type ApprovalRefusal = (typeof APPROVAL_REFUSALS)[number];
+
+export function isApprovalRefusal(v: unknown): v is ApprovalRefusal {
+  return typeof v === 'string' && (APPROVAL_REFUSALS as readonly string[]).includes(v);
+}
 
 /** `POST /api/approvals/:id/rule`'s body: the attribution pair, the verdict and a reason (at most
  *  `APPROVAL_REASON_MAX_CHARS`, one line). Nothing else: `permanent`, `updatedPermissions` and `mode` are refused
