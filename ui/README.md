@@ -212,6 +212,34 @@ its class's rule does not fit the value, the value is probably a colour or a
 new size, and it belongs in a palette or on a scale instead. The element half
 of the guard, which covers the shells themselves, lands with W2.
 
+## Fonts
+
+The Geist pair is self-hosted (D-5095). Nothing is fetched from a font host,
+and `geist` is not a dependency (spec §12 O5).
+
+- **The files.** `src/fonts/Geist-Variable.woff2` and
+  `src/fonts/GeistMono-Variable.woff2`, each one variable file covering weights
+  100 to 900, and `src/fonts/OFL.txt`, all taken unchanged from the `geist`
+  npm package at **1.8.1** (`npm pack geist@1.8.1` in a scratch directory).
+  The note above the faces in `src/styles/tokens.css` records each file's
+  SHA-256, and `pwa/test/fonts.test.ts` holds them.
+- **The rules.** Two top-level `@font-face` rules atop `src/styles/tokens.css`
+  declare `'Geist'` and `'Geist Mono'` with `font-display: swap`, beside the
+  stacks that name them. They are not in a `fonts.css` of their own (D-5450):
+  the contrast gate requires every stylesheet under `src/` to hold a style
+  rule. Vite resolves each `url()` from `src/styles/`, in the app's build and
+  in Storybook's, and emits a hashed asset under `/assets/`.
+- **The stacks.** `--family-ui` and `--family-mono` lead with the pair and keep
+  the system stacks behind it, so a glyph Geist lacks falls back, per glyph,
+  to a system face.
+- **The licence.** SIL Open Font License 1.1. The app ships a byte-identical
+  copy at `/licenses/Geist-OFL.txt` (`pwa/public/licenses/`), and the service
+  worker never answers `/licenses/` with the app shell (`swDenylist`).
+- **To update the pair,** pack the new release, copy the three files over,
+  and change the version and the hashes in `tokens.css`, in this section and
+  in `fonts.test.ts`, together. Copy `OFL.txt` to `pwa/public/licenses/Geist-OFL.txt`
+  again.
+
 ## Hook classes
 
 Components carry their original bare class names (`btn-primary`, `sheet-panel`,
