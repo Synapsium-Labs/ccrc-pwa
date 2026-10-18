@@ -441,6 +441,23 @@ a different project is refused `project-mismatch` with `by:` the project that
 session's workspace belongs to — at the open, and again at the dispatch resume if
 the open ever let one through.
 
+**A crossing wave always spawns fresh, even into a project an earlier wave
+already reached.** The server admits your open when your OWN registry project is
+the run's project or the programme's home; a crossing (you sit in the home, the
+run is elsewhere) binds only a fresh spawn. Naming an EXISTING session of the
+target project from outside it is refused `project-mismatch` with `by:` your
+project and a `detail` that says so, so wave 3 into the same target as wave 2
+opens without `sessionId` too. A coordinator in neither the home nor the run's
+project is refused `project-mismatch` with `by:` its own project.
+
+**Two more `POST /api/runs` refusals, both on `refused` (409).** `not-a-child`:
+the `sessionId` you named is an existing session with no child marker — one the
+operator created — and only a dispatched child is ever bound to a run; open
+without `sessionId` and let dispatch spawn one. `attribution-required`: the
+fleet box's `ccrc-api` is new enough to send your `claimedByUuid` and this open
+carried none; the `detail` says to upgrade the fleet box's `ccrc-api` (`ccrc
+rollout`) — `"$API" runs open` sends it for you, so this means an old client.
+
 **What a crossing costs, so a cap refusal reads as arithmetic rather than a
 fault.** The cap rule is exact: concurrency counts dispatched runs in an ACTIVE
 state, not held workspaces and not merely non-terminal ones. A terminal producer

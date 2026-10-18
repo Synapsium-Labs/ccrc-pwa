@@ -43,6 +43,7 @@ const REVIEW = {
 } as const;
 const STALE = { ok: false as const, error: 'stale-uuid' as const, detail: 'claimedByUuid does not match the registry — stale sender; re-read your own .uuid' };
 const NO_PROJECT_DETAIL = "the claimant's registry row records no project, so it cannot be the run's";
+const CROSSING_DETAIL = "ws-1 is an existing session of demo and the claimant is of demo-home — a crossing wave opens without sessionId and spawns fresh";
 const NOT_A_CHILD_DETAIL = 'ws-1 is a registry row with no child marker — a session the operator created is never bound as a child';
 
 const reviewed = (over: Partial<ReviewedRunFacts> = {}): ReviewedRunFacts => ({
@@ -60,6 +61,7 @@ function facts(body: Record<string, unknown>, over: Partial<OpenRunFacts> = {}):
     openClaimantsOf: () => [],
     fleetCarriesAttribution: true,
     attribute: async () => ({ ok: true }),
+    claimantListed: async () => ({ ok: true }),
     claimantProject: async () => ({ kind: 'measured', project: 'demo' }),
     sessionMark: async () => ({ kind: 'absent' }),
     ...over,
@@ -92,6 +94,10 @@ const SINGLE: Row[] = [
     refusal: { error: 'bad-request', detail: 'sessionId is refused on a review run — it always spawns fresh on its own workspace' } },
   { name: 'no claimedByUuid once the fleet carries the client', gate: 'attribution', f: facts({ ...WORK, claimedByUuid: undefined }),
     refusal: { refused: 'attribution-required', detail: "upgrade the fleet box's ccrc-api (ccrc rollout)" } },
+  { name: 'an unattributed claimant that is not a listed registry row, before the switch-over', gate: 'attribution',
+    f: facts({ ...WORK, claimedByUuid: undefined }, { fleetCarriesAttribution: false,
+      claimantListed: async () => ({ ok: false, error: 'unknown-sender', detail: 'no registry row for coord-1' }) }),
+    refusal: { error: 'unknown-sender', detail: 'no registry row for coord-1' } },
   { name: 'a stale claimedByUuid', gate: 'attribution', f: facts({ ...WORK }, { attribute: async () => STALE }),
     refusal: { error: 'stale-uuid', detail: STALE.detail } },
   { name: 'an unreadable reviewed run', gate: 'reviewRead',
@@ -141,7 +147,7 @@ const SINGLE: Row[] = [
     f: facts({ ...WORK }, { claimantProject: async () => ({ kind: 'unreadable' }) }),
     refusal: { error: 'registry-unmeasurable', detail: "the claimant's registry project could not be read — transient, not a fact about the claimant" } },
   { name: "a review whose claimant's project is not the REVIEWED run's", gate: 'claimantProject',
-    f: facts({ ...REVIEW }, { reviewed: () => ({ ok: true, run: reviewed({ project: 'demo-2' }) }) }),
+    f: facts({ ...REVIEW, homeProject: 'demo-home' }, { reviewed: () => ({ ok: true, run: reviewed({ project: 'demo-2' }) }) }),
     refusal: { refused: 'project-mismatch', by: 'demo' } },
   { name: 'a sessionId naming a row with no child marker', gate: 'notAChild',
     f: facts({ ...WORK, sessionId: 'ws-1' }, { sessionMark: async () => ({ kind: 'root' }) }),
@@ -149,6 +155,10 @@ const SINGLE: Row[] = [
   { name: 'a sessionId listed but unbuilt', gate: 'notAChild',
     f: facts({ ...WORK, sessionId: 'ws-1' }, { sessionMark: async () => ({ kind: 'unbuilt' }) }),
     refusal: { error: 'registry-unmeasurable', detail: 'registry row for ws-1 is listed but unreadable — transient, not a fact about the session' } },
+  { name: "a crossing coordinator binding an existing child of the run's project", gate: 'crossingSession',
+    f: facts({ ...WORK, homeProject: 'demo-home', sessionId: 'ws-1' }, {
+      claimantProject: async () => ({ kind: 'measured', project: 'demo-home' }), sessionMark: async () => ({ kind: 'child' }) }),
+    refusal: { refused: 'project-mismatch', by: 'demo-home', detail: CROSSING_DETAIL } },
 ];
 
 /** One row per adjacent order-dependent pair: the body trips both, the
@@ -229,6 +239,7 @@ const PAIRS: (Row & { pair: [OpenRunGate, OpenRunGate] })[] = [
  *  a PAIRS row to the next gate the earlier one can meet. */
 const EXCLUSIVE_PAIRS: { pair: [OpenRunGate, OpenRunGate]; why: string }[] = [
   { pair: ['reviewsOnWork', 'reviewsId'], why: 'the first trips only a work run, the second only a review run' },
+  { pair: ['notAChild', 'crossingSession'], why: 'the first trips only a root or an unbuilt row, the second only a child row' },
 ];
 
 describe('openRunPreconditions — one row per gate (D-5384)', () => {
@@ -284,6 +295,45 @@ const SHAPE_CLAUSES: { name: string; body: Record<string, unknown> }[] = [
   { name: 'an empty claimedByUuid', body: { ...WORK, claimedByUuid: '' } },
   { name: 'a whitespace-only claimedByUuid', body: { ...WORK, claimedByUuid: ' ' } },
 ];
+
+/** A programme's waves may run in ANY project (the cross-repo ruling,
+ *  2026-08-11): a claimant of the programme's HOME is admitted into another
+ *  project's run, the home stored or (on a first open) the body's own — and
+ *  never by binding an existing session of that project (D-5388, as amended). */
+describe("openRunPreconditions — a crossing is the home's claimant (D-5388)", () => {
+  const AT_HOME = { claimantProject: async () => ({ kind: 'measured' as const, project: 'demo-home' }) };
+  it('admits a fresh-spawn crossing whose claimant is of the body home, stamping the claimant project', async () => {
+    expect(await openRunPreconditions(facts({ ...WORK, homeProject: 'demo-home' }, AT_HOME)))
+      .toMatchObject({ ok: true, open: { project: 'demo', coordProject: 'demo-home' } });
+  });
+  it('admits a crossing against the STORED home', async () => {
+    expect(await openRunPreconditions(facts({ ...WORK, homeProject: 'demo-home' },
+      { ...AT_HOME, programKnown: () => true, programHome: () => 'demo-home' })))
+      .toMatchObject({ ok: true, open: { coordProject: 'demo-home' } });
+  });
+  it('admits a legacy open (no body home) against the stored home', async () => {
+    expect(await openRunPreconditions(facts({ ...WORK, homeProject: undefined },
+      { ...AT_HOME, legacyAccepted: true, programKnown: () => true, programHome: () => 'demo-home' })))
+      .toMatchObject({ ok: true, open: { coordProject: 'demo-home' } });
+  });
+  it('refuses a legacy open with no home anywhere when the claimant is not of the run', async () => {
+    expect(await openRunPreconditions(facts({ ...WORK, homeProject: undefined }, { ...AT_HOME, legacyAccepted: true })))
+      .toStrictEqual({ ok: false, refusal: { gate: 'claimantProject', refused: 'project-mismatch', by: 'demo-home' } });
+  });
+  it('admits a crossing naming a sessionId that is not yet a registry row (the dispatch before ws-add)', async () => {
+    expect(await openRunPreconditions(facts({ ...WORK, homeProject: 'demo-home', sessionId: 'ws-1' }, AT_HOME)))
+      .toMatchObject({ ok: true, open: { sessionId: 'ws-1', coordProject: 'demo-home' } });
+  });
+  it("admits the run project's own claimant binding an existing child", async () => {
+    expect(await openRunPreconditions(facts({ ...WORK, sessionId: 'ws-1' }, { sessionMark: async () => ({ kind: 'child' }) })))
+      .toMatchObject({ ok: true, open: { sessionId: 'ws-1', coordProject: 'demo' } });
+  });
+  it('refuses a claimant of neither the home nor the run', async () => {
+    expect(await openRunPreconditions(facts({ ...WORK, homeProject: 'demo-home' },
+      { claimantProject: async () => ({ kind: 'measured', project: 'demo-c' }) })))
+      .toStrictEqual({ ok: false, refusal: { gate: 'claimantProject', refused: 'project-mismatch', by: 'demo-c' } });
+  });
+});
 
 describe('openRunPreconditions — the shape gate, one row per clause (D-5384)', () => {
   for (const r of SHAPE_CLAUSES) {
@@ -391,7 +441,7 @@ describe('openRunPreconditions — the switch-over and the binding (D-5298)', ()
   });
 
   it('the project gate compares the body project UNTRIMMED, as F1 does', async () => {
-    expect(await openRunPreconditions(facts({ ...WORK, project: ' demo ' })))
+    expect(await openRunPreconditions(facts({ ...WORK, project: ' demo ', homeProject: 'demo-home' })))
       .toStrictEqual({ ok: false, refusal: { gate: 'claimantProject', refused: 'project-mismatch', by: 'demo' } });
   });
 });

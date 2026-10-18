@@ -68,6 +68,11 @@ export interface OpenRunFacts {
   /** D-5298: the claim lanes' attribution check (`requireAttribution`'s
    *  verdict, `coord/routes.ts`) for `claimedBy` against `claimedByUuid`. */
   readonly attribute: (claimant: string, uuid: string) => Promise<AttributionRead>;
+  /** D-5298: an UNATTRIBUTED claimant (before the switch-over) is a listed
+   *  registry row — `<claimant>.uuid` in the registry listing — or
+   *  `unknown-sender`, so no later gate path-joins an unlisted id (`../x`)
+   *  into a field read. */
+  readonly claimantListed: (claimant: string) => Promise<AttributionRead>;
   /** D-5298: the claimant's OWN registry project, MEASURED (`fieldMeasured`,
    *  never `SessionRecord.project`'s `project ?? id` default). */
   readonly claimantProject: (claimant: string) => Promise<ClaimantProjectRead>;
@@ -217,6 +222,10 @@ interface Ctx {
   verdict?: HomeProjectVerdict;
   unattributed?: boolean;
   coordProject?: string;
+  /** The programme's home after `homeVerdict`: the body's shaped home, else
+   *  (a legacy open) the stored one, else null. */
+  effectiveHome?: string | null;
+  mark?: SessionMarkRead;
 }
 
 type GateResult = { error: 'bad-request'; detail?: string } | { error: 'run-unreadable' | AttributionRefusal; detail: string }
@@ -280,6 +289,8 @@ const GATES = [
     const uuid = c.b.claimedByUuid;
     if (uuid === undefined) {
       if (c.f.fleetCarriesAttribution) return { refused: 'attribution-required', detail: ATTRIBUTION_REQUIRED_DETAIL };
+      const listed = await c.f.claimantListed(c.b.claimedBy as string);
+      if (!listed.ok) return { error: listed.error, detail: listed.detail };
       c.unattributed = true;
       return undefined;
     }
@@ -327,6 +338,7 @@ const GATES = [
     c.verdict = v;
     if (v.kind === 'mismatch') return { refused: 'home-mismatch', by: v.by };
     if (v.kind === 'required') return bad('homeProject is required');
+    c.effectiveHome = c.home !== undefined ? c.home : known ? c.f.programHome(c.slug!) : null;
     return undefined;
   }],
   // §12: a dispatched worker may not coordinate. EVERY open claimant is read
@@ -336,14 +348,18 @@ const GATES = [
     const workerOf = c.f.openClaimantsOf(c.b.claimedBy as string).find((x) => x !== c.b.claimedBy);
     return workerOf !== undefined ? { refused: 'claimant-is-a-worker', by: workerOf } : undefined;
   }],
-  // D-5298 (spec §4, §6.4): a session in another project cannot become a
-  // child's parent. The claimant's OWN registry project must EQUAL the run's —
-  // not F1's weaker "the session's history agrees with the run". On every
-  // open, a `sessionId` or not: a fresh-spawn dispatch later makes a child of
-  // the run's project whose parent is this claimant. FAILS CLOSED (D-5388): a row that
-  // records no project is refused (`by` absent, the sentence says why), an
-  // unreadable field is the transient 502. After the DB-only gates — a
-  // registry read is the dearer one — and before `notAChild`.
+  // D-5298 (spec §4, §6.4), D-5388: a session in another project cannot
+  // become a child's parent. The claimant's OWN registry project must equal
+  // the run's — not F1's weaker "the session's history agrees with the run" —
+  // OR the programme's home (`effectiveHome`), because a programme's waves may
+  // run in ANY project (the cross-repo ruling of 2026-08-11): a crossing's
+  // coordinator sits in the home. A crossing binds only a fresh spawn
+  // (`crossingSession` below). On every open, a `sessionId` or not: a
+  // fresh-spawn dispatch later makes a child of the run's project whose parent
+  // is this claimant. FAILS CLOSED: a row that records no project is refused
+  // (`by` absent, the sentence says why), an unreadable field is the transient
+  // 502. After the DB-only gates — a registry read is the dearer one — and
+  // before `notAChild`.
   ['claimantProject', async (c) => {
     const project = c.target !== undefined ? c.target.project : c.b.project as string;
     const r = await c.f.claimantProject(c.b.claimedBy as string);
@@ -355,7 +371,7 @@ const GATES = [
       return { refused: 'project-mismatch', detail: "the claimant's registry row records no project, so it cannot be the run's" };
     }
     c.coordProject = r.project;
-    return r.project !== project ? { refused: 'project-mismatch', by: r.project } : undefined;
+    return r.project !== project && r.project !== c.effectiveHome ? { refused: 'project-mismatch', by: r.project } : undefined;
   }],
   // D-5298 (spec §4): a session the operator created cannot become a child. A
   // `sessionId` naming an existing registry row whose `ChildMark` is not
@@ -366,6 +382,7 @@ const GATES = [
   ['notAChild', async (c) => {
     if (typeof c.b.sessionId !== 'string') return undefined;
     const m = await c.f.sessionMark(c.b.sessionId);
+    c.mark = m;
     if (m.kind === 'root') {
       return { refused: 'not-a-child',
         detail: `${c.b.sessionId} is a registry row with no child marker — a session the operator created is never bound as a child` };
@@ -375,6 +392,20 @@ const GATES = [
         detail: `registry row for ${c.b.sessionId} is listed but unreadable — transient, not a fact about the session` };
     }
     return undefined;
+  }],
+  // D-5388: a crossing (the claimant is of the home, not of the run) binds
+  // only a FRESH spawn. An existing child row of the run's project would
+  // otherwise be rebound to a parent outside its project — a child of any
+  // other programme whose home a confused session claims. A row-less id (the
+  // dispatch before `ws-add`) is admitted, like `notAChild`'s; `deferred` is
+  // left to rule 3's child gate. Reads `notAChild`'s mark, never a second one.
+  ['crossingSession', (c) => {
+    if (typeof c.b.sessionId !== 'string' || c.mark?.kind !== 'child') return undefined;
+    const project = c.target !== undefined ? c.target.project : c.b.project as string;
+    return c.coordProject !== project
+      ? { refused: 'project-mismatch', by: c.coordProject,
+          detail: `${c.b.sessionId} is an existing session of ${project} and the claimant is of ${c.coordProject} — a crossing wave opens without sessionId and spawns fresh` }
+      : undefined;
   }],
 ] as const satisfies readonly (readonly [string, Gate])[];
 

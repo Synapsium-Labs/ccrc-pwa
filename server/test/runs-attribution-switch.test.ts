@@ -137,6 +137,22 @@ describe('POST /api/runs — the fleet carries the client (D-5298)', () => {
     expect(unattributedCount(w.coord)).toBe(0);
   });
 
+  it('a listed `.uuid` whose row cannot be built (and no `.child`) is 502 registry-unmeasurable, never admitted as row-less', async () => {
+    // A half-written entry: the `.uuid` is listed but `wrapper` and `workdir`
+    // are not, so no row is built around it. It cannot be proven absent, so
+    // the route answers `unbuilt`, not `absent` (the D-5298 route mapping).
+    const home = mkTmp('ccrc-attr-');
+    seedFleet(home);
+    const half = 'project-a-half-written';
+    writeFileSync(path.join(home, '.cc-sessions', `${half}.uuid`), `u-${half}`);
+    const w = await openApp(home); app = w.app;
+    const res = await post(app, { ...OPEN, ...attributed(PARENT), sessionId: half });
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toMatchObject({ ok: false, error: 'registry-unmeasurable' });
+    expect(okRuns(w.coord.runs()), 'a refused open left a planned orphan').toHaveLength(0);
+    expect(w.coord.parentOfSession(half)).toBeNull();
+  });
+
   it('not a child: naming an existing row with no `.child` is 409 not-a-child, and that root stays unbound', async () => {
     const home = mkTmp('ccrc-attr-');
     seedFleet(home);
@@ -198,6 +214,22 @@ describe('POST /api/runs — the fleet does not carry the client yet (D-5298)', 
       expect(okRuns(w.coord.runs())).toHaveLength(0);
     });
   }
+
+  it('an unattributed claimedBy that is not a listed registry row is 403 unknown-sender, never path-joined into a field read', async () => {
+    // `../outside` would read `<registryDir>/../outside.project`, a file
+    // outside the registry: its content must neither admit the open nor come
+    // back as `by`.
+    const home = mkTmp('ccrc-attr-');
+    seedFleet(home);
+    writeFileSync(path.join(home, 'outside.project'), 'project-a');
+    const w = await openApp(home, notUpgraded(null)); app = w.app;
+    for (const claimedBy of ['../outside', 'project-a-not-listed']) {
+      const res = await post(app, { ...OPEN, claimedBy });
+      expect(res.statusCode, claimedBy).toBe(403);
+      expect(res.json()).toMatchObject({ ok: false, error: 'unknown-sender' });
+    }
+    expect(okRuns(w.coord.runs())).toHaveLength(0);
+  });
 
   it('a stale uuid is still refused before the switch-over (a sent uuid is always checked)', async () => {
     const home = mkTmp('ccrc-attr-');

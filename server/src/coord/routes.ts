@@ -1387,6 +1387,14 @@ export function registerCoordRoutes(
       fleetCarriesAttribution: fleetCarriesRunsAttribution(
         deps.cfg.role, deps.build ?? null, deps.fleetState?.build ?? null),
       attribute: (who, uuid) => attributionVerdict(who, uuid, 'claimedByUuid'),
+      claimantListed: async (who) => {
+        const names = await deps.io.readdir(deps.cfg.registryDir);
+        if (names === null) {
+          return { ok: false, error: 'registry-unmeasurable',
+            detail: 'the registry directory could not be listed, so the claimant could not be checked' };
+        }
+        return names.includes(`${who}.uuid`) ? { ok: true } : { ok: false, error: 'unknown-sender', detail: `no registry row for ${who}` };
+      },
       // MEASURED, through `fieldMeasured` — never `SessionRecord.project`,
       // whose `project ?? id` collapsing default (`registry.ts`'s
       // `buildRecord`) would otherwise answer as if it were a measurement

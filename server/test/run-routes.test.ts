@@ -272,6 +272,28 @@ describe('POST /api/runs', () => {
     expect(okRun(w.coord.run((ok.json() as { id: number }).id))?.coordProject).toBe(PROJECT);
   });
 
+  it('admits a crossing — a claimant of the programme\'s HOME opening a run elsewhere — and stamps the home (D-5388)', async () => {
+    // The cross-repo ruling: a programme's waves may run in ANY project, and
+    // the coordinator sits in the home. A fresh-spawn crossing is admitted and
+    // its stamp is the claimant's measured project, which is what the board's
+    // crossing marking reads. Binding an EXISTING child of the run's project
+    // from outside it is refused: a crossing spawns fresh.
+    const home = mkTmp('ccrc-runs-');
+    seed(home, CLAIMED_BY, { project: 'intake-platform' });
+    seed(home, 'demo-existing-child');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const res = await postOpen(app, { ...OPEN_BODY, claimedBy: CLAIMED_BY, homeProject: 'intake-platform' });
+    expect(res.statusCode).toBe(200);
+    const id = (res.json() as { id: number }).id;
+    expect(okRun(w.coord.run(id))?.coordProject).toBe('intake-platform');
+    expect(okRun(w.coord.run(id))?.project).toBe(PROJECT);
+    const bound = await postOpen(app, { ...OPEN_BODY, wave: 2, claimedBy: CLAIMED_BY, homeProject: 'intake-platform',
+      sessionId: 'demo-existing-child' });
+    expect([bound.statusCode, bound.json()]).toEqual([409, { ok: false, refused: 'project-mismatch', by: 'intake-platform',
+      detail: `demo-existing-child is an existing session of ${PROJECT} and the claimant is of intake-platform — a crossing wave opens without sessionId and spawns fresh` }]);
+  });
+
   it('refuses a coordinator with no registry record — 403 unknown-sender, where the stamp once read "absence permits" (D-5298)', async () => {
     const home = mkTmp('ccrc-runs-');
     const { run } = makeRunner(home);
