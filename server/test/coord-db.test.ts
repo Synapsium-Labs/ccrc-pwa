@@ -10,6 +10,7 @@ import {
   openCoordDb, shouldRemoveMigrationFailureArtifact, tx,
 } from '../src/coord/db.js';
 import { MIGRATIONS } from '../src/coord/schema.js';
+import { CoordStore } from '../src/coord/store.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const dbPathIn = (home: string): string => path.join(home, '.ccrc', 'coord.db');
@@ -660,7 +661,7 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     db.close();
   });
 
-  it('COORD_SCHEMA_VERSION derives to 21 — never hand-edited beside a growing array', () => {
+  it('COORD_SCHEMA_VERSION derives to 22 — never hand-edited beside a growing array', () => {
     // Bumped to 20 by ten migrations: MIGRATIONS[10] (runs.kind/runs.reviews,
     // design 2026-09-14 §5.1), MIGRATIONS[11] (runs.coordProject, board
     // placement wave 1 Task 1), MIGRATIONS[12] (pool_edges/pool_epoch,
@@ -674,10 +675,11 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // workspace lifecycle spec §5.4), MIGRATIONS[18]
     // (dead_coordinator_breaker_state, the breaker's typed state, §5.4/§12)
     // MIGRATIONS[19] (collect_lane_settings, the collector switch,
-    // path-identity spec 2026-10-12 §5.2) and MIGRATIONS[20]
-    // (asks.releaseReason, D-5290, coordinator-first routing §5.2).
-    expect(COORD_SCHEMA_VERSION).toBe(21);
-    expect(MIGRATIONS.length).toBe(21);
+    // path-identity spec 2026-10-12 §5.2), MIGRATIONS[20]
+    // (asks.releaseReason, D-5290, coordinator-first routing §5.2) and
+    // MIGRATIONS[21] (runs.unattributed, D-5298, coordinator-first Task 11b).
+    expect(COORD_SCHEMA_VERSION).toBe(22);
+    expect(MIGRATIONS.length).toBe(22);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -737,9 +739,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // MIGRATIONS[16] (stall_settings and run_events_by_at, stall watch
     // settings §8), MIGRATIONS[17] (dead_claimants), MIGRATIONS[18]
     // (dead_coordinator_breaker_state) and MIGRATIONS[19]
-    // (collect_lane_settings) and MIGRATIONS[20] (asks.releaseReason); the
-    // migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(21);
+    // (collect_lane_settings), MIGRATIONS[20] (asks.releaseReason) and
+    // MIGRATIONS[21] (runs.unattributed); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(22);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
@@ -1561,9 +1563,41 @@ describe('coord.db: migration 21 — asks.releaseReason (D-5290, coordinator-fir
     });
     raw.close();
     const db = openCoordDb(p);
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(21);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(22);
     const rows = db.prepare('SELECT childId, state, releasedAt, releaseReason FROM asks').all();
     expect(rows).toEqual([{ childId: 'project-a-quiet-basin', state: 'released', releasedAt: 2, releaseReason: null }]);
     db.close();
+  });
+});
+
+describe('coord.db: migration 22 — runs.unattributed (D-5298, coordinator-first Task 11b)', () => {
+  it('reaches a database ALREADY at user_version 21 and keeps its runs rows, each not recorded unattributed', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < 21; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec('PRAGMA user_version = 21');
+      raw.exec("INSERT INTO programs (slug, title, createdAt, state) VALUES ('program-a', 'A', 1, 'active')");
+      raw.exec("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) " +
+               "VALUES ('program-a', 1, 1, 'project-a', 'planned', 'project-a-calm-mesa', 1)");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(22);
+    expect(db.prepare('SELECT program, claimedBy, unattributed FROM runs').all())
+      .toEqual([{ program: 'program-a', claimedBy: 'project-a-calm-mesa', unattributed: 0 }]);
+    db.close();
+  });
+
+  it('openRun journals an unattributed open as 1 and every other open as 0', () => {
+    const coord = new CoordStore(openCoordDb(dbPathIn(mkTmp('ccrc-coord-'))));
+    const a = coord.openRun({ program: 'program-a', title: 'A', project: 'project-a', wave: 1, waveOf: 2,
+      claimedBy: 'project-a-calm-mesa', unattributed: true });
+    const b = coord.openRun({ program: 'program-a', title: 'A', project: 'project-a', wave: 2, waveOf: 2,
+      claimedBy: 'project-a-calm-mesa' });
+    if (!('id' in a) || !('id' in b)) throw new Error('fixture: both opens must succeed');
+    expect(coord.db.prepare('SELECT id, unattributed FROM runs ORDER BY id').all())
+      .toEqual([{ id: a.id, unattributed: 1 }, { id: b.id, unattributed: 0 }]);
   });
 });

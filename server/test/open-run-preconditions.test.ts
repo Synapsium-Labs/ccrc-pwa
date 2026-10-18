@@ -16,7 +16,7 @@
 // The bodies copy the committed open-body shape (`home-project-required.test.ts`'s
 // OPEN_BODY, `run-routes.test.ts`'s review opens) with neutral ids.
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { buildServer } from '../src/server.js';
@@ -35,12 +35,15 @@ import {
 
 const WORK = {
   program: 'demo-program', title: 'Wave two', project: 'demo',
-  wave: 2, waveOf: 3, claimedBy: 'coord-1', homeProject: 'demo',
+  wave: 2, waveOf: 3, claimedBy: 'coord-1', claimedByUuid: 'u-coord-1', homeProject: 'demo',
 } as const;
 const REVIEW = {
   kind: 'review', reviews: 7, program: 'demo-program', title: 'Review wave two',
-  claimedBy: 'coord-1', homeProject: 'demo',
+  claimedBy: 'coord-1', claimedByUuid: 'u-coord-1', homeProject: 'demo',
 } as const;
+const STALE = { ok: false as const, error: 'stale-uuid' as const, detail: 'claimedByUuid does not match the registry — stale sender; re-read your own .uuid' };
+const NO_PROJECT_DETAIL = "the claimant's registry row records no project, so it cannot be the run's";
+const NOT_A_CHILD_DETAIL = 'ws-1 is a registry row with no child marker — a session the operator created is never bound as a child';
 
 const reviewed = (over: Partial<ReviewedRunFacts> = {}): ReviewedRunFacts => ({
   kind: 'work', state: 'awaiting-review', program: 'demo-program', claimedBy: 'coord-1',
@@ -55,6 +58,10 @@ function facts(body: Record<string, unknown>, over: Partial<OpenRunFacts> = {}):
     programKnown: () => false,
     programHome: () => null,
     openClaimantsOf: () => [],
+    fleetCarriesAttribution: true,
+    attribute: async () => ({ ok: true }),
+    claimantProject: async () => ({ kind: 'measured', project: 'demo' }),
+    sessionMark: async () => ({ kind: 'absent' }),
     ...over,
   };
 }
@@ -83,6 +90,10 @@ const SINGLE: Row[] = [
     refusal: { error: 'bad-request', detail: BAD_SLUG_DETAIL } },
   { name: 'a review naming a sessionId', gate: 'reviewSession', f: facts({ ...REVIEW, sessionId: 'ws-1' }),
     refusal: { error: 'bad-request', detail: 'sessionId is refused on a review run — it always spawns fresh on its own workspace' } },
+  { name: 'no claimedByUuid once the fleet carries the client', gate: 'attribution', f: facts({ ...WORK, claimedByUuid: undefined }),
+    refusal: { refused: 'attribution-required', detail: "upgrade the fleet box's ccrc-api (ccrc rollout)" } },
+  { name: 'a stale claimedByUuid', gate: 'attribution', f: facts({ ...WORK }, { attribute: async () => STALE }),
+    refusal: { error: 'stale-uuid', detail: STALE.detail } },
   { name: 'an unreadable reviewed run', gate: 'reviewRead',
     f: facts({ ...REVIEW }, { reviewed: () => ({ ok: false, detail: 'database is locked' }) }),
     refusal: { error: 'run-unreadable', detail: 'database is locked' } },
@@ -120,6 +131,24 @@ const SINGLE: Row[] = [
   { name: "a claimant that is somebody else's worker", gate: 'claimantWorker',
     f: facts({ ...WORK }, { openClaimantsOf: () => ['coord-1', 'coord-9', 'coord-8'] }),
     refusal: { refused: 'claimant-is-a-worker', by: 'coord-9' } },
+  { name: "a claimant whose own project is not the run's", gate: 'claimantProject',
+    f: facts({ ...WORK }, { claimantProject: async () => ({ kind: 'measured', project: 'demo-b' }) }),
+    refusal: { refused: 'project-mismatch', by: 'demo-b' } },
+  { name: 'a claimant whose row records no project', gate: 'claimantProject',
+    f: facts({ ...WORK }, { claimantProject: async () => ({ kind: 'none' }) }),
+    refusal: { refused: 'project-mismatch', detail: NO_PROJECT_DETAIL } },
+  { name: "a claimant whose project field is unreadable", gate: 'claimantProject',
+    f: facts({ ...WORK }, { claimantProject: async () => ({ kind: 'unreadable' }) }),
+    refusal: { error: 'registry-unmeasurable', detail: "the claimant's registry project could not be read — transient, not a fact about the claimant" } },
+  { name: "a review whose claimant's project is not the REVIEWED run's", gate: 'claimantProject',
+    f: facts({ ...REVIEW }, { reviewed: () => ({ ok: true, run: reviewed({ project: 'demo-2' }) }) }),
+    refusal: { refused: 'project-mismatch', by: 'demo' } },
+  { name: 'a sessionId naming a row with no child marker', gate: 'notAChild',
+    f: facts({ ...WORK, sessionId: 'ws-1' }, { sessionMark: async () => ({ kind: 'root' }) }),
+    refusal: { refused: 'not-a-child', detail: NOT_A_CHILD_DETAIL } },
+  { name: 'a sessionId listed but unbuilt', gate: 'notAChild',
+    f: facts({ ...WORK, sessionId: 'ws-1' }, { sessionMark: async () => ({ kind: 'unbuilt' }) }),
+    refusal: { error: 'registry-unmeasurable', detail: 'registry row for ws-1 is listed but unreadable — transient, not a fact about the session' } },
 ];
 
 /** One row per adjacent order-dependent pair: the body trips both, the
@@ -140,9 +169,16 @@ const PAIRS: (Row & { pair: [OpenRunGate, OpenRunGate] })[] = [
   { name: 'bad slug + sessionId on a review', pair: ['program', 'reviewSession'], gate: 'program',
     f: facts({ ...REVIEW, program: BAD_SLUG, sessionId: 'ws-1' }),
     refusal: { error: 'bad-request', detail: BAD_SLUG_DETAIL } },
-  { name: 'sessionId on a review + unreadable target', pair: ['reviewSession', 'reviewRead'], gate: 'reviewSession',
-    f: facts({ ...REVIEW, sessionId: 'ws-1' }, { reviewed: () => ({ ok: false, detail: 'database is locked' }) }),
+  { name: 'sessionId on a review + a stale uuid', pair: ['reviewSession', 'attribution'], gate: 'reviewSession',
+    f: facts({ ...REVIEW, sessionId: 'ws-1' }, { attribute: async () => STALE }),
     refusal: { error: 'bad-request', detail: 'sessionId is refused on a review run — it always spawns fresh on its own workspace' } },
+  { name: 'a stale uuid + unreadable target (who asks is decided before the store answers)',
+    pair: ['attribution', 'reviewRead'], gate: 'attribution',
+    f: facts({ ...REVIEW }, { attribute: async () => STALE, reviewed: () => ({ ok: false, detail: 'database is locked' }) }),
+    refusal: { error: 'stale-uuid', detail: STALE.detail } },
+  { name: 'no uuid once upgraded + unreadable target', pair: ['attribution', 'reviewRead'], gate: 'attribution',
+    f: facts({ ...REVIEW, claimedByUuid: undefined }, { reviewed: () => ({ ok: false, detail: 'database is locked' }) }),
+    refusal: { refused: 'attribution-required', detail: "upgrade the fleet box's ccrc-api (ccrc rollout)" } },
   { name: 'missing target (the kind gate reads the target the read gate loads)',
     pair: ['reviewRead', 'reviewKind'], gate: 'reviewRead',
     f: facts({ ...REVIEW }, { reviewed: () => ({ ok: true, run: null }) }),
@@ -180,6 +216,13 @@ const PAIRS: (Row & { pair: [OpenRunGate, OpenRunGate] })[] = [
   { name: 'no home + claimant a worker', pair: ['homeVerdict', 'claimantWorker'], gate: 'homeVerdict',
     f: facts({ ...WORK, homeProject: undefined }, { openClaimantsOf: () => ['coord-9'] }),
     refusal: { error: 'bad-request', detail: 'homeProject is required' } },
+  { name: 'claimant a worker + claimant of another project', pair: ['claimantWorker', 'claimantProject'], gate: 'claimantWorker',
+    f: facts({ ...WORK }, { openClaimantsOf: () => ['coord-9'], claimantProject: async () => ({ kind: 'measured', project: 'demo-b' }) }),
+    refusal: { refused: 'claimant-is-a-worker', by: 'coord-9' } },
+  { name: 'claimant of another project + a root named as the child', pair: ['claimantProject', 'notAChild'], gate: 'claimantProject',
+    f: facts({ ...WORK, sessionId: 'ws-1' }, {
+      claimantProject: async () => ({ kind: 'measured', project: 'demo-b' }), sessionMark: async () => ({ kind: 'root' }) }),
+    refusal: { refused: 'project-mismatch', by: 'demo-b' } },
 ];
 
 /** Adjacent pairs no single input trips together, and why. Each is bridged by
@@ -189,27 +232,27 @@ const EXCLUSIVE_PAIRS: { pair: [OpenRunGate, OpenRunGate]; why: string }[] = [
 ];
 
 describe('openRunPreconditions — one row per gate (D-5384)', () => {
-  it('covers every gate in OPEN_RUN_GATES with a single-gate row, and names no other', () => {
+  it('covers every gate in OPEN_RUN_GATES with a single-gate row, and names no other', async () => {
     const names = OPEN_RUN_GATES.map(([n]) => n);
     expect(new Set(names).size).toBe(names.length);
     expect([...new Set(SINGLE.map((r) => r.gate))].sort()).toEqual([...names].sort());
   });
 
   for (const r of SINGLE) {
-    it(`${r.gate}: ${r.name}`, () => {
-      expect(openRunPreconditions(r.f)).toStrictEqual({ ok: false, refusal: { gate: r.gate, ...r.refusal } });
+    it(`${r.gate}: ${r.name}`, async () => {
+      expect(await openRunPreconditions(r.f)).toStrictEqual({ ok: false, refusal: { gate: r.gate, ...r.refusal } });
     });
   }
 });
 
 describe('openRunPreconditions — the gate-order table (D-5384)', () => {
   for (const r of PAIRS) {
-    it(`${r.pair[0]} before ${r.pair[1]}: ${r.name}`, () => {
-      expect(openRunPreconditions(r.f)).toStrictEqual({ ok: false, refusal: { gate: r.gate, ...r.refusal } });
+    it(`${r.pair[0]} before ${r.pair[1]}: ${r.name}`, async () => {
+      expect(await openRunPreconditions(r.f)).toStrictEqual({ ok: false, refusal: { gate: r.gate, ...r.refusal } });
     });
   }
 
-  it('every adjacent pair in OPEN_RUN_GATES is a table row or a stated exclusive pair', () => {
+  it('every adjacent pair in OPEN_RUN_GATES is a table row or a stated exclusive pair', async () => {
     const names = OPEN_RUN_GATES.map(([n]) => n);
     const covered = new Set([...PAIRS, ...EXCLUSIVE_PAIRS].map((p) => p.pair.join('>')));
     const missing: string[] = [];
@@ -237,88 +280,141 @@ const SHAPE_CLAUSES: { name: string; body: Record<string, unknown> }[] = [
   { name: 'an empty sessionId', body: { ...WORK, sessionId: '' } },
   { name: 'a whitespace-only sessionId', body: { ...WORK, sessionId: ' ' } },
   { name: 'a numeric homeProject', body: { ...WORK, homeProject: 5 } },
+  { name: 'a numeric claimedByUuid', body: { ...WORK, claimedByUuid: 5 } },
+  { name: 'an empty claimedByUuid', body: { ...WORK, claimedByUuid: '' } },
+  { name: 'a whitespace-only claimedByUuid', body: { ...WORK, claimedByUuid: ' ' } },
 ];
 
 describe('openRunPreconditions — the shape gate, one row per clause (D-5384)', () => {
   for (const r of SHAPE_CLAUSES) {
-    it(`shape: ${r.name}`, () => {
-      expect(openRunPreconditions(facts(r.body))).toStrictEqual({ ok: false, refusal: { gate: 'shape', error: 'bad-request' } });
+    it(`shape: ${r.name}`, async () => {
+      expect(await openRunPreconditions(facts(r.body))).toStrictEqual({ ok: false, refusal: { gate: 'shape', error: 'bad-request' } });
     });
   }
 
-  it('a null waveOf on a review is admitted, and the plan takes the reviewed run\'s waveOf', () => {
-    expect(openRunPreconditions(facts({ ...REVIEW, waveOf: null })))
+  it('a null waveOf on a review is admitted, and the plan takes the reviewed run\'s waveOf', async () => {
+    expect(await openRunPreconditions(facts({ ...REVIEW, waveOf: null })))
       .toMatchObject({ ok: true, open: { kind: 'review', waveOf: 3 } });
   });
 });
 
 describe('openRunPreconditions — what the fact lookups receive (D-5384)', () => {
-  it('programKnown and programHome are asked with the SHAPED slug, so a padded slug cannot skip home-mismatch', () => {
+  it('programKnown and programHome are asked with the SHAPED slug, so a padded slug cannot skip home-mismatch', async () => {
     const programKnown = vi.fn((s: string) => s === 'demo-program');
     const programHome = vi.fn((s: string) => (s === 'demo-program' ? 'other-home' : null));
-    expect(openRunPreconditions(facts({ ...WORK, program: ' demo-program ' }, { programKnown, programHome })))
+    expect(await openRunPreconditions(facts({ ...WORK, program: ' demo-program ' }, { programKnown, programHome })))
       .toStrictEqual({ ok: false, refusal: { gate: 'homeVerdict', refused: 'home-mismatch', by: 'other-home' } });
     expect(programKnown).toHaveBeenCalledWith('demo-program');
     expect(programHome).toHaveBeenCalledWith('demo-program');
   });
 
-  it('F1 compares the body project UNTRIMMED, as the inline handler did', () => {
+  it('F1 compares the body project UNTRIMMED, as the inline handler did', async () => {
     const sessionProject = vi.fn(() => 'demo');
-    expect(openRunPreconditions(facts({ ...WORK, project: ' demo ', sessionId: 'ws-1' }, { sessionProject })))
+    expect(await openRunPreconditions(facts({ ...WORK, project: ' demo ', sessionId: 'ws-1' }, { sessionProject })))
       .toStrictEqual({ ok: false, refusal: { gate: 'projectMismatch', refused: 'project-mismatch', by: 'demo' } });
     expect(sessionProject).toHaveBeenCalledWith('ws-1');
   });
 });
 
 describe('openRunPreconditions — the admitted opens (D-5384)', () => {
-  it('a work open: its plan is the body\'s, the slug shaped, the home trimmed, the verdict a first write', () => {
-    const v = openRunPreconditions(facts({ ...WORK, program: ' demo-program ', homeProject: ' demo ', sessionId: 'ws-1' }));
+  it('a work open: its plan is the body\'s, the slug shaped, the home trimmed, the verdict a first write', async () => {
+    const v = await openRunPreconditions(facts({ ...WORK, program: ' demo-program ', homeProject: ' demo ', sessionId: 'ws-1' }));
     expect(v).toStrictEqual({
       ok: true, home: { kind: 'write' },
       open: {
         program: 'demo-program', title: 'Wave two', project: 'demo', wave: 2, waveOf: 3,
         claimedBy: 'coord-1', kind: 'work', reviews: null, homeProject: 'demo', sessionId: 'ws-1',
+        unattributed: false, coordProject: 'demo',
       },
     });
   });
 
-  it('a review open takes project, wave and waveOf off the reviewed run, never the body', () => {
-    const v = openRunPreconditions(facts({ ...REVIEW, waveOf: null },
-      { reviewed: () => ({ ok: true, run: reviewed({ project: 'demo-2', wave: 4, waveOf: null }) }) }));
+  it('a review open takes project, wave and waveOf off the reviewed run, never the body', async () => {
+    const v = await openRunPreconditions(facts({ ...REVIEW, waveOf: null },
+      { reviewed: () => ({ ok: true, run: reviewed({ project: 'demo-2', wave: 4, waveOf: null }) }),
+        claimantProject: async () => ({ kind: 'measured', project: 'demo-2' }) }));
     expect(v).toStrictEqual({
       ok: true, home: { kind: 'write' },
       open: {
         program: 'demo-program', title: 'Review wave two', project: 'demo-2', wave: 4, waveOf: null,
         claimedBy: 'coord-1', kind: 'review', reviews: 7, homeProject: 'demo',
+        unattributed: false, coordProject: 'demo-2',
       },
     });
   });
 
-  it('a known programme with a NULL home is a backfill; a matching one agrees; the legacy branch stays reachable', () => {
-    expect(openRunPreconditions(facts({ ...WORK }, { programKnown: () => true, programHome: () => null })))
+  it('a known programme with a NULL home is a backfill; a matching one agrees; the legacy branch stays reachable', async () => {
+    expect(await openRunPreconditions(facts({ ...WORK }, { programKnown: () => true, programHome: () => null })))
       .toMatchObject({ ok: true, home: { kind: 'backfill', home: 'demo' } });
-    expect(openRunPreconditions(facts({ ...WORK }, { programKnown: () => true, programHome: () => 'demo' })))
+    expect(await openRunPreconditions(facts({ ...WORK }, { programKnown: () => true, programHome: () => 'demo' })))
       .toMatchObject({ ok: true, home: { kind: 'agrees' } });
-    expect(openRunPreconditions({ ...facts({ ...WORK, homeProject: undefined }), legacyAccepted: true }))
+    expect(await openRunPreconditions({ ...facts({ ...WORK, homeProject: undefined }), legacyAccepted: true }))
       .toMatchObject({ ok: true, home: { kind: 'legacy' }, open: { program: 'demo-program' } });
   });
 
-  it('a self-claimed run and an absent waveOf are admitted', () => {
-    const v = openRunPreconditions(facts({ ...WORK, waveOf: undefined }, { openClaimantsOf: () => ['coord-1'] }));
+  it('a self-claimed run and an absent waveOf are admitted', async () => {
+    const v = await openRunPreconditions(facts({ ...WORK, waveOf: undefined }, { openClaimantsOf: () => ['coord-1'] }));
     expect(v).toMatchObject({ ok: true, open: { waveOf: null } });
   });
 });
 
+describe('openRunPreconditions — the switch-over and the binding (D-5298)', () => {
+  it('before the fleet carries the client, an open with no claimedByUuid is admitted unattributed, and never attributed', async () => {
+    const attribute = vi.fn(async () => STALE);
+    const v = await openRunPreconditions(facts({ ...WORK, claimedByUuid: undefined }, { fleetCarriesAttribution: false, attribute }));
+    expect(v).toMatchObject({ ok: true, open: { unattributed: true, coordProject: 'demo' } });
+    expect(attribute).not.toHaveBeenCalled();
+  });
+
+  it('before the switch-over the project and not-a-child gates still refuse an unattributed open', async () => {
+    const pre = { fleetCarriesAttribution: false };
+    expect(await openRunPreconditions(facts({ ...WORK, claimedByUuid: undefined },
+      { ...pre, claimantProject: async () => ({ kind: 'measured', project: 'demo-b' }) })))
+      .toStrictEqual({ ok: false, refusal: { gate: 'claimantProject', refused: 'project-mismatch', by: 'demo-b' } });
+    expect(await openRunPreconditions(facts({ ...WORK, claimedByUuid: undefined, sessionId: 'ws-1' },
+      { ...pre, sessionMark: async () => ({ kind: 'root' }) })))
+      .toStrictEqual({ ok: false, refusal: { gate: 'notAChild', refused: 'not-a-child', detail: NOT_A_CHILD_DETAIL } });
+  });
+
+  it('a sent uuid is checked in either state, against the claimant it names', async () => {
+    const attribute = vi.fn(async () => STALE);
+    expect(await openRunPreconditions(facts({ ...WORK }, { fleetCarriesAttribution: false, attribute })))
+      .toStrictEqual({ ok: false, refusal: { gate: 'attribution', error: 'stale-uuid', detail: STALE.detail } });
+    expect(attribute).toHaveBeenCalledWith('coord-1', 'u-coord-1');
+  });
+
+  it('a child and a row-less id are admitted; a deferred mark is left to the child gate', async () => {
+    for (const kind of ['child', 'absent', 'deferred'] as const) {
+      expect(await openRunPreconditions(facts({ ...WORK, sessionId: 'ws-1' }, { sessionMark: async () => ({ kind }) })), kind)
+        .toMatchObject({ ok: true, open: { sessionId: 'ws-1' } });
+    }
+  });
+
+  it('the project gate compares the body project UNTRIMMED, as F1 does', async () => {
+    expect(await openRunPreconditions(facts({ ...WORK, project: ' demo ' })))
+      .toStrictEqual({ ok: false, refusal: { gate: 'claimantProject', refused: 'project-mismatch', by: 'demo' } });
+  });
+});
+
 describe('openRunPreconditions reads its facts lazily, in gate order (D-5384)', () => {
-  it('a malformed body reads nothing; a work open never reads a reviewed run', () => {
+  it('a malformed body reads nothing; a work open never reads a reviewed run', async () => {
     const spies = {
       reviewed: vi.fn(() => ({ ok: true as const, run: reviewed() })),
       sessionProject: vi.fn(() => null), programKnown: vi.fn(() => false),
       programHome: vi.fn(() => null), openClaimantsOf: vi.fn(() => [] as string[]),
+      attribute: vi.fn(async () => ({ ok: true as const })),
+      claimantProject: vi.fn(async () => ({ kind: 'measured' as const, project: 'demo' })),
+      sessionMark: vi.fn(async () => ({ kind: 'absent' as const })),
     };
-    openRunPreconditions(facts({ ...WORK, title: '' }, spies));
+    await openRunPreconditions(facts({ ...WORK, title: '' }, spies));
     for (const s of Object.values(spies)) expect(s).not.toHaveBeenCalled();
-    openRunPreconditions(facts({ ...WORK }, spies));
+    // D-5298: a refusal at the attribution gate reads no store fact and no
+    // later registry fact.
+    await openRunPreconditions(facts({ ...REVIEW }, { ...spies, attribute: async () => STALE }));
+    expect(spies.reviewed).not.toHaveBeenCalled();
+    expect(spies.claimantProject).not.toHaveBeenCalled();
+    await openRunPreconditions(facts({ ...WORK }, spies));
+    expect(spies.sessionMark).not.toHaveBeenCalled();     // no sessionId, no mark read
     expect(spies.reviewed).not.toHaveBeenCalled();
     expect(spies.sessionProject).not.toHaveBeenCalled();   // no sessionId, no F1 read
     expect(spies.programHome).not.toHaveBeenCalled();      // an unknown programme has no stored home to ask for
@@ -334,6 +430,11 @@ describe('the route answers the decider\'s refusals with the inline sends\' exac
   const openApp = async (): Promise<FastifyInstance> => {
     const home = mkTmp('ccrc-open-run-');
     mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    // The claimant's registry row (`run-routes.test.ts`'s `seed` field set):
+    // since D-5298 an open is attributed against it and its project.
+    const fields: Record<string, string> = { wrapper: 'claude', project: 'demo', workdir: '/w/coord-1',
+      uuid: 'u-coord-1', started: '1', workspace: 'coord-1', branch: 'ws/coord-1', base: 'origin/main' };
+    for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(home, '.cc-sessions', `coord-1.${k}`), v);
     const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
     return buildServer({ ...testDeps(home, runner), mailToken: TOKEN, coord });
   };
@@ -359,7 +460,7 @@ describe('the route answers the decider\'s refusals with the inline sends\' exac
 });
 
 describe('refuseRun (D-5384)', () => {
-  it('answers RUN_REFUSAL_STATUS with `{ ok, refused, ...extra }` in that key order', () => {
+  it('answers RUN_REFUSAL_STATUS with `{ ok, refused, ...extra }` in that key order', async () => {
     const sent: { code?: number; body?: unknown } = {};
     const reply = {
       code(n: number) { sent.code = n; return reply; },

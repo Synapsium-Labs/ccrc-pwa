@@ -6615,3 +6615,28 @@ describe('the session role is enumerated, narrowed and derived once, in shared/a
     expect(stallCode(path.join(ccrcRoot, 'server/src/fleet.ts'))).toMatch(/\brole:\s*sessionRoleOf\(r\.child\)/);
   });
 });
+
+// D-5298 (plan docs/superpowers/plans/2026-10-17-coordinator-first-routing.md, Task 11b; spec §6.4). APPENDED. The
+// switch-over floor `RUNS_ATTRIBUTION_SINCE` (the first release tag carrying Task 11a's client) is defined once, in
+// shared/api.ts, and read on a code line only by `fleetCarriesRunsAttribution`, defined once beside `buildAgreement`
+// in server/src/fleetstate.ts; `POST /api/runs` (server/src/coord/routes.ts) is that function's one caller. Code
+// lines only (`stallCode`).
+describe('the runs-attribution switch-over is defined once, read once (D-5298)', () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+
+  it('CONTROL: the patterns see a definition and a call, and pass over comment lines', () => {
+    expect(/\bRUNS_ATTRIBUTION_SINCE\s*=/.test("export const RUNS_ATTRIBUTION_SINCE = 'v0.0.239';")).toBe(true);
+    expect(/\bfleetCarriesRunsAttribution\(/.test('fleetCarriesAttribution: fleetCarriesRunsAttribution(')).toBe(true);
+    expect(stallCodeText('// RUNS_ATTRIBUTION_SINCE = x\nconst x = 1;')).not.toMatch(/\bRUNS_ATTRIBUTION_SINCE\b/);
+  });
+
+  it('RUNS_ATTRIBUTION_SINCE is defined in shared/api.ts alone and read on a code line in fleetstate.ts alone', () => {
+    expect(holders(/\bRUNS_ATTRIBUTION_SINCE\s*=/)).toEqual(['shared/api.ts']);
+    expect(holders(/\bRUNS_ATTRIBUTION_SINCE\b/)).toEqual(['server/src/fleetstate.ts', 'shared/api.ts']);
+  });
+
+  it('fleetCarriesRunsAttribution is defined in fleetstate.ts and called by the open route alone', () => {
+    expect(holders(/\bfunction\s+fleetCarriesRunsAttribution\b/)).toEqual(['server/src/fleetstate.ts']);
+    expect(holders(/\bfleetCarriesRunsAttribution\(/)).toEqual(['server/src/coord/routes.ts', 'server/src/fleetstate.ts']);
+  });
+});
