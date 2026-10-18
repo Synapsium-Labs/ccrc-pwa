@@ -11,7 +11,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { FEED_CAP, interruptLine, mergeBySeq, reviveNotifyEvents } from '../src/lib/feed';
+import { FEED_CAP, interruptLine, mergeBySeq, raisesUnread, reviveNotifyEvents } from '../src/lib/feed';
 import { isNotifyKind, type NotifyEvent } from '../../shared/api';
 
 const e = (over: Partial<NotifyEvent> = {}): NotifyEvent => ({
@@ -174,5 +174,24 @@ describe('the interrupt kind (D-5237)', () => {
     expect(interruptLine(e({ kind: 'interrupt', body: 'source=x outcome=y' }))).toBe('⎋ not interrupted · unknown · unknown');
     expect(interruptLine(e({ kind: 'interrupt', body: 'garbage' }))).toBeNull();
     expect(interruptLine(e({ kind: 'mail', body: 'source=keycap outcome=sent' }))).toBeNull();
+  });
+});
+
+// D-5431 (operator ruling 2026-10-18): an interrupt record is kept in Mail but never counts as unread. Only that kind
+// changes: every other kind, the record-only `coord`, `update`, `queue` and `nudge` included, still counts.
+describe('which records raise the unread count (D-5431)', () => {
+  const KINDS = ['ask', 'done', 'merged', 'mail', 'run', 'coord', 'update', 'queue', 'interrupt', 'nudge', 'unknown'] as const;
+
+  it('every kind but `interrupt` raises it', () => {
+    for (const kind of KINDS) {
+      expect(isNotifyKind(kind), `${kind} is not a kind this build knows`).toBe(true);
+      expect(raisesUnread(e({ kind })), kind).toBe(kind !== 'interrupt');
+    }
+  });
+
+  it('an interrupt never does, whatever its body says', () => {
+    expect(raisesUnread(e({ kind: 'interrupt', title: 'interrupt · keycap', body: 'source=keycap outcome=sent' }))).toBe(false);
+    expect(raisesUnread(e({ kind: 'interrupt', title: 'interrupt · deny', body: 'source=deny outcome=not-alive' }))).toBe(false);
+    expect(raisesUnread(e({ kind: 'interrupt', title: 'interrupt · keycap', body: 'off its grammar' }))).toBe(false);
   });
 });
