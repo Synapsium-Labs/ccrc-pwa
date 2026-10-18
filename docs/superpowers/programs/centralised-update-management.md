@@ -4033,7 +4033,7 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     env (alert 119's sources were the fixture HOME inside callers' snippets, not the ccd path); runbook-holds'
     one binding carries `DOCTOR_CHECKS`. D-5259 records it. CodeQL finds 0, and the bot resolved all three threads.
     The review reads only `d7662ee11..f8fa675eb`, centred on `sh`'s `eval` semantics and containment.
-  - **05:00 UTC: wave 17's full run 39096832066 (`dcb9ec8f5`) has finished (mail 6189).** Linux is all green.
+  - **04:55 UTC: wave 17's full run 39096832066 (`dcb9ec8f5`) has finished (mail 6189).** Linux is all green.
     The Darwin rows D5, D6 and D13 of the `update-sweep` check pass on macOS 3/4. The macOS reds are `main`'s
     daily's (`ccd-docs-index`, `ccd-docs-tree` row 64, which is B2, `session-hook-turnmark`, `ccrc-doctor`
     delegation-hooks), plus one `main` lacks: `ccrc-codex` L0a. L0a was green on macOS in three earlier runs, and
