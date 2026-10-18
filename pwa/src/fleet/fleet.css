@@ -1178,6 +1178,8 @@
 .sess-state--waiting { color: var(--status-attention-text); }
 .sess-state--working { color: var(--status-busy-text); }
 .sess-state--exited  { color: var(--ink-secondary); }
+/* D-5242: asleep, not a death — the same quiet ink as `exited`, and its own hook. */
+.sess-state--asleep { color: var(--ink-secondary); }
 /* D-5296: the quiet "with coordinator" state. The calm tone: secondary ink,
    not the busy or attention hue — the session is neither running nor waiting
    on the operator; its parent holds the question. */

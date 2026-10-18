@@ -39,6 +39,7 @@ import { elapsedWords, useNow, WARN_GLYPH } from '@ccrc/ui';
 import { restartWords } from '../lib/restart';
 import { humanBytes } from '../screens/ArchiveScreen';
 import { lifecycleQualifier } from './lifecycleWords';
+import { hibernatedWords } from './hibernated';
 import { childOfRunLabel } from './runWords';
 import { spawnChip } from './spawnWords';
 import { GraphChip, LastSpawnChip, UnmeasuredChip } from './chips';
@@ -131,6 +132,10 @@ export interface SessionMetaProps {
   state: string;
   /** The same. */
   dead: boolean;
+  /** D-5242: when this dead row went to sleep (`hibernatedSince`), or null. A sleeping row reads
+   *  `hibernated · 6h` in place of `state`, and its stop stamp is not shown: `ccd hibernate` writes
+   *  `.stopped`, so the lifecycle qualifier would otherwise call a sleep a stop. Optional: absent is awake. */
+  asleepAt?: number | null;
   /** The disclosure this row's toggle owns. The LIST is rendered by
    *  `SessionLine`, outside this row, so the three of these cross the seam
    *  together: the toggle is here, the content is there. */
@@ -166,7 +171,7 @@ const markerNote = (
 };
 
 export function SessionMeta({
-  session, roster, projectPool, onOpenRun, selected, state, dead,
+  session, roster, projectPool, onOpenRun, selected, state, dead, asleepAt = null,
   subagentList, subagentsOpen, subagentsId, onToggleSubagents,
 }: SessionMetaProps): ReactNode {
   // The cleanup bucket's own facts — the merged PR number and the size
@@ -184,7 +189,7 @@ export function SessionMeta({
   // The row's lifecycle qualifier (§4.4) and the swap refusal's durable
   // marker (§2.4). Neither touches `state` above: the bucket ladder is
   // untouched, a dead row stays `exited`, and these are cells beside it.
-  const qualifier = lifecycleQualifier(session);
+  const qualifier = asleepAt !== null ? null : lifecycleQualifier(session);
 
   // Child-reclamation wave 5: which run minted this workspace, when it is a
   // child. `childOfRunLabel` is the one reader of `session.child`.
@@ -352,7 +357,9 @@ export function SessionMeta({
             </span>
           ) : (
             <span className={`sess-state sess-state--${state}`} title={bgWords?.title}>
-              {bgWords === null ? state : `${state} · ${bgWords.text}`}
+              {asleepAt !== null
+                ? hibernatedWords(asleepAt, now)
+                : bgWords === null ? state : `${state} · ${bgWords.text}`}
             </span>
           )}
 
