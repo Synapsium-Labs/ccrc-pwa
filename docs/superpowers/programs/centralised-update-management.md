@@ -4220,6 +4220,15 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       so it runs at #410's landing instead. Any other conflict stops for a narrow review;
     - on a fresh wave-done I verify, run CI, and merge #441; then wave 17's landing round, and #566 last. I tell
       path identity's coordinator of the ruling.
+  - **12:50 UTC: #441's landing round verified at `b7a1c4c3f` (mail 6380; amber-cove, after landing mail 6375).**
+    Its parents are `7bc2d9015` and `main`'s `43efd63c8`. Against my own merge-tree of those two, the tip differs
+    only in `ccd/ccd`'s stamp: the conflict markers became one regenerated line, and `mark.mjs --check` reads
+    `ccrc-unmodified` with one marker line. `_signal_group(` has its def and `_stop`'s two calls, nothing new from
+    `main`; `ccd/ccd`'s hunks are wave 15's `_svc_enable` pair and wave 20's `Sys` hunk, inside 5974's fence. The
+    worker's gate is green, file by file (ccd-docs-tree whole 188, macos-platform 105). `main` has since moved to
+    `8c24c8fc1` (#599, a plan file #441 does not touch), and the tip merges into it clean. Run 300 is at
+    awaiting-review; no review, by 5980's ruling. Path identity's coordinator acknowledged the ruling (6379). CI run
+    39128752700 is in progress; on green I merge #441.
 
 ## Carried constraints
 
