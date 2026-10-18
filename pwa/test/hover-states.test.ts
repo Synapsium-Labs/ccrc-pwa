@@ -21,7 +21,7 @@ import {
   BACK_BUTTON, BARE_ROW, DOOR, KEYCAP, LIST_ROW, buttonVariants,
 } from '@ccrc/ui';
 import { cn } from '../../ui/src/lib/cn';
-import { declValue, ruleIn, stripComments } from './cssRule';
+import { atBlock, declValue, ruleIn, stripComments } from './cssRule';
 
 const ROOT = path.join(import.meta.dirname, '..', '..');
 const read = (rel: string): string => readFileSync(path.join(ROOT, rel), 'utf8');
@@ -68,6 +68,31 @@ describe('every interactive primitive carries a hover and a pressed state', () =
     const merged = cn(buttonVariants({ variant: 'ghost' }), at![1]);
     expect(has(merged, 'hover:bg-transparent')).toBe(true);
     expect(has(merged, 'hover:bg-hover')).toBe(false);
+  });
+
+  // D-5462 (Task 14b): KEYCAP's hover is a utility, and an UNLAYERED app rule
+  // beats every layered rule whatever its specificity. The header's rule sat
+  // unlayered on the primary ink, so the lift was dead twice over: outranked,
+  // and onto the ink it already wore.
+  it("the header's keycaps rest below the hover ink, in a layer the hover outranks (D-5462)", () => {
+    const chat = read('pwa/src/session/chat.css');
+    const layered = atBlock(chat, '@layer components');
+    const rest = declValue(ruleIn(layered, '.chat-head .keycap'), 'color');
+    expect(rest, 'the header cap rests on the secondary ink, one tier under the lift').toBe('var(--ink-secondary)');
+    const unlayered = stripComments(chat).replace(stripComments(layered), '');
+    expect(unlayered, 'an unlayered .chat-head .keycap would outrank the hover again')
+      .not.toMatch(/(^|[}\s])\.chat-head \.keycap\s*\{/);
+    expect(has(KEYCAP, 'hover:text-ink-primary')).toBe(true);
+  });
+
+  it('the terminal keys hold the well ink under the mouse (D-5462)', () => {
+    // On the well the primitive's primary ink is dark glass on dark glass in
+    // the light theme. Unlayered, `.term-keys .keycap` outranks the hover, so
+    // the cap keeps --ink-on-well; layering it would let the hover through.
+    const chat = read('pwa/src/session/chat.css');
+    expect(declValue(ruleIn(chat, '.term-keys .keycap'), 'color')).toBe('var(--ink-on-well)');
+    expect(atBlock(chat, '@layer components'), 'the terminal cap moved into the layer')
+      .not.toMatch(/\.term-keys \.keycap\s*\{/);
   });
 
   it('the theme bridge maps both grounds, so the utilities resolve to the tokens', () => {
