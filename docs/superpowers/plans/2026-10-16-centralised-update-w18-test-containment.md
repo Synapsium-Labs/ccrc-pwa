@@ -1857,7 +1857,7 @@ index 98588f683..78b7d1959 100644
   | T3-8 | either `projected-home` call site reverted to `env: { ...process.env, HOME: … }` | row 2, naming that line. [prototype, on the inline form: the census reddened its line] *(worker, measured standalone at the landing tip `aaf923a4b`: row 2, naming `projected-home.test.ts:54` or `:671`)* |
   | T3-9 | `phEnv` drops `net` | `projected-home`'s new row: "assertNoRealTool: ssh resolved to …". The census stays green (a helper call) *(worker, measured at the landing tip `aaf923a4b`: 1 of 58)* |
   | T3-10 | `phEnv` drops `systemd` | `projected-home`'s new row: the bus pair and `systemctl` are no longer under HOME *(worker, measured at the landing tip `aaf923a4b`: 1 of 58)* |
-  | T3-6b | `runDrRcState`'s env reverted to `{ ...process.env, HOME: home }` (fix round 1, review 535 F11) | the two `runbook-holds` rows that call `runDrRcState`, 2 of 23, by `assertNoRealTool: XDG_RUNTIME_DIR=/run/user/<uid> does not name a path inside the fixture HOME`; the census stays green, the doctor checks being outside its names *(worker, measured at the fix-round tip and again at the landing tip `aaf923a4b`)* |
+  | T3-6b | `runDrRcState`'s env reverted to `{ ...process.env, HOME: home }` (fix round 1, review 535 F11) | the two `runbook-holds` rows that call `runDrRcState`, 2 of 23, by `assertNoRealTool: XDG_RUNTIME_DIR=/run/user/<uid> does not name a path inside the fixture HOME`; the census stays green, the doctor checks being outside its names *(worker, measured at the fix-round tip and again at the landing tip `aaf923a4b`)* Since fix round 3 the reverted binding keeps `DOCTOR_CHECKS` (D-5259), and the two rows red as before *(worker, measured at fix round 3's tip `5f09d7e7e`)* |
 
   Fix round 1's census rows (D-5256), each measured standalone *(worker, standalone: node type stripping and a minimal `describe`/`it`/`expect` shim, at the fix-round tip; row numbers: 1 found, 2 ALLOWED, 3 SLICED_ALLOWED, 4 placement, 5 reasons, 6 R14(b)'s spawn, 7 corpus)*. Unmutated: 7 of 7. On `git archive 0a06ebb9a`: row 2 only, the seven predicted hits plus the `ALLOWED` one.
 
@@ -2488,3 +2488,18 @@ names one landing round after #448):
 memory reads 22 GiB or more: `raw-spawn-census`, `ccd-harness-containment`, `ccrc-containment`, `ccd-pool-sync`,
 `runbook-holds`, `topology-clean`, `deviation-refs` (after `git fetch origin main`) and `dtbd`. Every new mutation
 row is measured. No merge of `main` in this round.
+
+## Coordinator rulings after F16 (2026-10-18)
+
+F16 was accepted at `d7662ee11`: the +25 tests are all this wave's, `ccrc-account` C3 and `platform-hazards` are flakes, and the remaining macOS reds are `main`'s own. It is not re-run.
+
+The merge was then refused by the repository's rule that every review thread be resolved. #482 carried three open CodeQL threads, for alerts 118, 119 and 120. Dismissing an alert, or resolving its thread by hand, is the operator's act, not the coordinator's or the worker's. Fixing them in code is the wave's.
+
+**Fix round 3** (D-5259):
+- `pat` escapes every regex metacharacter (alert 118).
+- The harness's `sh` and `runbook-holds`' `_dr_rc_state` spawn keep a constant `bash -c` command, with paths and the snippet in the environment (alerts 119 and 120).
+- The gate: `raw-spawn-census` 7, `ccd-harness-containment` 28, `runbook-holds` 23, `ccd-workspaces` 81, `ccd-tmux-anchor` 35, `typecheck-tests` 12, both `tsc` runs, `single-definition` 670, `topology-clean` 55, `dtbd` 1 and `deviation-refs` 31.
+- Measured beyond the gate: the four harness users named in alert 119's flows (`ccd-child-tmpdir` 38, `ccd-rc-flag` 20, `ccd-login-screen` 40, `ccd-reason-flag` 11), every census row standalone (each as recorded), and T3-6 and T3-6b by vitest.
+- No merge of `main` in this round.
+
+The pass is CodeQL reporting all three alerts fixed on the new head, and its bot resolving the three threads itself. One short scoped review reads only this round's diff, and then the coordinator merges.
