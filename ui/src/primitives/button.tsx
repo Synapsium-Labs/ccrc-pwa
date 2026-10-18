@@ -9,7 +9,7 @@
 // HOOK CLASSES. Each element also carries its original bare class name
 // (`dot`, `btn-primary`, `sheet-panel`, ...). Those carry no styling any more —
 // the utilities do that — they are STABLE SELECTORS other stylesheets and the
-// test suite key on (`.sess-line--active .sess-lamp > .dot`,
+// test suite key on (`.chat-meta .dot`,
 // `.sheet-panel .proj-ready`, `.block-screen .btn-primary`). Removing one
 // silently un-styles a descendant rule in another package with no build error,
 // so they stay until every consumer of that selector is migrated too.
@@ -48,7 +48,7 @@ export const buttonVariants = cva(
         'danger-ghost':
           'btn-danger-ghost border border-status-dead bg-transparent text-status-dead-text text-base leading-none font-medium disabled:text-ink-disabled disabled:border-edge-subtle',
         ghost:
-          'btn-ghost border border-edge-strong bg-transparent text-ink-primary text-base leading-none font-medium transition-[transform,background-color] motion-reduce:transition-none enabled:active:bg-raised disabled:text-ink-disabled disabled:border-edge-subtle',
+          'btn-ghost border border-edge-strong bg-transparent text-ink-primary text-base leading-none font-medium transition-[transform,background-color] motion-reduce:transition-none enabled:hover:bg-hover enabled:active:bg-pressed disabled:text-ink-disabled disabled:border-edge-subtle',
         /** `quiet` — the raised mono control. FOUR app rules declared the same
          *  eleven declarations: `.coord-toggle`, `.child-reclaim-toggle` and
          *  `.caps-save` were byte-identical, and `.program-start-door`
@@ -66,7 +66,7 @@ export const buttonVariants = cva(
          *  keeps by passing it at the call site. Folding both to one number
          *  would be a visual change, and this wave has none. */
         quiet:
-          'border border-edge-subtle bg-raised text-ink-secondary font-mono text-2xs font-medium leading-none not-italic normal-nums enabled:active:scale-[0.96]',
+          'border border-edge-subtle bg-raised text-ink-secondary font-mono text-2xs font-medium leading-none not-italic normal-nums enabled:hover:bg-hover enabled:active:bg-pressed enabled:active:scale-[0.96]',
       },
       /** How wide. `full` is the sheet shape and the default — a sheet's
        *  commit button spans it. Its `px-4` is the room a WRAPPED label needs:

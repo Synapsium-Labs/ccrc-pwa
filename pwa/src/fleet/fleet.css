@@ -831,159 +831,49 @@
   border-radius: var(--r-md);
 }
 
-/* ── SELECTION — reverse video ────────────────────────────────────
-   Selection takes the two loudest channels a row has — the fill and the
-   POLARITY of its ink — and status is evicted from both. It cannot be
-   chromatic here: --accent and --status-busy are the same hex (#45D67E,
-   tokens.css) and the four account hues own the cool half of the wheel, so
-   any coloured selection on THIS screen is a status or identity collision by
-   construction. Polarity is the one channel status does not use and cannot
-   use, and it reads in every vision type and in greyscale.
-   The old signal was --bg-raised on --bg-surface: 1.10:1 dark / 1.17:1 light
-   — less than the hairline that merely separates one card from the next
-   (1.25 / 1.31), and the same fill the ··· button already wears on every row.
-   The new one is 15.68:1 dark / 16.58:1 light.
+/* ── HOVER (D-5101) ───────────────────────────────────────────────
+   A row under the mouse lifts to --bg-hover, the opaque 5% ink-primary mix
+   over the card that every interactive primitive shares. Only inside
+   `(hover: hover)`: a coarse pointer has no hover, and an unguarded :hover
+   sticks on the last-tapped row of a phone. The meta keeps its status and
+   lane hues on this ground, so the gate holds every status text and lane hue
+   against --bg-hover (design/contrast-check.mjs).
+   `:not(.sess-line--active)` (D-5455): the selected row keeps its tint and
+   rail under the mouse. A bare `.sess-line:hover` (0,2,0) outranks
+   `.sess-line--active` (0,1,0) and would turn the selected row grey. */
+@media (hover: hover) {
+  .sess-line:not(.sess-line--active):hover { background: var(--bg-hover); }
+}
+
+/* ── SELECTION — tint plus rail (D-5101) ──────────────────────────
+   The selected row is the accent tint with a 2px phosphor rail inset on its
+   leading edge, and its label steps up to semibold. It replaces the
+   reverse-video slab (background: var(--ink-primary)) and the achromatic
+   group that slab needed, which painted every meta cell --edge-strong
+   because the status texts and lane hues died on a near-white bar. On the
+   tint they live: the meta keeps busy, attention and dead hues and the lane
+   hues, and design/contrast-check.mjs gates each of them on --accent-tint
+   in every palette, with the dots at 3:1. The rail, not the tint, is what
+   separates selection from a status: a hue fill alone would collide with
+   --status-busy, the rail is a shape at the row's edge that no status uses.
+   The lamp needs no plate and the ··· no re-ground: both sit on a ground the
+   gate already measures. The focus ring keeps base.css's accent, which reads
+   on the tint the way it reads on the card.
    Desktop-only by construction: shell.css hides .shell-nav below 900px once a
    session is open, so no phone ever renders a selected row. */
 .sess-line--active {
-  background: var(--ink-primary);
-  color: var(--bg-page);               /* 16.94:1 dark / 15.26:1 light */
+  background: var(--accent-tint);
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 
-/* .sess-open is color: inherit, so the label inherits the flip. Weight is the
-   second, non-colour channel. */
+/* .sess-open is color: inherit, so the label keeps the card's ink. Weight is
+   the second, non-colour channel. */
 .sess-line--active .sess-label { font-weight: var(--weight-semibold); }
 
-/* The meta line goes achromatic. --status-*-text and the account hues are
-   tuned for --bg-surface and die on the slab (busy-text 1.47:1 dark / 2.61:1
-   light; acct claude 1.46 / 2.42). The SEMANTICS survive: the state is still
-   the word working/waiting/exited, ⚠ is still a shape, the account is still
-   its mono name (tokens.css: "colour is the secondary cue"), and the status
-   hue survives in the lamp two cells left. --edge-strong rather than
-   --bg-raised: it flips polarity with the pair (#39403A dark, #C3CAC2 light)
-   and lands at 9.27:1 / 9.91:1, which keeps a REAL ink step under the 16.94:1
-   label instead of two maximal inks pretending to be a hierarchy. */
-.sess-line--active .sess-meta,
-.sess-line--active .sess-state,
-.sess-line--active .sess-tally,
-.sess-line--active .sess-graph,
-.sess-line--active .sess-subagents,
-.sess-line--active .sess-warn,
-.sess-line--active .sess-acct,
-.sess-line--active .sess-acct-away,
-.sess-line--active .sess-ask,
-.sess-line--active .sess-subagent-row,
-/* The six ink-tertiary meta cells (.sess-held / .sess-lifecycle /
-   .sess-swapblocked / .sess-ask-state share one rule; .sess-unmeasured and
-   .sess-substrate each have their own). Being
-   INSIDE .sess-meta is not enough for them: a child's own `color` beats the
-   colour it would inherit from its parent, so on the selected row they went
-   on painting --ink-tertiary on the --ink-primary slab — 2.72:1 dark /
-   2.91:1 light, against this file's 4.5:1 body floor, where --edge-strong
-   reads 9.27 / 9.91 (design/audit.mjs's resolver, the gate's own engine).
-   .sess-held shipped that way on main; .sess-lifecycle and .sess-swapblocked
-   joined its declarations later and inherited the omission with them, which
-   is what widened it — .sess-lifecycle renders on every non-running row.
-   .sess-ask-state (Task 19) joins already knowing better — no new pair for
-   design/contrast-check.mjs: it joins the pair this rule already declares. */
-.sess-line--active .sess-held,
-.sess-line--active .sess-restart,
-.sess-line--active .sess-lifecycle,
-.sess-line--active .sess-swapblocked,
-.sess-line--active .sess-stranded,
-.sess-line--active .sess-offpool,
-.sess-line--active .sess-ask-state,
-.sess-line--active .sess-unmeasured,
-.sess-line--active .sess-substrate,
-.sess-line--active .sess-child,
-/* Task 6: .sess-repo paints --ink-tertiary of its own — it sits inside
-   `.sess-open` on the row's FIRST line, beside the label, not inside
-   `.sess-meta` like the cells above, but the same rule applies: a child's
-   own `color` beats the inherited flip, so without this line it strands on
-   the selected slab exactly the way `.sess-held` did before it joined this
-   group. Joins the pair this rule already declares — no new pair for
-   design/contrast-check.mjs. */
-.sess-line--active .sess-repo,
-/* D-5301: the coordinator badge sits beside `.sess-repo` in the same register
-   and strands on the selected slab the same way. */
-.sess-line--active .sess-role,
-/* §1.6b's chip paints --status-dead-text (and --ink-tertiary on two variants)
-   of its own, so it strands on the selected slab exactly the way .sess-warn
-   would without this line. */
-.sess-line--active .sess-spawn,
-/* …and its two ink-tertiary VARIANTS, which are (0,2,0) exactly like the line
-   above and are declared LATER in this file, so the bare selector alone would
-   lose the tie to them on the selected row — the same stranding, one attribute
-   deeper. `[data-spawn]` (0,3,0) settles it by specificity rather than by
-   source order, so moving either rule stays free. */
-.sess-line--active .sess-spawn[data-spawn],
-/* The context-pressure chip (D-2011) paints --status-attention-text of its
-   own, so it strands on the selected slab exactly like .sess-warn above
-   without this line. */
-.sess-line--active .sess-ctxpressure,
-/* …and its wedge VARIANT (D-2016), same shape as .sess-spawn's own variant
-   two lines up: `[data-wedge]` is (0,2,0), equal to the bare
-   `.sess-line--active .sess-ctxpressure` above and declared LATER in this
-   file (fleet.css's own `.sess-ctxpressure[data-wedge]` rule), so the tie
-   would go to source order without a higher-specificity member here too. */
-.sess-line--active .sess-ctxpressure[data-wedge],
-.sess-line--active .sess-meta > *:not(:first-child)::before {
-  color: var(--edge-strong);
-}
-
-/* The lamp keeps its hue by keeping its floor. --lamp-size (18px) has sat in
-   tokens.css since day one, documented as exactly this ("status-dot lamp
-   bezel: --bg-well floor") and used nowhere. The plate is what makes every dot
-   on this row sit on --bg-well — the one background design/contrast-check.mjs
-   already verifies all four dots against at 3:1 in BOTH themes (dark 10.67 /
-   11.20 / 5.31 / 6.08; light 4.10 / 4.64 / 3.83 / 3.15). Without it the
-   dark-theme dots die on the near-white slab (busy 1.63, attention 1.55).
-   Absolutely positioned so it costs the first grid column nothing: widening
-   .sess-lamp would push this row's label ~10px right of every sibling's and
-   break the shared left edge. At 18px centred on an 8px dot it overhangs 5px
-   per side into the row's own 8px padding and 8px gap — no reflow, no tap
-   target moves. */
-.sess-line--active .sess-lamp { position: relative; }
-.sess-line--active .sess-lamp::before {
-  content: '';
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: var(--lamp-size);
-  height: var(--lamp-size);
-  margin: calc(var(--lamp-size) / -2) 0 0 calc(var(--lamp-size) / -2);
-  border-radius: var(--r-full);
-  background: var(--bg-well);
-}
-/* The plate is positioned; without this it paints over the unpositioned dot. */
-.sess-line--active .sess-lamp > .dot { position: relative; }
-
-/* The ··· keeps its 32×32 box, hairline and tap overlay — it flips polarity
-   with the row instead of dissolving into it. Its normal --bg-raised fill is
-   14.32:1 against the slab, i.e. a bright chip punched into the bar, the
-   inverse of its shipped identity. Re-grounding to --bg-page keeps the matched
-   pair with .proj-card-add intact in form (glyph 9.36:1 dark / 6.81:1 light on
-   that fill). The hairline stays exempt as a hairline, exactly as
-   --edge-subtle on --bg-raised is. */
-.sess-line--active .sess-actions {
-  background: var(--bg-page);
-  border-color: var(--edge-strong);
-  color: var(--ink-secondary);
-}
-
-/* base.css draws :focus-visible in --accent, which measures 1.63:1 on the dark
-   slab — an invisible ring on exactly the row most likely to hold focus.
-   Colour only, plus a 1px offset so the ring's outer edge lands 3px out,
-   inside the row's own 4px padding, instead of flush with the slab's edge
-   where subpixel rounding can drop 1px onto --bg-surface. */
-.sess-line--active :focus-visible {
-  outline-color: var(--bg-page);
-  outline-offset: 1px;
-}
-
-/* Forced colours flatten fill AND ink to Canvas/CanvasText: the polarity
-   channel does not exist there, and the row would be left with font-weight
-   alone. An inset border is the channel that survives. */
+/* Forced colours flatten fill AND ink to Canvas/CanvasText and drop the
+   inset box-shadow, so neither the tint nor the rail exists there, and the
+   row would be left with font-weight alone. An inset outline is the channel
+   that survives. */
 @media (forced-colors: active) {
   .sess-line--active {
     outline: 2px solid CanvasText;
@@ -1268,8 +1158,9 @@
    rather than a cell inside the .sess-meta the tally sits in. Unlike
    .sess-tally/.sess-cleanup-fact/.sess-subagents above, .sess-subagent-row
    below sets its own colour rather than inheriting .sess-meta's (it is not a
-   descendant of it) — same shape as .sess-ask further down, and it needs the
-   matching .sess-line--active override for the same reason that one does.
+   descendant of it) — same shape as .sess-ask further down. On the selected
+   row it keeps that colour on the accent tint, where the gate measures it
+   (D-5101).
    A real <ul> now that a <div>, not a <button>, is the ancestor: list-style
    and the list's own margin/padding are zeroed here rather than trusted to
    preflight, same reasoning as .sess-subagents above. */
@@ -1319,15 +1210,11 @@
    long time reads louder than the quiet reading above, so it borrows
    .sess-warn's own --status-dead-text rather than minting a new ink. An
    ATTRIBUTE variant, not a class, so `session-line.test.tsx`'s automated
-   "every coloured class is answered on the selected slab" census (which
-   scans literal `className` strings only) never has to know this state
-   exists — same idiom `.sess-spawn[data-spawn]`'s own variants already use,
-   and the same reason: this file states the achromatic answer for the BASE
-   class below, and this rule's own higher specificity — not source order —
-   is what keeps the selected+wedged row from losing that answer to this
-   variant (mirrors `.sess-line--active .sess-spawn[data-spawn]` a few
-   screens down; see fleet-css.test.ts's dedicated specificity proof on that
-   cell for the failure mode this avoids). */
+   "every coloured cell paints an ink the gate measures on the tint" census
+   (which scans literal `className` strings only) never has to know this
+   state exists — same idiom `.sess-spawn[data-spawn]`'s own variants already
+   use. Its --status-dead-text is one of the inks that census admits, and
+   the selected row keeps it on the accent tint (D-5101). */
 .sess-ctxpressure[data-wedge] {
   color: var(--status-dead-text);
   font-weight: var(--weight-medium);
@@ -1371,9 +1258,8 @@
    fleet screen carries the amber; a red chip per row would say it N times).
    Fixed words ("unreachable tmux"), so `flex: none` like its sibling — the
    reason lives in `title`, never rendered here. Its own `color` takes it out
-   of .sess-meta's inheritance, so it is also named in .sess-line--active's
-   achromatic group above — see that rule's comment for the ratios this
-   costs while a cell is not. */
+   of .sess-meta's inheritance, and the selected row keeps it on the accent
+   tint, where the gate measures --ink-tertiary (D-5101). */
 .sess-substrate {
   color: var(--ink-tertiary);
   flex: none;
@@ -1386,8 +1272,8 @@
    selector on the rule above, because that rule's key is grandfathered in
    the contrast gate's uncovered census and renaming it would read as a new
    blind spot. Its own `color` takes it out of .sess-meta's
-   inheritance, so it is also named in .sess-line--active's achromatic group,
-   which answers the selected row. The unselected row's ground is the project
+   inheritance, and the selected row keeps it on the accent tint, where the
+   gate measures --ink-tertiary (D-5101). The unselected row's ground is the project
    card: design/audit.mjs's INHERITED_GROUNDS entry for this rule is what makes
    that pair MEASURED rather than a new entry in the uncovered census. */
 .sess-child {
@@ -1403,8 +1289,8 @@
    truncating mono cells (below), so the shape census sees one rule; its ink
    is its own rule, not a member of .sess-held's colour group, so that
    grandfathered selector stays as it is, and design/audit.mjs grounds it on
-   the project card. The selected row is answered by the achromatic group
-   above. */
+   the project card. The selected row keeps it on the accent tint, where the
+   gate measures --ink-tertiary (D-5101). */
 .sess-restart {
   color: var(--ink-tertiary);
 }
@@ -1424,10 +1310,10 @@
    the same reason — a short, verbatim, ink-tertiary fact with its full text
    in `title`.
 
-   The `color` below is UNSELECTED ink only. Setting a colour here at all is
-   what takes these cells out of .sess-meta's inheritance, so each one also
-   has to be named in .sess-line--active's achromatic group above — see the
-   comment on that rule for the ratios this cost while they were not. */
+   The `color` below is the cells' ink on every row. Setting a colour here at
+   all takes these cells out of .sess-meta's inheritance; the selected row
+   keeps it on the accent tint, where the gate measures --ink-tertiary
+   (D-5101). */
 /* ONE TRUNCATING MONO CELL, seven slots of the session line. The four
    declarations under the colour are the same four `.sess-stranded` and
    `.sess-acct` each declared for themselves — siblings in one component, so
@@ -1535,10 +1421,9 @@ button.sess-held {
      button font, and it also outranks `.sess-held`'s own `font-family`
      declaration above (0,1,1 beats 0,1,0), so the mono face has to be restated
      here or the cell silently changes typeface the moment it becomes a door.
-     `color` is deliberately NOT restated — `.sess-held` above and
-     `.sess-line--active .sess-held` (0,2,0, which still outranks this rule)
-     both keep answering for it, and a copy here would be one more place to
-     forget. */
+     `color` is deliberately NOT restated — `.sess-held` above answers for
+     it on every row, the selected one's tint included (D-5101), and a copy
+     here would be one more place to forget. */
   font: inherit;
   font-family: var(--family-mono);
   text-align: left;
@@ -1742,9 +1627,11 @@ button.sess-held {
 }
 
 /* A fold hides the selected row exactly as it would hide a pending dialog, so
-   the card name wears the slab at chip scale — one idiom at two scales, so
-   "inverted = the one you are in" reads the same on a row and on a folded
-   card. Costs 8px of a nowrap+ellipsis name, on one card, only while folded. */
+   the card name wears an inverted chip, "the one you are in", on the folded
+   card. It was the row's slab at chip scale; since D-5101 the row itself is
+   the accent tint plus a rail, and this chip is left as it was (it is not
+   Task 9's to retune). Costs 8px of a nowrap+ellipsis name, on one card,
+   only while folded. */
 .proj-card[data-holds-selection] .proj-card-name {
   background: var(--ink-primary);
   color: var(--bg-page);
@@ -2121,12 +2008,13 @@ button.proj-card-pool::before {
    label drops --ink-primary -> --ink-secondary (15.68 -> 8.67 dark,
    16.58 -> 7.41 light, both already-gated pairs) and gives up its medium
    weight. Two channels, no compositing, floor cleared in both themes.
-   :not(.sess-line--active) because the selected row reverses out and fills
-   with --ink-primary as a BACKGROUND — --ink-secondary on that slab is 1.81
-   dark / 2.24 light, and project-card.test.tsx:337 renders precisely an
-   archived selected row. This rule sits after .sess-line--active .sess-label
-   in source order and has equal specificity, so the guard is load-bearing,
-   not decorative. */
+   :not(.sess-line--active) keeps the selected archived row's label in the
+   row's own ink and semibold weight, the selection's non-colour channel: this
+   rule sits after .sess-line--active .sess-label in source order with equal
+   specificity, so without the guard it would take the weight back. The
+   selector is kept byte for byte (D-5101): design/audit.mjs's INHERITED_GROUNDS
+   key and contrast.test.ts's mutation anchors name it, and
+   project-card.test.tsx renders precisely an archived selected row. */
 .proj-archived-body .sess-line:not(.sess-line--active) .sess-label {
   color: var(--ink-secondary);
   font-weight: var(--weight-regular);

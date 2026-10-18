@@ -39,3 +39,12 @@ export const PRESS_FEEDBACK =
 export const PRESS_TRANSFORM =
   'cursor-pointer transition-transform duration-press ease-swift'
   + ' motion-reduce:transition-none';
+
+/** THE GROUND A ROW LIFTS TO AND SINKS TO (D-5101): `--bg-hover` under the
+ *  mouse, `--bg-pressed` while held. `enabled:` on both, because a disabled
+ *  row neither lifts nor sinks; `hover:` is gated on `(hover: hover)` by
+ *  Tailwind v4, so a phone never sticks on it. One constant because
+ *  `ListRow` and `BareRow` both carry it, and a sentence spelled in two files
+ *  drifts (`literal-census.test.ts`). The ghost and quiet buttons spell the
+ *  same two utilities inside their cva variants. */
+export const PRESS_GROUND = 'enabled:hover:bg-hover enabled:active:bg-pressed';
