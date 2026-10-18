@@ -120,6 +120,16 @@ export function SessionLine({
 
   const label = sessionLabel(session);
 
+  // D-5301 (coordinator-first spec §8): every session the operator creates is
+  // its project's coordinator, and the server derives `role` from `.child`
+  // alone. THE ONE READER of `FleetSession.role` in `pwa/src`: the live `fleet`
+  // frame is CAST, never revived (`stores/fleet.ts`'s `asFleetMsg`), so a
+  // server older than the field omits the key, and only the exact word earns
+  // the badge — absent, `null`, `child` and a word this bundle never heard of
+  // all render nothing.
+  const role: unknown = (session as { role?: unknown }).role;
+  const coordinator = role === 'coordinator';
+
 
   // Dead sessions stay silent about subagents too, same reasoning as limits
   // above: nothing is running, so a hook-reported roster from before the
@@ -213,6 +223,11 @@ export function SessionLine({
         >
           <TypedLabel className="sess-label" text={label} />
           {repo !== null && <span className="sess-repo">{repo}</span>}
+          {/* Inside the button, after the label and the repo, like `.sess-repo`:
+              the role is part of what this row IS, so it rides the accessible
+              name ("quiet-mesa coordinator"), and on the label's own line it
+              costs no third line at any width — the label ellipsises first. */}
+          {coordinator && <span className="sess-role">coordinator</span>}
         </button>
         <SessionMeta
           session={session}

@@ -10,7 +10,7 @@ import type { HookState } from './hookstate.js';
 import type { FleetSession, LifecycleInput, PrState, SessionStatus, SessionUsage, TaskProgress } from '../../shared/api.js';
 // The ladder lives in `shared/` because `reviveFleetSession` is its second
 // producer and the two must not be able to disagree — see its own docstring.
-import { sessionBucket, sessionLifecycle, spawnVerdict } from '../../shared/api.js';
+import { sessionBucket, sessionLifecycle, sessionRoleOf, spawnVerdict } from '../../shared/api.js';
 import type { Roster } from '../../shared/roster.js';
 // Task 19: the chip's own read. No cycle — `coord/store.ts` imports nothing
 // from this file, the same pairing `watch.ts` already has with both.
@@ -871,6 +871,10 @@ export async function assembleFleet(
       // three-way reading of `$REG/<id>.child` (`SessionRecord.child`). A
       // display value on this wire — the bind gate re-reads the registry.
       child: r.child,
+      // D-5301: the role, from `.child` and nothing else — `sessionRoleOf`,
+      // the one derivation, so the badge and the start card agree on the
+      // `.child` axis only (the card is also silent for a held row; see there).
+      role: sessionRoleOf(r.child),
       // Workspace lifecycle §5.1. `child` here is the registry's reading, `unreadable` counted as a child.
       releasedFrom: released.ok
         ? releasedFrom({
