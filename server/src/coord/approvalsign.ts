@@ -13,12 +13,13 @@
  * L3: it owns two files on this box's disk and the one signing call; it decides nothing about a ruling's content.
  */
 import { createPrivateKey, createPublicKey, generateKeyPairSync, sign, type KeyObject } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import {
   APPROVAL_SIGNING_KEY_FILE, approvalRulingBytes, isApprovalRefusal, isApprovalReleaseReason, type ApprovalRulingRecord,
 } from '../../../shared/api.js';
 import type { NodeRole } from '../../../shared/node-role.js';
+import type { FleetMode } from '../config.js';
 
 /** The operator's opt-in file on a single box (spec §6.1): without it a `both` server mints no rulings. */
 export const APPROVALS_SINGLE_BOX_FILE = 'approvals-single-box';
@@ -49,6 +50,11 @@ export function loadOrCreateApprovalSigner(ccrcDir: string): ApprovalSigner {
   if (existsSync(file)) {
     priv = createPrivateKey(readFileSync(file, 'utf8'));
     if (priv.asymmetricKeyType !== 'ed25519') throw new Error(`${file} is not an Ed25519 private key`);
+    // A key the operator copied or restored keeps the copy's mode: tighten it, never use it wider than 0600.
+    if ((statSync(file).mode & 0o077) !== 0) {
+      chmodSync(file, 0o600);
+      console.warn(`ccrc-server: ${file} was readable beyond its owner; its mode is now 0600`);
+    }
   } else {
     mkdirSync(ccrcDir, { recursive: true, mode: 0o700 });
     const pair = generateKeyPairSync('ed25519');
@@ -73,12 +79,14 @@ export function loadOrCreateApprovalSigner(ccrcDir: string): ApprovalSigner {
 }
 
 /**
- * Whether this server may mint and sign rulings at all (spec §6.1, §6.4): a `server` (or `fleet`) role yes; `both`
- * only when the operator placed `<home>/.ccrc/approvals-single-box`, because on one box the signature separates
- * nothing. Reads the role as `config.ts`'s `deriveRole` derived it, never the opt-in file alone.
+ * Whether this server may mint and sign rulings at all (spec §6.1, §6.4): a `server` (or `fleet`) role on a remote
+ * fleet yes; otherwise only when the operator placed `<home>/.ccrc/approvals-single-box`, because on one box the
+ * signature separates nothing. Single-box is `both`, or a fleet mode of `local` whatever the role: `deriveRole`
+ * prefers a recorded `CCRC_ROLE`, and a box that records `server` but runs `CCRC_FLEET=local` hosts the sessions
+ * beside the key (D-5298). Never the opt-in file alone.
  */
-export function rulingsAllowedHere(role: NodeRole, ccrcDir: string): boolean {
-  if (role !== 'both') return true;
+export function rulingsAllowedHere(role: NodeRole, fleetMode: FleetMode, ccrcDir: string): boolean {
+  if (role !== 'both' && fleetMode === 'remote') return true;
   return existsSync(path.join(ccrcDir, APPROVALS_SINGLE_BOX_FILE));
 }
 

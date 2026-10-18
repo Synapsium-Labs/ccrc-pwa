@@ -2,7 +2,7 @@
 // mode 0600 and reused, served as its public half, and the single-box gate. The key pair is generated in the test's
 // own fixture directory, never committed.
 import { describe, it, expect } from 'vitest';
-import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { createPublicKey, verify } from 'node:crypto';
 import path from 'node:path';
 import { approvalKeyPath, loadOrCreateApprovalSigner, rulingsAllowedHere, APPROVALS_SINGLE_BOX_FILE } from '../src/coord/approvalsign.js';
@@ -43,14 +43,29 @@ describe('the approval signing key (spec §6.4)', () => {
     expect(readFileSync(approvalKeyPath(dir), 'utf8')).toBe('not a key\n');
   });
 
-  it('rulingsAllowedHere: role server yes; both only with the operator\'s opt-in file', () => {
+  it('rulingsAllowedHere: role server on a remote fleet yes; both, or any role on a local fleet, only with the operator\'s opt-in file', () => {
     const dir = path.join(mkTmp('ccrc-aprsign-'), '.ccrc');
     loadOrCreateApprovalSigner(dir);
-    expect(rulingsAllowedHere('server', dir)).toBe(true);
-    expect(rulingsAllowedHere('both', dir)).toBe(false);
+    expect(rulingsAllowedHere('server', 'remote', dir)).toBe(true);
+    expect(rulingsAllowedHere('both', 'local', dir)).toBe(false);
+    expect(rulingsAllowedHere('both', 'remote', dir)).toBe(false);
+    // A recorded CCRC_ROLE=server over CCRC_FLEET=local hosts the sessions beside the key: single-box whatever the role.
+    expect(rulingsAllowedHere('server', 'local', dir)).toBe(false);
+    expect(rulingsAllowedHere('fleet', 'local', dir)).toBe(false);
     writeFileSync(path.join(dir, APPROVALS_SINGLE_BOX_FILE), '');
-    expect(rulingsAllowedHere('both', dir)).toBe(true);
-    expect(rulingsAllowedHere('server', dir)).toBe(true);
+    expect(rulingsAllowedHere('both', 'local', dir)).toBe(true);
+    expect(rulingsAllowedHere('server', 'local', dir)).toBe(true);
+    expect(rulingsAllowedHere('server', 'remote', dir)).toBe(true);
+  });
+
+  it('an existing key file wider than 0600 (copied or restored) is tightened to 0600 on load, and still used', () => {
+    const dir = path.join(mkTmp('ccrc-aprsign-'), '.ccrc');
+    const a = loadOrCreateApprovalSigner(dir);
+    const file = approvalKeyPath(dir);
+    chmodSync(file, 0o644);
+    const b = loadOrCreateApprovalSigner(dir);
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+    expect(b.publicKeyPem()).toBe(a.publicKeyPem());
   });
 
   it('GET /api/approvals/key serves the public half, box-token gated', async () => {

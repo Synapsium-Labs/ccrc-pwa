@@ -9422,8 +9422,17 @@ _check_approval-key-colocated() {
     for f in "$HOME/.cc-sessions"/*.uuid; do [ -e "$f" ] && n=$((n + 1)); done
   fi
   if [ "$n" -gt 0 ]; then
-    local opt="the operator has not opted in, so this server mints no rulings (409 single-box)"
-    [ -f "$HOME/.ccrc/approvals-single-box" ] && opt="the operator opted in (\$HOME/.ccrc/approvals-single-box), so rulings are minted and signed here"
+    # The server's own gate (`rulingsAllowedHere`): a non-`both` role over CCRC_FLEET=remote mints without the opt-in;
+    # `both`, or a local fleet mode whatever the recorded role, only with it.
+    local opt="the operator has not opted in, so this server mints no rulings (409 single-box)" role="" mode=""
+    if [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ]; then
+      role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"; mode="$(_box_env_value "$BOX_ENV_FILE" CCRC_FLEET)"
+    fi
+    if [ "$mode" = remote ] && [ "$role" != both ]; then
+      opt="this box records CCRC_ROLE=${role:-(none: server, derived)} and CCRC_FLEET=remote, so this server mints and signs rulings here without the opt-in"
+    elif [ -f "$HOME/.ccrc/approvals-single-box" ]; then
+      opt="the operator opted in (\$HOME/.ccrc/approvals-single-box), so rulings are minted and signed here"
+    fi
     _dr_warn approval-key-colocated "approval-key-colocated: the server's approval signing key sits beside $n session row(s) on this box, so a same-user session could read it; $opt" \
       "run the server and the sessions on two boxes (ccrc install --role server / --role fleet) for a signature that separates them; on one box, keep \$HOME/.ccrc/approvals-single-box only if you accept that"
     return 2

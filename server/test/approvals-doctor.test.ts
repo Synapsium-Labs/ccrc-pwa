@@ -24,8 +24,8 @@ const put = (rel: string, text: string): void => {
 };
 beforeEach(() => { home = mkTmp('ccrc-aprdoc-'); });
 afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
-const run = (fn: string, role = 'both'): { code: number; out: string } => {
-  put('.ccrc/box.env', `CCRC_ROLE=${role}\n`);
+const run = (fn: string, role = 'both', more = ''): { code: number; out: string } => {
+  put('.ccrc/box.env', `CCRC_ROLE=${role}\n${more}`);
   const script = `source ${shq(CCRC)}; source ${shq(CHECKS)}; BOX_ENV_FILE=${shq(path.join(home, '.ccrc', 'box.env'))}; ${fn}`;
   const r = spawnSync(BASH, ['-c', script], { encoding: 'utf8', env: ghContainedEnv(home, { ...process.env, HOME: home }) });
   return { code: r.status ?? -1, out: `${r.stdout}${r.stderr}` };
@@ -45,6 +45,16 @@ describe('doctor: approval-key-colocated (spec §6.1)', () => {
     put('.ccrc/approvals-single-box', '');
     const r = run('_check_approval-key-colocated');
     expect(r.out).toMatch(/^WARN approval-key-colocated: .*the operator opted in/m);
+  });
+  it('follows the server\'s own gate: a server role over CCRC_FLEET=remote mints without the opt-in; over local it does not', () => {
+    put(`.ccrc/${APPROVAL_SIGNING_KEY_FILE}`, 'key\n');
+    put('.cc-sessions/project-a-quiet-basin.uuid', 'u-1\n');
+    expect(run('_check_approval-key-colocated', 'server', 'CCRC_FLEET=remote\n').out)
+      .toMatch(/^WARN approval-key-colocated: .*CCRC_FLEET=remote, so this server mints and signs rulings here without the opt-in/m);
+    expect(run('_check_approval-key-colocated', 'server', 'CCRC_FLEET=local\n').out)
+      .toMatch(/^WARN approval-key-colocated: .*has not opted in, so this server mints no rulings/m);
+    expect(run('_check_approval-key-colocated', 'both', 'CCRC_FLEET=remote\n').out)
+      .toMatch(/^WARN approval-key-colocated: .*has not opted in, so this server mints no rulings/m);
   });
   it('silent on a server-only HOME: the key and no session rows is a PASS', () => {
     put(`.ccrc/${APPROVAL_SIGNING_KEY_FILE}`, 'key\n');

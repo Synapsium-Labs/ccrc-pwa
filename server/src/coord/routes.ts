@@ -4337,7 +4337,7 @@ export function registerCoordRoutes(
     }
     if (await approvalsKilled()) return refuseRoute(reply, 'approvals-disabled');
     if (!(await requireAttribution(reply, sessionId, sessionUuid, 'sessionUuid'))) return;
-    if (!rulingsAllowedHere(deps.cfg.role, deps.cfg.ccrcDir)) {
+    if (!rulingsAllowedHere(deps.cfg.role, deps.cfg.fleetMode, deps.cfg.ccrcDir)) {
       return refuseRoute(reply, 'single-box', { detail: 'this server shares one box with the sessions; place ~/.ccrc/approvals-single-box to opt in' });
     }
     const signer = signerFor();
@@ -4486,7 +4486,7 @@ export function registerCoordRoutes(
     const row = read.row;
     if (row === null) return refuseRoute(reply, 'unknown-approval');
     if (await approvalsKilled()) return refuseRoute(reply, 'approvals-disabled');
-    if (!rulingsAllowedHere(deps.cfg.role, deps.cfg.ccrcDir)) return refuseRoute(reply, 'single-box');
+    if (!rulingsAllowedHere(deps.cfg.role, deps.cfg.fleetMode, deps.cfg.ccrcDir)) return refuseRoute(reply, 'single-box');
     if (row.parentId !== fromId) {
       return refuseRoute(reply, 'not-parent', { detail: 'only the claimant this prompt was held for may rule on it' });
     }
