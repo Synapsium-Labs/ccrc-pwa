@@ -1717,6 +1717,16 @@ describe('the quiet "with coordinator" state (D-5296)', () => {
     expect(container.querySelector('.sess-state--coordinator')).not.toBeInTheDocument();
   });
 
+  // `dead` reads the status and `state` the bucket, so they can disagree: a
+  // process that died before the ladder refiled the row is still `working`.
+  it('a dead process on a row still bucketed working never reads the coordinator words', () => {
+    const { container } = render(
+      <SessionLine session={held({ status: 'dead' })} onOpen={() => {}} onActions={() => {}} />,
+    );
+    expect(container.querySelector('.sess-state--coordinator')).not.toBeInTheDocument();
+    expect(container.querySelector('.sess-state')?.textContent).not.toContain('with coordinator');
+  });
+
   it('an idle row with the field set reads idle, never the coordinator words', () => {
     const { container } = render(
       <SessionLine session={held({ bucket: 'idle' })} onOpen={() => {}} onActions={() => {}} />,
