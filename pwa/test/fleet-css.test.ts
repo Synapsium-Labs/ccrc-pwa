@@ -132,13 +132,21 @@ describe('fleet density and alignment', () => {
     });
   });
 
-  it('has no @container query left — .sess-acct can no longer be hidden or squeezed', () => {
+  it('has no @container query that can hide or squeeze a cell — .sess-acct can no longer be hidden or squeezed', () => {
     // The query this repeatedly guarded (first hiding .sess-acct, then
     // hiding .sess-state, then discovered to compact .sess-acct into a
     // neighbour's track) is gone along with the one-line layout it existed
     // to rescue. .fleet-list's own container-type/-name went with it —
     // nothing else in this file uses them.
-    expect(css).not.toContain('@container');
+    // D-5545 (verifier round 1) brought back exactly ONE query, of a different kind: it reads `.sess-body`'s own
+    // width to pick between the two drawn forms of a long name or programme (`Fit`), and it may touch nothing
+    // but those two forms' `display` — never a cell's track, never `.sess-acct`/`.sess-state`.
+    const queries = css.match(/@container[^{]*\{(?:[^{}]*\{[^{}]*\})*\s*\}/g) ?? [];
+    expect(queries).toHaveLength(1);
+    expect(queries[0]).toMatch(/^@container sess-body \(min-width: \d+px\)/);
+    const selectors = [...queries[0]!.replace(/^@container[^{]*\{/, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => [m[1]!.trim(), m[2]!.trim()]);
+    expect(selectors).toEqual([['.fit-full', 'display: inline;'], ['.fit-short', 'display: none;']]);
+    expect(css).toMatch(/\.sess-body \{ container: sess-body \/ inline-size; \}/);
     expect(css).not.toContain('container-type');
     expect(css).not.toContain('container-name');
   });
@@ -1352,15 +1360,33 @@ describe('the Accounts screen keeps its voices (the audit\'s quick wins)', () =>
   });
 });
 
-// D-5528: the programme slug is variable-length; at 360 it ellipsises and the
-// wave — the fact the operator asked for — stays whole.
+// D-5545: the card is a glance and NO cell on it ends in an ellipsis — the name and the programme are shortened by
+// whole tokens in `sessionFacts.ts`, and every cell that used to ellipsise wraps at a space instead. jsdom lays
+// nothing out, so the rule is held where it is decided: each cell's LAST declaration of each property.
+describe('no card cell ends in an ellipsis (D-5545)', () => {
+  for (const sel of ['.sess-label', '.sess-meta > .sess-held', '.sess-meta > .sess-context', '.sess-meta > .sess-marker', '.sess-pw-prog']) {
+    it(`${sel} clips nothing and wraps`, () => {
+      expect(declaredValues(css, sel, 'text-overflow').at(-1), sel).toBe('clip');
+      expect(declaredValues(css, sel, 'white-space').at(-1), sel).toBe('normal');
+    });
+  }
+  it('the cross-project chip drops under the name rather than squeezing it', () => {
+    expect(declaredValues(css, '.sess-open', 'flex-wrap').at(-1)).toBe('wrap');
+  });
+});
+
+// D-5528: the programme slug is variable-length and the wave — the fact the
+// operator asked for — stays whole. D-5545: the programme no longer ellipsises
+// either: the model shortens it by whole tokens (`shortenByToken`), and the
+// last rule lets it wrap at a space rather than cut a fragment.
 describe('the programme-and-wave label shrinks by its programme, never its wave (D-5528)', () => {
   it('the wave half never shrinks', () => {
     expect(declaredValues(css, '.sess-pw-wave', 'flex')).toEqual(['none']);
   });
-  it('the programme half ellipsises', () => {
-    expect(declaredValues(css, '.sess-pw-prog', 'text-overflow')).toEqual(['ellipsis']);
-    expect(declaredValues(css, '.sess-pw-prog', 'overflow')).toEqual(['hidden']);
+  it('the programme half never ends in an ellipsis: its last rule clips nothing and wraps (D-5545)', () => {
+    expect(declaredValues(css, '.sess-pw-prog', 'text-overflow').at(-1)).toBe('clip');
+    expect(declaredValues(css, '.sess-pw-prog', 'overflow').at(-1)).toBe('visible');
+    expect(declaredValues(css, '.sess-pw-prog', 'white-space').at(-1)).toBe('normal');
   });
   it('the cell that carries it is never narrower than its wave', () => {
     expect(ruleFor('.sess-held:has(> .sess-pw)')).toMatch(/min-width:\s*calc\(var\(--pw-wave/);

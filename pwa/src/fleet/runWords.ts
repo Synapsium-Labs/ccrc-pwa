@@ -831,11 +831,13 @@ export const programmeWaveTail = (r: NonNullable<ChildRunContext['run']>): strin
  *  the run-board door's title). `reclaimed` adds the lifecycle clause, true only
  *  for a workspace the run minted. */
 export const runSentence = (
-  r: NonNullable<ChildRunContext['run']>, coordinator: string | null, reclaimed: boolean,
+  r: NonNullable<ChildRunContext['run']>, coordinator: string | null, reclaimed: boolean, whose: string | null = null,
 ): string => {
   const programme = r.programTitle !== '' ? r.programTitle : r.program;
   const verb = r.kind === 'review' ? 'reviews' : 'does';
-  return `this workspace ${verb} one wave of ${programme} for ${coordinator ?? 'its coordinator'}`
+  // `whose`: the session header names whose code the wave is done on (D-5527). ONE sentence for the fleet
+  // row's title and the header's (D-5545), so a review reads "reviews one wave" on both.
+  return `this workspace ${verb} one wave of ${programme}${whose === null ? '' : ` on ${whose} code`} for ${coordinator ?? 'its coordinator'}`
     + (reclaimed ? '; it is stopped or reclaimed when the wave is done' : '');
 };
 

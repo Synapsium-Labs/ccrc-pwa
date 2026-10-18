@@ -2114,8 +2114,9 @@ the last quarter hour keeps running on the wrong-pool account until its gate
 opens, and then goes with an `auto-pool` line. Two sessions do not wait:
 a hard-blocked one takes the rescue arm immediately, and a session under a
 program hold does not move *at all* until it is released — a retag never breaks
-a hold. The visible waiting state is `data-offpool` on the session row: the
-account chip says this session is running in one pool while its project is in
+a hold. The visible waiting state is the `off-pool` marker on the session row
+(`data-marker="off-pool"`, its sentence in the title and in the session
+header's details): this session is running in one pool while its project is in
 another, which is exactly true, and reads as "queued", not "stuck". Retagging
 deliberately does not bypass `SWAP_COOLDOWN`; that gate exists to stop a swap
 storm and a retag is not a good reason to reopen one.
@@ -2780,12 +2781,17 @@ chooser (next section); a **Hot files** strip appears only while some session ho
 `Dead` — and the three that want a human add this device's unseen count and **Mark all seen**. **Each project gets
 one card**; tap its name to fold it (remembered per browser). Its head shows the account the project is pinned
 to, a dot while anything on it waits on you, `N working` while folded, `N stranded`, the project's pool chip (tap
-to tag the project) and a **+** that adds a workspace. **Each row is one session**: a dot and a state word
-(`waiting`, `working`, `done`, `idle`, `merged`, `archived`, `exited`), its label and account, and chips for what
-else the row knows — a hold reason, a `⚠` when its account's 5h or 7d window is over 75%, context at 80% or
-more, running subagents, a stranded or refused swap, an off-pool account, the last spawn verdict, a lifecycle
-qualifier. A coordinator's workers sit bracketed under it (`└─`); `Released (N)` and `Archived (N)` fold at the
-card's foot.
+to tag the project) and a **+** that adds a workspace. **Each row is one session, at a glance** (D-5545): its
+name (a long one shortened by whole tokens, never cut mid-word), a dot and a state word (`waiting`, `working`,
+`done`, `idle`, `merged`, `archived`, `exited`), at most ONE attention marker — the most urgent of an unreachable
+pane, a gone coordinator, a failed spawn, `needs you`, `with coordinator`, a lifecycle qualifier, a stranded or
+refused swap, a wedge, `limit N%` (its account's 5h or 7d window over 75%), context at 80% or more, a hibernated
+coordinator, a recent restart, an unreadable registry, `off-pool` — and ONE context line: a child's `<programme> ·
+wave N of M`, otherwise its PR or branch. A row working on another project's code carries that project's chip.
+Everything else the row knows — its account, role, task tally, subagents, hold reason, question, graph reads and
+every marker, not only the first — is in the **session header**, a superset of the row (its details row folds
+behind one door on a phone). A coordinator's workers sit bracketed under it (`└─`); `Released (N)` and
+`Archived (N)` fold at the card's foot.
 
 **A row's `···`** opens its actions sheet, which says in a sentence what is wrong with the row when something is,
 and what would revive it: **Restart session**; **Swap account** — every other account you have not switched off,
