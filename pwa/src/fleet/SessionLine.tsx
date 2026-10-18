@@ -239,7 +239,6 @@ export function SessionLine({
           roster={roster}
           projectPool={projectPool}
           onOpenRun={onOpenRun}
-          selected={selected}
           state={state}
           dead={dead}
           asleepAt={asleepAt}

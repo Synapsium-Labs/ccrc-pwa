@@ -47,6 +47,11 @@ export const KEYCAP =
   'keycap grid min-w-tap min-h-tap place-items-center rounded-sm border border-b-2'
   + ' font-mono text-xs font-medium leading-none tracking-caps not-italic normal-nums'
   + ` ${PRESS_TRANSFORM} enabled:active:translate-y-px`
+  // D-5101: the hover ink. Both of today's grounds re-declare the ink in an
+  // app sheet (`.chat-head .keycap` primary, `.term-keys .keycap` on-well),
+  // and an unlayered rule beats a utility, so this lands only where a call
+  // site leaves the ink to the primitive — the terminal keys stay on-well.
+  + ' enabled:hover:text-ink-primary'
   + ` ${FOCUS_RING}`;
 
 export interface KeycapProps extends ButtonHTMLAttributes<HTMLButtonElement> {
