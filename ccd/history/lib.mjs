@@ -151,6 +151,13 @@ export const TMUX_DEADLINE_MS = 2000;               // `tmux display-message -p 
 export const REPARSE_MAX_TARGETS = 500;
 export const CARRIER_KILL_S = 600;                  // == the unit's TimeoutStartSec=10min (DM43)
 export const EXPORT_MARGIN_DAYS = 30;
+// W1-B4 (spec §9.15): the sole-copy export's directory under the root, its segment bound and cadence (both chosen),
+// and the one segment format this build writes and reads. Declared here, above MODE_CHECKED_FILE_ROOTS, which
+// names EXPORT_DIR: a const read before its declaration is a TDZ error at load.
+export const EXPORT_DIR = 'export';
+export const EXPORT_SEGMENT_MAX_BYTES = 256 * 1024 * 1024;
+export const EXPORT_PASS_INTERVAL_MS = 60 * 60 * 1000;
+export const EXPORT_SEGMENT_FORMAT = 1;
 export const LINE_MAX = 16 * 1024 * 1024;           // a longer transcript line is stored raw-only
 /** The largest decompressed size (raw_len) a reader that must hold a whole stored body will decode. A body stored
  *  from a row Claude Code wrote (JSON.stringify output) re-encodes at no more than its line's length, so it is within
@@ -3289,6 +3296,9 @@ export const HEALTH_META = Object.freeze({
   recoverUnmovedTicks: 'recover_unmoved_ticks',
   exportSegmentNewer: 'export_segment_newer',
   exportSegmentMissing: 'export_segment_missing',
+  exportPassMs: 'export_pass_ms',               // W1-B4: when the last export pass ran (doctor's last-pass rule)
+  exportDueOldestMs: 'export_due_oldest_ms',    // W1-B4: the census's oldest due-since (doctor's wait rule)
+  exportPaused: 'export_paused',                // W1-B4: the export's pause for room on the home filesystem
   // D-5027 (history-held-pass-is-fresh-for-tick-stale): the held arm of a scheduled pass stamps the time it ended (ms).
   heldPassMs: 'held_pass_ms',
 });
@@ -3309,7 +3319,7 @@ export const HEALTH_COUNTERS = Object.freeze({
  *  `retention.unmeasured`). Spelled once, here. */
 export const RETENTION_STATE_META = 'retention_state:';
 
-const MODE_CHECKED_FILE_ROOTS = Object.freeze(['db', 'card', 'steer', 'journal', 'export']);
+const MODE_CHECKED_FILE_ROOTS = Object.freeze(['db', 'card', 'steer', 'journal', EXPORT_DIR]);
 
 /** The mode §9.6 wants for one entry under ~/.ccrc/history, by its
  *  root-relative path (`.` is the root itself): every directory 0700; a file
@@ -8064,4 +8074,188 @@ export function decideCardWithdraw(p) {
   if (!p.ingested) return withdrawFor('roster-unreadable');
   if (!p.budgetLeft) return withdrawFor('budget');
   return { act: 'keep' };
+}
+
+// ===========================================================================
+// The sole-copy export's decisions (spec §9.15 "The pass": Preflight, Write;
+// §9.3 the floor; §6.2 ingest_files.source_key; W1-B4 Task 1). Pure: the sweep
+// measures the export filesystem, lists export/<store_id>/ and reads meta, and
+// passes what it saw; every verdict on those facts is taken here.
+// D-4754 (history-sole-copy-export) D-4226
+// B2's D-4695 (history-backup-preflight-and-rename) D-4179
+// D-4755 (history-export-cadence-from-first-tick)
+// ===========================================================================
+
+/** A published segment's name (§9.15 "Write"): `<seq>.<writer>.db`, seq a positive decimal with no leading zero
+ *  and at most 16 digits (then a safe integer), writer the binding's 8-hex token (WRITER_RE's grammar). */
+const SEGMENT_NAME_RE = /^([1-9][0-9]{0,15})\.([0-9a-f]{8})\.db$/;
+
+/** The name segment `seq` of `writer` is published under. A part off its grammar is a caller's bug and throws: no
+ *  file name is ever formed from an unchecked part. */
+export function segmentName({ seq, writer }) {
+  if (!Number.isSafeInteger(seq) || seq < 1) throw new TypeError(`segmentName: seq must be a positive safe integer, got ${String(seq)}`);
+  if (typeof writer !== 'string' || !WRITER_RE.test(writer)) throw new TypeError(`segmentName: writer must be 8 lowercase hex, got ${JSON.stringify(writer)}`);
+  return `${seq}.${writer}.db`;
+}
+
+/** A segment name back to its parts, or null when it is not one: a temp, a stray file, a seq with a leading zero
+ *  or past the safe integers. */
+export function parseSegmentName(name) {
+  if (typeof name !== 'string') return null;
+  const m = SEGMENT_NAME_RE.exec(name);
+  if (m === null) return null;
+  const seq = Number(m[1]);
+  return Number.isSafeInteger(seq) ? { seq, writer: m[2] } : null;
+}
+
+/** The temp a segment is built in before its link (§9.15: `.<seq>.<writer>.db.tmp`), a dot-name beside it, so it is
+ *  never a published name. Only a segment name has one. */
+export function segmentTempName(name) {
+  if (parseSegmentName(name) === null) throw new TypeError(`segmentTempName: not a segment name: ${JSON.stringify(name)}`);
+  return `.${name}.tmp`;
+}
+
+/** Segment names in the order replay applies them (§9.14 "Export replay": `(seq, writer)`): seq numerically, then
+ *  the writer token in code-unit order, never the names' own lexical order (`10.…` before `9.…`). A name that is
+ *  not a segment's is dropped. */
+export function orderSegmentNames(names) {
+  const parsed = [];
+  for (const n of names) {
+    const p = parseSegmentName(n);
+    if (p !== null) parsed.push({ n, ...p });
+  }
+  parsed.sort((a, b) => a.seq - b.seq || (a.writer < b.writer ? -1 : a.writer > b.writer ? 1 : 0));
+  return parsed.map((p) => p.n);
+}
+
+/** The next segment number (§9.15 "Write"): one past the highest seq on disk under export/<store_id>/, of any
+ *  writer, and past the one meta last recorded, so a restored or rebuilt store whose counter is behind, or a
+ *  directory carried in from another box, never has a number reused. A recorded value that is not a positive safe
+ *  integer was not recorded. */
+export function nextSegmentSeq({ onDisk, recorded }) {
+  let top = Number.isSafeInteger(recorded) && recorded > 0 ? recorded : 0;
+  for (const s of onDisk) if (s > top) top = s;
+  return top + 1;
+}
+
+/** Whether this tick runs the export pass (§9.15 "The pass": at most once an hour, chosen). The clock runs from the
+ *  last pass or, before the first, from the store's first tick (D-4755 (history-export-cadence-from-first-tick)): a new
+ *  store writes no segment in its first hour, and the pass and doctor's last-pass rule read one clock. A clock that
+ *  went backwards (a last pass or first tick after now) runs the pass rather than wait for the clock to catch up:
+ *  an early segment costs nothing, a late one widens the window in which the store is the only copy
+ *  (D-4756 (history-export-cadence-clock-backwards)). No clock at all waits: the tick that asks has recorded its own
+ *  ticks row, so the next tick has one. `intervalMs` is exportPassIntervalMs' answer: an hour, or longer after
+ *  passes that published and could not mark (D-4757 (history-export-mark-failure-backs-off)). */
+export function decideExportPass({ nowMs, lastPassMs, firstTickMs, intervalMs = EXPORT_PASS_INTERVAL_MS }) {
+  const since = lastPassMs ?? firstTickMs;
+  if (since === null) return 'wait';
+  const age = nowMs - since;
+  return age < 0 || age >= intervalMs ? 'run' : 'wait';
+}
+
+/** The longest the export waits between passes, however many passes in a row failed to mark (chosen: a day). */
+export const EXPORT_MARK_BACKOFF_MAX_MS = 24 * EXPORT_PASS_INTERVAL_MS;
+
+/** The export's interval after `markFails` passes in a row that published their segment and then failed to mark it
+ *  (§9.15 "Mark"; Task 7 counts them in meta). Such a pass leaves its rows unmarked, so the next one publishes them
+ *  again; while the store's own volume refuses the marks, an hourly retry would publish a copy every hour until the
+ *  home filesystem's floor. The interval doubles per failure (1 h, 2 h, 4 h, …), at most EXPORT_MARK_BACKOFF_MAX_MS,
+ *  and a count that is not a positive safe integer is no failure (D-4757 (history-export-mark-failure-backs-off)). */
+export function exportPassIntervalMs(markFails) {
+  const n = Number.isSafeInteger(markFails) && markFails > 0 ? Math.min(markFails, 5) : 0;
+  return Math.min(EXPORT_PASS_INTERVAL_MS * 2 ** n, EXPORT_MARK_BACKOFF_MAX_MS);
+}
+
+/** The export's room verdict (§9.15 "Preflight"; rev 3.1 review, RC9). `free` is the sweep's statfsWithDeadline
+ *  answer for ~/.ccrc/history/export, judged by planCopy with THAT filesystem's own threshold (§9.3's formula,
+ *  floorThreshold) and the segment bound as the copy's size, so one segment can never take the home filesystem
+ *  below its floor. A probe that threw is `low-disk`, as the store's own floor reads one (§9.10); a probe that never
+ *  answered is `unsettled`, kept apart so the pass can say which. */
+export function planExportRoom(free) {
+  if (free.state === 'unsettled') return { admit: false, word: 'unsettled', needBytes: null };
+  if (free.state !== 'ok') return { admit: false, word: 'low-disk', needBytes: null };
+  const r = planCopy({ freeBytes: free.bytes, thresholdBytes: floorThreshold(free.fsSize), sizeBytes: EXPORT_SEGMENT_MAX_BYTES });
+  return { admit: r.admit, word: r.admit ? 'ok' : 'low-disk', needBytes: r.needBytes };
+}
+
+const EXPORT_DECIMAL_RE = /^(0|[1-9][0-9]*)$/;
+
+/** dev or ino in decimal: a number, a BigInt (statSync's `bigint: true`, past 2^53) or the decimal text of one. */
+function exportDecimal(v, what) {
+  if (typeof v === 'bigint' && v >= 0n) return v.toString();
+  if (typeof v === 'number' && Number.isSafeInteger(v) && v >= 0) return String(v);
+  if (typeof v === 'string' && EXPORT_DECIMAL_RE.test(v)) return v;
+  throw new TypeError(`exportedSourceKey: ${what} must be a non-negative integer, got ${String(v)}`);
+}
+
+/** The source_key of the dead-file ingest_files row export replay puts a gone file's memberships on (§6.2; §9.15
+ *  "Memberships of a gone file"): `exported:` plus hex(sha256(path ∖0 dev ∖0 ino)). It never equals a live row's
+ *  key (''), so replay never lands on a live file, even one that now reuses that inode. dev and ino are rendered in
+ *  decimal, so a BigInt past 2^53 keys exactly as the store holds it. A path holding a NUL could forge a separator,
+ *  and no POSIX path holds one, so it throws. An empty path is a file the store knows no path for (a retired row
+ *  keeps none; the export pass writes '' for it): it keys by (dev, ino) alone, and is still never a live key. */
+export function exportedSourceKey(path, dev, ino) {
+  if (typeof path !== 'string' || path.includes('\0')) throw new TypeError(`exportedSourceKey: path must be a string without NUL, got ${JSON.stringify(path)}`);
+  return `exported:${sha256Hex(`${path}\0${exportDecimal(dev, 'dev')}\0${exportDecimal(ino, 'ino')}`)}`;
+}
+
+// ── The marks' two decisions (§9.15 "Mark", "After a bind"; coordinator ruling RD2: L4 delivery is not allowed to
+// decide). The sweep measures meta, the directory listing and the marked names, calls these and acts on the answer.
+// D-4757 (history-export-mark-failure-backs-off) D-4226
+
+/** The text meta export_mark_fails holds when it is a count: a decimal with no sign and no leading zero. */
+const EXPORT_MARK_FAILS_RE = /^(0|[1-9][0-9]{0,15})$/;
+
+/** The count meta export_mark_fails holds (Task 7 writes it), as the backoff reads it. Absent, torn or hand-edited
+ *  text, or a number past the safe integers, is no failure: the export never waits longer on a value it cannot read. */
+export function exportMarkFailsOf(recorded) {
+  if (typeof recorded !== 'string' || !EXPORT_MARK_FAILS_RE.test(recorded)) return 0;
+  const n = Number(recorded);
+  return Number.isSafeInteger(n) ? n : 0;
+}
+
+/** What one pass's outcome does to the mark-failure backoff (D-4757 (history-export-mark-failure-backs-off)): whether the
+ *  pass backs off, and the next wait. `outcome` is what the sweep saw: 'mark-failed' (its segment was linked, then the
+ *  marks threw), 'marked' (the marks committed), 'mark-busy' (linked, then SQLITE_BUSY: the write lock's, not the
+ *  volume's, so no backoff; RD3) or 'write-failed' (a throw before any link: nothing was published). `recorded` is
+ *  meta export_mark_fails as read. Answers the count that stands, the meta text to write (null: leave meta as it is;
+ *  a marked pass writes '0' only over another value, so a store that never failed a mark gains no key) and the wait
+ *  the cadence then applies. Any other outcome is a caller's bug and throws. */
+export function decideMarkOutcome({ outcome, recorded }) {
+  const prev = exportMarkFailsOf(recorded);
+  let markFails;
+  let write = null;
+  switch (outcome) {
+    case 'mark-failed': markFails = prev + 1; write = String(markFails); break;
+    case 'marked': markFails = 0; if (recorded !== null && recorded !== '0') write = '0'; break;
+    case 'mark-busy':
+    case 'write-failed': markFails = prev; break;
+    default: throw new TypeError(`decideMarkOutcome: not an export outcome: ${JSON.stringify(outcome)}`);
+  }
+  return { markFails, write, intervalMs: exportPassIntervalMs(markFails) };
+}
+
+/** A bind fact's meta key: `bound:<ms>`, as B2's insertBindFacts writes one inside every adopt, restore and rebuild. */
+const BIND_FACT_RE = /^bound:[0-9]{1,16}$/;
+
+/** Whether this step checks the export's marks against the segments on this box (§9.15 "After a bind"), and what
+ *  that check records as covered. `metaKeys` are the store's meta keys that may be bind facts; `checkedRecord` is what
+ *  the last check recorded (a JSON list of keys) or null. A step checks when a bind fact exists that the record does
+ *  not hold: by KEY, never by comparing a bind's clock with the check's, because the two may be two boxes' clocks (an
+ *  adopt) or one clock either side of a step back. A record that does not parse, or is not a list, covers nothing, so
+ *  the check runs rather than miss a bind. `record` is every fact this check covers, sorted, as the check writes it. */
+export function decideMarkCheck({ metaKeys, checkedRecord }) {
+  const facts = metaKeys.filter((k) => typeof k === 'string' && BIND_FACT_RE.test(k)).sort();
+  let parsed;
+  try { parsed = JSON.parse(checkedRecord ?? '[]'); } catch { parsed = []; }
+  const have = new Set(Array.isArray(parsed) ? parsed.filter((x) => typeof x === 'string') : []);
+  return { check: facts.some((k) => !have.has(k)), facts, record: JSON.stringify(facts) };
+}
+
+/** The segment names the store's marks give that export/<store_id>/ on this box does not hold, once each, sorted:
+ *  their marks are cleared so their rows export again (§9.15 "After a bind"). `named` and `present` are the sweep's
+ *  measurements: the marks' DISTINCT exported_seg values and listSegments' names. */
+export function missingSegmentNames({ named, present }) {
+  const here = new Set(present);
+  return [...new Set(named)].filter((n) => !here.has(n)).sort();
 }

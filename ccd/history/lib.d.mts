@@ -444,6 +444,9 @@ export const HEALTH_META: Readonly<{
   recoverUnmovedTicks: 'recover_unmoved_ticks';
   exportSegmentNewer: 'export_segment_newer';
   exportSegmentMissing: 'export_segment_missing';
+  exportPassMs: 'export_pass_ms';
+  exportDueOldestMs: 'export_due_oldest_ms';
+  exportPaused: 'export_paused';
   heldPassMs: 'held_pass_ms';
 }>;
 export const HEALTH_COUNTERS: Readonly<{
@@ -921,3 +924,27 @@ export function consumedBoundaryTs(i: {
 }): number | null;
 export function decideConsumedScope(i: { marker: Presence<string>; uuid: string; boundaryTsMs: number | null }): CardConsumedScope;
 export function decideCardWithdraw(p: CardPassFacts): { act: 'withdraw'; reason: CardWithdrawReason } | { act: 'keep' };
+// --- W1-B4 Task 1: the sole-copy export's names, numbers, cadence, room and dead-file key (spec §9.15, §9.3, §6.2)
+export const EXPORT_DIR: 'export';
+export const EXPORT_SEGMENT_MAX_BYTES: number;
+export const EXPORT_PASS_INTERVAL_MS: number;
+export const EXPORT_SEGMENT_FORMAT: number;
+export function segmentName(i: { seq: number; writer: string }): string;
+export function parseSegmentName(name: string): { seq: number; writer: string } | null;
+export function segmentTempName(name: string): string;
+export function orderSegmentNames(names: readonly string[]): string[];
+export function nextSegmentSeq(i: { onDisk: readonly number[]; recorded: number | null }): number;
+export function decideExportPass(i: { nowMs: number; lastPassMs: number | null; firstTickMs: number | null; intervalMs?: number }): 'run' | 'wait';
+export const EXPORT_MARK_BACKOFF_MAX_MS: number;
+export function exportPassIntervalMs(markFails: number): number;
+/** The sweep's statfsWithDeadline answer for ~/.ccrc/history/export, as planExportRoom takes it. */
+export type ExportProbe = { state: 'ok'; bytes: number; fsSize: number } | { state: 'unsettled' } | { state: 'threw' };
+export interface ExportRoom { admit: boolean; word: 'ok' | 'low-disk' | 'unsettled'; needBytes: number | null }
+export function planExportRoom(free: ExportProbe): ExportRoom;
+export function exportedSourceKey(path: string, dev: string | number | bigint, ino: string | number | bigint): string;
+// the marks' two decisions (RD2)
+export function exportMarkFailsOf(recorded: string | null): number;
+export type ExportMarkOutcome = 'marked' | 'mark-failed' | 'mark-busy' | 'write-failed';
+export function decideMarkOutcome(i: { outcome: ExportMarkOutcome; recorded: string | null }): { markFails: number; write: string | null; intervalMs: number };
+export function decideMarkCheck(i: { metaKeys: readonly string[]; checkedRecord: string | null }): { check: boolean; facts: string[]; record: string };
+export function missingSegmentNames(i: { named: Iterable<string>; present: Iterable<string> }): string[];

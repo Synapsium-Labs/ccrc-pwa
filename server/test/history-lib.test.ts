@@ -7952,3 +7952,152 @@ describe('lib: HA2, the read verbs\' envelope, schema word, shared readers and s
     }
   });
 });
+
+// ===========================================================================
+// W1-B4 Task 1: the sole-copy export's names, numbers, cadence, room and
+// dead-file key (spec §9.15 "The pass", §9.3, §6.2; O39's numbering half, O40's
+// pure half). Pure, on lib.mjs alone.
+// ===========================================================================
+import * as libSeg from '../../ccd/history/lib.mjs';
+
+describe('W1-B4: segment names, their order and the next number (spec 9.15 "Write"; O39 numbering half)', () => {
+  const W = '0a1b2c3d';
+  it('the constants are the spec\'s chosen values, and MODE_CHECKED_FILE_ROOTS judges a segment and its temp under EXPORT_DIR', () => {
+    expect(libSeg.EXPORT_DIR).toBe('export');
+    expect(libSeg.EXPORT_SEGMENT_MAX_BYTES).toBe(256 * 1024 * 1024);
+    expect(libSeg.EXPORT_PASS_INTERVAL_MS).toBe(3_600_000);
+    expect(libSeg.EXPORT_SEGMENT_FORMAT).toBe(1);
+    const sid = '0189abcd-1234-4678-9abc-0000000000e1';
+    const name = libSeg.segmentName({ seq: 7, writer: W });
+    expect(libSeg.modeWantOf(`${libSeg.EXPORT_DIR}/${sid}/${name}`, 'file')).toBe('0600');
+    expect(libSeg.modeWantOf(`${libSeg.EXPORT_DIR}/${sid}/${libSeg.segmentTempName(name)}`, 'file')).toBe('0600');
+    expect(libSeg.modeWantOf(`${libSeg.EXPORT_DIR}/${sid}`, 'dir')).toBe('0700');
+  });
+  it('segmentName, parseSegmentName and segmentTempName agree, and nothing off the grammar names a file', () => {
+    expect(libSeg.segmentName({ seq: 12, writer: W })).toBe('12.0a1b2c3d.db');
+    expect(libSeg.parseSegmentName('12.0a1b2c3d.db')).toEqual({ seq: 12, writer: W });
+    expect(libSeg.segmentTempName('12.0a1b2c3d.db')).toBe('.12.0a1b2c3d.db.tmp');
+    for (const bad of ['012.0a1b2c3d.db', '0.0a1b2c3d.db', '12.0A1B2C3D.db', '12.0a1b2c3.db', '.12.0a1b2c3d.db.tmp',
+      '12.0a1b2c3d.db-journal', '12.0a1b2c3d.jsonl', '9999999999999999.0a1b2c3d.db', '12345678901234567.0a1b2c3d.db', '']) {
+      expect(libSeg.parseSegmentName(bad), bad).toBeNull();
+    }
+    expect(libSeg.parseSegmentName('9007199254740991.0a1b2c3d.db')).toEqual({ seq: Number.MAX_SAFE_INTEGER, writer: W });
+    expect(() => libSeg.segmentName({ seq: 0, writer: W })).toThrow(TypeError);
+    expect(() => libSeg.segmentName({ seq: 1.5, writer: W })).toThrow(TypeError);
+    expect(() => libSeg.segmentName({ seq: 3, writer: '../x' })).toThrow(TypeError);
+    expect(() => libSeg.segmentTempName('../12.0a1b2c3d.db')).toThrow(TypeError);
+  });
+  it('orderSegmentNames is (seq, writer) with seq numeric, never the names\' lexical order; a non-segment is dropped', () => {
+    expect(libSeg.orderSegmentNames(['10.0000000a.db', '9.ffffffff.db', '.9.0000000b.db.tmp', 'notes.db', '9.0000000b.db', '01.0000000a.db']))
+      .toEqual(['9.0000000b.db', '9.ffffffff.db', '10.0000000a.db']);
+  });
+  it('O39: nextSegmentSeq is one past every seq on disk, of any writer, and past meta\'s; a counter behind the directory moves past it', () => {
+    expect(libSeg.nextSegmentSeq({ onDisk: [], recorded: null })).toBe(1);
+    expect(libSeg.nextSegmentSeq({ onDisk: [3, 9, 4], recorded: 5 })).toBe(10);
+    expect(libSeg.nextSegmentSeq({ onDisk: [3], recorded: 12 })).toBe(13);
+    expect(libSeg.nextSegmentSeq({ onDisk: [2], recorded: Number.NaN })).toBe(3);
+  });
+});
+
+describe('W1-B4: the hourly cadence, the room verdict and the dead-file key (spec 9.15 "The pass", 9.3, 6.2; O40 pure half)', () => {
+  const H = 3_600_000;
+  const T = Date.UTC(2026, 11, 1);
+  it('decideExportPass: within the hour of the last pass, or of the first tick before any pass, it waits; from the hour on it runs', () => {
+    expect(libSeg.decideExportPass({ nowMs: T, lastPassMs: T - H + 1, firstTickMs: T - 10 * H })).toBe('wait');
+    expect(libSeg.decideExportPass({ nowMs: T, lastPassMs: T - H, firstTickMs: T - 10 * H })).toBe('run');
+    expect(libSeg.decideExportPass({ nowMs: T, lastPassMs: null, firstTickMs: T - H + 1 })).toBe('wait');
+    expect(libSeg.decideExportPass({ nowMs: T, lastPassMs: null, firstTickMs: T - H })).toBe('run');
+    expect(libSeg.decideExportPass({ nowMs: T, lastPassMs: null, firstTickMs: null })).toBe('wait');
+  });
+  it('decideExportPass: a clock that went backwards runs the pass rather than wait for it to catch up', () => {
+    expect(libSeg.decideExportPass({ nowMs: T, lastPassMs: T + 24 * H, firstTickMs: T - 10 * H })).toBe('run');
+    expect(libSeg.decideExportPass({ nowMs: T, lastPassMs: null, firstTickMs: T + 1 })).toBe('run');
+  });
+  it('exportPassIntervalMs: an hour, doubled for each pass in a row that published and could not mark, at most a day; decideExportPass waits that interval', () => {
+    expect([0, 1, 2, 3, 4, 5, 99].map((n) => libSeg.exportPassIntervalMs(n))).toEqual([H, 2 * H, 4 * H, 8 * H, 16 * H, 24 * H, 24 * H]);
+    for (const bad of [-1, 1.5, Number.NaN]) expect(libSeg.exportPassIntervalMs(bad), String(bad)).toBe(H);
+    expect(libSeg.EXPORT_MARK_BACKOFF_MAX_MS).toBe(24 * H);
+    expect(libSeg.decideExportPass({ nowMs: T, lastPassMs: T - 2 * H + 1, firstTickMs: null, intervalMs: 2 * H })).toBe('wait');
+    expect(libSeg.decideExportPass({ nowMs: T, lastPassMs: T - 2 * H, firstTickMs: null, intervalMs: 2 * H })).toBe('run');
+    expect(libSeg.decideExportPass({ nowMs: T, lastPassMs: T + H, firstTickMs: null, intervalMs: 2 * H }), 'a clock that went backwards still runs').toBe('run');
+  });
+  it('O40: planExportRoom admits only above the export filesystem\'s own floor plus one segment (RC9); a throw is low-disk, a hang unsettled', () => {
+    const size = 100 * 1024 ** 3;
+    const need = libSeg.floorThreshold(size) + libSeg.EXPORT_SEGMENT_MAX_BYTES;
+    expect(libSeg.planExportRoom({ state: 'ok', bytes: need, fsSize: size })).toEqual({ admit: false, word: 'low-disk', needBytes: need });
+    expect(libSeg.planExportRoom({ state: 'ok', bytes: need + 1, fsSize: size })).toEqual({ admit: true, word: 'ok', needBytes: need });
+    expect(libSeg.planExportRoom({ state: 'threw' })).toEqual({ admit: false, word: 'low-disk', needBytes: null });
+    expect(libSeg.planExportRoom({ state: 'unsettled' })).toEqual({ admit: false, word: 'unsettled', needBytes: null });
+  });
+  it('exportedSourceKey is exported: + hex(sha256(path NUL dev NUL ino)), dev and ino in decimal whatever their type', () => {
+    const p = '/home/u/.claude-a/projects/-home-u-tree-demo/0189abcd-1234-4678-9abc-0000000000e2.jsonl';
+    const want = `exported:${createHash('sha256').update(`${p}\0${'2049'}\0${'18446744073709551557'}`).digest('hex')}`;
+    expect(libSeg.exportedSourceKey(p, 2049, 18446744073709551557n)).toBe(want);
+    expect(libSeg.exportedSourceKey(p, 2049n, '18446744073709551557')).toBe(want);
+    expect(libSeg.exportedSourceKey(p, 2049, 7)).not.toBe(libSeg.exportedSourceKey(p, 2049, 8));
+    // A retired file row keeps no path, and Task 5 writes '' for it: the key is still (dev, ino)'s, and never ''.
+    expect(libSeg.exportedSourceKey('', 2049, 7)).toMatch(/^exported:[0-9a-f]{64}$/);
+    expect(libSeg.exportedSourceKey('', 2049, 7)).not.toBe(libSeg.exportedSourceKey('', 2049, 8));
+    for (const [path, dev, ino] of [['/a\0b', 1, 2], ['/a', -1, 2], ['/a', 1, 2.5], ['/a', 1, '0x1f']] as const) {
+      expect(() => libSeg.exportedSourceKey(path, dev, ino), `${JSON.stringify(path)} ${String(dev)} ${String(ino)}`).toThrow(TypeError);
+    }
+  });
+  it('HEALTH_META names the export keys once each, and none reuses a key B1 or B2 writes', () => {
+    expect(libSeg.HEALTH_META.exportPassMs).toBe('export_pass_ms');
+    expect(libSeg.HEALTH_META.exportDueOldestMs).toBe('export_due_oldest_ms');
+    expect(libSeg.HEALTH_META.exportPaused).toBe('export_paused');
+    const values = Object.values(libSeg.HEALTH_META);
+    expect(new Set(values).size).toBe(values.length);
+    for (const taken of ['export_due', 'export_overdue', 'export_census_ms', 'oldest_row_ms', 'first_due_ms', 'first_deletion_ms', 'export_seq']) {
+      expect(values, taken).not.toContain(taken);
+    }
+  });
+});
+
+describe('W1-B4: the mark-failure backoff and the check after a bind, decided in lib (spec 9.15 "Mark", "After a bind"; RD2)', () => {
+  const H = 3_600_000;
+  const W = '0a1b2c3d';
+  it('exportMarkFailsOf: the count meta holds; text off the decimal grammar, or past the safe integers, is no failure', () => {
+    expect(['0', '1', '7', '12'].map((v) => libSeg.exportMarkFailsOf(v))).toEqual([0, 1, 7, 12]);
+    for (const bad of [null, '', '-1', '1.5', 'x', '01', ' 2', '9999999999999999', '99999999999999999']) {
+      expect(libSeg.exportMarkFailsOf(bad), String(bad)).toBe(0);
+    }
+  });
+  it('decideMarkOutcome: a pass that published and could not mark backs off one step more; a marked pass ends the backoff; a busy, or a failure before the link, leaves it as it stands', () => {
+    expect(libSeg.decideMarkOutcome({ outcome: 'mark-failed', recorded: null })).toEqual({ markFails: 1, write: '1', intervalMs: 2 * H });
+    expect(libSeg.decideMarkOutcome({ outcome: 'mark-failed', recorded: '2' })).toEqual({ markFails: 3, write: '3', intervalMs: 8 * H });
+    expect(libSeg.decideMarkOutcome({ outcome: 'mark-failed', recorded: 'torn' })).toEqual({ markFails: 1, write: '1', intervalMs: 2 * H });
+    expect(libSeg.decideMarkOutcome({ outcome: 'marked', recorded: '3' })).toEqual({ markFails: 0, write: '0', intervalMs: H });
+    expect(libSeg.decideMarkOutcome({ outcome: 'marked', recorded: 'torn' })).toEqual({ markFails: 0, write: '0', intervalMs: H });
+    expect(libSeg.decideMarkOutcome({ outcome: 'marked', recorded: '0' }), 'nothing to end: no write').toEqual({ markFails: 0, write: null, intervalMs: H });
+    expect(libSeg.decideMarkOutcome({ outcome: 'marked', recorded: null }), 'a store that never failed a mark gains no meta key')
+      .toEqual({ markFails: 0, write: null, intervalMs: H });
+    expect(libSeg.decideMarkOutcome({ outcome: 'mark-busy', recorded: '2' }), 'a busy is the lock\'s, not the volume\'s (RD3)')
+      .toEqual({ markFails: 2, write: null, intervalMs: 4 * H });
+    expect(libSeg.decideMarkOutcome({ outcome: 'write-failed', recorded: '2' }), 'nothing was published').toEqual({ markFails: 2, write: null, intervalMs: 4 * H });
+    expect(() => libSeg.decideMarkOutcome({ outcome: 'other' as unknown as 'marked', recorded: null })).toThrow(TypeError);
+  });
+  it('decideMarkCheck: a step checks when a bind fact exists that the last check did not cover, by KEY and never by clock, and records every fact it covers', () => {
+    expect(libSeg.decideMarkCheck({ metaKeys: [], checkedRecord: null })).toEqual({ check: false, facts: [], record: '[]' });
+    expect(libSeg.decideMarkCheck({ metaKeys: ['bound:1700000000000', 'export_seq'], checkedRecord: null }))
+      .toEqual({ check: true, facts: ['bound:1700000000000'], record: '["bound:1700000000000"]' });
+    expect(libSeg.decideMarkCheck({ metaKeys: ['bound:1700000000000'], checkedRecord: '["bound:1700000000000"]' }).check, 'a covered fact checks nothing').toBe(false);
+    // a bind stamped before the last check (a box whose clock is behind, or a clock stepped back) is still a new fact
+    expect(libSeg.decideMarkCheck({ metaKeys: ['bound:1700000500000', 'bound:1700000300000'], checkedRecord: '["bound:1700000500000"]' }),
+      'a bind stamped before the last check was never checked')
+      .toEqual({ check: true, facts: ['bound:1700000300000', 'bound:1700000500000'], record: '["bound:1700000300000","bound:1700000500000"]' });
+  });
+  it('decideMarkCheck: only bound:<ms> keys are bind facts, and a record that does not parse, or is not a list, covers nothing', () => {
+    expect(libSeg.decideMarkCheck({ metaKeys: ['bound:', 'bound:12a', 'bound:12345678901234567', 'unbound:5', 'bound:5:x'], checkedRecord: null }))
+      .toEqual({ check: false, facts: [], record: '[]' });
+    for (const rec of ['not json', '{"bound:5":1}', '"bound:5"']) {
+      expect(libSeg.decideMarkCheck({ metaKeys: ['bound:5'], checkedRecord: rec }).check, rec).toBe(true);
+    }
+    expect(libSeg.decideMarkCheck({ metaKeys: ['bound:5'], checkedRecord: '[5, "bound:5"]' }).check, 'a string entry still covers').toBe(false);
+  });
+  it('missingSegmentNames: the names the marks give that this box does not hold, once each, sorted', () => {
+    expect(libSeg.missingSegmentNames({ named: new Set([`3.${W}.db`, `1.${W}.db`, `2.${W}.db`]), present: [`1.${W}.db`] })).toEqual([`2.${W}.db`, `3.${W}.db`]);
+    expect(libSeg.missingSegmentNames({ named: [`2.${W}.db`, `2.${W}.db`], present: [] })).toEqual([`2.${W}.db`]);
+    expect(libSeg.missingSegmentNames({ named: [`1.${W}.db`], present: [`1.${W}.db`, `9.${W}.db`] })).toEqual([]);
+  });
+});
