@@ -4476,7 +4476,7 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     - Acts: the failed job is re-run (evidence, and the promotion if it is green and the cause is a test-timing
       class); a diagnosis workflow is running (three Opus investigators, a Sonnet refuter per claim, an Opus
       judge). The promotion waits for both, and the owner gets the finding.
-  - **23:25 UTC: the cause is a clock race in the test; the shipped hook has no defect.** Eight agents, none died;
+  - **23:10 UTC: the cause is a clock race in the test; the shipped hook has no defect.** Eight agents, none died;
     every claim was put to a refuter. Verified by me in the job log:
     - The failing row is the table's eleventh, "5 s inside the lease" (`at` = n - 175), not the first. Rows 1
       to 10 carry the collection-time n, 1792362735; the failing row carries 1792362560.
