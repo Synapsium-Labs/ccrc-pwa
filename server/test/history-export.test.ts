@@ -65,6 +65,8 @@ interface SweepExport {
   newBudget(now?: () => number, limits?: { maxMs?: number; maxBytes?: number; chunkBytes?: number }): Record<string, unknown>;
   writeChunk(db: DatabaseSync, chunk: Record<string, unknown>): { newEntries: number; minNewTsMs: number | null };
   checkSegmentMarks(db: DatabaseSync, ctx: Record<string, unknown>, record: string): { cleared: number; segments: string[] };
+  makeIngestCtx(home: string, homes: string[], nowMs: number, ids: { storeId: string; writer: string }): Record<string, unknown>;
+  ingestSidecars(db: DatabaseSync, ctx: Record<string, unknown>, budget: Record<string, unknown>, uuids: string[]): Promise<{ bytes: number; complete: boolean }>;
 }
 let SW: SweepExport;
 beforeAll(async () => { SW = (await import('../../ccd/history/sweep.mjs')) as unknown as SweepExport; });
@@ -1544,6 +1546,176 @@ describe('marks that move (W1-B4 Task 8; spec §9.15 "Mark", "After a bind")', (
     expect(segmentRows(seg2, 'sidecars').map(pick(['name', 'uuid'])).sort((a, b) => String(a['name']).localeCompare(String(b['name']))),
       'beside the linked sidecar row, the unlinked one that names the same blob').toEqual([{ name: 'b4rev001.txt', uuid: rid(2) }, { name: 'b4rev002.txt', uuid: null }]);
     expect(metaOf(box, 'export_due'), 'nothing is left due').toBe('0');
+    expect(strandedBlobs(box)).toEqual([]);
+  }, 600_000);
+
+  // ── W1-B4 fix round 1, F6 (review 614): D-5399 (history-export-late-unlinked-sidecar-clears-blob-mark) ─────────────────
+  // D-4761 sends an unlinked sidecar row with the blob it names. A LATER unlinked row naming a blob an earlier carrier already
+  // exported was never offered again: the unlinked run keeps only unexported blobs and the census counts by the blob's mark. So
+  // ingestSidecar's transaction takes a live, exported blob's mark off when it stores a NEW unlinked row naming it, with the marks of
+  // the entries that reference it (D-5395's invariant); the next pass then carries the bytes once with every unlinked row naming
+  // them. The cases below take the sidecar files in-process through the tick's own ingestSidecars (the real function, on a counting
+  // handle) after one real export pass, and read the statements it ran as well as the marks it left.
+  const BODY_5399 = 'the tool output a later sidecar repeats byte for byte\n';
+  const sideDir5399 = (b: HistoryBox): string => path.join(b.accountHome['claude-a']!, 'projects', SLUG, U, 'tool-results');
+  const toolResult5399 = (n: number, file: string): Record<string, unknown> => toolResultRow({
+    uuid: rid(n), ts: new Date(Date.now() - 2 * DAY).toISOString(), sessionId: U, cwd: WORK, toolUseId: `toolu_01B4D5399${n}`,
+    content: `Output too large. Full output saved to: /home/u/x/tool-results/${file}`,
+  });
+  /** A box whose rows are exported once: row 1 a prompt, row 2 a tool_result naming `b4s5399a.txt`, whose file (BODY_5399) is the blob's
+   *  first carrier (a LINKED sidecar); row 3, with `late`, names a file that has not landed. Segment 1 holds everything. */
+  function exportedWithSidecar(prefix: string, o: { late?: boolean } = {}): { box: HistoryBox; ids: { storeId: string; writer: string }; s1: string; blobSha: string } {
+    const rows = [row(1, 'a prompt', 2 * DAY), toolResult5399(2, 'b4s5399a.txt'), ...(o.late === true ? [toolResult5399(3, 'b4s5399c.txt')] : [])];
+    const { box, ids } = ingestedBox(prefix, rows, {
+      passes: 3,
+      plant: (b) => { fs.mkdirSync(sideDir5399(b), { recursive: true }); fs.writeFileSync(path.join(sideDir5399(b), 'b4s5399a.txt'), BODY_5399); },
+    });
+    expect(q(box, 'SELECT s.name, e.uuid FROM sidecars s LEFT JOIN entries e ON e.entry_id = s.entry_id'), 'the fixture must link the first carrier to the tool_result row')
+      .toEqual([{ name: 'b4s5399a.txt', uuid: rid(2) }]);
+    passAt(box, 65);
+    const s1 = `1.${ids.writer}.db`;
+    const blobSha = String(q(box, 'SELECT lower(hex(b.sha256)) AS sha FROM sidecars s JOIN blobs b ON b.blob_id = s.blob_id')[0]!['sha']);
+    expect(Object.values(marks(box)), 'CONTROL: every row exported').toEqual(Array(rows.length).fill(s1));
+    expect(q(box, 'SELECT exported_seg AS seg FROM blobs WHERE lower(hex(sha256)) = ?', blobSha), 'CONTROL: the first carrier exported the blob').toEqual([{ seg: s1 }]);
+    return { box, ids, s1, blobSha };
+  }
+  /** The tick's sidecar step, in-process, on a handle that records the statements: `file` (created or rewritten with `body`, its
+   *  mtime moved on when it existed) is taken as the tick takes it. Answers the statements that matter, as short labels. */
+  async function takeSidecar5399(box: HistoryBox, ids: { storeId: string; writer: string }, file: string, body: string, db?: DatabaseSync): Promise<string[]> {
+    const p5399 = path.join(sideDir5399(box), file);
+    const existed = fs.existsSync(p5399);
+    fs.mkdirSync(sideDir5399(box), { recursive: true });
+    fs.writeFileSync(p5399, body);
+    if (existed) { const later = new Date(Date.now() + 5 * MIN); fs.utimesSync(p5399, later, later); }   // the same bytes under a newer mtime: read again
+    const run = async (handle: DatabaseSync): Promise<string[]> => {
+      const w = counting(handle);
+      const r = await SW.ingestSidecars(w.db, SW.makeIngestCtx(box.home, box.homes, Date.now(), ids), SW.newBudget(), [U]);
+      expect(r.complete, 'the sidecar step ran to its end').toBe(true);
+      return w.ran.flatMap((t) => {
+        if (/^INSERT INTO sidecars /.test(t)) return ['row'];
+        if (/^UPDATE blobs SET exported_ms = NULL, exported_seg = NULL WHERE blob_id = \?/.test(t)) return ['blob-unmark'];
+        if (/^UPDATE entries SET exported_ms = NULL, exported_seg = NULL WHERE entry_id = \?/.test(t)) return ['entry-clear'];
+        if (/^UPDATE entries SET exported_ms = NULL, exported_seg = NULL WHERE exported_ms IS NOT NULL/.test(t)) return ['referrer-clear'];
+        if (/^INSERT INTO sidecar_seen /.test(t)) return ['seen'];
+        return [];
+      });
+    };
+    return db === undefined ? onStore(box, run) : run(db);
+  }
+  const blobMarkOf5399 = (box: HistoryBox, sha: string): unknown => q(box, 'SELECT exported_seg AS seg FROM blobs WHERE lower(hex(sha256)) = ?', sha)[0]!['seg'];
+
+  it('D-5399, ingest: a NEW unlinked row naming a live, exported blob takes the blob\'s mark off and the marks of the entries that reference it, in the ingest transaction; the census counts the blob due again; the next pass carries the bytes ONCE with the new row and the entry\'s linked one', async () => {
+    const { box, ids, s1, blobSha } = exportedWithSidecar('ccrc-history-export-d5399a-');
+    const s2 = `2.${ids.writer}.db`;
+    const labels = await takeSidecar5399(box, ids, 'b4s5399b.txt', BODY_5399);
+    expect(q(box, 'SELECT name, entry_id IS NULL AS unlinked FROM sidecars ORDER BY name'), 'the fixture must store the new row unlinked, on the same blob')
+      .toEqual([{ name: 'b4s5399a.txt', unlinked: 0 }, { name: 'b4s5399b.txt', unlinked: 1 }]);
+    expect(q(box, 'SELECT count(DISTINCT blob_id) AS n FROM sidecars')[0]!['n']).toBe(1);
+    expect(blobMarkOf5399(box, blobSha), 'the blob\'s mark is off').toBeNull();
+    expect(strandedBlobs(box), 'D-5395: no live blob is held only by marked entries (the blob is unmarked, so every entry that references it is too)').toEqual([]);
+    expect(marks(box), 'the mark of the one entry that references it (row 2, through its linked sidecar) is off with it; row 1 keeps segment 1').toEqual({ [rid(1)]: s1, [rid(2)]: null });
+    expect(labels, 'the unlinked row, then the blob\'s mark off, then the four statements that take the referrers\' marks off, then the seen mark: one transaction, in this order')
+      .toEqual(['row', 'blob-unmark', 'referrer-clear', 'referrer-clear', 'referrer-clear', 'referrer-clear', 'seen']);
+    expect(metaOf(box, 'export_due'), 'the census has not run since (it runs in the tick)').toBe('0');
+    passAt(box, 100);   // a tick: the census sees the blob due
+    expect(metaOf(box, 'export_due'), 'the census counts the blob due again').toBe('1');
+    passAt(box, 130);   // the pass
+    expect(segmentsOf(box)).toEqual([s1, s2]);
+    const seg2 = path.join(exportDirOf(box), s2);
+    expect(segmentRows(seg2, 'blobs').map((b) => b['sha256']), 'segment 2 carries the blob\'s bytes once').toEqual([blobSha]);
+    expect(segmentRows(seg2, 'sidecars').map(pick(['name', 'uuid'])).sort((a, b) => String(a['name']).localeCompare(String(b['name']))),
+      'with the new unlinked row and the linked one of the entry it re-exports').toEqual([{ name: 'b4s5399a.txt', uuid: rid(2) }, { name: 'b4s5399b.txt', uuid: null }]);
+    expect(segmentRows(seg2, 'entries').map((e) => e['uuid']), 'the entry that references the blob is written again; row 1 stays in segment 1').toEqual([rid(2)]);
+    expect(marks(box)).toEqual({ [rid(1)]: s1, [rid(2)]: s2 });
+    expect(blobMarkOf5399(box, blobSha), 'the blob is marked by the segment that carried it again').toBe(s2);
+    expect(metaOf(box, 'export_due'), 'nothing is left due').toBe('0');
+    expect(strandedBlobs(box)).toEqual([]);
+  }, 600_000);
+
+  it('D-5399, ingest: SEVERAL new unlinked rows for one blob, each in its own tick before the next pass, cost ONE re-export: the first clears the blob\'s mark and its referrers\', the later ones find it clear and run no referrer statement, and the next pass writes the blob once, in one segment, with every unlinked row naming it', async () => {
+    const { box, ids, s1, blobSha } = exportedWithSidecar('ccrc-history-export-d5399b-');
+    const s2 = `2.${ids.writer}.db`;
+    const first = await takeSidecar5399(box, ids, 'b4s5399b.txt', BODY_5399);
+    expect(first.filter((l) => l === 'referrer-clear'), 'the first row clears the referrers').toHaveLength(4);
+    const second = await takeSidecar5399(box, ids, 'b4s5399d.txt', BODY_5399);
+    const third = await takeSidecar5399(box, ids, 'b4s5399e.txt', BODY_5399);
+    expect(second, 'the second row: the blob\'s mark is off already, so the statement changes nothing and no referrer is looked at').toEqual(['row', 'blob-unmark', 'seen']);
+    expect(third).toEqual(['row', 'blob-unmark', 'seen']);
+    expect(q(box, 'SELECT count(*) AS n FROM sidecars WHERE entry_id IS NULL')[0]!['n'], 'the fixture must store three unlinked rows').toBe(3);
+    expect(blobMarkOf5399(box, blobSha)).toBeNull();
+    passAt(box, 130);   // one pass
+    expect(segmentsOf(box), 'ONE segment for all of them').toEqual([s1, s2]);
+    const seg2 = path.join(exportDirOf(box), s2);
+    expect(segmentRows(seg2, 'blobs').map((b) => b['sha256']), 'the blob\'s bytes once').toEqual([blobSha]);
+    expect(segmentRows(seg2, 'sidecars').map(pick(['name', 'uuid'])).sort((a, b) => String(a['name']).localeCompare(String(b['name']))),
+      'every unlinked row that names it, and the entry\'s linked one').toEqual([
+      { name: 'b4s5399a.txt', uuid: rid(2) }, { name: 'b4s5399b.txt', uuid: null }, { name: 'b4s5399d.txt', uuid: null }, { name: 'b4s5399e.txt', uuid: null }]);
+    expect(segmentRows(seg2, 'entries').map((e) => e['uuid']), 'and the one entry once').toEqual([rid(2)]);
+    expect(metaOf(box, 'export_due'), 'nothing is left due').toBe('0');
+    expect(strandedBlobs(box)).toEqual([]);
+  }, 600_000);
+
+  it('D-5399, ingest: a row stored already (the same file rewritten with the same bytes), a LINKED new row (D-4763 as before: only its entry\'s marks), and a new row on a FRESH blob take no blob\'s mark off and run no blob statement', async () => {
+    const { box, ids, s1, blobSha } = exportedWithSidecar('ccrc-history-export-d5399c-', { late: true });
+    // a new LINKED row on the exported blob: row 3 names b4s5399c.txt, which lands now with the same bytes
+    const linked = await takeSidecar5399(box, ids, 'b4s5399c.txt', BODY_5399);
+    expect(linked, 'D-4763: the entry\'s marks (the one entry statement), nothing on the blob').toEqual(['row', 'entry-clear', 'seen']);
+    expect(q(box, 'SELECT name, entry_id IS NULL AS unlinked FROM sidecars ORDER BY name'), 'the fixture must link it').toEqual([{ name: 'b4s5399a.txt', unlinked: 0 }, { name: 'b4s5399c.txt', unlinked: 0 }]);
+    expect(marks(box), 'only the entry it links lost its mark').toEqual({ [rid(1)]: s1, [rid(2)]: s1, [rid(3)]: null });
+    expect(blobMarkOf5399(box, blobSha), 'a linked row leaves the blob\'s mark').toBe(s1);
+    // a new UNLINKED row on a FRESH blob: no mark to take off, so no blob statement
+    const fresh = await takeSidecar5399(box, ids, 'b4s5399f.txt', 'bytes no other file holds\n');
+    expect(fresh, 'a fresh blob costs the row and the seen mark, as before').toEqual(['row', 'seen']);
+    expect(marks(box)).toEqual({ [rid(1)]: s1, [rid(2)]: s1, [rid(3)]: null });
+    // the unlinked row of a blob that is exported and then read again
+    const first = await takeSidecar5399(box, ids, 'b4s5399b.txt', BODY_5399);
+    expect(first.includes('blob-unmark'), 'CONTROL: the first read of an unlinked row on the exported blob takes its mark off').toBe(true);
+    passAt(box, 130);
+    const s2 = segmentsOf(box).map((n) => path.basename(n)).filter((n) => n !== s1);
+    expect(s2, 'the pass wrote the blob again').toHaveLength(1);
+    expect(blobMarkOf5399(box, blobSha), 'CONTROL: the blob is marked again').toBe(s2[0]);
+    const before = marks(box);
+    const again = await takeSidecar5399(box, ids, 'b4s5399b.txt', BODY_5399);   // read again under a newer mtime: the row exists
+    expect(again, 'the row exists (the key is the transcript, the name and the blob): the insert changes nothing and nothing else runs').toEqual(['row', 'seen']);
+    expect(blobMarkOf5399(box, blobSha), 'a row stored already took no mark off').toBe(s2[0]);
+    expect(marks(box)).toEqual(before);
+    expect(strandedBlobs(box)).toEqual([]);
+  }, 600_000);
+
+  it('D-5399, ingest: a row whose blob is PRUNED takes no mark off (the live probe is made to lie, because the real ingest revives the tombstone before it stores the row); a tombstone the new row\'s own bytes revive is live again and is taken off with its referrers\'', async () => {
+    const { box, ids, s1, blobSha } = exportedWithSidecar('ccrc-history-export-d5399d-');
+    await onStore(box, (db) => {   // prune took the exported blob's bytes: the tombstone keeps its mark
+      db.prepare('UPDATE blobs SET z = NULL, pruned_ms = ?, fts_indexed = 0 WHERE lower(hex(sha256)) = ?').run(Date.now(), blobSha);
+    });
+    // The lie: the tick's probe for a live blob (stmts(db).blobLive) answers a row, so the bytes are not stored and the row is
+    // stored against the tombstone, the one shape the transaction's own guard (z IS NOT NULL) is for.
+    const liar = (db: DatabaseSync): DatabaseSync => new Proxy(db, {
+      get(t, k) {
+        if (k === 'prepare') {
+          return (sql: string): object => {
+            const st = t.prepare(sql);
+            if (sql !== 'SELECT blob_id FROM blobs WHERE sha256 = ? AND z IS NOT NULL') return st;
+            return new Proxy(st, { get(x, m) { const v: unknown = Reflect.get(x, m, x); return m === 'get' ? (): object => ({ blob_id: 1 }) : typeof v === 'function' ? (v as (...a: unknown[]) => unknown).bind(x) : v; } });
+          };
+        }
+        const v: unknown = Reflect.get(t, k, t);
+        return typeof v === 'function' ? (v as (...a: unknown[]) => unknown).bind(t) : v;
+      },
+    });
+    const lied = await onStore(box, async (db) => takeSidecar5399(box, ids, 'b4s5399b.txt', BODY_5399, liar(db)));
+    expect(q(box, 'SELECT name, entry_id IS NULL AS unlinked FROM sidecars ORDER BY name'), 'the fixture must store the row, unlinked, against the tombstone')
+      .toEqual([{ name: 'b4s5399a.txt', unlinked: 0 }, { name: 'b4s5399b.txt', unlinked: 1 }]);
+    expect(q(box, 'SELECT z IS NULL AS stub FROM blobs WHERE lower(hex(sha256)) = ?', blobSha), 'and the blob is still a tombstone').toEqual([{ stub: 1 }]);
+    expect(lied, 'the statement ran and changed nothing: no referrer was looked at').toEqual(['row', 'blob-unmark', 'seen']);
+    expect(blobMarkOf5399(box, blobSha), 'a pruned blob keeps its mark').toBe(s1);
+    expect(marks(box), 'and so do its referrers').toEqual({ [rid(1)]: s1, [rid(2)]: s1 });
+    // The real shape: no lie. The file's bytes are in hand, so the tombstone is revived (D-4589) and the blob is live and, being
+    // exported, marked: the new row takes the mark off, with the referrers'.
+    const revived = await takeSidecar5399(box, ids, 'b4s5399g.txt', BODY_5399);
+    expect(revived.includes('blob-unmark') && revived.filter((l) => l === 'referrer-clear').length === 4, 'the revived blob is taken off with its referrers').toBe(true);
+    expect(q(box, 'SELECT z IS NULL AS stub FROM blobs WHERE lower(hex(sha256)) = ?', blobSha), 'the fixture must revive the tombstone').toEqual([{ stub: 0 }]);
+    expect(blobMarkOf5399(box, blobSha)).toBeNull();
+    expect(marks(box)).toEqual({ [rid(1)]: s1, [rid(2)]: null });
     expect(strandedBlobs(box)).toEqual([]);
   }, 600_000);
 });

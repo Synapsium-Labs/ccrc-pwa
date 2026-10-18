@@ -4348,8 +4348,9 @@ function clearReferrerMarks(db, blobIds) {
   return cleared;
 }
 
-/** A blob the chunk or the sidecar stores: inserted, or a tombstone revived (D-4589). A fresh blob costs the one insert
- *  and nothing else: the insert's answer says it was fresh, and no entry references a blob that did not exist. When the
+/** A blob the chunk or the sidecar stores: inserted, or a tombstone revived (D-4589). Answers whether the blob was FRESH (the
+ *  insert made a row), which the sidecar path reads to know a blob has no mark to clear (D-5399). A fresh blob costs the one
+ *  insert and nothing else: the insert's answer says it was fresh, and no entry references a blob that did not exist. When the
  *  insert met a row, the second statement turns a tombstone into a body (a row that already holds one is left as it is),
  *  and the blob is then live and, unless an export carried its bytes before prune took them, unmarked: the entries that
  *  reference it lose their marks in the same transaction (D-5395 (history-export-mark-needs-its-blobs)). The caller
@@ -4357,10 +4358,11 @@ function clearReferrerMarks(db, blobIds) {
  *  holds for it, since a live, unmarked blob is never under a marked entry. */
 function storeBlob(db, sha, z, rawLen) {
   const s = stmts(db);
-  if (Number(s.blobIns.run(sha, CODEC, z, rawLen).changes) === 1) return;
+  if (Number(s.blobIns.run(sha, CODEC, z, rawLen).changes) === 1) return true;
   s.blobRevive.run(CODEC, z, rawLen, sha);
   const unmarked = s.blobUnmarked.get(sha);
   if (unmarked !== undefined) clearReferrerMarks(db, [Number(unmarked.blob_id)]);
+  return false;
 }
 
 /** A stored blob's bytes parsed as JSON, behind lib's structure gate (D-4345, history-json-structure-bound). A body
@@ -5070,6 +5072,9 @@ function sideStmts(db) {
       ON CONFLICT(path) DO UPDATE SET size = excluded.size, mtime_ns = excluded.mtime_ns, blob_id = excluded.blob_id`),
     sidecarIns: db.prepare(`INSERT INTO sidecars (transcript_pk, name, blob_id, entry_id, first_seen_ms)
       VALUES (?, ?, ?, ?, ?) ON CONFLICT(transcript_pk, name, blob_id) DO NOTHING`),
+    // W1-B4 (D-5399 (history-export-late-unlinked-sidecar-clears-blob-mark)): the mark off a LIVE, exported blob a new unlinked
+    // row names; it changes a row only for such a blob, which is how the caller knows to clear the blob's referrers too.
+    blobUnmark: db.prepare('UPDATE blobs SET exported_ms = NULL, exported_seg = NULL WHERE blob_id = ? AND exported_ms IS NOT NULL AND z IS NOT NULL'),
     // Not caught up as Task 20 counts behind: a live row a path still names, short of its measured size (or never
     // measured). One row per (file, path), for notCaughtUp to filter by rostered home, as behindStats does.
     notCaughtUp: db.prepare(`SELECT f.file_id AS fileId, p.path AS path FROM ingest_files f
@@ -5239,10 +5244,26 @@ export async function ingestSidecar(db, ctx, s, budget, cache) {
     const transcriptPk = withTx(db, 'NORMAL', () => ensureTranscript(db, s.uuid));
     const entryId = linkSidecar(s.name, candidatesFor(db, cache, transcriptPk, s));
     withTx(db, 'NORMAL', () => {
-      if (z !== null) storeBlob(db, sha, z, size);
+      const fresh = z !== null && storeBlob(db, sha, z, size);
       const blobId = stmts(db).blobId.get(sha).blob_id;
       const ins = q.sidecarIns.run(transcriptPk, s.name, blobId, entryId, ctx.nowMs);
-      if (ins.changes === 1 && entryId === null) bump(db, 'sidecar_unlinked');
+      if (ins.changes === 1 && entryId === null) {
+        bump(db, 'sidecar_unlinked');
+        // W1-B4 (D-5399 (history-export-late-unlinked-sidecar-clears-blob-mark), NEW): schema v2 gives a sidecar row no mark, so the
+        // row travels with its blob (D-4761), and a NEW unlinked row naming a blob that is live and already exported would never
+        // be offered again: the unlinked run keeps only unexported blobs and the census counts by the blob's mark, so the row,
+        // with its name and its transcript, would stay store-only and doctor silent. Clearing the blob's mark here, with its
+        // referrers' (D-5395's invariant), makes the census count the blob due again and the next pass carry it with every
+        // unlinked row that names it; replay absorbs the repeated bytes and rows. The statement runs only for a NEW unlinked row
+        // on a blob that is not fresh (a fresh blob has no mark): a linked row, a row already stored (a swap copy of the same
+        // transcript adds none: the key is the transcript, the name and the blob) and a fresh blob cost nothing new; and the
+        // referrers are cleared only when the mark was there, so several new rows for one blob before the next pass cost one
+        // re-export. A row naming a PRUNED blob clears nothing (z is NULL: its text is gone, and only its name and transcript
+        // would travel): the remaining residual. Here the probe above has stored or revived the bytes in hand, so the guard is
+        // for a blob pruned between that probe and this insert, which the lock rules out. Replay's replaySidecarRow does not do
+        // this: a replayed row travelled already.
+        if (!fresh && Number(q.blobUnmark.run(blobId).changes) === 1) clearReferrerMarks(db, [Number(blobId)]);
+      }
       // W1-B4 Task 8 (D-4763 (history-export-late-sidecar-clears-marks), NEW): a sidecar row first linked after its entry was
       // exported clears the entry's marks, in this transaction, so the next pass writes the entry again with the new
       // row and its bytes. A no-op for an entry not yet exported.
@@ -8110,7 +8131,11 @@ const EXPORT_TRANSCRIPT_ENTRIES_SQL = 'SELECT entry_id, ts_ms, transcript_pk FRO
  *  otherwise scans entries_ts, 2.5 to 190 times slower on the shapes measured. */
 const EXPORT_UNEXPORTED_TRANSCRIPTS_SQL = 'SELECT DISTINCT transcript_pk FROM entries INDEXED BY entries_unexported WHERE exported_ms IS NULL';
 /** Blobs only an unlinked sidecar names, unexported and unpruned: schema v1 has no mark on a sidecar row, so the blob's
- *  mark is the row's (D-4761 (history-export-unlinked-sidecar-with-blob)). */
+ *  mark is the row's (D-4761 (history-export-unlinked-sidecar-with-blob)). A NEW unlinked row naming a blob that is live and
+ *  already exported takes the blob's mark off when it is stored (ingestSidecar, D-5399
+ *  (history-export-late-unlinked-sidecar-clears-blob-mark)), so this offers the blob again and the pass carries its bytes with
+ *  every unlinked row that names it. A row naming a pruned blob is never offered: its text is gone, and only its name and
+ *  transcript would travel (the residual D-5399 names). */
 const EXPORT_UNLINKED_SQL = 'SELECT DISTINCT s.blob_id AS blob_id FROM sidecars s JOIN blobs b ON b.blob_id = s.blob_id '
   + 'WHERE s.entry_id IS NULL AND b.exported_ms IS NULL AND b.z IS NOT NULL AND s.blob_id > ? ORDER BY s.blob_id LIMIT ?';
 
@@ -8387,8 +8412,10 @@ function writeSegmentRows(db, ctx, seg, sel) {
     files.set(fileId, f);
     return f;
   };
-  // A carried blob's bytes as stored, with every unlinked sidecar row naming it; a pruned blob as a stub. A blob already
-  // exported is in its own segment, which replay applies first (every segment's blobs before any rows, §9.14).
+  // A carried blob's bytes as stored, with EVERY unlinked sidecar row naming it, the older ones too (D-4761); a pruned blob as a
+  // stub. A blob already exported is in its own segment, which replay applies first (every segment's blobs before any rows,
+  // §9.14); it is carried again only when a new unlinked row cleared its mark (ingestSidecar, D-5399
+  // (history-export-late-unlinked-sidecar-clears-blob-mark)), and then its bytes and rows repeat, which replay absorbs.
   const ensureBlob = (id) => {
     if (done.blobs.has(id)) return;
     done.blobs.add(id);

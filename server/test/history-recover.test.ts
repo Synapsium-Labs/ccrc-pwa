@@ -4282,6 +4282,175 @@ describe('O43: the export survives source loss (W1-B4 Task 11)', () => {
   }, 2.5 * HEAVY);
 });
 
+// ── W1-B4 fix round 1, F6 (review 614; D-5399 (history-export-late-unlinked-sidecar-clears-blob-mark)): an unlinked sidecar whose
+// blob another transcript already exported ────────────────────────────────────────────────────────────────────────────────
+// The fixture. Two sessions of one project in two workspaces (W1, W2), each with a transcript: T1 (session one) and T2
+// (session two). T1's own LINKED sidecar is the blob's earlier carrier: a tool_result row names the file, and the file is
+// the tool's saved output. A sidecar's blob is the file's own bytes, which no JSONL line is, so an entry body cannot share
+// it. (An unlinked first carrier would do as well: the pass offers it while its blob is unexported.) The later one is an
+// UNLINKED sidecar S of T2: the same bytes in a file no row names, written after the pass that exported T1's. Before D-5399
+// the pass never offered S (EXPORT_UNLINKED_SQL keeps only blobs with exported_ms NULL, and the census counts by the blob's
+// mark), so no segment held S's row; now S's ingest takes the blob's mark off, with its referrers' (T1's tool_result row), and
+// the next pass carries the blob once, S's row and T1's linked row with its entry. Everything is due and exported; then
+// both transcripts, both sidecar files and history.db are lost, `doctor --rebuild` replays the segments, and every read
+// scoped to T2 must still find S: the grep forms (FTS and --regex; tool provenance is searchable by default, so no flag
+// brings it in) by --workspace and by --session, each also in the family's own default scope. expand and describe answer
+// the same before and after: they list only a sidecar LINKED to an entry (recall.mjs expandItems skips entry_id NULL),
+// so S is not on them in the control either, and they are recorded, not asserted to show S.
+describe('F6 (D-5399): an unlinked sidecar whose blob another transcript exported is still found by scoped reads after a rebuild from the segments (W1-B4 fix round 1)', () => {
+  const F6_ID1 = 'claude-a-f6one';
+  const F6_ID2 = 'claude-a-f6two';
+  const F6_U1 = 'f6f6f6f6-0000-4000-8000-000000000611';
+  const F6_U2 = 'f6f6f6f6-0000-4000-8000-000000000612';
+  const F6_G1 = '0189abcd-1234-4678-9abc-0000000f6a01';
+  const F6_G2 = '0189abcd-1234-4678-9abc-0000000f6a02';
+  const F6_SLUG1 = '-home-u-tree-f6w1';
+  const F6_SLUG2 = '-home-u-tree-f6w2';
+  const F6_HOUR = 3_600_000;
+  const F6_WORD = 'zqf6sidecar';
+  const F6_SHARED = 'f6shared.txt';
+  const F6_ORPHAN = 'f6orphan.txt';
+  const F6_BODY = `${F6_WORD} the tool output two transcripts saved byte for byte\nthe second line of the shared output\n`;
+
+  interface F6Read { key: string; pane: string; args: string[]; asserted: boolean }
+  interface F6Answer { exit: number | null; sidecars: string[]; hasS: boolean; hasShared: boolean; sLine: string | null }
+  /** One read through the real CLI, in the JSON form (its items name the sidecars) and the human form (the line a session
+   *  sees). `hasS` is S's name or its text anywhere in the answer; `sLine` the human line that holds it. */
+  const f6Ask = (box: HistoryBox, r: F6Read): F6Answer => {
+    const env = withPane(box, r.pane);
+    const j = runCli(box, [...r.args, '--json'], { env });
+    const h = runCli(box, r.args, { env });
+    const items = ((j.json?.['items'] ?? []) as Array<Record<string, unknown>>);
+    const sidecars = items.map((i) => i['sidecar']).filter((x): x is string => typeof x === 'string');
+    const text = `${h.stdout}\n${j.stdout}`;
+    const sLine = h.stdout.split('\n').find((l) => l.includes(F6_ORPHAN) || l.includes('zqf6sidecar')) ?? null;
+    return {
+      exit: h.code, sidecars, hasS: sidecars.includes(F6_ORPHAN) || text.includes(F6_ORPHAN),
+      hasShared: sidecars.includes(F6_SHARED) || text.includes(F6_SHARED), sLine: sLine === null ? null : sLine.slice(0, 240),
+    };
+  };
+
+  for (const journal of [false, true]) {
+    it(`F6 (D-5399): ${journal ? 'the journal lost with history.db (the segments alone)' : 'history.db lost, the journal kept'}: grep (FTS and --regex) by --workspace and by --session finds the unlinked sidecar after doctor --rebuild, as it did before`, async () => {
+      const box = makeHistoryBox(`ccrc-hist-f6${journal ? 'j' : 'k'}-`, { role: 'fleet' });
+      const W1 = path.join(box.home, 'work', 'w1');
+      const W2 = path.join(box.home, 'work', 'w2');
+      fs.mkdirSync(W1, { recursive: true });
+      fs.mkdirSync(W2, { recursive: true });
+      const dirOf = (slug: string, uuid: string): string => path.join(box.accountHome['claude-a']!, 'projects', slug, uuid, 'tool-results');
+      plantSession(box, F6_ID1, { uuid: F6_U1, generation: F6_G1, project: 'demo', workdir: W1 });
+      plantSession(box, F6_ID2, { uuid: F6_U2, generation: F6_G2, project: 'demo', workdir: W2 });
+      const t1 = plantTranscript(box, 'claude-a', F6_SLUG1, F6_U1, [
+        userRow({ uuid: rrU(610), ts: rrIso(12), parentUuid: null, sessionId: F6_U1, cwd: W1, text: 'zqf6one ask for the output' }),
+        toolResultRow({
+          uuid: rrU(611), ts: rrIso(11), parentUuid: rrU(610), sessionId: F6_U1, cwd: W1, toolUseId: 'toolu_01F6ONE',
+          content: `Output too large. Full output saved to: /home/u/x/tool-results/${F6_SHARED}`,
+        }),
+        assistantRow({ uuid: rrU(612), ts: rrIso(10), parentUuid: rrU(611), sessionId: F6_U1, cwd: W1, text: 'zqf6one answer' }),
+      ]);
+      const t2 = plantTranscript(box, 'claude-a', F6_SLUG2, F6_U2, rrCompacted(F6_U2, 620, 'Polishing workspace two.', W2, 'zqf6two'));
+      fs.mkdirSync(dirOf(F6_SLUG1, F6_U1), { recursive: true });
+      fs.writeFileSync(path.join(dirOf(F6_SLUG1, F6_U1), F6_SHARED), F6_BODY);
+      spoolLine(box, F6_ID1, rrStart(F6_ID1, F6_U1, 'startup', { reg: F6_U1, gen: F6_G1 }));
+      spoolLine(box, F6_ID2, rrStart(F6_ID2, F6_U2, 'startup', { reg: F6_U2, gen: F6_G2 }));
+      const leafOf = (id: string): string[] => rrQ<{ node_id: string }>(box,
+        "SELECT n.node_id AS node_id FROM nodes n JOIN sessions s ON s.session_pk = n.session_pk WHERE s.ccrc_id = ? AND n.kind <> 'condensed' ORDER BY n.node_id", id).map((r) => r.node_id);
+      rrTickUntil(box, () => countOf(box, 'entries') === 8 && countOf(box, 'sidecars') === 1 && leafOf(F6_ID2).length === 1
+        && rrQ<{ n: number }>(box, 'SELECT count(*) AS n FROM epochs WHERE confirmed_ms IS NOT NULL')[0]!.n === 2, 12);
+
+      // The pass that exports T1's rows, T2's rows and the blob: every row is due (the files were last written before the clock).
+      const first = runDriver(box, { offsetMs: 2 * F6_HOUR });
+      expect(first.code, `${first.stdout}\n${first.stderr}`).toBe(0);
+      const names = segmentsOf(box).map((n) => path.basename(n));
+      expect(names, 'one segment').toHaveLength(1);
+      const seg1 = path.join(exportDirOf(box), names[0]!);
+      expect(rrQ<{ n: number }>(box, 'SELECT count(*) AS n FROM entries WHERE exported_seg = ?', names[0]!)[0]!.n, 'every row exported').toBe(8);
+      const blobSha = rrQ<{ sha: string }>(box, 'SELECT lower(hex(b.sha256)) AS sha FROM sidecars s JOIN blobs b ON b.blob_id = s.blob_id WHERE s.name = ?', F6_SHARED)[0]!.sha;
+      expect(rrQ(box, 'SELECT exported_seg AS seg FROM blobs WHERE lower(hex(sha256)) = ?', blobSha), 'CONTROL: T1\'s sidecar carried the blob').toEqual([{ seg: names[0]! }]);
+      expect(segmentRows(seg1, 'sidecars').map((x) => [x['name'], x['uuid']])).toEqual([[F6_SHARED, rrU(611)]]);
+
+      // S arrives after the blob was exported: a scan tick finds the file, an unlinked sidecar of T2 on the same blob.
+      fs.mkdirSync(dirOf(F6_SLUG2, F6_U2), { recursive: true });
+      fs.writeFileSync(path.join(dirOf(F6_SLUG2, F6_U2), F6_ORPHAN), F6_BODY);
+      for (let k = 1; k <= 3 && countOf(box, 'sidecars') < 2; k += 1) {
+        const tick = runDriver(box, { offsetMs: 2 * F6_HOUR + 35 * MIN * k });
+        expect(tick.code, `${tick.stdout}\n${tick.stderr}`).toBe(0);
+      }
+      expect(rrQ(box, `SELECT s.name AS name, s.entry_id IS NULL AS unlinked, t.cc_session_uuid AS uuid FROM sidecars s
+        JOIN transcripts t ON t.transcript_pk = s.transcript_pk ORDER BY s.name`), 'the fixture must store S unlinked, under T2')
+        .toEqual([{ name: F6_ORPHAN, unlinked: 1, uuid: F6_U2 }, { name: F6_SHARED, unlinked: 0, uuid: F6_U1 }]);
+      expect(rrQ<{ n: number }>(box, 'SELECT count(DISTINCT blob_id) AS n FROM sidecars')[0]!.n, 'the two sidecars share one blob').toBe(1);
+      // D-5399: S's ingest took the blob's mark off, and its referrers' (T1's tool_result row, which links the blob through its
+      // sidecar); every other row keeps segment 1.
+      expect(rrQ(box, 'SELECT exported_ms IS NULL AS unmarked, exported_seg AS seg FROM blobs WHERE lower(hex(sha256)) = ?', blobSha),
+        'S\'s ingest cleared the blob\'s mark').toEqual([{ unmarked: 1, seg: null }]);
+      expect(strandedBlobs(box), 'D-5395: no live blob is held only by marked entries (the blob is unmarked, so every entry that references it is too)').toEqual([]);
+      expect(rrQ(box, 'SELECT uuid FROM entries WHERE exported_ms IS NULL ORDER BY uuid'), 'the mark of the one entry that references it (T1\'s tool_result row) is off with it')
+        .toEqual([{ uuid: rrU(611) }]);
+      expect(metaOf(box, 'export_due'), 'the census counts the blob due again, so doctor sees what the pass owes (before D-5399 it read 0 and nothing was owed)').toBe('1');
+
+      // The next pass past the hourly clock: the unlinked run offers the blob again, and the pass writes a second segment.
+      const last = runDriver(box, { offsetMs: 6 * F6_HOUR });
+      expect(last.code, `${last.stdout}\n${last.stderr}`).toBe(0);
+      const both = segmentsOf(box).map((n) => path.basename(n));
+      expect(both, 'S wrote a second segment').toHaveLength(2);
+      expect(both[0]).toBe(names[0]);
+      const seg2 = path.join(exportDirOf(box), both[1]!);
+      expect(segmentRows(seg2, 'blobs').map((b) => b['sha256']), 'it carries the blob\'s bytes once').toEqual([blobSha]);
+      expect(segmentRows(seg2, 'sidecars').map((x) => [x['name'], x['uuid']]).sort(), 'with BOTH sidecar rows: S\'s, unlinked, and T1\'s, linked, which travels with its re-exported entry')
+        .toEqual([[F6_ORPHAN, null], [F6_SHARED, rrU(611)]]);
+      expect(segmentRows(seg2, 'entries').map((e) => e['uuid']), 'the entry that references the blob is written again, the others stay in segment 1').toEqual([rrU(611)]);
+      expect(rrQ<{ n: number }>(box, 'SELECT count(*) AS n FROM entries WHERE exported_seg = ?', both[0]!)[0]!.n).toBe(7);
+      expect(rrQ(box, 'SELECT exported_seg AS seg FROM blobs WHERE lower(hex(sha256)) = ?', blobSha), 'the blob is marked by the second segment').toEqual([{ seg: both[1]! }]);
+      expect(metaOf(box, 'export_due'), 'nothing is left due').toBe('0');
+      expect(strandedBlobs(box)).toEqual([]);
+
+      const leaf = leafOf(F6_ID2)[0]!;
+      const reads: F6Read[] = [
+        { key: 'grep FTS --workspace (pane two)', pane: F6_ID2, args: ['grep', '--workspace', F6_WORD], asserted: true },
+        { key: 'grep FTS --session two (pane one)', pane: F6_ID1, args: ['grep', '--session', F6_ID2, F6_WORD], asserted: true },
+        { key: 'grep FTS own family (pane two)', pane: F6_ID2, args: ['grep', F6_WORD], asserted: true },
+        { key: 'grep --regex --workspace (pane two)', pane: F6_ID2, args: ['grep', '--workspace', '--regex', F6_WORD], asserted: true },
+        { key: 'grep --regex --session two (pane one)', pane: F6_ID1, args: ['grep', '--session', F6_ID2, '--regex', F6_WORD], asserted: true },
+        { key: 'grep --regex own family (pane two)', pane: F6_ID2, args: ['grep', '--regex', F6_WORD], asserted: true },
+        { key: 'expand T2 leaf (pane two)', pane: F6_ID2, args: ['expand', leaf], asserted: false },
+        { key: 'describe T2 leaf (pane two)', pane: F6_ID2, args: ['describe', leaf], asserted: false },
+        { key: 'expand T2 first row (pane two)', pane: F6_ID2, args: ['expand', rrU(620)], asserted: false },
+        // contrast: what the same segment still carries for T1, whose sidecar is linked
+        { key: 'grep FTS own family (pane one)', pane: F6_ID1, args: ['grep', F6_WORD], asserted: false },
+        { key: 'grep FTS --project (pane two)', pane: F6_ID2, args: ['grep', '--project', F6_WORD], asserted: false },
+        { key: 'expand T1 tool_result (pane one)', pane: F6_ID1, args: ['expand', rrU(611)], asserted: false },
+        // CONTROL of the scope: T2's own rows are found by --workspace on both sides of the rebuild
+        { key: 'grep FTS T2 row text --workspace (pane two)', pane: F6_ID2, args: ['grep', '--workspace', 'zqf6two'], asserted: false },
+      ];
+      const ask = (): Record<string, F6Answer> => Object.fromEntries(reads.map((r) => [r.key, f6Ask(box, r)]));
+      const before = ask();
+      for (const r of reads.filter((x) => x.asserted)) expect(before[r.key]!.hasS, `CONTROL: ${r.key} finds S before the loss: ${JSON.stringify(before[r.key])}`).toBe(true);
+      expect(before['expand T1 tool_result (pane one)']!.hasShared, 'CONTROL: expand shows a LINKED sidecar').toBe(true);
+
+      // The loss: every source of the text, then the rebuild from the segments.
+      fs.rmSync(t1);
+      fs.rmSync(t2);
+      fs.rmSync(dirOf(F6_SLUG1, F6_U1), { recursive: true });
+      fs.rmSync(dirOf(F6_SLUG2, F6_U2), { recursive: true });
+      rrLose(box, { binding: false, journal });
+      const rebuilt = await cliOnPty(box, ['doctor', '--rebuild']);
+      expect(rebuilt.code, rebuilt.out).toBe(0);
+      rrTickUntil(box, () => rrRecovered(box) && countOf(box, 'entries') === 8 && leafOf(F6_ID2).length === 1, 12);
+      expect(leafOf(F6_ID2), 'the leaf keeps its id').toEqual([leaf]);
+
+      const after = ask();
+      expect(after['grep FTS T2 row text --workspace (pane two)']!.exit, 'CONTROL: the rebuilt --workspace scope holds T2\'s rows').toBe(0);
+      const missing = reads.filter((r) => r.asserted && !after[r.key]!.hasS).map((r) => r.key);
+      const table = reads.map((r) => `${r.key}: before ${JSON.stringify(before[r.key])} / after ${JSON.stringify(after[r.key])}`).join('\n');
+      expect(missing, `scoped reads that no longer find S after the rebuild:\n${table}`).toEqual([]);
+      for (const r of reads.filter((x) => !x.asserted)) {
+        expect([after[r.key]!.exit, after[r.key]!.hasS, after[r.key]!.hasShared], `${r.key} answers as before`).toEqual([before[r.key]!.exit, before[r.key]!.hasS, before[r.key]!.hasShared]);
+      }
+    }, 4 * HEAVY);
+  }
+});
+
 // ── W1-B4 whole-branch review: replay marks an entry only while every blob it references is exported or pruned ──────
 // D-5395 (history-export-mark-needs-its-blobs). The real verbs, in fixture HOMEs: a late variant (or a late-linked
 // sidecar) clears its entry's mark; a backup taken then holds that entry unmarked over a live, unmarked blob; the loss
