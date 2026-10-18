@@ -77,7 +77,7 @@ Replace each stale sentence. The six edits, by line:
 
 - [ ] **Step 3: Fix `server/src/fleet.ts:71-80`**
 
-The docstring states `ACCOUNTS['claude-lab0'].ccdValid` is `false` and that the fixture test pins ccd rejecting it. Both are false. Rewrite to state that dev0 is home-able and ccd-valid, so ccd mints `claude-lab0-*` ids, which is exactly why longest-prefix-wins is load-bearing rather than prophylactic.
+The docstring states `ACCOUNTS['claude-lab0'].ccdValid` is `false` and that the fixture test pins ccd rejecting it. Both are false. Rewrite to state that lab0 is home-able and ccd-valid, so ccd mints `claude-lab0-*` ids, which is exactly why longest-prefix-wins is load-bearing rather than prophylactic.
 
 - [ ] **Step 4: Fix `server/src/server.ts:235`**
 
@@ -724,7 +724,7 @@ Do **not** rename `--acct-active` / `--acct-active-tint` (136-137) — they are 
 
 - [ ] **Step 4: Fix the two `--acct-` string inspections**
 
-`SessionScreen.tsx:121` is `const acct = acctVar.startsWith('--acct-') ? acctVar.slice('--acct-'.length) : undefined;`. Since `claude-lab0`'s `colorVar` is `--ink-tertiary`, `acct` is `undefined` and dev0 renders in `claude`'s cyan. Replace with a direct `accountHue(roster, wrapper)` lookup. Do the same at `SwapSheet.tsx:126`, keeping the `--bg-raised` fallback for a wrapper not in the roster.
+`SessionScreen.tsx:121` is `const acct = acctVar.startsWith('--acct-') ? acctVar.slice('--acct-'.length) : undefined;`. Since `claude-lab0`'s `colorVar` is `--ink-tertiary`, `acct` is `undefined` and lab0 renders in `claude`'s cyan. Replace with a direct `accountHue(roster, wrapper)` lookup. Do the same at `SwapSheet.tsx:126`, keeping the `--bg-raised` fallback for a wrapper not in the roster.
 
 - [ ] **Step 5: Make `accounts.ts` a projection of runtime data**
 

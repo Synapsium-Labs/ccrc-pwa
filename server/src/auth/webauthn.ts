@@ -372,8 +372,8 @@ export function relyingPartyProblem(rpId: string, origin: string): string | null
  * every key on this box one account.
  *
  * NEVER PII. A single-operator box has no email and no username to put here
- * (`shared/api.ts`'s `PasskeyRegisterStart` holds that seam open for the team
- * edition); this is a hash of a value that is already public, carrying no
+ * (`shared/api.ts`'s `PasskeyRegisterStart` holds that seam open for a later
+ * product decision); this is a hash of a value that is already public, carrying no
  * information about the person at all. 16 bytes is WebAuthn's recommended
  * minimum.
  */

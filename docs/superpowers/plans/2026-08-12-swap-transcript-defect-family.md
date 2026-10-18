@@ -4657,13 +4657,13 @@ describe('resolveTranscript — the ladder, rung by rung (spec §5.1)', () => {
     // input to the PWA's banner — a foreign hit rendered silently is the quiet
     // wrongness this spec exists to remove.
     const b = box();
-    const personal = path.join(b.root, '.claude-home');
-    const corp = path.join(b.root, '.claude-acme');
-    plant(stranded(personal), 2000, 'older foreign\n');
-    const newest = plant(stranded(corp), 3000, 'newer foreign\n');
+    const home = path.join(b.root, '.claude-home');
+    const acme = path.join(b.root, '.claude-acme');
+    plant(stranded(home), 2000, 'older foreign\n');
+    const newest = plant(stranded(acme), 3000, 'newer foreign\n');
     mkdirSync(path.join(b.cfg, 'projects'), { recursive: true }); // own account: listable, empty
     const r = await resolveTranscript(localIO, opts(b, {
-      foreign: [{ account: 'claude9', configDir: personal }, { account: 'claude-acme', configDir: corp }],
+      foreign: [{ account: 'claude9', configDir: home }, { account: 'claude-acme', configDir: acme }],
     }));
     expect(r).toEqual({ kind: 'found', path: newest, rung: 'foreign-glob', account: 'claude-acme' });
   });
@@ -4673,11 +4673,11 @@ describe('resolveTranscript — the ladder, rung by rung (spec §5.1)', () => {
     // one uuid would then render another account's frozen history for most of
     // the fleet.
     const b = box();
-    const personal = path.join(b.root, '.claude-home');
-    plant(stranded(personal), 9000, 'newer, but foreign\n');
+    const home = path.join(b.root, '.claude-home');
+    plant(stranded(home), 9000, 'newer, but foreign\n');
     const own = plant(stranded(b.cfg), 1000, 'older, but ours\n');
     const r = await resolveTranscript(localIO, opts(b, {
-      foreign: [{ account: 'claude9', configDir: personal }],
+      foreign: [{ account: 'claude9', configDir: home }],
     }));
     expect(r).toEqual({ kind: 'found', path: own, rung: 'uuid-glob', account: null });
   });

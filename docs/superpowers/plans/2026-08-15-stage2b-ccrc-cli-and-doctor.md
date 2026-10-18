@@ -419,8 +419,8 @@ git commit -m "feat(ccrc): doctor notices a wrapper the roster does not describe
 ```ts
 it('every generated account in the shipped migration roster declares the secretsFile its box uses', () => {
   const roster = JSON.parse(readFileSync('deploy/accounts.migration.json', 'utf8'));
-  const corp = roster.accounts.find((a: any) => a.id === 'claude-acme');
-  expect(corp.exec.secretsFile).toBe('.cc-secrets/claude-acme-oauth.env');
+  const acme = roster.accounts.find((a: any) => a.id === 'claude-acme');
+  expect(acme.exec.secretsFile).toBe('.cc-secrets/claude-acme-oauth.env');
 });
 ```
 
