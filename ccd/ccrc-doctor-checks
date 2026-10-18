@@ -9249,10 +9249,11 @@ _check_update-sweep() {
       # coordinator's ruling 12, D-5316): the operator's Reading 9 case is a unit
       # that was crash-looping BEFORE the update, and one `active` read is what such
       # a unit shows between its restarts, so `active` is back only with NRestarts 0.
-      # `show` WITHOUT `--value`, the two values taken BY NAME: `--value` prints in
-      # the manager's property order, not the order of the `-p` flags, so a two-value
-      # `--value` read cannot say which line is which. No ActiveState line, an empty
-      # one, or `active` with no digits for NRestarts is the manager not answering.
+      # `show` WITHOUT `--value` (D-5328), the two values taken BY NAME: `--value`
+      # prints in the manager's property order, not the order of the `-p` flags, so
+      # a two-value `--value` read cannot say which line is which. No ActiveState
+      # line, an empty one, or `active` with no digits for NRestarts is the manager
+      # not answering.
       # Darwin has no NRestarts: it keeps the one `_svc_is_active` read.
       for id in ${ids[@]+"${ids[@]}"}; do
         if [ "${CCD_OS:-linux}" = darwin ]; then
