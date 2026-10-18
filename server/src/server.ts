@@ -1281,6 +1281,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // must treat it as `'unknown'`, never as `'ok'` and never as an empty
     // history.
     const lifecycle = watcher?.lifecycleHealth() ?? undefined;
+    // The delegation broker's report-only observation health (wave 3, Task 13), from the checkpoint's own intervals. Absent until the
+    // lane has run, and on a box with no coordination database: absence reads as UNKNOWN, never as healthy (`FleetHealth.delegation`).
+    const delegation = watcher?.currentDelegationHealth() ?? undefined;
     if (deps.cfg.fleetMode === 'remote' && deps.fleetState) {
       // The two stamps: with a coordination database, the inventory's rows —
       // re-measured every minute by `sweepInventory`, superseded rows excluded
@@ -1302,6 +1305,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         builds,
         projectPools: poolsEnforcement(deps.fleetState?.ccdVerbs ?? null),
         ...(lifecycle ? { lifecycle } : {}),
+        ...(delegation ? { delegation } : {}),
       };
     }
     // Local mode drives ccd on this same box, off this same roster: there is
@@ -1322,6 +1326,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // journal, and a block that appeared only in remote mode would make the
       // dev box permanently unable to see its own mirror stall.
       ...(lifecycle ? { lifecycle } : {}),
+      ...(delegation ? { delegation } : {}),
     };
   });
 

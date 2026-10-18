@@ -79,8 +79,8 @@ export interface TasksRead {
    *  returned null, which folds two conditions this reader cannot part —
    *  "no such directory" (the ordinary shape: most sessions never make a task
    *  list) and "the directory is there and would not list" (EACCES; in remote
-   *  mode one dropped agent-WS round trip). `io.readdir` has no measured
-   *  variant, so the distinction is not available HERE — but the consumer
+   *  mode one dropped agent-WS round trip). `io.readdir`, which this calls, folds
+   *  them (its measured sibling `readdirMeasured` does not), so the distinction is not available HERE — but the consumer
    *  needs the fold flagged even so, because the two share the one recovery:
    *  do not overwrite a tally that was measured a moment ago with a zero
    *  nobody measured.

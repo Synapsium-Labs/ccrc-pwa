@@ -14,6 +14,10 @@
 #
 # The raw root it makes (ccrc-dlg-raw.* in ${TMPDIR:-/tmp}) holds UNSANITISED bundles. This script never deletes it, on
 # success or on failure, and says where it is; the operator removes it by hand once nothing needs it.
+#
+# Fail-closed before `--missing` is relied on (D-3999): `rig.sh all` exits 1 when any single run failed, so step 2 fails and this
+# script stops there, with no sanitised version directory for it, and `--missing` selects that version again; a versions directory
+# `rig.sh versions` cannot read refuses here with rig.sh's own exit 2 and words, not "no version is installed".
 set -euo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 TREE=$(cd "$HERE/../../.." && pwd)
@@ -91,4 +95,6 @@ for i in "${!STEP[@]}"; do
   fi
 done
 printf 'recapture: raw root: %s\n' "${RAW:-<raw>}"
-printf 'recapture: it %s: rm -rf %s\n' "$KEPT" "${RAW:-<raw>}"
+# The one line meant to be PASTED into a shell, so the root goes through `%q` (a spaced TMPDIR, pasted as `%s`, removed other paths and
+# left the root). A dry run has no root: its `<raw>` placeholder goes through the same `%q`, once, and reads `\<raw\>`.
+printf 'recapture: it %s: rm -rf %q\n' "$KEPT" "${RAW:-<raw>}"

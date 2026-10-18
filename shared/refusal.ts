@@ -56,14 +56,14 @@ export type CollectLaneRouteRefusal = Exclude<CollectLaneRefusal, 'confirm-requi
  *  D-5381; the others also belong to a narrower vocabulary of their own (the
  *  asks', the claims', the pools'), which this list does not replace. */
 export const GENERIC_REFUSALS = [
-  'ask-mismatch', 'ask-unreadable', 'bad-account-id', 'bad-attachment', 'bad-path', 'bad-pool-name',
-  'bad-session', 'bad-session-id', 'bad-transition', 'ceiling', 'child-unmeasurable', 'claim-conflict',
-  'claim-terminal', 'claimant-changed', 'clip-unmeasurable', 'fleetFailed', 'foreign-origin', 'gone',
-  'hetzner-error', 'internal', 'no-record', 'no-session', 'no-such-passkey', 'not-found', 'not-held',
-  'not-owner', 'not-parent', 'not-remote', 'not-seeded', 'pool-mismatch', 'pool-unreadable',
-  'registry-unreadable', 'run-closed', 'run-unreadable', 'runs-unreadable', 'sweep-stopped', 'too-large',
-  'unknown-ask', 'unknown-claim', 'unknown-session', 'unmeasured', 'unrouteable-record', 'unsupported',
-  'unsupported-type',
+  'application-failed', 'ask-mismatch', 'ask-unreadable', 'bad-account-id', 'bad-attachment', 'bad-path',
+  'bad-pool-name', 'bad-session', 'bad-session-id', 'bad-transition', 'ceiling', 'child-unmeasurable',
+  'claim-conflict', 'claim-terminal', 'claimant-changed', 'clip-unmeasurable', 'fleetFailed',
+  'foreign-origin', 'gone', 'hetzner-error', 'incarnation-changed', 'internal', 'no-record',
+  'no-session', 'no-such-passkey', 'not-found', 'not-held', 'not-owner', 'not-parent', 'not-ready',
+  'not-remote', 'not-seeded', 'pool-mismatch', 'pool-unreadable', 'registry-unreadable', 'run-closed',
+  'run-unreadable', 'runs-unreadable', 'sweep-stopped', 'too-large', 'unknown-ask', 'unknown-claim',
+  'unknown-session', 'unmeasured', 'unrouteable-record', 'unsupported', 'unsupported-type',
 ] as const;
 export type GenericRefusal = (typeof GENERIC_REFUSALS)[number];
 
@@ -93,6 +93,7 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   'claim-conflict': 409, 'claim-terminal': 409, 'claimant-changed': 409, 'no-record': 409, 'no-session': 409,
   'not-held': 409, 'not-remote': 409, 'not-seeded': 409, 'pool-mismatch': 409, 'run-closed': 409,
   'sweep-stopped': 409, 'unrouteable-record': 409, 'marker-still-controls': 409, 'conflict': 409,
+  'incarnation-changed': 409,
   // 413, 415, 429
   'oversize': 413, 'too-large': 413,
   'unsupported-type': 415,
@@ -104,7 +105,7 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   'unmeasured': 502,
   'unavailable': 503, 'journal-unreadable': 503, 'journal-unwritable': 503, 'ask-unreadable': 503,
   'pool-unreadable': 503, 'registry-unreadable': 503, 'run-unreadable': 503, 'runs-unreadable': 503,
-  'state-unmeasurable': 503, 'write-failed': 503,
+  'state-unmeasurable': 503, 'write-failed': 503, 'application-failed': 503, 'not-ready': 503,
 };
 
 /** The runtime list, derived from the table (`PR_REASONS`'s idiom). */

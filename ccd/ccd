@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=1b81659572590b98c24cdc59559ea2d9e93f0aa0f28c55e34bbe2ad4962f7006
+# ccrc:generated 1 sha256=e029f8746a7a49d2e6282beb0415c3f04bf48cd23caaae4b53e41dc2a9dbb404
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -4084,11 +4084,11 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
     _ws_private_family "$psuffix" || continue
     rm -f "$pf" || _reg_purge_unremoved "$pf"
   done
-  # GENERATION LAST, after the archived/reaping tail and after every private
-  # family — and OUTSIDE the loop above, which skips it. It is the row's
-  # authorization: while it stands, a hook holding it can still take the lock,
-  # so it is the last thing to go.
-  rm -f "$REG/$id.generation" || _reg_purge_unremoved "$REG/$id.generation"
+  # GENERATION LAST, after the archived/reaping tail and every private family, and OUTSIDE the loop above, which skips it: the row's authorization, so while it stands a hook holding it can still take the lock.
+  # `joined` and `joinedprev` ONCE MORE, AFTER IT, in ONE `rm` call on the same line, and the order is the point: session-hook.sh appends `$REG/$id.joined` on a SubagentStart WITHOUT this lock (and renames it whole to `joinedprev` past 128 lines), only while `generation` stands (it checks before the append and again after it, and removes both names if the row is gone), and the glob loop above passed the names tens of milliseconds before this line.
+  # An append that lands before this line is taken by it; one that lands after `generation` has gone sees no row on its re-check and removes itself. Placed earlier, it would leave a hook that still sees the row free to write behind it, and an orphaned dot-free field holds the slug for ever (`_ws_slug_free`'s any-field check; `ws-gc`, keyed on `.uuid`/`.workspace`, never clears it).
+  # Its own literal paths and never the loop's `f` (the note beside the `hf` loop: a second unlink through that variable is a second canonical write on the compaction card's allow-list; neither name is on it). ONE call, so the purge's unlink count stays what `ccd-workspaces.test.ts` pins; a refusal names each path still standing. Line-neutral by construction, so no cited anchor below moves.
+  rm -f "$REG/$id.generation" || _reg_purge_unremoved "$REG/$id.generation"; rm -f "$REG/$id.joined" "$REG/$id.joinedprev" || { [[ -e "$REG/$id.joined" ]] && _reg_purge_unremoved "$REG/$id.joined"; [[ -e "$REG/$id.joinedprev" ]] && _reg_purge_unremoved "$REG/$id.joinedprev"; }
   _compact_lock_release "$_pg_fd"
   return "$_pg_urc"
 }
@@ -8685,7 +8685,7 @@ EOF
   echo docs-show
   echo docs-fetch
   echo docs-index
-  echo docs-v1
+  echo docs-v1; echo delegation-events-v1   # delegation broker wave 3: the spool grammar and ccd-made spool directories (`_delegation_spool_dir`); the hook's registration is the doctor's to measure, not this token's
   echo swap-busy-v1   # cmd_swap re-measures at the act and takes --interrupt (D-5240): the server sends the flag only behind this word
 }
 
@@ -22608,6 +22608,35 @@ _child_tmpdir() {   # id -> rc 0 + path on stdout | 1 not a child | 2 child, lea
   printf '%s' "$dir"
 }
 
+# ── THE OWNER'S DELEGATION SPOOL DIRECTORY (delegation broker wave 3, spec §5.3) ─
+# `$REG/delegation/spool/<id>`, mode 0700, made HERE, at every spawn, and nowhere else. The session hook appends one line per
+# delegation event to `<YYYYMMDDHH>.spool` inside it and NEVER makes it: a hook that created the directory would be a hook
+# that forked `mkdir` on the hot path of every tool call, and a directory it finds missing says something true, that no ccd
+# which speaks `delegation-events-v1` has spawned this session, so it skips. The same reasoning is why the path is made by
+# the spawn and not by `ws-add` or `cmd_start`: a respawn, a swap and a supervisor restart reach `_spawn_start` too, and a
+# session that predates this code gains its directory at its next spawn.
+# NEVER A REFUSAL, like `_child_tmpdir`'s rc 2: a spawn that died here would leave a supervisor restart with no session at
+# all, for the sake of evidence the census backstops. A path that cannot be made a private directory warns and returns 1;
+# the spawn goes on and the hook skips until a later spawn makes it.
+# NEVER THROUGH A LINK: the root, the spool directory and the owner's directory must not be symlinks, so a link planted at
+# any of them cannot aim the hook's appends or its prune elsewhere (the hook refuses the same three).
+# THE ID is the registry's own shape and never dot-leading: `.` and `..` would name the spool root or the registry itself,
+# and a dot-leading name is one the hook refuses to write for. Mode is set with `chmod -- 0700 <dir>` (the operand last
+# after `--`, D-3510), so a directory an older ccd or an operator widened is private again at the next spawn.
+# NOTHING PURGES IT in this wave: the hook prunes only a LIVE owner's own buckets (at its next write), so a removed owner, or one whose
+# session never runs again, keeps its last 24 to 25 hourly buckets and this directory for good; the spool is evidence the server may not have read yet.
+_delegation_spool_dir() {   # id -> 0 the owner's directory stands, private | 1 not made (warned, or refused for the id): a failure never fails a spawn
+  local LC_ALL=C id="${1-}" base="$REG/delegation" d
+  [[ "$id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || return 1
+  d="$base/spool/$id"
+  if [[ -L "$base" || -L "$base/spool" || -L "$d" ]] \
+     || ! mkdir -p -m 0700 -- "$base" "$base/spool" "$d" 2>/dev/null \
+     || [[ ! -d "$d" || -L "$d" || -L "$base" || -L "$base/spool" ]] || ! chmod -- 0700 "$d" 2>/dev/null; then
+    echo "ccd: warn: $id's delegation spool directory $d could not be made a private directory — spawning without it; the delegation hook skips until a later spawn makes it" >&2
+    return 1
+  fi
+}
+
 # ── THE TEMP ROOT'S POSITIVE WITNESS (child-workspace reclamation, spec §5.2) ─
 # `$REG/tmproots/<id>` says "ccd handed THIS directory, by dev, ino and btime,
 # to run <run> as its temp root": one line, `v=1 id=<id> run=<run> dev=<n>
@@ -23100,6 +23129,9 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # uncontained; the spawn proceeds either way.
   local tmpenv="" ctmp
   ctmp=$(_child_tmpdir "$id") && tmpenv="TMPDIR='$ctmp'"
+  # THE OWNER'S DELEGATION SPOOL DIRECTORY (delegation broker wave 3, `_delegation_spool_dir`): made here, once per spawn, for every
+  # session and not only a child; a failure has already warned and never refuses the spawn.
+  _delegation_spool_dir "$id" || true
   # D-5241: the tool-child priority, on both spawn lines for `$tmpenv`'s reason.
   local adjenv; adjenv=$(_tool_adj_env)
   resenv="$resenv${adjenv:+ $adjenv}${routeenv:+ $routeenv}${tmpenv:+ $tmpenv}"
