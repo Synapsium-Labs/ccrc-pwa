@@ -199,6 +199,17 @@ export function MessageBubble({
         </p>
       );
     }
+    if (event.origin === 'idle-compact-nudge') {
+      // D-5373: the server typed ONE "continue" prompt after an idle compaction
+      // left a fresh open task list (operator ruling 2026-10-17). It is the
+      // server's act, so it is a pill and never the operator's bubble; the
+      // prompt it typed is the tooltip. The idle pill's resting ink: no alarm.
+      return (
+        <p className="sys-divider sys-divider--idle sys-divider--nudge" title={event.text}>
+          nudged after idle compaction · ccrc typed “continue”
+        </p>
+      );
+    }
     // A system row whose text runs to more than ONE LINE cannot be told by the
     // pill below, and the pill does not fail loudly — it lies quietly.
     // `.sys-divider` declares no `white-space`, so every newline COLLAPSES into

@@ -6,7 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { localIO } from '../src/io.js';
 import { resolveTranscript, transcriptPath, type TranscriptResolution } from '../src/transcript/resolve.js';
 import { parseTranscriptLine } from '../src/transcript/parse.js';
-import type { ChatEvent } from '../../shared/api.js';
+import { IDLE_COMPACT_NUDGE_PROMPT, type ChatEvent } from '../../shared/api.js';
+import { ROW as NUDGE_ROW } from './idleNudgeFixtures.js';
 
 const fixture = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'transcript-sample.jsonl');
 
@@ -319,6 +320,31 @@ describe('the idle-compaction notice is a system event, not dropped (D-5371)', (
       { type: 'assistant', uuid: 'a2', timestamp: '2026-10-17T18:38:00.500Z', message: { role: 'assistant', content: [{ type: 'tool_use', id: 't2', name: 'Bash', input: { command: 'true' } }] } },
     ];
     expect(midTurn.flatMap(parse).some((e) => e.kind === 'system' && e.origin === 'idle-compact')).toBe(false);
+  });
+});
+
+// D-5373: the server's own nudge after an idle compaction is a plain user row
+// (sendPrompt writes no isMeta); the chat shows it as a pill so the operator
+// sees why a turn started. Matched on the WHOLE trimmed text, never a prefix.
+describe('the idle-compaction nudge is a system pill, not the operator speaking (D-5373)', () => {
+  const parse = (o: object): ChatEvent[] => parseTranscriptLine(JSON.stringify(o));
+  it('a user row whose whole text is the nudge prompt is a system event, origin idle-compact-nudge', () => {
+    expect(parse(NUDGE_ROW.nudge)).toEqual([{
+      kind: 'system', uuid: 'u3', ts: NUDGE_ROW.nudge.timestamp, text: IDLE_COMPACT_NUDGE_PROMPT, origin: 'idle-compact-nudge',
+    }]);
+  });
+  it('the same text in a text block, or with surrounding whitespace, is still the nudge', () => {
+    const blocks = { ...NUDGE_ROW.nudge, message: { role: 'user', content: [{ type: 'text', text: `  ${IDLE_COMPACT_NUDGE_PROMPT}\n` }] } };
+    expect(parse(blocks).map((e) => e.kind === 'system' ? e.origin : e.kind)).toEqual(['idle-compact-nudge']);
+  });
+  it('the operator typing a sentence that merely starts with the nudge stays the operator', () => {
+    const longer = { ...NUDGE_ROW.nudge, message: { role: 'user', content: `${IDLE_COMPACT_NUDGE_PROMPT} Also run the tests.` } };
+    expect(parse(longer).map((e) => e.kind)).toEqual(['user']);
+    const shorter = { ...NUDGE_ROW.nudge, message: { role: 'user', content: 'Continue with your open tasks.' } };
+    expect(parse(shorter).map((e) => e.kind)).toEqual(['user']);
+  });
+  it('a sidechain copy is dropped like every sidechain row', () => {
+    expect(parse({ ...NUDGE_ROW.nudge, isSidechain: true })).toEqual([]);
   });
 });
 
