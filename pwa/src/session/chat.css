@@ -54,6 +54,21 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* D-5527 — the coordination line: whose code this session works on, who
+   coordinates it, and the programme, wave and run. Under the title, in the
+   crumb's ink; it WRAPS rather than ellipsising, because at 360 each clause is
+   a fact the operator came here to read, and the run number is the last of
+   them (it left the fleet row for this line). The header's own surface is
+   restated here so the contrast gate can measure the pair. */
+.chat-coord {
+  margin: 0 0 2px;
+  font-size: var(--fs-xs);
+  line-height: 1.35;
+  color: var(--ink-secondary);
+  background: var(--bg-surface);
+  overflow-wrap: anywhere;
+}
+.chat-coord-part { display: inline-block; max-width: 100%; }
 /* ONE wrapping row: status, account, model, effort, branch. It was two fixed
    rows, which spent a line of chat height on every screen to say what fits
    comfortably on one. Narrow screens wrap it rather than reintroducing the row. */
@@ -388,6 +403,7 @@ button.metachip:active {
 .chat-banner--missing .banner-path {
   font: var(--weight-regular) var(--fs-xs) / var(--lh-mono) var(--family-mono);
   color: var(--ink-secondary);
+  background: var(--bg-surface);
   overflow-wrap: anywhere;
 }
 

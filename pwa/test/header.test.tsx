@@ -1301,3 +1301,49 @@ describe('the header of a hibernated row (D-5242)', () => {
     expect(screen.queryByText('hibernated')).toBeNull();
   });
 });
+
+// — D-5527: a coordinated workspace says, in words, whose code it works on and who coordinates it —
+
+describe('SessionScreen: the coordination line (D-5527)', () => {
+  const CHILD = 'lane-b-project-b-quiet-river';
+  const COORD = 'lane-a-project-a';
+  const run41 = {
+    id: 41, program: 'port-api', programTitle: 'Port the API', wave: 5, waveOf: 7,
+    project: 'project-b', homeProject: 'project-b', sessionId: CHILD, workspace: 'quiet-river', branch: null,
+    state: 'dispatched', kind: 'work', reviews: null, claimedBy: COORD, resumed: true, clearedAt: null,
+    openedAt: 1_800_000_000_000, dispatchStartedAt: null, dispatchedAt: null, closedAt: null, handoffCommit: null,
+    items: { done: 0, total: 0 }, unreadMail: 0,
+    health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0, lastRejectCode: null,
+              briefQueued: true, clearError: null, coordKickoffPendingSince: null }, childReclaim: null,
+  } as const;
+  const mount = (sessions: FleetSession[], runs: readonly (typeof run41)[] = [run41]) => {
+    const store = createSessionStore(CHILD, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } });
+    const fleet = createFleetStore({ makeSocket: fakeSocket });
+    act(() => {
+      fleet.setState({ sessions, runs: runs.map((r) => ({ ...r })), runsFrameSeen: true, conn: 'open' });
+    });
+    render(<SessionScreen id={CHILD} store={store} fleet={fleet} />);
+  };
+  const child = baseSession({
+    id: CHILD, project: 'project-b', workspace: 'quiet-river', role: 'child',
+    child: { kind: 'child', runId: 39 }, boardProject: 'project-a',
+  });
+
+  it('a cross-project child: working on its project, coordinated from its coordinator, then the programme, wave and run', () => {
+    mount([baseSession({ id: COORD, project: 'project-a', name: 'the coordinator', role: 'coordinator' }), child]);
+    const line = document.querySelector('.chat-coord');
+    expect(line?.textContent).toBe('working on project-b · coordinated from the coordinator · port-api · wave 5 of 7 · run #41');
+    expect(line).toHaveAttribute('title', expect.stringContaining('one wave of Port the API on project-b’s code for the coordinator'));
+  });
+
+  it('a coordinator the fleet does not carry is named by the project it coordinates from', () => {
+    mount([child]);
+    expect(document.querySelector('.chat-coord')?.textContent)
+      .toBe('working on project-b · coordinated from project-a · port-api · wave 5 of 7 · run #41');
+  });
+
+  it('a session nobody coordinates has no coordination line — the no-regression baseline', () => {
+    mount([baseSession({ id: CHILD, project: 'project-b' })], []);
+    expect(document.querySelector('.chat-coord')).toBeNull();
+  });
+});

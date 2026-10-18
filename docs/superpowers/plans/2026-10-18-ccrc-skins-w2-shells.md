@@ -1440,6 +1440,19 @@ D-5497 was not drawn from that block: the coordinator issued it to Task S10a fro
   - **No field for `sign-in`.** Nothing on `FleetSession` says a session is blocked on its account's sign-in.
   - **What closes it.** A server field that carries the open dialog's kind (from the hook envelope, and from `waitingFor`'s `sandbox request`), and one for a sign-in block, each additive on the wire. Either is a change to `shared/api.ts` and `server/src/fleet.ts`, outside S10a's new-files-only scope, and is for the coordinator to schedule. Until then every attention row those fields would explain answers `null`, as D-5473 requires.
 
+### Cross-project nesting
+
+Issued 2026-10-18 to the cross-project nesting change, a block of three. D-5527 is defined here, once.
+
+- **D-5527** — `fleet-tree` (Tasks S6, S10): one pure model, `pwa/src/fleet/fleetTree.ts`, decides each fleet row's card and parent for both skins, and S6's cards and S10's project mode read its groups and rows (`fleetTree`) rather than calling `groupFleet`, `runCard` and `nestFleet` themselves. S10's status mode reads `workingOn` and `childRunContext` for a child filed under its own status. Since cross-project coordination (#601, D-5523), a coordinator in one project can dispatch children that are workspaces of another.
+  - **Card.** A row renders where the server placed it (`boardHome`). The server places a held child on its coordinator's project, because the run's stamp records the claimant's own project. The client never overrides that placement. Following the live run's claimant on the client was measured and rejected. It would also move a child whose `boardProject` is null (an older server, or a failed placement read, D-2875) off its own card, which is where `orphanNote` says its coordinator is dead and offers the reclaim.
+  - **Parent.** The parent is the `claimedBy` of the active run bound to the row. Nesting is `nestFleet`'s and is unchanged. A card's runs are the runs whose worker renders on it, keyed through the same card map.
+  - **Indicator.** A row whose own project differs from its card carries a chip with the `folder-code` icon and that project's name, inside the row button so it is part of the accessible name. A same-project child shows nothing new.
+  - **Words.** A child's label names its programme and wave (`port-api · wave 5 of 7`, or `· review of wave 5`), taken from the active run bound to it. A workspace resumed for a later wave therefore shows that wave and not the run that minted it. A child that no open run names reads "run not on the board". The run number moves to the session header's coordination line (`working on <project> · coordinated from <coordinator> · <programme> · wave N of M · run #N`). The reclaim banner leads with the programme and wave when the board holds the run, and keeps `run #N` as the second key.
+  - **Coordinator not a live row.** A stopped workspace coordinator is still a live row, so its child stays nested under it. An archived or missing coordinator leaves the child at the top level of the card the server placed it on, which is the coordinator's project while the stamp answers and the child's own project after that. The child keeps its chip and gets the orphan marker.
+
+Issued and unused: 5528, 5529.
+
 ## Review log
 
 Two adversarial reviews of rev 0, both against `origin/main` `bd10981d`, both "NEEDS REVISION". Rev 1 applies every finding above low severity and each cheap low one. Findings are listed by severity, each with its resolution.

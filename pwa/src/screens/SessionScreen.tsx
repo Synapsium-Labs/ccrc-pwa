@@ -27,6 +27,8 @@ import { useQueuedRoute } from '../session/useQueuedRoute';
 import { routeView } from '../session/routeView';
 import { substrateFaultTitle } from '../fleet/substrateWords';
 import { SessionHeader } from '../session/SessionHeader';
+import { coordinationLine, coordinationOf } from '../fleet/fleetTree';
+import { isRunClosed } from '../fleet/runWords';
 import { HistoryTab } from '../session/HistoryTab';
 import { TerminalDrawer } from '../session/TerminalDrawer';
 import { modelOptions, effortOptions, type PickOption } from '../lib/models';
@@ -169,6 +171,10 @@ export function SessionScreen({
   const live = useFleet((s) => s.sessions.find((x) => x.id === id) ?? null);
   const roster = useFleet((s) => s.roster);
   const projects = useFleet((s) => s.projects);
+  // D-5527: the fleet tree's facts about who this session works for, read off
+  // the same sessions and active runs the fleet's rows are drawn from.
+  const fleetSessions = useFleet((s) => s.sessions);
+  const fleetRuns = useFleet((s) => s.runs);
 
   const kbInset = useKeyboardInsets();
   const [restarting, setRestarting] = useState(false);
@@ -243,6 +249,9 @@ export function SessionScreen({
   // for this project in that read, or a row whose `repo` is not `named` —
   // all three collapse deliberately at `repoLabel`, the one reader.
   const repo = repoLabel(projects?.find((r) => r.name === project)?.repo);
+  const coordinated = live === null ? null
+    : coordinationOf(live, fleetSessions, fleetRuns.filter((r) => !isRunClosed(r)));
+  const coordination = coordinated === null ? null : coordinationLine(coordinated);
 
   // Routing slice 6, Task 4: once `live.route` rides the wire, the pickers'
   // active row and the header's queued badge are DERIVED from it instead of
@@ -433,6 +442,7 @@ export function SessionScreen({
         statusUpdatedAt={statusUpdatedAt}
         roster={roster}
         repo={repo}
+        coordination={coordination}
         onInterrupt={(source) => void interrupt(source)}
         onOpenTerminal={openTerminal}
         onBack={() => navigate('/')}

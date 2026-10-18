@@ -1338,6 +1338,43 @@
    guarding that ceiling the same way `.sess-label` guards its own width. No
    `margin-left` any more — `.sess-open`'s `gap` (above) now does the
    spacing between the two cells, and doing it twice would double it. */
+/* D-5527 — whose code a row works on, when the card it renders on is another
+   project's (a coordinator's dispatched child from a different project). On the
+   label's line, before `.sess-repo`, because the meta line ellipsises at 360
+   and this is the one fact that must survive there. The project name in mono,
+   like the card head's own project name, with the vendored `folder-code` icon
+   stroked in the same ink; a hairline in that ink marks it as a chip, on the
+   card's own surface, painted here so the contrast gate measures the pair
+   (a chip whose ground only the DOM knows would join the uncovered census,
+   which is frozen while the skins foundations' #402 is open). `flex: none` keeps it whole while
+   `.sess-label` ellipsises first; a very long project name ellipsises inside. */
+.sess-workson {
+  flex: none;
+  display: inline-flex;
+  align-self: center;
+  align-items: center;
+  gap: 3px;
+  max-width: 45%;
+  padding: 0 var(--sp-1);
+  border: 1px solid currentColor;
+  border-radius: var(--r-sm);
+  font-family: var(--family-mono);
+  font-size: var(--fs-2xs);
+  line-height: 1.5;
+  color: var(--ink-secondary);
+  background: var(--bg-surface);
+  white-space: nowrap;
+}
+.sess-workson-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sess-workson svg {
+  width: 12px;
+  height: 12px;
+}
+
 .sess-repo {
   flex: none;
   max-width: 45%;

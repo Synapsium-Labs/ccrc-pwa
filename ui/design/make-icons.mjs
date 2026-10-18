@@ -29,6 +29,7 @@ const NAMES = [
   'bell',
   'bell-off',
   'file-text',
+  'folder-code',
   'hand',
   'key-round',
   'mail',

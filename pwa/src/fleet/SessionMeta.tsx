@@ -40,7 +40,7 @@ import { restartWords } from '../lib/restart';
 import { humanBytes } from '../screens/ArchiveScreen';
 import { lifecycleQualifier } from './lifecycleWords';
 import { hibernatedWords } from './hibernated';
-import { childOfRunLabel } from './runWords';
+import { childOfRunLabel, type ChildRunContext } from './runWords';
 import { spawnChip } from './spawnWords';
 import { GraphChip, LastSpawnChip, UnmeasuredChip } from './chips';
 import './fleet.css';
@@ -140,6 +140,10 @@ export interface SessionMetaProps {
   subagentsOpen: boolean;
   subagentsId: string;
   onToggleSubagents: () => void;
+  /** The active run bound to this row and its coordinator's name (D-5527,
+   *  `fleetTree.ts`'s `childRunContext`), for the child label's programme and
+   *  wave. Absent: nothing known, and a child says its run is not on the board. */
+  childRun?: ChildRunContext;
 }
 
 /**
@@ -169,7 +173,7 @@ const markerNote = (
 
 export function SessionMeta({
   session, roster, projectPool, onOpenRun, state, dead, asleepAt = null,
-  subagentList, subagentsOpen, subagentsId, onToggleSubagents,
+  subagentList, subagentsOpen, subagentsId, onToggleSubagents, childRun,
 }: SessionMetaProps): ReactNode {
   // The cleanup bucket's own facts — the merged PR number and the size
   // ws-archive measured, both already on the wire (`pr.number`,
@@ -188,9 +192,10 @@ export function SessionMeta({
   // untouched, a dead row stays `exited`, and these are cells beside it.
   const qualifier = asleepAt !== null ? null : lifecycleQualifier(session);
 
-  // Child-reclamation wave 5: which run minted this workspace, when it is a
-  // child. `childOfRunLabel` is the one reader of `session.child`.
-  const childOf = childOfRunLabel(session);
+  // Child-reclamation wave 5, reworded by the operator's ruling of 2026-10-18:
+  // the programme and wave this child is doing, when it is a child.
+  // `childOfRunLabel` is the one reader of `session.child`.
+  const childOf = childOfRunLabel(session, childRun);
 
   // Task 19: the ask pre-emption lane's chip. Through `sessionAsk`, never
   // `session.ask` directly — the live `fleet` frame is cast, not revived
@@ -455,10 +460,11 @@ export function SessionMeta({
             )
           )}
 
-          {/* Wave 5: the child-of-run label. Informational only, in
+          {/* Wave 5: the child label — its programme and wave since the
+              operator's ruling of 2026-10-18. Informational only, in
               `.sess-substrate`'s shape: a short, fixed,
-              never-truncated ink-tertiary fact about which run this
-              workspace belongs to. The full sentence lives in `title`. */}
+              never-truncated ink-tertiary fact about which wave this
+              workspace is doing. The full sentence lives in `title`. */}
           {childOf !== null && (
             <span className="sess-child" data-child={childOf.data} title={childOf.title}>
               {childOf.text}
