@@ -115,9 +115,10 @@ const HOVER_INKS = [
   '--acct-cyan', '--acct-violet', '--acct-blue', '--acct-magenta', '--acct-amber', '--acct-green',
 ];
 // A pressed primitive sinks to `--bg-pressed`. Only `ListRow`, `BareRow` and
-// the ghost and quiet buttons press to a ground, and what they draw is the
-// neutral tiers plus one coloured ink: the session menu's danger row
-// (`.menu-item--danger .menu-label`, --status-dead-text). The fleet row never
+// the ghost, danger-ghost (D-5495) and quiet buttons press to a ground, and
+// what they draw is the neutral tiers plus one coloured ink: the session
+// menu's danger row (`.menu-item--danger .menu-label`) and the danger-ghost's
+// label, both --status-dead-text. The fleet row never
 // presses to a ground, and a chip inside a pressed row paints its own. The
 // danger row is the one ink beyond the plan's neutral list (D-5454).
 const PRESSED_INKS = ['--ink-primary', '--ink-secondary', '--ink-tertiary', '--status-dead-text'];
@@ -316,6 +317,11 @@ const pairs = (T, name) => [
   [`${name} dead-text / page`, T.deadText, T.page, 4.5],
   [`${name} danger hairline / sheet (UI 3:1)`, T.dead, T.sheet, 3],
   [`${name} danger hairline / dead banner tint (UI 3:1)`, T.dead, T.deadTintSolid, 3],
+  // The danger-ghost lifts and sinks as `ghost` does (D-5495). Its label is
+  // in HOVER_INKS and PRESSED_INKS; its hairline is gated here. Nord's
+  // pressed pair is the thinnest, at 3.00.
+  [`${name} danger hairline / hover (UI 3:1)`, T.dead, T.hover, 3],
+  [`${name} danger hairline / pressed (UI 3:1)`, T.dead, T.pressed, 3],
 ];
 
 let fail = 0, n = 0;
