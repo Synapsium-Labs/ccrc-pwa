@@ -21,6 +21,10 @@ const usageLine = (agentId: string, input: number): string =>
     message: { id: 'msg_x', usage: { input_tokens: input, cache_read_input_tokens: 1000, cache_creation_input_tokens: 0, output_tokens: 9 } } });
 
 const T0 = Date.parse('2026-01-01T00:00:00Z');
+/** An mtime set through utimes goes via floating-point seconds, so a sub-second
+ *  start reads back a fraction of a millisecond off on some filesystems (Linux
+ *  CI: `…009.999` for `…010`): starts are compared to within half a ms. */
+const closeMs = (ms: number): unknown => expect.closeTo(ms, 0);
 const at = (f: string, ms: number): void => utimesSync(f, new Date(ms), new Date(ms));
 const LIVE: Proc = { kind: 'live', startedAt: T0 - 60_000 };
 
@@ -119,7 +123,7 @@ describe('SessionWorkflows — what the session has, or that it could not be rea
     const [w] = (r as { workflows: unknown[] }).workflows as Array<Record<string, unknown>>;
     expect(w).toMatchObject({
       id: RUN, name: 'example-flow', state: 'running', done: 1, failed: 1, total: 3,
-      phase: 'Verify', phases: ['Build', 'Verify', 'Ship'], startedAt: T0 + 40, endedAt: null,
+      phase: 'Verify', phases: ['Build', 'Verify', 'Ship'], startedAt: closeMs(T0 + 40), endedAt: null,
       tokens: 1005 + 1007 + 1011, tokensUnmeasured: 0,
     });
   });
@@ -211,7 +215,7 @@ describe('SessionWorkflows — finished, resumed and orphaned runs', () => {
       journalAt: summaryAt + 10_000,
     });
     const r = await new SessionWorkflows(localIO, S).read(LIVE, summaryAt + 20_000);
-    expect((r as { workflows: unknown[] }).workflows).toMatchObject([{ state: 'running', name: 'example-flow', total: 4, startedAt: summaryAt + 10_000 }]);
+    expect((r as { workflows: unknown[] }).workflows).toMatchObject([{ state: 'running', name: 'example-flow', total: 4, startedAt: closeMs(summaryAt + 10_000) }]);
   });
 
   it('no summary and every write before this process started: an orphan, not shown', async () => {
@@ -377,7 +381,7 @@ describe('SessionWorkflows — bounded reads', () => {
       for (let i = 0; i < 12; i++) appendFileSync(path.join(S, 'subagents', 'workflows', RUN, `agent-r${i}.jsonl`), usageLine(`r${i}`, t + 2));
       const r = await wf.read(LIVE, T0 + 9000 + t * 2000);
       w = (r as { workflows: Array<{ startedAt: number | null; tokensUnmeasured: number }> }).workflows[0];
-      expect(w!.startedAt).toBe(T0 + 10); // from the first tick on
+      expect(w!.startedAt).toEqual(closeMs(T0 + 10)); // from the first tick on
     }
     expect(w!.tokensUnmeasured).toBe(0);
   });
@@ -404,7 +408,7 @@ describe('SessionWorkflows — bounded reads', () => {
       appendFileSync(path.join(S, 'subagents', 'workflows', B, 'agent-b1.jsonl'), usageLine('b1', 777 + t));
       const r = await wf.read(LIVE, T0 + 9000 + t * 2000);
       b = (r as { workflows: Array<{ id: string; startedAt: number | null; tokens: number | null }> }).workflows.find((w) => w.id === B);
-      expect(b!.startedAt).toBe(T0 + 50);
+      expect(b!.startedAt).toEqual(closeMs(T0 + 50));
       expect(b!.tokens).not.toBeNull();
     }
   });
