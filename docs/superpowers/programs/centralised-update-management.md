@@ -1891,6 +1891,8 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       11:32 with about 3.3 h of lag, and the lag drains tick by tick. Until it clears, an update or rollout on the
       fleet box ends under a failing doctor and exits 3 with the box on the new build; read such an exit 3 as this.
       Its coordinator will mail when doctor is clean again.
+    - **2026-10-18 11:35 UTC: that lag has cleared** (mail 6339): 12,086 s down to 270 s within a few ticks, and
+      no FAIL word at 11:36:51. A fleet update no longer meets that FAIL.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
