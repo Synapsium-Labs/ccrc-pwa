@@ -84,6 +84,7 @@ const UI_SRC = path.join(import.meta.dirname, '..', '..', 'ui', 'src');
  *  `completes every hook class @ccrc/ui emits` below reds until it is here. */
 export const OWNED = [
   'btn-primary', 'btn-ghost',                                    // Button / buttonVariants
+  'btn-danger', 'btn-danger-ghost',                              // Button's danger variants (D-5099)
   'dot', 'dot--busy', 'dot--attention', 'dot--idle',             // StatusDot / dotVariants
   'dot--done', 'dot--cleanup', 'dot--dead',
   'limits', 'limit-track', 'limit-fill',                         // LimitBar / fillVariants / LIMIT_TRACK

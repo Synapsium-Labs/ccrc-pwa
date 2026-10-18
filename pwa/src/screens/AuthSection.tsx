@@ -179,7 +179,7 @@ export function AuthSection(): ReactNode {
         enrolled passkeys are unaffected. To end every session at once, rotate the passphrase with
         <code> ccrc passwd</code> on the box.
       </p>
-      <Button variant="primary" disabled={busy} onClick={() => void signOut()}>
+      <Button variant="ghost" disabled={busy} onClick={() => void signOut()}>
         {busy ? 'Signing out…' : 'Sign out'}
       </Button>
       {signOutNote !== null && <p className="accounts-fresh" role="status">{signOutNote}</p>}
