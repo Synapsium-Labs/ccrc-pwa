@@ -4450,6 +4450,18 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       was refused `unknown-recipient`.
     - What is left: stable waits on the delegation broker's macOS files and then a green `full-suite` on a
       released commit; docs part 2; the final rollout.
+  - **22:05 UTC: the delegation broker's macOS fixes merged; the full run for the promotion is dispatched.**
+    - Mail 6560: #597 merged as `c1453e422` at 22:04:47, released as v0.0.299, which is `main`'s head. It fixes
+      session-hook-turnmark's 7 cases, ccrc-doctor's 3 (2 skip on darwin by design, 1 fixed with a stub) and
+      `delegation-spool`'s line cap (its deviation 5436, 1008 bytes on macOS, the operator's "macOS cap, record losses").
+    - It says row 64 and `ccd-docs-index`'s stdout-cap case stayed red on macOS in run 600's full runs and in
+      the daily 39093762060. Measured: none of those three runs' commits contains #607 (`af19bc1fb`), so row 64
+      was expected red there; `main` now carries both. `ccd-docs-index`'s case is a recorded flake.
+    - Every item marked before stable is merged: rows 7, 12 and 16, R1 and R19. Docs part 2 is not one.
+    - `stable` is at v0.0.11 (`f0cb87437`), an ancestor of `main`, so the promotion is a fast-forward.
+    - Dispatched: full run 39170871363 on `main` at `c1453e422` (`gh workflow run ci.yml --ref main -f
+      mode=full`). On a green `full-suite` I fast-forward `stable` to that commit. On a red one I measure each red
+      against the flake list: a recorded flake gets one job re-run, anything else is reported first.
 
 ## Carried constraints
 
