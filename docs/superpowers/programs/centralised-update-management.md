@@ -1944,6 +1944,17 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         before the soak. Sizes on the server at 15:03 (mail 6420): the journal 40.0M, the checkpoint 4.5M,
         `coord.db` 143M plus a 7.7M WAL. The 14:13 backup holds `coord.db` 131M, the journal 35M and the
         checkpoint 4M. With 10 backups kept, `~/ccrc-backups` carries about ten copies of that data.
+      - **2026-10-18 15:55 UTC: both boxes moved to v0.0.279 (#611) by the operator's console tap**, fleet first
+        (15:47:10 to 15:48:27), then the server (15:48:37 to 15:49:14); both reports `done`. This is the first move
+        driven by wave 17's updater, and **wave 17's sweep record works live.** The fleet's `done` report carries
+        `"sweep":"down: 3: <three session ids>"`, the same 3 pre-failed supervisors its stderr names (Reading 9's
+        class). The server's carries `"sweep":"ok"`, and its doctor SKIPs `update-sweep` for `CCRC_ROLE=server`
+        (D-5330). The fleet's post-install doctor SKIPs it again, since it reads the report while it is still
+        `installing`; a standalone doctor would read the `down` arm, WARN only. Fleet 36 passed, 7 warned, 0
+        failed; server 27 passed; one backup pruned. v0.0.276 to v0.0.278 (#602, #604, #609) were skipped, and
+        v0.0.280 (#612) followed, unapplied. STATUS: fleet and server v0.0.279, newest v0.0.280, intent
+        dev/auto=stable, backups fleet 169M/server 1217M, disk free fleet 211G/work volume 94G/server 32G, no
+        anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
