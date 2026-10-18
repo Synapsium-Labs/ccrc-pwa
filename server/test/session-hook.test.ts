@@ -8606,7 +8606,14 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       //   diff -U0` of that task's own commit), a net +43 wholly above the
       //   referent, which — measured by the same bytes — goes `:5918` ->
       //   `:5961`. Still not `:5644`, so the entry stays 1 -> 1.
-      'shared/api.ts': 1,
+      //   Hibernation's server half (D-5242, plan Task 17a, `FleetSession.hibernatedAt` and its revive,
+      //   `PRESENCE_OPEN_TTL_MS`): three pure-insertion hunks, +5 at `FleetSession.lastEnd`, +3 in
+      //   `reviveFleetSession` and +12 beside `PRESENCE_TTL_MS`, a net +20 wholly above the referent. Neither frozen
+      //   corpus document changed. The shift slid a `null`-bearing comment line (`.branch` reads null) under `:5644`,
+      //   so the entry reads 0 — A COINCIDENTAL PASS, NEVER A REPAIR, the same as before the `b501698a` rebase: the
+      //   cited sentence's referent, `return isLcRefusalToken(token) ? …`, is at `:8520`, and Task 11 still owns the
+      //   debt. 1 -> 0, the key leaves the census; README's own anchors into `shared/api.ts` were re-pointed by the
+      //   same +20 (its census stays empty). Measured by diffing the dumped failure sets, never retyped.
       // `server/test/single-definition.test.ts` 0 -> 8, A NEW ENTRY, and the
       // whole of it is ONE shift. This wave's Task 1 added 23 lines low in that
       // file — two `describe` blocks immediately after the `one sessionLabel`
@@ -8815,7 +8822,10 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // `--files ccd/session-hook.sh,README.md,server/test/single-definition.test.ts` prints `total stated 202  base 202
     // tree 202`, every key stated = base = tree, and the composition, rows (55) and sites (35) each `ENTERED []`,
     // `LEFT []`. Nothing moved: B3's single-definition describe is appended after main's. S6-R11, no D-number.
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(202);
+    // 202 -> 201 at hibernation's server half (D-5242, plan Task 17a): the one `shared/api.ts` site (`plan:3396
+    // :5644`) passes coincidentally on that file's +20 inserted lines, argued beside the map; no other key moves and
+    // neither frozen corpus document changed. S6-R11, no new D-number.
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(201);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a

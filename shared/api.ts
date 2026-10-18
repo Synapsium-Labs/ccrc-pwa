@@ -293,6 +293,11 @@ export interface FleetSession {
    *  key), which shows it for `LAST_END_SHOWN_MS`. ADDITIVE: no `FLEET_PROTO`
    *  bump. */
   lastEnd: LastEnd | null;
+  /** D-5242 (`hibernate-long-idle-sessions`): when `ccd hibernate` put this session to sleep, epoch MS, from
+   *  `$REG/<id>.hibernated` (read only when the registry listing names it). Null when it is not asleep, and on a
+   *  malformed marker. ADDITIVE: the row's lifecycle reads `stopped` and its bucket `dead` as for any deliberate stop
+   *  (no new `SessionBucket` member), and this field alone tells a sleeping session from one that is gone. */
+  hibernatedAt: number | null;
   /** How many graph READS this session has made — `hookstate.ts`'s
    *  `graphQueries`, carried through unchanged. ADDITIVE: no `FLEET_PROTO`
    *  bump, and an older peer that omits it revives as `null` below.
@@ -3260,6 +3265,9 @@ export function reviveFleetSession(raw: unknown, unnamedSpawnWord: UnnamedSpawnW
       // D-5237. Absent → null (an older snapshot predates the field);
       // malformed → null (`reviveLastEnd`); an unknown cause → `unknown`.
       lastEnd: reviveLastEnd(o, 'lastEnd'),
+      // D-5242. Absent → null: an older snapshot or server predates the field, and a session it did not know was
+      // asleep reads as the stopped row it showed then.
+      hibernatedAt: optNum(o, 'hibernatedAt'),
       // Absent → null, exactly as `optSubagents` degrades: a snapshot written
       // before this field existed is ignorant of the count, not a witness to
       // its being zero. Present-but-not-a-finite-number throws inside
@@ -4520,6 +4528,18 @@ export type SessionClientMsg = { type: 'visible'; visible: boolean };
  */
 export const PRESENCE_REFRESH_MS = 15_000;
 export const PRESENCE_TTL_MS = 45_000;
+/**
+ * The OPEN claim's lifetime (D-5242, spec §5.11's presence contract): how long the server believes a
+ * `/ws/session/:id` connection is still open after its last frame, visible or hidden. Every frame re-stamps it, and
+ * the client's heartbeat now beats whatever the visibility (`visible:false` while hidden, which `isVisible` reads
+ * exactly as before), so a hidden but running tab keeps its session from being put to sleep.
+ *
+ * Why it is so much longer than `PRESENCE_TTL_MS`: a browser throttles a hidden tab's timers, to about one wake-up a
+ * minute at the most, so the hidden beat arrives a minute apart rather than every `PRESENCE_REFRESH_MS`, and the claim
+ * must outlive several of those missed beats. A page the browser froze sends nothing, and its claim lapses after this
+ * long — the case the open screen's wake covers when the operator comes back.
+ */
+export const PRESENCE_OPEN_TTL_MS = 10 * 60_000;
 
 /** Wire protocol generation of the PWA↔server pair. Bump on a breaking
  *  wire change. FLEET_PROTO_MIN is the kill-switch: raise it above an

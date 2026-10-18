@@ -4503,9 +4503,25 @@ re-supervises and resumes a stopped session. Switches: `$REG/stop-done-disabled`
 tree — touch and remove it by hand on the fleet box) and `$REG/reclaim-paused` (every cleanup lane, above). Its holds
 carry hibernation's words (D-5242), and hibernation absorbs it when it lands; until then it acts earlier (10 minutes
 after the run's close, against hibernation's 6 h of idleness) and is looser in a few facts — it has no `recent` (N)
-hold, a page open in a hidden tab does not hold the worker (hibernation's open-socket presence does not exist yet),
-and nor do session crons, a terminal attached on the box or an opt-out marker — so the operator who comes back to such
-a page revives a stopped session (`ensure` resumes it; nothing is lost).
+hold, and session crons, a terminal attached on the box and an opt-out marker do not hold the worker — so the operator
+who comes back to such a session revives a stopped one (`ensure` resumes it; nothing is lost). Its viewer is
+hibernation's: any open session screen, a hidden tab included, under the presence contract below.
+
+**Hibernation, the server's verdict (shadow only; D-5242).** A long-idle session is to be put to sleep — its process
+stopped, journaled as a deliberate `hibernate`, and woken by `ccd ensure` — and the server decides which
+(`hibernateVerdict`, `server/src/coord/hibernate.ts`): a live pane whose raw live word is `idle`, bucket `idle` (a
+`done` row is badged and stays awake), no pane menu, background work or subagents, a turn marker that reads `done` with
+no background task (`bg` exactly 0) and nothing scheduled (`crons` exactly 0; an older hook's marker, with no `crons`,
+holds) whose latest main event is more than N ago (6 h; `$REG/hibernate-after-hours`, 1 to 168, overrides), no hold, no
+open run naming it as worker or claimant in any non-terminal state, no claim, no outstanding mail, nobody with it open,
+not stranded, swap-blocked, under a substrate fault or archived, and no `$REG/<id>.no-hibernate`. Today the sweep
+(`hibernateSweep.ts`, every 5 minutes) ONLY LOGS a `ccrc-server: hibernate-shadow <id> idle=<h>h` line, at most once per
+session an hour; it holds no ccd runner, so no build of it can stop a session, whatever `$REG/hibernate-live` says.
+`$REG/hibernate-disabled` silences it. None of these markers has a writer in the tree. **The presence contract:**
+beside the visible claim that suppresses pushes, every `/ws/session/:id` connection holds an *open* claim, stamped at
+connect and by every frame, visible or hidden, believed for `PRESENCE_OPEN_TTL_MS` (10 minutes) and dropped at close;
+the PWA's heartbeat now beats while hidden too (`visible:false`, which leaves notifications as they were), and for that
+long after a server start every session counts as viewed. A sleeping session's row carries `hibernatedAt`.
 
 **Landing order (landing-order wave 1).** Every merge of `main` into a branch restarts that branch's
 CI, so a session absorbs `main` only on a licence. Worker clause 16 names three, each read after one
@@ -5209,8 +5225,8 @@ working set, `SessionStart(compact)` serves the card once beside the graph card 
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:8324-8326`), each with an operator sentence of its own at `:8376`,
-`:8384` and `:8397`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:8344-8346`), each with an operator sentence of its own at `:8396`,
+`:8404` and `:8417`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 

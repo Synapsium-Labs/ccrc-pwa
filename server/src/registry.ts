@@ -235,6 +235,10 @@ export interface SessionRecord {
    *  ended costs no read; parsed by `parseLastEnd` (absent or malformed →
    *  null, the row still parses; an unknown cause → `unknown`). */
   lastEnd: LastEnd | null;
+  /** `$REG/<id>.hibernated` — `<epoch> <idle-hours>`, written by `ccd hibernate` (D-5242) and removed by the
+   *  wake (`ensure`/`start`), `stop` and `ws-archive`. Its epoch in MS. Read ONLY when the listing names it, so a
+   *  row that never slept costs no read; parsed by `parseHibernated` (malformed → null, the row still parses). */
+  hibernatedAt: number | null;
   /** Which of `started`/`stopped`/`supervised` were LISTED but unreadable this
    *  pass — the same evidence rule `unmeasured` uses for the identity triple,
    *  over the three fields §4.3's classifier reads. Kept SEPARATE from
@@ -729,9 +733,10 @@ function noteWholeFleetListing(listable: boolean, now: number): void {
  * session count per sweep, so a 24-session fleet's whole-registry sweep rises
  * from 721 to 745 agent-WS operations per `readRegistry` call.
  *
- * Plus one LISTED-ONLY read (D-5237): `.lastend`, read only when the listing
- * names it, so a row that has never recorded a process end pays nothing and
- * one that has pays one read more. The census counts the reads every row pays (D-5347).
+ * Plus two LISTED-ONLY reads: `.lastend` (D-5237) and `.hibernated` (D-5242),
+ * each read only when the listing names it, so a row that has never recorded a
+ * process end, or never slept, pays nothing and one that has pays one read
+ * more. The census counts the reads every row pays (D-5347).
  *
  * Returns null for a DROPPED registry entry — narrowed (architecture doc,
  * increment 1's second half) from the old "missing wrapper/workdir/uuid"
@@ -749,7 +754,7 @@ async function buildRecord(
   const [wrapperRead, project, workdirRead, uuidRead, startedRead, home, pool, lastswap, workspace, branchRead,
     base, prPhaseRaw, prNumberRaw, prCheckedAtRaw, archivedRaw, manifestRaw, holdRead,
     stoppedRead, supervisedRead, swapBlockedRaw, spawnRaw, substrateRead, strandedRead,
-    routeFieldReads, degradedRead, inertRead, childRead, lastEndRaw] = await Promise.all([
+    routeFieldReads, degradedRead, inertRead, childRead, lastEndRaw, hibernatedRaw] = await Promise.all([
     fieldMeasured(io, cfg.registryDir, id, 'wrapper'), field(io, cfg.registryDir, id, 'project'),
     fieldMeasured(io, cfg.registryDir, id, 'workdir'), fieldMeasured(io, cfg.registryDir, id, 'uuid'),
     fieldMeasured(io, cfg.registryDir, id, 'started'), field(io, cfg.registryDir, id, 'home'),
@@ -782,6 +787,8 @@ async function buildRecord(
     // D-5237: the last process end's cause, read only when listed — a row
     // that has never ended (or predates the field) costs nothing.
     names.includes(`${id}.lastend`) ? field(io, cfg.registryDir, id, 'lastend') : Promise.resolve(null),
+    // D-5242: the hibernation marker, read only when listed — a row that never slept costs nothing.
+    names.includes(`${id}.hibernated`) ? field(io, cfg.registryDir, id, 'hibernated') : Promise.resolve(null),
   ]);
 
   // The identity-triple ladder. `uuid` first: `names.includes(id + '.uuid')`
@@ -1097,6 +1104,7 @@ async function buildRecord(
     // typing as `number`, the silent lie `numOrNull` exists to refuse.
     spawn: spawnStamp === null || spawnRc === null ? null : { at: spawnStamp.at, rc: spawnRc },
     lastEnd: parseLastEnd(lastEndRaw),
+    hibernatedAt: parseHibernated(hibernatedRaw),
     lifecycleUnmeasured,
     unmeasured,
     route,
@@ -1330,4 +1338,16 @@ export async function freshAskAt(io: FleetIO, cfg: CcrcConfig, childId: string):
   if (identity === null) return UNMEASURED_ASK_AT;
   const hs = await readHookState(io, cfg.registryDir, childId, identity.uuid, Date.now());
   return hs === null ? UNMEASURED_ASK_AT : hs.updatedAt;
+}
+
+/** `$REG/<id>.hibernated`'s body (D-5242): `<epoch-seconds>` and, after one space, the idle hours `ccd hibernate`
+ *  measured (an integer or a decimal). The epoch is what is read, in MS; the hours are the log's, not the wire's.
+ *  Anything else — an empty body, a non-integer or zero epoch, a third word — is null: a marker this build cannot
+ *  read never names a time it did not measure, and the row still parses. */
+export function parseHibernated(raw: string | null): number | null {
+  if (raw === null) return null;
+  const m = /^([1-9][0-9]{0,15})(?: ([0-9]+(?:\.[0-9]+)?))?$/.exec(raw.trim());
+  if (m === null) return null;
+  const at = Number(m[1]);
+  return Number.isSafeInteger(at * 1000) ? at * 1000 : null;
 }

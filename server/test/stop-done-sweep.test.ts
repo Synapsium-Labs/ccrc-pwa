@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { stopDonePass, type StopDoneMemory, type StopDoneSweepDeps } from '../src/stopDoneSweep.js';
 import { STOP_DONE_DISABLED_MARKER, STOP_DONE_GRACE_MS, STOP_DONE_PER_PASS, STOP_DONE_RETRY_MS } from '../src/stopDone.js';
-import { PRESENCE_TTL_MS, type FleetSession } from '../../shared/api.js';
+import { PRESENCE_OPEN_TTL_MS, PRESENCE_TTL_MS, type FleetSession } from '../../shared/api.js';
 import type { SessionRecord } from '../src/registry.js';
 import type { FleetState } from '../src/fleetstate.js';
 import path from 'node:path';
@@ -15,6 +15,7 @@ import { buildServer } from '../src/server.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { RECLAIM_PAUSE_MARKER } from '../src/coord/rundefs.js';
+import { Presence } from '../src/presence.js';
 import { readSessionRecord } from '../src/registry.js';
 import { liveRowFor, turnReadDeps } from '../src/turnverdict.js';
 import type { Runner } from '../src/exec.js';
@@ -24,7 +25,7 @@ import type { Runner } from '../src/exec.js';
 // the declared stop, the one feed row, and the retry memory.
 
 const NOW = 1_800_000_000_000;
-const STARTED = NOW - PRESENCE_TTL_MS - 60_000;
+const STARTED = NOW - PRESENCE_OPEN_TTL_MS - 60_000;
 
 const row = (id: string, o: Partial<FleetSession> = {}): FleetSession => ({
   id, child: { kind: 'child', runId: 1 }, archivedAt: null, held: null, stoppedBy: null, unmeasured: [],
@@ -76,7 +77,7 @@ function fake(ids: readonly string[], o: { surface?: boolean; serial?: boolean }
     },
     runCcd: async (a) => { f.argv.push([...a]); return { ok: f.ccdOk, stdout: '', stderr: f.ccdOk ? '' : 'refused', killed: false, signal: null }; },
     fleetState: { ccdVerbs: o.surface === false ? [] : ['stop-surface'] } as unknown as FleetState,
-    presence: { isVisible: () => false },
+    presence: { isOpen: () => false },
     notifyLog: {
       epoch: 'e', record: (e: { sessionId: string; runId: number | null }) => { f.feed.push({ sessionId: e.sessionId, runId: e.runId }); return { ...e, seq: ++seq, at: NOW }; },
       flush: async () => undefined,
@@ -184,7 +185,18 @@ describe('stopDonePass (D-5370)', () => {
 
   it('a worker somebody has on screen is not stopped', async () => {
     const f = fake([ID]);
-    await stopDonePass({ ...f.deps, presence: { isVisible: (id) => id === ID } }, mem(), [row(ID)], [rec(ID)], []);
+    await stopDonePass({ ...f.deps, presence: { isOpen: (id) => id === ID } }, mem(), [row(ID)], [rec(ID)], []);
+    expect(f.argv).toEqual([]);
+  });
+
+  it('D-5242\'s presence contract: an open screen in a hidden tab holds the worker as it holds a sleeping session', async () => {
+    const f = fake([ID]);
+    const presence = new Presence(() => NOW);
+    const tok = Symbol('fixture');
+    presence.markOpen(tok, ID);
+    presence.setVisible(tok, null);
+    expect(presence.isVisible(ID)).toBe(false);
+    await stopDonePass({ ...f.deps, presence }, mem(), [row(ID)], [rec(ID)], []);
     expect(f.argv).toEqual([]);
   });
 
@@ -192,6 +204,14 @@ describe('stopDonePass (D-5370)', () => {
     const f = fake([ID]);
     await stopDonePass({ ...f.deps, startedAt: NOW - 1000 }, mem(), [row(ID)], [rec(ID)], []);
     expect(f.argv).toEqual([]);
+  });
+
+  it('the post-start hold lasts PRESENCE_OPEN_TTL_MS (D-5242): past the visible TTL it still holds, past the open one it stops', async () => {
+    const f = fake([ID]);
+    await stopDonePass({ ...f.deps, startedAt: NOW - PRESENCE_TTL_MS - 1 }, mem(), [row(ID)], [rec(ID)], []);
+    expect(f.argv).toEqual([]);
+    await stopDonePass({ ...f.deps, startedAt: NOW - PRESENCE_OPEN_TTL_MS }, mem(), [row(ID)], [rec(ID)], []);
+    expect(f.argv).toEqual([['stop', ID, '--surface', 'agent']]);
   });
 
   it('a box whose ccd cannot declare the stop surface is not stopped (never an undeclared stop)', async () => {

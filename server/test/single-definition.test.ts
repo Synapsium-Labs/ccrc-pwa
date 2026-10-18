@@ -6865,3 +6865,50 @@ describe('ccrc history card line: the hook and lib spell one grammar, one cap an
     expect(Number(age[0]) * 1000).toBe(l['SCOPE_MARKER_MAX_AGE_MS']);
   });
 });
+
+// D-5242 (`hibernate-long-idle-sessions`, plan Task 17a). APPENDED, for the reason the stall-watch blocks above state.
+// Hibernation's four operator settings — `hibernate-live`, `hibernate-disabled`, `hibernate-after-hours` and the
+// per-session `<id>.no-hibernate` — are touched and removed BY HAND in `$REG`, like `stall-watch-disabled`: nothing in
+// the tree writes one. The TS half: the one file that spells each on a code line is its definer, an L1 file that
+// reaches no `node:` module and so cannot write it, and the files that name its constant reach no write either. The
+// shell half asks for no WRITER, not no holder: plan Task 16's `cmd_hibernate` reads `.no-hibernate` at the act, and a
+// read is not a write. The hold list is spelled once.
+describe('D-5242: hibernation’s markers have no writer, and its holds one home', () => {
+  const DEFINER = 'server/src/coord/hibernate.ts';
+  const MARKERS = [
+    ['hibernate-live', 'HIBERNATE_LIVE_MARKER'], ['hibernate-disabled', 'HIBERNATE_DISABLED_MARKER'],
+    ['hibernate-after-hours', 'HIBERNATE_AFTER_HOURS_FILE'], ['no-hibernate', 'NO_HIBERNATE_SUFFIX'],
+  ] as const;
+  const SHELL_WRITE = /(?:>>?|\btouch\b|\btee\b|\b_reg_set\b|\bprintf\b[^|]*>|\bcp\b|\bmv\b|\bln\b|\binstall\b)/;
+  const TS_WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
+  it.each(MARKERS)('%s: no line of shell writes it', (name) => {
+    expect(SHELL_WRITE.test(`touch "$REG/${name}"`), 'CONTROL: the pattern sees a write').toBe(true);
+    const writers = BASH.flatMap((f) => codeLines(f).filter((l) => l.includes(name) && SHELL_WRITE.test(l)).map((l) => `${rel(f)}: ${l.trim()}`));
+    expect(writers, `${name}: a line of shell writes it`).toEqual([]);
+  });
+  it.each(MARKERS)('%s: its one TS holder is its definer, which reaches no node: module', (name) => {
+    // `hibernate-live` and `hibernate-disabled` contain no other marker; `no-hibernate` is not a substring of the three
+    // `hibernate-…` names, so each scan finds its own word only.
+    expect(ALL.filter((f) => stallCode(f).includes(`'${name}'`) || stallCode(f).includes(`"${name}"`)
+      || stallCode(f).includes(`\`${name}`) || stallCode(f).includes(`/${name}`)).map(rel).sort(),
+    `${name} spelled on a code line outside ${DEFINER}`).toEqual([DEFINER]);
+    expect(stallCode(path.join(ccrcRoot, DEFINER))).not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
+  });
+  it.each(MARKERS)('%s: the files that name its constant reach no write', (_name, constant) => {
+    const holders = ALL.filter((f) => stallCode(f).includes(constant)).map(rel).sort();
+    expect(holders, `${constant}: nobody names it`).toContain(DEFINER);
+    for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(TS_WRITE);
+  });
+  it('HIBERNATE_HOLDS, its map and its constants are declared once, in the definer', () => {
+    for (const c of ['HIBERNATE_HOLDS', 'HIBERNATE_HOLD_MAP', 'HIBERNATE_AFTER_MS_DEFAULT', 'HIBERNATE_SWEEP_MS',
+      'HIBERNATE_SHADOW_LINE_MS', 'HIBERNATE_AFTER_HOURS_MIN', 'HIBERNATE_AFTER_HOURS_MAX',
+      ...MARKERS.map(([, k]) => k)]) {
+      const decl = new RegExp(`\\b(?:const|let|var)\\s+${c}\\b`);
+      expect(ALL.filter((f) => decl.test(stallCode(f))).map(rel), c).toEqual([DEFINER]);
+    }
+  });
+  it('PRESENCE_OPEN_TTL_MS is declared once, in shared/api.ts beside PRESENCE_TTL_MS', () => {
+    const decl = /\b(?:const|let|var)\s+PRESENCE_OPEN_TTL_MS\b/;
+    expect(ALL.filter((f) => decl.test(stallCode(f))).map(rel)).toEqual(['shared/api.ts']);
+  });
+});
