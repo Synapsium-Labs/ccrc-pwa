@@ -6,7 +6,7 @@
 
 **Foundations plan:** `docs/superpowers/plans/2026-10-15-ccrc-skins-foundations.md`. It defines D-5093 to D-5104 and the numbers its workers were issued. This plan cites them and never redefines them. Its Global constraints, Review focus and freeze rule bind here too, restated below where W2 adds to them.
 
-**Status:** DRAFT rev 1 (2026-10-18), after two adversarial reviews (§Review log). Task S0 (this plan) is the docs PR. Nothing is dispatched until the operator approves it, and then each task only once its gates (§Gates) are met.
+**Status:** APPROVED rev 1 (2026-10-18), after two adversarial reviews (§Review log). Task S0 (this plan) is the docs PR. The operator approved it on 2026-10-18 ("take our UI/UX programme to the end"): each task is dispatched as its gates (§Gates) open, and not before.
 
 **Operator rulings this plan builds on** (2026-10-15, spec §1.1, and the spec's §12):
 - Build both skins and switch between them, with the good parts borrowed across.
@@ -270,15 +270,15 @@ Every Modify path above exists at `bd10981d`, except `pwa/src/command/*` (F10), 
 - **The values are today's.** `.wordmark` in `pwa/src/fleet/fleet.css` on `bd10981d` is `font: var(--weight-medium) var(--fs-xl) / 1 var(--family-mono)` in `--ink-primary`, and `.wordmark::before` paints the caret in `--accent` with `margin-right: 0.4em`. The primitive takes those (size `--fs-xl`, line-height 1, a 0.4em gap). Step 0 re-reads them on the task's base, and if one has moved, the primitive takes the new value and the PR says which.
 - Accessible text is "ccrc". The caret is decoration.
 
-- [ ] **Step 0: Measure.** Read `.wordmark` and `.wordmark::before` in `fleet.css`: family, size, weight, line-height, the caret's colour and the space between (on `bd10981d`: `--weight-medium`, `--fs-xl`, 1, `--family-mono`, `--accent`, 0.4em). Confirm `text-phosphor` and `text-xl` exist in `theme.css`'s key map. Record them in the PR beside the primitive's computed values in Storybook.
-- [ ] **Step 1: Red.** `wordmark.test.tsx`:
+- [x] **Step 0: Measure.** Read `.wordmark` and `.wordmark::before` in `fleet.css`: family, size, weight, line-height, the caret's colour and the space between (on `bd10981d`: `--weight-medium`, `--fs-xl`, 1, `--family-mono`, `--accent`, 0.4em). Confirm `text-phosphor` and `text-xl` exist in `theme.css`'s key map. Record them in the PR beside the primitive's computed values in Storybook.
+- [x] **Step 1: Red.** `wordmark.test.tsx`:
   - "renders an aria-hidden ❯ followed by ccrc, and its accessible text is ccrc". Red: no module.
   - "the caret is painted in the accent": not a class-string check, which passes with an uncoloured caret. The test takes the caret's colour utility from the rendered class list and resolves it through `theme.css`'s `@theme` block to the token it names, using the mapping `utility-pairs.test.ts` already does (imported if it is exported; otherwise moved to a shared test helper in this PR, never copied), and expects `--accent`. A utility with no ccrc `@theme` key (`text-accent`) resolves to nothing and is red. `utility-pairs.test.ts` itself cannot hold this pair: the caret has no ground in its own prefix group, the INHERITED_GROUNDS case its header excludes. The Storybook play test then reads the caret's computed `color` against `--accent`'s computed value, in both skins.
   - "the name is in mono at medium weight at today's size" (the computed `font-family`, `font-weight` and `font-size` in the Storybook play test, equal to `.wordmark`'s on the fleet head in the same story frame).
   - "there is no text node between the caret and the name, so it cannot wrap there".
   - "a caller's `whitespace-normal` undoes nowrap" (`cn` is tailwind-merge, and `className` merges after the base, so the caller's class wins: the one documented way to undo it).
-- [ ] **Step 2: Green.** Implement, export, add the story (both skins through the toolbar).
-- [ ] **Step 3: Mutation table, RUN.**
+- [x] **Step 2: Green.** Implement, export, add the story (both skins through the toolbar).
+- [x] **Step 3: Mutation table, RUN.**
 
   | Mutant | Suite | Expected red |
   |---|---|---|
@@ -288,8 +288,8 @@ Every Modify path above exists at `bd10981d`, except `pwa/src/command/*` (F10), 
   | `text-xl` replaced by `text-ui` | the story's play test | "…at today's size" |
   | the base classes merged after `className` | wordmark | "a caller's `whitespace-normal` undoes nowrap" (the base's `whitespace-nowrap` then wins over the caller) |
 
-- [ ] **Step 4: Per width × skin × mode.** Storybook, the `Wordmark` story: 360, 390, 1280, 1920 × Refined, Instrument × dark, light (16 renders). Identical in both skins except the radius-free box (nothing moves); the caret is the accent in every palette; nothing wraps at 360.
-- [ ] **Step 5: Verify.**
+- [x] **Step 4: Per width × skin × mode.** Storybook, the `Wordmark` story: 360, 390, 1280, 1920 × Refined, Instrument × dark, light (16 renders). Identical in both skins except the radius-free box (nothing moves); the caret is the accent in every palette; nothing wraps at 360.
+- [x] **Step 5: Verify.**
 
       cd ui && ./node_modules/.bin/tsc --noEmit && npm run build-storybook -- --quiet
       cd pwa && ./node_modules/.bin/vitest run --maxWorkers=2 test/wordmark.test.tsx test/utility-pairs.test.ts test/design-system-boundary.test.ts test/skin-identity.test.ts
@@ -1427,7 +1427,7 @@ Mark it ✓, or write the defect and its fix. Screenshots are evidence for the r
 - **D-5478** — `instrument-page-grounds` (Task S3): the token contract gates every status text (`status <kind> text / page`) and every lane token (`acct-<hue> / page`, and `/ surface`) on `--bg-page` too, at 4.5:1, because Instrument's panels put them on the page (spec §8.2). The status texts' fit already names the page (`text(k, g)`'s default grounds are `[surface, page, raised]`), so their pairs are a gate, red only by mutation; the `--acct-<hue>` fit gains `page` (`[tint, surface, page]`), which is the fitting work. It is generator lane 4, after F9. If either hand-tuned Phosphor palette's lane hue is short on the page, the task stops and asks for a ruling rather than fitting a hand-tuned value.
 - **D-5479** — `flip-after-parity` (Task S18): Instrument's `preview: false` lands as its own PR, after the parity test, and not in "the W2 PR that lands Instrument's shell" as D-5096 says, because that shell lands across eight PRs and a flip inside any of them would make a partial shell every desktop's default. It also waits for the picker (F12b), axe in both skins (F3b), and `Sheet`'s desktop arm unless the coordinator rules otherwise.
 
-Issued and unused: 5480. It is the one spare for a departure a worker meets while executing a task here; it is defined here, once, in the PR that introduces it, and the coordinator asks the allocator for more if one is not enough.
+Issued and unused: 5480, 5496. 5480 is the one spare for a departure a worker meets while executing a task here; it is defined here, once, in the PR that introduces it, and the coordinator asks the allocator for more if one is not enough. 5496 was issued to Task S1 as its spare, and S1 met no departure.
 
 ## Review log
 
