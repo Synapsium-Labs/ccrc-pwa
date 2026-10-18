@@ -1862,6 +1862,15 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     - **2026-10-18 06:00 UTC:** v0.0.261 (#482, wave 18) and v0.0.262 (#425) released and stay unapplied under
       `auto=stable`; no box moved. STATUS: fleet and server v0.0.244, newest v0.0.262, intent dev/auto=stable, backups
       fleet 131M/server 826M, disk free fleet 212G/work volume 96G/server 32G, no anomalies.
+    - **2026-10-18 06:58 UTC: both boxes moved to v0.0.262 by the operator's console tap** (`from: pwa`, a
+      prerelease; `stable` unchanged). Fleet first, 06:28:34 to 06:30:07: the bundle verified (checksum, provenance,
+      MANIFEST), a backup taken before the install, the gate up, v0.0.226 pruned (not among the newest 3). Then the
+      server, 06:30:55 to 06:31:22. The watchdog has said "last update done — nothing to do" since. The fleet sweep
+      named each pre-failed supervisor "FAILED — try-restart skipped it and this sweep did not verify it" with its
+      fix (wave 16's wording, now live). The 4 failed units failed on 10-12 and 10-17, before the move. Doctor: 52
+      checks, 36 passed, 7 warned, 0 failed. v0.0.263 and v0.0.264 (#585, docs) followed. STATUS: fleet and server
+      v0.0.262, newest v0.0.264, intent dev/auto=stable, backups fleet 117M/server 833M, disk free fleet 213G/work
+      volume 93G/server 32G, no anomalies.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
