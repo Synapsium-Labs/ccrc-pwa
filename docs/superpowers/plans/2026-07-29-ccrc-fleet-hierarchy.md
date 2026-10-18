@@ -21,7 +21,7 @@ Splitting is not deferral: Plan B's riskiest parts (the readout table, the rollu
 
 ## Global Constraints
 
-- Repo `/srv/projects/OpenClawHetzner`, branch `ccrc/fleet-hierarchy`.
+- Repo `/srv/projects/project-c`, branch `ccrc/fleet-hierarchy`.
 - Suite runs from the package dir: `cd infra/ccrc/pwa && npx vitest run`. Single file: `npx vitest run test/x.test.tsx`. Typecheck: `npx tsc --noEmit`.
 - **Baseline: pwa 313 tests, 29 files, typecheck clean.** This plan *deletes* tests along with the components they cover, so the total is expected to move — see "Test accounting" below. Never invent a test to hit a number; report the counts you actually observe.
 - **Contrast gate: `node infra/ccrc/pwa/design/contrast-check.mjs` → `ALL 82 PASS`.** Any new foreground/background pair must be added to that file's `pairs()` list rather than left invisible to the gate.

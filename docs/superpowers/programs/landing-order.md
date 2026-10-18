@@ -4,7 +4,7 @@ Spec: `docs/superpowers/specs/2026-09-23-landing-order-and-main-churn-design.md`
 Plans: `docs/superpowers/plans/2026-09-2?-landing-order-wave<N>-*.md` — each written once the waves it depends on
 have landed what it reads
 Home project: `ccrc-pwa`   Coordinator: `ccrc-pwa-quiet-river` (assigned by the operator 2026-10-02)   Workspace: **a fresh one per wave**
-Ticket: `CCR-19` (Linear; mirrored as GitHub issue #198) — the coordinator is created from it
+Ticket: `#198` (Linear; mirrored as GitHub issue #198) — the coordinator is created from it
 Companion programme: `docs/superpowers/programs/session-continuity.md`
 
 **What this program is.** The fleet manufactures main churn — ritual syncs, `update-branch`, repeat absorptions —
@@ -26,14 +26,14 @@ merges, workers never do, and nothing merges unattended** (spec §3, R5). The op
 | 5 | 5 | the landing line: entries, intents, holds, `land-candidate`, the coordinator's pinned merge, the PWA doors | server, ccd, skills, pwa | waves 2–4; session-continuity wave 1 | — | to plan |
 
 **A fresh workspace per wave (R4) is child-reclamation's.** The spec first drew it as step 6 of the wave lifecycle,
-gated on CCR-15 wave 3. CCR-15 wave 2 (#178) made it live on `main` as "One PR per child", so wave 1 no longer
+gated on #166 wave 3. #166 wave 2 (#178) made it live on `main` as "One PR per child", so wave 1 no longer
 carries it (spec §5.1, amended 2026-09-24).
 
 ## Decisions & deviations
 
 - **2026-09-23 — the design, its rulings and the written spec.** Approved in the brainstorm (R1–R8); the operator
   ruled both open decisions on the written spec the same day: break-glass keeps the repository-admin role as the
-  ruleset's only bypass actor (R9); strict protection comes off intake-platform and data-internal after a week of
+  ruleset's only bypass actor (R9); strict protection comes off project-n and project-e after a week of
   coordinator landings with composition tests (R10).
 - **2026-09-23 — stage 2 split into two waves.** The spec's own rollout order puts the `--admin` deny after the
   operator's ruleset change and the proof run (§5.2 steps 2–4), so it ships as wave 2b rather than behind a flag in

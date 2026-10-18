@@ -294,7 +294,7 @@ const INSTALLER = path.resolve(__dirname, '../../ccd/install-session-hooks.sh');
 
 // The MEASURED real-world shape (2026-08-05): SessionStart with a compact
 // matcher + a matcher-less entry, SessionEnd; one home carries an extra
-// cloneme SessionEnd entry. The installer must preserve every byte of these.
+// project-w SessionEnd entry. The installer must preserve every byte of these.
 const EXISTING = {
   hooks: {
     SessionStart: [
@@ -303,7 +303,7 @@ const EXISTING = {
     ],
     SessionEnd: [
       { hooks: [{ type: 'command', command: "'/home/u/.claude/skills/code-usage/scripts/cron-upload.sh' --hook" }] },
-      { hooks: [{ type: 'command', command: '/home/u/.cloneme/cloneme-session-end.sh' }] },
+      { hooks: [{ type: 'command', command: '/home/u/.project-w/cloneme-session-end.sh' }] },
     ],
   },
   statusLine: { type: 'command', command: 'bash "$HOME/.claude/statusline-command.sh"' },
@@ -313,7 +313,7 @@ let home: string;
 const cfg = (d: string): string => path.join(home, d, 'settings.json');
 beforeEach(() => {
   home = mkTmp('ccrc-hookinstall-');
-  for (const d of ['.claude', '.claude-personal']) {
+  for (const d of ['.claude', '.claude-home']) {
     fs.mkdirSync(path.join(home, d), { recursive: true });
     fs.writeFileSync(cfg(d), JSON.stringify(EXISTING, null, 2));
   }
@@ -322,7 +322,7 @@ beforeEach(() => {
 afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
 
 const run = (...args: string[]): void => {
-  execFileSync('bash', [INSTALLER, '--homes', path.join(home, '.claude'), path.join(home, '.claude-personal'), ...args],
+  execFileSync('bash', [INSTALLER, '--homes', path.join(home, '.claude'), path.join(home, '.claude-home'), ...args],
     { env: { ...process.env, HOME: home } });
 };
 
@@ -362,14 +362,14 @@ describe('install-session-hooks', () => {
     expect(stops[0].hooks[0].command).not.toContain('/old/place/');
   });
   it('refuses a home whose settings.json is broken JSON, touching nothing', () => {
-    fs.writeFileSync(cfg('.claude-personal'), '{broken');
+    fs.writeFileSync(cfg('.claude-home'), '{broken');
     expect(() => run()).toThrow();
-    expect(fs.readFileSync(cfg('.claude-personal'), 'utf8')).toBe('{broken');
+    expect(fs.readFileSync(cfg('.claude-home'), 'utf8')).toBe('{broken');
   });
   it('a home with NO settings.json gets one with only the managed hooks', () => {
-    fs.rmSync(cfg('.claude-personal'));
+    fs.rmSync(cfg('.claude-home'));
     run();
-    const s = JSON.parse(fs.readFileSync(cfg('.claude-personal'), 'utf8'));
+    const s = JSON.parse(fs.readFileSync(cfg('.claude-home'), 'utf8'));
     expect(Object.keys(s)).toEqual(['hooks']);
   });
   it('backs up every settings.json it rewrites', () => {
@@ -401,7 +401,7 @@ BACKUPS="$HOME/ccrc-backups/$TS"
 
 homes=()
 if [[ "${1:-}" == --homes ]]; then shift; homes=("$@")
-else homes=("$HOME/.claude" "$HOME/.claude-personal" "$HOME/.claude-corp" "$HOME/.claude-gpt"); fi
+else homes=("$HOME/.claude" "$HOME/.claude-home" "$HOME/.claude-acme" "$HOME/.claude-gpt"); fi
 
 rc=0
 for dir in "${homes[@]}"; do

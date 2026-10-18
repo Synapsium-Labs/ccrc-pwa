@@ -87,9 +87,9 @@ no-overloaded-null rule applied to a **message** rather than to a return value.
 **D-156 — `foreign` was one classify covering two sentences, and the lock that hid it was a file's
 size.** `--force` overwrote *any* foreign file under a generated id. Measured: with `claude` flipped
 to `generated` and another account made upstream, `ccrc wrappers --force` rewrote the launcher and
-exited **0** — and because `claude2`, `claude-corp` and `claude-dev0` all end
+exited **0** — and because `claude9`, `claude-acme` and `claude-lab0` all end
 `exec "$HOME/.local/bin/claude" "$@"`, that closed an exec loop across **every lane at once**
-(`claude2 --version`: rc 127 → rc **124**, i.e. it stopped terminating). Lock 4 does not catch it: the
+(`claude9 --version`: rc 127 → rc **124**, i.e. it stopped terminating). Lock 4 does not catch it: the
 staged wrapper execs the *other* account, so it is not self-referential, and lock 4 tests only
 self-reference. Until 2026-08-20 the only thing preventing any of it was that the file was ~334 MB and
 classified `oversize`, which no flag overrides — **a lock nobody had written down, deleted by a file
@@ -116,8 +116,8 @@ retargets the witnesses, which is what a rename *is*, while a mis-edit that prom
 wrapper leaves a permanent protected witness. The narrowing exists on paper if it ever bites.
 
 **D-158 — a witness must parse as the full generated shape, so a bespoke launcher casts no vote.**
-Measured live: the *loose* witness set for `claude` is 7 files (`claude2`, `claude-corp`,
-`claude-dev0`, `ccgpt`, `cck3`, `claude-glm`, `gpt`); the *strict* set is 3. Strict was chosen because
+Measured live: the *loose* witness set for `claude` is 7 files (`claude9`, `claude-acme`,
+`claude-lab0`, `ccgpt`, `ccx3`, `claude-alt1`, `gpt`); the *strict* set is 3. Strict was chosen because
 it turns the size cap from a hole into an entailment — a file too big to be 2–3 significant lines is
 *provably* not a witness — where a loose "does the text contain an exec line" rule would have made the
 cap a silent blind spot. Mutation-measured in the other direction too: dropping the strict rule reds
@@ -182,6 +182,6 @@ on its own. They guard both locks regressing, not this one.
   `versions/` currently holds `2.1.228` with the *newest* mtime beside 2.1.235–2.1.238, and the
   launcher runs 2.1.238. Both need the operator's sign-off — every live session execs that file.
 - D-159 (the roster model) and D-160 (doctor's missing `-L`).
-- The pre-existing `FAIL wrappers` on both boxes (`claude-corp` sources an undeclared secrets file;
-  `claude-dev0`/`claude2` roster mismatches) — D-69 era, unrelated, and measured byte-identical before
+- The pre-existing `FAIL wrappers` on both boxes (`claude-acme` sources an undeclared secrets file;
+  `claude-lab0`/`claude9` roster mismatches) — D-69 era, unrelated, and measured byte-identical before
   and after this change.

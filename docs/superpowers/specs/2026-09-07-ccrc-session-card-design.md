@@ -40,8 +40,8 @@ investigation — **do not quote these as stable**; re-measure before the readin
 | rows carrying a `.hold` | **2** |
 | rows with at least one co-tenant | **16 of 17** |
 
-By project: ccrc-pwa 7, custom-tools 3, MekWarLive 2, intake-platform 2,
-expoAI-assistant 2, rp-llm 1. Both held sessions *also* have co-tenants, so the
+By project: ccrc-pwa 7, project-d 3, project-f 2, project-n 2,
+project-h 2, project-j 1. Both held sessions *also* have co-tenants, so the
 two populations overlap and do not nest. Five of the hold-less are **main
 checkouts**, which `ccd ws-hold` refuses outright (`ccd:5306` — *"nothing ever
 auto-archives a main checkout, so a hold there is a lie waiting to confuse
@@ -53,7 +53,7 @@ Taken by the orchestrator against the live server, `GET /api/claims?all=1`:
 
 ```
 total claim rows ever: 34   distinct holders: 10
-  ccrc-pwa 16 · expoAI-assistant 11 · MekWarLive 7
+  ccrc-pwa 16 · project-h 11 · project-f 7
 runId IS NULL rows: 0
 live claims at the time of reading: 0
 ```
@@ -237,7 +237,7 @@ four of ccd's hold readers, whose stated rule is *doubt reads as HELD*.
 > whole is five rather than four.
 
 **Case E — archived with a standing hold.** Live on this box:
-`data-internal-still-prairie`, stamped `archived=… reason=merged:#160`, with a
+`project-e-still-prairie`, stamped `archived=… reason=merged:#160`, with a
 live pane. The card calls those bytes *"the residue of a claim, not an
 assignment"* and drops the worker imperative entirely.
 
@@ -412,7 +412,7 @@ subject exists for.
 > id, **modelled**: `$id` has a shape gate but no length bound and appears
 > more than once across these sentences, so this figure is an assumption and
 > not a ceiling; the longest id live on this fleet today is 29,
-> `expoAI-assistant-keen-prairie`) + co-tenant **245** (a 64-character
+> `project-h-keen-prairie`) + co-tenant **245** (a 64-character
 > project and a **two-digit count**, also modelled rather than bounded: `$CT_N`
 > is interpolated un-padded and the singular and plural halves are the same
 > length, so the count's digits are the whole of the difference — 244 / 245 /

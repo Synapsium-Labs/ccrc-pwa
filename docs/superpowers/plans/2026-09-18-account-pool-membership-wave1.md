@@ -1091,7 +1091,7 @@ At the end of `MIGRATIONS` in `server/src/coord/schema.ts`, before the closing `
   //
   // ROW PER EDGE, not a column on an account (operator ruling 2). `subjectKind`
   // exists from day one though wave 1 writes only 'account' rows: the project
-  // half may migrate in later, and the org edition's `user -> pinned account` is
+  // half may migrate in later, and a later multi-user deployment's `user -> pinned account` is
   // a DIFFERENT EDGE, not a wider column. Wave 1's "one pool per account" is a
   // PARTIAL UNIQUE INDEX, so relaxing it to multi-pool later drops an index and
   // rewrites no rows and changes no wire shape — where widening a column would
@@ -1825,6 +1825,6 @@ D-3075, D-3076, D-3084, D-3085 and D-3086.
 ## Carried, not owned by this wave
 
 - Multi-pool accounts (drop the partial unique index; the wire already carries `pools: string[]`).
-- `principal_grants` and the org edition (spec §6) — out of scope by operator ruling 3.
+- `principal_grants` and a later multi-user deployment (spec §6) — out of scope by operator ruling 3.
 - Retiring the roster `pool` field — a later wave with its own skew analysis.
 - The server box's `accounts.json` still needs the 5+2 `provider` lines the fleet box got on 2026-09-17; the projection is byte-identical so there is no divergence, but the remote server still emits the boot warning.

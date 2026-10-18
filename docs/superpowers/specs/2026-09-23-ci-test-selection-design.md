@@ -506,7 +506,7 @@ The bounded second review round (closure of the 43, plus a fresh pass over the n
 ## 16. Amendment 2026-10-15: macOS off pull requests, and up to 12 Linux shards
 
 Ruled by the operator on 2026-10-15 ("do all the stuff you can do for me", answering the agentic landing standard's
-list of CCRC amendments, Synapsium-Labs/horkos `docs/superpowers/specs/2026-10-14-agentic-landing-standard-design.md`
+list of CCRC amendments, Synapsium-Labs/project-l `docs/superpowers/specs/2026-10-14-agentic-landing-standard-design.md`
 §5, ccrc-pwa rows 1 and 3).
 
 **What changes.**

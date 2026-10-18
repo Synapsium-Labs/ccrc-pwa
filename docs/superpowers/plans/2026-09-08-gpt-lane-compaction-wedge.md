@@ -1,7 +1,7 @@
 # gpt-lane compaction wedge — context pressure on the wire, ccd compactor honesty, the astra tier
 
 **Date:** 2026-09-08
-**Trigger:** `custom-tools-calm-river` lost 80.7 minutes to
+**Trigger:** `project-d-calm-river` lost 80.7 minutes to
 `Prompt is too long · automatic compaction failed: Request timed out`.
 
 ## The incident, measured

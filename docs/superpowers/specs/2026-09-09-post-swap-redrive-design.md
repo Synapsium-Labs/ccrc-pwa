@@ -9,15 +9,15 @@
 > path is manual intervention by sending a resume message, as the built-in mechanisms don't seem
 > to produce the desired result.
 
-Measured on the claude2 storm of 2026-09-09 (four sessions rescued to claude-dev0 within six
+Measured on the claude9 storm of 2026-09-09 (four sessions rescued to claude-lab0 within six
 minutes), every one of them: **the rescue fires, the swap lands, the session sits idle at a prompt
 until a human types.**
 
 | session | banner | rescue decided | swap landed | idle until | what ended the idle |
 |---|---|---|---|---|---|
-| intake-platform-quiet-cove | 11:23:23 | 11:23:28 | 11:25:29 | 11:52:45 | typed `куігьу` ("resume" on a Cyrillic layout) |
-| custom-tools-calm-river | 11:22:57 | 11:22:58 | 11:23:07 | 11:31:48 | typed `resume` |
-| custom-tools-amber-ridge | 11:25:22 | 11:25:25 | 11:27:05 | 11:32:55 | typed `resume work` |
+| project-n-quiet-cove | 11:23:23 | 11:23:28 | 11:25:29 | 11:52:45 | typed `куігьу` ("resume" on a Cyrillic layout) |
+| project-d-calm-river | 11:22:57 | 11:22:58 | 11:23:07 | 11:31:48 | typed `resume` |
+| project-d-amber-ridge | 11:25:22 | 11:25:25 | 11:27:05 | 11:32:55 | typed `resume work` |
 | ccrc-pwa-clear-meadow | 11:27:38 | 11:27:42 | 11:29:04 | 11:30:24 | an incidental ccrc-mail nudge |
 
 Sources: `~/.cc-sessions/swap.log`, `journalctl --user -u claude-session@<id>`, each session's
@@ -66,7 +66,7 @@ Every fact below was read from the installed Claude Code bundle
 5. **The affinity arm then bounces the stalled session home.** At the exact `fiveResetAt`
    instant `_limit_field` returns `""`, `_avail home` succeeds, and the session — idle precisely
    because it stalled — passes the idle gate: a second restart, a second transcript copy, a second
-   synthetic pair, and on claude2 a `Remote Control disconnected — Claude.ai login was rejected`.
+   synthetic pair, and on claude9 a `Remote Control disconnected — Claude.ai login was rejected`.
    Zero turns ran on the rescue account.
 6. **The PWA renders the stall as a conversation.** `server/src/transcript/parse.ts` reads
    neither `isMeta` nor `message.model`, so the META prompt is a right-aligned user bubble and the

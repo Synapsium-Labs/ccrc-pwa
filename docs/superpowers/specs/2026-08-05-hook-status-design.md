@@ -118,11 +118,11 @@ CC with the event payload on stdin. Behavior:
 Idempotent, run by `deploy.sh agent` after shipping the script (same gated
 lifecycle, backed up first):
 
-- For each wrapper home (`~/.claude`, `~/.claude-personal`, `~/.claude-corp`,
+- For each wrapper home (`~/.claude`, `~/.claude-home`, `~/.claude-acme`,
   `~/.claude-gpt`): jq-merge the managed hook entries into
   `settings.json`'s `.hooks`, preserving every existing entry (MEASURED:
   SessionStart/SessionEnd hooks exist in all four and one home carries an
-  extra cloneme entry — the installer must be provably non-destructive).
+  extra project-w entry — the installer must be provably non-destructive).
 - **Managed-entry recognition is by script filename** (Orca's trick): any
   existing entry whose command contains `/session-hook.sh` is swept and
   replaced, so re-runs converge and stale paths from old installs cannot
@@ -238,7 +238,7 @@ TDD throughout, existing idioms. Load-bearing fixtures:
    overwritten not crashed on; timing budget asserted (< 50 ms p95 over 20
    runs in the harness).
 2. Installer: fixture homes with the MEASURED real-world settings.json
-   shapes (including the cloneme extra) — merge preserves them exactly;
+   shapes (including the project-w extra) — merge preserves them exactly;
    re-run converges; a filename-matched stale entry is swept; broken-JSON
    settings refuses (non-zero, file untouched).
 3. Resolver: freshness window, uuid mismatch → null, malformed → null,

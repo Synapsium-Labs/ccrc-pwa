@@ -2,7 +2,7 @@
 
 Written 2026-08-22 against main `c39eabc`, from the decision brief
 (`2026-08-21-stage5-oss-decision-brief.md`) under the operator rulings recorded there:
-**S1** — publish under **Synapsium-Labs** (repo transfer + copyright identity);
+**S1** — publish under **Synapsium-Labs** (the owner decision is recorded there);
 **S2** — docs sanitise-and-ship, with the bar **verified by a mechanism, not a read-through**,
 and tailnet topology **cleared out, not masked** (it is noise to the public reader, not just
 a leak); **S10** — the setup must work with **no third-party DNS dependency**. Two pre-flip
@@ -13,26 +13,26 @@ session id scrubbed from all refs; backup at `~/ccrc-backups/20260822-history-re
 
 The stage's shape: **make the tree owner-agnostic and box-agnostic, prove it with a red-bar
 suite, add the DNS-free exposure mode, restructure the README for an outside reader — then
-hand the operator a short, honest flip checklist.** The flip itself (repo transfer + public
+hand the operator a short, honest flip checklist.** The flip itself (the operator's steps + public
 toggle) stays an operator act.
 
 ## 1 — Identity: license and owner (S1 + S8)
 
 - Root `LICENSE`: AGPL-3.0 text, copyright line `Copyright (C) 2026 Synapsium Labs`
   (exact legal form confirmed with the operator at PR review; default stands unless they
-  supply a registered-company form).
+  supply another form).
 - `"license": "AGPL-3.0-only"` in `server/`, `agent/`, `pwa/` `package.json` (`shared/`
   stays a bare resolver shim — no license field to invent, it publishes under the root
   LICENSE like every non-package file). No per-file headers — they would fight the
   design-rationale comment idiom that opens every file.
-- `install.sh`'s `CCRC_RELEASE_OWNER` default flips the employer org → `Synapsium-Labs`
+- `install.sh`'s `CCRC_RELEASE_OWNER` default flips the previous owner org → `Synapsium-Labs`
   in the SAME commit the operator transfers the repo (GitHub redirects the old org URL, so
   ordering inside the flip window is forgiving, but the tree must never name two owners).
   Until that commit, the tree keeps working against the current org. README's
   `curl … | bash` one-liner and the release workflow's implicit owner ride the same value —
   the single-definition suite gains the pin: **the owner string is defined once**
   (`install.sh`), everything else derives or quotes it.
-- The old employer token's residue, both casings (70 occurrences, 23 files — `ccd/ccd`, `ccd/ccrc`,
+- The old owner token's residue, both casings (70 occurrences, 23 files — `ccd/ccd`, `ccd/ccrc`,
   fixture session names in `fleetws`/`registry` tests, `pwa/design/mockup.html`, docs):
   fixture and demo spellings become neutral project names (`acme-platform-ts` class);
   prose mentions in docs follow §8's corpus policy. The `ccd/ccd` commit re-stamps
@@ -72,7 +72,7 @@ any `/mnt/HC_Volume_*` path, any public IPv4 outside the RFC 5737 documentation 
 (and loopback/RFC 1918 fixtures), any `duckdns.org` subdomain outside the documented
 placeholders, any `session_01…`-shaped id that is not the committed EXAMPLE one. The
 small residue a pattern cannot express — the username, the two SSH key names, the
-company org string — rides in the test base64-encoded with a comment saying exactly why:
+old owner org string — rides in the test base64-encoded with a comment saying exactly why:
 it breaks casual greppability, while the values themselves are already public-by-ruling
 in the retained commit-author history, so this is noise-prevention, not secrecy. No
 allowlist entries at ship — an empty allowlist IS the claim; any future exception must

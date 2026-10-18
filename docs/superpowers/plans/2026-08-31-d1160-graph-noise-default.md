@@ -32,7 +32,7 @@ refused tree:
     1  .astro/
 ```
 
-Five repos — **OpenClawHetzner, custom-tools, data-internal, intake-platform,
+Five repos — **project-c, project-d, project-e, project-n,
 wt-model-rates-sync** — were blocked by *nothing but* ccrc's own artifacts (16/16, 22/22,
 40/40, 16/16 and 19/19 of their breaches). Their graphs had gone 3 to 26 days stale.
 
@@ -73,10 +73,10 @@ Measured, three mutations, each red:
 
 ## Known, and deliberately not fixed here
 
-Nine of the fourteen refused trees carry genuinely untracked project files — `rp-llm` 62,
-`expoAI-assistant` 38, `clone-me` 10, `mm-data` 2, one further TypeScript project 2 (its
+Nine of the fourteen refused trees carry genuinely untracked project files — `project-j` 62,
+`project-h` 38, `project-w` 10, `project-t` 2, one further TypeScript project 2 (its
 name is one of the literal real identifiers this public-bound repo's pre-push guard
 refuses outright, and the count is the part that carries the argument anyway),
-`synapsium-platform` 1 (`.astro/`), `MekWarLive` 1 and its worktree, `egress-cost` 1.
+`project-k` 1 (`.astro/`), `project-f` 1 and its worktree, `egress-cost` 1.
 Those stay refused, and should: the guard is protecting a reproducible graph. Each is an
 operator decision — track the file, or add a `<repo>.list`.

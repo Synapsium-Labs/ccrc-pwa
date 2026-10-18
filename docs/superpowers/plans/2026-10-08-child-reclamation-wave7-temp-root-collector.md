@@ -2,7 +2,7 @@
 
 > **For agentic workers:** this plan is dispatched as a wave to a `ccrc-worker` session; follow the `ccrc-worker` skill for the protocol (ack, claims, asks, wave-done). To execute the tasks, REQUIRED SUB-SKILL: superpowers:subagent-driven-development. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Programme:** child-reclamation (CCR-15), **wave 7 of 9**, run 347. **Deploy class: AGENT-FIRST, and inert.** Everything this wave ships moves with the fleet box's `ccd`. No server composes `ws-collect` until wave 9. The server-side files this wave touches only DECLARE: a constant, a budget row, union members and sentences.
+**Programme:** child-reclamation (#166), **wave 7 of 9**, run 347. **Deploy class: AGENT-FIRST, and inert.** Everything this wave ships moves with the fleet box's `ccd`. No server composes `ws-collect` until wave 9. The server-side files this wave touches only DECLARE: a constant, a budget row, union members and sentences.
 
 **Goal:** Ship the verb that takes back a temp root nobody owns any more, and make it unable to take anything else. After this wave:
 - `ccd ws-audit --session <id> --collect` says whether a witnessed temp root can be collected, and mints a token when it can;

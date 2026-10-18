@@ -19,7 +19,7 @@ the card stays a renderer. Everything else is component and CSS work.
 
 ## Global Constraints
 
-- Repo `/srv/projects/OpenClawHetzner`, branch `ccrc/fleet-polish`.
+- Repo `/srv/projects/project-c`, branch `ccrc/fleet-polish`.
 - Suites run from the package dir: `cd infra/ccrc/{server,agent,pwa} && npx vitest run`. Single file: `npx vitest run test/x.test.ts`.
 - **Baseline to preserve, measured 2026-07-29: server 400, agent 86, pwa 330.** Typecheck (`npx tsc --noEmit`) clean in all three.
 - **Use only CSS tokens that exist in `pwa/src/styles/tokens.css`.** The real set: `--sp-1..--sp-6/8/10/12`, `--text-2xs/xs/sm/base/lg/xl/2xl`, `--ink-primary/secondary/tertiary/disabled`, `--edge-subtle/strong`, `--r-sm/md/lg/xl/full`, `--bg-page/surface/raised/well/sheet`, `--font-ui/mono`, `--status-busy-text`, `--status-attention-text`, `--status-dead-text`, `--acct-*`, `--tap-min`. There is **no** `--danger`, `--attn`, `--live`, `--line`, `--s-N` or `--fs-xs`. Inventing a token silently renders as nothing.
@@ -110,8 +110,8 @@ separate because each is independently shippable and one is blocked:
 `<configDir>/sessions/<pid>.json` for each live session, e.g.:
 
 ```json
-{"pid":1713330,"sessionId":"2a57…","cwd":"/mnt/…/OpenClawHetzner",
- "name":"openclawhetzner-42","nameSource":"derived","status":"busy",
+{"pid":1713330,"sessionId":"2a57…","cwd":"/mnt/…/project-c",
+ "name":"project-c-42","nameSource":"derived","status":"busy",
  "statusUpdatedAt":1785324429417,"version":"2.1.220"}
 ```
 
@@ -131,10 +131,10 @@ Append to `infra/ccrc/server/test/fleet.test.ts`:
 describe('derived session handles', () => {
   const build = async (live: Record<string, unknown>) => {
     const home = mkdtempSync(path.join(tmpdir(), 'ccrc-'));
-    seedSession(home, 'claude2-MekWarLive', 'claude2');
-    mkdirSync(path.join(home, '.claude-personal', 'sessions'), { recursive: true });
+    seedSession(home, 'claude9-project-f', 'claude9');
+    mkdirSync(path.join(home, '.claude-home', 'sessions'), { recursive: true });
     writeFileSync(
-      path.join(home, '.claude-personal', 'sessions', '40613.json'),
+      path.join(home, '.claude-home', 'sessions', '40613.json'),
       JSON.stringify({ pid: 40613, sessionId: '1'.repeat(36), cwd: '/d', status: 'idle', ...live }),
     );
     const run: Runner = async (_cmd, args) => {
@@ -143,11 +143,11 @@ describe('derived session handles', () => {
       return { code: 0, stdout: '', stderr: '' };
     };
     const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run));
-    return fleet.find((s) => s.id === 'claude2-MekWarLive')!;
+    return fleet.find((s) => s.id === 'claude9-project-f')!;
   };
 
   it('drops a name Claude Code declares derived', async () => {
-    expect((await build({ name: 'mekwarlive-e7', nameSource: 'derived' })).name).toBeNull();
+    expect((await build({ name: 'project-f-e7', nameSource: 'derived' })).name).toBeNull();
   });
 
   it('keeps a name with no nameSource at all — an older file, chosen by a human', async () => {
@@ -166,7 +166,7 @@ describe('derived session handles', () => {
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `cd infra/ccrc/server && npx vitest run test/fleet.test.ts`
-Expected: the first test FAILS with `expected 'mekwarlive-e7' to be null`. The
+Expected: the first test FAILS with `expected 'project-f-e7' to be null`. The
 other two PASS already (nothing filters yet) — that is correct and expected;
 they are the regression guards that stop the fix from over-reaching.
 
@@ -203,7 +203,7 @@ In `assembleFleet`, replace the line
 with
 
 ```ts
-          // A derived name is Claude Code's session handle (`openclawhetzner-42`
+          // A derived name is Claude Code's session handle (`project-c-42`
           // — cwd basename plus a counter), never a description of the work, so
           // it is dropped HERE rather than shipped for the PWA to re-judge.
           // `name` on the wire therefore means "a name worth displaying", and
@@ -277,13 +277,13 @@ describe('pin', () => {
   });
 
   it('is null when they disagree — the card must not claim one of them', () => {
-    const [g] = groupFleet([at('demo-a', 'claude'), at('demo-b', 'claude2')]);
+    const [g] = groupFleet([at('demo-a', 'claude'), at('demo-b', 'claude9')]);
     expect(g.pin).toBeNull();
   });
 
   it('is the lone session\'s home for a single-session project', () => {
-    const [g] = groupFleet([at('demo-a', 'claude-corp')]);
-    expect(g.pin).toBe('claude-corp');
+    const [g] = groupFleet([at('demo-a', 'claude-acme')]);
+    expect(g.pin).toBe('claude-acme');
   });
 });
 ```
@@ -328,7 +328,7 @@ Append to `infra/ccrc/pwa/test/project-card.test.tsx`:
 ```ts
 describe('pinned account', () => {
   it('shows the account the project is pinned to', () => {
-    render(<ProjectCard group={grp({ pin: 'claude-corp' })} onOpen={() => {}} onActions={() => {}} />);
+    render(<ProjectCard group={grp({ pin: 'claude-acme' })} onOpen={() => {}} onActions={() => {}} />);
     expect(screen.getByText('team·b')).toBeInTheDocument();
   });
 
@@ -447,7 +447,7 @@ Append to `infra/ccrc/pwa/test/session-line.test.tsx`:
 describe('away from home', () => {
   it('marks the account chip when the session is not on its pinned account', () => {
     const { container } = render(
-      <SessionLine session={s({ wrapper: 'claude2', home: 'claude' })}
+      <SessionLine session={s({ wrapper: 'claude9', home: 'claude' })}
                    onOpen={() => {}} onActions={() => {}} />);
     expect(container.querySelector('.sess-acct')).toHaveAttribute('data-away');
   });
@@ -460,14 +460,14 @@ describe('away from home', () => {
   });
 
   it('says so for assistive tech, which cannot see a colour', () => {
-    render(<SessionLine session={s({ wrapper: 'claude2', home: 'claude' })}
+    render(<SessionLine session={s({ wrapper: 'claude9', home: 'claude' })}
                         onOpen={() => {}} onActions={() => {}} />);
     expect(screen.getByLabelText('running on team·alt, pinned to team·max')).toBeInTheDocument();
   });
 
   it('never marks a dead session — it is not running anywhere', () => {
     const { container } = render(
-      <SessionLine session={s({ wrapper: 'claude2', home: 'claude', status: 'dead' })}
+      <SessionLine session={s({ wrapper: 'claude9', home: 'claude', status: 'dead' })}
                    onOpen={() => {}} onActions={() => {}} />);
     expect(container.querySelector('.sess-acct')).not.toHaveAttribute('data-away');
   });
@@ -540,7 +540,7 @@ existing session factory name):
 ```ts
 describe('away note', () => {
   it('spells out the swap, which the line only marks', () => {
-    render(<SessionActionsSheet session={sess({ wrapper: 'claude2', home: 'claude' })}
+    render(<SessionActionsSheet session={sess({ wrapper: 'claude9', home: 'claude' })}
                                 open onClose={() => {}} />);
     expect(screen.getByText(/Pinned to team·max, running on team·alt/)).toBeInTheDocument();
   });
@@ -628,7 +628,7 @@ Append to `infra/ccrc/pwa/test/project-card.test.tsx`:
 
 ```ts
 describe('the + is icon-only', () => {
-  const projected = { wrapper: 'claude2', score: 9 };
+  const projected = { wrapper: 'claude9', score: 9 };
 
   it('renders no visible projection text in the header', () => {
     const { container } = render(
@@ -1257,7 +1257,7 @@ it('excludes a disabled account from the swap picker', () => {
 });
 
 it('keeps every account when none is disabled', () => {
-  expect(pickableWrappers([], [])).toEqual(['claude', 'claude2', 'claude-corp', 'gpt']);
+  expect(pickableWrappers([], [])).toEqual(['claude', 'claude9', 'claude-acme', 'gpt']);
 });
 ```
 
@@ -1670,9 +1670,9 @@ Append to `infra/ccrc/pwa/test/header.test.tsx`:
 describe('breadcrumb', () => {
   it('names the workspace beside the project', () => {
     render(<SessionHeader {...props({ session: sess({
-      project: 'custom-tools', workspace: 'quiet-basin', name: null, branch: 'ws/quiet-basin',
+      project: 'project-d', workspace: 'quiet-basin', name: null, branch: 'ws/quiet-basin',
     }) })} />);
-    expect(screen.getByText('custom-tools')).toBeInTheDocument();
+    expect(screen.getByText('project-d')).toBeInTheDocument();
     expect(screen.getByText('ws/quiet-basin')).toBeInTheDocument();
   });
 
@@ -1717,7 +1717,7 @@ import type { FleetSession } from '../../../shared/api';
  * What to call a session, everywhere. `name ?? branch ?? workspace ?? id`.
  *
  * `name` is only ever present when it is worth showing: the server drops
- * Claude Code's derived session handles (`openclawhetzner-42` — cwd basename
+ * Claude Code's derived session handles (`project-c-42` — cwd basename
  * plus a counter) before they reach the wire, so a non-null name is one a
  * human chose. Branch outranks the slug because a workspace's branch gets
  * renamed to something descriptive while `workspace` keeps the slug it was

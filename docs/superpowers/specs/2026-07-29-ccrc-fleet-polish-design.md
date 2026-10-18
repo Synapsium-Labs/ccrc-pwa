@@ -38,15 +38,15 @@ Nine sessions, `GET /api/fleet`, 2026-07-29:
 
 | project | name | branch | workspace | wrapper | home |
 |---|---|---|---|---|---|
-| custom-tools | `custom-tools-9a` | `feat/mirror-heartbeats-to-da…` | null | claude-corp | claude-corp |
-| data-internal | `data-internal-7a` | `feat/surface-and-accounts-fi…` | null | claude-corp | claude-corp |
+| project-d | `project-d-9a` | `feat/mirror-heartbeats-to-da…` | null | claude-acme | claude-acme |
+| project-e | `project-e-7a` | `feat/surface-and-accounts-fi…` | null | claude-acme | claude-acme |
 | acme-platform-ts | `frontend-ui-foundation-39` | `feat/company-enquiry` | null | claude | claude |
-| intake-platform | `add-mcp-image-attachments` | `feat/board-phase-1` | null | claude-corp | claude-corp |
-| rp-llm | `rp-llm-98` | `main` | null | claude2 | claude2 |
-| synapsium-platform | `synapsium-platform-3a` | `main` | null | claude | claude |
-| MekWarLive | `mekwarlive-e7` | `main` | null | claude2 | claude2 |
-| OpenClawHetzner | `openclawhetzner-42` | `main` | null | claude | claude |
-| expoAI-assistant | `expoai-assistant-44` | `main` | null | claude | claude |
+| project-n | `add-mcp-image-attachments` | `feat/board-phase-1` | null | claude-acme | claude-acme |
+| project-j | `project-j-98` | `main` | null | claude9 | claude9 |
+| project-k | `project-k-3a` | `main` | null | claude | claude |
+| project-f | `project-f-e7` | `main` | null | claude9 | claude9 |
+| project-c | `project-c-42` | `main` | null | claude | claude |
+| project-h | `project-h-44` | `main` | null | claude | claude |
 
 Three things fall straight out of that table, and each one changes a decision
 below:
@@ -117,20 +117,20 @@ information**, and eight of nine names are exactly that.
 
 The evidence is not a guess — Claude Code declares it. Every
 `<config-dir>/sessions/<pid>.json` carries a `nameSource` field beside `name`.
-Read across all four wrapper config dirs (`~/.claude`, `~/.claude-corp`,
-`~/.claude-personal`, `~/.claude-glm`):
+Read across all four wrapper config dirs (`~/.claude`, `~/.claude-acme`,
+`~/.claude-home`, `~/.claude-alt1`):
 
 ```
 name                        nameSource   cwd basename
-custom-tools-9a             derived      custom-tools
-data-internal-7a            derived      data-internal
+project-d-9a             derived      project-d
+project-e-7a            derived      project-e
 frontend-ui-foundation-39   derived      frontend-ui-foundation
 add-mcp-image-attachments   (absent)     board-phase-1
-rp-llm-98                   derived      rp-llm
-synapsium-platform-3a       derived      synapsium-platform
-mekwarlive-e7               derived      MekWarLive
-openclawhetzner-42          derived      OpenClawHetzner
-expoai-assistant-44         derived      expoAI-assistant
+project-j-98                   derived      project-j
+project-k-3a       derived      project-k
+project-f-e7               derived      project-f
+project-c-42          derived      project-c
+project-h-44         derived      project-h
 ```
 
 `derived` means Claude Code built the string from the working directory plus a
@@ -139,7 +139,7 @@ on those same rows reads `feat/mirror-heartbeats-to-datadog`,
 `feat/company-enquiry`, `feat/board-phase-1`.
 
 `SessionHeader` already knows this. Its comment reads *"Show the clean project
-name, not Claude Code's auto-derived session name (e.g. `custom-tools-91`), which
+name, not Claude Code's auto-derived session name (e.g. `project-d-91`), which
 reads as noise"* — the chat header rejects `name` outright while the fleet line
 prefers it. One of the two is wrong, and the table says which.
 
@@ -168,7 +168,7 @@ Two of the nine sessions are running in worktrees:
 
 ```
 frontend-ui-foundation-39   .../acme-platform-ts/.claude/worktrees/frontend-ui-foundation
-add-mcp-image-attachments   .../intake-platform/.claude/worktrees/board-phase-1
+add-mcp-image-attachments   .../project-n/.claude/worktrees/board-phase-1
 ```
 
 Both have `workspace: null`, because ccrc derives `workspace` from ccd's
@@ -297,7 +297,7 @@ after-number is what gets reported, not the projection.
 ### The FAB covers card content
 
 `position: fixed` bottom-right, 56px, over the list. On the live fleet it sits on
-top of `expoAI-assistant`'s task tally in every viewport and both themes. The list
+top of `project-h`'s task tally in every viewport and both themes. The list
 has no bottom padding reserving space for it.
 
 ## The card header, laid out
@@ -306,15 +306,15 @@ Left to right: chevron · project name · pinned account · (attention dot) · `
 hard right.
 
 ```
-▾  custom-tools          claude-corp                        +
-   ⎇ feat/mirror-heartbeats-to-datadog  working  4/5  claude-corp  ···
+▾  project-d          claude-acme                        +
+   ⎇ feat/mirror-heartbeats-to-datadog  working  4/5  claude-acme  ···
 ```
 
 The `+` becomes **icon-only and right-aligned**. The projected account and
 headroom move into its accessible name, which is where they already are:
 
 ```
-aria-label="New workspace on custom-tools — team·max, 91% free"
+aria-label="New workspace on project-d — team·max, 91% free"
 ```
 
 On a fine pointer they also appear as a `title` tooltip. Nothing is lost for a
@@ -395,7 +395,7 @@ Today: back chevron · title · meta chips · `>_` · `⋯` · `esc`.
 ### The title is the project, and that breaks the moment workspaces return
 
 `SessionHeader` sets `title = session.project`. With two workspaces of one
-project open, both headers read `custom-tools` — identical, with nothing to tell
+project open, both headers read `project-d` — identical, with nothing to tell
 them apart. The fleet line below already labels them distinctly; the chat header
 throws that away.
 

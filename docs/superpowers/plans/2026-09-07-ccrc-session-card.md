@@ -669,7 +669,7 @@ _ct_read() {   # <path> -> CT_V ; rc 0 read, 1 absent, 2 unmeasurable
 # this repo already made. `server/src/coord/peers.ts` (D9): the peers route
 # "does NOT filter on `.archived` ... `archivedAt` is reported verbatim and
 # decides nothing", and it ships `archiveContradicted`/`archivedStale` to NAME
-# the contradiction. Measured on this box: `data-internal-still-prairie` has
+# the contradiction. Measured on this box: `project-e-still-prairie` has
 # carried `.archived` for 33 days beside a 4-second-old heartbeat, and the
 # server calls it `deliverable:"yes"`. In the other direction a main checkout
 # can never be archived at all, so an `.archived` filter over-counts a dead
@@ -1593,7 +1593,7 @@ PR body: the measured baseline from `## Baseline recorded`, the deploy order, an
 - Pre-deploy roll-up (the reading at **13:53:50Z** — NOT the 13:53:58Z line, which is the Step 8 mutation artifact written with the log emptied):
   `{"ts":"2026-09-07T13:53:50Z","gateOff":false,"queriesToday":66,"denied":5,"zeroQuery":3,"peerRead":0,"claimed":0,"nullPeerRead":23,"heldN":2,"coTenantN":15,"liveN":17}`
   `nullPeerRead:23` = every row, no field: the proof the hook has not shipped. Its fall is the proof it has.
-- Claims history: rows **34** · programless **0** · holders **10** · projects **ccrc-pwa, expoAI-assistant, MekWarLive**
+- Claims history: rows **34** · programless **0** · holders **10** · projects **ccrc-pwa, project-h, project-f**
   Measured 2026-09-07 pre-deploy by raw HTTP against the live server (`GET /api/claims?all=1`, box token),
   because the installed client predates Task 2's `all` key and still refuses `--all`. Re-take it through
   `ccrc-api claims list --all 1` after the agent-lane deploy; the figures must match or the deploy changed
@@ -1692,7 +1692,7 @@ prose. The floor is now 1923.
   A 860 (a 127-character workdir, a 127-character hold whose reason names a run — the longer of the two
   case-A sentences — and a 40-character id, modelled: `$id` has a shape gate but no length bound and
   appears more than once across these sentences, so this is an assumption, not a ceiling; the longest id
-  live on this fleet today is 29, `expoAI-assistant-keen-prairie`) + co-tenant 245 (a 64-character project
+  live on this fleet today is 29, `project-h-keen-prairie`) + co-tenant 245 (a 64-character project
   and a two-digit count) + two one-space joins = **1826** — not the fix wave's 1768: its own 801 for held
   case A undercounted the true 860 by 59. Against 1800 that is **not** headroom: 1826 exceeds it by 26
   characters, and the old bound truncates exactly this combination mid-word inside the co-tenant sentence

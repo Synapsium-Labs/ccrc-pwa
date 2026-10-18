@@ -24,7 +24,7 @@ separate authorisation, and only then is the other repository's copy deleted.
 
 ## 1. What the tree says today (measured 2026-09-20)
 
-`ccrc-pwa` at `7d78b376`; `OpenClawHetzner` at `fix/ccgpt-midturn-system-messages`; live box as noted.
+`ccrc-pwa` at `7d78b376`; `project-c` at `fix/ccgpt-midturn-system-messages`; live box as noted.
 
 | Fact | Measurement |
 |---|---|
@@ -641,7 +641,7 @@ The shim's and publisher's cases become vitest suites in `server/test/` in exact
 the one gate every other guard in this repo rides.
 
 **The split is per-method, not per-class.** `test_ccgpt_proxy.py` is not cleanly divided: `TestWrappersStoppedDecidingModels`
-and `TestLaneModelGate` each mix GPT-lane assertions with assertions about an unrelated OpenClaw wrapper.
+and `TestLaneModelGate` each mix GPT-lane assertions with assertions about an unrelated legacy-tree wrapper.
 Moving whole classes would either drag that wrapper's coverage into ccrc or drop the lane's. The plan moves
 methods, and states the count on both sides before and after — a smaller green suite is still green.
 
@@ -656,7 +656,7 @@ repository has two real account email addresses committed in plaintext in three 
 reads from, so a careless copy would ship green through the ratchet. An email class is added, red-first
 against a fixture address, before any GPT-lane file is created.
 
-**Nothing OpenClaw-specific is deleted**: its GLM/K3 wrapper cases, its provider-policy cases and its
+**Nothing legacy-specific is deleted**: its GLM/K3 wrapper cases, its provider-policy cases and its
 ownership-allow-list case stay in that repository.
 
 **Stale source-shape assertions are replaced, not copied.** The existing suite positively pins the `nohup`
@@ -679,7 +679,7 @@ and a mirror laxer than the parser gives `ccd` a projection from a roster the se
    `ccrc wrappers`, `ccrc models litellm <id>`, start; verify unit names and slice, listener identity on both
    ports, `/ccgpt/lane`, a streamed turn, a tool call, and a published usage row — none of it by reading a
    secret. Retire the fixed usage timer (amended: §20.9). Then the next lane.
-4. **Delete the OpenClaw copy.** `ccgpt`, `ccgpt-proxy`, `ccgpt-usage`, the four usage units, the static
+4. **Delete the legacy-tree copy.** `ccgpt`, `ccgpt-proxy`, `ccgpt-usage`, the four usage units, the static
    LiteLLM config, the machine-specific per-lane launchers, the install runbook, and the GPT-only tests.
    Its docs stop pointing operators at deleted files; historical design records stay, marked superseded.
 

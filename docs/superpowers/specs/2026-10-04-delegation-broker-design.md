@@ -56,7 +56,7 @@ has an owner in ccrc; nothing ccrc runs will ever clean one.
    real run; never silently ignored, never forcibly converted.
 4. **Coordinator identity is explicit intent plus inferred escalation.**
 5. **Durable nesting lasts until the workspace is reclaimed**, not until a run closes.
-6. **Ephemeral worker workspaces are cleaned up under the updated cleanup scheme** (the CCR-15 /
+6. **Ephemeral worker workspaces are cleaned up under the updated cleanup scheme** (the #166 /
    workspace-lifecycle safety spine). "Ephemeral" names presentation and expected lifetime, not an
    exemption from cleanup.
 7. **The new ccd verbs are workspace-lifecycle verbs, not coordination mutation** (2026-10-04). They sit
@@ -726,7 +726,7 @@ measured cell records the failing test and `N failed | M passed`.
 
 One ccrc programme, run through `runs open` / `runs dispatch` — this design exists because that was
 skipped — one wave per stage. Every `delegation_*` table lands in wave 2's single migration. Waves 1–4
-depend on nothing unbuilt. Wave 6 sequences after CCR-15's fourth wave (the server-side reclaim sweep
+depend on nothing unbuilt. Wave 6 sequences after #166's fourth wave (the server-side reclaim sweep
 and pause route) so lease cleanup reuses its sweep. Each wave can be disabled independently by its
 capability or marker; reverts go in reverse order.
 

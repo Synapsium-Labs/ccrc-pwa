@@ -4,7 +4,7 @@
 
 ## In short
 
-This is W0 of the path-identity follow-up programme: it designs fixes for the residuals that child-workspace reclamation (CCR-15) left open, and the collector switch the operator asked for on the Settings page.
+This is W0 of the path-identity follow-up programme: it designs fixes for the residuals that child-workspace reclamation (#166) left open, and the collector switch the operator asked for on the Settings page.
 It answers four questions about ccrc's destructive verbs: which session id a verb binds, what the tail and the collector may believe about a temp-root leaf, which worktree `git worktree remove --force` may delete, and what arms the temp-root collector.
 Every change to ccd and to the server's id handling refuses or holds more at the verb it touches; three W2 changes keep or return an id to the collector's population, where it stays collectable only under the collector's full ladder, while today the leaf leaks.
 The switch adds a signed-in console-session arm alongside the fleet-box marker, then moves control solely to Settings after the operator removes that marker and a successful listing journals its retirement; after that hand migration, a database-only rollback, re-created marker or other fleet box cannot arm deletion the operator turned off.
@@ -13,11 +13,11 @@ The operator rules on the rows marked Operator in each decision table, listed ag
 
 ## 1. Context
 
-This section says what CCR-15 shipped, what it left open, and why identity is the common thread. It also records the fleet box layout this design was measured against.
+This section says what #166 shipped, what it left open, and why identity is the common thread. It also records the fleet box layout this design was measured against.
 
-### 1.1 What CCR-15 shipped
+### 1.1 What #166 shipped
 
-CCR-15 built child-workspace reclamation in nine waves. Its last wave, the temp-root collector's server lane, merged as `28e8dc1b2` and is deployed (sourced: the programme ledger; the git log of the home repo).
+#166 built child-workspace reclamation in nine waves. Its last wave, the temp-root collector's server lane, merged as `28e8dc1b2` and is deployed (sourced: the programme ledger; the git log of the home repo).
 
 - `ws-reclaim` removes a dead child's worktree, branch and temp root. It runs behind a ladder of refusals and a token that is re-proved on the box.
 - `ws-expire` (workspace-lifecycle's verb) removes an archived workspace after seven days, through the same ladder and tail.
@@ -709,7 +709,7 @@ L0 additions to `shared/api.ts` are `CollectLaneChoice`, `COLLECT_LANE_CHOICES`,
 | SW3 | Change detection | 1: final synchronous resolver and flip on effective boolean. 2: route clears pairs. 3: source changes also flip | 1. The destructive executor retains the decision, and source-only handoff leaves the licence unchanged | Coordinator | Proposed |
 | SW4 | Route gate | 1: session gate and confirm. 2: also refuse Live while sign-in is dark. 3: box token | 2. Arming unattended deletion requires a signed-in operator | Operator | Proposed |
 | SW5 | Placement | 1: own Settings section. 2: /runs. 3: section plus durable feed query | 1 | Coordinator | Proposed |
-| SW6 | Programme | A: CCR-15 wave 10. B: path-identity wave | A, because it changes what arms CCR-15's destructive lane | Operator | Proposed |
+| SW6 | Programme | A: #166 wave 10. B: path-identity wave | A, because it changes what arms #166's destructive lane | Operator | Proposed |
 | SW7 | Stored Live across a version change | A: eligible to re-arm after the same node is freshly measured. B: require a new confirm for every version | A, with the post-ready state stopped until same-epoch identity is known | Operator | Proposed |
 
 SW1 does not cover a whole-state restore that rolls both database and journal backward together. Approval of SW1 option A accepts that boundary and the required pause plus fresh confirmation after such a restore. It also accepts the server-memory connection-epoch identity cache; persisted inventory alone is not sufficient.
@@ -760,7 +760,7 @@ Executor, route and census:
 - `SESSION_ONLY` adds the path so its source scan covers the POST and its auth assertion proves both GET and POST absent from `EXEMPT`; the no-box-token census and its CLAUDE.md prose add the POST coordination write. A separate route test proves the GET also consults no box token. The exempt-from-naming list and all three skill forbid-mention suites cover both methods and the marker.
 - PWA tests cover every state, the confirm sheet, pre-latch Off policy, other-node view, mismatch and 404.
 
-### §5 as built (CCR-15 wave 10, run 400)
+### §5 as built (#166 wave 10, run 400)
 
 This note says how wave 10 of the child-reclamation programme (run 400) built this section, and where the build reads
 it more narrowly than the text above or Figure 5. It amends; it edits no earlier text. The programme contract's
@@ -929,7 +929,7 @@ Smaller departures carry no slug: three further pins in the store and journal su
 
 This section orders the work. One rule shapes it: every `ccd/ccd` edit waits for workspace-lifecycle W6 (#351, which holds `ccd/ccd`) to merge, and the ccd waves then go in series. Anything shared with ws-expire also needs the consent of workspace-lifecycle's coordinator for each wave (the cross-programme precedent).
 
-SW is listed here for ordering only. If SW6 rules A, it runs as CCR-15 wave 10 under that programme's ledger and contract; if B, as a wave of this programme.
+SW is listed here for ordering only. If SW6 rules A, it runs as #166 wave 10 under that programme's ledger and contract; if B, as a wave of this programme.
 
 | Wave | Content | Size | Touches | Gating | Order |
 |---|---|---|---|---|---|
@@ -962,7 +962,7 @@ Each wave is one PR with one safety subject (contract R38 and R48):
 | W2 | What a removal or witness drop is licensed against: absences and mounts |
 | W3 | Which tree `git worktree remove` may delete |
 | W4 | The collector's identity proof |
-| SW (CCR-15 wave 10 if SW6 rules A) | What arms the collector's deletion |
+| SW (#166 wave 10 if SW6 rules A) | What arms the collector's deletion |
 
 Scheduling conflicts (measured or sourced):
 - SW and #322 both edit `SettingsScreen.tsx`, and CLAUDE.md's session-only sentence and its census.
@@ -1089,7 +1089,7 @@ Each wave starts with a read-only Task 0, so the guarantees in this spec are sti
 - Temp roots and mounts: TR1 (the truncation-stable kept-leaf key), TR2 (rows without the key, distinct from malformed or truncated rows), TR5 (the mount question in the removal helper and before every standing nested-checkout and child forced removal, all in W2), TR9 (rec==f), TR10 (the root identity format), TR11 (the temp-root probe and another mount), TR12 (how many recycled-spawn pins).
 - TR3 and TR4 keep an id in the collector's population; TR6 first makes one valid aside-only id visible to both server composition and ccd admission, then restores its witness under the reap lock. These W2 changes refuse at the tail but let the collector reach a leaf that leaks today. The coordinator proposes them; say if you want them held.
 - Worktree identity: PI1 (an entry field at every spawn), PI2 (legacy rows), PI3 (add-only ancestry and mounts), PI4 (the R31 amendment and the cwd probe), PI5 (narrow or close the tail window).
-- The switch: SW1 (generation-journaled OR, latch, connection-bound node, and the whole-state-restore boundary), SW2 (pre-latch Off; recommendation changed to refusal), SW4 (the sign-in gate for Live), SW6 (CCR-15 wave 10), SW7 (a version change with Live stored). The switch adds a signed-in console-session arm now and moves control solely to Settings only after the marker hand step; please confirm that is what you want.
+- The switch: SW1 (generation-journaled OR, latch, connection-bound node, and the whole-state-restore boundary), SW2 (pre-latch Off; recommendation changed to refusal), SW4 (the sign-in gate for Live), SW6 (#166 wave 10), SW7 (a version change with Live stored). The switch adds a signed-in console-session arm now and moves control solely to Settings only after the marker hand step; please confirm that is what you want.
 - Before SW ships: tell us whether sign-in (`CCRC_AUTH`) is armed on the server box; its env file is outside what a session may read.
 - The programme: PG1 (whether W4 is wanted), PG2 (consent per wave).
 - When the switch is deployed: set Settings to live, then remove the marker by hand on the fleet box. That act is yours, never a session's.

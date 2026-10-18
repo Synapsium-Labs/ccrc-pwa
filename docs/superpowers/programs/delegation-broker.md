@@ -27,7 +27,7 @@ never links work by a name, a path, a time or a working directory.
 | 4 | 3 Project | the `delegation` frame; activity and lease rows in the PWA; a ccd prune of absent owners' spool directories (operator ruling 2026-10-14) | server + pwa, plus the fleet box for the ccd prune (order set by its plan) | 3 | — | to plan |
 | 5 | 4 Adopt | `ws-lease-mark` and carriers; read-only `ws-lease-audit`; adoption; digest mail; retain and resolve; promotion through `ws-add --base` | **AGENT-FIRST**, then server | 4 | — | to plan |
 | 6 | 5 Clean (shadow) | audit tokens for due leases; shadow rows; the shadow review | server | 5 | — | to plan |
-| 7 | 6 Clean (live) | `ws-lease-clean`; the executor taking a target record | **AGENT-FIRST**, then server | 6; CCR-15 wave 4's sweep (merged #215, live) | — | to plan |
+| 7 | 6 Clean (live) | `ws-lease-clean`; the executor taking a target record | **AGENT-FIRST**, then server | 6; #166 wave 4's sweep (merged #215, live) | — | to plan |
 
 ## Measurement matrix (filled by wave 1; wave 2's close-out added 2.1.292 and the real-lane cross-check)
 
@@ -555,7 +555,7 @@ opened as that stage's run and is now the close-out's.
 - **2026-10-01 to 2026-10-04 — the operator's rulings during design** (spec §2): route 1 (a delegation broker plus
   reconciliation); ephemeral workers render as activity under their parent; durable work outside `runs dispatch` is
   auto-adopted and guided; coordinator identity is explicit intent plus inferred escalation; nesting lasts until
-  the workspace is reclaimed; ephemeral worktrees are cleaned under the CCR-15 / workspace-lifecycle spine; the new
+  the workspace is reclaimed; ephemeral worktrees are cleaned under the #166 / workspace-lifecycle spine; the new
   ccd verbs are workspace-lifecycle verbs, not coordination mutation; four corrections from measurement.
 - **2026-10-05 — operator decision: spec approved with revisions R1–R9** (spec §2.1): promotion dispatches a child
   from the lease's tip; only the server journal creates a lease; rungs 3 and 4 narrowed; hour-bucketed spool; a

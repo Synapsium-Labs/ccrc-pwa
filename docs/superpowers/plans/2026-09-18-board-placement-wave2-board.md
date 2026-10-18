@@ -73,15 +73,15 @@ Append to `server/test/fleetstate.test.ts` (the file already imports from `'../.
 ```ts
 describe('boardHome — the ONE reader of FleetSession.boardProject (board-placement wave 2, Task 1)', () => {
   it('reads the placement when the server decided one', () => {
-    expect(boardHome({ project: 'custom-tools', boardProject: 'intake-platform' })).toBe('intake-platform');
+    expect(boardHome({ project: 'project-d', boardProject: 'project-n' })).toBe('project-n');
   });
   it('falls back to the project on null — an older server, an older snapshot, or a failed read (D-2875)', () => {
-    expect(boardHome({ project: 'custom-tools', boardProject: null })).toBe('custom-tools');
+    expect(boardHome({ project: 'project-d', boardProject: null })).toBe('project-d');
   });
   it('falls back on an ABSENT key — the live frame is cast, not revived', () => {
     // No `boardProject` key at all, the runtime shape of a row from a server
     // that predates the field. `??` reads it as null; `=== null` would not.
-    expect(boardHome({ project: 'custom-tools' })).toBe('custom-tools');
+    expect(boardHome({ project: 'project-d' })).toBe('project-d');
   });
 });
 
@@ -217,7 +217,7 @@ Append inside the `'board placement on the wire'` describe in `server/test/fleet
   it('a REFUSED placement read emits null on every row — never a non-null that reads as "placed at home" (D-2875)', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
-    seedSession(home, 'demo-worker5', 'claude', { hold: 'program:agent-evals wave:1/1' });
+    seedSession(home, 'demo-worker5', 'claude', { hold: 'program:prog-j wave:1/1' });
     const coord = mkCoord();
     vi.spyOn(coord, 'coordPlacementStamps').mockReturnValue({ ok: false, kind: 'run-unreadable', detail: 'closed for the test' });
     const fleet = await assembleFleet(
@@ -543,15 +543,15 @@ In `pwa/test/fleet-screen.test.tsx`, add (it already spies `api.projects`, see `
 ```tsx
   it('renders a card for a known project with no session on it, once /api/projects lands (R5)', async () => {
     vi.spyOn(api, 'projects').mockResolvedValue({ roots: [], projects: [
-      { name: 'OpenClawHetzner', workdir: '/home/rc/projects/OpenClawHetzner' },
-      { name: 'ghost', workdir: '/home/rc/projects/ghost' },
+      { name: 'project-c', workdir: '/home/u/projects/project-c' },
+      { name: 'ghost', workdir: '/home/u/projects/ghost' },
     ] });
     const store = makeStore();
     render(<FleetScreen store={store} />);
     seed(store, { conn: 'open', sessions: [session()], pools: { listed: true, byProject: {}, enforcement: 'enforced' } });
     await waitFor(() => {
       const names = [...document.querySelectorAll('.proj-card-name')].map((n) => n.textContent);
-      expect(names).toEqual(['OpenClawHetzner', 'ghost']);
+      expect(names).toEqual(['project-c', 'ghost']);
     });
   });
 ```
@@ -662,45 +662,45 @@ Add to `pwa/test/groupFleet.test.ts`:
 describe('the grouping key is boardHome (spec §6, Task 4)', () => {
   it('places a session on its boardProject card, not its own project\'s', () => {
     const g = groupFleet([
-      s({ id: 'coord', project: 'intake' }),
-      s({ id: 'w', project: 'custom-tools', boardProject: 'intake' }),
+      s({ id: 'coord', project: 'project-n' }),
+      s({ id: 'w', project: 'project-d', boardProject: 'project-n' }),
     ], []);
-    expect(g.map((x) => x.project)).toEqual(['intake', 'custom-tools']);
+    expect(g.map((x) => x.project)).toEqual(['project-n', 'project-d']);
     expect(g[0]!.sessions.map((x) => x.id)).toEqual(['coord', 'w']);
     expect(g[1]!.sessions).toEqual([]);                          // the own-project card survives, empty
   });
 
   it('counts on the DESTINATION card — attention, busy, unseen, stranded and the archived split follow the row', () => {
     const g = groupFleet([
-      s({ id: 'coord', project: 'intake' }),
-      s({ id: 'w', project: 'custom-tools', boardProject: 'intake', bucket: 'attention', bucketSince: 10 }),
-      s({ id: 'a', project: 'custom-tools', boardProject: 'intake', bucket: 'archived', archivedAt: 5 }),
+      s({ id: 'coord', project: 'project-n' }),
+      s({ id: 'w', project: 'project-d', boardProject: 'project-n', bucket: 'attention', bucketSince: 10 }),
+      s({ id: 'a', project: 'project-d', boardProject: 'project-n', bucket: 'archived', archivedAt: 5 }),
     ], []);
-    const intake = g.find((x) => x.project === 'intake')!;
-    expect(intake.attention).toBe(true);
-    expect(intake.unseen).toBe(1);
-    expect(intake.archived.map((x) => x.id)).toEqual(['a']);
-    const own = g.find((x) => x.project === 'custom-tools')!;
+    const card = g.find((x) => x.project === 'project-n')!;
+    expect(card.attention).toBe(true);
+    expect(card.unseen).toBe(1);
+    expect(card.archived.map((x) => x.id)).toEqual(['a']);
+    const own = g.find((x) => x.project === 'project-d')!;
     expect(own.attention).toBe(false);
     expect(own.archived).toEqual([]);
   });
 
   it('a placement naming a project nobody knows still renders — on a card of that name', () => {
-    const g = groupFleet([s({ id: 'w', project: 'custom-tools', boardProject: 'nowhere' })], ['custom-tools']);
-    expect(g.map((x) => x.project)).toEqual(['nowhere', 'custom-tools']);
+    const g = groupFleet([s({ id: 'w', project: 'project-d', boardProject: 'nowhere' })], ['project-d']);
+    expect(g.map((x) => x.project)).toEqual(['nowhere', 'project-d']);
   });
 
   it('the emptied card says where its work went, per destination, live rows only', () => {
     const g = groupFleet([
-      s({ id: 'w1', project: 'custom-tools', boardProject: 'intake' }),
-      s({ id: 'w2', project: 'custom-tools', boardProject: 'intake' }),
-      s({ id: 'w3', project: 'custom-tools', boardProject: 'data' }),
-      s({ id: 'a', project: 'custom-tools', boardProject: 'intake', bucket: 'archived', archivedAt: 5 }),
-      s({ id: 'home', project: 'custom-tools' }),
+      s({ id: 'w1', project: 'project-d', boardProject: 'project-n' }),
+      s({ id: 'w2', project: 'project-d', boardProject: 'project-n' }),
+      s({ id: 'w3', project: 'project-d', boardProject: 'data' }),
+      s({ id: 'a', project: 'project-d', boardProject: 'project-n', bucket: 'archived', archivedAt: 5 }),
+      s({ id: 'home', project: 'project-d' }),
     ], []);
-    const own = g.find((x) => x.project === 'custom-tools')!;
-    expect(own.elsewhere).toEqual([{ project: 'intake', count: 2 }, { project: 'data', count: 1 }]);
-    expect(g.find((x) => x.project === 'intake')!.elsewhere).toEqual([]);
+    const own = g.find((x) => x.project === 'project-d')!;
+    expect(own.elsewhere).toEqual([{ project: 'project-n', count: 2 }, { project: 'data', count: 1 }]);
+    expect(g.find((x) => x.project === 'project-n')!.elsewhere).toEqual([]);
   });
 });
 ```
@@ -862,10 +862,10 @@ Also correct the `orphanNote` comment paragraph that begins `asked against THIS 
 ```tsx
   it('renders the elsewhere lines as text with no control, and nothing when nothing moved', () => {
     const { container, rerender } = render(
-      <ProjectCard group={grp({ sessions: [], pin: { state: 'empty' }, elsewhere: [{ project: 'intake', count: 2 }] })}
+      <ProjectCard group={grp({ sessions: [], pin: { state: 'empty' }, elsewhere: [{ project: 'project-n', count: 2 }] })}
                    onOpen={() => {}} onActions={() => {}} />);
     const line = container.querySelector('.proj-elsewhere-line')!;
-    expect(line.textContent).toBe('2 workspaces under intake');
+    expect(line.textContent).toBe('2 workspaces under project-n');
     expect(container.querySelectorAll('.proj-elsewhere button, .proj-elsewhere a')).toHaveLength(0);
     rerender(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} />);
     expect(container.querySelector('.proj-elsewhere')).toBeNull();
@@ -1005,9 +1005,9 @@ In `pwa/test/session-line.test.tsx`, add:
 ```tsx
 describe('the repo label (board-placement wave 2, Task 6)', () => {
   it('sits INSIDE the row button\'s accessible name, so two same-slug rows are two names', () => {
-    render(<SessionLine session={s()} repo="Synapsium-Labs/custom-tools" onOpen={() => {}} onActions={() => {}} />);
-    expect(screen.getByRole('button', { name: /quiet-mesa.*Synapsium-Labs\/custom-tools/ })).toBeInTheDocument();
-    expect(document.querySelector('.sess-repo')?.textContent).toBe('Synapsium-Labs/custom-tools');
+    render(<SessionLine session={s()} repo="Synapsium-Labs/project-d" onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByRole('button', { name: /quiet-mesa.*Synapsium-Labs\/project-d/ })).toBeInTheDocument();
+    expect(document.querySelector('.sess-repo')?.textContent).toBe('Synapsium-Labs/project-d');
   });
   it('renders nothing when the card already implies the repo', () => {
     render(<SessionLine session={s()} onOpen={() => {}} onActions={() => {}} />);
@@ -1049,16 +1049,16 @@ In `pwa/test/project-card.test.tsx`:
 describe('the repo label appears only where the card stops implying it (spec §6, Task 6)', () => {
   const repos: Record<string, ProjectRepoWire> = {
     demo: { state: 'named', slug: 'o/demo' },
-    'custom-tools': { state: 'named', slug: 'o/custom-tools' },
+    'project-d': { state: 'named', slug: 'o/project-d' },
     twin: { state: 'named', slug: 'o/demo' },          // a second project on the SAME repo
     dark: { state: 'unmeasured' },
   };
   const repoFor = (p: string): ProjectRepoWire | undefined => repos[p];
-  const moved = sess({ id: 'custom-tools-still-river', project: 'custom-tools', workspace: 'still-river', boardProject: 'demo' });
+  const moved = sess({ id: 'project-d-still-river', project: 'project-d', workspace: 'still-river', boardProject: 'demo' });
 
   it('labels a row whose OWN project\'s repo differs from the card\'s', () => {
     render(<ProjectCard group={grp({ sessions: [sess(), moved] })} repoFor={repoFor} onOpen={() => {}} onActions={() => {}} />);
-    expect(screen.getByRole('button', { name: /still-river.*o\/custom-tools/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /still-river.*o\/project-d/ })).toBeInTheDocument();
     expect(document.querySelectorAll('.sess-repo')).toHaveLength(1);
   });
   it('does NOT label a moved row whose repo equals the card\'s — the name differs, the repo does not', () => {
@@ -1078,7 +1078,7 @@ describe('the repo label appears only where the card stops implying it (spec §6
     const own = sess({ id: 'demo-still-river', workspace: 'still-river' });
     render(<ProjectCard group={grp({ sessions: [own, moved] })} repoFor={repoFor} onOpen={() => {}} onActions={() => {}} />);
     expect(screen.getByRole('button', { name: 'still-river' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /still-river.*o\/custom-tools/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /still-river.*o\/project-d/ })).toBeInTheDocument();
   });
 });
 ```
@@ -1172,8 +1172,8 @@ In `pwa/test/header.test.tsx` (use the file's own render helper for `SessionHead
 ```tsx
 describe('the repo label in the session view (board-placement wave 2, Task 7, R3)', () => {
   it('renders the repo unconditionally when it is known', () => {
-    renderHeader({ repo: 'Synapsium-Labs/custom-tools' });
-    expect(screen.getByText('Synapsium-Labs/custom-tools')).toBeInTheDocument();
+    renderHeader({ repo: 'Synapsium-Labs/project-d' });
+    expect(screen.getByText('Synapsium-Labs/project-d')).toBeInTheDocument();
     expect(document.querySelector('.chip--repo')).not.toBeNull();
   });
   it('renders nothing when it is not — an older server, or a deep link before any fleet read (D-3013)', () => {

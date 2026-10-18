@@ -19,7 +19,7 @@
 - Tests-first for every behavior change; `deploy.sh` structure changes are pinned by `agent/test/deploy-verify.test.ts` reading the script as text (house pattern).
 - Existing tests define compatibility: `server/test/health.test.ts`, `server/test/config.test.ts`, `agent/test/deploy-verify.test.ts` may be EDITED where this plan says so, never deleted.
 - Both remote command blocks in deploy.sh (`AGENT_CMD=`, `REMOTE_CMD=`) are single-quoted strings whose `&&` links existing tests split and order-check — additions must stay inside the quoting discipline (no nested single quotes; `$(…)`/`$VAR` expand remotely).
-- The live boxes: server = <server-host> (`you@<server-host>:2222`, key `~/.ssh/<your-key>`), fleet host = openclaw (self, `you@<fleet-host>:2222`). Deploys run from a clean worktree at `origin/main`.
+- The live boxes: server = <server-host> (`you@<server-host>:2222`, key `~/.ssh/<your-key>`), fleet host = <fleet-host> (self, `you@<fleet-host>:2222`). Deploys run from a clean worktree at `origin/main`.
 
 ## File Structure
 
@@ -35,8 +35,8 @@ Create:
   server/test/buildinfo.test.ts
   server/test/ccd-version.test.ts
 Modify:
-  ccd/statusline-command.sh          (repatriate 2 live-ahead claude-dev0 case lines)
-  ccd/install-session-hooks.sh       (homes list gains $HOME/.claude-dev0)
+  ccd/statusline-command.sh          (repatriate 2 live-ahead claude-lab0 case lines)
+  ccd/install-session-hooks.sh       (homes list gains $HOME/.claude-lab0)
   ccd/ccd                            (new `version` verb: cmd_version + dispatch + usage + caps list)
   deploy/ccrc.service                (EnvironmentFile cutover)
   deploy/ccrc.env.example            (document ALL real vars: HOST/PORT, VAPID trio, PROJECTS_ROOT)
@@ -56,7 +56,7 @@ Modify:
 
 ### Task 1: Repatriate the live-ahead script edits
 
-The live `~/.claude/statusline-command.sh` on openclaw is 2 lines AHEAD of `ccd/statusline-command.sh` (claude-dev0 support added by hand), and `ccd/install-session-hooks.sh`'s homes list is missing `.claude-dev0` for the same reason. The repo must match live reality before anything ships these files.
+The live `~/.claude/statusline-command.sh` on the fleet box is 2 lines AHEAD of `ccd/statusline-command.sh` (claude-lab0 support added by hand), and `ccd/install-session-hooks.sh`'s homes list is missing `.claude-lab0` for the same reason. The repo must match live reality before anything ships these files.
 
 **Files:**
 - Modify: `ccd/statusline-command.sh` (two case tables, ~lines 51 and 156)
@@ -74,22 +74,22 @@ diff -u ccd/statusline-command.sh ~/.claude/statusline-command.sh
 ```
 Expected: exactly two `+` lines (no other drift since the investigation):
 ```
-+  "$HOME/.claude-dev0")     acct="${GREEN}team·d${RESET}" ;;
-+  "$HOME/.claude-dev0")     lbl="claude-dev0" ;;
++  "$HOME/.claude-lab0")     acct="${GREEN}team·d${RESET}" ;;
++  "$HOME/.claude-lab0")     lbl="claude-lab0" ;;
 ```
 If ANY other lines differ, STOP and re-read the live file — repatriate whatever is actually there, not this plan's snapshot.
 
 - [ ] **Step 2: Apply both lines to the repo copy**
 
-In `ccd/statusline-command.sh`, first case table (account label, after the `.claude-corp` line):
+In `ccd/statusline-command.sh`, first case table (account label, after the `.claude-acme` line):
 ```bash
-  "$HOME/.claude-corp")     acct="${BLUE}team·b${RESET}" ;;
-  "$HOME/.claude-dev0")     acct="${GREEN}team·d${RESET}" ;;
+  "$HOME/.claude-acme")     acct="${BLUE}team·b${RESET}" ;;
+  "$HOME/.claude-lab0")     acct="${GREEN}team·d${RESET}" ;;
 ```
-Second case table (wrapper label, after the `.claude-corp` line):
+Second case table (wrapper label, after the `.claude-acme` line):
 ```bash
-  "$HOME/.claude-corp")     lbl="claude-corp" ;;
-  "$HOME/.claude-dev0")     lbl="claude-dev0" ;;
+  "$HOME/.claude-acme")     lbl="claude-acme" ;;
+  "$HOME/.claude-lab0")     lbl="claude-lab0" ;;
 ```
 
 - [ ] **Step 3: Confirm the diff is now empty**
@@ -97,15 +97,15 @@ Second case table (wrapper label, after the `.claude-corp` line):
 Run: `diff -u ccd/statusline-command.sh ~/.claude/statusline-command.sh && echo IDENTICAL`
 Expected: `IDENTICAL`
 
-- [ ] **Step 4: Add `.claude-dev0` to install-session-hooks.sh homes**
+- [ ] **Step 4: Add `.claude-lab0` to install-session-hooks.sh homes**
 
 In `ccd/install-session-hooks.sh`, the default homes list currently reads:
 ```bash
-homes=("$HOME/.claude" "$HOME/.claude-personal" "$HOME/.claude-corp" "$HOME/.claude-gpt")
+homes=("$HOME/.claude" "$HOME/.claude-home" "$HOME/.claude-acme" "$HOME/.claude-gpt")
 ```
 Change to:
 ```bash
-homes=("$HOME/.claude" "$HOME/.claude-personal" "$HOME/.claude-corp" "$HOME/.claude-gpt" "$HOME/.claude-dev0")
+homes=("$HOME/.claude" "$HOME/.claude-home" "$HOME/.claude-acme" "$HOME/.claude-gpt" "$HOME/.claude-lab0")
 ```
 (Quote the ACTUAL current line from the file — if it differs from the above, keep its shape and append the dev0 entry. The loop body already skips non-existent dirs: `[[ -d "$dir" ]] || continue`, so machines without dev0 are unaffected.)
 
@@ -118,7 +118,7 @@ Expected: `OK`
 
 ```bash
 git add ccd/statusline-command.sh ccd/install-session-hooks.sh
-git commit -m "fix(ccd): the repo's statusline and hook installer catch up with the live host's claude-dev0 support"
+git commit -m "fix(ccd): the repo's statusline and hook installer catch up with the live host's claude-lab0 support"
 ```
 
 ---

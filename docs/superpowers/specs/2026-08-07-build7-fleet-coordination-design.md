@@ -17,7 +17,7 @@ exactly this build's goals. Scoped from five read-only scouts against
 ## 0. Four measured facts that shaped everything
 
 1. **Two boxes.** The server (and therefore SQLite) lives on `<server-host>`;
-   ccd, the registry, tmux and every session live on `openclaw`. The agent
+   ccd, the registry, tmux and every session live on `<fleet-host>`. The agent
    link between them is **read-only for files** (writes: `.cc-clips` only) —
    the server mutates the registry only through whitelisted ccd verbs.
    `README.md`'s "local mode is what's deployed" is false

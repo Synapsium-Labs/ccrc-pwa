@@ -65,7 +65,7 @@ and use hookstate only as a secondary guard.
 
 ## 3. What was measured
 
-Every item was produced by a command on the live fleet box (`openclaw`) on 2026-08-27, or read from a
+Every item was produced by a command on the live fleet box (`<fleet-host>`) on 2026-08-27, or read from a
 cited `file:line`. Claims marked **[re-verified]** were independently re-run by the author after the
 review.
 
@@ -74,7 +74,7 @@ review.
 | Fact | Evidence |
 |---|---|
 | Installed **0.9.9**; latest **0.9.50**, 218 releases | `graphify --version`; PyPI `graphifyy` JSON **[re-verified]** |
-| Skill absent from `.claude-dev0` and `.claude-glm`, present in five homes | `cat ~/.claude-*/skills/graphify/.graphify_version` **[re-verified]** |
+| Skill absent from `.claude-lab0` and `.claude-alt1`, present in five homes | `cat ~/.claude-*/skills/graphify/.graphify_version` **[re-verified]** |
 | **Zero** graphify references in ccrc source | `grep -rin graphify ccd/ccd ccd/ccrc server/src agent/src shared` → 0 **[re-verified]** |
 | No doctor check for skills or hooks exists | `CCRC_DOCTOR_CHECKS`, `ccd/ccrc-doctor-checks:166-192` |
 
@@ -89,7 +89,7 @@ review.
 | Staleness probe, 58 trees | **354 ms** |
 | Corpus guard (`detect()` + `git ls-files`) | 1.67 s / 30 MB |
 
-**Unmeasured and load-bearing:** MekWarLive is 5,837 code files (~8× ccrc) and its wall time has
+**Unmeasured and load-bearing:** project-f is 5,837 code files (~8× ccrc) and its wall time has
 never been observed — the rebuild log carries no timestamps, so any "~3 min" figure is extrapolation
 from file count. This sizes O2.
 
@@ -285,7 +285,7 @@ deploy re-swaps all five homes and accretes a `~/ccrc-backups/<ts>/`.
 **Deltas from the worker installer**, stated rather than implied: SRC derived from the pinned
 interpreter's `graphify.__file__`; **no** `CCRC_SKILL_SRC` default into `$REG`; a call site **outside**
 `_inst_skills`' `for name in` loop; `NAME=graphify`; **realpath de-duplication** (which
-`install-worker-skill.sh` does not have — `.claude-gpt` and `.claude-kimi` symlink `skills/` into
+`install-worker-skill.sh` does not have — `.claude-gpt` and `.claude-alt2` symlink `skills/` into
 `~/.claude/skills`); and a real graphify arm in `ccrc uninstall` (`:4581-4583` hardcodes the
 worker/coordinator filenames and removes nothing from rostered homes).
 
@@ -648,7 +648,7 @@ and it produced a dangling cross-reference in revision 2 of this very document:
 - **G-2 — `ccrc-pwa` has no `graphify-out` ignore rule.** Neither `.gitignore` nor `.git/info/exclude`;
   `git check-ignore graphify-out/` exits 1 today with 5 live worktrees. Any graph built in one would
   make that workspace unremovable at three seams.
-- **G-3 — skill drift is invisible.** Absent from `.claude-dev0` and `.claude-glm`, present in five
+- **G-3 — skill drift is invisible.** Absent from `.claude-lab0` and `.claude-alt1`, present in five
   homes, and no check can see it.
 
 **Upstream graphify defects (recorded, worth reporting; not ccrc D-numbers):**
@@ -673,7 +673,7 @@ adopts it unless overruled.
 - **O2 — sweep scope and per-pass budget.** First pass is **~19 cold builds plus ~41 rebuilds** —
   every pre-existing store lacks an engine stamp, so C.1's probe marks all of them stale on day one
   (the "~15 refreshes" figure died with revision 1's HEAD-only probe). ccrc costs 24.7 s;
-  **MekWarLive's wall time is unmeasured**. Recommendation: all trees, serialized, with a per-pass
+  **project-f's wall time is unmeasured**. Recommendation: all trees, serialized, with a per-pass
   rebuild budget so the first pass drains over hours rather than blocking. Note C.1 makes a pin bump
   cost a full-fleet pass too.
 - **O3 — sweep interval and idle-gate strength.** A tree goes stale exactly when its session commits —
@@ -710,9 +710,9 @@ a `.md` file to a source file: **0, 0, and 0**. Doc↔code edges of any kind: 1,
 every one linking YAML or HTML to markdown, never a spec to a symbol. The spec↔code bridge is the
 entire reason to want semantics on an SDD corpus.
 
-**What 1,104,895 measured tokens bought** (synapsium-platform, `cost.json`): 300 of 3,954 nodes (7.6%)
+**What 1,104,895 measured tokens bought** (project-k, `cost.json`): 300 of 3,954 nodes (7.6%)
 and **47 of 5,087 edges (0.92%)**, ~40 of those from five PNG screenshots. **262 of 300 semantic nodes
-have degree 0** — unreachable by `explain`, `path`, `affected`. expoAI: **1,244/1,264 orphaned (98%)**.
+have degree 0** — unreachable by `explain`, `path`, `affected`. project-h: **1,244/1,264 orphaned (98%)**.
 
 **What AST gives free:** markdown extracted deterministically into a heading tree
 (`extract.py:12848`); 951 of synapsium's 979 document nodes are AST-origin. `affected "FleetSession"`

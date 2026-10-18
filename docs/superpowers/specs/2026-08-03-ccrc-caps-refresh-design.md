@@ -160,7 +160,7 @@ here.
   corruption — `cmd_supervise` is a single loop already resident past the point new
   bytes would be read — but the class is real and an atomic install removes it
   rather than shrinking it.
-- **`CCRC_SSH_KEY` defaults to a key that does not exist on openclaw**
+- **`CCRC_SSH_KEY` defaults to a key that does not exist on the fleet box**
   (`<your-key>`; the fleet host calls it `<your-key>`), a difference
   `deploy.sh:4-6` documents without acting on. Deploying from the fleet host fails
   at first contact with a bare `Permission denied (publickey)`.

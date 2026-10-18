@@ -4,7 +4,7 @@ Spec: `docs/superpowers/specs/2026-09-22-child-workspace-reclamation-design.md`
 Plans: `docs/superpowers/plans/2026-09-22-child-reclamation-wave{1,2,3,4,5}-*.md`
 Contract: `docs/superpowers/programs/child-reclamation-contract.md` (cross-wave names and types; §7–§8 rulings)
 Home project: `ccrc-pwa`   Coordinator: `ccrc-pwa-calm-mesa`   Workspace: **a fresh one per wave**
-Ticket: CCR-15
+Ticket: #166
 
 **What this program is.** A workspace the coordinator dispatches is a *child*: declared as one by the server
 at creation, never tended by a human, used for at most one PR, and reclaimed with its artifacts when its run
@@ -62,7 +62,7 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 - **2026-10-12 18:51 — THE PATH-IDENTITY W0 SPEC IS MERGED: #360 = `837a099c0` (18:48:11Z). The operator wrote "360 merged" and named no exception.**
   - **How I read the merge.** It approves the design with its recommendations. Each row marked Operator takes its recommended option as the working ruling; each row marked Coordinator stands as proposed. The operator can change any of them before the wave that builds it dispatches; a change after dispatch becomes a fix round. The full list is in `docs/superpowers/programs/path-identity.md`'s first entry.
-  - **SW6 is A: the collector's Settings switch is THIS programme's wave 10**, because it changes what arms CCR-15's destructive lane. It runs under this ledger and this contract (a new contract section). That supersedes the 11:39 entry's "run 380 closes final, which retires CCR-15 complete": CCR-15 now ends with wave 10.
+  - **SW6 is A: the collector's Settings switch is THIS programme's wave 10**, because it changes what arms #166's destructive lane. It runs under this ledger and this contract (a new contract section). That supersedes the 11:39 entry's "run 380 closes final, which retires #166 complete": #166 now ends with wave 10.
   - **The switch's working rulings:** SW1 A (marker OR Settings, with a generation-journaled marker latch and a connection-bound fleet node), SW2 option 3 (`409 marker-still-controls` for Off while the marker controls the lane), SW3 option 1, SW4 option 2 (`403 sign-in-unarmed` for a Live request while sign-in is dark), SW5 option 1 (its own Settings section), SW7 A (a stored Live re-arms only after the same node is measured on the new connection).
   - **Sign-in is ARMED on the server box (measured 18:5x, anonymous reads only):** `GET /api/auth/status` answers `mode: "passphrase"` with 3 passkeys enrolled, and `GET /api/updates` without a session answers 401. So SW4's refusal would not fire on this box today; it stays as the rule for a box whose gate is dark.
   - **The path-identity programme opens now** with its own ledger. Its wave 1 is W1a (the server's id gate). Run 380 closes once wave 10's run and that programme's first run are open.
@@ -71,8 +71,8 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 - **2026-10-12 11:39 — THE OPERATOR RULED: "yes proceed with next work, and yes add setting to the settings UI".**
   - **Question 3 is answered yes:** I start the path-identity W0 spec and the W1 planning now.
   - **The collector's switch goes into the Settings UI.** It is designed in the W0 spec, on the stall-watch settings precedent (spec 2026-10-05), and built as a wave of the follow-up.
-  - **Question 1 (programme shape) is still unanswered.** I take the default that contract R71 already states: the path-identity work is a follow-up PROGRAMME of its own, not CCR-15 waves 10+.
-    - Run 380 stays at `merging` until that programme's first run opens. Then it closes final, which retires CCR-15 complete.
+  - **Question 1 (programme shape) is still unanswered.** I take the default that contract R71 already states: the path-identity work is a follow-up PROGRAMME of its own, not #166 waves 10+.
+    - Run 380 stays at `merging` until that programme's first run opens. Then it closes final, which retires #166 complete.
     - The operator can still redirect before then.
 
 - **2026-10-12 11:19 — ALL THREE ORPHANS ARE COLLECTED.**
@@ -114,7 +114,7 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
   - **Server box.** At 08:01 it read `[current]` at v0.0.149 (`28e8dc1b`).
   - **Measured read-only.** `ccrc rollout --to v0.0.149 --check` every 2 minutes from 07:30, plus `ccrc version` and `~/.ccrc/update.json`.
   - **The lane is SHADOWED.** `$REG/collect-lane-live` is absent (checked with `ls` only), and nothing in the tree writes it.
-  - **Run 380 stays at `merging`.** It closes final only after the next run opens, per the operator's answer on programme shape. Closing it with no other run open would retire CCR-15.
+  - **Run 380 stays at `merging`.** It closes final only after the next run opens, per the operator's answer on programme shape. Closing it with no other run open would retire #166.
 
 - **2026-10-12 07:29 — REVIEW 388 IS DONE (4281, acked; run 388 closed `done`, released; report `reviews/review-388-ec9d63aa.md`). WAVE 9 IS MERGED: #354 = `28e8dc1b2` (07:28:38Z), a squash of `ec9d63aa7`, by `--admin --match-head-commit`. Run 380 is at `merging`.**
   - **No class (a) finding.** 34 agents ran, with no lens unverified.
@@ -200,7 +200,7 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
       - W4, optional: temp-root identity format v2.
   - **Gates.** Every `ccd/ccd` edit waits for workspace-lifecycle wave 6 (#351) to merge. The ladder and tail are shared with `ws-expire`, so quiet-river consents per wave.
   - **Thirteen operator questions,** led by:
-    - the programme's shape (its own programme, or waves 10+ of CCR-15);
+    - the programme's shape (its own programme, or waves 10+ of #166);
     - entry-time identity and the legacy-row policy;
     - bind and mountinfo scope;
     - whether `ws-reclaim` may use a refusal-only cwd probe;
@@ -436,7 +436,7 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 - **2026-10-11 12:41 — wave 9's pre-flight is measured; its draft rulings (contract §16, R82–R92) are under attack.**
   - **The pre-flight.** Workflow `wf_4de39178-36a`: four Opus readers (the composer, SAFETY, attention and pacing,
     overlaps and size) and a completeness critic, read-only at `d0c2b7803`. 5 agents, 0 errors. Evidence:
-    `ccr15-evidence-archive/wave9-preflight/preflight.json`.
+    `#166-evidence-archive/wave9-preflight/preflight.json`.
   - **What wave 7 left for the lane.** The builders, `COLLECT_CAP`, the agent grant and the 240 s runner row exist, and
     nothing composes them. The agent's read grant already covers both listings, so the wave needs no agent, ccd or PWA
     edit: collector attention can ride `ChildReclaimAttention`, whose PWA reader keeps any item whatever its `kind`.
@@ -957,7 +957,7 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 - **2026-10-08 20:15 — wave 8's plan is ASSEMBLED, and its attack runs.** The plan is
   `docs/superpowers/plans/2026-10-08-child-reclamation-wave8-reclaim-server-half.md`, 8,371 lines, at `740a2f220`.
   - **The drafts.** Workflow `wf_3a0bcd5e-8ba` ran seven Opus drafters.
-  - **The rulings.** Every draft item is ruled in `ccr15-evidence-archive/wave8/drafts-rulings.md`, H1 to H8 and the
+  - **The rulings.** Every draft item is ruled in `#166-evidence-archive/wave8/drafts-rulings.md`, H1 to H8 and the
     per-task rulings. The main ones:
     - H1: dispatch only after wave 7 merges;
     - H3: Task 6 owns the `stuck` reading and wave 7's pin flip;
@@ -976,7 +976,7 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 - **2026-10-08 18:50 — wave 8's pre-flight is RULED: contract §15, R73 to R80.** Three Opus attackers (`wf_8b58bf16-6e8`,
   SAFETY at xhigh) broke six of the draft's rulings and amended the rest. The attack is
-  `ccr15-evidence-archive/wave8/attack.json`. What changed:
+  `#166-evidence-archive/wave8/attack.json`. What changed:
   - **X1 holds R63 literally.** On an older ccd, a LICENSED request is never spent: it defers `unsupported`.
     - An unreadable generation becomes the existing doubt word `identity-unmeasured`, never a silent re-sighting.
     - Close's requests skip the compare. That is safe, because close's minting run can never re-mint.
@@ -997,14 +997,14 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
     without waiting for the expiry. The terms: append-only edits in the worker's own regions, README anchors
     re-pointed by content, run 320's lines never rewritten, and the second lander merges main and re-runs the
     whitelist suites, single-definition and the README census. The fallback dispatch armed for 21:29Z was stopped.
-    The brief as dispatched is `ccr15-evidence-archive/wave7-brief-as-dispatched.md`.
+    The brief as dispatched is `#166-evidence-archive/wave7-brief-as-dispatched.md`.
   - **A live instance of R67's adoption residual.** The slug was recycled from review 341's reviewer, whose
     2.21 GiB temp root the wave-6 tail KEPT at 13:42, refused over a planted `.git`. The new child's `_child_tmpdir`
     ran `mkdir -p` onto that leaf: its birth time is 10:34:45, the reviewer's spawn, and run 347's fresh witness now
     binds that old inode. Nothing is lost, because R64 Rule 1 still refuses the planted `.git` at every later
     removal, so the leaf stays the operator's. Measured read-only: four witnesses now stand in `$REG/tmproots`, all
     for children spawned since v0.0.124.
-  - **Wave 8.** Its pre-flight is back (`ccr15-evidence-archive/wave8/preflight.json`). Its main finding: wave 7's
+  - **Wave 8.** Its pre-flight is back (`#166-evidence-archive/wave8/preflight.json`). Its main finding: wave 7's
     ccd binding does NOT close X1 alone, because the executor audits and acts back to back after the licence has
     waited in the queue. The server must carry the licensed generation and compare it before the audit. Quiet-river
     was asked three things about wave 5 (4033): one shared kept-leaf reader, the never-stopping tier for
@@ -1037,7 +1037,7 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
     #319's state is measured.
 
 - **2026-10-08 17:44 — wave 7's plan attack is back; the fixes are being applied.** The attack is
-  `ccr15-evidence-archive/wave7/plan-attack.json`.
+  `#166-evidence-archive/wave7/plan-attack.json`.
   - **The run.** Workflow `wf_aec6389c-9aa` ran 32 agents: four lenses and two refuters per serious finding. It raised
     33 findings.
   - **Confirmed, and important:**
@@ -1072,7 +1072,7 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 - **2026-10-08 15:58 — wave 7's task drafts are in and ruled; reconciliation runs.**
   - **The drafts.** Workflow `wf_cf7b2003-df7` ran nine Opus drafters on Tasks 1 to 9, about 12,000 lines in all, with
-    87 open items and 13 departures. Every one is ruled in `ccr15-evidence-archive/wave7/drafts-rulings.md`.
+    87 open items and 13 departures. Every one is ruled in `#166-evidence-archive/wave7/drafts-rulings.md`.
   - **What the rulings change:**
     - the `collect` act is declared at the start of Task 4, before anything journals it;
     - each new word is declared with its first journal site;
@@ -1096,7 +1096,7 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 - **2026-10-08 14:29 — wave 7's pre-flight is RULED: contract §14, R65 to R72.** Four Opus attackers (`wf_93877eb5-7f3`,
   SAFETY at xhigh) broke the draft in nine places, and every break is closed in the binding text. The attack is
-  `ccr15-evidence-archive/wave7-preflight/attack.json`.
+  `#166-evidence-archive/wave7-preflight/attack.json`.
   - **Resume authority** moves from the lifecycle journal to a quarantine record. ccd has no journal reader, and D7
     forbids the journal from gating an act. The record is `$REG/tmpquarantine/<id>.<ns>.<pid>`, written before the
     move and dropped LAST, so no slot can be orphaned.
@@ -1117,7 +1117,7 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
   - **Next.** quiet-river is told (R72). Then: wave 8's run, both blocks, and the wave 7 plan, prototype-first.
 
 - **2026-10-08 14:03 — wave 7's pre-flight (run 347) is measured; its draft rulings are under attack.** The evidence
-  and the draft are in `ccr15-evidence-archive/wave7-preflight/`.
+  and the draft are in `#166-evidence-archive/wave7-preflight/`.
   - **How it was measured.** Workflow `wf_429ad81b-9cd` ran five Opus readers and a completeness critic, read-only, at
     `b0647d850`.
   - **The collector has nothing to collect yet.** `$REG/tmproots` does not exist: the witness writer first shipped
@@ -1155,7 +1155,7 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
     (`wf_429ad81b-9cd`, read-only) was started at 13:42.
 
 - **2026-10-08 13:08 — review 346 ruled clean of class (a); #326 MERGED as `b0647d850` at the reviewed tip
-  `d12b6467e`.** The report is `ccr15-evidence-archive/reviews/review-346-d12b6467.md`, and run 346 closed `done`.
+  `d12b6467e`.** The report is `#166-evidence-archive/reviews/review-346-d12b6467.md`, and run 346 closed `done`.
   - **Review 346.**
     - The merge's code resolution is an exact union of both sides.
     - `ccd/ccd` and `ccd/ccrc` have no non-comment change beyond the stamp, proven four ways.
@@ -1182,7 +1182,7 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
     quiet-river (4011) were told of the merge.
 
 - **2026-10-08 12:22 — the integration round's wave-done is verified (mail 4007); run 291 is at `awaiting-review` on
-  `d12b6467e`, and scoped review run 346 is opened.** The evidence is under `ccr15-evidence-archive/wave6-int-done/`.
+  `d12b6467e`, and scoped review run 346 is opened.** The evidence is under `#166-evidence-archive/wave6-int-done/`.
   - **Measured.** The tip is pushed, PR #326's head equals it, and main `669b83055` is an ancestor. The round has two
     commits:
     - `de01c465d` merges main. `ccd/ccd` and `ccd/ccrc` are unchanged by it.
@@ -1194,13 +1194,13 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
     `readme-api-anchors-remeasured-on-merge` points it at the merged file's lines instead. That departs from the
     integration ruling's "byte for byte", not from the plan, so it takes no deviation number. 4463 stays unused, and
     the block ends there.
-  - **Review run 346.** Its brief is `ccr15-evidence-archive/review-291-int-brief.md`, scoped to the two commits. It
+  - **Review run 346.** Its brief is `#166-evidence-archive/review-291-int-brief.md`, scoped to the two commits. It
     adds a SAFETY lens at xhigh asking whether #328's merged code composes or queues `ws-reclaim` or `ws-expire` on a
     path wave 6's checks do not expect. Its dispatch waited on the daily cap, and it was dispatched at 12:39 to
     `ccrc-pwa-warm-basin`, on the first freed slot.
 
 - **2026-10-08 12:03 — review 341 ruled: wave 6 is accepted on its code; an integration round merges main (mail
-  4004).** Rulings: `ccr15-evidence-archive/reviews/integration-291-rulings.md`.
+  4004).** Rulings: `#166-evidence-archive/reviews/integration-291-rulings.md`.
   - **Review 341.** It read fix round 1 at `750910110`. 41 findings were raised by 139 agents, and 11 survived the
     refute pass, which merge into 9. None is class (a). F1's SAFETY property holds:
     - review 335's case keeps the leaf under reclaim and under expire, in the temp root and in clips;
@@ -1223,7 +1223,7 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 - **2026-10-08 08:01 — fix round 1's wave-done verified (mail 3983); run 291 is at `awaiting-review` on
   `750910110`.** The wave-done's fingerprint was re-measured, and the evidence is archived under
-  `ccr15-evidence-archive/wave6-fr1-done/`.
+  `#166-evidence-archive/wave6-fr1-done/`.
   - **Measured.** The tip is pushed, PR #326's head equals it, and the merge-tree against main `3c33d3218` is clean.
     CI on the new tip was still running.
   - **Suite.** The full suite ran on code tip `bf8c542fb`, with server, agent and pwa all green apart from two reds:
@@ -1242,7 +1242,7 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
     second merges main and restamps, then re-runs `expiry-lane-prose`, `ccd-reg-get-census` and the session-hook
     citation census.
   - **Next.** Scoped review run **341** is opened, and its brief is
-    `ccr15-evidence-archive/review-291-fr1-brief.md`. The panel is held out, with lens 0 SAFETY at xhigh on F1. Its
+    `#166-evidence-archive/review-291-fr1-brief.md`. The panel is held out, with lens 0 SAFETY at xhigh on F1. Its
     dispatch waits on the rolling daily cap; the next slot is 08:47Z. F3's twin went to quiet-river (3984), and
     amber-river was told to stay idle (3985).
   - **10:34 — run 341 dispatched to `ccrc-pwa-clear-summit`.** The cap refused it twice first, at 08:47 and 09:58,
@@ -1280,7 +1280,7 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
   - 4463 stays in reserve.
 
 - **2026-10-08 01:28 — run 291 goes to fix round 1 (mail 3955). The rulings are
-  `ccr15-evidence-archive/reviews/fix-round-291-1-rulings.md`, and contract §13 gains R64.**
+  `#166-evidence-archive/reviews/fix-round-291-1-rulings.md`, and contract §13 gains R64.**
   - **How the ruling was checked.** Before ruling, the workflow `wf_a685fa5e-319` (two Opus agents, one Sonnet, all
     read-only) checked the F1 design. It corrected the coordinator's draft, which had a breadcrumb trigger with
     "refuse on any `.git`". That draft would have held about 13% of temp roots and missed a tree moved AS the leaf, a
@@ -1339,7 +1339,7 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
     holds a checkout" would leak about 13% of them.
 - **2026-10-07 22:20 — review run 335 is dispatched to `ccrc-pwa-brisk-basin`.** The daily cap refused at 24 of 24,
   and the background retry dispatched at the 22:20 age-out. The brief is
-  `ccr15-evidence-archive/review-291-brief.md`: the held-out panel, plus the plan's four lenses (SAFETY and SECURITY
+  `#166-evidence-archive/review-291-brief.md`: the held-out panel, plus the plan's four lenses (SAFETY and SECURITY
   mandatory), and the a/b/c classes. Each finding is classed (a) shipped behaviour, (b) shipped prose or
   (c) record only. X2 item 8 went to quiet-river (3939).
 - **2026-10-07 21:57 — wave 6's wave-done (3938) is verified; run 291 is at `awaiting-review`; the departures are
@@ -1356,14 +1356,14 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
   - **Numbers.** The worker named 37 slugs. Each substantive departure has its own number: 4126 and 4127 (ruled at
     dispatch), and 4128, 4129, 4130, 4131, 4132, 4133, 4134, 4135 and 4136 (fail-closed additions). Each task's
     plan-text corrections share one number: 4137, 4138, 4139, 4140, 4141, 4142, 4143, 4144, 4145, 4146 and 4147.
-    4148 and 4149 are reserve. The table is `ccr15-evidence-archive/wave6-done/deviation-numbers.md`. Each number is
+    4148 and 4149 are reserve. The table is `#166-evidence-archive/wave6-done/deviation-numbers.md`. Each number is
     defined in the plan at the fix round.
   - **For workspace-lifecycle (X2, item 8).** `_ws_expire_locked` has no recompute-to-pin branch-state check, so
     `ws-expire` keeps that window in both directions. This goes to quiet-river.
   - **Two wave-3 defects found by wave 6's reviews** go to wave 7's pre-flight:
     - rung 8 reads git's silent omission of an unreadable gitdir or `worktrees/` as "no record";
     - the ladder's `_WS_NORMALISE_WHY` refusal detail is uncapped.
-- **2026-10-07 16:47 — the operator's fleet disk cleanup reaches CCR-15 (ops notice 3890; no reply wanted).**
+- **2026-10-07 16:47 — the operator's fleet disk cleanup reaches #166 (ops notice 3890; no reply wanted).**
   - **What it did here.** It removed reclaim-row-placement-safety's review scratch and run 174's
     `swift-hollow` scratch directory. It hand-ran `ws-expire` on four archived, unmarked
     workspaces of this programme's era: `amber-summit`, `keen-hollow`, `plain-ridge` and `warm-hollow`. Their attic
@@ -1488,7 +1488,7 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
   - **The deploy.** Through the updater only, observed read-only. v0.0.105 is building, and the fleet box is on
     v0.0.104 until it moves. Run 260 closes once the server box converges.
   - **Wave 6's dispatch.**
-    - Brief: `ccr15-evidence-archive/wave6-brief.md`, with planSha `26e3318b` and 15 items (Tasks 0 to 14).
+    - Brief: `#166-evidence-archive/wave6-brief.md`, with planSha `26e3318b` and 15 items (Tasks 0 to 14).
     - Route: opus · xhigh, subagent sonnet, workflows on, compact 40.
     - The brief also carries review 303's Task 13 additions (G1, G4) and the overlaps as re-read: run 302's claim 1055
       on `ccd/ccrc` and `README.md`; workspace-lifecycle wave 3b (run 290) and stall-watch-settings W1 (run 295), both
@@ -1538,7 +1538,7 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
     3943 and 3944 are defined in the plan. 3945 is unused.
   - **The suite.** `red`, with no real break: load reds that are green alone, plus three files red on a clean
     origin/main.
-  - **Review run 303.** Its brief is `ccr15-evidence-archive/review-260fr1-brief.md`. It covers F1, F2/F18, F4 (with
+  - **Review run 303.** Its brief is `#166-evidence-archive/review-260fr1-brief.md`. It covers F1, F2/F18, F4 (with
     the SAFETY lens, Opus xhigh) and F11/F12, then the merge's `--remerge-diff`, then the rest of the round's diff.
     Each finding is classed as shipped behaviour, shipped prose or record only.
   - **Dispatch.** The rolling daily cap refused at 24 of 24. The background retry dispatched it at 17:32:11, once
@@ -1662,7 +1662,7 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 - **2026-10-06 08:49 — wave 6's pre-flight done. Rulings R48–R59 are drafted as contract §12; the plan is
   drafting.**
   - **The pre-flight.** Six read-only Opus scouts (workflow `wf_9703ecf7-bc3`) read `77c11245`, #290 and the live box.
-    The evidence is in `.superpowers/sdd/ccr15-evidence-archive/wave6-preflight/`.
+    The evidence is in `.superpowers/sdd/#166-evidence-archive/wave6-preflight/`.
   - **R38's first measurement.** Wave 3's tail removed `~/.cc-tmp/ccrc-pwa-swift-hollow` while the killed pane's
     processes still ran with `TMPDIR` set to it. One of them recreated it 3.7 s after `reclaim done`, at
     22:12:10.735 on 2026-10-04; the pane's scope ended 2 ms later. The tail asks only whether tmux still has the
@@ -1706,7 +1706,7 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
     on the detail, as contract §12; the plan; an attack review; a docs PR; and the dispatch.
 - **2026-10-06 08:30 — #286 merged (WL wave 3, `77c11245`, 08:28); wave 6 is clear to dispatch; #290's CI is green.**
   - **WL's notice (mail 3655).**
-    - The CCR-15 spec now carries the one agreed hunk in the "Not changed, deliberately" passage (about :778 to
+    - The #166 spec now carries the one agreed hunk in the "Not changed, deliberately" passage (about :778 to
       :785).
     - WL's review 288 (F4) adds one more qualification there: ws-restore also refuses `in-progress` on a `.reaping`
       breadcrumb that cannot be read. WL carries that to its wave 3b's first commit, and quiet-river says before 3b
@@ -1721,7 +1721,7 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
       in 3622 and 3623.
     - Review 285 is still reading the pre-merge tip, and the worker holds pushes until it reports.
   - **Wave 6** now gets its plan and pre-flight against `77c11245`, and its run opens before run 260 closes.
-- **2026-10-06 05:48 — workspace-lifecycle amends one CCR-15 text (mail 3632; answered in 3633).**
+- **2026-10-06 05:48 — workspace-lifecycle amends one #166 text (mail 3632; answered in 3633).**
   - **The finding.** WL's review 284 found that #286 falsifies the spec's "Not changed, deliberately" sentence
     (about :780). #286 ships ws-reap's `expire-in-progress` refusal and a spawn-path refusal that covers ws-restore.
   - **WL's fix (their D-3965).** bright-canyon names the two refusals there, points at WL's §5.3, and makes the
@@ -1777,7 +1777,7 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
     - the full server suite in twelve shards.
     The first dispatch was refused, and nothing was touched: ccd refused `subagent: opus`, because the roster's
     `CCRC_SUBAGENT_CLASSES` is `haiku sonnet`. The route sent was `{opus, xhigh, sonnet, workflow on, compact 40}`.
-    The brief is at `.superpowers/sdd/ccr15-evidence-archive/review-285-brief.md`. Worker status mail 3629 says
+    The brief is at `.superpowers/sdd/#166-evidence-archive/review-285-brief.md`. Worker status mail 3629 says
     to hold pushes and gives the numbers.
 - **2026-10-06 04:51 — `ccrc-pwa-quiet-river` agreed to the overlap rule (mail 3622, replying to 3560).**
   - Rules 1–4 stand as written.
@@ -1998,7 +1998,7 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
     3943, 3944 and 3945. Run 174 then closed `done`, not final, with `prPhase` `merged`, answering `childReclaim:
     queued` for `swift-hollow`.
   - **Evidence kept.** The review reports for runs 212 to 217, 222, 254 and 258, and `swift-hollow`'s gitignored SDD
-    directory and reports, are copied to `.superpowers/sdd/ccr15-evidence-archive/` in the coordinator worktree
+    directory and reports, are copied to `.superpowers/sdd/#166-evidence-archive/` in the coordinator worktree
     (gitignored, never reclaimed). Their originals go when their children are reclaimed.
   - **What goes live with v0.0.79:** the sweep, once both boxes advertise `reclaim-v1` and `reclaim-pause-v1`. It
     starts on the backlog: 62 child-marked rows sat stopped on the fleet box at 21:25, including the reviewers of this
@@ -3059,4 +3059,4 @@ compact:'40'}`; the plan's SAFETY tasks run on Opus implementers and reviewers. 
 SAFETY lens and SECURITY lens beside the held-out panel.
 
 **After wave 10 merges and deploys,** the operator confirms Settings Live for the fleet node and then removes the
-marker by hand; the next coherent listing retires it. CCR-15 ends when run 400 closes final.
+marker by hand; the next coherent listing retires it. #166 ends when run 400 closes final.

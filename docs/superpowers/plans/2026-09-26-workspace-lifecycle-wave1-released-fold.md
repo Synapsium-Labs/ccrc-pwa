@@ -20,7 +20,7 @@
 - **No new route, no new `ccd` verb, no change to `POST /api/sessions/:id/archive`.** "Archive all" calls `api.archive(id)` with the id ALONE — never `force`, never a second argument — one row at a time, and reports every refusal with the server's own reason (`apiErrorText`), in a toast that stays up until dismissed. In this wave a busy refusal arrives as today's generic 502 with `ccd`'s stderr; wave 2 gives it a typed reason.
 - **Nothing archives anything on its own** (spec §7). The fold and its button are the operator's; there is no sweep, timer or lane in this wave.
 - **Unchanged:** board placement (`boardPlacement`, a released worker renders on its own card), the bucket ladder (`sessionBucket`, M10) and the bucket chips' counts (they still count released rows: folded, not removed), `nestFleet`, the Archived fold's own rules and its grandfathered CSS identity.
-- **Children:** "Archive all" skips a row whose `releasedFrom.child` is true — the registry's CCR-15 reading is `child` or `unreadable` — and reads the child flag ONLY there (`archivableReleased`), never `FleetSession.child`: one decision, one field.
+- **Children:** "Archive all" skips a row whose `releasedFrom.child` is true — the registry's #166 reading is `child` or `unreadable` — and reads the child flag ONLY there (`archivableReleased`), never `FleetSession.child`: one decision, one field.
 - **CSS gates.** Every new colour rule is either measured or REGISTERED in `pwa/design/audit.mjs`'s `INHERITED_GROUNDS`; never widen a selector that is a grandfathered identity (`.proj-archived-toggle` is one — joining it made two new uncovered identities, measured). Every new control carries `min-height: var(--tap-min)`.
 - **Cited files pay the citation tax (S6-R11).** `shared/api.ts`, `README.md` and `server/test/single-definition.test.ts` are cited by line by the corpus `server/test/session-hook.test.ts` audits. README is REPAIRED BY CONTENT with `readme-reanchor.py` (Task 1 Step 6), never by adding a delta to a number; the census is NOT edited (its measured movement after the repair is zero). No rule is widened and no D-number is spent.
 - **Locate every edit by content.** Line numbers in this plan are hints. Every "Find" block below was generated from, and replayed against, `df4fe069`; if a block is absent or not unique on your base, `main` moved under it: stop and report rather than improvising an anchor.
@@ -72,13 +72,13 @@ The five inputs the spec implies that a person using this will meet first, each 
 
 Measured 2026-09-26 on a prototype of this plan's exact edits — local branch `proto/wl-wave1` at `397a62d6`, never pushed — over `df4fe069` (`origin/main` `dcac4691` plus the spec). The plan's blocks were then replayed onto a clean `df4fe069` task by task and reproduce the prototype byte for byte, file modes included (by the planner, and independently by the executability reviewer). They are why the tasks look the way they do.
 
-1. **`FleetSession.child` already exists** (CCR-15 wave 2): the registry's three-way `ChildMark`. `ReleasedFrom.child` is derived from it at the single write site, `r.child.kind !== 'none'`, and the PWA reads the child flag only through `releasedFrom`.
+1. **`FleetSession.child` already exists** (#166 wave 2): the registry's three-way `ChildMark`. `ReleasedFrom.child` is derived from it at the single write site, `r.child.kind !== 'none'`, and the PWA reads the child flag only through `releasedFrom`.
 2. **Every terminal run on the live box has a close time** — 163 of 163 `done`/`failed` rows of 171 (`ccrc-api runs list --closed 1`, 2026-09-26) — but `runs.closedAt` is nullable, so a NULL or unrepresentable close time is doubt for THAT row only (`LastRun.closedAt: null` → `releasedFrom` null), never a failure of the whole read. The run id stays all-or-failure (D-2545's rule).
 3. **The claimant set already has a reader**, `CoordStore.openCoordinatorIds()`; `lastRunBySession` reuses it rather than respelling its predicate, and takes the assembly's session ids (`currentAsksFor(childIds)`'s shape), so its output is bounded by the registry, not by the run history. `EXPLAIN QUERY PLAN` (review round): the subquery reads `COVERING INDEX runs_by_session`, the outer read is a rowid `SEARCH`.
 4. **Adding the member breaks the server build** until `assembleFleet`'s literal sets it: `src/fleet.ts: error TS2741: Property 'releasedFrom' is missing … required in type 'FleetSession'`. So Task 1 writes `releasedFrom: null` there and Task 4 replaces it.
 5. **The fixture sweep is 32 files.** 33 test files carry `child: { kind: 'none' }` (measured at `5b1c58a8`; 31 and 32 before the worker stall watch added `stall-sweep.test.ts`); 32 are full `FleetSession` literals and `server/test/hold-gate.test.ts`'s is a `SessionRecord` (which has no such member — adding one is an excess-property error). The sweep must be idempotent: a plain `sed` run after a new test file already carried the field doubled its key (measured), so Task 1 uses a `perl` negative lookahead.
 6. **The citation tax is README's four anchors, and nothing else.** Task 1's five inserted lines move the purge-refusal vocabulary README points at: `README HAS ITS OWN CENSUS ENTRY` reds (`expected [ 'shared/api.ts:7611-7613', …(3) ] to deeply equal []`) and `CITATION DEBT` reds (`byFile['shared/api.ts']` 1 → 5, the four README sites ENTERED). After the content repair, the census re-measures stated = base = tree for every key, total 195, ENTERED/LEFT empty in all three compositions; Task 8's README paragraph and Task 1's `single-definition` append move nothing.
-7. **CCR-15 wave 3 (#187, open) collides on exactly one hunk: README's anchor sentence**, which both waves re-anchor. `git merge-tree` of the prototype with `origin/ws/plain-summit` → rc 1, `README.md` only; with update wave 4 (#181, `origin/ws/keen-meadow`), with `origin/main`, #188 and #180 → rc 0. Resolved by taking EITHER side of that hunk and running `readme-reanchor.py` on the merged tree: the seven citation cases `7 passed | 328 skipped (335)`, this wave's server files green, both `tsc` clean (measured both ways in review). If wave 3 lands FIRST, every Find block here stays unique and every count holds but the two the plan hedges (the anchor lines; 333 → 335); if this wave lands first, wave 3's own re-point `grep`s match no line this wave adds. Wave 3 appends a union member after `'purge-mechanism-absent'`, which moves that line's `;` — so the script keys on member names, never on a line's end (its first version failed exactly there).
+7. **#166 wave 3 (#187, open) collides on exactly one hunk: README's anchor sentence**, which both waves re-anchor. `git merge-tree` of the prototype with `origin/ws/plain-summit` → rc 1, `README.md` only; with update wave 4 (#181, `origin/ws/keen-meadow`), with `origin/main`, #188 and #180 → rc 0. Resolved by taking EITHER side of that hunk and running `readme-reanchor.py` on the merged tree: the seven citation cases `7 passed | 328 skipped (335)`, this wave's server files green, both `tsc` clean (measured both ways in review). If wave 3 lands FIRST, every Find block here stays unique and every count holds but the two the plan hedges (the anchor lines; 333 → 335); if this wave lands first, wave 3's own re-point `grep`s match no line this wave adds. Wave 3 appends a union member after `'purge-mechanism-absent'`, which moves that line's `;` — so the script keys on member names, never on a line's end (its first version failed exactly there).
 8. **The contrast gate refuses a widened grandfathered selector.** Writing `.proj-archived-toggle, .proj-released-toggle` as one rule made two identities the census did not know (`expected [ …(2) ] to deeply equal []`). The fold gets its own rules, registered under `var(--bg-surface)` beside `.proj-crossing` and `.proj-elsewhere-line`.
 9. **The instrument runs on the server box alone**, as spec §9 now says: `coord.db` carries the runs and the lifecycle journal the server mirrors from ccd's `$REG/.lifecycle/`, and `state-cache.json` carries every registry fact the rows need, as the board last saw them. Opening a WAL database nobody holds open with `mode=ro` makes SQLite create its `-shm`/`-wal` files, owned by the runner — hence "run it as the server's own user" in its docstring.
 10. **A symlinked `pwa/node_modules` reds one case of `typecheck-tests.test.ts`** ("PWA_TSC really is pwa's own installed compiler"): environmental, green on a real `npm ci` — which Task 1 Step 0 does.
@@ -123,7 +123,7 @@ const REL: ReleasedFrom = {
 };
 
 const session: FleetSession = {
-  id: 'demo-amber', wrapper: 'claude', home: '/home/rc', project: 'demo', workdir: '/data/projects/demo',
+  id: 'demo-amber', wrapper: 'claude', home: '/home/u', project: 'demo', workdir: '/data/projects/demo',
   workspace: 'amber', name: null, status: 'idle', statusUpdatedAt: null, limits: null,
   dialogPending: false, version: null, model: null, effort: null, ultracode: false,
   branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
@@ -292,9 +292,9 @@ export const UPDATE_GATE_CAP = 'update-gate';
  *
  *   - `runId`, `program`, `claimedBy`, `closedAt` — the newest run's own columns; `closedAt` is epoch MS.
  *   - `programTitle` — `programs.title`, `null` only if the programme row could not be joined.
- *   - `child` — the registry's CCR-15 child reading (`FleetSession.child`) is `child` or `unreadable`. An
+ *   - `child` — the registry's #166 child reading (`FleetSession.child`) is `child` or `unreadable`. An
  *     unreadable marker reads as a child, the direction that defers: "Archive all" skips children, which leave
- *     through CCR-15's own reclamation.
+ *     through #166's own reclamation.
  *
  * ADDITIVE; `FLEET_PROTO` is not bumped. The LIVE `fleet` frame is CAST, not revived (`pwa/src/stores/fleet.ts`'s
  * `asFleetMsg`), so a row from an older server has no key at all — read it ONLY through `releasedFromOf`.
@@ -381,7 +381,7 @@ def line_of(prefix):
     hits = [i + 1 for i, l in enumerate(api) if l.startswith(prefix)]
     assert len(hits) == 1, f'{prefix!r} matched {len(hits)} lines; stop and report'
     return hits[0]
-# The union arms by MEMBER NAME, never by what ends the line: CCR-15 wave 3 appends a member after
+# The union arms by MEMBER NAME, never by what ends the line: #166 wave 3 appends a member after
 # 'purge-mechanism-absent', which moves its ';' to that new last arm.
 a, b = line_of("  | 'purge-refused'"), line_of("  | 'purge-mechanism-absent'")
 assert b == a + 2 and api[a].startswith("  | 'purge-incomplete'"), 'the three arms are no longer adjacent; stop and report'
@@ -406,7 +406,7 @@ git fetch origin main && git -C "$(git rev-parse --show-toplevel)" diff --quiet 
   docs/superpowers/plans/2026-09-10-graphify-compaction-card-plan-a.md && echo corpus-frozen
 ```
 
-Expected, in order: `2 failed | 5 passed | 326 skipped (333)` (`README HAS ITS OWN CENSUS ENTRY` and `CITATION DEBT` — Pre-flight finding 6); `re-anchored: shared/api.ts:7616-7618, :7656, :7664, :7677` on a `df4fe069` base; `7 passed | 326 skipped (333)` (on a base that already carries CCR-15 wave 3, `7 passed | 328 skipped (335)`); `corpus-frozen`. If `CITATION DEBT` is still red after the script, your insertion moved a FROZEN-corpus anchor, which this plan measured it does not: stop and report — never edit the census to match.
+Expected, in order: `2 failed | 5 passed | 326 skipped (333)` (`README HAS ITS OWN CENSUS ENTRY` and `CITATION DEBT` — Pre-flight finding 6); `re-anchored: shared/api.ts:7616-7618, :7656, :7664, :7677` on a `df4fe069` base; `7 passed | 326 skipped (333)` (on a base that already carries #166 wave 3, `7 passed | 328 skipped (335)`); `corpus-frozen`. If `CITATION DEBT` is still red after the script, your insertion moved a FROZEN-corpus anchor, which this plan measured it does not: stop and report — never edit the census to match.
 
 - [ ] **Step 7: Commit.** Tracked changes by `-u` (never a stray untracked file) and the new file by name:
 
@@ -582,7 +582,7 @@ export interface ReleasedInput extends SessionRuns {
   readonly held: boolean;
   /** An archived workspace belongs to the `Archived (N)` fold, never to this one. */
   readonly archived: boolean;
-  /** The registry's CCR-15 child reading is `child` or `unreadable` (`ReleasedFrom.child`). */
+  /** The registry's #166 child reading is `child` or `unreadable` (`ReleasedFrom.child`). */
   readonly child: boolean;
 }
 
@@ -1157,7 +1157,7 @@ import type { FleetSession, ReleasedFrom } from '../../shared/api';
 Find:
 
 ```ts
-    expect(g.find((x) => x.project === 'intake')!.elsewhere).toEqual([]);
+    expect(g.find((x) => x.project === 'project-n')!.elsewhere).toEqual([]);
   });
 });
 
@@ -1166,7 +1166,7 @@ Find:
 Replace with:
 
 ```ts
-    expect(g.find((x) => x.project === 'intake')!.elsewhere).toEqual([]);
+    expect(g.find((x) => x.project === 'project-n')!.elsewhere).toEqual([]);
   });
 });
 
@@ -1229,12 +1229,12 @@ describe('the Released sub-fold (workspace lifecycle spec §5.1)', () => {
 
   it('released rows count toward unseen, and toward neither busy nor pin while a live row exists', () => {
     const g = groupFleet([
-      s({ id: 'live', home: 'claude2', bucket: 'idle' }),
+      s({ id: 'live', home: 'claude9', bucket: 'idle' }),
       s({ id: 'r', home: 'claude-b', bucket: 'done', bucketSince: 50, releasedFrom: rel(1, 100) }),
     ], [])[0]!;
     expect(g.unseen).toBe(1);                                           // the `done` released row
     expect(g.busy).toBe(0);
-    expect(g.pin).toEqual({ state: 'shared', home: 'claude2' });
+    expect(g.pin).toEqual({ state: 'shared', home: 'claude9' });
   });
 });
 
@@ -1512,7 +1512,7 @@ const rel = (child = false): ReleasedFrom =>
   ({ runId: 1, program: 'lifecycle', programTitle: null, claimedBy: 'coord', closedAt: 100, child });
 
 const s = (over: Partial<FleetSession>): FleetSession => ({
-  id: 'x', wrapper: 'claude2', home: 'claude2', project: 'p', workdir: '/p',
+  id: 'x', wrapper: 'claude9', home: 'claude9', project: 'p', workdir: '/p',
   workspace: 'w', name: null, status: 'idle', statusUpdatedAt: 0, limits: null,
   dialogPending: false, version: null, model: null, effort: null,
   ultracode: false, branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
@@ -1605,7 +1605,7 @@ Expected: `Failed to resolve import "../src/fleet/archiveReleased"`, `Tests no t
 // "Archive all (N)" inside a card's `Released (N)` fold (workspace lifecycle spec §5.1).
 //
 // PLAIN archives, one at a time: never `force`, and never any other option — the server's door decides every
-// refusal, and this loop only reports it. Children are skipped (CCR-15 reclaims them itself; its spec §5.9
+// refusal, and this loop only reports it. Children are skipped (#166 reclaims them itself; its spec §5.9
 // assumes a child is never archived), and every row is re-read from the CURRENT frame just before its own
 // request, because a row can stop being released while the loop is still working through the rows above it.
 import { releasedFromOf, type FleetSession } from '../../../shared/api';
@@ -1690,7 +1690,7 @@ git commit -m "pwa: Archive all — plain archives, one at a time, each row re-r
 Find:
 
 ```tsx
-    expect(screen.getByRole('button', { name: /still-river.*o\/custom-tools/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /still-river.*o\/project-d/ })).toBeInTheDocument();
   });
 });
 
@@ -1699,7 +1699,7 @@ Find:
 Replace with:
 
 ```tsx
-    expect(screen.getByRole('button', { name: /still-river.*o\/custom-tools/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /still-river.*o\/project-d/ })).toBeInTheDocument();
   });
 });
 
@@ -3667,7 +3667,7 @@ git fetch origin main && git -C "$(git rev-parse --show-toplevel)" diff --quiet 
 
 Expected: `unchanged`; `7 passed`; `corpus-frozen`; both guards green (this plan defines no number).
 
-- [ ] **Step 4: If `main` moved, merge it — and if CCR-15 wave 3 is on it, the README sentence conflicts.** `git merge origin/main`. On a conflict in README's one anchor sentence (`purge-mechanism-absent` … `each with an operator sentence of its own at`), take EITHER side of that hunk only, then run `readme-reanchor.py`: it derives the right lines for the merged `shared/api.ts` whichever side you took (Pre-flight finding 7). Any other conflict: resolve it as the source it is, then re-run Steps 1–3. Never take a whole file's side.
+- [ ] **Step 4: If `main` moved, merge it — and if #166 wave 3 is on it, the README sentence conflicts.** `git merge origin/main`. On a conflict in README's one anchor sentence (`purge-mechanism-absent` … `each with an operator sentence of its own at`), take EITHER side of that hunk only, then run `readme-reanchor.py`: it derives the right lines for the merged `shared/api.ts` whichever side you took (Pre-flight finding 7). Any other conflict: resolve it as the source it is, then re-run Steps 1–3. Never take a whole file's side.
 
 - [ ] **Step 5: Open the PR** from the workspace branch: title `Workspace lifecycle wave 1: the Released (N) fold`, body naming the spec, this plan, the ledger, the deploy class (server + PWA — a normal `ccrc rollout`; nothing changes on the fleet box, and the instrument ships in `deploy/` and runs nowhere until someone runs it), the counts from Step 2, and that no D-number was minted. A red `test-macos` leg is not yet this branch's: recent PRs (#181, #186, #187) and `main`'s own push runs show the same leg failing or cancelled at its time cap — compare with `main`'s same leg before chasing it.
 

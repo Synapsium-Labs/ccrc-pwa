@@ -13,10 +13,10 @@ so both problems start compounding now.
 
 ### The branch tracks `main`
 
-Measured on the live workspace `custom-tools-quiet-basin`:
+Measured on the live workspace `project-d-quiet-basin`:
 
 ```
-$ git -C ~/worktrees/custom-tools/quiet-basin status -sb
+$ git -C ~/worktrees/project-d/quiet-basin status -sb
 ## quiet-basin...origin/main
 
 $ git config --get branch.quiet-basin.merge
@@ -51,10 +51,10 @@ The branch is the raw slug, `quiet-basin`. Every repo on this fleet uses
 
 | repo | recent branches |
 |---|---|
-| intake-platform | `docs/pilot-copy-fit`, `feat/int-7-mcp-image-attachments` |
-| synapsium-platform | `feat/site-windtunnel`, `fix/site-visual-polish` |
-| MekWarLive | `feature/battlescape-a1c-c`, `chore/MEK-995-cleanup` |
-| OpenClawHetzner | `ccrc/attachment-tray` |
+| project-n | `docs/pilot-copy-fit`, `feat/int-7-mcp-image-attachments` |
+| project-k | `feat/site-windtunnel`, `fix/site-visual-polish` |
+| project-f | `feature/battlescape-a1c-c`, `chore/ABC-123-cleanup` |
+| project-c | `ccrc/attachment-tray` |
 
 A bare `quiet-basin` is indistinguishable from a human's branch, sorts nowhere
 useful, and gives no hint it is machine-created and disposable.
@@ -117,7 +117,7 @@ This is not a hypothetical risk — **it has already happened, at scale, through
 other tooling.** Measured on this box:
 
 ```
-MekWarLive/.claude/worktrees/   16 dirs, 29G
+project-f/.claude/worktrees/   16 dirs, 29G
   oldest 2026-06-15, newest 2026-07-04   (all ≥24 days idle)
   largest agent-a7ed588…  4.8G  = 4.5G CDK output + 1.6G node_modules
   git worktree list reports 17 registered against 16 on disk
@@ -133,10 +133,10 @@ audit was manual, took a working session, and nothing will stop the next 29G
 accumulating. What survives as a live example is smaller and equally invisible:
 
 ```
-custom-tools: /home/you/.handoff/wt/custom-tools-receiver-heartbeat--20260728-221900-3091316
+project-d: /home/you/.handoff/wt/project-d-receiver-heartbeat--20260728-221900-3091316
 ```
 
-A handoff worktree, registered against `custom-tools`, outside `$WORKTREES_ROOT`,
+A handoff worktree, registered against `project-d`, outside `$WORKTREES_ROOT`,
 belonging to tooling that is now switched off. `ws-gc` must report it and must
 not touch it.
 

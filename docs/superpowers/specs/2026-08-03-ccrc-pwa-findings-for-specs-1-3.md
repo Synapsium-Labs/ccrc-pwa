@@ -141,7 +141,7 @@ concrete reason it matters rather than a tidiness argument.
 - **No `engines` field** in any of the four `package.json` files, despite Node
   ≥22 being a hard requirement documented only in prose. Spec 3's prereq check.
 - **`CCRC_SSH_KEY` defaults to a key that does not exist on the fleet host** —
-  `$HOME/.ssh/<your-key>`, where openclaw calls it `<your-key>`. The
+  `$HOME/.ssh/<your-key>`, where the fleet box calls it `<your-key>`. The
   difference is documented in `deploy.sh:4-6` without being acted on, so a deploy
   driven from the fleet host fails at first contact with a bare
   `Permission denied (publickey)`. Spec 3: try both, and name both when neither

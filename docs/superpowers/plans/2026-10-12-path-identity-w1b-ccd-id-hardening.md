@@ -127,7 +127,7 @@ Each line binds every task.
   - #351 has merged (R1).
   - Workspace-lifecycle's coordinator consents to the three ws-expire edits (Task 0).
   - No live claim may hold `ccd/ccd` or a file this wave creates.
-  - `ccd/ccd` edits merge serially. W1a (run 399) and CCR-15 wave 10 (run 400) edit no `ccd/ccd`. If either lands mid-wave, the worker merges `main` and re-points by content.
+  - `ccd/ccd` edits merge serially. W1a (run 399) and #166 wave 10 (run 400) edit no `ccd/ccd`. If either lands mid-wave, the worker merges `main` and re-points by content.
 - **Commands are approval-free:** plain reads, git, grep, sed, awk, node, vitest, and `gh` reads. No `bash -c` with `eval`. Never `pkill` or `killall`; kill only a PID you recorded. A subagent's permission prompt blocks the whole pane, and its mail.
 - **Subagents never send mail** and never invoke the `ccrc-worker` skill. Only the worker sends the wave-done.
 - **The repository is public.** Nothing goes into code, tests, commits or the PR body that names a host, an absolute home path, a private project, or an account or lane. Use neutral stand-ins such as `<wrapper>`, `the fleet box` and `<projects-root>`.
@@ -170,7 +170,7 @@ R1 to R14 are the coordinator's W1b rulings, renumbered. R15 onward were **propo
   - R27 adds a further question this ruling did not see.
 - **R11 — `cmd_enable`'s two-argument form calls `_ws_project_valid`** before it journals. It refuses more than today (a departure). Ahead of that call, the same form asks `cmd_start`'s own wrapper check with its words, `_is_valid_wrapper "$1" || die "unknown wrapper '$1' (valid: ${CCRC_ACCOUNTS[*]})"`. So an unrostered or flag-spelled wrapper leaves no `enable` row and no reap lock either (the coordinator's ruling on the first review's enable finding).
 - **R12 — The registry peek** before the collect reap lock is kept, so `registered` keeps its precedence.
-- **R13 — Item 31's wording** must hold whether or not CCR-15 wave 10 has merged.
+- **R13 — Item 31's wording** must hold whether or not #166 wave 10 has merged.
 - **R14 — Numbers.** W1b's block is allocated when its run opens.
 - **R15 — Names and homes (proposed by the frame; confirmed 2026-10-12).** This resolves report A's placement "after `:21072`" against report B's `CCD_ID_MAX`/`_ccd_id_cap`.
   - The new definitions go directly above `_ws_tmproot_id_ok`'s comment block (`# THE ID A WITNESS MAY BE NAMED FOR`, about `:21070`), in this order: `_reg_id_ok`, `_REG_ID_MAX`, `_reg_id_cap` (with `_REG_ID_CAP_WHY`), then `_ws_tmproot_id_ok`'s own comment and line. All of them sit below every frozen anchor.
@@ -6993,7 +6993,7 @@ EOF
 **Why:** three comments in the temp-root collector's region of `ccd/ccd` say things the code no longer does (spec §7, items 29, 30 and 31). This task changes them in place, each with the same number of lines, so no line moves, and adds a test that reads each sentence back from ccd's own text.
 - **Item 29.** The witness-only arm of `_ws_collect_eval` reads the cleanup pause (`_ws_collect_paused || return 1`) before it mints its `collect-absent` token. The header's witness-only paragraph does not mention the pause.
 - **Item 30.** A probe that reaches its bound ends the audit, so only ONE `_plat_timeout` grace is paid. That is 30 + 10 + 30 + 3 = 73 s, or 78 s at the 8 s grace, the sum `collect-audit-budget.test.ts` already pins. The header sums one grace per probe instead ("about 79 s … 94 s"), and it still carries the stale clause "A budget keyed on the mode is wave 9's."
-- **Item 31.** The COLLECT-V1 note says "this wave ships it inert". The lane composes the verb and acts once the operator arms it. R13: the new wording must hold whether or not CCR-15 wave 10's Settings switch has merged.
+- **Item 31.** The COLLECT-V1 note says "this wave ships it inert". The lane composes the verb and acts once the operator arms it. R13: the new wording must hold whether or not #166 wave 10's Settings switch has merged.
 - `# COLLECT-V1.` must stay first on its line. `collect-readers.test.ts` slices the collector's region up to `'\n# COLLECT-V1.'`.
 - The EXPIRE-V1 note ("wave 3b composes it, this wave ships it inert") is workspace-lifecycle's text. It is NOT edited here (HARD BOUNDARY); it was reported to that programme.
 
@@ -7356,7 +7356,7 @@ EOF
 - **R24.** The spec gets one new subsection, "### 2.9 As built (W1b)". It carries the corrections that R2, R3, R8, R10, R11, R12, R20, R27 and R28 name, plus the stated residuals. Items 24 to 31 of §7 get the Status cell "Built (W1b)". The decided W0 text above §2.9 is not rewritten.
 - **R24 again.** The rulings file gets "### §17 as built (path-identity W1b, run <n>)" at the end of §17. It names each departure and each residual by slug, and carries no number.
 - **R23.** Committed code cites the spec, never the contract. The spec and the contract do not use this plan's R-numbers, because they would collide with the contract's own R-numbers. They use the spec's decision IDs (SEC1, SEC3 to SEC7) and section numbers.
-- **R13.** Item 31's wording must hold whether or not CCR-15 wave 10 has merged. So must the sentence here that repeats it.
+- **R13.** Item 31's wording must hold whether or not #166 wave 10 has merged. So must the sentence here that repeats it.
 
 **Files:**
 - Modify `docs/superpowers/specs/2026-10-12-path-identity-design.md`:

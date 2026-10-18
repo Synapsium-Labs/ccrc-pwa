@@ -30,7 +30,7 @@ as the thing this design must not have to be migrated away from.
 
 1. **The UI ships in wave 1.** Not a follow-up wave.
 2. **Row per edge, now.** Not a column on the account with a migration later.
-3. **The org edition is a separate story and out of scope.** This spec references it only as the
+3. **A later multi-user deployment is a separate story and out of scope.** This spec references it only as the
    constraint that decides the storage shape.
 4. Pool means what §1 says it means — a billing/tenancy grouping — confirmed against the operator's
    own reading, not assumed from the code.

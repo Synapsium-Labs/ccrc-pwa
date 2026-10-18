@@ -3,7 +3,7 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended)
 > or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax.
 
-**Goal:** Close three `ccd` defects reported from outside this program by `claude-OpenClawHetzner`, each
+**Goal:** Close three `ccd` defects reported from outside this program by `claude-project-c`, each
 small, each currently INERT, and each silent the moment it stops being inert: `_plat_mv_notdir`'s Darwin
 arm returns success while its own postcondition is false, and `ccrc-doctor-checks` never asks about a
 timer that is about to start shipping. **Part D was added 2026-09-10** and is a different kind of item:
@@ -844,7 +844,7 @@ follow a symlink to a directory, which nobody has measured. **Conditional on the
 after a SUCCESSFUL `rm -f`, the destination does not exist and no `mv` can move into it; a FAILING `rm`
 is a precondition nothing enforced until the final round, closed there by `rm -f -- "$2" || return 1`
 (the fall-through this defect's own recurrence rode in on) — so "unverified on Darwin" is the argument
-FOR the fix, not a reason to wait for a mac. Reported by `claude-OpenClawHetzner`; confirmed and narrowed
+FOR the fix, not a reason to wait for a mac. Reported by `claude-project-c`; confirmed and narrowed
 here.
 
 **F14 (review run 69) — the header's fixture claim, narrowed and then WITHDRAWN rather than restated.**
@@ -1055,7 +1055,7 @@ timer's last run reached this lane" (a FAILED run rewrites the file too); `fetch
 the provider actually answered". A freshness check that read mtime would call a lane fresh for as long
 as the timer keeps failing at it.
 
-Contract supplied by `claude-OpenClawHetzner`, who owns the probe; measured by them on `origin/main`
+Contract supplied by `claude-project-c`, who owns the probe; measured by them on `origin/main`
 `ee1d6228`. Not a defect they introduced — the flag was always probe-written — and not one this repo
 can close from the `known` list alone, which is why Part C exists as its own arm rather than a widening
 of Part B.

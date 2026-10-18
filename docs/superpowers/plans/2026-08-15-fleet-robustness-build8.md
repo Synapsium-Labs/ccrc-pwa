@@ -2177,7 +2177,7 @@ describe('an UNCLAIMED live pane is adopted, not ignored', () => {
     h.sh(`_reg_set ${id} uuid b7001948-0000-4c2f-9a1b-0cfc0dc3d199
       _reg_set ${id} project ${project}
       _reg_set ${id} workdir "$HOME/projects/${project}"
-      _reg_set ${id} wrapper claude2
+      _reg_set ${id} wrapper claude9
       printf '%s' "$(( $(date +%s) - 5 ))" > "$REG/${id}.supervised"`);
   };
 
@@ -5275,21 +5275,21 @@ describe('divergences — the three kinds, individually', () => {
     const out = divergences(input({
       worktrees: [
         { project: 'demo', name: 'quiet-basin', path: '/home/u/worktrees/demo/quiet-basin' },
-        { project: 'demo', name: 'alertwire', path: '/home/u/worktrees/alertwire' },
+        { project: 'demo', name: 'alertpipe', path: '/home/u/worktrees/alertpipe' },
       ],
     }));
     expect(out).toEqual([{ kind: 'unregistered-worktree', id: null,
-      path: '/home/u/worktrees/alertwire', detail: expect.any(String) }]);
+      path: '/home/u/worktrees/alertpipe', detail: expect.any(String) }]);
   });
 
   it('finds a FLAT worktree, not only a nested one', () => {
-    // Measured live: `custom-tools-alertwire` sits directly under `~/worktrees/`.
+    // Measured live: `project-d-alertpipe` sits directly under `~/worktrees/`.
     // A detector globbing `~/worktrees/*/*/` misses it — which is why this reads
     // git's OWN admin records rather than the directory layout.
     const out = divergences(input({
       records: [],
-      worktrees: [{ project: 'custom-tools', name: 'alertwire',
-                    path: '/home/u/worktrees/custom-tools-alertwire' }],
+      worktrees: [{ project: 'project-d', name: 'alertpipe',
+                    path: '/home/u/worktrees/project-d-alertpipe' }],
     }));
     expect(out.map((d) => d.kind)).toEqual(['unregistered-worktree']);
   });
@@ -7582,7 +7582,7 @@ describe('POST /api/sessions/:id/archive — and an open run', () => {
   const seededHome = (id: string): string => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
-    seedSession(home, id, 'claude2');
+    seedSession(home, id, 'claude9');
     return home;
   };
   const recording = (calls: string[][]): Runner => async (_cmd, args) => {
@@ -9098,14 +9098,14 @@ short-circuits the query away for every claimed row.
   // moves except `branch` (which ccd writes, not the sweep).
   it('is indifferent to a hold, and touches no PR lineage', async () => {
     const h = harness();
-    seed(h.home, { hold: 'program:agent-evals wave:1/4' });
+    seed(h.home, { hold: 'program:prog-j wave:1/4' });
     transcript(h.home, [TITLE('Fix the PR sheet')]);
     const w = new FleetWatcher(testDeps(h.home, h.run), new Bus(), 2000);
 
     await w.sweepNames();
     expect(renames(h.calls)).toEqual(['ws/fix-the-pr-sheet']);
     expect(readFileSync(path.join(h.home, '.cc-sessions', `${ID}.hold`), 'utf8'))
-      .toBe('program:agent-evals wave:1/4');
+      .toBe('program:prog-j wave:1/4');
     expect(h.calls.every((a) => a[0] === 'ws-rename'),
       'the naming lane emits exactly one verb and it is not pr-state').toBe(true);
   });
@@ -9127,14 +9127,14 @@ short-circuits the query away for every claimed row.
   // while a coordinator held a ledger naming the old one. The claim now wins.
   it('will not rename a HELD workspace — the claim outranks the title', async () => {
     const h = harness();
-    seed(h.home, { hold: 'program:agent-evals wave:1/4' });
+    seed(h.home, { hold: 'program:prog-j wave:1/4' });
     transcript(h.home, [TITLE('Fix the PR sheet')]);
     const w = new FleetWatcher(testDeps(h.home, h.run), new Bus(), 2000);
 
     await w.sweepNames();
     expect(renames(h.calls), 'a claimed workspace is not renamed').toEqual([]);
     expect(readFileSync(path.join(h.home, '.cc-sessions', `${ID}.hold`), 'utf8'))
-      .toBe('program:agent-evals wave:1/4');
+      .toBe('program:prog-j wave:1/4');
     expect(h.calls, 'a skipped row emits no verb at all — not even a probe').toEqual([]);
   });
 
@@ -9218,7 +9218,7 @@ short-circuits the query away for every claimed row.
   // stop naming that workspace for the life of the server process, with no log
   // line saying why.
   it('does not retire an incarnation on a `held` refusal — a hold is not permanent', async () => {
-    const h = harness('{"refused":"held","detail":"program:agent-evals wave:1/4","paths":[]}');
+    const h = harness('{"refused":"held","detail":"program:prog-j wave:1/4","paths":[]}');
     seed(h.home);                                   // unheld at read time; ccd refuses at call time
     transcript(h.home, [TITLE('Fix the PR sheet')]);
     const w = new FleetWatcher(testDeps(h.home, h.run), new Bus(), 2000);
@@ -9376,9 +9376,9 @@ hold can land in. **AGENT-FIRST**, and it hits GATE 1.
   // any PR, so it must leave that file absent.
   it('renames a HELD workspace, and leaves the hold and the prhistory alone', () => {
     addOne();
-    h.sh(`cmd_ws_hold --session demo-quiet-mesa --reason "program:agent-evals wave:1/4"`);
+    h.sh(`cmd_ws_hold --session demo-quiet-mesa --reason "program:prog-j wave:1/4"`);
     expect(rename('demo-quiet-mesa', 'feat/real-name').new).toBe('feat/real-name');
-    expect(h.reg('demo-quiet-mesa', 'hold')).toBe('program:agent-evals wave:1/4');
+    expect(h.reg('demo-quiet-mesa', 'hold')).toBe('program:prog-j wave:1/4');
     expect(h.reg('demo-quiet-mesa', 'prhistory')).toBeNull();
     expect(h.reg('demo-quiet-mesa', 'prnumber')).toBeNull();
   });
@@ -9399,13 +9399,13 @@ hold can land in. **AGENT-FIRST**, and it hits GATE 1.
   // prhistory is unchanged by either outcome and is still asserted here.
   it('refuses a HELD workspace, renames nothing, and leaves hold and prhistory alone', () => {
     const wt = addOne();
-    h.sh(`cmd_ws_hold --session demo-quiet-mesa --reason "program:agent-evals wave:1/4"`);
+    h.sh(`cmd_ws_hold --session demo-quiet-mesa --reason "program:prog-j wave:1/4"`);
     expect(refusal('demo-quiet-mesa', 'feat/real-name')).toBe('held');
     // The refusal is an ANSWER, not a fault: exit 0 (h.sh would throw otherwise,
     // which `refusal()` going through `rename()` already proves) and nothing moved.
     expect(h.git(wt, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('ws/quiet-mesa');
     expect(h.reg('demo-quiet-mesa', 'branch')).toBe('ws/quiet-mesa');
-    expect(h.reg('demo-quiet-mesa', 'hold')).toBe('program:agent-evals wave:1/4');
+    expect(h.reg('demo-quiet-mesa', 'hold')).toBe('program:prog-j wave:1/4');
     expect(h.reg('demo-quiet-mesa', 'prhistory')).toBeNull();
     expect(h.reg('demo-quiet-mesa', 'prnumber')).toBeNull();
   });
@@ -9423,7 +9423,7 @@ hold can land in. **AGENT-FIRST**, and it hits GATE 1.
   // The other direction, so the rung is a refusal rather than an outage.
   it('renames an UNHELD workspace exactly as before, and after a release', () => {
     const wt = addOne();
-    h.sh(`cmd_ws_hold --session demo-quiet-mesa --reason "program:agent-evals wave:1/4"`);
+    h.sh(`cmd_ws_hold --session demo-quiet-mesa --reason "program:prog-j wave:1/4"`);
     h.sh(`cmd_ws_release --session demo-quiet-mesa`);
     expect(rename('demo-quiet-mesa', 'feat/real-name').new).toBe('feat/real-name');
     expect(h.git(wt, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('feat/real-name');
@@ -9437,7 +9437,7 @@ hold can land in. **AGENT-FIRST**, and it hits GATE 1.
   // run at all.
   it('refuses before it touches git or the network', () => {
     addOne();
-    h.sh(`cmd_ws_hold --session demo-quiet-mesa --reason "program:agent-evals wave:1/4"`);
+    h.sh(`cmd_ws_hold --session demo-quiet-mesa --reason "program:prog-j wave:1/4"`);
     // A `git` that records every call and then refuses: if the rung is placed
     // after the worktree/upstream probes, one of them fires and this reds.
     const NOGIT = `git() { echo "git $*" >> "$HOME/ccd-calls"; return 1; };`;
@@ -9653,7 +9653,7 @@ have to be built here, including the affinity fixture, which does not exist anyw
                capture-pane) printf '%s\\n' "❯ " ;;
                list-panes)   echo ${PANE_PID} ;;
              esac; return 0; };
-    _swap_target() { echo claude2; }; _avail() { return 0; };
+    _swap_target() { echo claude9; }; _avail() { return 0; };
     _dispatch_swap() { echo "dispatch $1 -> $2" >> "$HOME/ccd-calls"; };
   `;
 
@@ -9664,7 +9664,7 @@ have to be built here, including the affinity fixture, which does not exist anyw
     tmux() { case "\${1:-}" in
                capture-pane) echo "API Error: 429 Too Many Requests" ;;
              esac; return 0; };
-    _swap_target() { echo claude2; }; _avail() { return 0; };
+    _swap_target() { echo claude9; }; _avail() { return 0; };
     _dispatch_swap() { echo "dispatch $1 -> $2" >> "$HOME/ccd-calls"; };
   `;
 
@@ -9685,7 +9685,7 @@ have to be built here, including the affinity fixture, which does not exist anyw
       // vacuous — a fixture that never dispatches proves nothing about a rung.
       seed(); idleStatus();
       h.sh(`${AFFINITY_STUBS} _auto_swap_check ${ID}`);
-      expect(h.calls().join('\n')).toContain(`dispatch ${ID} -> claude2`);
+      expect(h.calls().join('\n')).toContain(`dispatch ${ID} -> claude9`);
     });
 
     it('does NOT relocate a HELD session on the affinity path', () => {
@@ -9703,7 +9703,7 @@ have to be built here, including the affinity fixture, which does not exist anyw
       // noticing quickly.
       seed(); hold();
       h.sh(`${RESCUE_STUBS} _auto_swap_check ${ID}`);
-      expect(h.calls().join('\n')).toContain(`dispatch ${ID} -> claude2`);
+      expect(h.calls().join('\n')).toContain(`dispatch ${ID} -> claude9`);
     });
 
     it('defers on a present-but-unreadable hold — `-e` not `-f`', () => {
@@ -9721,7 +9721,7 @@ have to be built here, including the affinity fixture, which does not exist anyw
       expect(h.calls().join('\n')).not.toContain('dispatch');
       fs.rmSync(path.join(h.home, '.cc-sessions', `${ID}.hold`));
       h.sh(`${AFFINITY_STUBS} _auto_swap_check ${ID}`);
-      expect(h.calls().join('\n')).toContain(`dispatch ${ID} -> claude2`);
+      expect(h.calls().join('\n')).toContain(`dispatch ${ID} -> claude9`);
     });
   });
   ```
@@ -9735,7 +9735,7 @@ have to be built here, including the affinity fixture, which does not exist anyw
   behaviour, and their passing now is what makes the fixture trustworthy);
   `does NOT relocate a HELD session…`, `defers on a present-but-unreadable hold` and
   `relocates again once the hold is released` FAIL with
-  `expected '…dispatch claude-demo -> claude2…' not to contain 'dispatch'`.
+  `expected '…dispatch claude-demo -> claude9…' not to contain 'dispatch'`.
 
 - [ ] **Step 3: Write the rung**
 
@@ -10408,7 +10408,7 @@ product decision, and this task raises it in a comment rather than deciding it i
 
   ```ts
    * `name` is only ever present when it is worth showing: the server drops
-   * Claude Code's derived session handles (`openclawhetzner-42` — cwd basename
+   * Claude Code's derived session handles (`project-c-42` — cwd basename
    * plus a counter) before they reach the wire, so a non-null name is one a
    * human chose. Branch outranks the slug because a workspace's branch gets
    * renamed to something descriptive while `workspace` keeps the slug it was
@@ -10420,7 +10420,7 @@ product decision, and this task raises it in a comment rather than deciding it i
 
   ```ts
    * `name` is only ever present when it is worth showing: the server drops
-   * Claude Code's derived session handles (`openclawhetzner-42` — cwd basename
+   * Claude Code's derived session handles (`project-c-42` — cwd basename
    * plus a counter) before they reach the wire, so a non-null name is one a
    * human chose. Branch outranks the slug because a workspace's branch gets
    * renamed to something descriptive while `workspace` keeps the slug it was
@@ -10535,14 +10535,14 @@ are inline object literals in `pwa/test/lifecycle-ui.test.tsx`, and **they are i
   // `pwa/test/lifecycle-ui.test.tsx` — not exported, so they cannot be
   // imported. Reproduced here in the same shape (the roster is what makes the
   // assertions readable: TEST_ROSTER resolves `claude` -> "team·alt" and
-  // `claude2` -> "team·b"). Wave 1 adds `started`/`spawnState` to
+  // `claude9` -> "team·b"). Wave 1 adds `started`/`spawnState` to
   // `FleetSession`; if this task lands after that wave, the compiler will name
   // them and they go in the literal below.
   const fakeSocket = () => ({ close: () => {}, send: () => {} }) as never;
 
   const fleetSession = (patch: Partial<FleetSession> = {}): FleetSession => ({
-    id: 'claude:OpenClawHetzner', wrapper: 'claude', home: '/home/rc',
-    project: 'OpenClawHetzner', workdir: '/root/projects/OpenClawHetzner',
+    id: 'claude:project-c', wrapper: 'claude', home: '/home/u',
+    project: 'project-c', workdir: '/root/projects/project-c',
     workspace: null, name: null, status: 'idle', statusUpdatedAt: Date.now() - 120_000,
     limits: { five: 62, seven: 71 },
     dialogPending: false, model: null, effort: null, ultracode: false, branch: null,
@@ -10561,7 +10561,7 @@ are inline object literals in `pwa/test/lifecycle-ui.test.tsx`, and **they are i
 
   describe('SwapSheet says the move is temporary and names the home account', () => {
     it('names the home account the session will return to', () => {
-      const s = fleetSession({ wrapper: 'claude2', home: 'claude' });
+      const s = fleetSession({ wrapper: 'claude9', home: 'claude' });
       render(<SwapSheet session={s} open onClose={vi.fn()} fleet={storeWith([s])} />);
       // The account it is on NOW and the account it goes BACK to are different
       // facts and the sheet must show both — before this task it showed only
@@ -13342,7 +13342,7 @@ line, then restore. Verify `git status` is clean. Record before/after counts.
 ```bash
 cd <worktree> && node <scratchpad>/restamp.mjs   # must print -> ccrc-unmodified
 git add ccd/ccd server/test/ccd-die-containment.test.ts server/test/ccdWsHelpers.ts
-git -c user.name="Mykyta Fastovets" -c user.email="you@example.com" commit
+git -c user.name="the operator" -c user.email="you@example.com" commit
 ```
 
 ---
@@ -13480,7 +13480,7 @@ confirm the structural case goes red. Report before/after counts; verify `git st
 ```bash
 cd <worktree> && node <scratchpad>/restamp.mjs   # must print -> ccrc-unmodified
 git add ccd/ccd server/test/ccd-arith-containment.test.ts
-git -c user.name="Mykyta Fastovets" -c user.email="you@example.com" commit
+git -c user.name="the operator" -c user.email="you@example.com" commit
 ```
 
 - [ ] **Step 8: pin `_spawn_start`'s failure mode, because the split installed a door (D-300 (was D-B8-4))**
@@ -13565,11 +13565,11 @@ have shown it free, so the test asks the same shell.
 mutation-proved each: deleting `readWorktreeRecords`'s path-escape guard left the suite green; the
 "`_spawn_start` still dies" test wrapped the call in `( )`, so it passed whether the guard was fatal or
 not; the achromatic CSS override was, verbatim, "a comment, not a mechanism"; and `divergence.test.ts`'s
-"finds a FLAT worktree" case passed `name: 'alertwire'` — **a fixture choice, not a measurement of git.**
+"finds a FLAT worktree" case passed `name: 'alertpipe'` — **a fixture choice, not a measurement of git.**
 
-That last one hid a real defect. Measured on the live box, `custom-tools` runs BOTH worktree layouts,
-and git's admin name for the flat one is `custom-tools-alertwire`, so `${project}-${name}` derived
-`custom-tools-custom-tools-alertwire` — an id no registry row can ever match, reported every sweep,
+That last one hid a real defect. Measured on the live box, `project-d` runs BOTH worktree layouts,
+and git's admin name for the flat one is `project-d-alertpipe`, so `${project}-${name}` derived
+`project-d-project-d-alertpipe` — an id no registry row can ever match, reported every sweep,
 forever, on the divergence kind whose repair deletes worktrees.
 
 The fix is a measurement, not a heuristic: the ccd id comes from the checkout path read out of the
@@ -13662,11 +13662,11 @@ Distinguish them by probing the site in isolation before believing either.
 
 **D-305 (was D-B8-9) — the substrate fix was necessary and not sufficient: it lost a race at boot.** The reboot
 that was to verify `_tmux_new_session` (D-303) instead disproved it a second time. The server came
-back in `claude-session@claude-synapsium-platform.service`; `ccrc-tmux-server.scope` was absent.
+back in `claude-session@claude-project-k.service`; `ccrc-tmux-server.scope` was absent.
 
 The journal is unambiguous. At 22:41:46 **fifteen** supervisors logged `Failed to start transient scope
 unit: Unit ccrc-tmux-server.scope was already loaded or has a fragment file`, and **one** logged
-`Started ccrc-tmux-server.scope - /usr/bin/tmux new-session -d -s cc-claude-corp-data-internal`. The
+`Started ccrc-tmux-server.scope - /usr/bin/tmux new-session -d -s cc-claude-acme-project-e`. The
 scope was created and never held anything: the fifteen losers **did not wait**. Each fell through to a
 bare `tmux new-session`, one of those created the server in its own cgroup, and the scope winner's
 `new-session` then merely CONNECTED to that server, leaving its scope holding a client that exited at
@@ -13697,8 +13697,8 @@ condition under which the mechanism actually runs.
 **Found** 2026-08-19, verifying the D-305 reboot. The reboot was a free natural experiment: every
 process on the box provably restarted at 08:58:25, so any hookstate written earlier belongs to a
 process that no longer exists. Twelve of seventeen live sessions carried hookstate older than the
-boot. Two of them read `state: "working"` — `claude2-OpenClawHetzner` (stamped 18 minutes before the
-boot) and `claude-corp-custom-tools` (10.3 hours before it). Both were marked as actively working by a
+boot. Two of them read `state: "working"` — `claude9-project-c` (stamped 18 minutes before the
+boot) and `claude-acme-project-d` (10.3 hours before it). Both were marked as actively working by a
 process the reboot had destroyed.
 
 **Root cause, and it is not in the hook.** `session-hook.sh` dispatches on ten events. Its

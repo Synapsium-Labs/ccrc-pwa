@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Repo `/srv/projects/OpenClawHetzner`, branch `ccrc/workspace-lifecycle`.
+- Repo `/srv/projects/project-c`, branch `ccrc/workspace-lifecycle`.
 - Suites run from the package dir: `cd infra/ccrc/{server,agent,pwa} && npx vitest run`. Single file: `npx vitest run test/x.test.ts`.
 - **Baseline to preserve: server 335, agent 86, pwa 313.** Typecheck (`npx tsc --noEmit`) clean in all three.
 - `bash -n infra/<server-host>-portability/ccd` must pass after every ccd change.
@@ -39,8 +39,8 @@ These were checked on the host on 2026-07-28. Do not re-derive them; do not assu
 | `git branch -d ws/quiet-mesa` works normally | fixture |
 | `du -scb a b` de-dupes hardlinks across all arguments in one invocation and prints a `total` row | verified |
 | `numfmt --to=iec` is present | `numfmt --to=iec 5033164800` → `4.7G` |
-| `$HOME/projects` → `/data/projects` → `/srv/projects`; git records the **fully resolved** path in `worktree list` | `git -C ~/projects/custom-tools worktree list --porcelain` |
-| a live **foreign** worktree exists right now | `/home/you/.handoff/wt/custom-tools-receiver-heartbeat--20260728-221900-3091316` |
+| `$HOME/projects` → `/data/projects` → `/srv/projects`; git records the **fully resolved** path in `worktree list` | `git -C ~/projects/project-d worktree list --porcelain` |
+| a live **foreign** worktree exists right now | `/home/you/.handoff/wt/project-d-receiver-heartbeat--20260728-221900-3091316` |
 
 **The `ws-gc` code in Tasks 6 and 7 was executed verbatim against a six-state fixture before this plan was written** — one tracked workspace, one orphan, one foreign worktree, one hand-deleted directory and one dead registry entry. It classified all six correctly, skipped the main checkout despite its triple-symlinked path, printed the table and total, and on `--prune` reclaimed the stale metadata and dead entry while declining the foreign and unmerged ones. If it does not behave that way for you, suspect the transcription before suspecting the logic.
 
@@ -76,7 +76,7 @@ Two behaviours that surfaced in that run and are deliberate, not bugs:
 - Consumes: nothing from earlier tasks.
 - Produces: registry field `branch` holding the full branch name (e.g. `ws/quiet-mesa`), written by `cmd_ws_add`. Task 2 reads it; Task 5 (`ws-rename`) overwrites it.
 
-**Context:** `cmd_ws_add` today runs `git worktree add -b "$slug" "$wt" "$base"`. Because `$base` is a remote-tracking ref (`origin/main`) and git's `branch.autoSetupMerge` defaults to `true`, every workspace branch created so far has `origin/main` as its upstream. `git pull` in such a workspace merges `main` into the branch. This is live on `custom-tools-quiet-basin` right now.
+**Context:** `cmd_ws_add` today runs `git worktree add -b "$slug" "$wt" "$base"`. Because `$base` is a remote-tracking ref (`origin/main`) and git's `branch.autoSetupMerge` defaults to `true`, every workspace branch created so far has `origin/main` as its upstream. `git pull` in such a workspace merges `main` into the branch. This is live on `project-d-quiet-basin` right now.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -574,7 +574,7 @@ export function makeCcdHarness(prefix: string): CcdHarness {
   fs.mkdirSync(path.join(home, '.cc-limits'), { recursive: true });
   const bin = path.join(home, '.local', 'bin');
   fs.mkdirSync(bin, { recursive: true });
-  for (const w of ['claude', 'claude2', 'claude-corp']) {
+  for (const w of ['claude', 'claude9', 'claude-acme']) {
     fs.writeFileSync(path.join(bin, w), '#!/bin/sh\n', { mode: 0o755 });
   }
 
@@ -709,7 +709,7 @@ describe('_ws_branch_valid', () => {
   it('accepts the type/slug shape every repo here uses', () => {
     expect(ok('feat/int-7-mcp-image-attachments')).toBe(true);
     expect(ok('ccrc/attachment-tray')).toBe(true);
-    expect(ok('fix/MEK-995.cleanup')).toBe(true);
+    expect(ok('fix/ABC-123.cleanup')).toBe(true);
   });
 
   it('rejects a leading dash — git would read it as an option', () => {
@@ -794,11 +794,11 @@ describe('ws-rename', () => {
   });
 
   it('refuses a session that is not a workspace', () => {
-    h.sh(`_reg_set claude2-demo wrapper claude2
-          _reg_set claude2-demo project demo
-          _reg_set claude2-demo workdir ${path.join(h.home, 'projects', 'demo')}
-          _reg_set claude2-demo uuid abc`);
-    expect(() => h.sh(`cmd_ws_rename claude2-demo feat/real-name`)).toThrow();
+    h.sh(`_reg_set claude9-demo wrapper claude9
+          _reg_set claude9-demo project demo
+          _reg_set claude9-demo workdir ${path.join(h.home, 'projects', 'demo')}
+          _reg_set claude9-demo uuid abc`);
+    expect(() => h.sh(`cmd_ws_rename claude9-demo feat/real-name`)).toThrow();
   });
 
   it('refuses an unknown id', () => {
@@ -1316,15 +1316,15 @@ Expected: 18 passed.
 - [ ] **Step 8: Run it against the real box, read the output, and check nothing changed**
 
 ```bash
-git -C /srv/projects/OpenClawHetzner stash list > /tmp/before-gc.txt
+git -C /srv/projects/project-c stash list > /tmp/before-gc.txt
 ls -la ~/worktrees ~/worktrees/* >> /tmp/before-gc.txt
 bash infra/<server-host>-portability/ccd ws-gc
 ls -la ~/worktrees ~/worktrees/* > /tmp/after-gc.txt
 diff /tmp/before-gc.txt /tmp/after-gc.txt && echo "UNCHANGED"
 ```
 
-Expected: the report lists `custom-tools/quiet-basin` as `tracked` (or `dirty`), and the handoff worktree
-`/home/you/.handoff/wt/custom-tools-receiver-heartbeat--20260728-221900-3091316` as `foreign`.
+Expected: the report lists `project-d/quiet-basin` as `tracked` (or `dirty`), and the handoff worktree
+`/home/you/.handoff/wt/project-d-receiver-heartbeat--20260728-221900-3091316` as `foreign`.
 `diff` prints nothing and `UNCHANGED` appears. If the real run shows a state you did not expect, stop and report it — do not adjust the classifier to make the output look tidier.
 
 - [ ] **Step 9: Commit**
@@ -1616,7 +1616,7 @@ Then confirm the test run left the host alone:
 
 ```bash
 ls ~/.cc-sessions/ | wc -l          # unchanged from before the run
-ls ~/worktrees/*/                    # custom-tools/quiet-basin still present
+ls ~/worktrees/*/                    # project-d/quiet-basin still present
 tmux ls | wc -l                      # nine live sessions still there
 ```
 

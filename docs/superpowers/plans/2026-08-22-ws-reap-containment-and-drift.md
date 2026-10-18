@@ -10,7 +10,7 @@ against that tree; if `main` moves, re-derive by `git grep -n <identifier>`, nev
 **Ledger:** highest `D-` on `origin/main` at cut time is **D-170**; this plan allocates **D-171…**.
 
 **Goal.** Two defects in `_ws_reap_eval` make the PWA's reap flow refuse workspaces that are provably
-safe to remove. On 2026-08-22 all three archived `expoAI-assistant` workspaces (`clear-cove`,
+safe to remove. On 2026-08-22 all three archived `project-h` workspaces (`clear-cove`,
 `warm-mesa`, `swift-delta`, ~3.6 G) were refused through the UI and removed by hand with `ccd ws-rm`
 + `git branch -D`. `ws-rm` accepted all three. **The UI and the CLI disagreed about identical
 evidence, and the UI was wrong.**
@@ -469,7 +469,7 @@ is what this wave is not finished without.
 ### Prerequisite — deploy AGENT-FIRST
 
 The centre of mass is `ccd/`, so the fleet host ships first; the server reads what ccd writes. From
-`openclaw`, with the documented per-workstation overrides:
+`<fleet-host>`, with the documented per-workstation overrides:
 
 ```bash
 CCRC_SSH_PORT=22 CCRC_SSH_KEY=$HOME/.ssh/<your-key> bash deploy/deploy.sh agent you@<fleet-host>

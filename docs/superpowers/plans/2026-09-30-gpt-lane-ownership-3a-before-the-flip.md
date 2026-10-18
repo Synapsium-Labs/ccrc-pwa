@@ -82,7 +82,7 @@ Every task's requirements implicitly include this section. The first two groups 
   - `ext-a` and `ext-b` (kind `external`, `telemetry: "codex"`): the live lanes' shape in unit cases (Tasks 2, 3, 6, 7; Task 1 hands `ext-a` to the probe as an argument only, never as a roster row). The rehearsal (Task 10) instead flips `codex-a` and `codex-b` between the two kinds;
   - `gen-a` (kind `generated`): the third row Task 2's Z3 refusal is measured on;
   - the tree's existing non-live `router` row;
-  - `claude` (upstream) and `claude2` (generated);
+  - `claude` (upstream) and `claude9` (generated);
   - `authDir` `.local/share/ccrc/codex/<id>`, written only through `codexAuthDir(id)`;
   - token `test-token-not-a-secret`, model ids `gpt-x` and `probe-model`;
   - ports from `freePorts()` for anything that listens, and `45010`/`45011`/`45020`/`45021` only for pure-parse fixtures that open no socket.
@@ -8380,7 +8380,7 @@ describe('ccrc doctor --fix: wrappers — a launcher is regenerated only when cc
    *  SKIPs and `_fix_codex` never runs on these boxes (the Codex case below is
    *  the one exception, and says so). */
   const UP = { id: 'claude', label: 'claude', configDirSuffix: '.claude', exec: { kind: 'upstream' }, homeAble: true, telemetry: 'anthropic' };
-  const GEN = { id: 'claude2', label: 'claude2', configDirSuffix: '.claude2', exec: { kind: 'generated' }, homeAble: true, telemetry: 'none' };
+  const GEN = { id: 'claude9', label: 'claude9', configDirSuffix: '.claude9', exec: { kind: 'generated' }, homeAble: true, telemetry: 'none' };
   const marked = (id: string, suffix: string, execKind: 'generated' | 'codex'): string =>
     markGenerated(generateWrapperBody({ id, configDirSuffix: suffix, execKind }, 'claude'));
   function launcherBox(prefix: string, accounts: object[] = [UP, GEN]): string {
@@ -8410,26 +8410,26 @@ describe('ccrc doctor --fix: wrappers — a launcher is regenerated only when cc
     const home = launcherBox('ccrc-doctor-fix-wrappers-absent-');
     const r0 = runDoctor(home);
     expect(lineFor(r0.stdout, 'wrappers')).toMatch(/^FAIL wrappers: /);
-    expect(existsSync(bin(home, 'claude2')), 'doctor without --fix wrote a launcher').toBe(false);
+    expect(existsSync(bin(home, 'claude9')), 'doctor without --fix wrote a launcher').toBe(false);
     const r = runDoctor(home, ['doctor', '--fix']);
-    expect(r.stdout).toMatch(/^FIX wrappers: WRITE claude2: /m);
+    expect(r.stdout).toMatch(/^FIX wrappers: WRITE claude9: /m);
     expect(second(r.stdout)).toMatch(/^PASS wrappers: /m);
-    expect(readFileSync(bin(home, 'claude2'), 'utf8')).toBe(marked('claude2', '.claude2', 'generated'));
-    expect(statSync(bin(home, 'claude2')).mode & 0o777).toBe(0o755);
+    expect(readFileSync(bin(home, 'claude9'), 'utf8')).toBe(marked('claude9', '.claude9', 'generated'));
+    expect(statSync(bin(home, 'claude9')).mode & 0o777).toBe(0o755);
   });
 
   it('a launcher whose ccrc marker still verifies, written for an older roster, is regenerated, and the one it replaced is kept', () => {
     const home = launcherBox('ccrc-doctor-fix-wrappers-stale-');
-    const old = marked('claude2', '.claude2-old', 'generated');
-    writeFileSync(bin(home, 'claude2'), old, { mode: 0o755 });
+    const old = marked('claude9', '.claude9-old', 'generated');
+    writeFileSync(bin(home, 'claude9'), old, { mode: 0o755 });
     const r0 = runDoctor(home);
     expect(lineFor(r0.stdout, 'wrappers')).toMatch(/^FAIL wrappers: /);
-    expect(readFileSync(bin(home, 'claude2'), 'utf8')).toBe(old);
+    expect(readFileSync(bin(home, 'claude9'), 'utf8')).toBe(old);
     const r = runDoctor(home, ['doctor', '--fix']);
-    expect(r.stdout).toMatch(/^FIX wrappers: REWRITE claude2: /m);
+    expect(r.stdout).toMatch(/^FIX wrappers: REWRITE claude9: /m);
     expect(second(r.stdout)).toMatch(/^PASS wrappers: /m);
-    expect(readFileSync(bin(home, 'claude2'), 'utf8')).toBe(marked('claude2', '.claude2', 'generated'));
-    const b = backups(home, 'claude2');
+    expect(readFileSync(bin(home, 'claude9'), 'utf8')).toBe(marked('claude9', '.claude9', 'generated'));
+    const b = backups(home, 'claude9');
     expect(b).toHaveLength(1);
     expect(readFileSync(bin(home, b[0]!), 'utf8')).toBe(old);
   });
@@ -8437,25 +8437,25 @@ describe('ccrc doctor --fix: wrappers — a launcher is regenerated only when cc
   it('a launcher ccrc did not write is never overwritten: its FAIL stands, byte for byte, with no backup', () => {
     const home = launcherBox('ccrc-doctor-fix-wrappers-foreign-');
     const foreign = ['#!/usr/bin/env bash', '# hand-written, and pointing somewhere else on purpose',
-      'export CLAUDE_CONFIG_DIR="$HOME/.claude2-elsewhere"', 'exec "$HOME/.local/bin/claude" "$@"', ''].join('\n');
-    writeFileSync(bin(home, 'claude2'), foreign, { mode: 0o755 });
+      'export CLAUDE_CONFIG_DIR="$HOME/.claude9-elsewhere"', 'exec "$HOME/.local/bin/claude" "$@"', ''].join('\n');
+    writeFileSync(bin(home, 'claude9'), foreign, { mode: 0o755 });
     const r = runDoctor(home, ['doctor', '--fix']);
-    expect(r.stdout).toMatch(/^FIX wrappers: REFUSE claude2: /m);
+    expect(r.stdout).toMatch(/^FIX wrappers: REFUSE claude9: /m);
     expect(second(r.stdout)).toMatch(/^FAIL wrappers: /m);
-    expect(readFileSync(bin(home, 'claude2'), 'utf8')).toBe(foreign);
-    expect(backups(home, 'claude2')).toEqual([]);
+    expect(readFileSync(bin(home, 'claude9'), 'utf8')).toBe(foreign);
+    expect(backups(home, 'claude9')).toEqual([]);
   });
 
   it('a launcher ccrc wrote and someone edited since is never overwritten either', () => {
     const home = launcherBox('ccrc-doctor-fix-wrappers-edited-');
-    const edited = marked('claude2', '.claude2', 'generated').replace('/.claude2"', '/.claude2-hand"');
-    expect(edited, 'the edit changed nothing — re-anchor it on the export line').not.toBe(marked('claude2', '.claude2', 'generated'));
-    writeFileSync(bin(home, 'claude2'), edited, { mode: 0o755 });
+    const edited = marked('claude9', '.claude9', 'generated').replace('/.claude9"', '/.claude9-hand"');
+    expect(edited, 'the edit changed nothing — re-anchor it on the export line').not.toBe(marked('claude9', '.claude9', 'generated'));
+    writeFileSync(bin(home, 'claude9'), edited, { mode: 0o755 });
     const r = runDoctor(home, ['doctor', '--fix']);
-    expect(r.stdout).toMatch(/^FIX wrappers: REFUSE claude2: /m);
+    expect(r.stdout).toMatch(/^FIX wrappers: REFUSE claude9: /m);
     expect(second(r.stdout)).toMatch(/^FAIL wrappers: /m);
-    expect(readFileSync(bin(home, 'claude2'), 'utf8')).toBe(edited);
-    expect(backups(home, 'claude2')).toEqual([]);
+    expect(readFileSync(bin(home, 'claude9'), 'utf8')).toBe(edited);
+    expect(backups(home, 'claude9')).toEqual([]);
   });
 
   it('a Codex lane\'s marker-verified launcher is regenerated the same way, to exec ccrc-codex', async () => {
@@ -10961,7 +10961,7 @@ cat > "$SCRATCH/t11-residue-insert.mjs" <<'EOF'
 import { readFileSync, writeFileSync } from 'node:fs';
 const [target, b64File] = process.argv.slice(2);
 const add = readFileSync(b64File, 'utf8').split('\n').filter(Boolean);
-const ANCHOR = "'ZXhwb3BsYXRmb3Jt',\n";
+const ANCHOR = "'<base64 of a listed name>',\n";
 const src = readFileSync(target, 'utf8');
 if (src.split(ANCHOR).length !== 2) throw new Error('ROSTER_RESIDUE: the fifth entry is not exactly one line end');
 writeFileSync(target, src.replace(ANCHOR, `${ANCHOR}${add.map((b) => `  '${b}',\n`).join('')}`));
@@ -11611,7 +11611,7 @@ Plan 3a's two ruling-Z guards bind 3b's order:
 - **R-O5, mirroring the lanes' exec blocks into the server box's roster:** yes, after both lanes verify and after critic #14's census.
 - **R-O6, pausing auto-update:** pause it for each lane's window only, never across the soak (critic #4, and the 2026-09-30 ruling that ccrc's own updater is monitored, never replaced by hand). The skeleton's `update.lock` reason is refuted: no runbook step takes that lock.
 - **R-O7, the live launcher's bytes, which match no commit:** keep a box-local, dot-named 0600 snapshot until Plan 4's cleanup is verified.
-- **R-O8, OpenClawHetzner's box-swap runbook and the GLM notes:** trim the runbook in place, and move the GLM install notes into `infra/handoff/README.md`.
+- **R-O8, project-c's box-swap runbook and the GLM notes:** trim the runbook in place, and move the GLM install notes into `infra/handoff/README.md`.
 - **R-O9, the soak before Plan 4:** at least one full weekly usage window on both lanes.
 - **R-C10's framing, a note carried from Plan 3a's merge authorisation (critic #22):** use the targeted `ccgpt-runtime build` plus the one `enable --now` of ccrc's instance, not a full install. It equals the spine's own converge only once the operator has disabled that lane's foreign usage timer (its `ccgpt-usage@<id>.timer`, or the flat `ccgpt-usage.timer`), so that disable precedes both the roster flip and the enable, as steps 3 and 5 order it. Only then is the next update a no-op. Plan 3b puts it to the operator for confirmation, because it resembles the hand rollout that the 2026-09-30 ruling forbids.
 
@@ -11632,15 +11632,15 @@ Plan 3a's two ruling-Z guards bind 3b's order:
   - **Optional:** a third authorisation for the server-box mirror.
 - **Plan 4**
   - It rests on the operator's standing authorisation of the eventual removal (spec §2.11), plus an explicit go after the soak.
-  - Tasks 1–3 are one OpenClawHetzner PR, reviewed there.
+  - Tasks 1–3 are one project-c PR, reviewed there.
   - Task 4 is a separate, irreversible live act, authorised on its own.
   - Task 5 is a small ccrc PR, code plus docs (ruling Z8).
 
 **Plan 4: retirement (the point of no return)**
-1. **OpenClawHetzner:** move claude-glm's install notes out of the runbook being deleted, to where R-O8 says. A grep proves the notes are at their new home before the old file goes.
-2. **OpenClawHetzner:** split `test_ccgpt_proxy.py` per method. State method counts before and after. The GLM/K3 wrapper cases, the provider-policy cases and the ownership-allow-list case stay and pass, run per the file's docstring (that repository has no CI for them). The publisher's SHA-256 pin goes with the publisher.
+1. **project-c:** move claude-alt1's install notes out of the runbook being deleted, to where R-O8 says. A grep proves the notes are at their new home before the old file goes.
+2. **project-c:** split `test_ccgpt_proxy.py` per method. State method counts before and after. The GLM/K3 wrapper cases, the provider-policy cases and the ownership-allow-list case stay and pass, run per the file's docstring (that repository has no CI for them). The publisher's SHA-256 pin goes with the publisher.
    - **Obligation (critic #19):** map each deleted GPT-lane test method to a ccrc case, or to a stale `nohup` pin that spec §14 says to replace, with counts on both sides.
-3. **OpenClawHetzner:** delete the GPT-lane files and repair every reference.
+3. **project-c:** delete the GPT-lane files and repair every reference.
    - **Obligation (critic #19):** the count is ten files deleted plus the one split in Task 2, not "eleven deleted".
    - Mark the box-swap design record superseded, and fix the `.gitignore` comment.
    - `git grep ccgpt` then hits only superseded records.

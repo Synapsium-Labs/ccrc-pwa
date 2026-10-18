@@ -51,7 +51,7 @@ below was read or measured this week, not carried from the August spec.
    `_wrap_parse_shape` (`ccd/ccrc-wrapper-shape:209-277`) accepts exactly 2 or 3
    significant lines and prints a positional 4-field TSV consumed by `cmd_wrappers` (three
    sites), `ccrc-adopt`, doctor's `_check_wrappers` and `wrapper-roundtrip.test.ts`. The
-   hand-written api-key lanes on the box (`cck3`, `claude-glm`) are 12-15 lines and are
+   hand-written api-key lanes on the box (`ccx3`, `claude-alt1`) are 12-15 lines and are
    refused by that reader by design.
 4. **Roster model.** `ExecSpec = upstream | generated{secretsFile?} | external`
    (`shared/roster.ts:65-68`); `secretsFile` validated only in the generated arm and
@@ -87,7 +87,7 @@ below was read or measured this week, not carried from the August spec.
    `CLAUDE_CODE_OAUTH_TOKEN`; `gpt -> ccgpt` (LiteLLM 1.93.0 + a system-folding shim,
    device-code login writing `~/.handoff/chatgpt-auth/auth.json`, refresh automatic,
    a FAILED refresh falls into a fresh 15-minute device-code prompt inside whatever
-   process called it); `cck3`/`claude-glm` undeclared OpenRouter/Cortecs lanes sourcing a
+   process called it); `ccx3`/`claude-alt1` undeclared OpenRouter/Cortecs lanes sourcing a
    shared `~/.handoff/env`. **`gpt` was kill-switched by `~/.cc-sessions/gpt-disabled` from
    2026-07-28 until 2026-09-08, when `065882ae` (PR #61) removed the file and put every
    ENABLED non-home-able lane back into the auto-swap rotation as a last-resort overflow
@@ -341,7 +341,7 @@ degraded arm the OpenRouter lane falls back to when the catalogue will not load.
 one look, and the sentence that says which of the two you are reading is already required.
 
 **The ownership whitelist is enforced by a PROXY on this fleet, not by an account setting —
-MEASURED 2026-09-07.** `~/.local/bin/cck3` and `~/.local/bin/claude-glm` both point
+MEASURED 2026-09-07.** `~/.local/bin/ccx3` and `~/.local/bin/claude-alt1` both point
 `ANTHROPIC_BASE_URL` at `http://127.0.0.1:$HANDOFF_PROXY_PORT` (8642), both start
 `handoff-proxy` if it is not already listening, and both **refuse to run** when
 `~/.handoff/providers-whitelist.json` is absent; the proxy injects that list as `provider.only`
@@ -358,7 +358,7 @@ does not *require* the proxy, does not start it and never reads the whitelist fi
 which endpoint the lane carries and leaves the judgement where it belongs (decision 3 stands,
 now stated in terms of what is actually on the box).
 
-**A correction the same measurement forces.** `cck3` is not a Moonshot-first-party lane: its key
+**A correction the same measurement forces.** `ccx3` is not a Moonshot-first-party lane: its key
 is `OPENROUTER_API_KEY` and its endpoint is the loopback proxy. What is Moonshot is the
 *upstream* OpenRouter would route to, and the ownership ban bites THERE, as `provider.only` —
 the wrapper even warns on startup when `moonshotai` is missing from the whitelist. Generalising
@@ -1597,7 +1597,7 @@ plan's mutation table will name these at minimum:
         allowlist is what makes it necessary rather than merely tidy;
     (b) whether the generated api-key arm should widen beyond OpenRouter. **GRANTED 2026-09-07;
         it is now decision 22.** The policy worry attached to it here was mistaken and §4.3
-        records the correction: `cck3` is not a Moonshot-endpoint lane, it is an OpenRouter lane
+        records the correction: `ccx3` is not a Moonshot-endpoint lane, it is an OpenRouter lane
         behind the whitelist proxy, so the base-URL field neither invokes nor weakens the
         ownership ban.
 
@@ -1665,7 +1665,7 @@ plan's mutation table will name these at minimum:
         loosening: it is the measured shape of every api-key lane already on this box, and it is
         what lets an operator point at the whitelist proxy. Alternative: accept any scheme with a
         warning, which puts the lane's key on a network in clear on the operator's say-so.
-    (c) **the existing `cck3` / `claude-glm` wrappers are DECLARED, never adopted.** They each do
+    (c) **the existing `ccx3` / `claude-alt1` wrappers are DECLARED, never adopted.** They each do
         things ccrc's four-line generated shape cannot — start the whitelist proxy, choose an arm
         from `HANDOFF_PROVIDER`, export six model variables, refuse without the whitelist file —
         and `ccrc wrappers` would rewrite an adopted one INTO that four-line shape, which is data

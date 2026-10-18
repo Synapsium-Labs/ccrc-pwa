@@ -14,12 +14,12 @@
 
 ## The coordinator's rulings this plan builds (binding; they win over the spec and over the plan's own preferences)
 
-- **(A) The first commit is review 288's residue** (Task 1): F1 the CONTROL plants a running unit too (the stronger pin); F2 3964's entry and ccd's resume header say a pane that came back is itself a cwd user; F3 3964 gets its mutation row; F4 CCR-15's qualification gains "or a breadcrumb that stands but cannot be read", inside that passage only; F5/F6 the as-built rows corrected to the measured counts (M08 ladder 17, M26 verb 3) with the note that review 284 quoted 1 and 2; F7 `close_time`'s list says "among them" and names U+0085.
+- **(A) The first commit is review 288's residue** (Task 1): F1 the CONTROL plants a running unit too (the stronger pin); F2 3964's entry and ccd's resume header say a pane that came back is itself a cwd user; F3 3964 gets its mutation row; F4 #166's qualification gains "or a breadcrumb that stands but cannot be read", inside that passage only; F5/F6 the as-built rows corrected to the measured counts (M08 ladder 17, M26 verb 3) with the note that review 284 quoted 1 and 2; F7 `close_time`'s list says "among them" and names U+0085.
 - **(B) 3893 closed before the lane composes the verb** (Task 2): both remedies measured per verb; the archive is cleared inside the gate (the departure `return-clears-the-archive-inside-the-gate`); a test forces the interleaving through a stubbed seam and reds when the fix is removed.
 - **(C) The threshold is never typed by the server** (Tasks 3, 5, 7): `expiresAt` in the audit's document, `archivedAt` on `not-expired`, ONE reader, no re-audit before the instant unless the archive changes, no evidence composes nothing. AGENT-FIRST: ccd, then server and pwa.
 - **(D) The lane** (Tasks 5–7): `archivedExpiryVerdict` in its own L1 file; a second population with its own memory, clocks, executor call, feed rows and attention entries, never visible to child reclamation wave 5's chip; audit, then verb with the audit's token; `capSupported(state, EXPIRE_CAP)`; the box words told apart from composition errors; the word map held equal to ccd's EXPIRE region by a test; `verb-gate.test.ts`'s `CAP_GATED_VERBS` entry; at most one `ws-expire` per pass, fleet-wide.
 - **(E) The lane ships shadowed** (Tasks 6, 7, 8): `$REG/expire-lane-live` absent → audit and record "would expire", never `ws-expire`; present → the call; `reclaim-paused` → nothing. No writer in the tree, pinned beside `stall-watch-live`. The archived-past-seven-days count on this box is in the deploy note.
-- **(F) The switch and the words** (Task 8, after the lane's live arm): `reclaim-paused` the one cleanup switch, the Runs-banner label widened, CCR-15 §5.8's "and nothing else" amended (spec §6 item 1), coordinator clause 3 with its verbatim pin, README and `wave-lifecycle.md` §6, the archive-confirm copy.
+- **(F) The switch and the words** (Task 8, after the lane's live arm): `reclaim-paused` the one cleanup switch, the Runs-banner label widened, #166 §5.8's "and nothing else" amended (spec §6 item 1), coordinator clause 3 with its verbatim pin, README and `wave-lifecycle.md` §6, the archive-confirm copy.
 - **(G) Operator text** (Tasks 3, 5, 7): a standing `in-use` refusal is expected; after a bounded number of passes it is an attention entry naming the pid, its command and the path; the text never tells an operator to end a pid without naming what it is; the lane never kills.
 - **(H) The carried follow-ups** (Tasks 9–11): the archive door's unreadable-store 409 detail, the base's 404 fold, the `already archived` reading, FM7, ws-reap's fresh arm over an unreadable breadcrumb on an archived row, ws-gc's two lines. NOT taken: ws-reclaim's word for an `expire:` breadcrumb (both are retries) — recorded under "Carried out of this wave".
 - **(I) Overlaps**: drafted on `origin/main`; every anchor in a file another in-flight wave edits is listed under `## Re-measure at dispatch`, and the coordinator re-verifies the plan on `main` after child reclamation's #290 merges.
@@ -57,7 +57,7 @@ Copied from `CLAUDE.md`, the spec, wave 3's plan and the ledger where the value 
 - **Branch discipline.** Commit on this workspace's own branch, one commit per task, never a separate feature branch. Identity is the repository's noreply address; do not change git config. Before each push: `git log --format='%an <%ae>' origin/main..HEAD | sort -u`.
 - **Deviation numbers.** Twelve departures, by slug; the issued block is 4114–4125 (see the callout above). No `D-<n>` token is written for a new number in any code comment, test title or doc this plan touches: the comments name the departure's SLUG where they need one.
 - **No hostnames, IPs, tailnet names or docserver URLs** anywhere in the diff (`topology-clean.test.ts`).
-- **Overlap (ruling I).** Child reclamation wave 5 (#290, run 260, in review) edits `watch.ts`, `server.ts`, `shared/api.ts`, `README.md`, `childReclaimWords.ts`, `ChildReclaimBanner.tsx`, `child-reclaim-banner.test.tsx` and the CCR-15 spec (§1, §5.5), among the files this plan touches; child reclamation wave 6 (its plan merged as #293) edits `ccd/ccd`, `shared/api.ts`, `watch.ts`, `fleetws.test.ts`, `RunsScreen.tsx` and `childReclaimWords.ts`; session-continuity wave 4 (run 274) edits `ccd/ccd`, `server/test/single-definition.test.ts` (it APPENDS a no-writer describe for `scope-sweep-live`, its own Task 3) and `README.md` (its Tasks 1 and 7); stall-watch-settings W1 (its plan merged as #285) edits `shared/api.ts` and `watch.ts`. Ruling (E) asks for this wave's no-writer pin "beside stall-watch-live and scope-sweep-live": `scope-sweep-live` is NOT on `main` yet (0 occurrences in `single-definition.test.ts` on `4db20aa17`) — it arrives with run 274 — so Task 7 places the pin beside `stall-watch-live`'s, and **whichever of the two waves lands second keeps the two no-writer describes adjacent** when it merges `main` (both append after the stall-watch blocks). `ccd/ccd` is shared BY REGION (the ledger's 2026-10-06 07:02 ruling): this wave's regions are the EXPIRE region, the MIRROR block, the return verbs' gate lines, `_ws_reap_locked`'s first line, ws-gc's `archived)`/`reaping)` arms and the `_reg_get` census sentence. Whichever lands second runs `git merge origin/main` (never a rebase), keeps both sides, re-stamps `ccd/ccd`, re-measures the `_reg_get` census, re-runs the five citation cases and `cite-remeasure`, repairs README's anchors by content, and re-runs this plan's suites.
+- **Overlap (ruling I).** Child reclamation wave 5 (#290, run 260, in review) edits `watch.ts`, `server.ts`, `shared/api.ts`, `README.md`, `childReclaimWords.ts`, `ChildReclaimBanner.tsx`, `child-reclaim-banner.test.tsx` and the #166 spec (§1, §5.5), among the files this plan touches; child reclamation wave 6 (its plan merged as #293) edits `ccd/ccd`, `shared/api.ts`, `watch.ts`, `fleetws.test.ts`, `RunsScreen.tsx` and `childReclaimWords.ts`; session-continuity wave 4 (run 274) edits `ccd/ccd`, `server/test/single-definition.test.ts` (it APPENDS a no-writer describe for `scope-sweep-live`, its own Task 3) and `README.md` (its Tasks 1 and 7); stall-watch-settings W1 (its plan merged as #285) edits `shared/api.ts` and `watch.ts`. Ruling (E) asks for this wave's no-writer pin "beside stall-watch-live and scope-sweep-live": `scope-sweep-live` is NOT on `main` yet (0 occurrences in `single-definition.test.ts` on `4db20aa17`) — it arrives with run 274 — so Task 7 places the pin beside `stall-watch-live`'s, and **whichever of the two waves lands second keeps the two no-writer describes adjacent** when it merges `main` (both append after the stall-watch blocks). `ccd/ccd` is shared BY REGION (the ledger's 2026-10-06 07:02 ruling): this wave's regions are the EXPIRE region, the MIRROR block, the return verbs' gate lines, `_ws_reap_locked`'s first line, ws-gc's `archived)`/`reaping)` arms and the `_reg_get` census sentence. Whichever lands second runs `git merge origin/main` (never a rebase), keeps both sides, re-stamps `ccd/ccd`, re-measures the `_reg_get` census, re-runs the five citation cases and `cite-remeasure`, repairs README's anchors by content, and re-runs this plan's suites.
 
 ## Review Focus
 
@@ -68,7 +68,7 @@ The inputs a person — or a reviewer looking for a deletion that should not hap
 3. **One at a time.** ONE pass runs at a time — a pass that finds another still running returns at once — so at most one `ws-expire` is in flight, fleet-wide, and at most one is composed per pass; a second call inside the cadence does nothing (Task 7: `at most ONE ws-expire …`, `a pass that finds another still running returns at once …`, `a second call inside the cadence does nothing …`).
 4. **The threshold is ccd's.** A row is audited once per archive to learn `expiresAt` (at most three such audits a pass); a young one is not asked again before its instant; a re-archived one is learned afresh; a `not-expired` at the act (the threshold was raised) teaches the audit's new instant; an older ccd is no evidence and nothing is composed (Task 3: `expiresAt is ccd's own threshold`; Task 7: `a YOUNG archive …`, `…unless its archive changes`, `a threshold RAISED …`, `an older ccd's document …`). No seven-day literal in the server or the PWA, and one reader of the key (Task 7's single-definition pins).
 5. **3893 is closed.** A REAL expiry forced into the gap between each return verb's gate and its journal line finds the row `not-archived` and takes nothing; with the fix removed, it takes the row (Task 2).
-6. **What is never touched.** A child (CCR-15's), a held row (listed), a row an open run names as worker or claimant, a row a review still needs, a row whose identity is unmeasured, a row someone is viewing — each read twice: by the LANE on every pass (Task 7's population cases each prove the row never became ELIGIBLE, so the lane's own wiring of every condition is pinned, not only the executor's), and by the EXECUTOR again at the act, with the destructive-grade reads child reclamation's executor takes (Task 6: `a run that names the row NOW …`, `a REVIEW run naming the row …`; Task 7: `a row bound to a run while the pass learns ANOTHER row's instant is deferred at the act`).
+6. **What is never touched.** A child (#166's), a held row (listed), a row an open run names as worker or claimant, a row a review still needs, a row whose identity is unmeasured, a row someone is viewing — each read twice: by the LANE on every pass (Task 7's population cases each prove the row never became ELIGIBLE, so the lane's own wiring of every condition is pinned, not only the executor's), and by the EXECUTOR again at the act, with the destructive-grade reads child reclamation's executor takes (Task 6: `a run that names the row NOW …`, `a REVIEW run naming the row …`; Task 7: `a row bound to a run while the pass learns ANOTHER row's instant is deferred at the act`).
 7. **A process in the tree.** A standing `in-use` is asked again every pass, listed after three with the pid, its command and the path, and the sentence says to find out what it is before ending it — the fleet's own tmux server is also a `tmux: server` — and never says kill (Task 3: `inUse` in the document; Task 5: the sentence; Task 7: `after 3 refusals …`).
 8. **The box words.** `flock-unavailable` (permanent for that box: the lane composes nothing more there — Task 7: `flock-unavailable stops the lane on that box …`) and `lock-unopenable` (retryable) are read from their stderr shapes — the second MEASURED off the real verb — and never confused with a composition error, which is reported and never retried (Task 5). `python3 unavailable` is the box's too: a retried failure, not a composition error.
 9. **The `inUse` record is JSON at its source** (the security ruling). A cwd and a command are chosen by whoever owns the process; the probe's python `json.dumps` each record, the shell keeps the line as printed, a pid that is not ASCII digits is unmeasured, and a newline, a tab or a quote in either field yields one valid record with the exact bytes (Task 3: `a cwd and a command carrying a newline, a tab and a quote are ONE record …`; the ladder's `a listed pid that is not ASCII digits is UNMEASURED …`).
@@ -77,14 +77,14 @@ The inputs a person — or a reviewer looking for a deletion that should not hap
 
 | File | Task | Responsibility |
 |---|---|---|
-| `server/test/ccd-ws-expire-verb.test.ts` (the CONTROL), `ccd/ccd` (the resume header, comment only), wave 3's plan (3964's entry, Task 9A's table), the CCR-15 spec (§6's "Not changed, deliberately"), `deploy/measure-workspace-lifecycle.py` (`close_time`'s docstring) | 1 | review 288's residue, F1–F7 |
+| `server/test/ccd-ws-expire-verb.test.ts` (the CONTROL), `ccd/ccd` (the resume header, comment only), wave 3's plan (3964's entry, Task 9A's table), the #166 spec (§6's "Not changed, deliberately"), `deploy/measure-workspace-lifecycle.py` (`close_time`'s docstring) | 1 | review 288's residue, F1–F7 |
 | `ccd/ccd` (the return verbs' four gate lines, `_ws_expire_refuse_return`, the seam `_ws_expire_return_gap`, `_spawn_start`'s comment, the `_reg_get` census), `shared/api.ts` (the `unarchive` act's comment, line-neutral); `server/test/ccd-ws-expire-return-race.test.ts` | 2 | 3893 closed: a return clears the archive inside its gate; the interleaving forced |
 | `ccd/ccd` (`_ws_expire_archived`, `_ws_expire_fork_contained`, `_ws_expire_cwd_users` — its python emits each in-use record JSON-encoded, `_ws_expire_audit_contained`); `server/test/ccd-ws-expire-audit.test.ts`, `server/test/ccd-ws-expire-ladder.test.ts` (the pid guard) | 3 | the audit carries `expiresAt`, `archivedAt` on `not-expired`, and who is in the tree — as JSON built at its source (the security ruling) |
 | `shared/api.ts` (`ExpiryAttention`, `CoordStatus.expiryAttention`), `server/src/watch.ts` (`emitCoord`), `README.md` (four anchors, by content); `server/test/fleetws.test.ts` | 4 | the expiry list reaches the coord frame |
 | `server/src/archivedExpiry.ts` (new, L1); `server/test/archived-expiry-policy.test.ts` (new) | 5 | the words, the parsers, the one `expiresAt` reader, the verdict, the memory, the attention words |
 | `server/src/coord/expireArchived.ts` (new); `server/test/expire-archived.test.ts` (new), `server/test/verb-gate.test.ts` (`CAP_GATED_VERBS`), `server/test/mail-routes.test.ts` (the thirteenth union) | 6 | the one executor — the store re-read at the act, the switches read again nearest the argv — and its feed row |
 | `server/src/watch.ts` (`sweepArchivedExpiry`, its memory, its tick dispatch), `server/src/coord/expireArchived.ts` (`learnExpiry`); `server/test/archived-expiry-lane.test.ts` (new), `server/test/single-definition.test.ts` (the no-writer pins, the threshold pins) | 7 | the lane, shadowed, one pass at a time |
-| `pwa/src/fleet/expiryWords.ts`, `pwa/src/fleet/ExpiryAttention.tsx` (new), `pwa/src/fleet/ChildReclaimBanner.tsx`, `pwa/src/fleet/childReclaimWords.ts`, `pwa/src/fleet/ArchiveSheet.tsx`, `pwa/src/screens/FleetScreen.tsx` (the Archive-all confirm), `ccd/coordinator-skill/SKILL.md`, `ccd/coordinator-skill/references/wave-lifecycle.md`, `README.md`, the CCR-15 spec (§5.8), the lifecycle spec (§5.3, §6 item 1); `pwa/test/child-reclaim-banner.test.tsx`, `pwa/test/archive-sheet.test.tsx`, `pwa/test/fleet-screen.test.tsx`, `server/test/coordinator-skill.test.ts`, `server/test/expiry-lane-prose.test.ts` (new) | 8 | the one cleanup switch and the words that move with the live arm |
+| `pwa/src/fleet/expiryWords.ts`, `pwa/src/fleet/ExpiryAttention.tsx` (new), `pwa/src/fleet/ChildReclaimBanner.tsx`, `pwa/src/fleet/childReclaimWords.ts`, `pwa/src/fleet/ArchiveSheet.tsx`, `pwa/src/screens/FleetScreen.tsx` (the Archive-all confirm), `ccd/coordinator-skill/SKILL.md`, `ccd/coordinator-skill/references/wave-lifecycle.md`, `README.md`, the #166 spec (§5.8), the lifecycle spec (§5.3, §6 item 1); `pwa/test/child-reclaim-banner.test.tsx`, `pwa/test/archive-sheet.test.tsx`, `pwa/test/fleet-screen.test.tsx`, `server/test/coordinator-skill.test.ts`, `server/test/expiry-lane-prose.test.ts` (new) | 8 | the one cleanup switch and the words that move with the live arm |
 | `server/src/coord/archiveDoor.ts`, `server/src/server.ts` (the archive route); `server/test/archive-door-decide.test.ts`, `server/test/archive-door.test.ts`, `server/test/routes.test.ts` | 9 | the archive door's carried follow-ups: the store's detail, 503 for an unlistable registry, `already archived` over a live pane |
 | `pwa/src/fleet/groupFleet.ts` (`inReleasedFold`); `pwa/test/groupFleet.test.ts` | 10 | FM7: the folds never share a row, by the PWA's own predicates |
 | `ccd/ccd` (`_ws_reap_locked`'s first line, `_ws_reap_crumb_unread` in the MIRROR block, ws-gc's two arms); `server/test/ccd-ws-expire-verb.test.ts`, `server/test/ccd-ws-gc.test.ts` | 11 | ws-reap never takes its fresh arm over an unreadable breadcrumb; ws-gc's advice is true |
@@ -165,7 +165,7 @@ Replace with:
 
 Measured: `server/test/ccd-ws-expire-verb.test.ts`: `30 passed (30)`.
 
-- [ ] **Step 3: F2–F7, the texts.** F2: 3964's entry and ccd's resume header say a pane that came back is itself a cwd user and refuses `in-use` there, never killed — the header's comment grows by two lines inside the EXPIRE region, below `:19131`; the entry gains a continuation line INSIDE its list item, and its own `- **D-3964** … —` line stays byte-identical, because `deviation-refs.test.ts` reads that line shape in EVERY plan, this one's replay blocks included, and a Find and a Replace that quote two different subjects for one number are its red (measured: `1 failed | 30 passed (31)` — no NEW D-<n> carries two different subjects in two different plans — when this plan's first draft edited the line itself). F3: 3964 gets its row in Task 9A's guard table (W1, and W4 now that F1 has made it red). F5/F6, as ruled: M08 and M26 corrected to the whole-file counts, with the note that review 284 quoted 1 and 2. F4: CCR-15's "Not changed, deliberately" qualification gains "or a breadcrumb that stands but cannot be read" — that passage ONLY (#290 edits that spec's §1 and §5.5; the coordinator told child reclamation's coordinator in mail 3655). F7: `close_time`'s list says "among them" and names U+0085 (Python's `float()` strips it, JavaScript's `Number()` does not — measured: `float('\x8512')` is `12.0`, `Number('\u008512')` is `NaN`).
+- [ ] **Step 3: F2–F7, the texts.** F2: 3964's entry and ccd's resume header say a pane that came back is itself a cwd user and refuses `in-use` there, never killed — the header's comment grows by two lines inside the EXPIRE region, below `:19131`; the entry gains a continuation line INSIDE its list item, and its own `- **D-3964** … —` line stays byte-identical, because `deviation-refs.test.ts` reads that line shape in EVERY plan, this one's replay blocks included, and a Find and a Replace that quote two different subjects for one number are its red (measured: `1 failed | 30 passed (31)` — no NEW D-<n> carries two different subjects in two different plans — when this plan's first draft edited the line itself). F3: 3964 gets its row in Task 9A's guard table (W1, and W4 now that F1 has made it red). F5/F6, as ruled: M08 and M26 corrected to the whole-file counts, with the note that review 284 quoted 1 and 2. F4: #166's "Not changed, deliberately" qualification gains "or a breadcrumb that stands but cannot be read" — that passage ONLY (#290 edits that spec's §1 and §5.5; the coordinator told child reclamation's coordinator in mail 3655). F7: `close_time`'s list says "among them" and names U+0085 (Python's `float()` strips it, JavaScript's `Number()` does not — measured: `float('\x8512')` is `12.0`, `Number('\u008512')` is `NaN`).
 
 <!-- replay: replace ccd/ccd -->
 In `ccd/ccd`, find:
@@ -289,7 +289,7 @@ fix(expire): review 288's residue, F1-F7
 
 F1: the worktree-resume CONTROL plants a running unit too, so a unit ask
 there reds it. F2: a pane that came back is itself a cwd user (3964's entry,
-the resume header). F3: 3964's mutation row. F4: CCR-15's qualification names
+the resume header). F3: 3964's mutation row. F4: #166's qualification names
 a breadcrumb that stands but cannot be read. F5/F6: the as-built rows carry
 the measured counts (M08 ladder 17, M26 verb 3). F7: close_time's list says
 "among them" and names U+0085.
@@ -617,7 +617,7 @@ In `shared/api.ts`, find:
   | 'unarchive'     // `_spawn_start` cleared an archive stamp because a pane was
                     // being created. DISTINCT FROM `restore`: that is an
                     // operator asking for the workspace back; this is a spawn
-                    // repairing an invariant nobody declared (CCR-10).
+                    // repairing an invariant nobody declared (#127).
 ````
 
 Replace with:
@@ -626,7 +626,7 @@ Replace with:
   | 'unarchive'     // a return verb's gate (wave 3b) or `_spawn_start` cleared
                     // an archive stamp because a pane was asked for. DISTINCT
                     // FROM `restore`: that is the deliberate way back; this is
-                    // a start/ensure/swap/enable on an archived row (CCR-10).
+                    // a start/ensure/swap/enable on an archived row (#127).
 ````
 
 <!-- replay: replace ccd/ccd -->
@@ -1900,7 +1900,7 @@ Create `server/src/archivedExpiry.ts`:
 // these verdicts; `coord/expireArchived.ts` (the one executor) reads the box's two documents through the parsers
 // here. Nothing in this file reads a file, a row or a clock.
 //
-// THE POPULATION is an ARCHIVED WORKSPACE nobody claims, seven days after its archive — never a child (CCR-15's lane
+// THE POPULATION is an ARCHIVED WORKSPACE nobody claims, seven days after its archive — never a child (#166's lane
 // owns those) and never a main checkout (nothing archives one). THE THRESHOLD IS NEVER TYPED HERE: ccd's
 // `ws-audit --expire` document carries `expiresAt` (`archivedAt + WS_EXPIRE_AFTER_S`, from the one ccd definition),
 // and `expireAuditExpiresAt` is the ONE reader of that key. A document without it — an older ccd — is NO EVIDENCE,
@@ -2171,10 +2171,10 @@ export type ArchivedExpiryVerdict =
  * IS THIS ROW AN ARCHIVED WORKSPACE THE SERVER MAY ASK TO EXPIRE NOW (spec §5.3, "A row is eligible when")? Every
  * conjunct in the spec's order, every doubt ineligible:
  *  - a workspace (a main checkout is never expired) with an archive;
- *  - no child marker — `child` or `unreadable` is CCR-15's lane's, never this one's;
+ *  - no child marker — `child` or `unreadable` is #166's lane's, never this one's;
  *  - identity measured;
  *  - the store read; no non-terminal run names it as `sessionId` or as `claimedBy`; it is not the `sessionId` of a
- *    review run whose reviewed run is not terminal (CCR-15 R16, applied to unmarked reviewers: the report lives in
+ *    review run whose reviewed run is not terminal (#166 R16, applied to unmarked reviewers: the report lives in
  *    this workspace's clips);
  *  - its expiry instant is KNOWN (ccd's, from the audit) and has come;
  *  - no hold. A row past its instant and still held is `held` — the attention list's, never acted on.
@@ -2206,7 +2206,7 @@ export function archivedExpiryStoreSkip(store: ExpiryStoreRead): ArchivedExpiryS
   return null;
 }
 
-/** A REVIEW run naming this row as `sessionId`, whose reviewed run is not terminal, keeps it (spec §5.3, CCR-15 R16).
+/** A REVIEW run naming this row as `sessionId`, whose reviewed run is not terminal, keeps it (spec §5.3, #166 R16).
  *  A reviewed run this pass could not read, or that is absent, is doubt — and doubt keeps. */
 export const reviewKeeps = (reviewed: { readonly kind: 'run'; readonly state: RunState } | { readonly kind: 'absent' } | { readonly kind: 'unreadable' }): boolean =>
   reviewed.kind !== 'run' || !(TERMINAL_RUN_STATES as readonly RunState[]).includes(reviewed.state);
@@ -2931,7 +2931,7 @@ async function expirySwitches(deps: ExpireArchivedDeps): Promise<{ kind: 'paused
   return { kind: 'clear', live: names.includes(EXPIRE_LANE_LIVE_MARKER) };
 }
 
-/** THE REVIEW CONJUNCT for one row (spec §5.3, CCR-15 R16): is `id` the `sessionId` of a REVIEW run whose reviewed
+/** THE REVIEW CONJUNCT for one row (spec §5.3, #166 R16): is `id` the `sessionId` of a REVIEW run whose reviewed
  *  run is not terminal? An unreadable or absent reviewed run is doubt, and doubt keeps (`reviewKeeps`). Shared by the
  *  lane's pass and the act's re-read. */
 export function expiryReviewing(coord: CoordStore, id: string): { ok: true; reviewing: boolean } | { ok: false; detail: string } {
@@ -3419,7 +3419,7 @@ describe('the population — what the lane never touches', () => {
     expect(f.entry(id)?.eligibleSince ?? null, `${id}: never eligible`).toBeNull();
   };
 
-  it('a child (CCR-15’s) is never even audited here', async () => {
+  it('a child (#166’s) is never even audited here', async () => {
     const f = await fixture();
     f.touch(EXPIRE_LANE_LIVE_MARKER);
     f.plant('demo-child', OLD, { child: '7' });
@@ -3966,7 +3966,7 @@ MSG
 **Interfaces:**
 - Produces (PWA): `expiryAttentionOf(coord)` — THE ONE READER of `CoordStatus.expiryAttention` (absent → `[]`; a malformed member dropped alone); `EXPIRY_KIND_WORD` and `expiryKindWord(kind)` (a kind from a newer server reads `reported`); `<ExpiryAttention coord>` — the list, a REPORT (no button, no link), rendered INSIDE the cleanup row under the children's list, in the row's existing classes (`fleet.css` is not touched).
 - Changes (PWA): the cleanup row's words — `cleanup not paused` / `cleanup paused` / `cleanup switch unreadable`, and the toggle `Pause cleanup` / `Resume cleanup`; the archive-confirm copy for a workspace, spec §5.2: "It goes offline and folds into Archived. Restore brings it back for 7 days; after that it is cleaned up."; and the BULK confirm ("Archive all" in a card's Released fold, `FleetScreen.tsx`) — the path that feeds the most rows into the seven days (§11 item 2: every archive starts the clock) — from "Restore brings any of them back." to "Restore brings any of them back for 7 days; after that they are cleaned up." (the review's spec lens: the first draft left it promising an unbounded Restore).
-- Changes (texts): coordinator clause 3 ends "…this session’s own workspace is cleaned up by a human, or by the server seven days after it is archived once the operator has armed the server’s expiry lane (until then the lane only records what it would expire)." (spec §5.3’s words plus the arming condition the coordinator ruled on; the verbatim pin moves with it); `wave-lifecycle.md` §6 — "your own workspace, and any workspace dispatch did not mint … stays until a human cleans it up, or — when it carries no child marker — until the server cleans it up seven days after it is archived, once the operator has armed the server’s expiry lane (until then the lane only records what it would expire)", while `has-coordinated` is LEFT AS IT IS on `main` and pinned unchanged: a child that has coordinated keeps its `.child` marker, which `archivedExpiryVerdict` skips and `ws-expire`'s rung 2′ refuses, so it is still cleaned up only by a human (the first draft added "or by the server seven days after it is archived" there, and pinned that false claim — the review's spec lens); README (a coordinator's own workspace "is still cleaned up by a human — or, when it carries no child marker, by the server seven days after it is archived, once the operator has armed the expiry lane with `$REG/expire-lane-live` (until then the lane only records what it would expire)"; a new paragraph, **Archived workspaces are cleaned up after seven days**, whose first sentence carries the same condition; and the three other README passages that name the switch — the `/runs` pause list's item 1, the child-reclaim paragraph's deferral list, the reclaim sweep's switch paragraph — and the verb table's `reclaim-pause` row, each now calling it the cleanup row or the cleanup pause and saying it stops the expiry too; pinned in `expiry-lane-prose.test.ts`); CCR-15 §5.8 — the ONE passage of that spec that says the pause stops "nothing else" — amended (spec §6 item 1; it edits no other CCR-15 passage, and the coordinator pre-notifies child reclamation's coordinator); the lifecycle spec's §5.3 gains **As wave 3b builds the lane** (with an item for the arming condition) and §6 items 1 and 2 their amendment notes. **The arming condition is in the words, not only in the deploy note** (the coordinator's partial ruling on Open question 1): README, `wave-lifecycle.md` §6 and clause 3 each say that the cleanup follows the archive by seven days once the operator has armed the lane and that until then the lane only records what it would expire, so each is true before and after the arming. README names `$REG/expire-lane-live`; the two skill files say it in words, because no skill file names the marker (a session told about the dial could arm a deletion — this task's pin). No skill file names `ws-expire` (wave 3's pin) or `expire-lane-live` (this task's).
+- Changes (texts): coordinator clause 3 ends "…this session’s own workspace is cleaned up by a human, or by the server seven days after it is archived once the operator has armed the server’s expiry lane (until then the lane only records what it would expire)." (spec §5.3’s words plus the arming condition the coordinator ruled on; the verbatim pin moves with it); `wave-lifecycle.md` §6 — "your own workspace, and any workspace dispatch did not mint … stays until a human cleans it up, or — when it carries no child marker — until the server cleans it up seven days after it is archived, once the operator has armed the server’s expiry lane (until then the lane only records what it would expire)", while `has-coordinated` is LEFT AS IT IS on `main` and pinned unchanged: a child that has coordinated keeps its `.child` marker, which `archivedExpiryVerdict` skips and `ws-expire`'s rung 2′ refuses, so it is still cleaned up only by a human (the first draft added "or by the server seven days after it is archived" there, and pinned that false claim — the review's spec lens); README (a coordinator's own workspace "is still cleaned up by a human — or, when it carries no child marker, by the server seven days after it is archived, once the operator has armed the expiry lane with `$REG/expire-lane-live` (until then the lane only records what it would expire)"; a new paragraph, **Archived workspaces are cleaned up after seven days**, whose first sentence carries the same condition; and the three other README passages that name the switch — the `/runs` pause list's item 1, the child-reclaim paragraph's deferral list, the reclaim sweep's switch paragraph — and the verb table's `reclaim-pause` row, each now calling it the cleanup row or the cleanup pause and saying it stops the expiry too; pinned in `expiry-lane-prose.test.ts`); #166 §5.8 — the ONE passage of that spec that says the pause stops "nothing else" — amended (spec §6 item 1; it edits no other #166 passage, and the coordinator pre-notifies child reclamation's coordinator); the lifecycle spec's §5.3 gains **As wave 3b builds the lane** (with an item for the arming condition) and §6 items 1 and 2 their amendment notes. **The arming condition is in the words, not only in the deploy note** (the coordinator's partial ruling on Open question 1): README, `wave-lifecycle.md` §6 and clause 3 each say that the cleanup follows the archive by seven days once the operator has armed the lane and that until then the lane only records what it would expire, so each is true before and after the arming. README names `$REG/expire-lane-live`; the two skill files say it in words, because no skill file names the marker (a session told about the dial could arm a deletion — this task's pin). No skill file names `ws-expire` (wave 3's pin) or `expire-lane-live` (this task's).
 - These land in the SAME commit series as the lane's live arm (Task 7) and after it — never before — so no text claims a cleanup that does not run (ruling F). While the lane is shadowed, README, `wave-lifecycle.md` §6 and clause 3 say so in their own words (the ruling above); the PWA's archive-confirm copy (the single confirm and Archive all) still says what an ARMED fleet does, and whether to hedge it until the fleet is armed is the operator's Open question 1; the deploy note says the operator arms it.
 
 - [ ] **Step 1: Write the failing tests.**
@@ -4189,7 +4189,7 @@ Replace with:
 ````ts
     expect(s6).toContain('it stays until a human cleans it up');
     // Workspace lifecycle wave 3b: an ARCHIVED workspace with no child marker is the server's to clean up seven days
-    // after its archive — and a child that has coordinated keeps its marker, so it is still a human's (CCR-15).
+    // after its archive — and a child that has coordinated keeps its marker, so it is still a human's (#166).
     expect(s6).toContain('or — when it carries no child marker — until the server cleans it up seven days after it is archived');
     // …and says WHEN (the coordinator's ruling): only once the operator has armed the lane; until then it only records. The
     // skill files never name the lane's marker file, so the condition is told in words.
@@ -4260,7 +4260,7 @@ describe('README: what happens to an archived workspace now', () => {
 describe('the coordinator’s reference, §6', () => {
   it('a child that has coordinated stays a human’s; an unmarked workspace is the server’s seven days after its archive', () => {
     const s = flat('ccd/coordinator-skill/references/wave-lifecycle.md');
-    // `has-coordinated` keeps its `.child` marker, and neither lane ever expires a marked child (CCR-15; spec §5.3).
+    // `has-coordinated` keeps its `.child` marker, and neither lane ever expires a marked child (#166; spec §5.3).
     expect(s).toContain('`has-coordinated` means the child has coordinated a run, so its workspace is cleaned up by a human. No');
     expect(s).toContain('it stays until a human cleans it up, or — when it carries no child marker — until the server cleans it up seven days after it is archived, once the operator has armed the server’s expiry lane (until then the lane only records what it would expire)');
   });
@@ -4278,7 +4278,7 @@ describe('the coordinator’s reference, §6', () => {
 });
 
 describe('the specs', () => {
-  it('CCR-15 §5.8: the pause is the fleet’s one cleanup switch now — the expiry stops with it', () => {
+  it('#166 §5.8: the pause is the fleet’s one cleanup switch now — the expiry stops with it', () => {
     const s = flat('docs/superpowers/specs/2026-09-22-child-workspace-reclamation-design.md');
     expect(s).not.toContain('Pausing stops reclamation fleet-wide and nothing else;');
     expect(s).toContain('Pausing stops reclamation fleet-wide, and — since workspace lifecycle wave 3b — the expiry of archived workspaces too');
@@ -4309,7 +4309,7 @@ Measured on `22b4eabda`, Tasks 1–7 applied (re-anchored 2026-10-06; the counts
 - `pwa/test/child-reclaim-banner.test.tsx`: `Test Files 1 failed (1)`, no tests — `Failed to resolve import "../src/fleet/expiryWords"`
 - `pwa/test/archive-sheet.test.tsx`: `1 failed | 24 passed (25)` — × an idle workspace: its words, and Archive sends the plain call
 - `server/test/coordinator-skill.test.ts`: `2 failed | 158 passed (160)` — × carries all sixteen clauses verbatim; × wave-lifecycle §6 says what a child is, when it is reclaimed, and what is not
-- `server/test/expiry-lane-prose.test.ts`: `7 failed | 1 passed (8)` — the README paragraph, the coordinator's own workspace in README, README's other switch passages, wave-lifecycle §6, clause 3 in the file that holds it, CCR-15 §5.8, the lifecycle spec; the skill corpus already names no `expire-lane-live` (green)
+- `server/test/expiry-lane-prose.test.ts`: `7 failed | 1 passed (8)` — the README paragraph, the coordinator's own workspace in README, README's other switch passages, wave-lifecycle §6, clause 3 in the file that holds it, #166 §5.8, the lifecycle spec; the skill corpus already names no `expire-lane-live` (green)
 - `pwa/test/fleet-screen.test.tsx`: `1 failed | 97 passed (98)` — × opens on its own key, confirms once, archives each non-child row with its id alone, and reports in one toast (the bulk confirm's seven days)
 
 - [ ] **Step 3: Make them pass.**
@@ -4530,7 +4530,7 @@ In `docs/superpowers/specs/2026-09-24-workspace-lifecycle-design.md`, find:
 Replace with:
 
 ````markdown
-  1. `reclaim-paused` "and nothing else" becomes the cleanup switch (§5.3). Amended by this design’s wave 3b: CCR-15's
+  1. `reclaim-paused` "and nothing else" becomes the cleanup switch (§5.3). Amended by this design’s wave 3b: #166's
      §5.8 now says the pause stops the expiry of archived workspaces too.
 ````
 
@@ -4779,7 +4779,7 @@ The cleanup row says cleanup, lists the expiry lane's reports under the
 children's, and both archive confirms (one workspace, and Archive all) say
 what happens after seven days. A child that has coordinated is still a
 human's to clean up, and the docs say so.
-Coordinator clause 3 (verbatim pin), wave-lifecycle §6, README, CCR-15 §5.8
+Coordinator clause 3 (verbatim pin), wave-lifecycle §6, README, #166 §5.8
 (spec §6 item 1) and the lifecycle spec's §5.3 (the shadowed lane) move with
 the lane's live arm, never before it.
 
@@ -5219,10 +5219,10 @@ Replace with:
   // alone: `inReleasedFold` excludes `inArchivedFold`, the one predicate, never the bucket by hand.
   it('a stopped main checkout the wire calls released is in Archived alone — the folds never share a row (FM7)', () => {
     const released = { runId: 4, program: 'lifecycle', programTitle: null, claimedBy: 'demo-c', closedAt: 9, child: false };
-    const row = main('claude2-demo', { stoppedBy: STOP(5), releasedFrom: released });
+    const row = main('claude9-demo', { stoppedBy: STOP(5), releasedFrom: released });
     expect(inReleasedFold(row)).toBe(false);
     const [g] = groupFleet([row], []);
-    expect(g!.archived.map((x) => x.id)).toEqual(['claude2-demo']);
+    expect(g!.archived.map((x) => x.id)).toEqual(['claude9-demo']);
     expect(g!.released).toEqual([]);
   });
 
@@ -5692,7 +5692,7 @@ Known reds that are not this wave's: tmp-sweep's "FAILS CLOSED…" (red on `main
 
 ## Re-measure at dispatch (ruling I)
 
-This plan was drafted on `origin/main` (`77c11245`, replay-checked on `b3b5a73ed`) and revised on `4db20aa17` (every one of its 117 blocks replayed there). Child reclamation wave 5 (#290, run 260) edits `watch.ts`, `server.ts`, `shared/api.ts`, `README.md`, `childReclaimWords.ts`, `ChildReclaimBanner.tsx`, `child-reclaim-banner.test.tsx` and the CCR-15 spec; child reclamation wave 6's merged plan edits `ccd/ccd`, `shared/api.ts`, `watch.ts`, `fleetws.test.ts` and `childReclaimWords.ts`; session-continuity wave 4 (run 274) edits `ccd/ccd`, `single-definition.test.ts` and `README.md`; stall-watch-settings W1's merged plan edits `shared/api.ts` and `watch.ts`. The coordinator re-verifies this plan on `main` after #290 merges: every block below must still match exactly once at its turn, or be re-anchored BY CONTENT (never by a line delta) before dispatch.
+This plan was drafted on `origin/main` (`77c11245`, replay-checked on `b3b5a73ed`) and revised on `4db20aa17` (every one of its 117 blocks replayed there). Child reclamation wave 5 (#290, run 260) edits `watch.ts`, `server.ts`, `shared/api.ts`, `README.md`, `childReclaimWords.ts`, `ChildReclaimBanner.tsx`, `child-reclaim-banner.test.tsx` and the #166 spec; child reclamation wave 6's merged plan edits `ccd/ccd`, `shared/api.ts`, `watch.ts`, `fleetws.test.ts` and `childReclaimWords.ts`; session-continuity wave 4 (run 274) edits `ccd/ccd`, `single-definition.test.ts` and `README.md`; stall-watch-settings W1's merged plan edits `shared/api.ts` and `watch.ts`. The coordinator re-verifies this plan on `main` after #290 merges: every block below must still match exactly once at its turn, or be re-anchored BY CONTENT (never by a line delta) before dispatch.
 
 **RE-ANCHOR DONE, 2026-10-06 — replayed onto `origin/main` `8d85c7cf4`.** That head is `b27fabc15` (#290) plus #284 (`22b4eabda`, "Delegation broker wave 1: measurement": `README.md`, `ccd/session-hook.sh`, `ccd/install-session-hooks.sh`, the delegation programme's ledger and tests) plus #302 (a doctor check), #303 (`ccd`'s route apply) and #304 (test fixtures). The re-anchor began on `22b4eabda` — the stage-by-stage replay (each task's red step, its green step, its taxes, `ccd/ccd` re-stamped after each ccd stage) and every red/green count below were measured there — and `main` moved while it ran. #302–#304 edit `ccd/ccd`, `README.md` and none of the other files this plan touches, and they invalidate exactly ONE block: Task 2's `_reg_get` census sentence (the base now reads 193/163, where `b27fabc15` read 192/162; #303 added one call), re-anchored by content below. **The plan now carries 123 blocks** (the 117, plus six the coordinator's rulings added: Task 8's §6 item 2 amendment and Task 12's five spec amendments), and **every one of the 123 matches EXACTLY ONCE at its turn on `8d85c7cf4`** (replayed in one pass, `ccd/ccd` re-stamped after each task's blocks); on `b27fabc15` and on `22b4eabda` 122 match and that one census block does not. The three blocks the dry run below found on `b27fabc15` are re-anchored by content. The suites the sections below name were re-run on the `8d85c7cf4` final tree, one file per process, `--maxWorkers=1`, in the foreground; each count that differs from the first draft's is rewritten where it stands: #290's growth (`child-reclaim-sweep` 74 → 177, `child-reclaim-sweep-policy` 86 → 186, `child-reclaim` 128 → 151, `child-reclaim-banner` 30 → 38, `runs-screen` 104 → 132, `fleet-css` 80 → 82, `contrast` 256 → 257), this plan's own `expiry-lane-prose` (7 → 8, with the coordinator's arming-condition rulings), `ccd-reg-get-census`'s 194/164 (→ 195/165, #303's one call), and the two stale figures, Task 9 Step 4's `single-definition` (275 → 404) and Task 11 Step 4's `archived-expiry-policy` (42 → 43). `boot`'s two timing cases go red on this fleet box under a load average of 34–38 on PRISTINE `main` too (4 of 6 runs there, up to 6.7 s against a 3 s bound; the plan's tree read the same range): a load flake, not this plan's.
 
@@ -5776,7 +5776,7 @@ The blocks in the shared files, by task and the first line of their Find:
 
 **Child reclamation wave 6 (run 291, plan #293) and the shared ccd code** — the question in that programme's mails 3657 and 3666 to this coordinator, answered from this plan: 3b edits NONE of `_ws_reclaim_tail`, `_ws_reclaim_contained`, `_ws_reclaim_ladder`, `_ws_reclaim_workdir_shared`, `_ws_reclaim_owned` or the platform block. In ccd it edits only the EXPIRE region (Tasks 1–3: `_ws_expire_resume_eval`'s header, `_ws_expire_archived`, `_ws_expire_fork_contained`, `_ws_expire_cwd_users`' BODY — the command read and the read loop — `_ws_expire_audit_contained`, `_ws_expire_refuse_return` and the new seam), the MIRROR block (Task 11's helper), the return verbs' four gate lines, `_ws_reap_locked`'s first line, ws-gc's two arms and the `_reg_get` census sentence. The one shared function both waves touch is `_ws_expire_cwd_users`: wave 6 corrects its HEADER comment (its item 7, body byte-identical), 3b its body — the second lander merges main and keeps both. Wave 6's token gains `branchState=` (its item 5): an audit token minted before that deploy and spent after answers `state-changed` once, which this lane reads as a retry. Wave 6's new in-use probe and `_ws_expire_cwd_users` fold only after this wave's 3893 fix has landed, by agreement (its mail 3657, item 3).
 
-None of #290's other files — `childReclaimSweep.ts`, `coord/store.ts`, `coord/childReclaim.ts`, `close.ts`, `coord/routes.ts`, `runWords.ts`, `RunsScreen.tsx`, `SessionLine.tsx`, `AbandonSheet.tsx`, `fleet.css` — is edited by this plan (the expiry lane is a sibling pass precisely so `sweepChildReclaim` is untouched, and the expiry list renders inside the cleanup row in its existing classes). Child reclamation's coordinator is told before Task 1's CCR-15 hunk (§6, "Not changed, deliberately") and Task 8's (§5.8) are pushed (the coordinator's notice, ruling F); #290 edits that spec's §1 and §5.5 only.
+None of #290's other files — `childReclaimSweep.ts`, `coord/store.ts`, `coord/childReclaim.ts`, `close.ts`, `coord/routes.ts`, `runWords.ts`, `RunsScreen.tsx`, `SessionLine.tsx`, `AbandonSheet.tsx`, `fleet.css` — is edited by this plan (the expiry lane is a sibling pass precisely so `sweepChildReclaim` is untouched, and the expiry list renders inside the cleanup row in its existing classes). Child reclamation's coordinator is told before Task 1's #166 hunk (§6, "Not changed, deliberately") and Task 8's (§5.8) are pushed (the coordinator's notice, ruling F); #290 edits that spec's §1 and §5.5 only.
 
 ## Deploy note
 
@@ -5828,7 +5828,7 @@ Not departures, and named so nobody hunts for a number: the cleanup row's widene
 |---|---|---|
 | ws-reclaim's word for an `expire:` breadcrumb (it answers `reap-in-progress`) | NOT TAKEN (ruling H) | both are retries; a word of its own would widen `CHILD_RECLAIM_TOKEN_KIND` for a breadcrumb ws-reclaim never meets in practice (wave 3's departure, by number 3892) |
 | Wave 2's operator questions 1 and 2 (the PR sheet's "Archive now"; the remote-mode worktree check) | stay open with the operator | unchanged by this wave |
-| Wave 2's operator question 3 — whether L5's "Its workers will be cleaned up" stands | the operator, with this wave's arming | true of MARKED children (CCR-15 reclaims them). An UNMARKED worker is only RELEASED when its programme ends (spec §5.4; §7: no automatic archive of anything), and this lane acts on ARCHIVED rows alone — so an unmarked worker is cleaned up only after someone archives it, and then seven days later once the lane is armed. Arming does not make the copy true for unmarked workers |
+| Wave 2's operator question 3 — whether L5's "Its workers will be cleaned up" stands | the operator, with this wave's arming | true of MARKED children (#166 reclaims them). An UNMARKED worker is only RELEASED when its programme ends (spec §5.4; §7: no automatic archive of anything), and this lane acts on ARCHIVED rows alone — so an unmarked worker is cleaned up only after someone archives it, and then seven days later once the lane is armed. Arming does not make the copy true for unmarked workers |
 | A box that answered `flock-unavailable` is not asked again for the life of the server process | wave 4, or a follow-up if the operator wants it re-asked on a capability change | a restart re-asks; a box without util-linux `flock` cannot run any expiry, so nothing is lost by waiting |
 | The expiry list is rebuilt after a restart, not read back | a follow-up if the operator wants it durable | the departure `expiry-attention-from-lane-memory` |
 

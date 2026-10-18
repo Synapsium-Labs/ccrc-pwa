@@ -93,7 +93,7 @@ already have — is the only placement where neither delivery file imports the o
 - **Role vocabulary only, in every byte this wave writes — including this plan.**
   `server/test/topology-clean.test.ts` scans `git ls-files` AND every blob `origin/main..HEAD`
   introduces (D-208) and bans the operator's username, the two real box names, the volume id, the
-  GitHub handle and the old employer org. **No absolute home path anywhere; use
+  GitHub handle and the previous owner org. **No absolute home path anywhere; use
   `cd "$(git rev-parse --show-toplevel)"`.**
 - **Deviation refs are ledgered and bounded.** `server/test/deviation-refs.test.ts` requires the
   highest `D-<n>` token anywhere in the tracked tree to equal the highest `D-<n>` DEFINED by a heading

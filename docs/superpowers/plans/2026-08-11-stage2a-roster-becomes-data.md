@@ -44,7 +44,7 @@
 
 ### Task 1: Correct the stale roster prose
 
-The roster's docstrings contradict the roster after `claude-dev0`'s promotion. These comments are what a maintainer reads before touching arm order, so they are corrected first, as their own reviewable commit, before any structural edit. No behaviour changes.
+The roster's docstrings contradict the roster after `claude-lab0`'s promotion. These comments are what a maintainer reads before touching arm order, so they are corrected first, as their own reviewable commit, before any structural edit. No behaviour changes.
 
 **Files:**
 - Modify: `shared/api.ts:1203-1205, 1224-1226, 1253-1256, 1260-1263, 1319-1321, 1341, 1346, 1353-1355`
@@ -60,7 +60,7 @@ The roster's docstrings contradict the roster after `claude-dev0`'s promotion. T
 ```bash
 cd /home/you/worktrees/ccrc-pwa/calm-mesa
 grep -n "ccdValid\|homeAble" shared/api.ts | sed -n '1,40p'
-# Expect: line 1323 shows claude-dev0 with ccdValid: true, homeAble: true
+# Expect: line 1323 shows claude-lab0 with ccdValid: true, homeAble: true
 grep -n "is not ccd-valid\|Three today\|is false\|The three accounts" shared/api.ts
 grep -n "ccdValid\` is \`false\`" server/src/fleet.ts
 ```
@@ -69,15 +69,15 @@ grep -n "ccdValid\` is \`false\`" server/src/fleet.ts
 
 Replace each stale sentence. The six edits, by line:
 - `1203-1205`: `homeAble`/`ccdValid`/`hooksAble` are no longer "three genuinely different subsets" — only `homeAble` still narrows (4 of 5). Say so.
-- `1224-1226`: delete the "not ccd-valid, so ccd cannot mint an id under that prefix" clause; ccd mints `claude-dev0-*` ids for real.
-- `1253-1256`: "Three today, not four or five" → **four** today: `claude`, `claude2`, `claude-corp`, `claude-dev0`; only `gpt` is excluded.
-- `1260-1263`: delete "`claude-dev0` is false"; all five are ccd-valid, and the fixture test asserts exactly that.
+- `1224-1226`: delete the "not ccd-valid, so ccd cannot mint an id under that prefix" clause; ccd mints `claude-lab0-*` ids for real.
+- `1253-1256`: "Three today, not four or five" → **four** today: `claude`, `claude9`, `claude-acme`, `claude-lab0`; only `gpt` is excluded.
+- `1260-1263`: delete "`claude-lab0` is false"; all five are ccd-valid, and the fixture test asserts exactly that.
 - `1319-1321`: `colorVar: '--ink-tertiary'` is no longer "the fallback for a wrapper it didn't recognise" — dev0 is recognised and simply has no hue assigned yet.
-- `1341`/`1346`/`1353-1355`: "The three accounts" → four; and `claude-dev0` is no longer "a wrapper NOT in this list".
+- `1341`/`1346`/`1353-1355`: "The three accounts" → four; and `claude-lab0` is no longer "a wrapper NOT in this list".
 
 - [ ] **Step 3: Fix `server/src/fleet.ts:71-80`**
 
-The docstring states `ACCOUNTS['claude-dev0'].ccdValid` is `false` and that the fixture test pins ccd rejecting it. Both are false. Rewrite to state that dev0 is home-able and ccd-valid, so ccd mints `claude-dev0-*` ids, which is exactly why longest-prefix-wins is load-bearing rather than prophylactic.
+The docstring states `ACCOUNTS['claude-lab0'].ccdValid` is `false` and that the fixture test pins ccd rejecting it. Both are false. Rewrite to state that dev0 is home-able and ccd-valid, so ccd mints `claude-lab0-*` ids, which is exactly why longest-prefix-wins is load-bearing rather than prophylactic.
 
 - [ ] **Step 4: Fix `server/src/server.ts:235`**
 
@@ -98,7 +98,7 @@ Expected: PASS, same count as before the task.
 git add shared/api.ts server/src/fleet.ts server/src/server.ts
 git commit -m "docs(shared,server): the roster's prose catches up with the roster
 
-claude-dev0's promotion to a first-class account left six docstrings asserting
+claude-lab0's promotion to a first-class account left six docstrings asserting
 the opposite of the data — that it is not ccd-valid, that ccdValid is false,
 that HOME_ABLE_WRAPPERS is three accounts. fleet.ts repeated the ccdValid claim
 and cited a fixture test that now asserts the reverse. These comments are what
@@ -359,7 +359,7 @@ git commit -m "feat(shared): generate ccd's bash roster projection, arms sorted 
 
 The ordering hazard stops being a comment asking maintainers not to reorder and
 becomes a property of the emitter. Today's arms are not actually
-length-descending — claude-corp- and claude-dev0- tie at 12, and claude2-
+length-descending — claude-acme- and claude-lab0- tie at 12, and claude9-
 precedes claude- by hand-authoring luck — so the test asserts behaviour through
 a real bash subshell rather than comparing generated text to today's."
 ```
@@ -536,7 +536,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
 
 `loadRoster` uses `readFileSync` — `server/src/index.ts:21` calls `loadConfig()` at module top level with no await, so this must not become async. A missing file throws with the remedy `run \`ccrc install\` (or ship deploy/accounts.default.json to ~/.ccrc/accounts.json)`.
 
-Delete the `wrappers` field (18-24) and its derivation (74-84). **Preserve** the load-bearing prose at 46-57 (why `configDirFor` answers `undefined`) and adapt 74-81's `claude-dev0` outage note into `configDirFor`'s docstring — it is the reason this function exists.
+Delete the `wrappers` field (18-24) and its derivation (74-84). **Preserve** the load-bearing prose at 46-57 (why `configDirFor` answers `undefined`) and adapt 74-81's `claude-lab0` outage note into `configDirFor`'s docstring — it is the reason this function exists.
 
 - [ ] **Step 5: Seed the roster in every direct `loadConfig` caller**
 
@@ -665,9 +665,9 @@ The `<` (not `<=`) tie-break is preserved: `ccd-workspaces.test.ts:231` and `pro
 it('resolves the longer id when one account id is a prefix of another', () => {
   const r = parseRoster({ version: 1, accounts: [
     { id: 'claude', label: 'c', configDirSuffix: '.claude', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
-    { id: 'claude-dev0', label: 'd', configDirSuffix: '.claude-dev0', exec: { kind: 'generated' }, homeAble: true, hue: 'violet', telemetry: 'anthropic' },
+    { id: 'claude-lab0', label: 'd', configDirSuffix: '.claude-lab0', exec: { kind: 'generated' }, homeAble: true, hue: 'violet', telemetry: 'anthropic' },
   ] });
-  expect(idHomeWrapper(r, 'claude-dev0-quiet-basin')).toBe('claude-dev0');
+  expect(idHomeWrapper(r, 'claude-lab0-quiet-basin')).toBe('claude-lab0');
   expect(idHomeWrapper(r, 'claude-quiet-basin')).toBe('claude');
   // the fallback branch — no test covers it today
   expect(idHomeWrapper(r, 'zzz-quiet-basin')).toBe('claude');
@@ -683,7 +683,7 @@ git commit -m "feat(shared,server): the roster becomes runtime data, and placeme
 
 projectHome scored an account with no telemetry row as 0 and therefore picked
 it over every measured account — confirmed against the current tree, where
-{claude:5, claude2:6, claude-corp:7} projects onto claude-dev0 at score 0.
+{claude:5, claude9:6, claude-acme:7} projects onto claude-lab0 at score 0.
 Latent only because dev0 reports honestly and gpt is held out by homeAble.
 Unknown now ranks below measured, with a first-home-able fallback so a fresh
 install with no telemetry anywhere still has somewhere to put work."
@@ -712,7 +712,7 @@ Expected: PASS with the four new rows (amber/green × dark/light) reporting real
 
 - [ ] **Step 2: Rename the tokens, keeping every hex and every ratio comment verbatim**
 
-`--acct-claude` → `--acct-cyan`, `--acct-claude2` → `--acct-violet`, `--acct-corp` → `--acct-blue`, `--acct-gpt` → `--acct-magenta`, plus each `-tint`, in the dark block (123-130) and the light block (329-336).
+`--acct-claude` → `--acct-cyan`, `--acct-claude9` → `--acct-violet`, `--acct-corp` → `--acct-blue`, `--acct-gpt` → `--acct-magenta`, plus each `-tint`, in the dark block (123-130) and the light block (329-336).
 
 Do **not** rename `--acct-active` / `--acct-active-tint` (136-137) — they are the alias layer components actually style against, and they are deliberately not redeclared in the light block. Update `--pr-merged` (95) to `var(--acct-violet)` and the rationale comment at 85-94 that names the old token twice.
 
@@ -720,11 +720,11 @@ Do **not** rename `--acct-active` / `--acct-active-tint` (136-137) — they are 
 
 - [ ] **Step 3: Rewrite the `[data-acct]` selectors to key on hue names**
 
-`tokens.css:371-374` currently keys on token *suffixes* (`claude-corp` → `--acct-corp` → `data-acct='corp'`), which works only by coincidence of naming. They become `[data-acct='cyan']`, `[data-acct='violet']`, `[data-acct='blue']`, `[data-acct='magenta']`, plus amber and green.
+`tokens.css:371-374` currently keys on token *suffixes* (`claude-acme` → `--acct-corp` → `data-acct='corp'`), which works only by coincidence of naming. They become `[data-acct='cyan']`, `[data-acct='violet']`, `[data-acct='blue']`, `[data-acct='magenta']`, plus amber and green.
 
 - [ ] **Step 4: Fix the two `--acct-` string inspections**
 
-`SessionScreen.tsx:121` is `const acct = acctVar.startsWith('--acct-') ? acctVar.slice('--acct-'.length) : undefined;`. Since `claude-dev0`'s `colorVar` is `--ink-tertiary`, `acct` is `undefined` and dev0 renders in `claude`'s cyan. Replace with a direct `accountHue(roster, wrapper)` lookup. Do the same at `SwapSheet.tsx:126`, keeping the `--bg-raised` fallback for a wrapper not in the roster.
+`SessionScreen.tsx:121` is `const acct = acctVar.startsWith('--acct-') ? acctVar.slice('--acct-'.length) : undefined;`. Since `claude-lab0`'s `colorVar` is `--ink-tertiary`, `acct` is `undefined` and dev0 renders in `claude`'s cyan. Replace with a direct `accountHue(roster, wrapper)` lookup. Do the same at `SwapSheet.tsx:126`, keeping the `--bg-raised` fallback for a wrapper not in the roster.
 
 - [ ] **Step 5: Make `accounts.ts` a projection of runtime data**
 
@@ -738,7 +738,7 @@ git add -A pwa
 git commit -m "feat(pwa): account colours become hue names, and dev0 stops rendering in claude's cyan
 
 data-acct was derived by stripping --acct- off the colour token, so an account
-whose token was not an --acct-* name (claude-dev0, --ink-tertiary) fell through
+whose token was not an --acct-* name (claude-lab0, --ink-tertiary) fell through
 to the default and painted itself cyan. The hue is now looked up, not parsed."
 ```
 
@@ -953,13 +953,13 @@ Build a fixture `HOME` containing: a non-script `~/.local/bin/claude` (write a f
 it('classifies the binary as upstream, the shaped scripts as generated, and the bespoke one as external', () => {
   const roster = parseRoster(JSON.parse(runAdopt(home)));
   expect(roster.upstreamId).toBe('claude');
-  expect(roster.byId.get('claude2')!.exec).toEqual({ kind: 'generated', secretsFile: '.cc-secrets/claude2-oauth.env' });
+  expect(roster.byId.get('claude9')!.exec).toEqual({ kind: 'generated', secretsFile: '.cc-secrets/claude9-oauth.env' });
   expect(roster.byId.get('gpt')!.exec.kind).toBe('external');
 });
 
 it('writes id-as-label, since it cannot invent a friendly name', () => {
   const roster = parseRoster(JSON.parse(runAdopt(home)));
-  expect(roster.byId.get('claude2')!.label).toBe('claude2');
+  expect(roster.byId.get('claude9')!.label).toBe('claude9');
 });
 ```
 
@@ -979,7 +979,7 @@ cd server && ./node_modules/.bin/vitest run test/adopt.test.ts
 bash ccd/ccrc-adopt > /tmp/adopted.json && cat /tmp/adopted.json
 ```
 
-Expected: five accounts — `claude` upstream, `claude2`/`claude-corp`/`claude-dev0` generated (two with secrets files), `gpt` external.
+Expected: five accounts — `claude` upstream, `claude9`/`claude-acme`/`claude-lab0` generated (two with secrets files), `gpt` external.
 
 - [ ] **Step 5: Commit**
 
@@ -997,8 +997,8 @@ Run in order once all tasks are green:
 1. `cd server && ./node_modules/.bin/vitest run` — includes the generator round-trip with the `a`/`a-b`/`a-b-c` fixture.
 2. A malformed `accounts.json` refuses to boot in the server **and** in ccd, each naming its remedy.
 3. `deploy/accounts.migration.json` reproduces today's five accounts verbatim — labels byte-exact including U+00B7 — and all three suites pass.
-4. `bash ccd/ccrc-adopt` on openclaw independently rediscovers those same five from disk alone.
-5. Both boxes deploy; `/health` reports the shipped sha; `claude-dev0` still resolves; no live session loses its account.
+4. `bash ccd/ccrc-adopt` on the fleet box independently rediscovers those same five from disk alone.
+5. Both boxes deploy; `/health` reports the shipped sha; `claude-lab0` still resolves; no live session loses its account.
 
 ## Notes carried out of recon
 

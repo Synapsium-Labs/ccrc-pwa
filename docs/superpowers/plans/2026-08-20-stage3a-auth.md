@@ -425,8 +425,8 @@ rewrites the file from memory, resurrecting the row.
 
 - **Passkeys are origin-bound; 3a's proof is localhost-scoped** — enrolled-there credentials don't carry to 3b's DuckDNS name; per-credential rpId binding makes that a loud failure, not a silent one. Stated, not engineered around.
 - **`Secure` behind real TLS + `trustProxy`** — 3a drives `Secure` from config; the `trustProxy`/`X-Forwarded-Proto` decision lands properly in 3b when Caddy terminates TLS.
-- **Per-user identity** — the single-identity session layer is deliberately the team-edition seam (spec §6); this slice ships one operator.
-- **Attestation verification** (packed/tpm/etc.) — out of scope; `attestation:'none'` is what keeps the crypto library-free; the team edition revisits it.
+- **Per-user identity** — the single-identity session layer is deliberately a seam held open for a later decision (spec §6); this slice ships one operator.
+- **Attestation verification** (packed/tpm/etc.) — out of scope; `attestation:'none'` is what keeps the crypto library-free; a later decision revisits it.
 
 **Minors found DURING the stage, recorded rather than fixed.** Consolidated here
 from each task's own progress notes at close-out, because once the plan is the

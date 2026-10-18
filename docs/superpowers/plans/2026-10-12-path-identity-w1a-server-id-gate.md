@@ -106,7 +106,7 @@ Each line binds every task.
 - **Run vitest in the foreground, from `server/`:** `./node_modules/.bin/vitest run test/<file>`, with a timeout of at least 600000 ms. Never bare `npx vitest`.
   - Run every command line written `cd server && …` as `(cd server && …)`, in a subshell. The worker's shell keeps its working directory between calls, so a bare `cd server` makes the next `cd server` line fail and runs the next root-relative command (`grep … server/src`, `git add server/…`) from the wrong directory. A mutation table's `S` or "from `server/`" command runs the same way.
   - Re-run a CLAUDE.md load flake in isolation before calling it a break.
-  - New cases go in NEW files (the precedent of the CCR-15 waves). Edit an existing file only where a task names it: a literal shape, a pin of the old order, or a test the new gate breaks.
+  - New cases go in NEW files (the precedent of the #166 waves). Edit an existing file only where a task names it: a literal shape, a pin of the old order, or a test the new gate breaks.
 - **Modules.** An isolated worktree installs server modules only. Run `npm ci` in `pwa/` or `agent/` before any command there.
 - **`shared/api.ts`:**
   - Edits stay inside the foot block, below every line that README and the compaction-card corpus cite. The highest cited line is README's `:7951`; the block starts at `:9679`.

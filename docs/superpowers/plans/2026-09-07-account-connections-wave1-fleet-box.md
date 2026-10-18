@@ -1045,7 +1045,7 @@ export const baseUrlCases: readonly BaseUrlCase[];
 
 **Why:** §4.1 gives the gate five clauses and §5 gives three of them refusal codes (`base-url-insecure`, `base-url-credentials`, and `base-url-required`, which is not this gate's business — it is the absence of a value, decided against `PROVIDERS[p].baseUrlRequired`). A boolean predicate cannot carry the other two, and CLAUDE.md's "no overloaded null at a seam" is not advice here: the add sheet has to say *which* of "that is not a URL", "that is plain http to somewhere that is not this box", "your key is in the URL", "a query string is not part of an endpoint" and "a fragment is not part of an endpoint" happened, and a caller handling all five identically would be re-deriving them from the input it just handed over.
 
-The loopback exception is measured behaviour, not a courtesy. `~/.local/bin/cck3` and `~/.local/bin/claude-glm` on the fleet box both point `ANTHROPIC_BASE_URL` at `http://127.0.0.1:8642` (spec §4.3, measured 2026-09-07), and §4.3's whole argument for generalising `baseUrl` is that the ownership-whitelist proxy IS an Anthropic-compatible endpoint. Refusing plain `http:` outright would refuse the configuration this fleet already runs; permitting it anywhere would carry the lane's key across a network in clear. The host set is CLOSED and literal — `127.0.0.1`, `[::1]`, `localhost` — not a `127.0.0.0/8` range test, because a range test in L0 means parsing dotted quads and `URL` has already normalised the only three spellings that matter (measured: `new URL('http://127.0.0.1./v1').hostname` is `'127.0.0.1'`, and `new URL('http://LOCALHOST:8642').hostname` is `'localhost'`).
+The loopback exception is measured behaviour, not a courtesy. `~/.local/bin/ccx3` and `~/.local/bin/claude-alt1` on the fleet box both point `ANTHROPIC_BASE_URL` at `http://127.0.0.1:8642` (spec §4.3, measured 2026-09-07), and §4.3's whole argument for generalising `baseUrl` is that the ownership-whitelist proxy IS an Anthropic-compatible endpoint. Refusing plain `http:` outright would refuse the configuration this fleet already runs; permitting it anywhere would carry the lane's key across a network in clear. The host set is CLOSED and literal — `127.0.0.1`, `[::1]`, `localhost` — not a `127.0.0.0/8` range test, because a range test in L0 means parsing dotted quads and `URL` has already normalised the only three spellings that matter (measured: `new URL('http://127.0.0.1./v1').hostname` is `'127.0.0.1'`, and `new URL('http://LOCALHOST:8642').hostname` is `'localhost'`).
 
 Two behaviours of `URL` decide the implementation and are measured rather than assumed (2026-09-07, node 22):
 
@@ -1277,8 +1277,8 @@ Expected: FAIL at collection — `Failed to resolve import "../../shared/base-ur
  *  `http://LOCALHOST:8642` with `localhost`), and a range test in L0 means
  *  hand-parsing dotted quads for a set of three.
  *
- *  The exception is not a courtesy: `~/.local/bin/cck3` and
- *  `~/.local/bin/claude-glm` on the fleet box already point
+ *  The exception is not a courtesy: `~/.local/bin/ccx3` and
+ *  `~/.local/bin/claude-alt1` on the fleet box already point
  *  `ANTHROPIC_BASE_URL` at `http://127.0.0.1:8642` (spec §4.3, measured
  *  2026-09-07), and the whole argument for a general `baseUrl` is that the
  *  ownership-whitelist proxy IS an Anthropic-compatible endpoint. Refusing
@@ -1894,10 +1894,10 @@ describe('exec.secretsFile is legal on all three kinds — and gated on all thre
 …and change the two existing strict literals at `server/test/roster.test.ts:203-212` from
 
 ```ts
-    expect(acct?.exec).toEqual({ kind: 'generated', secretsFile: '.cc-secrets/claude2-oauth.env' });
+    expect(acct?.exec).toEqual({ kind: 'generated', secretsFile: '.cc-secrets/claude9-oauth.env' });
 ```
 ```ts
-    expect(r.accounts.find((a) => a.id === 'claude2')?.exec).toEqual({ kind: 'generated' });
+    expect(r.accounts.find((a) => a.id === 'claude9')?.exec).toEqual({ kind: 'generated' });
 ```
 
 to
@@ -1906,10 +1906,10 @@ to
     // `provider` is now on every generated exec — defaulted to `anthropic` for a
     // roster that predates the field, which is what this fixture is.
     expect(acct?.exec).toEqual(
-      { kind: 'generated', provider: 'anthropic', secretsFile: '.cc-secrets/claude2-oauth.env' });
+      { kind: 'generated', provider: 'anthropic', secretsFile: '.cc-secrets/claude9-oauth.env' });
 ```
 ```ts
-    expect(r.accounts.find((a) => a.id === 'claude2')?.exec)
+    expect(r.accounts.find((a) => a.id === 'claude9')?.exec)
       .toEqual({ kind: 'generated', provider: 'anthropic' });
 ```
 
@@ -1917,8 +1917,8 @@ to
 
 Run: `cd server && ./node_modules/.bin/vitest run test/roster.test.ts`
 Expected: FAIL. The two edited assertions fail first, and both are the same shape:
-`roster.test.ts:206` receives `{ kind: 'generated', secretsFile: '.cc-secrets/claude2-oauth.env' }` where it now
-demands `{ kind: 'generated', provider: 'anthropic', secretsFile: '.cc-secrets/claude2-oauth.env' }`, and
+`roster.test.ts:206` receives `{ kind: 'generated', secretsFile: '.cc-secrets/claude9-oauth.env' }` where it now
+demands `{ kind: 'generated', provider: 'anthropic', secretsFile: '.cc-secrets/claude9-oauth.env' }`, and
 `:211` receives `{ kind: 'generated' }` where it demands `{ kind: 'generated', provider: 'anthropic' }`. The new describes fail on their own terms, in both directions. Every `exec.provider` / `exec.baseUrl` /
 `exec.models` REFUSAL case receives no throw at all (the fields are unknown keys today and are warned about, then
 dropped), and the two `secretsFile` refusal rows on `upstream`/`external` likewise pass through. Every ACCEPT case
@@ -2355,9 +2355,9 @@ In `parseRoster`, replace the single `drafts` line — **`:581`**, `const drafts
 
 `ccd/ccrc-adopt` composes `{"kind":"generated"}` and `{"kind":"generated","secretsFile":…}` in one `case` arm (`:496-503`: the jq-composed form at `:498`, the bare literal at `:500`; the whole `case` is `:494-505`) and writes the roster; `adopt.test.ts` feeds that output through `parseRoster` and asserts the parsed `exec` whole. Adopt is NOT changed by this wave — an adopted roster is legal, warns once per boot, and the warning is the operator's cue to state the provider. Four assertions therefore gain the defaulted field:
 
-- `:124` and `:590`: `{ kind: 'generated', secretsFile: '.cc-secrets/claude2-oauth.env' }` → `{ kind: 'generated', provider: 'anthropic', secretsFile: '.cc-secrets/claude2-oauth.env' }`
+- `:124` and `:590`: `{ kind: 'generated', secretsFile: '.cc-secrets/claude9-oauth.env' }` → `{ kind: 'generated', provider: 'anthropic', secretsFile: '.cc-secrets/claude9-oauth.env' }`
 - `:159`: `{ kind: 'generated' }` → `{ kind: 'generated', provider: 'anthropic' }`
-- `:160-162`: `{ kind: 'generated', secretsFile: '.cc-secrets/claude-dev0-oauth.env' }` → the same plus `provider: 'anthropic'`
+- `:160-162`: `{ kind: 'generated', secretsFile: '.cc-secrets/claude-lab0-oauth.env' }` → the same plus `provider: 'anthropic'`
 
 Add above `:124`, once, so the next reader knows why:
 
@@ -5953,7 +5953,7 @@ git commit -m "feat(account): the credential reads from stdin or not at all, and
 `add` is stated in `cmd_wrappers`' own pre-pass banner (`ccd/ccrc:2438-2452`): every refusal below
 ends "nothing was written", and a pre-pass is what makes that sentence TRUE rather than merely
 reassuring. That comment records the measured version of the mistake — a run that printed
-`WRITE claude2 …` and then, two lines later, `… and nothing was written`, *"two statements about one
+`WRITE claude9 …` and then, two lines later, `… and nothing was written`, *"two statements about one
 run, contradicting each other, with the first one right"* (`:2442-2444`).
 
 Here the stakes are sharper than a contradictory transcript, and this is the argument for putting
@@ -8338,7 +8338,7 @@ holds an uncalled helper to.
   and — CONSUMED from Task 21, never re-declared — `plantLauncher(home, name, body?)`. Answer:
   `{"ok":true,"id":"<id>","kind":"external","disabled":true,"roster":<roster>}` at exit 0.
 
-**Why:** `declare` is the only way an `openai` launcher, a `cck3` or a `claude-glm` ever becomes a
+**Why:** `declare` is the only way an `openai` launcher, a `ccx3` or a `claude-alt1` ever becomes a
 ccrc lane — decision 22(c) (spec:1668-1677) rules those wrappers **declared, never adopted**, because
 `ccrc wrappers` would rewrite an adopted one into the four-line generated shape
 (`shared/wrapper.mjs:144-148`) and that is data loss, not adoption. So the verb's whole job is a

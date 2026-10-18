@@ -2,7 +2,7 @@
 
 Plan: `docs/superpowers/plans/2026-09-24-child-tmpdir-bsd-chmod.md` (the worker commits it beside the fix)
 Home project: `ccrc-pwa`   Coordinator: `ccrc-pwa-calm-mesa`   Workspace: a fresh child
-A one-wave follow-up to `child-reclamation` (CCR-15), whose wave 1 shipped the defect.
+A one-wave follow-up to `child-reclamation` (#166), whose wave 1 shipped the defect.
 
 **What this program is.** Wave 1's `_child_tmpdir` privatises a child's temp root with `chmod 0700 -- "$dir"`.
 BSD `chmod` (macOS) stops parsing options at the mode operand, reads the `--` as a file, and exits 1. On macOS,

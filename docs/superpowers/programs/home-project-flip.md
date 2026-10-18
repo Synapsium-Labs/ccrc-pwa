@@ -23,9 +23,9 @@ agent-lane deploy at 2026-09-14T11:51:42Z (the moment the installed coordinator 
 field; crossrepo ledger, Carried constraints E1).**
 
 `legacy_since_deploy = 8`, `opens_since_deploy = 15`. The eight are all from two coordinators: seven opens of
-`qdrant-consolidation` (waves 4, 5, 6, 7, 9, 8, 10 — runs 50, 52, 53, 54, 56, 57, 58 — by
-`intake-platform-keen-meadow`, 2026-09-14T12:59:03Z through 2026-09-15T07:38:57Z) and one of `bug-fix-waves`
-(wave 1, run 55, by `expoAI-assistant-still-river`, 2026-09-14T17:21:29Z; its six later opens, runs 59–64, all
+`prog-d` (waves 4, 5, 6, 7, 9, 8, 10 — runs 50, 52, 53, 54, 56, 57, 58 — by
+`project-n-keen-meadow`, 2026-09-14T12:59:03Z through 2026-09-15T07:38:57Z) and one of `prog-g`
+(wave 1, run 55, by `project-h-still-river`, 2026-09-14T17:21:29Z; its six later opens, runs 59–64, all
 carried the field). The six opens after 2026-09-15T07:38:57Z (runs 59–64, two programmes) were all
 well-formed: `legacy_24h = 0`, `opens_24h = 6` at read time. All-time the event count is 10 (runs 43 and 47,
 `account-pools`, are the two before the deploy).
@@ -54,7 +54,7 @@ cited, never re-minted.
   2026-09-16 ("backfill and flip today", then "let's do it now") that the flip ships now: the refusal it
   produces is loud (`400 bad-request`, detail `homeProject is required`), its remedy is one field in the
   caller's body, and the installed skill has sent that field since 2026-09-14. The two coordinators whose
-  opens omitted it were named above; the one whose latest opens still omit it (`intake-platform-keen-meadow`)
+  opens omitted it were named above; the one whose latest opens still omit it (`project-n-keen-meadow`)
   was mailed on 2026-09-16 (mail 1398) with the refusal and the remedy. The merge and both deploys stay gated
   on the operator's word with the corrected trail in front of them.
 - **D-2868 — the PR is wider than "one constant and one suite", and that makes it agent-first.** With the
@@ -123,8 +123,8 @@ cited, never re-minted.
   in that same transaction as the ONE project every run of that programme names (`SELECT DISTINCT project FROM
   runs WHERE program = ?` — exactly one row for all eight); an online `.backup()` copy was taken first
   (`~/.ccrc/coord.db.bak-20260916T101907Z`, beside the database, not in any repo). Written: `account-pools`,
-  `build4`, `ccd-queue`, `program-leverage`, `registry-durability` → `ccrc-pwa`; `battlescape-operational` →
-  `MekWarLive`; `claude-tooling-consolidation` → `custom-tools`; `promise-backfill` → `expoAI-assistant`.
+  `build4`, `ccd-queue`, `program-leverage`, `registry-durability` → `ccrc-pwa`; `prog-c` →
+  `project-f`; `prog-f` → `project-d`; `prog-e` → `project-h`.
   Eight rows updated, zero NULL after. No run event records it — there is no run to hang one on — so this
   entry is the record. A box-token-gated route plus a client verb for the same write stays undone: it would be
   a product feature, and nothing today needs it.
@@ -146,12 +146,12 @@ cited, never re-minted.
   it. Carrying homes through a rebuild still needs an artifact that proves them — not this programme's work.
 - **Three live coordinators are exposed to the refusal, and each was mailed on 2026-09-16.** After the flip
   lands on the server lane, an open that omits the field is refused before any row is written.
-  `intake-platform-keen-meadow` (seven omissions, last 2026-09-15T07:38:57Z, programme `done`; mail 1398);
+  `project-n-keen-meadow` (seven omissions, last 2026-09-15T07:38:57Z, programme `done`; mail 1398);
   `ccrc-pwa-amber-summit` (runs 43 and 47, the two before the deploy; still holds `ccd-queue` run 42);
-  `claude2-MekWarLive` (`battlescape-operational`, run 31 working — every run of that programme predates the
+  `claude9-project-f` (`prog-c`, run 31 working — every run of that programme predates the
   field, so its next open is that coordinator's FIRST under the feature: a point raised by the crossrepo
   wave-3 worker's finding, mail 1401, which independently re-measured the trail and agrees with it).
-  `expoAI-assistant-still-river` has sent the field on every open since 2026-09-15T16:27:56Z and was not
+  `project-h-still-river` has sent the field on every open since 2026-09-15T16:27:56Z and was not
   mailed.
 - **Deploy order for this PR: fleet host first, then the server box** (D-2868). Both lanes ran main `98236c81`
   on 2026-09-16 (agent built 10:03:05Z, server 10:09:45Z); re-read `ccd version` and `/health` before either

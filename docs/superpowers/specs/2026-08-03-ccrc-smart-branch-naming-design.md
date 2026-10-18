@@ -25,7 +25,7 @@ line the model generated from the first prompt:
 {"type":"ai-title","aiTitle":"Brainstorm Helix and slide notes integration","sessionId":"5016f833-…"}
 ```
 
-That is `custom-tools-brisk-prairie`, whose branch reads `ws/brisk-prairie`.
+That is `project-d-brisk-prairie`, whose branch reads `ws/brisk-prairie`.
 Nothing consumes the title. `transcript/ask.ts:12` lists `ai-title` among the line
 types it knows about and skips.
 
@@ -308,7 +308,7 @@ no client API method, and no state to keep.
 session — `name ?? branch ?? workspace ?? id`.
 
 For a workspace session **with no human-chosen name** it resolves to the branch,
-because a derived Claude Code handle (`openclawhetzner-42` — cwd basename plus a
+because a derived Claude Code handle (`project-c-42` — cwd basename plus a
 counter) is dropped before it reaches the wire:
 `name = live.nameSource === 'derived' ? null : live.name`
 (`server/src/fleet.ts:82`, comment at `:75-81`). Only the exact string `derived`

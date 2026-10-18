@@ -1,6 +1,6 @@
 # ccrc surface map — archive/restore UI, fleet payload, listProjects, whitelist, verb gate
 
-Root: `/srv/projects/OpenClawHetzner/infra/ccrc` (monorepo copy of ccrc-pwa).
+Root: `/srv/projects/project-c/infra/ccrc` (monorepo copy of ccrc-pwa).
 All line refs are from a full read of each file, at HEAD `5a943c5`.
 
 ---
@@ -164,9 +164,9 @@ Measured on this box (probe under `scratchpad/probes/`, plain `git`, `file://`-f
 - bare repo dir → `.git` absent (the dir *is* the repo)
 
 Measured on the real `/data/projects`: **16 dirs with a `.git` directory, 4 with no `.git` at all**
-(`cctest`, `cab-batch`, `cab-archive`, `bt-rules`), and exactly **1 with a `.git` regular file** —
+(`cctest`, `project-r`, `project-q`, `project-o`), and exactly **1 with a `.git` regular file** —
 `/data/projects/wt-model-rates-sync`, whose `.git` reads
-`gitdir: /srv/projects/data-internal/.git…`. That is the masquerade in the brief,
+`gitdir: /srv/projects/project-e/.git…`. That is the masquerade in the brief,
 confirmed.
 
 So the naive rule "skip if `readdir(workdir/.git) === null`" is **wrong**: it would also delete the
@@ -197,7 +197,7 @@ or the masquerade returns through the other door.
 ### Tests that pin `listProjects`
 
 `server/test/lifecycle.test.ts:179-220`, two cases:
-- `:180-211` — builds a tmp projects root with `alpha/`, `mekwar/`, `.hidden/`, `stray.txt`, seeds two
+- `:180-211` — builds a tmp projects root with `alpha/`, `project-f/`, `.hidden/`, `stray.txt`, seeds two
   registry sessions, and asserts the **exact sorted array** of `{name, workdir}` plus that
   `GET /api/projects` returns the identical object. A new skip rule lands here as a third fixture
   (`git worktree`-shaped: a dir containing a `.git` **file**) — note the test uses real `mkdirSync`/

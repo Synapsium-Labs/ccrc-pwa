@@ -2,7 +2,7 @@
 
 Plan: `docs/superpowers/plans/2026-09-30-reclaim-entry-safety.md` (the worker commits the coordinator's exact plan artifact beside the fix)
 Home project: `ccrc-pwa`   Coordinator: `ccrc-pwa-calm-mesa`   Workspace: a fresh child
-A one-wave safety prerequisite to `child-reclamation` (CCR-15), sequenced after `reclaim-row-placement-safety`; wave 4 cannot proceed until both programmes merge.
+A one-wave safety prerequisite to `child-reclamation` (#166), sequenced after `reclaim-row-placement-safety`; wave 4 cannot proceed until both programmes merge.
 
 **What this program is.** Child-reclamation wave 4's adversarial resolver rounds measured a process-wide
 precondition that its call-site repair cannot establish: direct reclaim can inherit Bash functions and startup

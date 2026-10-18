@@ -4,8 +4,8 @@ Spec: `docs/superpowers/specs/2026-09-24-workspace-lifecycle-design.md`
 Plans: `docs/superpowers/plans/2026-09-2?-workspace-lifecycle-wave<N>-*.md` — each written once the waves it depends on
 have landed what it reads
 Home project: `ccrc-pwa`   Coordinator: `ccrc-pwa-quiet-river` (assigned by the operator 2026-10-02)   Workspace: **a fresh one per wave**
-Ticket: `CCR-17` (Linear; mirrored as GitHub issue #196) — the coordinator is created from it
-Companion programme: `docs/superpowers/programs/child-reclamation.md` (CCR-15) — waves 2–4 here build on its waves 3–4
+Ticket: `#196` (Linear; mirrored as GitHub issue #196) — the coordinator is created from it
+Companion programme: `docs/superpowers/programs/child-reclamation.md` (#166) — waves 2–4 here build on its waves 3–4
 
 **What this program is.** Released workers littered the fleet board: 29 of 56 registry rows on 2026-09-24 were
 workspaces a programme had finished with, loose at the top of their cards under generated names, and the operator
@@ -456,8 +456,8 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     - **R1:** the six test-macos reds are this wave's own Linux-only cases, which do not force `CCD_OS=linux`.
       They are fixed now: merged, they would hold main's daily macOS full-suite red, and the stable gate reads that.
       probe-macos's platform-hazards red is main's.
-    - **P4 → 3965:** the CCR-15 texts this wave falsifies are amended now, per spec §6: ws-reap's resume fork, and
-      CCR-15's "Not changed, deliberately" sentence (it now names ws-reap's `expire-in-progress` and ws-restore's
+    - **P4 → 3965:** the #166 texts this wave falsifies are amended now, per spec §6: ws-reap's resume fork, and
+      #166's "Not changed, deliberately" sentence (it now names ws-reap's `expire-in-progress` and ws-restore's
       refusal). Child reclamation's coordinator was told in mail 3632 and agreed (3633). Their #290 edits that
       spec's §1 and §5.5 only, so this edit stays inside the :780 passage; a wider edit asks first (mail 3634).
     - **P1–P3, P5–P8:** text and test corrections. P3 adds the young re-archive case. P6 writes Task 9A's as-built
@@ -483,7 +483,7 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     - R1: the Linux-only cases force Linux, and the live-unit row stubs launchd.
     - R2 → 3964: the `worktree` resume asks the `in-use` probe and never kills. A pane that came back counts as a
       cwd user.
-    - P4 → 3965: one hunk in CCR-15's passage. The contract carries no such sentence.
+    - P4 → 3965: one hunk in #166's passage. The contract carries no such sentence.
     - The text fixes P1–P3 and P5–P8, and R3's precondition row.
   - **Re-measured:**
     - The tip matches the claim, and the four required checks are green (CI 37424981281).
@@ -503,7 +503,7 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     - F1: the CONTROL's unit half is hollow. Plant an active unit, or drop "and the unit" from its title.
     - F2: D-3964 and the resume header say that a pane that came back is a cwd user.
     - F3: 3964 gets its mutation row in the plan (W1, verb 2).
-    - F4: CCR-15's qualification adds "or a breadcrumb that stands but cannot be read" (D-3894), inside the :780
+    - F4: #166's qualification adds "or a breadcrumb that stands but cannot be read" (D-3894), inside the :780
       passage only. Child reclamation's coordinator is told before it is pushed (mail 3655).
     - F5 and F6, ruled: the plan's as-built rows are CORRECTED TO THE MEASURED COUNTS (M08 ladder 17, M26 verb 3), with
       a note that review 284 quoted 1 and 2. A measured count beats a quoted one.
@@ -538,7 +538,7 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     `scope-sweep-live`. `reclaim-paused` stops everything. The reason: 29 of today's 30 archived rows on the fleet
     box are past seven days (review 284's R4 measurement), so the first armed pass faces that backlog. **Arming is
     the operator's.**
-  - **(F) The switch and the words.** `reclaim-paused` is the one cleanup switch, and the banner label widens. CCR-15's
+  - **(F) The switch and the words.** `reclaim-paused` is the one cleanup switch, and the banner label widens. #166's
     §6 item 1 text touches only its `reclaim-paused` passages; child reclamation's coordinator is told before the
     push. The rest are coordinator clause 3's move with its verbatim pin, README, wave-lifecycle §6 and the confirm
     copy. None of this text lands before the live arm.
@@ -619,7 +619,7 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
 
 ## Carried constraints
 
-- **CCR-15 wave 3 (#187) and this wave share README's anchor sentence.** Both re-anchor README's four pointers into
+- **#166 wave 3 (#187) and this wave share README's anchor sentence.** Both re-anchor README's four pointers into
   `shared/api.ts`. Whichever lands second takes either side of that one hunk and runs the plan's `readme-reanchor.py`
   (measured: the citation cases and this wave's server files green on the merged tree).
 - **`shared/api.ts` is a cited file**, and waves 1 and 2 both insert into it; each pays S6-R11 in its own commit.

@@ -3095,7 +3095,7 @@ Expected: the branch's author is a real identity of the same family as `main`'s 
 ```bash
 git push -u origin "$(git rev-parse --abbrev-ref HEAD)"
 gh pr create --base main --title "Child reclamation wave 5: the closed run's reclaim chip" --body-file - <<'EOF'
-Wave 5 of the child-reclamation programme (CCR-15; spec §5.9, §8), **server + pwa**.
+Wave 5 of the child-reclamation programme (#166; spec §5.9, §8), **server + pwa**.
 
 The operator can now read what became of a child workspace once its run closed.
 
@@ -3291,7 +3291,7 @@ What it found:
 - **No "Wave 5 inherits" item was placed.** G3's ruled "wave 5 must bound it" had no task, so the chip's own sentence "a wait on someone using it is bounded" was false.
 - **Two live children show the gaps:**
   - `ccrc-pwa-brisk-meadow` is skipped as `coordinating` on every pass. R37's reader is not fenced to the workspace's current generation, and this slug coordinated program-leverage runs in August.
-  - `expoAI-assistant-calm-mesa` fails `pin-failed` on every attempt, because its registry branch is already gone.
+  - `project-h-calm-mesa` fails `pin-failed` on every attempt, because its registry branch is already gone.
 - **Size.** With every item amended in, the wave was estimated at 12k to 18k insertions over 80 to 110 files. That is above waves 3 and 4.
 
 The coordinator ruled R38 to R47 and the open-issue rulings that amend them. They are contract §11, appended to the contract in the same docs PR as this section, and this section is written to them. R38 splits the wave: this plan keeps the chip and the server-side inherits, and a new wave 6 carries R36 and the ccd-side inherits (A1). A design agent's recommendation binds only where a ruling adopts it.
@@ -3303,7 +3303,7 @@ The coordinator ruled R38 to R47 and the open-issue rulings that amend them. The
 - Plan citations inside this section (`plan:NNNN`) refer to this file as it stood before this section was appended. Every line above this section is unchanged.
 - Code citations are to `334fb722a`, and so are ledger citations (`ledger:NNN`). They are snapshots, so locate code by content.
 - Live readings in this section (claims, versions, child markers, caps) were taken read-only on 2026-10-05 at 16:56 UTC. The coordinator re-reads each before dispatch, and the read made then is the one that counts.
-- The pre-flight's and the design agents' records are in the coordinator's gitignored evidence archive (`.superpowers/sdd/ccr15-evidence-archive/wave5-preflight/`). They are summarised here.
+- The pre-flight's and the design agents' records are in the coordinator's gitignored evidence archive (`.superpowers/sdd/#166-evidence-archive/wave5-preflight/`). They are summarised here.
 
 ### A1 — The plan's scope (R38): what wave 5 carries, and what moved to wave 6
 
@@ -3356,7 +3356,7 @@ The path-identity follow-up moves to after wave 6.
 **Non-goals.** The worker neither duplicates nor reaches into:
 - pane-scope stragglers that outlive `tmux kill-session`, which belong to session-continuity waves 4 and 9 (ledger, 2026-10-05 13:33);
 - the path-identity items: a re-pointed alias, a bind mount, the window before `git worktree remove`, and the two `//` remedy wordings;
-- the live residue R38 lists outside the waves (`expoAI-assistant-calm-mesa`'s gone branch, `~/.cc-tmp`'s foreign entries). That residue is offered to the operator and never acted on by a session.
+- the live residue R38 lists outside the waves (`project-h-calm-mesa`'s gone branch, `~/.cc-tmp`'s foreign entries). That residue is offered to the operator and never acted on by a session.
 
 **The spec text this wave's code makes true reaches `main` before the code.** Code comments cite the spec, never the contract and never a ruling's date (contract R23), so the spec has to say what the code does. The coordinator's docs PR (below) carries:
 - §5.7: the presence lease, its tenure bound, and R39's three figures (A5); R40's fence, under which "has coordinated" means the workspace's current generation; and the two paragraphs those lean on, a programme's own hold ending with its programme, and R-5d's birth fence;
@@ -5502,7 +5502,7 @@ Every existing attention `toEqual` keeps passing. They already carry `kind` from
 Measured by the attention-visibility design:
 - An executor `deferred` clears the failure pacing (`childReclaimNextEntry`, `childReclaimSweep.ts:447-459`), so `childReclaimDue` re-asks it every pass.
 - `reclaimChild` writes one feed row per outcome (`childReclaim.ts:680-684`; `recordChildReclaimFeed` at `:1232-1248`). That is one row a minute for `state-changed`, `reap-in-progress` or `marker-mismatch`.
-- `expoAI-assistant-calm-mesa` (`pin-failed`, branch gone) writes a row every 15 minutes, indefinitely.
+- `project-h-calm-mesa` (`pin-failed`, branch gone) writes a row every 15 minutes, indefinitely.
 
 **Binding text.**
 
@@ -6161,7 +6161,7 @@ The component destructures `workspaceChild = 'unknown'`. `const ws = run.workspa
 `pwa/src/screens/RunsScreen.tsx`, directly after `sessionById`:
 
 ```ts
-  // CCR-15 wave 5 (spec §5.7): the abandon sheet's confirm line branches on the
+  // #166 wave 5 (spec §5.7): the abandon sheet's confirm line branches on the
   // run's workspace's child mark, read off the fleet row this board already looks up.
   const abandonSession = abandonTarget === null || abandonTarget.sessionId === null
     ? undefined : sessionById.get(abandonTarget.sessionId);
@@ -7101,7 +7101,7 @@ plan:3084-3091, unchanged.
 ```bash
 git push -u origin "$(git rev-parse --abbrev-ref HEAD)"
 gh pr create --base main --title "Child reclamation wave 5: the closed run's reclaim chip, a bounded presence rule, a fenced coordinating rule" --body-file - <<'EOF'
-Wave 5 of the child-reclamation programme (CCR-15; spec §5.7, §5.9, §8), **server + pwa**.
+Wave 5 of the child-reclamation programme (#166; spec §5.7, §5.9, §8), **server + pwa**.
 
 1. **The run chip** (Tasks 1 to 9). `RunSummary.childReclaim` is one of `reclaimed | pending | deferred | paused | refused`
    with a server-composed sentence, or `null`. It is additive; `FLEET_PROTO` is unchanged. There is one pure derivation,
@@ -7169,7 +7169,7 @@ The worker's part ends at Step 6. No session runs `ccrc rollout`, `ccrc update` 
    - the fleet box's `~/.ccrc/update.json` phase, `GET /api/updates`, `/health`'s `version`, and the PWA's `BuildLine`;
    - that `~/.local/bin/ccd caps` on the fleet box still lists `reclaim-v1` and `reclaim-pause-v1`, since the lane needs both;
    - the first board load that carries chips;
-   - the first sweep passes under R39 and R40. `ccrc-pwa-brisk-meadow` should leave the `coordinating` skip and be reclaimed through the ordinary path, which shows as a `child reclaimed` feed row. `expoAI-assistant-calm-mesa` still fails `pin-failed` until wave 6 lands or the operator acts (R38's residue).
+   - the first sweep passes under R39 and R40. `ccrc-pwa-brisk-meadow` should leave the `coordinating` skip and be reclaimed through the ordinary path, which shows as a `child reclaimed` feed row. `project-h-calm-mesa` still fails `pin-failed` until wave 6 lands or the operator acts (R38's residue).
 4. A failed or reverted update row halts every move until the operator acks it from the Updates screen. The coordinator records it and never acks it. The operator's kill switch for the sweep stays `reclaim-pause`, on the Runs screen.
 
 Promotion to `stable` is a separate operator act, not this wave's.

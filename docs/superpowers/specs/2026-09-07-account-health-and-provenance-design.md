@@ -66,7 +66,7 @@ Everything below was measured on the fleet host, not inferred. Each row is repro
 | E8 | Credential storage | all four Anthropic accounts authenticate via `CLAUDE_CODE_OAUTH_TOKEN` from `~/.cc-secrets/<id>-oauth.env`; `.credentials.json`'s `claudeAiOauth` block is empty everywhere |
 | E9 | Outbound network in `ccd/ccd` | **zero** — one `curl` in 13k+ lines, inside a comment |
 | E10 | The four swap constants on `main` | `SWAP_THRESHOLD`, `SWAP_HEADROOM`, `SWAP_FRESH`, `SWAP_QUIET` — one occurrence each (own assignment), **zero readers** |
-| E11 | Reset simultaneity | `claude` and `claude-corp` share a `fiveResetAt`; `claude2` and `claude-dev0` are staggered |
+| E11 | Reset simultaneity | `claude` and `claude-acme` share a `fiveResetAt`; `claude9` and `claude-lab0` are staggered |
 | E12 | Bash mutation of the rollover branch | exactly **2** assertions red (+1 with the age branch); TS side **5** |
 
 **E1–E4 together are the load-bearing find.** The endpoint authenticates *before* it checks scope, so

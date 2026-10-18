@@ -576,7 +576,7 @@ Sweep the whole diff. One literal mutant per added construct — including `CAPS
 
 - [ ] **Step 4: Verify the real thing**
 
-On openclaw, with the branch deployed: note `ccd caps`' current output, touch `~/.local/bin/ccd`, and confirm within 60s that `GET /api/fleet` still reports real PR phases rather than `unsupported`. Then confirm the negative: stop the agent, and check `ccdVerbs` is not cleared.
+On the fleet box, with the branch deployed: note `ccd caps`' current output, touch `~/.local/bin/ccd`, and confirm within 60s that `GET /api/fleet` still reports real PR phases rather than `unsupported`. Then confirm the negative: stop the agent, and check `ccdVerbs` is not cleared.
 
 ---
 

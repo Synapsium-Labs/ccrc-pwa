@@ -96,7 +96,7 @@ it is where a program is actually started.
 - **Role vocabulary only, in every byte this wave writes — including this plan.**
   `server/test/topology-clean.test.ts` scans `git ls-files` AND every blob `origin/main..HEAD`
   introduces (D-208) and bans the operator's username, the two real box names, the volume id, the
-  GitHub handle and the old employer org. **No absolute home path anywhere; use
+  GitHub handle and the previous owner org. **No absolute home path anywhere; use
   `cd "$(git rev-parse --show-toplevel)"`.**
 - **Deviation refs are ledgered and bounded.** `server/test/deviation-refs.test.ts` requires the
   highest `D-<n>` token anywhere in the tracked tree to equal the highest `D-<n>` DEFINED by a heading
@@ -1727,7 +1727,7 @@ inflates the score.
 | 5.1 | **P2** — delete the floor read, hard-code `seeded` | `lifecycle` | 4 | `AssertionError: expected 'seeded' to be 'not-seeded' // Object.is equality` |
 | 5.2 | a throwing floor answers `not-seeded` | `lifecycle` | 2 | `AssertionError: expected 'not-seeded' to be 'unmeasurable' // Object.is equality` |
 | 5.3 | remove the per-project catch | `lifecycle` | 2 | `AssertionError: expected 500 to be 200 // Object.is equality` |
-| 5.4 | unswept watcher OMITS the key instead of sending `null` | `lifecycle` | 2 | `AssertionError: expected [ { name: 'MekWarLive', …(1) }, …(3) ] to deeply equal [ { name: 'MekWarLive', …(2) }, …(3) ]` |
+| 5.4 | unswept watcher OMITS the key instead of sending `null` | `lifecycle` | 2 | `AssertionError: expected [ { name: 'project-f', …(1) }, …(3) ] to deeply equal [ { name: 'project-f', …(2) }, …(3) ]` |
 
 **Row 5.4 ran against `lifecycle` only, though the plan listed `lifecycle, start-program`** (noted in
 fix round 1, minor 8). The drop is substantively right and is recorded rather than left as a silent

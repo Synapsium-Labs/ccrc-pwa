@@ -150,7 +150,7 @@ held — nothing wedged). But the box was left with an ORPHANED workspace, `swif
 worktree + full registry entries present, no session, no run binding.
 
 Cause, in order: `cmd_ws_add` writes the worktree and registry FIRST and runs
-`_spawn` + `_ws_supervise` LAST. `_ws_least_loaded` picked wrapper `claude-dev0` by
+`_spawn` + `_ws_supervise` LAST. `_ws_least_loaded` picked wrapper `claude-lab0` by
 session-count + disk only — it does NOT consider wrapper HEALTH. dev0 was rate-limited
 (logged in, over limit), so the fresh session showed a usage-limit screen that
 `_accept_first_run_prompts` does not recognize — it matches ready banners and
@@ -304,7 +304,7 @@ and **operator input** — the two surfaces the coordination build did not touch
 
 - **F10 — placement ignores the billing lane.** `_ws_least_loaded` ranks home-able accounts by
   `_limit_score` alone (max of the 5h/7d percentages), which knows nothing about how an account
-  bills. `claude-dev0` is on Claude API usage credits, so the least-loaded account is exactly the
+  bills. `claude-lab0` is on Claude API usage credits, so the least-loaded account is exactly the
   one a dispatched worker must not land on. Caught at $2.38. Task #35.
 - **F11 — the auto-naming lane renames a coordinator-dispatched workspace.** `ws-add` created
   `ws/brisk-harbor`; within a minute the naming lane renamed the branch out from under the run,
@@ -439,7 +439,7 @@ would have disagreed is `list-units`, which does not name it. `ccd ws-audit` cou
 corrected the reading either: `_ws_reap_eval` refuses `not-archived` first and nulls every
 downstream field, and `_alive` appeared nowhere in that verb.
 
-**3 (C11). "`_ws_least_loaded` picked wrapper `claude-dev0` by session-count + disk only" (lines
+**3 (C11). "`_ws_least_loaded` picked wrapper `claude-lab0` by session-count + disk only" (lines
 153–154).** It considers neither. `_ws_least_loaded` ranks home-able accounts by `_account_ok` plus
 `_limit_score` — the whole of its ranking is `sc=$(_limit_score "$w"); [[ -z "$sc" ]] && continue`
 followed by `(( sc < bs )) && { bs=$sc; best="$w"; }` — and `_limit_score` is the max of the 5h/7d

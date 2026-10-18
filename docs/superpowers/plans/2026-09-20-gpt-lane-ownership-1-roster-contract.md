@@ -27,7 +27,7 @@ Do not start Plan 2 from this document.
 Copied from the spec and this repo's `CLAUDE.md`. Every task's requirements implicitly include this section.
 
 - **`$REPO` is this worktree's root.** Every command below assumes it: `export REPO="$(git rev-parse --show-toplevel)"`. Absolute paths are never written into tracked text here — they carry the operator's username, which `topology-clean`'s operator-residue class bans (docs speak roles: `/home/you`, `you@<server-host>`).
-- **This repository is PUBLIC.** No real account id, label, email address, host, selected machine port, credential, OAuth path or operator username may appear in any tracked byte. Fixtures speak the `team·…` vocabulary; test ids are `codex-a`, `codex-b`, `claude`, `claude2`.
+- **This repository is PUBLIC.** No real account id, label, email address, host, selected machine port, credential, OAuth path or operator username may appear in any tracked byte. Fixtures speak the `team·…` vocabulary; test ids are `codex-a`, `codex-b`, `claude`, `claude9`.
 - **No account-name list in any shipped source file.** The roster is runtime data in `~/.ccrc/accounts.json`.
 - **Never print secret file CONTENTS.** Existence and mode only, via `ls`.
 - **Fixture HOMEs only in tests.** Never run `ccd`, `ccrc`, `gen-wrappers.mjs` or `deploy.sh` against the real `$HOME`. Use `mkTmp` from `server/test/tmpHelpers.ts`.
@@ -1737,7 +1737,7 @@ git push -u origin ws/astra-system-message-error
 
 The PR body ends with `🤖 Generated with [Claude Code](https://claude.com/claude-code)`, links the spec by its **GitHub blob URL** (never a docserver URL), and states plainly that this wave ships no runtime and changes no box's behaviour until a roster declares a `codex` lane.
 
-**Do not deploy.** The spec's §15 sequence is: land → release → separately authorised cutover → OpenClaw deletion. This plan ends at "land".
+**Do not deploy.** The spec's §15 sequence is: land → release → separately authorised cutover → legacy-tree deletion. This plan ends at "land".
 
 ## Self-review of this plan
 

@@ -77,7 +77,7 @@ Every task's requirements implicitly include this section.
 **Repository and process**
 - **Node floor `>=22.13.0`**, identical across the three engines. Never lower an `engines` field to make a test green.
 - **The repository is PUBLIC (AGPL-3.0).** No real account id, lane name, label, email, host, port, credential, OAuth path, session codename, operator username or real model id may appear in any tracked byte. Fixture vocabulary:
-  - ids `codex-a`, `codex-b` (kind `codex`), `claude` (upstream), `claude2` (generated);
+  - ids `codex-a`, `codex-b` (kind `codex`), `claude` (upstream), `claude9` (generated);
   - `authDir` `.local/share/ccrc/codex/<id>`;
   - tokens `test-token-not-a-secret`;
   - model ids `gpt-x` and `probe-model`.
@@ -941,7 +941,7 @@ EOF
 
 > Resolved by ruling R15: this task performs the S6-R11 citation repair in its own commit, after the insert and the re-stamp, and commits GREEN (Step 6). README's two `ccd/ccd:` anchors are re-pointed by content, then the compaction-card census is re-measured by dumping and re-pinned. Task 12 Step 2 only re-measures.
 
-> Resolved by ruling R41: the branch is rebased onto `origin/main` before Task 1 (Step 0 checks it). This task's numbers were RE-MEASURED at `36d62a1d`, which is `bbb5e714` (it carries CCR-15 wave 1, #175) plus this plan's own document, a file no step here reads. The platform region is byte-identical to `aed80210`'s (md5 measured), so the insert is unchanged, but every census number and README anchor moved. A number marked `aed80210` is history. Every number here is an EXAMPLE to re-derive at execution, never a value to paste. Post-condition diffs compare against Step 0's `BASE`.
+> Resolved by ruling R41: the branch is rebased onto `origin/main` before Task 1 (Step 0 checks it). This task's numbers were RE-MEASURED at `36d62a1d`, which is `bbb5e714` (it carries #166 wave 1, #175) plus this plan's own document, a file no step here reads. The platform region is byte-identical to `aed80210`'s (md5 measured), so the insert is unchanged, but every census number and README anchor moved. A number marked `aed80210` is history. Every number here is an EXAMPLE to re-derive at execution, never a value to paste. Post-condition diffs compare against Step 0's `BASE`.
 
 > **Departures from Appendix A's TEXT (additive; none changes a name or an interface; each has a test and a
 > mutation row).** They all follow one rule: one contract, two arms. Whatever one arm cannot report after the
@@ -1994,7 +1994,7 @@ file:
    the match to sit inside `cmd_ensure` at both trees, which is what the sentence says.
 
 History, for the reader of an older draft. At `aed80210` the mint's anchor named a comment line inside
-`cmd_ensure` that was green only through sub-rule A, so this step once carried a referent correction. CCR-15 wave 1
+`cmd_ensure` that was green only through sub-rule A, so this step once carried a referent correction. #166 wave 1
 (#175) re-pointed it onto the call itself, and at `36d62a1d` both anchors are pure shifts. On a base where either
 assertion fails, the script prints `STOP:` and exits 1. It never maps. Report the line to the controller. At
 `36d62a1d`, this exact script STOPs when either anchor is put back to its old `aed80210` number
@@ -2421,11 +2421,11 @@ Step 6c dump printed.
 12. **The repair constrains later commits and parallel branches.**
     - README's two anchors now name `:20021-20023` and `:21234` (measured at `36d62a1d`; the shipped values are the
       ones 6b's LOCATE printed). Any later insert above either line in `ccd/ccd` rots them again.
-    - **CCR-15 wave 1 is MERGED (#175, `bbb5e714`).** It re-pointed these same two README anchors, to `:19866-19868`
+    - **#166 wave 1 is MERGED (#175, `bbb5e714`).** It re-pointed these same two README anchors, to `:19866-19868`
       and onto the `_reg_generation_init "$id"` call itself at `:21079`, and it moved the census. This plan is
       therefore the second to merge. Every Step 6 number here was re-measured on that base, and the referent
       correction this task once carried is gone, because main already made it.
-    - **CCR-15 waves 3 and 4 are still to come, and both plans modify `ccd/ccd`**
+    - **#166 waves 3 and 4 are still to come, and both plans modify `ccd/ccd`**
       (`docs/superpowers/plans/2026-09-22-child-reclamation-wave3-ws-reclaim-and-close.md` and
       `…-wave4-sweep-and-switch.md`). Whichever branch merges second re-measures on its merge ref. The census is a
       function of branch × main, so a number derived before that merge is a forecast. That is why 6b's LOCATE reads
@@ -9752,7 +9752,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 *The external arm must not move a byte.*
 - The live lanes are `external` rows (D-3169).
-- OpenClaw's LiteLLM reads the box-global file.
+- The legacy tree's LiteLLM reads the box-global file.
 - Plan 3 retires this arm at cutover (D-3482).
 
 So the external body of `_models_litellm` stays verbatim, behind a one-line dispatch, and so does
@@ -18622,7 +18622,7 @@ measured) — the roster edit is Plan 3's cutover.
 - D-3482 — For `exec.kind == codex` lanes ONLY, `_models_litellm` writes
   `~/.ccrc/codex/<id>/litellm.yaml`, asks `_codex_tier_ours` instead of `pgrep`, and does STOP→WRITE→START through
   ccrc's own tier functions. `external` lanes keep today's box-global path and bare `ccgpt stop` byte-for-byte (the
-  live lanes are `external`; OpenClaw's LiteLLM reads that path). Pulled forward from Plan 3 because a lane cannot
+  live lanes are `external`; the legacy tree's LiteLLM reads that path). Pulled forward from Plan 3 because a lane cannot
   run without a config; Plan 3 retires the external arm at cutover.
 - D-3483 — `_svc_have_user_manager` is NEW logic (Linux: `command -v systemd-run` AND
   `systemctl --user show-environment` succeeds). Spec §7.3 says the fallback probe is inherited from
@@ -18664,7 +18664,7 @@ measured) — the roster edit is Plan 3's cutover.
   `_inst_graphify_engine` uses, or python `os.replace`).
 - **Order invariants:** nothing after `_inst_installed`; `cmd_install` ends with `cmd_doctor`; every commit on main
   installs (an install line never precedes its file; a file may precede its install line).
-- Fixture vocabulary: ids `codex-a`, `codex-b` (codex), `claude` (upstream), `claude2` (generated). authDir
+- Fixture vocabulary: ids `codex-a`, `codex-b` (codex), `claude` (upstream), `claude9` (generated). authDir
   `.local/share/ccrc/codex/<id>`. Tokens `test-token-not-a-secret`. Gateway keys in tests are generated, never
   asserted by value — assert shape (`^sk-[0-9a-f]{48}$`) and mode.
 - Commit trailer: `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
@@ -19046,7 +19046,7 @@ wins.
     never `origin/main`.
   - Task 2's LOCATE reads README's `ccd/ccd:` anchors with `grep -o 'ccd/ccd:[0-9-]*' README.md`, not literals.
     It asserts that the base block holds the quoted bytes (`genrc == 1`, `_reg_generation_init "$id"`) before
-    mapping. Its Hazard 12 says CCR-15 wave 1 is merged (#175).
+    mapping. Its Hazard 12 says #166 wave 1 is merged (#175).
 - **R42 — Task 3 follows Task 1.** Task 3's Step 4 edits lines Task 1 renames. The order is `1 → 3`, and Task 3's
   Consumes names Task 1 as a hard edge.
 - **R43 — secrets on the live box.** Never read or print a live unit's `Environment=` or any key-bearing file.

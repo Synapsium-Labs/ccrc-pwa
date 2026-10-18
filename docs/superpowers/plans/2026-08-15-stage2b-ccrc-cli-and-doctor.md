@@ -45,13 +45,13 @@
 
 *(D-69 onward; append as implementation discovers them.)*
 
-- **D-69 — the roster does not describe the box it came from.** `~/.ccrc/accounts.json` on the fleet host declares `claude-corp` as `{"kind":"generated"}` with no `secretsFile`, while the live `~/.local/bin/claude-corp` sources `.cc-secrets/claude-corp-oauth.env` (present, 461 bytes, mtime 2026-08-15 15:33 — actively rotating). `deploy/accounts.migration.json` carries the same omission. `exec.secretsFile` has no runtime consumer today, so nothing has ever noticed. The first generator to write wrappers from this roster silently drops that account's auth line. Doctor's roster/wrapper coherence check (Task 5) is what finds it; the data fix is Task 6. **The live box's `accounts.json` is user-owned — a human edits it, not a deploy.**
+- **D-69 — the roster does not describe the box it came from.** `~/.ccrc/accounts.json` on the fleet host declares `claude-acme` as `{"kind":"generated"}` with no `secretsFile`, while the live `~/.local/bin/claude-acme` sources `.cc-secrets/claude-acme-oauth.env` (present, 461 bytes, mtime 2026-08-15 15:33 — actively rotating). `deploy/accounts.migration.json` carries the same omission. `exec.secretsFile` has no runtime consumer today, so nothing has ever noticed. The first generator to write wrappers from this roster silently drops that account's auth line. Doctor's roster/wrapper coherence check (Task 5) is what finds it; the data fix is Task 6. **The live box's `accounts.json` is user-owned — a human edits it, not a deploy.**
 
 - **D-70 — the generated projection cannot answer the question the roster is asked.** This plan's Task 5 brief named `~/.ccrc/accounts.sh` as the coherence check's input. That is unimplementable: `shared/generate.mjs` emits `CCRC_ACCOUNTS`, `CCRC_HOME_ABLE`, `CCRC_MEASURED`, `CCRC_UPSTREAM` and the five `_ccrc_*` lookups, and **no `exec.kind` and no `secretsFile`** — so the projection cannot express the very distinction D-69 is made of. The check reads `~/.ccrc/accounts.json` directly instead, via `node` rather than `jq`: the test suite stubs `jq` as `exit 0`, so a `jq`-based reader would have seen an empty roster in every fixture and passed everything. Consequence for later work: anything needing `exec` semantics must read the JSON, and the projection is only good for the four questions ccd asks of it.
 
 - **D-71 — `IFS=$'\t' read` cannot read a tab-separated record with empty fields.** A tab is IFS *whitespace*, so bash collapses runs of it and strips leading ones. `IFS=$'\t' read -r id suffix kind secrets` over a roster row therefore shifts every field left when an earlier one is empty: an entry with no `id` was read as `id=".acct-a", suffix="generated"`. Two consequences, both silent — the no-id guard was dead code that could never fire, and a missing `configDirSuffix` was reported as a bad `exec.kind`, sending the operator to the wrong field. Measured: `printf '\tb\tc\n' | { IFS=$'\t' read -r f1 f2 f3; }` yields `f1=b f2=c f3=`, not `f1= f2=b f3=c`. Fields are now split by hand in `_check_wrappers`. **Any tab-delimited record with possibly-empty fields must not use `read` with `IFS` alone** — this idiom appears wherever a bash reader parses a generated record, and it fails only on the empty-field case, which is exactly the case a validity guard exists to catch.
 
-- **D-72 — the roster-divergence detector is blind to the exact defect class D-69 belongs to.** `rosterAgreement` (PR #46) compares the two boxes' `bodyDigest` of the generated `accounts.sh`, deliberately — nothing on the fleet host reads `accounts.json` at runtime, so the projection is what `ccd` actually obeys. But the projection carries only `CCRC_ACCOUNTS`, `CCRC_HOME_ABLE`, `CCRC_MEASURED`, `CCRC_UPSTREAM` and the five `_ccrc_*` lookups; **`exec.kind` and `exec.secretsFile` are never emitted** (D-70). So two boxes whose rosters differ ONLY in a `secretsFile` produce byte-identical projections and report `'agreed'`. Measured on this plan's own Task 6 fix: adding `claude-corp`'s `secretsFile` left the digest at `3916c1c1…`, unchanged. This is not an argument for digesting the JSON instead — that would fire on every deploy where an operator's comment or key order differs, and the projection genuinely is what ccd obeys. It means the fingerprint answers "would the two boxes RUN the same bash?" and not "do the two boxes AGREE about their accounts?", and only the first of those is currently checked anywhere. Closing it needs a second, JSON-level comparison of the semantic fields the projection drops — or `ccrc doctor`'s wrapper check run on both boxes, which is what actually catches it today.
+- **D-72 — the roster-divergence detector is blind to the exact defect class D-69 belongs to.** `rosterAgreement` (PR #46) compares the two boxes' `bodyDigest` of the generated `accounts.sh`, deliberately — nothing on the fleet host reads `accounts.json` at runtime, so the projection is what `ccd` actually obeys. But the projection carries only `CCRC_ACCOUNTS`, `CCRC_HOME_ABLE`, `CCRC_MEASURED`, `CCRC_UPSTREAM` and the five `_ccrc_*` lookups; **`exec.kind` and `exec.secretsFile` are never emitted** (D-70). So two boxes whose rosters differ ONLY in a `secretsFile` produce byte-identical projections and report `'agreed'`. Measured on this plan's own Task 6 fix: adding `claude-acme`'s `secretsFile` left the digest at `3916c1c1…`, unchanged. This is not an argument for digesting the JSON instead — that would fire on every deploy where an operator's comment or key order differs, and the projection genuinely is what ccd obeys. It means the fingerprint answers "would the two boxes RUN the same bash?" and not "do the two boxes AGREE about their accounts?", and only the first of those is currently checked anywhere. Closing it needs a second, JSON-level comparison of the semantic fields the projection drops — or `ccrc doctor`'s wrapper check run on both boxes, which is what actually catches it today.
 
 - **D-73 — the fleet host has no `~/.ccrc/ccrc.env`, so it cannot name its own server.** Measured on the live box: `~/.ccrc/` holds `agent.env`, `accounts.json`, `accounts.sh`, `build.json` and `coord.db` — and no `ccrc.env`. Nothing has needed one, because `ccd` never sources it (it derives every path from `$HOME`) and the agent reads `agent.env`. But the OSS spec §2 makes `ccrc.env` "the single source of machine configuration, read by everything", and the first tool that needs a *server address from the fleet side* — `ccrc status` — has nowhere to read it from. It correctly SKIPs rather than guessing, and `deploy/notify.sh:35`'s baked `${CCRC_ADDR:-203.0.113.7:7788}` fallback is the shape this must not copy. The deploy's `ship_env` already ships `ccrc.env` to the SERVER lane only; the agent lane ships `ccrc-agent.env`. Closing this means deciding what a fleet-role box's `ccrc.env` contains and having the agent lane ship one.
 - **Not a deviation, recorded so it is not mistaken for one:** `ccrc doctor`'s fleet check WARNs `build: unknown` against the live server today because that server runs `d7137c24` — exactly this branch's merge-base — which predates Tasks 2–3. The `build` field does not exist in its response yet. The check is behaving correctly (`'unknown'` is not disagreement) and turns PASS once both boxes carry this branch.
@@ -395,7 +395,7 @@ Compare PATHS only; never open a secrets file. Follow adopt's bias rule (`:32-39
 
 ```bash
 bash ccd/ccrc doctor
-# EXPECTED on the fleet host TODAY: FAIL wrappers: claude-corp — this is D-69,
+# EXPECTED on the fleet host TODAY: FAIL wrappers: claude-acme — this is D-69,
 # a real finding, and Task 6 is its fix. Do not "fix" it by weakening the check.
 ```
 
@@ -408,7 +408,7 @@ git commit -m "feat(ccrc): doctor notices a wrapper the roster does not describe
 
 ---
 
-## Task 6: Fix D-69 — the shipped roster describes claude-corp's secrets file
+## Task 6: Fix D-69 — the shipped roster describes claude-acme's secrets file
 
 **Files:**
 - Modify: `deploy/accounts.migration.json`
@@ -419,8 +419,8 @@ git commit -m "feat(ccrc): doctor notices a wrapper the roster does not describe
 ```ts
 it('every generated account in the shipped migration roster declares the secretsFile its box uses', () => {
   const roster = JSON.parse(readFileSync('deploy/accounts.migration.json', 'utf8'));
-  const corp = roster.accounts.find((a: any) => a.id === 'claude-corp');
-  expect(corp.exec.secretsFile).toBe('.cc-secrets/claude-corp-oauth.env');
+  const corp = roster.accounts.find((a: any) => a.id === 'claude-acme');
+  expect(corp.exec.secretsFile).toBe('.cc-secrets/claude-acme-oauth.env');
 });
 ```
 
@@ -431,7 +431,7 @@ Expected: FAIL — `secretsFile` is undefined.
 
 - [ ] **Step 3: Implement**
 
-Add `"secretsFile": ".cc-secrets/claude-corp-oauth.env"` to `claude-corp`'s `exec` block. Verify the generated projection's fingerprint changes as expected and that `roster.test.ts` still passes.
+Add `"secretsFile": ".cc-secrets/claude-acme-oauth.env"` to `claude-acme`'s `exec` block. Verify the generated projection's fingerprint changes as expected and that `roster.test.ts` still passes.
 
 - [ ] **Step 4: Run to verify it passes**
 
@@ -443,7 +443,7 @@ Run: `cd server && ./node_modules/.bin/vitest run`
 
 ```bash
 git add deploy/accounts.migration.json server/test/gen-accounts.test.ts
-git commit -m "fix(roster): claude-corp declares the secrets file its wrapper has always sourced (D-69)"
+git commit -m "fix(roster): claude-acme declares the secrets file its wrapper has always sourced (D-69)"
 ```
 
 ---

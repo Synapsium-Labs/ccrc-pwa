@@ -3411,7 +3411,7 @@ Add `capSupported`, `POOLS_CAP` to the existing `./ccdargv.js` import, `poolVerd
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/swap-route-pool.test.ts test/lifecycle.test.ts`
-Expected: PASS. `lifecycle.test.ts`'s two existing swap cases stay byte-identical: `seedDefault` seeds a complete identity triple for `claude2-MekWarLive` with `project: 'MekWarLive'`, no `pools/` exists, so `poolFor` answers `untagged` and `poolVerdict` answers ok.
+Expected: PASS. `lifecycle.test.ts`'s two existing swap cases stay byte-identical: `seedDefault` seeds a complete identity triple for `claude9-project-f` with `project: 'project-f'`, no `pools/` exists, so `poolFor` answers `untagged` and `poolVerdict` answers ok.
 
 - [ ] **Step 5: Measure the mutations**
 

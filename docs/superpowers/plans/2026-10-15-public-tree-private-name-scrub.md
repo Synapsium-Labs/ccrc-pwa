@@ -364,3 +364,8 @@ Run 561 was issued D-5277 to D-5288 at dispatch. Each number is defined here whe
   replaced by its `#h8`, since a file named after an entry would otherwise put the name into a public CI log, and it
   reads a `words` phrase broken across two lines, which the plan left to the local scan. The branch corpus reads a
   path git decorates in a diff header (a trailing TAB after a space, C-quoting with octal escapes).
+- **D-5283** — `commercial-work-list` (Task 2 Step 3): `info/ccrc-scrub/crit-text.txt` is the inventory critic's list of
+  text paths, not the commercial and legal work list. The work list was the critic's commercial entry, re-measured at
+  the branch point with a phrase search (edition plans, licensing strategy, competition, employer and ownership,
+  copyright, customers). Neighbouring sentences carried the same matter, so more lines were reworded than the entry
+  named; each reworded `path:line` is in the local `info/ccrc-scrub/operator-read.txt`, for the operator to read.

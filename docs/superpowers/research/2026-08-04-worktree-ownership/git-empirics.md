@@ -8,11 +8,11 @@ git version 2.43.0
 ```
 
 All results below are MEASURED, verbatim, from throwaway fixtures built under
-`/tmp/claude-1000/-mnt-HC-Volume-105751470-projects-OpenClawHetzner/2a57e3e1-6822-474f-9202-2f580ed9be65/scratchpad/probes/`
+`<scratchpad>/probes/`
 (local bare repo as `origin`, one commit, no network). Fixtures deleted at the end.
 
 Throughout, paths are abbreviated as `$P` =
-`/tmp/claude-1000/-mnt-HC-Volume-105751470-projects-OpenClawHetzner/2a57e3e1-6822-474f-9202-2f580ed9be65/scratchpad/probes`
+`<scratchpad>/probes`
 in prose; **transcript output is verbatim and shows full paths**.
 
 ## Fixture
@@ -730,7 +730,7 @@ original probe or this one.
 ### Design consequences checked against the real `ccd` (not just asserted)
 
 The report hedges its ccd consequences ("if it is `[ -n "$(git status --porcelain)" ]`").
-Re-opened `/srv/projects/OpenClawHetzner/infra/<server-host>-portability/ccd`
+Re-opened `/srv/projects/project-c/infra/<server-host>-portability/ccd`
 (5439 lines) and grepped for every consumer:
 
 - **The dirty rung is exactly that shape.** `ccd:1078` `dirty=$(git -C "$workdir" status --porcelain 2>"$derrf")`, `ccd:1082` `[[ -z "$dirty" ]] || die "worktree not removed (uncommitted changes?)…"`. So E2's false positive is **real, not hypothetical**: any nested child worktree hard-blocks `ws-reap` on a healthy parent. E2's design consequence is **CONFIRMED against code**.

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** this plan is dispatched as a wave to a `ccrc-worker` session; follow the `ccrc-worker` skill for the protocol (ack, claims, asks, wave-done). To execute the tasks, REQUIRED SUB-SKILL: superpowers:subagent-driven-development. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Programme:** child-reclamation (CCR-15), **wave 9 of 9**, run 380. **Deploy class: server.** This wave is server and shared L0 only. It has no ccd, agent or PWA edit. Wave 7 (#344) shipped the verb `ws-collect`, its audit, its capability token and its agent grant, INERT; wave 8 (#349) shipped reclaim's server half. Both are deployed (v0.0.147).
+**Programme:** child-reclamation (#166), **wave 9 of 9**, run 380. **Deploy class: server.** This wave is server and shared L0 only. It has no ccd, agent or PWA edit. Wave 7 (#344) shipped the verb `ws-collect`, its audit, its capability token and its agent grant, INERT; wave 8 (#349) shipped reclaim's server half. Both are deployed (v0.0.147).
 
 **Goal:** Write the ONE server composer that spends wave 7's collect token, and ship it SHADOWED. After this wave:
 - **The lane finds its population exactly.** It reads `$REG/tmproots` and `$REG/tmpquarantine` with measured reads, keeps only names the one L0 temp-root id predicate admits (never a dash-leading or over-long id), parses record names exactly, and never reads `~/.cc-tmp` (R83).

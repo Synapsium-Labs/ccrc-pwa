@@ -148,7 +148,7 @@ afterEach(() => { h.cleanup(); });
 
 const UUID = 'b7001948-1111-4bcc-b60b-0cfc0dc3d199';
 const SRC = '.claude';        // the `claude` account's config dir
-const DST = '.claude-dev0';   // the `claude-dev0` account's config dir
+const DST = '.claude-lab0';   // the `claude-lab0` account's config dir
 
 /** A transcript at <cfg>/projects/<pdir>/<uuid>.jsonl. `mtime` in whole
  *  seconds, because §2.2's newest-wins rule reads `stat -c %Y`. */
@@ -225,7 +225,7 @@ describe('_transcript_matches', () => {
     // M2: the incident uuid exists in FIVE config dirs at five different
     // sizes. A locator allowed to cross accounts would carry a stale copy.
     plant(SRC, '-data-projects-demo', 'MINE\n');
-    plant('.claude-personal', '-data-projects-demo', 'STALE\n');
+    plant('.claude-home', '-data-projects-demo', 'STALE\n');
     const out = h.sh(`_transcript_matches "$HOME/${SRC}" ${UUID}`).split('\n');
     expect(out).toHaveLength(1);
     expect(out[0]).toContain(`/${SRC}/projects/`);
@@ -624,7 +624,7 @@ const EMPTY_TEXT = '{"message":{"content":[{"type":"text","text":""}]}}';
 const SWAP = 'systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; }; '
   + 'tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; }; sleep() { :; };';
 
-const runSwap = (target = 'claude-dev0'): string =>
+const runSwap = (target = 'claude-lab0'): string =>
   h.sh(`${SWAP} cmd_swap ${ID} ${target}`, { TMUX: '' });
 
 /** The registry row cmd_swap reads. Returns `mdir` — the munge of the resolved
@@ -656,7 +656,7 @@ const sidecar = (cfg: string, pdir: string, rel: string, body: string): string =
 
 /** A path inside the DESTINATION account's project dir. */
 const dstAt = (pdir: string, rel: string): string =>
-  path.join(h.home, '.claude-dev0', 'projects', pdir, rel);
+  path.join(h.home, '.claude-lab0', 'projects', pdir, rel);
 
 const swapLog = (): string => {
   const p = path.join(h.home, '.cc-sessions', 'swap.log');
@@ -670,11 +670,11 @@ describe('cmd_swap carries the transcript', () => {
     // completed anyway with a warning nobody read.
     const mdir = seed('claude');
     plant('.claude', '-w-quiet-mesa', 'HISTORY\n');
-    expect(runSwap()).toContain('swapped claude-demo: claude -> claude-dev0');
+    expect(runSwap()).toContain('swapped claude-demo: claude -> claude-lab0');
     expect(fs.readFileSync(dstAt('-w-quiet-mesa', `${UUID}.jsonl`), 'utf8')).toBe('HISTORY\n');
     // …and the slot the resumed process reads first is covered too.
     expect(fs.readFileSync(dstAt(mdir, `${UUID}.jsonl`), 'utf8')).toBe('HISTORY\n');
-    expect(h.reg(ID, 'wrapper')).toBe('claude-dev0');
+    expect(h.reg(ID, 'wrapper')).toBe('claude-lab0');
   });
 
   it('a gpt -> Anthropic swap sanitizes the copy, and every carried name IS that file', () => {
@@ -752,7 +752,7 @@ describe('cmd_swap carries the sidecars', () => {
     const mdir = seed('claude');
     plant('.claude', mdir, 'HISTORY\n');
     sidecar('.claude', mdir, 'tool-results/r.json', 'SOURCE\n');
-    sidecar('.claude-dev0', mdir, 'tool-results/r.json', 'ALREADY THERE\n');
+    sidecar('.claude-lab0', mdir, 'tool-results/r.json', 'ALREADY THERE\n');
     runSwap();
     expect(fs.readFileSync(dstAt(mdir, path.join(UUID, 'tool-results/r.json')), 'utf8'))
       .toBe('ALREADY THERE\n');
@@ -771,7 +771,7 @@ describe('cmd_swap keeps carrying the task list', () => {
     fs.mkdirSync(tasks, { recursive: true });
     fs.writeFileSync(path.join(tasks, 'plan.json'), 'PLAN\n');
     runSwap();
-    expect(fs.readFileSync(path.join(h.home, '.claude-dev0', 'tasks', UUID, 'plan.json'), 'utf8'))
+    expect(fs.readFileSync(path.join(h.home, '.claude-lab0', 'tasks', UUID, 'plan.json'), 'utf8'))
       .toBe('PLAN\n');
     expect(fs.readFileSync(path.join(tasks, 'plan.json'), 'utf8'),
       'copy, don\'t move: a reverted swap still needs the old lane\'s copy').toBe('PLAN\n');
@@ -797,7 +797,7 @@ describe('cmd_swap keeps carrying the task list', () => {
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccd-swap.test.ts` (`timeout: 600000`)
 
-Expected: FAIL — 6 of 9. The transcript cases fail with `ENOENT: no such file or directory, open '…/.claude-dev0/projects/-w-quiet-mesa/<uuid>.jsonl'` (cmd_swap still copies only the `mdir` path); every sidecar case fails the same way on its sidecar path, because nothing copies sidecars today. The tasks-dir case and the systemctl-ordering case PASS from the start — they are regression pins, and a red one here means the harness is wrong.
+Expected: FAIL — 6 of 9. The transcript cases fail with `ENOENT: no such file or directory, open '…/.claude-lab0/projects/-w-quiet-mesa/<uuid>.jsonl'` (cmd_swap still copies only the `mdir` path); every sidecar case fails the same way on its sidecar path, because nothing copies sidecars today. The tasks-dir case and the systemctl-ordering case PASS from the start — they are regression pins, and a red one here means the harness is wrong.
 
 - [ ] **Step 3: Add `_swap_carry_sidecars`**
 
@@ -1075,7 +1075,7 @@ describe('a swap that cannot carry the conversation', () => {
     // glob is a read, so it costs nothing above the teardown.
     const id = seed();
     plantNotify();
-    const r = shFail(`${SWAP_STUBS} cmd_swap ${id} claude2`);
+    const r = shFail(`${SWAP_STUBS} cmd_swap ${id} claude9`);
     expect(r.code).not.toBe(0);
     expect(r.stderr).toContain(`refusing to swap ${id}`);
     expect(h.calls().join('\n')).not.toContain(`stop claude-session@${id}`);
@@ -1088,11 +1088,11 @@ describe('a swap that cannot carry the conversation', () => {
     // self-swap path has already returned 0 to a caller it then kills.
     const id = seed();
     plantNotify();
-    shFail(`${SWAP_STUBS} cmd_swap ${id} claude2`);
+    shFail(`${SWAP_STUBS} cmd_swap ${id} claude9`);
     expect(h.reg(id, 'swapblocked'))
       .toMatch(new RegExp(`^\\d{10} no transcript found for ${UUID_A} under claude$`));
     expect(notices()).toContain(`cc swap BLOCKED: ${id} stays on claude`);
-    expect(swapLog()).toContain(`swap-refused ${id}: claude -> claude2`);
+    expect(swapLog()).toContain(`swap-refused ${id}: claude -> claude9`);
   });
 
   it('does NOT write lastswap — a refusal must not read as a swap landing', () => {
@@ -1101,7 +1101,7 @@ describe('a swap that cannot carry the conversation', () => {
     // from summary" — an auto-compaction. A refusal that stamped lastswap
     // would compact the very history it refused in order to protect.
     const id = seed();
-    shFail(`${SWAP_STUBS} cmd_swap ${id} claude2`);
+    shFail(`${SWAP_STUBS} cmd_swap ${id} claude9`);
     expect(h.reg(id, 'lastswap')).toBeNull();
   });
 
@@ -1116,7 +1116,7 @@ describe('a swap that cannot carry the conversation', () => {
     plantNotify();
     const rotate = `tmux() { [[ "\${1:-}" == kill-session ]] && _reg_set ${id} uuid ${UUID_B};
       echo "tmux $*" >> "$HOME/ccd-calls"; return 0; };`;
-    const r = shFail(`${SWAP_STUBS} ${rotate} cmd_swap ${id} claude2`);
+    const r = shFail(`${SWAP_STUBS} ${rotate} cmd_swap ${id} claude9`);
     expect(r.code).not.toBe(0);
     expect(h.reg(id, 'swapblocked'))
       .toContain(`no transcript found for ${UUID_B} under claude after flush`);
@@ -1135,7 +1135,7 @@ describe('a swap that cannot carry the conversation', () => {
     const noUnit = `systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; return 1; };`;
     const rotate = `tmux() { [[ "\${1:-}" == kill-session ]] && _reg_set ${id} uuid ${UUID_B};
       echo "tmux $*" >> "$HOME/ccd-calls"; return 0; };`;
-    shFail(`${SWAP_STUBS} ${noUnit} ${rotate} cmd_swap ${id} claude2`);
+    shFail(`${SWAP_STUBS} ${noUnit} ${rotate} cmd_swap ${id} claude9`);
     expect(h.calls().join('\n')).toContain(`cmd_ensure ${id}`);
   });
 
@@ -1145,9 +1145,9 @@ describe('a swap that cannot carry the conversation', () => {
     const id = seed(UUID_A);
     plantTranscript('.claude', '-x-projects-demo', UUID_A);
     fs.writeFileSync(path.join(h.home, '.cc-sessions', `${id}.swapblocked`), '1754000000 stale');
-    h.sh(`${SWAP_STUBS} cmd_swap ${id} claude2`);
+    h.sh(`${SWAP_STUBS} cmd_swap ${id} claude9`);
     expect(h.reg(id, 'swapblocked')).toBeNull();
-    expect(h.reg(id, 'wrapper')).toBe('claude2');
+    expect(h.reg(id, 'wrapper')).toBe('claude9');
   });
 });
 
@@ -1156,9 +1156,9 @@ describe('ccd swap --force', () => {
     // The operator has looked and decided there is genuinely nothing to carry.
     const id = seed();
     plantNotify();
-    const out = h.sh(`${SWAP_STUBS} cmd_swap --force ${id} claude2`);
-    expect(out).toContain(`swapped ${id}: claude -> claude2`);
-    expect(h.reg(id, 'wrapper')).toBe('claude2');
+    const out = h.sh(`${SWAP_STUBS} cmd_swap --force ${id} claude9`);
+    expect(out).toContain(`swapped ${id}: claude -> claude9`);
+    expect(h.reg(id, 'wrapper')).toBe('claude9');
     expect(h.reg(id, 'lastswap')).toMatch(/^\d{10}$/);
     expect(h.reg(id, 'swapblocked'), 'a forced swap is not a blocked one').toBeNull();
   });
@@ -1169,12 +1169,12 @@ describe('ccd swap --force', () => {
     // "--force". Second lock: _is_valid_wrapper rejects the literal, so even
     // past the stripper (`--`) it cannot land in the target slot.
     const a = seed(UUID_A, 'claude-demo');
-    h.sh(`${SWAP_STUBS} cmd_swap --force ${a} claude2`);
-    expect(h.reg(a, 'wrapper')).toBe('claude2');
+    h.sh(`${SWAP_STUBS} cmd_swap --force ${a} claude9`);
+    expect(h.reg(a, 'wrapper')).toBe('claude9');
 
     const b = seed(UUID_A, 'claude-demo2');
-    h.sh(`${SWAP_STUBS} cmd_swap ${b} claude2 --force`);
-    expect(h.reg(b, 'wrapper')).toBe('claude2');
+    h.sh(`${SWAP_STUBS} cmd_swap ${b} claude9 --force`);
+    expect(h.reg(b, 'wrapper')).toBe('claude9');
 
     const c = seed(UUID_A, 'claude-demo3');
     expect(shFail(`${SWAP_STUBS} cmd_swap ${c} --force`).code).not.toBe(0);
@@ -1190,7 +1190,7 @@ describe('_auto_swap_check and a refused session', () => {
    *  headroom, and a dispatch that logs instead of running systemd-run. */
   const AUTO_STUBS = `
     tmux() { case "\${1:-}" in capture-pane) echo "API Error: 429 Too Many Requests";; esac; return 0; };
-    _swap_target() { echo claude2; }; _avail() { return 0; };
+    _swap_target() { echo claude9; }; _avail() { return 0; };
     _dispatch_swap() { echo "dispatch $1 -> $2" >> "$HOME/ccd-calls"; };
   `;
 
@@ -1210,7 +1210,7 @@ describe('_auto_swap_check and a refused session', () => {
 
     stamp(1801);
     h.sh(`${AUTO_STUBS} _auto_swap_check ${id}`);
-    expect(h.calls().join('\n')).toContain(`dispatch ${id} -> claude2`);
+    expect(h.calls().join('\n')).toContain(`dispatch ${id} -> claude9`);
   });
 
   it('a garbage stamp does not gate and does not emit an unbound-variable line', () => {
@@ -1222,7 +1222,7 @@ describe('_auto_swap_check and a refused session', () => {
     const r = shFail(`${AUTO_STUBS} _auto_swap_check ${id}`);
     expect(r.code).toBe(0);
     expect(r.stderr).not.toContain('unbound variable');
-    expect(h.calls().join('\n')).toContain(`dispatch ${id} -> claude2`);
+    expect(h.calls().join('\n')).toContain(`dispatch ${id} -> claude9`);
   });
 });
 
@@ -1631,15 +1631,15 @@ describe('the callers M6 actually lied through', () => {
 
   it('ccd start does the same — and both still report success on a healthy spawn', () => {
     h.sh(`mkdir -p "$HOME/projects/demo"`);
-    const bad = shFail(`${TMUX} rm -f "$HOME/pane-up"; CCD_IN_UNIT=1; cmd_start claude2 demo`,
+    const bad = shFail(`${TMUX} rm -f "$HOME/pane-up"; CCD_IN_UNIT=1; cmd_start claude9 demo`,
       { PANE_TEXT: '', SPAWN_MAKES_PANE: '0' });
     expect(bad.code).toBe(3);
-    expect(bad.stdout).not.toContain('started claude2-demo');
-    expect(bad.stderr).toContain('start failed for claude2-demo (spawn rc 3)');
+    expect(bad.stdout).not.toContain('started claude9-demo');
+    expect(bad.stderr).toContain('start failed for claude9-demo (spawn rc 3)');
     // Positive control: without it, "never print a success line" passes.
-    const good = h.sh(`${TMUX} rm -f "$HOME/pane-up"; CCD_IN_UNIT=1; cmd_start claude2 demo`,
+    const good = h.sh(`${TMUX} rm -f "$HOME/pane-up"; CCD_IN_UNIT=1; cmd_start claude9 demo`,
       { PANE_TEXT: '? for shortcuts' });
-    expect(good).toContain('started claude2-demo (new)');
+    expect(good).toContain('started claude9-demo (new)');
   });
 });
 ```
@@ -1773,7 +1773,7 @@ git commit -m "fix(ccd): a spawn reports what actually happened, and records it 
 
 ### Task 5: the human start path restores supervision instead of routing around it
 
-Implements spec §3.1 and §3.2. `cmd_start` (ccd:6951) and `cmd_ensure` (ccd:6971) both call `_spawn` directly while `cmd_stop` (ccd:7101) is `systemctl --user disable --now` — so stop-then-start yields a tmux pane with **no unit**: no supervise loop, therefore no `_sync_uuid`, no `_auto_swap_check`, no `_auto_compact_check`, and no record when it dies. That is how `claude-corp-data-internal` ran 22 unsupervised minutes and died with nothing recording it, and M5 measured three rows still in the adjacent state. After this task the verbs ask the unit to spawn and wait on observables, `cmd_supervise` heals its own boot-persistence at entry, and the unit fails fast instead of looping invisibly.
+Implements spec §3.1 and §3.2. `cmd_start` (ccd:6951) and `cmd_ensure` (ccd:6971) both call `_spawn` directly while `cmd_stop` (ccd:7101) is `systemctl --user disable --now` — so stop-then-start yields a tmux pane with **no unit**: no supervise loop, therefore no `_sync_uuid`, no `_auto_swap_check`, no `_auto_compact_check`, and no record when it dies. That is how `claude-acme-project-e` ran 22 unsupervised minutes and died with nothing recording it, and M5 measured three rows still in the adjacent state. After this task the verbs ask the unit to spawn and wait on observables, `cmd_supervise` heals its own boot-persistence at entry, and the unit fails fast instead of looping invisibly.
 
 Three things to carry into the diff. `cmd_swap`'s tail (ccd:7064) falls back to `cmd_ensure`, and after this task that fallback goes through the unit — which is correct and is precisely why §3.2 rejects `INVOCATION_ID` as the recursion guard: `_dispatch_swap` (ccd:6564) runs `ccd swap` inside its own transient `systemd-run` unit, a context that genuinely *should* reach systemd. `cmd_ws_add` (ccd:1123) and `cmd_ws_restore` (ccd:2183) keep their **supervision** wiring untouched: they call `_spawn` and then `_ws_supervise`, which is already `systemctl --user enable --now`, so they never had D2's missing-unit defect.
 
@@ -1899,13 +1899,13 @@ describe('stop then start leaves the unit ENABLED', () => {
     // units, and a failed unit refuses to start until its failure is cleared,
     // so without that link the verb advertised as "what revives it" would not.
     h.sh(`mkdir -p "$HOME/projects/demo"`);
-    const out = h.sh(`${UNIT} cmd_stop claude2-demo; cmd_start claude2 demo`);
+    const out = h.sh(`${UNIT} cmd_stop claude9-demo; cmd_start claude9 demo`);
     expect(sysCalls()).toEqual([
-      'systemctl --user disable --now claude-session@claude2-demo',
-      'systemctl --user reset-failed claude-session@claude2-demo',
-      'systemctl --user enable --now claude-session@claude2-demo',
+      'systemctl --user disable --now claude-session@claude9-demo',
+      'systemctl --user reset-failed claude-session@claude9-demo',
+      'systemctl --user enable --now claude-session@claude9-demo',
     ]);
-    expect(out).toContain('started claude2-demo');
+    expect(out).toContain('started claude9-demo');
     // The verb did not spawn anything itself — the unit did.
     expect(h.calls().some((c) => c.startsWith('tmux new-session'))).toBe(false);
   });
@@ -1916,12 +1916,12 @@ describe('stop then start leaves the unit ENABLED', () => {
     // no route builds. A leftover second `enable --now` in cmd_enable would be
     // a redundant systemd round-trip on every create.
     h.sh(`mkdir -p "$HOME/projects/demo"`);
-    const out = h.sh(`${UNIT} cmd_enable claude2 demo`);
+    const out = h.sh(`${UNIT} cmd_enable claude9 demo`);
     expect(sysCalls()).toEqual([
-      'systemctl --user reset-failed claude-session@claude2-demo',
-      'systemctl --user enable --now claude-session@claude2-demo',
+      'systemctl --user reset-failed claude-session@claude9-demo',
+      'systemctl --user enable --now claude-session@claude9-demo',
     ]);
-    expect(out).toContain('enabled boot-persistence for claude2-demo');
+    expect(out).toContain('enabled boot-persistence for claude9-demo');
   });
 });
 
@@ -1983,12 +1983,12 @@ describe('the start waits on observables', () => {
     // ccd:7180 is `_alive || cmd_ensure` then `exec tmux attach` — delegating
     // the spawn made that asynchronous, so without the wait the attach races a
     // pane that is not there yet.
-    seed('claude2-demo');
-    const r = runCcd('attach', 'claude2', 'demo');
+    seed('claude9-demo');
+    const r = runCcd('attach', 'claude9', 'demo');
     expect(r.code).toBe(0);
     const calls = h.calls();
-    const enableAt = calls.indexOf('systemctl --user enable --now claude-session@claude2-demo');
-    const attachAt = calls.indexOf('tmux attach -t cc-claude2-demo');
+    const enableAt = calls.indexOf('systemctl --user enable --now claude-session@claude9-demo');
+    const attachAt = calls.indexOf('tmux attach -t cc-claude9-demo');
     expect(enableAt).toBeGreaterThan(-1);
     expect(attachAt).toBeGreaterThan(enableAt);
   });
@@ -2030,7 +2030,7 @@ describe('when systemd is not there, the start still happens and says so', () =>
 - [ ] **Step 2: Run it to verify it fails**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccd-supervised-start.test.ts` (`timeout: 600000`)
-Expected: FAIL — the first case reports the systemctl list as `[ 'systemctl --user disable --now claude-session@claude2-demo' ]` against the expected three, because `cmd_start` still spawns directly; the `_have_systemctl` cases fail with `_have_systemctl: command not found`.
+Expected: FAIL — the first case reports the systemctl list as `[ 'systemctl --user disable --now claude-session@claude9-demo' ]` against the expected three, because `cmd_start` still spawns directly; the `_have_systemctl` cases fail with `_have_systemctl: command not found`.
 
 - [ ] **Step 3: Add the wait bound, the probe, and `_supervised_start`**
 
@@ -2247,7 +2247,7 @@ git commit -m "fix(ccd): a human start goes through the unit, so the session tha
 
 ### Task 6: start stops minting a second id for a swapped session
 
-This implements spec §3.4, the second half of D2. `cmd_start` (ccd:6959) and `cmd_enable` (ccd:7098) only take `<wrapper> <project>`, and they recompute the id from those two words. A session keeps the id it was born with across every swap — `claude2-expoAI-assistant` is still that id while its `wrapper` field reads `claude-dev0` — so an operator reading the account off the board and typing it back **mints a second id** for a session that already exists. Worse, `cmd_start` then unconditionally `_reg_set`s `wrapper` from its argument (ccd:6971), pointing the row at a config dir that does not hold the transcript: exactly the shape of the 2026-08-11 incident, one verb later. `cmd_stop` grew the one-argument id form for the same reason and records it in its own comment (ccd:7109-7118); this task gives `start` and `enable` the same form, and makes the registry's account win over the argument.
+This implements spec §3.4, the second half of D2. `cmd_start` (ccd:6959) and `cmd_enable` (ccd:7098) only take `<wrapper> <project>`, and they recompute the id from those two words. A session keeps the id it was born with across every swap — `claude9-project-h` is still that id while its `wrapper` field reads `claude-lab0` — so an operator reading the account off the board and typing it back **mints a second id** for a session that already exists. Worse, `cmd_start` then unconditionally `_reg_set`s `wrapper` from its argument (ccd:6971), pointing the row at a config dir that does not hold the transcript: exactly the shape of the 2026-08-11 incident, one verb later. `cmd_stop` grew the one-argument id form for the same reason and records it in its own comment (ccd:7109-7118); this task gives `start` and `enable` the same form, and makes the registry's account win over the argument.
 
 **Files:**
 - Modify: `ccd/ccd` — `cmd_start` (ccd:6959-6977, whole body replaced), `cmd_enable` (ccd:7098-7107, whole body replaced)
@@ -2268,7 +2268,7 @@ Create `server/test/ccd-start-id.test.ts`:
  *
  * Two defects, one verb. `<wrapper> <project>` recomputes `<wrapper>-<project>`,
  * but a session keeps its birth id across every swap, so an operator reading
- * `claude-dev0` off the board and typing it back mints a SECOND row. And the
+ * `claude-lab0` off the board and typing it back mints a SECOND row. And the
  * unconditional `_reg_set wrapper` then pointed the ORIGINAL row at an account
  * whose config dir does not hold its transcript — the 21:32 incident's own
  * mechanism, reachable from a keyboard.
@@ -2301,8 +2301,8 @@ const run = (snippet: string): { code: number; stdout: string; stderr: string } 
   return { code: r.status ?? 1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 };
 
-/** A registry row exactly as the incident left it: the id says `claude2`, the
- *  `wrapper` field says `claude-dev0`, because auto-swap moved it. */
+/** A registry row exactly as the incident left it: the id says `claude9`, the
+ *  `wrapper` field says `claude-lab0`, because auto-swap moved it. */
 const seedRow = (id: string, wrapper: string, project: string): void => {
   fs.mkdirSync(path.join(h.home, 'projects', project), { recursive: true });
   h.sh(`_reg_set ${id} uuid b7001948-0000-4c2f-9a1b-0cfc0dc3d199
@@ -2316,14 +2316,14 @@ describe('ccd start — the one-argument id form', () => {
   it('starts the id it was given whole, without re-deriving one', () => {
     // Kills the mutant that still runs `_id "$1" "$2"` on a single argument:
     // that starts `<id>-` (or dies), never the row the operator named.
-    seedRow('claude2-expoAI-assistant', 'claude-dev0', 'expoAI-assistant');
-    const r = run(`${STUBS} cmd_start claude2-expoAI-assistant`);
+    seedRow('claude9-project-h', 'claude-lab0', 'project-h');
+    const r = run(`${STUBS} cmd_start claude9-project-h`);
     expect(r.code).toBe(0);
-    expect(h.calls()).toEqual(['supervised_start claude2-expoAI-assistant']);
-    expect(r.stdout).toContain('started claude2-expoAI-assistant (resume)');
+    expect(h.calls()).toEqual(['supervised_start claude9-project-h']);
+    expect(r.stdout).toContain('started claude9-project-h (resume)');
     // A workspace id (`<project>-<slug>`, no wrapper prefix) is the case the
     // two-argument form cannot express at all.
-    expect(h.reg('claude2-expoAI-assistant', 'wrapper')).toBe('claude-dev0');
+    expect(h.reg('claude9-project-h', 'wrapper')).toBe('claude-lab0');
   });
 
   it('refuses a single argument it has no row for, and says how to create one', () => {
@@ -2353,25 +2353,25 @@ describe('ccd start — the one-argument id form', () => {
 
 describe('ccd start — the registry account wins over the argument', () => {
   it('leaves wrapper alone and warns when the two-argument form disagrees', () => {
-    // THE INCIDENT, exactly: auto-swap moved claude2-expoAI-assistant to
-    // claude-dev0; the operator typed the account off the board back in; the
+    // THE INCIDENT, exactly: auto-swap moved claude9-project-h to
+    // claude-lab0; the operator typed the account off the board back in; the
     // unconditional `_reg_set wrapper` pointed the row at a config dir that
     // does not hold the transcript. Kills the mutant that keeps the write.
-    seedRow('claude2-expoAI-assistant', 'claude-dev0', 'expoAI-assistant');
-    const r = run(`${STUBS} cmd_start claude2 expoAI-assistant`);
+    seedRow('claude9-project-h', 'claude-lab0', 'project-h');
+    const r = run(`${STUBS} cmd_start claude9 project-h`);
     expect(r.code).toBe(0);
-    expect(h.reg('claude2-expoAI-assistant', 'wrapper')).toBe('claude-dev0');
-    expect(r.stderr).toContain('lives on claude-dev0, not claude2');
-    expect(r.stderr).toContain('ccd swap claude2-expoAI-assistant claude2');
+    expect(h.reg('claude9-project-h', 'wrapper')).toBe('claude-lab0');
+    expect(r.stderr).toContain('lives on claude-lab0, not claude9');
+    expect(r.stderr).toContain('ccd swap claude9-project-h claude9');
     // And it really started — a refusal here would strand the row.
-    expect(h.calls()).toEqual(['supervised_start claude2-expoAI-assistant']);
+    expect(h.calls()).toEqual(['supervised_start claude9-project-h']);
   });
 
   it('does not warn when the argument agrees with the row', () => {
     // Kills the mutant that warns unconditionally, which teaches the operator
     // to ignore the one warning that matters.
-    seedRow('claude2-expoAI-assistant', 'claude2', 'expoAI-assistant');
-    const r = run(`${STUBS} cmd_start claude2 expoAI-assistant`);
+    seedRow('claude9-project-h', 'claude9', 'project-h');
+    const r = run(`${STUBS} cmd_start claude9 project-h`);
     expect(r.code).toBe(0);
     expect(r.stderr).not.toContain('warn');
   });
@@ -2381,28 +2381,28 @@ describe('ccd start — the registry account wins over the argument', () => {
     // names is the one that lands. Kills an over-eager "registry always wins"
     // that would leave a new row with no wrapper at all.
     fs.mkdirSync(path.join(h.home, 'projects', 'demo'), { recursive: true });
-    const r = run(`${STUBS} cmd_start claude-corp demo`);
+    const r = run(`${STUBS} cmd_start claude-acme demo`);
     expect(r.code).toBe(0);
-    expect(h.reg('claude-corp-demo', 'wrapper')).toBe('claude-corp');
-    expect(h.reg('claude-corp-demo', 'workdir')).toBe(path.join(h.home, 'projects', 'demo'));
-    expect(h.reg('claude-corp-demo', 'started')).toBe('1');
-    expect(r.stdout).toContain('started claude-corp-demo (new)');
+    expect(h.reg('claude-acme-demo', 'wrapper')).toBe('claude-acme');
+    expect(h.reg('claude-acme-demo', 'workdir')).toBe(path.join(h.home, 'projects', 'demo'));
+    expect(h.reg('claude-acme-demo', 'started')).toBe('1');
+    expect(r.stdout).toContain('started claude-acme-demo (new)');
   });
 
   it('honours an explicit workdir on the creating form', () => {
     fs.mkdirSync(path.join(h.home, 'elsewhere'), { recursive: true });
-    const r = run(`${STUBS} cmd_start claude-corp demo "$HOME/elsewhere"`);
+    const r = run(`${STUBS} cmd_start claude-acme demo "$HOME/elsewhere"`);
     expect(r.code).toBe(0);
-    expect(h.reg('claude-corp-demo', 'workdir')).toBe(path.join(h.home, 'elsewhere'));
+    expect(h.reg('claude-acme-demo', 'workdir')).toBe(path.join(h.home, 'elsewhere'));
   });
 });
 
 describe('ccd enable', () => {
   it('takes the id form too — after §3.1 the two verbs are one act', () => {
-    seedRow('claude2-expoAI-assistant', 'claude-dev0', 'expoAI-assistant');
-    const r = run(`${STUBS} cmd_enable claude2-expoAI-assistant`);
+    seedRow('claude9-project-h', 'claude-lab0', 'project-h');
+    const r = run(`${STUBS} cmd_enable claude9-project-h`);
     expect(r.code).toBe(0);
-    expect(h.calls()).toEqual(['supervised_start claude2-expoAI-assistant']);
+    expect(h.calls()).toEqual(['supervised_start claude9-project-h']);
   });
 
   it('keeps its own usage line rather than borrowing start\'s', () => {
@@ -2419,7 +2419,7 @@ describe('ccd enable', () => {
 - [ ] **Step 2: Run it to verify it fails**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccd-start-id.test.ts` (`timeout: 600000`)
-Expected: FAIL — the first case dies at `ccd: usage: ccd start <wrapper> <project> [workdir]` (today's one-argument refusal), and the disagreement case reports `expected 'claude2' to be 'claude-dev0'`. Confirm both failure texts before proceeding.
+Expected: FAIL — the first case dies at `ccd: usage: ccd start <wrapper> <project> [workdir]` (today's one-argument refusal), and the disagreement case reports `expected 'claude9' to be 'claude-lab0'`. Confirm both failure texts before proceeding.
 
 - [ ] **Step 3: Rewrite `cmd_start`**
 
@@ -2429,8 +2429,8 @@ Replace the whole of `cmd_start` (ccd:6959-6977). This block is **shape-authorit
 cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   # THE ONE-ARGUMENT FORM IS THE CORRECT ONE FOR ANYTHING THAT ALREADY EXISTS.
   # `<wrapper> <project>` recomputes `<wrapper>-<project>`, and a session keeps
-  # the id it was born with across every swap — `claude2-expoAI-assistant` is
-  # still that id while its `wrapper` field reads `claude-dev0`. So an operator
+  # the id it was born with across every swap — `claude9-project-h` is
+  # still that id while its `wrapper` field reads `claude-lab0`. So an operator
   # reading the account off the board and typing it back MINTS A SECOND ID for
   # a session that already exists. `cmd_stop` grew this form first, for the
   # same reason, and its own comment records it.
@@ -2458,8 +2458,8 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
 
   # THE REGISTRY WINS OVER THE ARGUMENT, FOR THE ACCOUNT ONLY (spec §3.4).
   # `_reg_set "$id" wrapper "$wrapper"` used to be unconditional, so
-  # `ccd start claude2 expoAI-assistant` on a session auto-swap had moved to
-  # claude-dev0 rewrote the row to an account whose config dir does not hold
+  # `ccd start claude9 project-h` on a session auto-swap had moved to
+  # claude-lab0 rewrote the row to an account whose config dir does not hold
   # the transcript — the resumed session then finds no history under the very
   # account it was just told it lives on. `ccd swap` is the ONLY verb that
   # moves a session between accounts; a differing argument is a warning, and
@@ -2641,7 +2641,7 @@ describe('_ws_unsupervise records a deliberate stop', () => {
     // ("nothing is watching this; ccd start <id> is what would"), never
     // `stopped` ("somebody stopped it"). The rc is recorded separately in
     // $REG/<id>.spawn by §3.1.
-    h.sh(`_reg_set ${ID} wrapper claude2
+    h.sh(`_reg_set ${ID} wrapper claude9
       _reg_set ${ID} workdir "$HOME"
       _reg_set ${ID} uuid b7001948-0000-4c2f-9a1b-0cfc0dc3d199`);
     h.sh(`systemctl() { :; }; _ws_unsupervise ${ID} agent`);
@@ -2675,8 +2675,8 @@ describe('cmd_stop', () => {
   });
 
   it('still recomputes <wrapper>-<project> for the legacy two-argument form, flag and all', () => {
-    expect(h.sh(`${STOP} cmd_stop claude2 demo --surface pwa`)).toBe('stopped claude2-demo');
-    expect(h.reg('claude2-demo', 'stopped')).toMatch(/^\d{10} pwa$/);
+    expect(h.sh(`${STOP} cmd_stop claude9 demo --surface pwa`)).toBe('stopped claude9-demo');
+    expect(h.reg('claude9-demo', 'stopped')).toMatch(/^\d{10} pwa$/);
   });
 
   it('records `cli` when nobody declared a surface', () => {
@@ -2743,18 +2743,18 @@ describe('the supervisor heartbeat', () => {
     h.sh(`_reg_set ${ID} uuid b7001948-0000-4c2f-9a1b-0cfc0dc3d199
       _reg_set ${ID} project demo
       _reg_set ${ID} workdir "$HOME/projects/demo"
-      _reg_set ${ID} wrapper claude-dev0
+      _reg_set ${ID} wrapper claude-lab0
       _reg_set ${ID} started 1`);
     // A real transcript where the post-D1 locator will find it, so the swap
     // carries rather than refusing (§2.4).
     h.sh(`wd=$(readlink -f "$HOME/projects/demo"); mdir=$(echo "$wd" | tr '/._' '---')
-      mkdir -p "$HOME/.claude-dev0/projects/$mdir"
-      printf '{"type":"message"}\\n' > "$HOME/.claude-dev0/projects/$mdir/b7001948-0000-4c2f-9a1b-0cfc0dc3d199.jsonl"`);
+      mkdir -p "$HOME/.claude-lab0/projects/$mdir"
+      printf '{"type":"message"}\\n' > "$HOME/.claude-lab0/projects/$mdir/b7001948-0000-4c2f-9a1b-0cfc0dc3d199.jsonl"`);
     run(`CCD_SWAP_DETACHED=1
       _alive() { return 1; }; tmux() { :; }; cmd_ensure() { :; }; sleep() { :; };
       systemctl() { [[ "$*" == *"start claude-session@"* ]] \
         && echo "start:$(_session_state ${ID})" >> "$HOME/ccd-calls"; return 0; };
-      cmd_swap ${ID} claude2`);
+      cmd_swap ${ID} claude9`);
     expect(h.calls()).toContain('start:restarting');
   });
 });
@@ -2853,24 +2853,24 @@ describe('ccd ls', () => {
     // is NOT this task's to touch, and that is asserted here rather than
     // hoped for.
     h.sh(`_reg_set ${ID} uuid u
-      _reg_set ${ID} wrapper claude-dev0
+      _reg_set ${ID} wrapper claude-lab0
       _reg_set ${ID} workdir /data/projects/demo
       _reg_set ${ID} started 1`);
     const out = run(`_alive() { return 1; }; cmd_ls`).stdout;
     expect(out).toContain('STATE');
     expect(out).not.toContain('ALIVE');
-    expect(out).toMatch(new RegExp(`${ID}\\s+claude-dev0\\s+orphan\\s+/data/projects/demo`));
+    expect(out).toMatch(new RegExp(`${ID}\\s+claude-lab0\\s+orphan\\s+/data/projects/demo`));
     expect(out).toContain('gpt overflow lane: not installed  —  0 session(s) currently on it');
   });
 
   it('prints the same word for a stopped row that _session_state does', () => {
     h.sh(`_reg_set ${ID} uuid u
-      _reg_set ${ID} wrapper claude-dev0
+      _reg_set ${ID} wrapper claude-lab0
       _reg_set ${ID} workdir /data/projects/demo
       _reg_set ${ID} started 1`);
     h.sh(`systemctl() { :; }; _ws_unsupervise ${ID} pwa`);
     const out = run(`_alive() { return 1; }; cmd_ls`).stdout;
-    expect(out).toMatch(new RegExp(`${ID}\\s+claude-dev0\\s+stopped\\s+`));
+    expect(out).toMatch(new RegExp(`${ID}\\s+claude-lab0\\s+stopped\\s+`));
   });
 });
 ```
@@ -4657,15 +4657,15 @@ describe('resolveTranscript — the ladder, rung by rung (spec §5.1)', () => {
     // input to the PWA's banner — a foreign hit rendered silently is the quiet
     // wrongness this spec exists to remove.
     const b = box();
-    const personal = path.join(b.root, '.claude-personal');
-    const corp = path.join(b.root, '.claude-corp');
+    const personal = path.join(b.root, '.claude-home');
+    const corp = path.join(b.root, '.claude-acme');
     plant(stranded(personal), 2000, 'older foreign\n');
     const newest = plant(stranded(corp), 3000, 'newer foreign\n');
     mkdirSync(path.join(b.cfg, 'projects'), { recursive: true }); // own account: listable, empty
     const r = await resolveTranscript(localIO, opts(b, {
-      foreign: [{ account: 'claude2', configDir: personal }, { account: 'claude-corp', configDir: corp }],
+      foreign: [{ account: 'claude9', configDir: personal }, { account: 'claude-acme', configDir: corp }],
     }));
-    expect(r).toEqual({ kind: 'found', path: newest, rung: 'foreign-glob', account: 'claude-corp' });
+    expect(r).toEqual({ kind: 'found', path: newest, rung: 'foreign-glob', account: 'claude-acme' });
   });
 
   it('an own-account answer beats a NEWER foreign one — rung 6 is never reached while rung 5 hits', async () => {
@@ -4673,11 +4673,11 @@ describe('resolveTranscript — the ladder, rung by rung (spec §5.1)', () => {
     // one uuid would then render another account's frozen history for most of
     // the fleet.
     const b = box();
-    const personal = path.join(b.root, '.claude-personal');
+    const personal = path.join(b.root, '.claude-home');
     plant(stranded(personal), 9000, 'newer, but foreign\n');
     const own = plant(stranded(b.cfg), 1000, 'older, but ours\n');
     const r = await resolveTranscript(localIO, opts(b, {
-      foreign: [{ account: 'claude2', configDir: personal }],
+      foreign: [{ account: 'claude9', configDir: personal }],
     }));
     expect(r).toEqual({ kind: 'found', path: own, rung: 'uuid-glob', account: null });
   });
@@ -4725,11 +4725,11 @@ describe('resolveTranscript — the ladder, rung by rung (spec §5.1)', () => {
     const b = box();
     const io: FleetIO = {
       ...localIO,
-      readdir: async (p) => (p.includes('.claude-personal') ? null : localIO.readdir(p)),
+      readdir: async (p) => (p.includes('.claude-home') ? null : localIO.readdir(p)),
     };
     mkdirSync(path.join(b.cfg, 'projects'), { recursive: true });
     const r = await resolveTranscript(io, opts(b, {
-      foreign: [{ account: 'claude2', configDir: path.join(b.root, '.claude-personal') }],
+      foreign: [{ account: 'claude9', configDir: path.join(b.root, '.claude-home') }],
     }));
     expect(r).toEqual({ kind: 'fallback', path: transcriptPath(b.cfg, b.liveLink, UUID), complete: false });
   });
@@ -5354,14 +5354,14 @@ describe('foreignConfigDirs (spec §5.2)', () => {
   it('lists every OTHER account in roster order, and never the session\'s own', () => {
     // Kills two mutants: one that includes the own account (rung 6 would then
     // shadow rung 5 on a tie) and one that hand-types the account list instead
-    // of reading the roster — which is how `claude-dev0`, the account holding
+    // of reading the roster — which is how `claude-lab0`, the account holding
     // the incident's recovered transcript, would silently drop out.
     const cfg = loadConfig({ CCRC_HOME: mkTmp('ccrc-foreign-') });
-    const others = foreignConfigDirs(cfg, 'claude2');
-    expect(others.map((o) => o.account)).not.toContain('claude2');
-    expect(others.map((o) => o.account)).toContain('claude-dev0');
+    const others = foreignConfigDirs(cfg, 'claude9');
+    expect(others.map((o) => o.account)).not.toContain('claude9');
+    expect(others.map((o) => o.account)).toContain('claude-lab0');
     expect(others.map((o) => o.account)).toEqual(
-      Object.keys(cfg.wrappers).filter((w) => w !== 'claude2'));
+      Object.keys(cfg.wrappers).filter((w) => w !== 'claude9'));
     expect(others.every((o) => o.configDir === cfg.wrappers[o.account as keyof typeof cfg.wrappers])).toBe(true);
   });
 });
@@ -5375,8 +5375,8 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
     // old code, whose only re-point trigger was `data.uuid !== this.uuid`.
     const home = mkTmp('ccrc-repoint-');
     seed(home);
-    const exact = path.join(home, '.claude-personal', 'projects', MUNGED, `${UUID_A}.jsonl`);
-    const glob = path.join(home, '.claude-personal', 'projects', '-elsewhere', `${UUID_A}.jsonl`);
+    const exact = path.join(home, '.claude-home', 'projects', MUNGED, `${UUID_A}.jsonl`);
+    const glob = path.join(home, '.claude-home', 'projects', '-elsewhere', `${UUID_A}.jsonl`);
     rmSync(exact);
     mkdirSync(path.dirname(glob), { recursive: true });
     writeFileSync(glob, userLine('g1', 'stranded'));
@@ -5436,8 +5436,8 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
     // host renders as an empty chat).
     const home = mkTmp('ccrc-foreignframe-');
     seed(home);
-    rmSync(path.join(home, '.claude-personal', 'projects', MUNGED, `${UUID_A}.jsonl`));
-    const held = path.join(home, '.claude-corp', 'projects', '-stranded', `${UUID_A}.jsonl`);
+    rmSync(path.join(home, '.claude-home', 'projects', MUNGED, `${UUID_A}.jsonl`));
+    const held = path.join(home, '.claude-acme', 'projects', '-stranded', `${UUID_A}.jsonl`);
     mkdirSync(path.dirname(held), { recursive: true });
     writeFileSync(held, userLine('f1', 'another account holds this'));
 
@@ -5448,7 +5448,7 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
       await stream.start();
       const backlog = frames.find((f) => f.type === 'backlog');
       expect(backlog.file).toBe(held);
-      expect(backlog.foreignAccount).toBe('claude-corp');
+      expect(backlog.foreignAccount).toBe('claude-acme');
       expect(backlog.searchComplete).toBe(true);
     } finally {
       stream.stop();
@@ -5458,7 +5458,7 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
     // And the unmeasured case: a null readdir must not read as an empty chat.
     const home2 = mkTmp('ccrc-foreignframe-');
     seed(home2);
-    rmSync(path.join(home2, '.claude-personal', 'projects', MUNGED, `${UUID_A}.jsonl`));
+    rmSync(path.join(home2, '.claude-home', 'projects', MUNGED, `${UUID_A}.jsonl`));
     const frames2: any[] = [];
     const stream2 = new SessionStream(mkLadderDeps(home2, unlistableIO), new Bus(), ID, (m) => frames2.push(m));
     try {
@@ -5715,8 +5715,8 @@ export function shouldRepoint(
  * input and its tiebreak (§5.1).
  *
  * Read off `cfg.wrappers`, which `loadConfig` DERIVES from `ACCOUNTS` (see its
- * own comment on why: a hand-typed copy is how `claude-dev0` was missing for
- * the account's entire life — and `~/.claude-dev0` is precisely where the
+ * own comment on why: a hand-typed copy is how `claude-lab0` was missing for
+ * the account's entire life — and `~/.claude-lab0` is precisely where the
  * incident's recovered transcript sits today). Never a literal list of account
  * names in this module: architecture rule (a), config is data.
  *
@@ -5980,7 +5980,7 @@ const line = (session: FleetSession): void => {
   render(<SessionLine session={session} onOpen={() => {}} onActions={() => {}} />);
 };
 
-const makeStore = (id = 'claude:OpenClawHetzner'): SessionStore =>
+const makeStore = (id = 'claude:project-c'): SessionStore =>
   createSessionStore(id, {
     makeSocket: () =>
       ({ onopen: null, onmessage: null, onclose: null, onerror: null, close(): void {} }) as unknown as WebSocket,
@@ -6151,10 +6151,10 @@ describe('a chat that had to look elsewhere says so', () => {
   // Kills a resolver answer whose `account` is dropped on the way to the UI.
   it('a transcript found under ANOTHER account is bannered by name', () => {
     const store = makeStore();
-    render(<SessionScreen id="claude:OpenClawHetzner" store={store} />);
+    render(<SessionScreen id="claude:project-c" store={store} />);
     applyBacklog(store, {
       type: 'backlog', uuid: 'b7001948', offset: 120, missing: false,
-      file: '/home/rc/.claude/projects/-data-projects-x/b7001948.jsonl',
+      file: '/home/u/.claude/projects/-data-projects-x/b7001948.jsonl',
       account: 'claude', complete: true, events: [someEvent],
     });
     expect(screen.getByText(/Stranded history — read from team·max/)).toBeInTheDocument();
@@ -6163,10 +6163,10 @@ describe('a chat that had to look elsewhere says so', () => {
 
   it('a transcript found on this session own account raises no banner', () => {
     const store = makeStore();
-    render(<SessionScreen id="claude:OpenClawHetzner" store={store} />);
+    render(<SessionScreen id="claude:project-c" store={store} />);
     applyBacklog(store, {
       type: 'backlog', uuid: 'u1', offset: 10, missing: false,
-      file: '/home/rc/.claude/projects/x/u1.jsonl',
+      file: '/home/u/.claude/projects/x/u1.jsonl',
       account: null, complete: true, events: [someEvent],
     });
     expect(screen.queryByText(/Stranded history/)).not.toBeInTheDocument();
@@ -6176,10 +6176,10 @@ describe('a chat that had to look elsewhere says so', () => {
   // one. Kills one sentence serving both failures.
   it("an unfinished search says the fleet host is unreadable — a DIFFERENT sentence from 'no messages'", () => {
     const store = makeStore();
-    render(<SessionScreen id="claude:OpenClawHetzner" store={store} />);
+    render(<SessionScreen id="claude:project-c" store={store} />);
     applyBacklog(store, {
       type: 'backlog', uuid: 'u1', offset: 0, missing: true,
-      file: '/home/rc/.claude/projects/x/u1.jsonl', complete: false, events: [],
+      file: '/home/u/.claude/projects/x/u1.jsonl', complete: false, events: [],
     });
     expect(screen.getByText("Can't read the fleet host right now")).toBeInTheDocument();
     expect(screen.queryByText("Can't find this session's transcript")).not.toBeInTheDocument();
@@ -6190,10 +6190,10 @@ describe('a chat that had to look elsewhere says so', () => {
   // host-unreadable sentence, and one that always suppresses the empty state.
   it('a COMPLETE search that found nothing keeps today sentence and today empty state', () => {
     const store = makeStore();
-    render(<SessionScreen id="claude:OpenClawHetzner" store={store} />);
+    render(<SessionScreen id="claude:project-c" store={store} />);
     applyBacklog(store, {
       type: 'backlog', uuid: 'u1', offset: 0, missing: true,
-      file: '/home/rc/.claude/projects/x/u1.jsonl', complete: true, events: [],
+      file: '/home/u/.claude/projects/x/u1.jsonl', complete: true, events: [],
     });
     expect(screen.getByText("Can't find this session's transcript")).toBeInTheDocument();
     expect(screen.queryByText("Can't read the fleet host right now")).not.toBeInTheDocument();
@@ -6204,10 +6204,10 @@ describe('a chat that had to look elsewhere says so', () => {
   // every pre-field server report the fleet host unreadable.
   it('an older server that sends neither field is a COMPLETE search', () => {
     const store = makeStore();
-    render(<SessionScreen id="claude:OpenClawHetzner" store={store} />);
+    render(<SessionScreen id="claude:project-c" store={store} />);
     applyBacklog(store, {
       type: 'backlog', uuid: 'u1', offset: 0, missing: true,
-      file: '/home/rc/.claude/projects/x/u1.jsonl', events: [],
+      file: '/home/u/.claude/projects/x/u1.jsonl', events: [],
     } as Backlog);
     expect(screen.getByText("Can't find this session's transcript")).toBeInTheDocument();
     expect(screen.queryByText("Can't read the fleet host right now")).not.toBeInTheDocument();
@@ -6700,13 +6700,13 @@ file — reconcile the imports against the tree rather than adding duplicates.
 
   it('never crosses into another account to answer', () => {
     // The one thing the ladder must NOT do. A session on `claude` whose only
-    // copy sits under `.claude-corp` gets the canonical unchecked address, not
+    // copy sits under `.claude-acme` gets the canonical unchecked address, not
     // another account's file — that is D4's bannered rung, and it belongs to a
     // surface that can show the banner, not to a tombstone that cannot.
     const wd = path.join(h.home, 'projects', 'lonely');
     fs.mkdirSync(wd, { recursive: true });
     h.sh(`_reg_set t5 wrapper claude; _reg_set t5 workdir '${wd}'; _reg_set t5 uuid u-5`);
-    plant('.claude-corp', mungePath(fs.realpathSync(wd)), 'u-5');
+    plant('.claude-acme', mungePath(fs.realpathSync(wd)), 'u-5');
     expect(h.sh('_transcript_path t5')).toBe(
       path.join(h.home, '.claude', 'projects', mungePath(fs.realpathSync(wd)), 'u-5.jsonl'),
     );
@@ -6996,7 +6996,7 @@ Record the post-deploy check the rollout will run (§8's own done-condition, not
 
 ```bash
 ls ~/.config/systemd/user/default.target.wants/ | grep 'claude-session@'
-# expect ccrc-pwa-calm-mesa, data-internal-plain-harbor and data-internal-still-prairie
+# expect ccrc-pwa-calm-mesa, project-e-plain-harbor and project-e-still-prairie
 # to appear after the first agent deploy, with nobody having typed anything (M5)
 ```
 

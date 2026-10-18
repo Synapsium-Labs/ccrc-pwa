@@ -32,7 +32,7 @@ adversarial refutation out of 41.
    `ProjectCard` cannot distinguish "no runs" from "no frame yet", so every page load paints a
    populated, confidently flat fleet that then jumps into place. Fires on every load.
 2. **Cross-repo programmes never nest, structurally.** Reproduced against live run 58
-   (`qdrant-consolidation` wave 10: work in `custom-tools`, coordinator `intake-platform-keen-meadow`).
+   (`prog-d` wave 10: work in `project-d`, coordinator `project-n-keen-meadow`).
    Both cards render flat; the worker is indistinguishable from an uncoordinated workspace.
 3. **The wave boundary.** `pwa/src/fleet/runWords.ts:107` — "between closing wave N and opening wave
    N+1 … every row of the program is terminal". Every worker un-nests in that window.
@@ -211,7 +211,7 @@ rows still renders — name, `+`, pool chip — so the index cannot be destroyed
 (R5). Sessions whose placement names a project not in the list still render on a card of their own
 name, so nothing falls off the board if the two reads disagree.
 
-**An emptied card says where its work went** — "2 workspaces under `intake-platform`" — as plain text,
+**An emptied card says where its work went** — "2 workspaces under `project-n`" — as plain text,
 never a link. A tappable route would be the second access path R2 excludes; this is the same reason the
 existing `abroad` line is a bare `<span>` with no `onClick` (`pwa/src/fleet/ProjectCard.tsx:496-505`).
 The `abroad` line survives but narrows: it must subtract any run whose worker now renders on this card,
@@ -354,18 +354,18 @@ workspaces of its own so that only the parent coordinator has that right.
   **one** was run from a session pane (2026-08-27, from the ccrc-pwa main checkout's own pane, actor
   `orchestrator: PR #11 review fixes`). No dispatched worker has ever minted a workspace.
 - The rows that float are §1's mechanism 2. Reconstructed card by card from `state-cache.json` and the
-  active runs: `custom-tools-bright-hollow` (run 85, wave 20) and `data-internal-brisk-river` (run 84,
+  active runs: `project-d-bright-hollow` (run 85, wave 20) and `project-e-brisk-river` (run 84,
   wave 19) sit at depth 0 on their own project cards wearing only the rule-3 orphan marker, while their
-  coordinator `intake-platform-keen-meadow` — itself a workspace the operator spawned from the console
-  on 2026-09-02 — brackets `intake-platform-quiet-prairie` (run 82) on the intake-platform card. Nine of
-  that programme's twenty waves have worked in `custom-tools` or `data-internal`; every one rendered
+  coordinator `project-n-keen-meadow` — itself a workspace the operator spawned from the console
+  on 2026-09-02 — brackets `project-n-quiet-prairie` (run 82) on the project-n card. Nine of
+  that programme's twenty waves have worked in `project-d` or `project-e`; every one rendered
   this way. Wave 1 of this design is merged (`2985b9d1`, PR #137) and **not deployed** (the server box
   reports `53e6a438`); wave 2 was never written, so nothing renders yet.
 
 **The ruling this addendum records.** Both remedies, because each is only honest with the other:
 
 1. **Correct the board — wave 2, §6–§8 as written.** Under §4's resolver those two rows land on the
-   intake-platform card under `keen-meadow`, which is the picture the operator asked for.
+   project-n card under `keen-meadow`, which is the picture the operator asked for.
 2. **Make §7's contract a mechanism.** `RowDepth = 0 | 1` is the operator's ruling and stays. But a
    real run-to-run chain would render exactly the reported picture even after wave 2: `nestFleet`'s
    rule 4 lifts the middle session to depth 0 with its own child beneath it and the top coordinator's

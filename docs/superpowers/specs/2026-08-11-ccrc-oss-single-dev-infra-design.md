@@ -12,9 +12,9 @@ enrollment) and version surfaces.
 Turn ccrc from a single-operator system grown in place on two specific machines
 into **an installable, updatable, standalone product a solo developer anywhere
 can run** — the best solo-dev experience possible — and open-source it. A
-separate, later product (the org/team edition, where an org deploys the stack
-and its engineers share it) is explicitly out of scope; decisions here must not
-wall it off, and one (the auth seam) is chosen specifically to serve it later.
+separate, later product decision (recorded outside this document, not
+argued here) is explicitly out of scope; decisions here must not
+wall off its options, and one (the auth seam) is chosen with them in mind.
 
 The evidence base for this design is the 2026-08-10 installability survey
 (six investigation angles + two adversarial critics + synthesis; 47 blockers
@@ -35,7 +35,7 @@ is a partial description of it. This workstream closes that gap.
 | TLS termination | Installer-managed Caddy in front; ccrc stays plain HTTP on localhost | ACME issuance/renewal is Caddy's core competency, not surface we should own; bring-your-own-proxy users skip it |
 | Auth mechanism | Passphrase set by `ccrc passwd` immediately after install — install itself writes none, since under `curl \| bash` stdin is the script (shipped 3a deviation) — scrypt-hashed, server-side sessions, rate-limited + optional WebAuthn passkey enrolled after first login | The PWA lives on a phone; passkeys are the right ergonomics there. Recovery = `ccrc passwd` run locally on the box (i.e. over SSH) — see §6 |
 | Remote control | `--remote-control` becomes per-install config (`CCRC_REMOTE_CONTROL`); default **off** for OSS installs | Nothing in ccrc's data/control path uses it (prompts go via tmux send-keys, chat via transcripts); it exists to make sessions discoverable on claude.ai — a second UI the ccrc PWA supersedes — and it costs render workarounds (fleet.ts:93, inject/send.ts:559). CAVEAT: ccd's pane-parsing heuristics were calibrated against RC-mode rendering, so the off-mode needs validation, not just a flag (Stage 2) |
-| License | AGPL-3.0, sole copyright holder | Protects the future team edition from hosted-fork competition; dual licensing stays available for the commercial edition |
+| License | AGPL-3.0 | The licence choice is a recorded product decision; its rationale is kept outside this document |
 | Lifecycle CLI | New thin `ccrc` command (install/update/doctor/status/logs/backup/uninstall) | ccd is versioned BY the thing the updater replaces — the updater must live outside it (the in-place-overwrite bug class PR #28 just fixed, one level up). ccd remains the session tool |
 | Updates | `ccrc update` — explicit, human-invoked, per box; opt-in newer-version notice; never auto-update | Consent temperament: the system that gates its own destructive verbs on confirmation does not change running software unasked |
 | Distribution | CI-built matched-set tarball on GitHub Releases + checksums; `curl … install.sh \| bash` bootstrap | No npm (file: deps, no workspace root, node-pty compiles anyway), no Docker (the server's job is host manipulation) — survey YAGNI findings |
@@ -153,9 +153,9 @@ name and a certificate?" — with two v1 providers:
   a different name.
 
 A ccrc-operated subdomain service (`you.ccrc.app`) is a deliberate LATER third
-provider — it is central infrastructure someone must run and the natural
-business/product feature (provided URL by default, custom domains as a
-team-edition capability); v1 ships nothing the project must keep alive.
+provider — it is central infrastructure someone must run, and whether to offer
+it is a later product decision (recorded elsewhere, not argued here);
+v1 ships nothing the project must keep alive.
 
 **TLS:** installer-managed Caddy terminates HTTPS for the chosen name and
 reverse-proxies to ccrc on localhost. Users with their own proxy skip the
@@ -176,7 +176,7 @@ machine-token routes (`/api/notify`, coordination lanes — the box token stays
 for machine-to-machine). Today ~40 routes, including a raw pty websocket and
 spawn-a-session-in-any-directory, have zero gates; the tailnet ACL is the only
 boundary and it lives outside the repo. This single-identity session layer is
-deliberately the seam the team edition later extends with per-user identity.
+deliberately the seam a later decision may extend with per-user identity.
 
 ### 7. Update
 
@@ -213,14 +213,14 @@ down-migrations.
 
 ### 9. Out of scope for this workstream
 
-- Multi-user identity/ownership (team edition; the auth seam is its hook).
+- Multi-user identity/ownership (a later product decision; the auth seam is its hook).
 - Docker/OCI, npm publishing, macOS (survey YAGNI — each adds surface with no
   v1 payoff; the server's job is host manipulation, containers fight it).
 - The shared-repo `ws/*` slug-namespace collision (a two-person problem; solo
-  dev never draws from a shared pool — team edition concern).
+  dev never draws from a shared pool — a later product decision).
 - Config/settings UI, account-management UI (features workstream).
 - Auto-update, subpath hosting, PWA↔server protocol negotiation build-out.
-- The `ccrc.app` subdomain service (later provider; business decision).
+- The `ccrc.app` subdomain service (later provider; a later decision).
 
 ### Stages — each ends demonstrably working
 
@@ -250,8 +250,8 @@ independent of the features workstream entirely.
 - **Caddy as a dependency.** One more moving part per install. Mitigation:
   it is optional by contract (BYO proxy documented); installer owns its
   config end-to-end; doctor checks it.
-- **AGPL friction for adopters.** Accepted consciously — the protection for
-  the future team edition outweighs adoption friction for a solo-dev tool.
+- **AGPL friction for adopters.** Accepted consciously — the reasons for
+  the licence, recorded elsewhere, outweigh adoption friction for a solo-dev tool.
 
 ## References
 

@@ -538,7 +538,7 @@ git fetch origin main && cd server && ./node_modules/.bin/vitest run test/deviat
 
 - [ ] **Check author identity, push, open the PR.** The PR body links the spec by **GitHub blob URL** (never a docserver URL), carries Task 8's table, and states plainly that this plan **installs but enables nothing** — no runtime is built, no timer is enabled, no process starts.
 
-**Do not deploy.** Spec §15: land → release → separately authorised cutover → OpenClaw deletion.
+**Do not deploy.** Spec §15: land → release → separately authorised cutover → legacy-tree deletion.
 
 ---
 
@@ -559,7 +559,7 @@ so that it reaches a place the next author reads. Each names its source; nothing
 
 **Plan 2b-2 — the lane runs**
 
-1. **Placing `ccgpt` IS the cutover.** On the operator's fleet box `~/.local/bin/ccgpt` is OpenClaw's LIVE
+1. **Placing `ccgpt` IS the cutover.** On the operator's fleet box `~/.local/bin/ccgpt` is the legacy tree's LIVE
    launcher (beside its `ccgpt-proxy` and `ccgpt-usage`, both without `.py`). 2b-2 must not overwrite it silently:
    an ownership check, a distinct name, or an explicitly authorised swap (D-3172 is the same class, measured).
 2. Write `ccd/ccgpt` and `ccd/ccgpt-runtime`, and IN THE SAME COMMIT add them to `_inst_bins` (behind spec §11's
@@ -586,11 +586,11 @@ so that it reaches a place the next author reads. Each names its source; nothing
 10. `_models_summary` in `ccd/ccrc` never prints `.remedy`, so every `ccrc models` remedy — this plan's
     haiku-unassigned warning and `init`'s — reaches only `--json` callers.
 11. The §7 lifecycle: `_svc_run_supervised`, `_inst_enable`'s restart-after-update, the `nohup` fallback; replace the
-    OpenClaw suite's stale `nohup` pins rather than copying them (Plan 2a).
+    legacy suite's stale `nohup` pins rather than copying them (Plan 2a).
 
 **Plan 3 — lifecycle, doctor, cutover**
 
-12. The usage timer's cutover: take over (or rename past) the `ccgpt-usage@` template OpenClaw owns, retire its fixed
+12. The usage timer's cutover: take over (or rename past) the `ccgpt-usage@` template the legacy tree owns, retire its fixed
     `ccgpt-usage.timer`, and only then place the pair and enable `ccgpt-usage@<id>.timer` per adopted lane with
     `_check_codex` — after `ExecStart` resolves the runtime interpreter (D-3172, D-3164).
 13. At cutover, rewrite deliberately — never delete — the install argv census that asserts no `ccgpt-usage` enable,
@@ -645,7 +645,7 @@ and would have to be rewritten by the task that defines it.
 
 **Why it is safe to ship — as corrected by D-3172.** The first version of this paragraph said the unit was
 "inert until Plan 3 arms a lane"; that was false, because an instance of the same NAME was already enabled on
-the fleet box (OpenClaw's). Under D-3172 Plan 2b-1 places this pair nowhere, so the unit file is now genuinely
+the fleet box (the legacy tree's). Under D-3172 Plan 2b-1 places this pair nowhere, so the unit file is now genuinely
 inert: it ships in the tree, referenced by no installer. The original argument was that nothing in Plan 2b-1
 enables, starts or `daemon-reload`s an instance of this template — the guard for that is an argv census over the recorded `systemctl`
 calls, measured red under mutation. The unit is an inert file until Plan 3 arms a lane.
@@ -761,7 +761,7 @@ cannot miss it. Found by the Task 3 review.
   that owns cutover.** Tasks 3, 4 and 7 placed, removed and deployed the pair under the Architecture sentence
   "installs but does not enable … installed and inert". That was true of the installer and false in effect: on the
   operator's fleet box the name is occupied — `~/.config/systemd/user/ccgpt-usage@.service` and `@.timer` belong to
-  the OpenClaw repository, and an instance of that template — one of the operator's live Codex lanes — is ENABLED (measured read-only by the
+  the legacy repository, and an instance of that template — one of the operator's live Codex lanes — is ENABLED (measured read-only by the
   controller, 2026-09-23). The next rollout would have replaced a live, enabled timer's definition, and
   `ccrc uninstall` would have deleted another repository's live unit — against the standing ruling that ccrc writes
   only what it owns. Every fixture HOME is empty, so no suite and no per-task review could see it; the final
@@ -770,7 +770,7 @@ cannot miss it. Found by the Task 3 review.
   still ship, referenced by no installer (Plan 2a's precedent for its `.py` files); a fixture test plants a foreign
   pair plus an enabled-instance link and proves install AND uninstall leave all three byte-identical. Replacing that
   unit IS the cutover (spec §15 step 3, separately authorised): Plan 3 designs it — an ownership check, or a
-  rename that makes the swap explicit. The same class, larger: `~/.local/bin/ccgpt` on that box is OpenClaw's live
+  rename that makes the swap explicit. The same class, larger: `~/.local/bin/ccgpt` on that box is the legacy tree's live
   launcher, so Plan 2b-2 placing ccrc's `ccgpt` is ALSO the cutover (see the carry-forward section). This entry
   supersedes the placement parts of D-3166, D-3167 and D-3170.
 

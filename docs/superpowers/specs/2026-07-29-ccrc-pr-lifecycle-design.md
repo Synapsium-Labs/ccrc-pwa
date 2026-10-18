@@ -19,7 +19,7 @@ Why deletion cannot be automated here, concretely and not as taste:
 2. **The check that would gate it is blind to the loss that matters.** `ws-rm`'s sole data guard is `git status --porcelain` (ccd:252), which cannot see gitignored content. A worktree holding `SECRET_API_KEY=…` in `.env` is deleted today with the output `removed workspace …` and nothing else, and that content was never in the object store. No poller produces the judgement "yes, I know about that `.env`". Only a human reading the filename does.
 3. **`git branch -D` is indistinguishable from destroying work.** A branch on a squash-merged base plus one genuinely unmerged commit produces the byte-identical `branch -d` error and exit code as a fully merged one.
 4. **There is no pressure justifying the risk.** `ccd ws-gc` reports 6.4 G across 18 worktrees, all foreign, zero ccd workspaces. `ws-add` already refuses below `CCD_DISK_FLOOR_GB`. The cost of not deleting is a directory.
-5. **`custom-tools-quiet-basin` lived 13h40m, burned 23min41s CPU, and vanished during normal operation.** Shipping an automation whose failure mode is "the thing I was working on is gone and I do not know why" into that context is the wrong lesson.
+5. **`project-d-quiet-basin` lived 13h40m, burned 23min41s CPU, and vanished during normal operation.** Shipping an automation whose failure mode is "the thing I was working on is gone and I do not know why" into that context is the wrong lesson.
 
 So: **merge → archive (automatic). Archived → delete (two taps, a manifest, and a state-fingerprint the server re-proves at the moment of deletion).** Everything below is the mechanism that makes that pair safe.
 
@@ -196,7 +196,7 @@ export interface PrState {
 
 **Always exactly one thing: open `PrSheet`. No state of the cap performs an action on tap.** A misread badge can therefore never cost anything. Opening the sheet fires a one-shot `GET /api/sessions/:id/pr` (cached values shown meanwhile). Every destructive or outward-facing action is a labelled button *inside* the sheet, and each uses the codebase's existing `QuickConfirm` consequence grammar — the primitive already used for stopping a session, swapping accounts and rebooting the host. Two identical ghost buttons side by side on a phone is not a confirmation.
 
-**Failing checks get no action button.** Check names arrive from GitHub and are attacker-controllable on any repo that accepts fork PRs (`MegaMek/megamek` is public and takes them continuously). A "ask the session to fix the failing checks" button would inject that text through `POST /api/sessions/:id/prompt` → `tmux send-keys -l` into an agent spawned with `--dangerously-skip-permissions` (ccd:887). That is remote command execution against a `repo`-scoped token with no dialog, no `dialogPending`, and no notification. Check names are inert text. **No GitHub-sourced string is ever placed in a prompt, an argv, or a shell.**
+**Failing checks get no action button.** Check names arrive from GitHub and are attacker-controllable on any repo that accepts fork PRs (`example-org/example-repo` is public and takes them continuously). A "ask the session to fix the failing checks" button would inject that text through `POST /api/sessions/:id/prompt` → `tmux send-keys -l` into an agent spawned with `--dangerously-skip-permissions` (ccd:887). That is remote command execution against a `repo`-scoped token with no dialog, no `dialogPending`, and no notification. Check names are inert text. **No GitHub-sourced string is ever placed in a prompt, an argv, or a shell.**
 
 `SessionActionsSheet.tsx:65-72` — the existing unconfirmed one-tap "Remove workspace" — is **rewired to open the same audit→confirm flow**, and its comment ("ccd ws-rm refuses … an unmerged branch") is deleted because it is false: `ws-rm` swallows `branch -d`'s failure with `2>/dev/null || true` (ccd:267-268) and orphans the branch. Leaving a shallower unguarded door beside a careful one guarantees the unguarded one gets used.
 
@@ -244,7 +244,7 @@ Server-side, in `server/src/prstate.ts` — **deterministic, no model call, test
 2. Otherwise, the first commit's body paragraph if any.
 3. `## Plan` — the session's own task list, which the server already reads (`tasks/read.ts`, swept into `FleetWatcher.taskProgress` every 10 s). Rendered `- [x] title` / `- [ ] title`. This is the best available description of the work and costs one map lookup.
 4. `## Commits` — `- <short sha> <subject>`.
-5. Trailer: ``Opened from ccrc workspace `custom-tools-quiet-basin` (`ws/quiet-basin` → `main`).``
+5. Trailer: ``Opened from ccrc workspace `project-d-quiet-basin` (`ws/quiet-basin` → `main`).``
 
 ### 3.3 Confirmation
 
@@ -252,8 +252,8 @@ The sheet in `none` phase is a composer:
 
 - **Title:** a single-line editable input, prefilled. One field, one thumb height.
 - **Body:** a **read-only rendered preview**, scrollable. A multi-line editor in a bottom sheet is a bad surface, and the body is fully regenerable — prose edits happen on GitHub, one tap away via the sheet's own link.
-- **Facts line, always shown:** `ws/quiet-basin → main · example-org/custom-tools · 3 commits`. A dirty-tree line when applicable: *"2 files are not committed — they will not be in this PR."*
-- **Primary:** `QuickConfirm` labelled **Open pull request**, consequence sentence: *"Pushes `ws/quiet-basin` to `example-org/custom-tools` and opens a public pull request. Reviewers are notified. ccrc cannot undo this."* Secondary: **Open as draft**. Disabled while `status === 'busy'` and under `unauthenticated`.
+- **Facts line, always shown:** `ws/quiet-basin → main · example-org/project-d · 3 commits`. A dirty-tree line when applicable: *"2 files are not committed — they will not be in this PR."*
+- **Primary:** `QuickConfirm` labelled **Open pull request**, consequence sentence: *"Pushes `ws/quiet-basin` to `example-org/project-d` and opens a public pull request. Reviewers are notified. ccrc cannot undo this."* Secondary: **Open as draft**. Disabled while `status === 'busy'` and under `unauthenticated`.
 - The request goes through the existing per-session `KeyedQueue` (`server.ts:224`), so it serialises with every other write.
 
 **There is no merge button, in any state, ever.** Merging is the irreversible review decision and belongs on github.com where the diff is. The sheet says so: *"Merging happens on GitHub. When it merges, ccrc archives this workspace automatically."* This also keeps the write surface at exactly one additive verb.
@@ -346,7 +346,7 @@ Three stages. **Merge → ARCHIVE (automatic, destroys nothing). Archived → RE
 
 **The one real cost, disclosed:** killing tmux discards the pane scrollback and any in-flight turn. That is why archive requires an affirmative idle and nobody attached. `ws-restore` runs `_spawn "$id" resume`, and Claude Code resumes the conversation from the on-disk transcript, so *context* is not lost — only the pane.
 
-**Where archived is visible — folded, never hidden.** `FleetSession.archivedAt`; `groupFleet.ts` splits archived rows into a collapsed `Archived (3)` sub-fold at the bottom of each `ProjectCard`, using the existing `foldState.ts` localStorage mechanism. A fleet-footer row `Archived · 7 · 2.3 GB` routes to `ArchiveScreen`. `/s/<id>` still resolves, the transcript still renders, and `SessionHeader` gains an `archived · merged #42` chip. **Notification, after the fact:** `✓ merged · custom-tools › quiet-basin — PR #42 merged; workspace archived, nothing deleted.` Tapping navigates to the session. It promises nothing else — `PushPayload` is `{title, body, sessionId?}` (`push.ts:16-18`) and `push-sw.js` passes no `actions[]`, so any "tap to keep / tap to cancel" copy would be a straight lie on the lock screen.
+**Where archived is visible — folded, never hidden.** `FleetSession.archivedAt`; `groupFleet.ts` splits archived rows into a collapsed `Archived (3)` sub-fold at the bottom of each `ProjectCard`, using the existing `foldState.ts` localStorage mechanism. A fleet-footer row `Archived · 7 · 2.3 GB` routes to `ArchiveScreen`. `/s/<id>` still resolves, the transcript still renders, and `SessionHeader` gains an `archived · merged #42` chip. **Notification, after the fact:** `✓ merged · project-d › quiet-basin — PR #42 merged; workspace archived, nothing deleted.` Tapping navigates to the session. It promises nothing else — `PushPayload` is `{title, body, sessionId?}` (`push.ts:16-18`) and `push-sw.js` passes no `actions[]`, so any "tap to keep / tap to cancel" copy would be a straight lie on the lock screen.
 
 `ws-restore` (no confirmation, it only creates): die unless `.archived`; die if `$workdir` is missing (point at `ccd ws-attic`); `rm -f "$REG/$id".{archived,archivedreason,archivemanifest}`; `_spawn "$id" resume`; `_reg_set started 1`; `_ws_supervise "$id"`. Note `ccd ensure` does **not** re-supervise (`ccd:937-944`), so restore must call `_ws_supervise` explicitly or boot persistence is silently lost.
 
@@ -367,7 +367,7 @@ Runs only on an archived workspace. Emits one JSON object:
   "token":"<sha256 or absent>" }
 ```
 
-**`git ls-files --others --ignored --exclude-standard` is NOT used.** It enumerates per-file: measured 210,070 entries / 24.6 MB in `custom-tools` (the agent's `EXEC_MAX_BUFFER` is 8 MB) and 102,016 in the largest worktree on this box. A manifest capped at "20 + count" then shows twenty `.remember/logs/autonomous/*.log` lines and a number, and the one judgement the whole design depends on becomes structurally unavailable. Use **`git status --porcelain --ignored=matching`**, which collapses ignored directories to one entry each — verified: 3 lines for 4 files, `!! .env` / `!! dist/` / `!! node_modules/`. Entries are sorted **sensitive-first, then by bytes descending**, and the count and total bytes are never truncated.
+**`git ls-files --others --ignored --exclude-standard` is NOT used.** It enumerates per-file: measured 210,070 entries / 24.6 MB in `project-d` (the agent's `EXEC_MAX_BUFFER` is 8 MB) and 102,016 in the largest worktree on this box. A manifest capped at "20 + count" then shows twenty `.remember/logs/autonomous/*.log` lines and a number, and the one judgement the whole design depends on becomes structurally unavailable. Use **`git status --porcelain --ignored=matching`**, which collapses ignored directories to one entry each — verified: 3 lines for 4 files, `!! .env` / `!! dist/` / `!! node_modules/`. Entries are sorted **sensitive-first, then by bytes descending**, and the count and total bytes are never truncated.
 
 `sensitive` = entries matching a small, non-rotting pattern set: `.env*`, `*.pem`, `*.key`, `*.p12`, `id_[dre]*`, `*.kdbx`, `credentials*`, `*.sqlite*`, `*.db`, `*.dump`, `*.sql`, `secrets*`. `.ccrc/` is **listed, not exempted** — ccd itself added it to `info/exclude` (ccd:206), so exempting it would create a blind spot ccd manufactured.
 
@@ -474,7 +474,7 @@ CAS aborts if the ref moved between proof and delete. `git branch -D` appears no
 Remove quiet-basin?                                    [ Remove quiet-basin · 1.2 GB ]
 
   branch      ws/quiet-basin — merged in #42 (proof: patch-id), 6 days ago
-  worktree    ~/worktrees/custom-tools/quiet-basin        1.2 GB
+  worktree    ~/worktrees/project-d/quiet-basin        1.2 GB
   uncommitted none
   not in git  3 entries, 412 MB — node_modules/ · dist/ · .ccrc/     [show all]
               These are in no commit and cannot be recovered.
@@ -567,4 +567,4 @@ Remove quiet-basin?                                    [ Remove quiet-basin · 1
 
 Agent suite green at 86 + additions, with `whitelist-noghosts.test.ts` failing loudly by design if a `gh` key is added. `server/test/whitelist-subset.test.ts` layers 1–3 green, including the static scan for inline argv literals and the superset assertion. `server/test/ccdPrHelpers.ts` (isolated-`HOME` bash harness modelled on `ccdWsHelpers.ts:16-28`, `gh()` stubbed as a shell function) covers, first and foremost, the **multi-commit squash with a moved base** — plus base-unmoved squash, true merge, rebase merge, the control case (squash + one real unmerged commit → `tree-differs`), dirty, untracked, ignored-only, sensitive-ignored, stashed, unpushed, detached, drifted, worktree-gone, breadcrumb-resume, `state-changed`, and gh timeout/401/`[]`. Every negative case asserts the worktree still exists afterwards.
 
-Suggested location once saved: `docs/superpowers/specs/2026-07-29-ccrc-pr-lifecycle.md` → [ccrc PR lifecycle](https://<server-host>.<tailnet>.ts.net/OpenClawHetzner/specs/2026-07-29-ccrc-pr-lifecycle.md)
+Suggested location once saved: `docs/superpowers/specs/2026-07-29-ccrc-pr-lifecycle.md` → [ccrc PR lifecycle](https://<server-host>.<tailnet>.ts.net/project-c/specs/2026-07-29-ccrc-pr-lifecycle.md)
