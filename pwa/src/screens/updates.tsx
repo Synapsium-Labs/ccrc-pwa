@@ -24,7 +24,7 @@
 import { useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type {
-  CatalogueErrorReason, CatalogueState, NodeWire, ReleaseWire, UpdateChannel,
+  CatalogueErrorReason, CatalogueState, NodeWire, ReleaseSourceWire, ReleaseWire, UpdateChannel,
 } from '../../../shared/api';
 import {
   SETTLED_UPDATE_STATES, isReleaseTag, isStampRead, isUpdateChannel,
@@ -44,6 +44,7 @@ import { ACK_UNREADABLE_TEXT, canAck, keepFocusInRow, sendAck } from '../fleet/u
 import { haltingNodes, updateAllHaltedText } from '../fleet/updateHalt';
 import { isPlaceableInstant, nodeVersion, pendingTag } from '../fleet/useUpdatesView';
 import { moveSkipText, noBundleRollbackText } from '../lib/api';
+import { ReleaseNotes } from '../fleet/ReleaseNotes';
 import '../fleet/fleet.css';
 
 export function clockTime(ms: number): string {
@@ -226,8 +227,9 @@ export function rollbackBlockedText(blockers: readonly RollbackBlocker[], tag: s
   }).join(' ');
 }
 
-function ReleaseItem({ release: r, nodes, haltedBy, onMove }: {
-  release: ReleaseWire; nodes: readonly NodeWire[]; haltedBy: string | null; onMove: (intent: MoveIntent) => void;
+function ReleaseItem({ release: r, nodes, haltedBy, source, onMove }: {
+  release: ReleaseWire; nodes: readonly NodeWire[]; haltedBy: string | null; source: ReleaseSourceWire | undefined;
+  onMove: (intent: MoveIntent) => void;
 }): ReactNode {
   const refused = refusedLine(r, nodes);
   const direction = releaseDirection(r.tag, nodes);
@@ -253,7 +255,8 @@ function ReleaseItem({ release: r, nodes, haltedBy, onMove }: {
         {r.yanked === true && <span className="settings-badge">yanked</span>}
       </div>
       {refused !== null && <p className="settings-release-refused">{refused}</p>}
-      {typeof r.notes === 'string' && r.notes !== '' && <pre className="settings-release-notes">{r.notes}</pre>}
+      {/* D-5549: the What's-new sheet's own rendering — plain text, grouped, `#NNN` linked from the number. */}
+      <ReleaseNotes notes={r.notes} source={source} />
       {blocked !== null && <p className="settings-release-refused" data-testid="settings-release-blocked">{blocked}</p>}
       <div className="settings-release-actions">
         {/* main added the `running` arm and the blockers guard; the branch
@@ -274,8 +277,9 @@ function ReleaseItem({ release: r, nodes, haltedBy, onMove }: {
   );
 }
 
-export function ReleaseList({ releases, nodes, onMove }: {
-  releases: readonly ReleaseWire[]; nodes: readonly NodeWire[]; onMove: (intent: MoveIntent) => void;
+export function ReleaseList({ releases, nodes, source, onMove }: {
+  releases: readonly ReleaseWire[]; nodes: readonly NodeWire[]; source?: ReleaseSourceWire;
+  onMove: (intent: MoveIntent) => void;
 }): ReactNode {
   const haltedId = useId();
   if (releases.length === 0) return null;
@@ -288,7 +292,7 @@ export function ReleaseList({ releases, nodes, onMove }: {
       {shown !== null && <HaltedLine id={haltedId} text={shown} />}
       <ul className={`settings-releases ${RESET_LIST}`} aria-label="Releases">
         {sorted.map((r) => (
-          <ReleaseItem key={r.tag} release={r} nodes={nodes} haltedBy={shown !== null ? haltedId : null} onMove={onMove} />
+          <ReleaseItem key={r.tag} release={r} nodes={nodes} haltedBy={shown !== null ? haltedId : null} source={source} onMove={onMove} />
         ))}
       </ul>
     </>

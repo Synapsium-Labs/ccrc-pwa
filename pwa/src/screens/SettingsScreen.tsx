@@ -659,7 +659,7 @@ function UpdatesBody({ view, stale, now, reload }: {
       <p className={line.tone === 'calm' ? 'settings-catalogue' : `settings-catalogue settings-catalogue--${line.tone}`}>
         {line.text}
       </p>
-      {view !== null && <ReleaseList releases={view.releases} nodes={view.nodes} onMove={openMove} />}
+      {view !== null && <ReleaseList releases={view.releases} nodes={view.nodes} source={view.source} onMove={openMove} />}
       {view !== null && (
         <NodeList
           nodes={view.nodes} releases={view.releases} now={now} catalogueLastOkAt={catalogueLastOkAt} onAcked={reload} onMove={openMove}

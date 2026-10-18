@@ -589,6 +589,9 @@ export function registerUpdateRoutes(
       // Box-token lifecycle wave 1 (D-4392): the console card's one object, the driver's own view, read at
       // request time. No driver, no field — an absent `boxToken` is how an older server already answers.
       ...(deps.tokenDriver ? { boxToken: deps.tokenDriver.view() } : {}),
+      // D-5549: the pair the catalogue lists from, so the PWA can link a release note's `#NNN` from the number
+      // alone. No usable source, no field: the PWA then shows the number as text, never a guessed link.
+      ...(deps.cfg.releaseSource.ok ? { source: { owner: deps.cfg.releaseSource.owner, repo: deps.cfg.releaseSource.repo } } : {}),
     };
     return view;
   });
