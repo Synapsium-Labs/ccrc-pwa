@@ -19,7 +19,7 @@ import {
   makeHistoryBox, runSweep, runShim, runDriver, skipOnDarwin, openStoreRO, counters, journalRecords, plantSession,
   plantTranscript, spoolLine, preloadOptions, PRELOADS, CLI, recoverRow, boundEmptyStore,
   runCli, withPane, seedFamily, journalDirOf, REPO, rewindStoreToV1, runOnPty, type HistoryBox, type SpawnOpts,
-  plantSegment, segmentSha, segmentsOf, type PlantSegmentRow,
+  plantSegment, segmentSha, segmentsOf, segmentRows, exportDirOf, type PlantSegmentRow,
 } from './historyHelpers.js';
 import { userRow, assistantRow, boundaryRow, summaryRow } from './historyFixtures.js';
 import { removeTmpFixturesEachTest, mkTmp } from './tmpHelpers.js';
@@ -1408,10 +1408,11 @@ function rrTalk(sid: string, base: number, n: number): object[] {
 /** A transcript with one manual compaction (§7.4). It has a user and an assistant row, then the boundary, then the
  *  summary right after it (the manual +1 position, which the boundary's anchor names), then one more row. The
  *  first row and the summary's Current Work section both carry `work`. Row uuids are rrU(base)…rrU(base + 4).
- *  One native leaf derives from it. */
-function rrCompacted(sid: string, base: number, work: string): object[] {
+ *  One native leaf derives from it. `cwd` is where its rows say the session was launched (default WORK) and `tag`
+ *  is the word the other three texts begin with (default 'zqrecover'). */
+function rrCompacted(sid: string, base: number, work: string, cwd: string = WORK, tag = 'zqrecover'): object[] {
   const at = (k: number) => ({
-    uuid: rrU(base + k), ts: rrIso(10 - k), parentUuid: k === 0 ? null : rrU(base + k - 1), sessionId: sid, cwd: WORK,
+    uuid: rrU(base + k), ts: rrIso(10 - k), parentUuid: k === 0 ? null : rrU(base + k - 1), sessionId: sid, cwd,
   });
   const anchor = rrU(base + 3);
   const summary = [
@@ -1425,11 +1426,11 @@ function rrCompacted(sid: string, base: number, work: string): object[] {
     '</summary>',
   ].join('\n');
   return [
-    userRow({ ...at(0), text: `zqrecover ask about ${work}` }),
-    assistantRow({ ...at(1), text: 'zqrecover answer' }),
+    userRow({ ...at(0), text: `${tag} ask about ${work}` }),
+    assistantRow({ ...at(1), text: `${tag} answer` }),
     boundaryRow({ ...at(2), trigger: 'manual', headUuid: anchor, anchorUuid: anchor, tailUuid: anchor, allUuids: [] }),
     summaryRow({ ...at(3), text: summary }),
-    userRow({ ...at(4), text: 'zqrecover after the compaction' }),
+    userRow({ ...at(4), text: `${tag} after the compaction` }),
   ];
 }
 
@@ -4096,42 +4097,16 @@ describe('O43: the export survives source loss (W1-B4 Task 11)', () => {
   const O43_WORK = 'Polishing the export fixture.';
   const O43_TEXT = `zqb4export ask about ${O43_WORK}`;
 
-  /** rrCompacted's transcript, launched in `cwd`: a user and an assistant row, a manual compaction's boundary, its
-   *  summary right after it, then one more row. Row uuids are rrU(base)…rrU(base + 4); one native leaf derives. */
-  function o43Compacted(sid: string, base: number, cwd: string): object[] {
-    const at = (k: number) => ({
-      uuid: rrU(base + k), ts: rrIso(10 - k), parentUuid: k === 0 ? null : rrU(base + k - 1), sessionId: sid, cwd,
-    });
-    const anchor = rrU(base + 3);
-    const summary = [
-      '<summary>',
-      '1. Primary Request and Intent:',
-      '   Keep the fixture repository healthy.',
-      '8. Current Work:',
-      `   ${O43_WORK}`,
-      '9. Optional Next Step:',
-      '   Run the suite again.',
-      '</summary>',
-    ].join('\n');
-    return [
-      userRow({ ...at(0), text: O43_TEXT }),
-      assistantRow({ ...at(1), text: 'zqb4export answer' }),
-      boundaryRow({ ...at(2), trigger: 'manual', headUuid: anchor, anchorUuid: anchor, tailUuid: anchor, allUuids: [] }),
-      summaryRow({ ...at(3), text: summary }),
-      userRow({ ...at(4), text: 'zqb4export after the compaction' }),
-    ];
-  }
-
   interface O43Built { box: HistoryBox; transcript: string; workdir: string; leaf: string; segment: string; dev: bigint; ino: bigint }
   /** A bound box whose store captured one compacted family launched in a real workdir, derived its leaf, and then
-   *  exported every row in one pass run two hours on. Nothing writes the transcript after it is planted, so its mtime,
-   *  the per-copy clock, is before every pass's. */
+   *  exported every row in one pass run two hours on. Nothing writes the transcript after it is planted, until a case
+   *  appends to it, so its mtime, the per-copy clock, is before every pass's. */
   function o43Built(prefix: string): O43Built {
     const box = makeHistoryBox(prefix, { role: 'fleet' });
     const workdir = path.join(box.home, 'work', 'w');
     fs.mkdirSync(workdir, { recursive: true });
     plantSession(box, O43_ID, { uuid: O43_U, generation: O43_G, project: 'demo', workdir });
-    const transcript = plantTranscript(box, 'claude-a', SLUG, O43_U, o43Compacted(O43_U, 430, workdir));
+    const transcript = plantTranscript(box, 'claude-a', SLUG, O43_U, rrCompacted(O43_U, 430, O43_WORK, workdir, 'zqb4export'));
     spoolLine(box, O43_ID, rrStart(O43_ID, O43_U, 'startup', { reg: O43_U, gen: O43_G }));
     rrTickUntil(box, () => countOf(box, 'entries') === 5 && rrLeafIds(box).length === 1, 10);
     const leaf = rrLeafIds(box)[0]!;
@@ -4174,8 +4149,10 @@ describe('O43: the export survives source loss (W1-B4 Task 11)', () => {
     expect((w.json?.['scope'] as { families: Array<{ ccrc_id: string }> }).families.map((f) => f.ccrc_id)).toEqual([O43_ID]);
     // The replay marked every row, so a pass past the rebuilt store's own hourly clock finds nothing due, though the
     // per-copy rule makes every row of the gone transcript due at once: marked rows are never candidates.
+    const passBefore = Number(metaOf(box, HEALTH_META.exportPassMs) ?? 0);
     const again = runDriver(box, { offsetMs: 2 * O43_HOUR });
     expect(again.code, `${again.stdout}\n${again.stderr}`).toBe(0);
+    expect(Number(metaOf(box, HEALTH_META.exportPassMs)), 'the pass ran (it did not wait on its clock), and found nothing due').toBeGreaterThan(passBefore);
     expect(segmentsOf(box).map((s) => path.basename(s))).toEqual([b.segment]);
   }, 2.5 * HEAVY);
 
@@ -4213,19 +4190,58 @@ describe('O43: the export survives source loss (W1-B4 Task 11)', () => {
     expect(counters(box)['inode_recycled'] ?? 0, 'the dead row is never taken for the live file').toBe(0);
   }, 2.5 * HEAVY);
 
-  it('review focus: the same rebuild with the live transcript KEPT: expand prints each row once, the leaf keeps its id, and the replayed marks survive the re-ingest', async () => {
+  it('review focus: the same rebuild with the live transcript KEPT and still growing: expand prints each row once, the leaf keeps its id, the gone file\'s memberships stay on its exported: row, the replayed marks survive the re-ingest, and the next pass exports only the rows written since', async () => {
     const b = o43Built('ccrc-hist-o43-kept-');
     const { box } = b;
+    const aUuids = [0, 1, 2, 3, 4].map((k) => rrU(430 + k));
+    const grown = [rrU(435), rrU(436)];
+    // The session goes on after the export: two rows more land in the live transcript (same inode) and no tick reads them
+    // before history.db is lost, so the rebuilt store meets five replayed, marked rows and two fresh, unmarked ones.
+    const more = [
+      userRow({ uuid: grown[0]!, ts: rrIso(2), parentUuid: aUuids[4]!, sessionId: O43_U, cwd: b.workdir, text: 'zqb4export grew after the export' }),
+      assistantRow({ uuid: grown[1]!, ts: rrIso(1), parentUuid: grown[0]!, sessionId: O43_U, cwd: b.workdir, text: 'zqb4export grew, answered' }),
+    ];
+    fs.appendFileSync(b.transcript, more.map((r) => `${JSON.stringify(r)}\n`).join(''));
+    expect(fs.statSync(b.transcript, { bigint: true }).ino, 'CONTROL: the live file keeps its inode while it grows').toBe(b.ino);
+    expect(countOf(box, 'entries'), 'CONTROL: the lost store knew five rows, all exported').toBe(5);
     rrLose(box, { binding: false, journal: false });
     expect((await cliOnPty(box, ['doctor', '--rebuild'])).code).toBe(0);
-    rrTickUntil(box, () => rrRecovered(box) && rrLeafIds(box).length === 1
+    rrTickUntil(box, () => rrRecovered(box) && countOf(box, 'entries') === 7 && rrLeafIds(box).length === 1
       && rrQ<{ n: number }>(box, "SELECT count(*) AS n FROM ingest_files WHERE source_key = '' AND eof_ms IS NOT NULL")[0]!.n === 1, 12);
-    expect(rrLeafIds(box)).toEqual([b.leaf]);
-    expect(countOf(box, 'entries'), 'one row per uuid, whichever copy brought it').toBe(5);
+    expect(rrLeafIds(box), 'the leaf keeps the lost store\'s id').toEqual([b.leaf]);
+    const marks = (): Array<{ uuid: string; seg: string | null }> => rrQ(box, 'SELECT uuid, exported_seg AS seg FROM entries ORDER BY uuid');
+    expect(countOf(box, 'entries'), 'one row per uuid, whichever copy brought it').toBe(7);
     const ex = runCli(box, ['expand', b.leaf], { env: withPane(box, O43_ID) });
     expect(ex.code, `${ex.stdout}\n${ex.stderr}`).toBe(0);
     expect(ex.stdout.split(O43_TEXT).length - 1, 'each row once').toBe(1);
-    expect(rrQ<{ n: number }>(box, 'SELECT count(*) AS n FROM entries WHERE exported_seg = ?', b.segment)[0]!.n,
-      'the re-ingest left the replayed marks, so nothing is exported twice').toBe(5);
+    // Review Focus 5: an exported: dead-file row and the re-ingested live row coexist, and neither takes the other's memberships.
+    const fileOf = (sourceKey: string): number | undefined => rrQ<{ file_id: number }>(box,
+      'SELECT file_id FROM ingest_files WHERE source_key = ? AND dev = ? AND ino = ?', sourceKey, Number(b.dev), Number(b.ino))[0]?.file_id;
+    const held = (fileId: number): string[] => rrQ<{ uuid: string }>(box,
+      'SELECT e.uuid AS uuid FROM memberships m JOIN entries e ON e.entry_id = m.entry_id WHERE m.file_id = ? ORDER BY m.line', fileId).map((x) => x.uuid);
+    const dead = fileOf(exportedSourceKey(b.transcript, b.dev, b.ino));
+    const live = fileOf('');
+    expect(dead, 'the gone copy\'s dead-file row').toBeDefined();
+    expect(live, 'the live file\'s own row').toBeDefined();
+    expect(dead).not.toBe(live);
+    expect(rrQ(box, 'SELECT count(*) AS n FROM ingest_files'), 'two rows for the one inode, and no third').toEqual([{ n: 2 }]);
+    expect(rrQ(box, 'SELECT status FROM ingest_files WHERE file_id = ?', dead!), 'the gone copy\'s row stays exported').toEqual([{ status: 'exported' }]);
+    expect(rrQ(box, 'SELECT status FROM ingest_files WHERE file_id = ?', live!), 'and the file on disk is live').toEqual([{ status: 'live' }]);
+    expect(held(dead!), 'the dead row holds exactly what the segment exported').toEqual(aUuids);
+    expect(held(live!), 'the live row holds everything the file holds').toEqual([...aUuids, ...grown]);
+    expect(rrQ(box, 'SELECT DISTINCT struct_file_id AS f FROM entries'), 'the newest-rank rule puts every entry\'s structure on the live copy').toEqual([{ f: live }]);
+    expect(marks(), 'the re-ingest left the replayed marks and the owed rows unmarked')
+      .toEqual([...aUuids.map((uuid) => ({ uuid, seg: b.segment })), ...grown.map((uuid) => ({ uuid, seg: null }))]);
+    expect(segmentsOf(box).map((x) => path.basename(x)), 'no pass has exported since the rebuild').toEqual([b.segment]);
+    // The next pass past the rebuilt store's hourly clock exports the two rows written since, and only those.
+    const next = runDriver(box, { offsetMs: 2 * O43_HOUR });
+    expect(next.code, `${next.stdout}\n${next.stderr}`).toBe(0);
+    const names = segmentsOf(box).map((x) => path.basename(x));
+    expect(names, 'exactly one new segment').toHaveLength(2);
+    expect(names[0]).toBe(b.segment);
+    expect(segmentRows(path.join(exportDirOf(box), names[1]!), 'entries').map((r) => r['uuid']).sort(), 'it holds the two new rows and nothing else').toEqual(grown);
+    expect(marks(), 'the first five keep the original segment; the two new ones took the new one')
+      .toEqual([...aUuids.map((uuid) => ({ uuid, seg: b.segment })), ...grown.map((uuid) => ({ uuid, seg: names[1]! }))]);
+    expect([held(dead!), held(live!)], 'a pass moves no membership').toEqual([aUuids, [...aUuids, ...grown]]);
   }, 2.5 * HEAVY);
 });
