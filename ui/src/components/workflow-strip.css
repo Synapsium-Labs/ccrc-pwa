@@ -65,11 +65,9 @@
     display: flex;
     flex-direction: column;
     gap: var(--sp-1);
-    /* Shrinks and scrolls before it can clip, should three lines ever not
-       fit (a very long name on a very short screen). */
-    flex: 0 1 auto;
-    min-height: 0;
-    overflow-y: auto;
+    /* No scroll of its own (an unfocusable scroll region fails axe's
+       scrollable-region-focusable): at most three lines, measured at most
+       217px of the 256px cap at 360x640 with long, wrapping names. */
     margin: 0;
     padding: 0 var(--sp-3) var(--sp-2) var(--sp-3);
     font: var(--weight-regular) var(--fs-2xs) / var(--lh-tight) var(--family-mono);
