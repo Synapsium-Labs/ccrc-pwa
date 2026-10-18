@@ -97,7 +97,7 @@ const HELPER_WORD = /\brefuseRoute\(\s*reply\s*,\s*'([^']+)'/g;
 const INLINE_SEND_PINS: Readonly<Record<string, number>> = {
   'auth/gate.ts': 2,
   'coord/routes.ts': 177,
-  'server.ts': 126,
+  'server.ts': 130,
   'token/routes.ts': 2,   // the rotate route's 501, a `RotateAnswer`; the claim door's oversized-body 413
 };
 
@@ -113,7 +113,7 @@ const COMPUTED_SEND_PINS: Readonly<Record<string, number>> = {
  *  ternaries are counted on their own below. */
 const ALLOWED_SPLITS: readonly { file: string; word: string; status: number; count: number }[] = [
   // registry-unmeasurable: 502 in coord/routes.ts (the table), 503 in server.ts until #549 (ARCH-11b) unifies it.
-  { file: 'server.ts', word: 'registry-unmeasurable', status: 503, count: 3 },
+  { file: 'server.ts', word: 'registry-unmeasurable', status: 503, count: 4 },
   // The lockout: `unauthenticated` with verdict `locked-out` and a retry-after header.
   { file: 'server.ts', word: 'unauthenticated', status: 429, count: 3 },
   // Fastify's own oversized-body 413, reshaped into the small claim body (spec 4.6).
@@ -160,7 +160,7 @@ describe('REFUSAL_STATUS (D-5381)', () => {
     expect(Object.fromEntries(splits)).toEqual(Object.fromEntries(ALLOWED_SPLITS.map((a) => [`${a.file}|${a.word}`, a.count])));
   });
 
-  it('server.ts\'s computed 503 registry-unmeasurable sends are counted — seven 503s in all with the literal three', () => {
+  it('server.ts\'s computed 503 registry-unmeasurable sends are counted — eight 503s in all with the literal four', () => {
     const text = sources().find((s) => s.rel === 'server.ts')!.text;
     const ternaries = refusalSends(text).filter((s) =>
       /^read\.reason === 'unlistable' \? 503 : 404$/.test(s.arg)

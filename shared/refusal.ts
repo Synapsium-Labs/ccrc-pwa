@@ -27,7 +27,7 @@
  *
  * THREE MEASURED SPLITS, kept as they were:
  *   - `registry-unmeasurable` answers 502 in `coord/routes.ts` and 503 in
- *     `server.ts`. The table says 502; `server.ts`'s seven 503 sends (three
+ *     `server.ts`. The table says 502; `server.ts`'s eight 503 sends (four
  *     literal, four through a `read.reason === 'unlistable' ? 503 : 404`
  *     ternary) stay inline until #549 (ARCH-11b) unifies them.
  *   - `unauthenticated` answers 429 with verdict `locked-out` and a
