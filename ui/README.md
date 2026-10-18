@@ -149,7 +149,12 @@ Some things never vary between skins (D-5094, spec §3.1). A skin may change
 how dense the console is. It never changes what the console is:
 
 - **The wordmark `❯ ccrc`.** The `❯` is in `--accent`, then `ccrc` in mono at
-  medium weight, top-left in every shell.
+  medium weight, top-left in every shell. It is one primitive, `Wordmark`
+  (`src/primitives/wordmark.tsx`, D-5470), which every shell's bar renders:
+  the caret is `text-phosphor` (theme.css's key for `--accent`; `text-accent`
+  is shadcn's muted surface and no ccrc colour), the name `--fs-xl` mono at
+  medium weight, line-height 1, and the two are separated by a box gap rather
+  than a space, so the mark never wraps between them.
 - **The `❯` caret** means "selected" or "acting" wherever it appears, page
   titles included. A skin never adds a second cursor glyph.
 - **The phosphor accent** (`--accent` and its family) marks commit actions, the
