@@ -9454,8 +9454,19 @@ export const FLEET_SCOPE = '*';
 /** The poller's own state (§7). `{lastOkAt: null, lastError: null}` = never
  *  checked since this process started — never "up to date". */
 export interface CatalogueState { lastOkAt: number | null; lastError: { at: number; reason: string } | null }
-/** `GET /api/updates` (§12). */
-export interface UpdatesView { catalogue: CatalogueState; releases: ReleaseWire[]; nodes: NodeWire[]; intent: UpdateIntentWire[]; boxToken?: BoxTokenView }
+/** The GitHub owner/repo the catalogue lists releases from (D-5549) — the pair
+ *  the server's release source READ (`server/src/config.ts`), sent so the PWA
+ *  can link a release note's `#NNN` to that repo's pull request from the
+ *  number alone. No TS root spells the org (`single-definition.test.ts`), so
+ *  this is the only way a client learns it. */
+export interface ReleaseSourceWire { owner: string; repo: string }
+/** `GET /api/updates` (§12). `source` is ADDITIVE (D-5549): absent from an
+ *  older server and from one with no usable release source, and the PWA then
+ *  shows a `#NNN` as plain text — never a guessed link. */
+export interface UpdatesView {
+  catalogue: CatalogueState; releases: ReleaseWire[]; nodes: NodeWire[]; intent: UpdateIntentWire[]; boxToken?: BoxTokenView;
+  source?: ReleaseSourceWire;
+}
 
 /** Every refusal word an update route answers with (§12). */
 export type UpdateRouteError =

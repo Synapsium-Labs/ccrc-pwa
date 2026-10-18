@@ -577,6 +577,74 @@ describe('release.yml: the thin workflow, pinned to the script', () => {
   });
 });
 
+describe('release.yml: the release body is written by the notes script, through a file (D-5548)', () => {
+  const WORKFLOW = join(REPO, '.github', 'workflows', 'release.yml');
+  const wf = (): string => readFileSync(WORKFLOW, 'utf8');
+
+  it('writes the notes after the attest step and before the publish, outside the publish glob', () => {
+    const src = wf();
+    const attest = src.search(/^      - uses: actions\/attest-build-provenance@v4$/m);
+    const notes = src.search(/^        run: node deploy\/release-notes\.mjs --tag "\$GITHUB_REF_NAME" --out "\$RUNNER_TEMP\/release-notes\.txt"/m);
+    const publish = src.search(/^        run: gh release create /m);
+    expect(notes).toBeGreaterThan(attest);
+    expect(publish).toBeGreaterThan(notes);
+    expect(src).toContain('gh release create "$GITHUB_REF_NAME" release-out/* --verify-tag --prerelease --notes-file "$RUNNER_TEMP/release-notes.txt"');
+    expect(src, 'the notes must not land in release-out/, which the publish globs as assets').not.toMatch(/--out "?release-out\/release-notes/);
+  });
+
+  it('a writer that fails publishes an empty body rather than failing the release', () => {
+    expect(wf()).toMatch(/release-notes\.mjs [^\n]*\|\| \{ echo "::warning::[^\n]*"; : > "\$RUNNER_TEMP\/release-notes\.txt"; \}$/m);
+  });
+});
+
+/** Every `run:` body of a workflow — the one-line form and the `|`/`>` block
+ *  form, whose body is each following line indented deeper than the key. */
+function runBodies(src: string): string[] {
+  const lines = src.split('\n');
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    const m = /^(\s*)(?:- )?run:\s?(.*)$/.exec(lines[i] ?? '');
+    if (m === null) continue;
+    const indent = (m[1] ?? '').length;
+    const value = m[2] ?? '';
+    if (!/^[|>][-+]?$/.test(value.trim())) { out.push(value); continue; }
+    const body: string[] = [];
+    for (let j = i + 1; j < lines.length; j += 1) {
+      const l = lines[j] ?? '';
+      if (l.trim() !== '' && l.length - l.trimStart().length <= indent) break;
+      body.push(l);
+    }
+    out.push(body.join('\n'));
+  }
+  return out;
+}
+
+describe('the release workflows never put an expression or commit text in a run: line (D-5548)', () => {
+  // A `${{ … }}` inside `run:` is pasted into the script BEFORE the shell
+  // parses it, so an expression carrying untrusted text (a commit message, a
+  // PR title, `github.event.*`) is script injection. Every value a run: line
+  // needs arrives through `env:` and is read as "$VAR"; commit text arrives
+  // through a file the notes script writes. This holds all three release
+  // workflows to that, the notes step included.
+  it.each(['release.yml', 'release-main.yml', 'release-stable.yml'])('%s', (name) => {
+    const src = readFileSync(join(REPO, '.github', 'workflows', name), 'utf8');
+    const bodies = runBodies(src);
+    expect(bodies.length, `${name}: the scan found no run: lines`).toBeGreaterThan(0);
+    for (const b of bodies) {
+      expect(b, `${name}: an expression inside run:`).not.toContain('${{');
+      expect(b, `${name}: run: reads github.event`).not.toMatch(/github\.event|head_commit|GITHUB_EVENT_PATH/);
+      expect(b, `${name}: run: reads commit text itself`).not.toMatch(/\bgit\b[^\n]*\blog\b|--notes |-m "\$/);
+    }
+  });
+
+  it('the scanner sees a planted expression (the guard is not vacuous)', () => {
+    const planted = 'jobs:\n  x:\n    steps:\n      - run: echo "${{ github.event.head_commit.message }}"\n      - name: y\n        run: |\n          echo ok\n          echo "${{ github.event.pull_request.title }}"\n';
+    const bodies = runBodies(planted);
+    expect(bodies).toHaveLength(2);
+    expect(bodies.every((b) => b.includes('${{'))).toBe(true);
+  });
+});
+
 describe('release-main.yml: the thin main-push workflow, pinned to its script (spec 2026-09-18 §3, 2026-09-20 §4)', () => {
   const WORKFLOW = join(REPO, '.github', 'workflows', 'release-main.yml');
   const wf = (): string => readFileSync(WORKFLOW, 'utf8');
