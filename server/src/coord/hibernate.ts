@@ -92,6 +92,20 @@ export const HIBERNATE_LIVE_MARKER = 'hibernate-live';
 export const HIBERNATE_AFTER_HOURS_FILE = 'hibernate-after-hours';
 export const NO_HIBERNATE_SUFFIX = 'no-hibernate';
 
+/** The live read's no-word reasons (`liveWordFor`'s), as the verdict's input spells them. */
+export const HIBERNATE_LIVE_REASONS = ['no-pane', 'no-config-dir', 'unmeasured'] as const;
+
+/** Every kebab word this file spells as a literal (its holds, its four operator settings, the live read's reasons),
+ *  for `mail-routes.test.ts`'s census of `server/src/coord`: none is a mail rejection or a route refusal. Derived from
+ *  the tables above, never re-spelled. */
+const HIBERNATE_KEBABS: ReadonlySet<string> = new Set<string>([
+  ...HIBERNATE_HOLDS, HIBERNATE_DISABLED_MARKER, HIBERNATE_LIVE_MARKER, HIBERNATE_AFTER_HOURS_FILE, NO_HIBERNATE_SUFFIX,
+  ...HIBERNATE_LIVE_REASONS,
+]);
+export function isHibernateKebab(token: string): boolean {
+  return HIBERNATE_KEBABS.has(token);
+}
+
 /** `$REG/hibernate-after-hours`'s body → N in MS. An integer from 1 to 168, surrounding whitespace allowed; anything
  *  else — absent, out of range, a fraction, a unit — is the default, never a guess at what was meant. */
 export function hibernateAfterMs(raw: string | null): number {
@@ -135,7 +149,7 @@ export type HibernateLive =
   | {
     readonly kind: 'read';
     /** `liveWordFor`'s answer, the RAW word; `no-pane`/`no-config-dir`/`unmeasured` when it gave none. */
-    readonly word: { readonly ok: true; readonly word: string } | { readonly ok: false; readonly reason: 'no-pane' | 'no-config-dir' | 'unmeasured' };
+    readonly word: { readonly ok: true; readonly word: string } | { readonly ok: false; readonly reason: (typeof HIBERNATE_LIVE_REASONS)[number] };
     readonly mark: HibernateMark;
   };
 
