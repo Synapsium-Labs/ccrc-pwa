@@ -29,6 +29,52 @@
    the gate measured 94, which is the same drift in miniature.
    ========================================================================== */
 
+/* ----------------------------------------------------------------------------
+   THE GEIST PAIR, SELF-HOSTED (D-5095). The two faces --family-ui and
+   --family-mono name, declared here beside them (D-5450: a stylesheet holding
+   only @font-face fails the contrast gate's every-sheet-has-rules walk, so the
+   plan's separate fonts.css would have needed a frozen file edited).
+   Top level, never inside :root or a palette block: a face nested in a style
+   rule is dropped.
+
+   Geist and Geist Mono are part of the identity core (D-5094): both skins draw
+   every glyph of UI and mono text in them. They are VENDORED, not installed
+   (spec §12 O5) and never fetched from a font host. Vite resolves each url()
+   below from this directory, in the app's build and in Storybook's, and emits
+   the file as a hashed, same-origin asset under /assets/.
+
+   Source:  the `geist` npm package, geist@1.8.1 (`npm pack`, never a dependency)
+     ui/src/fonts/Geist-Variable.woff2      sha256 9ce2d97863cab59a0c7522534112d6c42a4e25c0e6b2ab37766761b0f82cfbd6
+     ui/src/fonts/GeistMono-Variable.woff2  sha256 119f3e159fc15dd77311e929d3a657a193b57a3e625234666bc43c6e2b1127f7
+     ui/src/fonts/OFL.txt                   sha256 930853ee1daa68554d9e35c8a9175affb74f699fad9a5da6ee5ebe76379d9137
+   Licence: SIL Open Font License 1.1, Copyright (c) 2023 Vercel, in
+     collaboration with basement.studio. Shipped byte for byte at
+     /licenses/Geist-OFL.txt (pwa/public/licenses/). pwa/test/fonts.test.ts
+     holds every hash above, and the copy.
+
+   One variable file per family covers every weight (100 to 900). `swap`
+   paints today's system face first and swaps once the file arrives, so text
+   is never invisible while it loads. The stacks below keep the system
+   faces behind Geist, so a glyph Geist lacks (❯ ♻ ⑂ …) falls back per glyph
+   to the face it had before.
+   ------------------------------------------------------------------------- */
+
+@font-face {
+  font-family: 'Geist';
+  src: url('../fonts/Geist-Variable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Geist Mono';
+  src: url('../fonts/GeistMono-Variable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
   /* ------------------------------------------------------------------ *
    *  COLOR — dark theme (default)                                       *
@@ -222,9 +268,11 @@
      anything a human reads as prose (chat, buttons, dialog copy).
      Any mono value that updates in place (elapsed clocks, percentages,
      durations) also gets font-variant-numeric: tabular-nums — readouts
-     must never jitter sideways. */
-  --family-ui:   system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --family-mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, "Roboto Mono", "Liberation Mono", monospace;
+     must never jitter sideways.
+     The Geist pair leads both stacks (D-5095, the faces atop this file); today's system
+     stacks stay behind it, so a glyph Geist lacks falls back per glyph. */
+  --family-ui:   "Geist", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --family-mono: "Geist Mono", ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, "Roboto Mono", "Liberation Mono", monospace;
 
   --fs-2xs:  11px;   /* eyebrows, limit labels, keycap legends */
   --fs-xs:   12px;   /* timestamps, tool-card meta */
