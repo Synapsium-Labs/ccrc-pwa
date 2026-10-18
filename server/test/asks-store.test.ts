@@ -537,10 +537,10 @@ describe('a row minted released, with its reason (D-5290)', () => {
     expect(okAsk(s.askById(id))?.releaseReason).toBe('unknown');
   });
 
-  // D-5530: the three fail-closed reasons are words this build writes and
+  // D-5530, D-5531: the fail-closed reasons are words this build writes and
   // reads back; `parent-project-mismatch` is never written again, but a row
   // an older build wrote still reads back as itself, never `unknown`.
-  for (const reason of ['run-unclaimed', 'run-other-programme', 'parent-unmeasured'] as const) {
+  for (const reason of ['run-unclaimed', 'run-other-programme', 'parent-unmeasured', 'run-unattributed'] as const) {
     it(`mints and reads back ${reason} (D-5530)`, () => {
       const s = mk();
       const id = s.insertAsk({ childId: CHILD, parentId: PARENT, runId: null, askKey: 'k', askAt: 1000,

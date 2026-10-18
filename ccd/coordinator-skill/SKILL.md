@@ -458,9 +458,10 @@ ruling of 2026-10-18, D-5530). A child's question — and, once approvals ship,
 its permission prompt — is held for the recorded claimant of the child's run,
 which is you, whatever project you and the child are in: you are mailed it and
 answer it exactly as clause 11 and `references/wave-lifecycle.md`'s ask lane
-say. Only a run with no claimant, a run of another programme, or a parent the
-server cannot measure sends it straight to the operator instead, and you are
-not mailed those.
+say. Only a run with no claimant, a run of another programme, a run opened
+without your attribution (before the fleet carried `ccrc-api`'s claimant uuid,
+D-5531), or a parent the server cannot measure sends it straight to the
+operator instead, and you are not mailed those.
 
 **Two more `POST /api/runs` refusals, both on `refused` (409).** `not-a-child`:
 the `sessionId` you named is an existing session with no child marker — one the

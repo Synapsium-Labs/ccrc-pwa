@@ -8728,6 +8728,12 @@ export class FleetWatcher {
    *    resume arm), whose marker still names wave 1, and `reclaimProgram`
    *    moves every run of a programme to its heir together, so the claimant
    *    is the one fact the binding run and the minting run share;
+   *  - the minting run's claimant was ATTRIBUTED (D-5531, the ruling's
+   *    "correctly attributed"): the run is not journaled `unattributed` and
+   *    carries its `coordProject` stamp (else `run-unattributed`, the same —
+   *    held for nobody). A run opened with no `claimedByUuid` before the fleet
+   *    carried the client, or before the attributed binding, records a
+   *    `claimedBy` nobody proved, and a recorded name alone is not a parent;
    *  - the parent's registry row exists, is neither archived nor stopped, and
    *    is not measured dead by `claimantMeasuredDead`, the predicate
    *    `sweepDeadCoordinators` reads (else `parent-not-live`);
@@ -8782,6 +8788,10 @@ export class FleetWatcher {
         held = { parent: ASK_OPERATOR_PRINCIPAL, reason: 'run-unclaimed' };
       } else if (minting.run.claimedBy !== parent) {
         held = { parent: ASK_OPERATOR_PRINCIPAL, reason: 'run-other-programme' };
+      } else if (minting.run.unattributed || minting.run.coordProject === null) {
+        // D-5531: the binding run's claimant was never attributed, so this
+        // tick cannot vouch for it as a parent, wherever it sits. Fail closed.
+        held = { parent: ASK_OPERATOR_PRINCIPAL, reason: 'run-unattributed' };
       } else {
         held = { parent, reason: null };
         const row = recs.find((x) => x.id === parent) ?? null;

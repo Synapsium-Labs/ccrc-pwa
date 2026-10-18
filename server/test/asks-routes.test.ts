@@ -1035,7 +1035,7 @@ describe('late answer wins; declined (D-5289)', () => {
   // not reach it, and the parent's route refuses it as no longer pre-emptible.
   // D-5530: every reason this build writes, and `parent-project-mismatch`,
   // which an older build wrote and this one never does.
-  for (const reason of ['parent-not-live', 'parent-unmeasured', 'run-unclaimed', 'run-other-programme',
+  for (const reason of ['parent-not-live', 'parent-unmeasured', 'run-unclaimed', 'run-other-programme', 'run-unattributed',
     'parent-project-mismatch'] as const) {
     it(`a row minted released (${reason}) is refused to the parent 409 not-held, and nothing is pressed`, async () => {
       const { coord, id, calls } = await setup(Date.now());

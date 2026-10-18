@@ -10725,6 +10725,13 @@ export function parseServerCaps(text: string, nowS: number): ServerCapsParse {
  *                             someone other than the claimant of the newest
  *                             open run naming the child: the child belongs to
  *                             another programme's coordinator.
+ *  `run-unattributed`         D-5531: the run the child's mark names records
+ *                             a claimant nobody ATTRIBUTED — journaled
+ *                             `unattributed` (opened with no `claimedByUuid`
+ *                             before the fleet carried the client), or with no
+ *                             `coordProject` stamp (opened before the
+ *                             attributed binding). A recorded claimedBy alone
+ *                             is not a parent.
  *  `parent-project-mismatch`  READ ONLY since D-5530: an older build wrote it
  *                             when the claimant was a session of another
  *                             project. Never written again; a row carrying it
@@ -10733,7 +10740,7 @@ export function parseServerCaps(text: string, nowS: number): ServerCapsParse {
  *                             never written. */
 export type AskReleaseReason =
   | 'parent-not-live' | 'parent-unmeasured' | 'run-unclaimed' | 'run-other-programme'
-  | 'parent-project-mismatch' | 'unknown';
+  | 'run-unattributed' | 'parent-project-mismatch' | 'unknown';
 
 /** The reasons a mint may WRITE (D-5530): every `AskReleaseReason` but the
  *  read-only legacy word and the reader's degrade. */
@@ -10741,7 +10748,7 @@ export type AskMintReleaseReason = Exclude<AskReleaseReason, 'parent-project-mis
 
 export const ASK_RELEASE_REASON_MAP: Record<AskReleaseReason, true> = {
   'parent-not-live': true, 'parent-unmeasured': true, 'run-unclaimed': true, 'run-other-programme': true,
-  'parent-project-mismatch': true, unknown: true,
+  'run-unattributed': true, 'parent-project-mismatch': true, unknown: true,
 };
 
 export function isAskReleaseReason(v: unknown): v is AskReleaseReason {

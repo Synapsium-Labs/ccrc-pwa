@@ -150,6 +150,12 @@ export interface PrLineageEntry { pr: number; branch: string; phase: string; rec
 export interface RunRow extends RunSummary {
   prLineage: PrLineageEntry[]; coordProject: string | null;
   sessionBornAt: number | null; sessionBornFor: string | null;
+  /** Migration 23 (D-5298): the open was ACCEPTED with no `claimedByUuid`
+   *  (before the fleet carried the client) and journaled so — the claimant was
+   *  only shown to be listed, never attributed. Read through on
+   *  `coordProject`'s idiom and stripped off the wire by `toRunSummary`.
+   *  D-5531: the ask lane fails closed on it (`run-unattributed`). */
+  unattributed: boolean;
 }
 
 /** One open run naming a session. NOT a `RunRow`: these four columns are all
@@ -185,10 +191,10 @@ export type { CoordPlacementStamp };
  *  and the `runs` WS frame's own emitter (`watch.ts`'s `emitRuns`, Task 10)
  *  rather than each holding its own copy of the strip. Strips `sessionBornAt`
  *  and `sessionBornFor` (migration 16) on the same idiom: server-only
- *  measurements, never sent. */
+ *  measurements, never sent. And `unattributed` (migration 23), the same. */
 export const toRunSummary = (row: RunRow): RunSummary => {
   const { prLineage: _prLineage, coordProject: _coordProject, sessionBornAt: _sessionBornAt,
-          sessionBornFor: _sessionBornFor, ...summary } = row;
+          sessionBornFor: _sessionBornFor, unattributed: _unattributed, ...summary } = row;
   return summary;
 };
 
@@ -866,6 +872,7 @@ interface RunRowDb {
   coordProject: string | null;
   sessionBornAt: number | null;
   sessionBornFor: string | null;
+  unattributed: number;
 }
 
 /** CAST-to-TEXT rather than `setReadBigInts(true)` (D-2590, a deliberate
@@ -886,7 +893,7 @@ const RUN_ROW_COLUMNS =
   'r.resumed, r.clearedAt, r.openedAt, r.dispatchStartedAt, ' +
   'r.dispatchedAt, r.closedAt, ' +
   'r.handoffCommit, r.prLineage, r.briefQueued, r.clearError, r.coordProject, r.sessionBornAt, ' +
-  'r.sessionBornFor';
+  'r.sessionBornFor, r.unattributed';
 
 /** ONE persisted integer, read as TEXT and proven representable.
  *
@@ -4151,6 +4158,10 @@ export class CoordStore {
       // rebound (spec §5.3's recycled-slug hazard, extended across a
       // rollback).
       sessionBornFor: row.sessionBornFor,
+      // Migration 23's journal (D-5298), read through on the same idiom; 1 is
+      // "accepted unattributed", every other value (0, the column default every
+      // older row carries) is not. D-5531 reads it in the ask lane.
+      unattributed: row.unattributed === 1,
     };
   }
 

@@ -2335,6 +2335,9 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec Â
     expect(lane).toMatch(/A cross-project coordinator receives its children's questions/);
     expect(lane).toMatch(/no project is compared/);
     expect(lane).toMatch(/any other caller, whatever its project, is `403 not-parent`/);
+    // D-5531: a run whose claimant was never attributed holds nothing.
+    expect(section).toMatch(/a run opened without your attribution/);
+    expect(lane).toMatch(/opened without your attribution \(D-5531\)/);
     for (const text of [section, lane]) expect(text).not.toMatch(/parent-project-mismatch/);
   });
 

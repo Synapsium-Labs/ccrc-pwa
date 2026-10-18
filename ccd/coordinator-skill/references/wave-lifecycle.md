@@ -1052,7 +1052,9 @@ answer. The answer route admits exactly the session a row is held for: any other
 whatever its project, is `403 not-parent`. A question the server could not hold for anyone (a
 run with no claimant, a run of another programme, or a parent it could not measure) goes to the
 operator at once, is never mailed to you, and is not in your `asks list`; an answer to one is
-refused (`not-held`, or `403 not-parent` when it was held for nobody).
+refused (`not-held`, or `403 not-parent` when it was held for nobody). So does one whose run was
+opened without your attribution (D-5531): a run opened with no claimant uuid before the fleet
+carried `ccrc-api`, or before the attributed binding, holds nothing, wherever you sit.
 
 ```bash
 : "${ask_id:?set ask_id to the held ask row positive decimal id}"

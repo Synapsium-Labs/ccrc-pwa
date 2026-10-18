@@ -197,7 +197,7 @@ describe('the ask mint point (D-2172, D-2173)', () => {
 
     const run = f.coord.openRun({
       program: 'prog', title: 'Prog', project: 'ccrc-pwa',
-      wave: 1, waveOf: null, claimedBy: 'coord-1',
+      wave: 1, waveOf: null, claimedBy: 'coord-1', coordProject: 'ccrc-pwa',
     }) as { id: number };
     f.coord.setSession(run.id, 'cc-a'); f.child('cc-a', run.id);
 
@@ -251,7 +251,7 @@ describe('the ask mint point (D-2172, D-2173)', () => {
     const f = fixture({ push, sessions: ['ccrc-pwa/cc-a'] });
     const run = f.coord.openRun({
       program: 'prog', title: 'Prog', project: 'ccrc-pwa',
-      wave: 1, waveOf: null, claimedBy: 'coord-1',
+      wave: 1, waveOf: null, claimedBy: 'coord-1', coordProject: 'ccrc-pwa',
     }) as { id: number };
     f.coord.setSession(run.id, 'cc-a'); f.child('cc-a', run.id);
 
@@ -299,7 +299,7 @@ describe('the ask mint point (D-2172, D-2173)', () => {
 
     const run = f.coord.openRun({
       program: 'prog', title: 'Prog', project: 'ccrc-pwa',
-      wave: 1, waveOf: null, claimedBy: 'coord-1',
+      wave: 1, waveOf: null, claimedBy: 'coord-1', coordProject: 'ccrc-pwa',
     }) as { id: number };
     f.coord.setSession(run.id, 'cc-a'); f.child('cc-a', run.id);
 
@@ -328,12 +328,12 @@ describe('the ask mint point (D-2172, D-2173)', () => {
 
     const runA = f.coord.openRun({
       program: 'prog-a', title: 'A', project: 'ccrc-pwa',
-      wave: 1, waveOf: null, claimedBy: 'coord-1',
+      wave: 1, waveOf: null, claimedBy: 'coord-1', coordProject: 'ccrc-pwa',
     }) as { id: number };
     f.coord.setSession(runA.id, 'cc-a'); f.child('cc-a', runA.id);
     const runB = f.coord.openRun({
       program: 'prog-b', title: 'B', project: 'ccrc-pwa',
-      wave: 1, waveOf: null, claimedBy: 'coord-1',
+      wave: 1, waveOf: null, claimedBy: 'coord-1', coordProject: 'ccrc-pwa',
     }) as { id: number };
     f.coord.setSession(runB.id, 'cc-b'); f.child('cc-b', runB.id);
 
@@ -370,7 +370,7 @@ describe('the ask mint point (D-2172, D-2173)', () => {
     const f = fixture({ push, notifyLog: log, sessions: ['ccrc-pwa/cc-a'] });
     const run = f.coord.openRun({
       program: 'prog', title: 'Prog', project: 'ccrc-pwa',
-      wave: 1, waveOf: null, claimedBy: 'coord-1',
+      wave: 1, waveOf: null, claimedBy: 'coord-1', coordProject: 'ccrc-pwa',
     }) as { id: number };
     f.coord.setSession(run.id, 'cc-a'); f.child('cc-a', run.id);
 
@@ -403,7 +403,7 @@ describe('the ask mint point (D-2172, D-2173)', () => {
     const f = fixture({ push, sessions: ['ccrc-pwa/cc-a'] });
     const run = f.coord.openRun({
       program: 'prog', title: 'Prog', project: 'ccrc-pwa',
-      wave: 1, waveOf: null, claimedBy: 'coord-1',
+      wave: 1, waveOf: null, claimedBy: 'coord-1', coordProject: 'ccrc-pwa',
     }) as { id: number };
     f.coord.setSession(run.id, 'cc-a'); f.child('cc-a', run.id);
     f.coord.insertAsk = () => { throw new Error('boom — simulated coord.db failure'); };
@@ -429,7 +429,7 @@ describe('the ask mint point (D-2172, D-2173)', () => {
     const f = fixture({ push, sessions: ['ccrc-pwa/cc-a'] });
     const run = f.coord.openRun({
       program: 'prog', title: 'Prog', project: 'ccrc-pwa',
-      wave: 1, waveOf: null, claimedBy: 'coord-1',
+      wave: 1, waveOf: null, claimedBy: 'coord-1', coordProject: 'ccrc-pwa',
     }) as { id: number };
     f.coord.setSession(run.id, 'cc-a'); f.child('cc-a', run.id);
     // The row a newer build wrote and a rollback left behind. `parentOfSession`
@@ -470,7 +470,7 @@ describe('the ask mint point (D-2172, D-2173)', () => {
     const f = fixture({ push, notifyLog: log, presence, sessions: ['ccrc-pwa/cc-a'] });
     const run = f.coord.openRun({
       program: 'prog', title: 'Prog', project: 'ccrc-pwa',
-      wave: 1, waveOf: null, claimedBy: 'coord-1',
+      wave: 1, waveOf: null, claimedBy: 'coord-1', coordProject: 'ccrc-pwa',
     }) as { id: number };
     f.coord.setSession(run.id, 'cc-a'); f.child('cc-a', run.id);
 
@@ -495,7 +495,7 @@ describe('the ask mint point (D-2172, D-2173)', () => {
     const f = fixture({ push, sessions: ['ccrc-pwa/cc-a'] });
     const run = f.coord.openRun({
       program: 'prog', title: 'Prog', project: 'ccrc-pwa',
-      wave: 1, waveOf: null, claimedBy: 'cc-a',
+      wave: 1, waveOf: null, claimedBy: 'cc-a', coordProject: 'ccrc-pwa',
     }) as { id: number };
     f.coord.setSession(run.id, 'cc-a'); f.child('cc-a', run.id);
 
@@ -524,7 +524,7 @@ describe('the ask mint point (D-2172, D-2173)', () => {
     const f = fixture({ push, sessions: ['ccrc-pwa/cc-a'] });
     const run = f.coord.openRun({
       program: 'prog', title: 'Prog', project: 'ccrc-pwa',
-      wave: 1, waveOf: null, claimedBy: 'coord-1',
+      wave: 1, waveOf: null, claimedBy: 'coord-1', coordProject: 'ccrc-pwa',
     }) as { id: number };
     f.coord.setSession(run.id, 'cc-a'); f.child('cc-a', run.id);
 
@@ -566,7 +566,7 @@ describe('the ask mint point (D-2172, D-2173)', () => {
     const f = fixture({ push, sessions: ['ccrc-pwa/cc-a'] });
     const run = f.coord.openRun({
       program: 'prog', title: 'Prog', project: 'ccrc-pwa',
-      wave: 1, waveOf: null, claimedBy: 'coord-1',
+      wave: 1, waveOf: null, claimedBy: 'coord-1', coordProject: 'ccrc-pwa',
     }) as { id: number };
     f.coord.setSession(run.id, 'cc-a'); f.child('cc-a', run.id);
 
@@ -607,7 +607,7 @@ describe('the ask mint point (D-2172, D-2173)', () => {
     const f = fixture({ push, sessions: ['ccrc-pwa/cc-a'] });
     const run = f.coord.openRun({
       program: 'prog', title: 'Prog', project: 'ccrc-pwa',
-      wave: 1, waveOf: null, claimedBy: 'coord-1',
+      wave: 1, waveOf: null, claimedBy: 'coord-1', coordProject: 'ccrc-pwa',
     }) as { id: number };
     f.coord.setSession(run.id, 'cc-a'); f.child('cc-a', run.id);
     f.coord.insertMail = () => { throw new Error('boom — simulated coord.db failure'); };
@@ -676,7 +676,7 @@ describe('the ask instance guard advances under a live dialog', () => {
     const f = fixture({ push, sessions: ['ccrc-pwa/cc-a'] });
     const run = f.coord.openRun({
       program: 'prog', title: 'Prog', project: 'ccrc-pwa',
-      wave: 1, waveOf: null, claimedBy: 'coord-1',
+      wave: 1, waveOf: null, claimedBy: 'coord-1', coordProject: 'ccrc-pwa',
     }) as { id: number };
     f.coord.setSession(run.id, 'cc-a'); f.child('cc-a', run.id);
     await f.tick();                                     // priming: no menu
@@ -742,10 +742,15 @@ describe('the first-sighting race and a parent that is not live (D-5290)', () =>
     (f.coord.db.prepare("SELECT COUNT(*) AS n FROM mail WHERE toId = ?").get(to) as { n: number }).n;
   const pushesFor = (sent: PushPayload[], id: string) => sent.filter((p) => p.tag === askTag(id));
 
-  /** A child of `parent` in `project`: the run, the binding, the marker. */
+  /** A child of `parent` in `project`: the run, the binding, the marker. The
+   *  run is opened as `POST /api/runs` opens it today: attributed, with the
+   *  claimant's own project MEASURED and stamped (`coordProject`, read off the
+   *  claimant's id prefix here). D-5531: a run without that stamp, or journaled
+   *  `unattributed`, holds nothing — see the cases at the end of this block. */
   const dispatch = (f: ReturnType<typeof fixture>, child: string, parent: string, project = 'project-a') => {
     const run = f.coord.openRun({
       program: 'prog', title: 'Prog', project, wave: 1, waveOf: null, claimedBy: parent,
+      coordProject: parent.split('-').slice(0, 2).join('-'),
     }) as { id: number };
     f.coord.setSession(run.id, child);
     return run.id;
@@ -1039,7 +1044,7 @@ describe('the first-sighting race and a parent that is not live (D-5290)', () =>
     const minting = dispatch(f, CHILD, PARENT);
     f.child(CHILD, minting);
     const other = f.coord.openRun({
-      program: 'other', title: 'Other', project: 'project-a', wave: 1, waveOf: null, claimedBy: FAR,
+      program: 'other', title: 'Other', project: 'project-a', wave: 1, waveOf: null, claimedBy: FAR, coordProject: 'project-a',
     }) as { id: number };
     f.coord.setSession(other.id, CHILD);
     await f.tick();
@@ -1060,7 +1065,7 @@ describe('the first-sighting race and a parent that is not live (D-5290)', () =>
     const f = fixture({ push, sessions: [`project-a/${OPS}`, `project-a/${PARENT}`] });
     dispatch(f, OPS, PARENT);
     const other = f.coord.openRun({
-      program: 'other', title: 'Other', project: 'project-a', wave: 1, waveOf: null, claimedBy: OPS,
+      program: 'other', title: 'Other', project: 'project-a', wave: 1, waveOf: null, claimedBy: OPS, coordProject: 'project-a',
     }) as { id: number };
     writeFileSync(path.join(f.home, '.cc-sessions', `${OPS}.child`), String(other.id));
     await f.tick();
@@ -1141,6 +1146,81 @@ describe('the first-sighting race and a parent that is not live (D-5290)', () =>
     expect(asksRows(f)).toEqual([expect.objectContaining({ childId: CHILD, parentId: FAR, state: 'held', releaseReason: null })]);
     expect(mailTo(f, FAR)).toBe(1);
   });
+
+  // D-5531 (run-unattributed; the operator's ruling of 2026-10-18 holds an ask
+  // for the run's "recorded, correctly ATTRIBUTED claimant"). Two run shapes
+  // record a claimant nobody attributed, and both fail CLOSED: a run journaled
+  // `unattributed` (accepted with no `claimedByUuid` before the fleet carried
+  // the client; the claimant was only shown to be listed), and a run with no
+  // `coordProject` stamp (opened before the attributed binding, its claimant
+  // taken from the body under the box token alone). Permanent security cases
+  // from the cross-project verification (XSEC-1, XSEC-1b).
+  const unattributedShapes: [string, (f: ReturnType<typeof fixture>, runId: number) => void][] = [
+    ['a run journaled unattributed', (f, runId) => { f.coord.db.prepare('UPDATE runs SET unattributed = 1 WHERE id = ?').run(runId); }],
+    ['a run with no coordProject stamp', (f, runId) => { f.coord.db.prepare('UPDATE runs SET coordProject = NULL WHERE id = ?').run(runId); }],
+  ];
+  for (const [name, unattribute] of unattributedShapes) {
+    for (const [where, claimant, specs] of [
+      ['claimed from another project', FAR, [`project-a/${CHILD}`, `project-b/${FAR}`]],
+      ['claimed from the same project', PARENT, [`project-a/${CHILD}`, `project-a/${PARENT}`]],
+    ] as const) {
+      it(`${name}, ${where}: minted released (run-unattributed), held for nobody, the claimant never mailed (D-5531)`, async () => {
+        const sent: PushPayload[] = [];
+        const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+        const f = fixture({ push, sessions: [...specs] });
+        const runId = dispatch(f, CHILD, claimant, 'project-a');
+        unattribute(f, runId);
+        f.child(CHILD, runId);
+        await f.tick();
+        f.writeAsk(CHILD, ENVELOPE);
+        f.showMenu(CHILD);
+        await f.tick();
+        const rows = asksRows(f);
+        expect(rows).toHaveLength(1);
+        expect(rows[0]).toMatchObject({ childId: CHILD, parentId: 'operator', state: 'released', releaseReason: 'run-unattributed' });
+        expect(rows[0]!.releasedAt).not.toBeNull();
+        expect(mailTo(f, claimant)).toBe(0);
+        expect(pushesFor(sent, CHILD)).toHaveLength(1);
+        expect(pushesFor(sent, CHILD)[0]!.actions).toBeDefined();
+      });
+    }
+    it(`${name}: released from the amendment branch too (run-unattributed), the claimant never mailed (D-5531)`, async () => {
+      const sent: PushPayload[] = [];
+      const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+      const f = fixture({ push, sessions: [`project-a/${CHILD}`, `project-b/${FAR}`] });
+      const runId = dispatch(f, CHILD, FAR, 'project-a');
+      unattribute(f, runId);
+      f.child(CHILD, runId);
+      await f.tick();                                 // priming
+      f.writeAsk(CHILD, null, 'waiting');
+      f.showMenu(CHILD);
+      await f.tick();                                 // first sighting: deferred
+      f.writeAsk(CHILD, ENVELOPE);
+      await f.tick();
+      expect(asksRows(f)).toEqual([expect.objectContaining({ childId: CHILD, parentId: 'operator', state: 'released', releaseReason: 'run-unattributed' })]);
+      expect(mailTo(f, FAR)).toBe(0);
+      expect(pushesFor(sent, CHILD).filter((p) => p.actions !== undefined)).toHaveLength(1);
+    });
+  }
+
+  it('the stamp is read off the run the mark names: an attributed wave-2 run over an unattributed wave 1 still releases (D-5531)', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    const f = fixture({ push, sessions: [`project-a/${CHILD}`, `project-b/${FAR}`] });
+    const wave1 = dispatch(f, CHILD, FAR, 'project-a');
+    f.coord.db.prepare('UPDATE runs SET unattributed = 1 WHERE id = ?').run(wave1);
+    const wave2 = f.coord.openRun({
+      program: 'prog', title: 'Prog', project: 'project-a', wave: 2, waveOf: null, claimedBy: FAR, coordProject: 'project-b',
+    }) as { id: number };
+    f.coord.setSession(wave2.id, CHILD);
+    f.child(CHILD, wave1);
+    await f.tick();
+    f.writeAsk(CHILD, ENVELOPE);
+    f.showMenu(CHILD);
+    await f.tick();
+    expect(asksRows(f)).toEqual([expect.objectContaining({ parentId: 'operator', state: 'released', releaseReason: 'run-unattributed' })]);
+    expect(mailTo(f, FAR)).toBe(0);
+  });
 });
 
 // D-5294, D-5295 (plan docs/superpowers/plans/2026-10-17-coordinator-first-routing.md, Task 6; spec §5.4, §6.7).
@@ -1159,7 +1239,7 @@ describe("the parent's ask brief (D-5294, D-5295)", () => {
     const push = { notify: async (_p: PushPayload) => {} };
     const f = fixture({ push, sessions: [`project-a/${CHILD}`] });
     const run = f.coord.openRun({
-      program: 'prog', title: 'Prog', project: 'project-a', wave: 1, waveOf: null, claimedBy: PARENT,
+      program: 'prog', title: 'Prog', project: 'project-a', wave: 1, waveOf: null, claimedBy: PARENT, coordProject: 'project-a',
     }) as { id: number };
     f.coord.setSession(run.id, CHILD); f.child(CHILD, run.id);
     await f.tick();                                                   // priming
