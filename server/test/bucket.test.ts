@@ -596,7 +596,7 @@ describe('a Stop that leaves delegated work running (D-5231)', () => {
       branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
       hookState: 'done', askSummary: null, subagents: null, background: null, lastEnd: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'working', bucketSince: 1000,
       unmeasured: [], statusUnmeasured: false, lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null,
-      started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: null,
+      started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, role: 'coordinator', releasedFrom: null,
     };
     const cached = JSON.parse(JSON.stringify(row)) as Record<string, unknown>;
     delete cached['background'];
@@ -704,5 +704,81 @@ describe('a Stop that leaves delegated work running (D-5231)', () => {
       expect(row.background).toEqual({ count: 2, kinds: ['workflow'] });
       expect(row.bucket).toBe('working');
     });
+  });
+});
+
+// ── `agent-events-keep-the-main-state` (D-5232; spec §5.2) ──
+// The pair of halves, end to end: the real hook writes a Stop that leaves two subagents running, then three agent
+// PostToolUse events behind the server's word `hook-main-state-v1` (written the way Task 9b's writers write it). The
+// carry keeps the Stop's `done` and the delegated pair, and Task 1's `!delegated` rung holds the row `working`
+// throughout over a live `busy` older than the Stop. Without the carry each agent event wrote `working` (the flap);
+// without the rung the carried `done` would read idle.
+describe('a carried done stands through delegated work, and the rung holds it working (D-5232)', () => {
+  const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
+  const FIVE = path.resolve(__dirname, 'fixtures/hook/stop-bg-five-kinds.json');
+  const ID = 'lane-a-project-a';
+  const UUID = '00000000-0000-4000-8000-000000000001';
+  const GENERATION = '0189abcd-1234-5678-9abc-0123456789ab';
+  const ROSTER = { version: 1, accounts: [{
+    id: 'lane-a', label: 'lane-a', configDirSuffix: '.lane-a',
+    exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic',
+  }] };
+  const subagent = (id: string): Record<string, unknown> =>
+    ({ id, type: 'subagent', status: 'running', description: 'fixture agent', agent_type: 'general-purpose' });
+
+  it('a Stop and three agent PostToolUse events: hook done/Stop, background 2, bucket working each time', async () => {
+    const home = mkTmp('ccrc-carry-');
+    seedRoster(home, ROSTER);
+    const reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    const fields = { wrapper: 'lane-a', project: 'project-a', workdir: '/data/projects/project-a', uuid: UUID, started: '1', generation: GENERATION };
+    for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${ID}.${k}`), v);
+    const bin = path.join(home, 'bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(path.join(bin, 'tmux'), `#!/bin/sh\necho "cc-${ID}"\n`, { mode: 0o755 });
+    mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    writeFileSync(path.join(home, '.ccrc', SERVER_CAPS_FILE), renderServerCaps(['dispatch-live-gate-v1', 'hook-main-state-v1'], Math.floor(Date.now() / 1000)));
+    const hook = (payload: Record<string, unknown>): void => {
+      execFileSync('bash', [HOOK], {
+        input: JSON.stringify(payload), encoding: 'utf8',
+        env: { ...process.env, HOME: home, PATH: `${bin}:${process.env['PATH'] ?? ''}`, TMUX_PANE: '%1',
+          CLAUDE_CODE_SESSION_ID: UUID, CLAUDE_PID: '40613', CCRC_SESSION_GENERATION: GENERATION },
+      });
+    };
+    const five = JSON.parse(readFileSync(FIVE, 'utf8')) as Record<string, unknown>;
+    hook({ ...five, background_tasks: [subagent('a0000000000000001'), subagent('a0000000000000002')] });
+    const first = await readHookStateRawMeasured(localIO, reg, ID, UUID);
+    if (!first.ok) throw new Error(`the hook wrote no readable hookstate: ${first.reason}`);
+    const stopAt = first.state.updatedAt;
+    mkdirSync(path.join(home, '.lane-a', 'sessions'), { recursive: true });
+    writeFileSync(path.join(home, '.lane-a', 'sessions', '40613.json'), JSON.stringify({
+      pid: 40613, sessionId: UUID, cwd: '/data/projects/project-a',
+      status: 'busy', statusUpdatedAt: stopAt - 60_000, version: '2.1.296',
+    }));
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return { code: args.includes(`=cc-${ID}:`) ? 0 : 1, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const agentPost = {
+      session_id: UUID, transcript_path: `/rig/fixhome/cfg/projects/-rig-repo/${UUID}.jsonl`,
+      cwd: '/rig/repo/.claude/worktrees/agent-a0000000000000001', prompt_id: '00000000-0000-4000-8000-0000000000a1',
+      permission_mode: 'default', agent_id: 'a0000000000000001', agent_type: 'general-purpose', effort: { level: 'medium' },
+      hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'true', description: 'fixture' },
+      tool_response: { stdout: '', stderr: '', interrupted: false, isImage: false }, tool_use_id: 'toolu_rig000002',
+    };
+    for (let i = 0; i <= 3; i++) {
+      if (i > 0) hook(agentPost);
+      const raw = await readHookStateRawMeasured(localIO, reg, ID, UUID);
+      if (!raw.ok) throw new Error(`unreadable hookstate after event ${i}: ${raw.reason}`);
+      expect(raw.state, `after ${i} agent events`).toMatchObject({ state: 'done', event: 'Stop', updatedAt: stopAt });
+      const fleet = await assembleFleet(localIO, cfg, new Tmux(run), Math.floor(Date.now() / 1000),
+        undefined, undefined, undefined, undefined, new Map([[ID, raw.state]]));
+      const row = fleet.find((x) => x.id === ID)!;
+      expect(row.status, `after ${i} agent events`).toBe('busy');
+      expect(row.background, `after ${i} agent events`).toEqual({ count: 2, kinds: ['subagent'] });
+      expect(row.bucket, `after ${i} agent events`).toBe('working');
+    }
   });
 });

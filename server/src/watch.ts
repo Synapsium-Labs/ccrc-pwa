@@ -381,11 +381,12 @@ function stallHookAskOf(raw: HookStateRawRead): HookAskFact {
   return 'questions' in raw.state.ask ? { kind: 'ask', at: raw.state.updatedAt } : { kind: 'approval', at: raw.state.updatedAt };
 }
 
-/** The raw hookstate as the frozen and delegates steps read it (`HookRawFact`): the identity and the event are
- *  carried, and L1 judges them. */
+/** The raw hookstate as the frozen and delegates steps read it (`HookRawFact`): the identity, the event and the
+ *  additive `aliveAt` (D-5232: subagent activity, which the two clocks read) are carried, and L1 judges them. */
 function stallHookFactOf(raw: HookStateRawRead): HookRawFact {
   return raw.ok
-    ? { ok: true, updatedAt: raw.state.updatedAt, event: raw.state.event, sessionId: raw.sessionId, identity: raw.identity }
+    ? { ok: true, updatedAt: raw.state.updatedAt, event: raw.state.event, sessionId: raw.sessionId, identity: raw.identity,
+      ...(raw.aliveAt === undefined ? {} : { aliveAt: raw.aliveAt }) }
     : { ok: false, reason: raw.reason };
 }
 

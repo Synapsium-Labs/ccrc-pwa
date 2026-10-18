@@ -3542,6 +3542,29 @@ hs_unreadable=0
 # emitted once per new context, so a counter carried across a `/clear` would
 # credit context N+1's card with context N's act.
 if [[ "$event" == SessionStart && "$src" != resume ]]; then gq=0; gd=0; cp=0; cc=0; fi
+# THE ROSTER'S RESETS AND PRUNES (D-5232; not gated: they change no existing field's meaning). Every SessionStart that
+# reaches here empties it: `startup`, `clear`, `resume` and a source-less start are a new process, whose agents died with
+# the old one; `compact` exited in its arm (D-306), so a compaction, which kills no agent, keeps it. At a main Stop
+# (always the main thread; a subagent's own end is SubagentStop): a measured `bg` of 0 (Claude Code lists every running
+# or pending backgrounded task [B]) empties it; a `bg` of 1 to 8 whose ids were all kept (`bgi` holds at most eight, each
+# on the id rule) cuts it to the listed ids, but ONLY when every delegated task the Stop lists is a `subagent` (`bgdk`
+# empty or exactly `subagent`): a subagent's task id equals its SubagentStart `agent_id` in every committed capture
+# (2.1.280 to 2.1.292, `server/test/fixtures/delegation/*/agent-iso-bg.json` [M]), and no capture shows a teammate's,
+# a cloud session's or an unseen kind's, while a workflow's agents are not listed one by one. Anything else (`bg` -1
+# included) leaves it alone. Entries with no `id` (an older hook's) do not survive a prune.
+if [[ "$event" == SessionStart ]]; then subs="[]"; fi
+if [[ "$event" == Stop && -z "$paid" && "$subs" != "[]" && "$bg" =~ ^[0-9]+$ ]]; then
+  if (( bg == 0 )); then
+    subs="[]"
+  elif (( bg <= 8 )) && [[ "$bgd" =~ ^[0-9]+$ && ( "$bgdk" == "" || "$bgdk" == subagent ) ]]; then
+    bgn=0; bgrest="$bgi"
+    while [[ -n "$bgrest" ]]; do bgn=$((bgn + 1)); [[ "$bgrest" == *,* ]] && bgrest="${bgrest#*,}" || bgrest=""; done
+    if (( bgn == bg )); then
+      subs=$(jq -c --arg ids "$bgi" '($ids | split(",")) as $l | map(select((.id? // null) as $i | ($i | type) == "string" and any($l[]; . == $i)))' \
+        <<<"$subs" 2>/dev/null) || subs="[]"
+    fi
+  fi
+fi
 if [[ -n "$gcmd" && "$gcmd" =~ $GRAPH_QUERY_RE ]]; then gq=$((gq + 1)); fi
 # THE PROXIMATE ACT and THE DISTAL ONE, counted apart. `peers list` is the act
 # the co-tenant card prescribes; `claims take` is what that answer's own rule 0
@@ -4193,111 +4216,6 @@ fi
 waitby=""
 [[ "$state" == waiting && -n "$paid" ]] && waitby="subagent"
 
-# `a-carried-wait-keeps-its-stamp` (D-4041, review 397 F3; the race is that review's artifact 2, "P1 exception 1").
-# ONE fresh `jq` read of the file at the carry point answers every question the two subagent arms below ask: its state,
-# who raised the wait, the ask, `interrupted`, and the wait's own `updatedAt` and `event`. It is a read of the file as it
-# stands NOW, not of `prev_state`, which the prefilter's `read -r prev_state` took far above: a main-thread answer
-# landing in between must not be overwritten by a `waiting` decided from the old read. Lines, not `@tsv` (see its note).
-# `state` prints only when it is one of the three words this hook writes (an exact match, so a corrupt value is never
-# healed into one: `"wait\ning"` is empty here, not `waiting`); `event` is cut to letters, and `updatedAt` prints its
-# floor when it is a number. WHAT MAKES A STAMP KEEPABLE is the `^[0-9]+$` test in `_hook_keep_stamp` below, and only that
-# (a negative prints with its `-` and fails it; mutation N2 pins it). The `type == "number"` here is POSITIONAL, not a
-# guard: `floor` on a string, array, object, null or boolean aborts the jq program, which would blank every line printed after
-# `updatedAt` (today only `event`, unused while `fr_upd` is empty); it keeps a later field safe if one is ever added.
-# A jq that fails on its first output (a root that is neither an object nor null, or an unparseable file) prints nothing: every field comes up
-# empty, which both arms read as "nothing to carry". Lines printed before a later error still come out.
-# `background-aware-working` (D-5231): two more lines, appended LAST, read D-5231's delegated pair for the subagent arm's
-# carry: `bgDelegated` prints only as a non-negative integer, `bgDelegatedKinds` only as a string of at most 200 bytes of
-# `a-z`, `_`, `-` and `,` (no regex, so a jq without Oniguruma reads it too); either one failing carries neither (the
-# count is dropped with a malformed kinds value, and the kinds with a malformed count).
-fr_state="" fr_by="" fr_ask="" fr_int="" fr_upd="" fr_ev="" fr_bgd="" fr_bgdk=""
-_hook_fresh_read() {
-  fr_state="" fr_by="" fr_ask="" fr_int="" fr_upd="" fr_ev="" fr_bgd="" fr_bgdk=""
-  { read -r fr_state; read -r fr_by; read -r fr_ask; read -r fr_int; read -r fr_upd; read -r fr_ev; read -r fr_bgd; read -r fr_bgdk; } < <(jq -r \
-    'def keep(f): explode | map(select(f)) | implode; def alpha: (. >= 65 and . <= 90) or (. >= 97 and . <= 122);
-     (.state | if . == "working" or . == "waiting" or . == "done" then . else "" end),
-     (if .waitBy == "subagent" then "subagent" else "" end),
-     (.ask // null | tojson),
-     (if .interrupted == true then "true" else "false" end),
-     (.updatedAt | if type == "number" then floor | tostring else "" end),
-     (.event | if type == "string" then keep(alpha) else "" end),
-     (.bgDelegated | if type == "number" and . >= 0 and . == floor then floor | tostring else "" end),
-     (.bgDelegatedKinds | if type == "string" and length <= 200 and (explode | all(. == 44 or . == 45 or . == 95 or (. >= 97 and . <= 122))) then "k" + . else "" end)' "$f" 2>/dev/null)
-  # Both or neither: a valid kinds value arrives behind a `k` marker (a measured zero's "" is valid and prints "k"),
-  # so a failed one (empty, no marker) is told apart from it and clears the count too.
-  if [[ "$fr_bgd" =~ ^[0-9]+$ && "$fr_bgdk" == k* ]]; then fr_bgdk="${fr_bgdk#k}"; else fr_bgd="" fr_bgdk=""; fi
-}
-# The stamp a carried wait keeps. A MAIN-thread wait (fresh state `waiting`, not raised by a subagent) that a subagent
-# event writes over keeps the file's own `updatedAt` and `event` (the wait's START, which the attention bucket, the ask
-# row's `askAt` and the stall watch's hold 2a read) and gains the additive `aliveAt` = now (the liveness the aged door,
-# `hookstate.ts`, reads, so a long wait with subagents working stays fresh). Every other write has no `aliveAt`, and a
-# file whose `updatedAt` is negative, is not a number (null, a boolean, a string), or is a value jq prints in exponent
-# form (such as 1e16 or 1e300: which values print that way follows jq's number formatting, not a size cut) fails the
-# `^[0-9]+$` test below and keeps nothing: it is written as before, with a fresh stamp.
-# A non-negative fractional value keeps its floor (a negative one floors to a negative and fails that test): the hook
-# writes integer milliseconds only, so one is a foreign or corrupt file, and the floor moves the stamp by under 1 ms.
-w_ev="" w_upd="" w_alive=""
-_hook_keep_stamp() {
-  [[ "$fr_state" == waiting && "$fr_by" != subagent && "$fr_upd" =~ ^[0-9]+$ ]] || return 0
-  w_upd="$fr_upd" w_ev="$fr_ev" w_alive=$(_hook_epoch_ms)
-}
-
-if [[ "$event" == SubagentStart || "$event" == SubagentStop ]]; then
-  name=$(jq -r '.agent_name // .subagent_name // .agent_type // "subagent"' <<<"$payload" 2>/dev/null) || name="subagent"
-  now=$(_hook_epoch_ms)
-  if [[ "$event" == SubagentStart ]]; then
-    subs=$(jq -c --arg n "$name" --argjson t "$now" \
-      '(. + [{name:$n, startedAt:$t}]) | .[-32:]' <<<"$subs" 2>/dev/null) || subs="[]"
-  else
-    subs=$(jq -c --arg n "$name" 'del(.[ (map(.name) | index($n)) // empty ])' <<<"$subs" 2>/dev/null) || subs="[]"
-  fi
-  # Session state untouched: keep the state the file holds (or skip entirely when no state was ever written, or the file
-  # is gone or unreadable by now — a subagent event before any turn is inert). `prev_state` is only the no-fork prefilter.
-  # A stored state that is not one of the hook's three words (a corrupt file) reads empty at the fresh read and exits
-  # there too, which ALSO skips the subagent-list update above: at base that update was written over the corrupt state
-  # (a multi-line one mangled by the prefilter) (D-4041).
-  [[ -n "$prev_state" ]] || exit 0
-  _hook_fresh_read
-  [[ -n "$fr_state" ]] || exit 0
-  state="$fr_state"
-  ask_json="${fr_ask:-null}"
-  [[ "$fr_int" == true ]] && interrupted="true" || interrupted="false"
-  waitby="$fr_by"
-  _hook_keep_stamp
-  # D-5231: an agent event keeps the delegated pair the main Stop recorded (the carry); nothing else writes it.
-  if [[ -n "$fr_bgd" ]]; then bgd="$fr_bgd" bgdk="$fr_bgdk"; else bgd="" bgdk=""; fi
-fi
-
-# `subagent-tool-event-keeps-the-waiting-ask` (D-4039, finding 4063): a subagent's PreToolUse/PostToolUse never ends the
-# main thread's wait. It reaches the case above as `working` with a null ask, and written as is it erased a question the
-# main thread asked 3.1 s earlier, before any pane tick could mint the ask row. Only `waiting` is carried, with its ask and
-# `interrupted`, and every other state keeps today's write. (A subagent's PermissionRequest is not a tool event of this
-# kind: it still replaces a main question with its own approval, as it always did — Review Focus 1.)
-# `a-carried-wait-keeps-its-stamp` (D-4041): the carry keeps the wait's `updatedAt` and `event` and adds `aliveAt`
-# (above). The reader that needs the stamp to MOVE is the aged door (`hookstate.ts`), and it reads `aliveAt` for that.
-# `carry-only-a-main-thread-wait` (task review, Important 1): a wait that a subagent raised itself (`waitBy` stored
-# as "subagent") is NOT carried, so that subagent's own approved dialog ends at its next tool event as it always did.
-# `prev_state` is the no-fork prefilter only; the decision is made on the one fresh read, on a subagent's tool event.
-if [[ -n "$paid" && "$prev_state" == waiting && ( "$event" == PreToolUse || "$event" == PostToolUse ) ]]; then
-  _hook_fresh_read
-  if [[ "$fr_state" == waiting && "$fr_by" != subagent ]]; then
-    state="waiting"
-    ask_json="${fr_ask:-null}"
-    [[ "$fr_int" == true ]] && interrupted="true" || interrupted="false"
-    waitby=""
-    _hook_keep_stamp
-  fi
-fi
-
-# Transitions to working/done clear the ask: an answered question must not
-# stay sticky on the sheet.
-[[ "$state" == working || "$state" == done ]] && { [[ "$event" == SubagentStart || "$event" == SubagentStop ]] || ask_json="null"; }
-
-# D-5231: the delegated pair is written by a main Stop (from an array) and carried by a subagent event, and by nothing
-# else: a new main turn's first write leaves it out. A plain test, no fork, so the hot path pays nothing.
-[[ "$event" == Stop || "$event" == SubagentStart || "$event" == SubagentStop ]] || { bgd="" bgdk=""; }
-bgd="${bgd:-}" bgdk="${bgdk:-}"
-
 # `_hook_server_cap <word>` (D-5232's gate, plan 2026-10-16 Task 9b; spec §6.1): 0 iff the server this box talks to
 # advertises <word>, measured. `~/.ccrc/server-caps` is written every minute by `ccd-update-sync` on a `fleet` node and
 # by the server itself on a `server` or `both` node. It counts only when it is EXACTLY three `\n`-terminated lines
@@ -4321,7 +4239,213 @@ _hook_server_cap() {   # <word> -> 0 advertised and current; 1 otherwise
   (( at <= now && now - at <= 180 )) || return 1
   [[ " ${l2#caps} " == *" $want "* ]]
 }
+# `hook-main-state-v1` (D-5232): read once, and only for an agent event (`$paid`); a main event never pays for it.
+hms=""
+[[ -n "$paid" ]] && _hook_server_cap hook-main-state-v1 && hms=1
 
+# `a-carried-wait-keeps-its-stamp` (D-4041, review 397 F3; the race is that review's artifact 2, "P1 exception 1").
+# ONE fresh `jq` read of the file at the carry point answers every question the two subagent arms below ask: its state,
+# who raised the wait, the ask, `interrupted`, and the wait's own `updatedAt` and `event`. It is a read of the file as it
+# stands NOW, not of `prev_state`, which the prefilter's `read -r prev_state` took far above: a main-thread answer
+# landing in between must not be overwritten by a `waiting` decided from the old read. Lines, not `@tsv` (see its note).
+# `state` prints only when it is one of the three words this hook writes (an exact match, so a corrupt value is never
+# healed into one: `"wait\ning"` is empty here, not `waiting`); `event` is cut to letters, and `updatedAt` prints its
+# floor when it is a number. WHAT MAKES A STAMP KEEPABLE is the `^[0-9]+$` test in `_hook_keep_stamp` below, and only that
+# (a negative prints with its `-` and fails it; mutation N2 pins it). The `type == "number"` here is POSITIONAL, not a
+# guard: `floor` on a string, array, object, null or boolean aborts the jq program, which would blank every line printed after
+# `updatedAt` (today only `event`, unused while `fr_upd` is empty); it keeps a later field safe if one is ever added.
+# A jq that fails on its first output (a root that is neither an object nor null, or an unparseable file) prints nothing: every field comes up
+# empty, which both arms read as "nothing to carry". Lines printed before a later error still come out.
+# `background-aware-working` (D-5231): two more lines, appended LAST, read D-5231's delegated pair for the subagent arm's
+# carry: `bgDelegated` prints only as a non-negative integer, `bgDelegatedKinds` only as a string of at most 200 bytes of
+# `a-z`, `_`, `-` and `,` (no regex, so a jq without Oniguruma reads it too); either one failing carries neither (the
+# count is dropped with a malformed kinds value, and the kinds with a malformed count).
+# `agent-events-keep-the-main-state` (D-5232): five more lines, appended LAST, read the stored `waitPrev` (the main state a
+# subagent's own wait replaced) on the same rules as the five fields above: its state only as one of the three words,
+# its event cut to letters, its stamp as a floor, its ask as JSON, its flag as true/false. A `waitPrev` that is not an
+# object prints every line empty (the ask "null", the flag "false"), which the restore reads as "nothing to restore".
+fr_state="" fr_by="" fr_ask="" fr_int="" fr_upd="" fr_ev="" fr_bgd="" fr_bgdk=""
+fr_wps="" fr_wpe="" fr_wpu="" fr_wpa="" fr_wpi=""
+_hook_fresh_read() {
+  fr_state="" fr_by="" fr_ask="" fr_int="" fr_upd="" fr_ev="" fr_bgd="" fr_bgdk=""
+  fr_wps="" fr_wpe="" fr_wpu="" fr_wpa="" fr_wpi=""
+  { read -r fr_state; read -r fr_by; read -r fr_ask; read -r fr_int; read -r fr_upd; read -r fr_ev; read -r fr_bgd; read -r fr_bgdk
+    read -r fr_wps; read -r fr_wpe; read -r fr_wpu; read -r fr_wpa; read -r fr_wpi; } < <(jq -r \
+    'def keep(f): explode | map(select(f)) | implode; def alpha: (. >= 65 and . <= 90) or (. >= 97 and . <= 122);
+     (.state | if . == "working" or . == "waiting" or . == "done" then . else "" end),
+     (if .waitBy == "subagent" then "subagent" else "" end),
+     (.ask // null | tojson),
+     (if .interrupted == true then "true" else "false" end),
+     (.updatedAt | if type == "number" then floor | tostring else "" end),
+     (.event | if type == "string" then keep(alpha) else "" end),
+     (.bgDelegated | if type == "number" and . >= 0 and . == floor then floor | tostring else "" end),
+     (.bgDelegatedKinds | if type == "string" and length <= 200 and (explode | all(. == 44 or . == 45 or . == 95 or (. >= 97 and . <= 122))) then "k" + . else "" end),
+     (.waitPrev | if type == "object" then (.state | if . == "working" or . == "waiting" or . == "done" then . else "" end) else "" end),
+     (.waitPrev | if type == "object" then (.event | if type == "string" then keep(alpha) else "" end) else "" end),
+     (.waitPrev | if type == "object" then (.updatedAt | if type == "number" then floor | tostring else "" end) else "" end),
+     (.waitPrev | if type == "object" then (.ask // null | tojson) else "null" end),
+     (.waitPrev | if type == "object" and .interrupted == true then "true" else "false" end)' "$f" 2>/dev/null)
+  # Both or neither: a valid kinds value arrives behind a `k` marker (a measured zero's "" is valid and prints "k"),
+  # so a failed one (empty, no marker) is told apart from it and clears the count too.
+  if [[ "$fr_bgd" =~ ^[0-9]+$ && "$fr_bgdk" == k* ]]; then fr_bgdk="${fr_bgdk#k}"; else fr_bgd="" fr_bgdk=""; fi
+}
+# The stamp a carried wait keeps. A MAIN-thread wait (fresh state `waiting`, not raised by a subagent) that a subagent
+# event writes over keeps the file's own `updatedAt` and `event` (the wait's START, which the attention bucket, the ask
+# row's `askAt` and the stall watch's hold 2a read) and gains the additive `aliveAt` = now (the liveness the aged door,
+# `hookstate.ts`, reads, so a long wait with subagents working stays fresh). Every other write has no `aliveAt`, and a
+# file whose `updatedAt` is negative, is not a number (null, a boolean, a string), or is a value jq prints in exponent
+# form (such as 1e16 or 1e300: which values print that way follows jq's number formatting, not a size cut) fails the
+# `^[0-9]+$` test below and keeps nothing: it is written as before, with a fresh stamp.
+# A non-negative fractional value keeps its floor (a negative one floors to a negative and fails that test): the hook
+# writes integer milliseconds only, so one is a foreign or corrupt file, and the floor moves the stamp by under 1 ms.
+w_ev="" w_upd="" w_alive=""
+_hook_keep_stamp() {
+  [[ "$fr_state" == waiting && "$fr_by" != subagent && "$fr_upd" =~ ^[0-9]+$ ]] || return 0
+  w_upd="$fr_upd" w_ev="$fr_ev" w_alive=$(_hook_epoch_ms)
+}
+
+# `agent-events-keep-the-main-state` (D-5232): the stamp an agent event keeps behind the server's word. Over any main
+# state (and over a subagent's own wait, at a SubagentStart or SubagentStop) the file's `updatedAt` and `event` stand,
+# and `aliveAt` = now is the liveness the aged door and the stall watch's two clocks read. The stamp is keepable on
+# exactly `_hook_keep_stamp`'s rule (`^[0-9]+$`); a file that fails it keeps nothing and the event writes as before.
+_hook_keep_main_stamp() {
+  [[ -n "$fr_state" && "$fr_upd" =~ ^[0-9]+$ ]] || return 1
+  w_upd="$fr_upd" w_ev="$fr_ev" w_alive=$(_hook_epoch_ms)
+}
+# `waitPrev`, as written: rebuilt from the fresh read's validated lines (a word, letters, digits, a JSON value, a flag),
+# so no byte of it is quoted from the file unchecked. `wp_out` is what the write below stores ("" = no key).
+wp_out=""
+_hook_wait_prev_kept() {   # the stored waitPrev, carried as it stands, when it reads whole
+  [[ -n "$fr_wps" && "$fr_wpu" =~ ^[0-9]+$ ]] || return 1
+  wp_out="{\"state\":\"$fr_wps\",\"event\":\"$fr_wpe\",\"updatedAt\":$fr_wpu,\"ask\":${fr_wpa:-null},\"interrupted\":${fr_wpi:-false}}"
+}
+# `hs_skip` (D-5232): this run writes no hookstate, and still reaches the one print. An agent event with no file to
+# carry (absent, unreadable, or a state that is not one of the hook's words) is inert for the file, never an exit: a
+# subagent's PreToolUse keeps its deny or nudge (`pre_json`) on a session that has no hookstate yet.
+hs_skip=""
+# `hcarry` (D-5232): this write is the carry, so it keeps the ask and D-5231's pair rather than clearing them.
+hcarry=""
+
+if [[ "$event" == SubagentStart || "$event" == SubagentStop ]]; then
+  # THE ROSTER, keyed by `agent_id` (D-5232; not gated: it changes no existing field's meaning). The id is the
+  # payload's `agent_id`, kept only when it is wholly `[A-Za-z0-9_-]{1,64}` (no regex: a jq without Oniguruma reads it
+  # too). A Start adds `{name, startedAt, id}` unless that id is listed; a Stop removes the entry with its id and is a
+  # no-op when none matches (a side agent's Stop). A payload with no id that passes the rule (no capture shows one: an
+  # older harness's shape) keeps today's name-keyed write exactly (D-5375): `{name, startedAt}` added, the first name match
+  # removed. Its entries carry no id, so the first prune drops them.
+  { read -r name; read -r aid; } < <(jq -r 'def keep(f): explode | map(select(f)) | implode;
+    (.agent_name // .subagent_name // .agent_type // "subagent" | tostring | explode | map(if . == 10 or . == 13 then 32 else . end) | implode),
+    ((.agent_id // "") | tostring | . as $r | keep((. >= 65 and . <= 90) or (. >= 97 and . <= 122) or (. >= 48 and . <= 57) or . == 95 or . == 45)
+      | if . == $r and length >= 1 and length <= 64 then . else "" end)' <<<"$payload" 2>/dev/null) || { name="subagent" aid=""; }
+  name="${name:-subagent}"
+  now=$(_hook_epoch_ms)
+  if [[ -n "$aid" && "$event" == SubagentStart ]]; then
+    subs=$(jq -c --arg n "$name" --argjson t "$now" --arg id "$aid" \
+      'if any(.[]; (.id? // null) == $id) then . else (. + [{name:$n, startedAt:$t, id:$id}]) end | .[-32:]' <<<"$subs" 2>/dev/null) || subs="[]"
+  elif [[ -n "$aid" ]]; then
+    subs=$(jq -c --arg id "$aid" 'map(select((.id? // null) != $id))' <<<"$subs" 2>/dev/null) || subs="[]"
+  elif [[ "$event" == SubagentStart ]]; then
+    subs=$(jq -c --arg n "$name" --argjson t "$now" \
+      '(. + [{name:$n, startedAt:$t}]) | .[-32:]' <<<"$subs" 2>/dev/null) || subs="[]"
+  else
+    subs=$(jq -c --arg n "$name" 'del(.[ (map(.name) | index($n)) // empty ])' <<<"$subs" 2>/dev/null) || subs="[]"
+  fi
+  # Session state untouched: keep the state the file holds, or write nothing when no state was ever written, the file
+  # is gone or unreadable by now, or it holds a state that is not one of the hook's three words (a corrupt file) —
+  # which ALSO skips the roster update above (D-4041). `prev_state` is only the no-fork prefilter. No write is not an
+  # exit (D-5232): the tail's print is still reached.
+  if [[ -z "$prev_state" ]]; then hs_skip=1; else
+    _hook_fresh_read
+    if [[ -z "$fr_state" ]]; then hs_skip=1; else
+      state="$fr_state"
+      ask_json="${fr_ask:-null}"
+      [[ "$fr_int" == true ]] && interrupted="true" || interrupted="false"
+      waitby="$fr_by"
+      if [[ -n "$hms" ]]; then
+        # D-5232, behind the word: the whole main state stands (a subagent's own wait with its `waitPrev` included).
+        _hook_keep_main_stamp || true
+        [[ "$fr_by" == subagent ]] && { _hook_wait_prev_kept || true; }
+      else
+        _hook_keep_stamp
+      fi
+      # D-5231: an agent event keeps the delegated pair the main Stop recorded (the carry); nothing else writes it.
+      if [[ -n "$fr_bgd" ]]; then bgd="$fr_bgd" bgdk="$fr_bgdk"; else bgd="" bgdk=""; fi
+    fi
+  fi
+fi
+
+# `subagent-tool-event-keeps-the-waiting-ask` (D-4039, finding 4063): a subagent's PreToolUse/PostToolUse never ends the
+# main thread's wait. It reaches the case above as `working` with a null ask, and written as is it erased a question the
+# main thread asked 3.1 s earlier, before any pane tick could mint the ask row. Only `waiting` is carried, with its ask and
+# `interrupted`, and every other state keeps today's write. (A subagent's PermissionRequest is not a tool event of this
+# kind: it still replaces a main question with its own approval, as it always did — Review Focus 1.)
+# `a-carried-wait-keeps-its-stamp` (D-4041): the carry keeps the wait's `updatedAt` and `event` and adds `aliveAt`
+# (above). The reader that needs the stamp to MOVE is the aged door (`hookstate.ts`), and it reads `aliveAt` for that.
+# `carry-only-a-main-thread-wait` (task review, Important 1): a wait that a subagent raised itself (`waitBy` stored
+# as "subagent") is NOT carried, so that subagent's own approved dialog ends at its next tool event as it always did.
+# `prev_state` is the no-fork prefilter only; the decision is made on the one fresh read, on a subagent's tool event.
+if [[ -n "$paid" && "$prev_state" == waiting && ( "$event" == PreToolUse || "$event" == PostToolUse ) ]]; then
+  _hook_fresh_read
+  if [[ "$fr_state" == waiting && "$fr_by" != subagent ]]; then
+    state="waiting"
+    ask_json="${fr_ask:-null}"
+    [[ "$fr_int" == true ]] && interrupted="true" || interrupted="false"
+    waitby=""
+    _hook_keep_stamp
+  fi
+fi
+
+# `agent-events-keep-the-main-state` (D-5232; spec §5.2), BEHIND THE SERVER'S WORD (`hms`, above): an agent tool event
+# (PreToolUse other than AskUserQuestion, PostToolUse) never rewrites the main state. It keeps the file's `state`,
+# `event`, `updatedAt`, `ask`, `interrupted` and D-5231's pair, and writes `aliveAt` = now: D-4041's carry generalised
+# from a main-thread wait to every main state, so a Stop's `done` stands through the delegated run it left (the
+# server's `!delegated` rung, its live dispatch gate and its stall clocks are what read it there, which is why the
+# word gates it). A main-thread wait was already carried by the block above, and is left as it took it. Over a wait a
+# SUBAGENT raised (`waitBy:"subagent"`) the event RESTORES the `waitPrev` that wait stored, with `aliveAt`; with no
+# `waitPrev` (an older hook's wait) it writes today's `working`. With no file to carry it writes none (`hs_skip`).
+# Without the word every line here is skipped, and the event writes exactly what it wrote before.
+if [[ -n "$hms" && ( "$event" == PostToolUse || ( "$event" == PreToolUse && "${tool:-}" != AskUserQuestion ) ) \
+      && "$state" != waiting ]]; then
+  if [[ -z "$prev_state" ]]; then hs_skip=1; else
+    [[ "$prev_state" == waiting ]] || _hook_fresh_read   # over a wait, the block above already took the fresh read
+    if [[ -z "$fr_state" ]]; then
+      hs_skip=1
+    elif [[ "$fr_state" == waiting && "$fr_by" == subagent ]]; then
+      if [[ -n "$fr_wps" && "$fr_wpu" =~ ^[0-9]+$ ]]; then
+        state="$fr_wps" ask_json="${fr_wpa:-null}" interrupted="${fr_wpi:-false}" waitby="" hcarry=1
+        w_upd="$fr_wpu" w_ev="$fr_wpe" w_alive=$(_hook_epoch_ms)
+      fi
+    elif _hook_keep_main_stamp; then
+      state="$fr_state" ask_json="${fr_ask:-null}" waitby="" hcarry=1
+      [[ "$fr_int" == true ]] && interrupted="true" || interrupted="false"
+    fi
+    if [[ -n "$hcarry" && -n "$fr_bgd" ]]; then bgd="$fr_bgd" bgdk="$fr_bgdk"; else bgd="" bgdk=""; fi
+  fi
+fi
+# A SUBAGENT'S OWN WAIT (D-5232; the store gated too, D-5374), behind the same word: its AskUserQuestion PreToolUse or PermissionRequest still writes
+# `waiting`, `waitBy:"subagent"` and a fresh stamp (attention needs it), and now stores `waitPrev`, the state, event,
+# stamp, ask and `interrupted` flag it replaced, so its end can restore them. Over a wait a subagent raised, the older
+# `waitPrev` is kept (the main state under both). D-5231's pair stands beside it for the restore to keep (D-5376). A file with
+# no main state to remember stores none.
+if [[ -n "$hms" && "$waitby" == subagent && -n "$prev_state" ]]; then
+  [[ "$event" == PreToolUse && "$prev_state" == waiting ]] || _hook_fresh_read
+  if [[ "$fr_state" == waiting && "$fr_by" == subagent ]]; then
+    _hook_wait_prev_kept || true
+  elif [[ -n "$fr_state" && "$fr_upd" =~ ^[0-9]+$ ]]; then
+    [[ "$fr_int" == true ]] && wp_int=true || wp_int=false
+    wp_out="{\"state\":\"$fr_state\",\"event\":\"$fr_ev\",\"updatedAt\":$fr_upd,\"ask\":${fr_ask:-null},\"interrupted\":$wp_int}"
+  fi
+  if [[ -n "$fr_bgd" ]]; then hcarry=1 bgd="$fr_bgd" bgdk="$fr_bgdk"; fi
+fi
+
+# Transitions to working/done clear the ask: an answered question must not
+# stay sticky on the sheet. (A carried write keeps the ask it carried, D-5232.)
+[[ "$state" == working || "$state" == done ]] && { [[ "$event" == SubagentStart || "$event" == SubagentStop || -n "$hcarry" ]] || ask_json="null"; }
+
+# D-5231: the delegated pair is written by a main Stop (from an array) and carried by a subagent event, and by nothing
+# else: a new main turn's first write leaves it out. A plain test, no fork, so the hot path pays nothing.
+[[ "$event" == Stop || "$event" == SubagentStart || "$event" == SubagentStop || -n "$hcarry" ]] || { bgd="" bgdk=""; }
+bgd="${bgd:-}" bgdk="${bgdk:-}"
 # `compactions-write-no-hookstate` (D-5239, spec §5.8): while the server advertises `dispatch-live-gate-v1` (its
 # dispatch gate reads the live pane, so a `done` standing over a busy compaction can never be `/clear`ed), PreCompact
 # and PostCompact, `auto` and `manual` alike, WRITE NO HOOKSTATE: the file stays byte for byte as it was, which carries
@@ -4333,8 +4457,7 @@ _hook_server_cap() {   # <word> -> 0 advertised and current; 1 otherwise
 # committed `clear-compact-resume` captures, and 2.1.300 on a workstation rig): a typed `/compact` fires PreCompact,
 # a SubagentStop and PostCompact, and NO UserPromptSubmit, so there is no `/compact` prompt arm. With the word not
 # advertised, a compaction writes exactly what it writes today. `hs_skip` is the one flag the write below honours
-# (Task 2's no-file agent event sets it too).
-hs_skip=""
+# (Task 2's no-file agent event sets it too, above; it is initialised there, so it is not reset here).
 if [[ "$event" == PreCompact || "$event" == PostCompact ]] && _hook_server_cap dispatch-live-gate-v1; then hs_skip=1; fi
 
 if [[ -z "$hs_skip" ]]; then
@@ -4345,7 +4468,7 @@ if [[ -z "$hs_skip" ]]; then
     --argjson ask "$ask_json" --argjson subagents "$subs" --argjson graphQueries "$gq" \
     --argjson graphGateDenials "$gd" --arg waitBy "$waitby" --arg aliveAt "$w_alive" \
     --argjson ccrcPeerReads "$cp" --argjson ccrcClaims "$cc" \
-    --arg bgDelegated "$bgd" --arg bgDelegatedKinds "$bgdk" \
+    --arg bgDelegated "$bgd" --arg bgDelegatedKinds "$bgdk" --arg waitPrev "$wp_out" \
     '{v:$v, state:$state, event:$event, sessionId:$sessionId, pid:$pid,
       updatedAt:$updatedAt, ask:$ask, subagents:$subagents, graphQueries:$graphQueries,
       graphGateDenials:$graphGateDenials, ccrcPeerReads:$ccrcPeerReads,
@@ -4353,12 +4476,13 @@ if [[ -z "$hs_skip" ]]; then
      + (if $interrupted then {interrupted:true} else {} end)
      + (if $waitBy == "subagent" then {waitBy:"subagent"} else {} end)
      + (if $aliveAt != "" then {aliveAt: ($aliveAt | tonumber)} else {} end)
-     + (if $bgDelegated != "" then {bgDelegated: ($bgDelegated | tonumber), bgDelegatedKinds: $bgDelegatedKinds} else {} end)') || exit 0
+     + (if $bgDelegated != "" then {bgDelegated: ($bgDelegated | tonumber), bgDelegatedKinds: $bgDelegatedKinds} else {} end)
+     + (if $waitPrev != "" and $waitBy == "subagent" then ((try ($waitPrev | fromjson) catch null) as $w | if ($w | type) == "object" then {waitPrev: $w} else {} end) else {} end)') || exit 0
 
   # 64KB cap: drop the questions envelope before anything else — a truncated
   # envelope is worse than none.
   if (( ${#out} > 65536 )); then
-    out=$(jq -c '.ask = null' <<<"$out" 2>/dev/null) || exit 0
+    out=$(jq -c '.ask = null | if (.waitPrev | type) == "object" then .waitPrev.ask = null else . end' <<<"$out" 2>/dev/null) || exit 0
     (( ${#out} <= 65536 )) || exit 0
   fi
 

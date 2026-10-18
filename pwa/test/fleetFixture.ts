@@ -33,6 +33,6 @@ export const fleetSession = (over: Partial<FleetSession> = {}): FleetSession => 
   bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
   lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null,
   substrate: null, started: true, spawnState: null, ask: null, usage: null,
-  boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: null,
+  boardProject: null, route: null, child: { kind: 'none' }, role: null, releasedFrom: null,
   ...over,
 });

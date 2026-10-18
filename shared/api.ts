@@ -53,6 +53,40 @@ export type ChildMark =
  *  calls. Anything else in a marker is `unreadable`, never a child. */
 export const CHILD_RUN_ID = /^[1-9][0-9]{0,9}$/;
 
+/** What a session IS to the routing (coordinator-first spec §8, D-5301): every
+ *  session the operator creates is its project's `coordinator`; a workspace a
+ *  dispatch minted is a `child`. DERIVED, never marked: `.child` is written only
+ *  by a dispatch (`ws-add --no-rc --child`), at the only moment worker-ness is
+ *  known, so every operator path — the PWA "+", the create sheets, the CLI — is
+ *  covered with no new marker, and a recycled slug cannot inherit a stale role
+ *  because `.child` is cleared with its row. Coordinator-ness is not parenthood:
+ *  a run still binds a parent (spec §4). */
+export type SessionRole = 'coordinator' | 'child';
+
+/** Derived-enumeration discipline (`SESSION_LIFECYCLE_MAP`'s): a member added
+ *  to the union with no key here fails LOUDLY (TS2741), and a stray key fails
+ *  the other way (TS2353). */
+const SESSION_ROLE_MAP: Record<SessionRole, true> = { coordinator: true, child: true };
+export const SESSION_ROLES: readonly SessionRole[] = Object.keys(SESSION_ROLE_MAP) as SessionRole[];
+
+/** The only way to narrow an untrusted value to a `SessionRole` — the
+ *  snapshot-revival path reads one out of a cache an older or newer build
+ *  wrote. The CONSTANT is cast, never the input (`isSessionLifecycle`'s rule). */
+export function isSessionRole(v: unknown): v is SessionRole {
+  return typeof v === 'string' && (SESSION_ROLES as readonly string[]).includes(v);
+}
+
+/** THE ONE DERIVATION of the role, from the registry's reading of `.child` and
+ *  nothing else. `unreadable` is a child: the marker file exists, which is what
+ *  the start card (`session-hook.sh`'s `_hook_role_card`) tests, so the badge
+ *  and the card agree on the `.child` axis, and ONLY that axis: a session whose
+ *  `.child` exists, parsed or not, is a child to both, and a dispatched child is
+ *  never told, or shown, that it coordinates. The card has further silences the
+ *  badge does not read: a held row (`$REG/<id>.hold`), the card-off switch, and
+ *  a `resume`/`fork` start. So a held row with no `.child` shows the coordinator
+ *  badge although it was never given the card; both are as spec §8 asks. */
+export const sessionRoleOf = (child: ChildMark): SessionRole => (child.kind === 'none' ? 'coordinator' : 'child');
+
 export interface FleetSession {
   id: string; wrapper: string; home: string; project: string; workdir: string;
   /** The worktree slug when this session is a workspace; null for a project's
@@ -507,6 +541,21 @@ export interface FleetSession {
    * `none`. No `FLEET_PROTO` bump.
    */
   readonly child: ChildMark;
+
+  /**
+   * What this session is to the routing (D-5301, coordinator-first spec §8):
+   * `sessionRoleOf(child)` above, the one derivation, computed by
+   * `server/src/fleet.ts` from the registry's `.child` reading. The PWA shows a
+   * quiet "coordinator" badge from it before any run exists.
+   *
+   * ADDITIVE, absence-permits: `null` is "this record does not say" — an older
+   * persisted `FleetSession[]` revives with `null` (`reviveFleetSession`), and
+   * a live frame from an older server arrives with the key absent, so a PWA
+   * reader treats `undefined` and `null` alike as no role, and shows no badge.
+   * It is never re-derived from a revived `child`, which an older snapshot
+   * defaults to `none`: that would badge a pre-marker child a coordinator.
+   */
+  readonly role: SessionRole | null;
 
   /** Where this workspace was RELEASED from, or `null` — `ReleasedFrom`, at the end of this file, carries the
    *  contract; `releasedFromOf` there is the field's one reader. */
@@ -2949,6 +2998,18 @@ const reviveChildMark = (o: RawObj, k: string): ChildMark => {
   throw new MalformedSnapshot(k);
 };
 
+/** `FleetSession.role`'s persistence contract (D-5301) — THE ONE READER of the
+ *  key off raw JSON. Absent or null → `null`: a snapshot written before the
+ *  field says nothing about the role. Present → one `SessionRole`, or the WHOLE
+ *  session is rejected (`reviveChildMark`'s stance): a value this build cannot
+ *  name is never laundered into either role. */
+const reviveSessionRole = (o: RawObj, k: string): SessionRole | null => {
+  const v = o[k];
+  if (v === undefined || v === null) return null;
+  if (isSessionRole(v)) return v;
+  throw new MalformedSnapshot(k);
+};
+
 /** Shape only: `class` is a string the SERVER derived (see `SessionUsage`);
  *  membership is not re-checked here because this file imports no class list. */
 function reviveUsage(o: Record<string, unknown>, key: string): SessionUsage | null {
@@ -3160,6 +3221,7 @@ export function reviveFleetSession(raw: unknown, unnamedSpawnWord: UnnamedSpawnW
       boardProject: optStr(o, 'boardProject'),
       route: reviveRoute(o, 'route'),
       child: reviveChildMark(o, 'child'),
+      role: reviveSessionRole(o, 'role'),
       releasedFrom: reviveReleasedFrom(o, 'releasedFrom'),
     };
 
@@ -10432,7 +10494,7 @@ export function backgroundOnlyRefusal(body: unknown): { count: number | null; ki
 // from Tasks 2 and 10, the file's name, the lease and the grammar in `ccd/session-hook.sh`.
 
 /** One capability word the server advertises. Spelled once, as the keys of `SERVER_CAP_MAP`. */
-export type ServerCap = 'dispatch-live-gate-v1';
+export type ServerCap = 'dispatch-live-gate-v1' | 'hook-main-state-v1';
 
 /** Every word, with what it promises. The value is `true`; the promise is the comment, which a word's reader may
  *  rely on and nothing weaker. `PR_REASON_MAP`'s idiom: a word added to `ServerCap` and not here is TS2741. */
@@ -10444,6 +10506,16 @@ const SERVER_CAP_MAP: Readonly<Record<ServerCap, true>> = {
    *  by this server as a session safe to `/clear`. Added by Task 9b (the change that creates this list), cut after
    *  Task 9 merged; `dispatch-live-gate.test.ts` pins the word beside the gate it names. */
   'dispatch-live-gate-v1': true,
+  /** D-5232 (Task 2): this server reads a hook `done` that stands through delegated work, which is what the fleet's
+   *  hook writes once it sees this word (an agent event keeps the main state and writes `aliveAt`). It promises three
+   *  readers together, on this server: Task 1's `!delegated` rung (D-5231: a `done` over delegated background work
+   *  shows `working · N in background`, never idle), Task 9's live dispatch gate (D-5238: such a `done` over a busy
+   *  pane is never `/clear`ed), and Task 2's stall clocks (`stallHookActivityAt`, `server/src/coord/stall.ts`: the
+   *  frozen arm and the `delegates` hold read `aliveAt`, so subagent activity still counts once agent events stop
+   *  moving `updatedAt`). The promise holds because the change adding this word is cut after Tasks 1 and 9 merged
+   *  (it edits `bucket.test.ts` on Task 1's `background` and Task 9's `dispatch-live-gate.test.ts`) and carries the
+   *  stall clocks itself; `stall-verdict.test.ts` pins them beside the word. */
+  'hook-main-state-v1': true,
 };
 
 /** The words this server advertises, in `GET /health`'s `caps`, and in the file a `server` or `both` node writes. */

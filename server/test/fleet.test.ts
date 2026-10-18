@@ -8,7 +8,7 @@ import { Tmux, type Runner } from '../src/exec.js';
 import { localIO } from '../src/io.js';
 import type { Statusline } from '../src/pane/statusline.js';
 import { readHookStateRawMeasured, type HookState } from '../src/hookstate.js';
-import { ASK_OPERATOR_PRINCIPAL, SERVER_CAPS_FILE, renderServerCaps, type PrState } from '../../shared/api.js';
+import { ASK_OPERATOR_PRINCIPAL, SERVER_CAPS_FILE, renderServerCaps, reviveFleetSession, type PrState } from '../../shared/api.js';
 import { parseRoster } from '../../shared/roster.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
@@ -109,6 +109,68 @@ describe('assembleFleet', () => {
     const dead = fleet.find((s) => s.id === 'claude-dead-proj')!;
     expect(dead.status).toBe('dead');
     expect(dead.name).toBeNull();
+  });
+});
+
+// D-5301 (coordinator-first spec §8): every session the operator creates is a
+// coordinator, and the role is DERIVED from the one marker only a dispatch
+// writes — `$REG/<id>.child` — never marked. The rows below are the same shape
+// whichever operator path made them: a PWA "+", a `POST /api/sessions` start
+// and a CLI create (`cc <wrapper> <project>`, a hand-run `ccd ws-add`) leave
+// no `.child`, and no server route wrote any of these fixtures.
+describe('assembleFleet: the session role (D-5301)', () => {
+  it("is 'coordinator' for every row with no .child — a CLI create, a held row and a main checkout alike — and 'child' for a .child row, unreadable included", async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    // A CLI create: a workspace row nothing on the server made.
+    seedSession(home, 'lane-a-project-a-calm-mesa', 'lane-a', { workspace: 'calm-mesa' });
+    // A main checkout, started by hand.
+    seedSession(home, 'lane-a-project-a', 'lane-a');
+    // An operator-created row the operator then held: the hold is not the role.
+    seedSession(home, 'lane-a-project-a-open-dune', 'lane-a', { workspace: 'open-dune', hold: 'parked' });
+    // Dispatched children: a marker naming the minting run, and one that does not parse.
+    seedSession(home, 'lane-a-project-a-quiet-basin', 'lane-a', { workspace: 'quiet-basin', child: '7' });
+    seedSession(home, 'lane-a-project-a-still-cove', 'lane-a', { workspace: 'still-cove', child: 'not-a-run' });
+    const run: Runner = async () => ({ code: 1, stdout: '', stderr: '' });
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1784600000);
+    const role = (id: string) => fleet.find((s) => s.id === id)!.role;
+    expect(role('lane-a-project-a-calm-mesa')).toBe('coordinator');
+    expect(role('lane-a-project-a')).toBe('coordinator');
+    expect(role('lane-a-project-a-open-dune')).toBe('coordinator');
+    expect(role('lane-a-project-a-quiet-basin')).toBe('child');
+    // An unreadable marker is still a `.child` file: the start card (Task 9)
+    // reads it as a child, so the badge does too — never a coordinator.
+    expect(role('lane-a-project-a-still-cove')).toBe('child');
+    // The fixtures are what they claim: the registry read both markers as children.
+    expect(fleet.find((s) => s.id === 'lane-a-project-a-quiet-basin')!.child).toEqual({ kind: 'child', runId: 7 });
+    expect(fleet.find((s) => s.id === 'lane-a-project-a-still-cove')!.child).toEqual({ kind: 'unreadable' });
+  });
+
+  describe('reviveFleetSession — role (ADDITIVE, absence-permits)', () => {
+    const assembledRow = async (): Promise<Record<string, unknown>> => {
+      const home = mkTmp('ccrc-');
+      seedRoster(home);
+      seedSession(home, 'lane-a-project-a', 'lane-a');
+      const run: Runner = async () => ({ code: 1, stdout: '', stderr: '' });
+      const [row] = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1784600000);
+      return JSON.parse(JSON.stringify(row)) as Record<string, unknown>;
+    };
+
+    it('a snapshot from before the field (no key) and an explicit null revive null — never re-derived from child', async () => {
+      const raw = await assembledRow();
+      delete raw['role'];
+      expect(reviveFleetSession(raw)?.role).toBeNull();
+      expect(reviveFleetSession({ ...raw, role: null })?.role).toBeNull();
+    });
+
+    it.each(['coordinator', 'child'] as const)('round-trips %s exactly', async (role) => {
+      expect(reviveFleetSession({ ...(await assembledRow()), role })?.role).toBe(role);
+    });
+
+    it.each([['an unknown word', 'parent'], ['a boolean', true], ['an object', { kind: 'child' }]])(
+      'rejects the WHOLE session on %s — never laundered into either role', async (_what, role) => {
+        expect(reviveFleetSession({ ...(await assembledRow()), role })).toBeNull();
+      });
   });
 });
 

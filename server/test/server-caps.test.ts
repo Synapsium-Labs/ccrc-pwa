@@ -73,6 +73,8 @@ describe('the file\'s grammar: renderServerCaps then parseServerCaps (spec §6.1
 
   it('every advertised word is on the grammar, listed once, and the file\'s name is the one the fleet reads', () => {
     expect(SERVER_CAPS).toContain('dispatch-live-gate-v1');
+    // D-5232 (Task 2): the stall clocks, Task 1's rung and Task 9's gate together, on this server.
+    expect(SERVER_CAPS).toContain('hook-main-state-v1');
     expect(new Set(SERVER_CAPS).size).toBe(SERVER_CAPS.length);
     for (const w of SERVER_CAPS) expect(isServerCapWord(w), w).toBe(true);
     expect(SERVER_CAPS_FILE).toBe('server-caps');

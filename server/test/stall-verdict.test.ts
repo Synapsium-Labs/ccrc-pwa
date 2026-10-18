@@ -790,7 +790,7 @@ describe('wave 2 vocabulary: a self-wake notice is the watch’s own, never mail
 // object (`w2-facts-separate-object` (D-3629)), so no wave-1 row changes. `W2_LIVE` arms the wave-2 rules; `ARMED` (the
 // default) is the dark: wave-2 facts present, `stall-watch-w2-live` absent.
 import {
-  stallMarkView, stallMailDisabledHold, stallRunMail, stallCitedCheck, stallNotifyDelivery,
+  stallMarkView, stallHookActivityAt, stallMailDisabledHold, stallRunMail, stallCitedCheck, stallNotifyDelivery,
   STALL_BOUND_MS, DELEGATE_WINDOW_MS, DELEGATE_CAP_MS, FROZEN_NO_EVENT_MS, DEAD_GRACE_MS, COORD_DEAF_MS,
   CHECK_UNDELIVERED_MS, MARKER_UNREADABLE_MS,
 } from '../src/coord/stall.js';
@@ -2083,5 +2083,54 @@ describe('a hookstate carried through a compaction reads the pre-compaction acti
     expect(alive).toBe(false);
     expect(fact).toEqual(hookAt(NOW - 61 * MIN, 'PostToolUse'));
     expect(fv(fact)).toEqual(frozenV(NOW - 2 * H));
+  });
+});
+
+// D-5232 (plan 2026-10-16 Task 2, spec §5.2): behind the server's word `hook-main-state-v1` an agent event keeps the main
+// thread's `updatedAt` and writes only `aliveAt`, so subagent activity lives there. The frozen clock and the `delegates`
+// hold read the newest non-plumbing activity (`stallHookActivityAt`), which is `updatedAt` unless its event is plumbing,
+// maxed with `aliveAt`. APPENDED, so no earlier case moves.
+describe('subagent activity lives in `aliveAt` (D-5232)', () => {
+  const dv = (hook: HookRawFact, facts: Partial<StallW2Facts> = {}): StallVerdict => vw({ arming: W2_LIVE }, { hook, ...facts });
+  const STOP_AT = NOW - 2.5 * H;
+  const quiet = markOf({ at: STOP_AT, stopAt: STOP_AT, turnAt: STOP_AT - 10 * MIN });
+
+  it('(s1) the delegates hold: a Stop 2.5 h ago with aliveAt a minute ago holds delegates', () => {
+    expect(STOP_AT).toBeLessThan(NOW - DELEGATE_WINDOW_MS);
+    expect(NOW - STOP_AT).toBeLessThan(DELEGATE_CAP_MS);
+    expect(dv(hookAt(STOP_AT, 'Stop', { aliveAt: NOW - MIN }), { mark: quiet })).toEqual(hold('delegates'));
+    // CONTROL: the same file with no aliveAt is the quiet arm's notice
+    expect(dv(hookAt(STOP_AT, 'Stop'), { mark: quiet })).not.toEqual(hold('delegates'));
+  });
+
+  it('(s2) no frozen during a long foreground Agent call: subagent events keep aliveAt current', () => {
+    const turnAt = NOW - 70 * MIN;
+    const mark = markOf({ ...FROZEN_OVER, at: turnAt, turnAt });
+    expect(fv(hookAt(turnAt + 5_000, 'PreToolUse', { aliveAt: NOW - 2 * MIN }), {}, { mark })).toEqual(hold('busy'));
+  });
+
+  it('(s3) the same with no aliveAt and updatedAt 61 minutes old is frozen: the arm still fires', () => {
+    const turnAt = NOW - 70 * MIN;
+    const mark = markOf({ ...FROZEN_OVER, at: turnAt, turnAt });
+    expect(fv(hookAt(NOW - 61 * MIN, 'PreToolUse'), {}, { mark })).toEqual(frozenV(turnAt));
+  });
+
+  it('(s4) plumbing still never refreshes: an older hook\'s PostCompact a minute ago, no aliveAt, keeps turnStart', () => {
+    expect(fv(hookAt(NOW - MIN, 'PostCompact'))).toEqual(frozenV(NOW - 2 * H));
+    expect(dv(hookAt(NOW - MIN, 'PostCompact'))).toEqual(r1(RUN67_DISPATCHED));
+  });
+
+  it('(s5) aliveAt older than DELEGATE_WINDOW_MS holds no delegates', () => {
+    expect(dv(hookAt(STOP_AT, 'Stop', { aliveAt: NOW - DELEGATE_WINDOW_MS }), { mark: quiet })).not.toEqual(hold('delegates'));
+    expect(dv(hookAt(STOP_AT, 'Stop', { aliveAt: NOW - DELEGATE_WINDOW_MS + 1 }), { mark: quiet })).toEqual(hold('delegates'));
+  });
+
+  it('stallHookActivityAt: updatedAt unless plumbing, maxed with aliveAt, null when neither counts', () => {
+    expect(stallHookActivityAt({ updatedAt: 10, event: 'Stop' })).toBe(10);
+    expect(stallHookActivityAt({ updatedAt: 10, event: 'Stop', aliveAt: 20 })).toBe(20);
+    expect(stallHookActivityAt({ updatedAt: 30, event: 'Stop', aliveAt: 20 })).toBe(30);
+    expect(stallHookActivityAt({ updatedAt: 30, event: 'PostCompact', aliveAt: 20 })).toBe(20);
+    expect(stallHookActivityAt({ updatedAt: 30, event: 'PostCompact' })).toBeNull();
+    expect(stallHookActivityAt({ updatedAt: 30, event: null })).toBe(30);
   });
 });

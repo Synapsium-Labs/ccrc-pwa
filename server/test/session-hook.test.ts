@@ -11784,3 +11784,25 @@ describe('the hot-path budget through the shell prefix (D-5241)', () => {
     expect(times[Math.floor(times.length * 0.95) - 1]).toBeLessThan(150);
   }, 30000);
 });
+
+// The hot-path budget for an agent payload (D-5232). APPENDED at the very end, so no line a citation anchors moves.
+describe('the PostToolUse budget holds for agent payloads (D-5232)', () => {
+  // D-5232 (plan 2026-10-16 Task 2): the same budget for an AGENT PostToolUse behind the server's word
+  // `hook-main-state-v1`, which reads `~/.ccrc/server-caps` with builtins and takes the one fresh read to carry the
+  // main state. The file to carry is a Stop's `done`, written first.
+  it('p95 of 20 agent PostToolUse runs behind hook-main-state-v1 stays under the same 150 ms budget (D-5232)', () => {
+    fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.ccrc', 'server-caps'),
+      `at ${Math.floor(Date.now() / 1000)}\ncaps dispatch-live-gate-v1 hook-main-state-v1\nend\n`);
+    run({ hook_event_name: 'Stop', background_tasks: [] });
+    const times: number[] = [];
+    for (let i = 0; i < 20; i++) {
+      const t0 = Date.now();
+      run({ hook_event_name: 'PostToolUse', tool_name: 'Bash', agent_id: 'a0000000000000001', agent_type: 'general-purpose' });
+      times.push(Date.now() - t0);
+    }
+    expect(readState().state, 'the carry ran: the Stop\'s done stands').toBe('done');
+    times.sort((a, b) => a - b);
+    expect(times[Math.floor(times.length * 0.95) - 1]).toBeLessThan(150);
+  }, 30000);
+});
