@@ -3717,6 +3717,19 @@ describe('W1-B4 Task 10: export replay in the recovery step (spec §9.14 "Export
         ccrc_id: X10_ID, generation, seq, cc_session_uuid: uuid, cause: 'startup', declared_by: 'hook',
         started_ms: t0, cwd: WORK, git_branch: 'main', cwd_real: WORK, confirmed_ms: t0,
       } });
+      // The store's own launch facts for U1, as its transcript's first row gave them (the tick's epochFacts, or a restored
+      // backup's epoch): they differ from the segment's in all four columns, and the store's win. A journal record carries
+      // none (chainEpoch writes the uuid, cause and confirmation only), so the facts go in between the step's journal phases
+      // and its export phases, through the executors seam.
+      const own = { started: t0 + 77, cwd: '/home/u/launch/own', branch: 'own-branch', real: '/home/u/launch/own-real' };
+      const executors = {
+        ...SW.RECOVER_EXECUTORS,
+        'export-blobs': (d: DatabaseSync, run: unknown, c: unknown): unknown => {
+          d.prepare('UPDATE epochs SET started_ms = ?, cwd = ?, git_branch = ?, cwd_real = ? WHERE cc_session_uuid = ? AND started_ms IS NULL AND cwd IS NULL')
+            .run(own.started, own.cwd, own.branch, own.real, U1);
+          return (SW.RECOVER_EXECUTORS['export-blobs'] as (a: unknown, b: unknown, c: unknown) => unknown)(d, run, c);
+        },
+      };
       plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: [], rows: [
         // a family the journal merged: it lands in (X10_ID, X10_G), whose project the journal set
         { kind: 'family', row: { ccrc_id: X10_ID, generation: '', project: 'elsewhere', first_seen_ms: t0 } },
@@ -3724,17 +3737,18 @@ describe('W1-B4 Task 10: export replay in the recovery step (spec §9.14 "Export
         epoch(X10_G, 1, U2),     // seq 1 is U1's: skipped, counted
         epoch(X10_G, 2, U3),     // the journal lacks it: inserted at its own seq
       ] });
-      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids), executors)).toEqual({ moved: true, done: true, held: false });
       expect(db.prepare('SELECT generation, project, merged_into IS NOT NULL AS merged FROM sessions WHERE ccrc_id = ? ORDER BY generation')
         .all(X10_ID).map((r) => ({ ...r }))).toEqual([
         { generation: '', project: 'demo', merged: 1 },
         { generation: X10_G, project: 'demo', merged: 0 },
       ]);
-      expect(db.prepare(`SELECT e.seq AS seq, e.cc_session_uuid AS uuid, e.cause AS cause, e.declared_by AS by, e.cwd AS cwd,
-          e.started_ms AS started, e.confirmed_ms AS confirmed FROM epochs e JOIN sessions s ON s.session_pk = e.session_pk
+      expect(db.prepare(`SELECT e.seq AS seq, e.cc_session_uuid AS uuid, e.cause AS cause, e.declared_by AS by, e.cwd AS cwd, e.git_branch AS branch,
+          e.cwd_real AS real, e.started_ms AS started, e.confirmed_ms AS confirmed FROM epochs e JOIN sessions s ON s.session_pk = e.session_pk
           WHERE s.ccrc_id = ? AND s.generation = ? ORDER BY e.seq`).all(X10_ID, X10_G).map((r) => ({ ...r }))).toEqual([
-        { seq: 1, uuid: U1, cause: 'import', by: 'operator', cwd: WORK, started: t0, confirmed: t0 + 4 },
-        { seq: 2, uuid: U3, cause: 'startup', by: 'hook', cwd: WORK, started: t0, confirmed: t0 },
+        // the store's launch facts and the journal's seq, cause and confirmation all win over the segment's
+        { seq: 1, uuid: U1, cause: 'import', by: 'operator', cwd: own.cwd, branch: own.branch, real: own.real, started: own.started, confirmed: t0 + 4 },
+        { seq: 2, uuid: U3, cause: 'startup', by: 'hook', cwd: WORK, branch: 'main', real: WORK, started: t0, confirmed: t0 },
       ]);
       expect(countersOn(db, 'export_epoch_conflict')).toEqual({ export_epoch_conflict: 1 });
     } finally {
@@ -4431,6 +4445,93 @@ describe('D-5395: replay marks an entry only while every blob it references is e
       expect(marksOf(db), 'a variant, a sidecar, a boundary and the entry\'s own blob each hold their entry unmarked; the two with exported blobs are marked')
         .toEqual([null, null, null, null, `2.${X10_WRITER}.db`, `2.${X10_WRITER}.db`]);
       expect(strandedBlobsOn(db)).toEqual([]);
+    } finally {
+      closeWriter(db);
+    }
+  });
+});
+
+// ── W1-B4 whole-branch review: replay resumes after a segment the operator moved aside (D-4765's way out) ───────────
+describe('W1-B4 whole-branch review: export replay resumes after a segment moved aside, and walks no earlier segment again', () => {
+  type ChunkAnswer = { cursor: recExport.RecoverCursor; moved: boolean; phaseDone: boolean };
+  type Chunk = (db: DatabaseSync, run: unknown, c: recExport.RecoverCursor) => ChunkAnswer | Promise<ChunkAnswer>;
+  /** The shipped executors, each recording the cursor it is called with. */
+  const recording = (seen: string[]): Readonly<Record<string, unknown>> => Object.fromEntries(Object.entries(SW.RECOVER_EXECUTORS).map(([phase, fn]) =>
+    [phase, (db: DatabaseSync, run: unknown, c: recExport.RecoverCursor): ChunkAnswer | Promise<ChunkAnswer> => {
+      seen.push(recExport.formatRecoverCursor(c));
+      return (fn as Chunk)(db, run, c);
+    }]));
+  const name = (seq: number): string => `${seq}.${X10_WRITER}.db`;
+  /** A published segment whose `entries` table can no longer be read, though its meta and its blobs read: a damaged copy. */
+  const breakEntries = (file: string): void => {
+    const sdb = new DatabaseSync(file, { readOnly: true });
+    const root = Number((sdb.prepare('SELECT rootpage FROM sqlite_master WHERE name = ?').get('entries') as { rootpage: number }).rootpage);
+    const size = Number((sdb.prepare('PRAGMA page_size').get() as { page_size: number }).page_size);
+    sdb.close();
+    const fd = fs.openSync(file, 'r+');
+    try { fs.writeSync(fd, Buffer.alloc(size, 0xff), 0, size, (root - 1) * size); } finally { fs.closeSync(fd); }
+  };
+
+  it('the blobs phase: a bad middle segment stalls the step at its name; moved aside, the step goes on at the next segment, counts the foreign segment once, and walks no earlier segment', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-aside-blobs-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const a = x10Texts(0xe00, 3, 'zqasideb', t0);
+      const b = x10Texts(0xe10, 3, 'zqasidec', t0);
+      // 1: another store's segment, which the blobs walk counts (export_segment_foreign) each time it reaches it
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, metaStoreId: '0189abcd-1234-4678-9abc-0000000010ff', blobs: [{ text: 'zqasideb theirs' }], rows: [] });
+      plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, blobs: a.map((t) => ({ text: t.text })),
+        rows: x10Rows({ uuid: x10U(0xe0), path: '/home/u/gone/asideb.jsonl', ino: 9991, texts: a }) });
+      const mid = path.join(exportDirOf(box), name(3));
+      fs.writeFileSync(mid, 'not a database, and not a newer format either\n', { mode: 0o600 });
+      plantSegment(box, ids.storeId, { seq: 4, writer: X10_WRITER, blobs: b.map((t) => ({ text: t.text })),
+        rows: x10Rows({ uuid: x10U(0xe1), path: '/home/u/gone/asidec.jsonl', ino: 9995, texts: b, seq: 2 }) });
+      const seen: string[] = [];
+      expect(await SW.recoveryStep(db, stepCtx(box, ids), recording(seen))).toEqual({ moved: true, done: false, held: false });
+      expect(cursorOn(db), 'CONTROL: the step waits at the segment that cannot be read').toBe(`export-blobs:${name(3)}:0`);
+      expect(countersOn(db, 'recover_chunk_failed', 'export_segment_foreign')).toEqual({ recover_chunk_failed: 1, export_segment_foreign: 1 });
+      fs.renameSync(mid, `${mid}.aside`);
+      const mark = seen.length;
+      expect(await SW.recoveryStep(db, stepCtx(box, ids), recording(seen))).toEqual({ moved: true, done: true, held: false });
+      const after = seen.slice(mark).filter((c) => c.startsWith('export-blobs'));
+      expect(after[0], 'the first chunk after the move names the segment moved aside').toBe(`export-blobs:${name(3)}:0`);
+      expect(after.slice(1).every((c) => c.startsWith(`export-blobs:${name(4)}:`)), `then only the segment that orders after it: ${after.join(' | ')}`).toBe(true);
+      expect(after.filter((c) => c.includes(`:${name(1)}:`) || c.includes(`:${name(2)}:`)), 'no chunk walks an earlier segment again').toEqual([]);
+      expect(countersOn(db, 'export_segment_foreign', 'recover_chunk_failed'), 'the foreign segment was counted once, as in a single pass').toEqual({ export_segment_foreign: 1, recover_chunk_failed: 1 });
+      expect([x10Count(db, 'entries'), x10Count(db, 'memberships'), x10Count(db, 'blobs')]).toEqual([6, 6, 6]);
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('the rows phase: a middle segment whose rows cannot be read stalls the step; moved aside, the step goes on at the next segment, and the first segment\'s rows are applied and counted once', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-aside-rows-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const first = x10Texts(0xf10, 2, 'zqasider1', t0);
+      const last = x10Texts(0xf20, 2, 'zqasider3', t0);
+      // 1: its second row names a blob no segment holds, so every apply of this row counts export_row_blob_missing once
+      const rows1 = x10Rows({ uuid: x10U(0xf1), path: '/home/u/gone/asider1.jsonl', ino: 9992, texts: first });
+      const orphan = rows1.filter((r) => r.kind === 'entry').pop()!;
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: [{ text: first[0]!.text }], rows: rows1 });
+      expect(orphan.row['blob_sha256']).toEqual(segmentSha(first[1]!.text));
+      const mid = plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, blobs: first.map((t) => ({ text: `${t.text} again` })),
+        rows: x10Rows({ uuid: x10U(0xf2), path: '/home/u/gone/asider2.jsonl', ino: 9993, texts: first.map((t) => ({ ...t, uuid: `${t.uuid.slice(0, -1)}9`, text: `${t.text} again` })) }) });
+      breakEntries(mid);
+      plantSegment(box, ids.storeId, { seq: 3, writer: X10_WRITER, blobs: last.map((t) => ({ text: t.text })), rows: x10Rows({ uuid: x10U(0xf3), path: '/home/u/gone/asider3.jsonl', ino: 9994, texts: last }) });
+      const seen: string[] = [];
+      expect(await SW.recoveryStep(db, stepCtx(box, ids), recording(seen))).toEqual({ moved: true, done: false, held: false });
+      expect(cursorOn(db), 'CONTROL: the step waits in the rows phase at the segment whose rows cannot be read').toBe(`export-rows:${name(2)}:0`);
+      expect(countersOn(db, 'recover_chunk_failed', 'export_row_blob_missing')).toEqual({ recover_chunk_failed: 1, export_row_blob_missing: 1 });
+      const entriesBefore = x10Count(db, 'entries');
+      fs.renameSync(mid, `${mid}.aside`);
+      const mark = seen.length;
+      expect(await SW.recoveryStep(db, stepCtx(box, ids), recording(seen))).toEqual({ moved: true, done: true, held: false });
+      const after = seen.slice(mark).filter((c) => c.startsWith('export-rows'));
+      expect(after[0]).toBe(`export-rows:${name(2)}:0`);
+      expect(after.filter((c) => c.includes(`:${name(1)}:`)), 'no chunk walks segment 1 again').toEqual([]);
+      expect(countersOn(db, 'export_row_blob_missing', 'recover_chunk_failed'), 'segment 1\'s row is counted once, as in a single pass').toEqual({ export_row_blob_missing: 1, recover_chunk_failed: 1 });
+      expect(x10Count(db, 'entries') - entriesBefore, 'and the last segment\'s two rows were applied').toBe(2);
     } finally {
       closeWriter(db);
     }

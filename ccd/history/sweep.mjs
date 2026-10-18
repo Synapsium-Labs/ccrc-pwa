@@ -2981,10 +2981,14 @@ function replayRowPage(db, run, sdb, dir, name, meta, after) {
  *  transaction (B2's executor contract). `blobs` picks the phase's page. */
 function exportPhaseChunk(db, run, cursor, blobs) {
   const { dir, names } = exportReplayListing(run);
-  // A cursor naming a segment this listing does not hold restarts the phase: segments are never removed by the sweep,
-  // and every insert here is idempotent.
+  // A cursor naming a segment this listing does not hold resumes at the first listed segment that orders after it, from its
+  // start. The sweep never removes a segment, but D-4765's way out for one that cannot be read is to move it aside, and the
+  // cursor at a stall always names that segment. Restarting the phase at the first segment would walk every earlier one again,
+  // with capture held, and count what each counts a second time (export_row_unplaced, export_row_blob_missing,
+  // export_epoch_conflict, export_segment_foreign); the segments that order before the missing one are done.
   const found = cursor.file === null ? -1 : names.indexOf(cursor.file);
-  const at = found === -1 ? 0 : found;
+  const at = cursor.file === null ? 0 : found !== -1 ? found
+    : Math.max(0, orderSegmentNames([...names, cursor.file]).indexOf(cursor.file));
   const after = found === -1 ? 0 : cursor.offset;
   const name = at < names.length ? names[at] : null;
   const position = (file, offset) => ({ phase: cursor.phase, file, offset, blobId: null, pairsAdded: run.pairsAdded });
