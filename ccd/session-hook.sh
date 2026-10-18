@@ -3329,7 +3329,8 @@ msid="${CLAUDE_CODE_SESSION_ID:-$psid}"
 # A REGULAR FILE OR NOTHING, as the history spool's append: a symlink, directory or FIFO at either path is neither read nor
 # written (builtin tests; a FIFO read would block the hook), and a `joinedprev` that is not one stops the rotation.
 # BOUNDED, BY RENAME: past JOIN_ROTATE_AT lines the Start that notices opens the file on its own fd, takes `flock -n` on it,
-# confirms the path still names that inode (a second descriptor of the path, `-ef` the locked one, both read through `/dev/fd`) and still holds more than the cap, then `mv -f`s it whole to
+# confirms the path still names that inode (a second descriptor of it, `-ef` the locked one, both through `/dev/fd`) and still
+# holds more than the cap, then `mv -f`s it whole to
 # `<id>.joinedprev` (dot-free too), replacing the last one. Nothing is rewritten, so NO APPEND IS LOST: a writer whose
 # descriptor opened the old inode writes into joinedprev, a later one creates a fresh `joined`, and a second rotator fails
 # `flock -n`, finds the path renamed or finds a short new file, and skips. Membership is the union: the last
@@ -3340,7 +3341,10 @@ msid="${CLAUDE_CODE_SESSION_ID:-$psid}"
 JOIN_ROTATE_AT=128 JOIN_READ_MAX=16384
 _hook_join_record() {   # $aid -> 0 appended; 1 refused (never fatal: the caller says `|| true`)
   local jf="$REG/$id.joined" jp="$REG/$id.joinedprev" cur="" nl="" fd="" fd2="" same=0
-  [[ ! -L "$jf" && ( ! -e "$jf" || -f "$jf" ) ]] || return 1   # absence BEFORE regularity: a sibling's first `>>` between `-f` and `! -e` read as "exists, not regular" and lost this append (D-5434)
+  # The entry guard refuses only a POSITIVE non-regular type (D-5434). "Absent or regular" is two reads, and a sibling's first `>>`
+  # (creation) or a rotator's `mv -f` (removal) lands between them in either order, so that form refused a plain append and the
+  # caller's `|| true` hid the lost line. No move between absent and regular makes any of these tests true.
+  if [[ -L "$jf" || -d "$jf" || -p "$jf" || -S "$jf" || -b "$jf" || -c "$jf" ]]; then return 1; fi
   if ! { printf '%s\n' "$aid" >> "$jf"; } 2>/dev/null; then
     # A FAILED WRITE STILL CREATED THE FILE (ENOSPC after O_CREAT leaves an empty `joined`), so it gets the same look at the row
     # as a landed one: a row purged under it must not keep an orphan, and an empty file is an orphan like any other.
