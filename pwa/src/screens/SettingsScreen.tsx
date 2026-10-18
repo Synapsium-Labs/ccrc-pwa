@@ -8,7 +8,9 @@
 // plan; fix rounds 1–2 widened several of their guards in place — see the
 // plan's `## Deviations found`, D-3315/D-3316); and Stall watch (stall watch
 // settings, design 2026-10-05 §13), which lives in its own file,
-// `StallWatchSection.tsx`, with its own read. The update plane's READING
+// `StallWatchSection.tsx`, with its own read; and Temp root collector
+// (path-identity spec 2026-10-12 §5.7), in `fleet/CollectLaneSection.tsx`,
+// with its own read too, mounted after Stall watch. The update plane's READING
 // surface — the release list, the node inventory and the twenty pure helpers
 // that turn a wire row into a sentence — moved to `screens/updates.tsx`; this
 // file composes it, beside the Appearance section (the theme picker).
@@ -24,8 +26,9 @@ import type {
   UpdateRouteRefusal, UpdatesView,
 } from '../../../shared/api';
 import {
-  AUTO_MODES, FLEET_SCOPE, NOTIFY_MODES, UPDATE_CHANNELS, UPDATE_GATE_CAP, isNotifyMode,
+  AUTO_MODES, FLEET_SCOPE, NOTIFY_MODES, UPDATE_CHANNELS, isNotifyMode,
 } from '../../../shared/api';
+import { carriesUpdateGate } from '../../../shared/update-move';
 import { LOOPBACK_HOSTS } from '../../../shared/base-url';
 import {
   BackButton, Button, PHOSPHOR, RADIO_FIELDSET, RADIO_LEGEND, Radio, RadioFieldset,
@@ -33,10 +36,11 @@ import {
 } from '@ccrc/ui';
 import { NotificationBell } from '../fleet/NotificationBell';
 import { StallWatchSection } from './StallWatchSection';
+import { CollectLaneSection } from '../fleet/CollectLaneSection';
 import { UNCONFIRMED_TEXT } from './settingsText';
 import { planMove, type MoveIntent, type PlannedMove } from '../fleet/movePlan';
 import { UpdateMoveSheet } from '../fleet/UpdateMoveSheet';
-import { isPlaceableInstant, useUpdatesView, type UpdatesPoll } from '../fleet/useUpdatesView';
+import { UPDATES_STALE_TEXT, isPlaceableInstant, useUpdatesView, type UpdatesPoll } from '../fleet/useUpdatesView';
 import { ApiError, api, apiErrorText, readBoxTokenView, updateErrorText } from '../lib/api';
 // `dayClock` and `elapsedWords` come THROUGH the update plane's reading
 // surface, which is where the twenty wire-row-to-sentence helpers moved: the
@@ -97,8 +101,6 @@ const AUTO_GATE_NOTE = 'Auto-install needs the rollback gate on every node — n
 export { UNCONFIRMED_TEXT };
 /** The first poll never landed and was not a 501 — a read that failed, said as one, not a skeleton forever. */
 const UNREAD_TEXT = 'The update plane could not be read — the screen tries again every minute.';
-/** A later poll failed: what is shown is the last answer that landed, and it says so. */
-const STALE_TEXT = 'The latest read failed — this is the last answer that landed.';
 /** The update surface's own sentence for a box with no control plane — Task 5's table, read through its one
  *  translator, so this file holds no second copy of it. */
 const NOT_CONFIGURED_TEXT = updateErrorText(new ApiError(501, { ok: false, error: 'not-configured' }));
@@ -108,7 +110,7 @@ const AUTO_GATE_REFUSAL = 'auto-needs-rollback-gate' satisfies UpdateRouteError;
 export function autoGateMissing(nodes: readonly NodeWire[]): NodeWire[] {
   // Array.isArray, not a bare `.includes`: a caps field that arrived as a
   // STRING would answer by substring and read as gated.
-  return nodes.filter((n) => !(Array.isArray(n.caps) && n.caps.includes(UPDATE_GATE_CAP)));
+  return nodes.filter((n) => !(Array.isArray(n.caps) && carriesUpdateGate(n.caps)));
 }
 
 /** The node ids a `409 auto-needs-rollback-gate` names; null for any other failure, and for a 409 naming no id
@@ -512,8 +514,10 @@ export function SettingsScreen(): ReactNode {
   // sections: all three read the same answer (Tasks 7–10; the card,
   // box-token lifecycle Task B6), so they can never disagree about the fleet.
   // ONE clock for the two that show an age, Updates and the Box token card.
-  // The Stall watch section is the one with its own read, of its own
-  // endpoint, through its own hook (useStallWatchView, design 2026-10-05 §13).
+  // The Stall watch and Temp root collector sections each have their own
+  // read, of their own endpoint, through their own hook (useStallWatchView,
+  // design 2026-10-05 §13; useCollectLaneView, path-identity spec 2026-10-12
+  // §5.7). The collector comes after Stall watch, as §5.7 places it.
   const poll = useUpdatesView();
   const now = useNow(30_000);
   return (
@@ -534,6 +538,7 @@ export function SettingsScreen(): ReactNode {
       {poll.view !== null && <BoxTokenSection view={poll.view} now={now} reload={poll.reload} />}
       <NotificationsSection view={poll.view} reload={poll.reload} />
       <StallWatchSection />
+      <CollectLaneSection />
     </div>
   );
 }
@@ -672,7 +677,8 @@ function UpdatesBody({ view, stale, now, reload }: {
 
   return (
     <>
-      {stale && <p className="settings-note">{STALE_TEXT}</p>}
+      {/* A later poll failed: the update plane's one sentence for the last answer that landed (wave 19, R24(b)). */}
+      {stale && <p className="settings-note">{UPDATES_STALE_TEXT}</p>}
       <RadioFieldset
         legend="Channel"
         name="settings-channel"

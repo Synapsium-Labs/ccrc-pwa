@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <!--
+    O6 browser spike harness for the terminal drawer
+    (plan docs/superpowers/plans/2026-10-14-terminal-drawer-every-width-stage1.md, Task 1).
+
+    This page is NOT in pwa/tsconfig.json's include nor in the build's input, so
+    it never ships. Serve it with:
+
+      cd pwa && ./node_modules/.bin/vite --host
+
+    then open /spike/drawer-input.html. It touches no session, socket or server.
+  -->
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>drawer input spike</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./drawer-input.tsx"></script>
+  </body>
+</html>

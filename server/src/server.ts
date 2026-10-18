@@ -5,11 +5,12 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import fastifyWebsocket from '@fastify/websocket';
 import fastifyMultipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
+import { pwaStaticOptions } from './pwaStatic.js';
 import { configDirFor, type CcrcConfig } from './config.js';
 import type { BuildInfo } from './buildinfo.js';
 import type { Tmux } from './exec.js';
 import type { FleetIO } from './io.js';
-import { assembleFleet, liveStatus } from './fleet.js';
+import { assembleFleet } from './fleet.js';
 import { readLimits, projectHome, projectPlacement } from './limits.js';
 import { readSharesMeasured } from './shares.js';
 import { CLASSES, type ModelClass } from '../../shared/models.js';
@@ -29,7 +30,7 @@ import { buildAgreement, defaultCachePath, derivedBuilds, loadSnapshot, rosterAg
 // include list and the ESM-emit invariant honest.
 import { generateAccountsSh } from '../../shared/generate.mjs';
 import { bodyDigest } from '../../shared/mark.mjs';
-import { ACTOR_FLAGS_CAP, CCD_ARGV, POOLS_CAP, ROUTE_APPLY_CAP, ROUTE_ARGV_CAP, capSupported, deviceActor,
+import { ACTOR_FLAGS_CAP, CCD_ARGV, POOLS_CAP, ROUTE_APPLY_CAP, ROUTE_ARGV_CAP, SWAP_BUSY_CAP, capSupported, deviceActor,
          stopSurfaceSupported, verbSupported, type ActorFlags, type CcdArgv } from './ccdargv.js';
 import { parsePrLines, prView, unknownView } from './prstate.js';
 import { parseAudit, parseReap } from './wsaudit.js';
@@ -39,9 +40,10 @@ import type { FleetWatcher } from './watch.js';
 import { SessionStream, parseSince } from './sessionws.js';
 import { KeyedQueue } from './inject/queue.js';
 import {
-  sendPrompt, answerDialog, answerDialogMulti, answerDialogText, interrupt, submitEnter, type SendDeps,
+  sendPrompt, answerDialog, answerDialogMulti, answerDialogText, interrupt, interruptVerdict, moveDialogTab, submitEnter,
+  type InterruptVerdict, type SendDeps,
 } from './inject/send.js';
-import { answerAsk, type AskDeps } from './inject/ask.js';
+import { answerAsk, readAskAnswer, type AskDeps } from './inject/ask.js';
 import { freshAskAt, measuredIdentity, readRegistry, readSessionRecord } from './registry.js';
 import type { SessionRecord } from './registry.js';
 import { readHookState } from './hookstate.js';
@@ -53,6 +55,7 @@ import type { SpawnPty } from './pty.js';
 import type { PushService } from './push.js';
 import type { NotifyLog } from './notifylog.js';
 import { Presence } from './presence.js';
+import type { FleetIdentityCell } from './fleetidentity.js';
 import type { ChildReclaimOutcome, ChildReclaimRequest } from './coord/childReclaim.js';
 import { MAIL_TOKEN_HEADER, checkMailToken, type BoxTokenHolder } from './coord/token.js';
 import { registerCoordRoutes } from './coord/routes.js';
@@ -67,6 +70,7 @@ import { buildInfoOfRow } from './update/inventory.js';
 import type { PoolEdgeLog } from './coord/pooledgelog.js';
 import type { CataloguePoller } from './update/catalogue.js';
 import type { UpdateIntentLog } from './coord/updateintentlog.js';
+import type { CollectLaneJournal } from './collectLane.js';
 import { AuthSecretUnusable, readAuthSecret, verifyPassphrase, type AuthSecret } from './auth/secret.js';
 import { ABSOLUTE_TTL_MS, SessionStore } from './auth/sessions.js';
 import { LoginRateLimiter, PASSKEY_MAX_FAILURES } from './auth/ratelimit.js';
@@ -91,13 +95,15 @@ import {
   type FloorState, type ProjectRow, type ProjectPoolsWire, type ProjectPoolWire, type ProjectRepoWire,
   parseRouteFields, programKickoffVerdict, routeFieldsOrNull, routeParseDetail, type RouteFields,
 } from '../../shared/api.js';
-import { ARCHIVE_REFUSALS, archiveInterrupts } from '../../shared/api.js';
+import { ARCHIVE_REFUSALS, SERVER_CAPS, interruptRouteSource, type SwapRefusal } from '../../shared/api.js';
+import { DrawerInterruptThrottle, drawerInterruptSource, recordInterrupt } from './interruptlog.js';
+import type { Dialog } from '../../shared/api.js';
 import {
-  archiveFlags, archiveOutcome, busyReadFailsClosed, decideArchive, refusedAtStop, stopVerdict, worktreeOf, type ArchiveMeasure,
+  archiveFlags, archiveOutcome, busyReadFailsClosed, decideArchive, frameRowVerdict, refusedAtStop, worktreeOf, type ArchiveMeasure,
   type TurnVerdict,
-  type LiveFileReading, type StopRowReading,
 } from './coord/archiveDoor.js';
-import { readLiveStateMeasured } from './livestate.js';
+import { liveRowFor, liveRowWithHookFor, liveWordFor, turnReadDeps, turnVerdictFor } from './turnverdict.js';
+import { ccdSwapRefusal, swapTurnRefusal } from './swapguard.js';
 
 /**
  * A client frame off the per-session socket, or null if it isn't one.
@@ -243,6 +249,12 @@ function anonymousAssertStart(full: PasskeyAssertStart): Partial<PasskeyAssertSt
   ) as Partial<PasskeyAssertStart>;
 }
 
+/** The collector switch's composition (path-identity spec 2026-10-12 §5.2, §5.6), built once in `index.ts`: the ONE
+ *  generation journal `CoordStore.setCollectLane` appends to inside its transaction, and this process's boot nonce,
+ *  which only the switch route's confirm key reads. One object, so "no journal" has one spelling: `Deps.collectLane`
+ *  absent. */
+export interface CollectLaneDeps { readonly journal: CollectLaneJournal; readonly bootNonce: string }
+
 export interface Deps {
   cfg: CcrcConfig;
   /** The deploy's build stamp (buildinfo.ts, read once at boot from
@@ -277,6 +289,15 @@ export interface Deps {
    *  its absence is still the local/remote mode test for THIS field, even
    *  though `fleetState` itself is no longer the same tell. */
   refreshCaps?: () => Promise<void>;
+  /** The connection-bound fleet node identity (path-identity spec 2026-10-12 §5.2).
+   *  - Remote mode: the agent client's own cell (`fleet.identity`). It is invalidated on every ready and close, and
+   *    only the inventory's fleet sweep publishes into it, under the epoch it captured.
+   *  - Local mode: a cell nothing invalidates (epoch 0). The server row's own sweep publishes into it, because this
+   *    box is the fleet node.
+   *  It is optional so that the hand-built Deps in tests stay valid. A reader of an absent cell uses
+   *  `NO_FLEET_IDENTITY`, which is never known, so nothing arms through it. Production carries it in both arms
+   *  (text pins over index.ts). */
+  fleetIdentity?: FleetIdentityCell;
   /** The ONE per-session write queue for the process. Built in `index.ts` and
    *  handed to both `buildServer` and `FleetWatcher`, because the naming
    *  sweep's `ws-rename` has to serialise against `POST /workspace/reap` — and
@@ -346,6 +367,11 @@ export interface Deps {
    *  `index.ts` beside `coord`. Optional the same way `coord` is: absent, the
    *  intent route answers `501 not-configured`. */
   updateIntentLog?: UpdateIntentLog;
+  /** The collector switch's journal and boot nonce (`CollectLaneDeps`), `updateIntentLog`'s twin for the journal's
+   *  reason: the route and the collector's latch share the process's one instance. Optional the way `coord` is.
+   *  Absent: `GET` and `POST /api/coord/collect-lane` answer `501 not-configured`, and the collector reads its control
+   *  state as `journal-not-configured`, never as a missing journal, which would be the bootstrap. */
+  collectLane?: CollectLaneDeps;
   /** Design 2026-09-20 §10 (wave 5): the SERVER-role node's own move, spawned on this box with the same absolute
    *  argv the agent uses. A two-template capability, never a raw `Runner` — a runner here would give every
    *  route a way around `runCcd` (D-3397). `localUpdateSpawnFor(realRunner, cfg.home)` in
@@ -1157,11 +1183,14 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // carrying `version` follows. Emitting `version: undefined` instead would
   // serialise away, but the conditional keeps the two cases distinguishable
   // in tests (`toEqual` is strict about keys) and in intent.
+  // `caps` (D-5232's mechanism, Task 9b; spec §6.1) is additive and always present: the words this server advertises,
+  // which a fleet node's `ccd-update-sync` records for the hook's gated arms. deploy.sh's gate greps `"sha"` and the
+  // update health gate reads `.version`, so neither sees it.
   app.get('/health', async () => {
     const build = deps.build ?? null;
     return build?.version !== undefined
-      ? { ok: true, build, version: build.version }
-      : { ok: true, build };
+      ? { ok: true, build, version: build.version, caps: SERVER_CAPS }
+      : { ok: true, build, caps: SERVER_CAPS };
   });
 
   const stateCachePath = deps.stateCachePath ?? defaultCachePath();
@@ -1252,6 +1281,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // must treat it as `'unknown'`, never as `'ok'` and never as an empty
     // history.
     const lifecycle = watcher?.lifecycleHealth() ?? undefined;
+    // The delegation broker's report-only observation health (wave 3, Task 13), from the checkpoint's own intervals. Absent until the
+    // lane has run, and on a box with no coordination database: absence reads as UNKNOWN, never as healthy (`FleetHealth.delegation`).
+    const delegation = watcher?.currentDelegationHealth() ?? undefined;
     if (deps.cfg.fleetMode === 'remote' && deps.fleetState) {
       // The two stamps: with a coordination database, the inventory's rows —
       // re-measured every minute by `sweepInventory`, superseded rows excluded
@@ -1273,6 +1305,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         builds,
         projectPools: poolsEnforcement(deps.fleetState?.ccdVerbs ?? null),
         ...(lifecycle ? { lifecycle } : {}),
+        ...(delegation ? { delegation } : {}),
       };
     }
     // Local mode drives ccd on this same box, off this same roster: there is
@@ -1293,6 +1326,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // journal, and a block that appeared only in remote mode would make the
       // dev box permanently unable to see its own mirror stall.
       ...(lifecycle ? { lifecycle } : {}),
+      ...(delegation ? { delegation } : {}),
     };
   });
 
@@ -1677,6 +1711,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // handed the sweep's abandon here, and has no other way to close a run. Called optionally: a test's stand-in watcher
   // (a structural double, not a `FleetWatcher`) carries no such method, and has no lane to hand it to.
   watcher?.useCoordSerialiser?.(coordRoutes);
+  // The stop-done lane (D-5370) stops a finished run's worker on the same serialiser, so a dispatch opening a run onto
+  // it cannot fall between the lane's store read and its `ccd stop`. Optional for the same stand-in watcher's reason.
+  watcher?.useStopDoneSerialiser?.(coordRoutes);
 
   // The update control plane (design 2026-09-20 §12, update-management W2),
   // registered from its own file — which is why `auth-gate.test.ts`'s `ROUTES`
@@ -1742,6 +1779,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return Number.isFinite(n) && n > 0 ? Math.floor(n) : dflt;
   };
 
+  const drawerInterrupts = new DrawerInterruptThrottle();   // D-5237: one lone ESC / Ctrl-C row per session per 2 s
   app.get('/ws/pty/:id', { websocket: true }, (socket, req) => {
     const { id } = req.params as { id: string };
     const q = req.query as { cols?: string; rows?: string };
@@ -1749,7 +1787,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const rows = dim(q.rows, 24);
     // THE LATCH, AND IT GOES BEFORE THE ATTACH (spec §5.1, F3, F14).
     //
-    // ccd spawns every session `window-size latest` (`ccd/ccd:14790`), and
+    // ccd spawns every session `window-size latest` (`_spawn_start` in
+    // `ccd/ccd`), and
     // tmux's own default is `latest` too — so the window follows whichever
     // client most recently typed. A phone's pty client is a full tmux client
     // (F6), so the first phone attach NARROWS the window, tmux REFLOWS the
@@ -1802,16 +1841,28 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // NO PER-CLIENT GRID MAP rides with it (§5.1): the window is one fixed size
     // for every drawer, so a second drawer closing restores nothing anyone was
     // depending on, and the close handler's own 220x50 becomes a no-op rather
-    // than the defect PR #96's handoff was built to cure. The deliberate
-    // un-pin is wave 3, under the fit guard, through an advertised ccd verb.
+    // than the defect PR #96's handoff was built to cure.
+    //
+    // THE DRAWER NO LONGER LEANS ON THIS PIN. It attaches a client the
+    // window's own size, 220 columns by 50 rows plus tmux's status row (spec
+    // 2026-10-14 §5.1, D-5005), and a client that size moves nothing under
+    // `latest`. So the pin is no longer how a drawer keeps its own client from
+    // narrowing the window: it repairs a window something else moved, and it
+    // holds against a client that is not the window's size — an older bundle,
+    // which still dials its own grid (spec 2026-10-14 §8, I7). A wide drawer
+    // may later have the window follow it, never below `READER_MIN_COLS`,
+    // through that spec's guarded sizer (§6, stage 2).
     void deps.tmux.resizeWindow(id, PINNED_WINDOW_COLS, PINNED_WINDOW_ROWS);
     const p = spawnPty(id, cols, rows);
     const sub = p.onData((data) => socket.send(data));   // server->client: raw utf8 frames
     socket.on('message', (raw) => {
       try {
         const m = JSON.parse(String(raw)) as { type?: unknown; data?: unknown; cols?: unknown; rows?: unknown };
-        if (m.type === 'input' && typeof m.data === 'string') p.write(m.data);
-        else if (m.type === 'resize' && typeof m.cols === 'number' && typeof m.rows === 'number') {
+        if (m.type === 'input' && typeof m.data === 'string') {
+          p.write(m.data);   // D-5237: the bytes pass through unchanged; a lone ESC or Ctrl-C is also recorded
+          const src = drawerInterruptSource(m.data);
+          if (src !== null && drawerInterrupts.admit(id, Date.now())) recordInterrupt(deps, id, src, 'sent');
+        } else if (m.type === 'resize' && typeof m.cols === 'number' && typeof m.rows === 'number') {
           p.resize(m.cols, m.rows);
         }
       } catch { /* ignore malformed frames */ }
@@ -1901,7 +1952,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // `sendDeps`/`askDeps` themselves are built ABOVE, ahead of
   // `registerCoordRoutes` — see that call site's own comment.
   //
-  // C0.2: `knownId` gates 20 request-id routes (16 POST, 4 GET — every one of
+  // C0.2: `knownId` gates 21 request-id routes (17 POST, 4 GET — every one of
   // them a per-request check, not a periodic sweep) plus the constructed-id
   // revival probe below, and previously called `readRegistry` — a 24-session
   // fleet's baseline is 745 agent-WS operations [registry-read-census:fleet]
@@ -2098,6 +2149,19 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return { ok: true, queued: out.queued };
   });
 
+  /** After an answer route (decisions `ask-answer-returns-next-screen`, `dialog-frame-log`): a refusal is logged by its
+   *  code, since until now nothing recorded one; an answer that saw the pane move hands that screen to every open
+   *  stream of the session (`answered:<id>`, `SessionStream`'s `onAnswered`). */
+  const answeredFrame = (
+    id: string, route: string, res: { ok: true; next?: Dialog | null } | { ok: false; error: string },
+  ): void => {
+    if (!res.ok) {
+      console.log(`ccrc-server: dialog-refused ${id} ${route} ${res.error}`);
+      return;
+    }
+    if (res.next !== undefined) bus.emit(`answered:${id}`, res.next);
+  };
+
   app.post('/api/sessions/:id/dialog', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
@@ -2106,6 +2170,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
     const res = await answerDialog(sendDeps, id, body.dialogId, body.optionIndex);
+    answeredFrame(id, 'dialog', res);
     return res.ok ? res : reply.code(409).send(res);
   });
 
@@ -2124,6 +2189,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
     const res = await answerDialogText(sendDeps, id, body.dialogId, body.optionIndex, body.text);
+    answeredFrame(id, 'dialog/text', res);
     if (res.ok) return res;
     return reply.code(res.error === 'bad-text' ? 400 : 409).send(res);
   });
@@ -2144,8 +2210,24 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
     const res = await answerDialogMulti(sendDeps, id, body.dialogId, body.optionIndexes as number[]);
+    answeredFrame(id, 'dialog/multi', res);
     if (res.ok) return res;
     return reply.code(res.error === 'bad-indexes' ? 400 : 409).send(res);
+  });
+
+  /**
+   * Decision `ask-dialog-tab-route`: move an AskUserQuestion's pane to another tab with ←/→ (the sheet's arrow keys and
+   * its tab strip), each step proved by the screen it lands on, never Enter (`moveDialogTab`, `inject/send.ts`). The
+   * screen it lands on goes back as `next` and to every open stream (`answeredFrame`), as an answer's does. A malformed
+   * body is the caller's to fix (400 `bad-request`); every other refusal is a 409.
+   */
+  app.post('/api/sessions/:id/dialog/tab', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
+    const res = await moveDialogTab(sendDeps, id, req.body ?? null);
+    answeredFrame(id, 'dialog/tab', res);
+    if (res.ok) return res;
+    return reply.code(res.error === 'bad-request' ? 400 : 409).send(res);
   });
 
   /**
@@ -2188,13 +2270,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   app.post('/api/sessions/:id/ask', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
-    const body = (req.body ?? {}) as { askKey?: unknown; optionIndexes?: unknown };
-    if (typeof body.askKey !== 'string' ||
-        !Array.isArray(body.optionIndexes) ||
-        !body.optionIndexes.every((n) => typeof n === 'number')) {
+    // D-5293: one reader for this body and the parent's (`readAskAnswer`).
+    const body = readAskAnswer(req.body ?? {});
+    if (body === null || body.askKey === undefined) {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
-    const optionIndexes = body.optionIndexes as number[];
+    const optionIndexes = body.optionIndexes;
     // Narrowed to `string` by the guard above, but that narrowing does not
     // cross into `pressPlain`'s own closure below — a fresh `const` of the
     // narrowed type carries it there.
@@ -2285,7 +2366,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // back to `held`, not stranded `answering`: the same rollback verb
       // `/api/asks/:id/answer` uses on its own refused press; see
       // `untakeAsk`'s own docstring (`store.ts`) for the full argument.
-      if (!coord.untakeAsk(held.id)) {
+      if (!coord.untakeAsk(held.id, taken.from)) {
         console.warn(`ccrc-server: untakeAsk(${held.id}) returned false after a refused operator ` +
           "press — the ask row was not 'answering' when the rollback ran; it may be stranded");
       }
@@ -2342,7 +2423,22 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   app.post('/api/sessions/:id/interrupt', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
-    const res = await interrupt(sendDeps, id, async () => (await liveStatus(deps.io, deps.cfg, deps.tmux, id)) === 'busy');
+    // D-5236: what Escape would interrupt, from the RAW live word (never `liveStatus()`'s collapse, which reads `shell`
+    // and `waiting` busy) and the frame's row with its hook stamp — the turn reads' one home, `turnverdict.ts`.
+    // `interruptVerdict` holds the rule. A row that cannot be found, or a word that cannot be read, is `not-busy`, as
+    // `liveStatus()` answered it (D-115); with an unmeasured identity no row is read, so any non-idle word sends Escape.
+    const res = await interrupt(sendDeps, id, async (): Promise<InterruptVerdict> => {
+      const read = await readSessionRecord(deps.io, deps.cfg, id);
+      if (!read.found) return { kind: 'idle' };
+      const word = await liveWordFor(turnReads, read.record);
+      const identity = measuredIdentity(read.record);
+      if (!word.ok || word.word === 'idle' || identity === null) {
+        return interruptVerdict({ word, row: null, hookUpdatedAt: null, hookEvent: null });
+      }
+      return interruptVerdict({ word, ...(await liveRowWithHookFor(turnReads, read.record, identity.uuid)) });
+    });
+    // D-5237: every answer is recorded with the client's source (anything else is `unknown`) and its outcome; never pushed.
+    recordInterrupt(deps, id, interruptRouteSource((req.body as { source?: unknown } | null)?.source), res.ok ? 'sent' : res.error);
     return res.ok ? res : reply.code(409).send(res);
   });
 
@@ -2679,7 +2775,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const body = (req.body ?? {}) as { route?: unknown };
     const routed = parseOperatorRoute(reply, body.route);
     if (routed.reply !== null) return routed.reply;
-    return runCcdOr502(reply, CCD_ARGV.wsAdd(project, routed.route));
+    // The operator's create declares who made it (D-5301): `pwaDec`, the
+    // human-driven routes' one dec, cap-gated so an old ccd gets the bare argv.
+    // D-5369: the actor is the device actually used, not spec §8's literal
+    // `--actor operator`.
+    return runCcdOr502(reply, CCD_ARGV.wsAdd(project, routed.route, pwaDec(req)));
   });
 
   /**
@@ -2995,44 +3095,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return CCD_ARGV.stopPair(originalWrapper, rec.project, surface);
   }
 
-  /**
-   * The row the fleet frame would assemble for ONE session, measured on the request — the archive door's busy read
-   * (workspace lifecycle §5.2: "read from the same live state the fleet frame uses: status/hookState, re-read on the
-   * request, for both kinds of row"). `assembleFleet` over this one registry row, so its tmux and live-file reads and
-   * its bucket ladder are the frame's own, with this session's hook state read from disk now rather than taken from
-   * the watcher's last sweep. The pane-scraped pieces (a dialog menu, a Workflow row) are the watcher's newest. No
-   * `coord`: no field `archiveInterrupts` reads comes from it.
-   */
-  const liveRowFor = async (rec: SessionRecord, uuid: string): Promise<FleetSession | null> => {
-    const hs = await readHookState(deps.io, deps.cfg.registryDir, rec.id, uuid, Date.now());
-    const [row] = await assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(),
-      watcher?.currentStatuslines(), undefined, undefined, new Map(hs === null ? [] : [[rec.id, hs]]), [rec]);
-    return row ?? null;
-  };
-
-  /**
-   * The READS behind "what turn would a STOP lose?" (`stopVerdict`, `coord/archiveDoor.ts`, D-3878, holds the rule and
-   * its reasoning, and since 3881 answers idle, busy or unmeasured): the wrapper's config dir FIRST (a pure config
-   * lookup, in ccd's order — F2), then the tmux verdict, then — only for a `live` pane — its pid and its live file, then
-   * the frame's row. A read a verdict makes impossible is skipped, never faked; which reads MATTER is the rule's to say,
-   * so none is skipped for being redundant. Read FAIL-CLOSED because `cmd_stop` refuses nothing: for a main checkout
-   * this is the only guard there is. Its second caller is a workspace whose programme is to end or that is archived with
-   * `interrupt` (`busyReadFailsClosed`, D-3877, F7), where it is the only read that can refuse before that end or stop;
-   * every other workspace keeps `ws-archive`'s own fail-closed `_ws_status` behind the door. `liveRowFor` cannot answer
-   * it alone: the frame folds what it could not measure towards rest.
-   */
-  const stopVerdictFor = async (rec: SessionRecord, uuid: string): Promise<TurnVerdict> => {
-    const cfgDir = configDirFor(deps.cfg, rec.wrapper);
-    if (cfgDir === undefined) return stopVerdict({ configDir: 'none' });
-    const v = await deps.tmux.sessionVerdict(rec.id);
-    if (v.verdict !== 'live') return stopVerdict({ configDir: 'present', pane: v.verdict });
-    const pid = await deps.tmux.panePid(rec.id);
-    if (pid === null) return stopVerdict({ configDir: 'present', pane: 'live', pid: 'unread' });
-    const read = await readLiveStateMeasured(deps.io, cfgDir, pid);
-    const liveFile: LiveFileReading = read.ok ? { read: 'ok', status: read.state.status } : { read: read.reason };
-    const row: StopRowReading = (await liveRowFor(rec, uuid)) ?? 'missing';
-    return stopVerdict({ configDir: 'present', pane: 'live', pid, liveFile, row });
-  };
+  /** The turn reads' deps — `liveRowFor` and `turnVerdictFor` live in `turnverdict.ts`, their one home (D-5238), and
+   *  read the watcher's newest pane-scraped pieces through thunks at call time. */
+  const turnReads = turnReadDeps(deps, watcher);
 
   app.post('/api/sessions/:id/stop', async (req, reply) => {
     const { id } = req.params as { id: string };
@@ -3160,20 +3225,25 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
 
   app.post('/api/sessions/:id/swap', async (req, reply) => {
     const { id } = req.params as { id: string };
-    const body = (req.body ?? {}) as { wrapper?: unknown; crossPool?: unknown };
+    const body = (req.body ?? {}) as { wrapper?: unknown; crossPool?: unknown; interrupt?: unknown };
     if (typeof body.wrapper !== 'string' || body.wrapper.length === 0) {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
-    // ONE queued invocation for both arms (D-2177, below), but that is the only
+    // D-5240: `interrupt: true` is the operator's consent to lose a MEASURED turn ("swap anyway"). It reaches ccd as
+    // `--interrupt` only on a box that advertises `swap-busy-v1`; an older ccd gets the old argv, which refuses nothing.
+    const interrupt = body.interrupt === true;
+    const consentArgv = interrupt && capSupported(deps.fleetState, SWAP_BUSY_CAP);
+    // ONE queued invocation for both arms (D-2177, below), and since D-5240 one turn gate (below) — the only
     // server-side preflight they share. A declared crossing gets the 501 skew
-    // refusal and deliberately skips `readSessionRecord` plus the pool verdict;
+    // refusal and deliberately skips the pool verdict;
     // ccd re-measures session and tag on the fleet box. The ordinary arm owns
-    // the early 404/503 ladder and pool refusal. Every applicable refusal is
+    // the pool refusal; both own the early 404/503 ladder, the crossing since D-5240 (D-5379), whose turn gate needs the row.
+    // Every applicable refusal is
     // decided BEFORE queue entry. `lifecycle.test.ts` pins ordinary-arm queueing;
     // `swap-route-pool.test.ts` pins crossing-arm queueing and each arm's
-    // applicable held-slot refusals (D-1684, D-2468, D-2481).
-    let argv: CcdArgv;
-    if (body.crossPool === true) {
+    // applicable held-slot refusals (D-1684, D-2468, D-2481); `swap-route-busy.test.ts` the turn gate (D-5240).
+    const cross = body.crossPool === true;
+    if (cross) {
       // The declared crossing skips the verdict entirely — that IS the
       // override. It does not skip the SKEW gate: `capSupported` refuses on no
       // evidence, for the reason spelled out on `CCD_ARGV.swapCross`. An
@@ -3183,19 +3253,20 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       if (!capSupported(deps.fleetState, POOLS_CAP)) {
         return reply.code(501).send({ ok: false, error: 'unsupported' });
       }
-      argv = CCD_ARGV.swapCross(id, body.wrapper);
-    } else {
-      // The row, for its `project`, is a best-effort early refusal: it avoids
+    }
+    // The row: for the ordinary arm's `project` (the pool refusal) and for both arms' turn gate. `readSessionRecord`
+    // reads one id, not the fleet; the ladder is `/stop`'s because an unlistable registry proves nothing about THIS
+    // id and 404 would be a lie.
+    const read = await readSessionRecord(deps.io, deps.cfg, id);
+    if (!read.found) {
+      return reply.code(read.reason === 'unlistable' ? 503 : 404)
+        .send({ ok: false, error: read.reason === 'unlistable' ? 'registry-unmeasurable' : 'unknown-session' });
+    }
+    if (!cross) {
+      // The pool verdict is a best-effort early refusal: it avoids
       // queueing a swap that is already known to violate the pool rule. The
       // queue wait can stale this snapshot, so `cmd_swap` re-measures and is the
-      // authoritative gate at execution time. `readSessionRecord` reads one id,
-      // not the fleet; the ladder is `/stop`'s because an unlistable registry
-      // proves nothing about THIS id and 404 would be a lie.
-      const read = await readSessionRecord(deps.io, deps.cfg, id);
-      if (!read.found) {
-        return reply.code(read.reason === 'unlistable' ? 503 : 404)
-          .send({ ok: false, error: read.reason === 'unlistable' ? 'registry-unmeasurable' : 'unknown-session' });
-      }
+      // authoritative gate at execution time.
       const pool = poolFor(await readProjectPools(
         deps.io,
         deps.cfg,
@@ -3204,8 +3275,22 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       ), read.record.project);
       const refused = refusePool(reply, body.wrapper, pool);
       if (refused) return refused;
-      argv = CCD_ARGV.swap(id, body.wrapper);
     }
+    // D-5240: the turn gate, archive's fail-closed `turnVerdictFor` under archive's consent rule (`swapTurnRefusal`):
+    // `busy` without consent is `409 session-busy`, `unmeasured` is `409 status-unknown` with or without it. Read here,
+    // before the queue, and again inside the job, so a turn that began during the wait is refused the same way. An
+    // identity field that could not be read is `/archive`'s 503 (D-5380): the turn reads need the uuid.
+    const identity = measuredIdentity(read.record);
+    if (identity === null) return reply.code(503).send({ ok: false, error: 'registry-unmeasurable' });
+    const rec = read.record;
+    const turnRefusal = async (): Promise<SwapRefusal | null> =>
+      swapTurnRefusal(await turnVerdictFor(turnReads, rec, identity.uuid), interrupt);
+    const early = await turnRefusal();
+    if (early !== null) return reply.code(409).send({ ok: false, error: early });
+    const wrapper = body.wrapper;
+    const argv: CcdArgv = cross
+      ? (consentArgv ? CCD_ARGV.swapCrossInterrupt(id, wrapper) : CCD_ARGV.swapCross(id, wrapper))
+      : (consentArgv ? CCD_ARGV.swapInterrupt(id, wrapper) : CCD_ARGV.swap(id, wrapper));
     // D-2177: `cmd_swap` stops the supervisor unit and kills the tmux pane
     // (`remote/runner.ts`'s own comment on its budget), so it must never run
     // between `answerAsk`'s pane capture and its keystroke — it would tear the
@@ -3249,8 +3334,18 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // box-local case: it is what turns the auto-swap's keystroke loss into a
     // refusal instead of a false ok:true, and it is the only one of the two
     // halves that reaches it.
-    const res = await sendDeps.queue.run(id, () => deps.runCcd(argv));
-    return res.ok ? { ok: true } : reply.code(502).send({ ok: false, stderr: res.stderr });
+    const res = await sendDeps.queue.run(id, async () => {
+      const late = await turnRefusal();
+      return late !== null ? { refused: late } : { ran: await deps.runCcd(argv) };
+    });
+    if ('refused' in res) return reply.code(409).send({ ok: false, error: res.refused });
+    if (res.ran.ok) return { ok: true };
+    // ccd's own two refusals (D-5240: `cmd_swap`'s manual gate, after both reads above) are the same two 409s, so a
+    // turn that began between the in-queue read and ccd's act reaches the operator as `session-busy` with its "swap
+    // anyway". Every other ccd failure keeps the generic 502 with ccd's sentence.
+    const ccdRefused = ccdSwapRefusal(res.ran.stderr);
+    if (ccdRefused !== null) return reply.code(409).send({ ok: false, error: ccdRefused });
+    return reply.code(502).send({ ok: false, stderr: res.ran.stderr });
   });
 
   // ── PR lifecycle ────────────────────────────────────────────────
@@ -3326,7 +3421,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
    * refuses inside `ws-archive`, before ITS act; `archiveOutcome` carries `ended` on that answer. This handler
    * measures, hands the measurements over, and does what the decision says, in its order: end the programme (inside
    * the decision), stop (`{interrupt}`, or a main checkout), archive (a workspace). A main checkout's turn is read
-   * fail-closed (`stopVerdictFor`) — and so is a workspace's, when the programme is to end or it is archived with
+   * fail-closed (`turnVerdictFor`) — and so is a workspace's, when the programme is to end or it is archived with
    * `interrupt` (`busyReadFailsClosed`, D-3877, 3881) — into THREE words (3881): a turn measured in progress is
    * `409 session-busy`, which `interrupt` consents to; one nobody could measure is `409 status-unknown`, whatever the
    * consents. A stop nobody
@@ -3371,15 +3466,14 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const archiveArgv = rec.workspace === null ? null : CCD_ARGV.wsArchive(id, pwaDec(req));
     const measure: ArchiveMeasure = {
       workspace: rec.workspace !== null,
-      // WHICH read is `busyReadFailsClosed`'s to say (D-3877): the fail-closed `stopVerdictFor` for a main checkout (its
+      // WHICH read is `busyReadFailsClosed`'s to say (D-3877): the fail-closed `turnVerdictFor` for a main checkout (its
       // stop's only guard), for a workspace whose programme is about to END, `interrupt` or not (3881), and for a
       // workspace archived with `interrupt`, whose stop runs ahead of ccd's own read (F7); otherwise the frame's own
-      // row, with `ws-archive`'s fail-closed `_ws_status` behind it — two-valued, busy or idle. No row
-      // would be no measurement, read as busy — unreachable by construction (`assembleFleet` maps its records 1:1),
-      // kept rather than pinned.
+      // row (`frameRowVerdict`), with `ws-archive`'s fail-closed `_ws_status` behind it — busy or idle, and unmeasured
+      // for a row whose status was not measured (D-5274).
       turn: busyReadFailsClosed(rec.workspace !== null, flags)
-        ? await stopVerdictFor(rec, identity.uuid)
-        : await liveRowFor(rec, identity.uuid).then((live): TurnVerdict => (live === null || archiveInterrupts(live) ? 'busy' : 'idle')),
+        ? await turnVerdictFor(turnReads, rec, identity.uuid)
+        : frameRowVerdict(await liveRowFor(turnReads, rec, identity.uuid)), // D-5274: an unmeasured row is refused, never busy
       // In remote mode this stat is outside the agent's read roots and answers `unmeasured`, which proceeds — ccd's
       // own `[[ -d $workdir ]]` refusal measures it there (`ArchiveMeasure.worktree`).
       worktree: rec.workspace === null ? 'present' : worktreeOf(await deps.io.statMeasured(rec.workdir)),
@@ -3410,7 +3504,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // Re-read at the act, fail-closed, unless the operator consented to lose the turn. A turn measured in progress
       // is `session-busy`, a state nobody could read `status-unknown` — the word is `refusedAtStop`'s (3881).
       if (!flags.interrupt) {
-        const verdict = await stopVerdictFor(rec, identity.uuid);
+        const verdict = await turnVerdictFor(turnReads, rec, identity.uuid);
         if (verdict !== 'idle') {
           const refused = refusedAtStop(verdict, plan.ended);
           return reply.code(refused.status).send(refused.body);
@@ -3426,13 +3520,13 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // stopped NOTHING — a row archived earlier whose pane came back without a spawn path clearing the stamp (a pre-#143
     // pane). Read as `archived:true` alone, the door said a session was put away that tmux still runs. A pane tmux
     // PROVES up is stopped here, as the archive's own act would have — but only after the turn is re-read at the act,
-    // fail-closed (`stopVerdictFor`, the rule for a stop nobody agreed to: this branch is never `interrupt`'s, whose
+    // fail-closed (`turnVerdictFor`, the rule for a stop nobody agreed to: this branch is never `interrupt`'s, whose
     // stop has already run), because `ws-archive`'s own fail-closed `_ws_status` is skipped on `already archived` and
     // the turn the door measured came from the frame's row. Only an `idle` answer stops; a busy or unreadable turn, a
     // pane gone, or one tmux cannot be asked about, is left as before — archived, not stopped.
     if (archived.ok && !stopped && /^already archived /m.test(archived.stdout)
         && (await deps.tmux.sessionVerdict(id)).verdict === 'live'
-        && (await stopVerdictFor(rec, identity.uuid)) === 'idle') {
+        && (await turnVerdictFor(turnReads, rec, identity.uuid)) === 'idle') {
       const res = await deps.runCcd(stopArgvFor(id, rec, identity));
       if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr, ...endedSpread });
       stopped = true;
@@ -3608,7 +3702,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // fallback to index.html; absent -> skip (API-only mode).
   const pwaRoot = findPwaRoot();
   if (pwaRoot) {
-    await app.register(fastifyStatic, { root: pwaRoot });
+    // No size/mtime validators: a release's sw.js kept the same weak ETag, so no deploy reached a
+    // browser with the worker installed (pwaStatic.ts).
+    await app.register(fastifyStatic, pwaStaticOptions(pwaRoot));
     app.setNotFoundHandler((req, reply) => {
       if (req.method === 'GET' && !req.url.startsWith('/api') && !req.url.startsWith('/ws')) {
         return reply.type('text/html').sendFile('index.html');

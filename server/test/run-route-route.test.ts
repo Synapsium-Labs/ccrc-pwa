@@ -3,7 +3,7 @@
 // `run-routes.test.ts`'s own harness (`makeRunner`/`openApp`/`seed`) rather
 // than re-deriving it — see that file for what each helper actually does.
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/server.js';
@@ -74,6 +74,9 @@ const openApp = async (
   home: string, run: Runner, over: Partial<Omit<Deps, 'cfg'>> & { cfg?: Partial<Deps['cfg']> } = {},
 ) => {
   mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+  // D-5298: the claimant the opens name is a registry row of the run's
+  // project — unless the case already seeded it its own way.
+  if (!existsSync(path.join(home, '.cc-sessions', `${CLAIMED_BY}.uuid`))) seed(home, CLAIMED_BY);
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const base = testDeps(home, run);
   const app = await buildServer({ ...base, mailToken: TOKEN, coord, ...over, cfg: { ...base.cfg, ...(over.cfg ?? {}) } });
@@ -92,9 +95,16 @@ const ROUTE_READY_FLEET = {
 const tokenHeaders = (token: string | null): Record<string, string> =>
   token === null ? {} : { 'x-ccrc-mail-token': token };
 
+/** D-5298 (coordinator-first Task 11b): an open is attributed against the
+ *  claimant's own registry row — `seed`'s `u-<id>` uuid, sent unless the body
+ *  names `claimedByUuid` itself. */
+const attributed = (body: unknown): Record<string, unknown> => {
+  const b = body as Record<string, unknown>;
+  return typeof b?.claimedBy === 'string' && !('claimedByUuid' in b) ? { ...b, claimedByUuid: `u-${b.claimedBy}` } : b;
+};
 const postOpen = (app: FastifyInstance, body: unknown = OPEN_BODY, token: string | null = TOKEN) =>
   app.inject({ method: 'POST', url: '/api/runs', headers: tokenHeaders(token),
-    payload: body as Record<string, unknown> });
+    payload: attributed(body) });
 const postDispatch = (app: FastifyInstance, id: number | string, body: unknown = { brief: 'do it' }, token: string | null = TOKEN) =>
   app.inject({ method: 'POST', url: `/api/runs/${id}/dispatch`, headers: tokenHeaders(token),
     payload: body as Record<string, unknown> });
@@ -258,6 +268,7 @@ describe('POST /api/runs/:id/route', () => {
   it('409s bad-session (not 200, and writes no event) when the COORDINATOR session id is not a legal shape', async () => {
     const home = mkTmp('ccrc-route-');
     const { run } = makeRunner(home);
+    seed(home, 'bad claimant');   // D-5298: the open attributes it against its own registry row
     const w = await openApp(home, run, { fleetState: ROUTE_READY_FLEET }); app = w.app;
     const opened = (await postOpen(w.app, { ...OPEN_BODY, claimedBy: 'bad claimant' })).json() as { id: number };
     const res = await postRoute(w.app, opened.id, { target: 'coordinator', why: 'x', kind: 'shallow' });

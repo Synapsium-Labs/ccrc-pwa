@@ -107,6 +107,9 @@ export interface SessionState {
    *  `dialog` above. */
   ask: HookAsk | null;
   tasks: TaskItem[]; // the session's task list, as the TUI's widget shows it
+  /** D-5372: the tasks frame's `touchedAt` (newest task file mtime, epoch ms);
+   *  absent when the frame carried none. Replaced with every tasks frame. */
+  tasksTouchedAt?: number;
   /** Outstanding mail for THIS session — queued or delivered, never acked or
    *  rejected (the server filters, `sessionws.ts`'s `checkMail`). Replaced
    *  wholesale like `tasks`, because the frame is a statement about the
@@ -147,6 +150,12 @@ export interface SessionState {
   pending: PendingSend[]; // optimistic sends
   conn: 'connecting' | 'open' | 'down';
   apply(msg: SessionStreamMsg): void;
+  /** Decision `ask-answer-returns-next-screen`: the screen an answer route says the pane moved to (`DialogAnswered`'s
+   *  `next`), applied by the sheet that sent the answer. It replaces `dialog` only while the store still holds the
+   *  screen that was answered (`answeredId`), or no screen at all: a frame the stream delivered since is newer, and
+   *  wins. A no-menu poll that cleared `dialog` before the answer came back is exactly what it overrides (the
+   *  2026-10-16 report). `next: null` clears it, as `dialog_cleared` would. */
+  applyAnswered(answeredId: string, next: Dialog | null): void;
   connect(): void;
   disconnect(): void;
   send(text: string, opts?: { replaceDraft?: boolean; attachments?: PendingAttachment[] }): Promise<void>;
@@ -159,7 +168,7 @@ export interface SessionState {
 
 export type SessionSnapshot = Pick<
   SessionState,
-  'events' | 'offset' | 'uuid' | 'status' | 'statusUpdatedAt' | 'dialog' | 'ask' | 'tasks' | 'mail'
+  'events' | 'offset' | 'uuid' | 'status' | 'statusUpdatedAt' | 'dialog' | 'ask' | 'tasks' | 'tasksTouchedAt' | 'mail'
 > & {
   missingFile: string | null;
   strandedAccount: string | null;
@@ -248,7 +257,7 @@ export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): Sess
     case 'dialog_cleared':
       return { ...s, dialog: null };
     case 'tasks':
-      return { ...s, tasks: msg.tasks };
+      return { ...s, tasks: msg.tasks, tasksTouchedAt: msg.touchedAt };
     // Build 7 Task 6: the session's own outstanding mail, one row above the
     // plan (`@ccrc/ui` mail-strip.tsx). Same replace-wholesale rule as `tasks`
     // just above.
@@ -314,6 +323,7 @@ const snapshotOf = (s: SessionState): SessionSnapshot => ({
   dialog: s.dialog,
   ask: s.ask,
   tasks: s.tasks,
+  tasksTouchedAt: s.tasksTouchedAt,
   mail: s.mail,
   missingFile: s.missingFile,
   strandedAccount: s.strandedAccount,
@@ -700,6 +710,10 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
       file: null,
       pending: [],
       conn: 'connecting',
+
+      applyAnswered(answeredId, next) {
+        set((s) => (s.dialog === null || s.dialog.id === answeredId ? { dialog: next } : {}));
+      },
 
       apply(msg) {
         set((s) => {

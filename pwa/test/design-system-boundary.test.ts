@@ -114,7 +114,7 @@ export const OWNED = [
   'attach-btn',                                                  // AttachButton
   'build-line-side--warn',                                       // BuildLine
   'task-card-status--ok', 'task-card-status--bad',               // TaskCard
-  'task-mark--running',                                          // TaskStrip
+  'task-mark--running', 'task-row--stale',                       // TaskStrip (D-5372)
   // QuickConfirm's QC_CONSEQUENCE / QC_ACTIONS. Their LOOK is utilities, not a
   // stylesheet rule, so an app call site that wrote the hook bare rendered
   // unstyled: ArchiveSheet and UpdateMoveSheet did, after the branch deleted
@@ -131,6 +131,9 @@ export const NOT_VOCABULARY: Record<string, string> = {
   class: 'the English word, in a sentence inside a comment or an aria string',
   fleet: 'the English word — BuildLine labels a box "fleet"; the app also has a `.fleet` screen class, which is how it reaches the intersection',
   'sr-only': "Tailwind's own utility, which a stylesheet in this tree also defines; emitted by Sheet and owned by the framework",
+  // D-5158: a merge-config name, registered here rather than OWNED, which
+  // would refuse the app's own `card` class.
+  card: "a spacing-theme NAME in cn.ts (the --pad-card role, D-5093), which tailwind-merge needs bare to place `p-card`; never emitted as a class — the app's own `.card` rule in fleet.css is how it reaches the intersection",
 };
 
 /** Every `className="..."` / `className={'...'}` string literal in a file. */

@@ -107,8 +107,10 @@ with the run now `dispatched`, or a refusal:
 | `cap-concurrency` | `maxConcurrentWorkers` is full | stop, name the cap, wait |
 | `cap-daily` | `maxSessionsPerDay` is used up | stop, name the cap, wait |
 | `ambiguous-dispatch` | wave 1's spawn found 0 or >1 candidate workspaces | stop and report; the operator resolves it |
-| `worker-busy` | wave ≥ 2's session is observably mid-turn | wait and retry; do not force it |
+| `worker-busy` | wave ≥ 2's session is observably mid-turn — at the gate, or at the act: the server reads the live file again just before the `/clear`, and a refusal there can leave this run's own hold and route arming in place, which the next dispatch rewrites (D-5238) | wait and retry; do not force it |
 | `hookstate-unmeasurable` | wave ≥ 2's session has a hookstate file the server could not READ — so whether it is mid-turn was never measured at all | retry once: nothing was spawned, the run is untouched and still `planned`, and the workspace was only resumed. If it repeats, stop and report — a file on the fleet host needs a human, and this refusal will stand until it is readable |
+| `status-unmeasurable` | wave ≥ 2's session's LIVE file (or its pane) could not be read before the `/clear`, so whether it is mid-turn was never measured — the hookstate can say `done` while the pane works, so the server also reads the live file (D-5238) | the same rule as `hookstate-unmeasurable`: retry once (the run is untouched, still `planned`, the workspace only resumed — read again just before the `/clear`, it can also refuse at the act, after this run's own hold and route arming were placed, both of which the next dispatch rewrites); if it repeats, stop and report |
+| `worker-starting` | the pane THIS dispatch's `ensure` started had not come up within the server's bounded wait | send the dispatch again: nothing was held, cleared or sent and the run is untouched. This is the only way a spawn slower than the wait completes |
 | `project-mismatch` | wave ≥ 2's session has a registry row whose `.project` was READ and names ANOTHER project than this run's; `by` names the project that was read. A row whose `.project` cannot be read answers `registry-unmeasurable` instead — take that code by its OWN row below (stop and report; never a blind retry): its wire shape is identical to the one a killed `ws-add` can send, so you cannot tell from the response which rung answered. A row with no `.project` at all is not refused | stop and report. Nothing was spawned, no `/clear` was sent, and the run is untouched and still `planned` — but the OPEN that named this `sessionId` placed a hold on that workspace, a worktree in the wrong repo, and it is still standing. Do not retry this dispatch, and do not simply open the wave again without `sessionId`: an open of the same still-`planned` wave returns the SAME run, still bound to the crossing session, and the next dispatch refuses identically. The operator must abandon the wedged run from the console; only after the operator reports it abandoned do you open the wave again WITHOUT `sessionId` so it spawns fresh in the target repo |
 | `workspace-spent` | wave ≥ 2's session is a CHILD whose branch has had a PR since this run was opened — usually the previous wave's worker opened it after you opened this wave on its workspace; `pr` names it. The body also carries `unbound`, and `detail` whenever `unbound` is `false` | `unbound:true`: the server has already released the workspace (or handed its claim to the other run still open on it), cleared this run's `sessionId` and left the run `planned` — dispatch it again, unchanged, and a fresh child is minted, branching from the project's default branch and carrying none of the spent producer's unmerged commits; if this wave depends on that producer's code, wait until its PR is proven merged, exactly as §5's "One PR per child" requires, before dispatching again. `unbound:false`: that release (or hand-over) did not happen, or it happened but the run was no longer `planned` and bound by the time it completed — `detail` says which; a `detail` naming a PERMANENT cause — this box's ccd "does not support" the verb, the surviving run's claim "cannot be written", or the other runs naming the workspace "could not be read" — means stop and report, and any other `detail` (including "`<verb> failed`") means retry the same dispatch once, and if it repeats, stop and report. Either way nothing was resumed and no `/clear` was sent |
 | `spent-unmeasured` | wave ≥ 2's session may be a spent child and the evidence could not be read; `detail` says which read failed. An UNLISTABLE registry (`detail` `the registry could not be listed`) answers this for ANY session, marked or not — where a resume used to answer `error: 'registry-unmeasurable'` — because without the listing the server cannot tell a child from any other workspace; but dispatch lists the registry for its own pause check FIRST, so a registry that is ALREADY unlistable there answers `paused` instead (the table's first row) and never reaches here — this code's unlistable case is a listing that fails only at the resume arm's own re-read, after that pause check's listing already succeeded. `unbound` is always `false` | retry the same dispatch: the binding is kept, nothing was resumed and no `/clear` was sent. It is not `workspace-spent`. If it repeats, stop and report |
@@ -1049,19 +1051,39 @@ entry, not an invitation like the operator-only doors above.
 JSON
 ```
 
-Press an answer in with that body. A 409 from this route can come from three
-route/CAS guards before `answerAsk` (`not-held`, `ask-moved`, or
-`child-unmeasurable`) or from a downstream `answerAsk` refusal. No refusal path
-presses a digit when the eligible ask is single-select, which is the only shape
-this hold lane mints; after a downstream refusal the route rolls the row back to
-`held`.
-- `not-held` — the row has LEFT `held` and is no longer pre-emptible. That is FOUR different
-  endings, not one: another principal is mid-answer, the grace window lapsed and the operator
-  was notified after all, the child's dialog went away, or someone already ruled. Only the
-  first is a race a retry could win, and you cannot tell which from this code alone — read the
-  row (`GET /api/asks`, below) rather than retrying blind. (This entry said "a lost race
-  against another principal that already took the row" for one wave, naming one of the four:
-  the gloss came from `store.ts`, where it was equally wrong, and both were corrected together.)
+Press an answer in with that body. A LAPSE DOES NOT END YOUR TURN (late answer wins, D-5289):
+when the grace window lapses, the operator's notification fires and the row moves to
+`released`, but it stays answerable, by you or by the operator, until one of you acts. An
+answer you press after the lapse still lands, and the operator's notification is replaced by
+one saying you answered it. Only a ruling ends it: an answer from either principal, or your
+own release (below).
+
+A 409 from this route can come from six route/CAS guards before `answerAsk` (`not-held`,
+`ask-moved`, `child-unmeasurable`, `declined`, `already-answered`, or `ask-mismatch`) or from
+a downstream `answerAsk` refusal (D-5357, D-5368). No refusal path presses a digit when the eligible ask is
+single-select, which is the only shape this hold lane mints; after a downstream refusal the
+route puts the row back in the state it was taken from: `held`, or `released` if the window
+had already lapsed.
+- `not-held` — the row is in no state a principal can take it from, and no ruling is the
+  reason. That is THREE different endings, not one: another principal is mid-answer, the
+  child's dialog went away, or the row carries a state this build cannot read. Only the first
+  is a race a retry could win, and you cannot tell which from this code alone — read the row
+  (`GET /api/asks`, below) rather than retrying blind. A lapse is NOT one of them: a lapsed
+  row is still answerable (above). (This entry said "a lost race against another principal
+  that already took the row" for one wave, naming one of its endings: the gloss came from
+  `store.ts`, where it was equally wrong, and both were corrected together. It then said
+  `not-held` also covered a lapse and an answered row, until D-5289 made a lapsed row
+  answerable and named the two rulings below apart.)
+- `ask-mismatch` — your body carried an `askKey` (optional; the operator's route sends one)
+  that is not this row's key (D-5368). The route refuses it before it takes the row: nothing
+  is pressed and the row is unchanged. Re-read the ask (`GET /api/asks`, below) and answer
+  the question it shows, or send no `askKey`.
+- `declined` — YOU released this question yourself (`asks release`, below). A release is
+  final: you handed the question to the operator, and your later answer is refused. Do not
+  retry; the question is the operator's now.
+- `already-answered` — a principal already ruled: you earlier, or the operator from their own
+  phone, after the lapse or before it. Nothing is left to do; read the row (`GET /api/asks`)
+  for who answered if your ledger needs it.
 - `ask-moved` — the CHILD REPAINTED AN IDENTICAL QUESTION since this row was minted; the menu
   on its screen right now may be a different instance of what looks like the same question.
   This IS a reason to re-read the ask and answer the CURRENT one, never a reason to retry the
@@ -1076,7 +1098,7 @@ this hold lane mints; after a downstream refusal the route rolls the row back to
   `not-alive`, `no-menu`, and `menu-mismatch`. Each names the failed live-state,
   option, or pane guard; stop and re-read rather than treating 409 as three
   possible conditions or retrying blind. Counting both halves, this route answers
-  409 with thirteen (3 + 10) distinct codes.
+  409 with 15 distinct codes (6 + 10, `ask-mismatch` in both halves).
 ```bash
 : "${ask_id:?set ask_id to the held ask row positive decimal id}"
 "$API" asks release "$ask_id" --json - <<JSON
@@ -1087,8 +1109,11 @@ JSON
 Decline to rule on it with that body. A decline is not a failure: it is what turns the grace window
 into a CEILING rather than a flat tax on every question you cannot answer — the operator's
 notification fires AT ONCE on release, instead of the child's question sitting quiet until the
-window lapses on its own. Decline anything that would be a NEW decision (clause 11's own
-words — product intent, scope, a tradeoff nobody ruled on, anything irreversible) rather than
+window lapses on its own. A release is FINAL: the row moves to `declined`, a terminal state,
+and an answer you send for it afterwards is refused `declined` (D-5289) — releasing hands the
+question over, it does not defer it. Only a `held` row can be released; a release of a row
+that has already lapsed, or that a principal has taken or answered, is refused `not-held`.
+Decline anything that would be a NEW decision (clause 11's own words — product intent, scope, a tradeoff nobody ruled on, anything irreversible) rather than
 guessing at it.
 ```bash
 "$API" asks list

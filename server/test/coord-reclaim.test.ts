@@ -563,37 +563,49 @@ describe('reclaimRun restamps the board placement it just invalidated', () => {
     const two = seedRun(s, DEAD, 2);
     s.db.prepare('UPDATE runs SET coordProject = ? WHERE program = ?').run('the-dead-project', PROGRAM);
     seedRow(home, DEAD);
-    seedRow(home, LIVE, { project: 'the-heir-project' });
+    // D-5298: the heir must be of the run's project (`seedRun`'s `demo`); the
+    // trailing newline proves the stamp is the MEASURED (trimmed) field.
+    seedRow(home, LIVE, { project: 'demo\n' });
     expect(await reclaimRun(depsFor(home, s, GONE), two, LIVE)).toMatchObject({ ok: true });
-    expect([stampOn(s, one), stampOn(s, two)]).toEqual(['the-heir-project', 'the-heir-project']);
+    expect([stampOn(s, one), stampOn(s, two)]).toEqual(['demo', 'demo']);
   });
 
-  it('leaves the stamp NULL when the heir\'s project cannot be READ — never the displaced one', async () => {
+  // D-5298 (coordinator-first Task 11b, spec §6.4): the heir project rung.
+  // Before it, each of the next four shapes reached the commit and the stamp
+  // question was the only one; since it, each is refused and nothing moves —
+  // the displaced stamp included.
+  it('refuses an heir of ANOTHER project, naming it, and moves nothing', async () => {
     const home = mkTmp('ccrc-reclaim-');
     const s = store(home);
     const id = seedRun(s, DEAD, 1);
     s.db.prepare('UPDATE runs SET coordProject = ? WHERE program = ?').run('the-dead-project', PROGRAM);
     seedRow(home, DEAD);
     seedRow(home, LIVE, { project: 'the-heir-project' });
-    // The row LISTS and assembles — only `<LIVE>.project`'s bytes refuse — so
-    // the ladder still reaches the commit and this is a stamp question, not a
-    // refusal question.
-    const io = unreadableField(LIVE, 'project');
-    expect(await reclaimRun(depsFor(home, s, GONE, io), id, LIVE)).toMatchObject({ ok: true });
-    expect(stampOn(s, id)).toBeNull();
+    expect(await reclaimRun(depsFor(home, s, GONE), id, LIVE))
+      .toEqual({ ok: false, kind: 'project-mismatch', by: 'the-heir-project' });
+    expect(stampOn(s, id)).toBe('the-dead-project');
   });
 
-  it('leaves the stamp NULL for an EMPTY project field — `?? null` does not catch `\'\'`', async () => {
+  it('refuses registry-unmeasurable when the heir\'s project cannot be READ — never the displaced one', async () => {
     const home = mkTmp('ccrc-reclaim-');
     const s = store(home);
     const id = seedRun(s, DEAD, 1);
     s.db.prepare('UPDATE runs SET coordProject = ? WHERE program = ?').run('the-dead-project', PROGRAM);
+    seedRow(home, DEAD);
+    seedRow(home, LIVE, { project: 'demo' });
+    // The row LISTS and assembles — only `<LIVE>.project`'s bytes refuse.
+    const io = unreadableField(LIVE, 'project');
+    expect(await reclaimRun(depsFor(home, s, GONE, io), id, LIVE)).toMatchObject({ ok: false, kind: 'registry-unmeasurable' });
+    expect(stampOn(s, id)).toBe('the-dead-project');
+  });
+
+  it('refuses an EMPTY project field — `?? null` does not catch `\'\'`, and neither does the rung', async () => {
+    const home = mkTmp('ccrc-reclaim-');
+    const s = store(home);
+    const id = seedRun(s, DEAD, 1);
     seedRow(home, DEAD);
     seedRow(home, LIVE, { project: '' });
-    expect(await reclaimRun(depsFor(home, s, GONE), id, LIVE)).toMatchObject({ ok: true });
-    // D-2872's class: an empty field is not a measurement, and a stamp written
-    // once and never backfilled must not carry `''` as a project name.
-    expect(stampOn(s, id)).toBeNull();
+    expect(await reclaimRun(depsFor(home, s, GONE), id, LIVE)).toMatchObject({ ok: false, kind: 'project-mismatch' });
   });
 
   it('measures the field, not `SessionRecord.project`\'s `project ?? id` display default', async () => {
@@ -603,12 +615,70 @@ describe('reclaimRun restamps the board placement it just invalidated', () => {
     seedRow(home, DEAD);
     // No `<LIVE>.project` file at all, but the row still assembles from its
     // identity triple. `readSessionRecord(...).record.project` would answer the
-    // SESSION ID here — `buildRecord`'s `project ?? id` — and stamping that
-    // would put a session id on the board as a project name, permanently.
+    // SESSION ID here — `buildRecord`'s `project ?? id` — so a rung that read
+    // it would compare a session id with the run's project.
     seedRowNoProject(home, LIVE);
-    expect(await reclaimRun(depsFor(home, s, GONE), id, LIVE)).toMatchObject({ ok: true });
-    expect(stampOn(s, id)).not.toBe(LIVE);
+    expect(await reclaimRun(depsFor(home, s, GONE), id, LIVE)).toEqual({ ok: false, kind: 'project-mismatch',
+      detail: "the incoming coordinator's registry row records no project, so it cannot be the run's" });
     expect(stampOn(s, id)).toBeNull();
+  });
+});
+
+// D-5388: reclaim rebinds EVERY run of the programme (`reclaimProgram`'s one
+// UPDATE), so the heir is checked against every open run it would become the
+// parent of — not only the run the operator named. Each run's project, or the
+// programme's stored home (a crossing's coordinator sits there), admits.
+describe('reclaimRun checks the heir against every open run of the programme (D-5388)', () => {
+  const seedIn = (s: CoordStore, project: string, wave: number): number => {
+    const r = s.openRun({ program: PROGRAM, title: 'F5 demo', project, wave, waveOf: 2, claimedBy: DEAD });
+    if (!('id' in r)) throw new Error('fixture: openRun refused');
+    return r.id;
+  };
+
+  it('refuses an heir of ONE project of a two-project programme with no stored home, and moves nothing', async () => {
+    const home = mkTmp('ccrc-reclaim-');
+    const s = store(home);
+    const a = seedIn(s, 'demo', 1);
+    const b = seedIn(s, 'demo-b', 2);
+    seedRow(home, DEAD);
+    seedRow(home, LIVE, { project: 'demo' });
+    expect(await reclaimRun(depsFor(home, s, GONE), a, LIVE)).toEqual({ ok: false, kind: 'project-mismatch', by: 'demo',
+      detail: `run ${b} of this programme is in demo-b, and the incoming coordinator is of neither that project nor the programme's home` });
+    expect([okRun(s.run(a))!.claimedBy, okRun(s.run(b))!.claimedBy]).toEqual([DEAD, DEAD]);
+  });
+
+  it("admits an heir of the programme's stored HOME across both projects", async () => {
+    const home = mkTmp('ccrc-reclaim-');
+    const s = store(home);
+    const a = seedIn(s, 'demo', 1);
+    const b = seedIn(s, 'demo-b', 2);
+    s.setProgramHome(PROGRAM, 'demo');
+    seedRow(home, DEAD);
+    seedRow(home, LIVE, { project: 'demo' });
+    expect(await reclaimRun(depsFor(home, s, GONE), b, LIVE)).toMatchObject({ ok: true });
+    expect([okRun(s.run(a))!.claimedBy, okRun(s.run(b))!.claimedBy]).toEqual([LIVE, LIVE]);
+  });
+
+  it("admits a crossing programme's home heir whose runs all sit in another project", async () => {
+    const home = mkTmp('ccrc-reclaim-');
+    const s = store(home);
+    const a = seedIn(s, 'demo', 1);
+    s.setProgramHome(PROGRAM, 'demo-home');
+    seedRow(home, DEAD);
+    seedRow(home, LIVE, { project: 'demo-home' });
+    expect(await reclaimRun(depsFor(home, s, GONE), a, LIVE)).toMatchObject({ ok: true });
+    expect(okRun(s.run(a))!.claimedBy).toBe(LIVE);
+  });
+
+  it('ignores a TERMINAL run of another project: no open binding moves to the heir there', async () => {
+    const home = mkTmp('ccrc-reclaim-');
+    const s = store(home);
+    const a = seedIn(s, 'demo', 1);
+    const b = seedIn(s, 'demo-b', 2);
+    s.db.prepare("UPDATE runs SET state = 'done' WHERE id = ?").run(b);
+    seedRow(home, DEAD);
+    seedRow(home, LIVE, { project: 'demo' });
+    expect(await reclaimRun(depsFor(home, s, GONE), a, LIVE)).toMatchObject({ ok: true });
   });
 });
 

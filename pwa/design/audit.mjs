@@ -751,9 +751,17 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-surface)'],
     why: "the repo slug composed into .sess-open's accessible name (Task 6, board-placement wave 2), same ink-tertiary register as .sess-held next door — both sit directly on the project card's own ground. Its selector names no ancestor, so no route could ground it. The SELECTED row is answered by the achromatic group (--edge-strong), pinned separately in fleet-css.test.ts",
   },
+  '.sess-role': {
+    under: ['var(--bg-surface)'],
+    why: "D-5301's coordinator badge, composed into .sess-open's accessible name after .sess-repo and in its register (ink-tertiary on the project card's own ground). Its selector names no ancestor, so no route could ground it; without this entry it would join the uncovered census, which new rules may not do. The SELECTED row is answered by the achromatic group (--edge-strong), pinned separately in fleet-css.test.ts",
+  },
   '.sess-child': {
     under: ['var(--bg-surface)'],
     why: "child-reclamation wave 5's child-of-run label is a .sess-meta cell on an unselected .sess-line, whose ground is the project card, in the same ink-tertiary register as .sess-held next door. Its selector names no ancestor, so no route could ground it; without this entry it would join the uncovered census, which new rules may not do. The SELECTED row is answered by the achromatic group (--edge-strong), pinned separately in fleet-css.test.ts",
+  },
+  '.sess-restart': {
+    under: ['var(--bg-surface)'],
+    why: "D-5237's restart cell (\"restarted · out of memory · 3m ago\") is a .sess-meta cell on an unselected .sess-line, whose ground is the project card, in the same ink-tertiary register as .sess-held next door. Its selector names no ancestor, so no route could ground it; without this entry it would join the uncovered census, which new rules may not do. The SELECTED row is answered by the achromatic group (--edge-strong), pinned separately in fleet-css.test.ts",
   },
   '.sess-spawn': {
     under: ['var(--bg-surface)'],
@@ -762,6 +770,10 @@ export const INHERITED_GROUNDS = {
   '.sess-stranded': {
     under: ['var(--bg-surface)'],
     why: 'the stranded chip is a .sess-meta cell on an unselected .sess-line, whose ground is the project card. Its selector names no ancestor, so the auditor cannot recover that ground from CSS alone. The SELECTED row does not use this registered attention ink: .sess-line--active answers it through the achromatic group with --edge-strong, pinned separately in fleet-css.test.ts',
+  },
+  '.sess-state--coordinator': {
+    under: ['var(--bg-surface)'],
+    why: 'D-5296: the quiet "with coordinator" state word is the first .sess-meta cell on an unselected .sess-line, whose ground is the project card. Its selector names no ancestor, so the auditor cannot recover that ground from CSS alone. The SELECTED row is answered by the achromatic group (.sess-line--active .sess-state, --edge-strong), pinned separately in fleet-css.test.ts',
   },
   '.sess-offpool': {
     under: ['var(--bg-surface)'],
@@ -1004,7 +1016,7 @@ export const KEYFRAME_TROUGHS = {
   'chat.css jump-in 0': 'a one-shot entrance for the jump-to-latest button; the resting state is opacity 1',
   'chat.css caret-blink 0': 'the terminal caret, a step-end blink between 1 and 0. A caret is a cursor, not content',
   'chat.css working-glyph 0.35': 'the working indicator glyph (.msg-working-glyph). Reduced motion: animation none, opacity 1',
-  'chat.css working-dot 0.25': 'the three working dots (.msg-working-dots i), 4px decorative pips beside a full-strength label. Reduced motion: animation none, opacity inherits 1',
+  'chat.css working-dot 0.25': 'the three working dots (.msg-working-dots i), 4px decorative pips beside a full-strength label; the same dots are the own-words Send\'s busy face (.dlg-reply-wait i), painted in Send\'s busy ink (.dlg-reply-send[aria-busy=\'true\'], measured above) on a button a screen reader hears as Sending…. Reduced motion: animation none, opacity inherits 1',
   'chat.css tool-breathe 0.55': 'the running tool dot (.tool-dot--run, @ccrc/ui tool-card.css — the keyframe stayed here because its other consumer did) and the terminal "attaching" word. Reduced motion: animation none, opacity 0.8 for both — registered and measured above',
   'attach-spin.css attach-spin 1': 'a rotation; the stops set no opacity',
 };

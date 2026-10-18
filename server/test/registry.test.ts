@@ -12,7 +12,7 @@ import {
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
 import { unreadableField, absentField } from './ioDoubles.js';
-import { ROUTE_WRITABLE_FIELDS } from '../../shared/api.js';
+import { RESTART_CAUSES, ROUTE_WRITABLE_FIELDS } from '../../shared/api.js';
 
 const seed = (dir: string, id: string, fields: Record<string, string>) => {
   for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(dir, `${id}.${k}`), v);
@@ -37,7 +37,11 @@ function buildRecordFieldReadCount(src: string): number {
   const text = body![1]!;
   const bareCalls = [...text.matchAll(/\bfield(?:Measured)?\(/g)].length;
   const mapCalls = [...text.matchAll(/ROUTE_WRITABLE_FIELDS\.map\(/g)].length;
-  return bareCalls + mapCalls * (ROUTE_WRITABLE_FIELDS.length - 1);
+  // A read guarded by the listing (`names.includes(...) ? field(...) :
+  // Promise.resolve(null)`, D-5237's `lastend`) fires only for a row whose
+  // listing names the file, so it is not part of the cost every row pays (D-5347).
+  const listedOnly = [...text.matchAll(/names\.includes\([^)]*\)\s*\?\s*field(?:Measured)?\(/g)].length;
+  return bareCalls + mapCalls * (ROUTE_WRITABLE_FIELDS.length - 1) - listedOnly;
 }
 
 function taggedRegistryCensusClaims(src: string): Map<string, number[]> {
@@ -1257,6 +1261,57 @@ describe('the lifecycle stamps (D3)', () => {
 
   it('a session with no strand marker reads null', async () => {
     expect((await read()).stranded).toBeNull();
+  });
+});
+
+// D-5237: `$REG/<id>.lastend` — `<epoch> <cause>`, ccd's record of the last
+// process end — is read only when the listing names it, through `parseLastEnd`.
+describe('the last process end (D-5237)', () => {
+  let home: string;
+  let reg: string;
+  beforeEach(() => {
+    home = mkTmp('ccrc-');
+    seedRoster(home);
+    reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    seed(reg, 'lane-a-project-a', {
+      uuid: 'a'.repeat(36), wrapper: 'claude', workdir: '/w', project: 'project-a',
+    });
+  });
+  const lastEndReads: string[] = [];
+  const countingIO: FleetIO = {
+    ...localIO,
+    readFile: async (p) => { if (p.endsWith('.lastend')) lastEndReads.push(p); return localIO.readFile(p); },
+    readFileMeasured: async (p, t, s) => { if (p.endsWith('.lastend')) lastEndReads.push(p); return localIO.readFileMeasured(p, t, s); },
+  };
+  const read = async () => (await readRegistry(countingIO, loadConfig({ CCRC_HOME: home })))[0]!;
+
+  it('parses `<epoch> <cause>` into epoch ms and the cause', async () => {
+    seed(reg, 'lane-a-project-a', { lastend: '1785300000 oom' });
+    expect((await read()).lastEnd).toEqual({ at: 1785300000_000, cause: 'oom' });
+  });
+  it('absent is null, and costs no read', async () => {
+    lastEndReads.length = 0;
+    expect((await read()).lastEnd).toBeNull();
+    expect(lastEndReads).toEqual([]);
+  });
+  it('a malformed line is null, and the row still parses', async () => {
+    for (const bad of ['', 'oom', '1785300000', 'x 1785300000', '1785300000 oom extra', '1785300000 OOM']) {
+      seed(reg, 'lane-a-project-a', { lastend: bad });
+      const r = await read();
+      expect(r.id, JSON.stringify(bad)).toBe('lane-a-project-a');
+      expect(r.lastEnd, JSON.stringify(bad)).toBeNull();
+    }
+  });
+  it('a cause this build does not know degrades to unknown', async () => {
+    seed(reg, 'lane-a-project-a', { lastend: '1785300000 cosmic-ray' });
+    expect((await read()).lastEnd).toEqual({ at: 1785300000_000, cause: 'unknown' });
+  });
+  it('every cause ccd writes parses as itself', async () => {
+    for (const cause of RESTART_CAUSES) {
+      seed(reg, 'lane-a-project-a', { lastend: `1785300000 ${cause}` });
+      expect((await read()).lastEnd).toEqual({ at: 1785300000_000, cause });
+    }
   });
 });
 

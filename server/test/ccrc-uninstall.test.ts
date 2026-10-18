@@ -56,6 +56,8 @@ import {
   plantLaneConfig, laneUnits, GPT_LANE_BINS, type StubRc, type LanePorts,
 } from './codexLaneFixture.js';
 import { psArgs } from './laneReaper.js';
+// CCR-15 wave 10: the collector's generation journal's ONE name (path-identity spec 2026-10-12 §5.3).
+import { COLLECT_LANE_JOURNAL_BASENAME } from '../src/coord/collectLaneJournal.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -203,6 +205,8 @@ function plantInstalledBox(home: string, opts: { versioned?: string[] } = {}): v
   writeFileSync(join(bin, 'ccd-tmp-sweep'), '#!/bin/sh\n# tmp sweep\n', { mode: 0o755 });
   // The pane-scope sweep, placed by `_inst_bins` on the same non-Darwin arm.
   writeFileSync(join(bin, 'ccd-scope-sweep'), '#!/bin/sh\n# scope sweep\n', { mode: 0o755 });
+  // D-5241: the tool-child priority's shell prefix, placed by `_inst_bins` on the same non-Darwin arm.
+  writeFileSync(join(bin, 'ccd-tool-adj'), '#!/bin/sh\n# tool adj\n', { mode: 0o755 });
   // history spec §9.5: the history sweep's shim, placed by `_inst_bins` off
   // server boxes — planted so `_uninst_tree_bins`' removal is measured.
   writeFileSync(join(bin, 'ccd-history-sweep'), '#!/bin/sh\n# history sweep\n', { mode: 0o755 });
@@ -286,6 +290,11 @@ function plantInstalledBox(home: string, opts: { versioned?: string[] } = {}): v
   }
   writeFileSync(join(units, 'claude-session@.service.d', 'limits.conf'), '[Service]\n');
   writeFileSync(join(units, 'app-claude\\x2dsession.slice.d', 'limits.conf'), '[Slice]\n');
+  // D-5241: the victim policy's two scope drop-ins, which `_inst_units` places on every Linux role.
+  for (const d of ['tmux-spawn-.scope.d', 'ccrc-tmux-server.scope.d']) {
+    mkdirSync(join(units, d), { recursive: true });
+    writeFileSync(join(units, d, '50-oom-continue.conf'), '[Scope]\nOOMPolicy=continue\n');
+  }
   // …and the same "this box is installed" fixture in launchd's spelling. The
   // verbs under test read whichever directory THIS platform installs into, so
   // a fixture that planted only the systemd set would leave the Darwin arm
@@ -531,6 +540,19 @@ function instUnitsDestinations(): string[] {
 }
 
 describe('ccrc uninstall: the remove set (spec §7)', () => {
+  itLinux('D-5241: the scope drop-ins go as FILES — an operator\'s own drop-in beside one, and its directory, stay', () => {
+    const home = mkTmp('ccrc-uninst-oomdropins-');
+    plantInstalledBox(home);
+    const units = join(home, '.config', 'systemd', 'user');
+    writeFileSync(join(units, 'ccrc-tmux-server.scope.d', 'override.conf'), '[Scope]\nOOMPolicy=continue\n');
+    const r = runVerb(home, 'uninstall');
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(join(units, 'ccrc-tmux-server.scope.d', '50-oom-continue.conf'))).toBe(false);
+    expect(readdirSync(join(units, 'ccrc-tmux-server.scope.d'))).toEqual(['override.conf']);
+    expect(existsSync(join(units, 'tmux-spawn-.scope.d'))).toBe(false);
+    expect(r.stdout).toMatch(/^uninstall: units: stopped, disabled and removed \(incl\. both drop-ins, the two OOMPolicy=continue scope drop-ins and the slice escape\)$/m);
+  });
+
   itLinux('units: every unit file the box had goes — read off the fixture, which must plant all of _inst_units — disable --now, daemon-reload last, recording stub only (Plan 3a Task 7; 2b-1 item 19)', () => {
     const home = mkTmp('ccrc-uninst-units-');
     plantInstalledBox(home);
@@ -548,6 +570,9 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     expect(before.filter((f) => existsSync(join(units, f))), 'these unit files survived the uninstall').toEqual([]);
     expect(existsSync(join(units, 'claude-session@.service.d'))).toBe(false);
     expect(existsSync(join(units, 'app-claude\\x2dsession.slice.d'))).toBe(false);
+    // D-5241: both scope drop-ins go, and their directories with them once empty.
+    expect(existsSync(join(units, 'tmux-spawn-.scope.d'))).toBe(false);
+    expect(existsSync(join(units, 'ccrc-tmux-server.scope.d'))).toBe(false);
     const calls = readFileSync(join(home, 'systemctl-calls'), 'utf8')
       .split('\n').filter((l) => l !== '');
     expect(calls).toContain('--user disable --now ccrc.service');
@@ -768,7 +793,7 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     // `_inst_bins` places them, so an uninstall that left them strands them on
     // PATH for ever.
     for (const b of ['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-usage-sweep',
-      'ccd-usage-sweep.py', 'ccd-account-health', 'ccd-tmp-sweep', 'ccd-scope-sweep', 'ccd-history-sweep',
+      'ccd-usage-sweep.py', 'ccd-account-health', 'ccd-tmp-sweep', 'ccd-scope-sweep', 'ccd-tool-adj', 'ccd-history-sweep',
       'ccd-telemetry-keepalive', 'ccd-account-auth', 'ccd-pool-sync', 'ccd-update-sync',
       ...GPT_LANE_BINS, 'graphify']) {
       expect(existsSync(join(home, '.local', 'bin', b)), `${b} survived`).toBe(false);
@@ -1359,6 +1384,24 @@ describe('ccrc backup: update\'s step 2 standalone, with CCRC_BACKUP_KEEP prunin
     expect(left).not.toContain('20250101-000000');
     expect(left).not.toContain('20250102-000000');
     expect(left.length).toBe(3);
+  });
+
+  it('ccrc backup takes no copy of the journal (path-identity spec 2026-10-12 §5.3)', () => {
+    const home = mkTmp('ccrc-backup-journal-');
+    plantInstalledBox(home);
+    plantCoordDb(home);
+    const journal = join(home, '.ccrc', COLLECT_LANE_JOURNAL_BASENAME);
+    writeFileSync(journal, '{"generation":3}\n', { mode: 0o600 });
+    const before = readFileSync(journal);
+    const r = runVerb(home, 'backup');
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    const dir = /^backup: (\S+)/m.exec(r.stdout)![1]!;
+    expect(readFileSync(join(dir, 'coord.db')).subarray(0, 15).toString('utf8'),
+      'CONTROL: the backup ran and took its coord.db snapshot').toBe('SQLite format 3');
+    const copies = readdirSync(dir, { recursive: true, encoding: 'utf8' })
+      .filter((p) => path.basename(p) === COLLECT_LANE_JOURNAL_BASENAME);
+    expect(copies, 'the backup holds a copy of the journal').toEqual([]);
+    expect(readFileSync(journal).equals(before), 'ccrc backup rewrote the journal').toBe(true);
   });
 });
 
@@ -2622,6 +2665,22 @@ describe('ccrc uninstall --purge and the history store (history spec §9.5, O42,
     const store = join(home, '.ccrc', 'history');
     const covering = sources.filter((s) => s === store || store.startsWith(s.endsWith('/') ? s : `${s}/`));
     expect(covering, 'a backup row copies the history store, or a directory holding it').toEqual([]);
+  });
+
+  it('_upd_backup_pairs lists no row equal to, or an ancestor of, the journal (path-identity spec 2026-10-12 §5.3)', () => {
+    const home = mkTmp('ccrc-uninst-journal-o45-');
+    plantInstalledBox(home);
+    const r = sourced(home, '_upd_backup_pairs');
+    expect(r.code, r.stderr).toBe(0);
+    const sources = r.stdout.split('\n').filter(Boolean).map((l) => l.split('\t')[1] ?? '');
+    expect(sources.length, 'the listing printed almost nothing — the check below would be vacuous').toBeGreaterThan(3);
+    expect(sources, 'the listing did not run against this HOME').toContain(join(home, '.ccrc', 'memory'));
+    const journal = join(home, '.ccrc', COLLECT_LANE_JOURNAL_BASENAME);
+    const covers = (s: string): boolean => s === journal || journal.startsWith(s.endsWith('/') ? s : `${s}/`);
+    expect(covers(join(home, '.ccrc')), 'CONTROL: an ancestor row covers it').toBe(true);
+    expect(covers(journal), 'CONTROL: the row itself covers it').toBe(true);
+    expect(covers(join(home, '.ccrc', 'memory')), 'CONTROL: a sibling row does not').toBe(false);
+    expect(sources.filter(covers), 'a backup row copies the journal, or a directory holding it').toEqual([]);
   });
 });
 

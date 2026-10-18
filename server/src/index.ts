@@ -1,4 +1,4 @@
-import { buildServer, type Deps } from './server.js';
+import { buildServer, type CollectLaneDeps, type Deps } from './server.js';
 import { derivedRoleNote, loadConfig } from './config.js';
 import { readBuildInfo, type BuildInfo } from './buildinfo.js';
 import { realRunner, Tmux } from './exec.js';
@@ -10,6 +10,7 @@ import { FleetWatcher } from './watch.js';
 import { installShutdownSeal } from './shutdownseal.js';
 import { connectFleet, type FleetClient } from './remote/client.js';
 import { makeRefreshCaps } from './refreshcaps.js';
+import { FleetIdentityCell } from './fleetidentity.js';
 import { PushService } from './push.js';
 import { NotifyLog } from './notifylog.js';
 import { Presence } from './presence.js';
@@ -18,14 +19,17 @@ import { bootBoxToken } from './token/boot.js';
 import { BoxTokenDriver } from './token/driver.js';
 import { fileBothRoleWriter, fileTokenStore, tokenPaths } from './token/files.js';
 import { gateRowsOver, generationReaderOver, tokenSyncLinkOver } from './token/link.js';
-import { openCoordDb } from './coord/db.js';
+import { coordinationRestoreRefusal, openCoordDb } from './coord/db.js';
+import { COORDINATION_RESTORE_MARKER_FILE } from './coord/delegation-checkpoint.js';
 import { CoordStore } from './coord/store.js';
 import { PoolEdgeLog, defaultPoolEdgeLogPath } from './coord/pooledgelog.js';
 import { UpdateIntentLog, defaultUpdateIntentLogPath } from './coord/updateintentlog.js';
+import { collectLaneJournalAt, defaultCollectLaneJournalPath } from './coord/collectLaneJournal.js';
 import { readLocalCcdCaps } from './localcaps.js';
 import { localUpdateSpawnFor } from './update/converge.js';
 import { UPDATE_OP_TIMEOUT_MS } from '../../shared/agent-protocol.js';
 import { apiBaseProblem, createCataloguePoller } from './update/catalogue.js';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 
 const cfg = loadConfig();
@@ -60,6 +64,16 @@ const tokenBoot = await bootBoxToken({
 });
 for (const line of tokenBoot.warnings) console.warn(line);
 const mailToken = tokenBoot.holder;
+
+// R24 (delegation broker wave 3): an active coordination restore marker stops the process BEFORE coord.db is opened, and so does a
+// marker that cannot be measured (fail closed). `ccrc coordination-snapshot` publishes the marker while it replaces coord.db and the
+// delegation journal and checkpoint, so booting over it would open a half-replaced set. Refused the way the agent-link check below
+// refuses: one `ccrc-server:` line on stderr, then a nonzero exit.
+const restoreRefusal = coordinationRestoreRefusal(cfg.ccrcDir, COORDINATION_RESTORE_MARKER_FILE);
+if (restoreRefusal !== null) {
+  console.error(restoreRefusal);
+  process.exit(1);
+}
 
 // Opened at the root, before the watcher: a database that cannot be migrated
 // must stop the process, not be discovered by the first sweep that touches
@@ -104,6 +118,16 @@ if (releaseApiUrlProblem !== null) {
 // 2026-09-20 §6).
 const updateIntentLog = new UpdateIntentLog(defaultUpdateIntentLogPath(cfg.ccrcDir));
 
+// The collector switch's ONE generation journal and this process's ONE boot nonce (path-identity spec 2026-10-12
+// §5.2, §5.6), beside `updateIntentLog` and for its reason: `CoordStore.setCollectLane` appends to the journal INSIDE
+// its transaction, so the route and the collector's latch share this instance. The journal resolves through
+// `cfg.ccrcDir`. The nonce is minted once per process and read only by the route's confirm key, so a key minted
+// before a restart never confirms after it; it never enters L1 state.
+const collectLane: CollectLaneDeps = {
+  journal: collectLaneJournalAt(defaultCollectLaneJournalPath(cfg.ccrcDir)),
+  bootNonce: randomUUID(),
+};
+
 // ONE queue, above the mode branch, so both modes and both consumers get the
 // same object. Serialising the naming sweep's rename against
 // POST /workspace/reap is the point; a per-consumer queue would serialise a
@@ -130,9 +154,11 @@ if (cfg.fleetMode === 'remote') {
     poolEdgeLog,
     catalogue,
     updateIntentLog,
+    collectLane,
     updateRunner: localUpdateSpawnFor(cfg.home),
     sendUpdateOp: (tag, kind) => fleet.client.request({ t: 'req', op: 'update', tag, kind }, UPDATE_OP_TIMEOUT_MS),
-    refreshCaps: makeRefreshCaps(fleet.client, fleet.state),
+    fleetIdentity: fleet.identity,
+    refreshCaps: makeRefreshCaps(fleet.client, fleet.state, fleet.identity),
   };
 } else {
   // Fix round 3 (task 14, Important #3): real evidence, not an absent
@@ -180,13 +206,20 @@ if (cfg.fleetMode === 'remote') {
   void readLocalCcdCaps(cfg.ccdBin).then((verbs) => {
     if (verbs !== null) fleetState.ccdVerbs = verbs;
   });
+  // Path-identity spec 2026-10-12 §5.2, local mode. There is no agent connection, so nothing invalidates this cell
+  // and its epoch stays 0. The inventory's own sweep publishes THIS box's directly read node-id into it
+  // (`runInventory`'s `ownIdentity`), because in local mode this box is the fleet node. A box whose node-id cannot
+  // be read stays unmeasured; the connection label is never an identity.
+  const localFleetIdentity = new FleetIdentityCell();
   deps = {
     cfg, build, runCcd: ccdRunner(realRunner, cfg), tmux: new Tmux(realRunner), io: localIO,
     spawnPty: attachPty, push, notifyLog, presence, queue, mailToken, coord,
     poolEdgeLog,
     catalogue,
     updateIntentLog,
+    collectLane,
     updateRunner: localUpdateSpawnFor(cfg.home),
+    fleetIdentity: localFleetIdentity,
     // `connected`/`downSince` are inert for local mode — every reader of
     // them is gated on `cfg.fleetMode === 'remote'` first (server.ts,
     // watch.ts) — so `true`/`null` are placeholders, never read as a claim

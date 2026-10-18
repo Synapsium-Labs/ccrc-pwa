@@ -43,7 +43,7 @@ import {
   asStallWatchView, stallWriteRefusal, useStallWatchView, type StallWatchPoll,
 } from '../fleet/useStallWatchView';
 import { api } from '../lib/api';
-import { UNCONFIRMED_TEXT } from './settingsText';
+import { SETTINGS_AMBER_NOTE, SETTINGS_NOW_CLASS, UNCONFIRMED_TEXT } from './settingsText';
 
 /** Fill each `{name}` slot of an L0 text from `slots`. A slot it was not given stays as written; a value is
  *  inserted literally (a replacer function, so a `$` in a server's detail is never a replacement pattern). */
@@ -265,11 +265,7 @@ export function StallWatchSection(): ReactNode {
  *  server's effect and key. */
 interface PendingConfirm { request: StallWatchRequest; confirm: StallConfirmRequired }
 
-const NOW_CLASS: Record<StallNowTone, string> = {
-  head: 'settings-catalogue',
-  note: 'settings-note',
-  warn: 'settings-catalogue settings-catalogue--amber',
-};
+const NOW_CLASS: Readonly<Record<StallNowTone, string>> = SETTINGS_NOW_CLASS;
 /** The select's value for the built-in, and for a stored value the list does not hold (an unreadable one): an
  *  empty option, drawn blank, so the select never shows a value the server did not answer. A stored NUMBER equal to
  *  the view's built-in is not the built-in: the server reports it as a pinned choice (`chosen`), a `default` write
@@ -361,7 +357,7 @@ function StallWatchBody({ view, stale, poll }: { view: StallWatchView; stale: bo
 
   return (
     <>
-      {stale && <p className="settings-note settings-catalogue--amber">{STALL_SECTION_TEXT.stale}</p>}
+      {stale && <p className={SETTINGS_AMBER_NOTE}>{STALL_SECTION_TEXT.stale}</p>}
       {now.map((line, i) => <p key={i} className={NOW_CLASS[line.tone]}>{line.text}</p>)}
       {next !== null && <p className="settings-catalogue">{next.lead}</p>}
       {next !== null && next.waitsOn.length > 0 && (

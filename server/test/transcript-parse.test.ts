@@ -6,7 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { localIO } from '../src/io.js';
 import { resolveTranscript, transcriptPath, type TranscriptResolution } from '../src/transcript/resolve.js';
 import { parseTranscriptLine } from '../src/transcript/parse.js';
-import type { ChatEvent } from '../../shared/api.js';
+import { IDLE_COMPACT_NUDGE_PROMPT, type ChatEvent } from '../../shared/api.js';
+import { ROW as NUDGE_ROW } from './idleNudgeFixtures.js';
 
 const fixture = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'transcript-sample.jsonl');
 
@@ -266,6 +267,84 @@ describe('the harness resume pair is system, not a conversation (D-2228)', () =>
   it('a human typing the sentence is a user event — isMeta decides, not the words', () => {
     const human = metaPrompt.replace('"isMeta":true', '"isMeta":false');
     expect(parseTranscriptLine(human).map((e) => e.kind)).toEqual(['user']);
+  });
+});
+
+// D-5371: Claude Code's idle ("sleep") compaction runs on a session whose turn
+// had already ended and starts no turn. The one row that says so is its own
+// `informational` notice after the summary; the separator before "turn off" is
+// a NO-BREAK SPACE in the binary (`M8n="\xA0"`). Shapes from a fleet transcript,
+// neutral content.
+describe('the idle-compaction notice is a system event, not dropped (D-5371)', () => {
+  const T0 = '2026-10-17T17:43:12.000Z';
+  const rows = [
+    { type: 'assistant', uuid: 'a1', timestamp: T0, message: { role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text: 'Here is the third question.' }] } },
+    { type: 'system', subtype: 'turn_duration', isMeta: false, uuid: 'd1', timestamp: '2026-10-17T17:43:13.000Z' },
+    { type: 'system', subtype: 'compact_boundary', content: 'Conversation compacted', level: 'info', uuid: 'b1',
+      compactMetadata: { trigger: 'auto', preTokens: 201796, postTokens: 38994, durationMs: 68059 }, timestamp: '2026-10-17T18:37:58.000Z' },
+    { type: 'user', isCompactSummary: true, uuid: 's1', timestamp: '2026-10-17T18:37:58.500Z',
+      message: { role: 'user', content: 'This session is being continued from a previous conversation that ran out of context. Continue the conversation from where it left off without asking the user any further questions.' } },
+    { type: 'system', subtype: 'informational', isMeta: false, level: 'notice', uuid: 'n1', timestamp: '2026-10-17T18:37:59.980Z',
+      content: 'Compacted while idle, before the prompt cache expired · turn off with "idleCompaction": false in settings.json' },
+  ];
+  const parse = (o: object): ChatEvent[] => parseTranscriptLine(JSON.stringify(o));
+
+  it('the notice after an idle compaction is the last event, origin idle-compact, CC\'s sentence as the text', () => {
+    const events = rows.flatMap(parse);
+    expect(events.at(-1)).toEqual({
+      kind: 'system', uuid: 'n1', ts: '2026-10-17T18:37:59.980Z', text: rows[4]!.content, origin: 'idle-compact',
+    });
+  });
+  it('the "after an hour idle" notice stays dropped: Claude Code yields it inside the turn the operator just started (compact_on_return), so "nothing was running" would be false (D-5371)', () => {
+    const variant = { ...rows[4]!, content: 'Compacted after an hour idle, using a summary written while you were away · turn off with "idleCompaction": false in settings.json' };
+    expect(parse(variant)).toEqual([]);
+  });
+  it('every other system row stays dropped: the boundary, the turn duration, another informational row', () => {
+    expect(parse(rows[1]!)).toEqual([]);
+    expect(parse(rows[2]!)).toEqual([]);
+    expect(parse({ ...rows[4]!, content: 'Some other notice' })).toEqual([]);
+    expect(parse({ ...rows[4]!, subtype: 'local_command' })).toEqual([]);
+    expect(parse({ ...rows[4]!, content: undefined, message: { content: rows[4]!.content } })).toEqual([]);
+  });
+  it('a user row that starts with the same words is still the operator speaking — the type decides', () => {
+    const typed = { type: 'user', uuid: 'u9', timestamp: T0, message: { role: 'user', content: 'Compacted while idle, before the prompt cache expired' } };
+    expect(parse(typed).map((e) => e.kind)).toEqual(['user']);
+  });
+  it('a sidechain notice is dropped like every sidechain row', () => {
+    expect(parse({ ...rows[4]!, isSidechain: true })).toEqual([]);
+  });
+  it('a compaction in the middle of a turn has no notice and yields no idle-compact event', () => {
+    const midTurn = [
+      { type: 'user', uuid: 'r1', timestamp: T0, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }] } },
+      rows[2]!, rows[3]!,
+      { type: 'assistant', uuid: 'a2', timestamp: '2026-10-17T18:38:00.500Z', message: { role: 'assistant', content: [{ type: 'tool_use', id: 't2', name: 'Bash', input: { command: 'true' } }] } },
+    ];
+    expect(midTurn.flatMap(parse).some((e) => e.kind === 'system' && e.origin === 'idle-compact')).toBe(false);
+  });
+});
+
+// D-5373: the server's own nudge after an idle compaction is a plain user row
+// (sendPrompt writes no isMeta); the chat shows it as a pill so the operator
+// sees why a turn started. Matched on the WHOLE trimmed text, never a prefix.
+describe('the idle-compaction nudge is a system pill, not the operator speaking (D-5373)', () => {
+  const parse = (o: object): ChatEvent[] => parseTranscriptLine(JSON.stringify(o));
+  it('a user row whose whole text is the nudge prompt is a system event, origin idle-compact-nudge', () => {
+    expect(parse(NUDGE_ROW.nudge)).toEqual([{
+      kind: 'system', uuid: 'u3', ts: NUDGE_ROW.nudge.timestamp, text: IDLE_COMPACT_NUDGE_PROMPT, origin: 'idle-compact-nudge',
+    }]);
+  });
+  it('the same text in a text block, or with surrounding whitespace, is still the nudge', () => {
+    const blocks = { ...NUDGE_ROW.nudge, message: { role: 'user', content: [{ type: 'text', text: `  ${IDLE_COMPACT_NUDGE_PROMPT}\n` }] } };
+    expect(parse(blocks).map((e) => e.kind === 'system' ? e.origin : e.kind)).toEqual(['idle-compact-nudge']);
+  });
+  it('the operator typing a sentence that merely starts with the nudge stays the operator', () => {
+    const longer = { ...NUDGE_ROW.nudge, message: { role: 'user', content: `${IDLE_COMPACT_NUDGE_PROMPT} Also run the tests.` } };
+    expect(parse(longer).map((e) => e.kind)).toEqual(['user']);
+    const shorter = { ...NUDGE_ROW.nudge, message: { role: 'user', content: 'Continue with your open tasks.' } };
+    expect(parse(shorter).map((e) => e.kind)).toEqual(['user']);
+  });
+  it('a sidechain copy is dropped like every sidechain row', () => {
+    expect(parse({ ...NUDGE_ROW.nudge, isSidechain: true })).toEqual([]);
   });
 });
 

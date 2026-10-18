@@ -1,9 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 // The ladder lives in `shared/` because `reviveFleetSession` is its second
 // producer — see its docstring, and fleetstate.test.ts's derivation suite.
-import { sessionBucket, SESSION_LIFECYCLES, type BucketInput } from '../../shared/api.js';
+import { sessionBucket, reviveFleetSession, SESSION_LIFECYCLES, SERVER_CAPS_FILE, renderServerCaps, type BucketInput, type FleetSession } from '../../shared/api.js';
+import { execFileSync } from 'node:child_process';
+import { readHookStateRawMeasured } from '../src/hookstate.js';
 import { loadConfig } from '../src/config.js';
 import { assembleFleet } from '../src/fleet.js';
 import { Tmux, type Runner } from '../src/exec.js';
@@ -14,7 +16,7 @@ import { seedRoster } from './helpers.js';
 
 const base: BucketInput = {
   status: 'idle', statusUpdatedAt: 1000, dialogPending: false,
-  hookState: null, archivedAt: null, pr: null,
+  hookState: null, archivedAt: null, pr: null, background: null,
 };
 
 describe('sessionBucket', () => {
@@ -327,7 +329,8 @@ describe('sessionBucket', () => {
     writeFileSync(path.join(reg2, 'claude-demo.started'), '1');
     const idleRun: Runner = async (_cmd, args) => {
       if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '', stderr: '' };
+      // A real pane pid with no live file behind it (`no-state`, idle): since D-5234 a NULL pid is unmeasured `busy`.
+      if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
       return { code: 0, stdout: '', stderr: '' };
     };
     const fleetNoHookFile = await assembleFleet(
@@ -533,5 +536,311 @@ describe('the lifecycle field moves no bucket (M10)', () => {
       pr: { phase: 'merged' } as never, lifecycle: 'stopped' as const,
     };
     expect(sessionBucket(s, null).bucket).toBe('cleanup');
+  });
+});
+
+// ── `background-aware-working` (D-5231; spec §5.1) ──
+// A Stop that leaves DELEGATED work running keeps a live `busy` on `working`: from 2.1.277 Claude Code keeps the live
+// file `busy` through that work, so the hook `done` is not evidence of a wedge there. D-75 is unchanged for a Stop with
+// no delegated work, and `done` is dated from the live file's idle write once the work ends.
+describe('a Stop that leaves delegated work running (D-5231)', () => {
+  const BG = { count: 2, kinds: ['workflow'] };
+
+  it('(a) busy, a NEWER hook Stop `done` with delegated work → working, dated by the live file', () => {
+    const r = sessionBucket({ ...base, status: 'busy', statusUpdatedAt: 1000, hookState: 'done', background: BG }, 5700, 'Stop');
+    expect(r).toEqual({ bucket: 'working', bucketSince: 1000 });
+  });
+
+  // Every D-75 shape that settles `done` today, with no delegated work: null and a measured zero alike.
+  const WEDGES: [string, BucketInput, number, string | null, { bucket: string; bucketSince: number | null }][] = [
+    ['a wedged busy, newer Stop done', { ...base, status: 'busy', statusUpdatedAt: 1000, hookState: 'done' }, 5700, 'Stop', { bucket: 'done', bucketSince: 5700 }],
+    ['a wedged busy, no live stamp', { ...base, status: 'busy', statusUpdatedAt: null, hookState: 'done' }, 5700, 'Stop', { bucket: 'done', bucketSince: 5700 }],
+    ['an idle row, newer Stop done', { ...base, hookState: 'done' }, 7777, 'Stop', { bucket: 'done', bucketSince: 7777 }],
+    ['an idle row, done with no event', { ...base, hookState: 'done' }, 7777, null, { bucket: 'done', bucketSince: 7777 }],
+  ];
+  it.each(WEDGES)('(b) %s: still done with background null and with a count of 0', (_l, input, at, ev, want) => {
+    expect(sessionBucket({ ...input, background: null }, at, ev)).toEqual(want);
+    expect(sessionBucket({ ...input, background: { count: 0, kinds: [] } }, at, ev)).toEqual(want);
+  });
+
+  it('(c) live idle at T2 after a Stop at T1 with background set → done, dated T2', () => {
+    const r = sessionBucket({ ...base, status: 'idle', statusUpdatedAt: 9000, hookState: 'done', background: BG }, 5700, 'Stop');
+    expect(r).toEqual({ bucket: 'done', bucketSince: 9000 });
+  });
+
+  it('(c) and a Stop LATER than the idle write keeps the Stop\'s own stamp', () => {
+    const r = sessionBucket({ ...base, status: 'idle', statusUpdatedAt: 5000, hookState: 'done', background: BG }, 5700, 'Stop');
+    expect(r).toEqual({ bucket: 'done', bucketSince: 5700 });
+  });
+
+  it('(d) the measured flap shape as a replay (DERIVED from the investigation\'s timeline, times only): no sample reads done', () => {
+    // live `busy` throughout from T0; the hook: working at +18.2 s, a Stop listing two workflows at +20.2 s, an agent
+    // PostToolUse (today's write: `working`, no pair) at +32.3 s.
+    const T0 = 1_000_000;
+    const live = { ...base, status: 'busy' as const, statusUpdatedAt: T0 };
+    const samples: [BucketInput, number, string][] = [
+      [{ ...live, hookState: 'working', background: null }, T0 + 18_200, 'UserPromptSubmit'],
+      [{ ...live, hookState: 'done', background: { count: 2, kinds: ['workflow'] } }, T0 + 20_200, 'Stop'],
+      [{ ...live, hookState: 'working', background: null }, T0 + 32_300, 'PostToolUse'],
+    ];
+    for (const [input, at, ev] of samples) {
+      expect(sessionBucket(input, at, ev), `${ev} at +${(at - T0) / 1000}s`).toEqual({ bucket: 'working', bucketSince: T0 });
+    }
+  });
+
+  it('(e) reviveFleetSession of a cached row with no background → null, and the ladder\'s old answers', () => {
+    const row: FleetSession = {
+      id: 'lane-a-project-a', wrapper: 'lane-a', home: '/home/fixture', project: 'project-a', workdir: '/data/projects/project-a',
+      workspace: null, name: null, status: 'busy', statusUpdatedAt: 1000, limits: null,
+      dialogPending: false, version: null, model: null, effort: null, ultracode: false,
+      branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
+      hookState: 'done', askSummary: null, subagents: null, background: null, lastEnd: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'working', bucketSince: 1000,
+      unmeasured: [], statusUnmeasured: false, lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null,
+      started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, role: 'coordinator', releasedFrom: null, withCoordinator: null,
+    };
+    const cached = JSON.parse(JSON.stringify(row)) as Record<string, unknown>;
+    delete cached['background'];
+    delete cached['bucket'];
+    delete cached['bucketSince'];
+    const revived = reviveFleetSession(cached);
+    expect(revived).not.toBeNull();
+    expect(revived!.background).toBeNull();
+    // no hook stamp on a cached row: a busy one stays working, exactly the pre-D-5231 answer
+    expect(revived!.bucket).toBe(sessionBucket({ ...base, status: 'busy', statusUpdatedAt: 1000, hookState: 'done' }, null).bucket);
+    expect(revived!.bucket).toBe('working');
+    // a present, well-formed value survives; a malformed one degrades to null without rejecting the row
+    expect(reviveFleetSession({ ...cached, background: { count: 2, kinds: ['workflow'] } })!.background).toEqual({ count: 2, kinds: ['workflow'] });
+    for (const bad of [{ count: -1, kinds: [] }, { count: 1.5, kinds: [] }, { count: 1, kinds: 'workflow' }, 'x', [1]]) {
+      expect(reviveFleetSession({ ...cached, background: bad })!.background, JSON.stringify(bad)).toBeNull();
+    }
+  });
+
+  // (b2) END TO END: the real hook writes the hookstate from a Stop whose only listed task is a FINISHED subagent, the
+  // real reader parses it, and `assembleFleet` ships the row. The hook's status rule writes `bgDelegated: 0`, so
+  // `fleet.ts` leaves `background` null and D-75's wedge recovery answers `done` over a stale live `busy`.
+  describe('(b2) a finished task does not switch off D-75', () => {
+    const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
+    const FIVE = path.resolve(__dirname, 'fixtures/hook/stop-bg-five-kinds.json');
+    const ID = 'lane-a-project-a';
+    const UUID = '00000000-0000-4000-8000-000000000001';
+    const GENERATION = '0189abcd-1234-5678-9abc-0123456789ab';
+    const ROSTER = { version: 1, accounts: [{
+      id: 'lane-a', label: 'lane-a', configDirSuffix: '.lane-a',
+      exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic',
+    }] };
+
+    /** `after`: hook payloads run after the Stop; `caps`: a current `server-caps` listing those words first. */
+    const rowAfterStop = async (tasks: unknown[], after: object[] = [], caps: string[] = []): Promise<FleetSession> => {
+      const home = mkTmp('ccrc-bg-');
+      seedRoster(home, ROSTER);
+      const reg = path.join(home, '.cc-sessions');
+      mkdirSync(reg, { recursive: true });
+      const fields = { wrapper: 'lane-a', project: 'project-a', workdir: '/data/projects/project-a', uuid: UUID, started: '1', generation: GENERATION };
+      for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${ID}.${k}`), v);
+      const bin = path.join(home, 'bin');
+      mkdirSync(bin, { recursive: true });
+      writeFileSync(path.join(bin, 'tmux'), `#!/bin/sh\necho "cc-${ID}"\n`, { mode: 0o755 });
+      const payload = { ...(JSON.parse(readFileSync(FIVE, 'utf8')) as Record<string, unknown>), background_tasks: tasks };
+      if (caps.length > 0) {
+        mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+        writeFileSync(path.join(home, '.ccrc', SERVER_CAPS_FILE), renderServerCaps(caps, Math.floor(Date.now() / 1000)));
+      }
+      for (const p of [payload, ...after]) {
+        execFileSync('bash', [HOOK], {
+          input: JSON.stringify(p), encoding: 'utf8',
+          env: { ...process.env, HOME: home, PATH: `${bin}:${process.env['PATH'] ?? ''}`, TMUX_PANE: '%1',
+            CLAUDE_CODE_SESSION_ID: UUID, CLAUDE_PID: '40613', CCRC_SESSION_GENERATION: GENERATION },
+        });
+      }
+      const raw = await readHookStateRawMeasured(localIO, reg, ID, UUID);
+      if (!raw.ok) throw new Error(`the hook wrote no readable hookstate: ${raw.reason}`);
+      // the live file: busy, written a minute before the Stop, on a build whose word covers delegation
+      mkdirSync(path.join(home, '.lane-a', 'sessions'), { recursive: true });
+      writeFileSync(path.join(home, '.lane-a', 'sessions', '40613.json'), JSON.stringify({
+        pid: 40613, sessionId: UUID, cwd: '/data/projects/project-a',
+        status: 'busy', statusUpdatedAt: raw.state.updatedAt - 60_000, version: '2.1.296',
+      }));
+      const run: Runner = async (_cmd, args) => {
+        if (args[0] === 'has-session') return { code: args.includes(`=cc-${ID}:`) ? 0 : 1, stdout: '', stderr: '' };
+        if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
+        return { code: 0, stdout: '', stderr: '' };
+      };
+      const cfg = loadConfig({ CCRC_HOME: home });
+      const fleet = await assembleFleet(localIO, cfg, new Tmux(run), Math.floor(Date.now() / 1000),
+        undefined, undefined, undefined, undefined, new Map([[ID, raw.state]]));
+      return fleet.find((x) => x.id === ID)!;
+    };
+    const subagent = (status: string): Record<string, unknown> =>
+      ({ id: 'a0000000000000001', type: 'subagent', status, description: 'fixture agent', agent_type: 'general-purpose' });
+
+    it('a Stop listing only a completed subagent: background null, the wedge reads done', async () => {
+      const row = await rowAfterStop([subagent('completed')]);
+      expect(row.status).toBe('busy');
+      expect(row.background).toBeNull();
+      expect(row.bucket).toBe('done');
+    });
+
+    it('control: the same Stop with the subagent running keeps the row working', async () => {
+      const row = await rowAfterStop([subagent('running')]);
+      expect(row.background).toEqual({ count: 1, kinds: ['subagent'] });
+      expect(row.bucket).toBe('working');
+    });
+
+    // `compactions-write-no-hookstate` (D-5239): an idle compaction during a delegated run (Claude Code's idle timer
+    // fires it ~55 min after the Stop) leaves the hookstate as the Stop wrote it, behind the server's word, so the
+    // pair stands and Task 1's rung keeps the row working over the live `busy`. At base PreCompact and PostCompact
+    // rewrite the file without the pair, and PostCompact `manual`'s fresh `done` lets D-75 paint `done`.
+    const compaction = (trigger: 'auto' | 'manual'): object[] => ['PreCompact', 'PostCompact'].map((ev) => ({
+      session_id: UUID, transcript_path: `/rig/fixhome/cfg/projects/-rig-repo/${UUID}.jsonl`, cwd: '/rig/repo',
+      prompt_id: '00000000-0000-4000-8000-0000000000c1', hook_event_name: ev, trigger,
+      ...(ev === 'PreCompact' ? { custom_instructions: null } : { compact_summary: 'fixture summary' }),
+    }));
+    it('a delegated row stays working across an auto then a manual compaction, behind dispatch-live-gate-v1 (D-5239)', async () => {
+      const tasks = [{ id: 'w00000001', type: 'workflow', status: 'running', description: 'fixture workflow', name: 'fixwf' },
+        { id: 'w00000002', type: 'workflow', status: 'running', description: 'fixture workflow', name: 'fixwf' }];
+      const row = await rowAfterStop(tasks, [...compaction('auto'), ...compaction('manual')], ['dispatch-live-gate-v1']);
+      expect(row.status).toBe('busy');
+      expect(row.hookState).toBe('done');
+      expect(row.background).toEqual({ count: 2, kinds: ['workflow'] });
+      expect(row.bucket).toBe('working');
+    });
+  });
+});
+
+// ── `agent-events-keep-the-main-state` (D-5232; spec §5.2) ──
+// The pair of halves, end to end: the real hook writes a Stop that leaves two subagents running, then three agent
+// PostToolUse events behind the server's word `hook-main-state-v1` (written the way Task 9b's writers write it). The
+// carry keeps the Stop's `done` and the delegated pair, and Task 1's `!delegated` rung holds the row `working`
+// throughout over a live `busy` older than the Stop. Without the carry each agent event wrote `working` (the flap);
+// without the rung the carried `done` would read idle.
+describe('a carried done stands through delegated work, and the rung holds it working (D-5232)', () => {
+  const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
+  const FIVE = path.resolve(__dirname, 'fixtures/hook/stop-bg-five-kinds.json');
+  const ID = 'lane-a-project-a';
+  const UUID = '00000000-0000-4000-8000-000000000001';
+  const GENERATION = '0189abcd-1234-5678-9abc-0123456789ab';
+  const ROSTER = { version: 1, accounts: [{
+    id: 'lane-a', label: 'lane-a', configDirSuffix: '.lane-a',
+    exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic',
+  }] };
+  const subagent = (id: string): Record<string, unknown> =>
+    ({ id, type: 'subagent', status: 'running', description: 'fixture agent', agent_type: 'general-purpose' });
+
+  it('a Stop and three agent PostToolUse events: hook done/Stop, background 2, bucket working each time', async () => {
+    const home = mkTmp('ccrc-carry-');
+    seedRoster(home, ROSTER);
+    const reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    const fields = { wrapper: 'lane-a', project: 'project-a', workdir: '/data/projects/project-a', uuid: UUID, started: '1', generation: GENERATION };
+    for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${ID}.${k}`), v);
+    const bin = path.join(home, 'bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(path.join(bin, 'tmux'), `#!/bin/sh\necho "cc-${ID}"\n`, { mode: 0o755 });
+    mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    writeFileSync(path.join(home, '.ccrc', SERVER_CAPS_FILE), renderServerCaps(['dispatch-live-gate-v1', 'hook-main-state-v1'], Math.floor(Date.now() / 1000)));
+    const hook = (payload: Record<string, unknown>): void => {
+      execFileSync('bash', [HOOK], {
+        input: JSON.stringify(payload), encoding: 'utf8',
+        env: { ...process.env, HOME: home, PATH: `${bin}:${process.env['PATH'] ?? ''}`, TMUX_PANE: '%1',
+          CLAUDE_CODE_SESSION_ID: UUID, CLAUDE_PID: '40613', CCRC_SESSION_GENERATION: GENERATION },
+      });
+    };
+    const five = JSON.parse(readFileSync(FIVE, 'utf8')) as Record<string, unknown>;
+    hook({ ...five, background_tasks: [subagent('a0000000000000001'), subagent('a0000000000000002')] });
+    const first = await readHookStateRawMeasured(localIO, reg, ID, UUID);
+    if (!first.ok) throw new Error(`the hook wrote no readable hookstate: ${first.reason}`);
+    const stopAt = first.state.updatedAt;
+    mkdirSync(path.join(home, '.lane-a', 'sessions'), { recursive: true });
+    writeFileSync(path.join(home, '.lane-a', 'sessions', '40613.json'), JSON.stringify({
+      pid: 40613, sessionId: UUID, cwd: '/data/projects/project-a',
+      status: 'busy', statusUpdatedAt: stopAt - 60_000, version: '2.1.296',
+    }));
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return { code: args.includes(`=cc-${ID}:`) ? 0 : 1, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const agentPost = {
+      session_id: UUID, transcript_path: `/rig/fixhome/cfg/projects/-rig-repo/${UUID}.jsonl`,
+      cwd: '/rig/repo/.claude/worktrees/agent-a0000000000000001', prompt_id: '00000000-0000-4000-8000-0000000000a1',
+      permission_mode: 'default', agent_id: 'a0000000000000001', agent_type: 'general-purpose', effort: { level: 'medium' },
+      hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'true', description: 'fixture' },
+      tool_response: { stdout: '', stderr: '', interrupted: false, isImage: false }, tool_use_id: 'toolu_rig000002',
+    };
+    for (let i = 0; i <= 3; i++) {
+      if (i > 0) hook(agentPost);
+      const raw = await readHookStateRawMeasured(localIO, reg, ID, UUID);
+      if (!raw.ok) throw new Error(`unreadable hookstate after event ${i}: ${raw.reason}`);
+      expect(raw.state, `after ${i} agent events`).toMatchObject({ state: 'done', event: 'Stop', updatedAt: stopAt });
+      const fleet = await assembleFleet(localIO, cfg, new Tmux(run), Math.floor(Date.now() / 1000),
+        undefined, undefined, undefined, undefined, new Map([[ID, raw.state]]));
+      const row = fleet.find((x) => x.id === ID)!;
+      expect(row.status, `after ${i} agent events`).toBe('busy');
+      expect(row.background, `after ${i} agent events`).toEqual({ count: 2, kinds: ['subagent'] });
+      expect(row.bucket, `after ${i} agent events`).toBe('working');
+    }
+  });
+});
+
+// ── `with-coordinator-state` (D-5296; plan Task 7) ──
+// While the session's parent holds its question, the attention rung stands
+// down and the row reads `working`, dated from the hold's `since`.
+describe('the quiet "with coordinator" state (D-5296)', () => {
+  const WC = { kind: 'question' as const, parentId: 'project-a-calm-mesa', since: 4000, notifyAt: 184_000 };
+
+  it('hook waiting with withCoordinator set → working, bucketSince = since', () => {
+    expect(sessionBucket({ ...base, hookState: 'waiting', withCoordinator: WC }, 5000)).toEqual({ bucket: 'working', bucketSince: 4000 });
+    expect(sessionBucket({ ...base, dialogPending: true, withCoordinator: WC }, null)).toEqual({ bucket: 'working', bucketSince: 4000 });
+  });
+
+  it('with it null, or absent, → attention (unchanged)', () => {
+    expect(sessionBucket({ ...base, hookState: 'waiting', withCoordinator: null }, 5000)).toEqual({ bucket: 'attention', bucketSince: 5000 });
+    expect(sessionBucket({ ...base, hookState: 'waiting' }, 5000)).toEqual({ bucket: 'attention', bucketSince: 5000 });
+  });
+
+  it('a malformed value reads as null → attention', () => {
+    for (const bad of [{ ...WC, kind: 'x' }, { ...WC, parentId: '' }, { ...WC, since: 'x' }, { ...WC, since: Number.NaN }, { ...WC, notifyAt: Number.NaN }, 'x', [1]]) {
+      expect(sessionBucket({ ...base, hookState: 'waiting', withCoordinator: bad as never }, 5000).bucket, JSON.stringify(bad)).toBe('attention');
+    }
+  });
+
+  it('moves no other rung: a dead or archived row keeps its bucket', () => {
+    expect(sessionBucket({ ...base, status: 'dead', hookState: 'waiting', withCoordinator: WC }, 5000).bucket).toBe('dead');
+  });
+
+  it('reviveFleetSession of a cached row without the field, or with it, → null and attention', () => {
+    const row: FleetSession = {
+      id: 'project-a-quiet-basin', wrapper: 'lane-a', home: '/home/fixture', project: 'project-a', workdir: '/data/projects/project-a',
+      workspace: 'quiet-basin', name: null, status: 'idle', statusUpdatedAt: 1000, limits: null,
+      dialogPending: false, version: null, model: null, effort: null, ultracode: false,
+      branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
+      hookState: 'waiting', askSummary: null, subagents: null, background: null, withCoordinator: WC, lastEnd: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'working', bucketSince: 4000,
+      unmeasured: [], statusUnmeasured: false, lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null,
+      started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, role: 'coordinator', releasedFrom: null,
+    };
+    const cached = JSON.parse(JSON.stringify(row)) as Record<string, unknown>;
+    // an older snapshot: no field, no bucket → derived attention
+    const older = { ...cached };
+    delete older['withCoordinator'];
+    delete older['bucket'];
+    delete older['bucketSince'];
+    const a = reviveFleetSession(older)!;
+    expect(a.withCoordinator).toBeNull();
+    expect(a.bucket).toBe('attention');
+    // a snapshot written while held: the field revives null and the recorded
+    // `working` is re-derived, so the row shows Needs-you
+    const b = reviveFleetSession(cached)!;
+    expect(b.withCoordinator).toBeNull();
+    expect({ bucket: b.bucket, bucketSince: b.bucketSince }).toEqual({ bucket: 'attention', bucketSince: null });
+    // a malformed value never rejects the row and never survives
+    for (const bad of [{ kind: 'x' }, 'x', [1], 7]) {
+      const r = reviveFleetSession({ ...cached, withCoordinator: bad });
+      expect(r, JSON.stringify(bad)).not.toBeNull();
+      expect(r!.withCoordinator).toBeNull();
+      expect(r!.bucket).toBe('attention');
+    }
+    // a recorded bucket with the field absent or null is taken as recorded
+    expect(reviveFleetSession({ ...cached, withCoordinator: null })!.bucket).toBe('working');
   });
 });

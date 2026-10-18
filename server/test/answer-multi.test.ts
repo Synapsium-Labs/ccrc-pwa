@@ -17,7 +17,6 @@ import { tmuxTarget } from '../../shared/tmux-target.js';
 // Tab, and proves the screen moved on. Every pane here is a recorded 2.1.300 screen (`fixtures/panes/cc300-ask-*.txt`,
 // 220x50, read with `capture-pane -p` as `Tmux.capture` reads), or one marked DERIVED with the edit it makes.
 
-const noSleep = async () => {};
 
 /** `answer-text.test.ts`'s scripted-capture fake: capture-pane answers the scripted panes in order (the last one
  *  repeats; null is exit 1). Every other tmux call succeeds. */
@@ -38,7 +37,11 @@ function fakeTmux(panes: (string | null)[]) {
 
 const sendKeysCalls = (calls: string[][]) => calls.filter((c) => c[1] === 'send-keys');
 const captureCalls = (calls: string[][]) => calls.filter((c) => c[1] === 'capture-pane');
-const deps = (tmux: Tmux): SendDeps => ({ tmux, queue: new KeyedQueue(), sleep: noSleep });
+/** A fake clock that only sleeps move, so `settleNext`'s 1.5 s wall-clock budget is spent in fake time. */
+const deps = (tmux: Tmux): SendDeps => {
+  let t = 0;
+  return { tmux, queue: new KeyedQueue(), sleep: async (ms) => { t += ms; }, now: () => t };
+};
 
 const panesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'panes');
 const fixture = (name: string): string => readFileSync(path.join(panesDir, name), 'utf8');
@@ -81,7 +84,7 @@ describe('answerDialogMulti: ticks the boxes, proves the ticks, then Tab (D-5048
   it('toggles only the rows whose tick differs, proves the ticks, then Tab', async () => {
     const { tmux, calls } = fakeTmux([FEAT_1, FEAT_1_3, TOOLS_Q]);
     const res = await answerDialogMulti(deps(tmux), SID, idOf(FEAT_1), [1, 3]);
-    expect(res).toEqual({ ok: true });
+    expect(res).toEqual({ ok: true, next: parseDialog(TOOLS_Q) });
     // Logging is already ticked: digit 1 would UNtick it. Only Tracing differs.
     expect(sendKeysCalls(calls)).toEqual(keys('3', 'Tab'));
   });
@@ -89,7 +92,7 @@ describe('answerDialogMulti: ticks the boxes, proves the ticks, then Tab (D-5048
   it('a revisited question: unticks first, then ticks, then Tab — the recorded sequence, end to end', async () => {
     const { tmux, calls } = fakeTmux([TOOLS_REVISIT, TOOLS_REVISIT_2_1, SIZES_OPEN]);
     const res = await answerDialogMulti(deps(tmux), SID, idOf(TOOLS_REVISIT), [1, 3]);
-    expect(res).toEqual({ ok: true });
+    expect(res).toEqual({ ok: true, next: parseDialog(SIZES_OPEN) });
     expect(sendKeysCalls(calls)).toEqual(keys('2', '1', 'Tab'));
     // The ticks never changed the id the caller holds, and what was committed is what the review lists.
     expect(idOf(TOOLS_REVISIT_2_1)).toBe(idOf(TOOLS_REVISIT));
@@ -99,35 +102,35 @@ describe('answerDialogMulti: ticks the boxes, proves the ticks, then Tab (D-5048
   it('ticks in the order asked, since the answer lists the boxes in the order they were ticked', async () => {
     const { tmux, calls } = fakeTmux([TOOLS_OPEN, TOOLS_REVISIT_2_1, SIZES_OPEN]);
     const res = await answerDialogMulti(deps(tmux), SID, idOf(TOOLS_OPEN), [3, 1]);
-    expect(res).toEqual({ ok: true });
+    expect(res).toEqual({ ok: true, next: parseDialog(SIZES_OPEN) });
     expect(sendKeysCalls(calls)).toEqual(keys('3', '1', 'Tab'));
   });
 
   it('nothing differs: no digit, the ticks proved, then Tab', async () => {
     const { tmux, calls } = fakeTmux([FEAT_1_3, FEAT_1_3, TOOLS_Q]);
     const res = await answerDialogMulti(deps(tmux), SID, idOf(FEAT_1_3), [3, 1]);
-    expect(res).toEqual({ ok: true });
+    expect(res).toEqual({ ok: true, next: parseDialog(TOOLS_Q) });
     expect(sendKeysCalls(calls)).toEqual(keys('Tab'));
   });
 
   it('the last question: Tab lands on the review screen', async () => {
     const { tmux, calls } = fakeTmux([SIZES_OPEN, SIZES_LARGE, REVIEW]);
     const res = await answerDialogMulti(deps(tmux), SID, idOf(SIZES_OPEN), [2]);
-    expect(res).toEqual({ ok: true });
+    expect(res).toEqual({ ok: true, next: parseDialog(REVIEW) });
     expect(sendKeysCalls(calls)).toEqual(keys('2', 'Tab'));
   });
 
   it('a slow render is waited for: the tick proof is polled', async () => {
     const { tmux, calls } = fakeTmux([FEAT_1, FEAT_1, FEAT_1, FEAT_1_3, TOOLS_Q]);
     const res = await answerDialogMulti(deps(tmux), SID, idOf(FEAT_1), [1, 3]);
-    expect(res).toEqual({ ok: true });
+    expect(res).toEqual({ ok: true, next: parseDialog(TOOLS_Q) });
     expect(sendKeysCalls(calls)).toEqual(keys('3', 'Tab'));
   });
 
   it('a slow commit is waited for: the move is polled', async () => {
     const { tmux, calls } = fakeTmux([FEAT_1_3, FEAT_1_3, FEAT_1_3, FEAT_1_3, TOOLS_Q]);
     const res = await answerDialogMulti(deps(tmux), SID, idOf(FEAT_1_3), [1, 3]);
-    expect(res).toEqual({ ok: true });
+    expect(res).toEqual({ ok: true, next: parseDialog(TOOLS_Q) });
     expect(sendKeysCalls(calls)).toEqual(keys('Tab'));
   });
 

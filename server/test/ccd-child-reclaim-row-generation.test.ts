@@ -196,6 +196,11 @@ describe('the read runs under the row\'s compaction lock, as every other generat
    *  opens another, which `flock` refuses until the wait runs out. */
   const HOLD = `COMPACT_LOCK_WAIT=1; _compact_lock_acquire ${CHILD_ID} 1 || exit 9; held="$COMPACT_LOCK_FD";`;
   const lockFile = (): string => path.join(h.home, '.cc-sessions', `.${CHILD_ID}.compactions.lock`);
+  /** The probe's wait, in seconds: ONE, never 0. util-linux's `flock -w 0` tries once without blocking, but the
+   *  `flock` macOS boxes install (Homebrew's) refuses a timeout of 0 as a usage error before it tries the lock, so a
+   *  0 there answers "held" over a lock nobody holds. A released lock is taken at once either way; a held one
+   *  refuses after this second. */
+  const PROBE_WAIT = 1;
 
   it('a held lock is a read that did not run: unmeasured, no token, the detail names the acquire — fresh and resume', () => {
     const c = makeChild(h);
@@ -215,7 +220,7 @@ describe('the read runs under the row\'s compaction lock, as every other generat
   it('the acquire\'s reason rides the detail, and the lock is released once the read is done', () => {
     makeChild(h);
     expect(h.sh(`${CHILD_STUBS} _ws_reclaim_eval ${CHILD_ID} 0 '' >/dev/null; printf '%s' "$REAP_VERDICT";`
-      + ` _compact_lock_acquire ${CHILD_ID} 0 && printf ' released'`), 'a fresh acquire in the same shell, no wait')
+      + ` _compact_lock_acquire ${CHILD_ID} ${PROBE_WAIT} && printf ' released'`), 'a fresh acquire in the same shell')
       .toBe('reclaimable released');
     fs.rmSync(lockFile());
     fs.mkdirSync(lockFile());
@@ -228,7 +233,7 @@ describe('the read runs under the row\'s compaction lock, as every other generat
     makeChild(h);
     fs.rmSync(genFile());
     expect(h.sh(`_ws_reclaim_generation ${CHILD_ID}; printf '%s' "$?";`
-      + ` if _compact_lock_acquire ${CHILD_ID} 0; then printf ' released'; else printf ' held'; fi`), 'a fresh acquire in the same shell, no wait')
+      + ` if _compact_lock_acquire ${CHILD_ID} ${PROBE_WAIT}; then printf ' released'; else printf ' held'; fi`), 'a fresh acquire in the same shell')
       .toBe('2 released');
   }, 90_000);
 });

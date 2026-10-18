@@ -7,7 +7,7 @@ and **follows a session across account/wrapper swaps**
 (the thing claude.ai's own app can't do). Weigh every feature by the loop it serves:
 spec → plan → subagent execution with per-PR review lenses + whole-branch pass → coordinated multi-wave programs.
 
-**`README.md` (~6200 lines) is the canonical system overview. This file is only the non-obvious operational rules
+**`README.md` (~6574 lines) is the canonical system overview. This file is only the non-obvious operational rules
 — read the README for anything below in depth.** Deep design lives in `docs/superpowers/specs/` (esp.
 `2026-08-10-architecture-ddd-clean-solid.md`, `2026-08-07-build7-fleet-coordination-design.md`).
 
@@ -296,9 +296,14 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   than open empty**. Its synchrony is a stated concurrency invariant — **do not wrap it async** (a repository/async
   interface over `CoordStore` is explicitly rejected). It is a server-side RE-MEASUREMENT of ccd's flat files
   (registry, hold, `.prhistory`), which stay ground truth; a lost coord.db re-measures those from them, but
-  what it adds on top — mail, claims, asks, central pool edges, update intents, the stall-watch settings choice —
-  is gone without the snapshot every `ccrc update` (and `ccrc backup`) takes into `~/ccrc-backups/<ts>/`
-  (`pool-edges.log` is never replayed).
+  what it adds on top — mail, claims, asks, central pool edges, update intents, the stall-watch settings choice,
+  the collector switch — is gone without the snapshot every `ccrc update` (and `ccrc backup`) takes into
+  `~/ccrc-backups/<ts>/` (`pool-edges.log` is never replayed). The switch's `collect-lane-generation.log` is never
+  copied into a snapshot or restored with one: leave it in place, so a database restored alone never re-arms the
+  collector (one from before the switch's last change is safety-stopped). One from before the legacy collector file's
+  retirement is repaired only by a confirmed Live, which keeps its unset latch, so a standing or re-created legacy file
+  then arms the lane again, on any node, with Off refused, until a coherent, unpaused, same-epoch listing shows the
+  file absent and retires it.
 - **Zero new ccd verbs for coordination mutation** — mutations ride already-granted `CcdArgv` (a brand built at
   the call site, never table-looked-up). Exec surface is closed: `EXEC_COMMANDS = ['tmux','ccd']`.
 - **Box token gates every coordination WRITE** (`/api/mail*`, `/api/runs*`) — header `x-ccrc-mail-token`, `401`
@@ -313,18 +318,22 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   armed all four still sit behind the session gate (`auth/gate.ts`'s NOT-EXEMPT note: gating them there
   "strengthens D-282 rather than reversing it"). Those prefixes are the bulk of the box-token surface, not the
   whole of it (D-1148, correcting a "whole box-token surface" claim this file carried for one wave): `POST
-  /api/asks/:id/answer`, `POST /api/asks/:id/release`, `POST /api/claims`, `POST /api/claims/:id/release`, `POST /api/ledger/deviations` and
-  `GET /api/ledger` all call `requireMailToken` outside both. The dual-credential reads, including `GET /api/feed`
+  /api/asks/:id/answer`, `POST /api/asks/:id/release`, `POST /api/claims`, `POST /api/claims/:id/release`,
+  `POST /api/coordinators/:session/intent`, `POST /api/ledger/deviations` and
+  `GET /api/ledger` all call `requireMailToken` outside both (the intent door, where a session declares its own coordinator
+  intent through `ccrc-api`, is attribution-checked and sits in `auth/gate.ts`'s EXEMPT table like the claim lanes: its only
+  caller holds the token and has no cookie). The dual-credential reads, including `GET /api/feed`
   and the update projection read `GET /api/updates/intent/:nodeId` (a fleet node's timer pulls it cookieless from
   update-management W4), call `checkMailToken` only after a session check; `auth/gate.ts`'s EXEMPT reasons — route by route, each
   with its own argument — are the census, not this bullet. What does need saying here are the
   coordination WRITES that carry no box token at all: `POST /api/sessions/:id/kickoff` (wave 4),
-  `POST /api/coord/caps` (wave 6), `POST /api/coord/reclaim-pause` (child-reclamation wave 4) and
-  `POST /api/coord/stall-watch` (stall-watch settings wave 1) are
+  `POST /api/coord/caps` (wave 6), `POST /api/coord/reclaim-pause` (child-reclamation wave 4),
+  `POST /api/coord/stall-watch` (stall-watch settings wave 1) and `POST /api/coord/collect-lane`
+  (child-reclamation wave 10, which also refuses `live` while sign-in is dark) are
   session-gated only — armed, they sit behind the auth gate like every other PWA-surface write. The first
   needs prose because no scanner can see it: `coord-pause-route.test.ts` reads
   `server/src/coord/routes.ts` alone, and that route is registered in `server.ts`, so a door opened outside
-  that one file is invisible to the set that pins the doors. The other three are in that file's `SESSION_ONLY`
+  that one file is invisible to the set that pins the doors. The other four are in that file's `SESSION_ONLY`
   set, and `box-token-census.test.ts` checks this sentence against it in both directions (D-1231). The update
   control plane's routes are session-only by design (the box token never writes intent — design 2026-09-20,
   decision 15): `GET /api/updates`, `POST /api/updates/intent`, `POST /api/updates/refresh`, `POST
@@ -374,7 +383,7 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   (`resolveCoordinator(runId)` reads that run's `claimedBy`, no program-state predicate) — which is the
   documented recovery for an already-retired program.
 - The coordinator is an ordinary fleet session running the `ccrc-coordinator` skill
-  (`ccd/coordinator-skill/SKILL.md`); its sixteen clauses are pinned VERBATIM by
+  (`ccd/coordinator-skill/SKILL.md`); its seventeen clauses are pinned VERBATIM by
   `server/test/coordinator-skill.test.ts` — a softened clause is a red suite. Pause kill-switches are FILES
   (`$REG/coordinator-paused`, `$REG/mail-disabled`). `mail-disabled` has **no writer in the tree** — touch/rm by
   hand only. `coordinator-paused` does: Build 4's whitelisted `ccd coord-pause --state on|off`, driven by
@@ -422,7 +431,7 @@ each tell absent from unreadable, and the B64 arm tells a THIRD condition, over-
 size beside it. The four convenience reads — `readFile`, `readFileFrom`, `readFileB64`, `stat` — still
 fold every failure to one `null`, DELIBERATELY, so an older caller keeps its exact meaning; each now
 names its own collapse in `io.ts` and points at its measured sibling, and each derives from it, so no
-adapter narrows a distinction it received. **The one read left with no measured sibling is `readdir`.**
+adapter narrows a distinction it received. **`readdir` has its measured sibling too:** `readdirMeasured`.
 The agent's wire no longer lies either: `absent` is a separate positive marker spread ONLY on a proven
 ENOENT (`statPayload`, `agent/src/server.ts`), so EACCES answers a bare `{missing: true}` and a newer
 server reads that as UNMEASURED rather than as absence (D-1396) — the sentence here previously said the

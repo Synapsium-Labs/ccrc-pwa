@@ -2,7 +2,8 @@ import { performance } from 'node:perf_hooks';
 import type { Deps } from './server.js';
 import type { Bus } from './bus.js';
 import { assembleFleet, lifecycleInputFor, registrySecondsToMs } from './fleet.js';
-import { measuredIdentity, readRegistry, readRegistryMeasured } from './registry.js';
+import { answeredByBody, askPushBody, withCoordinatorBody } from './askbody.js';
+import { measuredIdentity, readRegistry, readRegistryMeasured, readSessionRecord } from './registry.js';
 import {
   accountPoolsEnforcement, poolsEnforcement, poolsWire, readObservedEpochFromRegistry, readPoolEpoch,
   readProjectPools,
@@ -18,26 +19,33 @@ import {
 import { readLiveState, readLiveStateMeasured } from './livestate.js';
 import { mailTurnIdle, mailTurnModeOf, mailTurnReadsMark, type MailTurnMode } from './turnidle.js';
 import { readTurnMarkMeasured } from './turnmark.js';
+import { finishedAfter } from './coord/finished.js';
 import { readHookState, readHookStateRawMeasured, type HookState, type HookStateRawRead } from './hookstate.js';
 import { readUsageMeasured, USAGE_FRESH_S } from './usage.js';
 import { sendPrompt } from './inject/send.js';
+import {
+  decideIdleCompactNudge, idleNudgeDisabled, idleNudgeFeedBody, idleNudgeRefusedBody, idleNudgeRowHold, readCompactionTail,
+  type CompactionTail, type IdleNudgeRowFacts,
+} from './idlenudge.js';
 import { askActions, askKey } from './askkey.js';
 // The ask lane's two WINDOWS moved out of this file (whole-branch review
 // F2(b)): `fleet.ts`'s chip is their second reader and cannot import this
 // module — `watch.ts` imports `assembleFleet` from it — so they now live
 // where both may read them. `ASK_SWEEP_MS` below is unaffected: it is this
 // lane's poll cadence, not a window, and this file is still its only reader.
-import { ASK_ANSWERING_MAX_MS, ASK_GRACE_MS } from './askwindow.js';
+import { ASK_ANSWERING_MAX_MS, ASK_SETTLE_TICKS, askNotifyAt } from './askwindow.js';
+import { UNTRUSTED_CAP_BYTES, untrustedBlock } from './coord/untrusted.js';
 import type { SessionRecord } from './registry.js';
 import type {
   ChildMark, ChildReclaimAttention, ChildReclaimGeneration, ChildReclaimKeptWord, CoordStatus, DeadCoordinatorAttention, Dialog, ExpiryAttention, FleetSession, HookAsk, HookAskQuestion,
   LifecycleHealth, MailGate, MirroredLifecycleEvent, NotifyEvent, ProjectPoolsWire, ProjectRepoWire, PrState, RunSummary,
   SessionStatus, SessionUsage, TaskProgress,
 } from '../../shared/api.js';
+import type { DelegationEventEnvelopeV1, DelegationHealthInput, DelegationObservationHealth } from '../../shared/api.js';
 // ONE LINE, deliberately: `single-definition.test.ts` scans for `UNCHECKED_PR`
 // arriving from shared/api on a single import line, and a prettier multi-line
 // form is invisible to it.
-import { FLEET_SCOPE, LEDGER_STALE_MS, MAIL_MAX_ATTEMPTS, MAIL_REPLAY_MS, STALL_FOLLOW_LABEL, STALL_LEVEL_TEXT, TERMINAL_DELIVERY_STATES, UNCHECKED_PR, lifecycleIsDead, sessionLifecycle } from '../../shared/api.js';
+import { FLEET_SCOPE, IDLE_COMPACT_NUDGE_PROMPT, LEDGER_STALE_MS, SERVER_CAPS, MAIL_MAX_ATTEMPTS, MAIL_REPLAY_MS, STALL_FOLLOW_LABEL, STALL_LEVEL_TEXT, TERMINAL_DELIVERY_STATES, UNCHECKED_PR, lifecycleIsDead, sessionLifecycle } from '../../shared/api.js';
 import { JournalMirror } from './coord/mirror.js';
 // The pause marker's ONE definition in the tree. `MAIL_DISABLED_MARKER` is
 // NOT imported beside it: this file holds its own module-local literal
@@ -49,17 +57,52 @@ import {
   queueStallNotice, queueSystemMail, survivorOf,
 } from './coord/rundefs.js';
 import { landingAsk, landingVerdict, type LandingFacts } from './coord/landing.js';
-import { readWorktreeRecords } from './coord/gitref.js';
+import {
+  readParentGenerations, readWorktreeCensus, settleParentIncarnations, type DelegationCensusPass, type WorktreeCensus,
+} from './coord/gitref.js';
 import { ccdIdForWorktree, divergences, unclaimedWorktrees, type DivergenceInput } from './divergence.js';
+// The delegation lane's (wave 3, Task 13) imports, in one block of their own: the pure modules it composes, and the durable applier.
+import { randomUUID } from 'node:crypto';
+import type { MeasuredDirectoryRead } from './io.js';
+import { DelegationDurability, type DelegationDurableBatch } from './coord/delegation-checkpoint.js';
+import {
+  DelegationIngestError, delegationBucketDurabilityOf, delegationBucketUtcHour, ingestAndApplyDelegationBucket, readDelegationBucket,
+  unreadableDelegationBucketResult, type DelegationBucketDurability, type DelegationBucketResult,
+} from './coord/delegation-ingest.js';
+import { correlateDelegation, type DelegationCorrelationInput, type DelegationListingWindow } from './coord/delegation-correlation.js';
+import { DELEGATION_EVIDENCE_MARGIN_MS, delegationLostEvidenceForced, delegationMarkAttributionOf } from './coord/delegation-correlation.js';
+import { DELEGATION_CLOCK_SKEW_MS } from './coord/delegation-correlation.js';
+import {
+  DELEGATION_DROPPED_UNMEASURED, delegationDroppedKeyId, delegationDroppedKeyOf, delegationGoneTrees, delegationTreeKey, indexDelegationDropped,
+  planDelegationDroppedPrune, type DelegationDroppedEvidence, type DelegationDroppedKey, type DelegationPruneProject,
+} from './coord/delegation-correlation.js';
+import {
+  delegationHashSetAdd, delegationHashSetHas, delegationMarkForced, emptyDelegationHashSet, type DelegationHashSet, type DelegationMarkKind,
+  DELEGATION_ROOT_UNMEASURED, delegationUnknownWindowForced, type DelegationProjectsRoot,
+} from './coord/delegation-correlation.js';
+import type { WorktreeRead } from './coord/gitref.js';
+import type { DelegationCensusDiagnostic } from './coord/gitref.js';
+import { delegationCircuitBreaker, planDelegationReconciliation, type DelegationReportEffect } from './coord/delegation-policy.js';
+import { isUnownedWorkReason } from './coord/delegation-policy.js';
+import { delegationBucketHourMs, delegationBucketReadable, planDelegationCursorRetention } from './coord/delegation-model.js';
+import { DELEGATION_HOUR_NO_CAPABILITY, DELEGATION_HOUR_NO_SPOOL, isDelegationHourCarveOut } from './coord/delegation-model.js';
+import {
+  DELEGATION_HOUR_CLOSE_MARGIN_MS, DELEGATION_HOUR_MS, DELEGATION_HOUR_NEVER_CLOSED, DELEGATION_INTERVAL_RETENTION_HOURS, DELEGATION_UNMEASURED_INCARNATION,
+  DelegationModelError,
+  canonicalDelegationJson, delegationCapabilityState, delegationHealthInputOf, delegationObservationHealthOf, formatDelegationInstant,
+  parseDelegationInstant, upkeepDelegationIntervals,
+  type DeepReadonly, type DelegationAttemptRow, type DelegationBucketCursor, type DelegationCensusRecord, type DelegationCheckpointV1,
+  type DelegationObservationInterval, type DelegationRecoveryState,
+} from './coord/delegation-model.js';
 import { claimExpiry, type LivenessProbe } from './coord/claims.js';
-import { measureClaimant } from './coord/reclaim.js';
+import { claimantMeasuredDead, measureClaimant } from './coord/reclaim.js';
 import {
   BACKLOG_HORIZON_MS, STALL_CHECK_PREFIX, STALL_QUIET_MS, STALL_REPLY_PREFIX, parseStallDetail, stallArmingOf,
   stallCheckMail, stallCitedCheck, stallCoordinatorSubjects, stallDeadShaped, stallDetail, stallFacts,
   stallFailedVerdict, stallLastCheck, stallMailClass, stallMailStuckVerdicts, stallMarkUnreadable,
   stallNotifyDelivery, stallOrphanDCandidate, stallOrphanDVerdict, stallOrphanEVerdict, stallPushRoute, stallPushText, stallReportKind, stallReportMail, stallReportTitle,
   stallRunMail, stallSessionMail, stallNewestDelivery, stallSessionMarkerVerdict, stallSessionPushText, stallSubjects,
-  stallReactivation, stallVerdict, stallW2ReportMail,
+  stallReactivation, stallVerdict, stallW2ReportMail, turnMarkStale,
   type AskRowFact, type HookAskFact, type HookRawFact, type LiveWordRead, type StallArming,
   type StallInput, type StallNotice, type StallNotify, type StallRunRow, type StallSessionInput, type StallSubject,
   type StallVerdict, type StallWorker, type TurnMarkRead,
@@ -129,6 +172,7 @@ import type { CoordRoutesHandle } from './coord/routes.js';
 import { localIO } from './io.js';
 import { measureFleetReadiness, type FleetReadiness } from './readiness.js';
 import { FLEET_LABEL, SERVER_LABEL, sweepInventory, type InventoryDeps, type SweepOutcome } from './update/inventory.js';
+import { SERVER_CAPS_WRITE_MS, writeServerCaps, type WriteServerCapsResult } from './update/serverCaps.js';
 import { resolveAndProject, type ProjectionOutcome } from './update/project.js';
 import { runDispatch, type DispatchRunResult } from './update/converge.js';
 import type { MoveFeedRecord } from './update/dispatch.js';
@@ -139,19 +183,25 @@ import { CATALOGUE_POLL_INTERVAL_MS } from './update/catalogue.js';
 // changes: `ccdargv.js` and `childReclaimSweep.js` are imported a second time here, by name.
 import { COLLECT_CAP } from './ccdargv.js';
 import type { ChildReclaimCollectInput } from './childReclaimSweep.js';
+import { NO_FLEET_IDENTITY } from './fleetidentity.js';
+import { stopDonePass, type StopDoneMemory } from './stopDoneSweep.js';
+import { STOP_DONE_SWEEP_MS } from './stopDone.js';
+import { liveRowFor, liveWordFor, turnMarkFor, turnReadDeps, turnVerdictFor } from './turnverdict.js';
 import {
   COLLECT_AUDITS_PER_PASS, COLLECT_FEED_TITLE, collectAfterAct, collectAfterAudit, collectAfterFoldFailed, collectAfterHold,
   collectAfterPresence, collectAfterWouldCollect, collectAttentionItems, collectAttentionViews, collectBoxAfterPopulation,
   collectBoxProbesAtArrival, collectCandidateOf, collectClearPair, collectFeedAnswerBody, collectFeedCollectedBody,
-  collectFeedCueOfAct, collectFeedCueOfAudit, collectFeedReadBody, collectFeedStep, collectFeedSwitchBody,
-  collectFeedWouldCollectBody,
+  collectFeedCueOfAct, collectFeedCueOfAudit, collectFeedReadBody, collectFeedStep, collectLaneLive, collectSwitchFeedBody,
+  collectFeedWouldCollectBody, COLLECT_SETTING_FEED_TITLE,
   collectFirstSighting, collectForgets, collectForgottenActRow, collectFresh, collectJobEffects, collectOffers,
   collectPassClass, collectPopulation, collectWouldCollectKey, type CollectAudit, type CollectEntry, type CollectFeedCue,
   type CollectPassClass, type CollectPopulation, type CollectResult, type CollectStep, type CollectUnsettledKind,
+  collectLaneCounts, type CollectLaneCounts, type CollectLaneSettled, type CollectLatchOutcome,
 } from './collectLane.js';
 import {
   collectSwitches, collectTempRoot, learnCollect, readCollectPopulation,
-  type CollectClock, type CollectGenerations, type CollectJobOutcome, type CollectLanePort,
+  type CollectClock, type CollectControlDeps, type CollectGenerations, type CollectJobOutcome, type CollectLanePort,
+  collectRetireLatch,
 } from './coord/collectTempRoot.js';
 
 const SGR = /\x1b\[[0-9;]*m/g; // same idiom as inject/send.ts:80 — see detectDialogs's own comment
@@ -280,6 +330,12 @@ const CLAIM_SWEEP_MS = 60_000;
  *  constant's reason: a threshold of the quiet time (2 h built-in, 30 min at the least, stall watch settings §7)
  *  does not need the 2 s tick. EXPORTED for its suite, as `LC_SWEEP_MS` and `READINESS_SWEEP_MS` are. */
 export const STALL_SWEEP_MS = CLAIM_SWEEP_MS;
+/** `idle-compact-nudge` (D-5373): the lane's own clock. A nudge waits out `IDLE_NUDGE_SETTLE_MS` (30 s) anyway, so a
+ *  10 s beat costs at most one beat of extra delay; the transcript tail is re-read only when the file changed. */
+export const IDLE_NUDGE_SWEEP_MS = 10_000;
+/** How much of a transcript's end the nudge lane reads: the compaction summary (~14 KB measured) and the attachments
+ *  Claude Code re-injects after it sit well inside 1 MiB, the backlog's own window. */
+const IDLE_NUDGE_TAIL_BYTES = 1024 * 1024;
 /** The gap rule's threshold (slug `stall-clocks-drop-on-an-unobserved-gap` (D-3750)): between one missed sweep (~120 s, clocks survive) and two (~180 s, clocks drop). */
 const STALL_CLOCK_GAP_MS = STALL_SWEEP_MS * 5 / 2;
 
@@ -325,11 +381,12 @@ function stallHookAskOf(raw: HookStateRawRead): HookAskFact {
   return 'questions' in raw.state.ask ? { kind: 'ask', at: raw.state.updatedAt } : { kind: 'approval', at: raw.state.updatedAt };
 }
 
-/** The raw hookstate as the frozen and delegates steps read it (`HookRawFact`): the identity and the event are
- *  carried, and L1 judges them. */
+/** The raw hookstate as the frozen and delegates steps read it (`HookRawFact`): the identity, the event and the
+ *  additive `aliveAt` (D-5232: subagent activity, which the two clocks read) are carried, and L1 judges them. */
 function stallHookFactOf(raw: HookStateRawRead): HookRawFact {
   return raw.ok
-    ? { ok: true, updatedAt: raw.state.updatedAt, event: raw.state.event, sessionId: raw.sessionId, identity: raw.identity }
+    ? { ok: true, updatedAt: raw.state.updatedAt, event: raw.state.event, sessionId: raw.sessionId, identity: raw.identity,
+      ...(raw.aliveAt === undefined ? {} : { aliveAt: raw.aliveAt }) }
     : { ok: false, reason: raw.reason };
 }
 
@@ -602,8 +659,8 @@ const MAIL_REPLAY_MAX_ATTEMPTS = 20;
  *  it is gone — so treating a targeted `absent` as "not disabled" would
  *  fail OPEN exactly when the registry has vanished, the one case this
  *  kill-switch most needs to fail SHUT on. `io.readdir` still collapses
- *  every failure of its own to `null` — no measured variant exists for it —
- *  but that collapse is the point: `listing === null` means "can't tell",
+ *  every failure of its own to `null` — it is the folding read; its sibling
+ *  `readdirMeasured` is not used here — and that collapse is the point: `listing === null` means "can't tell",
  *  and "can't tell" must read as disabled, not as license to proceed
  *  because the marker itself couldn't be seen. `limits.ts:134-142` already
  *  filters unknown `<name>-disabled` markers out of `/api/accounts`, so
@@ -714,6 +771,22 @@ export class FleetWatcher {
    *  see `ASK_ANSWERING_MAX_MS`'s own docstring). */
   private heldAsks = new Map<string, { until: number; askId: number;
     ev: Parameters<FleetWatcher['pushOne']>[0]; answeringSince: number | null }>();
+  /** D-5289, late answer wins: the push the lapse fired, per child, kept so a
+   *  parent's answer after the deadline can replace that notification under
+   *  the same tag (`answeredLate`). Set only by `sweepAsks`'s own lapse (a
+   *  parent's `declined` never lands here: its push is the parent's own act),
+   *  dropped when replaced and whenever the child's dialog clears or is
+   *  replaced (`detectDialogs`), so it holds at most one entry per child
+   *  sitting on a lapsed question. Its loss on a restart is free: the operator
+   *  keeps the lapse's notification, today's behaviour. */
+  private lapsedAsks = new Map<string, { askId: number; ev: Parameters<FleetWatcher['pushOne']>[0] }>();
+  /** D-5290: dialogs whose FIRST raise is deferred, per child — the dialog id
+   *  and how many ticks it has been seen while the child's hookstate was not
+   *  yet `waiting` and no envelope made it answerable. Bounded by
+   *  `ASK_SETTLE_TICKS`; dropped the moment the dialog is raised or held, and
+   *  whenever it clears or is replaced. Its loss on a restart is free: a
+   *  restart re-raises nothing anyway (`heldAsks`' own note). */
+  private settlingAsks = new Map<string, { dialogId: string; ticks: number }>();
   /** Fail-shut kill switch for the hold, `$REG/asks-disabled`. Declared in
    *  Task 6 (RULING F2) so the mint fork below compiled before this method
    *  existed; now SET by `sweepAsks` below, off the same registry listing
@@ -767,6 +840,10 @@ export class FleetWatcher {
    *  census's per-sweep map: that retention must never reach the census,
    *  which a failed read may only ever suppress, never feed. */
   private headBranches = new Map<string, { project: string; branch: string | null }>();
+  /** What `sweepDivergences` last prepared for the delegation lane from the census it already takes (wave 3, Task 10): each
+   *  censused project's answer and the incarnation of every registry id the pass used. REPLACED whole by a pass, never merged, so a
+   *  project that was not read is never a stale one; `null` until the first pass. Nothing consumes it before the watcher lane. */
+  private delegationCensus: DelegationCensusPass | null = null;
   /** Settles the first time `headBranches` is written; the first assembly
    *  after boot waits on it, bounded (`HEADS_BOOT_WAIT_MS`). */
   private headsSettled!: Promise<void>;
@@ -774,6 +851,10 @@ export class FleetWatcher {
   private headsBootWaited = false;
   /** Prior status per session — drives the busy→idle push. */
   private prevStatus = new Map<string, SessionStatus>();
+  /** When each row's current busy stretch began (D-5233): set on the tick a measured row turns `busy`, from its
+   *  `statusUpdatedAt` (the live file writes on change, so that stamp is the stretch's start), else the tick's clock;
+   *  cleared when a measured row is anything but `busy`. The Finished push asks for a main Stop at or after it. */
+  private episodeBusySince = new Map<string, number>();
   /** Last swept task progress per session id, and when the sweep ran. */
   private taskProgress = new Map<string, TaskProgress>();
   private lastTaskSweep = 0;
@@ -810,6 +891,14 @@ export class FleetWatcher {
    *  a `ready`-triggered sweep also defers the minute gate's next one. */
   private lastInventoryAt = 0;
   private inventoryRun: Promise<SweepOutcome[]> | null = null;
+  /** The server-caps beat's clock and its ONE write in flight (D-5232's mechanism, Task 9b). Starts at 0 so the first
+   *  tick after a start writes: that tick IS the boot write (`start()` ticks at once). Its own clock, never the
+   *  inventory lane's, so the file is rewritten whether or not this server has a coordination database. */
+  private lastServerCapsAt = 0;
+  private serverCapsRun: Promise<WriteServerCapsResult | null> | null = null;
+  /** The last server-caps write failure's stable key (`unwritable:<errno>`), so an unwritable ~/.ccrc warns once
+   *  per change of reason, not once a minute (`lastProjectionWhy`'s idiom); null after a success. */
+  private lastServerCapsWhy: string | null = null;
   /** C2 (final fix wave): the last inventory-sweep REJECTION message warned
    *  about, so a standing cause (a locked or corrupt coord.db held past one
    *  sweep) warns once, not every tick/ready — reset to null the moment a
@@ -1007,8 +1096,14 @@ export class FleetWatcher {
    *  - `collectUnsettledLogged`: the ids whose call this process has logged as unsettled, once.
    *  - `collectFlockLatched`: an act answered ccd's `flock-unavailable`: no act job is offered again in this process, and
    *    a box-wide line says so, so an armed lane is never silently off.
-   *  - `collectLastSeenLive`: the live marker as the last act job read it. It starts SHADOWED, so an arming made while the
-   *    server was down, or before a restart no job saw, is still a flip, and still writes its row.
+   *  - `collectLastSeenLive`: the effective live boolean as the last act job resolved it, never its source (path-identity
+   *    spec 2026-10-12 §5.5). It starts SHADOWED, so an arming no job saw before a restart is still a flip, with its row.
+   *  - `collectSeenEpoch`: the connection epoch the lane's observation pairs stand under (path-identity spec 2026-10-12
+   *    §5.5), re-read at each pass's head and after its gather. A move clears every pair; an act job is queued under it
+   *    (`collectAct`), so its executor composes nothing once the epoch it reads after its final listing differs.
+   *  - `collectControlWarned`: the switch's warn latches (§5.5, `collectControlNote`): each safety-stop reason, and
+   *    `marker-recreated`, warned once until a coherent resolution clears it. The latch's outcomes (`collectLatchNote`,
+   *    the coordinator's extension of the warn-latch ruling) warn once under `latch-<kind>`, until a retire clears them.
    *  - `collectPop`: the last measured pass's population, for the box-wide listing and refused-name lines; `null` before
    *    one. `collectPopNames`: the registry listing that pass's pre-filter read, for attention's projection.
    *  - `collectBoxProbes`: the box-wide probes standing (through `collectBoxProbesAtArrival`: every answer but one older
@@ -1029,6 +1124,8 @@ export class FleetWatcher {
   private collectUnsettledLogged = new Set<string>();
   private collectFlockLatched = false;
   private collectLastSeenLive = false;
+  private collectSeenEpoch = 0;
+  private collectControlWarned = new Set<string>();
   private collectPop: CollectPopulation | null = null;
   private collectPopNames: ReadonlySet<string> = new Set();
   private collectBoxProbes: ReadonlyMap<string, string> = new Map();
@@ -1195,6 +1292,14 @@ export class FleetWatcher {
    *  row on a 10 s clock; without the memo, every row with no transcript at its
    *  exact address would run a full uuid search on every sweep, forever. */
   private readonly transcripts: TranscriptResolver;
+  /** `idle-compact-nudge` (D-5373): `<id>#<compaction key>` pairs this process has nudged or begun to nudge, written
+   *  BEFORE the send, so a send in flight or a failed one is never retried. The durable half is the `nudge` feed row. */
+  private readonly idleNudged = new Set<string>();
+  /** The newest compaction read off each session's transcript tail, keyed by the file's path, size and mtime, so an
+   *  idle session waiting on the operator costs one stat per beat, not a 1 MiB read. */
+  private readonly idleNudgeTails = new Map<string, { sig: string; tail: CompactionTail }>();
+  private idleNudgeRunning = false;
+  private lastIdleNudgeAt = 0;
   /** The set of projects with at least one non-dead session, as of the last
    *  completed `tick()` — feeds `pushOne`'s "name the project only when more
    *  than one is active" rule. `detectDialogs` and `sweepPr`/`sweepMerged`
@@ -1304,6 +1409,14 @@ export class FleetWatcher {
    *  newer has already answered. A pass that finds another running returns at once — so at most one expiry act is
    *  ever in flight, fleet-wide, and every act's answer is folded onto the entry it was asked for. */
   private archivedExpirySweeping = false;
+  /** The stop-done lane (D-5370, `stopDoneSweep.ts`): its last pass, whether one runs, its one memory (a refused
+   *  stop's retry instant), the coordination serialiser `buildServer` hands it, and the process start it holds
+   *  `viewer` against (presence is never persisted). */
+  private lastStopDoneSweep = 0;
+  private stopDoneSweeping = false;
+  private readonly stopDoneMemory: StopDoneMemory = { retryAt: new Map() };
+  private stopDoneSerial: (<T>(fn: () => Promise<T>) => Promise<T>) | null = null;
+  private readonly stopDoneStartedAt = Date.now();
   /** `flock-unavailable`, once a box has answered it: the lane composes nothing more there (this process). */
   private archivedExpiryBoxRefused: string | null = null;
   /** THE DEAD-COORDINATOR LANE (workspace lifecycle wave 4): its clock; ONE PASS AT A TIME, the expiry lane's reason;
@@ -1418,6 +1531,34 @@ export class FleetWatcher {
       clearInterval(this.timer);
       this.timer = null;
     }
+  }
+
+  /**
+   * The server-caps write (D-5232's mechanism; plan 2026-10-16 Task 9b; spec §6.1): on a `server` or `both` node, the
+   * words this server advertises, at this process's clock, into `<ccrcDir>/server-caps`, the file the fleet's hook
+   * gates on. A `fleet`-role server writes nothing (`ccd-update-sync` is that node's writer) and answers null.
+   * Single-flight: a beat that finds a write in flight joins it. A failure warns once per change of `code`.
+   */
+  serverCapsNow(): Promise<WriteServerCapsResult | null> {
+    if (this.serverCapsRun !== null) return this.serverCapsRun;
+    this.lastServerCapsAt = Date.now();
+    const { role, ccrcDir } = this.deps.cfg;
+    if (role !== 'server' && role !== 'both') return Promise.resolve(null);
+    const run = writeServerCaps(ccrcDir, SERVER_CAPS, Math.floor(Date.now() / 1000)).then((r) => {
+      const key = r.ok ? null : `${r.why}:${r.code ?? 'none'}`;
+      if (!r.ok && key !== this.lastServerCapsWhy) {
+        console.warn(`ccrc-server: could not write ~/.ccrc/server-caps (the fleet hook's gated arms stay off until it is written): ${r.detail}`);
+      }
+      this.lastServerCapsWhy = key;
+      return r;
+    }).finally(() => { this.serverCapsRun = null; });
+    this.serverCapsRun = run;
+    return run;
+  }
+
+  /** Resolves once no server-caps write is in flight. For a caller that fired the beat and must read its result. */
+  async serverCapsSettled(): Promise<void> {
+    if (this.serverCapsRun !== null) await this.serverCapsRun;
   }
 
   /**
@@ -1611,9 +1752,15 @@ export class FleetWatcher {
     const coord = this.deps.coord;
     if (coord === undefined) return [];
     const { cfg, fleetState } = this.deps;
+    // Path-identity spec 2026-10-12 §5.2: the one identity cell goes to the sweep that measures the fleet node. In
+    // remote mode the agent connection's sweep publishes into it, and the server's own row never does. In local mode
+    // this box IS the fleet node, so its own sweep publishes into the never-invalidated cell. Absent: nothing is
+    // published.
     const inv: InventoryDeps = {
       store: coord, localIo: localIO, ccrcDir: cfg.ccrcDir, role: cfg.role,
-      fleet: cfg.fleetMode === 'remote' && fleetState !== undefined ? { io: this.deps.io, state: fleetState } : null,
+      fleet: cfg.fleetMode === 'remote' && fleetState !== undefined
+        ? { io: this.deps.io, state: fleetState, identity: this.deps.fleetIdentity } : null,
+      ownIdentity: cfg.fleetMode === 'remote' ? undefined : this.deps.fleetIdentity,
     };
     return this.sweepThenProject(inv, Date.now());
   }
@@ -1810,6 +1957,56 @@ export class FleetWatcher {
     return new Map([...this.headBranches].map(([id, h]) => [id, h.branch]));
   }
 
+  /** The delegation lane's input from the last census pass (see `delegationCensus`). */
+  currentDelegationCensus(): DelegationCensusPass | null {
+    return this.delegationCensus;
+  }
+
+  /** The delegation lane (wave 3, Task 13; see `DelegationLane`), made on first use: a parameter property is not yet assigned when a
+   *  field initialiser runs, so it cannot be built beside the other fields. */
+  private delegationLaneMemo: DelegationLane | null = null;
+  private delegationLane(): DelegationLane {
+    this.delegationLaneMemo ??= new DelegationLane(this.deps, () => this.delegationCensus);
+    return this.delegationLaneMemo;
+  }
+
+  /** One pass of the delegation lane. PUBLIC for the reason `sweepNames` is: `tick()` dispatches it with `void`, so a test that awaits
+   *  `tick()` has not awaited it. A no-op without a coordination database, inside the census cadence, or while a pass is running. */
+  sweepDelegation(sessions: readonly LaneSession[], records: readonly LaneRecord[]): Promise<void> {
+    return this.delegationLane().sweep(sessions, records);
+  }
+
+  /** The seven-day observation health, as of now, from the checkpoint's own intervals. `undefined` until the lane has tried to open its
+   *  applier: absence on the wire reads as UNKNOWN, never as healthy. */
+  currentDelegationHealth(): DelegationObservationHealth | undefined {
+    return this.delegationLane().health();
+  }
+
+  /** What the lane last concluded, for tests and diagnostics: nothing here is wire. */
+  delegationReport() {
+    return this.delegationLane().report();
+  }
+
+  /** The lane's durable applier, opened on first use (null when the open itself failed). */
+  delegationApplier(): Promise<DelegationDurability | null> {
+    return this.delegationLane().applier();
+  }
+
+  /** Test seams of the delegation lane (see `DelegationLaneSeams`); production passes none. */
+  setDelegationSeams(seams: DelegationLaneSeams): void {
+    this.delegationLane().setSeams(seams);
+  }
+
+  /** Closes the delegation applier's journal descriptor, if it was ever opened (tests, and a clean shutdown). */
+  closeDelegation(): Promise<void> {
+    return this.delegationLaneMemo === null ? Promise.resolve() : this.delegationLaneMemo.close();
+  }
+
+  /** Whether `tick()`'s registry read listed. The health reads it as of the request: an unreadable registry is an unmeasured basis. */
+  noteDelegationRegistry(listed: boolean): void {
+    this.delegationLane().noteRegistry(listed);
+  }
+
   /** Last-swept plan progress — same reasoning as currentPending(). */
   currentTaskProgress(): Map<string, TaskProgress> {
     return new Map(this.taskProgress);
@@ -1871,6 +2068,15 @@ export class FleetWatcher {
       laneGen: this.collectLaneGen, lastSeenLive: this.collectLastSeenLive, flockLatched: this.collectFlockLatched };
   }
 
+  /** The collector switch's counts (path-identity spec 2026-10-12 §5.7), for `GET /api/coord/collect-lane`'s view:
+   *  would collect, held (unvouched ids among them) and the box-wide lines, by L1's `collectLaneCounts` over the input
+   *  builder the published items use (`collectAttentionInput`), read at request time, not their snapshot. `null` until a
+   *  pass has measured a population, which means "not measured yet", never zero. It adds no state; the PWA counts nothing. */
+  currentCollectCounts(): CollectLaneCounts | null {
+    if (this.collectPop === null) return null;
+    return collectLaneCounts(this.collectAttentionInput());
+  }
+
   /** The sweep's in-memory state, read-only (child-reclamation wave 4) — what
    *  wave 5's run chip reads to tell `deferred` from `pending`. Empty after a
    *  restart, by design: see `childReclaimSweepState`'s own docstring. Its
@@ -1907,6 +2113,48 @@ export class FleetWatcher {
    *  runs on the coordination serialiser, exported from `registerCoordRoutes`"). The lane's ONLY way to end a run. */
   useCoordSerialiser(h: Pick<CoordRoutesHandle, 'withSweepAbandon'>): void {
     this.deadCoordinatorSerial = h.withSweepAbandon;
+  }
+
+  /** `buildServer` hands the stop-done lane (D-5370) the coordination serialiser: its stop re-reads the store and acts
+   *  inside it. Until then the lane stops nothing. */
+  useStopDoneSerialiser(h: Pick<CoordRoutesHandle, 'serial'>): void {
+    this.stopDoneSerial = (fn) => h.serial(fn);
+  }
+
+  /**
+   * THE STOP-DONE LANE (D-5370): a finished run's dispatched worker is stopped once idle, and restarts on re-dispatch.
+   * A sibling on the tick, at its own cadence, on THIS tick's assembled rows and registry listing (the listing carries
+   * the kill switch). Never awaited by the tick; one pass at a time. The rule is `stopDoneVerdict` (L1), the pass
+   * `stopDonePass` (L4).
+   */
+  async sweepStopDone(sessions: readonly FleetSession[], records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
+    const coord = this.deps.coord;
+    if (!coord || this.stopDoneSweeping) return;
+    const now = Date.now();
+    if (this.lastStopDoneSweep !== 0 && now - this.lastStopDoneSweep < STOP_DONE_SWEEP_MS) return;
+    this.lastStopDoneSweep = now;
+    this.stopDoneSweeping = true;
+    try {
+      const reads = turnReadDeps(this.deps, this);
+      await stopDonePass({
+        coord, runCcd: this.deps.runCcd, fleetState: this.deps.fleetState, presence: this.deps.presence,
+        notifyLog: this.deps.notifyLog,
+        liveWord: (rec) => liveWordFor(reads, rec), turnVerdict: (rec, uuid) => turnVerdictFor(reads, rec, uuid),
+        mark: (rec) => turnMarkFor(reads, rec),
+        rowAtAct: async (rec) => {
+          const again = await readSessionRecord(this.deps.io, this.deps.cfg, rec.id);
+          if (!again.found) return { ok: false };
+          const row = await liveRowFor(reads, again.record, again.record.uuid);
+          return row === null ? { ok: false } : { ok: true, row };
+        },
+        serial: this.stopDoneSerial, queueRun: (id, fn) => this.deps.queue.run(id, fn),
+        startedAt: this.stopDoneStartedAt, now: Date.now,
+      }, this.stopDoneMemory, sessions, records, names);
+    } catch (err) {
+      console.warn(`ccrc-server: sweepStopDone failed (${err instanceof Error ? err.message : String(err)}) — no stops this pass`);
+    } finally {
+      this.stopDoneSweeping = false;
+    }
   }
 
   /** The last measured project-pool sweep, or null if none has been taken yet
@@ -1978,6 +2226,14 @@ export class FleetWatcher {
         void this.dispatchInventorySweep();
       }
 
+      // The server-caps beat (D-5232's mechanism, Task 9b) sits BESIDE the inventory lane, never inside it: that lane
+      // is `coord`-gated, and a coord-less server must still keep its fleet's file current. Above the registry's
+      // fail-shut return for the same reason as both update lanes (it reads nothing from the registry). NEVER
+      // awaited; `serverCapsNow` never rejects (`writeServerCaps` never throws, and its warning is its own).
+      if (Date.now() - this.lastServerCapsAt >= SERVER_CAPS_WRITE_MS) {
+        void this.serverCapsNow();
+      }
+
       // Read once, share with the two lanes that would otherwise each read it
       // again on EVERY tick (detectDialogs, sweepHookStates) — in remote mode
       // every readRegistry() field is its own agent-WS round trip, so this is
@@ -2017,6 +2273,7 @@ export class FleetWatcher {
       // null. The listed arm's bounded cost and why it stays awaited are stated
       // on `emitPools`; `project-pools-read.test.ts` pins both cost arms.
       await this.emitPools(registryRead.listed ? registryRead.names : null);
+      this.noteDelegationRegistry(registryRead.listed);
       if (!registryRead.listed) {
         // Retain, don't erase, at fleet scale: `this.hookStates`/
         // `this.taskProgress`/`this.prevStatus`/`this.lastJson` are all left
@@ -2224,7 +2481,12 @@ export class FleetWatcher {
           // instant `prevStatus` was overwritten to an unmeasured 'idle'.
           if (unmeasuredIds.has(s.id)) continue;
           if (this.prevStatus.get(s.id) === 'busy' && s.status === 'idle') {
-            this.pushOne({ kind: 'done', sessionId: s.id, project: s.project, title: '✓ Finished', body: 'Finished — back to idle' }, projects);
+            // D-5233: the edge alone is no evidence a turn ended (a compaction, a restart, an overload tick and an
+            // Escape all make one); a main Stop inside this busy stretch is.
+            const since = this.episodeBusySince.get(s.id);
+            if (since !== undefined && await this.finishedEvidence(s.id, s.wrapper, records, panePids, since)) {
+              this.pushOne({ kind: 'done', sessionId: s.id, project: s.project, title: '✓ Finished', body: 'Finished — back to idle' }, projects);
+            }
           }
         }
         // Build 7's two new notify kinds ride the SAME primed gate as the
@@ -2269,7 +2531,16 @@ export class FleetWatcher {
       // Skips the SAME unmeasured ids the push loop above skips — see its own
       // comment: overwriting `prevStatus` with a guessed 'idle' here would
       // permanently lose the real busy→idle edge the instant the row heals.
-      for (const s of sessions) { if (!unmeasuredIds.has(s.id)) this.prevStatus.set(s.id, s.status); }
+      for (const s of sessions) {
+        if (unmeasuredIds.has(s.id)) continue;
+        this.prevStatus.set(s.id, s.status);
+        // The busy stretch's start (D-5233; not the mail gate's own `busySince`), kept from the tick the row turned
+        // busy, priming tick included, and under the same unmeasured skip as `prevStatus`, so a guessed status
+        // neither opens nor closes a stretch.
+        if (s.status !== 'busy') this.episodeBusySince.delete(s.id);
+        else if (!this.episodeBusySince.has(s.id)) this.episodeBusySince.set(s.id, s.statusUpdatedAt ?? Date.now());
+      }
+      for (const id of this.episodeBusySince.keys()) { if (!sessionProjects.has(id)) this.episodeBusySince.delete(id); }
       this.activeProjects = projects;
       // Build 9 wave 7: the claim lease rides THIS tick, on its own slower
       // clocks — no new timer (D12), and the mail sweep below this block is
@@ -2289,11 +2560,24 @@ export class FleetWatcher {
       // awaited: its reads are async, so it cannot sit in the claim pair's synchronous try-block. It gates itself
       // on `primed`, which is set below, so the priming tick never judges.
       void this.sweepStalls(sessions, registryRead.names, { panePids, records }).catch(() => { /* one bad sweep must not kill the poll */ });
+      // NEVER awaited, the stall watch's reasons: the STOP-DONE lane (D-5370) on THIS tick's rows and listing. Gated on
+      // `primed` like the stall watch, so the priming tick never stops anything.
+      if (this.primed) void this.sweepStopDone(sessions, records, registryRead.names).catch(() => { /* one bad sweep must not kill the poll */ });
+      // D-5373: NEVER awaited, `sweepMail`'s reason — it can call `sendPrompt` through the per-session queue. Own clock.
+      if (Date.now() - this.lastIdleNudgeAt >= IDLE_NUDGE_SWEEP_MS) {
+        this.lastIdleNudgeAt = Date.now();
+        void this.sweepIdleCompactNudge(sessions, registryRead.names, { panePids, records })
+          .catch(() => { /* one bad sweep must not kill the poll */ });
+      }
       // NEVER awaited, same reasoning as `sweepDivergences`: each is a
       // handful of io reads per PROJECT, on an hourly / 15-minute clock.
       void this.sweepLedgerFloor(records).catch(() => { /* one bad sweep must not kill the poll */ });
       void this.sweepLedgerReconcile().catch(() => { /* one bad sweep must not kill the poll */ });
       void this.sweepReadiness().catch(() => { /* one bad sweep must not kill the poll */ });
+      // NEVER awaited, the same reasons: the DELEGATION lane (wave 3, Task 13) is a sibling at the census's own cadence, on this tick's
+      // `sessions` and registry rows. It reads spool buckets over the agent link, so awaiting it would put the dialog detector and the
+      // busy->idle push behind a slow remote read; it is single-flight and has its own budget (`DelegationLane`).
+      void this.sweepDelegation(sessions, records).catch(() => { /* one bad sweep must not kill the poll */ });
       this.primed = true;
       if (this.deps.cfg.fleetMode === 'remote' && this.deps.fleetState?.connected) {
         // C0.4: `connected` alone is not "this read was complete" — a
@@ -3249,8 +3533,18 @@ export class FleetWatcher {
     const headBranch = new Map<string, string | null>();
     const fleetHeads = new Map<string, { project: string; branch: string | null }>();
     const transientlyUnread = new Set<string>();
+    // The delegation lane's input, taken from THIS pass's reads: each project's census, and the registry generations of the ids the
+    // pass was handed, read once BEFORE the census and once after it (R38, restored exactly by R47): the first round COMPLETES before
+    // the first census read is issued, so a generation bump between a census read and a late first read cannot label old-incarnation
+    // evidence measured. It is one concurrent round (one round trip), the only delivery IO ahead of the console's HEAD labels; the
+    // SECOND round runs after `settleHeads()`. No second admin-directory read and no schedule of its own.
+    const generationOf = (id: string) => childReclaimGenerationRead(this.deps.io, this.deps.cfg.registryDir, id);
+    const generationsBefore = await readParentGenerations(generationOf, records.map((r) => r.id));
+    const delegationProjects = new Map<string, WorktreeCensus>();
     for (const project of projects) {
-      const read = await readWorktreeRecords(this.deps.io, this.deps.cfg.projectsRoot, project);
+      const census = await readWorktreeCensus(this.deps.io, this.deps.cfg.projectsRoot, project);
+      delegationProjects.set(project, census);
+      const read = census.read;
       // §1.7. Both refusals contribute nothing for this project — a census can
       // only ever suppress a finding here, never manufacture one — but they are
       // NAMED separately rather than collapsed, because they are different facts
@@ -3307,7 +3601,7 @@ export class FleetWatcher {
     // label in it back to the registry's name for a minute; a STANDING refusal
     // (`not-a-checkout`, `refused-project`) keeps nothing. NOT covered: a
     // per-worktree `gitdir`/`HEAD` read that fails inside a listing that
-    // answered — `readWorktreeRecords` reports those as a dropped record or a
+    // answered — `readWorktreeCensus`'s `read` reports those as a dropped record or a
     // null HEAD, indistinguishable from a detached one, so that row falls to
     // the registry until the next sweep.
     for (const [id, h] of this.headBranches) {
@@ -3315,6 +3609,11 @@ export class FleetWatcher {
     }
     this.headBranches = fleetHeads;
     this.settleHeads();
+    // The delegation lane's input, AFTER the console's labels are settled and BEFORE this method's own early returns below.
+    this.delegationCensus = {
+      measuredAt: now, projects: delegationProjects,
+      incarnations: await settleParentIncarnations(generationOf, generationsBefore),
+    };
     // THE CLAIM EVIDENCE, READ AFTER THE WORKTREE EVIDENCE IT IS WEIGHED
     // AGAINST — and that ordering is the whole reason this is a second listing
     // rather than the one `tick()` already took (D-283's "one listing,
@@ -4230,9 +4529,9 @@ export class FleetWatcher {
    * executor (`collectTempRoot`), its feed rows, and its attention items, which reach the frame only through the child
    * lane's one write (`childReclaimPublishAttention`).
    *
-   * IT SHIPS SHADOWED. Until the operator touches the live marker by hand, a token the lane would spend is RECORDED — a
-   * feed row once per (id, token) episode, and an attention item — and nothing is composed. The marker is read by the
-   * executor alone, nearest the argv; this pass never reads it.
+   * IT SHIPS SHADOWED. Until the operator arms it (the legacy marker before its latch, or Settings `live` for this node),
+   * a token the lane would spend is RECORDED — a feed row once per (id, token) episode, and an attention item — and
+   * nothing is composed. The executor arms nearest the argv; this pass hands its listing to the switch's latch alone.
    *
    * WHAT IT ASKS. Each pass, at most ONE ACT JOB and at most `COLLECT_AUDITS_PER_PASS` LEARNING audits, chosen by
    * `collectOffers` (L1): the act first, to the earliest ripe id by ripening instant; then learning audits to due ids by
@@ -4278,8 +4577,18 @@ export class FleetWatcher {
   }
 
   /** One pass of the collector's lane, run only while no other pass runs. Its ONE await is the gather. It queues its
-   *  calls and never awaits them (`sweepTempRootCollect`). */
+   *  calls and never awaits them (`sweepTempRootCollect`). Its connection epoch is read at its head and again after the
+   *  gather (path-identity spec 2026-10-12 §5.5), and its listing is handed to the switch's latch (§5.4) and nothing else. */
   private async collectPass(coord: CoordStore, names: readonly string[]): Promise<void> {
+    // ZERO — THE CONNECTION EPOCH (path-identity spec 2026-10-12 §5.5): the epoch the lane's observation pairs stand under.
+    // One that moved since the last pass clears every pair, so no pair straddles two connections. An act job is queued
+    // under it (`collectAct`), and its executor composes nothing when the epoch it reads after its final listing differs.
+    const link = this.deps.fleetIdentity ?? NO_FLEET_IDENTITY;
+    const head = link.epochNow();
+    if (head !== this.collectSeenEpoch) {
+      this.collectSeenEpoch = head;
+      this.collectClearPairs();
+    }
     // ONE — the capabilities (spec §5.10): both, or the lane never runs — never an automatic destructive lane on a box the
     // phone cannot pause. A missing one clears every pair, so each id needs two FRESH observations once it returns.
     if (!capSupported(this.deps.fleetState, COLLECT_CAP) || !capSupported(this.deps.fleetState, RECLAIM_PAUSE_CAP)) {
@@ -4299,12 +4608,28 @@ export class FleetWatcher {
     const mono = this.childReclaimLaneNow().monoMs;
     this.lastCollectSweep = mono;
     const [listings, switches] = gathered;
+    // THE GATHER'S BRACKET (path-identity spec 2026-10-12 §5.5): an epoch that moved while the gather was out clears every
+    // pair and ends the pass. Nothing it listed is read, and no latch is retired from a listing that straddled two
+    // connections. The pairs, now empty, stand under the epoch after it.
+    const after = link.epochNow();
+    if (after !== head) {
+      this.collectSeenEpoch = after;
+      this.collectClearPairs();
+      return;
+    }
     // THREE — the switch: a raised pause, or a registry that did not list, stops the pass before any audit and clears
-    // every pair. Only `paused` is read: the live marker in the same listing is the executor's, at its act.
+    // every pair. Only `paused` is read here: the marker in the same listing is the executor's to arm with, at its act.
     if (switches.paused) {
       this.collectClearPairs();
       return;
     }
+    // THE LATCH (path-identity spec 2026-10-12 §5.4): this listing, coherent, unpaused and on one epoch, proving the legacy
+    // marker absent while the latch is unset, retires it through the one latch helper and the store's one writer, with
+    // one feed row, so an idle lane follows a removed marker within one pass. The helper decides (`collectLatchDue`), it
+    // never heals a mismatch, and the listing is handed to it and to nothing else. Its outcome is said once per
+    // non-success kind (`collectLatchNote`, the coordinator's extension of the warn-latch ruling), so a latch that cannot
+    // retire is never silent.
+    this.collectLatchNote(collectRetireLatch(this.collectControlDeps(coord), switches, { before: head, after }));
     // FOUR — the population (L1): the ids to consider, from the MEASURED listings only, pre-filtered on the tick's exact
     // `<id>.child` and `<id>.uuid` names unless a measured record names the id. Kept for the box-wide lines. An id is
     // forgotten — its pacing and episodes with it, and no feed row — only when `collectForgets` says so (both listings
@@ -4364,17 +4689,24 @@ export class FleetWatcher {
 
   /** The ONE act job (spec §5.10): `collectTempRoot`'s six steps on the id's queue key, the fleet-wide slot taken as it
    *  is queued, never awaited. The deps are composed INSIDE the queue callback, `execChildReclaim`'s idiom, so the job
-   *  reads `deps`'s current answer when it runs. It reaches this lane's memory through `collectPortFor` alone. Its
-   *  answer is folded for the LANE first (`collectJobEffects`: the slot, the latch), then for its id
-   *  (`collectFoldJob`). */
+   *  reads `deps`'s current answer when it runs. The connection epoch the job stands under is read OUTSIDE it, as the
+   *  job is queued (path-identity spec 2026-10-12 §5.5), so a reconnect between this pass and the job's start composes
+   *  nothing. The job reaches this lane's memory through `collectPortFor` alone, and the switch's control state through
+   *  `collectControlDeps`. Its answer is folded for the LANE first (`collectJobEffects`: the slot, the flock latch),
+   *  then for its id (`collectFoldJob`). */
   private collectAct(coord: CoordStore, id: string, pass: number, mono: number): void {
     this.collectEntryOf(id);
     this.collectInFlight.set(id, { kind: 'act', sinceMono: mono, phase: 'queued' });
     this.collectSlot = { kind: 'job', id, sinceMono: mono };
+    // THE JOB'S EPOCH (path-identity spec 2026-10-12 §5.5): the epoch this pass found the lane's pairs standing under,
+    // read HERE, as the job is queued, never inside the callback. Its executor composes nothing when the epoch it reads
+    // after its final listing differs, so a reconnect between the queueing and the job's start composes nothing.
+    const epoch = this.collectSeenEpoch;
     void this.deps.queue.run(id, () => collectTempRoot({
       coord, io: this.deps.io, cfg: this.deps.cfg, runCcd: this.collectRunCcd(id), fleetState: this.deps.fleetState,
       presence: this.deps.presence, lane: this.collectPortFor(coord, id), observeIntervalMs: COLLECT_OBSERVE_INTERVAL_MS,
-    }, { id }))
+      control: this.collectControlDeps(coord), link: this.deps.fleetIdentity ?? NO_FLEET_IDENTITY,
+    }, { id, epoch }))
       .then((outcome) => { this.collectSettleJob(coord, id, pass, outcome); }, (err: unknown) => {
         const detail = err instanceof Error ? err.message : String(err);
         console.warn(`ccrc-server: sweepTempRootCollect: the collector's job for ${id} threw (${detail}) — read as one that may have acted: the act slot and ${id} wait CHILD_RECLAIM_STALL_MS`);
@@ -4462,7 +4794,7 @@ export class FleetWatcher {
   }
 
   /** Folds one AUDIT answer (spec §5.10). What it says of the BOX counts whatever became of the id: the box-wide probes,
-   *  by the answer's ARRIVAL (`collectBoxProbesAnswered`: an answer older than the probes' latest change is skipped, as
+   *  by the answer's ARRIVAL (`collectBoxProbesAnswered`: an answer from before the probes were last rebuilt is skipped, as
    *  an act job's observation 2 can be, folded when its job settles) and, for an answer a pass queued, that pass's tally
    *  (`collectPassClass`). Then the id's entry, through Task 4's `collectAfterAudit`: an OBSERVATION only when
    *  `composed` is given and both generations it captured still stand (`collectFresh`); then the feed cue. An id
@@ -4552,28 +4884,108 @@ export class FleetWatcher {
     }
   }
 
+  /** The collector's `coord` feed row (path-identity spec 2026-10-12 §5.4). It records the marker latch's retirement,
+   *  a change to the switch's control state with no run and no session: `kind:'coord'`, `sessionId:''` and
+   *  `runId:null`, as `POST /api/coord/caps` records its change. It is recorded and archived, never pushed. A failed
+   *  archive write is said and never stops the lane, and the log is flushed whatever happened (`collectRecordFeed`'s
+   *  idiom). */
+  private collectRecordCoordFeed(coord: CoordStore, title: string, body: string): void {
+    const log = this.deps.notifyLog;
+    if (!log) return;
+    try {
+      const ev = log.record({ kind: 'coord', sessionId: '', runId: null, title, body });
+      coord.recordFeedEvent(log.epoch, ev);
+    } catch (err) {
+      console.warn('ccrc-server: recordFeedEvent failed '
+        + `(${err instanceof Error ? err.message : String(err)}) — temp-root collector ${title}, feed archive degraded`);
+    } finally {
+      void log.flush();
+    }
+  }
+
   /** The executor's view of this lane's memory (spec §5.10; `CollectLanePort`, declared by the executor). Every member is
-   *  synchronous, so the executor's step 6 reads observation 1 with no await between that read and its argv, and its step
-   *  5 records the marker with none between the read and the flip. `id` is the job's, which the flip's row names. */
+   *  synchronous, so the executor's step 6 reads observation 1 with no await between that read and its argv, and
+   *  resolves the switch with none between its reads and the flip. `id` is the job's, which the flip's row names. */
   private collectPortFor(coord: CoordStore, id: string): CollectLanePort {
     return {
       clock: () => this.collectClock(),
       generations: (of) => ({ lane: this.collectLaneGen, id: this.collectState.get(of)?.idGen ?? -1 }),
       observation: (of) => this.collectState.get(of)?.obs ?? null,
+      // Every lane-wide clear a job reports (a pause, a missing capability, a moved epoch, an unknown node) clears every
+      // pair alike (path-identity spec 2026-10-12 §5.5).
       cleared: () => { this.collectClearPairs(); },
-      flipped: (live) => {
-        // THE LAST-SEEN-LIVE FLAG (spec §5.10). A change either way is a FLIP: every pair clears, ONE feed row says so —
-        // any same-uid session can touch the marker, so every change an act job SEES is said; one undone between two
-        // step-5 reads is never seen — and the job that saw it composes nothing. It starts SHADOWED, so an arming the
-        // lane never saw is a flip too.
+      flipped: (r) => {
+        this.collectControlNote(r);
+        // THE LAST-SEEN-LIVE FLAG (spec §5.10; path-identity spec 2026-10-12 §5.5). The lane flips on the EFFECTIVE
+        // BOOLEAN, never on its source: a marker-to-Settings handoff that stays live is no flip, writes no row and keeps
+        // every pair. A change of the boolean either way is a FLIP: every pair clears, ONE feed row says so and names
+        // the source or the bounded safety-stop reason, and the job that saw it composes nothing. Every change an act
+        // job SEES is said; one undone between two step-6 resolutions is never seen. It starts SHADOWED, so an arming
+        // the lane never saw is a flip too.
+        const live = collectLaneLive(r);
         if (live === this.collectLastSeenLive) return false;
         this.collectLastSeenLive = live;
         this.collectClearPairs();
         this.collectRecordFeed(coord, { sessionId: id, runId: null, title: COLLECT_FEED_TITLE.switch,
-          body: collectFeedSwitchBody(live) });
+          body: collectSwitchFeedBody(r) });
         return true;
       },
     };
+  }
+
+  /** The executor's control deps (path-identity spec 2026-10-12 §5.2, §5.4; `CollectControlDeps`, declared by the
+   *  executor): the store, the process's ONE generation journal (`Deps.collectLane`, built in `index.ts`), the wall
+   *  clock, and the latch's row writer. A server built with no journal hands null, which the executor reads as an
+   *  unmeasurable control state, never as a missing journal. Wiring only: the deciding is the executor's and L1's. */
+  private collectControlDeps(coord: CoordStore): CollectControlDeps {
+    return {
+      coord,
+      journal: this.deps.collectLane?.journal ?? null,
+      wallNow: () => this.childReclaimLaneNow().wallMs,
+      latchRetired: (body) => { this.collectRecordCoordFeed(coord, COLLECT_SETTING_FEED_TITLE, body); },
+    };
+  }
+
+  /** THE SWITCH'S WARN LATCHES (path-identity spec 2026-10-12 §5.5), called first from the port's `flipped`, which every
+   *  settled resolution passes through: a safety stop warns once per reason, and a legacy file re-created after its latch
+   *  warns once, so a stuck read state is said once rather than on every act job. A coherent resolution (live or
+   *  shadowed) clears every latch but the one it raises again and the latch helper's own (`latch-…`,
+   *  `collectLatchNote`), as the stall-settings latch re-arms when a read applies.
+   *  The stopped arms (pause, unlistable, epoch, unknown fleet) never reach it, and change none. It decides nothing about
+   *  the lane: the resolution is L1's. */
+  private collectControlNote(r: CollectLaneSettled): void {
+    const key = r.kind === 'safety-stopped' ? r.why : r.notes.markerRecreated ? 'marker-recreated' : null;
+    if (r.kind !== 'safety-stopped') {
+      for (const k of [...this.collectControlWarned]) if (k !== key && !k.startsWith('latch-')) this.collectControlWarned.delete(k);
+    }
+    if (key === null || this.collectControlWarned.has(key)) return;
+    this.collectControlWarned.add(key);
+    console.warn(r.kind === 'safety-stopped'
+      ? `ccrc-server: sweepTempRootCollect: the collector's control state is safety-stopped (${r.why}) — it removes `
+        + 'nothing until its database row and generation journal are proved coherent'
+      : "ccrc-server: sweepTempRootCollect: the fleet box's legacy file was re-created; this server no longer honours it");
+  }
+
+  /** THE LATCH'S WARN LATCHES (the coordinator's extension of the warn-latch ruling, 2026-10-12): the pass's latch
+   *  outcome, said once per non-success kind. A latch the store keeps refusing, failing or throwing on is reported once,
+   *  neither silent nor repeated on every pass. Off stays refused until the latch retires, so this line is the
+   *  operator's only reason for it. Its keys are `latch-<kind>`. They are cleared on `retired` and never by a coherent
+   *  resolution (`collectControlNote` skips them). `not-due` changes nothing. It decides nothing: the helper already
+   *  did, and the pass goes on either way. */
+  private collectLatchNote(o: CollectLatchOutcome): void {
+    if (o.kind === 'not-due') return;
+    if (o.kind === 'retired') {
+      for (const k of [...this.collectControlWarned]) if (k.startsWith('latch-')) this.collectControlWarned.delete(k);
+      return;
+    }
+    const key = `latch-${o.kind}`;
+    if (this.collectControlWarned.has(key)) return;
+    this.collectControlWarned.add(key);
+    const why = o.kind === 'refused' ? `the store refused it (${o.code})`
+      : o.kind === 'failed' ? `the store failed at ${o.phase}`
+      : 'the store threw before its append (a busy database or a read fault)';
+    console.warn(`ccrc-server: sweepTempRootCollect: the legacy file's latch could not be retired: ${why}; `
+      + 'Off stays refused until a later pass retires it');
   }
 
   /** The runner the lane hands its calls (spec §5.10): `deps.runCcd`, marking the id's flight with what is out — an
@@ -4676,13 +5088,20 @@ export class FleetWatcher {
    *  decides every item; the list's ONE write merges them (`childReclaimPublishAttention`). A stated residual: they
    *  reach the frame only at that publish, and stand unchanged while the child lane's pass fails shut. */
   private collectAttention(): ChildReclaimCollectInput {
+    return collectAttentionItems(this.collectAttentionInput());
+  }
+
+  /** What the collector's attention reads (spec §5.10), extracted so the published items and the switch's counts
+   *  (`currentCollectCounts`, path-identity spec 2026-10-12 §5.7) read ONE input: each remembered id L1 projects, the
+   *  box facts, and the clock the unsettled lines are measured at. It reads memory and decides nothing. */
+  private collectAttentionInput(): Parameters<typeof collectAttentionItems>[0] {
     const nowMono = this.collectClock().mono;
     const entries = collectAttentionViews(this.collectState, this.collectPop, this.collectPopNames);
-    return collectAttentionItems({ entries, nowMono, box: {
+    return { entries, nowMono, box: {
       unmeasured: this.collectPop?.unmeasured ?? [], refusedNames: this.collectPop?.refusedNames ?? 0,
       boxProbes: this.collectBoxProbes, passAudits: this.collectPassAudits, flockLatched: this.collectFlockLatched,
       unsettled: this.collectUnsettled(nowMono),
-    } });
+    } };
   }
 
   /**
@@ -5043,7 +5462,7 @@ export class FleetWatcher {
       measuredAt.set(id, at);
       measured.set(id, await measureClaimant({ coord, io: this.deps.io, cfg: this.deps.cfg, tmux }, id, at));
     }
-    const dead = ids.filter((id) => measured.get(id)!.state === 'dead');
+    const dead = ids.filter((id) => claimantMeasuredDead(measured.get(id)!));
     let journalOf: (id: string) => DeadCoordinatorJournal;
     /** The newest successful spawn's instant for a claimant the clause called crashed (so the journal was trusted), or `null`. */
     let journalSpawnedAtOf: (id: string) => number | null = () => null;
@@ -5795,6 +6214,39 @@ export class FleetWatcher {
       : { live: { ok: false, reason: read.reason }, startedAt: null };
   }
 
+  /** D-5233: did a main Stop fall inside this busy stretch? Asked only at a busy→idle edge, so the reads are rare. The
+   *  turn marker is read for this id only, with the row's identity. Its `absent`, `malformed` and `foreign` readings
+   *  need no live read, so a session with no live-status file (`no-state`: an older build, or one that has not
+   *  published yet) still reaches the `absent` fallback. A readable marker is then judged stale against the live
+   *  process's start (a second live read: the tick's row carries no `startedAt`); with no pane, no config dir, or a
+   *  live read that is `no-state` or `unmeasured`, that start is unknown, so the marker is unjudgeable, counts as
+   *  `unmeasured` and pushes nothing. An `absent` marker falls back to the hookstate the tick already holds. The rule
+   *  is `finishedAfter`'s (L1). */
+  private async finishedEvidence(id: string, wrapper: string, records: readonly SessionRecord[],
+    panePids: ReadonlyMap<string, number | null>, busySince: number): Promise<boolean> {
+    const hs = this.hookStates.get(id);
+    const mark = await this.finishedMark(id, wrapper, records, panePids);
+    return finishedAfter(mark, hs === undefined ? null : { state: hs.state, event: hs.event, updatedAt: hs.updatedAt }, busySince);
+  }
+
+  /** `finishedEvidence`'s marker read: the shape and identity first, with no staleness judgement; a readable marker
+   *  then needs the live process's start, or it is `unmeasured`. */
+  private async finishedMark(id: string, wrapper: string, records: readonly SessionRecord[],
+    panePids: ReadonlyMap<string, number | null>): Promise<TurnMarkRead> {
+    const rec = records.find((r) => r.id === id);
+    const ident = rec === undefined ? null : measuredIdentity(rec);
+    if (ident === null) return { ok: false, reason: 'unmeasured' };
+    const mark = await readTurnMarkMeasured(this.deps.io, this.deps.cfg.registryDir, id, ident.uuid, null);
+    if (!mark.ok) return mark;
+    const pid = panePids.get(id) ?? null;
+    const cfgDir = configDirFor(this.deps.cfg, wrapper);
+    if (!pid || !cfgDir) return { ok: false, reason: 'unmeasured' };
+    const live = await readLiveStateMeasured(this.deps.io, cfgDir, pid);
+    if (!live.ok) return { ok: false, reason: 'unmeasured' };
+    // As `readTurnMarkMeasured` judges it: a live file with no process start cannot vouch for the marker.
+    return live.state.startedAt === null || turnMarkStale(mark, live.state.startedAt) ? { ok: false, reason: 'stale' } : mark;
+  }
+
   /** Read 2: the turn marker. Judged for staleness against the live process when the live file was read; with no
    *  live read, L1 re-judges it from `liveStartedAt`. An unmeasured identity cannot be compared, so it answers
    *  `unmeasured` without reading, and `stallMarkClock` does not count that answer. */
@@ -5999,6 +6451,113 @@ export class FleetWatcher {
       kind: route.kind, sessionId: id, project, title: text.title, body: text.body,
       tag: route.tag, recordAlways: true,
     }, this.activeProjects);
+  }
+
+  /**
+   * `idle-compact-nudge` (D-5373; operator ruling 2026-10-17, "Nudge if work is open"). After Claude Code's idle
+   * compaction — which runs on a turn that had ENDED and starts none — type ONE "continue" prompt into a session whose
+   * task list is fresh and has open items. L4: it gathers the facts and applies `decideIdleCompactNudge`'s answer
+   * (`idlenudge.ts`, L1), which holds on every fact it could not read.
+   *
+   * The reads are staged cheapest first and each stops at the first hold: the fleet row (no read), then the live
+   * status, the turn marker, the task list, and last the transcript tail (a stat, and a read only when the file
+   * changed). At most once per compaction: the `<id>#<key>` pair is added to `idleNudged` and the `nudge` feed row is
+   * recorded BEFORE `sendPrompt` runs, and that row (`hasFeedEvent`, exact body) is what a restarted server reads. A
+   * row that did not land types nothing. The send is `sendPrompt` with its echo proofs, never over a draft, a menu,
+   * an armed limit recovery or a pane that shows a turn running. The nudge then reads as the `idle-compact-nudge` pill
+   * in the chat (`transcript/parse.ts`), and its user row is itself a hold for this compaction.
+   */
+  async sweepIdleCompactNudge(sessions: readonly FleetSession[], names: readonly string[], tick: StallTick): Promise<void> {
+    if (!this.primed || this.idleNudgeRunning) return;
+    this.idleNudgeRunning = true;
+    try {
+      const disabled = idleNudgeDisabled(names);
+      const coord = this.deps.coord;
+      const durable = coord !== undefined && this.deps.notifyLog !== undefined;
+      for (const s of sessions) {
+        const row: IdleNudgeRowFacts = {
+          disabled, durable, unmeasured: s.unmeasured.length > 0 || s.statusUnmeasured,
+          lifecycle: s.lifecycle, archived: s.archivedAt !== null, status: s.status,
+          dialogPending: s.dialogPending, askSummary: s.askSummary, ask: s.ask?.state ?? null,
+        };
+        if (idleNudgeRowHold(row) !== null || coord === undefined) continue;
+        await this.idleNudgeOne(s, row, coord, tick);
+      }
+    } finally {
+      this.idleNudgeRunning = false;
+    }
+  }
+
+  /** One session past the row holds: the staged reads, the decision, and the send. */
+  private async idleNudgeOne(s: FleetSession, row: IdleNudgeRowFacts, coord: CoordStore, tick: StallTick): Promise<void> {
+    const rec = tick.records.find((r) => r.id === s.id);
+    const ident = rec === undefined ? null : measuredIdentity(rec);
+    const cfgDir = ident === null ? null : configDirFor(this.deps.cfg, ident.wrapper);
+    const pid = tick.panePids.get(s.id) ?? null;
+    if (ident === null || !cfgDir || !pid) return;
+    const liveRead = await readLiveStateMeasured(this.deps.io, cfgDir, pid);
+    const live = liveRead.ok
+      ? { ok: true as const, word: liveRead.state.status, since: liveRead.state.statusUpdatedAt }
+      : { ok: false as const };
+    const base = { ...row, now: Date.now(), live, mark: { ok: false as const }, tasks: { ok: false as const },
+      compaction: { kind: 'none' as const }, alreadyNudged: () => false };
+    // Stage 1: everything but the marker, the tasks and the tail. A hold here costs no further read.
+    let v = decideIdleCompactNudge(base);
+    if (v.act === 'hold' && v.reason !== 'no-marker') return;
+    const markRead = await readTurnMarkMeasured(this.deps.io, this.deps.cfg.registryDir, s.id, ident.uuid,
+      liveRead.ok ? { startedAt: liveRead.state.startedAt } : null);
+    const mark = markRead.ok ? { ok: true as const, state: markRead.state, bg: markRead.bg } : { ok: false as const };
+    v = decideIdleCompactNudge({ ...base, mark });
+    if (v.act === 'hold' && v.reason !== 'tasks-unread') return;
+    const taskRead = await readTasks(this.deps.io, cfgDir, ident.uuid, { touchedAt: true });
+    const tasks = taskRead.listed
+      ? { ok: true as const, open: taskRead.tasks.filter((t) => t.status === 'in_progress' || t.status === 'pending').length,
+        touchedAt: taskRead.touchedAt ?? null }
+      : { ok: false as const };
+    v = decideIdleCompactNudge({ ...base, mark, tasks });
+    if (v.act === 'hold' && v.reason !== 'no-compaction') return;
+    const compaction = await this.idleNudgeTail(s.id, cfgDir, ident);
+    const alreadyNudged = (key: string): boolean =>
+      this.idleNudged.has(`${s.id}#${key}`) || coord.hasFeedEvent('nudge', s.id, idleNudgeFeedBody(key));
+    v = decideIdleCompactNudge({ ...base, now: Date.now(), mark, tasks, compaction, alreadyNudged });
+    if (v.act !== 'nudge') return;
+    // Once, BEFORE the send: this process's set, then the durable row. A row that did not land types nothing.
+    this.idleNudged.add(`${s.id}#${v.key}`);
+    const body = idleNudgeFeedBody(v.key);
+    this.pushOne({ kind: 'nudge', sessionId: s.id, project: s.project, title: '↻ Nudging after idle compaction', body,
+      recordAlways: true, recordOnly: true }, this.activeProjects);
+    if (!coord.hasFeedEvent('nudge', s.id, body)) {
+      console.warn(`ccrc-server: idle-compact-nudge ${s.id} compaction ${v.key}: the feed record did not land — nothing typed`);
+      return;
+    }
+    const res = await sendPrompt({ tmux: this.deps.tmux, queue: this.deps.queue }, s.id, IDLE_COMPACT_NUDGE_PROMPT,
+      { holdIfAutoContinueArmed: true, refuseIfTurnRunning: true });
+    console.warn(`ccrc-server: idle-compact-nudge ${s.id} compaction ${v.key}: ${res.ok ? 'typed' : `refused (${res.error}), not retried`}`);
+    // The feed agrees with the log line: a refused send gets its own row, so "Nudging" is never the last word on a
+    // nudge that typed nothing.
+    if (!res.ok) {
+      this.pushOne({ kind: 'nudge', sessionId: s.id, project: s.project, title: '↻ Nudge not typed',
+        body: idleNudgeRefusedBody(v.key, res.error), recordAlways: true, recordOnly: true }, this.activeProjects);
+    }
+  }
+
+  /** The newest compaction in this session's transcript tail, re-read only when the file's size or mtime moved. An
+   *  unreadable or absent file answers `none`, which holds. */
+  private async idleNudgeTail(id: string, cfgDir: string, ident: { uuid: string; workdir: string }): Promise<CompactionTail> {
+    const file = (await this.transcripts.resolve({
+      configDir: cfgDir, dir: ident.workdir, registryWorkdir: ident.workdir, uuid: ident.uuid,
+    })).path;
+    const st = await this.deps.io.statMeasured(file);
+    if (!st.ok) return { kind: 'none' };
+    const sig = `${file}:${st.size}:${st.mtimeMs}`;
+    const memo = this.idleNudgeTails.get(id);
+    if (memo !== undefined && memo.sig === sig) return memo.tail;
+    const start = Math.max(0, st.size - IDLE_NUDGE_TAIL_BYTES);
+    const res = await this.deps.io.readFileFromMeasured(file, start);
+    if (!res.ok) return { kind: 'none' };
+    const tail = readCompactionTail(res.data);
+    this.idleNudgeTails.set(id, { sig, tail });
+    return tail;
   }
 
   /**
@@ -7611,7 +8170,7 @@ export class FleetWatcher {
           // `sweepMerged` above.
           this.pushOne({
             kind: 'ask', sessionId: r.id, project: r.project,
-            title: '❓ Question', body: dialog.title || 'Claude has a question',
+            title: '❓ Question', body: askPushBody(this.hookStates.get(r.id) ?? null, dialog),
             ...(actions ? { actions } : {}),
           }, this.activeProjects);
           // Latched whenever this raise had no actions, cleared the moment one
@@ -7645,6 +8204,9 @@ export class FleetWatcher {
           // scope), is the only place left that can still name it — done
           // unconditionally, before eligibility is even asked for the NEW
           // dialog, because the OLD one is gone from the pane either way.
+          // D-5289: a lapsed question this child replaced is no longer one a
+          // late parent answer could land in, so its notification is final.
+          this.lapsedAsks.delete(r.id);
           const orphaned = this.heldAsks.get(r.id);
           if (orphaned !== undefined && last !== undefined) {
             // The map entry is dropped unconditionally, BEFORE the guarded
@@ -7668,74 +8230,18 @@ export class FleetWatcher {
           }
           this.dialogIds.set(r.id, dialog.id);
           this.bus.emit(`session:${r.id}`, { type: 'dialog', dialog });
+          this.settlingAsks.delete(r.id);
           if (notify) {
-            const hs = this.hookStates.get(r.id) ?? null;
-            const ask = hs?.ask ?? null;
-            // D-2173: ELIGIBILITY IS `askActions`, and nothing else. Its own
-            // contract is "offer an action only where `answerAsk` would
-            // accept it", so every ask it refuses — an approval, a
-            // multi-question envelope, a multi-select, a free-text ask, a
-            // blank label — is one no principal could answer through this
-            // lane. Holding those would be a grace window that can never
-            // resolve to an answer. `ask !== null && 'questions' in ask` is
-            // redundant with `actions !== null` at runtime (`askActions`
-            // returns null for exactly the same envelopes) — it exists so
-            // the compiler, not just the contract, knows `ask.questions[0]`
-            // is safe to read inside `hold`.
-            let held = false;
-            if (actions !== null && hs !== null && ask !== null && 'questions' in ask) {
-              // Fix round 1, item 2 (Important): `parentOfSession` and
-              // everything `hold` itself does (`openRunsForSession`, the
-              // WRITE `insertAsk`, `queueSystemMail`'s own `tx()`/`BEGIN
-              // IMMEDIATE`, plus `hold`'s own explicit throw on a
-              // key-derivation drift) reach `node:sqlite` directly,
-              // unguarded — and `tick()` is fired as `void this.tick()` with
-              // no `unhandledRejection` handler anywhere in this tree, so an
-              // unguarded throw here would kill the whole process over a
-              // fault every neighbouring coord lane already survives
-              // (`pushNewMail`/`pushNewRuns` above, `recordFeedEvent` inside
-              // `pushOne`, this file's own ruling on exactly this class at
-              // the `pushNewMail`/`pushNewRuns` call site). FALLS BACK TO
-              // `raise()` on any failure — the fail-safe direction: the lane
-              // degrades to today's ordinary immediate push rather than
-              // losing the question or the process.
-              try {
-                const parent = this.deps.coord?.parentOfSession(r.id) ?? null;
-                if (parent !== null && parent !== r.id && !this.asksDisabled) {
-                  const mint = this.hold(r, dialog, actions, hs, ask, parent);
-                  // D-2172: the RECORD is minted now, not at release.
-                  // `pushOne` returns before `notifyLog.record` when the
-                  // operator is looking, so suppressing the raise without
-                  // recording would delete the operator's only durable
-                  // trace of a question their parent then answered in their
-                  // name.
-                  this.pushOne({ ...mint.ev, recordAlways: true, recordOnly: true }, this.activeProjects);
-                  this.heldAsks.set(r.id, mint);
-                  held = true;
-                }
-              } catch (err) {
-                console.warn(`ccrc-server: ask hold failed for ${r.id} (${err instanceof Error ? err.message : String(err)}) — falling back to an immediate push`);
-                // Fix round 2, item 2: `insertAsk` and `queueSystemMail` are
-                // SEPARATE transactions inside `hold()` — a throw after the
-                // first commits (inside `queueSystemMail`'s own `tx()`, or in
-                // `pushOne`/`heldAsks.set` below it) would otherwise leave an
-                // ask row `held` with NO `heldAsks` entry: unreachable by
-                // Task 7's map-keyed sweep and Task 8's dialog-keyed
-                // `staleAsk`, while the `raise()` below means the operator
-                // gets the push AND a nudged parent may still act on the
-                // very question that push just escalated. Settle whatever
-                // may have committed — a no-op (0 rows changed) in the
-                // common case where nothing did — wrapped so the
-                // compensation itself cannot throw OUT of this catch and
-                // undo the fallback to `raise()` it exists to protect.
-                try {
-                  this.deps.coord?.staleAsk(dialog.id, r.id, Date.now());
-                } catch (compErr) {
-                  console.warn(`ccrc-server: ask hold compensation failed for ${r.id} (${compErr instanceof Error ? compErr.message : String(compErr)}) — a held row may remain orphaned`);
-                }
-              }
+            // D-5290: the FIRST raise waits while the child's hookstate is not
+            // yet `waiting` and nothing made the dialog answerable — the menu
+            // painted after this tick's hookstate read (`tick()`'s ordering
+            // note), and one or two ticks later the envelope is there to hold.
+            // Bounded by `ASK_SETTLE_TICKS`, in the arm below.
+            if (actions === null && this.hookStates.get(r.id)?.state !== 'waiting') {
+              this.settlingAsks.set(r.id, { dialogId: dialog.id, ticks: 1 });
+            } else if ((await this.tryHold(r, dialog, actions, recs)).kind === 'none') {
+              raise();
             }
-            if (!held) raise();
           }
         } else {
           // SAME DIALOG, STILL PAINTED (D-2403). The continuity observation
@@ -7751,20 +8257,51 @@ export class FleetWatcher {
           // re-stamping is not a weakening. Runs BEFORE the amendment gate, and
           // independent of it, whether or not the notification is replaced.
           this.restampHeldAsk(r.id, dialog.id);
-          if (notify && actions && this.actionlessAsks.get(r.id) === dialog.id) {
+          const settling = this.settlingAsks.get(r.id);
+          if (settling !== undefined && settling.dialogId === dialog.id) {
+            // D-5290, the deferred first raise: still nothing to hold and
+            // hookstate still not `waiting` — wait, at most `ASK_SETTLE_TICKS`
+            // ticks in all; otherwise this IS the first raise, through the one
+            // `tryHold` the first sighting uses.
+            if (actions === null && this.hookStates.get(r.id)?.state !== 'waiting' && settling.ticks < ASK_SETTLE_TICKS) {
+              settling.ticks += 1;
+            } else {
+              this.settlingAsks.delete(r.id);
+              if (notify && (await this.tryHold(r, dialog, actions, recs)).kind === 'none') raise();
+            }
+          } else if (notify && actions && this.actionlessAsks.get(r.id) === dialog.id) {
             // The amendment. Same question, same tag — `push-sw.js` sets
-            // `renotify` from the tag, so this REPLACES the un-answerable
-            // notification in its slot rather than stacking a second one
-            // under it. It is a second raise, so `pushOne` records a second
-            // event in the catch-up ring: the ring is a record of what was
-            // raised, and two really were, which is the honest cost of not
-            // leaving the question un-answerable.
-            raise();
+            // `renotify` from the tag, so a raise here REPLACES the
+            // un-answerable notification in its slot rather than stacking a
+            // second one under it. It is a second raise, so `pushOne` records
+            // a second event in the catch-up ring: the ring is a record of
+            // what was raised, and two really were, which is the honest cost
+            // of not leaving the question un-answerable.
+            //
+            // D-5290: the envelope that arrived a tick after the menu is the
+            // hold's first chance, so the amendment asks `tryHold` first. Held,
+            // the actionless notification is replaced, same tag, by the quiet
+            // "with coordinator" body and no buttons, and nothing is raised;
+            // released at once (a parent not live, or of another project),
+            // `tryHold` has already pushed the answerable payload.
+            const outcome = await this.tryHold(r, dialog, actions, recs);
+            if (outcome.kind === 'none') {
+              raise();
+            } else {
+              this.actionlessAsks.delete(r.id);
+              if (outcome.kind === 'held') {
+                this.pushOne({
+                  kind: 'ask', sessionId: r.id, project: r.project,
+                  title: '❓ Question', body: withCoordinatorBody(outcome.parent),
+                }, this.activeProjects);
+              }
+            }
           }
         }
       } else if (last !== undefined) {
         this.dialogIds.delete(r.id);
         this.actionlessAsks.delete(r.id);
+        this.settlingAsks.delete(r.id);
         // Task 8: the dialog went away with nothing to replace it — the
         // operator hit escape at the terminal, or the session was
         // interrupted, cleared, swapped, or died. The pane is the only
@@ -7782,6 +8319,9 @@ export class FleetWatcher {
         // different dialog minted later on the same session. Settling the
         // held ask on the way out, in THIS branch, means there is nothing
         // left for that guard to miss.
+        // D-5289: a lapsed question whose dialog cleared was acted on (or went
+        // away); no late parent answer can land in it, so its notification is final.
+        this.lapsedAsks.delete(r.id);
         const held = this.heldAsks.get(r.id);
         if (held !== undefined) {
           // Dropped unconditionally, BEFORE the guarded write below — same
@@ -7873,8 +8413,9 @@ export class FleetWatcher {
    *     mid-call — strand the question forever, silently. Past
    *     `ASK_ANSWERING_MAX_MS` since first observed `'answering'`, this
    *     degrades exactly like the missing-row arm below: push, drop.
-   *   - `'answered'` | `'released'` | `'stale'` — somebody already resolved
-   *     it (an answer landed, an explicit `POST /api/asks/:id/release`, or
+   *   - `'answered'` | `'released'` | `'declined'` | `'stale'` — somebody
+   *     already resolved it (an answer landed, an explicit `POST
+   *     /api/asks/:id/release`, which is `'declined'` since D-5289, or
    *     `detectDialogs`'s own orphan-settle). Drop the entry, no push — the
    *     question is already closed.
    *   - `'held'` — the CAS above just failed against this exact state, so
@@ -7927,6 +8468,7 @@ export class FleetWatcher {
       }
       if (released) {
         this.heldAsks.delete(id);
+        this.lapsedAsks.set(id, { askId: held.askId, ev: held.ev });
         this.pushOne(held.ev, this.activeProjects);
         continue;
       }
@@ -7970,6 +8512,7 @@ export class FleetWatcher {
         }
         case 'answered':
         case 'released':
+        case 'declined':
         case 'stale':
           this.heldAsks.delete(id);    // settled by someone else — no push
           continue;
@@ -8031,11 +8574,144 @@ export class FleetWatcher {
   }
 
   /**
+   * D-5289, late answer wins: `POST /api/asks/:id/answer` settled a row it
+   * took from `'released'`, so the lapse already notified the operator. Replace
+   * that notification under the same tag (`pushOne`'s default
+   * `${kind}-${sessionId}`, the lapse's own) with `answeredByBody(parent)`, and
+   * no actions: the question is answered, so the lock-screen buttons must go.
+   * Only for the lapse this watcher snapshotted for THIS row (`askId`), and
+   * once: a restart, a cleared dialog or another row's answer replaces nothing.
+   * PUBLIC for the same reason `releaseHeldAsk` is: the route's only door in.
+   *
+   * A known race, benign: a tick that captures the pane while the route is
+   * still awaiting `sendKey` can see the dialog already cleared and drop the
+   * `lapsedAsks` entry before this runs, so the operator keeps the lapse's
+   * original notification (today's behaviour). Open follow-up, not this
+   * method's: a `'released'` row whose dialog clears with nobody answering
+   * never moves to `'stale'` (`staleAsk` takes `held`/`answering` only).
+   */
+  answeredLate(childId: string, askId: number, parent: string): void {
+    const lapsed = this.lapsedAsks.get(childId);
+    if (lapsed === undefined || lapsed.askId !== askId) return;
+    this.lapsedAsks.delete(childId);
+    this.pushOne({ ...lapsed.ev, body: answeredByBody(parent), actions: undefined }, this.activeProjects);
+  }
+
+  /**
+   * D-5290 (coordinator-first routing spec §5.2): THE ONE DECISION every hold
+   * goes through — `detectDialogs`' first sighting, its deferred first raise
+   * and its amendment branch alike, so the envelope that arrives a tick after
+   * the menu is held exactly as one that arrived with it. Answers `none` (raise
+   * to the operator as today), `held` (minted `held`, the parent mailed, the
+   * operator's push deferred and recorded) or `released` (minted `released`
+   * with its reason and the operator pushed on this tick).
+   *
+   * The checks, in order, each `none` when it fails:
+   *  - D-2173: ELIGIBILITY IS `askActions`, and nothing else. Its own contract
+   *    is "offer an action only where `answerAsk` would accept it", so every
+   *    ask it refuses — an approval, a multi-question envelope, a
+   *    multi-select, a free-text ask, a blank label — is one no principal
+   *    could answer through this lane. `'questions' in ask` is redundant with
+   *    `actions !== null` at runtime; it exists so the compiler knows
+   *    `ask.questions[0]` is safe to read inside `hold`.
+   *  - the kill switch (`$REG/asks-disabled`, `sweepAsks`).
+   *  - THE CHILD MARK (spec §4): the registry row's `ChildMark` is
+   *    `{kind: 'child'}`. `none` and `unreadable` never hold: a run can name
+   *    any session (`POST /api/runs`, until Task 11b), so `parentOfSession`
+   *    alone does not make an operator-created session a child.
+   *  - `parentOfSession` answers, the self-claim guard (`parent !== r.id`),
+   *    and the parent it answers is the claimant of the run the mark names —
+   *    the minting run. Compared by claimant, not by run id: a wave N >= 2 run
+   *    resumes the SAME workspace (`dispatch.ts`'s resume arm), whose marker
+   *    still names wave 1, and `reclaimProgram` moves every run of a programme
+   *    to its heir together, so the claimant is the one fact the binding run
+   *    and the minting run share.
+   *  Then, past those, the row is minted either way:
+   *  - the parent's registry row exists (else `parent-not-live`), is of the
+   *    child's project (else `parent-project-mismatch`), is neither archived
+   *    nor stopped, and is not measured dead by `claimantMeasuredDead`, the
+   *    predicate `sweepDeadCoordinators` reads (else `parent-not-live`).
+   *
+   * Fix round 1, item 2 (Important): `parentOfSession` and everything `hold`
+   * does (`openRunsForSession`, the WRITE `insertAsk`, `queueSystemMail`'s own
+   * `tx()`/`BEGIN IMMEDIATE`, plus `hold`'s own throw on a key-derivation
+   * drift) reach `node:sqlite` directly, unguarded — and `tick()` is fired as
+   * `void this.tick()` with no `unhandledRejection` handler anywhere in this
+   * tree, so an unguarded throw here would kill the whole process. ANY FAILURE
+   * ANSWERS `none`, so the caller falls back to `raise()`: the lane degrades to
+   * today's ordinary immediate push rather than losing the question or the
+   * process.
+   */
+  private async tryHold(
+    r: SessionRecord, dialog: Dialog, actions: PushPayload['actions'] | null, recs: readonly SessionRecord[],
+  ): Promise<{ kind: 'none' } | { kind: 'held'; parent: string } | { kind: 'released' }> {
+    const none = { kind: 'none' } as const;
+    const hs = this.hookStates.get(r.id) ?? null;
+    const ask = hs?.ask ?? null;
+    if (actions === null || hs === null || ask === null || !('questions' in ask)) return none;
+    const coord = this.deps.coord;
+    if (!coord || this.asksDisabled) return none;
+    const mark = r.child;
+    if (mark.kind !== 'child') return none;
+    try {
+      const parent = coord.parentOfSession(r.id);
+      if (parent === null || parent === r.id) return none;
+      // D-5362: the binding is "the parent is the claimant of the run the
+      // mark names", not "the mark names the newest open run": a wave N>=2
+      // run resumes the same workspace, whose `.child` still names wave 1.
+      const minting = coord.run(mark.runId);
+      if (!minting.ok || minting.run === null || minting.run.claimedBy !== parent) return none;
+      const row = recs.find((x) => x.id === parent) ?? null;
+      let reason: 'parent-not-live' | 'parent-project-mismatch' | null = null;
+      if (row === null) reason = 'parent-not-live';
+      else if (row.project !== r.project) reason = 'parent-project-mismatch';
+      else if (row.archivedAt !== null || row.stopped !== null) reason = 'parent-not-live';
+      else if (claimantMeasuredDead(await measureClaimant(
+        { coord, io: this.deps.io, cfg: this.deps.cfg, tmux: this.deps.tmux }, parent, Date.now()))) {
+        reason = 'parent-not-live';
+      }
+      const mint = this.hold(r, dialog, actions, hs, ask, parent, reason);
+      if (reason !== null) {
+        // Released at once: the operator's answerable push fires on THIS
+        // tick, never after the window, and no hold is kept for the sweep.
+        this.pushOne(mint.ev, this.activeProjects);
+        return { kind: 'released' };
+      }
+      // D-2172: the RECORD is minted now, not at release. `pushOne` returns
+      // before `notifyLog.record` when the operator is looking, so suppressing
+      // the raise without recording would delete the operator's only durable
+      // trace of a question their parent then answered in their name.
+      this.pushOne({ ...mint.ev, recordAlways: true, recordOnly: true }, this.activeProjects);
+      this.heldAsks.set(r.id, mint);
+      return { kind: 'held', parent };
+    } catch (err) {
+      console.warn(`ccrc-server: ask hold failed for ${r.id} (${err instanceof Error ? err.message : String(err)}) — falling back to an immediate push`);
+      // Fix round 2, item 2: `insertAsk` and `queueSystemMail` are SEPARATE
+      // transactions inside `hold()` — a throw after the first commits (inside
+      // `queueSystemMail`'s own `tx()`, or in `pushOne`/`heldAsks.set` after
+      // it) would otherwise leave an ask row `held` with NO `heldAsks` entry:
+      // unreachable by Task 7's map-keyed sweep and Task 8's dialog-keyed
+      // `staleAsk`, while the fallback `raise()` means the operator gets the
+      // push AND a nudged parent may still act on the very question that push
+      // just escalated. Settle whatever may have committed — a no-op (0 rows
+      // changed) in the common case where nothing did — wrapped so the
+      // compensation itself cannot throw OUT of this catch.
+      try {
+        coord.staleAsk(dialog.id, r.id, Date.now());
+      } catch (compErr) {
+        console.warn(`ccrc-server: ask hold compensation failed for ${r.id} (${compErr instanceof Error ? compErr.message : String(compErr)}) — a held row may remain orphaned`);
+      }
+      return none;
+    }
+  }
+
+  /**
    * Mint the ask row, snapshot the push `raise()` would have sent, and queue
-   * the mail that wakes the parent. Called ONLY from the eligibility fork
-   * above, which has already proven `actions !== null` (so `ask` is a
-   * single-question envelope with readable labels) and `parent !== null &&
-   * parent !== r.id`.
+   * the mail that wakes the parent. Called ONLY from `tryHold`, which has
+   * already proven `actions !== null` (so `ask` is a single-question envelope
+   * with readable labels), the child mark and `parent !== null && parent !==
+   * r.id`. With a `releaseReason` (D-5290) the row is minted `released` and no
+   * mail is queued; the caller pushes `ev` at once.
    *
    * `ev` is snapshotted here, not re-derived at release (Task 7's
    * `sweepAsks`) or at answer time — nothing persists a tick-local closure
@@ -8047,6 +8723,7 @@ export class FleetWatcher {
   private hold(
     r: SessionRecord, dialog: Dialog, actions: PushPayload['actions'],
     hs: HookState, ask: Extract<HookAsk, { questions: HookAskQuestion[] }>, parent: string,
+    releaseReason: 'parent-not-live' | 'parent-project-mismatch' | null,
   ): { until: number; askId: number; ev: Parameters<FleetWatcher['pushOne']>[0]; answeringSince: number | null } {
     const q = ask.questions[0]!;
     const key = askKey(ask);
@@ -8057,6 +8734,8 @@ export class FleetWatcher {
     if (key === null) throw new Error(`hold: eligible ask on ${r.id} produced no askKey`);
     const options = q.options.map((o) => o.label);
     const now = Date.now();
+    // D-5294: the one deadline, read by the sweep (`until`) and stated in the brief.
+    const until = askNotifyAt(now);
     // Same run `parentOfSession` derived the parent from — `openRunsForSession`
     // mirrors its `ORDER BY id DESC LIMIT 1` pick via "last of the ASC list",
     // the same idiom `sweepMerged` above already uses. Recorded on the ask
@@ -8076,10 +8755,11 @@ export class FleetWatcher {
     const askId = this.deps.coord!.insertAsk({
       childId: r.id, parentId: parent, runId, askKey: key, askAt: hs.updatedAt,
       dialogId: dialog.id, question: q.question, options, now,
+      ...(releaseReason === null ? {} : { releaseReason }),
     });
     const ev: Parameters<FleetWatcher['pushOne']>[0] = {
       kind: 'ask', sessionId: r.id, project: r.project,
-      title: '❓ Question', body: dialog.title || 'Claude has a question',
+      title: '❓ Question', body: askPushBody(hs, dialog),
       actions,
     };
     // The parent is asleep and nothing else will wake it. Ordinary mail, so
@@ -8097,32 +8777,1972 @@ export class FleetWatcher {
     // literal: `isAskNudgeMail` in the same module must recognise exactly
     // this shape, and a queue/reader pair spelling one convention twice is
     // the kind of thing that drifts.
-    queueSystemMail(this.deps.coord!, null, {
-      fromId: 'operator', toId: parent, runId: null, kind: 'question',
-      subject: askNudgeSubject(askId), body: renderAskBrief(askId, r.id, q.question, options),
-    });
-    return { until: now + ASK_GRACE_MS, askId, ev, answeringSince: null };
+    // D-5290: a row minted released mails nobody — its parent is not live, or
+    // is not this child's project's, and the operator already has the push.
+    if (releaseReason === null) {
+      queueSystemMail(this.deps.coord!, null, {
+        fromId: 'operator', toId: parent, runId: null, kind: 'question',
+        subject: askNudgeSubject(askId), body: renderAskBrief(askId, r.id, q.question, options, until),
+      });
+    }
+    return { until, askId, ev, answeringSince: null };
   }
 }
 
 /**
  * The parent's ENTIRE evidentiary surface (design spec §6.1) is this ask row
  * plus its own artifacts — no route, ws feed, or ccd verb lets one session
- * read another's transcript. So this states four things and nothing else:
- * the child's id, the question and its options in order, the two routes a
- * parent may act through, and the lazy role invocation (design spec §4) —
- * this session is that child's parent, and `ccrc-coordinator` is the skill
- * for the job. That sentence is why nothing has to happen at session
- * creation: the role arrives with its first duty.
+ * read another's transcript. So this states the child's id, the moment the
+ * operator is notified (D-5294), the question and its options in order, the
+ * ready-to-run commands a parent may act through, and the lazy role invocation
+ * (design spec §4) — this session is that child's parent, and
+ * `ccrc-coordinator` is the skill for the job. That sentence is why nothing has
+ * to happen at session creation: the role arrives with its first duty.
+ *
+ * D-5294 (coordinator-first spec §5.4, §6.7):
+ * - the deadline is `notifyAt` (`askNotifyAt`, the one computation the sweep
+ *   also acts on), printed in UTC, with the late-answer sentence D-5289 makes
+ *   true; it counts from the mint (the row's `at`), not the row's `askAt`
+ *   (D-5364);
+ * - the question and the option labels are the child's text, so they ride
+ *   inside `untrustedBlock` and nowhere else; outside it the brief names
+ *   options only by index;
+ * - the commands (D-5365) are the coordinator skill's own client form
+ *   (`wave-lifecycle.md`'s ask lane): `"$API"`, `$id` and `$uuid` are the
+ *   names the skill's preamble sets, so the heredoc is UNQUOTED and the shell
+ *   expands them into the attribution the route requires. Nothing the child
+ *   wrote is inside a heredoc: the ask id and the index are integers this
+ *   server minted;
+ * - the question is fenced but not yet redacted (D-5366): `redactCommand`
+ *   comes from Task 12, and plan Task 16 applies it to the question before
+ *   the row stores it and before this brief carries it.
  */
-function renderAskBrief(askId: number, childId: string, question: string, options: string[]): string {
-  const numbered = options.map((label, i) => `  ${i}. ${label}`).join('\n');
-  return `You are the parent of session \`${childId}\`, which is waiting on a question it cannot answer itself:\n` +
-    `${question}\n${numbered}\n\n` +
+function renderAskBrief(
+  askId: number, childId: string, question: string, options: string[], notifyAt: number,
+): string {
+  const asked = `${question}\n${options.map((label, i) => `  ${i}. ${label}`).join('\n')}`;
+  const deadline = new Date(notifyAt).toISOString().slice(11, 19);
+  const who = '"fromId":"$id","fromUuid":"$uuid"';
+  const answers = options.map((_label, i) =>
+    `Option ${i}:\n"$API" asks answer ${askId} --json - <<JSON\n{${who},"optionIndexes":[${i}]}\nJSON\n`).join('');
+  return `You are the parent of session \`${childId}\`, which is waiting on a question it cannot answer itself.\n` +
+    `The operator is notified at ${deadline} UTC unless you answer or hand over; ` +
+    `a later answer still counts until the operator acts.\n\n` +
+    `${untrustedBlock(asked, UNTRUSTED_CAP_BYTES, 'on the ask row (`"$API" asks list` shows it while the row is held, not after the lapse)')}\n\n` +
     `Rule from your own artifacts — spec, plan, ledger, branch, your prior rulings — never from the child's ` +
-    `reasoning, which you cannot see.\n` +
-    `Answer: POST /api/asks/${askId}/answer { optionIndexes: [<index>] }\n` +
-    `Decline (not yours to rule — fires the operator's own notification at once): ` +
-    `POST /api/asks/${askId}/release\n\n` +
+    `reasoning, which you cannot see.\n\n` +
+    `Answer with the index of the option you rule for ("$API", $id and $uuid are the ccrc-coordinator skill's):\n` +
+    answers +
+    `\nDecline (not yours to rule — fires the operator's own notification at once, and is final):\n` +
+    `"$API" asks release ${askId} --json - <<JSON\n{${who}}\nJSON\n\n` +
     `Run the ccrc-coordinator skill.`;
+}
+
+// ── THE DELEGATION LANE (delegation broker wave 3, Task 13; spec §5.5, §5.12) ──────────────────────────────────────────────────
+//
+// A SIBLING of `sweepDivergences`, never a branch of it, and never awaited by `tick()`: it reads each live owner's hourly spool
+// buckets, ingests them durably (Task 9 into Task 8), correlates the census this watcher ALREADY takes once a minute against the
+// retained evidence (Task 11), plans report-only effects (Task 12), applies the durable ones and repairs the SQLite projection
+// (Task 7). It keeps the seven-day observation intervals the health is computed from. WAVE 3 IS OBSERVATION ONLY: this lane writes no
+// carrier, starts no cleanup clock, mints no token and takes no filesystem action; its only durable writes go through
+// `DelegationDurability`, and the policy it applies is closed and non-executable.
+//
+// L4: it GATHERS (the owner's directory listing and a bounded byte range through `FleetIO`) and it APPLIES; every decision is a
+// pure module's (`ingestDelegationBucket`, `correlateDelegation`, `planDelegationReconciliation`, the health arithmetic).
+//
+//   ONE PASS AT A TIME (M5/M6). `sweeping` is the single-flight latch; a pass that finds another running returns at once, which also
+//   keeps two census passes from being reconciled side by side (the newer `measuredAt` only). A pass has a BUDGET enforced by a
+//   deadline the work cannot veto: a read that never answers ends the pass, its late answer is discarded (`signal.aborted` is checked
+//   after every await before anything is applied), and the next pass is not blocked by it.
+//   A DOCUMENTED RELAXATION (M2): a budget cut releases the latch while the cut pass's work may still be unwinding, so "a pass never
+//   starts while the previous one runs" holds for a pass that ends and is relaxed for one that is cut. That is deliberate: holding the
+//   latch until a hung read answered would wedge the lane for good. The late work is inert because an abort check follows every
+//   await before anything is applied, and what it could still have in flight (a durable application already queued) is idempotent:
+//   attempts dedupe by ID, events dedupe by `eventId`, and an append-only bucket cannot move a cursor backwards. The stat fallback after a
+//   failed range read (`readDelegationBucket`) cannot carry the tick's signal, because `FleetIO.statMeasured` takes no signal and no
+//   timeout; the pass deadline race bounds it instead.
+//
+//   EVERY INGESTION READS THE DURABLE STATE AT THE MOMENT IT INGESTS, after the range read and never from a copy taken before it: a row
+//   that moved during the read is a disagreement ingestion reports, not a coordinate this lane overwrites. Cursors move ONLY through
+//   ingestion (`applyAccepted`): nothing here rewrites `bucketCursors` through a checkpoint-only change.
+//
+//   WHAT THE LANE DROPPED (R57, R65, D-4653). The slice of the journal the lane keeps for correlation is bounded, and an eviction is
+//   never allowed to decide a link (spec §5.3: a lost event delays or prevents a link, never creates one). Rung 4 reads the HORIZON,
+//   the latest `observedAt` among the events the lane evicted, which bounds a listing window. Rungs 2 and 3 cannot be bounded by an
+//   instant: an event that is gone is invisible, and the lane's one-event-per-tuple rule hides a tuple's LATER events once its first is
+//   evicted. So the lane REMEMBERS what it dropped: at every eviction (the cap, and a reload that truncates the whole journal) it keeps
+//   the minimal keys correlation reads (the parent, the agent and run ids the event named, its directory, whether it was a
+//   SubagentStart or SubagentStop), de-duplicated, never the event. A tuple's held event stands for the later events of its tuple that
+//   the rule hid (their keys are the tuple's own), so recording the holder's eviction records them. Correlation asks the index, by
+//   membership, whether a link rests on an event the lane no longer holds (`delegation-correlation.ts`, clauses (a) and (b)).
+//   WHERE IT LIVES: LANE MEMORY ONLY: a Map of distinct keys on this class. It adds no file, no
+//   SQLite-only state, and writes nothing to the journal; `loadEvidence` rebuilds it from nothing at every reload, exactly as it
+//   recomputes the horizon. A LOST INDEX IS NOT AN EMPTY ONE: the index is measured only once `loadEvidence` has streamed the whole
+//   retained journal and indexed every event it dropped while doing so; until then (a restart, a recovery, a visit that failed
+//   midway) it is UNMEASURED (`DELEGATION_DROPPED_UNMEASURED`), the lane reconciles nothing, and correlation answers
+//   `unmeasured('evidence-horizon')` for every link against it (D-4008: unknown is never empty). BOUNDED, AND FORGETFUL ONLY
+//   FOR A TREE A MEASURED CENSUS SHOWS GONE (R69 to R71). The lane keeps the last measured canonical path of every tree the census lists
+//   (lane memory; after a restart it is seeded from the checkpoint's leases and attempts). A dropped key is forgotten only when no
+//   protected path and no asked-about name needs it (`planDelegationDroppedPrune`, which argues why that is sound): a path protects its
+//   keys while a census record lists it and while it is the remembered path of a tree that no census of ITS OWN project, measured in
+//   this pass, shows gone, so a record whose `gitdir` read failed (a null path), a project with no view this pass and a project missing
+//   from the census each keep what they had. The restart is per project: a project not yet measured since the lane started keeps ITS OWN
+//   keys (its sessions' and the paths it remembers) while the others prune. A key is stamped with the time of the latest event dropped
+//   under it and is forgotten only if that predates the census that prunes it (less the clock skew allowance). A standing refusal
+//   holds no tree and counts as measured with none (R70): a refused project name always (the census returns before it reads anything,
+//   so no path in it can be a rung-2 or rung-3 candidate, which is always a census record); `not-a-checkout` only after it has recurred
+//   on three consecutive census passes spanning ten minutes (R71), because `gitref.ts` names a residual in which one dropped round trip
+//   reads as that answer. The keys are pruned as the journal streams (every 4,096 new ones) and at a reconcile after a batch.
+//
+//   A FORGOTTEN VETO IS PROVED GONE OR MARKED (R73, D-4653). A key is forgotten only if a census of its project, measured in this pass,
+//   shows every tree it could veto gone, or it is replaced by a COARSER mark that still moves every link it could have vetoed to
+//   `unmeasured('evidence-horizon')`: so a tree the lane does not know (an unseeded tree after a restart, a project with no live session)
+//   loses nothing to a prune. A project that lists a TRANSIENT null-path record it has no path for holds its own keys back, per project,
+//   for a streak of three censuses over ten minutes (`LANE_NULL_PATH` decides transient from standing; a standing null path never holds
+//   anything back). A held-back project over `DELEGATION_PROJECT_HOLD_CAP` keys is lost. Lane memory only, like the index: no file, no
+//   SQLite-only state, the journal untouched. What sets and what clears each mark (R73, R74, R75):
+//     - PATH MARKS (64-bit hashes of directories, `DELEGATION_MARK_CAP` across all of them). Set by a prune that forgets a key at a
+//       directory no tree shown gone by THAT census, and no lost project's remembered tree, had (a SubagentStart or SubagentStop leaves
+//       none). Kept per project they are attributed to (`delegationMarkProjectOf`: the nearest listed or remembered tree, else the
+//       project's own checkout under the projects root), and apart for none. Cleared ONLY by a restart (or a recovery): its
+//       `loadEvidence` re-indexes the complete journal (wave 3 never compacts it) against what the census then lists, so a tree listed
+//       with its path keeps its keys and its path is not marked again. A census alone never clears one: it cannot show what the forgotten
+//       events said. Dropped, with the rest of its project's, when that project is lost (its prefixes, below, keep what it guarded).
+//       The projects root the attribution reads is RESOLVED (N20), through `FleetIO.realpath` on the box that holds it, at every pass;
+//       a root that does not resolve attributes nothing by the root (the nearest-tree rule still applies) until a later pass resolves
+//       it, so no mark is attributed by a spelling git does not report (coordinator 5439: unmeasured, never a guess).
+//     - LOST-PROJECT PREFIXES (R77, N19; the directories that attributed path marks to a project: the nearest tree's path, or the
+//       project's checkout under the resolved projects root). Recorded with each mark the project is given, set as a COVER when that
+//       project is lost (by rule 3 or at a cap): every tree at or under one answers `unmeasured('evidence-horizon')` at rungs 2 and 3,
+//       whatever repository it belongs to, so a mark that guarded another repository's tree nested inside the lost project's checkout or
+//       tree keeps its veto. Cleared only by a restart's load. Bounded by the trees and checkouts that attributed a mark since the load
+//       (`DELEGATION_MARK_CAP` of them in all; past it the global flag rises).
+//     - UNKNOWN-REPOSITORY WINDOWS (I-1; not marks in the index, but counted beside them). A rung-4 listing window of a session whose
+//       project this process cannot name (no registry row and no live session has named it since the lane started: a reclaimed child,
+//       a forgotten session, after a restart) is kept with a null repository, and rung 4 treats it as on every repository: a
+//       candidate it overlaps is `unresolved`, and an open-ended or early one keeps the horizon test from linking. Set at every
+//       reconcile from the slice; cleared when a registry row or a live session names the session's project again, or when the window's
+//       events leave the slice (the evidence horizon then bounds it, the natural bound). Lane memory: the slice and the session map.
+//     - ID MARKS (64-bit hashes of agent and run ids; attributed to no project, since an id names none). Set by a prune that forgets a
+//       key naming an id nobody asks about yet (a name made redundant by its own parent's activity row is exact and leaves none). Cleared
+//       only by a restart: by then the id is asked about, so the load keeps the key itself.
+//     - LOST PROJECTS (at most one per project). Set when a held-back project holds more than its cap of keys (R73 rule 3), or when a mark
+//       set reaches its cap and the project holds the most path marks (R75): its marks are dropped, its project mark covers every
+//       tree of it, and its prefixes cover every tree under them. Cleared only by a restart whose load measures the project.
+//     - THE GLOBAL LOSSY FLAG. Set only when the marks attributed to no project fill a set by themselves (R75: every attributed project is
+//       lost first, biggest first, until the set is under its cap). Cleared only by a restart whose re-index fits under the cap. In wave 3
+//       the journal never shrinks, so once it holds more unattributed forgettable directories (or row-less ids) than the cap, every
+//       restart raises the flag again and no rung-2 or rung-3 link is made: wave 4's journal compaction is what makes marks finite.
+//   THE LIVENESS ANSWER (R74), stated: a mark set for a tree that stays alive keeps that tree's rung-2 and rung-3 links
+//   `unmeasured('evidence-horizon')` until the next restart (no re-read: re-reading the journal holds the applier queue for longer than
+//   a pass at 30 days). A tree that stays alive and invisible past every restart is never decided, which is the intended answer. So
+//   every verdict a mark changed is COUNTED, by kind (`delegationMarkForced`; a verdict two marks cover goes to the first of flag, project,
+//   prefix, path, id; then an unknown-repository window, `delegationUnknownWindowForced`), apart from every other `unmeasured` reason:
+//   per tree and kind, cumulatively since the last hourly warn line, which prints and resets them and also names the held-back projects
+//   (with their key counts), the lost projects and the flag, and never a path.
+//
+//   THE READ HORIZON AND CURSOR RETENTION (R58, D-4654). The lane reads no bucket older than the spool lookback, and decides that in
+//   ONE place (`delegationBucketReadable`), for a live owner's listing and for a dead owner's unclosed hour alike. Bucket cursors retire
+//   behind that horizon through `DelegationDurability.pruneBucketCursors` (under the applier's lock, on its own rows, never on this
+//   lane's copy), at most once per UTC hour and only when the planner has something to drop; that is safe only because nothing past the
+//   read horizon is ever read again.
+//
+//   ONE DURABLE APPLICATION PER PASS (D-4658, ruling R79). Every application rewrites the whole checkpoint and re-projects it, which is
+//   linear in all-time activities, so the bucket results of a pass are STAGED and applied together (`stage`, `flushPass`): one journal
+//   append run, one checkpoint replacement, one projection, in O5's order. Lane memory only (the pass's own list); no file. ONE REFUSED
+//   BUCKET NEVER STOPS THE PASS (R82): a refusal before the first byte is isolated by bisection and costs that bucket alone, exactly as
+//   unbatched; a failure after the first byte still fails the applier closed and stops the pass (`flushPass`).
+//
+//   NO-OP SKIP (hand-off 2). A bucket result that accepts nothing, leaves the cursor row as it was and would not change the hour's
+//   interval stages NOTHING, and a pass that staged nothing makes no durable call. The one exception is the CLOSE WRITE: once an hour
+//   has ended (plus the hook's margin) it is written one more time, so that its record postdates its close and the lane can tell, after
+//   a restart, an hour it saw whole from one it only saw begin.
+//
+//   THE INTERVALS. Each observed (session, incarnation, UTC hour) has one checkpoint-owned `measured` or `unmeasured` row; unmeasured
+//   is sticky. A session whose spool directory does not exist (a pane older than the spool code, D-4651), a capability the fleet does
+//   not offer, an unreadable directory or range, malformed evidence and a parent whose incarnation is unmeasured are each an
+//   UNMEASURED hour, never a measured-empty one. Only a listing that SUCCEEDED and does not name the bucket is an empty hour. Between
+//   two unmeasured words in one hour a LOSS word displaces a CARVE-OUT word (`directory-absent`, `capability-absent`), and a carve-out
+//   word never displaces a loss word (R90): the checkpoint's merge holds that, and the no-op skip re-stages a loss over a carve-out.
+//
+//   THE LANE NEVER LINKS ACROSS A STRETCH IT KNOWS IT DID NOT READ (W1, coordinator 5512; R88, R89). Lane memory only, both:
+//     - THE LATEST READY INSTANT (R88, `readyAt`). Set by the first pass of a process that reaches the owners, and again by the first
+//       pass to reach them after the lane was found NOT READY (no census, no applier, or an applier not `ready` or failed; and R103, a
+//       registry `tick()` could not list, which stops the tick before the census and this lane; R109, a pass cut before the owners,
+//       which listed no one; and R116, a recovery the lane started that has not SETTLED, returned or thrown: while it runs, its
+//       projection repair after `recover()` already reports `ready` included, a pass reads no owner, reconciles nothing and sets no
+//       instant): to the settle of the last recovery the lane started (`recoveredAt`, the in-process one, R112, R116), whichever pass
+//       started it, or else to the instant the pass's applier answered (`appliedAt`, R113), which covers the BOOT recovery `open()`
+//       makes, for the pass that started the open and for a later one awaiting the cached applier alike (R117); and never earlier than
+//       the setting pass's own clock, whatever the wall clock does (one clamp for both arms: R115 for the appliedAt arm, R120 for the
+//       recoveredAt arm). (Measuring after the await carries the clock-skew allowance from the settle: that covers a call made during
+//       the recovery by a hook clock running ahead of the server's. When the clocks agree, the pass budget (45 s) keeps a recovery
+//       whose pass is not cut inside the skew (60 s), unless a starved event loop fires the budget timer late; a recovery whose pass
+//       was cut runs on past the budget, and its settle covers that too.) (No census and no applier can only be found before a
+//       process's first ready pass: the census is never unset and the applier is cached once opened; they stay as defence.) Correlation
+//       gets one lost window from the epoch to it plus the clock skew on every repository (`delegationNotReadyWindowOf`, R104): a
+//       stretch's start cannot be measured, so every rung-4 candidate whose creator began at or before it is held, and through X1 so is
+//       a rung-3 link whose creator bracket reaches back to it. Cleared by nothing; only a later ready instant moves it, and a restart
+//       starts again from none.
+//     - THE OWNERS A PASS LISTED (R89, `pendingOwners`). Every owner a census lists is remembered, with the hours it was listed in, until
+//       one observation of it COMPLETES in a pass that was not cut AND what it read is DURABLE (R101: after the pass's flush, which did
+//       not fail past its first byte and refused none of its buckets): so a pass cut before it reaches an owner, or whose read is lost
+//       at the flush, leaves that owner to a later pass, live or not, whatever the next census says. An owner the last pass listed and
+//       this one does not is pending again (R102), so its last lines are read once more after it ends. A pass forgets nothing of an owner a
+//       NEWER pass has listed or re-pended (R107, the `listedBy` stamp): a cut pass's late flush can land after it. Until it is read its listed hours,
+//       and its measured hours not yet closed (R106), are lost windows. An hour that leaves the read horizon before the owner is read is
+//       STAGED as a gap with a LOSS word (`hour-never-closed`, never a carve-out word) for the pass's flush, and leaves the memory as it is staged;
+//       the owner is forgotten once it has no listed hour left: so the memory is bounded by the read horizon (and `lastListed` by the live
+//       sessions). A failed flush is covered by the next recovery's not-ready window; an R82 pre-write refusal of that gap's own bucket
+//       would drop it unrecorded, and nothing known produces one.
+//
+//   REPORT-ONLY EFFECTS. Attempts are made durable through one checkpoint-only change BEFORE any lease is journaled (so the next pass
+//   sees them), then each lease request goes through `createLease` (which deduplicates on the identity key, so a request re-emitted
+//   after a crash is a no-op), then the projection is repaired. Measured absence has no durable field in wave 3 (a checkpoint-only
+//   change cannot alter a lease, and wave 3 never releases one): it is remembered in memory, once per tree.
+
+/** The census's own cadence, derived and not respelled: the lane adds no faster read of anything. */
+export const DELEGATION_SWEEP_MS = DIVERGENCE_SWEEP_MS;
+/** What a pass may spend: under the cadence, so a stuck pass ends before the next is due. */
+export const DELEGATION_PASS_BUDGET_MS = 45_000;
+/** What one read of the lane may take (the stat fallback after a failed range read included: it is bounded by the pass signal). */
+const DELEGATION_READ_TIMEOUT_MS = 10_000;
+/** A recovery that failed is tried again no more often than this: it reads the whole journal. */
+const DELEGATION_RECOVERY_RETRY_MS = 5 * 60_000;
+/** M-1: a reconcile older than three census cadences no longer vouches for its counts (the breaker reads unmeasured). */
+const DELEGATION_STALE_RECONCILE_MS = 3 * DELEGATION_SWEEP_MS;
+/** The evidence the lane keeps for correlation, newest. Evicting the oldest makes a verdict less decided (`evidence-horizon`), never
+ *  more: the horizon of what was evicted is handed to correlation, which will not link on evidence an eviction could have emptied. */
+const DELEGATION_EVIDENCE_CAP = 20_000;
+/** The dropped-evidence keys are pruned each time this many new ones have been collected, while `loadEvidence` streams the journal and at
+ *  a reconcile, so a long journal cannot hold every key it ever dropped at once and a busy fleet does not pay a prune every pass (R65: the
+ *  peak is this many plus what survives). */
+const DELEGATION_DROPPED_PRUNE_EVERY = 4096;
+/** R71: a project's `not-a-checkout` answer is trusted as a STANDING fact only after it has recurred on this many consecutive census
+ *  passes spanning at least this long; any other answer for the project resets the streak. `gitref.ts` names the residual: one dropped
+ *  round trip that lands on one stat and not its neighbour reads as that answer. The streak counts only the censuses the lane NOTES (at a
+ *  load and at a reconcile): a good answer in a census the lane never reconciled (a pass cut before its reconcile) does not reset it. The
+ *  ten-minute span still holds, so that costs at most a streak that ends one census early, never one pass that forgets a path.
+ *  R73 rule 1 bounds the transient null-path hold with the same streak. */
+const DELEGATION_STANDING_PASSES = 3;
+const DELEGATION_STANDING_SPAN_MS = 10 * 60_000;
+/**
+ * R73 rule 3: the most dropped keys a held-back project (not measured since the start, or listing a transient null-path record it has no
+ * path for) may keep. Past it the project is LOST: its keys go through the prune with their marks, and every tree of it answers
+ * `unmeasured('evidence-horizon')` at rungs 2 and 3 until a restart. It equals the evidence slice's own cap, so a held-back project
+ * never holds more than the slice itself does; at the 30-day fixture's traffic a project carrying a tenth of it holds 18,710 keys at 30
+ * days and reaches the cap at about 32, which is where the round-3 hold (rising without a ceiling) is now cut.
+ */
+const DELEGATION_PROJECT_HOLD_CAP = DELEGATION_EVIDENCE_CAP;
+/**
+ * R73 rule 2, R75: the most 64-bit hashes the path marks (all projects' together) and the id marks each hold: 3/4 of 2^20 slot pairs, so
+ * a set never exceeds 8 MB (`delegationHashSetAdd` grows it by doubling, from 16 KB). THE BOUND IS A COUNT OF DISTINCT DIRECTORIES, NOT
+ * A CALENDAR: a restart re-indexes the journal, and wave 3 never compacts it, so the path marks hold the distinct directories the whole
+ * journal ever forgot without a census showing their tree gone. Measured at a restart's load over the 30-day fixture (20 sessions; each a
+ * day 60 subagents, each in its own tree and two directories under it, and 40 fresh directories of its own): 121,199 path marks a month
+ * (about 4,040 a day), every one under a project's checkout, so attributed. At the cap the project holding the most marks is lost (its
+ * trees answer `unmeasured` until a restart) and its marks are dropped, again until the set is under the cap: at the fixture's rate the
+ * first project goes in about 195 days, at ten times that rate in about 20. The GLOBAL flag rises only when unattributed marks alone
+ * fill the set: never, at the fixture; were each session's 40 own directories a day outside every checkout and tree (measured: 747
+ * unattributed marks a day), in about 1,050 days at its rate and 105 at ten times it. The flag is on the warn line and in the report.
+ */
+const DELEGATION_MARK_CAP = 786_432;
+/**
+ * R73 rule 1: what a census record whose canonical path is null says about that path, by its diagnostic words, as a TOTAL table over
+ * them (a new word is a compile error until it is placed). `standing` names a path that will not read differently next time (a
+ * relative or malformed `gitdir`, a name the census refuses): such a record never holds anything back, because a null path is never a
+ * rung-2 or rung-3 candidate, and if it is ever repaired the path marks of the keys forgotten meanwhile catch it. `transient` names a read
+ * that may do better (a failed `gitdir` read, a record being born). `other` is about something else than the path. A null path with no
+ * `standing` word is transient, whatever else it carries: unknown resolves toward holding, never toward forgetting.
+ */
+const LANE_NULL_PATH: Readonly<Record<DelegationCensusDiagnostic, 'standing' | 'transient' | 'other'>> = {
+  'gitdir-absent': 'transient', 'gitdir-unreadable': 'transient', 'gitdir-malformed': 'standing', 'gitdir-relative': 'standing',
+  'head-absent': 'other', 'head-unreadable': 'other', 'head-malformed': 'other',
+  'first-log-unreadable': 'other', 'first-log-malformed': 'other',
+  'claude-base-malformed': 'other', 'claude-base-unreadable': 'other',
+  'lock-unreadable': 'other', 'name-refused': 'standing', 'record-initializing': 'transient',
+};
+const laneNullPathStanding = (diagnostic: string | null): boolean =>
+  (diagnostic ?? '').split(',').some((w) => Object.prototype.hasOwnProperty.call(LANE_NULL_PATH, w) && LANE_NULL_PATH[w as DelegationCensusDiagnostic] === 'standing');
+/** What a failed census read means for pruning, as a TOTAL table over the read's reasons (a new reason is a compile error until it is
+ *  placed): `always` is a project that can never be censused (the name is refused before anything is read), `streak` is a standing
+ *  fact only once it has recurred (R71), `never` is a read that may do better next time. */
+const LANE_READ_REFUSAL: Readonly<Record<Extract<WorktreeRead, { ok: false }>['reason'], 'always' | 'streak' | 'never'>> = {
+  'refused-project': 'always', 'not-a-checkout': 'streak', unlistable: 'never', unreachable: 'never',
+};
+/** A tree seen for the first time may be a ccd workspace being BORN: two reconciliation passes of waiting (spec §5.4, rung 1). */
+const DELEGATION_BIRTH_PASSES = 2;
+/** How long a first-measured-dead instant is remembered: far past the breaker's ten-minute window. */
+const DELEGATION_DEAD_MEMORY_MS = 60 * 60_000;
+/** Rung 2's point lookups (spec §5.4: "a point lookup, never a search ... back-filled at a bounded rate"): at most this many meta
+ *  files are read in a pass, and a tree that gave no meta is not asked again for this long. */
+const DELEGATION_META_READS_PER_PASS = 8;
+const DELEGATION_META_RETRY_MS = 5 * 60_000;
+/** A workflow's meta directory is read for at most this many entries, and a meta file for at most this many characters. */
+const DELEGATION_META_DIR_ENTRIES = 64;
+const DELEGATION_META_MAX_CHARS = 65_536;
+
+/** Test seams of the lane: production passes none. `evidenceCap` scales the evidence slice so an eviction can be provoked with a handful
+ *  of events; `readEveryListedBucket` bypasses the read horizon and the settled/closed filters, so the second line of defence
+ *  (eventId idempotence against the retained journal) can be pinned; `reconcileBeforeLoad` lets a pass reconcile although the evidence
+ *  load did not complete, so the second layer of the lost-index condition (the index handed to correlation is unmeasured) can be pinned.
+ *  `projectHoldCap` and `markCap` scale R73's two bounds down to a handful of keys. */
+export interface DelegationLaneSeams {
+  evidenceCap?: number; readEveryListedBucket?: boolean; droppedPruneEvery?: number; reconcileBeforeLoad?: boolean;
+  projectHoldCap?: number; markCap?: number;
+  /** D-4658: apply each bucket result at once, as before the batching (the reference an "equal to an unbatched run" row compares with). */
+  unbatched?: boolean;
+}
+
+type LaneSession = Pick<FleetSession, 'id' | 'project' | 'status'>;
+type LaneRecord = Pick<SessionRecord, 'id' | 'project' | 'child'>;
+type DelegationVerdictCounts = { unresolved: number; conflicting: number; unmeasured: number };
+
+type LanePointMeta = DelegationCorrelationInput['pointMetas'][number];
+/** What a rung-2 lookup for one tree came to: a meta was found; it was asked and gave nothing; or the pass's budget ran out first. */
+type LaneMetaOutcome = 'found' | 'missed' | 'unasked';
+/** The retained evidence indexed ONCE per reconcile (M5), so a tree's lookup is a map read and not a scan of the slice. */
+interface LaneEvidenceIndex {
+  /** agent ID -> the first event of each parent that names it and carries its transcript path. */
+  claimants: Map<string, Map<string, { event: DelegationEventEnvelopeV1; journalId: string }>>;
+  /** run ID -> its first Workflow launch response, with the transcript directory it names. */
+  launches: Map<string, { event: DelegationEventEnvelopeV1; journalId: string; dir: string }>;
+}
+/** One owner to observe in a pass. `incarnation: null` is a parent whose incarnation could not be measured (`reason` says why).
+ *  `listedHours` are the hours (ms) a pass listed it in and no completed observation has covered yet, inside the read horizon (R89). */
+interface LaneOwner { id: string; incarnation: string | null; reason: string; live: boolean; listedHours: readonly number[] }
+/** R89: an owner a pass LISTED from the census, and the hours (ms) it was listed in, until one observation of it completes. */
+interface LanePendingOwner {
+  id: string; incarnation: string | null; reason: string; hours: Set<number>;
+  /** R107 (re-review N1): the sequence of the last pass that LISTED it alive or re-pended it (R102). A pass forgets only an owner no
+   *  newer pass has listed: a cut pass's late flush must not erase a later pass's listing of the same hour (the hours are one set). */
+  listedBy: number;
+}
+/** An owner's identity in a pass and in the pending memory: (id, incarnation or null). */
+const laneOwnerKey = (id: string, incarnation: string | null): string => JSON.stringify([id, incarnation]);
+/** The detail of an hour whose parent's incarnation could not be measured. */
+const laneIncarnationGap = (reason: string): string => `incarnation-unmeasured: the parent's registry incarnation is ${reason}`;
+/** R90: whether an UNMEASURED result with `next` as its detail changes a stored UNMEASURED row with `prior`: only a loss word arriving over
+ *  a carve-out word does (the checkpoint's merge keeps the loss either way). */
+const laneLossOverCarveOut = (prior: string | null, next: string | null): boolean => isDelegationHourCarveOut(prior) && !isDelegationHourCarveOut(next);
+/** One staged bucket result (D-4658, R82). */
+interface LaneStaged { batch: DelegationDurableBatch; key: string; label: string }
+interface LanePass {
+  now: number;
+  signal: AbortSignal;
+  census: DelegationCensusPass;
+  sessions: readonly LaneSession[];
+  records: readonly LaneRecord[];
+  capability: DelegationHealthInput['capabilityState'];
+  /** D-4658: every bucket's durable batch this pass staged, applied together by `flushPass`, each with its hour's settle key (the
+   *  bucket's identity for R82's isolation) and a label for its warn line. */
+  pending: LaneStaged[];
+  /** Hours to remember as settled once the pass's application is durable (never before: a failed one leaves them to be read again). */
+  settle: string[];
+  /** R101: the owners whose observation COMPLETED in this pass before any cut. Each leaves the pending memory only once what it staged
+   *  is durable (`forgetRead`, after the flush), never when the observation merely returns. */
+  completed: LaneOwner[];
+  /** R107: this pass's sequence (the lane counts the passes it starts), stamped on every owner it lists or re-pends. */
+  seq: number;
+  /** R109 (re-review N3): set, synchronously, once the pass is past its last check before the owners; a pass cut before it listed nothing. */
+  reachedOwners: boolean;
+}
+
+const laneTreeKey = delegationTreeKey;
+/** `YYYYMMDDHH`, the bucket name of an hour. */
+const laneBucketOf = (hourMs: number): string => formatDelegationInstant(hourMs).replace(/[-:T]/g, '').slice(0, 10);
+const laneHourOf = (ms: number): number => Math.floor(ms / DELEGATION_HOUR_MS) * DELEGATION_HOUR_MS;
+const laneCloseAt = (hourMs: number): number => hourMs + DELEGATION_HOUR_MS + DELEGATION_HOUR_CLOSE_MARGIN_MS;
+const laneInstantMs = (iso: string): number | null => {
+  try { return parseDelegationInstant(iso); } catch (err) { if (err instanceof DelegationModelError) return null; throw err; }
+};
+
+/** The census, flat: every project whose delegation census was a MEASURED success contributes its records, each (project, adminRecord)
+ *  once. A project whose view was null is left OUT of `censused` and contributes nothing: an empty list would read as "every tree is gone"
+ *  (hand-off 12), so a caller that prunes by project name does so only when `allMeasured`: every project is censused or a standing refusal. */
+function laneFlatCensus(census: DelegationCensusPass, standing: ReadonlySet<string>): { censused: string[]; flat: DelegationCensusRecord[]; held: Set<string>; allMeasured: boolean } {
+  const censused: string[] = [];
+  const flat: DelegationCensusRecord[] = [];
+  const held = new Set<string>();
+  for (const [project, view] of census.projects) {
+    if (view.delegation === null) continue;
+    censused.push(project);
+    for (const r of view.delegation) {
+      const k = laneTreeKey(r.project, r.adminRecord);
+      if (held.has(k)) continue;
+      held.add(k);
+      flat.push(r);
+    }
+  }
+  // A standing refusal holds no tree: it counts as measured (R70), or one `not-a-checkout` project would stop every prune for ever.
+  return { censused, flat, held, allMeasured: [...census.projects.keys()].every((p) => censused.includes(p) || standing.has(p)) };
+}
+
+/** The per-kind sets of trees a mark held back, empty: every kind of `DelegationMarkKind`, spelt once. */
+const laneNoForced = (): Record<DelegationMarkKind, Set<string>> =>
+  ({ path: new Set(), id: new Set(), project: new Set(), lossy: new Set(), prefix: new Set(), window: new Set() });
+
+/** X1: a tree's first sighting as correlation reads it (canonical instants; `after` null when unknown). */
+const laneSightingOf = (s: { after: number | null; at: number }): DelegationCorrelationInput['firstSighting'] =>
+  ({ after: s.after === null ? null : formatDelegationInstant(s.after), at: formatDelegationInstant(s.at) });
+
+/** A cursor row nobody needs to store: the state of a bucket with nothing read from it. */
+const laneFreshCursor = (c: DelegationBucketCursor): boolean =>
+  c.cursor === 0 && c.lastSize === 0 && c.anchor === null && !c.replaced && c.lastCompleteAt === null;
+
+/**
+ * The listing windows (rung 4) the retained evidence holds: a Bash call whose PreToolUse carries a `listing` (the admin records
+ * before) paired by `toolUseId` with its PostToolUse listing (after). The window's `repository` is the census's own project key, taken
+ * from the REGISTRY row of the session that ran the call: rung 4 compares it with the census record's `project` verbatim, so both
+ * sides are built from the one key (hand-off 7).
+ *
+ * A SESSION NO REGISTRY ROW HAS NAMED KEEPS ITS WINDOWS, with an UNKNOWN repository (`null`; final review I-1). Dropping them would drop
+ * negative evidence: after a restart the lane knows a session's project only from what this process has seen, so a session whose row is
+ * gone (a reclaimed child, a forgotten session) would lose its overlap veto and rung 4 would link the other session. A null-repository
+ * window is never a candidate, and rung 4 treats it as on every repository (`delegation-correlation.ts`), so it can only move a verdict
+ * toward unresolved or unmeasured. It is rebuilt at every reconcile from the evidence slice and the session map, both lane memory (the
+ * slice itself is rebuilt from the journal at a load): no file, no SQLite-only state.
+ *
+ * A SHED LISTING IS A LOST WINDOW (2c, R84). The hook spells a listing it dropped to fit the line as `truncated: true` with no `listing`
+ * (and a line already truncated for another field never attempts one), so a Bash PreToolUse or PostToolUse that is truncated and carries
+ * no listing may have lost one. A shed PreToolUse makes a window from its own instant to its PostToolUse's (whatever that carries), or
+ * open-ended; a shed PostToolUse makes its PreToolUse's window LOST and ENDS it at its own instant (an unbounded window would veto every
+ * later call). A lost window's listings mean nothing. A PostToolUse with neither a listing nor `truncated` cannot say whether it lost one
+ * (a command without the token, or a listing the hook could not read), so it leaves its window open-ended, as before, and a call with
+ * neither on both ends makes no window at all.
+ *
+ * THE LISTED REPOSITORY (2c d, R84). `listedOf`, when handed over, attributes a working directory to the repository whose admin records
+ * the hook listed there (the lane: the nearest tree it lists or remembers, else its RESOLVED projects root). A window whose two ends'
+ * directories are attributed alike carries that repository; one whose directory is absent, unattributed or disagrees between its ends
+ * carries null: every repository. Without `listedOf` the field is absent, and only `repository` is read.
+ */
+export function delegationListingWindowsOf(
+  evidence: Iterable<DelegationEventEnvelopeV1>, projectOf: (sessionId: string) => string | undefined,
+  listedOf?: (cwd: string) => string | null,
+): DelegationListingWindow[] {
+  type BashPre = DelegationEventEnvelopeV1 & { eventKind: 'PreToolUse'; toolName: 'Bash' };
+  type BashPost = DelegationEventEnvelopeV1 & { eventKind: 'PostToolUse'; toolName: 'Bash' };
+  const pre = new Map<string, BashPre>();
+  const post = new Map<string, BashPost>();
+  const keyOf = (e: DelegationEventEnvelopeV1 & { toolUseId: string }): string => JSON.stringify([e.sessionId, e.parentIncarnation, e.toolUseId]);
+  /** A listing, or a line that may have shed one. */
+  const listingOrShed = (e: { listing?: readonly string[]; truncated?: true }): boolean => e.listing !== undefined || e.truncated === true;
+  for (const e of evidence) {
+    if (e.eventKind === 'PreToolUse' && e.toolName === 'Bash' && listingOrShed(e)) pre.set(keyOf(e), e);
+    else if (e.eventKind === 'PostToolUse' && e.toolName === 'Bash' && listingOrShed(e)) post.set(keyOf(e), e);
+  }
+  const listedAt = (cwd: string | undefined): string | null => (listedOf === undefined || cwd === undefined || cwd === '' ? null : listedOf(cwd));
+  const out: DelegationListingWindow[] = [];
+  for (const [key, start] of pre) {
+    const repository = projectOf(start.sessionId) ?? null;
+    const end = post.get(key);
+    const lost = start.listing === undefined || (end !== undefined && end.listing === undefined);
+    let listedRepository: string | null | undefined;
+    if (listedOf !== undefined) {
+      const first = listedAt(start.cwd);
+      listedRepository = end === undefined || (first !== null && listedAt(end.cwd) === first) ? first : null;
+    }
+    out.push({
+      sessionId: start.sessionId, parentIncarnation: start.parentIncarnation, toolUseId: start.toolUseId, repository,
+      ...(listedRepository === undefined ? {} : { listedRepository }), ...(lost ? { lost: true as const } : {}),
+      startedAt: start.observedAt, endedAt: end === undefined ? null : end.observedAt, before: start.listing ?? [],
+      after: lost || end === undefined || end.listing === undefined ? null : end.listing,
+    });
+  }
+  return out;
+}
+
+// The two unmeasured-hour words that do NOT veto a link (R84, the carve-out) are `DELEGATION_HOUR_NO_SPOOL` and
+// `DELEGATION_HOUR_NO_CAPABILITY`, defined once in the model (R90), which the reader's own vocabulary is built from, and imported.
+/** The detail head ingestion gives a bucket whose last bytes are a line that may still complete (`delegation-ingest.ts`, step 9). */
+const LANE_TORN_TAIL = 'torn-tail:';
+
+/** One LOST hour of one owner as a listing window (2c, R84): on every repository, naming no call, from the hour's start to one hour and
+ *  one margin later (a call that began in the hour may have ended up to the margin after it). An hour that cannot be placed (null) is a
+ *  window over all of time: it fails SAFE. Pure. */
+function delegationLostHourWindow(sessionId: string, parentIncarnation: string, hourMs: number | null): DelegationListingWindow {
+  return {
+    sessionId, parentIncarnation, toolUseId: '', repository: null, lost: true,
+    startedAt: formatDelegationInstant(hourMs ?? 0),
+    endedAt: hourMs === null ? null : formatDelegationInstant(hourMs + DELEGATION_HOUR_MS + DELEGATION_EVIDENCE_MARGIN_MS), before: [], after: null,
+  };
+}
+
+/**
+ * R88 (W1 a; coordinator 5512): the stretch the lane was NOT READY for, as ONE lost window on every repository, from the epoch to the
+ * lane's LATEST READY INSTANT. While the lane is down, in recovery, without a census or without an applier, it lists no owner, so a
+ * session born and gone in that stretch is never read; and the start of such a stretch cannot be measured (a restart remembers
+ * nothing of the process before it). So every candidate whose creator began at or before the ready instant is held, on every
+ * repository, and an in-process recovery moves the instant (the lane's own memory, `DelegationLane.readyAt`: no durable fact bounds the
+ * window). R104 (review F4): the ready instant is the SERVER's clock and a call's start is the FLEET's (`observedAt`), so the window
+ * ends `DELEGATION_CLOCK_SKEW_MS` after it, as X1 widens the same comparison: a fleet clock AHEAD of the server's stamps a call made
+ * before the ready instant up to the skew after it. A null instant (no ready pass yet) is an OPEN-ENDED window from the epoch, which
+ * vetoes everything: it fails safe, and it is never reached, since the lane reconciles only after a pass has set the instant. Pure.
+ */
+export function delegationNotReadyWindowOf(readyAtMs: number | null): DelegationListingWindow {
+  return {
+    sessionId: '', parentIncarnation: '', toolUseId: '', repository: null, lost: true,
+    startedAt: formatDelegationInstant(0), endedAt: readyAtMs === null ? null : formatDelegationInstant(readyAtMs + DELEGATION_CLOCK_SKEW_MS), before: [], after: null,
+  };
+}
+
+/**
+ * The windows the CHECKPOINT says the lane lost (2c, R84; coordinator 5477, 5484): every one is lost (`lost: true`), names no call (an
+ * empty `toolUseId`), and is on EVERY repository (`repository: null`), because what an unread hour held cannot be told. Pure.
+ *   - AN UNMEASURED HOUR of a session (a vanished bucket, an unreadable range, a refused or over-long line, an unmeasured incarnation, an
+ *     hour that never closed): a window from the hour's start to one hour and one margin later, since a call that began in the hour may
+ *     have ended up to the margin after it. THE CARVE-OUT (R84, ruled narrowly): an hour whose detail begins `capability-absent` never
+ *     vetoes (fleet-wide, it captured nothing, and rung 4 then has no window either); one whose detail begins `directory-absent` vetoes
+ *     only for an owner that HAD a spool: a cursor row (the lane read a bucket of it), or a measured hour (the lane listed its
+ *     directory). An owner with neither never had a spool, by construction: the no-spool class carried to the operator, across which
+ *     rung 4 links. (The measured-hour arm outlives the cursor rows, which retire at 48 hours: a spool that existed and vanished is
+ *     still seen for the interval rows' 192.)
+ *   - A TORN TAIL: a bucket whose last bytes are a line that may never complete. Its hour is MEASURED, so it is read from the cursor row's
+ *     detail while the cursor lives, and from the measured hour's detail (written by the same application) after it retires.
+ *   - THE RETENTION FLOOR: one window from the epoch to the oldest hour the checkpoint still keeps, plus a margin, so a candidate a lost
+ *     hour vetoed does not link once that hour's row is pruned (192 hours), and a tree whose first sighting is unknown (a restart) meets
+ *     lost evidence by construction.
+ * An hour or a bucket name that cannot be placed fails SAFE: a window over all of time.
+ */
+export function delegationLostWindowsOf(
+  intervals: readonly DeepReadonly<DelegationObservationInterval>[], cursors: readonly DeepReadonly<DelegationBucketCursor>[], nowMs: number,
+): DelegationListingWindow[] {
+  const hadSpool = new Set<string>();
+  for (const c of cursors) hadSpool.add(c.sessionId);
+  for (const r of intervals) if (r.state === 'measured') hadSpool.add(r.sessionId);
+  const out: DelegationListingWindow[] = [];
+  const seen = new Set<string>();
+  const add = (sessionId: string, parentIncarnation: string, hourMs: number | null): void => {
+    const id = JSON.stringify([sessionId, parentIncarnation, hourMs]);
+    if (seen.has(id)) return;
+    seen.add(id);
+    out.push(delegationLostHourWindow(sessionId, parentIncarnation, hourMs));
+  };
+  for (const r of intervals) {
+    const detail = r.detail ?? '';
+    const lost = r.state === 'unmeasured'
+      ? !detail.startsWith(DELEGATION_HOUR_NO_CAPABILITY) && (!detail.startsWith(DELEGATION_HOUR_NO_SPOOL) || hadSpool.has(r.sessionId))
+      : detail.startsWith(LANE_TORN_TAIL);
+    if (lost) add(r.sessionId, r.parentIncarnation, laneInstantMs(r.utcHour));
+  }
+  for (const c of cursors) if ((c.detail ?? '').startsWith(LANE_TORN_TAIL)) add(c.sessionId, c.parentIncarnation, delegationBucketHourMs(c.bucket));
+  const keepFrom = laneHourOf(nowMs) - DELEGATION_INTERVAL_RETENTION_HOURS * DELEGATION_HOUR_MS;
+  out.push({
+    sessionId: '', parentIncarnation: '', toolUseId: '', repository: null, lost: true,
+    startedAt: formatDelegationInstant(0), endedAt: formatDelegationInstant(keepFrom + DELEGATION_EVIDENCE_MARGIN_MS), before: [], after: null,
+  });
+  return out;
+}
+
+class DelegationLane {
+  private durable: DelegationDurability | null = null;
+  private opening: Promise<DelegationDurability | null> | null = null;
+  /** The lane has tried to open the applier: from then on a health is reported (absence before that reads as unknown). */
+  private attempted = false;
+  private sweeping = false;
+  private lastSweepAt = 0;
+  private lastRecoverAt = 0;
+  private registryListed = true;
+  /** Hours already read after they closed, this process: not read again. Memory only; a restart reads each once more. */
+  private readonly settled = new Set<string>();
+  /** R82: the buckets (by settle key) whose result the applier refused before writing anything: applied alone on later passes, so a
+   *  standing refusal costs one small application a pass. Lane memory, this process only (no file, no SQLite); a bucket leaves it when
+   *  its result applies, or when its hour passes the read horizon (R85, A-F4: it is never staged again), so it is bounded by the buckets
+   *  the lane can still read. */
+  private readonly refusedBuckets = new Set<string>();
+  private passes = 0;
+  /** R107: the sequence of the last pass this lane started (each pass takes the next one). */
+  private passSeq = 0;
+  private skipped = 0;
+  /** R88 (W1 a): the LATEST READY INSTANT (epoch ms), or null before the first pass of this process reached the owners. Lane memory
+   *  only: no durable fact bounds it, and a restart starts from none. */
+  private readyAt: number | null = null;
+  /** R88: a pass found the lane not ready since `readyAt` was set (a fresh process starts so): the next pass to reach the owners sets it. */
+  private notReady = true;
+  /** R116 (review 556 W1): a recovery this lane started (`run()`'s `await durable.recover()`, its one caller) has not settled. Set just
+   *  before that await and cleared in its `finally`, so it clears whether the recovery returned or threw. While it is set the lane is NOT
+   *  READY: a pass reads no owner, reconciles nothing and sets no instant, even once `recover()` already reports `ready` and only its
+   *  projection repair (`repairLocked`) is still running. Lane memory only. */
+  private recovering = false;
+  /** R112, R116: the instant (epoch ms) the last recovery this lane started SETTLED (returned or threw), measured in that await's
+   *  `finally`; null once an instant has consumed it. A LANE field, not the recovering pass's own: in W1's order the pass that recovered
+   *  is cut, and the pass that sets the instant is a later one. Measured after the await, so the clock-skew allowance runs from the
+   *  settle, which covers a call made during the recovery by a hook clock running ahead of the server's. When the clocks agree, the pass
+   *  budget (45 s) keeps a recovery whose pass is not cut inside the skew (60 s), unless a starved event loop fires the budget timer
+   *  late; a recovery whose pass was cut runs on past the budget, and its settle covers that too. Overwritten by each settle, so it is
+   *  the LAST recovery's. Lane memory only. */
+  private recoveredAt: number | null = null;
+  /** R89 (W1 b): the owners a pass LISTED and no completed observation has read since, by `laneOwnerKey`. Lane memory only; bounded by the
+   *  read horizon (an hour past it is recorded as a gap and leaves, and an owner with no hour left leaves with it). */
+  private readonly pendingOwners = new Map<string, LanePendingOwner>();
+  /** R102: the owners the last pass to reach the owners LISTED alive, with the hour it listed them in. One the next pass does not list is
+   *  pending again, so it is read once more after it goes. Lane memory only; bounded by the live sessions. */
+  private lastListed = new Map<string, { id: string; incarnation: string | null; reason: string; hourMs: number }>();
+  // evidence for correlation
+  private readonly evidence = new Map<string, { event: DelegationEventEnvelopeV1; key: string | null }>();
+  private readonly evidenceKeys = new Map<string, string>();
+  /** R57: the latest `observedAt` (epoch ms) among events evicted from `evidence`; null while none was. Only ever rises, and is
+   *  recomputed from nothing at every reload from the journal. */
+  private evidenceHorizonMs: number | null = null;
+  /** R65: the DISTINCT keys of every event this lane no longer holds, by key id. Lane memory only: no file, no SQLite state, no journal
+   *  write. Rebuilt from nothing by `loadEvidence`; measured only while `evidenceLoaded` (see `droppedIndex`). */
+  private readonly dropped = new Map<string, { key: DelegationDroppedKey; at: number }>();
+  /** The latest observed time (ms) of any event of a held tuple, the hidden tuple-mates included, so a key's stamp is not earlier than a
+   *  hidden mate. Deleted with the tuple's held event. */
+  private readonly tupleLatest = new Map<string, number>();
+  /** R69: the last MEASURED canonical path of each tree the census listed, by tree key. Lane memory, lost at a restart and then seeded
+   *  from the checkpoint's leases and attempts. A tree leaves it only when a measured census of its own project shows it gone. */
+  private readonly knownPaths = new Map<string, string>();
+  /** Projects whose delegation census has been MEASURED since this lane started. */
+  private readonly measuredProjects = new Set<string>();
+  /** R71: the current run of consecutive `not-a-checkout` answers, per project. */
+  private readonly notCheckout = new Map<string, { firstAt: number; lastAt: number; passes: number }>();
+  /** R73 rule 1: the current run of consecutive censuses in which a project listed a transient null-path record it has no path for. */
+  private readonly unplaced = new Map<string, { firstAt: number; lastAt: number; passes: number }>();
+  /** The paths of the trees the census measured at `measuredAt` showed gone (forgotten from `knownPaths` already): a key at one of them is
+   *  forgotten against THAT census with no path mark. */
+  private gone: { measuredAt: number; paths: Set<string> } = { measuredAt: Number.NaN, paths: new Set() };
+  /** R73: the lossy marks (lane memory, like the index; see the lane's docstring for what sets and clears each). The path marks are kept
+   *  per project they are attributed to (R75), and apart for none. */
+  private pathsByProject = new Map<string, DelegationHashSet>();
+  private unattributedPaths: DelegationHashSet = emptyDelegationHashSet();
+  private markIds: DelegationHashSet = emptyDelegationHashSet();
+  private readonly lostProjects = new Set<string>();
+  /** R77: per project, the directories that attributed a path mark to it since the last load; a COVER only once the project is lost. */
+  private prefixesByProject = new Map<string, Set<string>>();
+  private prefixCount = 0;
+  private lossy = false;
+  /** N20: the projects root as RESOLVED this pass (`FleetIO.realpath`), or `DELEGATION_ROOT_UNMEASURED` until a pass resolves it. */
+  private projectsRoot: DelegationProjectsRoot = DELEGATION_ROOT_UNMEASURED;
+  /** The projects the last prune held back, and how many keys each holds. */
+  private heldBack: ReadonlyMap<string, number> = new Map();
+  /** How many verdicts of the last reconcile each kind of mark changed (a gauge, for the report). */
+  private markForced: Record<DelegationMarkKind, number> = { path: 0, id: 0, project: 0, lossy: 0, prefix: 0, window: 0 };
+  /** N16: the trees (by tree key) each kind of mark held back, cumulatively since the last hourly warn line, which prints and resets them. */
+  private forcedSinceLine: Record<DelegationMarkKind, Set<string>> = laneNoForced();
+  /** 2c (R84): how many verdicts of the last reconcile LOST evidence held back from a link (a shed listing, an unmeasured hour, a lost
+   *  creator; `delegationLostEvidenceForced`), a gauge, and the trees it held since the last hourly line, which prints and resets them.
+   *  Counted apart from every mark kind. Lane memory only. */
+  private lostForced = 0;
+  private lostSinceLine = new Set<string>();
+  private lastMarkWarnHour = -1;
+  private droppedIndexCache: DelegationDroppedEvidence | null = null;
+  /** New keys since the last prune, and the most keys held at once since the last load began (a report figure: the bound is real). */
+  private droppedAdded = 0;
+  private droppedPeak = 0;
+  private seams: DelegationLaneSeams = {};
+  private lastPruneHour = -1;
+  private cursorsPruned = 0;
+  private warnedUnparseableCursors = false;
+  private evidenceLoaded = false;
+  private evidenceLoading: Promise<void> | null = null;
+  private readonly sessionProject = new Map<string, string>();
+  // reconciliation memory
+  private reconciledAt = 0;
+  private reconciliations = 0;
+  private firstSeen = new Map<string, number>();
+  /** X1 (R84; coordinator 5484, condition 3): per tree, the census instant (ms) that first listed it (`at`) and the latest earlier census of
+   *  its project, which did not (`after`; null when this process measured none: a restart lost it, and a lost first-sighting instant is not
+   *  an empty one). Kept like `knownPaths`: a tree leaves it only when a census of its own project, measured in a reconcile, does not list
+   *  it; a project whose view was null keeps its trees' sightings. Lane memory only: no file, no SQLite-only state. A tree first listed
+   *  before a restart therefore reads `after: null` for as long as it stays listed; its instant is measured again only if it leaves a
+   *  measured census and is listed anew. */
+  private sighted = new Map<string, { after: number | null; at: number }>();
+  /** The census instant (ms) of the last reconcile that MEASURED each project, for the next new tree's `after`. Bounded by the projects. */
+  private censusedAt = new Map<string, number>();
+  private previous: { flat: readonly DelegationCensusRecord[]; projects: readonly string[] } | null = null;
+  private verdicts: DelegationVerdictCounts = { unresolved: 0, conflicting: 0, unmeasured: 0 };
+  private reconciled = false;
+  /** When (the pass's clock) the last reconcile completed: the breaker vouches for the counts only while it is recent (M-1). */
+  private reconciledWallMs = 0;
+  private readonly absences = new Map<string, { project: string; adminRecord: string; observedAt: string }>();
+  private lastAlive = new Set<string>();
+  private aliveSeen = false;
+  private readonly firstDead = new Map<string, number>();
+  /** Rung 2's positive meta reads (a point lookup in the parent's own transcript tree), kept for the process: a meta is read evidence,
+   *  not journal evidence, so it is never durable and is read again after a restart. */
+  private readonly pointMetas = new Map<string, LanePointMeta>();
+  private readonly metaMiss = new Map<string, number>();
+
+  constructor(private readonly deps: Deps, private readonly census: () => DelegationCensusPass | null) {}
+
+  /** R103 (review F3): an unlistable registry stops `tick()` before the census and before this lane's pass (its fail-shut return), so
+   *  nothing is listed while it lasts: it is "no census", and marks the lane NOT READY. The first pass after it sets the ready instant. */
+  noteRegistry(listed: boolean): void {
+    this.registryListed = listed;
+    if (!listed) this.notReady = true;
+  }
+
+  setSeams(seams: DelegationLaneSeams): void { this.seams = seams; }
+
+  /** Closes the applier's journal descriptor, if it was ever opened (tests, and a clean shutdown). */
+  async close(): Promise<void> {
+    await this.opening?.catch(() => undefined);
+    await this.durable?.close();
+  }
+
+  private evidenceHorizon(): string | null {
+    return this.evidenceHorizonMs === null ? null : formatDelegationInstant(this.evidenceHorizonMs);
+  }
+
+  /** What correlation is handed about the events this lane dropped. UNMEASURED until `loadEvidence` has read the whole retained journal
+   *  (`evidenceLoaded` IS the measured state): an index that was lost, or never built, is not an empty one. */
+  private droppedIndex(): DelegationDroppedEvidence {
+    if (!this.evidenceLoaded) return DELEGATION_DROPPED_UNMEASURED;
+    this.droppedIndexCache ??= indexDelegationDropped([...this.dropped.values()].map((e) => e.key), {
+      lossy: this.lossy, projects: new Set(this.lostProjects), prefixes: this.lostPrefixes(),
+      paths: [this.unattributedPaths, ...this.pathsByProject.values()], ids: this.markIds,
+    });
+    return this.droppedIndexCache;
+  }
+
+  /** R77: the cover of the lost projects: every prefix that attributed a mark to one of them. */
+  private lostPrefixes(): Set<string> {
+    const out = new Set<string>();
+    for (const project of this.lostProjects) for (const p of this.prefixesByProject.get(project) ?? []) out.add(p);
+    return out;
+  }
+
+  /** R73: forgets every mark, because the load that follows rebuilds them from the complete journal (a restart, a recovery). */
+  private resetMarks(): void {
+    this.pathsByProject = new Map();
+    this.unattributedPaths = emptyDelegationHashSet();
+    this.markIds = emptyDelegationHashSet();
+    this.lostProjects.clear();
+    this.prefixesByProject = new Map();
+    this.prefixCount = 0;
+    this.lossy = false;
+    this.heldBack = new Map();
+    this.droppedIndexCache = null;
+  }
+
+  private pathMarkCount(): number {
+    let n = this.unattributedPaths.size;
+    for (const s of this.pathsByProject.values()) n += s.size;
+    return n;
+  }
+
+  /** A project is lost: its project mark covers every tree of it, so its path marks are dropped (R73 rule 3, R75). */
+  private loseProject(project: string): void {
+    this.lostProjects.add(project);
+    this.pathsByProject.delete(project);
+  }
+
+  /**
+   * R75: records one path mark. Under a lost project, or with the global flag up, it is covered already. At the cap the project holding
+   * the most path marks is lost first (biggest first, again until there is room), and the ONE global flag rises only when the marks
+   * attributed to no project fill the cap by themselves. R77: the prefix that attributed the mark is recorded FIRST, whatever happens to
+   * the mark, so a project lost now or later covers it (a mark skipped because its project is already lost is covered by that prefix).
+   */
+  private markPath(path: string, project: string | null, prefix: string | null, cap: number): void {
+    if (project !== null && prefix !== null) this.notePrefix(project, prefix, cap);
+    if (this.lossy || (project !== null && this.lostProjects.has(project))) return;
+    const set = project === null ? this.unattributedPaths : this.pathsByProject.get(project) ?? emptyDelegationHashSet();
+    if (delegationHashSetHas(set, path)) return;
+    while (this.pathMarkCount() >= cap) {
+      let biggest: string | null = null;
+      for (const [p, s] of this.pathsByProject) if (s.size > 0 && (biggest === null || s.size > this.pathsByProject.get(biggest)!.size)) biggest = p;
+      if (biggest === null) { this.lossy = true; return; }
+      this.loseProject(biggest);
+      if (biggest === project) return;
+    }
+    delegationHashSetAdd(set, path, Number.POSITIVE_INFINITY);
+    if (project !== null) this.pathsByProject.set(project, set);
+  }
+
+  /** R77: one more directory that attributed a mark to `project`. Bounded with the marks: past `cap` of them the global flag rises. */
+  private notePrefix(project: string, prefix: string, cap: number): void {
+    const set = this.prefixesByProject.get(project) ?? new Set<string>();
+    if (set.has(prefix)) return;
+    if (this.prefixCount >= cap) { this.lossy = true; return; }
+    set.add(prefix);
+    this.prefixesByProject.set(project, set);
+    this.prefixCount += 1;
+    if (this.lostProjects.has(project)) this.droppedIndexCache = null;
+  }
+
+  /** A record whose path is null for a transient reason, and which has no remembered path (R73 rule 1). */
+  private unplacedRecord(r: DelegationCensusRecord): boolean {
+    return r.state !== 'absent' && r.canonicalPath === null && !laneNullPathStanding(r.diagnostic) && !this.knownPaths.has(laneTreeKey(r.project, r.adminRecord));
+  }
+
+  /** The lane no longer holds this event: keep the keys correlation reads of it, stamped with the time of the latest event dropped
+   *  under them (outside their identity). */
+  private noteDropped(event: DelegationEventEnvelopeV1, at: number): void {
+    const key = delegationDroppedKeyOf(event);
+    const id = delegationDroppedKeyId(key);
+    const have = this.dropped.get(id);
+    if (have !== undefined) { have.at = Math.max(have.at, at); return; }
+    this.dropped.set(id, { key, at });
+    this.droppedIndexCache = null;
+    this.droppedAdded += 1;
+    this.droppedPeak = Math.max(this.droppedPeak, this.dropped.size);
+  }
+
+  /** What this census says, remembered: the `not-a-checkout` streak (R71), the projects measured since this lane started, and the last
+   *  measured path of every tree it lists. Idempotent for one census (a streak counts a census once). */
+  private noteCensus(census: DelegationCensusPass): void {
+    for (const [project, view] of census.projects) {
+      const notCheckout = view.delegation === null && !view.read.ok && view.read.reason === 'not-a-checkout';
+      const run = this.notCheckout.get(project);
+      if (!notCheckout) this.notCheckout.delete(project);
+      else if (run === undefined) this.notCheckout.set(project, { firstAt: census.measuredAt, lastAt: census.measuredAt, passes: 1 });
+      else if (census.measuredAt > run.lastAt) { run.lastAt = census.measuredAt; run.passes += 1; }
+      if (view.delegation !== null) {
+        this.measuredProjects.add(project);
+        for (const r of view.delegation) if (r.state !== 'absent' && r.canonicalPath !== null) this.knownPaths.set(laneTreeKey(r.project, r.adminRecord), r.canonicalPath);
+      }
+      // R73 rule 1: the run of censuses listing a transient null-path record with no remembered path. Anything else resets it.
+      const unplaced = view.delegation !== null && view.delegation.some((r) => this.unplacedRecord(r));
+      const held = this.unplaced.get(project);
+      if (!unplaced) this.unplaced.delete(project);
+      else if (held === undefined) this.unplaced.set(project, { firstAt: census.measuredAt, lastAt: census.measuredAt, passes: 1 });
+      else if (census.measuredAt > held.lastAt) { held.lastAt = census.measuredAt; held.passes += 1; }
+    }
+    for (const project of [...this.notCheckout.keys()]) if (!census.projects.has(project)) this.notCheckout.delete(project);
+    for (const project of [...this.unplaced.keys()]) if (!census.projects.has(project)) this.unplaced.delete(project);
+  }
+
+  /** The projects that hold no tree the lane could decide, for pruning (R70): a refused name; and `not-a-checkout` once it has recurred
+   *  on enough consecutive passes (R71). A transient null (`unlistable`, `unreachable`) is not one. */
+  private standingProjects(census: DelegationCensusPass): Set<string> {
+    const out = new Set<string>();
+    for (const [project, view] of census.projects) {
+      if (view.delegation !== null || view.read.ok) continue;
+      const how = LANE_READ_REFUSAL[view.read.reason];
+      const run = this.notCheckout.get(project);
+      if (how === 'always') out.add(project);
+      else if (how === 'streak' && run !== undefined && run.passes >= DELEGATION_STANDING_PASSES && run.lastAt - run.firstAt >= DELEGATION_STANDING_SPAN_MS) out.add(project);
+    }
+    return out;
+  }
+
+  private pruneProjects(census: DelegationCensusPass): Map<string, DelegationPruneProject> {
+    const standing = this.standingProjects(census);
+    return new Map([...census.projects].map(([project, view]) => {
+      // R73 rule 1: held back while the streak has not run its course (no run on file for a census that lists one: held, the safe side).
+      const run = this.unplaced.get(project);
+      const settled = run !== undefined && run.passes >= DELEGATION_STANDING_PASSES && run.lastAt - run.firstAt >= DELEGATION_STANDING_SPAN_MS;
+      const unplacedHold = view.delegation !== null && view.delegation.some((r) => this.unplacedRecord(r)) && !settled;
+      return [project, {
+        records: view.delegation, standing: standing.has(project), measuredSinceStart: this.measuredProjects.has(project), unplacedHold,
+      }] as const;
+    }));
+  }
+
+  /** Forgets the remembered path of every tree a measured census of its own project shows gone, keeping the paths for the prunes against
+   *  that same census (a key at one of them is forgotten with no path mark). */
+  private forgetGoneTrees(census: DelegationCensusPass): void {
+    if (this.gone.measuredAt !== census.measuredAt) this.gone = { measuredAt: census.measuredAt, paths: new Set() };
+    for (const k of delegationGoneTrees(this.knownPaths, this.pruneProjects(census))) {
+      const path = this.knownPaths.get(k);
+      if (path !== undefined) this.gone.paths.add(path);
+      this.knownPaths.delete(k);
+    }
+  }
+
+  /** Forgets the dropped-evidence keys `planDelegationDroppedPrune` lets go, after recording the marks that stand for them (R73: both in
+   *  this one synchronous step, so no index is ever built between them). At a set's cap the biggest project is lost first (R75); the global
+   *  flag rises only for marks no project can carry (path marks attributed to none, and id marks, since an id names no project). */
+  private pruneDropped(census: DelegationCensusPass, activities: DelegationCheckpointV1['activities']): void {
+    const plan = planDelegationDroppedPrune({
+      keys: [...this.dropped].map(([id, e]) => [id, e.key, e.at] as const), projects: this.pruneProjects(census), known: this.knownPaths,
+      gonePaths: this.gone.measuredAt === census.measuredAt ? this.gone.paths : new Set(),
+      projectOfParent: (parentId) => this.sessionProject.get(parentId), activities, measuredAtMs: census.measuredAt,
+      lost: this.lostProjects, holdCap: this.seams.projectHoldCap ?? DELEGATION_PROJECT_HOLD_CAP, projectsRoot: this.projectsRoot,
+    });
+    this.droppedAdded = 0;
+    this.heldBack = plan.held;
+    const cap = this.seams.markCap ?? DELEGATION_MARK_CAP;
+    for (const project of plan.lose) this.loseProject(project);
+    for (const m of plan.markPaths) this.markPath(m.path, m.project, m.prefix, cap);
+    for (const id of plan.markIds) if (!this.lossy && !delegationHashSetAdd(this.markIds, id, cap)) this.lossy = true;
+    for (const id of plan.forget) this.dropped.delete(id);
+    if (plan.forget.length > 0 || plan.lose.length > 0 || plan.markPaths.length > 0 || plan.markIds.length > 0) this.droppedIndexCache = null;
+  }
+
+  report() {
+    return {
+      passes: this.passes, reconciliations: this.reconciliations, skippedApplications: this.skipped,
+      verdicts: { ...this.verdicts }, absences: [...this.absences.values()], breaker: this.breakerNow(Date.now()),
+      evidenceEvents: this.evidence.size, evidenceHorizon: this.evidenceHorizon(), cursorsPruned: this.cursorsPruned,
+      metaMisses: this.metaMiss.size, pointMetas: this.pointMetas.size,
+      droppedEvidence: { measured: this.evidenceLoaded, keys: this.dropped.size, peak: this.droppedPeak }, knownTrees: this.knownPaths.size,
+      marks: {
+        paths: this.pathMarkCount(), unattributedPaths: this.unattributedPaths.size, ids: this.markIds.size,
+        lostProjects: [...this.lostProjects].sort(), lostPrefixes: this.lostPrefixes().size, lossy: this.lossy, heldBack: Object.fromEntries(this.heldBack),
+        forced: { ...this.markForced },
+        forcedSinceLine: Object.fromEntries(Object.entries(this.forcedSinceLine).map(([k, v]) => [k, v.size])) as Record<DelegationMarkKind, number>,
+      },
+      projectsRoot: this.projectsRoot === null ? 'none' : typeof this.projectsRoot === 'string' ? 'resolved' : 'unmeasured',
+      lostEvidence: { forced: this.lostForced, sinceLine: this.lostSinceLine.size }, refusedBuckets: this.refusedBuckets.size,
+    };
+  }
+
+  /** The applier, opened once. A recovery that FAILED is still an applier (it reports `failure()` and refuses to apply); only an IO
+   *  error that stopped the open itself leaves none, and the next pass tries again. */
+  applier(): Promise<DelegationDurability | null> {
+    if (this.opening === null) {
+      const coord = this.deps.coord;
+      this.opening = (async (): Promise<DelegationDurability | null> => {
+        try {
+          const d = await DelegationDurability.open({
+            dir: this.deps.cfg.ccrcDir,
+            projection: coord === undefined ? null : {
+              project: (cp) => coord.projectDelegationCheckpoint(cp),
+              insertEvents: (rows) => coord.insertDelegationEvents(rows),
+              eventStats: () => coord.delegationEventStats(),
+            },
+            now: () => Date.now(), randomUUID: () => randomUUID(), warn: (m) => console.warn(m),
+          });
+          this.durable = d;
+          this.lastRecoverAt = Date.now();                                // open() has just recovered: a retry waits its interval
+          return d;
+        } catch (err) {
+          console.warn(`ccrc-server: the delegation applier could not be opened: ${err instanceof Error ? err.message : String(err)}`);
+          this.opening = null;
+          return null;
+        } finally {
+          this.attempted = true;
+        }
+      })();
+    }
+    return this.opening;
+  }
+
+  // ── the health, as of the request ──────────────────────────────────────────────────────────────────────────────────────
+
+  private firstDeadParents(): { parentId: string; firstMeasuredDeadAt: string }[] {
+    return [...this.firstDead].map(([parentId, ms]) => ({ parentId, firstMeasuredDeadAt: formatDelegationInstant(ms) }));
+  }
+
+  /**
+   * The breaker, which is what vouches for the verdict counts (M3). UNMEASURED until a census has been reconciled, and again from the
+   * moment the applier is found not ready or failed (final review M-1: the counts of an earlier pass are not this state's). That also
+   * covers a failed evidence load: a load runs after a reconcile only through a recovery, which has already unreconciled, and the lane
+   * reconciles nothing until a load completes. And once the last reconcile is older than `DELEGATION_STALE_RECONCILE_MS` (a lane that
+   * stopped reconciling, for any reason, no longer vouches for what it last counted).
+   */
+  private breakerNow(nowMs: number): DelegationHealthInput['circuitBreaker'] {
+    if (!this.reconciled || nowMs - this.reconciledWallMs > DELEGATION_STALE_RECONCILE_MS) return 'unmeasured';
+    return delegationCircuitBreaker({ now: formatDelegationInstant(nowMs), registryReadable: this.registryListed, firstDeadParents: this.firstDeadParents() });
+  }
+
+  /**
+   * THE VERDICT COUNTS ARE UNKNOWN WHILE THE BREAKER IS UNMEASURED (M3). `unresolved`, `conflicting` and `unmeasured` are plain numbers
+   * on the wire, so "not measured yet" cannot be said by them; it is said by `circuitBreaker`. Until the lane has reconciled a census
+   * (a fresh start, an evidence read that keeps failing, a recovery that has not finished), from the moment the applier is found failed,
+   * and once its last reconcile is three cadences old (M-1), the breaker reads `unmeasured` and the counts read 0, and a reader must
+   * treat them as UNKNOWN, never as "no unowned work". Only a measured breaker vouches for the counts.
+   *
+   * From the checkpoint's own intervals and the measurements the server holds NOW (the fleet's capability, the registry, the breaker);
+   *  never from SQLite. Absent until the lane has tried to open its applier. */
+  health(): DelegationObservationHealth | undefined {
+    if (!this.attempted) return undefined;
+    const now = Date.now();
+    const breaker = this.breakerNow(now);
+    const health = delegationObservationHealthOf(delegationHealthInputOf({
+      nowMs: now, state: this.durable === null ? null : this.durable.state(),
+      capabilityState: delegationCapabilityState(this.deps.fleetState?.ccdVerbs), registryReadable: this.registryListed,
+      // M3, M-1: while the breaker is unmeasured the counts are unknown, and read 0 (never an earlier pass's numbers).
+      circuitBreaker: breaker, verdictCounts: breaker === 'unmeasured' ? { unresolved: 0, conflicting: 0, unmeasured: 0 } : this.verdicts,
+    }));
+    // A torn journal tail this process healed (D-4655) rides on the member as a plain fact. It is not an input to any gate: a heal is
+    // never a failure, never makes the health unhealthy, and never makes it unmeasured by itself.
+    const healed = this.durable === null ? null : this.durable.lastTailHeal();
+    // MUST 1: a quarantine that could not be listed is said, never read as "no heal".
+    const unlisted = this.durable !== null && this.durable.tailQuarantineUnmeasured();
+    return { ...health, ...(healed === null ? {} : { lastTailHeal: healed }), ...(unlisted ? { tailQuarantineUnmeasured: true as const } : {}) };
+  }
+
+  // ── a pass ────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  async sweep(sessions: readonly LaneSession[], records: readonly LaneRecord[]): Promise<void> {
+    if (this.deps.coord === undefined) return;                           // no coordination database, no lane
+    if (this.sweeping) return;                                           // SINGLE FLIGHT (M5/M6)
+    const now = Date.now();
+    if (this.lastSweepAt !== 0 && now - this.lastSweepAt < DELEGATION_SWEEP_MS) return;
+    const census = this.census();
+    if (census === null) {                                               // no census yet: wait, and keep the cadence unspent
+      this.notReady = true;                                              // R88: nothing is listed, so nothing is read
+      return;
+    }
+    this.sweeping = true;
+    this.lastSweepAt = now;
+    const ac = new AbortController();
+    const cut = new Promise<'cut'>((resolve) => { ac.signal.addEventListener('abort', () => resolve('cut'), { once: true }); });
+    const timer = setTimeout(() => ac.abort(), DELEGATION_PASS_BUDGET_MS);
+    timer.unref();
+    const pass: LanePass = {
+      now, signal: ac.signal, census, sessions, records, capability: delegationCapabilityState(this.deps.fleetState?.ccdVerbs), pending: [], settle: [], completed: [],
+      seq: ++this.passSeq, reachedOwners: false,
+    };
+    const work = this.run(pass).then(() => 'done' as const);
+    work.catch(() => undefined);                                         // a late rejection of a cut pass is not an unhandled one
+    try {
+      const outcome = await Promise.race([work, cut]);
+      if (outcome === 'cut') {
+        console.warn(`ccrc-server: a delegation pass outran its ${DELEGATION_PASS_BUDGET_MS} ms budget and was cut; its late answers are discarded`);
+        // R109 (re-review N3): cut before the owners (in the projects-root resolution or the evidence load), it listed no one: the lane is
+        // NOT READY, at once, so the next pass to reach the owners moves the ready instant past a session only this pass's census named.
+        if (!pass.reachedOwners) this.notReady = true;
+      }
+    } catch (err) {
+      console.warn(`ccrc-server: a delegation pass failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      clearTimeout(timer);
+      ac.abort();                                                        // whatever outlives the pass finds its signal aborted
+      this.sweeping = false;
+    }
+  }
+
+  private async run(pass: LanePass): Promise<void> {
+    this.noteSessions(pass);
+    const durable = await this.applier();
+    /** R113 (review 544 P2): when the applier answered, so the boot recovery `open()` makes is covered like an in-process one (R112): for
+     *  the pass that started the open, and for a later pass awaiting the cached applier after the first was cut (R117), because the
+     *  cached promise resolves only after `open()` recovered. Measured after the await for the reason on `recoveredAt`. The wall clock
+     *  can step back during the await, so this can be earlier than `pass.now`: the instant below clamps it (R115). */
+    const appliedAt = Date.now();
+    if (durable === null) {
+      this.notReady = true;                                            // R88: no applier, nothing is read
+      return;
+    }
+    if (this.recovering) { this.notReady = true; return; }             // R116 (W1): a recovery the lane started has not settled: not ready
+    if (pass.signal.aborted) return;
+    if (durable.state().phase !== 'ready' || durable.failure() !== null) {
+      this.notReady = true;                                            // R88: in recovery, or failed: what happens now is not read
+      this.unreconcile();                                              // M-1: what was counted is not this state's
+      // A recovery that failed applies NOTHING and reads nothing: the files are left exactly as they are. It is tried again, rarely.
+      if (pass.now - this.lastRecoverAt < DELEGATION_RECOVERY_RETRY_MS) return;
+      this.lastRecoverAt = pass.now;
+      this.recovering = true;                                          // R116: until it settles, every pass is not ready
+      try {
+        await durable.recover();
+      } finally {
+        this.recovering = false;                                       // R116: settled, returned or thrown
+        this.recoveredAt = Date.now();                                 // R112, R116: the settle, for whichever pass sets the next instant
+      }
+      // On a return these run in the same synchronous continuation as the `finally`, so no pass sees the recovery settled with the old
+      // slice still marked loaded. (A throw skips them, as before: `recover()` throws only before it clears its failure, since its
+      // projection repair never throws, so the next pass finds the applier failed and is not ready, by R88's arm above.)
+      this.evidenceLoaded = false;                                     // the slice and the dropped-evidence index are measured again by the next load
+      this.dropped.clear();
+      this.tupleLatest.clear();
+      this.droppedIndexCache = null;
+      if (durable.state().phase !== 'ready' || durable.failure() !== null || pass.signal.aborted) return;
+    }
+    await this.resolveProjectsRoot(pass);
+    if (pass.signal.aborted) { this.notReady = true; return; }        // R109: cut before the owners, so nothing was listed
+    this.passes += 1;
+    await this.loadEvidence(durable, pass);
+    if (pass.signal.aborted) { this.notReady = true; return; }        // R109: the same
+    pass.reachedOwners = true;                                         // R109: synchronously after the last check, before any await
+
+    // R88: the first pass to reach the owners after a not-ready mark (and the first of a process) is the latest ready instant: the
+    // settle of the last recovery the lane started (`recoveredAt`, R112, R116), whichever pass started it, else the instant this pass's
+    // applier answered, after the boot recovery `open()` makes (R113, R117); and never earlier than this pass's own clock, whatever the
+    // wall clock did during the awaits (one clamp for both arms: R115 for the appliedAt arm, R120 for the recoveredAt arm). Measured
+    // after the awaits, so the skew allowance runs from the settle (the reason on `recoveredAt`). The settle is consumed here. Everything
+    // at or before the instant may hold a session nothing listed.
+    if (this.notReady) {
+      this.readyAt = Math.max(pass.now, this.recoveredAt ?? appliedAt);
+      this.recoveredAt = null;
+      this.notReady = false;
+    }
+    await this.expirePendingOwners(pass, durable);
+    for (const owner of this.ownersOf(pass, durable.state())) {
+      if (pass.signal.aborted) break;
+      try {
+        await this.observeOwner(pass, durable, owner);
+        // R89: one observation COMPLETED, in a pass that was not cut. R101: it is forgotten only once what it staged is durable.
+        if (!pass.signal.aborted) pass.completed.push(owner);
+      } catch (err) { console.warn(`ccrc-server: delegation owner ${owner.id} could not be observed: ${err instanceof Error ? err.message : String(err)}`); }
+    }
+    // D-4658: what the owners staged, as ONE durable application. Also after a cut: everything staged came from a read that answered
+    // before the cut (an abort check follows every read), and a fleet whose passes are always cut must still make progress. Its FIRST
+    // application is enqueued at once; its standing refusals go one by one, and a bisection's halves only after the attempt before them
+    // settles, so after a cut a later pass's flush CAN land between them (R85, A-F5), and apply a bucket from a newer cursor before this
+    // pass applies it from an older one. Nothing applies twice (events dedupe by `eventId`), intervals never regress (their merge is
+    // order-independent and `unmeasured` is sticky), `replaced` stays sticky, and a cursor that steps back once is re-read and deduped by
+    // the next pass.
+    // R101: the owners this pass read are forgotten only now, and only for what the flush made durable (a cut pass's late flush too).
+    this.forgetRead(pass, await this.flushPass(pass, durable));
+    if (pass.signal.aborted) return;
+
+    // The upkeep: retention, and the hour that was never closed. One checkpoint-only change over the INTERVALS, and only when there is
+    // something to do (the same array comes back otherwise). Cursors are never in it.
+    if (upkeepDelegationIntervals(durable.state().checkpoint.observationIntervals, pass.now).changed) {
+      try {
+        await durable.applyCheckpointChange((cp) => ({ ...cp, observationIntervals: upkeepDelegationIntervals(cp.observationIntervals, pass.now).intervals }));
+      } catch (err) { console.warn(`ccrc-server: delegation interval upkeep failed: ${err instanceof Error ? err.message : String(err)}`); }
+    }
+    if (pass.signal.aborted) return;
+    await this.pruneCursors(pass, durable);
+    if (pass.signal.aborted) return;
+
+    // A census this lane has not reconciled yet; an older or equal one is left alone.
+    if (pass.census.measuredAt > this.reconciledAt && (this.evidenceLoaded || this.seams.reconcileBeforeLoad === true)) await this.reconcile(pass, durable);
+  }
+
+  /** M-1: the lane no longer vouches for its last counts: the breaker reads unmeasured and the counts read 0 until a reconcile. */
+  private unreconcile(): void {
+    this.reconciled = false;
+    this.verdicts = { unresolved: 0, conflicting: 0, unmeasured: 0 };
+  }
+
+  /**
+   * N20 (coordinator 5439): the projects root the attribution reads, RESOLVED at every pass through `FleetIO.realpath`, so on the box that
+   * holds it (in remote mode the root is a fleet-box path, and the server's own filesystem would answer about the wrong disk). A root that
+   * does not resolve is `DELEGATION_ROOT_UNMEASURED` for this pass: attribution by the root answers nothing (never the configured
+   * spelling, which git's canonical paths may not start with), and the next pass tries again.
+   */
+  private async resolveProjectsRoot(pass: LanePass): Promise<void> {
+    const configured = this.deps.cfg.projectsRoot;
+    let resolved: string | null = null;
+    try { resolved = await this.deps.io.realpath(configured); } catch { resolved = null; }
+    if (pass.signal.aborted) return;
+    this.projectsRoot = resolved === null || resolved === '' ? DELEGATION_ROOT_UNMEASURED : resolved;
+  }
+
+  /**
+   * Cursor retention (R58, D-4654): at most once per UTC hour, and only when the planner finds something to drop, ask the applier to
+   * retire the cursors past the retention. The plan made HERE is only the decision to ask; the applier decides again, under its lock, on
+   * its own rows, and a cursor whose hour is not on file is kept. Cursors are never touched through a checkpoint-only change.
+   */
+  private async pruneCursors(pass: LanePass, durable: DelegationDurability): Promise<void> {
+    const hour = laneHourOf(pass.now);
+    if (hour === this.lastPruneHour) return;
+    const cp = durable.state().checkpoint;
+    const plan = planDelegationCursorRetention(cp.bucketCursors, cp.observationIntervals, pass.now);
+    if (plan.unparseable.length > 0 && !this.warnedUnparseableCursors) {
+      this.warnedUnparseableCursors = true;
+      console.warn(`ccrc-server: ${plan.unparseable.length} delegation bucket cursor(s) name no hour and are kept: ${plan.unparseable.slice(0, 3).map((c) => JSON.stringify(c.bucket)).join(', ')}`);
+    }
+    // The hour is spent BEFORE the attempt (N6): a prune that failed is retried at most once per UTC hour, like one that succeeded, and
+    // not on every pass (each attempt is a planner run, a commit attempt and a warning line).
+    this.lastPruneHour = hour;
+    if (plan.drop.length > 0) {
+      try { this.cursorsPruned += (await durable.pruneBucketCursors(pass.now)).dropped; }
+      catch (err) { console.warn(`ccrc-server: the delegation cursor retention failed: ${err instanceof Error ? err.message : String(err)}`); }
+    }
+  }
+
+  /** Who died since the last pass, by what this process watched: a parent first seen DEAD is not a fresh death (a restart is not a
+   *  mass-death event), one seen alive and then dead is, and one seen alive again is not dead. */
+  private noteSessions(pass: LanePass): void {
+    for (const r of pass.records) this.sessionProject.set(r.id, r.project);
+    for (const s of pass.sessions) this.sessionProject.set(s.id, s.project);
+    const alive = new Set(pass.sessions.filter((s) => s.status !== 'dead').map((s) => s.id));
+    if (this.aliveSeen) {
+      for (const s of pass.sessions) {
+        if (s.status === 'dead' && this.lastAlive.has(s.id) && !this.firstDead.has(s.id)) this.firstDead.set(s.id, pass.now);
+      }
+    }
+    for (const id of alive) this.firstDead.delete(id);
+    for (const [id, at] of this.firstDead) if (pass.now - at > DELEGATION_DEAD_MEMORY_MS) this.firstDead.delete(id);
+    this.lastAlive = alive;
+    this.aliveSeen = true;
+  }
+
+  /** The live sessions the census took an incarnation of, the owners a pass listed and no observation has read since (R89), and the
+   *  owners with an hour still to close, in a stable order. Every owner the census lists is remembered as listed in this hour. */
+  private ownersOf(pass: LanePass, state: DeepReadonly<DelegationRecoveryState>): LaneOwner[] {
+    const out = new Map<string, LaneOwner>();
+    const nowHour = laneHourOf(pass.now);
+    const listed = new Map<string, { id: string; incarnation: string | null; reason: string; hourMs: number }>();
+    for (const s of pass.sessions) {
+      if (s.status === 'dead') continue;
+      const inc = pass.census.incarnations.get(s.id);
+      if (inc === undefined) continue;                                   // born after the census: the next census names it
+      const incarnation = inc.kind === 'measured' ? inc.incarnation : null;
+      const reason = inc.kind === 'measured' ? '' : inc.reason;
+      const k = laneOwnerKey(s.id, incarnation);
+      // R89: LISTED, so it stays an owner, live or not, until one observation of it completes (the loop in `run` forgets it then).
+      const pending = this.pendingOwners.get(k) ?? { id: s.id, incarnation, reason, hours: new Set<number>(), listedBy: pass.seq };
+      pending.reason = reason;
+      pending.hours.add(nowHour);
+      pending.listedBy = pass.seq;                                       // R107
+      this.pendingOwners.set(k, pending);
+      out.set(k, { id: s.id, incarnation, reason, live: true, listedHours: [] });
+      listed.set(k, { id: s.id, incarnation, reason, hourMs: nowHour });
+    }
+    // R102 (review F2): an owner the last pass listed and this one does not (it ended, or died, since) may have written after its last
+    // read: it is pending again, not live, with the hour it was last listed in, so it is read once more before it leaves.
+    for (const [k, gone] of this.lastListed) {
+      if (listed.has(k)) continue;
+      const pending = this.pendingOwners.get(k) ?? { id: gone.id, incarnation: gone.incarnation, reason: gone.reason, hours: new Set<number>(), listedBy: pass.seq };
+      pending.hours.add(gone.hourMs);
+      pending.listedBy = pass.seq;                                       // R107
+      this.pendingOwners.set(k, pending);
+    }
+    this.lastListed = listed;
+    // R89: an owner a pass listed whose observation never completed (a cut pass, an observation that threw), which the census no longer
+    // names alive: it is read anyway, once, as an owner that is not live.
+    for (const [k, p] of this.pendingOwners) if (!out.has(k)) out.set(k, { id: p.id, incarnation: p.incarnation, reason: p.reason, live: false, listedHours: [] });
+    // An owner that is no longer live still has its last hour to close (a session that ended mid-hour).
+    for (const r of state.checkpoint.observationIntervals) {
+      if (r.state !== 'measured' || r.parentIncarnation === DELEGATION_UNMEASURED_INCARNATION) continue;
+      const at = laneInstantMs(r.utcHour);
+      const recorded = laneInstantMs(r.recordedAt);
+      if (at === null || recorded === null || at % DELEGATION_HOUR_MS !== 0) continue;
+      if (pass.now < laneCloseAt(at) || recorded >= laneCloseAt(at)) continue;
+      if (!this.readable(at, pass.now)) continue;             // past the read horizon: nothing of it is read, and upkeep turns the hour into a gap
+      const k = laneOwnerKey(r.sessionId, r.parentIncarnation);
+      if (!out.has(k)) out.set(k, { id: r.sessionId, incarnation: r.parentIncarnation, reason: '', live: false, listedHours: [] });
+    }
+    return [...out].map(([k, o]): LaneOwner => {
+      const hours = [...(this.pendingOwners.get(k)?.hours ?? [])].filter((h) => this.readable(h, pass.now)).sort((a, b) => a - b);
+      return { ...o, listedHours: hours };
+    }).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  }
+
+  /**
+   * R89: a listed hour of a pending owner that has LEFT THE READ HORIZON before any observation of it completed can never be read: it is
+   * STAGED as a gap with a LOSS word for the pass's flush, never `directory-absent` or `capability-absent` (nothing measured either),
+   * under the owner's incarnation (the stand-in for an unmeasured one, whose own word it keeps), and leaves the memory as it is staged; an owner
+   * with no listed hour left is forgotten. So the memory is bounded by the read horizon. The two edges: a flush that fails is covered by
+   * the next recovery's not-ready window, and an R82 pre-write refusal of that gap's own bucket would drop it unrecorded (nothing known
+   * produces one).
+   */
+  private async expirePendingOwners(pass: LanePass, durable: DelegationDurability): Promise<void> {
+    for (const [k, p] of [...this.pendingOwners]) {
+      for (const hourMs of [...p.hours].sort((a, b) => a - b)) {
+        if (this.readable(hourMs, pass.now)) continue;
+        if (pass.signal.aborted) return;
+        const detail = p.incarnation === null
+          ? laneIncarnationGap(p.reason)
+          : `${DELEGATION_HOUR_NEVER_CLOSED}: listed in this hour, and never read before the hour left the read horizon`;
+        await this.noteGap(pass, durable, p.id, p.incarnation ?? DELEGATION_UNMEASURED_INCARNATION, hourMs, detail);
+        p.hours.delete(hourMs);
+      }
+      if (p.hours.size === 0) this.pendingOwners.delete(k);
+    }
+  }
+
+  /** R89: the hours of every owner a pass listed and no completed observation has read, as lost windows (on every repository). R106
+   *  (review F6): and every hour of it the checkpoint holds MEASURED and not yet closed (recorded before its close): lines may have
+   *  landed there after its last read (an owner read at 10:59:30 whose read throws at 11:00:30 is listed in hour 11 only). */
+  private pendingWindows(state: DeepReadonly<DelegationRecoveryState>): DelegationListingWindow[] {
+    const out: DelegationListingWindow[] = [];
+    for (const p of this.pendingOwners.values()) {
+      const hours = new Set(p.hours);
+      if (p.incarnation !== null) {
+        for (const r of state.checkpoint.observationIntervals) {
+          if (r.sessionId !== p.id || r.parentIncarnation !== p.incarnation || r.state !== 'measured') continue;
+          const at = laneInstantMs(r.utcHour);
+          const recorded = laneInstantMs(r.recordedAt);
+          if (at !== null && (recorded === null || recorded < laneCloseAt(at))) hours.add(at);
+        }
+      }
+      for (const hourMs of hours) out.push(delegationLostHourWindow(p.id, p.incarnation ?? DELEGATION_UNMEASURED_INCARNATION, hourMs));
+    }
+    return out;
+  }
+
+  // ── one owner, one hour ───────────────────────────────────────────────────────────────────────────────────────────────
+
+  private async observeOwner(pass: LanePass, durable: DelegationDurability, owner: LaneOwner): Promise<void> {
+    if (owner.incarnation === null) {
+      // The parent's incarnation could not be measured (absent, unreadable, changing): nothing can be bound to it, so nothing is read,
+      // and the hour is a gap under a stand-in incarnation so that it counts. R89: every hour a pass LISTED it in and no completed
+      // observation covered, live or not (a live owner's open hour is one: it was listed in this pass).
+      for (const hourMs of owner.listedHours) {
+        await this.noteGap(pass, durable, owner.id, DELEGATION_UNMEASURED_INCARNATION, hourMs, laneIncarnationGap(owner.reason));
+      }
+      return;
+    }
+    const inc = owner.incarnation;
+    const capabilityPresent = pass.capability === 'present' ? true : pass.capability === 'absent' ? false : null;
+    let listing: MeasuredDirectoryRead = { ok: false, reason: 'unreadable' };
+    if (capabilityPresent === true) {
+      try { listing = await this.deps.io.readdirMeasured(this.ownerDir(owner.id), DELEGATION_READ_TIMEOUT_MS, pass.signal); }
+      catch { /* a dropped agent round trip is an unreadable listing */ }
+      if (pass.signal.aborted) return;
+    }
+    for (const hourMs of this.hoursOf(pass, durable.state(), owner, inc, listing)) {
+      if (pass.signal.aborted) return;
+      await this.observeHour(pass, durable, owner.id, inc, hourMs, listing, capabilityPresent);
+    }
+  }
+
+  private ownerDir(id: string): string { return `${this.deps.cfg.registryDir}/delegation/spool/${id}`; }
+
+  private settledKey(id: string, inc: string, hourMs: number): string { return JSON.stringify([id, inc, hourMs]); }
+
+  /** The hours to look at for one owner: the open hour (a live owner), every bucket the listing names within the spool's retention,
+   *  and every hour this owner recorded before it ended and has not closed since; minus the hours already settled. */
+  private hoursOf(pass: LanePass, state: DeepReadonly<DelegationRecoveryState>, owner: LaneOwner, inc: string, listing: MeasuredDirectoryRead): number[] {
+    const nowHour = laneHourOf(pass.now);
+    const hours = new Set<number>();
+    if (owner.live) hours.add(nowHour);
+    for (const hourMs of owner.listedHours) hours.add(hourMs);           // R89: every hour a pass listed it in and nothing has read since
+    if (listing.ok) {
+      for (const name of listing.entries) {
+        const m = /^(\d{10})\.spool$/.exec(name);
+        if (m === null) continue;
+        let at: number;
+        try { at = parseDelegationInstant(delegationBucketUtcHour(m[1]!)); } catch { continue; }
+        if (this.readable(at, pass.now)) hours.add(at);
+      }
+    }
+    for (const r of state.checkpoint.observationIntervals) {
+      if (r.sessionId !== owner.id || r.parentIncarnation !== inc || r.state !== 'measured') continue;
+      const at = laneInstantMs(r.utcHour);
+      const recorded = laneInstantMs(r.recordedAt);
+      if (at === null || !this.readable(at, pass.now)) continue;
+      if (recorded === null || recorded < laneCloseAt(at)) hours.add(at);
+    }
+    const closed = (at: number): boolean => {
+      if (pass.now < laneCloseAt(at)) return false;
+      const row = state.checkpoint.observationIntervals.find((r) => r.sessionId === owner.id && r.parentIncarnation === inc && r.utcHour === formatDelegationInstant(at));
+      const recorded = row === undefined ? null : laneInstantMs(row.recordedAt);
+      return (row !== undefined && row.state === 'measured' && recorded !== null && recorded >= laneCloseAt(at)) || this.settled.has(this.settledKey(owner.id, inc, at));
+    };
+    return [...hours].filter((at) => this.seams.readEveryListedBucket === true || !closed(at)).sort((a, b) => a - b);
+  }
+
+  /** THE read horizon, in one place (R58): whether an hour's bucket may be read at all. Everything the lane reads, for a live owner or
+   *  a dead one, passes through here. (The test seam reads every listed bucket not in the future, to pin the second line of defence.) */
+  private readable(hourMs: number, nowMs: number): boolean {
+    return this.seams.readEveryListedBucket === true ? hourMs <= laneHourOf(nowMs) : delegationBucketReadable(hourMs, nowMs);
+  }
+
+  /**
+   * D-4658 (ruling R79, `one-durable-application-per-pass`): a bucket's durable batch is STAGED here and applied with every other one
+   * of the pass by `flushPass`, in ONE `applyAcceptedBatch`: one journal append run (each record fsynced before the next), ONE
+   * checkpoint replacement, ONE projection, where the lane used to make one application per busy owner (each a whole-checkpoint
+   * rewrite and a whole projection, linear in all-time activities). Every bucket of a pass is ingested against the same durable state
+   * (the buckets are distinct rows, and the journal dedupes events by `eventId`), so nothing a bucket decides reads another's staged
+   * batch. Nothing staged is visible, or noted as evidence, before the application is durable (O1).
+   */
+  private async stage(
+    pass: LanePass, durable: DelegationDurability, batch: DelegationDurableBatch, key: string, label: string,
+  ): Promise<DeepReadonly<DelegationRecoveryState>> {
+    if (this.seams.unbatched === true) {
+      const out = await durable.applyAccepted(batch);
+      for (const r of out.appended) if (r.entry.kind === 'evidence-accepted') this.noteEvidence(r.journalId, r.entry.event);
+      return out.state;
+    }
+    pass.pending.push({ batch, key, label });
+    return durable.state();
+  }
+
+  /**
+   * The pass's durable application (D-4658), with ONE REFUSED BUCKET NEVER STOPPING THE PASS (R82). Two failures are told apart by the
+   * applier's own state, never by the error's words:
+   *   - a PRE-WRITE REFUSAL: the application threw and the applier is NOT failed (`failure()` null). Nothing was written: `acceptLocked`
+   *     and `commitLocked` validate, plan, fold and build everything before the first byte. The staged list is then BISECTED, so every
+   *     other result becomes durable in this same pass, and each refusing result is refused exactly as an unbatched application would
+   *     refuse it: its own warn line, no cursor or interval, no settle key. A bucket refused once is remembered in lane memory
+   *     (`refusedBuckets`, this process only: no file, no SQLite) and is applied ALONE, first, on later passes, so a standing refusal
+   *     costs one small failed application a pass, never a bisection, and the rest go as one batch. It is forgotten when it applies.
+   *   - a FAILURE AFTER THE FIRST BYTE (or the applier's own state disagreeing with its journal): `commitLocked` has failed the applier
+   *     closed. Unchanged: the whole pass stops, nothing is settled, and the recovery that follows replays what the journal holds.
+   * WHAT CAN PRODUCE A PRE-WRITE REFUSAL TODAY: (1) the checkpoint's own readers, `readCursor` and `readInterval`, re-checking the shape
+   * of a result's cursor and interval (strings, integers, an anchor that starts at or before the cursor, instants, the interval-state
+   * words), which ingestion builds from the owner id, the bucket name, the offsets and anchor it measured and its detail text; (2) the
+   * journal's `validateEntry` over each accepted event's envelope, separate code from ingestion's line parser; (3) the fold
+   * (`foldRecord`'s chain and identity-mapping refusals), `mergeInterval` and `build()`'s checkpoint invariants and encoding. Ingestion
+   * builds every result inside those shapes, so no spool content is known to reach one; the isolation exists because the applier
+   * re-validates independently, and a disagreement (a future change on either side) must cost one bucket, not the fleet's evidence.
+   */
+  private async flushPass(pass: LanePass, durable: DelegationDurability): Promise<{ failed: boolean; refused: ReadonlySet<string> }> {
+    const staged = pass.pending.splice(0);
+    const refused = new Set<string>();
+    // R85 (A-F4): a refusal whose bucket is past the read horizon is never staged again, so remembering it would only grow the set.
+    for (const k of [...this.refusedBuckets]) {
+      const hourMs = (JSON.parse(k) as [string, string, number])[2];
+      if (!this.readable(hourMs, pass.now)) this.refusedBuckets.delete(k);
+    }
+    try {
+      // a standing refusal goes first, alone (it may apply now, and then leaves the set); every other result goes as one application
+      const standing = new Set(staged.filter((x) => this.refusedBuckets.has(x.key)).map((x) => x.key));
+      for (const e of staged.filter((x) => standing.has(x.key))) await this.applyIsolating(durable, [e], refused);
+      await this.applyIsolating(durable, staged.filter((x) => !standing.has(x.key)), refused);
+    } catch (err) {
+      console.warn(`ccrc-server: the delegation pass's durable application of ${staged.length} bucket result(s) failed after it began writing; the applier recovers and the next pass reads them again: ${err instanceof Error ? err.message : String(err)}`);
+      pass.settle.length = 0;
+      return { failed: true, refused };
+    }
+    for (const k of pass.settle.splice(0)) if (!refused.has(k)) this.settled.add(k);
+    return { failed: false, refused };
+  }
+
+  /**
+   * R101 (review F1): an owner whose observation completed leaves the pending memory only once what it read is DURABLE. After a failure
+   * past the first byte nothing of the pass is durable, so every owner it read stays pending (and is read again once the applier
+   * recovers, whether or not a census still names it); an owner one of whose buckets the applier REFUSED before writing (R82) stays
+   * pending too, so its refused bucket is staged again. Otherwise the hours the observation covered (its listed hours) leave the owner's
+   * memory, and an owner with none left is forgotten. R107 (re-review N1): a cut pass's late flush can land after a LATER pass has listed
+   * or re-pended the same owner in the same hour, and the hours are one set, so a pass forgets nothing of an owner whose stamp
+   * (`listedBy`) is newer than its own: that later pass forgets it, once its own read is durable.
+   */
+  private forgetRead(pass: LanePass, flushed: { failed: boolean; refused: ReadonlySet<string> }): void {
+    const done = pass.completed.splice(0);
+    if (flushed.failed) return;
+    const refusedOwners = new Set([...flushed.refused].map((k) => { const [id, inc] = JSON.parse(k) as [string, string, number]; return JSON.stringify([id, inc]); }));
+    for (const owner of done) {
+      if (refusedOwners.has(JSON.stringify([owner.id, owner.incarnation ?? DELEGATION_UNMEASURED_INCARNATION]))) continue;
+      const k = laneOwnerKey(owner.id, owner.incarnation);
+      const pending = this.pendingOwners.get(k);
+      if (pending === undefined) continue;
+      if (pending.listedBy > pass.seq) continue;                         // R107: a newer pass listed it; that pass decides
+      for (const hourMs of owner.listedHours) pending.hours.delete(hourMs);
+      if (pending.hours.size === 0) this.pendingOwners.delete(k);
+    }
+  }
+
+  /** R82: applies `entries` as one application; on a PRE-WRITE refusal, bisects until each refusing result stands alone, and refuses it
+   *  (its warn line, remembered in `refusedBuckets`); a failure after the first byte (the applier failed) is rethrown, whole. */
+  private async applyIsolating(durable: DelegationDurability, entries: readonly LaneStaged[], refused: Set<string>): Promise<void> {
+    if (entries.length === 0) return;
+    let out: Awaited<ReturnType<DelegationDurability['applyAcceptedBatch']>>;
+    try {
+      out = await durable.applyAcceptedBatch(entries.map((e) => e.batch));
+    } catch (err) {
+      if (durable.failure() !== null) throw err;                         // after the first byte: fail closed, the whole pass stops
+      if (entries.length === 1) {
+        const [only] = entries;
+        refused.add(only!.key);
+        this.refusedBuckets.add(only!.key);
+        console.warn(`ccrc-server: delegation bucket ${only!.label} was refused before anything was written: ${err instanceof Error ? err.message : String(err)}`);
+        return;
+      }
+      const mid = entries.length >> 1;
+      await this.applyIsolating(durable, entries.slice(0, mid), refused);
+      await this.applyIsolating(durable, entries.slice(mid), refused);
+      return;
+    }
+    // R85 (A-F6): the bookkeeping after a DURABLE application stays outside the try that reads every throw as a pre-write refusal: a
+    // throw here must never re-apply what was written, nor leave its records out of the evidence slice unnoticed.
+    for (const r of out.appended) if (r.entry.kind === 'evidence-accepted') this.noteEvidence(r.journalId, r.entry.event);
+    for (const e of entries) this.refusedBuckets.delete(e.key);
+  }
+
+  /** An hour recorded as a gap without a bucket to read: written once. */
+  private async noteGap(pass: LanePass, durable: DelegationDurability, id: string, inc: string, hourMs: number, detail: string): Promise<void> {
+    const hour = formatDelegationInstant(hourMs);
+    const prior = durable.state().checkpoint.observationIntervals.find((r) => r.sessionId === id && r.parentIncarnation === inc && r.utcHour === hour);
+    // R90: an unmeasured hour is written once, unless this is a loss word over a carve-out word
+    if (prior !== undefined && prior.state === 'unmeasured' && !laneLossOverCarveOut(prior.detail, detail)) { this.skipped += 1; return; }
+    if (pass.signal.aborted) return;
+    await this.stage(pass, durable, {
+      accepted: [], cursor: null,
+      interval: { sessionId: id, parentIncarnation: inc, utcHour: hour, state: 'unmeasured', detail, recordedAt: formatDelegationInstant(Date.now()) },
+    }, this.settledKey(id, inc, hourMs), `${id}/${laneBucketOf(hourMs)}`);
+  }
+
+  private async observeHour(
+    pass: LanePass, durable: DelegationDurability, id: string, inc: string, hourMs: number, listing: MeasuredDirectoryRead, capabilityPresent: boolean | null,
+  ): Promise<void> {
+    const bucket = laneBucketOf(hourMs);
+    const closing = pass.now >= laneCloseAt(hourMs);
+    const row = durable.state().checkpoint.bucketCursors.find((r) => r.sessionId === id && r.parentIncarnation === inc && r.bucket === bucket);
+    const read = await readDelegationBucket(this.deps.io, {
+      ownerDir: this.ownerDir(id), sessionId: id, parentIncarnation: inc, bucket, cursor: row?.cursor ?? 0, lastSize: row?.lastSize ?? 0,
+      anchorStart: row?.anchor?.start ?? null, capabilityPresent, listing, timeoutMs: DELEGATION_READ_TIMEOUT_MS, signal: pass.signal,
+    });
+    if (pass.signal.aborted) return;                                     // a late answer of a cut pass applies nothing
+    const state = durable.state();                                       // AT THIS MOMENT, never a copy taken before the read (M5/M6)
+    const seen = { accepted: 0 };
+    const gate = this.gateOf(pass, durable, state, id, inc, hourMs, bucket, seen);
+    try {
+      if (read.ok) await ingestAndApplyDelegationBucket(read.input, state, gate);
+      else await gate.applyBucketResult(unreadableDelegationBucketResult({ sessionId: id, parentIncarnation: inc, bucket }, state, { reason: read.reason, detail: read.detail }));
+    } catch (err) {
+      if (err instanceof DelegationIngestError) { console.warn(`ccrc-server: delegation bucket ${id}/${bucket} was refused: ${err.message}`); return; }
+      throw err;
+    }
+    // An hour read AFTER it closed, with nothing new in it, is not read again by this process (once the pass's application is durable).
+    if (closing && read.ok && seen.accepted === 0) pass.settle.push(this.settledKey(id, inc, hourMs));
+  }
+
+  /** The durable door for one bucket result: the no-op skip, then Task 8's own adapter (taking note of what it journaled). */
+  private gateOf(
+    pass: LanePass, durable: DelegationDurability, state: DeepReadonly<DelegationRecoveryState>, id: string, inc: string, hourMs: number, bucket: string,
+    seen: { accepted: number },
+  ): DelegationBucketDurability {
+    const hour = formatDelegationInstant(hourMs);
+    // Task 8's own adapter maps the result to its batch (and refuses an inapplicable one); the batch is STAGED for the pass (D-4658).
+    const key = this.settledKey(id, inc, hourMs);
+    const label = `${id}/${bucket}`;
+    const adapter = delegationBucketDurabilityOf({ applyAccepted: async (batch) => ({ state: await this.stage(pass, durable, batch, key, label) }) }, () => Date.now());
+    return {
+      applyBucketResult: async (result: DelegationBucketResult) => {
+        if (!result.applicable) return adapter.applyBucketResult(result);   // refused by name: a result that is not for a bucket applies nothing
+        seen.accepted = result.accepted.length;
+        const cp = state.checkpoint;
+        const row = cp.bucketCursors.find((r) => r.sessionId === id && r.parentIncarnation === inc && r.bucket === bucket);
+        const prior = cp.observationIntervals.find((r) => r.sessionId === id && r.parentIncarnation === inc && r.utcHour === hour);
+        const cursorSame = row === undefined ? laneFreshCursor(result.cursor) : canonicalDelegationJson(row) === canonicalDelegationJson(result.cursor);
+        const recorded = prior === undefined ? null : laneInstantMs(prior.recordedAt);
+        const needsClose = pass.now >= laneCloseAt(hourMs) && prior !== undefined && prior.state === 'measured' && (recorded === null || recorded < laneCloseAt(hourMs));
+        // R90: a loss word arriving over a carve-out word in the same hour moves the interval too (the merge keeps the loss)
+        const intervalMoves = prior === undefined || (prior.state === 'measured' && result.interval === 'unmeasured')
+          || (prior.state === 'unmeasured' && result.interval === 'unmeasured' && laneLossOverCarveOut(prior.detail, result.detail));
+        if (result.accepted.length === 0 && cursorSame && !needsClose && !intervalMoves) {
+          this.skipped += 1;
+          return state;
+        }
+        if (row === undefined && result.accepted.length === 0 && laneFreshCursor(result.cursor)) {
+          // Nothing was read from this bucket, so there is no cursor to keep: the interval alone is the record.
+          return this.stage(pass, durable, {
+            accepted: [], cursor: null,
+            interval: { sessionId: id, parentIncarnation: inc, utcHour: hour, state: result.interval, detail: result.detail, recordedAt: formatDelegationInstant(Date.now()) },
+          }, key, label);
+        }
+        return adapter.applyBucketResult(result);
+      },
+    };
+  }
+
+  // ── the evidence correlation reads ────────────────────────────────────────────────────────────────────────────────────
+
+  /**
+   * What the lane keeps of the journal for correlation, which is a thin slice: the join events (a subagent's start and stop, a
+   * launch response), every Bash call that carries a worktree listing or may have SHED one (2c: `truncated`, no listing; the
+   * one-event-per-tuple rule would otherwise hide it behind an earlier event of its tuple), and ONE event per (session, incarnation, agent, working
+   * directory) for anything else that names a directory (rung 3 compares only `cwd`). Bounded by `DELEGATION_EVIDENCE_CAP`, oldest
+   * first out. An eviction makes a verdict LESS decided, never more (R57, D-4653): the latest `observedAt` among the events evicted
+   * is kept as the evidence horizon and handed to correlation, which refuses a link that rests on evidence reaching back to it. (The
+   * one-event-per-tuple rule above is not an eviction: a later event of a tuple adds nothing correlation reads.)
+   */
+  private noteEvidence(journalId: string, event: DelegationEventEnvelopeV1): void {
+    if (this.evidence.has(journalId)) return;
+    // The time of this event, for the stamp of any key dropped under it; an instant nobody can read is never old enough to forget.
+    const observed = laneInstantMs(event.observedAt) ?? Number.POSITIVE_INFINITY;
+    let key: string | null = null;
+    const tupleKey = (): string | null => (typeof event.cwd === 'string' ? JSON.stringify([event.sessionId, event.parentIncarnation, event.agentId ?? '', event.cwd]) : null);
+    if (event.eventKind === 'SubagentStart' || event.eventKind === 'SubagentStop') key = null;
+    else if (event.eventKind === 'PostToolUse' && 'launch' in event && event.launch !== null) key = null;
+    else if ((event.eventKind === 'PreToolUse' || event.eventKind === 'PostToolUse') && event.toolName === 'Bash'
+      && (('listing' in event && event.listing !== undefined) || event.truncated === true)) key = null;   // 2c: a shed listing is a (lost) window too
+    else {
+      const t = tupleKey();
+      if (t === null) return;
+      if (this.evidenceKeys.has(t)) {                                  // a hidden tuple-mate: it adds nothing correlation reads, but its time counts
+        this.tupleLatest.set(t, Math.max(this.tupleLatest.get(t) ?? 0, observed));
+        return;
+      }
+      key = t;
+    }
+    this.evidence.set(journalId, { event, key });
+    if (key !== null) { this.evidenceKeys.set(key, journalId); this.tupleLatest.set(key, observed); }
+    const cap = this.seams.evidenceCap ?? DELEGATION_EVIDENCE_CAP;
+    while (this.evidence.size > cap) {
+      const [oldest] = this.evidence.keys();
+      if (oldest === undefined) break;
+      const gone = this.evidence.get(oldest);
+      this.evidence.delete(oldest);
+      if (gone === undefined) continue;
+      const goneAt = Math.max(laneInstantMs(gone.event.observedAt) ?? Number.POSITIVE_INFINITY, gone.key === null ? 0 : this.tupleLatest.get(gone.key) ?? 0);
+      if (gone.key !== null) { this.evidenceKeys.delete(gone.key); this.tupleLatest.delete(gone.key); }
+      // R65: remember what was lost. A tuple's held event stands for the later events of its tuple that the one-event-per-tuple rule
+      // hid, and their keys are the tuple's own, so this records them too (stamped with the latest of them, the hidden ones included).
+      this.noteDropped(gone.event, goneAt);
+      // The horizon only rises. An `observedAt` that cannot be read (accepted events always carry a canonical one) is treated as now.
+      this.evidenceHorizonMs = Math.max(this.evidenceHorizonMs ?? 0, laneInstantMs(gone.event.observedAt) ?? Date.now());
+    }
+  }
+
+  /** Streams the retained journal once, through the applier (which alone names the file), after it is ready; from then on every
+   *  application adds what it journals. */
+  private async loadEvidence(durable: DelegationDurability, pass: LanePass): Promise<void> {
+    if (this.evidenceLoaded) return;
+    this.evidenceLoading ??= (async () => {
+      try {
+        // Every attempt starts from nothing and reads the whole journal: a failed attempt leaves no partial slice behind, and the
+        // horizon is recomputed from this load's own evictions. A slice that is not whole is never handed to correlation (D-4008).
+        this.evidence.clear();
+        this.evidenceKeys.clear();
+        this.tupleLatest.clear();
+        this.evidenceHorizonMs = null;
+        this.dropped.clear();
+        this.droppedIndexCache = null;
+        this.droppedAdded = 0;
+        this.droppedPeak = 0;
+        this.resetMarks();                                             // R73: rebuilt from the complete journal as it streams
+        // R69: a restart lost the remembered paths. Seed them from what the checkpoint durably holds (a lease and an attempt both carry
+        // their tree's canonical path), then add what this pass's census lists, and let a measured census of a tree's own project retire it.
+        const checkpoint = durable.state().checkpoint;
+        for (const r of [...checkpoint.leases, ...checkpoint.attempts]) {
+          if (r.canonicalPath !== null && !this.knownPaths.has(laneTreeKey(r.project, r.adminRecord))) this.knownPaths.set(laneTreeKey(r.project, r.adminRecord), r.canonicalPath);
+        }
+        this.noteCensus(pass.census);
+        this.forgetGoneTrees(pass.census);
+        // A long journal drops far more keys than any census can still ask about, so while it streams the keys are pruned every
+        // `DELEGATION_DROPPED_PRUNE_EVERY` new ones, against the census this pass holds and the checkpoint's activities (the visit folds
+        // nothing, so they are already whole). The plan forgets nothing for a project this lane has not measured since it started.
+        const every = this.seams.droppedPruneEvery ?? DELEGATION_DROPPED_PRUNE_EVERY;
+        const activities = checkpoint.activities;
+        await durable.visitRetainedRecords((r) => {
+          if (r.entry.kind !== 'evidence-accepted') return;
+          this.noteEvidence(r.journalId, r.entry.event);
+          if (this.droppedAdded >= every) this.pruneDropped(pass.census, activities);
+        });
+        this.evidenceLoaded = true;
+      } catch (err) {
+        console.warn(`ccrc-server: the delegation evidence could not be read from the journal: ${err instanceof Error ? err.message : String(err)}`);
+        this.evidence.clear();
+        this.evidenceKeys.clear();
+        this.dropped.clear();                                          // a partial index is not a measured one
+        this.tupleLatest.clear();
+        this.resetMarks();                                             // nor are partial marks
+        this.droppedIndexCache = null;
+      } finally {
+        this.evidenceLoading = null;
+      }
+    })();
+    await this.evidenceLoading;
+  }
+
+  // ── reconciliation ────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  private async reconcile(pass: LanePass, durable: DelegationDurability): Promise<void> {
+    this.reconciledAt = pass.census.measuredAt;
+    if (durable.state().phase !== 'ready') return;
+    const now = formatDelegationInstant(pass.now);
+
+    // The census, flat (hand-off 12): a project whose view was null contributes nothing and is not in `censused`.
+    this.noteCensus(pass.census);
+    this.forgetGoneTrees(pass.census);
+    const { censused, flat, held, allMeasured } = laneFlatCensus(pass.census, this.standingProjects(pass.census));
+    this.reconciliations += 1;
+    const nextFirstSeen = new Map(flat.map((r) => [laneTreeKey(r.project, r.adminRecord), this.firstSeen.get(laneTreeKey(r.project, r.adminRecord)) ?? this.reconciliations] as const));
+    // X1: a tree new to this census was born after the last census that measured its project, if this process took one.
+    const nextSighted = new Map<string, { after: number | null; at: number }>();
+    for (const r of flat) {
+      const k = laneTreeKey(r.project, r.adminRecord);
+      nextSighted.set(k, this.sighted.get(k) ?? { after: this.censusedAt.get(r.project) ?? null, at: pass.census.measuredAt });
+    }
+    const measuredNow = new Set(censused);
+    for (const [k, v] of this.sighted) if (!nextSighted.has(k) && !measuredNow.has((JSON.parse(k) as [string, string])[0])) nextSighted.set(k, v);
+    const recordsById = new Map(pass.records.map((r) => [r.id, r] as const));
+    const registryRowOf = (record: DelegationCensusRecord): LaneRecord | undefined => {
+      const ccdId = record.canonicalPath === null ? null : ccdIdForWorktree(record.project, record.canonicalPath);
+      return ccdId === null ? undefined : recordsById.get(ccdId);
+    };
+    const waitRemaining = (record: DelegationCensusRecord): number =>
+      DELEGATION_BIRTH_PASSES - (this.reconciliations - (nextFirstSeen.get(laneTreeKey(record.project, record.adminRecord)) ?? this.reconciliations));
+
+    // M6: the lane's memory is bounded by the census. A miss and a positive meta leave with their tree; a measured absence leaves when
+    // its tree is back in the census. N4: only against projects that were CENSUSED in this pass. A project whose view was null
+    // contributes no trees, which is not the same as having none, so its cached reads stay (a positive meta carries no project, so
+    // those are pruned only when every project was measured).
+    const censusedProjects = new Set(censused);
+    const names = new Set(flat.map((r) => r.adminRecord));
+    for (const k of [...this.metaMiss.keys()]) if (!held.has(k) && censusedProjects.has((JSON.parse(k) as [string, string])[0])) this.metaMiss.delete(k);
+    if (allMeasured) for (const [k, m] of [...this.pointMetas]) if (!names.has(m.sourceKind === 'agent' ? `agent-${m.upstreamId}` : m.upstreamId)) this.pointMetas.delete(k);
+    for (const k of [...this.absences.keys()]) if (held.has(k)) this.absences.delete(k);
+
+    // The evidence, indexed once (M5), for the rung-2 lookups.
+    const index: LaneEvidenceIndex = { claimants: new Map(), launches: new Map() };
+    for (const [journalId, { event }] of this.evidence) {
+      if (typeof event.transcriptPath === 'string') {
+        const ids = [event.agentId];
+        if (event.eventKind === 'PostToolUse' && 'launch' in event && event.launch !== null && typeof event.launch === 'object' && 'agentId' in event.launch) ids.push(event.launch.agentId);
+        for (const agentId of ids) {
+          if (typeof agentId !== 'string') continue;
+          const byParent = index.claimants.get(agentId) ?? new Map();
+          const pk = JSON.stringify([event.sessionId, event.parentIncarnation]);
+          if (!byParent.has(pk)) byParent.set(pk, { event, journalId });
+          index.claimants.set(agentId, byParent);
+        }
+      }
+      if (event.eventKind === 'PostToolUse' && event.toolName === 'Workflow' && event.launch !== null && !index.launches.has(event.launch.runId)) {
+        index.launches.set(event.launch.runId, { event, journalId, dir: event.launch.transcriptDir });
+      }
+    }
+
+    // Rung 2's point lookups come BEFORE the snapshot: a meta that opens an activity changes the checkpoint, and correlation and policy
+    // must both read the one state that includes it.
+    await this.readMetas(pass, durable, flat, index, (r) => registryRowOf(r) === undefined && waitRemaining(r) <= 0);
+    if (pass.signal.aborted) return;
+    const state = durable.state();                                       // ONE snapshot: correlation and policy both read it
+    if (state.phase !== 'ready') return;
+    // M6: a measured absence is kept only for a tree the checkpoint still holds (a lease or an attempt names it).
+    const heldByCheckpoint = new Set([...state.checkpoint.leases, ...state.checkpoint.attempts].map((r) => laneTreeKey(r.project, r.adminRecord)));
+    for (const k of [...this.absences.keys()]) if (!heldByCheckpoint.has(k)) this.absences.delete(k);
+    const evidenceHorizon = this.evidenceHorizon();
+    // R65: forget the dropped-evidence keys no present tree and no activity row can still ask about, but only against a census in which
+    // every project was measured (a project with no view contributes no paths, and would read as "nothing needs this").
+    if (this.droppedAdded >= (this.seams.droppedPruneEvery ?? DELEGATION_DROPPED_PRUNE_EVERY)) this.pruneDropped(pass.census, state.checkpoint.activities);
+    const droppedEvidence = this.droppedIndex();
+
+    const evidence = [...this.evidence].map(([journalId, v]) => ({ journalId, event: v.event }));
+    // 2c d (R84): a call's listing is the repository its cwd is attributed to, by the TREES (every census path and every remembered one; the
+    // nearest wins, so a nested worktree is its own repository's), and by the projects root only when it is RESOLVED. Unattributed: null.
+    const trees = new Map<string, string>();
+    for (const [k, p] of this.knownPaths) trees.set(p, (JSON.parse(k) as [string, string])[0]);
+    for (const r of flat) if (r.canonicalPath !== null) trees.set(r.canonicalPath, r.project);
+    const root = this.projectsRoot;
+    const listedOf = (cwd: string): string | null => delegationMarkAttributionOf(cwd, root, trees)?.project ?? null;
+    // 2c (R84): the windows the slice holds, the shed ones lost, and the windows the checkpoint says were lost (hours, torn tails, the floor).
+    // W1 (R88, R89): and the stretches the lane's own memory knows it did not read: everything up to the latest ready instant, and every
+    // listed hour of an owner no completed observation has read.
+    const windows = [
+      ...delegationListingWindowsOf([...this.evidence.values()].map((v) => v.event), (sessionId) => this.sessionProject.get(sessionId), listedOf),
+      ...delegationLostWindowsOf(state.checkpoint.observationIntervals, state.checkpoint.bucketCursors, pass.now),
+      delegationNotReadyWindowOf(this.readyAt),
+      ...this.pendingWindows(state),
+    ];
+    const pointMetas = [...this.pointMetas.values()];
+    const inputFor = (record: DelegationCensusRecord): DelegationCorrelationInput => {
+      const row = registryRowOf(record);
+      return {
+        record,
+        // No wave-3 datum names a checkpoint activity for a run's child (lineage rows owned by a run have no writer), so rung 1 has
+        // nothing to agree with: a ccd workspace is `unresolved` as a workspace, never claimed as a lease and never run-child-owned.
+        runChildAgreement: null,
+        activities: state.checkpoint.activities, acceptedEvidence: evidence, pointMetas, listingWindows: windows,
+        birthPassesRemaining: Math.max(0, Math.min(DELEGATION_BIRTH_PASSES, waitRemaining(record))) as 0 | 1 | 2,
+        hasRegistryRow: row !== undefined, hasChildMarker: row !== undefined && row.child.kind !== 'none',
+        evidenceHorizon, droppedEvidence,
+        firstSighting: laneSightingOf(nextSighted.get(laneTreeKey(record.project, record.adminRecord)) ?? { after: null, at: pass.census.measuredAt }),
+      };
+    };
+    // ONE expression: each pair is a census record and the verdict about it, never sorted or filtered apart.
+    const pairs = flat.map((record) => ({ record, verdict: correlateDelegation(inputFor(record)) }));
+    // R73, N16: which verdicts each kind of mark changed (a verdict two marks cover goes to the first of flag, project, path, id), counted
+    // apart from every other `unmeasured` reason: a gauge of this reconcile, and the trees, cumulatively until the next hourly line.
+    const forced: Record<DelegationMarkKind, number> = { path: 0, id: 0, project: 0, lossy: 0, prefix: 0, window: 0 };
+    // I-1: a verdict an unknown-repository listing window changed is counted as `window`, after every mark (it is not one of the index's).
+    const unknownWindows = windows.some((w) => w.repository === null && w.lost !== true);
+    if (droppedEvidence.measured || unknownWindows) {
+      for (const { record, verdict } of pairs) {
+        const input = inputFor(record);
+        const kind = (droppedEvidence.measured ? delegationMarkForced(input, verdict) : null)
+          ?? (unknownWindows && delegationUnknownWindowForced(input, verdict) ? 'window' : null);
+        if (kind === null) continue;
+        forced[kind] += 1;
+        this.forcedSinceLine[kind].add(laneTreeKey(record.project, record.adminRecord));
+      }
+    }
+    this.markForced = forced;
+    // 2c (R84): the links lost evidence held back, counted apart from the marks. A tree an unreleased lease holds is owned already (N5).
+    const leasedNow = new Set(state.checkpoint.leases.filter((l) => l.releasedAt === null).map((l) => laneTreeKey(l.project, l.adminRecord)));
+    let lostForced = 0;
+    for (const { record, verdict } of pairs) {
+      if (verdict.kind !== 'unmeasured' || leasedNow.has(laneTreeKey(record.project, record.adminRecord))) continue;   // the reason is correlation's to read
+      if (!delegationLostEvidenceForced(inputFor(record), verdict)) continue;
+      lostForced += 1;
+      this.lostSinceLine.add(laneTreeKey(record.project, record.adminRecord));
+    }
+    this.lostForced = lostForced;
+
+    const deaths = this.firstDeadParents();
+    const effects = planDelegationReconciliation({
+      now, recovery: state, census: flat, correlations: pairs, registryReadable: this.registryListed, firstDeadParents: deaths,
+      previousSuccessfulCensus: this.previous === null ? null : this.previous.flat,
+      censusedProjects: censused, previousCensusedProjects: this.previous === null ? null : this.previous.projects,
+    });
+
+    // The counts are the pass's VERDICTS, one per census record that is a tree or could not be read; an `absent` record is a tree
+    // being removed. Never attempt rows: policy files none for work no parent is named for.
+    const counts: DelegationVerdictCounts = { unresolved: 0, conflicting: 0, unmeasured: 0 };
+    // N5: a tree that holds an UNRELEASED lease is owned work, whatever its evidence has since become (the creating window leaves the
+    // slice, or rung 4's horizon test refuses to repeat the link): it is counted in none of the three.
+    const leased = leasedNow;
+    for (const { record, verdict } of pairs) {
+      if (record.state === 'absent') continue;
+      if (leased.has(laneTreeKey(record.project, record.adminRecord))) continue;
+      // `unresolved` and `conflicting` count UNOWNED WORK only (R59), by the one classifier policy files its reports with: a ccd
+      // workspace and a tree being born are not work. An `unmeasured` verdict (an eviction among them) is always counted.
+      if (verdict.kind === 'unmeasured') counts.unmeasured += 1;
+      else if ((verdict.kind === 'unresolved' || verdict.kind === 'conflicting') && isUnownedWorkReason(verdict.reason)) counts[verdict.kind] += 1;
+    }
+    this.verdicts = counts;
+    this.firstSeen = nextFirstSeen;
+    this.sighted = nextSighted;
+    for (const p of censused) this.censusedAt.set(p, pass.census.measuredAt);
+    this.previous = { flat, projects: censused };
+    this.reconciled = true;
+    this.reconciledWallMs = pass.now;
+    this.warnMarks(pass.now);
+    if (pass.signal.aborted) return;
+    await this.applyEffects(pass, durable, effects);
+  }
+
+  /**
+   * R73 rule 4, N16: once per UTC hour while any project is held back or lost, the global flag is up, or a mark held a verdict back since
+   * the last line, ONE line names them (project names and counts only, never a path or a payload) and gives, per kind of mark, how many
+   * trees it held at `unmeasured` since the last line; the counts are then reset.
+   */
+  private warnMarks(nowMs: number): void {
+    const f = this.forcedSinceLine;
+    const present = this.heldBack.size > 0 || this.lostProjects.size > 0 || this.lossy || Object.values(f).some((set) => set.size > 0) || this.lostSinceLine.size > 0;
+    const hour = laneHourOf(nowMs);
+    if (!present || hour === this.lastMarkWarnHour) return;
+    this.lastMarkWarnHour = hour;
+    const held = [...this.heldBack].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([p, n]) => `${p} (${n} keys)`).join(', ') || 'none';
+    const lost = [...this.lostProjects].sort().join(', ') || 'none';
+    console.warn(`ccrc-server: delegation dropped-evidence marks (R73): projects held back: ${held}; lost projects: ${lost}; global lossy flag: ${this.lossy ? 'up' : 'down'}; `
+      + `marks held: ${this.pathMarkCount()} paths (${this.unattributedPaths.size} in no project), ${this.markIds.size} ids, ${this.lostPrefixes().size} lost-project prefixes; `
+      + `trees held unmeasured by a mark since the last line: path ${f.path.size}, id ${f.id.size}, project ${f.project.size}, lossy ${f.lossy.size}, `
+      + `prefix ${f.prefix.size}, unknown-repository window ${f.window.size}; `
+      + `trees held unmeasured by lost evidence (a shed listing, an unmeasured hour, a lost creator) since the last line: ${this.lostSinceLine.size}`);
+    this.forcedSinceLine = laneNoForced();
+    this.lostSinceLine = new Set();
+  }
+
+  // ── rung 2: the positive meta reads ───────────────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Rung 2 decides a tree named `agent-<id>` or `wf_<run>-<n>` here or not at all, and it needs a point lookup: the parent's own
+   * transcript tree holds a `*.meta.json` whose `worktreePath` must equal the tree's canonical path. The directory comes from the
+   * parent's OWN spool history (an event's `transcriptPath` and Claude session id, or a Workflow launch's `transcriptDir`), never a
+   * search. At most `DELEGATION_META_READS_PER_PASS` files are read in a pass, a tree that gave nothing is not asked again for
+   * `DELEGATION_META_RETRY_MS`, and a tree still inside its birth wait or held by the registry is not asked at all. A positive meta
+   * opens the activity it names through the applier's own door (`applyPositiveAgentMeta` / `applyPositiveWorkflowMeta`), whose ID
+   * exists only after the checkpoint replacement (O1); the meta itself is read evidence and is never journaled.
+   */
+  private async readMetas(
+    pass: LanePass, durable: DelegationDurability, flat: readonly DelegationCensusRecord[], index: LaneEvidenceIndex, askable: (r: DelegationCensusRecord) => boolean,
+  ): Promise<void> {
+    const budget = { left: DELEGATION_META_READS_PER_PASS };
+    for (const record of flat) {
+      if (budget.left <= 0 || pass.signal.aborted) return;
+      if (record.state !== 'present' || record.canonicalPath === null || !askable(record)) continue;
+      const key = laneTreeKey(record.project, record.adminRecord);
+      if ((this.metaMiss.get(key) ?? 0) > pass.now) continue;
+      const wf = /^(wf_.+)-(\d+)$/.exec(record.adminRecord);
+      let outcome: LaneMetaOutcome = 'missed';
+      try {
+        if (record.adminRecord.startsWith('agent-')) outcome = await this.readAgentMeta(pass, durable, record.adminRecord.slice('agent-'.length), index, budget);
+        else if (wf !== null) outcome = await this.readWorkflowMeta(pass, durable, record, wf[1]!, index, budget);
+        else continue;
+      } catch (err) {
+        console.warn(`ccrc-server: a delegation meta read for ${record.adminRecord} failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      // Only a tree that was really ASKED and gave nothing is remembered as a miss; one the budget ran out on is asked next pass.
+      if (outcome === 'missed' && !pass.signal.aborted) this.metaMiss.set(key, pass.now + DELEGATION_META_RETRY_MS);
+    }
+  }
+
+  private async readMetaFile(pass: LanePass, file: string, budget: { left: number }): Promise<{ worktreePath: string } | null> {
+    budget.left -= 1;
+    const read = await this.deps.io.readFileMeasured(file, DELEGATION_READ_TIMEOUT_MS, pass.signal);
+    if (!read.ok || read.content.length > DELEGATION_META_MAX_CHARS || pass.signal.aborted) return null;
+    let parsed: unknown;
+    try { parsed = JSON.parse(read.content); } catch { return null; }
+    const wt = typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, unknown>)['worktreePath'] : undefined;
+    return typeof wt === 'string' && wt !== '' ? { worktreePath: wt } : null;
+  }
+
+  private async readAgentMeta(pass: LanePass, durable: DelegationDurability, agentId: string, index: LaneEvidenceIndex, budget: { left: number }): Promise<LaneMetaOutcome> {
+    let found = false;
+    let unasked = false;
+    for (const { event, journalId } of index.claimants.get(agentId)?.values() ?? []) {
+      if (pass.signal.aborted) break;
+      if (budget.left <= 0) { unasked = true; break; }
+      const transcript = event.transcriptPath!;
+      const file = `${transcript.slice(0, transcript.lastIndexOf('/'))}/${event.claudeSessionId}/subagents/agent-${agentId}.meta.json`;
+      const meta = await this.readMetaFile(pass, file, budget);
+      if (meta === null || pass.signal.aborted) continue;
+      this.pointMetas.set(JSON.stringify([event.sessionId, event.parentIncarnation, 'agent', agentId]), {
+        parentId: event.sessionId, parentIncarnation: event.parentIncarnation, sourceKind: 'agent', upstreamId: agentId,
+        worktreePath: meta.worktreePath, evidenceJournalId: journalId,
+      });
+      found = true;
+      // The meta is a qualifying join, but opening waits for at least one retained event naming the agent (a candidate): there is one.
+      const cp = durable.state().checkpoint;
+      if (!cp.activities.some((a) => a.sourceKind === 'agent' && a.upstreamId === agentId && a.parentId === event.sessionId && a.parentIncarnation === event.parentIncarnation)) {
+        await durable.applyPositiveAgentMeta({ parentId: event.sessionId, parentIncarnation: event.parentIncarnation, agentId });
+      }
+    }
+    return found ? 'found' : unasked ? 'unasked' : 'missed';
+  }
+
+  private async readWorkflowMeta(
+    pass: LanePass, durable: DelegationDurability, record: DelegationCensusRecord, runId: string, index: LaneEvidenceIndex, budget: { left: number },
+  ): Promise<LaneMetaOutcome> {
+    // The run's launch response names its transcript directory; its workers' metas are the files directly inside it.
+    const launch = index.launches.get(runId);
+    if (launch === undefined) return 'missed';
+    if (budget.left <= 0) return 'unasked';
+    budget.left -= 1;                                                    // the directory listing is a read of the pass, charged like a file read (M5)
+    let listing: MeasuredDirectoryRead;
+    try { listing = await this.deps.io.readdirMeasured(launch.dir, DELEGATION_READ_TIMEOUT_MS, pass.signal); } catch { return 'missed'; }
+    if (!listing.ok || pass.signal.aborted) return 'missed';
+    for (const name of listing.entries.filter((n) => /^agent-[A-Za-z0-9_-]+\.meta\.json$/.test(n)).slice(0, DELEGATION_META_DIR_ENTRIES)) {
+      if (pass.signal.aborted) return 'missed';
+      if (budget.left <= 0) return 'unasked';
+      const meta = await this.readMetaFile(pass, `${launch.dir}/${name}`, budget);
+      if (meta === null || meta.worktreePath !== record.canonicalPath) continue;
+      // The worker's index is the meta's own: the last component of the worktree path it names is `<runId>-<index>`.
+      const m = /^(.+)-(\d+)$/.exec(meta.worktreePath.slice(meta.worktreePath.lastIndexOf('/') + 1));
+      const workerIndex = m === null ? Number.NaN : Number(m[2]);
+      if (m === null || m[1] !== runId || !Number.isSafeInteger(workerIndex)) continue;
+      this.pointMetas.set(JSON.stringify([launch.event.sessionId, launch.event.parentIncarnation, 'workflow', record.adminRecord]), {
+        parentId: launch.event.sessionId, parentIncarnation: launch.event.parentIncarnation, sourceKind: 'workflow', upstreamId: record.adminRecord,
+        worktreePath: meta.worktreePath, evidenceJournalId: launch.journalId,
+      });
+      await durable.applyPositiveWorkflowMeta({ parentId: launch.event.sessionId, parentIncarnation: launch.event.parentIncarnation, runId, workerIndex });
+      return 'found';
+    }
+    return 'missed';
+  }
+
+  private async applyEffects(pass: LanePass, durable: DelegationDurability, effects: readonly DelegationReportEffect[]): Promise<void> {
+    const attempts: DelegationAttemptRow[] = [];
+    for (const e of effects) {
+      if (e.kind === 'request-linked-lease-identity' || e.kind === 'record-run-child-owned' || e.kind === 'record-unowned-worktree') attempts.push(e.attempt);
+    }
+    const filed = attempts.length === 0 ? new Set<string>() : await this.fileAttempts(durable, attempts);
+    let repair = false;
+    for (const e of effects) {
+      if (pass.signal.aborted) return;
+      switch (e.kind) {
+        case 'request-linked-lease-identity':
+          // The attempt is on file before the lease is journaled; `createLease` deduplicates on the identity key, so a request re-emitted
+          // after a crash between the two is a no-op.
+          if (!filed.has(e.attempt.attemptId)) break;
+          try { await durable.createLease(e.request); }
+          catch (err) { console.warn(`ccrc-server: a delegation lease identity could not be journaled: ${err instanceof Error ? err.message : String(err)}`); }
+          break;
+        case 'record-run-child-owned':
+        case 'record-unowned-worktree':
+          break;                                                         // the attempt row is the whole record
+        case 'record-measured-absence': {
+          const k = laneTreeKey(e.project, e.adminRecord);
+          if (!this.absences.has(k)) this.absences.set(k, { project: e.project, adminRecord: e.adminRecord, observedAt: e.observedAt });
+          break;
+        }
+        case 'repair-report-projection':
+          repair = true;
+          break;
+        case 'record-observation-interval':
+          try { await durable.applyAccepted({ accepted: [], cursor: null, interval: e.interval }); }
+          catch (err) { console.warn(`ccrc-server: a delegation interval could not be recorded: ${err instanceof Error ? err.message : String(err)}`); }
+          break;
+        default:
+          e satisfies never;
+      }
+    }
+    if (repair && !pass.signal.aborted) {
+      try { await durable.repairProjection(); }
+      catch (err) { console.warn(`ccrc-server: the delegation projection could not be repaired: ${err instanceof Error ? err.message : String(err)}`); }
+    }
+  }
+
+  /** Makes the pass's attempts durable through a checkpoint-only change (an attempt already on file is skipped, so an upsert is a no-op),
+   *  one change for the lot and, if the lot is refused, each alone. Answers the IDs now on file. */
+  private async fileAttempts(durable: DelegationDurability, attempts: readonly DelegationAttemptRow[]): Promise<Set<string>> {
+    const add = (list: readonly DelegationAttemptRow[]) => (cp: DelegationCheckpointV1): DelegationCheckpointV1 => {
+      const have = new Set(cp.attempts.map((a) => a.attemptId));
+      const fresh = list.filter((a, i) => !have.has(a.attemptId) && list.findIndex((b) => b.attemptId === a.attemptId) === i);
+      return fresh.length === 0 ? cp : { ...cp, attempts: [...cp.attempts, ...fresh] };
+    };
+    try {
+      await durable.applyCheckpointChange(add(attempts));
+    } catch (err) {
+      console.warn(`ccrc-server: the delegation attempts could not be filed together (${err instanceof Error ? err.message : String(err)}); filing each alone`);
+      for (const a of attempts) {
+        try { await durable.applyCheckpointChange(add([a])); }
+        catch (e2) { console.warn(`ccrc-server: a delegation attempt could not be filed: ${e2 instanceof Error ? e2.message : String(e2)}`); }
+      }
+    }
+    return new Set(durable.state().checkpoint.attempts.map((a) => a.attemptId));
+  }
 }

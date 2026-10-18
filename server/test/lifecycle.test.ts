@@ -35,6 +35,15 @@ const seedDefault = (home: string) =>
     started: '1',
   });
 
+/** D-5240: the swap route reads the turn (`turnVerdictFor`) before the queue and inside it, fail-closed, and this
+ *  file's session runs on `claude2`, an account the test roster does not carry, which reads `unmeasured`. A swap case
+ *  here is about argv, queueing and the 502, so it moves the row onto a roster account and proves the pane gone: a
+ *  verdict of `idle` with no further read (`swap-route-busy.test.ts` owns busy and unmeasured). */
+const swappable = (home: string): void => {
+  writeFileSync(path.join(home, '.cc-sessions', `${ID}.wrapper`), 'claude');
+};
+const PANE_GONE = (args: string[]) => ({ code: 1, stdout: '', stderr: `can't find session: ${args[2] ?? ''}` });
+
 /** Server over a seeded one-session registry; every exec succeeds (or fails with stderr 'boom').
  *  `ccdVerbs`, when given, seeds a real `fleetState` (mirroring
  *  `coord-pause-route.test.ts`'s own pattern) — the shape a skew test needs
@@ -49,6 +58,8 @@ async function makeApp(
     unswept?: boolean;
     /** F3: the `ledgerFloor` port the route reads per project. */
     coord?: unknown;
+    /** D-5240: a session the swap route's turn gate reads `idle` (`swappable`); tmux calls are then not recorded. */
+    swapIdle?: boolean;
   } = {},
 ): Promise<{
   app: FastifyInstance;
@@ -60,9 +71,15 @@ async function makeApp(
   seedRoster(home);
   seedDefault(home);
   const calls: string[][] = [];
+  if (opts.swapIdle) swappable(home);
   const run: Runner = async (cmd, args) => {
+    if (opts.swapIdle && args[0] === 'has-session') return PANE_GONE(args);
     calls.push([cmd, ...args]);
-    return opts.fail ? { code: 1, stdout: '', stderr: 'boom' } : { code: 0, stdout: '', stderr: '' };
+    if (opts.fail) return { code: 1, stdout: '', stderr: 'boom' };
+    // A real pane pid, as routes.test.ts's makeApp gives: since D-5234 a null pid on an alive pane is an unmeasured
+    // row, which the archive door refuses `status-unknown` (D-5274).
+    if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
+    return { code: 0, stdout: '', stderr: '' };
   };
   const env: NodeJS.ProcessEnv = { CCRC_HOME: home };
   if (opts.projectsRoot) env.CCRC_PROJECTS_ROOT = opts.projectsRoot;
@@ -273,7 +290,7 @@ describe('lifecycle routes', () => {
   });
 
   it('POST /api/sessions/:id/swap sends exact argv', async () => {
-    const { app, calls, cfg } = await makeApp();
+    const { app, calls, cfg } = await makeApp({ swapIdle: true });
     const res = await app.inject({
       method: 'POST',
       url: `/api/sessions/${ID}/swap`,
@@ -285,7 +302,7 @@ describe('lifecycle routes', () => {
   });
 
   it('a failing ccd maps to 502 with stderr', async () => {
-    const { app } = await makeApp({ fail: true });
+    const { app } = await makeApp({ fail: true, swapIdle: true });
     const res = await app.inject({
       method: 'POST',
       url: `/api/sessions/${ID}/swap`,
@@ -319,8 +336,13 @@ describe('lifecycle routes', () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
     seedDefault(home);
+    swappable(home);
     const order: string[] = [];
-    const run: Runner = async (_cmd, args) => { order.push(args.join(' ')); return { code: 0, stdout: '', stderr: '' }; };
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return PANE_GONE(args);
+      order.push(args.join(' '));
+      return { code: 0, stdout: '', stderr: '' };
+    };
     const cfg = loadConfig({ CCRC_HOME: home });
     // Recording, so the enqueue itself is observable — see the wait below.
     const enqueued: string[] = [];

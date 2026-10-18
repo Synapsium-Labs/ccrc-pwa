@@ -34,7 +34,7 @@ import type {
 import {
   CCRC_DIR_NAME, NODE_FILE_BASENAMES, NODE_FILES, parseCcdCaps, parseObservedEpochDoc, POOL_EPOCH_FILE_NAME, TOKEN_SYNC_OP,
   TOKEN_SYNC_SPAWN_TIMEOUT_MS, UPDATE_OP, UPDATE_SPAWN_DRAIN_MS, UPDATE_SPAWN_TIMEOUT_MS, decideKilledSpawn, firstStderrLine,
-  inFlightBusyDetail, isClaimCode, isUpdateLockHeldLine, lockHeldBusyDetail, tokenSyncSpawnArgv, updateLauncherPath,
+  inFlightBusyDetail, isClaimCode, isReadFromRange, isUpdateLockHeldLine, lockHeldBusyDetail, tokenSyncSpawnArgv, updateLauncherPath,
   updateSpawnArgv, updateWriterMayLive,
   type KillProbeOutcome, type UpdateReportRead, type UpdateSpawnResult,
 } from '../../shared/agent-protocol.js';
@@ -44,11 +44,12 @@ import { bodyDigest } from '../../shared/mark.mjs';
 import {
   readB64Measured,
   readFromMeasured,
-  listDir,
+  listDirMeasured,
   lstatMeasured,
   readWhole,
   statMeasured,
   writeB64,
+  type ListDirResult,
   type ReadB64Result,
   type ReadFromResult,
   type ReadResult,
@@ -273,10 +274,27 @@ function readB64Payload(r: ReadB64Result): { dataB64: string | null; absent?: tr
 /** Builds the `readFrom` op's payload. Shape is unchanged for both existing
  *  arms — `{data, size}` on success, `{data: null}` on failure — with
  *  `absent` spread in only on a proven ENOENT. The EOF case rides the SUCCESS
- *  arm as `{data: '', size}`, exactly as it does today. */
-function readFromPayload(r: ReadFromResult): { data: string; size: number } | { data: null; absent?: true } {
-  if (r.ok) return { data: r.data, size: r.size };
+ *  arm as `{data: '', size}`, exactly as it does today.
+ *
+ *  `dataB64` is spread in ONLY when the result carries it, and a result carries
+ *  it only for a request that sent `maxBytes` — so an old caller's answer is
+ *  byte-identical to what it was, and a failure never wears bytes. */
+function readFromPayload(
+  r: ReadFromResult,
+): { data: string; dataB64?: string; size: number } | { data: null; absent?: true } {
+  if (r.ok) return { data: r.data, ...(r.dataB64 !== undefined ? { dataB64: r.dataB64 } : {}), size: r.size };
   return { data: null, ...(r.reason === 'absent' ? { absent: true as const } : {}) };
+}
+
+/** Builds the `readdir` op's payload. `{names: string[]}` on success — an empty
+ *  listing included — and `{names: null}` on failure, which is the shape every
+ *  older agent sent for ALL failures, so an older server's `names` reader is
+ *  unaffected. `absent` is spread in ONLY on a proven ENOENT, for the same
+ *  reason and by the same rule as `statPayload`'s and `readB64Payload`'s: a
+ *  newer server reads a bare `names: null` as UNMEASURED, never as absence. */
+function readdirPayload(r: ListDirResult): { names: string[] } | { names: null; absent?: true } {
+  if (r.ok) return { names: r.names };
+  return { names: null, ...(r.reason === 'absent' ? { absent: true as const } : {}) };
 }
 
 function clampTimeout(ms: number | undefined): number {
@@ -521,7 +539,7 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: 
     case 'readFrom': {
       const p = await checkPath(req.path, ctx.cfg, 'read');
       if (!p) { send(ws, fail(req.id, 'forbidden')); return; }
-      send(ws, ok(req.id, readFromPayload(await readFromMeasured(p, req.offset))));
+      send(ws, ok(req.id, readFromPayload(await readFromMeasured(p, req.offset, req.maxBytes))));
       return;
     }
     case 'readB64': {
@@ -533,7 +551,7 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: 
     case 'readdir': {
       const p = await checkPath(req.path, ctx.cfg, 'read');
       if (!p) { send(ws, fail(req.id, 'forbidden')); return; }
-      send(ws, ok(req.id, { names: await listDir(p) }));
+      send(ws, ok(req.id, readdirPayload(await listDirMeasured(p))));
       return;
     }
     case 'stat': {
@@ -818,7 +836,17 @@ function validateReq(msg: Record<string, unknown>): AgentReq | ReqRefusal | null
     case 'readFrom': {
       if (typeof msg.path !== 'string') return null;
       if (typeof msg.offset !== 'number') return null;
-      return { t: 'req', id, op: 'readFrom', path: msg.path, offset: msg.offset } satisfies ReadFromReq;
+      const req: ReadFromReq = { t: 'req', id, op: 'readFrom', path: msg.path, offset: msg.offset };
+      // `maxBytes` is the byte arm's one field (delegation wave 3). Absent, the
+      // frame is exactly what it always was — including an odd offset, which the
+      // old arm clamps. Present, the whole range must be a valid one: a frame
+      // that says "bound this read" and bounds it wrongly is a malformed frame,
+      // not a request to guess at.
+      if (msg.maxBytes !== undefined) {
+        if (!isReadFromRange(msg.offset, msg.maxBytes)) return null;
+        req.maxBytes = msg.maxBytes as number;
+      }
+      return req;
     }
     case 'readB64': {
       if (typeof msg.path !== 'string') return null;

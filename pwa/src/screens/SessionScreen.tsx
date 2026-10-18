@@ -6,8 +6,9 @@
 // DialogSheet and the TerminalDrawer mount at the bottom.
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { repoLabel, substrateFault, type RouteField } from '../../../shared/api';
+import { backgroundOnlyRefusal, repoLabel, sessionWithCoordinator, substrateFault, type FleetSession, type RouteField, type SessionStatus } from '../../../shared/api';
 import { ATTENTION_DOT, Button, MailStrip, Skeleton, TaskStrip, toast } from '@ccrc/ui';
+import { staleFor } from '../session/taskStaleness';
 import { SwapSheet } from '../fleet/SwapSheet';
 import { ArchiveSheet, restoreSession } from '../fleet/ArchiveSheet';
 import { accountHue, accountLabel } from '../lib/accounts';
@@ -30,6 +31,7 @@ import { HistoryTab } from '../session/HistoryTab';
 import { TerminalDrawer } from '../session/TerminalDrawer';
 import { modelOptions, effortOptions, type PickOption } from '../lib/models';
 import '../session/chat.css';
+import { answerControlLabel } from '../session/askLive';
 
 /** Keyboard discipline: the bottom inset the on-screen keyboard covers. The
  *  screen pads its shell by this much so the composer stays above the
@@ -38,6 +40,22 @@ import '../session/chat.css';
  *  named export — tests and later tasks import it from here). */
 export function useKeyboardInsets(): number {
   return useKeyboardInset({ pinTop: true });
+}
+
+/** `background-aware-working` (D-5231): does the chat wear its working pulse?
+ *  It reads the server's BUCKET once a snapshot row exists, and the live word
+ *  only before it, so card, header and chat cannot disagree: a wedged `busy`
+ *  that the ladder filed `done` stops pulsing, and delegated work after a Stop
+ *  keeps it. A dead session never pulses. */
+export function chatPulsing(
+  live: (Pick<FleetSession, 'bucket'> & { withCoordinator?: unknown }) | null, effectiveStatus: SessionStatus | null,
+): boolean {
+  if (effectiveStatus === 'dead') return false;
+  // D-5296: while the parent holds the question the ladder files the row
+  // `working`, but nothing runs; the header reads it in the calm tint, so the
+  // chat does not pulse either (D-5390).
+  if (live !== null && sessionWithCoordinator(live) !== null) return false;
+  return live !== null ? live.bucket === 'working' : effectiveStatus === 'busy';
 }
 
 export function SessionScreen({
@@ -63,6 +81,12 @@ export function SessionScreen({
   const fileMeasured = useStore((s) => s.fileMeasured);
   const file = useStore((s) => s.file);
   const tasks = useStore((s) => s.tasks);
+  // D-5372: read beside `tasks`, not through its own selector. The reducer sets
+  // `tasksTouchedAt` only together with `tasks`, and every tasks frame brings a
+  // new array, so the `tasks` selector above already re-renders on each change.
+  // (A further `useStore(…)` call site adds one more CodeQL
+  // unvalidated-dynamic-method-call false positive on the route-keyed store.)
+  const tasksTouchedAt = useStore.getState().tasksTouchedAt;
   const mail = useStore((s) => s.mail);
   // Build 4 Task 18, spec §2.3: the ask card's second derivation source. A
   // live `ask` (hook envelope) and a live `dialog` (scraped pane menu) are
@@ -72,6 +96,9 @@ export function SessionScreen({
   const liveAsk = useStore((s) => s.ask);
   const liveDialog = useStore((s) => s.dialog);
   const askPending = liveAsk !== null || liveDialog !== null;
+  // Decision `ask-answer-control-says-submit`: while the pane is on an ask's review screen, the transcript's control
+  // says what the sheet it raises is waiting on, so a hidden sheet is one labelled click from Submit.
+  const answerLabel = answerControlLabel(liveDialog);
   // This session's fleet entry — live name, account, dialogPending badge.
   const live = useFleet((s) => s.sessions.find((x) => x.id === id) ?? null);
   const roster = useFleet((s) => s.roster);
@@ -197,6 +224,7 @@ export function SessionScreen({
   // dead session is read-only and a busy one wears the caret from first paint.
   const effectiveStatus = status ?? live?.status ?? null;
   const dead = effectiveStatus === 'dead';
+  const pulsing = chatPulsing(live, effectiveStatus);
   const loading = uuid === null && missingFile === null;
   // An UNMEASURED absence is not an empty chat. When the resolver could not
   // finish looking (§5.2's `searchComplete: false`, which §5.5 makes routine
@@ -234,12 +262,21 @@ export function SessionScreen({
   };
 
   // Confirm-free: esc just sends. A 409 means the turn already ended — say so
-  // quietly; anything else is a real failure.
-  const interrupt = async (): Promise<void> => {
+  // quietly; anything else is a real failure. `background-only` (D-5236): the
+  // main turn ended over background work the server would not Escape, because
+  // Escape stops none of it — the toast says what still runs.
+  const interrupt = async (source: 'keycap' | 'escape-key'): Promise<void> => {
     try {
-      await api.interrupt(id);
+      await api.interrupt(id, source);
     } catch (err) {
-      if (err instanceof ApiError && err.status === 409) {
+      const bg = err instanceof ApiError && err.status === 409 ? backgroundOnlyRefusal(err.body) : null;
+      if (bg !== null) {
+        toast(bg.count === null
+          ? 'The main turn has finished; a background shell or monitor is still running. Escape would not stop it.'
+          : `The main turn has finished; ${bg.count} background ${bg.count === 1 ? 'task' : 'tasks'}`
+            + `${bg.kinds.length > 0 ? ` (${bg.kinds.join(', ')})` : ''} ${bg.count === 1 ? 'is' : 'are'} still running.`
+            + ` Escape would not stop ${bg.count === 1 ? 'it' : 'them'}.`);
+      } else if (err instanceof ApiError && err.status === 409) {
         toast("Claude isn't working right now — nothing to stop");
       } else {
         toast(`Couldn't stop — ${err instanceof Error ? err.message : String(err)}`, 'error');
@@ -326,7 +363,7 @@ export function SessionScreen({
         statusUpdatedAt={statusUpdatedAt}
         roster={roster}
         repo={repo}
-        onInterrupt={() => void interrupt()}
+        onInterrupt={(source) => void interrupt(source)}
         onOpenTerminal={openTerminal}
         onBack={() => navigate('/')}
         onChangeModel={changeModel}
@@ -433,10 +470,11 @@ export function SessionScreen({
             id={id}
             events={events}
             pending={pending}
-            busy={effectiveStatus === 'busy'}
+            busy={pulsing}
             onRetry={(key) => useStore.getState().retry(key)}
             onDiscard={(key) => useStore.getState().discard(key)}
             askPending={askPending}
+            answerLabel={answerLabel}
             onAnswer={() => setRaise((n) => n + 1)}
           />
         )}
@@ -447,7 +485,7 @@ export function SessionScreen({
 
       {/* Sits between the conversation and the composer — where the TUI puts it,
           directly above the prompt you're about to type into. */}
-      <TaskStrip tasks={tasks} />
+      <TaskStrip tasks={tasks} untouchedFor={staleFor(tasksTouchedAt, Date.now())} />
 
       {/* Plain measuring shell so ToastHost's --composer-h offset has something
           to observe — Composer.tsx itself carries no ref to forward. */}

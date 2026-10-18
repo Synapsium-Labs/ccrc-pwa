@@ -2,7 +2,7 @@
 // suites run ccd: a stub tmux on PATH answers the session name, stdin carries
 // the hook payload, and the assertion reads the file the script wrote.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { execFileSync, spawnSync, spawn } from 'node:child_process';
+import { execFileSync, spawnSync, spawn, type SpawnSyncReturns } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -311,7 +311,7 @@ const minimalPath = (omit: string[]): string => {
  *  `timeout` IS INVOKED TWICE PER HOOK RUN, and a stub that does not know that
  *  is a barrier in the wrong place. BEFORE the `case "$event"`, the hook
  *  resolves `timeout`/`gtimeout` into `$hooktmo` and asks
- *  `"$hooktmo" 2 tmux display-message -p '#S'` — the bound on the one tmux
+ *  `"$hooktmo" 2 tmux display-message -p -t "$TMUX_PANE" '#S'` — the bound on the one tmux
  *  question every hook event asks, which exists because a wedged tmux server
  *  answers nothing and never returns. That is invocation ONE, and it happens
  *  before the compaction arms are reached at all; the helper's
@@ -643,7 +643,7 @@ describe('the fleet gate and failure polarity', () => {
     plantGraph(tree, { built: 'deadbee' });
 
     const cheapTimes: number[] = [];
-    const mainTimes: number[] = [];
+    const mainTimes: number[] = []; run({ hook_event_name: 'UserPromptSubmit' }); run({ hook_event_name: 'SubagentStart', agent_id: 'a-1', agent_type: 'general-purpose' });   // a-1 is JOINED, so the cheap arm stays a subagent's (delegation broker wave 3)
     for (let i = 0; i < 20; i++) {
       const t0 = process.hrtime.bigint();
       run({ hook_event_name: 'PostToolUse', tool_name: 'Bash', agent_id: 'a-1' });
@@ -1129,7 +1129,7 @@ describe('the SessionStart graph card', () => {
 
   it('prints NOTHING when the tree has no graph and the sweep never mentioned it', () => {
     const tree = path.join(home, 'tree');
-    gitTree(tree, 1);
+    gitTree(tree, 1); fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-basin.child'), '');   // a child row: the D-5301 role subject is silent, so this subject's own silence is what is measured
     expect(run({ hook_event_name: 'SessionStart', cwd: tree })).toBe('');
   });
 
@@ -1149,7 +1149,7 @@ describe('the SessionStart graph card', () => {
   // engine's stderr, or from a whole matched refusal line.
   it('clips a pathological census reason instead of injecting it whole', () => {
     const tree = path.join(home, 'tree');
-    gitTree(tree, 1);
+    gitTree(tree, 1); fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-basin.child'), '');   // a child row: the D-5301 role subject is silent, so the bound measures this subject alone
     sweepPass([{ path: tree, outcome: 'failed', reason: 'x'.repeat(100_000) }]);
     const text = card(run({ hook_event_name: 'SessionStart', cwd: tree }));
     expect(text).toContain('failed');
@@ -1222,7 +1222,7 @@ describe('the SessionStart graph card', () => {
       passes: [{ started: 'x', finished: 'x', pin: '0.9.9', status: 'ok', trees: [
         { path: gone, outcome: 'never-built', reason: 'no exclude entry', duration_ms: 3 },
       ] }],
-    }));
+    })); fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-basin.child'), '');   // a child row: the D-5301 role subject is silent, so this subject's own silence is what is measured
     expect(run({ hook_event_name: 'SessionStart', cwd: gone })).toBe('');
     expect(readState().state).toBe('done');
   });
@@ -2847,7 +2847,7 @@ describe('the compaction card — PreCompact and the helper (spec §3.1)', () =>
     // hook-owned set standing for PostCompact. That is no longer what this
     // userland gets. The tmux bound sits ABOVE the event switch: the hook
     // resolves `timeout`/`gtimeout` into `$hooktmo` BEFORE it reads the event,
-    // and with neither present it does not ask `tmux display-message -p '#S'`
+    // and with neither present it does not ask `tmux display-message -p -t "$TMUX_PANE" '#S'`
     // at all — `$tname` stays empty and `[[ "$tname" == cc-?* ]] || exit 0`
     // ends the run before there is a session id to write anything under.
     // "A hook that cannot bound its own tmux call must not make it" is the
@@ -10293,7 +10293,7 @@ describe('memory convergence (spec 2026-09-08 §2)', () => {
   // deleted fleet-wide. Every other memory test here reads the filesystem, so
   // a stray `echo` on the converge path was invisible to all of them.
   it('prints nothing on the converge path — a second stdout line deletes both cards fleet-wide', () => {
-    expect(run(payload())).toBe('');
+    fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-basin.child'), ''); expect(run(payload())).toBe('');   // a child row: the D-5301 role subject is silent
   });
 
   // The call site sits ABOVE the `source == compact` early return, and the
@@ -10328,9 +10328,393 @@ describe('memory convergence (spec 2026-09-08 §2)', () => {
   });
 });
 
+// ── EXACT-PANE OWNERSHIP (delegation broker wave 3, task 1; mutation W3-M01) ──
+//
+// The hook learns WHOSE event it is from one question to the tmux server, and the
+// answer decides every file it writes: the hookstate, the turn marker, the capture
+// of a `-hookcap` session, and the delegation spool this wave adds. Untargeted,
+// `tmux display-message -p '#S'` answers for the pane the server calls CURRENT,
+// which is this hook's own only while tmux can still resolve the pane from its
+// client. MEASURED on tmux 3.4: with `TMUX_PANE` in the client's environment and
+// the pane alive, tmux resolves it by itself; with the pane GONE, or with a client
+// that carries no pane, it falls back to the most recently active session. So a
+// hook event from a torn-down pane was written under whatever ccrc session was
+// current, and that session's state belonged to someone else. The lookup is
+// therefore `-t "$TMUX_PANE"`: the exact pane or nothing.
+//
+// Two groups. The first drives a REAL tmux on a private socket (`-L <name> -f
+// /dev/null`, the way ccd-tmux-anchor.test.ts does: never the default server);
+// the second a stub that answers the untargeted question and fails or wedges the
+// targeted one, which is the lookup-failure half and needs no tmux at all.
+const EXACT_PANE_TMUX: string | null = (() => {
+  const r = spawnSync('sh', ['-c', 'command -v tmux'], { encoding: 'utf8' });
+  const p = (r.stdout ?? '').trim();
+  return r.status === 0 && p.startsWith('/') ? p : null;
+})();
+describe('exact-pane hook ownership: the session name is asked of $TMUX_PANE, never of the server\'s current pane', () => {
+  /** The fixture row (`stateFile()` reads its hookstate) and a SECOND ccrc session whose id ends
+   *  `-hookcap`, so a wrong attribution to it leaves BOTH a hookstate and a capture directory. */
+  const OWNER = 'cc-demo-quiet-basin';
+  const OTHER = 'cc-other-hookcap';
+  const reg = (): string => path.join(home, '.cc-sessions');
+  const otherState = (): string => path.join(reg(), 'other-hookcap.hookstate.json');
+  const captureRoot = (): string => path.join(home, '.ccrc', 'hook-capture');
+  const spoolRoot = (): string => path.join(reg(), 'delegation');
+  /** An ordinary prompt: it writes a hookstate for the session it is attributed to, and no spool line (it is not a delegation event). */
+  const EVENT = { hook_event_name: 'UserPromptSubmit' };
+  /** A valid delegation event: with its pane attributed to a session that has a spool directory and a generation, it WOULD write a
+   *  line there, so "no line" below measures the attribution and not a payload the spool would have refused anyway. Every row that
+   *  claims "no delegation spool" sends it as well as `EVENT`. */
+  const SESSION_END = { hook_event_name: 'SessionEnd', session_id: 'uuid-1', reason: 'clear' };
+  /** BOTH sessions' spool directories exist, each with the row's generation, so a mis-attributed SessionEnd has somewhere valid to land
+   *  (delegation broker wave 3, carried minor of Task 1: this check could not fail while the directories did not exist). */
+  const plantSpoolDirs = (): void => {
+    for (const sid of ['demo-quiet-basin', 'other-hookcap']) fs.mkdirSync(path.join(spoolRoot(), 'spool', sid), { recursive: true });
+    fs.writeFileSync(path.join(reg(), 'other-hookcap.generation'), GENERATION);
+  };
+  beforeEach(plantSpoolDirs);
+  /** What the hook may have written for ANY session: a hookstate, a turn marker, a capture, a spool bucket. */
+  const wroteNothing = (): void => {
+    expect(fs.readdirSync(reg()).sort(), 'the registry holds only the two rows\' generation files and the spool root')
+      .toEqual(['delegation', 'demo-quiet-basin.generation', 'other-hookcap.generation']);
+    expect(fs.existsSync(captureRoot()), 'no capture directory').toBe(false);
+    for (const sid of ['demo-quiet-basin', 'other-hookcap']) {
+      const dir = path.join(spoolRoot(), 'spool', sid);
+      expect(fs.existsSync(dir), `${sid}'s spool directory stands (anti-vacuity: a line had somewhere to go)`).toBe(true);
+      expect(fs.readdirSync(dir), `no bucket in ${sid}'s spool`).toEqual([]);
+    }
+  };
+
+  describe.skipIf(EXACT_PANE_TMUX === null)('real tmux, private socket'
+    + (EXACT_PANE_TMUX === null ? ' — SKIPPED: no tmux on PATH, so there is no real tmux to measure against' : ''), () => {
+    /** Short (macOS `sun_path`) and unique per run (concurrent suites). */
+    const SOCK = `hkex${process.pid}${Math.random().toString(36).slice(2, 6)}`;
+    const T = (...args: string[]): SpawnSyncReturns<string> =>
+      spawnSync(EXACT_PANE_TMUX!, ['-L', SOCK, '-f', '/dev/null', ...args], {
+        encoding: 'utf8', env: { ...process.env, TMUX: undefined, TMUX_PANE: undefined, TMUX_TMPDIR: undefined } as NodeJS.ProcessEnv });
+    /** `kill-server` returns before the server has gone, and a `new-session` that lands in that window
+     *  answers `server exited unexpectedly` (measured, ccd-tmux-anchor.test.ts) — so poll until tmux itself
+     *  says there is nothing to connect to. */
+    const resetServer = (): void => {
+      T('kill-server');
+      for (let i = 0; i < 200; i++) {
+        const r = T('list-sessions');
+        if (r.status !== 0 && /no server running|error connecting/.test(r.stderr)) return;
+        spawnSync('sleep', ['0.05']);
+      }
+      throw new Error(`the private tmux server on ${SOCK} would not go away`);
+    };
+    /** A session whose one pane sits in `sleep`; its pane id, which is what the hook receives as `TMUX_PANE`. */
+    const mk = (name: string): string => {
+      const r = T('new-session', '-d', '-P', '-F', '#{pane_id}', '-s', name, '-x', '80', '-y', '24', 'exec sleep 600');
+      expect(r.status, `fixture new-session ${name}: ${r.stderr}`).toBe(0);
+      return r.stdout.trim();
+    };
+    const argvLog = (): string[] => fs.readFileSync(path.join(home, 'tmux-argv'), 'utf8').split('\n').filter(Boolean);
+    /** The fixture PATH's `tmux`: the private-socket tmux, argv recorded. `CLIENT_BLIND` strips `TMUX_PANE`
+     *  from the CLIENT's environment — a tmux client that carries no pane, which is what an untargeted
+     *  question needs the server's idea of "current" for. */
+    const plantShim = (): void => fs.writeFileSync(path.join(home, 'bin', 'tmux'),
+      `#!/bin/sh\nunset TMUX TMUX_TMPDIR\n[ -n "\${CLIENT_BLIND:-}" ] && unset TMUX_PANE\n`
+      + `printf '%s\\n' "$*" >> "$HOME/tmux-argv"\nexec '${EXACT_PANE_TMUX}' -L '${SOCK}' -f /dev/null "$@"\n`, { mode: 0o755 });
+
+    beforeEach(() => { resetServer(); plantShim(); });
+    afterEach(() => {
+      T('kill-server');
+      // tmux leaves the socket FILE behind after `kill-server` (measured, 3.4): tmux's own default
+      // directory, since TMUX_TMPDIR is unset, and a name that is this run's alone.
+      if (typeof process.getuid === 'function') fs.rmSync(path.join('/tmp', `tmux-${process.getuid()}`, SOCK), { force: true });
+    });
+
+    it('another pane is CURRENT while TMUX_PANE names the owner: the event is the owner\'s, and only the owner\'s', () => {
+      const ownerPane = mk(OWNER);
+      spawnSync('sleep', ['0.1']);
+      mk(OTHER);
+      // THE PREMISE, MEASURED: an untargeted question to this server answers the other, newer session. Without
+      // this the case below passes for a hook that asks nothing exact.
+      expect(T('display-message', '-p', '#S').stdout.trim(), 'the server\'s current session is the OTHER one').toBe(OTHER);
+      const r = runFull(EVENT, { TMUX_PANE: ownerPane, CLIENT_BLIND: '1' });
+      expect(r).toEqual({ stdout: '', stderr: '' });
+      expect(fs.existsSync(stateFile()), 'the owner\'s hookstate was written').toBe(true);
+      expect(readState().state, 'the owner\'s hookstate').toBe('working');
+      expect(fs.existsSync(otherState()), 'the current pane\'s session got nothing').toBe(false);
+      expect(fs.existsSync(captureRoot()), 'and no capture of its').toBe(false);
+      expect(argvLog(), 'the one tmux question names the pane').toEqual([`display-message -p -t ${ownerPane} #S`]);
+    });
+
+    it('exact-pane teardown: the pane is gone but another ccrc pane remains — no hookstate, no capture, no delegation spool', () => {
+      const ownerPane = mk(OWNER);
+      mk(OTHER);
+      expect(T('kill-session', '-t', `=${OWNER}`).status, 'the owner\'s session is torn down').toBe(0);
+      expect(T('list-sessions', '-F', '#{session_name}').stdout.trim(), 'only the other ccrc session remains').toBe(OTHER);
+      // THE PREMISE, MEASURED: the very question the old hook asked, from a client whose `TMUX_PANE` still
+      // names the dead pane, answers the survivor — which is the wrong session for this event.
+      const old = spawnSync(EXACT_PANE_TMUX!, ['-L', SOCK, '-f', '/dev/null', 'display-message', '-p', '#S'], {
+        encoding: 'utf8', env: { ...process.env, TMUX: undefined, TMUX_PANE: ownerPane, TMUX_TMPDIR: undefined } as NodeJS.ProcessEnv });
+      expect(old.stdout.trim(), 'an untargeted question names the survivor').toBe(OTHER);
+      const events = [EVENT, { hook_event_name: 'Stop' }, SESSION_END];
+      for (const event of events) {
+        expect(runFull(event, { TMUX_PANE: ownerPane }), `${event.hook_event_name}: silent, exit 0`).toEqual({ stdout: '', stderr: '' });
+      }
+      wroteNothing();
+      // The exact log, not `every` over it (which passes on an empty one): one question per event, each naming the dead pane.
+      expect(argvLog(), 'every question named the dead pane, once per event').toEqual(events.map(() => `display-message -p -t ${ownerPane} #S`));
+    });
+  });
+
+  describe('a stub tmux that answers the UNTARGETED question with a ccrc name', () => {
+    /** Untargeted: the fixture row's name. Targeted: `ask`. */
+    const plantTmux = (ask: string): void => fs.writeFileSync(path.join(home, 'bin', 'tmux'),
+      `#!/bin/sh\ncase " $* " in *" -t "*) ${ask} ;; esac\necho "${OWNER}"\n`, { mode: 0o755 });
+
+    it('a targeted lookup that FAILS attributes nothing: exit 0, no hookstate, no capture, no delegation spool', () => {
+      plantTmux('echo "can\'t find pane" >&2; exit 1');
+      for (const event of [EVENT, SESSION_END]) expect(runFull(event, { TMUX_PANE: '%7' }), event.hook_event_name).toEqual({ stdout: '', stderr: '' });
+      wroteNothing();
+    });
+
+    it('a targeted lookup that NEVER ANSWERS costs the bound and attributes nothing', () => {
+      plantTmux('sleep 30');
+      for (const event of [EVENT, SESSION_END]) {
+        const t0 = Date.now();
+        expect(runFull(event, { TMUX_PANE: '%7' }), event.hook_event_name).toEqual({ stdout: '', stderr: '' });
+        const ms = Date.now() - t0;
+        expect(ms, `${event.hook_event_name}: the hook took ${ms}ms — the bound did not fire`).toBeLessThan(10_000);
+      }
+      wroteNothing();
+    });
+
+    it('control: the same stub, asked about the pane it can resolve, attributes to it', () => {
+      plantTmux(`echo "${OWNER}"; exit 0`);
+      runFull(EVENT, { TMUX_PANE: '%7' });
+      expect(readState().state).toBe('working');
+      // And it is the SESSION_END that makes the rows above able to fail: attributed, it writes its line into the owner's spool.
+      runFull(SESSION_END, { TMUX_PANE: '%7' });
+      const dir = path.join(spoolRoot(), 'spool', 'demo-quiet-basin');
+      expect(fs.readdirSync(dir).filter((f) => f.endsWith('.spool')), 'attributed, a SessionEnd writes a bucket').toHaveLength(1);
+    });
+  });
+});
+
+// ── A bare agent_id is not a subagent: the captured payloads, replayed (delegation broker wave 3, Task 2) ──
+//
+// The turn marker treated ANY non-empty `agent_id` as a subagent's event. The captured real-lane payloads
+// (`fixtures/delegation/<version>/*.json`) say what an id means: every tool event that carries one comes after a
+// SubagentStart naming it, no main-thread event (Stop, StopFailure, PostCompact, PreCompact, SessionStart,
+// SessionEnd, UserPromptSubmit) carries one in any of the 196 captured scenarios (14 versions, 2.1.280 to 2.1.299; 193
+// measured, and the 3 `interrupt-exit` cells of 2.1.295, 2.1.296 and 2.1.299 unmeasured), and the only SubagentStop with no
+// Start is the unpaired kind: empty agent_type, an agent id no SubagentStart ever named. It is the one around /compact in
+// every version's `clear-compact-resume` (14 measured cells); the three unmeasured `interrupt-exit` cells above also carry one
+// (empty agent_type, a foreign id), which nothing here relies on. The marker therefore trusts an id only once a
+// SubagentStart has named it in THIS owner's join file (`<id>.joined`); the same payloads with their SubagentStarts
+// taken out are the measured "agent_id alone" lane (amendment `tool-agent-id-alone-is-unjoined-evidence`), and there
+// the parent's own tool call must be recorded. SessionStart and SessionEnd are left out of the replay: they carry no
+// id and run the card and teardown machinery this property does not need.
+describe('a bare agent_id is not a subagent: captured delegation payloads replayed through the hook', () => {
+  const FIXTURES = path.resolve(__dirname, 'fixtures/delegation');
+  type Captured = { seq: number; event: string; envSid: string; payload: Record<string, unknown> & { agent_id?: string } };
+  const load = (version: string, scenario: string): Captured[] =>
+    (JSON.parse(fs.readFileSync(path.join(FIXTURES, version, `${scenario}.json`), 'utf8')) as { events: Captured[] }).events
+      .filter((e) => e.event !== 'SessionStart' && e.event !== 'SessionEnd');
+  const markerFile = (): string => path.join(home, '.cc-sessions', 'demo-quiet-basin.turn.json');
+  const marker = (): string | null => (fs.existsSync(markerFile()) ? fs.readFileSync(markerFile(), 'utf8') : null);
+  const TOOL = new Set(['PreToolUse', 'PostToolUse']);
+  /** Replays the events through the hook and reports, for each TOOL event that carries an id, the marker before and after. */
+  const replay = (events: Captured[]): Array<{ seq: number; id: string; before: string | null; after: string | null; joined: boolean }> => {
+    const seenStart = new Set<string>();
+    const rows: Array<{ seq: number; id: string; before: string | null; after: string | null; joined: boolean }> = [];
+    for (const e of events) {
+      const before = marker();
+      runFull(e.payload, { CLAUDE_CODE_SESSION_ID: e.envSid });
+      const id = e.payload.agent_id;
+      if (TOOL.has(e.event) && typeof id === 'string' && id !== '') rows.push({ seq: e.seq, id, before, after: marker(), joined: seenStart.has(id) });
+      if (e.event === 'SubagentStart' && typeof id === 'string') seenStart.add(id);
+    }
+    return rows;
+  };
+  const withoutStarts = (events: Captured[]): Captured[] => events.filter((e) => e.event !== 'SubagentStart');
+  /** `agent-input-keys-are-the-callers`: the Agent `tool_input` key set is whatever the calling model sends, and both real
+   *  lanes omitted `subagent_type`, which the rig's mock always sends. The classification reads no `tool_input` key. */
+  const withoutSubagentType = (events: Captured[]): Captured[] => {
+    let removed = 0;
+    const out = events.map((e) => {
+      const input = e.payload['tool_input'];
+      if (e.payload['tool_name'] !== 'Agent' || typeof input !== 'object' || input === null || !('subagent_type' in input)) return e;
+      removed += 1;
+      const { subagent_type: _gone, ...rest } = input as Record<string, unknown>;
+      return { ...e, payload: { ...e.payload, tool_input: rest } };
+    });
+    expect(removed, 'anti-vacuity: the capture\'s Agent launch events did carry a subagent_type').toBeGreaterThanOrEqual(1);
+    return out;
+  };
+
+  const CASES: Array<[string, string]> = [
+    ['2.1.280', 'agent-plain'], ['2.1.292', 'agent-plain'],
+    ['2.1.280', 'agent-iso-bg'], ['2.1.292', 'agent-iso-bg'],
+    ['2.1.280', 'wf-iso'], ['2.1.292', 'wf-iso'],
+  ];
+
+  it.each(CASES)('%s %s: a joined subagent\'s tool events never move the marker, however they interleave with the parent\'s Stop', (version, scenario) => {
+    const rows = replay(load(version, scenario));
+    expect(rows.length, 'the scenario carries tool events with an agent_id').toBeGreaterThanOrEqual(2);
+    for (const r of rows) {
+      expect(r.joined, `seq ${r.seq}: the capture names ${r.id} in a SubagentStart first`).toBe(true);
+      expect(r.after, `seq ${r.seq}: the subagent's tool event left the marker as it found it`).toBe(r.before);
+    }
+  });
+
+  it.each(CASES)('%s %s: the same events with their SubagentStarts taken out are the agent_id-alone lane: each tool event is the main thread', (version, scenario) => {
+    const rows = replay(withoutStarts(load(version, scenario)));
+    expect(rows.length).toBeGreaterThanOrEqual(2);
+    // A tool event over a marker that already reads working is a builtin read and writes nothing, whoever sent it; the
+    // lane bites where the parent's Stop has come first, so those rows must exist and each must be re-opened by it.
+    const afterStop = rows.filter((r) => r.before !== null && (JSON.parse(r.before) as { state: string }).state === 'done');
+    expect(afterStop.length, 'the scenario has an agent_id tool event after the parent\'s Stop').toBeGreaterThanOrEqual(1);
+    for (const r of rows) {
+      expect(r.joined).toBe(false);
+      expect(JSON.parse(r.after as string), `seq ${r.seq}: an unjoined id leaves the parent's turn working`).toMatchObject({ state: 'working' });
+    }
+    for (const r of afterStop) {
+      expect(JSON.parse(r.after as string), `seq ${r.seq}: an unjoined id's tool event after Stop stamps the parent's turn`)
+        .toMatchObject({ state: 'working', event: expect.stringMatching(/ToolUse$/) });
+    }
+  });
+
+  const AGENT_CASES = CASES.filter(([, scenario]) => scenario.startsWith('agent-'));
+  it.each(AGENT_CASES)('%s %s, agent-input-keys-are-the-callers: with `subagent_type` removed from every Agent launch the joined subagent is still a subagent', (version, scenario) => {
+    const rows = replay(withoutSubagentType(load(version, scenario)));
+    expect(rows.length).toBeGreaterThanOrEqual(2);
+    for (const r of rows) {
+      expect(r.joined, `seq ${r.seq}`).toBe(true);
+      expect(r.after, `seq ${r.seq}: the subagent's tool event left the marker as it found it`).toBe(r.before);
+    }
+  });
+
+  it.each(AGENT_CASES)('%s %s, agent-input-keys-are-the-callers: with `subagent_type` removed and the Starts taken out, the bare id is still the main thread', (version, scenario) => {
+    const rows = replay(withoutStarts(withoutSubagentType(load(version, scenario))));
+    const afterStop = rows.filter((r) => r.before !== null && (JSON.parse(r.before) as { state: string }).state === 'done');
+    expect(afterStop.length).toBeGreaterThanOrEqual(1);
+    for (const r of afterStop) {
+      expect(JSON.parse(r.after as string), `seq ${r.seq}`).toMatchObject({ state: 'working', event: expect.stringMatching(/ToolUse$/) });
+    }
+  });
+
+  it('post-turn-subagentstop-is-unpaired: the captured unpaired SubagentStop (empty agent_type, no Start), after the parent\'s Stop, admits nothing: its id is still the main thread', () => {
+    for (const version of ['2.1.280', '2.1.292']) {
+      const stray = (JSON.parse(fs.readFileSync(path.join(FIXTURES, version, 'clear-compact-resume.json'), 'utf8')) as { events: Captured[] })
+        .events.find((e) => e.event === 'SubagentStop')!;
+      expect(stray.payload.agent_type, `${version}: fixture is the unpaired kind`).toBe('');
+      const tool = load(version, 'agent-plain').find((e) => e.event === 'PreToolUse' && e.payload.agent_id)!;
+      runFull({ hook_event_name: 'UserPromptSubmit' });
+      runFull({ hook_event_name: 'Stop' });
+      runFull(stray.payload, { CLAUDE_CODE_SESSION_ID: stray.envSid });
+      const done = marker();
+      expect(JSON.parse(done as string).state).toBe('done');
+      runFull({ ...tool.payload, agent_id: stray.payload.agent_id }, { CLAUDE_CODE_SESSION_ID: stray.envSid });
+      expect(JSON.parse(marker() as string), `${version}: a tool event under the unpaired id`).toMatchObject({ state: 'working', event: 'PreToolUse' });
+      fs.rmSync(markerFile());
+      fs.rmSync(stateFile());
+    }
+  });
+});
+
+// ── The delegation spool beside the hook's other writers (delegation broker wave 3, Task 5) ──
+//
+// `delegation-spool.test.ts` owns the line grammar, the caps and the prune. This describe owns what the append must NOT
+// disturb in the hook around it: the compact SessionStart still exits before the hookstate, the turn marker and the capture arm
+// (its early `exit 0` became a flag that the same tail honours, so the spool line can be written first); a SessionEnd is still
+// inert; and the line does not wait on the hookstate write that follows it.
+describe('the delegation spool leaves the hook\'s other writers alone', () => {
+  const SPOOL = (): string => path.join(home, '.cc-sessions', 'delegation', 'spool', 'demo-quiet-basin');
+  const turnFile = (): string => path.join(home, '.cc-sessions', 'demo-quiet-basin.turn.json');
+  const spoolLines = (): any[] => (fs.existsSync(SPOOL()) ? fs.readdirSync(SPOOL()).filter((f) => f.endsWith('.spool')).flatMap((f) =>
+    fs.readFileSync(path.join(SPOOL(), f), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))) : []);
+  const SID = '6350faa0-a1be-4e78-939c-57485268f6fc';
+  beforeEach(() => { fs.mkdirSync(SPOOL(), { recursive: true }); });
+
+  it('compact SessionStart: one spool line, and still no hookstate, no turn marker, and an untouched marker already on disk', () => {
+    run({ hook_event_name: 'UserPromptSubmit' });                       // a turn is open: marker working, hookstate working
+    const marker = fs.readFileSync(turnFile(), 'utf8');
+    const state = fs.readFileSync(stateFile(), 'utf8');
+    runFull({ hook_event_name: 'SessionStart', source: 'compact', session_id: SID, transcript_path: '/rig/t.jsonl', cwd: home });
+    expect(spoolLines().map((l) => [l.eventKind, l.source])).toEqual([['SessionStart', 'compact']]);
+    expect(fs.readFileSync(turnFile(), 'utf8'), 'compact leaves whatever PreCompact wrote standing (D-306)').toBe(marker);
+    expect(fs.readFileSync(stateFile(), 'utf8')).toBe(state);
+  });
+
+  it('compact SessionStart on a -hookcap session is still not captured (it never reached the capture arm), while a startup is', () => {
+    fs.writeFileSync(path.join(home, 'bin', 'tmux'), '#!/bin/sh\necho "cc-demo-hookcap"\n', { mode: 0o755 });
+    fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-hookcap.generation'), GENERATION);
+    const cap = path.join(home, '.ccrc', 'hook-capture', 'demo-hookcap');
+    runFull({ hook_event_name: 'SessionStart', source: 'compact', session_id: SID, cwd: home });
+    expect(fs.existsSync(cap) ? fs.readdirSync(cap) : [], 'no capture for compact').toEqual([]);
+    runFull({ hook_event_name: 'SessionStart', source: 'startup', session_id: SID, cwd: home });
+    expect(fs.readdirSync(cap).filter((f) => f.startsWith('SessionStart-')), 'a startup is captured as before').toHaveLength(1);
+  });
+
+  it('compact SessionStart writes no history-spool line (its arm excludes compact) though the delegation spool takes one', () => {
+    const hist = path.join(home, '.ccrc', 'history', 'spool');
+    fs.mkdirSync(hist, { recursive: true });
+    const sid = '7d0c3f5e-1a2b-4c3d-8e9f-0a1b2c3d4e5f';
+    runFull({ hook_event_name: 'SessionStart', source: 'compact', session_id: sid, cwd: home });
+    expect(fs.existsSync(path.join(hist, 'demo-quiet-basin.jsonl'))).toBe(false);
+    expect(spoolLines()).toHaveLength(1);
+    runFull({ hook_event_name: 'SessionStart', source: 'startup', session_id: sid, cwd: home });
+    expect(fs.existsSync(path.join(hist, 'demo-quiet-basin.jsonl')), 'control: a startup does write the history line').toBe(true);
+  });
+
+  it('SessionEnd: a spool line, and no hookstate and no turn marker (it stays a termination hint)', () => {
+    runFull({ hook_event_name: 'SessionEnd', session_id: SID, reason: 'prompt_input_exit' });
+    expect(spoolLines().map((l) => [l.eventKind, l.reason])).toEqual([['SessionEnd', 'prompt_input_exit']]);
+    expect(fs.existsSync(stateFile())).toBe(false);
+    expect(fs.existsSync(turnFile())).toBe(false);
+  });
+
+  it('the line does not wait on the hookstate write: with the hookstate path unwritable the delegation line is still in', () => {
+    fs.mkdirSync(stateFile());                                          // a directory where the file belongs: the rename fails
+    runFull({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'true' }, tool_use_id: 'toolu_01', session_id: SID, tool_response: { stdout: '' } });
+    expect(spoolLines().map((l) => l.eventKind)).toEqual(['PostToolUse']);
+  });
+
+  it('a Stop and a StopFailure add no line and change nothing they changed before', () => {
+    runFull({ hook_event_name: 'UserPromptSubmit', session_id: SID });
+    runFull({ hook_event_name: 'Stop', session_id: SID });
+    expect(readState().state).toBe('done');
+    runFull({ hook_event_name: 'StopFailure', session_id: SID, error: 'server_error' });
+    expect(spoolLines()).toEqual([]);
+  });
+
+  // THE PRODUCTION CONFIGURATION'S COST (review of Task 5, Important 2). The p95 pin in 'the fleet gate and failure polarity' runs with NO
+  // spool directory and a payload with no `session_id` or `tool_use_id`, so the spool's jq text is never compiled there. Once ccd has
+  // made the directory (every session, at its next spawn) every Bash, Agent, Task, Workflow and session event compiles it: about
+  // 11 ms of jq CPU on top of the parse. This row is that pin's twin for the configuration the fleet will actually run, with the same
+  // 150 ms allowance, and it asserts the line was written so it cannot pass by never reaching the spool. It is its own `it` (the
+  // existing pin's lines are not edited); the helpers it needs are this file's module-level `run` and the describe's `spoolLines`.
+  it('p95 of 20 realistic Bash PostToolUse runs with the spool directory and generation present stays under the same 150 ms budget, and every run wrote its line', () => {
+    const times: number[] = [];
+    for (let i = 0; i < 20; i++) {
+      const payload = {
+        session_id: SID, transcript_path: `/rig/fixhome/cfg/projects/-rig-repo/${SID}.jsonl`, cwd: '/rig/repo', prompt_id: 'd9a6fd11-6f0f-41f3-8c1b-0932efbc04a6',
+        permission_mode: 'default', effort: { level: 'medium' }, hook_event_name: 'PostToolUse', tool_name: 'Bash',
+        tool_input: { command: 'git status --short', description: 'show the working tree state' },
+        tool_response: { stdout: ' M ccd/session-hook.sh\n', stderr: '', interrupted: false, isImage: false, noOutputExpected: false },
+        tool_use_id: `toolu_01Pin${String(i).padStart(2, '0')}AAAAAAAAAAAAAAAA`, duration_ms: 41,
+      };
+      const t0 = Date.now();
+      run(payload);
+      times.push(Date.now() - t0);
+    }
+    const lines = spoolLines();
+    expect(lines.map((l) => `${l.eventKind}:${l.toolName}`), 'every run reached the spool and wrote its line').toEqual(Array(20).fill('PostToolUse:Bash'));
+    expect(new Set(lines.map((l) => l.toolUseId)).size).toBe(20);
+    times.sort((a, b) => a - b);
+    expect(times[Math.floor(times.length * 0.95) - 1]).toBeLessThan(150);
+  }, 60000);
+});
+
 // ── The tmux question's BOUND (slice-0 carry) ──────────────────────────────
 //
-// `tmux display-message -p '#S'` talks to the tmux SERVER over its socket, and
+// `tmux display-message -p -t "$TMUX_PANE" '#S'` talks to the tmux SERVER over its socket, and
 // a wedged server (SIGSTOP, a swapping box) answers nothing and never returns.
 // Unbounded, that hangs the HOOK — which runs on the hot path of every tool
 // call in every live session on the box, not once per render in one pane the
@@ -10362,7 +10746,7 @@ describe('the tmux session-name read is bounded', () => {
   });
 
   it('a tmux that never answers costs the hook the bound, not the turn', () => {
-    // Mutation: drop the bound (`tname=$(tmux display-message -p '#S' …)`) and
+    // Mutation: drop the bound (`tname=$(tmux display-message -p -t "$TMUX_PANE" '#S' …)`) and
     // this waits the stub's full 30 s instead of ~2.
     fs.writeFileSync(path.join(home, 'bin', 'tmux'), '#!/bin/sh\nsleep 30\n', { mode: 0o755 });
     const t0 = Date.now();
@@ -11387,6 +11771,54 @@ describe('ccrc history: the recall CLI is not search-gated (spec 2026-10-05 §8.
     }
     expect(readState().graphGateDenials, 'a recall call was counted as a denial').toBe(1);
   });
+});
+
+describe('the hot-path budget through the shell prefix (D-5241)', () => {
+  // AT THE END OF THIS FILE, not beside the PostToolUse pin it mirrors: this file's lines are cited
+  // by number (the citation census above), and an insertion above them moves that census.
+  // D-5241: on Linux every hook command runs through `CLAUDE_CODE_SHELL_PREFIX`
+  // (`ccd-tool-adj`), as ONE string (plan Task 13 step 7), so the same budget
+  // holds with the prefix in front. The hook is not a Bash tool snippet, so the
+  // prefix runs it unchanged (no score raise); what it adds is its own start
+  // and one `bash -c`. Measured 2026-10-17 on a workstation (macOS), 20 runs
+  // each, the two tests in one run: this PostToolUse hook 56 ms a run bare, 58
+  // ms through the prefix (a bare `bash -c true` 6.1 ms p50, 17.9 ms through it).
+  it('p95 of 20 runs through the ccd-tool-adj prefix stays under the same budget (D-5241)', () => {
+    const prefix = path.resolve(__dirname, '../../ccd/ccd-tool-adj');
+    const times: number[] = [];
+    for (let i = 0; i < 20; i++) {
+      const t0 = Date.now();
+      execFileSync(prefix, [`bash ${sh(HOOK)}`], {
+        input: JSON.stringify({ hook_event_name: 'PostToolUse', tool_name: 'Bash' }),
+        encoding: 'utf8', env: hookEnv(),
+      });
+      times.push(Date.now() - t0);
+    }
+    times.sort((a, b) => a - b);
+    expect(times[Math.floor(times.length * 0.95) - 1]).toBeLessThan(150);
+  }, 30000);
+});
+
+// The hot-path budget for an agent payload (D-5232). APPENDED at the very end, so no line a citation anchors moves.
+describe('the PostToolUse budget holds for agent payloads (D-5232)', () => {
+  // D-5232 (plan 2026-10-16 Task 2): the same budget for an AGENT PostToolUse behind the server's word
+  // `hook-main-state-v1`, which reads `~/.ccrc/server-caps` with builtins and takes the one fresh read to carry the
+  // main state. The file to carry is a Stop's `done`, written first.
+  it('p95 of 20 agent PostToolUse runs behind hook-main-state-v1 stays under the same 150 ms budget (D-5232)', () => {
+    fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.ccrc', 'server-caps'),
+      `at ${Math.floor(Date.now() / 1000)}\ncaps dispatch-live-gate-v1 hook-main-state-v1\nend\n`);
+    run({ hook_event_name: 'Stop', background_tasks: [] });
+    const times: number[] = [];
+    for (let i = 0; i < 20; i++) {
+      const t0 = Date.now();
+      run({ hook_event_name: 'PostToolUse', tool_name: 'Bash', agent_id: 'a0000000000000001', agent_type: 'general-purpose' });
+      times.push(Date.now() - t0);
+    }
+    expect(readState().state, 'the carry ran: the Stop\'s done stands').toBe('done');
+    times.sort((a, b) => a - b);
+    expect(times[Math.floor(times.length * 0.95) - 1]).toBeLessThan(150);
+  }, 30000);
 });
 // ── ccrc history: the PreCompact scope marker (history spec 2026-10-05 §5.1, §5.5 S16; W1-B3 task 8) ──
 // APPENDED, with NO new import line: the citation census cites this file by line.

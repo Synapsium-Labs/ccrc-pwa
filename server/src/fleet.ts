@@ -10,7 +10,7 @@ import type { HookState } from './hookstate.js';
 import type { FleetSession, LifecycleInput, PrState, SessionStatus, SessionUsage, TaskProgress } from '../../shared/api.js';
 // The ladder lives in `shared/` because `reviveFleetSession` is its second
 // producer and the two must not be able to disagree — see its own docstring.
-import { sessionBucket, sessionLifecycle, spawnVerdict } from '../../shared/api.js';
+import { sessionBucket, sessionLifecycle, sessionRoleOf, spawnVerdict } from '../../shared/api.js';
 import type { Roster } from '../../shared/roster.js';
 // Task 19: the chip's own read. No cycle — `coord/store.ts` imports nothing
 // from this file, the same pairing `watch.ts` already has with both.
@@ -25,10 +25,13 @@ import { foldLastRuns, releasedFrom, type ReleasedLookup } from './coord/release
 // F2(b): the `held` chip's ceiling, DERIVED from the lane's own two
 // windows. It lives in `askwindow.ts` because `watch.ts` (their first
 // reader) imports this module, so the constants could not stay there.
-import { ASK_HELD_CHIP_MAX_MS } from './askwindow.js';
+import { ASK_HELD_CHIP_MAX_MS, askNotifyAt } from './askwindow.js';
 
-/** `FleetSession.askSummary`'s ceiling — a fleet card row, not a transcript. */
-const ASK_SUMMARY_MAX_LEN = 80;
+/** `FleetSession.askSummary`'s ceiling — a fleet card row, not a transcript; an ask push's too (D-5356). */
+export const ASK_SUMMARY_MAX_LEN = 80;
+/** D-5231, D-5272: the hook events whose `done` can hold the delegated pair —
+ *  the main `Stop` that writes it, and the two subagent events that carry it. */
+const BACKGROUND_CARRIER_EVENTS: ReadonlySet<string> = new Set(['Stop', 'SubagentStart', 'SubagentStop']);
 
 /**
  * The fleet card's one-line summary of a `waiting` hook state.
@@ -152,6 +155,28 @@ function fleetAsk(row: AskRow | null, nowMs: number): FleetSession['ask'] {
     return { state: 'answered', parentId: row.parentId, answeredBy: row.answeredBy };
   }
   return null;
+}
+
+/**
+ * `with-coordinator-state` (D-5296): `FleetSession.withCoordinator` from the
+ * session's NEWEST asks row (`currentAsksFor`, the same batched read
+ * `fleetAsk` takes). Set only while that row is `held` or `answering` (a
+ * principal is mid-answer) AND the assembly's clock is strictly before
+ * `notifyAt`; `released`, `declined`, `answered`, `stale` and `unknown` all
+ * give null, so a hand-over, the parent's own release, an answer and a gone
+ * dialog each return the row to the ladder's attention rung on the next
+ * assembly. `notifyAt` is `askNotifyAt(row.at)`, the mint time, NEVER
+ * `row.askAt` (hookstate's `updatedAt`, the instance guard): the sweep counts
+ * the window from the mint, so the fleet clears the state at the moment the
+ * operator's push fires (D-5364). Plan Task 16 adds the approvals source
+ * here, through this one function.
+ */
+function fleetWithCoordinator(row: AskRow | null, nowMs: number): FleetSession['withCoordinator'] {
+  if (row === null) return null;
+  if (row.state !== 'held' && row.state !== 'answering') return null;
+  const notifyAt = askNotifyAt(row.at);
+  if (nowMs >= notifyAt) return null;
+  return { kind: 'question', parentId: row.parentId, since: row.at, notifyAt };
 }
 
 /**
@@ -314,12 +339,12 @@ export function idHomeWrapper(roster: Roster, id: string): string {
 
 /**
  * Authoritative live status for one session — the same signal the fleet uses:
- * dead if no tmux session, else busy/idle from the live status file. Used by
- * the interrupt route: a --remote-control pane never renders the busy marker
- * at all, and an RC-off pane does render it, but the same pane can ALSO be
- * showing a dialog painted right alongside it — either way busy-ness has to
- * come from the live status file, which also sees subagents the pane never
- * shows.
+ * dead if no tmux session, else busy/idle from the live status file. No route reads it since D-5236
+ * (the interrupt route takes the RAW word, `turnverdict.ts`'s `liveWordFor`); its D-115 pins stay.
+ * Why the file: a --remote-control pane never renders the busy marker at all, and an RC-off pane
+ * does render it, but the same pane can ALSO be showing a dialog painted right alongside it —
+ * either way busy-ness has to come from the live status file, which also sees subagents the pane
+ * never shows.
  */
 export async function liveStatus(io: FleetIO, cfg: CcrcConfig, tmux: Tmux, id: string): Promise<SessionStatus> {
   // C0.3: this only ever asks about ONE id — no uniqueness or subtraction
@@ -352,9 +377,9 @@ export async function liveStatus(io: FleetIO, cfg: CcrcConfig, tmux: Tmux, id: s
   // `assembleFleet` below takes `readLiveStateMeasured` and paints an
   // unreadable live file `busy`; this function must keep answering `'idle'`
   // for it, and the two are not drift. A card DISPLAYS, so its reassuring
-  // word is the dangerous one; this function's sole consumer is
-  // `POST /api/sessions/:id/interrupt`'s `… === 'busy'` check, which REFUSES
-  // on anything else — so here `'idle'` is what withholds the keystroke, and
+  // word is the dangerous one; this function's consumer was the interrupt
+  // route's `… === 'busy'` check (D-5236 keeps the same answer in `interruptVerdict`),
+  // which REFUSES on anything else — so `'idle'` is what withholds the keystroke, and
   // "fail toward busy" would GRANT an interrupt on a read that measured
   // nothing, inverting D-115's own intent one line from its remedy. Same
   // direction the `!cfgDir` fallback above already argues for, on the same
@@ -435,7 +460,7 @@ export async function assembleFleet(
   cfg: CcrcConfig,
   tmux: Tmux,
   now = Math.floor(Date.now() / 1000),
-  pendingDialogs?: Set<string>,
+  pendingDialogs?: ReadonlySet<string>,
   statuslines?: Map<string, Statusline>,
   taskProgress?: Map<string, TaskProgress>,
   /** Last-swept PR state per session id (FleetWatcher's third lane). Absent on
@@ -547,7 +572,18 @@ export async function assembleFleet(
       const pid = await tmux.panePid(r.id);
       panePids?.set(r.id, pid);
       const cfgDir = configDirFor(cfg, r.wrapper);
-      if (pid && cfgDir) {
+      if (pid === null) {
+        // D-5234: the pane is alive and its pid read FAILED (`list-panes`
+        // answered non-zero or nothing parseable — a loaded tmux server, a
+        // dropped round trip). That measured nothing about the session, so
+        // it takes the unreadable-live-file arm's shape below (D-115): `busy`
+        // on this display surface, declared unmeasured so `watch.ts` keeps
+        // the row's previous status instead of spending an edge — an overload
+        // tick that failed six busy rows' reads used to push six "Finished".
+        // The interrupt route's verdict answers `not-busy` here (D-5236).
+        status = 'busy';
+        statusUnmeasured = true;
+      } else if (cfgDir) {
         // D-115: `readLiveStateMeasured`, not `readLiveState`. The folded read
         // answered ONE null for four conditions, and this block spent it as
         // "leave `status` at the `alive` default" — which is `'idle'`. So a
@@ -583,8 +619,8 @@ export async function assembleFleet(
           // surface's: a card is read as permission to walk away, so the
           // reassuring word is the dangerous one here. `liveStatus` two
           // functions up answers `'idle'` on this identical failure ON
-          // PURPOSE — its sole consumer is the interrupt route's
-          // `… === 'busy'`, which REFUSES on idle, so "fail toward busy"
+          // PURPOSE, as the interrupt route's verdict does (D-5236): it
+          // REFUSES on an unread word, so "fail toward busy"
           // there would GRANT interrupts on a read that measured nothing.
           // Both are failing away from the act that cannot be taken back;
           // `fleet.test.ts` pins the pair together on ONE fixture so the
@@ -596,8 +632,8 @@ export async function assembleFleet(
           // them is the same defect one field over — `statusUpdatedAt` in
           // particular renders as the `· 1m ago` beside the word, so a
           // fabricated one would put a fresh timestamp under a status nobody
-          // measured. `no-state` — absent, half-written, or naming no session
-          // — is untouched and still leaves the whole block at `idle`: that
+          // measured. `no-state` — absent, or a well-formed record naming no
+          // session (a torn body is unmeasured since D-5234) — is untouched and still leaves the whole block at `idle`: that
           // is a real measurement of a pane that has published nothing yet,
           // the ordinary shape in the seconds after `ccd ws-add`.
           status = 'busy';
@@ -734,7 +770,25 @@ export async function assembleFleet(
       // coord.db degrades every row to null rather than throwing out of
       // `assembleFleet`, which neither caller wraps.
       ask: fleetAsk(asksByChild.get(r.id) ?? null, nowMs),
+      // D-5296: the quiet "with coordinator" state, from the same row.
+      withCoordinator: fleetWithCoordinator(asksByChild.get(r.id) ?? null, nowMs),
       subagents: hs?.subagents ?? null,
+      // `background-aware-working` (D-5231): the delegated work a main Stop
+      // left running, and ONLY when the live file's own word covers that work
+      // (2.1.277 on, `liveCoversWorkflows`) — below that floor D-75 answers as
+      // before — and only while the hook state is that Stop's `done` with a
+      // count above zero. Null everywhere else, which is the ladder's old answer.
+      // A subagent event after that Stop carries the pair but, until D-5232's
+      // gated arm keeps the main event, rewrites `event`: so the `done` may
+      // read `SubagentStart`/`SubagentStop`, the two events that carry it
+      // (`BACKGROUND_CARRIER_EVENTS`, D-5272); no other event writes the pair.
+      background: liveCoversWorkflows && hs !== null && hs.state === 'done'
+        && hs.event !== null && BACKGROUND_CARRIER_EVENTS.has(hs.event)
+        && hs.background !== undefined && hs.background.count > 0
+        ? hs.background : null,
+      // D-5237: the registry's record of the last process end, carried as is;
+      // the PWA shows it for an hour (`recentLastEnd`).
+      lastEnd: r.lastEnd,
       // `?? null` and not `?? 0`: no hook data at all and a hook reporting
       // zero reads are two conditions, and `hookstate.ts` already keeps them
       // apart — collapsing them one layer out would undo that on the wire.
@@ -817,6 +871,10 @@ export async function assembleFleet(
       // three-way reading of `$REG/<id>.child` (`SessionRecord.child`). A
       // display value on this wire — the bind gate re-reads the registry.
       child: r.child,
+      // D-5301: the role, from `.child` and nothing else — `sessionRoleOf`,
+      // the one derivation, so the badge and the start card agree on the
+      // `.child` axis only (the card is also silent for a held row; see there).
+      role: sessionRoleOf(r.child),
       // Workspace lifecycle §5.1. `child` here is the registry's reading, `unreadable` counted as a child.
       releasedFrom: released.ok
         ? releasedFrom({
