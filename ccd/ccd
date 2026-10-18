@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=e575a7420e277ad095361347c2ce193ad64b6d232a1e1a08b530fdc4776c7627
+# ccrc:generated 1 sha256=8519afb9c467e1fa1e0c1b21a5228cb0ff5b9aa36e3467aec031df3baefa54d2
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -28117,9 +28117,9 @@ cmd_stop() {   # [--surface <word>] <id>  |  [--surface <word>] <wrapper> <proje
   # the stamp's word; `$declared` is empty unless a flag actually arrived, and
   # the journal keeps the two apart.
   _lc_done stop "$id" "" dec.surface "$(_lc_surface_norm "$declared")"
+  rm -f -- "$REG/$id.hibernated"   # a stop ENDS a hibernation (D-5242): an ordinary stopped row, which mail never wakes
   [[ -e "$REG/$id.choicekept" ]] || _operator_choice_keep "$id"   # `ccd start`/`enable` respawn from the record: the operator's own /model and /effort reach it first; a session already stopped and read is not read again (§5.7)
   _ws_unsupervise "$id" "$surface" "$declared"
-  rm -f -- "$REG/$id.hibernated"   # a stop ENDS a hibernation (D-5242): an ordinary stopped row, which mail never wakes
   tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || _operator_choice_unmark "$id"   # a kill that failed on a live session leaves no marker (§5.7)
   echo "stopped $id"
 }
