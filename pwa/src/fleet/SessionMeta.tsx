@@ -210,6 +210,12 @@ export function SessionMeta({
   const heldTitle = heldRun === null || session.held === null ? session.held
     : `${childOf?.title ?? runSentence(heldRun, childRun?.coordinator ?? null, false)} — hold: ${session.held}`;
   const heldBody = heldRun === null ? session.held : <ProgrammeWave run={heldRun} />;
+  // The row's programme-and-wave label, wherever it renders: its wave's width in
+  // mono characters is the cell's floor (fleet.css `--pw-wave`), so the cell gives
+  // up the programme on a narrow row and never the wave.
+  const labelRun = heldRun ?? (childOf?.data === 'child' ? activeRun : null);
+  const metaStyle = labelRun === null ? undefined
+    : ({ '--pw-wave': `${programmeWaveTail(labelRun).length}ch` } as CSSProperties);
 
   // Task 19: the ask pre-emption lane's chip. Through `sessionAsk`, never
   // `session.ask` directly — the live `fleet` frame is cast, not revived
@@ -364,7 +370,7 @@ export function SessionMeta({
   // to hold a track open (that was only ever a grid requirement, and this
   // is no longer a grid).
   return (
-        <span className="sess-meta">
+        <span className="sess-meta" style={metaStyle}>
           {wcWords !== null ? (
             <span className="sess-state sess-state--coordinator" title={wcWords.title}>
               {wcWords.text}

@@ -1362,7 +1362,7 @@ describe('the programme-and-wave label shrinks by its programme, never its wave 
     expect(declaredValues(css, '.sess-pw-prog', 'text-overflow')).toEqual(['ellipsis']);
     expect(declaredValues(css, '.sess-pw-prog', 'overflow')).toEqual(['hidden']);
   });
-  it('the cell that carries it can shrink below its text', () => {
-    expect(ruleFor('.sess-held:has(> .sess-pw)')).toMatch(/min-width:\s*0/);
+  it('the cell that carries it is never narrower than its wave', () => {
+    expect(ruleFor('.sess-held:has(> .sess-pw)')).toMatch(/min-width:\s*calc\(var\(--pw-wave/);
   });
 });

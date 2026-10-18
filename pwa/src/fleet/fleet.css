@@ -1270,22 +1270,41 @@
    in `.sess-child` or, when an active run explains the hold, in `.sess-held`'s
    place. The slug is variable-length, so the plain `.sess-child` text's
    `flex: none` (fixed hedges: "run not on the board", "child marker
-   unreadable") no longer holds for it: the cell shrinks, the PROGRAMME
-   ellipsises, and the wave — the fact the operator asked for — stays whole.
-   `display: flex` on the cell keeps `.sess-meta`'s middot `::before` on the
-   same line as the two halves. No colour here: the cell's own rule answers. */
+   unreadable") no longer holds for it: the PROGRAMME ellipsises and the wave —
+   the fact the operator asked for — stays whole. The cell's floor is the
+   middot plus the wave, in mono characters: `--pw-wave` is set on the row's
+   `.sess-meta` from the wave's own text (a flex item's min-content would be
+   the whole label, so the floor cannot come from layout). `display: flex` on
+   the cell keeps `.sess-meta`'s middot `::before` on the label's line. No
+   colour here: the cell's own rule answers. (Measured and rejected: a shrink
+   factor under 1 so the lane gives way first — a lone unfrozen item whose
+   factor sums under 1 takes only that fraction of the deficit, so the cell
+   never shrank and the row's clip ate the wave.) */
 .sess-held:has(> .sess-pw),
 .sess-child:has(> .sess-pw) {
   display: flex;
   flex: 0 1 auto;
-  min-width: 0;
+  min-width: calc(var(--pw-wave, 0ch) + 1ch + 2 * var(--sp-1));
   overflow: hidden;
+  font-family: var(--family-mono);
+}
+/* The context-pressure alarm never shrinks, and an alarm outranks the wave:
+   on a row that carries both and has no room, the floor stands down and the
+   wave clips (its words stay in the cell's title). */
+.sess-held:has(> .sess-pw):has(~ .sess-ctxpressure),
+.sess-child:has(> .sess-pw):has(~ .sess-ctxpressure) {
+  min-width: 0;
+}
+/* The lane gives way before the programme on a crowded phone row: the account
+   is a hue and a name repeated in the row's title, the programme is the row's
+   one statement of what it is doing. */
+.sess-meta:has(> * > .sess-pw) > .sess-acct {
+  flex-shrink: 20;
 }
 .sess-pw {
   display: flex;
   min-width: 0;
 }
-/* No `min-width: 0`: a flex item with `overflow: hidden` already shrinks to 0. */
 .sess-pw-prog {
   overflow: hidden;
   text-overflow: ellipsis;
