@@ -19,7 +19,7 @@ import {
   makeHistoryBox, runSweep, runShim, runDriver, skipOnDarwin, openStoreRO, counters, journalRecords, plantSession,
   plantTranscript, spoolLine, preloadOptions, PRELOADS, CLI, recoverRow, boundEmptyStore,
   runCli, withPane, seedFamily, journalDirOf, REPO, rewindStoreToV1, runOnPty, type HistoryBox, type SpawnOpts,
-  plantSegment, segmentSha, type PlantSegmentRow,
+  plantSegment, segmentSha, segmentsOf, type PlantSegmentRow,
 } from './historyHelpers.js';
 import { userRow, assistantRow, boundaryRow, summaryRow } from './historyFixtures.js';
 import { removeTmpFixturesEachTest, mkTmp } from './tmpHelpers.js';
@@ -4079,4 +4079,153 @@ describe('W1-B4 Task 10: export replay in the recovery step (spec §9.14 "Export
     expect(recoverRow(box)!.completed_ms).not.toBeNull();
     expect([countOf(box, 'entries'), countOf(box, 'memberships'), counters(box)['export_epoch_conflict']]).toEqual([4, 4, 1]);
   }, HEAVY);
+});
+
+// ── W1-B4 Task 11: O43, the export survives source loss (spec §9.11 O43, §9.14, §9.15) ─────────────────────────────
+// The whole path through the real sweep, the real CLI and the real rebuild. A family is captured in a real workdir
+// and compacted; its leaf derives; the export pass, run two hours on (past its hourly clock; the fixture homes carry
+// no cleanupPeriodDays, so the transcript's home has horizon 0 and, under the per-copy rule, every row is due from the
+// file's last write, two hours before the pass's clock), writes one segment. Then the transcript and
+// history.db are lost, and `doctor --rebuild` replays the journal and the export. Only the export holds the text, the
+// gone file's memberships and the epoch's launch cwd, so each read verb that answers proves the segment came back.
+describe('O43: the export survives source loss (W1-B4 Task 11)', () => {
+  const O43_ID = 'claude-a-export';
+  const O43_G = '0189abcd-1234-4678-9abc-0000000043a1';
+  const O43_U = 'b43b43b4-0000-4000-8000-000000000431';
+  const O43_HOUR = 3_600_000;
+  const O43_WORK = 'Polishing the export fixture.';
+  const O43_TEXT = `zqb4export ask about ${O43_WORK}`;
+
+  /** rrCompacted's transcript, launched in `cwd`: a user and an assistant row, a manual compaction's boundary, its
+   *  summary right after it, then one more row. Row uuids are rrU(base)…rrU(base + 4); one native leaf derives. */
+  function o43Compacted(sid: string, base: number, cwd: string): object[] {
+    const at = (k: number) => ({
+      uuid: rrU(base + k), ts: rrIso(10 - k), parentUuid: k === 0 ? null : rrU(base + k - 1), sessionId: sid, cwd,
+    });
+    const anchor = rrU(base + 3);
+    const summary = [
+      '<summary>',
+      '1. Primary Request and Intent:',
+      '   Keep the fixture repository healthy.',
+      '8. Current Work:',
+      `   ${O43_WORK}`,
+      '9. Optional Next Step:',
+      '   Run the suite again.',
+      '</summary>',
+    ].join('\n');
+    return [
+      userRow({ ...at(0), text: O43_TEXT }),
+      assistantRow({ ...at(1), text: 'zqb4export answer' }),
+      boundaryRow({ ...at(2), trigger: 'manual', headUuid: anchor, anchorUuid: anchor, tailUuid: anchor, allUuids: [] }),
+      summaryRow({ ...at(3), text: summary }),
+      userRow({ ...at(4), text: 'zqb4export after the compaction' }),
+    ];
+  }
+
+  interface O43Built { box: HistoryBox; transcript: string; workdir: string; leaf: string; segment: string; dev: bigint; ino: bigint }
+  /** A bound box whose store captured one compacted family launched in a real workdir, derived its leaf, and then
+   *  exported every row in one pass run two hours on. Nothing writes the transcript after it is planted, so its mtime,
+   *  the per-copy clock, is before every pass's. */
+  function o43Built(prefix: string): O43Built {
+    const box = makeHistoryBox(prefix, { role: 'fleet' });
+    const workdir = path.join(box.home, 'work', 'w');
+    fs.mkdirSync(workdir, { recursive: true });
+    plantSession(box, O43_ID, { uuid: O43_U, generation: O43_G, project: 'demo', workdir });
+    const transcript = plantTranscript(box, 'claude-a', SLUG, O43_U, o43Compacted(O43_U, 430, workdir));
+    spoolLine(box, O43_ID, rrStart(O43_ID, O43_U, 'startup', { reg: O43_U, gen: O43_G }));
+    rrTickUntil(box, () => countOf(box, 'entries') === 5 && rrLeafIds(box).length === 1, 10);
+    const leaf = rrLeafIds(box)[0]!;
+    const st = fs.statSync(transcript, { bigint: true });
+    const r = runDriver(box, { offsetMs: 2 * O43_HOUR });
+    expect(r.code, `${r.stdout}\n${r.stderr}`).toBe(0);
+    const segs = segmentsOf(box).map((s) => path.basename(s));
+    expect(segs, 'one segment, written past the export\'s hourly clock').toHaveLength(1);
+    expect(rrQ<{ n: number }>(box, 'SELECT count(*) AS n FROM entries WHERE exported_seg = ?', segs[0]!)[0]!.n, 'every row exported').toBe(5);
+    return { box, transcript, workdir, leaf, segment: segs[0]!, dev: st.dev, ino: st.ino };
+  }
+
+  const launch = (box: HistoryBox): unknown[] =>
+    rrQ(box, 'SELECT cc_session_uuid, cwd, cwd_real, started_ms, git_branch FROM epochs ORDER BY cc_session_uuid');
+
+  it('O43: exported, then the transcript and history.db lost: doctor --rebuild replays the segment, and expand, describe and --workspace answer from it; nothing is exported twice', async () => {
+    const b = o43Built('ccrc-hist-o43-');
+    const { box } = b;
+    const before = launch(box);
+    expect(before, 'CONTROL: the lost store knew the launch cwd').toEqual([expect.objectContaining({ cc_session_uuid: O43_U, cwd: b.workdir })]);
+    fs.rmSync(b.transcript);
+    rrLose(box, { binding: false, journal: false });
+    const r = await cliOnPty(box, ['doctor', '--rebuild']);
+    expect(r.code, r.out).toBe(0);
+    rrTickUntil(box, () => rrRecovered(box) && rrLeafIds(box).length === 1, 12);
+    expect(rrLeafIds(box), 'the leaf re-derives from the exported copy, with the lost store\'s id').toEqual([b.leaf]);
+    expect(launch(box), 'the epoch\'s launch facts came back from the segment alone').toEqual(before);
+    expect(rrQ(box, 'SELECT source_key, status FROM ingest_files ORDER BY file_id'), 'one dead-file row, and no live one')
+      .toEqual([{ source_key: exportedSourceKey(b.transcript, b.dev, b.ino), status: 'exported' }]);
+    expect(rrQ<{ n: number }>(box, 'SELECT count(*) AS n FROM entries WHERE exported_seg = ?', b.segment)[0]!.n, 'replayed rows are marked').toBe(5);
+    const pane = withPane(box, O43_ID);
+    const ex = runCli(box, ['expand', rrU(430)], { env: pane });
+    expect(ex.code, `${ex.stdout}\n${ex.stderr}`).toBe(0);
+    expect(ex.stdout).toContain(O43_TEXT);
+    const d = runCli(box, ['describe', b.leaf, '--json'], { env: pane });
+    expect(d.code, `${d.stdout}\n${d.stderr}`).toBe(0);
+    expect((d.json?.['items'] as Array<{ node_id: string }>)[0]!.node_id).toBe(b.leaf);
+    const w = runCli(box, ['tree', '--workspace', '--json'], { env: pane });
+    expect(w.code, `${w.stdout}\n${w.stderr}`).toBe(0);
+    expect((w.json?.['scope'] as { families: Array<{ ccrc_id: string }> }).families.map((f) => f.ccrc_id)).toEqual([O43_ID]);
+    // The replay marked every row, so a pass past the rebuilt store's own hourly clock finds nothing due, though the
+    // per-copy rule makes every row of the gone transcript due at once: marked rows are never candidates.
+    const again = runDriver(box, { offsetMs: 2 * O43_HOUR });
+    expect(again.code, `${again.stdout}\n${again.stderr}`).toBe(0);
+    expect(segmentsOf(box).map((s) => path.basename(s))).toEqual([b.segment]);
+  }, 2.5 * HEAVY);
+
+  it('O43, a reused inode: the gone file\'s exported memberships land on its exported: row, never on the live file that now has its inode, and ingesting that file moves nothing of them', async () => {
+    const b = o43Built('ccrc-hist-o43-inode-');
+    const { box } = b;
+    const B_ID = 'claude-a-inode';
+    const B_U = 'b43b43b4-0000-4000-8000-000000000432';
+    const B_G = '0189abcd-1234-4678-9abc-0000000043b1';
+    const aUuids = [0, 1, 2, 3, 4].map((k) => rrU(430 + k));
+    const bUuids = [rrU(440), rrU(441)];
+    // The reuse: A's file renamed onto B's canonical path keeps its inode, and rewriting it in place keeps it too.
+    const pB = path.join(path.dirname(b.transcript), `${B_U}.jsonl`);
+    fs.renameSync(b.transcript, pB);
+    fs.writeFileSync(pB, `${rrTalk(B_U, 440, 2).map((x) => JSON.stringify(x)).join('\n')}\n`);
+    expect(fs.statSync(pB, { bigint: true }).ino, 'CONTROL: B\'s file holds A\'s inode').toBe(b.ino);
+    rrLose(box, { binding: false, journal: false });
+    expect((await cliOnPty(box, ['doctor', '--rebuild'])).code).toBe(0);
+    plantSession(box, B_ID, { uuid: B_U, generation: B_G, project: 'demo' });
+    spoolLine(box, B_ID, rrStart(B_ID, B_U, 'startup', { reg: B_U, gen: B_G }));
+    const held = (fileId: number): string[] => rrQ<{ uuid: string }>(box,
+      'SELECT e.uuid AS uuid FROM memberships m JOIN entries e ON e.entry_id = m.entry_id WHERE m.file_id = ? ORDER BY m.line', fileId).map((x) => x.uuid);
+    const fileOf = (sourceKey: string): number | undefined => rrQ<{ file_id: number }>(box,
+      'SELECT file_id FROM ingest_files WHERE source_key = ? AND dev = ? AND ino = ?', sourceKey, Number(b.dev), Number(b.ino))[0]?.file_id;
+    rrTickUntil(box, () => rrRecovered(box) && fileOf('') !== undefined && held(fileOf('')!).length === 2, 12);
+    const dead = fileOf(exportedSourceKey(b.transcript, b.dev, b.ino));
+    const live = fileOf('')!;
+    expect(dead, 'A\'s dead-file row').toBeDefined();
+    expect(rrQ(box, 'SELECT status FROM ingest_files WHERE file_id = ?', dead!)).toEqual([{ status: 'exported' }]);
+    expect(held(dead!)).toEqual(aUuids);
+    expect(held(live)).toEqual(bUuids);
+    rrTickUntil(box, () => true, 1);   // one more tick over the live file
+    expect(held(dead!), 'nothing of A moved').toEqual(aUuids);
+    expect(held(live)).toEqual(bUuids);
+    expect(counters(box)['inode_recycled'] ?? 0, 'the dead row is never taken for the live file').toBe(0);
+  }, 2.5 * HEAVY);
+
+  it('review focus: the same rebuild with the live transcript KEPT: expand prints each row once, the leaf keeps its id, and the replayed marks survive the re-ingest', async () => {
+    const b = o43Built('ccrc-hist-o43-kept-');
+    const { box } = b;
+    rrLose(box, { binding: false, journal: false });
+    expect((await cliOnPty(box, ['doctor', '--rebuild'])).code).toBe(0);
+    rrTickUntil(box, () => rrRecovered(box) && rrLeafIds(box).length === 1
+      && rrQ<{ n: number }>(box, "SELECT count(*) AS n FROM ingest_files WHERE source_key = '' AND eof_ms IS NOT NULL")[0]!.n === 1, 12);
+    expect(rrLeafIds(box)).toEqual([b.leaf]);
+    expect(countOf(box, 'entries'), 'one row per uuid, whichever copy brought it').toBe(5);
+    const ex = runCli(box, ['expand', b.leaf], { env: withPane(box, O43_ID) });
+    expect(ex.code, `${ex.stdout}\n${ex.stderr}`).toBe(0);
+    expect(ex.stdout.split(O43_TEXT).length - 1, 'each row once').toBe(1);
+    expect(rrQ<{ n: number }>(box, 'SELECT count(*) AS n FROM entries WHERE exported_seg = ?', b.segment)[0]!.n,
+      'the re-ingest left the replayed marks, so nothing is exported twice').toBe(5);
+  }, 2.5 * HEAVY);
 });
