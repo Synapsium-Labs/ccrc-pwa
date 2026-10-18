@@ -578,6 +578,7 @@ In `_bak_prune`'s loop, `d="${BAK_DIRS[$i]}"; name="${d##*/}"` and the five `[ â
 
 - [x] **Step 4: mutation rows** *(prototype, by `e1.sh`)*: delete the `BAK_KEEP_DATA` clause: E2 RED; delete the floor clause: E2 RED; delete the own-dir clause: E2 RED; replace the floor guard by `floor=0`: E2 RED. With the helper in place one deletion reds BOTH pruners' rows at once, which the two copies could not.
   - As built: `e1.sh` with each mutation applied to `_bak_removable` (restored from a saved copy, `cmp` clean after each): delete the `BAK_KEEP_DATA` clause: E2 RED; delete the floor clause: E2 RED; delete the own-dir clause: E2 RED; `floor=0`: E2 RED (E1 and E3 stay GREEN each time). Suite form, with the `BAK_KEEP_DATA` clause deleted: five rows red at once, in both pruners (`ccrc backup`'s three data-keep rows, the `ccrc update` legacy row, P4's flip rollback, and the differential case); restored, `cmp` clean.
+  - As built (fix round 1): E2/E3 as a behavioural case (`_bak_removable answers removable for exactly the unprotected names, â€¦`, through `sourcedCcrc`, own dir 20250109 below the floor 20250110, keeps 20250102/03/04; removable exactly `20250101 20250105`; floor `garbage` removes nothing), beside the E1 case. Measured in the suite, each restored with `cmp` clean: delete the own-dir clause RED; delete the floor clause RED; delete the `BAK_KEEP_DATA` clause RED; `floor=0` RED (nothing removable, `[ '' ]`); unmutated GREEN.
 
 ### Task 7: a link is never a backup (R10i; W17-f; D-5319)
 

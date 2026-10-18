@@ -13090,6 +13090,25 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
       expect(src.split('[ "$d" = "$BAK_KEEP_').length - 1, 'the three keep clauses are spelled once, in _bak_removable').toBe(3);
       expect(body('_bak_removable'), 'the helper fails closed on an unparsable floor').toMatch(/\[\[ "\$UPD_BAK_FLOOR" =~ \^\[0-9\]\{8\}-\[0-9\]\{6\}\$ \]\] \|\| return 1/);
     });
+
+    // E2/E3 (R14(a), D-5318): the helper's ANSWERS, not its spelling. The own dir (20250109) sits BELOW the floor, so the own-dir
+    // clause alone keeps it; 20250110 and 20250111 are kept by the floor clause alone; each keep by its own clause.
+    it('_bak_removable answers removable for exactly the unprotected names, and nothing at all on an unparsable floor (E2, E3; D-5318)', () => {
+      const home = freshUpdateBox('ccrc-fx-e2-removable-');
+      const names = ['20250101', '20250102', '20250103', '20250104', '20250105', '20250109', '20250110', '20250111'];
+      const row = (floor: string): string => [
+        'R="$HOME/ccrc-backups"',
+        `UPD_BAK_FLOOR='${floor}'; UPD_BACKUP_DIR="$R/20250109-000000"`,
+        'BAK_KEEP_SNAP="$R/20250102-000000"; BAK_KEEP_DATA="$R/20250103-000000"; BAK_KEEP_TREE="$R/20250104-000000"',
+        `for n in ${names.join(' ')}; do _bak_removable "$R/$n-000000" && printf '%s ' "$n"; done; echo`,
+      ].join('\n');
+      const e2 = sourcedCcrc(home, row('20250110-000000'));
+      expect(e2.code, `stderr: ${e2.stderr}`).toBe(0);
+      expect(e2.stdout.trim().split(/\s+/), 'removable: neither own, at or after the floor, nor any of the three keeps').toEqual(['20250101', '20250105']);
+      const e3 = sourcedCcrc(home, row('garbage'));
+      expect(e3.code, `stderr: ${e3.stderr}`).toBe(0);
+      expect(e3.stdout.trim(), 'an unparsable floor keeps everything').toBe('');
+    });
   });
 
   // fix round 1 item 9 (review 196 F10), REVERSED by wave 17 (R10i, D-5319): a timestamp-named SYMLINK is NOT a timestamped
@@ -13155,6 +13174,7 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
     const targetBefore = treeDigest(target);
     const r = pruneSourced(home);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout, 'the prune ran: a skipped prune would leave every dir and prove nothing').not.toMatch(/prune skipped/);
     expect(existsSync(real) && !isLink(real), 'the real backup is the newest-1 by the one rule: a link is not counted').toBe(true);
     expect(isLink(link), 'the link is not a backup: it stays').toBe(true);
     expect(treeDigest(target), 'its target is untouched').toEqual(targetBefore);
@@ -13176,6 +13196,7 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
     const targetBefore = treeDigest(target);
     const r = pruneSourced(home);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout, 'the prune ran: a skipped prune would leave every dir and prove nothing').not.toMatch(/prune skipped/);
     expect(existsSync(tree), 'the real tree backup is the newest earlier tree backup: a link\'s target is never the tree keep').toBe(true);
     expect(existsSync(plain), 'the newest real dir holds the one newest-N slot').toBe(true);
     expect(isLink(link), 'the link stays').toBe(true);
@@ -13657,6 +13678,7 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       plant(viaUpdate);
       const u = runUpdate(viaUpdate, [], { CCRC_BACKUP_KEEP: '0' });
       expect(u.code, `stderr: ${u.stderr}\nstdout: ${u.stdout}`).toBe(0);
+      expect(existsSync(announcedBackupDir(u.stdout, viaUpdate)), 'the update\'s own backup dir is kept, as the backup\'s is').toBe(true);
       expect(left(viaBackup), 'ccrc backup keeps the three keeps and the floor').toEqual(['20250102-000000', '20250103-000000', '20250104-000000', '29991231-000000']);
       expect(left(viaUpdate), 'an update\'s _bak_gc leaves the same set').toEqual(left(viaBackup));
     });

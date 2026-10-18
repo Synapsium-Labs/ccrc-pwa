@@ -22458,7 +22458,8 @@ _bak_snap_class() {
 # rollback never get here. It NEVER DIES and never writes update.json: a `_ccrc_die` here would turn a completed
 # update into a `failed` report. rc 0 done or nothing to do; rc 1 skipped or a removal failed; every caller writes
 # `|| :`. It keeps the newest $CCRC_BACKUP_KEEP timestamped dirs of any origin (the ONE bounded validator,
-# `_keep_ok`, D-3423; counted as `ccrc backup` and deploy.sh count them (neither counts a link, D-5319); read from the process env only), and four
+# `_keep_ok`, D-3423; counted as `ccrc backup` and deploy.sh count them (neither counts a link, D-5319);
+# read from the process env only), and four
 # more that can only LEAVE the removal set: this run's own backup by its exact path; every dir named at or after
 # this run's lock second (UPD_BAK_FLOOR) — both D-3593; and, among the dirs neither of those protects, the newest tree backup (D-3594; a
 # `server-dist` or `agent-dist` entry: another run's, a deploy's, or the previous update's) and the newest VALID coordination
