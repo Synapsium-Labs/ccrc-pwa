@@ -105,7 +105,7 @@ export const PALETTE_ACTIVE =
 
 /** The palette's entrance and exit, on vaul's keyframes (D-5457): the
  *  content's slide and the overlay's fade both run at the tokens' pace.
- *  Exported for `command-palette.test.tsx`, which reads it off the element. */
+ *  `command-layer.test.tsx` reads it off the open palette. */
 export const PALETTE_MOTION =
   'data-[state=open]:[animation-duration:var(--dur-base)]!'
   + ' data-[state=open]:[animation-timing-function:var(--curve-swift)]!'
