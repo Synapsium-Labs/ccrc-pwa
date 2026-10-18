@@ -1311,6 +1311,22 @@ describe('W1-B4 Task 9: status --json reads the export pass and counts segments;
     expect(ee.health.warn.map((i) => i.word)).not.toContain('export-due');
   }, 120_000);
 
+  it('an export directory that cannot be listed reads segments and segment_bytes null, never 0: unmeasured is not empty (spec §9.15 "Who reads it")', () => {
+    const { box, storeId } = x9Bound('ccrc-hist-x9-env-unlistable-', {});
+    // export/<store_id> planted as a regular FILE: readdir answers ENOTDIR, which listSegments throws (only ENOENT is "none").
+    // A file works as root too, where a chmod 000 directory would still list.
+    const exportRoot = x9Path.join(box.root, x9Lib.EXPORT_DIR);
+    x9Fs.mkdirSync(exportRoot, { recursive: true, mode: 0o700 });
+    x9Fs.writeFileSync(x9Path.join(exportRoot, storeId), 'not a directory\n', { mode: 0o600 });
+    const r = x9H.runCli(box, ['status', '--json']);
+    expect(r.code, `${r.stdout}\n${r.stderr}`).toBe(0);
+    expect(r.stderr).toBe('');
+    expect(exportOf(r.json as unknown as X9Envelope)).toMatchObject({ segments: null, segment_bytes: null });
+    // CONTROL: the same store with the directory simply absent (no export yet) is zero, which is a measurement.
+    const absent = x9Bound('ccrc-hist-x9-env-absentdir-', {});
+    expect(exportOf(x9Status(absent.box))).toMatchObject({ segments: 0, segment_bytes: 0 });
+  }, 120_000);
+
   it('doctor\'s inputs through status: a due count with a fresh pass and a young due-since is no WARN; a due-since over two intervals, or a pass over 2 h old, WARNs export-due', () => {
     const now = Date.now();
     const passKey = x9Lib.HEALTH_META.exportPassMs;

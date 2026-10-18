@@ -3677,7 +3677,7 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     thresholdBytes: 20_000_000_000, copyBps: null, backupsDb: [], journalStoreDirs: [], extrasUnmeasured: [], exportLastPassMs: null, exportDueOldestMs: null,
     ...o,
   });
-  const words =(r: healthLib.HealthResult, cls: 'warn' | 'fail'): string[] => r[cls].map((i) => i.word);
+  const words = (r: healthLib.HealthResult, cls: 'warn' | 'fail'): string[] => r[cls].map((i) => i.word);
   const RECOVER = { step: 'recover/1', cursor: '2026-10.0a1b2c3d.jsonl:4096' };   // task 27's envelope spelling
   const WORD_CASES: Array<[string, 'pass' | 'warn' | 'fail', Partial<healthLib.HealthInputs>]> = [
     ['ok', 'pass', {}],
