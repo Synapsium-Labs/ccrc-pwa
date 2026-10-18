@@ -137,6 +137,19 @@ describe('the wake trigger (D-5242)', () => {
     await waitFor(() => expect(ensure).toHaveBeenCalledTimes(2));
   });
 
+  it('the row reads alive while the call is in flight, then hibernates again: one more', async () => {
+    // ccd's ensure starts the pane and then waits for it to settle, so the fleet frame says alive before the call
+    // returns. The success that lands after must re-arm, or a second sleep in view would fire nothing (D-5242).
+    let resolve!: () => void;
+    ensure.mockImplementationOnce(() => new Promise<void>((r) => { resolve = r; }));
+    const { frame } = renderScreen(asleep(), 'dead');
+    await waitFor(() => expect(ensure).toHaveBeenCalledTimes(1));
+    frame(awake({ status: 'idle', bucket: 'idle' }));
+    await act(async () => { resolve(); await Promise.resolve(); });
+    frame(asleep({ hibernatedAt: AT + 1 }));
+    await waitFor(() => expect(ensure).toHaveBeenCalledTimes(2));
+  });
+
   it('never wakes a dead row with no hibernatedAt: a crash is not silently restarted by opening it', async () => {
     renderScreen(awake({ status: 'dead', bucket: 'dead', lifecycle: 'orphan' }), 'dead');
     await Promise.resolve();

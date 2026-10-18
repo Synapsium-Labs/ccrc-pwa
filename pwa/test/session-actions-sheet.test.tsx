@@ -941,6 +941,17 @@ describe('a hibernated row (D-5242)', () => {
     });
   });
 
+  it('a failed wake says "Couldn\'t wake", never "Couldn\'t restart"', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (u: unknown) => (String(u).endsWith('/ensure')
+      ? new Response(JSON.stringify({ ok: false, stderr: 'tmux: no server running' }),
+        { status: 502, headers: { 'content-type': 'application/json' } })
+      : accountsRoute())));
+    renderSheet(sleeper());
+    fireEvent.click(screen.getByRole('button', { name: 'Wake session' }));
+    expect(await screen.findByText(/Couldn't wake/)).toBeInTheDocument();
+    expect(screen.queryByText(/Couldn't restart/)).toBeNull();
+  });
+
   it('still offers Forget on a dead row with no hibernatedAt', () => {
     renderSheet(sleeper({ hibernatedAt: null }));
     expect(screen.getByRole('button', { name: /forget session/i })).toBeInTheDocument();

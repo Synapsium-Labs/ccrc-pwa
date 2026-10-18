@@ -81,6 +81,10 @@ export function useWakeOnOpen(
 ): { asleepAt: number | null; waking: boolean; pending: boolean; wake: () => void } {
   const asleepAt = live === null ? null : hibernatedSince(live);
   const asleep = asleepAt !== null;
+  // The row as it reads NOW, for a call that returns after a frame: ccd's ensure starts the pane and then waits for
+  // it to settle, so the row usually reads alive before the call is back (D-5242).
+  const asleepRef = useRef(asleep);
+  asleepRef.current = asleep;
   const blocked = fault !== null && fault !== undefined;
   const [visible, setVisible] = useState(() => document.visibilityState === 'visible');
   const phase = useRef<WakePhase>('armed');
@@ -101,7 +105,9 @@ export function useWakeOnOpen(
   const wake = useCallback((): void => {
     set('pending');
     api.ensure(id).then(
-      () => { if (phase.current === 'pending') set('sent'); },
+      // A row still asleep stays `sent` (nothing more until it reads alive); a row that already reads alive
+      // re-arms here, since the effect below skipped it while the call was out.
+      () => { if (phase.current === 'pending') set(asleepRef.current ? 'sent' : 'armed'); },
       (err: unknown) => {
         set('armed');
         // The toast outlives this call: a later wake may be out by the time it is tapped.

@@ -1283,6 +1283,10 @@ describe('the header of a hibernated row (D-5242)', () => {
     expect(screen.queryByText('not running')).toBeNull();
     const dot = screen.getByRole('img', { name: 'hibernated' });
     expect(dot.className).toMatch(/dot--idle/);
+    // The word wears the calm ink too, not the dead tone: colour must not contradict "Waking…" below.
+    const line = screen.getByText('hibernated').closest('.status-line');
+    expect(line?.className).toMatch(/status-line--idle/);
+    expect(line?.className).not.toMatch(/status-line--dead/);
   });
 
   it('the stream saying dead over a sleeping row still reads hibernated', () => {
