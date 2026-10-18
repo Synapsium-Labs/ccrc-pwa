@@ -36,21 +36,23 @@ const rowOf = (fx: Approvals, id: number) => {
 };
 
 /** Boot (the priming tick), mint one or more requests through the route, then paint the prompt and tick once. */
-const raise = async (inputs: Record<string, unknown>[]): Promise<{ ids: number[]; nonces: string[]; waits: number[] }> => {
+const raise = async (
+  inputs: Record<string, unknown>[], o: { painted?: boolean; status?: number[] } = {},
+): Promise<{ ids: number[]; nonces: string[]; waits: number[] }> => {
   vi.useFakeTimers({ toFake: ['Date'] });
   at(0);
   f = await standardFixture();
   await f.watcher.tick();
   const ids: number[] = [], nonces: string[] = [], waits: number[] = [];
-  for (const input of inputs) {
+  for (const [i, input] of inputs.entries()) {
     const body = requestBody(input);
     const res = await f.request(body);
-    expect(res.statusCode).toBe(201);
+    expect(res.statusCode).toBe(o.status?.[i] ?? 201);
     const j = res.json() as { id: number; waitS: number };
     ids.push(j.id); waits.push(j.waitS); nonces.push(body['nonce'] as string);
   }
   hookstate(f, { approval: { tool: 'Bash', summary: 'rm -rf build' } });
-  f.panes.set(CHILD, PERMISSION_PANE);
+  f.panes.set(CHILD, o.painted === false ? BARE : PERMISSION_PANE);
   await f.watcher.tick();
   return { ids, nonces, waits };
 };
@@ -61,15 +63,17 @@ const tickAt = async (ms: number): Promise<void> => {
 };
 
 describe('the approval window and the operator\'s push (D-5441)', () => {
-  it('a subagent row: waitS 180, no push for 180 s, the push at 180 s, and a ruling at 200 s is hook-gone with the notification unchanged', async () => {
-    const { ids, waits } = await raise([hookInput({ agentId: 'a0000000000000001' })]);
+  it('a subagent row: waitS 180, its menu hidden while the hook waits (D-5440), raised at its first sighting after the window, and a ruling at 200 s is hook-gone with the notification unchanged', async () => {
+    const { ids, waits } = await raise([hookInput({ agentId: 'a0000000000000001' })], { painted: false });
     expect(waits).toEqual([180]);
-    expect(askPushes(f!)).toEqual([]);
     await tickAt(179_000);
     expect(askPushes(f!)).toEqual([]);
+    expect(rowOf(f!, ids[0]!).state).toBe('held');
     await tickAt(180_000);
-    expect(askPushes(f!)).toHaveLength(1);
     expect(rowOf(f!, ids[0]!).state).toBe('released');
+    f!.panes.set(CHILD, PERMISSION_PANE);          // the hook returned with no decision: the menu paints now
+    await tickAt(181_000);
+    expect(askPushes(f!)).toHaveLength(1);
     at(200_000);
     expect((await f!.rule(ids[0]!, PARENT, 'allow')).json()).toMatchObject({ error: 'hook-gone' });
     await tickAt(202_000);
@@ -113,15 +117,18 @@ describe('the approval window and the operator\'s push (D-5441)', () => {
     expect((await f!.ruling(ids[0]!, nonces[0]!)).json()).toEqual({ state: 'released' });
   });
 
-  it('two parallel subagent requests mint two rows, and the push holds until both are ruled or lapse', async () => {
-    const { ids } = await raise([hookInput({ agentId: 'a0000000000000001' }), hookInput({ agentId: 'a0000000000000002', command: 'rm -rf dist' })]);
+  it('two parallel subagent requests mint two rows, each ruled or lapsing on its own, and neither buzzes while hidden', async () => {
+    const { ids } = await raise([hookInput({ agentId: 'a0000000000000001' }), hookInput({ agentId: 'a0000000000000002', command: 'rm -rf dist' })],
+      { painted: false });
     expect(new Set(ids).size).toBe(2);
     at(10_000);
     expect((await f!.rule(ids[0]!, PARENT, 'deny')).statusCode).toBe(200);
     await tickAt(100_000);
     expect(askPushes(f!)).toEqual([]);
+    expect(rowOf(f!, ids[1]!).state).toBe('held');
     await tickAt(180_000);
-    expect(askPushes(f!)).toHaveLength(1);
+    expect(rowOf(f!, ids[1]!).state).toBe('released');
+    expect(rowOf(f!, ids[0]!).state).toBe('denied');
   });
 
   it('the painted prompt answered in the pane: the dialog clears and its unruled rows become operator', async () => {
@@ -146,6 +153,53 @@ describe('the approval window and the operator\'s push (D-5441)', () => {
     const row = rowOf(f!, ids[0]!);
     expect(row.inputRedacted).toBeNull();
     expect(row.digest).toMatch(/^[0-9a-f]{64}$/);
+  });
+});
+
+// The painted prompt is the main thread's: a background subagent's menu is painted only after its hook returns (D-5440,
+// and a fleet child's subagents are background ones, D-5443). So only the child's main-thread rows defer the painted
+// dialog's push, and a subagent's hidden wait neither withholds that push nor is ended by that dialog (D-5491).
+describe('a main-thread prompt and a background subagent\'s hidden wait at once (D-5491)', () => {
+  const BG = { agentId: 'a0000000000000001', command: 'rm -rf dist' };
+  it('the main-thread row lapses at 60 s while the subagent row is held: the operator is pushed then, not at 180 s', async () => {
+    const { ids } = await raise([hookInput(BG), hookInput({})]);
+    await tickAt(59_000);
+    expect(askPushes(f!)).toEqual([]);
+    await tickAt(61_000);
+    expect(askPushes(f!)).toHaveLength(1);
+    expect(rowOf(f!, ids[0]!).state).toBe('held');
+  });
+
+  it('a forbidden main-thread request (minted released) goes straight to the operator while the subagent row is held', async () => {
+    await raise([hookInput(BG), hookInput({ command: 'ccd ws-rm project-a-still-cove' })], { status: [201, 409] });
+    expect(askPushes(f!)).toHaveLength(1);
+  });
+
+  it('the claimant hands the main-thread prompt over while the subagent row is held: the push fires at once', async () => {
+    const { ids } = await raise([hookInput(BG), hookInput({})]);
+    at(5_000);
+    expect((await f!.release(ids[1]!, PARENT)).json()).toEqual({ ok: true });
+    expect(askPushes(f!)).toHaveLength(1);
+    expect(rowOf(f!, ids[0]!).state).toBe('held');
+  });
+
+  it('the main-thread row is ruled and its dialog clears: the subagent row keeps its hidden wait (not operator)', async () => {
+    const { ids } = await raise([hookInput(BG), hookInput({})]);
+    at(10_000);
+    expect((await f!.rule(ids[1]!, PARENT, 'allow')).statusCode).toBe(200);
+    f!.panes.set(CHILD, BARE);
+    await tickAt(14_000);
+    expect(rowOf(f!, ids[0]!).state).toBe('held');
+    expect(rowOf(f!, ids[1]!).state).toBe('allowed');
+    expect(askPushes(f!)).toEqual([]);
+  });
+
+  it('a subagent row ruled while the main-thread prompt is with the operator does not replace that notification', async () => {
+    const { ids } = await raise([hookInput(BG), hookInput({ command: 'ccd ws-rm project-a-still-cove' })], { status: [201, 409] });
+    expect(askPushes(f!)).toHaveLength(1);
+    at(10_000);
+    expect((await f!.rule(ids[0]!, PARENT, 'deny')).statusCode).toBe(200);
+    expect(askPushes(f!)).toHaveLength(1);
   });
 });
 

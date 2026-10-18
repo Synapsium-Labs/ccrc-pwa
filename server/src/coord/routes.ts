@@ -4549,7 +4549,7 @@ export function registerCoordRoutes(
         void log.flush();
       }
     }
-    watcher?.approvalRuled(row.childId, fromId, verdict);
+    watcher?.approvalRuled(row.childId, row.agentId, fromId, verdict);
     return { ok: true, state: verdict === 'allow' ? 'allowed' : 'denied' };
   });
 

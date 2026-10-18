@@ -796,7 +796,7 @@ export class FleetWatcher {
   private lapsedAsks = new Map<string, { askId: number; ev: Parameters<FleetWatcher['pushOne']>[0] }>();
   /** D-5298 (plan Task 16): the operator's deferred push for a child whose painted permission prompt has an
    *  approvals row held for its claimant (`tryHold`'s approval arm). `until` is the latest `notifyAt` of the rows it
-   *  covers; `rowIds` are those rows, so a cleared dialog marks only them `operator`. `sweepApprovals` pushes `ev` once
+   *  covers; `rowIds` are those rows (the main thread's only, D-5491), so a cleared dialog marks only them `operator`. `sweepApprovals` pushes `ev` once
    *  no covered row is held any more and the dialog is still painted. In memory only, as `heldAsks` is: a restart
    *  loses the deferral, and the dialog then raises on its next sighting. */
   private heldApprovals = new Map<string, { until: number; dialogId: string; rowIds: number[];
@@ -8725,7 +8725,10 @@ export class FleetWatcher {
       const now = Date.now();
       const read = coord.approvalsForChild(r.id, ['held']);
       if (!read.ok) return { kind: 'none' };
-      const open = read.rows.filter((x) => now < x.notifyAt && x.releaseReason === null);
+      // Only the main thread's rows (D-5491): the painted menu is the main thread's, because a background subagent's
+      // is painted only after its hook returns (D-5440; a fleet child's subagents are background ones, D-5443). A
+      // subagent's held row neither withholds this push nor is marked `operator` when this dialog clears.
+      const open = read.rows.filter((x) => x.agentId === '' && now < x.notifyAt && x.releaseReason === null);
       if (open.length === 0) return { kind: 'none' };
       const ev: Parameters<FleetWatcher['pushOne']>[0] = {
         kind: 'ask', sessionId: r.id, project: r.project, title: '❓ Question', body: askPushBody(hs, dialog),
@@ -8801,8 +8804,9 @@ export class FleetWatcher {
   /** `POST /api/approvals/:id/rule`'s door in: a deferred push stays deferred (the hook prints the ruling and the
    *  dialog clears; `sweepApprovals` pushes if it does not). A prompt the operator was already pushed about (its menu
    *  was sighted before the row was minted) has that notification replaced, same tag, by who ruled. */
-  approvalRuled(childId: string, parent: string, verdict: 'allow' | 'deny'): void {
-    if (this.heldApprovals.has(childId) || !this.dialogIds.has(childId)) return;
+  approvalRuled(childId: string, agentId: string, parent: string, verdict: 'allow' | 'deny'): void {
+    // A subagent's ruling is not the painted prompt's (D-5491): the operator's notification for that prompt stays.
+    if (agentId !== '' || this.heldApprovals.has(childId) || !this.dialogIds.has(childId)) return;
     const project = this.lastFleet?.find((f) => f.id === childId)?.project ?? '';
     this.pushOne({ kind: 'ask', sessionId: childId, project, title: '❓ Question', body: approvalRuledBody(parent, verdict) },
       this.activeProjects);
