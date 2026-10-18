@@ -1011,6 +1011,9 @@ const STRAY_DIRS = ['', '.ccrc', '.local/bin', '.cc-sessions', '.claude', 'ccrc'
   '.config/systemd/user',
   '.config/systemd/user/claude-session@.service.d',
   '.config/systemd/user/app-claude\\x2dsession.slice.d',
+  // D-5241: the two scope drop-in directories `_inst_units` stages into.
+  '.config/systemd/user/tmux-spawn-.scope.d',
+  '.config/systemd/user/ccrc-tmux-server.scope.d',
   // Worker-skill Task 4: `_inst_tree_copy` stages a whole DIRECTORY beside its
   // target under `.cc-sessions` (already listed above), and each skill
   // installer stages one beside ITS target, inside the account config dir's
@@ -2245,6 +2248,15 @@ describe('ccrc install: the executables and files it installs', () => {
     const { home } = installed;
     const bin = join(home, '.local', 'bin', 'ccd-scope-sweep');
     expect(readFileSync(bin)).toEqual(readFileSync(placed(home, 'ccd', 'ccd-scope-sweep')));
+    expect(mode(bin)).toBe(0o755);
+  });
+
+  itLinux('ccd-tool-adj lands beside them (D-5241, the tool-child priority\'s shell prefix) — every role, but not Darwin', () => {
+    // `ccd`'s `_spawn_start` names it in CLAUDE_CODE_SHELL_PREFIX on Linux only; macOS has no
+    // /proc/self/oom_score_adj to raise, so it is not placed there (the Darwin describe pins the absence).
+    const { home } = installed;
+    const bin = join(home, '.local', 'bin', 'ccd-tool-adj');
+    expect(readFileSync(bin)).toEqual(readFileSync(placed(home, 'ccd', 'ccd-tool-adj')));
     expect(mode(bin)).toBe(0o755);
   });
 
@@ -4314,6 +4326,9 @@ const UNIT_FILES: Array<[string, string]> = [
   ['ccrc-update-watchdog.timer', 'deploy/systemd/ccrc-update-watchdog.timer'],
   ['claude-session@.service.d/limits.conf', 'deploy/systemd/claude-session@.service.d/limits.conf'],
   [`${SLICE_DIR}/limits.conf`, 'deploy/systemd/app-claude-session.slice.d/limits.conf'],
+  // D-5241: the victim policy's two OOMPolicy=continue scope drop-ins, every role, Linux only, beside the two above.
+  ['tmux-spawn-.scope.d/50-oom-continue.conf', 'deploy/systemd/tmux-spawn-.scope.d/50-oom-continue.conf'],
+  ['ccrc-tmux-server.scope.d/50-oom-continue.conf', 'deploy/systemd/ccrc-tmux-server.scope.d/50-oom-continue.conf'],
 ];
 
 /** The runner's `systemctl` records one line per call: the argv, a tab, then
@@ -4538,6 +4553,21 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
       'the drop-in dir carries the repository spelling, which systemd never reads')
       .not.toContain('app-claude-session.slice.d');
     expect(existsSync(unitDir(home, SLICE_DIR, 'limits.conf'))).toBe(true);
+  });
+
+  it('D-5241: names the pane-scope drop-in directory with its TRAILING HYPHEN (systemd\'s prefix form), and nothing else', () => {
+    // The mutation this exists for: without the hyphen the directory names a unit `tmux-spawn.scope` that never
+    // exists, and every pane keeps `OOMPolicy=stop` with nothing failing (plan 2026-10-16 Task 13 step 1 measured
+    // that the hyphenated prefix form reaches a new transient scope).
+    const { home } = units;
+    expect(readdirSync(unitDir(home))).toContain('tmux-spawn-.scope.d');
+    expect(readdirSync(unitDir(home))).not.toContain('tmux-spawn.scope.d');
+    expect(readdirSync(unitDir(home, 'tmux-spawn-.scope.d'))).toEqual(['50-oom-continue.conf']);
+    expect(readdirSync(unitDir(home, 'ccrc-tmux-server.scope.d'))).toEqual(['50-oom-continue.conf']);
+    for (const d of ['tmux-spawn-.scope.d', 'ccrc-tmux-server.scope.d']) {
+      expect(read(unitDir(home, d, '50-oom-continue.conf')).split('\n').filter((l) => l && !l.startsWith('#')))
+        .toEqual(['[Scope]', 'OOMPolicy=continue']);
+    }
   });
 
   it('does NOT install ccrc-agent.service — a required EnvironmentFile with no file', () => {
@@ -5131,7 +5161,7 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
         // where its timer looks").
         // history spec §9.5: `ccd-history-sweep` joins on the timer-bound names' terms, behind its role gate (this install is `both`).
         : ['ccd', 'ccd-account-auth', 'ccd-account-health', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-history-sweep',
-           'ccd-pool-sync', 'ccd-scope-sweep', 'ccd-telemetry-keepalive', 'ccd-tmp-sweep', 'ccd-update-sync', 'ccd-usage-sweep',
+           'ccd-pool-sync', 'ccd-scope-sweep', 'ccd-telemetry-keepalive', 'ccd-tmp-sweep', 'ccd-tool-adj', 'ccd-update-sync', 'ccd-usage-sweep',
            'ccd-usage-sweep.py', 'ccrc', 'ccrc-api', 'graphify', ...GPT_LANE_BINS].sort());
   });
 
@@ -6328,7 +6358,7 @@ describe('ccrc install --role: the refusals and the default', () => {
       '--user restart ccrc.service',
     ]);
     expect(r.stdout).toMatch(
-      /^install: units: ccrc\.service, claude-session@\.service, ccd-cap-scopes\.\{service,timer\} and both drop-ins in \$HOME\/\.config\/systemd\/user$/m);
+      /^install: units: ccrc\.service, claude-session@\.service, ccd-cap-scopes\.\{service,timer\}, both drop-ins and the two OOMPolicy=continue scope drop-ins in \$HOME\/\.config\/systemd\/user$/m);
   });
 
   itLinux('--role server is today\'s spine minus nothing — the difference from both is reserved', () => {
@@ -8485,6 +8515,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "cert": "SKIP",
         "config": "PASS",
         "credentials": "PASS",
+        "delegation-hooks": "PASS",
         "disk": "PASS",
         "docs": "PASS",
         "docs-sw": "SKIP",
@@ -8506,6 +8537,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "models": "PASS",
         "name": "SKIP",
         "node": "PASS",
+        "oom-policy": "PASS",
         "path": "PASS",
         "pool-sync": "WARN",
         "pools": "PASS",
@@ -8539,6 +8571,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "cert": "SKIP",
         "config": "PASS",
         "credentials": "PASS",
+        "delegation-hooks": "PASS",
         "disk": "PASS",
         "docs": "PASS",
         "docs-sw": "SKIP",
@@ -8560,6 +8593,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "models": "PASS",
         "name": "SKIP",
         "node": "PASS",
+        "oom-policy": "PASS",
         "path": "PASS",
         "pool-sync": "WARN",
         "pools": "PASS",
@@ -8663,6 +8697,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
       "cert": "SKIP",
       "config": "PASS",
       "credentials": "PASS",
+      "delegation-hooks": "PASS",
       "disk": "PASS",
       "docs": "PASS",
       "docs-sw": "SKIP",
@@ -8684,6 +8719,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
       "models": "PASS",
       "name": "SKIP",
       "node": "PASS",
+      "oom-policy": "PASS",
       "path": "PASS",
       "pool-sync": "WARN",
       "pools": "PASS",

@@ -25,6 +25,7 @@ import type { FleetWatcher } from '../src/watch.js';
 import { STALL_FOLLOW_LABEL, STALL_LEVEL_TEXT } from '../../shared/api.js';
 import type { StallWatchView, StallWriteEffect } from '../../shared/api.js';
 import { STALL_WATCH_REFUSALS } from '../../shared/stall-watch.js';
+import { REFUSAL_STATUS } from '../../shared/refusal.js';
 import {
   STALL_NOTICE_WINDOW_MS, STALL_QUIET_MAX_MS, STALL_QUIET_MIN_MS, STALL_QUIET_STEP_MS, stallEffectKey,
 } from '../src/coord/stallsettings.js';
@@ -683,8 +684,10 @@ describe('M16b: the arming row has one writer, the session-only door', () => {
 describe('D-4045: the POST answers exactly the refusal codes L0 lists', () => {
   it('the codes the POST handler sends, notConfigured\'s included, are STALL_WATCH_REFUSALS, no more and no fewer', () => {
     const raw = ROUTES_SRC();
+    // D-5381: notConfigured answers through refuseRoute, at the table's 501.
     expect(raw, 'notConfigured no longer answers not-configured').toContain(
-      "const notConfigured = (reply: FastifyReply) => reply.code(501).send({ ok: false, error: 'not-configured' });");
+      "const notConfigured = (reply: FastifyReply) => refuseRoute(reply, 'not-configured');");
+    expect(REFUSAL_STATUS['not-configured']).toBe(501);
     const handler = stripComments(postHandler(raw));
     const codes = new Set([...handler.matchAll(/\berror: '([a-z-]+)'/g)].map((m) => m[1]));
     if (/\bnotConfigured\(reply\)/.test(handler)) codes.add('not-configured');

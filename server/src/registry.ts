@@ -1273,7 +1273,8 @@ export const UNMEASURED_ASK_AT = -1;
  * THAT ARGUMENT IS SOUND ABOUT SUBSTITUTION AND SILENT ABOUT EVERYTHING ELSE
  * (D-2403). `updatedAt` moving is NECESSARY for a substitution and nowhere
  * near sufficient for one: `ccd/session-hook.sh` stamps it on every write
- * except a carried main-thread wait (D-4041, below),
+ * except a carried main-thread wait (D-4041, below) and, behind the server's
+ * word `hook-main-state-v1`, any agent event's carry (D-5232, below),
  * and its `SubagentStart`/`SubagentStop` arm re-reads `.ask` straight back
  * off the file, so a subagent event on a session blocked at a dialog rewrites
  * the identical envelope under a fresh number. (That sentence no longer holds
@@ -1281,7 +1282,11 @@ export const UNMEASURED_ASK_AT = -1;
  * and `event` and adds `aliveAt`, so such a subagent event moves nothing this
  * function compares. It still holds for a wait a SUBAGENT raised, stored as
  * `waitBy:"subagent"`, which is not carried and is rewritten under a fresh
- * stamp, and for any other bump.) Read alone, this function
+ * stamp, and for any other bump. Since D-5232, behind `hook-main-state-v1`,
+ * `aliveAt` is no longer only a carried wait's: every agent event keeps the
+ * main state's stamp and writes `aliveAt`, a SubagentStart or SubagentStop
+ * over a subagent's own wait keeps that wait's stamp too, and the wait's
+ * end restores the `waitPrev` it stored.) Read alone, this function
  * therefore refused parents over bumps nobody made — permanently, because
  * nothing re-stamped the row. It is now half of a pair: `CoordStore.restampAsk`
  * advances `askAt` on the ticks where `detectDialogs` has just re-scraped the

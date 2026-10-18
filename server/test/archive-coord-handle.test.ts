@@ -118,4 +118,19 @@ describe('CoordRoutesHandle', () => {
       await app.close();
     }, 15_000);
   });
+  it('D-5370: `serial` is the SAME hold — the stop-done lane\'s act waits behind a coordination write in flight', async () => {
+    const { app, handle, coord } = setup();
+    const order: string[] = [];
+    let release!: () => void;
+    const held = new Promise<void>((r) => { release = r; });
+    const first = handle.withAbandon(coord, async () => { order.push('write:start'); await held; order.push('write:end'); });
+    const second = handle.serial(async () => { order.push('stop'); return 1; });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(order, 'the lane did not run inside the write').toEqual(['write:start']);
+    release();
+    await first;
+    expect(await second).toBe(1);
+    expect(order).toEqual(['write:start', 'write:end', 'stop']);
+    await app.close();
+  });
 });

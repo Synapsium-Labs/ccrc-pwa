@@ -730,6 +730,10 @@ if [ "$TARGET" = "agent" ]; then
   # The pane-scope sweep (session-continuity wave 4), beside the reaper and on
   # its terms; its stop is shadowed until ~/.cc-sessions/scope-sweep-live exists.
   install_atomic ccd/ccd-scope-sweep .local/bin/ccd-scope-sweep 755
+  # D-5241: the tool-child priority's shell prefix, which `ccd` names in
+  # CLAUDE_CODE_SHELL_PREFIX on Linux. Unconditional here: this lane IS a
+  # session host.
+  install_atomic ccd/ccd-tool-adj .local/bin/ccd-tool-adj 755
   install_atomic ccd/tmux.conf .tmux.conf 644
   install_atomic ccd/statusline-command.sh .claude/statusline-command.sh 755
   # `ccrc` joins ccd on PATH, in the same ordering class: after the roster it
@@ -799,6 +803,11 @@ if [ "$TARGET" = "agent" ]; then
   # MemoryHigh=20G. The last-sorting file is the one old copies of deploy.sh
   # never overwrite. After daemon-reload, AGENT_CMD runs assert-slice-policy.sh
   # to read the enforced value and fail the deploy unless it is `infinity`.
+  # D-5241 (spec 2026-10-16 §5.10): the two OOMPolicy=continue scope drop-ins,
+  # `tmux-spawn-.scope.d` (systemd's PREFIX form, trailing hyphen and all, so
+  # it reaches every pane scope) and `ccrc-tmux-server.scope.d`, the same pair
+  # `ccrc install`'s `_inst_units` places. Nothing ever deletes them on a
+  # redeploy of an older tree; rolling back is removing them by hand.
   AGENT_BUILD_CMD='_unit_atomic() { cp -- "$1" "$2.incoming.$$" || return 1; chmod 644 "$2.incoming.$$" || return 1; mv -f -- "$2.incoming.$$" "$2" || return 1; rm -f -- "$2.incoming."*; }
 cd ~/ccrc/agent && npm ci && npm run build \
     && mkdir -p ~/.config/systemd/user \
@@ -808,6 +817,9 @@ cd ~/ccrc/agent && npm ci && npm run build \
     && _unit_atomic ~/ccrc/deploy/systemd/claude-session@.service.d/limits.conf ~/.config/systemd/user/claude-session@.service.d/limits.conf \
     && _unit_atomic ~/ccrc/deploy/systemd/app-claude-session.slice.d/limits.conf "$HOME/.config/systemd/user/app-claude\x2dsession.slice.d/limits.conf" \
     && _unit_atomic ~/ccrc/deploy/systemd/app-claude-session.slice.d/zz-no-memoryhigh.conf "$HOME/.config/systemd/user/app-claude\x2dsession.slice.d/zz-no-memoryhigh.conf" \
+    && mkdir -p ~/.config/systemd/user/tmux-spawn-.scope.d ~/.config/systemd/user/ccrc-tmux-server.scope.d \
+    && _unit_atomic ~/ccrc/deploy/systemd/tmux-spawn-.scope.d/50-oom-continue.conf ~/.config/systemd/user/tmux-spawn-.scope.d/50-oom-continue.conf \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccrc-tmux-server.scope.d/50-oom-continue.conf ~/.config/systemd/user/ccrc-tmux-server.scope.d/50-oom-continue.conf \
     && _unit_atomic ~/ccrc/deploy/systemd/ccrc-agent.service.d/protect.conf ~/.config/systemd/user/ccrc-agent.service.d/protect.conf \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-cap-scopes.service ~/.config/systemd/user/ccd-cap-scopes.service \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-cap-scopes.timer ~/.config/systemd/user/ccd-cap-scopes.timer \
@@ -1221,9 +1233,18 @@ else
   # ever taken, unlike dist-pwa and coord.db beside it.
   "${SSH[@]}" "$BOX" "mkdir -p ~/ccrc-backups/$TS"
   "${SCP[@]}" deploy/backup-coord.mjs "$BOX":ccrc-backups/backup-coord.mjs
+  "${SCP[@]}" deploy/coordination-snapshot.mjs "$BOX":ccrc-backups/coordination-snapshot.mjs
   "${SSH[@]}" "$BOX" "{ [ ! -d ~/ccrc/server/dist-pwa ] || cp -a ~/ccrc/server/dist-pwa ~/ccrc-backups/$TS/dist-pwa; } \
     && { [ ! -f ~/.config/systemd/user/ccrc.service ] || cp -a ~/.config/systemd/user/ccrc.service ~/ccrc-backups/$TS/ccrc.service; } \
     && { [ ! -f ~/.ccrc/coord.db ] || node --no-warnings ~/ccrc-backups/backup-coord.mjs ~/.ccrc/coord.db ~/ccrc-backups/$TS/coord.db; }"
+  # The coordination snapshot (delegation broker wave 3, O3) is the LAST member of this set and is taken BEFORE the rsync below:
+  # the delegation journal and checkpoint are authority a running server wrote, and the rsync is the first step that can touch
+  # a box's tree. The helper (shipped fresh above, like backup-coord.mjs; it imports nothing from this tree) describes the SQLite
+  # snapshot just taken, copies both sidecars from one stable view, validates them, and writes its manifest only when every
+  # member is durable. A failure here aborts the deploy (`set -e` through ssh) before anything on the box has changed. A torn journal
+  # tail (D-4655) is NOT a failure: the helper leaves it out, exits 0 and prints one warning line on its stderr, which ssh passes
+  # through to this terminal (no redirect and no `-q` here, on purpose; a test pins both).
+  "${SSH[@]}" "$BOX" "node --no-warnings ~/ccrc-backups/coordination-snapshot.mjs capture --dir ~/ccrc-backups/$TS"
   # See the agent path's identical exclude, above, for why: this rsync also
   # ships `deploy/` whole, and without the exclude a stale, retired token left
   # in the checkout would ride along to the box, unhardened.

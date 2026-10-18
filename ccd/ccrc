@@ -1863,8 +1863,11 @@ UPD_VERSION=""
 UPD_STAGED_SHA=""    # _upd_fetch: the extracted tree's OWN sha (review fix round 1 I3) — arm 3 compares it to old_sha to tell a same-tag REBUILD (mixed) from a same-tag REPEAT (not mixed)
 UPD_BACKUP_DIR=""
 BAK_DIRS=()        # `_bak_list`'s out-param: the timestamped backup dirs, oldest first
-BAK_KEEP_SNAP=""   # `_bak_keepset`'s out-params (wave 9 R10g): the newest earlier coord.db snapshot and the newest earlier tree backup,
+BAK_KEEP_SNAP=""   # `_bak_keepset`'s out-params (wave 9 R10g): the newest earlier valid coordination snapshot and the newest earlier tree backup,
 BAK_KEEP_TREE=""   # each chosen among the dirs the floor and this run's own path do not already protect
+BAK_KEEP_DATA=""   # `_bak_keepset`'s third out-param (D-4641): the newest earlier valid coordination snapshot that holds data
+BAK_SNAP_DATA=0    # `_bak_snap_class`'s out-params: whether a valid dir holds data, and why the classifier failed (rc 2)
+BAK_SNAP_WHY=""
 UPD_BAK_FLOOR=""   # the second this run first held ~/.ccrc/update.lock (`_upd_lock`); `_bak_gc` keeps every dir named at or after it
 UPD_URL_DIR=""    # _upd_resolve: the release's URL space (latest/ or download/<tag>/)
 UPD_URL_DIR_SAFE=""    # _upd_resolve: same, through _upd_redact — every "fetching …"/WARN line prints THIS, never UPD_URL_DIR, so a credentialed CCRC_RELEASE_BASE_URL never reaches stdout (review 155 C17, fix round 1 item 11); the real curl calls still read UPD_URL_DIR
@@ -2029,7 +2032,7 @@ MODELS_SUBAGENT_CLASSES="haiku sonnet"
 
 usage() {
   cat <<EOF
-usage: $PROG {doctor|status|adopt|wrappers|account|memory|models|codex|install|update|rollback|versions|channel|rollout|uninstall|backup|logs|passwd|expose|token|restamp|version|watchdog|history}
+usage: $PROG {doctor|status|adopt|wrappers|account|memory|models|codex|install|update|rollback|versions|channel|rollout|uninstall|backup|coordination-snapshot|logs|passwd|expose|token|restamp|version|watchdog|history}
 
 The lifecycle CLI for a Claude Code fleet box — installs, updates and
 diagnoses a box, as a sibling to ccd (which drives sessions once one is
@@ -2219,14 +2222,25 @@ already running).
             since 'ccrc memory --apply' it is the SOLE live copy, and a
             session's prose is not configuration) unless [--purge-memory]
             is also given; $(_uninst_history_kept_line); never worktrees, never tmux state
-  backup    take update's backup step standalone: coord.db snapshot, dists,
-            ccd and the units to ~/ccrc-backups/<ts>/ (never
+  backup    take update's backup step standalone: coord.db snapshot, the
+            delegation journal and checkpoint with their manifest
+            (coordination-snapshot.json), dists, ccd and the units to
+            ~/ccrc-backups/<ts>/ (never
             ~/.ccrc/collect-lane-generation.log: a restore leaves it in
-            place), then prune to the newest \$CCRC_BACKUP_KEEP (default 10)
-            timestamped backups — never this run's own or one named after it
-            began, nor the newest earlier tree backup and coord.db snapshot;
-            skipped while another ccrc run holds ~/.ccrc/update.lock —
-            hand-made siblings are never touched
+            place), then prune to the
+            newest \$CCRC_BACKUP_KEEP (default 10) timestamped backups — never
+            this run's own or one named after it began, nor the newest earlier
+            tree backup, valid coordination snapshot and valid one that holds
+            data; skipped while another
+            ccrc run holds ~/.ccrc/update.lock — hand-made siblings are never touched
+  coordination-snapshot
+            validate --from <timestamp-directory>   classify a backup's coordination
+            snapshot (v1, legacy, none, invalid; exit 0, 0, 1, 2; usage or a helper
+            that cannot run: 70)
+            restore --from <timestamp-directory>   replace the live journal,
+            checkpoint and coord.db (and its WAL/SHM) from a valid v1 snapshot, as
+            one set; refuses unless ccrc.service is measured inactive
+            recover                finish an interrupted restore from its marker
   logs      this box's service journal: journalctl --user -u ccrc.service
             (or ccrc-agent.service when ccrc.env records CCRC_ROLE=fleet).
             Exit 3: the install completed but the trailing doctor failed
@@ -14308,6 +14322,14 @@ _inst_bins() {   # what has to be ON PATH: ccrc's own executables, and the launc
     # `deploy/gen-wrappers.mjs`'s `TOOLCHAIN_EXECUTABLES` knows the name, or the
     # orphan scan in `_inst_wrappers` (every role) would report it.
     _inst_atomic "$tree/ccd/ccd-scope-sweep" "$bin/ccd-scope-sweep" 755
+    # D-5241: the tool-child priority's prefix, which `ccd`'s `_spawn_start`
+    # names in CLAUDE_CODE_SHELL_PREFIX on Linux only — so systemd only here
+    # too: macOS has no /proc/self/oom_score_adj to raise. Every role, on the
+    # sweeps' terms (inert where no session runs). Left behind by a rollback it
+    # is inert: nothing names it once the session respawns without the prefix.
+    # `deploy/gen-wrappers.mjs`'s `TOOLCHAIN_EXECUTABLES` knows the name, or the
+    # orphan scan in `_inst_wrappers` (every role) would report it.
+    _inst_atomic "$tree/ccd/ccd-tool-adj" "$bin/ccd-tool-adj" 755
     # The account-health probe, on the sweep's exact terms: every ROLE, but not
     # Darwin — its only runner is a systemd timer, and a binary whose runner
     # never fires would be the same no-op cap-scopes' own comment warns about.
@@ -14343,9 +14365,9 @@ _inst_bins() {   # what has to be ON PATH: ccrc's own executables, and the launc
   _inst_atomic "$gen" "$bin/ccrc" 755
   rm -f -- "$gen"
   if [ "$CCD_OS" = darwin ]; then
-    echo "install: bins: ccd, ccd-account-auth${api_bin}${lane_bins} and the ccrc launcher in \$HOME/.local/bin${lane_note} (no ccd-cap-scopes — it caps cgroup scopes, and macOS has none; no ccd-graph-sweep, no ccd-account-health, no ccd-telemetry-keepalive, no ccd-usage-sweep, no ccd-tmp-sweep, no ccd-scope-sweep, no ccd-history-sweep, no ccd-pool-sync and no ccd-update-sync — their timers are systemd-only)"
+    echo "install: bins: ccd, ccd-account-auth${api_bin}${lane_bins} and the ccrc launcher in \$HOME/.local/bin${lane_note} (no ccd-cap-scopes — it caps cgroup scopes, and macOS has none; no ccd-graph-sweep, no ccd-account-health, no ccd-telemetry-keepalive, no ccd-usage-sweep, no ccd-tmp-sweep, no ccd-scope-sweep, no ccd-tool-adj, no ccd-history-sweep, no ccd-pool-sync and no ccd-update-sync — their timers are systemd-only)"
   else
-    echo "install: bins: ccd, ccd-account-auth, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-usage-sweep, ccd-tmp-sweep, ccd-scope-sweep, ccd-pool-sync, ccd-update-sync${hist_bin}${api_bin}${lane_bins} and the ccrc launcher in \$HOME/.local/bin${lane_note}"
+    echo "install: bins: ccd, ccd-account-auth, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-usage-sweep, ccd-tmp-sweep, ccd-scope-sweep, ccd-tool-adj, ccd-pool-sync, ccd-update-sync${hist_bin}${api_bin}${lane_bins} and the ccrc launcher in \$HOME/.local/bin${lane_note}"
   fi
 }
 
@@ -14991,7 +15013,23 @@ _inst_units() {
     "$dir/claude-session@.service.d/limits.conf" 644
   _inst_atomic "$tree/deploy/systemd/app-claude-session.slice.d/limits.conf" \
     "$slice/limits.conf" 644
-  echo "install: units: $role_unit, claude-session@.service, ccd-cap-scopes.{service,timer} and both drop-ins in \$HOME/.config/systemd/user"
+  # D-5241 (spec 2026-10-16 §5.10): the victim policy's two OOMPolicy=continue
+  # drop-ins, Linux only (the Darwin arm returned above) and on every role, as
+  # the two limits.conf files are: a drop-in for a scope a box never creates
+  # applies to nothing. `tmux-spawn-.scope.d` IS SPELLED WITH ITS TRAILING
+  # HYPHEN: that is systemd's prefix form, the one name that reaches every
+  # `tmux-spawn-<uuid>.scope` (measured on throwaway scopes, plan Task 13 step
+  # 1). Without the hyphen it names a unit called `tmux-spawn.scope` that never
+  # exists. NOTHING HERE OR IN AN OLDER RELEASE DELETES THEM: a rollback below
+  # this release removes both by hand (the plan's Task 15, README's "Memory
+  # guardrails"), and `cmd_uninstall` removes them.
+  mkdir -p "$dir/tmux-spawn-.scope.d" "$dir/ccrc-tmux-server.scope.d" \
+    || _ccrc_die "cannot create the scope drop-in directories in $dir"
+  _inst_atomic "$tree/deploy/systemd/tmux-spawn-.scope.d/50-oom-continue.conf" \
+    "$dir/tmux-spawn-.scope.d/50-oom-continue.conf" 644
+  _inst_atomic "$tree/deploy/systemd/ccrc-tmux-server.scope.d/50-oom-continue.conf" \
+    "$dir/ccrc-tmux-server.scope.d/50-oom-continue.conf" 644
+  echo "install: units: $role_unit, claude-session@.service, ccd-cap-scopes.{service,timer}, both drop-ins and the two OOMPolicy=continue scope drop-ins in \$HOME/.config/systemd/user"
 }
 
 # ── _inst_codex_runtime — the Codex lanes' LiteLLM runtime (spec §5.2) ────
@@ -16540,12 +16578,16 @@ _inst_floor() {
 #      (the manifest guards the SET — a file corrupted after the MANIFEST was
 #      generated ships in a tarball whose SHA256SUMS is perfectly honest).
 #      A box with no network answers with curl's failure and changes nothing.
-#   2. BACK UP (`_upd_backup`): coord.db by VACUUM INTO (never cp — the WAL has
-#      been measured holding 10x the main file; backup-coord.mjs's header),
-#      plus dists, ccd and the units, all under ONE `~/ccrc-backups/<ts>/`,
-#      never `~/.ccrc/collect-lane-generation.log`. BEFORE the install touches
-#      anything, so a fault at any later step leaves the backup complete — the
-#      ordering is pinned by a test that injects exactly that fault.
+#   2. BACK UP (`_upd_backup`): coord.db by VACUUM INTO (never cp — the WAL
+#      has been measured holding 10x the main file; backup-coord.mjs's
+#      header), plus dists, ccd and the units, and LAST the coordination
+#      snapshot (the delegation journal and checkpoint, with the manifest
+#      `coordination-snapshot.json` that describes them and the coord.db
+#      snapshot; `deploy/coordination-snapshot.mjs capture`), all under ONE
+#      `~/ccrc-backups/<ts>/`, never `~/.ccrc/collect-lane-generation.log`.
+#      BEFORE the install touches anything, so a fault at any later step leaves
+#      the backup complete — the ordering is pinned by a test that injects
+#      exactly that fault.
 #   3. INSTALL: the `_inst_*` spine, re-run FROM THE STAGED TREE by invoking
 #      the staged `ccrc install` (role-aware, per the CCRC_ROLE this box
 #      recorded in ccrc.env). Not a re-implementation and not a sourced
@@ -20117,7 +20159,28 @@ _upd_backup() {
       || _ccrc_die "the coord.db snapshot failed — refusing to install with an incomplete backup (read backup-coord.mjs's lines above)"
   fi
   _upd_backup_set
-  local shown="$UPD_BACKUP_DIR"; [ "${UPD_REDACT_ACTIVE:-0}" = 1 ] && shown="$(_upd_redact "$shown")"; echo "$say: $shown (coord.db snapshot, dists, ccd and its body, units — taken before anything was installed)"   # redacted only in an update-family run (X1's scope): `ccrc backup`'s result line stays a usable absolute path
+  # THE COORDINATION SNAPSHOT RUNS LAST (delegation broker wave 3, O3). The two authoritative sidecars
+  # (~/.ccrc/delegation-events.log and ~/.ccrc/delegation-checkpoint.json) are described, with the coord.db snapshot taken above,
+  # by one manifest, `coordination-snapshot.json`, which the helper writes only after every member is durable. They are NOT rows
+  # of `_upd_backup_set`: that list is what arm 3 of `_upd_restore` copies back, and a rollback must never put old sidecars over
+  # live ones (they are authority, written by a running server since the snapshot). Continue ONLY after a durable manifest.
+  # The helper's success line is dropped (the result line below describes it); its failure text is kept, on one line, and goes
+  # through `_ccrc_die`, so it is redacted like every other message of an update-family run.
+  local cerr=""
+  cerr="$(node --no-warnings "$CCRC_HERE/../deploy/coordination-snapshot.mjs" capture --dir "$UPD_BACKUP_DIR" 2>&1 >/dev/null)" \
+    || _ccrc_die "the coordination snapshot failed — refusing to install with an incomplete backup (${cerr//$'\n'/ })"
+  local shown="$UPD_BACKUP_DIR"; [ "${UPD_REDACT_ACTIVE:-0}" = 1 ] && shown="$(_upd_redact "$shown")"; echo "$say: $shown (coord.db snapshot, coordination sidecars and manifest, dists, ccd and its body, units — taken before anything was installed)"   # redacted only in an update-family run (X1's scope): `ccrc backup`'s result line stays a usable absolute path
+  # A torn journal tail (D-4655): the capture never writes the journal and the server heals its own, so a tail it finds is LEFT OUT of the
+  # snapshot, which is still a valid one, and the helper says so in one warning line on its stderr. The backup succeeded; the operator is
+  # told, after the result line, in the same WARN shape every other line of this family uses. Only the helper's own line is relayed.
+  local warn_line=""
+  while IFS= read -r warn_line; do
+    case "$warn_line" in
+      "coordination snapshot: warning: "*)
+        [ "${UPD_REDACT_ACTIVE:-0}" = 1 ] && warn_line="$(_upd_redact "$warn_line")"
+        echo "$say: WARN: ${warn_line#coordination snapshot: warning: }" ;;
+    esac
+  done <<<"$cerr"
 }
 
 # ── _upd_backup_set — the ONE list of what a backup copies ────────────────
@@ -22140,6 +22203,52 @@ cmd_backup() {
   _bak_prune
 }
 
+# ── cmd_coordination_snapshot — validate, restore or recover a coordination snapshot (delegation broker wave 3, O3) ──
+# `ccrc coordination-snapshot validate --from <timestamp-directory>` classifies a `~/ccrc-backups/<ts>/` directory by
+# `deploy/coordination-snapshot.mjs` (`v1`, `legacy`, `none`, `invalid`; exit 0, 0, 1, 2; and a second line `data: yes|no`).
+# `restore --from <dir>` replaces the live delegation journal, checkpoint and coord.db (with its WAL and SHM) from a VALID v1
+# snapshot, as one set: it validates the source first, requires ccrc.service MEASURED inactive (running and unmeasurable both
+# refuse; asked again once the marker is durable), stages, publishes an active restore marker (delegation recovery refuses to run
+# while it stands, and so does the server's boot, before coord.db opens), replaces, and makes `COMMITTED` durable before it cleans up.
+# `recover` finishes an interrupted restore from that marker: before `COMMITTED` back to the old set, after it forward to the new.
+# Both take ~/.ccrc/update.lock (`_ver_lock_try`) for the whole act, so `ccrc update` cannot restart the unit mid-restore.
+# The verb is a thin door: the helper is the whole implementation, and its exit code is this verb's. Its OWN refusals follow the
+# brief's table, not ccrc's house "2 is a usage error": a usage error, a missing node and a missing helper are 70 (a plain
+# `exit 70`: `_ccrc_die` is hard-wired to 1, which is `none`). It is NEVER reached by `ccrc update`, `ccrc rollback` or arm 3 of
+# `_upd_restore`: a rollback does not carry the sidecars.
+cmd_coordination_snapshot() {
+  local sub="${1:-}" helper="$CCRC_HERE/../deploy/coordination-snapshot.mjs"
+  case "$sub" in
+    -h|--help) usage; exit 0 ;;
+    validate|restore)
+      shift
+      [ $# -eq 2 ] && [ "$1" = --from ] && [ -n "$2" ] \
+        || { printf '%s\n' "usage: $PROG coordination-snapshot $sub --from <timestamp-directory>" >&2; exit 70; }
+      ;;
+    recover)
+      shift
+      [ $# -eq 0 ] || { printf '%s\n' "usage: $PROG coordination-snapshot recover" >&2; exit 70; }
+      ;;
+    *) printf '%s\n' "usage: $PROG coordination-snapshot {validate --from <timestamp-directory>|restore --from <timestamp-directory>|recover}" >&2; exit 70 ;;
+  esac
+  command -v node >/dev/null 2>&1 \
+    || { printf '%s\n' "$PROG: node is required by 'ccrc coordination-snapshot' (it runs deploy/coordination-snapshot.mjs) but is not on PATH — nothing was read or changed" >&2; exit 70; }
+  [ -f "$helper" ] \
+    || { printf '%s\n' "$PROG: coordination-snapshot: the helper deploy/coordination-snapshot.mjs is missing from this tree — nothing was read or changed" >&2; exit 70; }
+  if [ "$sub" != validate ]; then
+    local lrc=0
+    _ver_lock_try || lrc=$?
+    case "$lrc" in
+      0) ;;
+      1) printf '%s\n' "$PROG: coordination-snapshot $sub: another ccrc run holds ~/.ccrc/update.lock — nothing was changed" >&2; exit 2 ;;
+      *) printf '%s\n' "$PROG: coordination-snapshot $sub: ~/.ccrc/update.lock could not be taken (no flock, or it cannot be measured) — nothing was changed" >&2; exit 2 ;;
+    esac
+  fi
+  local rc=0
+  node --no-warnings "$helper" "$sub" "$@" || rc=$?
+  exit "$rc"
+}
+
 # `_keep_ok <value>` and `_keep_why <knob> <value>` — the ONE validator for
 # every KEEP knob in this file (review 179 F6; D-3423; `deploy/deploy.sh`'s
 # `prune_backups` spells the same DIGIT test a second time on purpose, held
@@ -22191,8 +22300,9 @@ _bak_list() {
 # expansion is already lexically sorted, which for this shape IS
 # chronological order.
 # Wave 9 R10g (D-3825, D-3826): the removal set is cut by `_bak_keepset`, the helper `_bak_gc` shares — this run's own dir,
-# every dir named at or after UPD_BAK_FLOOR (`cmd_backup` sets it before it backs up) and the newest earlier tree backup
-# and coord.db snapshot are never removed — and the prune holds ~/.ccrc/update.lock. Where `_bak_gc` WARNs and returns,
+# every dir named at or after UPD_BAK_FLOOR (`cmd_backup` sets it before it backs up), the newest earlier tree backup, the newest
+# earlier valid coordination snapshot and the newest earlier one that holds data (D-4641) are never removed — and the prune holds
+# ~/.ccrc/update.lock. Where `_bak_gc` WARNs and returns,
 # this verb says "prune skipped" and returns 0: the backup was taken, and its echo and its invalid-KEEP refusal (the two
 # `_ccrc_die`s) are unchanged. A floor that is not recorded (only a direct call reaches it) prunes nothing.
 _bak_prune() {
@@ -22214,12 +22324,19 @@ _bak_prune() {
   esac
   _bak_list
   local floor=$((10#${UPD_BAK_FLOOR//-/})) n=${#BAK_DIRS[@]} i d name
-  _bak_keepset   # cannot fail here: the floor was checked above
+  local krc=0
+  _bak_keepset || krc=$?   # rc 1 cannot happen here (the floor was checked above); rc 2 is the classifier failing
+  if [ "$krc" -ne 0 ]; then
+    echo "backup: prune skipped — the coordination snapshot classifier failed (${BAK_SNAP_WHY:-no reason given}), so nothing can say which backup holds the newest valid snapshot; nothing was pruned"
+    if [ "$took" -eq 1 ]; then _upd_unlock; fi
+    return 0
+  fi
   for ((i = 0; i < n - keep; i++)); do
     d="${BAK_DIRS[$i]}"; name="${d##*/}"
     [ "$d" = "$UPD_BACKUP_DIR" ] && continue
     [ "$((10#${name//-/}))" -ge "$floor" ] && continue
     [ "$d" = "$BAK_KEEP_SNAP" ] && continue
+    [ "$d" = "$BAK_KEEP_DATA" ] && continue
     [ "$d" = "$BAK_KEEP_TREE" ] && continue
     rm -rf -- "${BAK_DIRS[$i]}" \
       || _ccrc_die "could not prune ${BAK_DIRS[$i]} — the newer backups above it are all intact"
@@ -22229,30 +22346,91 @@ _bak_prune() {
   return 0
 }
 
-# ── _bak_keepset — which two earlier dirs a prune keeps beyond the floor (wave 9 R10g, D-3825) ──
-# The ONE spelling of the two extra keeps' SELECTION, shared by `_bak_gc` and `_bak_prune`: which earlier coord.db snapshot
-# and which earlier tree backup are kept, and the own-dir and floor pair that selection skips over. That is all that is
-# shared (fix round 1, F4). The four-line removal filter that APPLIES the keeps — own dir, floor, snapshot, tree — is
-# written twice, once in each pruner's loop, and nothing pins the two copies to each other.
-# The two extra keeps are chosen among dirs NOT already protected (below the floor, not this run's own): the protected
-# ones are kept anyway, so picking one of them would protect nothing. READS BAK_DIRS (`_bak_list` first), UPD_BACKUP_DIR and
-# UPD_BAK_FLOOR; WRITES BAK_KEEP_SNAP (the newest earlier coord.db snapshot) and BAK_KEEP_TREE (the newest earlier tree
-# backup), "" when none. rc 1 when UPD_BAK_FLOOR is not a timestamp, WITHOUT touching either out-param. It declares its
+# ── _bak_keepset — which three earlier dirs a prune keeps beyond the floor (wave 9 R10g, D-3825) ──
+# The ONE spelling of the extra keeps' SELECTION, shared by `_bak_gc` and `_bak_prune`: which earlier coordination snapshot,
+# which earlier snapshot that holds data, and which earlier tree backup are kept, and the own-dir and floor pair that selection
+# skips over. That is all that is shared (fix round 1, F4). The removal filter that APPLIES the keeps — own dir, floor, snapshot,
+# data snapshot, tree — is written twice, once in each pruner's loop, and nothing pins the two copies to each other.
+# The extra keeps are chosen among dirs NOT already protected (below the floor, not this run's own): the protected
+# ones are kept anyway, so picking one of them would protect nothing. They are INDEPENDENT of each other and of the newest-N keep
+# (delegation broker wave 3, O3): a dir is "the newest snapshot" by what the classifier says of its coordination snapshot,
+# "the newest data-bearing snapshot" by the classifier's `data: yes` (a v1 snapshot with any member present, or a legacy one; so a
+# newer snapshot of an EMPTY box never evicts the last one that holds data, D-4641), and "the newest tree backup" by its
+# `server-dist`/`agent-dist` entry, each searched on its own, so a dir kept as one is never what keeps, or evicts, another.
+# READS BAK_DIRS (`_bak_list` first), UPD_BACKUP_DIR and UPD_BAK_FLOOR; WRITES BAK_KEEP_SNAP (the newest earlier valid coordination
+# snapshot), BAK_KEEP_DATA (the newest earlier valid one that holds data) and BAK_KEEP_TREE (the newest earlier tree backup), ""
+# when none. rc 1 when UPD_BAK_FLOOR is not a timestamp, WITHOUT touching an out-param; rc 2 when the classifier itself FAILED
+# (`_bak_snap_class`; BAK_SNAP_WHY says why), all out-params "" — the caller prunes NOTHING and says why. It declares its
 # own floor and n: the callers' locals are not its to read. Links are counted as `_bak_list` counts them (R10i, deferred).
 _bak_keepset() {
-  local floor n i d name
+  local floor n i d name src
   [[ "$UPD_BAK_FLOOR" =~ ^[0-9]{8}-[0-9]{6}$ ]] || return 1
   floor=$((10#${UPD_BAK_FLOOR//-/})); n=${#BAK_DIRS[@]}
-  BAK_KEEP_SNAP=""; BAK_KEEP_TREE=""
+  BAK_KEEP_SNAP=""; BAK_KEEP_DATA=""; BAK_KEEP_TREE=""
   for ((i = n - 1; i >= 0; i--)); do
     d="${BAK_DIRS[$i]}"; name="${d##*/}"
     [ "$d" = "$UPD_BACKUP_DIR" ] && continue
     [ "$((10#${name//-/}))" -ge "$floor" ] && continue
-    if [ -z "$BAK_KEEP_SNAP" ] && [ -f "$d/coord.db" ]; then BAK_KEEP_SNAP="$d"; fi
+    if [ -z "$BAK_KEEP_DATA" ]; then
+      src=0; _bak_snap_class "$d" || src=$?
+      case "$src" in
+        0)
+          [ -n "$BAK_KEEP_SNAP" ] || BAK_KEEP_SNAP="$d"
+          [ "$BAK_SNAP_DATA" -eq 1 ] && BAK_KEEP_DATA="$d"
+          ;;
+        1) ;;
+        *) BAK_KEEP_SNAP=""; BAK_KEEP_DATA=""; BAK_KEEP_TREE=""; return 2 ;;
+      esac
+    fi
     if [ -z "$BAK_KEEP_TREE" ] && { [ -e "$d/server-dist" ] || [ -e "$d/agent-dist" ]; }; then BAK_KEEP_TREE="$d"; fi
-    [ -n "$BAK_KEEP_SNAP" ] && [ -n "$BAK_KEEP_TREE" ] && break
+    [ -n "$BAK_KEEP_DATA" ] && [ -n "$BAK_KEEP_TREE" ] && break
   done
   return 0
+}
+
+# `_bak_snap_class <timestamp dir>` — whether a backup dir holds a VALID coordination snapshot, by `coordination-snapshot.mjs
+# validate` (delegation broker wave 3): rc 0 yes (`v1`, or `legacy`: a bare, valid coord.db from before the sidecars), rc 1 no
+# (`none`, or `invalid`: a present manifest that does not hold up never falls back to the DB beside it), rc 2 the classifier
+# FAILED — which is not an answer, so the pruner deletes nothing. It FAILS when node is not on PATH, when the helper is not in the
+# running tree, and whenever the helper's (exit code, first word) is not exactly one of `0 v1`, `0 legacy`, `1 none`, `2 invalid`
+# with a `data: yes|no` second line: a node that could not even load the helper exits 1, which must never read as "none".
+# After a rollback to a tree that predates the helper the classifier is absent, so backups are not pruned until the box next
+# updates to a tree that has it; that costs disk, never a snapshot (R25). BAK_SNAP_DATA (0|1) says whether a valid dir holds
+# data, and BAK_SNAP_WHY carries a one-line reason on rc 2. A dir holding a valid sidecar snapshot and NO coord.db is a valid
+# snapshot (the live DB was absent when it was taken): the pre-filter below looks for any of the four names a snapshot is made of,
+# never for coord.db alone.
+_bak_snap_class() {
+  local d="$1" n any=0 rc=0 out first second helper="$CCRC_HERE/../deploy/coordination-snapshot.mjs"
+  BAK_SNAP_DATA=0; BAK_SNAP_WHY=""
+  for n in coordination-snapshot.json delegation-events.log delegation-checkpoint.json coord.db; do
+    if [ -e "$d/$n" ] || [ -L "$d/$n" ]; then any=1; break; fi
+  done
+  [ "$any" -eq 1 ] || return 1
+  if ! command -v node >/dev/null 2>&1; then BAK_SNAP_WHY="node is not on PATH"; return 2; fi
+  if [ ! -f "$helper" ]; then
+    BAK_SNAP_WHY="deploy/coordination-snapshot.mjs is not in the running ccrc tree (after a rollback to a tree that predates it, backups are not pruned until the next update to one that has it)"
+    return 2
+  fi
+  # STDOUT alone is the answer; stderr goes to a private temp file and is only ever the reason on a failure (an environment that
+  # prints a line on stderr, such as a debugger banner, must not turn a good answer into a failure).
+  local errf="" err1="" rest
+  errf="$(_plat_mktemp 2>/dev/null)" || errf=""
+  out="$(node --no-warnings "$helper" validate --from "$d" 2>"${errf:-/dev/null}")" || rc=$?
+  if [ -n "$errf" ]; then IFS= read -r err1 < "$errf" || :; rm -f -- "$errf"; fi
+  first="${out%%$'\n'*}"; second=""; rest=""
+  [ "$first" = "$out" ] || { rest="${out#*$'\n'}"; second="${rest%%$'\n'*}"; }
+  case "$rc:${first%%:*}" in
+    0:v1|0:legacy|1:none|2:invalid) ;;
+    *) BAK_SNAP_WHY="the classifier answered exit $rc, \"${first:0:100}\"${err1:+ (stderr: ${err1:0:100})}"; BAK_SNAP_WHY="${BAK_SNAP_WHY//[![:print:]]/?}"; return 2 ;;
+  esac
+  # Line 2 exactly the data line, and nothing after it.
+  if [ "$rest" != "$second" ]; then BAK_SNAP_WHY="the classifier's answer had more than two lines"; return 2; fi
+  case "$second" in
+    "data: yes") BAK_SNAP_DATA=1 ;;
+    "data: no") ;;
+    *) BAK_SNAP_WHY="the classifier's answer carried no data line"; return 2 ;;
+  esac
+  case "$rc" in 0) return 0 ;; *) return 1 ;; esac
 }
 
 # ── _bak_gc — update's and rollback's own prune of ~/ccrc-backups (wave 8 item B) ──
@@ -22265,8 +22443,10 @@ _bak_keepset() {
 # `_keep_ok`, D-3423; counted as `ccrc backup` and deploy.sh count them; read from the process env only), and four
 # more that can only LEAVE the removal set: this run's own backup by its exact path; every dir named at or after
 # this run's lock second (UPD_BAK_FLOOR) — both D-3593; and, among the dirs neither of those protects, the newest tree backup (D-3594; a
-# `server-dist` or `agent-dist` entry: another run's, a deploy's, or the previous update's) and the newest coord.db
-# snapshot (D-3595). The lock was released before the sweep (design §10), so it is RE-TAKEN (D-3592) without dying: any other holder
+# `server-dist` or `agent-dist` entry: another run's, a deploy's, or the previous update's) and the newest VALID coordination
+# snapshot (D-3595, widened by delegation broker wave 3: `_bak_snap_class` asks `coordination-snapshot.mjs classify`, so a v1
+# snapshot with sidecars and no coord.db counts, and an invalid manifest never does) and, beside it, the newest valid snapshot that HOLDS DATA (D-4641:
+# a v1 with a member present, or a legacy one), so an empty-box snapshot never evicts the last one with data. The sets are independent. The lock was released before the sweep (design §10), so it is RE-TAKEN (D-3592) without dying: any other holder
 # means nothing is pruned.
 _bak_gc() {   # <lead word: update|rollback>
   local lead="$1" keep="${CCRC_BACKUP_KEEP:-10}"
@@ -22290,16 +22470,23 @@ _bak_gc() {   # <lead word: update|rollback>
   esac
   _bak_list
   local floor=$((10#${UPD_BAK_FLOOR//-/})) n=${#BAK_DIRS[@]} i d name shown rc=0
-  _bak_keepset   # wave 9 R10g: the selection of the two extra keeps, shared with `_bak_prune`; the floor was checked above
+  local krc=0
+  _bak_keepset || krc=$?   # wave 9 R10g: the selection of the two extra keeps, shared with `_bak_prune`; the floor was checked above
+  if [ "$krc" -ne 0 ]; then
+    echo "$lead: backups: WARN: the coordination snapshot classifier failed (${BAK_SNAP_WHY:-no reason given}), so nothing can say which backup holds the newest valid snapshot — nothing pruned"
+    if [ "$took" -eq 1 ]; then _upd_unlock; fi
+    return 1
+  fi
   for ((i = 0; i < n - keep; i++)); do
     d="${BAK_DIRS[$i]}"; name="${d##*/}"
     [ "$d" = "$UPD_BACKUP_DIR" ] && continue   # D-3593
     [ "$((10#${name//-/}))" -ge "$floor" ] && continue   # D-3593
     [ "$d" = "$BAK_KEEP_SNAP" ] && continue
+    [ "$d" = "$BAK_KEEP_DATA" ] && continue
     [ "$d" = "$BAK_KEEP_TREE" ] && continue
     shown="$d"; case "$d" in "$HOME"/*) shown="\$HOME${d#"$HOME"}" ;; esac
     if rm -rf -- "$d" 2>/dev/null; then
-      echo "$lead: backups: pruned $shown (kept: the newest $keep timestamped backups, every one named at or after this run took its lock, this run's own, the newest earlier tree backup and the newest earlier coord.db snapshot; hand-made siblings are never touched)"
+      echo "$lead: backups: pruned $shown (kept: the newest $keep timestamped backups, every one named at or after this run took its lock, this run's own, the newest earlier tree backup, the newest earlier valid coordination snapshot and the newest earlier one that holds data; hand-made siblings are never touched)"
     else
       echo "$lead: backups: WARN: could not prune $shown — every newer backup is intact"
       rc=1
@@ -23223,11 +23410,18 @@ _uninst_units() {
     || _ccrc_die "removing the unit files under $dir failed"
   rm -rf -- "$dir/claude-session@.service.d" "$slice" \
     || _ccrc_die "removing the drop-in directories under $dir failed"
+  # D-5241: the two scope drop-ins, as FILES and never their directories whole:
+  # `ccrc-tmux-server.scope.d` may also hold an operator's own hand-placed
+  # drop-in (the 2026-10-12 recovery placed one), which is not ccrc's to remove.
+  # Each directory goes only if that leaves it empty.
+  rm -f -- "$dir/tmux-spawn-.scope.d/50-oom-continue.conf" "$dir/ccrc-tmux-server.scope.d/50-oom-continue.conf" \
+    || _ccrc_die "removing the scope drop-ins under $dir failed"
+  rmdir -- "$dir/tmux-spawn-.scope.d" "$dir/ccrc-tmux-server.scope.d" 2>/dev/null || :
   if command -v systemctl >/dev/null 2>&1; then
     systemctl --user daemon-reload \
       || echo "uninstall: units: daemon-reload failed — systemd may still list units whose files are gone until the next reload" >&2
   fi
-  echo "uninstall: units: stopped, disabled and removed (incl. both drop-ins and the slice escape)"
+  echo "uninstall: units: stopped, disabled and removed (incl. both drop-ins, the two OOMPolicy=continue scope drop-ins and the slice escape)"
 }
 
 # ── _uninst_codex — stop the Codex lanes' tiers, remove their runtime ─────
@@ -23549,7 +23743,7 @@ _uninst_wrappers() {
     # is another repository's unmarked launcher, which the marker test below
     # already keeps, and nothing here places it (D-3478). `ccd-update-sync`
     # joins on the same terms as the timer-bound binary from programme wave 4.
-    case "$name" in ccd|ccrc|ccd-cap-scopes|ccd-graph-sweep|ccd-account-health|ccd-telemetry-keepalive|ccd-account-auth|ccd-usage-sweep|ccd-tmp-sweep|ccd-scope-sweep|ccd-history-sweep|ccd-pool-sync|ccd-update-sync|ccgpt-runtime|ccrc-codex|ccrc-api) continue ;; esac
+    case "$name" in ccd|ccrc|ccd-cap-scopes|ccd-graph-sweep|ccd-account-health|ccd-telemetry-keepalive|ccd-account-auth|ccd-usage-sweep|ccd-tmp-sweep|ccd-scope-sweep|ccd-tool-adj|ccd-history-sweep|ccd-pool-sync|ccd-update-sync|ccgpt-runtime|ccrc-codex|ccrc-api) continue ;; esac
     [[ "$name" =~ $WRAPPER_ID_RE ]] || continue
     verdict="$(node --no-warnings --input-type=module -e '
 import { readFileSync, statSync } from "node:fs";
@@ -23750,8 +23944,10 @@ _uninst_tree_bins() {
   # non-Darwin role and only its timer is fleet-gated, so it is removed here
   # on every role.
   #
+  # `ccd-tool-adj` (D-5241, the tool-child priority's shell prefix) joins on
+  # `ccd-scope-sweep`'s terms: `_inst_bins` places it on every non-Darwin role.
   # `ccrc-api` (wave 17, D-5313), the closed client the role skills call, joins
-  # on `ccd-history-sweep`'s terms: `_inst_bins` places it on both platform
+  # on the GPT lane's terms: `_inst_bins` places it on both platform
   # arms and every role but server, so it is removed here on every role (a
   # no-op on a server box). Whatever is at the path goes, README's link to the
   # tree or a copy deploy.sh or the spine placed: each is ccrc's own file.
@@ -23771,6 +23967,7 @@ _uninst_tree_bins() {
     "$HOME/.local/bin/ccd-telemetry-keepalive" "$HOME/.local/bin/ccd-account-auth" \
     "$HOME/.local/bin/ccd-usage-sweep" "$HOME/.local/bin/ccd-usage-sweep.py" \
     "$HOME/.local/bin/ccd-tmp-sweep" "$HOME/.local/bin/ccd-scope-sweep" "$HOME/.local/bin/ccd-pool-sync" \
+    "$HOME/.local/bin/ccd-tool-adj" \
     "$HOME/.local/bin/ccd-history-sweep" \
     "$HOME/.local/bin/ccd-update-sync" \
     "$HOME/.local/bin/ccgpt-proxy.py" "$HOME/.local/bin/ccgpt-usage.py" \
@@ -23783,7 +23980,7 @@ _uninst_tree_bins() {
   rm -f -- "$HOME/.local/libexec/ccrc/ccd" \
     || _ccrc_die "removing ccd's body from \$HOME/.local/libexec/ccrc failed"
   rmdir -- "$HOME/.local/libexec/ccrc" 2>/dev/null || :
-  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-scope-sweep, ccd-history-sweep, ccd-pool-sync, ccd-update-sync, ccgpt-proxy.py, ccgpt-usage.py, ccgpt-runtime, ccrc-codex, ccrc-api and the ccrc launcher removed from \$HOME/.local/bin, and ccd's body from \$HOME/.local/libexec/ccrc; the completed-install record and the node's update state (~/.ccrc/previous, install-step, update.json, update.lock, update-intent) removed$vsaid$msaid$nsaid"
+  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-scope-sweep, ccd-tool-adj, ccd-history-sweep, ccd-pool-sync, ccd-update-sync, ccgpt-proxy.py, ccgpt-usage.py, ccgpt-runtime, ccrc-codex, ccrc-api and the ccrc launcher removed from \$HOME/.local/bin, and ccd's body from \$HOME/.local/libexec/ccrc; the completed-install record and the node's update state (~/.ccrc/previous, install-step, update.json, update.lock, update-intent) removed$vsaid$msaid$nsaid"
   echo "uninstall: tree: the box token's node records (~/.ccrc/box-token-generation, token-sync.json) removed; its value and state files stay with ~/.ccrc/mail.token, and ~/.cc-secrets/ccrc-mail.token is not touched"
   # ── the one entry that is not ccrc's own binary ─────────────────────────
   # `_inst_graphify_engine` converges `$HOME/.local/bin/graphify` onto the
@@ -24140,6 +24337,7 @@ case "$VERB" in
   rollout) cmd_rollout "$@" ;;
   uninstall) cmd_uninstall "$@" ;;
   backup)  cmd_backup "$@" ;;
+  coordination-snapshot) cmd_coordination_snapshot "$@" ;;
   logs)    cmd_logs "$@" ;;
   passwd)  cmd_passwd "$@" ;;
   expose)  cmd_expose "$@" ;;

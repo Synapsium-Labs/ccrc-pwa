@@ -2610,6 +2610,104 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
   }, 30_000);
 });
 
+// ── The delegation join record goes with its row (delegation broker wave 3, Task 2) ─────────────────────────────
+// `session-hook.sh` appends the ids a SubagentStart named to `$REG/<id>.joined`, and past 128 lines renames that whole file
+// to `$REG/<id>.joinedprev`: DOT-FREE suffixes on purpose, so the purge loop's glob unlinks both with the row and no
+// explicit name is needed (unlike the two-dot hookstate and turn marker above). Dot-free is also what makes a LEFTOVER one
+// hold the slug under `_ws_slug_free`'s any-field check, which is why the hook writes them only while the row's
+// `.generation` stands (`_reg_purge` removes that last).
+describe('_reg_purge takes the delegation join record with the row (delegation broker wave 3)', () => {
+  it('removes <id>.joined and <id>.joinedprev, leaves a longer id\'s and a nested id\'s standing, and the slug reads free again', () => {
+    const id = seed();
+    const REGD = path.join(h.home, '.cc-sessions');
+    fs.writeFileSync(path.join(REGD, `${id}.joined`), 'aef14f3b6908dc0a9\n');
+    fs.writeFileSync(path.join(REGD, `${id}.joinedprev`), 'a-0\n');
+    const neighbours = [`${id}x.joined`, `${id}.x-y.joined`, `${id}x.joinedprev`, `${id}.x-y.joinedprev`];
+    for (const n of neighbours) fs.writeFileSync(path.join(REGD, n), 'a-1\n');
+    expect(h.sh(`_ws_slug_free demo still-river; echo "free=$?"`), 'a dot-free field holds the slug while it stands').toContain('free=1');
+    const out = h.sh(`_reg_purge ${id}; echo "rc=$?"; echo "unremoved=[$REG_PURGE_UNREMOVED]"`);
+    expect(out, 'nothing was refused').toContain('rc=0');
+    expect(out, 'and the out-parameter stays empty').toContain('unremoved=[]');
+    for (const n of ['joined', 'joinedprev']) expect(fs.existsSync(path.join(REGD, `${id}.${n}`)), `${n} goes with the row`).toBe(false);
+    for (const n of neighbours) expect(fs.existsSync(path.join(REGD, n)), `${n} is another row's`).toBe(true);
+    expect(h.sh(`_ws_slug_free demo still-river; echo "free=$?"`), 'and the slug is free again').toContain('free=0');
+  });
+});
+
+// ── No window orphans a join record (delegation broker wave 3, Task 2, fix round 2) ───────────────────────────
+// The hook takes no lock for its append, and `_reg_purge` removes `generation` and then, last, the join record, so a SubagentStart can land its
+// append while a purge is running. An orphaned `<id>.joined` is a dot-free field: `_ws_slug_free` returns 1 on it for
+// ever and `ws-gc`'s dead-reg arm (keyed on `.uuid`/`.workspace`) never clears it; `<id>.joinedprev`, the rotation's
+// renamed file, is the same kind of field. Two windows, closed by two lines:
+//   (1) the append lands AFTER the purge loop's glob has passed the names and BEFORE `generation` goes: this purge removes
+//       both once more, in ONE `rm -f` call, AFTER `generation` (the rows below drive it by shadowing `_usage_purge`, the
+//       first call between the loop and the generation unlink, so the "append" is deterministic and needs no sleep);
+//   (2) the append finishes AFTER the purge: the hook re-checks `generation` after its write and after a rotation's rename
+//       and removes both names (`session-hook-turnmark.test.ts`, "no window orphans a join record").
+// The new unlink goes through its own literal paths, never the glob loop's `f`: a second unlink through that variable would
+// be a second canonical write on the compaction card's allow-list (the note beside the `hf` loop in `_reg_purge`). It is
+// ONE `rm` call, so the purge's unlink count (pinned in `ccd-workspaces.test.ts`) does not move for the second name.
+describe('_reg_purge leaves no join record behind, whenever the hook\'s append lands (delegation broker wave 3)', () => {
+  const REGD = (): string => path.join(h.home, '.cc-sessions');
+  /** `_usage_purge` is called after the purge loop and before the generation unlink; this stand-in is the hook's append
+   *  landing exactly there. */
+  const APPEND_IN_THE_WINDOW = `_usage_purge() { printf 'aef14f3b6908dc0a9\\n' >> "$REG/$1.joined"; printf 'a-0\\n' >> "$REG/$1.joinedprev"; }`;
+
+  it('window 1: an append that lands after the loop passed the name is removed by the unlink that follows generation', () => {
+    const id = seed();
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', `${id}.generation`), '0189abcd-1234-5678-9abc-0123456789ab');
+    const out = h.sh(`${APPEND_IN_THE_WINDOW}; _reg_purge ${id}; echo "rc=$?"; echo "unremoved=[$REG_PURGE_UNREMOVED]"`);
+    expect(out).toContain('rc=0');
+    expect(out).toContain('unremoved=[]');
+    for (const n of ['joined', 'joinedprev']) expect(fs.existsSync(path.join(REGD(), `${id}.${n}`)), `the ${n} that landed in the window did not survive`).toBe(false);
+    expect(fs.existsSync(path.join(REGD(), `${id}.generation`))).toBe(false);
+    expect(h.sh(`_ws_slug_free demo still-river; echo "free=$?"`), 'and the slug is free').toContain('free=0');
+  });
+
+  it('it is the LAST unlink, ONE rm call for both names: after generation, before the lock is released', () => {
+    const id = seed();
+    fs.writeFileSync(path.join(REGD(), `${id}.generation`), '0189abcd-1234-5678-9abc-0123456789ab');
+    fs.writeFileSync(path.join(REGD(), `${id}.joined`), 'a-1\n');
+    fs.writeFileSync(path.join(REGD(), `${id}.joinedprev`), 'a-0\n');
+    const log = path.join(h.home, 'rm-order');
+    // One log line per `rm` CALL that names one of this row's files: its operands, in order.
+    h.sh(`rm() { local a names=""; for a in "$@"; do case "$a" in "$REG"/${id}.*) names+="\${a##*/} " ;; esac; done
+      [ -z "$names" ] || printf '%s\\n' "$names" >> '${log}'; command rm "$@"; }
+      _reg_purge ${id}`);
+    const calls = fs.readFileSync(log, 'utf8').split('\n').filter(Boolean);
+    expect(calls.at(-1), 'the last call takes both names at once').toBe(`${id}.joined ${id}.joinedprev `);
+    expect(calls.at(-2), 'and right before it the generation went').toBe(`${id}.generation `);
+    expect(calls.filter((c) => c.includes('.joined ') || c.includes('.joinedprev ')), 'the loop took each first, one call apiece')
+      .toEqual([`${id}.joined `, `${id}.joinedprev `, `${id}.joined ${id}.joinedprev `]);
+  });
+
+  it('a refusal of that unlink is its own condition: status 3, and each path still standing is named', () => {
+    const id = seed();
+    fs.writeFileSync(path.join(REGD(), `${id}.generation`), '0189abcd-1234-5678-9abc-0123456789ab');
+    // The landed "append" is a DIRECTORY, so only the tail unlink can meet it (the loop's glob already passed).
+    const one = h.sh(`_usage_purge() { mkdir "$REG/$1.joinedprev"; }; _reg_purge ${id}; echo "rc=$?"; echo "unremoved=[$REG_PURGE_UNREMOVED]"`);
+    expect(one, 'a refused unlink is status 3').toContain('rc=3');
+    expect(one, 'only the name that stands is named').toContain(`unremoved=[${path.join(REGD(), `${id}.joinedprev`)}]`);
+    expect(fs.existsSync(path.join(REGD(), `${id}.generation`)), 'generation still went first').toBe(false);
+  });
+
+  it('both names refused: both are named, in order', () => {
+    const id = seed();
+    fs.writeFileSync(path.join(REGD(), `${id}.generation`), '0189abcd-1234-5678-9abc-0123456789ab');
+    const both = h.sh(`_usage_purge() { mkdir "$REG/$1.joined" "$REG/$1.joinedprev"; }; _reg_purge ${id}; echo "rc=$?"; echo "unremoved=[$REG_PURGE_UNREMOVED]"`);
+    expect(both).toContain('rc=3');
+    expect(both).toContain(`unremoved=[${path.join(REGD(), `${id}.joined`)}, ${path.join(REGD(), `${id}.joinedprev`)}]`);
+  });
+
+  it('a nested id\'s or a longer id\'s record is not this row\'s: the tail names one path only', () => {
+    const id = seed();
+    const neighbours = [`${id}x.joined`, `${id}.x-y.joined`];
+    for (const n of neighbours) fs.writeFileSync(path.join(REGD(), n), 'a-1\n');
+    h.sh(`${APPEND_IN_THE_WINDOW}; _reg_purge ${id}`);
+    for (const n of neighbours) expect(fs.existsSync(path.join(REGD(), n)), `${n} is another row's`).toBe(true);
+  });
+});
+
 // ── The stall watch's turn marker goes with its row (worker stall watch wave 2, spec 2026-09-29 §5.1) ─────
 // `session-hook.sh` writes `$REG/<id>.turn.json` beside `<id>.hookstate.json`. Both names carry a SECOND dot,
 // so the purge loop's `*.*` skip (the nested-id guard) passes over them, and `_reg_purge` names both

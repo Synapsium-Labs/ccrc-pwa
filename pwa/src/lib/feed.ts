@@ -6,7 +6,7 @@
 // and `notifymark.ts` advances the durable mark ONE-WAY at the moment that
 // response lands. So the tail must be merged and rendered on receipt: there is
 // no second chance to ask for it.
-import { reviveNotifyEvent, type NotifyEvent } from '../../../shared/api';
+import { parseInterruptEventBody, reviveNotifyEvent, type NotifyEvent } from '../../../shared/api';
 
 /** How many events the store keeps. Mirrors the server ring's own 200
  *  (server/src/notifylog.ts) so the client never pretends to hold more
@@ -87,4 +87,15 @@ export function mergeBySeq(a: readonly NotifyEvent[], b: readonly NotifyEvent[])
   for (const e of b) by.set(recordKey(e), e);
   const all = [...by.values()].sort((x, y) => x.at - y.at || x.seq - y.seq);
   return all.length > FEED_CAP ? all.slice(all.length - FEED_CAP) : all;
+}
+
+/** D-5237: an `interrupt` record's scrollback line — "⎋ interrupted · keycap" when the key was sent, and
+ *  "⎋ not interrupted · <source> · <outcome>" when the route refused it (no key pressed). Through the shared body
+ *  reader, so a token this build does not know reads `unknown`. Null for any other kind, or a body off its grammar
+ *  (the caller keeps the record's own title). */
+export function interruptLine(e: NotifyEvent): string | null {
+  if (e.kind !== 'interrupt') return null;
+  const b = parseInterruptEventBody(e.body);
+  if (b === null) return null;
+  return b.outcome === 'sent' ? `⎋ interrupted · ${b.source}` : `⎋ not interrupted · ${b.source} · ${b.outcome}`;
 }

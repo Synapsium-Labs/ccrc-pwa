@@ -1375,6 +1375,231 @@ export const MIGRATIONS: readonly string[] = [
   INSERT INTO collect_lane_settings (id, choice, fleetNodeId, markerRetiredAt, generation, updatedAt)
     VALUES (1, 'off', NULL, NULL, 0, 0);
   `,
+  // ── 21: user_version 20 -> 21 ─────────────────────────────────────────────
+  // D-5290 (coordinator-first routing spec 2026-10-17 §5.2): an ask row may be MINTED `released`, never held, when
+  // its child's parent is not live (`parent-not-live`) or is a session of another project (`parent-project-mismatch`):
+  // the operator is pushed on the same tick, and the row is the journal of why the parent was skipped. `releaseReason`
+  // is that why, NULL for every row the hold minted (a lapse or a decline leaves it NULL too). Read back through
+  // `isAskReleaseReason`, never a cast; NO CHECK, for the reason `collect_lane_settings.choice` gives: a token a newer
+  // build writes must not stop an older build opening the file.
+  //
+  // ONE ADDITIVE COLUMN, nullable, no default, and nothing else: an older build opening a file at `user_version 21`
+  // takes rule 3 (it warns, reads as-is and migrates nothing); its `ASK_COLS` never names the column, so it reads these
+  // rows as the lapsed `released` rows they look like. Every earlier entry is frozen. RE-MEASURE the slot immediately
+  // before the PR and before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE asks ADD COLUMN releaseReason TEXT;
+  `,
+  // ── 22: user_version 21 -> 22 ─────────────────────────────────────────────
+  // The delegation broker's REPORT-ONLY coordination projection (delegation broker wave 3, spec §5.2): the six
+  // `delegation_*` tables, of the complete future-facing shape, in ONE step — waves 4-7 add code and no schema.
+  //   - `delegation_sessions`, `_attempts`, `_activities`, `_leases`, `_lineage`, `_events`. Columns are camelCase, tables and
+  //     indexes snake_case, every instant is epoch ms (the server's clock); the checkpoint and the journal spell the same
+  //     instants as canonical UTC strings, and `delegation-model.ts` is the one codec between the two.
+  //   - THEY ARE REPAIRABLE OUTPUT, NEVER AUTHORITY. The journal (`delegation-events.log`) and the checkpoint
+  //     (`delegation-checkpoint.json`) are the record. The checkpoint carries sessions, attempts, activities, leases and
+  //     lineage, and `CoordStore.projectDelegationCheckpoint` rebuilds exactly those five in one transaction: it deletes the
+  //     lineage, leases, attempts and activities, deletes the sessions (and, first, the events) that LEFT the checkpoint,
+  //     upserts the staying sessions in place, and inserts the activities, attempts, leases and lineage. The checkpoint
+  //     carries NO events, so `delegation_events` is journal-derived: only `CoordStore.insertDelegationEvent` and its batch
+  //     `insertDelegationEvents` write it, a
+  //     projection deletes the events of a session that leaves and touches no other, and a lost or damaged events table is
+  //     repaired by replaying the retained journal through those two (Task 8), NOT by projecting. Nothing else
+  //     writes any of the six. So SQLite never becomes a second identity source, and it holds no health and no
+  //     coordinator intent as an authority (the checkpoint's `observationIntervals` and `coordinatorIntentByParent` do).
+  //     Bucket cursors and pruning holds have NO table: they live in the checkpoint alone.
+  //   - WAVE 3 WRITES A LEASE ROW ONLY BY REPLAYING A DURABLE `lease-created` ENTRY, and fixes generation 0, equal creating
+  //     and current journal sequences, `ephemeral` disposition, `not-due` cleanup and every transition clock, evidence and
+  //     carrier field to NULL. The DDL deliberately allows more (adoption, retention, promotion, cleanup, a carrier
+  //     generation, a release) because later waves fill those in; the WAVE-3 guard is `assertWave3Lease` in code, so the
+  //     schema never has to change to loosen it.
+  //   - THE TWO PARTIAL IDENTITY INDEXES on `delegation_leases` are one idea in two halves. SQLite treats NULLs in a UNIQUE
+  //     index as distinct, so a single UNIQUE (project, adminRecord, creationBase, canonicalPath) would admit unlimited
+  //     duplicates whose `creationBase` is NULL; one index per nullness avoids that, and both cover UNRELEASED rows only
+  //     (`releasedAt IS NULL`) so the exact tuple is reusable once its lease is released. `delegation_leases_one_active_path`
+  //     is independent: no two unreleased leases own one `canonicalPath`.
+  //   - An unresolved, conflicting or unmeasured ATTEMPT may keep `canonicalPath` NULL; a linked one may not.
+  //   - `delegation_lineage.runId` is a foreign key to `runs(id)`; every other key is internal to the six.
+  //
+  // A NEW SET OF TABLES AND NOTHING ELSE, entries 18, 19 and 20's argument, and the choice that keeps a ROLLBACK bootable: an
+  // older build opening a file at `user_version 22` takes `db.ts` rule 3 (it warns, reads as-is, migrates nothing) and
+  // never names these tables, so its runs, mail, claims and ledger work unchanged, and no table it owns was altered.
+  //
+  // MIGRATIONS[0..20] are frozen: `db.ts` iterates from the live `user_version`, so an edit to an applied entry never
+  // runs. THIS ENTRY WAS SLOT 20 WHEN IT WAS WRITTEN, measured against origin/main (19 entries) at the wave-3 task that
+  // wrote it. The child reclamation wave 10 collector switch (#384) merged first and took `user_version 19 -> 20`, so this
+  // one moved up a slot rather than sharing an index, as entries 18 and 19 did before it. It moved up once more on its
+  // landing merge, because the asks release reason (#511) had taken `user_version 20 -> 21`. A move is safe only because
+  // this entry has never shipped: no release and no box carries it at an earlier index, so no database applied it there,
+  // and a move changes its index and this comment, never its SQL. Whichever branch holding the same slot merges second
+  // moves up the same way, and the tests find this entry by its DDL, so a renumber edits only the version pins that name
+  // the slot. RE-MEASURE immediately before the PR and before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE delegation_sessions (
+    sessionId            TEXT NOT NULL,
+    parentIncarnation    TEXT NOT NULL,
+    explicitIntentAt     INTEGER,
+    effective            INTEGER NOT NULL CHECK (effective IN (0, 1)),
+    effectiveBasisJson   TEXT NOT NULL,
+    claudeSessionIdsJson TEXT NOT NULL,
+    firstObservedAt      INTEGER NOT NULL,
+    lastObservedAt       INTEGER NOT NULL,
+    PRIMARY KEY (sessionId, parentIncarnation),
+    CHECK (lastObservedAt >= firstObservedAt)
+  );
+  CREATE INDEX delegation_sessions_by_effective
+    ON delegation_sessions(effective, lastObservedAt);
+
+  CREATE TABLE delegation_attempts (
+    attemptId         TEXT NOT NULL PRIMARY KEY,
+    parentId          TEXT NOT NULL,
+    parentIncarnation TEXT NOT NULL,
+    project           TEXT NOT NULL,
+    adminRecord       TEXT NOT NULL,
+    canonicalPath     TEXT,
+    attemptedAt       INTEGER NOT NULL,
+    rung              INTEGER CHECK (rung IS NULL OR rung BETWEEN 1 AND 4),
+    verdict           TEXT NOT NULL CHECK (verdict IN ('linked', 'unresolved', 'conflicting', 'unmeasured')),
+    evidenceJournalIdsJson TEXT NOT NULL,
+    detail            TEXT,
+    CHECK (verdict != 'linked' OR canonicalPath IS NOT NULL),
+    FOREIGN KEY (parentId, parentIncarnation)
+      REFERENCES delegation_sessions(sessionId, parentIncarnation)
+  );
+  CREATE INDEX delegation_attempts_by_parent
+    ON delegation_attempts(parentId, parentIncarnation, attemptedAt);
+  CREATE INDEX delegation_attempts_by_path
+    ON delegation_attempts(project, adminRecord, attemptedAt);
+
+  CREATE TABLE delegation_activities (
+    activityId         TEXT NOT NULL PRIMARY KEY,
+    parentId           TEXT NOT NULL,
+    parentIncarnation  TEXT NOT NULL,
+    sourceKind         TEXT NOT NULL CHECK (sourceKind IN ('agent', 'workflow', 'bash-worktree')),
+    upstreamId         TEXT NOT NULL,
+    identityJournalId  TEXT NOT NULL CHECK (length(identityJournalId) = 64),
+    displayName        TEXT,
+    executionState     TEXT NOT NULL CHECK (executionState IN ('active', 'ended', 'unknown')),
+    openedAt           INTEGER NOT NULL,
+    endedAt            INTEGER,
+    lastEventAt        INTEGER NOT NULL,
+    UNIQUE (parentId, parentIncarnation, sourceKind, upstreamId),
+    FOREIGN KEY (parentId, parentIncarnation)
+      REFERENCES delegation_sessions(sessionId, parentIncarnation),
+    CHECK (endedAt IS NULL OR endedAt >= openedAt),
+    CHECK (lastEventAt >= openedAt)
+  );
+  CREATE INDEX delegation_activities_by_parent
+    ON delegation_activities(parentId, parentIncarnation, executionState);
+
+  CREATE TABLE delegation_leases (
+    leaseId                 TEXT NOT NULL PRIMARY KEY,
+    generation              INTEGER NOT NULL CHECK (generation >= 0),
+    creatingJournalSequence INTEGER NOT NULL UNIQUE CHECK (creatingJournalSequence > 0),
+    currentJournalSequence  INTEGER NOT NULL CHECK (currentJournalSequence >= creatingJournalSequence),
+    activityId              TEXT NOT NULL REFERENCES delegation_activities(activityId),
+    parentId                TEXT NOT NULL,
+    parentIncarnation       TEXT NOT NULL,
+    project                 TEXT NOT NULL,
+    adminRecord             TEXT NOT NULL,
+    canonicalPath           TEXT NOT NULL,
+    creationBase            TEXT,
+    sourceKind              TEXT NOT NULL CHECK (sourceKind IN ('agent', 'workflow', 'raw', 'attached')),
+    parentageState          TEXT NOT NULL CHECK (parentageState IN ('linked', 'unresolved', 'conflicting', 'unmeasured')),
+    workspaceState          TEXT NOT NULL CHECK (workspaceState IN ('none', 'provisioning', 'present', 'absent', 'unmeasured')),
+    disposition             TEXT NOT NULL CHECK (disposition IN ('ephemeral', 'adopted', 'retained', 'promoted')),
+    cleanupState            TEXT NOT NULL CHECK (cleanupState IN ('not-due', 'pending', 'running', 'refused', 'reclaimed', 'unmeasured')),
+    cleanupPopulation       TEXT NOT NULL CHECK (cleanupPopulation = 'ephemeral-lease'),
+    firstObservedAt         INTEGER NOT NULL,
+    lastObservedAt          INTEGER NOT NULL,
+    terminalEvidenceAt      INTEGER,
+    adoptedAt               INTEGER,
+    retainedAt              INTEGER,
+    promotedAt              INTEGER,
+    cleanupDueAt            INTEGER,
+    cleanupStartedAt        INTEGER,
+    cleanupFinishedAt       INTEGER,
+    cleanupEvidenceJson     TEXT,
+    carrierGenerationSeen   INTEGER CHECK (carrierGenerationSeen IS NULL OR carrierGenerationSeen >= 1),
+    releasedAt              INTEGER,
+    FOREIGN KEY (parentId, parentIncarnation)
+      REFERENCES delegation_sessions(sessionId, parentIncarnation),
+    CHECK (lastObservedAt >= firstObservedAt),
+    CHECK (terminalEvidenceAt IS NULL OR terminalEvidenceAt >= firstObservedAt),
+    CHECK (adoptedAt IS NULL OR adoptedAt >= firstObservedAt),
+    CHECK (retainedAt IS NULL OR retainedAt >= firstObservedAt),
+    CHECK (promotedAt IS NULL OR promotedAt >= firstObservedAt),
+    CHECK (cleanupDueAt IS NULL OR cleanupDueAt >= firstObservedAt),
+    CHECK (cleanupStartedAt IS NULL OR cleanupStartedAt >= firstObservedAt),
+    CHECK (cleanupFinishedAt IS NULL OR cleanupFinishedAt >= firstObservedAt),
+    CHECK (cleanupFinishedAt IS NULL OR cleanupStartedAt IS NOT NULL),
+    CHECK (releasedAt IS NULL OR releasedAt >= firstObservedAt)
+  );
+  CREATE UNIQUE INDEX delegation_leases_identity_null_base
+    ON delegation_leases(project, adminRecord, canonicalPath)
+    WHERE creationBase IS NULL AND releasedAt IS NULL;
+  CREATE UNIQUE INDEX delegation_leases_identity_with_base
+    ON delegation_leases(project, adminRecord, creationBase, canonicalPath)
+    WHERE creationBase IS NOT NULL AND releasedAt IS NULL;
+  CREATE UNIQUE INDEX delegation_leases_one_active_path
+    ON delegation_leases(canonicalPath)
+    WHERE releasedAt IS NULL;
+  CREATE INDEX delegation_leases_by_parent
+    ON delegation_leases(parentId, parentIncarnation, releasedAt);
+  CREATE INDEX delegation_leases_by_activity
+    ON delegation_leases(activityId);
+  CREATE INDEX delegation_leases_by_cleanup
+    ON delegation_leases(cleanupPopulation, cleanupState, cleanupDueAt);
+
+  CREATE TABLE delegation_lineage (
+    lineageId          TEXT NOT NULL PRIMARY KEY,
+    parentId           TEXT NOT NULL,
+    parentIncarnation  TEXT NOT NULL,
+    activityId         TEXT REFERENCES delegation_activities(activityId),
+    leaseId            TEXT REFERENCES delegation_leases(leaseId),
+    runId              INTEGER REFERENCES runs(id),
+    openedAt           INTEGER NOT NULL,
+    closedAt           INTEGER,
+    closeReason        TEXT,
+    FOREIGN KEY (parentId, parentIncarnation)
+      REFERENCES delegation_sessions(sessionId, parentIncarnation),
+    CHECK (((activityId IS NOT NULL) + (leaseId IS NOT NULL) + (runId IS NOT NULL)) = 1),
+    CHECK ((closedAt IS NULL) = (closeReason IS NULL)),
+    CHECK (closedAt IS NULL OR closedAt >= openedAt)
+  );
+  CREATE INDEX delegation_lineage_by_parent
+    ON delegation_lineage(parentId, parentIncarnation, closedAt);
+  CREATE INDEX delegation_lineage_by_activity
+    ON delegation_lineage(activityId, closedAt);
+  CREATE INDEX delegation_lineage_by_lease
+    ON delegation_lineage(leaseId, closedAt);
+  CREATE INDEX delegation_lineage_by_run
+    ON delegation_lineage(runId, closedAt);
+
+  CREATE TABLE delegation_events (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    eventId            TEXT NOT NULL UNIQUE,
+    journalSequence    INTEGER NOT NULL UNIQUE CHECK (journalSequence > 0),
+    journalDigest      TEXT NOT NULL CHECK (length(journalDigest) = 64),
+    acceptedAt         INTEGER NOT NULL,
+    sessionId          TEXT NOT NULL,
+    parentIncarnation  TEXT NOT NULL,
+    claudeSessionId    TEXT NOT NULL,
+    eventKind          TEXT NOT NULL CHECK (eventKind IN ('SessionStart', 'PreToolUse', 'PostToolUse', 'SubagentStart', 'SubagentStop', 'UserPromptSubmit', 'SessionEnd')),
+    observedAt         INTEGER NOT NULL,
+    payloadJson        TEXT NOT NULL,
+    FOREIGN KEY (sessionId, parentIncarnation)
+      REFERENCES delegation_sessions(sessionId, parentIncarnation)
+  );
+  CREATE INDEX delegation_events_by_parent
+    ON delegation_events(sessionId, parentIncarnation, journalSequence);
+  CREATE INDEX delegation_events_by_observed
+    ON delegation_events(observedAt);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

@@ -205,6 +205,8 @@ function plantInstalledBox(home: string, opts: { versioned?: string[] } = {}): v
   writeFileSync(join(bin, 'ccd-tmp-sweep'), '#!/bin/sh\n# tmp sweep\n', { mode: 0o755 });
   // The pane-scope sweep, placed by `_inst_bins` on the same non-Darwin arm.
   writeFileSync(join(bin, 'ccd-scope-sweep'), '#!/bin/sh\n# scope sweep\n', { mode: 0o755 });
+  // D-5241: the tool-child priority's shell prefix, placed by `_inst_bins` on the same non-Darwin arm.
+  writeFileSync(join(bin, 'ccd-tool-adj'), '#!/bin/sh\n# tool adj\n', { mode: 0o755 });
   // history spec §9.5: the history sweep's shim, placed by `_inst_bins` off
   // server boxes — planted so `_uninst_tree_bins`' removal is measured.
   writeFileSync(join(bin, 'ccd-history-sweep'), '#!/bin/sh\n# history sweep\n', { mode: 0o755 });
@@ -292,6 +294,11 @@ function plantInstalledBox(home: string, opts: { versioned?: string[] } = {}): v
   }
   writeFileSync(join(units, 'claude-session@.service.d', 'limits.conf'), '[Service]\n');
   writeFileSync(join(units, 'app-claude\\x2dsession.slice.d', 'limits.conf'), '[Slice]\n');
+  // D-5241: the victim policy's two scope drop-ins, which `_inst_units` places on every Linux role.
+  for (const d of ['tmux-spawn-.scope.d', 'ccrc-tmux-server.scope.d']) {
+    mkdirSync(join(units, d), { recursive: true });
+    writeFileSync(join(units, d, '50-oom-continue.conf'), '[Scope]\nOOMPolicy=continue\n');
+  }
   // …and the same "this box is installed" fixture in launchd's spelling. The
   // verbs under test read whichever directory THIS platform installs into, so
   // a fixture that planted only the systemd set would leave the Darwin arm
@@ -537,6 +544,19 @@ function instUnitsDestinations(): string[] {
 }
 
 describe('ccrc uninstall: the remove set (spec §7)', () => {
+  itLinux('D-5241: the scope drop-ins go as FILES — an operator\'s own drop-in beside one, and its directory, stay', () => {
+    const home = mkTmp('ccrc-uninst-oomdropins-');
+    plantInstalledBox(home);
+    const units = join(home, '.config', 'systemd', 'user');
+    writeFileSync(join(units, 'ccrc-tmux-server.scope.d', 'override.conf'), '[Scope]\nOOMPolicy=continue\n');
+    const r = runVerb(home, 'uninstall');
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(join(units, 'ccrc-tmux-server.scope.d', '50-oom-continue.conf'))).toBe(false);
+    expect(readdirSync(join(units, 'ccrc-tmux-server.scope.d'))).toEqual(['override.conf']);
+    expect(existsSync(join(units, 'tmux-spawn-.scope.d'))).toBe(false);
+    expect(r.stdout).toMatch(/^uninstall: units: stopped, disabled and removed \(incl\. both drop-ins, the two OOMPolicy=continue scope drop-ins and the slice escape\)$/m);
+  });
+
   itLinux('units: every unit file the box had goes — read off the fixture, which must plant all of _inst_units — disable --now, daemon-reload last, recording stub only (Plan 3a Task 7; 2b-1 item 19)', () => {
     const home = mkTmp('ccrc-uninst-units-');
     plantInstalledBox(home);
@@ -554,6 +574,9 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     expect(before.filter((f) => existsSync(join(units, f))), 'these unit files survived the uninstall').toEqual([]);
     expect(existsSync(join(units, 'claude-session@.service.d'))).toBe(false);
     expect(existsSync(join(units, 'app-claude\\x2dsession.slice.d'))).toBe(false);
+    // D-5241: both scope drop-ins go, and their directories with them once empty.
+    expect(existsSync(join(units, 'tmux-spawn-.scope.d'))).toBe(false);
+    expect(existsSync(join(units, 'ccrc-tmux-server.scope.d'))).toBe(false);
     const calls = readFileSync(join(home, 'systemctl-calls'), 'utf8')
       .split('\n').filter((l) => l !== '');
     expect(calls).toContain('--user disable --now ccrc.service');
@@ -774,7 +797,7 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     // `_inst_bins` places them, so an uninstall that left them strands them on
     // PATH for ever.
     for (const b of ['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-usage-sweep',
-      'ccd-usage-sweep.py', 'ccd-account-health', 'ccd-tmp-sweep', 'ccd-scope-sweep', 'ccd-history-sweep',
+      'ccd-usage-sweep.py', 'ccd-account-health', 'ccd-tmp-sweep', 'ccd-scope-sweep', 'ccd-tool-adj', 'ccd-history-sweep',
       'ccd-telemetry-keepalive', 'ccd-account-auth', 'ccd-pool-sync', 'ccd-update-sync', 'ccrc-api',
       ...GPT_LANE_BINS, 'graphify']) {
       expect(existsSync(join(home, '.local', 'bin', b)), `${b} survived`).toBe(false);

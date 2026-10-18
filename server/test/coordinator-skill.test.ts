@@ -1,6 +1,6 @@
 // The coordinator skill is prose a model follows unsupervised against a fleet
 // it can destroy. These are the properties a review cannot hold in place:
-// sixteen contract clauses, the routes it names, the refusal codes it promises,
+// seventeen contract clauses, the routes it names, the refusal codes it promises,
 // the envelope it quotes and the template it ships. `wsaudit.test.ts` already
 // established the idiom — harvest tokens out of a source and require the
 // copy to match it in both directions.
@@ -94,7 +94,7 @@ const serverSources = (): string => {
   return out.join('\n');
 };
 
-// The sixteen clauses, verbatim. Kept as a literal array rather than a regex per
+// The seventeen clauses, verbatim. Kept as a literal array rather than a regex per
 // clause: the point is that the SENTENCE is the contract, so a paraphrase must
 // fail exactly as a deletion does.
 //
@@ -127,10 +127,13 @@ const CONTRACT = [
   // Worker stall watch, wave 3 (spec 2026-09-29 §6.1), amended by wave 7 (D-3805). Typographic apostrophes
   // and quotes, as clauses 3–12 are typed; no straight apostrophe at all.
   'A mail from `operator` whose subject begins `stall:` is the server’s stall watch reporting your worker, not the worker itself; it wakes you, and answering it is not polling. Ack it, re-measure the run and the worker’s last mail, then act once: mail the worker a resume that names its last mail and what it owes; or, if the silence is yours because you told it to wait, mail it a subject beginning `wait:` that names what it waits for; or, if the worker is dead or cannot be woken, re-dispatch a dead one as ‘When something is wrong’ says and say which in this turn’s text for the operator. A stall mail never licenses re-dispatching a live worker. Send that `wait:` mail unasked as well, whenever you tell a `working` worker to wait, behind another run or programme or until a time. The watch reads a `wait:` as the run waiting on you only until the next mail to or from the worker, its own notices aside: that mail hands the run back to the worker unless it is another `wait:` from you or, from the worker, a question, an exact `wave-done` or `review-done` claim, or a reply beginning `re stall-check: waiting`.',
+  // Delegation broker wave 3, Task 15 (spec 2026-10-04 §5.1, §13). Written with no apostrophe at all, so neither the straight nor
+  // the curly spelling can drift. It names the CLIENT verb, not the route; it is an identity declaration, never a restriction.
+  'Before delegating, declare coordinator intent for this session with `ccrc-api coordinators intent set --session <id>`; clear that declaration when the coordinator role ends. This is an identity declaration, not a restriction on ordinary Agent or Workflow use.',
 ];
 
 describe('the coordinator skill: its contract', () => {
-  it('carries all sixteen clauses verbatim', () => {
+  it('carries all seventeen clauses verbatim', () => {
     for (const clause of CONTRACT) {
       expect(skill, `missing contract clause: ${clause.slice(0, 48)}…`).toContain(clause);
     }
@@ -152,7 +155,7 @@ describe('the coordinator skill: its contract', () => {
   // "pinned verbatim" exists to prevent. `worker-skill.test.ts` already
   // carries this guard; this ports it, with two adaptations the worker's
   // version does not need. First, the coordinator states its count in prose as
-  // "These sixteen sentences" (SKILL.md:67), not "clauses"/"lines" as the
+  // "These seventeen sentences" (SKILL.md:67), not "clauses"/"lines" as the
   // worker skill says, so the in-file harvest is widened to accept all three.
   // Second, README.md's own mention line-wraps the count word onto the line
   // after "clauses" (measured — CLAUDE.md's does not), so the cross-file
@@ -187,7 +190,7 @@ describe('the coordinator skill: its contract', () => {
   it('spells that same count, as one derived word, everywhere prose states it', () => {
     expect(COUNT_WORD, `${CONTRACT.length} clauses is past the end of WORDS — extend the array`)
       .toBeTruthy();
-    // SKILL.md states it once in its own words ("These sixteen sentences").
+    // SKILL.md states it once in its own words ("These seventeen sentences").
     // HARVESTED, never matched literally, so a revert to "ten" fails with the
     // wrong word named rather than with a missing string. The filter against
     // WORDS is what keeps a stray "protocol sentences" (SKILL.md's own clause
@@ -445,6 +448,54 @@ describe('the coordinator skill: its contract', () => {
   });
 });
 
+// Delegation broker wave 3, Task 15 (spec 2026-10-04 §5.1, §13): clause 17, the coordinator's explicit intent declaration. The clause
+// is pinned VERBATIM with the others above; these rows hold what the verbatim pin cannot: that it is an IDENTITY declaration and not a
+// restriction, that the client verb it names exists, and that the skill still names none of the later waves' lease or cleanup verbs.
+describe('the coordinator skill: clause 17, coordinator intent', () => {
+  const CLAUSE_17 = CONTRACT[CONTRACT.length - 1]!;
+
+  it('is the seventeenth and last clause, and SKILL.md numbers it so', () => {
+    expect(CONTRACT).toHaveLength(17);
+    expect(CLAUSE_17.startsWith('Before delegating, declare coordinator intent for this session with ')).toBe(true);
+    expect(skill).toContain(`\n17. ${CLAUSE_17}\n`);
+  });
+
+  it('names a client verb the closed client really has: `ccrc-api coordinators intent set --session <id>`', () => {
+    const verb = /`ccrc-api (coordinators) (intent) (set) --session <id>`/.exec(CLAUSE_17);
+    expect(verb, 'clause 17 no longer names the client verb').not.toBeNull();
+    const client = readFileSync(CCRC_API, 'utf8');
+    const table = client.slice(client.indexOf('declare -A ROUTES=('));
+    const rows = [...table.slice(0, table.indexOf('\n)')).matchAll(/^\s*\[([a-z.-]+)\]='([^']*)'/gm)].map((m) => [m[1]!, m[2]!]);
+    expect(rows, 'the client has no row for the verb clause 17 names').toContainEqual(['coordinators.intent', 'POST|/api/coordinators/{id}/intent|yes|-']);
+  });
+
+  it('is an identity declaration and not a restriction: generic Agent and Workflow use stays permitted', () => {
+    expect(CLAUSE_17).toContain('This is an identity declaration, not a restriction on ordinary Agent or Workflow use.');
+    // No prohibition rides in the clause itself, and it adds no act that waits on the declaration.
+    expect(CLAUSE_17).not.toMatch(/\b(never|must not|may not|forbid|refus|only after|until)\b/i);
+    // The corpus never tells a coordinator that delegation needs the declaration first, or that Agent and Workflow are off.
+    expect(allSkillText).not.toMatch(/(?:Agent|Workflow)[^.\n]{0,40}(?:is|are) (?:refused|forbidden|blocked)/i);
+    expect(allSkillText).not.toMatch(/without (?:a |the )?(?:coordinator )?intent[^.\n]{0,40}(?:refus|forbid|block)/i);
+  });
+
+  it('leaves the routing matrix\'s workflow mode alone: a coordinator still orchestrates with workflows on', () => {
+    const matrix = refs('routing-matrix.md');
+    expect(matrix).toContain('| On while orchestrating |');
+    expect(matrix).toContain('Opus · ultracode while orchestrating');
+    // Clause 17 names neither the mode nor the effort, so it cannot contradict the row.
+    expect(CLAUSE_17).not.toMatch(/workflow mode|ultracode|effort/i);
+  });
+
+  it('names no later-wave lease or cleanup verb anywhere in the corpus', () => {
+    // Waves 5 to 7 own the lease carrier, adoption, promotion, `ws-add --base` and the cleanup verbs; this skill is never told them.
+    const verbs = ['ws-lease-mark', 'ws-lease-audit', 'ws-lease-clean', 'ws-lease', 'lease-mark', 'ws-add --base', 'ws-expire', 'ws-collect'];
+    const named = (text: string): string[] => verbs.filter((v) => text.includes(v));
+    expect(named(`${allSkillText}\nccd ws-lease-clean\n`), 'CONTROL: a mention planted in a scratch copy is seen')
+      .toEqual(['ws-lease-clean', 'ws-lease']);
+    expect(named(allSkillText)).toEqual([]);
+  });
+});
+
 describe('the coordinator skill: linkage', () => {
   // fastify spells params `:id` and so does the skill, so the match is
   // character for character — the same trick that makes wsaudit's harvest a
@@ -497,6 +548,11 @@ describe('the coordinator skill: linkage', () => {
     // because completeness was asserted only as `routes.size >= 6`, a floor
     // any six mentions clear regardless of which six.
     const EXEMPT: ReadonlySet<string> = new Set([
+      // DELEGATION BROKER wave 3, Task 15 — NAMED THROUGH ITS CLIENT VERB, not exempt for a prohibition. Clause 17 tells the
+      // coordinator to run `ccrc-api coordinators intent set --session <id>`, and the client owns the route: no skill file
+      // spells the path (the closed client takes no path), so the harvest of `GET|POST /api/...` text cannot see it. The clause 17
+      // block below holds the other half, that the verb it names is a row of the client's table.
+      'POST /api/coordinators/:session/intent',
       // The PWA's own /mail screen reads this (MailScreen.tsx) — not part
       // of the coordinator's protocol; the skill has no reason to call it
       // and naming it would be clutter, not linkage.
@@ -1828,6 +1884,9 @@ describe('the coordinator-resume runbook (program-leverage wave 1, spec S3 item 
 describe('the ask-answer 409 contract distinguishes route/CAS guards from answerAsk refusals', () => {
   const ROUTE_CAS_409 = [
     'not-held', 'ask-moved', 'child-unmeasurable', 'declined', 'already-answered',
+    // D-5368: the parent's route refuses an `askKey` that is not the row's
+    // before it takes the row — the same word `answerAsk` refuses downstream.
+    'ask-mismatch',
   ] as const;
   /** D-5357: Task 4's two route refusals (D-5289, late answer wins), named in
    *  the skill AGENT-FIRST — this text ships before the server that sends them,
@@ -1872,8 +1931,8 @@ describe('the ask-answer 409 contract distinguishes route/CAS guards from answer
     }
 
     expect(flat(section), 'the route/CAS refusals are not scoped before answerAsk')
-      .toContain(flat('five route/CAS guards before `answerAsk` (`not-held`, ' +
-        '`ask-moved`, `child-unmeasurable`, `declined`, or `already-answered`)'));
+      .toContain(flat('six route/CAS guards before `answerAsk` (`not-held`, ' +
+        '`ask-moved`, `child-unmeasurable`, `declined`, `already-answered`, or `ask-mismatch`)'));
     // D-5357: the contract Task 4 (D-5289) ships — a lapse leaves the row
     // answerable, a refused press goes back where it was taken from, and a
     // parent's own release is final.
@@ -1899,7 +1958,10 @@ describe('the ask-answer 409 contract distinguishes route/CAS guards from answer
     // refusal from `answerAsk` or rewriting the prose back to a three-condition
     // claim both red here rather than only in a phrasing the regex happens to know.
     expect(section, 'the ask lane no longer states the 409 split as its two derived halves')
-      .toContain(`(${ROUTE_CAS_409.length} + ${downstream.length}) distinct codes`);
+      .toContain(`${new Set([...ROUTE_CAS_409, ...downstream]).size} distinct codes ` +
+        `(${ROUTE_CAS_409.length} + ${downstream.length}, \`ask-mismatch\` in both halves)`);
+    // D-5368: the one code both halves spell is the one the prose names as shared.
+    expect(ROUTE_CAS_409.filter((c) => downstream.includes(c))).toEqual(['ask-mismatch']);
     expect(section, 'the ask lane regressed to one of the literal three-condition phrasings')
       .not.toMatch(/409[^.]{0,240}(?:only|is|has) three (?:possible )?(?:conditions|refusals)/i);
   });

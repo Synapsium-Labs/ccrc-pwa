@@ -5,7 +5,8 @@
 import type { AccountsResponse, AckAnswer, ApplyUpdateBody, AutoMode, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, MoveSkipWhy, NotifyEvent, NotifyMode, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, RollbackUpdateBody, RouteField, RouteFields, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, UpdateChannel, UpdateRouteError, UpdatesView, WsAudit } from '../../../shared/api';
 import { raiseAuthLostFrom } from './auth';
 import { ARCHIVE_REFUSALS, isArchiveRefusal, type ArchiveAnswer, type ArchiveBody, type ArchiveRefusal } from '../../../shared/api';
-import type { Dialog, DialogAnswered, DialogTabRequest } from '../../../shared/api';
+import { SWAP_REFUSALS, type SwapRefusal } from '../../../shared/api';
+import type { Dialog, DialogAnswered, DialogTabRequest, InterruptRouteSource } from '../../../shared/api';
 
 import { isNodeRole } from '../../../shared/node-role';
 import { TOKEN_TRANSPORTS } from '../../../shared/agent-protocol';
@@ -275,6 +276,17 @@ export const ARCHIVE_REFUSAL_TEXT: Readonly<Record<ArchiveRefusal, string>> = {
   [ARCHIVE_REFUSALS.worktreeGone]: 'Its worktree is gone, so it cannot be described for the archive record.',
   [ARCHIVE_REFUSALS.statusUnknown]: 'Its status cannot be read, so it will not be archived on a guess.',
   [ARCHIVE_REFUSALS.manifestUnbuildable]: 'It cannot be described truthfully for the archive record. Nothing was touched.',
+};
+
+/**
+ * The swap route's refusals in words (D-5240, working-state spec §5.9), keyed by `SWAP_REFUSALS`, never a second
+ * spelling. Not spread into `API_ERROR_TEXT`: the two codes are archive's too, and a toast that reads an archive
+ * sentence about a swap would be wrong, so `SwapSheet` reads this map itself. A first `sessionBusy` is answered with
+ * the "swap anyway" confirm, not with this sentence; the sentence is for a refusal no consent is left to answer.
+ */
+export const SWAP_REFUSAL_TEXT: Readonly<Record<SwapRefusal, string>> = {
+  [SWAP_REFUSALS.sessionBusy]: 'It is working — moving it now would lose the turn in progress and its background tasks.',
+  [SWAP_REFUSALS.statusUnknown]: 'Its status cannot be read, so it will not be moved on a guess. Stop it first, then move it.',
 };
 
 /**
@@ -941,9 +953,14 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  and an absent `opts` both keep the ordinary `{wrapper}` request shape.
      *  Not a checkbox anywhere in the UI: it is what a
      *  pick made under `SwapSheet`'s "show other pools" disclosure sends, after
-     *  a confirm sentence that names the crossing. */
-    swap: (id: string, wrapper: string, opts?: { crossPool?: boolean }) =>
-      post(`${sid(id)}/swap`, opts?.crossPool === true ? { wrapper, crossPool: true } : { wrapper }),
+     *  a confirm sentence that names the crossing. `{interrupt:true}` the same way (D-5240): ONLY when it is true, sent
+     *  only by `SwapSheet`'s "swap anyway", the second tap after the route answered `409 session-busy`. */
+    swap: (id: string, wrapper: string, opts?: { crossPool?: boolean; interrupt?: boolean }) =>
+      post(`${sid(id)}/swap`, {
+        wrapper,
+        ...(opts?.crossPool === true ? { crossPool: true } : {}),
+        ...(opts?.interrupt === true ? { interrupt: true } : {}),
+      }),
     /** The terminal drawer's scrollback — the pane's own history, read with
      *  `capture-pane`. `lines` is the server's number, echoed back: this side
      *  never names one, so there is nothing for the two to disagree about.
@@ -1190,7 +1207,8 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     claims: (opts?: { all?: boolean }): Promise<{ claims: ClaimSummary[] }> =>
       getJson<{ claims: ClaimSummary[] }>(
         opts?.all === true ? '/api/claims?all=1' : '/api/claims'),
-    interrupt: (id: string) => post(`${sid(id)}/interrupt`),
+    /** D-5237: `source` names the control that sent it (the keycap, the Escape key, a Deny); the server records it. */
+    interrupt: (id: string, source: InterruptRouteSource) => post(`${sid(id)}/interrupt`, { source }),
     /** `POST /api/coord/pause` (spec §4.2) — request `{paused}`, response
      *  `{ok:true, requested}` on success (the field is `requested`, never
      *  `paused`: the route ran a verb, it did not read the marker back).

@@ -87,12 +87,15 @@ describe('README: cross-repo programmes', () => {
     // suite green. Round 5's replacement was still file-wide while its message named
     // the open handler: adding the token to ANOTHER registration's destructure kept it
     // green. Both halves now pin the one construct they name, and the ROUTES half is
-    // scoped to the `POST /api/runs` handler body before it looks.
-    const openHandler = (): string =>
-      passage('the open route handler', ROUTES,
-        "app.post('/api/runs', async (req, reply) => {", "\n  app.post('/api/runs/:id/dispatch'");
-    expect(openHandler(), 'the open handler no longer destructures homeProject off the request body')
-      .toMatch(/const \{[^}]*\bhomeProject\b[^}]*\} = body;/);
+    // scoped to the `POST /api/runs` handler body before it looks. D-5384 moved
+    // that destructure into the open route's L1 decider (`coord/openRun.ts`), so
+    // the pin now reads the decider's body-shape gate, the one construct that
+    // takes `homeProject` off the request body.
+    const openShapeGate = (): string =>
+      passage('the open decider\'s shape gate', read('server/src/coord/openRun.ts'),
+        "['shape', (c) => {", "\n  ['reviewsOnWork'");
+    expect(openShapeGate(), 'the open decider no longer destructures homeProject off the request body')
+      .toMatch(/const \{[^}]*\bhomeProject\b[^}]*\} = c\.b\b/);
     expect(crossSection(), 'the cross-repo section no longer states the request contract — ' +
       'that the canonical open body takes homeProject on every wave')
       .toMatch(/body takes `homeProject` on every wave/);

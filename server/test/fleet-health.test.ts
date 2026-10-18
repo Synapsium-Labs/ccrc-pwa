@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { buildServer, type Deps } from '../src/server.js';
 import { loadConfig } from '../src/config.js';
@@ -13,7 +13,7 @@ import { DEFAULT_TEST_ROSTER, seedRoster, testDeps } from './helpers.js';
 import { parseRoster } from '../../shared/roster.js';
 import { generateAccountsSh } from '../../shared/generate.mjs';
 import { bodyDigest } from '../../shared/mark.mjs';
-import type { FleetSession } from '../../shared/api.js';
+import type { FleetHealth, FleetSession } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
@@ -22,6 +22,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import { LC_CAP_TOKEN } from '../src/coord/mirrorplan.js';
 import { genFile } from './lifecycleHelpers.js';
 import { LC_ACT_UNKNOWN, LC_DIR_NAME, LIFECYCLE_ACTS } from '../../shared/api.js';
+import { DELEGATION_JOURNAL_FILE, DELEGATION_TORN_DIR, buildDelegationJournalRecord, encodeDelegationJournalRecord } from '../src/coord/delegation-journal.js';
 import type { BuildInfo } from '../../shared/buildinfo.js';
 import type { NodeMeasurement } from '../src/coord/store.js';
 
@@ -50,9 +51,9 @@ const session = (id: string): FleetSession => ({
   workspace: null, name: null, status: 'idle', statusUpdatedAt: null, limits: null,
   dialogPending: false, version: null, model: null, effort: null, ultracode: false,
   branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
-  hookState: null, askSummary: null, subagents: null, background: null, lastEnd: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null,
+  hookState: null, askSummary: null, subagents: null, background: null, withCoordinator: null, lastEnd: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null,
   unmeasured: [], statusUnmeasured: false, lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null,
-  started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: null,
+  started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, role: 'coordinator', releasedFrom: null,
 });
 
 /** The digest the SERVER computes for its own roster — derived through the
@@ -263,7 +264,9 @@ describe('GET /api/fleet — degraded mode', () => {
     expect(body.sessions[0]?.subagents).toBeNull();
     expect(body.sessions[0]?.graphQueries).toBeNull();
     expect(body).toEqual({
-      sessions: [session('claude-Cached')],
+      // D-5301: an older cache says nothing about the role, so it revives null —
+      // never re-derived from the defaulted `child` (`reviveSessionRole`).
+      sessions: [{ ...session('claude-Cached'), role: null }],
       stale: true,
       downSince: 1700000000000,
     });
@@ -357,6 +360,135 @@ describe('POST /api/fleet/reboot', () => {
     expect(res.statusCode).toBe(502);
     expect(res.json()).toEqual({ ok: false, error: 'hetzner-error' });
     await app.close();
+  });
+});
+
+describe('/api/fleet/health: the delegation observation health (wave 3, Task 13)', () => {
+  const DELEGATION_CAPS = ['caps', 'delegation-events-v1'];
+  const INC = '0189abcd-1234-5678-9abc-0123456789ab';
+
+  /** A watcher over a store, with a census pass planted for one live session whose spool directory exists: the lane then has run. */
+  async function lane(env: Record<string, string> = {}, verbs: string[] = DELEGATION_CAPS, plant?: (ccrcDir: string) => void) {
+    const home = mkTmp('ccrc-fh-dg-');
+    seedRoster(home);
+    const cfg = loadConfig({ CCRC_HOME: home, ...env });
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    plant?.(path.join(home, '.ccrc'));
+    mkdirSync(path.join(cfg.registryDir, 'delegation', 'spool', 'demo-a'), { recursive: true });
+    const full = {
+      cfg, runCcd: ccdRunner(deadRunner, cfg), tmux: new Tmux(deadRunner), io: localIO, queue: new KeyedQueue(), coord,
+      fleetState: { connected: true, downSince: null, ccdVerbs: verbs, rosterFp: null, build: null },
+    } as never as Deps;
+    const bus = new Bus();
+    const watcher = new FleetWatcher(full, bus);
+    const app = await buildServer(full, bus, watcher);
+    const runLane = async (): Promise<void> => {
+      (watcher as unknown as { delegationCensus: unknown }).delegationCensus = {
+        measuredAt: Date.now(), projects: new Map(), incarnations: new Map([['demo-a', { kind: 'measured', incarnation: INC }]]),
+      };
+      await watcher.sweepDelegation([{ id: 'demo-a', project: 'demo', status: 'idle' }] as never, [{ id: 'demo-a', project: 'demo', child: { kind: 'none' } }] as never);
+    };
+    return { app, watcher, runLane };
+  }
+  type Body = Record<string, unknown> & { delegation?: Record<string, unknown> };
+
+  for (const [name, env] of [['local', {}], ['remote', { CCRC_FLEET: 'remote' }]] as const) {
+    it(`${name} mode: the member is ABSENT until the lane has run (absence reads as unknown), then present and report-only`, async () => {
+      const { app, runLane } = await lane(env);
+      try {
+        const before = (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as Body;
+        expect('delegation' in before, 'a health that has measured nothing must not render a block').toBe(false);
+        await runLane();
+        const after = (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as Body;
+        expect(after.delegation).toMatchObject({ mode: 'report-only', stageGate: 'unmeasured', unmeasuredRate: null, circuitBreaker: 'clear' });
+        // the new member is the only change: nothing else of the response moved
+        const { delegation: _gone, ...rest } = after;
+        const { ...restBefore } = before;
+        expect(rest).toEqual(restBefore);
+      } finally { await app.close(); }
+    });
+  }
+
+  it('an old fleet (a `ccd caps` list without the token) is unmeasured on the wire, never a zero or an eligible', async () => {
+    const { app, runLane } = await lane({}, ['caps', 'ws-rm']);
+    try {
+      await runLane();
+      const body = (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as Body;
+      expect(body.delegation).toMatchObject({ stageGate: 'unmeasured', unmeasuredRate: null });
+      expect(body.delegation!['stageGate']).not.toBe('eligible');
+    } finally { await app.close(); }
+  });
+
+  it('a server with a watcher but no coordination database, or no watcher at all, never emits it', async () => {
+    const deps = testDeps(mkTmp('ccrc-fh-dg-'));
+    const bus = new Bus();
+    const watcher = new FleetWatcher(deps, bus);
+    const a = await buildServer(deps, bus, watcher);
+    const b = await buildServer(testDeps(mkTmp('ccrc-fh-dg-')));
+    try {
+      for (const app of [a, b]) {
+        const body = (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as Body;
+        expect('delegation' in body).toBe(false);
+      }
+    } finally { await a.close(); await b.close(); }
+  });
+
+  // D-4655: a torn journal tail the server healed at boot is reported here, additively, and is never a failure.
+  describe('a healed torn journal tail (D-4655): lastTailHeal on the member, never a failure', () => {
+    const record = buildDelegationJournalRecord({
+      sequence: 1, acceptedAt: '2026-10-15T10:00:00.000Z', previousDigest: null,
+      entry: {
+        kind: 'evidence-accepted',
+        event: {
+          v: 1, eventKind: 'SessionStart', source: 'startup', observedAt: '2026-10-15T09:59:00.000Z', sessionId: 'demo-a', parentIncarnation: INC,
+          claudeSessionId: '6350faa0-a1be-4e78-939c-57485268f6fc', eventId: 'e'.repeat(64), bucket: '2026101509', startOffset: 0, endOffset: 120,
+        },
+      },
+    });
+    const torn = (ccrcDir: string): void => {
+      mkdirSync(ccrcDir, { recursive: true });
+      writeFileSync(path.join(ccrcDir, DELEGATION_JOURNAL_FILE), Buffer.concat([Buffer.from(encodeDelegationJournalRecord(record)), Buffer.from('{"acceptedAt":"2026-10-15T1')]));
+    };
+
+    it('the member carries {at, bytes, quarantinePath} after the lane has healed a tail, and the rest of the member is what it was', async () => {
+      const { app, runLane } = await lane({}, DELEGATION_CAPS, torn);
+      try {
+        await runLane();
+        const body = (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as Body;
+        const heal = body.delegation!['lastTailHeal'] as { at: string; bytes: number; quarantinePath: string };
+        expect(heal.bytes).toBe('{"acceptedAt":"2026-10-15T1'.length);
+        expect(heal.at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+        expect(heal.quarantinePath).toMatch(new RegExp(`${DELEGATION_TORN_DIR.replace('.', '\\.')}/\\d+-[0-9a-f]{64}\\.tail$`));
+        expect(readFileSync(heal.quarantinePath, 'utf8')).toBe('{"acceptedAt":"2026-10-15T1');
+        // never a failure, never unhealthy, and not made unmeasured by itself: the gates read what they read without it
+        expect(body.delegation).toMatchObject({ mode: 'report-only', stageGate: 'unmeasured', circuitBreaker: 'clear', unmeasuredRate: null });
+        expect(Object.keys(body.delegation!).sort()).toEqual([
+          'circuitBreaker', 'conflicting', 'lastCheckpointRevision', 'lastIngestedAt', 'lastJournalSequence', 'lastTailHeal', 'measuredSessionHours', 'mode',
+          'stageGate', 'unmeasured', 'unmeasuredRate', 'unresolved', 'unmeasuredSessionHours', 'windowEndedAt', 'windowStartedAt',
+        ].sort());
+        expect(body.delegation!['lastJournalSequence']).toBe(1);
+      } finally { await app.close(); }
+    });
+
+    it('without a heal the member has no lastTailHeal key at all (absence is not "healthy" and not an empty object)', async () => {
+      const { app, runLane } = await lane();
+      try {
+        await runLane();
+        const body = (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as Body;
+        expect('lastTailHeal' in body.delegation!).toBe(false);
+      } finally { await app.close(); }
+    });
+  });
+
+  it('adds no PWA state and no fleet frame: the type is an optional member and the PWA source never names it', () => {
+    const fh: FleetHealth = { mode: 'local', connected: true, downSince: null };
+    expect(fh.delegation).toBeUndefined();
+    const pwa = path.resolve(__dirname, '../../pwa/src');
+    const grep = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+      const p = path.join(dir, e.name);
+      return e.isDirectory() ? grep(p) : /\.(ts|tsx|svelte|js)$/.test(e.name) && /DelegationObservationHealth|\.delegation\b/.test(readFileSync(p, 'utf8')) ? [p] : [];
+    });
+    expect(grep(pwa)).toEqual([]);
   });
 });
 

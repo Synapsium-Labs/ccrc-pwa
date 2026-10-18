@@ -53,6 +53,40 @@ export type ChildMark =
  *  calls. Anything else in a marker is `unreadable`, never a child. */
 export const CHILD_RUN_ID = /^[1-9][0-9]{0,9}$/;
 
+/** What a session IS to the routing (coordinator-first spec §8, D-5301): every
+ *  session the operator creates is its project's `coordinator`; a workspace a
+ *  dispatch minted is a `child`. DERIVED, never marked: `.child` is written only
+ *  by a dispatch (`ws-add --no-rc --child`), at the only moment worker-ness is
+ *  known, so every operator path — the PWA "+", the create sheets, the CLI — is
+ *  covered with no new marker, and a recycled slug cannot inherit a stale role
+ *  because `.child` is cleared with its row. Coordinator-ness is not parenthood:
+ *  a run still binds a parent (spec §4). */
+export type SessionRole = 'coordinator' | 'child';
+
+/** Derived-enumeration discipline (`SESSION_LIFECYCLE_MAP`'s): a member added
+ *  to the union with no key here fails LOUDLY (TS2741), and a stray key fails
+ *  the other way (TS2353). */
+const SESSION_ROLE_MAP: Record<SessionRole, true> = { coordinator: true, child: true };
+export const SESSION_ROLES: readonly SessionRole[] = Object.keys(SESSION_ROLE_MAP) as SessionRole[];
+
+/** The only way to narrow an untrusted value to a `SessionRole` — the
+ *  snapshot-revival path reads one out of a cache an older or newer build
+ *  wrote. The CONSTANT is cast, never the input (`isSessionLifecycle`'s rule). */
+export function isSessionRole(v: unknown): v is SessionRole {
+  return typeof v === 'string' && (SESSION_ROLES as readonly string[]).includes(v);
+}
+
+/** THE ONE DERIVATION of the role, from the registry's reading of `.child` and
+ *  nothing else. `unreadable` is a child: the marker file exists, which is what
+ *  the start card (`session-hook.sh`'s `_hook_role_card`) tests, so the badge
+ *  and the card agree on the `.child` axis, and ONLY that axis: a session whose
+ *  `.child` exists, parsed or not, is a child to both, and a dispatched child is
+ *  never told, or shown, that it coordinates. The card has further silences the
+ *  badge does not read: a held row (`$REG/<id>.hold`), the card-off switch, and
+ *  a `resume`/`fork` start. So a held row with no `.child` shows the coordinator
+ *  badge although it was never given the card; both are as spec §8 asks. */
+export const sessionRoleOf = (child: ChildMark): SessionRole => (child.kind === 'none' ? 'coordinator' : 'child');
+
 export interface FleetSession {
   id: string; wrapper: string; home: string; project: string; workdir: string;
   /** The worktree slug when this session is a workspace; null for a project's
@@ -239,6 +273,19 @@ export interface FleetSession {
    *  keeps a live `busy` on `working` (`sessionBucket`'s `!delegated`) and the
    *  wedge qualifier stands down. ADDITIVE: no `FLEET_PROTO` bump. */
   background: { count: number; kinds: string[] } | null;
+  /** `with-coordinator-state` (D-5296): this session's question is held by
+   *  its parent (the coordinator), which may answer before the operator is
+   *  notified. Set by `fleet.ts` from the session's NEWEST `asks` row while it
+   *  is `held` or `answering` and the assembly's clock is before `notifyAt`
+   *  (`askNotifyAt` of the row's mint time, D-5364); null in every other
+   *  case. While set, `sessionBucket` skips the attention rung and answers
+   *  `working`, dated `since`, so the child leaves Needs-you without a new
+   *  `SessionBucket` member. `kind` is `question` today; plan Task 16 adds
+   *  `approval` through the same computation. ADDITIVE: no `FLEET_PROTO`
+   *  bump. Read a live (cast) frame through `sessionWithCoordinator`; a cached
+   *  snapshot revives it as null (`reviveFleetSession`), which shows
+   *  Needs-you, the safe direction. */
+  withCoordinator: WithCoordinator | null;
   /** `interrupt-and-restart-causes-recorded` (D-5237): when and why this
    *  session's previous process ended, from `$REG/<id>.lastend` through
    *  `parseLastEnd`; null when the registry holds none or it is malformed.
@@ -508,6 +555,21 @@ export interface FleetSession {
    */
   readonly child: ChildMark;
 
+  /**
+   * What this session is to the routing (D-5301, coordinator-first spec §8):
+   * `sessionRoleOf(child)` above, the one derivation, computed by
+   * `server/src/fleet.ts` from the registry's `.child` reading. The PWA shows a
+   * quiet "coordinator" badge from it before any run exists.
+   *
+   * ADDITIVE, absence-permits: `null` is "this record does not say" — an older
+   * persisted `FleetSession[]` revives with `null` (`reviveFleetSession`), and
+   * a live frame from an older server arrives with the key absent, so a PWA
+   * reader treats `undefined` and `null` alike as no role, and shows no badge.
+   * It is never re-derived from a revived `child`, which an older snapshot
+   * defaults to `none`: that would badge a pre-marker child a coordinator.
+   */
+  readonly role: SessionRole | null;
+
   /** Where this workspace was RELEASED from, or `null` — `ReleasedFrom`, at the end of this file, carries the
    *  contract; `releasedFromOf` there is the field's one reader. */
   readonly releasedFrom: ReleasedFrom | null;
@@ -676,6 +738,52 @@ export function sessionAsk(
     state: raw.state,
     parentId: raw.parentId,
     answeredBy: typeof by === 'string' && by !== '' ? by : null,
+  };
+}
+
+/** `with-coordinator-state` (D-5296): what the quiet state carries. `since` is
+ *  the hold's start (the asks row's mint time, ms) and `notifyAt` the moment
+ *  the operator is notified (`askNotifyAt` of that same time), both epoch ms. */
+export interface WithCoordinator {
+  kind: 'question' | 'approval';
+  parentId: string;
+  since: number;
+  notifyAt: number;
+}
+
+/** D-5296: THE ONE reader of `FleetSession.withCoordinator` on a live (cast,
+ *  not revived) frame and in the bucket ladder. A server predating the field
+ *  omits the key: `undefined` reads as null. A present-but-malformed value
+ *  (not an object, an unknown `kind`, a blank `parentId`, a non-finite
+ *  `since` or `notifyAt`) also reads as null, never a throw: null is the old
+ *  answer, Needs-you, which is the safe direction for a state that hides a
+ *  question from the operator's list. */
+export function sessionWithCoordinator(s: { withCoordinator?: unknown }): WithCoordinator | null {
+  const v = s.withCoordinator;
+  if (v === undefined || v === null || typeof v !== 'object' || Array.isArray(v)) return null;
+  const o = v as { kind?: unknown; parentId?: unknown; since?: unknown; notifyAt?: unknown };
+  if (o.kind !== 'question' && o.kind !== 'approval') return null;
+  if (typeof o.parentId !== 'string' || o.parentId === '') return null;
+  if (typeof o.since !== 'number' || !Number.isFinite(o.since)) return null;
+  if (typeof o.notifyAt !== 'number' || !Number.isFinite(o.notifyAt)) return null;
+  return { kind: o.kind, parentId: o.parentId, since: o.since, notifyAt: o.notifyAt };
+}
+
+/** D-5296, D-5390: the words of the quiet state, for the card and the header alike:
+ *  `with coordinator · <parent's short name>`. The short name is the parent's
+ *  id less the child's own `<project>-` prefix (a held ask's parent is in the
+ *  child's project, D-5363), or the whole id when it does not carry that
+ *  prefix. `title` says why the operator was not asked, and when they will be. */
+export function withCoordinatorWords(wc: WithCoordinator, project: string): { text: string; short: string; title: string } {
+  const prefix = `${project}-`;
+  const short = project !== '' && wc.parentId.startsWith(prefix) && wc.parentId.length > prefix.length
+    ? wc.parentId.slice(prefix.length)
+    : wc.parentId;
+  const what = wc.kind === 'approval' ? 'permission prompt' : 'question';
+  return {
+    text: `with coordinator · ${short}`,
+    short,
+    title: `${wc.parentId} holds this ${what} and may answer it first; you are notified at ${new Date(wc.notifyAt).toISOString().slice(11, 19)} UTC unless it answers or hands it over. You can still answer it yourself.`,
   };
 }
 
@@ -1383,7 +1491,11 @@ export interface WsTombstone {
 export type BucketInput = Pick<
   FleetSession,
   'status' | 'statusUpdatedAt' | 'dialogPending' | 'hookState' | 'archivedAt' | 'pr' | 'background'
->;
+> & {
+  /** D-5296: optional here so a literal that predates the field still
+   *  buckets; absent reads as null through `sessionWithCoordinator`. */
+  withCoordinator?: FleetSession['withCoordinator'];
+};
 
 /** `background-aware-working` (D-5231) — THE DELEGATED-TASK RULE, its one home.
  *  A task listed in a Stop's `background_tasks` is DELEGATED work (it can hold
@@ -1534,6 +1646,12 @@ export function sessionBucket(
   }
   if (s.status === 'dead') return { bucket: 'dead', bucketSince: s.statusUpdatedAt };
   if (s.dialogPending || s.hookState === 'waiting') {
+    // `with-coordinator-state` (D-5296): while the session's parent holds the
+    // question, the attention rung stands down and the row reads `working`,
+    // dated from the hold, so it leaves Needs-you. `fleet.ts` clears the field
+    // at `notifyAt` and on every hand-over, and the row returns here.
+    const wc = sessionWithCoordinator(s);
+    if (wc !== null) return { bucket: 'working', bucketSince: wc.since };
     // The hook's timestamp is the honest episode start ONLY when the hook is
     // why we are here; a pane-scraped dialog has no hook write behind it.
     const since = s.hookState === 'waiting' ? hookUpdatedAt ?? s.statusUpdatedAt : s.statusUpdatedAt;
@@ -2949,6 +3067,18 @@ const reviveChildMark = (o: RawObj, k: string): ChildMark => {
   throw new MalformedSnapshot(k);
 };
 
+/** `FleetSession.role`'s persistence contract (D-5301) — THE ONE READER of the
+ *  key off raw JSON. Absent or null → `null`: a snapshot written before the
+ *  field says nothing about the role. Present → one `SessionRole`, or the WHOLE
+ *  session is rejected (`reviveChildMark`'s stance): a value this build cannot
+ *  name is never laundered into either role. */
+const reviveSessionRole = (o: RawObj, k: string): SessionRole | null => {
+  const v = o[k];
+  if (v === undefined || v === null) return null;
+  if (isSessionRole(v)) return v;
+  throw new MalformedSnapshot(k);
+};
+
 /** Shape only: `class` is a string the SERVER derived (see `SessionUsage`);
  *  membership is not re-checked here because this file imports no class list. */
 function reviveUsage(o: Record<string, unknown>, key: string): SessionUsage | null {
@@ -3123,6 +3253,10 @@ export function reviveFleetSession(raw: unknown, unnamedSpawnWord: UnnamedSpawnW
       // (`reviveAsk`'s rule): the field is a display chip and one ladder
       // conjunct, and a cached row is bucketed with no hook stamp anyway.
       background: reviveBackground(o, 'background'),
+      // D-5296: ALWAYS null, whatever the snapshot carried. A cached row is
+      // old by definition, and a hold it recorded may have lapsed or been
+      // handed over since; null shows Needs-you, the safe direction.
+      withCoordinator: null,
       // D-5237. Absent → null (an older snapshot predates the field);
       // malformed → null (`reviveLastEnd`); an unknown cause → `unknown`.
       lastEnd: reviveLastEnd(o, 'lastEnd'),
@@ -3160,6 +3294,7 @@ export function reviveFleetSession(raw: unknown, unnamedSpawnWord: UnnamedSpawnW
       boardProject: optStr(o, 'boardProject'),
       route: reviveRoute(o, 'route'),
       child: reviveChildMark(o, 'child'),
+      role: reviveSessionRole(o, 'role'),
       releasedFrom: reviveReleasedFrom(o, 'releasedFrom'),
     };
 
@@ -3167,10 +3302,17 @@ export function reviveFleetSession(raw: unknown, unnamedSpawnWord: UnnamedSpawnW
     // that wrote it had `hookUpdatedAt` and we do not. An absent one is derived
     // and dated `null`: the ladder's bucket needs nothing this record lacks,
     // its `bucketSince` does.
+    // D-5389 (beside D-5296): a snapshot written while the session's parent
+    // held its question recorded the `working` that hold produced. That
+    // bucket is derived too,
+    // with the field now null, so the revived row shows Needs-you instead of
+    // a stale quiet state.
+    const wcRaw = o['withCoordinator'];
+    const derive = bucketRaw === null || (wcRaw !== undefined && wcRaw !== null);
     return {
       ...revived,
-      bucket: bucketRaw === null ? sessionBucket(revived, null).bucket : (bucketRaw as SessionBucket),
-      bucketSince: bucketRaw === null ? null : optNum(o, 'bucketSince'),
+      bucket: derive ? sessionBucket(revived, null).bucket : (bucketRaw as SessionBucket),
+      bucketSince: derive ? null : optNum(o, 'bucketSince'),
     };
   } catch (err) {
     if (err instanceof MalformedSnapshot) return null;
@@ -3465,6 +3607,14 @@ export interface FleetHealth {
    * `state: 'unknown'`, never as `'ok'` and never as an empty history.
    */
   lifecycle?: LifecycleHealth;
+  /**
+   * The delegation broker's report-only observation health (wave 3, Task 13): the seven-day rolling UTC session-hour window of
+   * spool intervals, the stage gate it decides, the breaker and the pass's verdict counts. Optional for the same absence-permits
+   * reason `roster` and `lifecycle` are: an older server omits it, and a reader must treat an absent block as UNKNOWN, never as
+   * healthy and never as zero. A present block can itself say `unmeasured` (`stageGate`), which is a measurement, not an absence.
+   * Wave 3 adds no fleet frame and no PWA state; nothing renders it yet.
+   */
+  delegation?: DelegationObservationHealth;
 }
 
 /**
@@ -4056,8 +4206,46 @@ export interface SlashCommand {
  *  was ignored" (the 2026-09-09 clip). Additive, optional: an older reader
  *  ignores it, an older writer omits it.
  *  'limit' — the assistant row Claude Code appends on a 429
- *  (`isApiErrorMessage:true, error:"rate_limit"`; D-2365). */
-export type SystemOrigin = 'resume-prompt' | 'no-response' | 'limit';
+ *  (`isApiErrorMessage:true, error:"rate_limit"`; D-2365).
+ *  'idle-compact' — Claude Code's notice after an idle compaction that
+ *  started no turn (D-5371).
+ *  'idle-compact-nudge' — the server's own "continue" prompt, typed once after
+ *  an idle compaction left a fresh open task list (D-5373). A plain user row
+ *  whose whole text is `IDLE_COMPACT_NUDGE_PROMPT`, shown as a pill so the
+ *  operator sees why a turn started. */
+export type SystemOrigin = 'resume-prompt' | 'no-response' | 'limit' | 'idle-compact' | 'idle-compact-nudge';
+/** `stale-task-strip` (D-5372): a task list whose newest file is older than
+ *  this is a plan left open, not running work — the strip says "N open" and
+ *  "Plan · untouched <age>" rather than "N running". Claude Code rewrites a task
+ *  file on every status change, so a live plan is seconds or minutes old; 6 h
+ *  outlasts any one turn measured. */
+export const TASKS_STALE_MS = 6 * 60 * 60 * 1000;
+/** `idle-compact-marker` (D-5371): the notice Claude Code writes after its
+ *  idle ("sleep") compaction — a `type:"system"`, `subtype:"informational"`
+ *  row whose TOP-LEVEL `content` starts with this sentence (Claude Code
+ *  2.1.302, `igs`, appended by the idle host's own compact callback, outside
+ *  any turn), followed by "turn off with "idleCompaction": false in
+ *  settings.json". That compaction runs on a turn that had already ended and
+ *  starts none, so the row is what says the session is waiting for the
+ *  operator rather than stalled (110 of 111 measured post-compaction
+ *  "stalls", 2026-10-17). Deliberately NOT "Compacted after an hour idle"
+ *  (`ags`): Claude Code yields that one inside the query loop when the
+ *  operator returns (compact_on_return), so it lands inside a turn the
+ *  operator just started and stays dropped as before. The parser matches the
+ *  prefix; a reworded notice degrades to today's drop, never to a false pill. */
+export const IDLE_COMPACT_NOTICE_PREFIXES = [
+  'Compacted while idle',
+] as const;
+/** `idle-compact-nudge` (D-5373): the one prompt the server types into a
+ *  session after an idle compaction when its task list is fresh and has open
+ *  items (operator ruling 2026-10-17, "Nudge if work is open"). Typed through
+ *  `sendPrompt` as a plain user row; the transcript parser reads a user row
+ *  whose whole trimmed text is this sentence as the `idle-compact-nudge`
+ *  system pill. The second sentence is the guard for the shape the ruling
+ *  names as the risk: a session that had ended its turn on a question to the
+ *  operator answers in one line and stops. */
+export const IDLE_COMPACT_NUDGE_PROMPT =
+  "Continue with your open tasks. If you were waiting for the operator's answer, say so in one line and stop.";
 /** The sentence Claude Code's default resume prompt is, and every variant —
  *  including ccd's RESUME_PROMPT — begins with. The parser matches the prefix. */
 export const RESUME_PROMPT_PREFIX = 'Continue from where you left off.';
@@ -4288,7 +4476,11 @@ export type SessionStreamMsg =
    *  when both are present. */
   | { type: 'ask'; ask: HookAsk; key: string | null }   // key: answerable via POST /api/sessions/:id/ask; null for approval envelopes
   | { type: 'ask_cleared' }                       // the hook's ask went null, stale, or its hookstate file is gone
-  | { type: 'tasks'; tasks: TaskItem[] }          // the session's task list changed (or first read)
+  | { type: 'tasks'; tasks: TaskItem[];          // the session's task list changed (or first read)
+      /** D-5372: the newest task file `mtimeMs`, epoch ms. OPTIONAL: absent when
+       *  the list has no open item, no stat answered, or the server is older;
+       *  absence renders the strip as it always did. */
+      touchedAt?: number }
   /** This session's own OUTSTANDING mail — `state` restricted server-side to
    *  `queued` or `delivered`, never `acked`/`rejected` (`sessionws.ts`'s
    *  `checkMail`). Read directly off `CoordStore.outstandingMailFor` in-process,
@@ -4363,8 +4555,10 @@ export interface NotifyEvent {
    *  attribution row would land in `run_events` and be seen by nobody (D-1163). Additive: an
    *  older client degrades it to `unknown` through `reviveNotifyEvent`, which is the
    *  degradation this union was given `unknown` for. `update` is a move the update dispatcher
-   *  leased (wave 8 item A) — about no session and no run, recorded, never pushed; `queue` is the landing lane's dequeue notice. */
-  kind: 'ask' | 'done' | 'merged' | 'mail' | 'run' | 'coord' | 'update' | 'queue' | 'unknown';
+   *  leased (wave 8 item A) — about no session and no run, recorded, never pushed; `queue` is the landing lane's dequeue notice; `interrupt` is an Escape or Ctrl-C the console sent, with its source and outcome (D-5237, `INTERRUPT_SOURCES`), recorded, never pushed.
+   *  `nudge` is the idle-compaction nudge (D-5373): the server typed a "continue" prompt into the session, recorded,
+   *  never pushed; its body names the compaction, and the record is the lane's durable "already nudged" read. */
+  kind: 'ask' | 'done' | 'merged' | 'mail' | 'run' | 'coord' | 'update' | 'queue' | 'interrupt' | 'nudge' | 'unknown';
   sessionId: string; title: string; body: string;
   /**
    * WHICH RUN this notification is about, or `null` when it is about none.
@@ -4403,7 +4597,7 @@ export interface CatchUp { epoch: string; seq: number; resync: boolean; events: 
 /** The recognised `NotifyEvent.kind` tokens. Kept private; the door in is
  *  `isNotifyKind` below, the same split `PR_PHASES`/`isPrPhase` use and for
  *  the identical reason (that function's own docstring has the argument). */
-const NOTIFY_KINDS: readonly NotifyEvent['kind'][] = ['ask', 'done', 'merged', 'mail', 'run', 'coord', 'update', 'queue', 'unknown'];
+const NOTIFY_KINDS: readonly NotifyEvent['kind'][] = ['ask', 'done', 'merged', 'mail', 'run', 'coord', 'update', 'queue', 'interrupt', 'nudge', 'unknown'];
 
 /**
  * Use THIS, never `NOTIFY_KINDS.includes(x as NotifyEvent['kind'])` — the
@@ -10380,7 +10574,7 @@ export function backgroundOnlyRefusal(body: unknown): { count: number | null; ki
 // from Tasks 2 and 10, the file's name, the lease and the grammar in `ccd/session-hook.sh`.
 
 /** One capability word the server advertises. Spelled once, as the keys of `SERVER_CAP_MAP`. */
-export type ServerCap = 'dispatch-live-gate-v1';
+export type ServerCap = 'dispatch-live-gate-v1' | 'hook-main-state-v1';
 
 /** Every word, with what it promises. The value is `true`; the promise is the comment, which a word's reader may
  *  rely on and nothing weaker. `PR_REASON_MAP`'s idiom: a word added to `ServerCap` and not here is TS2741. */
@@ -10392,6 +10586,16 @@ const SERVER_CAP_MAP: Readonly<Record<ServerCap, true>> = {
    *  by this server as a session safe to `/clear`. Added by Task 9b (the change that creates this list), cut after
    *  Task 9 merged; `dispatch-live-gate.test.ts` pins the word beside the gate it names. */
   'dispatch-live-gate-v1': true,
+  /** D-5232 (Task 2): this server reads a hook `done` that stands through delegated work, which is what the fleet's
+   *  hook writes once it sees this word (an agent event keeps the main state and writes `aliveAt`). It promises three
+   *  readers together, on this server: Task 1's `!delegated` rung (D-5231: a `done` over delegated background work
+   *  shows `working · N in background`, never idle), Task 9's live dispatch gate (D-5238: such a `done` over a busy
+   *  pane is never `/clear`ed), and Task 2's stall clocks (`stallHookActivityAt`, `server/src/coord/stall.ts`: the
+   *  frozen arm and the `delegates` hold read `aliveAt`, so subagent activity still counts once agent events stop
+   *  moving `updatedAt`). The promise holds because the change adding this word is cut after Tasks 1 and 9 merged
+   *  (it edits `bucket.test.ts` on Task 1's `background` and Task 9's `dispatch-live-gate.test.ts`) and carries the
+   *  stall clocks itself; `stall-verdict.test.ts` pins them beside the word. */
+  'hook-main-state-v1': true,
 };
 
 /** The words this server advertises, in `GET /health`'s `caps`, and in the file a `server` or `both` node writes. */
@@ -10454,3 +10658,411 @@ export function parseServerCaps(text: string, nowS: number): ServerCapsParse {
   if (nowS - at > SERVER_CAPS_LEASE_S) return { ok: false, why: 'stale' };
   return { ok: true, at, words };
 }
+
+/** Why an ask row was MINTED `released` rather than held (D-5290,
+ *  coordinator-first routing spec §5.2) — the row's `releaseReason`, `null`
+ *  on every row the hold minted. Rides `GET /api/asks` as an additive field.
+ *
+ *  `parent-not-live`          the parent has no registry row, is archived or
+ *                             stopped, or the dead-coordinator predicate
+ *                             measures it dead.
+ *  `parent-project-mismatch`  the run's claimant is a session of another
+ *                             project (a run opened before the attributed
+ *                             binding, spec §6.4).
+ *  `unknown`                  a token this build does not know, read off disk;
+ *                             never written. */
+export type AskReleaseReason = 'parent-not-live' | 'parent-project-mismatch' | 'unknown';
+
+export const ASK_RELEASE_REASON_MAP: Record<AskReleaseReason, true> = {
+  'parent-not-live': true, 'parent-project-mismatch': true, unknown: true,
+};
+
+export function isAskReleaseReason(v: unknown): v is AskReleaseReason {
+  return typeof v === 'string' && (Object.keys(ASK_RELEASE_REASON_MAP) as string[]).includes(v);
+}
+
+// ── Interrupt sources (D-5237's first half; plan 2026-10-16, Task 7; spec §5.5) ────────────────────────────────────
+// APPENDED at the very end, for the reason the block above gives (README and the specs cite this file by line).
+//
+// Every Escape (or Ctrl-C) the console sends is recorded as a `NotifyEvent` of kind `interrupt`, recorded and never
+// pushed, whose body is `source=<InterruptSource> outcome=<InterruptOutcome>` (`interruptEventBody`, the one writer;
+// `parseInterruptEventBody`, the one reader). The route's three sources are the PWA's controls; the drawer's two are
+// raw pty input frames that are exactly ESC or exactly Ctrl-C (`server/src/interruptlog.ts`); `unknown` is what any
+// other or absent route `source` degrades to, and what a reader makes of a token it does not know.
+
+/** Who sent the interrupt, and through which door. The value says which door may claim it: `route` sources arrive as
+ *  `POST /api/sessions/:id/interrupt`'s optional `source`, `drawer` sources are only ever minted by the pty relay,
+ *  and `unknown` is the degrade. */
+const INTERRUPT_SOURCE_MAP = {
+  keycap: 'route', 'escape-key': 'route', deny: 'route',
+  'drawer-escape': 'drawer', 'drawer-ctrl-c': 'drawer',
+  unknown: 'degrade',
+} as const satisfies Record<string, 'route' | 'drawer' | 'degrade'>;
+export type InterruptSource = keyof typeof INTERRUPT_SOURCE_MAP;
+export const INTERRUPT_SOURCES: readonly InterruptSource[] = Object.keys(INTERRUPT_SOURCE_MAP) as InterruptSource[];
+/** The sources a client may name in the interrupt route's body. */
+export type InterruptRouteSource = { [K in InterruptSource]: (typeof INTERRUPT_SOURCE_MAP)[K] extends 'route' ? K : never }[InterruptSource];
+export function isInterruptSource(v: unknown): v is InterruptSource {
+  return typeof v === 'string' && Object.prototype.hasOwnProperty.call(INTERRUPT_SOURCE_MAP, v);
+}
+/** The route's reader of its body's `source`: a route source is kept, anything else (absent, another type, a token
+ *  this build does not know, or a drawer source no client may claim) is `unknown`, never a 400. */
+export function interruptRouteSource(v: unknown): InterruptSource {
+  return isInterruptSource(v) && INTERRUPT_SOURCE_MAP[v] === 'route' ? v : 'unknown';
+}
+
+/** What the interrupt did: `sent` (the key was pressed), or the route's refusal code (zero keys). */
+export type InterruptOutcome = 'sent' | InterruptRefusal;
+export function isInterruptOutcome(v: unknown): v is InterruptOutcome {
+  return v === 'sent' || (typeof v === 'string' && (INTERRUPT_REFUSALS as readonly string[]).includes(v));
+}
+/** The one writer of an `interrupt` event's body. */
+export function interruptEventBody(source: InterruptSource, outcome: InterruptOutcome): string {
+  return `source=${source} outcome=${outcome}`;
+}
+/** The one reader of an `interrupt` event's body: null off its grammar; a token this build does not know is
+ *  `unknown` (a newer server's source or outcome on an older client). */
+export function parseInterruptEventBody(body: string): { source: InterruptSource; outcome: InterruptOutcome | 'unknown' } | null {
+  const m = /^source=(\S+) outcome=(\S+)$/.exec(body);
+  if (m === null) return null;
+  return { source: isInterruptSource(m[1]) ? m[1] : 'unknown', outcome: isInterruptOutcome(m[2]) ? m[2] : 'unknown' };
+}
+
+/**
+ * The swap route's refusal codes (D-5240, working-state spec §5.9): every `error` word `POST /api/sessions/:id/swap`
+ * refuses a turn with, declared ONCE in `ARCHIVE_REFUSALS`' shape, and the same two words archive uses for the same
+ * two facts, so a code means one thing whichever door sent it. The server sends `SWAP_REFUSALS.<name>` and the PWA
+ * branches on it; neither spells one as a bare literal. ccd's own two refusals (`ccd: session-busy:` and `ccd:
+ * status-unknown:`, `cmd_swap`'s manual gate) are spelled from these too (`ccdSwapRefusal`, `server/src/swapguard.ts`).
+ *
+ *   - `sessionBusy` — a turn MEASURED in progress (the server's fail-closed `turnVerdictFor`, before the queue or
+ *     inside it, or ccd after both). `{interrupt:true}` consents; the turn in progress and its background tasks are lost.
+ *   - `statusUnknown` — nobody could read the turn. No consent covers it: stop the session first, then swap.
+ *
+ * Appended at the end of this file, like `ARCHIVE_REFUSALS`, so no line README or a contract cites moves.
+ */
+export const SWAP_REFUSALS = {
+  sessionBusy: ARCHIVE_REFUSALS.sessionBusy,
+  statusUnknown: ARCHIVE_REFUSALS.statusUnknown,
+} as const;
+export type SwapRefusal = (typeof SWAP_REFUSALS)[keyof typeof SWAP_REFUSALS];
+
+/** Every swap refusal code, DERIVED from `SWAP_REFUSALS` — never a second list. */
+export const SWAP_REFUSAL_CODES: readonly SwapRefusal[] = Object.values(SWAP_REFUSALS);
+
+export function isSwapRefusal(v: unknown): v is SwapRefusal {
+  return typeof v === 'string' && (SWAP_REFUSAL_CODES as readonly string[]).includes(v);
+}
+
+// ── Delegation observation: the shared event and state vocabulary (delegation broker wave 3) ──────────────────────
+// Declared ONCE, here, and derived everywhere else: each closed set is an `as const` array with its type read from
+// it, and `single-definition.test.ts` fails the build on a second spelling. This block imports nothing (L0).
+// Names and shapes are a contract between the hook, the server's reader and the later projection; never rename a
+// property or collapse a union member.
+
+/** The seven hook events a delegation spool line may carry. A closed set: a line whose `eventKind` is not one of
+ *  these is not a delegation line. */
+export const DELEGATION_EVENT_KINDS = [
+  'SessionStart',
+  'PreToolUse',
+  'PostToolUse',
+  'SubagentStart',
+  'SubagentStop',
+  'UserPromptSubmit',
+  'SessionEnd',
+] as const;
+export type DelegationEventKind = (typeof DELEGATION_EVENT_KINDS)[number];
+
+/** Where an activity (a unit of delegated work the parent started) came from. `bash-worktree` is raw Bash use of
+ *  a worktree; it maps to lease provenance `raw`. */
+export const DELEGATION_ACTIVITY_SOURCE_KINDS = [
+  'agent',
+  'workflow',
+  'bash-worktree',
+] as const;
+export type DelegationActivitySourceKind =
+  (typeof DELEGATION_ACTIVITY_SOURCE_KINDS)[number];
+
+/** Provenance of a lease. `attached` is representable in the complete migration; wave 3 has no writer for it. */
+export const DELEGATION_LEASE_SOURCE_KINDS = [
+  'agent',
+  'workflow',
+  'raw',
+  'attached',
+] as const;
+export type DelegationLeaseSourceKind =
+  (typeof DELEGATION_LEASE_SOURCE_KINDS)[number];
+
+/** Whether the work is running. `unknown` is a measurement state, never a default for `ended`. */
+export const DELEGATION_EXECUTION_STATES = ['active', 'ended', 'unknown'] as const;
+export type DelegationExecutionState = (typeof DELEGATION_EXECUTION_STATES)[number];
+
+/** Whether an activity is tied to a parent. `unmeasured` means the evidence to decide was unreadable or missing, and
+ *  is never folded into `unresolved`. */
+export const DELEGATION_PARENTAGE_STATES = [
+  'linked', 'unresolved', 'conflicting', 'unmeasured',
+] as const;
+export type DelegationParentageState = (typeof DELEGATION_PARENTAGE_STATES)[number];
+
+export const DELEGATION_WORKSPACE_STATES = [
+  'none', 'provisioning', 'present', 'absent', 'unmeasured',
+] as const;
+export type DelegationWorkspaceState = (typeof DELEGATION_WORKSPACE_STATES)[number];
+
+export const DELEGATION_DISPOSITIONS = [
+  'ephemeral', 'adopted', 'retained', 'promoted',
+] as const;
+export type DelegationDisposition = (typeof DELEGATION_DISPOSITIONS)[number];
+
+/** Cleanup progress. Wave 3 is report-only: no state here authorises an action by itself. */
+export const DELEGATION_CLEANUP_STATES = [
+  'not-due', 'pending', 'running', 'refused', 'reclaimed', 'unmeasured',
+] as const;
+export type DelegationCleanupState = (typeof DELEGATION_CLEANUP_STATES)[number];
+
+export const DELEGATION_CLEANUP_POPULATIONS = [
+  'ephemeral-lease',
+] as const;
+export type DelegationCleanupPopulation =
+  (typeof DELEGATION_CLEANUP_POPULATIONS)[number];
+
+export const DELEGATION_INTENT_SOURCES = [
+  'explicit', 'run-owner', 'delegation-inferred', 'retained-lineage',
+] as const;
+export type DelegationIntentSource = (typeof DELEGATION_INTENT_SOURCES)[number];
+
+export const DELEGATION_ATTEMPT_VERDICTS = [
+  'linked', 'unresolved', 'conflicting', 'unmeasured',
+] as const;
+export type DelegationAttemptVerdict = (typeof DELEGATION_ATTEMPT_VERDICTS)[number];
+
+/** The keys every spool line carries. A line is evidence and never authority; the hook decides nothing about
+ *  parentage. `truncated` marks a line whose optional fields were dropped to fit its size bound. */
+export interface DelegationSpoolCommonV1 {
+  v: 1;
+  eventKind: DelegationEventKind;
+  observedAt: string;
+  sessionId: string;
+  parentIncarnation: string;
+  claudeSessionId: string;
+  claudeVersion?: string;
+  cwd?: string;
+  transcriptPath?: string;
+  agentId?: string;
+  agentType?: string | null;
+  truncated?: true;
+}
+
+export type DelegationPreToolUseEvidenceV1 =
+  | (DelegationSpoolCommonV1 & {
+      eventKind: 'PreToolUse';
+      toolName: 'Agent' | 'Task' | 'Workflow';
+      toolUseId: string;
+      isolation: string | null;
+    })
+  | (DelegationSpoolCommonV1 & {
+      eventKind: 'PreToolUse';
+      toolName: 'Bash';
+      toolUseId: string;
+      listing?: readonly string[];
+    });
+
+export interface DelegationAgentLaunchV1 {
+  status: 'async-launched' | 'completed';
+  agentId: string;
+  isAsync: boolean;
+}
+
+export interface DelegationWorkflowLaunchV1 {
+  status: 'async-launched' | 'completed';
+  taskId: string;
+  taskType: string;
+  workflowName: string;
+  runId: string;
+  transcriptDir: string;
+  scriptPath: string;
+}
+
+export type DelegationPostToolUseEvidenceV1 =
+  | (DelegationSpoolCommonV1 & {
+      eventKind: 'PostToolUse';
+      toolName: 'Agent' | 'Task';
+      toolUseId: string;
+      outcome: 'completed' | 'failed' | 'async-launched' | 'unknown';
+      launch: DelegationAgentLaunchV1 | null;
+    })
+  | (DelegationSpoolCommonV1 & {
+      eventKind: 'PostToolUse';
+      toolName: 'Workflow';
+      toolUseId: string;
+      outcome: 'completed' | 'failed' | 'async-launched' | 'unknown';
+      launch: DelegationWorkflowLaunchV1 | null;
+    })
+  | (DelegationSpoolCommonV1 & {
+      eventKind: 'PostToolUse';
+      toolName: 'Bash';
+      toolUseId: string;
+      outcome: 'completed' | 'failed' | 'unknown';
+      listing?: readonly string[];
+    });
+
+/** The raw spool line: a closed discriminated union, each variant accepting only its named keys. */
+export type DelegationSpoolLineV1 =
+  | (DelegationSpoolCommonV1 & {
+      eventKind: 'SessionStart';
+      source: string;
+    })
+  | DelegationPreToolUseEvidenceV1
+  | DelegationPostToolUseEvidenceV1
+  | (DelegationSpoolCommonV1 & {
+      eventKind: 'SubagentStart';
+      agentId: string;
+      agentType: string | null;
+    })
+  | (DelegationSpoolCommonV1 & {
+      eventKind: 'SubagentStop';
+      agentId: string;
+      agentType: string | null;
+      agentTranscriptPath: string | null;
+    })
+  | (DelegationSpoolCommonV1 & {
+      eventKind: 'UserPromptSubmit';
+      notification: {
+        taskId: string;
+        toolUseId: string;
+        status: 'completed' | 'failed' | 'cancelled' | 'unknown';
+      };
+    })
+  | (DelegationSpoolCommonV1 & {
+      eventKind: 'SessionEnd';
+      reason: string;
+    });
+
+/** A spool line as the server read it: the bucket and the byte range it occupied, from which `eventId` is derived. */
+export type DelegationEventEnvelopeV1 = DelegationSpoolLineV1 & {
+  eventId: string;
+  bucket: string;
+  startOffset: number;
+  endOffset: number;
+};
+
+/** The immutable identity of an activity; the activity id is minted once for it and never re-derived. */
+export interface DelegationActivityNaturalKey {
+  parentId: string;
+  parentIncarnation: string;
+  sourceKind: DelegationActivitySourceKind;
+  upstreamId: string;
+}
+
+/** The report-only health the server publishes. Absence on the wire means unknown. */
+export interface DelegationObservationHealth {
+  mode: 'report-only';
+  windowStartedAt: string | null;
+  windowEndedAt: string | null;
+  measuredSessionHours: number;
+  unmeasuredSessionHours: number;
+  unmeasuredRate: number | null;
+  stageGate: 'eligible' | 'ineligible' | 'unmeasured';
+  circuitBreaker: 'clear' | 'suspended' | 'unmeasured';
+  unresolved: number;
+  conflicting: number;
+  unmeasured: number;
+  lastJournalSequence: number | null;
+  lastCheckpointRevision: number | null;
+  lastIngestedAt: string | null;
+  /**
+   * The last torn journal tail this server process cut off and kept (D-4655). Absent until one has been: absence is not "healthy" or
+   * "unhealthy", it says no heal happened in this process. A heal is never a failure and never makes the health unmeasured by itself.
+   */
+  lastTailHeal?: DelegationTailHeal;
+  /**
+   * MUST 1 (coordinator 5424): the tail quarantine (`delegation-events.torn/`) could not be listed at the last boot or recovery, so
+   * whether a heal happened that no report of this process covers is UNKNOWN, never "no heal". Absent when it was listed.
+   */
+  tailQuarantineUnmeasured?: true;
+}
+
+/** A torn delegation-journal tail the server healed: a crash or a failed append left a partial last line, the server kept those bytes
+ *  under `quarantinePath` and cut the journal back to its last complete record. The spool still holds what the fragment carried. */
+export interface DelegationTailHeal {
+  /** When the cut was made, as a canonical UTC millisecond instant: this process's clock as the truncate returned, or, for a heal found
+   *  in the quarantine at boot (`foundAtBoot`), the kept file's own modification time (written just before the cut). */
+  at: string;
+  /** How many bytes were cut off and kept. */
+  bytes: number;
+  /** Where the kept bytes are, on the server box. */
+  quarantinePath: string;
+  /** True for a heal no report of this process made: found in the quarantine at a boot or a recovery (a process that died between its
+   *  cut and its report, or an earlier boot's). Absent for a heal this process made and reported itself. */
+  foundAtBoot?: true;
+}
+
+/** What the health projection is computed from; every field is a measurement the server already holds. */
+export interface DelegationHealthInput {
+  windowStartedAt: string | null;
+  windowEndedAt: string | null;
+  windowComplete: boolean;
+  measuredSessionHours: number;
+  unmeasuredSessionHours: number;
+  capabilityState: 'present' | 'absent' | 'unmeasured';
+  registryReadable: boolean;
+  recoveryPhase: 'reconstructing' | 'ready';
+  circuitBreaker: 'clear' | 'suspended' | 'unmeasured';
+  unresolved: number;
+  conflicting: number;
+  unmeasured: number;
+  lastJournalSequence: number | null;
+  lastCheckpointRevision: number | null;
+  lastIngestedAt: string | null;
+}
+
+/** The size and shape bounds of one delegation spool line (delegation broker wave 3, spec §5.3), declared ONCE. The hook's
+ *  jq program and shell block spell the same numbers in `ccd/session-hook.sh` (`def idmax:`, `def maxline:`, `def maxlabel:` and
+ *  `def maxpath:` in the jq text, `CCRC_ID_MAX` for the owner, and the `DSP_` constants beside the append) because a hook cannot
+ *  import this file; `delegation-spool.test.ts` reads both and fails on any drift, and the server's reader imports THIS object.
+ *  Every byte count is UTF-8 bytes, never characters.
+ *
+ *  Each value is chosen from measurement, on the fixture corpus (`fixtures/delegation/<version>/`: 14 versions, 2.1.280 to
+ *  2.1.299, 193 measured cells; its paths are sanitised and shorter than a real fleet's) and on the fleet's own transcript
+ *  trees, never from a guess:
+ *   - `lineBytesBelow`: the plan says LESS than 4096 bytes, not less than or equal, counting the LF. A line that is built
+ *     in one buffered `printf` and so reaches the file in ONE `write(2)` must fit one 4096-byte stdio block, and 4095 is the
+ *     most that block holds. An O_APPEND write of one block is the only append the hook can make that two hooks racing on
+ *     one bucket never interleave.
+ *   - `idBytes`: the longest id in the corpus is 36 (a Claude session UUID; agent ids 17, task ids 9, run ids 15); a real
+ *     `tool_use_id` is about 30 (the corpus's are shorter placeholders). 64 is the
+ *     bound the hook's own agent-id grammar already uses (`idmax`), so one number covers agent, tool-use, task, run and
+ *     Claude session ids. An id outside `[A-Za-z0-9_-]{1,64}` is never recorded, and never cleaned into one that is.
+ *   - `ownerIdBytes`: the ccd session id, which is also the spool directory's name. 128 is the hook's `CCRC_ID_MAX`, which the
+ *     spool gate reads by name rather than restating.
+ *   - `labelBytes`: display-grade strings (agent type, workflow name, task type, `source`, `reason`, `isolation`, Claude
+ *     version). The longest in the corpus is 17 bytes (an agent type or a `reason`); a workflow's name is its author's choice,
+ *     so the bound is generous.
+ *   - `pathBytes`: the corpus's longest path is 138 bytes (an agent transcript); the longest transcript, workflow-directory,
+ *     workflow-script or agent-transcript path found under the fleet's account homes is 254 bytes (measured over 11,753
+ *     transcripts, 8,737 workflow directories, 7,098 scripts and 178,389 agent transcripts); 512 is twice that. A longer
+ *     path is dropped, never cut, because a cut path names a different place.
+ *   - `listingNames`: the busiest repository on the fleet carries 93 linked-worktree admin records; 256 is nearly three
+ *     times that. A listing over this count is dropped whole, never cut, because a partial listing reads as a complete one.
+ *   - `listingNameBytes`: the longest admin record name on the fleet is 37 bytes (the busiest repos' longest are 23 to 37;
+ *     Claude Code's own `agent-<17 hex>` is 23, which is also the corpus's longest). A name longer than 64 bytes, or outside
+ *     `[A-Za-z0-9._@+-]`, drops the listing.
+ *   A listing of 93 real names is about 2.6 KiB, so the line cap (not the count) is what usually drops a listing: the
+ *   cap is reached at about 130 names of the usual length, which is the ~3.9 KiB case the plan measures.
+ *
+ *  When a line is over `lineBytesBelow` its optional fields are dropped in this order until it fits, and `truncated: true`
+ *  is set: `listing`, `claudeVersion`, `cwd`, `agentType` (omitted where optional, null where the variant requires the key),
+ *  `transcriptPath`. The required identity fields, `agentTranscriptPath` and a launch among them, are never dropped (the
+ *  required-but-nullable ones are not nulled to fit; a line they alone push over the cap is not written). With every bound
+ *  above at its maximum and nothing escaped they sum to under 3.2 KiB; a line whose required fields alone pass the cap
+ *  (a launch whose paths are inflated six-fold by control-character escapes) is not written at all, because a lost line can
+ *  delay a link and an over-cap line could tear one. */
+export const DELEGATION_SPOOL_BOUNDS = {
+  lineBytesBelow: 4096,
+  idBytes: 64,
+  ownerIdBytes: 128,
+  labelBytes: 128,
+  pathBytes: 512,
+  listingNames: 256,
+  listingNameBytes: 64,
+} as const;

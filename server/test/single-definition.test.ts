@@ -25,7 +25,7 @@ import {
   ASK_STATES, isAskState, ASK_REFUSE_CODES, isAskRefuseCode, ROUTE_WRITABLE_FIELDS, UPDATE_CHANNELS, UPDATE_STATES, UPDATE_PHASES, INSTALL_STATES, PROVENANCE_STATES, AUTO_MODES, NOTIFY_MODES, REQUEST_KINDS, STAMP_READS, NODE_OSES, TAG_FILE_READS,
   SPAWN_VERDICTS,
 } from '../../shared/api.js'; import { NODE_ROLES } from '../../shared/node-role.js';
-import { ARCHIVE_REFUSALS } from '../../shared/api.js';
+import { ARCHIVE_REFUSALS, SWAP_REFUSALS } from '../../shared/api.js';
 import { PROVIDER_IDS } from '../../shared/providers.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 
@@ -2767,6 +2767,13 @@ describe('one absent/unreadable read vocabulary', () => {
     expect(registry).toMatch(/import\s+type\s*\{[^}]*\bReadFailure\b[^}]*\}\s*from\s*'\.\/io\.js'/);
   });
 
+  it('is what delegation-model.ts derives a census record\'s state from, not a third copy (ruling R43)', () => {
+    const model = readFileSync(path.join(ccrcRoot, 'server/src/coord/delegation-model.ts'), 'utf8');
+    expect(model).not.toMatch(PAIR);
+    expect(model).toMatch(/state: 'present' \| ReadFailure;/);
+    expect(model).toMatch(/import\s+type\s*\{[^}]*\bReadFailure\b[^}]*\}\s*from\s*'\.\.\/\.\.\/\.\.\/shared\/agent-protocol\.js'/);
+  });
+
   it('server/src/io.ts re-exports ReadFailure rather than restating it', () => {
     const io = readFileSync(path.join(ccrcRoot, 'server/src/io.ts'), 'utf8');
     expect(io).not.toMatch(PAIR);
@@ -2794,6 +2801,133 @@ describe('one absent/unreadable read vocabulary', () => {
     // 'absent'` must stay invisible, which is the whole reason the fingerprint
     // is a PAIR (see this describe's own header).
     expect(PAIR.test("type WsAuditUnit = 'enabled' | 'loaded' | 'absent';")).toBe(false);
+  });
+});
+
+// Delegation broker wave 3, Task 4 (docs/superpowers/plans/2026-10-08-
+// delegation-broker-wave3-observe.md, "Shared event and state vocabulary"):
+// eleven closed vocabularies, each an `as const` array in `shared/api.ts` with
+// its type DERIVED from it. Same family as the block above, and the same
+// reason: a second spelling of a closed set is how a vocabulary drifts, and
+// nothing but a red suite stops the copy. This scans only the arrays and the
+// types derived from them. The interfaces around them are shapes, not sets.
+//
+// The fingerprint for a hand-typed copy is a union whose members are EXACTLY a
+// vocabulary's, in any order. A superset or subset is not a copy — the
+// workspace and attempt-verdict sets overlap `FleetHealth`-style fields that
+// say something else (`'present' | 'absent' | 'unmeasured'`) — so the compare
+// is set EQUALITY, never "contains three of them".
+describe('delegation wave 3: the closed vocabularies are declared once, in shared/api.ts, and their types derived', () => {
+  const VOCABS = [
+    ['DELEGATION_EVENT_KINDS', 'DelegationEventKind',
+      ['SessionStart', 'PreToolUse', 'PostToolUse', 'SubagentStart', 'SubagentStop', 'UserPromptSubmit', 'SessionEnd']],
+    ['DELEGATION_ACTIVITY_SOURCE_KINDS', 'DelegationActivitySourceKind', ['agent', 'workflow', 'bash-worktree']],
+    ['DELEGATION_LEASE_SOURCE_KINDS', 'DelegationLeaseSourceKind', ['agent', 'workflow', 'raw', 'attached']],
+    ['DELEGATION_EXECUTION_STATES', 'DelegationExecutionState', ['active', 'ended', 'unknown']],
+    ['DELEGATION_PARENTAGE_STATES', 'DelegationParentageState', ['linked', 'unresolved', 'conflicting', 'unmeasured']],
+    ['DELEGATION_WORKSPACE_STATES', 'DelegationWorkspaceState', ['none', 'provisioning', 'present', 'absent', 'unmeasured']],
+    ['DELEGATION_DISPOSITIONS', 'DelegationDisposition', ['ephemeral', 'adopted', 'retained', 'promoted']],
+    ['DELEGATION_CLEANUP_STATES', 'DelegationCleanupState',
+      ['not-due', 'pending', 'running', 'refused', 'reclaimed', 'unmeasured']],
+    ['DELEGATION_CLEANUP_POPULATIONS', 'DelegationCleanupPopulation', ['ephemeral-lease']],
+    ['DELEGATION_INTENT_SOURCES', 'DelegationIntentSource', ['explicit', 'run-owner', 'delegation-inferred', 'retained-lineage']],
+    ['DELEGATION_ATTEMPT_VERDICTS', 'DelegationAttemptVerdict', ['linked', 'unresolved', 'conflicting', 'unmeasured']],
+  ] as const;
+  const apiText = (): string => readFileSync(path.join(ccrcRoot, 'shared', 'api.ts'), 'utf8');
+  const declaredIn = (decl: RegExp): string[] => ALL.filter((f) => decl.test(readFileSync(f, 'utf8'))).map(rel);
+
+  it('finds the vocabularies it scans (a scan over nothing passes everything)', () => {
+    expect(VOCABS.length).toBe(11);
+    expect(apiText()).toContain('DELEGATION_EVENT_KINDS');
+  });
+
+  for (const [arr, type, members] of VOCABS) {
+    it(`${arr} is declared exactly once, in shared/api.ts, with the plan's members in the plan's order`, async () => {
+      const DEF = new RegExp(`^\\s*(?:export\\s+)?(?:const|let|var)\\s+${arr}\\b`, 'm');
+      expect(declaredIn(DEF), arr).toEqual(['shared/api.ts']);
+      const api = (await import('../../shared/api.js')) as unknown as Record<string, unknown>;
+      expect(api[arr], `${arr} is exported`).toEqual(members);
+    });
+
+    it(`${type} is declared exactly once, in shared/api.ts, DERIVED from ${arr}`, () => {
+      const DEF = new RegExp(`^\\s*(?:export\\s+)?(?:declare\\s+)?(?:type\\s+${type}\\b\\s*(?:<[^>\\n]*>)?\\s*=|interface\\s+${type}\\b)`, 'm');
+      expect(declaredIn(DEF), type).toEqual(['shared/api.ts']);
+      expect(apiText()).toMatch(new RegExp(`^export type ${type} =\\s*\\(typeof ${arr}\\)\\[number\\];$`, 'm'));
+    });
+  }
+
+  // Union runs: `'a' | 'b' | 'c'`, however the lines wrap.
+  const UNION_RUN = /'[^'\n]+'(?:\s*\|\s*'[^'\n]+')+/g;
+  const unionSets = (text: string): Array<ReadonlySet<string>> =>
+    (text.match(UNION_RUN) ?? []).map((run) => new Set([...run.matchAll(/'([^'\n]+)'/g)].map((m) => m[1]!)));
+  const equalsSet = (set: ReadonlySet<string>, members: readonly string[]): boolean =>
+    set.size === members.length && members.every((m) => set.has(m));
+
+  it('the union fingerprint is order-insensitive, set-EQUAL, and leaves overlapping non-copies alone', () => {
+    const parentage = VOCABS[4][2];
+    const spelled = (text: string): boolean => unionSets(text).some((set) => equalsSet(set, parentage));
+    expect(spelled("type X = 'linked' | 'unresolved' | 'conflicting' | 'unmeasured';")).toBe(true);
+    expect(spelled("type X = 'unmeasured' | 'conflicting' | 'linked' | 'unresolved';"), 'any order').toBe(true);
+    expect(spelled("type X =\n  | 'linked'\n  | 'unresolved'\n  | 'conflicting'\n  | 'unmeasured';"), 'wrapped').toBe(true);
+    expect(spelled("type X = 'linked' | 'unresolved' | 'conflicting';"), 'a subset is not a copy').toBe(false);
+    expect(spelled("type X = 'linked' | 'unresolved' | 'conflicting' | 'unmeasured' | 'extra';"), 'a superset is not a copy').toBe(false);
+    expect(spelled("capabilityState: 'present' | 'absent' | 'unmeasured';"), 'an overlapping other set').toBe(false);
+  });
+
+  for (const [arr, type, members] of VOCABS) {
+    if (members.length < 2) continue;   // a union of one word states no set
+    it(`no source hand-types a union equal to ${arr} — ${type} comes from the array`, () => {
+      const holders = ALL.filter((f) => unionSets(readFileSync(f, 'utf8')).some((set) => equalsSet(set, members))).map(rel);
+      expect(holders).toEqual([]);
+    });
+  }
+});
+
+// Delegation broker wave 3, Task 4: `ReadFailure` stays declared ONCE, in
+// `shared/agent-protocol.ts` (D-1438), and the two consumer shapes this task
+// adds to the seam carry it by NAME. A `{ok:false; reason: 'absent' |
+// 'unreadable'}` spelled inline in either would be the pair's third copy, and
+// the pair scan above already refuses it in io.ts by its fingerprint; these
+// pin the same fact by the names the new shapes are supposed to use.
+describe('delegation wave 3: the measured directory and byte-range reads carry ReadFailure by name', () => {
+  const read = (relPath: string): string => readFileSync(path.join(ccrcRoot, relPath), 'utf8');
+  const declaredIn = (decl: RegExp): string[] => ALL.filter((f) => decl.test(readFileSync(f, 'utf8'))).map(rel);
+
+  it('ReadFailure is declared in exactly one file, shared/agent-protocol.ts, and server/src/io.ts only re-exports it', () => {
+    expect(declaredIn(/^\s*(?:export\s+)?type\s+ReadFailure\b\s*=/m)).toEqual(['shared/agent-protocol.ts']);
+    const io = read('server/src/io.ts');
+    expect(io).toMatch(/^export type \{ ReadFailure \};$/m);
+    expect(io).not.toMatch(/^\s*(?:export\s+)?type\s+ReadFailure\b\s*=/m);
+  });
+
+  it.each([
+    ['MeasuredDirectoryRead', 'entries: readonly string[]'],
+    ['MeasuredByteRangeRead', 'bytes: Uint8Array; size: number'],
+  ])('%s is declared once, in server/src/io.ts, and its failure arm is { ok: false; reason: ReadFailure }', (name, okArm) => {
+    expect(declaredIn(new RegExp(`^\\s*(?:export\\s+)?type\\s+${name}\\b\\s*=`, 'm'))).toEqual(['server/src/io.ts']);
+    const io = read('server/src/io.ts');
+    const at = io.indexOf(`export type ${name} =`);
+    expect(at, `${name}'s declaration`).toBeGreaterThan(-1);
+    // To the blank line that ends the declaration: its arms hold `;` inside braces.
+    const rest = io.slice(at);
+    const body = rest.slice(0, rest.indexOf('\n\n'));
+    expect(body).toContain(okArm);
+    expect(body).toMatch(/\{ ok: false; reason: ReadFailure \}/);
+    expect(body).not.toMatch(/'absent'|'unreadable'/);
+  });
+
+  it('the new consumers import ReadFailure rather than restating it', () => {
+    // fileops.ts is already pinned by the pair scan above; the new agent-side
+    // directory result lives in the same file and names the type, and the
+    // remote adapter takes it from the seam it implements.
+    const fileops = read('agent/src/fileops.ts');
+    const at = fileops.indexOf('export type ListDirResult =');
+    expect(at, 'ListDirResult\'s declaration').toBeGreaterThan(-1);
+    const rest = fileops.slice(at);
+    expect(rest.slice(0, rest.indexOf('\n\n'))).toMatch(/\{ ok: false; reason: ReadFailure \}/);
+    expect(read('server/src/remote/io.ts')).toMatch(
+      /import\s+type\s*\{[^}]*\bReadFailure\b[^}]*\}\s*from\s*'\.\.\/io\.js'/,
+    );
   });
 });
 
@@ -6365,5 +6499,253 @@ describe('the ask push body is built once, in server/src/askbody.ts (D-5302)', (
     expect(askbody).not.toMatch(/\.summary\b|\bsummary\s*[,}]|\bhookAskSummary\b/);
     expect(stallCodeText('const { tool, summary } = a;')).toMatch(/\bsummary\s*[,}]/);   // CONTROL
     expect(holders(/permission requested/)).toEqual(['server/src/askbody.ts']);
+  });
+});
+
+// D-5290 (plan docs/superpowers/plans/2026-10-17-coordinator-first-routing.md, Task 5; spec §5.2). APPENDED. ONE
+// `tryHold` decides every ask hold: it is defined once, in `server/src/watch.ts`; it is the only caller of `hold` (the
+// mint) and the watcher's only reader of `parentOfSession`, so no raise site can hold on its own checks; and the
+// first sighting, the deferred first raise and the amendment branch all call it. Its parent-live check reads the
+// dead-coordinator sweep's own predicate, `claimantMeasuredDead`, defined once in `server/src/coord/reclaim.ts` and
+// read by both. Code lines only (`stallCode`).
+describe('one tryHold decides every ask hold (D-5290)', () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  const DEFINES_TRY = /\basync\s+tryHold\s*\(|\bfunction\s+tryHold\b|\btryHold\s*=\s*(?:async\s*)?\(/;
+  const DEFINES_DEAD = /\bfunction\s+claimantMeasuredDead\b|\bclaimantMeasuredDead\s*=\s*\(/;
+
+  it('CONTROL: the patterns see a definition and pass over a call and a comment line', () => {
+    expect(DEFINES_TRY.test('  private async tryHold(')).toBe(true);
+    expect(DEFINES_TRY.test('await this.tryHold(r, dialog, actions, recs)')).toBe(false);
+    expect(DEFINES_DEAD.test('export function claimantMeasuredDead(v: ClaimantVerdict): boolean {')).toBe(true);
+    expect(stallCodeText('// private async tryHold(\nconst x = 1;')).not.toMatch(DEFINES_TRY);
+  });
+
+  it('tryHold is defined in server/src/watch.ts and nowhere else', () => {
+    expect(holders(DEFINES_TRY)).toEqual(['server/src/watch.ts']);
+  });
+
+  it("watch.ts mints only inside tryHold, reads parentOfSession only there, and calls it from all three raise paths", () => {
+    const watch = stallCode(path.join(ccrcRoot, 'server/src/watch.ts'));
+    const start = watch.search(/\basync\s+tryHold\s*\(/);
+    const end = watch.indexOf('\n  }\n', start);
+    expect(start).toBeGreaterThan(-1);
+    const body = watch.slice(start, end);
+    const rest = watch.slice(0, start) + watch.slice(end);
+    expect(body.match(/\bthis\.hold\(/g) ?? []).toHaveLength(1);
+    expect(rest).not.toMatch(/\bthis\.hold\(/);
+    expect(body).toMatch(/\.parentOfSession\(/);
+    expect(rest).not.toMatch(/\.parentOfSession\(/);
+    expect(rest.match(/\bthis\.tryHold\(/g) ?? []).toHaveLength(3);
+    expect(body).toMatch(/\bclaimantMeasuredDead\(/);
+  });
+
+  it('claimantMeasuredDead is defined in server/src/coord/reclaim.ts and read by the dead-coordinator sweep', () => {
+    expect(holders(DEFINES_DEAD)).toEqual(['server/src/coord/reclaim.ts']);
+    const watch = stallCode(path.join(ccrcRoot, 'server/src/watch.ts'));
+    expect(watch).toMatch(/const dead = ids\.filter\(\(id\) => claimantMeasuredDead\(/);
+  });
+});
+
+// D-5293 (plan docs/superpowers/plans/2026-10-17-coordinator-first-routing.md, Task 8; spec §5.3). APPENDED. The
+// parent's hold and the operator's answer route read ONE eligibility rule, `answerableAsk` in `server/src/askkey.ts`:
+// `askActions` (the hold's sole gate, D-2173) reads it and spells none of its tests, and `answerAsk` reads it before
+// the pane. Both routes that press through `answerAsk` read their body with ONE reader, `readAskAnswer` in
+// `server/src/inject/ask.ts`, and neither route respells the `optionIndexes` check. Code lines only (`stallCode`).
+describe('one eligibility rule and one answer body for the parent and the operator (D-5293)', () => {
+  const definesFn = (name: string): RegExp =>
+    new RegExp(`\\bfunction\\s+${name}\\b|\\b${name}\\s*=\\s*(?:\\(|function\\b|async\\b)`);
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  const INDEX_CHECK = /typeof\s+\w+\s*===\s*'number'/;
+  const ELIGIBILITY_TESTS = /\.questions\.length|\bmultiSelect\b|\.options\.length|\.label\.trim\(\)/;
+  /** The code between two literal anchors, both asserted, the closing one after the opening one. */
+  const between = (name: string, text: string, from: string, to: string): string => {
+    const a = text.indexOf(from);
+    expect(a, `${name}: the opening anchor is gone`).toBeGreaterThan(-1);
+    const b = text.indexOf(to, a + from.length);
+    expect(b, `${name}: the closing anchor is gone`).toBeGreaterThan(a);
+    return text.slice(a, b);
+  };
+
+  it('CONTROL: the patterns see a definition, an index check and an eligibility test, and pass over comments', () => {
+    expect(definesFn('answerableAsk').test('export function answerableAsk(ask) {')).toBe(true);
+    expect(definesFn('readAskAnswer').test('const readAskAnswer = (b) => b;')).toBe(true);
+    expect(definesFn('answerableAsk').test('if (!answerableAsk(ask)) return null;')).toBe(false);
+    expect(INDEX_CHECK.test("optionIndexes.every((n) => typeof n === 'number')")).toBe(true);
+    expect(ELIGIBILITY_TESTS.test('if (ask.questions.length !== 1) return null;')).toBe(true);
+    expect(ELIGIBILITY_TESTS.test('if (q.multiSelect === true) return null;')).toBe(true);
+    expect(stallCodeText('// q.multiSelect === true\nconst x = 1;')).not.toMatch(ELIGIBILITY_TESTS);
+  });
+
+  it('answerableAsk is defined in server/src/askkey.ts and readAskAnswer in server/src/inject/ask.ts, nowhere else', () => {
+    expect(holders(definesFn('answerableAsk'))).toEqual(['server/src/askkey.ts']);
+    expect(holders(definesFn('readAskAnswer'))).toEqual(['server/src/inject/ask.ts']);
+  });
+
+  it('askActions reads answerableAsk and spells none of its tests', () => {
+    const body = between('askActions', stallCode(path.join(ccrcRoot, 'server/src/askkey.ts')),
+      'export function askActions(', '\n}\n');
+    expect(body).toMatch(/\banswerableAsk\(ask\)/);
+    expect(body).not.toMatch(ELIGIBILITY_TESTS);
+  });
+
+  it('answerAsk reads answerableAsk before it captures the pane', () => {
+    const body = between('answerAsk', stallCode(path.join(ccrcRoot, 'server/src/inject/ask.ts')),
+      'export async function answerAsk(', '\n}\n');
+    const gate = body.indexOf('answerableAsk(hs.ask)');
+    expect(gate, 'answerAsk reads answerableAsk').toBeGreaterThan(-1);
+    expect(gate, 'and before the capture').toBeLessThan(body.indexOf('d.tmux.capture('));
+  });
+
+  it('both answer routes read their body with readAskAnswer and neither respells the index check', () => {
+    const operator = between('POST /api/sessions/:id/ask', stallCode(path.join(ccrcRoot, 'server/src/server.ts')),
+      "app.post('/api/sessions/:id/ask'", "app.get('/api/sessions/:id/commands'");
+    const parent = between('POST /api/asks/:id/answer', stallCode(path.join(ccrcRoot, 'server/src/coord/routes.ts')),
+      "app.post('/api/asks/:id/answer'", "app.post('/api/asks/:id/release'");
+    for (const [name, code] of [['operator', operator], ['parent', parent]] as const) {
+      expect(code, name).toMatch(/\breadAskAnswer\(/);
+      expect(code, name).not.toMatch(INDEX_CHECK);
+      expect(code, name).not.toMatch(/Array\.isArray\(\s*(?:body\.)?optionIndexes\b/);
+    }
+  });
+});
+
+// D-5294, D-5295 (plan docs/superpowers/plans/2026-10-17-coordinator-first-routing.md, Task 6; spec §5.4, §5.5,
+// §6.7). APPENDED. The ask window has ONE home and ONE deadline computation: `ASK_GRACE_MS` (180 s) is defined in
+// `server/src/askwindow.ts` and read by name on a code line nowhere else in the source roots, so the hold's sweep
+// deadline and the brief's "notified at" both go through `askNotifyAt`, defined there too. The fence renderer for a
+// child's text in a coordinator's mail, `untrustedBlock`, is defined in `server/src/coord/untrusted.ts` alone, its
+// preface spelled there alone, and the brief calls it. Code lines only (`stallCode`).
+describe('the ask window, its deadline and the untrusted-data fence are each defined once (D-5294, D-5295)', () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  const defines = (name: string): RegExp =>
+    new RegExp(`\\bfunction\\s+${name}\\b|\\b(?:const|let|var)\\s+${name}\\s*=`);
+
+  it('CONTROL: the patterns see a definition and a read, and pass over comment lines', () => {
+    expect(defines('askNotifyAt').test('export function askNotifyAt(heldAt: number): number {')).toBe(true);
+    expect(defines('askNotifyAt').test('const askNotifyAt = (t) => t;')).toBe(true);
+    expect(/\bASK_GRACE_MS\b/.test('return { until: now + ASK_GRACE_MS };')).toBe(true);
+    expect(stallCodeText('// the window is ASK_GRACE_MS\nconst x = 1;')).not.toMatch(/\bASK_GRACE_MS\b/);
+  });
+
+  it('ASK_GRACE_MS is 180 000, defined in server/src/askwindow.ts', () => {
+    const src = stallCode(path.join(ccrcRoot, 'server/src/askwindow.ts'));
+    expect(src).toMatch(/export const ASK_GRACE_MS = 180_000;/);
+    expect(holders(defines('ASK_GRACE_MS'))).toEqual(['server/src/askwindow.ts']);
+  });
+
+  it('ASK_GRACE_MS is read on a code line in server/src/askwindow.ts and nowhere else', () => {
+    expect(holders(/\bASK_GRACE_MS\b/)).toEqual(['server/src/askwindow.ts']);
+  });
+
+  it('askNotifyAt is defined in server/src/askwindow.ts alone, and the hold reads it once for both uses', () => {
+    expect(holders(defines('askNotifyAt'))).toEqual(['server/src/askwindow.ts']);
+    const watch = stallCode(path.join(ccrcRoot, 'server/src/watch.ts'));
+    expect(watch.match(/\baskNotifyAt\(/g) ?? []).toHaveLength(1);
+    expect(watch).toMatch(/renderAskBrief\([^)]*\buntil\)/);
+    expect(watch).toMatch(/return \{ until, askId,/);
+  });
+
+  it('untrustedBlock and its preface live in server/src/coord/untrusted.ts alone, and the brief calls it', () => {
+    expect(holders(defines('untrustedBlock'))).toEqual(['server/src/coord/untrusted.ts']);
+    expect(holders(/untrusted data written by a model/)).toEqual(['server/src/coord/untrusted.ts']);
+    const watch = stallCode(path.join(ccrcRoot, 'server/src/watch.ts'));
+    expect(watch).toMatch(/\buntrustedBlock\(asked, UNTRUSTED_CAP_BYTES,/);
+  });
+});
+
+// D-5370 (`stop-worker-at-run-done`). APPENDED, for the reason the stall-watch blocks above state. The stop-done lane
+// ships LIVE (the operator's ruling), and its kill switch `$REG/stop-done-disabled` is the operator's to touch and
+// remove BY HAND, beside `stall-watch-disabled` — so no line of shell names it, its one TS holder on a code line is its
+// definer (an L1 file that reaches no `node:` module and so cannot write it), and the files that name its constant are
+// the definer and the lane, neither of which reaches a write. Its numbers and its holds are spelled once, in the definer.
+describe('D-5370: the stop-done lane’s kill switch has no writer, and its constants one home', () => {
+  const NAME = 'stop-done-disabled';
+  const DEFINER = 'server/src/stopDone.ts';
+  it('no shell line names it, and its one TS holder is its definer, which reaches no node: module', () => {
+    expect(holdersOf(NAME), 'a line of shell names it — a writer, or a reader this design never had').toEqual([]);
+    expect(ALL.filter((f) => stallCode(f).includes(NAME)).map(rel).sort(), `spelled on a code line outside ${DEFINER}`)
+      .toEqual([DEFINER]);
+    expect(stallCode(path.join(ccrcRoot, DEFINER))).not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
+  });
+  it('the files that name STOP_DONE_DISABLED_MARKER are the definer and the lane, and neither reaches a write', () => {
+    const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
+    expect(WRITE.test('await deps.io.writeFile(`${dir}/${m}`, "");'), 'CONTROL: the pattern sees a write').toBe(true);
+    const holders = ALL.filter((f) => stallCode(f).includes('STOP_DONE_DISABLED_MARKER')).map(rel).sort();
+    expect(holders).toEqual([DEFINER, 'server/src/stopDoneSweep.ts']);
+    for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(WRITE);
+  });
+  it('each of its constants and its hold list is declared once, in the definer', () => {
+    for (const c of ['STOP_DONE_GRACE_MS', 'STOP_DONE_PER_PASS', 'STOP_DONE_MEASURES_PER_PASS', 'STOP_DONE_SWEEP_MS',
+      'STOP_DONE_RETRY_MS', 'STOP_DONE_DISABLED_MARKER', 'STOP_DONE_HOLDS', 'STOP_DONE_HOLD_MAP']) {
+      const decl = new RegExp(`\\b(?:const|let|var)\\s+${c}\\b`);
+      expect(ALL.filter((f) => decl.test(stallCode(f))).map(rel), c).toEqual([DEFINER]);
+    }
+  });
+});
+
+// D-5373 `idle-compact-nudge`: APPENDED, the stall pins' reason. The lane's kill switch is a hand-touched registry
+// marker with no writer in the tree, on the `stall-watch-disabled` precedent; and the prompt the lane types is
+// compared by EQUALITY in the transcript parser, so a second literal would be a second rule.
+describe('idle-compact-nudge: the kill switch has no writer, and the prompt is spelled once (D-5373)', () => {
+  it('idle-compact-nudge-disabled: no shell line names it, and its one TS holder is its pure definer', () => {
+    const name = 'idle-compact-nudge-disabled';
+    const definer = 'server/src/idlenudge.ts';
+    expect(holdersOf(name), `${name}: a line of shell names it`).toEqual([]);
+    expect(ALL.filter((f) => stallCode(f).includes(name)).map(rel).sort(), `${name}: spelled on a code line outside ${definer}`)
+      .toEqual([definer]);
+    expect(stallCode(path.join(ccrcRoot, definer)), `${definer} reaches a node: module — it could write the marker`)
+      .not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
+  });
+  it("the nudge prompt's sentence is spelled on a code line in shared/api.ts alone", () => {
+    const needle = 'Continue with your open tasks.';
+    expect(ALL.filter((f) => stallCode(f).includes(needle)).map(rel).sort()).toEqual(['shared/api.ts']);
+  });
+});
+
+// D-5240 (working-state spec §5.9): the swap route's refusal words are declared once, as `SWAP_REFUSALS` in L0, and
+// they ARE archive's two spellings for the same two facts (bound by reference there, so this row holds the binding).
+// The quoted-literal scan above already allows `session-busy` and `status-unknown` in `shared/api.ts` and the audit
+// alone, so the server's swap guard and the PWA's sheet cannot spell either; this row pins that ccd's two swap
+// refusals are read in one place, `ccdSwapRefusal` (`server/src/swapguard.ts`), off the declaration.
+describe('the swap route spells its refusal words once (D-5240)', () => {
+  it('SWAP_REFUSALS is exactly archive\'s session-busy and status-unknown', () => {
+    expect(SWAP_REFUSALS).toEqual({ sessionBusy: ARCHIVE_REFUSALS.sessionBusy, statusUnknown: ARCHIVE_REFUSALS.statusUnknown });
+  });
+  it('ccd\'s swap refusals are read only by ccdSwapRefusal, in swapguard.ts', () => {
+    const holders = ALL.filter((f) => /\bfunction ccdSwapRefusal\b/.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(holders).toEqual(['server/src/swapguard.ts']);
+    expect(ALL.filter((f) => /`ccd: \$\{code\}:`/.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['server/src/swapguard.ts']);
+  });
+});
+
+// D-5301 (plan docs/superpowers/plans/2026-10-17-coordinator-first-routing.md, Task 10; spec §8). APPENDED. The
+// session role is enumerated once (`SESSION_ROLE_MAP`, its list derived by `Object.keys`), narrowed by one guard, and
+// DERIVED once, by `sessionRoleOf` from the registry's `.child` reading; `server/src/fleet.ts` is the one place the
+// wire field is computed, and it computes it through that function. Code lines only (`stallCode`).
+describe('the session role is enumerated, narrowed and derived once, in shared/api.ts (D-5301)', () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+
+  it('CONTROL: the patterns see a definition and pass over comment lines', () => {
+    expect(/\bSESSION_ROLE_MAP\s*[:=]/.test('const SESSION_ROLE_MAP: Record<SessionRole, true> = {')).toBe(true);
+    expect(/\bsessionRoleOf\s*=/.test('export const sessionRoleOf = (child) => x;')).toBe(true);
+    expect(stallCodeText('// const SESSION_ROLE_MAP = {}\nconst x = 1;')).not.toMatch(/\bSESSION_ROLE_MAP\s*[:=]/);
+  });
+
+  it('SESSION_ROLE_MAP, SESSION_ROLES, isSessionRole and sessionRoleOf are each defined in shared/api.ts and nowhere else', () => {
+    expect(holders(/\bSESSION_ROLE_MAP\s*[:=]/)).toEqual(['shared/api.ts']);
+    expect(holders(/\bSESSION_ROLES\s*[:=]/)).toEqual(['shared/api.ts']);
+    expect(holders(/\bfunction\s+isSessionRole\b|\bisSessionRole\s*=/)).toEqual(['shared/api.ts']);
+    expect(holders(/\bfunction\s+sessionRoleOf\b|\bsessionRoleOf\s*=/)).toEqual(['shared/api.ts']);
+  });
+
+  it('SESSION_ROLES is derived from its map, never a hand-kept list', () => {
+    const api = readFileSync(path.join(ccrcRoot, 'shared/api.ts'), 'utf8');
+    expect(api).toMatch(/export const SESSION_ROLES: readonly SessionRole\[\] =\s*\n?\s*Object\.keys\(SESSION_ROLE_MAP\)/);
+    expect(api).not.toMatch(/SESSION_ROLES[^=]*=\s*\[/);
+  });
+
+  it("the wire field is computed in server/src/fleet.ts only, through sessionRoleOf of the registry's child", () => {
+    expect(holders(/\brole:\s*sessionRoleOf\(/)).toEqual(['server/src/fleet.ts']);
+    expect(stallCode(path.join(ccrcRoot, 'server/src/fleet.ts'))).toMatch(/\brole:\s*sessionRoleOf\(r\.child\)/);
   });
 });
