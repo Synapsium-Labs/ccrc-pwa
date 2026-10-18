@@ -166,8 +166,9 @@ const box = async (cfg: BoxCfg = {}) => {
 // interleaving with its writes moved. A pending timer alone is no better a sign: any fake timer the route did not arm
 // reads as parked, and a case's write lands inside the first decision (the pause case pins this with one).
 
-/** Real wall time any one wait on the code under test may take before the case fails. */
-const REAL_BOUND_MS = 20_000;
+/** Real wall time any one wait on the code under test may take before the case fails. Below `vitest.config.ts`'s Linux
+ *  `testTimeout` (20 000 ms), so the named error below surfaces before vitest's own `Test timed out`. */
+const REAL_BOUND_MS = 10_000;
 const turn = (): Promise<void> => new Promise<void>((r) => { setImmediate(r); });
 /** Wait `ms` of REAL time, through event-loop turns (the faked `setTimeout` cannot). */
 const realDelay = async (ms: number): Promise<void> => {

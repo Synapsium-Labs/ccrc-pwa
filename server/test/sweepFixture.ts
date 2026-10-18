@@ -39,7 +39,9 @@ export const BASH = realPath('bash');
 export const CCRC_SRC = join(REPO, 'ccd', 'ccrc');
 /** The script the fixture's `~/ccrc/deploy/verify-service.sh` is a copy of, unless a case names another. */
 export const VERIFY_SRC = join(REPO, 'deploy', 'verify-service.sh');
-/** The frozen pre-wave-11 `_upd_sweep` (v0.0.60 through v0.0.84), sourced after `ccd/ccrc` and redefining it. */
+/** The frozen pre-wave-11 `_upd_sweep` (v0.0.60 through v0.0.84), sourced after `ccd/ccrc` and redefining it. The file
+ *  redefines `_upd_phase` too (since 74f93f8f1): v0.0.84's seven-key writer, byte-identical to `_upd_phase` at 65f4b5ab4,
+ *  so every `frozen` case runs the old writer, which is the right model of an old process. */
 export const FROZEN_SWEEP = join(here, 'fixtures', 'upd-sweep-pre-wave11.bash');
 /** S0, the verify script every release through v0.0.79 ships (one digest from v0.0.1, measured) — the PRE-wave-10
  *  script, with no deliberate-stop classifier — byte for byte (`git show v0.0.79:deploy/verify-service.sh`; wave 12,
