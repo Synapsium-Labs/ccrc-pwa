@@ -364,4 +364,25 @@ describe('ccd-tmp-sweep: a hibernated session is live', () => {
     expect(out.err).toContain('hibernated-unreadable');
     for (const u of STALE) expect(exists(path.join(f.root, u)), `${u} was removed by a refused pass`).toBe(true);
   });
+
+  it('.hibernated beside a .uuid that does not hold a uuid refuses the pass and removes nothing', () => {
+    const f = fixture();
+    const r = regOf(f);
+    fs.writeFileSync(path.join(r, `${ROW}.hibernated`), '1700000000 7');
+    fs.writeFileSync(path.join(r, `${ROW}.uuid`), 'not-a-uuid\n');
+    const out = run(f);
+    expect(out.code).toBe(1);
+    expect(out.err).toContain('hibernated-unreadable');
+    for (const u of STALE) expect(exists(path.join(f.root, u)), `${u} was removed by a refused pass`).toBe(true);
+  });
+
+  it('a dangling .hibernated symlink still marks the row asleep: its dir is kept', () => {
+    const f = fixture();
+    const r = regOf(f);
+    fs.writeFileSync(path.join(r, `${ROW}.uuid`), `${U.stale1}\n`);
+    fs.symlinkSync(path.join(r, 'nowhere'), path.join(r, `${ROW}.hibernated`));
+    const out = run(f);
+    expect(out.code, out.err).toBe(0);
+    expect(exists(path.join(f.root, PROJ, U.stale1)), 'the sleeping session lost its temp dir').toBe(true);
+  });
 });

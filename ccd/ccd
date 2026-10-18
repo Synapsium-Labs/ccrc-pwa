@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=d300e6ac3b39db0a2d2b4921569eec43d777809744cb1cc3a31ae1b5875996ea
+# ccrc:generated 1 sha256=8feec83d2ca5225c0805f12cbf782966d4a07d89d78d30ede92f1afc887b8b59
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -28125,6 +28125,9 @@ cmd_hibernate() {   # [--surface <word>] [--actor <text>] [--reason <text>] <id>
   [[ -e "$REG/$id.no-hibernate" ]] && _hib_refuse opted-out "$id carries a no-hibernate marker"
   local now last
   _now_s_to now; _reg_get_to last "$id" lastswap
+  # A `.lastswap` that stands but does not read as an epoch is unmeasured, and an unmeasured read holds (`-e`/`-L`, the hold polarity; D-5242).
+  [[ ( -e "$REG/$id.lastswap" || -L "$REG/$id.lastswap" ) && ! "$last" =~ ^[0-9]+$ ]] \
+    && _hib_refuse recent-swap "$REG/$id.lastswap does not read as an epoch"
   [[ "$last" =~ ^[0-9]+$ && $(( now - last )) -lt $(( SWAP_JITTER + 60 )) ]] \
     && _hib_refuse recent-swap "a swap was dispatched $(( now - last ))s ago and may still be landing"
   # THE TURN MARKER (`$REG/<id>.turn.json`, one line, the hook's jq writes it

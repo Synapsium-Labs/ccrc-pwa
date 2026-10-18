@@ -121,6 +121,33 @@ describe('ccd hibernate: an idle session is put to sleep, journalled as delibera
     expect(has('hibernated'), 'the marker is down before the kill').toBe(true);
   });
 
+  it('the marker is down before the unsupervise (a stopped row is never a sleeping one nobody knows to wake)', () => {
+    idle();
+    hibernate('_ws_unsupervise() { exit 7; };');
+    expect(has('hibernated'), 'the marker precedes _ws_unsupervise').toBe(true);
+    expect(killed(), 'the shell ended before the kill').toBe(false);
+  });
+
+  it('a .hibernated standing on a live idle pane is not taken as asleep: the full re-measure runs and the act lands', () => {
+    idle();
+    fs.writeFileSync(regPath('hibernated'), '1 7\n');
+    const r = hibernate();
+    expect(r.rc, r.err).toBe(0);
+    expect(r.out).toContain(`hibernated ${ID}`);
+    expect(r.out).not.toContain('already hibernated');
+    expect(eventsOf(h.home, 'hibernate')).toHaveLength(1);
+    expect(killed()).toBe(true);
+  });
+
+  it('a .hibernated standing on a live busy pane still refuses busy (the re-measure is not skipped)', () => {
+    idle(); live('busy');
+    fs.writeFileSync(regPath('hibernated'), '1 7\n');
+    const r = hibernate();
+    expect(r.rc, r.err).toBe(3);
+    expect(r.err).toContain('ccd: session-busy: busy');
+    expect(killed()).toBe(false);
+  });
+
   it('the dec flags are stripped before the arity rule and land on the journal row', () => {
     idle();
     const r = hibernate('', `--surface agent --actor 'sweep:hibernate' ${ID}`);
@@ -154,6 +181,10 @@ describe('ccd hibernate: every re-measure refuses session-busy at exit 3 and tou
     ['a .hold', 'held', () => { fs.writeFileSync(regPath('hold'), 'wave 2'); }],
     ['a .no-hibernate', 'opted-out', () => { fs.writeFileSync(regPath('no-hibernate'), ''); }],
     ['a fresh lastswap', 'recent-swap', () => { fs.writeFileSync(regPath('lastswap'), String(nowS() - 30)); }],
+    // The window's edge: past 60 s, inside SWAP_JITTER + 60 = 180 s (a swap still behind its random delay).
+    ['a lastswap 150 s old', 'recent-swap', () => { fs.writeFileSync(regPath('lastswap'), String(nowS() - 150)); }],
+    // A lastswap that stands but is not a number is unmeasured, and an unmeasured read holds.
+    ['a lastswap that is not a number', 'recent-swap', () => { fs.writeFileSync(regPath('lastswap'), 'soon'); }],
     ['#{session_attached} reading 1', 'attached', () => { attached('1'); }],
     ['#{session_attached} unreadable', 'attached', () => { attached(null); }],
     ['#{session_attached} not a number', 'attached', () => { attached('yes'); }],
@@ -190,6 +221,14 @@ describe('the wake, and the verbs that end or refuse a hibernation', () => {
   it('ccd ensure removes .stopped and .hibernated and writes .woke', () => {
     asleep();
     h.sh(`${DEAD} _supervised_start() { echo "supervised_start $*" >> "$HOME/ccd-calls"; return 0; }; cmd_ensure ${ID} >/dev/null 2>&1 || true`, { TMUX: '' });
+    expect(has('stopped')).toBe(false);
+    expect(has('hibernated')).toBe(false);
+    expect(fs.readFileSync(regPath('woke'), 'utf8')).toMatch(/^\d+$/);
+  });
+
+  it('ccd start <id> removes .stopped and .hibernated and writes .woke (ccd enable wakes through it)', () => {
+    asleep();
+    h.sh(`${DEAD} _supervised_start() { echo "supervised_start $*" >> "$HOME/ccd-calls"; return 0; }; cmd_start ${ID} >/dev/null 2>&1 || true`, { TMUX: '' });
     expect(has('stopped')).toBe(false);
     expect(has('hibernated')).toBe(false);
     expect(fs.readFileSync(regPath('woke'), 'utf8')).toMatch(/^\d+$/);
