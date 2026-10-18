@@ -1427,6 +1427,22 @@ describe('only an agent id with a qualifying join is a subagent to the turn mark
         expect([...batch, ...planted].filter((id) => !have.has(id)), `trial ${t}: no id vanished`).toEqual([]);
       }
     }, 120_000);
+
+    // A SOURCE PIN: no BASH_ENV shadow can split one `[[ ]]`, and a many-round race would be flaky. Measured with a DEBUG-trap
+    // barrier holding eight writers at the guard: 4 of 400 rounds lost a line at the old order, 0 of 400 reordered (D-5434).
+    it('the entry guard asks absence before regularity, so a sibling creating the file between the two reads is not a refusal (D-5434)', () => {
+      const src = fs.readFileSync(HOOK, 'utf8');
+      const open = src.indexOf('_hook_join_record() {');
+      expect(open, 'the hook defines _hook_join_record').toBeGreaterThan(-1);
+      const guard = src.slice(open).split('\n').slice(1).find((line) => line.includes('|| return 1'));
+      expect(guard, 'the first refusal line of _hook_join_record is its entry guard').toBeDefined();
+      expect(guard).toContain('-L "$jf"');
+      const absent = guard!.indexOf('! -e "$jf"');
+      const regular = guard!.indexOf('-f "$jf"');
+      expect(absent, 'the guard asks `! -e "$jf"`').toBeGreaterThan(-1);
+      expect(regular, 'and `-f "$jf"`').toBeGreaterThan(-1);
+      expect(absent, 'absence is asked first').toBeLessThan(regular);
+    });
   });
 
   it('hookstate.json no longer carries the join: after a Start with an id its keys are the base shape', () => {

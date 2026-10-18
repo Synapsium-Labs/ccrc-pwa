@@ -3340,7 +3340,7 @@ msid="${CLAUDE_CODE_SESSION_ID:-$psid}"
 JOIN_ROTATE_AT=128 JOIN_READ_MAX=16384
 _hook_join_record() {   # $aid -> 0 appended; 1 refused (never fatal: the caller says `|| true`)
   local jf="$REG/$id.joined" jp="$REG/$id.joinedprev" cur="" nl="" fd=""
-  [[ ! -L "$jf" && ( -f "$jf" || ! -e "$jf" ) ]] || return 1
+  [[ ! -L "$jf" && ( ! -e "$jf" || -f "$jf" ) ]] || return 1   # absence BEFORE regularity: a sibling's first `>>` between `-f` and `! -e` read as "exists, not regular" and lost this append (D-5434)
   if ! { printf '%s\n' "$aid" >> "$jf"; } 2>/dev/null; then
     # A FAILED WRITE STILL CREATED THE FILE (ENOSPC after O_CREAT leaves an empty `joined`), so it gets the same look at the row
     # as a landed one: a row purged under it must not keep an orphan, and an empty file is an orphan like any other.
