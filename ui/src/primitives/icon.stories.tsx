@@ -24,7 +24,7 @@ export const Default: Story = { args: { name: 'bell' } };
 export const TheSet: Story = {
   args: { name: 'bell' },
   render: () => (
-    <div className="grid gap-3 text-ink-secondary font-mono text-2xs" style={{ gridTemplateColumns: 'auto repeat(3, 32px)' }}>
+    <div className="grid justify-start gap-3 text-ink-secondary font-mono text-2xs" style={{ gridTemplateColumns: 'auto repeat(3, 32px)' }}>
       {NAMES.map((n) => (
         <div key={n} className="contents">
           <span>{n}</span>

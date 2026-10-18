@@ -57,7 +57,8 @@ export function MailCard({ envelope }: { envelope: MailEnvelope }): ReactNode {
   return (
     <article className="mail-card">
       <p className="mail-card-from">
-        <span className="mail-card-glyph" aria-hidden="true"><Icon name="mail" /></span>
+        {/* self-center: a block svg has no baseline in this baseline row (D-5100). */}
+        <span className="mail-card-glyph self-center" aria-hidden="true"><Icon name="mail" /></span>
         <span className="mail-card-sender">{envelope.fromId}</span>
         <span className="mail-card-arrow" aria-hidden="true">→</span>
         <span className="mail-card-recipient">{envelope.toId}</span>

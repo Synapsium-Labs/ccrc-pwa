@@ -94,6 +94,16 @@ describe('MailCard', () => {
     expect(glyph.querySelector('svg path')!.getAttribute('d')).toBe(ICONS.mail[0]![1].d);
   });
 
+  it('centres the mail icon on the sender line, not on its baseline (D-5100)', () => {
+    // The line is a baseline-aligned flex row and a block svg has no
+    // baseline, so without its own centring the icon sits above the text
+    // and grows the line from 16px to 19px. Only the glyph is centred; the
+    // → arrow is text and keeps the baseline.
+    render(<ChatListInner id="s" events={[mailTurn()]} pending={[]} />);
+    expect(document.querySelector('.mail-card-glyph')!).toHaveClass('self-center');
+    expect(document.querySelector('.mail-card-arrow')!).not.toHaveClass('self-center');
+  });
+
   it('names kind, subject and run/wave, and renders artifacts AS PATHS', () => {
     render(<ChatListInner id="s" events={[mailTurn('m1', {
       artifacts: ['docs/superpowers/plans/build4.md', '/tmp/wave4.log'],
