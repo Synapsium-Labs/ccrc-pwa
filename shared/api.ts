@@ -11099,3 +11099,53 @@ export const DELEGATION_SPOOL_BOUNDS = {
   listingNames: 256,
   listingNameBytes: 64,
 } as const;
+
+/** The SAFETY-forbidden `ccd` verbs a dispatched child's deny file names (plan Task 15, D-5299): Task 12's
+ *  `FORBIDDEN_CCD_VERBS` (`server/src/coord/approvalguard.ts`), every one of which has a stable prefix, held equal to
+ *  it by `ccd-spawn-child-settings.test.ts`. One `|`-joined string, not eight quoted literals, for the reason that
+ *  list gives: the verb censuses count a quoted verb as a composer of it, and this list composes nothing. */
+const CHILD_DENY_CCD_VERBS: readonly string[] =
+  'ws-rm|ws-reap|ws-gc --prune|ws-archive|ws-restore|ws-reclaim|ws-expire|ws-collect'.split('|');
+
+/** Whether the deny file also names each verb's path-qualified forms (`Bash(*\/ccd ws-rm:*)`,
+ *  `Bash(~/.local/bin/ccd ws-rm:*)` and the like). FALSE until plan Task 13 records, on the rig, that Claude Code's
+ *  deny matcher takes a leading wildcard; Task 13 decides, and turning them on is this one word here and its bash twin
+ *  `CHILD_DENY_PATH_QUALIFIED` in `ccd/install-session-hooks.sh` (D-5299). Invariant 10 does not rest on it: the
+ *  child's PreToolUse deny (Task 14) refuses every form whatever the matcher takes. */
+export const CHILD_DENY_PATH_QUALIFIED = false as boolean;
+
+/** The program heads a deny rule is written for: the bare name always, and the path-qualified forms only behind
+ *  `CHILD_DENY_PATH_QUALIFIED`. */
+const childDenyHeads = (prog: 'ccd' | 'ccrc'): readonly string[] =>
+  CHILD_DENY_PATH_QUALIFIED ? [prog, `*/${prog}`, `~/.local/bin/${prog}`] : [prog];
+
+/** The `permissions.deny` list of `~/.cc-sessions/child-deny.settings.json`, the one managed file every dispatched
+ *  child (a row with `.child`) spawns with through `--settings` (spec §6.6, plan Task 15, D-5299): the forbidden
+ *  `ccd` verbs, then `ccrc update` and `ccrc rollback`. No approval overrides a deny rule. The installer's bash copy
+ *  is held equal to this list by iteration (`install-session-hooks.test.ts`), never respelled in a test. */
+export const CHILD_DENY_RULES: readonly string[] = [
+  ...CHILD_DENY_CCD_VERBS.flatMap((v) => childDenyHeads('ccd').map((h) => `Bash(${h} ${v}:*)`)),
+  ...['update', 'rollback'].flatMap((v) => childDenyHeads('ccrc').map((h) => `Bash(${h} ${v}:*)`)),
+];
+
+/** `$REG/<id>.deny-settings` (plan Task 15, D-5299): the sha256 of the deny file the child was last spawned with,
+ *  written by `ccd`'s spawn of a `.child` row and only when it passed the file. Three answers, as `ChildMark`: Task
+ *  16's `409 deny-not-engaged` refuses both `none` and `unreadable`, and engages only on a digest equal to the managed
+ *  file's current one. */
+export type DenySettingsMark =
+  | { readonly kind: 'none' }                                  // no field: spawned without the deny file
+  | { readonly kind: 'digest'; readonly sha256: string }       // the file's lowercase hex sha256 at that spawn
+  | { readonly kind: 'unreadable' };                           // listed but unreadable, or not a sha256
+
+/** `$REG/<id>.childshell` (plan Task 15, D-5360's requirement, D-5391): the shell `ccd`'s spawn of a `.child` row
+ *  pinned the child's Bash tool to through `CLAUDE_CODE_SHELL`. Three answers again; Task 16 refuses a ruling for a
+ *  child whose record does not show the bash pin. */
+export type ChildShellMark =
+  | { readonly kind: 'none' }                                  // no field: no pin at that spawn
+  | { readonly kind: 'pinned'; readonly shell: string }        // an absolute path, as `ccd` wrote it
+  | { readonly kind: 'unreadable' };                           // listed but unreadable, or not an absolute path
+
+/** A `.deny-settings` value: 64 lowercase hex characters, as `sha256sum`/`shasum -a 256` print them. */
+export const DENY_SETTINGS_DIGEST = /^[0-9a-f]{64}$/;
+/** A `.childshell` value: an absolute path of plain characters. */
+export const CHILD_SHELL_PATH = /^\/[A-Za-z0-9._/-]+$/;

@@ -3,8 +3,8 @@ import type { CcrcConfig } from './config.js';
 import type { FleetIO, MeasuredRead, ReadFailure } from './io.js';
 import { readHookState } from './hookstate.js';
 import {
-  CHILD_RUN_ID, isPrPhase, isStopSurface, parseLastEnd, ROUTE_WRITABLE_FIELDS,
-  type ChildMark, type IdentityField, type LastEnd, type LifecycleField,
+  CHILD_RUN_ID, CHILD_SHELL_PATH, DENY_SETTINGS_DIGEST, isPrPhase, isStopSurface, parseLastEnd, ROUTE_WRITABLE_FIELDS,
+  type ChildMark, type ChildShellMark, type DenySettingsMark, type IdentityField, type LastEnd, type LifecycleField,
   type PrPhase, type RouteField, type RouteFields, type RouteReadField, type StopSurface,
 } from '../../shared/api.js';
 
@@ -377,6 +377,14 @@ export interface SessionRecord {
    * spec §5.1's two authorities and nothing may treat it as a credential.
    */
   child: ChildMark;
+  /**
+   * `$REG/<id>.deny-settings` and `$REG/<id>.childshell` — what `ccd`'s last spawn of a `.child` row passed: the
+   * deny file's sha256 and the shell its Bash tool was pinned to (plan Task 15, D-5299, D-5391), for Task 16's
+   * `409 deny-not-engaged`. Optional and additive: absent reads as `none`. Attribution, like `child`: any process of
+   * the uid can write them.
+   */
+  denySettings?: DenySettingsMark;
+  childShell?: ChildShellMark;
 }
 
 /**
@@ -591,6 +599,19 @@ function childMarkOf(read: MeasuredRead, listed: boolean): ChildMark {
   return listed ? { kind: 'unreadable' } : { kind: 'none' };
 }
 
+/** `$REG/<id>.deny-settings`'s ONE reader (plan Task 15, D-5299): `null` is an unlisted field (`none`); a listed
+ *  field reads as a digest only when it is exactly one sha256, else `unreadable`. */
+export function denySettingsOf(read: MeasuredRead | null): DenySettingsMark {
+  if (read === null) return { kind: 'none' };
+  return read.ok && DENY_SETTINGS_DIGEST.test(read.content) ? { kind: 'digest', sha256: read.content } : { kind: 'unreadable' };
+}
+
+/** `$REG/<id>.childshell`'s ONE reader (plan Task 15, D-5391), the same three readings. */
+export function childShellOf(read: MeasuredRead | null): ChildShellMark {
+  if (read === null) return { kind: 'none' };
+  return read.ok && CHILD_SHELL_PATH.test(read.content) ? { kind: 'pinned', shell: read.content } : { kind: 'unreadable' };
+}
+
 /** `<epoch> <rest>` — the packed two-token stamp shape every D3 field uses.
  *  Epoch and payload share ONE registry file on purpose (§4.1): the registry is
  *  read per-field per-session on a 2s tick, and packing is what keeps `stopped`
@@ -754,7 +775,7 @@ async function buildRecord(
   const [wrapperRead, project, workdirRead, uuidRead, startedRead, home, pool, lastswap, workspace, branchRead,
     base, prPhaseRaw, prNumberRaw, prCheckedAtRaw, archivedRaw, manifestRaw, holdRead,
     stoppedRead, supervisedRead, swapBlockedRaw, spawnRaw, substrateRead, strandedRead,
-    routeFieldReads, degradedRead, inertRead, childRead, lastEndRaw, hibernatedRaw] = await Promise.all([
+    routeFieldReads, degradedRead, inertRead, childRead, lastEndRaw, denyRead, shellRead, hibernatedRaw] = await Promise.all([
     fieldMeasured(io, cfg.registryDir, id, 'wrapper'), field(io, cfg.registryDir, id, 'project'),
     fieldMeasured(io, cfg.registryDir, id, 'workdir'), fieldMeasured(io, cfg.registryDir, id, 'uuid'),
     fieldMeasured(io, cfg.registryDir, id, 'started'), field(io, cfg.registryDir, id, 'home'),
@@ -787,6 +808,10 @@ async function buildRecord(
     // D-5237: the last process end's cause, read only when listed — a row
     // that has never ended (or predates the field) costs nothing.
     names.includes(`${id}.lastend`) ? field(io, cfg.registryDir, id, 'lastend') : Promise.resolve(null),
+    // Plan Task 15 (D-5299, D-5391): the child's spawn record, read only when listed, so a row ccd never spawned
+    // as a child costs nothing and a listed field that will not read is `unreadable`, never `none`.
+    names.includes(`${id}.deny-settings`) ? fieldMeasured(io, cfg.registryDir, id, 'deny-settings') : Promise.resolve(null),
+    names.includes(`${id}.childshell`) ? fieldMeasured(io, cfg.registryDir, id, 'childshell') : Promise.resolve(null),
     // D-5242: the hibernation marker, read only when listed — a row that never slept costs nothing.
     names.includes(`${id}.hibernated`) ? field(io, cfg.registryDir, id, 'hibernated') : Promise.resolve(null),
   ]);
@@ -1109,6 +1134,9 @@ async function buildRecord(
     unmeasured,
     route,
     child: childMarkOf(childRead, childListed),
+    // Only when listed: a row with neither field keeps today's record shape exactly (absent reads as `none`).
+    ...(denyRead === null ? {} : { denySettings: denySettingsOf(denyRead) }),
+    ...(shellRead === null ? {} : { childShell: childShellOf(shellRead) }),
   };
 }
 

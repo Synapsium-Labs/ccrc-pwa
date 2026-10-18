@@ -6866,6 +6866,28 @@ describe('ccrc history card line: the hook and lib spell one grammar, one cap an
   });
 });
 
+// D-5299 / D-5391 (plan docs/superpowers/plans/2026-10-17-coordinator-first-routing.md, Task 15). APPENDED. The
+// children's deny list (`CHILD_DENY_RULES`), its path-qualified switch (`CHILD_DENY_PATH_QUALIFIED`) and the spawn
+// record's two value shapes have one TypeScript home, `shared/api.ts`; the record's two readers have one,
+// `server/src/registry.ts`. The installer's bash list is a documented second copy, held equal by iteration
+// (`install-session-hooks.test.ts`), not by this text scan.
+describe('the children\'s deny list, its switch and the spawn record\'s readers each have one home (D-5299, D-5391)', () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  const decl = (c: string): RegExp => new RegExp(`\\b(?:const|let|var|function)\\s+${c}\\b`);
+  it('CONTROL: the pattern sees a declaration and passes over a use', () => {
+    expect(decl('CHILD_DENY_RULES').test('export const CHILD_DENY_RULES: readonly string[] = [')).toBe(true);
+    expect(decl('CHILD_DENY_RULES').test('expect(CHILD_DENY_RULES).toEqual(x);')).toBe(false);
+  });
+  it('each constant is declared once, in shared/api.ts', () => {
+    for (const c of ['CHILD_DENY_RULES', 'CHILD_DENY_PATH_QUALIFIED', 'DENY_SETTINGS_DIGEST', 'CHILD_SHELL_PATH']) {
+      expect(holders(decl(c)), c).toEqual(['shared/api.ts']);
+    }
+  });
+  it('each reader is declared once, in server/src/registry.ts', () => {
+    for (const c of ['denySettingsOf', 'childShellOf']) expect(holders(decl(c)), c).toEqual(['server/src/registry.ts']);
+  });
+});
+
 // D-5242 (`hibernate-long-idle-sessions`, plan Task 17a). APPENDED, for the reason the stall-watch blocks above state.
 // Hibernation's four operator settings — `hibernate-live`, `hibernate-disabled`, `hibernate-after-hours` and the
 // per-session `<id>.no-hibernate` — are touched and removed BY HAND in `$REG`, like `stall-watch-disabled`: nothing in
