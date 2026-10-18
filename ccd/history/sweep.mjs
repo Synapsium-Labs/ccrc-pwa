@@ -8301,8 +8301,10 @@ function exportSelect(db, ctx, nowMs, homeDays, boundBytes) {
       // could see. The scan then reads on, and the next page or phase tells: with no room left planSegment takes nothing from
       // it and counts every due row in it as left. The probe costs one more page (at most the page size, each candidate with
       // its blob and sidecar lookups) when a pass ends a page exactly at its bound, and ends at the first page holding a due
-      // row; a pass that left a due row on the page it filled never probes. Where nothing else is due it reads what a pass
-      // with room left reads anyway, to the end of the phases. Lib's leftDue decides; this only delivers (RD2).
+      // row; before that page it may also seek each remaining due transcript's empty young run and page through unlinked
+      // sidecars that are not yet due (that run is not filtered to due transcripts), each page under the run's budget. A
+      // pass that left a due row on the page it filled never probes. Where nothing else is due it reads what a pass with
+      // room left reads anyway, to the end of the phases. Lib's leftDue decides; this only delivers (RD2).
       if (plan.leftDue > 0) { sel.complete = false; return false; }
     }
     if (!budgetLeft(ctx.budget)) { sel.complete = false; return false; }
