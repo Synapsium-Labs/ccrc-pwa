@@ -4274,6 +4274,26 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     - docs PR part 2: README's Reading 9 clause and `ccrc-api` lines, R25(a) and (c), `ccrc-update.test.ts`'s
       citation, the closure; README is under claim 1655 until about 14:44;
     - the final rollout's exit criteria, measured live, with the operator tapping the rehearsal.
+  - **14:40 UTC: full run 39134142619 on `main` at `b51a2e20d`: Linux green, `full-suite` red on macOS only, and
+    B2 is red again.** `test-macos` 3/4 (job 117695192710) has `ccrc-doctor` delegation-hooks' 3 and 1/4 (job
+    117695192751) `session-hook-turnmark`'s 7: #448's, expected, the delegation broker's follow-up. 1/4 also has
+    `ccd-docs-tree` row 64 (overflow under `stdout_cap=200`): `unreadable`, not `too-many`, in 536 ms. Read from
+    the source:
+    - `snapshot` answers `unreadable {step:'status'}` for an `OSError`, which is what `os.killpg` raises;
+    - 536 ms is under `KILL_GRACE_S` (2 s), so the raise is `_stop`'s SIGTERM (or `_group_alive`'s probe), not
+      the SIGKILL;
+    - `spawn`'s overflow path never polls before `_stop`, so git, done writing, is exiting or a zombie when the
+      SIGTERM goes. The SIGTERM absorbs EPERM only when `poll()` then reaps the leader. A Darwin leader that
+      already answers EPERM but cannot yet be reaped fails that test and raises. That is a hypothesis, unmeasured.
+    - Row 64 was green on macOS once, at `97493f9b2` (job 117447659194, 591 ms), and no macOS run read it between
+      fix round 1 (`86aef1b92`) and today: PR CI skips `test-macos` by event. Fix round 1 changed only the SIGKILL
+      arm, which a 536 ms failure never reaches. So one sample each way, and flake or regression is open.
+    - B2 is the operator's stable blocker (ruling of 2026-10-17 15:50), so the 2026-09-28 "macOS gates nothing"
+      ruling does not cover it. I re-ran the failed jobs for a second sample, and **dispatch planned run 566 (wave
+      20) as B2's follow-up**: diagnose on Darwin, fix inside the three functions (`ccd/ccd` is unclaimed since
+      claim 1557 ended; path identity's coordinator is told), with its block's unused numbers 5336 to 5342.
+      Debugging row: Opus · xhigh, Sonnet · high refuters, workflows off. Its macOS proof is a full run on its
+      branch, which I dispatch. Dispatched 14:43 to worker plain-delta (`ws/plain-delta`), 3 items.
 
 ## Carried constraints
 
