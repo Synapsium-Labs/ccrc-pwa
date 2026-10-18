@@ -245,4 +245,17 @@ describe('SessionScreen shows the workflows', () => {
     expect(screen.getByText('1 workflow running')).toBeTruthy();
     expect(screen.getByText('example-flow')).toBeTruthy();
   });
+  it('a frame that arrives after the page painted repaints the strip (the subscription is live)', () => {
+    const store = createSessionStore('claude:demo2', {
+      makeSocket: () => ({ onopen: null, onmessage: null, onclose: null, onerror: null, close() {} }) as unknown as WebSocket,
+      api: { prompt: async () => {} },
+    });
+    act(() => store.getState().apply({ type: 'backlog', uuid: 'u1', events: [], offset: 0, file: '/t.jsonl', missing: false }));
+    render(<SessionScreen id="claude:demo2" store={store} />);
+    expect(screen.queryByText('example-flow')).toBeNull();
+    act(() => store.getState().apply({ type: 'workflows', workflows: [wf()] }));
+    expect(screen.getByText('example-flow')).toBeTruthy();
+    act(() => store.getState().apply({ type: 'workflows', workflows: [] }));
+    expect(screen.queryByText('example-flow')).toBeNull();
+  });
 });
