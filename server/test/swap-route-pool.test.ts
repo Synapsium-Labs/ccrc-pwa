@@ -81,9 +81,15 @@ const open = async (
 ): Promise<FastifyInstance> => {
   calls = [];
   const run: Runner = async (_cmd, args) => { calls.push([...args]); return { code: 0, stdout: '', stderr: '' }; };
+  // D-5240: the swap route reads the turn (`turnVerdictFor`) before the queue and inside it. This suite is about the
+  // pool rule, so tmux answers on its own runner, never recorded in `calls`: the pane is proven gone, a verdict of
+  // `idle` with no further read (`swap-route-busy.test.ts` owns the busy and unmeasured cases).
+  const paneGone: Runner = async (_cmd, args) =>
+    args[0] === 'has-session' ? { code: 1, stdout: '', stderr: `can't find session: ${args[2] ?? ''}` }
+      : { code: 0, stdout: '', stderr: '' };
   const cfg = loadConfig({ CCRC_HOME: home });
   const a = await buildServer({
-    cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: opts.io ?? localIO, queue: opts.queue ?? new KeyedQueue(),
+    cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(paneGone), io: opts.io ?? localIO, queue: opts.queue ?? new KeyedQueue(),
     ...(opts.ccdVerbs !== undefined
       ? { fleetState: { connected: true, downSince: null, ccdVerbs: opts.ccdVerbs, rosterFp: null, build: null } }
       : {}),
