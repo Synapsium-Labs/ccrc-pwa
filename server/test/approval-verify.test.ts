@@ -99,7 +99,7 @@ describe('approval-verify: a forged or misdirected ruling prints nothing', () =>
     expect(verdictFor(ruling, expected, ours.pub)).toBeNull();
   });
   it('a key that is not Ed25519 verifies nothing', () => {
-    const { publicKey } = generateKeyPairSync('rsa', { modulusLength: 1024 });
+    const { publicKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
     expect(verdictFor(signed(record()), expected, publicKey.export({ type: 'spki', format: 'pem' }).toString())).toBeNull();
   });
 });
