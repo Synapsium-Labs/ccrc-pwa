@@ -6923,13 +6923,13 @@ describe('ccrc doctor: wrappers', () => {
 
   it('escapes EVERY control byte, not the three that would break its own TSV', () => {
     // The verdict line is read by a human on a terminal that ACTS on control
-    // bytes: `claude<BS>corp` renders as an account that exists. Escaping only
+    // bytes: `claude-x<BS>acme` renders as an account that exists. Escaping only
     // \t \r \n left the invented-id failure reachable through any other C0
     // byte, so the whole range is escaped and none of it reaches the output.
     const home = healthy('ccrc-doctor-wrappers-c0-id-');
-    writeRawRoster(home, rawRoster(UP_JSON, entry({ id: 'claude\bcorp', exec: { kind: 'generated' } })));
+    writeRawRoster(home, rawRoster(UP_JSON, entry({ id: 'claude-x\bacme', exec: { kind: 'generated' } })));
     const r = runDoctor(home);
-    expect(r.stdout).toContain('claude\\x08corp');
+    expect(r.stdout).toContain('claude-x\\x08acme');
     expect(r.stdout).toMatch(/is not a legal account id/);
     expect(r.stdout).not.toContain('\b');
     expect(r.stderr).not.toContain('\b');
