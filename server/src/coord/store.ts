@@ -5673,11 +5673,13 @@ export class CoordStore {
    *  with exactly this body — `sweepLanding`'s durable "already told" read for
    *  a removal no open run names (landing-order wave 2), whose body carries the
    *  removal time. Bounded by `FEED_RETENTION` like every feed read: a record
-   *  pruned out of the archive reads as never recorded, and is announced again. */
+   *  pruned out of the archive reads as never recorded, and is announced again.
+   *  The body is compared in the form `recordFeedEvent` stored it, redacted (D-5298): a body carrying a token-shaped
+   *  run (a compaction uuid, a commit SHA) is archived masked, and a raw comparison would never match it. */
   hasFeedEvent(kind: string, sessionId: string, body: string): boolean {
     const row = this.db.prepare(
       'SELECT 1 AS x FROM feed_events WHERE kind = ? AND sessionId = ? AND body = ? LIMIT 1',
-    ).get(kind, sessionId, body);
+    ).get(kind, sessionId, redactCommand(body));
     return row !== undefined;
   }
 
