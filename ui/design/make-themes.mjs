@@ -559,6 +559,22 @@ function build(seed) {
   t['--status-dead-tint'] = `color-mix(in srgb, ${hues.dead} 12%, transparent)`;
   t['--status-dead-tint-solid'] = over(hues.dead, 0.12, surface);
   t['--status-dead-text'] = text('dead', [surface, page, t['--status-dead-tint-solid']]);
+  // THE DANGER BUTTON'S INK (D-5099): the label on a fill of the dead dot.
+  // Picked, not fitted: the first of near-black and white (in that order on a
+  // dark palette, the other on a light one, as `--ink-on-accent` is) that
+  // clears 4.6 on `--status-dead`, the gate's 4.5 plus a margin. The dot is
+  // NOT moved to make room, unlike the accent: it is a lamp first, fitted to
+  // its own 3:1 on the grounds and the well, and a button must not retune a
+  // lamp. So neither ink clearing it is a refusal, never a muddied ink.
+  {
+    const INKS = dark ? ['#1F0B07', '#FFFFFF'] : ['#FFFFFF', '#1F0B07'];
+    const picked = INKS.find((i) => ratio(hexToRgb(i), hexToRgb(t['--status-dead'])) >= 4.6);
+    if (picked) t['--ink-on-danger'] = picked;
+    else {
+      UNREACHABLE.push(`${name} ink-on-danger: neither ${INKS.join(' nor ')} clears 4.6 on --status-dead ${t['--status-dead']}`);
+      t['--ink-on-danger'] = INKS[0];
+    }
+  }
   t['--status-done'] = dot('done');       t['--status-done-text'] = text('done');
   t['--status-cleanup'] = dot('cleanup'); t['--status-cleanup-text'] = text('cleanup');
 

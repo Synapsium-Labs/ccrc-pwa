@@ -103,6 +103,9 @@
   --ink-disabled:  #5C655D;  /* intentionally sub-AA; disabled only (WCAG-exempt) */
   --ink-on-well:   #DEE4DE;  /* terminal/code text: 15.52:1 on well */
   --ink-on-accent: #082312;  /* text on phosphor buttons: 8.87:1 on accent */
+  /* Text on the filled danger button (D-5099): --status-dead's fill, so its
+     ink is fitted to that hue, not to the phosphor's. Near-black in dark. */
+  --ink-on-danger: #1F0B07;  /* 5.74:1 on --status-dead */
 
   /* Interactive accent = the phosphor. Send button, links, focus ring,
      the ❯ preselect cursor. Same hue family as busy — intentionally:
@@ -441,6 +444,7 @@
   --ink-disabled:  #98A29A;  /* disabled only (WCAG-exempt) */
   --ink-on-well:   #DEE4DE;  /* 13.98:1 on the (still dark) well */
   --ink-on-accent: #FFFFFF;  /* 5.35:1 on light accent */
+  --ink-on-danger: #FFFFFF;  /* 5.73:1 on --status-dead */
 
   --accent:      #0E7B3F;   /* focus ring 4.92:1 vs page (needs 3:1) */
   --accent-tint: #DFF2E5;   /* primary ink on it: 14.19:1 */
@@ -536,6 +540,7 @@
   --status-dead-tint:        color-mix(in srgb, #BF616A 12%, transparent);
   --status-dead-tint-solid:  #4B4655;
   --status-dead-text:        #FDABB0;
+  --ink-on-danger:           #1F0B07;
   --status-done:             #8FBCBB;
   --status-done-text:        #9DCAC9;
   --status-cleanup:          #95A0B6;
@@ -603,6 +608,7 @@
   --status-dead-tint:        color-mix(in srgb, #F7768E 12%, transparent);
   --status-dead-tint-solid:  #3D3145;
   --status-dead-text:        #FB7A92;
+  --ink-on-danger:           #1F0B07;
   --status-done:             #73DACA;
   --status-done-text:        #73DACA;
   --status-cleanup:          #7882AE;
@@ -670,6 +676,7 @@
   --status-dead-tint:        color-mix(in srgb, #FF5555 12%, transparent);
   --status-dead-tint-solid:  #4C3B48;
   --status-dead-text:        #FE9790;
+  --ink-on-danger:           #1F0B07;
   --status-done:             #8BE9FD;
   --status-done-text:        #8BE9FD;
   --status-cleanup:          #8596CB;
@@ -737,6 +744,7 @@
   --status-dead-tint:        color-mix(in srgb, #F38BA8 12%, transparent);
   --status-dead-tint-solid:  #483D50;
   --status-dead-text:        #FD94B1;
+  --ink-on-danger:           #1F0B07;
   --status-done:             #94E2D5;
   --status-done-text:        #94E2D5;
   --status-cleanup:          #9296AD;
@@ -804,6 +812,7 @@
   --status-dead-tint:        color-mix(in srgb, #FB4934 12%, transparent);
   --status-dead-tint-solid:  #533A36;
   --status-dead-text:        #FD9A89;
+  --ink-on-danger:           #1F0B07;
   --status-done:             #8EC07C;
   --status-done-text:        #9ACD88;
   --status-cleanup:          #A5978C;
@@ -871,6 +880,7 @@
   --status-dead-tint:        color-mix(in srgb, #E06C75 12%, transparent);
   --status-dead-tint-solid:  #463C45;
   --status-dead-text:        #FF9197;
+  --ink-on-danger:           #1F0B07;
   --status-done:             #56B6C2;
   --status-done-text:        #65C4D0;
   --status-cleanup:          #8A92A0;
@@ -938,6 +948,7 @@
   --status-dead-tint:        color-mix(in srgb, #DC322F 12%, transparent);
   --status-dead-tint-solid:  #213640;
   --status-dead-text:        #FE8C80;
+  --ink-on-danger:           #1F0B07;
   --status-done:             #2AA198;
   --status-done-text:        #53C2B8;
   --status-cleanup:          #799098;
@@ -1005,6 +1016,7 @@
   --status-dead-tint:        color-mix(in srgb, #CF222E 12%, transparent);
   --status-dead-tint-solid:  #F9E4E6;
   --status-dead-text:        #C61427;
+  --ink-on-danger:           #FFFFFF;
   --status-done:             #23853D;
   --status-done-text:        #136F2E;
   --status-cleanup:          #6D757E;
@@ -1072,6 +1084,7 @@
   --status-dead-tint:        color-mix(in srgb, #DC322F 12%, transparent);
   --status-dead-tint-solid:  #FBE3D9;
   --status-dead-text:        #C6131A;
+  --ink-on-danger:           #FFFFFF;
   --status-done:             #1A8981;
   --status-done-text:        #000001;
   --status-cleanup:          #6D7A7A;
@@ -1139,6 +1152,7 @@
   --status-dead-tint:        color-mix(in srgb, #D20F39 12%, transparent);
   --status-dead-tint-solid:  #FAE2E7;
   --status-dead-text:        #C31A38;
+  --ink-on-danger:           #FFFFFF;
   --status-done:             #068C93;
   --status-done-text:        #000003;
   --status-cleanup:          #777A8B;
