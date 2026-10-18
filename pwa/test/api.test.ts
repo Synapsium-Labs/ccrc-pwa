@@ -961,6 +961,20 @@ describe('account pools', () => {
     expect(JSON.parse(init.body as string)).toEqual({ wrapper: 'claude2', crossPool: true });
   });
 
+  it('swap(id, w, {interrupt:true}) sends the consent, alone or beside the crossing (D-5240)', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+    await api.swap('s1', 'claude2', { interrupt: true });
+    await api.swap('s1', 'claude2', { crossPool: true, interrupt: true });
+    await api.swap('s1', 'claude2', { interrupt: false });
+    const bodies = fetchImpl.mock.calls.map((c) => JSON.parse((c as [string, RequestInit])[1].body as string));
+    expect(bodies).toEqual([
+      { wrapper: 'claude2', interrupt: true },
+      { wrapper: 'claude2', crossPool: true, interrupt: true },
+      { wrapper: 'claude2' },
+    ]);
+  });
+
   it('createSession omits crossPool entirely unless it is true', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
     const api = createApi(fetchImpl as unknown as typeof fetch);
