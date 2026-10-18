@@ -3575,7 +3575,7 @@ describe('W1-B4: the export phases in the recovery step (spec §9.14)', () => {
   });
 });
 
-// ── W1-B4 Task 10: export replay, the recovery step's two export phases (spec §9.14 "Export replay", §9.15) ─────
+// ── W1-B4 Task 10: export replay, the recovery step's three export phases (spec §9.14 "Export replay", §9.15) ───
 // Segments are planted through store.mjs (historyHelpers' plantSegment), never by hand, and every HOME is a fixture.
 // In-process cases run sweep.mjs's recoveryStep on a store createStore made; the O44 and rollback cases spawn the
 // real pass. Every name here is prefixed x10/X10, so nothing collides with B2's cases above.
@@ -3635,6 +3635,12 @@ function x10Store(prefix: string, cursor: string | null = null): { box: ReturnTy
 }
 const x10Count = (db: DatabaseSync, table: string): number =>
   Number((db.prepare(`SELECT count(*) AS n FROM ${table}`).get() as { n: number }).n);
+/** The shipped recovery executors, each recording the cursor it is called with, for recoveryStep's `executors` argument. */
+const x10Recording = (seen: string[]): Readonly<Record<string, unknown>> => Object.fromEntries(Object.entries(SW.RECOVER_EXECUTORS).map(([phase, fn]) =>
+  [phase, (db: DatabaseSync, run: unknown, c: recExport.RecoverCursor): unknown => {
+    seen.push(recExport.formatRecoverCursor(c));
+    return (fn as (db: DatabaseSync, run: unknown, c: recExport.RecoverCursor) => unknown)(db, run, c);
+  }]));
 
 describe('W1-B4 Task 10: export replay in the recovery step (spec §9.14 "Export replay")', () => {
   it('O44, the segment case: a format-2 segment beside a format-1 one, under a step larger than one pass\'s budget: the step completes, format 1 replays and is marked, format 2 is skipped and FAILs export-segment-newer naming it', () => {
@@ -4576,14 +4582,6 @@ describe('D-5395: replay marks an entry only while every blob it references is e
 
 // ── W1-B4 whole-branch review: replay resumes after a segment the operator moved aside (D-4765's way out) ───────────
 describe('W1-B4 whole-branch review: export replay resumes after a segment moved aside, and walks no earlier segment again', () => {
-  type ChunkAnswer = { cursor: recExport.RecoverCursor; moved: boolean; phaseDone: boolean };
-  type Chunk = (db: DatabaseSync, run: unknown, c: recExport.RecoverCursor) => ChunkAnswer | Promise<ChunkAnswer>;
-  /** The shipped executors, each recording the cursor it is called with. */
-  const recording = (seen: string[]): Readonly<Record<string, unknown>> => Object.fromEntries(Object.entries(SW.RECOVER_EXECUTORS).map(([phase, fn]) =>
-    [phase, (db: DatabaseSync, run: unknown, c: recExport.RecoverCursor): ChunkAnswer | Promise<ChunkAnswer> => {
-      seen.push(recExport.formatRecoverCursor(c));
-      return (fn as Chunk)(db, run, c);
-    }]));
   const name = (seq: number): string => `${seq}.${X10_WRITER}.db`;
   /** A published segment whose `entries` table can no longer be read, though its meta and its blobs read: a damaged copy. */
   const breakEntries = (file: string): void => {
@@ -4610,12 +4608,12 @@ describe('W1-B4 whole-branch review: export replay resumes after a segment moved
       plantSegment(box, ids.storeId, { seq: 4, writer: X10_WRITER, blobs: b.map((t) => ({ text: t.text })),
         rows: x10Rows({ uuid: x10U(0xe1), path: '/home/u/gone/asidec.jsonl', ino: 9995, texts: b, seq: 2 }) });
       const seen: string[] = [];
-      expect(await SW.recoveryStep(db, stepCtx(box, ids), recording(seen))).toEqual({ moved: true, done: false, held: false });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids), x10Recording(seen))).toEqual({ moved: true, done: false, held: false });
       expect(cursorOn(db), 'CONTROL: the step waits at the segment that cannot be read').toBe(`export-blobs:${name(3)}:0`);
       expect(countersOn(db, 'recover_chunk_failed', 'export_segment_foreign')).toEqual({ recover_chunk_failed: 1, export_segment_foreign: 1 });
       fs.renameSync(mid, `${mid}.aside`);
       const mark = seen.length;
-      expect(await SW.recoveryStep(db, stepCtx(box, ids), recording(seen))).toEqual({ moved: true, done: true, held: false });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids), x10Recording(seen))).toEqual({ moved: true, done: true, held: false });
       const after = seen.slice(mark).filter((c) => c.startsWith('export-blobs'));
       expect(after[0], 'the first chunk after the move names the segment moved aside').toBe(`export-blobs:${name(3)}:0`);
       expect(after.slice(1).every((c) => c.startsWith(`export-blobs:${name(4)}:`)), `then only the segment that orders after it: ${after.join(' | ')}`).toBe(true);
@@ -4643,13 +4641,13 @@ describe('W1-B4 whole-branch review: export replay resumes after a segment moved
       breakEntries(mid);
       plantSegment(box, ids.storeId, { seq: 3, writer: X10_WRITER, blobs: last.map((t) => ({ text: t.text })), rows: x10Rows({ uuid: x10U(0xf3), path: '/home/u/gone/asider3.jsonl', ino: 9994, texts: last }) });
       const seen: string[] = [];
-      expect(await SW.recoveryStep(db, stepCtx(box, ids), recording(seen))).toEqual({ moved: true, done: false, held: false });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids), x10Recording(seen))).toEqual({ moved: true, done: false, held: false });
       expect(cursorOn(db), 'CONTROL: the step waits in the rows phase at the segment whose rows cannot be read').toBe(`export-rows:${name(2)}:0`);
       expect(countersOn(db, 'recover_chunk_failed', 'export_row_blob_missing')).toEqual({ recover_chunk_failed: 1, export_row_blob_missing: 1 });
       const entriesBefore = x10Count(db, 'entries');
       fs.renameSync(mid, `${mid}.aside`);
       const mark = seen.length;
-      expect(await SW.recoveryStep(db, stepCtx(box, ids), recording(seen))).toEqual({ moved: true, done: true, held: false });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids), x10Recording(seen))).toEqual({ moved: true, done: true, held: false });
       const after = seen.slice(mark).filter((c) => c.startsWith('export-rows'));
       expect(after[0]).toBe(`export-rows:${name(2)}:0`);
       expect(after.filter((c) => c.includes(`:${name(1)}:`)), 'no chunk walks segment 1 again').toEqual([]);
@@ -4679,13 +4677,13 @@ describe('D-5397: export replay applies every segment\'s bytes before any segmen
   };
   const markOf = (db: DatabaseSync, uuid: string): string | null =>
     (db.prepare('SELECT exported_seg AS seg FROM entries WHERE uuid = ?').get(uuid) as { seg: string | null }).seg;
-  type Chunk = (db: DatabaseSync, run: unknown, c: recExport.RecoverCursor) => unknown;
-  /** The shipped executors, each recording the cursor it is called with. */
-  const recording = (seen: string[]): Readonly<Record<string, unknown>> => Object.fromEntries(Object.entries(SW.RECOVER_EXECUTORS).map(([phase, fn]) =>
-    [phase, (db: DatabaseSync, run: unknown, c: recExport.RecoverCursor): unknown => {
-      seen.push(recExport.formatRecoverCursor(c));
-      return (fn as Chunk)(db, run, c);
-    }]));
+  /** What a reader gets from the replayed store: the real `expand` verb on one row, run as the family's session (a registry
+   *  entry and a pane for it, so the verb's scope reaches the family the segment placed). It answers the row's text, or
+   *  says its content was pruned: the read the rows and the stored bodies are for. */
+  const expandOf = (box: HistoryBox, fam: X10Family, uuid: string): ReturnType<typeof runCli> => {
+    plantSession(box, X10_ID, { uuid: fam.uuid, generation: X10_G, project: 'demo', workdir: WORK });
+    return runCli(box, ['expand', uuid], { env: withPane(box, X10_ID) });
+  };
   /** A family of `n` rows, and the segment rows that place any subset of them. */
   const family = (base: number, n: number, word: string): { fam: X10Family; texts: X10Text[] } => {
     const texts = x10Texts(base, n, word, Date.now() - 400 * X10_DAY);
@@ -4706,7 +4704,7 @@ describe('D-5397: export replay applies every segment\'s bytes before any segmen
       let r = { moved: false, done: false, held: false };
       for (let i = 0; i < 40 && !r.done; i += 1) {
         const before = seen.length;
-        r = await SW.recoveryStep(db, stepCtx(box, ids, { maxBytes: 1, chunkBytes: 1 }), recording(seen));
+        r = await SW.recoveryStep(db, stepCtx(box, ids, { maxBytes: 1, chunkBytes: 1 }), x10Recording(seen));
         for (let k = before; k < seen.length; k += 1) passOf.push(i);
       }
       expect(r.done, `the step completed: ${seen.join(' | ')}`).toBe(true);
@@ -4741,6 +4739,11 @@ describe('D-5397: export replay applies every segment\'s bytes before any segmen
       expect(bodyOf(db, texts[0]!.text), 'a read of the blob answers its text').toBe(texts[0]!.text);
       expect(markOf(db, texts[0]!.uuid)).toBe(segName(1));
       expect(countersOn(db, 'export_blob_tombstone_kept', 'export_row_blob_missing')).toEqual({ export_blob_tombstone_kept: 0, export_row_blob_missing: 0 });
+      // the read itself, through the real verb: the stub of segment 2 hid nothing
+      const ex = expandOf(box, fam, texts[0]!.uuid);
+      expect(ex.code, `${ex.stdout}\n${ex.stderr}`).toBe(0);
+      expect(ex.stdout, 'expand prints the text the later stub did not swallow').toContain(texts[0]!.text);
+      expect(ex.stdout).not.toContain('content pruned on');
     } finally {
       closeWriter(db);
     }
@@ -4762,6 +4765,15 @@ describe('D-5397: export replay applies every segment\'s bytes before any segmen
       expect(bodyOf(db, texts[0]!.text), 'a read of it answers no text').toBeNull();
       expect(blobOf(db, texts[1]!.text)).toEqual({ stub: 0, pruned: 0, seg: segName(1) });
       expect(countersOn(db, 'export_blob_tombstone_kept'), 'one body met the tombstone; row 1\'s repeat met a blob the replay stored').toEqual({ export_blob_tombstone_kept: 1 });
+      // the reads, through the real verb: the tombstone answers that its content was pruned, the live blob its text
+      const pruned = expandOf(box, fam, texts[0]!.uuid);
+      expect(pruned.code, `${pruned.stdout}\n${pruned.stderr}`).toBe(0);
+      expect(pruned.stdout, 'expand on the tombstone says so').toContain('content pruned on');
+      expect(pruned.stdout, 'and prints none of the body replay ignored').not.toContain(texts[0]!.text);
+      const live = expandOf(box, fam, texts[1]!.uuid);
+      expect(live.code, `${live.stdout}\n${live.stderr}`).toBe(0);
+      expect(live.stdout, 'CONTROL: a live blob prints its text').toContain(texts[1]!.text);
+      expect(live.stdout).not.toContain('content pruned on');
     } finally {
       closeWriter(db);
     }
@@ -4777,14 +4789,14 @@ describe('D-5397: export replay applies every segment\'s bytes before any segmen
       plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, blobs: [{ text: texts[2]!.text }, stubOf(texts[1]!.text)], rows: x10Rows({ ...fam, texts: [texts[1]!, texts[2]!] }) });
       plantSegment(box, ids.storeId, { seq: 3, writer: X10_WRITER, blobs: [{ text: texts[0]!.text }], rows: x10Rows({ ...fam, texts: [texts[0]!] }) });
       const first: string[] = [];
-      expect(await SW.recoveryStep(w, stepCtx(box, ids, { maxBytes: 1, chunkBytes: 1 }), recording(first))).toEqual({ moved: true, done: false, held: false });
+      expect(await SW.recoveryStep(w, stepCtx(box, ids, { maxBytes: 1, chunkBytes: 1 }), x10Recording(first))).toEqual({ moved: true, done: false, held: false });
       const stored = cursorOn(w);
       expect(stored, 'CONTROL: the pass ended inside the bytes phase, after segment 1\'s bytes').toMatch(new RegExp(`^export-blobs:${segName(1)}:[1-9][0-9]*$`));
       closeWriter(w);   // the kill: nothing of the first pass but the committed rows and the cursor survives
       w = openWriter(historyPaths(box.home).dbFile);
       const rest: string[] = [];
       let r = { moved: false, done: false, held: false };
-      for (let i = 0; i < 60 && !r.done; i += 1) r = await SW.recoveryStep(w, stepCtx(box, ids, { maxBytes: 1, chunkBytes: 1 }), recording(rest));
+      for (let i = 0; i < 60 && !r.done; i += 1) r = await SW.recoveryStep(w, stepCtx(box, ids, { maxBytes: 1, chunkBytes: 1 }), x10Recording(rest));
       expect(r.done, `the step completed: ${rest.join(' | ')}`).toBe(true);
       expect(rest[0], 'the first chunk after the kill is the stored cursor\'s').toBe(stored);
       const phases = [...first, ...rest].map((c) => c.replace(/[:+].*$/, ''));
@@ -4812,7 +4824,7 @@ describe('D-5397: export replay applies every segment\'s bytes before any segmen
       plantSegment(box, ids.storeId, { seq: 3, writer: X10_WRITER, blobs: [stubOf(texts[1]!.text)], rows: x10Rows({ ...fam, texts: [texts[1]!] }) });
       plantSegment(box, ids.storeId, { seq: 4, writer: X10_WRITER, format: 2, blobs: [stubOf(texts[2]!.text)], rows: [] });
       const seen: string[] = [];
-      expect(await SW.recoveryStep(db, stepCtx(box, ids), recording(seen))).toEqual({ moved: true, done: true, held: false });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids), x10Recording(seen))).toEqual({ moved: true, done: true, held: false });
       const stubs = seen.filter((c) => c.startsWith('export-stubs'));
       expect(stubs[0], 'the first chunk is the stored cursor\'s').toBe(`export-stubs:${segName(2)}:0`);
       expect(stubs.filter((c) => c.includes(`:${segName(1)}:`)), 'no chunk walks segment 1').toEqual([]);
