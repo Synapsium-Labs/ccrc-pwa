@@ -4362,7 +4362,7 @@ export function registerCoordRoutes(
 
     const { session } = req.params as { session: string };
     const raw = req.body;
-    const bad = (detail: string) => reply.code(400).send({ ok: false, error: 'bad-request', detail });
+    const bad = (detail: string) => refuseRoute(reply, 'bad-request', { detail });
     if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return bad('the body is a JSON object {action, byId, byUuid}');
     const { action, byId, byUuid } = raw as Record<string, unknown>;
     if (Object.keys(raw).sort().join(',') !== 'action,byId,byUuid') return bad('the body carries exactly action, byId and byUuid');
@@ -4373,22 +4373,22 @@ export function registerCoordRoutes(
       return bad('byId and the session in the path are session ids, and byUuid is a non-empty string');
     }
     if (byId !== session) {
-      return reply.code(403).send({ ok: false, error: 'not-owner',
-        detail: 'byId is not the session in the path: a session declares its own intent and no other session\'s' });
+      return refuseRoute(reply, 'not-owner',
+        { detail: 'byId is not the session in the path: a session declares its own intent and no other session\'s' });
     }
     if (!(await requireAttribution(reply, byId, byUuid, 'byUuid'))) return;
 
     const generationOf = (id: string) => childReclaimGenerationRead(deps.io, deps.cfg.registryDir, id);
     const incarnation = (await settleParentIncarnations(generationOf, await readParentGenerations(generationOf, [byId]))).get(byId);
     if (incarnation === undefined || incarnation.kind !== 'measured') {
-      return reply.code(502).send({ ok: false, error: 'registry-unmeasurable',
-        detail: `the registry incarnation of ${byId} is unmeasured (${incarnation === undefined ? 'unread' : incarnation.reason}) — transient, retry` });
+      return refuseRoute(reply, 'registry-unmeasurable',
+        { detail: `the registry incarnation of ${byId} is unmeasured (${incarnation === undefined ? 'unread' : incarnation.reason}) — transient, retry` });
     }
 
     let durable: DelegationDurability | null = null;
     try { durable = await watcher.delegationApplier(); } catch { durable = null; }
     if (durable === null) {
-      return reply.code(503).send({ ok: false, error: 'not-ready', detail: 'the delegation lane has no durable applier open yet — retry' });
+      return refuseRoute(reply, 'not-ready', { detail: 'the delegation lane has no durable applier open yet — retry' });
     }
     const request = { action: action as (typeof COORDINATOR_INTENT_ACTIONS)[number], sessionId: byId, parentIncarnation: incarnation.incarnation,
       declaredAt: formatDelegationInstant(Date.now()) };
@@ -4398,11 +4398,12 @@ export function registerCoordRoutes(
     } catch (err) {
       console.warn(`ccrc-server: coordinator-intent: the ${request.action} for ${byId} could not be made durable ` +
         `(${err instanceof Error ? err.message : String(err)})`);
-      const notReady = err instanceof DelegationCheckpointError && err.code === 'not-ready';
-      return reply.code(503).send({ ok: false, error: notReady ? 'not-ready' : 'application-failed',
-        detail: notReady
-          ? 'the delegation lane is recovering its checkpoint — retry'
-          : 'the declaration is not confirmed durable; set and clear are idempotent, so retry' });
+      if (err instanceof DelegationCheckpointError && err.code === 'not-ready') {
+        return refuseRoute(reply, 'not-ready',
+          { detail: 'the delegation lane is recovering its checkpoint — retry' });
+      }
+      return refuseRoute(reply, 'application-failed',
+        { detail: 'the declaration is not confirmed durable; set and clear are idempotent, so retry' });
     }
 
     // Durable now (or already so). The incarnation is read once more: the declaration was made for the one measured BEFORE the queued
@@ -4425,7 +4426,6 @@ export function registerCoordRoutes(
       try { projection = (await durable.repairProjection()) === null ? 'stale' : 'projected'; } catch { projection = 'stale'; }
     }
     if (moved) {
-      const changedWord: keyof typeof COORDINATOR_INTENT_REFUSALS = 'incarnation-changed';
       // N2: the detail follows what the re-read found and what was asked.
       const landed = `the ${request.action} landed on the previous incarnation (${incarnation.incarnation}) and stands there`;
       const detail = after.kind === 'absent'
@@ -4433,7 +4433,8 @@ export function registerCoordRoutes(
         : request.action === 'set'
           ? `the registry incarnation of ${byId} changed while the declaration was queued: ${landed}, and the new one has none — retry to declare for the new one`
           : `the registry incarnation of ${byId} changed while the clear was queued: ${landed}; the new incarnation never had a declaration, so there is nothing to clear for it`;
-      return reply.code(409).send({ ok: false, error: changedWord, incarnation: incarnation.incarnation, projection, detail });
+      return refuseRoute(reply, 'incarnation-changed' satisfies keyof typeof COORDINATOR_INTENT_REFUSALS,
+        { incarnation: incarnation.incarnation, projection, detail });
     }
     const mine = applied.state.checkpoint.sessions.find((s) => s.sessionId === byId && s.parentIncarnation === incarnation.incarnation);
     return reply.code(200).send({
