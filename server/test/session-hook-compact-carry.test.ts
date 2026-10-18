@@ -295,9 +295,36 @@ describe('behind the word, a compaction writes no hookstate (D-5239, spec §5.8)
 
 // The full real sequence of an idle `/compact` is Stop, PreCompact, SubagentStop, PostCompact. Behind this word alone
 // the SubagentStop between the two compaction events still rewrites the hookstate (a fresh `bucketSince`), so the
-// visible effect needs Task 2's no-file agent event behind its own word `hook-main-state-v1`. Task 2 inherits this.
-describe('the full real /compact sequence (Task 2 lands the SubagentStop half)', () => {
-  it.todo('both words advertised: Stop at T0, PreCompact, SubagentStop, PostCompact(manual) → the file byte-identical');
+// visible effect needs Task 2's carry (D-5232) behind its own word `hook-main-state-v1`.
+const compactionSubagentStop = (): object => ({
+  session_id: UUID, transcript_path: TRANSCRIPT, cwd: '/rig/repo', prompt_id: '00000000-0000-4000-8000-0000000000c1',
+  permission_mode: 'default', agent_id: 'a80efa07709a9de58', agent_type: '', effort: { level: 'medium' },
+  hook_event_name: 'SubagentStop', stop_hook_active: false,
+  agent_transcript_path: `/rig/fixhome/cfg/projects/-rig-repo/${UUID}/subagents/agent-a80efa07709a9de58.jsonl`,
+  last_assistant_message: 'fixture', background_tasks: [], session_crons: [],
+});
+describe('the full real /compact sequence (D-5232 lands the SubagentStop half)', () => {
+  it('both words advertised: Stop at T0, PreCompact, SubagentStop, PostCompact(manual) → the main state untouched', () => {
+    writeCaps([WORD, 'hook-main-state-v1']);
+    const before = doneAt(T0);
+    run(preCompact('manual'));
+    run(compactionSubagentStop());
+    run(postCompact('manual'));
+    // Not byte-identical: the compaction's own agent is a real agent, so its SubagentStop writes `aliveAt` (the carry's
+    // one write). Every other field, the main state and its stamp among them, is the Stop's, byte for byte.
+    const { aliveAt, ...rest } = readState();
+    expect(typeof aliveAt).toBe('number');
+    expect(JSON.stringify(rest)).toBe(JSON.stringify(JSON.parse(before.toString()) as object));
+    expect(rest).toMatchObject({ state: 'done', event: 'Stop', updatedAt: T0 });
+  });
+  it('the same sequence behind dispatch-live-gate-v1 alone → the SubagentStop rewrites the main state (today\'s bytes)', () => {
+    writeCaps([WORD]);
+    doneAt(T0);
+    run(preCompact('manual'));
+    run(compactionSubagentStop());
+    expect(readState()['updatedAt'] as number).toBeGreaterThan(T0 + 30 * 60_000);
+    expect(readState()).not.toHaveProperty('aliveAt');
+  });
 });
 
 // Measured first (plan Task 10): a typed `/compact` fires PreCompact, a SubagentStop (the compaction's own agent)

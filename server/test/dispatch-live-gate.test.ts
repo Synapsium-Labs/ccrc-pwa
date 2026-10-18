@@ -512,3 +512,30 @@ describe('a hook done carried through an idle compaction, live busy, is worker-b
     expect(b.acts()).toEqual([]);
   });
 });
+
+// D-5232 (plan 2026-10-16, Task 2): behind `hook-main-state-v1` the fleet's hook keeps a Stop's `done` through the agent
+// events of the delegated run it left (the carried shape: the Stop's own `updatedAt` and `event`, `aliveAt` moved by the
+// agent events, the delegated pair). That carry is safe only behind this gate, which reads the live word and refuses a
+// busy pane, so this case is why Task 9 is a structural prerequisite of Task 2. APPENDED.
+describe('a done carried through delegated work never reaches /clear (D-5232, behind D-5238)', () => {
+  it('hook done/Stop carried 40 minutes, aliveAt current, live `busy` → worker-busy: no hold, no /clear', async () => {
+    const b = await box();
+    writeFileSync(path.join(b.home, '.cc-sessions', `${ID}.hookstate.json`), JSON.stringify({
+      v: 1, state: 'done', event: 'Stop', sessionId: UUID, pid: PANE, updatedAt: Date.now() - 40 * 60_000, ask: null,
+      subagents: [{ name: 'general-purpose', startedAt: Date.now() - 41 * 60_000, id: 'a0000000000000001' }],
+      graphQueries: 0, graphGateDenials: 0, ccrcPeerReads: 0, ccrcClaims: 0,
+      aliveAt: Date.now() - 30_000, bgDelegated: 1, bgDelegatedKinds: 'subagent' }));
+    live(b.home, 'busy');
+    const res = await b.dispatch();
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, refused: 'worker-busy' });
+    expect(b.acts()).toEqual([]);
+    expect(b.cleared()).toBe(false);
+    expect(b.state()).toBe('planned');
+  });
+
+  it('SERVER_CAPS lists hook-main-state-v1 beside the gate\'s own word', () => {
+    expect(SERVER_CAPS).toContain('dispatch-live-gate-v1');
+    expect(SERVER_CAPS).toContain('hook-main-state-v1');
+  });
+});
