@@ -6064,7 +6064,7 @@ export const RUN_REFUSE_CODES: readonly RunRefuseCode[] = Object.keys(RUN_REFUSE
 export type MailGate =
   | 'same-sweep' | 'in-flight' | 'cooldown'
   | 'registry-absent' | 'registry-unmeasurable'
-  | 'tmux-gone' | 'session-dead' | 'tmux-unknown'
+  | 'tmux-gone' | 'session-dead' | 'tmux-unknown' | 'hibernated'   // D-5242: asleep, never parked — the mail lane wakes it
   | 'pending-ask' | 'no-pane' | 'no-config-dir'
   | 'not-idle' | 'not-quiet' | 'turn-mark-unreadable';
 
@@ -6074,7 +6074,7 @@ export type MailGate =
 const MAIL_GATE_MAP: Record<MailGate, true> = {
   'same-sweep': true, 'in-flight': true, cooldown: true,
   'registry-absent': true, 'registry-unmeasurable': true,
-  'tmux-gone': true, 'session-dead': true, 'tmux-unknown': true,
+  'tmux-gone': true, 'session-dead': true, 'tmux-unknown': true, hibernated: true,
   'pending-ask': true, 'no-pane': true, 'no-config-dir': true,
   'not-idle': true, 'not-quiet': true, 'turn-mark-unreadable': true,
 };
@@ -8496,7 +8496,7 @@ export const LC_REFUSAL_WORD: Record<LcRefusalToken, string> = {
     'A workspace with this id, or what one left behind, still stands in the registry, so ccrc treats the temporary directory there as that workspace’s and will not clean it up. Nothing was removed; ccrc looks again once the id is free.',
   'changed-recently':
     'Something in this temporary directory changed recently, so ccrc leaves it alone for now. Nothing was removed; ccrc looks again once it has stayed unchanged long enough.',
-  // D-5242: a hibernated row is asleep, not dead — `ccd ensure` (or mail, a dispatch, an open screen) wakes it (D-5423).
+  // D-5242: a hibernated row is asleep, not dead — `ccd ensure` (or mail, a dispatch, a Restart) wakes it (D-5423).
   'hibernated':
     'This session is asleep, not gone: it wakes when it is opened, mailed or dispatched. Wake it (ccd ensure) or stop it (ccd stop) first. Nothing was removed.',
 };
@@ -8723,6 +8723,9 @@ export interface PeerSummary {
   readonly archivedAt: number | null;
   /** Stamped archived AND measured live this pass. */
   readonly archivedStale: boolean;
+  /** D-5242: `FleetSession.hibernatedAt`, epoch MS, or null when the peer is not asleep. ADDITIVE: an older server sends
+   *  none. A sleeping peer reads `deliverable: yes` — the mail lane wakes it. */
+  readonly hibernatedAt: number | null;
   /** The `.hold` text verbatim, or null — `FleetSession.held`'s contract. */
   readonly held: string | null;
   readonly intent: string | null;
@@ -9874,9 +9877,15 @@ export function archiveInterrupts(s: Pick<FleetSession, 'status' | 'bucket'>): b
  * workspace, no pane, and a stop stamp). A main checkout started again leaves the fold, because `cmd_start` and
  * `cmd_ensure` remove the stop stamp on the attempt; a stopped workspace that is not archived stays at the top level,
  * where Archive is offered again. `stoppedBy` is read `?? null`: the live frame is cast, not revived.
+ *
+ * A HIBERNATED main checkout (D-5242) is not in the fold: `ccd hibernate` leaves exactly the stopped-main-checkout
+ * shape (a stop stamp, no pane), but the row is asleep, not put away — it stays at the top level, where opening it
+ * wakes it. Only the second clause reads `hibernatedAt` (`?? null`, the same cast): an archived workspace stays in the
+ * fold whatever a stale `.hibernated` says.
  */
-export function inArchivedFold(s: Pick<FleetSession, 'bucket' | 'workspace' | 'status' | 'stoppedBy'>): boolean {
-  return s.bucket === 'archived' || (s.workspace === null && s.status === 'dead' && (s.stoppedBy ?? null) !== null);
+export function inArchivedFold(s: Pick<FleetSession, 'bucket' | 'workspace' | 'status' | 'stoppedBy' | 'hibernatedAt'>): boolean {
+  return s.bucket === 'archived'
+    || (s.workspace === null && s.status === 'dead' && (s.stoppedBy ?? null) !== null && (s.hibernatedAt ?? null) === null);
 }
 
 /** When a row entered the Archived fold, the fold's sort key (newest first): `bucketSince` for an archived workspace
@@ -10774,12 +10783,15 @@ export function parseInterruptEventBody(body: string): { source: InterruptSource
  *   - `sessionBusy` — a turn MEASURED in progress (the server's fail-closed `turnVerdictFor`, before the queue or
  *     inside it, or ccd after both). `{interrupt:true}` consents; the turn in progress and its background tasks are lost.
  *   - `statusUnknown` — nobody could read the turn. No consent covers it: stop the session first, then swap.
+ *   - `hibernated` (D-5242) — the row is asleep (`ccd hibernate`'s `.hibernated` stands): there is no running session to
+ *     move, and no consent covers it. Answered before any turn read, and ccd's own `ccd: hibernated:` maps to it too.
  *
  * Appended at the end of this file, like `ARCHIVE_REFUSALS`, so no line README or a contract cites moves.
  */
 export const SWAP_REFUSALS = {
   sessionBusy: ARCHIVE_REFUSALS.sessionBusy,
   statusUnknown: ARCHIVE_REFUSALS.statusUnknown,
+  hibernated: 'hibernated',
 } as const;
 export type SwapRefusal = (typeof SWAP_REFUSALS)[keyof typeof SWAP_REFUSALS];
 

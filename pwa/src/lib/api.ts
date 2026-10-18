@@ -287,6 +287,8 @@ export const ARCHIVE_REFUSAL_TEXT: Readonly<Record<ArchiveRefusal, string>> = {
 export const SWAP_REFUSAL_TEXT: Readonly<Record<SwapRefusal, string>> = {
   [SWAP_REFUSALS.sessionBusy]: 'It is working — moving it now would lose the turn in progress and its background tasks.',
   [SWAP_REFUSALS.statusUnknown]: 'Its status cannot be read, so it will not be moved on a guess. Stop it first, then move it.',
+  // D-5242: the row is asleep; nothing runs to move. Waking it is the session screen's (plan Task 18).
+  [SWAP_REFUSALS.hibernated]: 'It is asleep, so there is nothing running to move. Open it and restart it, then move it.',
 };
 
 /**

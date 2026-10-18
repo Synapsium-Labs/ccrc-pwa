@@ -33,6 +33,10 @@ export interface DeliverabilityRow {
    *  watch §4.1), and it delivers like `idle`. `peerDeliverable` reads no live
    *  word at all, so the two ladders must still agree on it. */
   readonly liveStatus?: 'idle' | 'shell';
+  /** D-5242: `$REG/<id>.hibernated` stands beside the stop stamp. The sweep's answer for such a row is a WAKE (`ccd
+   *  ensure`) with the delivery left outstanding under the `hibernated` gate — a transient hold, like a busy peer's —
+   *  so it maps to `yes`. */
+  readonly hibernated?: boolean;
   readonly expect: PeerDeliverable;
 }
 
@@ -75,6 +79,10 @@ export const DELIVERABILITY_FIXTURE: readonly DeliverabilityRow[] = [
   { name: 'a SHELL peer (an idle main loop over background shell work) is yes — and the sweep sends',
     registry: 'measured', tmux: 'live', panePid: true,
     supervisedAgoSec: 5, stoppedAgoSec: null, started: true, quiet: true, liveStatus: 'shell', expect: 'yes' },
+
+  { name: 'a HIBERNATED peer is yes — the sweep wakes it (ensure) and keeps the delivery outstanding under hibernated',
+    registry: 'measured', tmux: 'gone', panePid: false,
+    supervisedAgoSec: null, stoppedAgoSec: 90, started: true, quiet: true, hibernated: true, expect: 'yes' },
 ];
 
 /** One fixture row -> the pure ladder's own input shape. `alive` for the
@@ -85,6 +93,7 @@ export function probeOf(row: DeliverabilityRow, nowMs: number = PARITY_NOW): Pee
     registry: row.registry,
     tmux: row.tmux,
     panePid: row.panePid ? PARITY_PID : null,
+    hibernated: row.hibernated === true,
     lifecycle: sessionLifecycle({
       alive: row.tmux === 'live',
       supervisedAt: row.supervisedAgoSec === null ? null : nowMs - row.supervisedAgoSec * 1000,
