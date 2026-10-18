@@ -2000,6 +2000,9 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         Server backups rose 1730M to 1878M: a 233M snapshot replaced one of 86M, the ruled journal growth.
         STATUS: fleet and server v0.0.294, newest v0.0.298, intent dev/auto=off, backups fleet 173M/server
         1878M, disk free fleet 209G/work volume 82G/server 31G, no anomalies.
+      - 22:55: v0.0.299 (#597) to v0.0.306 (#656), eight releases, followed, unapplied (auto off). STATUS: fleet
+        and server v0.0.294, newest v0.0.306, intent dev/auto=off, backups fleet 173M/server 1878M, disk free
+        fleet 207G/work volume 85G/server 31G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
