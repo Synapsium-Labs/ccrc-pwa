@@ -57,6 +57,7 @@ function workerAt(word: string, since: number | null, over: Partial<PresentWorke
 }
 
 const MARK_BASE: TurnMark = {
+  crons: null,
   sessionId: 'uuid-1', state: 'done', event: 'Stop', at: NOW - 3 * H, turnAt: NOW - 3 * H - 20 * MIN,
   stopAt: NOW - 3 * H, bg: 0, bgKinds: [], bgIds: [], err: null, restartAt: null, lostBg: 0, lostKinds: [],
   lostIds: [], graceUntil: null,

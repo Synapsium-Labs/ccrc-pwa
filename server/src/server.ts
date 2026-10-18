@@ -1759,7 +1759,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // below re-stamps the claim, and the client sends one every
     // PRESENCE_REFRESH_MS for exactly that reason (see Presence's own doc).
     const token = Symbol('viewer');
+    // D-5242's presence contract: the OPEN claim, stamped at connect and re-stamped by EVERY frame — before the frame
+    // is parsed, so even one that fails to parse proves the socket alive. A hidden tab beats too, and holds its session
+    // awake for `PRESENCE_OPEN_TTL_MS` after its last frame; `drop` at close removes both claims.
+    presence.markOpen(token, id);
     socket.on('message', (raw) => {
+      presence.touch(token);
       try {
         const m = asSessionClientMsg(JSON.parse(String(raw)));
         if (m !== null) presence.setVisible(token, m.visible ? id : null);

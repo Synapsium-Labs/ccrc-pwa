@@ -546,6 +546,7 @@ describe('stallPushText: r3 and the three caps', () => {
 type OkMark = Extract<TurnMarkRead, { ok: true }>;
 const S4_STOP = T('2026-09-28T21:52:51Z');
 const markOf = (over: Partial<OkMark> = {}): TurnMarkRead => ({
+  crons: null,
   ok: true, sessionId: 'uuid-demo', state: 'done', event: 'Stop', at: S4_STOP,
   turnAt: T('2026-09-28T21:50:21Z'), stopAt: S4_STOP, bg: 1, bgKinds: ['subagent'], bgIds: ['b989ocn62'],
   err: null, restartAt: null, lostBg: 0, lostKinds: [], lostIds: [], graceUntil: null, ...over,

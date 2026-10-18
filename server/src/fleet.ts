@@ -789,6 +789,8 @@ export async function assembleFleet(
       // D-5237: the registry's record of the last process end, carried as is;
       // the PWA shows it for an hour (`recentLastEnd`).
       lastEnd: r.lastEnd,
+      // D-5242: already epoch MS (`parseHibernated`), carried straight off the record like `lastEnd`.
+      hibernatedAt: r.hibernatedAt,
       // `?? null` and not `?? 0`: no hook data at all and a hook reporting
       // zero reads are two conditions, and `hookstate.ts` already keeps them
       // apart — collapsing them one layer out would undo that on the wire.

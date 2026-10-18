@@ -186,6 +186,8 @@ import type { ChildReclaimCollectInput } from './childReclaimSweep.js';
 import { NO_FLEET_IDENTITY } from './fleetidentity.js';
 import { stopDonePass, type StopDoneMemory } from './stopDoneSweep.js';
 import { STOP_DONE_SWEEP_MS } from './stopDone.js';
+import { hibernateShadowPass, type HibernateShadowMemory } from './hibernateSweep.js';
+import { HIBERNATE_AFTER_HOURS_FILE, HIBERNATE_SWEEP_MS } from './coord/hibernate.js';
 import { liveRowFor, liveWordFor, turnMarkFor, turnReadDeps, turnVerdictFor } from './turnverdict.js';
 import {
   COLLECT_AUDITS_PER_PASS, COLLECT_FEED_TITLE, collectAfterAct, collectAfterAudit, collectAfterFoldFailed, collectAfterHold,
@@ -1417,6 +1419,12 @@ export class FleetWatcher {
   private readonly stopDoneMemory: StopDoneMemory = { retryAt: new Map() };
   private stopDoneSerial: (<T>(fn: () => Promise<T>) => Promise<T>) | null = null;
   private readonly stopDoneStartedAt = Date.now();
+  /** Hibernation's SHADOW sweep (D-5242, `hibernateSweep.ts`): its last pass, whether one runs, its one memory (the
+   *  last shadow line per id), and the process start it holds `viewer` against (presence is never persisted). */
+  private lastHibernateSweep = 0;
+  private hibernateSweeping = false;
+  private readonly hibernateMemory: HibernateShadowMemory = { lastLine: new Map() };
+  private readonly hibernateStartedAt = Date.now();
   /** `flock-unavailable`, once a box has answered it: the lane composes nothing more there (this process). */
   private archivedExpiryBoxRefused: string | null = null;
   /** THE DEAD-COORDINATOR LANE (workspace lifecycle wave 4): its clock; ONE PASS AT A TIME, the expiry lane's reason;
@@ -2157,6 +2165,34 @@ export class FleetWatcher {
     }
   }
 
+  /**
+   * HIBERNATION, SHADOW ONLY (D-5242, plan Task 17a): every `HIBERNATE_SWEEP_MS`, on THIS tick's assembled rows and
+   * registry listing (the listing carries the switches), `hibernateShadowPass` asks `hibernateVerdict` about every row
+   * and logs a `hibernate-shadow` line for a `hibernate` answer. It is handed no ccd runner: nothing here can put a
+   * session to sleep. Never awaited by the tick; one pass at a time.
+   */
+  async sweepHibernateShadow(sessions: readonly FleetSession[], records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
+    if (this.hibernateSweeping) return;
+    const now = Date.now();
+    if (this.lastHibernateSweep !== 0 && now - this.lastHibernateSweep < HIBERNATE_SWEEP_MS) return;
+    this.lastHibernateSweep = now;
+    this.hibernateSweeping = true;
+    try {
+      const reads = turnReadDeps(this.deps, this);
+      await hibernateShadowPass({
+        coord: this.deps.coord, presence: this.deps.presence,
+        liveWord: (rec) => liveWordFor(reads, rec), mark: (rec) => turnMarkFor(reads, rec),
+        readAfterHours: () => this.deps.io.readFile(`${this.deps.cfg.registryDir}/${HIBERNATE_AFTER_HOURS_FILE}`),
+        log: (line) => console.warn(line),
+        startedAt: this.hibernateStartedAt, now: Date.now,
+      }, this.hibernateMemory, sessions, records, names);
+    } catch (err) {
+      console.warn(`ccrc-server: sweepHibernateShadow failed (${err instanceof Error ? err.message : String(err)}) — no verdicts this pass`);
+    } finally {
+      this.hibernateSweeping = false;
+    }
+  }
+
   /** The last measured project-pool sweep, or null if none has been taken yet
    *  — same reasoning as `currentCoord()`'s null. */
   currentPools(): ProjectPoolsWire | null {
@@ -2563,6 +2599,8 @@ export class FleetWatcher {
       // NEVER awaited, the stall watch's reasons: the STOP-DONE lane (D-5370) on THIS tick's rows and listing. Gated on
       // `primed` like the stall watch, so the priming tick never stops anything.
       if (this.primed) void this.sweepStopDone(sessions, records, registryRead.names).catch(() => { /* one bad sweep must not kill the poll */ });
+      // D-5242: hibernation's SHADOW sweep, never awaited, gated on `primed` like the stop-done lane. It only logs.
+      if (this.primed) void this.sweepHibernateShadow(sessions, records, registryRead.names).catch(() => { /* one bad sweep must not kill the poll */ });
       // D-5373: NEVER awaited, `sweepMail`'s reason — it can call `sendPrompt` through the per-session queue. Own clock.
       if (Date.now() - this.lastIdleNudgeAt >= IDLE_NUDGE_SWEEP_MS) {
         this.lastIdleNudgeAt = Date.now();

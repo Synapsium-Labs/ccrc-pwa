@@ -686,11 +686,15 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
      * `PRESENCE_REFRESH_MS` (three refreshes of slack, both defined together
      * in `shared/api.ts`).
      *
-     * Only while visible: a hidden tab's claim is a DELETE on the server, and
-     * a deletion does not need repeating.
+     * WHATEVER the visibility (D-5242's presence contract): the server also
+     * keeps an OPEN claim per connection, re-stamped by every frame, and it is
+     * what holds this session awake while the screen is open — so a hidden tab
+     * repeats `visible:false` on the same beat, and an open claim that needs a
+     * beat gets one. A hidden frame still deletes only the VISIBLE claim, so
+     * notifications behave exactly as before.
      */
     const beat = (): void => {
-      if (document.visibilityState === 'visible') reportVisible(true);
+      reportVisible();
     };
 
     return {

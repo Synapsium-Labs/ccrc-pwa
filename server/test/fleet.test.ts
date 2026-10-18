@@ -1894,6 +1894,38 @@ describe('FleetSession.lastEnd (D-5237)', () => {
   });
 });
 
+// D-5242 (plan Task 17a): the registry's `.hibernated` reaches the wire as `FleetSession.hibernatedAt`, epoch ms;
+// unlisted is null, and a malformed body is null with the row still on the wire.
+describe('FleetSession.hibernatedAt (D-5242)', () => {
+  const ID = 'lane-a-project-a';
+  const UUID = '00000000-0000-4000-8000-000000000001';
+  const ROSTER = { version: 1, accounts: [{
+    id: 'lane-a', label: 'lane-a', configDirSuffix: '.lane-a',
+    exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic',
+  }] };
+  const row = async (hibernated: string | null): Promise<{ hibernatedAt: unknown } | undefined> => {
+    const home = mkTmp('ccrc-hibernated-');
+    seedRoster(home, ROSTER);
+    const reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    const fields: Record<string, string> = { wrapper: 'lane-a', project: 'project-a', workdir: '/data/projects/project-a', uuid: UUID, started: '1', stopped: '1784599820 agent' };
+    if (hibernated !== null) fields['hibernated'] = hibernated;
+    for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${ID}.${k}`), v);
+    const run: Runner = async () => ({ code: 1, stdout: '', stderr: '' });
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1_784_600_000);
+    return fleet.find((x) => x.id === ID);
+  };
+  it('a hibernated row rides the wire with hibernatedAt, its bucket still dead', async () => {
+    expect(await row('1784599820 7')).toMatchObject({ hibernatedAt: 1_784_599_820_000, status: 'dead', bucket: 'dead' });
+  });
+  it('no .hibernated is null', async () => {
+    expect((await row(null))!.hibernatedAt).toBeNull();
+  });
+  it('a malformed .hibernated is null, and the row is still on the wire', async () => {
+    expect((await row('seven hours ago'))!.hibernatedAt).toBeNull();
+  });
+});
+
 // `compactions-write-no-hookstate` (D-5239; spec §5.8): an idle compaction behind the server's word leaves the Stop's
 // hookstate as it was, so the row's `bucketSince` stays the Stop's T0 (no fresh `done`, no badge). END TO END: the real
 // hook writes the file, the real reader parses it, `assembleFleet` ships the row. At base PostCompact `manual` writes a

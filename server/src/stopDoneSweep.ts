@@ -8,7 +8,7 @@ import type { TurnVerdict } from './coord/archiveDoor.js';
 import { CCD_ARGV, stopSurfaceSupported } from './ccdargv.js';
 import { RECLAIM_PAUSE_MARKER } from './coord/rundefs.js';
 import { expiryReviewing } from './coord/expireArchived.js';
-import { PRESENCE_TTL_MS, type FleetSession } from '../../shared/api.js';
+import { PRESENCE_OPEN_TTL_MS, type FleetSession } from '../../shared/api.js';
 import {
   STOP_DONE_DISABLED_MARKER, STOP_DONE_GRACE_MS, STOP_DONE_MEASURES_PER_PASS, STOP_DONE_PER_PASS, STOP_DONE_RETRY_MS,
   stopDoneVerdict, type StopDoneInput, type StopDoneLive, type StopDoneMark, type StopDoneRow, type StopDoneStoreRead,
@@ -52,7 +52,9 @@ export interface StopDoneSweepDeps {
     | 'runsNamingSession' | 'run'>;
   readonly runCcd: Deps['runCcd'];
   readonly fleetState: FleetState | undefined;
-  readonly presence: Pick<Presence, 'isVisible'> | undefined;
+  /** D-5242's presence contract: `isOpen`, an open screen visible or hidden — a hidden but open tab holds a finished
+   *  worker as it holds a sleeping session. */
+  readonly presence: Pick<Presence, 'isOpen'> | undefined;
   readonly notifyLog: NotifyLog | undefined;
   /** `turnverdict.ts`'s `liveWordFor` and `turnVerdictFor`, over the watcher's thunks. */
   readonly liveWord: (rec: SessionRecord) => Promise<
@@ -166,8 +168,8 @@ export async function stopDonePass(
   const reads = storeReads(deps.coord, pop.map((s) => s.id));
   const surface = stopSurfaceSupported(deps.fleetState);
   const inputFor = (row: StopDoneRow, store: StopDoneStoreRead, live: StopDoneLive, at: number): StopDoneInput => ({
-    row, store, viewer: deps.presence?.isVisible(row.id) ?? false, sinceStartMs: at - deps.startedAt,
-    presenceTtlMs: PRESENCE_TTL_MS, surface, live, now: at, graceMs: STOP_DONE_GRACE_MS,
+    row, store, viewer: deps.presence?.isOpen(row.id) ?? false, sinceStartMs: at - deps.startedAt,
+    presenceTtlMs: PRESENCE_OPEN_TTL_MS, surface, live, now: at, graceMs: STOP_DONE_GRACE_MS,
   });
   const due: FleetSession[] = [];
   let measured = 0;
