@@ -54,12 +54,13 @@ import {
   MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES,
   MAIL_SUBJECT_MAX_BYTES, PEER_ETIQUETTE, PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, transitionsFor, IDLE_RUN_STATES,
   FAILURE_KINDS, ROUTE_CONTROL_CHAR_RE, isSessionIdShape, parseRouteEventDetail, parseRouteFields, routeEventDetail, RUN_STATES, TERMINAL_RUN_STATES,
-  type AskState, type ClaimConflict, type CoordCapsView, type LifecycleQueryResult, type MailRejectCode,
+  type AskState, type ClaimConflict, type CoordCapsView, type LifecycleQueryResult,
   type MirroredLifecycleEvent, type PeerDeliverable, type PeerSummary, type RunState, type RunSummary,
   type FailureKind, type RouteField, type RunRouteBody, type RouteMode,
   type StallConfirmRequired, type StallWatchEffective, type StallWatchStages, type StallWatchView, type StallWriteEffect,
-  type CollectLaneRefusal,
 } from '../../../shared/api.js';
+import { REFUSAL_STATUS, type CollectLaneRouteRefusal, type MailRouteRefusal } from '../../../shared/refusal.js';
+import { refuseRoute } from '../refuse.js';
 
 /**
  * `POST /api/runs/:id/route`'s routable run states (review finding #6,
@@ -571,7 +572,7 @@ export function registerCoordRoutes(
    */
   watcher?: FleetWatcher,
 ): CoordRoutesHandle {
-  const notConfigured = (reply: FastifyReply) => reply.code(501).send({ ok: false, error: 'not-configured' });
+  const notConfigured = (reply: FastifyReply) => refuseRoute(reply, 'not-configured');
 
   // One instance for this server (see `CoordMutex`'s own docstring) —
   // serialises the WRITE routes' bodies below: open, dispatch, close, advance.
@@ -698,13 +699,11 @@ export function registerCoordRoutes(
    *  message ever arrived. `ctx` never carries `code`/`detail` itself — both
    *  are this function's own parameters, spread on top so a call site cannot
    *  accidentally supply a stale one. */
-  const refuse = (
-    reply: FastifyReply, status: number, code: MailRejectCode,
+  const refuse = (reply: FastifyReply, code: MailRouteRefusal,   // D-5381: the status is REFUSAL_STATUS's
     ctx: Omit<Parameters<CoordStore['recordRejection']>[0], 'code' | 'detail'>,
-    detail: string,
-  ) => {
+    detail: string) => {
     deps.coord!.recordRejection({ ...ctx, code, detail });
-    return reply.code(status).send({ ok: false, error: code, detail });
+    return reply.code(REFUSAL_STATUS[code]).send({ ok: false, error: code, detail });
   };
 
   /**
@@ -761,7 +760,7 @@ export function registerCoordRoutes(
           ? 'no box token is configured on this server — /api/mail fails shut on an unconfigured ' +
             'token, it does not fail open (fix-round finding 3)'
           : 'wrong box token';
-      return refuse(reply, 401, 'unauthenticated', {}, detail);
+      return refuse(reply, 'unauthenticated', {}, detail);
     }
 
     // 2: body shape. fromId/fromUuid/toId/subject/body must all be strings;
@@ -781,7 +780,7 @@ export function registerCoordRoutes(
 
     if (typeof fromId !== 'string' || typeof fromUuid !== 'string' || typeof toId !== 'string' ||
         typeof subject !== 'string' || typeof msgBody !== 'string') {
-      return refuse(reply, 400, 'bad-kind',
+      return refuse(reply, 'bad-kind',
         { fromId: typeof fromId === 'string' ? fromId : undefined,
           toId: typeof toId === 'string' ? toId : undefined },
         'fromId/fromUuid/toId/subject/body must all be strings');
@@ -789,7 +788,7 @@ export function registerCoordRoutes(
 
     const artifacts = artifactsRaw === undefined ? [] : artifactsRaw;
     if (!Array.isArray(artifacts) || !artifacts.every((a) => typeof a === 'string' && path.isAbsolute(a))) {
-      return refuse(reply, 400, 'bad-kind', { fromId, toId, subject },
+      return refuse(reply, 'bad-kind', { fromId, toId, subject },
         'artifacts must be an array of absolute paths — paths, never payloads (spec:52-53)');
     }
 
@@ -814,14 +813,14 @@ export function registerCoordRoutes(
     } else if (typeof runIdRaw === 'number' && Number.isInteger(runIdRaw) && runIdRaw >= 1) {
       runId = runIdRaw;
     } else {
-      return refuse(reply, 400, 'bad-kind', { fromId, toId, subject },
+      return refuse(reply, 'bad-kind', { fromId, toId, subject },
         'runId must be a positive integer when given');
     }
 
     // 3: sendable kind. `isSendableMailKind` deliberately excludes `unknown` —
     // a sender cannot ask for the we-do-not-know bucket.
     if (!isSendableMailKind(kind)) {
-      return refuse(reply, 400, 'bad-kind', { fromId, toId, subject, runId },
+      return refuse(reply, 'bad-kind', { fromId, toId, subject, runId },
         `unrecognised or missing mail kind: ${JSON.stringify(kind)}`);
     }
 
@@ -836,19 +835,19 @@ export function registerCoordRoutes(
     // stays well under Fastify's default 1 MiB body limit (`server.ts`
     // builds `Fastify({ logger: false })` with no `bodyLimit` override).
     if (Buffer.byteLength(msgBody, 'utf8') > MAIL_BODY_MAX_BYTES) {
-      return refuse(reply, 413, 'oversize', { fromId, toId, kind, subject, runId },
+      return refuse(reply, 'oversize', { fromId, toId, kind, subject, runId },
         `body exceeds ${MAIL_BODY_MAX_BYTES} bytes`);
     }
     if (Buffer.byteLength(subject, 'utf8') > MAIL_SUBJECT_MAX_BYTES) {
-      return refuse(reply, 413, 'oversize', { fromId, toId, kind, subject, runId },
+      return refuse(reply, 'oversize', { fromId, toId, kind, subject, runId },
         `subject exceeds ${MAIL_SUBJECT_MAX_BYTES} bytes`);
     }
     if (artifacts.length > MAIL_ARTIFACTS_MAX) {
-      return refuse(reply, 413, 'oversize', { fromId, toId, kind, subject, runId },
+      return refuse(reply, 'oversize', { fromId, toId, kind, subject, runId },
         `artifacts exceeds ${MAIL_ARTIFACTS_MAX} entries`);
     }
     if ((artifacts as string[]).some((a) => Buffer.byteLength(a, 'utf8') > MAIL_ARTIFACT_PATH_MAX_BYTES)) {
-      return refuse(reply, 413, 'oversize', { fromId, toId, kind, subject, runId },
+      return refuse(reply, 'oversize', { fromId, toId, kind, subject, runId },
         `an artifact path exceeds ${MAIL_ARTIFACT_PATH_MAX_BYTES} bytes`);
     }
 
@@ -869,7 +868,7 @@ export function registerCoordRoutes(
     // directory.
     const names = await deps.io.readdir(deps.cfg.registryDir);
     if (names === null) {
-      return refuse(reply, 502, 'registry-unmeasurable', { fromId, toId, kind, subject, runId },
+      return refuse(reply, 'registry-unmeasurable', { fromId, toId, kind, subject, runId },
         'the registry directory could not be listed — transient, not a fact about the sender');
     }
     const registry = await readRegistry(deps.io, deps.cfg);
@@ -885,10 +884,10 @@ export function registerCoordRoutes(
       // evidence `registry.ts`'s own `HOLD_UNREADABLE` sentinel already
       // trusts for `.hold`.
       if (names.includes(`${fromId}.uuid`)) {
-        return refuse(reply, 502, 'registry-unmeasurable', { fromId, toId, kind, subject, runId },
+        return refuse(reply, 'registry-unmeasurable', { fromId, toId, kind, subject, runId },
           `registry row for ${fromId} is listed but unreadable — transient, not a fact about the sender`);
       }
-      return refuse(reply, 403, 'unknown-sender', { fromId, toId, kind, subject, runId },
+      return refuse(reply, 'unknown-sender', { fromId, toId, kind, subject, runId },
         `no registry row for ${fromId}`);
     }
 
@@ -907,7 +906,7 @@ export function registerCoordRoutes(
     // one.
     const senderIdentity = measuredIdentity(sender);
     if (senderIdentity === null) {
-      return refuse(reply, 502, 'registry-unmeasurable', { fromId, toId, kind, subject, runId },
+      return refuse(reply, 'registry-unmeasurable', { fromId, toId, kind, subject, runId },
         `registry row for ${fromId} is listed but its identity could not be measured — ` +
           'transient, not a fact about the sender');
     }
@@ -916,7 +915,7 @@ export function registerCoordRoutes(
     // `measuredIdentity` above — a MEASURED triple member is never the empty
     // string, only a DEGRADED one is, and check 5.5 already refused that).
     if (senderIdentity.uuid !== fromUuid) {
-      return refuse(reply, 403, 'stale-uuid', { fromId, fromUuid, toId, kind, subject, runId },
+      return refuse(reply, 'stale-uuid', { fromId, fromUuid, toId, kind, subject, runId },
         'fromUuid does not match the registry — stale sender');
     }
 
@@ -930,10 +929,10 @@ export function registerCoordRoutes(
     // follows the chair, a session id names a session.
     if (toId !== 'coordinator' && toId !== 'worker' && !registry.some((r) => r.id === toId)) {
       if (names.includes(`${toId}.uuid`)) {
-        return refuse(reply, 502, 'registry-unmeasurable', { fromId, fromUuid, toId, kind, subject, runId },
+        return refuse(reply, 'registry-unmeasurable', { fromId, fromUuid, toId, kind, subject, runId },
           `registry row for ${toId} is listed but unreadable — transient, not a fact about the recipient`);
       }
-      return refuse(reply, 404, 'unknown-recipient', { fromId, fromUuid, toId, kind, subject, runId },
+      return refuse(reply, 'unknown-recipient', { fromId, fromUuid, toId, kind, subject, runId },
         `no registry row for ${toId}`);
     }
 
@@ -956,7 +955,7 @@ export function registerCoordRoutes(
     }
     const run = runRead === null ? null : runRead.run;
     if (runId !== null && run === null) {
-      return refuse(reply, 404, 'unknown-run', { fromId, fromUuid, toId, kind, subject, runId },
+      return refuse(reply, 'unknown-run', { fromId, fromUuid, toId, kind, subject, runId },
         `no run ${runId}`);
     }
 
@@ -983,7 +982,7 @@ export function registerCoordRoutes(
         : runId === null
           ? "the 'worker' role needs a runId — a worker is per run, and there is nothing to fall back to"
           : `run ${runId} has no worker`;
-      return refuse(reply, 404, 'unknown-recipient', { fromId, fromUuid, toId, kind, subject, runId }, why);
+      return refuse(reply, 'unknown-recipient', { fromId, fromUuid, toId, kind, subject, runId }, why);
     }
 
     // 9: peer-mail bounds — `runId === null` ONLY (Build 9b wave 0, D10 hole
@@ -1005,15 +1004,15 @@ export function registerCoordRoutes(
     // 'peer-quota' invites a retry later.
     if (runId === null) {
       if (coord.hasOutstandingPeerDuplicate(fromId, resolvedToId, subject)) {
-        return refuse(reply, 409, 'duplicate', { fromId, fromUuid, toId, kind, subject, runId },
+        return refuse(reply, 'duplicate', { fromId, fromUuid, toId, kind, subject, runId },
           `an outstanding peer mail from ${fromId} to ${resolvedToId} with this subject is already queued`);
       }
       if (coord.outstandingPeerCount(fromId, resolvedToId) >= PEER_MAIL_MAX_OUTSTANDING) {
-        return refuse(reply, 429, 'peer-quota', { fromId, fromUuid, toId, kind, subject, runId },
+        return refuse(reply, 'peer-quota', { fromId, fromUuid, toId, kind, subject, runId },
           `${PEER_MAIL_MAX_OUTSTANDING} peer mails from ${fromId} to ${resolvedToId} are already outstanding`);
       }
       if (coord.peerMailInLastHour(fromId, Date.now()) >= PEER_MAIL_HOURLY) {
-        return refuse(reply, 429, 'peer-quota', { fromId, fromUuid, toId, kind, subject, runId },
+        return refuse(reply, 'peer-quota', { fromId, fromUuid, toId, kind, subject, runId },
           `${fromId} has sent ${PEER_MAIL_HOURLY} peer mails in the last hour`);
       }
     }
@@ -1083,12 +1082,12 @@ export function registerCoordRoutes(
           ? 'no box token is configured on this server — /api/mail/:id/ack fails shut on an ' +
             'unconfigured token, it does not fail open (fix-round finding 3)'
           : 'wrong box token';
-      return refuse(reply, 401, 'unauthenticated', {}, detail);
+      return refuse(reply, 'unauthenticated', {}, detail);
     }
 
     const body = (req.body ?? {}) as { fromId?: unknown; fromUuid?: unknown };
     if (typeof body.fromId !== 'string' || typeof body.fromUuid !== 'string') {
-      return refuse(reply, 400, 'bad-kind', {}, 'fromId/fromUuid must both be strings');
+      return refuse(reply, 'bad-kind', {}, 'fromId/fromUuid must both be strings');
     }
     const { fromId, fromUuid } = body;
 
@@ -1099,39 +1098,39 @@ export function registerCoordRoutes(
     // `unknown-sender` would be equally false.
     const names = await deps.io.readdir(deps.cfg.registryDir);
     if (names === null) {
-      return refuse(reply, 502, 'registry-unmeasurable', { fromId },
+      return refuse(reply, 'registry-unmeasurable', { fromId },
         'the registry directory could not be listed — transient, not a fact about the sender');
     }
     const registry = await readRegistry(deps.io, deps.cfg);
     const sender = registry.find((r) => r.id === fromId);
     if (!sender) {
       if (names.includes(`${fromId}.uuid`)) {
-        return refuse(reply, 502, 'registry-unmeasurable', { fromId },
+        return refuse(reply, 'registry-unmeasurable', { fromId },
           `registry row for ${fromId} is listed but unreadable — transient, not a fact about the sender`);
       }
-      return refuse(reply, 403, 'unknown-sender', { fromId }, `no registry row for ${fromId}`);
+      return refuse(reply, 'unknown-sender', { fromId }, `no registry row for ${fromId}`);
     }
     // 5.5: same gate the ingress route carries — see its own comment.
     const senderIdentity = measuredIdentity(sender);
     if (senderIdentity === null) {
-      return refuse(reply, 502, 'registry-unmeasurable', { fromId },
+      return refuse(reply, 'registry-unmeasurable', { fromId },
         `registry row for ${fromId} is listed but its identity could not be measured — ` +
           'transient, not a fact about the sender');
     }
     if (senderIdentity.uuid !== fromUuid) {
-      return refuse(reply, 403, 'stale-uuid', { fromId, fromUuid },
+      return refuse(reply, 'stale-uuid', { fromId, fromUuid },
         'fromUuid does not match the registry — stale sender');
     }
 
     const { id: idParam } = req.params as { id: string };
     const id = parseCanonicalPositiveSafeInteger(idParam);
     if (id === null) {
-      return refuse(reply, 400, 'bad-kind', { fromId, fromUuid }, 'bad delivery id');
+      return refuse(reply, 'bad-kind', { fromId, fromUuid }, 'bad delivery id');
     }
 
     const delivery = coord.delivery(id);
     if (!delivery || delivery.toId !== fromId) {
-      return refuse(reply, 404, 'unknown-recipient', { fromId, fromUuid },
+      return refuse(reply, 'unknown-recipient', { fromId, fromUuid },
         'this delivery is not addressed to you');
     }
 
@@ -1156,7 +1155,7 @@ export function registerCoordRoutes(
     // 404s an id that names no row, and nothing in this tree deletes one. Total
     // rather than dropped, and it answers with the SAME code that pre-check
     // does, because from the server's side that is what it is.
-    return refuse(reply, 404, 'unknown-recipient', { fromId, fromUuid },
+    return refuse(reply, 'unknown-recipient', { fromId, fromUuid },
       'this delivery is not addressed to you');
   });
 
@@ -2872,8 +2871,8 @@ export function registerCoordRoutes(
       : c.kind === 'mismatch' ? `a mismatch (journal maximum ${c.journalMax}, database generation ${c.rowGeneration})`
         : `unmeasurable (${c.why})`;
   /** A refusal body, `{ok, error, detail?}`: never a path, never an errno. */
-  const collectRefuse = (reply: FastifyReply, status: number, error: CollectLaneRefusal, detail?: string) =>
-    reply.code(status).send(detail === undefined ? { ok: false, error } : { ok: false, error, detail });
+  const collectRefuse = (reply: FastifyReply, error: CollectLaneRouteRefusal, detail?: string) =>   // D-5381: REFUSAL_STATUS's
+    reply.code(REFUSAL_STATUS[error]).send(detail === undefined ? { ok: false, error } : { ok: false, error, detail });
 
   app.get('/api/coord/collect-lane', async (_req, reply) => {
     if (!deps.coord || !deps.collectLane) return notConfigured(reply);
@@ -2887,7 +2886,7 @@ export function registerCoordRoutes(
     collectViewNote('the control state', collectControlFault(read.control));
     const row = read.row;
     if (row.kind === 'absent') {
-      return collectRefuse(reply, 503, 'state-unmeasurable',
+      return collectRefuse(reply, 'state-unmeasurable',
         'the collector setting row is absent, and the server never inserts one');
     }
     const journal = read.journal;
@@ -2902,13 +2901,13 @@ export function registerCoordRoutes(
 
   app.post('/api/coord/collect-lane', async (req, reply) => {
     const parsed = decideCollectLaneBody(req.body);
-    if (!parsed.ok) return collectRefuse(reply, 400, 'bad-request', parsed.detail);
+    if (!parsed.ok) return collectRefuse(reply, 'bad-request', parsed.detail);
     if (!deps.coord || !deps.collectLane) return notConfigured(reply);
     const coord = deps.coord;
     const lane = deps.collectLane;
     const request = parsed.request;
     if (request.choice === 'live' && !(deps.cfg.authEnabled && sessionAuth(req).reason === 'session')) {
-      return collectRefuse(reply, 403, 'sign-in-unarmed');
+      return collectRefuse(reply, 'sign-in-unarmed');
     }
     const link = deps.fleetIdentity ?? NO_FLEET_IDENTITY;
     const before = link.epochNow();
@@ -2922,29 +2921,29 @@ export function registerCoordRoutes(
     const decided = decideCollectLanePost({
       request, row: read.row, journal: read.journal, switches, epoch, node, caps, boot: lane.bootNonce, counts,
     });
-    if (decided.kind === 'unmeasurable') return collectRefuse(reply, 503, 'state-unmeasurable', decided.detail);
-    if (decided.kind === 'marker') return collectRefuse(reply, 409, 'marker-still-controls');
+    if (decided.kind === 'unmeasurable') return collectRefuse(reply, 'state-unmeasurable', decided.detail);
+    if (decided.kind === 'marker') return collectRefuse(reply, 'marker-still-controls');
     if (decided.kind === 'confirm') return reply.code(409).send(decided.body);
     let w: ReturnType<typeof coord.setCollectLane>;
     try {
       w = coord.setCollectLane(decided.request, Date.now(), lane.journal);
     } catch (err) {
       collectWarn(`the ${decided.request.kind} write could not begin (${err instanceof Error ? err.message : String(err)})`);
-      return collectRefuse(reply, 503, 'write-failed', 'the write could not begin');
+      return collectRefuse(reply, 'write-failed', 'the write could not begin');
     }
     if (w.kind === 'refused') {
-      if (w.code === 'conflict') return collectRefuse(reply, 409, 'conflict', w.detail);
-      if (w.code === 'marker-still-controls') return collectRefuse(reply, 409, 'marker-still-controls', w.detail);
+      if (w.code === 'conflict') return collectRefuse(reply, 'conflict', w.detail);
+      if (w.code === 'marker-still-controls') return collectRefuse(reply, 'marker-still-controls', w.detail);
       // `not-coherent` is the answer to the latch's retire, which this door never sends. It is logged, and refused
       // as unmeasurable.
       if (w.code === 'not-coherent') {
         collectWarn(`the store refused a ${decided.request.kind} write as not coherent: ${w.detail}`);
       }
-      return collectRefuse(reply, 503, 'state-unmeasurable', w.detail);
+      return collectRefuse(reply, 'state-unmeasurable', w.detail);
     }
     if (w.kind === 'failed') {
       collectWarn(`the ${decided.request.kind} write failed at its ${w.phase} step (${w.code}); nothing is proved written`);
-      return collectRefuse(reply, 503, 'write-failed', `the write failed at its ${w.phase} step`);
+      return collectRefuse(reply, 'write-failed', `the write failed at its ${w.phase} step`);
     }
     const change = w.kind === 'written' ? collectLaneSettingChange(w.before, w.after, w.journalBefore) : null;
     const log = deps.notifyLog;
@@ -2968,7 +2967,7 @@ export function registerCoordRoutes(
     if (!collectLaneWriteProved(decided.request, w.kind === 'written' ? w.generation : null, proofRow, proofJournal)
       || proofRow.kind === 'absent' || proofJournal.kind === 'not-configured') {
       collectWarn(`a ${decided.request.kind} write answered ${w.kind}, and the re-read after it does not show the requested state`);
-      return collectRefuse(reply, 503, 'write-failed', 'the re-read after the write does not show the requested state');
+      return collectRefuse(reply, 'write-failed', 'the re-read after the write does not show the requested state');
     }
     return reply.code(200).send({ ok: true, ...collectLaneView({
       row: proofRow, journal: proofJournal, switches, epoch, node, caps, counts, notice: COLLECT_LANE_APPLIES_TEXT,
