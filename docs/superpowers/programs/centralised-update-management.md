@@ -4122,6 +4122,19 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     #441, a full run. I asked path identity (mail 6266) whether #410 still waits on #397, and whether it could land
     first, since its only conflict is the stamp line. Both answers are theirs; an operator blocker goes to the
     operator.
+  - **07:55 UTC: the stable path waits on operator decisions in path identity, and on #448's macOS reds.**
+    - **Path identity (mail 6267):** #397, then #410, still stands. #397 (run 399) waits on the operator, for a
+      means of proving no earlier test process is alive, or for acceptance of that risk. #410 is not ready
+      either: review 575 closing is not landing acceptance. Report 6174's departures (branch-red and main-green
+      stops, the foreground method, the incomplete E9) are unwaived, and the test method and the census guard
+      are operator decisions. Path identity does not let #410 land before #397. The 5967 fence on #441 stands.
+    - **`main`'s macOS reds (daily 39093762060 at `46c50a9a4`):** `ccd-docs-tree` row 64 (B2) and
+      `ccd-docs-index` (the same `os.killpg` EPERM), both green on #441's full run, so #441 carries them. And
+      `session-hook-turnmark` (7 cases) and `ccrc-doctor` delegation-hooks (3), red since #448 in 2 of 2 full
+      runs (also 39096832066), Linux green. They are the delegation broker's; mail 6270 gives its coordinator
+      the evidence and asks who fixes them and when.
+    - **So stable needs:** the operator's #397 and #410 decisions (or a ruling that #441 may land before #410),
+      then #441, #448's two macOS files fixed, and a green `full-suite` on a released commit. Put to the operator.
 
 ## Carried constraints
 
