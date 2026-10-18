@@ -1442,16 +1442,19 @@ D-5497 was not drawn from that block: the coordinator issued it to Task S10a fro
 
 ### Cross-project nesting
 
-Issued 2026-10-18 to the cross-project nesting change, a block of three. D-5527 is defined here, once.
+Issued 2026-10-18 to the cross-project nesting change, a block of three. D-5527 and D-5528 are defined here, once.
 
 - **D-5527** — `fleet-tree` (Tasks S6, S10): one pure model, `pwa/src/fleet/fleetTree.ts`, decides each fleet row's card and parent for both skins, and S6's cards and S10's project mode read its groups and rows (`fleetTree`) rather than calling `groupFleet`, `runCard` and `nestFleet` themselves. S10's status mode reads `workingOn` and `childRunContext` for a child filed under its own status. Since cross-project coordination (#601, D-5523), a coordinator in one project can dispatch children that are workspaces of another.
   - **Card.** A row renders where the server placed it (`boardHome`). The server places a held child on its coordinator's project, because the run's stamp records the claimant's own project. The client never overrides that placement. Following the live run's claimant on the client was measured and rejected. It would also move a child whose `boardProject` is null (an older server, or a failed placement read, D-2875) off its own card, which is where `orphanNote` says its coordinator is dead and offers the reclaim.
-  - **Parent.** The parent is the `claimedBy` of the active run bound to the row. Nesting is `nestFleet`'s and is unchanged. A card's runs are the runs whose worker renders on it, keyed through the same card map.
+  - **Parent.** The parent is the `claimedBy` of the active run bound to the row: the latest one (`runForSession`), never the row itself. Nesting is `nestFleet`'s, fed only each session's latest active run, so the bracket, the label and the header name the same coordinator when two runs name one worker. A card's runs are the runs whose worker renders on it, keyed through the same card map.
+  - **Known limit.** A cross-project coordinator that is itself a child sits under its own coordinator, but its children stay at the top level of the card the server placed them on (its own project), because the stamp records the claimant's own project and the client never overrides placement. `fleetTree.test.ts` pins this.
   - **Indicator.** A row whose own project differs from its card carries a chip with the `folder-code` icon and that project's name, inside the row button so it is part of the accessible name. A same-project child shows nothing new.
   - **Words.** A child's label names its programme and wave (`port-api · wave 5 of 7`, or `· review of wave 5`), taken from the active run bound to it. A workspace resumed for a later wave therefore shows that wave and not the run that minted it. A child that no open run names reads "run not on the board". The run number moves to the session header's coordination line (`working on <project> · coordinated from <coordinator> · <programme> · wave N of M · run #N`). The reclaim banner leads with the programme and wave when the board holds the run, and keeps `run #N` as the second key.
   - **Coordinator not a live row.** A stopped workspace coordinator is still a live row, so its child stays nested under it. An archived or missing coordinator leaves the child at the top level of the card the server placed it on, which is the coordinator's project while the stamp answers and the child's own project after that. The child keeps its chip and gets the orphan marker.
 
-Issued and unused: 5528, 5529.
+- **D-5528** — `run-label-door` (Tasks S6, S10): every dispatched child is held with `program:<slug> wave:N/M run:<id>`, so the raw hold text put the run number back on the row and said the programme and wave twice. When an active run explains a hold, the programme-and-wave label takes the hold cell's place, and is the run-board door when there is one. The hold text stays verbatim in its title and is never parsed. A hold that no active run explains keeps its raw text, and an unreadable child marker keeps both its hedge and the raw hold. The programme slug ellipsises at phone width and the wave stays whole.
+
+Issued and unused: 5529.
 
 ## Review log
 

@@ -1659,6 +1659,58 @@ describe('a child workspace names its programme and wave (wave 5; operator rulin
     expect(childMarkOf(input)).toEqual(expected);
   });
 
+  // D-5528: every dispatched child is ws-held with `program:<slug> wave:N/M run:<id>`
+  // (routes.ts's holdAndBindSession), so the hold cell beside the label used to put
+  // the run number back on the row and say the programme and wave twice. When an
+  // active run explains the hold, the label IS the run-board door; the hold text
+  // survives verbatim in the title only.
+  describe('a held child whose active run explains the hold (D-5528)', () => {
+    const run = { program: 'port-api', programTitle: 'Port the API', wave: 5, waveOf: 7, kind: 'work' as const };
+    const held = 'program:port-api wave:5/7 run:41';
+    const meta = (): HTMLElement => document.querySelector('.sess-meta') as HTMLElement;
+
+    it('shows no run number and states the programme and wave once', () => {
+      render(<SessionLine session={s({ child: { kind: 'child', runId: 39 }, held })} onOpenRun={() => {}}
+                          onOpen={() => {}} onActions={() => {}} childRun={{ run, coordinator: 'the coordinator' }} />);
+      const text = meta().textContent ?? '';
+      expect(text).not.toMatch(/run:|run #/);
+      expect(text.split('port-api').length - 1).toBe(1);
+      expect(text).toContain('port-api · wave 5 of 7');
+    });
+
+    it('the label is the run-board door, and the hold text is kept verbatim in its title only', () => {
+      const onOpenRun = vi.fn();
+      render(<SessionLine session={s({ child: { kind: 'child', runId: 39 }, held })} onOpenRun={onOpenRun}
+                          onOpen={() => {}} onActions={() => {}} childRun={{ run, coordinator: 'the coordinator' }} />);
+      const door = document.querySelector('button[data-held]') as HTMLElement;
+      expect(door.textContent).toBe('port-api · wave 5 of 7');
+      expect(door.getAttribute('title')).toContain(held);
+      expect(door.getAttribute('aria-label')).toBe('Open the run board — port-api · wave 5 of 7');
+      door.click();
+      expect(onOpenRun).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps the wave whole and ellipsises only the programme name', () => {
+      render(<SessionLine session={s({ child: { kind: 'child', runId: 39 }, held })} onOpenRun={() => {}}
+                          onOpen={() => {}} onActions={() => {}}
+                          childRun={{ run: { ...run, program: 'migrate-legacy-billing-reconciliation-pipeline', wave: 12, waveOf: 14 }, coordinator: null }} />);
+      expect(document.querySelector('.sess-pw-prog')?.textContent).toBe('migrate-legacy-billing-reconciliation-pipeline');
+      expect(document.querySelector('.sess-pw-wave')?.textContent).toBe(' · wave 12 of 14');
+    });
+
+    it('a hold no active run explains stays the raw text, as today', () => {
+      render(<SessionLine session={s({ held })} onOpenRun={null} onOpen={() => {}} onActions={() => {}} />);
+      expect(document.querySelector('[data-held]')?.textContent).toBe(held);
+    });
+
+    it('an unreadable marker keeps both cells: its hedge, and the raw hold', () => {
+      render(<SessionLine session={s({ child: { kind: 'unreadable' }, held })} onOpenRun={() => {}}
+                          onOpen={() => {}} onActions={() => {}} childRun={{ run, coordinator: null }} />);
+      expect(cell()?.textContent).toBe('child marker unreadable');
+      expect(document.querySelector('[data-held]')?.textContent).toBe(held);
+    });
+  });
+
   it('the label says nothing for a marker this build cannot read, and for an unsafe run id', () => {
     expect(childOfRunLabel(cast(null))).toBeNull();
     expect(childOfRunLabel(cast({ kind: 'child', runId: 2 ** 53 }))).toBeNull();

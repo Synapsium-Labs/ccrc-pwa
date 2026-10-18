@@ -92,6 +92,12 @@ export function childRunContext(
   return { run: runForSession(runs, s.id), coordinator: parent === null ? null : sessionLabel(parent) };
 }
 
+/** The runs `nestFleet` brackets by: a pending spawn (no session yet) and, per
+ *  session, only the run `runForSession` answers — so the bracket's parent and
+ *  `parentIdOf` are one rule, never two orders that disagree. */
+const latestPerSession = (runs: readonly RunSummary[]): RunSummary[] =>
+  runs.filter((r) => r.sessionId === null || runForSession(runs, r.sessionId) === r);
+
 /** A card of the tree: `groupFleet`'s group, plus the rows `nestFleet` draws
  *  from it, the runs that drew them, and the runs this project is the HOME of
  *  that work on another card (`ProjectCard`'s `abroad`, spec §3 F4). */
@@ -110,7 +116,10 @@ export function fleetTree(
     const mine = runs.filter((r) => runCard(r, cards) === g.project);
     return {
       ...g,
-      rows: nestFleet(g.sessions, mine),
+      // Rule 1, ONE parent: the bracket reads only each session's LATEST active
+      // run (`runForSession`, the run the label and header name), so a worker
+      // two claimants' runs both name nests under the one its label says.
+      rows: nestFleet(g.sessions, latestPerSession(mine)),
       runs: mine,
       // A run homed here and working elsewhere, minus one whose worker renders
       // on this very card — that run is a bracketed row here already (spec §6).
@@ -160,6 +169,6 @@ export function coordinationLine(c: Coordination): { text: string; parts: readon
   const whose = c.workingOn === null ? 'this project’s' : `${c.workingOn}’s`;
   const title = c.run === null
     ? `this workspace works on ${whose} code and is shown under ${c.card}, its coordinator’s project; no open run names it`
-    : `this workspace does one wave of ${c.run.programTitle !== '' ? c.run.programTitle : c.run.program} on ${whose} code for ${c.coordinator ?? `a coordinator in ${c.card}`}; it is stopped or reclaimed when the wave is done`;
+    : `this workspace ${c.run.kind === 'review' ? 'reviews' : 'does'} one wave of ${c.run.programTitle !== '' ? c.run.programTitle : c.run.program} on ${whose} code for ${c.coordinator ?? `a coordinator in ${c.card}`}; it is stopped or reclaimed when the wave is done`;
   return { text: parts.join(' · '), parts, title };
 }

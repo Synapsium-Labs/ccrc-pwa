@@ -349,9 +349,10 @@ export function SessionHeader({
             whose code, whose programme — before the meta row says how it is. */}
         {coordination !== null && (
           <p className="chat-coord" title={coordination.title}>
-            {/* Each clause an inline block, so the line wraps BETWEEN clauses at 360 and a clause wider than the line still wraps inside. */}
+            {/* Each clause an inline block, so the line wraps BETWEEN clauses at 360 and a clause wider than the line still wraps inside.
+                The separator rides INSIDE the clause it introduces, so a wrapped line never starts with, or holds, a lone `·`. */}
             {coordination.parts.map((part, i) => (
-              <Fragment key={i}>{i > 0 && ' · '}<span className="chat-coord-part">{part}</span></Fragment>
+              <Fragment key={i}>{i > 0 && ' '}<span className="chat-coord-part">{i > 0 && '· '}{part}</span></Fragment>
             ))}
           </p>
         )}

@@ -207,3 +207,50 @@ describe('the run label — programme and wave, never a bare run number (operato
     expect(childOfRunLabel({})).toBeNull();
   });
 });
+
+describe('one parent rule for the bracket, the label and the header (D-5527 rule 1)', () => {
+  it('a worker two active runs name, from different claimants, nests under the claimant of the LATEST run — the one its label names', () => {
+    const c2 = sess('lane-a-project-a-second', { workspace: null, role: 'coordinator', name: 'the second' });
+    const w = sess('lane-a-project-a-worker', { role: 'child', child: { kind: 'child', runId: 50 } });
+    const rs = [
+      run({ id: 50, wave: 4, project: 'project-a', homeProject: 'project-a', sessionId: w.id, claimedBy: c2.id }),
+      run({ id: 51, wave: 5, project: 'project-a', homeProject: 'project-a', sessionId: w.id, claimedBy: COORD }),
+    ];
+    const tree = shape([coordinator, c2, w], rs);
+    expect(tree.find(([p]) => p === 'project-a')![1]).toEqual([[COORD, 0], [w.id, 1], [c2.id, 0]]);
+    expect(coordinationOf(w, [coordinator, c2, w], rs)!.coordinator).toBe('the coordinator');
+  });
+
+  it('a run a session claims for itself names no coordinator and no parent', () => {
+    const w = sess('lane-a-project-a-solo', { role: 'child', child: { kind: 'child', runId: 60 } });
+    const rs = [run({ id: 60, project: 'project-a', homeProject: 'project-a', sessionId: w.id, claimedBy: w.id })];
+    const c = coordinationOf(w, [w], rs)!;
+    expect(c.coordinator).toBeNull();
+    expect(coordinationLine(c).text).not.toContain('coordinated from');
+    expect(shape([w], rs)).toEqual([['project-a', [[w.id, 0]]]]);
+  });
+
+  it('KNOWN LIMIT: a cross-project coordinator that is itself a child keeps its own children on the card the server placed them on', () => {
+    // top (project-a) coordinates mid (project-b, placed on project-a); mid
+    // coordinates leaf (project-c, placed on project-b — the stamp names the
+    // claimant's OWN project, D-5523). Rule 2 never overrides placement, so leaf
+    // stays top level on project-b; nestFleet's one level keeps mid a child.
+    const mid = sess('lane-b-project-b-mid', { project: 'project-b', role: 'coordinator', boardProject: 'project-a' });
+    const leaf = sess('lane-c-project-c-leaf', { project: 'project-c', role: 'child', boardProject: 'project-b' });
+    const rs = [
+      run({ id: 70, project: 'project-b', homeProject: 'project-b', sessionId: mid.id, claimedBy: COORD }),
+      run({ id: 71, project: 'project-c', homeProject: 'project-c', sessionId: leaf.id, claimedBy: mid.id }),
+    ];
+    const tree = shape([coordinator, mid, leaf], rs);
+    expect(tree.find(([p]) => p === 'project-a')![1]).toEqual([[COORD, 0], [mid.id, 1]]);
+    expect(tree.find(([p]) => p === 'project-b')![1]).toEqual([[leaf.id, 0]]);
+  });
+});
+
+describe('the header title for a review run', () => {
+  it('says the workspace REVIEWS one wave, like the row', () => {
+    const review = run({ id: 42, kind: 'review', reviews: 41, sessionId: 'lane-b-project-b-quiet-river' });
+    const c = coordinationOf(crossChild('project-a'), [coordinator, crossChild('project-a')], [review])!;
+    expect(coordinationLine(c).title).toMatch(/^this workspace reviews one wave of Port the API/);
+  });
+});

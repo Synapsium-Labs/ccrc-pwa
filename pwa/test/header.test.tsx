@@ -1342,6 +1342,12 @@ describe('SessionScreen: the coordination line (D-5527)', () => {
       .toBe('working on project-b · coordinated from project-a · port-api · wave 5 of 7 · run #41');
   });
 
+  it('names the ACTIVE run, never a closed one the store still holds with a higher id', () => {
+    const closed = { ...run41, id: 45, wave: 6, state: 'done', closedAt: 1_800_000_100_000 } as unknown as typeof run41;
+    mount([baseSession({ id: COORD, project: 'project-a', name: 'the coordinator', role: 'coordinator' }), child], [run41, closed]);
+    expect(document.querySelector('.chat-coord')?.textContent).toContain('wave 5 of 7 · run #41');
+  });
+
   it('a session nobody coordinates has no coordination line — the no-regression baseline', () => {
     mount([baseSession({ id: CHILD, project: 'project-b' })], []);
     expect(document.querySelector('.chat-coord')).toBeNull();

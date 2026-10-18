@@ -40,7 +40,7 @@ import { restartWords } from '../lib/restart';
 import { humanBytes } from '../screens/ArchiveScreen';
 import { lifecycleQualifier } from './lifecycleWords';
 import { hibernatedWords } from './hibernated';
-import { childOfRunLabel, type ChildRunContext } from './runWords';
+import { childOfRunLabel, programmeWave, programmeWaveTail, runSentence, type ChildRunContext } from './runWords';
 import { spawnChip } from './spawnWords';
 import { GraphChip, LastSpawnChip, UnmeasuredChip } from './chips';
 import './fleet.css';
@@ -196,6 +196,20 @@ export function SessionMeta({
   // the programme and wave this child is doing, when it is a child.
   // `childOfRunLabel` is the one reader of `session.child`.
   const childOf = childOfRunLabel(session, childRun);
+  // D-5528: every dispatched child is ws-held with `program:<slug> wave:N/M
+  // run:<id>`, so the raw hold cell put the run number back on the row and said
+  // the programme and wave twice. When an ACTIVE run explains the hold, the
+  // programme-and-wave label takes the hold cell's place — the same element, the
+  // run-board door when there is one — and the hold text stays verbatim in its
+  // title (displayed, never parsed). An unreadable child marker keeps both
+  // cells: its hedge, and the raw hold.
+  const activeRun = childRun?.run ?? null;
+  const heldRun = session.held !== null && activeRun !== null && childOf?.data !== 'unreadable'
+    ? activeRun : null;
+  const heldText = heldRun === null ? session.held : programmeWave(heldRun);
+  const heldTitle = heldRun === null || session.held === null ? session.held
+    : `${childOf?.title ?? runSentence(heldRun, childRun?.coordinator ?? null, false)} — hold: ${session.held}`;
+  const heldBody = heldRun === null ? session.held : <ProgrammeWave run={heldRun} />;
 
   // Task 19: the ask pre-emption lane's chip. Through `sessionAsk`, never
   // `session.ask` directly — the live `fleet` frame is cast, not revived
@@ -442,8 +456,8 @@ export function SessionMeta({
               is what stops one tap from ALSO opening the session. */}
           {session.held !== null && (
             onOpenRun === null ? (
-              <span className="sess-held" data-held="true" title={session.held}>
-                {session.held}
+              <span className="sess-held" data-held="true" title={heldTitle ?? undefined}>
+                {heldBody}
               </span>
             ) : (
               <button
@@ -451,11 +465,11 @@ export function SessionMeta({
                 className="sess-held"
                 data-held="true"
                 data-open="true"
-                title={session.held}
-                aria-label={`Open the run board — ${session.held}`}
+                title={heldTitle ?? undefined}
+                aria-label={`Open the run board — ${heldText}`}
                 onClick={onOpenRun}
               >
-                {session.held}
+                {heldBody}
               </button>
             )
           )}
@@ -465,9 +479,9 @@ export function SessionMeta({
               `.sess-substrate`'s shape: a short, fixed,
               never-truncated ink-tertiary fact about which wave this
               workspace is doing. The full sentence lives in `title`. */}
-          {childOf !== null && (
+          {childOf !== null && heldRun === null && (
             <span className="sess-child" data-child={childOf.data} title={childOf.title}>
-              {childOf.text}
+              {childOf.data === 'child' && activeRun !== null ? <ProgrammeWave run={activeRun} /> : childOf.text}
             </span>
           )}
 
@@ -641,5 +655,17 @@ export function SessionMeta({
           </span>
           {offPoolLabel !== null && <span className="sess-offpool">off-pool</span>}
         </span>
+  );
+}
+
+/** `<programme> · wave 5 of 7` as two spans: the programme slug ellipsises at
+ *  phone width, the wave never does (D-5528; fleet.css `.sess-pw`). The text
+ *  is `programmeWave`'s, character for character. */
+function ProgrammeWave({ run }: { run: NonNullable<ChildRunContext['run']> }): ReactNode {
+  return (
+    <span className="sess-pw">
+      <span className="sess-pw-prog">{run.program}</span>
+      <span className="sess-pw-wave">{programmeWaveTail(run)}</span>
+    </span>
   );
 }

@@ -818,8 +818,26 @@ const NO_RUN: ChildRunContext = { run: null, coordinator: null };
  *  run (which carries the wave it reviews). THE one spelling, read by the fleet
  *  row's child label and the session header's coordination line. */
 export const programmeWave = (r: NonNullable<ChildRunContext['run']>): string =>
-  `${r.program} · ${r.kind === 'review' ? `review of wave ${r.wave}`
+  `${r.program}${programmeWaveTail(r)}`;
+
+/** The wave half of `programmeWave`, separator included (` · wave 5 of 7`) —
+ *  split out so the fleet row can ellipsise a long programme slug and keep the
+ *  wave, the fact the operator asked for, whole (D-5528). */
+export const programmeWaveTail = (r: NonNullable<ChildRunContext['run']>): string =>
+  ` · ${r.kind === 'review' ? `review of wave ${r.wave}`
     : r.waveOf === null ? `wave ${r.wave}` : `wave ${r.wave} of ${r.waveOf}`}`;
+
+/** The plain-language sentence for a row an active run names (the label's and
+ *  the run-board door's title). `reclaimed` adds the lifecycle clause, true only
+ *  for a workspace the run minted. */
+export const runSentence = (
+  r: NonNullable<ChildRunContext['run']>, coordinator: string | null, reclaimed: boolean,
+): string => {
+  const programme = r.programTitle !== '' ? r.programTitle : r.program;
+  const verb = r.kind === 'review' ? 'reviews' : 'does';
+  return `this workspace ${verb} one wave of ${programme} for ${coordinator ?? 'its coordinator'}`
+    + (reclaimed ? '; it is stopped or reclaimed when the wave is done' : '');
+};
 
 /**
  * The fleet line's label, projected from `childMarkOf` (the one reader of
@@ -848,13 +866,7 @@ export const childOfRunLabel = (
         title: `minted by run #${m.runId}; no open run on the board names this workspace — the run may have closed, and the server reclaims the workspace when nothing keeps it`,
       };
     }
-    const review = r.kind === 'review';
-    const programme = r.programTitle !== '' ? r.programTitle : r.program;
-    return {
-      text: programmeWave(r),
-      data: 'child',
-      title: `this workspace ${review ? 'reviews' : 'does'} one wave of ${programme} for ${ctx.coordinator ?? 'its coordinator'}; it is stopped or reclaimed when the wave is done`,
-    };
+    return { text: programmeWave(r), data: 'child', title: runSentence(r, ctx.coordinator, true) };
   }
   if (m.kind === 'unreadable') {
     return {

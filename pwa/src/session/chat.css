@@ -403,7 +403,6 @@ button.metachip:active {
 .chat-banner--missing .banner-path {
   font: var(--weight-regular) var(--fs-xs) / var(--lh-mono) var(--family-mono);
   color: var(--ink-secondary);
-  background: var(--bg-surface);
   overflow-wrap: anywhere;
 }
 

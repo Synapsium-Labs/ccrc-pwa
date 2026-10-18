@@ -1266,6 +1266,35 @@
   color: var(--ink-tertiary);
   flex: none;
 }
+/* D-5528 — the programme-and-wave label (`ProgrammeWave` in SessionMeta.tsx),
+   in `.sess-child` or, when an active run explains the hold, in `.sess-held`'s
+   place. The slug is variable-length, so the plain `.sess-child` text's
+   `flex: none` (fixed hedges: "run not on the board", "child marker
+   unreadable") no longer holds for it: the cell shrinks, the PROGRAMME
+   ellipsises, and the wave — the fact the operator asked for — stays whole.
+   `display: flex` on the cell keeps `.sess-meta`'s middot `::before` on the
+   same line as the two halves. No colour here: the cell's own rule answers. */
+.sess-held:has(> .sess-pw),
+.sess-child:has(> .sess-pw) {
+  display: flex;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+.sess-pw {
+  display: flex;
+  min-width: 0;
+}
+/* No `min-width: 0`: a flex item with `overflow: hidden` already shrinks to 0. */
+.sess-pw-prog {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sess-pw-wave {
+  flex: none;
+  white-space: pre;
+}
 
 /* D-5237: "restarted · out of memory · 3m ago", for an hour after a recorded
    process end. The .sess-held register (mono, ink-tertiary) and, like it, a
