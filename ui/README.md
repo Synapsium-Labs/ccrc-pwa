@@ -134,8 +134,12 @@ servers when the runs finish.
 ### Reaching Instrument before there is a picker
 
 Instrument is a preview until its shell lands, and the Settings picker comes
-later. Until the command palette offers "Switch layout", select it from the
-browser console on the app's own page, then reload:
+later. Until then, the command palette selects it: ⌘K (Ctrl+K off a Mac), then
+"Switch layout →", then "Instrument (preview)". "Match this device" on the
+same page returns to the default. Both are remembered per device (D-5103).
+
+Without a keyboard, or before the bundle runs, the browser console on the
+app's own page does the same, followed by a reload:
 
     localStorage.setItem('ccrc-skin', 'instrument')
 

@@ -24,14 +24,18 @@ import { fileURLToPath } from 'node:url';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const OUT = path.join(HERE, '..', 'src', 'icons', 'lucide.ts');
 
-/** The icons in use. Add a name here, re-run, and commit both files. */
+/** The icons in use. Add a name here, re-run, and commit both files.
+ *  `command`, `corner-down-left` and `search` are the palette's (D-5103, D-5457). */
 const NAMES = [
   'bell',
   'bell-off',
+  'command',
+  'corner-down-left',
   'file-text',
   'hand',
   'key-round',
   'mail',
+  'search',
   'settings',
 ];
 
