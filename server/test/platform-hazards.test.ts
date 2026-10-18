@@ -35,6 +35,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { itLinux, itDarwin, platformContrast } from './platformFixtures.js';
+import { makeCcdHarness } from './ccdWsHelpers.js';
+import { unitJson } from './docsHelperPy.js';
 
 const HELPER = path.resolve(__dirname, '../../ccd/ccd-account-auth');
 const CANARY = 'CANARY_PLATFORM_HAZARD_TOKEN';
@@ -360,4 +362,127 @@ describe('R14(i): the UTF-8 locale bash takes here, and whether D-3833/D-3979\'s
     // Whatever number it is: the instrument records the macOS answer and never asserts it.
     expect(p.lines, `${answer}. The line probe gave LINES=${p.lines}.`).toMatch(/^\d+$/);
   });
+});
+
+// ── B2: WHAT DARWIN'S killpg ANSWERS WHILE AN OVERFLOWED LEADER EXITS (centralised update wave 20 follow-up) ──
+// Row 64 of `ccd-docs-tree.test.ts` (a `git status` that overflows a lowered `stdout_cap`) read `unreadable` on the
+// macOS leg in 536 ms after wave 20's fix had made it green there once. Wave 20 absorbs an EPERM from the Docs
+// helper's first `killpg(SIGTERM)` only when `poll()` reaps the leader at that instant. The open hypothesis: Darwin
+// also answers EPERM for a leader that is still EXITING, not yet a zombie a wait can reap, so `poll()` is None and
+// the EPERM raises. This asks the helper's own `Sys.spawn` the question many times, against two writers that
+// overflow 200 bytes and exit at once, and RECORDS each stop: every `killpg` answer, and at each EPERM what
+// `kill(pid, 0)` and a non-reaping `waitid` say of the leader at that moment (and, in the last pass, `ps`'s state).
+// A stop that raised also records how long the leader took to become reapable. `os.killpg` is wrapped through the
+// helper's own `os` seam; the shipped helper is unchanged. Like R14(i), the Darwin arm asserts only that the probe
+// ran, because a red here is a `full-suite` red; the answer is read from the `probe-macos` and `test-macos` logs.
+type B2Pass = { label: string; n: number; tally: Record<string, number>; reapAfterRaise: string[] };
+type B2Report = { python: string; mac: string; git: string; passes: B2Pass[] };
+
+const B2_PROBE = [
+  'import errno, os, platform, subprocess, time',
+  'real = os.killpg',
+  'it = None',
+  'def name(e):',
+  '    return errno.errorcode.get(e.errno, str(e.errno))',
+  'def kill0(pid):',
+  '    try:',
+  '        os.kill(pid, 0)',
+  "        return 'ok'",
+  '    except OSError as e:',
+  '        return name(e)',
+  'def nowait(pid):',
+  "    if not hasattr(os, 'waitid'):",
+  "        return 'n/a'",
+  '    try:',
+  '        r = os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)',
+  '    except OSError as e:',
+  '        return name(e)',
+  "    return 'unexited' if r is None else 'exited'",
+  'def ps(pid):',
+  "    r = subprocess.run(['ps', '-o', 'stat=', '-p', str(pid)], capture_output=True, text=True)",
+  "    return r.stdout.strip() or 'gone'",
+  'def probing(pgid, sig):',
+  '    try:',
+  '        real(pgid, sig)',
+  '    except OSError as e:',
+  "        rec = '%d:%s' % (sig, name(e))",
+  "        if e.errno == errno.EPERM:",
+  "            rec += '(kill0=%s,waitid=%s' % (kill0(pgid), nowait(pgid))",
+  "            if it['ps']:",
+  "                rec += ',ps=%s' % ps(pgid)",
+  "            rec += ')'",
+  "        it['calls'].append(rec)",
+  '        raise',
+  "    it['calls'].append('%d:ok' % sig)",
+  'os.killpg = probing',
+  'class Probe(H.Sys):',
+  '    def _stop(self, proc):',
+  '        try:',
+  '            H.Sys._stop(self, proc)',
+  '        finally:',
+  '            if proc.returncode is None:',
+  '                t0 = time.monotonic()',
+  '                while proc.poll() is None and time.monotonic() - t0 < 5:',
+  '                    time.sleep(0.0005)',
+  "                it['reap'] = '%.1fms' % ((time.monotonic() - t0) * 1000)",
+  'H.SYS = Probe()',
+  'def run(label, argv, cwd, n, with_ps):',
+  '    global it',
+  '    tally, reaps = {}, []',
+  '    for _ in range(n):',
+  "        it = {'calls': [], 'ps': with_ps, 'reap': None}",
+  '        try:',
+  '            sp = H.SYS.spawn(argv, dict(os.environ), cwd, 10, 200)',
+  "            end = 'overflow' if sp.overflow else 'rc %s' % sp.rc",
+  '        except OSError as e:',
+  "            end = 'raised ' + name(e)",
+  "        if it['reap'] is not None:",
+  "            reaps.append(it['reap'])",
+  "        key = '%s <- %s' % (end, ' '.join(it['calls']) or 'no signal')",
+  '        tally[key] = tally.get(key, 0) + 1',
+  "    return {'label': label, 'n': n, 'tally': tally, 'reapAfterRaise': reaps}",
+  "repo = os.path.join(os.environ['HOME'], 'b2-repo')",
+  "status = ['git', 'status', '--porcelain=v2', '-z', '--untracked-files=all']",
+  "gitv = subprocess.run(['git', '--version'], capture_output=True, text=True).stdout.strip()",
+  "out({'python': platform.python_version(), 'mac': platform.mac_ver()[0], 'git': gitv, 'passes': [",
+  "    run('git status', status, repo, 40, False),",
+  "    run('printf', ['printf', '%0400d', '0'], repo, 40, False),",
+  "    run('git status, ps at each EPERM', status, repo, 12, True)]})",
+].join('\n');
+
+describe('B2: what killpg answers while an overflowed leader exits, asked of the Docs helper\'s own stop (wave 20 follow-up)', () => {
+  const probe = (): B2Report => {
+    const h = makeCcdHarness('ccrc-b2-');
+    try {
+      const repo = path.join(h.home, 'b2-repo');
+      fs.mkdirSync(repo);
+      h.git(repo, 'init', '-q');
+      for (let i = 0; i < 20; i++) fs.writeFileSync(path.join(repo, `long-name-${i}-${'x'.repeat(40)}.md`), 'n\n');
+      return unitJson<B2Report>(h.home, B2_PROBE, { timeoutMs: 280_000 });
+    } finally {
+      h.cleanup();
+    }
+  };
+  const ran = (r: B2Report): void => {
+    for (const p of r.passes) {
+      expect(Object.values(p.tally).reduce((a, b) => a + b, 0), `${p.label}: ${JSON.stringify(p)}`).toBe(p.n);
+    }
+  };
+
+  // RECORDED: whichever answers Darwin gives are the measurement.
+  itDarwin('every stop of an overflowed writer — RECORDED: each killpg answer, and the leader\'s state at each EPERM', () => {
+    const r = probe();
+    console.info(`B2 probe on macOS ${r.mac}, python ${r.python}, ${r.git}:\n${JSON.stringify(r.passes, null, 1)}`);
+    ran(r);
+  }, 300_000);
+
+  // The control: Linux signals a group whose leader has exited unreaped with rc 0, so no stop meets an EPERM.
+  itLinux('every stop of an overflowed writer — the SIGTERM is delivered or meets an empty group, never EPERM, and every stop returns', () => {
+    const r = probe();
+    console.info(`B2 probe on Linux, python ${r.python}, ${r.git}:\n${JSON.stringify(r.passes, null, 1)}`);
+    ran(r);
+    for (const p of r.passes) {
+      expect(Object.keys(p.tally).filter((k) => !k.startsWith('overflow <- ') || k.includes('EPERM')), JSON.stringify(p)).toEqual([]);
+    }
+  }, 300_000);
 });

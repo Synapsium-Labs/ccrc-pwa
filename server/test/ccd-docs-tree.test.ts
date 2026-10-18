@@ -2302,7 +2302,8 @@ describe('docs draft snapshot (docs W1a Task 14)', () => {
       const { wt, head } = t14holder({ [`${T14_S}a.md`]: 'aaaa\n' });
       for (let i = 0; i < 20; i++) t14fs.writeFileSync(t14path.join(wt, T14_S, `long-name-${i}-${'x'.repeat(40)}.md`), 'n\n');
       const o = t14phase({ served: head, kw: 'stdout_cap=200' });
-      expect(o.facts).toMatchObject({ state: 'too-many', branch: 'ws/a', worktree: wt });
+      // The message carries the whole facts: an `unreadable` here names its step and detail (wave 20 follow-up).
+      expect(o.facts, JSON.stringify(o.facts)).toMatchObject({ state: 'too-many', branch: 'ws/a', worktree: wt });
       expect(o.facts['bytes']).toBe(200);
       expect(o.facts['count']).toBeLessThan(20);
       expect(o.entries).toBe(1);
