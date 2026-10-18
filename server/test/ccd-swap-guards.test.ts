@@ -465,3 +465,34 @@ describe('ccd caps', () => {
     expect(h.sh('cmd_caps').split('\n')).toContain('swap-busy-v1');
   });
 });
+
+// ── a woken row takes no cosmetic swap (`hibernate-long-idle-sessions` (D-5242)) ──
+// A wake is a cold `--resume`; an affinity move straight after it would pay a second one. `.woke` (the epoch
+// `ensure` writes when it clears `.hibernated`) holds the affinity arm for SWAP_COOLDOWN. The rescue arm is not
+// held: a session on a blocked account is still evacuated.
+describe('a woken row takes no affinity swap for SWAP_COOLDOWN (D-5242)', () => {
+  const arrange = (wokeAgoS: number | null): void => {
+    seed('claude'); pane('❯ '); live('claude', 'idle');
+    fs.writeFileSync(regPath('lastswap'), String(nowS() - 5000));
+    if (wokeAgoS !== null) fs.writeFileSync(regPath('woke'), String(nowS() - wokeAgoS));
+  };
+
+  it('a wake 60 s ago: the affinity arm dispatches nothing', () => {
+    arrange(60);
+    decide();
+    expect(detached()).toEqual([]);
+    expect(h.reg(ID, 'wrapper')).toBe('claude');
+  });
+
+  it('control: a wake older than SWAP_COOLDOWN dispatches as before', () => {
+    arrange(5000);
+    decide();
+    expect(detached()).toHaveLength(1);
+  });
+
+  it('control: no .woke dispatches as before', () => {
+    arrange(null);
+    decide();
+    expect(detached()).toHaveLength(1);
+  });
+});

@@ -765,8 +765,9 @@ describe('every stop that a spawn follows keeps the operator\'s choice first', (
   // must call `_operator_choice_keep` as the statement before its stop, or a
   // stop after which no spawn follows, with the reason. A NEW function that
   // stops a session is in neither list, and this reds until it is classified.
-  it('every stop in ccd is classified: three keep the operator\'s choice first, the rest end the row', () => {
-    const KEEPS = ['cmd_stop', 'cmd_swap', 'cmd_ws_archive'];
+  it('every stop in ccd is classified: four keep the operator\'s choice first, the rest end the row', () => {
+    // `cmd_hibernate` (D-5242) is a stop a spawn follows: `ensure` or `start` wakes it from the record.
+    const KEEPS = ['cmd_stop', 'cmd_swap', 'cmd_ws_archive', 'cmd_hibernate'];
     // EVERY SPAWN READS, at ONE choke point: `_spawn_start` calls the keep itself — a
     // revival follows no ccd stop (Claude Code exited, most often a pane-scope OOM kill,
     // and `_supervised_start`'s two unsupervised fallbacks and ws-restore are spawns
@@ -815,6 +816,13 @@ describe('every stop that a spawn follows keeps the operator\'s choice first', (
         expect(src[i]).toMatch(/^ {2}\[\[ -e "\$REG\/\$id\.choicekept" \]\] \|\| _operator_choice_keep "\$id" /);
         expect(src[i + 1]).toMatch(/^ {2}_typed_note "\$id" since /);
         expect(src[i + 2]).toMatch(/^ {2}rm -f "\$REG\/\$id\.choicekept" /);
+      }
+      if (fn === 'cmd_hibernate') {   // the keep, then (past the comment) the marker, the unsupervise and the kill
+        expect(src[i]).toMatch(GUARD);
+        const next = src.slice(i + 1).filter(live).slice(0, 3);
+        expect(next[0]).toMatch(/^ {2}_reg_set "\$id" hibernated /);
+        expect(next[1]).toMatch(/^ {2}_ws_unsupervise "\$id" ccd$/);
+        expect(next[2]).toMatch(UNMARK);
       }
       if (fn === 'cmd_ws_archive') {
         expect(src[i]).toMatch(/^ {2}\[\[ -e "\$REG\/\$id\.choicekept" \]\] \|\| _operator_choice_keep "\$id"; _ws_unsupervise "\$id" /);

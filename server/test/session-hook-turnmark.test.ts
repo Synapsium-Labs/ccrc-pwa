@@ -208,7 +208,7 @@ const turnMark = (): any => JSON.parse(turnRaw());
 const plantTurn = (line: string): void => { fs.writeFileSync(turnFile(), line); };
 /** The writer's key order: the base object in TURN_MARK_PROGRAM fixes it. */
 const TURN_KEYS: readonly string[] = ['v', 'sessionId', 'state', 'event', 'at', 'turnAt', 'stopAt', 'bg', 'bgKinds',
-  'bgIds', 'err', 'restartAt', 'lostBg', 'lostKinds', 'lostIds'];
+  'bgIds', 'err', 'restartAt', 'lostBg', 'lostKinds', 'lostIds', 'crons'];
 
 /** The delegation join record (`<id>.joined`, delegation broker wave 3): one agent id per line, exactly as the payload sent it
  *  (only an id that is already a plain `[A-Za-z0-9_-]{1,64}` is ever recorded), appended by a SubagentStart. `undefined`
@@ -226,7 +226,7 @@ describe('the turn marker (§5.1)', () => {
   /** A Stop's line with nothing carried: what the writer emits over a foreign or unreadable previous line. */
   const freshStop = (at: number): Record<string, unknown> => ({ v: 1, sessionId: 'uuid-1', state: 'done',
     event: 'Stop', at, turnAt: null, stopAt: at, bg: -1, bgKinds: '', bgIds: '', err: null, restartAt: null,
-    lostBg: 0, lostKinds: '', lostIds: '' });
+    lostBg: 0, lostKinds: '', lostIds: '', crons: -1 });
 
   it("UserPromptSubmit on no marker writes ONE line, exactly, keys in the writer's order", () => {
     const t0 = Date.now();
@@ -238,7 +238,7 @@ describe('the turn marker (§5.1)', () => {
     expect(at).toBeLessThanOrEqual(t1);
     expect(raw).toBe(JSON.stringify({ v: 1, sessionId: 'uuid-1', state: 'working', event: 'UserPromptSubmit', at,
       turnAt: at, stopAt: null, bg: -1, bgKinds: '', bgIds: '', err: null, restartAt: null, lostBg: 0,
-      lostKinds: '', lostIds: '' }) + '\n');
+      lostKinds: '', lostIds: '', crons: -1 }) + '\n');
     expect(Object.keys(JSON.parse(raw))).toEqual(TURN_KEYS);
   });
 
@@ -477,7 +477,7 @@ describe('the turn marker (§5.1)', () => {
     // would end the constant early, and this is where that shows.
     expect(body.trimEnd().endsWith('else empty end'), 'the constant ends where the program does').toBe(true);
     const names = [...new Set([...body.matchAll(/\$([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]!))].sort();
-    expect(names).toEqual(['at', 'b', 'bg', 'bgi', 'bgk', 'err', 'ev', 'k', 'kind', 'p', 'prev', 'raw', 'same', 'sid']);
+    expect(names).toEqual(['at', 'b', 'bg', 'bgi', 'bgk', 'crons', 'err', 'ev', 'k', 'kind', 'p', 'prev', 'raw', 'same', 'sid']);
     expect(src.split('"$TURN_MARK_PROGRAM"').length - 1, 'one use, one jq').toBe(1);
   });
 });
@@ -544,7 +544,7 @@ describe('the turn marker across a restart (§5.1, SessionStart)', () => {
     const m = turnMark();
     expect(m).toEqual({ v: 1, sessionId: 'uuid-2', state: 'done', event: 'SessionStart', at: m.at, turnAt: null,
       stopAt: null, bg: 0, bgKinds: '', bgIds: '', err: null, restartAt: m.at, lostBg: 0, lostKinds: '',
-      lostIds: '' });
+      lostIds: '', crons: -1 });
   });
 
   it('clear writes the fresh line', () => {
@@ -553,7 +553,7 @@ describe('the turn marker across a restart (§5.1, SessionStart)', () => {
     const m = turnMark();
     expect(m).toEqual({ v: 1, sessionId: 'uuid-1', state: 'done', event: 'SessionStart', at: m.at, turnAt: null,
       stopAt: null, bg: -1, bgKinds: '', bgIds: '', err: null, restartAt: null, lostBg: 0, lostKinds: '',
-      lostIds: '' });
+      lostIds: '', crons: -1 });
   });
 
   it('compact leaves the marker byte-identical (D-306: it fires mid-turn)', () => {
@@ -1479,5 +1479,72 @@ describe('only an agent id with a qualifying join is a subagent to the turn mark
       expect(withSpool, 'jq forks per event, spool present vs absent').toEqual(without);
       expect(Math.min(...withSpool), 'and the parse is among them').toBeGreaterThanOrEqual(1);
     });
+  });
+});
+
+// ── The marker's `crons` (hibernation, Task 16, `hibernate-long-idle-sessions` (D-5242)) ──
+// A main Stop records the LENGTH of `session_crons` (Claude Code's session-scoped crons and wakeups, which no
+// live word, background list or roster shows [B]); −1 when the key is absent or not an array. Carried on every
+// other kind for the same session, −1 on `clear` and for a foreign line. The payload is the committed five-kinds
+// Stop (`fixtures/hook/stop-bg-five-kinds.json`, every key kept), with only `session_crons` edited.
+describe('the turn marker counts session_crons (D-5242)', () => {
+  const FIVE_KINDS = path.resolve(__dirname, 'fixtures/hook/stop-bg-five-kinds.json');
+  const fiveKinds = (): Record<string, unknown> =>
+    JSON.parse(fs.readFileSync(FIVE_KINDS, 'utf8')) as Record<string, unknown>;
+  /** One cron in the schema's own shape [B]. */
+  const CRON = { id: 'c0000001', schedule: '0 9 * * 1-5', recurring: true, prompt: 'fixture' };
+  const stopCrons = (crons: unknown): Record<string, unknown> => ({ ...fiveKinds(), session_crons: crons });
+  const stopNoCrons = (): Record<string, unknown> => { const p = fiveKinds(); delete p['session_crons']; return p; };
+
+  it('a Stop with one session cron writes crons: 1, as the last key', () => {
+    run(stopCrons([CRON]));
+    const m = turnMark();
+    expect(m).toMatchObject({ state: 'done', event: 'Stop', crons: 1 });
+    expect(Object.keys(m)).toEqual(TURN_KEYS);
+  });
+
+  it('an empty session_crons writes 0', () => {
+    run(stopCrons([]));
+    expect(turnMark().crons).toBe(0);
+  });
+
+  it('no session_crons key, or one that is not an array, writes -1, never 0', () => {
+    run(stopNoCrons());
+    expect(turnMark().crons).toBe(-1);
+    run(stopCrons({ a: CRON }));
+    expect(turnMark().crons).toBe(-1);
+    run(stopCrons('x'));
+    expect(turnMark().crons).toBe(-1);
+  });
+
+  it('a UserPromptSubmit after it carries the count; a later Stop with none resets it to 0', () => {
+    run(stopCrons([CRON, { ...CRON, id: 'c0000002' }]));
+    run({ hook_event_name: 'UserPromptSubmit' });
+    expect(turnMark()).toMatchObject({ state: 'working', crons: 2 });
+    run(stopCrons([]));
+    expect(turnMark()).toMatchObject({ state: 'done', crons: 0 });
+  });
+
+  it('a StopFailure and a resume carry it; clear writes -1', () => {
+    run(stopCrons([CRON]));
+    run({ hook_event_name: 'StopFailure', error: 'server_error' });
+    expect(turnMark()).toMatchObject({ state: 'failed', crons: 1 });
+    run({ hook_event_name: 'SessionStart', source: 'resume' });
+    expect(turnMark()).toMatchObject({ crons: 1 });
+    run({ hook_event_name: 'SessionStart', source: 'clear' });
+    expect(turnMark().crons).toBe(-1);
+  });
+
+  it('a line under ANOTHER session id carries nothing: -1', () => {
+    run(stopCrons([CRON]));
+    run({ hook_event_name: 'UserPromptSubmit' }, { CLAUDE_CODE_SESSION_ID: 'uuid-2' });
+    expect(turnMark()).toMatchObject({ sessionId: 'uuid-2', crons: -1 });
+  });
+
+  it('an older line with no crons key carries as -1', () => {
+    plantTurn(JSON.stringify({ v: 1, sessionId: 'uuid-1', state: 'done', event: 'Stop', at: 5, turnAt: 4, stopAt: 5,
+      bg: 0, bgKinds: '', bgIds: '', err: null, restartAt: null, lostBg: 0, lostKinds: '', lostIds: '' }) + '\n');
+    run({ hook_event_name: 'UserPromptSubmit' });
+    expect(turnMark()).toMatchObject({ state: 'working', crons: -1 });
   });
 });

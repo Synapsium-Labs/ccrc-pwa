@@ -269,10 +269,11 @@ describe('measure-working-state.py --section snapshot', () => {
     hook('project-a-quiet-basin', sidOf(3), stopWith((fiveKinds()['background_tasks'] as Record<string, unknown>[])
       .filter((t) => t['type'] === 'shell')), { updatedAt: NOW - 2 * MIN });
     live(103, sidOf(3), 'busy', NOW - 10 * MIN);
-    // D: idle with an aged working/PostCompact (auto), its last main event (a Stop) 3 h ago; no `crons` field.
+    // D: idle with an aged working/PostCompact (auto), its last main event (a Stop) 3 h ago; no `crons` field
+    // (an older hook's marker: today's hook writes `crons` from the Stop's `session_crons`, D-5242, so it is dropped).
     row('lane-b-project-d', sidOf(4));
     hook('lane-b-project-d', sidOf(4), stopWith([]), { updatedAt: NOW - 181 * MIN });
-    hook('lane-b-project-d', sidOf(4), postCompact('auto'), { updatedAt: NOW - 180 * MIN });
+    hook('lane-b-project-d', sidOf(4), postCompact('auto'), { updatedAt: NOW - 180 * MIN }, { crons: undefined });
     live(104, sidOf(4), 'idle', NOW - 179 * MIN);
     // E: idle with a fresh done/PostCompact (manual): a no-turn badge; last main event 7 h ago, a cron scheduled.
     row('lane-b-project-e', sidOf(5));
