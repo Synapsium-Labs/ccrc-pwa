@@ -369,3 +369,8 @@ Run 561 was issued D-5277 to D-5288 at dispatch. Each number is defined here whe
   the branch point with a phrase search (edition plans, licensing strategy, competition, employer and ownership,
   copyright, customers). Neighbouring sentences carried the same matter, so more lines were reworded than the entry
   named; each reworded `path:line` is in the local `info/ccrc-scrub/operator-read.txt`, for the operator to read.
+- **D-5284** — `byte-pin-is-a-blob-id` (Task 3 Step 2): the 2026-08-11 crossrepo specification's byte-identity pin now
+  compares the file's git blob id (`git hash-object --no-filters`) with the id of the swept bytes, beside its four
+  content literals, instead of comparing it with `origin/main`. The sweep had to edit the file, and after this lands
+  an `origin/main` comparison would compare the file with itself. The blob id needs no new import, so the edit to the
+  swept test stays line-neutral. Measured: a one-byte edit to the specification reds the pin.

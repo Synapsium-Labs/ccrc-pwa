@@ -263,7 +263,7 @@ describe('the coordinator skill: its contract', () => {
     expect(s6, 'a copy-before-close instruction is back').not.toContain('copy its report');
     expect(s6).toContain('it stays until a human cleans it up');
     // Workspace lifecycle wave 3b: an ARCHIVED workspace with no child marker is the server's to clean up seven days
-    // after its archive — and a child that has coordinated keeps its marker, so it is still a human's (CCR-15).
+    // after its archive — and a child that has coordinated keeps its marker, so it is still a human's (#166).
     expect(s6).toContain('or — when it carries no child marker — until the server cleans it up seven days after it is archived');
     // …and says WHEN (the coordinator's ruling): only once the operator has armed the lane; until then it only records. The
     // skill files never name the lane's marker file, so the condition is told in words.
@@ -2518,16 +2518,16 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec �
     });
   });
 
-  it('keeps the superseded 2026-08-11 specification byte-identical to origin/main', () => {
+  it('keeps the superseded 2026-08-11 specification byte-identical to its swept record', () => {
     const historicalPath = 'docs/superpowers/specs/2026-08-11-crossrepo-programmes-design.md';
     const historical = readFileSync(path.join(root, historicalPath));
-    const baseline = execFileSync('git', ['show', `origin/main:${historicalPath}`], { cwd: root });
-    expect(historical).toEqual(baseline);
+    const blob = execFileSync('git', ['hash-object', '--no-filters', historicalPath], { cwd: root }).toString().trim();
+    expect(blob, 'the frozen 2026-08-11 ruling record was edited').toBe('33025c763bb16faaa06c55cd53359eda65f0dce5');
 
-    // The comparison above is against a MOVING ref, and it says nothing about
-    // WHAT the file holds: once this branch merges it compares the file to
-    // itself, so from that moment it pins "unchanged since whatever main says"
-    // rather than the ruling this document exists to preserve. The literals
+    // The blob id above is this record as the private-name sweep left it (run
+    // 561: neutral stand-ins, line-neutral, no ruling touched), so any later
+    // edit reds it. It replaced a comparison with origin/main, which the sweep
+    // had to change and which, once merged, compares the file to itself. The literals
     // below are the content half — Q1's refusal and Q2's requirement, the two
     // rulings every later wave cites — so an edit that lands on main and then
     // propagates here still reds.
