@@ -4345,6 +4345,20 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       raises a grace period later, not at once. The worker reports its red row, M1 to M8 and the gate as measured.
     - Next: a post-fix `probe-macos`, one record commit, then the full run on the final tip, which I dispatch, a
       scoped review, and the merge.
+  - **16:10 UTC: B2's follow-up verified at `453170331` (mail 6448); review run 609 dispatched (swift-prairie).**
+    - The tip is PR #607's head, out of draft. Four files: `ccd/ccd` (21 added, 14 removed, its hunks the stamp,
+      `_stop` and `_signal_group`), the docs-tree test, platform-hazards and the plan. `mark.mjs --check` reads
+      `ccrc-unmodified`; the merge-tree with `main` (`c067b0c84`) is clean; PR CI 39140658244 is green.
+    - The macOS proof, full run 39140769427: row 64 green (job 117716174711, 533 ms); `ccd-docs-index` whole and
+      the B2 probe green, all 92 stops returning (job 117716174649); every Linux leg green. Its `full-suite` is
+      red only on the delegation broker's macOS files: delegation-hooks' 3, session-hook-turnmark's 7, and
+      `delegation-spool`'s line-size case (a 4948-byte line against 4096, job 117716174716; green in main's two
+      samples, so intermittent). The broker's coordinator has that last one (mail 6449).
+    - Its suite word is `red` with `failure: unclear`, honestly: none of the reds is this wave's.
+    - Run 566 advanced through working to awaiting-review. Review 609's scope is the whole small wave: the fix
+      (no live leak, bounded, the SIGKILL rule), the evidence by job id, the rows and mutations (M7, M9 or M10
+      measured), the two diagnostics, the deferred notes and the records. Held-out panel plus a process-safety
+      lens.
 
 ## Carried constraints
 
