@@ -4,7 +4,7 @@
 // claimant rules (`POST /api/approvals/:id/rule`) and the server signs; the hook fetches the ruling with its nonce.
 // Every ruling here is verified with the shipped verifier's own function (`ccd/approval-verify.mjs`).
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { verdictFor } from '../../ccd/approval-verify.mjs';
 import { APPROVAL_CWD_TRUSTED, APPROVAL_REFUSALS_LOG } from '../../shared/api.js';
@@ -273,6 +273,74 @@ describe('POST /api/approvals/:id/rule — the claimant rules, and the server si
     const got = (await f.ruling(id, body['nonce'] as string)).json() as Record<string, unknown>;
     expect(got).toEqual({ state: 'declined' });
     expect((await f.rule(id, PARENT, 'allow')).json()).toMatchObject({ error: 'declined' });
+  });
+});
+
+describe('the rule and release routes\' own gates (spec §6.3 server step 5, §6.8, D-5441)', () => {
+  it('either kill switch placed after the mint: the ruling is 409 approvals-disabled and nothing is signed', async () => {
+    for (const where of ['.cc-sessions', '.ccrc']) {
+      const g = await standardFixture();
+      try {
+        const { id } = await ask(g);
+        writeFileSync(path.join(g.home, where, 'approvals-disabled'), '');
+        const res = await g.rule(id, PARENT, 'deny');
+        expect(res.statusCode, where).toBe(409);
+        expect(res.json(), where).toMatchObject({ error: 'approvals-disabled' });
+        expect({ state: rowOf(g, id).state, ruling: rowOf(g, id).ruling }, where).toEqual({ state: 'held', ruling: null });
+      } finally { await g.close(); }
+    }
+  });
+
+  it('a single box whose opt-in was withdrawn after the mint: the ruling is 409 single-box and nothing is signed', async () => {
+    f = await standardFixture({ role: 'both' });
+    const optIn = path.join(f.home, '.ccrc', 'approvals-single-box');
+    writeFileSync(optIn, '');
+    const { id } = await ask(f);
+    expect(rowOf(f, id).state).toBe('held');
+    rmSync(optIn);
+    const res = await f.rule(id, PARENT, 'deny');
+    expect(res.json()).toMatchObject({ error: 'single-box' });
+    expect({ state: rowOf(f, id).state, ruling: rowOf(f, id).ruling }).toEqual({ state: 'held', ruling: null });
+  });
+
+  it('a hand-over by anyone but the held-for claimant is 403 not-parent, and the row stays held', async () => {
+    f = await standardFixture();
+    const { id } = await ask(f);
+    for (const who of [CHILD2, FAR, CHILD]) {
+      const res = await f.release(id, who);
+      expect(res.statusCode, who).toBe(403);
+      expect(res.json(), who).toMatchObject({ error: 'not-parent' });
+    }
+    expect(rowOf(f, id).state).toBe('held');
+  });
+
+  it('the child re-marked to another run of the same claimant after the mint: the ruling is not-a-child', async () => {
+    f = await standardFixture();
+    const { id } = await ask(f);
+    const again = f.run(PARENT, CHILD);
+    f.child(CHILD, again);
+    const res = await f.rule(id, PARENT, 'deny');
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: 'not-a-child' });
+    expect(rowOf(f, id).state).toBe('held');
+  });
+
+  it('the signed record expires at the window\'s end, the row\'s notifyAt (D-5441)', async () => {
+    f = await standardFixture();
+    const { id, body } = await ask(f);
+    expect((await f.rule(id, PARENT, 'deny')).statusCode).toBe(200);
+    const answer = (await f.ruling(id, body['nonce'] as string)).json() as { ruling: { record: { expiresAt: number } } };
+    expect(answer.ruling.record.expiresAt).toBe(rowOf(f, id).notifyAt);
+  });
+
+  it('GET /api/approvals/:id: the claimant reading its own row minted released (parent-not-live) is 403', async () => {
+    f = await standardFixture();
+    f.gone.add(PARENT);
+    const { id } = await ask(f);
+    f.gone.delete(PARENT);
+    expect(rowOf(f, id).parentId).toBe(PARENT);
+    const res = await f.app.inject({ method: 'GET', url: `/api/approvals/${id}?fromId=${PARENT}&fromUuid=${uuidOf(PARENT)}`, headers: TOK });
+    expect(res.statusCode).toBe(403);
   });
 });
 
