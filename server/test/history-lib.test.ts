@@ -111,6 +111,7 @@ describe('every ccd/history module and history test fixture keeps its ring (spec
     'cli.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' },
     // W1-B2 Task 8: node derivation, L4. sweep.mjs imports it, so it imports nothing of the sweep or the CLI back (§6.4).
     'derive.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' },
+    'card.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' },
     'recall.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' },
     'regex-worker.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' || s === './recall.mjs' },
   };

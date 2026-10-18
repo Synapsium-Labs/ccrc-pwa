@@ -23,7 +23,7 @@ never links work by a name, a path, a time or a working directory.
 |---|---|---|---|---|---|---|
 | 1 | 1 Measure | `SessionEnd` registered (captured in a `-hookcap` session, otherwise inert); the capture reducer's delegation block; the mock-API capture rig in the tree; the fixture corpus and its derived matrix; a read-only on-box census | fleet (the hook and installer reach homes through `ccrc update`); tests | — | #284 | **merged** 2026-10-06 as `22b4eabda` after reviews 277, 296 and 304 and two fix rounds; run 271 closed `done`; review 304's 13 findings carried to wave 2 as residue |
 | 2 | 1 Measure (close-out) | the real-lane cross-check (a worker runs two `-hookcap` lanes); a capture of every fleet Claude Code version the corpus lacks; review 304's residue; one re-capture script | tests and docs (the hook and installer unchanged) | 1 | #321 | **merged** 2026-10-13 as `4967dc495`, a plain merge of exact head `823efd3eb` (fix round 5, which absorbed `main`), adding history only; its content first reached `main` inside #340's squash `081636389` on 2026-10-10, byte-identical to `e183237e5`, the tip review 334 accepted; run 306 closed `done` |
-| 3 | 2 Observe | exact-pane and turn-marker corrections; current-lane recapture; bounded hook spools; additive byte-safe ingestion; journal/checkpoint and one complete `delegation_*` migration; census, correlation and report-only reconciliation; checkpoint-owned health; delegation-hooks doctor; coordinator intent and clause 17 | fleet first, then server; skills/doctor | 2 | — | **dispatched** 2026-10-14 00:25:04Z: run 360 to a fresh child (`ccrc-pwa-soft-delta`, branch `ws/soft-delta`) with all 16 items, from plan commit `081636389`, after every overlapping claim's holder consented (decisions below); plan and O1–O5 operator-approved 2026-10-09; block 4633–4664 |
+| 3 | 2 Observe | exact-pane and turn-marker corrections; current-lane recapture; bounded hook spools; additive byte-safe ingestion; journal/checkpoint and one complete `delegation_*` migration; census, correlation and report-only reconciliation; checkpoint-owned health; delegation-hooks doctor; coordinator intent and clause 17 | fleet first, then server; skills/doctor | 2 | #448 | **merged** 2026-10-18 as `46c50a9a4` (03:04:32Z), a squash of head `1ee3c784a`, after reviews 518, 533, 544, 556, 563, 578 and 583; run 360 closed `done`; dispatched 2026-10-14 00:25:04Z: run 360 to a fresh child (`ccrc-pwa-soft-delta`, branch `ws/soft-delta`) with all 16 items, from plan commit `081636389`, after every overlapping claim's holder consented (decisions below); plan and O1–O5 operator-approved 2026-10-09; block 4633–4664 |
 | 4 | 3 Project | the `delegation` frame; activity and lease rows in the PWA; a ccd prune of absent owners' spool directories (operator ruling 2026-10-14) | server + pwa, plus the fleet box for the ccd prune (order set by its plan) | 3 | — | to plan |
 | 5 | 4 Adopt | `ws-lease-mark` and carriers; read-only `ws-lease-audit`; adoption; digest mail; retain and resolve; promotion through `ws-add --base` | **AGENT-FIRST**, then server | 4 | — | to plan |
 | 6 | 5 Clean (shadow) | audit tokens for due leases; shadow rows; the shadow review | server | 5 | — | to plan |
@@ -803,6 +803,190 @@ departures found mid-wave (Tasks 4–6's rig fixes among them). Numbers not used
     registry row is gone and the directory's newest bucket is more than 24 hours old: the same day of ingestion the
     spec gives a live owner.
   - That makes wave 4 a ccd change as well, so its plan sets a deploy class that includes the fleet box.
+- **2026-10-14 to 2026-10-18 — other programmes shared wave 3's files by consent.** Each consent names its regions.
+  Whichever PR lands second merges `main` (never a rebase), keeps both sides, re-points citations by content and
+  re-runs the touched suites.
+  - Run 308 (`ccrc-pwa-quiet-river`), mails 5003 and 5005: run 308 edits its named `ccd/ccd` functions
+    (`_resume_env`'s body, `_sync_uuid`, the operator-choice functions); wave 3 keeps its `_reg_purge` line, its spool
+    helper and its `cmd_caps` word. In return, wave 3's Task 14 adds only its new `delegation-hooks` doctor check. 5005
+    adds that the second-lander steps never license a merge of `main` on their own; worker clause 16 still decides.
+  - Run 413 (5112, 5113), on `server/test/single-definition.test.ts`: own lines only; if both append a describe at the
+    end of the file, run 413's stays last.
+  - Run 400 (5149), on `shared/api.ts` and `server/test/single-definition.test.ts`: keep both sides, with wave 3's foot
+    block after `main`'s and run 400's.
+  - Run 399 (5103, worker to worker under clause 11): additive hunks in `server/src/watch.ts` and
+    `server/test/divergence-sweep.test.ts`, off the regions 5103 lists.
+  - Centralised update waves 15 and 16 (5255), path identity wave 2 (5339) and centralised update wave 19, run 483
+    (5448): each fenced to its own functions or lines, and off wave 3's.
+  - `README.md` and `CLAUDE.md` were held by run 468 (`ccrc-pwa-plain-mesa`). It consented to each in-place edit wave 3
+    made there (5227, 5233, 5248, 5352, 5441, 5514, 5743, 5827, 5879). Its 6109 raised no objection to any notice sent
+    (5938, 6025, 6046 and 6069 had gone unanswered) and said none is needed in future.
+- **2026-10-15 — operator rulings: a torn journal tail heals itself, and wave 4 fixes the installer's foreign-hook
+  drop.**
+  - D-4642 had a torn journal tail block capture and every caller. Offered three options, the operator answered "we
+    need a self-healing mechanism for this" (coordinator mail 5246). Task 8C built it as D-4655, which supersedes
+    D-4642.
+  - Healable means bytes after the last LF only, with every complete record valid, the chain intact, and the
+    checkpoint naming a complete record or none. Anything else is corruption and stays fail-closed.
+  - The server, the journal's sole writer, heals inside the serialised applier. It quarantines the torn bytes under
+    `~/.ccrc` (never deletes them), fsyncs, truncates to the last complete record and fsyncs again. Capture never
+    writes the journal: on a healable tail it captures the complete prefix and records the tail's length and SHA-256
+    in an additive manifest field.
+  - A heal is reported, never silent and never a doctor FAIL. Mail 5424 made one more case a must-fix: a heal that the
+    process dies before reporting is reported at the next boot, from the quarantine directory alone.
+  - The same day the operator chose option B for the installer. `ccd/install-session-hooks.sh`'s `JQ_UNMANAGED` filter
+    drops every hook group, under any event, that holds a `/session-hook.sh` command, foreign commands in it included.
+    Wave 3 leaves the installer as it is; its new doctor fixer refuses a home with such a mixed group and leaves
+    `settings.json` byte-identical (R55, widened in the answer to mail 5179). Wave 4 owns the installer fix: a per-hook
+    sweep that removes only ccrc's own command and keeps a backup.
+- **2026-10-15 to 2026-10-16 — the bounds for the worker's own lane rulings (coordinator mail 5213).**
+  - A lane change is the worker's to rule only when it lives in lane memory or inside the normal durable application,
+    adds no file and no SQLite-only state, leaves the journal untouched, and moves verdicts only toward unmeasured
+    (D-4008's direction). A second durable file, journal compaction, the O5 order and the O3 snapshot contents stay the
+    operator's.
+  - Accepted inside those bounds: R65 and rung 4's 20-minute margin (5354); R67 to R69 (5387); R70 for
+    `refused-project`, its `not-a-checkout` arm only on 5387's condition, which R71's streak carries; R73 to R75 (5406,
+    5424); R77 (5439); M-A and D-4658 (one durable application per pass; 5443); and D-4659 (lost evidence never decides
+    a link; R84). Each lane mark states what sets and clears it, with a safety row and a liveness row.
+  - Accepted apart from those bounds: D-4656, the intent door exempt like the claim lanes, as the plan corrected to
+    the spec's route row (5354).
+  - Rung 4's margin rests on Claude Code's 10-minute ceiling for a foreground Bash call. Measured on the fleet box on
+    2026-10-16 (5443): no home and no running Claude Code process sets `BASH_MAX_TIMEOUT_MS` or
+    `BASH_DEFAULT_TIMEOUT_MS`. A doctor WARN for either variable goes to wave 4.
+- **2026-10-16 — operator ruling on rung 4: "Keep, decide later".** The worker's question (5472) was a creator outside any
+  hook window, such as a background job, getting a wrong permanent lease. The coordinator's answer (5477) named the
+  whole class no hook can bracket: background Bash and Monitor calls, children a foreground call leaves running, calls whose text lacks the
+  worktree token, tools that are not Bash, sessions with no spool, creators filed under another repository, and
+  anything outside Claude Code. Across that class rung 4 contradicts spec §5.1 and §5.3. The coordinator declined a
+  narrow hook fix and asked the operator.
+  - The ruling (relayed in 5480): wave 3 journals rung-4 links as designed, each traceable to its bracketing command.
+    Before wave 4 displays anything, the operator rules on how soak-era and later rung-4 links are treated.
+  - It changed no linking. It made the identification answer load-bearing: every rung-4 lease the soak creates is
+    listable from the journal with its creator's `toolUseId` and both listings. Four gaps go to the operator with wave
+    4's plan: the lost-evidence context is not kept with the lease; other sessions' calls around a lease are not held;
+    hook-level drops and sessions with no spool leave no trace; and the listing's common dir is never recorded.
+  - Measured by the worker (5493): the census lists linked worktrees only, so a worktree-naming Bash call from a main
+    checkout matches no tree and vetoes every repository. Rung 4 is expected to read largely unresolved or unmeasured
+    live. Attributing main checkouts (Q-W4) goes to wave 4.
+- **2026-10-16 — re-review B ruled, the M-B fields licensed, and #448 opened (mails 5497 and 5504).**
+  - Re-review B's Q2/F4, ruled "keep the letter" (5497): of 66 active session units, 0 lacked a generation file, so a
+    fold toward linking bought nothing measured. Incarnation-absent owners are named in wave-done and the README, and
+    go to wave 4 beside hook presence if they matter during the soak.
+  - B-F1 (important) was fixed as R85: a held `Pre` with no `Post` is lost evidence (§5.3).
+  - The M-B field licence (5504): `foundAtBoot?: true` on the tail-heal surface D-4655 names, and
+    `tailQuarantineUnmeasured?: true` on delegation health. Both are additive, under protocol 1, and mark the heal
+    report unmeasured, not the lane's verdict. Review 518's F8 later found these fields had no D-entry.
+  - #448 opened at head `db97d89c4` (5503).
+- **2026-10-16 — wave 3's first wave-done verified (mail 5507); review 518.** The tip, the handoff commit and #448's
+  head were all `6d7ae4990`, and all 16 items settled `done`. The worker sent `suite: red` (box-only reds and named
+  flakes; the full run at `db97d89c4` had no branch-red file) and `failure: shallow`.
+  - Reviewer `ccrc-pwa-swift-river`, at `6d7ae4990`. Panel complete: 45 agents, 13 confirmed, 1 refuted, 0 unexamined,
+    no unverified lens.
+  - 18 findings, 5 important (S1, F1, F2, F3, W1) and 13 minor; W5 was refuted as a defect and kept on record. S1 was
+    `ccrc-doctor.test.ts`'s end-of-file fixture sweep timing out on this box. F1–F3 were unpinned guards. W1 was a
+    session the lane never visits: it makes no lost window, so rung 4 links across it.
+  - Ruled in fix round 5512: W1's known part fixed now (a lane-down or recovery stretch is a lost window over every
+    repository, and a listed owner is read once before it is dropped); W3 fixed; rows for F1–F6, W4 and W5; S1 fixed and
+    measured by one background whole-file run; F7, F9 and F10 recorded as D-4660, D-4661 and D-4662; F8 and W5 as
+    amendments of D-4655 and D-4659; F11 and F13 as comments; F12 no action. W1's never-listed part and W2 went to the
+    operator (next entry).
+- **2026-10-16 — operator rulings on review 518's W1 and W2.**
+  - W1's never-listed session (born and gone between two census passes, never read): "Wave 4". Wave 3 discloses it and
+    pins today's link (R91); wave 4 lists the spool root.
+  - W2, `deploy/deploy.sh`'s `prune_backups`, which keeps the newest `CCRC_BACKUP_KEEP` timestamp-named directories and applies
+    none of Task 8 Step 6's keep sets: "Accept; W16 blocks KEEP=0". The age-only fallback prune is accepted for the soak
+    and recorded as D-4663, and wave 3 makes no `deploy.sh` edit. Centralised update wave 16 took the guard as D-5144:
+    `prune_backups` refuses an all-zeros `CCRC_BACKUP_KEEP` and prunes nothing, its selection and delete lines
+    unchanged. It landed in #444 as `13f11b696` on 2026-10-17 at 20:06Z. Full keep sets go to a later wave, on wave 4's
+    list.
+  - Review 568 of #444 found that `prune_backups` keeps the newest directory by name, which the deploying machine's
+    clock sets. By agreement (6007) that stays in centralised update wave 17, because #448 makes no `deploy.sh` edit.
+- **2026-10-17 — review 533 (`ccrc-pwa-amber-hollow`, at `8e758c8f0`).** Panel incomplete: the correctness and spec
+  lenses returned, and the reproduce lens never did, because the box's out-of-memory killer took the reviewer's pane
+  four times.
+  - 4 findings: F1 important (R109's tick-level mark and its `reachedOwners` flag were unpinned), F2–F4 minor.
+  - Ruled: F1 and F2 fixed with rows R110, R111 and R112, each red against its own mutant, and a fourth mutant recorded
+    in D-4659 as redundant; F3 fixed in place; F4 reworded inside the three consented README lines.
+  - An unverified lens is not an approval (coordinator clause 14), so the next scoped review re-ran the reproduce lens.
+- **2026-10-17 — review 544 (`ccrc-pwa-swift-basin`, at `5a058fc4c`).** Panel complete after two out-of-memory resumes:
+  4 confirmed, 4 refuted, 0 unexamined.
+  - 5 findings: P2 important (a boot recovery left the ready instant at the pass's clock), and P1, P3, P4 and the
+    reviewer's own M1, minor.
+  - Ruled: P2 fixed (R113: the ready instant is no earlier than recovery's return); P1's late-return arms kept, D-4659
+    corrected, and R114 pins today's hold; P3 reworded with the README holder's consent; P4's count re-measured; M1 in
+    prose. A conditional late-return arm was declined and left for the operator to place in wave 4.
+  - The next wave-done (5849, at `9ebe539f3`) reported a new intermittent red in `session-hook-turnmark` ("concurrent
+    rotators"). It is green alone and on re-run, and its cause is unknown.
+- **2026-10-17 — review 556 (`ccrc-pwa-brisk-prairie`, at `9ebe539f3`).** Panel complete: 15 agents, no deaths, no
+  unverified lens. 6 findings, all minor.
+  - Ruled: F3 enforced (R115, a clamp for a backward clock step); W1 fixed (R116: the lane is not ready while a recovery
+    it started has not settled); F2 pinned (R117); F1 argued in D-4659 rather than pinned, because no order was found in
+    which the second mark matters; W2 reworded with consent (5879).
+  - W3: the hook's 2 s tmux lookup bound and its jq read's `|| exit 0` drop a whole event silently. Ruled part of the
+    carried class: D-4662 corrected, and the drops go on wave 4's list.
+  - Centralised update's coordinator, `ccrc-pwa-bright-river`, had operator authority to merge that programme's
+    completion chain, with #448 on it; #448's merge stayed with this coordinator (5892, 5895). The worker then merged
+    `main` `71fb70189` (`feac1a7a2`). CI at that merge was red only in `main`'s own `dispatch-live-gate.test.ts`.
+- **2026-10-17 — the landing freeze with centralised update (mails 5954 and 5960).** Whichever of #448 and #444 was
+  ready first would land. Once either sent its landing absorb, the other would not merge until that PR landed or its
+  coordinator said it had stopped. #444 merged first. Mail 6021 said #448's absorb had started, and 6022 held #441 and
+  #482 until #448 landed. Mail 6157 ended the freeze at #448's merge.
+- **2026-10-17 — review 563 (`ccrc-pwa-swift-prairie`, at `a8c2cd90f`).** Panel complete at the last fix commit
+  `e78020622`: 15 agents, no deaths, 0 unexamined. 2 minor findings, neither needing a ruling: F1, no row pinned R115's
+  clamp on the `recoveredAt` arm; F2, a plan sentence that said the reverse of the cut-recovery order. Ruled: row R120
+  and the prose fix, as the first commits of the landing round.
+- **2026-10-17 to 2026-10-18 — the landing round.** #448 then conflicted with `main` in eight files. This repository
+  has no strict status-check rule, so the coordinator ejected the PR (worker clause 16, trigger 3) at base `27f0a24a0`
+  (fix round 6020), and named a new base at each later absorb.
+  - K `de20f154c` (R120 at `c16bfd137`, and the prose fixes). M2 `88ca1584e` merged `main` `d656d022a`, eight files
+    resolved by rule. `4b4cc226d` raised `ccrc-api-closed`'s route census from 24 to 25, for #508's route.
+  - M3 `a3c8df5f7` merged `8e6abf461`. #511 had taken `MIGRATIONS[20]` (`user_version` 21), so wave 3's migration moved
+    to `MIGRATIONS[21]`, `user_version` 22, with its SQL byte-identical. It had never shipped: releases come from `main`
+    only.
+  - M4 `4e824f5bd` merged `0e48e786e` (`CLAUDE.md` line 10, `server/src/coord/routes.ts`, `shared/api.ts`). Review 578
+    read K through M4.
+  - After it: `5f87b0859` and K2 `2a915cb1d` (review 578's fixes), then M5 `e368c9423`, merging `7129eca88`, and M6
+    `fff4f4f7a`, merging `3b5473fbb` (citations only).
+  - CI at M6 was red in `refusal-status.test.ts`, #572's ratchet. M7 `4032ba2de` merged `14be46e1d` cleanly. F7
+    `e8caac911` sends the intent route's six refusals through `refuseRoute` and declares its three words
+    (`application-failed`, `incarnation-changed`, `not-ready`) in `GENERIC_REFUSALS` and `REFUSAL_STATUS`, with no pin
+    changed. P7 `2fe4fdf51` records it in the plan. `4464fd452` fixed a clock flake in a
+    `delegation-wave3.integration` test.
+  - M8 `1ee3c784a` merged `004357787` (citations only). Review 583 read K2 through M8.
+  - Pre-merge re-probe: `main` had moved to `9ce0d5310` (#579), and the merge-tree was clean. The named suites passed on
+    the merge tree, except one `single-definition` case that needs the `.git` the scratch copy lacked; the PR read
+    mergeable, and 25 checks were green with 5 skipped. `gh pr merge 448 --squash --admin
+    --match-head-commit 1ee3c784a…` merged it at 03:04:32Z on 2026-10-18 as `46c50a9a4`.
+  - Run 584 opened for wave 4 as `planned`, with no session: opening it on the worker's session was refused, because
+    that workspace was spent with #448. Run 360 then closed `final:true`, `done`, `released:true`, with its child
+    reclaim queued. The prerelease `v0.0.258` carries wave 3.
+- **2026-10-18 — review 578 (`ccrc-pwa-quiet-meadow`, at `4e824f5bd`).** Panel complete at K: 12 agents, 3 confirmed,
+  0 refuted, 0 unexamined. 5 findings, all minor.
+  - F1 and F5 (a test comment and a doctor-checks comment) were fixed in `5f87b0859`, and F2 and F3 (two plan
+    clauses) in K2 `2a915cb1d`, which also carries F4's D-4659 bullet.
+  - F4: #512's stop-done lane stops idle children; a stopped pane reads `dead`; and the lane's circuit breaker reads
+    two such stops within 10 minutes as a mass death. While suspended, `planRecord` withholds rung-2, rung-3 and rung-4
+    lease requests and unowned records, and the soak (Rollout step 8) reads circuit-breaker periods.
+  - Ruled: recorded in D-4659 as a limit, with no code change in wave 3. The coordinator's first reading, that wave 3
+    acts on nothing here, was corrected before the fix round went out. The operator's question is open: fix it before
+    the soak, in a follow-up PR, or keep it as a known limitation.
+- **2026-10-18 — review 583 (`ccrc-pwa-soft-summit`, at `1ee3c784a`).** Two panels, both complete, at K2 and at
+  `4464fd452`: each 15 agents, 1 confirmed, 3 refuted, 0 unexamined. CI run 39089647516 was green.
+  - F1 (minor): the F4 bullet names Rollout step 7 as the gate, and step 7 does not say so. Ruled no change: the D-4659
+    bullet is the record until the operator rules on F4.
+  - F2 (minor): `COORDINATOR_INTENT_REFUSALS`'s docstring is stale after F7. Ruled to wave 4's list, as a line-neutral
+    comment edit.
+- **2026-10-18 — lesson: `shared/api.ts` citations in prose are test-pinned.** README's and the child-reclamation
+  spec's citations of `shared/api.ts` lines are checked by `collect-lane-prose.test.ts` (the spec's) and by
+  `session-hook.test.ts`'s README audit, which must stay empty. Wave 3 inserts 8 lines high in `shared/api.ts` (at
+  `FleetHealth.delegation`), so most absorbs (M2, M3, M5, M6 and M8) conflicted on
+  those citations. The first M8 draft took `main`'s side and
+  planned a correction afterwards. A check rejected it: the PR would have landed with both guards red, and a
+  post-merge correction in a ledger PR is outside clause 15. Resolve such a conflict by measuring the merged file and
+  writing its numbers.
+- **2026-10-18 — wave 3's deviation block.** The merged plan defines D-4633 through D-4663, 31 entries. D-4655
+  supersedes D-4642, by the operator's ruling of 2026-10-15. 4664 is unused, as the plan's "Unused" line states.
+  #448's squash title names "D-4633..D-4659" only; the plan is the record.
 
 ## Carried constraints
 
@@ -928,6 +1112,42 @@ These are plan refinements and proposed implementation decisions under the appro
 change the spec or convert O1–O5 into prior requirements.
 
 ## Next-wave brief
+
+**Wave 3 merged on 2026-10-18.** #448 landed at 03:04:32Z as `46c50a9a4`, after reviews 518, 533, 544, 556, 563, 578
+and 583 (decisions above). Run 360 closed `done`, and the prerelease `v0.0.258` carries the wave.
+
+**Wave 4 — project** inputs:
+- Run 584 is open, `wave:4`, state `planned`, with no session. Its plan is not written.
+- The operator's wave-4 list, collected from wave 3's rulings and reviews:
+  - rung 4: how soak-era and later rung-4 links are treated, ruled before wave 4 displays anything (2026-10-16), with
+    the four identification gaps beside it, and Q-W4, attributing main checkouts without the symlinked spelling;
+  - journal compaction, which is the operator's, with the checkpoint-size bound that rides it;
+  - mark liveness: what clears each lane mark, and counting mark-forced unmeasured links apart;
+  - W1's never-listed part: list the spool root;
+  - `prune_backups`' full keep sets (D-4663; D-5144 only blocks KEEP=0);
+  - the conditional late-return arm that review 544 left for the operator to place;
+  - the hook's silent whole-event drops (D-4662);
+  - the unexplained intermittent red in `session-hook-turnmark`;
+  - a doctor WARN when `BASH_MAX_TIMEOUT_MS` or `BASH_DEFAULT_TIMEOUT_MS` is set;
+  - hook presence as a measured input (a home with no hook reads measured-empty), with incarnation-absent owners
+    beside it;
+  - the absent-owner spool prune (operator ruling 2026-10-14);
+  - the installer's `JQ_UNMANAGED` fix (operator ruling 2026-10-15), and registering `PostToolUseFailure`;
+  - B-F3: the X2 and X4 lane rows carry no count assertion;
+  - listing shed for large repositories: this repository's 124 linked names (about 2,082 B) do not shed today, and
+    roughly 155 to 200 names would; the live shed rate is unmeasured;
+  - lease release for a reused raw worktree path, which stays conflicting until release exists (release itself is
+    wave 5's);
+  - an agent-side realpath resolver for the projects root, which a remote-mode server cannot resolve;
+  - from review 578: F4's ruling (fix before the soak, or a known limitation); R111's fixed 20 ms real-time wait, which
+    reds under load; `ccd/session-hook.sh`'s stale "exits in its arm" comments for a compact SessionStart; and a
+    development `coord.db` at `user_version` 21, from an earlier branch build, meeting the renumbered migration (no
+    known box);
+  - from the M6 absorb's check: #575's hookstate carry keys on `$paid` (any `agent_id`), while wave 3's turn marker
+    keys on the join, so an unjoined `agent_id` keeps a stored `done` while the marker reads `working`;
+  - from review 583: the stale `COORDINATOR_INTENT_REFUSALS` docstring.
+
+Rollout and the seven-day soak are the operator's acts, by the plan's "Rollout and Verification" steps 1–9.
 
 **Review 334 accepted wave 2 at its exact tip; wave 2 merged on 2026-10-13** (the decisions above record how). Reviewer `ccrc-pwa-keen-summit` accepted
 `e183237e59f481ac85730bc06ca5cef29dea1d15` in immutable report

@@ -15,7 +15,7 @@ describe('the asks table', () => {
   it('the cross-repo columns added at schema version 10 are still present at the current version', () => {
     const home = mkTmp('ccrc-coord-');
     const db = openCoordDb(dbPathIn(home));
-    // TEN migrations have landed since this test's own version: MIGRATIONS[10]
+    // TWELVE migrations have landed since this test's own version: MIGRATIONS[10]
     // (`runs.kind`/`runs.reviews`, review runs, design 2026-09-14 §5.1),
     // MIGRATIONS[11] (`runs.coordProject`, board placement wave 1 Task 1),
     // MIGRATIONS[12] (`pool_edges`/`pool_epoch`, account-pool membership wave 1
@@ -26,13 +26,15 @@ describe('the asks table', () => {
     // §5.3), MIGRATIONS[16] (`stall_settings` and `run_events_by_at`, stall
     // watch settings §8), MIGRATIONS[17] (`dead_claimants`, workspace
     // lifecycle §5.4), MIGRATIONS[18] (`dead_coordinator_breaker_state`,
-    // workspace lifecycle §5.4) and MIGRATIONS[19] (`collect_lane_settings`,
-    // path-identity §5.2). None touches the asks table. MIGRATIONS[20] does:
-    // `asks.releaseReason` (D-5290, coordinator-first routing §5.2). This pin
-    // only needs the CURRENT total — it asserts "no migration after the one
-    // this test knows about has changed the asks table's columns", not
-    // anything about any of the eleven.
-    expect(COORD_SCHEMA_VERSION).toBe(21);
+    // workspace lifecycle §5.4), MIGRATIONS[19] (`collect_lane_settings`,
+    // path-identity §5.2), MIGRATIONS[20] (`asks.releaseReason`, D-5290,
+    // coordinator-first routing §5.2), MIGRATIONS[21] (the six
+    // `delegation_*` tables, delegation broker wave 3) and MIGRATIONS[22]
+    // (`runs.unattributed`, D-5298). Only MIGRATIONS[20]
+    // touches the asks table. This pin only needs the CURRENT total — it
+    // asserts "no migration after the one this test knows about has changed
+    // the asks table's columns", not anything about any of the twelve.
+    expect(COORD_SCHEMA_VERSION).toBe(23);
     const cols = (db.prepare("SELECT name FROM pragma_table_info('asks')").all() as
       { name: string }[]).map((r) => r.name).sort();
     expect(cols).toEqual([

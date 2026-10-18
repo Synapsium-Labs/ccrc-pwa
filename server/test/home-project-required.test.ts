@@ -12,7 +12,7 @@
 // route test catches a require branch that stops requiring even while the
 // constant still reads `false`. Either alone leaves half the guard unmeasured.
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
@@ -41,6 +41,13 @@ const OPEN_BODY = {
 const openApp = async () => {
   const home = mkTmp('ccrc-home-project-');
   mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+  // D-5298: the claimant's own registry row, of the run's project
+  // (`run-routes.test.ts`'s `seed` field set); `postOpen` sends its uuid.
+  const id = OPEN_BODY.claimedBy;
+  for (const [k, v] of Object.entries({ wrapper: 'claude', project: 'demo', workdir: `/w/${id}`, uuid: `u-${id}`,
+    started: '1', workspace: id, branch: `ws/${id}`, base: 'origin/main' })) {
+    writeFileSync(path.join(home, '.cc-sessions', `${id}.${k}`), v);
+  }
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const app = await buildServer({ ...testDeps(home, runner), mailToken: TOKEN, coord });
   return { app, coord };
@@ -50,7 +57,7 @@ const postOpen = (app: FastifyInstance, body: unknown) =>
   app.inject({
     method: 'POST', url: '/api/runs',
     headers: { 'x-ccrc-mail-token': TOKEN },
-    payload: body as Record<string, unknown>,
+    payload: { claimedByUuid: `u-${OPEN_BODY.claimedBy}`, ...(body as Record<string, unknown>) },
   });
 
 describe('homeProject is required at open (the legacy generation is over)', () => {

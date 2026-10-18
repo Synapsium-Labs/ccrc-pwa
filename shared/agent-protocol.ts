@@ -313,7 +313,11 @@ export function parseCcdCaps(stdout: string): string[] {
 }
 export interface ExecReq   { t: 'req'; id: number; op: 'exec'; cmd: string; args: string[]; timeoutMs?: number }
 export interface ReadReq   { t: 'req'; id: number; op: 'read'; path: string }
-export interface ReadFromReq { t: 'req'; id: number; op: 'readFrom'; path: string; offset: number }
+/** `maxBytes` is ADDITIVE (delegation wave 3): an older caller omits it and gets the answer it always got, key for key.
+ *  Present, the agent reads no more than `maxBytes` bytes from `offset` and additionally answers `dataB64`, the canonical
+ *  base64 of exactly the bytes it read (see `isReadFromRange` for what a valid request is). It is the same op with one
+ *  optional field — no new op, no ready-frame word, no `FLEET_PROTO` bump. */
+export interface ReadFromReq { t: 'req'; id: number; op: 'readFrom'; path: string; offset: number; maxBytes?: number }
 export interface ReadB64Req { t: 'req'; id: number; op: 'readB64'; path: string }
 export interface ReaddirReq{ t: 'req'; id: number; op: 'readdir'; path: string }
 export interface StatReq   { t: 'req'; id: number; op: 'stat'; path: string }
@@ -352,7 +356,12 @@ export interface ResOk  { t: 'res'; id: number; ok: true;  [k: string]: unknown 
  *  `server/src/remote/client.ts`'s `AgentOpError`. No `FLEET_PROTO` bump. */
 export interface ResErr { t: 'res'; id: number; ok: false; err: string; detail?: string }
 // exec → {code, stdout, stderr}; read → {data: string|null, absent?: true}; readFrom → {data: string, size: number}|{data: null, absent?: true};
-// readB64 → {dataB64: string|null, absent?: true, tooLarge?: true, size?: number}; readdir → {names: string[]|null}; stat → {mtimeMs, size}|{missing: true, absent?: true};
+//   readFrom WITH `maxBytes` → {data: string, dataB64: string, size: number}|{data: null, absent?: true}: `data` is the old lossy UTF-8
+//   decode of the bounded bytes, `dataB64` their canonical base64, and a reader that needs the BYTES reads `dataB64` alone — an older agent
+//   ignores `maxBytes` and sends no `dataB64`, which a byte reader must take as unmeasured, never as text to re-encode;
+// readB64 → {dataB64: string|null, absent?: true, tooLarge?: true, size?: number}; readdir → {names: string[]}|{names: null, absent?: true}
+//   (`absent` only on a proven ENOENT; an older agent sends a bare {names: null} for every failure, which is unmeasured, never absent);
+//   stat → {mtimeMs, size}|{missing: true, absent?: true};
 // lstat → {kind: 'regular'|'symlink'|'other'}|{missing: true, absent?: true}. TWO positive markers and no
 //   silent third answer: an agent that does not implement this op fails the request outright
 //   (`not-implemented`), so the server reads UNMEASURED rather than mistaking an older peer's
@@ -743,6 +752,20 @@ export function isTokenVerbMissing(detail: string | null | undefined): boolean {
  *  io.ts`), so this is the natural single home, and a type-only export adds
  *  nothing to the PWA's bundle unless the PWA starts importing this file. */
 export type ReadFailure = 'absent' | 'unreadable';
+
+/** The largest `maxBytes` one `readFrom` may carry — the per-call ceiling of the delegation spool reader (wave 3). A
+ *  bound on the REQUEST, declared once so the agent that enforces it and the two server adapters that refuse before
+ *  the wire agree on the number. */
+export const READ_FROM_MAX_BYTES = 262144;
+
+/** Whether `(offset, maxBytes)` is a valid byte-range request: `offset` a non-negative safe integer, `maxBytes` an
+ *  integer in `1..READ_FROM_MAX_BYTES`. The ONE judgment of it — the agent's `validateReq` answers `bad-request` to a
+ *  frame that fails it, and `localIO` and the remote adapter answer `unreadable` without touching the disk or the
+ *  wire. Old callers never pass `maxBytes` and never reach it: their clamping of an odd offset is unchanged. */
+export function isReadFromRange(offset: unknown, maxBytes: unknown): boolean {
+  return typeof offset === 'number' && Number.isSafeInteger(offset) && offset >= 0
+    && typeof maxBytes === 'number' && Number.isSafeInteger(maxBytes) && maxBytes >= 1 && maxBytes <= READ_FROM_MAX_BYTES;
+}
 
 export interface TailData  { t: 'tail'; tailId: number; dataB64: string }       // appended bytes
 export interface TailReset { t: 'tail'; tailId: number; reset: true; size: number } // file truncated/rotated

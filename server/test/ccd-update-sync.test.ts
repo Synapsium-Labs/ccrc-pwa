@@ -169,7 +169,7 @@ const refusesAndKeeps = (prefix: string, body: string, why: RegExp, status = '20
 
 /** The REAL reader, on the configured fleet arm: `CCRC_ROLE=fleet` recorded
  *  and `ccd-update-sync.timer`'s unit FILE installed (zero bytes — the
- *  `ccdWsHelpers.ts:136-139` idiom; `_upd_intent_state` measures the file,
+ *  `plantPoolSyncTimer` idiom; `_upd_intent_state` measures the file,
  *  never the projection's own absence). */
 const readBack = (home: string): Run => {
   writeFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_ROLE=fleet\n');

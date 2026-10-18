@@ -2767,6 +2767,13 @@ describe('one absent/unreadable read vocabulary', () => {
     expect(registry).toMatch(/import\s+type\s*\{[^}]*\bReadFailure\b[^}]*\}\s*from\s*'\.\/io\.js'/);
   });
 
+  it('is what delegation-model.ts derives a census record\'s state from, not a third copy (ruling R43)', () => {
+    const model = readFileSync(path.join(ccrcRoot, 'server/src/coord/delegation-model.ts'), 'utf8');
+    expect(model).not.toMatch(PAIR);
+    expect(model).toMatch(/state: 'present' \| ReadFailure;/);
+    expect(model).toMatch(/import\s+type\s*\{[^}]*\bReadFailure\b[^}]*\}\s*from\s*'\.\.\/\.\.\/\.\.\/shared\/agent-protocol\.js'/);
+  });
+
   it('server/src/io.ts re-exports ReadFailure rather than restating it', () => {
     const io = readFileSync(path.join(ccrcRoot, 'server/src/io.ts'), 'utf8');
     expect(io).not.toMatch(PAIR);
@@ -2794,6 +2801,133 @@ describe('one absent/unreadable read vocabulary', () => {
     // 'absent'` must stay invisible, which is the whole reason the fingerprint
     // is a PAIR (see this describe's own header).
     expect(PAIR.test("type WsAuditUnit = 'enabled' | 'loaded' | 'absent';")).toBe(false);
+  });
+});
+
+// Delegation broker wave 3, Task 4 (docs/superpowers/plans/2026-10-08-
+// delegation-broker-wave3-observe.md, "Shared event and state vocabulary"):
+// eleven closed vocabularies, each an `as const` array in `shared/api.ts` with
+// its type DERIVED from it. Same family as the block above, and the same
+// reason: a second spelling of a closed set is how a vocabulary drifts, and
+// nothing but a red suite stops the copy. This scans only the arrays and the
+// types derived from them. The interfaces around them are shapes, not sets.
+//
+// The fingerprint for a hand-typed copy is a union whose members are EXACTLY a
+// vocabulary's, in any order. A superset or subset is not a copy — the
+// workspace and attempt-verdict sets overlap `FleetHealth`-style fields that
+// say something else (`'present' | 'absent' | 'unmeasured'`) — so the compare
+// is set EQUALITY, never "contains three of them".
+describe('delegation wave 3: the closed vocabularies are declared once, in shared/api.ts, and their types derived', () => {
+  const VOCABS = [
+    ['DELEGATION_EVENT_KINDS', 'DelegationEventKind',
+      ['SessionStart', 'PreToolUse', 'PostToolUse', 'SubagentStart', 'SubagentStop', 'UserPromptSubmit', 'SessionEnd']],
+    ['DELEGATION_ACTIVITY_SOURCE_KINDS', 'DelegationActivitySourceKind', ['agent', 'workflow', 'bash-worktree']],
+    ['DELEGATION_LEASE_SOURCE_KINDS', 'DelegationLeaseSourceKind', ['agent', 'workflow', 'raw', 'attached']],
+    ['DELEGATION_EXECUTION_STATES', 'DelegationExecutionState', ['active', 'ended', 'unknown']],
+    ['DELEGATION_PARENTAGE_STATES', 'DelegationParentageState', ['linked', 'unresolved', 'conflicting', 'unmeasured']],
+    ['DELEGATION_WORKSPACE_STATES', 'DelegationWorkspaceState', ['none', 'provisioning', 'present', 'absent', 'unmeasured']],
+    ['DELEGATION_DISPOSITIONS', 'DelegationDisposition', ['ephemeral', 'adopted', 'retained', 'promoted']],
+    ['DELEGATION_CLEANUP_STATES', 'DelegationCleanupState',
+      ['not-due', 'pending', 'running', 'refused', 'reclaimed', 'unmeasured']],
+    ['DELEGATION_CLEANUP_POPULATIONS', 'DelegationCleanupPopulation', ['ephemeral-lease']],
+    ['DELEGATION_INTENT_SOURCES', 'DelegationIntentSource', ['explicit', 'run-owner', 'delegation-inferred', 'retained-lineage']],
+    ['DELEGATION_ATTEMPT_VERDICTS', 'DelegationAttemptVerdict', ['linked', 'unresolved', 'conflicting', 'unmeasured']],
+  ] as const;
+  const apiText = (): string => readFileSync(path.join(ccrcRoot, 'shared', 'api.ts'), 'utf8');
+  const declaredIn = (decl: RegExp): string[] => ALL.filter((f) => decl.test(readFileSync(f, 'utf8'))).map(rel);
+
+  it('finds the vocabularies it scans (a scan over nothing passes everything)', () => {
+    expect(VOCABS.length).toBe(11);
+    expect(apiText()).toContain('DELEGATION_EVENT_KINDS');
+  });
+
+  for (const [arr, type, members] of VOCABS) {
+    it(`${arr} is declared exactly once, in shared/api.ts, with the plan's members in the plan's order`, async () => {
+      const DEF = new RegExp(`^\\s*(?:export\\s+)?(?:const|let|var)\\s+${arr}\\b`, 'm');
+      expect(declaredIn(DEF), arr).toEqual(['shared/api.ts']);
+      const api = (await import('../../shared/api.js')) as unknown as Record<string, unknown>;
+      expect(api[arr], `${arr} is exported`).toEqual(members);
+    });
+
+    it(`${type} is declared exactly once, in shared/api.ts, DERIVED from ${arr}`, () => {
+      const DEF = new RegExp(`^\\s*(?:export\\s+)?(?:declare\\s+)?(?:type\\s+${type}\\b\\s*(?:<[^>\\n]*>)?\\s*=|interface\\s+${type}\\b)`, 'm');
+      expect(declaredIn(DEF), type).toEqual(['shared/api.ts']);
+      expect(apiText()).toMatch(new RegExp(`^export type ${type} =\\s*\\(typeof ${arr}\\)\\[number\\];$`, 'm'));
+    });
+  }
+
+  // Union runs: `'a' | 'b' | 'c'`, however the lines wrap.
+  const UNION_RUN = /'[^'\n]+'(?:\s*\|\s*'[^'\n]+')+/g;
+  const unionSets = (text: string): Array<ReadonlySet<string>> =>
+    (text.match(UNION_RUN) ?? []).map((run) => new Set([...run.matchAll(/'([^'\n]+)'/g)].map((m) => m[1]!)));
+  const equalsSet = (set: ReadonlySet<string>, members: readonly string[]): boolean =>
+    set.size === members.length && members.every((m) => set.has(m));
+
+  it('the union fingerprint is order-insensitive, set-EQUAL, and leaves overlapping non-copies alone', () => {
+    const parentage = VOCABS[4][2];
+    const spelled = (text: string): boolean => unionSets(text).some((set) => equalsSet(set, parentage));
+    expect(spelled("type X = 'linked' | 'unresolved' | 'conflicting' | 'unmeasured';")).toBe(true);
+    expect(spelled("type X = 'unmeasured' | 'conflicting' | 'linked' | 'unresolved';"), 'any order').toBe(true);
+    expect(spelled("type X =\n  | 'linked'\n  | 'unresolved'\n  | 'conflicting'\n  | 'unmeasured';"), 'wrapped').toBe(true);
+    expect(spelled("type X = 'linked' | 'unresolved' | 'conflicting';"), 'a subset is not a copy').toBe(false);
+    expect(spelled("type X = 'linked' | 'unresolved' | 'conflicting' | 'unmeasured' | 'extra';"), 'a superset is not a copy').toBe(false);
+    expect(spelled("capabilityState: 'present' | 'absent' | 'unmeasured';"), 'an overlapping other set').toBe(false);
+  });
+
+  for (const [arr, type, members] of VOCABS) {
+    if (members.length < 2) continue;   // a union of one word states no set
+    it(`no source hand-types a union equal to ${arr} — ${type} comes from the array`, () => {
+      const holders = ALL.filter((f) => unionSets(readFileSync(f, 'utf8')).some((set) => equalsSet(set, members))).map(rel);
+      expect(holders).toEqual([]);
+    });
+  }
+});
+
+// Delegation broker wave 3, Task 4: `ReadFailure` stays declared ONCE, in
+// `shared/agent-protocol.ts` (D-1438), and the two consumer shapes this task
+// adds to the seam carry it by NAME. A `{ok:false; reason: 'absent' |
+// 'unreadable'}` spelled inline in either would be the pair's third copy, and
+// the pair scan above already refuses it in io.ts by its fingerprint; these
+// pin the same fact by the names the new shapes are supposed to use.
+describe('delegation wave 3: the measured directory and byte-range reads carry ReadFailure by name', () => {
+  const read = (relPath: string): string => readFileSync(path.join(ccrcRoot, relPath), 'utf8');
+  const declaredIn = (decl: RegExp): string[] => ALL.filter((f) => decl.test(readFileSync(f, 'utf8'))).map(rel);
+
+  it('ReadFailure is declared in exactly one file, shared/agent-protocol.ts, and server/src/io.ts only re-exports it', () => {
+    expect(declaredIn(/^\s*(?:export\s+)?type\s+ReadFailure\b\s*=/m)).toEqual(['shared/agent-protocol.ts']);
+    const io = read('server/src/io.ts');
+    expect(io).toMatch(/^export type \{ ReadFailure \};$/m);
+    expect(io).not.toMatch(/^\s*(?:export\s+)?type\s+ReadFailure\b\s*=/m);
+  });
+
+  it.each([
+    ['MeasuredDirectoryRead', 'entries: readonly string[]'],
+    ['MeasuredByteRangeRead', 'bytes: Uint8Array; size: number'],
+  ])('%s is declared once, in server/src/io.ts, and its failure arm is { ok: false; reason: ReadFailure }', (name, okArm) => {
+    expect(declaredIn(new RegExp(`^\\s*(?:export\\s+)?type\\s+${name}\\b\\s*=`, 'm'))).toEqual(['server/src/io.ts']);
+    const io = read('server/src/io.ts');
+    const at = io.indexOf(`export type ${name} =`);
+    expect(at, `${name}'s declaration`).toBeGreaterThan(-1);
+    // To the blank line that ends the declaration: its arms hold `;` inside braces.
+    const rest = io.slice(at);
+    const body = rest.slice(0, rest.indexOf('\n\n'));
+    expect(body).toContain(okArm);
+    expect(body).toMatch(/\{ ok: false; reason: ReadFailure \}/);
+    expect(body).not.toMatch(/'absent'|'unreadable'/);
+  });
+
+  it('the new consumers import ReadFailure rather than restating it', () => {
+    // fileops.ts is already pinned by the pair scan above; the new agent-side
+    // directory result lives in the same file and names the type, and the
+    // remote adapter takes it from the seam it implements.
+    const fileops = read('agent/src/fileops.ts');
+    const at = fileops.indexOf('export type ListDirResult =');
+    expect(at, 'ListDirResult\'s declaration').toBeGreaterThan(-1);
+    const rest = fileops.slice(at);
+    expect(rest.slice(0, rest.indexOf('\n\n'))).toMatch(/\{ ok: false; reason: ReadFailure \}/);
+    expect(read('server/src/remote/io.ts')).toMatch(
+      /import\s+type\s*\{[^}]*\bReadFailure\b[^}]*\}\s*from\s*'\.\.\/io\.js'/,
+    );
   });
 });
 
@@ -5101,7 +5235,11 @@ describe('ccrc history: every vocabulary is declared once, in lib.mjs, and bound
     'SCOPE_KINDS', 'GREP_SORTS', 'REF_KINDS', 'FAN_IN', 'RECOVER_PHASES', 'FTS_SHADOWS', 'READ_VERBS',
     'INDEXED_PROVENANCE', 'VERB_TABLES', 'EXPAND_LABEL',
     // W1-B2 Task 7A (spec rev 3.5): the belt's words more than one module reads or writes.
-    'BELT_COUNTERS', 'BELT_META', 'BELT_NODES_STEP', 'REDACT_SOURCES_META'] as const;
+    'BELT_COUNTERS', 'BELT_META', 'BELT_NODES_STEP', 'REDACT_SOURCES_META',
+    // W1-B3: every constant the card line adds to lib, declared there once (Task 11 binds the hook's spellings).
+    'CARD_LINE_PATTERN', 'CARD_LINE_MAX', 'CARD_DIR', 'SCOPE_DIR', 'CARD_DESCRIBE_CMD',
+    'CARD_MEASURE_ROWS', 'CARD_MEASURE_MAX_WAIT_MS', 'CARD_ATTACHMENT_MAX_BYTES', 'PURGED_FILES_GRACE_MS',
+    'SCOPE_MARKER_MAX_AGE_MS', 'CARD_CONSUMED_SCOPES', 'CARD_WITHDRAW_REASONS'] as const;
   /** The declaration scan's corpus: the history modules and every deploy/ and shared/ `.mjs`. NOT the rest of
    *  ccd/: `ccd/compact-card.mjs` declares an `EXIT` of its own (its exit codes, a different module's). */
   const DECL_CORPUS = [...new Set([...HISTORY_MJS, ...mjsUnder(path.join(ccrcRoot, 'deploy')), ...mjsUnder(path.join(ccrcRoot, 'shared'))])];
@@ -5207,7 +5345,7 @@ describe('ccrc history: every vocabulary is declared once, in lib.mjs, and bound
     expect(lines[0]).toMatch(/\bSTORE_DB_REL\s*=\s*['"]\.ccrc\/history\/db['"]/);
   });
 
-  it('COVERAGE is this-box, and the word is a literal in lib.mjs alone; CARD_PREFIX is declared (its hook half lands in B3)', async () => {
+  it('COVERAGE is this-box, and the word is a literal in lib.mjs alone; CARD_PREFIX is declared (its hook half: the card line describe below)', async () => {
     const l = await lib();
     expect([...(l['COVERAGE'] as readonly string[])]).toEqual(['this-box']);
     expect(HISTORY_MJS.filter((f) => /['"`]this-box['"`]/.test(stallCode(f))).map(rel)).toEqual(['ccd/history/lib.mjs']);
@@ -6613,6 +6751,118 @@ describe('the session role is enumerated, narrowed and derived once, in shared/a
   it("the wire field is computed in server/src/fleet.ts only, through sessionRoleOf of the registry's child", () => {
     expect(holders(/\brole:\s*sessionRoleOf\(/)).toEqual(['server/src/fleet.ts']);
     expect(stallCode(path.join(ccrcRoot, 'server/src/fleet.ts'))).toMatch(/\brole:\s*sessionRoleOf\(r\.child\)/);
+  });
+});
+
+// D-5298 (plan docs/superpowers/plans/2026-10-17-coordinator-first-routing.md, Task 11b; spec §6.4). APPENDED. The
+// switch-over floor `RUNS_ATTRIBUTION_SINCE` (the first release tag carrying Task 11a's client) is defined once, in
+// shared/api.ts, and read on a code line only by `fleetCarriesRunsAttribution`, defined once beside `buildAgreement`
+// in server/src/fleetstate.ts; `POST /api/runs` (server/src/coord/routes.ts) is that function's one caller. Code
+// lines only (`stallCode`).
+describe('the runs-attribution switch-over is defined once, read once (D-5298)', () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+
+  it('CONTROL: the patterns see a definition and a call, and pass over comment lines', () => {
+    expect(/\bRUNS_ATTRIBUTION_SINCE\s*=/.test("export const RUNS_ATTRIBUTION_SINCE = 'v0.0.239';")).toBe(true);
+    expect(/\bfleetCarriesRunsAttribution\(/.test('fleetCarriesAttribution: fleetCarriesRunsAttribution(')).toBe(true);
+    expect(stallCodeText('// RUNS_ATTRIBUTION_SINCE = x\nconst x = 1;')).not.toMatch(/\bRUNS_ATTRIBUTION_SINCE\b/);
+  });
+
+  it('RUNS_ATTRIBUTION_SINCE is defined in shared/api.ts alone and read on a code line in fleetstate.ts alone', () => {
+    expect(holders(/\bRUNS_ATTRIBUTION_SINCE\s*=/)).toEqual(['shared/api.ts']);
+    expect(holders(/\bRUNS_ATTRIBUTION_SINCE\b/)).toEqual(['server/src/fleetstate.ts', 'shared/api.ts']);
+  });
+
+  it('fleetCarriesRunsAttribution is defined in fleetstate.ts and called by the open route alone', () => {
+    expect(holders(/\bfunction\s+fleetCarriesRunsAttribution\b/)).toEqual(['server/src/fleetstate.ts']);
+    expect(holders(/\bfleetCarriesRunsAttribution\(/)).toEqual(['server/src/coord/routes.ts', 'server/src/fleetstate.ts']);
+  });
+});
+
+// CCRC HISTORY W1-B3 (spec 2026-10-05 §8.6, §9.11 O14): the card line's HOOK HALF. APPENDED after the last
+// describe, with no import line, for the reason the blocks above state; lib is imported dynamically. The hook
+// cannot import lib.mjs (no fork on the hook's path), so it spells the grammar, the cap and the two directory
+// names once each, in bash, and this binds every one of those spellings to lib's single definition.
+describe('ccrc history card line: the hook and lib spell one grammar, one cap and one prefix (spec 2026-10-05 §8.6, O14)', () => {
+  const HOOK_SH = path.join(ccrcRoot, 'ccd', 'session-hook.sh');
+  type Lib = Record<string, unknown>;
+  const lib = async (): Promise<Lib> => (await import('../../ccd/history/lib.mjs')) as unknown as Lib;
+  /** The value of a top-level `NAME='…'` or `NAME="…"` or `NAME=<digits>` assignment, from code lines only. */
+  const assigned = (lines: readonly string[], name: string): string[] =>
+    lines.flatMap((l) => {
+      const m = new RegExp(`^${name}=(?:'([^']*)'|"([^"]*)"|([0-9]+))$`).exec(l);
+      return m ? [m[1] ?? m[2] ?? m[3]!] : [];
+    });
+
+  /** The hook spells its bracket ranges as explicit lists (D-5064: a range widens under a UTF-8 collating locale).
+   *  This maps exactly those three lists back to lib's ranges and nothing else, so a list that loses or gains a
+   *  character is no range and still differs from lib's pattern. */
+  const lists = (re: string): string =>
+    re.replaceAll('[0123456789abcdef]', '[0-9a-f]').replaceAll('[0123456789]', '[0-9]').replaceAll('[123456789]', '[1-9]');
+
+  it('CONTROL: the extractor reads each quoting, and refuses an indented or commented line', () => {
+    expect(assigned(["A='x y'", 'A="$HOME/z"', 'A=512'], 'A')).toEqual(['x y', '$HOME/z', '512']);
+    expect(assigned(["  A='x'", "# A='x'", "AB='x'"], 'A')).toEqual([]);
+    expect(codeLines(HOOK_SH).some((l) => l.startsWith('HISTORY_CARD_RE=')), 'the hook defines the grammar').toBe(true);
+  });
+
+  it('the hook\'s one HISTORY_CARD_RE literal is lib\'s CARD_LINE_PATTERN, character for character, and begins with CARD_PREFIX', async () => {
+    const l = await lib();
+    const defs = assigned(codeLines(HOOK_SH), 'HISTORY_CARD_RE');
+    expect(defs, 'HISTORY_CARD_RE is assigned once, single-quoted').toHaveLength(1);
+    expect(lists(defs[0]!)).toBe(l['CARD_LINE_PATTERN']);
+    expect(defs[0]!.startsWith(`^${String(l['CARD_PREFIX'])}`)).toBe(true);
+    expect((l['CARD_LINE_RE'] as RegExp).source).toBe(new RegExp(lists(defs[0]!)).source);
+  });
+
+  it('CONTROL: the list normaliser maps exactly the three lists, so a list that lost a character still differs from lib\'s ranges', () => {
+    expect(lists('[0123456789abcdef]{8}[0123456789]x[123456789]')).toBe('[0-9a-f]{8}[0-9]x[1-9]');
+    expect(lists('[012345678abcdef]')).toBe('[012345678abcdef]');
+    expect(lists('[0123456789abcdeg]')).toBe('[0123456789abcdeg]');
+    expect(lists('[0-9a-f]'), 'a range is not rewritten: it stays a range, which the reader scan refuses').toBe('[0-9a-f]');
+  });
+
+  it('the reader\'s UUID grammar is lib\'s UUID_RE (the lists, normalised), so the hook and the CLI accept one family of generations and session ids', async () => {
+    const l = await lib();
+    const lines = codeLines(HOOK_SH).filter((x) => /^\s*local uuid_re='/.test(x));
+    expect(lines, 'uuid_re is assigned once, in the reader').toHaveLength(1);
+    const re = /local uuid_re='([^']*)'/.exec(lines[0]!)![1]!;
+    expect(new RegExp(lists(re)).source).toBe((l['UUID_RE'] as RegExp).source);
+  });
+
+  it('`History: ` is spelled on one hook code line, the grammar\'s', () => {
+    expect(codeLines(HOOK_SH).filter((x) => x.includes('History: ')).map((x) => x.slice(0, x.indexOf('=')))).toEqual(['HISTORY_CARD_RE']);
+  });
+
+  it('HISTORY_CARD_MAX is CARD_LINE_MAX, and the read and the reserve are spelled from it, never as 512 or 513', async () => {
+    const l = await lib();
+    const code = codeLines(HOOK_SH);
+    expect(assigned(code, 'HISTORY_CARD_MAX')).toEqual([String(l['CARD_LINE_MAX'])]);
+    // The delegation spool's jq definitions (#448) spell its own 512-character path bound, `def maxpath: 512;`, a different
+    // quantity: that one token is set aside, and any other 512 or 513 on any line, that one included, still counts.
+    expect(code.filter((x) => /(?<![\w.])51[23](?![\w.])/.test(x.replace('def maxpath: 512;', ''))), 'a hand-kept 512 or 513').toEqual([`HISTORY_CARD_MAX=${String(l['CARD_LINE_MAX'])}`]);
+    const spelled = code.filter((x) => x.includes('HISTORY_CARD_MAX + 1'));
+    expect(spelled.length, 'the read and the reserve').toBe(2);
+    expect(spelled.some((x) => /\bread -r -N "\$\(\( HISTORY_CARD_MAX \+ 1 \)\)"/.test(x)), 'the read').toBe(true);
+    expect(spelled.some((x) => /HISTORY_CARD_RESERVE=\$\(\( HISTORY_CARD_MAX \+ 1 \)\)$/.test(x)), 'the reserve').toBe(true);
+  });
+
+  it('the card and scope directories are spelled once each, under HISTORY_ROOT_REL, named as lib names them', async () => {
+    const l = await lib();
+    const code = codeLines(HOOK_SH);
+    const root = String(l['HISTORY_ROOT_REL']);
+    for (const [name, dir] of [['HISTORY_CARD_DIR', l['CARD_DIR']], ['HISTORY_SCOPE_DIR', l['SCOPE_DIR']]] as const) {
+      expect(assigned(code, name), name).toEqual([`$HOME/${root}/${String(dir)}`]);
+      expect(code.filter((x) => x.includes(`${root}/${String(dir)}`)), `${root}/${String(dir)} spelled twice`).toHaveLength(1);
+    }
+    expect(code.filter((x) => x.includes(`${root}/${String(l['RECALL_OFF_DIR'])}/`)), 'the recall-off path, once').toHaveLength(1);
+  });
+
+  it("SCOPE_MARKER_MAX_AGE_MS is the hook's COMPACT_CARD_MAX_AGE in ms: the window a consumption's marker is read within is the one the reader serves within (ruling RC3)", async () => {
+    const l = await lib();
+    const age = assigned(codeLines(HOOK_SH), 'COMPACT_CARD_MAX_AGE');
+    expect(age, 'COMPACT_CARD_MAX_AGE is assigned once, in whole seconds').toHaveLength(1);
+    expect(Number(age[0]) * 1000).toBe(l['SCOPE_MARKER_MAX_AGE_MS']);
   });
 });
 

@@ -10,7 +10,7 @@
 // (D-1240). Session-gated when armed, open dark, like every other same-origin
 // PWA write. `coord-pause-route.test.ts` holds both halves of that.
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { mkdirSync, readFileSync, readdirSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
@@ -46,7 +46,7 @@ const withCoord = async (over: Partial<Deps> = {}) => {
   // `db` is handed back for ONE test: the singleton `coordinator_state` row is
   // reachable through no public method, and D-1164's disagreement between
   // `setCaps` (silent no-op) and `caps()` (throws) is only observable without it.
-  return { app, coord, notifyLog, db };
+  return { app, coord, notifyLog, db, home };
 };
 
 /** A box with no coordination database — no `coord` key at all, the same shape
@@ -339,7 +339,12 @@ describe('POST /api/coord/caps', () => {
       return { ok: true, stdout: '', stderr: '', killed: false, signal: null };
     };
 
-    const { app, coord } = await withCoord({ mailToken: TOKEN, runCcd });
+    const { app, coord, home } = await withCoord({ mailToken: TOKEN, runCcd });
+    // D-5298: the open attributes its claimant against its own registry row, of
+    // the run's project (`run-routes.test.ts`'s `seed` field set).
+    for (const [k, v] of Object.entries({ wrapper: 'claude', project: 'demo', workdir: '/w/the-coordinator',
+      uuid: 'u-the-coordinator', started: '1', workspace: 'the-coordinator', branch: 'ws/the-coordinator',
+      base: 'origin/main' })) writeFileSync(path.join(home, '.cc-sessions', `the-coordinator.${k}`), v);
     // The instrument for "both prologues have run". Counting `caps()` reads is
     // deterministic under BOTH spellings — the shape probe outside the lock is
     // one per request either way — so this wait cannot pass for one variant and
@@ -356,7 +361,7 @@ describe('POST /api/coord/caps', () => {
     const opening = app.inject({ method: 'POST', url: '/api/runs',
       headers: { 'x-ccrc-mail-token': TOKEN },
       payload: { program: 'p', title: 'P', project: 'demo', wave: 1, waveOf: 8,
-                 claimedBy: 'the-coordinator', sessionId: 'the-worker', homeProject: 'demo' } });
+                 claimedBy: 'the-coordinator', claimedByUuid: 'u-the-coordinator', sessionId: 'the-worker', homeProject: 'demo' } });
 
     // PREMISE 1 — THE HOLD IS REACHED AT ALL, and it fails FAST if it is not
     // (D-1228). `POST /api/runs` has three early returns before `runCcd` — a 400

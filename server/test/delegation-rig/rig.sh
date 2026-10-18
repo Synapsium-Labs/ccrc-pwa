@@ -13,10 +13,10 @@
 #   rig.sh setup <root> [<version>]  fixture HOME <root>/fixhome (config <root>/fixhome/cfg), repo <root>/repo
 #   rig.sh run <version> <scenario.json> <out-dir>   one run; a raw bundle lands in <out-dir>
 #   rig.sh all <raw-root> [<version>...]   reap, then every installed version (or only those named, each checked
-#                                    first) x every scenario -> <raw-root>/<v>/<s>/, then <raw-root>/.done
+#                                    first) x every scenario -> <raw-root>/<v>/<s>/, then <raw-root>/.done; exit 1 if any run failed
 #   rig.sh versions [<version>...]   the versions `all` would cover, one per line: every installed one, or the ones named
 #                                    (each must be installed). Installed = x.y.z-shaped and executable under the real HOME's
-#                                    ~/.local/share/claude/versions. recapture.sh asks this too, so both share one filter.
+#                                    ~/.local/share/claude/versions (none there: none; unreadable there: exit 2). recapture.sh asks this too.
 #   rig.sh reap                      remove what killed runs left: dlg<pid> tmux servers and
 #                                    ccrc-dlg-rig.* roots whose owning rig.sh pid is gone, or that have
 #                                    no .owner, nothing modified for 10 minutes and no process under them
@@ -63,6 +63,25 @@ guard_sock() { [[ ${1-} =~ $SOCK_RE ]]; }
 # An installed Claude Code version: x.y.z-shaped (it names a file under $VERSIONS, so no `..` and no `/`) and executable there.
 version_ok() { [[ ${1-} =~ $VERSION_RE && -x $VERSIONS/${1-} ]]; }
 need_version() { version_ok "${1-}" || die "'${1-}' is not an installed Claude Code version under $VERSIONS (x.y.z, executable)"; }
+# The entries of $VERSIONS, into LISTED (one per line). A versions directory that is ABSENT is "none installed": LISTED stays empty.
+# One that cannot be READ is not that answer, it is a failure to measure, and it ends the run (exit 2): a directory that cannot be both
+# listed and searched, a path that is not a directory (a file, a link to nothing), or one under a parent that cannot be searched. `-e`
+# is as false under such a parent as for an absent path, so when nothing answers at the path the nearest entry above it that does
+# decides: absent means that entry is a directory this user can search. D-3999: every one of these read as none installed, and
+# `rig.sh all` with no version named then captured nothing, wrote .done and exited 0. Call it in the MAIN shell, as pick_versions
+# does: a `die` in $( ) ends only that subshell.
+LISTED=""
+list_versions() {
+  local up=$VERSIONS
+  LISTED=""
+  if [[ -d $VERSIONS ]]; then
+    [[ -r $VERSIONS && -x $VERSIONS ]] || die "cannot read the versions directory $VERSIONS: it cannot be both listed and searched (a failure, not 'none installed')"
+    LISTED=$(ls -- "$VERSIONS" 2>/dev/null) || die "cannot read the versions directory $VERSIONS: listing it failed (a failure, not 'none installed')"
+  else
+    while [[ ! -e $up && ! -L $up ]]; do up=$(dirname -- "$up"); done   # ends at an entry that exists: dirname's fixed points are . and /
+    if [[ ! -d $up || ! -x $up ]]; then die "cannot read the versions directory $VERSIONS: '$up' is not a directory that can be searched (a failure, not 'none installed')"; fi
+  fi
+}
 # The versions one capture covers, into VERS: numeric order, each once. None named = every installed one. Named ones are ALL
 # checked first and the first bad one refused. Call it in the MAIN shell, never inside $( ) or < <( ): a `die` there ends only
 # that subshell (review 304 F7 was exactly that), so `rig.sh versions` and cmd_all call it directly.
@@ -74,9 +93,10 @@ pick_versions() {
     for v in "$@"; do need_version "$v"; done
     while IFS= read -r v; do VERS+=("$v"); done < <(printf '%s\n' "$@" | sort -t. -k1,1n -k2,2n -k3,3n | uniq)
   else
+    list_versions
     while IFS= read -r v; do
       if version_ok "$v"; then VERS+=("$v"); fi
-    done < <(ls "$VERSIONS" 2>/dev/null | sort -t. -k1,1n -k2,2n -k3,3n)
+    done < <(printf '%s\n' "$LISTED" | sort -t. -k1,1n -k2,2n -k3,3n)
   fi
 }
 guard_out() {   # an output directory must not sit inside the source tree (raw bundles are never git-add-able)
@@ -423,7 +443,7 @@ cmd_reap() {
   return 0
 }
 cmd_all() {
-  local RAW=${1-} v s rc
+  local RAW=${1-} v s rc total=0 failed=0
   [[ -n $RAW ]] || die "usage: rig.sh all <raw-root> [<version>...]"
   shift
   pick_versions "$@"   # a bad version refuses the whole capture BEFORE anything is made, reaped or removed
@@ -432,12 +452,19 @@ cmd_all() {
   rm -f "$RAW/.done"
   for v in ${VERS[@]+"${VERS[@]}"}; do
     for s in "$HERE"/scenarios/*.json; do
+      total=$((total + 1))
       # rc is read FIRST: the $(basename) below would reset $? to 0 before the printf expanded it.
       bash "$0" run "$v" "$s" "$RAW/$v/$(basename "$s" .json)" \
-        || { rc=$?; printf 'rig: run %s %s failed rc=%s\n' "$v" "$(basename "$s")" "$rc" >&2; }
+        || { rc=$?; failed=$((failed + 1)); printf 'rig: run %s %s failed rc=%s\n' "$v" "$(basename "$s")" "$rc" >&2; }
     done
   done
+  # .done says the sweep FINISHED (every run was attempted), not that every run succeeded: the exit says that. D-3999: a failed run
+  # left a bundle that builds `unmeasured` cells, and the sweep exited 0 over it, so a capture was trusted that had a hole in it.
   date -u +%Y-%m-%dT%H:%M:%SZ > "$RAW/.done"
+  if (( failed )); then
+    printf 'rig: %d of %d run(s) failed (the lines above name each); .done only marks the sweep as finished\n' "$failed" "$total" >&2
+    return 1
+  fi
 }
 
 case ${1-} in
