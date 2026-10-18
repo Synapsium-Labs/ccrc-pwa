@@ -107,6 +107,9 @@ describe('the meter is on the palette', () => {
     const track = container.querySelector('.meter');
     const fill = container.querySelector('.meter-fill');
     expect(track).toHaveClass('bg-limit-track', 'rounded-full', 'overflow-hidden');
+    // Its height is the skin's token, so Instrument's 8px cannot fall back to a
+    // literal (D-5447).
+    expect(track).toHaveClass('h-(--meter-h)');
     expect(fill).toHaveClass('bg-limit-critical');
     expect(fill).toHaveStyle({ width: '91%' });
     expect(track).toHaveAttribute('data-band', 'crit');
@@ -126,6 +129,10 @@ describe('the meter is on the palette', () => {
       for (const pat of ['LIMIT_TRACK', 'fillVariants(', 'bg-limit-', 'limit-fill']) {
         if (code.includes(pat)) offenders.push(`${rel}: ${pat}`);
       }
+      // A meter drawn by hand with the old hook classes (D-5447). Lowercase
+      // `className=` only, so `Meter`'s own `trackClassName`/`fillClassName`
+      // props, which pass the hooks to it, are not drawing anything.
+      if (/\bclassName=[^>\n]*\bacct-(meter|fill)(?![\w-])/.test(code)) offenders.push(`${rel}: hand-drawn acct-meter/acct-fill`);
     }
     expect(offenders).toEqual([]);
   });
