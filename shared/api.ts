@@ -11264,7 +11264,8 @@ export interface ApprovalRulingRecord {
   readonly agentId: string;
   readonly digest: string;
   readonly nonce: string;
-  readonly class: 'forbidden' | 'escalate' | 'ordinary';
+  /** An `ApprovalClass` word, as `approvalClass` (server/src/coord/approvalguard.ts) answered it; spelled there once. */
+  readonly class: string;
   readonly verdict: 'allow' | 'deny';
   readonly reason: string;
   readonly expiresAt: number;
