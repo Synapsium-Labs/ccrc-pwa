@@ -958,6 +958,7 @@ export type ExportMarkOutcome = 'marked' | 'mark-failed' | 'mark-busy' | 'write-
 export function decideMarkOutcome(i: { outcome: ExportMarkOutcome; recorded: string | null }): { markFails: number; write: string | null; intervalMs: number };
 export function decideMarkCheck(i: { metaKeys: readonly string[]; checkedRecord: string | null }): { check: boolean; facts: string[]; record: string };
 export function missingSegmentNames(i: { named: Iterable<string>; present: Iterable<string> }): string[];
+export function entryMayHoldMark(i: { blobs: readonly { exported: boolean; pruned: boolean }[] }): boolean;
 // --- W1-B4 Task 2: what one export segment carries (spec §9.15 "What is due", "Write")
 export interface SegmentBlob { key: string; zBytes: number; exported: boolean; pruned: boolean }
 export interface SegmentCandidate extends ExportCandidate { key: string; blobs: readonly SegmentBlob[] }

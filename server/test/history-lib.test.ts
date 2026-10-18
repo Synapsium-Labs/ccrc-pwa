@@ -8301,6 +8301,50 @@ describe('W1-B4: planSegment, the row-level due rule and what a segment carries 
   });
 });
 
+describe('W1-B4 whole-branch review: entryMayHoldMark, an entry keeps its export mark only while every blob it references is exported or pruned (D-5395 (history-export-mark-needs-its-blobs))', () => {
+  const DAY = 86_400_000;
+  const NOW = Date.UTC(2026, 11, 1);
+  const A = '/home/u/.claude-a';
+  const homes = { [A]: 180 };
+  const b = (exported: boolean, pruned: boolean): { exported: boolean; pruned: boolean } => ({ exported, pruned });
+  it('every blob exported: the entry may hold its mark', () => {
+    expect(libCarry.entryMayHoldMark({ blobs: [b(true, false), b(true, false), b(true, false)] })).toBe(true);
+  });
+  it('one blob pruned and the rest exported: it may (a stub is all there is to export, and a stub is never marked)', () => {
+    expect(libCarry.entryMayHoldMark({ blobs: [b(true, false), b(false, true), b(true, false)] })).toBe(true);
+    expect(libCarry.entryMayHoldMark({ blobs: [b(false, true)] }), 'a pruned blob alone').toBe(true);
+    expect(libCarry.entryMayHoldMark({ blobs: [b(true, true)] }), 'exported, then pruned').toBe(true);
+  });
+  it('one blob live and unmarked, whatever the others are: it may not (the pass offers only unmarked entries, so that text would stay store-only)', () => {
+    expect(libCarry.entryMayHoldMark({ blobs: [b(true, false), b(false, false)] })).toBe(false);
+    expect(libCarry.entryMayHoldMark({ blobs: [b(false, false), b(true, false)] }), 'in either order').toBe(false);
+    expect(libCarry.entryMayHoldMark({ blobs: [b(false, true), b(false, false), b(true, false)] }), 'beside a pruned one').toBe(false);
+    expect(libCarry.entryMayHoldMark({ blobs: [b(false, false)] }), 'alone').toBe(false);
+  });
+  it('no blob at all: it may, because nothing is owed. Measured: planSegment takes such a row carrying nothing (the pass then marks it), so a no for it would never be settled by any pass', () => {
+    const file = { home: A, mtimeMs: NOW - 160 * DAY, present: true };
+    const seg = libCarry.planSegment({ nowMs: NOW, homeRetentionDays: homes, boundBytes: 100 * libCarry.EXPORT_ROW_META_BYTES,
+      rows: [{ key: 'e-none', tsMs: NOW - 160 * DAY, files: [file], blobs: [] }] });
+    expect(seg, 'the pass takes it and has nothing to carry or stub').toMatchObject({ take: ['e-none'], carry: [], stubs: [] });
+    expect(libCarry.entryMayHoldMark({ blobs: [] })).toBe(true);
+  });
+  it('the pass\'s own output satisfies it: a taken row\'s blobs, once the segment carries the live ones, are all exported or pruned', () => {
+    const file = { home: A, mtimeMs: NOW - 160 * DAY, present: true };
+    const blobs = [{ key: 'live', zBytes: 10, exported: false, pruned: false }, { key: 'done', zBytes: 10, exported: true, pruned: false },
+      { key: 'stub', zBytes: 0, exported: false, pruned: true }];
+    const seg = libCarry.planSegment({ nowMs: NOW, homeRetentionDays: homes, boundBytes: 100 * libCarry.EXPORT_ROW_META_BYTES,
+      rows: [{ key: 'e-1', tsMs: NOW - 160 * DAY, files: [file], blobs }] });
+    expect(seg.take).toEqual(['e-1']);
+    const after = blobs.map((x) => ({ exported: x.exported || seg.carry.includes(x.key), pruned: x.pruned }));
+    expect(libCarry.entryMayHoldMark({ blobs: after })).toBe(true);
+    expect(libCarry.entryMayHoldMark({ blobs: blobs.map((x) => ({ exported: x.exported, pruned: x.pruned })) }), 'before the segment carries the live one').toBe(false);
+  });
+  it('a list is required: anything else is a caller\'s bug and throws, never a quiet yes', () => {
+    expect(() => libCarry.entryMayHoldMark({ blobs: undefined as unknown as [] })).toThrow(/entryMayHoldMark: blobs must be a list, got undefined/);
+    expect(() => libCarry.entryMayHoldMark({ blobs: 'live' as unknown as [] })).toThrow(/entryMayHoldMark: blobs must be a list, got string/);
+  });
+});
+
 describe('W1-B4: planExport\'s oldest due-since, the census input of doctor\'s wait rule (spec 9.15 "The gap guard"; O41 B4 input)', () => {
   const DAY = 86_400_000;
   const NOW = Date.UTC(2026, 11, 1);

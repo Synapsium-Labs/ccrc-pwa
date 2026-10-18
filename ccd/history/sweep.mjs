@@ -62,7 +62,7 @@ import {
   mergeJournalByTime, decideBind, restoreNameOk,
   EXPORT_DIR, EXPORT_SEGMENT_MAX_BYTES, EXPORT_SEGMENT_FORMAT, segmentName, nextSegmentSeq, planSegment, CLAUDE_CODE_DEFAULT_RETENTION_DAYS,
   shortestRetention, exportHorizonDays, decideExportPass, planExportRoom, exportPassIntervalMs, exportMarkFailsOf, decideMarkOutcome,
-  decideMarkCheck, missingSegmentNames, deadFileSourceKey, decideSegmentReplay, orderSegmentNames,
+  decideMarkCheck, missingSegmentNames, deadFileSourceKey, decideSegmentReplay, orderSegmentNames, entryMayHoldMark,
 } from './lib.mjs';
 import {
   MIGRATIONS, OWED_INDEX, StoreError, bump, clearDoneMarkers, closeWriter, createStore, dropPending, finishPending, getMeta,
@@ -2629,8 +2629,10 @@ async function recoverReindexChunk(db, run, cursor) {
 //                   ino)) (lib deadFileSourceKey: a path already of that form is the key itself, so a replayed row
 //                   exported again maps back to its own row), never a live row, even one that now reuses its inode
 //                   (§9.15), and with no file_paths row, so the live ingest can never find it;
-//                 - entries go through ENTRY_UPSERT's newest-rank rule, each marked with its segment;
-//                 - variants, boundaries (their carried ord), sidecars and memberships, idempotently.
+//                 - entries go through ENTRY_UPSERT's newest-rank rule, each marked with its segment unless the store holds a
+//                   blob it references live and unmarked (lib entryMayHoldMark; D-5395 (history-export-mark-needs-its-blobs));
+//                 - variants, boundaries (their carried ord), sidecars and memberships, idempotently; one that links such a
+//                   blob to its entry takes the entry's mark off.
 // Segments go in (seq, writer) order (lib orderSegmentNames), whatever their writer, and lib decideSegmentReplay
 // judges each from its meta: a newer format is refused loudly (meta export_segment_newer lists it, doctor FAIL
 // export-segment-newer) and skipped; another store's is skipped and counted export_segment_foreign. A segment that
@@ -2691,6 +2693,16 @@ function replayStmts(db) {
         tail_uuid, kept_blob_id, pre_tokens, post_tokens, duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT DO NOTHING`),
     boundaryHas: db.prepare('SELECT 1 AS x FROM boundaries WHERE entry_id = ?'),
+    // D-5395 (history-export-mark-needs-its-blobs): the states of the blobs an entry references, as the store holds them
+    // now: its own, its variants', its linked sidecars' and its boundary's kept blob. The sidecars are read through the
+    // key's transcript prefix (their table has no index on entry_id), the others through entries' primary key and the
+    // variants' and boundaries' own keys.
+    entryBlobStates: db.prepare(`SELECT b.z IS NULL AS pruned, b.exported_ms IS NOT NULL AS exported FROM blobs b WHERE b.blob_id IN (
+        SELECT blob_id FROM entries WHERE entry_id = ?
+        UNION SELECT blob_id FROM entry_variants WHERE entry_id = ?
+        UNION SELECT blob_id FROM sidecars WHERE transcript_pk = ? AND entry_id = ?
+        UNION SELECT kept_blob_id FROM boundaries WHERE entry_id = ? AND kept_blob_id IS NOT NULL)`),
+    blobState: db.prepare('SELECT z IS NULL AS pruned, exported_ms IS NOT NULL AS exported FROM blobs WHERE blob_id = ?'),
   };
   EXPORT_REPLAY_STMTS.set(db, s);
   return s;
@@ -2767,7 +2779,21 @@ function replayEntryRow(db, seg, r) {
     r.parse_state, r.struct_rank_ns, fileId, blobId);
   const s = replayStmts(db);
   const e = s.entrySel.get(r.uuid);
-  s.entryMark.run(seg.markMs, seg.name, e.entry_id);
+  // D-5395: the segment holds this row's bytes, but the store may hold more of the entry than the segment did (a late
+  // variant, a late-linked sidecar, a revived blob in the backup a restore started from): marked only when lib says every
+  // blob the entry references, as the store holds them now, is exported or pruned.
+  const states = s.entryBlobStates.all(e.entry_id, e.entry_id, t, e.entry_id, e.entry_id)
+    .map((b) => ({ pruned: Number(b.pruned) === 1, exported: Number(b.exported) === 1 }));
+  if (entryMayHoldMark({ blobs: states })) s.entryMark.run(seg.markMs, seg.name, e.entry_id);
+}
+/** D-5395: a replayed row that links a blob to an entry takes the entry's mark off when the store holds that blob live
+ *  and unmarked (lib decides), so the entry exports again with the bytes. The entry's own row marked it earlier in the
+ *  segment, before this row linked what the segment's export had not carried. */
+function unmarkEntryOverBlob(db, entryId, blobId) {
+  const b = replayStmts(db).blobState.get(blobId);
+  if (b !== undefined && !entryMayHoldMark({ blobs: [{ pruned: Number(b.pruned) === 1, exported: Number(b.exported) === 1 }] })) {
+    stmts(db).exportClear.run(entryId);
+  }
 }
 /** A variant's first file is the dead-file row of the first file the segment names for it (first_path, first_dev,
  *  first_ino; the export pass writes that file row before the entry), else its entry's own dead-file row
@@ -2780,6 +2806,7 @@ function replayVariantRow(db, _seg, r) {
   if (blobId === null) { bump(db, 'export_row_blob_missing'); return; }
   const first = deadFileIdOf(db, r.first_path, r.first_dev, r.first_ino) ?? Number(e.struct_file_id);
   stmts(db).variantIns.run(e.entry_id, blobId, first, r.first_seen_ms, r.cause);   // B1's own insert, byte for byte (ON CONFLICT (entry_id, blob_id) DO NOTHING)
+  unmarkEntryOverBlob(db, e.entry_id, blobId);
 }
 function replayBoundaryRow(db, _seg, r) {
   const s = replayStmts(db);
@@ -2794,6 +2821,7 @@ function replayBoundaryRow(db, _seg, r) {
   const ins = s.boundaryIns.run(e.entry_id, t, r.boundary_ord, r.trigger, r.head_uuid, r.anchor_uuid, r.tail_uuid, kept, r.pre_tokens, r.post_tokens, r.duration_ms);
   // Nothing inserted: the entry already has its boundary (a repeat, absorbed), or another entry holds this (transcript, ord).
   if (Number(ins.changes) === 0 && s.boundaryHas.get(e.entry_id) === undefined) bump(db, 'export_row_unplaced');
+  if (Number(ins.changes) === 1 && kept !== null) unmarkEntryOverBlob(db, e.entry_id, kept);
 }
 function replaySidecarRow(db, _seg, r) {
   const s = replayStmts(db);
@@ -2808,6 +2836,7 @@ function replaySidecarRow(db, _seg, r) {
     else entryId = e.entry_id;
   }
   sideStmts(db).sidecarIns.run(t, r.name, blobId, entryId, r.first_seen_ms);   // B1's own insert, byte for byte (ON CONFLICT (transcript_pk, name, blob_id) DO NOTHING)
+  if (entryId !== null) unmarkEntryOverBlob(db, entryId, blobId);
 }
 function replayMembershipRow(db, _seg, r) {
   const fileId = deadFileIdOf(db, r.path, r.dev, r.ino);
@@ -4162,9 +4191,13 @@ function stmts(db) {
   s = {
     blobId: db.prepare('SELECT blob_id, fts_indexed FROM blobs WHERE sha256 = ?'),
     // D-4589 (history-prune-revives-a-tombstone-on-recapture): a tombstone holds no body, so "already stored" means a row whose
-    // z is not NULL (blobLive), and the insert revives a tombstone; a stored body is never rewritten.
+    // z is not NULL (blobLive), and the insert revives a tombstone; a stored body is never rewritten. storeBlob runs the two
+    // statements below as one upsert's two halves, so a revival is told from a fresh blob by the insert's own answer, with no
+    // statement added for a fresh one (D-5395 (history-export-mark-needs-its-blobs)).
     blobLive: db.prepare('SELECT blob_id FROM blobs WHERE sha256 = ? AND z IS NOT NULL'),
-    blobIns: db.prepare('INSERT INTO blobs (sha256, codec, z, raw_len) VALUES (?, ?, ?, ?) ON CONFLICT(sha256) DO UPDATE SET codec = excluded.codec, z = excluded.z, raw_len = excluded.raw_len, pruned_ms = NULL WHERE blobs.z IS NULL'),
+    blobIns: db.prepare('INSERT INTO blobs (sha256, codec, z, raw_len) VALUES (?, ?, ?, ?) ON CONFLICT(sha256) DO NOTHING'),
+    blobRevive: db.prepare('UPDATE blobs SET codec = ?, z = ?, raw_len = ?, pruned_ms = NULL WHERE sha256 = ? AND z IS NULL'),
+    blobUnmarked: db.prepare('SELECT blob_id FROM blobs WHERE sha256 = ? AND exported_ms IS NULL'),
     blobZ: db.prepare('SELECT z, raw_len FROM blobs WHERE blob_id = ?'),
     entrySel: db.prepare('SELECT entry_id, blob_id FROM entries WHERE uuid = ?'),
     entryUpsert: db.prepare(ENTRY_UPSERT),
@@ -4198,6 +4231,49 @@ function stmts(db) {
   };
   INGEST_STMTS.set(db, s);
   return s;
+}
+
+/** The entries that reference a blob, and where each reference lives (D-5395 (history-export-mark-needs-its-blobs)): the
+ *  entry's own blob, a variant's, a LINKED sidecar's and a boundary's kept blob. Each statement clears the mark of the
+ *  entries one reference names, and only marked ones, through an index the schema already has (entries_blob,
+ *  entry_variants_blob, sidecars_blob, boundaries_kept) and the entries' primary key. An unlinked sidecar references no
+ *  entry. */
+const REFERRER_CLEAR_SQL = Object.freeze([
+  'UPDATE entries SET exported_ms = NULL, exported_seg = NULL WHERE exported_ms IS NOT NULL AND blob_id = ?',
+  'UPDATE entries SET exported_ms = NULL, exported_seg = NULL WHERE exported_ms IS NOT NULL AND entry_id IN (SELECT entry_id FROM entry_variants WHERE blob_id = ?)',
+  'UPDATE entries SET exported_ms = NULL, exported_seg = NULL WHERE exported_ms IS NOT NULL AND entry_id IN (SELECT entry_id FROM sidecars WHERE blob_id = ? AND entry_id IS NOT NULL)',
+  'UPDATE entries SET exported_ms = NULL, exported_seg = NULL WHERE exported_ms IS NOT NULL AND entry_id IN (SELECT entry_id FROM boundaries WHERE kept_blob_id = ?)',
+]);
+const REFERRER_CLEAR_STMTS = new WeakMap();
+/** Takes the export mark off every entry that references any of these blobs, and answers how many it cleared. Run in
+ *  the caller's transaction, on the paths that leave a live blob unmarked under entries that may be marked: a bind check
+ *  that cleared the marks of a missing segment's blobs, and a revived tombstone. An entry keeps its mark only while every
+ *  blob it references is exported or pruned (lib entryMayHoldMark); the pass offers only unmarked entries, so without
+ *  this the blob would never be carried. */
+function clearReferrerMarks(db, blobIds) {
+  let st = REFERRER_CLEAR_STMTS.get(db);
+  if (st === undefined) {
+    st = REFERRER_CLEAR_SQL.map((sql) => db.prepare(sql));
+    REFERRER_CLEAR_STMTS.set(db, st);
+  }
+  let cleared = 0;
+  for (const id of blobIds) for (const stmt of st) cleared += Number(stmt.run(id).changes);
+  return cleared;
+}
+
+/** A blob the chunk or the sidecar stores: inserted, or a tombstone revived (D-4589). A fresh blob costs the one insert
+ *  and nothing else: the insert's answer says it was fresh, and no entry references a blob that did not exist. When the
+ *  insert met a row, the second statement turns a tombstone into a body (a row that already holds one is left as it is),
+ *  and the blob is then live and, unless an export carried its bytes before prune took them, unmarked: the entries that
+ *  reference it lose their marks in the same transaction (D-5395 (history-export-mark-needs-its-blobs)). The caller
+ *  inserts only a blob it found no body for, so a row that holds one here is a race the lock rules out; the same rule
+ *  holds for it, since a live, unmarked blob is never under a marked entry. */
+function storeBlob(db, sha, z, rawLen) {
+  const s = stmts(db);
+  if (Number(s.blobIns.run(sha, CODEC, z, rawLen).changes) === 1) return;
+  s.blobRevive.run(CODEC, z, rawLen, sha);
+  const unmarked = s.blobUnmarked.get(sha);
+  if (unmarked !== undefined) clearReferrerMarks(db, [Number(unmarked.blob_id)]);
 }
 
 /** A stored blob's bytes parsed as JSON, behind lib's structure gate (D-4345, history-json-structure-bound). A body
@@ -4372,7 +4448,7 @@ export function writeChunk(db, chunk) {
   return withTx(db, 'NORMAL', () => {
     const blobIds = new Map();
     for (const [hex, b] of chunk.blobs) {
-      if (b.z !== null) s.blobIns.run(b.sha, CODEC, b.z, b.rawLen);   // D-4211: codec br5, Brotli quality 5
+      if (b.z !== null) storeBlob(db, b.sha, b.z, b.rawLen);   // D-4211: codec br5, Brotli quality 5
       blobIds.set(hex, s.blobId.get(b.sha).blob_id);
     }
     const counts = new Map(chunk.counts);
@@ -5069,7 +5145,7 @@ export async function ingestSidecar(db, ctx, s, budget, cache) {
     const transcriptPk = withTx(db, 'NORMAL', () => ensureTranscript(db, s.uuid));
     const entryId = linkSidecar(s.name, candidatesFor(db, cache, transcriptPk, s));
     withTx(db, 'NORMAL', () => {
-      if (z !== null) stmts(db).blobIns.run(sha, CODEC, z, size);
+      if (z !== null) storeBlob(db, sha, z, size);
       const blobId = stmts(db).blobId.get(sha).blob_id;
       const ins = q.sidecarIns.run(transcriptPk, s.name, blobId, entryId, ctx.nowMs);
       if (ins.changes === 1 && entryId === null) bump(db, 'sidecar_unlinked');
@@ -8490,7 +8566,10 @@ function bindFactKeys(db) {
  *  names and the listing measured here. One NORMAL transaction; when anything was cleared, export_segment_missing +1
  *  and HEALTH_META.exportSegmentMissing holds how many marks, which doctor WARNs on until a complete pass resets it.
  *  Either way it records its clock and `record`, the bind facts lib decideMarkCheck says it covers. Two DISTINCT scans
- *  of exported_seg per bind, blobs then entries; neither column has an index and none is added. A directory that is
+ *  of exported_seg per bind, blobs then entries, and one more of the blobs' per missing segment (the live blobs its
+ *  marks name); neither column has an index and none is added. An entry that references a live blob whose mark went
+ *  loses its own mark with it, whichever segment marked it (D-5395 (history-export-mark-needs-its-blobs)), and
+ *  those entries count in the number cleared. A directory that is
  *  absent (ENOENT) lists as none, so every mark naming a segment is missing; one that cannot be listed for any other
  *  reason (ENOTDIR, EACCES) is NOT absent: listSegments throws, before anything is cleared or recorded, and exportStep
  *  counts it and tries again next step. */
@@ -8503,9 +8582,17 @@ export function checkSegmentMarks(db, ctx, record) {
   const segments = missingSegmentNames({ named, present });
   let cleared = 0;
   withTx(db, 'NORMAL', () => {
+    // D-5395 (history-export-mark-needs-its-blobs): the live blobs whose marks name a missing segment, collected BEFORE their
+    // marks go. An entry that references one of them stays marked with a segment that IS here, and its blob is exported no
+    // more, so the entries get their marks cleared with the blobs' (a pruned blob owes nothing: a stub is all there is to export).
+    const lost = db.prepare('SELECT blob_id FROM blobs WHERE exported_seg = ? AND z IS NOT NULL');
     const blobs = db.prepare('UPDATE blobs SET exported_ms = NULL, exported_seg = NULL WHERE exported_seg = ?');
     const entries = db.prepare('UPDATE entries SET exported_ms = NULL, exported_seg = NULL WHERE exported_seg = ?');
-    for (const seg of segments) cleared += Number(blobs.run(seg).changes) + Number(entries.run(seg).changes);
+    for (const seg of segments) {
+      const ids = lost.all(seg).map((r) => Number(r.blob_id));
+      cleared += Number(blobs.run(seg).changes) + Number(entries.run(seg).changes);
+      cleared += clearReferrerMarks(db, ids);
+    }
     if (cleared > 0) {
       bump(db, 'export_segment_missing');
       setMeta(db, HEALTH_META.exportSegmentMissing, String(cleared));

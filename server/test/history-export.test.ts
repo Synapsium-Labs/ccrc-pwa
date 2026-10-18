@@ -13,7 +13,7 @@ import path from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import {
   makeHistoryBox, runSweep, skipOnDarwin, openStoreRO, counters, journalRecords, plantSession, plantTranscript,
-  exportDirOf, segmentsOf, segmentRows, runDriver, recoverRow, PRELOADS, CLI, runOnPty, type HistoryBox,
+  exportDirOf, segmentsOf, segmentRows, runDriver, recoverRow, PRELOADS, CLI, runOnPty, strandedBlobs, strandedBlobsOn, plantSegment, type HistoryBox,
 } from './historyHelpers.js';
 import { userRow, toolResultRow } from './historyFixtures.js';
 import { removeTmpFixturesEachTest } from './tmpHelpers.js';
@@ -25,6 +25,7 @@ import { DatabaseSync as MemDb } from 'node:sqlite';
 import * as x9Fs from 'node:fs';
 import * as x9Path from 'node:path';
 import { createHash as x9Hash } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { DatabaseSync as X9Db } from 'node:sqlite';
 import * as x9Lib from '../../ccd/history/lib.mjs';
 import * as x9Store from '../../ccd/history/store.mjs';
@@ -55,6 +56,8 @@ interface SweepExport {
   exportPass(db: DatabaseSync, ctx: Record<string, unknown>): Promise<PassResult>;
   exportStep(db: DatabaseSync, ctx: Record<string, unknown>): Promise<PassResult | null>;
   newBudget(now?: () => number, limits?: { maxMs?: number; maxBytes?: number; chunkBytes?: number }): Record<string, unknown>;
+  writeChunk(db: DatabaseSync, chunk: Record<string, unknown>): { newEntries: number; minNewTsMs: number | null };
+  checkSegmentMarks(db: DatabaseSync, ctx: Record<string, unknown>, record: string): { cleared: number; segments: string[] };
 }
 let SW: SweepExport;
 beforeAll(async () => { SW = (await import('../../ccd/history/sweep.mjs')) as unknown as SweepExport; });
@@ -939,6 +942,7 @@ describe('marks that move (W1-B4 Task 8; spec §9.15 "Mark", "After a bind")', (
     expect(Object.values(marks(box))).toEqual([again, again]);
     expect(metaOf(box, HEALTH_META.exportSegmentMissing), 'the re-export left nothing due behind: the WARN clears').toBe('0');
     expect(counters(box)['export_segment_missing'], 'a second check ran without a second bind').toBe(1);
+    expect(strandedBlobs(box), 'D-5395: no live blob is held only by marked entries').toEqual([]);
   }, 300_000);
 
   it('the check runs on the first step after a bind and not again until the next one: marks naming a present segment stay; a restore\'s bind clears those naming a missing one', async () => {
@@ -970,6 +974,7 @@ describe('marks that move (W1-B4 Task 8; spec §9.15 "Mark", "After a bind")', (
     expect(q(box, 'SELECT count(*) AS n FROM blobs WHERE exported_seg IS NOT NULL')[0]!['n']).toBe(0);
     expect(counters(box)['export_segment_missing']).toBe(1);
     expect(metaOf(box, HEALTH_META.exportSegmentMissing)).toBe('4');
+    expect(strandedBlobs(box), 'D-5395: no live blob is held only by marked entries').toEqual([]);
   }, 120_000);
 
   it('the check follows the bind facts it has not covered, never their clocks: a bind stamped before the last check (a box whose clock is behind) still runs it', async () => {
@@ -992,6 +997,7 @@ describe('marks that move (W1-B4 Task 8; spec §9.15 "Mark", "After a bind")', (
     });
     expect(Object.values(marks(box)), 'a bind stamped before the last check was never checked').toEqual([null, null]);
     expect(counters(box)['export_segment_missing']).toBe(1);
+    expect(strandedBlobs(box), 'D-5395: no live blob is held only by marked entries').toEqual([]);
   }, 120_000);
 
   // The check lists export/<store_id>/. A listing that fails for any reason but ENOENT is "unreadable", never "absent":
@@ -1068,6 +1074,7 @@ describe('marks that move (W1-B4 Task 8; spec §9.15 "Mark", "After a bind")', (
     await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, at(3 * MIN))));
     expect(Object.values(marks(box)), 'the next step checks again').toEqual([null, null]);
     expect(counters(box)['export_segment_missing']).toBe(1);
+    expect(strandedBlobs(box), 'D-5395: no live blob is held only by marked entries').toEqual([]);
   }, 120_000);
 
   it('a sidecar linked after its entry was exported clears that entry\'s marks, and the next pass writes the entry again with the sidecar row and its bytes; the census\'s due count returns to 0', () => {
@@ -1130,6 +1137,134 @@ describe('marks that move (W1-B4 Task 8; spec §9.15 "Mark", "After a bind")', (
     expect(q(box, 'SELECT count(*) AS n FROM sidecars')[0]!['n'], 'the same bytes are no second row').toBe(1);
     expect(marks(box), 'a sidecar already stored cleared its entry\'s marks').toEqual({ [rid(1)]: s1, [rid(2)]: s2 });
   }, 300_000);
+
+  // W1-B4 whole-branch review, D-5395 (history-export-mark-needs-its-blobs): an entry keeps its mark only while every
+  // blob it references is exported or pruned. Three ways the cases above left it marked over a live, unmarked blob.
+  for (const pruned of [false, true]) {
+    it(`D-5395, a bind check: segment 1 moved aside, segment 2 present: ${pruned
+      ? 'the entry segment 2 marked keeps its mark when the blob segment 1 marked has since been pruned (a stub is all there is to export)'
+      : 'the entry segment 2 marked is cleared with the blobs segment 1 marked, because its own blob is one of them; the next pass carries that blob and the census ends at 0'}`, async () => {
+      const { box, transcript, ids } = ingestedBox(`ccrc-history-export-bindref${pruned ? 'p' : ''}-`, [row(1, 'body one', 2 * DAY), row(2, 'another row', 2 * DAY)]);
+      const s1 = `1.${ids.writer}.db`;
+      const s2 = `2.${ids.writer}.db`;
+      const s3 = `3.${ids.writer}.db`;
+      passAt(box, 65);
+      fs.appendFileSync(transcript, `${JSON.stringify(row(1, 'body two', 2 * DAY))}\n`);   // the late variant clears row 1
+      passAt(box, 100);
+      passAt(box, 130);
+      expect(segmentsOf(box)).toEqual([s1, s2]);
+      expect(marks(box), 'CONTROL: row 1 is marked by segment 2 (it carries the late body), row 2 by segment 1').toEqual({ [rid(1)]: s2, [rid(2)]: s1 });
+      const blobMarks = (): Array<Record<string, unknown>> => q(box, `SELECT e.uuid AS uuid, b.exported_seg AS seg FROM entries e JOIN blobs b ON b.blob_id = e.blob_id ORDER BY e.uuid`);
+      expect(blobMarks(), 'CONTROL: row 1\'s own blob (its first body) went with segment 1').toEqual([{ uuid: rid(1), seg: s1 }, { uuid: rid(2), seg: s1 }]);
+      expect(strandedBlobs(box), 'CONTROL: the invariant holds before the bind').toEqual([]);
+      if (pruned) {
+        // prune took row 1's first body after segment 1 carried it: the store holds a tombstone, and segment 1 the only copy
+        await onStore(box, (db) => {
+          db.prepare('UPDATE blobs SET z = NULL, pruned_ms = ?, fts_indexed = 0 WHERE blob_id = (SELECT blob_id FROM entries WHERE uuid = ?)').run(Date.now(), rid(1));
+        });
+      }
+      // D-4765's own way out: the operator moves segment 1 aside, and a bind fact makes the next step check the marks
+      fs.renameSync(path.join(exportDirOf(box), s1), path.join(exportDirOf(box), `${s1}.aside`));
+      await onStore(box, (db) => { setMeta(db, `bound:${Date.now() + 131 * MIN}`, 'restore'); });
+      passAt(box, 131);   // the check runs first; the export's cadence still waits (its last pass at +130)
+      expect(blobMarks(), 'segment 1\'s blob marks are cleared').toEqual([{ uuid: rid(1), seg: null }, { uuid: rid(2), seg: null }]);
+      expect(counters(box)['export_segment_missing']).toBe(1);
+      expect(strandedBlobs(box)).toEqual([]);
+      if (pruned) {
+        expect(marks(box), 'row 2 is cleared with its blob; row 1 owes nothing (its first body is pruned, its late one is in segment 2) and keeps its mark')
+          .toEqual({ [rid(1)]: s2, [rid(2)]: null });
+        expect(metaOf(box, HEALTH_META.exportSegmentMissing), 'two blobs and row 2').toBe('3');
+        passAt(box, 200);
+        expect(marks(box)).toEqual({ [rid(1)]: s2, [rid(2)]: s3 });
+        expect(segmentRows(path.join(exportDirOf(box), s3), 'entries').map((e) => e['uuid']), 'segment 3 holds row 2 alone').toEqual([rid(2)]);
+      } else {
+        expect(marks(box), 'and so are the marks of every entry that references one of those blobs, whichever segment marked it').toEqual({ [rid(1)]: null, [rid(2)]: null });
+        expect(metaOf(box, HEALTH_META.exportSegmentMissing), 'two blobs, row 2, and row 1 whose blob segment 1 held').toBe('4');
+        passAt(box, 200);
+        expect(marks(box)).toEqual({ [rid(1)]: s3, [rid(2)]: s3 });
+        const seg3 = path.join(exportDirOf(box), s3);
+        expect(segmentRows(seg3, 'entries').map((e) => e['uuid']).sort(), 'segment 3 holds both rows').toEqual([rid(1), rid(2)]);
+        expect(blobMarks(), 'and carries both first bodies; the late one stays in segment 2').toEqual([{ uuid: rid(1), seg: s3 }, { uuid: rid(2), seg: s3 }]);
+        expect(segmentRows(seg3, 'blobs'), 'two bodies').toHaveLength(2);
+      }
+      expect(segmentsOf(box).filter((n) => !n.endsWith('.aside'))).toEqual([s2, s3]);
+      expect(metaOf(box, 'export_due'), 'nothing is left due').toBe('0');
+      expect(metaOf(box, HEALTH_META.exportSegmentMissing), 'the WARN clears because nothing is left, not because a pass found nothing due').toBe('0');
+      expect(strandedBlobs(box)).toEqual([]);
+    }, 600_000);
+  }
+
+  it('D-5395, a revived tombstone (writeChunk): a row whose blob prune tombstoned before its export went with a stub; a swap copy that stores the bytes again clears that row\'s mark, and an exported blob that was pruned and revived clears nothing; the next pass carries the bytes', async () => {
+    const { box, transcript, ids } = ingestedBox('ccrc-history-export-revive-', [row(1, 'kept text', 2 * DAY), row(2, 'pruned text', 2 * DAY)]);
+    const s1 = `1.${ids.writer}.db`;
+    const s2 = `2.${ids.writer}.db`;
+    const tombstone = (uuid: string) => onStore(box, (db) => {
+      // B2 Task 20's tombstone, as prune --apply writes it
+      db.prepare('UPDATE blobs SET z = NULL, pruned_ms = ?, fts_indexed = 0 WHERE blob_id = (SELECT blob_id FROM entries WHERE uuid = ?)').run(Date.now(), uuid);
+    });
+    await tombstone(rid(2));   // never exported: its row travels with a stub
+    passAt(box, 65);
+    expect(marks(box)).toEqual({ [rid(1)]: s1, [rid(2)]: s1 });
+    expect(q(box, 'SELECT b.exported_seg AS exported_seg FROM blobs b JOIN entries e ON e.blob_id = b.blob_id WHERE e.uuid = ? AND b.z IS NULL', rid(2)), 'CONTROL: the stub is no mark')
+      .toEqual([{ exported_seg: null }]);
+    await tombstone(rid(1));   // exported, THEN pruned: its bytes are in segment 1
+    // the swap copy: the same transcript, byte for byte, under another account's home
+    const copy = path.join(box.accountHome['claude-b']!, 'projects', SLUG, `${U}.jsonl`);
+    fs.mkdirSync(path.dirname(copy), { recursive: true });
+    fs.copyFileSync(transcript, copy);
+    passAt(box, 100);
+    expect(q(box, 'SELECT count(*) AS n FROM blobs WHERE z IS NULL')[0]!['n'], 'the fixture must revive both tombstones').toBe(0);
+    expect(marks(box), 'the exported blob keeps its row marked; the never-exported one clears its row\'s').toEqual({ [rid(1)]: s1, [rid(2)]: null });
+    expect(strandedBlobs(box)).toEqual([]);
+    passAt(box, 130);
+    expect(segmentsOf(box)).toEqual([s1, s2]);
+    expect(marks(box)).toEqual({ [rid(1)]: s1, [rid(2)]: s2 });
+    const seg2 = path.join(exportDirOf(box), s2);
+    expect(segmentRows(seg2, 'entries').map((e) => e['uuid'])).toEqual([rid(2)]);
+    const sha2 = String(q(box, 'SELECT lower(hex(b.sha256)) AS sha FROM entries e JOIN blobs b ON b.blob_id = e.blob_id WHERE e.uuid = ?', rid(2))[0]!['sha']);
+    expect(segmentRows(seg2, 'blobs').map(pick(['sha256', 'pruned'])), 'segment 2 carries the revived bytes').toEqual([{ sha256: sha2, pruned: 0 }]);
+    expect(metaOf(box, 'export_due'), 'nothing is left due').toBe('0');
+    expect(strandedBlobs(box)).toEqual([]);
+  }, 600_000);
+
+  it('D-5395, a revived tombstone (ingestSidecar): a linked sidecar whose blob prune tombstoned before the export went with a stub; the same bytes under another name store the blob again and clear the entry that links the first; the next pass carries the bytes', async () => {
+    const tr = toolResultRow({
+      uuid: rid(2), ts: new Date(Date.now() - 2 * DAY).toISOString(), sessionId: U, cwd: WORK, toolUseId: 'toolu_01B4REVIVE',
+      content: 'Output too large. Full output saved to: /home/u/x/tool-results/b4rev001.txt',
+    });
+    const dirOf = (b: HistoryBox): string => path.join(b.accountHome['claude-a']!, 'projects', SLUG, U, 'tool-results');
+    const BODY = 'the tool output of the revive case\n';
+    const { box, ids } = ingestedBox('ccrc-history-export-revives-', [row(1, 'a prompt', 2 * DAY), tr], {
+      passes: 3,
+      plant: (b) => { fs.mkdirSync(dirOf(b), { recursive: true }); fs.writeFileSync(path.join(dirOf(b), 'b4rev001.txt'), BODY); },
+    });
+    const s1 = `1.${ids.writer}.db`;
+    const s2 = `2.${ids.writer}.db`;
+    expect(q(box, 'SELECT s.name, e.uuid FROM sidecars s LEFT JOIN entries e ON e.entry_id = s.entry_id'), 'the fixture must link the sidecar to the tool_result row')
+      .toEqual([{ name: 'b4rev001.txt', uuid: rid(2) }]);
+    await onStore(box, (db) => {
+      db.prepare("UPDATE blobs SET z = NULL, pruned_ms = ?, fts_indexed = 0 WHERE blob_id = (SELECT blob_id FROM sidecars WHERE name = 'b4rev001.txt')").run(Date.now());
+    });
+    passAt(box, 65);
+    expect(marks(box)).toEqual({ [rid(1)]: s1, [rid(2)]: s1 });
+    fs.writeFileSync(path.join(dirOf(box), 'b4rev002.txt'), BODY);   // the same bytes, under a name no row names
+    passAt(box, 100);
+    expect(q(box, 'SELECT name, entry_id IS NULL AS unlinked FROM sidecars ORDER BY name'), 'the fixture must read the second file')
+      .toEqual([{ name: 'b4rev001.txt', unlinked: 0 }, { name: 'b4rev002.txt', unlinked: 1 }]);
+    expect(q(box, 'SELECT count(*) AS n FROM blobs WHERE z IS NULL')[0]!['n'], 'the fixture must revive the tombstone').toBe(0);
+    expect(marks(box), 'the entry that links the revived blob is cleared').toEqual({ [rid(1)]: s1, [rid(2)]: null });
+    expect(strandedBlobs(box)).toEqual([]);
+    passAt(box, 130);
+    expect(segmentsOf(box)).toEqual([s1, s2]);
+    expect(marks(box)).toEqual({ [rid(1)]: s1, [rid(2)]: s2 });
+    const seg2 = path.join(exportDirOf(box), s2);
+    const sha = String(q(box, 'SELECT lower(hex(b.sha256)) AS sha FROM sidecars s JOIN blobs b ON b.blob_id = s.blob_id WHERE s.name = ?', 'b4rev001.txt')[0]!['sha']);
+    expect(segmentRows(seg2, 'blobs').map(pick(['sha256', 'pruned'])), 'segment 2 carries the revived bytes').toEqual([{ sha256: sha, pruned: 0 }]);
+    expect(segmentRows(seg2, 'sidecars').map(pick(['name', 'uuid'])).sort((a, b) => String(a['name']).localeCompare(String(b['name']))),
+      'beside the linked sidecar row, the unlinked one that names the same blob').toEqual([{ name: 'b4rev001.txt', uuid: rid(2) }, { name: 'b4rev002.txt', uuid: null }]);
+    expect(metaOf(box, 'export_due'), 'nothing is left due').toBe('0');
+    expect(strandedBlobs(box)).toEqual([]);
+  }, 600_000);
 });
 
 // ── W1-B4 Task 9: the census's oldest due-since, and status --json's export block (spec §9.6, §9.15) ─────────────
@@ -1554,4 +1689,153 @@ describe('the selection reaches the due rows within its budget (W1-B4 whole-bran
     expect(metaOf(box, 'export_attempt_ms'), 'a pass that finds nothing due is a completed pass too').toBeNull();
     expect(metaOf(box, HEALTH_META.exportPassMs)).toBe(String(T + HOUR));
   }, 300_000);
+});
+
+// ── W1-B4 whole-branch review, FIX-B: what the mark invariant costs (D-5395 (history-export-mark-needs-its-blobs)) ───
+// The invariant is kept by clearing the referrers of a blob a bind check unmarks or a revival brings back, and by asking
+// the store, at a replayed entry, which blobs it references. Neither may cost the ingest's hot path a statement for a
+// fresh blob, and neither may scan a table the schema indexes for the lookup.
+describe('D-5395: the mark invariant adds no statement for a fresh blob and reads each reference through its index', () => {
+  const sweepSrc = (): string => fs.readFileSync(new URL('../../ccd/history/sweep.mjs', import.meta.url), 'utf8');
+  const referrerSql = (): string[] => {
+    const m = /const REFERRER_CLEAR_SQL = Object\.freeze\(\[([\s\S]*?)\]\);/.exec(sweepSrc());
+    if (m === null) throw new Error('sweep.mjs declares no REFERRER_CLEAR_SQL');
+    return [...m[1]!.matchAll(/'([^']*)'/g)].map((x) => x[1]!);
+  };
+  const gatherSql = (): string => {
+    const m = /entryBlobStates: db\.prepare\(`([\s\S]*?)`\)/.exec(sweepSrc());
+    if (m === null) throw new Error('sweep.mjs declares no entryBlobStates');
+    return m[1]!;
+  };
+
+  it('the referrer clears search entries_blob, entry_variants_blob, sidecars_blob and boundaries_kept, and the replay lookup seeks every table it reads: no scan of entries, variants or boundaries, sidecars through the transcript prefix', () => {
+    const db = new MemDb(':memory:');
+    try {
+      for (const m of MIGRATIONS) db.exec(m);
+      db.exec('PRAGMA foreign_keys = OFF');
+      db.exec('BEGIN');
+      const it = db.prepare("INSERT INTO transcripts (transcript_pk, cc_session_uuid, harness, agent_id) VALUES (?, ?, 'claude-code', '')");
+      const ib = db.prepare("INSERT INTO blobs (blob_id, sha256, codec, z, raw_len) VALUES (?, ?, 'raw', x'00', 1)");
+      const ie = db.prepare("INSERT INTO entries (uuid, transcript_pk, type, provenance, prov_version, struct_rank_ns, struct_file_id, blob_id, ts_ms, exported_ms) "
+        + "VALUES (?, ?, 'user', 'x', 1, 0, 1, ?, ?, 1)");
+      const isc = db.prepare('INSERT INTO sidecars (transcript_pk, name, blob_id, entry_id, first_seen_ms) VALUES (?, ?, ?, ?, 1)');
+      const iv = db.prepare('INSERT INTO entry_variants (entry_id, blob_id, first_file_id, first_seen_ms) VALUES (?, ?, 1, 1)');
+      const ik = db.prepare('INSERT INTO boundaries (entry_id, transcript_pk, ord, kept_blob_id) VALUES (?, ?, ?, ?)');
+      for (let t = 1; t <= 200; t += 1) it.run(t, `u${t}`);
+      for (let i = 1; i <= 4000; i += 1) {
+        ib.run(i, `h${i}`);
+        ie.run(`e${i}`, 1 + (i % 200), i, 1000 + i);
+        if (i % 10 === 0) { isc.run(1 + (i % 200), `s${i}`, i, i); iv.run(i, i - 1); ik.run(i, 1 + (i % 200), i, i - 2); }
+      }
+      db.exec('COMMIT');
+      db.exec('ANALYZE');   // the planner as a real store's statistics leave it
+      const plan = (sql: string, args: number[]): string => (db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...args) as Array<{ detail: string }>).map((r) => r.detail).join(' | ');
+      const sqls = referrerSql();
+      expect(sqls, 'one clear for each of the four references').toHaveLength(4);
+      ['entries_blob', 'entry_variants_blob', 'sidecars_blob', 'boundaries_kept'].forEach((ix, k) => {
+        const p = plan(sqls[k]!, [0]);
+        expect(p, `clear ${k + 1} searches ${ix}`).toMatch(new RegExp(`USING (COVERING )?INDEX ${ix}(_prov)? \\(`));   // schema v2 adds entries_blob_prov beside entries_blob, both keyed by blob_id
+        expect(p, `clear ${k + 1} scans nothing`).not.toMatch(/\bSCAN\b/);
+      });
+      const gather = plan(gatherSql(), [5, 5, 6, 5, 5]);
+      expect(gather, 'the replay lookup scans none of the tables it reads').not.toMatch(/\bSCAN\b/);
+      expect(gather, 'and reads a transcript\'s linked sidecars through the key\'s transcript prefix').toContain('SEARCH sidecars USING INDEX sqlite_autoindex_sidecars_1 (transcript_pk=?)');
+    } finally {
+      db.close();
+    }
+  });
+
+  /** `db` with every statement it prepares counted when it runs, in order. */
+  function counting(db: DatabaseSync): { db: DatabaseSync; ran: string[] } {
+    const ran: string[] = [];
+    const wrap = (text: string, st: object): object => new Proxy(st, {
+      get(t, p) {
+        const v: unknown = Reflect.get(t, p, t);
+        if (p === 'run' || p === 'get' || p === 'all') return (...a: unknown[]): unknown => { ran.push(text); return (v as (...x: unknown[]) => unknown).apply(t, a); };
+        return typeof v === 'function' ? (v as (...x: unknown[]) => unknown).bind(t) : v;
+      },
+    });
+    const proxy = new Proxy(db, {
+      get(target, prop) {
+        if (prop === 'prepare') return (text: string): object => wrap(text, target.prepare(text));
+        const v: unknown = Reflect.get(target, prop, target);
+        return typeof v === 'function' ? (v as (...x: unknown[]) => unknown).bind(target) : v;
+      },
+    });
+    return { db: proxy, ran };
+  }
+
+  it('the bind check clears the entries that reference a blob whose mark it clears, through each of the four references (its own blob, a variant, a linked sidecar, a kept blob), and keeps those whose blobs it did not clear or that a prune left a stub', async () => {
+    const { box, ids } = ingestedBox('ccrc-history-export-refs-', [row(1, 'a prompt', DAY)]);
+    const S1 = `1.${ids.writer}.db`;                                                                // the segment this box no longer has
+    const S2 = path.basename(plantSegment(box, ids.storeId, { seq: 2, writer: ids.writer, blobs: [], rows: [] }));   // one it has
+    const r = await onStore(box, async (db) => {
+      const one = (sql: string): number => Number((db.prepare(sql).get() as { n: number }).n);
+      const tp = one('SELECT transcript_pk AS n FROM transcripts');
+      const file = one('SELECT file_id AS n FROM ingest_files');
+      const blob = (name: string, seg: string | null, live: boolean): number => Number(db.prepare(
+        'INSERT INTO blobs (sha256, codec, z, raw_len, pruned_ms, exported_ms, exported_seg) VALUES (?, ?, ?, 4, ?, ?, ?)')
+        .run(createHash('sha256').update(name).digest(), 'br5', live ? Buffer.from('zz') : null, live ? null : 1, seg === null ? null : 1, seg).lastInsertRowid);
+      const entry = (uuid: string, blobId: number, seg = S2): number => Number(db.prepare(
+        "INSERT INTO entries (uuid, transcript_pk, type, provenance, prov_version, struct_rank_ns, struct_file_id, blob_id, ts_ms, exported_ms, exported_seg) VALUES (?, ?, 'user', 'x', 1, 0, ?, ?, 1, 1, ?)")
+        .run(uuid, tp, file, blobId, seg).lastInsertRowid);
+      const held = blob('held in a segment that is here', S2, true);
+      const lost = { own: blob('own', S1, true), variant: blob('variant', S1, true), sidecar: blob('sidecar', S1, true), kept: blob('kept', S1, true) };
+      const stub = blob('pruned since', S1, false);
+      const eOwn = entry(rid(11), lost.own);
+      const eVar = entry(rid(12), held);
+      const eSide = entry(rid(13), held);
+      const eKept = entry(rid(14), held);
+      const eCtl = entry(rid(15), held);
+      const eStub = entry(rid(16), held);
+      entry(rid(17), blob('a stub no segment carried', null, false), S1);   // marked with the missing segment, over no blob that segment marked
+      db.prepare('INSERT INTO entry_variants (entry_id, blob_id, first_file_id, first_seen_ms) VALUES (?, ?, ?, 1)').run(eVar, lost.variant, file);
+      db.prepare('INSERT INTO entry_variants (entry_id, blob_id, first_file_id, first_seen_ms) VALUES (?, ?, ?, 1)').run(eStub, stub, file);
+      db.prepare('INSERT INTO sidecars (transcript_pk, name, blob_id, entry_id, first_seen_ms) VALUES (?, ?, ?, ?, 1)').run(tp, 'linked.txt', lost.sidecar, eSide);
+      db.prepare('INSERT INTO boundaries (entry_id, transcript_pk, ord, kept_blob_id) VALUES (?, ?, 1, ?)').run(eKept, tp, lost.kept);
+      expect(strandedBlobsOn(db), 'CONTROL: marked blobs strand nobody').toEqual([]);
+      const out = SW.checkSegmentMarks(db, { paths: historyPaths(box.home), ids, now: () => Date.now() }, '["bound:1"]');
+      return { out, stranded: strandedBlobsOn(db) };
+    });
+    expect(r.out.segments).toEqual([S1]);
+    const left = q(box, 'SELECT uuid, exported_seg FROM entries WHERE uuid >= ? ORDER BY uuid', rid(11)).map((e) => [e['uuid'], e['exported_seg']]);
+    expect(left, 'the four that reference a blob whose mark went are cleared, and so is the one marked with the missing segment itself; the one with a blob in a present segment, and the one whose lost blob was pruned since, keep theirs').toEqual([
+      [rid(11), null], [rid(12), null], [rid(13), null], [rid(14), null], [rid(15), S2], [rid(16), S2], [rid(17), null]]);
+    expect(r.out.cleared, 'five blob marks (a pruned one included), the entry marked with the missing segment, and the four entries that reference a blob whose mark went').toBe(10);
+    expect(metaOf(box, HEALTH_META.exportSegmentMissing)).toBe('10');
+    expect(r.stranded).toEqual([]);
+  }, 120_000);
+
+  it('the hot path: a chunk that stores a fresh blob runs the insert and the id read and nothing about marks; a revival adds the revive, one read, and the four referrer clears only when the blob is unmarked', async () => {
+    const { box } = ingestedBox('ccrc-history-export-hotpath-', [row(1, 'a prompt', DAY)]);
+    const sha = (n: number): Buffer => createHash('sha256').update(`hotpath ${n}`).digest();
+    const chunkOf = (blobs: Array<{ sha: Buffer; z: Buffer }>): Record<string, unknown> => ({
+      blobs: new Map(blobs.map((b) => [b.sha.toString('hex'), { sha: b.sha, z: b.z, rawLen: 4 }])), counts: new Map(), rows: [],
+      transcriptPk: 1, fileId: 1, rankNs: 0n, first: null, cursor: { offset: 0, tailSha: null }, size: 0, mtimeNs: 0n, rawError: null,
+      nowMs: Date.now(), pairIdx: null, ccUuid: U,
+    });
+    const body = Buffer.from('zz');
+    const marksSql = /UPDATE entries SET exported_ms = NULL|UPDATE blobs SET codec|exported_ms IS NULL/;
+    const ran = await onStore(box, (raw) => {
+      // a tombstone never exported, one exported and then pruned
+      const put = raw.prepare('INSERT INTO blobs (sha256, codec, z, raw_len, pruned_ms, exported_ms, exported_seg) VALUES (?, ?, NULL, 4, 1, ?, ?)');
+      put.run(sha(2), 'br5', null, null);
+      put.run(sha(3), 'br5', 1, '9.0a1b2c3d.db');
+      const fresh = counting(raw);
+      SW.writeChunk(fresh.db, chunkOf([{ sha: sha(1), z: body }]));
+      const revived = counting(raw);
+      SW.writeChunk(revived.db, chunkOf([{ sha: sha(2), z: body }]));
+      const kept = counting(raw);
+      SW.writeChunk(kept.db, chunkOf([{ sha: sha(3), z: body }]));
+      return { fresh: fresh.ran, revived: revived.ran, kept: kept.ran };
+    });
+    const touching = (l: string[]): string[] => l.filter((t) => /\bblobs\b|UPDATE entries/.test(t) && !/ingest_files/.test(t));
+    expect(touching(ran.fresh), 'a fresh blob: the insert and the id read').toHaveLength(2);
+    expect(ran.fresh.filter((t) => marksSql.test(t)), 'and nothing about marks').toEqual([]);
+    expect(touching(ran.revived), 'a revived blob nobody exported: the insert, the revive, the unmarked read, four clears, the id read').toHaveLength(8);
+    expect(ran.revived.filter((t) => /UPDATE entries SET exported_ms = NULL/.test(t))).toHaveLength(4);
+    expect(touching(ran.kept), 'a revived blob a segment carried: no clear').toHaveLength(4);
+    expect(ran.kept.filter((t) => /UPDATE entries SET exported_ms = NULL/.test(t))).toEqual([]);
+    expect(q(box, 'SELECT count(*) AS n FROM blobs WHERE z IS NULL')[0]!['n'], 'all three are stored').toBe(0);
+  }, 120_000);
 });

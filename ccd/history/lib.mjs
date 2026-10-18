@@ -8327,6 +8327,20 @@ export function missingSegmentNames({ named, present }) {
   return [...new Set(named)].filter((n) => !here.has(n)).sort();
 }
 
+/** Whether an entry may hold its export mark, from the states of the blobs it references as the store holds them now
+ *  (D-5395 (history-export-mark-needs-its-blobs)): an entry references its own blob, its variants' blobs, its linked
+ *  sidecars' blobs and its boundary's kept blob. It keeps its mark only while every one of them is `exported` (some
+ *  segment holds its bytes) or `pruned` (a tombstone: a stub is all there is to export). A referenced blob that is
+ *  neither is live and unmarked: its text is store-only, and a marked entry hides it from the pass, which offers only
+ *  unmarked entries, so the census counts the blob due for good. The sweep asks it where it would set a mark (a
+ *  replayed row) and clears the marks of the referrers of a blob it unmarks or revives (a bind check, a revived
+ *  tombstone). No blob at all answers yes: nothing is owed, and it agrees with planSegment, which takes such a row
+ *  carrying nothing and whose pass marks it (the schema gives every entry its own blob, so the sweep never asks it). */
+export function entryMayHoldMark({ blobs }) {
+  if (!Array.isArray(blobs)) throw new TypeError(`entryMayHoldMark: blobs must be a list, got ${typeof blobs}`);
+  return blobs.every((b) => b.exported === true || b.pruned === true);
+}
+
 // ===========================================================================
 // What one export segment carries (spec §9.15 "What is due", "Write"; W1-B4
 // Task 2). Pure: the sweep pages its candidate rows, in the runs its exportSelect

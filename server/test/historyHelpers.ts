@@ -691,3 +691,29 @@ export function plantSegment(box: HistoryBox, storeId: string, s: PlantSegmentSp
   if (b4SegStore.publishSegment(seg, dir, name) !== 'linked') throw new Error(`plantSegment: ${name} is already in ${dir}`);
   return path.join(dir, name);
 }
+
+// ── W1-B4 whole-branch review: the mark invariant (D-5395 (history-export-mark-needs-its-blobs)) ───────────────
+/** The pairs (blob, entry) of every reference an entry holds on a blob: its own blob, its variants', its LINKED
+ *  sidecars' and its boundary's kept blob. An unlinked sidecar references no entry, so it is no pair. */
+const ENTRY_BLOB_REFS_SQL = `SELECT blob_id, entry_id FROM entries
+  UNION SELECT blob_id, entry_id FROM entry_variants
+  UNION SELECT blob_id, entry_id FROM sidecars WHERE entry_id IS NOT NULL
+  UNION SELECT kept_blob_id, entry_id FROM boundaries WHERE kept_blob_id IS NOT NULL`;
+/** Live blobs no segment has carried (z held, exported_ms NULL) that some entry references and whose every referring
+ *  entry is marked: the pass offers only unmarked entries, so no pass would ever carry such a blob, the census counts
+ *  it due for good and its text stays store-only. The invariant (D-5395) is that there are none. */
+const STRANDED_BLOBS_SQL = `WITH refs(blob_id, entry_id) AS (${ENTRY_BLOB_REFS_SQL})
+  SELECT lower(hex(b.sha256)) AS sha FROM blobs b
+  WHERE b.z IS NOT NULL AND b.exported_ms IS NULL
+    AND EXISTS (SELECT 1 FROM refs r WHERE r.blob_id = b.blob_id)
+    AND NOT EXISTS (SELECT 1 FROM refs r JOIN entries e ON e.entry_id = r.entry_id WHERE r.blob_id = b.blob_id AND e.exported_ms IS NULL)
+  ORDER BY sha`;
+/** The sha256 (hex) of every stranded blob in `db` (an empty list is the invariant holding). */
+export function strandedBlobsOn(db: DatabaseSync): string[] {
+  return (db.prepare(STRANDED_BLOBS_SQL).all() as Array<{ sha: string }>).map((r) => String(r.sha));
+}
+/** The same on the box's store, read-only. */
+export function strandedBlobs(box: HistoryBox): string[] {
+  const db = openStoreRO(box);
+  try { return strandedBlobsOn(db); } finally { db.close(); }
+}
