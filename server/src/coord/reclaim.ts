@@ -264,8 +264,9 @@ export type ReclaimOutcome =
   | { ok: false; kind: 'claimant-alive'; detail: string; by: string }
   // the NEW claimant is a live worker of another run (spec §12)
   | { ok: false; kind: 'heir-is-a-worker'; by: string }
-  // D-5298: the NEW claimant's own registry project is not the run's (`by`
-  // its project), or its row records none (`by` absent, `detail` says so)
+  // D-5298, D-5523: the NEW claimant's registry row records no project (`by`
+  // absent, `detail` says so). Since D-5523 an heir of any project is admitted,
+  // so the arm answers only the row that cannot be stamped.
   | { ok: false; kind: 'project-mismatch'; by?: string; detail?: string };
 
 /**
@@ -285,12 +286,15 @@ export type ReclaimOutcome =
  *      it out;
  *    • the HEIR PROJECT RUNG (D-5298, coordinator-first spec §6.4), unnumbered
  *      for the same reason, right after the heir rung below and inside the
- *      same `to !== from` branch: the heir's OWN measured registry project
- *      must equal the run's, or `project-mismatch` — a session in another
- *      project cannot become a child's parent by inheriting a programme any
- *      more than by opening a run. It fails closed (a row recording no
- *      project is refused; an unreadable field is `registry-unmeasurable`)
- *      and costs one field read, before the tmux measurement;
+ *      same `to !== from` branch: the heir's OWN registry project is measured
+ *      and stamped. Since D-5523 (the operator's ruling of 2026-10-18) it is
+ *      no longer compared with the run's project or the home: a coordinator
+ *      may sit in any project. It still fails closed (a row recording no
+ *      project is `project-mismatch`; an unreadable field is
+ *      `registry-unmeasurable`) and costs one field read, before the tmux
+ *      measurement. A cross-project heir leaves the programme's EXISTING
+ *      children's asks released to the operator (`parent-project-mismatch`,
+ *      watch.ts `tryHold`) — fail-safe, and the operator's own door;
  *    • the HEIR RUNG, deliberately UNNUMBERED so rungs 4 and 5 keep the
  *      numbers this file's comments and its suite already cite: `to` is not
  *      the worker of somebody ELSE's open run — else `heir-is-a-worker`
@@ -393,10 +397,12 @@ export async function reclaimRun(
     // D-5298: the heir project rung (the ladder above), the project rule only —
     // this is an ungated operator door with no uuid to attribute (D-5388). Not
     // on the identity path: re-typing the current claimant changes no binding.
-    // D-5388: `reclaimProgram` rebinds EVERY claimed run of the programme, so
-    // the heir is checked against every OPEN one it would become the parent
-    // of, not only the named run: each run's project, or the programme's
-    // stored home (a crossing's coordinator sits in the home), admits.
+    // D-5523 (the operator's ruling of 2026-10-18, #601): a coordinator may sit
+    // in ANY project, so the heir's project is MEASURED for the stamp and no
+    // longer compared with the runs' or the home — which supersedes D-5388's
+    // check against every open run of the programme. It still FAILS CLOSED:
+    // an unreadable field is the transient 502 and a row recording no project
+    // is refused, because the stamp below must be a measurement.
     const heir = await fieldMeasured(deps.io, deps.cfg.registryDir, to, 'project');
     if (!heir.ok && heir.reason === 'unreadable') {
       return { ok: false, kind: 'registry-unmeasurable',
@@ -404,18 +410,9 @@ export async function reclaimRun(
     }
     if (!heir.ok || heir.content === '') {
       return { ok: false, kind: 'project-mismatch',
-        detail: "the incoming coordinator's registry row records no project, so it cannot be the run's" };
+        detail: "the incoming coordinator's registry row records no project, so its project cannot be stamped" };
     }
     heirProject = heir.content;
-    const programHome = deps.coord.programHome(run.program);
-    if (heirProject !== programHome) {
-      if (heirProject !== run.project) return { ok: false, kind: 'project-mismatch', by: heirProject };
-      const other = deps.coord.programOpenClaimedRuns(run.program).find((r) => r.project !== heirProject);
-      if (other !== undefined) {
-        return { ok: false, kind: 'project-mismatch', by: heirProject,
-          detail: `run ${other.id} of this programme is in ${other.project}, and the incoming coordinator is of neither that project nor the programme's home` };
-      }
-    }
     const claimant = await measureClaimant(deps, from, now);
     if (claimant.state === 'unmeasurable') {
       return { ok: false, kind: 'registry-unmeasurable', detail: claimant.why };

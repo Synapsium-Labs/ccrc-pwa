@@ -1433,8 +1433,8 @@ export function registerCoordRoutes(
 
     // The coordinator's project, from the REGISTRY, MEASURED (D-2342) — read
     // ONCE, by the decider's `claimantProject` gate (D-5298), which refuses a
-    // claimant whose project is absent, empty, unreadable or not the run's. So
-    // an admitted open always carries a measured stamp; the stamp is still
+    // claimant whose project is absent, empty or unreadable (since D-5523 it is
+    // no longer compared with the run's or the home's). So an admitted open always carries a measured stamp; the stamp is still
     // written once and never backfilled.
     const coordProject = open.coordProject;
 
