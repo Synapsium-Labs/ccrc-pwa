@@ -122,8 +122,7 @@ describe('needsReason (D-5473, D-5497)', () => {
     // An answered ask explains a ruling already made, not the open dialog.
     expect(needsReason(attention({ ask: { state: 'answered', parentId: 'p-coord', answeredBy: 'p-coord' } }))).toBeNull();
     // A live frame from an older server omits the keys (it is cast, not revived).
-    const older = attention({}) as Partial<FleetSession>;
-    delete older.substrate; delete older.ask;
+    const { substrate: _substrate, ask: _ask, ...older } = attention({});
     expect(needsReason(older as FleetSession)).toBeNull();
   });
 
