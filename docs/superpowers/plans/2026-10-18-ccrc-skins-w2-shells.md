@@ -996,6 +996,7 @@ This task lands before S9 so those tasks add rules, not palette values.
   - "the tab bar publishes --phone-nav-h while mounted and removes it on unmount; a toast's offset includes it".
   - "every top-level screen's scroll region pads its bottom by --phone-nav-h" (a read of `shell.css` and each screen's root class).
 - [ ] **Step 2: Green.** Build it, retire the head. Run `contrast.test.ts`, `tap-targets.test.tsx` and `control-census.test.ts` alone: the retired keys leave the census (shrinking), and nothing new is uncovered.
+  - **Expect the Wordmark story to go red.** `ui/src/primitives/wordmark.stories.tsx` reads `.wordmark` and `.wordmark::before` from `fleet.css` (`HEAD_RULES`) to compare the primitive with the head. Once those rules go, drop the head comparison from the story and its play test; keep the `--accent` probe, and assert the computed font family, weight and size against the literal tokens (`--family-mono`, `--weight-medium`, `--fs-xl`) instead (D-5470).
 - [ ] **Step 3: Mutation table, RUN.**
 
   | Mutant | Suite | Expected red |
@@ -1427,7 +1428,7 @@ Mark it ✓, or write the defect and its fix. Screenshots are evidence for the r
 - **D-5478** — `instrument-page-grounds` (Task S3): the token contract gates every status text (`status <kind> text / page`) and every lane token (`acct-<hue> / page`, and `/ surface`) on `--bg-page` too, at 4.5:1, because Instrument's panels put them on the page (spec §8.2). The status texts' fit already names the page (`text(k, g)`'s default grounds are `[surface, page, raised]`), so their pairs are a gate, red only by mutation; the `--acct-<hue>` fit gains `page` (`[tint, surface, page]`), which is the fitting work. It is generator lane 4, after F9. If either hand-tuned Phosphor palette's lane hue is short on the page, the task stops and asks for a ruling rather than fitting a hand-tuned value.
 - **D-5479** — `flip-after-parity` (Task S18): Instrument's `preview: false` lands as its own PR, after the parity test, and not in "the W2 PR that lands Instrument's shell" as D-5096 says, because that shell lands across eight PRs and a flip inside any of them would make a partial shell every desktop's default. It also waits for the picker (F12b), axe in both skins (F3b), and `Sheet`'s desktop arm unless the coordinator rules otherwise.
 
-Issued and unused: 5480, 5496. 5480 is the one spare for a departure a worker meets while executing a task here; it is defined here, once, in the PR that introduces it, and the coordinator asks the allocator for more if one is not enough. 5496 was issued to Task S1 as its spare, and S1 met no departure.
+Issued and unused: 5480, 5496. 5480 is the one spare for a departure a worker meets while executing a task here; it is defined here, once, in the PR that introduces it, and the coordinator asks the allocator for more if one is not enough.
 
 ## Review log
 

@@ -150,7 +150,8 @@ how dense the console is. It never changes what the console is:
 
 - **The wordmark `❯ ccrc`.** The `❯` is in `--accent`, then `ccrc` in mono at
   medium weight, top-left in every shell. It is one primitive, `Wordmark`
-  (`src/primitives/wordmark.tsx`, D-5470), which every shell's bar renders:
+  (`src/primitives/wordmark.tsx`, D-5470), which every shell's bar renders
+  as the shells land (S4b, S5, S9, S11):
   the caret is `text-phosphor` (theme.css's key for `--accent`; `text-accent`
   is shadcn's muted surface and no ccrc colour), the name `--fs-xl` mono at
   medium weight, line-height 1, and the two are separated by a box gap rather
