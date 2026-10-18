@@ -84,8 +84,8 @@ const REPO = path.resolve(__dirname, '..', '..');
 const ROOTS = ['server/test', 'agent/test'] as const;
 const SELF = 'server/test/raw-spawn-census.test.ts';
 
-/** Files whose BARE spawns of a script are known and reasoned, with their exact count. Claimed files cannot be edited
- *  by this wave; each entry says what it reaches and when it is to be fixed. Empty since wave 17 (D-5322): the last
+/** Files whose BARE spawns of a script are known and reasoned, with their exact count. An entry is only for a file a
+ *  wave may not edit, and says what it reaches and when it is to be fixed. Empty since wave 17 (D-5322): the last
  *  entry's spawn runs contained, and a new bare one must be fixed or listed here with its reason. */
 const ALLOWED = new Map<string, { count: number; reason: string }>([]);
 
