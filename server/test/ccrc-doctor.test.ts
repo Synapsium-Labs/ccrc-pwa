@@ -16331,6 +16331,39 @@ describe('update-sweep: the last update\'s sweep, read from its report, WARN nev
     expect(r.code).toBe(2);
   });
 
+  // The gate skips on exactly `server` (D-5330). Each case below plants `died: abandoned` and expects the WARN: a role
+  // that hosts supervisors (`fleet`, the one the check exists for), a box with no ccrc.env at all, and a ccrc.env that
+  // cannot be read are none of them the skip (review 594 F1: skip-on-fleet, an unreadable file read as server and an
+  // absent one read as server each stayed green before these).
+  const abandonedWarns = (r: Result): void => {
+    expect(verdict(r)).toMatch(/^WARN update-sweep: the watchdog closed the last update's report/);
+    expect(r.code).toBe(2);
+  };
+
+  it('D16d: a fleet-role box keeps the check: `died: abandoned` WARNs, never the server-role skip (D-5330)', () => {
+    const home = sweepBox('ccrc-doctor-us-role-fleet-');
+    writeCcrcEnv(home, ['CCRC_ROLE=fleet', 'CCRC_FLEET=remote', ''].join('\n'));
+    plantSweep(home, 'died: abandoned', 'failed');
+    abandonedWarns(runUs(home));
+  });
+
+  it('D16e: a box with no ccrc.env at all keeps the check: an absent file is no role, never read as server (D-5330)', () => {
+    const home = sweepBox('ccrc-doctor-us-role-noenv-');
+    rmSync(join(home, '.ccrc', 'ccrc.env'), { force: true });
+    expect(existsSync(join(home, '.ccrc', 'ccrc.env')), 'the fixture still has a ccrc.env').toBe(false);
+    plantSweep(home, 'died: abandoned', 'failed');
+    abandonedWarns(runUs(home));
+  });
+
+  // Skipped as root: root reads a mode-000 file, so the file would be readable and the case would measure nothing.
+  it.skipIf(process.getuid?.() === 0)('D16f: an unreadable ccrc.env (mode 000) that records CCRC_ROLE=server keeps the check: an unreadable role is no role, never folded into the skip (D-5330)', () => {
+    const home = sweepBox('ccrc-doctor-us-role-unreadable-');
+    writeCcrcEnv(home, ['CCRC_ROLE=server', 'CCRC_FLEET=local', ''].join('\n'));
+    chmodSync(join(home, '.ccrc', 'ccrc.env'), 0o000);
+    plantSweep(home, 'died: abandoned', 'failed');
+    abandonedWarns(runUs(home));
+  });
+
   // The Darwin arm is ONE `_svc_is_active` read (no NRestarts under launchd), through the file's own `stubLaunchctl`, which
   // answers from the same `fixture-unit-claude-session@<id>.service` file the systemctl stub reads: `active`, any other word
   // (a loaded job that is not running: `inactive`) and an EMPTY file (the manager could not be asked). `failed` has no
