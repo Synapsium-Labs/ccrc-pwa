@@ -12355,6 +12355,24 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     expect(fs.readdirSync(path.join(home, '.cc-sessions')).filter((n) => n.startsWith(`.${ID}.compactserved.`))).toEqual([]);
   });
 
+  // The commonest real shape (review of the landing merge): a manual session, which D-5301 makes its project's
+  // coordinator (no `.child` row, no `.hold`). It gets the role subject AND the line: the role rides the standing card,
+  // the line the compact subject, and the emitter joins the two with one space. The baseline is the same session with
+  // no prediction planted, so the role subject is shown to be the hook's own, unchanged by the line beside it.
+  it('a manual session (no child row, no hold: a coordinator under D-5301) gets its role subject and the card line together', () => {
+    const child = path.join(home, '.cc-sessions', `${ID}.child`);
+    fs.rmSync(child, { force: true });
+    expect(fs.existsSync(path.join(home, '.cc-sessions', `${ID}.hold`)), 'no hold row').toBe(false);
+    const roleOnly = served();
+    expect(roleOnly, 'the role subject alone, before any prediction').toMatch(/^ccrc-role: You are a coordinator for this project\./);
+    expect(hasLine(roleOnly), 'no line without a prediction').toBe(false);
+    plantAll();
+    fs.rmSync(child, { force: true });   // plantDirs plants the child row; this case is the session without one
+    expect(LINE, 'the line keeps its grammar').toMatch(lib.CARD_LINE_RE);
+    expect(LINE.length, 'the line stays under its cap').toBeLessThanOrEqual(lib.CARD_LINE_MAX);
+    expect(served(), 'the role subject, unchanged, then the line').toBe(`${roleOnly} ${LINE}`);
+  });
+
   const MARKERS: ReadonlyArray<readonly [string, () => string]> = [
     ['subagent', () => `subagent ${SID} ${Date.now()}`],
     ['ambiguous', () => `ambiguous ${SID} ${Date.now()}`],
