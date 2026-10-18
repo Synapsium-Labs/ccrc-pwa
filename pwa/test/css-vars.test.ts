@@ -94,10 +94,10 @@ describe('every var() under src/ resolves to a token src/ defines', () => {
       const f = path.join(dir, 'pwa/src/fleet/fleet.css');
       fs.writeFileSync(
         f,
-        // The rule as main ships it: the misspelt token with its fallback. The
-        // literal this file now carries is that fallback, written plainly.
-        fs.readFileSync(f, 'utf8').replace(
-          ".acct-fill { background: #f85149; }", ".acct-fill { background: var(--limit-crit, #f85149); }"),
+        // The rule as main once shipped it: the misspelt token with its
+        // fallback. The rule itself is gone (the meter owns its fill, D-5098),
+        // so the plant is a scratch rule appended to the temp copy.
+        `${fs.readFileSync(f, 'utf8')}\n.acct-fill { background: var(--limit-crit, #f85149); }\n`,
       );
       expect(unresolved(path.join(dir, 'pwa'))).toEqual([
         { token: '--limit-crit', where: expect.stringContaining('fleet.css:') },

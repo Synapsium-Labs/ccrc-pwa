@@ -27,8 +27,8 @@
 
    NOTHING READS THE TYPE OR DENSITY ROLES YET. They are declared so the axis
    exists; the shared primitives adopt them in Task 14, the app sheets in Task
-   14b. Until then Instrument differs from Refined in radii, card elevation and
-   motion only.
+   14b. Until then Instrument differs from Refined in radii, card elevation,
+   motion and the meter's shape (D-5098, which Meter reads already).
    ========================================================================== */
 
 :root[data-skin='instrument'] {
@@ -60,6 +60,12 @@
 
   /* elevation — depth from grounds and hairlines, not shadow */
   --elev-card: none;
+
+  /* meter — ten LED segments with 2px gaps, 8px tall, on every meter
+     (D-5098). Unlit segments show the palette's track. */
+  --meter-h:        8px;
+  --meter-segments: 10;
+  --meter-gap:      2px;
 }
 
 @media (min-width: 900px) {

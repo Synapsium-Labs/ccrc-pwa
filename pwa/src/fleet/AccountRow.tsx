@@ -13,7 +13,7 @@
 // ground stays.
 import type { CSSProperties, ReactNode } from 'react';
 import type { RosterWire } from '../../../shared/api';
-import { Chip, LIMIT_TRACK, ListRow, fillVariants, limitBand } from '@ccrc/ui';
+import { Chip, ListRow, Meter, limitBand } from '@ccrc/ui';
 import { accountHue, accountLabel } from '../lib/accounts';
 import { condemned, type AccountFacts } from './accountPicker';
 import { PoolTag } from './PoolTag';
@@ -29,7 +29,10 @@ import './fleet.css';
  *  visual language for it. The track is left EMPTY for a rolled-over window,
  *  which is what `Bar` renders too — its fill is `width: 0%` there, because the
  *  0 it would draw is the inferred one. A confident bar and the word "reset"
- *  would contradict each other in the same row. */
+ *  would contradict each other in the same row.
+ *
+ *  The bar itself is `Meter`, the one meter every gauge draws through
+ *  (D-5098); this keeps only the `acct-gauge` wrapper and the words. */
 function Gauge({ label, value, rolledOver, off = false }: {
   label: string; value: number | null; rolledOver: boolean; off?: boolean;
 }): ReactNode {
@@ -37,14 +40,7 @@ function Gauge({ label, value, rolledOver, off = false }: {
   return (
     <span className="acct-gauge">
       <span>{label}</span>
-      <span className={LIMIT_TRACK}>
-        {pct !== null && (
-          <span
-            className={fillVariants({ band: off ? 'off' : limitBand(pct) })}
-            style={{ width: `${pct}%` }}
-          />
-        )}
-      </span>
+      <Meter pct={pct} band={pct === null ? 'none' : limitBand(pct)} off={off} />
       <span className="acct-gauge-pct">
         {rolledOver ? 'reset' : pct === null ? '—' : `${Math.round(pct)}%`}
       </span>
@@ -119,11 +115,11 @@ export function AccountRow({
       <span className="acct-gauges">
         {/* Above the gauges, not instead of them: the numbers are still true of
             the last moment anything ran there, and this is the sentence that
-            says why they stopped moving. The gauges take LimitBar's `off` band
+            says why they stopped moving. The gauges take the meter's `off`
             for the reason AccountsScreen greys its own — a frozen crit-red bar
             reads as live pressure on a lane nothing is running on. It was a
-            `[data-disabled]` rule in fleet.css reaching into `.limit-fill`;
-            the component owns its own appearance now. */}
+            `[data-disabled]` rule in fleet.css reaching into the fill; the
+            component owns its own appearance now. */}
         {off && <span className="acct-condemned">sign-in expired on the fleet host</span>}
         {facts === null ? (
           <span className="acct-unknown">limits unknown</span>
