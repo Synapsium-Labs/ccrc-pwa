@@ -55,8 +55,8 @@
    One variable file per family covers every weight (100 to 900). `swap`
    paints today's system face first and swaps once the file arrives, so text
    is never invisible while it loads. The stacks below keep the system
-   faces behind Geist, so a glyph Geist lacks (❯ ♻ ⑂ …) falls back per glyph
-   to the face it had before.
+   faces behind Geist, so a glyph Geist lacks (❯ ⑂ ✉ …) falls back per glyph
+   to a system face.
    ------------------------------------------------------------------------- */
 
 @font-face {

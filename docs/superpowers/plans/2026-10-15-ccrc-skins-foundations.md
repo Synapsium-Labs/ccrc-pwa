@@ -131,9 +131,9 @@ Every task's requirements include this section. `CLAUDE.md` is the authority; th
 | `ui/src/styles/skins.ts` | **Create** | the skin catalogue (`SKINS`, ids, `preview`), `SKIN_STORAGE_KEY`, `SKIN_TOKENS` (with each tap-bearing density token marked), `resolveSkin`, `applySkin`; `AUTO` and `DEVICE_QUERY` in Task 12a | 1, 2, 5, 12a |
 | `ui/src/styles/skins.css` | **Create** | `:root[data-skin='instrument']` and its media blocks: Instrument's token values, no colour | 1, 5, 11 |
 | `ui/src/styles/tokens.css` | Modify | `:root` gains the role tokens with Refined's values, `--fs-md` and `--ls-tight` (Task 1); meter tokens (5); `--ink-on-danger` (6); the Geist stacks (7); `--bg-hover` and `--bg-pressed` (9); Refined's radii (11). The generated block is regenerated in Tasks 4, 6 and 9. | 1, 4–7, 9, 11 |
-| `ui/src/styles/theme.css` | Modify | imports `skins.css` (1) and `fonts.css` (7) after `tokens.css`; maps the new tokens | 1, 6, 7, 9 |
+| `ui/src/styles/theme.css` | Modify | imports `skins.css` (1) and `fonts.css` (7: none, D-5450) after `tokens.css`; maps the new tokens | 1, 6, 7, 9 |
 | `ui/src/lib/cn.ts` | Modify | the merge learns the new utilities: the font-size group gains `md`, `ui`, `prose`, `meta`, `title` and `section`; the spacing scale gains `gutter`, `row`, `card` and `section` | 1 |
-| `ui/src/styles/fonts.css` | **Create** | the two `@font-face` rules | 7 |
+| `ui/src/styles/fonts.css` | **Create** | the two `@font-face` rules (not created: D-5450) | 7 |
 | `ui/src/fonts/Geist-Variable.woff2`, `GeistMono-Variable.woff2`, `OFL.txt` | **Create** | the vendored Geist pair and its licence | 7 |
 | `pwa/public/licenses/Geist-OFL.txt` | **Create** | the licence as shipped with the app (a bound copy) | 7 |
 | `ui/src/icons/lucide.ts`, `ui/src/icons/LICENSE.lucide` | **Create** | the vendored lucide icon nodes in use, and the ISC licence | 8 |

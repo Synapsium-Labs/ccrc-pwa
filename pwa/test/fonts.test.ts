@@ -22,7 +22,7 @@ import { declaredValues, norm, stripComments } from './cssRule';
 //   (1) the two woff2 files are the pinned release's, byte for byte;
 //   (2) the two @font-face rules point at exactly those files;
 //   (3) the stacks lead with Geist and keep today's system stacks behind it,
-//       so a glyph Geist lacks falls back per glyph to the face it had before;
+//       so a glyph Geist lacks falls back per glyph to a system face;
 //   (4) nothing reaches an external font host;
 //   (5) the shipped licence is the vendored one, and is the OFL 1.1;
 //   (6) the faces are top-level rules of tokens.css, which theme.css imports.

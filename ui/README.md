@@ -231,7 +231,7 @@ and `geist` is not a dependency (spec §12 O5).
   in Storybook's, and emits a hashed asset under `/assets/`.
 - **The stacks.** `--family-ui` and `--family-mono` lead with the pair and keep
   the system stacks behind it, so a glyph Geist lacks falls back, per glyph,
-  to the face it had before.
+  to a system face.
 - **The licence.** SIL Open Font License 1.1. The app ships a byte-identical
   copy at `/licenses/Geist-OFL.txt` (`pwa/public/licenses/`), and the service
   worker never answers `/licenses/` with the app shell (`swDenylist`).
