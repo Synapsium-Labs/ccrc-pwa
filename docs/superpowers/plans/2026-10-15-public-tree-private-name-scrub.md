@@ -322,4 +322,45 @@ ledger, the 2026-09-08 spec and the wave-3 docs-flip plan), `server/test/coordin
 
 ## Deviations found
 
-(None yet. Numbers are issued to the run at dispatch.)
+Run 561 was issued D-5277 to D-5288 at dispatch. Each number is defined here when it is taken.
+
+- **D-5277** — `visibility-measured-by-token` (Task 1 Step 6): a row's visibility was measured with the class's own
+  tokenizer, as a whole token joined any way (every form a row commits, matched as `part`), over the messages and
+  patches reachable from `origin`'s branches and the tags that exist on `origin`, not with `git log --all -i -G`.
+  `--all` reaches refs that were never published (local-only tags, the stash), and a fixed-string `-G` counts a token
+  inside an unrelated longer word, which would commit a hash for a name whose private sense was never public. A row
+  whose base64 copy is in that history counts as present: the two base64-literal classes this plan removes published
+  those names in decodable form, so hashing them reveals nothing new. Result: 80 rows `pub`, 17 `local` (8 already
+  local, 9 measured absent); no `local` row has a hit in the tree. A first pass that matched each row in its own mode
+  marked one row `local` that the tree speaks joined another way; the Task 1 review found it.
+- **D-5278** — `no-product-passes` (Task 1 Step 7): class 9's `passes` carry no product run. The tree speaks product
+  vocabulary containing a `run` entry's tokens for one row only, and committing that vocabulary beside the class,
+  with or without a comment, tells a reader which tokens that entry is made of. The `run`/`part` distinction is
+  pinned by synthetic unit pins in `private-names.test.ts` instead, and the Task 7 mutant that widens a `run` entry to
+  `part` shows red on the tree row. The passes are ccrc's own vocabulary, the house stand-ins, and the replacement
+  vocabulary the two removed classes pinned.
+- **D-5279** — `entries-live-in-the-matcher` (Task 1 Steps 7-8): `PRIVATE_NAMES`, `CANARY` and `EXEMPTIONS` are exported
+  by `private-names.mjs`, not defined in `topology-clean.test.ts`: `license.test.ts` reads the old-org entries from
+  them (Decision 3) and the local scan applies the same exemptions as the class, so both need one copy. `CANARY` is
+  built by `join`, so no line of the tree spells it as one run, and the planned line-digest exemption for its
+  defining line is not needed. A `match` class takes `(line, file)`. Both exemptions apply to one entry only, in
+  documents under `docs/` whose path names the history programme.
+- **D-5280** — `every-form-of-a-name` (Task 1 Step 10, Review Focus 4): the tokenizer and the entries cover the forms the
+  tree writes a name in, found by the independent `grep -F` cross-check and by the Task 1 review. A list row commits
+  up to three entries (`entriesOf`): its tokens split at camelCase boundaries, its camelCase pieces merged, and all
+  its tokens run together. A line is read split; then, where it has a camelCase boundary, every run of two to four
+  consecutive camelCase pieces is read as one token against the one-token entries (a name inside `useXxx` or
+  `XxxClient`), and its pieces merged. An upper-case run splits before its last capital when a lower-case letter
+  follows. A line is folded one code point at a time: NFKC, Unicode hyphens to `-`, soft hyphens and zero-width
+  characters dropped. The old classes matched substrings, so a name with a letter or digit appended still scored;
+  class 9 matches whole tokens, and such a form is caught only where it is another listed row.
+- **D-5281** — `modes-keep-their-joiners` (Task 1 Step 10): `run` matches the joiners its name is listed with
+  (case-blind), not any run joiner, and a fourth mode, `exact`, matches anywhere in a run with the listed joiners.
+  Measured at the branch point: some rows' tokens also occur in product vocabulary or in fixture file names, joined
+  by a different character, and every such hit was a false positive. The local list's modes changed for nine rows:
+  one to `exact`, eight from `run` to `part`, where `part` loses nothing and also catches a name inside a branch or
+  workspace slug.
+- **D-5282** — `the-class-reads-like-the-scan` (Task 1, Review Focus 3 and 4): class 9 prints a path with each hit
+  replaced by its `#h8`, since a file named after an entry would otherwise put the name into a public CI log, and it
+  reads a `words` phrase broken across two lines, which the plan left to the local scan. The branch corpus reads a
+  path git decorates in a diff header (a trailing TAB after a space, C-quoting with octal escapes).
