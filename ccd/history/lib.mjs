@@ -8472,7 +8472,8 @@ export function planSegment({ nowMs, homeRetentionDays, rows, boundBytes, reduce
  *  waits its interval, not the next tick. Two shapes, both a pass that wrote no segment and so moved nothing:
  *  - nothing taken and the selection did not run to its end (`taken` 0, `selectionComplete` false). The bound cannot end a
  *    selection before its first row, since planSegment takes a pass's first row whatever its size, so the budget is all
- *    that is left;
+ *    that is left. A selection that never began, the budget already spent as the pass started (the export is the tick's
+ *    last step), is the same fact: it did not run to its end;
  *  - rows taken and none written, the writer finding the budget spent before its first row (`written` 0, `writeStopped`
  *    'budget'). The writer checks the budget before history-off, so a budget spent beside the operator's switch reads as
  *    the budget.

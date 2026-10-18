@@ -8448,7 +8448,8 @@ function noteExportPassDone(db, nowMs, complete) {
   if (complete && (getMeta(db, HEALTH_META.exportSegmentMissing) ?? '0') !== '0') setMeta(db, HEALTH_META.exportSegmentMissing, '0');
 }
 
-/** A pass the run's budget held before it wrote a segment (lib budgetHeldPass: nothing taken, or rows taken and none written;
+/** A pass the run's budget held before it wrote a segment (lib budgetHeldPass: nothing taken, because the selection ran out of
+ *  budget or never began on a budget already spent, or rows taken and none written;
  *  D-5394 (history-export-select-due-transcripts)): one stderr line, and the attempt clock in the small transaction a failure
  *  records it in, so exportStep's cadence waits its interval. It is not a pass: doctor's last-pass clock does not move. A
  *  record that meets busy or a full disk is left: the next tick tries sooner, and nothing is lost. */
@@ -8489,7 +8490,16 @@ export async function exportPass(db, ctx) {
     ensureExportDirs(ctx.paths, storeId);
     // A stale temp (a killed pass's) is removed by Task 6's exportStep before its preflight, so a pause never keeps it.
     const room = Math.min(EXPORT_SEGMENT_MAX_BYTES, ctx.budget.maxBytes - ctx.budget.bytes);
-    if (room <= 0 || !budgetLeft(ctx.budget)) return stop('held');
+    if (room <= 0 || !budgetLeft(ctx.budget)) {
+      // The run's budget is already spent as the export starts (it is the tick's last step and shares the budget with ingest,
+      // the FTS backfill, nodes and cards): the selection never begins, which is a selection that did not run to its end, so
+      // lib's budgetHeldPass says the same as for one the budget ended (nothing taken, `selectionComplete` false). The pass
+      // records its attempt and says so once, so the next step waits its interval and not the next tick, and a node with a
+      // standing backlog does not re-run the bind-check read, the mkdir, the temp sweep and the statfs every tick in silence
+      // (D-5394 (history-export-select-due-transcripts)).
+      if (budgetHeldPass({ taken: 0, selectionComplete: false, written: 0, writeStopped: null })) noteExportPassHeld(db, ctx, nowMs);
+      return stop('held');
+    }
     const sel = exportSelect(db, ctx, nowMs, exportHomeDays(db, ctx.homes), room);
     if (sel.taken.length === 0) {
       // The run's budget ended the selection before it took a row (lib budgetHeldPass; never history-off, which stops the
@@ -8588,7 +8598,7 @@ export async function exportPass(db, ctx) {
  *  (HEALTH_META.exportPaused, planExportRoom's word) until a preflight admits. Capture is unaffected, and the next tick
  *  retries: a pause is not a pass. A stale temp is removed before the probe, so a pause never keeps one. A pass that
  *  fails with a caught error counts for the cadence (Task 5's attempt clock), so it retries hourly; so does a pass the
- *  run's budget held before it wrote a segment, whether it took no row or took rows and wrote none (lib budgetHeldPass;
+ *  run's budget held before it wrote a segment, whether it started on a budget already spent, took no row or took rows and wrote none (lib budgetHeldPass;
  *  D-5394 (history-export-select-due-transcripts)), while history-off, a pause and a busy leave the clock as it was; and a
  *  pass that ran to its end (written, or nothing due) deletes the attempt clock. First of all, and
  *  outside the cadence, the step checks the export marks against the segments on this box once per new bind fact

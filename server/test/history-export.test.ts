@@ -1911,6 +1911,42 @@ describe('the selection reaches the due rows within its budget (W1-B4 whole-bran
     expect(metaOf(box, 'export_attempt_ms'), 'a pass that ran to its end clears the attempt clock').toBeNull();
   }, 300_000);
 
+  // The export is the tick's last step and shares the run's 90 s / 512 MiB budget with ingest, the FTS backfill, nodes and
+  // cards, so on a node with a backlog it starts on a budget the earlier steps already spent. That pass is held before it
+  // selects anything, and it records its attempt and says so like the two holds above, so the next step waits its interval
+  // instead of re-running the bind-check read, the mkdir, the temp sweep and the statfs every tick, silently (D-5394).
+  for (const spent of ['bytes', 'clock'] as const) {
+    it(`(c) an export step that starts on a budget already spent (${spent}) records its attempt and says so once, so the next step waits its interval; a step with a budget that lasts then writes the rows and clears the record`, async () => {
+      const { box, ids } = ingestedBox(`ccrc-history-export-held-early-${spent}-`, [row(1, 'one', 2 * DAY), row(2, 'two', DAY)]);
+      const T = Date.now() + 2 * HOUR;   // past the store's first hour: the cadence runs a pass here
+      // The budget is spent as the pass starts: no byte of the run's allowance is left, or no millisecond of its clock.
+      const limits = spent === 'bytes' ? { maxBytes: 0 } : { maxMs: 0 };
+      const err = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+      let r: PassResult | null;
+      let lines: string[];
+      try {
+        r = await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, () => T, { deps: { statfs: roomy }, limits })));
+        lines = err.mock.calls.map((c) => String(c[0])).filter((l) => l.startsWith('history-sweep:'));
+      } finally {
+        err.mockRestore();
+      }
+      expect(r, 'held: the budget was spent before the selection began').toEqual({ state: 'held', segment: null, rows: 0, blobs: 0, bytes: 0, complete: false });
+      expect(lines, 'one line, naming the held export pass and the budget').toHaveLength(1);
+      expect(lines[0]).toMatch(/^history-sweep: the export pass was held by the run's budget \(\d+ ms\) before it wrote a due row/);
+      expect(metaOf(box, 'export_attempt_ms'), 'the attempt is recorded').toBe(String(T));
+      expect(metaOf(box, HEALTH_META.exportPassMs), 'and a held pass is still not a pass').toBeNull();
+      expect(segmentsOf(box)).toEqual([]);
+      expect(marks(box)).toEqual({ [rid(1)]: null, [rid(2)]: null });
+      expect(await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, () => T + 10 * MIN, { deps: { statfs: roomy } }))),
+        'ten minutes on, the cadence waits from the attempt, not from the first tick two hours back').toBeNull();
+      // CONTROL: an hour after the attempt, with a budget that lasts, the same box writes both rows, and that pass clears the record.
+      const next = await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, () => T + 61 * MIN, { deps: { statfs: roomy } })));
+      expect(next, 'an hour after the attempt the step runs').toMatchObject({ state: 'written', rows: 2, complete: true });
+      expect(metaOf(box, 'export_attempt_ms'), 'a pass that ran to its end clears the attempt clock').toBeNull();
+      expect(metaOf(box, HEALTH_META.exportPassMs)).toBe(String(T + 61 * MIN));
+    }, 300_000);
+  }
+
   /** `db` as a pass sees it, every `.all()` recorded with its statement's text: the pass is the real one, the handle its own. */
   const watched = (db: DatabaseSync, calls: Array<{ sql: string; args: unknown[] }>): DatabaseSync => new Proxy(db, {
     get(target, prop) {
