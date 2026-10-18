@@ -657,7 +657,12 @@ export function makeCcdHarness(prefix: string): CcdHarness {
   // The ccd path and the caller's snippet ride the ENVIRONMENT, not argv (wave 18 fix round 3, D-5259): CodeQL reads
   // every argv element of a `bash -c` as part of the command (js/shell-command-injection-from-environment), and a
   // snippet often interpolates this fixture HOME. Both are set AFTER `env(extra)`, so no `extra` overrides them, and
-  // unset before ccd is sourced, so nothing ccd starts inherits them. `eval` runs the snippet as the old `-c` text did.
+  // unset before ccd is sourced, so nothing ccd starts inherits them. That is hygiene, not containment: the two keys
+  // carry a fixture path and test text, never a tool, a bus or a HOME, and no row pins them (review 585, F3).
+  // `eval` gives every snippet that PARSES the meaning the old `-c` text gave it. Three differences remain:
+  // (a) a syntax error now surfaces after ccd is sourced, prefixed `eval:` (rc 2 either way); (b) execFileSync's
+  // thrown message no longer carries the snippet, so a `toThrow` can match only stderr; (c) the snippet can see the
+  // two non-exported shell variables `ccd_h_src` and `ccd_h_snippet`.
   const sh = (snippet: string, extra: NodeJS.ProcessEnv = {}): string =>
     execFileSync('bash', ['-c', 'ccd_h_src=$CCD_HARNESS_SRC ccd_h_snippet=$CCD_HARNESS_SNIPPET; '
       + 'unset CCD_HARNESS_SRC CCD_HARNESS_SNIPPET; source "$ccd_h_src"; eval "$ccd_h_snippet"'],

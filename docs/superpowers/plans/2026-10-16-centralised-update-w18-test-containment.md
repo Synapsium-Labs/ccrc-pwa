@@ -282,10 +282,14 @@ These are departures from the brief, the ledger, or what shipped text at `256b25
     The same findings stand on `main` under older fingerprints (alerts 64 and 90). This wave's edits to those lines made CodeQL report them as new.
   - **The change**, following #404's fix of alert 84 (`history-lib.test.ts`):
     - `pat` escapes `[\\^$.*+?()[\]{}|]`. Its inputs are identifiers, so no verdict moves.
-    - `sh` passes `CCD_HARNESS_SRC` and `CCD_HARNESS_SNIPPET` after `env(extra)`, so no `extra` overrides them. The constant command copies them to shell variables, unsets both before sourcing ccd, so nothing ccd starts inherits them, then sources ccd and `eval`s the snippet.
+    - `sh` passes `CCD_HARNESS_SRC` and `CCD_HARNESS_SNIPPET` after `env(extra)`, so no `extra` overrides them. The constant command copies them to shell variables, unsets both before sourcing ccd, so nothing ccd starts inherits them, then sources ccd and `eval`s the snippet. Setting the keys after the spread and unsetting them before `source` are hygiene, not containment: the keys carry a fixture path and test text, never a tool, a bus or a HOME, and no row pins them (review 585, F3, ruled).
+    - `eval` gives every snippet that parses the meaning the old `-c` text gave it (review 585, F2). Three differences remain:
+      - a syntax error now surfaces after ccd is sourced, prefixed `eval:` (rc 2 either way);
+      - `execFileSync`'s thrown message no longer carries the snippet, so a `toThrow` can match only stderr;
+      - the snippet can see the two non-exported shell variables `ccd_h_src` and `ccd_h_snippet`.
     - `runDrRcState` adds `DOCTOR_CHECKS` to the one binding it asserts on and spawns with, and runs `. "$DOCTOR_CHECKS"; _dr_rc_state`.
 
-    The census still counts both spawns as contained script spawns (199 in all), and `ALLOWED` and `SLICED_ALLOWED` are unchanged.
+    The census still counts `sh`'s spawn as a contained script spawn (199 in all). `_dr_rc_state`'s spawn stays outside the census, as before: the doctor checks are not among its names (review 585, F1). `ALLOWED` and `SLICED_ALLOWED` are unchanged.
 
 ## File structure
 
