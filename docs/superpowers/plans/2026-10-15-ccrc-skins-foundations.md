@@ -179,7 +179,7 @@ Every task's requirements include this section. `CLAUDE.md` is the authority; th
 | `pwa/src/stores/fleet.ts` | Modify | the `divergence` frame's arm in `asFleetMsg`, and the census in state | 15 |
 | `pwa/src/fleet/integrityWords.ts` | **Create** | the pure model of the divergence census | 15 |
 | `pwa/src/session/sessionFacts.ts` | **Create** | the pure model of a session's version and cost | 16 |
-| `pwa/src/session/ChatList.tsx` | Modify (with Task 17's gate) | the list leaves room under its last row while the pill shows | 17 |
+| `pwa/src/session/ChatList.tsx` | Modify (with Task 17's gate) | the at-bottom threshold is the pill's band, so the pill never covers a failed send's Retry or Discard (D-5464) | 17 |
 | `.github/workflows/ci.yml` | Modify (after #402) | `storybook-a11y` once per skin | 3b |
 | `server/test/ci-pipeline.test.ts` | Modify (after #402) | pins the per-skin a11y run | 3b |
 | `pwa/test/skin-catalogue.test.ts`, `skin-boot.test.tsx`, `skin-identity.test.ts`, `ink-tiers.test.ts`, `meter.test.tsx`, `danger-buttons.test.tsx`, `fonts.test.ts`, `icon.test.tsx`, `hover-states.test.ts`, `command-registry.test.ts`, `command-layer.test.tsx`, `page-scaffold.test.tsx`, `skin-picker.test.tsx`, `base-defaults.test.ts`, `role-census.test.ts`, `integrity-frame.test.ts`, `integrity-words.test.ts`, `session-facts.test.ts`, `jump-latest.test.tsx`; `fonts-built.test.ts` (7b) | **Create** | each task's own red suite | 1–17 |
@@ -1175,7 +1175,7 @@ Item 2's one hazard: Chrome lets the standard scrollbar properties win over `::-
 
 **Why gated.** The pill's rule lives in `pwa/src/session/chat.css`, and the control census (`control-census.test.ts`) registers it as `'session/ChatList.tsx <button> jump-latest'`. Both in-flight branches edit both files. `ChatList.tsx` itself is free.
 
-**Routing:** band 2. **Needs:** the two merges. **Deviation number:** none (a defect fix).
+**Routing:** band 2. **Needs:** the two merges. **Deviation number:** none issued in advance (a defect fix); executing it found D-5464 (§Deviations found, "Found while executing Task 17").
 
 **What is measured** (spec §2 item 12). `.jump-latest` is absolutely placed at `bottom: var(--sp-3)` over the list (`chat.css`), and `ChatList.tsx` renders it whenever Virtuoso reports the reader is not at the bottom. The audit measured it covering a failed send's Retry and Discard at 390.
 
@@ -1372,6 +1372,19 @@ A worker never allocates: it names a departure by slug in its report, and the co
   - **The derivation:** `--scrollbar-thumb: var(--status-idle)`, declared once in `:root` and re-resolved by every palette, like `--status-dead-tint-solid`. The idle lamp's matte grey is the one token already fitted to exactly this contract: the generator fits every status dot to 3:1, plus margin, against surface, page, raised and the well, and the gate holds Phosphor's two hand-tuned values to it. Measured as the thumb: 3.10 at worst (Solarized Dark, on raised), 3.14 on a light well (GitHub Light). It is matte, so it never glows, and grey in every palette, so it reads as chrome, not as a state. Never a per-palette hex tuned until the numbers pass.
   - **Held by:** five `scrollbar thumb / <ground> (UI 3:1)` token pairs in `pwa/design/contrast-check.mjs`, in every palette; and `pwa/test/base-defaults.test.ts`, which measures the token `html` names on all five grounds in all twelve palettes, and holds `--scrollbar-thumb` to one declaration, in `:root`, naming tokens and no colour literal.
   - **Departs** item 2's `var(--edge-strong)` and its census-safety note ("the contrast gate gains no pair"): the gate gains sixty. It adds a `:root` token and edits `contrast-check.mjs`, neither in Task 13's file list. No generated value moves, and `contrast-check.mjs` is in no in-flight table.
+
+### Found while executing Task 17
+
+Two spares were issued 2026-10-18 for Task 17's departures. One is defined here.
+
+- **D-5464** — `jump-latest-band-threshold` (Task 17): the fix for cause (b) is virtuoso's at-bottom threshold set to the pill's band, not a Footer the pill's size.
+  - **Step 0, measured** at 390 in headless Chromium against the built app, with a fixture transcript and a send whose `/prompt` answers 500. The cause is (b), not (a): at the bottom no pill renders (gap 0). Between 6 and 40px above the end, the pill (714-758) sits on Retry, whose top runs 724-758 across those offsets. From 48px it is clear, with the row past the list's foot.
+  - **Step 1's remedy for (b) moves nothing.** A Footer `--tap-min` + `--sp-3` tall, present only while the pill shows, was built and swept over the same offsets. It is added below the viewport, so no row moves. Every offset that covered Retry on `main` still covered it, and the reported gap simply grew by the footer's 56px. A footer exactly the pill's size reserves the band the pill covers, so the last row clears the pill only at the very end, where the pill already hides.
+  - **The fix:** the reader counts as at the newest turn while its foot is inside the pill's band. `ChatList` passes `atBottomThreshold` as `--tap-min` + `--sp-3`, read once per mount from `:root` (`pillBandOf`), never a copy of the values. A token that does not read as pixels leaves virtuoso's own threshold. The sweep after it: the pill never covers Retry or Discard at any offset, in either skin or mode, at 360, 390, 438, 1280, 1440 and 1920.
+  - **Held by** `pwa/test/jump-latest.test.tsx`, which pins the threshold to the tokens, binds `.jump-latest`'s `bottom` and `min-height` to the same two tokens, and keeps virtuoso's default when they are unreadable.
+  - **Its cost:** `followOutput` and the settling pin read the same at-bottom state, so a reader within 56px of the end now follows new output, where it was 4px. No file outside Task 17's list changes, and `chat.css` and `control-census.test.ts` are untouched.
+
+Issued and unused (Task 17): 5465, the task's second spare, written without the prefix so it seeds no floor.
 
 ### Found while executing Task 6
 
