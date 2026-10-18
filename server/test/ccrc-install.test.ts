@@ -8489,6 +8489,12 @@ describeLinux('ccrc install: a timer systemd refuses is a COUNTED degraded step 
  *  `ccd-update-sync.timer` seconds before and no sync has written
  *  `~/.ccrc/server-caps`, the fresh-install grace D-4168 rules) and nothing else
  *  moved.
+ *  RE-MEASURED again when doctor gained its `update-sweep` check (wave 17, D-5316), by the
+ *  live-shape case's own calls (`liveBox`, two installs, both hourly refreshes, doctor) in a
+ *  MEASURE-only case on a disposable `git archive` copy of the tip that added the check: the
+ *  three maps each gained `"update-sweep": "SKIP"` (an install writes no `update.json`, so the
+ *  install tail's doctor has no last update to read) and nothing else moved: all three codes
+ *  and both refreshes equal, `codex` aside as above.
  *  It is a golden: nothing re-measures
  *  it, so a merge-up that moves a doctor check's class on the live shape reds
  *  the live-shape case until Step 3 is re-run on a disposable copy of the new
@@ -8555,6 +8561,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "tmux_skew": "PASS",
         "transcripts": "PASS",
         "update-exposure": "SKIP",
+        "update-sweep": "SKIP",
         "update-sync": "WARN",
         "wrappers": "PASS"
       }
@@ -8611,6 +8618,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "tmux_skew": "PASS",
         "transcripts": "PASS",
         "update-exposure": "SKIP",
+        "update-sweep": "SKIP",
         "update-sync": "WARN",
         "wrappers": "PASS"
       }
@@ -8737,6 +8745,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
       "tmux_skew": "PASS",
         "transcripts": "PASS",
       "update-exposure": "SKIP",
+      "update-sweep": "SKIP",
       "update-sync": "WARN",
       "wrappers": "PASS"
     }
