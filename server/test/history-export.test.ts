@@ -125,12 +125,13 @@ const byUuid = (a: Record<string, unknown>, b: Record<string, unknown>): number 
 };
 
 /** `db` with every statement it prepares counted when it runs, in order. */
-function counting(db: DatabaseSync): { db: DatabaseSync; ran: string[] } {
+function counting(db: DatabaseSync): { db: DatabaseSync; ran: string[]; calls: Array<{ text: string; method: string }> } {
   const ran: string[] = [];
+  const calls: Array<{ text: string; method: string }> = [];   // the same, with how each statement was run
   const wrap = (text: string, st: object): object => new Proxy(st, {
     get(t, p) {
       const v: unknown = Reflect.get(t, p, t);
-      if (p === 'run' || p === 'get' || p === 'all') return (...a: unknown[]): unknown => { ran.push(text); return (v as (...x: unknown[]) => unknown).apply(t, a); };
+      if (p === 'run' || p === 'get' || p === 'all' || p === 'iterate') return (...a: unknown[]): unknown => { ran.push(text); calls.push({ text, method: p }); return (v as (...x: unknown[]) => unknown).apply(t, a); };
       return typeof v === 'function' ? (v as (...x: unknown[]) => unknown).bind(t) : v;
     },
   });
@@ -141,7 +142,7 @@ function counting(db: DatabaseSync): { db: DatabaseSync; ran: string[] } {
       return typeof v === 'function' ? (v as (...x: unknown[]) => unknown).bind(target) : v;
     },
   });
-  return { db: proxy, ran };
+  return { db: proxy, ran, calls };
 }
 
 describe('the export pass, in-process (W1-B4 Task 5; spec §9.15 "What is due", "The pass")', () => {
@@ -1921,11 +1922,11 @@ describe('D-5395: the mark invariant adds no statement for a fresh blob and read
     expect(r.stranded).toEqual([]);
   }, 120_000);
 
-  it('the bind check hands the referrer clears its lost blob ids in bounded batches (ctx.deps.exportBindBatch overrides the size): ceil(N/batch) rounds of four statements, and the same cleared count and end state as one unbounded batch', async () => {
+  it('the bind check reads its lost blob ids by iteration and hands the referrer clears them in bounded batches (ctx.deps.exportBindBatch overrides the size): ceil(N/batch) rounds of four statements, and the same cleared count and end state as one unbounded batch', async () => {
     /** One box with the same fixture every time: five live blobs lost across TWO missing segments (S1, S3), one pruned stub S1
      *  marked, each lost blob referenced by an entry that a PRESENT segment (S2) marked through a different reference, and one
-     *  entry marked with the missing segment itself. */
-    const fixture = async (prefix: string, batch: number | undefined) => {
+     *  entry marked with the missing segment itself. With `lostCount` 4 the fifth blob and its entry are left out. */
+    const fixture = async (prefix: string, batch: number | undefined, lostCount: 4 | 5 = 5) => {
       const { box, ids } = ingestedBox(prefix, [row(1, 'a prompt', DAY)]);
       const S1 = `1.${ids.writer}.db`;
       const S3 = `3.${ids.writer}.db`;
@@ -1941,13 +1942,13 @@ describe('D-5395: the mark invariant adds no statement for a fresh blob and read
           "INSERT INTO entries (uuid, transcript_pk, type, provenance, prov_version, struct_rank_ns, struct_file_id, blob_id, ts_ms, exported_ms, exported_seg) VALUES (?, ?, 'user', 'x', 1, 0, ?, ?, 1, 1, ?)")
           .run(uuid, tp, file, blobId, seg).lastInsertRowid);
         const held = blob('held in a segment that is here', S2, true);
-        const lost = [blob('a', S1, true), blob('b', S1, true), blob('c', S1, true), blob('d', S3, true), blob('e', S3, true)];
+        const lost = [blob('a', S1, true), blob('b', S1, true), blob('c', S1, true), blob('d', S3, true), ...(lostCount === 5 ? [blob('e', S3, true)] : [])];
         blob('a stub', S1, false);
         const own = entry(rid(21), lost[0]!, S2);                       // its own blob lost
         const variant = entry(rid(22), held, S2);
         const sidecar = entry(rid(23), held, S2);
         const kept = entry(rid(24), held, S2);
-        const own2 = entry(rid(25), lost[4]!, S2);
+        const own2 = lostCount === 5 ? entry(rid(25), lost[4]!, S2) : 0;
         entry(rid(26), held, S1);                                        // marked with a missing segment itself
         entry(rid(27), held, S2);                                        // references nothing lost: keeps its mark
         db.prepare('INSERT INTO entry_variants (entry_id, blob_id, first_file_id, first_seen_ms) VALUES (?, ?, ?, 1)').run(variant, lost[1]!, file);
@@ -1957,18 +1958,22 @@ describe('D-5395: the mark invariant adds no statement for a fresh blob and read
         expect(strandedBlobsOn(db), 'CONTROL: marked blobs strand nobody').toEqual([]);
         const watch = counting(db);
         const out = SW.checkSegmentMarks(watch.db, { paths: historyPaths(box.home), ids, now: () => 1, deps: batch === undefined ? {} : { exportBindBatch: batch } }, '["bound:1"]');
-        return { out, stranded: strandedBlobsOn(db), ran: watch.ran };
+        return { out, stranded: strandedBlobsOn(db), ran: watch.ran, calls: watch.calls };
       });
+      // how the lost-ids select ran: through iterate (never materialised), once, and never through all
+      const lostSelect = r.calls.filter((c) => c.text.startsWith('SELECT blob_id FROM blobs WHERE exported_seg IN'));
       const arms = r.ran.filter((t) => /^UPDATE entries SET exported_ms = NULL, exported_seg = NULL WHERE exported_ms IS NOT NULL/.test(t)).length;
       const state = {
         blobs: q(box, 'SELECT lower(hex(sha256)) AS sha, exported_ms, exported_seg FROM blobs WHERE z IS NOT NULL OR pruned_ms IS NOT NULL ORDER BY sha'),
         entries: q(box, 'SELECT uuid, exported_ms, exported_seg FROM entries ORDER BY uuid'),
       };
-      return { cleared: r.out.cleared, segments: r.out.segments, arms, stranded: r.stranded, state, S1, S2, S3 };
+      return { cleared: r.out.cleared, segments: r.out.segments, arms, stranded: r.stranded, state, S1, S2, S3, lostSelect: lostSelect.map((c) => c.method) };
     };
     const one = await fixture('ccrc-history-export-batch-one-', undefined);
     const two = await fixture('ccrc-history-export-batch-two-', 2);
     expect(one.segments, 'two missing segments').toEqual([one.S1, one.S3]);
+    expect(one.lostSelect, 'the lost ids are read through iterate, once: a row at a time, never every lost blob materialised by all()').toEqual(['iterate']);
+    expect(two.lostSelect, 'and the same however small the batch').toEqual(['iterate']);
     expect(one.arms, 'five ids fit one default batch: four statements, one for each reference').toBe(4);
     expect(two.arms, 'five ids in batches of two: three batches, four statements each').toBe(12);
     // blobs: five live + the stub = 6; entries: the five referrers (own x2, variant, sidecar, kept) + the one marked S1 itself = 6
@@ -1978,7 +1983,19 @@ describe('D-5395: the mark invariant adds no statement for a fresh blob and read
     // the end state, by content (the two boxes mint their own writer names, so compare with the names normalised)
     const norm = (st: typeof one.state, who: typeof one): unknown => JSON.parse(JSON.stringify(st).replaceAll(who.S1, 'S1').replaceAll(who.S2, 'S2').replaceAll(who.S3, 'S3'));
     expect(norm(two.state, two), 'the same end state as one unbounded batch').toEqual(norm(one.state, one));
-    expect((one.state.entries as Array<Record<string, unknown>>).filter((e) => e['exported_seg'] !== null).map((e) => e['uuid']).sort(), 'only the entry that references nothing lost keeps its mark, and the exported one').toContain(rid(27));
+    expect((one.state.entries as Array<Record<string, unknown>>).filter((e) => e['exported_seg'] !== null).map((e) => e['uuid']).sort(),
+      'only the entry that references nothing lost keeps its mark').toEqual([rid(27)]);
+    // An exact multiple: four ids in batches of two are two full batches and no trailing empty one (an empty batch runs nothing).
+    const fourOne = await fixture('ccrc-history-export-batch-four-one-', undefined, 4);
+    const four = await fixture('ccrc-history-export-batch-four-two-', 2, 4);
+    expect(fourOne.arms, 'four ids in one default batch').toBe(4);
+    expect(four.arms, 'four ids in batches of two: exactly two batches, four statements each, and no empty third').toBe(8);
+    expect(four.lostSelect).toEqual(['iterate']);
+    // blobs: four live + the stub = 5; entries: the four referrers + the one marked S1 itself = 5
+    expect(fourOne.cleared).toBe(10);
+    expect(four.cleared, 'the batch size moves no count').toBe(fourOne.cleared);
+    expect(four.stranded).toEqual([]);
+    expect(norm(four.state, four), 'and no end state').toEqual(norm(fourOne.state, fourOne));
   }, 300_000);
 
   it('the hot path: a chunk that stores a fresh blob runs the insert and the id read and nothing about marks; a revival adds the revive, one read, and the four referrer clears only when the blob is unmarked', async () => {
