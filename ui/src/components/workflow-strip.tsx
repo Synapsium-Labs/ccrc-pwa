@@ -1,8 +1,10 @@
 // Workflow strip — the dynamic workflows Claude Code is running in this session
 // (D-5560), one line each, the facts its own terminal row prints:
-// `○ name ▰▰▰▱ 19/20 · 3h15m · ↓ 2.5m tokens`. The lines are the strip's
-// always-visible summary, so the glance needs no tap; the head opens the
-// detail — each workflow's phases and every agent's label and state.
+// `○ name ▰▰▰▱ 19/20 · 3h15m · ↓ 2.5m tokens`. Collapsed, the first
+// SUMMARY_LINES_MAX lines are the strip's summary and the head counts the
+// rest, so the glance needs no tap and stays compact on a phone; open, the
+// summary steps aside and each workflow's detail — its facts line, its
+// phases and every agent's label and state — is one scroll body.
 //
 // Read-only. Nothing here starts, stops or changes a workflow: the only
 // buttons are the head and the folds that reveal rows.
@@ -88,16 +90,25 @@ function useNow(active: boolean): number {
   return now;
 }
 
-function WorkflowLine({ w, now }: { w: WorkflowView; now: number }): ReactNode {
+/** The collapsed strip's lines: a glance, so a few; the head counts them all
+ *  and the open strip lists every one with the same facts. */
+export const SUMMARY_LINES_MAX = 3;
+
+function WorkflowLine({ w, now, item = false }: { w: WorkflowView; now: number; item?: boolean }): ReactNode {
   const { pct, band } = meterOf(w);
   return (
-    <span className={`workflow-line workflow-line--${w.state}`}>
+    <span className={`workflow-line workflow-line--${w.state}`} role={item ? 'listitem' : undefined}>
       <span className="workflow-bullet" aria-hidden="true">{w.state === 'running' ? '○' : '●'}</span>
       <span className="workflow-name">{w.name ?? 'unnamed workflow'}</span>
       <span className="workflow-bar">
         <Meter pct={pct} band={band} />
       </span>
-      <span className="workflow-facts">{workflowFacts(w, now)}</span>
+      <span className="workflow-facts">
+        {workflowFacts(w, now)}
+        {/* The bullet is hidden from speech; a finished row's facts end in its
+            last word, so a running one needs its own. */}
+        {w.state === 'running' && <span className="sr-only"> · running</span>}
+      </span>
     </span>
   );
 }
@@ -139,20 +150,21 @@ function PhaseGroup({ w, phase, agents }: { w: WorkflowView; phase: string | nul
               <span className="workflow-agent-state">{stopped && a.state === 'running' ? 'stopped' : a.state}</span>
             </li>
           ))}
-          {done.length > 0 &&
-            (showDone ? (
-              done.map((a, i) => (
-                <li key={`d${i}`} className="workflow-agent workflow-agent--done">
-                  <span className="workflow-agent-glyph" aria-hidden="true">{AGENT_GLYPH.done}</span>
-                  <span className="workflow-agent-label">{a.label ?? 'unlabelled agent'}</span>
-                  <span className="workflow-agent-state">done</span>
-                </li>
-              ))
-            ) : (
-              <li className="workflow-agent workflow-agent--fold">
-                <button type="button" className={`workflow-fold ${FOCUS_RING}`} onClick={() => setShowDone(true)}>
-                  … +{done.length} done
-                </button>
+          {/* One button that stays put and toggles, so focus stays on it and
+              the done agents fold away again from the same place. */}
+          {done.length > 0 && (
+            <li key="fold" className="workflow-agent workflow-agent--fold">
+              <button type="button" className={`workflow-fold ${FOCUS_RING}`} aria-expanded={showDone} onClick={() => setShowDone((v) => !v)}>
+                {showDone ? `fold ${done.length} done` : `… +${done.length} done`}
+              </button>
+            </li>
+          )}
+          {showDone &&
+            done.map((a, i) => (
+              <li key={`d${i}`} className="workflow-agent workflow-agent--done">
+                <span className="workflow-agent-glyph" aria-hidden="true">{AGENT_GLYPH.done}</span>
+                <span className="workflow-agent-label">{a.label ?? 'unlabelled agent'}</span>
+                <span className="workflow-agent-state">done</span>
               </li>
             ))}
         </ul>
@@ -161,11 +173,16 @@ function PhaseGroup({ w, phase, agents }: { w: WorkflowView; phase: string | nul
   );
 }
 
-function WorkflowDetail({ w }: { w: WorkflowView }): ReactNode {
+function WorkflowDetail({ w, now }: { w: WorkflowView; now: number }): ReactNode {
   const groups = groupByPhase(w);
   return (
     <li className="workflow-detail">
-      <span className="workflow-detail-name">{w.name ?? 'unnamed workflow'}</span>
+      {/* The same facts line the collapsed summary shows: open, the summary
+          steps aside (workflow-strip.css) and this is where every workflow's
+          facts are, so the detail stays a superset of the glance. */}
+      <span className="workflow-detail-line">
+        <WorkflowLine w={w} now={now} />
+      </span>
       {w.done === null ? (
         <p className="workflow-detail-note">Its journal could not be read this pass — no agent is listed rather than a guess.</p>
       ) : (
@@ -197,6 +214,10 @@ export function WorkflowStrip({
   const ticking = workflows.some((w) => w.state === 'running' && w.startedAt !== null);
   const now = useNow(ticking);
   if (workflows.length === 0 && !unreadable) return null;
+  // Running rows first: a finished one (gone in 30 s) never pushes a running
+  // one behind the "+N more".
+  const glance = [...workflows.filter((w) => w.state === 'running'), ...workflows.filter((w) => w.state !== 'running')]
+    .slice(0, SUMMARY_LINES_MAX);
   return (
     <CollapsibleStrip
       root="workflow-strip"
@@ -207,9 +228,14 @@ export function WorkflowStrip({
       headline={workflowHeadline(workflows, unreadable)}
       summary={
         <>
-          {workflows.map((w) => (
-            <WorkflowLine key={w.id} w={w} now={now} />
-          ))}
+          <span className="workflow-lines" role="list">
+            {glance.map((w) => (
+              <WorkflowLine key={w.id} w={w} now={now} item />
+            ))}
+          </span>
+          {workflows.length > SUMMARY_LINES_MAX && (
+            <span className="workflow-more">+{workflows.length - SUMMARY_LINES_MAX} more — open for all</span>
+          )}
           {unreadable && workflows.length > 0 && (
             <span className="workflow-note">Could not re-read workflow state — showing the last read.</span>
           )}
@@ -221,7 +247,7 @@ export function WorkflowStrip({
           <p className="workflow-detail-note">This box could not read where Claude Code keeps this session&apos;s workflows.</p>
         </li>
       ) : (
-        workflows.map((w) => <WorkflowDetail key={w.id} w={w} />)
+        workflows.map((w) => <WorkflowDetail key={w.id} w={w} now={now} />)
       )}
     </CollapsibleStrip>
   );

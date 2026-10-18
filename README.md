@@ -2829,7 +2829,7 @@ questions and the answers given, and agent mail and harness task reports as card
 minutes or more gets a timestamp divider, and scrolling up stops the auto-follow until **Jump to latest**. Above
 the composer sit the session's outstanding mail and its plan (the TUI's task list, collapsed to the running task).
 Between the two, while the session runs any dynamic workflow, sits the **workflow strip** (D-5560): one line per
-workflow with Claude Code's own facts — its name, a bar, agents done of those scheduled so far, the time since it
+workflow (three collapsed, running ones first, the head counting all) with Claude Code's own facts — its name, a bar, agents done of those scheduled so far, the time since it
 started and `↓ N tokens` (the agents' current context, as Claude Code sums it) — and, opened, each workflow's phases
 and every agent's label and state. A finished workflow stays 30 s with its last word (`done`, `failed`,
 `stopped`), as in the terminal. It is read-only, read on the session socket's 2 s tick from the files Claude Code

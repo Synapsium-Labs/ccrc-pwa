@@ -178,6 +178,25 @@ describe('SessionWorkflows — finished, resumed and orphaned runs', () => {
     expect(io.calls.filter((c) => c.op === 'read' || c.op === 'range')).toEqual([]);
   });
 
+  it('many quiet runs re-stat spread over RESTAT_EVERY ticks, not all on one', async () => {
+    for (let f = 0; f < 30; f++) {
+      const id = `wf_${f.toString(16).padStart(8, '0')}-000`;
+      seedRun(id, [line({ type: 'launched' })], { journalAt: T0 - 100_000 });
+      seedSummary(id, { status: 'completed' }, T0 - 90_000);
+    }
+    const io = counted(localIO);
+    const wf = new SessionWorkflows(io, S);
+    await wf.read(LIVE, T0 + 9000); // the first read decides every run
+    const perTick: number[] = [];
+    for (let t = 0; t < RESTAT_EVERY * 2; t++) {
+      io.calls.length = 0;
+      await wf.read(LIVE, T0 + 11_000 + t * 2000);
+      perTick.push(io.calls.filter((c) => c.op === 'stat').length);
+    }
+    expect(perTick.reduce((a, b) => a + b, 0)).toBe(30 * 2 * 2); // each run twice, two stats each
+    expect(Math.max(...perTick)).toBeLessThanOrEqual(2 * Math.ceil(30 / RESTAT_EVERY));
+  });
+
   it('failed and killed keep their own word', async () => {
     finished('failed', T0 + 1000);
     const r = await new SessionWorkflows(localIO, S).read(LIVE, T0 + 2000);
@@ -338,6 +357,97 @@ describe('SessionWorkflows — bounded reads', () => {
     await wf.read(LIVE, T0 + 11_000);
     expect(io.calls.filter((c) => c.path.includes('agent-a1.jsonl'))).toEqual([]);
     expect(io.calls.filter((c) => c.path.includes('agent-a2.jsonl')).length).toBeGreaterThan(0); // the running one is
+  });
+
+  it('one run with 12 agents writing every tick still gets its start and its done agents measured', async () => {
+    const lines = [line({ type: 'launched' })];
+    const agents: Record<string, { start: number; input?: number }> = {};
+    for (let i = 0; i < 5; i++) {
+      lines.push(line({ type: 'started', key: key(100 + i), agentId: `d${i}`, label: `d${i}` }), line({ type: 'result', key: key(100 + i), agentId: `d${i}`, result: 1 }));
+      agents[`d${i}`] = { start: T0 + 10 + i, input: 10 };
+    }
+    for (let i = 0; i < 12; i++) {
+      lines.push(line({ type: 'started', key: key(i), agentId: `r${i}`, label: `r${i}` }));
+      agents[`r${i}`] = { start: T0 + 100 + i, input: 1 };
+    }
+    seedRun(RUN, lines, { agents });
+    const wf = new SessionWorkflows(localIO, S);
+    let w: { startedAt: number | null; tokensUnmeasured: number } | undefined;
+    for (let t = 0; t < 4; t++) {
+      for (let i = 0; i < 12; i++) appendFileSync(path.join(S, 'subagents', 'workflows', RUN, `agent-r${i}.jsonl`), usageLine(`r${i}`, t + 2));
+      const r = await wf.read(LIVE, T0 + 9000 + t * 2000);
+      w = (r as { workflows: Array<{ startedAt: number | null; tokensUnmeasured: number }> }).workflows[0];
+      expect(w!.startedAt).toBe(T0 + 10); // from the first tick on
+    }
+    expect(w!.tokensUnmeasured).toBe(0);
+  });
+
+  it('a run in a later batch, behind a run with 12 writing agents, is not starved', async () => {
+    const A = 'wf_00000000-001', B = 'wf_ffffffff-fff';
+    const la = [line({ type: 'launched' })];
+    const aa: Record<string, { start: number; input?: number }> = {};
+    for (let i = 0; i < 12; i++) {
+      la.push(line({ type: 'started', key: key(i), agentId: `r${i}`, label: `r${i}` }));
+      aa[`r${i}`] = { start: T0 + 100 + i, input: 1 };
+    }
+    seedRun(A, la, { agents: aa });
+    for (let f = 0; f < 8; f++) {
+      const id = `wf_8000000${f}-000`;
+      seedRun(id, [line({ type: 'launched' })], { journalAt: T0 - 100_000 });
+      seedSummary(id, { status: 'completed' }, T0 - 90_000);
+    }
+    seedRun(B, [line({ type: 'launched' }), line({ type: 'started', key: key(500), agentId: 'b1', label: 'b1' })], { agents: { b1: { start: T0 + 50, input: 777 } } });
+    const wf = new SessionWorkflows(localIO, S);
+    let b: { startedAt: number | null; tokens: number | null } | undefined;
+    for (let t = 0; t < 3; t++) {
+      for (let i = 0; i < 12; i++) appendFileSync(path.join(S, 'subagents', 'workflows', A, `agent-r${i}.jsonl`), usageLine(`r${i}`, t + 2));
+      appendFileSync(path.join(S, 'subagents', 'workflows', B, 'agent-b1.jsonl'), usageLine('b1', 777 + t));
+      const r = await wf.read(LIVE, T0 + 9000 + t * 2000);
+      b = (r as { workflows: Array<{ id: string; startedAt: number | null; tokens: number | null }> }).workflows.find((w) => w.id === B);
+      expect(b!.startedAt).toBe(T0 + 50);
+      expect(b!.tokens).not.toBeNull();
+    }
+  });
+
+  it('a journal that shrinks (rewritten) is folded again from byte 0', async () => {
+    const j = seedRun(RUN, RUNNING, { agents: { a1: { start: T0, input: 1 }, a2: { start: T0 + 1, input: 1 }, a3: { start: T0 + 2, input: 1 } } });
+    const wf = new SessionWorkflows(localIO, S);
+    const r1 = await wf.read(LIVE, T0 + 9000);
+    expect((r1 as { workflows: Array<{ total: number }> }).workflows[0]!.total).toBe(3);
+    writeFileSync(j, [line({ type: 'launched' }), line({ type: 'started', key: key(9), agentId: 'a9', label: 'only' })].join(''));
+    at(j, T0 + 10_000);
+    const r2 = await wf.read(LIVE, T0 + 11_000);
+    const w = (r2 as { workflows: Array<{ total: number; done: number }> }).workflows[0]!;
+    expect(w.total).toBe(1);
+    expect(w.done).toBe(0);
+  });
+
+  it('a summary stat that does not answer holds the row shown — not a false running row', async () => {
+    seedRun(RUN, RUNNING, { agents: { a1: { start: T0, input: 1 }, a2: { start: T0 + 1, input: 1 }, a3: { start: T0 + 2, input: 1 } } });
+    seedSummary(RUN, { status: 'completed', workflowName: 'neutral-run', agentCount: 3 }, T0 + 6000);
+    let failSummary = false;
+    const io = counted(localIO, (op, p) => failSummary && op === 'stat' && p.endsWith(`${RUN}.json`));
+    const wf = new SessionWorkflows(io, S);
+    const r1 = await wf.read(LIVE, T0 + 9000);
+    const shown = (r1 as { workflows: Array<{ state: string }> }).workflows[0]!;
+    expect(shown.state).toBe('completed');
+    failSummary = true;
+    const r2 = await wf.read(LIVE, T0 + 11_000);
+    expect((r2 as { workflows: Array<{ state: string }> }).workflows[0]).toEqual(shown);
+  });
+
+  it('a done agent whose last usage line is further back than the tail is found by walking back', async () => {
+    seedRun(RUN, [
+      line({ type: 'started', key: key(1), agentId: 'a1', label: 'done-one' }),
+      line({ type: 'result', key: key(1), agentId: 'a1', result: 'r' }),
+      line({ type: 'started', key: key(2), agentId: 'a2', label: 'still-going' }),
+    ], { agents: { a1: { start: T0 }, a2: { start: T0 + 1, input: 5 } } });
+    const tr = path.join(S, 'subagents', 'workflows', RUN, 'agent-a1.jsonl');
+    writeFileSync(tr, `${usageLine('a1', 41)}${line({ type: 'user', message: { content: 'z'.repeat(TAIL_BYTES + 300_000) } })}`);
+    const r = await new SessionWorkflows(localIO, S).read(LIVE, T0 + 9000);
+    const w = (r as { workflows: Array<{ tokens: number; tokensUnmeasured: number }> }).workflows[0]!;
+    expect(w.tokensUnmeasured).toBe(0);
+    expect(w.tokens).toBe(1041 + 1005);
   });
 
   it('sessionDirOf is the transcript path minus .jsonl', () => {

@@ -222,6 +222,10 @@ function dedupeAppend(existing: ChatEvent[], incoming: ChatEvent[]): ChatEvent[]
   return fresh.length === 0 ? existing : [...existing, ...fresh];
 }
 
+/** Both files known and equal: the same session dir (D-5560). */
+const sameTranscript = (was: string | null | undefined, now: string | null | undefined): boolean =>
+  typeof was === 'string' && was !== '' && was === now;
+
 /** Pure reducer over the session stream — one message in, next snapshot out. */
 export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): SessionSnapshot {
   switch (msg.type) {
@@ -237,10 +241,13 @@ export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): Sess
         events: [...keep, ...msg.events],
         uuid: msg.uuid,
         offset: msg.offset,
-        // D-5560: the rows belong to the session dir the backlog may have just
-        // left; the server states the next read after every backlog it sends.
-        workflows: [],
-        workflowsUnreadable: false,
+        // D-5560: the rows belong to the session dir — the transcript path
+        // minus `.jsonl` — so a backlog onto ANOTHER transcript drops them. A
+        // reconnect (or a rotation in place) onto the same one keeps them
+        // until the server's restated frame replaces them: clearing there
+        // unmounted the strip, collapsed it and jumped the conversation on
+        // every foregrounding of the PWA.
+        ...(sameTranscript(s.file, msg.file) ? {} : { workflows: [], workflowsUnreadable: false }),
         missingFile: msg.missing ? msg.file : null,
         // Unconditional, where `missingFile` above is gated: the file is the
         // address this `offset` is measured in, and a reconnect has to echo

@@ -158,6 +158,14 @@ describe('lastUsageTokens — the input side of the latest API call', () => {
     expect(lastUsageTokens(`${full.slice(5)}\n${full}`)).toBe(7);
   });
 
+  it('a line that is not an assistant message is skipped even when it carries a usage object', () => {
+    const text = [
+      usage({ input_tokens: 3, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1 }),
+      line({ type: 'progress', message: { usage: { input_tokens: 999, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } }),
+    ].join('\n');
+    expect(lastUsageTokens(text)).toBe(3);
+  });
+
   it('no usage line → null', () => {
     expect(lastUsageTokens(line({ type: 'user' }))).toBeNull();
   });
@@ -265,6 +273,10 @@ describe('a huge run is bounded on the wire, and the cut is said', () => {
     expect(v.agents.some((a) => a.label === 'agent-3' && a.state === 'failed')).toBe(true);
     // and in schedule order, newest last
     expect(v.agents.at(-1)!.label).toBe('agent-599');
+    // the done agents kept are the newest ones, not the oldest
+    const doneKept = v.agents.filter((a) => a.state === 'done').map((a) => a.label);
+    expect(doneKept).toContain('agent-589');
+    expect(doneKept).not.toContain('agent-0');
   });
 });
 
@@ -294,6 +306,8 @@ describe('firstAgentAfter — where a run (or its resume) started', () => {
     expect(firstAgentAfter(fold, starts, null)).toEqual({ at: 100 });
     // a resume in place: the summary was written at 250, so the resume started with the first agent after it
     expect(firstAgentAfter(fold, starts, 250)).toEqual({ at: 300 });
+    // a start AT the floor is the summary's own write, not the resume's: strictly after
+    expect(firstAgentAfter(fold, starts, 300)).toEqual({ at: 400 });
     // a start not measured yet is said, not skipped past
     expect(firstAgentAfter(fold, new Map(), null)).toEqual({ need: 'a0000000000000001' });
   });

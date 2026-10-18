@@ -14,7 +14,9 @@
 //  - the journal is read INCREMENTALLY from the last offset, at most
 //    `JOURNAL_CHUNKS_PER_TICK` chunks of `READ_FROM_MAX_BYTES` per run per tick;
 //  - an agent's tokens come from one `TAIL_BYTES` tail, re-read only when its
-//    size changed, at most `AGENT_READS_PER_TICK` per tick across all runs;
+//    size changed, at most `AGENT_READS_PER_TICK` per tick across all runs,
+//    shared so no run's start, labels or done agents wait behind another's
+//    busy agents (`read`);
 //  - a finished, dropped or interrupted run is re-stat'ed only every
 //    `RESTAT_EVERY` ticks (a resume in place grows its journal again).
 import path from 'node:path';
@@ -52,6 +54,15 @@ export const AGENT_READS_PER_TICK = 24;
 export const TAIL_BYTES = 65_536;
 export const RESTAT_EVERY = 15;
 export const RUNS_IN_PARALLEL = 8;
+/** Of AGENT_READS_PER_TICK, what the one-time reads (labels, done agents) always get. */
+export const ONE_TIME_RESERVE = 8;
+/** How many READ_FROM_MAX_BYTES chunks a done agent's read walks back past its tail. */
+export const WALKBACK_CHUNKS = 4;
+
+const rotate = <T>(xs: readonly T[], by: number): T[] => {
+  const k = xs.length === 0 ? 0 : by % xs.length;
+  return [...xs.slice(k), ...xs.slice(0, k)];
+};
 
 /** The session dir `S`: the transcript path minus `.jsonl`. */
 export function sessionDirOf(transcript: string): string {
@@ -79,8 +90,11 @@ interface RunCache {
   metaTried: Set<string>;
   phases: string[] | null | undefined;
   decision: RunDecision | null;
-  /** The tick this run was last stat'ed on. */
+  /** The tick this run was last stat'ed on (the first one minus `stagger`). */
   statTick: number;
+  /** Ticks this quiet run's re-stat is brought forward, so a session's quiet
+   *  runs re-stat spread over RESTAT_EVERY ticks instead of all on one. */
+  stagger: number;
   /** Where the next tick's round of running agents starts (`readAgents`). */
   cursor: number;
   view: WorkflowView | null;
@@ -89,7 +103,7 @@ interface RunCache {
 const newRun = (): RunCache => ({
   offset: 0, carry: emptyCarry(), fold: emptyFold(), journalMtime: null, summaryMtime: null,
   summary: undefined, summaryReadAt: null, tokens: new Map(), activity: new Map(), starts: new Map(),
-  meta: new Map(), metaTried: new Set(), phases: undefined, decision: null, statTick: -Infinity, cursor: 0, view: null,
+  meta: new Map(), metaTried: new Set(), phases: undefined, decision: null, statTick: -Infinity, stagger: 0, cursor: 0, view: null,
 });
 
 export class SessionWorkflows {
@@ -97,6 +111,8 @@ export class SessionWorkflows {
   private tick = 0;
   private scripts: readonly string[] | null = null;
   private scriptsTick = -Infinity;
+  /** Which running run's tail share comes first this tick. */
+  private runCursor = 0;
   /** Agent reads left this tick (tails, metas, stats of starts). */
   private budget = 0;
 
@@ -114,33 +130,83 @@ export class SessionWorkflows {
     const ids = listing.entries.filter((e) => RUN_ID_RE.test(e)).sort();
     for (const gone of [...this.runs.keys()]) if (!ids.includes(gone)) this.runs.delete(gone);
     const views: WorkflowView[] = [];
+    const running: Array<{ id: string; run: RunCache; unread: boolean }> = [];
     // A few runs at a time: a session's first read can list ~300 run dirs (the
     // measured maximum), two stats each, and in remote mode each is a round trip.
     for (let i = 0; i < ids.length; i += RUNS_IN_PARALLEL) {
-      const batch = ids.slice(i, i + RUNS_IN_PARALLEL).map((id) => {
+      const batch = ids.slice(i, i + RUNS_IN_PARALLEL).map(async (id, j) => {
         let run = this.runs.get(id);
-        if (run === undefined) { run = newRun(); this.runs.set(id, run); }
-        return this.readRun(id, run, proc, now);
+        if (run === undefined) {
+          run = newRun();
+          // Staggered: the quiet runs' re-stats spread over RESTAT_EVERY ticks
+          // instead of all landing on the same one.
+          run.stagger = (i + j) % RESTAT_EVERY;
+          this.runs.set(id, run);
+        }
+        return { id, run, r: await this.decideAndFold(id, run, proc, now) };
       });
-      for (const view of await Promise.all(batch)) if (view !== null) views.push(view);
+      for (const { id, run, r } of await Promise.all(batch)) {
+        if (r.kind === 'view') { if (r.view !== null) views.push(r.view); } else running.push({ id, run, unread: r.unread });
+      }
+    }
+    if (running.length > 0) {
+      // The agent budget, in an order that starves nobody (D-5561):
+      //  1. each running run's start — one cached stat, read once;
+      //  2. running agents' tails, a fair share per run, rotated across ticks
+      //     when there are more runs than shares;
+      //  3. the one-time reads (labels for old builds, done agents' last
+      //     tokens) with the rest, never less than ONE_TIME_RESERVE.
+      const startedAt = new Map<string, number | null>();
+      for (const r of running) startedAt.set(r.id, await this.startOf(r.id, r.run));
+      const order = rotate(running, this.runCursor);
+      const tailBudget = Math.max(0, this.budget - ONE_TIME_RESERVE);
+      const share = Math.max(2, Math.floor(tailBudget / running.length));
+      let tailLeft = tailBudget;
+      let served = 0;
+      for (const r of order) {
+        if (tailLeft < 2) break;
+        const quota = Math.min(share, tailLeft);
+        const spent = await this.readRunningTails(r.id, r.run, quota);
+        tailLeft -= spent;
+        this.budget -= spent;
+        served++;
+      }
+      this.runCursor = (this.runCursor + Math.max(1, served)) % running.length;
+      for (const r of order) await this.readMetas(r.id, r.run);
+      for (const r of order) await this.readDoneAgents(r.id, r.run);
+      for (const r of running) {
+        const { id, run } = r;
+        const name = await this.nameOf(id, run);
+        const phases = await this.phasesOf(id, run);
+        run.view = runningView({
+          id, name, fold: run.fold, phases, startedAt: startedAt.get(id) ?? null, meta: run.meta, unread: r.unread,
+          tokens: new Map([...run.tokens].map(([a, t]) => [a, t.tokens])),
+        });
+        views.push(run.view);
+      }
     }
     return { kind: 'read', workflows: selectRows(views, now) };
   }
 
-  private async readRun(id: string, run: RunCache, proc: Proc, now: number): Promise<WorkflowView | null> {
+  /** The cheap verdicts and the journal; a running run is finished by `read`. */
+  private async decideAndFold(id: string, run: RunCache, proc: Proc, now: number): Promise<{ kind: 'view'; view: WorkflowView | null } | { kind: 'running'; unread: boolean }> {
+    const held = (view: WorkflowView | null) => ({ kind: 'view' as const, view });
     // A run already ruled finished-and-dropped or interrupted is not re-read
-    // every tick: only every RESTAT_EVERY-th, to catch a resume in place.
-    const quiet = run.decision === 'interrupted' || (run.decision === 'finished' && run.view === null);
-    if (quiet && this.tick - run.statTick < RESTAT_EVERY) return null;
-    run.statTick = this.tick;
+    // every tick: only every RESTAT_EVERY-th, to catch a resume in place. An
+    // never-decided one waits on the same cadence while the process stays unmeasured.
+    const quiet = run.decision === 'interrupted' || (run.decision === 'undecided' && proc.kind === 'unmeasured')
+      || (run.decision === 'finished' && run.view === null);
+    if (quiet && this.tick - run.statTick < RESTAT_EVERY) return held(run.view);
+    run.statTick = this.tick - run.stagger; // brought forward once, then every RESTAT_EVERY
+    run.stagger = 0;
 
     const [journal, summary] = await Promise.all([
       this.io.statMeasured(path.join(this.runDir(id), 'journal.jsonl')),
       this.io.statMeasured(this.summaryPath(id)),
     ]);
     // A stat that did not answer measured nothing: hold what this run showed.
-    if (!journal.ok) return journal.reason === 'absent' ? null : run.view;
-    if (!summary.ok && summary.reason === 'unreadable') return run.view;
+    if (!journal.ok) return held(journal.reason === 'absent' ? null : run.view);
+    if (!summary.ok && summary.reason === 'unreadable') return held(run.view);
     run.summaryMtime = summary.ok ? summary.mtimeMs : null;
     run.journalMtime = journal.mtimeMs;
 
@@ -152,26 +218,23 @@ export class SessionWorkflows {
       if (at !== undefined && at > activity) activity = at;
     }
     const decision = decideRun({ summaryMtime: run.summaryMtime, journalMtime: journal.mtimeMs, activityMtime: activity, proc });
-    if (decision === 'undecided') return run.view;
+    if (decision === 'undecided') {
+      // Only a run never decided is quieted: one already showing keeps being
+      // asked every tick, so its row moves again the moment the process answers.
+      if (run.decision === null) run.decision = 'undecided';
+      return held(run.view);
+    }
     run.decision = decision;
-    if (decision === 'interrupted') { run.view = null; return null; }
-    if (decision === 'finished') { run.view = await this.finishedView(id, run, now); return run.view; }
+    if (decision === 'interrupted') { run.view = null; return held(null); }
+    if (decision === 'finished') { run.view = await this.finishedView(id, run, now); return held(run.view); }
 
-    // Running: read what was appended, then the agents.
+    // Running: read what was appended.
     const unread = !(await this.readJournal(id, run, journal.size));
     // A chunk that did not read this pass: the row this run showed stands (a
     // dropped round trip must not flicker the counts); a run never shown says
     // its counts are unread instead of drawing zeros.
-    if (unread && run.view !== null && run.view.state === 'running') return run.view;
-    await this.readAgents(id, run);
-    const name = await this.nameOf(id, run);
-    const phases = await this.phasesOf(id, run);
-    const startedAt = await this.startOf(id, run);
-    run.view = runningView({
-      id, name, fold: run.fold, phases, startedAt, meta: run.meta, unread,
-      tokens: new Map([...run.tokens].map(([a, t]) => [a, t.tokens])),
-    });
-    return run.view;
+    if (unread && run.view !== null && run.view.state === 'running') return held(run.view);
+    return { kind: 'running', unread };
   }
 
   /** Append-read the journal from `run.offset`. False when a chunk would not
@@ -191,52 +254,95 @@ export class SessionWorkflows {
     return true;
   }
 
-  /** Tokens, activity and (for old builds) labels, within this tick's budget. */
-  private async readAgents(id: string, run: RunCache): Promise<void> {
-    const dir = this.runDir(id);
-    // Running agents first: theirs is the number that moves. Taken ROUND-ROBIN
-    // from where the last tick stopped: with more running agents than one
-    // tick's budget, a fixed order spent every tick on the same ones and left
-    // the rest unmeasured for the run's life (measured by the mutation table).
-    const all = [...run.fold.keys.values()];
-    const running = all.filter((k) => k.last === 'started').sort((a, b) => a.seq - b.seq);
-    const from = running.length === 0 ? 0 : run.cursor % running.length;
-    const keys = [...running.slice(from), ...running.slice(0, from), ...all.filter((k) => k.last !== 'started').sort((a, b) => b.seq - a.seq)];
-    let visitedRunning = 0;
-    for (const k of keys) {
-      if (this.budget <= 0) break;
-      if (k.last === 'started') visitedRunning++;
+  /** Running agents' tokens and activity, at most `quota` reads; returns the
+   *  reads spent. Taken ROUND-ROBIN from where the last tick stopped: with
+   *  more running agents than one share, a fixed order spent every tick on
+   *  the same ones and left the rest unmeasured for the run's life. */
+  private async readRunningTails(id: string, run: RunCache, quota: number): Promise<number> {
+    const running = [...run.fold.keys.values()].filter((k) => k.last === 'started').sort((a, b) => a.seq - b.seq);
+    if (running.length === 0) return 0;
+    const from = run.cursor % running.length;
+    let spent = 0;
+    let visited = 0;
+    for (const k of [...running.slice(from), ...running.slice(0, from)]) {
+      if (quota - spent <= 0) break;
+      visited++;
       const held = run.tokens.get(k.agentId);
-      if (held?.final === true) continue; // a finished agent, read after it finished
-      const file = path.join(dir, `agent-${k.agentId}.jsonl`);
+      const file = path.join(this.runDir(id), `agent-${k.agentId}.jsonl`);
       const st = await this.io.statMeasured(file);
-      this.budget--;
+      spent++;
       if (!st.ok) continue;
-      if (k.last === 'started') run.activity.set(k.agentId, st.mtimeMs);
-      if (held !== undefined && held.size === st.size) {
-        if (k.last !== 'started') held.final = true;
-        continue;
-      }
-      if (this.budget <= 0) break;
+      run.activity.set(k.agentId, st.mtimeMs);
+      if (held !== undefined && held.size === st.size) continue;
+      if (quota - spent <= 0) { visited--; break; } // the tail is next tick's, from this agent
       const offset = Math.max(0, st.size - TAIL_BYTES);
       const tail = await this.io.readFileFromBytesMeasured(file, offset, Math.max(1, Math.min(TAIL_BYTES, st.size - offset)));
-      this.budget--;
+      spent++;
       if (!tail.ok) continue;
       const measured = lastUsageTokens(new TextDecoder().decode(tail.bytes));
       // No usage line in the tail keeps the previous reading (an agent mid-tool
       // writes long tool results); there was none before → unmeasured.
-      run.tokens.set(k.agentId, { size: st.size, tokens: measured ?? held?.tokens ?? null, final: k.last !== 'started' });
+      run.tokens.set(k.agentId, { size: st.size, tokens: measured ?? held?.tokens ?? null, final: false });
     }
-    run.cursor = from + visitedRunning;
-    for (const k of keys) {
-      if (this.budget <= 0) break;
+    run.cursor = from + visited;
+    return spent;
+  }
+
+  /** Labels for journal lines written before 2.1.265: one meta read each, ever. */
+  private async readMetas(id: string, run: RunCache): Promise<void> {
+    for (const k of run.fold.keys.values()) {
+      if (this.budget <= 0) return;
       if (k.label !== null || run.metaTried.has(k.agentId)) continue;
       run.metaTried.add(k.agentId);
-      const r = await this.io.readFileMeasured(path.join(dir, `agent-${k.agentId}.meta.json`));
+      const r = await this.io.readFileMeasured(path.join(this.runDir(id), `agent-${k.agentId}.meta.json`));
       this.budget--;
       const m = r.ok ? parseAgentMeta(r.content) : null;
       if (m !== null) run.meta.set(k.agentId, m);
     }
+  }
+
+  /** A done agent's last tokens, read once after its key ended (newest first).
+   *  A 64 KB tail with no usage line walks back in capped chunks, at most
+   *  WALKBACK_CHUNKS, before the agent is ruled unmeasurable. */
+  private async readDoneAgents(id: string, run: RunCache): Promise<void> {
+    const done = [...run.fold.keys.values()].filter((k) => k.last !== 'started').sort((a, b) => b.seq - a.seq);
+    for (const k of done) {
+      if (this.budget <= 0) return;
+      const held = run.tokens.get(k.agentId);
+      if (held?.final === true) continue;
+      const file = path.join(this.runDir(id), `agent-${k.agentId}.jsonl`);
+      const st = await this.io.statMeasured(file);
+      this.budget--;
+      if (!st.ok) continue;
+      if (held !== undefined && held.size === st.size && held.tokens !== null) { held.final = true; continue; }
+      const measured = await this.lastTokensOf(file, st.size);
+      if (measured === undefined) return; // out of budget mid-read: this agent again next tick
+      run.tokens.set(k.agentId, { size: st.size, tokens: measured ?? held?.tokens ?? null, final: true });
+    }
+  }
+
+  /** The last usage line's tokens, walking back from EOF: null when there is
+   *  none within the bound, undefined when the budget ran out first. */
+  private async lastTokensOf(file: string, size: number): Promise<number | null | undefined> {
+    let end = size;
+    let head = new Uint8Array(0); // the cut first line of the segment read last
+    for (let i = 0; i <= WALKBACK_CHUNKS && end > 0; i++) {
+      if (this.budget <= 0) return undefined;
+      const want = i === 0 ? TAIL_BYTES : READ_FROM_MAX_BYTES;
+      const start = Math.max(0, end - want);
+      const r = await this.io.readFileFromBytesMeasured(file, start, Math.max(1, end - start));
+      this.budget--;
+      if (!r.ok) return null;
+      const bytes = new Uint8Array(r.bytes.length + head.length);
+      bytes.set(r.bytes, 0);
+      bytes.set(head, r.bytes.length);
+      const measured = lastUsageTokens(new TextDecoder().decode(bytes));
+      if (measured !== null) return measured;
+      const nl = r.bytes.indexOf(10);
+      head = nl < 0 ? bytes : bytes.slice(0, nl + 1);
+      end = start;
+    }
+    return null;
   }
 
   /** When this run — or, resumed in place, its latest resume — started. */

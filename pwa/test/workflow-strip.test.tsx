@@ -1,6 +1,8 @@
 // The session page's workflow strip (D-5560): Claude Code's own row — name,
 // bar, done/total, elapsed, `↓ N tokens` — one line per workflow, the detail
 // (phases, each agent's label and state) behind the head. Neutral fixtures.
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { WorkflowStrip, formatElapsed, formatTokens, workflowFacts, workflowHeadline } from '@ccrc/ui';
@@ -132,6 +134,76 @@ describe('WorkflowStrip — the glance and the detail', () => {
   });
 });
 
+describe('WorkflowStrip — compact on a phone, every fact reachable', () => {
+  const many = (n: number): WorkflowView[] =>
+    Array.from({ length: n }, (_, i) => wf({ id: `wf_0000000${i}-aaa`, name: `flow-${i}`, done: i, total: 9 }));
+  it('collapsed: at most three lines, then "+N more" — the head already counts them all', () => {
+    const { container } = render(<WorkflowStrip workflows={many(6)} />);
+    expect(screen.getByText('6 workflows running')).toBeTruthy();
+    expect(container.querySelectorAll('.workflow-summary .workflow-line')).toHaveLength(3);
+    expect(screen.getByText('+3 more — open for all')).toBeTruthy();
+    expect(screen.queryByText('flow-5')).toBeNull();
+  });
+  it('collapsed: running rows come first, so a finished one never hides a running one', () => {
+    const done = (i: number): WorkflowView => wf({ id: `wf_1000000${i}-aaa`, name: `done-${i}`, state: 'completed', startedAt: T0 - 10_000 + i, endedAt: T0 });
+    render(<WorkflowStrip workflows={[done(0), done(1), done(2), wf({ name: 'still-running' })]} />);
+    expect(screen.getByText('still-running')).toBeTruthy();
+    expect(screen.getByText('+1 more — open for all')).toBeTruthy();
+  });
+  it('open: every workflow\'s own facts line heads its detail, so the summary can step aside', () => {
+    const { container } = render(<WorkflowStrip workflows={many(6)} />);
+    fireEvent.click(screen.getByRole('button', { expanded: false }));
+    const details = [...container.querySelectorAll('.workflow-detail')];
+    expect(details).toHaveLength(6);
+    for (const [i, d] of details.entries()) {
+      expect(d.querySelector('.workflow-name')!.textContent).toBe(`flow-${i}`);
+      expect(d.querySelector('.workflow-facts')!.textContent).toMatch(new RegExp(`^${i}/9 · `));
+    }
+  });
+  it('the summary is a list, one item per workflow, and a running one says running', () => {
+    render(<WorkflowStrip workflows={[wf(), wf({ id: 'wf_00000000-bbb', name: 'second-flow', state: 'completed', endedAt: T0 + 5 })]} />);
+    const items = screen.getAllByRole('listitem');
+    expect(items).toHaveLength(2);
+    expect(items[0]!.textContent).toMatch(/running$/);
+    expect(items[1]!.textContent).toMatch(/done$/);
+  });
+  it('the done fold toggles in place: it says open, keeps focus, and folds again', () => {
+    render(<WorkflowStrip workflows={[wf()]} />);
+    fireEvent.click(screen.getByRole('button', { expanded: false }));
+    const fold = screen.getByText('… +1 done').closest('button')!;
+    expect(fold.getAttribute('aria-expanded')).toBe('false');
+    fold.focus();
+    fireEvent.click(fold);
+    expect(screen.getByText('build')).toBeTruthy();
+    expect(fold.isConnected).toBe(true);
+    expect(fold.getAttribute('aria-expanded')).toBe('true');
+    expect(document.activeElement).toBe(fold);
+    fireEvent.click(fold);
+    expect(screen.queryByText('build')).toBeNull();
+  });
+});
+
+describe('workflow-strip.css — the cap and the scroll', () => {
+  const css = readFileSync(path.join(import.meta.dirname, '..', '..', 'ui', 'src', 'components', 'workflow-strip.css'), 'utf8');
+  const rule = (sel: string): string => {
+    const i = css.indexOf(`${sel} {`);
+    expect(i, sel).toBeGreaterThanOrEqual(0);
+    return css.slice(i, css.indexOf('}', i));
+  };
+  it('capped like the mail and task strips', () => {
+    expect(rule('  .workflow-strip')).toContain('max-height: min(40vh, 320px)');
+  });
+  it('open, the summary steps aside and the rows are the one scroll body, able to shrink', () => {
+    expect(rule('.workflow-strip--open .workflow-summary')).toContain('display: none');
+    const rows = rule('.workflow-rows');
+    expect(rows).toContain('overflow-y: auto');
+    expect(rows).toContain('min-height: 0');
+  });
+  it('the done fold clears the tap floor', () => {
+    expect(rule('.workflow-strip .workflow-fold')).toContain('min-height: var(--tap-min)');
+  });
+});
+
 const snap = (): SessionSnapshot => ({
   events: [], offset: 0, uuid: null, status: null, statusUpdatedAt: null, dialog: null, ask: null, tasks: [], mail: [],
   missingFile: null, strandedAccount: null, searchComplete: true, fileMeasured: true, file: null,
@@ -146,10 +218,16 @@ describe('the store', () => {
     const t = applySessionMsg(s, { type: 'workflows', workflows: [] });
     expect([t.workflows, t.workflowsUnreadable]).toEqual([[], false]);
   });
-  it('a backlog drops the rows — the session dir may have changed, and the server states the next read', () => {
-    const s = applySessionMsg(snap(), { type: 'workflows', workflows: [wf()] });
+  it('a backlog onto another transcript drops the rows — another session dir, and the server states the next read', () => {
+    const s = applySessionMsg({ ...snap(), file: '/t1.jsonl' }, { type: 'workflows', workflows: [wf()] });
     const t = applySessionMsg(s, { type: 'backlog', uuid: 'u2', events: [], offset: 0, file: '/t2.jsonl', missing: false });
     expect(t.workflows).toEqual([]);
+  });
+  it('a reconnect onto the same transcript keeps the rows until the restated frame replaces them', () => {
+    const s0 = applySessionMsg(snap(), { type: 'backlog', uuid: 'u1', events: [], offset: 0, file: '/t1.jsonl', missing: false });
+    const s = applySessionMsg(s0, { type: 'workflows', workflows: [wf()] });
+    const t = applySessionMsg(s, { type: 'backlog', uuid: 'u1', events: [], offset: 10, file: '/t1.jsonl', missing: false });
+    expect(t.workflows).toEqual([wf()]);
   });
 });
 

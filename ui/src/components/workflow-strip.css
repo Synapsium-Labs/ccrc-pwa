@@ -9,8 +9,9 @@
   /* SELF-GROUNDED — it sets its ink beside its ground, as `.mail-strip` does
      (audit.mjs route 1) — so every `.workflow-strip .foo` below is measured
      through the descendant route against `--bg-surface` and none needs a
-     registry entry. Capped like the task strip: a long agent list scrolls
-     inside itself rather than pushing the conversation off the screen. */
+     registry entry. Capped like the mail and task strips: collapsed it is a
+     head and at most three lines; open, the summary steps aside and the rows
+     are the one scroll body under the head, so no fact is ever clipped. */
   .workflow-strip {
     flex: none;
     margin: 0 var(--sp-4) var(--sp-2);
@@ -21,7 +22,7 @@
     overflow: hidden;
     display: flex;
     flex-direction: column;
-    max-height: min(50vh, 420px);
+    max-height: min(40vh, 320px);
     container-type: inline-size;
   }
   .workflow-strip--open {
@@ -64,11 +65,25 @@
     display: flex;
     flex-direction: column;
     gap: var(--sp-1);
+    /* Shrinks and scrolls before it can clip, should three lines ever not
+       fit (a very long name on a very short screen). */
+    flex: 0 1 auto;
+    min-height: 0;
+    overflow-y: auto;
     margin: 0;
     padding: 0 var(--sp-3) var(--sp-2) var(--sp-3);
     font: var(--weight-regular) var(--fs-2xs) / var(--lh-tight) var(--family-mono);
     font-variant-numeric: tabular-nums;
     color: var(--ink-secondary);
+  }
+  /* Open, each detail heads itself with this same line. */
+  .workflow-strip--open .workflow-summary {
+    display: none;
+  }
+  .workflow-lines {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-1);
   }
   .workflow-line {
     display: flex;
@@ -110,27 +125,32 @@
   }
   /* Wide enough for one line each: the lines become one grid, so the bars
      and the facts line up down the strip — Claude Code's own list does. */
+  /* Each line is a SUBGRID row rather than `display: contents`, which would
+     drop its listitem role from the accessibility tree in some engines. */
   @container (min-width: 560px) {
-    .workflow-strip .workflow-summary {
+    .workflow-lines {
       display: grid;
       grid-template-columns: auto minmax(0, 1fr) clamp(96px, 18cqw, 220px) auto;
       align-items: center;
       column-gap: var(--sp-3);
       row-gap: var(--sp-1);
     }
-    .workflow-line {
-      display: contents;
+    .workflow-lines .workflow-line {
+      display: grid;
+      grid-template-columns: subgrid;
+      grid-column: 1 / -1;
+      align-items: center;
     }
-    .workflow-bar {
+    .workflow-lines .workflow-bar {
       flex: none;
     }
-    .workflow-facts {
+    .workflow-lines .workflow-facts {
       padding-left: 0;
       white-space: nowrap;
     }
-    .workflow-strip .workflow-note {
-      grid-column: 1 / -1;
-    }
+  }
+  .workflow-strip .workflow-more {
+    color: var(--ink-secondary);
   }
   .workflow-strip .workflow-note {
     color: var(--ink-secondary);
@@ -142,17 +162,19 @@
     list-style: none;
     margin: 0;
     padding: 0 0 var(--sp-2);
+    flex: 1 1 auto;
     overflow-y: auto;
+    min-height: 0;
     border-top: 1px solid var(--edge-subtle);
   }
   .workflow-detail {
     padding: var(--sp-2) var(--sp-3) 0;
   }
-  .workflow-strip .workflow-detail-name {
+  .workflow-strip .workflow-detail-line {
     display: block;
-    overflow-wrap: anywhere;
-    font: var(--weight-medium) var(--fs-xs) / var(--lh-tight) var(--family-ui);
-    color: var(--ink-primary);
+    font: var(--weight-regular) var(--fs-2xs) / var(--lh-tight) var(--family-mono);
+    font-variant-numeric: tabular-nums;
+    color: var(--ink-secondary);
   }
   .workflow-strip .workflow-detail-note {
     margin: var(--sp-1) 0 0;
@@ -224,6 +246,7 @@
     color: var(--ink-secondary);
   }
   .workflow-strip .workflow-fold {
+    min-height: var(--tap-min);
     padding: var(--sp-1) 0;
     background: none;
     border: 0;
