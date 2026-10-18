@@ -41,7 +41,7 @@ describe('whitelist.checkPath', () => {
 
   function seed(): void {
     home = mkTmp('ccrc-wl-home-');
-    for (const d of ['.cc-sessions', '.cc-limits', '.cc-clips', '.claude', '.claude-corp']) {
+    for (const d of ['.cc-sessions', '.cc-limits', '.cc-clips', '.claude', '.claude-acme']) {
       mkdirSync(path.join(home, d), { recursive: true });
     }
     projectsRoot = mkTmp('ccrc-wl-projects-');
@@ -51,7 +51,7 @@ describe('whitelist.checkPath', () => {
   it('allows reads under every read-whitelisted root', async () => {
     seed();
     const cfg = { home, projectsRoot };
-    for (const rel of ['.cc-sessions/a', '.cc-limits/b', '.cc-clips/c', '.claude/settings.json', '.claude-corp/settings.json']) {
+    for (const rel of ['.cc-sessions/a', '.cc-limits/b', '.cc-clips/c', '.claude/settings.json', '.claude-acme/settings.json']) {
       const p = path.join(home, rel);
       expect(await checkPath(p, cfg, 'read')).not.toBeNull();
     }
@@ -249,7 +249,7 @@ describe('whitelist.checkPath', () => {
 describe('whitelist.isExecAllowed', () => {
   it('allows whitelisted cmd/subcommand pairs', () => {
     expect(isExecAllowed('tmux', ['has-session', '-t', 'x'])).toBe(true);
-    expect(isExecAllowed('ccd', ['swap', 'x', 'claude2'])).toBe(true);
+    expect(isExecAllowed('ccd', ['swap', 'x', 'claude9'])).toBe(true);
   });
 
   it('requires an EXACT bare command name — no basename matching', () => {
@@ -277,8 +277,8 @@ describe('whitelist.isExecAllowed', () => {
   // remote nothing, and are never re-proved at the instant of deletion.
   // See whitelist-noghosts.test.ts for the full statement.
   it('allows ws-add and refuses ws-rm', () => {
-    expect(isExecAllowed('ccd', ['ws-add', 'OpenClawHetzner'])).toBe(true);
-    expect(isExecAllowed('ccd', ['ws-rm', 'OpenClawHetzner-quiet-mesa'])).toBe(false);
+    expect(isExecAllowed('ccd', ['ws-add', 'project-c'])).toBe(true);
+    expect(isExecAllowed('ccd', ['ws-rm', 'project-c-quiet-mesa'])).toBe(false);
   });
 
   it('allows the PR and archive verbs at their pinned prefixes', () => {
@@ -337,9 +337,9 @@ describe('whitelist.isExecAllowed', () => {
     // anything while this holds: a list that had been widened to accept
     // anything ws-shaped — or anything at all — would satisfy those two
     // assertions for entirely the wrong reason.
-    expect(isExecAllowed('ccd', ['ws-nuke', 'OpenClawHetzner-quiet-mesa'])).toBe(false);
+    expect(isExecAllowed('ccd', ['ws-nuke', 'project-c-quiet-mesa'])).toBe(false);
     expect(isExecAllowed('ccd', ['ws'])).toBe(false);
-    expect(isExecAllowed('ccd', ['prefer', 'x', 'claude2'])).toBe(false);
+    expect(isExecAllowed('ccd', ['prefer', 'x', 'claude9'])).toBe(false);
     expect(isExecAllowed('ccd', ['supervise', 'x'])).toBe(false);
   });
 
