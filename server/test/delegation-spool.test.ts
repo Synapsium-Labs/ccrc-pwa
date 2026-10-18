@@ -417,7 +417,7 @@ describe('the hook\'s literal bounds equal DELEGATION_SPOOL_BOUNDS', () => {
     expect([B.lineBytesBelow, B.lineBytesBelowSmall], 'and this runner picks one of the two').toContain(NATIVE_CAP);
   });
   it.runIf(!/-linux-gnu/.test(spawnSync('bash', ['-c', 'printf %s "${BASH_VERSINFO[5]}"'], { encoding: 'utf8' }).stdout))(
-    'on a bash that is not built for glibc Linux, an OSTYPE of linux-gnu still picks the small cap (darwin and musl only; unverified until test-macos reports, D-5436)', () => {
+    'on a bash that is not built for glibc Linux, an OSTYPE of linux-gnu still picks the small cap (runs on darwin and musl only, D-5436)', () => {
       expect(capOf({ OSTYPE: 'linux-gnu' })).toBe(B.lineBytesBelowSmall);
     });
   it('with every bound at its maximum, the REQUIRED fields of the largest variants fit the 4096 cap (so a line that cannot fit there is a bug, not a case), and can pass the small one (D-5436)', () => {

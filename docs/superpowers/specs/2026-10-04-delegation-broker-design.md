@@ -97,9 +97,9 @@ has an owner in ccrc; nothing ccrc runs will ever clean one.
 | A capture arm already records raw hook payloads for a session whose id ends `-hookcap` | `ccd/session-hook.sh:2917-2930` (D-3612) |
 | The server reads each project's worktree admin records once a minute, through fleet IO, as `{name, path, headBranch}`; an unreadable record is silently skipped; a detached HEAD yields no sha | `server/src/coord/gitref.ts:272`, `:327-334`; `server/src/watch.ts:117` (`DIVERGENCE_SWEEP_MS`), `:2681` |
 | The fleet agent may WRITE only under `~/.cc-clips` (non-atomically); it may READ the registry, the projects root and `~/.claude*`; its `stat` answers size and mtime only | `agent/src/whitelist.ts:137`, `:140-146`; `agent/src/fileops.ts` (`writeB64`); `agent/src/server.ts:234` |
-| The exec surface is `tmux` and `ccd`; `git` is not executable by the server | `agent/src/whitelist.ts:192` |
-| `$REG/<id>.uuid` mirrors the session's CURRENT Claude session UUID; Claude Code rotates it on `/clear` and compaction, and ccd keeps no history | `ccd/ccd:15806-15817` (`_sync_uuid`) |
-| `ws-add` creates a new worktree from the main checkout; it takes no base ref | `ccd/ccd:6906` |
+| The exec surface is `tmux` and `ccd`; `git` is not executable by the server | `agent/src/whitelist.ts:194` |
+| `$REG/<id>.uuid` mirrors the session's CURRENT Claude session UUID; Claude Code rotates it on `/clear` and compaction, and ccd keeps no history | `ccd/ccd:17113-17118` (`_sync_uuid`) |
+| `ws-add` creates a new worktree from the main checkout; it takes no base ref | `ccd/ccd:6961` |
 | `.lifecycle` is already a journal name | `shared/api.ts:8547` (`LC_DIR_NAME`) |
 | Stage markers nothing in the tree writes, absence meaning shadow | `server/src/coord/stall.ts:104`, `:131` |
 
@@ -244,7 +244,7 @@ no locks, no waiting, no extra forks on the probe path.
 
 **Spool.** Each event is one line appended to `$REG/delegation/spool/<ccd-id>/<YYYYMMDDHH>.spool` (UTC
 hour bucket). Every writer computes the same name; `>>` creates the bucket idempotently; one `write` per
-line, each line under 4 KiB (1008 bytes where bash is not built for glibc Linux, D-5436; oversized optional fields are dropped and the line marked `truncated`);
+line, each line under 4 KiB (1008 bytes unless bash is built for glibc Linux and its OSTYPE reads `linux-gnu*`, D-5436; oversized optional fields are dropped and the line marked `truncated`);
 the line is built in the hook's existing single `jq` call. ccd creates the directory when it spawns a
 session — the hook never forks `mkdir`; a missing directory means skip. The hook prunes its own buckets
 older than 24 h at most once an hour; it removes nothing outside its own spool directory.
