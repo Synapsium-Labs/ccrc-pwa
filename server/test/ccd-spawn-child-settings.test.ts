@@ -148,6 +148,66 @@ describe('_spawn_start of a .child row passes the deny file and the shell pin, a
   });
 });
 
+describe('a child\'s FIRST spawn, the shell pin\'s absence, and a merge that fails (plan Task 15, review defects)', () => {
+  /** `_spawn_start <id> new` — the path after `ws-add-child`: one `--session-id` line, no retry. */
+  const spawnNew = (id: string, pre = ''): string[] => {
+    h.sh(`rm -f "$HOME/ccd-calls" "$HOME/pane-up"`);
+    h.sh(`${RESUME_DIES} ${pre} _spawn_start ${id} new 2>/dev/null`);
+    return h.calls().filter((c) => c.startsWith('tmux new-session')).map(composed);
+  };
+
+  it('a .child row\'s first spawn (mode new) carries --settings and the pin on its one --session-id line, and records both', () => {
+    install(); seed(CHILD, true);
+    const lines = spawnNew(CHILD);
+    expect(lines).toEqual([childLine(CHILD, denyFile(), `--session-id '${UUID}'`)]);
+    expect(h.reg(CHILD, 'deny-settings')).toBe(sha(denyFile()));
+    expect(h.reg(CHILD, 'childshell')).toBe('/bin/bash');
+  });
+
+  it('a row without .child spawns new with today\'s line, deny file installed or not', () => {
+    seed(TOP, false);
+    const without = spawnNew(TOP);
+    install();
+    expect(spawnNew(TOP)).toEqual(without);
+    expect(without).toEqual([today(`--session-id '${UUID}'`)]);
+    expect(h.reg(TOP, 'deny-settings')).toBeNull();
+    expect(h.reg(TOP, 'childshell')).toBeNull();
+  });
+
+  it('a pin that is not executable passes no CLAUDE_CODE_SHELL and removes a stale .childshell', () => {
+    install(); seed(CHILD, true);
+    spawnBoth(CHILD);
+    expect(h.reg(CHILD, 'childshell')).toBe('/bin/bash');
+    h.sh(`rm -f "$HOME/ccd-calls" "$HOME/pane-up"`);
+    h.sh(`${RESUME_DIES} CHILD_SHELL_PIN='${h.home}/no-such-shell'; _spawn_start ${CHILD} resume 2>/dev/null`);
+    const lines = h.calls().filter((c) => c.startsWith('tmux new-session')).map(composed);
+    expect(lines).toHaveLength(2);
+    for (const l of lines) { expect(l).not.toContain('CLAUDE_CODE_SHELL'); expect(l).toContain(`--settings '${denyFile()}'`); }
+    expect(h.reg(CHILD, 'childshell')).toBeNull();
+    expect(h.reg(CHILD, 'deny-settings')).toBe(sha(denyFile()));
+  });
+
+  it('a routed child whose merge fails keeps the route\'s ONE --settings and records no .deny-settings (D-5391)', () => {
+    install(); seed(CHILD, true);
+    h.sh(`_reg_set ${CHILD} class opus; _reg_set ${CHILD} workflow on`);
+    spawnBoth(CHILD);
+    expect(h.reg(CHILD, 'deny-settings')).not.toBeNull();
+    // The merge is the one jq call that takes --slurpfile; failing it alone is the fault.
+    const failMerge = 'jq() { case " $* " in *" --slurpfile "*) return 5 ;; esac; command jq "$@"; };';
+    h.sh(`rm -f "$HOME/ccd-calls" "$HOME/pane-up"`);
+    h.sh(`${RESUME_DIES} ${failMerge} _spawn_start ${CHILD} resume 2>/dev/null`);
+    const lines = h.calls().filter((c) => c.startsWith('tmux new-session')).map(composed);
+    expect(lines).toHaveLength(2);
+    for (const l of lines) {
+      expect(l.match(/--settings /g)).toHaveLength(1);
+      expect(l).not.toContain(denyFile());
+      const m = /--settings '([^']*)'/.exec(l);
+      expect(JSON.parse(m![1]!).permissions).toBeUndefined();
+    }
+    expect(h.reg(CHILD, 'deny-settings')).toBeNull();
+  });
+});
+
 describe('the registry reads the spawn record three ways (plan Task 15)', () => {
   const D = 'a'.repeat(64);
   it('.deny-settings: unlisted is none, a sha256 is a digest, anything else listed is unreadable', () => {

@@ -327,14 +327,24 @@ describe('the children\'s deny file (spec §6.6, plan Task 15, D-5299)', () => {
     expect(JSON.parse(fs.readFileSync(cfg('.claude'), 'utf8')).permissions).toBeUndefined();
     expect(JSON.parse(fs.readFileSync(cfg('.claude-personal'), 'utf8')).permissions).toEqual(own.permissions);
   });
-  it('re-running keeps the file\'s bytes (so every recorded digest still matches); --remove deletes it', () => {
+  it('re-running keeps the file\'s bytes (so every recorded digest still matches)', () => {
     run();
     const bytes = fs.readFileSync(denyFile());
     const ino = fs.statSync(denyFile()).ino;
     run();
     expect(fs.readFileSync(denyFile()).equals(bytes)).toBe(true);
     expect(fs.statSync(denyFile()).ino).toBe(ino);
+  });
+  // D-5392: the file is the BOX's, not a home's. `ccrc account remove` runs
+  // `--remove --homes <that one home>`; deleting the file there stripped every
+  // other account's children of the deny layer until the next install. Only
+  // `ccrc uninstall`'s `_uninst_cc_sessions` removes it (ccrc-uninstall.test.ts).
+  it('--remove, scoped to one home or roster-wide, leaves the file byte-identical (D-5392)', () => {
+    run();
+    const bytes = fs.readFileSync(denyFile());
     execFileSync('bash', [INSTALLER, '--remove', '--homes', path.join(home, '.claude')], { env: { ...process.env, HOME: home } });
-    expect(fs.existsSync(denyFile())).toBe(false);
+    expect(fs.readFileSync(denyFile()).equals(bytes)).toBe(true);
+    execFileSync('bash', [INSTALLER, '--remove', '--homes', path.join(home, '.claude'), path.join(home, '.claude-personal')], { env: { ...process.env, HOME: home } });
+    expect(fs.readFileSync(denyFile()).equals(bytes)).toBe(true);
   });
 });

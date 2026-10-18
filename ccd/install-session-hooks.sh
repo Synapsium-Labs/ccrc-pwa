@@ -149,7 +149,8 @@ done
 # settings ("Children only"). This is the documented second copy, held equal to the
 # TypeScript list by iteration in `install-session-hooks.test.ts`. The path-qualified
 # forms (`Bash(*/ccd ws-rm:*)` and the like) wait on plan Task 13's rig result:
-# CHILD_DENY_PATH_QUALIFIED is that one switch, twin of the TypeScript constant.
+# CHILD_DENY_PATH_QUALIFIED is the bash twin of the TypeScript constant: turning them on is
+# two flips (the iteration test holds them equal) and one test update (the `false` pin).
 CHILD_DENY_PATH_QUALIFIED=0
 CHILD_DENY_FILE="$HOME/.cc-sessions/child-deny.settings.json"
 _child_deny_json() {
@@ -165,9 +166,10 @@ _child_deny_json() {
   done
   printf '%s\n' "${rules[@]}" | jq -R . | jq -s '{permissions:{deny:.}}'
 }
-if [[ "$MODE" == remove ]]; then
-  rm -f -- "$CHILD_DENY_FILE"
-else
+# --remove leaves the file alone (D-5392): it is the BOX's, and `ccrc account remove`
+# runs `--remove --homes <one home>`, so deleting it here stripped every other account's
+# children of the deny layer. `ccrc uninstall`'s `_uninst_cc_sessions` is its one remover.
+if [[ "$MODE" != remove ]]; then
   mkdir -p -- "$(dirname "$CHILD_DENY_FILE")" 2>/dev/null || :
   if ! deny_next=$(_child_deny_json) || ! jq empty <<<"$deny_next"; then
     echo "install-session-hooks: could not build $CHILD_DENY_FILE" >&2; rc=1
