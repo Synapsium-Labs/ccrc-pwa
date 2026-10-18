@@ -435,18 +435,6 @@ const PROBE_TEXT = 'the parser reads each record and the cache keeps the result 
  *  fewer was not laid out the way the rows are. */
 const MIN_MEASURE = 8;
 
-/**
- * THE COLUMN'S MEASURES (`Measures`), read the only way they can be: by laying
- * out, hidden, one assistant paragraph and one user bubble in the live column,
- * and dividing each one's width by the width of an average glyph of the same
- * text — so whatever the font, the reading measure or the column, a line in
- * the predictor is a line on the screen.
- *
- * In a frame laid over the column that SCROLLS as virtuoso's scroller does, so
- * the probe's rows are exactly as wide as the real ones, scrollbar gutter and
- * all. A column that is not laid out — a screen hidden behind another — reads
- * 0, and is taken to hold the nominal measure.
- */
 /** THE BAND JUMP TO LATEST COVERS (the audit's B12; D-5464). `.jump-latest`
  *  sits `--sp-3` above the foot of the list and is at least `--tap-min` tall,
  *  so it covers whatever is in the bottom `--tap-min + --sp-3` of it. While the
@@ -474,6 +462,18 @@ export function pillBandOf(column: HTMLElement): number | undefined {
   return Number.isFinite(band) ? band : undefined;
 }
 
+/**
+ * THE COLUMN'S MEASURES (`Measures`), read the only way they can be: by laying
+ * out, hidden, one assistant paragraph and one user bubble in the live column,
+ * and dividing each one's width by the width of an average glyph of the same
+ * text — so whatever the font, the reading measure or the column, a line in
+ * the predictor is a line on the screen.
+ *
+ * In a frame laid over the column that SCROLLS as virtuoso's scroller does, so
+ * the probe's rows are exactly as wide as the real ones, scrollbar gutter and
+ * all. A column that is not laid out — a screen hidden behind another — reads
+ * 0, and is taken to hold the nominal measure.
+ */
 export function measuresOf(column: HTMLElement): Measures {
   const doc = column.ownerDocument;
   const make = (tag: string, className: string | null, probe: string | null, text: string | null): HTMLElement => {

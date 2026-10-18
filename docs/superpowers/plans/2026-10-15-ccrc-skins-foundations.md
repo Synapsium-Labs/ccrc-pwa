@@ -179,7 +179,7 @@ Every task's requirements include this section. `CLAUDE.md` is the authority; th
 | `pwa/src/stores/fleet.ts` | Modify | the `divergence` frame's arm in `asFleetMsg`, and the census in state | 15 |
 | `pwa/src/fleet/integrityWords.ts` | **Create** | the pure model of the divergence census | 15 |
 | `pwa/src/session/sessionFacts.ts` | **Create** | the pure model of a session's version and cost | 16 |
-| `pwa/src/session/ChatList.tsx` | Modify (with Task 17's gate) | the list leaves room under its last row while the pill shows | 17 |
+| `pwa/src/session/ChatList.tsx` | Modify (with Task 17's gate) | the at-bottom threshold is the pill's band, so the pill never covers a failed send's Retry or Discard (D-5464) | 17 |
 | `.github/workflows/ci.yml` | Modify (after #402) | `storybook-a11y` once per skin | 3b |
 | `server/test/ci-pipeline.test.ts` | Modify (after #402) | pins the per-skin a11y run | 3b |
 | `pwa/test/skin-catalogue.test.ts`, `skin-boot.test.tsx`, `skin-identity.test.ts`, `ink-tiers.test.ts`, `meter.test.tsx`, `danger-buttons.test.tsx`, `fonts.test.ts`, `icon.test.tsx`, `hover-states.test.ts`, `command-registry.test.ts`, `command-layer.test.tsx`, `page-scaffold.test.tsx`, `skin-picker.test.tsx`, `base-defaults.test.ts`, `role-census.test.ts`, `integrity-frame.test.ts`, `integrity-words.test.ts`, `session-facts.test.ts`, `jump-latest.test.tsx`; `fonts-built.test.ts` (7b) | **Create** | each task's own red suite | 1–17 |
