@@ -4,7 +4,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-18-accounts-connect-design.md` (rev 3, approved by the operator 2026-10-18; its Q4 and Q10 designs are pending the operator's review, §Gates). Every section binds this plan. Read the section a task names before its Step 0. The 09-05 spec (`2026-09-05-account-connections-ui-design.md`) stands wherever the spec says nothing, as its §15 says.
 
-**Status:** DRAFT rev 0 (2026-10-18). Task A0 (this plan, and the spec's D-prefix restore) is the docs PR. Nothing is dispatched until the operator approves it. Tasks A28 to A33 also wait for the operator's review of the Q4 designs, and A34 to A37 for the review of the Q10 designs.
+**Status:** DRAFT rev 1 (2026-10-18; rev 0 adversarially reviewed, §Review log). Task A0 (this plan, and the spec's D-prefix restore) is the docs PR. Nothing is dispatched until the operator approves it. Tasks A28 to A33 also wait for the operator's review of the Q4 designs, and A34 to A37 for the review of the Q10 designs.
 
 **Operator rulings this plan builds on** (2026-10-18, through the superpowers visual companion; the spec's §19 has each question, its recommendation and the ruling):
 - **Q1, the long-lived token is the default.** Their words: "without long lived token we keep having to reauth IN the sessions and it's a major pain." Flow A opens on **Mint a long-lived token**; a 401 sign-in lane's first fix, and an act on every sign-in lane, is **Switch to a long-lived token**; token lanes carry the optional stated identity.
@@ -14,13 +14,13 @@
 - **Q10, the alternative:** sign-in and mint from the app on a macOS fleet node too, with an explicit and safe test strategy (spec §3.10, §16.1).
 - **The visual calls the mockups left open, ruled 2026-10-18 "as mocked":** the Signed in lamp's `●` takes `--status-busy` with **no glow**, and the word stays quiet in `--ink-primary` (D-5517); Instrument card heads carry the title in primary ink and the scope as a small mono tag at the right. The third call (the release date on the meta line) is the Settings spec's.
 - **Settings rulings this plan honours:** Security moves into Settings (D-5508, the Settings spec's definition, which D-5522 cites); the passkey Revoke (and Add) gets the step-up once it exists (the Settings spec's D8), which A5's routes provide; there is no Danger zone section, so Remove sits in place with its confirm.
-- **The release-notes change (#645)** was approved by the operator ("Fix to release notes sounds good!") and merged to `main` as `62db8d3b` while this plan was written, so every file it touched is open to this plan, and its `TextLink` primitive is on `main` (§In flight).
+- **The release-notes fix (#651)** was approved by the operator ("Fix to release notes sounds good!"). Rev 0 credited the words to #645, which had already merged (`62db8d3b`, 21:55) before they were given; the open follow-up #651 ("notes drop prose-style D-number ranges too", explicitly #645's follow-up) is the fix they approved, and rev 1 records the approval against it; it merged as `6b89878e` while rev 1 was written. #651 touches only `deploy/release-notes.mjs` and its test, so it fences nothing here. #645's `TextLink` primitive is on `main` (§In flight).
 
-**Base:** `origin/main` `c1453e42` (#597), two merges after `f609f68c` (#644, the spec), where the plan was first measured: #645 (the release-notes change, `62db8d3b`) and #597 (delegation wave 3's follow-up) merged while it was written, and both fences are lifted below. Code is cited by file and by function, constant or selector, never by a bare line number. Step 0 of each task re-grounds every citation by content, on the tree the task starts from.
+**Base:** `origin/main` `6b89878e` (#651) at rev 1; rev 0 was measured at `c1453e42` (#597), two merges after `f609f68c` (#644, the spec). #645 (the release-notes change, `62db8d3b`) and #597 (delegation wave 3's follow-up) merged while rev 0 was written, and #646 (CF14, `77376226`), #650 (skins Task 14b, `694037c4`) and #651 (`6b89878e`) while rev 1 was; every one of those fences is lifted below. Code is cited by file and by function, constant or selector, never by a bare line number. Step 0 of each task re-grounds every citation by content, on the tree the task starts from.
 
 **Deploy class, per task.** Each task header names its lane: **server** (the server and the PWA bundle), **AGENT-FIRST** (the agent, `ccd`, `ccrc` or `deploy/`: the fleet box moves first), or **operator act**. The wire is additive-only: no task bumps `FLEET_PROTO`. A new route answers `501 unsupported` until the fleet advertises the cap word its subs need (N4), so a newer server beside an older fleet box narrows the door in place, and any rollout order is safe.
 
-**Names.** This plan's tasks are **A0** to **A37**. Other plans' tasks are cited as **F1**–**F17** (foundations), **S0**–**S18** (W2 shells), **R1a**–**R4** (the Settings spec's waves, §13 there; its plan is being written beside this one), **CF1**–**CF17** (coordinator-first routing) and **WS1**–**WS19** (working state and interruptions; hibernation is WS16–WS19). **W3-LC** is the coordinator-owned shell task "ListColumn holds the route's list" (Settings spec §4.3). **OA1**–**OA5** are operator acts. Lane fixtures are `lane-a` to `lane-f`; the mockups' frames name `work-max-1` and `openrouter-main`. A mockup frame is always cited with the word, as "mockup A4" (the mockup notes' own ids, A1–A14 for Accounts), so it is never confused with Task A4. The email is `someone@example.invalid`.
+**Names.** This plan's tasks are **A0** to **A38** (A38 was added by the review and lands in W2b after A23; A34 lands as two PRs, A34a and A34b). **#402/#627** names one gate: #402, or its reconciliation #627, whichever merges. Other plans' tasks are cited as **F1**–**F17** (foundations), **S0**–**S18** (W2 shells), **R1a**–**R4** (the Settings spec's waves, §13 there; its plan is being written beside this one), **CF1**–**CF17** (coordinator-first routing) and **WS1**–**WS19** (working state and interruptions; hibernation is WS16–WS19). **W3-LC** is the coordinator-owned shell task "ListColumn holds the route's list" (Settings spec §4.3). **OA1**–**OA5** are operator acts. Lane fixtures are `lane-a` to `lane-f`; the mockups' frames name `work-max-1` and `openrouter-main`. A mockup frame is always cited with the word, as "mockup A4" (the mockup notes' own ids, A1–A14 for Accounts), so it is never confused with Task A4. The email is `someone@example.invalid`.
 
 **Goal, PR by PR.**
 
@@ -51,6 +51,7 @@
 | A21 | unchanged | the auth routes, the in-memory attempt, the URL allowlist (N2) |
 | A22 | **Mint a long-lived token** (default) and **Sign in with Claude**, end to end | none |
 | A23 | the resume banner on any route; Switch to a long-lived token; Switch to sign-in; Sign the old sign-in out | none |
+| A38 | Sign in again; Mint a new token / Replace token (mint); the Expiring (minted token) card | none (A20's re-auth arms) |
 | A24 | unchanged | `add --provider openai`; `account-codex-v1` |
 | A25 | **OpenAI**: the ChatGPT device-code sheet | none |
 | A26 | unchanged | OpenRouter paste validate-first, `wrong-key-kind`, `telemetry: "openrouter"`, suggested models; `account-openrouter-v2` |
@@ -73,40 +74,47 @@
 
 ## In flight, and what it fences off
 
-Measured on 2026-10-18 with `gh pr view <n> --json files`. **A file in this table is frozen for this plan until its owner merges.** A task that needs one is gated in its header, and neither the task nor any of its steps edits a frozen file early. Each gated task re-reads the in-flight diffs before it starts, because a draft's file list can still grow.
+Measured on 2026-10-18 with `gh pr view <n> --json files` for **every** open PR, and re-measured at rev 1 (§Review log) after the review found four PRs missing (#647, #650, #652, #623); #646, #650 and #651 merged during rev 1. **A file in this table is frozen for this plan until its owner merges.** A task that needs one is gated in its header, and neither the task nor any of its steps edits a frozen file early. Each gated task re-reads the in-flight diffs before it starts, because a draft's file list can still grow.
 
 | In flight | Files it changes that this plan would otherwise touch | Tasks it gates |
 |---|---|---|
-| **#627** (draft; #402, the Docs screen, reconciled) | `pwa/src/app.tsx`, `pwa/src/lib/api.ts`, `pwa/src/fleet/FleetHead.tsx`, `SessionActionsSheet.tsx`, `pwa/src/session/SessionHeader.tsx`, `pwa/design/audit.mjs`; `pwa/test/contrast.test.ts`, `control-census.test.ts`, `markup-census.test.ts`, `design-system-boundary.test.ts`, `shell-css.test.ts`, `tap-targets.test.tsx`, `app.test.tsx`, `fleet-screen.test.tsx`, `hover-states.test.ts`; `server/test/single-definition.test.ts`; `.github/workflows/ci.yml` | every PWA task (A2–A4, A6, A12's PWA half, A14, A18, A19, A22, A23, A25, A27, A29, A31, A33); A23 owns the app-level banner in `app.tsx` |
+| **#402/#627** (#402, the Docs screen, open; #627, its draft reconciliation; **one gate: whichever of the two merges**, since they carry the same frozen files) | `pwa/src/app.tsx`, `pwa/src/lib/api.ts`, `pwa/src/fleet/FleetHead.tsx`, `SessionActionsSheet.tsx`, `pwa/src/session/SessionHeader.tsx`, `pwa/design/audit.mjs`; `pwa/test/contrast.test.ts`, `control-census.test.ts`, `markup-census.test.ts`, `design-system-boundary.test.ts`, `shell-css.test.ts`, `tap-targets.test.tsx`, `app.test.tsx`, `fleet-screen.test.tsx`, `hover-states.test.ts`; `server/test/ci-pipeline.test.ts`, `server/test/single-definition.test.ts` (shared, see below); `.github/workflows/ci.yml` | every PWA task (A2–A4, A6, A12's PWA half, A14, A18, A19, A22, A23, A25, A27, A29, A31, A33, A37, A38); A34 and A36 (`ci.yml`, `ci-pipeline.test.ts`); A23 owns the app-level banner in `app.tsx` |
 | ~~#645~~ (the release-notes change, D-5548 to D-5551) | **merged** as `62db8d3b`: `server/src/config.ts`, `shared/api.ts`, `pwa/src/fleet/fleet.css`, `SettingsScreen.tsx`, `ui/src/index.ts` and the rest are open again | none. It added `ui/src/primitives/text-link.tsx`: every outbound link **inside a line of text** in this plan (the ledger's revoke links, "Create a key on openrouter.ai ↗", "Delete it at openrouter.ai/keys ↗") is `TextLink`, which is inline by contract and has no tap floor. A **standalone** Open control ("Open claude.ai to sign in ↗", "Open OpenRouter credits ↗") is a `Button`, or `buttonVariants` on an anchor as `PrSheet`'s Open on GitHub, with `target=_blank` and `rel=noopener noreferrer` |
-| **#646** (CF14: the child's approval hook and forbidden-verb deny) | `ccd/session-hook.sh`, `ccd/ccrc`, `ccd/ccrc-api`, `ccd/ccrc-doctor-checks`, `deploy/deploy.sh`, `shared/api.ts`, `server/test/single-definition.test.ts`, `server/test/installTreeFixture.ts` | A9 (the hook and `APPROVAL_FORBIDDEN_JQ`, the static copy of `FORBIDDEN_PATTERNS`); every task that edits `ccd/ccrc` (A11, A13, A16, A20, A24, A26, A28, A30, A32, A35, A37) |
+| ~~#646~~ (CF14: the child's approval hook and forbidden-verb deny) | **merged** as `77376226` after rev 0 was written: `ccd/session-hook.sh`, `ccd/ccrc`, `ccd/ccrc-api`, `ccd/ccrc-doctor-checks`, `deploy/deploy.sh` and `server/test/installTreeFixture.ts` are open again, and `APPROVAL_FORBIDDEN_JQ` is on `main` for A9 to extend | none |
+| **#647** (the session card is a glance, D-5545) | `pwa/src/fleet/fleet.css`, `pwa/test/fleet-css.test.ts`, `pwa/test/fleet-screen.test.tsx`, `server/test/single-definition.test.ts` (shared) | A2, A18 (`fleet.css`), and A4 if it needs a `fleet.css` rule |
+| ~~#650~~ (skins Task 14b: the sheet body and `OptionRow` read the type and density roles) | **merged** as `694037c4` while rev 1 was written: `ui/src/primitives/sheet.tsx`, `option-row.css`, `pwa/src/fleet/fleet.css` and `pwa/src/styles/shell.css` carry its roles on `main`. Every sheet body here (A3, A18, A19, A22, A23, A25, A27, A29, A31, A33, A38) sits in that `Sheet` body and uses that `OptionRow`, and reads their roles rather than restating them | none |
+| **#652** (the session page lists its running workflows) | `server/src/sessionws.ts`, `shared/api.ts` (shared) | A10 (the mask point in `sessionws.ts`) |
+| **#623** (ccrc history W1-B4, the sole-copy export) | `.github/workflows/ci.yml`, `server/test/single-definition.test.ts` (shared) | A34, A36 (`ci.yml`) |
+| ~~#651~~ (release notes drop prose-style D-number ranges too; the follow-up to #645, the fix the operator approved) | **merged** as `6b89878e`: `deploy/release-notes.mjs`, `server/test/release-notes.test.ts` | none: this plan touches neither file |
 | **#565** (draft; GPT lane Plan 4 Part C) | `ccd/ccrc`, `ccd/ccd-account-auth`, `ccd/ccrc-codex`, `ccd/ccrc-models-probe`, `ccd/ccrc-doctor-checks`, `shared/roster.ts`, `shared/roster-json.mjs`, `server/src/limits.ts`, `deploy/models-op.mjs`, `deploy/deploy.sh`; `server/test/ccrc-account.test.ts`, `ccd-account-auth.test.ts`, `ccrc-install.test.ts`, `ccrc-update.test.ts`, `ccrc-doctor.test.ts` | every box task (A11, A13, A16, A20, A24, A26, A28, A30, A32, A35, A37); A1 (`shared/roster.ts`); A12 (`limits.ts`, the `readLimits` pass) |
 | **#435** (continuity wave 4b) and **#410** (path identity W1b) | `ccd/ccd` (both), `ccd/ccrc-doctor-checks` | A9 (`ccd`'s two spawn lines), A15 (`ccd supervise`) |
-| **#397** (path identity W1a) | `shared/api.ts`, `server/src/server.ts`, `server/src/sessionws.ts`, `server/src/watch.ts`, `server/src/registry.ts`, `server/src/fleet.ts`, `server/src/ccdargv.ts` | A1, A7, A9, A10, A12, and every route task (A14, A17, A21, A29, A31, A33), which register in `server.ts` |
+| **#397** (path identity W1a) | `shared/api.ts`, `server/src/server.ts`, `server/src/sessionws.ts`, `server/src/watch.ts`, `server/src/registry.ts`, `server/src/fleet.ts`, `server/src/ccdargv.ts` | A10 only (`sessionws.ts`). Its `shared/api.ts` and `server.ts` hunks fall under the shared-file rule below, so A1, A7, A12 and the route tasks absorb it by merge |
 | ~~#597~~ (delegation wave 3's follow-up) | **merged** as `c1453e42`: `ccd/session-hook.sh`, `server/src/watch.ts` and `shared/api.ts` are open again | none |
 | **The Settings plan** (being written; its R2 owns the `AuthSection` move) | `pwa/src/screens/AccountsScreen.tsx` (the `AuthSection` import), `pwa/src/screens/AuthSection.tsx` | A2 and every later edit of `AccountsScreen.tsx` (the Settings spec's §15.3 C4: F11, then R2, then this plan) |
 
-`shared/api.ts` is edited by #397 and #646 at once (and was by #645 and #597, now merged). This plan's additions to it are new exports, so their hunks are disjoint: each task absorbs `main` with `git merge` after every one of them that has merged, and re-runs its suites.
+**The shared-file rule (one rule, applied to every task).** Three files are **shared and append-only**, not frozen: `shared/api.ts`, `server/src/server.ts` (route registration only) and `server/test/single-definition.test.ts`. They are edited by #397, #565, #623, #627, #647 and #652 at once (and were by #645, #646, #650 and #597, now merged), and this plan's additions to them are new exports, new registrations and new registry rows, so the hunks are disjoint. No task is gated on another PR for them alone: each task absorbs `main` with `git merge` after every one of them that has merged, and re-runs its suites. A task that changes an **existing** line of one of them (none in this plan does) is gated like any frozen file. Every other file in this table is frozen until its owner merges. This is why A1, A5, A7, A12, A14, A17, A21, A29, A31 and A33 carry no #397 gate, and A10 does (for `sessionws.ts`).
 
 ## Gates: what each task waits for, stated honestly
 
 | Gate | What it is, and its state on 2026-10-18 | Tasks that wait | Why |
 |---|---|---|---|
-| **#627** | the Docs screen, #402 reconciled; open, draft | every PWA task | the frozen shell files and censuses above |
-| **F11** (`PageScaffold`, `Section`) | foundations Task 11; not built, itself gated on #627 | A2 (Refined's page), A4 | the screen is built on the scaffold (spec §12.1; Settings spec C3 extends the primitives) |
+| **#402/#627** | the Docs screen: #402 open, #627 its draft reconciliation; the gate opens when **either** merges | every PWA task; A34, A36 | the frozen shell files, censuses, `ci.yml` and `ci-pipeline.test.ts` above |
+| **F11** (`PageScaffold`, `Section`) | foundations Task 11; not built, itself gated on #402/#627 | A2 (Refined's page), A4 | the screen is built on the scaffold (spec §12.1; Settings spec C3 extends the primitives) |
 | **Settings R2** | moves `AuthSection` to Settings › Security (D-5508); planned | A2 and every later `AccountsScreen.tsx` edit | one owner at a time for that file (C4) |
 | **S2b** (the skin seam), **S4a** (the element guard) | W2 shells; not built | A4 | Instrument's Accounts layout is a skin part, and no skin calls the network or imports the other |
 | **S9** (Instrument's list column), **S11** (the phone tab bar, Accounts tab) | W2 shells; not built | A4 | the lane table sits in the list column; the phone page sits under the tab bar |
 | **W3-LC** ("ListColumn holds the route's list") | coordinator-owned shell task; not planned | A4 (laptop and wide) | `ListColumn` holds the fleet list only (S9); Accounts registers its own list there. This plan does not build it |
 | **`Sheet`'s desktop arm** (W1, unplanned) | not a gate | — | the container is decided by `Sheet` from the width, never by a body (two-skins §5.1). Every sheet body here is width-agnostic, so it is a bottom sheet at every width until the arm lands, and a centred dialog after, with no change here. Each PWA task's matrix records which one it saw. The arm's own PR re-runs this plan's sheet cells |
 | **#645** | the release-notes change; **merged** (`62db8d3b`) | none (open) | `config.ts`, `fleet.css` and `ui/src/index.ts` are free; `TextLink` exists |
-| **Coordinator-first** | CF15 (deny rules for children) is on main: `CHILD_DENY_RULES`, the managed `~/.cc-sessions/child-deny.settings.json` passed to `.child` rows only, one `--settings` (D-5391). CF14 is #646 (open). CF16 (the server half) is planned | A9 after #646 | A9 extends the child-only file to every session (N1's reading) and #646's forbidden-verb deny to account verbs, and adds the account verbs to `FORBIDDEN_PATTERNS` so no approval path can rule them |
+| **Coordinator-first** | CF15 (deny rules for children) is on main: `CHILD_DENY_RULES`, the managed `~/.cc-sessions/child-deny.settings.json` passed to `.child` rows only, one `--settings` (D-5391). CF14 is #646, **merged** (`77376226`). CF16 (the server half) is planned | A9 (open on this count) | A9 extends the child-only file to every session (N1's reading) and #646's forbidden-verb deny to account verbs, and adds the account verbs to `FORBIDDEN_PATTERNS` so no approval path can rule them |
 | **Hibernation** | WS16–WS18 are on main (#593–#598): `$REG/<id>.hibernated`, `cmd_swap` refuses `hibernated`, `ccd ensure` wakes. WS19 (the shadow week, then arming) is the operator's, pending | A3, A16 | `POST /api/sessions/:id/swap` refuses a hibernated session, so Move says "refused: asleep" for it. `_acct_live` counts a row live only by its tmux pane, and `remove` rehomes every row naming the lane, so a hibernated session on a removed lane would wake on upstream. N3 makes remove count it. Nothing here waits for WS19; N3 must land (A16) before the UI can remove a lane |
 | **#565** | GPT lane Plan 4 Part C; draft | every box task, A1, A12 | its files above |
 | **#435, #410** | open | A9, A15 | `ccd/ccd` |
-| **#397** | open | A1, A7, A9, A10, A12, every route task | `shared/api.ts`, `server.ts`, `sessionws.ts` |
+| **#397**, **#652** | open | A10 | `sessionws.ts` (the shared files absorb by merge) |
+| **#647** | open | A2, A18 (`fleet.css`); A4 if it needs a `fleet.css` rule | the frozen styling file above |
+| **#623** | open | A34, A36 | `.github/workflows/ci.yml` |
 | **N1–N6 issued** | the spec's two unnumbered decisions, N1 and N2, and this plan's N3–N6 | A9 (N1), A16 (N3, N4), A17 (N6), A20 (N5), A21 (N2) | a number is issued before the task that defines it is dispatched (§Deviations and decisions) |
-| **OA1** | the operator's box run, before W2b ships (spec §16) | A20–A23 | the allowlisted hosts, the code shapes, `claude auth logout`'s revocation (G23), a live session after logout (§9), the env strip (§3.3), whether the first check creates `.claude.json` (§6.2 step 9) |
+| **OA1** | the operator's box run, before W2b ships (spec §16) | A20–A23, A38 | the allowlisted hosts, the code shapes, `claude auth logout`'s revocation (G23), a live session after logout (§9), the env strip (§3.3), whether the first check creates `.claude.json` (§6.2 step 9) |
 | **OA4**, the Q4 review | the operator's review of spec §8.2, §8.7 and §8.8 | A28–A33 | the spec's explicit gate for wave 3 |
 | **OA2** | the OpenRouter box run, before W3a–W3c ship | A28–A33 | headless code display, `expires_at` on create and on a management key, self-delete, minted keys outliving their management key |
 | **OA5**, the Q10 review | the operator's review of spec §3.10 and §16.1 | A34–A37 | the spec's explicit gate for wave 3d |
@@ -119,17 +127,17 @@ A1 (wire kinds) ── A2 (state words, Refined) ─┬─ A3 (Move sessions)
                                               └─ A4 (Instrument layouts) ··· after S2b, S4a, S9, S11, W3-LC
 A5 (step-up, server) ── A6 (Confirm it's you)                       [W1a: no gate for A5]
 A7 (gate, audit, AccountOps) ── A8 (agent op, LimitCORE)            [W1b]
-A9 (deny guard) ··· after #646, #435, #410;  A10 (transcript mask)  [W1c: both before any write route]
+A9 (deny guard) ··· after #435, #410;  A10 (transcript mask)  [W1c: both before any write route]
 A11 (box: lane state, locks, backfill) ── A12 (reload, lanes, connect) ── A13 (box: check, seed, readiness) ── A14 (check/enable routes, knob)
 A15 (supervise re-read) ··· after #435 and #410
 A16 (box: paste, remove, discard, N3) ── A17 (write routes, canary) ── A18 (door, connect sheet, paste) ── A19 (remove, discard, replace)
-OA1 ── A20 (box: auth) ── A21 (auth routes, N2) ── A22 (Mint, Sign in) ── A23 (resume, switches)
+OA1 ── A20 (box: auth, re-auth, mintedAt) ── A21 (auth routes, N2) ── A22 (Mint, Sign in) ── A23 (resume, switches) ── A38 (Sign in again, Mint a new token, the Expiring card)
 A24 (box: codex) ── A25 (ChatGPT sheet)                             [after A22]
 A26 (box: OpenRouter paste) ── A27 (OpenRouter paste sheet)         [after A18]
 OA2 + OA4 ── A28 (box: PKCE) ── A29 (Connect)                       [after A23, A27]
              A30 (box: management key) ── A31 (Provider keys)       [after A27]
              A32 (box: mint) ── A33 (Mint sheets)                   [after A31]
-OA5 ── A34 (macOS measurement) ── A35 (darwin arm, dark) ── A36 (layer 2) ── 3 green daily runs + OA3 ── A37 (switch on)   [after A23]
+OA5 ── A34a (the probe workflow) ── A34b (its run, recorded) ── A35 (darwin arm, dark) ── A36 (layer 2) ── 3 green daily runs + OA3 ── A37 (switch on)   [after A23]
 ```
 
 A7 and A9–A10 land before A17 (the first route that carries a secret). A11 lands before A12 and A13, because both read what it writes. The box tasks in one wave edit `ccd/ccrc` in disjoint functions, so a later one absorbs `main` with `git merge` and re-runs its suites. Everything else can be dispatched in parallel worktrees once its predecessors and gates allow.
@@ -202,8 +210,8 @@ Every task's requirements include this section. `CLAUDE.md` is the authority, an
 | `deploy/ccrc.service`, `deploy/ccrc-agent.service` (and the units `ccrc install` writes) | Modify | `LimitCORE=0` | 8 |
 | `ccd/install-session-hooks.sh` | Modify | writes `~/.cc-sessions/account-deny.settings.json` (N1) beside the child file | 9 |
 | `ccd/ccd` | Modify (after #435 and #410) | both spawn lines pass the account deny file to every row, merged into a child's one `--settings` (9); `supervise` re-reads `accounts.sh` on a fingerprint change (15) | 9, 15 |
-| `ccd/session-hook.sh` | Modify (after #646) | the PreToolUse deny of the account verbs and paths in every form, for every session | 9 |
-| `ccd/ccrc` | Modify (after #565 and #646) | the account verbs' new arms (11, 13, 16, 20, 24, 26, 28, 30, 32), the darwin arm (35, 37) | 11–37 |
+| `ccd/session-hook.sh` | Modify (#646 merged) | the PreToolUse deny of the account verbs and paths in every form, for every session | 9 |
+| `ccd/ccrc` | Modify (after #565; #646 merged) | the account verbs' new arms (11, 13, 16, 20, 24, 26, 28, 30, 32), the darwin arm (35, 37) | 11–37 |
 | `ccd/ccd-account-auth` | Modify (after #565) | `--attempt` echo, the private socket, `kill-server`, `auth-scratch` delete (20); the darwin launcher's helper side (35) | 20, 35 |
 | `ccd/ccd-account-health` | Modify | writes the lane-state file | 11 |
 | `deploy/account-op.mjs` | Modify | the suffix rule (G4), `config-dir-exists` (G20), the codex row (G2) | 16, 24 |
@@ -211,7 +219,7 @@ Every task's requirements include this section. `CLAUDE.md` is the authority, an
 | `pwa/src/fleet/accountWords.ts` | **Create** | the screen's words for each state, trouble card and refusal code | 2, 14, 18, 19, 22, 25, 27, 29, 31, 33 |
 | `pwa/src/screens/AccountsScreen.tsx` | Modify (after F11 and Settings R2) | the scaffold, trouble cards first, lane cards, the door, the Provider keys block | 2, 14, 18, 31 |
 | `pwa/src/fleet/AccountRow.tsx`, `AccountMeterRow.tsx` | Modify | the two-line head, the kind chip, the credit meter | 2, 27 |
-| `pwa/src/fleet/TroubleCard.tsx` | **Create** | what is wrong, its effect, the fix (spec §4.2) | 2, 14, 19, 22, 33 |
+| `pwa/src/fleet/TroubleCard.tsx` | **Create** | what is wrong, its effect, the fix (spec §4.2) | 2, 14, 19, 22, 27, 33, 38 |
 | `pwa/src/fleet/MoveSessionsSheet.tsx` | **Create** | the sequential mover (spec §4.5) | 3 |
 | `pwa/src/skins/instrument/AccountsTable.tsx`, `AccountsDetail.tsx` | **Create** (after S2b) | Instrument's grouped table and detail pane | 4, 31 |
 | `pwa/src/accounts/ConfirmItsYou.tsx`, `useStepUp.ts` | **Create** | the explicit step-up button, calling `navigator.credentials.get` on the tap | 6 |
@@ -219,16 +227,17 @@ Every task's requirements include this section. `CLAUDE.md` is the authority, an
 | `pwa/src/accounts/SecretField.tsx`, `CodeField.tsx`, `CopyField.tsx` | **Create** | the secret field (cleared on submit, close, route change, hide), the code field, the truthful copy control | 18, 22 |
 | `pwa/src/accounts/RemoveSheet.tsx`, `ReplaceSheet.tsx`, `CompromiseSteps.tsx` | **Create** | remove and discard, replace, the all-provider disclosure | 19 |
 | `pwa/src/accounts/AuthResumeBanner.tsx`, `MethodSwitchSheet.tsx` | **Create** | the app-level resume, the two method switches | 23 |
+| `pwa/src/accounts/ReauthSheet.tsx` | **Create** | Sign in again, Mint a new token, the Expiring (minted token) card's acts | 38 |
 | `pwa/src/accounts/ProviderKeys.tsx`, `ManagementSheet.tsx`, `MintFields.tsx`, `RetireSheet.tsx` | **Create** | the management key's row and instructions; mint, retire and limit | 31, 33 |
-| `pwa/src/app.tsx` | Modify (after #627) | mounts `AuthResumeBanner` on every route | 23 |
+| `pwa/src/app.tsx` | Modify (after #402/#627) | mounts `AuthResumeBanner` on every route | 23 |
 | `pwa/src/stores/fleet.ts` | Modify | `refreshAccounts()` after every mutation; `lanes` and `connect` held outside the persisted slice | 12 |
-| `pwa/src/lib/api.ts` | Modify (after #627) | the account and step-up calls | 6, 14, 17–33 |
-| `pwa/src/fleet/fleet.css` | Modify | the trouble card's rail (Refined only), the kind chip | 2, 18 |
-| `.github/workflows/ci.yml` | Modify | the macOS probe job (34); the layer-2 step's `env` (36) | 34, 36 |
-| `server/test/…`, `agent/test/…`, `pwa/test/…` | **Create** | each task's own red suite, named in the task | 1–37 |
+| `pwa/src/lib/api.ts` | Modify (after #402/#627) | the account and step-up calls | 6, 14, 17–33 |
+| `pwa/src/fleet/fleet.css` | Modify (after #647) | the trouble card's rail (Refined only), the kind chip | 2, 18 |
+| `.github/workflows/ci.yml` | Modify (after #402/#627 and #623) | the layer-2 step's `env` (36); A34's probe is its own workflow file | 36 |
+| `server/test/…`, `agent/test/…`, `pwa/test/…` | **Create** | each task's own red suite, named in the task | 1–38 |
 | `server/test/auth-gate.test.ts`, `box-token-census.test.ts`, `single-definition.test.ts`, `install-session-hooks.test.ts`, `ccrc-account.test.ts`, `ccd-account-auth.test.ts`, `macos-platform.test.ts`, `script-shim-platform.test.ts`; `pwa/test/accounts-screen.test.tsx`, `offline.test.ts`, `danger-buttons.test.tsx` | Modify | follow the change, named per task | per task |
 
-Every Modify path above exists at `c1453e42` except the units `ccrc install` writes, which Step 0 of A8 finds by content. Every Create path does not exist there (checked when this plan was written).
+Every Modify path above exists at `6b89878e` except the units `ccrc install` writes, which Step 0 of A8 finds by content. Every Create path does not exist there (checked when this plan was written).
 
 ---
 
@@ -246,7 +255,7 @@ Every task's header gives its **Routing** (band, and one or two reviewers), its 
 
 ### Task A1: the lane's kind on the wire (spec §13.1's `RosterWire` row; D-5517) — W0
 
-**Routing:** band 3, one reviewer. **Lane:** server. **Needs:** nothing. **Gates:** #397 (`shared/api.ts`), #565 (`shared/roster.ts`). Plan 3a's C-1 adds `models` to the same interface; the fields are disjoint, and whichever lands second absorbs the other with `git merge`.
+**Routing:** band 3, one reviewer. **Lane:** server. **Needs:** nothing. **Gates:** #565 (`shared/roster.ts`). `shared/api.ts` and `single-definition.test.ts` are shared and append-only (§In flight), so they are absorbed by merge, not gated. Plan 3a's C-1 adds `models` to the same interface; the fields are disjoint, and whichever lands second absorbs the other with `git merge`.
 
 **Files:**
 - Modify `shared/api.ts` (`RosterWire`), `shared/roster.ts` (the one reader that derives the new fields from a parsed entry), and the server's `RosterWire` builder (Step 0 finds it by its `homeAble`/`resolvedPool` composition).
@@ -278,7 +287,7 @@ Every task's header gives its **Routing** (band, and one or two reviewers), its 
 
 ### Task A2: one state word per lane, the kind chip, trouble cards and the roll-up, in Refined (D-5517) — W0
 
-**Routing:** band 3, one reviewer. **Lane:** server (the PWA bundle). **Needs:** A1. **Gates:** #627; F11; Settings R2 (`AccountsScreen.tsx`).
+**Routing:** band 3, one reviewer. **Lane:** server (the PWA bundle). **Needs:** A1. **Gates:** #402/#627; #647 (`pwa/src/fleet/fleet.css`); F11; Settings R2 (`AccountsScreen.tsx`).
 
 **Files:**
 - Create `shared/accounts.ts` (L0: `STATE_WORDS`, their precedence, `stateWordFor`, `KIND_CODES`), `pwa/src/fleet/accountWords.ts`, `pwa/src/fleet/TroubleCard.tsx`, `pwa/test/account-state-words.test.ts` and `pwa/test/accounts-trouble.test.tsx`.
@@ -306,7 +315,7 @@ Every task's header gives its **Routing** (band, and one or two reviewers), its 
   - "a glyph is never rendered without its word" (every lamp has a text sibling or an `aria-label` equal to the word).
   - "a Codex lane says weekly window only".
   - "the CLI fix's Copy says Copied only when `clipboard.writeText` resolves" (a rejecting stub leaves the text selected with the hold-to-copy line).
-- [ ] **Step 2: Green.** Implement the shape. `cd pwa && node design/contrast-check.mjs` stays green. If `contrast.test.ts` names an identity this task added or made stale, STOP: that file is #627's until it merges.
+- [ ] **Step 2: Green.** Implement the shape. `cd pwa && node design/contrast-check.mjs` stays green. If `contrast.test.ts` names an identity this task added or made stale, STOP: that file is #402/#627's until one of them merges.
 - [ ] **Step 3: Mutation table, RUN.**
 
   | Mutant | Suite | Expected red |
@@ -334,7 +343,7 @@ Every task's header gives its **Routing** (band, and one or two reviewers), its 
 
 ### Task A3: Move sessions, one at a time (spec §4.5) — W0
 
-**Routing:** band 3, one reviewer. **Lane:** server (the PWA bundle). **Needs:** A2. **Gates:** #627. Hibernation's contract is on main (§Gates): this task reads it and changes nothing in it.
+**Routing:** band 3, one reviewer. **Lane:** server (the PWA bundle). **Needs:** A2. **Gates:** #402/#627. Hibernation's contract is on main (§Gates): this task reads it and changes nothing in it.
 
 **Files:**
 - Create `pwa/src/fleet/MoveSessionsSheet.tsx` and `pwa/test/move-sessions-sheet.test.tsx`.
@@ -369,7 +378,7 @@ Every task's header gives its **Routing** (band, and one or two reviewers), its 
 
 ### Task A4: Instrument's Accounts: the grouped lane table, the detail pane and the dense phone list (spec §12.2; D-5517) — W0
 
-**Routing:** band 3, one reviewer. **Lane:** server (the PWA bundle). **Needs:** A2, A3. **Gates:** S2b, S4a, S9, S11 and W3-LC; #627.
+**Routing:** band 3, one reviewer. **Lane:** server (the PWA bundle). **Needs:** A2, A3. **Gates:** S2b, S4a, S9, S11 and W3-LC; #402/#627; #647 if Step 0 finds a rule is needed in `fleet.css`.
 
 **Files:**
 - Create `pwa/src/skins/instrument/AccountsTable.tsx`, `pwa/src/skins/instrument/AccountsDetail.tsx` and `pwa/test/accounts-instrument.test.tsx`.
@@ -404,7 +413,7 @@ Every task's header gives its **Routing** (band, and one or two reviewers), its 
 
 ### Task A5: step-up that keeps the session (D-5512; G12) — W1a
 
-**Routing:** band 3, **two reviewers** (an authentication credential). **Lane:** server. **Needs:** nothing. **Gates:** none (spec §17: W1a can start now). It edits `server.ts` and `shared/api.ts`, so it absorbs #397 with `git merge` if that lands first. The Settings plan's R2s consumes it.
+**Routing:** band 3, **two reviewers** (an authentication credential). **Lane:** server. **Needs:** nothing. **Gates:** none (spec §17: W1a can start now). Its `server.ts`, `shared/api.ts` and `single-definition.test.ts` hunks are append-only (§In flight's rule), so it absorbs #397, #652 and the others with `git merge` whenever they land first. The Settings plan's R2s consumes it.
 
 **Files:**
 - Create `server/src/auth/stepup.ts`, `server/test/step-up.test.ts` and `server/test/step-up-binding.test.ts`.
@@ -416,6 +425,7 @@ Every task's header gives its **Routing** (band, and one or two reviewers), its 
 - A challenge is bound to the `idHash` that started it; another session's finish is refused.
 - `/passphrase` is refused `passkey-enrolled` whenever any passkey is enrolled.
 - `StepUpRateLimiter` is separate from `LoginRateLimiter`. Exhausting it locks step-up for **that session** until it ends or the operator signs in again (`step-up-locked`); another session keeps its own budget. A7 adds the audit row through the `onStepUpLocked` callback this task exposes.
+- **`Cache-Control: no-store` on every answer** of the three routes, refusals included (spec §3.3); they do not sit behind A7's `accountGate`, so they set it themselves.
 - `requireRecentAssertion(ms)` (default 5 min, from `shared/accounts.ts`) refuses `step-up-required`, and `stepUpFreshUntil(session)` is the one reader that `GET /api/accounts` will carry (A12).
 
 - [ ] **Step 1: Red.** `step-up-binding.test.ts`, against the real fastify app with the gate armed by a test passphrase:
@@ -428,6 +438,7 @@ Every task's header gives its **Routing** (band, and one or two reviewers), its 
   - "requireRecentAssertion passes at 4:59 and refuses at 5:00 plus 1 ms" (fake clock).
   - "each step-up route refuses a box token (401) and answers auth-off while the gate is dark".
   - "no step-up route is in EXEMPT" (and `auth-gate.test.ts`'s sweep lists all three).
+  - "every answer of every step-up route, each refusal included (box token, dark gate, bad challenge, locked), carries `Cache-Control: no-store`".
 - [ ] **Step 2: Green.**
 - [ ] **Step 3: Mutation table, RUN.**
 
@@ -440,6 +451,7 @@ Every task's header gives its **Routing** (band, and one or two reviewers), its 
   | step-up failures charged to `LoginRateLimiter` | step-up-binding | "…budget untouched" |
   | `<=` for `<` at the window edge | step-up | "refuses at 5:00 plus 1 ms" |
   | a step-up route added to `EXEMPT` | step-up | "no step-up route is in EXEMPT" |
+  | `no-store` set on success only | step-up | "…each refusal included…" |
 
 - [ ] **Step 4: Per width × skin × mode.** No UI: "no UI" in all sixteen cells. A6 is the first surface.
 - [ ] **Step 5: Verify.**
@@ -449,7 +461,7 @@ Every task's header gives its **Routing** (band, and one or two reviewers), its 
 
 ### Task A6: "Confirm it's you" (D-5512; spec §3.2) — W1a
 
-**Routing:** band 3, **two reviewers** (the user-activation path to a passkey assertion). **Lane:** server (the PWA bundle). **Needs:** A5. **Gates:** #627 (`pwa/src/lib/api.ts`).
+**Routing:** band 3, **two reviewers** (the user-activation path to a passkey assertion). **Lane:** server (the PWA bundle). **Needs:** A5. **Gates:** #402/#627 (`pwa/src/lib/api.ts`).
 
 **Files:** Create `pwa/src/accounts/ConfirmItsYou.tsx`, `pwa/src/accounts/useStepUp.ts` and `pwa/test/confirm-its-you.test.tsx`. Modify `pwa/src/lib/api.ts`.
 
@@ -479,7 +491,7 @@ Every task's header gives its **Routing** (band, and one or two reviewers), its 
 
 ### Task A7: the account gate, the audit and the `AccountOps` port (D-5511, D-5516; G11, G13) — W1b
 
-**Routing:** band 3, **two reviewers** (the gate every credential route sits behind). **Lane:** server. **Needs:** A5. **Gates:** #397 (`shared/api.ts`, `server.ts`).
+**Routing:** band 3, **two reviewers** (the gate every credential route sits behind). **Lane:** server. **Needs:** A5. **Gates:** none: `shared/api.ts`, `server.ts` and `single-definition.test.ts` are shared and append-only (§In flight's rule).
 
 **Files:**
 - Create `server/src/accounts/gate.ts`, `server/src/accounts/audit.ts`, `server/src/accounts/ops.ts`, `server/test/account-gate.test.ts`, `server/test/account-audit.test.ts` and `server/test/account-ops.test.ts`.
@@ -559,7 +571,7 @@ Every task's header gives its **Routing** (band, and one or two reviewers), its 
 
 ### Task A9: the deny guard on every fleet session (N1 `account-cli-deny`; G21, Q8) — W1c
 
-**Routing:** band 3, **two reviewers** (it guards the secret and scratch paths). **Lane:** AGENT-FIRST. **Needs:** nothing in this plan. **Gates:** #646 (CF14: the hook's forbidden-verb deny and `APPROVAL_FORBIDDEN_JQ`), #435 and #410 (`ccd/ccd`'s spawn lines), #397 (`shared/api.ts`); N1's number issued. **Lands before any write route** (A17).
+**Routing:** band 3, **two reviewers** (it guards the secret and scratch paths). **Lane:** AGENT-FIRST. **Needs:** nothing in this plan. **Gates:** #435 and #410 (`ccd/ccd`'s spawn lines); N1's number issued. #646 (CF14: the hook's forbidden-verb deny and `APPROVAL_FORBIDDEN_JQ`) merged as `77376226`, so Step 0 reads its code from `main`. **Lands before any write route** (A17).
 
 **Files:**
 - Modify `shared/api.ts` (`ACCOUNT_DENY_RULES` beside `CHILD_DENY_RULES`, and the account verbs added to the approval classifier's forbidden set, whose home Step 0 reads from CF12's code), `ccd/install-session-hooks.sh` (writes `~/.cc-sessions/account-deny.settings.json`, with its bash twin of the list), `ccd/ccd` (both spawn lines, through `_child_spawn_compose`'s one-`--settings` rule), `ccd/session-hook.sh` (the PreToolUse deny extended to every session for these verbs and paths, and `APPROVAL_FORBIDDEN_JQ` kept equal to the classifier), `CLAUDE.md` (the SAFETY lines) and the coordinator-first suites the change touches (`install-session-hooks.test.ts`, `ccd-spawn-child-settings.test.ts`, `session-hook-approval-deny.test.ts`, the classifier's guard corpus).
@@ -567,13 +579,13 @@ Every task's header gives its **Routing** (band, and one or two reviewers), its 
 
 **The shape (N1, as this plan reads it).** The spec says the account rules are "written into the same managed deny file" and also that "unlike the child list, it is applied to every fleet session". On main those cannot both hold: `child-deny.settings.json` reaches `.child` rows only, CF15 pins that a top-level spawn is byte-identical, and Claude Code's `--settings` takes one value (D-5391). So:
 - **A second managed file**, `~/.cc-sessions/account-deny.settings.json`, beside the child file, whose `permissions.deny` is exactly `ACCOUNT_DENY_RULES`: the mutating `ccrc account` subs (`add`, `auth-start`, `auth-code`, `auth-cancel`, `set`, `check`, `enable`, `disable`, `credential`, `remove`, `seed`) and `openrouter-management` with every sub, `ceiling` named on its own; `ccd-account-auth`; `ccd account-pane`; Read and Bash of `~/.cc-secrets/**`, `~/.ccrc/auth-scratch/**`, `~/.ccrc/codex/*/runtime.env` and `~/.ccrc/agent.env`; writes under `~/.cc-sessions/.auth/` and `~/.cc-sessions/.accounts/`; and, best effort, bare `env` and `printenv`. The rule spellings follow CF13's rig record for the matcher's grammar.
-- **Every row's spawn passes it.** A top-level row gets `--settings '<account file>'`. A `.child` row gets the **one** merged inline value (`$route * $child * $account`), and its recorded `.deny-settings` digest stays the child file's, which is what CF16 compares. CF15's "a top-level spawn is byte-identical" pin is replaced by "a top-level spawn differs from main only by the account file's `--settings`", and the replacement is this departure.
+- **Every row's spawn passes it, in exactly one `--settings`.** A row's record can already hold `--settings '<json>'` (the workflow keys, composed into `routeflags` for **any** routed row, not only children; `_child_spawn_compose`'s D-5391 comment), and a second `--settings` replaces the first. So one composer serves every row: a top-level row with no `--settings` in its record gets `--settings '<account file>'`; a top-level row whose record already has one gets that value merged with the account file's, in place; a `.child` row gets the route, child and account values merged into one inline value. **The merge joins the deny arrays.** jq's `*` merges objects recursively, but where both sides hold an array the right-hand one replaces the left, so a plain `$route * $child * $account` would throw away `CHILD_DENY_RULES` (CF15's guard). The value is `($r * $c * $a) | .permissions.deny = ([$r, $c, $a] | map(.permissions.deny // []) | add | unique)`, and the same holds for `allow` if any side carries one. A `.child` row's recorded `.deny-settings` digest stays the child file's, which is what CF16 compares. CF15's "a top-level spawn is byte-identical" pin is replaced by "a top-level spawn differs from main only by the account rules inside its one `--settings`", and the replacement is this departure.
 - **The hook.** #646's PreToolUse deny (its quote, backslash and continuation normalisation, its `$VAR` and `$(…)` program refusal, its `bash -c` reading) is extended from `.child` rows to every session, for the account verbs and paths only; a top-level session's other behaviour is unchanged.
 - **No approval can rule them.** The account verbs join the classifier's forbidden set, so a child's request for one is never sent (CF14) and no ruling exists to sign (CF16).
 - **The SAFETY lines** in `CLAUDE.md` name the same commands and paths as forbidden to every session, and say the guard is an accident guard.
 
 - [ ] **Step 1: Red.** `account-deny.test.ts`: "the managed file holds exactly `ACCOUNT_DENY_RULES`, iterated, not respelled, and its bash twin equals it"; "the list names every mutating sub in `ACCOUNT_SUBS` and every path in spec §3.1" (derived from the sub union, so a new sub without a rule is red); "the classifier answers forbidden for each account verb in bare, path-qualified, env-prefixed, chained and `bash -c` forms"; "CLAUDE.md's SAFETY section names each command and path".
-- [ ] **Step 1 (cont.).** `ccd-spawn-account-settings.test.ts` (fixture harness): "a top-level row's spawn carries `--settings` with the account file and nothing else changed"; "a child row's spawn carries exactly one `--settings`, the merge of route, child and account, and `.deny-settings` is the child file's sha256"; "a missing account file spawns without it and warns, and the child path is unaffected".
+- [ ] **Step 1 (cont.).** `ccd-spawn-account-settings.test.ts` (fixture harness): "a top-level row's spawn carries `--settings` with the account file and nothing else changed"; "a child row's spawn carries exactly one `--settings`, the merge of route, child and account, and `.deny-settings` is the child file's sha256"; "a child's merged `permissions.deny` contains every `CHILD_DENY_RULES` entry and every `ACCOUNT_DENY_RULES` entry" (iterated from both lists, never respelled); "a routed top-level row (its record holds the workflow keys' `--settings '<json>'`) spawns with exactly one `--settings` that keeps every workflow key and gains every account rule"; "a missing account file spawns without it and warns, and the child path is unaffected".
 - [ ] **Step 1 (cont.).** `session-hook-account-deny.test.ts`, for a top-level session, a coordinator and a child, main thread and subagent: `ccrc account remove --id lane-x`, `~/.local/bin/ccrc account add …`, `ccrc 'account' "remove"`, `C=ccrc; $C account remove`, `ccrc account openrouter-management ceiling --usd 100000`, `cat ~/.cc-secrets/x-oauth.env`, a Read of `~/.ccrc/auth-scratch/x/pkce`, and `printenv` are each denied with the envelope. **The evasion case:** `bash -c "$(printf '%s' 'ccrc acc' 'ount remove')"` is **not** denied, and the test's name says this is the documented limit of an accident guard.
 - [ ] **Step 2: Green.**
 - [ ] **Step 3: Mutation table, RUN.**
@@ -584,6 +596,9 @@ Every task's header gives its **Routing** (band, and one or two reviewers), its 
   | respell one rule in the bash twin | account-deny | "…its bash twin equals it" |
   | the account file passed to `.child` rows only | ccd-spawn-account-settings | "a top-level row's spawn carries…" |
   | two `--settings` on a child | ccd-spawn-account-settings | "exactly one `--settings`" |
+  | a plain `$r * $c * $a` merge (arrays replaced, not joined) | ccd-spawn-account-settings | "a child's merged `permissions.deny` contains every `CHILD_DENY_RULES` entry…" |
+  | append a second `--settings` to a routed top-level row | ccd-spawn-account-settings | "a routed top-level row… exactly one `--settings`…" |
+  | the merge applied to `.child` rows only | ccd-spawn-account-settings | "a routed top-level row… keeps every workflow key…" |
   | `.deny-settings` set to the merged value's digest | ccd-spawn-account-settings | "…is the child file's sha256" |
   | the hook's account arm gated on `.child` | session-hook-account-deny | the top-level and coordinator cases |
   | the normaliser skipped for account verbs | session-hook-account-deny | the quoted and `$C` cases |
@@ -593,12 +608,12 @@ Every task's header gives its **Routing** (band, and one or two reviewers), its 
 - [ ] **Step 4b: The rig check.** On the coordinator-first rig (CF13's, never the live fleet), for each Claude Code version in `APPROVAL_HOOK_VERSIONS`: a session spawned exactly as `ccd` spawns one (`--dangerously-skip-permissions`, the managed files) is refused each listed command **without a prompt**. The record goes into this plan's §Deviations and decisions under N1 in CF13's record format, before A17 merges. A version on which a rule does not fire is a STOP, never a skip.
 - [ ] **Step 5: Verify.**
 
-      cd server && ./node_modules/.bin/vitest run test/account-deny.test.ts test/ccd-spawn-account-settings.test.ts test/session-hook-account-deny.test.ts test/install-session-hooks.test.ts test/ccd-spawn-child-settings.test.ts test/session-hook-approval-deny.test.ts test/single-definition.test.ts   # session-hook-approval-deny arrives with #646
+      cd server && ./node_modules/.bin/vitest run test/account-deny.test.ts test/ccd-spawn-account-settings.test.ts test/session-hook-account-deny.test.ts test/install-session-hooks.test.ts test/ccd-spawn-child-settings.test.ts test/session-hook-approval-deny.test.ts test/single-definition.test.ts   # session-hook-approval-deny is on main with #646
       cd server && ./node_modules/.bin/vitest run test/coordinator-skill.test.ts test/worker-skill.test.ts   # the pinned clauses are untouched
 
 ### Task A10: credential shapes masked before any websocket (D-5513; G31) — W1c
 
-**Routing:** band 3, **two reviewers** (the lane secret's path to the screen). **Lane:** server. **Needs:** A7 (the fingerprint table's schema step follows A7's). **Gates:** #397 (`sessionws.ts`, `watch.ts`). **Lands before any write route** (A17).
+**Routing:** band 3, **two reviewers** (the lane secret's path to the screen). **Lane:** server. **Needs:** A7 (the fingerprint table's schema step follows A7's). **Gates:** #397 and #652 (both change `server/src/sessionws.ts`, which is not append-only for this task). **Lands before any write route** (A17).
 
 **Files:**
 - Create `server/src/accounts/mask.ts` and `server/test/secret-mask.test.ts`.
@@ -606,13 +621,15 @@ Every task's header gives its **Routing** (band, and one or two reviewers), its 
 
 **The shape.**
 - **Shapes.** `CREDENTIAL_MASKS` holds the credential shapes ccrc writes: Anthropic OAuth and API tokens (`sk-ant-oat…`, `sk-ant-api…`), OpenRouter keys (`sk-or-v1-…`) and the Codex gateway key's shape (read from `ccrc-codex`'s generator at Step 0). Each match becomes `‹secret masked›`.
-- **Exact bytes, by fingerprint.** A `compatible` key has no shape, so each lane secret also has a fingerprint: `HMAC-SHA256(box token, "ccrc-secret-fp-v1\0" ‖ secret)`, computed **on the box** by the verbs (they hold both), answered by every secret-writing sub and by `roster --json`, and stored in `secret_fingerprints` with the box token's generation. That table is never served and never leaves the server. The mask hashes each candidate run in a frame (whitespace-, quote-, `=`- and `:`-delimited, 20 to 8192 bytes, with its `=`-padded forms, at most 256 runs a frame) and masks a match. After a box-token rotation the server runs the `roster` sub, so the table is re-keyed. Until a lane's fingerprint exists, its shape mask still applies. The server never holds a lane secret. This is D-5513's keyed hash made concrete.
+- **Exact bytes, by fingerprint.** A `compatible` key has no shape, so each lane secret also has a fingerprint: `HMAC-SHA256(box token, "ccrc-secret-fp-v1\0" ‖ secret)`, computed **on the box** by the verbs (they hold both), answered by every secret-writing sub and by `roster --json`, and stored in `secret_fingerprints` with the box token's generation. That table is never served and never leaves the server. The mask hashes each candidate run in a frame (whitespace-, quote-, `=`- and `:`-delimited, 20 to 8192 bytes, with its `=`-padded forms) and masks a match. **The cap fails closed.** The hasher checks at most 256 runs per frame chunk; a frame with more runs is split into chunks of 256 runs on run boundaries and every chunk is checked, and past a hard ceiling of 64 chunks (16,384 runs) the rest of the frame is replaced by the fixed notice `‹output too large to check, masked›` (in `shared/api.ts` beside `SECRET_MASK`). No run is ever passed through unchecked. After a box-token rotation the server runs the `roster` sub, so the table is re-keyed. Until a lane's fingerprint exists, its shape mask still applies. The server never holds a lane secret. This is D-5513's keyed hash made concrete.
 - **Every frame.** Transcript rows, ask frames, drawer output and feed frames pass `maskFrame` before any websocket write. The drawer is a byte stream: a chunk that ends inside a candidate run holds that run back until the next chunk or 50 ms, so a secret split across two chunks is still masked.
 - The deny rules for `env` and `printenv` (A9) are on top of this, best effort.
 
 - [ ] **Step 1: Red.** `secret-mask.test.ts`:
   - "a transcript row holding an `env` dump with an assembled `sk-ant-oat…` and `sk-or-v1-…` reaches the session socket masked". Red: no mask.
   - "a compatible key with a fingerprint row is masked by exact bytes, and an unrelated string of the same length is not".
+  - "a compatible-key fingerprint planted at run 300 of one frame is masked" (past the first 256-run chunk).
+  - "a frame past the hard ceiling ends in the too-large notice, and no byte after the ceiling reaches the socket".
   - "a key split across two drawer chunks is masked, and the drawer is not delayed by more than 50 ms when no run is open".
   - "the ask frame and the feed frame carry only the mask".
   - "after a rotation, fingerprints of the old generation no longer match and the roster sub is requested".
@@ -626,6 +643,8 @@ Every task's header gives its **Routing** (band, and one or two reviewers), its 
   | `maskFrame` skipped for the drawer | secret-mask | "…split across two drawer chunks…" |
   | no hold-back at a chunk end | secret-mask | the same case |
   | candidate runs split on `-` | secret-mask | the compatible-key case |
+  | pass runs past the 256-run cap through | secret-mask | "…planted at run 300…" |
+  | past the hard ceiling, send the rest unmasked | secret-mask | "…ends in the too-large notice…" |
   | fingerprints compared without the generation | secret-mask | "…the old generation no longer match…" |
   | a second copy of the shapes in `redact.ts` | single-definition | its registry row |
   | the ask frame unmasked | secret-mask | "the ask frame and the feed frame…" |
@@ -638,7 +657,7 @@ Every task's header gives its **Routing** (band, and one or two reviewers), its 
 
 ### Task A11: the lane-state file, per-lane locks, a verb that dies halfway, and the backfill (D-5517, D-5518, D-5513's backups row; G16, G18, G33, G35) — W1d
 
-**Routing:** band 3, **two reviewers** (secret temp files and their sweep). **Lane:** AGENT-FIRST. **Needs:** A8. **Gates:** #565, #646.
+**Routing:** band 3, **two reviewers** (secret temp files and their sweep). **Lane:** AGENT-FIRST. **Needs:** A8. **Gates:** #565.
 
 **Files:**
 - Modify `ccd/ccrc` (the lane-state writer, the per-lane lock, TERM traps, the temp sweep, `roster --json` with `fleetIdentity` and fingerprints, the `install`/`update` backfill, the darwin `tmutil addexclusion`, the doctor checks), `ccd/ccd-account-health` (writes the lane-state file) and `server/test/ccrc-account.test.ts`, `ccrc-doctor.test.ts`, `macos-platform.test.ts`.
@@ -678,7 +697,7 @@ Every task's header gives its **Routing** (band, and one or two reviewers), its 
 
 ### Task A12: roster reload, and `lanes` and `connect` on `GET /api/accounts` (D-5517, D-5518, D-5513; G6, G14, G15, G16) — W1d
 
-**Routing:** band 3, **two reviewers** (identity and key hints on the wire). **Lane:** server. **Needs:** A7, A11. **Gates:** #565 (`limits.ts`), #397, #627 (`pwa/src/lib/api.ts`).
+**Routing:** band 3, **two reviewers** (identity and key hints on the wire). **Lane:** server. **Needs:** A7, A11. **Gates:** #565 (`limits.ts`), #402/#627 (`pwa/src/lib/api.ts`).
 
 **Files:**
 - Modify `server/src/config.ts` (`reloadRoster`), `server/src/limits.ts` (the `readLimits` pass reads each lane-state file over the existing `read` op), `server/src/server.ts` (`GET /api/accounts`), `shared/api.ts` (`LaneWire`, `AccountsConnect`), `shared/accounts.ts` (`stateWordFor` now reads the lane state), `pwa/src/stores/fleet.ts` (`refreshAccounts()`, and `lanes`/`connect` held outside the persisted slice) and `pwa/src/fleet/AccountRow.tsx` (the identity line).
@@ -690,11 +709,12 @@ Every task's header gives its **Routing** (band, and one or two reviewers), its 
 - **The lane state's two non-readings stay two.** An absent file reads Not checked. A file that exists but cannot be read (`readFileMeasured`'s unreadable) reads Inconclusive, "lane state unreadable". Neither is ever Signed in.
 - **Reconcile:** after any account op that errors or times out, and when the roster fingerprints disagree, the server runs the `roster` sub, reloads, and writes a `reconcile` audit row.
 - **The offline snapshot** persists `RosterWire` only; a test pins its keys, so `lanes` never lands in localStorage.
+- **Every Expiring and Rate-limited source (spec §4.1).** `stateWordFor` (pure, L1, its thresholds in `shared/accounts.ts` beside the words, registered in `single-definition`) now reads the lane state too: **Expiring** when a minted token's `mintedAt` + 365 d is under 30 d away, when an OpenRouter key's `credit` is at 10% or less of its limit, or when a key ccrc minted has a `keyExpiresAt` under 14 d away; **Rate-limited** also when an OpenRouter key's `credit.limit_remaining <= 0`, besides today's 5h and 7d windows. A pasted token (no `mintedAt`), a login lane and a Codex lane are never Expiring. Each word carries its sentence ("token minted 11 months ago · about 3 weeks left · estimated", "credit low · $1.20 of $20 left", "key expires in 9 days · set when minted"). The data arrives when its writer lands (`mintedAt` with A20, `credit` with A26, `keyExpiresAt` with A32); the word works from this task on, on fixtures.
 
 - [ ] **Step 1: Red.**
   - `roster-reload.test.ts`: "a roster from another fleet identity is refused and nothing changes"; "a good roster swaps `cfg.roster`, writes the mirror 0644 and recomputes `ownRosterFp`"; "a failed op triggers one `roster` sub and a `reconcile` row".
   - `accounts-route-lanes.test.ts`: "a session reader gets `lanes` and `connect`"; "a box-token reader and a dark-gate reader get neither, and today's fields byte-for-byte"; "`connect.origin` is `insecure` for an `http://` non-loopback `cfg.origin`"; "the answer is `no-store`".
-  - `account-state-words.test.ts` (extended): "an unreadable lane state is Inconclusive with its reason"; "Signed in needs a last check of ok inside 7 d"; "a pasted token is never Expiring".
+  - `account-state-words.test.ts` (extended): "an unreadable lane state is Inconclusive with its reason"; "Signed in needs a last check of ok inside 7 d"; "a pasted token is never Expiring"; "a minted token is Expiring at mintedAt + 335 d plus 1 ms and not at 335 d minus 1 ms"; "an OpenRouter key is Expiring at 10% of its limit left and not at 10.01%"; "a minted key is Expiring under 14 d before keyExpiresAt and not at 14 d"; "an OpenRouter key whose limit_remaining is 0 is Rate-limited, and Rate-limited outranks Expiring"; "a login lane and a Codex lane are never Expiring, whatever their files hold"; "a key with no limit (`limit: null`) is never credit-Expiring".
   - `offline-snapshot-keys.test.ts`: "the persisted snapshot's keys are exactly today's, and holding `lanes` in the store does not add one".
 - [ ] **Step 2: Green.**
 - [ ] **Step 3: Mutation table, RUN.**
@@ -706,6 +726,11 @@ Every task's header gives its **Routing** (band, and one or two reviewers), its 
   | `lanes` sent to every verdict | accounts-route-lanes | "a box-token reader … get neither" |
   | unreadable folded into absent | account-state-words | "an unreadable lane state is Inconclusive" |
   | the 7-day window at 70 days | account-state-words | "inside 7 d" |
+  | the token window at 365 − 3 d (or 60 d) | account-state-words | "…Expiring at mintedAt + 335 d…" |
+  | the credit threshold `<` for `<=`, or at 20% | account-state-words | "…Expiring at 10% of its limit left…" |
+  | the minted-key window at 30 d | account-state-words | "…under 14 d before keyExpiresAt…" |
+  | `limit_remaining < 0` for `<= 0` | account-state-words | "…limit_remaining is 0 is Rate-limited…" |
+  | Expiring read from a login lane's file | account-state-words | "a login lane and a Codex lane are never Expiring…" |
   | `lanes` added to the persisted slice | offline-snapshot-keys | "…does not add one" |
 
 - [ ] **Step 4: Per width × skin × mode.** 16 cells. The card's second head line now holds the identity ("Signed in as someone@example.invalid · Max", "Approved as … · stated by you", "Key sk-or-v1-…a3f9 · validated 2d ago"), truncated with an ellipsis at 360 and never wrapping the head; the full value in `title`. Both skins (Instrument's detail pane after A4), dark and light. A dark-gate fixture shows no identity anywhere.
@@ -717,21 +742,22 @@ Every task's header gives its **Routing** (band, and one or two reviewers), its 
 
 ### Task A13: check records the identity and runs the seed; enable needs a ready lane (D-5518; G1, G19) — W1e
 
-**Routing:** band 3, **two reviewers** (the probe runs the lane's credential; the seed copies trust flags). **Lane:** AGENT-FIRST. **Needs:** A11. **Gates:** #565, #646.
+**Routing:** band 3, **two reviewers** (the probe runs the lane's credential; the seed copies trust flags). **Lane:** AGENT-FIRST. **Needs:** A11. **Gates:** #565.
 
 **Files:**
-- Modify `ccd/ccrc` (`check`: identity from `claude auth status --json`, `lastRunAt`, and the seed step after the probe; `ccrc account seed --id` as a CLI verb that `ccrc install` also calls; `enable`'s `not-ready` with `--force` on the CLI only) and `server/test/ccrc-account.test.ts`.
+- Modify `ccd/ccrc` (`check`: identity from `claude auth status --json`, `lastRunAt`, and the seed step after the probe; `ccrc account seed --id` as a CLI verb that `ccrc install` **and `ccrc update`** also call for every lane whose `.claude.json` lacks `hasCompletedOnboarding` (spec §13.3's row, G1); `enable`'s `not-ready` with `--force` on the CLI only), `server/test/ccrc-account.test.ts` and `server/test/ccrc-update.test.ts`.
 - Create `server/test/ccrc-account-check-seed.test.ts` and `server/test/ccrc-account-enable-ready.test.ts`.
 
 **The shape.** `check` runs one probe turn (the lane's first run), then, inside the same verb and with no Claude Code run between: sets `hasCompletedOnboarding: true` and the theme; copies **only** the trust flags (`hasTrustDialogAccepted`, `hasClaudeMdExternalIncludes*`) that the upstream or home lane's `.claude.json` already has accepted, project by project; re-reads and verifies; records `seedVerifiedAt` after `lastRunAt`. Its answer carries `seed: {verifiedAt, trustCopied}`. If OA1 measures that the probe does **not** create `.claude.json`, this task's seed gains the headless first run before the check (spec §6.2 step 9); until OA1 runs, the test fixture models both. `enable` refuses `not-ready` unless the lane state records a credential, `seedVerifiedAt > lastRunAt`, and a last check of `ok`.
 
-- [ ] **Step 1: Red.** `ccrc-account-check-seed.test.ts` (a stub `claude` whose probe writes `.claude.json` and drops `hasCompletedOnboarding`, as the inventory measured): "after check the flag reads true and `seedVerifiedAt > lastRunAt`"; "only trust flags accepted upstream are copied, project by project, and the count is answered"; "the identity is recorded from `auth status --json` for a login lane and never for a token lane". `ccrc-account-enable-ready.test.ts`: "enable refuses `not-ready` with no credential, with no seed, with a seed older than the last run, and with a failing last check"; "a backfilled legacy lane reads 'Check it once to turn it on' and enables after one passing check"; "`--force` enables, and no agent sub can send it" (the argv builder from A8 refuses it).
+- [ ] **Step 1: Red.** `ccrc-account-check-seed.test.ts` (a stub `claude` whose probe writes `.claude.json` and drops `hasCompletedOnboarding`, as the inventory measured): "after check the flag reads true and `seedVerifiedAt > lastRunAt`"; "only trust flags accepted upstream are copied, project by project, and the count is answered"; "the identity is recorded from `auth status --json` for a login lane and never for a token lane". `ccrc-update.test.ts` (extended): "`ccrc update` seeds a lane whose `.claude.json` lacks the onboarding flag, and leaves a seeded lane's file byte-identical". `ccrc-account-enable-ready.test.ts`: "enable refuses `not-ready` with no credential, with no seed, with a seed older than the last run, and with a failing last check"; "a backfilled legacy lane reads 'Check it once to turn it on' and enables after one passing check"; "`--force` enables, and no agent sub can send it" (the argv builder from A8 refuses it).
 - [ ] **Step 2: Green.**
 - [ ] **Step 3: Mutation table, RUN.**
 
   | Mutant | Suite | Expected red |
   |---|---|---|
   | seed before the probe | ccrc-account-check-seed | "…`seedVerifiedAt > lastRunAt`" |
+  | `ccrc update` skips the seed (install only) | ccrc-update | "`ccrc update` seeds a lane…" |
   | copy every trust flag the upstream has | ccrc-account-check-seed | "only trust flags accepted upstream…" |
   | enable without the seed clause | ccrc-account-enable-ready | the no-seed case |
   | `>=` for `>` between seed and run | ccrc-account-enable-ready | "a seed older than the last run" |
@@ -739,11 +765,11 @@ Every task's header gives its **Routing** (band, and one or two reviewers), its 
 - [ ] **Step 4: Per width × skin × mode.** No UI: "no UI" in all sixteen cells. A14 shows the readiness reason.
 - [ ] **Step 5: Verify.**
 
-      cd server && ./node_modules/.bin/vitest run test/ccrc-account-check-seed.test.ts test/ccrc-account-enable-ready.test.ts test/ccrc-account.test.ts test/ccrc-install.test.ts
+      cd server && ./node_modules/.bin/vitest run test/ccrc-account-check-seed.test.ts test/ccrc-account-enable-ready.test.ts test/ccrc-account.test.ts test/ccrc-install.test.ts test/ccrc-update.test.ts
 
 ### Task A14: Check, and the kill switch with its readiness reason (D-5511, D-5518; spec §10) — W1e
 
-**Routing:** band 3, **two reviewers** (the first account routes on the HTTP surface). **Lane:** server. **Needs:** A7, A8, A12, A13. **Gates:** #627, F11, Settings R2, #397.
+**Routing:** band 3, **two reviewers** (the first account routes on the HTTP surface). **Lane:** server. **Needs:** A7, A8, A12, A13. **Gates:** #402/#627, F11, Settings R2.
 
 **Files:**
 - Create `server/src/accounts/routes.ts` (check, enable, disable), `server/test/account-routes-check.test.ts` and `pwa/test/account-knob.test.tsx`.
@@ -794,10 +820,10 @@ Every task's header gives its **Routing** (band, and one or two reviewers), its 
 
 ### Task A16: the box half of W2a: Anthropic paste validate-first, credential, set, remove and discard, re-add safety, and sleeping sessions (D-5513, D-5518, N3, N4; G4, G5, G20) — W2a
 
-**Routing:** band 3, **two reviewers** (writes, validates and deletes credentials). **Lane:** AGENT-FIRST. **Needs:** A11, A13. **Gates:** #565, #646; #435 and #410 (the cap word is one line in `ccd caps`, in `ccd/ccd`); N3's and N4's numbers issued.
+**Routing:** band 3, **two reviewers** (writes, validates and deletes credentials). **Lane:** AGENT-FIRST. **Needs:** A11, A13, A15 (G3: `account-v2` is advertised only once a new lane joins rotation without a restart, as the spec's "after G1–G5" asks). **Gates:** #565; #435 and #410 (the cap word is one line in `ccd caps`, in `ccd/ccd`); N3's and N4's numbers issued.
 
 **Files:**
-- Modify `ccd/ccrc` (`add --method paste` validate-first; `credential` validate-first; `set --stated -|--placement`; `remove`'s `discard` mode, UI-path deletes, `auth-in-progress`, the `auth-scratch` and temp sweeps, the `atProvider` ledger, and the sleeping-session rule; fingerprints in every secret-writing answer), `deploy/account-op.mjs` (the suffix rule, `suffix-collision`, `config-dir-exists` and `--adopt`), `ccd/ccd` (`ccd caps` lists `account-v2`), `shared/api.ts` (`ACCOUNT_CAPS`) and `server/test/ccrc-account.test.ts`.
+- Modify `ccd/ccrc` (`add --method paste` validate-first; `credential` validate-first; `set --stated -|--placement`; `remove`'s `discard` mode, UI-path deletes, `auth-in-progress`, the `auth-scratch` and temp sweeps, the `atProvider` ledger, and the sleeping-session rule; fingerprints in every secret-writing answer), `deploy/account-op.mjs` (the suffix rule, `suffix-collision`, `config-dir-exists` and `--adopt`), `ccd/ccd` (`ccd caps` lists `account-v2`), `shared/api.ts` (`ACCOUNT_CAPS`), `agent/src/accountop.ts` (the `remove` sub's `mode:'check'` built as `--dry-run`, the only flag it adds) and `server/test/ccrc-account.test.ts`.
 - Create `server/test/ccrc-account-paste.test.ts`, `server/test/ccrc-account-remove-v2.test.ts` and `server/test/ccrc-account-set.test.ts`.
 
 **The shape.**
@@ -805,12 +831,13 @@ Every task's header gives its **Routing** (band, and one or two reviewers), its 
 - **Re-add safety (G4, G20).** The suffix is `.claude-<id>`, or `.<id>` when the id already starts `claude-`; `suffix-collision` otherwise. An existing config folder refuses `config-dir-exists` and answers what it measured in it (signed out, or signed in as …), unless `--adopt` is given.
 - **`set`**: `--stated -` (1–120 characters on stdin, no control bytes) into the lane state; `--placement overflow|full` into the roster.
 - **`remove`**: `discard` mode only for a never-enabled lane with no live, sleeping or archived sessions (`not-discardable`); the UI path always deletes a token or key file and always signs a sign-in lane out; `auth-in-progress` while an attempt runs; every removal deletes `auth-scratch/<id>` and sweeps stray temp files; the answer's `atProvider` ledger names, per kind, what is still valid at the provider (spec §11.3).
+- **`remove --dry-run`** (Remove's pre-check, spec §11.1): refuses nothing, changes nothing, takes no lock, and answers the measurements the sheet shows: `{live, sleeping: [ids], archived, upstream: boolean, otherHomeAble, authInProgress, discardable, at, fleetIdentity}`. It is the only source of A19's pre-check, so "measured on the box" is literal.
 - **Sleeping sessions (N3).** `_acct_live` counts a row only by its tmux pane, and `remove` rehomes every row naming the lane, so a hibernated row (`$REG/<sid>.hibernated`, D-5242) would be rehomed onto upstream and wake there. `remove` therefore counts hibernated rows separately and refuses `sleeping-sessions` with their ids. The CLI's `--rehome-sleeping` keeps today's behaviour explicitly, and no route sends it.
 - **The cap word (N4).** `ccd caps` lists `account-v2` once this task's subs exist. Later waves each add their own word to `ACCOUNT_CAPS` (`account-auth-v1`, `account-codex-v1`, `account-openrouter-v2`, `account-or-pkce-v1`, `account-or-management-v1`, `account-or-mint-v1`), so the door and each method narrow in place by the word they need.
 
 - [ ] **Step 1: Red.**
   - `ccrc-account-paste.test.ts` (a stub `claude` that answers 401 or 200 by the env token): "a refused token writes no file and leaves no temp"; "an unreachable provider refuses `token-unverified` and writes nothing"; "a hostile value (`"\noutput = <tmp>/pwned`) refuses `key-charset` and creates no file"; "`credential` keeps the old file until the new token passes"; "the answer carries the fingerprint and no byte of the secret".
-  - `ccrc-account-remove-v2.test.ts`: "discard refuses a lane that was ever enabled, or that has a live, sleeping or archived session"; "a hibernated row on the lane refuses `sleeping-sessions` with its id, and nothing is rehomed"; "`--rehome-sleeping` rehomes it as today"; "the UI path deletes the key file and signs a sign-in lane out"; "remove during an attempt refuses `auth-in-progress`"; "`atProvider` names the token as still valid with its revoke link kind".
+  - `ccrc-account-remove-v2.test.ts`: "`--dry-run` answers live, sleeping, archived, upstream, the other home-able lanes and an attempt in progress, and leaves the roster, the lane state and every file byte-identical"; "discard refuses a lane that was ever enabled, or that has a live, sleeping or archived session"; "a hibernated row on the lane refuses `sleeping-sessions` with its id, and nothing is rehomed"; "`--rehome-sleeping` rehomes it as today"; "the UI path deletes the key file and signs a sign-in lane out"; "remove during an attempt refuses `auth-in-progress`"; "`atProvider` names the token as still valid with its revoke link kind".
   - `ccrc-account-set.test.ts`: "`--stated` takes stdin only and refuses a control byte"; "`--placement full` sets `homeAble:true`".
   - `ccrc-account.test.ts`: "an id starting `claude-` gets `.<id>`, never `.claude-claude-…`"; "an existing config folder refuses `config-dir-exists` with what it measured, and `--adopt` proceeds"; "`ccd caps` lists `account-v2`".
 - [ ] **Step 2: Green.**
@@ -824,6 +851,7 @@ Every task's header gives its **Routing** (band, and one or two reviewers), its 
   | hibernated rows counted as not live | ccrc-account-remove-v2 | "…refuses `sleeping-sessions`…" |
   | discard skips the archived-session check | ccrc-account-remove-v2 | "…or archived session" |
   | `remove` leaves `auth-scratch/<id>` | ccrc-account-remove-v2 | the sweep case |
+  | `--dry-run` falls through to the real remove | ccrc-account-remove-v2 | "…leaves the roster… byte-identical" |
   | the suffix rule doubles `claude-` | ccrc-account | "…never `.claude-claude-…`" |
 
 - [ ] **Step 4: Per width × skin × mode.** No UI: "no UI" in all sixteen cells. A18 and A19 show it.
@@ -833,15 +861,15 @@ Every task's header gives its **Routing** (band, and one or two reviewers), its 
 
 ### Task A17: the write routes, step-up enforced, and the canary (D-5511, D-5512, D-5513, D-5516; G11, G18) — W2a
 
-**Routing:** band 3, **two reviewers** (the first secret-bearing routes). **Lane:** server. **Needs:** A5, A7, A8, A9, A10, A12, A16. **Gates:** #397; N6's number issued.
+**Routing:** band 3, **two reviewers** (the first secret-bearing routes). **Lane:** server. **Needs:** A5, A7, A8, A9, A10, A12, A16. **Gates:** N6's number issued.
 
 **Files:**
 - Modify `server/src/accounts/routes.ts`, `server/src/server.ts`, `shared/api.ts` (the bodies and refusal codes, with statuses in `REFUSAL_STATUS`), `server/test/auth-gate.test.ts` and `server/test/box-token-census.test.ts`.
 - Create `server/test/account-routes-write.test.ts` and `server/test/account-canary.test.ts`.
 
-**The shape.** `POST /api/accounts` (step-up; `{provider, id, label, hue, method?, credential?, placement?, adopt?}` → `{ok, roster, lane, fleetIdentity}`), `POST /api/accounts/:id/credential` (step-up; `{credential}`), `POST /api/accounts/:id/set` (`{stated?, placement?}`; step-up only where spec §3.2 says) and `POST /api/accounts/:id/remove` (step-up; `{mode:'remove', confirmId}` or `{mode:'discard'}` → `{ok, roster, removed, kept, atProvider, rehomed}`), and `POST /api/accounts/revoke-ack` (N6: `{laneId, kind}`, writing only a `revoke-acknowledged` row; the lane may already be gone). The route checks the secret's bytes and size before the op (`key-charset`), holds it for the request only, passes it as `stdinB64`, keeps no reference, and masks the exact bytes and their base64 in any text it returns. Refusal sentences come from codes. Every mutating answer chains `reloadRoster`; every error or timeout reconciles. Every act writes one audit row.
+**The shape.** `POST /api/accounts` (step-up; `{provider, id, label, hue, method?, credential?, placement?, adopt?}` → `{ok, roster, lane, fleetIdentity}`), `POST /api/accounts/:id/credential` (step-up; `{credential}`), `POST /api/accounts/:id/set` (`{stated?, placement?}`; step-up only where spec §3.2 says) and `POST /api/accounts/:id/remove` (step-up; `{mode:'remove', confirmId}` or `{mode:'discard'}` → `{ok, roster, removed, kept, atProvider, rehomed}`; and `{mode:'check'}`, with no step-up because it changes nothing, reaching `ccrc account remove --dry-run` and answering its measurements with `fleetIdentity`). **Discard is checked twice (spec §11.5):** the route itself refuses `not-discardable` from the lane state (ever enabled) and the roster and session list (any session naming the lane) **before** it calls the op, and the verb checks again, and `POST /api/accounts/revoke-ack` (N6: `{laneId, kind}`, writing only a `revoke-acknowledged` row; the lane may already be gone). The route checks the secret's bytes and size before the op (`key-charset`), holds it for the request only, passes it as `stdinB64`, keeps no reference, and masks the exact bytes and their base64 in any text it returns. Refusal sentences come from codes. Every mutating answer chains `reloadRoster`; every error or timeout reconciles. Every act writes one audit row.
 
-- [ ] **Step 1: Red.** `account-routes-write.test.ts`: every route through A7's gate (box token, dark, insecure, stale step-up where it applies); "a hostile key refuses `key-charset` at the route, and, with the route bypassed, at the verb"; "a failed validation answers the code and an empty field, never the value"; "an add that times out answers outcome unknown, reconciles, and a retry finds the lane rather than `duplicate-id`"; "remove's typed confirm must equal the id (`confirm-mismatch`)"; "discard needs no typed confirm and still needs step-up".
+- [ ] **Step 1: Red.** `account-routes-write.test.ts`: every route through A7's gate (box token, dark, insecure, stale step-up where it applies); "a hostile key refuses `key-charset` at the route, and, with the route bypassed, at the verb"; "a failed validation answers the code and an empty field, never the value"; "an add that times out answers outcome unknown, reconciles, and a retry finds the lane rather than `duplicate-id`"; "remove's typed confirm must equal the id (`confirm-mismatch`)"; "discard needs no typed confirm and still needs step-up"; "with the verb stubbed to accept anything, the route still refuses `not-discardable` for an ever-enabled lane and for a lane with a session, and never calls the op"; "`{mode:'check'}` needs no step-up, is session-only, and changes nothing".
 - [ ] **Step 1 (cont.).** `account-canary.test.ts` (spec §16's canary, server half): paste-add and credential with canary values, through the local `AccountOps` and through the real agent, with a stub child that echoes the canary on stderr. The canary appears **only** in the 0600 secret file: not in any answer or refusal, any coord.db table, `feed_events`, the mail and push outboxes, the server's and agent's captured stdout and stderr, the status file or the lane-state file. A planted transcript `env` dump reaches the browser only masked (A10).
 - [ ] **Step 2: Green.**
 - [ ] **Step 3: Mutation table, RUN.**
@@ -853,6 +881,7 @@ Every task's header gives its **Routing** (band, and one or two reviewers), its 
   | the audit row stores the label of a pasted key | account-canary | the coord.db grep |
   | step-up dropped from `credential` | account-routes-write | the stale step-up case |
   | outcome unknown retries the add | account-routes-write | "…rather than `duplicate-id`" |
+  | the route's discard check removed (verb only) | account-routes-write | "with the verb stubbed…" |
 
 - [ ] **Step 4: Per width × skin × mode.** No UI: "no UI" in all sixteen cells. A18 is the screen.
 - [ ] **Step 5: Verify.**
@@ -862,7 +891,7 @@ Every task's header gives its **Routing** (band, and one or two reviewers), its 
 
 ### Task A18: the Add account door and the connect sheet, with Anthropic Paste end to end (D-5522, D-5513; spec §5, §6.1, §6.3, §12.3, §12.4) — W2a
 
-**Routing:** band 3, **two reviewers** (the secret field). **Lane:** server (the PWA bundle). **Needs:** A2, A6, A14, A17. **Gates:** #627, F11, Settings R2.
+**Routing:** band 3, **two reviewers** (the secret field). **Lane:** server (the PWA bundle). **Needs:** A2, A6, A14, A17. **Gates:** #402/#627; #647 (`pwa/src/fleet/fleet.css`), F11, Settings R2.
 
 **Files:**
 - Create `pwa/src/accounts/ConnectSheet.tsx` and its frames (`ProviderFrame.tsx`, `NameFrame.tsx`, `MethodFrame.tsx`, `RunFrame.tsx`, `ResultFrame.tsx`), `pwa/src/accounts/SecretField.tsx`, `pwa/src/accounts/CopyField.tsx`, `pwa/test/connect-sheet.test.tsx` and `pwa/test/secret-field.test.tsx`.
@@ -876,8 +905,10 @@ Every task's header gives its **Routing** (band, and one or two reviewers), its 
 - **Confirm it's you** (A6), then **Run** (the step ledger in mono with a clock per line) and **Result** (a register, not a celebration: the word, the identity line, the check's latency, **Turn it on** / Leave it off; the sheet never closes itself).
 - **The secret field:** `type=password` with a show toggle, `autocomplete=off`, `autocapitalize=off`, `spellcheck=false`, no password-manager `name`. Its value is component state only, cleared on submit, close, route change and `visibilitychange` to hidden; never in a store, `localStorage`, `sessionStorage` or IndexedDB. A refusal re-presents it **empty**.
 - **Outcome unknown:** "The fleet host didn't answer in time. The lane may exist; checking…", then the sheet resumes at the step the reconciled roster shows, and never retries into `duplicate-id`.
+- **Offline (spec §12.5, the 09-05 §12.8 rules).** Offline is the store's existing offline reading, never `navigator.onLine` alone. The screen reads from the snapshot with its ages; **every** act (the door, each frame's primary, Check, the knob, Remove, Discard, Replace) is refused with a sentence and the read-line ("You're offline: nothing was sent. Read 4 min ago."), and no secret or code field is shown. One refusal sentence per code, in `accountWords.ts`.
+- **Announcements (spec §12.4).** One live region per sheet: every step change is announced with `role="status"` (polite), and each terminal state (refused, expired, outcome unknown, done) with `role="alert"`. A frame that only re-renders announces nothing.
 
-- [ ] **Step 1: Red.** `connect-sheet.test.tsx`: "one door per width, and it narrows in place with each reason"; "a taken hue is selectable and the least-used is the default"; "`config-dir-exists` offers both choices, and Use what's there asks for step-up"; "Mint is the default when `account-auth-v1` is present, and narrowed with Paste selected when it is not"; "outcome unknown re-reads the roster and resumes; no second add is sent"; "the result frame offers Turn it on and never closes itself". `secret-field.test.tsx` (the PWA half of the canary): "after submit, close, route change and hide, the canary is in no storage, no store dump and no DOM node"; "a refused paste re-presents an empty field".
+- [ ] **Step 1: Red.** `connect-sheet.test.tsx`: "offline, every act on the screen and in the sheet is refused with its sentence and the read-line, and no request is sent"; "offline, no secret field is rendered"; "a step change lands in a `role="status"` region and a terminal state in a `role="alert"` one, each once"; "one door per width, and it narrows in place with each reason"; "a taken hue is selectable and the least-used is the default"; "`config-dir-exists` offers both choices, and Use what's there asks for step-up"; "Mint is the default when `account-auth-v1` is present, and narrowed with Paste selected when it is not"; "outcome unknown re-reads the roster and resumes; no second add is sent"; "the result frame offers Turn it on and never closes itself". `secret-field.test.tsx` (the PWA half of the canary): "after submit, close, route change and hide, the canary is in no storage, no store dump and no DOM node"; "a refused paste re-presents an empty field".
 - [ ] **Step 2: Green.**
 - [ ] **Step 3: Mutation table, RUN.**
 
@@ -888,6 +919,8 @@ Every task's header gives its **Routing** (band, and one or two reviewers), its 
   | re-present the refused value | secret-field | "…an empty field" |
   | hide the door instead of narrowing it | connect-sheet | "…narrows in place…" |
   | the first free hue as the default | connect-sheet | "…the least-used is the default" |
+  | one act left enabled offline (Check) | connect-sheet | "offline, every act…" |
+  | the terminal state announced as `status` | connect-sheet | "…a terminal state in a `role="alert"` one…" |
   | outcome unknown sends the add again | connect-sheet | "no second add is sent" |
 
 - [ ] **Step 4: Per width × skin × mode.** 16 cells, for the door (each narrowed state), each frame, a refused paste and the result: at 360 the frames stack, the derived folder line ellipsises in mono, the hue swatches wrap in one row of six at 44px each; at 1280 and 1920 the sheet is a bottom sheet until W1's desktop arm (the PR records which); the door is the scaffold action (Refined) and the list header action (Instrument, after A4). Mint first in the radio, narrowed. Dark and light.
@@ -900,14 +933,14 @@ Every task's header gives its **Routing** (band, and one or two reviewers), its 
 
 ### Task A19: Remove, Discard, Replace token by paste, the revoke checklist and the compromise disclosure (spec §9, §11, §3.11; N3, N6; G34) — W2a
 
-**Routing:** band 3, **two reviewers** (deletes credentials; the secret field). **Lane:** server (the PWA bundle). **Needs:** A3, A17, A18. **Gates:** #627, F11, Settings R2.
+**Routing:** band 3, **two reviewers** (deletes credentials; the secret field). **Lane:** server (the PWA bundle). **Needs:** A3, A17, A18. **Gates:** #402/#627, F11, Settings R2.
 
 **Files:**
 - Create `pwa/src/accounts/RemoveSheet.tsx`, `pwa/src/accounts/ReplaceSheet.tsx`, `pwa/src/accounts/CompromiseSteps.tsx`, `pwa/test/remove-sheet.test.tsx` and `pwa/test/replace-token.test.tsx`.
 - Modify `pwa/src/fleet/TroubleCard.tsx`, `pwa/src/screens/AccountsScreen.tsx` (the fold's Remove… and Replace token), `pwa/src/lib/api.ts` and `pwa/src/fleet/accountWords.ts`.
 
 **The shape.**
-- **Remove:** the pre-check, measured on the box at open ("0 live sessions · not the upstream lane · 2 other lanes can take new sessions · no sign-in in progress · read just now"). Live sessions block, with per-session **Move** and **Move all** through A3's mover, and the button recounts. **Sleeping sessions (N3)** are listed apart: "2 sessions on lane-b are asleep. Removing the lane would wake them somewhere else without their place in the conversation. Wake and move them first." with **Wake and move** (the existing ensure route, inside the fleet-wide wake budget, then A3's mover). Then the typed-id confirm and a `danger` button (`QuickConfirm` tone) with step-up. The answer's ledger: Removed, Kept on the box, and **Still valid at the provider** with each kind's revoke link (`TextLink`) and, for a token, the checklist item "☐ I revoked it at claude.ai/settings/claude-code ↗", recorded through `revoke-ack` (N6).
+- **Remove:** the pre-check, measured on the box at open through `remove {mode:'check'}` (A16's `--dry-run`, A17's route), and re-read after every Move ("0 live sessions · not the upstream lane · 2 other lanes can take new sessions · no sign-in in progress · read just now"). Live sessions block, with per-session **Move** and **Move all** through A3's mover, and the button recounts. **Sleeping sessions (N3)** are listed apart: "2 sessions on lane-b are asleep. Removing the lane would wake them somewhere else without their place in the conversation. Wake and move them first." with **Wake and move** (the existing ensure route, inside the fleet-wide wake budget, then A3's mover). Then the typed-id confirm and a `danger` button (`QuickConfirm` tone) with step-up. The answer's ledger: Removed, Kept on the box, and **Still valid at the provider** with each kind's revoke link (`TextLink`) and, for a token, the checklist item "☐ I revoked it at claude.ai/settings/claude-code ↗", recorded through `revoke-ack` (N6).
 - **Discard this lane:** one tap with step-up and no typed confirm, offered only for a never-enabled lane with no sessions.
 - **Replace token (paste):** the secret field, validate-first, the live sessions with one-tap Restart (the existing stop → ensure), then the same revoke checklist item. Leaving it unticked is allowed, and the full record then says "old token not marked revoked".
 - **`CompromiseSteps`:** spec §3.11's disclosure, naming only the providers present in the roster. It is shown in the token, Codex and OpenRouter result frames, and exported for Settings › Security to host (the Settings plan's R2).
@@ -943,11 +976,11 @@ The evidence is the lane-state files and, once A17 has merged, the audit rows; n
 
 ### Task A20: the box half of the sign-in: a detached attempt, a private socket, the code relay and the method switches (D-5514, D-5515, D-5518, N4, N5; G10, G17) — W2b
 
-**Routing:** band 3, **two reviewers** (the OAuth code and the minted token). **Lane:** AGENT-FIRST. **Needs:** A16. **Gates:** #565 (`ccd-account-auth`), #646, #435 and #410 (the cap line), OA1; N5's number issued.
+**Routing:** band 3, **two reviewers** (the OAuth code and the minted token). **Lane:** AGENT-FIRST. **Needs:** A16. **Gates:** #565 (`ccd-account-auth`), #435 and #410 (the cap line), OA1; N5's number issued.
 
 **Files:**
 - Modify `ccd/ccrc` (`auth-start`, `auth-code`, `auth-cancel`; `set --method setup-token|login`; `account-pane`'s socket), `ccd/ccd-account-auth` (`--attempt` echoed into the status file; the pane on `tmux -L ccrc-auth-<id>` inside the unit; `kill-server` and the `auth-scratch` delete on every terminal state), `ccd/ccd` (`ccd caps` lists `account-auth-v1`) and `server/test/ccd-account-auth.test.ts`.
-- Create `server/test/ccrc-account-auth-start.test.ts`, `server/test/ccd-account-auth-private-socket.test.ts` and `server/test/ccrc-account-method-switch.test.ts`.
+- Create `server/test/ccrc-account-auth-start.test.ts`, `server/test/ccd-account-auth-private-socket.test.ts`, `server/test/ccrc-account-method-switch.test.ts` and `server/test/ccrc-account-reauth.test.ts`. Modify `server/test/account-canary.test.ts` (the scrollback of every socket).
 
 **The shape.**
 - **`auth-start --id --method --attempt`** launches `systemd-run --user --unit=ccrc-auth-<id>-<attempt8> --collect -p RuntimeMaxSec=660 -p MemoryMax=512M ccd-account-auth <id> <method> --attempt <attemptId>` and returns as soon as the status file reads `starting` with that `attemptId`, in under 5 s. `login` runs on a pipe; `setup-token` and the Codex login need a pty and take a pane on the **private** `-L ccrc-auth-<id>` socket inside the unit.
@@ -956,10 +989,17 @@ The evidence is the lane-state files and, once A17 has merged, the audit rows; n
 - **Every terminal state, and `remove`,** runs `tmux -L ccrc-auth-<id> kill-server` and deletes `auth-scratch/<id>`.
 - **The switches.** Sign-in → token mints into the scratch dir; on `done`, `auth-code` validates the captured token with a probe, and only then, under the lane lock, `set --method setup-token` rewrites the roster method, the wrapper and `accounts.sh` and moves the token into `<id>-oauth.env`. `.credentials.json` stays until **Sign the old sign-in out** (N5, A23). Token → sign-in signs in into a scratch config dir, and only on `done` and a passing check of the scratch credential does `set --method login` move it in and delete `<id>-oauth.env`. A refused, cancelled or expired attempt leaves the lane byte-identical.
 - **N5's sign-out act** is `credential --sign-out`: `claude auth logout` in the lane's config dir.
+- **Re-authenticating an existing lane (spec §9 rows 1, 2, 5, 6; §4.2, §4.4).** `auth-start` on an existing lane of the **same** method is the Sign in again arm: for `login` it signs in into a scratch config dir and, on `done` and a passing check of the scratch credential, moves it in under the lane lock (the old `.credentials.json` stays until then); for `setup-token` it is **Mint a new token**: the token is minted into `auth-scratch/<id>`, validated with a probe, and only then installed through `credential` under the lane lock, the old `<id>-oauth.env` kept until the probe passes. A refused, cancelled or expired re-auth leaves the lane byte-identical. The Codex method's arm is A24's.
+- **`mintedAt`.** Every setup-token install (a new lane, a switch, a re-mint) writes `mintedAt` into the lane state in the same locked step as the token's rename; a paste never writes it, and a paste over a minted token clears it. A12's Expiring reads it.
+- **A darwin node before A35.** On `CCD_OS=darwin`, `auth-start` refuses `auth-unsupported-here` (reason `darwin-arm-absent`) before any spawn, since `systemd-run` does not exist there. A35 replaces this refusal with `darwin-arm-unproven` behind its switch.
+- **The canary reaches the private socket.** The canary suite (A17's) gains the tmux scrollback of **every** socket in the fixture, the private `-L ccrc-auth-<id>` socket included, captured before `kill-server`; the minted token's canary appears in none of them after the blanking.
 
 - [ ] **Step 1: Red.**
   - `ccrc-account-auth-start.test.ts` (stub `systemd-run` that daemonises the helper inside the fixture): "auth-start returns in under 5 s while the helper keeps running"; "the helper survives the caller's process-group kill"; "the status file echoes the attemptId"; "a second code refuses `code-already-sent`"; "the code never appears on any argv during the run" (sampled with `ps`).
   - `ccd-account-auth-private-socket.test.ts`: "the pane is on `-L ccrc-auth-<id>`, never the default socket"; "every terminal state (done, failed, expired, cancelled) runs `kill-server` and deletes `auth-scratch/<id>`"; "the setup-token line is captured into the 0600 file and blanked" (the shipped canary, kept).
+  - `ccrc-account-auth-start.test.ts` (cont.): "on `CCD_OS=darwin`, auth-start refuses `auth-unsupported-here` and spawns nothing" (a stub `systemd-run` that records it was never called).
+  - `ccrc-account-reauth.test.ts` (new): "Sign in again on a login lane leaves `.credentials.json` byte-identical until the scratch credential passes its check, then replaces it"; "Mint a new token on a token lane mints into `auth-scratch/<id>`, keeps the old `<id>-oauth.env` until the probe passes, then installs through `credential` under the lane lock"; "a refused, cancelled or expired re-auth leaves the lane byte-identical"; "every setup-token install writes `mintedAt` and a paste clears it".
+  - `account-canary.test.ts` (extended): "the minted token's canary is in no tmux scrollback of any socket in the fixture, the private `-L ccrc-auth-<id>` one included".
   - `ccrc-account-method-switch.test.ts`: "cancelling, expiring or refusing a token → sign-in switch leaves the token file and the roster method byte-identical"; "a sign-in → token switch writes the token and the method only after the probe passes, and leaves `.credentials.json` in place"; "`credential --sign-out` runs logout in that lane's config dir only".
 - [ ] **Step 2: Green.**
 - [ ] **Step 3: Mutation table, RUN.**
@@ -972,21 +1012,26 @@ The evidence is the lane-state files and, once A17 has merged, the audit rows; n
   | no `kill-server` on expiry | ccd-account-auth-private-socket | the expired case |
   | the method set before the probe | ccrc-account-method-switch | "…only after the probe passes…" |
   | the token deleted at switch start | ccrc-account-method-switch | "…leaves the token file … byte-identical" |
+  | re-mint installs before the probe | ccrc-account-reauth | "…keeps the old `<id>-oauth.env` until the probe passes…" |
+  | re-mint skips the lane lock | ccrc-account-reauth | the same case, with a concurrent `set` |
+  | `mintedAt` not written on a re-mint | ccrc-account-reauth | "…writes `mintedAt`…" |
+  | the darwin refusal removed | ccrc-account-auth-start | "…spawns nothing" |
+  | the scrollback captured on the default socket only | account-canary | "…the private `-L ccrc-auth-<id>` one included" |
 
 - [ ] **Step 4: Per width × skin × mode.** No UI: "no UI" in all sixteen cells. A22 is the screen.
 - [ ] **Step 5: Verify.**
 
-      cd server && ./node_modules/.bin/vitest run test/ccrc-account-auth-start.test.ts test/ccd-account-auth-private-socket.test.ts test/ccrc-account-method-switch.test.ts test/ccd-account-auth.test.ts test/script-shim-platform.test.ts
+      cd server && ./node_modules/.bin/vitest run test/ccrc-account-auth-start.test.ts test/ccd-account-auth-private-socket.test.ts test/ccrc-account-method-switch.test.ts test/ccrc-account-reauth.test.ts test/account-canary.test.ts test/ccd-account-auth.test.ts test/script-shim-platform.test.ts
 
 ### Task A21: the auth routes, the in-memory attempt, the URL allowlist and the sign-out act (D-5514, N2, N5; G17) — W2b
 
-**Routing:** band 3, **two reviewers** (the code relay; what the operator is asked to open). **Lane:** server. **Needs:** A17, A20. **Gates:** #397, OA1 (the hosts and shapes), N2's number issued.
+**Routing:** band 3, **two reviewers** (the code relay; what the operator is asked to open). **Lane:** server. **Needs:** A17, A20. **Gates:** OA1 (the hosts and shapes), N2's number issued.
 
 **Files:**
 - Create `server/src/accounts/attempts.ts`, `server/test/account-routes-auth.test.ts` and `server/test/auth-url-allowlist.test.ts`.
 - Modify `server/src/accounts/routes.ts`, `server/src/server.ts`, `shared/accounts.ts` (`AUTH_URL_HOSTS` per method and the code and `userCode` shapes, from OA1's record), `shared/api.ts` (`LaneWire.authAttempt`), `server/test/auth-gate.test.ts` and `server/test/account-canary.test.ts` (extended to `auth/code`).
 
-**The shape.** `POST /api/accounts/:id/auth/start` (step-up; the server generates the 32-hex `attemptId` and keeps `{attemptId, sessionIdHash, method, startedAt, expiresAt, node}` in memory), `GET /api/accounts/:id/auth` (reads the status file over the existing `read` op, polled at 1.5 s only while a sheet is open), `POST …/auth/code` (the **same session** that started it; the shape check, the byte check; `bad-code`, `code-already-sent`, `no-auth-attempt`) and `POST …/auth/cancel`, plus N5's `POST /api/accounts/:id/credential {signOut: true}` (step-up), which reaches `credential --sign-out`. **N2:** before it answers, `GET …/auth` requires the file to echo the server's `attemptId`, the URL to be `https` with a host in the method's exact allowlist, and the `userCode` to match its shape; anything else ends the attempt with `auth-url-untrusted` and an audit row, and the answer carries no URL. The host label is rendered from the URL the server parsed. `expiresAt` is the earlier of the provider's expiry and the helper's 600 s bound, and is the only source of every countdown. A later call answered by a node other than the attempt's is refused. `LaneWire.authAttempt = {state, expiresAt, mine}`, where `mine` is true only for the starting session.
+**The shape.** `POST /api/accounts/:id/auth/start` (step-up; the server generates the 32-hex `attemptId` and keeps `{attemptId, sessionIdHash, method, startedAt, expiresAt, node}` in memory), `GET /api/accounts/:id/auth` (reads the status file over the existing `read` op, polled at 1.5 s only while a sheet is open), `POST …/auth/code` (the **same session** that started it; the shape check, the byte check; `bad-code`, `code-already-sent`, `no-auth-attempt`) and `POST …/auth/cancel`, plus N5's `POST /api/accounts/:id/credential {signOut: true}` (step-up), which reaches `credential --sign-out`. **N2:** before it answers, `GET …/auth` requires the file to echo the server's `attemptId`, the URL to be `https` with a host in the method's exact allowlist, and the `userCode` to match its shape; anything else ends the attempt with `auth-url-untrusted` and an audit row, and the answer carries no URL. The host label is rendered from the URL the server parsed. `expiresAt` is the earlier of the provider's expiry and the helper's 600 s bound, and is the only source of every countdown. When the in-memory attempt reaches `expiresAt` the server issues `auth-cancel` (a no-op for a unit that has already ended; the deletion of PKCE's verifier for A29). A later call answered by a node other than the attempt's is refused. `LaneWire.authAttempt = {state, expiresAt, mine}`, where `mine` is true only for the starting session.
 
 - [ ] **Step 1: Red.** `auth-url-allowlist.test.ts`: "a status file rewritten mid-attempt to a foreign host refuses `auth-url-untrusted` with no URL in the answer"; "a different attemptId refuses the same way"; "an `http://` URL on an allowed host is refused"; "a `userCode` outside its shape is refused"; "the host label comes from the parsed URL". `account-routes-auth.test.ts`: "session B's code for session A's attempt is refused"; "the code is in no log, audit row or answer, and the audit says `auth-code ok`"; "`mine` is true only for the starting session"; "a node change mid-attempt is refused"; and the canary extended to `auth/code`.
 - [ ] **Step 2: Green.**
@@ -1007,15 +1052,17 @@ The evidence is the lane-state files and, once A17 has merged, the audit rows; n
 
 ### Task A22: Mint a long-lived token (the default) and Sign in with Claude (spec §6.1–§6.3, §12.3–§12.4; D-5514, Q1) — W2b
 
-**Routing:** band 3, **two reviewers** (the code field; what the operator is asked to open). **Lane:** server (the PWA bundle). **Needs:** A18, A21. **Gates:** #627.
+**Routing:** band 3, **two reviewers** (the code field; what the operator is asked to open). **Lane:** server (the PWA bundle). **Needs:** A18, A21. **Gates:** #402/#627.
 
 **Files:**
 - Create `pwa/src/accounts/CodeField.tsx`, `pwa/test/sign-in-sheet.test.tsx` and `pwa/test/code-field.test.tsx`.
 - Modify `pwa/src/accounts/MethodFrame.tsx`, `RunFrame.tsx`, `ResultFrame.tsx`, `pwa/src/lib/api.ts` and `pwa/src/fleet/accountWords.ts`.
 
+**Offline (spec §12.5).** An attempt in progress, offline, shows "The server isn't answering. The sign-in keeps running on the fleet host until 14:32. Reopen this when you're back online.", the time read from the **last-known** `expiresAt`, never computed from a duration; no code field and no URL card are shown, and Send code is never offered.
+
 **The shape.** Mint is the default and first, with its consequence line ("Lasts about a year, so sessions don't keep asking you to sign in again. Inference only: Remote Control won't work on this lane…"). The run frame follows spec §6.2: the ledger; **the URL card** (on a phone, **Copy link** primary with "Paste it into a private tab to sign in as a different account", Open ↗ secondary; at ≥900, a 52px "Open claude.ai to sign in ↗" primary with the mono host beside it and Copy link secondary; `rel=noopener noreferrer`); "What this grants" as a disclosure; the code field (`autocomplete=one-time-code`, mono, paste-first, trimmed) with **Send code**; the amber pulse while waiting on the operator and the breathing dot while the box works; the countdown from `expiresAt`. Mint then asks "Which account did you just approve?" (optional, 1–120) → `set {stated}`. The result frame shows the identity, "Not the account you meant? **Sign this lane out and start again**" (N5's sign-out, then a new attempt), and **Turn it on** / Leave it off, with `CompromiseSteps` (A19) for a token lane. Terminal states, each saying what did not happen: expired, code refused, link untrusted, cancelled (Cancel always present), outcome unknown. Every sentence comes from a code. "Copied" only when the clipboard promise resolves.
 
-- [ ] **Step 1: Red.** `sign-in-sheet.test.tsx`: "Mint is selected by default when `account-auth-v1` is present"; "on a phone Copy link is the primary, at ≥900 Open is"; "an `auth-url-untrusted` answer shows its sentence and no link"; "the countdown reads `expiresAt` and no duration is hard-coded" (a source scan for `600`, `10 min` and the like); "each terminal state says what did not happen, from its code"; "Cancel is present in every non-terminal frame". `code-field.test.tsx`: "a pasted code is trimmed and sent once; the field is disabled after Send"; "the code is never written to a store or storage".
+- [ ] **Step 1: Red.** `sign-in-sheet.test.tsx`: "Mint is selected by default when `account-auth-v1` is present"; "on a phone Copy link is the primary, at ≥900 Open is"; "an `auth-url-untrusted` answer shows its sentence and no link"; "the countdown reads `expiresAt` and no duration is hard-coded" (a source scan for `600`, `10 min` and the like); "each terminal state says what did not happen, from its code"; "Cancel is present in every non-terminal frame". "offline mid-attempt, the sheet shows the server-isn't-answering sentence with the last-known `expiresAt` time, and no code field, URL or Send"; "each step change is `role="status"` and each terminal state `role="alert"`". `code-field.test.tsx`: "a pasted code is trimmed and sent once; the field is disabled after Send"; "the code is never written to a store or storage".
 - [ ] **Step 2: Green.**
 - [ ] **Step 3: Mutation table, RUN.**
 
@@ -1025,6 +1072,8 @@ The evidence is the lane-state files and, once A17 has merged, the audit rows; n
   | the link rendered from the file's URL | sign-in-sheet | "…no link" on the untrusted answer |
   | a hard-coded 10-minute countdown | sign-in-sheet | the source scan |
   | Send stays enabled after a send | code-field | "…sent once…" |
+  | the code field kept while offline | sign-in-sheet | "offline mid-attempt…" |
+  | the offline time computed as now + 10 min | sign-in-sheet | the same case |
 
 - [ ] **Step 4: Per width × skin × mode.** 16 cells for the method radio (Mint first, as spec §20 says the plan's matrix must draw, unlike mockup A11), the URL card at 360 and 1280 (the primary swaps), the code field with the keyboard up at 390, the countdown in amber, each terminal state and the result frame. Mockups A4, A5, A12 are the references. Dark and light, both skins.
 - [ ] **Step 5: Verify.**
@@ -1035,7 +1084,7 @@ The evidence is the lane-state files and, once A17 has merged, the audit rows; n
 
 ### Task A23: resume on any route, and the two method switches (spec §6.2, §9; Q1, N5) — W2b
 
-**Routing:** band 3, **two reviewers** (the method switches move credentials). **Lane:** server (the PWA bundle). **Needs:** A20, A22. **Gates:** #627 (`app.tsx`).
+**Routing:** band 3, **two reviewers** (the method switches move credentials). **Lane:** server (the PWA bundle). **Needs:** A20, A22. **Gates:** #402/#627 (`app.tsx`).
 
 **Files:**
 - Create `pwa/src/accounts/AuthResumeBanner.tsx`, `pwa/src/accounts/MethodSwitchSheet.tsx`, `pwa/test/auth-resume-banner.test.tsx` and `pwa/test/method-switch.test.tsx`.
@@ -1064,15 +1113,50 @@ The evidence is the lane-state files and, once A17 has merged, the audit rows; n
       cd pwa && ./node_modules/.bin/vitest run          # full, foreground, timeout >= 600000
       cd pwa && ./node_modules/.bin/tsc --noEmit
 
+### Task A38: re-authenticate an existing Anthropic lane: Sign in again, Mint a new token, and the Expiring (minted token) card (spec §9 rows 1, 2; §4.2, §4.4; D-5514, Q1) — W2b
+
+Numbered after A37 because it was added by the review (§Review log); it lands after A23 in W2b.
+
+**Routing:** band 3, **two reviewers** (it replaces a live lane's credential). **Lane:** server (the PWA bundle). **Needs:** A19 (the revoke checklist and Restart list), A20 (the same-method re-auth arms and `mintedAt`), A22 (the sheet), A23 (the switches). **Gates:** #402/#627, F11, Settings R2.
+
+**Files:**
+- Create `pwa/src/accounts/ReauthSheet.tsx` and `pwa/test/reauth-sheet.test.tsx`.
+- Modify `pwa/src/fleet/TroubleCard.tsx`, `pwa/src/screens/AccountsScreen.tsx` (the fold's acts), `pwa/src/accounts/ReplaceSheet.tsx` (Replace token: mint beside paste), `pwa/src/lib/api.ts` and `pwa/src/fleet/accountWords.ts`.
+
+**The shape.**
+- **Sign in again** (an Anthropic sign-in lane): on the fold, and the **second** button of a Signed-out sign-in card, after Q1's primary **Switch to a long-lived token** (A23). Step-up, then A22's sign-in run on the existing lane (A20's same-method arm), the identity read back, and "Not the account this lane had? **Sign this lane out and start again**" when it differs.
+- **Mint a new token / Replace token (mint)** (a token lane): the **primary** fix of a Signed-out token lane, and on the fold as Replace token with mint first and paste second (A19's paste arm). Step-up, then A22's mint run on the existing lane; the token is installed only after it passes (A20), and the stated identity is asked again with the old one as its default text.
+- **The Expiring (minted token) card** (spec §4.2): "lane-c's token was minted about 11 months ago." / "Long-lived tokens last about a year. When it lapses the lane signs out." with **Replace token** (the mint above) · Switch to sign-in (A23).
+- **Every one of them ends the same way:** the lane's sessions with one-tap Restart (the existing stop → ensure), the revoke checklist item for a replaced token (A19, N6), and a fresh check whose word replaces the trouble card. A refused, cancelled or expired attempt says the old credential is untouched.
+
+- [ ] **Step 1: Red.** `reauth-sheet.test.tsx`: "a Signed-out sign-in lane's card holds Switch to a long-lived token first and Sign in again second"; "a Signed-out token lane's primary fix is Mint a new token"; "the Expiring (minted token) card offers Replace token and Switch to sign-in"; "each act asks for step-up before any request"; "each ends with the restart list, the revoke item for a replaced token, and a fresh check"; "a cancelled re-auth says the old credential is untouched and leaves the card as it was".
+- [ ] **Step 2: Green.**
+- [ ] **Step 3: Mutation table, RUN.**
+
+  | Mutant | Suite | Expected red |
+  |---|---|---|
+  | Sign in again as the sign-in card's primary | reauth-sheet | "…Switch to a long-lived token first…" |
+  | paste first in Replace token | reauth-sheet | "…primary fix is Mint a new token" |
+  | skip step-up on re-auth | reauth-sheet | "each act asks for step-up…" |
+  | no fresh check at the end | reauth-sheet | "…and a fresh check" |
+  | the Expiring card without Switch to sign-in | reauth-sheet | "…offers Replace token and Switch to sign-in" |
+
+- [ ] **Step 4: Per width × skin × mode.** 16 cells and the offline row: each trouble card with its acts at 360 (the two buttons stack, the primary first), the Expiring (minted token) card, the re-auth run and its ending (restart list, revoke item, fresh check). Dark and light, both skins.
+- [ ] **Step 5: Verify.**
+
+      cd pwa && ./node_modules/.bin/vitest run test/reauth-sheet.test.tsx test/method-switch.test.tsx test/sign-in-sheet.test.tsx test/replace-token.test.tsx
+      cd pwa && ./node_modules/.bin/vitest run          # full, foreground, timeout >= 600000
+      cd pwa && ./node_modules/.bin/tsc --noEmit
+
 ### Task A24: the Codex lane's add arm (D-5519, N4; G2, G20) — W2c
 
-**Routing:** band 3, **two reviewers** (a ChatGPT OAuth folder per lane). **Lane:** AGENT-FIRST. **Needs:** A20. **Gates:** #565 (the post-Plan-4 shape, no external arm), #646, #435 and #410 (the cap line).
+**Routing:** band 3, **two reviewers** (a ChatGPT OAuth folder per lane). **Lane:** AGENT-FIRST. **Needs:** A20. **Gates:** #565 (the post-Plan-4 shape, no external arm), #435 and #410 (the cap line).
 
 **Files:** Modify `ccd/ccrc` (`add --provider openai`; `remove`'s `authDir` delete), `deploy/account-op.mjs` (the codex row), `ccd/ccd` (`account-codex-v1` in `ccd caps`) and `server/test/ccrc-account.test.ts`. Create `server/test/ccrc-account-codex-add.test.ts`.
 
-**The shape.** `add --provider openai` picks a free `proxyPort`/`litellmPort` pair by probing the roster and the box's listeners; sets `exec.authDir` to a **fresh** `.local/share/ccrc/codex/<id>-<rand6>` (outside `~/.ccrc`, as the parser demands) and refuses `authdir-occupied` if it exists; writes the codex row `homeAble:true`, off; converges (`ccrc wrappers`, `ccrc models litellm <id>`) and runs `ccrc models <id> init codex`. An absent runtime venv refuses `codex-runtime-absent`; no venv is built under a sheet. `remove` from the UI deletes the lane's `authDir` by default; the CLI keeps its flag.
+**The shape.** `add --provider openai` picks a free `proxyPort`/`litellmPort` pair by probing the roster and the box's listeners; sets `exec.authDir` to a **fresh** `.local/share/ccrc/codex/<id>-<rand6>` (outside `~/.ccrc`, as the parser demands) and refuses `authdir-occupied` if it exists; writes the codex row `homeAble:true`, off; converges (`ccrc wrappers`, `ccrc models litellm <id>`) and runs `ccrc models <id> init codex`. An absent runtime venv refuses `codex-runtime-absent`; no venv is built under a sheet. `remove` from the UI deletes the lane's `authDir` by default; the CLI keeps its flag. **Sign in again (spec §9 row 5)** on an existing Codex lane is A20's same-method `auth-start` arm with the Codex login: it signs in into a scratch auth dir and moves it into `exec.authDir` under the lane lock only on `done` and a passing check, so a refused, cancelled or expired attempt leaves the old sign-in in place.
 
-- [ ] **Step 1: Red.** "an add writes a codex row with a free port pair and a fresh authDir"; "a re-add of the same id gets a different authDir"; "an existing authDir refuses `authdir-occupied`"; "no venv refuses `codex-runtime-absent` and writes nothing"; "remove from the UI path deletes the authDir; `--keep-codex-auth` keeps it"; "`ccd caps` lists `account-codex-v1`".
+- [ ] **Step 1: Red.** "a Codex Sign in again keeps the old `authDir` contents until the scratch sign-in passes its check, and a cancelled one leaves them byte-identical"; "an add writes a codex row with a free port pair and a fresh authDir"; "a re-add of the same id gets a different authDir"; "an existing authDir refuses `authdir-occupied`"; "no venv refuses `codex-runtime-absent` and writes nothing"; "remove from the UI path deletes the authDir; `--keep-codex-auth` keeps it"; "`ccd caps` lists `account-codex-v1`".
 - [ ] **Step 2: Green.**
 - [ ] **Step 3: Mutation table, RUN.**
 
@@ -1082,6 +1166,7 @@ The evidence is the lane-state files and, once A17 has merged, the audit rows; n
   | a port taken by a listener accepted | ccrc-account-codex-add | "…a free port pair…" |
   | build the venv when absent | ccrc-account-codex-add | "…writes nothing" |
   | remove keeps the authDir by default | ccrc-account-codex-add | the UI-path case |
+  | Codex re-auth writes into `authDir` directly | ccrc-account-codex-add | "…keeps the old `authDir` contents…" |
 
 - [ ] **Step 4: Per width × skin × mode.** No UI: "no UI" in all sixteen cells.
 - [ ] **Step 5: Verify.**
@@ -1090,13 +1175,13 @@ The evidence is the lane-state files and, once A17 has merged, the audit rows; n
 
 ### Task A25: OpenAI: the ChatGPT device-code sheet (spec §7.2; D-5519, N2) — W2c
 
-**Routing:** band 3, **two reviewers** (the device code binds an account to the lane). **Lane:** server (the PWA bundle). **Needs:** A22, A24. **Gates:** #627.
+**Routing:** band 3, **two reviewers** (the device code binds an account to the lane). **Lane:** server (the PWA bundle). **Needs:** A22, A24. **Gates:** #402/#627.
 
 **Files:** Create `pwa/test/chatgpt-sheet.test.tsx`. Modify `pwa/src/accounts/ProviderFrame.tsx`, `RunFrame.tsx`, `ResultFrame.tsx`, `pwa/src/accounts/RemoveSheet.tsx` (the Codex folder line) and `pwa/src/fleet/accountWords.ts`.
 
-**The shape.** OpenAI has no method step: "Models: luna, terra and sol from your ChatGPT plan." The device-code card: "Open the ChatGPT sign-in page ↗" (52px, the mono host from the parsed URL, Copy link; on a phone Copy link is primary), and the user code at 24px with `--tracking-caps` and its own Copy: "Type this code on the page. It's not a secret; it's shown so you can type it." Then "… waiting for you to approve" with the amber pulse and the countdown from `expiresAt`, the check step "starts this lane's gateway", and the result frame with `CompromiseSteps`. Terminal states mirror A22's; the Codex runtime's own failure line is never quoted. Remove shows **Delete this lane's ChatGPT sign-in folder**, on by default, and the ledger links "Remove it at chatgpt.com ↗".
+**The shape.** OpenAI has no method step: "Models: luna, terra and sol from your ChatGPT plan." The device-code card: "Open the ChatGPT sign-in page ↗" (52px, the mono host from the parsed URL, Copy link; on a phone Copy link is primary), and the user code at 24px with `--tracking-caps` and its own Copy: "Type this code on the page. It's not a secret; it's shown so you can type it." Then "… waiting for you to approve" with the amber pulse and the countdown from `expiresAt`, the check step "starts this lane's gateway", and the result frame with `CompromiseSteps`. Terminal states mirror A22's; the Codex runtime's own failure line is never quoted. Remove shows **Delete this lane's ChatGPT sign-in folder**, on by default, and the ledger links "Remove it at chatgpt.com ↗". **Sign in again (spec §9 row 5)** is the fold's act on a Codex lane and the primary fix of a Signed-out one: step-up, the same device-code sheet on the existing lane (A24's re-auth arm), and it ends with the lane's sessions and one-tap Restart, and a fresh check. It has its own cells in Step 4.
 
-- [ ] **Step 1: Red.** "the user code at 24px fits eight characters and a hyphen in 296px" (measured in jsdom from the computed font and tracking tokens); "the host label is the parsed URL's host"; "an untrusted `userCode` shows no code and no link"; "expiry reads the code's `expiresAt` time"; "the remove sheet's Codex line is on by default".
+- [ ] **Step 1: Red.** "a Signed-out Codex lane's primary fix is Sign in again, it asks for step-up, and it ends with the restart list and a fresh check"; "the user code at 24px fits eight characters and a hyphen in 296px" (measured in jsdom from the computed font and tracking tokens); "the host label is the parsed URL's host"; "an untrusted `userCode` shows no code and no link"; "expiry reads the code's `expiresAt` time"; "the remove sheet's Codex line is on by default".
 - [ ] **Step 2: Green.**
 - [ ] **Step 3: Mutation table, RUN.**
 
@@ -1114,9 +1199,9 @@ The evidence is the lane-state files and, once A17 has merged, the audit rows; n
 
 ### Task A26: OpenRouter by paste on the box: validate first, the right key kind, its telemetry and its suggested models (D-5520, D-5521, D-5556, N4; G7, G8, G28) — W2d
 
-**Routing:** band 3, **two reviewers** (an API key that spends money). **Lane:** AGENT-FIRST. **Needs:** A16. **Gates:** #565 (`ccrc-models-probe`), #646, #435 and #410 (the cap line).
+**Routing:** band 3, **two reviewers** (an API key that spends money). **Lane:** AGENT-FIRST. **Needs:** A16. **Gates:** #565 (`ccrc-models-probe`), #435 and #410 (the cap line).
 
-**Files:** Modify `ccd/ccrc` (`add --provider openrouter` and `credential` for an OpenRouter lane; `telemetry`; the suggested models), `ccd/ccd` (`account-openrouter-v2`) and `server/test/ccrc-account.test.ts`. Create `server/test/ccrc-account-openrouter-v2.test.ts`.
+**Files:** Modify `ccd/ccrc` (`add --provider openrouter` and `credential` for an OpenRouter lane; `telemetry`; the suggested models), `ccd/ccd` (`account-openrouter-v2`), `server/test/ccrc-account.test.ts` and `server/test/account-canary.test.ts` (OpenRouter paste and Replace key through A17's routes and the real agent, with a stub `curl` that echoes its stdin on stderr). Create `server/test/ccrc-account-openrouter-v2.test.ts`.
 
 **The shape.**
 - **Validate first, on the box:** the byte check; then `GET https://openrouter.ai/api/v1/key` with `curl -H @- --proto =https --max-redirs 0 --max-time 10`, stdin carrying exactly one line, `Authorization: Bearer <key>`. A 200 keeps `label`, `limit`, `limit_remaining`, `limit_reset`, `usage` and `is_free_tier` for the lane state; a 200 whose `is_management_key` or `is_provisioning_key` is true refuses `wrong-key-kind` and writes nothing; a 401 refuses `key-rejected`; anything else `key-unverified`. There is no "save anyway".
@@ -1125,7 +1210,7 @@ The evidence is the lane-state files and, once A17 has merged, the audit rows; n
 - **Suggested models (D-5556):** without `--models`, `add` runs `ccrc models <id> init openrouter` **before** it writes the key, taking the catalogue's suggested `anthropic/*` ids for `opus`, `sonnet`, `haiku` and `subagent`, each checked against `MODEL_ID_RE`. An unreadable catalogue refuses `catalogue-unreachable` and writes nothing.
 - **Placement:** `--placement overflow` (default: `homeAble:false`, `selectable:true`) or `full`.
 
-- [ ] **Step 1: Red** (a stub `curl` first on PATH that records argv and stdin, and answers as a scripted OpenRouter): "the key is on stdin as one header line and on no argv"; "the hostile key `"\noutput = <tmp>/pwned` refuses `key-charset` and no file appears"; "a management key refuses `wrong-key-kind` and writes nothing"; "a 401 writes nothing"; "the lane state carries the hint and the credit fields, and the key file holds the key"; "openrouter and compatible rows carry their own telemetry"; "an unreadable catalogue writes nothing"; "every OpenRouter call uses `--proto =https --max-redirs 0`".
+- [ ] **Step 1: Red** (a stub `curl` first on PATH that records argv and stdin, and answers as a scripted OpenRouter): "the key is on stdin as one header line and on no argv"; "the hostile key `"\noutput = <tmp>/pwned` refuses `key-charset` and no file appears"; "a management key refuses `wrong-key-kind` and writes nothing"; "a 401 writes nothing"; "the lane state carries the hint and the credit fields, and the key file holds the key"; "openrouter and compatible rows carry their own telemetry"; "an unreadable catalogue writes nothing"; "every OpenRouter call uses `--proto =https --max-redirs 0`"; `account-canary.test.ts`: "an OpenRouter paste-add and a Replace key, through the route and the real agent with a stderr-echoing `curl`, leave the canary only in the 0600 key file".
 - [ ] **Step 2: Green.**
 - [ ] **Step 3: Mutation table, RUN.**
 
@@ -1140,17 +1225,17 @@ The evidence is the lane-state files and, once A17 has merged, the audit rows; n
 - [ ] **Step 4: Per width × skin × mode.** No UI: "no UI" in all sixteen cells.
 - [ ] **Step 5: Verify.**
 
-      cd server && ./node_modules/.bin/vitest run test/ccrc-account-openrouter-v2.test.ts test/ccrc-account.test.ts test/models-probe.test.ts
+      cd server && ./node_modules/.bin/vitest run test/ccrc-account-openrouter-v2.test.ts test/ccrc-account.test.ts test/account-canary.test.ts test/models-probe.test.ts
 
 ### Task A27: OpenRouter by paste in the sheet: placement, the read-only models row, the credit meter and the masked key (spec §8.1, §8.3–§8.6; D-5520, D-5556) — W2d
 
-**Routing:** band 3, **two reviewers** (the secret field). **Lane:** server (the PWA bundle). **Needs:** A18, A26. **Gates:** #627.
+**Routing:** band 3, **two reviewers** (the secret field). **Lane:** server (the PWA bundle). **Needs:** A18, A26. **Gates:** #402/#627.
 
-**Files:** Create `pwa/test/openrouter-paste.test.tsx`. Modify `pwa/src/accounts/MethodFrame.tsx`, `RunFrame.tsx`, `ResultFrame.tsx`, `pwa/src/fleet/AccountRow.tsx` and `AccountMeterRow.tsx` (the credit meter), `pwa/src/fleet/accountWords.ts` and `pwa/src/lib/api.ts`.
+**Files:** Create `pwa/test/openrouter-paste.test.tsx`. Modify `pwa/src/accounts/MethodFrame.tsx`, `RunFrame.tsx`, `ResultFrame.tsx`, `pwa/src/fleet/AccountRow.tsx` and `AccountMeterRow.tsx` (the credit meter), `pwa/src/fleet/TroubleCard.tsx` (the two credit cards), `pwa/src/fleet/accountWords.ts` and `pwa/src/lib/api.ts`.
 
-**The shape.** OpenRouter's method radio in its fixed order: Mint, Connect, Paste. Until their cap words exist, Mint and Connect are narrowed in place. Mint without a management key reads "Needs an OpenRouter management key on the fleet host. It's installed from a shell there, never from this app:" with the command in a mono field and Copy; on a darwin node, "Minting runs from a Linux fleet host". **Paste:** "Create a key on openrouter.ai ↗", "Name it after this lane, for example `ccrc lane-d`, so you can find it later to revoke it", the secret field, then **Use**: Overflow only (default) or A full lane, each with its line. The validation ledger line: `✓ Key accepted by OpenRouter · "ccrc lane-d" · $20 limit, $18.40 left · 0.4 s`. **Models:** one read-only row, "Models: suggested · opus `anthropic/…` · …", each id ellipsised with its full value in `title`, and the note "To change these, run `ccrc models <id> …` on the fleet host." There is **no Change control**, not even a disabled one (Q6). The card shows `Key sk-or-v1-…a3f9 · validated 2d ago` and one credit meter (`$18.40 of $20 left`), or `$6.10 used · no limit`, each with its read time. The result frame says "Not the key you meant? **Discard this lane**". Replace key for a pasted key ends with "The old key still works at OpenRouter. Delete it at openrouter.ai/keys; ccrc can't."
+**The shape.** OpenRouter's method radio in its fixed order: Mint, Connect, Paste. Until their cap words exist, Mint and Connect are narrowed in place. Mint without a management key reads "Needs an OpenRouter management key on the fleet host. It's installed from a shell there, never from this app:" with the command in a mono field and Copy; on a darwin node, "Minting runs from a Linux fleet host". **Paste:** "Create a key on openrouter.ai ↗", "Name it after this lane, for example `ccrc lane-d`, so you can find it later to revoke it", the secret field, then **Use**: Overflow only (default) or A full lane, each with its line. The validation ledger line: `✓ Key accepted by OpenRouter · "ccrc lane-d" · $20 limit, $18.40 left · 0.4 s`. **Models:** one read-only row, "Models: suggested · opus `anthropic/…` · …", each id ellipsised with its full value in `title`, and the note "To change these, run `ccrc models <id> …` on the fleet host." There is **no Change control**, not even a disabled one (Q6). The card shows `Key sk-or-v1-…a3f9 · validated 2d ago` and one credit meter (`$18.40 of $20 left`), or `$6.10 used · no limit`, each with its read time. The result frame says "Not the key you meant? **Discard this lane**". Replace key for a pasted key ends with "The old key still works at OpenRouter. Delete it at openrouter.ai/keys; ccrc can't." **The credit trouble cards (spec §4.2):** Rate-limited (credit), "lane-d's OpenRouter key has no credit left.", with **Open OpenRouter credits ↗** (a standalone `Button` anchor, `rel=noopener noreferrer`) and **Switch lane off**; Expiring (credit), "lane-d's OpenRouter key has $1.20 of $20 left.", with **Open OpenRouter credits ↗** · Replace key for a pasted or connected key (a minted key's **Raise the limit** is A33's).
 
-- [ ] **Step 1: Red.** "the radio's order is Mint, Connect, Paste, and the narrowed rows say why"; "Mint's narrowed row carries the install command and a truthful Copy"; "the models row has no button, link or input"; "a key with no limit draws a usage line, not a meter"; "the key hint is taken from `LaneWire` and never computed in the browser" (a source scan for `slice(-4)` on a key); "a refused key re-presents an empty field with its code's sentence".
+- [ ] **Step 1: Red.** "a key with `limit_remaining` 0 shows the Rate-limited (credit) card with Open OpenRouter credits and Switch lane off"; "a key at 10% shows the Expiring (credit) card with Open OpenRouter credits and Replace key"; "the radio's order is Mint, Connect, Paste, and the narrowed rows say why"; "Mint's narrowed row carries the install command and a truthful Copy"; "the models row has no button, link or input"; "a key with no limit draws a usage line, not a meter"; "the key hint is taken from `LaneWire` and never computed in the browser" (a source scan for `slice(-4)` on a key); "a refused key re-presents an empty field with its code's sentence".
 - [ ] **Step 2: Green.**
 - [ ] **Step 3: Mutation table, RUN.**
 
@@ -1160,6 +1245,7 @@ The evidence is the lane-state files and, once A17 has merged, the audit rows; n
   | a meter drawn at 0 of null | openrouter-paste | "…draws a usage line, not a meter" |
   | the hint derived in the component | openrouter-paste | the source scan |
   | Overflow not the default | openrouter-paste | its placement case |
+  | the credit card drops Switch lane off | openrouter-paste | "…Rate-limited (credit) card…" |
 
 - [ ] **Step 4: Per width × skin × mode.** 16 cells, with mockups A7, A8, A9 and A14 as references, **minus their Change control**: the refused-key frame, the accepted frame, the models row ellipsising at 360, the credit meter (A: 5px continuous; B: 10 LED segments), Instrument's `or` rows in the 340 column. Dark and light.
 - [ ] **Step 5: Verify.**
@@ -1174,13 +1260,13 @@ The evidence is the lane-state files and, once A17 has merged, the audit rows; n
 
 ### Task A28: PKCE on the fleet box (D-5552, D-5514, N4; G25) — W3a
 
-**Routing:** band 3, **two reviewers** (a key born on the box from a one-time code). **Lane:** AGENT-FIRST. **Needs:** A20, A26. **Gates:** OA4, OA2; #565, #646, #435 and #410 (the cap line).
+**Routing:** band 3, **two reviewers** (a key born on the box from a one-time code). **Lane:** AGENT-FIRST. **Needs:** A20, A26. **Gates:** OA4, OA2; #565, #435 and #410 (the cap line).
 
 **Files:** Modify `ccd/ccrc` (`add --provider openrouter --method pkce`; `auth-start --method openrouter-pkce`; `auth-code`'s exchange arm), `ccd/ccd` (`account-or-pkce-v1`). Create `server/test/ccrc-account-pkce.test.ts`.
 
-**The shape.** `add --method pkce` creates the lane (catalogue first, then the off marker, the roster entry with `telemetry: "openrouter"` and the lane state) with no key. `auth-start --method openrouter-pkce` runs **no helper and no unit**: it draws 32 bytes from `/dev/urandom`, writes the base64url verifier to `~/.ccrc/auth-scratch/<id>/pkce` (0600, directory 0700), writes the status file `{state:'waiting-code', attemptId, expiresAt}` (start + 600 s), and **answers** `{ok, attemptId, expiresAt, url}` with the URL exactly `https://openrouter.ai/auth?code_challenge=<S256>&code_challenge_method=S256&key_label=ccrc%20<id>%20<date>`. `auth-code` checks the code's bytes, builds `{code, code_verifier, code_challenge_method:"S256"}` with `jq` from stdin, and sends it with `curl --data-binary @- --proto =https --max-redirs 0 --max-time 10` to `https://openrouter.ai/api/v1/auth/keys`. **The verifier is deleted before the exchange's answer is read.** The answer goes through `jq` straight onto the umask-077 temp file; A26's validation follows (a management-kind key refuses `wrong-key-kind` and the temp is deleted); then the rename and `keySource: 'pkce'`. A 4xx refuses `exchange-refused`. A key that was made but not installed answers the by-hand sentence with `pkce-minted-not-installed`; A30 adds the paged cleanup once a management key can exist.
+**The shape.** `add --method pkce` creates the lane (catalogue first, then the off marker, the roster entry with `telemetry: "openrouter"` and the lane state) with no key. `auth-start --method openrouter-pkce` runs **no helper and no unit**: it draws 32 bytes from `/dev/urandom`, writes the base64url verifier to `~/.ccrc/auth-scratch/<id>/pkce` (0600, directory 0700), writes the status file `{state:'waiting-code', attemptId, expiresAt}` (start + 600 s), and **answers** `{ok, attemptId, expiresAt, url}` with the URL exactly `https://openrouter.ai/auth?code_challenge=<S256>&code_challenge_method=S256&key_label=ccrc%20<id>%20<date>`. `auth-code` checks the code's bytes, builds `{code, code_verifier, code_challenge_method:"S256"}` with `jq` from stdin, and sends it with `curl --data-binary @- --proto =https --max-redirs 0 --max-time 10` to `https://openrouter.ai/api/v1/auth/keys`. **The verifier is deleted before the exchange's answer is read.** The answer goes through `jq` straight onto the umask-077 temp file; A26's validation follows (a management-kind key refuses `wrong-key-kind` and the temp is deleted); then the rename and `keySource: 'pkce'`. A 4xx refuses `exchange-refused`. A key that was made but not installed answers the by-hand sentence with `pkce-minted-not-installed`; A30 adds the paged cleanup once a management key can exist. **The verifier never outlives its attempt (spec §3.1, §3.9).** With no helper and no unit, nothing would delete it at `expiresAt`, so: `auth-cancel` for `openrouter-pkce` deletes the verifier and the status file; every `auth-start`, `auth-cancel`, `auth-code` and `remove` first sweeps every lane's PKCE scratch whose `expiresAt` has passed; and the server's attempt expiry (A21's in-memory timer, A29's arm) issues `auth-cancel` when the attempt ends, so the verifier is gone at the deadline even if no later verb runs.
 
-- [ ] **Step 1: Red** (stub `curl` and a stub OpenRouter): "the verifier exists only in `pkce`, 0600 in a 0700 directory, and is gone after the exchange whatever its outcome"; "neither the code nor the verifier is on any argv during the run" (sampled by `ps`); "the answered URL has exactly the three parameters, S256, no `callback_url`"; "a second code on a spent attempt refuses `code-already-sent`"; "a 4xx refuses `exchange-refused` and leaves no key file"; "a management-kind key from the exchange is refused and its temp deleted".
+- [ ] **Step 1: Red** (stub `curl` and a stub OpenRouter): "auth-cancel removes `pkce` and the status file"; "an expired attempt's verifier is gone after the next account verb on any lane"; "an `auth-code` on an expired attempt refuses `no-auth-attempt` and the verifier is already gone"; "the verifier exists only in `pkce`, 0600 in a 0700 directory, and is gone after the exchange whatever its outcome"; "neither the code nor the verifier is on any argv during the run" (sampled by `ps`); "the answered URL has exactly the three parameters, S256, no `callback_url`"; "a second code on a spent attempt refuses `code-already-sent`"; "a 4xx refuses `exchange-refused` and leaves no key file"; "a management-kind key from the exchange is refused and its temp deleted".
 - [ ] **Step 2: Green.**
 - [ ] **Step 3: Mutation table, RUN.**
 
@@ -1189,6 +1275,8 @@ The evidence is the lane-state files and, once A17 has merged, the audit rows; n
   | delete the verifier after reading the answer | ccrc-account-pkce | "…gone after the exchange whatever its outcome" (the stub answers slowly, then fails) |
   | the body on `--data` argv | ccrc-account-pkce | "…on any argv…" |
   | `code_challenge_method=plain` | ccrc-account-pkce | "…S256…" |
+  | auth-cancel leaves `pkce` for openrouter-pkce | ccrc-account-pkce | "auth-cancel removes `pkce`…" |
+  | the expiry sweep dropped from the verbs | ccrc-account-pkce | "an expired attempt's verifier is gone…" |
   | a `callback_url` added | ccrc-account-pkce | "…no `callback_url`" |
   | skip the key-kind check after the exchange | ccrc-account-pkce | the management-kind case |
 
@@ -1199,13 +1287,13 @@ The evidence is the lane-state files and, once A17 has merged, the audit rows; n
 
 ### Task A29: Connect with OpenRouter (D-5552, D-5553, D-5514, N2) — W3a
 
-**Routing:** band 3, **two reviewers** (the code relay, and the URL the operator opens). **Lane:** server (and the PWA bundle). **Needs:** A21, A23, A27, A28. **Gates:** OA4; #627, #397.
+**Routing:** band 3, **two reviewers** (the code relay, and the URL the operator opens). **Lane:** server (and the PWA bundle). **Needs:** A21, A23, A27, A28. **Gates:** OA4; #402/#627.
 
-**Files:** Modify `server/src/accounts/routes.ts`, `server/src/accounts/attempts.ts` (the URL kept in the attempt), `shared/accounts.ts` (`isOpenRouterAuthUrl`, the exact shape), `pwa/src/accounts/RunFrame.tsx`, `ResultFrame.tsx`, `pwa/src/fleet/accountWords.ts`. Create `server/test/account-routes-pkce.test.ts` and `pwa/test/openrouter-connect.test.tsx`.
+**Files:** Modify `server/src/accounts/routes.ts`, `server/src/accounts/attempts.ts` (the URL kept in the attempt), `shared/accounts.ts` (`isOpenRouterAuthUrl`, the exact shape), `pwa/src/accounts/RunFrame.tsx`, `ResultFrame.tsx`, `pwa/src/accounts/ReplaceSheet.tsx` (Connect again), `pwa/src/fleet/accountWords.ts` and `server/test/account-canary.test.ts` (the PKCE code). Create `server/test/account-routes-pkce.test.ts` and `pwa/test/openrouter-connect.test.tsx`.
 
-**The shape.** For `openrouter-pkce`, the server checks the op's URL against the exact shape (https, host `openrouter.ai`, path `/auth`, exactly `code_challenge` of 43 base64url characters, `code_challenge_method=S256` and the fixed `key_label`, in that order, nothing else) and keeps it in the attempt. `GET …/auth` serves **only** that URL, never the status file's. Anything else ends the attempt with `auth-url-untrusted`. A server restart loses the URL, so the attempt reads expired and the sheet offers Start again. The sheet reuses A22's URL card and code field with the host `openrouter.ai`: "Approve, then copy the code openrouter.ai shows you and paste it here." The ledger reads `✓ Key made by OpenRouter · "ccrc lane-d 2026-10-18" · no limit · 0.6 s`, and the result frame says "This key has no credit limit. Set one at openrouter.ai/keys, or mint keys instead, which always carry one." with "Not the key you meant? **Discard this lane**". **No callback arm (D-5553):** no `/connect/*` route or page exists, and the URL never carries `callback_url`.
+**The shape.** For `openrouter-pkce`, the server checks the op's URL against the exact shape (https, host `openrouter.ai`, path `/auth`, exactly `code_challenge` of 43 base64url characters, `code_challenge_method=S256` and the fixed `key_label`, in that order, nothing else) and keeps it in the attempt. `GET …/auth` serves **only** that URL, never the status file's. Anything else ends the attempt with `auth-url-untrusted`. A server restart loses the URL, so the attempt reads expired and the sheet offers Start again. The sheet reuses A22's URL card and code field with the host `openrouter.ai`: "Approve, then copy the code openrouter.ai shows you and paste it here." The ledger reads `✓ Key made by OpenRouter · "ccrc lane-d 2026-10-18" · no limit · 0.6 s`, and the result frame says "This key has no credit limit. Set one at openrouter.ai/keys, or mint keys instead, which always carry one." with "Not the key you meant? **Discard this lane**". **No callback arm (D-5553):** no `/connect/*` route or page exists, and the URL never carries `callback_url`. **Expiry cancels on the box:** when the in-memory attempt reaches `expiresAt`, or is cancelled, the server issues `auth-cancel`, so A28's verifier is deleted at the deadline. **Replace key by Connect again (spec §9 row 6, §4.4):** on a pasted or connected OpenRouter lane, the fold's Replace key offers Connect again beside paste: step-up, the same PKCE run on the existing lane, the new key validated and installed through `credential` with the old key file kept until the new one passes, then the sessions on the lane with one-tap Restart, a fresh check, and "The old key still works at OpenRouter. Delete it at openrouter.ai/keys ↗; ccrc can't." **The canary** (A17's suite) is extended to the PKCE code and the exchanged key, through the route and the real agent.
 
-- [ ] **Step 1: Red.** `account-routes-pkce.test.ts`: "an op URL that adds `callback_url`, uses `plain`, carries an extra parameter, reorders them or names another host refuses `auth-url-untrusted`"; "a status file rewritten mid-attempt to another URL changes nothing `GET …/auth` serves"; "after a restart the attempt reads expired"; "no route under `/connect/` is registered" (route-table enumeration). `openrouter-connect.test.tsx`: "the URL card's host is `openrouter.ai` from the parsed URL"; "the no-limit line and Discard are in the result frame"; "the made-not-installed answer names the key and links openrouter.ai/keys".
+- [ ] **Step 1: Red.** `account-routes-pkce.test.ts`: "an expired attempt and a cancelled one each issue `auth-cancel` to the op"; "Connect again on an existing lane keeps the old key file until the new key passes, and asks for step-up"; `account-canary.test.ts`: "the PKCE code and the exchanged key's canary appear only in the 0600 key file"; "an op URL that adds `callback_url`, uses `plain`, carries an extra parameter, reorders them or names another host refuses `auth-url-untrusted`"; "a status file rewritten mid-attempt to another URL changes nothing `GET …/auth` serves"; "after a restart the attempt reads expired"; "no route under `/connect/` is registered" (route-table enumeration). `openrouter-connect.test.tsx`: "the URL card's host is `openrouter.ai` from the parsed URL"; "the no-limit line and Discard are in the result frame"; "the made-not-installed answer names the key and links openrouter.ai/keys".
 - [ ] **Step 2: Green.**
 - [ ] **Step 3: Mutation table, RUN.**
 
@@ -1215,8 +1303,10 @@ The evidence is the lane-state files and, once A17 has merged, the audit rows; n
   | serve the status file's URL | account-routes-pkce | "…changes nothing `GET …/auth` serves" |
   | persist the URL in coord.db | account-routes-pkce | "after a restart the attempt reads expired" |
   | register `/connect/openrouter/done` | account-routes-pkce | "no route under `/connect/`…" |
+  | the expiry timer drops the attempt without `auth-cancel` | account-routes-pkce | "an expired attempt… issue `auth-cancel`" |
+  | Connect again replaces the key before validation | account-routes-pkce | "…keeps the old key file…" |
 
-- [ ] **Step 4: Per width × skin × mode.** 16 cells: the URL card with `openrouter.ai`, the code field, the no-limit result, the made-not-installed sentence. Both skins, dark and light.
+- [ ] **Step 4: Per width × skin × mode.** 16 cells: the URL card with `openrouter.ai`, the code field, the no-limit result, the made-not-installed sentence, and Replace key by Connect again from the fold. Both skins, dark and light.
 - [ ] **Step 5: Verify.**
 
       cd server && ./node_modules/.bin/vitest run test/account-routes-pkce.test.ts test/auth-url-allowlist.test.ts test/account-canary.test.ts
@@ -1225,7 +1315,7 @@ The evidence is the lane-state files and, once A17 has merged, the audit rows; n
 
 ### Task A30: the OpenRouter management key: CLI-only custody (D-5554, D-5513's backups row, N4; G26, G33) — W3b
 
-**Routing:** band 3, **two reviewers** (the strongest credential on the box). **Lane:** AGENT-FIRST. **Needs:** A26, A28. **Gates:** OA4, OA2; #565, #646, #435 and #410 (the cap line).
+**Routing:** band 3, **two reviewers** (the strongest credential on the box). **Lane:** AGENT-FIRST. **Needs:** A26, A28. **Gates:** OA4, OA2; #565, #435 and #410 (the cap line).
 
 **Files:** Modify `ccd/ccrc` (`account openrouter-management install|check|remove|ceiling`, the writer's bare-value arm, the one reader, the management state file, A28's paged cleanup), `ccd/ccd` (`account-or-management-v1`), `CLAUDE.md` (the SAFETY line naming the file) and `shared/api.ts` (`ACCOUNT_DENY_RULES` gains the file by name if A9's glob does not already cover it). Create `server/test/ccrc-or-management.test.ts`.
 
@@ -1237,7 +1327,7 @@ The evidence is the lane-state files and, once A17 has merged, the audit rows; n
 - **`remove`** deletes the file (minted keys keep working) and **`ceiling --usd`** sets the ceiling on the CLI (raise or lower). The agent's `or-management-remove` and `or-management-lower` reach `remove` and a **lower** ceiling only; a higher figure refuses `ceiling-cli-only`.
 - **The PKCE cleanup:** with a management key present, a made-not-installed PKCE key is found by paging **the whole** `GET /api/v1/keys` list and deleted only on an exact name match created inside the attempt's window (`pkce-minted-deleted`); a renamed key, two matches or a match outside the window is ambiguous and answered for deletion by hand.
 
-- [ ] **Step 1: Red** (stub `curl` and OpenRouter): "a tree grep finds `openrouter-management.key` only in the reader and the writer, and never as `.env`"; "the file holds the key's bytes with no `=` and no `export`"; "no generated wrapper, `accounts.sh` or settings file names it"; "install refuses a lane key, a null expiry and any darwin node"; "`--replace` with a higher ceiling keeps the old ceiling"; "`or-management-lower` with a higher figure refuses `ceiling-cli-only`"; "the key is sent only to the two fixed URLs, with no redirects"; "the PKCE cleanup over a three-page list holding a renamed key and a same-named key from before the attempt deletes only the exact in-window match".
+- [ ] **Step 1: Red** (stub `curl` and OpenRouter): "a grep of the **executable code** under `ccd/` and `deploy/` finds `openrouter-management.key` only in the reader and the writer, and never as `.env`" (the deny list in `shared/api.ts`, its bash twin's rule text and `CLAUDE.md`'s SAFETY line name the file as data, and are outside the grep's scope by construction); "the file holds the key's bytes with no `=` and no `export`"; "no generated wrapper, `accounts.sh` or settings file names it"; "install refuses a lane key, a null expiry and any darwin node"; "`--replace` with a higher ceiling keeps the old ceiling"; "`or-management-lower` with a higher figure refuses `ceiling-cli-only`"; "the key is sent only to the two fixed URLs, with no redirects"; "the PKCE cleanup over a three-page list holding a renamed key and a same-named key from before the attempt deletes only the exact in-window match".
 - [ ] **Step 2: Green.**
 - [ ] **Step 3: Mutation table, RUN.**
 
@@ -1257,11 +1347,11 @@ The evidence is the lane-state files and, once A17 has merged, the audit rows; n
 
 ### Task A31: the Provider keys block and the management key's instructions (D-5554; spec §8.7, §12.2, §12.3) — W3b
 
-**Routing:** band 3, **two reviewers** (the management key's state on the wire; its remove route). **Lane:** server (and the PWA bundle). **Needs:** A12, A30. **Gates:** OA4; #627, #397; A4 for Instrument's group.
+**Routing:** band 3, **two reviewers** (the management key's state on the wire; its remove route). **Lane:** server (and the PWA bundle). **Needs:** A12, A30. **Gates:** OA4; #402/#627; A4 for Instrument's group.
 
 **Files:** Modify `server/src/accounts/routes.ts`, `server/src/server.ts`, `shared/api.ts` (`connect.openrouterManagement`), `pwa/src/screens/AccountsScreen.tsx`, `pwa/src/skins/instrument/AccountsTable.tsx` and `AccountsDetail.tsx`. Create `pwa/src/accounts/ProviderKeys.tsx`, `pwa/src/accounts/ManagementSheet.tsx`, `server/test/or-management-routes.test.ts` and `pwa/test/provider-keys.test.tsx`.
 
-**The shape.** `POST /api/providers/openrouter/management/remove` (step-up; deletes the file only) and `POST …/management/ceiling` (lower only, no step-up; higher refuses `ceiling-cli-only`); **no install route**. `connect.openrouterManagement = {present, hint, expiresAt?, expirySource, ceiling, committed, mintedCount}`, for the session verdict only. The **Provider keys** block: one card after the lane cards (Refined; before the door on a phone), or a last `PROVIDER KEYS` group in the list column (Instrument) whose row opens the detail pane's panels. Its row reads "OpenRouter management key · not installed · **How to add**" or "installed · `sk-or-v1-…9b1d` · expires 18 Jan · 3 keys minted · $60 of $100 a month"; Expiring inside 14 days with **How to replace**; after expiry "Expired: lanes keep working; minting is off until you replace it". The **instructions sheet**: "Create a management key at openrouter.ai ↗", the expiry advice, the exact command in a read-only mono field with Copy (`ccrc account openrouter-management install --ceiling-usd 100`, and the ssh form with `<fleet-host>`), "Run this in a shell on the fleet host. The key never passes through this app.", and `CompromiseSteps`. **It has no secret field and no Install button.** It re-reads on focus and shows the installed row once the key is present.
+**The shape.** `POST /api/providers/openrouter/management/remove` (step-up; deletes the file only) and `POST …/management/ceiling` (lower only, no step-up; higher refuses `ceiling-cli-only`); **no install route**. `connect.openrouterManagement = {present, hint, expiresAt?, expirySource, ceiling, committed, mintedCount}`, for the session verdict only. The **Provider keys** block: one card after the lane cards (Refined; before the door on a phone), or a last `PROVIDER KEYS` group in the list column (Instrument) whose row opens the detail pane's panels. Its row reads "OpenRouter management key · not installed · **How to add**" or "installed · `sk-or-v1-…9b1d` · expires 18 Jan · 3 keys minted · $60 of $100 a month"; Expiring inside 14 days with **How to replace**; after expiry "Expired: lanes keep working; minting is off until you replace it". The **instructions sheet**: "Create a management key at openrouter.ai ↗", the expiry advice, the exact command in a read-only mono field with Copy (`ccrc account openrouter-management install --ceiling-usd 100`, and the ssh form with `<fleet-host>`), "Run this in a shell on the fleet host. The key never passes through this app.", and `CompromiseSteps`. **It has no secret field and no Install button.** The remove and lower flows end with "Delete the old one at openrouter.ai ↗ too" (`TextLink`), **unless** OA2 measured that a management key can delete itself, in which case `remove` deletes it at OpenRouter and the flow says "Deleted at OpenRouter too" (spec §8.7's closing line); the branch is read from OA2's record at Step 0, and a red case covers the branch taken. It re-reads on focus and shows the installed row once the key is present.
 
 - [ ] **Step 1: Red.** `or-management-routes.test.ts`: "the route table has no management install member"; "remove needs step-up; lower needs none and refuses a higher figure"; "`openrouterManagement` is absent for a box-token or dark-gate reader". `provider-keys.test.tsx`: "the instructions sheet has no password input, no textarea and no Install button"; "it re-reads on focus and flips to the installed row"; "the row reads Expiring inside 14 days and Expired after"; "the block is not drawn without the session verdict".
 - [ ] **Step 2: Green.**
@@ -1283,7 +1373,7 @@ The evidence is the lane-state files and, once A17 has merged, the audit rows; n
 
 ### Task A32: minting sub-keys under a monthly ceiling, rotation and retirement (D-5555, N4; G27) — W3c
 
-**Routing:** band 3, **two reviewers** (keys that spend money, made with the management key). **Lane:** AGENT-FIRST. **Needs:** A30. **Gates:** OA4, OA2; #565, #646, #435 and #410 (the cap line).
+**Routing:** band 3, **two reviewers** (keys that spend money, made with the management key). **Lane:** AGENT-FIRST. **Needs:** A30. **Gates:** OA4, OA2; #565, #435 and #410 (the cap line).
 
 **Files:** Modify `ccd/ccrc` (`add --method mint`; `credential --method mint` and `--retire`; `set --limit|--limit-reset`; `remove`'s deletes at OpenRouter; the pending-deletes ledger), `ccd/ccd` (`account-or-mint-v1`) and `shared/accounts.ts` (`monthlyCommitment`, the one copy of the arithmetic, mirrored by the verb and held equal by a parity test). Create `server/test/ccrc-account-mint.test.ts` and `server/test/mint-commitment-parity.test.ts`.
 
@@ -1309,7 +1399,7 @@ The evidence is the lane-state files and, once A17 has merged, the audit rows; n
 
 ### Task A33: Mint a key, Mint a replacement, Retire the old key and Change limit (spec §8.8, §4.2; D-5555) — W3c
 
-**Routing:** band 3, **two reviewers** (step-up on a commitment raise; key retirement). **Lane:** server (and the PWA bundle). **Needs:** A31, A32. **Gates:** OA4; #627, #397.
+**Routing:** band 3, **two reviewers** (step-up on a commitment raise; key retirement). **Lane:** server (and the PWA bundle). **Needs:** A31, A32. **Gates:** OA4; #402/#627.
 
 **Files:** Modify `server/src/accounts/routes.ts` (mint fields on `POST /api/accounts`; `credential {method:'mint'}` and `{retire:true, liveAck?}`; `set {limit?, limitReset?}` with step-up when `monthlyCommitment` rises), `pwa/src/accounts/MethodFrame.tsx`, `pwa/src/fleet/TroubleCard.tsx`, `pwa/src/screens/AccountsScreen.tsx` (the fold) and `pwa/src/fleet/accountWords.ts`. Create `pwa/src/accounts/MintFields.tsx`, `pwa/src/accounts/RetireSheet.tsx`, `server/test/account-routes-mint.test.ts` and `pwa/test/openrouter-mint.test.tsx`.
 
@@ -1339,14 +1429,17 @@ The operator reviews spec §3.10 (the darwin arm) and §16.1 (its three test lay
 
 ### Task A34: does a hosted macOS runner have a `gui/<uid>` domain? (D-5558) — W3d
 
-**Routing:** band 3, one reviewer (a measurement; no credential). **Lane:** server (CI only). **Needs:** A23. **Gates:** OA5.
+**Routing:** band 3, one reviewer (a measurement; no credential). **Lane:** server (CI only). **Needs:** A23. **Gates:** OA5; #402/#627 and #623 (`.github/workflows/ci.yml`; #402/#627 also `server/test/ci-pipeline.test.ts`).
 
-**Files:** Create `.github/workflows/macos-launchd-probe.yml` (`workflow_dispatch` only, `macos-latest`). Modify `server/test/ci-pipeline.test.ts` (pins the workflow's trigger and that it runs no repository code but the probe script) and the spec's §16.1 (the record).
+**Files:** Create `.github/workflows/macos-launchd-probe.yml` (`workflow_dispatch` only, `macos-latest`). Modify `server/test/ci-pipeline.test.ts` (pins the workflow's trigger and that it runs no repository code but the probe script) and the spec's §16.1 (the record, first as "not yet run").
+
+**Two commits, two PRs.** GitHub dispatches a `workflow_dispatch` workflow only when its file is on the default branch, so the PR cannot run its own probe. **A34a** merges the workflow, its ci-pipeline pin and a record marked "not yet run". **A34b** is a docs-only follow-up: once A34a is on `main`, the probe is dispatched from `main` (`gh workflow run macos-launchd-probe.yml --ref main`, by the coordinator, never on a fork), and the run id and result are written into spec §16.1 and under D-5558. A35 needs A34b, not A34a.
 
 **The shape.** One job that writes a trivial plist to `$RUNNER_TEMP`, runs `launchctl bootstrap gui/$(id -u)`, prints `launchctl print gui/$(id -u)/<label>`, boots it out, and checks that it is gone. A second step runs the same bootstrap from a shell with no GUI session of its own (a `sudo -u "$USER" -i` login shell) and records the exact error text, which fixes `no-launchd-session`'s sentence; if the runner cannot reproduce an ssh-only shape, the record says so and OA3 measures it. The result is recorded in spec §16.1 and under D-5558 below. **If the domain is absent on hosted runners,** the fallback is a self-hosted runner that is a disposable macOS VM. A self-hosted runner on a public repository can run untrusted fork code, so that fallback is a STOP for the operator's ruling, never a step this task takes.
 
 - [ ] **Step 1: Red.** `ci-pipeline.test.ts`: "the probe workflow has only `workflow_dispatch`, runs on `macos-latest`, and checks out nothing it executes beyond its own step". Red: no workflow.
-- [ ] **Step 2: Green.** Dispatch it once from the PR's branch (`gh workflow run macos-launchd-probe.yml --ref <branch>`), and paste the run id and the result into the record.
+- [ ] **Step 2: Green (A34a).** The ci-pipeline pin passes; the record reads "not yet run". Merge.
+- [ ] **Step 2b: The measurement (A34b).** Dispatch from `main` once A34a has merged, wait for the run, and commit the run id, the exit lines and the `no-launchd-session` error text into the record in a docs-only PR. A red run is recorded as red, with its log line; it is never re-run until it passes.
 - [ ] **Step 3: Mutation table, RUN.**
 
   | Mutant | Suite | Expected red |
@@ -1361,7 +1454,7 @@ The operator reviews spec §3.10 (the darwin arm) and §16.1 (its three test lay
 
 ### Task A35: the darwin arm, dark, with its stubbed layer 1 (D-5557, D-5558; G29, G30, G32) — W3d
 
-**Routing:** band 3, **two reviewers** (a credential flow on a second platform). **Lane:** AGENT-FIRST. **Needs:** A20, A34 (a green measurement). **Gates:** OA5; #565, #646.
+**Routing:** band 3, **two reviewers** (a credential flow on a second platform). **Lane:** AGENT-FIRST. **Needs:** A20, A34b (a green measurement recorded on `main`). **Gates:** OA5; #565.
 
 **Files:** Modify `ccd/ccrc` (the darwin arm of `auth-start`, the reaper, the darwin lock arm of the platform layer), `ccd/ccd-account-auth` (its darwin side, if any, from Step 0's reading) and `server/test/macos-platform.test.ts`. Create `server/test/ccrc-account-darwin.test.ts`.
 
@@ -1371,7 +1464,7 @@ The operator reviews spec §3.10 (the darwin arm) and §16.1 (its three test lay
 - **Its bounds.** The helper's own 600 s, the pump's backstop, and a **reaper**: every `auth-start`, `auth-cancel` and `remove` first boots out every `app.ccrc.auth.*` job whose attempt is past `expiresAt` + 60 s. On every terminal state: `launchctl bootout`, `tmux -L ccrc-auth-<id> kill-server`, and `auth-scratch/<id>` deleted (taking the plist with it).
 - **The lock.** An atomic `mkdir` of `~/.ccrc/locks/<id>.lock` in the 0700 `~/.ccrc/locks`, recording the owner's pid and that pid's start time (`ps -o lstart= -p <pid>`). It is reclaimed only when the pid is dead or its start time differs; `lock-unavailable` otherwise. The Linux arm stays `flock`, verbatim.
 - **Measured refusals:** `no-launchd-session` (A34's sentence), a missing tool or no bash of 4.4 or newer (named), `codex-runtime-absent`, and, for `login`, `keychain-shared` **by default** until A37 applies OA3's measurement.
-- **Dark.** `auth-start` on darwin refuses `auth-unsupported-here` with the reason `darwin-arm-unproven` unless `CCRC_DARWIN_AUTH_ARM=1` is in the verb's environment. The agent's spawn never passes it (A8's builder sets no environment of its own, and a test pins that). Layers 1 and 2 set it. A37 deletes the switch.
+- **Dark.** `auth-start` on darwin refuses `auth-unsupported-here` with the reason `darwin-arm-unproven` (replacing A20's `darwin-arm-absent`, with a red case that the old reason is gone) unless `CCRC_DARWIN_AUTH_ARM=1` is in the verb's environment. The agent's spawn never passes it (A8's builder sets no environment of its own, and a test pins that). Layers 1 and 2 set it. A37 deletes the switch.
 
 - [ ] **Step 1: Red** (layer 1: Linux CI, every PR, stubs first on PATH and a sandbox `HOME`): the plist's bytes (label, `RunAtLoad`, `KeepAlive` false, `AbandonProcessGroup` false, `Core 0`, the PATH order with the bash first, that bash as `ProgramArguments[0]`, `HOME` equal to the `dscl` stub's answer, no `~/Library/LaunchAgents` path); the `launchctl` argv for `bootstrap` and `bootout`; the reaper's selection; the `mkdir` lock's acquire, contend and stale reclaim (a dead pid, and a live pid with another start time); `kill-server` on every terminal state; each refusal; "without the switch, darwin refuses `darwin-arm-unproven`"; "the agent's spawn of `ccrc` carries no `CCRC_DARWIN_AUTH_ARM`".
 - [ ] **Step 2: Green.**
@@ -1394,7 +1487,7 @@ The operator reviews spec §3.10 (the darwin arm) and §16.1 (its three test lay
 
 ### Task A36: layer 2, a real launchd job on a macOS runner, behind a CI-only gate (D-5558) — W3d
 
-**Routing:** band 3, **two reviewers** (the guard against a job in the operator's real gui domain). **Lane:** server (CI only). **Needs:** A35. **Gates:** OA5.
+**Routing:** band 3, **two reviewers** (the guard against a job in the operator's real gui domain). **Lane:** server (CI only). **Needs:** A35. **Gates:** OA5; #402/#627 and #623 (`.github/workflows/ci.yml`; #402/#627 also `server/test/ci-pipeline.test.ts`).
 
 **Files:** Create `server/test/ccrc-account-darwin-launchd.test.ts` and `server/test/darwin-launchd-gate.test.ts`. Modify `.github/workflows/ci.yml` (the `test-macos` leg's step `env` gains `CCRC_REAL_LAUNCHD_TEST=1`) and `server/test/ci-pipeline.test.ts`.
 
@@ -1419,11 +1512,11 @@ The operator reviews spec §3.10 (the darwin arm) and §16.1 (its three test lay
 
 ### OA3: layer 3, the operator's check in a disposable macOS VM (operator act, no PR)
 
-Run by the operator, once before A37 and again after any change to the arm, in a **disposable macOS VM on their Mac** (Tart or UTM). Nothing is installed into the operator's real home, and no session or coordinator drives it (spec §16.1). A fresh `ccrc install` in local fleet mode inside the VM, with the gate armed, `CCRC_DARWIN_AUTH_ARM=1` in the VM's server environment, and a **scratch Anthropic account**: a real `claude setup-token` and `claude auth login` through the arm on two scratch lanes (`mac-scratch-1`, `mac-scratch-2`) with two config dirs. It **measures the keychain item's service and account naming per config dir**, and so decides between `keychain-shared` and per-lane delete-and-verify. Then remove each lane and check that its item is gone (`security find-generic-password` finds nothing), then Discard both. It ends with `launchctl print gui/<uid>` inside the VM showing no `app.ccrc.*` job, and then the VM is deleted. The record (naming, the ssh-only behaviour, the evidence from the audit rows and lane-state files) goes under D-5557 below.
+Run by the operator, once before A37 and again after any change to the arm, in a **disposable macOS VM on their Mac** (Tart or UTM). Nothing is installed into the operator's real home, and no session or coordinator drives it (spec §16.1). A fresh `ccrc install` in local fleet mode inside the VM, with the gate armed, `CCRC_DARWIN_AUTH_ARM=1` in the VM's server environment, and a **scratch Anthropic account**: a real `claude setup-token` and `claude auth login` through the arm on two scratch lanes (`mac-scratch-1`, `mac-scratch-2`) with two config dirs. It **measures the keychain item's service and account naming per config dir**, and so decides between `keychain-shared` and per-lane delete-and-verify. Then remove each lane and check that its item is gone (`security find-generic-password` finds nothing), then Discard both. It also measures **whether the Codex runtime builds on darwin** (spec §3.10): `ccrc install`'s Codex venv step in the VM, recorded as built (with its Python and the runtime's version) or as the exact failure, which decides whether a darwin node offers OpenAI lanes or refuses `codex-runtime-absent` with that sentence. It ends with `launchctl print gui/<uid>` inside the VM showing no `app.ccrc.*` job, and then the VM is deleted. The record (naming, the ssh-only behaviour, the Codex runtime's result, the evidence from the audit rows and lane-state files) goes under D-5557 below.
 
 ### Task A37: the darwin arm switched on, with the keychain branch OA3 chose (D-5557) — W3d
 
-**Routing:** band 3, **two reviewers**. **Lane:** AGENT-FIRST (and the PWA bundle). **Needs:** A35, A36. **Gates:** OA5; three consecutive green daily runs of A36's file (named by run id in the PR body); OA3's record; #627.
+**Routing:** band 3, **two reviewers**. **Lane:** AGENT-FIRST (and the PWA bundle). **Needs:** A35, A36. **Gates:** OA5; three consecutive green daily runs of A36's file (named by run id in the PR body); OA3's record; #402/#627.
 
 **Files:** Modify `ccd/ccrc` (the switch deleted; the keychain branch), `pwa/src/accounts/MethodFrame.tsx` and `pwa/src/fleet/accountWords.ts` (the darwin reasons in the radio, spec §12.6) and `server/test/ccrc-account-darwin.test.ts`. Create `pwa/test/darwin-reasons.test.tsx`.
 
@@ -1465,6 +1558,8 @@ Each cell checks:
 - no secret, code or key anywhere on screen except the masked forms;
 - nothing moved that the task did not intend.
 
+**The offline row.** Beside the sixteen cells, each PWA PR records one offline cell per skin at 360 and at 1280 (four in all, dark): the task's surfaces read from the snapshot with their ages, every act refused with its sentence and the read-line, and no secret or code field shown (spec §12.5).
+
 Mark it ✓, or write the defect and its fix.
 
 ## Deviations and decisions
@@ -1475,17 +1570,17 @@ Mark it ✓, or write the defect and its fix.
 
 - **D-5511** — `account-writes-operator-only` (Tasks A7, A12, A14, A17, A21, A29, A31, A33): every account route needs the gate's `session` verdict, an armed gate and an https or loopback `cfg.origin`. A box token is never accepted, so `ccrc-api`, every session and every coordinator get a 401 on the HTTP path. A dark gate refuses every account route with `auth-off`, with no loopback exception, because a dark loopback box is the default deployment. A plain-HTTP non-loopback origin refuses every write with `insecure-origin`, derived only from `cfg.origin` while the gate is armed, never from `Host`, `cfg.host` or `X-Forwarded-*`. One chokepoint, `accountGate` (`server/src/accounts/gate.ts`), applies all of this, plus `Cache-Control: no-store` and the cap word's refusing no-evidence polarity (`501 unsupported`). `GET /api/accounts` keeps today's answer for every reader and adds `lanes` and `connect` for the session verdict only. This guards the HTTP path only: same-uid processes on the fleet host are inside the trust boundary for secrets at rest.
 - **D-5512** — `account-step-up` (Tasks A5, A6, A17, A21, A31, A33): adding a credential, starting a sign-in, rotating, changing a method, raising a minted key's monthly commitment, removing or discarding a lane, and removing the management key each need a step-up from the last five minutes **on the same session**. Step-up has its own routes (`POST /api/auth/step-up/start|finish|passphrase`), because the login doors mint a session. Finishing stamps `SessionRecord.assertedAt` on the requesting session only, mints nothing, sets no cookie and keeps `generation`. Challenges use the `step-up` purpose, bound to the requester's `idHash`. The passphrase arm is refused `passkey-enrolled` whenever a passkey is enrolled. `StepUpRateLimiter` is separate from `LoginRateLimiter`, and exhausting it locks that session's step-up (`step-up-locked`, an audit row). The PWA's **Confirm it's you** is an explicit button whose tap calls `navigator.credentials.get` before any `await`, and nothing is retried on its own. The Settings spec's D8 guard on passkey Revoke and Add uses these routes.
-- **D-5513** — `account-secret-one-path` (Tasks A8, A10, A11, A16, A17, A18, A26, A28, A30, A32): a secret is typed once into a component's local state, sent once in an HTTPS POST, held by the server for that request with no reference kept, carried as `stdinB64` on the typed `account` op, and written by the verb as a 0600 file after the verb has refused control bytes and validated it. It is never echoed, stored in coord.db, put in browser storage, logged, mailed, pushed, put in the feed or carried on a websocket, and no child program's output reaches the browser. Keys born on the box (minted, PKCE) go from curl through `jq` to the temp file and never travel. `LimitCORE=0` on both units. **Transcripts, the drawer and the feed are masked** (`server/src/accounts/mask.ts`): the credential shapes in `CREDENTIAL_MASKS`, and every lane secret by exact bytes through a fingerprint that is `HMAC-SHA256(box token, "ccrc-secret-fp-v1\0" ‖ secret)`, computed on the box by the verbs (which hold both), answered by every secret-writing sub and by `roster --json`, kept in the server-only `secret_fingerprints` table with the token's generation, and re-keyed by a `roster` sub after a rotation. A drawer chunk ending inside a candidate run holds it back for up to 50 ms. **Backups:** on darwin the verbs exclude `~/.cc-secrets` and `~/.ccrc/auth-scratch` from Time Machine, and `ccrc doctor` checks the exclusions and FileVault; on Linux, doctor states the operator's answer about provider-level backups and snapshots. Any image taken while a credential existed holds it, and spec §3.11's steps apply to a leaked one.
-- **D-5514** — `oauth-code-relayed-once` (Tasks A20, A21, A22, A28, A29): the one-time code of the Anthropic and Codex sign-ins, and OpenRouter's PKCE code, is sent once by the session that started the attempt, shape-checked at the route, byte-checked again by the verb, and written once (into the helper's FIFO, or into the PKCE exchange's stdin). It is never stored, logged or put in an audit row as a value; the audit records `auth-code ok` or `auth-code refused <code>`. One code per attempt (`code-already-sent`). `expiresAt` is the earlier of the provider's expiry and the helper's 600 s bound, and is the only source of every countdown.
+- **D-5513** — `account-secret-one-path` (Tasks A8, A10, A11, A16, A17, A18, A26, A28, A30, A32): a secret is typed once into a component's local state, sent once in an HTTPS POST, held by the server for that request with no reference kept, carried as `stdinB64` on the typed `account` op, and written by the verb as a 0600 file after the verb has refused control bytes and validated it. It is never echoed, stored in coord.db, put in browser storage, logged, mailed, pushed, put in the feed or carried on a websocket, and no child program's output reaches the browser. Keys born on the box (minted, PKCE) go from curl through `jq` to the temp file and never travel. `LimitCORE=0` on both units. **Transcripts, the drawer and the feed are masked** (`server/src/accounts/mask.ts`): the credential shapes in `CREDENTIAL_MASKS`, and every lane secret by exact bytes through a fingerprint that is `HMAC-SHA256(box token, "ccrc-secret-fp-v1\0" ‖ secret)`, computed on the box by the verbs (which hold both), answered by every secret-writing sub and by `roster --json`, kept in the server-only `secret_fingerprints` table with the token's generation, and re-keyed by a `roster` sub after a rotation. A drawer chunk ending inside a candidate run holds it back for up to 50 ms. The exact-bytes check fails closed: a frame's runs are checked in chunks of 256, and past a hard ceiling the rest of the frame is replaced by a fixed too-large notice; no run is passed through unchecked. **Backups:** on darwin the verbs exclude `~/.cc-secrets` and `~/.ccrc/auth-scratch` from Time Machine, and `ccrc doctor` checks the exclusions and FileVault; on Linux, doctor states the operator's answer about provider-level backups and snapshots. Any image taken while a credential existed holds it, and spec §3.11's steps apply to a leaked one.
+- **D-5514** — `oauth-code-relayed-once` (Tasks A20, A21, A22, A25, A28, A29, A38): the one-time code of the Anthropic and Codex sign-ins, and OpenRouter's PKCE code, is sent once by the session that started the attempt, shape-checked at the route, byte-checked again by the verb, and written once (into the helper's FIFO, or into the PKCE exchange's stdin). It is never stored, logged or put in an audit row as a value; the audit records `auth-code ok` or `auth-code refused <code>`. One code per attempt (`code-already-sent`). `expiresAt` is the earlier of the provider's expiry and the helper's 600 s bound, and is the only source of every countdown; when the server's attempt reaches it, the server issues `auth-cancel`. A re-authentication of an existing lane (Sign in again, Mint a new token, Connect again) is the same relay into scratch, installed under the lane lock only after it passes, with the old credential kept until then.
 - **D-5515** — `auth-private-socket` (Tasks A20, A35): a sign-in runs as the fleet user, never inside an operator session, detached as a transient service (`systemd-run --user --unit=ccrc-auth-<id>-<attempt8> --collect` with `RuntimeMaxSec=660` and `MemoryMax=512M`; a transient launchd job on darwin), returning as soon as the status file reads `starting` with the server's `attemptId`, in under 5 s. The pane methods take a pane on a per-lane private tmux socket, `-L ccrc-auth-<id>`, inside that unit, which the agent's tmux grant, `ptyOpen` and the drawer cannot reach. Every terminal state, the reaper and `remove` run `tmux -L ccrc-auth-<id> kill-server` and delete `auth-scratch/<id>`.
 - **D-5516** — `account-audit` (Tasks A7, A17 and every task that adds an act): the session-only `account_events` table `{id, at, actor, act, laneId, provider, method?, outcome, code?, fleetIdentity}`, with `actor` a device label plus 8 hex characters of `idHash`, never an IP. The act, outcome and code vocabularies are closed, in `shared/api.ts`. No secret, code, URL, key hint, key hash or email is ever in a row; a minted key's name may be. Rows are kept 365 days. v1 writes the table and ships no screen to read it.
-- **D-5517** — `account-state-words` (Tasks A1, A2, A4, A11, A12): one state word per lane, from seven: Off, Signed out, Rate-limited, Expiring, Signed in, Inconclusive and Not checked, in that precedence, each derived on the server or in L0 `shared/accounts.ts` from the file its row names, each with its source and age. An absent lane-state file is Not checked; an unreadable one is Inconclusive with its reason; neither is ever Signed in. **Ruled 2026-10-18 (the mockups' first visual call, as mocked):** Signed in's `●` is `--status-busy` with no glow, and its word stays `--ink-primary`. On a Refined card, Signed out takes a 2px `--ink-primary` rail on `--bg-raised`; in Instrument's table it takes no rail, because the tint plus the `--accent` rail is the selected row's, and the word moves to the group header. No colour token is introduced. The lane-state file is `~/.cc-sessions/.accounts/<id>.json`, 0600, on the agent's read roots, written by every account verb and `ccd-account-health`, display only and never authority for anything that touches a secret. `RosterWire` carries `provider`, `kind`, `method`, `telemetry` and `managed`, each absent when the roster does not say.
-- **D-5518** — `account-post-add-convergence` (Tasks A11–A16, A20): after an add, `check` runs one probe turn (the lane's first run), then seeds `hasCompletedOnboarding` and the theme, copies only the trust flags the upstream or home lane already accepted, re-reads and records `seedVerifiedAt` after `lastRunAt`, all in one verb with no run between. If OA1 measures that the probe does not create `.claude.json`, a headless first run precedes the check. `enable` refuses `not-ready` unless the lane state records a credential, a seed verified after the last run and a last check of `ok`; `--force` is CLI-only. `ccrc install` and `ccrc update` backfill a lane-state file for every existing lane ("Check it once to turn it on"). Every mutating sub returns the roster with `fleetIdentity`; `reloadRoster` refuses another fleet's. `ccd supervise` re-reads `accounts.sh` on a fingerprint change, with no restart and no new actor. One act per lane (`flock`, or the darwin `mkdir` lock), TERM traps, the temp sweep, SIGTERM → SIGKILL on a sub's timeout, reconcile after any error or timeout, the outcome-unknown state that never retries into `duplicate-id`, and one-tap Discard for a lane that was never enabled and has no sessions.
+- **D-5517** — `account-state-words` (Tasks A1, A2, A4, A11, A12): one state word per lane, from seven: Off, Signed out, Rate-limited, Expiring, Signed in, Inconclusive and Not checked, in that precedence, each derived on the server or in L0 `shared/accounts.ts` from the file its row names, each with its source and age. Expiring has three sources (a minted token's `mintedAt` + 365 d under 30 d away, an OpenRouter key at 10% or less of its limit, a minted key's `keyExpiresAt` under 14 d away) and Rate-limited a fourth beside the 5h and 7d windows (`limit_remaining <= 0`); `mintedAt` is written by every setup-token install and cleared by a paste. An absent lane-state file is Not checked; an unreadable one is Inconclusive with its reason; neither is ever Signed in. **Ruled 2026-10-18 (the mockups' first visual call, as mocked):** Signed in's `●` is `--status-busy` with no glow, and its word stays `--ink-primary`. On a Refined card, Signed out takes a 2px `--ink-primary` rail on `--bg-raised`; in Instrument's table it takes no rail, because the tint plus the `--accent` rail is the selected row's, and the word moves to the group header. No colour token is introduced. The lane-state file is `~/.cc-sessions/.accounts/<id>.json`, 0600, on the agent's read roots, written by every account verb and `ccd-account-health`, display only and never authority for anything that touches a secret. `RosterWire` carries `provider`, `kind`, `method`, `telemetry` and `managed`, each absent when the roster does not say.
+- **D-5518** — `account-post-add-convergence` (Tasks A11–A16, A20): after an add, `check` runs one probe turn (the lane's first run), then seeds `hasCompletedOnboarding` and the theme, copies only the trust flags the upstream or home lane already accepted, re-reads and records `seedVerifiedAt` after `lastRunAt`, all in one verb with no run between. If OA1 measures that the probe does not create `.claude.json`, a headless first run precedes the check. `enable` refuses `not-ready` unless the lane state records a credential, a seed verified after the last run and a last check of `ok`; `--force` is CLI-only. `ccrc install` and `ccrc update` backfill a lane-state file for every existing lane ("Check it once to turn it on") and seed every lane whose onboarding flag is missing. Remove's pre-check is `remove --dry-run`, measured on the box. Every mutating sub returns the roster with `fleetIdentity`; `reloadRoster` refuses another fleet's. `ccd supervise` re-reads `accounts.sh` on a fingerprint change, with no restart and no new actor. One act per lane (`flock`, or the darwin `mkdir` lock), TERM traps, the temp sweep, SIGTERM → SIGKILL on a sub's timeout, reconcile after any error or timeout, the outcome-unknown state that never retries into `duplicate-id`, and one-tap Discard for a lane that was never enabled and has no sessions.
 - **D-5519** — `codex-lane-add` (Tasks A24, A25): `ccrc account add --provider openai` creates a ccrc-owned Codex lane: a free port pair, a fresh `authDir` per creation (`.local/share/ccrc/codex/<id>-<rand6>`, `authdir-occupied` if it exists), the codex row off, convergence and `models init codex`; `codex-runtime-absent` rather than building a runtime under a sheet. The UI's remove deletes the `authDir` by default.
 - **D-5520** — `openrouter-validate-first` (Tasks A26, A27, A28): an OpenRouter key is validated on the fleet box before anything is written: the byte check, then `GET /api/v1/key` with the bearer header on `curl -H @-` (never a config grammar, never argv), `--proto =https --max-redirs 0 --max-time 10`. A 401 writes nothing; any other failure writes nothing; there is no "save anyway". A key reporting `is_management_key` or `is_provisioning_key` true is refused `wrong-key-kind`, so a management key can never be sourced into a session. The key hint is computed by the verb at write time.
 - **D-5521** — `key-lane-telemetry` (Task A26): openrouter lanes write `telemetry: "openrouter"`, compatible lanes stop writing `anthropic`, and an OpenRouter lane shows one credit meter (or a usage line when the key has no limit), refreshed by validation and `check` only in v1.
 - **D-5522** — `accounts-door-and-sign-in-split` (Task A18): one **Add account** door per width: the lane list's last row on a phone (both skins), the `PageScaffold` action in Refined and the list column's header action in Instrument on desktop. It narrows in place with its reason (no `account-v2`, gate dark, insecure origin) and never vanishes. No palette command and no hint key (`a` is #626's "Go to Accounts"). The screen is named **Accounts** and holds lanes only. The move of the PWA's own sign-in to Settings › Security is **D-5508**, the Settings spec's one definition, cited here and not redefined; `AccountsScreen.tsx` is edited by F11, then Settings R2, then this plan.
-- **D-5552** — `openrouter-pkce-on-box` (Tasks A28, A29): OpenRouter's PKCE connect runs its verifier and its exchange on the fleet box. `auth-start` draws the verifier into `auth-scratch/<id>/pkce` (0600, directory 0700, outside the agent's read roots) and answers the authorisation URL, which carries only the S256 challenge and no `callback_url`; the server checks its exact shape and serves it from the attempt's memory, never from the status file. The default arm is a code arm with no redirect, the shape of the Anthropic sign-in that already works from an installed iPhone PWA. The exchange sends `{code, code_verifier, code_challenge_method}` on curl's stdin, deletes the verifier before reading the answer, validates the new key (D-5520) and answers `exchange-refused` on a 4xx. A key made but not installed is deleted only on an exact, in-window name match over the whole paged key list, when a management key exists; otherwise the operator is told its name to delete by hand. Not closed: a code approved from someone else's account; the result frame shows the key's label and credit with Discard.
+- **D-5552** — `openrouter-pkce-on-box` (Tasks A28, A29): OpenRouter's PKCE connect runs its verifier and its exchange on the fleet box. `auth-start` draws the verifier into `auth-scratch/<id>/pkce` (0600, directory 0700, outside the agent's read roots) and answers the authorisation URL, which carries only the S256 challenge and no `callback_url`; the server checks its exact shape and serves it from the attempt's memory, never from the status file. The default arm is a code arm with no redirect, the shape of the Anthropic sign-in that already works from an installed iPhone PWA. The verifier never outlives its attempt: `auth-cancel` deletes it, every account verb first sweeps PKCE scratch past its `expiresAt`, and the server's attempt expiry issues `auth-cancel`. The exchange sends `{code, code_verifier, code_challenge_method}` on curl's stdin, deletes the verifier before reading the answer, validates the new key (D-5520) and answers `exchange-refused` on a 4xx. A key made but not installed is deleted only on an exact, in-window name match over the whole paged key list, when a management key exists; otherwise the operator is told its name to delete by hand. Not closed: a code approved from someone else's account; the result frame shows the key's label and credit with Discard.
 - **D-5553** — `openrouter-pkce-callback-later` (Task A29): the callback arm is not built. Its bounds are kept for the day the operator asks for it after using the code arm: offered only at ≥900 outside standalone display mode with an https `cfg.origin`; installs only for the starting session, otherwise shows the code to copy; and `ccrc expose`'s proxy config skips access logging for `/connect/*`. Until then no `/connect/*` route exists and the URL never carries `callback_url`.
 - **D-5554** — `openrouter-management-key-custody` (Tasks A9, A30, A31): one management key per box, at `~/.cc-secrets/openrouter-management.key`, 0600, holding the bare key (a bare-value arm of the writer; no `=`, no `export`), never sourced, never in the roster, a lane-state file, an agent read root, coord.db, a log, an answer, the server or the browser. One reader streams it into `curl -H @-`, called only by the mint, rotate, limit, minted-remove, PKCE-cleanup and `check` paths; one destination, `https://openrouter.ai/api/v1/keys…` and `…/key`, with no redirects. **Install and replace are CLI-only**, on the fleet host's stdin, with validation, a required expiry (stated with `--expires` when OpenRouter does not report one), and a refusal on darwin (`management-key-darwin`). The monthly ceiling is set at install; the browser may only lower it, and only the CLI raises it. Remove (step-up) deletes the file and leaves minted keys working. A non-secret state file, `~/.cc-sessions/.accounts/_openrouter-management.json`, carries what the screen shows and the pending-deletes ledger. The deny rules name the file for reads, and `CLAUDE.md`'s SAFETY lines name it. The threat model (spec §8.7's table) and the compromise steps (spec §3.11) are part of this decision.
 - **D-5555** — `openrouter-mint-sub-keys` (Tasks A32, A33): a minted key always carries a limit, under a monthly ceiling over normalised commitments (never and monthly × 1, weekly × 5, daily × 31), counted from OpenRouter's own paged key list for the hashes ccrc recorded, its retired slots and the pending-deletes ledger, under the lane lock and a box-wide lock. A shorter reset is a raise. The name is fixed (`ccrc <lane-id> <yyyy-mm-dd>`), and Expires defaults to a year (Never is an explicit choice; the field is hidden if OpenRouter does not accept it). A failure after the create deletes the key by hash, and only a failed delete enters the ledger. Rotation keeps one retired slot; Retire disables, then deletes, with a danger confirm while older sessions remain. Remove and discard delete the minted and retired keys at OpenRouter, and a failed delete keeps counting and is retried. Off is not revoke. PKCE keys carry no limit and are outside the ceiling.
@@ -1499,10 +1594,10 @@ Issued and unused: 5559.
 
 These are decisions with no number yet: the spec's N1 and N2, and four this plan found. Each takes a number from `POST /api/ledger/deviations` before the task that implements it is dispatched, and the PR that implements it replaces the label with the number here and in the spec, in the same act.
 
-- **N1** — `account-cli-deny` (Task A9): deny rules and a PreToolUse hook on every fleet session for the mutating `ccrc account` subs, `openrouter-management` (with `ceiling` by name), `ccd-account-auth`, `ccd account-pane`, Read and Bash of the secret and scratch paths and `agent.env`, writes under `.auth/` and `.accounts/`, and best-effort `env` and `printenv`. **This plan's reading:** the spec's "the same managed deny file" cannot also be "applied to every fleet session" on main, where the child file reaches `.child` rows only and `--settings` takes one value. So the rules live in a second managed file, `~/.cc-sessions/account-deny.settings.json`, passed to every row; a child gets one merged `--settings` whose recorded `.deny-settings` digest stays the child file's. CF15's top-level byte-identity pin becomes "differs only by the account file". #646's forbidden-verb deny is extended to every session for these verbs, and the classifier marks them forbidden, so no approval can rule them. An accident guard, evadable by `bash -c` with an assembled string or another interpreter, and tested as such. Q8's ruling is kept by this stronger means.
+- **N1** — `account-cli-deny` (Task A9): deny rules and a PreToolUse hook on every fleet session for the mutating `ccrc account` subs, `openrouter-management` (with `ceiling` by name), `ccd-account-auth`, `ccd account-pane`, Read and Bash of the secret and scratch paths and `agent.env`, writes under `.auth/` and `.accounts/`, and best-effort `env` and `printenv`. **This plan's reading:** the spec's "the same managed deny file" cannot also be "applied to every fleet session" on main, where the child file reaches `.child` rows only and `--settings` takes one value. So the rules live in a second managed file, `~/.cc-sessions/account-deny.settings.json`, passed to every row in exactly one `--settings`: a row with none gets the file; a row whose record already has `--settings '<json>'` (the workflow keys, on any routed row) and every `.child` row get one merged inline value, whose `permissions.deny` is the **union** of every side's array (jq's `*` would replace one array with the other, dropping `CHILD_DENY_RULES`). A child's recorded `.deny-settings` digest stays the child file's. CF15's top-level byte-identity pin becomes "differs only by the account rules inside its one `--settings`". #646's forbidden-verb deny is extended to every session for these verbs, and the classifier marks them forbidden, so no approval can rule them. An accident guard, evadable by `bash -c` with an assembled string or another interpreter, and tested as such. Q8's ruling is kept by this stronger means.
 - **N2** — `auth-url-allowlist` (Task A21): what the operator is asked to open is validated by the server: the status file must echo the server's `attemptId`; the URL must be https with a host in the method's exact allowlist (from OA1's measurement); the `userCode` must match its measured shape; anything else ends the attempt with `auth-url-untrusted`, an audit row and no link. The host label is rendered from the URL the server parsed. PKCE's URL never comes from the status file (D-5552).
 - **N3** — `remove-counts-sleeping-sessions` (Tasks A16, A19): `_acct_live` counts a session live only by its tmux pane, and `remove` rehomes every row naming the lane, so a hibernated session (D-5242) on a removed lane would be rehomed onto upstream and wake there without its place in the conversation. `remove` counts hibernated rows and refuses `sleeping-sessions` with their ids; the CLI's `--rehome-sleeping` keeps today's behaviour, and no route sends it. The remove sheet lists them apart and offers **Wake and move** (the existing ensure route, inside the fleet-wide wake budget, then the sequential mover). Discard refuses a lane with a sleeping session too.
-- **N4** — `account-caps-per-wave` (Tasks A16, A20, A24, A26, A28, A30, A32): the spec names one cap word, `account-v2`, "advertised once G1–G5, G16–G20 and the agent op ship", but G2 (the Codex arm) is in W2c, so one word would keep W2a's working subs dark until W2c. So `account-v2` is advertised by A16 for its subs, and each later wave adds its own word to `ACCOUNT_CAPS`: `account-auth-v1` (A20), `account-codex-v1` (A24), `account-openrouter-v2` (A26), `account-or-pkce-v1` (A28), `account-or-management-v1` (A30), `account-or-mint-v1` (A32). The door, each provider and each method narrow in place by the word they need. `account-v1` stays as the wave-1 marker.
+- **N4** — `account-caps-per-wave` (Tasks A16, A20, A24, A26, A28, A30, A32): the spec names one cap word, `account-v2`, "advertised once G1–G5, G16–G20 and the agent op ship", but G2 (the Codex arm) is in W2c, so one word would keep W2a's working subs dark until W2c. So `account-v2` is advertised by A16 for its subs, after G1 (A13), G3 (A15, which A16 needs) and G4–G5 (A16 itself), and **without G2 only**: this departure is G2's alone, and each later wave adds its own word to `ACCOUNT_CAPS`: `account-auth-v1` (A20), `account-codex-v1` (A24), `account-openrouter-v2` (A26), `account-or-pkce-v1` (A28), `account-or-management-v1` (A30), `account-or-mint-v1` (A32). The door, each provider and each method narrow in place by the word they need. `account-v1` stays as the wave-1 marker.
 - **N5** — `sign-out-act` (Tasks A20, A22, A23): the spec uses a lane sign-out in three places (the result frame's "Sign this lane out and start again", the switch's "Sign the old sign-in out", and remove), but its route table names no sub for the first two. It is `POST /api/accounts/:id/credential {signOut: true}` (step-up), reaching `ccrc account credential --sign-out`, which runs `claude auth logout` in the lane's config dir (and on darwin, after A37, deletes and verifies the lane's keychain item).
 - **N6** — `revoke-ack-route` (Tasks A17, A19): the `revoke-acknowledged` act (spec §3.6) has no route, and a removed lane has no `:id` left to post to. It is `POST /api/accounts/revoke-ack {laneId, kind}`, session-only and outside `/api/accounts/:id`, which writes one audit row with no value and calls no op.
 
@@ -1512,9 +1607,30 @@ Each record is written by the act that measures it, before the tasks it gates ar
 - **N1, the rig check** (A9 Step 4b): per Claude Code version, each listed command refused without a prompt in bypass mode.
 - **OA1** (N2, D-5518): the sign-in hosts and code shapes; `claude auth logout`'s server-side effect; a live session after a logout; the Bash-tool env strip; whether the first check creates `.claude.json`.
 - **OA2** (D-5552, D-5554, D-5555): the headless code display; `expires_at` on create and on a management key; self-delete; minted keys outliving their management key.
-- **A34** (D-5558): the hosted runner's `gui/<uid>` domain, and the ssh-only bootstrap error.
-- **OA3** (D-5557): the keychain item's naming per config dir, and the VM's leftovers check.
+- **A34b** (D-5558): the hosted runner's `gui/<uid>` domain, and the ssh-only bootstrap error, from a dispatch on `main` after A34a merges.
+- **OA3** (D-5557): the keychain item's naming per config dir, whether the Codex runtime builds on darwin, and the VM's leftovers check.
+- **#402/#627 and the in-flight table** (§In flight): re-measured with `gh pr view --json files` for every open PR at rev 1.
 
 ## Review log
 
-None yet. The docs PR (A0) is reviewed by two independent reviewers, one for security and one for feasibility, before the operator is asked to approve it.
+**Rev 0 → rev 1 (2026-10-18), one adversarial review of rev 0 against the spec at `origin/main`, the tree and the open PRs. Verdict: needs revision (3 high, 6 medium, 6 low). Every finding was taken.**
+
+| Severity | Finding | What rev 1 does |
+|---|---|---|
+| high | A9's planned merge `$route * $child * $account` replaces the child's `permissions.deny` array with the account one (jq's `*` replaces arrays), and a routed top-level row that already carries `--settings '<json>'` (the workflow keys) would get a second `--settings`, losing one of them | A9 builds one `--settings` for every row, with the deny arrays joined (`… \| .permissions.deny = ([$r, $c, $a] \| map(.permissions.deny // []) \| add \| unique)`), routed top-level rows included; red cases "a child's merged deny contains every CHILD_DENY_RULES and ACCOUNT_DENY_RULES entry" and "a routed top-level row keeps its workflow keys and gains the account rules in one `--settings`"; mutants "plain `*` merge", "a second `--settings` on a routed top-level row", "merge on `.child` only"; N1's definition says so |
+| high | Re-authenticating an existing lane had no task: Sign in again (Anthropic, Codex), Mint a new token / Replace token (mint), Replace key by Connect again | A20 gains the same-method re-auth arms (scratch, then `credential` under the lane lock, the old file kept until the probe passes) and `ccrc-account-reauth.test.ts`; A24 the Codex arm; **new Task A38** (W2b, after A23) ships Sign in again and Mint a new token with step-up, the restart list, the revoke item and a fresh check; A25 adds Codex's Sign in again; A29 adds Replace key by Connect again |
+| high | Expiring was unreachable for minted tokens: nothing wrote `mintedAt`, and no test covered spec §4.1's thresholds or Rate-limited from `limit_remaining` | A20 writes `mintedAt` on every setup-token install (a paste clears it); A12 extends `stateWordFor` to every Expiring and Rate-limited source with edge tests and a mutant per threshold; A38 ships the Expiring (minted token) card; A27 the Rate-limited (credit) and Expiring (credit) cards with Open OpenRouter credits and Switch lane off |
+| medium | The gate table was stale (#647, #650, #652, #623 missing), A34 and A36 edited `ci.yml` and `ci-pipeline.test.ts` ungated, and the rule for `shared/api.ts`, `server.ts` and `single-definition.test.ts` was applied inconsistently | re-measured every open PR; rows for #647, #650 (merged during rev 1), #652, #623 and #651; one stated rule (those three files are shared and append-only, absorbed by merge), so A1, A5, A7, A12, A14, A17, A21, A29, A31, A33 drop their #397 gate and A10 keeps #397 and gains #652 for `sessionws.ts`; A34 and A36 gated on #402/#627 and #623; #646 recorded as merged and its gates lifted |
+| medium | A34 dispatched a `workflow_dispatch` workflow from its own branch, which GitHub does not allow before the file is on the default branch | split into A34a (the workflow, its pin, the record "not yet run") and A34b (dispatched from `main`, the run id and result recorded in a docs-only PR); A35 needs A34b |
+| medium | The PKCE verifier could outlive its attempt (no helper, no unit to delete it) | A28: `auth-cancel` deletes it, every account verb sweeps PKCE scratch past `expiresAt`, the server's expiry issues `auth-cancel` (A21, A29); red cases and mutants for cancel and expiry |
+| medium | A10's 256-run cap said nothing of the runs past it, so a `compatible` key could pass unmasked | the frame is checked in 256-run chunks, and past a hard ceiling the rest is replaced by a fixed notice; red case at run 300 and the ceiling, mutants "pass runs past the cap" and "send the rest unmasked" |
+| medium | Remove's pre-check "measured on the box" had no source | A16 adds `remove --dry-run` (no lock, no change, the measurements with `fleetIdentity`); A17's `{mode:'check'}` reaches it with no step-up; A19 reads it at open and after every Move |
+| medium | Spec §12.5 (offline) and §12.4's announcements had no task | A18: every act refused offline with its sentence and the read-line, no secret field offline, `role="status"` for steps and `role="alert"` for terminal states; A22: the offline sign-in-in-progress sentence from the last-known `expiresAt`, no code field offline; §Acceptance gains an offline row |
+| low | The canary missed the private socket's scrollback, the PKCE code and OpenRouter paste | A20 (every socket's scrollback), A26 (paste and Replace key through the route and the real agent), A29 (`account-canary.test.ts` in Files, the PKCE code) |
+| low | A5's step-up routes did not set `no-store` | added on every answer, refusals included, with a red case and the mutant "`no-store` on success only" |
+| low | Discard's eligibility was checked by the verb only | A17's route refuses `not-discardable` before the op, tested with the verb stubbed |
+| low | A darwin node before A35 would try `systemd-run` | A20 refuses `auth-unsupported-here` (`darwin-arm-absent`) on darwin; A35 replaces it with `darwin-arm-unproven` |
+| low | Smaller owners: `ccrc update`'s seed, the darwin Codex runtime, N4's G3, A30's grep scope, A31's closing line | A13 seeds on `ccrc update` too; OA3 measures the Codex runtime on darwin; A16 now needs A15, so N4 departs for G2 only and says so; A30's grep is scoped to executable code under `ccd/` and `deploy/`; A31 adds "Delete the old one at openrouter.ai ↗ too", conditioned on OA2's self-delete result |
+| low | The operator's "Fix to release notes sounds good!" was credited to #645, which had merged before it; #402 was not named beside #627 | the approval is recorded against #651 (merged as `6b89878e` during rev 1); the gate is named **#402/#627**, whichever merges |
+
+The docs PR is still reviewed by two independent reviewers, one for security and one for feasibility, before the operator is asked to approve the plan.
