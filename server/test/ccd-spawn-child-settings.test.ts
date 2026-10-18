@@ -10,7 +10,7 @@ import { execFileSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, ghContainedEnv, type CcdHarness, toolAdjToken as adj } from './ccdWsHelpers.js';
 import { CHILD_DENY_RULES, CHILD_DENY_PATH_QUALIFIED } from '../../shared/api.js';
 import { FORBIDDEN_CCD_VERBS } from '../src/coord/approvalguard.js';
 import { childShellOf, denySettingsOf, readSessionRecord } from '../src/registry.js';
@@ -40,7 +40,7 @@ const TOP = 'project-a-calm-mesa';
 const denyFile = (): string => path.join(h.home, '.cc-sessions', 'child-deny.settings.json');
 const sha = (p: string): string => crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
 const install = (): void => {
-  execFileSync('bash', [INSTALLER, '--homes'], { env: { ...process.env, HOME: h.home } });
+  execFileSync('bash', [INSTALLER, '--homes'], { env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }) });
 };
 const seed = (id: string, child: boolean): void => {
   h.sh(`_reg_set ${id} wrapper claude
@@ -59,12 +59,13 @@ const spawnBoth = (id: string): string[] => {
   expect(lines).toHaveLength(2);
   return lines.map(composed);
 };
-/** Today's argv for a top-level row, spelled from ccd's own `_resume_env` (`ccd-route-spawn.test.ts`'s rule). */
+/** Today's argv for a top-level row, spelled from ccd's own `_resume_env` and `_tool_adj_env` (D-5241, Linux only)
+ *  (`ccd-route-spawn.test.ts`'s rule). */
 const today = (sidflag: string): string =>
-  `cd '${h.home}' && exec env COLORTERM=truecolor ${h.sh('_resume_env')} '${h.home}/.local/bin/claude'  ${sidflag} --dangerously-skip-permissions`;
+  `cd '${h.home}' && exec env COLORTERM=truecolor ${h.sh('_resume_env')}${adj(h)} '${h.home}/.local/bin/claude'  ${sidflag} --dangerously-skip-permissions`;
 /** A child's argv: today's, plus its temp root and the shell pin in the env, and `--settings` before the id flag. */
 const childLine = (id: string, settings: string, sidflag: string): string =>
-  `cd '${h.home}' && exec env COLORTERM=truecolor ${h.sh('_resume_env')} TMPDIR='${h.home}/.cc-tmp/${id}' `
+  `cd '${h.home}' && exec env COLORTERM=truecolor ${h.sh('_resume_env')}${adj(h)} TMPDIR='${h.home}/.cc-tmp/${id}' `
   + `CLAUDE_CODE_SHELL=/bin/bash '${h.home}/.local/bin/claude' --settings '${settings}' ${sidflag} --dangerously-skip-permissions`;
 
 describe('CHILD_DENY_RULES (spec §6.6)', () => {
@@ -86,7 +87,7 @@ describe('_spawn_start of a row WITHOUT .child is byte-identical to today (plan 
     expect(withFile).toEqual(without);                                    // byte comparison: the file changes nothing
     expect(withFile[0]).toBe(today(`--resume '${UUID}'`));
     expect(withFile[1]).toBe(today(`--session-id '${UUID}'`));
-    for (const l of withFile) { expect(l).not.toContain('--settings'); expect(l).not.toContain('CLAUDE_CODE_SHELL'); }
+    for (const l of withFile) { expect(l).not.toContain('--settings'); expect(l).not.toContain('CLAUDE_CODE_SHELL='); }
     expect(h.reg(TOP, 'deny-settings')).toBeNull();
     expect(h.reg(TOP, 'childshell')).toBeNull();
   });
@@ -182,7 +183,7 @@ describe('a child\'s FIRST spawn, the shell pin\'s absence, and a merge that fai
     h.sh(`${RESUME_DIES} CHILD_SHELL_PIN='${h.home}/no-such-shell'; _spawn_start ${CHILD} resume 2>/dev/null`);
     const lines = h.calls().filter((c) => c.startsWith('tmux new-session')).map(composed);
     expect(lines).toHaveLength(2);
-    for (const l of lines) { expect(l).not.toContain('CLAUDE_CODE_SHELL'); expect(l).toContain(`--settings '${denyFile()}'`); }
+    for (const l of lines) { expect(l).not.toContain('CLAUDE_CODE_SHELL='); expect(l).toContain(`--settings '${denyFile()}'`); }
     expect(h.reg(CHILD, 'childshell')).toBeNull();
     expect(h.reg(CHILD, 'deny-settings')).toBe(sha(denyFile()));
   });
