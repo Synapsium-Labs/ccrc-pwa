@@ -1964,6 +1964,12 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         v0.0.280 (#612) followed, unapplied. STATUS: fleet and server v0.0.279, newest v0.0.280, intent
         dev/auto=stable, backups fleet 169M/server 1217M, disk free fleet 211G/work volume 94G/server 32G, no
         anomalies.
+      - **2026-10-18 16:55 UTC: both boxes moved to v0.0.281 (#605) by the operator's console tap**, fleet first
+        (16:21:04 to 16:22:21), then the server (16:22:33 to 16:23:10); both reports `done`, and both carry their
+        sweep record again (`down: 3` on the fleet, `ok` on the server). Fleet 36 passed, 7 warned, 0 failed;
+        server 27 passed; one backup pruned. v0.0.282 (#606) and v0.0.283 (#607, B2's follow-up) followed,
+        unapplied. STATUS: fleet and server v0.0.281, newest v0.0.283, intent dev/auto=stable, backups fleet
+        170M/server 1331M, disk free fleet 211G/work volume 92G/server 32G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
