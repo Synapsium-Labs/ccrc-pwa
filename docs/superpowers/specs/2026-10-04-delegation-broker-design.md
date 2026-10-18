@@ -76,7 +76,7 @@ has an owner in ccrc; nothing ccrc runs will ever clean one.
 | R4 | The agent retains events until contiguously acknowledged | **Hour-bucketed append-only spool, retained 24 h**; the server owns the cursor; a bucket gone before it was read marks that interval `unmeasured` (§5.3) | The agent can write only under `~/.cc-clips`; size-triggered rotation is not lock-free under concurrent hooks |
 | R5 | `ccd ws-audit --lease-clean` (a flag on `ws-audit`) | A separate read-only verb **`ws-lease-audit`**, its own capability; `lease-clean-v1` is execution only, and `ws-lease-clean` checks `$REG/lease-clean-live` itself (§5.11) | `ws-audit`'s grant and parser are `--session`-only; one token for shadow and live would make shadow tokens executable |
 | R6 | Admission rung 6 for promoted leases (run/session ownership) | Removed — after R1 a lease never has a session. Replaced by **"no linked activity active, and no recent parent use of the tree"** (§5.11) | An adopted tree can be in active use with no process inside it between tool calls |
-| R7 | Additive optional fields on the fleet frame | A **new `delegation` frame type** (§5.8) | Fleet-level facts travel as their own frames (`runs`, `coord`, `divergence`; `shared/api.ts:3724`) |
+| R7 | Additive optional fields on the fleet frame | A **new `delegation` frame type** (§5.8) | Fleet-level facts travel as their own frames (`runs`, `coord`, `divergence`; `shared/api.ts:4005-4014`) |
 | R8 | Stage 4 adoption, stage 5 carriers | **Carriers (`ws-lease-mark`) and the read-only `ws-lease-audit` ship with adoption in stage 4**; a carrier is written when a lease is linked, not when it is adopted (§5.10, §7) | Promotion's first act advances the carrier; adoption's "changed" test and promotion's "dirty" test both need the read-only audit, and the audit needs a carrier |
 | R9 | One level deep; a depth-1 session's delegation as a chip (not approved) | **Proposed:** a programme worker's durable leases nest under the top coordinator labelled "via <worker>"; its live activity is a chip on the worker row (§5.8) | One-level nesting must not hide a durable workspace |
 
@@ -100,7 +100,7 @@ has an owner in ccrc; nothing ccrc runs will ever clean one.
 | The exec surface is `tmux` and `ccd`; `git` is not executable by the server | `agent/src/whitelist.ts:192` |
 | `$REG/<id>.uuid` mirrors the session's CURRENT Claude session UUID; Claude Code rotates it on `/clear` and compaction, and ccd keeps no history | `ccd/ccd:15806-15817` (`_sync_uuid`) |
 | `ws-add` creates a new worktree from the main checkout; it takes no base ref | `ccd/ccd:6906` |
-| `.lifecycle` is already a journal name | `shared/api.ts:7767` (`LC_DIR_NAME`) |
+| `.lifecycle` is already a journal name | `shared/api.ts:8547` (`LC_DIR_NAME`) |
 | Stage markers nothing in the tree writes, absence meaning shadow | `server/src/coord/stall.ts:104`, `:131` |
 
 ### 3.1 What Claude Code provides (measured 2026-10-04, binaries 2.1.281 to 2.1.289)
@@ -244,7 +244,7 @@ no locks, no waiting, no extra forks on the probe path.
 
 **Spool.** Each event is one line appended to `$REG/delegation/spool/<ccd-id>/<YYYYMMDDHH>.spool` (UTC
 hour bucket). Every writer computes the same name; `>>` creates the bucket idempotently; one `write` per
-line, each line under 4 KiB (oversized optional fields are dropped and the line marked `truncated`);
+line, each line under 4 KiB (1008 bytes where bash is not built for glibc Linux, D-5436; oversized optional fields are dropped and the line marked `truncated`);
 the line is built in the hook's existing single `jq` call. ccd creates the directory when it spawns a
 session — the hook never forks `mkdir`; a missing directory means skip. The hook prunes its own buckets
 older than 24 h at most once an hour; it removes nothing outside its own spool directory.
@@ -399,7 +399,7 @@ new row kinds in `nestFleet` and the project card, not `FleetSession`s.
 
 | Counter | Rule |
 |---|---|
-| Programme capacity | unchanged (`ACTIVE_RUN_STATES`, `shared/api.ts:4280`; the daily dispatch cap) |
+| Programme capacity | unchanged (`ACTIVE_RUN_STATES`, `shared/api.ts:4832`; the daily dispatch cap) |
 | Live activity | informational |
 | Leases | informational, by disposition; consume no run slot |
 | Cleanup backlog | pending / refused / unmeasured obligations; own concurrency (1 in stage 6) and health thresholds |

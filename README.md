@@ -6430,9 +6430,9 @@ carrier, adoption, retention, promotion or cleanup. This section records what th
 
 **The path of one fact.** `ccd` creates `~/.cc-sessions/delegation/spool/<id>/` when it spawns a session and lists `delegation-events-v1`
 in `ccd caps`. `session-hook.sh` appends one line per delegation-relevant hook event to that directory's hourly bucket
-`<YYYYMMDDHH>.spool` (a strict UTF-8 JSON line plus LF, under 4096 bytes; a `listing` of git admin-record names rides a Bash call that
-names a worktree, and is the first field dropped to fit). The hook never makes the directory, never prunes outside its own, and keeps
-its own buckets for about 24 hours. The directory of a session that is removed, or never runs again, is not pruned by anything in
+`<YYYYMMDDHH>.spool` (a strict UTF-8 JSON line plus LF, under 4096 bytes on glibc Linux and 1008 elsewhere, D-5436; a `listing` of git admin-record
+names rides a Bash call that names a worktree, and is the first field dropped to fit). The hook never makes the directory, never prunes outside its
+own, and keeps its own buckets for about 24 hours. The directory of a session that is removed, or never runs again, is not pruned by anything in
 this wave. On the server the watcher's delegation lane, once per census cadence and never awaited by the poll, lists each live session's
 directory, reads the buckets as bounded byte ranges (the existing `readFrom` request with an optional `maxBytes` of at most 262144; an
 agent that answers without `dataB64` is unmeasured, never rebuilt from text) and applies them durably in this order: the journal
