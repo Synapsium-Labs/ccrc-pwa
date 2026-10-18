@@ -4356,12 +4356,18 @@ fi
 # A dispatched child (its row carries `$REG/<id>.child`), on the main thread AND in a subagent, never reaches the
 # approval surface and never runs a SAFETY `ccd` verb or `ccrc update` / `ccrc rollback`, in any invocation form:
 # bare, through a path ending `/ccd` or `/ccrc`, env-prefixed, anywhere in an `&&`, `;`, `||` or `|` chain, or inside
-# a `bash -c` / `sh -c` string. Children run with permissions bypassed, so no prompt and no classifier sees these
+# a `bash -c` / `sh -c` string. In this arm the command is read twice, as written and as bash runs it (`norm`: quotes,
+# backslashes and line continuations removed, which only ever denies more), and a verb or `approvals` after a `$VAR`,
+# `${...}`, `$(...)` or backtick program is refused too (`xmatch`; `update`/`rollback` only when the command also names
+# `ccrc`): the security review of Task 14 ran `ccd 'ws-rm' x`, `ccd ws\-rm x`, `C=ccd; $C ws-rm x` and `"${API:?}"
+# approvals` past the plain match. A verb run from a script file, stdin or another interpreter is past any lexical
+# match, an accepted limit (spec §6.1); the classifier escalates it. Children run with permissions bypassed, so no prompt and no classifier sees these
 # calls; this deny does, before the tool runs, and invariant 10 rests on it (spec §6.6), whatever Claude Code's deny
 # matcher takes (Task 15's file names the bare forms only; Task 13 measured that no leading wildcard matched). The
 # approval surface is `approvals` as `ccrc-api`'s FIRST argument (bare, a path, or `"$API"`/`$API`), `/api/approvals`,
 # any `approval-signing` path (the pinned public key's, and the server's private key's on `--role both`) and the
-# verifier; for Write, Edit, MultiEdit and NotebookEdit, a key's or the verifier's path. A child never rules on,
+# verifier; for Write, Edit, MultiEdit and NotebookEdit, a key's or the verifier's path; for Read, Grep and Glob, a
+# signing key's path (a Glob's pattern included). A child never rules on,
 # fetches or forges its own approvals (spec §6.1). A top-level session is untouched: it may still run these verbs
 # after asking the operator.
 #
@@ -4408,6 +4414,15 @@ def fmatch:
   (select(hbt("\n"; WB + "(?:systemctl|systemd-run|kill|pkill|killall)" + NW; "claude-session@|ccrc|tmux")) | "other\ta session unit or the tmux scope"),
   (select(hbt("[\n;&|]"; ">|" + NB + "tee" + NA + "|" + NB + "sed" + SP + "+" + FLAGS + "-i|" + NB + "perl" + SP + "+-" + NS + "*i|" + NB + "mv" + NA + "|" + NB + "cp" + NA + "|" + NB + "ln" + NA + "|" + NB + "truncate" + NA + "|" + NB + "rm" + NA; SENS)) | "other\tan edit to a settings file, a hook or a CLAUDE.md"),
   (select(hbt("[\n;&|]"; WB + "(?:cat|head|tail|less|more|base64|xxd|strings|od|nl|bat)" + NW; CRED)) | "other\tprinting a secret");
+def norm: gsub("\\\\\n"; "") | gsub("\\$(?=[" + $q + "\"])"; "") | gsub("\\\\(?<c>[\\s\\S])"; .c) | gsub("[" + $q + "\"]"; "");
+def EXP: "(?:\\$\\{[^}]*\\}|\\$\\([^)]*\\)|\\$[A-Za-z_][A-Za-z0-9_]*|`[^`]*`)";
+def EXPV: WB + EXP + SP + "+" + FLAGS;
+def xmatch:
+  (("ws-rm", "ws-reap", "ws-archive", "ws-restore", "ws-reclaim", "ws-expire", "ws-collect") as $v
+     | select(test(EXPV + $v + NW)) | "verb\tccd \($v)"),
+  (select(hbt("[;&|]"; EXPV + "ws-gc(?=" + SP + "|$)"; SP + "--prune" + NW)) | "verb\tccd ws-gc --prune"),
+  (select(test(WB + "ccrc" + NW) and test(EXPV + "(?:update|rollback)" + NW)) | "verb\tccrc update or rollback"),
+  (select(test(EXPV + "approvals" + NW)) | "surface\tthe approval surface");
 def edittool: . == "Write" or . == "Edit" or . == "MultiEdit" or . == "NotebookEdit";
 def pathwhy($t):
   first((.file_path, .path, .notebook_path) | select(type == "string")
@@ -4418,18 +4433,26 @@ def pathwhy($t):
 (.tool_name | if type == "string" then . else "" end) as $t
 | (.tool_input | if type == "object" then . else {} end) as $i
 | if $mode == "deny" then
-    (if $t == "Bash" then ($i.command | if type == "string" then first(fmatch | select(startswith("verb\t") or startswith("surface\t"))) // "" else "" end)
+    (if $t == "Bash" then ($i.command | if type == "string" then first((., norm) | (fmatch, xmatch) | select(startswith("verb\t") or startswith("surface\t"))) // "" else "" end)
      elif ($t | edittool) then (first(($i.file_path, $i.notebook_path) | select(type == "string" and test("approval-signing|approval-verify\\.mjs")) | "surface\ta write to the approval surface") // "")
+     elif $t == "Read" or $t == "Grep" or $t == "Glob" then (first(($i.file_path, $i.path, (if $t == "Glob" then $i.pattern else empty end)) | select(type == "string" and test("approval-signing")) | "surface\ta read of a signing key") // "")
      else "" end)
   elif $t == "Bash" then ($i.command | if type == "string" then first(fmatch) // "" else "" end)
   elif ($t | startswith("mcp__")) and any($i | .. | strings; first(fmatch) != null) then "other\tan MCP call naming a forbidden act"
   else ($i | pathwhy($t)) // ""
   end'
+# The prefilter reads a Bash payload with its quotes and backslashes removed (`apf`), and a JSON-escaped backslash-newline
+# first, as `norm` does in the program: `c''cd ws-rm` and `c\cd ws-rm` name `ccd` only once bash has removed them.
+apf=""
 if [[ "$event" == PreToolUse && -n "$id" && -e "$REG/$id.child" \
-      && "$pre_json" != *'"permissionDecision":"deny"'* ]] \
-   && [[ "$payload" == *ccd* || "$payload" == *ccrc* || "$payload" == *approval* ]]; then
+      && "$pre_json" != *'"permissionDecision":"deny"'* ]]; then
+  apf=$payload
+  if [[ "${tool:-}" == Bash && "$apf" == *[\'\"\\]* ]]; then apf=${apf//\\\\\\n/}; apf=${apf//[\'\"\\]/}; fi
+  [[ "$apf" == *ccd* || "$apf" == *ccrc* || "$apf" == *approval* ]] || apf=""
+fi
+if [[ -n "$apf" ]]; then
   case "${tool:-}" in
-    Bash|Write|Edit|MultiEdit|NotebookEdit)
+    Bash|Write|Edit|MultiEdit|NotebookEdit|Read|Grep|Glob)
       afw=$(jq -r --arg q "'" --arg mode deny "$APPROVAL_FORBIDDEN_JQ" <<<"$payload" 2>/dev/null) || afw=""
       areason=""
       case "$afw" in
@@ -4798,6 +4821,10 @@ _apr_call() {   # <args...> -> APR_BODY, APR_CODE from ccrc-api (body on stdout,
   return 0
 }
 # THE TIE AND THE WATCH. `apr_tie` is "" until tied, `-` once given up (ambiguous or unreadable), else the tool_use id.
+# A known limit: a pane answer whose tool_result is written BEFORE the first look (a fast command answered during the
+# request's round trip) leaves no OPEN match, so the hook never ties and runs to its window; its late output is ignored,
+# and the cost is a stale held row and one coordinator mail. Counting an already-resolved match would end the wait on
+# an earlier identical command (a repeated `npm test`), so it is not done.
 _apr_scan() {   # -> rc 0 when the transcript shows this request resolved
   local size chunk rest n last ids line uids="" rids=" " u
   [[ "$apr_tie" == - || -z "$apr_tp" ]] && return 1
