@@ -39,7 +39,7 @@
  *     `refuseOversizedClaim`, not the table.
  */
 import type { ClaimRefusal } from './box-token.js';
-import type { CollectLaneRefusal, DoneRejectCode, MailRejectCode, UpdateRouteError } from './api.js';
+import type { CollectLaneRefusal, DoneRejectCode, MailRejectCode, RunRefuseCode, UpdateRouteError } from './api.js';
 
 /** The mail codes a route answers in `error`. The done-authority codes travel
  *  as a run advance's `reject.code` and `undeliverable` is a delivery outcome;
@@ -109,3 +109,17 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
 
 /** The runtime list, derived from the table (`PR_REASONS`'s idiom). */
 export const ROUTE_REFUSALS = Object.keys(REFUSAL_STATUS) as RouteRefusal[];
+
+/** The run refusals `POST /api/runs` answers in `refused` — a `RunRefuseCode`
+ *  body key with its own field (`by`, `pr` or `detail`), never an `error` word,
+ *  so they are not `RouteRefusal`s (D-5384, audit ticket ARCH-21). */
+export type OpenRunConflict = Extract<RunRefuseCode,
+  'project-mismatch' | 'home-mismatch' | 'claimant-is-a-worker' | 'workspace-spent' | 'spent-unmeasured'
+  | 'claimed-by-another' | 'review-in-flight'>;
+
+/** Each one's status (D-5384). Measured from the open route's inline sends on
+ *  landing day — every one answered 409 — never chosen. */
+export const RUN_REFUSAL_STATUS: Readonly<Record<OpenRunConflict, number>> = {
+  'project-mismatch': 409, 'home-mismatch': 409, 'claimant-is-a-worker': 409,
+  'workspace-spent': 409, 'spent-unmeasured': 409, 'claimed-by-another': 409, 'review-in-flight': 409,
+};
