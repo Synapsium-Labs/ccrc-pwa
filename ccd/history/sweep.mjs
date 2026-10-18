@@ -62,6 +62,7 @@ import {
   mergeJournalByTime, decideBind, restoreNameOk,
   EXPORT_DIR, EXPORT_SEGMENT_MAX_BYTES, EXPORT_SEGMENT_FORMAT, segmentName, nextSegmentSeq, planSegment, CLAUDE_CODE_DEFAULT_RETENTION_DAYS,
   shortestRetention, exportHorizonDays, decideExportPass, planExportRoom, exportPassIntervalMs, exportMarkFailsOf, decideMarkOutcome,
+  decideMarkCheck, missingSegmentNames,
 } from './lib.mjs';
 import {
   MIGRATIONS, OWED_INDEX, StoreError, bump, clearDoneMarkers, closeWriter, createStore, dropPending, finishPending, getMeta,
@@ -3804,6 +3805,9 @@ function stmts(db) {
     variantHas: db.prepare('SELECT 1 AS hit FROM entry_variants WHERE entry_id = ? AND blob_id = ?'),
     variantIns: db.prepare(`INSERT INTO entry_variants (entry_id, blob_id, first_file_id, first_seen_ms, cause)
       VALUES (?, ?, ?, ?, ?) ON CONFLICT(entry_id, blob_id) DO NOTHING`),
+    // W1-B4 Task 8 (§9.15 "Mark"): a variant first seen after its entry was exported clears the entry's marks, so the
+    // next export pass writes the entry again with every variant (O39); so does a sidecar row first linked to it.
+    exportClear: db.prepare('UPDATE entries SET exported_ms = NULL, exported_seg = NULL WHERE entry_id = ? AND exported_ms IS NOT NULL'),
     firstFile: db.prepare('SELECT min(file_id) AS f FROM memberships WHERE entry_id = ?'),
     boundaryIns: db.prepare(`INSERT INTO boundaries (entry_id, transcript_pk, ord, trigger, head_uuid,
         anchor_uuid, tail_uuid, kept_blob_id, pre_tokens, post_tokens, duration_ms)
@@ -4025,6 +4029,7 @@ export function writeChunk(db, chunk) {
         const firstFile = s.firstFile.get(entryId).f ?? chunk.fileId;
         s.variantIns.run(entryId, before.blob_id, firstFile, chunk.nowMs, cause);
         s.variantIns.run(entryId, blobId, chunk.fileId, chunk.nowMs, cause);
+        s.exportClear.run(entryId);   // in the chunk's own transaction: the variant and the cleared mark commit together
         add(`variants_${cause.replace(/^ccd-/, '')}`);
       }
       s.membership.run(chunk.fileId, entryId, r.at);   // r.at is a byte offset (D-4237)
@@ -4697,6 +4702,10 @@ export async function ingestSidecar(db, ctx, s, budget, cache) {
       const blobId = stmts(db).blobId.get(sha).blob_id;
       const ins = q.sidecarIns.run(transcriptPk, s.name, blobId, entryId, ctx.nowMs);
       if (ins.changes === 1 && entryId === null) bump(db, 'sidecar_unlinked');
+      // W1-B4 Task 8 (D-4763 (history-export-late-sidecar-clears-marks), NEW): a sidecar row first linked after its entry was
+      // exported clears the entry's marks, in this transaction, so the next pass writes the entry again with the new
+      // row and its bytes. A no-op for an entry not yet exported.
+      if (ins.changes === 1 && entryId !== null) stmts(db).exportClear.run(entryId);
       q.seenUpsert.run(s.path, st.size, st.mtimeNs, blobId);
       if (text !== null && stmts(db).blobId.get(sha).fts_indexed === 0) indexBlob(db, blobId, text, ctx.pairIdx);
     });
@@ -7861,6 +7870,8 @@ function discardSegment(seg) {
  *  rule and the hourly cadence read. `complete` says every due row the pass found fit in its segment. */
 function noteExportPassDone(db, nowMs, complete) {
   setMeta(db, HEALTH_META.exportPassMs, String(nowMs));
+  // A complete pass left no due row behind: what a missing segment's cleared marks owed has exported again (Task 8).
+  if (complete && (getMeta(db, HEALTH_META.exportSegmentMissing) ?? '0') !== '0') setMeta(db, HEALTH_META.exportSegmentMissing, '0');
 }
 
 /** Phase 4 (§9.15 "Mark"): ONE transaction, after the link: the blobs whose bytes the segment holds and the entries it
@@ -7983,6 +7994,17 @@ export async function exportPass(db, ctx) {
  *  fails with a caught error counts for the cadence (Task 5's attempt clock), so it retries hourly. Null when the
  *  cadence waits. */
 export async function exportStep(db, ctx) {
+  // §9.15 "After a bind": first, and outside the cadence, on the first step after an adopt, a restore or a rebuild. lib
+  // decideMarkCheck decides it from WHICH bind facts the last check covered, never their clocks (RD2). A check that
+  // cannot list the directory is counted and tried again next step, never thrown out of the tick.
+  const markCheck = decideMarkCheck({ metaKeys: bindFactKeys(db), checkedRecord: getMeta(db, EXPORT_MARKS_CHECKED_BINDS_META) });
+  if (markCheck.check) {
+    try { checkSegmentMarks(db, ctx, markCheck.record); } catch (e) {
+      if (isBusy(e)) throw e;
+      process.stderr.write(`history-sweep: the export marks could not be checked against ${exportDirFor(ctx.paths, ctx.ids.storeId)}: ${e && e.message ? e.message : String(e)}\n`);
+      countOutside(db, 'export_marks_check_failed');
+    }
+  }
   const nowMs = ctx.now();
   const msOf = (k) => {
     const v = getMeta(db, k);
@@ -8020,6 +8042,54 @@ export async function exportStep(db, ctx) {
   // An admitting preflight ends a pause, whatever the pass then answers (held, failed or no-horizon included).
   if ((getMeta(db, HEALTH_META.exportPaused) ?? '') !== '') withTx(db, 'NORMAL', () => { setMeta(db, HEALTH_META.exportPaused, ''); });
   return exportPass(db, ctx);
+}
+
+// ── W1-B4 Task 8: the marks after a bind (spec §9.15 "After a bind"; D-4226) ───────────────
+// lib decides (coordinator ruling RD2): decideMarkCheck whether a step checks and what the check records, from the bind
+// facts' KEYS and never their clocks; missingSegmentNames which marked segments this box lacks. This block measures the
+// meta keys, the last check's record, the marked names and the directory listing, calls those, and acts.
+
+/** meta: when the export last checked its marks against the segments on this box (for display; never a decision). */
+const EXPORT_MARKS_CHECKED_META = 'export_marks_checked_ms';
+/** meta: the bind facts the last check covered, as lib decideMarkCheck's `record` gives them (a JSON list of
+ *  `bound:<ms>` keys). */
+const EXPORT_MARKS_CHECKED_BINDS_META = 'export_marks_checked_binds';
+
+/** The meta keys that may be bind facts: every adopt, restore and rebuild writes `bound:<ms>` inside its binding
+ *  transaction (B2's D-4724 (history-binding-facts-before-link)). A measurement only: lib decideMarkCheck says which are facts.
+ *  [] when none: a store only ever created on this box has nothing to check. */
+function bindFactKeys(db) {
+  return db.prepare("SELECT k FROM meta WHERE k LIKE 'bound:%'").all().map((r) => String(r.k));
+}
+
+/** §9.15 "After a bind": every blob and entry mark whose segment is not in export/<store_id>/ on THIS box is cleared,
+ *  so its rows export again. A directory left on the box the store came from is the usual cause; carrying it before
+ *  the verb avoids the re-export (§8.4). Which names are missing is lib missingSegmentNames' answer over the marked
+ *  names and the listing measured here. One NORMAL transaction; when anything was cleared, export_segment_missing +1
+ *  and HEALTH_META.exportSegmentMissing holds how many marks, which doctor WARNs on until a complete pass resets it.
+ *  Either way it records its clock and `record`, the bind facts lib decideMarkCheck says it covers. One DISTINCT scan
+ *  of exported_seg per bind; the column has no index and gets none. A listing that fails for any reason but ENOENT
+ *  throws (listSegments), before anything is cleared or recorded; exportStep counts it and the next step tries again. */
+export function checkSegmentMarks(db, ctx, record) {
+  const dir = exportDirFor(ctx.paths, ctx.ids.storeId);
+  const present = existsSync(dir) ? listSegments(dir).map((x) => x.name) : [];
+  const named = new Set();
+  for (const r of db.prepare('SELECT DISTINCT exported_seg AS seg FROM blobs WHERE exported_seg IS NOT NULL').all()) named.add(String(r.seg));
+  for (const r of db.prepare('SELECT DISTINCT exported_seg AS seg FROM entries WHERE exported_seg IS NOT NULL').all()) named.add(String(r.seg));
+  const segments = missingSegmentNames({ named, present });
+  let cleared = 0;
+  withTx(db, 'NORMAL', () => {
+    const blobs = db.prepare('UPDATE blobs SET exported_ms = NULL, exported_seg = NULL WHERE exported_seg = ?');
+    const entries = db.prepare('UPDATE entries SET exported_ms = NULL, exported_seg = NULL WHERE exported_seg = ?');
+    for (const seg of segments) cleared += Number(blobs.run(seg).changes) + Number(entries.run(seg).changes);
+    if (cleared > 0) {
+      bump(db, 'export_segment_missing');
+      setMeta(db, HEALTH_META.exportSegmentMissing, String(cleared));
+    }
+    setMeta(db, EXPORT_MARKS_CHECKED_META, String(ctx.now()));
+    setMeta(db, EXPORT_MARKS_CHECKED_BINDS_META, record);
+  });
+  return { cleared, segments };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {

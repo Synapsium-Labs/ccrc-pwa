@@ -13,13 +13,14 @@ import path from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import {
   makeHistoryBox, runSweep, skipOnDarwin, openStoreRO, counters, journalRecords, plantSession, plantTranscript,
-  exportDirOf, segmentsOf, segmentRows, runDriver, recoverRow, PRELOADS, type HistoryBox,
+  exportDirOf, segmentsOf, segmentRows, runDriver, recoverRow, PRELOADS, CLI, preloadOptions, type HistoryBox,
 } from './historyHelpers.js';
-import { userRow } from './historyFixtures.js';
+import { userRow, toolResultRow } from './historyFixtures.js';
 import { removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { EXPORT_ROW_META_BYTES, HEALTH_META, historyPaths } from '../../ccd/history/lib.mjs';
 import { closeWriter, openSegment, openWriter, pruneDryRun, segmentMeta, setMeta } from '../../ccd/history/store.mjs';
 import { syncBuiltinESMExports } from 'node:module';
+import * as pty from 'node-pty';
 
 skipOnDarwin();
 removeTmpFixturesEachTest();
@@ -870,4 +871,254 @@ describe('crash and collision safety (W1-B4 Task 7; spec §9.15 "Write", "Mark",
     expect(uuidsOf(s2), 'the residual: the same rows in two segments, which Task 10\'s replay absorbs').toEqual(uuidsOf(s1));
     expect(marks(box)).toEqual({ [rid(1)]: s2, [rid(2)]: s2 });
   }, 120_000);
+});
+
+/** `ccrc history doctor --adopt` on a REAL terminal (node-pty): the irreversible forms refuse without one (§8.4). A pty
+ *  child leads its own process group, so the safety timer kills the whole group, the shim and the sweep under it too
+ *  (W1-B2 Task 25's onPty idiom). A pty merges stdout and stderr. */
+function adoptOnPty(box: HistoryBox): Promise<{ code: number; out: string }> {
+  const env: Record<string, string> = {};
+  const merged: NodeJS.ProcessEnv = { ...box.env, HISTORY_TEST_STATFS: 'plenty', NODE_OPTIONS: preloadOptions([PRELOADS.statfs]) };
+  for (const [k, v] of Object.entries(merged)) if (v !== undefined) env[k] = v;
+  return new Promise((resolve) => {
+    const p = pty.spawn(process.execPath, ['--no-warnings', CLI, 'doctor', '--adopt'], { name: 'xterm-color', cols: 200, rows: 40, cwd: box.home, env });
+    let out = '';
+    let done = false;
+    const finish = (code: number): void => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve({ code, out });
+    };
+    const timer = setTimeout(() => {
+      try { process.kill(-p.pid, 'SIGKILL'); } catch { p.kill(); }
+      finish(-1);
+    }, 40_000);
+    p.onData((d) => { out += d; });
+    p.onExit(({ exitCode }) => finish(exitCode));
+  });
+}
+
+describe('marks that move (W1-B4 Task 8; spec §9.15 "Mark", "After a bind")', () => {
+  it('O39: a variant first seen after its entry was exported clears that entry\'s marks, and the next pass writes the entry again with both variants', () => {
+    const { box, transcript, ids } = ingestedBox('ccrc-history-export-variant-', [row(1, 'body one', 2 * DAY), row(2, 'another row', 2 * DAY)]);
+    const s1 = `1.${ids.writer}.db`;
+    const s2 = `2.${ids.writer}.db`;
+    passAt(box, 65);
+    expect(marks(box)).toEqual({ [rid(1)]: s1, [rid(2)]: s1 });
+    // the same uuid with another body, as a later copy of the row writes it (B1's DM2: one entry, two variants)
+    fs.appendFileSync(transcript, `${JSON.stringify(row(1, 'body two', 2 * DAY))}\n`);
+    passAt(box, 100);   // the scan reads the appended line; the export waits, its last pass at +65
+    expect(q(box, 'SELECT count(*) AS n FROM entry_variants')[0]!['n'], 'the fixture must make a variant').toBe(2);
+    expect(marks(box), 'the late variant left its entry marked').toEqual({ [rid(1)]: null, [rid(2)]: s1 });
+    passAt(box, 130);
+    expect(segmentsOf(box)).toEqual([s1, s2]);
+    expect(marks(box)).toEqual({ [rid(1)]: s2, [rid(2)]: s1 });
+    const seg2 = path.join(exportDirOf(box), s2);
+    expect(segmentRows(seg2, 'entries').map((e) => e['uuid'])).toEqual([rid(1)]);
+    const both = q(box, `SELECT lower(hex(b.sha256)) AS sha FROM entry_variants v JOIN entries e ON e.entry_id = v.entry_id
+      JOIN blobs b ON b.blob_id = v.blob_id WHERE e.uuid = ? ORDER BY sha`, rid(1)).map((r) => r['sha']);
+    expect(segmentRows(seg2, 'variants').map((v) => v['blob_sha256']).sort()).toEqual(both);
+    // the first body's bytes are in segment 1 already: segment 2 carries only the new one
+    expect(segmentRows(seg2, 'blobs')).toHaveLength(1);
+  }, 300_000);
+
+  it('O39: after an adopt with the segments left behind, the first tick clears every mark naming a missing segment, export_segment_missing +1, and the rows export again under the new writer', async () => {
+    const { box, ids } = ingestedBox('ccrc-history-export-adopt-', [row(1, 'one', 2 * DAY), row(2, 'two', DAY)]);
+    const P = historyPaths(box.home);
+    passAt(box, 65);
+    expect(Object.values(marks(box))).toEqual([`1.${ids.writer}.db`, `1.${ids.writer}.db`]);
+    // the store comes to "this box" and its export directory stays on the one it came from (§8.4's carry, not done)
+    fs.renameSync(exportDirOf(box), path.join(box.home, 'export-left-behind'));
+    fs.rmSync(P.storeId);
+    fs.rmSync(P.writer);
+    const adopt = await adoptOnPty(box);
+    expect(adopt.code, adopt.out).toBe(0);
+    const writer = fs.readFileSync(P.writer, 'utf8').trim();
+    expect(writer, 'adopt mints a new writer token').not.toBe(ids.writer);
+    expect(q(box, "SELECT v FROM meta WHERE k LIKE 'bound:%'")).toEqual([{ v: 'adopt' }]);
+    passAt(box, 70);   // the first tick after the bind; the cadence still waits (last pass at +65)
+    expect(Object.values(marks(box)), 'a mark still names a segment this box does not have').toEqual([null, null]);
+    expect(q(box, 'SELECT count(*) AS n FROM blobs WHERE exported_ms IS NOT NULL')[0]!['n']).toBe(0);
+    expect(counters(box)['export_segment_missing']).toBe(1);
+    expect(metaOf(box, HEALTH_META.exportSegmentMissing), 'two entries\' marks and two blobs\'').toBe('4');
+    expect(segmentsOf(box), 'the check wrote a segment').toEqual([]);
+    passAt(box, 130);
+    const again = `2.${writer}.db`;
+    expect(segmentsOf(box)).toEqual([again]);
+    expect(Object.values(marks(box))).toEqual([again, again]);
+    expect(metaOf(box, HEALTH_META.exportSegmentMissing), 'the re-export left nothing due behind: the WARN clears').toBe('0');
+    expect(counters(box)['export_segment_missing'], 'a second check ran without a second bind').toBe(1);
+  }, 300_000);
+
+  it('the check runs on the first step after a bind and not again until the next one: marks naming a present segment stay; a restore\'s bind clears those naming a missing one', async () => {
+    const { box, ids } = ingestedBox('ccrc-history-export-bindcheck-', [row(1, 'one', DAY), row(2, 'two', DAY)]);
+    const NOW = Date.now();
+    const at = (ms: number) => (): number => NOW + ms;
+    const name = `1.${ids.writer}.db`;
+    await onStore(box, (db) => SW.exportPass(db, exportCtx(box, ids, at(0))));
+    expect(Object.values(marks(box))).toEqual([name, name]);
+    // an adopt's bind fact, as B2's insertBindFacts writes it; the segment IS here, so nothing is cleared
+    await onStore(box, (db) => {
+      setMeta(db, `bound:${NOW + MIN}`, 'adopt');
+      return SW.exportStep(db, exportCtx(box, ids, at(2 * MIN)));
+    });
+    expect(metaOf(box, 'export_marks_checked_ms')).toBe(String(NOW + 2 * MIN));
+    expect(Object.values(marks(box))).toEqual([name, name]);
+    expect(counters(box)['export_segment_missing']).toBeUndefined();
+    expect(metaOf(box, HEALTH_META.exportSegmentMissing)).toBeNull();
+    // the segment goes, with no bind since the check: no check runs, and the marks stay
+    fs.rmSync(path.join(exportDirOf(box), name));
+    await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, at(3 * MIN))));
+    expect(Object.values(marks(box)), 'a check ran with no bind since the last one').toEqual([name, name]);
+    // a restore's bind: the next step clears every mark naming the missing segment
+    await onStore(box, (db) => {
+      setMeta(db, `bound:${NOW + 4 * MIN}`, 'restore');
+      return SW.exportStep(db, exportCtx(box, ids, at(5 * MIN)));
+    });
+    expect(Object.values(marks(box))).toEqual([null, null]);
+    expect(q(box, 'SELECT count(*) AS n FROM blobs WHERE exported_seg IS NOT NULL')[0]!['n']).toBe(0);
+    expect(counters(box)['export_segment_missing']).toBe(1);
+    expect(metaOf(box, HEALTH_META.exportSegmentMissing)).toBe('4');
+  }, 120_000);
+
+  it('the check follows the bind facts it has not covered, never their clocks: a bind stamped before the last check (a box whose clock is behind) still runs it', async () => {
+    const { box, ids } = ingestedBox('ccrc-history-export-bindkey-', [row(1, 'one', DAY), row(2, 'two', DAY)]);
+    const NOW = Date.now();
+    const at = (ms: number) => (): number => NOW + ms;
+    const name = `1.${ids.writer}.db`;
+    await onStore(box, (db) => SW.exportPass(db, exportCtx(box, ids, at(0))));
+    await onStore(box, (db) => {
+      setMeta(db, `bound:${NOW + 5 * MIN}`, 'adopt');
+      return SW.exportStep(db, exportCtx(box, ids, at(6 * MIN)));
+    });
+    expect(metaOf(box, 'export_marks_checked_ms')).toBe(String(NOW + 6 * MIN));
+    expect(Object.values(marks(box))).toEqual([name, name]);
+    // a restore whose bind fact carries a clock behind the last check's, with the segment gone
+    fs.rmSync(path.join(exportDirOf(box), name));
+    await onStore(box, (db) => {
+      setMeta(db, `bound:${NOW + 3 * MIN}`, 'restore');
+      return SW.exportStep(db, exportCtx(box, ids, at(7 * MIN)));
+    });
+    expect(Object.values(marks(box)), 'a bind stamped before the last check was never checked').toEqual([null, null]);
+    expect(counters(box)['export_segment_missing']).toBe(1);
+  }, 120_000);
+
+  it('a check that cannot list export/<store_id>/ is counted and retried, never thrown out of the tick: the marks stay, and the next step checks again', async () => {
+    const { box, ids } = ingestedBox('ccrc-history-export-bindlist-', [row(1, 'one', DAY), row(2, 'two', DAY)]);
+    const NOW = Date.now();
+    const at = (ms: number) => (): number => NOW + ms;
+    const name = `1.${ids.writer}.db`;
+    await onStore(box, (db) => SW.exportPass(db, exportCtx(box, ids, at(0))));
+    const dir = exportDirOf(box);
+    fs.renameSync(dir, `${dir}.kept`);
+    fs.writeFileSync(dir, 'a stray file under the directory\'s name');   // listing it fails ENOTDIR
+    // the cadence waits inside the hour after the pass at NOW, so only the check runs
+    await onStore(box, async (db) => {
+      setMeta(db, `bound:${NOW + MIN}`, 'adopt');
+      await SW.exportStep(db, exportCtx(box, ids, at(2 * MIN)));   // resolves: the step never throws it
+    });
+    expect(counters(box)['export_marks_check_failed']).toBe(1);
+    expect(Object.values(marks(box)), 'a check that could not list cleared marks').toEqual([name, name]);
+    expect(metaOf(box, 'export_marks_checked_ms'), 'a failed check is not a check').toBeNull();
+    fs.rmSync(dir);
+    fs.renameSync(`${dir}.kept`, dir);
+    await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, at(3 * MIN))));
+    expect(metaOf(box, 'export_marks_checked_ms'), 'the next step checks again').toBe(String(NOW + 3 * MIN));
+    expect(Object.values(marks(box))).toEqual([name, name]);
+  }, 120_000);
+
+  // Beyond the brief's list (flagged in the Task 8 report): the check's `if (isBusy(e)) throw e` had no case. The
+  // test's own writer connection answers its next BEGIN IMMEDIATE with SQLITE_BUSY (errcode 5), once, the stand-in for
+  // another connection holding the write lock past busy_timeout (the RD3 idiom above); shipped code reads no seam.
+  it('a busy error in the check is the lock\'s: the step rethrows it, nothing is counted export_marks_check_failed or recorded, and the next step checks again', async () => {
+    const { box, ids } = ingestedBox('ccrc-history-export-bindbusy-', [row(1, 'one', DAY), row(2, 'two', DAY)]);
+    const NOW = Date.now();
+    const at = (ms: number) => (): number => NOW + ms;
+    const name = `1.${ids.writer}.db`;
+    await onStore(box, (db) => SW.exportPass(db, exportCtx(box, ids, at(0))));
+    fs.rmSync(path.join(exportDirOf(box), name));   // the segment is gone, so the check has marks to clear
+    const err = await onStore(box, async (db) => {
+      setMeta(db, `bound:${NOW + MIN}`, 'restore');
+      let busied = 0;
+      const realExec = db.exec.bind(db);
+      (db as unknown as { exec: (sql: string) => void }).exec = (sql: string): void => {
+        if (busied < 1 && sql === 'BEGIN IMMEDIATE') {
+          busied += 1;
+          throw Object.assign(new Error('database is locked (the check)'), { code: 'ERR_SQLITE_ERROR', errcode: 5, errstr: 'database is locked' });
+        }
+        realExec(sql);
+      };
+      return SW.exportStep(db, exportCtx(box, ids, at(2 * MIN))).then(() => null, (e: unknown) => e);
+    }) as { errcode?: number; message?: string } | null;
+    expect(err?.errcode, 'the busy error was not rethrown').toBe(5);
+    expect(err?.message).toBe('database is locked (the check)');
+    expect(counters(box)['export_marks_check_failed'], 'a busy is the lock\'s, not a failed listing').toBeUndefined();
+    expect(Object.values(marks(box)), 'a check that met busy cleared marks').toEqual([name, name]);
+    expect(metaOf(box, 'export_marks_checked_ms'), 'a check that met busy is not a check').toBeNull();
+    await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, at(3 * MIN))));
+    expect(Object.values(marks(box)), 'the next step checks again').toEqual([null, null]);
+    expect(counters(box)['export_segment_missing']).toBe(1);
+  }, 120_000);
+
+  it('a sidecar linked after its entry was exported clears that entry\'s marks, and the next pass writes the entry again with the sidecar row and its bytes; the census\'s due count returns to 0', () => {
+    const late = toolResultRow({
+      uuid: rid(2), ts: new Date(Date.now() - 2 * DAY).toISOString(), sessionId: U, cwd: WORK, toolUseId: 'toolu_01B4LATE',
+      content: 'Output too large. Full output saved to: /home/u/x/tool-results/b4late01.txt',
+    });
+    const { box, ids } = ingestedBox('ccrc-history-export-latesc-', [row(1, 'a prompt', 2 * DAY), late]);
+    const s1 = `1.${ids.writer}.db`;
+    const s2 = `2.${ids.writer}.db`;
+    passAt(box, 65);
+    expect(marks(box)).toEqual({ [rid(1)]: s1, [rid(2)]: s1 });
+    // the tool's output file lands after its row was exported (a tick behind its JSONL line, or held back by a copy
+    // still behind: §9.2 step 4)
+    const dir = path.join(box.accountHome['claude-a']!, 'projects', SLUG, U, 'tool-results');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'b4late01.txt'), 'the late tool output body\n');
+    passAt(box, 100);   // a scan tick (over 30 min after the last): it finds and links the sidecar; the export waits
+    expect(q(box, 'SELECT s.name, e.uuid FROM sidecars s LEFT JOIN entries e ON e.entry_id = s.entry_id'), 'the fixture must link the sidecar to the exported row')
+      .toEqual([{ name: 'b4late01.txt', uuid: rid(2) }]);
+    expect(marks(box), 'the late sidecar left its entry marked').toEqual({ [rid(1)]: s1, [rid(2)]: null });
+    expect(metaOf(box, 'export_due'), 'the census counts the late sidecar\'s blob due').toBe('1');
+    passAt(box, 130);
+    expect(segmentsOf(box)).toEqual([s1, s2]);
+    expect(marks(box)).toEqual({ [rid(1)]: s1, [rid(2)]: s2 });
+    const side = q(box, 'SELECT lower(hex(b.sha256)) AS sha, b.exported_seg FROM sidecars s JOIN blobs b ON b.blob_id = s.blob_id')[0]!;
+    expect(side['exported_seg'], 'the sidecar\'s bytes stayed store-only').toBe(s2);
+    const seg2 = path.join(exportDirOf(box), s2);
+    expect(segmentRows(seg2, 'entries').map((e) => e['uuid'])).toEqual([rid(2)]);
+    expect(segmentRows(seg2, 'sidecars').map(pick(['name', 'uuid', 'blob_sha256'])))
+      .toEqual([{ name: 'b4late01.txt', uuid: rid(2), blob_sha256: side['sha'] }]);
+    expect(segmentRows(seg2, 'blobs').map((b) => b['sha256']), 'segment 2 carries only the sidecar\'s new bytes').toEqual([side['sha']]);
+    expect(metaOf(box, 'export_due'), 'nothing is left due').toBe('0');
+  }, 300_000);
+
+  // Beyond the brief's list (flagged in the Task 8 report): `ins.changes === 1` in ingestSidecar's clear had no case. A
+  // sidecar file rewritten with the same bytes is read again (its seen-file mark misses), but its row exists already
+  // (the table's key is the transcript, the name and the blob), so it is no NEW row and clears nothing.
+  it('a sidecar read again is no new row: the same file rewritten with the same bytes leaves its exported entry marked', () => {
+    const again = toolResultRow({
+      uuid: rid(2), ts: new Date(Date.now() - 2 * DAY).toISOString(), sessionId: U, cwd: WORK, toolUseId: 'toolu_01B4AGAIN',
+      content: 'Output too large. Full output saved to: /home/u/x/tool-results/b4again1.txt',
+    });
+    const { box, ids } = ingestedBox('ccrc-history-export-latesc2-', [row(1, 'a prompt', 2 * DAY), again]);
+    const s1 = `1.${ids.writer}.db`;
+    const s2 = `2.${ids.writer}.db`;
+    passAt(box, 65);
+    const dir = path.join(box.accountHome['claude-a']!, 'projects', SLUG, U, 'tool-results');
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, 'b4again1.txt');
+    fs.writeFileSync(file, 'the late tool output body\n');
+    passAt(box, 100);   // links the sidecar to the exported row: its marks are cleared
+    passAt(box, 130);   // the entry is written again with the sidecar row
+    expect(marks(box)).toEqual({ [rid(1)]: s1, [rid(2)]: s2 });
+    const seenBefore = q(box, 'SELECT mtime_ns FROM sidecar_seen')[0]!['mtime_ns'];
+    const later = new Date(Date.now() + 5 * MIN);
+    fs.utimesSync(file, later, later);   // the same bytes under a newer mtime
+    passAt(box, 165);   // the file is read again
+    expect(q(box, 'SELECT mtime_ns FROM sidecar_seen')[0]!['mtime_ns'], 'the fixture must make the tick read the sidecar again').not.toEqual(seenBefore);
+    expect(q(box, 'SELECT count(*) AS n FROM sidecars')[0]!['n'], 'the same bytes are no second row').toBe(1);
+    expect(marks(box), 'a sidecar already stored cleared its entry\'s marks').toEqual({ [rid(1)]: s1, [rid(2)]: s2 });
+  }, 300_000);
 });
