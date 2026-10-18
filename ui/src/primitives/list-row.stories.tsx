@@ -40,10 +40,10 @@ export const AMenu: Story = {
 };
 
 /** The account picker, which is where the other copy lived — the same twelve
- *  declarations with a different voice on top. CHECK that the row is 52px and
- *  not 44: the extra eight pixels are what separate neighbours under a thumb
- *  that is scrolling, which is why both rules spelled the literal rather than
- *  reaching for `--tap-min`. */
+ *  declarations with a different voice on top. CHECK, in Refined, that the
+ *  row is 52px and not 44: the extra eight pixels are what separate neighbours
+ *  under a thumb that is scrolling. The height is the `--row-h` role
+ *  (D-5093): Instrument draws it 44px, and 32px under a fine pointer. */
 export const AnAccountPicker: Story = {
   args: {
     className: '',

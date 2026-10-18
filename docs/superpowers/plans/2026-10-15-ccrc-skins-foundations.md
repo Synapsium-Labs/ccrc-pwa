@@ -1482,3 +1482,15 @@ Task 10 was issued two spares, 2026-10-18; both are defined here.
   - **Outside the file list:** `ui/design/make-icons.mjs`'s `NAMES` gains the three icons (the generated `lucide.ts` says to add a name there and re-run, and the run used lucide-static 1.59.0, the version in its header). `ui/README.md`'s "Reaching Instrument before there is a picker" now leads with the palette (spec §7 says the README documents both). `pwa/src/session/Composer.tsx` gains `data-page-keys` on its textarea, and its autofocus skips any dialog but a closing one (`[role="dialog"]:not([data-state="closed"])`), so arriving through the palette, which stays mounted at `data-state="closed"` while it animates out, still focuses the composer; the login cover, a dialog with no state, still holds focus.
 
 Issued and unused (Task 10): none.
+
+### Found while executing Task 14
+
+Task 14 was issued two spares, 2026-10-18; one is defined here.
+
+- **D-5460** — `role-pins-follow-the-role` (Task 14): two suites outside Task 14's file list pinned the scale steps the roles replace, and follow them.
+  - **Why:** the task's header says the shape census reads no TSX class string, but `shape-census.test.ts` asserts `LIST_ROW` contains `min-h-[52px]`, and `primitives.test.tsx` asserts `CHIP` contains `text-xs` and refuses any other `text-*` on it. Both went red on the green edit. Drawer stage 1 (#428) and the ask sheet half (#427) have merged, and #402 does not edit either file, so neither is frozen.
+  - **The change:** the list row's pin reads `min-h-row`, and the chip's reads `text-meta`, with its no-ink pattern excepting `text-meta` instead of `text-xs`. Refined's values behind them (52px and 12px) are held by `role-census.test.ts`'s "each adopted role equals, in Refined, the step it replaced", so neither pin loses its number. `list-row.stories.tsx`'s CHECK note says which skin draws 52px.
+  - **Also measured on this base:** `Radio`'s input keeps `h-[18px]` (the native input inside the tap-floored row), and `BackButton` keeps `text-[26px]` (the chevron's optical size); both are on the census's allowlist with that reason. `Select` spells no size of its own: it wears `TEXT_INPUT`, whose `text-input` is `TextInput`'s entry.
+  - **Departs** Task 14's file list, which names neither suite nor the story, nor `tokens.css`, whose roles comment ("Nothing reads a role until Task 14") now points at the census; a comment only, outside the generated block.
+
+Issued and unused (Task 14): 5461.

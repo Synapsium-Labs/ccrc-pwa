@@ -47,7 +47,7 @@ export const DOOR =
 /** The glyph beside the word. It is DECORATION — `aria-hidden`, because the
  *  label carries the meaning — and it drops to the UI font because the mono
  *  stack has no coverage for an emoji key or a gear. */
-export const DOOR_GLYPH = 'font-ui text-xs leading-none';
+export const DOOR_GLYPH = 'font-ui text-meta leading-none';
 
 export interface DoorProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   /** The decorative glyph. Rendered `aria-hidden` in its own span. */

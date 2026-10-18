@@ -99,9 +99,33 @@ and the contrast gate measures each palette once, for both skins.
   delete the ink beside `text-meta`. A role sets the font size only: Tailwind
   attaches no line height to a key it did not define. The page title's key is
   `title` because `page` is already a colour (see "Adding a token").
-- **Nothing reads the roles yet.** The shared primitives adopt them in a later
-  change. Until then, Instrument differs from Refined only in radii, card
-  elevation and motion.
+- **The shared primitives read the roles.** `Button`'s filled and ghost
+  variants say `text-ui`, `ListRow` says `min-h-row`, and `Chip`, `Keycap`,
+  `Door`'s glyph and `Radio`'s legend say `text-meta`. A role replaced a scale
+  step only where the role's Refined value is that step (`--fs-ui` is
+  `--fs-base`, `--fs-meta` is `--fs-xs`, `--row-h` is 52px), so Refined
+  renders as it did. In Instrument, buttons set at 13px from 900px wide,
+  meta at 11px, and list rows 44px tall, 32px under a fine pointer. The app
+  sheets, `Sheet`'s body and `OptionRow` follow in a later change.
+
+### The role census
+
+`pwa/test/role-census.test.ts` (D-5093) classifies every non-story primitive
+in `src/primitives/`, so a new one reds until its author decides:
+
+- **Role-bearing:** its size is a control's, a row's or a label's. It must
+  read the roles it adopted, and any scale size it keeps (a type step, an
+  arbitrary font size, or a height that is a number, a bracketed length or
+  `tap`) is on its allowlist with the reason no role fits. Examples: the tap
+  floor `min-h-tap`, the 16px input floor `text-input`, the quiet button's
+  11px mono label. An allowlist entry whose class has gone reds too.
+- **Not role-bearing:** with the reason, such as `Well` (mono code in a dark
+  well, sized by its content) or `Wordmark` (the identity core).
+
+The census also resolves each adopted role and the step it replaced in
+`tokens.css`'s `:root` and requires them equal, at every width. Retuning a
+Refined role reds it, and the adoption has to be measured again. Padding and
+gaps are a control's own rhythm and are not scanned.
 
 Storybook's **Skin** toolbar applies the skin through the same `applySkin`
 the app calls, and the token reference has a **Skin roles** page that shows
