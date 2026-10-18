@@ -596,7 +596,7 @@ describe('a Stop that leaves delegated work running (D-5231)', () => {
       branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
       hookState: 'done', askSummary: null, subagents: null, background: null, lastEnd: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'working', bucketSince: 1000,
       unmeasured: [], statusUnmeasured: false, lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null,
-      started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, role: 'coordinator', releasedFrom: null,
+      started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, role: 'coordinator', releasedFrom: null, withCoordinator: null,
     };
     const cached = JSON.parse(JSON.stringify(row)) as Record<string, unknown>;
     delete cached['background'];
@@ -780,5 +780,67 @@ describe('a carried done stands through delegated work, and the rung holds it wo
       expect(row.background, `after ${i} agent events`).toEqual({ count: 2, kinds: ['subagent'] });
       expect(row.bucket, `after ${i} agent events`).toBe('working');
     }
+  });
+});
+
+// ── `with-coordinator-state` (D-5296; plan Task 7) ──
+// While the session's parent holds its question, the attention rung stands
+// down and the row reads `working`, dated from the hold's `since`.
+describe('the quiet "with coordinator" state (D-5296)', () => {
+  const WC = { kind: 'question' as const, parentId: 'project-a-calm-mesa', since: 4000, notifyAt: 184_000 };
+
+  it('hook waiting with withCoordinator set → working, bucketSince = since', () => {
+    expect(sessionBucket({ ...base, hookState: 'waiting', withCoordinator: WC }, 5000)).toEqual({ bucket: 'working', bucketSince: 4000 });
+    expect(sessionBucket({ ...base, dialogPending: true, withCoordinator: WC }, null)).toEqual({ bucket: 'working', bucketSince: 4000 });
+  });
+
+  it('with it null, or absent, → attention (unchanged)', () => {
+    expect(sessionBucket({ ...base, hookState: 'waiting', withCoordinator: null }, 5000)).toEqual({ bucket: 'attention', bucketSince: 5000 });
+    expect(sessionBucket({ ...base, hookState: 'waiting' }, 5000)).toEqual({ bucket: 'attention', bucketSince: 5000 });
+  });
+
+  it('a malformed value reads as null → attention', () => {
+    for (const bad of [{ ...WC, kind: 'x' }, { ...WC, parentId: '' }, { ...WC, since: 'x' }, { ...WC, since: Number.NaN }, { ...WC, notifyAt: Number.NaN }, 'x', [1]]) {
+      expect(sessionBucket({ ...base, hookState: 'waiting', withCoordinator: bad as never }, 5000).bucket, JSON.stringify(bad)).toBe('attention');
+    }
+  });
+
+  it('moves no other rung: a dead or archived row keeps its bucket', () => {
+    expect(sessionBucket({ ...base, status: 'dead', hookState: 'waiting', withCoordinator: WC }, 5000).bucket).toBe('dead');
+  });
+
+  it('reviveFleetSession of a cached row without the field, or with it, → null and attention', () => {
+    const row: FleetSession = {
+      id: 'project-a-quiet-basin', wrapper: 'lane-a', home: '/home/fixture', project: 'project-a', workdir: '/data/projects/project-a',
+      workspace: 'quiet-basin', name: null, status: 'idle', statusUpdatedAt: 1000, limits: null,
+      dialogPending: false, version: null, model: null, effort: null, ultracode: false,
+      branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
+      hookState: 'waiting', askSummary: null, subagents: null, background: null, withCoordinator: WC, lastEnd: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'working', bucketSince: 4000,
+      unmeasured: [], statusUnmeasured: false, lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null,
+      started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, role: 'coordinator', releasedFrom: null,
+    };
+    const cached = JSON.parse(JSON.stringify(row)) as Record<string, unknown>;
+    // an older snapshot: no field, no bucket → derived attention
+    const older = { ...cached };
+    delete older['withCoordinator'];
+    delete older['bucket'];
+    delete older['bucketSince'];
+    const a = reviveFleetSession(older)!;
+    expect(a.withCoordinator).toBeNull();
+    expect(a.bucket).toBe('attention');
+    // a snapshot written while held: the field revives null and the recorded
+    // `working` is re-derived, so the row shows Needs-you
+    const b = reviveFleetSession(cached)!;
+    expect(b.withCoordinator).toBeNull();
+    expect({ bucket: b.bucket, bucketSince: b.bucketSince }).toEqual({ bucket: 'attention', bucketSince: null });
+    // a malformed value never rejects the row and never survives
+    for (const bad of [{ kind: 'x' }, 'x', [1], 7]) {
+      const r = reviveFleetSession({ ...cached, withCoordinator: bad });
+      expect(r, JSON.stringify(bad)).not.toBeNull();
+      expect(r!.withCoordinator).toBeNull();
+      expect(r!.bucket).toBe('attention');
+    }
+    // a recorded bucket with the field absent or null is taken as recorded
+    expect(reviveFleetSession({ ...cached, withCoordinator: null })!.bucket).toBe('working');
   });
 });
