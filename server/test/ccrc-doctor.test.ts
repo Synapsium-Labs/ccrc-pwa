@@ -14297,8 +14297,10 @@ describeLinux('ccrc doctor: history — a real store, state by state (O15, O28, 
     { name: 'O41 (B4): a due blob with the last export pass over 2 h old WARNs export-due, naming the count, and FAILs nothing while none is overdue', word: 'export-due', cls: 'WARN',
       plant: (home) => withStore(home, (db) => { freshTick(db); setExport(db, 3, 0); setHistoryMeta(db, HEALTH_META.exportPassMs, String(Date.now() - 3 * 3_600_000)); }),
       names: () => ['3'], absent: ['FAIL history: export-overdue'] },
+    // The writer is live in this build, so the remedy is the writer's (W1-B4 review 614), not B1's wait for a writer to ship.
     { name: 'O41: an overdue blob FAILs export-overdue', word: 'export-overdue', cls: 'FAIL',
-      plant: (home) => withStore(home, (db) => { freshTick(db); setExport(db, 3, 2); }) },
+      plant: (home) => withStore(home, (db) => { freshTick(db); setExport(db, 3, 2); }),
+      remedyNames: () => ['never --purge-history', 'one segment an hour'] },
     { name: 'O41 (B4): a due blob that has waited over two pass intervals WARNs export-due, though the last pass is fresh', word: 'export-due', cls: 'WARN',
       plant: (home) => withStore(home, (db) => {
         freshTick(db);

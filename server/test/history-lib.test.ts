@@ -8637,4 +8637,35 @@ describe('deriveHealth, W1-B4: with the export writer live, export-due waits for
     expect(dueItem(r)!.detail).toBe(`store ${STORE}: 1 unexported blob(s) are due by the horizon, and this build has no export writer`);
     expect(dueItem(r)!.remedy).toBe(healthLib.HEALTH_REMEDIES['export-due']);
   });
+
+  // W1-B4 review 614, F9: export-due's remedy was rewritten by arm when the writer landed; export-overdue's still told an
+  // operator to raise cleanupPeriodDays "until the export writer ships" on a build that has it.
+  describe('export-overdue\'s remedy follows the build, as export-due\'s does (W1-B4 review 614)', () => {
+    const overdue = (o: Partial<healthLib.HealthInputs>): healthLib.HealthItem =>
+      healthLib.deriveHealth(live({ exportOverdue: 3, ...o })).fail.find((i) => i.word === 'export-overdue')!;
+    const SWEEP = 'journalctl --user -u ccd-history-sweep -n 50';
+
+    it('a build with the writer live: keep the store, the pass carries the text into export/<store_id>/ at one segment an hour, and the sweep log is where to look if the count does not fall', () => {
+      const item = overdue({});
+      expect(item.remedy).toBe(`the store may be the only copy of this text: keep ~/.ccrc/history (never --purge-history); the export pass copies it into ~/.ccrc/history/export/<store_id>/ at one segment an hour, and if the count does not fall, read the sweep: ${SWEEP}`);
+      expect(item.remedy, 'it no longer waits for a writer that has shipped').not.toMatch(/until the export writer ships|W1-B4/);
+      expect(item.remedy, 'and carries no line number').not.toMatch(/\.(mjs|ts|sh):\d/);
+      expect(item.detail).toBe(`store ${STORE}: 3 unexported blob(s) whose source text is gone or past its deletion date: the store may be their only copy`);
+    });
+
+    it('the pass paused for room: the room first, as export-due\'s remedy puts it, with the store kept', () => {
+      const item = overdue({ exportPausedLowDisk: true });
+      expect(item.remedy).toBe('the store may be the only copy of this text: keep ~/.ccrc/history (never --purge-history), and free space on the home filesystem: the export pass is paused for room there, and this text waits for it');
+      expect(item.remedy).toContain('--purge-history');
+    });
+
+    it('a build without the writer keeps B1\'s text verbatim, whether or not a pause stands', () => {
+      for (const exportPausedLowDisk of [false, true]) {
+        const item = overdue({ exportWriterLive: false, exportPausedLowDisk });
+        expect(item.remedy, `paused ${exportPausedLowDisk}`).toBe(healthLib.HEALTH_REMEDIES['export-overdue']);
+        expect(item.remedy).toContain('cleanupPeriodDays');
+        expect(item.remedy).toContain('W1-B4');
+      }
+    });
+  });
 });

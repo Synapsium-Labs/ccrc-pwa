@@ -3474,6 +3474,8 @@ function remedyFor(word, h) {
         : HEALTH_REMEDIES['retention-lowered'];
     case 'export-due':
       return exportDueRemedy(h);
+    case 'export-overdue':
+      return exportOverdueRemedy(h);
     default:
       return HEALTH_REMEDIES[word] ?? '';
   }
@@ -8513,8 +8515,9 @@ export function decideSegmentReplay({ meta, storeId }) {
 // the store's own (meta the pass and the census keep), never a calendar date (O41; D-4207).
 // The census's due-since is its own measure of the rows, read at most one census interval late, which keeps a
 // steady store under the threshold (§9.15 "How long a due blob has waited").
-// The three helpers are function declarations: deriveHealth and remedyFor, above, call them at call time, and the
-// constant they read (EXPORT_PASS_INTERVAL_MS, Task 1) is initialised by then.
+// The four helpers (exportGapArm, exportDueDetail, exportDueRemedy and exportOverdueRemedy) are function declarations:
+// deriveHealth and remedyFor, above, call them at call time, and the constant they read (EXPORT_PASS_INTERVAL_MS, Task 1)
+// is initialised by then.
 
 /** Which arm of export-due fires, or null. `no-writer` is B1's ruled arm; `stale-pass` outranks `waited`. A clock
  *  that is not a time fires neither writer arm by itself: a last pass of null (none since this build landed), and a
@@ -8550,6 +8553,18 @@ function exportDueRemedy(h) {
   if (h.exportPausedLowDisk) return 'free space on the home filesystem: the export pass is paused for room there, and the due text waits for it';
   if (arm === 'stale-pass') return `read the sweep: ${SWEEP_LOG}; an export pass completes at least hourly, and none has for over two intervals`;
   return `none needed while the backlog drains at one segment an hour; if the count does not fall, read the sweep: ${SWEEP_LOG}`;
+}
+
+/** export-overdue's remedy, by build: B1's, verbatim, for a build without the writer (which can only ask for a longer
+ *  retention); with the writer live, what an operator does now (W1-B4 review 614). The text is the store's only copy until a
+ *  segment holds it, so the store is kept first; the room first while the pass is paused for it, as exportDueRemedy
+ *  has it; otherwise the pass drains the backlog at its hourly rate, and the sweep's log is where a count that does not
+ *  fall is read. */
+function exportOverdueRemedy(h) {
+  if (!h.exportWriterLive) return HEALTH_REMEDIES['export-overdue'];
+  const keep = 'the store may be the only copy of this text: keep ~/.ccrc/history (never --purge-history)';
+  if (h.exportPausedLowDisk) return `${keep}, and free space on the home filesystem: the export pass is paused for room there, and this text waits for it`;
+  return `${keep}; the export pass copies it into ~/.ccrc/history/${EXPORT_DIR}/<store_id>/ at one segment an hour, and if the count does not fall, read the sweep: ${SWEEP_LOG}`;
 }
 
 // The census's oldest due-since in meta (HEALTH_META.exportDueOldestMs), written and read back here only, so the sweep
