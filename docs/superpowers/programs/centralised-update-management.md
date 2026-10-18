@@ -4388,6 +4388,18 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     - Recorded only: case 6's 0.69 s margin is the likeliest timing candidate for the load-flake list; and "the
       absorb never re-sends the SIGTERM" is new in this wave, with an outcome equal to the base's. A later
       hardening could fall through to the SIGKILL instead of raising. That is residue for the next stop-path change.
+  - **16:35 UTC: B2's fix round 1 verified at `70b99da3d` (mail 6463).**
+    - The round is one commit on `453170331`, touching only the docs-tree test and the plan, with `ccd/` identical.
+      So full run 39140769427's macOS proof stands.
+    - Case 5's pin now accepts any live state and refuses `Z`, `X`, `gone` and empty.
+    - The worker measured 10 greens at load 12 to 13, T20-M7 red, and a zombie hand mutation red. F2 to F5 are done,
+      and PR #607's body is patched.
+    - Measured by me on the exact merge with `main` (`cab4f9055`, clean; `main` touched none of the four files):
+      - `-t 'row 64 on Darwin'` green 3 of 3 at load about 11.5;
+      - T20-M7 (the instant predicate) reds cases 3, 5 (`spawn: Operation not permitted`) and 6; restored, `cmp`
+        clean;
+      - `ccd-docs-tree` whole 190 and `ccd-docs-index` 256 green, and `mark.mjs --check` reads `ccrc-unmodified`.
+    - Run 566 is at awaiting-review. PR CI 39145386301 is running; on green I merge #607.
 
 ## Carried constraints
 
