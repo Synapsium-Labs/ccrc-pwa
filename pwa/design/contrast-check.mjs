@@ -62,6 +62,7 @@ const palette = (theme) => {
     busy: of('--status-busy'), busyText: of('--status-busy-text'), idle: of('--status-idle'),
     att: of('--status-attention'), attText: of('--status-attention-text'), attTint: of('--status-attention-tint'),
     dead: of('--status-dead'), deadText: of('--status-dead-text'), deadTintSolid: of('--status-dead-tint-solid'),
+    dangerInk: of('--ink-on-danger'),
     done: of('--status-done'), doneText: of('--status-done-text'),
     cleanup: of('--status-cleanup'), cleanupText: of('--status-cleanup-text'),
     cyan: of('--acct-cyan'), cyanT: of('--acct-cyan-tint'),
@@ -264,6 +265,20 @@ const pairs = (T, name) => [
   [`${name} scrollbar thumb / raised (UI 3:1)`, T.thumb, T.raised, 3],
   [`${name} scrollbar thumb / sheet (UI 3:1)`, T.thumb, T.sheet, 3],
   [`${name} scrollbar thumb / well (UI 3:1)`, T.thumb, T.well, 3],
+
+  // THE DANGER VARIANTS (D-5099). `danger` is a fill of --status-dead with
+  // --ink-on-danger on it: self-grounded, so utility-pairs.test.ts finds the
+  // pair in button.tsx, and this is its per-palette floor. `danger-ghost` is
+  // a --status-dead hairline around a --status-dead-text label on whatever
+  // the call site sits on: a sheet, a card or the page, and the fleet host's
+  // banner, whose ground is the 12% dead wash. Its label on that wash is the
+  // `dead-text / EXIT-badge pill` pair above; the hairline is a non-text
+  // boundary, 3:1 (WCAG 2.1 SC 1.4.11).
+  [`${name} ink-on-danger / status-dead`, T.dangerInk, T.dead, 4.5],
+  [`${name} dead-text / sheet`, T.deadText, T.sheet, 4.5],
+  [`${name} dead-text / page`, T.deadText, T.page, 4.5],
+  [`${name} danger hairline / sheet (UI 3:1)`, T.dead, T.sheet, 3],
+  [`${name} danger hairline / dead banner tint (UI 3:1)`, T.dead, T.deadTintSolid, 3],
 ];
 
 let fail = 0, n = 0;

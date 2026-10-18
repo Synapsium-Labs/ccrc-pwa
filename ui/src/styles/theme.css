@@ -89,6 +89,7 @@
   --color-ink-disabled:  var(--ink-disabled);
   --color-ink-on-well:   var(--ink-on-well);
   --color-ink-on-phosphor: var(--ink-on-accent);
+  --color-ink-on-danger:   var(--ink-on-danger);   /* the danger fill's label (D-5099) */
 
   /* --- accent (the phosphor) ------------------------------------------ */
   /* THE BRAND HUE IS `phosphor`, NOT `accent`, and shadcn is the reason.

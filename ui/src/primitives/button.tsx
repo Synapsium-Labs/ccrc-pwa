@@ -32,6 +32,21 @@ export const buttonVariants = cva(
            `button-line-height.test.ts` derives every Button the app renders. */
         primary:
           'btn-primary border-0 bg-phosphor text-ink-on-phosphor text-base leading-none font-semibold disabled:bg-edge-subtle disabled:text-ink-disabled',
+        /** `danger` and `danger-ghost` (D-5099) — the commit that destroys
+         *  something, and its quieter twin. `danger` is `primary`'s shape on
+         *  the dead hue: a fill of `--status-dead` with `--ink-on-danger`, a
+         *  token fitted per palette to that fill (near-black on a dark
+         *  palette, white on a light one), and the same disabled stand-down.
+         *  `danger-ghost` is `ghost`'s shape: a `--status-dead` hairline
+         *  around a `--status-dead-text` label, for a trigger that sits on a
+         *  ground already painted red (the fleet host's banner), where a red
+         *  fill would be red on red. It takes `ghost`'s disabled stand-down
+         *  too (D-5448). Both are gated per palette in
+         *  `pwa/design/contrast-check.mjs`. */
+        danger:
+          'btn-danger border-0 bg-status-dead text-ink-on-danger text-base leading-none font-semibold disabled:bg-edge-subtle disabled:text-ink-disabled',
+        'danger-ghost':
+          'btn-danger-ghost border border-status-dead bg-transparent text-status-dead-text text-base leading-none font-medium disabled:text-ink-disabled disabled:border-edge-subtle',
         ghost:
           'btn-ghost border border-edge-strong bg-transparent text-ink-primary text-base leading-none font-medium transition-[transform,background-color] motion-reduce:transition-none enabled:active:bg-raised disabled:text-ink-disabled disabled:border-edge-subtle',
         /** `quiet` — the raised mono control. FOUR app rules declared the same
