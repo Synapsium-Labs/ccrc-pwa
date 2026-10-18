@@ -32,12 +32,19 @@ HOOK_CMD='bash "$HOME/.cc-sessions/session-hook.sh"'
 # card): an operator decision, not this fix's. SessionEnd's entry carries NONE: Claude Code
 # runs SessionEnd hooks under its own 1.5 s budget (CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS,
 # measured on 2.1.292), which a configured `timeout` RAISES, to min(timeout, 60 s), on every
-# exit and /clear; and the spool append never runs on SessionEnd.
+# exit and /clear; and the history spool append never runs on SessionEnd. The delegation spool's append does (delegation broker
+# wave 3): one `printf` to a regular file the hook has just tested, in builtins, so it fits that budget, and the FIFO hazard
+# above applies to it the same way (a SessionEnd killed at 1.5 s loses one hint, which the census backstops).
 HOOK_TIMEOUT_S=600
 # Same discipline as HOOK_CMD: $HOME left unexpanded, resolved per-session.
 STATUSLINE_CMD='bash "$HOME/.claude/statusline-command.sh"'
 # Events that get a matcher-less managed entry. PreToolUse is handled
-# separately below because it alone carries matcher "*".
+# separately below because it alone carries matcher "*", which reaches every tool: Agent, Task, Workflow and Bash for the
+# delegation spool (the hook decides what to record; ToolSearch is a tool name, not an event, and records nothing).
+# The delegation spool records SessionStart, PreToolUse, PostToolUse, SubagentStart, SubagentStop, UserPromptSubmit and
+# SessionEnd, every one of which is below. WorktreeCreate and WorktreeRemove are NEVER registered: a registered hook for
+# either REPLACES Claude Code's own worktree handling (spec 2026-10-04 §3.1), and creation and removal are measured by the
+# census instead. `install-session-hooks.test.ts` pins both halves.
 #
 # This list and session-hook.sh's `case "$event"` arms are the same set written
 # twice, and they DRIFTED: the hook grew a SessionStart arm (F1) that was never

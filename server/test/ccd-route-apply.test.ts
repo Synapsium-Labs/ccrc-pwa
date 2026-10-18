@@ -816,6 +816,8 @@ describe('the /model flow as Claude Code 2.1.285–2.1.291 draws it (measured 20
     after('Escape', capture('cc291-model-escape-to-picker-120x30.txt'));
     h.sh(`${TMUX_STUB} _route_apply_now ${ID} || :`);
     expect(keys().slice(-2)).toEqual(['Escape', 'Escape']);
+    // D-5237: each Escape ccd sends is on record, one `route-escape` line apiece.
+    expect(swapLog().split('\n').filter((l) => l.endsWith(` route-escape ${ID}`))).toHaveLength(2);
   });
 
   it('…and ONE Escape when it lands at the prompt — no blind second key', () => {

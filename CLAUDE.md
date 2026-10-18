@@ -7,7 +7,7 @@ and **follows a session across account/wrapper swaps**
 (the thing claude.ai's own app can't do). Weigh every feature by the loop it serves:
 spec → plan → subagent execution with per-PR review lenses + whole-branch pass → coordinated multi-wave programs.
 
-**`README.md` (~6300 lines) is the canonical system overview. This file is only the non-obvious operational rules
+**`README.md` (~6574 lines) is the canonical system overview. This file is only the non-obvious operational rules
 — read the README for anything below in depth.** Deep design lives in `docs/superpowers/specs/` (esp.
 `2026-08-10-architecture-ddd-clean-solid.md`, `2026-08-07-build7-fleet-coordination-design.md`).
 
@@ -318,8 +318,11 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   armed all four still sit behind the session gate (`auth/gate.ts`'s NOT-EXEMPT note: gating them there
   "strengthens D-282 rather than reversing it"). Those prefixes are the bulk of the box-token surface, not the
   whole of it (D-1148, correcting a "whole box-token surface" claim this file carried for one wave): `POST
-  /api/asks/:id/answer`, `POST /api/asks/:id/release`, `POST /api/claims`, `POST /api/claims/:id/release`, `POST /api/ledger/deviations` and
-  `GET /api/ledger` all call `requireMailToken` outside both. The dual-credential reads, including `GET /api/feed`
+  /api/asks/:id/answer`, `POST /api/asks/:id/release`, `POST /api/claims`, `POST /api/claims/:id/release`,
+  `POST /api/coordinators/:session/intent`, `POST /api/ledger/deviations` and
+  `GET /api/ledger` all call `requireMailToken` outside both (the intent door, where a session declares its own coordinator
+  intent through `ccrc-api`, is attribution-checked and sits in `auth/gate.ts`'s EXEMPT table like the claim lanes: its only
+  caller holds the token and has no cookie). The dual-credential reads, including `GET /api/feed`
   and the update projection read `GET /api/updates/intent/:nodeId` (a fleet node's timer pulls it cookieless from
   update-management W4), call `checkMailToken` only after a session check; `auth/gate.ts`'s EXEMPT reasons — route by route, each
   with its own argument — are the census, not this bullet. What does need saying here are the
@@ -380,7 +383,7 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   (`resolveCoordinator(runId)` reads that run's `claimedBy`, no program-state predicate) — which is the
   documented recovery for an already-retired program.
 - The coordinator is an ordinary fleet session running the `ccrc-coordinator` skill
-  (`ccd/coordinator-skill/SKILL.md`); its sixteen clauses are pinned VERBATIM by
+  (`ccd/coordinator-skill/SKILL.md`); its seventeen clauses are pinned VERBATIM by
   `server/test/coordinator-skill.test.ts` — a softened clause is a red suite. Pause kill-switches are FILES
   (`$REG/coordinator-paused`, `$REG/mail-disabled`). `mail-disabled` has **no writer in the tree** — touch/rm by
   hand only. `coordinator-paused` does: Build 4's whitelisted `ccd coord-pause --state on|off`, driven by
@@ -428,7 +431,7 @@ each tell absent from unreadable, and the B64 arm tells a THIRD condition, over-
 size beside it. The four convenience reads — `readFile`, `readFileFrom`, `readFileB64`, `stat` — still
 fold every failure to one `null`, DELIBERATELY, so an older caller keeps its exact meaning; each now
 names its own collapse in `io.ts` and points at its measured sibling, and each derives from it, so no
-adapter narrows a distinction it received. **The one read left with no measured sibling is `readdir`.**
+adapter narrows a distinction it received. **`readdir` has its measured sibling too:** `readdirMeasured`.
 The agent's wire no longer lies either: `absent` is a separate positive marker spread ONLY on a proven
 ENOENT (`statPayload`, `agent/src/server.ts`), so EACCES answers a bare `{missing: true}` and a newer
 server reads that as UNMEASURED rather than as absence (D-1396) — the sentence here previously said the

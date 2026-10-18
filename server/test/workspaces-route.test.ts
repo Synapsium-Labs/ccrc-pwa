@@ -8,15 +8,22 @@ import { describe, it, expect } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import type { Runner } from '../src/exec.js';
 import { buildServer } from '../src/server.js';
+import { ACTOR_FLAGS_CAP, CCD_ARGV } from '../src/ccdargv.js';
 import { testDeps } from './helpers.js';
 
-async function appWithCcdSpy(): Promise<{ app: FastifyInstance; calls: string[][] }> {
+/** `ccdVerbs`, when given, seeds a real `fleetState` (lifecycle.test.ts's
+ *  `makeApp` shape); omitted, the deps carry none — no evidence, as before. */
+async function appWithCcdSpy(ccdVerbs?: string[]): Promise<{ app: FastifyInstance; calls: string[][] }> {
   const calls: string[][] = [];
   const run: Runner = async (_cmd, args) => {
     calls.push(args);
     return { code: 0, stdout: '', stderr: '' };
   };
-  const app = await buildServer(testDeps(undefined, run));
+  const deps = testDeps(undefined, run);
+  const app = await buildServer(ccdVerbs === undefined ? deps : {
+    ...deps,
+    fleetState: { connected: true, downSince: null, ccdVerbs, rosterFp: null, build: null },
+  });
   return { app, calls };
 }
 
@@ -27,6 +34,44 @@ describe('workspace routes', () => {
     expect(res.statusCode).toBe(200);
     expect(calls).toContainEqual(['ws-add', 'demo']);
     await app.close();
+  });
+
+  // D-5301 (coordinator-first spec §8): the PWA "+" says who made the
+  // workspace. It passes `ccd ws-add`'s existing `--surface`/`--actor` pair —
+  // `pwaDec`, the dec every other human-driven workspace route declares — and
+  // nothing else; only on a box whose ccd advertises the flags, because an old
+  // `cmd_ws_add` bound the first flag token as the slug (D-410).
+  it('the PWA create declares its surface and actor on a box that takes the flags, and no other new flag (D-5301)', async () => {
+    const { app, calls } = await appWithCcdSpy(['ws-add', ACTOR_FLAGS_CAP]);
+    const res = await app.inject({ method: 'POST', url: '/api/projects/project-a/workspaces' });
+    expect(res.statusCode).toBe(200);
+    expect(calls).toEqual([['ws-add', 'project-a', '--surface', 'pwa', '--actor', 'unmeasured']]);
+    await app.close();
+  });
+
+  it('the PWA create keeps its route flags leading and its dec trailing (D-5301)', async () => {
+    const { app, calls } = await appWithCcdSpy(['ws-add', ACTOR_FLAGS_CAP, 'route-argv-v1']);
+    const res = await app.inject({
+      method: 'POST', url: '/api/projects/project-a/workspaces', payload: { route: { effort: 'high' } },
+    });
+    if (res.statusCode !== 200) throw new Error(`route body refused: ${res.body}`);
+    const argv = calls[0]!;
+    expect(argv[0]).toBe('ws-add');
+    expect(argv.slice(-5)).toEqual(['project-a', '--surface', 'pwa', '--actor', 'unmeasured']);
+    await app.close();
+  });
+
+  it('a box that does not advertise the flags gets the bare create, token for token (D-410, D-5301)', async () => {
+    const { app, calls } = await appWithCcdSpy(['ws-add']);
+    await app.inject({ method: 'POST', url: '/api/projects/project-a/workspaces' });
+    expect(calls).toEqual([['ws-add', 'project-a']]);
+    await app.close();
+  });
+
+  it("a dispatch's create is byte-identical to today's — it never gains the operator's dec (D-5301)", () => {
+    expect(CCD_ARGV.wsAddWorker('project-a', null)).toEqual(['ws-add', '--no-rc', 'project-a']);
+    expect(CCD_ARGV.wsAddWorker('project-a', { surface: 'agent', actor: 'run:7 dispatch', reason: null }, null, 7))
+      .toEqual(['ws-add', '--no-rc', '--child', '7', 'project-a', '--surface', 'agent', '--actor', 'run:7 dispatch']);
   });
 
   it('DELETE /api/sessions/:id/workspace no longer exists', async () => {

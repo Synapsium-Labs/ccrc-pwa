@@ -76,9 +76,13 @@ const writeLimits = (w: string, five: number, seven: number): void => {
     JSON.stringify({ five, seven, ts: Math.floor(Date.now() / 1000) }));
 };
 
+/** D-5240 (fixture fallout, D-5350): a manual swap reads `_ws_status` before anything else, and an
+ *  alive pane with no pid is unreadable there (status-unknown). These cases
+ *  are about pools, so the pane is GONE, which `_ws_status` reads as idle. */
+const NO_PANE = 'case "${1:-}" in has-session) echo "can\'t find session: x" >&2; return 1 ;; esac;';
 const SWAP_STUBS = 'systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; return 0; };'
   + ' launchctl() { echo "launchctl $*" >> "$HOME/ccd-calls"; return 0; };'
-  + ` tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${WIDE_PANE} return 0; }; sleep() { :; };`;
+  + ` tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${WIDE_PANE} ${NO_PANE} return 0; }; sleep() { :; };`;
 
 /** The registry row cmd_swap reads. Returns `mdir` — the munge of the resolved
  *  workdir, computed here exactly as ccd's `tr '/._' '---'` computes it. */
@@ -766,7 +770,7 @@ const SELF = `
   launchctl() { echo "launchctl $*" >> "$HOME/ccd-calls"; return 0; };
   sleep() { :; };
   tmux() { ${WIDE_PANE} case "\${1:-}" in display-message) echo "cc-${ID}";; esac;
-    echo "tmux $*" >> "$HOME/ccd-calls"; return 0; };
+    echo "tmux $*" >> "$HOME/ccd-calls"; ${NO_PANE} return 0; };
   _svc_run_detached() { echo "detached $*" >> "$HOME/ccd-calls"; return 0; };
 `;
 

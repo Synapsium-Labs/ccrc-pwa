@@ -102,7 +102,10 @@ const floorRow = (id = ID): string | undefined => (h.reg(id, 'typed') ?? '').spl
 
 /** The real cmd_swap, with systemd, tmux and the flush wait stubbed (the
  *  `ccd-swap.test.ts` idiom); TMUX is emptied so the detached arm is never taken. */
-const SWAP = 'systemctl() { :; }; launchctl() { :; }; tmux() { :; }; sleep() { :; };';
+const SWAP = 'systemctl() { :; }; launchctl() { :; }; sleep() { :; };'
+  // GONE on `has-session` (D-5350): D-5240's manual gate reads `_ws_status` first, and
+  // `tmux() { :; }` alone is an alive pane with no pid, which it reads as unreadable.
+  + ' tmux() { case "${1:-}" in has-session) echo "can\'t find session: x" >&2; return 1 ;; esac; };';
 
 // ── THE JOURNAL ───────────────────────────────────────────────────────────────
 
@@ -870,6 +873,7 @@ describe('wave 3\'s residue: the marker, the order of the checks, and the swap a
     h.sh(`systemctl() { :; }; launchctl() { :; }; sleep() { :; };
       tmux() { [[ "\${1:-}" == kill-session ]] && return 1; return 0; };
       _session_probe() { PROBE_VERDICT=live; PROBE_DETAIL=""; PROBE_SUBSTRATE=present; };
+      _ws_status() { echo idle; };   # the live session is idle, so D-5240's manual gate lets the swap through
       cmd_swap ${ID} claude-d`, { TMUX: '' });
     expect(OOV(), 'the swap\'s keep read').toBe(1);
     expect(marked(), 'a live session is never left marked by a swap').toBe(false);

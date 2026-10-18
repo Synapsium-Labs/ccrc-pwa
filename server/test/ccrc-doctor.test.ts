@@ -35,7 +35,7 @@
 // The only real binaries any fixture reaches are `bash` (spawned by absolute
 // path), the real `node` behind the version stub, and `timeout` (symlinked in
 // where a test wants the timeout path exercised).
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeAll } from 'vitest';
 import { spawnSync, execFileSync } from 'node:child_process';
 import {
   writeFileSync, readFileSync, mkdirSync, symlinkSync, rmSync, chmodSync, existsSync, cpSync,
@@ -43,9 +43,9 @@ import {
 } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { mkTmp } from './tmpHelpers.js';
+import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { ghContainedEnv, ghPoisonAt, plantPoolEpoch, seedAccountsSh } from './ccdWsHelpers.js';
-import { plantAuthHelper, plantAuthModule, fixtureSecretLine } from './authFixtures.js';
+import { plantAuthHelper, plantAuthModule, fixtureSecretLine, compiledSecretJs } from './authFixtures.js';
 // One home for the scratch-slug vocabulary (D-2375) — see scratchSlugs.ts
 // for the rule, and for why the /var/tmp control needs both spellings.
 import { SCRATCH_SLUGS, PERSISTENT_SLUGS } from './scratchSlugs.js';
@@ -58,6 +58,7 @@ import {
 } from './docsIndexFixtures.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+
 const REPO = path.resolve(here, '..', '..');
 const CCRC_SRC = join(REPO, 'ccd', 'ccrc');
 const CHECKS_SRC = join(REPO, 'ccd', 'ccrc-doctor-checks');
@@ -81,6 +82,23 @@ const realPath = (name: string): string => {
 };
 
 interface Result { code: number; stdout: string; stderr: string }
+
+// ── fixture lifetime (R100, review 518's S1) ──────────────────────────────
+
+// Each case's homes go when the case ends, not in the file's one end-of-file sweep. That sweep (tmpHelpers' `afterAll`)
+// overran vitest's 20 s hook timeout when this file ran alone at the delegation wave's tip, after every one of its 1,036 tests
+// had passed: the class R20a cured for `ccrc-update.test.ts`. The call sits here, before the file's own root `afterEach` (the
+// codex lanes' process kill), because vitest runs after-hooks in reverse order of registration: that kill still sees its home.
+removeTmpFixturesEachTest();
+// ONE SHARED FIXTURE BREAKS UNDER THAT, and is built here instead. `authFixtures`' compiled reader (`compiledSecretJs`) is built
+// once per file into an `mkTmp` directory by whichever case first plants an auth module, and every later case copies from the
+// path it cached. Built inside a case, the directory is that case's and is gone when the case ends: the next copy fails with
+// ENOENT (measured: eleven of the twelve R98 rows). A `beforeAll` runs before the first case's mark, so the directory is left for
+// the end-of-file sweep. A failed build is not cached, so it is left to the case that needs it, which fails with the compiler's
+// own message, not every case in the file.
+beforeAll(() => {
+  try { compiledSecretJs(); } catch { /* the first case that plants an auth module builds it again and reports why it could not */ }
+}, 120_000);
 
 // ── fixture construction ──────────────────────────────────────────────────
 
@@ -108,6 +126,10 @@ function installCcrc(home: string): void {
   for (const n of ['install-coordinator-skill.sh', 'install-worker-skill.sh', 'install-reviewer-skill.sh', 'install-history-skill.sh']) {
     symlinkSync(join(REPO, 'ccd', n), join(ccd, n));
   }
+  // …and the HOOK installer (delegation broker wave 3, Task 14): `_check_delegation-hooks` reads the approved event
+  // set out of `$CCRC_HERE/install-session-hooks.sh`'s own `EVENTS_JSON` (no third copy), and `_fix_delegation-hooks`
+  // re-runs that same script, so a fixture tree carries it beside the doctor file as a real tree does.
+  symlinkSync(join(REPO, 'ccd', 'install-session-hooks.sh'), join(ccd, 'install-session-hooks.sh'));
   // The history CLI (spec 2026-10-05 §9.6): `_check_history` runs `node "$CCRC_HERE/history/cli.mjs" status --json`.
   // A LINK, like the skill trees and unlike the auth helpers: node resolves a module's imports from its REAL path,
   // and this module's imports (`./lib.mjs`, `./store.mjs`) sit beside it in the checkout, as they do in a box's
@@ -644,9 +666,14 @@ function writeRcFlag(home: string, text: string): void {
 function stubSystemctl(home: string): void {
   stub(home, 'systemctl',
     'if [ "$1" = "--user" ] && [ "$2" = "is-active" ]; then\n'
-    + '  f="$HOME/fixture-unit-$3"\n'
-    + '  if [ -f "$f" ]; then IFS= read -r v < "$f"; echo "$v"; [ "$v" = active ] && exit 0; exit 3; fi\n'
-    + '  echo inactive; exit 3\n'
+    // One word per unit, in order, exit 0 only if every unit is active (systemd's own `is-active u1 u2 ...`): `delegation-hooks`
+    // asks about all its pending units in one call. With one unit this is the single-unit stub it always was.
+    + '  shift 2; rc=0\n'
+    + '  for u in "$@"; do\n'
+    + '    f="$HOME/fixture-unit-$u"\n'
+    + '    if [ -f "$f" ]; then IFS= read -r v < "$f"; echo "$v"; [ "$v" = active ] || rc=3; else echo inactive; rc=3; fi\n'
+    + '  done\n'
+    + '  exit $rc\n'
     + 'fi\n'
     + 'if [ "$1" = "--user" ] && [ "$2" = "list-units" ]; then\n'
     + '  f="$HOME/fixture-scopes"\n'
@@ -654,7 +681,8 @@ function stubSystemctl(home: string): void {
     + '  exit 0\n'
     + 'fi\n'
     + 'if [ "$1" = "--user" ] && [ "$2" = "show" ]; then\n'
-    + '  f="$HOME/fixture-cgroup-of-$3"\n'
+    // D-5241: `-p OOMPolicy` answers from its own file, so the oom-policy check can never read a ControlGroup.
+    + '  f="$HOME/fixture-cgroup-of-$3"; [ "$5" = OOMPolicy ] && f="$HOME/fixture-oompolicy-of-$3"\n'
     + '  if [ -f "$f" ]; then IFS= read -r v < "$f"; echo "$v"; fi\n'
     + '  exit 0\n'
     + 'fi\n'
@@ -958,6 +986,24 @@ function plantScope(home: string, o: {
   writeFileSync(join(home, `fixture-cgroup-of-${unit}`), `${cg}\n`);
 }
 
+/** D-5241: the victim policy's two OOMPolicy=continue drop-ins, at the paths `_inst_units` places them (systemd only,
+ *  so the Linux unit directory whatever the host). `fixture-oompolicy-of-<unit>` is what the stub's `show -p OOMPolicy`
+ *  answers for a scope. */
+const OOM_DROPIN = {
+  pane: join('tmux-spawn-.scope.d', '50-oom-continue.conf'),
+  server: join('ccrc-tmux-server.scope.d', '50-oom-continue.conf'),
+} as const;
+function plantOomDropins(home: string, which: ReadonlyArray<keyof typeof OOM_DROPIN> = ['pane', 'server']): void {
+  for (const k of which) {
+    const p = join(home, '.config', 'systemd', 'user', OOM_DROPIN[k]);
+    mkdirSync(path.dirname(p), { recursive: true });
+    writeFileSync(p, '[Scope]\nOOMPolicy=continue\n');
+  }
+}
+function plantOomPolicy(home: string, unit: string, value: string): void {
+  writeFileSync(join(home, `fixture-oompolicy-of-${unit}`), `${value}\n`);
+}
+
 /** The fixture's stand-in for /etc/caddy/Caddyfile — outside `~/.ccrc`, since
  *  the real one is outside the home entirely and `ccrcDirEntries`-style
  *  assertions elsewhere would otherwise see it. */
@@ -1035,6 +1081,59 @@ function runDoctor(home: string, args: string[] = ['doctor'], extraEnv: NodeJS.P
  *  `_check_skills`' subject. One list for `healthy()` and `healthyCodexBox()`. */
 const SHIPPED_SKILLS = [['coordinator-skill', 'ccrc-coordinator'], ['worker-skill', 'ccrc-worker'], ['reviewer-skill', 'ccrc-reviewer'], ['history-skill', 'ccrc-history']] as const;
 
+/** The hook installer a fixture tree carries beside the doctor file, and the approved event set as an INDEPENDENT
+ *  reader of it sees it: `EVENTS_JSON` (the events that get a matcher-less managed entry) plus `PreToolUse`, the one
+ *  event the installer registers on its own line with matcher `*`. The doctor check reads the same `EVENTS_JSON`
+ *  line at run time; this reader exists so no test (and no fixture) types the list a second time. */
+const DH_INSTALLER = join(REPO, 'ccd', 'install-session-hooks.sh');
+function installerEvents(src = readFileSync(DH_INSTALLER, 'utf8')): string[] {
+  const m = /^EVENTS_JSON='(\[[^\n']*\])'$/m.exec(src);
+  if (m === null) throw new Error('ccd/install-session-hooks.sh no longer holds EVENTS_JSON=\'[...]\' in the shape this reader takes');
+  const events = JSON.parse(m[1]!) as string[];
+  if (events.length === 0) throw new Error('EVENTS_JSON is empty');
+  return [...events, 'PreToolUse'];
+}
+
+/** `<home>/<suffix>/settings.json` as the shipped installer leaves it: one managed entry per approved event,
+ *  `PreToolUse` carrying matcher `*`. `omit` drops events, `foreign` adds registrations the installer never writes,
+ *  and `extra` merges unrelated keys (a secret-looking one, in the cases that assert nothing is echoed). */
+/** The entry's command and timeout, read from the installer's own `HOOK_CMD` and `HOOK_TIMEOUT_S` (as `installerEvents()`
+ *  reads `EVENTS_JSON`), so a fixture registration can never drift from what the installer writes. */
+function installerHook(src = readFileSync(DH_INSTALLER, 'utf8')): { command: string; timeout: number } {
+  const c = /^HOOK_CMD='([^\n']*)'$/m.exec(src);
+  const tm = /^HOOK_TIMEOUT_S=(\d+)$/m.exec(src);
+  if (c === null || tm === null) throw new Error('ccd/install-session-hooks.sh no longer holds HOOK_CMD=\'...\' and HOOK_TIMEOUT_S=<n> in the shape this reader takes');
+  return { command: c[1]!, timeout: Number(tm[1]) };
+}
+type RegistrationOpts = { omit?: string[]; foreign?: string[]; ownWorktree?: string[]; extra?: Record<string, unknown>; events?: string[] };
+function registrationHooks(o: RegistrationOpts = {}): Record<string, unknown[]> {
+  const hooks: Record<string, unknown[]> = {};
+  const hook = installerHook();
+  for (const ev of o.events ?? installerEvents()) {
+    if (o.omit?.includes(ev)) continue;
+    const h = { type: 'command', command: hook.command, ...(ev === 'SessionEnd' ? {} : { timeout: hook.timeout }) };
+    hooks[ev] = [ev === 'PreToolUse' ? { matcher: '*', hooks: [h] } : { hooks: [h] }];
+  }
+  for (const ev of o.ownWorktree ?? []) hooks[ev] = [{ hooks: [{ type: 'command', command: hook.command }] }];
+  for (const ev of o.foreign ?? []) hooks[ev] = [{ hooks: [{ type: 'command', command: 'bash "$HOME/bin/their-worktree-hook.sh"' }] }];
+  return hooks;
+}
+function plantHookRegistration(home: string, suffix: string, o: RegistrationOpts = {}): void {
+  const hooks = registrationHooks(o);
+  mkdirSync(join(home, suffix), { recursive: true });
+  // Keys the home already carries (a lane's `env` block, `materialise`'s output) survive: the installer merges, and so does this.
+  let cur: Record<string, unknown> = {};
+  try { cur = JSON.parse(readFileSync(join(home, suffix, 'settings.json'), 'utf8')) as Record<string, unknown>; } catch { /* a fresh home */ }
+  writeFileSync(join(home, suffix, 'settings.json'), JSON.stringify({ ...cur, hooks, ...(o.extra ?? {}) }, null, 2));
+}
+
+/** `$REG/delegation/spool/<id>`, the owner directory ccd makes at spawn (mode 0700). */
+function plantSpoolDir(home: string, id: string): string {
+  const d = join(home, '.cc-sessions', 'delegation', 'spool', id);
+  mkdirSync(d, { recursive: true, mode: 0o700 });
+  return d;
+}
+
 /** `python3 -I -c <program>` for the two programs `_check_box-token` runs (`_BT_PY_STATE`, `_BT_PY_FLEET` in
  *  `ccd/ccrc-doctor-checks`), handed to the real interpreter; the text is read from the shipped file so a third or an
  *  edited program still reaches the stub's bare `exit 0`. Empty when this box has no python3 (the check then says so). */
@@ -1077,6 +1176,9 @@ function healthy(prefix: string): string {
   // A pane scope with nothing parked: `_check_scopes` PASSes, and returns
   // WITHOUT settling, so the healthy fixture costs no extra second.
   plantScope(home, { procs: [4101, 4102] });
+  // D-5241: both scope drop-ins on disk and the pane scope reading `continue`: `oom-policy` PASSes.
+  plantOomDropins(home);
+  plantOomPolicy(home, 'tmux-spawn-fixture.scope', 'continue');
   // The pane-scope sweep's verdict record, fresh and empty: `scope-sweep` PASSes.
   writeFileSync(join(home, 'fixture-scope-sweep.state'), `# ccd-scope-sweep v1 tick=${Math.floor(Date.now() / 1000)} up=8640000 mode=shadow\n`);
   // tmux answers its versions, client and server agreeing — a healthy box is
@@ -1110,6 +1212,9 @@ function healthy(prefix: string): string {
   // plantings, but without it `skills` WARNs "diff is not on PATH" on every
   // fixture in this suite, including `healthy()` itself, which must PASS).
   linkReal(home, 'diff');
+  // …and its settings.json registers the shipped session hook for every approved event: `delegation-hooks` is a check, and
+  // healthy()'s contract is that every check PASSES (no live session owes a spool directory here).
+  plantHookRegistration(home, '.claude');
   // …and its credential is where the convention says it is. A healthy box is one
   // where every check PASSES, and `credentials` measures exactly this: the
   // roster declares one telemetry:'anthropic' account, so there is one file it
@@ -1431,6 +1536,9 @@ async function healthyCodexBox(prefix: string, ids: readonly string[] = ['codex-
     for (const [tree, name] of SHIPPED_SKILLS) {
       cpSync(join(REPO, 'ccd', tree), join(home, `.claude-${id}`, 'skills', name), { recursive: true });
     }
+    // …and `delegation-hooks` measures every existing rostered home too: the installer registers the session hook in
+    // each one, a Codex lane's included, and merges it into the settings.json `materialise` wrote.
+    plantHookRegistration(home, `.claude-${id}`);
   }
   return home;
 }
@@ -1531,8 +1639,14 @@ const anyVerdictFor = (out: string, name: string): string | undefined =>
  *  fleet agent's `agent.env`, so neither arm has a subject. Measured the same
  *  way: with the check in the table and this `+ 1` absent, "every line is
  *  exactly PASS|WARN|FAIL|SKIP" and "prints a summary count LAST" red, and so
- *  does every `(N skipped)` pin that reads this constant. */
-const HEALTHY_SKIPS = (process.platform === 'darwin' ? 2 : 0) + 6;
+ *  does every `(N skipped)` pin that reads this constant.
+ *
+ *  RAISED BY ONE ON macOS ONLY (D-5241): `oom-policy` SKIPs there (launchd has
+ *  no OOMPolicy). On Linux `healthy()` plants both scope drop-ins and a pane
+ *  reading `continue`, so it PASSes and the count is unchanged there. Measured:
+ *  without this, the macOS run reds `counts BOTH lines in the summary` and
+ *  `every line is exactly PASS|WARN|FAIL|SKIP` (`expected 10 to be 9`). */
+const HEALTHY_SKIPS = (process.platform === 'darwin' ? 3 : 0) + 7;   // +1 server-caps (no role): its block at the end
 
 // ── the table itself ──────────────────────────────────────────────────────
 
@@ -10171,6 +10285,11 @@ describe('ccrc doctor: routing (routing spec 2026-09-14 §5.2, §8)', () => {
     const home = routingBox('ccrc-doctor-routing-subagent-census-irrelevant-');
     writeSettingsEnv(home, '.claude', { ANTHROPIC_MODEL: '' });
     plantSession(home, 'sess-a', { live: true, recorded: false });
+    // The whole run is recorded, so `delegation-hooks` must have no question for the manager either: the lane's
+    // registration stands (writeSettingsEnv replaced the file) and so does the session's owner directory, and a
+    // standing directory is never asked about (`delegation-hooks`' own "service manager is not asked" case).
+    plantHookRegistration(home, '.claude', { extra: { env: { ANTHROPIC_MODEL: '' } } });
+    plantSpoolDir(home, 'sess-a');
     stub(home, 'systemctl', 'echo "$*" >> "$HOME/systemctl-calls"; exit 1');
     const out = runDoctor(home).stdout;
     const line = lineFor(out, 'routing');
@@ -11053,8 +11172,10 @@ describe('ccrc doctor: accounts', () => {
 // all is now (correctly) ITS OWN unreachable finding, a fixture that means
 // to test only forked/converged would otherwise also trip unreachable on the
 // same home and muddy what a failing assertion is pinning.
-const HOOKED_SETTINGS =
-  '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"bash \\"$HOME/.cc-sessions/session-hook.sh\\""}]}]}}';
+// It carries the WHOLE shipped registration (`registrationHooks()`, the installer's own event set), not one event:
+// `delegation-hooks` measures every rostered home too, and a fixture that means to test forked/converged memory must
+// not also trip it.
+const HOOKED_SETTINGS = JSON.stringify({ hooks: registrationHooks() });
 
 describe('ccrc doctor: memory (spec 2026-09-08 §4, task 4)', () => {
   it('PASSes on a box where every pair is converged — including the vacuous case of no agent homes at all', () => {
@@ -14522,6 +14643,862 @@ describe('ccrc doctor: box-token', () => {
   });
 });
 
+// ── Delegation broker wave 3, Task 14: `delegation-hooks` ─────────────────────────────────────────────────────────
+// One check, four words. It measures, on every ROSTERED home, whether the hook registration the shipped installer
+// writes is there for every approved event, and whether each LIVE session's owner spool directory (made by ccd at
+// spawn, never by doctor) stands; a foreign `WorktreeCreate`/`WorktreeRemove` registration is a WARN. The approved
+// event set is the installer's own `EVENTS_JSON` plus its separately written `PreToolUse`, read at run time from
+// `$CCRC_HERE/install-session-hooks.sh`: this block types the list nowhere (`installerEvents()` reads the same line),
+// and the end-to-end case below proves the two agree by running the REAL installer into a fixture home. Doctor reads
+// the registration and never prints the file: the cases that plant a secret-looking key assert it never surfaces.
+describe('ccrc doctor: delegation-hooks', () => {
+  /** The own-hook FAIL's remedy (R55): true of what the installer's sweep does, which drops a WHOLE entry that carries ccrc's hook. */
+  const OWN_REMEDY_TEXT = "  remedy: run 'ccrc doctor --fix' (it removes ccrc's own entry from every event; an entry of its own that names another command is kept, but an entry shared with ccrc's hook is not, so --fix refuses a home that has one: move the other command into an entry of its own first)";
+  const THEIRS = (name: string) => ({ type: 'command', command: `bash "$HOME/bin/${name}.sh"` });
+  const SHAPE_REMEDY_TEXT = '  remedy: fix what is named (check with: ls -l $HOME/<home>/settings.json) — this is a mode or shape problem, not a missing registration, and doctor never prints the file';
+  /** `_check_delegation-hooks` alone, as `cmd_doctor` runs it (`runHistoryCheck`'s shape). */
+  function runDh(home: string, extraEnv: NodeJS.ProcessEnv = {}): Result {
+    const ccd = join(home, 'ccrc', 'ccd');
+    const r = spawnSync(BASH, ['-c',
+      `set -uo pipefail; . ${shq(join(ccd, 'ccrc'))}; . ${shq(join(ccd, 'ccrc-doctor-checks'))}; _check_delegation-hooks`],
+    { env: { ...doctorEnv(home), ...extraEnv }, encoding: 'utf8' });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  }
+  /** Every line of the check's answer, in order: verdict lines and their remedy lines. */
+  const lines = (r: Result): string[] => r.stdout.split('\n').filter((l) => l !== '');
+  const verdicts = (r: Result): string[] => lines(r).filter((l) => /^(PASS|WARN|FAIL|SKIP) delegation-hooks: /.test(l));
+  const remedyOf = (r: Result, verdict: RegExp): string => {
+    const ls = lines(r);
+    const i = ls.findIndex((l) => verdict.test(l));
+    expect(i, `no line matches ${verdict}\n${r.stdout}`).toBeGreaterThanOrEqual(0);
+    return ls[i + 1] ?? '';
+  };
+  const asRole = (home: string, role: string): void => writeCcrcEnv(home, `CCRC_ROLE=${role}\n`);
+  const dhBox = (prefix: string): string => healthy(prefix);
+  const twoHomes = (prefix: string): string => {
+    const home = dhBox(prefix);
+    writeRoster(home, [UPSTREAM, { id: 'lane-a', exec: { kind: 'generated' }, telemetry: 'anthropic' } as RosterEntry]);
+    plantHookRegistration(home, '.lane-a');
+    return home;
+  };
+  const events = installerEvents();
+
+  it('the approved set is the installer\'s own list: twelve events here, PreToolUse among them', () => {
+    // The CONTROL for every loop below: a scan over an empty list passes everything.
+    expect(events.length).toBeGreaterThanOrEqual(10);
+    expect(events).toContain('PreToolUse');
+    expect(events).toContain('SubagentStop');
+    expect(events).not.toContain('WorktreeCreate');
+    expect(events).not.toContain('WorktreeRemove');
+  });
+
+  it('PASSes on the healthy box, naming what it measured, with no remedy line and rc 0', () => {
+    const r = runDh(dhBox('ccrc-doctor-dh-pass-'));
+    expect(lines(r)).toEqual([
+      `PASS delegation-hooks: 1/1 rostered homes register all ${events.length} hook events the shipped installer writes; no running session lacks its delegation spool directory (0 registry rows read, 0 with a directory)`]);
+    expect(r.code).toBe(0);
+  });
+
+  it('PASSes on two homes, a live session whose owner directory stands and a parked one with none, counting both', () => {
+    const home = twoHomes('ccrc-doctor-dh-two-');
+    plantSession(home, 'lane-a-demo', { live: true, recorded: true });
+    plantSpoolDir(home, 'lane-a-demo');
+    plantSession(home, 'lane-a-parked', { live: false, recorded: true });   // measured NOT live, no directory: owes nothing
+    const r = runDh(home);
+    expect(lines(r)).toEqual([
+      `PASS delegation-hooks: 2/2 rostered homes register all ${events.length} hook events the shipped installer writes; no running session lacks its delegation spool directory (2 registry rows read, 1 with a directory)`]);
+    expect(r.code).toBe(0);
+  });
+
+  describe('role', () => {
+    it('a server-only box SKIPs with no remedy line and exit 3, even over a missing registration', () => {
+      const home = dhBox('ccrc-doctor-dh-server-');
+      rmSync(join(home, '.claude', 'settings.json'));
+      asRole(home, 'server');
+      const r = runDh(home);
+      expect(lines(r)).toEqual([
+        'SKIP delegation-hooks: this box records CCRC_ROLE=server, so it hosts no sessions and no hook registration or spool directory on it is ccrc\'s concern']);
+      expect(r.code).toBe(3);
+    });
+
+    it.each(['fleet', 'both', 'agent'])('a CCRC_ROLE=%s box measures, so a missing registration FAILs there', (role) => {
+      const home = dhBox(`ccrc-doctor-dh-role-${role}-`);
+      rmSync(join(home, '.claude', 'settings.json'));
+      asRole(home, role);
+      const r = runDh(home);
+      expect(verdicts(r)).toEqual([expect.stringMatching(/^FAIL delegation-hooks: /)]);
+      expect(r.code).toBe(1);
+    });
+  });
+
+  describe('registration', () => {
+    it.each(events)('a home missing the %s entry FAILs naming that event and the home, with the --fix remedy', (ev) => {
+      const home = dhBox('ccrc-doctor-dh-missing-');
+      plantHookRegistration(home, '.claude', { omit: [ev] });
+      const r = runDh(home);
+      expect(verdicts(r)).toEqual([
+        `FAIL delegation-hooks: the shipped hook registration is missing from 1 rostered home: claude: ${ev}`]);
+      expect(remedyOf(r, /^FAIL /)).toBe(
+        '  remedy: run \'ccrc doctor --fix\' (it re-runs the shipped tree\'s install-session-hooks.sh into every rostered home), or \'ccrc update\' (which re-places the tree and re-runs it)');
+      expect(r.code).toBe(1);
+    });
+
+    it('a PreToolUse entry that is not the managed matcher-"*" one does not count', () => {
+      const home = dhBox('ccrc-doctor-dh-pretool-');
+      const f = join(home, '.claude', 'settings.json');
+      const j = JSON.parse(readFileSync(f, 'utf8'));
+      j.hooks.PreToolUse[0].matcher = 'Bash';
+      writeFileSync(f, JSON.stringify(j));
+      expect(verdicts(runDh(home))).toEqual([expect.stringMatching(/^FAIL delegation-hooks: .*claude: PreToolUse$/)]);
+    });
+
+    it('an unrelated hook is not the shipped one: an entry that names another script leaves the event missing', () => {
+      const home = dhBox('ccrc-doctor-dh-unrelated-');
+      const f = join(home, '.claude', 'settings.json');
+      const j = JSON.parse(readFileSync(f, 'utf8'));
+      j.hooks.Stop = [{ hooks: [{ type: 'command', command: 'bash "$HOME/bin/their-stop-hook.sh"' }] }];
+      writeFileSync(f, JSON.stringify(j));
+      expect(verdicts(runDh(home))).toEqual([expect.stringMatching(/^FAIL delegation-hooks: .*claude: Stop$/)]);
+    });
+
+    it('a home with no settings.json FAILs, and is not skipped as though it were absent', () => {
+      const home = dhBox('ccrc-doctor-dh-nosettings-');
+      rmSync(join(home, '.claude', 'settings.json'));
+      const r = runDh(home);
+      expect(verdicts(r)).toEqual([
+        'FAIL delegation-hooks: the shipped hook registration is missing from 1 rostered home: claude: no settings.json']);
+      expect(r.code).toBe(1);
+    });
+
+    it('measures EVERY rostered home: the second one\'s defect is reported, the first one\'s health does not hide it', () => {
+      const home = twoHomes('ccrc-doctor-dh-second-');
+      plantHookRegistration(home, '.lane-a', { omit: ['SubagentStart', 'SessionEnd'] });
+      const r = runDh(home);
+      expect(verdicts(r)).toEqual([
+        'FAIL delegation-hooks: the shipped hook registration is missing from 1 rostered home: lane-a: SubagentStart, SessionEnd']);
+      expect(r.stdout).not.toMatch(/claude:/);
+    });
+
+    it('lists every defective home in roster order, and the order is the same on a re-run', () => {
+      const home = twoHomes('ccrc-doctor-dh-order-');
+      plantHookRegistration(home, '.claude', { omit: ['Stop'] });
+      plantHookRegistration(home, '.lane-a', { omit: ['PostCompact'] });
+      const a = runDh(home);
+      expect(verdicts(a)).toEqual([
+        'FAIL delegation-hooks: the shipped hook registration is missing from 2 rostered homes: claude: Stop; lane-a: PostCompact']);
+      expect(runDh(home).stdout).toBe(a.stdout);
+    });
+
+    it('a rostered home that does not exist on this box is ordinary, not a defect, and is not counted as measured', () => {
+      const home = twoHomes('ccrc-doctor-dh-absent-home-');
+      rmSync(join(home, '.lane-a'), { recursive: true });
+      expect(lines(runDh(home))).toEqual([
+        `PASS delegation-hooks: 1/1 rostered homes register all ${events.length} hook events the shipped installer writes; no running session lacks its delegation spool directory (0 registry rows read, 0 with a directory)`]);
+    });
+
+    it('SKIPs when none of the roster\'s homes exist here, saying so, with no remedy', () => {
+      const home = dhBox('ccrc-doctor-dh-no-homes-');
+      rmSync(join(home, '.claude'), { recursive: true });
+      const r = runDh(home);
+      expect(lines(r)).toEqual(['SKIP delegation-hooks: none of the roster\'s config directories exist on this box, so there is no hook registration to measure']);
+      expect(r.code).toBe(3);
+    });
+
+    it('never prints the settings file: a secret-looking key and a hook command stay out of every line', () => {
+      const home = dhBox('ccrc-doctor-dh-secret-');
+      plantHookRegistration(home, '.claude', {
+        omit: ['Stop'], foreign: ['WorktreeCreate'],
+        extra: { env: { CLAUDE_CODE_OAUTH_TOKEN: 'fixture-secret-0xDEADBEEF' } },
+      });
+      const r = runDh(home);
+      expect(r.stdout + r.stderr).not.toContain('fixture-secret-0xDEADBEEF');
+      expect(r.stdout + r.stderr).not.toContain('their-worktree-hook.sh');
+      expect(r.stdout + r.stderr).not.toContain('session-hook.sh"');
+      expect(r.code).toBe(1);
+    });
+  });
+
+  describe('unreadable is not absent', () => {
+    it.skipIf(process.getuid?.() === 0)('a settings.json that cannot be read FAILs as unreadable, never as missing', () => {
+      const home = dhBox('ccrc-doctor-dh-unreadable-file-');
+      chmodSync(join(home, '.claude', 'settings.json'), 0o000);
+      const r = runDh(home);
+      expect(verdicts(r)).toEqual([
+        'FAIL delegation-hooks: hook registration could not be read, so it is not known to be absent: claude: settings.json is not readable']);
+      expect(remedyOf(r, /^FAIL /)).toBe(
+        '  remedy: fix what is named (check with: ls -l $HOME/<home>/settings.json) — this is a mode or shape problem, not a missing registration, and doctor never prints the file');
+      expect(r.stdout).not.toMatch(/is missing from/);
+      expect(r.code).toBe(1);
+    });
+
+    it('a settings.json that is not JSON FAILs as unreadable, never as missing', () => {
+      const home = dhBox('ccrc-doctor-dh-badjson-');
+      writeFileSync(join(home, '.claude', 'settings.json'), '{"hooks": ');
+      expect(verdicts(runDh(home))).toEqual([
+        'FAIL delegation-hooks: hook registration could not be read, so it is not known to be absent: claude: settings.json is not valid JSON']);
+    });
+
+    it('a settings.json whose hooks key is not an object FAILs as unreadable', () => {
+      const home = dhBox('ccrc-doctor-dh-badshape-');
+      writeFileSync(join(home, '.claude', 'settings.json'), '{"hooks": []}');
+      expect(verdicts(runDh(home))).toEqual([
+        'FAIL delegation-hooks: hook registration could not be read, so it is not known to be absent: claude: settings.json does not hold hooks as an object']);
+    });
+
+    it.each([
+      ['an empty file', ''],
+      ['a whitespace-only file', '  \n\t\n'],
+      ['two JSON documents', '{"hooks":{}}\n{"hooks":{}}'],
+      ['a string document followed by an object', '"x"{}'],
+    ])('%s FAILs as unreadable with the shape remedy, never as a registration nobody read', (_what, body) => {
+      const home = dhBox('ccrc-doctor-dh-docs-');
+      writeFileSync(join(home, '.claude', 'settings.json'), body);
+      const r = runDh(home);
+      expect(verdicts(r)).toEqual([
+        'FAIL delegation-hooks: hook registration could not be read, so it is not known to be absent: claude: settings.json is empty or holds more than one JSON document']);
+      expect(remedyOf(r, /^FAIL /)).toBe(SHAPE_REMEDY_TEXT);
+      expect(r.stdout).not.toMatch(/^PASS /m);
+      expect(r.code).toBe(1);
+    });
+
+    it('a settings.json that is a directory FAILs as unreadable', () => {
+      const home = dhBox('ccrc-doctor-dh-dirfile-');
+      rmSync(join(home, '.claude', 'settings.json'));
+      mkdirSync(join(home, '.claude', 'settings.json'));
+      expect(verdicts(runDh(home))).toEqual([
+        'FAIL delegation-hooks: hook registration could not be read, so it is not known to be absent: claude: settings.json is not a regular file']);
+    });
+
+    it.skipIf(process.getuid?.() === 0)('a home directory that cannot be searched FAILs as unreadable, never as an absent home', () => {
+      const home = twoHomes('ccrc-doctor-dh-unreadable-home-');
+      chmodSync(join(home, '.lane-a'), 0o000);
+      try {
+        const r = runDh(home);
+        expect(verdicts(r)).toEqual([
+          'FAIL delegation-hooks: hook registration could not be read, so it is not known to be absent: lane-a: config directory is not a readable directory']);
+        expect(r.code).toBe(1);
+      } finally { chmodSync(join(home, '.lane-a'), 0o700); }
+    });
+
+    it('a home that is a dangling link FAILs as unreadable, not as an absent home', () => {
+      const home = twoHomes('ccrc-doctor-dh-dangling-home-');
+      rmSync(join(home, '.lane-a'), { recursive: true });
+      symlinkSync(join(home, 'nowhere'), join(home, '.lane-a'));
+      expect(verdicts(runDh(home))).toEqual([
+        'FAIL delegation-hooks: hook registration could not be read, so it is not known to be absent: lane-a: config directory is not a readable directory']);
+    });
+
+    it('an absent roster SKIPs (wrappers owns it); an unparsable one FAILs', () => {
+      const home = dhBox('ccrc-doctor-dh-roster-');
+      rmSync(join(home, '.ccrc', 'accounts.json'));
+      expect(lines(runDh(home))).toEqual(['SKIP delegation-hooks: no account roster at $HOME/.ccrc/accounts.json — the \'wrappers\' check owns that']);
+      writeRawRoster(home, '{"version":1,');
+      const r = runDh(home);
+      expect(verdicts(r)).toEqual([
+        'FAIL delegation-hooks: $HOME/.ccrc/accounts.json could not be read as a roster, so no rostered home can be named and none was measured']);
+      expect(remedyOf(r, /^FAIL /)).toMatch(/^ {2}remedy: restore it from a backup/);
+      expect(r.code).toBe(1);
+    });
+
+    it.skipIf(process.getuid?.() === 0)('a roster that cannot be read FAILs', () => {
+      const home = dhBox('ccrc-doctor-dh-roster-mode-');
+      chmodSync(join(home, '.ccrc', 'accounts.json'), 0o000);
+      const r = runDh(home);
+      expect(verdicts(r)).toEqual([
+        'FAIL delegation-hooks: $HOME/.ccrc/accounts.json exists but is not a readable regular file, so no rostered home can be named and none was measured']);
+      expect(remedyOf(r, /^FAIL /)).toBe('  remedy: fix its mode/ownership — check with: ls -l $HOME/.ccrc/accounts.json');
+      expect(r.code).toBe(1);
+    });
+
+    it('a box without node cannot read the roster: FAIL naming node, with its remedy, never a pass', () => {
+      const home = dhBox('ccrc-doctor-dh-nonode-');
+      unstub(home, 'node');
+      const r = runDh(home);
+      expect(verdicts(r)).toEqual([
+        'FAIL delegation-hooks: node is not on PATH, so $HOME/.ccrc/accounts.json cannot be read and no rostered home was measured']);
+      expect(remedyOf(r, /^FAIL /)).toBe("  remedy: install Node first — see the 'node' check above");
+      expect(r.code).toBe(1);
+    });
+
+    it('a roster with no usable account SKIPs rather than passing over nothing', () => {
+      const home = dhBox('ccrc-doctor-dh-roster-empty-');
+      writeRawRoster(home, '{"version":1,"accounts":[]}');
+      expect(lines(runDh(home))).toEqual(['SKIP delegation-hooks: no usable account in $HOME/.ccrc/accounts.json — the \'wrappers\' check owns that']);
+    });
+
+    it('a box without jq cannot read a registration: FAIL, naming the tool, never a pass', () => {
+      const home = dhBox('ccrc-doctor-dh-nojq-');
+      unstub(home, 'jq');
+      const r = runDh(home);
+      expect(verdicts(r)).toEqual([expect.stringMatching(/^FAIL delegation-hooks: jq is not on PATH, so no settings\.json could be read/)]);
+      expect(remedyOf(r, /^FAIL /)).toMatch(/^ {2}remedy: install jq/);
+      expect(r.code).toBe(1);
+    });
+  });
+
+  describe('the owner spool directory', () => {
+    const REMEDY_WAIT = (id: string, what = 'session'): string =>
+      `  remedy: nothing is lost by waiting: ccd makes the directory at the next spawn. To observe the ${what} now, stop and start ${what === 'session' ? 'it' : 'each'} through ccd (${what === 'session' ? '' : 'for example '}'ccd stop ${id}', then 'ccd start ${id}') — this resumes its conversation but ends an in-flight turn`;
+
+    it('a RUNNING session with no owner directory is a WARN (D-4651, R53), not a FAIL: it is observed at its next spawn, and the remedy says what makes it so now', () => {
+      const home = dhBox('ccrc-doctor-dh-spool-missing-');
+      plantSession(home, 'lane-a-demo', { live: true, recorded: true });
+      const r = runDh(home);
+      expect(verdicts(r)).toEqual([
+        'WARN delegation-hooks: 1 running session has no delegation spool directory yet, so it is not observed until its next spawn (a swap or a respawn): lane-a-demo']);
+      expect(remedyOf(r, /^WARN /)).toBe(REMEDY_WAIT('lane-a-demo'));
+      // …and it names no raw unit restart and does not claim that the update sweep makes the directory.
+      expect(r.stdout).not.toMatch(/systemctl --user restart|supervisor sweep/);
+      expect(r.code).toBe(2);
+    });
+
+    // R98 (review 518's F5): `systemctl is-active` prints one word per unit, and four of them mean the unit is RUNNING in
+    // the sense that matters here, a supervisor that is coming up, going down or being reloaded and so about to spawn or
+    // respawn a session that records nothing: `activating`, `reloading`, `refreshing`, `deactivating`. They reach the same
+    // WARN (no directory yet) and FAIL (an unusable one) as `active` does; `inactive` and `failed` owe nothing. launchd answers
+    // active, inactive or failed only, so these rows are systemd's own.
+    const RUNNING_WORDS = ['active', 'activating', 'reloading', 'refreshing', 'deactivating'] as const;
+    /** A registry row whose unit the manager answers `word` for. */
+    const plantAs = (home: string, id: string, word: string): void => {
+      plantSession(home, id, { live: false, recorded: true });
+      writeFileSync(join(home, `fixture-unit-claude-session@${id}.service`), `${word}\n`);
+    };
+
+    itLinux.each(RUNNING_WORDS)('a session whose unit is %s, with no owner directory, is the same WARN (R98)', (word) => {
+      const home = dhBox(`ccrc-doctor-dh-spool-word-${word}-`);
+      plantAs(home, 'lane-a-demo', word);
+      const r = runDh(home);
+      expect(verdicts(r)).toEqual([
+        'WARN delegation-hooks: 1 running session has no delegation spool directory yet, so it is not observed until its next spawn (a swap or a respawn): lane-a-demo']);
+      expect(remedyOf(r, /^WARN /)).toBe(REMEDY_WAIT('lane-a-demo'));
+      expect(r.code).toBe(2);
+    });
+
+    itLinux.each(RUNNING_WORDS)('a session whose unit is %s, with an owner directory that is a symlink, is the same FAIL (R98)', (word) => {
+      const home = dhBox(`ccrc-doctor-dh-spool-word-link-${word}-`);
+      plantAs(home, 'lane-a-demo', word);
+      const real = join(home, 'elsewhere');
+      mkdirSync(real);
+      mkdirSync(join(home, '.cc-sessions', 'delegation', 'spool'), { recursive: true });
+      symlinkSync(real, join(home, '.cc-sessions', 'delegation', 'spool', 'lane-a-demo'));
+      const r = runDh(home);
+      expect(verdicts(r)).toEqual([
+        'FAIL delegation-hooks: the delegation spool could not be used, so it is not known to be absent: lane-a-demo: owner directory is a symlink']);
+      expect(r.code).toBe(1);
+    });
+
+    itLinux.each(['inactive', 'failed'] as const)('a session whose unit is %s owes nothing: no directory is no finding (R98: the words are a closed set, not a wildcard)', (word) => {
+      const home = dhBox(`ccrc-doctor-dh-spool-word-idle-${word}-`);
+      plantAs(home, 'lane-a-demo', word);
+      const r = runDh(home);
+      expect(verdicts(r)).toEqual([expect.stringMatching(/^PASS delegation-hooks: .*\(1 registry rows read, 0 with a directory\)$/)]);
+      expect(r.code).toBe(0);
+    });
+
+    it('a FAIL is never hidden behind that WARN, and the WARN never hides the FAIL: an unreadable directory beside a missing one', () => {
+      const home = dhBox('ccrc-doctor-dh-spool-both-');
+      plantSession(home, 'lane-a-none', { live: true, recorded: true });
+      plantSession(home, 'lane-a-link', { live: true, recorded: true });
+      mkdirSync(join(home, '.cc-sessions', 'delegation', 'spool'), { recursive: true });
+      symlinkSync(join(home, 'elsewhere'), join(home, '.cc-sessions', 'delegation', 'spool', 'lane-a-link'));
+      const r = runDh(home);
+      expect(verdicts(r).map((l) => l.split(':')[0])).toEqual(['FAIL delegation-hooks', 'WARN delegation-hooks']);
+      expect(r.code).toBe(1);
+    });
+
+    it('asks the service manager ONCE for all its pending units, in one is-active call', () => {
+      const home = dhBox('ccrc-doctor-dh-spool-batch-');
+      for (let i = 1; i <= 4; i++) plantSession(home, `lane-a-s${i}`, { live: true, recorded: true });
+      plantSpoolDir(home, 'lane-a-s2');   // standing: not pending, so not asked about
+      stub(home, 'systemctl', 'echo "$*" >> "$HOME/systemctl-calls"; shift 2; for u in "$@"; do echo active; done');
+      const r = runDh(home);
+      const calls = readFileSync(join(home, 'systemctl-calls'), 'utf8').split('\n').filter(Boolean);
+      expect(calls).toEqual(['--user is-active claude-session@lane-a-s1.service claude-session@lane-a-s3.service claude-session@lane-a-s4.service']);
+      expect(verdicts(r)).toEqual([expect.stringMatching(/^WARN delegation-hooks: 3 running sessions have no delegation spool directory yet.*: lane-a-s1 lane-a-s3 lane-a-s4$/)]);
+    });
+
+    it('a short answer from the manager (fewer words than units) is never read as "not running"', () => {
+      const home = dhBox('ccrc-doctor-dh-spool-short-');
+      plantSession(home, 'lane-a-s1', { live: false, recorded: true });
+      plantSession(home, 'lane-a-s2', { live: false, recorded: true });
+      stub(home, 'systemctl', 'echo inactive');
+      expect(verdicts(runDh(home))).toEqual([expect.stringMatching(/^WARN delegation-hooks: the service manager gave no answer for 2 sessions, /)]);
+    });
+
+    it('a spool root that is a symlink is a FAIL even when no session is running (ccd refuses it at the next spawn)', () => {
+      const home = dhBox('ccrc-doctor-dh-spool-root-link-');
+      mkdirSync(join(home, '.cc-sessions', 'delegation'), { recursive: true });
+      mkdirSync(join(home, 'elsewhere'));
+      symlinkSync(join(home, 'elsewhere'), join(home, '.cc-sessions', 'delegation', 'spool'));
+      const r = runDh(home);
+      expect(verdicts(r)).toEqual([
+        'FAIL delegation-hooks: the delegation spool could not be used, so it is not known to be absent: $HOME/.cc-sessions/delegation/spool is a symlink']);
+      expect(remedyOf(r, /^FAIL /)).toMatch(/^ {2}remedy: fix what is named \(check with: ls -ld \$HOME\/\.cc-sessions\/delegation\/spool\)/);
+      expect(r.code).toBe(1);
+    });
+
+    it.skipIf(process.getuid?.() === 0)('a spool root that cannot be searched is a FAIL even when no session is running', () => {
+      const home = dhBox('ccrc-doctor-dh-spool-root-mode-');
+      const root = join(home, '.cc-sessions', 'delegation', 'spool');
+      mkdirSync(root, { recursive: true });
+      chmodSync(root, 0o000);
+      try {
+        expect(verdicts(runDh(home))).toEqual([
+          'FAIL delegation-hooks: the delegation spool could not be used, so it is not known to be absent: $HOME/.cc-sessions/delegation/spool is not a readable, searchable directory']);
+      } finally { chmodSync(root, 0o700); }
+    });
+
+    it('a standing directory is never a question for the manager: the service manager is not asked about it', () => {
+      const home = dhBox('ccrc-doctor-dh-spool-lazy-');
+      plantSession(home, 'lane-a-demo', { live: true, recorded: true });
+      plantSpoolDir(home, 'lane-a-demo');
+      stub(home, 'systemctl', 'echo "$*" >> "$HOME/systemctl-calls"; exit 1');
+      expect(verdicts(runDh(home))).toEqual([expect.stringMatching(/^PASS delegation-hooks: .*\(1 registry rows read, 1 with a directory\)$/)]);
+      expect(existsSync(join(home, 'systemctl-calls'))).toBe(false);
+    });
+
+    it('doctor mutates nothing: with a missing directory, a missing registration and a foreign hook, the registry and the homes are byte-identical after', () => {
+      const home = twoHomes('ccrc-doctor-dh-spool-readonly-');
+      plantSession(home, 'lane-a-demo', { live: true, recorded: true });
+      plantHookRegistration(home, '.claude', { omit: ['Stop'], foreign: ['WorktreeCreate'] });
+      const before = treeState(join(home, '.cc-sessions'), join(home, '.claude'), join(home, '.lane-a'));
+      expect(Object.keys(before).length).toBeGreaterThan(2);
+      expect(verdicts(runDh(home)).length).toBeGreaterThanOrEqual(3);
+      expect(treeState(join(home, '.cc-sessions'), join(home, '.claude'), join(home, '.lane-a'))).toEqual(before);
+      expect(existsSync(join(home, '.cc-sessions', 'delegation'))).toBe(false);
+    });
+
+    it('names at most five owners and counts the rest', () => {
+      const home = dhBox('ccrc-doctor-dh-spool-many-');
+      for (let i = 1; i <= 7; i++) plantSession(home, `lane-a-s${i}`, { live: true, recorded: true });
+      const r = runDh(home);
+      expect(verdicts(r)).toEqual([
+        'WARN delegation-hooks: 7 running sessions have no delegation spool directory yet, so they are not observed until their next spawn (a swap or a respawn): lane-a-s1 lane-a-s2 lane-a-s3 lane-a-s4 lane-a-s5 (+2 more)']);
+      expect(remedyOf(r, /^WARN /)).toBe(REMEDY_WAIT('lane-a-s1', 'sessions'));
+    });
+
+    it('an owner directory that is a symlink FAILs as unusable (ccd and the hook both refuse a link)', () => {
+      const home = dhBox('ccrc-doctor-dh-spool-link-');
+      plantSession(home, 'lane-a-demo', { live: true, recorded: true });
+      const real = join(home, 'elsewhere');
+      mkdirSync(real);
+      mkdirSync(join(home, '.cc-sessions', 'delegation', 'spool'), { recursive: true });
+      symlinkSync(real, join(home, '.cc-sessions', 'delegation', 'spool', 'lane-a-demo'));
+      const r = runDh(home);
+      expect(verdicts(r)).toEqual([
+        'FAIL delegation-hooks: the delegation spool could not be used, so it is not known to be absent: lane-a-demo: owner directory is a symlink']);
+      expect(remedyOf(r, /^FAIL /)).toBe(
+        '  remedy: fix what is named (check with: ls -ld $HOME/.cc-sessions/delegation/spool) — a link is refused by ccd and by the hook, so look before moving it; doctor never creates or removes the directory');
+      expect(r.code).toBe(1);
+    });
+
+    it.skipIf(process.getuid?.() === 0)('an owner directory that cannot be read FAILs as unusable, never as missing', () => {
+      const home = dhBox('ccrc-doctor-dh-spool-mode-');
+      plantSession(home, 'lane-a-demo', { live: true, recorded: true });
+      const d = plantSpoolDir(home, 'lane-a-demo');
+      chmodSync(d, 0o000);
+      try {
+        const r = runDh(home);
+        expect(verdicts(r)).toEqual([
+          'FAIL delegation-hooks: the delegation spool could not be used, so it is not known to be absent: lane-a-demo: owner directory is not a readable, searchable directory']);
+        expect(r.stdout).not.toMatch(/has no delegation spool directory/);
+      } finally { chmodSync(d, 0o700); }
+    });
+
+    it.skipIf(process.getuid?.() === 0)('a spool root that cannot be searched FAILs once, and does not read every owner as missing', () => {
+      const home = dhBox('ccrc-doctor-dh-spool-root-');
+      plantSession(home, 'lane-a-one', { live: true, recorded: true });
+      plantSession(home, 'lane-a-two', { live: true, recorded: true });
+      plantSpoolDir(home, 'lane-a-one');
+      const root = join(home, '.cc-sessions', 'delegation', 'spool');
+      chmodSync(root, 0o000);
+      try {
+        const r = runDh(home);
+        expect(verdicts(r)).toEqual([
+          'FAIL delegation-hooks: the delegation spool could not be used, so it is not known to be absent: $HOME/.cc-sessions/delegation/spool is not a readable, searchable directory']);
+        expect(r.stdout).not.toMatch(/has no delegation spool directory/);
+      } finally { chmodSync(root, 0o700); }
+    });
+
+    it.skipIf(process.getuid?.() === 0)('a registry that cannot be listed FAILs as unusable', () => {
+      const home = dhBox('ccrc-doctor-dh-registry-');
+      plantSession(home, 'lane-a-demo', { live: true, recorded: true });
+      chmodSync(join(home, '.cc-sessions'), 0o000);
+      try {
+        expect(verdicts(runDh(home))).toEqual([
+          'FAIL delegation-hooks: the delegation spool could not be used, so it is not known to be absent: $HOME/.cc-sessions is not a readable, searchable directory']);
+      } finally { chmodSync(join(home, '.cc-sessions'), 0o700); }
+    });
+
+    it('a session the manager could not be asked about is a WARN, never a pass and never a missing directory', () => {
+      const home = dhBox('ccrc-doctor-dh-unasked-');
+      plantSession(home, 'lane-a-demo', { live: false, recorded: true });
+      stub(home, 'systemctl', 'exit 0');   // prints no word: the question was not answered
+      const r = runDh(home);
+      expect(verdicts(r)).toEqual([
+        'WARN delegation-hooks: the service manager gave no answer for 1 session, so whether it owes a delegation spool directory was not measured: lane-a-demo']);
+      expect(remedyOf(r, /^WARN /)).toMatch(/^ {2}remedy: ask the manager by hand \(systemctl --user status claude-session@lane-a-demo\.service\)/);
+      expect(r.code).toBe(2);
+    });
+  });
+
+  describe('foreign Worktree hooks', () => {
+    it.each(['WorktreeCreate', 'WorktreeRemove'])('a registered %s is a WARN naming the home, with a manual-inspection remedy, and the file is left alone', (ev) => {
+      const home = dhBox('ccrc-doctor-dh-foreign-');
+      plantHookRegistration(home, '.claude', { foreign: [ev] });
+      const f = join(home, '.claude', 'settings.json');
+      const before = readFileSync(f, 'utf8');
+      const r = runDh(home);
+      expect(verdicts(r)).toEqual([
+        `WARN delegation-hooks: ${ev} is registered, and ccrc never registers it — a registered hook for either event replaces Claude Code's own worktree handling: claude: ${ev}`]);
+      expect(remedyOf(r, /^WARN /)).toBe(
+        '  remedy: inspect the entry by hand in that home\'s settings.json and remove it if it is not intended — doctor does not edit or delete it');
+      expect(r.code).toBe(2);
+      expect(readFileSync(f, 'utf8')).toBe(before);
+    });
+
+    it('both events, in two homes, are one WARN line in roster order', () => {
+      const home = twoHomes('ccrc-doctor-dh-foreign-both-');
+      plantHookRegistration(home, '.claude', { foreign: ['WorktreeRemove', 'WorktreeCreate'] });
+      plantHookRegistration(home, '.lane-a', { foreign: ['WorktreeCreate'] });
+      const r = runDh(home);
+      expect(verdicts(r)).toEqual([
+        'WARN delegation-hooks: WorktreeCreate, WorktreeRemove are registered, and ccrc never registers them — a registered hook for either event replaces Claude Code\'s own worktree handling: claude: WorktreeCreate WorktreeRemove; lane-a: WorktreeCreate']);
+      expect(remedyOf(r, /^WARN /)).toBe(
+        '  remedy: inspect the entries by hand in those homes\' settings.json and remove them if they are not intended — doctor does not edit or delete them');
+      expect(r.code).toBe(2);
+    });
+
+    it.each(['WorktreeCreate', 'WorktreeRemove'])('ccrc\'s OWN hook registered under %s is a FAIL naming --fix (not a foreign WARN), because the installer\'s sweep removes it', (ev) => {
+      const home = dhBox('ccrc-doctor-dh-own-worktree-');
+      plantHookRegistration(home, '.claude', { ownWorktree: [ev] });
+      const r = runDh(home);
+      expect(verdicts(r)).toEqual([
+        `FAIL delegation-hooks: ccrc's own session hook is registered under an event it never registers — a registered hook for WorktreeCreate or WorktreeRemove replaces Claude Code's own worktree handling: claude: ${ev}`]);
+      expect(remedyOf(r, /^FAIL /)).toBe(OWN_REMEDY_TEXT);
+      expect(r.code).toBe(1);
+    });
+
+    it.each(['WorktreeCreate', 'WorktreeRemove'])('ONE %s entry holding ccrc\'s hook AND another command is both: the FAIL for the first, then the WARN for the second (R55: per hook, not per entry)', (ev) => {
+      const home = dhBox('ccrc-doctor-dh-own-and-foreign-');
+      const f = join(home, '.claude', 'settings.json');
+      const j = JSON.parse(readFileSync(f, 'utf8'));
+      j.hooks[ev] = [{ hooks: [{ type: 'command', command: installerHook().command }, THEIRS('their-worktree-hook')] }];
+      writeFileSync(f, JSON.stringify(j));
+      const r = runDh(home);
+      expect(verdicts(r)).toEqual([
+        `FAIL delegation-hooks: ccrc's own session hook is registered under an event it never registers — a registered hook for WorktreeCreate or WorktreeRemove replaces Claude Code's own worktree handling: claude: ${ev}`,
+        `WARN delegation-hooks: ${ev} is registered, and ccrc never registers it — a registered hook for either event replaces Claude Code's own worktree handling: claude: ${ev}`]);
+      expect(remedyOf(r, /^FAIL /)).toBe(OWN_REMEDY_TEXT);
+      expect(r.code).toBe(1);
+    });
+
+    it('SEPARATE entries (ccrc\'s, and another command\'s) are still both, as before', () => {
+      const home = dhBox('ccrc-doctor-dh-own-and-foreign-sep-');
+      plantHookRegistration(home, '.claude', { ownWorktree: ['WorktreeCreate'] });
+      const f = join(home, '.claude', 'settings.json');
+      const j = JSON.parse(readFileSync(f, 'utf8'));
+      j.hooks.WorktreeCreate.push({ hooks: [THEIRS('their-worktree-hook')] });
+      writeFileSync(f, JSON.stringify(j));
+      const r = runDh(home);
+      expect(verdicts(r).map((l) => l.split(':')[0])).toEqual(['FAIL delegation-hooks', 'WARN delegation-hooks']);
+      expect(r.code).toBe(1);
+    });
+
+    it('an empty Worktree array is not a registration', () => {
+      const home = dhBox('ccrc-doctor-dh-foreign-empty-');
+      const f = join(home, '.claude', 'settings.json');
+      const j = JSON.parse(readFileSync(f, 'utf8'));
+      j.hooks.WorktreeCreate = [];
+      writeFileSync(f, JSON.stringify(j));
+      expect(verdicts(runDh(home))).toEqual([expect.stringMatching(/^PASS delegation-hooks: /)]);
+    });
+  });
+
+  describe('several defects at once', () => {
+    it('a FAIL is never hidden behind a WARN: FAIL lines first, then WARN lines, each followed by its own remedy, rc 1', () => {
+      const home = twoHomes('ccrc-doctor-dh-mixed-');
+      plantHookRegistration(home, '.claude', { omit: ['Stop'], foreign: ['WorktreeCreate'] });
+      writeFileSync(join(home, '.lane-a', 'settings.json'), 'not json');
+      plantSession(home, 'lane-a-demo', { live: true, recorded: true });
+      const r = runDh(home);
+      const ls = lines(r);
+      expect(ls.map((l) => (/^ {2}remedy: /.test(l) ? 'remedy' : l.split(': ')[0]))).toEqual([
+        'FAIL delegation-hooks', 'remedy',     // unreadable registration
+        'FAIL delegation-hooks', 'remedy',     // missing registration
+        'WARN delegation-hooks', 'remedy',     // foreign Worktree hook
+        'WARN delegation-hooks', 'remedy',     // running session with no spool directory yet
+      ]);
+      expect(ls[0]).toMatch(/could not be read.*lane-a: settings\.json is not valid JSON/);
+      expect(ls[2]).toMatch(/missing from 1 rostered home: claude: Stop/);
+      expect(ls[4]).toMatch(/WorktreeCreate is registered/);
+      expect(ls[6]).toMatch(/lane-a-demo$/);
+      expect(r.code).toBe(1);
+      expect(runDh(home).stdout).toBe(r.stdout);
+    });
+
+    it('a WARN alone returns 2 and a WARN with a FAIL returns the worse, 1', () => {
+      const home = dhBox('ccrc-doctor-dh-rc-');
+      plantHookRegistration(home, '.claude', { foreign: ['WorktreeCreate'] });
+      expect(runDh(home).code).toBe(2);
+      plantHookRegistration(home, '.claude', { foreign: ['WorktreeCreate'], omit: ['Stop'] });
+      expect(runDh(home).code).toBe(1);
+    });
+  });
+
+  describe('the approved event set is the installer\'s own', () => {
+    it('reads EVENTS_JSON from the installer beside the doctor file: an event the installer adds is demanded', () => {
+      const home = dhBox('ccrc-doctor-dh-extra-event-');
+      const dst = join(home, 'ccrc', 'ccd', 'install-session-hooks.sh');
+      rmSync(dst);
+      writeFileSync(dst, readFileSync(DH_INSTALLER, 'utf8').replace(/^EVENTS_JSON='\[/m, 'EVENTS_JSON=\'["FixtureEvent",'));
+      const r = runDh(home);
+      expect(verdicts(r)).toEqual([
+        'FAIL delegation-hooks: the shipped hook registration is missing from 1 rostered home: claude: FixtureEvent']);
+    });
+
+    it('an installer that is gone is a FAIL naming it, not a pass over an event set nobody knew', () => {
+      const home = dhBox('ccrc-doctor-dh-no-installer-');
+      rmSync(join(home, 'ccrc', 'ccd', 'install-session-hooks.sh'));
+      const r = runDh(home);
+      expect(verdicts(r)).toEqual([expect.stringMatching(/^FAIL delegation-hooks: the shipped tree has no install-session-hooks\.sh, so the approved event set could not be read: /)]);
+      expect(remedyOf(r, /^FAIL /)).toMatch(/^ {2}remedy: run 'ccrc update'/);
+      expect(r.code).toBe(1);
+    });
+
+    it('an installer whose EVENTS_JSON cannot be read is a FAIL', () => {
+      const home = dhBox('ccrc-doctor-dh-bad-installer-');
+      const dst = join(home, 'ccrc', 'ccd', 'install-session-hooks.sh');
+      rmSync(dst);
+      writeFileSync(dst, '#!/usr/bin/env bash\nEVENTS_JSON=$(compute)\n');
+      const r = runDh(home);
+      expect(verdicts(r)).toEqual([expect.stringMatching(/^FAIL delegation-hooks: .*holds no EVENTS_JSON list in the shape this check reads/)]);
+      expect(remedyOf(r, /^FAIL /)).toBe("  remedy: run 'ccrc update' to place a shipped tree whose installer and doctor agree");
+      expect(r.code).toBe(1);
+    });
+
+    it('PreToolUse is still written by the installer on its own line, with matcher "*" (the one name this check types)', () => {
+      expect(readFileSync(DH_INSTALLER, 'utf8')).toMatch(/\.PreToolUse = \(\(\.PreToolUse \/\/ \[\]\) \+ \[\{matcher:"\*"/);
+    });
+
+    it('the REAL installer\'s output PASSes: a fresh home converged by the shipped script, then a home holding a stale-path managed entry swept clean', () => {
+      const home = dhBox('ccrc-doctor-dh-real-installer-');
+      rmSync(join(home, '.claude', 'settings.json'));
+      const run = (): void => {
+        const i = spawnSync(BASH, [DH_INSTALLER, '--homes', join(home, '.claude')],
+          { env: { ...process.env, HOME: home }, encoding: 'utf8' });
+        expect(i.status, `${i.stdout}${i.stderr}`).toBe(0);
+      };
+      run();
+      expect(verdicts(runDh(home))).toEqual([expect.stringMatching(/^PASS delegation-hooks: 1\/1 rostered homes register all \d+ hook events/)]);
+      // …and the events the installer wrote are exactly the ones the check demands.
+      const f = join(home, '.claude', 'settings.json');
+      const written = JSON.parse(readFileSync(f, 'utf8')) as { hooks: Record<string, unknown> };
+      expect(Object.keys(written.hooks).sort()).toEqual([...installerEvents()].sort());
+      // The sweep: a managed entry at an OLD path (the installer matches on the file name) plus a foreign entry that is not ccrc's.
+      const stale = { hooks: [{ type: 'command', command: 'bash "$HOME/.old-location/session-hook.sh"' }] };
+      const theirs = { hooks: [{ type: 'command', command: 'bash "$HOME/bin/their-stop-hook.sh"' }] };
+      const j = JSON.parse(readFileSync(f, 'utf8')) as { hooks: Record<string, unknown[]> };
+      j.hooks['Stop'] = [stale, theirs, ...j.hooks['Stop']!];
+      writeFileSync(f, JSON.stringify(j));
+      run();
+      const after = JSON.parse(readFileSync(f, 'utf8')) as { hooks: Record<string, unknown[]> };
+      expect(JSON.stringify(after)).not.toContain('.old-location');
+      expect(after.hooks['Stop']).toContainEqual(theirs);
+      expect(verdicts(runDh(home))).toEqual([expect.stringMatching(/^PASS delegation-hooks: /)]);
+    });
+  });
+
+  describe('--fix', () => {
+    /** A one-entry table over the SHIPPED check file, so the run's only fixer is this check's (the other checks'
+     *  cures, wrappers' above all, are not this block's business and would write into the fixture home). */
+    const onlyThisCheck = (home: string): void =>
+      writeChecks(home, `. ${shq(CHECKS_SRC)}
+CCRC_DOCTOR_CHECKS=(delegation-hooks)
+`);
+    it('re-runs the shipped installer into the rostered homes, and the re-measurement is the verdict', () => {
+      const home = twoHomes('ccrc-doctor-dh-fix-');
+      for (const t of ['cp', 'mv', 'mkdir', 'cat', 'date', 'rm', 'basename', 'cmp']) linkReal(home, t);
+      rmSync(join(home, '.lane-a', 'settings.json'));
+      plantHookRegistration(home, '.claude', { omit: ['Stop'] });
+      onlyThisCheck(home);
+      const r = runDoctor(home, ['doctor', '--fix']);
+      expect(r.stdout).toMatch(/^FAIL delegation-hooks: the shipped hook registration is missing from 2 rostered homes: claude: Stop; lane-a: no settings\.json\n {2}remedy: run 'ccrc doctor --fix'/m);
+      expect(r.stdout).toMatch(/^FIX delegation-hooks: re-ran the shipped tree's install-session-hooks\.sh into 2 home\(s\): claude, lane-a$/m);
+      expect(r.stdout).toMatch(/^PASS delegation-hooks: 2\/2 rostered homes register all \d+ hook events/m);
+    });
+
+    it('does not touch a foreign Worktree entry, and leaves the WARN standing', () => {
+      const home = dhBox('ccrc-doctor-dh-fix-foreign-');
+      for (const t of ['cp', 'mv', 'mkdir', 'cat', 'date', 'rm', 'basename', 'cmp']) linkReal(home, t);
+      plantHookRegistration(home, '.claude', { omit: ['Stop'], foreign: ['WorktreeRemove'] });
+      onlyThisCheck(home);
+      const foreignBefore = JSON.parse(readFileSync(join(home, '.claude', 'settings.json'), 'utf8')).hooks.WorktreeRemove;
+      const r = runDoctor(home, ['doctor', '--fix']);
+      expect(r.stdout).toMatch(/^WARN delegation-hooks: WorktreeRemove is registered/m);
+      // never removes OR REWRITES (coordinator 5151): the entry is deep-equal to what was planted, not merely still there.
+      expect(JSON.parse(readFileSync(join(home, '.claude', 'settings.json'), 'utf8')).hooks.WorktreeRemove).toEqual(foreignBefore);
+    });
+
+    it('sweeps ccrc\'s own hook out of a Worktree event and leaves the other command there byte-identical', () => {
+      const home = dhBox('ccrc-doctor-dh-fix-own-worktree-');
+      for (const t of ['cp', 'mv', 'mkdir', 'cat', 'date', 'rm', 'basename', 'cmp']) linkReal(home, t);
+      plantHookRegistration(home, '.claude', { ownWorktree: ['WorktreeCreate'], foreign: ['WorktreeRemove'] });
+      const f = join(home, '.claude', 'settings.json');
+      const j = JSON.parse(readFileSync(f, 'utf8'));
+      const theirs = { hooks: [{ type: 'command', command: 'bash "$HOME/bin/their-worktree-hook.sh"' }] };
+      j.hooks.WorktreeCreate.push(theirs);
+      writeFileSync(f, JSON.stringify(j));
+      const foreignBefore = j.hooks.WorktreeRemove;
+      onlyThisCheck(home);
+      const r = runDoctor(home, ['doctor', '--fix']);
+      expect(r.stdout).toMatch(/^FAIL delegation-hooks: ccrc's own session hook is registered under an event it never registers/m);
+      expect(r.stdout).toMatch(/^FIX delegation-hooks: re-ran the shipped tree's install-session-hooks\.sh into 1 home\(s\): claude$/m);
+      const after = JSON.parse(readFileSync(f, 'utf8'));
+      expect(after.hooks.WorktreeCreate).toEqual([theirs]);
+      expect(after.hooks.WorktreeRemove).toEqual(foreignBefore);
+      expect(r.stdout).toMatch(/^WARN delegation-hooks: WorktreeCreate, WorktreeRemove are registered/m);
+    });
+
+    /** A home whose `event` holds ONE entry that carries ccrc's hook and another command, plus a defect that makes the check FAIL. */
+    const mixedHome = (prefix: string, event: string, also: { omit?: string[] } = {}): { home: string; f: string } => {
+      const home = dhBox(prefix);
+      for (const tool of ['cp', 'mv', 'mkdir', 'cat', 'date', 'rm', 'basename', 'cmp']) linkReal(home, tool);
+      plantHookRegistration(home, '.claude', { omit: also.omit ?? [] });
+      const f = join(home, '.claude', 'settings.json');
+      const j = JSON.parse(readFileSync(f, 'utf8'));
+      j.hooks[event] = [{ hooks: [{ type: 'command', command: installerHook().command }, THEIRS('their-shared-hook')] }];
+      writeFileSync(f, JSON.stringify(j, null, 2));
+      onlyThisCheck(home);
+      return { home, f };
+    };
+    const REFUSAL = (ev: string): RegExp => new RegExp(
+      `^FIX delegation-hooks: refused — claude: ${ev} holds an entry that mixes ccrc's session hook with another command, and the sweep that --fix, ccrc install and ccrc update run removes the whole entry that carries ccrc's hook, other commands included; move the other command into an entry of its own under ${ev}, then re-run ccrc doctor --fix$`, 'm');
+
+    it('REFUSES a home whose Worktree entry mixes ccrc\'s hook with another command: the file is byte-identical, the remedy names the event and the manual step, and the check still shows FAIL then WARN', () => {
+      const { home, f } = mixedHome('ccrc-doctor-dh-fix-mixed-worktree-', 'WorktreeCreate');
+      const before = readFileSync(f);
+      const r = runDoctor(home, ['doctor', '--fix']);
+      expect(r.stdout).toMatch(REFUSAL('WorktreeCreate'));
+      expect(Buffer.compare(readFileSync(f), before), 'the settings file changed').toBe(0);
+      const ls = r.stdout.split('\n');
+      // as measured, then as re-measured after the refused fix: FAIL then WARN both times
+      expect(ls.filter((l) => /^(FAIL|WARN) delegation-hooks: /.test(l)).map((l) => l.split(':')[0])).toEqual(
+        ['FAIL delegation-hooks', 'WARN delegation-hooks', 'FAIL delegation-hooks', 'WARN delegation-hooks']);
+      expect(r.stdout).toMatch(/^WARN delegation-hooks: WorktreeCreate is registered/m);
+      expect(r.code).toBe(1);
+      // …and the other command is still there, in the entry it was planted in.
+      expect(JSON.stringify(JSON.parse(readFileSync(f, 'utf8')).hooks.WorktreeCreate)).toContain('their-shared-hook');
+    });
+
+    it('REFUSES a home whose NON-Worktree entry mixes ccrc\'s hook with another command too (5180): byte-identical, and the remedy names that event', () => {
+      const { home, f } = mixedHome('ccrc-doctor-dh-fix-mixed-stop-', 'Stop', { omit: ['SessionEnd'] });
+      const before = readFileSync(f);
+      const r = runDoctor(home, ['doctor', '--fix']);
+      expect(r.stdout).toMatch(REFUSAL('Stop'));
+      expect(Buffer.compare(readFileSync(f), before), 'the settings file changed').toBe(0);
+      // the check is unchanged for an approved event: it names the missing registration, and nothing about the mixed entry
+      expect(r.stdout).toMatch(/^FAIL delegation-hooks: the shipped hook registration is missing from 1 rostered home: claude: SessionEnd$/m);
+      expect(r.stdout).not.toMatch(/^(FAIL|WARN) delegation-hooks: [^\n]*their-shared-hook/m);
+    });
+
+    // Task 14 re-review 2: N4 (shapes the installer's sweep walks although they are not valid settings), N5 (an event key is never
+    // word-split or globbed), N6 (several events: "A and B hold ... under each of A and B").
+    const reshaped = (prefix: string, shape: (j: { hooks: Record<string, unknown> }) => void): { home: string; f: string } => {
+      const { home, f } = mixedHome(prefix, 'SessionEnd');
+      const j = JSON.parse(readFileSync(f, 'utf8'));
+      j.hooks.SessionEnd = [{ hooks: [{ type: 'command', command: installerHook().command }] }];
+      shape(j);
+      writeFileSync(f, JSON.stringify(j, null, 2));
+      return { home, f };
+    };
+    it.each<[string, string, (j: { hooks: Record<string, unknown> }) => void]>([
+      ['an object-shaped `hooks` list', 'Stop', (j) => { j.hooks.Stop = [{ hooks: { a: { type: 'command', command: installerHook().command }, b: THEIRS('their-object-hook') } }]; }],
+      ['an object-shaped Worktree event value', 'WorktreeCreate', (j) => { j.hooks.WorktreeCreate = { x: { hooks: [{ type: 'command', command: installerHook().command }, THEIRS('their-object-hook')] } }; }],
+    ])('N4: REFUSES %s that mixes ccrc\'s hook with another command (the sweep would walk it): byte-identical', (_name, ev, shape) => {
+      const { home, f } = reshaped(`ccrc-doctor-dh-fix-shape-${ev}-`, shape);
+      const before = readFileSync(f);
+      const r = runDoctor(home, ['doctor', '--fix']);
+      expect(r.stdout).toMatch(REFUSAL(ev));
+      expect(Buffer.compare(readFileSync(f), before), 'the settings file changed').toBe(0);
+    });
+
+    it('N5: an event key `*` is named as itself, never glob-expanded or word-split', () => {
+      const { home, f } = reshaped('ccrc-doctor-dh-fix-star-', (j) => {
+        j.hooks['*'] = [{ hooks: [{ type: 'command', command: installerHook().command }, THEIRS('their-star-hook')] }];
+        delete j.hooks.SessionEnd;                                               // a defect, so the check FAILs and --fix runs
+      });
+      writeFileSync(join(home, 'aa.txt'), 'a file a glob would name');
+      const before = readFileSync(f);
+      const r = runDoctor(home, ['doctor', '--fix']);
+      expect(r.stdout).toMatch(/^FIX delegation-hooks: refused — claude: \* holds an entry that mixes ccrc's session hook with another command, .*an entry of its own under \*, then re-run ccrc doctor --fix$/m);
+      expect(Buffer.compare(readFileSync(f), before)).toBe(0);
+    });
+
+    it('N6: several mixed events are named together, with the plural verb: "A and B hold ... under each of A and B"', () => {
+      const { home, f } = reshaped('ccrc-doctor-dh-fix-two-', (j) => {
+        j.hooks.Stop = [{ hooks: [{ type: 'command', command: installerHook().command }, THEIRS('their-stop-hook')] }];
+        j.hooks.WorktreeCreate = [{ hooks: [{ type: 'command', command: installerHook().command }, THEIRS('their-wt-hook')] }];
+      });
+      const order = Object.keys(JSON.parse(readFileSync(f, 'utf8')).hooks).filter((k) => k === 'Stop' || k === 'WorktreeCreate');
+      const named = `${order[0]} and ${order[1]}`;
+      const r = runDoctor(home, ['doctor', '--fix']);
+      expect(r.stdout).toContain(`FIX delegation-hooks: refused — claude: ${named} hold an entry that mixes ccrc's session hook with another command`);
+      expect(r.stdout).toContain(`move the other command into an entry of its own under each of ${named}, then re-run ccrc doctor --fix`);
+    });
+
+    it('refuses only the mixed home: another home is fixed as before', () => {
+      const { home, f } = mixedHome('ccrc-doctor-dh-fix-mixed-one-home-', 'PostToolUse', { omit: ['SessionEnd'] });
+      writeRoster(home, [UPSTREAM, { id: 'lane-a', exec: { kind: 'generated' }, telemetry: 'anthropic' } as RosterEntry]);
+      mkdirSync(join(home, '.lane-a'), { recursive: true });
+      const before = readFileSync(f);
+      const r = runDoctor(home, ['doctor', '--fix']);
+      expect(r.stdout).toMatch(REFUSAL('PostToolUse'));
+      expect(r.stdout).toMatch(/^FIX delegation-hooks: re-ran the shipped tree's install-session-hooks\.sh into 1 home\(s\): lane-a$/m);
+      expect(Buffer.compare(readFileSync(f), before)).toBe(0);
+      const fixed = JSON.parse(readFileSync(join(home, '.lane-a', 'settings.json'), 'utf8'));
+      expect(Object.keys(fixed.hooks).sort()).toEqual([...installerEvents()].sort());
+    });
+
+    it('refuses, saying so, when the roster cannot be read (the check FAILed on it first)', () => {
+      const home = dhBox('ccrc-doctor-dh-fix-refuse-roster-');
+      writeRawRoster(home, '{"version":1,');
+      onlyThisCheck(home);
+      const r = runDoctor(home, ['doctor', '--fix']);
+      expect(r.stdout).toMatch(/^FAIL delegation-hooks: \$HOME\/\.ccrc\/accounts\.json could not be read as a roster/m);
+      expect(r.stdout).toMatch(/^FIX delegation-hooks: refused — \$HOME\/\.ccrc\/accounts\.json could not be read as a roster$/m);
+      expect(r.stdout).toMatch(/^FAIL delegation-hooks: [^\n]*\n {2}remedy: [^\n]*\n(?:.*\n)*?summary:/m);
+    });
+
+    it('refuses, quoting the installer, when the installer refuses a home (a settings.json it will not rewrite), and the home stays a FAIL', () => {
+      const home = dhBox('ccrc-doctor-dh-fix-refuse-installer-');
+      for (const t of ['cp', 'mv', 'mkdir', 'cat', 'date', 'rm', 'basename', 'cmp']) linkReal(home, t);
+      writeFileSync(join(home, '.claude', 'settings.json'), '{"hooks": ');
+      onlyThisCheck(home);
+      const r = runDoctor(home, ['doctor', '--fix']);
+      expect(r.stdout).toMatch(/^FIX delegation-hooks: refused — .*install-session-hooks\.sh said: install-session-hooks: .*settings\.json is not valid JSON — refusing$/m);
+      expect(r.stdout).toMatch(/summary: 1 checks \(0 skipped\), 1 verdicts — 0 passed, 0 warned, 1 failed/);
+      expect(readFileSync(join(home, '.claude', 'settings.json'), 'utf8')).toBe('{"hooks": ');
+    });
+  });
+
+  describe('in the whole table', () => {
+    it('is in the check table, just before docs-sw (which stays the table\'s last name), and a healthy box answers PASS for it in a full run', () => {
+      const names = tableNames();
+      expect(names.filter((n) => n === 'delegation-hooks')).toHaveLength(1);
+      expect(names[names.length - 2]).toBe('delegation-hooks');
+      const r = runDoctor(dhBox('ccrc-doctor-dh-table-'));
+      expect(anyVerdictFor(r.stdout, 'delegation-hooks')).toMatch(/^PASS delegation-hooks: 1\/1 rostered homes/);
+    });
+
+    it('a server-role box counts it as a skip, not a verdict', () => {
+      const home = dhBox('ccrc-doctor-dh-table-server-');
+      asRole(home, 'server');
+      expect(anyVerdictFor(runDoctor(home).stdout, 'delegation-hooks')).toMatch(/^SKIP delegation-hooks: this box records CCRC_ROLE=server/);
+    });
+  });
+});
+
 // ── Docs W4 Task 10: `docs-sw`, the installed service worker (spec 2026-10-01 §7.2, M7.5, M7.6) ──────────────
 // The server half of the Docs pair: `$BOX_TREE_DIR/server/dist-pwa/sw.js`, the worker both lanes install, must not
 // refuse the app shell to `/docs`. The build already refuses such a knob (`pwa/src/lib/sw-denylist.ts`, §7.3); this
@@ -14842,5 +15819,227 @@ describe('T11 review A-6: docs-sw reads the worker byte-wise under a UTF-8 local
     const r = runUnder(home, utf8 as string);
     expect(r.stdout.split('\n')[0], r.stdout).toMatch(/^PASS docs-sw: .* holds 2 entries \(\/\^\\\/api\\\/\/,\/\^\\\/ws\\\/\/\), none of them \/docs or under it$/);
     expect(r.code).toBe(0);
+  });
+});
+
+// ── server-caps: the server's capability words reach this box (D-5232's mechanism; plan 2026-10-16, Task 9b) ──────
+// A `fleet` or `both` node's hook engages a gated arm only while `~/.ccrc/server-caps` is whole, current within
+// SERVER_CAPS_LEASE_S and lists the arm's word. This check reads that file read-only, with the reader's grammar, and
+// names the writer when it is not current: the update-sync timer on a `fleet` node, the server on a `both` node. A
+// `server` node runs no hook: SKIP. A box with no recorded role is read as a `both` node when the file exists (its
+// own server derives `both` on a local fleet and writes it), and SKIPs when it does not (the arms are then off).
+// `healthy()` records no role, which is why HEALTHY_SKIPS carries one more (deleting that `+ 1` reds the summary pins).
+import { SERVER_CAPS_LEASE_S } from '../../shared/api.js';
+describe('ccrc doctor: server-caps (D-5232\'s mechanism)', () => {
+  const runCaps = (home: string): Result => {
+    const ccd = join(home, 'ccrc', 'ccd');
+    const r = spawnSync(BASH, ['-c',
+      `set -uo pipefail; . ${shq(join(ccd, 'ccrc'))}; . ${shq(join(ccd, 'ccrc-doctor-checks'))}; _check_server-caps`],
+    { env: doctorEnv(home), encoding: 'utf8' });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  };
+  const capsFile = (home: string): string => join(home, '.ccrc', 'server-caps');
+  const now = (): number => Math.floor(Date.now() / 1000);
+  // The writer's unit file, aged by `ageS`: the first-write grace (D-4168) runs from its mtime, so every case that is
+  // not about the grace places it OLDER than one lease, and an absent file there is the real fault.
+  const writerUnit = (home: string, unit: string, ageS: number): void => {
+    writeUnitFile(home, unit);
+    const t = now() - ageS;
+    utimesSync(join(unitDirOf(home), unitFileOf(unit)), t, t);
+  };
+  const role = (home: string, r: string): void => {
+    writeCcrcEnv(home, `CCRC_ROLE=${r}\n`);
+    if (r === 'fleet') writerUnit(home, 'ccd-update-sync.timer', SERVER_CAPS_LEASE_S + 60);
+    if (r === 'both') writerUnit(home, 'ccrc.service', SERVER_CAPS_LEASE_S + 60);
+  };
+
+  // macOS ships no ccd-update-sync (its timers are systemd-only), so a fleet node there SKIPs, as `update-sync` does:
+  // the cases that read the file on a fleet node are Linux's, and the SKIP below is asserted on both platforms.
+  itLinux('PASSes a current file on a fleet node, listing its words', () => {
+    const home = healthy('ccrc-doctor-server-caps-pass-');
+    role(home, 'fleet');
+    writeFileSync(capsFile(home), `at ${now()}\ncaps dispatch-live-gate-v1\nend\n`);
+    const r = runCaps(home);
+    expect(r.stdout, r.stderr).toMatch(/^PASS server-caps: .*dispatch-live-gate-v1/);
+    expect(r.code).toBe(0);
+  });
+
+  it('PASSes a file inside the lease (the bash copy of SERVER_CAPS_LEASE_S)', () => {
+    const home = healthy('ccrc-doctor-server-caps-pass-lease-');
+    role(home, 'both');
+    writeFileSync(capsFile(home), `at ${now() - SERVER_CAPS_LEASE_S + 5}\ncaps dispatch-live-gate-v1\nend\n`);
+    expect(runCaps(home).stdout).toMatch(/^PASS server-caps: /);
+  });
+
+  it('PASSes a current file with no words on a both node, saying it lists none', () => {
+    const home = healthy('ccrc-doctor-server-caps-pass-empty-');
+    role(home, 'both');
+    writeFileSync(capsFile(home), `at ${now()}\ncaps\nend\n`);
+    const r = runCaps(home);
+    expect(r.stdout, r.stderr).toMatch(/^PASS server-caps: .*no words/);
+  });
+
+  const warns: Array<[string, string, (home: string) => void, RegExp]> = [
+    ['absent', 'fleet', () => { /* no file */ }, /absent/],
+    ['torn', 'fleet', (h) => writeFileSync(capsFile(h), `at ${now()}\ncaps dispatch-live-gate-v1\n`), /torn/],
+    ['malformed', 'fleet', (h) => writeFileSync(capsFile(h), `at ${now()}\ncaps Bad_Word\nend\n`), /malformed/],
+    ['stale', 'fleet', (h) => writeFileSync(capsFile(h), `at ${now() - SERVER_CAPS_LEASE_S - 1}\ncaps dispatch-live-gate-v1\nend\n`), /stale/],
+    ['future', 'fleet', (h) => writeFileSync(capsFile(h), `at ${now() + 600}\ncaps dispatch-live-gate-v1\nend\n`), /future/],
+    ['stale on a both node', 'both', (h) => writeFileSync(capsFile(h), `at ${now() - 4000}\ncaps\nend\n`), /stale/],
+  ];
+  for (const [name, r, arrange, why] of warns) {
+    (r === 'fleet' ? itLinux : it)(`WARNs on ${name}, naming the writer`, () => {
+      const home = healthy('ccrc-doctor-server-caps-warn-');
+      role(home, r);
+      arrange(home);
+      const out = runCaps(home);
+      const lines = out.stdout.split('\n');
+      expect(lines[0], out.stdout + out.stderr).toMatch(/^WARN server-caps: /);
+      expect(lines[0]).toMatch(why);
+      expect(lines[1]).toMatch(/^ {2}remedy: /);
+      expect(lines[0]).toMatch(r === 'fleet' ? /until ccd-update-sync / : /until this box's own ccrc server /);
+      expect(out.code).toBe(2);
+    });
+  }
+
+  // A FRESH INSTALL ENDS GREEN (D-4168, D-139; `ccrc-install.test.ts` pins it): within one lease of the writer's unit
+  // file landing, an ABSENT file is a writer that has not had its first beat, and PASSes on its grace word.
+  for (const [r, unit, writer] of [['fleet', 'ccd-update-sync.timer', /until ccd-update-sync /], ['both', 'ccrc.service', /until this box's own ccrc server /]] as const) {
+    (r === 'fleet' ? itLinux : it)(`PASSes first-write-pending on a ${r} node whose ${unit} landed inside one lease, with no file yet`, () => {
+      const home = healthy(`ccrc-doctor-server-caps-grace-${r}-`);
+      role(home, r);
+      writerUnit(home, unit, 5);
+      const out = runCaps(home);
+      expect(out.stdout, out.stderr).toMatch(new RegExp(`^PASS server-caps: first-write-pending: ${unit.replace('.', '\\.')} was installed \\d+s ago`));
+      expect(out.stdout).toMatch(writer);
+      expect(out.code).toBe(0);
+    });
+  }
+
+  it('gives the grace to ABSENCE only: a torn file inside the lease of a fresh writer unit still WARNs', () => {
+    const home = healthy('ccrc-doctor-server-caps-grace-torn-');
+    role(home, 'both');
+    writerUnit(home, 'ccrc.service', 5);
+    writeFileSync(capsFile(home), `at ${now()}\ncaps dispatch-live-gate-v1\n`);
+    const out = runCaps(home);
+    expect(out.stdout, out.stderr).toMatch(/^WARN server-caps: .*torn/);
+    expect(out.code).toBe(2);
+  });
+
+  it('SKIPs on a fleet node with no ccd-update-sync.timer installed: nothing here records the words', () => {
+    const home = healthy('ccrc-doctor-server-caps-fleet-notimer-');
+    role(home, 'fleet');
+    removeUnitFile(home, 'ccd-update-sync.timer');
+    const r = runCaps(home);
+    expect(r.stdout).toMatch(/^SKIP server-caps: ccd-update-sync\.timer is not installed on this box/);
+    expect(r.code).toBe(3);
+  });
+
+  it('SKIPs on a server node, which runs no hook', () => {
+    const home = healthy('ccrc-doctor-server-caps-server-');
+    role(home, 'server');
+    const r = runCaps(home);
+    expect(r.stdout).toMatch(/^SKIP server-caps: this box records CCRC_ROLE=server/);
+    expect(r.code).toBe(3);
+  });
+
+  it('SKIPs on a box that records no role (healthy()) and has no file, saying the arms are off', () => {
+    const home = healthy('ccrc-doctor-server-caps-norole-');
+    const r = runCaps(home);
+    expect(r.stdout).toMatch(/^SKIP server-caps: this box records no CCRC_ROLE and has no ~\/\.ccrc\/server-caps, so the session hook's gated arms are off/);
+    expect(r.code).toBe(3);
+  });
+
+  it('reads the file on a box that records no role, naming its own server (role derived both) as the writer', () => {
+    const home = healthy('ccrc-doctor-server-caps-norole-pass-');
+    writeFileSync(capsFile(home), `at ${now()}\ncaps dispatch-live-gate-v1\nend\n`);
+    const r = runCaps(home);
+    expect(r.stdout, r.stderr).toMatch(/^PASS server-caps: .*by this box's own ccrc server \(role derived both\), if one runs here.*dispatch-live-gate-v1/);
+    expect(r.code).toBe(0);
+  });
+
+  it('WARNs on a stale file on a box that records no role, naming its own server', () => {
+    const home = healthy('ccrc-doctor-server-caps-norole-stale-');
+    writeFileSync(capsFile(home), `at ${now() - SERVER_CAPS_LEASE_S - 1}\ncaps dispatch-live-gate-v1\nend\n`);
+    const r = runCaps(home);
+    const lines = r.stdout.split('\n');
+    expect(lines[0], r.stdout + r.stderr).toMatch(/^WARN server-caps: .*stale.*until this box's own ccrc server \(role derived both\), if one runs here/);
+    expect(lines[1]).toMatch(/^ {2}remedy: record CCRC_ROLE/);
+    expect(r.code).toBe(2);
+  });
+
+  it('is read-only: a stale file is left byte for byte', () => {
+    const home = healthy('ccrc-doctor-server-caps-ro-');
+    role(home, 'both');
+    const text = `at ${now() - 999}\ncaps dispatch-live-gate-v1\nend\n`;
+    writeFileSync(capsFile(home), text);
+    runCaps(home);
+    expect(readFileSync(capsFile(home), 'utf8')).toBe(text);
+  });
+});
+
+
+// ── oom-policy (D-5241, plan 2026-10-16 Task 14) ─────────────────────────────
+describe('oom-policy: the victim policy\'s two scope drop-ins, on disk and applied', () => {
+  const SRV = 'ccrc-tmux-server.scope';
+  const PANE = 'tmux-spawn-fixture.scope';
+  const listServer = (home: string): void => { appendFileSync(join(home, 'fixture-scopes'), `${SRV} loaded active running\n`); };
+  const verdict = (home: string): { line: string; remedy: string } => {
+    const lines = runDoctor(home).stdout.split('\n');
+    const i = lines.findIndex((l) => / oom-policy: /.test(l));
+    expect(i, 'an oom-policy line').toBeGreaterThanOrEqual(0);
+    return { line: lines[i]!, remedy: lines[i + 1] ?? '' };
+  };
+
+  itLinux('PASS: both drop-ins in place and the live pane scope reads continue', () => {
+    const home = healthy('ccrc-doctor-oom-pass-');
+    expect(verdict(home).line).toBe(`PASS oom-policy: both OOMPolicy=continue drop-ins are in place and ${PANE} read continue`);
+  });
+
+  itLinux('PASS: the tmux server scope is read too, when it is listed', () => {
+    const home = healthy('ccrc-doctor-oom-pass-srv-');
+    listServer(home); plantOomPolicy(home, SRV, 'continue');
+    expect(verdict(home).line).toBe(`PASS oom-policy: both OOMPolicy=continue drop-ins are in place and ${SRV} and ${PANE} read continue`);
+  });
+
+  itLinux('WARN: the pane-scope drop-in is missing — named, with its trailing-hyphen directory', () => {
+    const home = healthy('ccrc-doctor-oom-nopane-');
+    rmSync(join(home, '.config', 'systemd', 'user', OOM_DROPIN.pane));
+    plantOomPolicy(home, PANE, 'stop');
+    const v = verdict(home);
+    expect(v.line).toMatch(/^WARN oom-policy: ~\/\.config\/systemd\/user\/tmux-spawn-\.scope\.d\/50-oom-continue\.conf is missing; tmux-spawn-fixture\.scope reads OOMPolicy=stop: /);
+    expect(v.remedy).toMatch(/^ {2}remedy: ccrc update \(or ccrc install\) places both drop-ins; then systemctl --user daemon-reload/);
+  });
+
+  itLinux('WARN: the tmux-server drop-in is missing, even with no tmux server scope running', () => {
+    const home = healthy('ccrc-doctor-oom-nosrv-');
+    rmSync(join(home, '.config', 'systemd', 'user', OOM_DROPIN.server));
+    expect(verdict(home).line).toMatch(/^WARN oom-policy: ~\/\.config\/systemd\/user\/ccrc-tmux-server\.scope\.d\/50-oom-continue\.conf is missing: /);
+  });
+
+  itLinux('WARN: a pane scope reading stop with its drop-in in place (not reloaded)', () => {
+    const home = healthy('ccrc-doctor-oom-panestop-');
+    listServer(home); plantOomPolicy(home, SRV, 'continue');
+    plantOomPolicy(home, PANE, 'stop');
+    expect(verdict(home).line).toMatch(/^WARN oom-policy: tmux-spawn-fixture\.scope reads OOMPolicy=stop although ~\/\.config\/systemd\/user\/tmux-spawn-\.scope\.d\/50-oom-continue\.conf is in place \(not reloaded\): /);
+  });
+
+  itLinux('WARN: the tmux server scope reading stop', () => {
+    const home = healthy('ccrc-doctor-oom-srvstop-');
+    listServer(home); plantOomPolicy(home, SRV, 'stop');
+    expect(verdict(home).line).toMatch(/^WARN oom-policy: ccrc-tmux-server\.scope reads OOMPolicy=stop although .* is in place \(not reloaded\): /);
+  });
+
+  itLinux('PASS, saying so, when no tmux scope is running to read (an unlisted scope is never asked)', () => {
+    const home = healthy('ccrc-doctor-oom-noscope-');
+    rmSync(join(home, 'fixture-scopes'));
+    plantOomPolicy(home, PANE, 'stop');   // would WARN if it were asked
+    expect(verdict(home).line).toBe('PASS oom-policy: both OOMPolicy=continue drop-ins are in place; no tmux scope is running to read');
+  });
+
+  // PLATFORM-ONLY: OOMPolicy is a systemd unit property; the Linux arm is every itLinux case above, and launchd has no counterpart to assert.
+  itDarwin('SKIP on macOS: launchd has no OOMPolicy', () => {
+    const home = healthy('ccrc-doctor-oom-darwin-');
+    expect(verdict(home).line).toBe('SKIP oom-policy: OOMPolicy is a systemd mechanism, and this box runs launchd');
   });
 });

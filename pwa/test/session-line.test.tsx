@@ -782,6 +782,21 @@ describe('ask chip', () => {
       unmount();
     }
   });
+
+  // D-5289: `declined` (a parent's own release) gets no words of its own — the
+  // operator's push fired at once and the parent may no longer answer, so the
+  // chip has nothing true to explain. Pinned through the reader too: this
+  // build's `sessionAsk` must pass the member through (it is vocabulary), and
+  // the fold to "no chip" is SessionMeta's, as for `released`.
+  it('renders no chip for declined, and sessionAsk passes declined through as vocabulary (D-5289)', () => {
+    expect(sessionAsk({ ask: { state: 'declined', parentId: 'project-a-calm-mesa', answeredBy: null } }))
+      .toEqual({ state: 'declined', parentId: 'project-a-calm-mesa', answeredBy: null });
+    const { container } = render(
+      <SessionLine session={s({ ask: { state: 'declined', parentId: 'project-a-calm-mesa', answeredBy: null } })}
+                   onOpen={() => {}} onActions={() => {}} />,
+    );
+    expect(container.querySelector('.sess-ask-state')).not.toBeInTheDocument();
+  });
 });
 
 // Registry ladder (Task 2): a degraded row's small, honest note — the
@@ -1490,6 +1505,77 @@ describe('the repo label (board-placement wave 2, Task 6)', () => {
   });
 });
 
+// ── D-5301: the coordinator badge ───────────────────────────────────────────
+//
+// Every session the operator creates is its project's coordinator (coordinator-
+// first spec §8); the server derives `FleetSession.role` from `.child` alone. The
+// row shows a quiet `coordinator` badge beside the label, in `.sess-repo`'s
+// ink register, before any run exists. A child, a row with no role (an older
+// server: the live frame is cast, so the key may be absent) and an unknown word
+// show nothing.
+describe('the coordinator badge (D-5301)', () => {
+  const badge = (): HTMLElement | null => document.querySelector('.sess-role');
+
+  it("shows 'coordinator' beside the label, inside the row button's accessible name", () => {
+    render(<SessionLine session={s({ role: 'coordinator' })} onOpen={() => {}} onActions={() => {}} />);
+    expect(badge()?.textContent).toBe('coordinator');
+    expect(screen.getByRole('button', { name: /^quiet-mesa.*coordinator$/ })).toBeInTheDocument();
+    expect(badge()!.closest('.sess-open')).not.toBeNull();
+  });
+
+  it('shows nothing for a child', () => {
+    render(<SessionLine session={s({ role: 'child', child: { kind: 'child', runId: 7 } })} onOpen={() => {}} onActions={() => {}} />);
+    expect(badge()).toBeNull();
+  });
+
+  it('shows nothing for a row from an older server (null, or the key absent) or an unknown word', () => {
+    render(<SessionLine session={s({ role: null })} onOpen={() => {}} onActions={() => {}} />);
+    expect(badge()).toBeNull();
+    cleanup();
+    const absent: Record<string, unknown> = { ...s() };
+    delete absent['role'];
+    render(<SessionLine session={absent as unknown as FleetSession} onOpen={() => {}} onActions={() => {}} />);
+    expect(badge()).toBeNull();
+    cleanup();
+    render(<SessionLine session={s({ role: 'parent' as unknown as FleetSession['role'] })} onOpen={() => {}} onActions={() => {}} />);
+    expect(badge()).toBeNull();
+  });
+
+  it('sits beside the repo label when both render, the label first', () => {
+    render(<SessionLine session={s({ role: 'coordinator' })} repo="project-a" onOpen={() => {}} onActions={() => {}} />);
+    const cells = [...document.querySelector('.sess-open')!.children].map((c) => c.className);
+    expect(cells).toEqual(['sess-label', 'sess-repo', 'sess-role']);
+  });
+
+  // jsdom lays nothing out, so "at every width" is held where width is decided:
+  // the stylesheet. The badge keeps its own width (`flex: none`) while the label
+  // ellipsises, and no rule at any breakpoint, skin or theme hides or restyles
+  // it — the phone, laptop and wide rows are the same cell.
+  it('renders at every width: it never shrinks, and no media, skin or theme rule hides it', () => {
+    // Comments stripped first: the rule's own note says `flex: none` in prose.
+    const bare = (t: string): string => t.replace(/\/\*[\s\S]*?\*\//g, '');
+    const css = bare(readFileSync(path.join(__dirname, '../src/fleet/fleet.css'), 'utf8'));
+    const own = [...css.matchAll(/(?:^|\})\s*\.sess-role\s*\{([^}]*)\}/g)].map((m) => m[1]!);
+    expect(own).toHaveLength(1);
+    expect(own[0]).toMatch(/(?:^|;|\s)flex:\s*none\s*;/);
+    const roots = [path.join(__dirname, '../src'), path.join(__dirname, '../../ui/src')];
+    const sheets: string[] = [];
+    const walk = (d: string): void => {
+      for (const e of readdirSync(d, { withFileTypes: true })) {
+        const p = path.join(d, e.name);
+        if (e.isDirectory()) walk(p);
+        else if (p.endsWith('.css')) sheets.push(bare(readFileSync(p, 'utf8')));
+      }
+    };
+    roots.forEach(walk);
+    for (const sheet of sheets) {
+      for (const rule of sheet.match(/[^{}]*\.sess-role\b[^{}]*\{[^}]*\}/g) ?? []) {
+        expect(rule).not.toMatch(/display:\s*none|visibility:\s*hidden/);
+      }
+    }
+  });
+});
+
 // ── child-reclamation wave 5: the child-of-run label ────────────────────────
 //
 // `.sess-held`'s ink register: a short fact, no action. Three answers, never two
@@ -1590,7 +1676,7 @@ describe('delegated background work (D-5231)', () => {
   });
 
   it('the identical stall without background still escalates (the qualifier is only stood down, not removed)', () => {
-    render(<SessionLine session={bgRow({ background: null, ctxPct: 91, statusUpdatedAt: Date.now() - 95 * 60_000 })}
+    render(<SessionLine session={bgRow({ background: null, lastEnd: null, ctxPct: 91, statusUpdatedAt: Date.now() - 95 * 60_000 })}
                         onOpen={() => {}} onActions={() => {}} />);
     expect(chip()?.getAttribute('data-wedge')).toBe('true');
   });
@@ -1600,5 +1686,132 @@ describe('delegated background work (D-5231)', () => {
     delete row.background;
     render(<SessionLine session={row as FleetSession} onOpen={() => {}} onActions={() => {}} />);
     expect(document.querySelector('.sess-state')?.textContent).toBe('working');
+  });
+});
+
+// `interrupt-and-restart-causes-recorded` (D-5237; plan 2026-10-16-working-state-and-interruptions Task 8): for an
+// hour after a recorded process end the card says "restarted · <cause> · <age> ago", the time in the title.
+describe('a recent restart is named (D-5237)', () => {
+  const cell = (): Element | null => document.querySelector('.sess-restart');
+  const at = (agoMs: number): number => Date.now() - agoMs;
+
+  it('an oom end 3 minutes ago reads `restarted · out of memory · 3m ago`', () => {
+    render(<SessionLine session={s({ lastEnd: { at: at(3 * 60_000 + 5_000), cause: 'oom' } })} onOpen={() => {}} onActions={() => {}} />);
+    expect(cell()?.textContent).toBe('restarted · out of memory · 3m ago');
+    expect(cell()?.getAttribute('data-restart')).toBe('oom');
+    expect(cell()?.getAttribute('title')).toMatch(/^The previous process ended at .+: out of memory\.$/);
+  });
+
+  it('under a minute reads `just now`', () => {
+    render(<SessionLine session={s({ lastEnd: { at: at(10_000), cause: 'swap-manual' } })} onOpen={() => {}} onActions={() => {}} />);
+    expect(cell()?.textContent).toBe('restarted · swapped by hand · just now');
+  });
+
+  it('after an hour it is gone', () => {
+    render(<SessionLine session={s({ lastEnd: { at: at(61 * 60_000), cause: 'oom' } })} onOpen={() => {}} onActions={() => {}} />);
+    expect(cell()).toBeNull();
+  });
+
+  it('no end, and an older server that omits the key, render nothing', () => {
+    render(<SessionLine session={s({ lastEnd: null })} onOpen={() => {}} onActions={() => {}} />);
+    expect(cell()).toBeNull();
+    const row = s() as Partial<FleetSession>;
+    delete row.lastEnd;
+    render(<SessionLine session={row as FleetSession} onOpen={() => {}} onActions={() => {}} />);
+    expect(cell()).toBeNull();
+  });
+
+  it('an unknown cause on the wire reads `cause unknown`', () => {
+    const row = s({ lastEnd: { at: at(120_000), cause: 'cosmic-ray' as never } });
+    render(<SessionLine session={row} onOpen={() => {}} onActions={() => {}} />);
+    expect(cell()?.textContent).toBe('restarted · cause unknown · 2m ago');
+  });
+});
+
+// `with-coordinator-state` (D-5296; plan Task 7): while the session's parent
+// holds its question the server buckets it `working` and sets
+// `withCoordinator`; the card's state word reads `with coordinator · <parent>`
+// in the calm tone, and the held chip yields to it (D-5390).
+describe('the quiet "with coordinator" state (D-5296)', () => {
+  const WC = { kind: 'question' as const, parentId: 'project-a-calm-mesa', since: 4000, notifyAt: 184_000 };
+  const held = (over: Partial<FleetSession> = {}): FleetSession => fleetSession({
+    id: 'project-a-quiet-basin', project: 'project-a', workspace: 'quiet-basin', status: 'idle',
+    hookState: 'waiting', bucket: 'working', bucketSince: 4000, withCoordinator: WC,
+    ask: { state: 'held', parentId: 'project-a-calm-mesa', answeredBy: null }, ...over,
+  });
+
+  for (const width of [360, 390, 1280, 1920]) {
+    it(`reads "with coordinator · calm-mesa" in the calm tone at ${width} px, with no held chip`, () => {
+      window.innerWidth = width;
+      window.dispatchEvent(new Event('resize'));
+      const { container } = render(<SessionLine session={held()} onOpen={() => {}} onActions={() => {}} />);
+      const cell = container.querySelector('.sess-state');
+      expect(cell?.textContent).toBe('with coordinator · calm-mesa');
+      expect(cell?.className).toContain('sess-state--coordinator');
+      expect(cell?.getAttribute('title')).toContain('project-a-calm-mesa');
+      expect(container.querySelector('.sess-ask-state')).not.toBeInTheDocument();
+    });
+  }
+
+  it('a parent outside the project prefix is named in full', () => {
+    const { container } = render(
+      <SessionLine session={held({ withCoordinator: { ...WC, parentId: 'lane-b-other' } })} onOpen={() => {}} onActions={() => {}} />,
+    );
+    expect(container.querySelector('.sess-state')?.textContent).toBe('with coordinator · lane-b-other');
+  });
+
+  it('without the field (an older server, or null) the row keeps its ordinary word and the held chip', () => {
+    const { container } = render(
+      <SessionLine session={held({ withCoordinator: undefined as never })} onOpen={() => {}} onActions={() => {}} />,
+    );
+    expect(container.querySelector('.sess-state')?.textContent).toBe('working');
+    expect(container.querySelector('.sess-ask-state')?.textContent).toBe('held — project-a-calm-mesa may answer');
+  });
+
+  it('Needs-you does not list it: the bucket bar has no Attention chip for it, and does for the lapsed row', async () => {
+    const { BucketBar } = await import('../src/fleet/BucketBar');
+    const quiet = render(<BucketBar sessions={[held()]} acks={{}} ackAll={() => {}} />);
+    expect(quiet.container.textContent).not.toContain('Attention');
+    quiet.unmount();
+    const loud = render(<BucketBar sessions={[held({ withCoordinator: null, bucket: 'attention' })]} acks={{}} ackAll={() => {}} />);
+    expect(loud.container.textContent).toContain('Attention');
+  });
+
+  // The guard that keeps the state off any row but the `working` one the hold
+  // produces: the server keeps the field on a dead row, or on an idle one whose
+  // asks row is still `held` (a restart dropped the hold), until `notifyAt`.
+  it('a dead row with the field set reads exited, never the coordinator words', () => {
+    const { container } = render(
+      <SessionLine session={held({ status: 'dead', bucket: 'dead' })} onOpen={() => {}} onActions={() => {}} />,
+    );
+    expect(container.querySelector('.sess-state')?.textContent).toBe('exited');
+    expect(container.querySelector('.sess-state--coordinator')).not.toBeInTheDocument();
+  });
+
+  // `dead` reads the status and `state` the bucket, so they can disagree: a
+  // process that died before the ladder refiled the row is still `working`.
+  it('a dead process on a row still bucketed working never reads the coordinator words', () => {
+    const { container } = render(
+      <SessionLine session={held({ status: 'dead' })} onOpen={() => {}} onActions={() => {}} />,
+    );
+    expect(container.querySelector('.sess-state--coordinator')).not.toBeInTheDocument();
+    expect(container.querySelector('.sess-state')?.textContent).not.toContain('with coordinator');
+  });
+
+  it('an idle row with the field set reads idle, never the coordinator words', () => {
+    const { container } = render(
+      <SessionLine session={held({ bucket: 'idle' })} onOpen={() => {}} onActions={() => {}} />,
+    );
+    expect(container.querySelector('.sess-state--coordinator')).not.toBeInTheDocument();
+    expect(container.querySelector('.sess-state')?.textContent).not.toContain('with coordinator');
+  });
+
+  // D-5301 makes a main-checkout session (`<wrapper>-<project>`) a coordinator
+  // too; its id carries no `<project>-` prefix, so the card names it in full.
+  it('a `<wrapper>-<project>` main-checkout parent is named in full', () => {
+    const { container } = render(
+      <SessionLine session={held({ withCoordinator: { ...WC, parentId: 'wrapper-two-project-a' } })} onOpen={() => {}} onActions={() => {}} />,
+    );
+    expect(container.querySelector('.sess-state')?.textContent).toBe('with coordinator · wrapper-two-project-a');
   });
 });

@@ -11,9 +11,10 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
-  backgroundWork, backgroundWords, substrateFault,
+  backgroundWork, backgroundWords, sessionWithCoordinator, substrateFault, withCoordinatorWords,
   type FleetSession, type RosterWire, type RouteField, type SessionBucket, type SessionStatus,
 } from '../../../shared/api';
+import { restartWords } from '../lib/restart';
 import {
   BackButton, Chip, Keycap, ListRow, Sheet, StatusDot, TypedLabel, cn, elapsedShort, statusLabel, useNow,
 } from '@ccrc/ui';
@@ -33,7 +34,8 @@ export interface SessionHeaderProps {
   session: FleetSession | null;
   status: SessionStatus | null;
   statusUpdatedAt: number | null;
-  onInterrupt: () => void;
+  /** D-5237: called with the control that sent it, which the server records. */
+  onInterrupt: (source: 'keycap' | 'escape-key') => void;
   onOpenTerminal: () => void;
   onBack: () => void;
   /** "Change model" — opens the one-tap model chooser. */
@@ -225,7 +227,7 @@ export function SessionHeader({
       const el = e.target as HTMLElement | null;
       const tag = el?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || el?.isContentEditable === true) return;
-      onInterrupt();
+      onInterrupt('escape-key');
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -240,6 +242,13 @@ export function SessionHeader({
   // reads `working · N in background` (the kinds in the title), as the card does.
   const bg = bucket === 'working' && session != null ? backgroundWork(session) : null;
   const bgWords = bg === null ? null : backgroundWords(bg);
+  // D-5296: a `working` row whose parent holds its question reads
+  // `with coordinator · <parent>`, in the calm (idle) tint, as the card does.
+  // The dialog stays answerable from this screen: nothing here gates it.
+  const wc = bucket === 'working' && session != null ? sessionWithCoordinator(session) : null;
+  const wcWords = wc === null || session == null ? null : withCoordinatorWords(wc, session.project);
+  // D-5237: "restarted · out of memory · 3m ago" for an hour after a process end.
+  const restart = session != null ? restartWords(session, now) : null;
   const word =
     bucket === 'attention'
       ? 'waiting on you'
@@ -271,7 +280,7 @@ export function SessionHeader({
   // distinction colour must not carry alone. done/cleanup/archived take idle's
   // matte ink, exactly as their dots do (StatusDot's table).
   const variant =
-    bucket === 'attention' ? 'attention' : working ? 'busy' : bucket === 'dead' ? 'dead' : 'idle';
+    bucket === 'attention' ? 'attention' : wcWords !== null ? 'idle' : working ? 'busy' : bucket === 'dead' ? 'dead' : 'idle';
 
   // The substrate gate (spec §4): under a standing fault the console cannot
   // SEE this session, so Archive (and a main checkout's Restore) — an offer to act on a pane nobody can measure
@@ -328,12 +337,25 @@ export function SessionHeader({
           {bucket !== null && (
             <>
               <StatusDot status={bucket} />
-              <span className={`status-line status-line--${variant}`} title={bgWords?.title}>{word}</span>
+              <span className={cn('status-line', `status-line--${variant}`, wcWords !== null && 'status-line--coordinator')} title={wcWords?.title ?? bgWords?.title}>
+                {wcWords !== null ? (
+                  // D-5390: the phrase yields width before the parent's name does.
+                  <>
+                    <span className="status-line-lead">with coordinator</span>
+                    {' '}<span className="status-line-name">{`· ${wcWords.short}`}</span>
+                  </>
+                ) : word}
+              </span>
             </>
           )}
           {wrapper !== '' && (
             <Chip dot className={chipTone('active')}>
               {accountLabel(roster, wrapper)}
+            </Chip>
+          )}
+          {restart !== null && (
+            <Chip className={chipTone('restart')} title={restart.title} data-restart={restart.cause}>
+              {restart.text}
             </Chip>
           )}
           {repo !== null && (
@@ -400,7 +422,7 @@ export function SessionHeader({
         <PrKeycap pr={session.pr} onOpen={() => setPrOpen(true)} />
       )}
       {!finePointer && (
-        <Keycap className="keycap--esc" aria-label="Stop" disabled={!busy} onClick={onInterrupt}>
+        <Keycap className="keycap--esc" aria-label="Stop" disabled={!busy} onClick={() => onInterrupt('keycap')}>
           esc
         </Keycap>
       )}

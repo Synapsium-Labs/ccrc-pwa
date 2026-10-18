@@ -21,7 +21,7 @@
 #     this process's caller does not supply. Absent, it REFUSES; it never guesses
 #     a host. (A worker guessed one on 2026-08-25 and reported success against
 #     nothing.)
-#   * The route comes from ROUTES below, twenty-four rows, and nothing else.
+#   * The route comes from ROUTES below, twenty-five rows, and nothing else.
 #   * The only caller-supplied text that ever reaches a URL is an id or a query
 #     value the row itself declares, each validated against `SAFE_RE` BEFORE the
 #     request is built — refused, never escaped and sent.
@@ -73,7 +73,7 @@ REG="$HOME/.cc-sessions"
 SAFE_RE='^[A-Za-z0-9_-]+$'
 
 # METHOD|path|needs-id|comma-separated query keys this row accepts (or `-`).
-# Twenty-four rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
+# Twenty-five rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
 # derives the count from the table below and reds if this line or the bullet at
 # the top of this file states a different one. The original rows were chosen on
 # 2026-08-26 by measuring the skill corpora; the standing executable-corpus
@@ -142,6 +142,12 @@ declare -A ROUTES=(
   # one programme's events; without it the read is the whole box's, oldest-first.
   # An event that names no run is programless and appears only unfiltered.
   [feed.list]='GET|/api/feed|no|program,limit'
+  # The coordinator's explicit intent declaration (delegation broker wave 3, Task 15). The ONE row whose grammar is not the generic
+  # one: `coordinators intent <set|clear> --session <id>`, parsed by `parse_intent` below BEFORE the generic id and flag parser, which
+  # then sees no arguments at all. The path id and the body's `byId`/`byUuid` are DERIVED from this pane; `--session` is only an
+  # assertion that must equal the derived id, so it can never select another session. The row declares an id because the route
+  # template has one, not because a caller supplies it.
+  [coordinators.intent]='POST|/api/coordinators/{id}/intent|yes|-'
 )
 
 # Every refusal leaves by this door, in the SAME JSON envelope the routes
@@ -182,6 +188,7 @@ usage() {
       [[ "$q" == '-' ]] && q='' || q="  [--${q//,/ | --}]"
       printf '  %-18s %-5s %s%s\n' "${k/./ }" "$m" "$p" "$q"
     done
+    printf '  %-18s %s\n' '' 'coordinators intent takes set|clear --session <this session'"'"'s id> and nothing else'
     printf '  %-18s %s\n' 'whoami' 'this session'"'"'s {id,uuid}, from tmux + the registry'
     printf '  %-18s %s\n' '' '(ledger allocate fills "byId" from this pane; --by <id> for a caller with none)'
   } >&2
@@ -251,7 +258,9 @@ read_token() {   # sets TOKEN, or refuses (D-2724). Never call it in $( ).
 # auth/gate.ts's EXEMPT entry keeps the door open. It is refused on every other
 # row, and a session in a pane is filled from its pane. What is still
 # deliberately absent is any way to answer AS another session on a route that
-# checks attribution.
+# checks attribution. `coordinators intent` takes a second word of the same kind,
+# `--session`, and it is an ASSERTION, never a selector: `parse_intent` refuses
+# unless it equals the pane-derived id, exactly as `asks list --parent` does.
 DERIVED_ID=''
 DERIVED_UUID=''
 derive_identity() {   # sets DERIVED_ID / DERIVED_UUID, or refuses. NEVER call it
@@ -278,9 +287,58 @@ derive_identity() {   # sets DERIVED_ID / DERIVED_UUID, or refuses. NEVER call i
   [[ "$DERIVED_UUID" =~ $SAFE_RE ]] || refuse 'bad-uuid' 'session uuid is not a usable value'
 }
 
+# Adds `"<field>":"<value>"` as the FIRST key of the JSON object in `$body`
+# (main's local, read and rewritten here). Used by both body fills below.
+# `<value>` is always SAFE_RE-checked before it reaches this function (a `--by`
+# value, a derived id or a derived uuid), so it admits no quote and no backslash
+# and cannot escape the string it lands in. The third argument is the
+# `bad-body` detail for a body that is not an object.
+splice_body_field() {   # field, value, not-an-object detail
+  local lead rest restnb
+  lead="${body%%[![:space:]]*}"
+  rest="${body#"$lead"}"
+  [[ "$rest" == '{'* ]] || refuse 'bad-body' "$3"
+  rest="${rest#\{}"
+  restnb="${rest//[[:space:]]/}"
+  if [[ "$restnb" == '}' ]]; then body="{\"$1\":\"$2\"}"
+  else body="{\"$1\":\"$2\",$rest"; fi
+}
+
 cmd_whoami() {
   derive_identity
   printf '{"id":"%s","uuid":"%s"}\n' "$DERIVED_ID" "$DERIVED_UUID"
+}
+
+# `coordinators intent <set|clear> --session <id>`, and NOTHING ELSE (delegation broker wave 3, Task 15). A focused special case
+# that runs before the generic parser, so the generic one needs no flag, body file or query key for this row and gains none:
+# exactly one action word, then exactly one `--session`, nothing after it. The id and uuid are the PANE's (`derive_identity`);
+# `--session` must equal the derived id or the call is refused, so it asserts and never selects. The body is synthesized here from
+# those two values, which `derive_identity` has already held to SAFE_RE (no quote, no backslash), so it cannot break out of its
+# JSON strings. Sets INTENT_ID and INTENT_BODY, or refuses. NEVER call it inside $( ): `refuse` prints on stdout.
+INTENT_ID=''
+INTENT_BODY=''
+parse_intent() {
+  local action='' session='' have_session=0
+  (( $# >= 1 )) || refuse 'bad-args' 'coordinators intent needs set or clear'
+  action="$1"; shift
+  [[ "$action" == 'set' || "$action" == 'clear' ]] \
+    || refuse 'bad-args' "coordinators intent takes set or clear, not: $action"
+  while (( $# )); do
+    case "$1" in
+      --session)
+        (( have_session == 0 )) || refuse 'bad-args' '--session was given twice'
+        [[ $# -ge 2 ]] || refuse 'bad-args' '--session needs a value'
+        [[ "$2" =~ $SAFE_RE ]] || refuse 'bad-id' '--session value is not a plain session id'
+        session="$2"; have_session=1; shift 2 ;;
+      *) refuse 'bad-args' "unexpected argument: $1" ;;
+    esac
+  done
+  (( have_session == 1 )) || refuse 'bad-args' 'coordinators intent needs --session <id>'
+  derive_identity
+  [[ "$session" == "$DERIVED_ID" ]] \
+    || refuse 'session-mismatch' '--session must name this pane-derived session'
+  INTENT_ID="$DERIVED_ID"
+  INTENT_BODY="{\"action\":\"$action\",\"byId\":\"$DERIVED_ID\",\"byUuid\":\"$DERIVED_UUID\"}"
 }
 
 main() {
@@ -299,9 +357,15 @@ main() {
   IFS='|' read -r method tmpl needs qkeys <<< "${ROUTES[$key]}"
 
   # A positional id, if this row declares one. It is read before the flags so an
-  # id can never be mistaken for a flag value.
-  local id=''
-  if [[ $# -gt 0 && "$1" != --* ]]; then id="$1"; shift; fi
+  # id can never be mistaken for a flag value. The ONE row with a grammar of its own,
+  # `coordinators intent`, is parsed whole by `parse_intent` instead; it derives the id
+  # from the pane and consumes every argument, so the generic parser below sees none.
+  local id='' intent_body=''
+  if [[ "$key" == 'coordinators.intent' ]]; then
+    parse_intent "$@"
+    id="$INTENT_ID"; intent_body="$INTENT_BODY"
+    set --
+  elif [[ $# -gt 0 && "$1" != --* ]]; then id="$1"; shift; fi
 
   if [[ "$needs" == 'yes' ]]; then
     [[ -n "$id" ]] || refuse 'no-id' "$group $verb needs an id"
@@ -355,7 +419,11 @@ main() {
     fi
   fi
 
-  # THE ONE BODY THIS CLIENT REWRITES, and the first in its history. Measured
+  # The intent row's body is the body `parse_intent` synthesized: never read from a file or stdin.
+  [[ -z "$intent_body" ]] || body="$intent_body"
+
+  # THE FIRST BODY THIS CLIENT REWRITES. It now rewrites two more: the intent
+  # row's (above, replaced whole) and `runs.open`'s (below). Measured
   # 2026-09-02: at least 101 of this project's allocations already carry an empty
   # holder, because the documented body omits `byId` and the route stores
   # `byId ?? ''` — an omitted field and an explicit empty string reaching one
@@ -400,16 +468,44 @@ main() {
     case "$nb" in
       *'"byId":'*) : ;;                      # the caller has spoken
       *)
-        local who lead rest restnb
+        local who
         if [[ -n "$by" ]]; then who="$by"; else derive_identity; who="$DERIVED_ID"; fi
-        lead="${body%%[![:space:]]*}"
-        rest="${body#"$lead"}"
-        [[ "$rest" == '{'* ]] \
-          || refuse 'bad-body' 'the allocate body is not a JSON object; byId cannot be added'
-        rest="${rest#\{}"
-        restnb="${rest//[[:space:]]/}"
-        if [[ "$restnb" == '}' ]]; then body="{\"byId\":\"$who\"}"
-        else body="{\"byId\":\"$who\",$rest"; fi ;;
+        splice_body_field 'byId' "$who" \
+          'the allocate body is not a JSON object; byId cannot be added' ;;
+    esac
+  fi
+
+  # THE SECOND BODY THIS CLIENT FILLS: a run's claimant sends its own identity
+  # (D-5298; coordinator-first routing, spec §6.4). `POST /api/runs` is where a
+  # coordinator becomes a child's parent, and the server checks the claimant with
+  # `requireAttribution` against `claimedByUuid`. The coordinator skill's body
+  # names `claimedBy` and no uuid, and it stays that way: the uuid is read here,
+  # from the caller's own `$REG/<id>.uuid` through `derive_identity` (the pane,
+  # then the registry, as `whoami` and `asks list` read it), so no caller can get
+  # it wrong one call at a time. `runs.open` is the only row that sets a claimant:
+  # dispatch, advance, close, items and route take a run id and leave
+  # `claimedBy` and `sessionId` alone, and the reclaim door that does change them
+  # is one of the four that never have a row here (above).
+  #
+  # SAME RULES AS THE `byId` FILL, for the same reasons: a body that already
+  # names `claimedByUuid` is left alone (the route re-measures it, so the caller
+  # who spoke owns the answer, and it needs no pane); a blank one is refused; a
+  # body with no derivable identity is refused and nothing is sent; a bodyless
+  # call is untouched. The textual test's limits stated for `byId` hold here
+  # too. Freshness, not identity: every `.uuid` is readable by the one UNIX user
+  # these sessions share, so this stops a confused session, not a hostile one.
+  if [[ "$key" == 'runs.open' && -n "$body" ]]; then
+    local ob="${body//[[:space:]]/}"
+    case "$ob" in
+      *'"claimedByUuid":""'*)
+        refuse 'bad-body' 'the body names an EMPTY claimedByUuid; the claimant would be unattributed' ;;
+    esac
+    case "$ob" in
+      *'"claimedByUuid":'*) : ;;             # the caller has spoken
+      *)
+        derive_identity
+        splice_body_field 'claimedByUuid' "$DERIVED_UUID" \
+          'the runs open body is not a JSON object; claimedByUuid cannot be added' ;;
     esac
   fi
 

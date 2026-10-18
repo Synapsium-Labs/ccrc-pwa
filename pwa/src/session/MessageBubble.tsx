@@ -188,6 +188,28 @@ export function MessageBubble({
         </p>
       );
     }
+    if (event.origin === 'idle-compact') {
+      // D-5371: Claude Code's idle compaction ran on a turn that had already
+      // ended and started none. Without this pill the chat's last item is the
+      // recap whose text says "continue where it left off", which read as a
+      // stall. Claude Code's own sentence (and its off switch) is the tooltip.
+      return (
+        <p className="sys-divider sys-divider--idle" title={event.text}>
+          compacted while idle · nothing was running — waiting for you
+        </p>
+      );
+    }
+    if (event.origin === 'idle-compact-nudge') {
+      // D-5373: the server typed ONE "continue" prompt after an idle compaction
+      // left a fresh open task list (operator ruling 2026-10-17). It is the
+      // server's act, so it is a pill and never the operator's bubble; the
+      // prompt it typed is the tooltip. The idle pill's resting ink: no alarm.
+      return (
+        <p className="sys-divider sys-divider--idle sys-divider--nudge" title={event.text}>
+          nudged after idle compaction · ccrc typed “continue”
+        </p>
+      );
+    }
     // A system row whose text runs to more than ONE LINE cannot be told by the
     // pill below, and the pill does not fail loudly — it lies quietly.
     // `.sys-divider` declares no `white-space`, so every newline COLLAPSES into

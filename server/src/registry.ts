@@ -3,8 +3,8 @@ import type { CcrcConfig } from './config.js';
 import type { FleetIO, MeasuredRead, ReadFailure } from './io.js';
 import { readHookState } from './hookstate.js';
 import {
-  CHILD_RUN_ID, isPrPhase, isStopSurface, ROUTE_WRITABLE_FIELDS,
-  type ChildMark, type IdentityField, type LifecycleField,
+  CHILD_RUN_ID, isPrPhase, isStopSurface, parseLastEnd, ROUTE_WRITABLE_FIELDS,
+  type ChildMark, type IdentityField, type LastEnd, type LifecycleField,
   type PrPhase, type RouteField, type RouteFields, type RouteReadField, type StopSurface,
 } from '../../shared/api.js';
 
@@ -229,6 +229,12 @@ export interface SessionRecord {
    *  process is a fact this side of the seam can see; no wire field carries it
    *  yet, which is what makes the PWA task purely additive. */
   spawn: { at: number; rc: number } | null;
+  /** `$REG/<id>.lastend` — `<epoch> <cause>`, written by `ccd` at every
+   *  process end it sees (D-5237: the supervise loop's `gone` exit and
+   *  `cmd_swap`). Read ONLY when the listing names it, so a row that never
+   *  ended costs no read; parsed by `parseLastEnd` (absent or malformed →
+   *  null, the row still parses; an unknown cause → `unknown`). */
+  lastEnd: LastEnd | null;
   /** Which of `started`/`stopped`/`supervised` were LISTED but unreadable this
    *  pass — the same evidence rule `unmeasured` uses for the identity triple,
    *  over the three fields §4.3's classifier reads. Kept SEPARATE from
@@ -723,6 +729,10 @@ function noteWholeFleetListing(listable: boolean, now: number): void {
  * session count per sweep, so a 24-session fleet's whole-registry sweep rises
  * from 721 to 745 agent-WS operations per `readRegistry` call.
  *
+ * Plus one LISTED-ONLY read (D-5237): `.lastend`, read only when the listing
+ * names it, so a row that has never recorded a process end pays nothing and
+ * one that has pays one read more. The census counts the reads every row pays (D-5347).
+ *
  * Returns null for a DROPPED registry entry — narrowed (architecture doc,
  * increment 1's second half) from the old "missing wrapper/workdir/uuid"
  * blanket rule to exactly two evidenced cases, both now LOGGED rather than
@@ -739,7 +749,7 @@ async function buildRecord(
   const [wrapperRead, project, workdirRead, uuidRead, startedRead, home, pool, lastswap, workspace, branchRead,
     base, prPhaseRaw, prNumberRaw, prCheckedAtRaw, archivedRaw, manifestRaw, holdRead,
     stoppedRead, supervisedRead, swapBlockedRaw, spawnRaw, substrateRead, strandedRead,
-    routeFieldReads, degradedRead, inertRead, childRead] = await Promise.all([
+    routeFieldReads, degradedRead, inertRead, childRead, lastEndRaw] = await Promise.all([
     fieldMeasured(io, cfg.registryDir, id, 'wrapper'), field(io, cfg.registryDir, id, 'project'),
     fieldMeasured(io, cfg.registryDir, id, 'workdir'), fieldMeasured(io, cfg.registryDir, id, 'uuid'),
     fieldMeasured(io, cfg.registryDir, id, 'started'), field(io, cfg.registryDir, id, 'home'),
@@ -769,6 +779,9 @@ async function buildRecord(
     // child. MEASURED — an unreadable marker must never read as "not a
     // child" — and read as ccd reads it, untrimmed (see `SessionRecord.child`).
     fieldMeasured(io, cfg.registryDir, id, 'child', 'shell'),
+    // D-5237: the last process end's cause, read only when listed — a row
+    // that has never ended (or predates the field) costs nothing.
+    names.includes(`${id}.lastend`) ? field(io, cfg.registryDir, id, 'lastend') : Promise.resolve(null),
   ]);
 
   // The identity-triple ladder. `uuid` first: `names.includes(id + '.uuid')`
@@ -1083,6 +1096,7 @@ async function buildRecord(
     // renders as `null` while
     // typing as `number`, the silent lie `numOrNull` exists to refuse.
     spawn: spawnStamp === null || spawnRc === null ? null : { at: spawnStamp.at, rc: spawnRc },
+    lastEnd: parseLastEnd(lastEndRaw),
     lifecycleUnmeasured,
     unmeasured,
     route,
@@ -1259,7 +1273,8 @@ export const UNMEASURED_ASK_AT = -1;
  * THAT ARGUMENT IS SOUND ABOUT SUBSTITUTION AND SILENT ABOUT EVERYTHING ELSE
  * (D-2403). `updatedAt` moving is NECESSARY for a substitution and nowhere
  * near sufficient for one: `ccd/session-hook.sh` stamps it on every write
- * except a carried main-thread wait (D-4041, below),
+ * except a carried main-thread wait (D-4041, below) and, behind the server's
+ * word `hook-main-state-v1`, any agent event's carry (D-5232, below),
  * and its `SubagentStart`/`SubagentStop` arm re-reads `.ask` straight back
  * off the file, so a subagent event on a session blocked at a dialog rewrites
  * the identical envelope under a fresh number. (That sentence no longer holds
@@ -1267,7 +1282,11 @@ export const UNMEASURED_ASK_AT = -1;
  * and `event` and adds `aliveAt`, so such a subagent event moves nothing this
  * function compares. It still holds for a wait a SUBAGENT raised, stored as
  * `waitBy:"subagent"`, which is not carried and is rewritten under a fresh
- * stamp, and for any other bump.) Read alone, this function
+ * stamp, and for any other bump. Since D-5232, behind `hook-main-state-v1`,
+ * `aliveAt` is no longer only a carried wait's: every agent event keeps the
+ * main state's stamp and writes `aliveAt`, a SubagentStart or SubagentStop
+ * over a subagent's own wait keeps that wait's stamp too, and the wait's
+ * end restores the `waitPrev` it stored.) Read alone, this function
  * therefore refused parents over bumps nobody made — permanently, because
  * nothing re-stamped the row. It is now half of a pair: `CoordStore.restampAsk`
  * advances `askAt` on the ticks where `detectDialogs` has just re-scraped the

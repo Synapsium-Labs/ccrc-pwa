@@ -200,7 +200,7 @@ export function EnvelopeSheet({
     if (busy) return;
     setDenying(true);
     try {
-      await api.interrupt(id);
+      await api.interrupt(id, 'deny');
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
         // interrupt's `not-busy` can mean EITHER "the agent already finished

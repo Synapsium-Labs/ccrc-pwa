@@ -30,12 +30,13 @@
 import type { CSSProperties, ReactNode } from 'react';
 import {
   ASK_OPERATOR_PRINCIPAL, backgroundWork, backgroundWords,
-  ctxPressure, graphGateCount, graphReadCount, sessionAsk, substrateFault, turnStall,
-  unmeasuredFields,
+  ctxPressure, graphGateCount, graphReadCount, sessionAsk, sessionWithCoordinator, substrateFault, turnStall,
+  unmeasuredFields, withCoordinatorWords,
   type FleetSession, type ProjectPoolWire, type RosterWire,
 } from '../../../shared/api';
 import { accountColorVar, accountLabel, accountPool } from '../lib/accounts';
 import { elapsedWords, useNow, WARN_GLYPH } from '@ccrc/ui';
+import { restartWords } from '../lib/restart';
 import { humanBytes } from '../screens/ArchiveScreen';
 import { lifecycleQualifier } from './lifecycleWords';
 import { childOfRunLabel } from './runWords';
@@ -207,7 +208,13 @@ export function SessionMeta({
   // chip; anything else reads as no ask, the same "no chip" a genuinely
   // absent `ask` gets.
   const askRaw = sessionAsk(session);
-  const ask = askRaw !== null && (askRaw.state === 'held' || askRaw.state === 'answered') ? askRaw : null;
+  // D-5296: while the parent holds the question the state word itself says
+  // so — `with coordinator · <parent>` — in the calm tone, and the `held`
+  // chip, which would repeat the parent's name on a 360 px row, yields to it
+  // (D-5390). Only on the `working` row the hold produces, never on a dead one.
+  const wc = dead || state !== 'working' ? null : sessionWithCoordinator(session);
+  const wcWords = wc === null ? null : withCoordinatorWords(wc, session.project);
+  const ask = askRaw !== null && (askRaw.state === 'answered' || (askRaw.state === 'held' && wc === null)) ? askRaw : null;
 
   // §1.6b. ONE chip, never two — every condition that decides which one, and
   // the §1.7 degrade for a verdict this bundle was compiled without, now live
@@ -257,6 +264,8 @@ export function SessionMeta({
   // `working` row (N is "as listed at the last Stop" and never shown once the
   // live file reads idle, which moves the bucket off `working`).
   const bgWords = state === 'working' && background !== null ? backgroundWords(background) : null;
+  // D-5237: the card's qualifier for an hour after a process end.
+  const restart = dead ? null : restartWords(session, now);
   const turnAge =
     wedged && session.statusUpdatedAt !== null ? elapsedWords(now - session.statusUpdatedAt) : null;
 
@@ -337,9 +346,15 @@ export function SessionMeta({
   // is no longer a grid).
   return (
         <span className="sess-meta">
-          <span className={`sess-state sess-state--${state}`} title={bgWords?.title}>
-            {bgWords === null ? state : `${state} · ${bgWords.text}`}
-          </span>
+          {wcWords !== null ? (
+            <span className="sess-state sess-state--coordinator" title={wcWords.title}>
+              {wcWords.text}
+            </span>
+          ) : (
+            <span className={`sess-state sess-state--${state}`} title={bgWords?.title}>
+              {bgWords === null ? state : `${state} · ${bgWords.text}`}
+            </span>
+          )}
 
           {/* Position 2, immediately after `.sess-state`. `.sess-meta` has no
               flex-wrap and no `order`, so DOM order IS visual order, and only
@@ -347,6 +362,15 @@ export function SessionMeta({
               `flex: none` in fleet.css: §2.4 lengthens the hold reason in the
               same build and the two changes compound. */}
           <LastSpawnChip chip={chip} />
+
+          {/* D-5237: "restarted · out of memory · 3m ago", for an hour after a
+              recorded process end; the time in `title`. Same quiet truncating
+              mono register as `.sess-held`. */}
+          {restart !== null && (
+            <span className="sess-restart" data-restart={restart.cause} title={restart.title}>
+              {restart.text}
+            </span>
+          )}
 
           {/* Registry ladder (architecture doc, increment 1's second half —
               Task 2): this row's identity triple could not be fully measured

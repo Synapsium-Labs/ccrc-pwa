@@ -573,6 +573,14 @@ export interface CcdHarness {
   cleanup(): void;
 }
 
+/** D-5241: the tool-child priority's `env` token, as `_spawn_start` splices it after `_resume_env` — read
+ *  from ccd's own `_tool_adj_env` (one definition, read twice), with its leading space, so a pinned spawn
+ *  line is byte-exact on macOS (empty) and on Linux alike. */
+export const toolAdjToken = (h: Pick<CcdHarness, 'sh'>): string => {
+  const v = h.sh('_tool_adj_env');
+  return v ? ` ${v}` : '';
+};
+
 export function makeCcdHarness(prefix: string): CcdHarness {
   const home = mkTmp(prefix);
   // BEFORE anything else: sourcing ccd without a roster is fatal by design, so

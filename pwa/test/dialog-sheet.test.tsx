@@ -741,7 +741,8 @@ describe('DialogSheet (hook envelope)', () => {
     renderWithAsk(APPROVAL_ASK, yesNoDialog());
 
     fireEvent.click(screen.getByRole('button', { name: 'Deny' }));
-    expect(interruptSpy).toHaveBeenCalledWith(SESSION_ID);
+    // D-5237: a Deny names itself as the interrupt's source.
+    expect(interruptSpy).toHaveBeenCalledWith(SESSION_ID, 'deny');
   });
 
   it('toasts an honest, ambiguity-acknowledging message when Deny 409s (fix round 1: not-busy could mean either idle or already-resolved)', async () => {
@@ -963,7 +964,8 @@ describe('DialogSheet (hook envelope)', () => {
       expect(screen.getByRole('button', { name: 'Open terminal to answer' })).toBeInTheDocument();
 
       fireEvent.click(screen.getByRole('button', { name: 'Deny' }));
-      expect(interruptSpy).toHaveBeenCalledWith(SESSION_ID);
+      // D-5237: a Deny names itself as the interrupt's source.
+    expect(interruptSpy).toHaveBeenCalledWith(SESSION_ID, 'deny');
     });
 
     // Fix round 2 (Important): the CTA's own handler must gate on `busy` as
