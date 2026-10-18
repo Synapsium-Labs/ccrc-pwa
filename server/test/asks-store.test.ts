@@ -536,4 +536,48 @@ describe('a row minted released, with its reason (D-5290)', () => {
     s.db.prepare("UPDATE asks SET releaseReason = 'a-later-word' WHERE id = ?").run(id);
     expect(okAsk(s.askById(id))?.releaseReason).toBe('unknown');
   });
+
+  // D-5530: the three fail-closed reasons are words this build writes and
+  // reads back; `parent-project-mismatch` is never written again, but a row
+  // an older build wrote still reads back as itself, never `unknown`.
+  for (const reason of ['run-unclaimed', 'run-other-programme', 'parent-unmeasured'] as const) {
+    it(`mints and reads back ${reason} (D-5530)`, () => {
+      const s = mk();
+      const id = s.insertAsk({ childId: CHILD, parentId: PARENT, runId: null, askKey: 'k', askAt: 1000,
+        dialogId: 'd', question: 'q', options: ['a'], now: 7, releaseReason: reason });
+      expect(okAsk(s.askById(id))).toMatchObject({ state: 'released', releaseReason: reason });
+    });
+  }
+
+  it('a parent-project-mismatch row an older build wrote reads back as itself (D-5530)', () => {
+    const s = mk();
+    const id = s.insertAsk({ childId: CHILD, parentId: PARENT, runId: null, askKey: 'k', askAt: 1000,
+      dialogId: 'd', question: 'q', options: ['a'], now: 7, releaseReason: 'parent-not-live' });
+    s.db.prepare("UPDATE asks SET releaseReason = 'parent-project-mismatch' WHERE id = ?").run(id);
+    expect(okAsk(s.askById(id))?.releaseReason).toBe('parent-project-mismatch');
+  });
+
+  // D-5530: the parent's listing is the rows HELD for it. A row minted
+  // released was never held for anyone, so its question text is not the
+  // parent's to read; a row the lapse released was held for it and stays
+  // listed (late answer wins, D-5289).
+  it('asksForParent lists only rows held for the parent: never a minted-released one, nor another parent\'s (D-5530)', () => {
+    const s = mk();
+    const ins = (parentId: string, question: string, releaseReason?: 'parent-not-live' | 'parent-unmeasured') =>
+      s.insertAsk({ childId: CHILD, parentId, runId: null, askKey: 'k', askAt: 1000,
+        dialogId: 'd', question, options: ['a'], now: 7, ...(releaseReason ? { releaseReason } : {}) });
+    const held = ins(PARENT, 'held for it');
+    const lapsed = ins(PARENT, 'lapsed for it');
+    expect(s.releaseAsk(lapsed, 8)).toBe(true);
+    ins(PARENT, 'minted released: not live', 'parent-not-live');
+    ins(PARENT, 'minted released: unmeasured', 'parent-unmeasured');
+    const legacy = ins(PARENT, 'legacy mismatch', 'parent-not-live');
+    s.db.prepare("UPDATE asks SET releaseReason = 'parent-project-mismatch' WHERE id = ?").run(legacy);
+    ins('project-b-far-ridge', "another parent's");
+    const all = s.asksForParent(PARENT);
+    expect(all.ok && all.asks.map((a) => a.question)).toEqual(['held for it', 'lapsed for it']);
+    const released = s.asksForParent(PARENT, 'released');
+    expect(released.ok && released.asks.map((a) => a.id)).toEqual([lapsed]);
+    expect(held).toBeGreaterThan(0);
+  });
 });

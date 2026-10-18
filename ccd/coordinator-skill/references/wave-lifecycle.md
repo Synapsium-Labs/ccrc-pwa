@@ -1044,6 +1044,16 @@ a child's pane, and this session never does it by any other means. All three rou
 lane are named here — a coordinator IS a parent and calls all three, so this is the truthful
 entry, not an invitation like the operator-only doors above.
 
+**A cross-project coordinator receives its children's questions** (the operator's ruling of
+2026-10-18, D-5530). A child's question is held for the recorded claimant of the child's run
+wherever that claimant sits — no project is compared — so if you coordinate a programme whose
+runs are in another project, its children's questions are mailed to you and are yours to
+answer. The answer route admits exactly the session a row is held for: any other caller,
+whatever its project, is `403 not-parent`. A question the server could not hold for anyone (a
+run with no claimant, a run of another programme, or a parent it could not measure) goes to the
+operator at once, is never mailed to you, and is not in your `asks list`; an answer to one is
+refused (`not-held`, or `403 not-parent` when it was held for nobody).
+
 ```bash
 : "${ask_id:?set ask_id to the held ask row positive decimal id}"
 "$API" asks answer "$ask_id" --json - <<JSON

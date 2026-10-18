@@ -95,7 +95,7 @@ import {
   RUN_HOLD_NUMBER_MAX,
   IDLE_RUN_STATES, transitionsFor, TERMINAL_DELIVERY_STATES, TERMINAL_RUN_STATES, TMPROOT_ID_MAX_CHARS,
   WAVE_DONE_SUBJECT,
-  type AskReleaseReason, type AskState,
+  type AskMintReleaseReason, type AskReleaseReason, type AskState,
   type ClaimConflict, type ClaimState, type ClaimSummary,
   type CoordCaps, type DeviationAllocation, type DeviationAllocState,
   type LifecycleAct, type LifecycleGap, type LifecycleGapReason, type LifecycleOutcome,
@@ -7029,8 +7029,9 @@ export class CoordStore {
   }
 
   /** Minted at hold time (Task 6), state `'held'` — or, with a
-   *  `releaseReason` (D-5290), `'released'` at once, for a child whose parent
-   *  is not live or of another project. Those are the only states an ask is
+   *  `releaseReason` (D-5290), `'released'` at once, for a child the hold
+   *  fails closed on (D-5530: a parent not live or not measurable, a run with
+   *  no claimant or of another programme). Those are the only states an ask is
    *  ever inserted in; nothing else writes a fresh row.
    *
    *  THE `runId` GUARD IS DEFENSIVE (D-2545) and unreachable by construction
@@ -7048,9 +7049,10 @@ export class CoordStore {
   insertAsk(a: {
     childId: string; parentId: string; runId: number | null; askKey: string;
     askAt: number; dialogId: string; question: string; options: string[]; now: number;
-    /** D-5290: present, the row is minted `released` at `now` with this reason
-     *  (the parent is not live, or of another project), never `held`. */
-    releaseReason?: Exclude<AskReleaseReason, 'unknown'>;
+    /** D-5290: present, the row is minted `released` at `now` with this reason,
+     *  never `held`. D-5530: one of the fail-closed words (`AskMintReleaseReason`);
+     *  `parent-project-mismatch` is read-only and never written again. */
+    releaseReason?: AskMintReleaseReason;
   }): number {
     if (a.runId !== null && !isPositiveDecimalSafeInteger(a.runId)) {
       // The COLUMN and nothing else — the offending value never leaves here.
@@ -7077,14 +7079,22 @@ export class CoordStore {
   }
 
   /** The parent's cross-sibling read (Task 11's `GET /api/asks`) — every ask
-   *  addressed to this parent, or only those in one `state` when given. */
+   *  HELD for this parent, or only those in one `state` when given.
+   *
+   *  D-5530: `releaseReason IS NULL` is the "held for it" half. A row minted
+   *  `released` (any `releaseReason`, the legacy `parent-project-mismatch`
+   *  included) was never held for anyone: the operator owned it from its first
+   *  tick, the parent was never mailed it and may not answer it (D-5363), so
+   *  its question text is not the parent's to read. A row the LAPSE released
+   *  keeps a NULL reason and stays listed, because it was held for this parent
+   *  and is still its to answer (D-5289). */
   asksForParent(parentId: string, state?: AskState): AsksReadResult {
     const rows = (state === undefined
       ? this.db.prepare(
-          `SELECT ${CoordStore.ASK_COLS} FROM asks WHERE parentId = ? ORDER BY id`,
+          `SELECT ${CoordStore.ASK_COLS} FROM asks WHERE parentId = ? AND releaseReason IS NULL ORDER BY id`,
         ).all(parentId)
       : this.db.prepare(
-          `SELECT ${CoordStore.ASK_COLS} FROM asks WHERE parentId = ? AND state = ? ORDER BY id`,
+          `SELECT ${CoordStore.ASK_COLS} FROM asks WHERE parentId = ? AND state = ? AND releaseReason IS NULL ORDER BY id`,
         ).all(parentId, state)) as Parameters<CoordStore['hydrateAsk']>[0][];
     const asks: AskRow[] = [];
     for (const r of rows) {

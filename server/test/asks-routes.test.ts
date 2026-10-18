@@ -56,10 +56,10 @@ const QUESTION = { question: 'Which colour?', options: [{ label: 'Red' }, { labe
 const ASK_KEY = askKey({ questions: [QUESTION] })!;
 const ASK_PANE = 'Which colour?\n❯ 1. Red\n  2. Blue\nEnter to select\n';
 
-const seed = (home: string, id: string, uuid: string): void => {
+const seed = (home: string, id: string, uuid: string, project = 'demo'): void => {
   const reg = path.join(home, '.cc-sessions');
   mkdirSync(reg, { recursive: true });
-  const fields = { wrapper: 'claude', project: 'demo', workdir: `/w/demo/${id}`, uuid, started: '1' };
+  const fields = { wrapper: 'claude', project, workdir: `/w/${project}/${id}`, uuid, started: '1' };
   for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${id}.${k}`), v);
 };
 
@@ -1030,11 +1030,13 @@ describe('late answer wins; declined (D-5289)', () => {
     expect(sendKeysCalls(calls)).toHaveLength(1);
   });
 
-  // D-5290: a row MINTED released (`parent-not-live`, `parent-project-mismatch`)
-  // was never mailed to the parent and never held: the operator owns it from
-  // the first tick, so late answer wins does not reach it, and the parent's
-  // route refuses it as no longer pre-emptible.
-  for (const reason of ['parent-not-live', 'parent-project-mismatch'] as const) {
+  // D-5290: a row MINTED released was never mailed to the parent and never
+  // held: the operator owns it from the first tick, so late answer wins does
+  // not reach it, and the parent's route refuses it as no longer pre-emptible.
+  // D-5530: every reason this build writes, and `parent-project-mismatch`,
+  // which an older build wrote and this one never does.
+  for (const reason of ['parent-not-live', 'parent-unmeasured', 'run-unclaimed', 'run-other-programme',
+    'parent-project-mismatch'] as const) {
     it(`a row minted released (${reason}) is refused to the parent 409 not-held, and nothing is pressed`, async () => {
       const { coord, id, calls } = await setup(Date.now());
       coord.db.prepare("UPDATE asks SET state = 'released', releasedAt = 1, releaseReason = ? WHERE id = ?").run(reason, id);
@@ -1099,5 +1101,83 @@ describe('late answer wins; declined (D-5289)', () => {
     expect(parent.statusCode).toBe(409);
     expect(parent.json()).toEqual({ ok: false, error: 'already-answered' });
     expect(sendKeysCalls(calls)).toHaveLength(1);
+  });
+});
+
+// D-5530 (cross-project-claimant-holds-asks; the operator's ruling of
+// 2026-10-18): an ask is held for the child's run's recorded claimant
+// wherever that claimant sits, and the answer route admits exactly that
+// claimant. A session of another project that is NOT the held-for claimant is
+// refused, and the parent's listing never carries a row that was not held for
+// it.
+describe('a cross-project coordinator answers its children (D-5530)', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  const KID = 'project-a-quiet-basin';
+  const FAR = 'project-b-far-ridge';
+  const NEAR = 'project-c-open-dune';
+  const MESA = 'project-a-calm-mesa';
+  const KID_UUID = 'q'.repeat(36);
+  const FAR_UUID = 'f'.repeat(36);
+  const NEAR_UUID = 'n'.repeat(36);
+  const MESA_UUID = 'm'.repeat(36);
+
+  const setup = async (now: number) => {
+    const home = mkTmp('ccrc-asks-');
+    seed(home, KID, KID_UUID, 'project-a');
+    seed(home, FAR, FAR_UUID, 'project-b');
+    seed(home, NEAR, NEAR_UUID, 'project-c');
+    seed(home, MESA, MESA_UUID, 'project-a');
+    seedHookstate(home, KID, KID_UUID, now);
+    const { run, calls } = tmuxRunner([ASK_PANE]);
+    const opened = await openApp(home, run);
+    app = opened.app;
+    const coord = opened.coord;
+    const ins = (parentId: string, question: string, releaseReason?: 'parent-not-live') => coord.insertAsk({
+      childId: KID, parentId, runId: null, askKey: ASK_KEY, askAt: now, dialogId: 'dlg-1', question,
+      options: QUESTION.options.map((o) => o.label), now, ...(releaseReason ? { releaseReason } : {}),
+    });
+    return { coord, calls, ins };
+  };
+
+  it('the held-for claimant in another project answers: 200, one key pressed, the row answered by it', async () => {
+    const { coord, calls, ins } = await setup(Date.now());
+    const id = ins(FAR, QUESTION.question);
+    const res = await answer(app!, id, { fromId: FAR, fromUuid: FAR_UUID, optionIndexes: [1] });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(sendKeysCalls(calls)).toHaveLength(1);
+    expect(okAsk(coord.askById(id))).toMatchObject({ state: 'answered', answeredBy: FAR });
+  });
+
+  for (const [who, fromId, fromUuid] of [
+    ['a session of a third project', NEAR, NEAR_UUID],
+    ["a session of the child's own project", MESA, MESA_UUID],
+  ] as const) {
+    it(`${who}, attributed, that is not the held-for claimant is refused 403 not-parent, and nothing is pressed`, async () => {
+      const { coord, calls, ins } = await setup(Date.now());
+      const id = ins(FAR, QUESTION.question);
+      const res = await answer(app!, id, { fromId, fromUuid, optionIndexes: [1] });
+      expect(res.statusCode).toBe(403);
+      expect(res.json()).toMatchObject({ ok: false, error: 'not-parent' });
+      expect(sendKeysCalls(calls)).toEqual([]);
+      expect(okAsk(coord.askById(id))!.state).toBe('held');
+    });
+  }
+
+  it('?parent= shows a parent only the rows held for it: never a minted-released row, nor another parent\'s', async () => {
+    const { coord, ins } = await setup(Date.now());
+    ins(FAR, 'held for far');
+    ins(FAR, 'minted released for far', 'parent-not-live');
+    const legacy = ins(FAR, 'legacy mismatch for far', 'parent-not-live');
+    coord.db.prepare("UPDATE asks SET releaseReason = 'parent-project-mismatch' WHERE id = ?").run(legacy);
+    ins(MESA, 'held for mesa');
+    const res = await app!.inject({ method: 'GET', url: `/api/asks?parent=${FAR}&fromUuid=${FAR_UUID}`, headers: TOK });
+    expect(res.statusCode).toBe(200);
+    const asks = (res.json() as { asks: { question: string; parentId: string }[] }).asks;
+    expect(asks.map((a) => a.question)).toEqual(['held for far']);
+    expect(res.body).not.toContain('minted released');
+    expect(res.body).not.toContain('legacy mismatch');
+    expect(res.body).not.toContain('held for mesa');
   });
 });

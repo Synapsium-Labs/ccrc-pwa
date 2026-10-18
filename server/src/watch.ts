@@ -41,11 +41,11 @@ import type {
   LifecycleHealth, MailGate, MirroredLifecycleEvent, NotifyEvent, ProjectPoolsWire, ProjectRepoWire, PrState, RunSummary,
   SessionStatus, SessionUsage, TaskProgress,
 } from '../../shared/api.js';
-import type { DelegationEventEnvelopeV1, DelegationHealthInput, DelegationObservationHealth } from '../../shared/api.js';
+import type { AskMintReleaseReason, DelegationEventEnvelopeV1, DelegationHealthInput, DelegationObservationHealth } from '../../shared/api.js';
 // ONE LINE, deliberately: `single-definition.test.ts` scans for `UNCHECKED_PR`
 // arriving from shared/api on a single import line, and a prettier multi-line
 // form is invisible to it.
-import { FLEET_SCOPE, IDLE_COMPACT_NUDGE_PROMPT, LEDGER_STALE_MS, SERVER_CAPS, MAIL_MAX_ATTEMPTS, MAIL_REPLAY_MS, STALL_FOLLOW_LABEL, STALL_LEVEL_TEXT, TERMINAL_DELIVERY_STATES, UNCHECKED_PR, lifecycleIsDead, sessionLifecycle } from '../../shared/api.js';
+import { ASK_OPERATOR_PRINCIPAL, FLEET_SCOPE, IDLE_COMPACT_NUDGE_PROMPT, LEDGER_STALE_MS, SERVER_CAPS, MAIL_MAX_ATTEMPTS, MAIL_REPLAY_MS, STALL_FOLLOW_LABEL, STALL_LEVEL_TEXT, TERMINAL_DELIVERY_STATES, UNCHECKED_PR, lifecycleIsDead, sessionLifecycle } from '../../shared/api.js';
 import { JournalMirror } from './coord/mirror.js';
 // The pause marker's ONE definition in the tree. `MAIL_DISABLED_MARKER` is
 // NOT imported beside it: this file holds its own module-local literal
@@ -8711,18 +8711,28 @@ export class FleetWatcher {
    *    `{kind: 'child'}`. `none` and `unreadable` never hold: a run can name
    *    any session (`POST /api/runs`, until Task 11b), so `parentOfSession`
    *    alone does not make an operator-created session a child.
-   *  - `parentOfSession` answers, the self-claim guard (`parent !== r.id`),
-   *    and the parent it answers is the claimant of the run the mark names —
-   *    the minting run. Compared by claimant, not by run id: a wave N >= 2 run
-   *    resumes the SAME workspace (`dispatch.ts`'s resume arm), whose marker
-   *    still names wave 1, and `reclaimProgram` moves every run of a programme
-   *    to its heir together, so the claimant is the one fact the binding run
-   *    and the minting run share.
-   *  Then, past those, the row is minted either way:
-   *  - the parent's registry row exists (else `parent-not-live`), is of the
-   *    child's project (else `parent-project-mismatch`), is neither archived
-   *    nor stopped, and is not measured dead by `claimantMeasuredDead`, the
-   *    predicate `sweepDeadCoordinators` reads (else `parent-not-live`).
+   *  - the self-claim guard (`parentOfSession` answering `r.id` itself), the
+   *    run the mark names exists, and some open run names the child at all
+   *    (none is not a child, spec §4).
+   *  Then, past those, the row is minted either way (D-5530,
+   *  cross-project-claimant-holds-asks, the operator's ruling of 2026-10-18:
+   *  the ask is held for the child's run's recorded claimant WHEREVER that
+   *  claimant sits — no project is compared — and everything else fails
+   *  CLOSED, released to the operator with a reason that says why):
+   *  - the run has a claimant: `parentOfSession` answers one and the run the
+   *    mark names records one (else `run-unclaimed`, held for nobody, so the
+   *    row's parent is `ASK_OPERATOR_PRINCIPAL`);
+   *  - the parent is the claimant of the run the mark names — the minting
+   *    run (else `run-other-programme`, the same). Compared by claimant, not by
+   *    run id: a wave N >= 2 run resumes the SAME workspace (`dispatch.ts`'s
+   *    resume arm), whose marker still names wave 1, and `reclaimProgram`
+   *    moves every run of a programme to its heir together, so the claimant
+   *    is the one fact the binding run and the minting run share;
+   *  - the parent's registry row exists, is neither archived nor stopped, and
+   *    is not measured dead by `claimantMeasuredDead`, the predicate
+   *    `sweepDeadCoordinators` reads (else `parent-not-live`);
+   *  - the claimant ladder could measure it (else `parent-unmeasured`: doubt
+   *    is not a hold).
    *
    * Fix round 1, item 2 (Important): `parentOfSession` and everything `hold`
    * does (`openRunsForSession`, the WRITE `insertAsk`, `queueSystemMail`'s own
@@ -8747,22 +8757,45 @@ export class FleetWatcher {
     if (mark.kind !== 'child') return none;
     try {
       const parent = coord.parentOfSession(r.id);
-      if (parent === null || parent === r.id) return none;
+      if (parent === r.id) return none;
       // D-5362: the binding is "the parent is the claimant of the run the
       // mark names", not "the mark names the newest open run": a wave N>=2
       // run resumes the same workspace, whose `.child` still names wave 1.
       const minting = coord.run(mark.runId);
-      if (!minting.ok || minting.run === null || minting.run.claimedBy !== parent) return none;
-      const row = recs.find((x) => x.id === parent) ?? null;
-      let reason: 'parent-not-live' | 'parent-project-mismatch' | null = null;
-      if (row === null) reason = 'parent-not-live';
-      else if (row.project !== r.project) reason = 'parent-project-mismatch';
-      else if (row.archivedAt !== null || row.stopped !== null) reason = 'parent-not-live';
-      else if (claimantMeasuredDead(await measureClaimant(
-        { coord, io: this.deps.io, cfg: this.deps.cfg, tmux: this.deps.tmux }, parent, Date.now()))) {
-        reason = 'parent-not-live';
+      if (!minting.ok || minting.run === null) return none;
+      // D-5530 (cross-project-claimant-holds-asks, the operator's ruling of
+      // 2026-10-18): the ask is held for the run's recorded claimant WHEREVER
+      // that claimant sits — no project is compared, so no registry `project`
+      // (a field the reader defaults to the session id when it is missing, not
+      // a measurement) is read here. What has no held-for claimant, or a
+      // claimant this tick cannot vouch for, fails CLOSED: the row is minted
+      // `released` with the reason, and the operator is pushed at once.
+      let held: { parent: string; reason: AskMintReleaseReason | null };
+      if (parent === null) {
+        // No claimant on the newest open run naming the child — or no open run
+        // at all, which is not a child (spec §4) and raises as today.
+        const sib = coord.openRunsForSession(r.id);
+        if (!sib.ok) throw new Error(`tryHold: ${sib.detail}`);
+        if (sib.siblings.length === 0) return none;
+        held = { parent: ASK_OPERATOR_PRINCIPAL, reason: 'run-unclaimed' };
+      } else if (minting.run.claimedBy === null) {
+        held = { parent: ASK_OPERATOR_PRINCIPAL, reason: 'run-unclaimed' };
+      } else if (minting.run.claimedBy !== parent) {
+        held = { parent: ASK_OPERATOR_PRINCIPAL, reason: 'run-other-programme' };
+      } else {
+        held = { parent, reason: null };
+        const row = recs.find((x) => x.id === parent) ?? null;
+        if (row === null || row.archivedAt !== null || row.stopped !== null) {
+          held.reason = 'parent-not-live';
+        } else {
+          const verdict = await measureClaimant(
+            { coord, io: this.deps.io, cfg: this.deps.cfg, tmux: this.deps.tmux }, parent, Date.now());
+          if (claimantMeasuredDead(verdict)) held.reason = 'parent-not-live';
+          else if (verdict.state === 'unmeasurable') held.reason = 'parent-unmeasured';
+        }
       }
-      const mint = this.hold(r, dialog, actions, hs, ask, parent, reason);
+      const reason = held.reason;
+      const mint = this.hold(r, dialog, actions, hs, ask, held.parent, reason);
       if (reason !== null) {
         // Released at once: the operator's answerable push fires on THIS
         // tick, never after the window, and no hold is kept for the sweep.
@@ -8775,7 +8808,7 @@ export class FleetWatcher {
       // trace of a question their parent then answered in their name.
       this.pushOne({ ...mint.ev, recordAlways: true, recordOnly: true }, this.activeProjects);
       this.heldAsks.set(r.id, mint);
-      return { kind: 'held', parent };
+      return { kind: 'held', parent: held.parent };
     } catch (err) {
       console.warn(`ccrc-server: ask hold failed for ${r.id} (${err instanceof Error ? err.message : String(err)}) — falling back to an immediate push`);
       // Fix round 2, item 2: `insertAsk` and `queueSystemMail` are SEPARATE
@@ -8815,7 +8848,7 @@ export class FleetWatcher {
   private hold(
     r: SessionRecord, dialog: Dialog, actions: PushPayload['actions'],
     hs: HookState, ask: Extract<HookAsk, { questions: HookAskQuestion[] }>, parent: string,
-    releaseReason: 'parent-not-live' | 'parent-project-mismatch' | null,
+    releaseReason: AskMintReleaseReason | null,
   ): { until: number; askId: number; ev: Parameters<FleetWatcher['pushOne']>[0]; answeringSince: number | null } {
     const q = ask.questions[0]!;
     const key = askKey(ask);
@@ -8869,8 +8902,8 @@ export class FleetWatcher {
     // literal: `isAskNudgeMail` in the same module must recognise exactly
     // this shape, and a queue/reader pair spelling one convention twice is
     // the kind of thing that drifts.
-    // D-5290: a row minted released mails nobody — its parent is not live, or
-    // is not this child's project's, and the operator already has the push.
+    // D-5290: a row minted released mails nobody — nobody is held for it
+    // (D-5530's fail-closed reasons), and the operator already has the push.
     if (releaseReason === null) {
       queueSystemMail(this.deps.coord!, null, {
         fromId: 'operator', toId: parent, runId: null, kind: 'question',

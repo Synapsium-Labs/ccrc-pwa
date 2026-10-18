@@ -13,7 +13,7 @@
 // scrape in the same fixture, because this is the first task that needs to.
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -111,6 +111,7 @@ function fixture(opts: {
   writeAsk: (id: string, ask: unknown, state?: string) => void;
   child: (id: string, runId: number, mark?: string) => void;
   gone: Set<string>;
+  unmeasured: Set<string>;
 } {
   const home = mkTmp('ccrc-');
   const info = seedSessions(home, opts.sessions);
@@ -118,10 +119,14 @@ function fixture(opts: {
   // D-5290: the sessions tmux answers `can't find session` for — a parent the
   // dead-coordinator predicate can measure dead (pane gone, lifecycle `orphan`).
   const gone = new Set<string>();
+  // D-5530: the sessions tmux does not answer for (a message that is not
+  // `can't find session`), so `measureClaimant` answers `unmeasurable`.
+  const unmeasured = new Set<string>();
   const runner: Runner = async (_cmd, args) => {
     const target = args[2] ?? '';
     const id = /^=cc-(.*):$/.exec(target)?.[1] ?? '';   // the exact target `=cc-<id>:` (D-3525)
     if (args[0] === 'has-session') {
+      if (unmeasured.has(id)) return { code: 1, stdout: '', stderr: 'server exited unexpectedly' };
       return gone.has(id) ? { code: 1, stdout: '', stderr: `can't find session: cc-${id}` } : { code: 0, stdout: '', stderr: '' };
     }
     if (args[0] === 'list-panes') {
@@ -156,6 +161,7 @@ function fixture(opts: {
       seedRow(home, parent, run!.project);
     },
     gone,
+    unmeasured,
   };
 }
 
@@ -878,8 +884,10 @@ describe('the first-sighting race and a parent that is not live (D-5290)', () =>
       writeFileSync(path.join(f.home, '.cc-sessions', `${CHILD}.child`), String(runId));
       return runId;
     }],
-    ['a parent of another project', 'parent-project-mismatch', (f) => {
-      const runId = dispatch(f, CHILD, FAR, 'project-a');
+    // D-5530: a run with no claimant (a reconstructed programme's) releases with its own reason.
+    ['a run with no claimant', 'run-unclaimed', (f) => {
+      const runId = dispatch(f, CHILD, PARENT);
+      f.coord.db.prepare('UPDATE runs SET claimedBy = NULL WHERE id = ?').run(runId);
       f.child(CHILD, runId);
       return runId;
     }],
@@ -942,12 +950,6 @@ describe('the first-sighting race and a parent that is not live (D-5290)', () =>
   const notAChild: [string, (f: ReturnType<typeof fixture>, runId: number) => void][] = [
     ['no `.child` marker', () => {}],
     ['an unreadable mark', (f) => { writeFileSync(path.join(f.home, '.cc-sessions', `${OPS}.child`), 'not-a-run'); }],
-    ['a mark naming a different run', (f) => {
-      const other = f.coord.openRun({
-        program: 'other', title: 'Other', project: 'project-a', wave: 1, waveOf: null, claimedBy: OPS,
-      }) as { id: number };
-      writeFileSync(path.join(f.home, '.cc-sessions', `${OPS}.child`), String(other.id));
-    }],
   ];
   for (const [name, arrange] of notAChild) {
     it(`not a child (${name}): a run naming an operator-created session never holds its question`, async () => {
@@ -967,7 +969,11 @@ describe('the first-sighting race and a parent that is not live (D-5290)', () =>
     });
   }
 
-  it('project mismatch: a legacy run claimed from another project mints released (parent-project-mismatch) and pushes at once', async () => {
+  // D-5530 (cross-project-claimant-holds-asks; the operator's ruling of
+  // 2026-10-18): an ask is held for the child's run's recorded claimant
+  // WHEREVER that claimant sits. No project is compared: a coordinator in
+  // project-b holds, is mailed, and is the row's parent.
+  it('a cross-project claimant holds: a run of project-a claimed from project-b mints held for it and mails it (D-5530)', async () => {
     const sent: PushPayload[] = [];
     const push = { notify: async (p: PushPayload) => { sent.push(p); } };
     const f = fixture({ push, sessions: [`project-a/${CHILD}`, `project-b/${FAR}`] });
@@ -979,10 +985,161 @@ describe('the first-sighting race and a parent that is not live (D-5290)', () =>
     await f.tick();
     const rows = asksRows(f);
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ childId: CHILD, parentId: FAR, state: 'released', releaseReason: 'parent-project-mismatch' });
+    expect(rows[0]).toMatchObject({ childId: CHILD, parentId: FAR, state: 'held', releaseReason: null });
+    expect(rows[0]!.releasedAt).toBeNull();
+    expect(mailTo(f, FAR)).toBe(1);
+    expect(pushesFor(sent, CHILD)).toEqual([]);
+  });
+
+  it('a cross-project claimant holds from the amendment branch too: the envelope on tick 2 holds and mails it (D-5530)', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    const f = fixture({ push, sessions: [`project-a/${CHILD}`, `project-b/${FAR}`] });
+    const runId = dispatch(f, CHILD, FAR, 'project-a');
+    f.child(CHILD, runId);
+    await f.tick();                                   // priming
+    f.writeAsk(CHILD, null, 'waiting');
+    f.showMenu(CHILD);
+    await f.tick();                                   // first sighting: deferred while waiting without an envelope
+    f.writeAsk(CHILD, ENVELOPE);
+    await f.tick();
+    expect(asksRows(f)).toEqual([expect.objectContaining({ childId: CHILD, parentId: FAR, state: 'held', releaseReason: null })]);
+    expect(mailTo(f, FAR)).toBe(1);
+    expect(pushesFor(sent, CHILD).filter((p) => p.actions !== undefined)).toEqual([]);
+  });
+
+  // D-5530, fail closed: no held-for claimant, so the operator has the
+  // question at once, and the row says why.
+  it('a run with no claimant mints released (run-unclaimed), held for nobody, and pushes at once (D-5530)', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    const f = fixture({ push, sessions: [`project-a/${CHILD}`, `project-a/${PARENT}`] });
+    const runId = dispatch(f, CHILD, PARENT);
+    f.coord.db.prepare('UPDATE runs SET claimedBy = NULL WHERE id = ?').run(runId);
+    f.child(CHILD, runId);
+    await f.tick();
+    f.writeAsk(CHILD, ENVELOPE);
+    f.showMenu(CHILD);
+    await f.tick();
+    const rows = asksRows(f);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ childId: CHILD, parentId: 'operator', state: 'released', releaseReason: 'run-unclaimed' });
+    expect(rows[0]!.releasedAt).not.toBeNull();
+    expect(mailTo(f, PARENT)).toBe(0);
+    expect(pushesFor(sent, CHILD)).toHaveLength(1);
+    expect(pushesFor(sent, CHILD)[0]!.actions).toBeDefined();
+  });
+
+  it("a child's run claimed by another programme's coordinator mints released (run-other-programme) and mails neither (D-5530)", async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    const f = fixture({ push, sessions: [`project-a/${CHILD}`, `project-a/${PARENT}`, `project-b/${FAR}`] });
+    // The mark names programme `prog`'s run (claimed by PARENT); the newest
+    // open run naming the child is programme `other`'s, claimed by FAR.
+    const minting = dispatch(f, CHILD, PARENT);
+    f.child(CHILD, minting);
+    const other = f.coord.openRun({
+      program: 'other', title: 'Other', project: 'project-a', wave: 1, waveOf: null, claimedBy: FAR,
+    }) as { id: number };
+    f.coord.setSession(other.id, CHILD);
+    await f.tick();
+    f.writeAsk(CHILD, ENVELOPE);
+    f.showMenu(CHILD);
+    await f.tick();
+    const rows = asksRows(f);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ childId: CHILD, parentId: 'operator', state: 'released', releaseReason: 'run-other-programme' });
+    expect(mailTo(f, PARENT) + mailTo(f, FAR)).toBe(0);
+    expect(pushesFor(sent, CHILD)).toHaveLength(1);
+    expect(pushesFor(sent, CHILD)[0]!.actions).toBeDefined();
+  });
+
+  it('a mark naming a run whose claimant is not the binding parent mints released (run-other-programme), never held (D-5362, D-5530)', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    const f = fixture({ push, sessions: [`project-a/${OPS}`, `project-a/${PARENT}`] });
+    dispatch(f, OPS, PARENT);
+    const other = f.coord.openRun({
+      program: 'other', title: 'Other', project: 'project-a', wave: 1, waveOf: null, claimedBy: OPS,
+    }) as { id: number };
+    writeFileSync(path.join(f.home, '.cc-sessions', `${OPS}.child`), String(other.id));
+    await f.tick();
+    f.writeAsk(OPS, ENVELOPE);
+    f.showMenu(OPS);
+    await f.tick();
+    expect(asksRows(f)).toEqual([expect.objectContaining({ childId: OPS, parentId: 'operator', state: 'released', releaseReason: 'run-other-programme' })]);
+    expect(mailTo(f, PARENT)).toBe(0);
+    expect(pushesFor(sent, OPS)).toHaveLength(1);
+    expect(pushesFor(sent, OPS)[0]!.actions).toBeDefined();
+  });
+
+  it('the run the mark names records no claimant while a newer run is claimed: released (run-unclaimed), never held (D-5530)', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    const f = fixture({ push, sessions: [`project-a/${CHILD}`, `project-a/${PARENT}`] });
+    // The mark names a reconstructed run (no claimant); wave 2 was opened by PARENT.
+    const minting = dispatch(f, CHILD, PARENT);
+    f.coord.db.prepare('UPDATE runs SET claimedBy = NULL WHERE id = ?').run(minting);
+    f.child(CHILD, minting);
+    dispatch(f, CHILD, PARENT);
+    await f.tick();
+    f.writeAsk(CHILD, ENVELOPE);
+    f.showMenu(CHILD);
+    await f.tick();
+    expect(asksRows(f)).toEqual([expect.objectContaining({ childId: CHILD, parentId: 'operator', state: 'released', releaseReason: 'run-unclaimed' })]);
+    expect(mailTo(f, PARENT)).toBe(0);
+    expect(pushesFor(sent, CHILD)).toHaveLength(1);
+  });
+
+  it('a marked child that no open run names is not a child: no row, raised as today (spec §4, D-5530)', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    const f = fixture({ push, sessions: [`project-a/${CHILD}`, `project-a/${PARENT}`] });
+    const runId = dispatch(f, CHILD, PARENT);
+    f.child(CHILD, runId);
+    f.coord.db.prepare("UPDATE runs SET state = 'done' WHERE id = ?").run(runId);
+    await f.tick();
+    f.writeAsk(CHILD, ENVELOPE);
+    f.showMenu(CHILD);
+    await f.tick();
+    expect(asksRows(f)).toEqual([]);
+    expect(mailTo(f, PARENT)).toBe(0);
+    expect(pushesFor(sent, CHILD)).toHaveLength(1);
+    expect(pushesFor(sent, CHILD)[0]!.actions).toBeDefined();
+  });
+
+  it('a parent that cannot be measured mints released (parent-unmeasured) and pushes at once, never held (D-5530)', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    const f = fixture({ push, sessions: [`project-a/${CHILD}`, `project-b/${FAR}`] });
+    const runId = dispatch(f, CHILD, FAR, 'project-a');
+    f.child(CHILD, runId);
+    f.unmeasured.add(FAR);
+    await f.tick();
+    f.writeAsk(CHILD, ENVELOPE);
+    f.showMenu(CHILD);
+    await f.tick();
+    const rows = asksRows(f);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ childId: CHILD, parentId: FAR, state: 'released', releaseReason: 'parent-unmeasured' });
     expect(mailTo(f, FAR)).toBe(0);
     expect(pushesFor(sent, CHILD)).toHaveLength(1);
     expect(pushesFor(sent, CHILD)[0]!.actions).toBeDefined();
+  });
+
+  it('a parent whose registry row records no project still holds: no project is read (D-5530)', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    const f = fixture({ push, sessions: [`project-a/${CHILD}`, `project-b/${FAR}`] });
+    const runId = dispatch(f, CHILD, FAR, 'project-a');
+    f.child(CHILD, runId);
+    rmSync(path.join(f.home, '.cc-sessions', `${FAR}.project`));
+    await f.tick();
+    f.writeAsk(CHILD, ENVELOPE);
+    f.showMenu(CHILD);
+    await f.tick();
+    expect(asksRows(f)).toEqual([expect.objectContaining({ childId: CHILD, parentId: FAR, state: 'held', releaseReason: null })]);
+    expect(mailTo(f, FAR)).toBe(1);
   });
 });
 
