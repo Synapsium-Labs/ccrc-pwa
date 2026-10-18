@@ -1658,6 +1658,10 @@ export class CoordStore {
      *  its absence is a real answer: an older row, or an open where the
      *  coordinator's registry record could not be read. */
     coordProject?: string;
+    /** D-5298: the open carried no `claimedByUuid` and the fleet did not yet
+     *  carry the client that sends it, so it was accepted unattributed and is
+     *  journaled here (migration 22). Absent is `false`. */
+    unattributed?: boolean;
   }): OpenRunResult {
     try {
       return tx(this.db, () => {
@@ -1735,15 +1739,15 @@ export class CoordStore {
           'ON CONFLICT(slug) DO UPDATE SET title = excluded.title',
         ).run(input.program, input.title, now, 'active', input.homeProject ?? null);
         const insertRun = this.db.prepare(
-          'INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt, kind, reviews, coordProject) ' +
-          'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          'INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt, kind, reviews, coordProject, unattributed) ' +
+          'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         );
         // Keep SQLite's exact INTEGER result until the safe-integer check below;
         // converting first can round an out-of-domain id into another number.
         insertRun.setReadBigInts(true);
         const res = insertRun.run(
           input.program, input.wave, input.waveOf, input.project, 'planned', input.claimedBy, now,
-          input.kind ?? 'work', input.reviews ?? null, input.coordProject ?? null,
+          input.kind ?? 'work', input.reviews ?? null, input.coordProject ?? null, input.unattributed === true ? 1 : 0,
         );
         const exactId = res.lastInsertRowid;
         const id = Number(exactId);
@@ -3993,6 +3997,15 @@ export class CoordStore {
    *  run already reads terminal inside its own transaction. `-1` when absent,
    *  an id AUTOINCREMENT never mints, so both are ONE query —
    *  `openRunsForSession`'s own idiom. */
+  /** D-5388: every NON-TERMINAL claimed run of `program`, id and project, by
+   *  id — the open bindings `reclaimProgram`'s UPDATE would hand to an heir,
+   *  read by the reclaim heir's project rung. */
+  programOpenClaimedRuns(program: string): { id: number; project: string }[] {
+    return this.db.prepare(
+      `SELECT id, project FROM runs WHERE program = ? AND claimedBy IS NOT NULL AND state NOT IN ${TERMINAL_RUN_STATES_SQL} ORDER BY id`,
+    ).all(program) as { id: number; project: string }[];
+  }
+
   programOpenRunCount(program: string, excludeRunId?: number): number {
     return (this.db.prepare(
       `SELECT count(*) AS c FROM runs WHERE program = ? AND state NOT IN ${TERMINAL_RUN_STATES_SQL} AND id != ?`,

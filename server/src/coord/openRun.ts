@@ -29,6 +29,14 @@ import type { RunKind, RunRefuseCode, RunSummary } from '../../../shared/api.js'
  * called LAZILY, by the gate that needs each one, so a refusal still costs only
  * the reads ahead of it — exactly the reads the inline handler made. A
  * malformed body reads nothing; a work open never reads a reviewed run.
+ *
+ * ASYNC SINCE TASK 11b (D-5387). Coordinator-first Task 11b's three gates read
+ * the REGISTRY (the claimant's `.uuid` and `.project`, the named session's
+ * child marker), and a registry read is awaited — on a two-box fleet it is an
+ * agent round trip. So the decider is `async` and a gate may answer a promise:
+ * the registry lookups stay lazy and in gate order exactly like the store's,
+ * rather than being read up front for every body (a malformed one included).
+ * Still L1: the lookups are passed in, and nothing here touches `fs`.
  */
 
 /** The reviewed run, as far as the review arm reads it. */
@@ -53,7 +61,56 @@ export interface OpenRunFacts {
   /** `CoordStore.openClaimantsOf`: every coordinator this session is currently
    *  the worker of, newest first. */
   readonly openClaimantsOf: (sessionId: string) => readonly string[];
+  /** D-5298: whether the fleet box's `ccrc-api` attributes `runs open`
+   *  (`fleetCarriesRunsAttribution`, computed by the route). False: an open
+   *  without `claimedByUuid` is accepted and journaled `unattributed`. */
+  readonly fleetCarriesAttribution: boolean;
+  /** D-5298: the claim lanes' attribution check (`requireAttribution`'s
+   *  verdict, `coord/routes.ts`) for `claimedBy` against `claimedByUuid`. */
+  readonly attribute: (claimant: string, uuid: string) => Promise<AttributionRead>;
+  /** D-5298: an UNATTRIBUTED claimant (before the switch-over) is a listed
+   *  registry row — `<claimant>.uuid` in the registry listing — or
+   *  `unknown-sender`, so no later gate path-joins an unlisted id (`../x`)
+   *  into a field read. */
+  readonly claimantListed: (claimant: string) => Promise<AttributionRead>;
+  /** D-5298: the claimant's OWN registry project, MEASURED (`fieldMeasured`,
+   *  never `SessionRecord.project`'s `project ?? id` default). */
+  readonly claimantProject: (claimant: string) => Promise<ClaimantProjectRead>;
+  /** D-5298: what the registry says the named `sessionId` is. */
+  readonly sessionMark: (sessionId: string) => Promise<SessionMarkRead>;
 }
+
+/** The attribution refusals, each a `RouteRefusal` word the claim lanes
+ *  already send (`unknown-sender` and `stale-uuid` 403, `registry-unmeasurable`
+ *  502). */
+export type AttributionRefusal = 'registry-unmeasurable' | 'unknown-sender' | 'stale-uuid';
+export type AttributionRead = { ok: true } | { ok: false; error: AttributionRefusal; detail: string };
+
+/** Three answers, never folded: a measured non-empty project; NONE (the field
+ *  is absent or empty — a fact about the row); and UNREADABLE (transient, not a
+ *  fact). */
+export type ClaimantProjectRead =
+  | { kind: 'measured'; project: string } | { kind: 'none' } | { kind: 'unreadable' };
+
+/** What the registry says a `sessionId` is (D-5298), in spec §4's words:
+ *   - `absent`: no `.uuid` listed — not a registry row yet. ADMITTED: a
+ *     dispatch opens its run before `ws-add --child <run>` makes the row;
+ *   - `child`: a row whose `ChildMark` is `{kind: 'child'}`;
+ *   - `root`: a row whose `ChildMark` is `{kind: 'none'}` — a session that is
+ *     not a dispatched child, which is every session the operator creates;
+ *   - `unbuilt`: a `.uuid` listed but no row could be built around it and no
+ *     `.child` listed — it cannot be proven absent, so it is refused as
+ *     unmeasurable rather than admitted;
+ *   - `deferred`: the registry could not be listed, or the marker is listed
+ *     but unreadable, or listed with no row built around it. Rule 3's child
+ *     gate (`childBind.ts`), which runs next and re-reads, refuses every one
+ *     of these `spent-unmeasured`, so this gate does not answer them twice. */
+export type SessionMarkRead =
+  | { kind: 'absent' } | { kind: 'child' } | { kind: 'root' } | { kind: 'unbuilt' } | { kind: 'deferred' };
+
+/** The detail an `attribution-required` refusal carries: the remedy, verbatim
+ *  from spec §6.4. */
+export const ATTRIBUTION_REQUIRED_DETAIL = "upgrade the fleet box's ccrc-api (ccrc rollout)";
 
 /** What the open route must DO about the body's `homeProject` and the
  *  programme's stored one. SIX answers, none folded into another: `write` and
@@ -126,15 +183,16 @@ export function shapeHomeProject(raw: string): HomeProjectShape {
 
 /** The run refusals this decider answers in `refused` (a `RunRefuseCode`
  *  body key, with `by`), as opposed to the `error` words. */
-export type OpenRunConflictCode = Extract<RunRefuseCode, 'project-mismatch' | 'home-mismatch' | 'claimant-is-a-worker'>;
+export type OpenRunConflictCode = Extract<RunRefuseCode,
+  'project-mismatch' | 'home-mismatch' | 'claimant-is-a-worker' | 'attribution-required' | 'not-a-child'>;
 
 /** One refusal, carrying the gate that answered it (for the order table; the
  *  route does not send it) and exactly the body fields the inline sends wrote:
  *  the bare shape refusal has NO `detail` key, every other `error` has one. */
 export type OpenRunRefusal =
   | { gate: OpenRunGate; error: 'bad-request'; detail?: string }
-  | { gate: OpenRunGate; error: 'run-unreadable'; detail: string }
-  | { gate: OpenRunGate; refused: OpenRunConflictCode; by: string };
+  | { gate: OpenRunGate; error: 'run-unreadable' | AttributionRefusal; detail: string }
+  | { gate: OpenRunGate; refused: OpenRunConflictCode; by?: string; detail?: string };
 
 /** The admitted open, shaped: what `CoordStore.openRun` and the route's later
  *  acts read, never the raw body. A review run's project, wave and waveOf are
@@ -143,6 +201,11 @@ export interface OpenRunPlan {
   program: string; title: string; project: string; wave: number; waveOf: number | null;
   claimedBy: string; kind: Exclude<RunKind, 'unknown'>; reviews: number | null;
   homeProject?: string; sessionId?: string;
+  /** D-5298: accepted with no `claimedByUuid` before the switch-over. */
+  unattributed: boolean;
+  /** The claimant's measured registry project — the `claimantProject` gate's
+   *  read, handed to `openRun`'s `coordProject` stamp so it is read once. */
+  coordProject: string;
 }
 
 export type OpenRunVerdict =
@@ -157,11 +220,17 @@ interface Ctx {
   target?: ReviewedRunFacts;
   home?: string;
   verdict?: HomeProjectVerdict;
+  unattributed?: boolean;
+  coordProject?: string;
+  /** The programme's home after `homeVerdict`: the body's shaped home, else
+   *  (a legacy open) the stored one, else null. */
+  effectiveHome?: string | null;
+  mark?: SessionMarkRead;
 }
 
-type GateResult = { error: 'bad-request'; detail?: string } | { error: 'run-unreadable'; detail: string }
-  | { refused: OpenRunConflictCode; by: string } | undefined;
-type Gate = (c: Ctx) => GateResult;
+type GateResult = { error: 'bad-request'; detail?: string } | { error: 'run-unreadable' | AttributionRefusal; detail: string }
+  | { refused: OpenRunConflictCode; by?: string; detail?: string } | undefined;
+type Gate = (c: Ctx) => GateResult | Promise<GateResult>;
 
 const isReview = (c: Ctx): boolean => c.b.kind === 'review';
 const bad = (detail: string): GateResult => ({ error: 'bad-request', detail });
@@ -189,6 +258,9 @@ const GATES = [
       (b.wave !== undefined && !isPositiveDecimalSafeInteger(b.wave)) ||
       !(b.waveOf === undefined || b.waveOf === null || isPositiveDecimalSafeInteger(b.waveOf)) ||
       !(sessionId === undefined || (typeof sessionId === 'string' && sessionId.trim() !== '')) ||
+      // D-5298: a sent `claimedByUuid` is a non-empty string; absent is the
+      // unattributed open the `attribution` gate decides.
+      !(b.claimedByUuid === undefined || (typeof b.claimedByUuid === 'string' && b.claimedByUuid.trim() !== '')) ||
       !(homeProject === undefined || typeof homeProject === 'string'))
       ? { error: 'bad-request' } : undefined;
   }],
@@ -204,6 +276,27 @@ const GATES = [
     return undefined;
   }],
   ['reviewSession', (c) => (isReview(c) && c.b.sessionId !== undefined) ? bad('sessionId is refused on a review run — it always spawns fresh on its own workspace') : undefined],
+  // D-5298 (coordinator-first Task 11b, spec §6.4): the claimant PROVES it is
+  // the claimant. AFTER every body-only gate (each is cheaper, and reveals
+  // nothing about the store) and BEFORE the first store read (`reviewRead`),
+  // so a caller that is not the claimant it names learns nothing about the
+  // store: not whether a reviewed run exists, not the project a session is
+  // bound to, not a programme's home, not whose worker the claimant is.
+  // Freshness, not identity (`requireAttribution`'s own note). Before the
+  // switch-over an absent uuid is ACCEPTED and journaled; a SENT one is always
+  // checked, so a stale claimant is refused in either state.
+  ['attribution', async (c) => {
+    const uuid = c.b.claimedByUuid;
+    if (uuid === undefined) {
+      if (c.f.fleetCarriesAttribution) return { refused: 'attribution-required', detail: ATTRIBUTION_REQUIRED_DETAIL };
+      const listed = await c.f.claimantListed(c.b.claimedBy as string);
+      if (!listed.ok) return { error: listed.error, detail: listed.detail };
+      c.unattributed = true;
+      return undefined;
+    }
+    const r = await c.f.attribute(c.b.claimedBy as string, uuid as string);
+    return r.ok ? undefined : { error: r.error, detail: r.detail };
+  }],
   ['reviewRead', (c) => {
     if (!isReview(c)) return undefined;
     const r = c.f.reviewed(c.b.reviews as number);
@@ -245,6 +338,7 @@ const GATES = [
     c.verdict = v;
     if (v.kind === 'mismatch') return { refused: 'home-mismatch', by: v.by };
     if (v.kind === 'required') return bad('homeProject is required');
+    c.effectiveHome = c.home !== undefined ? c.home : known ? c.f.programHome(c.slug!) : null;
     return undefined;
   }],
   // §12: a dispatched worker may not coordinate. EVERY open claimant is read
@@ -253,6 +347,65 @@ const GATES = [
   ['claimantWorker', (c) => {
     const workerOf = c.f.openClaimantsOf(c.b.claimedBy as string).find((x) => x !== c.b.claimedBy);
     return workerOf !== undefined ? { refused: 'claimant-is-a-worker', by: workerOf } : undefined;
+  }],
+  // D-5298 (spec §4, §6.4), D-5388: a session in another project cannot
+  // become a child's parent. The claimant's OWN registry project must equal
+  // the run's — not F1's weaker "the session's history agrees with the run" —
+  // OR the programme's home (`effectiveHome`), because a programme's waves may
+  // run in ANY project (the cross-repo ruling of 2026-08-11): a crossing's
+  // coordinator sits in the home. A crossing binds only a fresh spawn
+  // (`crossingSession` below). On every open, a `sessionId` or not: a
+  // fresh-spawn dispatch later makes a child of the run's project whose parent
+  // is this claimant. FAILS CLOSED: a row that records no project is refused
+  // (`by` absent, the sentence says why), an unreadable field is the transient
+  // 502. After the DB-only gates — a registry read is the dearer one — and
+  // before `notAChild`.
+  ['claimantProject', async (c) => {
+    const project = c.target !== undefined ? c.target.project : c.b.project as string;
+    const r = await c.f.claimantProject(c.b.claimedBy as string);
+    if (r.kind === 'unreadable') {
+      return { error: 'registry-unmeasurable',
+        detail: "the claimant's registry project could not be read — transient, not a fact about the claimant" };
+    }
+    if (r.kind === 'none') {
+      return { refused: 'project-mismatch', detail: "the claimant's registry row records no project, so it cannot be the run's" };
+    }
+    c.coordProject = r.project;
+    return r.project !== project && r.project !== c.effectiveHome ? { refused: 'project-mismatch', by: r.project } : undefined;
+  }],
+  // D-5298 (spec §4): a session the operator created cannot become a child. A
+  // `sessionId` naming an existing registry row whose `ChildMark` is not
+  // `{kind: 'child'}` is refused; a row-less id is admitted (a dispatch opens
+  // its run before `ws-add --child <run>` makes the row, and the marker it then
+  // writes names this run). LAST, beside rule 3's child gate, which reads the
+  // same row and runs next.
+  ['notAChild', async (c) => {
+    if (typeof c.b.sessionId !== 'string') return undefined;
+    const m = await c.f.sessionMark(c.b.sessionId);
+    c.mark = m;
+    if (m.kind === 'root') {
+      return { refused: 'not-a-child',
+        detail: `${c.b.sessionId} is a registry row with no child marker — a session the operator created is never bound as a child` };
+    }
+    if (m.kind === 'unbuilt') {
+      return { error: 'registry-unmeasurable',
+        detail: `registry row for ${c.b.sessionId} is listed but unreadable — transient, not a fact about the session` };
+    }
+    return undefined;
+  }],
+  // D-5388: a crossing (the claimant is of the home, not of the run) binds
+  // only a FRESH spawn. An existing child row of the run's project would
+  // otherwise be rebound to a parent outside its project — a child of any
+  // other programme whose home a confused session claims. A row-less id (the
+  // dispatch before `ws-add`) is admitted, like `notAChild`'s; `deferred` is
+  // left to rule 3's child gate. Reads `notAChild`'s mark, never a second one.
+  ['crossingSession', (c) => {
+    if (typeof c.b.sessionId !== 'string' || c.mark?.kind !== 'child') return undefined;
+    const project = c.target !== undefined ? c.target.project : c.b.project as string;
+    return c.coordProject !== project
+      ? { refused: 'project-mismatch', by: c.coordProject,
+          detail: `${c.b.sessionId} is an existing session of ${project} and the claimant is of ${c.coordProject} — a crossing wave opens without sessionId and spawns fresh` }
+      : undefined;
   }],
 ] as const satisfies readonly (readonly [string, Gate])[];
 
@@ -264,10 +417,10 @@ export const OPEN_RUN_GATES: readonly (readonly [OpenRunGate, Gate])[] = GATES;
  * Decide an open (D-5384): the first gate that refuses answers, else the
  * shaped plan and the home verdict the route acts on after `openRun`.
  */
-export function openRunPreconditions(f: OpenRunFacts): OpenRunVerdict {
+export async function openRunPreconditions(f: OpenRunFacts): Promise<OpenRunVerdict> {
   const c: Ctx = { f, b: f.body };
   for (const [gate, run] of OPEN_RUN_GATES) {
-    const r = run(c);
+    const r = await run(c);
     if (r !== undefined) return { ok: false, refusal: { gate, ...r } as OpenRunRefusal };
   }
   const b = c.b, t = c.target, review = isReview(c);
@@ -282,6 +435,7 @@ export function openRunPreconditions(f: OpenRunFacts): OpenRunVerdict {
       kind: review ? 'review' : 'work', reviews: review ? b.reviews as number : null,
       ...(c.home !== undefined ? { homeProject: c.home } : {}),
       ...(typeof b.sessionId === 'string' ? { sessionId: b.sessionId } : {}),
+      unattributed: c.unattributed === true, coordProject: c.coordProject!,
     },
   };
 }

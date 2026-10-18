@@ -5,7 +5,9 @@ import type { Bus } from '../bus.js';
 import type { FleetWatcher } from '../watch.js';
 import {
   UNMEASURED_ASK_AT, fieldMeasured, freshAskAt, measuredIdentity, readRegistry, readRegistryMeasured,
+  readSessionRecord,
 } from '../registry.js';
+import { fleetCarriesRunsAttribution } from '../fleetstate.js';
 import { answerAsk, readAskAnswer, type AskDeps } from '../inject/ask.js';
 import { assembleFleet } from '../fleet.js';
 import { turnReadDeps, turnVerdictFor } from '../turnverdict.js';
@@ -44,7 +46,9 @@ import {
   stallStages, stallUnheldBoxOf, stallWriteEffect, type StallBoxArming, type StallResolved,
 } from './stallsettings.js';
 import { childBindGate } from './childBind.js';
-import { openRunPreconditions, type HomeProjectVerdict, type OpenRunRefusal } from './openRun.js';
+import {
+  openRunPreconditions, type AttributionRead, type HomeProjectVerdict, type OpenRunRefusal, type SessionMarkRead,
+} from './openRun.js';
 import { collectControlNow, collectLaneCaps, collectSwitches } from './collectTempRoot.js';
 import {
   COLLECT_LANE_APPLIES_TEXT, COLLECT_SETTING_FEED_TITLE, collectLaneSettingChange, collectLaneView,
@@ -597,38 +601,44 @@ export function registerCoordRoutes(
    * "claimant") — this gate has two callers with two different verbs for
    * what they are doing, and "claimant" is only true of one of them.
    */
-  const requireAttribution = async (
-    reply: FastifyReply, whoId: string, whoUuid: string, uuidField: 'byUuid' | 'fromUuid',
-  ): Promise<boolean> => {
+  const attributionVerdict = async (
+    whoId: string, whoUuid: string, uuidField: 'byUuid' | 'fromUuid' | 'claimedByUuid',
+  ): Promise<AttributionRead> => {
     const names = await deps.io.readdir(deps.cfg.registryDir);
     if (names === null) {
-      reply.code(502).send({ ok: false, error: 'registry-unmeasurable',
-        detail: 'the registry directory could not be listed — transient, not a fact about the sender' });
-      return false;
+      return { ok: false, error: 'registry-unmeasurable',
+        detail: 'the registry directory could not be listed — transient, not a fact about the sender' };
     }
     const registry = await readRegistry(deps.io, deps.cfg);
     const row = registry.find((r) => r.id === whoId);
     if (!row) {
       if (names.includes(`${whoId}.uuid`)) {
-        reply.code(502).send({ ok: false, error: 'registry-unmeasurable',
-          detail: `registry row for ${whoId} is listed but unreadable — transient, not a fact about the sender` });
-        return false;
+        return { ok: false, error: 'registry-unmeasurable',
+          detail: `registry row for ${whoId} is listed but unreadable — transient, not a fact about the sender` };
       }
-      reply.code(403).send({ ok: false, error: 'unknown-sender', detail: `no registry row for ${whoId}` });
-      return false;
+      return { ok: false, error: 'unknown-sender', detail: `no registry row for ${whoId}` };
     }
     const identity = measuredIdentity(row);
     if (identity === null) {
-      reply.code(502).send({ ok: false, error: 'registry-unmeasurable',
-        detail: `registry row for ${whoId} is listed but its identity could not be measured — transient` });
-      return false;
+      return { ok: false, error: 'registry-unmeasurable',
+        detail: `registry row for ${whoId} is listed but its identity could not be measured — transient` };
     }
     if (identity.uuid !== whoUuid) {
-      reply.code(403).send({ ok: false, error: 'stale-uuid',
-        detail: `${uuidField} does not match the registry — stale sender; re-read your own .uuid` });
-      return false;
+      return { ok: false, error: 'stale-uuid',
+        detail: `${uuidField} does not match the registry — stale sender; re-read your own .uuid` };
     }
-    return true;
+    return { ok: true };
+  };
+  // The verdict above is the gate; this answers it. Through D-5381's
+  // `refuseRoute` since coordinator-first Task 11b (D-5298), which also hands
+  // the verdict to `POST /api/runs`' `attribution` gate as a fact — one check,
+  // two callers, the same words and statuses as the inline sends it replaced.
+  const requireAttribution = async (
+    reply: FastifyReply, whoId: string, whoUuid: string, uuidField: 'byUuid' | 'fromUuid',
+  ): Promise<boolean> => {
+    const v = await attributionVerdict(whoId, whoUuid, uuidField);
+    if (!v.ok) refuseRoute(reply, v.error, { detail: v.detail });
+    return v.ok;
   };
 
   /** One refusal, recorded and answered. The record is the point: spec:147-148
@@ -1235,11 +1245,34 @@ export function registerCoordRoutes(
   // reopening three routes of it because a DIFFERENT, older surface is also
   // open is the redesign, not gating them.
 
+  /** D-5298's `sessionMark` fact for the open route's `notAChild` gate: what
+   *  the registry says `sessionId` is, through `readSessionRecord` (the one
+   *  reader of `$REG/<id>.child`, `registry.ts`). See `SessionMarkRead` for
+   *  why `deferred` is left to rule 3's child gate, which re-reads. */
+  const sessionMarkOf = async (sessionId: string): Promise<SessionMarkRead> => {
+    const read = await readSessionRecord(deps.io, deps.cfg, sessionId);
+    if (read.found) {
+      const k = read.record.child.kind;
+      return k === 'child' ? { kind: 'child' } : k === 'none' ? { kind: 'root' } : { kind: 'deferred' };
+    }
+    if (read.reason === 'unlistable') return { kind: 'deferred' };
+    // `absent` is two populations (`readSessionRecord`'s docstring): no
+    // `.uuid` listed, and a listed row that could not be built. Only the first
+    // is row-less; a listed `.child` is the child gate's `spent-unmeasured`.
+    const names = await deps.io.readdir(deps.cfg.registryDir);
+    if (names === null || names.includes(`${sessionId}.child`)) return { kind: 'deferred' };
+    return names.includes(`${sessionId}.uuid`) ? { kind: 'unbuilt' } : { kind: 'absent' };
+  };
+
   /** A refusal `openRunPreconditions` decided (D-5384), answered through the
    *  route refusal helpers with exactly the body the inline sends wrote; the
    *  `gate` is the order table's, never sent. */
   const sendOpenRunRefusal = (reply: FastifyReply, r: OpenRunRefusal): FastifyReply => {
-    if ('refused' in r) return refuseRun(reply, r.refused, { by: r.by });
+    if ('refused' in r) {
+      return refuseRun(reply, r.refused, {
+        ...(r.by !== undefined ? { by: r.by } : {}), ...(r.detail !== undefined ? { detail: r.detail } : {}),
+      });
+    }
     return refuseRoute(reply, r.error, r.detail !== undefined ? { detail: r.detail } : {});
   };
 
@@ -1338,7 +1371,7 @@ export function registerCoordRoutes(
     // orphan and places no hold. Every read it makes is a synchronous DB read
     // handed in here, called only by the gate that needs it. This route answers
     // its refusal and acts on its plan; it decides none of it.
-    const pre = openRunPreconditions({
+    const pre = await openRunPreconditions({
       body, legacyAccepted: HOME_PROJECT_LEGACY_ACCEPTED,
       reviewed: (id) => { const r = coord.run(id); return r.ok ? r : { ok: false, detail: r.detail }; },
       sessionProject: (s) => coord.sessionProject(s),
@@ -1347,6 +1380,33 @@ export function registerCoordRoutes(
       programKnown: (slug) => coord.programs().some((p) => p.slug === slug),
       programHome: (slug) => coord.programHome(slug),
       openClaimantsOf: (s) => coord.openClaimantsOf(s),
+      // D-5298 (coordinator-first Task 11b, spec §6.4): the three registry
+      // facts, each read only by the gate that needs it. The switch-over reads
+      // this box's role (as `config.ts`'s `deriveRole` decided it), its own
+      // build stamp, and the fleet host's last `ready` stamp.
+      fleetCarriesAttribution: fleetCarriesRunsAttribution(
+        deps.cfg.role, deps.build ?? null, deps.fleetState?.build ?? null),
+      attribute: (who, uuid) => attributionVerdict(who, uuid, 'claimedByUuid'),
+      claimantListed: async (who) => {
+        const names = await deps.io.readdir(deps.cfg.registryDir);
+        if (names === null) {
+          return { ok: false, error: 'registry-unmeasurable',
+            detail: 'the registry directory could not be listed, so the claimant could not be checked' };
+        }
+        return names.includes(`${who}.uuid`) ? { ok: true } : { ok: false, error: 'unknown-sender', detail: `no registry row for ${who}` };
+      },
+      // MEASURED, through `fieldMeasured` — never `SessionRecord.project`,
+      // whose `project ?? id` collapsing default (`registry.ts`'s
+      // `buildRecord`) would otherwise answer as if it were a measurement
+      // (D-2342, the same reason `dispatch.ts`'s `project-mismatch` rung reads
+      // `.project` this way). Never `sessionProject`, which reads the runs
+      // table and so answers only for a session that has been a worker.
+      claimantProject: async (who) => {
+        const r = await fieldMeasured(deps.io, deps.cfg.registryDir, who, 'project');
+        if (!r.ok) return r.reason === 'absent' ? { kind: 'none' } : { kind: 'unreadable' };
+        return r.content === '' ? { kind: 'none' } : { kind: 'measured', project: r.content };
+      },
+      sessionMark: (s) => sessionMarkOf(s),
     });
     if (!pre.ok) return sendOpenRunRefusal(reply, pre.refusal);
     const { open, home: homeVerdict } = pre;
@@ -1371,22 +1431,12 @@ export function registerCoordRoutes(
         : refuseRun(reply, 'spent-unmeasured', { detail: gate.detail });
     }
 
-    // The coordinator's project, from the REGISTRY — never `sessionProject`,
-    // which reads the runs table and so answers only for a session that has
-    // been a worker. Measured over all 64 runs in history: no session has ever
-    // been both, so `sessionProject(claimedBy)` is null for every coordinator.
-    //
-    // MEASURED, through `fieldMeasured` — never `SessionRecord.project`,
-    // whose `project ?? id` collapsing default (`registry.ts`'s
-    // `buildRecord`) would otherwise reach this permanent stamp as if it
-    // were a measurement (D-2342, the same reason `dispatch.ts`'s
-    // `project-mismatch` rung reads `.project` this way instead of through a
-    // built record). An unreadable field, an absent field, and a present but
-    // EMPTY field all leave the stamp off — `undefined`, never a guess —
-    // because the stamp is written once and never backfilled: absence
-    // permits, but a wrong value never heals.
-    const projectRead = await fieldMeasured(deps.io, deps.cfg.registryDir, claimedBy, 'project');
-    const coordProject = projectRead.ok && projectRead.content !== '' ? projectRead.content : undefined;
+    // The coordinator's project, from the REGISTRY, MEASURED (D-2342) — read
+    // ONCE, by the decider's `claimantProject` gate (D-5298), which refuses a
+    // claimant whose project is absent, empty, unreadable or not the run's. So
+    // an admitted open always carries a measured stamp; the stamp is still
+    // written once and never backfilled.
+    const coordProject = open.coordProject;
 
     // `openRun` refuses a second coordinator (spec:291-292) rather than
     // arbitrating — the run is NOT opened, nothing else below runs. It is
@@ -1397,7 +1447,7 @@ export function registerCoordRoutes(
       wave: open.wave, waveOf: open.waveOf, claimedBy,
       kind: open.kind, reviews: open.reviews,
       ...(open.homeProject !== undefined ? { homeProject: open.homeProject } : {}),
-      ...(coordProject !== undefined ? { coordProject } : {}) });
+      coordProject, unattributed: open.unattributed });
     if ('kind' in opened) {
       return reply.code(opened.kind === 'hold-oversize' ? 413 : 400).send({
         ok: false,
@@ -1634,6 +1684,11 @@ export function registerCoordRoutes(
         return reply.code(409).send({ ok: false, refused: 'claimant-alive', by: r.by, detail: r.detail });
       case 'heir-is-a-worker':
         return reply.code(409).send({ ok: false, refused: 'heir-is-a-worker', by: r.by });
+      // D-5298: through `refuseRun` (D-5384's run-refusal helper), not inline.
+      case 'project-mismatch':
+        return refuseRun(reply, 'project-mismatch', {
+          ...(r.by !== undefined ? { by: r.by } : {}), ...(r.detail !== undefined ? { detail: r.detail } : {}),
+        });
       default: {
         const _exhaustive: never = r;
         return reply.code(500).send({ ok: false, error: 'internal', kind: (_exhaustive as { kind: string }).kind });

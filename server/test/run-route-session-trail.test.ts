@@ -15,7 +15,7 @@
 // `ws-add` call to mint a genuinely NEW workspace id, so two dispatches in
 // one test cannot share one `wsAddCreates` list).
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/server.js';
@@ -25,7 +25,7 @@ import { CoordStore } from '../src/coord/store.js';
 import type { Runner } from '../src/exec.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
-import { ACTOR_FLAGS_CAP, ROUTE_CAP } from '../src/ccdargv.js';
+import { ACTOR_FLAGS_CAP, CHILD_ARGV_CAP, ROUTE_CAP } from '../src/ccdargv.js';
 
 const PROJECT = 'demo';
 const CLAIMED_BY = 'ccrc-pwa-coordinator';
@@ -70,8 +70,20 @@ function makeRunner(home: string, cfg: RunnerConfig = {}): { run: Runner; calls:
       const sequence = cfg.wsAddSequence ?? [cfg.wsAddCreates ?? [`${PROJECT}-fresh`]];
       const ids = sequence[Math.min(wsAddCalls, sequence.length - 1)]!;
       wsAddCalls++;
-      for (const id of ids) seed(home, id);
+      // D-5298: as ccd's `ws-add --child <run>` does, the row carries the
+      // child marker naming the minting run, so a later wave's open — which
+      // binds only a child — can name it.
+      const at = args.indexOf('--child');
+      const child = at >= 0 ? args[at + 1] : undefined;
+      for (const id of ids) seed(home, id, child !== undefined ? { child } : {});
       return { code: 0, stdout: 'workspace demo-decoy on claude — /w/x (branch ws/decoy)', stderr: '' };
+    }
+    // Rule 3's child gate asks about the child a later wave binds; it has had
+    // no PR (`child-reclaim-refusals.test.ts`'s `noPrLine`).
+    if (verb === 'pr-state' && args[1] === '--session') {
+      const id = args[2] ?? '';
+      return { code: 0, stdout: `${JSON.stringify({ id, rows: [], baseShort: 'main', branch: `ws/${id}`, ahead: 1,
+        tip: 'f'.repeat(40), checkedAt: 1 })}\n`, stderr: '' };
     }
     return { code: 0, stdout: '', stderr: '' };
   };
@@ -82,6 +94,9 @@ const openApp = async (
   home: string, run: Runner, over: Partial<Omit<Deps, 'cfg'>> & { cfg?: Partial<Deps['cfg']> } = {},
 ) => {
   mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+  // D-5298: the claimant the opens name is a registry row of the run's
+  // project — unless the case already seeded it its own way.
+  if (!existsSync(path.join(home, '.cc-sessions', `${CLAIMED_BY}.uuid`))) seed(home, CLAIMED_BY);
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const base = testDeps(home, run);
   const app = await buildServer({ ...base, mailToken: TOKEN, coord, ...over, cfg: { ...base.cfg, ...(over.cfg ?? {}) } });
@@ -90,15 +105,24 @@ const openApp = async (
 
 const ROUTE_READY_FLEET = {
   connected: true, downSince: null, rosterFp: null, build: null,
-  ccdVerbs: ['ws-add', 'ensure', 'ws-hold', ROUTE_CAP, ACTOR_FLAGS_CAP] as string[],
+  // D-5298: and `child-argv-v1` and `pr-state`, so a fresh spawn is a marked child (as on
+  // today's fleet) and a later wave's open may name it.
+  ccdVerbs: ['ws-add', 'ensure', 'ws-hold', 'pr-state', ROUTE_CAP, ACTOR_FLAGS_CAP, CHILD_ARGV_CAP] as string[],
 };
 
 const tokenHeaders = (token: string | null): Record<string, string> =>
   token === null ? {} : { 'x-ccrc-mail-token': token };
 
+/** D-5298 (coordinator-first Task 11b): an open is attributed against the
+ *  claimant's own registry row — `seed`'s `u-<id>` uuid, sent unless the body
+ *  names `claimedByUuid` itself. */
+const attributed = (body: unknown): Record<string, unknown> => {
+  const b = body as Record<string, unknown>;
+  return typeof b?.claimedBy === 'string' && !('claimedByUuid' in b) ? { ...b, claimedByUuid: `u-${b.claimedBy}` } : b;
+};
 const postOpen = (app: FastifyInstance, body: unknown = OPEN_BODY, token: string | null = TOKEN) =>
   app.inject({ method: 'POST', url: '/api/runs', headers: tokenHeaders(token),
-    payload: body as Record<string, unknown> });
+    payload: attributed(body) });
 const postDispatch = (app: FastifyInstance, id: number | string, body: unknown = { brief: 'do it' }, token: string | null = TOKEN) =>
   app.inject({ method: 'POST', url: `/api/runs/${id}/dispatch`, headers: tokenHeaders(token),
     payload: body as Record<string, unknown> });
@@ -121,7 +145,7 @@ async function dispatchedRun(app: FastifyInstance, sid: string, body: unknown = 
  *  POST /api/runs, not a reopen"), copied because every case here needs it. */
 async function openNextWave(app: FastifyInstance, sid: string, wave = 2): Promise<number> {
   const opened = await postOpen(app, { ...OPEN_BODY, wave, sessionId: sid });
-  expect(opened.statusCode, `setup: wave ${wave} must open`).toBe(200);
+  expect(opened.statusCode, `setup: wave ${wave} must open: ${opened.body}`).toBe(200);
   return (opened.json() as { id: number }).id;
 }
 

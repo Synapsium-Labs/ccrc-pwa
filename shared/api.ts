@@ -6004,7 +6004,7 @@ export type RunRefuseCode =
   | 'prhistory-unreadable' | 'bad-transition' | 'unknown-item' | 'item-terminal'
   | 'project-mismatch' | 'home-mismatch' | 'hold-oversize' | 'hold-invalid' | 'review-in-flight'
   | 'claimant-is-a-worker' | 'workspace-spent' | 'spent-unmeasured'
-  | 'status-unmeasurable' | 'worker-starting';
+  | 'status-unmeasurable' | 'worker-starting' | 'attribution-required' | 'not-a-child';   // the last two: D-5298
 
 const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'claimed-by-another': true, paused: true, 'mail-disabled': true, 'cap-concurrency': true,
@@ -6014,7 +6014,7 @@ const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'project-mismatch': true, 'home-mismatch': true, 'hold-oversize': true, 'hold-invalid': true,
   'review-in-flight': true, 'claimant-is-a-worker': true,
   'workspace-spent': true, 'spent-unmeasured': true,
-  'status-unmeasurable': true, 'worker-starting': true,
+  'status-unmeasurable': true, 'worker-starting': true, 'attribution-required': true, 'not-a-child': true,
 };
 export const RUN_REFUSE_CODES: readonly RunRefuseCode[] = Object.keys(RUN_REFUSE_CODE_MAP) as RunRefuseCode[];
 
@@ -9303,6 +9303,19 @@ export function isNodeOs(v: unknown): v is NodeOs {
  *  refused. `deploy/release-main.sh`'s `SHAPE` is the bash twin, held equal
  *  by `update-states.test.ts`. */
 export const RELEASE_TAG = /^v[0-9]+\.[0-9]+\.[0-9]+$/;
+
+/**
+ * The first release tag that carries coordinator-first Task 11a (`ccrc-api`'s
+ * `runs open` sends `claimedByUuid`, D-5298) — ONE home. `POST /api/runs`
+ * requires attribution once the fleet's build stamp is at or past it, or
+ * agrees with this server's own (`fleetCarriesRunsAttribution`,
+ * `server/src/fleetstate.ts`). Measured, not chosen: the oldest tag
+ * `git tag --contains` names for 11a's merge commit (#508). A LABEL read off
+ * the stamp's `version` (the stamp's own docstring: never the truth about the
+ * code), which is why agreement is the other reading and a tagless dev build
+ * relies on it alone.
+ */
+export const RUNS_ATTRIBUTION_SINCE = 'v0.0.239';
 /** The ONE tag-shape guard: the routes, the resolver, the inventory's
  *  validators and the agent all call this, never the regex. */
 export function isReleaseTag(v: unknown): v is string {
