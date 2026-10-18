@@ -1,10 +1,14 @@
 // The command layer (D-5103): the ⌘K palette, the single keys and chords, and
 // the two ways Escape could reach through the palette to the session header.
+import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { Sheet } from '@ccrc/ui';
 import { AUTH_VERDICTS } from '../../shared/api';
 import { CommandLayer } from '../src/command/CommandLayer';
+import { CHORD_MS } from '../src/command/useShortcuts';
 import { clearAuthLost, raiseAuthLost } from '../src/lib/auth';
+import { useLocation } from '../src/lib/router';
 import { setSkin } from '../src/lib/skin';
 import { Composer } from '../src/session/Composer';
 import { SessionHeader, type SessionHeaderProps } from '../src/session/SessionHeader';
@@ -207,6 +211,9 @@ describe('the single keys', () => {
     render(<><Composer onSend={vi.fn()} pending={[]} /><CommandLayer /></>);
     const box = screen.getByRole('textbox');
     act(() => box.focus());
+    // A composer holding text keeps every key (D-5457): only an EMPTY one
+    // passes `[`, `]` and `?` to the page, and that is the next describe's.
+    fireEvent.change(box, { target: { value: 'see' } });
     const typed = fireEvent.keyDown(box, { key: ']' });
     expect(typed, 'the key is not prevented, so the text field takes it').toBe(true);
     expect(window.location.pathname).toBe('/');
@@ -285,5 +292,160 @@ describe('the base commands, through the palette', () => {
     fireEvent.change(screen.getByRole('combobox'), { target: { value: 'second' } });
     fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' });
     expect(window.location.pathname).toBe(`/s/${B.id}`);
+  });
+});
+
+// THE DESKTOP SESSION SCREEN (D-5457). On a fine pointer the composer takes
+// focus every time the session changes, so after one `]` the next key lands in
+// a textarea. A browser fires each key at `document.activeElement`; so does
+// `press`. The route below keys the composer on the session, as SessionScreen
+// does, so each arrival re-fires its autofocus.
+function SessionRoute(): ReactNode {
+  const { path } = useLocation();
+  const m = /^\/s\/([^/]+)$/.exec(path);
+  return m === null ? null : <Composer key={m[1]} id={decodeURIComponent(m[1]!)} onSend={vi.fn()} pending={[]} />;
+}
+/** The composer's autofocus is deferred a tick (`setTimeout(…, 0)`). */
+const settle = (): Promise<void> => act(async () => { await new Promise((r) => setTimeout(r, 5)); });
+const press = (init: Parameters<typeof fireEvent.keyDown>[1]): boolean =>
+  fireEvent.keyDown(document.activeElement ?? document.body, init);
+
+describe('the keys on a desktop session screen', () => {
+  it('`]` and `[` walk the fleet from the autofocused, empty composer', async () => {
+    stubPointer(true);
+    render(<><SessionRoute /><CommandLayer /></>);
+    press({ key: ']' });
+    expect(window.location.pathname).toBe(`/s/${A.id}`);
+    await settle();
+    expect(document.activeElement?.tagName, 'the composer took focus, as it does on a desk').toBe('TEXTAREA');
+    expect(press({ key: ']' }), 'the step is prevented, so no `]` lands in the box').toBe(false);
+    expect(window.location.pathname, 'the second `]` from inside the composer').toBe(`/s/${B.id}`);
+    await settle();
+    press({ key: ']' });
+    expect(window.location.pathname, 'the third wraps to the first').toBe(`/s/${A.id}`);
+    await settle();
+    press({ key: '[' });
+    expect(window.location.pathname).toBe(`/s/${B.id}`);
+  });
+
+  it('`?` opens the shortcuts from the empty composer', async () => {
+    stubPointer(true);
+    window.history.replaceState(null, '', `/s/${A.id}`);
+    render(<><SessionRoute /><CommandLayer /></>);
+    await settle();
+    expect(document.activeElement?.tagName).toBe('TEXTAREA');
+    press({ key: '?', shiftKey: true });
+    expect(shortcutsSheet()).not.toBeNull();
+  });
+
+  it('the g chords stay text in the composer, empty or not: "gr" starts a word', async () => {
+    stubPointer(true);
+    window.history.replaceState(null, '', `/s/${A.id}`);
+    render(<><SessionRoute /><CommandLayer /></>);
+    await settle();
+    expect(press({ key: 'g' })).toBe(true);
+    expect(press({ key: 'r' })).toBe(true);
+    expect(window.location.pathname).toBe(`/s/${A.id}`);
+  });
+
+  it('an input that is not the composer keeps `]` even when empty', () => {
+    render(<><input aria-label="Search" /><CommandLayer /></>);
+    const box = screen.getByRole('textbox', { name: 'Search' });
+    act(() => box.focus());
+    expect(press({ key: ']' })).toBe(true);
+    expect(window.location.pathname).toBe('/');
+  });
+
+  it('a composer arriving behind a CLOSING dialog still takes focus', async () => {
+    // A palette that ran a command stays mounted while it animates out,
+    // `role="dialog"` at `data-state="closed"`. Only an OPEN one holds focus.
+    stubPointer(true);
+    render(<><div role="dialog" data-state="closed" /><Composer id="x" onSend={vi.fn()} pending={[]} /></>);
+    await settle();
+    expect(document.activeElement?.tagName).toBe('TEXTAREA');
+  });
+});
+
+describe('the guards on a single key', () => {
+  it('`]` and `?` do nothing while a sheet is open', () => {
+    render(<><Sheet open onClose={() => {}} title="Busy"><p>held</p></Sheet><CommandLayer /></>);
+    fireEvent.keyDown(document.body, { key: ']' });
+    expect(window.location.pathname).toBe('/');
+    fireEvent.keyDown(document.body, { key: '?', shiftKey: true });
+    expect(shortcutsSheet()).toBeNull();
+  });
+
+  it('a `]` some surface already prevented does nothing', () => {
+    render(<CommandLayer />);
+    const claim = (e: Event): void => e.preventDefault();
+    document.addEventListener('keydown', claim);
+    try {
+      fireEvent.keyDown(document.body, { key: ']' });
+    } finally {
+      document.removeEventListener('keydown', claim);
+    }
+    expect(window.location.pathname).toBe('/');
+  });
+
+  it('`]` in a SELECT stays put', () => {
+    render(<><select aria-label="Pick"><option>a</option></select><CommandLayer /></>);
+    fireEvent.keyDown(screen.getByRole('combobox', { name: 'Pick' }), { key: ']' });
+    expect(window.location.pathname).toBe('/');
+  });
+
+  it('`]` in a contenteditable stays put', () => {
+    render(<><div data-testid="ed" contentEditable suppressContentEditableWarning>x</div><CommandLayer /></>);
+    const ed = screen.getByTestId('ed');
+    // jsdom does not implement isContentEditable; a browser reports true here.
+    Object.defineProperty(ed, 'isContentEditable', { value: true });
+    fireEvent.keyDown(ed, { key: ']' });
+    expect(window.location.pathname).toBe('/');
+  });
+
+  it('a held `]` (auto-repeat) steps once', () => {
+    render(<CommandLayer />);
+    fireEvent.keyDown(document.body, { key: ']' });
+    fireEvent.keyDown(document.body, { key: ']', repeat: true });
+    expect(window.location.pathname).toBe(`/s/${A.id}`);
+  });
+
+  it('`g`, then a wait past the chord window, then `r` does not navigate', () => {
+    render(<CommandLayer />);
+    const now = vi.spyOn(Date, 'now');
+    now.mockReturnValue(10_000);
+    fireEvent.keyDown(document.body, { key: 'g' });
+    now.mockReturnValue(10_000 + CHORD_MS + 1);
+    fireEvent.keyDown(document.body, { key: 'r' });
+    expect(window.location.pathname).toBe('/');
+    // The control: inside the window it is a chord.
+    now.mockReturnValue(20_000);
+    fireEvent.keyDown(document.body, { key: 'g' });
+    now.mockReturnValue(20_000 + CHORD_MS);
+    fireEvent.keyDown(document.body, { key: 'r' });
+    expect(window.location.pathname).toBe('/runs');
+  });
+});
+
+describe('the palette as drawn', () => {
+  it('the active option wears the tint and the rail; the others wear neither', () => {
+    render(<CommandLayer />);
+    openPalette();
+    const [first, second] = screen.getAllByRole('option');
+    for (const c of ['bg-phosphor-tint', 'shadow-[inset_2px_0_0_var(--accent)]']) {
+      expect(first!.className.split(/\s+/), `the active option: ${c}`).toContain(c);
+      expect(second!.className.split(/\s+/), `an idle option: ${c}`).not.toContain(c);
+    }
+  });
+
+  it("its motion retimes vaul's keyframes with the tokens, content and overlay alike", () => {
+    render(<CommandLayer />);
+    const dialog = openPalette().closest('[role="dialog"]')!;
+    const overlay = document.querySelector('[data-vaul-overlay]')!;
+    for (const [name, el] of [['content', dialog], ['overlay', overlay]] as const) {
+      const cls = el.className.split(/\s+/);
+      expect(cls, `${name} open`).toContain('data-[state=open]:[animation-duration:var(--dur-base)]!');
+      expect(cls, `${name} closed`).toContain('data-[state=closed]:[animation-duration:var(--dur-fast)]!');
+      expect(cls, `${name} curve`).toContain('data-[state=open]:[animation-timing-function:var(--curve-swift)]!');
+    }
   });
 });

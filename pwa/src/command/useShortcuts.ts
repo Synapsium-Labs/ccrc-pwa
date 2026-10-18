@@ -9,6 +9,14 @@
 // would make `?` unreachable. Keys match on `e.key` (what the layout types),
 // never `e.code` (where the key sits), so a non-QWERTY layout gets its own `?`.
 //
+// AN EMPTY COMPOSER IS THE ONE FIELD THAT PASSES KEYS ON (D-5457). On a fine
+// pointer the composer takes focus every time a session opens, so on a desk
+// focus is almost always there, and `]` would step once and then type. While
+// the box marked `data-page-keys` is EMPTY, `[`, `]` and `?` go to the page:
+// no message starts with a bare bracket or question mark often enough to
+// matter, and a box holding text keeps every key. The `g` chords never pass:
+// "gr" starts a word. ⌘K reaches every Go to from anywhere.
+//
 // A WINDOW BUBBLE LISTENER, ON PURPOSE. A surface that owns its keys stops them
 // before they get here: the terminal (xterm stops what it handles, so Ctrl+K
 // stays the shell's kill-line there), the ask sheet's keys (`useAskKeys`), and
@@ -33,6 +41,17 @@ export function inTextField(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null;
   const tag = el?.tagName;
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el?.isContentEditable === true;
+}
+
+/** The single keys an empty composer passes to the page (D-5457). */
+export const PASS_KEYS: readonly string[] = ['[', ']', '?'];
+
+/** A field that takes the key as text. The composer, while empty, gives up
+ *  `PASS_KEYS` (D-5457); every other field keeps every key. */
+export function keepsKey(target: EventTarget | null, key: string): boolean {
+  if (!inTextField(target)) return false;
+  const el = target as HTMLTextAreaElement;
+  return !(el.hasAttribute('data-page-keys') && el.value === '' && PASS_KEYS.includes(key));
 }
 
 /** An open sheet or dialog: a single key would act on the page beneath it
@@ -68,7 +87,7 @@ export function useShortcuts({ enabled, commands, context, onPalette }: Shortcut
         palette();
         return;
       }
-      if (e.defaultPrevented || modified(e) || inTextField(e.target) || dialogOpen()) {
+      if (e.defaultPrevented || e.isComposing || modified(e) || keepsKey(e.target, e.key) || dialogOpen()) {
         chordAt = null;
         return;
       }

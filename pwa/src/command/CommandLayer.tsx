@@ -111,7 +111,9 @@ export function CommandLayer(): ReactNode {
           ))}
         </ul>
         <p className="mt-3 font-ui text-sm text-ink-secondary">
-          Ctrl+K opens the palette too. The single keys work outside text fields, with no Ctrl, Alt or {COMMAND_KEY} held.
+          Ctrl+K opens the palette too. The single keys work outside text fields, with no Ctrl, Alt or {COMMAND_KEY} held;
+          an empty message box passes [, ] and ? on, and keeps the g chords as text.
+          {/* D-5457: the empty-composer rule, useShortcuts.ts. */}
         </p>
       </Sheet>
     </>

@@ -15,12 +15,12 @@ import type { Command, CommandContext } from './registry';
  *  Archive has no chord: `a` is Accounts, and the archive is a door off the
  *  fleet rather than a place visited every day. */
 export const GO_TO: readonly { id: string; title: string; path: string; chord?: string }[] = [
-  { id: 'go.fleet', title: 'Go to Fleet', path: '/', chord: 'f' },
-  { id: 'go.inbox', title: 'Go to Inbox', path: '/mail', chord: 'i' },
-  { id: 'go.runs', title: 'Go to Runs', path: '/runs', chord: 'r' },
-  { id: 'go.accounts', title: 'Go to Accounts', path: '/accounts', chord: 'a' },
-  { id: 'go.archive', title: 'Go to Archive', path: '/archive' },
-  { id: 'go.settings', title: 'Go to Settings', path: '/settings', chord: 's' },
+  { id: 'go-fleet', title: 'Go to Fleet', path: '/', chord: 'f' },
+  { id: 'go-inbox', title: 'Go to Inbox', path: '/mail', chord: 'i' },
+  { id: 'go-runs', title: 'Go to Runs', path: '/runs', chord: 'r' },
+  { id: 'go-accounts', title: 'Go to Accounts', path: '/accounts', chord: 'a' },
+  { id: 'go-archive', title: 'Go to Archive', path: '/archive' },
+  { id: 'go-settings', title: 'Go to Settings', path: '/settings', chord: 's' },
 ];
 
 /** The fleet in the order the fleet screen draws it: its cards in
@@ -68,14 +68,14 @@ export function baseCommands(): Command[] {
       run: (ctx) => ctx.navigate(g.path),
     })),
     {
-      id: 'session.open',
+      id: 'open-session',
       title: 'Open session…',
       group: 'Sessions',
       when: (ctx) => ctx.sessions.length > 0,
       run: (ctx) => ({
         title: 'Open session',
         commands: ctx.sessions.map((s): Command => ({
-          id: `session.open.${s.id}`,
+          id: `open-session-${s.id}`,
           title: sessionLabel(s),
           group: s.project,
           run: (c) => c.navigate(`/s/${encodeURIComponent(s.id)}`),
@@ -83,30 +83,30 @@ export function baseCommands(): Command[] {
       }),
     },
     {
-      id: 'session.next',
+      id: 'next-session',
       title: 'Next session',
       group: 'Sessions',
       keys: [']'],
       run: (ctx) => stepSession(ctx, 1),
     },
     {
-      id: 'session.previous',
+      id: 'prev-session',
       title: 'Previous session',
       group: 'Sessions',
       keys: ['['],
       run: (ctx) => stepSession(ctx, -1),
     },
     {
-      id: 'layout.switch',
+      id: 'switch-layout',
       title: 'Switch layout →',
       group: 'Appearance',
       run: () => ({
         title: 'Switch layout',
         // The picker's three (spec §7): Match this device, then the catalogue.
         commands: [
-          { id: `layout.${AUTO}`, title: 'Match this device', group: 'Layout', run: (c) => c.setSkin(AUTO) },
+          { id: `layout-${AUTO}`, title: 'Match this device', group: 'Layout', run: (c) => c.setSkin(AUTO) },
           ...SKINS.map((s): Command => ({
-            id: `layout.${s.id}`,
+            id: `layout-${s.id}`,
             title: s.preview ? `${s.label} (preview)` : s.label,
             group: 'Layout',
             run: (c) => c.setSkin(s.id),
@@ -115,15 +115,15 @@ export function baseCommands(): Command[] {
       }),
     },
     {
-      id: 'theme.switch',
+      id: 'switch-theme',
       title: 'Switch theme…',
       group: 'Appearance',
       run: () => ({
         title: 'Switch theme',
         commands: [
-          { id: `theme.${SYSTEM}`, title: 'Follow system', group: 'Theme', run: (c) => c.setTheme(SYSTEM) },
+          { id: `theme-${SYSTEM}`, title: 'Follow system', group: 'Theme', run: (c) => c.setTheme(SYSTEM) },
           ...THEMES.map((t): Command => ({
-            id: `theme.${t.id}`,
+            id: `theme-${t.id}`,
             title: t.label,
             group: t.mode === 'light' ? 'Light' : 'Dark',
             run: (c) => c.setTheme(t.id),
@@ -132,7 +132,7 @@ export function baseCommands(): Command[] {
       }),
     },
     {
-      id: 'help.shortcuts',
+      id: 'show-shortcuts',
       title: 'Show shortcuts',
       group: 'Help',
       keys: ['?'],

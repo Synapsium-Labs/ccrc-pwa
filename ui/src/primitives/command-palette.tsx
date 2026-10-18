@@ -26,8 +26,8 @@
 //
 // NO STYLESHEET OF ITS OWN, so no colour rule for the contrast gate to census
 // and no hook class for the boundary census to own: every ground and ink here
-// is a token utility (`bg-sheet`, `bg-hover`, `text-ink-*`), the pairs the
-// gate already measures for the sheet and the hovered row.
+// is a token utility (`bg-sheet`, `bg-phosphor-tint`, `text-ink-*`), the pairs
+// the gate already measures for the sheet and the selected row.
 import { useEffect, useId, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { Drawer } from 'vaul';
 import { cn } from '../lib/cn';
@@ -91,6 +91,27 @@ export function KeyHint(
   );
 }
 
+/** THE ACTIVE OPTION: Task 9's selected-row recipe, the accent tint plus a
+ *  2px phosphor rail inset on the leading edge (D-5101, D-5457). The option
+ *  Enter runs is the keyboard user's focus, which never leaves the input, so
+ *  it needs an indicator that reaches 3:1: `bg-hover` alone measured 1.07 to
+ *  1.16:1 on the sheet. The rail is the accent, which the gate holds at 3:1
+ *  and above on every ground; the tint keeps the inks the gate measures on
+ *  `--accent-tint`. Forced colours drop both the fill and the inset shadow,
+ *  so an inset outline carries it there, as `.sess-line--active` does. */
+export const PALETTE_ACTIVE =
+  'bg-phosphor-tint shadow-[inset_2px_0_0_var(--accent)]'
+  + ' forced-colors:outline-2 forced-colors:outline-[CanvasText] forced-colors:-outline-offset-2';
+
+/** The palette's entrance and exit, on vaul's keyframes (D-5457): the
+ *  content's slide and the overlay's fade both run at the tokens' pace.
+ *  Exported for `command-palette.test.tsx`, which reads it off the element. */
+export const PALETTE_MOTION =
+  'data-[state=open]:[animation-duration:var(--dur-base)]!'
+  + ' data-[state=open]:[animation-timing-function:var(--curve-swift)]!'
+  + ' data-[state=closed]:[animation-duration:var(--dur-fast)]!'
+  + ' data-[state=closed]:[animation-timing-function:var(--curve-swift)]!';
+
 export function CommandPalette({
   open,
   onClose,
@@ -151,7 +172,7 @@ export function CommandPalette({
         {/* The toast layer (D-5457): above a sheet (40) and the terminal drawer (50), so
             the palette opens over either without closing it, and below the
             block screen (100), which nothing outranks. */}
-        <Drawer.Overlay className="fixed inset-0 z-toast bg-scrim" onClick={onClose} />
+        <Drawer.Overlay className={cn('fixed inset-0 z-toast bg-scrim', PALETTE_MOTION)} onClick={onClose} />
         <Drawer.Content
           aria-describedby={undefined}
           onEscapeKeyDown={(e) => { e.stopPropagation(); }}
@@ -162,13 +183,17 @@ export function CommandPalette({
             // A phone's palette is the full width; from 900 it is a 640px
             // column centred under the top edge.
             'min-[900px]:max-w-[640px]',
-            // NOT the sheet's 420ms overshoot spring (D-5457): a palette is
-            // summoned by a keystroke and read at once, so it lands swiftly,
-            // with no bounce under the input the eye is going to, and leaves
-            // faster still. Instrument's skin retimes both steps to 120ms.
-            // Important for the sheet's reason: vaul inlines its transition.
-            'data-[state=open]:duration-base! data-[state=open]:ease-swift!',
-            'data-[state=closed]:duration-fast! data-[state=closed]:ease-swift!',
+            // THE MOTION IS vaul's KEYFRAME, so it is the keyframe that is
+            // retimed (D-5457). vaul 1.1.2 opens and closes a drawer with a
+            // CSS animation (`slideFromTop` / `slideToTop`, 500ms on its own
+            // curve), not a transition, so a `duration-*` utility, which sets
+            // only `transition-duration`, moves nothing. A palette is summoned
+            // by a keystroke and read at once: it lands at `--dur-base` on the
+            // swift curve and leaves at `--dur-fast`. Both are tokens, so
+            // Instrument's 120ms (skins.css) and the reduced-motion 1ms
+            // (tokens.css) reach it. Important because vaul's rule carries an
+            // attribute selector of higher specificity than one utility.
+            PALETTE_MOTION,
           )}
         >
           <Drawer.Title className="sr-only">{label}</Drawer.Title>
@@ -211,7 +236,7 @@ export function CommandPalette({
                 onMouseDown={(e) => { e.preventDefault(); }}
                 onMouseMove={() => { if (i !== at) setActive(i); }}
                 onClick={() => onRun(o.id)}
-                className={cn(LIST_ROW, 'px-2', i === at && 'bg-hover')}
+                className={cn(LIST_ROW, 'px-2', i === at && PALETTE_ACTIVE)}
               >
                 <span className="min-w-0 flex-1 truncate font-ui text-base text-ink-primary">{o.title}</span>
                 {o.group !== undefined

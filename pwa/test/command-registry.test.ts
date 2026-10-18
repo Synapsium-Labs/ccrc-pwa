@@ -65,3 +65,13 @@ describe('the base commands', () => {
     expect(fleetOrder([a1, a2, b1], []).map((s) => s.id)).toEqual(['b1', 'a2', 'a1']);
   });
 });
+
+describe("the ids are W2's door table's", () => {
+  it('every base command carries the id docs/superpowers/plans/2026-10-18-ccrc-skins-w2-shells.md §The door table names', () => {
+    expect(baseCommands().map((c) => c.id).sort()).toEqual([
+      'go-fleet', 'go-inbox', 'go-runs', 'go-accounts', 'go-archive', 'go-settings',
+      'open-session', 'next-session', 'prev-session',
+      'switch-layout', 'switch-theme', 'show-shortcuts',
+    ].sort());
+  });
+});
