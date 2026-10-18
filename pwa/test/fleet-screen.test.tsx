@@ -3103,3 +3103,62 @@ describe('the halt on the fleet screen (programme wave 14, R15)', () => {
     expect(count(document.body), 'no answer ever landed: nothing to call the last one').toBe(0);
   });
 });
+
+// — D-5527: a coordinator's dispatched child from ANOTHER project nests under it, on its card, and says whose code
+// it works on; its label names the programme and wave, never a bare run number. Neutral names (public repo). —
+
+describe('cross-project nesting on the fleet screen (D-5527)', () => {
+  const seedCross = (store: FleetStore): void => seed(store, {
+    conn: 'open',
+    sessions: [
+      session({ id: 'lane-a-project-a', project: 'project-a', workspace: null, name: 'the coordinator', role: 'coordinator' }),
+      session({ id: 'lane-a-project-a-still-pond', project: 'project-a', workspace: 'still-pond', role: 'child',
+                child: { kind: 'child', runId: 40 }, boardProject: 'project-a' }),
+      // Minted by run 39 (wave 4), resumed by run 41 for wave 5; the server placed it on its coordinator's card.
+      session({ id: 'lane-b-project-b-quiet-river', project: 'project-b', workspace: 'quiet-river', role: 'child',
+                child: { kind: 'child', runId: 39 }, boardProject: 'project-a' }),
+      session({ id: 'lane-b-project-b', project: 'project-b', workspace: null }),
+    ],
+    runs: [
+      runRow({ id: 40, program: 'tidy-docs', programTitle: 'Tidy the docs', wave: 1, waveOf: 2, project: 'project-a',
+               homeProject: 'project-a', sessionId: 'lane-a-project-a-still-pond', claimedBy: 'lane-a-project-a' }),
+      runRow({ id: 41, program: 'port-api', programTitle: 'Port the API', wave: 5, waveOf: 7, project: 'project-b',
+               homeProject: 'project-b', sessionId: 'lane-b-project-b-quiet-river', claimedBy: 'lane-a-project-a', resumed: true }),
+    ],
+    runsFrameSeen: true,
+  });
+  const card = (name: string): Element =>
+    [...document.querySelectorAll('.proj-card')].find((c) => c.querySelector('.proj-card-name')?.textContent === name)!;
+
+  it('nests the child under its coordinator inside the coordinator’s project card, beside a same-project child', () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seedCross(store);
+    const nested = [...card('project-a').querySelectorAll('.proj-nest .sess-label')].map((e) => e.textContent);
+    expect(nested).toEqual(['still-pond', 'quiet-river']);
+    expect([...card('project-b').querySelectorAll('.sess-line .sess-label')].map((e) => e.textContent)).toEqual(['lane-b-project-b']);
+    expect(card('project-b').querySelector('.proj-elsewhere-line')?.textContent).toBe('1 workspace under project-a');
+  });
+
+  it('the cross-project child names its project, and only it does', () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seedCross(store);
+    const chips = [...document.querySelectorAll('.sess-workson')];
+    expect(chips.map((c) => c.textContent)).toEqual(['works on project-b']);
+    expect(chips[0]!.closest('.sess-line')?.querySelector('.sess-label')?.textContent).toBe('quiet-river');
+    expect(chips[0]!.querySelector('svg')).not.toBeNull();
+    // Inside the row button, so it rides the accessible name.
+    expect(screen.getByRole('button', { name: /^quiet-river.*works on.*project-b$/ })).toBeInTheDocument();
+  });
+
+  it('each child names its programme and wave — the CURRENT wave of a resumed workspace — and no run number', () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seedCross(store);
+    const labels = [...document.querySelectorAll('.sess-child')].map((e) => e.textContent);
+    expect(labels).toEqual(['tidy-docs · wave 1 of 2', 'port-api · wave 5 of 7']);
+    expect(document.querySelector('.sess-child')?.getAttribute('title'))
+      .toBe('this workspace does one wave of Tidy the docs for the coordinator; it is stopped or reclaimed when the wave is done');
+  });
+});
