@@ -22,7 +22,8 @@ import type { ReactNode } from 'react';
 import type {
   FleetSession, ProjectPoolWire, RosterWire, SessionBucket,
 } from '../../../shared/api';
-import { StatusDot, TypedLabel, elapsedShort } from '@ccrc/ui';
+import { Icon, StatusDot, TypedLabel, elapsedShort } from '@ccrc/ui';
+import type { ChildRunContext } from './runWords';
 import { sessionLabel } from './sessionLabel';
 import { SessionMeta } from './SessionMeta';
 import { hibernatedSince } from './hibernated';
@@ -76,6 +77,8 @@ export function SessionLine({
   projectPool = null,
   onOpenRun = null,
   repo = null,
+  workingOn = null,
+  childRun,
 }: {
   session: FleetSession;
   onOpen: (id: string) => void;
@@ -111,6 +114,14 @@ export function SessionLine({
    *  today — two rows on one card would otherwise be two identical buttons
    *  in a screen-reader rotor. `null` renders nothing. */
   repo?: string | null;
+  /** D-5527: the project whose code this row works on, when the card it renders
+   *  on is another project's — a coordinator's dispatched child from a different
+   *  project (`fleetTree.ts`'s `workingOnCard`, decided by the card, never here).
+   *  Rendered INSIDE the row button, so it rides the accessible name. `null`
+   *  renders nothing: a same-project row reads exactly as it did. */
+  workingOn?: string | null;
+  /** The active run and coordinator name for the child label (`SessionMeta`). */
+  childRun?: ChildRunContext;
 }): ReactNode {
   const dead = session.status === 'dead';
   // D-5242: a dead row `ccd hibernate` put to sleep is ASLEEP, not exited — the
@@ -227,6 +238,16 @@ export function SessionLine({
           onClick={open}
         >
           <TypedLabel className="sess-label" text={label} />
+          {/* D-5527: whose code this row works on, when its card is another
+              project's. An icon beside a WORD (nothing is read out of shape
+              alone); the hidden lead makes the accessible name a sentence. */}
+          {workingOn !== null && (
+            <span className="sess-workson" data-project={workingOn} title={`works on ${workingOn}’s code`}>
+              <Icon name="folder-code" />
+              <span className="sr-only">works on </span>
+              <span className="sess-workson-name">{workingOn}</span>
+            </span>
+          )}
           {repo !== null && <span className="sess-repo">{repo}</span>}
           {/* Inside the button, after the label and the repo, like `.sess-repo`:
               the role is part of what this row IS, so it rides the accessible
@@ -239,7 +260,6 @@ export function SessionLine({
           roster={roster}
           projectPool={projectPool}
           onOpenRun={onOpenRun}
-          selected={selected}
           state={state}
           dead={dead}
           asleepAt={asleepAt}
@@ -247,6 +267,7 @@ export function SessionLine({
           subagentsOpen={subagentsOpen}
           subagentsId={subagentsId}
           onToggleSubagents={() => setSubagentsOpen((v) => !v)}
+          childRun={childRun}
         />
 
         {/* A third line, only while the hook is actually waiting on an answer

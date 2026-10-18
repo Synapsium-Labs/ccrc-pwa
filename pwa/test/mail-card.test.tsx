@@ -22,6 +22,7 @@ import { ChatListInner } from '../src/session/ChatList';
 import { buildChatItems } from '../src/session/chatItems';
 import { applySessionMsg, type SessionSnapshot } from '../src/stores/session';
 import { norm, stripComments } from './cssRule';
+import { ICONS } from '../../ui/src/icons/lucide';
 
 afterEach(() => {
   cleanup();
@@ -83,6 +84,24 @@ describe('MailCard', () => {
     const from = document.querySelector('.mail-card-from')?.textContent ?? '';
     expect(from).toContain('coordinator');
     expect(from).toContain('ccrc-pwa-brisk-harbor');
+  });
+
+  it('marks the card with Icon mail, not the ✉ character (D-5100)', () => {
+    render(<ChatListInner id="s" events={[mailTurn()]} pending={[]} />);
+    const glyph = document.querySelector('.mail-card-glyph')!;
+    expect(glyph).toHaveAttribute('aria-hidden', 'true');
+    expect(glyph.textContent).toBe('');
+    expect(glyph.querySelector('svg path')!.getAttribute('d')).toBe(ICONS.mail[0]![1].d);
+  });
+
+  it('centres the mail icon on the sender line, not on its baseline (D-5100)', () => {
+    // The line is a baseline-aligned flex row and a block svg has no
+    // baseline, so without its own centring the icon sits above the text
+    // and grows the line from 16px to 19px. Only the glyph is centred; the
+    // → arrow is text and keeps the baseline.
+    render(<ChatListInner id="s" events={[mailTurn()]} pending={[]} />);
+    expect(document.querySelector('.mail-card-glyph')!).toHaveClass('self-center');
+    expect(document.querySelector('.mail-card-arrow')!).not.toHaveClass('self-center');
   });
 
   it('names kind, subject and run/wave, and renders artifacts AS PATHS', () => {

@@ -8,6 +8,12 @@
 // comment refuses elsewhere ("A confident bar and the word 'reset' would
 // contradict each other in the same row").
 //
+// WHERE IT SHOWS. Every off lane now draws through the one `Meter` (D-5098):
+// the condemned and expired rows of the swap and new-session pickers, and,
+// since that task, the Accounts screen's disabled and sign-in-expired lanes.
+// Those last ones used to sit on `--bg-well`, where their frozen extent was
+// visible; on `--limit-track` they inherit this band's 1.02-1.10.
+//
 // WHY IT IS STILL HERE. It is not new. `fleet.css` carried
 // `.acct-list .acct-row[data-disabled='true'] .limit-fill { background:
 // var(--edge-subtle) }` and has been shipping that colour; moving it onto the
@@ -41,7 +47,9 @@ const { DARK, byName } = loadThemes(ROOT);
 const all: [string, Record<string, string>][] = [['DARK', DARK], ...Object.entries(byName)];
 
 const UI_SRC = path.join(import.meta.dirname, '..', '..', 'ui', 'src');
-const limitBar = readFileSync(path.join(UI_SRC, 'primitives', 'limit-bar.tsx'), 'utf8');
+// The fill's vocabulary moved into meter.tsx with the one meter (D-5098,
+// D-5446); limit-bar.tsx re-exports it.
+const limitBar = readFileSync(path.join(UI_SRC, 'primitives', 'meter.tsx'), 'utf8');
 
 /** The band's own measured ceiling. Anything at or under this is "invisible",
  *  which is what the entry below records; 3:1 is where it would stop being. */

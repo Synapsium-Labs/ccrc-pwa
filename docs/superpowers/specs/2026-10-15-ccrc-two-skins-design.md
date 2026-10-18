@@ -168,7 +168,7 @@ The element half needs the shells to scan. Written before they exist, it would b
 
 **Specificity.** `:root[data-skin='instrument']` is (0,2,0). It outranks every `[data-theme='…']` block (0,1,0) wherever it appears in the cascade, so the order of `tokens.css` and `skins.css` cannot decide a tie. That is how B's `--elev-card: none` wins in every palette, even though palette blocks declare `--elev-card` themselves.
 
-**Load order.** `theme.css` imports `tokens.css`, then `skins.css`, then (D-5095) `fonts.css`, all before any rule, as its header requires.
+**Load order.** `theme.css` imports `tokens.css`, then `skins.css`, both before any rule, as its header requires. The Geist pair's two `@font-face` rules (D-5095) sit at the top of `tokens.css`, not in a sheet of their own (D-5450).
 
 ### 4.2 What a skin may override (`SKIN_TOKENS`)
 
@@ -387,7 +387,7 @@ So when a skin component first puts a status text or a lane hue on another groun
 W1 adds `--accent-tint` (the selected row) and `--bg-hover` / `--bg-pressed` to the contract as grounds, each with exactly the inks drawn on it:
 - on `--accent-tint`, the selected fleet row: the three neutral inks, every status text and every lane hue;
 - on `--bg-hover`: the three neutral inks (rows, menu items, doors, ghost and quiet buttons), plus the status texts and lane hues, because a hovered fleet row keeps its meta;
-- on `--bg-pressed`: the three neutral inks only. No status text or lane hue is drawn on a pressed primitive; a chip paints its own ground.
+- on `--bg-pressed`: the three neutral inks, plus `--status-dead-text` for the session menu's danger row, which is a pressed `ListRow` (amended by D-5454). No other status text and no lane hue is drawn on a pressed primitive; a chip paints its own ground.
 
 The tertiary ink is fitted against the tint and the pressed recipe from the start (D-5097), so the neutral pairs hold when W1 adds them. The pressed recipe (ink at 9% over surface) bounds the hover one (5%), because the mix moves the ground monotonically toward the ink; the gate still measures both.
 

@@ -77,6 +77,10 @@
   --color-well:    var(--bg-well);
   --color-sheet:   var(--bg-sheet);
   --color-scrim:   var(--scrim);
+  /* the interactive grounds (D-5101): a row or ghost button under the mouse,
+     and held. Opaque derivations, so the gate measures them as pairs. */
+  --color-hover:   var(--bg-hover);
+  --color-pressed: var(--bg-pressed);
 
   /* --- hairlines ----------------------------------------------------- */
   --color-edge-subtle: var(--edge-subtle);

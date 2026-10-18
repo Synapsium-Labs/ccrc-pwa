@@ -134,8 +134,12 @@ servers when the runs finish.
 ### Reaching Instrument before there is a picker
 
 Instrument is a preview until its shell lands, and the Settings picker comes
-later. Until the command palette offers "Switch layout", select it from the
-browser console on the app's own page, then reload:
+later. Until then, the command palette selects it: ⌘K (Ctrl+K off a Mac), then
+"Switch layout →", then "Instrument (preview)". "Match this device" on the
+same page returns to the default. Both are remembered per device (D-5103).
+
+Without a keyboard, or before the bundle runs, the browser console on the
+app's own page does the same, followed by a reload:
 
     localStorage.setItem('ccrc-skin', 'instrument')
 
@@ -149,7 +153,13 @@ Some things never vary between skins (D-5094, spec §3.1). A skin may change
 how dense the console is. It never changes what the console is:
 
 - **The wordmark `❯ ccrc`.** The `❯` is in `--accent`, then `ccrc` in mono at
-  medium weight, top-left in every shell.
+  medium weight, top-left in every shell. It is one primitive, `Wordmark`
+  (`src/primitives/wordmark.tsx`, D-5470), which every shell's bar renders
+  as the shells land (S4b, S5, S9, S11):
+  the caret is `text-phosphor` (theme.css's key for `--accent`; `text-accent`
+  is shadcn's muted surface and no ccrc colour), the name `--fs-xl` mono at
+  medium weight, line-height 1, and the two are separated by a box gap rather
+  than a space, so the mark never wraps between them.
 - **The `❯` caret** means "selected" or "acting" wherever it appears, page
   titles included. A skin never adds a second cursor glyph.
 - **The phosphor accent** (`--accent` and its family) marks commit actions, the
@@ -211,6 +221,61 @@ a default in `tokens.css`'s `:root`, and only then set it in `skins.css`. If
 its class's rule does not fit the value, the value is probably a colour or a
 new size, and it belongs in a palette or on a scale instead. The element half
 of the guard, which covers the shells themselves, lands with W2.
+
+## Fonts
+
+The Geist pair is self-hosted (D-5095). Nothing is fetched from a font host,
+and `geist` is not a dependency (spec §12 O5).
+
+- **The files.** `src/fonts/Geist-Variable.woff2` and
+  `src/fonts/GeistMono-Variable.woff2`, each one variable file covering weights
+  100 to 900, and `src/fonts/OFL.txt`, all taken unchanged from the `geist`
+  npm package at **1.8.1** (`npm pack geist@1.8.1` in a scratch directory).
+  The note above the faces in `src/styles/tokens.css` records each file's
+  SHA-256, and `pwa/test/fonts.test.ts` holds them.
+- **The rules.** Two top-level `@font-face` rules atop `src/styles/tokens.css`
+  declare `'Geist'` and `'Geist Mono'` with `font-display: swap`, beside the
+  stacks that name them. They are not in a `fonts.css` of their own (D-5450):
+  the contrast gate requires every stylesheet under `src/` to hold a style
+  rule. Vite resolves each `url()` from `src/styles/`, in the app's build and
+  in Storybook's, and emits a hashed asset under `/assets/`.
+- **The stacks.** `--family-ui` and `--family-mono` lead with the pair and keep
+  the system stacks behind it, so a glyph Geist lacks falls back, per glyph,
+  to a system face.
+- **The licence.** SIL Open Font License 1.1. The app ships a byte-identical
+  copy at `/licenses/Geist-OFL.txt` (`pwa/public/licenses/`), and the service
+  worker never answers `/licenses/` with the app shell (`swDenylist`).
+- **To update the pair,** pack the new release, copy the three files over,
+  and change the version and the hashes in `tokens.css`, in this section and
+  in `fonts.test.ts`, together. Copy `OFL.txt` to `pwa/public/licenses/Geist-OFL.txt`
+  again.
+
+## Icons
+
+`Icon` (D-5100) draws a vendored lucide icon at 16, 20 or 24px. It is stroked
+in `currentColor`, so it takes the control's ink in every palette and both
+skins. It is `aria-hidden` and never focusable, so the word or label beside it
+carries the meaning.
+
+- **Vendored, not a dependency.** `src/icons/lucide.ts` holds the nodes of the
+  icons in use, with the lucide-static version in its header, and
+  `src/icons/LICENSE.lucide` holds the ISC licence. `lucide-react` would be a
+  new dependency and another React-calling package to dedupe.
+- **Adding an icon.** Add its name to the list in `design/make-icons.mjs`, then
+  run `node design/make-icons.mjs --from <lucide-static>/icons` against a local
+  copy (for example `npm pack lucide-static` in a scratch directory). Commit
+  both files. The script never runs in CI.
+- **What the nodes may hold.** The tags are `path`, `circle`, `rect`, `line`,
+  `polyline`, `polygon` and `ellipse`, and the attrs are geometric. The script
+  refuses anything else and `pwa/test/icon.test.tsx` checks the committed
+  file. Children are built with `createElement`; no markup string reaches the
+  DOM.
+- **No colour emoji.** The same suite runs a census: no emoji-presentation
+  character in `pwa/src` or `ui/src` outside comments, stories and tests. A
+  file still waiting on its owner is registered with the exact characters it
+  holds, and a registered file that no longer holds them is stale. A glyph
+  that must stay text (`MAIL_GLYPH`, `WARN_GLYPH`, `SETTINGS_GLYPH`) carries
+  U+FE0E, which asks every platform for the text presentation.
 
 ## Hook classes
 

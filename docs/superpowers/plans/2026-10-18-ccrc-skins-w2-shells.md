@@ -6,7 +6,7 @@
 
 **Foundations plan:** `docs/superpowers/plans/2026-10-15-ccrc-skins-foundations.md`. It defines D-5093 to D-5104 and the numbers its workers were issued. This plan cites them and never redefines them. Its Global constraints, Review focus and freeze rule bind here too, restated below where W2 adds to them.
 
-**Status:** DRAFT rev 1 (2026-10-18), after two adversarial reviews (§Review log). Task S0 (this plan) is the docs PR. Nothing is dispatched until the operator approves it, and then each task only once its gates (§Gates) are met.
+**Status:** APPROVED rev 1 (2026-10-18), after two adversarial reviews (§Review log). Task S0 (this plan) is the docs PR. The operator approved it on 2026-10-18 ("take our UI/UX programme to the end"): each task is dispatched as its gates (§Gates) open, and not before.
 
 **Operator rulings this plan builds on** (2026-10-15, spec §1.1, and the spec's §12):
 - Build both skins and switch between them, with the good parts borrowed across.
@@ -270,15 +270,15 @@ Every Modify path above exists at `bd10981d`, except `pwa/src/command/*` (F10), 
 - **The values are today's.** `.wordmark` in `pwa/src/fleet/fleet.css` on `bd10981d` is `font: var(--weight-medium) var(--fs-xl) / 1 var(--family-mono)` in `--ink-primary`, and `.wordmark::before` paints the caret in `--accent` with `margin-right: 0.4em`. The primitive takes those (size `--fs-xl`, line-height 1, a 0.4em gap). Step 0 re-reads them on the task's base, and if one has moved, the primitive takes the new value and the PR says which.
 - Accessible text is "ccrc". The caret is decoration.
 
-- [ ] **Step 0: Measure.** Read `.wordmark` and `.wordmark::before` in `fleet.css`: family, size, weight, line-height, the caret's colour and the space between (on `bd10981d`: `--weight-medium`, `--fs-xl`, 1, `--family-mono`, `--accent`, 0.4em). Confirm `text-phosphor` and `text-xl` exist in `theme.css`'s key map. Record them in the PR beside the primitive's computed values in Storybook.
-- [ ] **Step 1: Red.** `wordmark.test.tsx`:
+- [x] **Step 0: Measure.** Read `.wordmark` and `.wordmark::before` in `fleet.css`: family, size, weight, line-height, the caret's colour and the space between (on `bd10981d`: `--weight-medium`, `--fs-xl`, 1, `--family-mono`, `--accent`, 0.4em). Confirm `text-phosphor` and `text-xl` exist in `theme.css`'s key map. Record them in the PR beside the primitive's computed values in Storybook.
+- [x] **Step 1: Red.** `wordmark.test.tsx`:
   - "renders an aria-hidden ❯ followed by ccrc, and its accessible text is ccrc". Red: no module.
   - "the caret is painted in the accent": not a class-string check, which passes with an uncoloured caret. The test takes the caret's colour utility from the rendered class list and resolves it through `theme.css`'s `@theme` block to the token it names, using the mapping `utility-pairs.test.ts` already does (imported if it is exported; otherwise moved to a shared test helper in this PR, never copied), and expects `--accent`. A utility with no ccrc `@theme` key (`text-accent`) resolves to nothing and is red. `utility-pairs.test.ts` itself cannot hold this pair: the caret has no ground in its own prefix group, the INHERITED_GROUNDS case its header excludes. The Storybook play test then reads the caret's computed `color` against `--accent`'s computed value, in both skins.
   - "the name is in mono at medium weight at today's size" (the computed `font-family`, `font-weight` and `font-size` in the Storybook play test, equal to `.wordmark`'s on the fleet head in the same story frame).
   - "there is no text node between the caret and the name, so it cannot wrap there".
   - "a caller's `whitespace-normal` undoes nowrap" (`cn` is tailwind-merge, and `className` merges after the base, so the caller's class wins: the one documented way to undo it).
-- [ ] **Step 2: Green.** Implement, export, add the story (both skins through the toolbar).
-- [ ] **Step 3: Mutation table, RUN.**
+- [x] **Step 2: Green.** Implement, export, add the story (both skins through the toolbar).
+- [x] **Step 3: Mutation table, RUN.**
 
   | Mutant | Suite | Expected red |
   |---|---|---|
@@ -288,8 +288,8 @@ Every Modify path above exists at `bd10981d`, except `pwa/src/command/*` (F10), 
   | `text-xl` replaced by `text-ui` | the story's play test | "…at today's size" |
   | the base classes merged after `className` | wordmark | "a caller's `whitespace-normal` undoes nowrap" (the base's `whitespace-nowrap` then wins over the caller) |
 
-- [ ] **Step 4: Per width × skin × mode.** Storybook, the `Wordmark` story: 360, 390, 1280, 1920 × Refined, Instrument × dark, light (16 renders). Identical in both skins except the radius-free box (nothing moves); the caret is the accent in every palette; nothing wraps at 360.
-- [ ] **Step 5: Verify.**
+- [x] **Step 4: Per width × skin × mode.** Storybook, the `Wordmark` story: 360, 390, 1280, 1920 × Refined, Instrument × dark, light (16 renders). Identical in both skins except the radius-free box (nothing moves); the caret is the accent in every palette; nothing wraps at 360.
+- [x] **Step 5: Verify.**
 
       cd ui && ./node_modules/.bin/tsc --noEmit && npm run build-storybook -- --quiet
       cd pwa && ./node_modules/.bin/vitest run --maxWorkers=2 test/wordmark.test.tsx test/utility-pairs.test.ts test/design-system-boundary.test.ts test/skin-identity.test.ts
@@ -889,7 +889,7 @@ This task lands before S9 so those tasks add rules, not palette values.
 
 ### Task S10a: status grouping and the needs-you reason, as a pure model (D-5473) — may land before #402
 
-**Routing:** band 1 once Step 0 has fixed the field map. **Needs:** nothing. **Frozen files touched:** none (new files only).
+**Routing:** band 1 once Step 0 has fixed the field map. **Needs:** nothing. **Frozen files touched:** none (new files only). Executing it found D-5497 (§Deviations and decisions, "Found while executing Task S10a").
 
 **Files:** Create `pwa/src/fleet/statusGroups.ts` and `pwa/test/status-groups.test.ts`.
 
@@ -904,7 +904,7 @@ This task lands before S9 so those tasks add rules, not palette values.
   - "a dead session still dialogPending is in Dead, not Needs you";
   - "rows keep sortFleet's order within a group";
   - "every SessionBucket has a group and a label" (derived from the record's keys against a list the test builds from the type's values, never a second hand-kept list);
-  - "needsReason reads ask, allow, fault and sign-in from their fields, and null for an attention session no field explains";
+  - "needsReason reads ask, allow, fault and sign-in from their fields, and null for an attention session no field explains"; (reworded by D-5497)
   - "each group's unseen count equals BucketBar's for its bucket" (one fixture through both, including a never-acked idle session: `BucketBar` and `groupFleet` count with `isUnseen(s, acks)`, which puts the BADGED precondition (attention, done and cleanup only) in front of `isUnseenAt`, so an Idle, Working or Dead row never badges).
 - [ ] **Step 2: Green.** Implement.
 - [ ] **Step 3: Mutation table, RUN.**
@@ -996,6 +996,7 @@ This task lands before S9 so those tasks add rules, not palette values.
   - "the tab bar publishes --phone-nav-h while mounted and removes it on unmount; a toast's offset includes it".
   - "every top-level screen's scroll region pads its bottom by --phone-nav-h" (a read of `shell.css` and each screen's root class).
 - [ ] **Step 2: Green.** Build it, retire the head. Run `contrast.test.ts`, `tap-targets.test.tsx` and `control-census.test.ts` alone: the retired keys leave the census (shrinking), and nothing new is uncovered.
+  - **Expect the Wordmark story to go red.** `ui/src/primitives/wordmark.stories.tsx` reads `.wordmark` and `.wordmark::before` from `fleet.css` (`HEAD_RULES`) to compare the primitive with the head. Once those rules go, drop the head comparison from the story and its play test; keep the `--accent` probe, and assert the computed font family, weight and size against the literal tokens (`--family-mono`, `--weight-medium`, `--fs-xl`) instead (D-5470).
 - [ ] **Step 3: Mutation table, RUN.**
 
   | Mutant | Suite | Expected red |
@@ -1421,13 +1422,39 @@ Mark it ✓, or write the defect and its fix. Screenshots are evidence for the r
   - **Remembered per device:** the status/project toggle in `ccrc-fleet-group`, Refined's filter in `ccrc-fleet-filter`, each read and written inside try/catch, an unreadable or unknown value meaning the default.
   - **Reason tags on rows** stay W3's (U1), as spec §6 places them; W2 lands their data.
 - **D-5474** — `inspector-sections` (Tasks S8, S12, S16): the inspector's sections are shared components that read the stores through `useInspectorSession()`, which takes the session id from the route. So the inspector lives in the frame's `inspector` slot, outside `SessionScreen`, and reads the same one store per id. Each skin places them: Refined a 320 rail at ≥1600 on a session route, and nothing below (today's strips, chips and sheets carry the content); Instrument a permanent fourth column at ≥1600 on every route (an empty state off a session), an overlay from 900 to 1599, and the quick bar's sheets on a phone. Where a strip's content is in the inspector, the strip is not rendered: one instance per width.
-- **D-5475** — `transcript-rows` (Tasks S13a, S13b, S14): the per-tool summariser is a pure model (`toolSummary`, `groupToolRun`) that keeps file names only, never directories, and never folds an ask, a failed entry or a live entry into a group. `ChatList` applies `groupToolRun` before Virtuoso when the set's declarative `transcriptGrouping` is `'tool-runs'` (a per-item row cannot change the list's length or indices), and renders every resulting item through the set's `TranscriptRow`: Refined's draws a group as one plain-language row; Instrument's is a log row with a time gutter and a speaker gutter, prose kept in the sans. Each new row shape joins `itemHeight.ts`'s table, measured. Spec §10's W1 row gated the summariser on #402; its model touches none of #402's files, so it lands first, and its rows wait for S2b.
+- **D-5475** — `transcript-rows` (Tasks S13a, S13b, S14): the per-tool summariser is a pure model (`toolSummary`, `groupToolRun`) that keeps file names only, never directories, and never folds an ask, a failed entry or a live entry into a group. A path-like word in an Agent description goes to its file name too, and a Bash object is the command's first word once a leading `cd <dir> &&` (or `;`) step and `VAR=value` words are skipped. The one exception is a Grep pattern: it is a regex, where a slash is a character, so it stays whole. A group's clause counts distinct calls by their full input (the whole path or command), never by the cut object it shows, so two different `index.ts` files are "Read 2 files". Objects are cut by code points, so an astral character is never split. `ChatList` applies `groupToolRun` before Virtuoso when the set's declarative `transcriptGrouping` is `'tool-runs'` (a per-item row cannot change the list's length or indices), and renders every resulting item through the set's `TranscriptRow`: Refined's draws a group as one plain-language row; Instrument's is a log row with a time gutter and a speaker gutter, prose kept in the sans. Each new row shape joins `itemHeight.ts`'s table, measured. Spec §10's W1 row gated the summariser on #402; its model touches none of #402's files, so it lands first, and its rows wait for S2b.
 - **D-5476** — `jump-latest-command` (Task S15): Jump to latest is a registry command whose keys are `G` everywhere (a single key; Shift is not a modifier and keys match on `e.key`, so it never collides with the `g` chords) and ⌘J or Ctrl+J only where Step 0 measured that a page receives the key and can claim it. This is the single-key fallback spec §5.3 asks W2 to name. `jumpHandle.ts` holds one jump per mounted chat, unregistered on unmount. New session is registered in S2b, so its doors are built through `commandDoor` from S4b on; this task adds its key `n`. Scripted scrolls read the shared `scrollBehavior()`, `'auto'` under reduced motion.
 - **D-5477** — `skin-parity` (Task S17): the parity test spec §11 item 2 names. For each skin in `SKINS` and for a phone and a desktop width class, **in a real browser** (#402's leg; jsdom sees no layout and no media queries), counting only controls that are visible and inside the viewport: every `top` route within two activations of the fleet, and the fleet within one of every route; every registry command with a key or a `data-command` door at a desktop width and a door at a phone width, and every fleet flow with a `data-action` door, each evaluated where its `when` holds, with two reasoned registries (`KEYBOARD_ONLY`, `SKIN_ASYMMETRY`) asserted both ways; the identity core found by content, one main landmark and the skip link. Spec §5.4's switch-preserves list, made exhaustive, runs in jsdom on every top route and a session. The walk never activates a danger control, and its bounds are read from `ROUTES` and the registry.
 - **D-5478** — `instrument-page-grounds` (Task S3): the token contract gates every status text (`status <kind> text / page`) and every lane token (`acct-<hue> / page`, and `/ surface`) on `--bg-page` too, at 4.5:1, because Instrument's panels put them on the page (spec §8.2). The status texts' fit already names the page (`text(k, g)`'s default grounds are `[surface, page, raised]`), so their pairs are a gate, red only by mutation; the `--acct-<hue>` fit gains `page` (`[tint, surface, page]`), which is the fitting work. It is generator lane 4, after F9. If either hand-tuned Phosphor palette's lane hue is short on the page, the task stops and asks for a ruling rather than fitting a hand-tuned value.
 - **D-5479** — `flip-after-parity` (Task S18): Instrument's `preview: false` lands as its own PR, after the parity test, and not in "the W2 PR that lands Instrument's shell" as D-5096 says, because that shell lands across eight PRs and a flip inside any of them would make a partial shell every desktop's default. It also waits for the picker (F12b), axe in both skins (F3b), and `Sheet`'s desktop arm unless the coordinator rules otherwise.
 
-Issued and unused: 5480. It is the one spare for a departure a worker meets while executing a task here; it is defined here, once, in the PR that introduces it, and the coordinator asks the allocator for more if one is not enough.
+Issued and unused: 5480, 5496, 5498. 5480 is the plan's spare for a departure a worker meets while executing a task here, and 5498 was issued to Task S13a as its spare and not needed. A spare is defined here, once, in the PR that introduces it, and the coordinator asks the allocator for more if one is not enough.
+
+D-5497 was not drawn from that block: the coordinator issued it to Task S10a from the allocator, as that task's one spare, in the task's dispatch. It is defined once, below. 5480 is untouched by it.
+
+### Found while executing Task S10a
+
+- **D-5497** — `needs-reason-field-map` (Task S10a): Step 0's map found fields for two of `needsReason`'s four answers, so it answers `'fault'` and `'ask'` and never `'allow'` or `'sign-in'`, which stay in its type for W3's tags. The plan's Step 1 case ("reads ask, allow, fault and sign-in from their fields") assumed four fields; it is written instead as "reads ask and fault from their fields, never allow or sign-in that no field carries", plus a case that a session outside Needs you has no reason.
+  - **The map** (also in `pwa/src/fleet/statusGroups.ts`'s header). `fault`: `substrate`, through `substrateFault` (ccd's `cmd_supervise` writes `$REG/<id>.substrate`; `server/src/fleet.ts`'s `assembleFleet` carries it; an unreadable marker is still a fault). `ask`: `ask` in state `held` or `answering`, through `sessionAsk` (`assembleFleet` folds the newest `asks` row from `CoordStore`; those rows are minted for questions only today, which is why `fleetWithCoordinator` answers `kind: 'question'` for every one). `answered` is not an ask: it explains a ruling already made, not the dialog open now. A fault outranks an ask, because the console cannot re-measure a faulted row.
+  - **No field for `allow`.** A permission prompt reaches the wire only as `dialogPending`, `hookState: 'waiting'` and the `askSummary` string. The hook's ask envelope (questions or approval) and the live file's `waitingFor` word stay on the server. Reading `askSummary`'s `tool: summary` shape would be a guess, since a question's header can carry a colon. `withCoordinator.kind` does name an approval, but only on a held row, which the ladder files under `working`.
+  - **No field for `sign-in`.** Nothing on `FleetSession` says a session is blocked on its account's sign-in.
+  - **What closes it.** A server field that carries the open dialog's kind (from the hook envelope, and from `waitingFor`'s `sandbox request`), and one for a sign-in block, each additive on the wire. Either is a change to `shared/api.ts` and `server/src/fleet.ts`, outside S10a's new-files-only scope, and is for the coordinator to schedule. Until then every attention row those fields would explain answers `null`, as D-5473 requires.
+
+### Cross-project nesting
+
+Issued 2026-10-18 to the cross-project nesting change, a block of three. D-5527 and D-5528 are defined here, once.
+
+- **D-5527** — `fleet-tree` (Tasks S6, S10): one pure model, `pwa/src/fleet/fleetTree.ts`, decides each fleet row's card and parent for both skins, and S6's cards and S10's project mode read its groups and rows (`fleetTree`) rather than calling `groupFleet`, `runCard` and `nestFleet` themselves. S10's status mode reads `workingOn` and `childRunContext` for a child filed under its own status. Since cross-project coordination (#601, D-5523), a coordinator in one project can dispatch children that are workspaces of another.
+  - **Card.** A row renders where the server placed it (`boardHome`). The server places a held child on its coordinator's project, because the run's stamp records the claimant's own project. The client never overrides that placement. Following the live run's claimant on the client was measured and rejected. It would also move a child whose `boardProject` is null (an older server, or a failed placement read, D-2875) off its own card, which is where `orphanNote` says its coordinator is dead and offers the reclaim.
+  - **Parent.** The parent is the `claimedBy` of the active run bound to the row: the latest one (`runForSession`), never the row itself. Nesting is `nestFleet`'s, fed only each session's latest active run, so the bracket, the label and the header name the same coordinator when two runs name one worker. A card's runs are the runs whose worker renders on it, keyed through the same card map.
+  - **Known limit.** A cross-project coordinator that is itself a child sits under its own coordinator, but its children stay at the top level of the card the server placed them on (its own project), because the stamp records the claimant's own project and the client never overrides placement. `fleetTree.test.ts` pins this.
+  - **Indicator.** A row whose own project differs from its card carries a chip with the `folder-code` icon and that project's name, inside the row button so it is part of the accessible name. A same-project child shows nothing new.
+  - **Words.** A child's label names its programme and wave (`port-api · wave 5 of 7`, or `· review of wave 5`), taken from the active run bound to it. A workspace resumed for a later wave therefore shows that wave and not the run that minted it. A child that no open run names reads "run not on the board". The run number moves to the session header's coordination line (`working on <project> · coordinated from <coordinator> · <programme> · wave N of M · run #N`). The reclaim banner leads with the programme and wave when the board holds the run, and keeps `run #N` as the second key.
+  - **Coordinator not a live row.** A stopped workspace coordinator is still a live row, so its child stays nested under it. An archived or missing coordinator leaves the child at the top level of the card the server placed it on, which is the coordinator's project while the stamp answers and the child's own project after that. The child keeps its chip and gets the orphan marker.
+
+- **D-5528** — `run-label-door` (Tasks S6, S10): every dispatched child is held with `program:<slug> wave:N/M run:<id>`, so the raw hold text put the run number back on the row and said the programme and wave twice. When an active run explains a hold, the programme-and-wave label takes the hold cell's place, and is the run-board door when there is one. The hold text stays verbatim in its title and is never parsed. A hold that no active run explains keeps its raw text, and an unreadable child marker keeps both its hedge and the raw hold. The programme slug ellipsises at phone width and the wave stays whole.
+
+Issued and unused: 5529.
 
 ## Review log
 

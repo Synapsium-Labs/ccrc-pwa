@@ -40,7 +40,7 @@ import { restartWords } from '../lib/restart';
 import { humanBytes } from '../screens/ArchiveScreen';
 import { lifecycleQualifier } from './lifecycleWords';
 import { hibernatedWords } from './hibernated';
-import { childOfRunLabel } from './runWords';
+import { childOfRunLabel, programmeWave, programmeWaveTail, runSentence, type ChildRunContext } from './runWords';
 import { spawnChip } from './spawnWords';
 import { GraphChip, LastSpawnChip, UnmeasuredChip } from './chips';
 import './fleet.css';
@@ -125,9 +125,6 @@ export interface SessionMetaProps {
   roster: readonly RosterWire[];
   projectPool: ProjectPoolWire | null;
   onOpenRun: (() => void) | null;
-  /** The desktop sidebar's open row. Only reaches the account cell, which
-   *  drops its inline hue there — see `acctStyle`. */
-  selected: boolean;
   /** ONE reading of the wire, taken by `SessionLine`. */
   state: string;
   /** The same. */
@@ -143,6 +140,10 @@ export interface SessionMetaProps {
   subagentsOpen: boolean;
   subagentsId: string;
   onToggleSubagents: () => void;
+  /** The active run bound to this row and its coordinator's name (D-5527,
+   *  `fleetTree.ts`'s `childRunContext`), for the child label's programme and
+   *  wave. Absent: nothing known, and a child says its run is not on the board. */
+  childRun?: ChildRunContext;
 }
 
 /**
@@ -171,8 +172,8 @@ const markerNote = (
 };
 
 export function SessionMeta({
-  session, roster, projectPool, onOpenRun, selected, state, dead, asleepAt = null,
-  subagentList, subagentsOpen, subagentsId, onToggleSubagents,
+  session, roster, projectPool, onOpenRun, state, dead, asleepAt = null,
+  subagentList, subagentsOpen, subagentsId, onToggleSubagents, childRun,
 }: SessionMetaProps): ReactNode {
   // The cleanup bucket's own facts — the merged PR number and the size
   // ws-archive measured, both already on the wire (`pr.number`,
@@ -191,9 +192,30 @@ export function SessionMeta({
   // untouched, a dead row stays `exited`, and these are cells beside it.
   const qualifier = asleepAt !== null ? null : lifecycleQualifier(session);
 
-  // Child-reclamation wave 5: which run minted this workspace, when it is a
-  // child. `childOfRunLabel` is the one reader of `session.child`.
-  const childOf = childOfRunLabel(session);
+  // Child-reclamation wave 5, reworded by the operator's ruling of 2026-10-18:
+  // the programme and wave this child is doing, when it is a child.
+  // `childOfRunLabel` is the one reader of `session.child`.
+  const childOf = childOfRunLabel(session, childRun);
+  // D-5528: every dispatched child is ws-held with `program:<slug> wave:N/M
+  // run:<id>`, so the raw hold cell put the run number back on the row and said
+  // the programme and wave twice. When an ACTIVE run explains the hold, the
+  // programme-and-wave label takes the hold cell's place — the same element, the
+  // run-board door when there is one — and the hold text stays verbatim in its
+  // title (displayed, never parsed). An unreadable child marker keeps both
+  // cells: its hedge, and the raw hold.
+  const activeRun = childRun?.run ?? null;
+  const heldRun = session.held !== null && activeRun !== null && childOf?.data !== 'unreadable'
+    ? activeRun : null;
+  const heldText = heldRun === null ? session.held : programmeWave(heldRun);
+  const heldTitle = heldRun === null || session.held === null ? session.held
+    : `${childOf?.title ?? runSentence(heldRun, childRun?.coordinator ?? null, false)} — hold: ${session.held}`;
+  const heldBody = heldRun === null ? session.held : <ProgrammeWave run={heldRun} />;
+  // The row's programme-and-wave label, wherever it renders: its wave's width in
+  // mono characters is the cell's floor (fleet.css `--pw-wave`), so the cell gives
+  // up the programme on a narrow row and never the wave.
+  const labelRun = heldRun ?? (childOf?.data === 'child' ? activeRun : null);
+  const metaStyle = labelRun === null ? undefined
+    : ({ '--pw-wave': `${programmeWaveTail(labelRun).length}ch` } as CSSProperties);
 
   // Task 19: the ask pre-emption lane's chip. Through `sessionAsk`, never
   // `session.ask` directly — the live `fleet` frame is cast, not revived
@@ -321,15 +343,13 @@ export function SessionMeta({
 
   // Identity stays in the name; a dead line's account drains to gray.
   const acctVar = accountColorVar(roster, session.wrapper);
-  // Inline styles beat every selector short of !important, so the account hue
-  // has to be dropped HERE on the selected row: .sess-line--active's achromatic
-  // override could never win against it, and the hue measures 1.46:1 on the
-  // dark slab. The account survives as its mono name.
-  const acctStyle: CSSProperties | undefined = selected
-    ? undefined
-    : dead
-      ? { color: 'var(--ink-secondary)' }
-      : { color: `var(${acctVar})` };
+  // The account keeps its lane hue on EVERY row, the selected one included
+  // (D-5455). It used to be dropped on the selected row, because the reverse-
+  // video slab put it at 1.46:1; the selected row is the accent tint now, and
+  // design/contrast-check.mjs measures every lane hue on that tint.
+  const acctStyle: CSSProperties = dead
+    ? { color: 'var(--ink-secondary)' }
+    : { color: `var(${acctVar})` };
 
   // Running somewhere other than its pinned account — ccd's _auto_swap_check
   // moved it when `home` crossed the swap threshold. Dead sessions are exempt:
@@ -350,7 +370,7 @@ export function SessionMeta({
   // to hold a track open (that was only ever a grid requirement, and this
   // is no longer a grid).
   return (
-        <span className="sess-meta">
+        <span className="sess-meta" style={metaStyle}>
           {wcWords !== null ? (
             <span className="sess-state sess-state--coordinator" title={wcWords.title}>
               {wcWords.text}
@@ -442,8 +462,8 @@ export function SessionMeta({
               is what stops one tap from ALSO opening the session. */}
           {session.held !== null && (
             onOpenRun === null ? (
-              <span className="sess-held" data-held="true" title={session.held}>
-                {session.held}
+              <span className="sess-held" data-held="true" title={heldTitle ?? undefined}>
+                {heldBody}
               </span>
             ) : (
               <button
@@ -451,22 +471,23 @@ export function SessionMeta({
                 className="sess-held"
                 data-held="true"
                 data-open="true"
-                title={session.held}
-                aria-label={`Open the run board — ${session.held}`}
+                title={heldTitle ?? undefined}
+                aria-label={`Open the run board — ${heldText}`}
                 onClick={onOpenRun}
               >
-                {session.held}
+                {heldBody}
               </button>
             )
           )}
 
-          {/* Wave 5: the child-of-run label. Informational only, in
+          {/* Wave 5: the child label — its programme and wave since the
+              operator's ruling of 2026-10-18. Informational only, in
               `.sess-substrate`'s shape: a short, fixed,
-              never-truncated ink-tertiary fact about which run this
-              workspace belongs to. The full sentence lives in `title`. */}
-          {childOf !== null && (
+              never-truncated ink-tertiary fact about which wave this
+              workspace is doing. The full sentence lives in `title`. */}
+          {childOf !== null && heldRun === null && (
             <span className="sess-child" data-child={childOf.data} title={childOf.title}>
-              {childOf.text}
+              {childOf.data === 'child' && activeRun !== null ? <ProgrammeWave run={activeRun} /> : childOf.text}
             </span>
           )}
 
@@ -593,11 +614,10 @@ export function SessionMeta({
           {/* Context-window pressure (D-2011), escalated to the wedge
               reading (D-2016) — one cell, not two, same idiom `.sess-spawn`
               already uses for its own variants: a stable className the
-              achromatic-group census can answer, and a `data-wedge`
-              attribute (not a class) carrying the louder state, so a
-              selected+wedged row is answered by ITS OWN higher-specificity
-              rule rather than losing a tie to source order (see the matching
-              `.sess-ctxpressure[data-wedge]` rule in fleet.css). `title`
+              row's ink census can read, and a `data-wedge` attribute (not a
+              class) carrying the louder state, which keeps its own ink on
+              the selected row's tint as everywhere else (D-5101; see the
+              matching `.sess-ctxpressure[data-wedge]` rule in fleet.css). `title`
               carries the reading's own caveat — this is what CLAUDE CODE
               believes its window is, not this account's real usable wall —
               verbatim, never parsed, same contract as `.sess-held`. */}
@@ -641,5 +661,17 @@ export function SessionMeta({
           </span>
           {offPoolLabel !== null && <span className="sess-offpool">off-pool</span>}
         </span>
+  );
+}
+
+/** `<programme> · wave 5 of 7` as two spans: the programme slug ellipsises at
+ *  phone width, the wave never does (D-5528; fleet.css `.sess-pw`). The text
+ *  is `programmeWave`'s, character for character. */
+function ProgrammeWave({ run }: { run: NonNullable<ChildRunContext['run']> }): ReactNode {
+  return (
+    <span className="sess-pw">
+      <span className="sess-pw-prog">{run.program}</span>
+      <span className="sess-pw-wave">{programmeWaveTail(run)}</span>
+    </span>
   );
 }

@@ -125,9 +125,8 @@
   .shell-accounts .acct-reset {
     color: var(--ink-secondary);
   }
-  .shell-accounts .acct-meter {
-    height: 5px;
-  }
+  /* No height for the meter: it is `Meter`'s, from `--meter-h` (D-5098), so
+     the strip's meters take the skin's shape like every other. */
 
   .shell-nav {
     position: relative;

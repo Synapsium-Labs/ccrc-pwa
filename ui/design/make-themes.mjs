@@ -284,7 +284,11 @@ function inkTiers(name, fittedHex, cardGrounds, tint, surface, dark) {
   const away = dark ? +1 : -1;
   const fitted = hexToRgb(fittedHex);
   const [L0, C, h] = toLch(fitted);
-  const pressedOver = (p) => [0, 1, 2].map((i) => p[i] * PRESSED + surface[i] * (1 - PRESSED));
+  // ROUNDED TO THE 8-BIT VALUE IT IS PAINTED AS (D-5454): `--bg-pressed` is
+  // emitted as a hex (and a browser paints color-mix() at 8 bits), so the
+  // walk measures that, not the exact mix. Measured on Nord: 4.504 on the
+  // exact mix, 4.479 on the hex it ships as.
+  const pressedOver = (p) => [0, 1, 2].map((i) => Math.round(p[i] * PRESSED + surface[i] * (1 - PRESSED)));
   const neutralFor = (p) => [...cardGrounds, tint, pressedOver(p)];
   const band = (p, t) => Math.abs(lightness(p) - lightness(t));
   const tertiaryFor = (p) => {
@@ -511,19 +515,34 @@ function build(seed) {
     const [L, C, h] = toLch(hexToRgb(t['--ink-tertiary']));
     t['--ink-disabled'] = rgbToHex(fromLch([dark ? L - 0.14 : L + 0.14, C, h]));
   }
-  // `--edge-strong` is ALSO the INK of the inverted active row, where
-  // `--ink-primary` is the background (`.sess-line--active .sess-meta` and its
-  // twenty siblings, fleet.css). It is a hairline token being read as text, so
-  // it owes the TEXT floor of 4.5 there — not the 3:1 a border would. Fitting
-  // it at 3 left four palettes between 3.89 and 4.47: close enough to look
-  // deliberate, and wrong. It is fitted against the FINAL primary — the ground
-  // it is actually read on — and not the seed `ink`, which both fits above and
-  // the tiers can move primary away from: fitted to the seed, it was pushed
-  // further than the real ground needs (pwa/test/ink-tiers.test.ts replays it).
+  // `--edge-strong` WAS ALSO THE INK of the inverted active row, where
+  // `--ink-primary` was the background (the achromatic group in fleet.css).
+  // D-5101 retired that slab for the accent tint plus a rail, so nothing reads
+  // it as text any more, but the fit is KEPT: pwa/test/contrast.test.ts (a
+  // frozen file until #402 lands) still pins `--edge-strong` on
+  // `--ink-primary` at 4.5, and re-fitting it as a plain hairline would move
+  // every strong edge in every palette for a task that changes none. It is
+  // fitted against the FINAL primary, not the seed `ink`, which the tiers can
+  // move primary away from (pwa/test/ink-tiers.test.ts replays it).
   t['--edge-strong'] = fit(`${name} edge-strong`, edge(0.12),
     [t['--ink-primary']], 4.5, dark ? 'down' : 'up', 0.2);
 
   t['--accent-on-well'] = fit(`${name} accent-on-well`, accent, [well], 4.5, 'up', 0.8);
+
+  // HOVER AND PRESSED (D-5101): the FINAL primary at 5% and 9% over the card,
+  // pre-composited the way `--status-dead-tint-solid` is, so each is opaque
+  // and measured without re-mixing. tokens.css's :root states the same mixes
+  // as color-mix() for the hand-tuned pair. Derived here, after the tiers have
+  // settled primary, because they are grounds the status texts and lane hues
+  // are fitted on below.
+  t['--bg-hover'] = over(t['--ink-primary'], 0.05, surface);
+  t['--bg-pressed'] = over(t['--ink-primary'], 0.09, surface);
+  // THE ROW GROUNDS: the selected fleet row is `--accent-tint`, a hovered one
+  // `--bg-hover`, and both keep the meta's status texts and lane hues on them.
+  // Pressed bounds hover for a neutral ink, which is why only the dead text
+  // (the session menu's danger row, the one coloured ink on a pressed
+  // primitive) takes it as a ground too.
+  const ROW = [t['--accent-tint'], t['--bg-hover']];
 
   // Status: the DOT is a 3:1 non-text mark on surface / page / well; the TEXT
   // is 4.5 on surface. They are separate tokens because they are separate
@@ -547,7 +566,7 @@ function build(seed) {
     3, f ?? up, 0.1, [0.8], [surface]);
   // The TEXT inks raised as well as surface (`.task-mark--running`,
   // `.code-block-lang`), and fades to 0.85 on a card.
-  const text = (k, g) => fit(`${name} ${k} text`, hues[k], g ?? [surface, page, raised],
+  const text = (k, g) => fit(`${name} ${k} text`, hues[k], [...(g ?? [surface, page, raised]), ...ROW],
     4.5, up, 0.3, [0.85], [surface]);
 
   t['--status-busy'] = dot('busy');       t['--status-busy-text'] = text('busy');
@@ -558,7 +577,7 @@ function build(seed) {
   t['--status-dead'] = dot('dead');
   t['--status-dead-tint'] = `color-mix(in srgb, ${hues.dead} 12%, transparent)`;
   t['--status-dead-tint-solid'] = over(hues.dead, 0.12, surface);
-  t['--status-dead-text'] = text('dead', [surface, page, t['--status-dead-tint-solid']]);
+  t['--status-dead-text'] = text('dead', [surface, page, t['--status-dead-tint-solid'], t['--bg-pressed']]);
   // THE DANGER BUTTON'S INK (D-5099): the label on a fill of the dead dot.
   // Picked, not fitted: the first of near-black and white (in that order on a
   // dark palette, the other on a light one, as `--ink-on-accent` is) that
@@ -582,7 +601,7 @@ function build(seed) {
   for (const k of ['cyan', 'violet', 'blue', 'magenta', 'amber', 'green']) {
     const tint = over(hues[k], dark ? 0.18 : 0.16, surface);
     t[`--acct-${k}-tint`] = tint;
-    t[`--acct-${k}`] = fit(`${name} acct-${k}`, hues[k], [tint, surface], 4.5, up, 0.3);
+    t[`--acct-${k}`] = fit(`${name} acct-${k}`, hues[k], [tint, surface, ...ROW], 4.5, up, 0.3);
   }
 
   t['--limit-track'] = edge(0.03);
