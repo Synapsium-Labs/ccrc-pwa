@@ -2973,7 +2973,7 @@ describe('deploy.sh refuses what it cannot measure: the prune KEEP and the sweep
    *  then runs it with `bash -c` under the fixture HOME, so `cd ~/ccrc-backups`, the listing and the delete act on
    *  three timestamped directories and one hand-made one, and the rows read what is left. */
   const STAMPS = ['20261001-010101', '20261002-020202', '20261003-030303'];
-  const runPruneOnDisk = (keep: string, dirs: string[] = STAMPS, ts = '20270101-000000', links: string[] = []): { code: number; stderr: string; remote: string | null; left: string[]; outside: string[] } => {
+  const runPruneOnDisk = (keep: string, dirs: string[] = STAMPS, ts = '20270101-000000', links: string[] = [], files: string[] = []): { code: number; stderr: string; remote: string | null; left: string[]; outside: string[] } => {
     const fn = /prune_backups\(\) \{([\s\S]*?)\n\}/.exec(deploySh);
     expect(fn, 'deploy.sh has no prune_backups() helper').toBeTruthy();
     const home = mkTmp('ccrc-agent-prunedisk-');
@@ -2982,6 +2982,7 @@ describe('deploy.sh refuses what it cannot measure: the prune KEEP and the sweep
     const outside = path.join(home, 'outside');   // what a planted link points at, beside the backups dir
     mkdirSync(path.join(outside, 'server-dist'), { recursive: true });
     for (const l of links) symlinkSync(outside, path.join(backups, l));
+    for (const f of files) writeFileSync(path.join(backups, f), 'a plain file, not a backup\n');
     const rec = path.join(home, 'remote');
     const script = [
       `ssh_stub() { printf '%s' "$2" > ${JSON.stringify(rec)}; bash -c "$2"; }`,
@@ -3029,6 +3030,17 @@ describe('deploy.sh refuses what it cannot measure: the prune KEEP and the sweep
     expect(r.stderr).toBe('');
     expect(r.left, 'the real backup was removed in the link\'s place').toEqual([real, link, 'pre-flip-hand-made']);
     expect(r.outside, 'the link\'s target was touched').toEqual(['server-dist']);
+  }, 30_000);
+
+  it('D3e: a timestamp-named plain file is not a backup either, so a newer one never takes a newest-N slot and costs a real backup its place (D-5319)', () => {
+    // `ls -d` lists a file as it lists a directory, so at KEEP=1 a file named newer than the one real backup held the
+    // single slot and `head` handed the real backup to `rm -rf`. The lister tests `-d`, so a file is never listed.
+    const real = '20250101-000000';
+    const file = '20250102-000000';
+    const r = runPruneOnDisk('1', [real], '20270101-000000', [], [file]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stderr).toBe('');
+    expect(r.left, 'the real backup was removed in the file\'s place').toEqual([real, file, 'pre-flip-hand-made']);
   }, 30_000);
 
   it('D3d: the prune never removes this run\'s own $TS directory, even when the box\'s clock is ahead of the deploying machine\'s (D-5326)', () => {
