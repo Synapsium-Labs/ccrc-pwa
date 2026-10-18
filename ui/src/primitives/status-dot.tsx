@@ -68,13 +68,21 @@ const DOT: Record<
   dead: { tone: 'dead', label: 'not running', glyph: '✕' },
 };
 
+/** A SLEEPING session's dot (D-5242; the prop is `wake-on-open-surfaces`, D-5430): its bucket stays `dead` on the wire (no new bucket member), but nothing went
+ *  wrong, so it is matte idle ink, never the dead tone, with its own word and glyph. U+25CC, the dotted circle: the
+ *  same Geometric Shapes block as `◐` and `○` above, and a ring that is "not there right now" rather than `✕`. */
+const ASLEEP = { tone: 'idle', label: 'hibernated', glyph: '\u25CC' } as const;
+
 export interface StatusDotProps {
   status: SessionBucket;
+  /** The app's answer to "is this `dead` row asleep?" (D-5242). Only a `dead` dot reads it: any other bucket is awake
+   *  whatever a stale flag says. This package must not know how the app decides it, so it is a prop. */
+  asleep?: boolean;
   className?: string;
 }
 
-export function StatusDot({ status, className }: StatusDotProps): ReactNode {
-  const dot = DOT[status];
+export function StatusDot({ status, asleep = false, className }: StatusDotProps): ReactNode {
+  const dot = asleep && status === 'dead' ? ASLEEP : DOT[status];
   return (
     <span
       className={cn(dotVariants({ tone: dot.tone }), className)}

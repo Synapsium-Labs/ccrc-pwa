@@ -400,9 +400,9 @@ _hook_graph_card() {
 # see "IT SETS CT_V AND NEVER PRINTS" below) AND BOUNDED — `$(<f)` read the
 # WHOLE file before the trim ever ran, so one 2 MB peer `.project` took the
 # probe from 5 ms to 759 ms and one 8 MB file to 3.3 s (fix round 1, finding
-# 2); `-N` caps the bytes this function ever holds regardless of how large the
-# file on disk is (re-measured after the fix: the same 2 MB and 8 MB files
-# both read back in ~3 ms).
+# 2); `-N` caps the bytes HELD, not scanned: those 2 MB and 8 MB files read back
+# in ~3 ms, but bash does not count the NULs it drops, so a same-user sparse NUL
+# file is scanned at its apparent size (100 MiB ~1.8 s; a fork would close it: D-5065).
 #
 # THE BOUND IS `CCRC_ID_MAX` (128), NOT `CCRC_PROJ_MAX` (64), though every
 # caller today reads either a `.project` field (bound by `CCRC_PROJ_MAX`) or a
@@ -434,8 +434,8 @@ _hook_graph_card() {
 # treats the same as a genuinely empty field.
 #
 # A NUL byte in the file is still silently dropped — bash variables cannot
-# hold one, full stop, and no fork-free mechanism here can detect one was
-# ever there. What changes is that `read` does this WITHOUT bash's `$(<f)`
+# hold one, full stop, and _ct_read cannot tell one was there (the card reader's
+# bounded `read -d ''` probe can, D-5063). What changes is that `read` does this WITHOUT bash's `$(<f)`
 # warning (measured: zero stderr on `al\0pha`). The narrow "unsafe" divergence
 # finding 1 named — the byte-preserving server groups `al\0pha` on its own,
 # this hook groups the NUL-stripped `alpha` — is UNCHANGED and accepted:
@@ -450,12 +450,12 @@ _hook_graph_card() {
 #
 # The trim reproduces the server's own `field()` (`server/src/registry.ts:378`
 # does `content.trim()`), so the hook and the server group rows the same way.
-_ct_read() {   # <path> -> CT_V ; rc 0 read, 1 absent, 2 unmeasurable
-  CT_V=""
+_ct_read() {   # <path> -> CT_V CT_RAWN ; rc 0 read, 1 absent, 2 unmeasurable
+  CT_V=""; CT_RAWN=$CCRC_ID_MAX
   [[ -e "$1" ]] || return 1
   [[ -f "$1" && -r "$1" ]] || return 2
   IFS= read -r -N "$CCRC_ID_MAX" CT_V 2>/dev/null < "$1"
-  CT_V="${CT_V#"${CT_V%%[![:space:]]*}"}"; CT_V="${CT_V%"${CT_V##*[![:space:]]}"}"
+  CT_RAWN=${#CT_V}; CT_V="${CT_V#"${CT_V%%[![:space:]]*}"}"; CT_V="${CT_V%"${CT_V##*[![:space:]]}"}"
   return 0
 }
 
@@ -1512,7 +1512,7 @@ _hook_compact_pre() {
     --labels "$GM_CWD/graphify-out/.graphify_labels.json" \
     --set-stage "$setstage" --card-stage "$cardstage" \
     --parent-live "$CS_PARENT_LIVE" --live-agents "$CS_LIVE_N" \
-    --max-chars "$COMPACT_CARD_MAX_CHARS" --max-files "$COMPACT_WORKSET_MAX" \
+    --max-chars "$(( COMPACT_CARD_MAX_CHARS - ${HISTORY_CARD_RESERVE:-0} ))" --max-files "$COMPACT_WORKSET_MAX" \
     --built "$GM_BUILT" --fresh "$GM_FRESH" --scope "$CS_SCOPE" --at "$at" --nonce "$nonce" \
     ${CS_AGENT:+--agent "$CS_AGENT"} >/dev/null 2>&1
   helper_rc=$?
@@ -2879,7 +2879,130 @@ DSP_DEFS='def maxline: 4096; def maxlabel: 128; def maxpath: 512; def isid: type
 { read -r event; read -r psid; read -r paid; read -r aid; read -r dsp_bucket; read -r dsp_cut; read -r dsp_cwd; read -r dsp_line; } < <(jq -r --arg sid "$id" --arg gen "$dsp_gen" --arg ver "$dsp_ver" 'def keep(f): explode | map(select(f)) | implode; def alpha: (. >= 65 and . <= 90) or (. >= 97 and . <= 122); def idch: alpha or (. >= 48 and . <= 57) or . == 95 or . == 45; def idmax: 64; '"$dsp_defs"'(.hook_event_name // "" | tostring | keep(alpha)), (.session_id // "" | tostring | keep(idch)), (if ((.agent_id // "") | tostring | length) > 0 then "1" else "" end), (.agent_id | if type == "string" and length >= 1 and length <= idmax and (explode | all(idch)) then . else "" end)'"$dsp_out" <<<"$payload" 2>/dev/null) || exit 0   # no regex builtin: every event runs it, and a jq built without Oniguruma (an optional build dependency) must not skip the write. The first four lines are the cleaned event, session id, any-agent-id flag and raw agent id; the last four are the delegation spool's bucket, prune cutoff, listing cwd and line, all empty when no line is due
 [[ -n "$event" ]] || exit 0
 
-state="" ask_json="null" interrupted="false" src="" gcmd="" stopfail="" bg="-1" bgk="" bgi="" err="" hts="" msid="" sessend=""
+# ── THE HISTORY CARD LINE (ccrc history spec 2026-10-05 §8.6, W1-B3) ─────
+# One line folded into the compact subject of SessionStart(compact)'s one
+# envelope, `History: node L…… (this compaction)[ · parent N……] ·
+# ~/.local/bin/ccrc history describe L…`, naming the leaf this compaction is
+# about to become. SessionStart(compact) runs before PostCompact and before the
+# indexer can have seen the boundary, so the line is ccd-history-sweep's
+# PREDICTION, `card/<id>/<uuid>.txt`: written only at end-of-file, deleted when
+# the boundary that consumed it is ingested. This hook only reads it, and
+# writes no receipt: delivery is measured from the transcript
+# (D-4737 (history-card-measured-from-transcript)).
+#
+# DEFINED HERE, ABOVE THE `case`: the SessionStart arm calls it, and the arm runs
+# inside the case, before the tail. This block is the ONE sanctioned insertion
+# above README's anchor into this file (the emitter call in the SessionStart
+# arm); README re-points that anchor by content (D-4748 (history-card-reader-above-the-arm)).
+#
+# BUILTINS ONLY: no command substitution and no external command, because the
+# compact card's serve lock may still be held when the arm calls this. `_ct_read`
+# is a builtin `read -N` that sets CT_V. The clock is EPOCHREALTIME, read ONCE
+# into `t` (each expansion reads the clock anew, so two reads could straddle a
+# second: the spool block's rule), and without it no line is served (never a
+# `date` fork). `$(( ))` is arithmetic, not a fork.
+#
+# THE CHECKS, in the spec's order (§8.6):
+#   1. the main thread (`$paid` empty);
+#   2. history-off absent;
+#   3. the id within SPOOL_ID_MAX, and a lowercase-UUID psid (the file's key).
+#      `.` and `..` need no test of their own: under scope/ and card/ they name
+#      directories, which `_ct_read` and `[[ -f ]]` refuse;
+#   4. recall-off/<id>, honoured only when it names THIS family's generation
+#      (B2's D-4680 (history-recall-off-generation)): CCRC_SESSION_GENERATION when it has the
+#      UUID grammar, else `$REG/<id>.generation` when it does, else the record
+#      the sweep wrote beside this prediction, card/<id>/<psid>.gen: the id's
+#      newest family's generation, '' for a legacy family or none, which is what
+#      B2's CLI compares with then (coordinator ruling R-recalloff-parity). The record
+#      is used ONLY when `.generation` is absent or empty (D-5063): a linked, unreadable,
+#      full-window, NUL-holding (a bounded `read -d ''` finds it; one after a broken UTF-8 byte fails the grammar instead) or non-UUID one is unusable, and a recall-off file that exists then
+#      withholds the line, as with a missing, linked, unreadable, malformed, NUL-holding or full-window record (one probe finds both)
+#      (fail closed). It is read the way B2's CLI reads it, so the card and `ccrc history`
+#      never put one family in two eval arms: a symlink, a non-file or an unreadable file
+#      is OFF (D-4749 (history-card-recall-off-unreadable-off)). The read is CCRC_ID_MAX
+#      chars where the CLI's is 4,096 bytes, so a read that FILLS the window is
+#      OFF before it is trimmed: a hand edit that pads the file past it withholds
+#      the line, never serves one the CLI answers exit 8 for (W2's verb writes
+#      37 bytes). A named fail-closed row (coordinator ruling
+#      R-recalloff-trim): this trim, and the generation reads' (they test the NUL probe's raw read, never `_ct_read`'s [:space:] class, which differs between C libraries, and each probe seeds `x` with a non-grammar value, so a probe that could not open its file withholds: D-5064), take ASCII whitespace only, in every
+#      locale, where the CLI's JS trim also strips U+00A0, U+FEFF and the
+#      Unicode spaces, so a value that still holds a character outside the
+#      generation grammar (empty, or [0-9a-f-]) withholds the line: it may
+#      withhold where the CLI recalls, never serve where the CLI exits 8;
+#   5. the PreCompact scope marker reads `main <psid> <ms>`, the ms no older than
+#      COMPACT_CARD_MAX_AGE (at most, D-5051) and not in the future (D-4747 (history-card-main-scope-only)); the read's own `|| return 0` is defence in depth (D-5056);
+#   6. one bounded read of the card file, a regular file only (a FIFO would
+#      block the read), at most HISTORY_CARD_MAX + 1 chars, ONE trailing LF
+#      stripped. The read's bound IS the 512-char cap: the grammar admits no
+#      line over 145 chars, so a separate length test would be one no input
+#      can reach, and this file does not spell guards nothing can trip. The
+#      tests are builtin; a node swapped in after the test is opened: a link is
+#      followed, a FIFO blocks until Claude Code kills the hook
+#      (install-session-hooks.sh HOOK_TIMEOUT_S), as the spool block says;
+#   7. the grammar, one positive pattern held in a variable;
+#   8. the room: line + LF + card within COMPACT_CARD_MAX_CHARS.
+# THE FOLD puts the line on its own line ABOVE the compact card, and only when it
+# fits, so the emitter's `${2:0:$COMPACT_CARD_MAX_CHARS}` clip never cuts the
+# card's footer; the render reserves the room in the tail
+# (D-4736 (history-card-fold-and-reserve)). The LF is a variable assigned outside the
+# quotes, because `$'\n'` inside `${…:+…}` is not expanded under `bash --posix`.
+# Nothing here touches COMPACT_SERVE_NONCE, so the line alone stamps no `served`.
+#
+# The four names below are this file's one spelling of the card's cap, grammar
+# and two directories, each bound to lib.mjs's CARD_LINE_MAX, CARD_LINE_PATTERN,
+# SCOPE_DIR and CARD_DIR by single-definition.test.ts; the tail derives the
+# reserve from the cap (D-4750 (history-hook-card-names-once)).
+HISTORY_CARD_MAX=512
+HISTORY_CARD_RE='^History: node L[0123456789abcdef]{6,20}… \(this compaction\)( · parent N[0123456789abcdef]{6,20}…)? · ~/\.local/bin/ccrc history describe L[0123456789abcdef]{6,20}$'
+HISTORY_SCOPE_DIR="$HOME/.ccrc/history/scope"
+HISTORY_CARD_DIR="$HOME/.ccrc/history/card"
+_hook_history_card() {   # folds the history line into CARD_COMPACT; silent; builtins only
+  local uuid_re='^[0123456789abcdef]{8}-[0123456789abcdef]{4}-[0123456789abcdef]{4}-[0123456789abcdef]{4}-[0123456789abcdef]{12}$'
+  local off="$HOME/.ccrc/history/recall-off/$id" gen="" via="" x="" o="" ms="" now="" t="" s="" f="" v="" nl=$'\n' ws=$' \t\n\v\f\r'
+  [[ -z "$paid" ]] || return 0
+  [[ -e "$HOME/.ccrc/history-off" ]] && return 0
+  (( ${#id} <= 224 )) || return 0
+  [[ "$psid" =~ $uuid_re ]] || return 0
+  if [[ "${CCRC_SESSION_GENERATION:-}" =~ $uuid_re ]]; then
+    gen="$CCRC_SESSION_GENERATION" via=session
+  elif _ct_read "$REG/$id.generation"; [[ -e "$REG/$id.generation" || -L "$REG/$id.generation" ]]; then
+    if [[ -L "$REG/$id.generation" ]] || (( CT_RAWN >= CCRC_ID_MAX )) || { x=.; IFS= read -r -d '' -n "$CCRC_ID_MAX" x 2>/dev/null < "$REG/$id.generation"; }; then via=bad; else x="${x#"${x%%[!$ws]*}"}"; x="${x%"${x##*[!$ws]}"}"; if [[ "$x" =~ $uuid_re ]]; then gen="$x" via=registry; elif [[ -n "$x" ]]; then via=bad; fi; fi
+  fi
+  [[ -L "$off" || -L "${off%/*}" || ( -e "${off%/*}" && ! ( -d "${off%/*}" && -x "${off%/*}" ) ) ]] && return 0
+  if [[ -e "$off" ]]; then
+    [[ -f "$off" && -r "$off" ]] || return 0
+    IFS= read -r -N "$CCRC_ID_MAX" o 2>/dev/null < "$off"
+    (( ${#o} < CCRC_ID_MAX )) || return 0
+    o="${o#"${o%%[!$ws]*}"}"; o="${o%"${o##*[!$ws]}"}"
+    [[ "$o" == *[!0123456789abcdef-]* ]] && return 0
+    if [[ "$via" == bad ]]; then return 0; elif [[ -z "$via" ]]; then
+      [[ -L "$HISTORY_CARD_DIR/$id/$psid.gen" ]] && return 0
+      _ct_read "$HISTORY_CARD_DIR/$id/$psid.gen" || return 0; { x=.; IFS= read -r -d '' -n "$CCRC_ID_MAX" x 2>/dev/null < "$HISTORY_CARD_DIR/$id/$psid.gen"; } && return 0; x="${x#"${x%%[!$ws]*}"}"; x="${x%"${x##*[!$ws]}"}"
+      [[ -z "$x" || "$x" =~ $uuid_re ]] || return 0
+      gen="$x"
+    fi
+    [[ "$o" == "$gen" ]] && return 0
+  fi
+  _ct_read "$HISTORY_SCOPE_DIR/$id" || return 0
+  [[ "$CT_V" == "main $psid "* ]] || return 0
+  ms="${CT_V#"main $psid "}"
+  [[ "$ms" =~ ^[123456789][0123456789]{0,15}$ ]] || return 0
+  t="${EPOCHREALTIME:-}"
+  [[ "$t" =~ ^[123456789][0123456789]{0,11}[.,][0123456789]*$ ]] || return 0
+  s="${t%%[.,]*}" f="${t#*[.,]}000"
+  now=$(( s * 1000 + 10#${f:0:3} ))
+  (( now >= ms && now - ms <= COMPACT_CARD_MAX_AGE * 1000 )) || return 0
+  f="$HISTORY_CARD_DIR/$id/$psid.txt"
+  [[ -f "$f" ]] || return 0
+  IFS= read -r -N "$(( HISTORY_CARD_MAX + 1 ))" v 2>/dev/null < "$f"
+  v="${v%"$nl"}"
+  [[ "$v" =~ $HISTORY_CARD_RE ]] || return 0
+  (( ${#v} + 1 + ${#CARD_COMPACT} <= COMPACT_CARD_MAX_CHARS )) || return 0
+  CARD_COMPACT="$v${CARD_COMPACT:+$nl$CARD_COMPACT}"
+  return 0
+}
+
+state="" ask_json="null" interrupted="false" src="" gcmd="" stopfail="" bg="-1" crons="-1" bgk="" bgi="" err="" hts="" msid="" sessend=""
 case "$event" in
   UserPromptSubmit) state="working" ;;
   PostToolUse)
@@ -3026,7 +3149,7 @@ case "$event" in
     # describes the compacted context and nothing else, so startup, resume
     # and clear never read the file. It is passed to the emitter SEPARATELY —
     # the standing three keep their clip, the card gets its own (D-1899).
-    [[ "$src" == compact ]] && { _hook_compact_card || true; }
+    [[ "$src" == compact ]] && { _hook_compact_card || true; _hook_history_card || true; }
     CARD="$CARD_GRAPH"
     [ -z "$CARD_HOLD" ] || CARD="${CARD:+$CARD }$CARD_HOLD"
     [ -z "$CARD_ROLE" ] || CARD="${CARD:+$CARD }$CARD_ROLE"
@@ -3055,14 +3178,24 @@ case "$event" in
     # `NON_DELEGATING_TASK_KINDS` and `TERMINAL_TASK_STATUSES` (`shared/api.ts`), held equal by
     # `session-hook-background.test.ts`, which iterates over the TypeScript lists: a task counts unless its CLEANED kind
     # is one of the six, or its status is one of the three terminal words; an unseen kind or status counts.
-    { read -r bg; read -r bgk; read -r bgi; read -r bgd; read -r bgdk; } < <(jq -r '(if (.background_tasks|type) == "array" then .background_tasks else null end) as $a | def kind: (.type | if type == "string" then ascii_downcase | gsub(" "; "-") | gsub("[^a-z_-]"; "") else "" end); [$a[]? | objects | select((kind | IN("shell", "monitor", "mcp-task", "dream", "auto-mode-scan", "memory-import")) | not) | select((.status | IN("completed", "failed", "killed")) | not) | kind] as $d | [(if $a == null then -1 else ($a|length) end), ([$a[]? | objects | kind | select(length > 0)] | join(",")), ([$a[]? | objects | .id | strings | select(test("^[A-Za-z0-9_-]{1,64}\\z"))] | .[0:8] | join(",")), (if $a == null then -1 else ($d|length) end), ($d | map(select(length > 0)) | unique | join(","))] | .[]' <<<"$payload" 2>/dev/null)
+    { read -r bg; read -r bgk; read -r bgi; read -r bgd; read -r bgdk; read -r crons; } < <(jq -r '(if (.background_tasks|type) == "array" then .background_tasks else null end) as $a | def kind: (.type | if type == "string" then ascii_downcase | gsub(" "; "-") | gsub("[^a-z_-]"; "") else "" end); [$a[]? | objects | select((kind | IN("shell", "monitor", "mcp-task", "dream", "auto-mode-scan", "memory-import")) | not) | select((.status | IN("completed", "failed", "killed")) | not) | kind] as $d | [(if $a == null then -1 else ($a|length) end), ([$a[]? | objects | kind | select(length > 0)] | join(",")), ([$a[]? | objects | .id | strings | select(test("^[A-Za-z0-9_-]{1,64}\\z"))] | .[0:8] | join(",")), (if $a == null then -1 else ($d|length) end), ($d | map(select(length > 0)) | unique | join(",")), (if (.session_crons|type) == "array" then (.session_crons|length) else -1 end)] | .[]' <<<"$payload" 2>/dev/null)
     # The pair reaches the hookstate only from an ARRAY (bg not -1) and as a plain count; anything else writes neither.
+    # `hibernate-long-idle-sessions` (D-5242): line six is `crons`, the length of `session_crons` (session-scoped crons and wakeups, which no live word, background list or roster shows), -1 unless it is an ARRAY; only the marker reads it.
+    [[ "$crons" =~ ^[0-9]+$ ]] || crons=-1
     [[ "$bg" =~ ^[0-9]+$ && "$bgd" =~ ^[0-9]+$ ]] || { bgd="" bgdk=""; } ;;
   StopFailure) stopfail=1; err=$(jq -r '(.error // "") | tostring | gsub("[^a-z_]"; "") | .[0:64]' <<<"$payload" 2>/dev/null) ;;
   SessionEnd) sessend=1 ;;   # delegation broker §5.3: a termination HINT only — captured below in a -hookcap session, otherwise inert (no hookstate, no marker)
   SubagentStart|SubagentStop) state="" ;;   # subagent-set update only
   *) exit 0 ;;
 esac
+# THE HISTORY SCOPE MARKER, FAIL-CLOSED (ccrc history spec 2026-10-05 §5.1,
+# W1-B3): a main-thread PreCompact empties this id's existing marker HERE, before
+# any exit below can run, and the `history-scope` block after the compaction
+# card's call writes only a decided verdict. So a hookstate write or a jq that
+# fails, or a verdict nobody reached, leaves an EMPTY marker, never an older
+# fresh `main` one for a subagent (spec §5.1, "The early truncation").
+# Builtins only; no file is made; only a regular non-link file in a non-link scope/.
+[[ "$event" == PreCompact && -z "$paid" ]] && [[ -f "$HISTORY_SCOPE_DIR/$id" && ! -L "$HISTORY_SCOPE_DIR/$id" && ! -L "$HISTORY_SCOPE_DIR" ]] && { : > "$HISTORY_SCOPE_DIR/$id"; } 2>/dev/null
 # THE CAPTURE ARM (worker stall watch §5.1's first task; capture-arm-keyed-on-hookcap (D-3612),
 # capture-arm-is-permanent (D-3613), capture-file-carries-a-meta-line (D-3669)). Only a session whose
 # ccd id ends `-hookcap` pays more than this one test. Every registered event that
@@ -3091,7 +3224,12 @@ fi
 # THE TURN MARKER (worker stall watch, spec §5.1): `$REG/<id>.turn.json`, one JSON
 # line that the stall lane and the mail gate read. It is written HERE, below the
 # case, because README anchors this file at :2900 and nothing new may land above
-# that line (marker-logic-in-the-tail (D-3615)).
+# that line (marker-logic-in-the-tail (D-3615)). ONE SANCTIONED EXCEPTION since
+# ccrc history W1-B3: `_hook_history_card` and its four constants sit above the
+# `case`, because the SessionStart arm calls the function before the tail runs.
+# README's anchor moved with them and was re-pointed by content, so ":2900" here
+# reads "README's anchor": the emitter call in the SessionStart arm, found by
+# its text (D-4748 (history-card-reader-above-the-arm)). The rule itself stands.
 #
 # WHO WRITES: main-thread events only. A subagent's event is one whose `agent_id`
 # has a QUALIFYING JOIN: a SubagentStart for that id, recorded in THIS owner's join
@@ -3129,6 +3267,7 @@ fi
 # half an alias or a trailing comma, which the reader refuses
 # (alias-list-fits-whole-aliases (D-3658)). `fiti` keeps at most 8 ids.
 # restart: a same-session done moves bg* into lost* (a union, lost-kinds-accumulate (D-3660)); clear: a fresh line.
+# `crons` (D-5242): set on done, carried on every other kind for the same session, -1 on clear and for a foreign line.
 TURN_MARK_PROGRAM='
 def csv: split(",") | map(select(length > 0));
 def fitk: reduce .[] as $k (""; if (length + (if length > 0 then 1 else 0 end) + ($k|length)) <= 200 then (if length > 0 then . + "," + $k else $k end) else . end);
@@ -3146,21 +3285,23 @@ def fiti: .[0:8] | join(",");
    restartAt: (if $same then $p.restartAt else null end),
    lostBg: (if $same then ($p.lostBg // 0) else 0 end),
    lostKinds: (if $same then ($p.lostKinds // "") else "" end),
-   lostIds: (if $same then ($p.lostIds // "") else "" end)} as $b
+   lostIds: (if $same then ($p.lostIds // "") else "" end),
+   crons: (if $same then ($p.crons // -1) else -1 end)} as $b
 | if $kind == "working" then $b + {state: "working", turnAt: $at, lostBg: 0, lostKinds: "", lostIds: ""}
-  elif $kind == "done" then $b + {stopAt: $at, bg: $bg, bgKinds: ($bgk | csv | unique | fitk), bgIds: ($bgi | csv | fiti)}
+  elif $kind == "done" then $b + {stopAt: $at, bg: $bg, bgKinds: ($bgk | csv | unique | fitk), bgIds: ($bgi | csv | fiti), crons: $crons}
   elif $kind == "failed" then $b + {state: "failed", stopAt: $at, err: $err}
   elif $kind == "restart" then $b
     + (if $same and $p.state == "done" then {lostBg: (($p.lostBg // 0) + ([($p.bg // -1), 0] | max)), lostKinds: ((($p.lostKinds // "") + "," + ($p.bgKinds // "")) | csv | unique | fitk), lostIds: ((($p.lostIds // "") + "," + ($p.bgIds // "")) | csv | fiti)} else {} end)
     + {restartAt: $at, bg: 0, bgKinds: "", bgIds: ""}
-  elif $kind == "clear" then {v: 1, sessionId: $sid, state: "done", event: $ev, at: $at, turnAt: null, stopAt: null, bg: -1, bgKinds: "", bgIds: "", err: null, restartAt: null, lostBg: 0, lostKinds: "", lostIds: ""}
+  elif $kind == "clear" then {v: 1, sessionId: $sid, state: "done", event: $ev, at: $at, turnAt: null, stopAt: null, bg: -1, bgKinds: "", bgIds: "", err: null, restartAt: null, lostBg: 0, lostKinds: "", lostIds: "", crons: -1}
   else empty end'
 _hook_turn_mark() {   # <kind: working|done|failed|restart|clear> -> 0 written; 1 not written (never fatal)
   local kind="$1" mf="$REG/$id.turn.json" prev="" out
   [[ "$bg" =~ ^-?[0-9]+$ ]] || bg=-1
+  [[ "$crons" =~ ^-?[0-9]+$ ]] || crons=-1
   { IFS= read -r prev < "$mf"; } 2>/dev/null   # braces: a missing file's redirection error stays silent (D-1691)
   out=$(jq -cn --arg prev "$prev" --arg kind "$kind" --arg sid "$msid" --arg ev "$event" --argjson at "$hts" \
-    --argjson bg "$bg" --arg bgk "$bgk" --arg bgi "$bgi" --arg err "$err" "$TURN_MARK_PROGRAM" 2>/dev/null) || return 1
+    --argjson bg "$bg" --argjson crons "$crons" --arg bgk "$bgk" --arg bgi "$bgi" --arg err "$err" "$TURN_MARK_PROGRAM" 2>/dev/null) || return 1
   [[ -n "$out" ]] || return 1
   _hook_write_atomic "$mf" "turn-$hts" "$out"
 }
@@ -3262,7 +3403,8 @@ fi
 # ccd-history-sweep drains on its next tick. HERE, below the turn marker and
 # above the StopFailure exit and the hookstate write, so neither a failed
 # hookstate write nor compact-card-off can cost the line. Like the turn marker,
-# it is in the tail because nothing new may land above :2900.
+# it is in the tail because nothing new may land above README's anchor (the
+# emitter call in the SessionStart arm, found by content).
 #
 # BUILTINS ONLY, ON THE HOT PATH: no command substitution, no jq, no fork of
 # any kind — `_ct_read` is a builtin `read -N` that sets CT_V, so it is called
@@ -4502,6 +4644,92 @@ fi   # hs_skip
 # disk: each calls the helper under one locally resolved deadline, and the
 # state write must never wait on either. Nothing below prints — PostCompact's
 # whole output is a journal line on disk, and this file's contract is silence.
+# THE HISTORY CARD'S ROOM (ccrc history spec 2026-10-05 §8.6, W1-B3). The compact
+# card renders HISTORY_CARD_MAX + 1 chars short (`_hook_compact_pre`'s
+# `--max-chars` subtracts HISTORY_CARD_RESERVE), so the history line and its LF
+# always fit above it inside the one compact clip and never cost it its footer
+# (D-4736 (history-card-fold-and-reserve)). Only on PreCompact, and only when the sweep
+# has made card/ and history-off is absent: a box without history renders at
+# COMPACT_CARD_MAX_CHARS exactly as before. Builtin tests, the event first, so
+# no other event pays a stat. RESET FIRST, on every run (the `hcat` reset's
+# reasoning): an exported HISTORY_CARD_RESERVE must never shrink a card, and a
+# non-numeric one would abort the `$(( ))` under `set -u`.
+HISTORY_CARD_RESERVE=0
+[[ "$event" == PreCompact ]] && [[ -d "$HISTORY_CARD_DIR" ]] && [[ ! -e "$HOME/.ccrc/history-off" ]] && HISTORY_CARD_RESERVE=$(( HISTORY_CARD_MAX + 1 ))
+# `CS_SCOPE` is the compaction card's scope verdict, a plain global with no
+# initialiser. It is unset here, every run, so the history scope marker below
+# reads only a verdict THIS run reached, never one exported into the pane
+# (the `hcat` reset's reasoning).
+unset CS_SCOPE
 if [[ "$event" == PreCompact  ]]; then _hook_compact_pre  || true; fi
+# >>> history-scope (spec 2026-10-05 §5.1)
+# THE PRECOMPACT SCOPE MARKER (ccrc history spec 2026-10-05 §5.1, W1-B3):
+# ~/.ccrc/history/scope/<id> holds one line, `<scope> <psid> <ms>` (at most 64
+# bytes), which the SessionStart(compact) history card reads so its line reaches
+# a MAIN compaction only. A compacting subagent fires this hook with the
+# parent's session_id and no agent key, so this word is the one thing that
+# keeps the card line out of a subagent's context
+# (D-4747 (history-card-main-scope-only)).
+#
+# HERE, after `_hook_compact_pre`, because the card's verdict is reused
+# (D-4746 (history-scope-marker-after-card)). `CS_SCOPE` has no initialiser and this
+# file is `set -u`, so it is read only as `${CS_SCOPE+x}` / `${CS_SCOPE-}`:
+#   set, non-empty: the card's scope step ran, and its word is the marker's,
+#                   the card's overlap `ambiguous` included;
+#   set, empty:     scope answered rc 1, and nothing may be said;
+#   unset:          the card returned before scoping (compact-card-off, or a
+#                   failed payload read), so this block parses the payload and
+#                   runs `_hook_compact_scope` itself: the plain scope rule
+#                   decides, independent of compact-card-off.
+# `CS_SCOPE` is unset directly above the card's call, so a value exported into
+# the pane can never stand in for a verdict this run did not reach.
+#
+# AN UNDECIDED VERDICT WRITES NOTHING, AND THE MARKER IS ALREADY EMPTY: the
+# line directly below the event `case` emptied this id's existing marker on
+# this main-thread PreCompact, before any exit above could run
+# (spec §5.1, "The early truncation"). So a fresh `main` line an
+# earlier compaction of this psid wrote can never serve this one.
+#
+# GATES, builtins first and before any fork: PreCompact, the main thread
+# (`$paid`), the scope directory the sweep made, a real directory and never a
+# symlink (the hook never mkdirs; only db/ may link out of the history root),
+# and history-off absent. Then the id's bound (SPOOL_ID_MAX, as the spool block's;
+# `.` and `..` need no test of their own, since under scope/ they name
+# directories, which no write can open) and a lowercase-UUID psid (the card file
+# is keyed on it).
+#
+# A REGULAR FILE OR NOTHING, as the spool block's append (its D-4418 rule;
+# spec §5.1): the line DIRECTLY above the write
+# refuses a symlink, dangling or not, a FIFO and any other node, so a FIFO that
+# stands at scope/<id> when the test runs never blocks the `>` open. The tests
+# are builtin, here and on the early line below the event `case`, and bash has
+# no O_NOFOLLOW or O_NONBLOCK redirection, so what is left is a node swapped in
+# AFTER the test: it is opened, a link followed, a FIFO blocking until Claude
+# Code kills the hook (install-session-hooks.sh HOOK_TIMEOUT_S).
+#
+# PreCompact is off the hot path, so past the gates this block may
+# fork (one jq on the unset arm, the scope rule's finds, the clock). Every
+# redirection is under `{ …; } 2>/dev/null`, so nothing reaches stdout or
+# stderr, the unset arm's process-substitution read included
+# (D-5054 (history-scope-marker-hardening)). A hookstate write or a jq compose
+# that fails exits above, after the early line emptied any older marker, so it
+# leaves an empty marker or none: the fail-closed direction.
+_hook_history_scope() {   # -> scope/<id> = "<scope> <psid> <ms>" when decided; silent
+  local f="$HISTORY_SCOPE_DIR/$id" scope="" ms="" tp="" trig=""
+  (( ${#id} <= 224 )) || return 0
+  [[ "$psid" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || return 0
+  if [[ -z "${CS_SCOPE+x}" ]]; then
+    { { read -r tp; read -r trig; } < <(jq -r '(.transcript_path // "" | tostring), (.trigger // "auto" | tostring)' <<<"$payload" 2>/dev/null); } 2>/dev/null
+    _hook_compact_scope "$tp" "$trig" || true
+  fi
+  scope="${CS_SCOPE-}"
+  [[ -n "$scope" ]] || return 0
+  ms=$(_hook_epoch_ms)
+  [[ ! -L "$f" && ( -f "$f" || ! -e "$f" ) ]] || return 0
+  { printf '%s %s %s\n' "$scope" "$psid" "$ms" > "$f"; } 2>/dev/null
+  return 0
+}
+if [[ "$event" == PreCompact && -z "$paid" ]] && [[ -d "$HISTORY_SCOPE_DIR" && ! -L "$HISTORY_SCOPE_DIR" ]] && [[ ! -e "$HOME/.ccrc/history-off" ]]; then _hook_history_scope || true; fi
+# <<< history-scope
 if [[ "$event" == PostCompact ]]; then _hook_compact_post || true; fi
 exit 0

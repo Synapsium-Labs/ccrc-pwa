@@ -1501,6 +1501,10 @@ export interface TurnMark {
   readonly bg: number; readonly bgKinds: readonly string[]; readonly bgIds: readonly string[];
   readonly err: string | null; readonly restartAt: number | null;
   readonly lostBg: number; readonly lostKinds: readonly string[]; readonly lostIds: readonly string[];
+  /** D-5242: the last Stop's `session_crons` length (Claude Code's session-scoped crons and wakeups), −1 when that
+   *  Stop carried no array. NULL when the line has no such field (an older hook) or one this reader cannot judge —
+   *  absent, never 0, so hibernation's `scheduled` hold keeps such a session awake. Never condemns the line. */
+  readonly crons: number | null;
   /** `restartAt + RESTART_GRACE_MS` when that restart cut a turn short (`turnMarkGraceUntil`), else null. */
   readonly graceUntil: number | null;
 }

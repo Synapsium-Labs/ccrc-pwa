@@ -1,12 +1,14 @@
 /**
  * Every refusal word a route answers in `error`, and the ONE status each one
- * is answered with (D-5381, audit ticket #547, ARCH-11a). L0: type imports only.
+ * is answered with (D-5381, audit ticket #547, ARCH-11a). L0: type imports, and `SWAP_REFUSALS` (D-5242: its three
+ * codes key their rows below by the declaration, so no code is spelled a second time).
  *
  * `RouteRefusal` is the union of the refusal vocabularies the typed route
  * helpers already answered with — the claim door's (`ClaimRefusal`), the mail
  * ingress's (`MailRouteRefusal`, below), the update routes'
  * (`UpdateRouteError`) and the collect-lane door's (`CollectLaneRouteRefusal`,
- * below) — plus `GenericRefusal`, every other word a route sends as a literal
+ * below) — the swap route's (`SwapRefusal`, `SWAP_REFUSALS`: all three are 409s, D-5242 added `hibernated` and moved
+ * the route's swap refusals onto `refuseRoute`) — plus `GenericRefusal`, every other word a route sends as a literal
  * `error`. `REFUSAL_STATUS` is a `Record` over that union, so a word with
  * no status, or a status for no word, is a compile error, and a word cannot
  * carry two statuses. The runtime list is derived from it (`ROUTE_REFUSALS`),
@@ -39,7 +41,8 @@
  *     `refuseOversizedClaim`, not the table.
  */
 import type { ClaimRefusal } from './box-token.js';
-import type { CollectLaneRefusal, DoneRejectCode, MailRejectCode, RunRefuseCode, UpdateRouteError } from './api.js';
+import type { CollectLaneRefusal, DoneRejectCode, MailRejectCode, RunRefuseCode, SwapRefusal, UpdateRouteError } from './api.js';
+import { SWAP_REFUSALS } from './api.js';
 
 /** The mail codes a route answers in `error`. The done-authority codes travel
  *  as a run advance's `reject.code` and `undeliverable` is a delivery outcome;
@@ -67,7 +70,7 @@ export const GENERIC_REFUSALS = [
 ] as const;
 export type GenericRefusal = (typeof GENERIC_REFUSALS)[number];
 
-export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | CollectLaneRouteRefusal | GenericRefusal;
+export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | CollectLaneRouteRefusal | SwapRefusal | GenericRefusal;
 
 /** Each route refusal word's one status (D-5381). Measured from the sends on
  *  landing day, never chosen: changing one is a behaviour change. */
@@ -94,6 +97,7 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   'not-held': 409, 'not-remote': 409, 'not-seeded': 409, 'pool-mismatch': 409, 'run-closed': 409,
   'sweep-stopped': 409, 'unrouteable-record': 409, 'marker-still-controls': 409, 'conflict': 409,
   'incarnation-changed': 409,
+  [SWAP_REFUSALS.sessionBusy]: 409, [SWAP_REFUSALS.statusUnknown]: 409, [SWAP_REFUSALS.hibernated]: 409,
   // 413, 415, 429
   'oversize': 413, 'too-large': 413,
   'unsupported-type': 415,

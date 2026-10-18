@@ -1277,7 +1277,7 @@ The coordinator ruled F1 into the bar's class 3 and gave the wave its one fix ro
 **What changed** (three files: `server/test/containedTools.ts`, `server/test/ccrc-containment.test.ts`, this plan; `ccd/ccrc-api` and `deploy/notify.sh` are untouched):
 - **F1.** `cfg_ok` ran `! printf … | grep -qvE '…'`, so a grep that exited 2 (error) or 127 (not on PATH) counted as a pass and the config reached the real curl. It is now `printf … | grep -qvE '…'` followed by `[ $? -eq 1 ]`: a non-empty config passes only when grep exits exactly 1 (no line outside the rule). 0 (a line outside the rule), 2 and 127 all refuse. The regex is byte-identical.
 - **F2.** The docstring's PASSES bullet, the inline comment above `'cfg=; have_cfg=',` and Review Focus 3 now say what the front does with blank lines: `cfg=$(cat)` strips every trailing newline before the check, so a leading or interior blank line is refused, a trailing one passes, a config of only newlines is the empty config, and the real curl is re-fed the NORMALISED text (one trailing newline). The behaviour is unchanged: it carries no directive.
-- **F4.** D-4096's "Shipped" clause gives both counts: 5 for the baseline under an inherited xtrace, 4 for the T2-6 mutant. "Readings" (Reading 4) and the coordinator's ruling still quote the earlier "4 times"; they record what was said then and are left as written.
+- **F4.** D-4096's "Shipped" clause gives both counts: 5 for the baseline under an inherited xtrace, 4 for the T2-6 mutant. "Readings" (Reading 4) still quotes the earlier "4 times" and is left as written. The coordinator's ruling carries an aside that gives both counts (5 at baseline, 4 for the T2-6 mutant; see D-4096). The aside corrects a count and does not reshape the ruling, so it stays.
 
 **The audit** (every tool status the generated front's verdict rests on):
 - `cfg_ok`'s grep: FOLDED through `!`. FIXED (above), pinned by two rows, T1-16 and T1-18.
@@ -1288,7 +1288,7 @@ The coordinator ruled F1 into the bar's class 3 and gave the wave its one fix ro
 - `url_ok`'s record-pass `printf >> curl-front-passed`: it runs only after the check pass has accepted every argument, and its status decides nothing.
 - The re-feed `{ …printf; } | real -q "$@"; exit $?` and the final `exec`: the status is curl's own, passed through, not a verdict.
 
-**The new rows** (all in the front's describe, beside the R16 rows; each carries NO URL argument, so `allowed()` cannot refuse first and mask `cfg_ok`):
+**The new rows** (all in the front's describe, beside the R16 rows; the two F1 refusal rows carry NO URL argument, so `allowed()` cannot refuse first and mask `cfg_ok`, and the F2 pass row carries one, a loopback URL the allow-list admits):
 - a grep stub that exits 2, first on the row's PATH, on `HDR`: exit 97, the fake curl not run, `curl-poison` holding the argv record and not the config, `curl-front-passed` empty;
 - a PATH with `cat` only (a dir of one symlink) and NO grep, `/usr/bin:/bin` off it, on `url = "http://203.0.113.9/x"`: the same expectations;
 - a pass row on `HDR + '\n\n'`: exit 0, the real curl run with `-q` first and the argv unchanged, `fakeStdin()` equal to `HDR`.

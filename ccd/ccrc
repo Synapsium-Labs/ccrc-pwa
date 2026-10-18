@@ -892,7 +892,7 @@ PLIST
 
 # `systemctl --user enable --now` — install the unit AND start it now.
 # On launchd those are one verb (`bootstrap` both loads and, with RunAtLoad,
-# starts), which is why `_svc_enable` below is the same call minus the start:
+# starts), which is why `_svc_enable` below drops the start (and, on systemd, the reload):
 # a plist in ~/Library/LaunchAgents IS boot persistence, exactly as an enable
 # symlink is under systemd.
 _svc_enable_now() {   # <unit>
@@ -907,8 +907,8 @@ _svc_enable_now() {   # <unit>
   _svc_launchctl bootstrap "$d" "$(_svc_plist "$1")" 2>/dev/null
   _svc_launchctl kickstart "$d/$(_svc_label "$1")" >/dev/null 2>&1
 }
-_svc_enable() {   # <unit> — boot persistence only, no start
-  if [ "$CCD_OS" != darwin ]; then systemctl --user enable "$1" 2>/dev/null; return $?; fi
+_svc_enable() {   # <unit> — boot persistence only, no start, no reload
+  if [ "$CCD_OS" != darwin ]; then systemctl --user enable --no-reload "$1" 2>/dev/null; return $?; fi
   case "$1" in claude-session@*) _svc_write_session_plist "$1" || return 1 ;; esac
   _svc_launchctl enable "$(_svc_domain)/$(_svc_label "$1")" 2>/dev/null
   return 0
@@ -23802,15 +23802,17 @@ _uninst_cc_sessions() {
     echo "uninstall: ~/.cc-sessions: not present — nothing of ccrc's to remove there"
     return 0
   fi
+  # `child-deny.settings.json` is the box's one children's deny file (D-5299); this is its
+  # ONE remover (D-5392): `install-session-hooks.sh --remove` runs per account and leaves it.
   rm -f -- "$reg/session-hook.sh" "$reg/install-session-hooks.sh" "$reg/notify.sh" \
     "$reg/compact-card.mjs" \
     "$reg/install-coordinator-skill.sh" "$reg/install-worker-skill.sh" \
     "$reg/install-reviewer-skill.sh" "$reg/install-history-skill.sh" \
-    "$reg/install-graphify-skill.sh" \
+    "$reg/install-graphify-skill.sh" "$reg/child-deny.settings.json" \
     || _ccrc_die "removing ccrc's files under $reg failed"
   rm -rf -- "$reg/coordinator-skill" "$reg/worker-skill" "$reg/reviewer-skill" "$reg/history-skill" \
     || _ccrc_die "removing the skill trees under $reg failed"
-  echo "uninstall: ~/.cc-sessions: ccrc's own artifacts removed (hooks, notify, the four skill trees); the registry rows and operator switches stay"
+  echo "uninstall: ~/.cc-sessions: ccrc's own artifacts removed (hooks, notify, the children's deny file, the four skill trees); the registry rows and operator switches stay"
 }
 
 # ── _uninst_graphify_skills — the per-home graphify skill directories ─────

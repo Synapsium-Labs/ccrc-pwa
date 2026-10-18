@@ -25,6 +25,9 @@ const SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   stopId: ['demo-quiet-basin', 'pwa'],
   stopPair: ['claude', 'demo', 'pwa'],
   forget: ['claude-corp-demo'],
+  // D-5242: the dec rides after the one positional, as an unattended lane sends it; the bare `['hibernate']` grant
+  // admits it with no widening.
+  hibernate: ['demo-quiet-basin', { surface: 'agent', actor: 'sweep:hibernate', reason: null }],
   swap: ['demo-quiet-basin', 'claude2'],
   /** THE DELIBERATE CROSSING (account pools, spec §5.7). Three separate
    *  ENTRIES rather than an option on the three above — `start`/`enable`'s own
@@ -539,6 +542,7 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     stopId: ['stop', 'demo-quiet-basin', '--surface', 'pwa'],
     stopPair: ['stop', 'claude', 'demo', '--surface', 'pwa'],
     forget: ['forget', 'claude-corp-demo'],
+    hibernate: ['hibernate', 'demo-quiet-basin', '--surface', 'agent', '--actor', 'sweep:hibernate'],
     swap: ['swap', 'demo-quiet-basin', 'claude2'],
     // LEADING flag, before the positionals — the token order is
     // parse-load-bearing and it is the SAFE direction under version skew (spec

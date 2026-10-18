@@ -32,6 +32,7 @@ import { useProjectRows } from '../fleet/useProjectRows';
 import { useActionsSheet } from '../fleet/useActionsSheet';
 import { navigate } from '../lib/router';
 import { ackAll, acksSnapshot, FEED_ACK_KEY, isUnseenAt, prune, subscribeAcks } from '../lib/seen';
+import { raisesUnread } from '../lib/feed';
 import { ReapSheet } from '../session/ReapSheet';
 import { archivedSizeText, archivedSummary } from './ArchiveScreen';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
@@ -208,9 +209,10 @@ export function FleetScreen({
 
   // The feed's unread count, through the SAME comparison the bucket chips use
   // (seen.ts's isUnseenAt — see groupFleet.ts:30-44's pre-commitment). `acks`
-  // is already subscribed on this screen, so this costs one filter.
+  // is already subscribed on this screen, so this costs one filter. An `interrupt` record never counts
+  // (`raisesUnread`, D-5431): it is kept in Mail as a record, but every Escape the console sends writes one.
   const feed = useStore((s) => s.feed);
-  const unreadMail = feed.filter((ev) => isUnseenAt(FEED_ACK_KEY, ev.at, acks)).length;
+  const unreadMail = feed.filter((ev) => raisesUnread(ev) && isUnseenAt(FEED_ACK_KEY, ev.at, acks)).length;
 
   // The account-pool epoch/observed lag — a STALENESS signal, not a health
   // one (see the prop docs above). Rendered ONLY when both numbers are known

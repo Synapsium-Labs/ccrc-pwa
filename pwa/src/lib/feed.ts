@@ -99,3 +99,13 @@ export function interruptLine(e: NotifyEvent): string | null {
   if (b === null) return null;
   return b.outcome === 'sent' ? `⎋ interrupted · ${b.source}` : `⎋ not interrupted · ${b.source} · ${b.outcome}`;
 }
+
+/** D-5431 (`interrupt-rows-not-unread`, operator ruling 2026-10-18): whether a record counts as UNREAD. An `interrupt`
+ *  record stays in Mail as a record, but it never raises the mail door's count and its row is never marked unseen —
+ *  the console sends one on every Escape, and a count that rises each time the operator presses a key is noise. Only
+ *  that kind: every other record-only kind (`coord`, `update`, `queue`, `nudge`) counts as it always did. The ONE
+ *  predicate both readers use — FleetScreen's count and MailScreen's `data-unseen` — so the door and the rows it opens
+ *  onto never disagree. */
+export function raisesUnread(e: NotifyEvent): boolean {
+  return e.kind !== 'interrupt';
+}

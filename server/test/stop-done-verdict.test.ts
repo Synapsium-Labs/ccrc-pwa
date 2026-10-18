@@ -3,8 +3,11 @@ import {
   STOP_DONE_GRACE_MS, STOP_DONE_HOLDS, stopDoneVerdict, type StopDoneHold, type StopDoneInput, type StopDoneRow,
 } from '../src/stopDone.js';
 import { PRESENCE_TTL_MS } from '../../shared/api.js';
+import { HIBERNATE_AFTER_MS_DEFAULT, HIBERNATE_HOLDS } from '../src/coord/hibernate.js';
 
-// D-5370 (`stop-worker-at-run-done`): the pure verdict. Every hold has a case that answers `hold` with its own word
+// D-5370 (`stop-worker-at-run-done`): the pure verdict. Since Task 17b (stop-done-composes-hibernate (D-5427)) it
+// answers `hibernate`, never `stop`, and holds what hibernation holds and it lacked: `recent` (N, from the marker's
+// clock), `opted-out` and `scheduled` (`attached` is ccd's, at the act); `no-verb` replaces `no-surface`. Every hold has a case that answers `hold` with its own word
 // where the base input answers `stop`, so deleting a hold's line, or reordering it behind a later one that the case
 // does not trip, reds that case.
 
@@ -16,7 +19,9 @@ const row = (o: Partial<StopDoneRow> = {}): StopDoneRow => ({
   swapBlocked: null, substrate: null, bucket: 'idle', ...o,
 });
 
-const MARK_DONE = { ok: true, state: 'done', bg: 0 } as const;
+const HOUR = 60 * 60_000;
+const MARK_DONE = { ok: true, state: 'done', bg: 0, crons: 0, turnAt: NOW - 7 * HOUR - 60_000, stopAt: NOW - 7 * HOUR, restartAt: null } as const;
+const markAt = (o: Record<string, unknown>) => ({ ...MARK_DONE, ...o });
 const readLive = (o: Record<string, unknown>): StopDoneInput['live'] =>
   ({ kind: 'read', word: { ok: true, word: 'idle' }, turn: 'idle', mark: MARK_DONE, ...o }) as StopDoneInput['live'];
 
@@ -26,7 +31,8 @@ const base = (o: Partial<StopDoneInput> = {}): StopDoneInput => ({
     ok: true, last: { runId: 7, state: 'done', closedAt: NOW - STOP_DONE_GRACE_MS - 1 },
     openWorker: false, openClaimant: false, claim: false, mail: false, reviewing: false,
   },
-  viewer: false, sinceStartMs: PRESENCE_TTL_MS + 1, presenceTtlMs: PRESENCE_TTL_MS, surface: true,
+  viewer: false, sinceStartMs: PRESENCE_TTL_MS + 1, presenceTtlMs: PRESENCE_TTL_MS, verb: true, optedOut: false,
+  afterMs: HIBERNATE_AFTER_MS_DEFAULT,
   live: { kind: 'read', word: { ok: true, word: 'idle' }, turn: 'idle', mark: MARK_DONE },
   now: NOW, graceMs: STOP_DONE_GRACE_MS, ...o,
 });
@@ -35,8 +41,8 @@ const okStore = (o: Record<string, unknown>): StopDoneInput['store'] =>
   ({ ...(base().store as Extract<StopDoneInput['store'], { ok: true }>), ...o }) as StopDoneInput['store'];
 
 describe('stopDoneVerdict (D-5370)', () => {
-  it('a finished run\'s idle child, past the grace, with nothing holding it, is stopped — naming its run', () => {
-    expect(stopDoneVerdict(base())).toEqual({ act: 'stop', runId: 7 });
+  it('a finished run\'s idle child, past the grace, with nothing holding it, is put to sleep — naming its run and its idle time', () => {
+    expect(stopDoneVerdict(base())).toEqual({ act: 'hibernate', runId: 7, idleMs: 7 * HOUR });
   });
 
   it('with the live state unread and nothing else holding, it asks to measure — never a stop unmeasured', () => {
@@ -68,12 +74,15 @@ describe('stopDoneVerdict (D-5370)', () => {
     ['bucket', { row: row({ bucket: 'done' }) }],
     ['background', { row: row({ background: { count: 1, kinds: ['shell'] } }) }],
     ['roster', { row: row({ subagents: [{ name: 'a0000000000000001', startedAt: NOW }] }) }],
-    ['no-surface', { surface: false }],
+    ['no-verb', { verb: false }],
+    ['opted-out', { optedOut: true }],
     ['pane', { live: readLive({ word: { ok: false, reason: 'no-pane' } }) }],
     ['live-word', { live: readLive({ word: { ok: true, word: 'shell' } }) }],
     ['turn', { live: readLive({ turn: 'busy' }) }],
-    ['marker', { live: readLive({ mark: { ok: true, state: 'working', bg: 0 } }) }],
-    ['marker-background', { live: readLive({ mark: { ok: true, state: 'done', bg: 1 } }) }],
+    ['marker', { live: readLive({ mark: markAt({ state: 'working' }) }) }],
+    ['marker-background', { live: readLive({ mark: markAt({ bg: 1 }) }) }],
+    ['scheduled', { live: readLive({ mark: markAt({ crons: 1 }) }) }],
+    ['recent', { live: readLive({ mark: markAt({ stopAt: NOW - 5 * HOUR, turnAt: NOW - 5 * HOUR }) }) }],
   ];
 
   for (const [hold, o] of cases) {
@@ -88,7 +97,7 @@ describe('stopDoneVerdict (D-5370)', () => {
 
   it('a viewer is assumed for one presence TTL after the server starts (presence is never persisted)', () => {
     expect(stopDoneVerdict(base({ sinceStartMs: PRESENCE_TTL_MS - 1 }))).toEqual({ act: 'hold', reason: 'viewer' });
-    expect(stopDoneVerdict(base({ sinceStartMs: PRESENCE_TTL_MS }))).toEqual({ act: 'stop', runId: 7 });
+    expect(stopDoneVerdict(base({ sinceStartMs: PRESENCE_TTL_MS }))).toEqual({ act: 'hibernate', runId: 7, idleMs: 7 * HOUR });
   });
 
   it('every unmeasured live read holds as unmeasured — the live file, a missing config dir as pane, the turn verdict', () => {
@@ -115,7 +124,7 @@ describe('stopDoneVerdict (D-5370)', () => {
   });
 
   it('an empty roster does not hold; only a done run is a finished one (failed, abandoned and open states hold)', () => {
-    expect(stopDoneVerdict(base({ row: row({ subagents: [] }) }))).toEqual({ act: 'stop', runId: 7 });
+    expect(stopDoneVerdict(base({ row: row({ subagents: [] }) }))).toEqual({ act: 'hibernate', runId: 7, idleMs: 7 * HOUR });
     for (const state of ['failed', 'abandoned', 'merging', 'awaiting-review', 'closing', 'working', 'planned']) {
       expect(stopDoneVerdict(base({ store: okStore({ last: { runId: 7, state, closedAt: NOW - STOP_DONE_GRACE_MS - 1 } }) })))
         .toEqual({ act: 'hold', reason: 'not-done' });
@@ -124,14 +133,14 @@ describe('stopDoneVerdict (D-5370)', () => {
 
   it('the grace is measured from the run\'s close: exactly the grace past it stops', () => {
     expect(stopDoneVerdict(base({ store: okStore({ last: { runId: 7, state: 'done', closedAt: NOW - STOP_DONE_GRACE_MS } }) })))
-      .toEqual({ act: 'stop', runId: 7 });
+      .toEqual({ act: 'hibernate', runId: 7, idleMs: 7 * HOUR });
   });
 
   // Hibernation's own marker holds (spec §5.11, plan Task 17a): a finished turn whose last Stop listed nothing in the
   // background. A shell or a Monitor left running dies with the pane, and a row's `background` is null whenever its
   // hookstate aged out, so the marker is the only read that still sees it.
   it('a marker bg of -1 (the Stop could not say) holds as marker-background, like a positive count', () => {
-    expect(stopDoneVerdict(base({ live: readLive({ mark: { ok: true, state: 'done', bg: -1 } }) })))
+    expect(stopDoneVerdict(base({ live: readLive({ mark: markAt({ bg: -1 }) }) })))
       .toEqual({ act: 'hold', reason: 'marker-background' });
   });
 
@@ -140,12 +149,40 @@ describe('stopDoneVerdict (D-5370)', () => {
       expect(stopDoneVerdict(base({ live: readLive({ mark: { ok: false, reason } }) })))
         .toEqual({ act: 'hold', reason: 'marker' });
     }
-    expect(stopDoneVerdict(base({ live: readLive({ mark: { ok: true, state: 'failed', bg: 0 } }) })))
+    expect(stopDoneVerdict(base({ live: readLive({ mark: markAt({ state: 'failed' }) }) })))
       .toEqual({ act: 'hold', reason: 'marker' });
   });
 
   it('a stale hookstate (background null) with a marker that lists a background shell still holds', () => {
-    expect(stopDoneVerdict(base({ row: row({ background: null }), live: readLive({ mark: { ok: true, state: 'done', bg: 2 } }) })))
+    expect(stopDoneVerdict(base({ row: row({ background: null }), live: readLive({ mark: markAt({ bg: 2 }) }) })))
       .toEqual({ act: 'hold', reason: 'marker-background' });
+  });
+
+  // TASK 17b's absorbed holds (D-5427): what hibernation holds and this lane lacked.
+  it('a marker with no crons (an older hook) holds as scheduled; so does -1', () => {
+    for (const crons of [null, -1]) {
+      expect(stopDoneVerdict(base({ live: readLive({ mark: markAt({ crons }) }) }))).toEqual({ act: 'hold', reason: 'scheduled' });
+    }
+  });
+
+  it('recent is N from the marker\'s newest stamp, compactions never moving it: exactly N holds, N + 1 ms sleeps', () => {
+    const at = (ms: number) => readLive({ mark: markAt({ turnAt: NOW - ms, stopAt: NOW - ms }) });
+    expect(stopDoneVerdict(base({ live: at(HIBERNATE_AFTER_MS_DEFAULT) }))).toEqual({ act: 'hold', reason: 'recent' });
+    expect(stopDoneVerdict(base({ live: at(HIBERNATE_AFTER_MS_DEFAULT + 1) })))
+      .toEqual({ act: 'hibernate', runId: 7, idleMs: HIBERNATE_AFTER_MS_DEFAULT + 1 });
+    expect(stopDoneVerdict(base({ live: readLive({ mark: markAt({ restartAt: NOW - HOUR }) }) })), 'a restart moves the clock')
+      .toEqual({ act: 'hold', reason: 'recent' });
+    expect(stopDoneVerdict(base({ live: readLive({ mark: markAt({ turnAt: null, stopAt: null }) }) })), 'no stamp to age')
+      .toEqual({ act: 'hold', reason: 'recent' });
+    expect(stopDoneVerdict(base({ afterMs: 2 * HOUR, live: at(3 * HOUR) })), 'N is the operator\'s hibernate-after-hours')
+      .toEqual({ act: 'hibernate', runId: 7, idleMs: 3 * HOUR });
+  });
+
+  it('every hold this lane shares with hibernation is spelled in hibernation\'s words (the absorption)', () => {
+    const own = new Set(['not-a-child', 'child-unreadable', 'stopped', 'no-run', 'not-done', 'close-unplaced', 'grace',
+      'no-verb', 'turn', 'reviewing']);
+    const hib = new Set<string>(HIBERNATE_HOLDS);
+    expect(STOP_DONE_HOLDS.filter((h) => !own.has(h) && !hib.has(h))).toEqual([]);
+    expect(HIBERNATE_HOLDS.filter((h) => !(STOP_DONE_HOLDS as readonly string[]).includes(h)), 'every hibernation hold is the lane\'s too').toEqual([]);
   });
 });

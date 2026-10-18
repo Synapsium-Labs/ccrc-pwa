@@ -1315,6 +1315,53 @@ describe('the last process end (D-5237)', () => {
   });
 });
 
+// D-5242 (plan Task 17a): `$REG/<id>.hibernated` — `<epoch> <idle-hours>`, written by Task 16's `ccd hibernate` — is
+// read only when the listing names it, so a row that never slept pays nothing; its epoch becomes `hibernatedAt` (ms).
+describe('the hibernation marker (D-5242)', () => {
+  let home: string;
+  let reg: string;
+  beforeEach(() => {
+    home = mkTmp('ccrc-');
+    seedRoster(home);
+    reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    seed(reg, 'lane-a-project-a', {
+      uuid: 'a'.repeat(36), wrapper: 'claude', workdir: '/w', project: 'project-a',
+    });
+  });
+  const reads: string[] = [];
+  const countingIO: FleetIO = {
+    ...localIO,
+    readFile: async (p) => { if (p.endsWith('.hibernated')) reads.push(p); return localIO.readFile(p); },
+    readFileMeasured: async (p, t, s) => { if (p.endsWith('.hibernated')) reads.push(p); return localIO.readFileMeasured(p, t, s); },
+  };
+  const read = async () => (await readRegistry(countingIO, loadConfig({ CCRC_HOME: home })))[0]!;
+
+  it('a listed `.hibernated` gives hibernatedAt in epoch ms', async () => {
+    seed(reg, 'lane-a-project-a', { hibernated: '1785300000 7' });
+    expect((await read()).hibernatedAt).toBe(1785300000_000);
+  });
+  it('the idle hours may carry a fraction, and may be missing: the epoch is what is read', async () => {
+    for (const body of ['1785300000 6.5', '1785300000', '1785300000 7\n']) {
+      seed(reg, 'lane-a-project-a', { hibernated: body });
+      expect((await read()).hibernatedAt, JSON.stringify(body)).toBe(1785300000_000);
+    }
+  });
+  it('unlisted is null, and costs no read', async () => {
+    reads.length = 0;
+    expect((await read()).hibernatedAt).toBeNull();
+    expect(reads).toEqual([]);
+  });
+  it('a malformed body is null, and the row still parses', async () => {
+    for (const bad of ['', 'x', 'x 7', '-1 7', '1785300000.5 7', '1785300000 7 extra', '1785300000 seven', '0 7']) {
+      seed(reg, 'lane-a-project-a', { hibernated: bad });
+      const r = await read();
+      expect(r.id, JSON.stringify(bad)).toBe('lane-a-project-a');
+      expect(r.hibernatedAt, JSON.stringify(bad)).toBeNull();
+    }
+  });
+});
+
 // D-310, spec §2 (docs/superpowers/specs/2026-08-19-substrate-unreachable-design.md):
 // `$REG/<id>.substrate` is a supervisor's own "I could not reach tmux" record —
 // `<epoch-seconds> <verbatim reason>`, written by `_substrate_mark` on every

@@ -95,7 +95,8 @@ import {
   type FloorState, type ProjectRow, type ProjectPoolsWire, type ProjectPoolWire, type ProjectRepoWire,
   parseRouteFields, programKickoffVerdict, routeFieldsOrNull, routeParseDetail, type RouteFields,
 } from '../../shared/api.js';
-import { ARCHIVE_REFUSALS, SERVER_CAPS, interruptRouteSource, type SwapRefusal } from '../../shared/api.js';
+import { ARCHIVE_REFUSALS, SERVER_CAPS, SWAP_REFUSALS, interruptRouteSource, type SwapRefusal } from '../../shared/api.js';
+import { refuseRoute } from './refuse.js';
 import { DrawerInterruptThrottle, drawerInterruptSource, recordInterrupt } from './interruptlog.js';
 import type { Dialog } from '../../shared/api.js';
 import {
@@ -1759,7 +1760,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // below re-stamps the claim, and the client sends one every
     // PRESENCE_REFRESH_MS for exactly that reason (see Presence's own doc).
     const token = Symbol('viewer');
+    // D-5242's presence contract: the OPEN claim, stamped at connect and re-stamped by EVERY frame — before the frame
+    // is parsed, so even one that fails to parse proves the socket alive. A hidden tab beats too, and holds its session
+    // awake for `PRESENCE_OPEN_TTL_MS` after its last frame; `drop` at close removes both claims.
+    presence.markOpen(token, id);
     socket.on('message', (raw) => {
+      presence.touch(token);
       try {
         const m = asSessionClientMsg(JSON.parse(String(raw)));
         if (m !== null) presence.setVisible(token, m.visible ? id : null);
@@ -2767,6 +2773,13 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
 
   app.post('/api/sessions/:id/ensure', async (req, reply) => {
     const { id } = req.params as { id: string };
+    // D-5242: waking a hibernated row is an ASKED wake — never refused for the fleet-wide wake budget (the operator
+    // asked), but recorded in its window so the mail lane's automatic wakes do not land on top of it. Read from the
+    // listing alone; an unlistable registry records nothing and the call goes ahead exactly as before.
+    if (watcher?.admitWake !== undefined) {
+      const names = await deps.io.readdir(deps.cfg.registryDir);
+      if (names !== null && names.includes(`${id}.hibernated`)) watcher.admitWake('asked', id);
+    }
     return runCcdOr502(reply, CCD_ARGV.ensure(id));
   });
 
@@ -3262,6 +3275,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return reply.code(read.reason === 'unlistable' ? 503 : 404)
         .send({ ok: false, error: read.reason === 'unlistable' ? 'registry-unmeasurable' : 'unknown-session' });
     }
+    // D-5242: an ASLEEP row (`ccd hibernate`'s `.hibernated`) has no running session to move, on either arm and whatever
+    // the consent — and its turn reads `unmeasured`, which would answer the misleading `status-unknown`. Wake it first.
+    if (read.record.hibernatedAt !== null) return refuseRoute(reply, SWAP_REFUSALS.hibernated);
     if (!cross) {
       // The pool verdict is a best-effort early refusal: it avoids
       // queueing a swap that is already known to violate the pool rule. The
@@ -3286,7 +3302,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const turnRefusal = async (): Promise<SwapRefusal | null> =>
       swapTurnRefusal(await turnVerdictFor(turnReads, rec, identity.uuid), interrupt);
     const early = await turnRefusal();
-    if (early !== null) return reply.code(409).send({ ok: false, error: early });
+    if (early !== null) return refuseRoute(reply, early);
     const wrapper = body.wrapper;
     const argv: CcdArgv = cross
       ? (consentArgv ? CCD_ARGV.swapCrossInterrupt(id, wrapper) : CCD_ARGV.swapCross(id, wrapper))
@@ -3334,17 +3350,17 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // box-local case: it is what turns the auto-swap's keystroke loss into a
     // refusal instead of a false ok:true, and it is the only one of the two
     // halves that reaches it.
-    const res = await sendDeps.queue.run(id, async () => {
+    const res = await sendDeps.queue.run(id, async (): Promise<{ refused: SwapRefusal } | { ran: CcdResult }> => {
       const late = await turnRefusal();
       return late !== null ? { refused: late } : { ran: await deps.runCcd(argv) };
     });
-    if ('refused' in res) return reply.code(409).send({ ok: false, error: res.refused });
+    if ('refused' in res) return refuseRoute(reply, res.refused);
     if (res.ran.ok) return { ok: true };
     // ccd's own two refusals (D-5240: `cmd_swap`'s manual gate, after both reads above) are the same two 409s, so a
     // turn that began between the in-queue read and ccd's act reaches the operator as `session-busy` with its "swap
     // anyway". Every other ccd failure keeps the generic 502 with ccd's sentence.
     const ccdRefused = ccdSwapRefusal(res.ran.stderr);
-    if (ccdRefused !== null) return reply.code(409).send({ ok: false, error: ccdRefused });
+    if (ccdRefused !== null) return refuseRoute(reply, ccdRefused);   // `ccd: hibernated:` too (D-5242)
     return reply.code(502).send({ ok: false, stderr: res.ran.stderr });
   });
 

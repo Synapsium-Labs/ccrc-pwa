@@ -293,6 +293,11 @@ export interface FleetSession {
    *  key), which shows it for `LAST_END_SHOWN_MS`. ADDITIVE: no `FLEET_PROTO`
    *  bump. */
   lastEnd: LastEnd | null;
+  /** D-5242 (`hibernate-long-idle-sessions`): when `ccd hibernate` put this session to sleep, epoch MS, from
+   *  `$REG/<id>.hibernated` (read only when the registry listing names it). Null when it is not asleep, and on a
+   *  malformed marker. ADDITIVE: the row's lifecycle reads `stopped` and its bucket `dead` as for any deliberate stop
+   *  (no new `SessionBucket` member), and this field alone tells a sleeping session from one that is gone. */
+  hibernatedAt: number | null;
   /** How many graph READS this session has made — `hookstate.ts`'s
    *  `graphQueries`, carried through unchanged. ADDITIVE: no `FLEET_PROTO`
    *  bump, and an older peer that omits it revives as `null` below.
@@ -3260,6 +3265,9 @@ export function reviveFleetSession(raw: unknown, unnamedSpawnWord: UnnamedSpawnW
       // D-5237. Absent → null (an older snapshot predates the field);
       // malformed → null (`reviveLastEnd`); an unknown cause → `unknown`.
       lastEnd: reviveLastEnd(o, 'lastEnd'),
+      // D-5242. Absent → null: an older snapshot or server predates the field, and a session it did not know was
+      // asleep reads as the stopped row it showed then.
+      hibernatedAt: optNum(o, 'hibernatedAt'),
       // Absent → null, exactly as `optSubagents` degrades: a snapshot written
       // before this field existed is ignorant of the count, not a witness to
       // its being zero. Present-but-not-a-finite-number throws inside
@@ -4520,6 +4528,18 @@ export type SessionClientMsg = { type: 'visible'; visible: boolean };
  */
 export const PRESENCE_REFRESH_MS = 15_000;
 export const PRESENCE_TTL_MS = 45_000;
+/**
+ * The OPEN claim's lifetime (D-5242, spec §5.11's presence contract): how long the server believes a
+ * `/ws/session/:id` connection is still open after its last frame, visible or hidden. Every frame re-stamps it, and
+ * the client's heartbeat now beats whatever the visibility (`visible:false` while hidden, which `isVisible` reads
+ * exactly as before), so a hidden but running tab keeps its session from being put to sleep.
+ *
+ * Why it is so much longer than `PRESENCE_TTL_MS`: a browser throttles a hidden tab's timers, to about one wake-up a
+ * minute at the most, so the hidden beat arrives a minute apart rather than every `PRESENCE_REFRESH_MS`, and the claim
+ * must outlive several of those missed beats. A page the browser froze sends nothing, and its claim lapses after this
+ * long — the case the open screen's wake covers when the operator comes back.
+ */
+export const PRESENCE_OPEN_TTL_MS = 10 * 60_000;
 
 /** Wire protocol generation of the PWA↔server pair. Bump on a breaking
  *  wire change. FLEET_PROTO_MIN is the kill-switch: raise it above an
@@ -6044,7 +6064,7 @@ export const RUN_REFUSE_CODES: readonly RunRefuseCode[] = Object.keys(RUN_REFUSE
 export type MailGate =
   | 'same-sweep' | 'in-flight' | 'cooldown'
   | 'registry-absent' | 'registry-unmeasurable'
-  | 'tmux-gone' | 'session-dead' | 'tmux-unknown'
+  | 'tmux-gone' | 'session-dead' | 'tmux-unknown' | 'hibernated'   // D-5242: asleep, never parked — the mail lane wakes it
   | 'pending-ask' | 'no-pane' | 'no-config-dir'
   | 'not-idle' | 'not-quiet' | 'turn-mark-unreadable';
 
@@ -6054,7 +6074,7 @@ export type MailGate =
 const MAIL_GATE_MAP: Record<MailGate, true> = {
   'same-sweep': true, 'in-flight': true, cooldown: true,
   'registry-absent': true, 'registry-unmeasurable': true,
-  'tmux-gone': true, 'session-dead': true, 'tmux-unknown': true,
+  'tmux-gone': true, 'session-dead': true, 'tmux-unknown': true, hibernated: true,
   'pending-ask': true, 'no-pane': true, 'no-config-dir': true,
   'not-idle': true, 'not-quiet': true, 'turn-mark-unreadable': true,
 };
@@ -7620,7 +7640,7 @@ export type LifecycleAct =
                     // carry who and why, `detail` carries "<field>: <from> ->
                     // <to>" (no new dec key — the dec vocabulary is pinned at
                     // four). Additive on the wire, as every act is.
-  | 'start' | 'ensure' | 'swap' | 'enable' | 'stop' | 'forget'
+  | 'start' | 'ensure' | 'swap' | 'enable' | 'stop' | 'forget' | 'hibernate'   // `hibernate` (D-5242): `ccd hibernate`, a DELIBERATE stop of a long-idle session journalled before its own `unsupervise` row (surface `none`, which alone reads as a crash); its own act so the journal never needs a filter to tell a sleep from a stop; `ensure` wakes it
   | 'unarchive'     // a return verb's gate (wave 3b) or `_spawn_start` cleared
                     // an archive stamp because a pane was asked for. DISTINCT
                     // FROM `restore`: that is the deliberate way back; this is
@@ -7636,7 +7656,7 @@ const LIFECYCLE_ACT_MAP: Record<LifecycleAct, true> = {
   create: true, claim: true, purge: true, supervise: true, unsupervise: true,
   destroy: true, rename: true, hold: true, release: true, archive: true, restore: true,
   'attic-drop': true, reap: true, reclaim: true, expire: true, collect: true, rehome: true, gc: true, spawn: true, route: true, start: true, ensure: true,
-  swap: true, enable: true, stop: true, forget: true, unarchive: true,
+  swap: true, enable: true, stop: true, forget: true, hibernate: true, unarchive: true,
   unknown: true,
 };
 export const LIFECYCLE_ACTS: readonly LifecycleAct[] =
@@ -8319,7 +8339,7 @@ export type LcRefusalToken =
   | 'lock-unopenable'          // the reap lock could not be opened
   | 'is-a-workspace'           // forget, aimed at a workspace: use the audited path
   | 'session-live'             // forget, on a running session
-  | 'session-verdict-unknown'  // tmux did not answer: fail-shut, nothing removed
+  | 'session-verdict-unknown' | 'hibernated'  // tmux did not answer: fail-shut, nothing removed; `hibernated` (D-5242): forget on a sleeping row, wake or stop it first
   | 'spawn-failed'             // _lc_fail: the undo landed, the session did not come back
   | 'purge-refused'            // D-2605: the row's compaction mutex was unavailable, so the registry row stands
   | 'purge-incomplete'         // D-2605: the purge RAN — the row is gone, the fact is journaled — and something beside it would not unlink
@@ -8476,6 +8496,9 @@ export const LC_REFUSAL_WORD: Record<LcRefusalToken, string> = {
     'A workspace with this id, or what one left behind, still stands in the registry, so ccrc treats the temporary directory there as that workspace’s and will not clean it up. Nothing was removed; ccrc looks again once the id is free.',
   'changed-recently':
     'Something in this temporary directory changed recently, so ccrc leaves it alone for now. Nothing was removed; ccrc looks again once it has stayed unchanged long enough.',
+  // D-5242: a hibernated row is asleep, not dead — `ccd ensure` (or mail, a dispatch, a Restart) wakes it (D-5423).
+  'hibernated':
+    'This session is asleep, not gone: it wakes when it is opened, mailed or dispatched. Wake it (ccd ensure) or stop it (ccd stop) first. Nothing was removed.',
 };
 
 /** Derived from the map — the `PR_REASON_MAP` idiom, so a member added to the
@@ -8700,6 +8723,9 @@ export interface PeerSummary {
   readonly archivedAt: number | null;
   /** Stamped archived AND measured live this pass. */
   readonly archivedStale: boolean;
+  /** D-5242: `FleetSession.hibernatedAt`, epoch MS, or null when the peer is not asleep. ADDITIVE: an older server sends
+   *  none. A sleeping peer reads `deliverable: yes` — the mail lane wakes it. */
+  readonly hibernatedAt: number | null;
   /** The `.hold` text verbatim, or null — `FleetSession.held`'s contract. */
   readonly held: string | null;
   readonly intent: string | null;
@@ -9851,9 +9877,15 @@ export function archiveInterrupts(s: Pick<FleetSession, 'status' | 'bucket'>): b
  * workspace, no pane, and a stop stamp). A main checkout started again leaves the fold, because `cmd_start` and
  * `cmd_ensure` remove the stop stamp on the attempt; a stopped workspace that is not archived stays at the top level,
  * where Archive is offered again. `stoppedBy` is read `?? null`: the live frame is cast, not revived.
+ *
+ * A HIBERNATED main checkout (D-5242) is not in the fold: `ccd hibernate` leaves exactly the stopped-main-checkout
+ * shape (a stop stamp, no pane), but the row is asleep, not put away — it stays at the top level, where opening it
+ * wakes it. Only the second clause reads `hibernatedAt` (`?? null`, the same cast): an archived workspace stays in the
+ * fold whatever a stale `.hibernated` says.
  */
-export function inArchivedFold(s: Pick<FleetSession, 'bucket' | 'workspace' | 'status' | 'stoppedBy'>): boolean {
-  return s.bucket === 'archived' || (s.workspace === null && s.status === 'dead' && (s.stoppedBy ?? null) !== null);
+export function inArchivedFold(s: Pick<FleetSession, 'bucket' | 'workspace' | 'status' | 'stoppedBy' | 'hibernatedAt'>): boolean {
+  return s.bucket === 'archived'
+    || (s.workspace === null && s.status === 'dead' && (s.stoppedBy ?? null) !== null && (s.hibernatedAt ?? null) === null);
 }
 
 /** When a row entered the Archived fold, the fold's sort key (newest first): `bucketSince` for an archived workspace
@@ -10751,12 +10783,15 @@ export function parseInterruptEventBody(body: string): { source: InterruptSource
  *   - `sessionBusy` — a turn MEASURED in progress (the server's fail-closed `turnVerdictFor`, before the queue or
  *     inside it, or ccd after both). `{interrupt:true}` consents; the turn in progress and its background tasks are lost.
  *   - `statusUnknown` — nobody could read the turn. No consent covers it: stop the session first, then swap.
+ *   - `hibernated` (D-5242) — the row is asleep (`ccd hibernate`'s `.hibernated` stands): there is no running session to
+ *     move, and no consent covers it. Answered before any turn read, and ccd's own `ccd: hibernated:` maps to it too.
  *
  * Appended at the end of this file, like `ARCHIVE_REFUSALS`, so no line README or a contract cites moves.
  */
 export const SWAP_REFUSALS = {
   sessionBusy: ARCHIVE_REFUSALS.sessionBusy,
   statusUnknown: ARCHIVE_REFUSALS.statusUnknown,
+  hibernated: 'hibernated',
 } as const;
 export type SwapRefusal = (typeof SWAP_REFUSALS)[keyof typeof SWAP_REFUSALS];
 
@@ -11079,3 +11114,53 @@ export const DELEGATION_SPOOL_BOUNDS = {
   listingNames: 256,
   listingNameBytes: 64,
 } as const;
+
+/** The SAFETY-forbidden `ccd` verbs a dispatched child's deny file names (plan Task 15, D-5299): Task 12's
+ *  `FORBIDDEN_CCD_VERBS` (`server/src/coord/approvalguard.ts`), every one of which has a stable prefix, held equal to
+ *  it by `ccd-spawn-child-settings.test.ts`. One `|`-joined string, not eight quoted literals, for the reason that
+ *  list gives: the verb censuses count a quoted verb as a composer of it, and this list composes nothing. */
+const CHILD_DENY_CCD_VERBS: readonly string[] =
+  'ws-rm|ws-reap|ws-gc --prune|ws-archive|ws-restore|ws-reclaim|ws-expire|ws-collect'.split('|');
+
+/** Whether the deny file also names each verb's path-qualified forms (`Bash(*\/ccd ws-rm:*)`,
+ *  `Bash(~/.local/bin/ccd ws-rm:*)` and the like). FALSE until plan Task 13 records, on the rig, that Claude Code's
+ *  deny matcher takes a leading wildcard; Task 13 decides, and turning them on is this one word here and its bash twin
+ *  `CHILD_DENY_PATH_QUALIFIED` in `ccd/install-session-hooks.sh` (D-5299). Invariant 10 does not rest on it: the
+ *  child's PreToolUse deny (Task 14) refuses every form whatever the matcher takes. */
+export const CHILD_DENY_PATH_QUALIFIED = false as boolean;
+
+/** The program heads a deny rule is written for: the bare name always, and the path-qualified forms only behind
+ *  `CHILD_DENY_PATH_QUALIFIED`. */
+const childDenyHeads = (prog: 'ccd' | 'ccrc'): readonly string[] =>
+  CHILD_DENY_PATH_QUALIFIED ? [prog, `*/${prog}`, `~/.local/bin/${prog}`] : [prog];
+
+/** The `permissions.deny` list of `~/.cc-sessions/child-deny.settings.json`, the one managed file every dispatched
+ *  child (a row with `.child`) spawns with through `--settings` (spec §6.6, plan Task 15, D-5299): the forbidden
+ *  `ccd` verbs, then `ccrc update` and `ccrc rollback`. No approval overrides a deny rule. The installer's bash copy
+ *  is held equal to this list by iteration (`install-session-hooks.test.ts`), never respelled in a test. */
+export const CHILD_DENY_RULES: readonly string[] = [
+  ...CHILD_DENY_CCD_VERBS.flatMap((v) => childDenyHeads('ccd').map((h) => `Bash(${h} ${v}:*)`)),
+  ...['update', 'rollback'].flatMap((v) => childDenyHeads('ccrc').map((h) => `Bash(${h} ${v}:*)`)),
+];
+
+/** `$REG/<id>.deny-settings` (plan Task 15, D-5299): the sha256 of the deny file the child was last spawned with,
+ *  written by `ccd`'s spawn of a `.child` row and only when it passed the file. Three answers, as `ChildMark`: Task
+ *  16's `409 deny-not-engaged` refuses both `none` and `unreadable`, and engages only on a digest equal to the managed
+ *  file's current one. */
+export type DenySettingsMark =
+  | { readonly kind: 'none' }                                  // no field: spawned without the deny file
+  | { readonly kind: 'digest'; readonly sha256: string }       // the file's lowercase hex sha256 at that spawn
+  | { readonly kind: 'unreadable' };                           // listed but unreadable, or not a sha256
+
+/** `$REG/<id>.childshell` (plan Task 15, D-5360's requirement, D-5391): the shell `ccd`'s spawn of a `.child` row
+ *  pinned the child's Bash tool to through `CLAUDE_CODE_SHELL`. Three answers again; Task 16 refuses a ruling for a
+ *  child whose record does not show the bash pin. */
+export type ChildShellMark =
+  | { readonly kind: 'none' }                                  // no field: no pin at that spawn
+  | { readonly kind: 'pinned'; readonly shell: string }        // an absolute path, as `ccd` wrote it
+  | { readonly kind: 'unreadable' };                           // listed but unreadable, or not an absolute path
+
+/** A `.deny-settings` value: 64 lowercase hex characters, as `sha256sum`/`shasum -a 256` print them. */
+export const DENY_SETTINGS_DIGEST = /^[0-9a-f]{64}$/;
+/** A `.childshell` value: an absolute path of plain characters. */
+export const CHILD_SHELL_PATH = /^\/[A-Za-z0-9._/-]+$/;

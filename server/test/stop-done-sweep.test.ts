@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { stopDonePass, type StopDoneMemory, type StopDoneSweepDeps } from '../src/stopDoneSweep.js';
 import { STOP_DONE_DISABLED_MARKER, STOP_DONE_GRACE_MS, STOP_DONE_PER_PASS, STOP_DONE_RETRY_MS } from '../src/stopDone.js';
-import { PRESENCE_TTL_MS, type FleetSession } from '../../shared/api.js';
+import { PRESENCE_OPEN_TTL_MS, PRESENCE_TTL_MS, type FleetSession } from '../../shared/api.js';
 import type { SessionRecord } from '../src/registry.js';
 import type { FleetState } from '../src/fleetstate.js';
 import path from 'node:path';
@@ -15,16 +15,22 @@ import { buildServer } from '../src/server.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { RECLAIM_PAUSE_MARKER } from '../src/coord/rundefs.js';
+import { Presence } from '../src/presence.js';
 import { readSessionRecord } from '../src/registry.js';
 import { liveRowFor, turnReadDeps } from '../src/turnverdict.js';
 import type { Runner } from '../src/exec.js';
+import { ACTOR_FLAGS_CAP } from '../src/ccdargv.js';
+import { HIBERNATE_AFTER_HOURS_FILE, HIBERNATE_DISABLED_MARKER, NO_HIBERNATE_SUFFIX } from '../src/coord/hibernate.js';
 
 // D-5370 (`stop-worker-at-run-done`): the lane. The verdict's holds are pinned in `stop-done-verdict.test.ts`; this
 // file pins what the PASS does with them — the kill switch, the serialiser, the per-pass bound, the act-time re-read,
 // the declared stop, the one feed row, and the retry memory.
 
 const NOW = 1_800_000_000_000;
-const STARTED = NOW - PRESENCE_TTL_MS - 60_000;
+const STARTED = NOW - PRESENCE_OPEN_TTL_MS - 60_000;
+const HOUR = 3_600_000;
+/** A `done` marker seven hours old — past N — nothing in the background, nothing scheduled. */
+const MARK_IDLE = { ok: true, state: 'done', bg: 0, crons: 0, turnAt: NOW - 7 * HOUR - 60_000, stopAt: NOW - 7 * HOUR, restartAt: null } as const;
 
 const row = (id: string, o: Partial<FleetSession> = {}): FleetSession => ({
   id, child: { kind: 'child', runId: 1 }, archivedAt: null, held: null, stoppedBy: null, unmeasured: [],
@@ -49,7 +55,7 @@ interface Fake {
   reviewsOpen: Set<string>;
 }
 
-function fake(ids: readonly string[], o: { surface?: boolean; serial?: boolean } = {}): Fake {
+function fake(ids: readonly string[], o: { verb?: boolean; serial?: boolean } = {}): Fake {
   const f: Fake = {
     argv: [], feed: [], serialCalls: 0, runs: new Map(), openWorkers: new Set(), mailTo: new Set(), ccdOk: true,
     atAct: new Map(), reviewsOpen: new Set(),
@@ -75,15 +81,16 @@ function fake(ids: readonly string[], o: { surface?: boolean; serial?: boolean }
       run: (runId: number) => ({ ok: true as const, run: runId === 900 ? { reviews: 901 } : { state: 'working', reviews: null } }) as never,
     },
     runCcd: async (a) => { f.argv.push([...a]); return { ok: f.ccdOk, stdout: '', stderr: f.ccdOk ? '' : 'refused', killed: false, signal: null }; },
-    fleetState: { ccdVerbs: o.surface === false ? [] : ['stop-surface'] } as unknown as FleetState,
-    presence: { isVisible: () => false },
+    fleetState: { ccdVerbs: o.verb === false ? ['stop-surface', ACTOR_FLAGS_CAP] : ['hibernate', ACTOR_FLAGS_CAP] } as unknown as FleetState,
+    presence: { isOpen: () => false },
     notifyLog: {
       epoch: 'e', record: (e: { sessionId: string; runId: number | null }) => { f.feed.push({ sessionId: e.sessionId, runId: e.runId }); return { ...e, seq: ++seq, at: NOW }; },
       flush: async () => undefined,
     } as unknown as StopDoneSweepDeps['notifyLog'],
     liveWord: async () => ({ ok: true, word: 'idle', since: null }),
     turnVerdict: async () => 'idle',
-    mark: async () => ({ ok: true, state: 'done', bg: 0 }),
+    mark: async () => MARK_IDLE,
+    readAfterHours: async () => null,
     rowAtAct: async (r) => {
       const a = f.atAct.get(r.id);
       return a === 'unreadable' ? { ok: false } : { ok: true, row: row(r.id, a ?? {}) };
@@ -97,14 +104,69 @@ function fake(ids: readonly string[], o: { surface?: boolean; serial?: boolean }
 }
 
 const mem = (): StopDoneMemory => ({ retryAt: new Map() });
+/** The argv the lane composes since Task 17b (stop-done-composes-hibernate (D-5427)): `ccd hibernate`, declared. */
+const HIB = (id: string): string[] => ['hibernate', id, '--surface', 'agent', '--actor', 'sweep:stop-done'];
 const ID = 'project-a-quiet-basin';
 
 describe('stopDonePass (D-5370)', () => {
+  // TASK 17b (stop-done-composes-hibernate (D-5427)): the lane puts a finished worker to sleep with `ccd hibernate`, and
+  // holds what hibernation holds and it lacked.
+  it('hibernate-disabled stops this lane too: nothing is read and nothing is composed', async () => {
+    const f = fake([ID]);
+    const live = vi.fn(f.deps.liveWord);
+    expect(await stopDonePass({ ...f.deps, liveWord: live }, mem(), [row(ID)], [rec(ID)], [HIBERNATE_DISABLED_MARKER])).toEqual([]);
+    expect(f.argv).toEqual([]);
+    expect(live).not.toHaveBeenCalled();
+  });
+
+  it('recent: a worker idle less than N (6 h) since its marker\'s last stamp is left awake', async () => {
+    const f = fake([ID]);
+    const mark: StopDoneSweepDeps['mark'] = async () => ({ ...MARK_IDLE, turnAt: NOW - 5 * HOUR, stopAt: NOW - 5 * HOUR });
+    await stopDonePass({ ...f.deps, mark }, mem(), [row(ID)], [rec(ID)], []);
+    expect(f.argv).toEqual([]);
+  });
+
+  it('N is the operator\'s hibernate-after-hours, read only when listed: 2 puts a 3 h worker to sleep', async () => {
+    const f = fake([ID]);
+    const mark: StopDoneSweepDeps['mark'] = async () => ({ ...MARK_IDLE, turnAt: NOW - 3 * HOUR, stopAt: NOW - 3 * HOUR });
+    const after = vi.fn(async () => '2');
+    await stopDonePass({ ...f.deps, mark, readAfterHours: after }, mem(), [row(ID)], [rec(ID)], []);
+    expect(f.argv, 'unlisted: the default N holds the 3 h worker').toEqual([]);
+    expect(after).not.toHaveBeenCalled();
+    await stopDonePass({ ...f.deps, mark, readAfterHours: after }, mem(), [row(ID)], [rec(ID)], [HIBERNATE_AFTER_HOURS_FILE]);
+    expect(f.argv).toEqual([HIB(ID)]);
+  });
+
+  it('opted-out: a worker with $REG/<id>.no-hibernate is left awake', async () => {
+    const f = fake([ID]);
+    await stopDonePass(f.deps, mem(), [row(ID)], [rec(ID)], [`${ID}.${NO_HIBERNATE_SUFFIX}`]);
+    expect(f.argv).toEqual([]);
+  });
+
+  it('scheduled: a marker that lists a session cron, or carries none (an older hook), leaves the worker awake', async () => {
+    for (const crons of [1, null]) {
+      const f = fake([ID]);
+      await stopDonePass({ ...f.deps, mark: async () => ({ ...MARK_IDLE, crons }) }, mem(), [row(ID)], [rec(ID)], []);
+      expect(f.argv, String(crons)).toEqual([]);
+    }
+  });
+
+  it('ccd refusing session-busy (attached, at the act) is not asked again for the retry interval, and writes no feed row', async () => {
+    const f = fake([ID]);
+    const m = mem();
+    const runCcd: StopDoneSweepDeps['runCcd'] = async (a) => { f.argv.push([...a]); return { ok: false, stdout: '', stderr: 'ccd: session-busy: attached — 1 terminal(s) attached to the pane', killed: false, signal: null }; };
+    const out = await stopDonePass({ ...f.deps, runCcd }, m, [row(ID)], [rec(ID)], []);
+    expect(out).toEqual([{ id: ID, kind: 'skipped', detail: 'attached' }]);
+    expect(f.feed).toEqual([]);
+    await stopDonePass({ ...f.deps, runCcd }, m, [row(ID)], [rec(ID)], []);
+    expect(f.argv).toEqual([HIB(ID)]);
+  });
+
   it('happy path: one declared stop of the worker, on the serialiser, and one feed row naming its run', async () => {
     const f = fake([ID]);
     const out = await stopDonePass(f.deps, mem(), [row(ID)], [rec(ID)], []);
-    expect(out).toEqual([{ id: ID, kind: 'stopped', runId: 10 }]);
-    expect(f.argv).toEqual([['stop', ID, '--surface', 'agent']]);
+    expect(out).toEqual([{ id: ID, kind: 'hibernated', runId: 10 }]);
+    expect(f.argv).toEqual([HIB(ID)]);
     expect(f.serialCalls).toBe(1);
     expect(f.feed).toEqual([{ sessionId: ID, runId: 10 }]);
   });
@@ -184,8 +246,29 @@ describe('stopDonePass (D-5370)', () => {
 
   it('a worker somebody has on screen is not stopped', async () => {
     const f = fake([ID]);
-    await stopDonePass({ ...f.deps, presence: { isVisible: (id) => id === ID } }, mem(), [row(ID)], [rec(ID)], []);
+    await stopDonePass({ ...f.deps, presence: { isOpen: (id) => id === ID } }, mem(), [row(ID)], [rec(ID)], []);
     expect(f.argv).toEqual([]);
+  });
+
+  it('D-5242\'s presence contract: an open screen in a hidden tab holds the worker as it holds a sleeping session', async () => {
+    const f = fake([ID]);
+    const presence = new Presence(() => NOW);
+    const tok = Symbol('fixture');
+    presence.markOpen(tok, ID);
+    presence.setVisible(tok, null);
+    expect(presence.isVisible(ID)).toBe(false);
+    await stopDonePass({ ...f.deps, presence }, mem(), [row(ID)], [rec(ID)], []);
+    expect(f.argv).toEqual([]);
+  });
+
+  it('no presence port handed over reads as a viewer, as hibernation\'s own sweep does (fail closed)', async () => {
+    const f = fake([ID]);
+    await stopDonePass(f.deps, mem(), [row(ID)], [rec(ID)], []);
+    expect(f.argv).toEqual([HIB(ID)]);
+    const g = fake([ID]);
+    const out = await stopDonePass({ ...g.deps, presence: undefined }, mem(), [row(ID)], [rec(ID)], []);
+    expect(out).toEqual([]);
+    expect(g.argv).toEqual([]);
   });
 
   it('straight after a server start nothing is stopped: presence has not been re-established', async () => {
@@ -194,8 +277,16 @@ describe('stopDonePass (D-5370)', () => {
     expect(f.argv).toEqual([]);
   });
 
-  it('a box whose ccd cannot declare the stop surface is not stopped (never an undeclared stop)', async () => {
-    const f = fake([ID], { surface: false });
+  it('the post-start hold lasts PRESENCE_OPEN_TTL_MS (D-5242): past the visible TTL it still holds, past the open one it stops', async () => {
+    const f = fake([ID]);
+    await stopDonePass({ ...f.deps, startedAt: NOW - PRESENCE_TTL_MS - 1 }, mem(), [row(ID)], [rec(ID)], []);
+    expect(f.argv).toEqual([]);
+    await stopDonePass({ ...f.deps, startedAt: NOW - PRESENCE_OPEN_TTL_MS }, mem(), [row(ID)], [rec(ID)], []);
+    expect(f.argv).toEqual([HIB(ID)]);
+  });
+
+  it('a box whose ccd caps do not list hibernate is not touched (no-verb, D-5427)', async () => {
+    const f = fake([ID], { verb: false });
     await stopDonePass(f.deps, mem(), [row(ID)], [rec(ID)], []);
     expect(f.argv).toEqual([]);
   });
@@ -249,7 +340,7 @@ describe('stopDonePass (D-5370)', () => {
 
   it('a stale hookstate (row background null) whose turn marker lists a background shell is not stopped', async () => {
     const f = fake([ID]);
-    const out = await stopDonePass({ ...f.deps, mark: async () => ({ ok: true, state: 'done', bg: 1 }) }, mem(), [row(ID)], [rec(ID)], []);
+    const out = await stopDonePass({ ...f.deps, mark: async () => ({ ...MARK_IDLE, bg: 1 }) }, mem(), [row(ID)], [rec(ID)], []);
     expect(out).toEqual([]);
     expect(f.argv).toEqual([]);
   });
@@ -369,15 +460,15 @@ describe('the watcher\'s own pass, its deps unmocked (D-5370)', () => {
       workspace: WID, branch: `ws/${WID}`, base: 'origin/main', child: String(opened.id),
     };
     for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${WID}.${k}`), v);
-    const startedAt = Date.now() - 3_600_000;
+    const startedAt = Date.now() - 24 * 3_600_000;
     const sessions = path.join(home, `.${WRAPPER}`, 'sessions');
     mkdirSync(sessions, { recursive: true });
     writeFileSync(path.join(sessions, `${PANE}.json`), JSON.stringify({
       pid: PANE, sessionId: WUUID, status: 'idle', statusUpdatedAt: Date.now() - 20 * 60_000, startedAt }));
-    const markAt = Date.now() - 20 * 60_000;
+    const markAt = Date.now() - 7 * 3_600_000;
     const turnMark = (at: number): void => writeFileSync(path.join(reg, `${WID}.turn.json`), `${JSON.stringify({
       v: 1, sessionId: WUUID, state: 'done', event: 'Stop', at, turnAt: at - 60_000, stopAt: at,
-      bg: 0, bgKinds: '', bgIds: '', err: null, restartAt: null, lostBg: 0, lostKinds: '', lostIds: '' })}\n`);
+      bg: 0, bgKinds: '', bgIds: '', err: null, restartAt: null, lostBg: 0, lostKinds: '', lostIds: '', crons: 0 })}\n`);
     turnMark(markAt);
     const calls: string[][] = [];
     const run: Runner = async (_cmd, args) => {
@@ -386,7 +477,8 @@ describe('the watcher\'s own pass, its deps unmocked (D-5370)', () => {
       if (args[0] === 'list-panes') return { code: 0, stdout: `${PANE}\n`, stderr: '' };
       return { code: 0, stdout: '', stderr: '' };
     };
-    const deps = { ...testDeps(home, run), cfg, coord, fleetState: { ccdVerbs: ['stop-surface'] } };
+    // buildServer always hands the watcher a Presence; an absent port reads as a viewer (fail closed).
+    const deps = { ...testDeps(home, run), cfg, coord, fleetState: { ccdVerbs: ['hibernate'] }, presence: new Presence(() => Date.now()) };
     const w = new FleetWatcher(deps as never, new Bus(), 10_000);
     (w as unknown as { stopDoneStartedAt: number }).stopDoneStartedAt = startedAt;
     w.useStopDoneSerialiser({ serial: async (fn: () => Promise<unknown>) => fn() } as never);
@@ -398,7 +490,7 @@ describe('the watcher\'s own pass, its deps unmocked (D-5370)', () => {
       if (row === null) throw new Error('fixture row not assembled');
       return { rows: [row], records: [r.record] };
     };
-    const stops = () => calls.filter((c) => c[0] === 'stop');
+    const stops = () => calls.filter((c) => c[0] === 'hibernate' || c[0] === 'stop');
     return { home, reg, coord, w, tick, stops, turnMark, startedAt };
   };
 
@@ -408,7 +500,7 @@ describe('the watcher\'s own pass, its deps unmocked (D-5370)', () => {
       const t = await h.tick();
       expect(t.rows[0]).toMatchObject({ held: null, bucket: 'idle', child: { kind: 'child' } });
       await h.w.sweepStopDone(t.rows, t.records, []);
-      expect(h.stops()).toEqual([['stop', WID, '--surface', 'agent']]);
+      expect(h.stops()).toEqual([['hibernate', WID]]);
     } finally {
       h.coord.db.close();
     }
@@ -442,10 +534,10 @@ describe('the watcher\'s own pass, its deps unmocked (D-5370)', () => {
   it('a live marker counting a background task holds: the real count reaches the verdict', async () => {
     const h = await harness();
     try {
-      const at = Date.now() - 20 * 60_000;
+      const at = Date.now() - 7 * 3_600_000;
       writeFileSync(path.join(h.reg, `${WID}.turn.json`), `${JSON.stringify({
         v: 1, sessionId: WUUID, state: 'done', event: 'Stop', at, turnAt: at - 60_000, stopAt: at,
-        bg: 1, bgKinds: 'monitor', bgIds: 'b1', err: null, restartAt: null, lostBg: 0, lostKinds: '', lostIds: '' })}\n`);
+        bg: 1, bgKinds: 'monitor', bgIds: 'b1', err: null, restartAt: null, lostBg: 0, lostKinds: '', lostIds: '', crons: 0 })}\n`);
       const t = await h.tick();
       await h.w.sweepStopDone(t.rows, t.records, []);
       expect(h.stops()).toEqual([]);

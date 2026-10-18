@@ -8,7 +8,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { AccountUsage, FleetSession, ProjectPoolsWire } from '../../shared/api';
-import { fleetSession as baseSession } from './fleetFixture';
+import { fleetSession as baseSession, hibernatedSession } from './fleetFixture';
 import { useState } from 'react';
 import { ToastHost } from '@ccrc/ui';
 import { SWAP_REFUSALS } from '../../shared/api';
@@ -874,6 +874,37 @@ describe('SwapSheet: a busy session asks "swap anyway" (D-5240)', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Move' }));
     expect(await screen.findByText(/status cannot be read, so it will not be moved on a guess/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Swap anyway' })).not.toBeInTheDocument();
+  });
+
+  it('a 409 hibernated (D-5242) says it is asleep in a toast and offers no consent', async () => {
+    vi.spyOn(api, 'swap').mockRejectedValueOnce(refused(SWAP_REFUSALS.hibernated));
+    const s = fleetSession({ wrapper: 'claude', home: 'claude' });
+    render(<Harness s={s} fleet={storeWith([s])} />);
+    fireEvent.click(await screen.findByRole('button', { name: /team·b/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Move' }));
+    expect(await screen.findByText(/It is asleep, so there is nothing running to move/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Swap anyway' })).not.toBeInTheDocument();
+  });
+
+  it('the 409 hibernated toast offers Wake, which posts ensure (D-5242)', async () => {
+    vi.spyOn(api, 'swap').mockRejectedValueOnce(refused(SWAP_REFUSALS.hibernated));
+    const ensure = vi.spyOn(api, 'ensure').mockResolvedValue(undefined);
+    const s = fleetSession({ wrapper: 'claude', home: 'claude' });
+    render(<Harness s={s} fleet={storeWith([s])} />);
+    fireEvent.click(await screen.findByRole('button', { name: /team·b/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Move' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Wake' }));
+    await waitFor(() => expect(ensure).toHaveBeenCalledWith(s.id));
+  });
+
+  it('a hibernated row offers Wake in place of the account list (D-5242)', async () => {
+    const ensure = vi.spyOn(api, 'ensure').mockResolvedValue(undefined);
+    const s = hibernatedSession(Date.now() - 6 * 3_600_000, { id: 'lane-a-project-a', project: 'project-a', wrapper: 'claude', home: 'claude' });
+    render(<Harness s={s} fleet={storeWith([s])} />);
+    expect(screen.queryByRole('button', { name: /team·b/ })).toBeNull();
+    expect(screen.getByText(/asleep/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Wake session' }));
+    await waitFor(() => expect(ensure).toHaveBeenCalledWith('lane-a-project-a'));
   });
 
   it('the ask belongs to the session it was raised for: retargeted to another session, it is not shown', async () => {

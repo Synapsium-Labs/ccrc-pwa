@@ -25,6 +25,7 @@ import type {
 import { StatusDot, TypedLabel, elapsedShort } from '@ccrc/ui';
 import { sessionLabel } from './sessionLabel';
 import { SessionMeta } from './SessionMeta';
+import { hibernatedSince } from './hibernated';
 import './fleet.css';
 
 
@@ -112,10 +113,14 @@ export function SessionLine({
   repo?: string | null;
 }): ReactNode {
   const dead = session.status === 'dead';
+  // D-5242: a dead row `ccd hibernate` put to sleep is ASLEEP, not exited — the
+  // bucket stays `dead` (the server's), and only the word and the lamp change:
+  // `hibernated · 6h` (SessionMeta) beside a calm dot, never a death.
+  const asleepAt = hibernatedSince(session);
   // THE authority: no local re-derivation of attention/busy/state survives
   // here (nor in sortFleet.ts or groupFleet.ts) — the server decided which of
   // the seven buckets this session is in, and shipped it as `session.bucket`.
-  const state = WORD[session.bucket];
+  const state = asleepAt !== null ? 'asleep' : WORD[session.bucket];
 
 
   const label = sessionLabel(session);
@@ -165,7 +170,7 @@ export function SessionLine({
   return (
     <div className={selected ? 'sess-line sess-line--active' : 'sess-line'} data-state={state}>
       <span className="sess-lamp" data-status={session.bucket}>
-        <StatusDot status={session.bucket} />
+        <StatusDot status={session.bucket} asleep={asleepAt !== null} />
       </span>
 
       {/* The two-line block. A plain <div>, NOT the row's button: the subagent
@@ -237,6 +242,7 @@ export function SessionLine({
           selected={selected}
           state={state}
           dead={dead}
+          asleepAt={asleepAt}
           subagentList={subagentList}
           subagentsOpen={subagentsOpen}
           subagentsId={subagentsId}

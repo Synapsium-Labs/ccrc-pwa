@@ -3224,7 +3224,7 @@ describe('Build 9 nouns — the lifecycle journal vocabulary', () => {
     // `pwa/src/lib/api.ts` at 8 of 24, so the margin is 15 tokens.
     const enumerates = (src: string): boolean =>
       LIFECYCLE_ACTS.every((a) => new RegExp(`(?:'${a}'|(?<![\\w'-])${a}\\s*:)`).test(src));
-    expect(LIFECYCLE_ACTS.length).toBe(28);
+    expect(LIFECYCLE_ACTS.length).toBe(29);
     expect(LIFECYCLE_ACTS).toContain(LC_ACT_UNKNOWN);
     expect(enumerates(readFileSync(path.join(ccrcRoot, 'shared/api.ts'), 'utf8'))).toBe(true);
     expect(enumerates(readFileSync(path.join(ccrcRoot, 'pwa/src/lib/api.ts'), 'utf8'))).toBe(false);
@@ -5235,7 +5235,11 @@ describe('ccrc history: every vocabulary is declared once, in lib.mjs, and bound
     'SCOPE_KINDS', 'GREP_SORTS', 'REF_KINDS', 'FAN_IN', 'RECOVER_PHASES', 'FTS_SHADOWS', 'READ_VERBS',
     'INDEXED_PROVENANCE', 'VERB_TABLES', 'EXPAND_LABEL',
     // W1-B2 Task 7A (spec rev 3.5): the belt's words more than one module reads or writes.
-    'BELT_COUNTERS', 'BELT_META', 'BELT_NODES_STEP', 'REDACT_SOURCES_META'] as const;
+    'BELT_COUNTERS', 'BELT_META', 'BELT_NODES_STEP', 'REDACT_SOURCES_META',
+    // W1-B3: every constant the card line adds to lib, declared there once (Task 11 binds the hook's spellings).
+    'CARD_LINE_PATTERN', 'CARD_LINE_MAX', 'CARD_DIR', 'SCOPE_DIR', 'CARD_DESCRIBE_CMD',
+    'CARD_MEASURE_ROWS', 'CARD_MEASURE_MAX_WAIT_MS', 'CARD_ATTACHMENT_MAX_BYTES', 'PURGED_FILES_GRACE_MS',
+    'SCOPE_MARKER_MAX_AGE_MS', 'CARD_CONSUMED_SCOPES', 'CARD_WITHDRAW_REASONS'] as const;
   /** The declaration scan's corpus: the history modules and every deploy/ and shared/ `.mjs`. NOT the rest of
    *  ccd/: `ccd/compact-card.mjs` declares an `EXIT` of its own (its exit codes, a different module's). */
   const DECL_CORPUS = [...new Set([...HISTORY_MJS, ...mjsUnder(path.join(ccrcRoot, 'deploy')), ...mjsUnder(path.join(ccrcRoot, 'shared'))])];
@@ -5341,7 +5345,7 @@ describe('ccrc history: every vocabulary is declared once, in lib.mjs, and bound
     expect(lines[0]).toMatch(/\bSTORE_DB_REL\s*=\s*['"]\.ccrc\/history\/db['"]/);
   });
 
-  it('COVERAGE is this-box, and the word is a literal in lib.mjs alone; CARD_PREFIX is declared (its hook half lands in B3)', async () => {
+  it('COVERAGE is this-box, and the word is a literal in lib.mjs alone; CARD_PREFIX is declared (its hook half: the card line describe below)', async () => {
     const l = await lib();
     expect([...(l['COVERAGE'] as readonly string[])]).toEqual(['this-box']);
     expect(HISTORY_MJS.filter((f) => /['"`]this-box['"`]/.test(stallCode(f))).map(rel)).toEqual(['ccd/history/lib.mjs']);
@@ -6708,8 +6712,9 @@ describe('idle-compact-nudge: the kill switch has no writer, and the prompt is s
 // alone, so the server's swap guard and the PWA's sheet cannot spell either; this row pins that ccd's two swap
 // refusals are read in one place, `ccdSwapRefusal` (`server/src/swapguard.ts`), off the declaration.
 describe('the swap route spells its refusal words once (D-5240)', () => {
-  it('SWAP_REFUSALS is exactly archive\'s session-busy and status-unknown', () => {
-    expect(SWAP_REFUSALS).toEqual({ sessionBusy: ARCHIVE_REFUSALS.sessionBusy, statusUnknown: ARCHIVE_REFUSALS.statusUnknown });
+  it('SWAP_REFUSALS is exactly archive\'s session-busy and status-unknown, and hibernation\'s hibernated (D-5242)', () => {
+    expect(SWAP_REFUSALS).toEqual({ sessionBusy: ARCHIVE_REFUSALS.sessionBusy, statusUnknown: ARCHIVE_REFUSALS.statusUnknown,
+      hibernated: 'hibernated' });
   });
   it('ccd\'s swap refusals are read only by ccdSwapRefusal, in swapguard.ts', () => {
     const holders = ALL.filter((f) => /\bfunction ccdSwapRefusal\b/.test(readFileSync(f, 'utf8'))).map(rel);
@@ -6772,5 +6777,187 @@ describe('the runs-attribution switch-over is defined once, read once (D-5298)',
   it('fleetCarriesRunsAttribution is defined in fleetstate.ts and called by the open route alone', () => {
     expect(holders(/\bfunction\s+fleetCarriesRunsAttribution\b/)).toEqual(['server/src/fleetstate.ts']);
     expect(holders(/\bfleetCarriesRunsAttribution\(/)).toEqual(['server/src/coord/routes.ts', 'server/src/fleetstate.ts']);
+  });
+});
+
+// CCRC HISTORY W1-B3 (spec 2026-10-05 §8.6, §9.11 O14): the card line's HOOK HALF. APPENDED after the last
+// describe, with no import line, for the reason the blocks above state; lib is imported dynamically. The hook
+// cannot import lib.mjs (no fork on the hook's path), so it spells the grammar, the cap and the two directory
+// names once each, in bash, and this binds every one of those spellings to lib's single definition.
+describe('ccrc history card line: the hook and lib spell one grammar, one cap and one prefix (spec 2026-10-05 §8.6, O14)', () => {
+  const HOOK_SH = path.join(ccrcRoot, 'ccd', 'session-hook.sh');
+  type Lib = Record<string, unknown>;
+  const lib = async (): Promise<Lib> => (await import('../../ccd/history/lib.mjs')) as unknown as Lib;
+  /** The value of a top-level `NAME='…'` or `NAME="…"` or `NAME=<digits>` assignment, from code lines only. */
+  const assigned = (lines: readonly string[], name: string): string[] =>
+    lines.flatMap((l) => {
+      const m = new RegExp(`^${name}=(?:'([^']*)'|"([^"]*)"|([0-9]+))$`).exec(l);
+      return m ? [m[1] ?? m[2] ?? m[3]!] : [];
+    });
+
+  /** The hook spells its bracket ranges as explicit lists (D-5064: a range widens under a UTF-8 collating locale).
+   *  This maps exactly those three lists back to lib's ranges and nothing else, so a list that loses or gains a
+   *  character is no range and still differs from lib's pattern. */
+  const lists = (re: string): string =>
+    re.replaceAll('[0123456789abcdef]', '[0-9a-f]').replaceAll('[0123456789]', '[0-9]').replaceAll('[123456789]', '[1-9]');
+
+  it('CONTROL: the extractor reads each quoting, and refuses an indented or commented line', () => {
+    expect(assigned(["A='x y'", 'A="$HOME/z"', 'A=512'], 'A')).toEqual(['x y', '$HOME/z', '512']);
+    expect(assigned(["  A='x'", "# A='x'", "AB='x'"], 'A')).toEqual([]);
+    expect(codeLines(HOOK_SH).some((l) => l.startsWith('HISTORY_CARD_RE=')), 'the hook defines the grammar').toBe(true);
+  });
+
+  it('the hook\'s one HISTORY_CARD_RE literal is lib\'s CARD_LINE_PATTERN, character for character, and begins with CARD_PREFIX', async () => {
+    const l = await lib();
+    const defs = assigned(codeLines(HOOK_SH), 'HISTORY_CARD_RE');
+    expect(defs, 'HISTORY_CARD_RE is assigned once, single-quoted').toHaveLength(1);
+    expect(lists(defs[0]!)).toBe(l['CARD_LINE_PATTERN']);
+    expect(defs[0]!.startsWith(`^${String(l['CARD_PREFIX'])}`)).toBe(true);
+    expect((l['CARD_LINE_RE'] as RegExp).source).toBe(new RegExp(lists(defs[0]!)).source);
+  });
+
+  it('CONTROL: the list normaliser maps exactly the three lists, so a list that lost a character still differs from lib\'s ranges', () => {
+    expect(lists('[0123456789abcdef]{8}[0123456789]x[123456789]')).toBe('[0-9a-f]{8}[0-9]x[1-9]');
+    expect(lists('[012345678abcdef]')).toBe('[012345678abcdef]');
+    expect(lists('[0123456789abcdeg]')).toBe('[0123456789abcdeg]');
+    expect(lists('[0-9a-f]'), 'a range is not rewritten: it stays a range, which the reader scan refuses').toBe('[0-9a-f]');
+  });
+
+  it('the reader\'s UUID grammar is lib\'s UUID_RE (the lists, normalised), so the hook and the CLI accept one family of generations and session ids', async () => {
+    const l = await lib();
+    const lines = codeLines(HOOK_SH).filter((x) => /^\s*local uuid_re='/.test(x));
+    expect(lines, 'uuid_re is assigned once, in the reader').toHaveLength(1);
+    const re = /local uuid_re='([^']*)'/.exec(lines[0]!)![1]!;
+    expect(new RegExp(lists(re)).source).toBe((l['UUID_RE'] as RegExp).source);
+  });
+
+  it('`History: ` is spelled on one hook code line, the grammar\'s', () => {
+    expect(codeLines(HOOK_SH).filter((x) => x.includes('History: ')).map((x) => x.slice(0, x.indexOf('=')))).toEqual(['HISTORY_CARD_RE']);
+  });
+
+  it('HISTORY_CARD_MAX is CARD_LINE_MAX, and the read and the reserve are spelled from it, never as 512 or 513', async () => {
+    const l = await lib();
+    const code = codeLines(HOOK_SH);
+    expect(assigned(code, 'HISTORY_CARD_MAX')).toEqual([String(l['CARD_LINE_MAX'])]);
+    // The delegation spool's jq definitions (#448) spell its own 512-character path bound, `def maxpath: 512;`, a different
+    // quantity: that one token is set aside, and any other 512 or 513 on any line, that one included, still counts.
+    expect(code.filter((x) => /(?<![\w.])51[23](?![\w.])/.test(x.replace('def maxpath: 512;', ''))), 'a hand-kept 512 or 513').toEqual([`HISTORY_CARD_MAX=${String(l['CARD_LINE_MAX'])}`]);
+    const spelled = code.filter((x) => x.includes('HISTORY_CARD_MAX + 1'));
+    expect(spelled.length, 'the read and the reserve').toBe(2);
+    expect(spelled.some((x) => /\bread -r -N "\$\(\( HISTORY_CARD_MAX \+ 1 \)\)"/.test(x)), 'the read').toBe(true);
+    expect(spelled.some((x) => /HISTORY_CARD_RESERVE=\$\(\( HISTORY_CARD_MAX \+ 1 \)\)$/.test(x)), 'the reserve').toBe(true);
+  });
+
+  it('the card and scope directories are spelled once each, under HISTORY_ROOT_REL, named as lib names them', async () => {
+    const l = await lib();
+    const code = codeLines(HOOK_SH);
+    const root = String(l['HISTORY_ROOT_REL']);
+    for (const [name, dir] of [['HISTORY_CARD_DIR', l['CARD_DIR']], ['HISTORY_SCOPE_DIR', l['SCOPE_DIR']]] as const) {
+      expect(assigned(code, name), name).toEqual([`$HOME/${root}/${String(dir)}`]);
+      expect(code.filter((x) => x.includes(`${root}/${String(dir)}`)), `${root}/${String(dir)} spelled twice`).toHaveLength(1);
+    }
+    expect(code.filter((x) => x.includes(`${root}/${String(l['RECALL_OFF_DIR'])}/`)), 'the recall-off path, once').toHaveLength(1);
+  });
+
+  it("SCOPE_MARKER_MAX_AGE_MS is the hook's COMPACT_CARD_MAX_AGE in ms: the window a consumption's marker is read within is the one the reader serves within (ruling RC3)", async () => {
+    const l = await lib();
+    const age = assigned(codeLines(HOOK_SH), 'COMPACT_CARD_MAX_AGE');
+    expect(age, 'COMPACT_CARD_MAX_AGE is assigned once, in whole seconds').toHaveLength(1);
+    expect(Number(age[0]) * 1000).toBe(l['SCOPE_MARKER_MAX_AGE_MS']);
+  });
+});
+
+// D-5299 / D-5391 (plan docs/superpowers/plans/2026-10-17-coordinator-first-routing.md, Task 15). APPENDED. The
+// children's deny list (`CHILD_DENY_RULES`), its path-qualified switch (`CHILD_DENY_PATH_QUALIFIED`) and the spawn
+// record's two value shapes have one TypeScript home, `shared/api.ts`; the record's two readers have one,
+// `server/src/registry.ts`. The installer's bash list is a documented second copy, held equal by iteration
+// (`install-session-hooks.test.ts`), not by this text scan.
+describe('the children\'s deny list, its switch and the spawn record\'s readers each have one home (D-5299, D-5391)', () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  const decl = (c: string): RegExp => new RegExp(`\\b(?:const|let|var|function)\\s+${c}\\b`);
+  it('CONTROL: the pattern sees a declaration and passes over a use', () => {
+    expect(decl('CHILD_DENY_RULES').test('export const CHILD_DENY_RULES: readonly string[] = [')).toBe(true);
+    expect(decl('CHILD_DENY_RULES').test('expect(CHILD_DENY_RULES).toEqual(x);')).toBe(false);
+  });
+  it('each constant is declared once, in shared/api.ts', () => {
+    for (const c of ['CHILD_DENY_RULES', 'CHILD_DENY_PATH_QUALIFIED', 'DENY_SETTINGS_DIGEST', 'CHILD_SHELL_PATH']) {
+      expect(holders(decl(c)), c).toEqual(['shared/api.ts']);
+    }
+  });
+  it('each reader is declared once, in server/src/registry.ts', () => {
+    for (const c of ['denySettingsOf', 'childShellOf']) expect(holders(decl(c)), c).toEqual(['server/src/registry.ts']);
+  });
+});
+
+// D-5242 (`hibernate-long-idle-sessions`, plan Task 17a). APPENDED, for the reason the stall-watch blocks above state.
+// Hibernation's four operator settings — `hibernate-live`, `hibernate-disabled`, `hibernate-after-hours` and the
+// per-session `<id>.no-hibernate` — are touched and removed BY HAND in `$REG`, like `stall-watch-disabled`: nothing in
+// the tree writes one. The TS half: the one file that spells each on a code line is its definer, an L1 file that
+// reaches no `node:` module and so cannot write it, and the files that name its constant reach no write either. The
+// shell half asks for no WRITER, not no holder: plan Task 16's `cmd_hibernate` reads `.no-hibernate` at the act, and a
+// read is not a write. The hold list is spelled once.
+describe('D-5242: hibernation’s markers have no writer, and its holds one home', () => {
+  const DEFINER = 'server/src/coord/hibernate.ts';
+  const MARKERS = [
+    ['hibernate-live', 'HIBERNATE_LIVE_MARKER'], ['hibernate-disabled', 'HIBERNATE_DISABLED_MARKER'],
+    ['hibernate-after-hours', 'HIBERNATE_AFTER_HOURS_FILE'], ['no-hibernate', 'NO_HIBERNATE_SUFFIX'],
+  ] as const;
+  const SHELL_WRITE = /(?:>>?|\btouch\b|\btee\b|\b_reg_set\b|\bprintf\b[^|]*>|\bcp\b|\bmv\b|\bln\b|\binstall\b)/;
+  const TS_WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
+  it.each(MARKERS)('%s: no line of shell writes it', (name) => {
+    expect(SHELL_WRITE.test(`touch "$REG/${name}"`), 'CONTROL: the pattern sees a write').toBe(true);
+    const writers = BASH.flatMap((f) => codeLines(f).filter((l) => l.includes(name) && SHELL_WRITE.test(l)).map((l) => `${rel(f)}: ${l.trim()}`));
+    expect(writers, `${name}: a line of shell writes it`).toEqual([]);
+  });
+  it.each(MARKERS)('%s: its one TS holder is its definer, which reaches no node: module', (name) => {
+    // `hibernate-live` and `hibernate-disabled` contain no other marker; `no-hibernate` is not a substring of the three
+    // `hibernate-…` names, so each scan finds its own word only.
+    expect(ALL.filter((f) => stallCode(f).includes(`'${name}'`) || stallCode(f).includes(`"${name}"`)
+      || stallCode(f).includes(`\`${name}`) || stallCode(f).includes(`/${name}`)).map(rel).sort(),
+    `${name} spelled on a code line outside ${DEFINER}`).toEqual([DEFINER]);
+    expect(stallCode(path.join(ccrcRoot, DEFINER))).not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
+  });
+  it.each(MARKERS)('%s: the files that name its constant reach no write', (_name, constant) => {
+    const holders = ALL.filter((f) => stallCode(f).includes(constant)).map(rel).sort();
+    expect(holders, `${constant}: nobody names it`).toContain(DEFINER);
+    for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(TS_WRITE);
+  });
+  it('HIBERNATE_HOLDS, its map and its constants are declared once, in the definer', () => {
+    for (const c of ['HIBERNATE_HOLDS', 'HIBERNATE_HOLD_MAP', 'HIBERNATE_AFTER_MS_DEFAULT', 'HIBERNATE_SWEEP_MS',
+      'HIBERNATE_SHADOW_LINE_MS', 'HIBERNATE_AFTER_HOURS_MIN', 'HIBERNATE_AFTER_HOURS_MAX',
+      ...MARKERS.map(([, k]) => k)]) {
+      const decl = new RegExp(`\\b(?:const|let|var)\\s+${c}\\b`);
+      expect(ALL.filter((f) => decl.test(stallCode(f))).map(rel), c).toEqual([DEFINER]);
+    }
+  });
+  it('PRESENCE_OPEN_TTL_MS is declared once, in shared/api.ts beside PRESENCE_TTL_MS', () => {
+    const decl = /\b(?:const|let|var)\s+PRESENCE_OPEN_TTL_MS\b/;
+    expect(ALL.filter((f) => decl.test(stallCode(f))).map(rel)).toEqual(['shared/api.ts']);
+  });
+});
+
+// D-5242 (plan Task 17b). APPENDED, for the reason the stall-watch blocks above state. The wake budget has one home
+// (`coord/wakeBudget.ts`, its rule and its two figures) and ONE list it is applied to (`FleetWatcher.admitWake`, the only
+// caller of `wakeAdmit`); the live act's constants are hibernation's definer's, and each lane's declared actor is
+// spelled once, in its own L1 file.
+describe('D-5242: the wake budget and the live act have one home each (Task 17b)', () => {
+  const decl = (c: string): RegExp => new RegExp(`\\b(?:const|let|var)\\s+${c}\\b`);
+  it.each([
+    ['WAKE_BURST', 'server/src/coord/wakeBudget.ts'], ['WAKE_WINDOW_MS', 'server/src/coord/wakeBudget.ts'],
+    ['HIBERNATE_PER_SWEEP', 'server/src/coord/hibernate.ts'], ['HIBERNATE_ACT_LINE_MS', 'server/src/coord/hibernate.ts'],
+    ['HIBERNATE_SWEEP_ACTOR', 'server/src/coord/hibernate.ts'], ['STOP_DONE_ACTOR', 'server/src/stopDone.ts'],
+    ['MAIL_WAKE_FLOOR_MS', 'server/src/watch.ts'],
+  ])('%s is declared once, in %s', (c, home) => {
+    expect(ALL.filter((f) => decl(c).test(stallCode(f))).map(rel), c).toEqual([home]);
+  });
+  it('wakeAdmit is defined once and applied by the watcher alone: one window for the server', () => {
+    expect(ALL.filter((f) => /\bexport function wakeAdmit\b/.test(stallCode(f))).map(rel)).toEqual(['server/src/coord/wakeBudget.ts']);
+    expect(ALL.filter((f) => /\bwakeAdmit\(/.test(stallCode(f)) && !/\bexport function wakeAdmit\b/.test(stallCode(f))).map(rel))
+      .toEqual(['server/src/watch.ts']);
+  });
+  it('the lanes\' actor words are code-line literals in their definers alone', () => {
+    for (const [word, home] of [['sweep:hibernate', 'server/src/coord/hibernate.ts'], ['sweep:stop-done', 'server/src/stopDone.ts']] as const) {
+      expect(ALL.filter((f) => stallCode(f).includes(`'${word}'`)).map(rel), word).toEqual([home]);
+    }
   });
 });

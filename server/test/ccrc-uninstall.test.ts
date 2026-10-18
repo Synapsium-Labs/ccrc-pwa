@@ -364,6 +364,9 @@ function plantInstalledBox(home: string, opts: { versioned?: string[] } = {}): v
   // graphify Task 3: `_inst_graphify_skill` stages this beside the other four
   // installers, the same lane `_uninst_cc_sessions` must remove it from.
   writeFileSync(join(reg, 'install-graphify-skill.sh'), '#!/bin/sh\n', { mode: 0o755 });
+  // The children's deny file (coordinator-first Task 15, D-5299): written by
+  // install-session-hooks.sh, removed ONLY here (D-5392), never by its --remove.
+  writeFileSync(join(reg, 'child-deny.settings.json'), '{"permissions":{"deny":["Bash(ccd ws-rm:*)"]}}\n', { mode: 0o644 });
   writeFileSync(join(reg, 'coordinator-skill', 'SKILL.md'), '# the coordinator skill\n');
   writeFileSync(join(reg, 'worker-skill', 'SKILL.md'), '# the worker skill\n');
   writeFileSync(join(reg, 'reviewer-skill', 'SKILL.md'), '# the reviewer skill\n');
@@ -736,7 +739,7 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     expect(r.code, r.stderr).toBe(0);
     for (const f of ['session-hook.sh', 'install-session-hooks.sh', 'notify.sh', 'compact-card.mjs',
       'install-coordinator-skill.sh', 'install-worker-skill.sh', 'install-reviewer-skill.sh',
-      'install-graphify-skill.sh', 'install-history-skill.sh',
+      'install-graphify-skill.sh', 'install-history-skill.sh', 'child-deny.settings.json',
       'coordinator-skill', 'worker-skill', 'reviewer-skill', 'history-skill']) {
       expect(existsSync(join(home, '.cc-sessions', f)), `${f} survived`).toBe(false);
     }
@@ -744,6 +747,15 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
       'mail-gate-strict', 'stall-watch-disabled', 'stall-watch-live', 'stall-watch-escalate', 'stall-watch-w2-live', 'mail-gate-busy', 'mail-gate-busy-shadow']) {
       expect(existsSync(join(home, '.cc-sessions', f)), `${f} was removed`).toBe(true);
     }
+  });
+
+  it('~/.cc-sessions: the children\'s deny file goes even with no roster projection, where the hooks sweep is skipped (D-5392)', () => {
+    const home = mkTmp('ccrc-uninst-deny-noroster-');
+    plantInstalledBox(home);
+    rmSync(join(home, '.ccrc', 'accounts.sh'));
+    const r = runVerb(home, 'uninstall', ['--force']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(join(home, '.cc-sessions', 'child-deny.settings.json'))).toBe(false);
   });
 
   it('graphify skills: skills/graphify is removed from every rostered home, while OTHER skills there survive', () => {
