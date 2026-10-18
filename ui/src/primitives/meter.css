@@ -1,0 +1,25 @@
+/* `@layer components` — NOT unlayered; see typed-label.css for the full
+   argument and ../styles/theme.css for the layer declaration.
+
+   THE METER'S SHAPE (D-5098). One mask on the track, so the track and the
+   fill are cut alike and an unlit segment shows the track beneath it.
+
+   A segment is `(100% - (n - 1) * gap) / n` wide and the pattern repeats every
+   segment plus one gap, so n segments and n - 1 gaps fill the track exactly.
+   At :root's `--meter-segments: 1` and `--meter-gap: 0px` the segment is the
+   whole track: one opaque run, the continuous bar Refined has always drawn.
+   Instrument's 10 and 2px make the LED meter.
+
+   A mask reads only alpha, so it is built from `currentColor` and
+   `transparent` and nothing else: the meter's colours are the palette's
+   `--limit-*`, painted by the utilities on the element, never here. */
+@layer components {
+  .meter {
+    --meter-seg: calc((100% - (var(--meter-segments) - 1) * var(--meter-gap)) / var(--meter-segments));
+    mask-image: repeating-linear-gradient(
+      to right,
+      currentColor 0 var(--meter-seg),
+      transparent var(--meter-seg) calc(var(--meter-seg) + var(--meter-gap))
+    );
+  }
+}

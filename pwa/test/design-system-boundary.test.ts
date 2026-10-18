@@ -84,9 +84,11 @@ const UI_SRC = path.join(import.meta.dirname, '..', '..', 'ui', 'src');
  *  `completes every hook class @ccrc/ui emits` below reds until it is here. */
 export const OWNED = [
   'btn-primary', 'btn-ghost',                                    // Button / buttonVariants
+  'btn-danger', 'btn-danger-ghost',                              // Button's danger variants (D-5099)
   'dot', 'dot--busy', 'dot--attention', 'dot--idle',             // StatusDot / dotVariants
   'dot--done', 'dot--cleanup', 'dot--dead',
   'limits', 'limit-track', 'limit-fill',                         // LimitBar / fillVariants / LIMIT_TRACK
+  'meter', 'meter-fill',                                         // Meter (D-5098)
   'limit-fill--ok', 'limit-fill--warn', 'limit-fill--crit', 'limit-fill--off',
   'skel',                                                        // Skeleton
   'sheet-panel', 'sheet-panel--full', 'sheet-scrim', 'sheet-grabber', // Sheet
@@ -114,7 +116,7 @@ export const OWNED = [
   'attach-btn',                                                  // AttachButton
   'build-line-side--warn',                                       // BuildLine
   'task-card-status--ok', 'task-card-status--bad',               // TaskCard
-  'task-mark--running',                                          // TaskStrip
+  'task-mark--running', 'task-row--stale',                       // TaskStrip (D-5372)
   // QuickConfirm's QC_CONSEQUENCE / QC_ACTIONS. Their LOOK is utilities, not a
   // stylesheet rule, so an app call site that wrote the hook bare rendered
   // unstyled: ArchiveSheet and UpdateMoveSheet did, after the branch deleted
@@ -366,9 +368,10 @@ describe('the owned vocabulary keeps up with the package', () => {
  *  derivation is structural, so what it cannot tell apart is said out loud. */
 export const NOT_A_SKIN: Record<string, string> = {
   LIMIT_TRACK:
-    "AccountRow builds its gauge from the track plus `fillVariants` because the row must be "
-    + "SPANS ONLY — it sits inside the account button, and `<LimitBar>` renders a block. Both "
-    + "parts are the design system's; only the assembly is the app's.",
+    "the track `Meter` draws, exported beside `fillVariants` as one unit and re-exported "
+    + "through limit-bar.tsx. No app file assembles a meter from it any more — AccountRow's "
+    + "gauge is a `<Meter>` (D-5098), and meter.test.tsx's one-implementation scan reds on a "
+    + "file that reaches for either part.",
   DOOR_GLYPH: 'a glyph, not a class.',
   ASK_GLYPH: 'a glyph, not a class.',
   ASK_WORD: 'a word table, not a class.',

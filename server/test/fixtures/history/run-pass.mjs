@@ -39,7 +39,15 @@
 //   heavy              the versions among those that SCHEMA_ADDED marks heavy
 //   managedSettings    the managed-settings list the census reads instead of /etc (Task 26)
 //   budgetMs, budgetBytes, chunkBytes  the run budget's limits, handed to sweep.mjs as deps.budget (W1-B2 Task 25)
+//   eioOnRead          a path suffix: every fs.readSync on a descriptor whose /proc/self/fd target ends with it throws EIO (D-4340's
+//                      read error on one admitted copy, the FR2-d injection of history-ingest.test.ts, here in a spawned pass: the
+//                      faults preload has no read event). Armed before the pass starts; nothing else reads through that file.
+//   parserCrashOn      a text: a sha256 hash fed bytes that hold it throws, so the transcript parser (prepareLines hashes each
+//                      row's canonical body) crashes on the chunk that holds the text, and ingestFile counts parser_crash and
+//                      holds the cursor (D-5061's crash arm). Armed before the pass starts; the first line of a file is hashed
+//                      for its head sha, so the text must not sit in it.
 // argv after the script is runPass's argv, exactly as the shim would pass it.
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { syncBuiltinESMExports } from 'node:module';
@@ -137,6 +145,31 @@ if (spec.throwTimesAtStart !== undefined) {
 // deps.budget, an injected dependency (slug history-test-seams-not-env); an absent field keeps lib's default.
 if (spec.budgetMs !== undefined || spec.budgetBytes !== undefined || spec.chunkBytes !== undefined) {
   deps.budget = { maxMs: spec.budgetMs, maxBytes: spec.budgetBytes, chunkBytes: spec.chunkBytes };
+}
+if (typeof spec.eioOnRead === 'string') {
+  const realReadSync = fs.readSync;
+  const err = Object.assign(new Error('EIO: i/o error, read'), { code: 'EIO', errno: -5, syscall: 'read' });
+  fs.readSync = function readSync(fd, ...rest) {
+    let target = '';
+    try { target = fs.readlinkSync(`/proc/self/fd/${fd}`); } catch { /* a closed descriptor or no /proc: not ours */ }
+    if (target.endsWith(spec.eioOnRead)) throw err;
+    return realReadSync.call(this, fd, ...rest);
+  };
+  syncBuiltinESMExports();
+}
+if (typeof spec.parserCrashOn === 'string') {
+  const needle = Buffer.from(spec.parserCrashOn, 'utf8');
+  const realCreateHash = crypto.createHash;
+  crypto.createHash = function createHash(...args) {
+    const h = realCreateHash.apply(this, args);
+    const realUpdate = h.update;
+    h.update = function update(data, ...rest) {
+      if (Buffer.from(data).includes(needle)) throw new Error('injected parser bug');
+      return realUpdate.call(this, data, ...rest);
+    };
+    return h;
+  };
+  syncBuiltinESMExports();
 }
 const code = await runPass(process.argv.slice(2), deps);
 // An explicit exit, never a drained loop: an unsettled statfs (the 'hang' seam) pins a libuv thread.

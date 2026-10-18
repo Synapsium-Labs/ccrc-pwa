@@ -957,6 +957,11 @@ function pathWithout(home: string, missing: string): string {
     'node', 'git', 'npm', 'rsync', 'bash', 'sleep', 'jq', 'mktemp', 'basename',
     'diff', 'tmux', 'python3', 'flock', 'timeout', 'stat', 'grep', 'awk', 'realpath',
     'ln', 'readlink', SHA256_TOOL,
+    // `head` (wave 17 R8f, D-5317): `_inst_stamp` reads the release tag as
+    // `git tag --points-at HEAD | grep -E … | head -n1`, so a farm without it
+    // stamps no `version` at all, without failing the install (only a `command
+    // not found` line on stderr), in every case built on this list.
+    'head',
     // macOS: the service manager, its plist linter, and `uname`. The last one
     // is not decoration — `ccd`'s platform detection prefers bash's own
     // `$OSTYPE` precisely so a PATH without `uname` cannot silently answer
@@ -1006,6 +1011,9 @@ const STRAY_DIRS = ['', '.ccrc', '.local/bin', '.cc-sessions', '.claude', 'ccrc'
   '.config/systemd/user',
   '.config/systemd/user/claude-session@.service.d',
   '.config/systemd/user/app-claude\\x2dsession.slice.d',
+  // D-5241: the two scope drop-in directories `_inst_units` stages into.
+  '.config/systemd/user/tmux-spawn-.scope.d',
+  '.config/systemd/user/ccrc-tmux-server.scope.d',
   // Worker-skill Task 4: `_inst_tree_copy` stages a whole DIRECTORY beside its
   // target under `.cc-sessions` (already listed above), and each skill
   // installer stages one beside ITS target, inside the account config dir's
@@ -2199,10 +2207,12 @@ describe('ccrc install: the executables and files it installs', () => {
       expect(r.stdout, `--role ${role}: the Darwin arm was not taken\n${r.stderr}`)
         .toMatch(/^install: units: .* in \$HOME\/Library\/LaunchAgents \(launchd\)$/m);
       const lane: string[] = role === 'server' ? [] : [...GPT_LANE_BINS];
+      // wave 17 (D-5313): `ccrc-api` is on the Darwin arm too, off server only, like the lane's four.
+      const api: string[] = role === 'server' ? [] : ['ccrc-api'];
       const bins = readdirSync(join(home, '.local', 'bin'))
         .filter((b) => !FIXTURE_BINS.includes(b) && b !== 'graphify').sort();
       expect(bins, `--role ${role}: what the Darwin arm of _inst_bins placed`)
-        .toEqual(['ccd', 'ccd-account-auth', ...lane, 'ccrc'].sort());
+        .toEqual(['ccd', 'ccd-account-auth', ...api, ...lane, 'ccrc'].sort());
       for (const name of lane) {
         const bin = join(home, '.local', 'bin', name);
         expect(readFileSync(bin), `${name} is not the placed tree's copy`).toEqual(readFileSync(placed(home, 'ccd', name)));
@@ -2213,8 +2223,10 @@ describe('ccrc install: the executables and files it installs', () => {
       expect(line!, `--role ${role}: not the Darwin closing line`).toContain('macOS has none');
       if (role === 'server') {
         expect(line!, 'the server-role Darwin closing line claims a GPT-lane executable').not.toMatch(/ccgpt|ccrc-codex/);
+        expect(line!, 'the server-role Darwin closing line names ccrc-api, which it never placed').not.toContain('ccrc-api');
       } else {
         expect(line!).toMatch(new RegExp(LANE_BINS_IN_LINE));
+        expect(line!, `--role ${role}: the Darwin closing line does not name ccrc-api`).toMatch(/(?<![\w-])ccrc-api(?![\w-])/);
       }
     }
   });
@@ -2239,6 +2251,15 @@ describe('ccrc install: the executables and files it installs', () => {
     expect(mode(bin)).toBe(0o755);
   });
 
+  itLinux('ccd-tool-adj lands beside them (D-5241, the tool-child priority\'s shell prefix) — every role, but not Darwin', () => {
+    // `ccd`'s `_spawn_start` names it in CLAUDE_CODE_SHELL_PREFIX on Linux only; macOS has no
+    // /proc/self/oom_score_adj to raise, so it is not placed there (the Darwin describe pins the absence).
+    const { home } = installed;
+    const bin = join(home, '.local', 'bin', 'ccd-tool-adj');
+    expect(readFileSync(bin)).toEqual(readFileSync(placed(home, 'ccd', 'ccd-tool-adj')));
+    expect(mode(bin)).toBe(0o755);
+  });
+
   itLinux('ccd-history-sweep lands too (history spec §9.5) — the one sweep shim role-gated off server boxes', () => {
     // `_inst_bins` places it behind a one-line `[ "$INST_ROLE" = server ] ||`
     // test: doctor and the CLI read its presence as "this box can hold a
@@ -2248,6 +2269,34 @@ describe('ccrc install: the executables and files it installs', () => {
     const bin = join(home, '.local', 'bin', 'ccd-history-sweep');
     expect(readFileSync(bin)).toEqual(readFileSync(placed(home, 'ccd', 'ccd-history-sweep')));
     expect(mode(bin)).toBe(0o755);
+  });
+
+  it('ccrc-api lands too, a byte copy at 0755 on both arms (wave 17, D-5313)', () => {
+    // The closed client every role skill calls. `_inst_bins` places it on BOTH
+    // platform arms (hence `it`, not `itLinux`), behind the one-line role test
+    // the history sweep's shim uses; this install is role `both`, so it lands.
+    // At umask 077 the 0755 can only come from the chmod. The `--role server`
+    // case pins its absence, and the closing line must name it.
+    const { home, r } = installed;
+    const bin = join(home, '.local', 'bin', 'ccrc-api');
+    expect(readFileSync(bin)).toEqual(readFileSync(placed(home, 'ccd', 'ccrc-api')));
+    expect(mode(bin)).toBe(0o755);
+    expect(r.stdout).toMatch(/^install: bins: .*(?<![\w-])ccrc-api(?![\w-])/m);
+  });
+
+  itLinux('ccrc-api: README\'s link to the tree survives an install, still a link to the tree file (wave 17, D-5313)', () => {
+    // README links `~/.local/bin/ccrc-api` to the tree's file with `ln -sfn`.
+    // The source `_inst_atomic` compares is that link's own target, so its
+    // `cmp` branch keeps the link; a copy that always replaced the file would
+    // turn the link into a regular file that stops following updates.
+    const home = freshBox('ccrc-install-api-link-');
+    mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+    const dest = join(home, '.local', 'bin', 'ccrc-api');
+    symlinkSync(join(home, 'ccrc', 'ccd', 'ccrc-api'), dest);
+    const r = runInstall(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(lstatSync(dest).isSymbolicLink(), 'the install turned README\'s link into a regular file').toBe(true);
+    expect(realpathSync(dest)).toBe(realpathSync(placed(home, 'ccd', 'ccrc-api')));
   });
 
   it('the launcher is BYTE FOR BYTE what deploy.sh generates', () => {
@@ -4030,6 +4079,36 @@ describe('ccrc install: the build stamp', () => {
     expect(r.stdout).toMatch(/^install: stamp: [0-9a-f]{40} \(fixture-branch, v2\.0\.1\)$/m);
   });
 
+  // Wave 17 R8f (D-5317): `pathWithout`'s farm of real tools carries `head`, because the stamp's release-tag read
+  // pipes through it; without it the version is dropped without failing the install, with only a "command not found"
+  // line on stderr.
+  it('H1: pathWithout links a runnable head into its farm, and omits it when head is the named absence (wave 17 R8f, D-5317)', () => {
+    const farmOf = (path: string): string => path.split(':')[1] ?? '';
+    const runnable = (dir: string): boolean => {
+      try { return (statSync(join(dir, 'head')).mode & 0o111) !== 0; } catch { return false; }
+    };
+    const home = freshBox('ccrc-install-pathwithout-head-');
+    expect(runnable(farmOf(pathWithout(home, 'git'))), 'the farm lacks a runnable head').toBe(true);
+    expect(runnable(farmOf(pathWithout(home, 'head'))), 'head was linked although it is the named absence').toBe(false);
+  });
+
+  it('H2: an install from a checkout tagged v9.9.9, on a farm PATH, stamps version v9.9.9 (wave 17 R8f, D-5317)', () => {
+    const home = freshBox('ccrc-install-stamp-farm-tag-');
+    const root = treeRoot(home);
+    const sha = gitInit(root);
+    const t = spawnSync('git', ['-C', root, 'tag', 'v9.9.9'], {
+      env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' }, encoding: 'utf8',
+    });
+    if (t.status !== 0) throw new Error(`fixture git tag failed: ${t.stderr}`);
+    // No tool is the subject here: a name no farm entry carries leaves the whole farm linked.
+    const r = runInstall(home, ['install'], { PATH: pathWithout(home, 'nothing-is-missing') });
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout, r.stderr).toMatch(/^install: stamp: [0-9a-f]{40} \(fixture-branch, v9\.9\.9\)$/m);
+    const stamp = stampOf(home);
+    expect(stamp['sha']).toBe(sha);
+    expect(stamp['version'], 'the release tag was not read through the farm PATH').toBe('v9.9.9');
+  });
+
   it('says dirty when the checkout has uncommitted work', () => {
     const home = freshBox('ccrc-install-stamp-dirty-');
     gitInit(treeRoot(home));
@@ -4247,6 +4326,9 @@ const UNIT_FILES: Array<[string, string]> = [
   ['ccrc-update-watchdog.timer', 'deploy/systemd/ccrc-update-watchdog.timer'],
   ['claude-session@.service.d/limits.conf', 'deploy/systemd/claude-session@.service.d/limits.conf'],
   [`${SLICE_DIR}/limits.conf`, 'deploy/systemd/app-claude-session.slice.d/limits.conf'],
+  // D-5241: the victim policy's two OOMPolicy=continue scope drop-ins, every role, Linux only, beside the two above.
+  ['tmux-spawn-.scope.d/50-oom-continue.conf', 'deploy/systemd/tmux-spawn-.scope.d/50-oom-continue.conf'],
+  ['ccrc-tmux-server.scope.d/50-oom-continue.conf', 'deploy/systemd/ccrc-tmux-server.scope.d/50-oom-continue.conf'],
 ];
 
 /** The runner's `systemctl` records one line per call: the argv, a tab, then
@@ -4471,6 +4553,21 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
       'the drop-in dir carries the repository spelling, which systemd never reads')
       .not.toContain('app-claude-session.slice.d');
     expect(existsSync(unitDir(home, SLICE_DIR, 'limits.conf'))).toBe(true);
+  });
+
+  it('D-5241: names the pane-scope drop-in directory with its TRAILING HYPHEN (systemd\'s prefix form), and nothing else', () => {
+    // The mutation this exists for: without the hyphen the directory names a unit `tmux-spawn.scope` that never
+    // exists, and every pane keeps `OOMPolicy=stop` with nothing failing (plan 2026-10-16 Task 13 step 1 measured
+    // that the hyphenated prefix form reaches a new transient scope).
+    const { home } = units;
+    expect(readdirSync(unitDir(home))).toContain('tmux-spawn-.scope.d');
+    expect(readdirSync(unitDir(home))).not.toContain('tmux-spawn.scope.d');
+    expect(readdirSync(unitDir(home, 'tmux-spawn-.scope.d'))).toEqual(['50-oom-continue.conf']);
+    expect(readdirSync(unitDir(home, 'ccrc-tmux-server.scope.d'))).toEqual(['50-oom-continue.conf']);
+    for (const d of ['tmux-spawn-.scope.d', 'ccrc-tmux-server.scope.d']) {
+      expect(read(unitDir(home, d, '50-oom-continue.conf')).split('\n').filter((l) => l && !l.startsWith('#')))
+        .toEqual(['[Scope]', 'OOMPolicy=continue']);
+    }
   });
 
   it('does NOT install ccrc-agent.service — a required EnvironmentFile with no file', () => {
@@ -5052,7 +5149,8 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
         // joined in the commit that placed them, and no earlier than the
         // commits that wrote them (fix round 1, Finding 1). NEVER `ccgpt`
         // (D-3478).
-        ? ['ccd', 'ccd-account-auth', 'ccrc', 'graphify', ...GPT_LANE_BINS].sort()
+        // wave 17 (D-5313): `ccrc-api`, the closed client the role skills call, is on BOTH arms for every role but server.
+        ? ['ccd', 'ccd-account-auth', 'ccrc', 'ccrc-api', 'graphify', ...GPT_LANE_BINS].sort()
         // account-pool-membership wave 1, Task 4 fix round 1 (F1): `ccd-pool-sync`
         // joins the non-Darwin list on the timer-bound names' own terms. THIS
         // ASSERTION IS THE MUTATION SITE for that line in `_inst_bins`: it is
@@ -5063,8 +5161,8 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
         // where its timer looks").
         // history spec §9.5: `ccd-history-sweep` joins on the timer-bound names' terms, behind its role gate (this install is `both`).
         : ['ccd', 'ccd-account-auth', 'ccd-account-health', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-history-sweep',
-           'ccd-pool-sync', 'ccd-scope-sweep', 'ccd-telemetry-keepalive', 'ccd-tmp-sweep', 'ccd-update-sync', 'ccd-usage-sweep',
-           'ccd-usage-sweep.py', 'ccrc', 'graphify', ...GPT_LANE_BINS].sort());
+           'ccd-pool-sync', 'ccd-scope-sweep', 'ccd-telemetry-keepalive', 'ccd-tmp-sweep', 'ccd-tool-adj', 'ccd-update-sync', 'ccd-usage-sweep',
+           'ccd-usage-sweep.py', 'ccrc', 'ccrc-api', 'graphify', ...GPT_LANE_BINS].sort());
   });
 
   it('_inst_bins\' own closing line names every executable it placed', () => {
@@ -6260,7 +6358,7 @@ describe('ccrc install --role: the refusals and the default', () => {
       '--user restart ccrc.service',
     ]);
     expect(r.stdout).toMatch(
-      /^install: units: ccrc\.service, claude-session@\.service, ccd-cap-scopes\.\{service,timer\} and both drop-ins in \$HOME\/\.config\/systemd\/user$/m);
+      /^install: units: ccrc\.service, claude-session@\.service, ccd-cap-scopes\.\{service,timer\}, both drop-ins and the two OOMPolicy=continue scope drop-ins in \$HOME\/\.config\/systemd\/user$/m);
   });
 
   itLinux('--role server is today\'s spine minus nothing — the difference from both is reserved', () => {
@@ -6304,6 +6402,8 @@ describe('ccrc install --role: the refusals and the default', () => {
     // history spec §9.5: no shim, no unit pair and no enable on a server box —
     // it hosts no sessions and must never hold a store D-4183.
     expect(existsSync(join(home, '.local', 'bin', 'ccd-history-sweep')), '--role server placed ccd-history-sweep').toBe(false);
+    // wave 17 (D-5313): `ccrc-api` is gated on the same one-line role test.
+    expect(existsSync(join(home, '.local', 'bin', 'ccrc-api')), '--role server placed ccrc-api').toBe(false);
     expect(existsSync(unitDir(home, 'ccd-history-sweep.service'))).toBe(false);
     expect(existsSync(unitDir(home, 'ccd-history-sweep.timer'))).toBe(false);
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-history-sweep');
@@ -6343,6 +6443,7 @@ describe('ccrc install --role: the refusals and the default', () => {
     expect(bins, 'no `install: bins:` line in the transcript').toBeDefined();
     expect(bins!, 'the server-role closing line claims a GPT-lane executable').not.toMatch(/ccgpt|ccrc-codex/);
     expect(bins!, 'the server-role closing line names a history shim it never placed').not.toContain('ccd-history-sweep');
+    expect(bins!, 'the server-role closing line names ccrc-api, which it never placed').not.toContain('ccrc-api');
     expect(read(dotCcrc(home, 'ccrc.env'))).toMatch(/^CCRC_ROLE=server$/m);
     expect(r.stdout).toMatch(/^install: gate: /m);
   });
@@ -6636,9 +6737,11 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
     expect(fn, 'ccd/ccrc has no _ver_newer').not.toBeNull();
     const list = ['v0.0.1', 'v0.0.10', 'v0.0.9', 'v0.1.0', 'v1.0.0', 'v1.9.9', 'v1.9.10', 'v2.0.0', 'v10.0.0'];
     const sorted = spawnSync('bash', ['-c', 'printf "%s\\n" "$@" | sort -V', '--', ...list], { encoding: 'utf8' }).stdout.trim().split('\n');
+    // The `_ver_newer` slice runs contained (wave 17, D-5322); the `sort -V` reference above runs no slice.
+    const verEnv = ccrcContainedEnv(mkTmp('ccrc-install-vernewer-'), process.env, { managers: true, curl: 'poison' });
     for (let i = 0; i < sorted.length; i += 1) {
       for (let j = 0; j < sorted.length; j += 1) {
-        const r = spawnSync('bash', ['-c', `${fn![0]}\n_ver_newer "$1" "$2"`, '--', sorted[i]!, sorted[j]!], { encoding: 'utf8' });
+        const r = spawnSync('bash', ['-c', `${fn![0]}\n_ver_newer "$1" "$2"`, '--', sorted[i]!, sorted[j]!], { encoding: 'utf8', env: verEnv });
         expect(r.status, `${sorted[i]} newer than ${sorted[j]}?`).toBe(i > j ? 0 : 1);
       }
     }
@@ -6825,9 +6928,12 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
       fn![0],
       '_inst_installed',
     ].join('\n');
+    // Contained (wave 17, D-5322). The function reads CCRC_UPDATE_VERIFIED and CCRC_UPDATE_SPINE from the env, and the
+    // builder starts from `process.env`, so they ride through exactly as they did when the spawn inherited it.
+    const env = ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' });
     let r: Result;
     try {
-      const p = spawnSync('bash', ['-c', harness], { encoding: 'utf8' });
+      const p = spawnSync('bash', ['-c', harness], { encoding: 'utf8', env });
       r = { code: p.status ?? -1, stdout: p.stdout ?? '', stderr: p.stderr ?? '' };
     } finally {
       chmodSync(join(home, '.ccrc'), 0o755);
@@ -8381,6 +8487,19 @@ describeLinux('ccrc install: a timer systemd refuses is a COUNTED degraded step 
  *  that PR's merged tree: the three maps each gained `"transcripts": "PASS"`
  *  (the fresh fleet box's registry holds no row reading a superseded
  *  transcript) and nothing else moved.
+ *  RE-MEASURED again when doctor gained its `server-caps` check (plan 2026-10-16
+ *  Task 9b, D-5232's mechanism), by the live-shape case on Linux CI on that PR's
+ *  merged tree: the three maps each gained `"server-caps": "PASS"`
+ *  (`first-write-pending`: the `--role fleet` install placed
+ *  `ccd-update-sync.timer` seconds before and no sync has written
+ *  `~/.ccrc/server-caps`, the fresh-install grace D-4168 rules) and nothing else
+ *  moved.
+ *  RE-MEASURED again when doctor gained its `update-sweep` check (wave 17, D-5316), by the
+ *  live-shape case's own calls (`liveBox`, two installs, both hourly refreshes, doctor) in a
+ *  MEASURE-only case on a disposable `git archive` copy of the tip that added the check: the
+ *  three maps each gained `"update-sweep": "SKIP"` (an install writes no `update.json`, so the
+ *  install tail's doctor has no last update to read) and nothing else moved: all three codes
+ *  and both refreshes equal, `codex` aside as above.
  *  It is a golden: nothing re-measures
  *  it, so a merge-up that moves a doctor check's class on the live shape reds
  *  the live-shape case until Step 3 is re-run on a disposable copy of the new
@@ -8407,6 +8526,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "cert": "SKIP",
         "config": "PASS",
         "credentials": "PASS",
+        "delegation-hooks": "PASS",
         "disk": "PASS",
         "docs": "PASS",
         "docs-sw": "SKIP",
@@ -8428,6 +8548,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "models": "PASS",
         "name": "SKIP",
         "node": "PASS",
+        "oom-policy": "PASS",
         "path": "PASS",
         "pool-sync": "WARN",
         "pools": "PASS",
@@ -8437,6 +8558,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "routing": "PASS",
         "scope-sweep": "SKIP",
         "scopes": "SKIP",
+        "server-caps": "PASS",
         "services": "PASS",
         "skills": "PASS",
         "timeout": "PASS",
@@ -8444,6 +8566,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "tmux_skew": "PASS",
         "transcripts": "PASS",
         "update-exposure": "SKIP",
+        "update-sweep": "SKIP",
         "update-sync": "WARN",
         "wrappers": "PASS"
       }
@@ -8460,6 +8583,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "cert": "SKIP",
         "config": "PASS",
         "credentials": "PASS",
+        "delegation-hooks": "PASS",
         "disk": "PASS",
         "docs": "PASS",
         "docs-sw": "SKIP",
@@ -8481,6 +8605,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "models": "PASS",
         "name": "SKIP",
         "node": "PASS",
+        "oom-policy": "PASS",
         "path": "PASS",
         "pool-sync": "WARN",
         "pools": "PASS",
@@ -8490,6 +8615,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "routing": "PASS",
         "scope-sweep": "SKIP",
         "scopes": "SKIP",
+        "server-caps": "PASS",
         "services": "PASS",
         "skills": "PASS",
         "timeout": "PASS",
@@ -8497,6 +8623,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "tmux_skew": "PASS",
         "transcripts": "PASS",
         "update-exposure": "SKIP",
+        "update-sweep": "SKIP",
         "update-sync": "WARN",
         "wrappers": "PASS"
       }
@@ -8583,6 +8710,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
       "cert": "SKIP",
       "config": "PASS",
       "credentials": "PASS",
+      "delegation-hooks": "PASS",
       "disk": "PASS",
       "docs": "PASS",
       "docs-sw": "SKIP",
@@ -8604,6 +8732,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
       "models": "PASS",
       "name": "SKIP",
       "node": "PASS",
+      "oom-policy": "PASS",
       "path": "PASS",
       "pool-sync": "WARN",
       "pools": "PASS",
@@ -8613,6 +8742,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
       "routing": "PASS",
       "scope-sweep": "SKIP",
       "scopes": "SKIP",
+      "server-caps": "PASS",
       "services": "PASS",
       "skills": "PASS",
       "timeout": "PASS",
@@ -8620,6 +8750,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
       "tmux_skew": "PASS",
         "transcripts": "PASS",
       "update-exposure": "SKIP",
+      "update-sweep": "SKIP",
       "update-sync": "WARN",
       "wrappers": "PASS"
     }

@@ -178,3 +178,35 @@ _upd_sweep() {
   fi
   echo "update: sweep: every live claude-session@ supervisor now runs the ccd this update installed (KillMode=process verified per unit before any restart; panes untouched)"
 }
+
+# FROZEN (wave 17, D-5314) — `_upd_phase` exactly as v0.0.84 ships it (the seven-key writer): the frozen sweep above
+# reaches it through `_upd_sweep_die`, and wave 17 gave the tree's copy an eighth, `sweep`, key. X0c pins this copy.
+_upd_phase() {
+  local phase="$1" detail="${2:-}" now target="null" det tmp
+  now="$(date +%s 2>/dev/null)"
+  [[ "$now" =~ ^[1-9][0-9]{0,10}$ ]] || now=""
+  [[ "$UPD_REPORT_STARTED" =~ ^[1-9][0-9]{0,10}$ ]] || UPD_REPORT_STARTED="$now"
+  [[ "$UPD_REPORT_TARGET" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && target="\"$UPD_REPORT_TARGET\""
+  # Review fix round 1, M1: THE choke point for every report `detail` —
+  # `_ccrc_die` redacts its OWN sentence before it ever reaches here, but a
+  # detail built any other way (UPD_GATE_WHY, by way of $why/$reason/
+  # $gate_fail) reached this write unredacted. Redacting here, once, covers
+  # every caller uniformly, present or future — the same reasoning that made
+  # `_ccrc_die` the choke point for dies.
+  detail="$(_upd_redact "$detail")"
+  det="$(_upd_json_str "$detail")"
+  tmp="$BOX_UPDATE_JSON.tmp.$$"
+  _tmp_guard "$tmp"
+  if [ -n "$now" ] \
+     && { [ -d "${BOX_UPDATE_JSON%/*}" ] || mkdir -p "${BOX_UPDATE_JSON%/*}"; } 2>/dev/null \
+     && [ ! -d "$BOX_UPDATE_JSON" ] \
+     && { printf '{"target":%s,"phase":"%s","startedAt":%s,"updatedAt":%s,"detail":%s,"from":"%s","pid":%s}\n' \
+            "$target" "$phase" "$UPD_REPORT_STARTED" "$now" "$det" "$UPD_FROM" "${UPD_REPORT_PID:-$$}" > "$tmp"; } 2>/dev/null \
+     && chmod 644 "$tmp" 2>/dev/null \
+     && mv -f -- "$tmp" "$BOX_UPDATE_JSON" 2>/dev/null; then
+    return 0
+  fi
+  rm -f -- "$tmp" 2>/dev/null
+  echo "update: WARN: could not write ~/.ccrc/update.json (phase $phase) — the console will not see this phase; the update continues"
+  return 0
+}

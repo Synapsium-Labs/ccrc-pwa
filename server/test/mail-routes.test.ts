@@ -18,10 +18,18 @@ import { unreadableField as withUnreadableField } from './ioDoubles.js';
 import { okRun } from './coordReadHelpers.js';
 import { isChildReclaimKebab } from '../src/coord/childReclaim.js';
 import { isStallKebab } from '../src/coord/stall.js';
+import { isHibernateKebab } from '../src/coord/hibernate.js';
 import { isArchivedExpiryKebab } from '../src/archivedExpiry.js';
 import { isStallSettingsKebab } from '../src/coord/stallsettings.js';
 import { isDeadCoordinatorKebab } from '../src/deadCoordinator.js';
 import { isCollectExecutorKebab } from '../src/coord/collectTempRoot.js';
+import { isDelegationModelKebab } from '../src/coord/delegation-model.js';
+import { isDelegationJournalKebab } from '../src/coord/delegation-journal.js';
+import { isDelegationCheckpointKebab } from '../src/coord/delegation-checkpoint.js';
+import { isDelegationIngestKebab } from '../src/coord/delegation-ingest.js';
+import { isDelegationCorrelationKebab } from '../src/coord/delegation-correlation.js';
+import { isDelegationCensusKebab } from '../src/coord/gitref.js';
+import { isDelegationPolicyKebab } from '../src/coord/delegation-policy.js';
 import { isCollectLaneKebab } from '../src/collectLane.js';
 
 const TOKEN = 'f'.repeat(64);
@@ -863,6 +871,20 @@ describe('the rejection table is total, in both directions', () => {
         // and the lane's memory. Admitted through the exported guard, derived from that file's tables and L1's
         // `COLLECT_HOLD_WHYS`, never NOT_CODES, for the reason every union above gives.
         || isCollectExecutorKebab(tok)
+        // DELEGATION BROKER, WAVE 3: the SEVENTEENTH union, checked together and never merged, on the standing rule
+        // `enter-ignored` above states. The delegation modules (`delegation-model.ts`, `-journal.ts`, `-checkpoint.ts`,
+        // `-ingest.ts`, `-correlation.ts` and `-policy.ts`) spell, as literals, their refusal codes, the journal's entry kinds, the pruning
+        // hold reasons, the recovery phases and failure codes, the durability edges, the line rejections, the bucket
+        // unreadable reasons, the verdict kinds and every correlation reason; `gitref.ts` spells the worktree census's
+        // diagnostics; the policy spells its six report-effect tags and, as table keys, the correlation reasons it classifies; and
+        // `schema.ts`'s delegation CHECK constraints and `store.ts`'s projection spell some of the same words, from the same vocabularies
+        // (a source kind, a cleanup state, a model refusal). None is a mail rejection or a run refusal — no route answers with one; they ride the journal, the
+        // checkpoint, the cursor detail, a verdict and an effect. Admitted through seven exported guards, each derived from its own file's
+        // typed tables (or from `shared/api.ts`'s delegation vocabularies, read and never re-spelled), never NOT_CODES, for the
+        // reason every union above gives.
+        || isDelegationModelKebab(tok) || isDelegationJournalKebab(tok) || isDelegationCheckpointKebab(tok)
+        || isDelegationIngestKebab(tok) || isDelegationCorrelationKebab(tok) || isDelegationCensusKebab(tok)
+        || isDelegationPolicyKebab(tok)
         // CHILD RECLAMATION, WAVE 10: the next union, re-counted on the merged tree, checked together and never merged,
         // on the standing rule `enter-ignored` above states. `coord/collectLaneJournal.ts` (the collector switch's
         // generation journal adapter) spells its read kinds as literals, and the switch's other coord-side code
@@ -876,8 +898,14 @@ describe('the rejection table is total, in both directions', () => {
         // collector switch's route refusals, spelled there as literals. They are L0's own vocabulary, the words the
         // PWA reads off the wire. Admitted through the exported guard, derived from `shared/api.ts`'s table, never
         // NOT_CODES, for the reason every union above gives.
-        || isCollectLaneRefusal(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, collector switch word or collector-switch route refusal`).toBe(true);
+        || isCollectLaneRefusal(tok)
+        // HIBERNATION (D-5242, plan Task 17a): the next union, checked together and never merged, on the standing rule
+        // `enter-ignored` above states. `coord/hibernate.ts` spells its holds, its four operator settings and the live
+        // read's reasons as literals. None is a mail rejection or a run refusal: they ride a verdict and a log line,
+        // never a `refused` or `reject.code`. Admitted through the exported guard, derived from that file's tables,
+        // never NOT_CODES, for the reason every union above gives.
+        || isHibernateKebab(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal or hibernation word`).toBe(true);
     }
   });
 });

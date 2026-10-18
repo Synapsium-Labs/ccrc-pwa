@@ -10,7 +10,11 @@
   "2.1.289",
   "2.1.290",
   "2.1.291",
-  "2.1.292"
+  "2.1.292",
+  "2.1.294",
+  "2.1.295",
+  "2.1.296",
+  "2.1.299"
  ],
  "scenarios": [
   "agent-iso-bg",
@@ -20131,6 +20135,7770 @@
    "snapshots": {}
   },
   "2.1.292/wf-plain": {
+   "status": "measured",
+   "events": {
+    "PostToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "PreToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "model",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "SubagentStart": {
+     "count": 2,
+     "withAgentId": 2,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "SubagentStop": {
+     "count": 2,
+     "withAgentId": 2,
+     "keys": [
+      "agent_id",
+      "agent_transcript_path",
+      "agent_type",
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "main-call",
+    "wf-p1",
+    "wf-p2"
+   ],
+   "probesMissed": [],
+   "agentTool": null,
+   "agentIsolationInInput": null,
+   "subagentStarts": 2,
+   "subagentTypes": [
+    "workflow-subagent"
+   ],
+   "agentIdNamesWorktree": null,
+   "metaHasWorktreePath": null,
+   "recordsWithMeta": null,
+   "claudeBase": null,
+   "claudeBaseIsFirstLog": null,
+   "delegatedRecordsLeft": 0,
+   "otherRecordsLeft": 0,
+   "otherClaudeBase": null,
+   "worktreesLeft": 0,
+   "sessionEnd": {
+    "count": 0,
+    "reasons": []
+   },
+   "sessionIds": 1,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ]
+   ],
+   "subagentBash": null,
+   "transcriptNamesAgent": "all",
+   "snapshots": {}
+  },
+  "2.1.294/agent-iso-bg": {
+   "status": "measured",
+   "events": {
+    "PostToolUse": {
+     "count": 2,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "PreToolUse": {
+     "count": 2,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "model",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "SubagentStart": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "SubagentStop": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_transcript_path",
+      "agent_type",
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "main-call",
+    "sub-bash",
+    "sub-done"
+   ],
+   "probesMissed": [],
+   "agentTool": "Agent",
+   "agentIsolationInInput": true,
+   "subagentStarts": 1,
+   "subagentTypes": [
+    "general-purpose"
+   ],
+   "agentIdNamesWorktree": true,
+   "metaHasWorktreePath": "all",
+   "recordsWithMeta": "all",
+   "claudeBase": "all",
+   "claudeBaseIsFirstLog": "all",
+   "delegatedRecordsLeft": 1,
+   "otherRecordsLeft": 0,
+   "otherClaudeBase": null,
+   "worktreesLeft": 1,
+   "sessionEnd": {
+    "count": 0,
+    "reasons": []
+   },
+   "sessionIds": 1,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ]
+   ],
+   "subagentBash": {
+    "count": 2,
+    "withAgentId": 2,
+    "firstSessionId": "all",
+    "cwdInWorktree": "all"
+   },
+   "transcriptNamesAgent": "all",
+   "snapshots": {}
+  },
+  "2.1.294/agent-iso-changed": {
+   "status": "measured",
+   "events": {
+    "PostToolUse": {
+     "count": 2,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "PreToolUse": {
+     "count": 2,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "model",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "SubagentStart": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "SubagentStop": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_transcript_path",
+      "agent_type",
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "main-call",
+    "main-done",
+    "sub-bash",
+    "sub-done"
+   ],
+   "probesMissed": [],
+   "agentTool": "Agent",
+   "agentIsolationInInput": true,
+   "subagentStarts": 1,
+   "subagentTypes": [
+    "general-purpose"
+   ],
+   "agentIdNamesWorktree": true,
+   "metaHasWorktreePath": "all",
+   "recordsWithMeta": "all",
+   "claudeBase": "all",
+   "claudeBaseIsFirstLog": "all",
+   "delegatedRecordsLeft": 1,
+   "otherRecordsLeft": 0,
+   "otherClaudeBase": null,
+   "worktreesLeft": 1,
+   "sessionEnd": {
+    "count": 0,
+    "reasons": []
+   },
+   "sessionIds": 1,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ]
+   ],
+   "subagentBash": {
+    "count": 2,
+    "withAgentId": 2,
+    "firstSessionId": "all",
+    "cwdInWorktree": "all"
+   },
+   "transcriptNamesAgent": "all",
+   "snapshots": {}
+  },
+  "2.1.294/agent-iso-dirty": {
+   "status": "measured",
+   "events": {
+    "PostToolUse": {
+     "count": 2,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "PreToolUse": {
+     "count": 2,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "model",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "SubagentStart": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "SubagentStop": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_transcript_path",
+      "agent_type",
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "main-call",
+    "main-done",
+    "sub-bash",
+    "sub-done"
+   ],
+   "probesMissed": [],
+   "agentTool": "Agent",
+   "agentIsolationInInput": true,
+   "subagentStarts": 1,
+   "subagentTypes": [
+    "general-purpose"
+   ],
+   "agentIdNamesWorktree": true,
+   "metaHasWorktreePath": "all",
+   "recordsWithMeta": "all",
+   "claudeBase": "all",
+   "claudeBaseIsFirstLog": "all",
+   "delegatedRecordsLeft": 1,
+   "otherRecordsLeft": 0,
+   "otherClaudeBase": null,
+   "worktreesLeft": 1,
+   "sessionEnd": {
+    "count": 0,
+    "reasons": []
+   },
+   "sessionIds": 1,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ]
+   ],
+   "subagentBash": {
+    "count": 2,
+    "withAgentId": 2,
+    "firstSessionId": "all",
+    "cwdInWorktree": "all"
+   },
+   "transcriptNamesAgent": "all",
+   "snapshots": {}
+  },
+  "2.1.294/agent-iso-unchanged": {
+   "status": "measured",
+   "events": {
+    "PostToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "PreToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "model",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "SubagentStart": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "SubagentStop": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_transcript_path",
+      "agent_type",
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "main-call",
+    "main-done",
+    "sub-done"
+   ],
+   "probesMissed": [],
+   "agentTool": "Agent",
+   "agentIsolationInInput": true,
+   "subagentStarts": 1,
+   "subagentTypes": [
+    "general-purpose"
+   ],
+   "agentIdNamesWorktree": null,
+   "metaHasWorktreePath": null,
+   "recordsWithMeta": null,
+   "claudeBase": null,
+   "claudeBaseIsFirstLog": null,
+   "delegatedRecordsLeft": 0,
+   "otherRecordsLeft": 0,
+   "otherClaudeBase": null,
+   "worktreesLeft": 0,
+   "sessionEnd": {
+    "count": 0,
+    "reasons": []
+   },
+   "sessionIds": 1,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ]
+   ],
+   "subagentBash": null,
+   "transcriptNamesAgent": "all",
+   "snapshots": {}
+  },
+  "2.1.294/agent-plain": {
+   "status": "measured",
+   "events": {
+    "PostToolUse": {
+     "count": 2,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "PreToolUse": {
+     "count": 2,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "model",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "SubagentStart": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "SubagentStop": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_transcript_path",
+      "agent_type",
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "main-call",
+    "main-done",
+    "sub-bash",
+    "sub-done"
+   ],
+   "probesMissed": [],
+   "agentTool": "Agent",
+   "agentIsolationInInput": false,
+   "subagentStarts": 1,
+   "subagentTypes": [
+    "general-purpose"
+   ],
+   "agentIdNamesWorktree": null,
+   "metaHasWorktreePath": null,
+   "recordsWithMeta": null,
+   "claudeBase": null,
+   "claudeBaseIsFirstLog": null,
+   "delegatedRecordsLeft": 0,
+   "otherRecordsLeft": 0,
+   "otherClaudeBase": null,
+   "worktreesLeft": 0,
+   "sessionEnd": {
+    "count": 0,
+    "reasons": []
+   },
+   "sessionIds": 1,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ]
+   ],
+   "subagentBash": {
+    "count": 2,
+    "withAgentId": 2,
+    "firstSessionId": "all",
+    "cwdInWorktree": "none"
+   },
+   "transcriptNamesAgent": "all",
+   "snapshots": {}
+  },
+  "2.1.294/clear-compact-resume": {
+   "status": "measured",
+   "events": {
+    "PostCompact": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "compact_summary",
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "session_id",
+      "transcript_path",
+      "trigger"
+     ]
+    },
+    "PreCompact": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "custom_instructions",
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "session_id",
+      "transcript_path",
+      "trigger"
+     ]
+    },
+    "SessionEnd": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "reason",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 3,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "model",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 3,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "SubagentStop": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_transcript_path",
+      "agent_type",
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 3,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "c1",
+    "c2",
+    "c3"
+   ],
+   "probesMissed": [],
+   "agentTool": null,
+   "agentIsolationInInput": null,
+   "subagentStarts": 0,
+   "subagentTypes": [],
+   "agentIdNamesWorktree": null,
+   "metaHasWorktreePath": null,
+   "recordsWithMeta": null,
+   "claudeBase": null,
+   "claudeBaseIsFirstLog": null,
+   "delegatedRecordsLeft": 0,
+   "otherRecordsLeft": 0,
+   "otherClaudeBase": null,
+   "worktreesLeft": 0,
+   "sessionEnd": {
+    "count": 2,
+    "reasons": [
+     "clear",
+     "prompt_input_exit"
+    ]
+   },
+   "sessionIds": 2,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ],
+    [
+     "clear",
+     "s2"
+    ],
+    [
+     "resume",
+     "s2"
+    ]
+   ],
+   "subagentBash": null,
+   "transcriptNamesAgent": "all",
+   "snapshots": {}
+  },
+  "2.1.294/interrupt-exit": {
+   "status": "measured",
+   "events": {
+    "PostToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "PreToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "SessionEnd": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "reason",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "model",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "SubagentStart": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "main-call",
+    "main-hang",
+    "sub-hang"
+   ],
+   "probesMissed": [],
+   "agentTool": "Agent",
+   "agentIsolationInInput": true,
+   "subagentStarts": 1,
+   "subagentTypes": [
+    "general-purpose"
+   ],
+   "agentIdNamesWorktree": true,
+   "metaHasWorktreePath": "all",
+   "recordsWithMeta": "all",
+   "claudeBase": "all",
+   "claudeBaseIsFirstLog": "all",
+   "delegatedRecordsLeft": 1,
+   "otherRecordsLeft": 0,
+   "otherClaudeBase": null,
+   "worktreesLeft": 1,
+   "sessionEnd": {
+    "count": 1,
+    "reasons": [
+     "prompt_input_exit"
+    ]
+   },
+   "sessionIds": 1,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ]
+   ],
+   "subagentBash": null,
+   "transcriptNamesAgent": null,
+   "snapshots": {}
+  },
+  "2.1.294/parent-kill": {
+   "status": "measured",
+   "events": {
+    "PostToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "PreToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "model",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "SubagentStart": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "main-call",
+    "sub-hang"
+   ],
+   "probesMissed": [],
+   "agentTool": "Agent",
+   "agentIsolationInInput": true,
+   "subagentStarts": 1,
+   "subagentTypes": [
+    "general-purpose"
+   ],
+   "agentIdNamesWorktree": true,
+   "metaHasWorktreePath": "all",
+   "recordsWithMeta": "all",
+   "claudeBase": "all",
+   "claudeBaseIsFirstLog": "all",
+   "delegatedRecordsLeft": 1,
+   "otherRecordsLeft": 0,
+   "otherClaudeBase": null,
+   "worktreesLeft": 1,
+   "sessionEnd": {
+    "count": 0,
+    "reasons": []
+   },
+   "sessionIds": 1,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ]
+   ],
+   "subagentBash": null,
+   "transcriptNamesAgent": null,
+   "snapshots": {
+    "before-kill": [
+     "agent-a7c94afdf348cdb32"
+    ]
+   }
+  },
+  "2.1.294/raw-worktree": {
+   "status": "measured",
+   "events": {
+    "PostToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "PreToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "model",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "main-bash",
+    "main-done"
+   ],
+   "probesMissed": [],
+   "agentTool": null,
+   "agentIsolationInInput": null,
+   "subagentStarts": 0,
+   "subagentTypes": [],
+   "agentIdNamesWorktree": null,
+   "metaHasWorktreePath": null,
+   "recordsWithMeta": null,
+   "claudeBase": null,
+   "claudeBaseIsFirstLog": null,
+   "delegatedRecordsLeft": 0,
+   "otherRecordsLeft": 1,
+   "otherClaudeBase": "none",
+   "worktreesLeft": 0,
+   "sessionEnd": {
+    "count": 0,
+    "reasons": []
+   },
+   "sessionIds": 1,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ]
+   ],
+   "subagentBash": null,
+   "transcriptNamesAgent": null,
+   "snapshots": {}
+  },
+  "2.1.294/swap-resume": {
+   "status": "measured",
+   "events": {
+    "SessionEnd": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "reason",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "context_tokens",
+      "cwd",
+      "estimated_cache_write_usd",
+      "hook_event_name",
+      "model",
+      "prompt_cache_likely_expired",
+      "seconds_since_last_response",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "s1",
+    "s2"
+   ],
+   "probesMissed": [],
+   "agentTool": null,
+   "agentIsolationInInput": null,
+   "subagentStarts": 0,
+   "subagentTypes": [],
+   "agentIdNamesWorktree": null,
+   "metaHasWorktreePath": null,
+   "recordsWithMeta": null,
+   "claudeBase": null,
+   "claudeBaseIsFirstLog": null,
+   "delegatedRecordsLeft": 0,
+   "otherRecordsLeft": 0,
+   "otherClaudeBase": null,
+   "worktreesLeft": 0,
+   "sessionEnd": {
+    "count": 2,
+    "reasons": [
+     "prompt_input_exit"
+    ]
+   },
+   "sessionIds": 1,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ],
+    [
+     "resume",
+     "s1"
+    ]
+   ],
+   "subagentBash": null,
+   "transcriptNamesAgent": null,
+   "snapshots": {}
+  },
+  "2.1.294/wf-iso": {
+   "status": "measured",
+   "events": {
+    "PostToolUse": {
+     "count": 2,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "PreToolUse": {
+     "count": 2,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "model",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "SubagentStart": {
+     "count": 2,
+     "withAgentId": 2,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "SubagentStop": {
+     "count": 2,
+     "withAgentId": 2,
+     "keys": [
+      "agent_id",
+      "agent_transcript_path",
+      "agent_type",
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "main-call",
+    "wf-i1-bash",
+    "wf-i1-done",
+    "wf-i2"
+   ],
+   "probesMissed": [],
+   "agentTool": null,
+   "agentIsolationInInput": null,
+   "subagentStarts": 2,
+   "subagentTypes": [
+    "workflow-subagent"
+   ],
+   "agentIdNamesWorktree": null,
+   "metaHasWorktreePath": "all",
+   "recordsWithMeta": "all",
+   "claudeBase": "all",
+   "claudeBaseIsFirstLog": "all",
+   "delegatedRecordsLeft": 1,
+   "otherRecordsLeft": 0,
+   "otherClaudeBase": null,
+   "worktreesLeft": 1,
+   "sessionEnd": {
+    "count": 0,
+    "reasons": []
+   },
+   "sessionIds": 1,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ]
+   ],
+   "subagentBash": {
+    "count": 2,
+    "withAgentId": 2,
+    "firstSessionId": "all",
+    "cwdInWorktree": "all"
+   },
+   "transcriptNamesAgent": "all",
+   "snapshots": {}
+  },
+  "2.1.294/wf-iso-resume": {
+   "status": "measured",
+   "events": {
+    "PostToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "PreToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "context_tokens",
+      "cwd",
+      "estimated_cache_write_usd",
+      "hook_event_name",
+      "model",
+      "prompt_cache_likely_expired",
+      "seconds_since_last_response",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "SubagentStart": {
+     "count": 2,
+     "withAgentId": 2,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "SubagentStop": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_transcript_path",
+      "agent_type",
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "main-call",
+    "r1-hang",
+    "r2"
+   ],
+   "probesMissed": [
+    "r1-resumed"
+   ],
+   "agentTool": null,
+   "agentIsolationInInput": null,
+   "subagentStarts": 2,
+   "subagentTypes": [
+    "workflow-subagent"
+   ],
+   "agentIdNamesWorktree": null,
+   "metaHasWorktreePath": "all",
+   "recordsWithMeta": "all",
+   "claudeBase": "all",
+   "claudeBaseIsFirstLog": "all",
+   "delegatedRecordsLeft": 1,
+   "otherRecordsLeft": 0,
+   "otherClaudeBase": null,
+   "worktreesLeft": 1,
+   "sessionEnd": {
+    "count": 0,
+    "reasons": []
+   },
+   "sessionIds": 1,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ],
+    [
+     "resume",
+     "s1"
+    ]
+   ],
+   "subagentBash": null,
+   "transcriptNamesAgent": "all",
+   "snapshots": {
+    "before-kill": [
+     "wf_ada0471a-369-1"
+    ]
+   }
+  },
+  "2.1.294/wf-limit-pause": {
+   "status": "measured",
+   "events": {
+    "PostToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "PreToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "model",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "SubagentStart": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "SubagentStop": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_transcript_path",
+      "agent_type",
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "l1-done",
+    "l1-limited",
+    "main-call"
+   ],
+   "probesMissed": [],
+   "agentTool": null,
+   "agentIsolationInInput": null,
+   "subagentStarts": 1,
+   "subagentTypes": [
+    "workflow-subagent"
+   ],
+   "agentIdNamesWorktree": null,
+   "metaHasWorktreePath": "all",
+   "recordsWithMeta": null,
+   "claudeBase": null,
+   "claudeBaseIsFirstLog": null,
+   "delegatedRecordsLeft": 0,
+   "otherRecordsLeft": 0,
+   "otherClaudeBase": null,
+   "worktreesLeft": 0,
+   "sessionEnd": {
+    "count": 0,
+    "reasons": []
+   },
+   "sessionIds": 1,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ]
+   ],
+   "subagentBash": null,
+   "transcriptNamesAgent": "all",
+   "snapshots": {}
+  },
+  "2.1.294/wf-plain": {
+   "status": "measured",
+   "events": {
+    "PostToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "PreToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "model",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "SubagentStart": {
+     "count": 2,
+     "withAgentId": 2,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "SubagentStop": {
+     "count": 2,
+     "withAgentId": 2,
+     "keys": [
+      "agent_id",
+      "agent_transcript_path",
+      "agent_type",
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "main-call",
+    "wf-p1",
+    "wf-p2"
+   ],
+   "probesMissed": [],
+   "agentTool": null,
+   "agentIsolationInInput": null,
+   "subagentStarts": 2,
+   "subagentTypes": [
+    "workflow-subagent"
+   ],
+   "agentIdNamesWorktree": null,
+   "metaHasWorktreePath": null,
+   "recordsWithMeta": null,
+   "claudeBase": null,
+   "claudeBaseIsFirstLog": null,
+   "delegatedRecordsLeft": 0,
+   "otherRecordsLeft": 0,
+   "otherClaudeBase": null,
+   "worktreesLeft": 0,
+   "sessionEnd": {
+    "count": 0,
+    "reasons": []
+   },
+   "sessionIds": 1,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ]
+   ],
+   "subagentBash": null,
+   "transcriptNamesAgent": "all",
+   "snapshots": {}
+  },
+  "2.1.295/agent-iso-bg": {
+   "status": "measured",
+   "events": {
+    "PostToolUse": {
+     "count": 2,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "PreToolUse": {
+     "count": 2,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "model",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "SubagentStart": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "SubagentStop": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_transcript_path",
+      "agent_type",
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "main-call",
+    "sub-bash",
+    "sub-done"
+   ],
+   "probesMissed": [],
+   "agentTool": "Agent",
+   "agentIsolationInInput": true,
+   "subagentStarts": 1,
+   "subagentTypes": [
+    "general-purpose"
+   ],
+   "agentIdNamesWorktree": true,
+   "metaHasWorktreePath": "all",
+   "recordsWithMeta": "all",
+   "claudeBase": "all",
+   "claudeBaseIsFirstLog": "all",
+   "delegatedRecordsLeft": 1,
+   "otherRecordsLeft": 0,
+   "otherClaudeBase": null,
+   "worktreesLeft": 1,
+   "sessionEnd": {
+    "count": 0,
+    "reasons": []
+   },
+   "sessionIds": 1,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ]
+   ],
+   "subagentBash": {
+    "count": 2,
+    "withAgentId": 2,
+    "firstSessionId": "all",
+    "cwdInWorktree": "all"
+   },
+   "transcriptNamesAgent": "all",
+   "snapshots": {}
+  },
+  "2.1.295/agent-iso-changed": {
+   "status": "measured",
+   "events": {
+    "PostToolUse": {
+     "count": 2,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "PreToolUse": {
+     "count": 2,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "model",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "SubagentStart": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "SubagentStop": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_transcript_path",
+      "agent_type",
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "main-call",
+    "main-done",
+    "sub-bash",
+    "sub-done"
+   ],
+   "probesMissed": [],
+   "agentTool": "Agent",
+   "agentIsolationInInput": true,
+   "subagentStarts": 1,
+   "subagentTypes": [
+    "general-purpose"
+   ],
+   "agentIdNamesWorktree": true,
+   "metaHasWorktreePath": "all",
+   "recordsWithMeta": "all",
+   "claudeBase": "all",
+   "claudeBaseIsFirstLog": "all",
+   "delegatedRecordsLeft": 1,
+   "otherRecordsLeft": 0,
+   "otherClaudeBase": null,
+   "worktreesLeft": 1,
+   "sessionEnd": {
+    "count": 0,
+    "reasons": []
+   },
+   "sessionIds": 1,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ]
+   ],
+   "subagentBash": {
+    "count": 2,
+    "withAgentId": 2,
+    "firstSessionId": "all",
+    "cwdInWorktree": "all"
+   },
+   "transcriptNamesAgent": "all",
+   "snapshots": {}
+  },
+  "2.1.295/agent-iso-dirty": {
+   "status": "measured",
+   "events": {
+    "PostToolUse": {
+     "count": 2,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "PreToolUse": {
+     "count": 2,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "model",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "SubagentStart": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "SubagentStop": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_transcript_path",
+      "agent_type",
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "main-call",
+    "main-done",
+    "sub-bash",
+    "sub-done"
+   ],
+   "probesMissed": [],
+   "agentTool": "Agent",
+   "agentIsolationInInput": true,
+   "subagentStarts": 1,
+   "subagentTypes": [
+    "general-purpose"
+   ],
+   "agentIdNamesWorktree": true,
+   "metaHasWorktreePath": "all",
+   "recordsWithMeta": "all",
+   "claudeBase": "all",
+   "claudeBaseIsFirstLog": "all",
+   "delegatedRecordsLeft": 1,
+   "otherRecordsLeft": 0,
+   "otherClaudeBase": null,
+   "worktreesLeft": 1,
+   "sessionEnd": {
+    "count": 0,
+    "reasons": []
+   },
+   "sessionIds": 1,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ]
+   ],
+   "subagentBash": {
+    "count": 2,
+    "withAgentId": 2,
+    "firstSessionId": "all",
+    "cwdInWorktree": "all"
+   },
+   "transcriptNamesAgent": "all",
+   "snapshots": {}
+  },
+  "2.1.295/agent-iso-unchanged": {
+   "status": "measured",
+   "events": {
+    "PostToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "PreToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "model",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "SubagentStart": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "SubagentStop": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_transcript_path",
+      "agent_type",
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "main-call",
+    "main-done",
+    "sub-done"
+   ],
+   "probesMissed": [],
+   "agentTool": "Agent",
+   "agentIsolationInInput": true,
+   "subagentStarts": 1,
+   "subagentTypes": [
+    "general-purpose"
+   ],
+   "agentIdNamesWorktree": null,
+   "metaHasWorktreePath": null,
+   "recordsWithMeta": null,
+   "claudeBase": null,
+   "claudeBaseIsFirstLog": null,
+   "delegatedRecordsLeft": 0,
+   "otherRecordsLeft": 0,
+   "otherClaudeBase": null,
+   "worktreesLeft": 0,
+   "sessionEnd": {
+    "count": 0,
+    "reasons": []
+   },
+   "sessionIds": 1,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ]
+   ],
+   "subagentBash": null,
+   "transcriptNamesAgent": "all",
+   "snapshots": {}
+  },
+  "2.1.295/agent-plain": {
+   "status": "measured",
+   "events": {
+    "PostToolUse": {
+     "count": 2,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "PreToolUse": {
+     "count": 2,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "model",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "SubagentStart": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "SubagentStop": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_transcript_path",
+      "agent_type",
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "main-call",
+    "main-done",
+    "sub-bash",
+    "sub-done"
+   ],
+   "probesMissed": [],
+   "agentTool": "Agent",
+   "agentIsolationInInput": false,
+   "subagentStarts": 1,
+   "subagentTypes": [
+    "general-purpose"
+   ],
+   "agentIdNamesWorktree": null,
+   "metaHasWorktreePath": null,
+   "recordsWithMeta": null,
+   "claudeBase": null,
+   "claudeBaseIsFirstLog": null,
+   "delegatedRecordsLeft": 0,
+   "otherRecordsLeft": 0,
+   "otherClaudeBase": null,
+   "worktreesLeft": 0,
+   "sessionEnd": {
+    "count": 0,
+    "reasons": []
+   },
+   "sessionIds": 1,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ]
+   ],
+   "subagentBash": {
+    "count": 2,
+    "withAgentId": 2,
+    "firstSessionId": "all",
+    "cwdInWorktree": "none"
+   },
+   "transcriptNamesAgent": "all",
+   "snapshots": {}
+  },
+  "2.1.295/clear-compact-resume": {
+   "status": "measured",
+   "events": {
+    "PostCompact": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "compact_summary",
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "session_id",
+      "transcript_path",
+      "trigger"
+     ]
+    },
+    "PreCompact": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "custom_instructions",
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "session_id",
+      "transcript_path",
+      "trigger"
+     ]
+    },
+    "SessionEnd": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "reason",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 3,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "model",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 3,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "SubagentStop": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_transcript_path",
+      "agent_type",
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 3,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "c1",
+    "c2",
+    "c3"
+   ],
+   "probesMissed": [],
+   "agentTool": null,
+   "agentIsolationInInput": null,
+   "subagentStarts": 0,
+   "subagentTypes": [],
+   "agentIdNamesWorktree": null,
+   "metaHasWorktreePath": null,
+   "recordsWithMeta": null,
+   "claudeBase": null,
+   "claudeBaseIsFirstLog": null,
+   "delegatedRecordsLeft": 0,
+   "otherRecordsLeft": 0,
+   "otherClaudeBase": null,
+   "worktreesLeft": 0,
+   "sessionEnd": {
+    "count": 2,
+    "reasons": [
+     "clear",
+     "prompt_input_exit"
+    ]
+   },
+   "sessionIds": 2,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ],
+    [
+     "clear",
+     "s2"
+    ],
+    [
+     "resume",
+     "s2"
+    ]
+   ],
+   "subagentBash": null,
+   "transcriptNamesAgent": "all",
+   "snapshots": {}
+  },
+  "2.1.295/interrupt-exit": {
+   "status": "unmeasured",
+   "reason": "waitLabels [\"sub-hang\",\"main-hang\"]: timeout",
+   "eventsSeen": {
+    "SessionStart": 1,
+    "UserPromptSubmit": 1,
+    "PreToolUse": 1,
+    "PostToolUse": 1,
+    "SubagentStart": 1,
+    "Stop": 1,
+    "SubagentStop": 1,
+    "SessionEnd": 1
+   }
+  },
+  "2.1.295/parent-kill": {
+   "status": "measured",
+   "events": {
+    "PostToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "PreToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "model",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "SubagentStart": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "main-call",
+    "sub-hang"
+   ],
+   "probesMissed": [],
+   "agentTool": "Agent",
+   "agentIsolationInInput": true,
+   "subagentStarts": 1,
+   "subagentTypes": [
+    "general-purpose"
+   ],
+   "agentIdNamesWorktree": true,
+   "metaHasWorktreePath": "all",
+   "recordsWithMeta": "all",
+   "claudeBase": "all",
+   "claudeBaseIsFirstLog": "all",
+   "delegatedRecordsLeft": 1,
+   "otherRecordsLeft": 0,
+   "otherClaudeBase": null,
+   "worktreesLeft": 1,
+   "sessionEnd": {
+    "count": 0,
+    "reasons": []
+   },
+   "sessionIds": 1,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ]
+   ],
+   "subagentBash": null,
+   "transcriptNamesAgent": null,
+   "snapshots": {
+    "before-kill": [
+     "agent-a8baa7dca1506da21"
+    ]
+   }
+  },
+  "2.1.295/raw-worktree": {
+   "status": "measured",
+   "events": {
+    "PostToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "PreToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "model",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "main-bash",
+    "main-done"
+   ],
+   "probesMissed": [],
+   "agentTool": null,
+   "agentIsolationInInput": null,
+   "subagentStarts": 0,
+   "subagentTypes": [],
+   "agentIdNamesWorktree": null,
+   "metaHasWorktreePath": null,
+   "recordsWithMeta": null,
+   "claudeBase": null,
+   "claudeBaseIsFirstLog": null,
+   "delegatedRecordsLeft": 0,
+   "otherRecordsLeft": 1,
+   "otherClaudeBase": "none",
+   "worktreesLeft": 0,
+   "sessionEnd": {
+    "count": 0,
+    "reasons": []
+   },
+   "sessionIds": 1,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ]
+   ],
+   "subagentBash": null,
+   "transcriptNamesAgent": null,
+   "snapshots": {}
+  },
+  "2.1.295/swap-resume": {
+   "status": "measured",
+   "events": {
+    "SessionEnd": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "reason",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "context_tokens",
+      "cwd",
+      "estimated_cache_write_usd",
+      "hook_event_name",
+      "model",
+      "prompt_cache_likely_expired",
+      "seconds_since_last_response",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "s1",
+    "s2"
+   ],
+   "probesMissed": [],
+   "agentTool": null,
+   "agentIsolationInInput": null,
+   "subagentStarts": 0,
+   "subagentTypes": [],
+   "agentIdNamesWorktree": null,
+   "metaHasWorktreePath": null,
+   "recordsWithMeta": null,
+   "claudeBase": null,
+   "claudeBaseIsFirstLog": null,
+   "delegatedRecordsLeft": 0,
+   "otherRecordsLeft": 0,
+   "otherClaudeBase": null,
+   "worktreesLeft": 0,
+   "sessionEnd": {
+    "count": 2,
+    "reasons": [
+     "prompt_input_exit"
+    ]
+   },
+   "sessionIds": 1,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ],
+    [
+     "resume",
+     "s1"
+    ]
+   ],
+   "subagentBash": null,
+   "transcriptNamesAgent": null,
+   "snapshots": {}
+  },
+  "2.1.295/wf-iso": {
+   "status": "measured",
+   "events": {
+    "PostToolUse": {
+     "count": 2,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "PreToolUse": {
+     "count": 2,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "model",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "SubagentStart": {
+     "count": 2,
+     "withAgentId": 2,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "SubagentStop": {
+     "count": 2,
+     "withAgentId": 2,
+     "keys": [
+      "agent_id",
+      "agent_transcript_path",
+      "agent_type",
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "main-call",
+    "wf-i1-bash",
+    "wf-i1-done",
+    "wf-i2"
+   ],
+   "probesMissed": [],
+   "agentTool": null,
+   "agentIsolationInInput": null,
+   "subagentStarts": 2,
+   "subagentTypes": [
+    "workflow-subagent"
+   ],
+   "agentIdNamesWorktree": null,
+   "metaHasWorktreePath": "all",
+   "recordsWithMeta": "all",
+   "claudeBase": "all",
+   "claudeBaseIsFirstLog": "all",
+   "delegatedRecordsLeft": 1,
+   "otherRecordsLeft": 0,
+   "otherClaudeBase": null,
+   "worktreesLeft": 1,
+   "sessionEnd": {
+    "count": 0,
+    "reasons": []
+   },
+   "sessionIds": 1,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ]
+   ],
+   "subagentBash": {
+    "count": 2,
+    "withAgentId": 2,
+    "firstSessionId": "all",
+    "cwdInWorktree": "all"
+   },
+   "transcriptNamesAgent": "all",
+   "snapshots": {}
+  },
+  "2.1.295/wf-iso-resume": {
+   "status": "measured",
+   "events": {
+    "PostToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "PreToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "context_tokens",
+      "cwd",
+      "estimated_cache_write_usd",
+      "hook_event_name",
+      "model",
+      "prompt_cache_likely_expired",
+      "seconds_since_last_response",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "SubagentStart": {
+     "count": 2,
+     "withAgentId": 2,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "SubagentStop": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_transcript_path",
+      "agent_type",
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "main-call",
+    "r1-hang",
+    "r2"
+   ],
+   "probesMissed": [
+    "r1-resumed"
+   ],
+   "agentTool": null,
+   "agentIsolationInInput": null,
+   "subagentStarts": 2,
+   "subagentTypes": [
+    "workflow-subagent"
+   ],
+   "agentIdNamesWorktree": null,
+   "metaHasWorktreePath": "all",
+   "recordsWithMeta": "all",
+   "claudeBase": "all",
+   "claudeBaseIsFirstLog": "all",
+   "delegatedRecordsLeft": 1,
+   "otherRecordsLeft": 0,
+   "otherClaudeBase": null,
+   "worktreesLeft": 1,
+   "sessionEnd": {
+    "count": 0,
+    "reasons": []
+   },
+   "sessionIds": 1,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ],
+    [
+     "resume",
+     "s1"
+    ]
+   ],
+   "subagentBash": null,
+   "transcriptNamesAgent": "all",
+   "snapshots": {
+    "before-kill": [
+     "wf_8b4f2e6b-98d-1"
+    ]
+   }
+  },
+  "2.1.295/wf-limit-pause": {
+   "status": "measured",
+   "events": {
+    "PostToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "PreToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "model",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "SubagentStart": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "SubagentStop": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_transcript_path",
+      "agent_type",
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "l1-done",
+    "l1-limited",
+    "main-call"
+   ],
+   "probesMissed": [],
+   "agentTool": null,
+   "agentIsolationInInput": null,
+   "subagentStarts": 1,
+   "subagentTypes": [
+    "workflow-subagent"
+   ],
+   "agentIdNamesWorktree": null,
+   "metaHasWorktreePath": "all",
+   "recordsWithMeta": null,
+   "claudeBase": null,
+   "claudeBaseIsFirstLog": null,
+   "delegatedRecordsLeft": 0,
+   "otherRecordsLeft": 0,
+   "otherClaudeBase": null,
+   "worktreesLeft": 0,
+   "sessionEnd": {
+    "count": 0,
+    "reasons": []
+   },
+   "sessionIds": 1,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ]
+   ],
+   "subagentBash": null,
+   "transcriptNamesAgent": "all",
+   "snapshots": {}
+  },
+  "2.1.295/wf-plain": {
+   "status": "measured",
+   "events": {
+    "PostToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "PreToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "model",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "SubagentStart": {
+     "count": 2,
+     "withAgentId": 2,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "SubagentStop": {
+     "count": 2,
+     "withAgentId": 2,
+     "keys": [
+      "agent_id",
+      "agent_transcript_path",
+      "agent_type",
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "main-call",
+    "wf-p1",
+    "wf-p2"
+   ],
+   "probesMissed": [],
+   "agentTool": null,
+   "agentIsolationInInput": null,
+   "subagentStarts": 2,
+   "subagentTypes": [
+    "workflow-subagent"
+   ],
+   "agentIdNamesWorktree": null,
+   "metaHasWorktreePath": null,
+   "recordsWithMeta": null,
+   "claudeBase": null,
+   "claudeBaseIsFirstLog": null,
+   "delegatedRecordsLeft": 0,
+   "otherRecordsLeft": 0,
+   "otherClaudeBase": null,
+   "worktreesLeft": 0,
+   "sessionEnd": {
+    "count": 0,
+    "reasons": []
+   },
+   "sessionIds": 1,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ]
+   ],
+   "subagentBash": null,
+   "transcriptNamesAgent": "all",
+   "snapshots": {}
+  },
+  "2.1.296/agent-iso-bg": {
+   "status": "measured",
+   "events": {
+    "PostToolUse": {
+     "count": 2,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "PreToolUse": {
+     "count": 2,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "model",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "SubagentStart": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "SubagentStop": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_transcript_path",
+      "agent_type",
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "main-call",
+    "sub-bash",
+    "sub-done"
+   ],
+   "probesMissed": [],
+   "agentTool": "Agent",
+   "agentIsolationInInput": true,
+   "subagentStarts": 1,
+   "subagentTypes": [
+    "general-purpose"
+   ],
+   "agentIdNamesWorktree": true,
+   "metaHasWorktreePath": "all",
+   "recordsWithMeta": "all",
+   "claudeBase": "all",
+   "claudeBaseIsFirstLog": "all",
+   "delegatedRecordsLeft": 1,
+   "otherRecordsLeft": 0,
+   "otherClaudeBase": null,
+   "worktreesLeft": 1,
+   "sessionEnd": {
+    "count": 0,
+    "reasons": []
+   },
+   "sessionIds": 1,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ]
+   ],
+   "subagentBash": {
+    "count": 2,
+    "withAgentId": 2,
+    "firstSessionId": "all",
+    "cwdInWorktree": "all"
+   },
+   "transcriptNamesAgent": "all",
+   "snapshots": {}
+  },
+  "2.1.296/agent-iso-changed": {
+   "status": "measured",
+   "events": {
+    "PostToolUse": {
+     "count": 2,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "PreToolUse": {
+     "count": 2,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "model",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "SubagentStart": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "SubagentStop": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_transcript_path",
+      "agent_type",
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "main-call",
+    "main-done",
+    "sub-bash",
+    "sub-done"
+   ],
+   "probesMissed": [],
+   "agentTool": "Agent",
+   "agentIsolationInInput": true,
+   "subagentStarts": 1,
+   "subagentTypes": [
+    "general-purpose"
+   ],
+   "agentIdNamesWorktree": true,
+   "metaHasWorktreePath": "all",
+   "recordsWithMeta": "all",
+   "claudeBase": "all",
+   "claudeBaseIsFirstLog": "all",
+   "delegatedRecordsLeft": 1,
+   "otherRecordsLeft": 0,
+   "otherClaudeBase": null,
+   "worktreesLeft": 1,
+   "sessionEnd": {
+    "count": 0,
+    "reasons": []
+   },
+   "sessionIds": 1,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ]
+   ],
+   "subagentBash": {
+    "count": 2,
+    "withAgentId": 2,
+    "firstSessionId": "all",
+    "cwdInWorktree": "all"
+   },
+   "transcriptNamesAgent": "all",
+   "snapshots": {}
+  },
+  "2.1.296/agent-iso-dirty": {
+   "status": "measured",
+   "events": {
+    "PostToolUse": {
+     "count": 2,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "PreToolUse": {
+     "count": 2,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "model",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "SubagentStart": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "SubagentStop": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_transcript_path",
+      "agent_type",
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "main-call",
+    "main-done",
+    "sub-bash",
+    "sub-done"
+   ],
+   "probesMissed": [],
+   "agentTool": "Agent",
+   "agentIsolationInInput": true,
+   "subagentStarts": 1,
+   "subagentTypes": [
+    "general-purpose"
+   ],
+   "agentIdNamesWorktree": true,
+   "metaHasWorktreePath": "all",
+   "recordsWithMeta": "all",
+   "claudeBase": "all",
+   "claudeBaseIsFirstLog": "all",
+   "delegatedRecordsLeft": 1,
+   "otherRecordsLeft": 0,
+   "otherClaudeBase": null,
+   "worktreesLeft": 1,
+   "sessionEnd": {
+    "count": 0,
+    "reasons": []
+   },
+   "sessionIds": 1,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ]
+   ],
+   "subagentBash": {
+    "count": 2,
+    "withAgentId": 2,
+    "firstSessionId": "all",
+    "cwdInWorktree": "all"
+   },
+   "transcriptNamesAgent": "all",
+   "snapshots": {}
+  },
+  "2.1.296/agent-iso-unchanged": {
+   "status": "measured",
+   "events": {
+    "PostToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "PreToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "model",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "SubagentStart": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "SubagentStop": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_transcript_path",
+      "agent_type",
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "main-call",
+    "main-done",
+    "sub-done"
+   ],
+   "probesMissed": [],
+   "agentTool": "Agent",
+   "agentIsolationInInput": true,
+   "subagentStarts": 1,
+   "subagentTypes": [
+    "general-purpose"
+   ],
+   "agentIdNamesWorktree": null,
+   "metaHasWorktreePath": null,
+   "recordsWithMeta": null,
+   "claudeBase": null,
+   "claudeBaseIsFirstLog": null,
+   "delegatedRecordsLeft": 0,
+   "otherRecordsLeft": 0,
+   "otherClaudeBase": null,
+   "worktreesLeft": 0,
+   "sessionEnd": {
+    "count": 0,
+    "reasons": []
+   },
+   "sessionIds": 1,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ]
+   ],
+   "subagentBash": null,
+   "transcriptNamesAgent": "all",
+   "snapshots": {}
+  },
+  "2.1.296/agent-plain": {
+   "status": "measured",
+   "events": {
+    "PostToolUse": {
+     "count": 2,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "PreToolUse": {
+     "count": 2,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "model",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "SubagentStart": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "SubagentStop": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_transcript_path",
+      "agent_type",
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "main-call",
+    "main-done",
+    "sub-bash",
+    "sub-done"
+   ],
+   "probesMissed": [],
+   "agentTool": "Agent",
+   "agentIsolationInInput": false,
+   "subagentStarts": 1,
+   "subagentTypes": [
+    "general-purpose"
+   ],
+   "agentIdNamesWorktree": null,
+   "metaHasWorktreePath": null,
+   "recordsWithMeta": null,
+   "claudeBase": null,
+   "claudeBaseIsFirstLog": null,
+   "delegatedRecordsLeft": 0,
+   "otherRecordsLeft": 0,
+   "otherClaudeBase": null,
+   "worktreesLeft": 0,
+   "sessionEnd": {
+    "count": 0,
+    "reasons": []
+   },
+   "sessionIds": 1,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ]
+   ],
+   "subagentBash": {
+    "count": 2,
+    "withAgentId": 2,
+    "firstSessionId": "all",
+    "cwdInWorktree": "none"
+   },
+   "transcriptNamesAgent": "all",
+   "snapshots": {}
+  },
+  "2.1.296/clear-compact-resume": {
+   "status": "measured",
+   "events": {
+    "PostCompact": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "compact_summary",
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "session_id",
+      "transcript_path",
+      "trigger"
+     ]
+    },
+    "PreCompact": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "custom_instructions",
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "session_id",
+      "transcript_path",
+      "trigger"
+     ]
+    },
+    "SessionEnd": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "reason",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 3,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "model",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 3,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "SubagentStop": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_transcript_path",
+      "agent_type",
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 3,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "c1",
+    "c2",
+    "c3"
+   ],
+   "probesMissed": [],
+   "agentTool": null,
+   "agentIsolationInInput": null,
+   "subagentStarts": 0,
+   "subagentTypes": [],
+   "agentIdNamesWorktree": null,
+   "metaHasWorktreePath": null,
+   "recordsWithMeta": null,
+   "claudeBase": null,
+   "claudeBaseIsFirstLog": null,
+   "delegatedRecordsLeft": 0,
+   "otherRecordsLeft": 0,
+   "otherClaudeBase": null,
+   "worktreesLeft": 0,
+   "sessionEnd": {
+    "count": 2,
+    "reasons": [
+     "clear",
+     "prompt_input_exit"
+    ]
+   },
+   "sessionIds": 2,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ],
+    [
+     "clear",
+     "s2"
+    ],
+    [
+     "resume",
+     "s2"
+    ]
+   ],
+   "subagentBash": null,
+   "transcriptNamesAgent": "all",
+   "snapshots": {}
+  },
+  "2.1.296/interrupt-exit": {
+   "status": "unmeasured",
+   "reason": "waitLabels [\"sub-hang\",\"main-hang\"]: timeout",
+   "eventsSeen": {
+    "SessionStart": 1,
+    "UserPromptSubmit": 1,
+    "PreToolUse": 1,
+    "PostToolUse": 1,
+    "SubagentStart": 1,
+    "Stop": 1,
+    "SubagentStop": 1,
+    "SessionEnd": 1
+   }
+  },
+  "2.1.296/parent-kill": {
+   "status": "measured",
+   "events": {
+    "PostToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "PreToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "model",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "SubagentStart": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "main-call",
+    "sub-hang"
+   ],
+   "probesMissed": [],
+   "agentTool": "Agent",
+   "agentIsolationInInput": true,
+   "subagentStarts": 1,
+   "subagentTypes": [
+    "general-purpose"
+   ],
+   "agentIdNamesWorktree": true,
+   "metaHasWorktreePath": "all",
+   "recordsWithMeta": "all",
+   "claudeBase": "all",
+   "claudeBaseIsFirstLog": "all",
+   "delegatedRecordsLeft": 1,
+   "otherRecordsLeft": 0,
+   "otherClaudeBase": null,
+   "worktreesLeft": 1,
+   "sessionEnd": {
+    "count": 0,
+    "reasons": []
+   },
+   "sessionIds": 1,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ]
+   ],
+   "subagentBash": null,
+   "transcriptNamesAgent": null,
+   "snapshots": {
+    "before-kill": [
+     "agent-a5bb4480ab71fba7a"
+    ]
+   }
+  },
+  "2.1.296/raw-worktree": {
+   "status": "measured",
+   "events": {
+    "PostToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "PreToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "model",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "main-bash",
+    "main-done"
+   ],
+   "probesMissed": [],
+   "agentTool": null,
+   "agentIsolationInInput": null,
+   "subagentStarts": 0,
+   "subagentTypes": [],
+   "agentIdNamesWorktree": null,
+   "metaHasWorktreePath": null,
+   "recordsWithMeta": null,
+   "claudeBase": null,
+   "claudeBaseIsFirstLog": null,
+   "delegatedRecordsLeft": 0,
+   "otherRecordsLeft": 1,
+   "otherClaudeBase": "none",
+   "worktreesLeft": 0,
+   "sessionEnd": {
+    "count": 0,
+    "reasons": []
+   },
+   "sessionIds": 1,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ]
+   ],
+   "subagentBash": null,
+   "transcriptNamesAgent": null,
+   "snapshots": {}
+  },
+  "2.1.296/swap-resume": {
+   "status": "measured",
+   "events": {
+    "SessionEnd": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "reason",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "context_tokens",
+      "cwd",
+      "estimated_cache_write_usd",
+      "hook_event_name",
+      "model",
+      "prompt_cache_likely_expired",
+      "seconds_since_last_response",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "s1",
+    "s2"
+   ],
+   "probesMissed": [],
+   "agentTool": null,
+   "agentIsolationInInput": null,
+   "subagentStarts": 0,
+   "subagentTypes": [],
+   "agentIdNamesWorktree": null,
+   "metaHasWorktreePath": null,
+   "recordsWithMeta": null,
+   "claudeBase": null,
+   "claudeBaseIsFirstLog": null,
+   "delegatedRecordsLeft": 0,
+   "otherRecordsLeft": 0,
+   "otherClaudeBase": null,
+   "worktreesLeft": 0,
+   "sessionEnd": {
+    "count": 2,
+    "reasons": [
+     "prompt_input_exit"
+    ]
+   },
+   "sessionIds": 1,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ],
+    [
+     "resume",
+     "s1"
+    ]
+   ],
+   "subagentBash": null,
+   "transcriptNamesAgent": null,
+   "snapshots": {}
+  },
+  "2.1.296/wf-iso": {
+   "status": "measured",
+   "events": {
+    "PostToolUse": {
+     "count": 2,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "PreToolUse": {
+     "count": 2,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "model",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "SubagentStart": {
+     "count": 2,
+     "withAgentId": 2,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "SubagentStop": {
+     "count": 2,
+     "withAgentId": 2,
+     "keys": [
+      "agent_id",
+      "agent_transcript_path",
+      "agent_type",
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "main-call",
+    "wf-i1-bash",
+    "wf-i1-done",
+    "wf-i2"
+   ],
+   "probesMissed": [],
+   "agentTool": null,
+   "agentIsolationInInput": null,
+   "subagentStarts": 2,
+   "subagentTypes": [
+    "workflow-subagent"
+   ],
+   "agentIdNamesWorktree": null,
+   "metaHasWorktreePath": "all",
+   "recordsWithMeta": "all",
+   "claudeBase": "all",
+   "claudeBaseIsFirstLog": "all",
+   "delegatedRecordsLeft": 1,
+   "otherRecordsLeft": 0,
+   "otherClaudeBase": null,
+   "worktreesLeft": 1,
+   "sessionEnd": {
+    "count": 0,
+    "reasons": []
+   },
+   "sessionIds": 1,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ]
+   ],
+   "subagentBash": {
+    "count": 2,
+    "withAgentId": 2,
+    "firstSessionId": "all",
+    "cwdInWorktree": "all"
+   },
+   "transcriptNamesAgent": "all",
+   "snapshots": {}
+  },
+  "2.1.296/wf-iso-resume": {
+   "status": "measured",
+   "events": {
+    "PostToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "PreToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "context_tokens",
+      "cwd",
+      "estimated_cache_write_usd",
+      "hook_event_name",
+      "model",
+      "prompt_cache_likely_expired",
+      "seconds_since_last_response",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "SubagentStart": {
+     "count": 2,
+     "withAgentId": 2,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "SubagentStop": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_transcript_path",
+      "agent_type",
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "main-call",
+    "r1-hang",
+    "r2"
+   ],
+   "probesMissed": [
+    "r1-resumed"
+   ],
+   "agentTool": null,
+   "agentIsolationInInput": null,
+   "subagentStarts": 2,
+   "subagentTypes": [
+    "workflow-subagent"
+   ],
+   "agentIdNamesWorktree": null,
+   "metaHasWorktreePath": "all",
+   "recordsWithMeta": "all",
+   "claudeBase": "all",
+   "claudeBaseIsFirstLog": "all",
+   "delegatedRecordsLeft": 1,
+   "otherRecordsLeft": 0,
+   "otherClaudeBase": null,
+   "worktreesLeft": 1,
+   "sessionEnd": {
+    "count": 0,
+    "reasons": []
+   },
+   "sessionIds": 1,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ],
+    [
+     "resume",
+     "s1"
+    ]
+   ],
+   "subagentBash": null,
+   "transcriptNamesAgent": "all",
+   "snapshots": {
+    "before-kill": [
+     "wf_8958a4a9-03f-1"
+    ]
+   }
+  },
+  "2.1.296/wf-limit-pause": {
+   "status": "measured",
+   "events": {
+    "PostToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "PreToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "model",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "SubagentStart": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "SubagentStop": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_transcript_path",
+      "agent_type",
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "l1-done",
+    "l1-limited",
+    "main-call"
+   ],
+   "probesMissed": [],
+   "agentTool": null,
+   "agentIsolationInInput": null,
+   "subagentStarts": 1,
+   "subagentTypes": [
+    "workflow-subagent"
+   ],
+   "agentIdNamesWorktree": null,
+   "metaHasWorktreePath": "all",
+   "recordsWithMeta": null,
+   "claudeBase": null,
+   "claudeBaseIsFirstLog": null,
+   "delegatedRecordsLeft": 0,
+   "otherRecordsLeft": 0,
+   "otherClaudeBase": null,
+   "worktreesLeft": 0,
+   "sessionEnd": {
+    "count": 0,
+    "reasons": []
+   },
+   "sessionIds": 1,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ]
+   ],
+   "subagentBash": null,
+   "transcriptNamesAgent": "all",
+   "snapshots": {}
+  },
+  "2.1.296/wf-plain": {
+   "status": "measured",
+   "events": {
+    "PostToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "PreToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "model",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "SubagentStart": {
+     "count": 2,
+     "withAgentId": 2,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "SubagentStop": {
+     "count": 2,
+     "withAgentId": 2,
+     "keys": [
+      "agent_id",
+      "agent_transcript_path",
+      "agent_type",
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "main-call",
+    "wf-p1",
+    "wf-p2"
+   ],
+   "probesMissed": [],
+   "agentTool": null,
+   "agentIsolationInInput": null,
+   "subagentStarts": 2,
+   "subagentTypes": [
+    "workflow-subagent"
+   ],
+   "agentIdNamesWorktree": null,
+   "metaHasWorktreePath": null,
+   "recordsWithMeta": null,
+   "claudeBase": null,
+   "claudeBaseIsFirstLog": null,
+   "delegatedRecordsLeft": 0,
+   "otherRecordsLeft": 0,
+   "otherClaudeBase": null,
+   "worktreesLeft": 0,
+   "sessionEnd": {
+    "count": 0,
+    "reasons": []
+   },
+   "sessionIds": 1,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ]
+   ],
+   "subagentBash": null,
+   "transcriptNamesAgent": "all",
+   "snapshots": {}
+  },
+  "2.1.299/agent-iso-bg": {
+   "status": "measured",
+   "events": {
+    "PostToolUse": {
+     "count": 2,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "PreToolUse": {
+     "count": 2,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "model",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "SubagentStart": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "SubagentStop": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_transcript_path",
+      "agent_type",
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "main-call",
+    "sub-bash",
+    "sub-done"
+   ],
+   "probesMissed": [],
+   "agentTool": "Agent",
+   "agentIsolationInInput": true,
+   "subagentStarts": 1,
+   "subagentTypes": [
+    "general-purpose"
+   ],
+   "agentIdNamesWorktree": true,
+   "metaHasWorktreePath": "all",
+   "recordsWithMeta": "all",
+   "claudeBase": "all",
+   "claudeBaseIsFirstLog": "all",
+   "delegatedRecordsLeft": 1,
+   "otherRecordsLeft": 0,
+   "otherClaudeBase": null,
+   "worktreesLeft": 1,
+   "sessionEnd": {
+    "count": 0,
+    "reasons": []
+   },
+   "sessionIds": 1,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ]
+   ],
+   "subagentBash": {
+    "count": 2,
+    "withAgentId": 2,
+    "firstSessionId": "all",
+    "cwdInWorktree": "all"
+   },
+   "transcriptNamesAgent": "all",
+   "snapshots": {}
+  },
+  "2.1.299/agent-iso-changed": {
+   "status": "measured",
+   "events": {
+    "PostToolUse": {
+     "count": 2,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "PreToolUse": {
+     "count": 2,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "model",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "SubagentStart": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "SubagentStop": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_transcript_path",
+      "agent_type",
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "main-call",
+    "main-done",
+    "sub-bash",
+    "sub-done"
+   ],
+   "probesMissed": [],
+   "agentTool": "Agent",
+   "agentIsolationInInput": true,
+   "subagentStarts": 1,
+   "subagentTypes": [
+    "general-purpose"
+   ],
+   "agentIdNamesWorktree": true,
+   "metaHasWorktreePath": "all",
+   "recordsWithMeta": "all",
+   "claudeBase": "all",
+   "claudeBaseIsFirstLog": "all",
+   "delegatedRecordsLeft": 1,
+   "otherRecordsLeft": 0,
+   "otherClaudeBase": null,
+   "worktreesLeft": 1,
+   "sessionEnd": {
+    "count": 0,
+    "reasons": []
+   },
+   "sessionIds": 1,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ]
+   ],
+   "subagentBash": {
+    "count": 2,
+    "withAgentId": 2,
+    "firstSessionId": "all",
+    "cwdInWorktree": "all"
+   },
+   "transcriptNamesAgent": "all",
+   "snapshots": {}
+  },
+  "2.1.299/agent-iso-dirty": {
+   "status": "measured",
+   "events": {
+    "PostToolUse": {
+     "count": 2,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "PreToolUse": {
+     "count": 2,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "model",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "SubagentStart": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "SubagentStop": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_transcript_path",
+      "agent_type",
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "main-call",
+    "main-done",
+    "sub-bash",
+    "sub-done"
+   ],
+   "probesMissed": [],
+   "agentTool": "Agent",
+   "agentIsolationInInput": true,
+   "subagentStarts": 1,
+   "subagentTypes": [
+    "general-purpose"
+   ],
+   "agentIdNamesWorktree": true,
+   "metaHasWorktreePath": "all",
+   "recordsWithMeta": "all",
+   "claudeBase": "all",
+   "claudeBaseIsFirstLog": "all",
+   "delegatedRecordsLeft": 1,
+   "otherRecordsLeft": 0,
+   "otherClaudeBase": null,
+   "worktreesLeft": 1,
+   "sessionEnd": {
+    "count": 0,
+    "reasons": []
+   },
+   "sessionIds": 1,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ]
+   ],
+   "subagentBash": {
+    "count": 2,
+    "withAgentId": 2,
+    "firstSessionId": "all",
+    "cwdInWorktree": "all"
+   },
+   "transcriptNamesAgent": "all",
+   "snapshots": {}
+  },
+  "2.1.299/agent-iso-unchanged": {
+   "status": "measured",
+   "events": {
+    "PostToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "PreToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "model",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "SubagentStart": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "SubagentStop": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_transcript_path",
+      "agent_type",
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "main-call",
+    "main-done",
+    "sub-done"
+   ],
+   "probesMissed": [],
+   "agentTool": "Agent",
+   "agentIsolationInInput": true,
+   "subagentStarts": 1,
+   "subagentTypes": [
+    "general-purpose"
+   ],
+   "agentIdNamesWorktree": null,
+   "metaHasWorktreePath": null,
+   "recordsWithMeta": null,
+   "claudeBase": null,
+   "claudeBaseIsFirstLog": null,
+   "delegatedRecordsLeft": 0,
+   "otherRecordsLeft": 0,
+   "otherClaudeBase": null,
+   "worktreesLeft": 0,
+   "sessionEnd": {
+    "count": 0,
+    "reasons": []
+   },
+   "sessionIds": 1,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ]
+   ],
+   "subagentBash": null,
+   "transcriptNamesAgent": "all",
+   "snapshots": {}
+  },
+  "2.1.299/agent-plain": {
+   "status": "measured",
+   "events": {
+    "PostToolUse": {
+     "count": 2,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "PreToolUse": {
+     "count": 2,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "model",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "SubagentStart": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "SubagentStop": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_transcript_path",
+      "agent_type",
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "main-call",
+    "main-done",
+    "sub-bash",
+    "sub-done"
+   ],
+   "probesMissed": [],
+   "agentTool": "Agent",
+   "agentIsolationInInput": false,
+   "subagentStarts": 1,
+   "subagentTypes": [
+    "general-purpose"
+   ],
+   "agentIdNamesWorktree": null,
+   "metaHasWorktreePath": null,
+   "recordsWithMeta": null,
+   "claudeBase": null,
+   "claudeBaseIsFirstLog": null,
+   "delegatedRecordsLeft": 0,
+   "otherRecordsLeft": 0,
+   "otherClaudeBase": null,
+   "worktreesLeft": 0,
+   "sessionEnd": {
+    "count": 0,
+    "reasons": []
+   },
+   "sessionIds": 1,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ]
+   ],
+   "subagentBash": {
+    "count": 2,
+    "withAgentId": 2,
+    "firstSessionId": "all",
+    "cwdInWorktree": "none"
+   },
+   "transcriptNamesAgent": "all",
+   "snapshots": {}
+  },
+  "2.1.299/clear-compact-resume": {
+   "status": "measured",
+   "events": {
+    "PostCompact": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "compact_summary",
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "session_id",
+      "transcript_path",
+      "trigger"
+     ]
+    },
+    "PreCompact": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "custom_instructions",
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "session_id",
+      "transcript_path",
+      "trigger"
+     ]
+    },
+    "SessionEnd": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "reason",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 3,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "model",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 3,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "SubagentStop": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_transcript_path",
+      "agent_type",
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 3,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "c1",
+    "c2",
+    "c3"
+   ],
+   "probesMissed": [],
+   "agentTool": null,
+   "agentIsolationInInput": null,
+   "subagentStarts": 0,
+   "subagentTypes": [],
+   "agentIdNamesWorktree": null,
+   "metaHasWorktreePath": null,
+   "recordsWithMeta": null,
+   "claudeBase": null,
+   "claudeBaseIsFirstLog": null,
+   "delegatedRecordsLeft": 0,
+   "otherRecordsLeft": 0,
+   "otherClaudeBase": null,
+   "worktreesLeft": 0,
+   "sessionEnd": {
+    "count": 2,
+    "reasons": [
+     "clear",
+     "prompt_input_exit"
+    ]
+   },
+   "sessionIds": 2,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ],
+    [
+     "clear",
+     "s2"
+    ],
+    [
+     "resume",
+     "s2"
+    ]
+   ],
+   "subagentBash": null,
+   "transcriptNamesAgent": "all",
+   "snapshots": {}
+  },
+  "2.1.299/interrupt-exit": {
+   "status": "unmeasured",
+   "reason": "waitLabels [\"sub-hang\",\"main-hang\"]: timeout",
+   "eventsSeen": {
+    "SessionStart": 1,
+    "UserPromptSubmit": 1,
+    "PreToolUse": 1,
+    "PostToolUse": 1,
+    "SubagentStart": 1,
+    "Stop": 1,
+    "SubagentStop": 1,
+    "SessionEnd": 1
+   }
+  },
+  "2.1.299/parent-kill": {
+   "status": "measured",
+   "events": {
+    "PostToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "PreToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "model",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "SubagentStart": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "main-call",
+    "sub-hang"
+   ],
+   "probesMissed": [],
+   "agentTool": "Agent",
+   "agentIsolationInInput": true,
+   "subagentStarts": 1,
+   "subagentTypes": [
+    "general-purpose"
+   ],
+   "agentIdNamesWorktree": true,
+   "metaHasWorktreePath": "all",
+   "recordsWithMeta": "all",
+   "claudeBase": "all",
+   "claudeBaseIsFirstLog": "all",
+   "delegatedRecordsLeft": 1,
+   "otherRecordsLeft": 0,
+   "otherClaudeBase": null,
+   "worktreesLeft": 1,
+   "sessionEnd": {
+    "count": 0,
+    "reasons": []
+   },
+   "sessionIds": 1,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ]
+   ],
+   "subagentBash": null,
+   "transcriptNamesAgent": null,
+   "snapshots": {
+    "before-kill": [
+     "agent-ad1523ab93304683c"
+    ]
+   }
+  },
+  "2.1.299/raw-worktree": {
+   "status": "measured",
+   "events": {
+    "PostToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "PreToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "model",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "main-bash",
+    "main-done"
+   ],
+   "probesMissed": [],
+   "agentTool": null,
+   "agentIsolationInInput": null,
+   "subagentStarts": 0,
+   "subagentTypes": [],
+   "agentIdNamesWorktree": null,
+   "metaHasWorktreePath": null,
+   "recordsWithMeta": null,
+   "claudeBase": null,
+   "claudeBaseIsFirstLog": null,
+   "delegatedRecordsLeft": 0,
+   "otherRecordsLeft": 1,
+   "otherClaudeBase": "none",
+   "worktreesLeft": 0,
+   "sessionEnd": {
+    "count": 0,
+    "reasons": []
+   },
+   "sessionIds": 1,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ]
+   ],
+   "subagentBash": null,
+   "transcriptNamesAgent": null,
+   "snapshots": {}
+  },
+  "2.1.299/swap-resume": {
+   "status": "measured",
+   "events": {
+    "SessionEnd": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "reason",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "context_tokens",
+      "cwd",
+      "estimated_cache_write_usd",
+      "hook_event_name",
+      "model",
+      "prompt_cache_likely_expired",
+      "seconds_since_last_response",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "s1",
+    "s2"
+   ],
+   "probesMissed": [],
+   "agentTool": null,
+   "agentIsolationInInput": null,
+   "subagentStarts": 0,
+   "subagentTypes": [],
+   "agentIdNamesWorktree": null,
+   "metaHasWorktreePath": null,
+   "recordsWithMeta": null,
+   "claudeBase": null,
+   "claudeBaseIsFirstLog": null,
+   "delegatedRecordsLeft": 0,
+   "otherRecordsLeft": 0,
+   "otherClaudeBase": null,
+   "worktreesLeft": 0,
+   "sessionEnd": {
+    "count": 2,
+    "reasons": [
+     "prompt_input_exit"
+    ]
+   },
+   "sessionIds": 1,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ],
+    [
+     "resume",
+     "s1"
+    ]
+   ],
+   "subagentBash": null,
+   "transcriptNamesAgent": null,
+   "snapshots": {}
+  },
+  "2.1.299/wf-iso": {
+   "status": "measured",
+   "events": {
+    "PostToolUse": {
+     "count": 2,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "PreToolUse": {
+     "count": 2,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "model",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "SubagentStart": {
+     "count": 2,
+     "withAgentId": 2,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "SubagentStop": {
+     "count": 2,
+     "withAgentId": 2,
+     "keys": [
+      "agent_id",
+      "agent_transcript_path",
+      "agent_type",
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "main-call",
+    "wf-i1-bash",
+    "wf-i1-done",
+    "wf-i2"
+   ],
+   "probesMissed": [],
+   "agentTool": null,
+   "agentIsolationInInput": null,
+   "subagentStarts": 2,
+   "subagentTypes": [
+    "workflow-subagent"
+   ],
+   "agentIdNamesWorktree": null,
+   "metaHasWorktreePath": "all",
+   "recordsWithMeta": "all",
+   "claudeBase": "all",
+   "claudeBaseIsFirstLog": "all",
+   "delegatedRecordsLeft": 1,
+   "otherRecordsLeft": 0,
+   "otherClaudeBase": null,
+   "worktreesLeft": 1,
+   "sessionEnd": {
+    "count": 0,
+    "reasons": []
+   },
+   "sessionIds": 1,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ]
+   ],
+   "subagentBash": {
+    "count": 2,
+    "withAgentId": 2,
+    "firstSessionId": "all",
+    "cwdInWorktree": "all"
+   },
+   "transcriptNamesAgent": "all",
+   "snapshots": {}
+  },
+  "2.1.299/wf-iso-resume": {
+   "status": "measured",
+   "events": {
+    "PostToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "PreToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "context_tokens",
+      "cwd",
+      "estimated_cache_write_usd",
+      "hook_event_name",
+      "model",
+      "prompt_cache_likely_expired",
+      "seconds_since_last_response",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "SubagentStart": {
+     "count": 2,
+     "withAgentId": 2,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "SubagentStop": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_transcript_path",
+      "agent_type",
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "main-call",
+    "r1-hang",
+    "r2"
+   ],
+   "probesMissed": [
+    "r1-resumed"
+   ],
+   "agentTool": null,
+   "agentIsolationInInput": null,
+   "subagentStarts": 2,
+   "subagentTypes": [
+    "workflow-subagent"
+   ],
+   "agentIdNamesWorktree": null,
+   "metaHasWorktreePath": "all",
+   "recordsWithMeta": "all",
+   "claudeBase": "all",
+   "claudeBaseIsFirstLog": "all",
+   "delegatedRecordsLeft": 1,
+   "otherRecordsLeft": 0,
+   "otherClaudeBase": null,
+   "worktreesLeft": 1,
+   "sessionEnd": {
+    "count": 0,
+    "reasons": []
+   },
+   "sessionIds": 1,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ],
+    [
+     "resume",
+     "s1"
+    ]
+   ],
+   "subagentBash": null,
+   "transcriptNamesAgent": "all",
+   "snapshots": {
+    "before-kill": [
+     "wf_1f09b86a-4d3-1"
+    ]
+   }
+  },
+  "2.1.299/wf-limit-pause": {
+   "status": "measured",
+   "events": {
+    "PostToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "PreToolUse": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    "SessionStart": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "model",
+      "session_id",
+      "source",
+      "transcript_path"
+     ]
+    },
+    "Stop": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "SubagentStart": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_type",
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    },
+    "SubagentStop": {
+     "count": 1,
+     "withAgentId": 1,
+     "keys": [
+      "agent_id",
+      "agent_transcript_path",
+      "agent_type",
+      "background_tasks",
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "last_assistant_message",
+      "permission_mode",
+      "prompt_id",
+      "session_crons",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path"
+     ]
+    },
+    "UserPromptSubmit": {
+     "count": 2,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt",
+      "prompt_id",
+      "session_id",
+      "transcript_path"
+     ]
+    }
+   },
+   "labels": [
+    "l1-done",
+    "l1-limited",
+    "main-call"
+   ],
+   "probesMissed": [],
+   "agentTool": null,
+   "agentIsolationInInput": null,
+   "subagentStarts": 1,
+   "subagentTypes": [
+    "workflow-subagent"
+   ],
+   "agentIdNamesWorktree": null,
+   "metaHasWorktreePath": "all",
+   "recordsWithMeta": null,
+   "claudeBase": null,
+   "claudeBaseIsFirstLog": null,
+   "delegatedRecordsLeft": 0,
+   "otherRecordsLeft": 0,
+   "otherClaudeBase": null,
+   "worktreesLeft": 0,
+   "sessionEnd": {
+    "count": 0,
+    "reasons": []
+   },
+   "sessionIds": 1,
+   "sessionStarts": [
+    [
+     "startup",
+     "s1"
+    ]
+   ],
+   "subagentBash": null,
+   "transcriptNamesAgent": "all",
+   "snapshots": {}
+  },
+  "2.1.299/wf-plain": {
    "status": "measured",
    "events": {
     "PostToolUse": {

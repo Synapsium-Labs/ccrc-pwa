@@ -131,9 +131,9 @@ Every task's requirements include this section. `CLAUDE.md` is the authority; th
 | `ui/src/styles/skins.ts` | **Create** | the skin catalogue (`SKINS`, ids, `preview`), `SKIN_STORAGE_KEY`, `SKIN_TOKENS` (with each tap-bearing density token marked), `resolveSkin`, `applySkin`; `AUTO` and `DEVICE_QUERY` in Task 12a | 1, 2, 5, 12a |
 | `ui/src/styles/skins.css` | **Create** | `:root[data-skin='instrument']` and its media blocks: Instrument's token values, no colour | 1, 5, 11 |
 | `ui/src/styles/tokens.css` | Modify | `:root` gains the role tokens with Refined's values, `--fs-md` and `--ls-tight` (Task 1); meter tokens (5); `--ink-on-danger` (6); the Geist stacks (7); `--bg-hover` and `--bg-pressed` (9); Refined's radii (11). The generated block is regenerated in Tasks 4, 6 and 9. | 1, 4–7, 9, 11 |
-| `ui/src/styles/theme.css` | Modify | imports `skins.css` (1) and `fonts.css` (7) after `tokens.css`; maps the new tokens | 1, 6, 7, 9 |
+| `ui/src/styles/theme.css` | Modify | imports `skins.css` (1) and `fonts.css` (7: none, D-5450) after `tokens.css`; maps the new tokens | 1, 6, 7, 9 |
 | `ui/src/lib/cn.ts` | Modify | the merge learns the new utilities: the font-size group gains `md`, `ui`, `prose`, `meta`, `title` and `section`; the spacing scale gains `gutter`, `row`, `card` and `section` | 1 |
-| `ui/src/styles/fonts.css` | **Create** | the two `@font-face` rules | 7 |
+| `ui/src/styles/fonts.css` | **Create** | the two `@font-face` rules (not created: D-5450) | 7 |
 | `ui/src/fonts/Geist-Variable.woff2`, `GeistMono-Variable.woff2`, `OFL.txt` | **Create** | the vendored Geist pair and its licence | 7 |
 | `pwa/public/licenses/Geist-OFL.txt` | **Create** | the licence as shipped with the app (a bound copy) | 7 |
 | `ui/src/icons/lucide.ts`, `ui/src/icons/LICENSE.lucide` | **Create** | the vendored lucide icon nodes in use, and the ISC licence | 8 |
@@ -179,7 +179,7 @@ Every task's requirements include this section. `CLAUDE.md` is the authority; th
 | `pwa/src/stores/fleet.ts` | Modify | the `divergence` frame's arm in `asFleetMsg`, and the census in state | 15 |
 | `pwa/src/fleet/integrityWords.ts` | **Create** | the pure model of the divergence census | 15 |
 | `pwa/src/session/sessionFacts.ts` | **Create** | the pure model of a session's version and cost | 16 |
-| `pwa/src/session/ChatList.tsx` | Modify (with Task 17's gate) | the list leaves room under its last row while the pill shows | 17 |
+| `pwa/src/session/ChatList.tsx` | Modify (with Task 17's gate) | the at-bottom threshold is the pill's band, so the pill never covers a failed send's Retry or Discard (D-5464) | 17 |
 | `.github/workflows/ci.yml` | Modify (after #402) | `storybook-a11y` once per skin | 3b |
 | `server/test/ci-pipeline.test.ts` | Modify (after #402) | pins the per-skin a11y run | 3b |
 | `pwa/test/skin-catalogue.test.ts`, `skin-boot.test.tsx`, `skin-identity.test.ts`, `ink-tiers.test.ts`, `meter.test.tsx`, `danger-buttons.test.tsx`, `fonts.test.ts`, `icon.test.tsx`, `hover-states.test.ts`, `command-registry.test.ts`, `command-layer.test.tsx`, `page-scaffold.test.tsx`, `skin-picker.test.tsx`, `base-defaults.test.ts`, `role-census.test.ts`, `integrity-frame.test.ts`, `integrity-words.test.ts`, `session-facts.test.ts`, `jump-latest.test.tsx`; `fonts-built.test.ts` (7b) | **Create** | each task's own red suite | 1–17 |
@@ -1175,7 +1175,7 @@ Item 2's one hazard: Chrome lets the standard scrollbar properties win over `::-
 
 **Why gated.** The pill's rule lives in `pwa/src/session/chat.css`, and the control census (`control-census.test.ts`) registers it as `'session/ChatList.tsx <button> jump-latest'`. Both in-flight branches edit both files. `ChatList.tsx` itself is free.
 
-**Routing:** band 2. **Needs:** the two merges. **Deviation number:** none (a defect fix).
+**Routing:** band 2. **Needs:** the two merges. **Deviation number:** none issued in advance (a defect fix); executing it found D-5464 (§Deviations found, "Found while executing Task 17").
 
 **What is measured** (spec §2 item 12). `.jump-latest` is absolutely placed at `bottom: var(--sp-3)` over the list (`chat.css`), and `ChatList.tsx` renders it whenever Virtuoso reports the reader is not at the bottom. The audit measured it covering a failed send's Retry and Discard at 390.
 
@@ -1251,6 +1251,7 @@ Mark it ✓, or write the defect and its fix.
   - **The licence:** `OFL.txt` sits beside the fonts, and a bound copy ships at `/licenses/Geist-OFL.txt` through `pwa/public/`. The service worker's denylist gains `/licenses/`, so an installed client reaches the file rather than the app shell. After #384 the Layout fieldset carries one line naming the fonts and linking the notice (Task 12b).
   - **No external request:** a test forbids any external font host in every stylesheet, `index.html` and source file.
   - **Offline precache:** the workbox `globPatterns` gains `woff2` in Step 7b, after #402, which edits `pwa/vite.config.ts`. Until then an offline first load uses the system stack, which is today's behaviour.
+  - **As landed (Task 7):** the files come from `geist@1.8.1`, their SHA-256s recorded in `tokens.css` and held by `pwa/test/fonts.test.ts`. The two `@font-face` rules sit atop `ui/src/styles/tokens.css`, not in a `fonts.css` of their own (D-5450), and `swDenylist`'s own list is `/api/`, `/ws/` and `/licenses/`. Step 7b is not in Task 7's PR.
 - **D-5096** — `skin-default-and-picker` (Tasks 12a and 12b): first-run default by primary input, never by width. `AUTO` resolves `(hover: hover) and (pointer: fine)` to Instrument and everything else to Refined, so tablets get Refined (the spec's O1 ruling), and resizing never flips the skin: a narrow desktop window keeps its device's skin and shows that skin's phone layout (O2).
   - **Once per page load:** the device fact is read at `initSkin()` and never subscribed to (O2). This departs from `initTheme`, which follows the colour scheme live, because W2's shell is the skin's own component and a live re-resolve would remount it under the person using it.
   - **Preview:** `SkinChoice.preview` keeps `AUTO` on Refined everywhere while Instrument is a preview. The W2 PR that lands Instrument's shell sets it false, and that flip is what turns the desktop default on. Instrument is selectable as a labelled preview from ⌘K before then, and before Task 10 by the stored value and a reload (O6).
@@ -1270,11 +1271,14 @@ Mark it ✓, or write the defect and its fix.
   - **Shape is a skin token:** `--meter-h`, `--meter-segments` and `--meter-gap`, through a mask built from `currentColor` and `transparent` only. Refined is continuous at 5px; Instrument is 10 LED segments at 8px, everywhere.
   - **Kept for the frozen census:** the hook classes `acct-meter`, `acct-fill` and `data-band` stay on the rendered elements.
   - **Later:** carrying the band on the number is W1-gated.
+  - **Measured on the branch (Task 5),** against a fixture build at 360 to 1920 in both skins and both modes: the phone strip's meter is about 56px wide at 360 (the plan guessed 120), so an Instrument segment there is about 4px; the Accounts screen's is 231px at 360; a picker gauge is 88px (segments about 7px); and the wide top strip's is 758px at 1920 (the plan guessed 230), segments about 74px. Each still reads as ten segments. The height is `h-(--meter-h)`, an arbitrary-value utility on the custom property, so no bridge key and no `cn.ts` group was added. The fill's motion is `Meter`'s own `motion-reduce:transition-none`, so `fleet.css`'s second reduced-motion block, which named only `.acct-fill`, went with the rule it governed.
 - **D-5099** — `danger-variants` (Task 6): `Button` gains `danger` (a fill of `--status-dead` with a new `--ink-on-danger`) and `danger-ghost` (a `--status-dead` hairline with `--status-dead-text`). `QuickConfirm` gains `tone`.
   - **The token:** `--ink-on-danger` is hand-set in Phosphor (5.74 dark, 5.73 Daylight) and generated elsewhere as the first plain ink clearing 4.6 on `--status-dead` (measured: all ten, the tightest 4.63). It is gated by new token pairs.
   - **Call sites now:** Abandon, Archive, the forced archive, archive-all and Reap's Remove become `danger` (Remove keeps `reap-go`). The fleet host's Reboot, which restarts the whole fleet box, becomes `danger-ghost` inside its dead-tone banner, with a `danger` confirm. Sign out becomes `ghost`.
   - **Later:** the hand-drawn Abandon (`RunRow`) and Revoke (`AuthSection`) controls follow once the frozen control and contrast censuses are free. Stop (the session header's interrupt) follows after #402, which edits `SessionHeader.tsx`.
-- **D-5100** — `icon-primitive` (Task 8): an `Icon` primitive renders vendored lucide icon nodes (ISC, licence beside them, version recorded, regenerated by `ui/design/make-icons.mjs`). It does not use `lucide-react`, which would be a dependency and a fourth React-calling package for `pwa/vite.config.ts`'s dedupe lists.
+  - **Built (Task 6).** The generator picks `--ink-on-danger` from near-black `#1F0B07` and white, in that order on a dark palette and the reverse on a light one, and refuses (UNREACHABLE) when neither clears 4.6; it never moves `--status-dead`, which is a lamp fitted to its own 3:1 first. It picked `#1F0B07` for the seven dark palettes and white for the three light ones; no other generated value moved. "Archive's two confirms" are its primary (Archive) and Stop only, which stops the pane.
+  - **The gate's five new pairs, per palette** (`pwa/design/contrast-check.mjs`; 3744 checks, all pass), worst measured: `ink-on-danger / status-dead` 4.63 (Solarized Light), 4.66 (GitHub Light), 5.74 and 5.73 in Phosphor's two; `dead-text / sheet` 5.57 (Nord); `dead-text / page` 5.27 (Catppuccin Latte); the `danger-ghost` hairline on the sheet 3.85 (Nord) and on the fleet host's banner wash 3.34 (One Dark).
+- **D-5100** — `icon-primitive` (Task 8): an `Icon` primitive renders vendored lucide icon nodes (ISC, licence beside them, version recorded, regenerated by `ui/design/make-icons.mjs`). It does not use `lucide-react`, which would be a dependency and a fourth React-calling package for `pwa/vite.config.ts`'s dedupe lists. The nodes carry geometry only: `make-icons.mjs` drops lucide's `fill="currentColor"` on a dot (a circle of r ≤ 0.75, `key-round`'s), which `Icon`'s thinnest round stroke (1.5) already covers, and refuses every other non-geometric attr. `pwa/test/icon.test.tsx` holds the census: no emoji-presentation character in `pwa/src` or `ui/src` outside comments, stories and tests, with each registered exception keyed by the exact characters it may hold, so a new emoji in a registered file still reds.
   - **Safe by construction:** the nodes are a closed set of geometric SVG tags built with `createElement`, so no markup string reaches the DOM.
   - **Emoji swapped:** 🔑, ⚙ (as a door), 🔔, 🔕, ✋ and ✉ (as a mark) become icons.
   - **Glyphs that stay text** (`MAIL_GLYPH`, `WARN_GLYPH`, `SETTINGS_GLYPH`) gain U+FE0E.
@@ -1284,6 +1288,7 @@ Mark it ✓, or write the defect and its fix.
   - **The selected row** is `--accent-tint` with an inset 2px `--accent` rail. It replaces the reverse-video slab and the 43-rule achromatic override, so the meta keeps its status and lane hues.
   - **The gate gains each new ground with exactly the inks drawn on it:** the tint carries the neutral inks, the status texts and the lane hues; hover carries the neutral inks plus the status texts and lane hues, because a hovered fleet row keeps its meta; pressed carries the neutral inks only. The generator fits the status texts and lane hues with the tint and hover as grounds. Its forecast list (Dracula, Catppuccin Mocha, Gruvbox Dark and Solarized Dark, measured on main) is re-measured on the task's own base first.
   - **Kept for the frozen files:** the `sess-line--active` class and the archived-row `INHERITED_GROUNDS` key stay byte for byte. After #402, the seven grounds reasons that describe the slab are rewritten (Task 9b).
+  - **Measured on Task 9's base** (main plus Tasks 4 and 6, before any fit moved): 444 tint, hover and pressed pairs across the twelve palettes, six short, all on the tint and exactly the forecast: Dracula's dead text 4.34 and `--acct-blue` 4.43, Catppuccin Mocha's dead text 4.38, Gruvbox Dark's 4.21, Solarized Dark's `--acct-magenta` 4.21 and `--acct-amber` 4.26. The generator's refit clears them with its 0.3 margin, which also moves the near-misses (21 generated status-text and lane-hue values in all); the hand-tuned Phosphor pair moves nowhere. Task 9's two departures are D-5454 and D-5455.
   - **Its focus clause: one cue per control.** A text field drew two (`TEXT_INPUT`'s `focus:border-phosphor` and the ring), and now draws the ring alone, as every other control does. This reverses the field's recorded "border, not a ring" choice, which `base.css`'s blanket outline had already overridden in the app.
 - **D-5102** — `page-scaffold` (Task 11): `PageScaffold`, `Section` and `EmptyState` give every secondary screen a sticky header with Back, a `❯`-led title at `--fs-page` (in both skins, per the spec's O3 ruling), a token-bounded column (`--page-max`, `--page-max-wide`) and gutters (`--gutter`). Their density follows the skin's tokens, and they join D-5093's role census.
   - **Refined's radii** move to lg 14 and xl 20 here.
@@ -1370,3 +1375,88 @@ A worker never allocates: it names a departure by slug in its report, and the co
   - **The derivation:** `--scrollbar-thumb: var(--status-idle)`, declared once in `:root` and re-resolved by every palette, like `--status-dead-tint-solid`. The idle lamp's matte grey is the one token already fitted to exactly this contract: the generator fits every status dot to 3:1, plus margin, against surface, page, raised and the well, and the gate holds Phosphor's two hand-tuned values to it. Measured as the thumb: 3.10 at worst (Solarized Dark, on raised), 3.14 on a light well (GitHub Light). It is matte, so it never glows, and grey in every palette, so it reads as chrome, not as a state. Never a per-palette hex tuned until the numbers pass.
   - **Held by:** five `scrollbar thumb / <ground> (UI 3:1)` token pairs in `pwa/design/contrast-check.mjs`, in every palette; and `pwa/test/base-defaults.test.ts`, which measures the token `html` names on all five grounds in all twelve palettes, and holds `--scrollbar-thumb` to one declaration, in `:root`, naming tokens and no colour literal.
   - **Departs** item 2's `var(--edge-strong)` and its census-safety note ("the contrast gate gains no pair"): the gate gains sixty. It adds a `:root` token and edits `contrast-check.mjs`, neither in Task 13's file list. No generated value moves, and `contrast-check.mjs` is in no in-flight table.
+
+### Found while executing Task 17
+
+Two spares were issued 2026-10-18 for Task 17's departures. One is defined here.
+
+- **D-5464** — `jump-latest-band-threshold` (Task 17): the fix for cause (b) is virtuoso's at-bottom threshold set to the pill's band, not a Footer the pill's size.
+  - **Step 0, measured** at 390 in headless Chromium against the built app, with a fixture transcript and a send whose `/prompt` answers 500. The cause is (b), not (a): at the bottom no pill renders (gap 0). Between 6 and 40px above the end, the pill (714-758) sits on Retry, whose top runs 724-758 across those offsets. From 48px it is clear, with the row past the list's foot.
+  - **Step 1's remedy for (b) moves nothing.** A Footer `--tap-min` + `--sp-3` tall, present only while the pill shows, was built and swept over the same offsets. It is added below the viewport, so no row moves. Every offset that covered Retry on `main` still covered it, and the reported gap simply grew by the footer's 56px. A footer exactly the pill's size reserves the band the pill covers, so the last row clears the pill only at the very end, where the pill already hides.
+  - **The fix:** the reader counts as at the newest turn while its foot is inside the pill's band. `ChatList` passes `atBottomThreshold` as `--tap-min` + `--sp-3`, read once per mount from `:root` (`pillBandOf`), never a copy of the values. A token that does not read as pixels leaves virtuoso's own threshold. The sweep after it: the pill never covers Retry or Discard at any offset, in either skin or mode, at 360, 390, 438, 1280, 1440 and 1920.
+  - **Held by** `pwa/test/jump-latest.test.tsx`, which pins the threshold to the tokens, binds `.jump-latest`'s `bottom` and `min-height` to the same two tokens, and keeps virtuoso's default when they are unreadable.
+  - **Its cost:** `followOutput` and the settling pin read the same at-bottom state, so a reader within 56px of the end now follows new output, where it was 4px. No file outside Task 17's list changes, and `chat.css` and `control-census.test.ts` are untouched.
+
+Issued and unused (Task 17): 5465, the task's second spare, written without the prefix so it seeds no floor.
+
+### Found while executing Task 6
+
+Task 6's two spares, issued 2026-10-18, are both defined here.
+
+- **D-5448** — `danger-ghost-disabled-stand-down` (Task 6): `danger-ghost` carries `ghost`'s disabled stand-down, `disabled:text-ink-disabled disabled:border-edge-subtle`, which Task 6's shape for the variant does not list.
+  - **Why:** its one call site, the fleet host's Reboot, is `disabled` while a reboot is in flight. Without the stand-down a disabled Reboot reads exactly as an armed one, the defect `button.tsx`'s header names for the filled variants ("an accent-filled button that ignores taps reads as broken"). `danger` already takes `primary`'s stand-down, as the shape says.
+  - **Held by:** `pwa/test/danger-buttons.test.tsx`'s "a disabled danger-ghost stands down", which reds when either class leaves the variant. The stand-down paints no ground, so `utility-pairs.test.ts` finds no new pair and needs no exemption.
+- **D-5449** — `danger-hook-selectors` (Task 6): three suites outside Task 6's file list follow the variant, because they reach the archive confirm through its hook class: `pwa/test/header.test.tsx` (two), `session-actions-sheet.test.tsx` (six) and `lifecycle-ui.test.tsx` (one) read `.archive-conflict-sheet .btn-danger` where they read `.btn-primary`.
+  - **Why the hook and not the role:** the opener behind the sheet matches the same role and name, the reason `confirm.tsx`'s header gives for reaching a confirm by class. Only the class name changes; each case's assertions are as they were.
+  - **Departs** Task 6's file list. None of the three is in an in-flight table or in #402's file list (re-read 2026-10-18).
+
+Issued and unused (Task 6): none.
+
+### Found while executing Task 7
+
+A worker never allocates: it names a departure by slug in its report, and the coordinator allocates through `POST /api/ledger/deviations` and defines it here, once, in the PR that introduces it. Task 7 used both of its two spares, issued 2026-10-18.
+
+- **D-5450** — `font-faces-in-tokens-css` (Task 7): the two `@font-face` rules are declared at the top of `ui/src/styles/tokens.css`, beside the stacks that name them, and no `ui/src/styles/fonts.css` is created. `theme.css` therefore gains no import.
+  - **Why:** `pwa/test/contrast.test.ts` walks every stylesheet under `ui/src` (`stylesheets()` in `pwa/design/audit.mjs`) and requires each to yield at least one style rule ("parses rules out of %s"). `rulesOf` skips at-rules, so a sheet holding only `@font-face` reds it (measured: `expected 0 to be greater than 0` for `ui/src/styles/fonts.css`). Both files are frozen while #402 is in flight, and a filler rule added only to satisfy the census would be a rule nobody needs.
+  - **Census-neutral:** an `@font-face` is not a rule `rulesOf` reports, so the colour census and every grounds registry read as before. `contrast.test.ts` passes alone with no edit.
+  - **Held by** `pwa/test/fonts.test.ts`'s case (6): both faces sit at brace depth 0 in `tokens.css` (a face nested in `:root` is dropped), `theme.css` imports `tokens.css` before its first rule, and no other stylesheet under `ui/src`, `ui/.storybook`, `pwa/src` or `pwa/public` declares a face. Two mutants are red when run: a face moved inside `:root`, and a second face planted in `reset.css`.
+  - **Departs** Task 7's file list and shape (`fonts.css`, `@import './fonts.css'` after `skins.css`), its test (6) ("theme.css imports fonts.css before any rule") and its sixth mutant, and the spec's §4 load-order sentence, which is amended to match. A later task that unfreezes `contrast.test.ts` may move the faces into a sheet of their own.
+- **D-5451** — `mockup-stacks-follow` (Task 7): `pwa/design/mockup.html`'s copied `:root` block leads its two stacks with `"Geist"` and `"Geist Mono"` too. `contrast.test.ts`'s "design/mockup.html's copied token block still equals tokens.css" compares every declared token, the families included, so the copy follows the change (it redded with `mockup.html :root --family-ui` before the edit). The mockup loads no font file, so it renders the system faces behind the pair, as before. Departs Task 7's file list, which does not name `mockup.html`. Nothing in flight edits it.
+
+Issued and unused (Task 7): none. Both spares, D-5450 and D-5451, are defined above.
+
+### Found while executing Task 5
+
+The coordinator issued two spares for Task 5's departures, 2026-10-18. Both are defined here.
+
+- **D-5446** — `meter-vocabulary-moves-with-it` (Task 5): `limitBand`, `TRACK` and `fillVariants` are DEFINED in `ui/src/primitives/meter.tsx`, and `limit-bar.tsx` re-exports them, so the one meter owns the vocabulary it draws with and `ui/src/index.ts`'s `LimitBar` line stays byte for byte.
+  - **Two files outside Task 5's list follow it.** `pwa/test/limit-off-band.test.ts` reads `meter.tsx` for the `off` variant's literal (`limit-fill--off bg-edge-subtle`), which is where it now lives. `ui/src/primitives/limit-bar.stories.tsx`'s `OffBand` story draws its two rows as `<Meter>` instead of `TRACK` plus `fillVariants`, because `meter.test.tsx`'s one-implementation scan reads `ui/src`, stories included.
+  - **`NOT_A_SKIN`'s `LIMIT_TRACK` reason** in `design-system-boundary.test.ts` (a listed file) is rewritten: no app file assembles a meter from the track any more.
+  - **Held by** `meter.test.tsx`'s "one implementation" case, red when `AccountRow`'s `Gauge` goes back to `LIMIT_TRACK` and `fillVariants`, and by `limit-off-band.test.ts`'s first case, which reads the moved literal.
+  - **Departs** Task 5's file list, which names neither `limit-off-band.test.ts` nor `limit-bar.stories.tsx`.
+
+- **D-5447** — `meter-scan-reads-hand-drawn-hooks` (Task 5): `meter.test.tsx` holds two things the plan's case list left open, both found by review.
+  - **The hand-drawn meter.** Step 3's row "`AccountMeterRow` draws its own `<span className="acct-fill" style=…>`" expects "one implementation" to red, but that case scanned only `LIMIT_TRACK`, `fillVariants(`, `bg-limit-` and `limit-fill`, so the mutant was caught only by the disabled-lane case. The scan now also refuses a lowercase `className=` that names `acct-meter` or `acct-fill` outside `meter.tsx`. `Meter`'s own `trackClassName` / `fillClassName` props, which hand it the hooks, do not match.
+  - **The height.** No case held the track to `h-(--meter-h)`, so a literal `h-[5px]` kept every suite green and would have dropped Instrument's 8px meter back to 5px. "the meter's track is --limit-track" now asserts the class.
+  - **Held by** the mutants `h-(--meter-h)` → `h-[5px]` in `meter.tsx` (red: "the meter's track is --limit-track") and the hand-drawn `AccountMeterRow` (red: "one implementation", and the disabled-lane case).
+  - **Departs** Step 2's text for the one-implementation case, which lists four patterns.
+- **The `off` band reaches the Accounts screen** (D-5098, not a departure): main drew a disabled or sign-in-expired lane's `--edge-subtle` fill on `--bg-well`, where its frozen extent showed in both modes. Through `Meter` it sits on `--limit-track` at the off band's registered 1.02 to 1.10, so the row reads its last percentage with almost no bar. That is the result this task's text asks for; `limit-off-band.test.ts` now names the surface. The remedy (one line, `--ink-tertiary`) stays the operator's call.
+
+Issued and unused (Task 5): none; both spares are defined above.
+
+### Found while executing Task 9
+
+Task 9's two spares, issued 2026-10-18, are both defined here.
+
+- **D-5454** — `grounds-as-painted` (Task 9): each new ground is measured where and as it is actually painted, which departs Task 9's shape in three places.
+  - **The pressed recipe is measured at 8 bits.** `--bg-pressed` ships pre-composited as a hex in every generated palette, and a browser paints `color-mix()` at 8 bits too, so Task 4's tertiary walk (`inkTiers` in `ui/design/make-themes.mjs`) now rounds the recipe before it measures it. Measured on Nord: `ink-tertiary` reads 4.504 on the exact mix and 4.479 on the hex it ships as, a FAIL row the walk could not see. Nord's and Dracula's neutral tiers move one 8-bit step. `pwa/test/ink-tiers.test.ts` (outside Task 9's file list) replays the walk on `var(--bg-pressed)` instead of a re-mixed recipe, so the replay and the walk agree on the ground.
+  - **The terminal's Reconnect holds the well on hover.** It is a ghost Button on `--bg-well`, where the variant's card-mixed hover ground puts `--ink-on-well` at 1.17:1 (Phosphor Daylight). Its call site in `pwa/src/session/TerminalDrawer.tsx` (outside the file list) adds `enabled:hover:bg-transparent`, which the merge puts in place of the variant's hover. A `background` on `.term-retry` in `chat.css` was tried first and refused: it makes the rule a translucent ground with no `GROUNDS` entry, and `audit.mjs` is frozen. Held by `hover-states.test.ts`'s "the terminal's Reconnect holds the well on hover".
+  - **Pressed carries the dead text, not the neutral inks alone.** Step 0 read the session menu's danger row (`.menu-item--danger .menu-label`, a `ListRow`) drawing `--status-dead-text` on a pressed ground, which measured 4.37 (Nord), 4.32 (Dracula) and 4.43 (Gruvbox Dark). The gate's `PRESSED_INKS` gains it, and the generator fits the dead text on `--bg-pressed` too.
+    - The spec's §8.2 sentence on `--bg-pressed` ("the three neutral inks only") is amended in the same PR to name this one status text.
+  - **An anchor wearing the ghost is grounded at its call site.** The variant gates hover and press on `enabled:`, which matches form controls only, so the PR sheet's "Open on GitHub" `<a>` (`pwa/src/session/PrSheet.tsx`, outside the file list) adds the ungated `hover:bg-hover active:bg-pressed`. Held by `hover-states.test.ts`'s "an anchor wearing the ghost lifts and sinks without enabled:".
+- **D-5455** — `selected-row-keeps-its-hues` (Task 9): two changes outside Task 9's shape, so the selected row keeps the tint and its hues as the shape intends.
+  - **The hover skips the selected row.** The rule is `.sess-line:not(.sess-line--active):hover`, not `.sess-line:hover`: the bare form (0,2,0) outranks `.sess-line--active` (0,1,0) and would turn the selected row grey under the mouse.
+  - **The account keeps its inline lane hue when selected.** `SessionMeta.tsx`'s `acctStyle` dropped it on the selected row, because inline styles beat the achromatic group and the hue measured 1.46:1 on the slab. With the slab gone the hue stays, and the gate measures every lane hue on the tint. `SessionMeta` loses its `selected` prop, and `SessionLine.tsx` stops passing it (both outside the file list). Held by `session-line.test.tsx`'s "KEEPS the inline account hue on the selected row".
+
+Issued and unused (Task 9): none.
+
+### Found while executing Task 8
+
+A worker never allocates: it names a departure by slug in its report, and the coordinator allocates through `POST /api/ledger/deviations` and defines it here, once, in the PR that introduces it. Task 8 was issued two spares, 2026-10-18; one is defined here.
+
+- **D-5452** — `fleethead-waits-for-402` (Task 8): `pwa/src/fleet/FleetHead.tsx` is not edited, and its Account door keeps `🔑` as a registered census exception (`{ chars: '🔑', why: '#402 holds the file (D-5452)' }` in `pwa/test/icon.test.tsx`).
+  - **Why:** re-read on 2026-10-18 (`gh pr view 402 --json files`), #402 now edits `FleetHead.tsx`. Its Docs door (`📄`) moved there from `FleetScreen.tsx`, immediately before the Account door this task would swap. That makes the file in flight, and this task stays outside in-flight files. The Settings door's `SETTINGS_GLYPH` needs no edit there: the constant now carries U+FE0E, so the door draws the text gear.
+  - **What still holds:** the registry is keyed per character, so `📄` is not covered by the `🔑` entry. If this task merges first, #402's next absorb of `main` reds on the census for `📄`, and #402 swaps it for `Icon file-text` (vendored here) as the plan's "#402's 📄" paragraph says. The Account door's `Icon key-round` and the Settings door's `Icon settings` (both vendored here) land with the first change to edit `FleetHead.tsx` after #402 merges. The registry's stale-entry check reds the moment `🔑` leaves the file, so the entry goes in the same diff.
+  - **Departs** Task 8's mapping (its first two rows) and its "Frozen files touched: none".
+
+Issued and unused: 5453.

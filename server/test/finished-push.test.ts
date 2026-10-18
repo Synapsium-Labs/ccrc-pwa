@@ -24,6 +24,7 @@ const T0 = 1_800_000_000_000;
 const UUID = '00000000-0000-4000-8000-000000000001';
 
 const okMark = (over: Partial<TurnMark> = {}): TurnMarkRead => ({
+  crons: null,
   ok: true, sessionId: UUID, state: 'done', event: 'Stop', at: T0 + SEC, turnAt: T0 + SEC / 2, stopAt: T0 + SEC,
   bg: 0, bgKinds: [], bgIds: [], err: null, restartAt: null, lostBg: 0, lostKinds: [], lostIds: [], graceUntil: null,
   ...over,

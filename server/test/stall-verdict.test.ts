@@ -790,7 +790,7 @@ describe('wave 2 vocabulary: a self-wake notice is the watch’s own, never mail
 // object (`w2-facts-separate-object` (D-3629)), so no wave-1 row changes. `W2_LIVE` arms the wave-2 rules; `ARMED` (the
 // default) is the dark: wave-2 facts present, `stall-watch-w2-live` absent.
 import {
-  stallMarkView, stallMailDisabledHold, stallRunMail, stallCitedCheck, stallNotifyDelivery,
+  stallMarkView, stallHookActivityAt, stallMailDisabledHold, stallRunMail, stallCitedCheck, stallNotifyDelivery,
   STALL_BOUND_MS, DELEGATE_WINDOW_MS, DELEGATE_CAP_MS, FROZEN_NO_EVENT_MS, DEAD_GRACE_MS, COORD_DEAF_MS,
   CHECK_UNDELIVERED_MS, MARKER_UNREADABLE_MS,
 } from '../src/coord/stall.js';
@@ -804,6 +804,7 @@ type OkMark = Extract<TurnMarkRead, { ok: true }>;
 function markOf(over: Partial<OkMark> = {}): TurnMarkRead {
   const stopAt = NOW - 3 * H;
   return {
+    crons: null,
     ok: true, sessionId: UUID, state: 'done', event: 'Stop', at: stopAt, turnAt: stopAt - 10 * MIN, stopAt,
     bg: 0, bgKinds: [], bgIds: [], err: null, restartAt: null, lostBg: 0, lostKinds: [], lostIds: [], graceUntil: null,
     ...over,
@@ -2022,5 +2023,115 @@ describe('dialog-cap-clock-ignores-inbound-mail (D-4040)', () => {
     expect(stallVerdict(stallInput({ worker: limitedAtA, mail }), A + LIMIT_HOLD_CAP_MS)).toEqual(hold('limit'));
     expect(stallVerdict(stallInput({ worker: limitedAtA, mail }), A + 30 * MIN + LIMIT_HOLD_CAP_MS))
       .toEqual(capOf('limit-cap', RUN67_DISPATCHED));
+  });
+});
+
+// `compactions-write-no-hookstate` (D-5239; spec §5.8): behind the server's word a compaction writes no hookstate, so
+// the stall watch's hook fact after one is the PRE-compaction activity, with no fresh `updatedAt` and no `aliveAt`:
+// compactions stay plumbing. Fed by the real hook over a planted file. At base the compaction rewrites the file as a
+// fresh `PreCompact`/`PostCompact` event, and the delegates hold the Stop earned is lost.
+import { spawnSync as spawnHook } from 'node:child_process';
+import fsHook from 'node:fs';
+import pathHook from 'node:path';
+import { mkTmp as mkTmpHook } from './tmpHelpers.js';
+import { SERVER_CAPS_FILE, renderServerCaps } from '../../shared/api.js';
+
+describe('a hookstate carried through a compaction reads the pre-compaction activity (D-5239)', () => {
+  const HOOK = pathHook.resolve(__dirname, '../../ccd/session-hook.sh');
+  const SID = 'lane-a-project-a';
+  /** Plant `file`, run PreCompact and PostCompact (`trigger`) through the real hook behind the word, and answer the
+   *  stall lane's fact of what is on disk after, plus whether the file gained `aliveAt`. */
+  const throughCompaction = (file: Record<string, unknown>, trigger: 'auto' | 'manual'): { fact: HookRawFact; alive: boolean } => {
+    const home = mkTmpHook('ccrc-stall-compact-');
+    try {
+      const reg = pathHook.join(home, '.cc-sessions');
+      const bin = pathHook.join(home, 'bin');
+      fsHook.mkdirSync(reg, { recursive: true });
+      fsHook.mkdirSync(bin, { recursive: true });
+      fsHook.mkdirSync(pathHook.join(home, '.ccrc'), { recursive: true });
+      fsHook.writeFileSync(pathHook.join(bin, 'tmux'), `#!/bin/sh\necho "cc-${SID}"\n`, { mode: 0o755 });
+      fsHook.writeFileSync(pathHook.join(home, '.ccrc', SERVER_CAPS_FILE), renderServerCaps(['dispatch-live-gate-v1'], Math.floor(Date.now() / 1000)));
+      const hs = pathHook.join(reg, `${SID}.hookstate.json`);
+      fsHook.writeFileSync(hs, JSON.stringify(file) + '\n');
+      for (const ev of ['PreCompact', 'PostCompact']) {
+        const r = spawnHook('bash', [HOOK], {
+          input: JSON.stringify({ session_id: UUID, transcript_path: '/rig/fixhome/cfg/projects/-rig-repo/x.jsonl', cwd: '/rig/repo',
+            prompt_id: '00000000-0000-4000-8000-0000000000c1', hook_event_name: ev, trigger,
+            ...(ev === 'PreCompact' ? { custom_instructions: null } : { compact_summary: 'fixture summary' }) }),
+          encoding: 'utf8',
+          env: { ...process.env, HOME: home, PATH: `${bin}:${process.env['PATH'] ?? ''}`, TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: UUID, CLAUDE_PID: '4242' },
+        });
+        expect(r.status).toBe(0);
+      }
+      const after = JSON.parse(fsHook.readFileSync(hs, 'utf8')) as { updatedAt: number; event: string };
+      return { fact: hookAt(after.updatedAt, after.event), alive: 'aliveAt' in after };
+    } finally { fsHook.rmSync(home, { recursive: true, force: true }); }
+  };
+  const file = (state: string, event: string, updatedAt: number): Record<string, unknown> => ({
+    v: 1, state, event, sessionId: UUID, pid: 4242, updatedAt, ask: null, subagents: [], graphQueries: 0,
+    graphGateDenials: 0, ccrcPeerReads: 0, ccrcClaims: 0,
+  });
+
+  it('the delegates hold a Stop 29 min ago earned survives an idle compaction', () => {
+    const { fact, alive } = throughCompaction(file('done', 'Stop', NOW - 29 * MIN), 'manual');
+    expect(alive).toBe(false);
+    expect(fact).toEqual(hookAt(NOW - 29 * MIN, 'Stop'));
+    expect(vw({ arming: W2_LIVE }, { hook: fact })).toEqual(hold('delegates'));
+  });
+
+  it('the frozen clock still reads the last tool event 61 min ago through a mid-turn compaction', () => {
+    const { fact, alive } = throughCompaction(file('working', 'PostToolUse', NOW - 61 * MIN), 'auto');
+    expect(alive).toBe(false);
+    expect(fact).toEqual(hookAt(NOW - 61 * MIN, 'PostToolUse'));
+    expect(fv(fact)).toEqual(frozenV(NOW - 2 * H));
+  });
+});
+
+// D-5232 (plan 2026-10-16 Task 2, spec §5.2): behind the server's word `hook-main-state-v1` an agent event keeps the main
+// thread's `updatedAt` and writes only `aliveAt`, so subagent activity lives there. The frozen clock and the `delegates`
+// hold read the newest non-plumbing activity (`stallHookActivityAt`), which is `updatedAt` unless its event is plumbing,
+// maxed with `aliveAt`. APPENDED, so no earlier case moves.
+describe('subagent activity lives in `aliveAt` (D-5232)', () => {
+  const dv = (hook: HookRawFact, facts: Partial<StallW2Facts> = {}): StallVerdict => vw({ arming: W2_LIVE }, { hook, ...facts });
+  const STOP_AT = NOW - 2.5 * H;
+  const quiet = markOf({ at: STOP_AT, stopAt: STOP_AT, turnAt: STOP_AT - 10 * MIN });
+
+  it('(s1) the delegates hold: a Stop 2.5 h ago with aliveAt a minute ago holds delegates', () => {
+    expect(STOP_AT).toBeLessThan(NOW - DELEGATE_WINDOW_MS);
+    expect(NOW - STOP_AT).toBeLessThan(DELEGATE_CAP_MS);
+    expect(dv(hookAt(STOP_AT, 'Stop', { aliveAt: NOW - MIN }), { mark: quiet })).toEqual(hold('delegates'));
+    // CONTROL: the same file with no aliveAt is the quiet arm's notice
+    expect(dv(hookAt(STOP_AT, 'Stop'), { mark: quiet })).not.toEqual(hold('delegates'));
+  });
+
+  it('(s2) no frozen during a long foreground Agent call: subagent events keep aliveAt current', () => {
+    const turnAt = NOW - 70 * MIN;
+    const mark = markOf({ ...FROZEN_OVER, at: turnAt, turnAt });
+    expect(fv(hookAt(turnAt + 5_000, 'PreToolUse', { aliveAt: NOW - 2 * MIN }), {}, { mark })).toEqual(hold('busy'));
+  });
+
+  it('(s3) the same with no aliveAt and updatedAt 61 minutes old is frozen: the arm still fires', () => {
+    const turnAt = NOW - 70 * MIN;
+    const mark = markOf({ ...FROZEN_OVER, at: turnAt, turnAt });
+    expect(fv(hookAt(NOW - 61 * MIN, 'PreToolUse'), {}, { mark })).toEqual(frozenV(turnAt));
+  });
+
+  it('(s4) plumbing still never refreshes: an older hook\'s PostCompact a minute ago, no aliveAt, keeps turnStart', () => {
+    expect(fv(hookAt(NOW - MIN, 'PostCompact'))).toEqual(frozenV(NOW - 2 * H));
+    expect(dv(hookAt(NOW - MIN, 'PostCompact'))).toEqual(r1(RUN67_DISPATCHED));
+  });
+
+  it('(s5) aliveAt older than DELEGATE_WINDOW_MS holds no delegates', () => {
+    expect(dv(hookAt(STOP_AT, 'Stop', { aliveAt: NOW - DELEGATE_WINDOW_MS }), { mark: quiet })).not.toEqual(hold('delegates'));
+    expect(dv(hookAt(STOP_AT, 'Stop', { aliveAt: NOW - DELEGATE_WINDOW_MS + 1 }), { mark: quiet })).toEqual(hold('delegates'));
+  });
+
+  it('stallHookActivityAt: updatedAt unless plumbing, maxed with aliveAt, null when neither counts', () => {
+    expect(stallHookActivityAt({ updatedAt: 10, event: 'Stop' })).toBe(10);
+    expect(stallHookActivityAt({ updatedAt: 10, event: 'Stop', aliveAt: 20 })).toBe(20);
+    expect(stallHookActivityAt({ updatedAt: 30, event: 'Stop', aliveAt: 20 })).toBe(30);
+    expect(stallHookActivityAt({ updatedAt: 30, event: 'PostCompact', aliveAt: 20 })).toBe(20);
+    expect(stallHookActivityAt({ updatedAt: 30, event: 'PostCompact' })).toBeNull();
+    expect(stallHookActivityAt({ updatedAt: 30, event: null })).toBe(30);
   });
 });

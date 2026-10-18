@@ -191,6 +191,20 @@ describe('every self-grounded utility pair a component renders is measured', () 
     });
   });
 
+  it('the danger button pairs ink-on-danger on status-dead', () => {
+    // D-5099. The filled red confirm on every destructive sheet: its ink is a
+    // token of its own, fitted per palette to the dead hue (near-black on a
+    // dark palette, white on a light one). Named here so a variant that drifts
+    // to the phosphor fill, or back to the accent's ink, is a decision someone
+    // has to make in this file rather than a class swap nobody measures.
+    expect(pairs).toContainEqual({
+      file: 'button.tsx',
+      state: '',
+      ink: 'var(--ink-on-danger)',
+      ground: 'var(--status-dead)',
+    });
+  });
+
   it('includes the well, which this guard INHERITED from the stylesheet half', () => {
     // `chat.css .well` was measured by the stylesheet scan for twelve
     // palettes. The Well migration deleted that rule, and the gate's headline
@@ -327,8 +341,7 @@ describe('every class string survives the merge that renders it', () => {
     .filter(([, v]) => /(^|\s)(bg|text|border|font|min-h|w)-[a-z0-9]/.test(v));
   // `buttonVariants()` is deliberately NOT a source: a cva composes BASE then
   // VARIANT, and a variant overriding the base is the mechanism working —
-  // `ghost` replaces the base's `transition-transform`, `quiet` its `font-ui`
-  // and its press scale. A check over the composed string would read every
+  // `quiet` replaces the base's `font-ui` and its press scale. A check over the composed string would read every
   // intended override as a loss. What is checked here is each string ALONE.
   const strings: [string, string][] = [
     ...componentFiles(UI_SRC).flatMap((f) =>

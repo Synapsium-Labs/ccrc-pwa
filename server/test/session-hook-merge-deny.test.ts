@@ -828,6 +828,43 @@ describe('every jq `as $name` binding in the hook is parenthesised on its own (j
     ]);
   });
 
+  // The delegation spool's jq definitions (`DSP_DEFS`, delegation broker wave 3) are a 28-binding program the hook keeps in a
+  // variable and splices into the payload parse only for a payload that names a delegation tool or event. The extractor reads a
+  // `NAME='…'` span only when NAME is upper-case and opens the line (the form the hook's other kept programs use); the same text
+  // under a lower-case name, or after another statement, is outside it, and the coverage equality below then reds. These rows pin
+  // the form the spool uses, and that the guard is not blind to the form it must not use.
+  it('the extractor reads a kept program that is an upper-case NAME=\'…\' opening its line, and not the same text after another statement or under a lower-case name', () => {
+    const program = ".k as $k | $k";
+    const seen = (sh: string): string[] => jqPrograms(sh).map((p) => p.name);
+    expect(seen(`DSP_DEFS='${program}'; other="x"`), 'opening the line').toEqual(['DSP_DEFS']);
+    expect(seen(`other="x"; DSP_DEFS='${program}'`), 'after another statement').toEqual([]);
+    expect(seen(`dsp_defs='${program}'`), 'under a lower-case name').toEqual([]);
+    // What a hidden binding does to the coverage equality: the count of `as $` in the non-comment lines exceeds the extracted one.
+    const bindings = (sh: string): { extracted: number; inText: number } => ({
+      extracted: asBindings(jqPrograms(sh)),
+      inText: sh.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n').match(/\bas \$/g)?.length ?? 0,
+    });
+    const reads = bindings(`DSP_DEFS='${program}'; x=1`);
+    expect(reads.extracted, 'read').toBe(reads.inText);
+    const hidden = bindings(`x=1; dsp_defs='${program}'`);
+    expect(hidden.extracted, 'hidden').toBeLessThan(hidden.inText);
+  });
+
+  it('the spool\'s definitions are read as a program of their own, with their bindings counted, and no binding in them follows a binary operator', () => {
+    const hook = fs.readFileSync(HOOK, 'utf8');
+    const lines = hook.split('\n');
+    const at = lines.filter((l) => l.startsWith("DSP_DEFS='"));
+    expect(at, 'exactly one line opens with the assignment').toHaveLength(1);
+    const defs = jqPrograms(hook).filter((p) => p.name === 'DSP_DEFS');
+    expect(defs, 'and the extractor reads it once').toHaveLength(1);
+    expect((defs[0]!.body.match(/\bas \$/g) ?? []).length, 'its bindings are in the count (not zero, not hidden)').toBeGreaterThanOrEqual(20);
+    expect(defs[0]!.body.startsWith('def maxline:') && defs[0]!.body.endsWith('end;'), 'the whole program, definition to definition').toBe(true);
+    expect(jqAmbiguousAs(defs[0]!.body), 'every `as` in it is parenthesised on its own').toEqual([]);
+    // The parse line takes it by expansion, between the two spans of the parse program, and no other line holds a copy.
+    expect(lines.filter((l) => l.includes('"$dsp_defs"')), 'one expansion, in the parse').toHaveLength(1);
+    expect(lines.filter((l) => /^\s*[^#]*\bdef spool:/.test(l)), 'one copy of the program').toHaveLength(1);
+  });
+
   it('no jq program in ccd/session-hook.sh binds `as` to a binary chain', () => {
     const hook = fs.readFileSync(HOOK, 'utf8');
     const programs = jqPrograms(hook);
@@ -840,8 +877,13 @@ describe('every jq `as $name` binding in the hook is parenthesised on its own (j
     // four (those three Start/Stop reads and the carry's read) and added one, the shared `_hook_fresh_read`; 52 once
     // merged, since the role-skill deny (D-4934, #392) had added one on `main` first, its read of the skill's name
     // (`main` stood at 53 against a floor of 52). The 33 `as $` bindings below were 33 at every ref.
-    expect(programs.length, 'jq programs found').toBeGreaterThanOrEqual(52);
-    expect(asBindings(programs), '`as $` bindings found').toBeGreaterThanOrEqual(33);
+    // FLOOR 54 programs and 61 bindings once the delegation spool (wave 3, Task 5) landed, measured at its merge with #189's
+    // forked-session work: +2 programs (the payload parse is now two single-quoted spans around the `$dsp_defs` expansion where it
+    // was one, and `DSP_DEFS` is the spool's definitions, an upper-case variable opening its line so this extractor reads it) and
+    // +28 bindings, every one of them in `DSP_DEFS` (the two parse spans hold none). The bindings stayed 33 and the programs 52
+    // everywhere else. Two rows above pin the form `DSP_DEFS` uses, since the same text under another spelling is invisible here.
+    expect(programs.length, 'jq programs found').toBeGreaterThanOrEqual(54);
+    expect(asBindings(programs), '`as $` bindings found').toBeGreaterThanOrEqual(61);
     // Coverage by EQUALITY, not floors: every `as $` in a non-comment line of the hook
     // sits inside a program the extractor read, so a binding it cannot reach reds here.
     const bindingsInHook = hook.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n').match(/\bas \$/g)!.length;

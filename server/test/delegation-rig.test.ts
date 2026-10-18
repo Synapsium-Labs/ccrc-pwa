@@ -331,6 +331,34 @@ function versionsHome(entries: Array<[string, number]>): string {
  *  and three executables that are not versions (a word, two numbers, trailing text). */
 const MIXED: Array<[string, number]> = [['2.1.290', 0o755], ['2.1.9', 0o755], ['10.0.0', 0o755], ['2.1.997', 0o644], ['current', 0o755], ['2.1', 0o755], ['2.1.9x', 0o755]];
 
+// D-3999: a versions directory the rig cannot READ is a failure to measure, never "none installed" (which is a directory that is
+// absent or empty). The ways of putting it out of reach: two by a permission bit, which uid 0 walks straight through (a row that
+// needs one is skipped for root; the other two are not), and two by what is at the path (a file, a link to nothing).
+const IS_ROOT = typeof process.getuid === 'function' && process.getuid() === 0;
+const restores: Array<() => void> = [];
+afterEach(() => { for (const f of restores.splice(0)) f(); });   // a mode-000 directory must be walkable again for the fixture clean-up
+type Unreadable = { what: string; needsUser: boolean; breakIt: (versionsDir: string) => void };
+const UNREADABLE: Unreadable[] = [
+  { what: 'a versions directory that cannot be listed (mode 000)', needsUser: true,
+    breakIt: (d) => { fs.chmodSync(d, 0o000); restores.push(() => fs.chmodSync(d, 0o755)); } },
+  { what: 'a versions directory that can be listed but not searched (mode 444: every entry would read as not executable)', needsUser: true,
+    breakIt: (d) => { fs.chmodSync(d, 0o444); restores.push(() => fs.chmodSync(d, 0o755)); } },
+  { what: 'a directory above it that cannot be searched (mode 000)', needsUser: true,
+    breakIt: (d) => { const up = path.dirname(d); fs.chmodSync(up, 0o000); restores.push(() => fs.chmodSync(up, 0o755)); } },
+  { what: 'a versions path that is a regular file', needsUser: false,
+    breakIt: (d) => { fs.rmSync(d, { recursive: true, force: true }); fs.writeFileSync(d, 'not a directory\n', { mode: 0o755 }); } },   // executable: only "is a directory" says no
+  { what: 'a versions path that is a link to nothing', needsUser: false,
+    breakIt: (d) => { fs.rmSync(d, { recursive: true, force: true }); fs.symlinkSync(path.join(path.dirname(d), 'nowhere'), d); } },
+];
+/** A fixture HOME holding `MIXED` installed versions, then put out of reach the way `u` says; `dir` is its versions directory. */
+function unreadableHome(u: Unreadable): { home: string; dir: string } {
+  const home = versionsHome(MIXED);
+  const dir = path.join(home, '.local/share/claude/versions');
+  u.breakIt(dir);
+  if (u.needsUser) expect(() => fs.accessSync(path.join(dir, '2.1.290'), fs.constants.X_OK), 'this box really denies the way to an installed binary (else the row proves nothing)').toThrow();
+  return { home, dir };
+}
+
 describe('rig.sh run and all take only a version that is installed (review 304 F7)', () => {
   const SCENARIO = path.join(RIG, 'scenarios', 'agent-plain.json');
   /** Fresh private directories for what a run would make, so "made nothing" is a directory that stayed empty. */
@@ -390,6 +418,21 @@ describe('rig.sh run and all take only a version that is installed (review 304 F
     }, 60_000);
   }
 
+  // D-3999: given NO version, `all` asks the versions directory what is installed; a directory it cannot read must stop it, not
+  // read as "none installed" (which captured nothing, wrote .done and exited 0). Real rig.sh: it refuses before anything is made.
+  for (const u of UNREADABLE) {
+    it.skipIf(u.needsUser && IS_ROOT)(`all with no version named refuses ${u.what}: exit 2, naming the directory, and makes nothing: no raw root, no .done, no run root (D-3999)`, () => {
+      const { home, dir } = unreadableHome(u);
+      const { tmp, tmux } = sandbox();
+      const raw = path.join(mkTmp('ccrc-dlg-rawdir-'), 'raw');
+      const r = rigsh(['all', raw], { HOME: home, TMPDIR: tmp, TMUX_TMPDIR: tmux }, undefined, 20_000);
+      expect.soft(r.status, r.stderr).toBe(2);
+      expect.soft(r.stderr).toContain(`cannot read the versions directory ${dir}`);
+      expect.soft(fs.existsSync(raw), 'no raw root, and so no .done').toBe(false);
+      expect.soft(fs.readdirSync(tmp), 'no run root').toEqual([]);
+    }, 60_000);
+  }
+
   it('all checks the versions it is given before it reaps or removes anything: a dead run root and a leftover .done stay (F7)', () => {
     const home = versionsHome(MIXED);
     const { tmp, tmux } = sandbox();
@@ -416,7 +459,7 @@ describe('rig.sh run and all take only a version that is installed (review 304 F
       const raw = path.join(dir, 'raw');
       const log = path.join(dir, 'log');
       const script = ['set -euo pipefail', rigText('REAL_HOME', 'VERSIONS', 'VERSION_RE'), `HERE=${sq(dir)}`, `TREE=${sq(path.join(dir, 'tree'))}`,
-        'cmd_reap() { printf "reap\\n" >> "$LOG"; }', rigText('die', 'guard_out', 'version_ok', 'need_version', 'VERS', 'pick_versions', 'cmd_all'), 'cmd_all "$@"'].join('\n');
+        'cmd_reap() { printf "reap\\n" >> "$LOG"; }', rigText('die', 'guard_out', 'version_ok', 'need_version', 'LISTED', 'list_versions', 'VERS', 'pick_versions', 'cmd_all'), 'cmd_all "$@"'].join('\n');
       const r = spawnSync('bash', ['-c', script, stub, raw, ...args], { encoding: 'utf8', env: { ...process.env, HOME: home, LOG: log, RAW: raw, STUB_FAIL: failFor }, timeout: 60_000 });
       const lines = fs.existsSync(log) ? fs.readFileSync(log, 'utf8').split('\n').filter(Boolean) : [];
       const doneFile = path.join(raw, '.done');
@@ -438,14 +481,37 @@ describe('rig.sh run and all take only a version that is installed (review 304 F
       expect(r.done).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\n$/);
     }, 60_000);
 
-    it('a failed run is reported with its rc and does not stop the sweep, and .done is still written', () => {
+    it('a failed run is reported with its rc and does not stop the sweep, .done is still written, and the sweep exits 1 (D-3999: it exited 0)', () => {
       const r = runAll(versionsHome(MIXED), ['2.1.9', '10.0.0'], '2.1.9');
-      expect(r.status, r.stderr).toBe(0);
+      expect(r.status, r.stderr).toBe(1);
       expect(r.log).toEqual(sweep(['2.1.9', '10.0.0']));
       expect(r.stderr).toContain('rig: run 2.1.9 a.json failed rc=1');
       expect(r.stderr).toContain('rig: run 2.1.9 b.json failed rc=1');
       expect(r.stderr).not.toContain('rig: run 10.0.0');
       expect(r.done).not.toBeNull();
+    }, 60_000);
+
+    // D-3999: the sweep's exit is the AGGREGATE of its runs: any failed run makes it nonzero, wherever in the sweep the failure
+    // fell, and `.done` (a finished sweep's marker) does not make it zero. 1 is "a run failed"; 2 stays "refused before anything was made".
+    for (const [what, args, failFor, failed] of [
+      ['the FIRST version\'s runs fail and a later version\'s succeed', ['2.1.9', '10.0.0'], '2.1.9', 2],
+      ['the LAST version\'s runs fail and an earlier version\'s succeeded', ['2.1.9', '10.0.0'], '10.0.0', 2],
+      ['the only version named fails', ['2.1.290'], '2.1.290', 2],
+    ] as Array<[string, string[], string, number]>) {
+      it(`exits 1, with .done written and the failures counted, when ${what} (D-3999)`, () => {
+        const r = runAll(versionsHome(MIXED), args, failFor);
+        expect.soft(r.status, r.stderr).toBe(1);
+        expect.soft(r.stderr).toContain(`rig: ${failed} of ${args.length * 2} run(s) failed`);
+        expect.soft(r.log, 'the sweep went on past the failure').toEqual(sweep(args));
+        expect.soft(r.done, 'a finished sweep still leaves its marker').not.toBeNull();
+      }, 60_000);
+    }
+
+    it('a sweep with no failed run exits 0 and reports no failure (a failure is neither a refusal, exit 2, nor a clean finish)', () => {
+      const r = runAll(versionsHome(MIXED), ['2.1.9', '10.0.0']);
+      expect.soft(r.status, r.stderr).toBe(0);
+      expect.soft(r.stderr).not.toContain('failed');
+      expect.soft(r.done).not.toBeNull();
     }, 60_000);
 
     it('refuses a bad version before it reaps or runs anything, and writes no .done', () => {
@@ -492,6 +558,44 @@ describe('rig.sh run and all take only a version that is installed (review 304 F
       expect.soft(bare.stdout).toBe('');
       expect.soft(bare.stderr, 'a missing versions directory is "none installed", not an error to print').toBe('');
     }, 60_000);
+
+    // D-3999: absent and empty are "none installed"; a directory that cannot be READ is a different answer, and it is a failure.
+    for (const u of UNREADABLE) {
+      it.skipIf(u.needsUser && IS_ROOT)(`fails, exit 2, listing nothing and naming the directory, for ${u.what}: not "none installed" (D-3999)`, () => {
+        const { home, dir } = unreadableHome(u);
+        const r = ask(home);
+        expect.soft(r.status, r.stderr).toBe(2);
+        expect.soft(r.stderr).toContain(`cannot read the versions directory ${dir}`);
+        expect.soft(r.stdout).toBe('');
+      }, 60_000);
+    }
+
+    it('a listing that fails after the directory passed its checks (ls itself fails) refuses too: exit 2, naming the directory, listing nothing', () => {
+      const bin = mkTmp('ccrc-dlg-bin-');
+      fs.writeFileSync(path.join(bin, 'ls'), '#!/bin/sh\nexit 2\n', { mode: 0o755 });
+      const home = versionsHome(MIXED);
+      const r = rigsh(['versions'], { HOME: home, PATH: `${bin}:${process.env.PATH}` }, undefined, 20_000);
+      expect.soft(r.status, r.stderr).toBe(2);
+      expect.soft(r.stderr).toContain(`cannot read the versions directory ${path.join(home, '.local/share/claude/versions')}`);
+      expect.soft(r.stdout).toBe('');
+    }, 60_000);
+
+    it('a RELATIVE HOME with nothing under it is still "none installed", and the walk up its path ends: exit 0, nothing listed', () => {
+      const cwd = mkTmp('ccrc-dlg-cwd-');
+      const r = rigsh(['versions'], { HOME: 'no-such-home' }, cwd, 20_000);
+      expect.soft(r.status, r.stderr).toBe(0);
+      expect.soft(r.stdout).toBe('');
+      expect.soft(r.stderr).toBe('');
+    }, 60_000);
+
+    it('an ABSENT versions directory under a parent that exists and can be searched is still "none installed": exit 0, nothing listed, nothing printed (D-3999: absent is not unreadable)', () => {
+      const home = mkTmp('ccrc-dlg-home-');
+      fs.mkdirSync(path.join(home, '.local/share'), { recursive: true });   // .local/share/claude does not exist
+      const r = ask(home);
+      expect.soft(r.status, r.stderr).toBe(0);
+      expect.soft(r.stdout).toBe('');
+      expect.soft(r.stderr).toBe('');
+    }, 60_000);
   });
 });
 
@@ -520,7 +624,8 @@ function recaptureTree(corpus: string[] = ['2.1.290', '2.1.291'], prefix = 'ccrc
     '            echo "stdout line from all"; echo "stderr line from all" >&2',
     '            [[ ${STUB_ALL_RC:-0} == 0 ]] || exit "$STUB_ALL_RC"',
     '            [[ -z ${STAGED-} ]] || cp -R "$STAGED/." "$raw/"',
-    '            [[ -n ${STUB_NO_DONE-} ]] || echo 2026-01-01T00:00:00Z > "$raw/.done" ;;',
+    '            [[ -n ${STUB_NO_DONE-} ]] || echo 2026-01-01T00:00:00Z > "$raw/.done"',
+    '            exit "${STUB_RC_AFTER_DONE:-0}" ;;',   // a sweep that finished (left its .done) and still reports a failed run
     'esac', '',
   ].join('\n'));
   const logger = (tag: string, rcVar: string, scanVar = ''): string => [
@@ -603,7 +708,8 @@ describe('recapture.sh (review 304 F12: the corpus\'s one re-capture script)', (
     expect(stepLines(r.stdout)).toEqual(FIVE(t, ['2.1.9', '2.1.290', '2.1.999', '10.0.0']));
     expect(out.slice(-3)).toEqual([
       'recapture: raw root: <raw>',
-      'recapture: it holds UNSANITISED bundles: never commit it, never copy it off the box, remove it by hand once nothing needs it: rm -rf <raw>',
+      // D-3999: the hint is `printf %q`-escaped for a dry run too, so the placeholder reads `\<raw\>` (escaped exactly once)
+      'recapture: it holds UNSANITISED bundles: never commit it, never copy it off the box, remove it by hand once nothing needs it: rm -rf \\<raw\\>',
       '',
     ]);
   }, 60_000);
@@ -864,14 +970,112 @@ describe('recapture.sh (review 304 F12: the corpus\'s one re-capture script)', (
       `sanitize [--scan] [${t.fix}]`,
     ]);
     // step 1 wrote where it said, step 2 teed where it said and found the .done the capture left, and the "raw root:" line names the
-    // root whole. The closing "rm -rf" line prints the root with `%s`, as it is and not shell-escaped, so a path with a space must be
-    // quoted by hand before it is pasted: this row records that line as it stands, it does not say the line is right.
+    // root whole. The closing "rm -rf" line prints the root `%q`-escaped (D-3999: it was `%s`, so a path with a space, pasted, split
+    // in two), the one line of the output that is meant to be pasted into a shell.
     expect(fs.readFileSync(path.join(raw, 'versions-at-start'), 'utf8')).toMatch(/^# started \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\n2\.1\.9\n2\.1\.999\n$/);
     expect(fs.readFileSync(path.join(raw, 'all.log'), 'utf8')).toBe('stdout line from all\nstderr line from all\n');
     expect(fs.existsSync(path.join(raw, '.done'))).toBe(true);
     expect(r.stdout).toContain(`recapture: raw root: ${raw}\n`);
-    expect(r.stdout).toContain(`rm -rf ${raw}\n`);
+    expect(bashQ(raw), 'the escape changed the root\'s spelling (a space is a backslash and a space)').not.toBe(raw);
+    expect(r.stdout).toContain(`rm -rf ${bashQ(raw)}\n`);
   }, 60_000);
+
+  // D-3999: the three obligations the wave-1 ledger carried to the observe stage, closed before a later capture relies on
+  // `--missing`: a failed single run is a failed capture (cmd_all's aggregate exit, above, and what recapture does with it); an
+  // unreadable versions directory is a failure and not "none installed"; the closing cleanup hint round-trips through a shell.
+  describe('D-3999: recapture.sh fails closed before --missing is relied on', () => {
+    /** The argv `rm` would get if the operator PASTED the closing hint into a shell: the line's `rm -rf …` run by bash with `rm` a
+     *  function that prints its arguments NUL-separated, so nothing is removed. A path the hint left unquoted shows as the words it splits into. */
+    const pastedArgv = (hint: string): string[] => {
+      const at = hint.indexOf(': rm -rf ');
+      expect(at, 'the line carries an rm -rf').toBeGreaterThanOrEqual(0);
+      const r = spawnSync('bash', ['-c', 'rm() { printf "%s\\0" "$@"; }; eval "$1"', '_', hint.slice(at + 2)], { encoding: 'utf8' });
+      return r.stdout.split('\0').slice(0, -1);
+    };
+    const hintOf = (stdout: string): string => stdout.split('\n').find((l) => l.startsWith('recapture: it holds UNSANITISED')) as string;
+    // A TMPDIR whose path carries a space, both quotes, `$`, a command substitution, and the characters bash treats as syntax or globs.
+    const NASTY = 'ccrc-dlg-tmp o\'dd "q" $HOME $(true) ;|&<>*?[a]{b,c}!#~\\ -';
+
+    it('the paste oracle itself sees a split: an unquoted path with a space is two words, its %q spelling is one', () => {
+      expect(pastedArgv(': rm -rf /a b/c')).toEqual(['-rf', '/a', 'b/c']);
+      expect(pastedArgv(`: rm -rf ${bashQ('/a b/c')}`)).toEqual(['-rf', '/a b/c']);
+    });
+
+    it('a real run over a TMPDIR whose path carries a space and shell metacharacters ends with an rm -rf that, pasted, names the raw root whole and nothing else', () => {
+      const t = recaptureTree();
+      const c = ctx(t, ENTRIES, NASTY);
+      for (const ch of [' ', '\'', '"', '$', ';', '&', '*', '\\']) expect(c.tmp, `TMPDIR carries ${ch}`).toContain(ch);
+      const r = recapture(c, ['2.1.999']);
+      expect(r.status, r.stderr).toBe(0);
+      const made = fs.readdirSync(c.tmp);
+      expect(made, 'exactly one raw root, nothing else in TMPDIR').toHaveLength(1);
+      const raw = path.join(c.tmp, made[0] as string);
+      expect.soft(argvLines(t).map((l) => l.split(raw).join('<raw>'))[0], 'the steps got the root whole').toBe('all [<raw>] [2.1.999]');
+      expect.soft(pastedArgv(hintOf(r.stdout)), 'pasted: one word after -rf, the raw root itself').toEqual(['-rf', raw]);
+      expect.soft(r.stdout).toContain(`rm -rf ${bashQ(raw)}\n`);
+      expect.soft(r.stdout, 'the label line names the root as it is').toContain(`recapture: raw root: ${raw}\n`);
+    }, 60_000);
+
+    it('--dry-run closes with the same hint, its <raw> placeholder escaped EXACTLY ONCE: it reads \\<raw\\> and pastes as the placeholder itself', () => {
+      const t = recaptureTree();
+      const r = recapture(ctx(t, ENTRIES), ['--dry-run', '2.1.999']);
+      expect.soft(r.status, r.stderr).toBe(0);
+      const hint = hintOf(r.stdout);
+      expect.soft(hint.endsWith(': rm -rf \\<raw\\>'), hint).toBe(true);
+      expect.soft(hint, 'not escaped twice').not.toContain('\\\\');
+      expect.soft(pastedArgv(hint)).toEqual(['-rf', '<raw>']);
+      expect.soft(bashQ('<raw>'), 'bash\'s own %q agrees with the spelling').toBe('\\<raw\\>');
+      expect.soft(r.stdout, 'the other mention of the placeholder is a label, not a paste: it stays as it is').toContain('recapture: raw root: <raw>\n');
+    }, 60_000);
+
+    it('a capture that leaves its .done and still reports a failed run stops at step 2 with that exit: nothing is sanitised, the corpus gains no version directory, and --missing still selects the versions (failed is not "already complete")', () => {
+      const t = recaptureTree();
+      const c = ctx(t, ENTRIES);
+      const corpusBefore = treeListing(t.fix);
+      const r = recapture(c, ['--missing'], { STUB_RC_AFTER_DONE: '1' });
+      expect.soft(r.status, r.stderr).toBe(1);
+      expect.soft(r.stderr).toContain('step 2 failed (exit 1): capture every version against every scenario (rig.sh all; its .done must exist)');
+      expect.soft(kinds(t), 'the later steps did not run').toEqual(['all']);
+      const made = fs.readdirSync(c.tmp);
+      expect.soft(made, 'the raw root is kept').toHaveLength(1);
+      const raw = path.join(c.tmp, made[0] as string);
+      expect.soft(fs.existsSync(path.join(raw, '.done')), 'the sweep left its marker: it is the exit that failed it').toBe(true);
+      expect.soft(r.stderr).toContain(`recapture: the raw root ${raw} is kept`);
+      expect.soft(treeListing(t.fix), 'no version directory was added to the corpus').toEqual(corpusBefore);
+      const again = recapture(c, ['--dry-run', '--missing']);
+      expect.soft(again.status, again.stderr).toBe(0);
+      expect.soft(again.stdout, 'the versions are still missing').toContain('recapture: 3 version(s), as installed now: 2.1.9 2.1.999 10.0.0\n');
+      expect.soft(again.stdout, 'a failure is not "already complete"').not.toContain('already covers');
+    }, 60_000);
+
+    for (const u of UNREADABLE) {
+      for (const args of [[], ['--missing'], ['--dry-run', '--missing']]) {
+        it.skipIf(u.needsUser && IS_ROOT)(`${args.join(' ') || '(no argument)'} over ${u.what}: exit 2, the directory named as unreadable and not as "no version installed", and nothing made or run`, () => {
+          const t = recaptureTree();
+          const { home, dir } = unreadableHome(u);
+          const c = { home, tmp: mkTmp('ccrc-dlg-tmp-'), t };
+          const before = treeListing(t.dir);
+          const r = recapture(c, args);
+          expect.soft(r.status, r.stderr).toBe(2);
+          expect.soft(r.stderr).toContain(`cannot read the versions directory ${dir}`);
+          expect.soft(r.stderr, 'unreadable is not "none installed"').not.toContain('no Claude Code version is installed');
+          expect.soft(r.stdout).toBe('');
+          expect.soft(fs.readdirSync(c.tmp), 'no raw root').toEqual([]);
+          expect.soft(logLines(t), 'nothing ran').toEqual([]);
+          expect.soft(treeListing(t.dir), 'the tree is as it was').toEqual(before);
+        }, 60_000);
+      }
+    }
+
+    it('a HOME with no versions directory at all is still "none installed", in its own words (absent is not unreadable)', () => {
+      const t = recaptureTree();
+      const c = { home: mkTmp('ccrc-dlg-home-'), tmp: mkTmp('ccrc-dlg-tmp-'), t };
+      const r = recapture(c, ['--missing']);
+      expect.soft(r.status, r.stderr).toBe(2);
+      expect.soft(r.stderr).toContain('no Claude Code version is installed to capture');
+      expect.soft(r.stderr).not.toContain('cannot read the versions directory');
+    }, 60_000);
+  });
 });
 
 /** Set every mtime under `root` (files, symlinks, then directories, children first) to `when`. */

@@ -23,6 +23,7 @@ import { navigate } from '../lib/router';
 import { sessionDocsHref } from '../docs/docsLinks';
 import { sessionLabel } from './sessionLabel';
 import { narrowSinceWidened } from './spawnWords';
+import { hibernatedSince } from './hibernated';
 import { substrateFaultText, substrateFaultTitle } from './substrateWords';
 import { SwapSheet } from './SwapSheet';
 import { HoldControl } from './HoldControl';
@@ -157,7 +158,7 @@ export function SessionActionsSheet({
       // apiErrorText, never err.message: the runCcd routes fail as
       // 502 { ok, stderr } with no `error` key, so err.message yields the
       // generic "request failed (502)" and ccd's refusal never reaches anyone.
-      toast(failedTo('restart', err), 'error');
+      toast(failedTo(hibernatedSince(session) !== null ? 'wake' : 'restart', err), 'error');
     } finally {
       setRestarting(false);
     }
@@ -243,6 +244,9 @@ export function SessionActionsSheet({
   const label = sessionLabel(session);
   // The session's link into Docs (docs design 4.8), from the one builder the session menu also calls.
   const docsLink = sessionDocsHref(session);
+  // D-5242: a row `ccd hibernate` put to sleep. The top button is the same `/ensure` (it WAKES it), Forget is not offered
+  // (`ccd forget` refuses a sleeper, D-5423: wake it or stop it first), and the dead-pane notes do not speak of it.
+  const asleep = hibernatedSince(session) !== null;
 
   return (
     <>
@@ -250,8 +254,14 @@ export function SessionActionsSheet({
         <div className="sess-sheet">
           <Button variant="ghost" onClick={() => void restart()}
                   disabled={restarting || fault !== null} title={faultTitle}>
-            {restarting ? 'Restarting…' : 'Restart session'}
+            {asleep ? (restarting ? 'Waking…' : 'Wake session') : restarting ? 'Restarting…' : 'Restart session'}
           </Button>
+          {asleep && (
+            <p className="sess-sheet-note">
+              It is asleep: hibernated after a long idle. Wake session resumes the same conversation; opening it, mail
+              or a dispatch wakes it too.
+            </p>
+          )}
 
           {/* §4.4: "what would revive it" is a sentence the row can print and
               a button the operator already has. The button above posts
@@ -334,7 +344,7 @@ export function SessionActionsSheet({
               {`The last spawn landed in a pane under ${READER_MIN_COLS} columns, or one whose width ccd could not read, so ccd answered none of its startup prompts and skipped its /effort and its re-drive of any interrupted turn. The pane has since been widened and its prompt is up, so auto-swap and auto-compact are back on — if this session was mid-turn when it respawned, it may still be waiting for a nudge. This marker stays until the session next spawns.`}
             </p>
           )}
-          {session.spawnState === 'narrow' && session.status === 'dead' && (
+          {session.spawnState === 'narrow' && session.status === 'dead' && !asleep && (
             <p className="sess-sheet-note">
               {`The last spawn landed in a pane under ${READER_MIN_COLS} columns, or one whose width ccd could not read, and that pane is gone. Restart session builds a new one, which a current ccd pins 220x50.`}
             </p>
@@ -442,7 +452,7 @@ export function SessionActionsSheet({
               goes through Stop first; a workspace's removal destroys git
               state and goes through the audited sheet above. ccd re-proves
               both gates (and the hold) on the box. */}
-          {session.workspace === null && session.status === 'dead' && (
+          {session.workspace === null && session.status === 'dead' && !asleep && (
             <Button variant="ghost" className="sess-sheet-remove"
                     disabled={fault !== null} title={faultTitle}
                     onClick={() => setForgetConfirmOpen(true)}>

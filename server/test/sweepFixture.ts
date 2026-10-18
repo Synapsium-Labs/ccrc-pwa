@@ -39,7 +39,9 @@ export const BASH = realPath('bash');
 export const CCRC_SRC = join(REPO, 'ccd', 'ccrc');
 /** The script the fixture's `~/ccrc/deploy/verify-service.sh` is a copy of, unless a case names another. */
 export const VERIFY_SRC = join(REPO, 'deploy', 'verify-service.sh');
-/** The frozen pre-wave-11 `_upd_sweep` (v0.0.60 through v0.0.84), sourced after `ccd/ccrc` and redefining it. */
+/** The frozen pre-wave-11 `_upd_sweep` (v0.0.60 through v0.0.84), sourced after `ccd/ccrc` and redefining it. The file
+ *  redefines `_upd_phase` too (since 74f93f8f1): v0.0.84's seven-key writer, byte-identical to `_upd_phase` at 65f4b5ab4,
+ *  so every `frozen` case runs the old writer, which is the right model of an old process. */
 export const FROZEN_SWEEP = join(here, 'fixtures', 'upd-sweep-pre-wave11.bash');
 /** S0, the verify script every release through v0.0.79 ships (one digest from v0.0.1, measured) — the PRE-wave-10
  *  script, with no deliberate-stop classifier — byte for byte (`git show v0.0.79:deploy/verify-service.sh`; wave 12,
@@ -48,6 +50,10 @@ export const FROZEN_VERIFY_S0 = join(here, 'fixtures', 'verify-service-pre-wave1
 /** S10, the verify script as v0.0.80 through v0.0.91 ship it — wave 10's, with the classifier and none of wave 11's
  *  purged-arm guards — byte for byte (`git show v0.0.91:deploy/verify-service.sh`; wave 12, R19d, D-4069). */
 export const FROZEN_VERIFY_S10 = join(here, 'fixtures', 'verify-service-pre-wave11.sh');
+/** S15, the verify script as every release from wave 11's purged-arm guards up to wave 16 ships it — the script at the
+ *  dispatch base of wave 16, byte for byte (`git show 0b3ff2f62:deploy/verify-service.sh`), frozen so that a rollback's
+ *  pairing of a newer sweep with it is pinned (wave 16, the coordinator's Reading 6 ruling). */
+export const FROZEN_VERIFY_S15 = join(here, 'fixtures', 'verify-service-pre-wave16.sh');
 
 /** What gets a poison planted by `makeBox`. `gh` is not here: `ghContainedEnv` plants it. */
 export const POISONS: readonly string[] =
@@ -69,6 +75,10 @@ export interface UnitPlant {
   unit: string; active: string[]; mainPid: string[]; loadState?: string;
   listed?: 'active' | `crash:${string}` | 'gone';
   preRestart?: string | null;
+  /** In the POST-restart `--state=failed` listing, the one the sweep's "is FAILED" warning loop reads (wave 16). Opt-in
+   *  and never derived from `listed`: before wave 16 that listing answered nothing for every case, and still does for
+   *  every case that does not set this. */
+  failedListed?: boolean;
 }
 
 /** A unit's Nth `is-active` call waits, polling every 0.1 s for at most `boundTenths`, until `until` holds; then it
@@ -91,6 +101,8 @@ export interface BoxOpts {
   journalGate?: { unit: string; line: string };
   /** The `--state=activating,failed` listing exits this rc (and prints nothing) instead of answering. */
   crashListingRc?: number;
+  /** The post-restart `--state=active` listing exits this rc (and prints nothing) instead of answering (wave 16). */
+  activeListingRc?: number;
   /** `<home>/tmp` is a directory (default) or a regular file. */
   tmpdir?: 'dir' | 'file';
   /** Plants `<home>/.ccrc/update.json` as a report owned by `pid`. */
@@ -124,9 +136,11 @@ const SYSTEMCTL_STUB = [
   '    state=""',
   '    for a in "$@"; do case "$a" in --state=*) state="${a#--state=}" ;; esac; done',
   '    case "$state" in',
-  '      failed) exit 0 ;;',
+  '      failed) cat "$fx/list.failed"; exit 0 ;;',
   '      "") cat "$fx/list.all"; exit 0 ;;',
-  '      active) cat "$fx/list.active"; exit 0 ;;',
+  '      active)',
+  '        if [ -f "$fx/active.rc" ]; then IFS= read -r rc < "$fx/active.rc"; exit "$rc"; fi',
+  '        cat "$fx/list.active"; exit 0 ;;',
   '      activating,failed)',
   '        if [ -f "$fx/crash.rc" ]; then IFS= read -r rc < "$fx/crash.rc"; exit "$rc"; fi',
   '        cat "$fx/list.crash"; exit 0 ;;',
@@ -237,7 +251,9 @@ export function makeBox(o: BoxOpts): Box {
   const all: string[] = [];
   const active: string[] = [];
   const crash: string[] = [];
+  const failedL: string[] = [];
   for (const p of o.units) {
+    if (p.failedListed === true) failedL.push(row(p.unit, 'failed', 'failed'));
     const pre = p.preRestart === undefined ? 'active' : p.preRestart;
     if (pre !== null) all.push(row(p.unit, pre, subOf(pre)));
     const listed = p.listed ?? 'active';
@@ -254,7 +270,9 @@ export function makeBox(o: BoxOpts): Box {
   writeFileSync(join(fx, 'list.all'), lines(all));
   writeFileSync(join(fx, 'list.active'), lines(active));
   writeFileSync(join(fx, 'list.crash'), lines(crash));
+  writeFileSync(join(fx, 'list.failed'), lines(failedL));
   if (o.crashListingRc !== undefined) writeFileSync(join(fx, 'crash.rc'), `${o.crashListingRc}\n`);
+  if (o.activeListingRc !== undefined) writeFileSync(join(fx, 'active.rc'), `${o.activeListingRc}\n`);
   const byUnit = new Map<string, string[]>();
   for (const g of o.gates ?? []) {
     const cond = 'firstPids' in g.until

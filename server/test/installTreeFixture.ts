@@ -171,9 +171,16 @@ export const TREE_FILES = [
   // directory its `exec node` and doctor's `status --json` read, copied whole.
   'ccd/ccd-history-sweep',
   'ccd/history',
+  // `ccrc-api` (wave 17, D-5313), placed by `_inst_bins` on both arms for every
+  // role but server; without it `_inst_atomic` dies naming a source the tree
+  // does not carry.
+  'ccd/ccrc-api',
   // The pane-scope sweep (session-continuity wave 4), shipped by `_inst_bins` on
   // the same non-Darwin, every-ROLE arm as the reaper above.
   'ccd/ccd-scope-sweep',
+  // D-5241: the tool-child priority's shell prefix, placed by `_inst_bins` on
+  // the same non-Darwin, every-ROLE arm as the sweep above.
+  'ccd/ccd-tool-adj',
   // account-pool-membership wave 1, Task 4 fix round 1 (F1): the leased-
   // projection puller, shipped by `_inst_bins` on the same non-Darwin, every-
   // ROLE arm as the four above. Without this row `_inst_atomic` dies naming a

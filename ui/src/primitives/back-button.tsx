@@ -72,6 +72,8 @@ export const BACK_BUTTON =
   'back-btn'
   + ' flex-none min-w-tap min-h-tap border-none bg-transparent rounded-sm'
   + ' font-ui text-[26px] font-regular leading-none text-ink-secondary cursor-pointer'
+  // D-5101: brightens to the primary ink under the mouse, as a door does.
+  + ' hover:text-ink-primary'
   + ` ${PRESS_FEEDBACK}`
   + ` ${FOCUS_RING}`;
 

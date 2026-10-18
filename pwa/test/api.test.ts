@@ -961,6 +961,20 @@ describe('account pools', () => {
     expect(JSON.parse(init.body as string)).toEqual({ wrapper: 'claude2', crossPool: true });
   });
 
+  it('swap(id, w, {interrupt:true}) sends the consent, alone or beside the crossing (D-5240)', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+    await api.swap('s1', 'claude2', { interrupt: true });
+    await api.swap('s1', 'claude2', { crossPool: true, interrupt: true });
+    await api.swap('s1', 'claude2', { interrupt: false });
+    const bodies = fetchImpl.mock.calls.map((c) => JSON.parse((c as [string, RequestInit])[1].body as string));
+    expect(bodies).toEqual([
+      { wrapper: 'claude2', interrupt: true },
+      { wrapper: 'claude2', crossPool: true, interrupt: true },
+      { wrapper: 'claude2' },
+    ]);
+  });
+
   it('createSession omits crossPool entirely unless it is true', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
     const api = createApi(fetchImpl as unknown as typeof fetch);
@@ -1514,9 +1528,9 @@ describe('api client — each door sends exactly its own request', () => {
     });
   });
 
-  it('POSTs the interrupt with no body', async () => {
-    await api.interrupt(ID);
-    expect(sent()).toEqual({ url: `/api/sessions/${ENC}/interrupt`, method: 'POST', body: undefined });
+  it('POSTs the interrupt with the source that sent it (D-5237)', async () => {
+    await api.interrupt(ID, 'keycap');
+    expect(sent()).toEqual({ url: `/api/sessions/${ENC}/interrupt`, method: 'POST', body: { source: 'keycap' } });
   });
 
   it('GETs the command list under the session', async () => {

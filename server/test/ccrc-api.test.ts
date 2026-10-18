@@ -117,14 +117,15 @@ function run(args: string[], input?: string,
 const runBoth = run;
 
 /** A tmux that ANSWERS, planted where `ghContainedEnv`'s poison cannot displace
- *  it: `ccdWsHelpers.ts:233` is `if (fs.existsSync(p)) continue;`, so the stub
+ *  it: `ghContainedEnv` has `if (fs.existsSync(p)) continue;`, so the stub
  *  loop SKIPS a file already there, and `harnessBin` is the first PATH entry
- *  (`ccdWsHelpers.ts:109-122, :245`). Every test plants before it calls `run`,
- *  so this is the tmux the client meets — NOT a vacuous fixture.
+ *  (`ghContainedEnv` prepends it to `PATH`). Every test plants before it
+ *  calls `run`, so this is the tmux the client meets — NOT a vacuous fixture.
  *
  *  It logs argv to the SAME `$HOME/tmux-calls` the poison stub uses
- *  (`ccdWsHelpers.ts:229`), so `tmuxArgv()` reads one file whichever stub is in
- *  place, and a test can prove the pane was passed as an explicit target. */
+ *  (`ghContainedEnv`'s `tmux` row), so `tmuxArgv()` reads one file whichever
+ *  stub is in place, and a test can prove the pane was passed as an explicit
+ *  target. */
 const plantPane = (id: string, uuid = 'u-1234'): void => {
   fs.writeFileSync(path.join(harnessBin(home), 'tmux'),
     `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/tmux-calls"\nprintf 'cc-${id}\\n'\n`,
@@ -225,12 +226,15 @@ describe('the closed route table', () => {
     // NEW ROW rather than a `--program` on some existing one: the table is the
     // client's own contract and grows by a row, never by a URL argument.
     [['feed', 'list'], 'GET', '/api/feed'],
+    // The coordinator's explicit intent declaration (delegation broker wave 3, Task 15). The one row with a grammar of its
+    // own, `coordinators intent <set|clear> --session <id>`; the id in the path is derived from the pane, never from the flag.
+    [['coordinators', 'intent', 'set', '--session', 'demo-ws'], 'POST', '/api/coordinators/demo-ws/intent'],
   ];
 
   it.each(ROWS)('%s -> %s %s', async (args, method, url) => {
-    if (args[0] === 'asks' && args[1] === 'list') plantPane('demo-ws');
-    await run(args as string[], undefined,
-      args[0] === 'asks' && args[1] === 'list' ? { TMUX_PANE: '%7' } : undefined);
+    const paned = (args[0] === 'asks' && args[1] === 'list') || args[0] === 'coordinators';
+    if (paned) plantPane('demo-ws');
+    await run(args as string[], undefined, paned ? { TMUX_PANE: '%7' } : undefined);
     expect(seen).toHaveLength(1);
     expect(seen[0]!.method).toBe(method);
     // Query strings are the caller's (`mail list --to x` appends one); the path
@@ -253,7 +257,8 @@ describe('the closed route table', () => {
     //
     // Twenty-four since `runs.route` (routing slice 5, Task 4's escalation
     // door) landed.
-    expect(keys).toHaveLength(24);
+    // Twenty-five since `coordinators.intent` (delegation broker wave 3, Task 15).
+    expect(keys).toHaveLength(25);
   });
 
   it('states the row count in prose as the number the table actually holds', () => {
@@ -261,7 +266,7 @@ describe('the closed route table', () => {
     const WORDS: Record<number, string> = {
       15: 'fifteen', 16: 'sixteen', 17: 'seventeen', 18: 'eighteen',
       19: 'nineteen', 20: 'twenty', 21: 'twenty-one', 22: 'twenty-two',
-      23: 'twenty-three', 24: 'twenty-four',
+      23: 'twenty-three', 24: 'twenty-four', 25: 'twenty-five',
     };
     const want = WORDS[n];
     expect(want, `the ROUTES table outgrew this test's word list at ${n}`).toBeDefined();
@@ -438,7 +443,9 @@ describe('the token never rides curl\'s argv (R16)', () => {
 
   it.each([
     ['a GET', ['runs', 'list'], undefined, ''],
-    ['a POST whose body is a --json file', ['runs', 'open', '--json', 'BODYFILE'], undefined, '{"program":"p","wave":1}'],
+    // `claims take`, not `runs open`: the client fills `runs open`'s body
+    // (`claimedByUuid`, D-5298), and this case measures a body sent as written.
+    ['a POST whose body is a --json file', ['claims', 'take', '--json', 'BODYFILE'], undefined, '{"program":"p","wave":1}'],
     // THE COLLISION CASE: stdin is the body (read by `body=$(cat)`) AND curl's
     // config (the printf pipe). The mail envelope's own ack line is this shape.
     ['a POST whose body is --json - (stdin twice: the body, then curl\'s config)', ['asks', 'answer', '7', '--json', '-'],
@@ -770,15 +777,18 @@ describe('a query key rides only if its row declared it', () => {
 });
 
 describe('the body comes from --json, and only from there', () => {
+  // `claims take` is the plain POST here: `runs open` and `ledger allocate` are
+  // the two rows whose body the client fills (their own describes below), so a
+  // "sent verbatim" case on either would measure the fill, not the transport.
   it('sends a file body verbatim', async () => {
     const f = path.join(home, 'body.json');
     fs.writeFileSync(f, '{"program":"p","wave":1}');
-    await run(['runs', 'open', '--json', f]);
+    await run(['claims', 'take', '--json', f]);
     expect(seen[0]!.body).toBe('{"program":"p","wave":1}');
   });
 
   it('reads stdin for --json -', async () => {
-    await run(['runs', 'open', '--json', '-'], '{"program":"from-stdin"}');
+    await run(['claims', 'take', '--json', '-'], '{"program":"from-stdin"}');
     expect(seen[0]!.body).toBe('{"program":"from-stdin"}');
   });
 
@@ -791,7 +801,7 @@ describe('the body comes from --json, and only from there', () => {
   it('sets content-type on a POST that carries a body', async () => {
     const f = path.join(home, 'body.json');
     fs.writeFileSync(f, '{}');
-    await run(['runs', 'open', '--json', f]);
+    await run(['claims', 'take', '--json', f]);
     expect(seen).toHaveLength(1);
   });
 
@@ -854,7 +864,8 @@ describe('whoami: the pane is the proof', () => {
 
   it('says tmux could not answer FOR THIS PANE, not that there is no session', async () => {
     // No plantPane: the harness's own poisoned tmux answers rc 97 and prints
-    // nothing (`ccdWsHelpers.ts:229,235-239`), which is the "tmux refused" case.
+    // nothing (`ghContainedEnv`'s `tmux` row and the stub loop that writes it),
+    // which is the "tmux refused" case.
     const r = await run(['whoami'], undefined, { TMUX_PANE: '%7' });
     expect(r.status).not.toBe(0);
     expect(r.stdout).toContain('could not answer for this pane');
@@ -887,6 +898,99 @@ describe('whoami: the pane is the proof', () => {
     const got = await sh(`who=$(cat)\n${fence}\nprintf '%s|%s' "$id" "$uuid"`, r.stdout);
     expect(got, 'the corpora slice this stdout into a malformed identity')
       .toBe('demo-ws|u-1234');
+  });
+});
+
+// Delegation broker wave 3, Task 15 (plan steps 2 and 7). `coordinators intent <set|clear> --session <id>` is the one row whose grammar
+// is not the generic `<group> <verb> [<id>] [--json] [--key value]` one: a focused special case, run before the generic parser, that
+// accepts EXACTLY those words. The session and its uuid come from the PANE (`derive_identity`); `--session` is only an assertion that
+// must equal the derived id, so it can never select another session. The body is synthesized here, never read from a file or stdin.
+describe('coordinators intent: a focused grammar, identity from the pane', () => {
+  const INTENT = '/api/coordinators/demo-ws/intent';
+  const pane = { TMUX_PANE: '%7' };
+
+  it.each(['set', 'clear'])('%s posts {action, byId, byUuid} for THIS pane, to the path derived from it', async (action) => {
+    plantPane('demo-ws', 'u-1234');
+    const r = await run(['coordinators', 'intent', action, '--session', 'demo-ws'], undefined, pane);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.method).toBe('POST');
+    expect(seen[0]!.url).toBe(INTENT);
+    expect(seen[0]!.body).toBe(`{"action":"${action}","byId":"demo-ws","byUuid":"u-1234"}`);
+    expect(seen[0]!.auth, 'the box token still rides curl\'s stdin config').toBe(TOKEN);
+    expect(tmuxArgv()[0], 'the pane was passed as an explicit tmux target').toContain('-t %7');
+  });
+
+  it('prints the server\'s answer verbatim and never the token', async () => {
+    plantPane('demo-ws');
+    reply = { code: 200, body: '{"ok":true,"changed":true}' };
+    const r = await run(['coordinators', 'intent', 'set', '--session', 'demo-ws'], undefined, pane);
+    expect(r.stdout.trim()).toBe('{"ok":true,"changed":true}');
+    expect(r.stderr).toMatch(/^http 200$/m);
+    expect(r.stdout + r.stderr, 'the token reached an output stream').not.toContain(TOKEN);
+  });
+
+  it('refuses --session that is not the pane-derived session, and sends nothing (it asserts; it never selects)', async () => {
+    plantPane('demo-ws');
+    const r = await run(['coordinators', 'intent', 'set', '--session', 'someone-else'], undefined, pane);
+    expect(r.status).not.toBe(0);
+    expect(r.stdout).toContain('session-mismatch');
+    expect(JSON.parse(r.stdout)).toMatchObject({ ok: false, error: 'session-mismatch' });
+    expect(seen, 'a declaration for another session reached the wire').toHaveLength(0);
+    expect(r.stdout + r.stderr).not.toContain('someone-else"');
+  });
+
+  it('refuses with no pane even when tmux would answer, and sends nothing', async () => {
+    plantPane('someone-else');
+    const r = await run(['coordinators', 'intent', 'set', '--session', 'someone-else'], undefined, { TMUX_PANE: undefined, TMUX: undefined });
+    expect(r.status).not.toBe(0);
+    expect(r.stdout).toContain('no-pane');
+    expect(seen).toHaveLength(0);
+    expect(tmuxArgv(), 'tmux was shelled before the gate decided').toEqual([]);
+  });
+
+  it.each<[string, string[]]>([
+    ['no action', ['coordinators', 'intent']],
+    ['an unknown action', ['coordinators', 'intent', 'toggle', '--session', 'demo-ws']],
+    ['an upper-case action', ['coordinators', 'intent', 'SET', '--session', 'demo-ws']],
+    ['the action after the flag', ['coordinators', 'intent', '--session', 'demo-ws', 'set']],
+    ['a missing --session', ['coordinators', 'intent', 'set']],
+    ['a --session without a value', ['coordinators', 'intent', 'set', '--session']],
+    ['a DUPLICATE --session', ['coordinators', 'intent', 'set', '--session', 'demo-ws', '--session', 'demo-ws']],
+    ['an extra flag', ['coordinators', 'intent', 'set', '--session', 'demo-ws', '--by', 'demo-ws']],
+    ['--json', ['coordinators', 'intent', 'set', '--session', 'demo-ws', '--json', '-']],
+    ['a query key', ['coordinators', 'intent', 'set', '--session', 'demo-ws', '--all', '1']],
+    ['a trailing word', ['coordinators', 'intent', 'set', '--session', 'demo-ws', 'extra']],
+    ['a positional id', ['coordinators', 'intent', 'demo-ws', 'set', '--session', 'demo-ws']],
+    ['a --session that is not a plain id', ['coordinators', 'intent', 'set', '--session', 'demo/../ws']],
+  ])('refuses %s, with one parseable envelope, and sends nothing', async (_name, args) => {
+    plantPane('demo-ws');
+    const r = await run(args, '{"action":"set"}', pane);
+    expect(r.status).not.toBe(0);
+    expect(JSON.parse(r.stdout.trim().split('\n')[0]!)).toMatchObject({ ok: false });
+    expect(seen, 'a malformed intent command reached the wire').toHaveLength(0);
+  });
+
+  it('is the only row that takes --session: every other row refuses it by name', async () => {
+    plantPane('demo-ws');
+    const r = await run(['runs', 'list', '--session', 'demo-ws'], undefined, pane);
+    expect(r.status).not.toBe(0);
+    expect(r.stdout).toContain('unknown-query');
+    expect(seen).toHaveLength(0);
+    // …and the generic rows are untouched by the special case: no action word, no derived body.
+    seen.length = 0;
+    await run(['runs', 'list'], undefined, pane);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.body).toBe('');
+  });
+
+  it('the usage text names the grammar, and `coordinators` alone says what is missing', async () => {
+    const r = await run(['coordinators']);
+    expect(r.status).not.toBe(0);
+    expect(r.stdout).toContain('no-verb');
+    const h = await run(['--help']);
+    expect(h.stderr).toContain('coordinators intent');
+    expect(h.stderr).toContain('--session');
   });
 });
 
@@ -1022,5 +1126,117 @@ describe('ledger allocate carries an identity, or refuses', () => {
     expect(r.status).toBe(0);
     expect(seen).toHaveLength(1);
     expect(seen[0]!.body).toBe('');
+  });
+});
+
+// D-5298 (coordinator-first routing, spec §6.4; plan Task 11a). `POST /api/runs`
+// is where a coordinator becomes a child's parent, and the server half (Task 11b)
+// will refuse a claimant it cannot attribute. This half ships first, on the fleet
+// box: the client fills `claimedByUuid` from the caller's own `$REG/<id>.uuid`
+// (the pane, then the registry, exactly as `whoami` and `asks list` derive it),
+// so no coordinator's documented body has to change. An older server reads the
+// extra field as nothing. The fixture body is the coordinator skill's executable
+// `runs open` example and its review-run form, with neutral ids.
+describe('runs open carries its claimant\'s identity (D-5298)', () => {
+  const CLAIMANT = 'project-a-calm-mesa';
+  const CLAIMANT_UUID = 'u-calm-mesa-0001';
+  const WAVE = {
+    program: 'program-a', title: 'Wave 1', project: 'project-a', homeProject: 'project-a',
+    wave: 1, waveOf: null, claimedBy: CLAIMANT,
+  };
+  const REVIEW = {
+    program: 'program-a', title: 'Review wave 1', kind: 'review', reviews: 12,
+    claimedBy: CLAIMANT, homeProject: 'project-a',
+  };
+
+  it.each([
+    ['a wave run', WAVE],
+    ['a review run', REVIEW],
+  ])('fills claimedByUuid from this pane\'s own .uuid on %s', async (_what, body) => {
+    plantPane(CLAIMANT, CLAIMANT_UUID);
+    // Another session's .uuid beside it: the fill reads the PANE's, not any row.
+    fs.writeFileSync(path.join(home, '.cc-sessions', 'project-a-open-dune.uuid'), 'u-open-dune-0002\n');
+    const r = await run(['runs', 'open', '--json', '-'], JSON.stringify(body), { TMUX_PANE: '%7' });
+    expect(r.status, r.stdout).toBe(0);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.method).toBe('POST');
+    expect(seen[0]!.url).toBe('/api/runs');
+    expect(JSON.parse(seen[0]!.body)).toEqual({ ...body, claimedByUuid: CLAIMANT_UUID });
+    expect(tmuxArgv().some((a) => a.includes('-t %7')), 'the pane was not the tmux target').toBe(true);
+  });
+
+  it('an EMPTY object body gets a whole object back, not a trailing comma', async () => {
+    for (const body of ['{}', '{ }']) {
+      seen.length = 0;
+      plantPane(CLAIMANT, CLAIMANT_UUID);
+      const r = await run(['runs', 'open', '--json', '-'], body, { TMUX_PANE: '%7' });
+      expect(r.status, `an empty object body (${body}) refused`).toBe(0);
+      expect(seen).toHaveLength(1);
+      expect(seen[0]!.body).toBe(`{"claimedByUuid":"${CLAIMANT_UUID}"}`);
+    }
+  });
+
+  it('leading whitespace (a heredoc, a pretty-printer) is still an object', async () => {
+    plantPane(CLAIMANT, CLAIMANT_UUID);
+    const r = await run(['runs', 'open', '--json', '-'], `\n  ${JSON.stringify(WAVE)}`, { TMUX_PANE: '%7' });
+    expect(r.status, r.stdout).toBe(0);
+    expect(JSON.parse(seen[0]!.body)).toEqual({ ...WAVE, claimedByUuid: CLAIMANT_UUID });
+  });
+
+  it('sends NOTHING when there is a body and no derivable identity', async () => {
+    plantPane('project-b-far-ridge', 'u-far-ridge-0003');   // tmux WOULD answer
+    const r = await run(['runs', 'open', '--json', '-'], JSON.stringify(WAVE),
+      { TMUX_PANE: undefined, TMUX: undefined });
+    expect(seen, 'an unattributed runs open reached the wire').toHaveLength(0);
+    expect(r.status).not.toBe(0);
+    expect(r.stdout).toContain('no-pane');
+  });
+
+  it('sends NOTHING when the pane\'s session has no .uuid', async () => {
+    plantPane(CLAIMANT, CLAIMANT_UUID);
+    fs.rmSync(path.join(home, '.cc-sessions', `${CLAIMANT}.uuid`));
+    const r = await run(['runs', 'open', '--json', '-'], JSON.stringify(WAVE), { TMUX_PANE: '%7' });
+    expect(seen).toHaveLength(0);
+    expect(r.stdout).toContain('no-uuid');
+  });
+
+  it.each([
+    ['a blank claimedByUuid', '{"claimedByUuid":"","claimedBy":"project-a-calm-mesa"}'],
+    ['its spaced spelling', '{"claimedByUuid" : "","claimedBy":"project-a-calm-mesa"}'],
+    ['a body that is not a JSON object', '[1,2]'],
+  ])('refuses %s rather than sending it', async (_what, body) => {
+    plantPane(CLAIMANT, CLAIMANT_UUID);
+    const r = await run(['runs', 'open', '--json', '-'], body, { TMUX_PANE: '%7' });
+    expect(seen).toHaveLength(0);
+    expect(r.status).not.toBe(0);
+    expect(r.stdout).toContain('bad-body');
+  });
+
+  it('leaves a caller-supplied claimedByUuid exactly as written, and needs no pane for it', async () => {
+    // Never an override: the server re-measures it against the registry
+    // (`requireAttribution`), so the caller who spoke owns the answer.
+    const body = '{"claimedBy":"project-a-calm-mesa","claimedByUuid":"u-chosen"}';
+    const r = await run(['runs', 'open', '--json', '-'], body, { TMUX_PANE: undefined, TMUX: undefined });
+    expect(r.status, r.stdout).toBe(0);
+    expect(seen[0]!.body).toBe(body);
+  });
+
+  it('a BODYLESS runs open is untouched — there is nothing to attribute', async () => {
+    const r = await run(['runs', 'open'], undefined, { TMUX_PANE: undefined, TMUX: undefined });
+    expect(r.status).toBe(0);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.body).toBe('');
+  });
+
+  it.each([
+    ['dispatch', '{"brief":"b"}'],
+    ['advance', '{"to":"running","fingerprint":"f"}'],
+    ['close', '{"state":"failed"}'],
+    ['route', '{"target":"worker"}'],
+  ])('runs %s sets no claimant, so its body is sent as written', async (verb, body) => {
+    plantPane(CLAIMANT, CLAIMANT_UUID);
+    await run(['runs', verb, '12', '--json', '-'], body, { TMUX_PANE: '%7' });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.body).toBe(body);
   });
 });

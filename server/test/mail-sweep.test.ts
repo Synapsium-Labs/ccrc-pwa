@@ -31,6 +31,8 @@ import { MAIL_GATES, STALL_LEVEL_TEXT } from '../../shared/api.js';
 import { okRun } from './coordReadHelpers.js';
 import { MAIL_GATE_BUSY_MARKER, MAIL_GATE_BUSY_SHADOW_MARKER, MAIL_GATE_STRICT_MARKER } from '../src/turnidle.js';
 import type { StallSettingsPatch } from '../src/coord/stallsettings.js';
+import { queueProgramKickoff } from '../src/coord/kickoff.js';
+import { buildServer } from '../src/server.js';
 
 // Stall watch settings (design 2026-10-05 §9, M20): a resolver that really throws, switched on by one row at a time.
 // Every other row runs the real `resolveStallWatch`; the mock passes straight through while `fault.resolve` is null.
@@ -3483,6 +3485,159 @@ describe('sweepMail: the mail gate mode comes from the stall-watch resolution (s
       } finally {
         warn.mockRestore();
       }
+    }
+  });
+});
+
+// TASK 17b (D-5242): A SLEEPING RECIPIENT IS WOKEN, NEVER PARKED. `ccd hibernate` leaves the row stopped with
+// `$REG/<id>.hibernated` beside the stop stamp, which `sessionLifecycle` alone reads as `stopped`, a dead lifecycle — so
+// before this task its mail took the `session-dead` rung and parked. Now it is gated `hibernated`, its attempts are not
+// counted, and the lane wakes it with `ccd ensure`: at most once per recipient per 10 minutes, and under the fleet-wide
+// wake budget (two in any 60 s, oldest delivery first, asked wakes counted).
+describe('sweepMail: a hibernated recipient is woken, never parked (D-5242)', () => {
+  const WAKE_FLOOR_MS = 10 * 60_000;   // watch.ts's MAIL_WAKE_FLOOR_MS, mirrored
+  const seedHibernated = (home: string, id: string, uuid: string): void => {
+    seedRegistry(home, id, uuid);
+    seedStopped(home, id);
+    writeFileSync(path.join(home, '.cc-sessions', `${id}.hibernated`), `${Math.floor(NOW / 1000) - 7 * 3600} 7`);
+  };
+  const ccdRec = (): { calls: string[][]; runCcd: Deps['runCcd'] } => {
+    const calls: string[][] = [];
+    return { calls, runCcd: async (a) => { calls.push([...a]); return { ok: true, stdout: '', stderr: '', killed: false, signal: null }; } };
+  };
+  const ensures = (calls: string[][]): string[] => calls.filter((a) => a[0] === 'ensure').map((a) => a[1]!);
+  const SLEEPERS = ['project-a-basin-a', 'project-a-basin-b', 'project-a-basin-c', 'project-a-basin-d', 'project-a-basin-e'];
+
+  it('a queued delivery to a hibernated recipient: one ensure, gated hibernated, attempts not counted (never session-dead)', async () => {
+    const h = harness({ hasSession: false });
+    const coord = store(h.home);
+    const c = ccdRec();
+    const { w } = await primedWatcher(h, coord, { runCcd: c.runCcd });
+    seedHibernated(h.home, ID, UUID);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+    advance(PAST_SWEEP_MS); await w.sweepMail();
+    expect(ensures(c.calls)).toEqual([ID]);
+    const row = deliveryRow(coord, id);
+    expect(row.lastGate).toBe('hibernated');
+    expect(row.attempts).toBe(0);
+    expect(row.state).toBe('queued');
+  });
+
+  it('never parks, however many sweeps; a second sweep inside 10 minutes wakes nothing more, one after does', async () => {
+    const h = harness({ hasSession: false });
+    const coord = store(h.home);
+    const c = ccdRec();
+    const { w } = await primedWatcher(h, coord, { runCcd: c.runCcd });
+    seedHibernated(h.home, ID, UUID);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+    for (let i = 0; i < MAIL_MAX_ATTEMPTS + 2; i++) { advance(PAST_SWEEP_MS); await w.sweepMail(); }
+    expect(ensures(c.calls)).toEqual([ID]);
+    const row = deliveryRow(coord, id);
+    expect(row.state).toBe('queued');
+    expect(row.rejectCode).toBeNull();
+    expect(row.attempts).toBe(0);
+    advance(WAKE_FLOOR_MS); await w.sweepMail();
+    expect(ensures(c.calls)).toEqual([ID, ID]);
+  });
+
+  it('a `.hibernated` stamp beside a LIVE pane (ccd hibernate wrote it, its tmux kill failed) is delivered normally: no hibernated gate, no ensure', async () => {
+    const h = harness({ panes: HAPPY_PANES });
+    const coord = store(h.home);
+    const c = ccdRec();
+    const { w } = await primedWatcher(h, coord, { runCcd: c.runCcd });
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    seedLiveState(h.home);
+    seedStopped(h.home, ID);
+    writeFileSync(path.join(h.home, '.cc-sessions', `${ID}.hibernated`), `${Math.floor(NOW / 1000) - 7 * 3600} 7`);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+    await w.sweepMail();
+    expect(ensures(c.calls)).toEqual([]);
+    expect(deliveryRow(coord, id).lastGate).not.toBe('hibernated');
+    expect(literalSends(h.calls)).toEqual([NUDGE]);
+    expect(deliveryRow(coord, id).state).toBe('delivered');
+  });
+
+  it('mail-disabled: no wake (the whole lane is off)', async () => {
+    const h = harness({ hasSession: false });
+    const coord = store(h.home);
+    const c = ccdRec();
+    const { w } = await primedWatcher(h, coord, { runCcd: c.runCcd });
+    seedHibernated(h.home, ID, UUID);
+    queueTestDelivery(coord, ID, ENVELOPE);
+    writeFileSync(path.join(h.home, '.cc-sessions', 'mail-disabled'), '');
+    advance(PAST_SWEEP_MS); await w.sweepMail();
+    expect(c.calls).toEqual([]);
+  });
+
+  it('a kickoff queued to a hibernated coordinator through queueProgramKickoff is woken by this lane like any mail', async () => {
+    const h = harness({ hasSession: false });
+    const coord = store(h.home);
+    const c = ccdRec();
+    const { w } = await primedWatcher(h, coord, { runCcd: c.runCcd });
+    seedHibernated(h.home, ID, UUID);
+    const k = queueProgramKickoff({ coord }, ID, { slug: 'program-a', title: 'Program A' });
+    expect(k.ok).toBe(true);
+    advance(PAST_SWEEP_MS); await w.sweepMail();
+    expect(ensures(c.calls)).toEqual([ID]);
+    const rows = coord.db.prepare('SELECT lastGate, attempts FROM mail_deliveries WHERE toId = ?').all(ID) as { lastGate: string; attempts: number }[];
+    expect(rows).toEqual([{ lastGate: 'hibernated', attempts: 0 }]);
+  });
+
+  it('THE WAKE BUDGET: five sleeping recipients with due mail → exactly two ensures, to the two oldest deliveries', async () => {
+    const h = harness({ hasSession: false });
+    const coord = store(h.home);
+    const c = ccdRec();
+    const { w } = await primedWatcher(h, coord, { runCcd: c.runCcd });
+    SLEEPERS.forEach((s, i) => seedHibernated(h.home, s, String(i).repeat(36)));
+    const ids = SLEEPERS.map((s) => queueTestDelivery(coord, s, ENVELOPE).id);
+    advance(PAST_SWEEP_MS); await w.sweepMail();
+    expect(ensures(c.calls)).toEqual(SLEEPERS.slice(0, 2));
+    for (const id of ids.slice(2)) {
+      expect(deliveryRow(coord, id)).toMatchObject({ state: 'queued', lastGate: 'hibernated', attempts: 0 });
+    }
+    advance(PAST_SWEEP_MS); await w.sweepMail();
+    expect(ensures(c.calls), 'the next sweep inside 60 s wakes none').toEqual(SLEEPERS.slice(0, 2));
+    advance(60_000); await w.sweepMail();
+    expect(ensures(c.calls), 'once the window has passed, two more').toEqual(SLEEPERS.slice(0, 4));
+  });
+
+  it('an operator\'s ensure on a hibernated row 10 s before the sweep counts: only one automatic wake in that window', async () => {
+    const h = harness({ hasSession: false });
+    const coord = store(h.home);
+    const c = ccdRec();
+    const { w, deps } = await primedWatcher(h, coord, { runCcd: c.runCcd });
+    const OPERATOR = 'project-a-basin-z';
+    seedHibernated(h.home, OPERATOR, 'z'.repeat(36));
+    SLEEPERS.slice(0, 2).forEach((s, i) => seedHibernated(h.home, s, String(i).repeat(36)));
+    SLEEPERS.slice(0, 2).forEach((s) => queueTestDelivery(coord, s, ENVELOPE));
+    const app = await buildServer(deps, new Bus(), w);
+    try {
+      advance(PAST_SWEEP_MS);
+      const res = await app.inject({ method: 'POST', url: `/api/sessions/${OPERATOR}/ensure`, payload: {} });
+      expect(res.statusCode, 'the operator\'s own call is answered as always').toBe(200);
+      advance(10_000); await w.sweepMail();
+      expect(ensures(c.calls)).toEqual([OPERATOR, SLEEPERS[0]]);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('an operator\'s ensure is never refused for the budget, however full the window', async () => {
+    const h = harness({ hasSession: false });
+    const coord = store(h.home);
+    const c = ccdRec();
+    const { w, deps } = await primedWatcher(h, coord, { runCcd: c.runCcd });
+    SLEEPERS.forEach((s, i) => seedHibernated(h.home, s, String(i).repeat(36)));
+    const app = await buildServer(deps, new Bus(), w);
+    try {
+      for (const s of SLEEPERS) {
+        const res = await app.inject({ method: 'POST', url: `/api/sessions/${s}/ensure`, payload: {} });
+        expect(res.statusCode, s).toBe(200);
+      }
+      expect(ensures(c.calls)).toEqual(SLEEPERS);
+    } finally {
+      await app.close();
     }
   });
 });

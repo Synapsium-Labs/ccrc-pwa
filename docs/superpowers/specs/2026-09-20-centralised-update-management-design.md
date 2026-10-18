@@ -42,7 +42,7 @@ symlink** so rollback becomes a flip. Five waves; the last is the dangerous one 
 | The control plane already exists | `coord.db` (`node:sqlite`, WAL, 13 migrations, `COORD_SCHEMA_VERSION = MIGRATIONS.length`, `schema.ts:977-979`) holds `pool_edges` + `pool_epoch` (`:955-972`), journalled to `~/.ccrc/pool-edges.log` (`coord/pooledgelog.ts:39`), served by `GET /api/pools/epoch` (`server.ts:2689`) and pulled to the fleet box by `ccd-pool-sync.timer` (`OnUnitActiveSec=60s`) into `$REG/pool-epoch` by tmp-then-rename. That timer is installed on the fleet role only (`ccd/ccrc:10211-10212`, `:10316-10317`), Linux only (`_inst_units_darwin`, `:10084-10107`, writes one plist), and its binary is hand-named at six spine sites — `_inst_bins` (`:9772`, whose comment `:9765-9769` records the 203/EXEC-every-60-seconds failure of forgetting it), the two summary echoes (`:9808`, `:9810`), `cmd_uninstall`'s bin and unit lists (`:12090`, `:12105`, `:12335`, `:12337`), the wrapper-sweep `case` (`:12203`) and `deploy/gen-wrappers.mjs:201-202`'s `TOOLCHAIN_EXECUTABLES`. |
 | The restart-surviving spawn exists, and an older agent's answer is measured | `_svc_run_detached` (`ccd/ccrc:1016-1028`, byte-identical to `ccd/ccd:957-969`): `systemd-run --user --collect --quiet "$@"` on Linux; `nohup … &` on Darwin, whose own comment (`:1012-1015`) promises only that the caller "is exiting, not being SIGKILLed with its group". `setsid` is NOT enough — it stays in the caller's cgroup (`ccd/ccd:15589-15591`, incident 2026-07-05). Neither `deploy/ccrc.service` nor `ccrc-agent.service` sets `KillMode`. An agent that does not know an op answers `ResErr 'bad-request'` at once (`agent/src/server.ts:775-783`, `validateReq`'s `default: return null`), which `client.ts:210-213` already documents. |
 | A PWA-triggered privileged act has a precedent | `POST /api/fleet/reboot` (`server.ts:1207-1224`) reboots the fleet box via Hetzner, gated only by `fleetMode === 'remote'` + configured creds and the global session gate; no box token; pinned by `fleet-health.test.ts:244-305`. |
-| The exec surface is closed and stays closed | `EXEC_COMMANDS = ['tmux','ccd']` (`agent/src/whitelist.ts:134`), pinned by `ccrc-api-closed.test.ts:289` and `whitelist-structural.test.ts:475`; `systemctl`, `node`, `curl`, `gh` are in `FORBIDDEN_COMMANDS` (`:145-152`). The server never SSHes the fleet box at runtime. |
+| The exec surface is closed and stays closed | `EXEC_COMMANDS = ['tmux','ccd']` (`agent/src/whitelist.ts`'s `export const EXEC_COMMANDS`), pinned by `ccrc-api-closed.test.ts`'s `EXEC_COMMANDS is exactly tmux and ccd, and names no client` (which asserts the literal `export const EXEC_COMMANDS = ['tmux', 'ccd'] as const;`) and `whitelist-structural.test.ts`'s `EXEC_WHITELIST has exactly the two declared keys — position-independent`; `systemctl`, `node`, `curl`, `gh` are in `FORBIDDEN_COMMANDS` (the same file). The server never SSHes the fleet box at runtime. |
 | The PWA's own bundle is not the problem | `registerType: 'autoUpdate'` plus `main.tsx`'s 15-minute and visibility-change `registration.update()`. Untouched here. |
 
 ## 2. Decisions
@@ -1140,6 +1140,24 @@ own comment says forgets on restart. A fleet-level push has no session: it bypas
 tap lands on `/settings`. `notify` decides which tags push: `channel` = the newest eligible on the fleet's resolved
 channel; `stable` = stable promotions only; `off` = none. The copy is pinned in `push-copy.test.ts` the way every
 lane is (`:669-737`): a new `it()` reading the exact title, body and tag off `sent[]`.
+
+**The halt and the skew, on the home screen** (wave 14). Who halts, whether the console can move a node and
+whether auto would move it are answered by the dispatcher's own L0 predicates in `shared/update-move.ts`
+(`isHaltingUpdate`, `carriesDetachCap`, `carriesUpdateGate`, `agentPredatesUpdateOp`, `stampUnread`,
+`autoPermits`), which `dispatch.ts` calls and the home screen reads through `fleet/updateHalt.ts`; no node field on
+the wire says "halted". `HaltBanner` sits between `FleetHostBanner` and `UpdateBanner`: *Updates are halted —
+nothing moves on any node until each one below is acknowledged.*, one row per halting node (`<label>: <state> (last
+tried <target>) — <detail>`), each with its own **Ack** — the same `canAck` and `sendAck` (`fleet/updateAck.ts`)
+the Settings row calls — which stays down after a clean 200 until a poll shows a different lease. While a node
+halts, **Update all** is disabled, with a reason line tied to it by `aria-describedby` (`updateAllHaltedText`:
+*Update all waits: nothing moves until … tap Ack on it in the halt banner.*). `UPDATE_ERROR_TEXT`'s `halted`
+sentence (`lib/api.ts`) names both places the Ack is, and the move sheet says a `halted` skip even of a node its
+plan never named (`moveSkippedText`). The skew arm's remedy comes from `skewRemedy`: while a halt stands, the halt
+and its Ack, then what follows the ack (auto, or the terminal); when auto would move every node with a tag to move
+to and every node then ends on the same release tag, the console's own move; otherwise — no inventory answer, an
+unreadable lease, a stale view — the `ccrc rollout`/`ccrc update` sentence. Pinned by `update-move.test.ts`,
+`update-halt.test.ts`, `halt-banner.test.tsx`, `update-banner.test.tsx`, `update-move-sheet.test.tsx` and
+`fleet-host-banner.test.tsx`.
 
 **Unreachable is not current** (§7), pinned at each of the three surfaces: none renders "up to date" while
 `catalogue.lastOkAt` is null, and none renders a node's arrow while its `measuredAt` is null or its `channel` is

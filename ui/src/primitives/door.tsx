@@ -38,6 +38,9 @@ export const DOOR =
   'inline-flex items-center gap-[5px] min-h-tap px-1 py-0 border-0 rounded-sm'
   + ' bg-transparent text-ink-secondary font-mono text-2xs font-medium leading-none'
   + ' cursor-pointer'
+  // D-5101: brightens to the primary ink under the mouse, the ink its press
+  // already lands on. `hover:` is gated on `(hover: hover)` by Tailwind v4.
+  + ' hover:text-ink-primary'
   + ` ${PRESS_FEEDBACK}`
   + ` ${FOCUS_RING}`;
 

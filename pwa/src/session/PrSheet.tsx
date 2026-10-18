@@ -11,7 +11,7 @@ import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { substrateFault } from '../../../shared/api';
 import type { FleetSession, PrView } from '../../../shared/api';
-import { Button, QuickConfirm, Sheet, TextInput, TEXT_INPUT_INLINE, buttonVariants, toast } from '@ccrc/ui';
+import { Button, QuickConfirm, Sheet, TextInput, TEXT_INPUT_INLINE, buttonVariants, cn, toast } from '@ccrc/ui';
 import { api, apiErrorText } from '../lib/api';
 import { ArchiveConflictSheet, runOpenRuns, type ArchiveConflictRun } from '../fleet/ArchiveConflictSheet';
 import { isRunClosed } from '../fleet/runWords';
@@ -39,10 +39,14 @@ const NOT_ARCHIVED = 'Not archived — ccrc does not archive on merge.';
  *  AN ANCHOR WEARING A BUTTON. It navigates off the app, so it is an `<a>`
  *  with `rel="noreferrer"`; the look is the design system's ghost button, and
  *  `control-census.test.ts`'s VARIANT arm checks that `buttonVariants()`
- *  still carries the tap floor this anchor relies on. */
+ *  still carries the tap floor this anchor relies on.
+ *
+ *  ITS OWN HOVER AND PRESS (D-5101): the variant gates both on `enabled:`, which
+ *  matches form controls only, so an anchor would never lift or sink. The two
+ *  ungated utilities give it the ghost's grounds (`hover-states.test.ts`). */
 function OpenOnGitHub({ url }: { url: string }): ReactNode {
   return (
-    <a className={buttonVariants({ variant: 'ghost' })} href={url} target="_blank" rel="noreferrer">
+    <a className={cn(buttonVariants({ variant: 'ghost' }), 'hover:bg-hover active:bg-pressed')} href={url} target="_blank" rel="noreferrer">
       Open on GitHub
     </a>
   );

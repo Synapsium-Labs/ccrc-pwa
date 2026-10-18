@@ -1,6 +1,6 @@
 // Spec §5.4.4. `io.readdir` answers `string[] | null` and folds "the directory
-// is not there" into "the directory would not list" (the `FleetIO.readdir`
-// member in `server/src/io.ts` is the one read with no measured sibling). This
+// is not there" into "the directory would not list" (its measured sibling,
+// `FleetIO.readdirMeasured`, tells them apart; this reader predates it). This
 // reader splits them ONE LEVEL UP, off the
 // registry root listing the caller already took, the same trick `readLimits`
 // plays for `-disabled` markers. Getting that split wrong in the permissive
@@ -194,8 +194,10 @@ describe('readProjectPools — the I/O cost awaited by FleetWatcher.tick', () =>
       io[member] = typeof impl === 'function'
         ? (...args: unknown[]): unknown => {
             ops.push(member);
-            // Preserve methods such as readFile that derive through `this`.
-            return (impl as (...a: unknown[]) => unknown).apply(io, args);
+            // Count only the calls the code under test makes. A member that derives through `this` (`readdir` from
+            // `readdirMeasured`, `readFile` from `readFileMeasured`) must reach the UNWRAPPED localIO, so its own
+            // derivation is not recorded as a second operation: it is one listing, not two.
+            return (impl as (...a: unknown[]) => unknown).apply(localIO, args);
           }
         : impl;
     }

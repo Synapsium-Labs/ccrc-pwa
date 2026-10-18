@@ -310,3 +310,76 @@ describe('measure-history.py reads the event tables the sweep fills (O52)', () =
     expect(rep.w1f_grep_p95_ms).toBe(812);
   });
 });
+
+// ── W1-B3: W1-e, the card line's delivery (spec 2026-10-05 §10.7, §8.6; ruling RC3). END-APPENDED. ────────────
+// The sweep measures delivery from each compaction's transcript (card_served:<backend>, card_id_mismatch:<backend>)
+// and counts each prediction a later main boundary consumed by its compaction's scope marker
+// (card_consumed:main, :other, :unknown). W1-e is read from those counters alone, so each case plants counters in a
+// store createStore made, and nothing else.
+describe('measure-history.py: W1-e, the card line served and its id mismatches (spec 2026-10-05 §10.7; ruling RC3)', () => {
+  interface W1e {
+    consumed_main: number; consumed_other: number; consumed_unknown: number; served: number; mismatch: number;
+    served_share: number | null; mismatch_share: number | null;
+  }
+  type ReportW1e = Report & { w1e: W1e };
+
+  /** A real store holding exactly `counters`. */
+  const cardStore = (counters: Record<string, number>): string => {
+    const home = mkTmp('ccrc-measure-history-w1e-');
+    createStore(home);
+    const dbPath = path.join(home, '.ccrc', 'history', 'db', 'history.db');
+    const db = new DatabaseSync(dbPath);
+    try {
+      db.exec('DELETE FROM counters');
+      const ins = db.prepare('INSERT INTO counters (name, n) VALUES (?, ?)');
+      for (const [k, v] of Object.entries(counters)) ins.run(k, v);
+    } finally {
+      db.close();
+    }
+    return dbPath;
+  };
+  const w1eOf = (db: string): W1e => (report(['--db', db, '--now', String(NOW)]) as ReportW1e).w1e;
+
+  it("W1-e CONTROL: the scope words planted below are lib's CARD_CONSUMED_SCOPES, the words the sweep counts under", async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    expect(lib.CARD_CONSUMED_SCOPES).toEqual(['main', 'other', 'unknown']);
+  });
+
+  it('W1-e: the served share is over main and unknown consumptions, other reported beside it and out of the denominator: 20 of 21 served, 1 of 21 mismatched', () => {
+    const r = w1eOf(cardStore({
+      'card_served:anthropic': 19, 'card_served:other': 1, 'card_id_mismatch:anthropic': 1,
+      'card_consumed:main': 19, 'card_consumed:unknown': 2, 'card_consumed:other': 5,
+      card_written: 30, 'card_skipped:fork-qualified': 2, 'card_withdrawn:low-disk': 4,   // the writer's own: W1-e reads none
+    }));
+    expect(r).toMatchObject({ consumed_main: 19, consumed_other: 5, consumed_unknown: 2, served: 20, mismatch: 1 });
+    expect(r.served_share).toBeCloseTo(20 / 21, 12);
+    expect(r.mismatch_share).toBeCloseTo(1 / 21, 12);
+  });
+
+  it('W1-e: the mismatch share is of the lines that arrived (served + mismatch), the served share of the main and unknown consumptions', () => {
+    // 24 main or unknown consumptions; 19 lines named their own leaf, 1 named another, 4 compactions carried no line.
+    // Here the two denominators differ (20 and 24), and main and unknown differ from main alone (20), which the case
+    // above cannot tell apart.
+    const r = w1eOf(cardStore({
+      'card_served:anthropic': 18, 'card_served:unknown': 1, 'card_id_mismatch:other': 1,
+      'card_consumed:main': 20, 'card_consumed:unknown': 4,
+    }));
+    expect(r).toMatchObject({ consumed_main: 20, consumed_other: 0, consumed_unknown: 4, served: 19, mismatch: 1 });
+    expect(r.served_share).toBeCloseTo(19 / 24, 12);
+    expect(r.mismatch_share).toBeCloseTo(1 / 20, 12);
+  });
+
+  it('W1-e: a share with nothing under it is null, never 0; consumptions scoped other alone leave the served share null', () => {
+    expect(w1eOf(cardStore({ raw_only: 3 }))).toEqual({
+      consumed_main: 0, consumed_other: 0, consumed_unknown: 0, served: 0, mismatch: 0, served_share: null, mismatch_share: null,
+    });
+    const r = w1eOf(cardStore({ 'card_id_mismatch:anthropic': 2, 'card_consumed:other': 3 }));
+    expect(r).toMatchObject({ consumed_main: 0, consumed_other: 3, consumed_unknown: 0, served: 0, mismatch: 2, served_share: null });
+    expect(r.mismatch_share).toBe(1);
+  });
+
+  it('W1-e sits between W1-c and W1-f in the report, which stays headed by its store id', () => {
+    expect(Object.keys(report(['--db', cardStore({}), '--now', String(NOW)]))).toEqual(['store_id', 'user_version', 'counters',
+      'w1b_lag_p95_ms', 'w1c_duplicate_entries', 'w1e', 'w1f_grep_p95_ms', 'w2']);
+  });
+});

@@ -3,13 +3,14 @@ import { afterEach, describe, it, expect, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { FleetSession, PoolsEnforcement, ProjectPoolWire, ProjectPoolsWire, ProjectRepoWire, RunSummary } from '../../shared/api';
-import { fleetSession } from './fleetFixture';
+import { fleetSession, hibernatedSession } from './fleetFixture';
 import type { ProjectPlacementRead } from '../src/fleet/placementWords';
 import { SPAWN_STALL_MS } from '../../shared/api';
 import { groupFleet, type FleetGroup } from '../src/fleet/groupFleet';
 import { NEST_BRACKET, POOL_UNAVAILABLE_TEXT, ProjectCard } from '../src/fleet/ProjectCard';
 import { CROSSING_GLYPH, waveLabel } from '../src/fleet/runWords';
 import { TEST_ROSTER } from './rosterFixture';
+import { WARN_GLYPH } from '@ccrc/ui';
 
 // vitest runs without globals, so RTL's auto-cleanup never registers itself —
 // without this, rerender/multi-render tests below leak DOM across `it` blocks.
@@ -519,7 +520,8 @@ describe('the pending child — a spawn the operator can watch arrive', () => {
     expect(container.querySelector('.proj-pending')?.getAttribute('data-phase')).toBe('stalled');
     expect(screen.getByText('spawn never completed')).toBeInTheDocument();
     expect(screen.queryByText('spawning a worker')).toBeNull();
-    expect(container.querySelector('.proj-pending-glyph')?.textContent).toBe('⚠');
+    // The constant, never a literal: it carries U+FE0E (D-5100).
+    expect(container.querySelector('.proj-pending-glyph')?.textContent).toBe(WARN_GLYPH);
   });
 
   it('renders nothing at all for a planned run nobody has dispatched', () => {
@@ -1183,6 +1185,21 @@ describe('the orphan worker says which programme it belongs to', () => {
     // laptop.
     expect(marker.textContent).toContain('coordinator gone');
     expect(marker.tagName).toBe('DIV');                       // still a sibling, still not a control
+  });
+
+  it('says the coordinator is HIBERNATED, not gone, when it sleeps — and names the wake, not the reclaim (D-5242)', () => {
+    const g = grp({ sessions: [sess(), sess({ id: 'demo-still-cove', workspace: 'still-cove' })] });
+    const sleepingCoord = hibernatedSession(FROZEN - 3_600_000, { id: 'off-card-coordinator', project: 'elsewhere' });
+    const { container } = render(
+      <ProjectCard group={g} runs={[orphanRun]} nowMs={FROZEN} frameSeen
+                   coordOf={(id) => (id === 'off-card-coordinator' ? sleepingCoord : null)}
+                   onOpen={() => {}} onActions={() => {}} />);
+    const marker = container.querySelector('.proj-crossing')!;
+    expect(marker.getAttribute('data-presence')).toBe('hibernated');
+    expect(marker.textContent).toContain('coordinator hibernated');
+    expect(marker.textContent).not.toContain('coordinator gone');
+    expect(marker.getAttribute('title')).toContain('wakes it');
+    expect(marker.getAttribute('title')).not.toContain('reclaim');
   });
 
   it('claims nothing about a coordinator the frame has not measured', () => {
