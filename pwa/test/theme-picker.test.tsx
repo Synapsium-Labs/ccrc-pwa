@@ -6,7 +6,7 @@
 // A user-visible control with no red suite behind it is the shape of thing
 // that quietly stops working.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { PHOSPHOR, SYSTEM, THEMES } from '@ccrc/ui';
 import { initTheme, rememberTheme, setTheme, storedTheme } from '../src/lib/theme';
 import { AppearanceSection } from '../src/screens/SettingsScreen';
@@ -92,7 +92,9 @@ describe('the Appearance control', () => {
   // updates poll a radio-group test has no business needing.
   it('offers every palette the app can render, plus Follow system', () => {
     render(<AppearanceSection />);
-    expect(screen.getAllByRole('radio')).toHaveLength(THEMES.length + 1);
+    // Scoped to the Theme group: Appearance also holds the Layout picker
+    // (skin-picker.test.tsx), whose radios are not palettes.
+    expect(within(screen.getByRole('group', { name: 'Theme' })).getAllByRole('radio')).toHaveLength(THEMES.length + 1);
     // Anchored: each row's accessible name is "<label> <note>", and the
     // Follow-system note names both Phosphor palettes — so an unanchored
     // match finds two radios and the ambiguity is the test's, not the UI's.
