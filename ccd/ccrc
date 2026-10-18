@@ -3851,9 +3851,9 @@ _ccrc_foreign_remedy() {
 #   - Measured: with `claude` flipped to "generated" and another account made
 #     upstream, `ccrc wrappers --force` overwrote `~/.local/bin/claude` — a
 #     2741-byte launcher — with a generated wrapper, and exited 0. Because
-#     claude2, claude-corp and claude-dev0 all end
+#     claude9, claude-acme and claude-lab0 all end
 #     `exec "$HOME/.local/bin/claude" "$@"`, that closed an exec loop across
-#     EVERY LANE AT ONCE: `claude2 --version` went from rc=127 to rc=124, i.e.
+#     EVERY LANE AT ONCE: `claude9 --version` went from rc=127 to rc=124, i.e.
 #     it stopped terminating at all. Lock 4 does not catch it — the staged
 #     wrapper execs the OTHER account, so it is not self-referential, and lock
 #     4 tests only self-reference.
@@ -4155,7 +4155,7 @@ cmd_wrappers() {
   # Each refusal below ends "nothing was written", and this loop is what makes
   # that sentence TRUE rather than merely reassuring. These checks used to live
   # inside the action loop, where a manifest whose SECOND record was bad printed
-  # `WRITE claude2 …` and then, two lines later, `… and nothing was written` —
+  # `WRITE claude9 …` and then, two lines later, `… and nothing was written` —
   # two statements about one run, contradicting each other, with the first one
   # right. (It was invisible to the tests because every stub manifest that
   # reached these branches carried a single record.) These are all statements
@@ -4175,7 +4175,7 @@ cmd_wrappers() {
     # The id off the manifest is about to become a FILENAME under
     # $HOME/.local/bin. The gate is on the ID, before any path is built from it,
     # which is what makes it hold for a traversing id (`../../.bashrc`) as well
-    # as for a merely illegal one (`claude2.bak`) — a check on the resulting
+    # as for a merely illegal one (`claude9.bak`) — a check on the resulting
     # path would have to enumerate the ways a path can escape.
     [[ "$id" =~ $WRAPPER_ID_RE ]] \
       || _ccrc_die "the manifest from $gen names \"$id\", which is not a legal account id, and this verb will not build a path under $WRAPPER_BIN_DIR out of it — this is a bug in ccrc, not a fact about your box, and nothing was written"
@@ -4409,8 +4409,8 @@ cmd_wrappers() {
           #     `OVERSIZE_BYTES` so `$gen` reads it; no ccrc marker so it
           #     classifies `foreign`; and one `--force` under a mis-edited
           #     roster overwrote it with a wrapper exec'ing
-          #     `$HOME/.local/bin/claude` — itself — while claude-corp, claude2
-          #     and claude-dev0 all end `exec "$HOME/.local/bin/claude" "$@"`.
+          #     `$HOME/.local/bin/claude` — itself — while claude-acme, claude9
+          #     and claude-lab0 all end `exec "$HOME/.local/bin/claude" "$@"`.
           #     A FLEET-WIDE EXEC LOOP, from one flag. Until 2026-08-20 the
           #     only thing stopping it was that the file was ~334 MB and
           #     classified `oversize`; shrinking it to 2.7 KB removed a lock
@@ -4492,7 +4492,7 @@ cmd_wrappers() {
       # id would be adopted as a second account fighting the first over one
       # CLAUDE_CONFIG_DIR, and doctor would report a wrapper the roster never
       # declared. (It is the same "." that drops the `ccd.bak-<date>` and
-      # `claude2.bak-<date>` files a real box accumulates — see
+      # `claude9.bak-<date>` files a real box accumulates — see
       # `ccd/ccrc-wrapper-shape:63-67`.)
       # `cp -p` so the backup keeps the mode and timestamps of what it replaced,
       # and `-P` so it keeps WHAT it replaced (Plan 3a Task 9): the rename below
@@ -4595,14 +4595,14 @@ cmd_wrappers() {
 # operator sees exactly what would happen before it happens.
 #
 # HOMES ARE ENUMERATED FROM THE FILESYSTEM, NOT FROM THE ROSTER. Measured
-# 2026-09-09: `.claude-glm` and `.claude-kimi` are on disk, hold memory, and
+# 2026-09-09: `.claude-alt1` and `.claude-alt2` are on disk, hold memory, and
 # are in no roster entry. The roster describes accounts ccrc PLACES WORK ON;
 # it was never a census of homes, and using it as one is how the design's own
 # first draft came to list five homes when there were eight.
 _mem_homes() {   # -> one agent-home path per line
   local d
   for d in "$HOME"/.claude*/; do
-    # A named `.claude-docserver` skip used to sit here. REMOVED (final
+    # A named `.claude-docs-preview` skip used to sit here. REMOVED (final
     # whole-branch review, completeness critic item 4): the docserver is a
     # private, box-local operator tool this tree does not know about
     # (CLAUDE.md says so explicitly, for the same reason it forbids reading
@@ -4610,7 +4610,7 @@ _mem_homes() {   # -> one agent-home path per line
     # its directory name into general enumeration logic in a repo bound for
     # public release is identity residue, and it was provably dead code: the
     # very next line already excludes it on the one box it was written for
-    # (`.claude-docserver` has no `projects/`), so no test could ever pin it
+    # (`.claude-docs-preview` has no `projects/`), so no test could ever pin it
     # without manufacturing a `projects/` dir the real tool does not have.
     [ -d "${d}projects" ] || continue
     printf '%s\n' "${d%/}"
@@ -4714,12 +4714,12 @@ _mem_is_scratch() {   # <slug> -> 0 iff the slug names a throwaway temp dir
 # `_mem_state` calls `converged`, so a relative-but-correct link is LEFT AS
 # WRITTEN rather than normalised … only the link's own spelling is left alone."
 # The second half is what was false. `-ef` follows a CHAIN, so the pairs left
-# alone included `.claude-corp -> .claude's link -> store` — not a spelling but
+# alone included `.claude-acme -> .claude's link -> store` — not a spelling but
 # a shape the design forbids, in which one account's link is load-bearing for
 # another's, permanently (re-running `--apply` never repaired it) and invisibly
 # (`_check_memory` printed PASS). It is also an ordering a real box
 # plausibly produces under its actual locale (`en_US.UTF-8`: `.claude`
-# sorts before `.claude-corp`), so its own pair can converge first and
+# sorts before `.claude-acme`), so its own pair can converge first and
 # manufacture the chain mid-run — but see the CORRECTION below: this is not
 # a universal ordering rule, and an earlier version of this comment claimed
 # it was.
@@ -4900,9 +4900,9 @@ _mem_rebuild_index() {   # <store> -> prints the count of *.md files DROPPED
 _mem_absorb() {   # <src-dir> <store> <home-basename> -> prints "<left>\n" on
                    # stdout; returns 1 (with its own stderr diagnostics) if
                    # any copy failed, 0 otherwise.
-  # R6: `tag` strips a leading dot from the home basename (`.claude-corp` ->
-  # `claude-corp`) — every agent home starts with one, so leaving it in would
-  # make a conflict suffix read `same..claude-corp.md` (a double dot). Purely
+  # R6: `tag` strips a leading dot from the home basename (`.claude-acme` ->
+  # `claude-acme`) — every agent home starts with one, so leaving it in would
+  # make a conflict suffix read `same..claude-acme.md` (a double dot). Purely
   # cosmetic: it changes nothing about which files collide or how.
   #
   # I3 (review round 1): this function is deliberately narrow — a "memory
@@ -5014,7 +5014,7 @@ _mem_absorb() {   # <src-dir> <store> <home-basename> -> prints "<left>\n" on
     # C2 (review round 1): differs from what's there — keep BOTH, but the
     # suffixed slot may ALREADY be taken by an earlier, unrelated absorption
     # (M1's forbidden silent winner, one filename later — measured: a
-    # pre-existing `same.claude-corp.md` was destroyed, unconditionally
+    # pre-existing `same.claude-acme.md` was destroyed, unconditionally
     # overwritten, by a same-named suffix from a genuinely different file).
     # Never overwrite it blind: walk forward to the next free — or
     # byte-identical — numbered slot instead.
@@ -5058,15 +5058,15 @@ _mem_apply() {
       # because the memory genuinely IS shared into the one store. But
       # "resolves to" admits a shape the design forbids: a CHAIN. With
       # `.claude/projects/<slug>/memory` -> the store and
-      # `.claude-corp/projects/<slug>/memory` -> `.claude`'s link, `-ef`
+      # `.claude-acme/projects/<slug>/memory` -> `.claude`'s link, `-ef`
       # follows the whole chain and answers true, so a bare
       # `= converged && continue` here skipped that pair FOREVER — `--apply`
       # never repaired it and `_check_memory` printed `PASS memory`.
       #
       # IT IS AN ORDERING A REAL BOX PLAUSIBLY PRODUCES, not a contrived one —
       # under the box's actual `en_US.UTF-8` locale, `.claude` sorts before
-      # `.claude-corp`, so `.claude`'s own plain-directory pair converges
-      # FIRST and turns the very directory `.claude-corp` points at into a
+      # `.claude-acme`, so `.claude`'s own plain-directory pair converges
+      # FIRST and turns the very directory `.claude-acme` points at into a
       # link to the store. The pair that was going to be repaired becomes a
       # pair that reads converged, in the same run, by construction.
       #
@@ -5075,7 +5075,7 @@ _mem_apply() {
       # claimed. Bash sorts the expanded glob strings INCLUDING the trailing
       # `/`, so under `LC_ALL=C` (what a stripped systemd environment, and
       # this suite's own `doctorEnv`, actually set) `-` (0x2D) beats `/`
-      # (0x2F) and `.claude-corp/` sorts BEFORE `.claude/` — the opposite
+      # (0x2F) and `.claude-acme/` sorts BEFORE `.claude/` — the opposite
       # order, attributing a conflict copy to the wrong home. The chain
       # shape this arm repairs is real prior art on this box regardless of
       # which order manufactures it mid-run; only the false universal
