@@ -9,7 +9,7 @@
 // `ccd/session-hook.sh` writes at a main Stop (`v`, `state`, `event`, `sessionId`, `pid`, `updatedAt`, `ask`,
 // `subagents`, `graphQueries`, `graphGateDenials`, `ccrcPeerReads`, `ccrcClaims`, and D-5231's `bgDelegated` /
 // `bgDelegatedKinds` pair); no hook payload is built here.
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
@@ -22,6 +22,8 @@ import { localIO } from '../src/io.js';
 import { ccdRunner } from '../src/lifecycle.js';
 import { KeyedQueue } from '../src/inject/queue.js';
 import { interruptVerdict } from '../src/inject/send.js';
+import { NotifyLog } from '../src/notifylog.js';
+import type { PushService } from '../src/push.js';
 import { guardRunner, seedRoster } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -55,6 +57,10 @@ interface Box {
   pending?: string[];
   /** tmux proves the pane gone. */
   gone?: boolean;
+  /** The request body (D-5237: the optional `source`); absent sends `{}`. */
+  payload?: Record<string, unknown>;
+  /** Send NO payload and NO content-type at all — the request an older PWA really makes (D-5237). */
+  bare?: boolean;
 }
 
 const box = async (b: Box) => {
@@ -93,12 +99,19 @@ const box = async (b: Box) => {
   const cfg = loadConfig({ CCRC_HOME: home });
   const watcher = { currentPending: () => new Set(b.pending ?? []), currentStatuslines: () => new Map(),
     stop: () => {} } as unknown as FleetWatcher;
+  // D-5237: a real feed ring, and a push spy that must never be called — an interrupt is recorded, never pushed.
+  const notifyLog = new NotifyLog(path.join(home, 'notify-log.json'));
+  await notifyLog.load();
+  const notify = vi.fn(async () => {});
   const app = await buildServer(
-    { cfg, runCcd: ccdRunner(guarded, cfg), tmux: new Tmux(guarded), io: localIO, queue: new KeyedQueue() },
+    { cfg, runCcd: ccdRunner(guarded, cfg), tmux: new Tmux(guarded), io: localIO, queue: new KeyedQueue(),
+      notifyLog, push: { notify } as unknown as PushService },
     new Bus(), watcher);
   open.push(app);
-  const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/interrupt`, payload: {} });
-  return { res, keys: calls.filter((c) => c[0] === 'send-keys') };
+  const url = `/api/sessions/${ID}/interrupt`;
+  const res = b.bare ? await app.inject({ method: 'POST', url }) : await app.inject({ method: 'POST', url, payload: b.payload ?? {} });
+  const recorded = notifyLog.catchUp(notifyLog.epoch, 0).events.map((e) => ({ kind: e.kind, sessionId: e.sessionId, body: e.body }));
+  return { res, keys: calls.filter((c) => c[0] === 'send-keys'), recorded, pushes: notify.mock.calls.length };
 };
 
 const ESCAPE = [['send-keys', '-t', `=cc-${ID}:`, 'Escape']];
@@ -209,5 +222,62 @@ describe('interruptVerdict (D-5236)', () => {
   it('a row that could not be assembled is a turn, under shell too', () => {
     expect(interruptVerdict({ word: { ok: true, word: 'shell', since: T0 }, row: null, hookUpdatedAt: null, hookEvent: null }))
       .toEqual({ kind: 'turn' });
+  });
+});
+
+// D-5237 (plan Task 7; spec §5.5): every interrupt the route answers is recorded as a feed event of kind `interrupt`,
+// with the source the client named (or `unknown`) and the outcome, and never pushed.
+describe('POST /api/sessions/:id/interrupt records its source and outcome (D-5237)', () => {
+  const rec = (body: string) => [{ kind: 'interrupt', sessionId: ID, body }];
+
+  it('a keycap Escape that is sent is recorded `source=keycap outcome=sent`, and nothing is pushed', async () => {
+    const { res, keys, recorded, pushes } = await box({ live: { status: 'busy', at: T0 }, payload: { source: 'keycap' } });
+    expect(res.statusCode).toBe(200);
+    expect(keys).toEqual(ESCAPE);
+    expect(recorded).toEqual(rec('source=keycap outcome=sent'));
+    expect(pushes).toBe(0);
+  });
+
+  it('each route source the PWA sends is kept', async () => {
+    for (const source of ['keycap', 'escape-key', 'deny']) {
+      const { recorded } = await box({ live: { status: 'busy', at: T0 }, payload: { source } });
+      expect(recorded, source).toEqual(rec(`source=${source} outcome=sent`));
+    }
+  });
+
+  it('no source is `unknown`', async () => {
+    const { recorded } = await box({ live: { status: 'busy', at: T0 } });
+    expect(recorded).toEqual(rec('source=unknown outcome=sent'));
+  });
+
+  it('an older PWA\'s bare POST (no payload, no content-type) is answered 200 and recorded `unknown`', async () => {
+    const { res, keys, recorded } = await box({ live: { status: 'busy', at: T0 }, bare: true });
+    expect(res.statusCode).toBe(200);
+    expect(keys).toEqual(ESCAPE);
+    expect(recorded).toEqual(rec('source=unknown outcome=sent'));
+  });
+
+  it('a source it does not know is `unknown`, never a 400; a drawer source is not the route\'s to claim', async () => {
+    for (const source of ['x', 'drawer-escape', 'drawer-ctrl-c', 7, null]) {
+      const { res, recorded } = await box({ live: { status: 'busy', at: T0 }, payload: { source } });
+      expect(res.statusCode, String(source)).toBe(200);
+      expect(recorded, String(source)).toEqual(rec('source=unknown outcome=sent'));
+    }
+  });
+
+  it('the background-only refusal is recorded too, with no key and no push', async () => {
+    const { res, keys, recorded, pushes } = await box({ live: { status: 'busy', at: T0 }, hook: STOP_BG, payload: { source: 'escape-key' } });
+    expect(res.statusCode).toBe(409);
+    expect(keys).toEqual([]);
+    expect(recorded).toEqual(rec('source=escape-key outcome=background-only'));
+    expect(pushes).toBe(0);
+  });
+
+  it('not-busy and not-alive are recorded with their outcome', async () => {
+    const idle = await box({ live: { status: 'idle', at: T0 }, payload: { source: 'deny' } });
+    expect(idle.recorded).toEqual(rec('source=deny outcome=not-busy'));
+    const gone = await box({ live: { status: 'busy', at: T0 }, gone: true, payload: { source: 'keycap' } });
+    expect(gone.recorded).toEqual(rec('source=keycap outcome=not-alive'));
+    expect(idle.pushes + gone.pushes).toBe(0);
   });
 });

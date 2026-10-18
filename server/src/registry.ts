@@ -3,8 +3,8 @@ import type { CcrcConfig } from './config.js';
 import type { FleetIO, MeasuredRead, ReadFailure } from './io.js';
 import { readHookState } from './hookstate.js';
 import {
-  CHILD_RUN_ID, isPrPhase, isStopSurface, parseLastEnd, ROUTE_WRITABLE_FIELDS,
-  type ChildMark, type IdentityField, type LastEnd, type LifecycleField,
+  CHILD_RUN_ID, CHILD_SHELL_PATH, DENY_SETTINGS_DIGEST, isPrPhase, isStopSurface, parseLastEnd, ROUTE_WRITABLE_FIELDS,
+  type ChildMark, type ChildShellMark, type DenySettingsMark, type IdentityField, type LastEnd, type LifecycleField,
   type PrPhase, type RouteField, type RouteFields, type RouteReadField, type StopSurface,
 } from '../../shared/api.js';
 
@@ -235,6 +235,10 @@ export interface SessionRecord {
    *  ended costs no read; parsed by `parseLastEnd` (absent or malformed →
    *  null, the row still parses; an unknown cause → `unknown`). */
   lastEnd: LastEnd | null;
+  /** `$REG/<id>.hibernated` — `<epoch> <idle-hours>`, written by `ccd hibernate` (D-5242) and removed by the
+   *  wake (`ensure`/`start`), `stop` and `ws-archive`. Its epoch in MS. Read ONLY when the listing names it, so a
+   *  row that never slept costs no read; parsed by `parseHibernated` (malformed → null, the row still parses). */
+  hibernatedAt: number | null;
   /** Which of `started`/`stopped`/`supervised` were LISTED but unreadable this
    *  pass — the same evidence rule `unmeasured` uses for the identity triple,
    *  over the three fields §4.3's classifier reads. Kept SEPARATE from
@@ -373,6 +377,14 @@ export interface SessionRecord {
    * spec §5.1's two authorities and nothing may treat it as a credential.
    */
   child: ChildMark;
+  /**
+   * `$REG/<id>.deny-settings` and `$REG/<id>.childshell` — what `ccd`'s last spawn of a `.child` row passed: the
+   * deny file's sha256 and the shell its Bash tool was pinned to (plan Task 15, D-5299, D-5391), for Task 16's
+   * `409 deny-not-engaged`. Optional and additive: absent reads as `none`. Attribution, like `child`: any process of
+   * the uid can write them.
+   */
+  denySettings?: DenySettingsMark;
+  childShell?: ChildShellMark;
 }
 
 /**
@@ -587,6 +599,19 @@ function childMarkOf(read: MeasuredRead, listed: boolean): ChildMark {
   return listed ? { kind: 'unreadable' } : { kind: 'none' };
 }
 
+/** `$REG/<id>.deny-settings`'s ONE reader (plan Task 15, D-5299): `null` is an unlisted field (`none`); a listed
+ *  field reads as a digest only when it is exactly one sha256, else `unreadable`. */
+export function denySettingsOf(read: MeasuredRead | null): DenySettingsMark {
+  if (read === null) return { kind: 'none' };
+  return read.ok && DENY_SETTINGS_DIGEST.test(read.content) ? { kind: 'digest', sha256: read.content } : { kind: 'unreadable' };
+}
+
+/** `$REG/<id>.childshell`'s ONE reader (plan Task 15, D-5391), the same three readings. */
+export function childShellOf(read: MeasuredRead | null): ChildShellMark {
+  if (read === null) return { kind: 'none' };
+  return read.ok && CHILD_SHELL_PATH.test(read.content) ? { kind: 'pinned', shell: read.content } : { kind: 'unreadable' };
+}
+
 /** `<epoch> <rest>` — the packed two-token stamp shape every D3 field uses.
  *  Epoch and payload share ONE registry file on purpose (§4.1): the registry is
  *  read per-field per-session on a 2s tick, and packing is what keeps `stopped`
@@ -729,9 +754,10 @@ function noteWholeFleetListing(listable: boolean, now: number): void {
  * session count per sweep, so a 24-session fleet's whole-registry sweep rises
  * from 721 to 745 agent-WS operations per `readRegistry` call.
  *
- * Plus one LISTED-ONLY read (D-5237): `.lastend`, read only when the listing
- * names it, so a row that has never recorded a process end pays nothing and
- * one that has pays one read more. The census counts the reads every row pays (D-5347).
+ * Plus two LISTED-ONLY reads: `.lastend` (D-5237) and `.hibernated` (D-5242),
+ * each read only when the listing names it, so a row that has never recorded a
+ * process end, or never slept, pays nothing and one that has pays one read
+ * more. The census counts the reads every row pays (D-5347).
  *
  * Returns null for a DROPPED registry entry — narrowed (architecture doc,
  * increment 1's second half) from the old "missing wrapper/workdir/uuid"
@@ -749,7 +775,7 @@ async function buildRecord(
   const [wrapperRead, project, workdirRead, uuidRead, startedRead, home, pool, lastswap, workspace, branchRead,
     base, prPhaseRaw, prNumberRaw, prCheckedAtRaw, archivedRaw, manifestRaw, holdRead,
     stoppedRead, supervisedRead, swapBlockedRaw, spawnRaw, substrateRead, strandedRead,
-    routeFieldReads, degradedRead, inertRead, childRead, lastEndRaw] = await Promise.all([
+    routeFieldReads, degradedRead, inertRead, childRead, lastEndRaw, denyRead, shellRead, hibernatedRaw] = await Promise.all([
     fieldMeasured(io, cfg.registryDir, id, 'wrapper'), field(io, cfg.registryDir, id, 'project'),
     fieldMeasured(io, cfg.registryDir, id, 'workdir'), fieldMeasured(io, cfg.registryDir, id, 'uuid'),
     fieldMeasured(io, cfg.registryDir, id, 'started'), field(io, cfg.registryDir, id, 'home'),
@@ -782,6 +808,12 @@ async function buildRecord(
     // D-5237: the last process end's cause, read only when listed — a row
     // that has never ended (or predates the field) costs nothing.
     names.includes(`${id}.lastend`) ? field(io, cfg.registryDir, id, 'lastend') : Promise.resolve(null),
+    // Plan Task 15 (D-5299, D-5391): the child's spawn record, read only when listed, so a row ccd never spawned
+    // as a child costs nothing and a listed field that will not read is `unreadable`, never `none`.
+    names.includes(`${id}.deny-settings`) ? fieldMeasured(io, cfg.registryDir, id, 'deny-settings') : Promise.resolve(null),
+    names.includes(`${id}.childshell`) ? fieldMeasured(io, cfg.registryDir, id, 'childshell') : Promise.resolve(null),
+    // D-5242: the hibernation marker, read only when listed — a row that never slept costs nothing.
+    names.includes(`${id}.hibernated`) ? field(io, cfg.registryDir, id, 'hibernated') : Promise.resolve(null),
   ]);
 
   // The identity-triple ladder. `uuid` first: `names.includes(id + '.uuid')`
@@ -1097,10 +1129,14 @@ async function buildRecord(
     // typing as `number`, the silent lie `numOrNull` exists to refuse.
     spawn: spawnStamp === null || spawnRc === null ? null : { at: spawnStamp.at, rc: spawnRc },
     lastEnd: parseLastEnd(lastEndRaw),
+    hibernatedAt: parseHibernated(hibernatedRaw),
     lifecycleUnmeasured,
     unmeasured,
     route,
     child: childMarkOf(childRead, childListed),
+    // Only when listed: a row with neither field keeps today's record shape exactly (absent reads as `none`).
+    ...(denyRead === null ? {} : { denySettings: denySettingsOf(denyRead) }),
+    ...(shellRead === null ? {} : { childShell: childShellOf(shellRead) }),
   };
 }
 
@@ -1273,7 +1309,8 @@ export const UNMEASURED_ASK_AT = -1;
  * THAT ARGUMENT IS SOUND ABOUT SUBSTITUTION AND SILENT ABOUT EVERYTHING ELSE
  * (D-2403). `updatedAt` moving is NECESSARY for a substitution and nowhere
  * near sufficient for one: `ccd/session-hook.sh` stamps it on every write
- * except a carried main-thread wait (D-4041, below),
+ * except a carried main-thread wait (D-4041, below) and, behind the server's
+ * word `hook-main-state-v1`, any agent event's carry (D-5232, below),
  * and its `SubagentStart`/`SubagentStop` arm re-reads `.ask` straight back
  * off the file, so a subagent event on a session blocked at a dialog rewrites
  * the identical envelope under a fresh number. (That sentence no longer holds
@@ -1281,7 +1318,11 @@ export const UNMEASURED_ASK_AT = -1;
  * and `event` and adds `aliveAt`, so such a subagent event moves nothing this
  * function compares. It still holds for a wait a SUBAGENT raised, stored as
  * `waitBy:"subagent"`, which is not carried and is rewritten under a fresh
- * stamp, and for any other bump.) Read alone, this function
+ * stamp, and for any other bump. Since D-5232, behind `hook-main-state-v1`,
+ * `aliveAt` is no longer only a carried wait's: every agent event keeps the
+ * main state's stamp and writes `aliveAt`, a SubagentStart or SubagentStop
+ * over a subagent's own wait keeps that wait's stamp too, and the wait's
+ * end restores the `waitPrev` it stored.) Read alone, this function
  * therefore refused parents over bumps nobody made — permanently, because
  * nothing re-stamped the row. It is now half of a pair: `CoordStore.restampAsk`
  * advances `askAt` on the ticks where `detectDialogs` has just re-scraped the
@@ -1325,4 +1366,16 @@ export async function freshAskAt(io: FleetIO, cfg: CcrcConfig, childId: string):
   if (identity === null) return UNMEASURED_ASK_AT;
   const hs = await readHookState(io, cfg.registryDir, childId, identity.uuid, Date.now());
   return hs === null ? UNMEASURED_ASK_AT : hs.updatedAt;
+}
+
+/** `$REG/<id>.hibernated`'s body (D-5242): `<epoch-seconds>` and, after one space, the idle hours `ccd hibernate`
+ *  measured (an integer or a decimal). The epoch is what is read, in MS; the hours are the log's, not the wire's.
+ *  Anything else — an empty body, a non-integer or zero epoch, a third word — is null: a marker this build cannot
+ *  read never names a time it did not measure, and the row still parses. */
+export function parseHibernated(raw: string | null): number | null {
+  if (raw === null) return null;
+  const m = /^([1-9][0-9]{0,15})(?: ([0-9]+(?:\.[0-9]+)?))?$/.exec(raw.trim());
+  if (m === null) return null;
+  const at = Number(m[1]);
+  return Number.isSafeInteger(at * 1000) ? at * 1000 : null;
 }

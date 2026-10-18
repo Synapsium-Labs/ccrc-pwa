@@ -9,7 +9,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { makeCcdHarness, ghContainedEnv, harnessBin, CCD, WS_ADD, type CcdHarness } from './ccdWsHelpers.js';
 import { mungePath } from '../src/munge.js';
-import { ACCOUNT_POOLS_CAP, ACTOR_FLAGS_CAP, CHILD_ARGV_CAP, COLLECT_CAP, DOCS_CAP, EXPIRE_CAP, POOLS_CAP, RECLAIM_CAP, RECLAIM_PAUSE_CAP, ROUTE_APPLY_CAP, ROUTE_ARGV_CAP, ROUTE_CAP, WIN_SIZE_CAP } from '../src/ccdargv.js';
+import { ACCOUNT_POOLS_CAP, ACTOR_FLAGS_CAP, CHILD_ARGV_CAP, COLLECT_CAP, DOCS_CAP, EXPIRE_CAP, POOLS_CAP, RECLAIM_CAP, RECLAIM_PAUSE_CAP, ROUTE_APPLY_CAP, ROUTE_ARGV_CAP, ROUTE_CAP, SWAP_BUSY_CAP, WIN_SIZE_CAP } from '../src/ccdargv.js';
 
 /** sha256 of the empty string — what a failed read used to be indistinguishable
  *  from, and what a genuinely empty ignored set still legitimately hashes to. */
@@ -151,8 +151,8 @@ describe('ccd caps', () => {
   // still fail loudly on anything ELSE that drifts: a THIRD capability token
   // added without updating this list is exactly as much a silent hole as an
   // undispatched verb would be.
-  const KNOWN_CAPABILITY_TOKENS = ['account-pools', 'account-v1', 'actor-flags-v1', 'child-argv-v1', 'collect-v1', 'docs-v1', 'expire-v1', 'lifecycle-v1', 'pools-v1', 'reclaim-pause-v1', 'reclaim-v1', 'route-apply-v1', 'route-argv-v1', 'route-v1', 'stop-surface', 'swap-busy-v1', 'win-size-v1'];
-  // `swap-busy-v1` (D-5240, Task 11; D-5350) is the string only; its server constant, `SWAP_BUSY_CAP`, and the `toContain` that holds the two equal arrive with the server half (Task 12).
+  const KNOWN_CAPABILITY_TOKENS = ['account-pools', 'account-v1', 'actor-flags-v1', 'child-argv-v1', 'collect-v1', 'delegation-events-v1', 'docs-v1', 'expire-v1', 'lifecycle-v1', 'pools-v1', 'reclaim-pause-v1', 'reclaim-v1', 'route-apply-v1', 'route-argv-v1', 'route-v1', 'stop-surface', 'swap-busy-v1', 'win-size-v1'];
+  // `swap-busy-v1` (D-5240, Task 11; D-5350): its server constant, `SWAP_BUSY_CAP`, arrived with the server half (Task 12), and the `toContain` below holds the two equal.
 
   it('advertises exactly the verbs the dispatcher implements, plus the known capability tokens', () => {
     // The THIRD spelling of this token, closing the parity gap `ccdargv.ts`'s
@@ -173,6 +173,7 @@ describe('ccd caps', () => {
     // without it `win-size-v1` would be the one known token whose three
     // spellings are free to drift, which is the drift this block exists for.
     expect(KNOWN_CAPABILITY_TOKENS).toContain(WIN_SIZE_CAP);
+    expect(KNOWN_CAPABILITY_TOKENS).toContain(SWAP_BUSY_CAP);
     // Child reclamation wave 3's token: the third spelling of `reclaim-v1`,
     // held equal to the constant the executor gates on (`capSupported`) and to
     // ccd's own `echo reclaim-v1`.
@@ -193,6 +194,10 @@ describe('ccd caps', () => {
     // The native Docs reader's token (docs W2): the third spelling of `docs-v1`, held equal to the constant the docs
     // adapter's gate reads (`capSupported`) and to ccd's own `echo docs-v1` (W1).
     expect(KNOWN_CAPABILITY_TOKENS).toContain(DOCS_CAP);
+    // The delegation broker's wave-3 token: the spool grammar plus ccd making each session's spool directory. The server-side constant
+    // that gates ingestion arrives with the ingestion task; until then this list and ccd's own `echo delegation-events-v1` are the two
+    // spellings, and `delegation-spool.test.ts` pins that the token is advertised exactly once.
+    expect(KNOWN_CAPABILITY_TOKENS).toContain('delegation-events-v1');
     // The deployed ~/.local/bin/ccd is a COPY, not a symlink to the repo, so a
     // verb can pass the agent whitelist and still not exist on the box. This
     // list is what the agent reports; a list that drifts from the dispatcher
@@ -683,6 +688,15 @@ describe('ws-archive', () => {
       .toContain('ws/quiet-basin');
     expect(h.calls()).toContain('unsupervise demo-quiet-basin');
     expect(h.calls().some((c) => c.startsWith('tmux kill-session'))).toBe(true);
+  });
+
+  it('ends a HIBERNATION: a hibernated workspace row loses .hibernated, so the mail lane never wakes it (D-5242)', () => {
+    workspace('demo', 'quiet-basin');
+    // A sleeping row, as `ccd hibernate` leaves it: stopped, its marker beside it.
+    h.sh(`_reg_set demo-quiet-basin stopped "1 ccd"; _reg_set demo-quiet-basin hibernated "1 7"`);
+    expect(h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`)).toMatch(/^archived demo-quiet-basin/);
+    expect(h.reg('demo-quiet-basin', 'archived')).toMatch(/^\d+$/);
+    expect(h.reg('demo-quiet-basin', 'hibernated'), 'the marker survived the archive').toBeNull();
   });
 
   it('archives a DIRTY tree — it destroys nothing, and refusing would strand it', () => {

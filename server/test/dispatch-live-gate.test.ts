@@ -24,7 +24,8 @@ import { COORDINATOR_PAUSE_MARKER } from '../src/coord/rundefs.js';
 import { configDirFor } from '../src/config.js';
 import type { Runner } from '../src/exec.js';
 import type { CcdResult } from '../src/lifecycle.js';
-import { SERVER_CAPS } from '../../shared/api.js';
+import { SERVER_CAPS, SERVER_CAPS_FILE, renderServerCaps } from '../../shared/api.js';
+import { execFileSync } from 'node:child_process';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -52,6 +53,8 @@ interface BoxCfg {
   /** Real wall time an `onRequest` hook spends before the route runs (D-5378): event-loop turns in which the
    *  dispatch has begun but has nothing of the box in flight yet. */
   requestDelayMs?: number;
+  /** The watcher's wake budget (D-5242): every `admitWake` call is recorded here as `<kind>:<id>`, answered `admit`. */
+  wakes?: { calls: string[]; admit: boolean };
 }
 
 let open: FastifyInstance[] = [];
@@ -133,8 +136,11 @@ const box = async (cfg: BoxCfg = {}) => {
       return (f as (...x: unknown[]) => unknown).apply(base0.io, a);
     })])) as unknown as typeof base0.io,
   };
+  const wakes = cfg.wakes;
   const watcher = { currentPending: () => new Set(cfg.pending ?? []), currentStatuslines: () => new Map(),
-    stop: () => {} } as unknown as FleetWatcher;
+    stop: () => {},
+    ...(wakes === undefined ? {} : { admitWake: (k: string, id: string) => { wakes.calls.push(`${k}:${id}`); return wakes.admit; } }),
+  } as unknown as FleetWatcher;
   const app = await buildServer({ ...base, mailToken: TOKEN, coord }, new Bus(), watcher);
   open.push(app);
   const requestDelay = cfg.requestDelayMs;
@@ -262,6 +268,31 @@ describe('the dispatch /clear gate needs the live file measured idle (D-5238)', 
     expect(res.json()).toEqual({ ok: false, refused: 'status-unmeasurable' });
     expect(elapsed).toBeLessThan(DISPATCH_SPAWN_POLL_MS);
     expect(b.n['ensure']).toBe(1);
+  });
+
+  // D-5242: a resume whose row is hibernated is an ASKED wake — recorded in the fleet-wide wake budget's window beside
+  // its `ensure`, and never refused for it (a full window answers admit:false; the dispatch goes ahead regardless).
+  it('a resume onto a hibernated worker records an asked wake beside its ensure, and is never refused for the budget', async () => {
+    for (const admit of [true, false]) {
+      const wakes = { calls: [] as string[], admit };
+      const b = await box({ wakes });
+      writeFileSync(path.join(b.home, '.cc-sessions', `${ID}.hibernated`), '1799974800 7');
+      hookDone(b.home);
+      live(b.home, 'idle');
+      const res = await b.dispatch();
+      expect(res.statusCode, res.body).toBe(200);
+      expect(wakes.calls, `admit ${admit}`).toEqual([`asked:${ID}`]);
+      expect(b.n['ensure'], `admit ${admit}`).toBe(1);
+    }
+  });
+
+  it('a resume onto a worker that is not hibernated records no wake', async () => {
+    const wakes = { calls: [] as string[], admit: true };
+    const b = await box({ wakes });
+    hookDone(b.home);
+    live(b.home, 'idle');
+    expect((await b.dispatch()).statusCode).toBe(200);
+    expect(wakes.calls).toEqual([]);
   });
 
   it('the teammate caveat: bg 21 teammates listed at the Stop, live `idle`, hook `done` → proceeds', async () => {
@@ -477,5 +508,64 @@ describe('the bound has a basis in code (D-5238)', () => {
 describe('the gate\'s capability word (D-5238, advertised through D-5232\'s mechanism)', () => {
   it('SERVER_CAPS lists dispatch-live-gate-v1', () => {
     expect(SERVER_CAPS).toContain('dispatch-live-gate-v1');
+  });
+});
+
+// `compactions-write-no-hookstate` (D-5239): behind this gate's word the fleet's hook leaves a Stop's `done` standing
+// through an idle compaction, while the live file reads `busy` (it does during a compaction). The carry is safe only
+// because this gate reads the live word: the real hook writes the file, and the dispatch still refuses.
+describe('a hook done carried through an idle compaction, live busy, is worker-busy (D-5239 behind D-5238)', () => {
+  it('Stop, then PreCompact and PostCompact manual behind dispatch-live-gate-v1 → hook still done/Stop, worker-busy, no /clear', async () => {
+    const b = await box();
+    const bin = path.join(b.home, 'bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(path.join(bin, 'tmux'), `#!/bin/sh\necho "cc-${ID}"\n`, { mode: 0o755 });
+    mkdirSync(path.join(b.home, '.ccrc'), { recursive: true });
+    writeFileSync(path.join(b.home, '.ccrc', SERVER_CAPS_FILE), renderServerCaps(SERVER_CAPS, Math.floor(Date.now() / 1000)));
+    const stopPayload = { ...(JSON.parse(readFileSync(path.join(here, 'fixtures/hook/stop-bg-five-kinds.json'), 'utf8')) as object),
+      session_id: UUID, background_tasks: [] };
+    const compact = (ev: string): object => ({ session_id: UUID, transcript_path: '/rig/fixhome/cfg/projects/-rig-repo/x.jsonl',
+      cwd: '/rig/repo', prompt_id: '00000000-0000-4000-8000-0000000000c1', hook_event_name: ev, trigger: 'manual',
+      ...(ev === 'PreCompact' ? { custom_instructions: null } : { compact_summary: 'fixture summary' }) });
+    for (const p of [stopPayload, compact('PreCompact'), compact('PostCompact')]) {
+      execFileSync('bash', [path.join(ccrcRoot, 'ccd', 'session-hook.sh')], { input: JSON.stringify(p), encoding: 'utf8',
+        env: { ...process.env, HOME: b.home, PATH: `${bin}:${process.env['PATH'] ?? ''}`, TMUX_PANE: '%1',
+          CLAUDE_CODE_SESSION_ID: UUID, CLAUDE_PID: String(PANE) } });
+    }
+    const hs = JSON.parse(readFileSync(path.join(b.home, '.cc-sessions', `${ID}.hookstate.json`), 'utf8')) as Record<string, unknown>;
+    expect(hs).toMatchObject({ state: 'done', event: 'Stop', sessionId: UUID });
+    live(b.home, 'busy');
+    const res = await b.dispatch();
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, refused: 'worker-busy' });
+    expect(b.cleared()).toBe(false);
+    expect(b.acts()).toEqual([]);
+  });
+});
+
+// D-5232 (plan 2026-10-16, Task 2): behind `hook-main-state-v1` the fleet's hook keeps a Stop's `done` through the agent
+// events of the delegated run it left (the carried shape: the Stop's own `updatedAt` and `event`, `aliveAt` moved by the
+// agent events, the delegated pair). That carry is safe only behind this gate, which reads the live word and refuses a
+// busy pane, so this case is why Task 9 is a structural prerequisite of Task 2. APPENDED.
+describe('a done carried through delegated work never reaches /clear (D-5232, behind D-5238)', () => {
+  it('hook done/Stop carried 40 minutes, aliveAt current, live `busy` → worker-busy: no hold, no /clear', async () => {
+    const b = await box();
+    writeFileSync(path.join(b.home, '.cc-sessions', `${ID}.hookstate.json`), JSON.stringify({
+      v: 1, state: 'done', event: 'Stop', sessionId: UUID, pid: PANE, updatedAt: Date.now() - 40 * 60_000, ask: null,
+      subagents: [{ name: 'general-purpose', startedAt: Date.now() - 41 * 60_000, id: 'a0000000000000001' }],
+      graphQueries: 0, graphGateDenials: 0, ccrcPeerReads: 0, ccrcClaims: 0,
+      aliveAt: Date.now() - 30_000, bgDelegated: 1, bgDelegatedKinds: 'subagent' }));
+    live(b.home, 'busy');
+    const res = await b.dispatch();
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, refused: 'worker-busy' });
+    expect(b.acts()).toEqual([]);
+    expect(b.cleared()).toBe(false);
+    expect(b.state()).toBe('planned');
+  });
+
+  it('SERVER_CAPS lists hook-main-state-v1 beside the gate\'s own word', () => {
+    expect(SERVER_CAPS).toContain('dispatch-live-gate-v1');
+    expect(SERVER_CAPS).toContain('hook-main-state-v1');
   });
 });

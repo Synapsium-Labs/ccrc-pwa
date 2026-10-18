@@ -2,7 +2,7 @@
 // suites run ccd: a stub tmux on PATH answers the session name, stdin carries
 // the hook payload, and the assertion reads the file the script wrote.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { execFileSync, spawnSync, spawn } from 'node:child_process';
+import { execFileSync, spawnSync, spawn, type SpawnSyncReturns } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -311,7 +311,7 @@ const minimalPath = (omit: string[]): string => {
  *  `timeout` IS INVOKED TWICE PER HOOK RUN, and a stub that does not know that
  *  is a barrier in the wrong place. BEFORE the `case "$event"`, the hook
  *  resolves `timeout`/`gtimeout` into `$hooktmo` and asks
- *  `"$hooktmo" 2 tmux display-message -p '#S'` — the bound on the one tmux
+ *  `"$hooktmo" 2 tmux display-message -p -t "$TMUX_PANE" '#S'` — the bound on the one tmux
  *  question every hook event asks, which exists because a wedged tmux server
  *  answers nothing and never returns. That is invocation ONE, and it happens
  *  before the compaction arms are reached at all; the helper's
@@ -643,7 +643,7 @@ describe('the fleet gate and failure polarity', () => {
     plantGraph(tree, { built: 'deadbee' });
 
     const cheapTimes: number[] = [];
-    const mainTimes: number[] = [];
+    const mainTimes: number[] = []; run({ hook_event_name: 'UserPromptSubmit' }); run({ hook_event_name: 'SubagentStart', agent_id: 'a-1', agent_type: 'general-purpose' });   // a-1 is JOINED, so the cheap arm stays a subagent's (delegation broker wave 3)
     for (let i = 0; i < 20; i++) {
       const t0 = process.hrtime.bigint();
       run({ hook_event_name: 'PostToolUse', tool_name: 'Bash', agent_id: 'a-1' });
@@ -2847,7 +2847,7 @@ describe('the compaction card — PreCompact and the helper (spec §3.1)', () =>
     // hook-owned set standing for PostCompact. That is no longer what this
     // userland gets. The tmux bound sits ABOVE the event switch: the hook
     // resolves `timeout`/`gtimeout` into `$hooktmo` BEFORE it reads the event,
-    // and with neither present it does not ask `tmux display-message -p '#S'`
+    // and with neither present it does not ask `tmux display-message -p -t "$TMUX_PANE" '#S'`
     // at all — `$tname` stays empty and `[[ "$tname" == cc-?* ]] || exit 0`
     // ends the run before there is a session id to write anything under.
     // "A hook that cannot bound its own tmux call must not make it" is the
@@ -8429,6 +8429,15 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // 147 -> 146 on the forked-session-transcript review round (2026-10-13): the review fixes' ccd/ccd insertions slid
       // lines under frozen anchors; measured from the merged tree's dump, never retyped. S6-R11, no D-number.
       // 146 -> 147: RE-MEASURED on the forked-session-transcript review round 2 + tick diet W1 merge (2026-10-14), dumped from the merged tree and never retyped. S6-R11, no D-number.
+      // 147 -> 147 at ccrc history W1-B3 (Task 9), measured 2026-10-15 by `cite-remeasure.py` with
+      // `--files ccd/session-hook.sh,README.md` against `edae0c64d`: stated = base = tree for every key,
+      // `ENTERED []`, `LEFT []`, and the row and site arrays unmoved. The hook gained one block ABOVE
+      // README's anchor (`_hook_history_card` and its four constants, 123 lines with their blank line,
+      // defined above the event `case` because the SessionStart arm calls it before the tail runs), and
+      // every spec and plan anchor into the hook sits above that block (the highest is `:2472`), so none
+      // moved. README's own anchor moved with the block, and README is repaired, never counted: its quoted
+      // emitter call was re-pointed by content before this map was measured. Every other hook edit is in
+      // place or in the tail. Both corpus documents are byte-identical to `origin/main`. S6-R11, no D-number.
       'ccd/ccd': 147,
       'ccd/session-hook.sh': 21,
       'ccd/compact-card.mjs': 4,
@@ -8597,7 +8606,14 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       //   diff -U0` of that task's own commit), a net +43 wholly above the
       //   referent, which — measured by the same bytes — goes `:5918` ->
       //   `:5961`. Still not `:5644`, so the entry stays 1 -> 1.
-      'shared/api.ts': 1,
+      //   Hibernation's server half (D-5242, plan Task 17a, `FleetSession.hibernatedAt` and its revive,
+      //   `PRESENCE_OPEN_TTL_MS`): three pure-insertion hunks, +5 at `FleetSession.lastEnd`, +3 in
+      //   `reviveFleetSession` and +12 beside `PRESENCE_TTL_MS`, a net +20 wholly above the referent. Neither frozen
+      //   corpus document changed. The shift slid a `null`-bearing comment line (`.branch` reads null) under `:5644`,
+      //   so the entry reads 0 — A COINCIDENTAL PASS, NEVER A REPAIR, the same as before the `b501698a` rebase: the
+      //   cited sentence's referent, `return isLcRefusalToken(token) ? …`, is at `:8520`, and Task 11 still owns the
+      //   debt. 1 -> 0, the key leaves the census; README's own anchors into `shared/api.ts` were re-pointed by the
+      //   same +20 (its census stays empty). Measured by diffing the dumped failure sets, never retyped.
       // `server/test/single-definition.test.ts` 0 -> 8, A NEW ENTRY, and the
       // whole of it is ONE shift. This wave's Task 1 added 23 lines low in that
       // file — two `describe` blocks immediately after the `one sessionLabel`
@@ -8801,7 +8817,15 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // the five `single-definition.test.ts` sites argued above, unchanged; the one more is
     // `deploy/build-release.sh` 0 -> 1 (argued beside the map). Row and site arrays unmoved (55 and 35). Both
     // corpus documents are byte-identical to `origin/main`. S6-R11, no D-number.
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(202);
+    // 202 -> 202 at ccrc history W1-B3 (2026-10-15): 196 -> 196 on its own base (Task 9, argued beside the map), and
+    // RE-MEASURED on the merge of `origin/main` at `a3cebde1b`: `cite-remeasure.py` against `origin/main` with
+    // `--files ccd/session-hook.sh,README.md,server/test/single-definition.test.ts` prints `total stated 202  base 202
+    // tree 202`, every key stated = base = tree, and the composition, rows (55) and sites (35) each `ENTERED []`,
+    // `LEFT []`. Nothing moved: B3's single-definition describe is appended after main's. S6-R11, no D-number.
+    // 202 -> 201 at hibernation's server half (D-5242, plan Task 17a): the one `shared/api.ts` site (`plan:3396
+    // :5644`) passes coincidentally on that file's +20 inserted lines, argued beside the map; no other key moves and
+    // neither frozen corpus document changed. S6-R11, no new D-number.
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(201);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a
@@ -10314,9 +10338,393 @@ describe('memory convergence (spec 2026-09-08 §2)', () => {
   });
 });
 
+// ── EXACT-PANE OWNERSHIP (delegation broker wave 3, task 1; mutation W3-M01) ──
+//
+// The hook learns WHOSE event it is from one question to the tmux server, and the
+// answer decides every file it writes: the hookstate, the turn marker, the capture
+// of a `-hookcap` session, and the delegation spool this wave adds. Untargeted,
+// `tmux display-message -p '#S'` answers for the pane the server calls CURRENT,
+// which is this hook's own only while tmux can still resolve the pane from its
+// client. MEASURED on tmux 3.4: with `TMUX_PANE` in the client's environment and
+// the pane alive, tmux resolves it by itself; with the pane GONE, or with a client
+// that carries no pane, it falls back to the most recently active session. So a
+// hook event from a torn-down pane was written under whatever ccrc session was
+// current, and that session's state belonged to someone else. The lookup is
+// therefore `-t "$TMUX_PANE"`: the exact pane or nothing.
+//
+// Two groups. The first drives a REAL tmux on a private socket (`-L <name> -f
+// /dev/null`, the way ccd-tmux-anchor.test.ts does: never the default server);
+// the second a stub that answers the untargeted question and fails or wedges the
+// targeted one, which is the lookup-failure half and needs no tmux at all.
+const EXACT_PANE_TMUX: string | null = (() => {
+  const r = spawnSync('sh', ['-c', 'command -v tmux'], { encoding: 'utf8' });
+  const p = (r.stdout ?? '').trim();
+  return r.status === 0 && p.startsWith('/') ? p : null;
+})();
+describe('exact-pane hook ownership: the session name is asked of $TMUX_PANE, never of the server\'s current pane', () => {
+  /** The fixture row (`stateFile()` reads its hookstate) and a SECOND ccrc session whose id ends
+   *  `-hookcap`, so a wrong attribution to it leaves BOTH a hookstate and a capture directory. */
+  const OWNER = 'cc-demo-quiet-basin';
+  const OTHER = 'cc-other-hookcap';
+  const reg = (): string => path.join(home, '.cc-sessions');
+  const otherState = (): string => path.join(reg(), 'other-hookcap.hookstate.json');
+  const captureRoot = (): string => path.join(home, '.ccrc', 'hook-capture');
+  const spoolRoot = (): string => path.join(reg(), 'delegation');
+  /** An ordinary prompt: it writes a hookstate for the session it is attributed to, and no spool line (it is not a delegation event). */
+  const EVENT = { hook_event_name: 'UserPromptSubmit' };
+  /** A valid delegation event: with its pane attributed to a session that has a spool directory and a generation, it WOULD write a
+   *  line there, so "no line" below measures the attribution and not a payload the spool would have refused anyway. Every row that
+   *  claims "no delegation spool" sends it as well as `EVENT`. */
+  const SESSION_END = { hook_event_name: 'SessionEnd', session_id: 'uuid-1', reason: 'clear' };
+  /** BOTH sessions' spool directories exist, each with the row's generation, so a mis-attributed SessionEnd has somewhere valid to land
+   *  (delegation broker wave 3, carried minor of Task 1: this check could not fail while the directories did not exist). */
+  const plantSpoolDirs = (): void => {
+    for (const sid of ['demo-quiet-basin', 'other-hookcap']) fs.mkdirSync(path.join(spoolRoot(), 'spool', sid), { recursive: true });
+    fs.writeFileSync(path.join(reg(), 'other-hookcap.generation'), GENERATION);
+  };
+  beforeEach(plantSpoolDirs);
+  /** What the hook may have written for ANY session: a hookstate, a turn marker, a capture, a spool bucket. */
+  const wroteNothing = (): void => {
+    expect(fs.readdirSync(reg()).sort(), 'the registry holds only the two rows\' generation files and the spool root')
+      .toEqual(['delegation', 'demo-quiet-basin.generation', 'other-hookcap.generation']);
+    expect(fs.existsSync(captureRoot()), 'no capture directory').toBe(false);
+    for (const sid of ['demo-quiet-basin', 'other-hookcap']) {
+      const dir = path.join(spoolRoot(), 'spool', sid);
+      expect(fs.existsSync(dir), `${sid}'s spool directory stands (anti-vacuity: a line had somewhere to go)`).toBe(true);
+      expect(fs.readdirSync(dir), `no bucket in ${sid}'s spool`).toEqual([]);
+    }
+  };
+
+  describe.skipIf(EXACT_PANE_TMUX === null)('real tmux, private socket'
+    + (EXACT_PANE_TMUX === null ? ' — SKIPPED: no tmux on PATH, so there is no real tmux to measure against' : ''), () => {
+    /** Short (macOS `sun_path`) and unique per run (concurrent suites). */
+    const SOCK = `hkex${process.pid}${Math.random().toString(36).slice(2, 6)}`;
+    const T = (...args: string[]): SpawnSyncReturns<string> =>
+      spawnSync(EXACT_PANE_TMUX!, ['-L', SOCK, '-f', '/dev/null', ...args], {
+        encoding: 'utf8', env: { ...process.env, TMUX: undefined, TMUX_PANE: undefined, TMUX_TMPDIR: undefined } as NodeJS.ProcessEnv });
+    /** `kill-server` returns before the server has gone, and a `new-session` that lands in that window
+     *  answers `server exited unexpectedly` (measured, ccd-tmux-anchor.test.ts) — so poll until tmux itself
+     *  says there is nothing to connect to. */
+    const resetServer = (): void => {
+      T('kill-server');
+      for (let i = 0; i < 200; i++) {
+        const r = T('list-sessions');
+        if (r.status !== 0 && /no server running|error connecting/.test(r.stderr)) return;
+        spawnSync('sleep', ['0.05']);
+      }
+      throw new Error(`the private tmux server on ${SOCK} would not go away`);
+    };
+    /** A session whose one pane sits in `sleep`; its pane id, which is what the hook receives as `TMUX_PANE`. */
+    const mk = (name: string): string => {
+      const r = T('new-session', '-d', '-P', '-F', '#{pane_id}', '-s', name, '-x', '80', '-y', '24', 'exec sleep 600');
+      expect(r.status, `fixture new-session ${name}: ${r.stderr}`).toBe(0);
+      return r.stdout.trim();
+    };
+    const argvLog = (): string[] => fs.readFileSync(path.join(home, 'tmux-argv'), 'utf8').split('\n').filter(Boolean);
+    /** The fixture PATH's `tmux`: the private-socket tmux, argv recorded. `CLIENT_BLIND` strips `TMUX_PANE`
+     *  from the CLIENT's environment — a tmux client that carries no pane, which is what an untargeted
+     *  question needs the server's idea of "current" for. */
+    const plantShim = (): void => fs.writeFileSync(path.join(home, 'bin', 'tmux'),
+      `#!/bin/sh\nunset TMUX TMUX_TMPDIR\n[ -n "\${CLIENT_BLIND:-}" ] && unset TMUX_PANE\n`
+      + `printf '%s\\n' "$*" >> "$HOME/tmux-argv"\nexec '${EXACT_PANE_TMUX}' -L '${SOCK}' -f /dev/null "$@"\n`, { mode: 0o755 });
+
+    beforeEach(() => { resetServer(); plantShim(); });
+    afterEach(() => {
+      T('kill-server');
+      // tmux leaves the socket FILE behind after `kill-server` (measured, 3.4): tmux's own default
+      // directory, since TMUX_TMPDIR is unset, and a name that is this run's alone.
+      if (typeof process.getuid === 'function') fs.rmSync(path.join('/tmp', `tmux-${process.getuid()}`, SOCK), { force: true });
+    });
+
+    it('another pane is CURRENT while TMUX_PANE names the owner: the event is the owner\'s, and only the owner\'s', () => {
+      const ownerPane = mk(OWNER);
+      spawnSync('sleep', ['0.1']);
+      mk(OTHER);
+      // THE PREMISE, MEASURED: an untargeted question to this server answers the other, newer session. Without
+      // this the case below passes for a hook that asks nothing exact.
+      expect(T('display-message', '-p', '#S').stdout.trim(), 'the server\'s current session is the OTHER one').toBe(OTHER);
+      const r = runFull(EVENT, { TMUX_PANE: ownerPane, CLIENT_BLIND: '1' });
+      expect(r).toEqual({ stdout: '', stderr: '' });
+      expect(fs.existsSync(stateFile()), 'the owner\'s hookstate was written').toBe(true);
+      expect(readState().state, 'the owner\'s hookstate').toBe('working');
+      expect(fs.existsSync(otherState()), 'the current pane\'s session got nothing').toBe(false);
+      expect(fs.existsSync(captureRoot()), 'and no capture of its').toBe(false);
+      expect(argvLog(), 'the one tmux question names the pane').toEqual([`display-message -p -t ${ownerPane} #S`]);
+    });
+
+    it('exact-pane teardown: the pane is gone but another ccrc pane remains — no hookstate, no capture, no delegation spool', () => {
+      const ownerPane = mk(OWNER);
+      mk(OTHER);
+      expect(T('kill-session', '-t', `=${OWNER}`).status, 'the owner\'s session is torn down').toBe(0);
+      expect(T('list-sessions', '-F', '#{session_name}').stdout.trim(), 'only the other ccrc session remains').toBe(OTHER);
+      // THE PREMISE, MEASURED: the very question the old hook asked, from a client whose `TMUX_PANE` still
+      // names the dead pane, answers the survivor — which is the wrong session for this event.
+      const old = spawnSync(EXACT_PANE_TMUX!, ['-L', SOCK, '-f', '/dev/null', 'display-message', '-p', '#S'], {
+        encoding: 'utf8', env: { ...process.env, TMUX: undefined, TMUX_PANE: ownerPane, TMUX_TMPDIR: undefined } as NodeJS.ProcessEnv });
+      expect(old.stdout.trim(), 'an untargeted question names the survivor').toBe(OTHER);
+      const events = [EVENT, { hook_event_name: 'Stop' }, SESSION_END];
+      for (const event of events) {
+        expect(runFull(event, { TMUX_PANE: ownerPane }), `${event.hook_event_name}: silent, exit 0`).toEqual({ stdout: '', stderr: '' });
+      }
+      wroteNothing();
+      // The exact log, not `every` over it (which passes on an empty one): one question per event, each naming the dead pane.
+      expect(argvLog(), 'every question named the dead pane, once per event').toEqual(events.map(() => `display-message -p -t ${ownerPane} #S`));
+    });
+  });
+
+  describe('a stub tmux that answers the UNTARGETED question with a ccrc name', () => {
+    /** Untargeted: the fixture row's name. Targeted: `ask`. */
+    const plantTmux = (ask: string): void => fs.writeFileSync(path.join(home, 'bin', 'tmux'),
+      `#!/bin/sh\ncase " $* " in *" -t "*) ${ask} ;; esac\necho "${OWNER}"\n`, { mode: 0o755 });
+
+    it('a targeted lookup that FAILS attributes nothing: exit 0, no hookstate, no capture, no delegation spool', () => {
+      plantTmux('echo "can\'t find pane" >&2; exit 1');
+      for (const event of [EVENT, SESSION_END]) expect(runFull(event, { TMUX_PANE: '%7' }), event.hook_event_name).toEqual({ stdout: '', stderr: '' });
+      wroteNothing();
+    });
+
+    it('a targeted lookup that NEVER ANSWERS costs the bound and attributes nothing', () => {
+      plantTmux('sleep 30');
+      for (const event of [EVENT, SESSION_END]) {
+        const t0 = Date.now();
+        expect(runFull(event, { TMUX_PANE: '%7' }), event.hook_event_name).toEqual({ stdout: '', stderr: '' });
+        const ms = Date.now() - t0;
+        expect(ms, `${event.hook_event_name}: the hook took ${ms}ms — the bound did not fire`).toBeLessThan(10_000);
+      }
+      wroteNothing();
+    });
+
+    it('control: the same stub, asked about the pane it can resolve, attributes to it', () => {
+      plantTmux(`echo "${OWNER}"; exit 0`);
+      runFull(EVENT, { TMUX_PANE: '%7' });
+      expect(readState().state).toBe('working');
+      // And it is the SESSION_END that makes the rows above able to fail: attributed, it writes its line into the owner's spool.
+      runFull(SESSION_END, { TMUX_PANE: '%7' });
+      const dir = path.join(spoolRoot(), 'spool', 'demo-quiet-basin');
+      expect(fs.readdirSync(dir).filter((f) => f.endsWith('.spool')), 'attributed, a SessionEnd writes a bucket').toHaveLength(1);
+    });
+  });
+});
+
+// ── A bare agent_id is not a subagent: the captured payloads, replayed (delegation broker wave 3, Task 2) ──
+//
+// The turn marker treated ANY non-empty `agent_id` as a subagent's event. The captured real-lane payloads
+// (`fixtures/delegation/<version>/*.json`) say what an id means: every tool event that carries one comes after a
+// SubagentStart naming it, no main-thread event (Stop, StopFailure, PostCompact, PreCompact, SessionStart,
+// SessionEnd, UserPromptSubmit) carries one in any of the 196 captured scenarios (14 versions, 2.1.280 to 2.1.299; 193
+// measured, and the 3 `interrupt-exit` cells of 2.1.295, 2.1.296 and 2.1.299 unmeasured), and the only SubagentStop with no
+// Start is the unpaired kind: empty agent_type, an agent id no SubagentStart ever named. It is the one around /compact in
+// every version's `clear-compact-resume` (14 measured cells); the three unmeasured `interrupt-exit` cells above also carry one
+// (empty agent_type, a foreign id), which nothing here relies on. The marker therefore trusts an id only once a
+// SubagentStart has named it in THIS owner's join file (`<id>.joined`); the same payloads with their SubagentStarts
+// taken out are the measured "agent_id alone" lane (amendment `tool-agent-id-alone-is-unjoined-evidence`), and there
+// the parent's own tool call must be recorded. SessionStart and SessionEnd are left out of the replay: they carry no
+// id and run the card and teardown machinery this property does not need.
+describe('a bare agent_id is not a subagent: captured delegation payloads replayed through the hook', () => {
+  const FIXTURES = path.resolve(__dirname, 'fixtures/delegation');
+  type Captured = { seq: number; event: string; envSid: string; payload: Record<string, unknown> & { agent_id?: string } };
+  const load = (version: string, scenario: string): Captured[] =>
+    (JSON.parse(fs.readFileSync(path.join(FIXTURES, version, `${scenario}.json`), 'utf8')) as { events: Captured[] }).events
+      .filter((e) => e.event !== 'SessionStart' && e.event !== 'SessionEnd');
+  const markerFile = (): string => path.join(home, '.cc-sessions', 'demo-quiet-basin.turn.json');
+  const marker = (): string | null => (fs.existsSync(markerFile()) ? fs.readFileSync(markerFile(), 'utf8') : null);
+  const TOOL = new Set(['PreToolUse', 'PostToolUse']);
+  /** Replays the events through the hook and reports, for each TOOL event that carries an id, the marker before and after. */
+  const replay = (events: Captured[]): Array<{ seq: number; id: string; before: string | null; after: string | null; joined: boolean }> => {
+    const seenStart = new Set<string>();
+    const rows: Array<{ seq: number; id: string; before: string | null; after: string | null; joined: boolean }> = [];
+    for (const e of events) {
+      const before = marker();
+      runFull(e.payload, { CLAUDE_CODE_SESSION_ID: e.envSid });
+      const id = e.payload.agent_id;
+      if (TOOL.has(e.event) && typeof id === 'string' && id !== '') rows.push({ seq: e.seq, id, before, after: marker(), joined: seenStart.has(id) });
+      if (e.event === 'SubagentStart' && typeof id === 'string') seenStart.add(id);
+    }
+    return rows;
+  };
+  const withoutStarts = (events: Captured[]): Captured[] => events.filter((e) => e.event !== 'SubagentStart');
+  /** `agent-input-keys-are-the-callers`: the Agent `tool_input` key set is whatever the calling model sends, and both real
+   *  lanes omitted `subagent_type`, which the rig's mock always sends. The classification reads no `tool_input` key. */
+  const withoutSubagentType = (events: Captured[]): Captured[] => {
+    let removed = 0;
+    const out = events.map((e) => {
+      const input = e.payload['tool_input'];
+      if (e.payload['tool_name'] !== 'Agent' || typeof input !== 'object' || input === null || !('subagent_type' in input)) return e;
+      removed += 1;
+      const { subagent_type: _gone, ...rest } = input as Record<string, unknown>;
+      return { ...e, payload: { ...e.payload, tool_input: rest } };
+    });
+    expect(removed, 'anti-vacuity: the capture\'s Agent launch events did carry a subagent_type').toBeGreaterThanOrEqual(1);
+    return out;
+  };
+
+  const CASES: Array<[string, string]> = [
+    ['2.1.280', 'agent-plain'], ['2.1.292', 'agent-plain'],
+    ['2.1.280', 'agent-iso-bg'], ['2.1.292', 'agent-iso-bg'],
+    ['2.1.280', 'wf-iso'], ['2.1.292', 'wf-iso'],
+  ];
+
+  it.each(CASES)('%s %s: a joined subagent\'s tool events never move the marker, however they interleave with the parent\'s Stop', (version, scenario) => {
+    const rows = replay(load(version, scenario));
+    expect(rows.length, 'the scenario carries tool events with an agent_id').toBeGreaterThanOrEqual(2);
+    for (const r of rows) {
+      expect(r.joined, `seq ${r.seq}: the capture names ${r.id} in a SubagentStart first`).toBe(true);
+      expect(r.after, `seq ${r.seq}: the subagent's tool event left the marker as it found it`).toBe(r.before);
+    }
+  });
+
+  it.each(CASES)('%s %s: the same events with their SubagentStarts taken out are the agent_id-alone lane: each tool event is the main thread', (version, scenario) => {
+    const rows = replay(withoutStarts(load(version, scenario)));
+    expect(rows.length).toBeGreaterThanOrEqual(2);
+    // A tool event over a marker that already reads working is a builtin read and writes nothing, whoever sent it; the
+    // lane bites where the parent's Stop has come first, so those rows must exist and each must be re-opened by it.
+    const afterStop = rows.filter((r) => r.before !== null && (JSON.parse(r.before) as { state: string }).state === 'done');
+    expect(afterStop.length, 'the scenario has an agent_id tool event after the parent\'s Stop').toBeGreaterThanOrEqual(1);
+    for (const r of rows) {
+      expect(r.joined).toBe(false);
+      expect(JSON.parse(r.after as string), `seq ${r.seq}: an unjoined id leaves the parent's turn working`).toMatchObject({ state: 'working' });
+    }
+    for (const r of afterStop) {
+      expect(JSON.parse(r.after as string), `seq ${r.seq}: an unjoined id's tool event after Stop stamps the parent's turn`)
+        .toMatchObject({ state: 'working', event: expect.stringMatching(/ToolUse$/) });
+    }
+  });
+
+  const AGENT_CASES = CASES.filter(([, scenario]) => scenario.startsWith('agent-'));
+  it.each(AGENT_CASES)('%s %s, agent-input-keys-are-the-callers: with `subagent_type` removed from every Agent launch the joined subagent is still a subagent', (version, scenario) => {
+    const rows = replay(withoutSubagentType(load(version, scenario)));
+    expect(rows.length).toBeGreaterThanOrEqual(2);
+    for (const r of rows) {
+      expect(r.joined, `seq ${r.seq}`).toBe(true);
+      expect(r.after, `seq ${r.seq}: the subagent's tool event left the marker as it found it`).toBe(r.before);
+    }
+  });
+
+  it.each(AGENT_CASES)('%s %s, agent-input-keys-are-the-callers: with `subagent_type` removed and the Starts taken out, the bare id is still the main thread', (version, scenario) => {
+    const rows = replay(withoutStarts(withoutSubagentType(load(version, scenario))));
+    const afterStop = rows.filter((r) => r.before !== null && (JSON.parse(r.before) as { state: string }).state === 'done');
+    expect(afterStop.length).toBeGreaterThanOrEqual(1);
+    for (const r of afterStop) {
+      expect(JSON.parse(r.after as string), `seq ${r.seq}`).toMatchObject({ state: 'working', event: expect.stringMatching(/ToolUse$/) });
+    }
+  });
+
+  it('post-turn-subagentstop-is-unpaired: the captured unpaired SubagentStop (empty agent_type, no Start), after the parent\'s Stop, admits nothing: its id is still the main thread', () => {
+    for (const version of ['2.1.280', '2.1.292']) {
+      const stray = (JSON.parse(fs.readFileSync(path.join(FIXTURES, version, 'clear-compact-resume.json'), 'utf8')) as { events: Captured[] })
+        .events.find((e) => e.event === 'SubagentStop')!;
+      expect(stray.payload.agent_type, `${version}: fixture is the unpaired kind`).toBe('');
+      const tool = load(version, 'agent-plain').find((e) => e.event === 'PreToolUse' && e.payload.agent_id)!;
+      runFull({ hook_event_name: 'UserPromptSubmit' });
+      runFull({ hook_event_name: 'Stop' });
+      runFull(stray.payload, { CLAUDE_CODE_SESSION_ID: stray.envSid });
+      const done = marker();
+      expect(JSON.parse(done as string).state).toBe('done');
+      runFull({ ...tool.payload, agent_id: stray.payload.agent_id }, { CLAUDE_CODE_SESSION_ID: stray.envSid });
+      expect(JSON.parse(marker() as string), `${version}: a tool event under the unpaired id`).toMatchObject({ state: 'working', event: 'PreToolUse' });
+      fs.rmSync(markerFile());
+      fs.rmSync(stateFile());
+    }
+  });
+});
+
+// ── The delegation spool beside the hook's other writers (delegation broker wave 3, Task 5) ──
+//
+// `delegation-spool.test.ts` owns the line grammar, the caps and the prune. This describe owns what the append must NOT
+// disturb in the hook around it: the compact SessionStart still exits before the hookstate, the turn marker and the capture arm
+// (its early `exit 0` became a flag that the same tail honours, so the spool line can be written first); a SessionEnd is still
+// inert; and the line does not wait on the hookstate write that follows it.
+describe('the delegation spool leaves the hook\'s other writers alone', () => {
+  const SPOOL = (): string => path.join(home, '.cc-sessions', 'delegation', 'spool', 'demo-quiet-basin');
+  const turnFile = (): string => path.join(home, '.cc-sessions', 'demo-quiet-basin.turn.json');
+  const spoolLines = (): any[] => (fs.existsSync(SPOOL()) ? fs.readdirSync(SPOOL()).filter((f) => f.endsWith('.spool')).flatMap((f) =>
+    fs.readFileSync(path.join(SPOOL(), f), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))) : []);
+  const SID = '6350faa0-a1be-4e78-939c-57485268f6fc';
+  beforeEach(() => { fs.mkdirSync(SPOOL(), { recursive: true }); });
+
+  it('compact SessionStart: one spool line, and still no hookstate, no turn marker, and an untouched marker already on disk', () => {
+    run({ hook_event_name: 'UserPromptSubmit' });                       // a turn is open: marker working, hookstate working
+    const marker = fs.readFileSync(turnFile(), 'utf8');
+    const state = fs.readFileSync(stateFile(), 'utf8');
+    runFull({ hook_event_name: 'SessionStart', source: 'compact', session_id: SID, transcript_path: '/rig/t.jsonl', cwd: home });
+    expect(spoolLines().map((l) => [l.eventKind, l.source])).toEqual([['SessionStart', 'compact']]);
+    expect(fs.readFileSync(turnFile(), 'utf8'), 'compact leaves whatever PreCompact wrote standing (D-306)').toBe(marker);
+    expect(fs.readFileSync(stateFile(), 'utf8')).toBe(state);
+  });
+
+  it('compact SessionStart on a -hookcap session is still not captured (it never reached the capture arm), while a startup is', () => {
+    fs.writeFileSync(path.join(home, 'bin', 'tmux'), '#!/bin/sh\necho "cc-demo-hookcap"\n', { mode: 0o755 });
+    fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-hookcap.generation'), GENERATION);
+    const cap = path.join(home, '.ccrc', 'hook-capture', 'demo-hookcap');
+    runFull({ hook_event_name: 'SessionStart', source: 'compact', session_id: SID, cwd: home });
+    expect(fs.existsSync(cap) ? fs.readdirSync(cap) : [], 'no capture for compact').toEqual([]);
+    runFull({ hook_event_name: 'SessionStart', source: 'startup', session_id: SID, cwd: home });
+    expect(fs.readdirSync(cap).filter((f) => f.startsWith('SessionStart-')), 'a startup is captured as before').toHaveLength(1);
+  });
+
+  it('compact SessionStart writes no history-spool line (its arm excludes compact) though the delegation spool takes one', () => {
+    const hist = path.join(home, '.ccrc', 'history', 'spool');
+    fs.mkdirSync(hist, { recursive: true });
+    const sid = '7d0c3f5e-1a2b-4c3d-8e9f-0a1b2c3d4e5f';
+    runFull({ hook_event_name: 'SessionStart', source: 'compact', session_id: sid, cwd: home });
+    expect(fs.existsSync(path.join(hist, 'demo-quiet-basin.jsonl'))).toBe(false);
+    expect(spoolLines()).toHaveLength(1);
+    runFull({ hook_event_name: 'SessionStart', source: 'startup', session_id: sid, cwd: home });
+    expect(fs.existsSync(path.join(hist, 'demo-quiet-basin.jsonl')), 'control: a startup does write the history line').toBe(true);
+  });
+
+  it('SessionEnd: a spool line, and no hookstate and no turn marker (it stays a termination hint)', () => {
+    runFull({ hook_event_name: 'SessionEnd', session_id: SID, reason: 'prompt_input_exit' });
+    expect(spoolLines().map((l) => [l.eventKind, l.reason])).toEqual([['SessionEnd', 'prompt_input_exit']]);
+    expect(fs.existsSync(stateFile())).toBe(false);
+    expect(fs.existsSync(turnFile())).toBe(false);
+  });
+
+  it('the line does not wait on the hookstate write: with the hookstate path unwritable the delegation line is still in', () => {
+    fs.mkdirSync(stateFile());                                          // a directory where the file belongs: the rename fails
+    runFull({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'true' }, tool_use_id: 'toolu_01', session_id: SID, tool_response: { stdout: '' } });
+    expect(spoolLines().map((l) => l.eventKind)).toEqual(['PostToolUse']);
+  });
+
+  it('a Stop and a StopFailure add no line and change nothing they changed before', () => {
+    runFull({ hook_event_name: 'UserPromptSubmit', session_id: SID });
+    runFull({ hook_event_name: 'Stop', session_id: SID });
+    expect(readState().state).toBe('done');
+    runFull({ hook_event_name: 'StopFailure', session_id: SID, error: 'server_error' });
+    expect(spoolLines()).toEqual([]);
+  });
+
+  // THE PRODUCTION CONFIGURATION'S COST (review of Task 5, Important 2). The p95 pin in 'the fleet gate and failure polarity' runs with NO
+  // spool directory and a payload with no `session_id` or `tool_use_id`, so the spool's jq text is never compiled there. Once ccd has
+  // made the directory (every session, at its next spawn) every Bash, Agent, Task, Workflow and session event compiles it: about
+  // 11 ms of jq CPU on top of the parse. This row is that pin's twin for the configuration the fleet will actually run, with the same
+  // 150 ms allowance, and it asserts the line was written so it cannot pass by never reaching the spool. It is its own `it` (the
+  // existing pin's lines are not edited); the helpers it needs are this file's module-level `run` and the describe's `spoolLines`.
+  it('p95 of 20 realistic Bash PostToolUse runs with the spool directory and generation present stays under the same 150 ms budget, and every run wrote its line', () => {
+    const times: number[] = [];
+    for (let i = 0; i < 20; i++) {
+      const payload = {
+        session_id: SID, transcript_path: `/rig/fixhome/cfg/projects/-rig-repo/${SID}.jsonl`, cwd: '/rig/repo', prompt_id: 'd9a6fd11-6f0f-41f3-8c1b-0932efbc04a6',
+        permission_mode: 'default', effort: { level: 'medium' }, hook_event_name: 'PostToolUse', tool_name: 'Bash',
+        tool_input: { command: 'git status --short', description: 'show the working tree state' },
+        tool_response: { stdout: ' M ccd/session-hook.sh\n', stderr: '', interrupted: false, isImage: false, noOutputExpected: false },
+        tool_use_id: `toolu_01Pin${String(i).padStart(2, '0')}AAAAAAAAAAAAAAAA`, duration_ms: 41,
+      };
+      const t0 = Date.now();
+      run(payload);
+      times.push(Date.now() - t0);
+    }
+    const lines = spoolLines();
+    expect(lines.map((l) => `${l.eventKind}:${l.toolName}`), 'every run reached the spool and wrote its line').toEqual(Array(20).fill('PostToolUse:Bash'));
+    expect(new Set(lines.map((l) => l.toolUseId)).size).toBe(20);
+    times.sort((a, b) => a - b);
+    expect(times[Math.floor(times.length * 0.95) - 1]).toBeLessThan(150);
+  }, 60000);
+});
+
 // ── The tmux question's BOUND (slice-0 carry) ──────────────────────────────
 //
-// `tmux display-message -p '#S'` talks to the tmux SERVER over its socket, and
+// `tmux display-message -p -t "$TMUX_PANE" '#S'` talks to the tmux SERVER over its socket, and
 // a wedged server (SIGSTOP, a swapping box) answers nothing and never returns.
 // Unbounded, that hangs the HOOK — which runs on the hot path of every tool
 // call in every live session on the box, not once per render in one pane the
@@ -10348,7 +10756,7 @@ describe('the tmux session-name read is bounded', () => {
   });
 
   it('a tmux that never answers costs the hook the bound, not the turn', () => {
-    // Mutation: drop the bound (`tname=$(tmux display-message -p '#S' …)`) and
+    // Mutation: drop the bound (`tname=$(tmux display-message -p -t "$TMUX_PANE" '#S' …)`) and
     // this waits the stub's full 30 s instead of ~2.
     fs.writeFileSync(path.join(home, 'bin', 'tmux'), '#!/bin/sh\nsleep 30\n', { mode: 0o755 });
     const t0 = Date.now();
@@ -11372,5 +11780,1307 @@ describe('ccrc history: the recall CLI is not search-gated (spec 2026-10-05 §8.
       expect(run(pre('Bash', { command }, tree)), `the search gate denied a recall: ${command}`).toBe('');
     }
     expect(readState().graphGateDenials, 'a recall call was counted as a denial').toBe(1);
+  });
+});
+
+describe('the hot-path budget through the shell prefix (D-5241)', () => {
+  // AT THE END OF THIS FILE, not beside the PostToolUse pin it mirrors: this file's lines are cited
+  // by number (the citation census above), and an insertion above them moves that census.
+  // D-5241: on Linux every hook command runs through `CLAUDE_CODE_SHELL_PREFIX`
+  // (`ccd-tool-adj`), as ONE string (plan Task 13 step 7), so the same budget
+  // holds with the prefix in front. The hook is not a Bash tool snippet, so the
+  // prefix runs it unchanged (no score raise); what it adds is its own start
+  // and one `bash -c`. Measured 2026-10-17 on a workstation (macOS), 20 runs
+  // each, the two tests in one run: this PostToolUse hook 56 ms a run bare, 58
+  // ms through the prefix (a bare `bash -c true` 6.1 ms p50, 17.9 ms through it).
+  it('p95 of 20 runs through the ccd-tool-adj prefix stays under the same budget (D-5241)', () => {
+    const prefix = path.resolve(__dirname, '../../ccd/ccd-tool-adj');
+    const times: number[] = [];
+    for (let i = 0; i < 20; i++) {
+      const t0 = Date.now();
+      execFileSync(prefix, [`bash ${sh(HOOK)}`], {
+        input: JSON.stringify({ hook_event_name: 'PostToolUse', tool_name: 'Bash' }),
+        encoding: 'utf8', env: hookEnv(),
+      });
+      times.push(Date.now() - t0);
+    }
+    times.sort((a, b) => a - b);
+    expect(times[Math.floor(times.length * 0.95) - 1]).toBeLessThan(150);
+  }, 30000);
+});
+
+// The hot-path budget for an agent payload (D-5232). APPENDED at the very end, so no line a citation anchors moves.
+describe('the PostToolUse budget holds for agent payloads (D-5232)', () => {
+  // D-5232 (plan 2026-10-16 Task 2): the same budget for an AGENT PostToolUse behind the server's word
+  // `hook-main-state-v1`, which reads `~/.ccrc/server-caps` with builtins and takes the one fresh read to carry the
+  // main state. The file to carry is a Stop's `done`, written first.
+  it('p95 of 20 agent PostToolUse runs behind hook-main-state-v1 stays under the same 150 ms budget (D-5232)', () => {
+    fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.ccrc', 'server-caps'),
+      `at ${Math.floor(Date.now() / 1000)}\ncaps dispatch-live-gate-v1 hook-main-state-v1\nend\n`);
+    run({ hook_event_name: 'Stop', background_tasks: [] });
+    const times: number[] = [];
+    for (let i = 0; i < 20; i++) {
+      const t0 = Date.now();
+      run({ hook_event_name: 'PostToolUse', tool_name: 'Bash', agent_id: 'a0000000000000001', agent_type: 'general-purpose' });
+      times.push(Date.now() - t0);
+    }
+    expect(readState().state, 'the carry ran: the Stop\'s done stands').toBe('done');
+    times.sort((a, b) => a - b);
+    expect(times[Math.floor(times.length * 0.95) - 1]).toBeLessThan(150);
+  }, 30000);
+});
+// ── ccrc history: the PreCompact scope marker (history spec 2026-10-05 §5.1, §5.5 S16; W1-B3 task 8) ──
+// APPENDED, with NO new import line: the citation census cites this file by line.
+// `runFull`/`hookEnv`/`home`/`preCompact`/`plantSession`/`setFile`/`tl`/`LIVE`/`DEAD`/`GENERATION` are
+// this file's module-level fixture (a fixture HOME, a stub tmux answering
+// cc-demo-quiet-basin, the row's 36-byte generation file).
+// D-5055 (history-hook-test-scrub-once): ONE scrub for every history hook describe below, spec §10.1: the operator's own
+// session must not reach the hook through `hookEnv`'s `...process.env`, so `CCRC_RECALL_*` and `HISTORY_TEST_*` are blanked.
+const HISTORY_HOOK_SCRUB: Record<string, string> = {
+  TMUX: '', CLAUDE_CONFIG_DIR: '', CLAUDECODE: '',
+  ...Object.fromEntries(Object.keys(process.env).filter((k) => k.startsWith('CCRC_RECALL_') || k.startsWith('HISTORY_TEST_')).map((k) => [k, ''])),
+};
+describe('history scope marker: PreCompact records whose context is compacting (spec §5.1, S16)', () => {
+  const SID = '7d0c3f5e-1a2b-4c3d-8e9f-0a1b2c3d4e5f';
+  const ID = 'demo-quiet-basin';
+  const histDir = (...p: string[]): string => path.join(home, '.ccrc', 'history', ...p);
+  const scopeDir = (): string => histDir('scope');
+  const marker = (id = ID): string => histDir('scope', id);
+  const plantScope = (): void => { fs.mkdirSync(scopeDir(), { recursive: true, mode: 0o700 }); };
+  const cardOff = (): void => {
+    fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.ccrc', 'compact-card-off'), '');
+  };
+  const historyOff = (): void => {
+    fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.ccrc', 'history-off'), '');
+  };
+  /** PreCompact with this describe's UUID session id: the module's `preCompact` hard-codes `sess-1`. */
+  const pre = (transcript: string, trigger = 'manual', extra: object = {}): object =>
+    ({ ...preCompact(home, transcript, trigger), session_id: SID, ...extra });
+  /** The marker's three fields, asserted to be one line of at most 64 bytes. */
+  const read = (id = ID): { scope: string; sid: string; ms: number } => {
+    const raw = fs.readFileSync(marker(id), 'utf8');
+    expect(Buffer.byteLength(raw), 'the marker is at most 64 bytes').toBeLessThanOrEqual(64);
+    expect(raw.endsWith('\n') && raw.indexOf('\n') === raw.length - 1, 'one line').toBe(true);
+    const [scope, sid, ms] = raw.trimEnd().split(' ');
+    return { scope: scope!, sid: sid!, ms: Number(ms) };
+  };
+  /** Re-point the stub tmux at an id of exactly `n` characters. */
+  const longId = (n: number): string => {
+    const id = 'a'.repeat(n);
+    fs.writeFileSync(path.join(home, 'bin', 'tmux'), `#!/bin/sh\necho "cc-${id}"\n`, { mode: 0o755 });
+    fs.writeFileSync(path.join(home, '.cc-sessions', `${id}.generation`), GENERATION);
+    return id;
+  };
+
+  it('S16: with no scope/ directory there is no marker, nothing is created, and stdout and stderr are both empty', () => {
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    expect(runFull(pre(transcript), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(fs.existsSync(histDir()), 'the hook never mkdirs').toBe(false);
+  });
+
+  // The case above cannot see the gate on scope/: without it, the block's write into a missing directory fails
+  // silently and leaves the same nothing behind. What the gate saves is the block's forks, so this case counts them
+  // against the same run under history-off, whose own gate stops the block. compact-card-off keeps the card from
+  // scoping, so CS_SCOPE stays unset and the block, past its gate, would run its own jq, scope and clock.
+  itLinux('S16: with no scope/ directory the gate forks nothing: the same forks as the run under history-off', () => {
+    cardOff();
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    const forks = (): number => {
+      const trace = path.join(home, 'scope-trace.txt');
+      const r = spawnSync('strace', ['-f', '-o', trace, '-e', 'trace=clone,clone3,fork,vfork', 'bash', HOOK], {
+        input: JSON.stringify(pre(transcript)), encoding: 'utf8', env: hookEnv(HISTORY_HOOK_SCRUB),
+      });
+      expect(r.status, `strace ran the hook: ${r.stderr}`).toBe(0);
+      const lines = fs.readFileSync(trace, 'utf8').split('\n').filter((l) => l !== '');
+      fs.rmSync(trace);
+      const root = /^(\d+)\s/.exec(lines[0] ?? '')?.[1];
+      expect(root, 'strace traced a fork').toBeDefined();
+      return lines.filter((l) => new RegExp(`^${root}\\s+(?:clone3?|v?fork)\\(`).test(l)).length;
+    };
+    forks();                                              // WARM-UP: a first run may make state no later run repeats
+    const open = forks();
+    historyOff();
+    expect(open, 'the block forked although scope/ is absent').toBe(forks());
+    expect(fs.existsSync(histDir()), 'the hook never mkdirs').toBe(false);
+  }, 60_000);
+
+  it('S16: under compact-card-off a manual compaction is scoped by the marker itself — main <psid> <ms>', () => {
+    plantScope(); cardOff();
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    const before = Date.now();
+    expect(runFull(pre(transcript), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    const m = read();
+    expect([m.scope, m.sid]).toEqual(['main', SID]);
+    expect(m.ms).toBeGreaterThanOrEqual(before - 1000);
+    expect(m.ms).toBeLessThanOrEqual(Date.now() + 1000);
+  });
+
+  it('S16: the card\'s own verdict is reused — an unconsumed set inside the window makes it ambiguous', () => {
+    plantScope();
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    fs.writeFileSync(setFile(), '{}\n');                 // a young canonical set: the card's overlap check
+    expect(runFull(pre(transcript), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(read().scope).toBe('ambiguous');
+  });
+
+  it('S16: one live subagent beside a quiet parent is scoped subagent, on the card\'s path and under compact-card-off alike', () => {
+    plantScope();
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')], parentAge: DEAD,
+      subagents: [{ id: 'a1', lines: [tl.user('y')], age: LIVE }] });
+    runFull(pre(transcript, 'auto'), HISTORY_HOOK_SCRUB);
+    expect(read().scope).toBe('subagent');
+    fs.rmSync(marker());
+    cardOff();
+    runFull(pre(transcript, 'auto'), HISTORY_HOOK_SCRUB);
+    expect(read().scope).toBe('subagent');
+  });
+
+  it('S16: scope rc 1 (no readable transcript) writes no marker', () => {
+    plantScope();
+    expect(runFull(pre(path.join(home, 'missing.jsonl')), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(fs.existsSync(marker())).toBe(false);
+    cardOff();                                            // the unset arm's own scope run answers rc 1 too
+    expect(runFull(pre(path.join(home, 'missing.jsonl')), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(fs.existsSync(marker())).toBe(false);
+  });
+
+  it('an undecided verdict empties a fresh main marker this psid left, and creates nothing where none was', () => {
+    plantScope();
+    fs.writeFileSync(marker(), `main ${SID} ${Date.now()}\n`);
+    expect(runFull(pre(path.join(home, 'missing.jsonl')), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(fs.readFileSync(marker(), 'utf8'), 'the earlier main marker survived an undecided compaction').toBe('');
+  });
+
+  it.skipIf(process.getuid?.() === 0)('S16: a hookstate write that fails leaves no marker and still exits 0, silent', () => {
+    plantScope(); cardOff();
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    const reg = path.join(home, '.cc-sessions');
+    fs.chmodSync(reg, 0o500);                             // root writes through 0500, so root skips this
+    try {
+      expect(runFull(pre(transcript), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    } finally {
+      fs.chmodSync(reg, 0o700);
+    }
+    expect(fs.existsSync(marker()), 'a marker landed although the hookstate write failed').toBe(false);
+  });
+
+  it.skipIf(process.getuid?.() === 0)('a hookstate write that fails empties an older fresh main marker, so a following SessionStart(compact) serves no line', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    plantScope(); cardOff();
+    fs.writeFileSync(marker(), `main ${SID} ${Date.now()}\n`);  // an earlier main compaction's, still fresh
+    fs.mkdirSync(histDir('card', ID), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(histDir('card', ID, `${SID}.txt`), `${lib.cardLine({ leaf: 'L03a9c1', parent: null })}\n`, { mode: 0o600 });
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    const reg = path.join(home, '.cc-sessions');
+    fs.chmodSync(reg, 0o500);                             // the hookstate write fails, and the tail exits there
+    try {
+      expect(runFull(pre(transcript), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    } finally {
+      fs.chmodSync(reg, 0o700);
+    }
+    expect(fs.readFileSync(marker(), 'utf8'), 'the older main marker survived a PreCompact that exited at its hookstate write').toBe('');
+    // Once Task 9's reader exists, this is the end-to-end form: an emptied marker serves no line.
+    const r = runFull({ hook_event_name: 'SessionStart', source: 'compact', cwd: home, transcript_path: path.join(home, 't.jsonl'),
+      session_id: SID, prompt_id: 'p1', model: 'claude-opus-5' }, HISTORY_HOOK_SCRUB);
+    expect(r.stdout.includes('History: node '), 'a line served from an emptied marker').toBe(false);
+  });
+
+  it('S16: a CS_SCOPE exported into the pane is never read as this run\'s verdict', () => {
+    plantScope(); cardOff();
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')], parentAge: DEAD,
+      subagents: [{ id: 'a1', lines: [tl.user('y')], age: LIVE }] });
+    runFull(pre(transcript, 'auto'), { ...HISTORY_HOOK_SCRUB, CS_SCOPE: 'main' });
+    expect(read().scope).toBe('subagent');
+  });
+
+  it('S2 (marker half): a payload with agent_id writes no marker', () => {
+    plantScope(); cardOff();
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    runFull(pre(transcript, 'manual', { agent_id: 'agent-7' }), HISTORY_HOOK_SCRUB);
+    expect(fs.existsSync(marker())).toBe(false);
+  });
+
+  // D-5054 (history-scope-marker-hardening): the early truncation's main-thread and event tests each need a case that
+  // reds without them. The block's own gate refuses an agent_id payload and a non-PreCompact event too, so only a
+  // marker that was ALREADY there can tell the early line's tests from the block's.
+  it('D-5054: a PreCompact whose payload carries an agent_id leaves a fresh main marker byte for byte intact', () => {
+    plantScope(); cardOff();
+    const fresh = `main ${SID} ${Date.now()}\n`;
+    fs.writeFileSync(marker(), fresh);
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    expect(runFull(pre(transcript, 'manual', { agent_id: 'agent-7' }), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(fs.readFileSync(marker(), 'utf8'), 'a subagent thread emptied the main thread\'s marker').toBe(fresh);
+  });
+
+  it('D-5054: a later main-thread event after a main PreCompact leaves the fresh marker intact', () => {
+    plantScope(); cardOff();
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    runFull(pre(transcript), HISTORY_HOOK_SCRUB);
+    const written = fs.readFileSync(marker(), 'utf8');
+    expect(read().scope, 'the PreCompact wrote the marker this case then leaves to a Stop').toBe('main');
+    expect(runFull({ hook_event_name: 'Stop', session_id: SID }, HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(fs.readFileSync(marker(), 'utf8'), 'an event that is not a PreCompact emptied the marker').toBe(written);
+  });
+
+  it('S3 (marker half): history-off present writes no marker', () => {
+    plantScope(); cardOff(); historyOff();
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    expect(runFull(pre(transcript), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(fs.existsSync(marker())).toBe(false);
+  });
+
+  it('S8 (marker half): under history-off a PreCompact writes no marker while a SessionStart(clear) still spools its epoch line', () => {
+    plantScope(); cardOff(); historyOff();
+    fs.mkdirSync(histDir('spool'), { recursive: true, mode: 0o700 });
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    runFull(pre(transcript), HISTORY_HOOK_SCRUB);
+    expect(fs.existsSync(marker())).toBe(false);
+    runFull({ hook_event_name: 'SessionStart', source: 'clear', session_id: SID }, HISTORY_HOOK_SCRUB);
+    expect(fs.readFileSync(histDir('spool', `${ID}.jsonl`), 'utf8')).toContain('"ev":"SessionStart"');
+  });
+
+  it('the id bound is SPOOL_ID_MAX: a 224-char id is marked, a 225-char id is not', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    plantScope(); cardOff();
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    const fits = longId(lib.SPOOL_ID_MAX);
+    runFull(pre(transcript), HISTORY_HOOK_SCRUB);
+    expect(read(fits).scope).toBe('main');
+    const over = longId(lib.SPOOL_ID_MAX + 1);
+    runFull(pre(transcript), HISTORY_HOOK_SCRUB);
+    expect(fs.existsSync(marker(over))).toBe(false);
+  });
+
+  it('an id of . or .. names a directory, so no marker can land and nothing outside scope/ changes', () => {
+    plantScope(); cardOff();
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    for (const id of ['.', '..']) {
+      fs.writeFileSync(path.join(home, 'bin', 'tmux'), `#!/bin/sh\necho "cc-${id}"\n`, { mode: 0o755 });
+      expect(runFull(pre(transcript), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    }
+    expect(fs.readdirSync(scopeDir())).toEqual([]);
+    expect(fs.readdirSync(histDir()).sort()).toEqual(['scope']);
+  });
+
+  it('a session_id that is not a lowercase UUID writes no marker', () => {
+    plantScope(); cardOff();
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    runFull(pre(transcript, 'manual', { session_id: 'sess-1' }), HISTORY_HOOK_SCRUB);
+    expect(fs.existsSync(marker())).toBe(false);
+  });
+
+  it('a symlink where the marker goes is left alone, and its target is never written', () => {
+    plantScope(); cardOff();
+    const target = path.join(home, 'elsewhere.txt');
+    fs.writeFileSync(target, 'keep\n');
+    fs.symlinkSync(target, marker());
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    expect(runFull(pre(transcript), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(fs.readFileSync(target, 'utf8')).toBe('keep\n');
+    expect(fs.lstatSync(marker()).isSymbolicLink()).toBe(true);
+  });
+
+  // B1's F24 rows, for the marker (spec §5.1 and S16; B1's D-4418 rule, ruled R-B3-fifo). A
+  // FIFO already standing at scope/<id> passes a test that keeps only `! -L`, and the `>` open then blocks with no
+  // reader, so the run is bounded: a blocked hook is killed at the deadline, never left to hang the suite.
+  const runBounded = (payload: object): ReturnType<typeof spawnSync> => spawnSync('bash', [HOOK], {
+    input: JSON.stringify(payload), encoding: 'utf8', timeout: 10_000, killSignal: 'SIGKILL', env: hookEnv(HISTORY_HOOK_SCRUB),
+  });
+
+  it('a FIFO where the marker goes writes no marker and never blocks: exit 0, silent, the FIFO left as it was', () => {
+    plantScope(); cardOff();
+    execFileSync('mkfifo', [marker()]);
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    const r = runBounded(pre(transcript));
+    expect(r.signal, 'the hook blocked opening the FIFO and was killed at the deadline').toBeNull();
+    expect(r.status).toBe(0);
+    expect(r.stdout).toBe('');
+    expect(r.stderr).toBe('');
+    expect(fs.lstatSync(marker()).isFIFO()).toBe(true);
+  }, 30_000);
+
+  it('a symlinked scope/ is neither written nor truncated through', () => {
+    fs.mkdirSync(histDir(), { recursive: true, mode: 0o700 });
+    const elsewhere = path.join(home, 'elsewhere');
+    fs.mkdirSync(elsewhere, { mode: 0o700 });
+    fs.symlinkSync(elsewhere, scopeDir());
+    cardOff();
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    expect(runFull(pre(transcript), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(fs.readdirSync(elsewhere), 'the block wrote a marker through a symlinked scope/').toEqual([]);
+    fs.writeFileSync(path.join(elsewhere, ID), 'keep\n');
+    expect(runFull(pre(transcript), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(fs.readFileSync(path.join(elsewhere, ID), 'utf8'), 'a file behind a symlinked scope/ was truncated or overwritten').toBe('keep\n');
+  });
+
+  it('CONTROL: an existing regular marker is replaced by this run\'s decided verdict', () => {
+    plantScope(); cardOff();
+    fs.writeFileSync(marker(), `subagent ${SID} ${Date.now() - 60_000}\n`);
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    expect(runFull(pre(transcript), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect([read().scope, read().sid]).toEqual(['main', SID]);
+  });
+
+  it('the block sits after the card\'s call and before PostCompact\'s, and its gate forks nothing', () => {
+    const src = fs.readFileSync(HOOK, 'utf8');
+    const open = src.indexOf('# >>> history-scope (spec 2026-10-05 §5.1)');
+    const close = src.indexOf('# <<< history-scope');
+    const preCall = src.indexOf('if [[ "$event" == PreCompact  ]]; then _hook_compact_pre  || true; fi');
+    expect(open, 'no history-scope block').toBeGreaterThan(-1);
+    expect(src.indexOf('# >>> history-scope', open + 1), 'two history-scope blocks').toBe(-1);
+    expect(open, 'the marker must follow the card, whose verdict it reuses').toBeGreaterThan(preCall);
+    expect(close).toBeLessThan(src.indexOf('if [[ "$event" == PostCompact ]]; then _hook_compact_post || true; fi'));
+    expect(src.split('\n').filter((l) => l === 'unset CS_SCOPE'), 'CS_SCOPE is unset once').toHaveLength(1);
+    expect(src, 'unset directly above the card\'s call').toContain(
+      'unset CS_SCOPE\nif [[ "$event" == PreCompact  ]]; then _hook_compact_pre  || true; fi');
+    const gate = src.slice(open, close).split('\n').find((l) => l.startsWith('if [[ "$event" == PreCompact && -z "$paid" ]]'));
+    expect(gate, 'the gate line').toBeDefined();
+    expect(gate!.slice(0, gate!.indexOf('; then')), 'the gate forks').not.toMatch(/\$\(|`/);
+    // The early invalidation: below the event case, above every tail exit, builtin-only.
+    const early = src.split('\n').filter((l) => l.startsWith('[[ "$event" == PreCompact && -z "$paid" ]] && [[ -f '));
+    expect(early, 'one early invalidation line').toHaveLength(1);
+    const at = src.indexOf(`\n${early[0]!}\n`);
+    expect(at, 'below the event case').toBeGreaterThan(src.indexOf('\nesac\n'));
+    // The hookstate compose, wherever it is indented (main's dispatch-live gate wraps it in `if [[ -z "$hs_skip" ]]`).
+    const compose = src.search(/\n[ \t]*out=\$\(jq -cn \\\n[ \t]*--argjson v 1 --arg state /);
+    expect(compose, 'the hookstate compose').toBeGreaterThan(-1);
+    expect(at, 'above the hookstate compose and every exit after it').toBeLessThan(compose);
+    expect(early[0], 'the invalidation forks').not.toMatch(/\$\(|`/);
+    // B1's S1 form (its FR2a): a `${…@…}` transformation forks too, since `@P` runs prompt expansion and so command
+    // substitution. The early line, the gate and `_hook_history_scope`'s body spell none (past the gates the body may
+    // fork, but only by the forms its comment names: one jq, the scope rule, the clock).
+    const fnAt = src.indexOf('\n_hook_history_scope() {');
+    expect(fnAt, 'no _hook_history_scope definition').toBeGreaterThan(-1);
+    const fnCode = src.slice(fnAt, src.indexOf('\n}\n', fnAt)).split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    expect(`${early[0]!}\n${gate!}\n${fnCode}`.match(/\$\{[^}]*@/)?.[0] ?? null, 'a ${…@…} transformation in the marker lines (@P forks)').toBeNull();
+    // B1's D-4418 rule (spec §5.1): the type test is the line DIRECTLY above the write,
+    // so nothing but builtins runs between the test and the `>`; the gate and the early line refuse a symlinked scope/.
+    const fnLines = fnCode.split('\n');
+    const w = fnLines.findIndex((l) => l.includes('> "$f"; } 2>/dev/null'));
+    expect(w, 'no marker write').toBeGreaterThan(0);
+    expect(fnLines[w - 1]!.trim(), 'the regular-file test sits directly above the write, builtins only')
+      .toBe('[[ ! -L "$f" && ( -f "$f" || ! -e "$f" ) ]] || return 0');
+    // Either spelling of the directory: Task 9 re-points these lines to its HISTORY_SCOPE_DIR constant.
+    const notLinkedScope = /&& ! -L "(?:\$HOME\/\.ccrc\/history\/scope|\$HISTORY_SCOPE_DIR)" \]\]/;
+    expect(gate, 'the gate refuses a symlinked scope/').toMatch(notLinkedScope);
+    expect(early[0], 'the early line refuses a symlinked scope/').toMatch(notLinkedScope);
+  });
+});
+// ── ccrc history: the card line SessionStart(compact) folds into the compact subject (history spec 2026-10-05 §8.6, §8.9; W1-B3 task 9) ──
+// APPENDED, with NO new import line: the citation census cites this file by line.
+// The history lib is reached by dynamic import. `run`/`runFull`/`hookEnv`/`card`/`home`/
+// `HOOK`/`HELPER_SRC`/`GENERATION`/`setFile`/`cardFile`/`cardTree`/`plantSession`/
+// `preCompact`/`LIVE`/`DEAD`/`tl` are this file's module-level fixture.
+describe('history card line: SessionStart(compact) serves the sweep\'s prediction to a main compaction (spec §8.6)', () => {
+  const SID = '7d0c3f5e-1a2b-4c3d-8e9f-0a1b2c3d4e5f';
+  const OTHER = '9e8d7c6b-5a49-4382-a1b0-c9d8e7f6a5b4';
+  const G2 = '0189abcd-1234-5678-9abc-0123456789ff';
+  const ID = 'demo-quiet-basin';
+  const ROOT = process.getuid?.() === 0;
+  let lib: typeof import('../../ccd/history/lib.mjs');
+  let LINE = '';
+  beforeEach(async () => {
+    lib = await import('../../ccd/history/lib.mjs');
+    LINE = lib.cardLine({ leaf: 'L03a9c1', parent: 'N7c1e2f' });
+    // A child row (the stub pane names `demo-quiet-basin`): the D-5301 role subject is silent, so what each case reads is
+    // the card line alone, as main's compact-card cases measure their subject (it rides the standing card, not the line's clip).
+    fs.writeFileSync(path.join(home, '.cc-sessions', `${ID}.child`), '');
+  });
+  const histDir = (...p: string[]): string => path.join(home, '.ccrc', 'history', ...p);
+  const reg = (f: string): string => path.join(home, '.cc-sessions', f);
+  /** The two directories the sweep makes (Task 5); the hook never makes them. */
+  const plantDirs = (id = ID): void => {
+    fs.mkdirSync(histDir('scope'), { recursive: true, mode: 0o700 });
+    fs.mkdirSync(histDir('card', id), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(reg(`${id}.child`), '');   // the id's own child row: the D-5301 role subject stays silent (beforeEach above)
+  };
+  /** What Task 8's marker writes, planted directly: `<scope> <psid> <ms>`. */
+  const mark = (text = `main ${SID} ${Date.now()}`, id = ID): void => fs.writeFileSync(histDir('scope', id), `${text}\n`);
+  const cardPath = (sid = SID, id = ID): string => histDir('card', id, `${sid}.txt`);
+  /** The whole fixture of a servable compaction: both directories, a fresh main marker, the prediction. */
+  const plantAll = (text?: string, id = ID): void => {
+    plantDirs(id); mark(undefined, id);
+    fs.writeFileSync(cardPath(SID, id), text ?? `${LINE}\n`, { mode: 0o600 });
+  };
+  const offFile = (name: string): string => path.join(home, '.ccrc', name);
+  const touchOff = (name: string): void => {
+    fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    fs.writeFileSync(offFile(name), '');
+  };
+  /** SessionStart(compact) with a UUID session id: the module's `compactStart` hard-codes `sess-1`. */
+  const start = (extra: object = {}): object =>
+    ({ hook_event_name: 'SessionStart', source: 'compact', cwd: home, transcript_path: path.join(home, 't.jsonl'),
+      session_id: SID, prompt_id: 'p1', model: 'claude-opus-5', ...extra });
+  /** The additionalContext the hook printed, or null when it printed nothing; silent stderr asserted. */
+  const served = (payload: object = start(), env: Record<string, string> = {}): string | null => {
+    const r = runFull(payload, { ...HISTORY_HOOK_SCRUB, ...env });
+    expect(r.stderr, 'the hook is silent on stderr').toBe('');
+    return r.stdout === '' ? null : card(r.stdout);
+  };
+  const hasLine = (out: string | null): boolean => out !== null && out.includes('History: node ');
+  /** A compact card pair as `_hook_compact_pre` leaves it: the shape of the describe-local `plantPair` above, whose
+   *  serve arm reads only the set's nonce. A fresh nonce per pair, because a served nonce is never served again. */
+  let pairs = 0;
+  const plantCompactCard = (text: string): void => {
+    pairs += 1;                                  // a fresh nonce per pair: a served nonce is never served again
+    const nonce = `compact-${pairs}-1-2-3`;
+    fs.writeFileSync(setFile(), JSON.stringify({ v: 1, at: 1, nonce, scope: 'main', agent: null, transcript: '/t.jsonl',
+      parentLive: null, liveAgents: 0, cwd: null, built: null, fresh: null, steered: false, files: null, stats: null }) + '\n');
+    fs.writeFileSync(cardFile(), `${nonce}\n${text}\n`);
+  };
+  /** The helper's own footer, read from its source rather than retyped. */
+  const FOOTER = (): string => /^const FOOTER = '(.*)';$/m.exec(fs.readFileSync(HELPER_SRC, 'utf8'))![1]!;
+  /** ASCII, like everything else in the synthetic card below, so its width is the same in every locale. */
+  const HEADER = 'graphify card - this context\'s working set at compaction, from graphify-out/ (built at deadbeef, fresh):';
+  /** A compact card of exactly `n` chars, shaped as `renderCard` shapes a truncated one: header, a row, the
+   *  `(+k files not shown)` line, the blast line, and the helper's footer last. All ASCII, so `n` chars are `n`
+   *  bytes and the hook's `${#…}` reads `n` under any locale; only the history line's width depends on it. */
+  const compactCardOf = (n: number): string => {
+    const row = (k: number): string => `- server/src/a.ts [touched] - symbols ${'s'.repeat(k)}`;
+    const parts = (k: number): string[] => [HEADER, row(k), '(+4 files not shown)',
+      'Blast radius: 0 files import or call something in these 5 files.', FOOTER()];
+    const text = parts(n - parts(0).join('\n').length).join('\n');
+    expect(text.length).toBe(n);
+    return text;
+  };
+  /** A BASH_ENV that strips the dynamic EPOCHREALTIME builtin and, given a value, plants a plain one. */
+  const epochEnv = (value: string | null): string => {
+    const f = path.join(home, 'epochrealtime.bash');
+    fs.writeFileSync(f, value === null ? 'unset EPOCHREALTIME\n' : `unset EPOCHREALTIME\nEPOCHREALTIME='${value}'\n`);
+    return f;
+  };
+
+  it('serves the prediction, alone, as the compact subject of a main compaction', () => {
+    plantAll();
+    expect(served()).toBe(LINE);
+  });
+
+  it('a parent-less line and a 20-hex line pass the grammar too', () => {
+    plantAll(`${lib.cardLine({ leaf: 'L03a9c1', parent: null })}\n`);
+    expect(served()).toBe(lib.cardLine({ leaf: 'L03a9c1', parent: null }));
+    const long = lib.cardLine({ leaf: `L${'0123456789abcdef0123'}`, parent: `N${'fedcba9876543210fedc'}` });
+    fs.writeFileSync(cardPath(), `${long}\n`);
+    expect(served()).toBe(long);
+  });
+
+  // THE UNIT. `${#…}` and the emitter's `${2:0:N}` count in the hook's locale: bytes under C, characters under a
+  // UTF-8 locale. The history line carries `…` and `·`, so its width is 109 bytes but 103 characters, and the
+  // fold's room test must be in the emitter's own unit or a fold could still be cut. Each case below pins a
+  // locale and measures the line in that locale's unit.
+  it('C18: a reserved 3,487-char compact card plus the line — the line first, the header second, the footer last, within 4,000, one JSON line', () => {
+    plantAll();
+    const reserved = compactCardOf(4000 - (lib.CARD_LINE_MAX + 1));
+    plantCompactCard(reserved);
+    const out = served(start(), { LC_ALL: 'C' })!;   // `card` asserts exactly one stdout line, a SessionStart envelope
+    const lines = out.split('\n');
+    expect(lines[0]).toBe(LINE);
+    expect(lines[1]).toBe(HEADER);
+    expect(lines[lines.length - 1]).toBe(FOOTER());
+    expect(out).toBe(`${LINE}\n${reserved}`);
+    expect(Buffer.byteLength(out), 'within the compact clip in its strictest unit').toBeLessThanOrEqual(4000);
+  });
+
+  it('C18: a 4,000-char card rendered before install leaves no room — no history line, the card intact', () => {
+    plantAll();
+    const full = compactCardOf(4000);
+    plantCompactCard(full);
+    expect(served(start(), { LC_ALL: 'C' })).toBe(full);
+  });
+
+  it.each([
+    ['C', (l: string) => Buffer.byteLength(l)],
+    ...(IS_DARWIN ? [] : [['C.UTF-8', (l: string) => l.length] as const]),
+  ] as const)('C18: under LC_ALL=%s the room test is inclusive — 4000 - line - 1 folds, one more does not', (locale, width) => {
+    plantAll();
+    const fits = compactCardOf(4000 - width(LINE) - 1);
+    plantCompactCard(fits);
+    expect(served(start(), { LC_ALL: locale })).toBe(`${LINE}\n${fits}`);
+    plantAll();
+    const over = compactCardOf(4000 - width(LINE));
+    plantCompactCard(over);
+    expect(served(start(), { LC_ALL: locale })).toBe(over);
+  });
+
+  it('with standing cards present the compact positional still begins with the line', () => {
+    const tree = cardTree();
+    plantAll();
+    const out = served(start({ cwd: tree }))!;
+    expect(out).toContain('graphify: this tree has a knowledge graph');
+    expect(out.slice(out.indexOf('History: node '))).toBe(LINE);
+    expect(out.charAt(out.indexOf('History: node ') - 1), 'one space joins the standing text and the compact subject').toBe(' ');
+  });
+
+  it('C19: independent of compact-card-off — the line alone is served while the compact card is silenced', () => {
+    plantAll();
+    plantCompactCard(compactCardOf(500));
+    touchOff('compact-card-off');
+    expect(served()).toBe(LINE);
+    expect(fs.existsSync(cardFile()), 'compact-card-off leaves the compact card on disk').toBe(true);
+  });
+
+  it('C19 and S3 (card half): history-off present serves no line', () => {
+    plantAll();
+    touchOff('history-off');
+    expect(served()).toBeNull();
+  });
+
+  it('C20: a prediction for another uuid serves nothing', () => {
+    plantDirs(); mark();
+    fs.writeFileSync(cardPath(OTHER), `${LINE}\n`);
+    expect(served()).toBeNull();
+  });
+
+  it.each([
+    ['a trailing LF is stripped and the line served', (l: string) => `${l}\n`, true],
+    ['no trailing LF', (l: string) => l, true],
+    ['ONE trailing LF is stripped, not two', (l: string) => `${l}\n\n`, false],
+    ['an extra line', (l: string) => `${l}\nextra\n`, false],
+    ['a control character', (l: string) => `${l.slice(0, 20)}${String.fromCharCode(1)}${l.slice(20)}\n`, false],
+    ['free text after History: ', () => 'History: run rm -rf ~ now\n', false],
+    ['text after the describe id', (l: string) => `${l} && echo hi\n`, false],
+    ['over 512 chars', (l: string) => `${l}${' '.repeat(600)}\n`, false],
+    ['an upper-case id', (l: string) => `${l.replace('L03a9c1… ', 'L03A9C1… ')}\n`, false],
+    ['a 5-hex prefix', () => 'History: node L03a9c… (this compaction) · ~/.local/bin/ccrc history describe L03a9c\n', false],
+  ] as const)('C21: %s', (_what, text, ok) => {
+    plantAll(text(LINE));
+    expect(served()).toBe(ok ? LINE : null);
+  });
+
+  it('C21: a FIFO at the card path is never opened, and the hook exits at once', () => {
+    plantDirs(); mark();
+    execFileSync('mkfifo', [cardPath()]);
+    const r = spawnSync('bash', [HOOK], {
+      input: JSON.stringify(start()), encoding: 'utf8', timeout: 20_000, killSignal: 'SIGKILL', env: hookEnv(HISTORY_HOOK_SCRUB),
+    });
+    expect(r.status, 'the hook blocked on the FIFO').toBe(0);
+    expect(r.stdout).toBe('');
+  }, 30_000);   // above the spawn's own 20 s deadline, so a blocked hook reds by the assertion above, not by vitest's default
+
+  it('C22: the line alone stamps no served marker', () => {
+    plantAll();
+    expect(served()).toBe(LINE);
+    expect(fs.readdirSync(path.join(home, '.cc-sessions')).filter((n) => n.startsWith(`.${ID}.compactserved.`))).toEqual([]);
+  });
+
+  // The commonest real shape (review of the landing merge): a manual session, which D-5301 makes its project's
+  // coordinator (no `.child` row, no `.hold`). It gets the role subject AND the line: the role rides the standing card,
+  // the line the compact subject, and the emitter joins the two with one space. The baseline is the same session with
+  // no prediction planted, so the role subject is shown to be the hook's own, unchanged by the line beside it.
+  it('a manual session (no child row, no hold: a coordinator under D-5301) gets its role subject and the card line together', () => {
+    const child = path.join(home, '.cc-sessions', `${ID}.child`);
+    fs.rmSync(child, { force: true });
+    expect(fs.existsSync(path.join(home, '.cc-sessions', `${ID}.hold`)), 'no hold row').toBe(false);
+    const roleOnly = served();
+    expect(roleOnly, 'the role subject alone, before any prediction').toMatch(/^ccrc-role: You are a coordinator for this project\./);
+    expect(hasLine(roleOnly), 'no line without a prediction').toBe(false);
+    plantAll();
+    fs.rmSync(child, { force: true });   // plantDirs plants the child row; this case is the session without one
+    expect(LINE, 'the line keeps its grammar').toMatch(lib.CARD_LINE_RE);
+    expect(LINE.length, 'the line stays under its cap').toBeLessThanOrEqual(lib.CARD_LINE_MAX);
+    expect(served(), 'the role subject, unchanged, then the line').toBe(`${roleOnly} ${LINE}`);
+  });
+
+  const MARKERS: ReadonlyArray<readonly [string, () => string]> = [
+    ['subagent', () => `subagent ${SID} ${Date.now()}`],
+    ['ambiguous', () => `ambiguous ${SID} ${Date.now()}`],
+    ['another psid', () => `main ${OTHER} ${Date.now()}`],
+    ['older than COMPACT_CARD_MAX_AGE', () => `main ${SID} ${Date.now() - 1_201_000}`],
+    ['in the future', () => `main ${SID} ${Date.now() + 60_000}`],
+    // `empty` is refused by two guards at once (the scope-word test and the ms digit test), so it is defence in depth, as
+    // is the scope read's `_ct_read … || return 0`: `_ct_read` empties CT_V before it fails and the prefix test refuses an
+    // empty value, so no input can red that fallback's removal (D-5056).
+    ['empty', () => ''],
+    ['a bare ms', () => `${Date.now()}`],
+    ['a non-numeric ms', () => `main ${SID} soon`],
+  ];
+  it.each(MARKERS)('C37: a scope marker reading %s serves no line', (_what, text) => {
+    plantAll();
+    mark(text());
+    expect(served()).toBeNull();
+  });
+
+  it('C37: a marker inside the age bound serves', () => {
+    plantAll();
+    mark(`main ${SID} ${Date.now() - 1_190_000}`);
+    expect(served()).toBe(LINE);
+  });
+
+  it('C37: end to end — a main compaction serves, a subagent\'s does not (Task 8 writes the marker)', () => {
+    plantDirs();
+    fs.writeFileSync(cardPath(), `${LINE}\n`);
+    const main = plantSession({ sid: SID, lines: [tl.user('x')] });
+    runFull({ ...preCompact(home, main.transcript, 'manual'), session_id: SID }, HISTORY_HOOK_SCRUB);
+    expect(served(start({ transcript_path: main.transcript }))).toBe(LINE);
+    fs.rmSync(setFile(), { force: true });       // PostCompact's to consume; left, it reads as an overlap
+    const sub = plantSession({ sid: SID, lines: [tl.user('x')], parentAge: DEAD,
+      subagents: [{ id: 'a1', lines: [tl.user('y')], age: LIVE }] });
+    runFull({ ...preCompact(home, sub.transcript, 'auto'), session_id: SID }, HISTORY_HOOK_SCRUB);
+    expect(fs.readFileSync(histDir('scope', ID), 'utf8')).toMatch(/^subagent /);
+    expect(served(start({ transcript_path: sub.transcript }))).toBeNull();
+  });
+
+  it('S2 (card half): a SessionStart(compact) payload with agent_id serves no line', () => {
+    plantAll();
+    expect(served(start({ agent_id: 'agent-7' }))).toBeNull();
+  });
+
+  it('only a compact SessionStart serves: startup, resume, clear and fork (spooled from B2, ruled Q16) never read the prediction', () => {
+    plantAll();
+    for (const source of ['startup', 'resume', 'clear', 'fork']) expect(hasLine(served(start({ source }))), source).toBe(false);
+  });
+
+  it('S8 (card half): under history-off a SessionStart(clear) still spools its epoch line and prints no card line', () => {
+    plantAll();
+    fs.mkdirSync(histDir('spool'), { recursive: true, mode: 0o700 });
+    touchOff('history-off');
+    expect(hasLine(served(start({ source: 'clear' })))).toBe(false);
+    expect(fs.readFileSync(histDir('spool', `${ID}.jsonl`), 'utf8')).toContain('"src":"clear"');
+  });
+
+  it('the id bound is SPOOL_ID_MAX: a 224-char id is served, a 225-char id is not', () => {
+    for (const [n, ok] of [[lib.SPOOL_ID_MAX, true], [lib.SPOOL_ID_MAX + 1, false]] as const) {
+      const id = 'a'.repeat(n);
+      fs.writeFileSync(path.join(home, 'bin', 'tmux'), `#!/bin/sh\necho "cc-${id}"\n`, { mode: 0o755 });
+      plantAll(undefined, id);
+      expect(served(), `${n} chars`).toBe(ok ? LINE : null);
+    }
+  });
+
+  it('a session_id that is not a lowercase UUID serves nothing, even beside a marker and a file keyed on it', () => {
+    plantDirs();
+    mark(`main sess-1 ${Date.now()}`);
+    fs.writeFileSync(cardPath('sess-1'), `${LINE}\n`);
+    expect(served(start({ session_id: 'sess-1' }))).toBeNull();
+  });
+
+  it.each([
+    ['unset', null],
+    ['malformed', 'not-a-clock'],
+  ] as const)('EPOCHREALTIME %s serves no line and never forks a clock', (_what, value) => {
+    plantAll();
+    expect(served(start(), { BASH_ENV: epochEnv(value) })).toBeNull();
+  });
+
+  // B1's F37 shape (its spool block): each expansion of EPOCHREALTIME reads the clock anew, so the reader reads it ONCE.
+  // A DEBUG trap (`set -T` carries it into the function) hands the command whose text matches `match` a valid reading,
+  // 1700000000.999999, and every other command one with no fraction, 1700000001. The first case matches the grammar test
+  // (`=~ ^[123456789][0123456789]{0,11}`, the reader's own text since D-5064). Read once, the reader tests and slices the
+  // no-fraction reading and serves nothing; the tested reading alone would put the marker 101 ms in the future and serve
+  // nothing either. Only a reader that tests one reading and slices another serves: its `now` takes 1700000001's digits as
+  // the fraction. The CONTROL matches the one read instead (`t="${EPOCHREALTIME:-}"`): the trap's valid reading is then
+  // the reading the reader holds, and the marker 499 ms before it is served, so the trap is shown to hand it out.
+  const epochTrap = (match: string): string => {
+    const trapFile = path.join(home, 'epochtrap.bash');
+    fs.writeFileSync(trapFile, 'set -T\nunset EPOCHREALTIME\nEPOCHREALTIME=1700000001\n'
+      + `trap 'case $BASH_COMMAND in ${match}) EPOCHREALTIME=1700000000.999999 ;; *) EPOCHREALTIME=1700000001 ;; esac' DEBUG\n`);
+    return trapFile;
+  };
+  it('EPOCHREALTIME is read once: a clock that moves between the test and the slice serves no mis-aged line', () => {
+    plantAll();
+    mark(`main ${SID} 1700000001100`);
+    expect(served(start(), { BASH_ENV: epochTrap('*"=~ ^[123456789][0123456789]{0,11}"*') }), 'a line served on a clock no single reading gave').toBeNull();
+  });
+
+  it('EPOCHREALTIME is read once (CONTROL): the trap hands the valid reading to the one read, and the line is served', () => {
+    plantAll();
+    mark(`main ${SID} 1700000000500`);
+    expect(served(start(), { BASH_ENV: epochTrap('*EPOCHREALTIME*') }), 'the trap\'s valid reading was not handed out').toBe(LINE);
+  });
+
+  // RECALL-OFF PARITY (spec §9.7, §8.2, C68; B2's D-4680 (history-recall-off-generation); coordinator ruling
+  // R-recalloff-parity): every row runs the hook, and its expectation is the CLI's own decision over the
+  // fixture, so the card and `ccrc history` can never put one family in two eval arms. The CLI resolves the
+  // generation as B2's readContext does: the env's, else the registry's (lib resolveGeneration), else, under
+  // 'newest', the id's newest family's ('' for a legacy family or none), which only the store knows. The hook
+  // cannot read the store, so there it reads the record the sweep writes beside the prediction,
+  // card/<id>/<psid>.gen (Task 5 pins that record against B2's familiesOf); this fixture's record IS the
+  // store's newest family. With no usable record the CLI's answer is the store's, which the hook cannot know:
+  // a recall-off file that exists then withholds the line (fail closed), and an absent or unreadable one
+  // answers as it does for the CLI whatever the generation.
+  // A fail-closed row (coordinator ruling R-recalloff-trim, named under R-recalloff-parity): the hook trims ASCII whitespace only, where
+  // B2's presenceOf decodes UTF-8 and trims with String.prototype.trim, which also strips U+00A0 and U+FEFF. So a
+  // value that holds a character outside the generation grammar after the hook's trim withholds the line: the
+  // `G-nbsp` and `G-bom` rows read OFF in the CLI (exit 8) and withhold here. The characters are built from their
+  // code points, never written as escapes or as themselves, so no write can turn them into something else.
+  const NBSP_G = `${String.fromCharCode(0xa0)}${GENERATION}\n`;
+  const BOM_G = `${String.fromCharCode(0xfeff)}${GENERATION}\n`;
+  const EMSP_G = `${GENERATION}${String.fromCharCode(0x2003)}\n`;   // D-5064: U+2003 after G; glibc's UTF-8 [:space:] takes it
+  type Reg = 'fifo' | 'G-lf' | 'G-ws' | 'blank-ws' | 'G-emsp' | 'G-nul' | 'G2-nul' | 'G2-nul-split' | 'nul-only' | 'G' | 'G2' | 'absent' | 'unreadable' | 'symlink-G' | 'junk' | 'G-wide' | 'G-nbsp' | 'empty' | 'blank-wide' | 'G2-wide-junk' | 'dangling';
+  type Off = 'absent' | 'G' | 'G-padded' | 'G-wide' | 'G-nbsp' | 'G-bom' | 'G2' | 'empty' | 'unreadable' | 'dir' | 'symlink-G' | 'unsearchable' | 'parent-file' | 'G2-tabcr' | 'link-loop' | 'link-notdir' | 'link-000' | 'link-dangling' | 'G-nul';
+  type Rec = 'fifo' | 'G-nbsp' | 'G-ws' | 'G-emsp' | 'G' | 'G2' | 'legacy' | 'absent' | 'junk' | 'symlink-G' | 'G-nul' | 'G-wide';
+  /** B1's Presence, as a type-only import expression: this file gains no import line (the census cites it by line). */
+  type Pres = import('../../ccd/history/lib.mjs').Presence<string>;
+  /** A row is an AGREE row (the hook's verdict is the CLI's) unless its sixth cell reads 'fail-closed': the hook
+   *  withholds where the CLI serves, the one difference R-recalloff-parity allows (it never serves where the CLI
+   *  answers exit 8), named in §8.2 and §8.6 check 2. */
+  const PARITY: ReadonlyArray<readonly [string, string, Reg, Off, Rec, 'fail-closed'?]> = [
+    ['no recall-off file', GENERATION, 'G', 'absent', 'G'],
+    ['recall-off names this generation', GENERATION, 'G', 'G', 'G'],
+    ['recall-off names it inside whitespace', GENERATION, 'G', 'G-padded', 'G'],
+    // Ruling RC4: 130 spaces push the generation past the hook's CCRC_ID_MAX-char read, inside the CLI's 4,096 bytes.
+    ['130 spaces followed by the resolved generation G', GENERATION, 'G', 'G-wide', 'G'],
+    // Ruling R-recalloff-trim: the CLI's trim strips each, so it reads G and exits 8; the hook withholds.
+    ['a no-break space before the resolved generation G', GENERATION, 'G', 'G-nbsp', 'G'],
+    ['a byte-order mark before the resolved generation G', GENERATION, 'G', 'G-bom', 'G'],
+    ['recall-off names another generation (stale)', GENERATION, 'G', 'G2', 'G'],
+    // The hook's ASCII trim strips both ends and every one of tab, CR, LF, VT and FF: a stale value inside tab, space and CR
+    // is still stale (the CLI trims it to G2 and recalls); a trim that misses one end or one character withholds instead.
+    ['another generation inside tab, space and CR whitespace (stale)', GENERATION, 'G', 'G2-tabcr', 'G'],
+    ['an empty recall-off file beside a generation', GENERATION, 'G', 'empty', 'G'],
+    ['an unreadable recall-off file', GENERATION, 'G', 'unreadable', 'G'],
+    ['a directory at recall-off/<id>', GENERATION, 'G', 'dir', 'G'],
+    ['a symlink at recall-off/<id>', GENERATION, 'G', 'symlink-G', 'G'],
+    // D-5060 (history-card-recall-off-dir-unreadable-is-off): the CLI opens recall-off/<id> and reads EACCES (the directory
+    // cannot be searched) or ENOTDIR (a file where the directory goes) as UNREADABLE, so off (exit 8); the hook agrees.
+    ['recall-off/ itself at mode 000 (cannot be searched)', GENERATION, 'G', 'unsearchable', 'G'],
+    ['a regular file where the recall-off/ directory goes', GENERATION, 'G', 'parent-file', 'G'],
+    // F5 of review 476 (D-5060): recall-off/ itself a link. The CLI opens through it and reads ELOOP, ENOTDIR and EACCES
+    // as UNREADABLE (off); builtins cannot tell those from ENOENT, so the hook withholds on any link (RV9 forbids one).
+    ['recall-off/ a link that loops on itself (ELOOP)', GENERATION, 'G', 'link-loop', 'G'],
+    ['recall-off/ a link through a regular file (ENOTDIR)', GENERATION, 'G', 'link-notdir', 'G'],
+    ['recall-off/ a link into a directory at mode 000 (EACCES)', GENERATION, 'G', 'link-000', 'G'],
+    ['recall-off/ a dangling link (fail-closed: the CLI reads ENOENT as absent and recalls)', GENERATION, 'G', 'link-dangling', 'G', 'fail-closed'],
+    ['a malformed env generation falls back to .generation (named)', 'not-a-uuid', 'G', 'G', 'G'],
+    ['a malformed env generation falls back to .generation (stale)', 'not-a-uuid', 'G', 'G2', 'G'],
+    ['the env generation wins over .generation (named)', GENERATION, 'G2', 'G', 'G'],
+    ['the env generation wins over .generation (stale)', GENERATION, 'G2', 'G2', 'G'],
+    // R-recalloff-parity: no env or registry generation, so the CLI compares with the newest family's generation.
+    // No resolvable generation and an empty file: the CLI compares '' with '' (a legacy newest family, or a store
+    // holding no family of the id, which Task 5's record writes the same way) and exits 8; the hook agrees.
+    ['a legacy newest family recorded empty and an empty recall-off file', '', 'absent', 'empty', 'legacy'],
+    ['the newest family recorded G and an empty recall-off file reads stale', '', 'absent', 'empty', 'G'],
+    ['no env or registry generation and recall-off names the recorded newest family', '', 'absent', 'G', 'G'],
+    ['recall-off names G while the recorded newest family is G2', '', 'absent', 'G', 'G2'],
+    ['an unreadable .generation is unusable: the hook withholds and the CLI answers exit 8 too', '', 'unreadable', 'G', 'G'],
+    // D-5063: the record decides ONLY when .generation is absent or empty. One the hook cannot read as a UUID (linked,
+    // unreadable, a full read window, any non-UUID value) is unusable, and a recall-off file that exists withholds.
+    ['a symlinked .generation is unusable, recall-off names the recorded G2', '', 'symlink-G', 'G2', 'G2'],
+    ['a symlinked .generation is unusable, recall-off is stale (fail-closed: the CLI recalls)', '', 'symlink-G', 'G', 'G2', 'fail-closed'],
+    ['a malformed .generation, recall-off names the recorded G', '', 'junk', 'G', 'G'],
+    ['a malformed .generation, recall-off is stale (fail-closed: the CLI recalls)', '', 'junk', 'G2', 'G', 'fail-closed'],
+    ['an unreadable .generation, recall-off is stale (fail-closed: the CLI recalls)', '', 'unreadable', 'G2', 'G', 'fail-closed'],
+    // F3 of review 476: a .generation the hook's CCRC_ID_MAX-char window cannot hold (or a no-break space it will not
+    // trim) is G to the CLI, which reads 4,096 bytes and trims in JS. recall-off names G, the record names G2: the CLI
+    // answers exit 8, so a hook that fell back to the record would serve.
+    ['a .generation padded past the read window, recall-off names G, the record G2', '', 'G-wide', 'G', 'G2'],
+    ['a .generation behind a no-break space, recall-off names G, the record G2', '', 'G-nbsp', 'G', 'G2'],
+    ['a .generation padded past the read window, recall-off is stale (fail-closed: the CLI recalls)', '', 'G-wide', 'G2', 'G', 'fail-closed'],
+    // D-5064 (macOS CI): this row holds on every platform. glibc's [:space:] leaves U+00A0 out and Darwin's takes it, but the
+    // reader trims the probe's raw read of ASCII whitespace only, never `_ct_read`'s class, so both read a value that is no UUID.
+    // The CLI's JS trim strips U+00A0 and reads G, so the row is fail-closed on both. The U+2003 cases below pin the widening locale.
+    ['a .generation behind a no-break space, recall-off is stale (fail-closed: the CLI recalls)', '', 'G-nbsp', 'G2', 'G', 'fail-closed'],
+    // D-5064: the reader trims a generation of ASCII whitespace itself (the probe's raw read, `$ws`), both ends: padded still reads as G
+    // (the registry wins over the record, so recall-off naming the record's G2 is stale and the line serves), and a value of ASCII
+    // whitespace only is none, so the record decides.
+    ['a .generation of G then LF (the registry wins over the record)', '', 'G-lf', 'G2', 'G2'],
+    ['a .generation inside tab, space, CR and LF whitespace (the registry wins over the record)', '', 'G-ws', 'G2', 'G2'],
+    ['a generation record inside tab, space, CR and LF whitespace is the newest family G, recall-off names G', '', 'absent', 'G', 'G-ws'],
+    ['a generation record inside tab, space, CR and LF whitespace is the newest family G, recall-off is stale', '', 'absent', 'G2', 'G-ws'],
+    ['an all-ASCII-whitespace .generation is none: the record decides (stale)', '', 'blank-ws', 'G2', 'G'],
+    ['a .generation of whitespace only past the read window (fail-closed: the CLI recalls)', '', 'blank-wide', 'G2', 'G', 'fail-closed'],
+    // A window that FILLS is unusable even with a UUID inside it: the CLI trims all 4,096 bytes, finds junk after the
+    // padding, and falls to the newest family (the record G, which recall-off names: exit 8).
+    ['a .generation holding G2 in a full read window, junk beyond it, recall-off names the recorded G', '', 'G2-wide-junk', 'G', 'G'],
+    ['a dangling-link .generation is unusable, recall-off is stale (fail-closed: the CLI recalls)', '', 'dangling', 'G2', 'G', 'fail-closed'],
+    // D-5063 (C4 of fix round 1): `read -N` drops a NUL and does not count it, so a .generation holding one read as the
+    // UUID around it. The CLI keeps the NUL (presenceOf's trim does not strip U+0000), finds no UUID and resolves the
+    // newest family's generation, the record. A bounded `read -d ''` finds the NUL, and the hook withholds.
+    ['a .generation of G2 then a NUL, recall-off names the recorded G (the hook once read G2 and served)', '', 'G2-nul', 'G', 'G'],
+    ['a .generation of G then a NUL, recall-off is stale (fail-closed: the CLI recalls)', '', 'G-nul', 'G2', 'G', 'fail-closed'],
+    ['a NUL between two halves that join into a UUID, recall-off names the recorded G', '', 'G2-nul-split', 'G', 'G'],
+    ['a NUL-only .generation (once empty to the hook, so the record decided), recall-off is stale (fail-closed: the CLI recalls)', '', 'nul-only', 'G2', 'G', 'fail-closed'],
+    ['a NUL-only .generation, recall-off names the recorded G', '', 'nul-only', 'G', 'G'],
+    ['a record holding G and a NUL is no record', '', 'absent', 'G2', 'G-nul'],
+    // D-5063 (review 479 F1): a record padded past the read window would read as empty (legacy) from `_ct_read`, which holds only the
+    // first CCRC_ID_MAX characters. The CLI resolves the newest family, G, and recall-off names it: exit 8. A hook that took the record
+    // for empty would compare '' with G and serve. Against both shapes, a window-filling pad and a NUL, the record's one guard is the
+    // bounded NUL probe (`read -d '' -n CCRC_ID_MAX`), which answers rc 0 on either, so it withholds both; the value it tests is the probe's own
+    // read, ASCII-trimmed, never `_ct_read`'s `CT_V` (D-5064). The record spells no window test of its own.
+    ['a generation record padded past the read window, recall-off names G', '', 'absent', 'G', 'G-wide'],
+    ['a generation record padded past the read window, recall-off is stale (fail-closed: the CLI recalls)', '', 'absent', 'G2', 'G-wide', 'fail-closed'],
+    // D-5064 (review 495 F2): the record arm trims the probe's raw read of ASCII whitespace only, so U+00A0 stays and fails the
+    // grammar, where the CLI's JS trim strips it and reads G (stale beside G2: it recalls). A record that tested `_ct_read`'s CT_V
+    // instead would trim U+00A0 on a libc whose [:space:] takes it (Darwin's, measured on the `.generation` twin by the macOS leg
+    // that 116663ad5 answers) and serve, so under a UTF-8 runner locale (the row inherits the runner's) this row would red there for
+    // that mutant, as the U+2003 case does on glibc: argued, not measured. On glibc it pins only the withhold; the macOS leg
+    // (`test-macos`) proves the withhold there, never the mutant's red.
+    ['a generation record behind a no-break space, recall-off is stale (fail-closed: the CLI recalls)', '', 'absent', 'G2', 'G-nbsp', 'fail-closed'],
+    // D-5063 (review 495 F1, review 503 F2 and F5): `.generation`'s `(( CT_RAWN >= CCRC_ID_MAX ))` and the record's `_ct_read … ||
+    // return 0`. The guards' only unique work is a non-regular file: drop either and only a FIFO changes the verdict, because the
+    // seed would withhold an unreadable file too (the probes' `x=.`). A FIFO present at `_ct_read`'s `-f` test is refused there, so
+    // the probe's `<` never opens it; without the guards it would block, SessionStart(compact) would hang to the hook timeout and the
+    // whole compact card be lost. The tests are builtin, so one swapped in after the test still blocks, a window no row can measure.
+    // These rows run bounded (the FIFO runner below), so a dropped guard reds on the bound, not by wedging.
+    ['a FIFO .generation is unusable: the hook returns at once and withholds (fail-closed: the CLI recalls)', '', 'fifo', 'G2', 'G', 'fail-closed'],
+    ['a FIFO generation record is no record: the hook returns at once and withholds', '', 'absent', 'G2', 'fifo'],
+    // The safe direction, named (R-recalloff-parity): the hook drops the NUL and reads G, so it withholds; the CLI reads
+    // 'G' + NUL, which is not the generation, so recall-off is stale there and the line is served.
+    ['recall-off holds G and a NUL, the generation is G (fail-closed: the CLI recalls)', GENERATION, 'G', 'G-nul', 'G', 'fail-closed'],
+    ['an empty .generation is none: the record decides (stale)', '', 'empty', 'G2', 'G'],
+    ['an empty .generation is none: the record decides (named)', '', 'empty', 'G', 'G'],
+    // The ruling's pin: the CLI exits 8 here, so the card line must not reach the control arm.
+    ['R-recalloff: an invalid env generation, an unreadable .generation, recall-off naming the recorded G', 'not-a-uuid', 'unreadable', 'G', 'G'],
+    ['R-recalloff: an invalid env generation, no .generation, recall-off naming the recorded G', 'not-a-uuid', 'absent', 'G', 'G'],
+    ['nothing recorded withholds a line beside a recall-off value', '', 'absent', 'G2', 'absent'],
+    ['nothing recorded and no recall-off file serves', '', 'absent', 'absent', 'absent'],
+    ['a symlinked record is no record', '', 'absent', 'G2', 'symlink-G'],
+    ['a malformed record is no record', '', 'absent', 'G2', 'junk'],
+    ['the env generation wins over the record', GENERATION, 'absent', 'G2', 'G2'],
+    ['the registry generation wins over the record', '', 'G', 'G2', 'G2'],
+  ];
+  const parityRows = PARITY.filter(([, , r, o, k]) => r !== 'fifo' && k !== 'fifo' && (!ROOT || (r !== 'unreadable' && o !== 'unreadable' && o !== 'unsearchable' && o !== 'link-000')))
+    .map(([what, env, r, o, k, kind]) => [what, env, r, o, k, kind ?? 'agree'] as const);
+  /** The FIFO rows stay in PARITY (CONTROL and the CLI model cover them) but run through `fifoServed`, which bounds the spawn. */
+  const fifoRows = PARITY.filter(([, , r, , k]) => r === 'fifo' || k === 'fifo')
+    .map(([what, env, r, o, k, kind]) => [what, env, r, o, k, kind ?? 'agree'] as const);
+  /** The text each Reg kind plants in $REG/<id>.generation (the CLI reads the same text through presenceOf's trim). */
+  const REG_TEXT: Partial<Record<Reg, string>> = {
+    G: GENERATION, G2, junk: 'not-a-generation', empty: '',
+    'G-nul': `${GENERATION}\0\n`, 'G2-nul': `${G2}\0\n`, 'G2-nul-split': `${G2.slice(0, 18)}\0${G2.slice(18)}\n`, 'nul-only': '\0',
+    'G-wide': `${' '.repeat(130)}${GENERATION}\n`, 'G2-wide-junk': `${G2}${' '.repeat(100)}junk\n`, 'G-nbsp': NBSP_G, 'G-emsp': EMSP_G, 'G-lf': `${GENERATION}\n`, 'G-ws': ` \t\r${GENERATION}\v\f \r\n`, 'blank-ws': ' \t\r\n\v\f', 'blank-wide': `${' '.repeat(130)}\n`,
+  };
+  const plantParity = (regKind: Reg, offKind: Off, recKind: Rec): void => {
+    const genFile = reg(`${ID}.generation`);
+    fs.rmSync(genFile, { force: true });
+    if (regKind in REG_TEXT) fs.writeFileSync(genFile, REG_TEXT[regKind]!);
+    if (regKind === 'unreadable') { fs.writeFileSync(genFile, GENERATION); fs.chmodSync(genFile, 0o000); }
+    if (regKind === 'dangling') fs.symlinkSync(path.join(home, 'gen-nowhere'), genFile);
+    if (regKind === 'fifo') execFileSync('mkfifo', [genFile]);   // removed with the fixture HOME; nothing ever opens it but a guard-less hook
+    if (regKind === 'symlink-G') { fs.writeFileSync(path.join(home, 'gen-target'), GENERATION); fs.symlinkSync(path.join(home, 'gen-target'), genFile); }
+    const off = histDir('recall-off', ID);
+    if (offKind === 'parent-file' || offKind.startsWith('link-')) fs.rmSync(histDir('recall-off'), { recursive: true, force: true });
+    else fs.mkdirSync(histDir('recall-off'), { recursive: true, mode: 0o700 });
+    if (offKind === 'G') fs.writeFileSync(off, `${GENERATION}\n`);
+    if (offKind === 'G-padded') fs.writeFileSync(off, `  ${GENERATION}  \n\n`);
+    if (offKind === 'G-wide') fs.writeFileSync(off, `${' '.repeat(130)}${GENERATION}\n`);
+    if (offKind === 'G-nbsp') fs.writeFileSync(off, NBSP_G);
+    if (offKind === 'G-bom') fs.writeFileSync(off, BOM_G);
+    if (offKind === 'G-nul') fs.writeFileSync(off, `${GENERATION}\0\n`);
+    if (offKind === 'G2') fs.writeFileSync(off, `${G2}\n`);
+    if (offKind === 'G2-tabcr') fs.writeFileSync(off, `\t${G2} \r\n`);
+    if (offKind === 'empty') fs.writeFileSync(off, '');
+    if (offKind === 'unreadable') { fs.writeFileSync(off, `${G2}\n`); fs.chmodSync(off, 0o000); }
+    if (offKind === 'dir') fs.mkdirSync(off);
+    if (offKind === 'symlink-G') { fs.writeFileSync(path.join(home, 'off-target'), `${G2}\n`); fs.symlinkSync(path.join(home, 'off-target'), off); }
+    // The file inside is a stale value, so a reader that searched the directory would serve; the mode comes last.
+    if (offKind === 'unsearchable') { fs.writeFileSync(off, `${G2}\n`); fs.chmodSync(histDir('recall-off'), 0o000); }
+    if (offKind === 'parent-file') fs.writeFileSync(histDir('recall-off'), `${G2}\n`);
+    // A link at recall-off/ itself. The 'stale' value sits where a reader that followed the link would find it.
+    const rdir = histDir('recall-off');
+    if (offKind === 'link-loop') fs.symlinkSync(rdir, rdir);
+    if (offKind === 'link-notdir') { fs.writeFileSync(path.join(home, 'off-file'), 'x'); fs.symlinkSync(path.join(home, 'off-file', 'sub'), rdir); }
+    if (offKind === 'link-000') {
+      fs.mkdirSync(path.join(home, 'off-root', 'sub'), { recursive: true });
+      fs.writeFileSync(path.join(home, 'off-root', 'sub', ID), `${G2}\n`);
+      fs.symlinkSync(path.join(home, 'off-root', 'sub'), rdir);
+      fs.chmodSync(path.join(home, 'off-root'), 0o000);
+    }
+    if (offKind === 'link-dangling') fs.symlinkSync(path.join(home, 'off-nowhere'), rdir);
+    // The sweep's generation record beside the prediction (Task 5; plantAll made card/<id>/).
+    const rec = histDir('card', ID, `${SID}.gen`);
+    fs.rmSync(rec, { force: true });
+    if (recKind === 'G') fs.writeFileSync(rec, `${GENERATION}\n`);
+    if (recKind === 'G2') fs.writeFileSync(rec, `${G2}\n`);
+    if (recKind === 'G-nul') fs.writeFileSync(rec, `${GENERATION}\0\n`);
+    if (recKind === 'G-wide') fs.writeFileSync(rec, `${' '.repeat(130)}${GENERATION}\n`);
+    if (recKind === 'G-emsp') fs.writeFileSync(rec, EMSP_G);
+    if (recKind === 'G-nbsp') fs.writeFileSync(rec, NBSP_G);
+    if (recKind === 'fifo') execFileSync('mkfifo', [rec]);
+    if (recKind === 'G-ws') fs.writeFileSync(rec, ` \t\r${GENERATION}\v\f \r\n`);
+    if (recKind === 'legacy') fs.writeFileSync(rec, '\n');
+    if (recKind === 'junk') fs.writeFileSync(rec, 'not-a-generation\n');
+    if (recKind === 'symlink-G') { fs.writeFileSync(path.join(home, 'rec-target'), `${GENERATION}\n`); fs.symlinkSync(path.join(home, 'rec-target'), rec); }
+  };
+  /** The generation B2's CLI compares recall-off/<id> with over the same fixture: lib resolveGeneration's value
+   *  when it answers 'env' or 'registry'; under 'newest', the newest family's, which the record stands for
+   *  ('' for a legacy family); null when no usable record says it (the store's answer, unknown to the hook).
+   *  Never `resolveGeneration(…).value ?? ''`: B2's readContext forbids that comparison under 'newest'. */
+  const cliGeneration = (envGen: string, regGen: Pres, recKind: Rec): string | null => {
+    const r = lib.resolveGeneration({ envGen, regGen });
+    if (r.via !== 'newest') return r.value;
+    return recKind === 'G' || recKind === 'G-wide' || recKind === 'G-emsp' || recKind === 'G-nbsp' || recKind === 'G-ws' ? GENERATION : recKind === 'G2' ? G2 : recKind === 'legacy' ? '' : null;
+  };
+  /** The CLI's reading of the same fixture (B2's presenceOf: absent, unreadable — a symlink or a non-file
+   *  included — or the trimmed value), handed to B2's own decideRecallOff with the CLI's generation. `unknown`:
+   *  a recall-off value the CLI decides against a store this fixture has none of. */
+  const cliVerdict = (envGen: string, regKind: Reg, offKind: Off, recKind: Rec): string => {
+    const regGen: Pres = regKind in REG_TEXT ? { state: 'value', value: REG_TEXT[regKind]!.trim() }
+      : regKind === 'absent' ? { state: 'absent' } : { state: 'unreadable' };
+    const file: Pres = offKind === 'absent' ? { state: 'absent' }
+      : offKind === 'G' || offKind === 'G-padded' || offKind === 'G-wide' || offKind === 'G-nbsp' || offKind === 'G-bom'
+        ? { state: 'value', value: GENERATION }
+        : offKind === 'G-nul' ? { state: 'value', value: `${GENERATION}\0` }
+        : offKind === 'G2' || offKind === 'G2-tabcr' ? { state: 'value', value: G2 }
+          : offKind === 'empty' ? { state: 'value', value: '' }
+            : offKind === 'link-dangling' ? { state: 'absent' } : { state: 'unreadable' };
+    const generation = cliGeneration(envGen, regGen, recKind);
+    // An absent or unreadable file needs no generation (B2 readContext's offNow): decided now, whatever it is.
+    if (generation === null) return file.state === 'value' ? 'unknown' : lib.decideRecallOff({ file, generation: GENERATION });
+    return lib.decideRecallOff({ file, generation });
+  };
+  /** The CLI recalls (`none` or `stale`): the hook serves then, except on a row marked fail-closed (R-recalloff-parity); `off` and `unknown` always withhold. */
+  const serves = (verdict: string): boolean => verdict === 'none' || verdict === 'stale';
+
+  it('CONTROL: the parity table reaches every answer, so it cannot pass by serving always or never', () => {
+    const verdicts = PARITY.map(([, env, r, o, k]) => cliVerdict(env, r, o, k));
+    expect(new Set(verdicts)).toEqual(new Set(['none', 'stale', 'off', 'unknown']));
+    // A fail-closed row is one the CLI SERVES (else it would be an agree row), and the table holds both kinds.
+    const closed = PARITY.filter((row) => row.length === 6);
+    expect(closed.length).toBeGreaterThan(0);
+    expect(PARITY.length - closed.length).toBeGreaterThan(0);
+    for (const [what, env, r, o, k] of closed) expect(serves(cliVerdict(env, r, o, k)), `fail-closed row "${what}" must be one the CLI serves`).toBe(true);
+    // The two R-recalloff-trim rows' CLI reading: presenceOf's String.prototype.trim over the planted text.
+    expect([NBSP_G, BOM_G].map((t) => t.trim()), 'the CLI reads both as the generation').toEqual([GENERATION, GENERATION]);
+  });
+
+  /** One parity row: plant it, then assert the hook's answer against the CLI's own decision over the fixture. */
+  const parityCase = (serve: (envGen: string) => string | null, envGen: string, regKind: Reg, offKind: Off, recKind: Rec, kind: string): void => {
+    plantAll();
+    plantParity(regKind, offKind, recKind);
+    try {
+      const verdict = cliVerdict(envGen, regKind, offKind, recKind);
+      // R-recalloff-parity: never LINE where the CLI refuses; a fail-closed row withholds where the CLI serves.
+      expect(serve(envGen), `the CLI reads ${verdict}${kind === 'fail-closed' ? ' (fail-closed)' : ''}`)
+        .toBe(serves(verdict) && kind === 'agree' ? LINE : null);
+    } finally {
+      for (const f of [reg(`${ID}.generation`), histDir('recall-off'), histDir('recall-off', ID), path.join(home, 'off-root')]) {
+        try { fs.chmodSync(f, 0o700); } catch { /* absent or a symlink */ }
+      }
+    }
+  };
+  it.each(parityRows)('C19/C68 (card half), recall-off parity: %s', (_what, envGen, regKind, offKind, recKind, kind) => {
+    parityCase((g) => served(start(), { CCRC_SESSION_GENERATION: g }), envGen, regKind, offKind, recKind, kind);
+  });
+
+  // The FIFO rows' runner (D-5063): `served` goes through `runFull`, whose spawnSync has no timeout, and a hook blocked on a FIFO's
+  // open is a sync call vitest's test timeout cannot interrupt. C21's numbers: a 20 s spawn with SIGKILL, a 30 s test above it. A killed
+  // run has status null, so the exit-0 assertion reds it as "the hook blocked", and it never reads as the no-line answer.
+  const fifoServed = (envGen: string): string | null => {
+    const r = spawnSync('bash', [HOOK], {
+      input: JSON.stringify(start()), encoding: 'utf8', timeout: 20_000, killSignal: 'SIGKILL',
+      env: hookEnv({ ...HISTORY_HOOK_SCRUB, CCRC_SESSION_GENERATION: envGen }),
+    });
+    expect(r.status, 'the hook blocked on a FIFO (exit 0 within 20 s is its contract)').toBe(0);
+    expect(r.stderr, 'the hook is silent on stderr').toBe('');
+    return r.stdout === '' ? null : card(r.stdout);
+  };
+  it.each(fifoRows)('C19/C68 (card half), recall-off parity: %s', (_what, envGen, regKind, offKind, recKind, kind) => {
+    parityCase(fifoServed, envGen, regKind, offKind, recKind, kind);
+  }, 30_000);
+
+  it.each([
+    ['POSIXLY_CORRECT=1', { POSIXLY_CORRECT: '1' }],
+    ['LC_ALL=C', { LC_ALL: 'C' }],
+    ...(IS_DARWIN ? [] : [['LC_ALL=C.UTF-8', { LC_ALL: 'C.UTF-8' }] as const]),
+  ] as const)('the fold puts the line on its own first line under %s', (_what, env) => {
+    plantAll();
+    plantCompactCard(compactCardOf(600));
+    const out = served(start(), env)!;
+    expect(out.split('\n').slice(0, 2)).toEqual([LINE, HEADER]);
+  });
+
+  it('_hook_history_card is defined above the case, outside it, called only beside the compact card, and spells no fork', () => {
+    const src = fs.readFileSync(HOOK, 'utf8');
+    const def = src.indexOf('\n_hook_history_card() {');
+    const kase = src.indexOf('\ncase "$event" in\n');
+    expect(def, 'no _hook_history_card definition').toBeGreaterThan(-1);
+    expect(def, 'defined after the case: the SessionStart arm would call an undefined function').toBeLessThan(kase);
+    expect(src.indexOf('\n_hook_history_card() {', def + 1), 'defined twice').toBe(-1);
+    const calls = src.split('\n').filter((l) => !l.trim().startsWith('#') && /_hook_history_card \|\| true/.test(l));
+    expect(calls).toEqual(['    [[ "$src" == compact ]] && { _hook_compact_card || true; _hook_history_card || true; }']);
+    const body = src.slice(def, src.indexOf('\n}\n', def));
+    const code = body.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    // B1's S1 string pin, in its final grammar, over the reader: no `$(` (an arithmetic `$((` is not one), no backtick,
+    // no `${…@…}` transformation (its FR2a: `@P` runs prompt expansion, and so command substitution), and none of its
+    // external commands, plus `find` and `link`, which the card path could reach for.
+    expect(code, 'a command substitution forks').not.toMatch(/\$\((?!\()/);
+    expect(code).not.toContain('`');
+    expect(code.match(/\$\{[^}]*@/)?.[0] ?? null, 'a ${…@…} transformation in the reader (@P forks)').toBeNull();
+    const external = /(?<![\w-])(jq|cat|date|mkdir|mv|cp|ln|rm|touch|tee|awk|sed|grep|head|tail|tr|cut|stat|find|readlink|realpath|dirname|basename|env|timeout|flock|link|node|python3?|tmux|command|eval|exec|source)(?![\w-])/;
+    expect(code.match(external)?.[0] ?? null, 'an external command in the reader').toBeNull();
+    // B1's F37 rule: the clock is read once, so its test and its slice see one reading.
+    expect((code.match(/\$\{?EPOCHREALTIME\b/g) ?? []).length, 'EPOCHREALTIME expanded more than once').toBe(1);
+  });
+
+  // D-5064 (F6 of review 476): under a UTF-8 collating locale (glibc), a bash `[0-9a-f]` or `[0-9]` range widens to take
+  // characters outside ASCII. The reader spells every class as an explicit list, with no locale switch and no fork.
+  it('the reader spells no bracket range: every class is an explicit list (D-5064)', () => {
+    const src = fs.readFileSync(HOOK, 'utf8');
+    const from = src.indexOf('\nHISTORY_CARD_MAX=512\n');
+    const code = src.slice(from, src.indexOf('\n}\n', src.indexOf('\n_hook_history_card() {', from)))
+      .split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    expect(from, 'the constants and the reader were found').toBeGreaterThan(-1);
+    expect(code).toContain('[0123456789abcdef]{8}');    // the scan is over the reader's own text
+    // A range is `x-y` inside one bracket expression; a trailing literal `-` (`[!0123456789abcdef-]`) is not one.
+    // A bracket expression holds no whitespace here, which keeps `[[ -e "…history-off" ]]` out of the match.
+    const range = /\[(?!\[)[^\]\s]*?[0-9A-Za-z]-[^\]\s][^\]\s]*\]/;
+    expect(code.match(range)?.[0] ?? null, 'a bracket range in the reader').toBeNull();
+    expect('[0-9a-f]{8}'.match(range)?.[0], 'CONTROL: the scan sees a range').toBe('[0-9a-f]');
+    expect('[!0123456789abcdef-]'.match(range), 'CONTROL: a trailing literal - is no range').toBeNull();
+    expect('[[ -e "$HOME/.ccrc/history-off" ]]'.match(range), 'CONTROL: a test bracket is no class').toBeNull();
+  });
+
+  /** Does bash take `ch` for a member of `class_` (a bracket range) in this locale? The hook runs the same builtin. */
+  const widens = (locale: string, class_: string, ch: string): boolean =>
+    spawnSync('bash', ['-c', `[[ $1 =~ ^${class_}$ ]]`, '_', ch], { env: { PATH: process.env.PATH ?? '', LC_ALL: locale } }).status === 0;
+  const WIDE_LOCALE = IS_DARWIN ? null : ['en_US.UTF-8', 'en_GB.UTF-8'].find((l) => widens(l, '[0-9a-f]', String.fromCharCode(0xe1))) ?? null;
+  const A_ACUTE = String.fromCharCode(0xe1);          // U+00E1, which glibc collates into [0-9a-f]
+  const ARABIC_THREE = String.fromCharCode(0x663);    // U+0663, which glibc collates into [0-9]
+  describe.skipIf(WIDE_LOCALE === null)(`under a widening UTF-8 locale (${WIDE_LOCALE}) a non-ASCII character is never a hex digit or a decimal digit`, () => {
+    const env = { LC_ALL: WIDE_LOCALE ?? 'C' };
+    it('CONTROL: the same fixture, ASCII, is served under that locale, silently', () => {
+      plantAll();
+      expect(served(start(), env)).toBe(LINE);
+    });
+
+    it('a CCRC_SESSION_GENERATION with a non-ASCII character in a hex position is no generation: the recorded one decides', () => {
+      plantAll();
+      plantParity('absent', 'G', 'G');
+      // The CLI: an env generation outside the grammar falls to the newest family (the record G), which recall-off names.
+      expect(lib.resolveGeneration({ envGen: `${A_ACUTE}${GENERATION.slice(1)}`, regGen: { state: 'absent' } }).via).toBe('newest');
+      expect(served(start(), { ...env, CCRC_SESSION_GENERATION: `${A_ACUTE}${GENERATION.slice(1)}` })).toBeNull();
+    });
+
+    // CONTROL, not a pin of `uuid_re`: the payload jq filter (the `keep(alpha or (. >= 48 and . <= 57) or . == 95 or . == 45)`
+    // one that reads session_id) keeps only ASCII letters, digits, `_` and `-`, so the non-ASCII character is dropped before
+    // the reader sees it. The psid arrives ASCII and 35 characters long, which fails the grammar's length under either
+    // spelling of the class. The env-generation case above alone pins `uuid_re` against a widening locale.
+    it('CONTROL: the payload filter already makes a session id ASCII, so one with a non-ASCII character in a hex position serves nothing', () => {
+      const bad = `${A_ACUTE}${SID.slice(1)}`;
+      plantDirs();
+      mark(`main ${bad} ${Date.now()}`);
+      fs.writeFileSync(cardPath(bad), `${LINE}\n`);
+      expect(served(start({ session_id: bad }), env)).toBeNull();
+    });
+
+    it('a marker ms with a non-ASCII digit serves nothing and prints nothing on stderr (no arithmetic syntax error)', () => {
+      plantAll();
+      mark(`main ${SID} 1${ARABIC_THREE}${ARABIC_THREE}`);
+      expect(served(start(), env)).toBeNull();     // `served` asserts stderr is empty
+    });
+
+    it('a card line with non-ASCII characters in its hex positions is refused by the grammar', () => {
+      plantAll(`${LINE.replace('L03a9c1', `L${A_ACUTE.repeat(6)}`)}\n`);
+      expect(served(start(), env)).toBeNull();
+    });
+  });
+
+  // D-5064 (macOS CI): the reader's generation reads trim ASCII whitespace only, in every locale and on every C library. The CLI's
+  // JS trim strips U+2003, so it reads G + U+2003 as G and recalls beside a stale recall-off; the hook must withhold (a named
+  // fail-closed row, both arms). A reader that tested `_ct_read`'s CT_V would trim U+2003 wherever the locale's [:space:] holds
+  // it (glibc's UTF-8 locales do), read G and serve: these cases are red for that mutant. The finder takes the first UTF-8
+  // locale on the box whose bash really counts U+2003 a space; with none, the cases skip, never fake.
+  const spacey = (locale: string): boolean =>
+    spawnSync('bash', ['-c', '[[ $1 == [[:space:]] ]]', '_', String.fromCharCode(0x2003)], { env: { PATH: process.env.PATH ?? '', LC_ALL: locale } }).status === 0;
+  const SPACE_LOCALE = IS_DARWIN ? null : ['C.UTF-8', 'en_US.UTF-8', 'en_GB.UTF-8'].find(spacey) ?? null;
+  describe.skipIf(SPACE_LOCALE === null)(`under a UTF-8 locale whose [:space:] holds U+2003 (${SPACE_LOCALE}) a generation behind it is unusable`, () => {
+    const env = { LC_ALL: SPACE_LOCALE ?? 'C', CCRC_SESSION_GENERATION: '' };
+    it('CONTROL: the CLI reads G + U+2003 as G, so recall-off naming a stale G2 recalls', () => {
+      expect(EMSP_G.trim()).toBe(GENERATION);
+      expect(cliVerdict('', 'G-emsp', 'G2', 'G')).toBe('stale');
+      expect(cliVerdict('', 'absent', 'G2', 'G-emsp')).toBe('stale');
+    });
+
+    it('a .generation of G + U+2003 + LF, recall-off stale (fail-closed: the CLI recalls)', () => {
+      plantAll();
+      plantParity('G-emsp', 'G2', 'G');
+      expect(served(start(), env)).toBeNull();
+    });
+
+    it('a generation record of G + U+2003, no .generation, recall-off stale (fail-closed: the CLI recalls)', () => {
+      plantAll();
+      plantParity('absent', 'G2', 'G-emsp');
+      expect(served(start(), env)).toBeNull();
+    });
+
+    it('CONTROL: the same fixtures with a plain G serve the line, so the cases above withhold for the U+2003', () => {
+      plantAll();
+      plantParity('G', 'G2', 'G');
+      expect(served(start(), env)).toBe(LINE);
+      plantParity('absent', 'G2', 'G');
+      expect(served(start(), env)).toBe(LINE);
+    });
+  });
+
+  // D-5064 (fix round 2, follow-up 2): a NUL probe that cannot open its file withholds. The window is the microseconds between
+  // `_ct_read` and the probe's `<`, so no fixture reaches it from outside; the harness below defines the hook's OWN `_ct_read`, the
+  // HISTORY_* lines and `_hook_history_card`, extracted by content at test time (a copy would not follow the hook), wraps
+  // `_ct_read` so that after the real read it makes the file unreadable (chmod 000), and runs the reader on a fixture HOME. A
+  // probe that never opened its file used to keep the `''` it carried in: an empty record (a legacy family) that served where
+  // the CLI exits 8. Each probe seeds `x` with a value outside the grammar, so that probe withholds.
+  describe.skipIf(ROOT)('a NUL probe that cannot open its file withholds (the file turns unreadable between the two reads)', () => {
+    const hookText = (): string => fs.readFileSync(HOOK, 'utf8');
+    const fn = (name: string): string => {
+      const m = new RegExp(`^${name}\\(\\) \\{[^\\n]*\\n[\\s\\S]*?\\n\\}\\n`, 'm').exec(hookText());
+      expect(m, `${name} is defined in the hook`).not.toBeNull();
+      return m![0];
+    };
+    const assign = (name: string): string => {
+      const m = new RegExp(`^${name}=[^\\n]*\\n`, 'm').exec(hookText());
+      expect(m, `${name} is assigned in the hook`).not.toBeNull();
+      return m![0];
+    };
+    /** Run the reader over the planted fixture; `armed` is the suffix of the file `_ct_read` makes unreadable after its real read. */
+    const reader = (armed: string | null): string => {
+      const script = path.join(home, 'reader-harness.sh');
+      fs.writeFileSync(script, [
+        'set -uo pipefail',
+        ...['REG', 'CCRC_ID_MAX', 'COMPACT_CARD_MAX_CHARS', 'COMPACT_CARD_MAX_AGE', 'HISTORY_CARD_MAX', 'HISTORY_CARD_RE', 'HISTORY_SCOPE_DIR', 'HISTORY_CARD_DIR'].map(assign),
+        fn('_ct_read').replace('_ct_read() {', '_ct_read_real() {'),
+        // The race: the file is read, then it goes unreadable (a chmod by hand, a purge) before the probe opens it.
+        `_ct_read() { _ct_read_real "$1"; local rc=$?; case "$1" in *${armed ?? 'NEVER-MATCHES'}) [[ -f "$1" ]] && chmod 000 "$1" ;; esac; return $rc; }`,
+        fn('_hook_history_card'),
+        `id=${ID} psid=${SID} paid="" CARD_COMPACT=""`,
+        '_hook_history_card',
+        'printf "%s" "$CARD_COMPACT"',
+        '',
+      ].join('\n'));
+      const r = spawnSync('bash', [script], { encoding: 'utf8', env: hookEnv({ ...HISTORY_HOOK_SCRUB, CCRC_SESSION_GENERATION: '' }) });
+      expect(r.stderr, 'the reader is silent on stderr').toBe('');
+      expect(r.status).toBe(0);
+      return r.stdout;
+    };
+    afterEach(() => {
+      for (const f of [reg(`${ID}.generation`), histDir('card', ID, `${SID}.gen`)]) { try { fs.chmodSync(f, 0o600); } catch { /* absent */ } }
+    });
+
+    it('CONTROL: the harness serves the line when nothing is armed (a stale recall-off beside a G record, and beside a G2 .generation)', () => {
+      plantAll();
+      plantParity('absent', 'G2', 'G');
+      expect(reader(null)).toBe(LINE);
+      plantParity('G2', 'G', 'G2');
+      expect(reader(null)).toBe(LINE);
+    });
+
+    it('CONTROL: armed on a file the reader does not probe, the same fixtures still serve', () => {
+      plantAll();
+      plantParity('absent', 'G2', 'G');
+      expect(reader('.generation')).toBe(LINE);           // no .generation exists: the wrapper never fires
+      plantParity('G2', 'G', 'G2');
+      expect(reader('.gen')).toBe(LINE);                  // the .generation arm decides: the record is never read
+    });
+
+    it('the record arm: the record turns unreadable after its first read, recall-off names G, the record is G (the probe once read an empty record and served)', () => {
+      plantAll();
+      plantParity('absent', 'G', 'G');
+      expect(reader('.gen')).toBe('');
+      // The verdict above is the unarmed one too (o == gen), so this proves the wrapper fired: the record went unreadable.
+      expect(fs.statSync(histDir('card', ID, `${SID}.gen`)).mode & 0o777, 'the wrapper made the record unreadable').toBe(0);
+    });
+
+    it('the .generation arm: .generation turns unreadable after its first read, recall-off is stale, the record is G2', () => {
+      plantAll();
+      plantParity('G2', 'G', 'G2');
+      expect(reader('.generation')).toBe('');
+      expect(fs.statSync(reg(`${ID}.generation`)).mode & 0o777, 'the wrapper made .generation unreadable').toBe(0);
+    });
+  });
+
+  itLinux('forks nothing at runtime: serving the line takes exactly the forks a box without history takes', () => {
+    const traced = (env: Record<string, string> = {}): { forks: number; stdout: string } => {
+      const trace = path.join(home, 'card-trace.txt');
+      const r = spawnSync('strace', ['-f', '-o', trace, '-e', 'trace=clone,clone3,fork,vfork', 'bash', HOOK], {
+        input: JSON.stringify(start()), encoding: 'utf8', env: hookEnv({ ...HISTORY_HOOK_SCRUB, ...env }),
+      });
+      expect(r.status, `strace ran the hook: ${r.stderr}`).toBe(0);
+      const lines = fs.readFileSync(trace, 'utf8').split('\n').filter((l) => l !== '');
+      fs.rmSync(trace);
+      const root = /^(\d+)\s/.exec(lines[0] ?? '')?.[1];
+      expect(root, 'strace traced a fork').toBeDefined();
+      // One START line per fork, complete or `<unfinished ...>`; a `resumed` line is the same fork's tail.
+      return { forks: lines.filter((l) => new RegExp(`^${root}\\s+(?:clone3?|v?fork)\\(`).test(l)).length, stdout: r.stdout };
+    };
+    // WARM-UP: the first acquisition on a fresh row mints the stable lock (mktemp + link), which no later run
+    // repeats, so one unmeasured serve comes first and the two measured runs start from the same row.
+    plantCompactCard(compactCardOf(600));
+    expect(served()).not.toBeNull();
+    plantCompactCard(compactCardOf(600));        // both runs serve a compact card: the same emit, the same marker
+    const without = traced();
+    expect(hasLine(card(without.stdout))).toBe(false);
+    plantAll();
+    plantCompactCard(compactCardOf(600));
+    const withLine = traced();
+    expect(card(withLine.stdout).startsWith(`${LINE}\n`), 'the measured run served the line').toBe(true);
+    expect(withLine.forks).toBe(without.forks);
+    // Review 479 F4: the NUL probes (`.generation`'s and the generation record's) sit behind the env generation, so a pane whose
+    // CCRC_SESSION_GENERATION is a UUID, the pane that also serves the compact card, never reaches them. They get a pair of runs
+    // of their own, with an env generation that names none (the parity rows' arm; no compact card is served then, so the line
+    // stands alone in both runs). DIRECT has no `.generation` and no recall-off file: neither probe runs. PROBED has an EMPTY
+    // `.generation` (the first probe runs, rc 1, no NUL, and the record decides), a recall-off file naming G2 and a record naming
+    // G (the second probe runs, rc 1), so o != gen and the line is served. Since the probes' `x=.` seed a `: |` prefix
+    // reds earlier, at the served-line assertion (the subshelled `read` leaves the parent's `x=.`, so the line withholds). The tally
+    // still reds a fork that keeps the verdict: `( : );`, `true | true;` or `x=$(printf .)` inside a probe costs PROBED a fork or two (12 or 13 vs 11).
+    const noGen = { CCRC_SESSION_GENERATION: '' };
+    plantAll();
+    plantParity('absent', 'absent', 'G');
+    const direct = traced(noGen);
+    expect(card(direct.stdout), 'the unprobed run served the line').toBe(LINE);
+    plantAll();
+    plantParity('empty', 'G2', 'G');
+    const probed = traced(noGen);
+    expect(card(probed.stdout), 'the probed run served the line, through both NUL probes').toBe(LINE);
+    expect(probed.forks, `forks through both probes ${probed.forks}, without them ${direct.forks}`).toBe(direct.forks);
+  }, 60_000);
+});
+// ── ccrc history: the compact card's reserved room (history spec 2026-10-05 §8.6, §8.9 C38; W1-B3 task 10) ──
+// APPENDED, with NO new import line: the citation census cites this file by line. `runFull`/`hookEnv`/`home`/
+// `HOOK`/`stub`/`HELPER_ONLY`/`plantHelper`/`cardTree`/`plantSession`/`workLines`/`preCompact` are this
+// file's module-level fixture, and `HISTORY_HOOK_SCRUB` (D-5055) is the one scrub of every history hook describe.
+describe('history card reserve: the compact card renders HISTORY_CARD_MAX + 1 chars short on a history box (spec §8.6, C38)', () => {
+  const cardDir = (): string => path.join(home, '.ccrc', 'history', 'card');
+  /** PreCompact through the real arm with a stub `timeout` recording the helper's argv (the helper-argv case's idiom). */
+  const helperArgv = (env: Record<string, string> = {}): string => {
+    const tree = cardTree(); plantHelper();
+    stub('timeout', [HELPER_ONLY, 'printf \'%s\\n\' "$*" > "$HOME/timeout-argv"; shift; exec "$@"'].join('\n'));
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    const r = runFull(preCompact(tree, transcript), { ...HISTORY_HOOK_SCRUB, ...env });
+    expect(r).toEqual({ stdout: '', stderr: '' });
+    return fs.readFileSync(path.join(home, 'timeout-argv'), 'utf8');
+  };
+
+  it('C38: card/ present — the helper renders at 4000 - (HISTORY_CARD_MAX + 1) = 3487', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    fs.mkdirSync(cardDir(), { recursive: true, mode: 0o700 });
+    expect(4000 - (lib.CARD_LINE_MAX + 1)).toBe(3487);
+    expect(helperArgv()).toContain(' --max-chars 3487 --max-files 12 ');
+  });
+
+  it('C38: card/ absent — 4000, exactly as before history', () => {
+    expect(helperArgv()).toContain(' --max-chars 4000 --max-files 12 ');
+  });
+
+  it('history-off present beside card/ — 4000', () => {
+    fs.mkdirSync(cardDir(), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(home, '.ccrc', 'history-off'), '');
+    expect(helperArgv()).toContain(' --max-chars 4000 --max-files 12 ');
+  });
+
+  it.each(['999999', 'abc'])('an exported HISTORY_CARD_RESERVE=%s is reset — 4000, exit 0, silent', (value) => {
+    expect(helperArgv({ HISTORY_CARD_RESERVE: value })).toContain(' --max-chars 4000 --max-files 12 ');
+  });
+
+  itLinux('no other event pays for it: a PostToolUse with card/ present names no history path in any syscall', () => {
+    fs.mkdirSync(cardDir(), { recursive: true, mode: 0o700 });
+    const trace = path.join(home, 'reserve-trace.txt');
+    const r = spawnSync('strace', ['-f', '-o', trace, '-e', 'trace=file', 'bash', HOOK], {
+      input: JSON.stringify({ hook_event_name: 'PostToolUse', tool_name: 'Read', tool_input: {}, cwd: home }), encoding: 'utf8',
+      env: hookEnv(HISTORY_HOOK_SCRUB),
+    });
+    expect(r.status, `strace ran the hook: ${r.stderr}`).toBe(0);
+    const touched = fs.readFileSync(trace, 'utf8').split('\n').filter((l) => l.includes('/.ccrc/history/card'));
+    expect(touched, 'a PostToolUse stats the card directory').toEqual([]);
+  }, 60_000);
+
+  it('the reserve is spelled from HISTORY_CARD_MAX, reset unconditionally, and set directly above the scope reset', () => {
+    const src = fs.readFileSync(HOOK, 'utf8');
+    expect(src).toContain('    --max-chars "$(( COMPACT_CARD_MAX_CHARS - ${HISTORY_CARD_RESERVE:-0} ))" --max-files "$COMPACT_WORKSET_MAX" \\\n');
+    const reset = src.indexOf('\nHISTORY_CARD_RESERVE=0\n');
+    const set = src.indexOf('\n[[ "$event" == PreCompact ]] && [[ -d "$HISTORY_CARD_DIR" ]] && [[ ! -e "$HOME/.ccrc/history-off" ]] && HISTORY_CARD_RESERVE=$(( HISTORY_CARD_MAX + 1 ))\n');
+    expect(reset, 'no unconditional reset').toBeGreaterThan(-1);
+    expect(set, 'no PreCompact-gated set').toBeGreaterThan(reset);
+    expect(set, 'the reserve must be set before the card renders').toBeLessThan(src.indexOf('\nunset CS_SCOPE\n'));
   });
 });

@@ -769,3 +769,28 @@ describe('background — the delegated pair parses, and a malformed one is absen
       .toMatchObject({ ok: true, state: { background: { count: 1, kinds: ['a'.repeat(200)] } } });
   });
 });
+
+// ── `agent-events-keep-the-main-state` (D-5232) ──
+// Behind the server's word `hook-main-state-v1` EVERY agent event keeps the main thread's `updatedAt` and writes
+// `aliveAt`, so `aliveAt` is no longer only a carried wait's: a Stop's `done` carried through a delegated run ages on it
+// too, and the raw read hands it to the stall watch's raw fact. APPENDED.
+describe('aliveAt beside a carried done (D-5232)', () => {
+  const OLD = NOW - 40 * 60_000;
+  const carried = (o: Record<string, unknown> = {}): Record<string, unknown> =>
+    base({ state: 'done', event: 'Stop', updatedAt: OLD, bgDelegated: 2, bgDelegatedKinds: 'subagent', ...o });
+
+  it('a Stop 40 minutes ago with aliveAt a minute ago reads fresh, the main stamp and the pair kept', async () => {
+    const reg = mkTmp('ccrc-hookstate-');
+    seed(reg, ID, carried({ aliveAt: NOW - 60_000 }));
+    const r = await readHookStateMeasured(localIO, reg, ID, UUID, NOW);
+    expect(r).toMatchObject({ ok: true, state: { state: 'done', event: 'Stop', updatedAt: OLD, background: { count: 2, kinds: ['subagent'] } } });
+    const raw = await readHookStateRawMeasured(localIO, reg, ID, UUID);
+    expect(raw).toMatchObject({ ok: true, aliveAt: NOW - 60_000 });
+  });
+
+  it('with no agent event since, the same file is no-state', async () => {
+    const reg = mkTmp('ccrc-hookstate-');
+    seed(reg, ID, carried());
+    expect(await readHookStateMeasured(localIO, reg, ID, UUID, NOW)).toEqual({ ok: false, reason: 'no-state' });
+  });
+});

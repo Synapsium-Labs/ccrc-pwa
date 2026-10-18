@@ -88,16 +88,20 @@ export function orphanNote(
   // archive fold, or nowhere this pass — so the marker never claims more
   // than the frame has actually measured.
   const presence = coordPresence(parent, coordOf(parent), frameSeen);
+  // D-5242: a sleeping coordinator is not gone, and nothing should be reclaimed
+  // from it: mail or opening it wakes it.
   const where = presence === 'dead'
     ? `coordinator ${parent} is gone — reclaim this programme from the run board (the held cell opens it)`
-    : `this worker's coordinator is not among this card's live sessions`;
+    : presence === 'hibernated'
+      ? `coordinator ${parent} is hibernated — mail or opening it wakes it`
+      : `this worker's coordinator is not among this card's live sessions`;
   // …AND IN THE TEXT, not only in `title`/`data-presence` (final fix round).
   // Both of those are invisible on touch — there is no hover on a phone, and
   // this board is mobile-first — so the one measured fact that changes what
   // the operator should DO (reclaim it) reached only a laptop. `dead` alone:
   // `unknown` and `alive` say nothing new, because `coordPresence` refusing
   // to measure is not a claim that anything is gone (D-1138).
-  const gone = presence === 'dead' ? ' · coordinator gone' : '';
+  const gone = presence === 'dead' ? ' · coordinator gone' : presence === 'hibernated' ? ' · coordinator hibernated' : '';
   return crossing === null
     ? { text: `${label}${gone}`, title: where, presence }
     : {

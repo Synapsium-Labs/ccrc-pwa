@@ -6,6 +6,23 @@ import { localIO, type FleetIO } from '../src/io.js';
 import { mkTmp } from './tmpHelpers.js';
 import { MAX_READ_B64_BYTES } from '../../agent/src/fileops.js';
 
+// R99's one seam. `readFileFromBytesMeasured` stats the file, then reads the range it was promised, and a file that shrinks
+// in between is the case its length check exists for. The real `stat` is wrapped, never replaced: a row arms `afterStat`, and
+// the wrapper lets the real answer through and THEN runs it, so the shrink is the real filesystem's, at the one moment a
+// test cannot otherwise reach. Disarmed, the wrapper is the real `stat`, which is what every other row in this file sees.
+const afterStat = vi.hoisted(() => ({ run: null as null | ((p: string) => void) }));
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...actual,
+    stat: (async (p: Parameters<typeof actual.stat>[0], opts?: Parameters<typeof actual.stat>[1]) => {
+      const answer = await actual.stat(p, opts as never);
+      afterStat.run?.(String(p));
+      return answer;
+    }) as typeof actual.stat,
+  };
+});
+
 const mktempDir = (): string => mkTmp('ccrc-io-');
 const tmpFile = (name = 'x.txt'): string => path.join(mktempDir(), name);
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -108,6 +125,34 @@ describe('localIO.readFileFromMeasured', () => {
     writeFileSync(file, 'abc');
     expect(await localIO.readFileFrom(file, 3)).toEqual({ data: '', size: 3 });
     expect(await localIO.readFileFrom(path.join(path.dirname(file), 'nope'), 0)).toBeNull();
+  });
+});
+
+describe('localIO.readFileFromBytesMeasured', () => {
+  it('returns the bytes of the range and the whole file\'s size; the EOF arm is a positive answer, not a miss', async () => {
+    const file = tmpFile();
+    writeFileSync(file, '0123456789');
+    expect(await localIO.readFileFromBytesMeasured(file, 3, 4)).toEqual({ ok: true, bytes: new Uint8Array(Buffer.from('3456')), size: 10 });
+    expect(await localIO.readFileFromBytesMeasured(file, 8, 99)).toEqual({ ok: true, bytes: new Uint8Array(Buffer.from('89')), size: 10 });
+    expect(await localIO.readFileFromBytesMeasured(file, 10, 4)).toEqual({ ok: true, bytes: new Uint8Array(0), size: 10 });
+  });
+
+  // [label, offset, maxBytes, the size the file shrinks to once the stat has answered 10]
+  it.each([
+    ['partway through the range', 0, 10, 4],
+    ['partway through a range that starts inside the file', 3, 7, 6],
+    ['to before the offset: nothing at all is left to read', 6, 4, 2],
+    ['to empty', 0, 10, 0],
+  ] as const)('a file that SHRINKS between the stat and the read answers "unreadable", never ok with the short bytes it left (R99): %s', async (label, offset, maxBytes, shrunk) => {
+    const file = tmpFile();
+    writeFileSync(file, '0123456789');
+    let fired = 0;
+    afterStat.run = (p) => { if (p === file) { fired += 1; truncateSync(file, shrunk); } };
+    try {
+      expect(await localIO.readFileFromBytesMeasured(file, offset, maxBytes), label).toEqual({ ok: false, reason: 'unreadable' });
+    } finally { afterStat.run = null; }
+    expect(fired, 'the shrink happened between the stat and the read').toBe(1);
+    expect(statSync(file).size, 'the file really is that short now').toBe(shrunk);
   });
 });
 

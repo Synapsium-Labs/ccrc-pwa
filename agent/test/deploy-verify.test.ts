@@ -667,6 +667,9 @@ describe('the verification is actually wired into the deploy, and can observe a 
       // The pane-scope sweep's pair (session-continuity wave 4), shipped the same way.
       'systemd/ccd-scope-sweep.service',
       'systemd/ccd-scope-sweep.timer',
+      // D-5241: the victim policy's two OOMPolicy=continue scope drop-ins.
+      'systemd/tmux-spawn-.scope.d/50-oom-continue.conf',
+      'systemd/ccrc-tmux-server.scope.d/50-oom-continue.conf',
     ]) {
       expect(existsSync(path.join(deployDir, f)), `${f} is not in the repo`).toBe(true);
     }
@@ -686,6 +689,10 @@ describe('the verification is actually wired into the deploy, and can observe a 
       'the history sweep shim is not in the repo').toBe(true);
     expect(existsSync(path.join(deployDir, '..', 'ccd', 'ccd-scope-sweep')),
       'the pane-scope sweep is not in the repo').toBe(true);
+    expect(existsSync(path.join(deployDir, '..', 'ccd', 'ccd-tool-adj')),
+      'the tool-child priority prefix is not in the repo').toBe(true);
+    expect(deploySh.split('\n').filter((l) => l.trim() === 'install_atomic ccd/ccd-tool-adj .local/bin/ccd-tool-adj 755'),
+      'deploy.sh does not place ccd-tool-adj exactly once').toHaveLength(1);
 
     // Fix round 1, Finding 1 (Important, plan-mandated): measured on the
     // fleet host, read-only — every `systemd --user` unit's process carries a
@@ -751,6 +758,10 @@ describe('the verification is actually wired into the deploy, and can observe a 
       // The pane-scope sweep's pair, installed the same way.
       '_unit_atomic ~/ccrc/deploy/systemd/ccd-scope-sweep.service ~/.config/systemd/user/ccd-scope-sweep.service',
       '_unit_atomic ~/ccrc/deploy/systemd/ccd-scope-sweep.timer ~/.config/systemd/user/ccd-scope-sweep.timer',
+      // D-5241: the two scope drop-ins, the pane one in systemd's PREFIX form (trailing hyphen).
+      'mkdir -p ~/.config/systemd/user/tmux-spawn-.scope.d ~/.config/systemd/user/ccrc-tmux-server.scope.d',
+      '_unit_atomic ~/ccrc/deploy/systemd/tmux-spawn-.scope.d/50-oom-continue.conf ~/.config/systemd/user/tmux-spawn-.scope.d/50-oom-continue.conf',
+      '_unit_atomic ~/ccrc/deploy/systemd/ccrc-tmux-server.scope.d/50-oom-continue.conf ~/.config/systemd/user/ccrc-tmux-server.scope.d/50-oom-continue.conf',
     ]) {
       const at = buildLinks.findIndex((l) => l.includes(needle));
       expect(at, `AGENT_BUILD_CMD does not install: ${needle}`).toBeGreaterThan(-1);
@@ -2343,6 +2354,52 @@ describe('the verification is actually wired into the deploy, and can observe a 
     }
     // And the shim points at that tree, not at a copy of its own.
     expect(shimBody()).toContain('$HOME/ccrc/ccd/ccrc');
+  });
+});
+
+// Delegation broker wave 3, Task 8B: the fallback deploy's server arm takes the COORDINATION snapshot (the delegation journal and
+// checkpoint with a manifest, beside the SQLite snapshot) BEFORE the rsync that is the first step to touch the tree, and a failed
+// capture aborts the deploy. Read from the script's text, like the coord.db snapshot row above; the helper itself is run for
+// real in `server/test/coordination-snapshot.test.ts`.
+describe('the fallback deploy captures the coordination snapshot before rsync (W3-M32)', () => {
+  const deploySh = readFileSync(path.join(deployDir, 'deploy.sh'), 'utf8');
+  const serverBranch = deploySh.slice(deploySh.indexOf('\nelse'));   // the same structural anchor as the coord.db row (D-145)
+  const code = serverBranch.split('\n').filter((l) => !l.trim().startsWith('#')).join('\n');
+
+  it('the helper is shipped fresh this run, beside backup-coord.mjs, and invoked with `capture` into THIS run\'s timestamp directory', () => {
+    expect(code).toMatch(/"\$\{SCP\[@\]\}" deploy\/coordination-snapshot\.mjs "\$BOX":ccrc-backups\/coordination-snapshot\.mjs/);
+    expect(code).toMatch(/"\$\{SSH\[@\]\}" "\$BOX" "node --no-warnings ~\/ccrc-backups\/coordination-snapshot\.mjs capture --dir ~\/ccrc-backups\/\$TS"/);
+    expect(existsSync(join(deployDir, 'coordination-snapshot.mjs'))).toBe(true);
+  });
+
+  it('the capture comes AFTER the SQLite snapshot it describes and BEFORE the rsync that replaces the tree (W3-M32)', () => {
+    const sqliteAt = code.indexOf('node --no-warnings ~/ccrc-backups/backup-coord.mjs');
+    const shipAt = code.indexOf('deploy/coordination-snapshot.mjs');
+    const captureAt = code.indexOf('coordination-snapshot.mjs capture --dir');
+    const rsyncAt = code.indexOf('rsync -az');
+    expect(sqliteAt).toBeGreaterThan(-1);
+    expect(shipAt).toBeGreaterThan(-1);
+    expect(rsyncAt).toBeGreaterThan(-1);
+    expect(captureAt, 'the capture must follow the SQLite snapshot').toBeGreaterThan(sqliteAt);
+    expect(captureAt, 'the helper must be shipped before it is run').toBeGreaterThan(shipAt);
+    expect(captureAt, 'the capture must be taken BEFORE rsync rewrites the tree').toBeLessThan(rsyncAt);
+  });
+
+  it('a failed capture aborts the deploy: it is its own ssh call under `set -e`, never `|| true`, never backgrounded', () => {
+    expect(deploySh).toMatch(/^set -euo pipefail$/m);
+    const line = code.split('\n').find((l) => l.includes('coordination-snapshot.mjs capture --dir'))!;
+    expect(line).not.toMatch(/\|\||;|&\s*$|\bwait\b/);
+    expect(line.trim().startsWith('"${SSH[@]}"')).toBe(true);
+  });
+
+  it('the comment on the capture says what it is for, and the deploy still never backs coord.db up with cp', () => {
+    expect(serverBranch).toMatch(/The coordination snapshot \(delegation broker wave 3, O3\) is the LAST member of this set/);
+    expect(/cp[^\n]*coord\.db/.test(deploySh)).toBe(false);
+  });
+
+  it('the agent branch takes no coordination snapshot: a fleet box has no coordination sidecars', () => {
+    const agentBranch = deploySh.slice(0, deploySh.indexOf('\nelse'));
+    expect(agentBranch).not.toContain('coordination-snapshot');
   });
 });
 

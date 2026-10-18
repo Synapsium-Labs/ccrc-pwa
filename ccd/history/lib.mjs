@@ -7709,3 +7709,359 @@ export function decideIntegrity(rows) {
   if (bad.length > 0 && bad.every((r) => INDEX_DAMAGE_RE.test(r))) return { verdict: 'index', rows: bad };
   return { verdict: 'store', rows: bad.length > 0 ? bad : rows };
 }
+
+// ===========================================================================
+// The card line (spec 2026-10-05 §8.6, §5.1, §5.2, §9.4; W1-B3 plan Tasks 1-3). Pure. The sweep's card.mjs (L4)
+// measures the store, the registry and the history root's files and hands the facts in; the hook spells the
+// grammar, the cap and the two directory names once more in bash, bound to these by single-definition.test.ts
+// (W1-B3 Task 11). Every id that becomes a path passes idOk first, and every uuid UUID_RE
+// (D-4170).
+// ===========================================================================
+
+/** `~/.ccrc/history/card/<id>/<uuid>.txt`: the sweep's one-line predictions (§5.2, §8.6). */
+export const CARD_DIR = 'card';
+/** `~/.ccrc/history/scope/<id>`: the PreCompact scope markers the hook writes (§5.1). */
+export const SCOPE_DIR = 'scope';
+/** The longest card line the hook serves, in characters: it reads 513 and refuses more than 512 (§8.6, C21), and
+ *  the render reserves CARD_LINE_MAX + 1 (C38). The grammar's own longest line is 145 characters; the cap is the
+ *  spec's and is not tightened here. D-4736 (history-card-fold-and-reserve) */
+export const CARD_LINE_MAX = 512;
+/** The command the card names, as the grammar spells it: the literal `~/.local/bin/ccrc`, which bash expands at the
+ *  start of a word. B2's `next:` lines keep their own spelling, HISTORY_CMD. B2's D-4682 (history-skill-literal-path) */
+export const CARD_DESCRIBE_CMD = '~/.local/bin/ccrc history describe';
+/** The card line's one positive grammar (§8.6), character for character, built from CARD_PREFIX and
+ *  CARD_DESCRIBE_CMD so neither is spelled twice. The ellipsis and the middle dot are U+2026 and U+00B7, written as
+ *  themselves. */
+export const CARD_LINE_PATTERN = `^${escapeRe(CARD_PREFIX)}node L[0-9a-f]{6,20}… \\(this compaction\\)( · parent N[0-9a-f]{6,20}…)? · ${escapeRe(CARD_DESCRIBE_CMD)} L[0-9a-f]{6,20}$`;
+export const CARD_LINE_RE = new RegExp(CARD_LINE_PATTERN);
+/** How long a purged session's scope marker and card directory stay (§9.4: "the files of purged sessions after
+ *  7 days"). */
+export const PURGED_FILES_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
+
+function cardIdOk(fn, id) {
+  if (!idOk(id)) throw new TypeError(`${fn}: not a session id: ${JSON.stringify(id)}`);
+}
+
+/** `~/.ccrc/history/card/<id>`. The id passes idOk before the path exists (C66's shape). */
+export function cardDirOf(home, id) {
+  cardIdOk('cardDirOf', id);
+  return `${historyPaths(home).root}/${CARD_DIR}/${id}`;
+}
+
+/** `~/.ccrc/history/card/<id>/<uuid>.txt`: one session's prediction, keyed on the uuid the hook reads as `psid`. */
+export function cardFileOf(home, id, uuid) {
+  if (typeof uuid !== 'string' || !UUID_RE.test(uuid)) throw new TypeError(`cardFileOf: not a session uuid: ${JSON.stringify(uuid)}`);
+  return `${cardDirOf(home, id)}/${uuid}.txt`;
+}
+
+/** `~/.ccrc/history/scope/<id>`: one session's PreCompact scope marker (§5.1). */
+export function scopeMarkerOf(home, id) {
+  cardIdOk('scopeMarkerOf', id);
+  return `${historyPaths(home).root}/${SCOPE_DIR}/${id}`;
+}
+
+/** The card line for a leaf display prefix and, when one is named, a parent's (§8.6 Shape). Only a line the grammar
+ *  takes is ever answered: a leaf that is not `L` plus 6 to 20 lowercase hex, a parent that is not `N` plus the
+ *  same, or anything else the grammar refuses throws, so no caller can write a line the hook would refuse. */
+export function cardLine({ leaf, parent = null }) {
+  const line = `${CARD_PREFIX}node ${String(leaf)}… (this compaction)${parent === null ? '' : ` · parent ${String(parent)}…`} · ${CARD_DESCRIBE_CMD} ${String(leaf)}`;
+  if (!CARD_LINE_RE.test(line)) throw new TypeError(`cardLine: not a card line: ${JSON.stringify(line)}`);
+  return line;
+}
+
+/** The boundary the next compaction will write, as planSpans is shown it: a uuid no transcript row carries. */
+const CARD_NEXT_BOUNDARY = 'card-prediction:next-boundary';
+
+/** The span start of the leaf the next compaction of one copy will become (§6.1), taken from planSpans itself so
+ *  the rule is never spelled twice: a copy of two rows, its last boundary (or, with none, its first stored row) and
+ *  a synthetic next boundary. The answer is the last boundary's head, its own uuid when it has none, or the copy's
+ *  first row; null for a copy with no rows. B2's D-4688 (history-span-per-boundary-copy) */
+export function predictedSpanStart({ firstRowUuid, lastBoundary }) {
+  const rows = [];
+  const boundaries = [];
+  if (lastBoundary !== null) {
+    rows.push({ uuid: lastBoundary.uuid, pos: 0, isBoundary: true, isSummary: false });
+    boundaries.push({ uuid: lastBoundary.uuid, headUuid: lastBoundary.headUuid, kept: new Set(), summaryUuid: null });
+  } else if (firstRowUuid !== null) {
+    rows.push({ uuid: firstRowUuid, pos: 0, isBoundary: false, isSummary: false });
+  } else {
+    return null;
+  }
+  rows.push({ uuid: CARD_NEXT_BOUNDARY, pos: 1, isBoundary: true, isSummary: false });
+  boundaries.push({ uuid: CARD_NEXT_BOUNDARY, headUuid: null, kept: new Set(), summaryUuid: null });
+  const next = planSpans({ rows, boundaries }).leaves.find((l) => l.boundaryUuid === CARD_NEXT_BOUNDARY);
+  return next === undefined ? null : next.spanStartUuid;
+}
+
+const isNodeIdOf = (kind, id) => typeof id === 'string' && HISTORY_NODE_ID_RE.test(id) && id[0] === kind;
+
+/** What the card for one session's next compaction says (§8.6), or why there is none. The sweep measures the inputs
+ *  over the copy the next boundary will be written to, within the epoch and family that copy's transcript belongs to.
+ *  - No confirmed, unmerged epoch of this id names the uuid (`ccrcId` null): skip `no-epoch`.
+ *  - The copy holds no row: skip `no-rows`.
+ *  - The plain id is already bound to another boundary: decideLeafId would qualify this leaf with a boundary uuid that
+ *    does not exist yet, so no line can name it: skip `fork-qualified` (B2's D-4689 (history-leaf-id-fork-qualified)). The skip
+ *    carries that plain id, so decideCardFile can still count a prediction the boundary before it consumed.
+ *  - Otherwise the leaf is the plain id. Its parent is the depth-1 parent planFanIn groups it into when it is the 8th
+ *    final, unparented slot of this copy's run (`predicted`, parentId over that group: grouping starts at the first
+ *    unparented slot and stops at a slot not yet final, RB4); else the epoch's newest condensed node when that is a
+ *    well-formed N id (`newest-condensed`); else none.
+ *  Both print as displayPrefixes over the family's node ids and themselves: at least NODE_ID_DISPLAY_MIN hex digits,
+ *  unique within the family the reader's default scope is (RB2). */
+export function planCardPrediction(i) {
+  if (i.ccrcId === null) return { act: 'skip', reason: 'no-epoch' };
+  const start = predictedSpanStart(i);
+  if (start === null) return { act: 'skip', reason: 'no-rows' };
+  const d = decideLeafId({
+    ccrcId: i.ccrcId, ccUuid: i.ccUuid, spanStartUuid: start, boundaryUuid: CARD_NEXT_BOUNDARY, plainBoundOther: i.plainBoundOther,
+  });
+  if (d.forked) return { act: 'skip', reason: 'fork-qualified', plainLeafId: leafId(i.ccrcId, i.ccUuid, start) };
+  const leaf = d.id;
+  const slots = [
+    ...i.slots.map((x) => ({ nodeId: x.nodeId, final: x.nodeId !== null, parented: x.parented })),
+    { nodeId: leaf, final: true, parented: false },
+  ];
+  const group = planFanIn({ slots, width: FAN_IN.leaf }).find((g) => g.includes(leaf));
+  let parent = null;
+  let parentKind = null;
+  if (group !== undefined) {
+    parent = parentId(group);
+    parentKind = 'predicted';
+  } else if (isNodeIdOf('N', i.newestCondensed)) {
+    parent = i.newestCondensed;
+    parentKind = 'newest-condensed';
+  }
+  const shown = displayPrefixes([...i.familyIds, leaf, ...(parent === null ? [] : [parent])]);
+  return {
+    act: 'write', line: cardLine({ leaf: shown.get(leaf), parent: parent === null ? null : shown.get(parent) }),
+    leafId: leaf, parentId: parent, parentKind,
+  };
+}
+
+const CARD_LEAF_RE = new RegExp(`^${escapeRe(CARD_PREFIX)}node (L[0-9a-f]{6,20})…`);
+
+/** The leaf display prefix a grammar-valid card line names, or null for any other text. */
+function cardLeafOf(text) {
+  return CARD_LINE_RE.test(text) ? CARD_LEAF_RE.exec(text)[1] : null;
+}
+
+/** What to do with one session's card file (§8.6 Timing). `current` is the file as read: absent, unreadable, or its
+ *  text (one trailing LF is the writer's and is not part of the line). A new line is written only at end-of-file; a
+ *  file whose leaf the prediction no longer names was CONSUMED by the boundary ingested since, and goes off
+ *  end-of-file rather than wait; a file that is no card line, or cannot be read, is replaced at end-of-file and
+ *  removed otherwise; a skip removes any file. A fork skip names the plain id the next leaf would have had, so a
+ *  file whose leaf no longer prefixes it was consumed too, and is counted (W1-e's denominator,
+ *  D-4738 (history-card-consumed-counter)); a no-epoch or no-rows skip names no leaf and counts nothing.
+ *    absent                      → write at end-of-file, else none;
+ *    the same line               → keep;
+ *    the same leaf, re-rendered  → write at end-of-file, else keep (its parent or prefix moved, the leaf did not);
+ *    another leaf                → consumed: write at end-of-file, else delete;
+ *    no card line, unreadable    → write at end-of-file, else delete;
+ *    a skip                      → delete; consumed when it is a fork skip whose plain id the file's leaf no
+ *                                  longer prefixes. */
+export function decideCardFile({ current, prediction, atEof }) {
+  const present = current.state !== 'absent';
+  const text = current.state === 'value' ? current.value.replace(/\n$/, '') : null;
+  const was = text === null ? null : cardLeafOf(text);
+  if (prediction.act !== 'write') {
+    const moved = was !== null && typeof prediction.plainLeafId === 'string' && !prediction.plainLeafId.startsWith(was);
+    return { act: present ? 'delete' : 'none', consumed: moved };
+  }
+  if (!present) return { act: atEof ? 'write' : 'none', consumed: false };
+  if (text === prediction.line) return { act: 'keep', consumed: false };
+  if (was === null) return { act: atEof ? 'write' : 'delete', consumed: false };
+  if (!prediction.leafId.startsWith(was)) return { act: atEof ? 'write' : 'delete', consumed: true };
+  return { act: atEof ? 'write' : 'keep', consumed: false };
+}
+
+/** The generation record beside a prediction, `card/<id>/<uuid>.gen` (spec §9.7, §8.2, C68; coordinator ruling
+ *  R-recalloff-parity). The hook cannot read the store: when neither CCRC_SESSION_GENERATION nor $REG/<id>.generation
+ *  resolves a generation, it compares recall-off/<id> with this record, which holds the generation B2's CLI resolves
+ *  then (the id's newest family's: '' for a legacy family or none), and with no usable record it withholds the line.
+ *  `card` is decideCardFile's act and `mayWrite` the write gate decideCardFile was given (end-of-file and budget).
+ *  The record's text is the generation and one LF.
+ *    a prediction stands (write or keep), the record equal      → keep;
+ *    it stands, the record absent, another or unreadable       → write when a write is allowed, else delete (none
+ *                                                                 when absent): never a stale record (fail closed);
+ *    no prediction stands (delete or none)                      → none: the hook reads the record only beside one. */
+export function decideCardGenFile({ current, generation, card, mayWrite }) {
+  if (card !== 'write' && card !== 'keep') return 'none';
+  if (current.state === 'value' && current.value === `${generation}\n`) return 'keep';
+  if (mayWrite) return 'write';
+  return current.state === 'absent' ? 'none' : 'delete';
+}
+
+/** `~/.ccrc/history/card/<id>/<uuid>.gen`: the generation record the sweep writes beside a session's prediction (see
+ *  decideCardGenFile). Checked like cardFileOf (id by idOk, uuid by UUID_RE, before any path is formed), so the
+ *  record's name is spelled once, here. D-5049 (history-card-gen-path-helper) */
+export function cardGenFileOf(home, id, uuid) {
+  if (typeof uuid !== 'string' || !UUID_RE.test(uuid)) throw new TypeError(`cardGenFileOf: not a session uuid: ${JSON.stringify(uuid)}`);
+  return `${cardDirOf(home, id)}/${uuid}.gen`;
+}
+
+/** The rows after a boundary, in its holding copy, that the delivery measure reads for the SessionStart attachment
+ *  (chosen: RV17 found it within 40 rows of the boundary for 75 of 75 boundaries, M). D-4739 (history-card-measure-window) */
+export const CARD_MEASURE_ROWS = 40;
+/** How long after its leaf was derived a delivery window may stay open (chosen). A copy that stops being read (its
+ *  home left the roster, its file unreadable) never closes its window any other way, and the measure's cursor waits
+ *  on the oldest open window. */
+export const CARD_MEASURE_MAX_WAIT_MS = 24 * 60 * 60 * 1000;
+/** The largest attachment body the delivery measure decodes, by the blob's stored `raw_len` (the bytes of its JSON;
+ *  chosen). The hook clips its whole SessionStart output at CARD_TOTAL_MAX_CHARS characters, a few bytes each once
+ *  JSON-escaped, so a SessionStart attachment stays far below this even beside other hooks' context. A larger body,
+ *  such as a re-attached file of many MiB, is skipped unread rather than decompressed only to read its `type`.
+ *  D-4739 (history-card-measure-window) */
+export const CARD_ATTACHMENT_MAX_BYTES = 1024 * 1024;
+
+const CARD_ID_IN_TEXT_RE = new RegExp(`${escapeRe(CARD_PREFIX)}node (L[0-9a-f]{6,20})(?![0-9A-Za-z])`, 'g');
+
+/** The leaf display prefixes a SessionStart attachment names (§8.6 RV17): every `History: node L…` in the string
+ *  leaves of a `hook_additional_context` attachment, wherever it sits in a string, because `_hook_emit_context` joins
+ *  the standing cards and the compact subject with one space. Any other attachment type, or a value that is not an
+ *  object, names none. Sorted, each once. */
+export function cardIdsIn(attachment) {
+  if (attachment === null || typeof attachment !== 'object' || Array.isArray(attachment)) return [];
+  if (attachment.type !== 'hook_additional_context') return [];
+  const ids = new Set();
+  const stack = [attachment];
+  while (stack.length > 0) {
+    const v = stack.pop();
+    if (typeof v === 'string') {
+      for (const m of v.matchAll(CARD_ID_IN_TEXT_RE)) ids.add(m[1]);
+    } else if (Array.isArray(v)) {
+      for (const x of v) stack.push(x);
+    } else if (v !== null && typeof v === 'object') {
+      for (const x of Object.values(v)) stack.push(x);
+    }
+  }
+  return [...ids].sort();
+}
+
+/** Whether a leaf's delivery window is closed, so no History line can still arrive in it: CARD_MEASURE_ROWS rows read
+ *  after its boundary; the next boundary of its copy reached; its copy read to the end at least RAW_LEAF_GRACE_MS
+ *  after the boundary (`eofAfter`, lib eofAfterBoundary); its copy no longer live (gone, retired, exported, or none);
+ *  or CARD_MEASURE_MAX_WAIT_MS since the leaf was derived. D-4739 (history-card-measure-window) */
+export function cardWindowComplete({ live, rowsSeen, nextBoundary, eofAfter, waitedMs }) {
+  return !live || nextBoundary || rowsSeen >= CARD_MEASURE_ROWS || eofAfter || waitedMs >= CARD_MEASURE_MAX_WAIT_MS;
+}
+
+/** One leaf's delivery (§8.6, W1-e): `served` when a History line in its window names a prefix of it; `mismatch`
+ *  when History lines there name only other leaves (a stale or a mispredicted card); `none` when the window closed
+ *  with no History line; `wait` while it is open. D-4737 (history-card-measured-from-transcript) */
+export function decideCardDelivery({ ids, leafId, windowComplete }) {
+  if (ids.some((p) => leafId.startsWith(p))) return 'served';
+  if (ids.length > 0) return 'mismatch';
+  return windowComplete ? 'none' : 'wait';
+}
+
+/** A purged session's scope marker or card directory (§9.4): removed once the registry no longer names the session
+ *  (`$REG/<id>.uuid` absent) and its newest write is more than PURGED_FILES_GRACE_MS old. A registry entry that
+ *  could not be measured is never read as absent, and an entry with no measured time is kept. */
+export function decidePurgedEntry({ reg, newestMtimeMs, nowMs }) {
+  if (reg !== 'absent' || newestMtimeMs === null) return 'keep';
+  return nowMs - newestMtimeMs > PURGED_FILES_GRACE_MS ? 'remove' : 'keep';
+}
+
+// ── The consumption's scope (ruling RC3) ───────────────────────────────────────────────────────────────────────────
+/** How long a PreCompact scope marker speaks for the compaction it was written at, in ms: the hook's
+ *  COMPACT_CARD_MAX_AGE (1200 s), the age within which its reader serves a `main` marker (§8.6). The hook cannot
+ *  import lib, so single-definition.test.ts binds the two (W1-B3 Task 11). D-4738 (history-card-consumed-counter) */
+export const SCOPE_MARKER_MAX_AGE_MS = 1200 * 1000;
+/** The words a consumption is counted under, `card_consumed:<word>`. W1-e's served share is over `main` and
+ *  `unknown`; `other` is reported beside it (ruling RC3). */
+export const CARD_CONSUMED_SCOPES = Object.freeze(['main', 'other', 'unknown']);
+/** The scope words the hook writes into a marker (§5.1: `_hook_compact_scope`'s verdicts). */
+const SCOPE_MARKER_WORDS = Object.freeze(['main', 'subagent', 'ambiguous']);
+
+/** A marker's one line, `<scope> <uuid> <ms>` (one trailing LF is the hook's), or null for any other text. The uuid
+ *  is compared with the consumed file's own, which passed UUID_RE before it became a path, so it needs no grammar
+ *  of its own here. */
+function parseScopeMarker(text) {
+  const m = /^([a-z]+) (\S+) ([1-9][0-9]{0,15})$/.exec(text.replace(/\n$/, ''));
+  if (m === null || !SCOPE_MARKER_WORDS.includes(m[1])) return null;
+  return { scope: m[1], uuid: m[2], ms: Number(m[3]) };
+}
+
+/** The time of the boundary that consumed a card file (ruling RC3): of one copy's boundaries, in order, the one
+ *  whose leaf, by the span rule (predictedSpanStart over the boundary before it, or the copy's first row for the
+ *  first), the file's printed leaf prefixes. Walked newest first, where the consuming boundary almost always is. Its
+ *  `tsMs`, or null when the file prints no card line or no boundary there matches. A null `ccrcId` (no epoch names
+ *  the session) answers null before any hash: no epoch means no consumed boundary, and decideConsumedScope then
+ *  folds a null time to `unknown` (RC3). D-5050 (history-card-consumed-ts-no-epoch) */
+export function consumedBoundaryTs({ current, ccrcId, ccUuid, firstRowUuid, boundaries }) {
+  const was = current.state === 'value' ? cardLeafOf(current.value.replace(/\n$/, '')) : null;
+  // D-5050: leafId hashes every part and a null ccrcId would throw, so a session with no epoch answers null here.
+  if (was === null || ccrcId === null) return null;
+  for (let k = boundaries.length - 1; k >= 0; k -= 1) {
+    const start = predictedSpanStart({ firstRowUuid, lastBoundary: k === 0 ? null : boundaries[k - 1] });
+    if (start !== null && leafId(ccrcId, ccUuid, start).startsWith(was)) return boundaries[k].tsMs;
+  }
+  return null;
+}
+
+/** The scope a consumed prediction is counted under (W1-e's denominator, ruling RC3). `marker` is scope/<id> as
+ *  read: absent, unreadable, or its text. `uuid` is the consumed file's, and `boundaryTsMs` the consumed boundary's
+ *  time, null when it is not known:
+ *    main     the marker reads `main <uuid> <ms>`, its ms not after the boundary and within SCOPE_MARKER_MAX_AGE_MS of
+ *             it: the hook scoped THIS compaction main, so a line was due;
+ *    other    it reads `subagent` or `ambiguous` for this uuid in the same window: no line was ever due;
+ *    unknown  anything else: no marker, unreadable, emptied, another uuid, or a ms outside the window (overwritten by a
+ *             later PreCompact, or older than this compaction). Unknown stays in W1-e's denominator, so it can only
+ *             lower the served share. D-4738 (history-card-consumed-counter) */
+export function decideConsumedScope({ marker, uuid, boundaryTsMs }) {
+  if (marker.state !== 'value') return 'unknown';
+  const m = parseScopeMarker(marker.value);
+  if (m === null || m.uuid !== uuid) return 'unknown';
+  const age = boundaryTsMs === null ? null : boundaryTsMs - m.ms;
+  // D-5051 (history-scope-age-at-most): a marker exactly SCOPE_MARKER_MAX_AGE_MS old still serves (spec 8.6 says "younger than").
+  if (age === null || age < 0 || age > SCOPE_MARKER_MAX_AGE_MS) return 'unknown';
+  return m.scope === 'main' ? 'main' : 'other';
+}
+
+// ── The withdrawal (ruling RC2: fail closed) ───────────────────────────────────────────────────────────────────────
+/** The words a withdrawal is counted under, `card_withdrawn:<word>`: one per way a scheduled pass can run without a
+ *  card step over a caught-up ingest, and one, `copy-skipped`, that is a per-session withdrawal on a pass whose card
+ *  step ran and kept the rest (D-5061). */
+export const CARD_WITHDRAW_REASONS = Object.freeze([
+  'at-cap', 'low-disk', 'floor-stop', 'roster-unreadable', 'budget', 'recovering', 'migrating', 'held', 'unreachable',
+  'refused', 'unbound', 'copy-skipped',
+]);
+
+const withdrawFor = (reason) => ({ act: 'withdraw', reason });
+
+/** Whether a scheduled pass withdraws every card prediction, and under which word (ruling RC2: fail closed). A
+ *  prediction is consumed only by a card step that sees the boundary that consumed it. So a pass that runs none, or
+ *  whose ingest may have stopped short of that boundary, withdraws them all rather than leave a stale line for the
+ *  next compaction (the one exception in kind is the `copy` arm, which withdraws one session's and keeps the rest):
+ *    hold     `store-unbound` → unbound; `store-unreachable` → unreachable; any other word passOutcome answers with
+ *             EXIT.DB (a refusal that waits on the operator) → refused; the rest (held, a migration held for room or
+ *             time) → held;
+ *    migrate  → migrating;   recover → recovering;
+ *    run      a cap or floor pause → its own word (at-cap, low-disk); the per-chunk floor stopped the ingest →
+ *             floor-stop; no ingest ran (an unreadable roster) → roster-unreadable; the run's budget spent before the
+ *             card step → budget (the step still consumes and deletes; it only writes nothing); otherwise keep;
+ *    copy     one session's prediction, on a pass that kept the rest: its uuid among the transcript copies the ingest
+ *             could not read, admission refused or whose parse crashed this pass → copy-skipped (that copy may hold the boundary that
+ *             consumes the standing line, and the pass cannot see it); any other uuid keep. D-5061
+ *             (history-card-withdraw-on-a-skipped-copy)
+ *  A pass that never reaches this (history-off, a server box, a pass no timer starts) withdraws nothing. The hook
+ *  serves no line under the first two only WHILE the switch stands (history-off, or a box with no store): a
+ *  prediction written before history-off survives it, and is served again once the switch is removed, until the id's
+ *  next ingest consumes or replaces it. D-5062 (history-card-served-after-history-off) D-4740
+ *  (history-card-withdrawn-when-not-ticking) */
+export function decideCardWithdraw(p) {
+  if (p.arm === 'hold') {
+    if (p.word === 'store-unbound') return withdrawFor('unbound');
+    if (p.word === 'store-unreachable') return withdrawFor('unreachable');
+    return withdrawFor(passOutcome(p.word).exit === EXIT.DB ? 'refused' : 'held');
+  }
+  if (p.arm === 'migrate') return withdrawFor('migrating');
+  if (p.arm === 'recover') return withdrawFor('recovering');
+  if (p.arm === 'copy') return p.skipped.includes(p.uuid) ? withdrawFor('copy-skipped') : { act: 'keep' };
+  if (p.arm !== 'run') throw new TypeError(`decideCardWithdraw: not a pass arm: ${JSON.stringify(p.arm)}`);
+  if (p.pause === 'at-cap' || p.pause === 'low-disk') return withdrawFor(p.pause);
+  if (p.floorStop) return withdrawFor('floor-stop');
+  if (!p.ingested) return withdrawFor('roster-unreadable');
+  if (!p.budgetLeft) return withdrawFor('budget');
+  return { act: 'keep' };
+}

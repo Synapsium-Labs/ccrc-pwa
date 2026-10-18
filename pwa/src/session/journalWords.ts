@@ -31,7 +31,7 @@ export const ACT_WORD: Record<LifecycleAct, string> = {
   archive: 'archived', restore: 'restored', 'attic-drop': 'attic refs dropped',
   reap: 'reaped', reclaim: 'reclaimed', expire: 'expired', collect: 'temp root collected', rehome: 'home account moved', gc: 'gc pass', spawn: 'respawned', route: 'routing written', start: 'started',
   ensure: 'ensured', swap: 'account swapped', enable: 'enabled',
-  stop: 'stopped', forget: 'forgotten', unarchive: 'archive stamp cleared',
+  stop: 'stopped', forget: 'forgotten', hibernate: 'hibernated', unarchive: 'archive stamp cleared',
   unknown: 'unmodelled act',
 };
 

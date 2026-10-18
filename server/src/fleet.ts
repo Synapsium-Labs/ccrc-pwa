@@ -10,7 +10,7 @@ import type { HookState } from './hookstate.js';
 import type { FleetSession, LifecycleInput, PrState, SessionStatus, SessionUsage, TaskProgress } from '../../shared/api.js';
 // The ladder lives in `shared/` because `reviveFleetSession` is its second
 // producer and the two must not be able to disagree — see its own docstring.
-import { sessionBucket, sessionLifecycle, spawnVerdict } from '../../shared/api.js';
+import { sessionBucket, sessionLifecycle, sessionRoleOf, spawnVerdict } from '../../shared/api.js';
 import type { Roster } from '../../shared/roster.js';
 // Task 19: the chip's own read. No cycle — `coord/store.ts` imports nothing
 // from this file, the same pairing `watch.ts` already has with both.
@@ -25,7 +25,7 @@ import { foldLastRuns, releasedFrom, type ReleasedLookup } from './coord/release
 // F2(b): the `held` chip's ceiling, DERIVED from the lane's own two
 // windows. It lives in `askwindow.ts` because `watch.ts` (their first
 // reader) imports this module, so the constants could not stay there.
-import { ASK_HELD_CHIP_MAX_MS } from './askwindow.js';
+import { ASK_HELD_CHIP_MAX_MS, askNotifyAt } from './askwindow.js';
 
 /** `FleetSession.askSummary`'s ceiling — a fleet card row, not a transcript; an ask push's too (D-5356). */
 export const ASK_SUMMARY_MAX_LEN = 80;
@@ -155,6 +155,28 @@ function fleetAsk(row: AskRow | null, nowMs: number): FleetSession['ask'] {
     return { state: 'answered', parentId: row.parentId, answeredBy: row.answeredBy };
   }
   return null;
+}
+
+/**
+ * `with-coordinator-state` (D-5296): `FleetSession.withCoordinator` from the
+ * session's NEWEST asks row (`currentAsksFor`, the same batched read
+ * `fleetAsk` takes). Set only while that row is `held` or `answering` (a
+ * principal is mid-answer) AND the assembly's clock is strictly before
+ * `notifyAt`; `released`, `declined`, `answered`, `stale` and `unknown` all
+ * give null, so a hand-over, the parent's own release, an answer and a gone
+ * dialog each return the row to the ladder's attention rung on the next
+ * assembly. `notifyAt` is `askNotifyAt(row.at)`, the mint time, NEVER
+ * `row.askAt` (hookstate's `updatedAt`, the instance guard): the sweep counts
+ * the window from the mint, so the fleet clears the state at the moment the
+ * operator's push fires (D-5364). Plan Task 16 adds the approvals source
+ * here, through this one function.
+ */
+function fleetWithCoordinator(row: AskRow | null, nowMs: number): FleetSession['withCoordinator'] {
+  if (row === null) return null;
+  if (row.state !== 'held' && row.state !== 'answering') return null;
+  const notifyAt = askNotifyAt(row.at);
+  if (nowMs >= notifyAt) return null;
+  return { kind: 'question', parentId: row.parentId, since: row.at, notifyAt };
 }
 
 /**
@@ -748,6 +770,8 @@ export async function assembleFleet(
       // coord.db degrades every row to null rather than throwing out of
       // `assembleFleet`, which neither caller wraps.
       ask: fleetAsk(asksByChild.get(r.id) ?? null, nowMs),
+      // D-5296: the quiet "with coordinator" state, from the same row.
+      withCoordinator: fleetWithCoordinator(asksByChild.get(r.id) ?? null, nowMs),
       subagents: hs?.subagents ?? null,
       // `background-aware-working` (D-5231): the delegated work a main Stop
       // left running, and ONLY when the live file's own word covers that work
@@ -765,6 +789,8 @@ export async function assembleFleet(
       // D-5237: the registry's record of the last process end, carried as is;
       // the PWA shows it for an hour (`recentLastEnd`).
       lastEnd: r.lastEnd,
+      // D-5242: already epoch MS (`parseHibernated`), carried straight off the record like `lastEnd`.
+      hibernatedAt: r.hibernatedAt,
       // `?? null` and not `?? 0`: no hook data at all and a hook reporting
       // zero reads are two conditions, and `hookstate.ts` already keeps them
       // apart — collapsing them one layer out would undo that on the wire.
@@ -847,6 +873,10 @@ export async function assembleFleet(
       // three-way reading of `$REG/<id>.child` (`SessionRecord.child`). A
       // display value on this wire — the bind gate re-reads the registry.
       child: r.child,
+      // D-5301: the role, from `.child` and nothing else — `sessionRoleOf`,
+      // the one derivation, so the badge and the start card agree on the
+      // `.child` axis only (the card is also silent for a held row; see there).
+      role: sessionRoleOf(r.child),
       // Workspace lifecycle §5.1. `child` here is the registry's reading, `unreadable` counted as a child.
       releasedFrom: released.ok
         ? releasedFrom({

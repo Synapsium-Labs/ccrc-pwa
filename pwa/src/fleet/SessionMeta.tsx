@@ -30,8 +30,8 @@
 import type { CSSProperties, ReactNode } from 'react';
 import {
   ASK_OPERATOR_PRINCIPAL, backgroundWork, backgroundWords,
-  ctxPressure, graphGateCount, graphReadCount, sessionAsk, substrateFault, turnStall,
-  unmeasuredFields,
+  ctxPressure, graphGateCount, graphReadCount, sessionAsk, sessionWithCoordinator, substrateFault, turnStall,
+  unmeasuredFields, withCoordinatorWords,
   type FleetSession, type ProjectPoolWire, type RosterWire,
 } from '../../../shared/api';
 import { accountColorVar, accountLabel, accountPool } from '../lib/accounts';
@@ -39,6 +39,7 @@ import { elapsedWords, useNow, WARN_GLYPH } from '@ccrc/ui';
 import { restartWords } from '../lib/restart';
 import { humanBytes } from '../screens/ArchiveScreen';
 import { lifecycleQualifier } from './lifecycleWords';
+import { hibernatedWords } from './hibernated';
 import { childOfRunLabel } from './runWords';
 import { spawnChip } from './spawnWords';
 import { GraphChip, LastSpawnChip, UnmeasuredChip } from './chips';
@@ -131,6 +132,10 @@ export interface SessionMetaProps {
   state: string;
   /** The same. */
   dead: boolean;
+  /** D-5242: when this dead row went to sleep (`hibernatedSince`), or null. A sleeping row reads
+   *  `hibernated · 6h` in place of `state`, and its stop stamp is not shown: `ccd hibernate` writes
+   *  `.stopped`, so the lifecycle qualifier would otherwise call a sleep a stop. Optional: absent is awake. */
+  asleepAt?: number | null;
   /** The disclosure this row's toggle owns. The LIST is rendered by
    *  `SessionLine`, outside this row, so the three of these cross the seam
    *  together: the toggle is here, the content is there. */
@@ -166,7 +171,7 @@ const markerNote = (
 };
 
 export function SessionMeta({
-  session, roster, projectPool, onOpenRun, selected, state, dead,
+  session, roster, projectPool, onOpenRun, selected, state, dead, asleepAt = null,
   subagentList, subagentsOpen, subagentsId, onToggleSubagents,
 }: SessionMetaProps): ReactNode {
   // The cleanup bucket's own facts — the merged PR number and the size
@@ -184,7 +189,7 @@ export function SessionMeta({
   // The row's lifecycle qualifier (§4.4) and the swap refusal's durable
   // marker (§2.4). Neither touches `state` above: the bucket ladder is
   // untouched, a dead row stays `exited`, and these are cells beside it.
-  const qualifier = lifecycleQualifier(session);
+  const qualifier = asleepAt !== null ? null : lifecycleQualifier(session);
 
   // Child-reclamation wave 5: which run minted this workspace, when it is a
   // child. `childOfRunLabel` is the one reader of `session.child`.
@@ -208,7 +213,13 @@ export function SessionMeta({
   // chip; anything else reads as no ask, the same "no chip" a genuinely
   // absent `ask` gets.
   const askRaw = sessionAsk(session);
-  const ask = askRaw !== null && (askRaw.state === 'held' || askRaw.state === 'answered') ? askRaw : null;
+  // D-5296: while the parent holds the question the state word itself says
+  // so — `with coordinator · <parent>` — in the calm tone, and the `held`
+  // chip, which would repeat the parent's name on a 360 px row, yields to it
+  // (D-5390). Only on the `working` row the hold produces, never on a dead one.
+  const wc = dead || state !== 'working' ? null : sessionWithCoordinator(session);
+  const wcWords = wc === null ? null : withCoordinatorWords(wc, session.project);
+  const ask = askRaw !== null && (askRaw.state === 'answered' || (askRaw.state === 'held' && wc === null)) ? askRaw : null;
 
   // §1.6b. ONE chip, never two — every condition that decides which one, and
   // the §1.7 degrade for a verdict this bundle was compiled without, now live
@@ -340,9 +351,17 @@ export function SessionMeta({
   // is no longer a grid).
   return (
         <span className="sess-meta">
-          <span className={`sess-state sess-state--${state}`} title={bgWords?.title}>
-            {bgWords === null ? state : `${state} · ${bgWords.text}`}
-          </span>
+          {wcWords !== null ? (
+            <span className="sess-state sess-state--coordinator" title={wcWords.title}>
+              {wcWords.text}
+            </span>
+          ) : (
+            <span className={`sess-state sess-state--${state}`} title={bgWords?.title}>
+              {asleepAt !== null
+                ? hibernatedWords(asleepAt, now)
+                : bgWords === null ? state : `${state} · ${bgWords.text}`}
+            </span>
+          )}
 
           {/* Position 2, immediately after `.sess-state`. `.sess-meta` has no
               flex-wrap and no `order`, so DOM order IS visual order, and only

@@ -14,7 +14,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
 import type { NotifyEvent, RunSummary } from '../../../shared/api';
-import { eventRunId, recordKey, reviveNotifyEvents } from '../lib/feed';
+import { eventRunId, interruptLine, raisesUnread, recordKey, reviveNotifyEvents } from '../lib/feed';
 import { api } from '../lib/api';
 import { navigate } from '../lib/router';
 import { ack, acksSnapshot, FEED_ACK_KEY, isUnseenAt, subscribeAcks } from '../lib/seen';
@@ -50,10 +50,10 @@ const loadRunsDefault = (): Promise<{ runs: RunSummary[] }> => api.runs(true);
  *  `unknown` has to read as an honest answer rather than as a bug. */
 const KIND_WORD: Record<NotifyEvent['kind'], string> = {
   mail: 'mail', run: 'run', ask: 'asked', done: 'finished', merged: 'merged',
-  coord: 'config', update: 'update', queue: 'queue', unknown: 'unknown',
+  coord: 'config', update: 'update', queue: 'queue', interrupt: 'interrupt', nudge: 'nudged', unknown: 'unknown',
 };
 const KIND_GLYPH: Record<NotifyEvent['kind'], string> = {
-  mail: MAIL_GLYPH, run: '⟳', ask: '?', done: '✓', merged: '⑂', coord: SETTINGS_GLYPH, update: '⇡', queue: '⤺', unknown: '·',
+  mail: MAIL_GLYPH, run: '⟳', ask: '?', done: '✓', merged: '⑂', coord: SETTINGS_GLYPH, update: '⇡', queue: '⤺', interrupt: '⎋', nudge: '↻', unknown: '·',
 };
 
 export function MailScreen({
@@ -241,21 +241,27 @@ export function MailScreen({
             <div key={key} className="mail-group">
               <p className="mail-group-head">{g.head}</p>
               <ul className="mail-list">
-                {g.rows.map((ev) => (
-                  <li
-                    key={recordKey(ev)}
-                    className="mail-row"
-                    data-unseen={isUnseenAt(FEED_ACK_KEY, ev.at, acks) ? 'true' : 'false'}
-                  >
-                    <span className="mail-kind">
-                      <span className="mail-kind-glyph" aria-hidden="true">{KIND_GLYPH[ev.kind]}</span>
-                      {KIND_WORD[ev.kind]}
-                    </span>
-                    <span className="mail-row-title">{ev.title}</span>
-                    <span className="mail-when">{formatAge(nowSec - Math.floor(ev.at / 1000))}</span>
-                    {ev.body !== '' && <p className="mail-body">{ev.body}</p>}
-                  </li>
-                ))}
+                {g.rows.map((ev) => {
+                  // D-5431: an interrupt row whose body parsed shows it as its title, in words, and prints no raw
+                  // `source=… outcome=…` line — the title already says both. A body off its grammar has no title
+                  // standing in for it, so it still prints. `raisesUnread` keeps the row from ever reading unseen.
+                  const line = interruptLine(ev);
+                  return (
+                    <li
+                      key={recordKey(ev)}
+                      className="mail-row"
+                      data-unseen={raisesUnread(ev) && isUnseenAt(FEED_ACK_KEY, ev.at, acks) ? 'true' : 'false'}
+                    >
+                      <span className="mail-kind">
+                        <span className="mail-kind-glyph" aria-hidden="true">{KIND_GLYPH[ev.kind]}</span>
+                        {KIND_WORD[ev.kind]}
+                      </span>
+                      <span className="mail-row-title">{line ?? ev.title}</span>
+                      <span className="mail-when">{formatAge(nowSec - Math.floor(ev.at / 1000))}</span>
+                      {ev.body !== '' && line === null && <p className="mail-body">{ev.body}</p>}
+                    </li>
+                  );
+                })}
               </ul>
             </div>
           ))}

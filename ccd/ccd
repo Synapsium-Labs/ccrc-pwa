@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=e2192ee7db804cf293a2cd6bbbfc570cc5bc44302e2915ae757518d6b3c59a6b
+# ccrc:generated 1 sha256=b5eb42750547e8e34d2f721b310ab3fa83e921f67cde9cfe94db650f2ddfe380
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -863,7 +863,7 @@ PLIST
 
 # `systemctl --user enable --now` — install the unit AND start it now.
 # On launchd those are one verb (`bootstrap` both loads and, with RunAtLoad,
-# starts), which is why `_svc_enable` below is the same call minus the start:
+# starts), which is why `_svc_enable` below drops the start (and, on systemd, the reload):
 # a plist in ~/Library/LaunchAgents IS boot persistence, exactly as an enable
 # symlink is under systemd.
 _svc_enable_now() {   # <unit>
@@ -878,8 +878,8 @@ _svc_enable_now() {   # <unit>
   _svc_launchctl bootstrap "$d" "$(_svc_plist "$1")" 2>/dev/null
   _svc_launchctl kickstart "$d/$(_svc_label "$1")" >/dev/null 2>&1
 }
-_svc_enable() {   # <unit> — boot persistence only, no start
-  if [ "$CCD_OS" != darwin ]; then systemctl --user enable "$1" 2>/dev/null; return $?; fi
+_svc_enable() {   # <unit> — boot persistence only, no start, no reload
+  if [ "$CCD_OS" != darwin ]; then systemctl --user enable --no-reload "$1" 2>/dev/null; return $?; fi
   case "$1" in claude-session@*) _svc_write_session_plist "$1" || return 1 ;; esac
   _svc_launchctl enable "$(_svc_domain)/$(_svc_label "$1")" 2>/dev/null
   return 0
@@ -3134,10 +3134,10 @@ _reg_get() { [[ -f "$REG/$1.$2" && ! -L "$REG/$1.$2" ]] || return 1; local __rg_
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
-# and the reason is a count rather than a preference: this file makes 203
-# invocations across 172 non-comment lines.
+# and the reason is a count rather than a preference: this file makes 204
+# invocations across 173 non-comment lines.
 #
-# THE LAST MOVE WAS the tick diet's `_reg_get_to` conversions (D-4963), the −9 (`_session_hard_blocked` 2, `_auto_stale_check` 1, `_auto_swap_check` 2, `_auto_compact_check` 3, `_route_applied_get_to` 1: each hot read now fills its variable with builtins, no subshell); before it the forked-session transcript's review round 2 — the held-conversation wait (`_ci_held_wait` +3, `_supervised_start` +2, `_ci_bgwait_open`/`_ci_bgwait_close` +1 each — D-4944), the +7; before it its review round 1 (`_ci_bg_follow`, `_ci_chain_end`, `_ci_resume_follow` — D-4944/D-4945), the +3; before it the forked-session transcript's continued-in walk (`_sync_uuid`, `_follow_continued_in`), the +2; before it the read-back's lane gate (`_route_readback_transcript`), the +1; before it the read-back's transcript memo (`_route_readback_transcript`), the +1; before it the return gate's unarchive (workspace lifecycle wave 3b), the +2; before it the route read-back's uuid read (`_route_readback`), the +1; before it the EXPIRE region's reads (workspace lifecycle wave 3), the +10; before that the operator-choice reads (session-continuity wave 3), the +3; before that the rescue wait's reads (session-continuity wave 2), the +3;
+# THE LAST MOVE WAS the children's spawn record (plan Task 15, D-5299), the +1 (`_spawn_start`'s `.child` test); before it the tick diet's `_reg_get_to` conversions (D-4963), the −9 (`_session_hard_blocked` 2, `_auto_stale_check` 1, `_auto_swap_check` 2, `_auto_compact_check` 3, `_route_applied_get_to` 1: each hot read now fills its variable with builtins, no subshell); before it the forked-session transcript's review round 2 — the held-conversation wait (`_ci_held_wait` +3, `_supervised_start` +2, `_ci_bgwait_open`/`_ci_bgwait_close` +1 each — D-4944), the +7; before it its review round 1 (`_ci_bg_follow`, `_ci_chain_end`, `_ci_resume_follow` — D-4944/D-4945), the +3; before it the forked-session transcript's continued-in walk (`_sync_uuid`, `_follow_continued_in`), the +2; before it the read-back's lane gate (`_route_readback_transcript`), the +1; before it the read-back's transcript memo (`_route_readback_transcript`), the +1; before it the return gate's unarchive (workspace lifecycle wave 3b), the +2; before it the route read-back's uuid read (`_route_readback`), the +1; before it the EXPIRE region's reads (workspace lifecycle wave 3), the +10; before that the operator-choice reads (session-continuity wave 3), the +3; before that the rescue wait's reads (session-continuity wave 2), the +3;
 # then D-3526's carried-in verdict, the +6 (`_limit_dated`, `_limit_read`, `_never_came_up`, three in `_carried_in_note`); then the RECLAIM region's reads (CCR-15 wave 3, Task 5), `_child_tmpdir`'s and CCR-10's.
 # BEFORE THAT IT WAS ROUTING SLICE 4's, and naming it is what stops the next
 # reader hunting for a merge that did not happen: the applier and its registry
@@ -4084,11 +4084,11 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
     _ws_private_family "$psuffix" || continue
     rm -f "$pf" || _reg_purge_unremoved "$pf"
   done
-  # GENERATION LAST, after the archived/reaping tail and after every private
-  # family — and OUTSIDE the loop above, which skips it. It is the row's
-  # authorization: while it stands, a hook holding it can still take the lock,
-  # so it is the last thing to go.
-  rm -f "$REG/$id.generation" || _reg_purge_unremoved "$REG/$id.generation"
+  # GENERATION LAST, after the archived/reaping tail and every private family, and OUTSIDE the loop above, which skips it: the row's authorization, so while it stands a hook holding it can still take the lock.
+  # `joined` and `joinedprev` ONCE MORE, AFTER IT, in ONE `rm` call on the same line, and the order is the point: session-hook.sh appends `$REG/$id.joined` on a SubagentStart WITHOUT this lock (and renames it whole to `joinedprev` past 128 lines), only while `generation` stands (it checks before the append and again after it, and removes both names if the row is gone), and the glob loop above passed the names tens of milliseconds before this line.
+  # An append that lands before this line is taken by it; one that lands after `generation` has gone sees no row on its re-check and removes itself. Placed earlier, it would leave a hook that still sees the row free to write behind it, and an orphaned dot-free field holds the slug for ever (`_ws_slug_free`'s any-field check; `ws-gc`, keyed on `.uuid`/`.workspace`, never clears it).
+  # Its own literal paths and never the loop's `f` (the note beside the `hf` loop: a second unlink through that variable is a second canonical write on the compaction card's allow-list; neither name is on it). ONE call, so the purge's unlink count stays what `ccd-workspaces.test.ts` pins; a refusal names each path still standing. Line-neutral by construction, so no cited anchor below moves.
+  rm -f "$REG/$id.generation" || _reg_purge_unremoved "$REG/$id.generation"; rm -f "$REG/$id.joined" "$REG/$id.joinedprev" || { [[ -e "$REG/$id.joined" ]] && _reg_purge_unremoved "$REG/$id.joined"; [[ -e "$REG/$id.joinedprev" ]] && _reg_purge_unremoved "$REG/$id.joinedprev"; }
   _compact_lock_release "$_pg_fd"
   return "$_pg_urc"
 }
@@ -4366,7 +4366,7 @@ _LC_OBS=""
 # `badact` field, which is what makes the equality hold by construction rather
 # than by everyone remembering.
 _LC_ACTS=(archive attic-drop claim collect create destroy enable ensure expire forget gc
-          hold purge reap reclaim rehome release rename restore route spawn start stop
+          hibernate hold purge reap reclaim rehome release rename restore route spawn start stop
           supervise swap unarchive unsupervise)
 # The vocabulary is the set of ACCEPTABLE INPUTS; the degrade word is the
 # OUTPUT `_lc_emit` produces when an input is not in that set — the same rule
@@ -8685,8 +8685,8 @@ EOF
   echo docs-show
   echo docs-fetch
   echo docs-index
-  echo docs-v1
-  echo swap-busy-v1   # cmd_swap re-measures at the act and takes --interrupt (D-5240): the server sends the flag only behind this word
+  echo docs-v1; echo delegation-events-v1   # delegation broker wave 3: the spool grammar and ccd-made spool directories (`_delegation_spool_dir`); the hook's registration is the doctor's to measure, not this token's
+  echo swap-busy-v1; echo hibernate   # cmd_swap re-measures at the act and takes --interrupt (D-5240): the server sends the flag only behind this word; `hibernate` (D-5242) is a verb, sent only behind `verbSupported`
 }
 
 cmd_version() {   # what THIS box runs, per the deploy's own stamp — never a guess.
@@ -9963,7 +9963,7 @@ cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
   elif [[ "$ahead" == 0 ]]; then reason="empty"
   else reason="manual"; fi
   _reg_set "$id" archived "$(date +%s)"
-  _reg_set "$id" archivedreason "$reason"
+  _reg_set "$id" archivedreason "$reason"; rm -f -- "$REG/$id.hibernated"   # an archive ENDS a hibernation (D-5242): the mail lane never wakes an archived row
   # AFTER both markers, so `reason` is the value that actually landed. It is one
   # of exactly three words (ccd:4702-4704): merged:#N | empty | manual.
   # `.archived` is the one registry field carrying a WHY, and it is measurably
@@ -19246,6 +19246,12 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # `-e` not `-f`, matching the four existing hold readers: an unreadable hold
   # defers too, because doubt reads as HELD.
   [[ -e "$REG/$id.hold" ]] && return 0
+  # A WOKEN ROW TAKES NO COSMETIC SWAP for SWAP_COOLDOWN (D-5242): it has just
+  # paid a cold `--resume`, and a relocation now would pay another. A builtin
+  # test and read, no fork; `-f` first, so a FIFO here cannot block the tick.
+  local woke=""
+  [[ -f "$REG/$id.woke" ]] && { IFS= read -r woke < "$REG/$id.woke"; } 2>/dev/null
+  [[ "$woke" =~ ^[0-9]+$ && $(( now - woke )) -lt "$SWAP_COOLDOWN" ]] && return 0
   # Otherwise (returning home, or leaving at the rate ceiling): relocate only at a clean turn
   # boundary — never mid-turn or mid-subagent. The idle gate reads the live process status file;
   # pane heuristics alone miss running subagents (learned 2026-07-03).
@@ -22535,6 +22541,28 @@ _resume_env() {   # [id] -> one line of KEY=value assignments for `env`, switchi
   printf '%s' "$out"
 }
 
+# ── THE TOOL-CHILD PRIORITY (D-5241, spec 2026-10-16 §5.10) ─────────────────
+# Linux only: `CLAUDE_CODE_SHELL_PREFIX` names `ccd-tool-adj`, which runs a Bash
+# tool command at oom_score_adj 800 (Claude Code stays at 200), so an OOM in the
+# pane kills the tool that outgrew memory rather than the session. Hooks, the
+# statusline and MCP servers pass through it unraised (its header says why).
+# The value the pane would otherwise have had is handed on as
+# CCD_TOOL_ADJ_INNER, EXPANDED BY THE PANE'S SHELL (hence the escaped `$`), so
+# an existing prefix is wrapped, not replaced. Empty on macOS: no
+# /proc/self/oom_score_adj. A path Claude Code would split (it cuts a prefix at
+# its last " -") or one that breaks the single quotes spawns without it, said
+# on stderr.
+_tool_adj_env() {   # -> one line of KEY=value assignments for `env`, or nothing
+  [[ "$CCD_OS" == linux ]] || return 0
+  local p="$HOME/.local/bin/ccd-tool-adj"
+  case "$p" in
+    *" -"*|*"'"*)
+      echo "ccd: warn: $p cannot be a CLAUDE_CODE_SHELL_PREFIX (it contains \" -\" or a quote); spawning without the tool-child priority" >&2
+      return 0 ;;
+  esac
+  printf '%s' "CCD_TOOL_ADJ_INNER=\"\${CLAUDE_CODE_SHELL_PREFIX-}\" CLAUDE_CODE_SHELL_PREFIX='$p'"
+}
+
 # ── A CHILD'S TEMP ROOT (child-workspace reclamation, spec §5.2) ─────────────
 # A workspace minted by `ws-add --child <runId>` carries `$REG/<id>.child`, and
 # ONLY such a workspace spawns with TMPDIR pointed at `$HOME/.cc-tmp/<id>` — a
@@ -22584,6 +22612,91 @@ _child_tmpdir() {   # id -> rc 0 + path on stdout | 1 not a child | 2 child, lea
   _ws_tmproot_witness_write "$id" "$dir" "$run" \
     || echo "ccd: warn: $id's temp root $dir has no current witness — $(_ws_tmproot_witness_file "$id") could not be written; the spawn proceeds, and no collector will take this leaf until a later spawn writes it" >&2
   printf '%s' "$dir"
+}
+
+# ── THE OWNER'S DELEGATION SPOOL DIRECTORY (delegation broker wave 3, spec §5.3) ─
+# `$REG/delegation/spool/<id>`, mode 0700, made HERE, at every spawn, and nowhere else. The session hook appends one line per
+# delegation event to `<YYYYMMDDHH>.spool` inside it and NEVER makes it: a hook that created the directory would be a hook
+# that forked `mkdir` on the hot path of every tool call, and a directory it finds missing says something true, that no ccd
+# which speaks `delegation-events-v1` has spawned this session, so it skips. The same reasoning is why the path is made by
+# the spawn and not by `ws-add` or `cmd_start`: a respawn, a swap and a supervisor restart reach `_spawn_start` too, and a
+# session that predates this code gains its directory at its next spawn.
+# NEVER A REFUSAL, like `_child_tmpdir`'s rc 2: a spawn that died here would leave a supervisor restart with no session at
+# all, for the sake of evidence the census backstops. A path that cannot be made a private directory warns and returns 1;
+# the spawn goes on and the hook skips until a later spawn makes it.
+# NEVER THROUGH A LINK: the root, the spool directory and the owner's directory must not be symlinks, so a link planted at
+# any of them cannot aim the hook's appends or its prune elsewhere (the hook refuses the same three).
+# THE ID is the registry's own shape and never dot-leading: `.` and `..` would name the spool root or the registry itself,
+# and a dot-leading name is one the hook refuses to write for. Mode is set with `chmod -- 0700 <dir>` (the operand last
+# after `--`, D-3510), so a directory an older ccd or an operator widened is private again at the next spawn.
+# NOTHING PURGES IT in this wave: the hook prunes only a LIVE owner's own buckets (at its next write), so a removed owner, or one whose
+# session never runs again, keeps its last 24 to 25 hourly buckets and this directory for good; the spool is evidence the server may not have read yet.
+_delegation_spool_dir() {   # id -> 0 the owner's directory stands, private | 1 not made (warned, or refused for the id): a failure never fails a spawn
+  local LC_ALL=C id="${1-}" base="$REG/delegation" d
+  [[ "$id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || return 1
+  d="$base/spool/$id"
+  if [[ -L "$base" || -L "$base/spool" || -L "$d" ]] \
+     || ! mkdir -p -m 0700 -- "$base" "$base/spool" "$d" 2>/dev/null \
+     || [[ ! -d "$d" || -L "$d" || -L "$base" || -L "$base/spool" ]] || ! chmod -- 0700 "$d" 2>/dev/null; then
+    echo "ccd: warn: $id's delegation spool directory $d could not be made a private directory — spawning without it; the delegation hook skips until a later spawn makes it" >&2
+    return 1
+  fi
+}
+
+# ── THE CHILD'S SPAWN RECORD (spec §6.6, plan Task 15, D-5299, D-5391) ─────
+# A dispatched child (a row with `.child`) spawns with the box's ONE managed deny
+# file, `~/.cc-sessions/child-deny.settings.json` (written by
+# install-session-hooks.sh; `CHILD_DENY_RULES` in shared/api.ts), passed with
+# `--settings`, and with its Bash tool pinned to bash (`CLAUDE_CODE_SHELL`,
+# D-5360's requirement: the approval classifier's grammar is bash's). Each
+# spawn RECORDS what it passed, rewritten at every spawn and resume and removed
+# with the row by `_reg_purge`: `$REG/<id>.deny-settings` = the file's sha256,
+# `$REG/<id>.childshell` = the pinned shell. A spawn that could not pass the
+# file writes no digest (and removes a stale one), so the server's rulings
+# never engage for it (Task 16's `409 deny-not-engaged`). No verb, no flag.
+#
+# ONE `--settings`, ALWAYS (D-5391). Claude Code's `--settings` takes one
+# value and a second occurrence replaces the first, so a child whose routing
+# record already composed `--settings '<json>'` (the workflow keys) would lose
+# one of the two. For such a row the route's JSON and the deny file are merged
+# into that one inline value (`$route * $deny`, the deny file's keys last);
+# otherwise the file's path is appended. Either way the digest recorded is the
+# managed file's, which is what Task 16 compares against.
+CHILD_DENY_SETTINGS="$REG/child-deny.settings.json"
+CHILD_SHELL_PIN=/bin/bash
+_child_spawn_compose() {   # id launchflags -> sets CHILD_SPAWN_FLAGS, CHILD_SPAWN_ENV; writes the record
+  local id="$1" flags="$2" f="$CHILD_DENY_SETTINGS" sum="" rjson merged re="--settings '([^']*)'"
+  CHILD_SPAWN_FLAGS="$flags"; CHILD_SPAWN_ENV=""
+  if [[ -x "$CHILD_SHELL_PIN" && ! -d "$CHILD_SHELL_PIN" ]]; then
+    CHILD_SPAWN_ENV="CLAUDE_CODE_SHELL=$CHILD_SHELL_PIN"
+    _reg_set "$id" childshell "$CHILD_SHELL_PIN" \
+      || echo "ccd: warn: $id: could not record $REG/$id.childshell — the pin is passed, but rulings will not engage for this spawn" >&2
+  else
+    rm -f -- "$REG/$id.childshell"
+    echo "ccd: warn: $id is a child but $CHILD_SHELL_PIN is not executable — its Bash tool runs the user's shell and rulings will not engage for it" >&2
+  fi
+  if [[ -f "$f" && ! -L "$f" && "$f" != *"'"* ]] && ! grep -q "'" -- "$f" 2>/dev/null \
+     && jq -e '.permissions.deny | type == "array" and length > 0 and all(.[]; type == "string")' "$f" >/dev/null 2>&1; then
+    sum=$(_plat_sha256 < "$f" 2>/dev/null) && sum="${sum%% *}" || sum=""
+  fi
+  [[ "$sum" =~ ^[0-9a-f]{64}$ ]] || sum=""
+  if [[ -n "$sum" && "$flags" =~ $re ]]; then
+    rjson="${BASH_REMATCH[1]}"
+    if merged=$(jq -c -n --argjson r "$rjson" --slurpfile d "$f" '$r * $d[0]' 2>/dev/null) && [[ -n "$merged" && "$merged" != *"'"* ]]; then
+      CHILD_SPAWN_FLAGS="${flags%%"--settings '$rjson'"*}--settings '$merged'${flags#*"--settings '$rjson'"}"
+    else
+      sum=""
+    fi
+  elif [[ -n "$sum" ]]; then
+    CHILD_SPAWN_FLAGS="${flags:+$flags }--settings '$f'"
+  fi
+  if [[ -n "$sum" ]]; then
+    _reg_set "$id" deny-settings "$sum" \
+      || echo "ccd: warn: $id: could not record $REG/$id.deny-settings — the deny rules are passed, but rulings will not engage for this spawn" >&2
+  else
+    rm -f -- "$REG/$id.deny-settings"
+    echo "ccd: warn: $id is a child but $f is missing or not a deny file — spawning without the children's deny rules; rulings will not engage for it" >&2
+  fi
 }
 
 # ── THE TEMP ROOT'S POSITIVE WITNESS (child-workspace reclamation, spec §5.2) ─
@@ -23078,8 +23191,21 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # uncontained; the spawn proceeds either way.
   local tmpenv="" ctmp
   ctmp=$(_child_tmpdir "$id") && tmpenv="TMPDIR='$ctmp'"
-  resenv="$resenv${routeenv:+ $routeenv}${tmpenv:+ $tmpenv}"
+  # THE OWNER'S DELEGATION SPOOL DIRECTORY (delegation broker wave 3, `_delegation_spool_dir`): made here, once per spawn, for every
+  # session and not only a child; a failure has already warned and never refuses the spawn.
+  _delegation_spool_dir "$id" || true
+  # D-5241: the tool-child priority, on both spawn lines for `$tmpenv`'s reason.
+  local adjenv; adjenv=$(_tool_adj_env)
+  resenv="$resenv${adjenv:+ $adjenv}${routeenv:+ $routeenv}${tmpenv:+ $tmpenv}"
   local launchflags="$rcflag${routeflags:+${rcflag:+ }$routeflags}"
+  # THE CHILD'S DENY FILE AND SHELL PIN (plan Task 15, D-5299, D-5391), composed
+  # ONCE, here, into the flags and the `env` string BOTH spawn lines splice, for
+  # `$rcflag`'s reason. A row without `.child` takes no branch, so its spawn
+  # line is byte-identical to before (`ccd-spawn-child-settings.test.ts`).
+  if _child_runid_valid "$(_reg_get "$id" child)"; then
+    _child_spawn_compose "$id" "$launchflags"
+    launchflags="$CHILD_SPAWN_FLAGS"; resenv="$resenv${CHILD_SPAWN_ENV:+ $CHILD_SPAWN_ENV}"
+  fi
   # COLORTERM=truecolor so Claude Code emits 24-bit colour (it otherwise quantises
   # to 256, collapsing its palette). tmux passes it through to the terminal-drawer
   # xterm once the server has the RGB terminal-feature (see hardening/tmux.conf).
@@ -24305,6 +24431,7 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   # someone tried and it didn't come up — instead of a stale `stopped` that
   # hides the attempt and tells the operator to do the thing they just did.
   rm -f "$REG/$id.stopped"
+  _hib_wake_clear "$id"   # a start ends a hibernation: `.hibernated` goes beside `.stopped`, `.woke` records it (D-5242)
   # ONE EMIT, AT THE TOP, because this verb has FIVE exits — the supervised
   # arm's (ccd:11916 `return "$rc"`, ccd:11918 `return 0`), the in-unit arm's
   # (ccd:11927's `|| return $?`, ccd:11935 `return "$rc"`, and falling off the end
@@ -24410,6 +24537,7 @@ cmd_ensure() {   # id — idempotent; used by systemd. arg is the id directly.
   # unconditionally — `ensure` is `POST /api/sessions/:id/ensure`'s actual
   # revive route, so this is the case the spec sentence was written for.
   rm -f "$REG/$id.stopped"
+  _hib_wake_clear "$id"   # the WAKE (D-5242): `.hibernated` goes beside `.stopped`, `.woke` holds cosmetic swaps for SWAP_COOLDOWN
   # The Restart=always hot path, which is exactly why `_spawn_settle`'s
   # change-only rule exists one function up. This line is cheap — no fork beyond
   # the emitter's own — and it is what tells a respawn from a human's
@@ -27406,6 +27534,9 @@ cmd_swap() {   # [--force] [--cross-pool] [--interrupt] id target-wrapper — mo
   _is_valid_wrapper "$target" || die "unknown wrapper '$target' (valid: ${CCRC_ACCOUNTS[*]})"
   [[ -f "$REG/$id.uuid" ]] || die "no registry for '$id'"
   _ws_expire_refuse_return "$id" swap   # a return during an expiry refuses, before anything is journaled (EXPIRE region)
+  # A HIBERNATED ROW IS NOT SWAPPED (D-5242): it has no pane to move, and a swap
+  # would respawn it on another account behind the wake paths' budget.
+  [[ -e "$REG/$id.hibernated" ]] && die "hibernated: $id is asleep — wake it first (ccd ensure); nothing was touched"
   local cur; cur=$(_reg_get "$id" wrapper)
   [[ "$target" != "$cur" ]] || die "'$id' is already on $cur"
   [[ -x "$WRAPPER_DIR/$target" ]] || die "wrapper missing: $WRAPPER_DIR/$target"
@@ -27986,10 +28117,131 @@ cmd_stop() {   # [--surface <word>] <id>  |  [--surface <word>] <wrapper> <proje
   # the stamp's word; `$declared` is empty unless a flag actually arrived, and
   # the journal keeps the two apart.
   _lc_done stop "$id" "" dec.surface "$(_lc_surface_norm "$declared")"
+  rm -f -- "$REG/$id.hibernated"   # a stop ENDS a hibernation (D-5242): an ordinary stopped row, which mail never wakes
   [[ -e "$REG/$id.choicekept" ]] || _operator_choice_keep "$id"   # `ccd start`/`enable` respawn from the record: the operator's own /model and /effort reach it first; a session already stopped and read is not read again (§5.7)
   _ws_unsupervise "$id" "$surface" "$declared"
   tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || _operator_choice_unmark "$id"   # a kill that failed on a live session leaves no marker (§5.7)
   echo "stopped $id"
+}
+
+# ── HIBERNATE (`hibernate-long-idle-sessions` (D-5242); spec 2026-10-16 §5.11) ──
+# The server decides (`hibernateVerdict`); this verb ACTS, and only after
+# re-measuring at the act every box-local fact the decision read, plus the one
+# the server cannot see (an attached terminal). Any doubt refuses
+# `session-busy: <reason>` at exit 3 and touches NOTHING, the journal included:
+# a refusal writes no `hibernate` row, so the dead-coordinator lane can never
+# read a sleep that did not happen as a deliberate stop. The reasons are a
+# closed set: busy, draft, marker, background, scheduled, held, opted-out,
+# recent-swap, attached.
+_hib_refuse() {   # reason detail — EXITS 3 with `ccd: session-busy: <reason> — <detail>` on stderr. Never returns.
+  echo "ccd: session-busy: $1 — $2; nothing was touched" >&2
+  exit 3
+}
+
+_hib_wake_clear() {   # id — a start or an ensure ends a hibernation: `.hibernated` goes, `.woke` records the wake (epoch). Always 0.
+  # `-e` or `-L`: a marker that cannot be read is still a marker that must go.
+  [[ -e "$REG/$1.hibernated" || -L "$REG/$1.hibernated" ]] || return 0
+  rm -f -- "$REG/$1.hibernated"
+  local now; _now_s_to now
+  _reg_set "$1" woke "$now" || true
+  return 0
+}
+
+cmd_hibernate() {   # [--surface <word>] [--actor <text>] [--reason <text>] <id> — stop a long-idle session cleanly; `ccd ensure` wakes it.
+  # ONE POSITIONAL, AND THAT IS `cmd_ensure`'s SECURITY BOUNDARY: the agent
+  # grants the bare `['hibernate']` prefix, after which tokens are
+  # unconstrained, so the arity rule below is the only bound on what a caller
+  # can put here. The dec flags are stripped BEFORE it, exactly as
+  # `cmd_ws_archive`'s are (grep `FLAGS ARE STRIPPED BEFORE THE ARITY RULE`),
+  # and land on the `hibernate` row (`hibernate-verb-dec-and-idempotence` (D-5424)).
+  local lc_surface=none lc_actor='' lc_reason='' lc_gs=0 lc_ga=0 lc_gr=0 lc_args=()
+  local usage="usage: ccd hibernate [--surface <word>] [--actor <text>] [--reason <text>] <id>"
+  while (( $# )); do
+    case "$1" in
+      --surface)   [[ $# -ge 2 ]] || die "$usage"; lc_gs=1; lc_surface="$2"; shift 2 ;;
+      --surface=*) lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
+      --actor)     [[ $# -ge 2 ]] || die "$usage"; lc_ga=1; lc_actor="$2"; shift 2 ;;
+      --actor=*)   lc_ga=1; lc_actor="${1#--actor=}"; shift ;;
+      --reason)    [[ $# -ge 2 ]] || die "$usage"; lc_gr=1; lc_reason="$2"; shift 2 ;;
+      --reason=*)  lc_gr=1; lc_reason="${1#--reason=}"; shift ;;
+      *)           lc_args+=("$1"); shift ;;
+    esac
+  done
+  set -- "${lc_args[@]}"
+  if (( lc_gs )); then local lc_w; lc_w=$(_lc_surface_norm "$lc_surface"); lc_surface=${lc_w:-unknown}; fi
+  if (( lc_ga )); then
+    [[ -n "${lc_actor//[[:space:]]/}" ]] || die "--actor must be non-blank"
+    _lc_dec_ok "$lc_actor" || die "--actor is longer than $_LC_DEC_MAX bytes"
+  fi
+  if (( lc_gr )); then
+    [[ -n "${lc_reason//[[:space:]]/}" ]] || die "--reason must be non-blank"
+    _lc_dec_ok "$lc_reason" || die "--reason is longer than $_LC_DEC_MAX bytes"
+  fi
+  [[ $# -eq 1 ]] || die "$usage"
+  local id="$1"
+  [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
+  [[ -f "$REG/$id.uuid" ]] || die "no such session: $id"
+  # Idempotent on a row already asleep: no pane, the marker standing (D-5424: a sweep may retry a lost answer).
+  if [[ -e "$REG/$id.hibernated" && "$(_session_verdict "$id")" == gone ]]; then echo "already hibernated $id"; return 0; fi
+  # ── the re-measure, cheapest first ──
+  # `-e` not `-f`, the hold readers' polarity: a hold or an opt-out that cannot be read still holds.
+  [[ -e "$REG/$id.hold" ]] && _hib_refuse held "$id is held: a program has declared it is mid-flight here"
+  [[ -e "$REG/$id.no-hibernate" ]] && _hib_refuse opted-out "$id carries a no-hibernate marker"
+  local now last
+  _now_s_to now; _reg_get_to last "$id" lastswap
+  # A `.lastswap` that stands but does not read as an epoch is unmeasured, and an unmeasured read holds (`-e`/`-L`, the hold polarity; D-5242).
+  [[ ( -e "$REG/$id.lastswap" || -L "$REG/$id.lastswap" ) && ! "$last" =~ ^[0-9]+$ ]] \
+    && _hib_refuse recent-swap "$REG/$id.lastswap does not read as an epoch"
+  [[ "$last" =~ ^[0-9]+$ && $(( now - last )) -lt $(( SWAP_JITTER + 60 )) ]] \
+    && _hib_refuse recent-swap "a swap was dispatched $(( now - last ))s ago and may still be landing"
+  # THE TURN MARKER (`$REG/<id>.turn.json`, one line, the hook's jq writes it
+  # with fixed keys). Builtin reads only. `bg` and `crons` must be EXACTLY 0:
+  # -1 is a Stop whose list was absent or not an array, which says nothing
+  # about what runs or what is scheduled, so it refuses like a positive count.
+  # A marker with no `crons` (an older hook) refuses `scheduled` the same way:
+  # a session's crons and wakeups die with its process and nothing else shows them.
+  local mf="$REG/$id.turn.json" line="" mst="" mbg="" mcr="" re
+  [[ -f "$mf" ]] && { IFS= read -r line < "$mf"; } 2>/dev/null
+  re='"state":"([a-z]+)"';   [[ "$line" =~ $re ]] && mst="${BASH_REMATCH[1]}"
+  re='"bg":(-?[0-9]+)';      [[ "$line" =~ $re ]] && mbg="${BASH_REMATCH[1]}"
+  re='"crons":(-?[0-9]+)';   [[ "$line" =~ $re ]] && mcr="${BASH_REMATCH[1]}"
+  [[ "$mst" == done ]] || _hib_refuse marker "the turn marker reads ${mst:-nothing readable}, not done"
+  [[ "$mbg" == 0 ]] || _hib_refuse background "the last Stop's background tasks read ${mbg:-absent} (only exactly 0 is nothing running)"
+  [[ "$mcr" == 0 ]] || _hib_refuse scheduled "the last Stop's session crons read ${mcr:-absent} (only exactly 0 is nothing scheduled)"
+  # The live half: `_idle_for_keystroke`'s checks (width, no `esc to
+  # interrupt`, a prompt, live `idle`, COMPACT_QUIET of quiet, an empty box).
+  _pane_for_keystroke "$id" || _hib_refuse busy "${KS_WHY}${KS_DETAIL:+: $KS_DETAIL}"
+  if ! _idle_for_keystroke "$id" "$KS_PANE" ""; then
+    [[ "$KS_WHY" == drafting ]] && _hib_refuse draft "a message is half-typed in the input box"
+    _hib_refuse busy "${KS_WHY}${KS_DETAIL:+: $KS_DETAIL}"
+  fi
+  # NOBODY ATTACHED: a terminal attach, `cc`, or the PWA drawer's `tmux attach`
+  # pty. The one hold the server cannot see; an unreadable answer refuses.
+  local att=""
+  att=$(tmux display-message -p -t "$(_tmux_t "$id")" '#{session_attached}' 2>/dev/null) || att=""
+  [[ "$att" =~ ^[0-9]+$ ]] || _hib_refuse attached "tmux did not say whether a terminal is attached"
+  [[ "$att" == 0 ]] || _hib_refuse attached "$att terminal(s) attached to the pane"
+  # The idle age, for the marker and the log: the latest main event the marker records.
+  local k v latest=0 hours=0
+  for k in turnAt stopAt restartAt; do
+    re="\"$k\":([0-9]+)"; [[ "$line" =~ $re ]] || continue
+    v="${BASH_REMATCH[1]}"; (( v > latest )) && latest=$v
+  done
+  (( latest > 0 && now * 1000 > latest )) && hours=$(( (now * 1000 - latest) / 3600000 ))
+  # ── the act, in this order ──
+  # 1. The journal row FIRST: it is what makes the act deliberate to the
+  #    dead-coordinator lane (`DEAD_COORDINATOR_DELIBERATE_ACTS`), because the
+  #    `_ws_unsupervise` row below carries surface `none`. A kill that ended
+  #    this shell before it would leave a stop the journal reads as a crash.
+  _lc_done hibernate "$id" "" dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
+  [[ -e "$REG/$id.choicekept" ]] || _operator_choice_keep "$id"   # the wake respawns from the record: the operator's own /model and /effort reach it first (§5.7)
+  # 2. The marker BEFORE the stop, so a row that reads stopped is never a
+  #    sleeping one nobody knows to wake.
+  _reg_set "$id" hibernated "$now $hours" || die "could not write $REG/$id.hibernated — nothing was stopped"
+  _ws_unsupervise "$id" ccd
+  tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || _operator_choice_unmark "$id"   # a kill that failed on a live session leaves no marker (§5.7)
+  echo "$(date '+%F %T') hibernate $id: idle ${hours}h" >> "$REG/swap.log"
+  echo "hibernated $id"
 }
 
 cmd_forget() {   # <id> — remove a DEAD non-workspace session's registry entry.
@@ -28059,6 +28311,12 @@ cmd_forget() {   # <id> — remove a DEAD non-workspace session's registry entry
     _lc_refuse forget "$id" held \
       "held: $_hold_reason — release first: ccd ws-release --session $id" dec.reason "$reason"
   fi
+  # A HIBERNATED ROW IS ASLEEP, NOT DEAD (D-5242): mail, a dispatch or an open
+  # screen wakes it, so forgetting it would drop a session somebody can still
+  # reach. `-e`: a marker that cannot be read still refuses. Its own journal
+  # token (`hibernated-forget-refusal-token` (D-5423)).
+  [[ -e "$REG/$id.hibernated" ]] && _lc_refuse forget "$id" hibernated \
+    "hibernated: wake it (ccd ensure) or stop it (ccd stop) first — nothing was removed" dec.reason "$reason"
   # Deadness is a precondition, not an effect: forget is for a row whose
   # session is already gone. Stopping a live one is `ccd stop`'s job, and
   # collapsing the two into one verb turns a cleanup into a kill.
@@ -37158,21 +37416,32 @@ class Sys(Sys):
         later gets SIGKILL. The leader is reaped as it goes, so a group that
         has emptied answers ESRCH, which ends the wait early."""
         pgid = proc.pid
-        self._signal_group(pgid, signal.SIGTERM)
+        self._signal_group(proc, signal.SIGTERM, absorb_reaped=True)
         until = self.monotonic() + KILL_GRACE_S
         while self.monotonic() < until:
             if proc.poll() is not None and not self._group_alive(pgid):
                 break
             time.sleep(GROUP_POLL_S)
         else:
-            self._signal_group(pgid, signal.SIGKILL)
+            self._signal_group(proc, signal.SIGKILL)
         proc.wait()
 
-    def _signal_group(self, pgid, sig):
+    def _signal_group(self, proc, sig, absorb_reaped=False):
+        """killpg the leader's group. ESRCH, a group already empty, is no
+        error. Darwin answers EPERM, not ESRCH, while every member left is a
+        zombie, and an exited leader not yet reaped is one. With absorb_reaped,
+        which only _stop's SIGTERM passes, an EPERM met while the leader was
+        unreaped reaps it (poll) and is no error either: the grace loop that
+        follows judges whatever is left. At the SIGKILL no wait follows but
+        the leader's, so every EPERM the SIGKILL call meets raises. Any other
+        EPERM, a leader already reaped included, is a refusal and raises; on
+        Linux, which signals a zombie leader's group with rc 0, that is the
+        only kind."""
         try:
-            os.killpg(pgid, sig)
+            os.killpg(proc.pid, sig)
         except OSError as e:
-            if e.errno != errno.ESRCH:
+            reaped = absorb_reaped and e.errno == errno.EPERM and proc.returncode is None and proc.poll() is not None
+            if e.errno != errno.ESRCH and not reaped:
                 raise
 
     def _group_alive(self, pgid):
@@ -40161,6 +40430,7 @@ case "${1:-}" in
   enable)    shift; cmd_enable "$@" ;;
   stop)      shift; cmd_stop "$@" ;;
   forget)    shift; cmd_forget "$@" ;;
+  hibernate) shift; cmd_hibernate "$@" ;;
   swap)      shift; cmd_swap "$@" ;;
   swap-self) shift; cmd_swap_self "$@" ;;
   prefer)    shift; cmd_prefer "$@" ;;
@@ -40196,6 +40466,6 @@ case "${1:-}" in
   docs-show)  shift; cmd_docs_show "$@" ;;
   docs-fetch) shift; cmd_docs_fetch "$@" ;;
   version)   shift; cmd_version "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-hold|ws-release|coord-pause|reclaim-pause|win-size|account-pane|project-pool|route|pr-open|pr-state|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-hold|ws-release|coord-pause|reclaim-pause|win-size|account-pane|project-pool|route|pr-open|pr-state|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
 esac
 fi

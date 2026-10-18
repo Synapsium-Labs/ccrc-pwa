@@ -25,6 +25,7 @@ import type {
 import { StatusDot, TypedLabel, elapsedShort } from '@ccrc/ui';
 import { sessionLabel } from './sessionLabel';
 import { SessionMeta } from './SessionMeta';
+import { hibernatedSince } from './hibernated';
 import './fleet.css';
 
 
@@ -112,13 +113,27 @@ export function SessionLine({
   repo?: string | null;
 }): ReactNode {
   const dead = session.status === 'dead';
+  // D-5242: a dead row `ccd hibernate` put to sleep is ASLEEP, not exited — the
+  // bucket stays `dead` (the server's), and only the word and the lamp change:
+  // `hibernated · 6h` (SessionMeta) beside a calm dot, never a death.
+  const asleepAt = hibernatedSince(session);
   // THE authority: no local re-derivation of attention/busy/state survives
   // here (nor in sortFleet.ts or groupFleet.ts) — the server decided which of
   // the seven buckets this session is in, and shipped it as `session.bucket`.
-  const state = WORD[session.bucket];
+  const state = asleepAt !== null ? 'asleep' : WORD[session.bucket];
 
 
   const label = sessionLabel(session);
+
+  // D-5301 (coordinator-first spec §8): every session the operator creates is
+  // its project's coordinator, and the server derives `role` from `.child`
+  // alone. THE ONE READER of `FleetSession.role` in `pwa/src`: the live `fleet`
+  // frame is CAST, never revived (`stores/fleet.ts`'s `asFleetMsg`), so a
+  // server older than the field omits the key, and only the exact word earns
+  // the badge — absent, `null`, `child` and a word this bundle never heard of
+  // all render nothing.
+  const role: unknown = (session as { role?: unknown }).role;
+  const coordinator = role === 'coordinator';
 
 
   // Dead sessions stay silent about subagents too, same reasoning as limits
@@ -155,7 +170,7 @@ export function SessionLine({
   return (
     <div className={selected ? 'sess-line sess-line--active' : 'sess-line'} data-state={state}>
       <span className="sess-lamp" data-status={session.bucket}>
-        <StatusDot status={session.bucket} />
+        <StatusDot status={session.bucket} asleep={asleepAt !== null} />
       </span>
 
       {/* The two-line block. A plain <div>, NOT the row's button: the subagent
@@ -213,6 +228,11 @@ export function SessionLine({
         >
           <TypedLabel className="sess-label" text={label} />
           {repo !== null && <span className="sess-repo">{repo}</span>}
+          {/* Inside the button, after the label and the repo, like `.sess-repo`:
+              the role is part of what this row IS, so it rides the accessible
+              name ("quiet-mesa coordinator"), and on the label's own line it
+              costs no third line at any width — the label ellipsises first. */}
+          {coordinator && <span className="sess-role">coordinator</span>}
         </button>
         <SessionMeta
           session={session}
@@ -222,6 +242,7 @@ export function SessionLine({
           selected={selected}
           state={state}
           dead={dead}
+          asleepAt={asleepAt}
           subagentList={subagentList}
           subagentsOpen={subagentsOpen}
           subagentsId={subagentsId}
