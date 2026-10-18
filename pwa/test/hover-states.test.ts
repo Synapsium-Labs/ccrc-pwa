@@ -21,7 +21,7 @@ import {
   BACK_BUTTON, BARE_ROW, DOOR, KEYCAP, LIST_ROW, buttonVariants,
 } from '@ccrc/ui';
 import { cn } from '../../ui/src/lib/cn';
-import { declValue, ruleIn, stripComments } from './cssRule';
+import { atBlock, declValue, ruleIn, stripComments } from './cssRule';
 
 const ROOT = path.join(import.meta.dirname, '..', '..');
 const read = (rel: string): string => readFileSync(path.join(ROOT, rel), 'utf8');
@@ -68,6 +68,55 @@ describe('every interactive primitive carries a hover and a pressed state', () =
     const merged = cn(buttonVariants({ variant: 'ghost' }), at![1]);
     expect(has(merged, 'hover:bg-transparent')).toBe(true);
     expect(has(merged, 'hover:bg-hover')).toBe(false);
+  });
+
+  // D-5462 (Task 14b): KEYCAP's hover is a utility, and an UNLAYERED app rule
+  // beats every layered rule whatever its specificity. The header's rule sat
+  // unlayered on the primary ink, so the lift was dead twice over: outranked,
+  // and onto the ink it already wore. The secondary rest is scoped to a
+  // pointer that can hover: on touch the hover never fires, so the cap keeps
+  // the primary ink it always had (Refined stays pixel-identical on a phone).
+  it("the header's keycaps rest below the hover ink only where hover exists, in a layer the hover outranks (D-5462)", () => {
+    const chat = read('pwa/src/session/chat.css');
+    const layered = atBlock(chat, '@layer components');
+    const rest = declValue(ruleIn(layered, '.chat-head .keycap'), 'color');
+    expect(rest, 'without hover the header cap keeps the primary ink').toBe('var(--ink-primary)');
+    const hover = atBlock(layered, '@media (hover: hover)');
+    expect(declValue(ruleIn(hover, '.chat-head .keycap'), 'color'),
+      'under a hovering pointer the cap rests on the secondary ink, one tier under the lift')
+      .toBe('var(--ink-secondary)');
+    expect(has(KEYCAP, 'hover:text-ink-primary')).toBe(true);
+  });
+
+  it('no unlayered rule in chat.css re-declares the header keycap colour (D-5462)', () => {
+    // Structural, not one spelling: `.chat-head > .keycap`, a grouped list or
+    // a compound selector outranks the hover just as `.chat-head .keycap`
+    // would. Only the stand-down (`:disabled`) may stay unlayered, because the
+    // hover is `enabled:`-gated and nothing contests it there.
+    const chat = stripComments(read('pwa/src/session/chat.css'));
+    const unlayered = chat.replace(stripComments(atBlock(chat, '@layer components')), '');
+    const offenders: string[] = [];
+    const re = /([^{}]+)\{([^{}]*)\}/g;
+    for (let m = re.exec(unlayered); m !== null; m = re.exec(unlayered)) {
+      const body = m[2] ?? '';
+      if (!/(^|[;\s])color\s*:/.test(body)) continue;
+      for (const sel of (m[1] ?? '').split(',')) {
+        if (/\.chat-head\b/.test(sel) && /\.keycap\b/.test(sel) && !/:disabled\b/.test(sel)) {
+          offenders.push(sel.trim());
+        }
+      }
+    }
+    expect(offenders, 'an unlayered header keycap colour outranks the hover again').toEqual([]);
+  });
+
+  it('the terminal keys hold the well ink under the mouse (D-5462)', () => {
+    // On the well the primitive's primary ink is dark glass on dark glass in
+    // the light theme. Unlayered, `.term-keys .keycap` outranks the hover, so
+    // the cap keeps --ink-on-well; layering it would let the hover through.
+    const chat = read('pwa/src/session/chat.css');
+    expect(declValue(ruleIn(chat, '.term-keys .keycap'), 'color')).toBe('var(--ink-on-well)');
+    expect(atBlock(chat, '@layer components'), 'the terminal cap moved into the layer')
+      .not.toMatch(/\.term-keys \.keycap\s*\{/);
   });
 
   it('the theme bridge maps both grounds, so the utilities resolve to the tokens', () => {
