@@ -1264,7 +1264,7 @@ describe('the circuit breaker is the policy\'s, fed by deaths this process watch
     expect(w.watcher.delegationReport().breaker, 'x came back, so only y is a fresh death').toBe('clear');
   });
 
-  // A deliberate stop leaves its stamp (`stoppedBy`, epoch ms) or, for an archive, `archivedAt` (epoch SECONDS) on the row before the pane dies.
+  // A deliberate stop leaves its stamp (`stoppedBy`, epoch ms) on the row before the pane dies; an archive writes that stop stamp before the kill and `archivedAt` (epoch SECONDS) after, so the rows set `archivedAt` alone to pin the fallback.
   const stopped = (id: string, atMs: number) => sessionOf(id, 'dead', 'demo', { stoppedBy: { at: atMs, surface: 'agent' } });
   const archived = (id: string, atSeconds: number) => sessionOf(id, 'dead', 'demo', { archivedAt: atSeconds });
   const crashed = (id: string) => sessionOf(id, 'dead');
@@ -1281,7 +1281,7 @@ describe('the circuit breaker is the policy\'s, fed by deaths this process watch
     expect(leasesOf(w.home)).toHaveLength(1);
   });
 
-  it('two archived parents (an archive stamps archivedAt, not stoppedBy) are not a mass death either', async () => {
+  it('two unstamped archives (archivedAt set, stoppedBy null) are not a mass death either', async () => {
     const w = await rawTreeWorld();
     await censusPass(w, at(0), census, everyone(extras));
     await censusPass(w, at(1), census, everyone(extras));
