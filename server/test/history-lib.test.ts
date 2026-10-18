@@ -8082,6 +8082,28 @@ describe('W1-B4: the hourly cadence, the room verdict and the dead-file key (spe
       expect(() => libSeg.exportedSourceKey(path, dev, ino), `${JSON.stringify(path)} ${String(dev)} ${String(ino)}`).toThrow(TypeError);
     }
   });
+  it('deadFileSourceKey: a path already of the form exported:<64 lowercase hex> is the dead-file key itself; every other path, a near-miss included, keys through exportedSourceKey (D-5393)', () => {
+    const hex = 'ab12'.repeat(16);
+    const key = `exported:${hex}`;
+    expect(libSeg.deadFileSourceKey(key, 2049, 7), 'the key is its own key').toBe(key);
+    expect(libSeg.deadFileSourceKey(key, 99n, '5'), 'whatever its dev and ino').toBe(key);
+    // The round trip a re-exported replayed row takes: the key exportedSourceKey makes keys to itself.
+    const made = libSeg.exportedSourceKey('/home/u/gone/a.jsonl', 2049, 7);
+    expect(libSeg.deadFileSourceKey(made, 2049, 7)).toBe(made);
+    // Near misses go through the hash: 63 digits, an uppercase digit, a trailing character (a newline included), a leading one, a non-hex digit.
+    for (const near of [`exported:${hex.slice(1)}`, `exported:${hex.toUpperCase()}`, `${key}0`, `${key}\n`, ` ${key}`, `exported:${'g'.repeat(64)}`, `Exported:${hex}`]) {
+      expect(libSeg.deadFileSourceKey(near, 2049, 7), JSON.stringify(near)).toBe(libSeg.exportedSourceKey(near, 2049, 7));
+      expect(libSeg.deadFileSourceKey(near, 2049, 7), JSON.stringify(near)).not.toBe(near);
+    }
+    // A real path, B1's retire token and an empty path key through the hash too.
+    for (const p of ['/home/u/gone/a.jsonl', `retired:${'a1'.repeat(32)}`, '']) {
+      expect(libSeg.deadFileSourceKey(p, 2049, 7), JSON.stringify(p)).toBe(libSeg.exportedSourceKey(p, 2049, 7));
+    }
+    // A malformed dev or ino throws the same TypeError on both arms, and a NUL path still does.
+    expect(() => libSeg.deadFileSourceKey(key, -1, 7)).toThrow(TypeError);
+    expect(() => libSeg.deadFileSourceKey('/a', -1, 7)).toThrow(TypeError);
+    expect(() => libSeg.deadFileSourceKey('/a\0b', 1, 2)).toThrow(TypeError);
+  });
   it('HEALTH_META names the export keys once each, and none reuses a key B1 or B2 writes', () => {
     expect(libSeg.HEALTH_META.exportPassMs).toBe('export_pass_ms');
     expect(libSeg.HEALTH_META.exportDueOldestMs).toBe('export_due_oldest_ms');

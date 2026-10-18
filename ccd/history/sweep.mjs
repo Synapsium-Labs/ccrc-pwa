@@ -62,7 +62,7 @@ import {
   mergeJournalByTime, decideBind, restoreNameOk,
   EXPORT_DIR, EXPORT_SEGMENT_MAX_BYTES, EXPORT_SEGMENT_FORMAT, segmentName, nextSegmentSeq, planSegment, CLAUDE_CODE_DEFAULT_RETENTION_DAYS,
   shortestRetention, exportHorizonDays, decideExportPass, planExportRoom, exportPassIntervalMs, exportMarkFailsOf, decideMarkOutcome,
-  decideMarkCheck, missingSegmentNames, exportedSourceKey, decideSegmentReplay, orderSegmentNames,
+  decideMarkCheck, missingSegmentNames, deadFileSourceKey, decideSegmentReplay, orderSegmentNames,
 } from './lib.mjs';
 import {
   MIGRATIONS, OWED_INDEX, StoreError, bump, clearDoneMarkers, closeWriter, createStore, dropPending, finishPending, getMeta,
@@ -2626,8 +2626,9 @@ async function recoverReindexChunk(db, run, cursor) {
 //   export-rows   every segment's rows in their write order (ord), through the ingest's named columns:
 //                 - families and epochs fill only what the journal lacks, through merged_into;
 //                 - a gone file becomes a dead-file ingest_files row keyed 'exported:' + hex(sha256(path ∖0 dev ∖0
-//                   ino)), never a live row, even one that now reuses its inode (§9.15), and with no file_paths row,
-//                   so the live ingest can never find it;
+//                   ino)) (lib deadFileSourceKey: a path already of that form is the key itself, so a replayed row
+//                   exported again maps back to its own row), never a live row, even one that now reuses its inode
+//                   (§9.15), and with no file_paths row, so the live ingest can never find it;
 //                 - entries go through ENTRY_UPSERT's newest-rank rule, each marked with its segment;
 //                 - variants, boundaries (their carried ord), sidecars and memberships, idempotently.
 // Segments go in (seq, writer) order (lib orderSegmentNames), whatever their writer, and lib decideSegmentReplay
@@ -2681,14 +2682,15 @@ function replayStmts(db) {
     deadFileId: db.prepare('SELECT file_id FROM ingest_files WHERE dev = ? AND ino = ? AND source_key = ?'),
     entrySel: db.prepare('SELECT entry_id, struct_file_id FROM entries WHERE uuid = ?'),
     entryMark: db.prepare('UPDATE entries SET exported_ms = ?, exported_seg = ? WHERE entry_id = ? AND exported_ms IS NULL'),
-    // B1's boundaryIns draws ord itself; replay carries the exporter's. The conflict target is NARROW on purpose: the one
-    // uniqueness replay means to absorb is a repeated entry (a second segment of it). A (transcript_pk, ord) collision
-    // with ANOTHER entry's boundary is not absorbed: it throws, so the chunk fails and the step waits, as it does for a
-    // segment it cannot read (D-4765 (history-export-segment-unreadable-stalls)); a bare ON CONFLICT DO NOTHING would
-    // drop that boundary without a word.
+    // B1's boundaryIns draws ord itself; replay carries the exporter's. It meets two uniqueness rules, PRIMARY KEY
+    // (entry_id) and UNIQUE (transcript_pk, ord), and absorbs both: a repeated entry (a second segment of it) is the
+    // ordinary case, silent; a collision on (transcript_pk, ord) with ANOTHER entry's boundary is a row the store cannot
+    // place, and replayBoundaryRow counts it export_row_unplaced and goes on. A throw there would fail the chunk on every
+    // pass, and while the step is registered no tick runs, so capture would be held store-wide for one row.
     boundaryIns: db.prepare(`INSERT INTO boundaries (entry_id, transcript_pk, ord, trigger, head_uuid, anchor_uuid,
         tail_uuid, kept_blob_id, pre_tokens, post_tokens, duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT (entry_id) DO NOTHING`),
+      ON CONFLICT DO NOTHING`),
+    boundaryHas: db.prepare('SELECT 1 AS x FROM boundaries WHERE entry_id = ?'),
   };
   EXPORT_REPLAY_STMTS.set(db, s);
   return s;
@@ -2713,12 +2715,12 @@ function familyPkOf(db, ccrcId, generation) {
  *  segment carried, else the segment's cutoff (D-4764 (history-export-dead-file-eof), NEW): B2's leaf readiness reads it. */
 function ensureDeadFile(db, seg, path, dev, ino, transcriptPk, size, mtimeNs, eofMs) {
   const s = replayStmts(db);
-  const key = exportedSourceKey(path, dev, ino);
+  const key = deadFileSourceKey(path, dev, ino);
   s.deadFileUpsert.run(dev, ino, key, transcriptPk, size, mtimeNs, eofMs ?? seg.cutoffMs, PARSER_VERSION);
   return Number(s.deadFileId.get(dev, ino, key).file_id);
 }
 const deadFileIdOf = (db, path, dev, ino) => {
-  const row = replayStmts(db).deadFileId.get(dev, ino, exportedSourceKey(path, dev, ino));
+  const row = replayStmts(db).deadFileId.get(dev, ino, deadFileSourceKey(path, dev, ino));
   return row === undefined ? null : Number(row.file_id);
 };
 
@@ -2789,7 +2791,9 @@ function replayBoundaryRow(db, _seg, r) {
     kept = blobIdOf(db, r.kept_sha256);
     if (kept === null) bump(db, 'export_row_blob_missing');
   }
-  s.boundaryIns.run(e.entry_id, t, r.boundary_ord, r.trigger, r.head_uuid, r.anchor_uuid, r.tail_uuid, kept, r.pre_tokens, r.post_tokens, r.duration_ms);
+  const ins = s.boundaryIns.run(e.entry_id, t, r.boundary_ord, r.trigger, r.head_uuid, r.anchor_uuid, r.tail_uuid, kept, r.pre_tokens, r.post_tokens, r.duration_ms);
+  // Nothing inserted: the entry already has its boundary (a repeat, absorbed), or another entry holds this (transcript, ord).
+  if (Number(ins.changes) === 0 && s.boundaryHas.get(e.entry_id) === undefined) bump(db, 'export_row_unplaced');
 }
 function replaySidecarRow(db, _seg, r) {
   const s = replayStmts(db);
@@ -2846,9 +2850,29 @@ function exportReplayListing(run) {
   return run.exportListing;
 }
 
+/** The failure of a segment that cannot be read, naming the segment and the way out: an unreadable segment fails its
+ *  chunk and is never skipped, and while the step waits for it no tick ingests (D-4765
+ *  (history-export-segment-unreadable-stalls)). One text for every read of it: its open, its meta and each page. */
+function segmentUnreadable(dir, name, e) {
+  return new Error(`export segment ${dir}/${name} cannot be read (${e && e.message ? e.message : String(e)}); `
+    + 'recovery waits for it and capture is held. Move it aside under a non-segment name to skip it (its text is not '
+    + 'replayed), or put a good copy back');
+}
+
+/** One page read from an open segment. A file whose meta reads but whose later pages do not (a partial or damaged
+ *  copy, D-4765's own example) fails inside the page read with a bare SQLite message; it fails the chunk the same way,
+ *  with the segment named and the way out. Only the READ is wrapped: an error applying a row to the store is not a
+ *  segment that cannot be read. */
+function readSegmentPage(dir, name, read) {
+  try {
+    return read();
+  } catch (e) {
+    throw segmentUnreadable(dir, name, e);
+  }
+}
+
 /** A segment opened read-only and judged by lib from its meta, the judgement cached for the pass. Either read
- *  failing throws, naming the segment and the way out: an unreadable segment fails its chunk and is never skipped,
- *  and while the step waits for it no tick ingests (D-4765 (history-export-segment-unreadable-stalls)). */
+ *  failing throws, naming the segment and the way out (segmentUnreadable). */
 function openForReplay(run, dir, name) {
   let sdb = null;
   try {
@@ -2863,9 +2887,7 @@ function openForReplay(run, dir, name) {
     return { sdb, verdict };
   } catch (e) {
     if (sdb !== null) sdb.close();
-    throw new Error(`export segment ${dir}/${name} cannot be read (${e && e.message ? e.message : String(e)}); `
-      + 'recovery waits for it and capture is held. Move it aside under a non-segment name to skip it (its text is not '
-      + 'replayed), or put a good copy back');
+    throw segmentUnreadable(dir, name, e);
   }
 }
 
@@ -2891,8 +2913,8 @@ function noteSkippedSegment(db, name, verdict) {
 /** One page of one segment's blobs past `after` (a rowid), bounded by the chunk's bytes. insert-or-ignore by sha256
  *  (§9.14): a blob the store already holds, whole or pruned, keeps its row; one with bytes is marked with its
  *  segment. A stub (no bytes) goes in pruned (D-4759 (history-export-pruned-row-stub)). An empty page ends the segment. */
-function replayBlobPage(db, run, sdb, name, after) {
-  const page = segmentBlobsAfter(sdb, after, run.budget.chunkBytes);
+function replayBlobPage(db, run, sdb, dir, name, after) {
+  const page = readSegmentPage(dir, name, () => segmentBlobsAfter(sdb, after, run.budget.chunkBytes));
   if (page.length === 0) return { pos: after, done: true, bytes: 0 };
   const s = replayStmts(db);
   const markMs = run.now();
@@ -2909,8 +2931,8 @@ function replayBlobPage(db, run, sdb, name, after) {
 
 /** One page of one segment's rows past `after` (an ord), applied in order until the chunk's bytes; at least one. An
  *  empty page ends the segment. A kind format 1 does not define fails the chunk. */
-function replayRowPage(db, run, sdb, name, meta, after) {
-  const page = segmentRowsAfter(sdb, after, EXPORT_REPLAY_PAGE);
+function replayRowPage(db, run, sdb, dir, name, meta, after) {
+  const page = readSegmentPage(dir, name, () => segmentRowsAfter(sdb, after, EXPORT_REPLAY_PAGE));
   if (page.length === 0) return { pos: after, done: true, bytes: 0 };
   const seg = { name, markMs: run.now(), cutoffMs: meta.cutoffMs };
   let bytes = 0;
@@ -2946,8 +2968,8 @@ function exportPhaseChunk(db, run, cursor, blobs) {
       if (blobs && cursor.file === null) setMeta(db, HEALTH_META.exportSegmentNewer, '[]');
       if (opened.verdict !== null && opened.verdict.word === 'replay') {
         page = blobs
-          ? replayBlobPage(db, run, opened.sdb, name, after)
-          : replayRowPage(db, run, opened.sdb, name, opened.verdict.meta, after);
+          ? replayBlobPage(db, run, opened.sdb, dir, name, after)
+          : replayRowPage(db, run, opened.sdb, dir, name, opened.verdict.meta, after);
       } else if (opened.verdict !== null && blobs) {
         noteSkippedSegment(db, name, opened.verdict);
       }

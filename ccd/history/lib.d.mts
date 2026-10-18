@@ -951,6 +951,7 @@ export type ExportProbe = { state: 'ok'; bytes: number; fsSize: number } | { sta
 export interface ExportRoom { admit: boolean; word: 'ok' | 'low-disk' | 'unsettled'; needBytes: number | null }
 export function planExportRoom(free: ExportProbe): ExportRoom;
 export function exportedSourceKey(path: string, dev: string | number | bigint, ino: string | number | bigint): string;
+export function deadFileSourceKey(path: string, dev: string | number | bigint, ino: string | number | bigint): string;
 // the marks' two decisions (RD2)
 export function exportMarkFailsOf(recorded: string | null): number;
 export type ExportMarkOutcome = 'marked' | 'mark-failed' | 'mark-busy' | 'write-failed';

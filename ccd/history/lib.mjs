@@ -8244,6 +8244,25 @@ export function exportedSourceKey(path, dev, ino) {
   return `exported:${sha256Hex(`${path}\0${exportDecimal(dev, 'dev')}\0${exportDecimal(ino, 'ino')}`)}`;
 }
 
+/** The exact form of a dead-file source_key: `exported:` and 64 lowercase hex digits. */
+const DEAD_FILE_KEY_RE = /^exported:[0-9a-f]{64}$/;
+
+/** The source_key replay gives the dead-file row of the file a segment names by (path, dev, ino), the ONE rule the
+ *  exporter's path and replay's key share (D-5393 (history-export-pathless-file-identity)). A carried path already of the
+ *  exact form `exported:<64 lowercase hex>` IS a dead-file key: a replayed row exported again travels under its own
+ *  source_key as its path, and keying that token through exportedSourceKey would give the one file a second row beside
+ *  the one its older segment made. Every real path starts with '/', so none can match it. Any other path keys through
+ *  exportedSourceKey, a near-miss included (63 digits, an uppercase digit, a trailing character). dev and ino are checked
+ *  either way, so a malformed pair throws the same TypeError on both arms. */
+export function deadFileSourceKey(path, dev, ino) {
+  if (typeof path === 'string' && DEAD_FILE_KEY_RE.test(path)) {
+    exportDecimal(dev, 'dev');
+    exportDecimal(ino, 'ino');
+    return path;
+  }
+  return exportedSourceKey(path, dev, ino);
+}
+
 // ── The marks' two decisions (§9.15 "Mark", "After a bind"; coordinator ruling RD2: L4 delivery is not allowed to
 // decide). The sweep measures meta, the directory listing and the marked names, calls these and acts on the answer.
 // D-4757 (history-export-mark-failure-backs-off) D-4226

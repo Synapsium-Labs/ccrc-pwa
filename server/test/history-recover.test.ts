@@ -3814,7 +3814,7 @@ describe('W1-B4 Task 10: export replay in the recovery step (spec §9.14 "Export
     }
   });
 
-  it('a boundary replays once however many segments carry its entry; a boundary whose (transcript, ord) another entry holds fails the chunk and waits, never dropped', async () => {
+  it('a boundary replays once however many segments carry its entry, silently; a boundary whose (transcript, ord) another entry holds is counted export_row_unplaced and skipped, the chunk completing: one row never stalls the step', async () => {
     const { box, ids, db } = x10Store('ccrc-history-b4-bound-');
     try {
       const texts = x10Texts(0xd00, 2, 'zqbound', Date.now() - 400 * X10_DAY);
@@ -3823,15 +3823,17 @@ describe('W1-B4 Task 10: export replay in the recovery step (spec §9.14 "Export
         uuid, cc_session_uuid: x10U(0xd0), agent_id: '', boundary_ord: 1, trigger: 'manual', head_uuid: null, anchor_uuid: null,
         tail_uuid: null, kept_sha256: null, pre_tokens: 10, post_tokens: 5, duration_ms: 3,
       } });
-      // The first entry and its boundary travel in two segments (a repeat replay absorbs); a second entry of the same
-      // transcript claims the same ord in a third.
+      // The first entry and its boundary travel in two segments (a repeat replay absorbs, uncounted); a second entry of the
+      // same transcript claims the same ord in a third (a row the store cannot place: counted, skipped).
       plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: [{ text: texts[0]!.text }], rows: [...x10Rows(fam(texts[0]!)), boundary(texts[0]!.uuid)] });
       plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, blobs: [], rows: [...x10Rows(fam(texts[0]!)), boundary(texts[0]!.uuid)] });
       plantSegment(box, ids.storeId, { seq: 3, writer: X10_WRITER, blobs: [{ text: texts[1]!.text }], rows: [...x10Rows(fam(texts[1]!)), boundary(texts[1]!.uuid)] });
-      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: false, held: false });
-      expect(countersOn(db, 'recover_chunk_failed')).toEqual({ recover_chunk_failed: 1 });
-      expect(cursorOn(db), 'the step waits at the segment it cannot place').toBe(`export-rows:3.${X10_WRITER}.db:0`);
-      expect([x10Count(db, 'boundaries'), x10Count(db, 'entries')], 'segments 1 and 2 left one boundary; the failed chunk left nothing').toEqual([1, 1]);
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(countersOn(db, 'export_row_unplaced', 'recover_chunk_failed'),
+        'only the collision is counted (the repeat in segment 2 is not), and no chunk failed').toEqual({ export_row_unplaced: 1, recover_chunk_failed: 0 });
+      expect([x10Count(db, 'boundaries'), x10Count(db, 'entries')], 'one boundary; the second entry is placed without its boundary').toEqual([1, 2]);
+      expect(db.prepare('SELECT e.uuid AS uuid FROM boundaries b JOIN entries e ON e.entry_id = b.entry_id').all().map((r) => ({ ...r })),
+        'the first claim stands').toEqual([{ uuid: texts[0]!.uuid }]);
     } finally {
       closeWriter(db);
     }
@@ -3896,6 +3898,30 @@ describe('W1-B4 Task 10: export replay in the recovery step (spec §9.14 "Export
       expect(heldBy(UB), 'transcript B has a dead-file row holding exactly its rows').toEqual([b.map((x) => x.uuid)]);
       expect(db.prepare(`SELECT count(*) AS n FROM entries e JOIN ingest_files f ON f.file_id = e.struct_file_id WHERE f.transcript_pk <> e.transcript_pk`).get(),
         'no entry\'s structural file belongs to another transcript').toEqual({ n: 0 });
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('a replayed dead-file row exported again (a bind cleared its marks) travels under its own exported: key as its path, and replaying both segments into a fresh store yields ONE dead-file row (D-5393)', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-reexport-');
+    try {
+      const texts = x10Texts(0xf00, 2, 'zqreexp', Date.now() - 400 * X10_DAY);
+      const gone = '/home/u/gone/reexp.jsonl';
+      const ino = 9841;
+      const own = exportedSourceKey(gone, X10_DEV, ino);
+      // Segment 1 names the gone file by its real path. A store that replayed it holds the file as the dead-file row `own`
+      // and has no file_paths row for it, so when a bind clears the marks and the rows are exported again, the exporter
+      // writes that row with its source_key as the path: segment 2.
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows({ uuid: x10U(0xf0), path: gone, ino, texts }) });
+      plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, blobs: [], rows: x10Rows({ uuid: x10U(0xf0), path: own, ino, texts }) });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(db.prepare('SELECT source_key, status FROM ingest_files').all().map((r) => ({ ...r })),
+        'one dead-file row, under the key the real path gives').toEqual([{ source_key: own, status: 'exported' }]);
+      expect([x10Count(db, 'entries'), x10Count(db, 'memberships')], 'each row once, on that one row').toEqual([2, 2]);
+      expect(db.prepare('SELECT count(*) AS n FROM entries e JOIN ingest_files f ON f.file_id = e.struct_file_id').get()).toEqual({ n: 2 });
+      expect(countersOn(db, 'export_row_unplaced', 'export_row_blob_missing', 'recover_chunk_failed'))
+        .toEqual({ export_row_unplaced: 0, export_row_blob_missing: 0, recover_chunk_failed: 0 });
     } finally {
       closeWriter(db);
     }
@@ -4000,6 +4026,32 @@ describe('W1-B4 Task 10: export replay in the recovery step (spec §9.14 "Export
       closeWriter(db);
     }
   });
+
+  it('a segment whose meta reads but whose pages do not (a partial or damaged copy) fails its chunk like an unreadable one: counted recover_chunk_failed, the line names the segment and the way out, in the blobs pass and in the rows pass', () => {
+    for (const table of ['blobs', 'entries']) {
+      const box = makeHistoryBox(`ccrc-history-b4-pagefail-${table}-`);
+      pass(box);
+      const storeId = fs.readFileSync(historyPaths(box.home).storeId, 'utf8').trim();
+      const texts = x10Texts(0x1000, 2, 'zqpagefail', Date.now() - 400 * X10_DAY);
+      const seg = plantSegment(box, storeId, { seq: 1, writer: X10_WRITER, blobs: texts.map((t) => ({ text: t.text })),
+        rows: x10Rows({ uuid: x10U(0x100), path: '/home/u/gone/pagefail.jsonl', ino: 9851, texts }) });
+      // Overwrite the table's root page with 0xFF bytes: meta (another page) still reads, the table's rows do not.
+      const sdb = new DatabaseSync(seg, { readOnly: true });
+      const root = Number((sdb.prepare('SELECT rootpage FROM sqlite_master WHERE name = ?').get(table) as { rootpage: number }).rootpage);
+      const size = Number((sdb.prepare('PRAGMA page_size').get() as { page_size: number }).page_size);
+      sdb.close();
+      const fd = fs.openSync(seg, 'r+');
+      try { fs.writeSync(fd, Buffer.alloc(size, 0xff), 0, size, (root - 1) * size); } finally { fs.closeSync(fd); }
+      registerRecovery(box, Date.now());
+      const r = runSweep(box, []);
+      expect(r.code, `${table}: ${r.stdout}\n${r.stderr}`).toBe(0);
+      expect(r.stderr, `${table}: the line names the segment`).toContain(`${path.basename(seg)} cannot be read`);
+      expect(r.stderr, `${table}: and the way out`).toContain('Move it aside under a non-segment name to skip it (its text is not replayed), or put a good copy back');
+      expect(counters(box)['recover_chunk_failed'], `${table}: counted`).toBe(1);
+      expect(countOf(box, 'entries'), `${table}: nothing replayed past the failure`).toBe(0);
+      expect(recoverRow(box)!.completed_ms, `${table}: the step waits`).toBeNull();
+    }
+  }, HEAVY);
 
   it('a chunk that throws rolls back what it applied with its cursor; the next pass applies it once', () => {
     const box = makeHistoryBox('ccrc-history-b4-rollback-');
