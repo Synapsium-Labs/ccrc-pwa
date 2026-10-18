@@ -4500,7 +4500,7 @@ the coordination serialiser, the registry record and its row, the store, presenc
 and `ccd` re-measures the box-local half (a terminal attached included). At most three acts a pass; a refused one is not
 asked again for an hour. The coordinator's feed gets one `Worker asleep` row per act. Since Task 17b it is hibernation
 for this population, not a separate stop (D-5427): it holds everything hibernation holds, and a worker it puts down
-wakes as any sleeping session does — mail, a re-dispatch's `ccd ensure`, an open screen. It stays live under its own
+wakes as any sleeping session does — mail, a re-dispatch's `ccd ensure`, a Restart. It stays live under its own
 switches while hibernation's own sweep waits for the operator to arm it: `$REG/stop-done-disabled` (this lane only; no
 writer in the tree — touch and remove it by hand on the fleet box), `$REG/reclaim-paused` (every cleanup lane, above)
 and `$REG/hibernate-disabled` (every act that puts a session to sleep). A box whose `ccd caps` lacks `hibernate` is left

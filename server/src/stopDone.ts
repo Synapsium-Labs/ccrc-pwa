@@ -15,7 +15,7 @@ import type { FleetSession } from '../../shared/api.js';
  *
  * ABSORBED BY HIBERNATION (D-5242, spec §5.11; stop-done-composes-hibernate (D-5427), plan Task 17b): the lane
  * composes `ccd hibernate`, never `ccd stop`, so a finished worker it puts down wakes like any sleeping session — mail
- * (under the fleet-wide wake budget), a re-dispatch's `ensure`, an open screen — and it holds every fact hibernation
+ * (under the fleet-wide wake budget), a re-dispatch's `ensure`, a Restart — and it holds every fact hibernation
  * holds, in hibernation's words (`HIBERNATE_HOLDS`): `recent` (N, `$REG/hibernate-after-hours` or six hours, from the
  * turn marker's newest stamp), `opted-out` (`$REG/<id>.no-hibernate`), `scheduled` (the marker's `crons` not exactly
  * 0) and, at the act, ccd's own `attached`. Its population is therefore a subset of hibernation's. It is NOT retired:

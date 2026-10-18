@@ -232,6 +232,13 @@ describe('measureClaimant — three answers, and the inputs that collapse into e
     expect(v.why).toContain('hibernated');
   });
 
+  it('only the STOPPED lifecycle is asleep: an orphan with a stale .hibernated (no stop stamp) still reads dead', async () => {
+    const home = mkTmp('ccrc-reclaim-');
+    seedRow(home, DEAD, { supervised: String(SEC - 3600), hibernated: `${SEC - 7200} 7` });
+    const v = await measureClaimant(depsFor(home, store(home), GONE), DEAD, NOW);
+    expect(v).toMatchObject({ state: 'dead', cause: 'orphan' });
+  });
+
   it('a .hibernated row whose pane is live is ALIVE on the tmux rung, as any live pane', async () => {
     const home = mkTmp('ccrc-reclaim-');
     seedRow(home, DEAD, { hibernated: `${SEC} 7` });

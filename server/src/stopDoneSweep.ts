@@ -154,7 +154,7 @@ function recordFeed(deps: StopDoneSweepDeps, id: string, runId: number): void {
   try {
     const ev = log.record({
       kind: 'run', sessionId: id, runId, title: 'Worker asleep',
-      body: `${id} was put to sleep: its run ${runId} is done and it sat idle. Mail, a re-dispatch or opening it wakes it.`,
+      body: `${id} was put to sleep: its run ${runId} is done and it sat idle. Mail, a re-dispatch or a restart wakes it.`,
     });
     deps.coord.recordFeedEvent(log.epoch, ev);
   } catch (err) {
@@ -185,7 +185,7 @@ export async function stopDonePass(
   const verb = verbSupported(deps.fleetState, CCD_ARGV.hibernate(pop[0]!.id, null));
   const afterMs = hibernateAfterMs(names.includes(HIBERNATE_AFTER_HOURS_FILE) ? await deps.readAfterHours() : null);
   const inputFor = (row: StopDoneRow, store: StopDoneStoreRead, live: StopDoneLive, at: number): StopDoneInput => ({
-    row, store, viewer: deps.presence?.isOpen(row.id) ?? false, sinceStartMs: at - deps.startedAt,
+    row, store, viewer: deps.presence?.isOpen(row.id) ?? true, sinceStartMs: at - deps.startedAt,
     presenceTtlMs: PRESENCE_OPEN_TTL_MS, verb, optedOut: names.includes(`${row.id}.${NO_HIBERNATE_SUFFIX}`), afterMs,
     live, now: at, graceMs: STOP_DONE_GRACE_MS,
   });

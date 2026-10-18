@@ -236,7 +236,7 @@ describe('the substrate axis reaches the wire — projected, not re-read (D-310 
 
 // D-5242: a hibernated MAIN CHECKOUT is asleep, not put away. Its row is the stopped-main-checkout shape the archived
 // fold's second clause takes (no workspace, no pane, a stop stamp) — so that clause now excludes a row with
-// `hibernatedAt`, and the sleeper stays at the card's top level, where opening it wakes it. The first clause (the
+// `hibernatedAt`, and the sleeper stays at the card's top level, where its Restart wakes it. The first clause (the
 // `archived` bucket) is unchanged: an archived workspace with a stale `.hibernated` stays in the fold.
 describe('the archived fold and a hibernated row (D-5242)', () => {
   it('a hibernated main checkout is NOT in the archived fold', async () => {

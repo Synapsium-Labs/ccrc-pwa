@@ -514,6 +514,45 @@ describe('hibernatePass: the live act', () => {
     expect([...held.argvs, ...gone.argvs]).toEqual([]);
   });
 
+  // The store, the live claims and the mail queue are read again INSIDE the serialiser (D-5428): what the tick read
+  // is not what holds at the kill. Each case flips its read only once the serialiser has been entered.
+  const atAct = (o: (inside: () => boolean) => Partial<NonNullable<HibernateSweepDeps['coord']>>) => {
+    let inside = false;
+    const l = live();
+    const coord = { ...l.f.deps.coord!, ...o(() => inside) } as NonNullable<HibernateSweepDeps['coord']>;
+    const port: HibernateActPort = { ...l.port, serial: async (fn) => { inside = true; return fn(); } };
+    return { l, f: { ...l.f, deps: { ...l.f.deps, coord, act: port } } };
+  };
+
+  it('AT THE ACT the store is read again: a run opened onto the session inside the serialiser holds run-worker', async () => {
+    const { l, f } = atAct((inside) => ({
+      openRunsForSession: (id) => (inside()
+        ? { ok: true, siblings: [{ id: 1, program: 'program-a', wave: 1, waveOf: 1 }] }
+        : l.f.coord.openRunsForSession(id)) as never,
+    }));
+    expect((await pass(f, mem(), [HIBERNATE_LIVE_MARKER]))[0]!.act)
+      .toEqual({ kind: 'held-at-act', verdict: { act: 'hold', reason: 'run-worker' } });
+    expect(l.argvs).toEqual([]);
+  });
+
+  it('AT THE ACT the live claims are read again: a claim taken inside the serialiser holds claim', async () => {
+    const { l, f } = atAct((inside) => ({
+      activeClaims: () => (inside() ? [{ heldBy: ID }] : l.f.coord.activeClaims()) as never,
+    }));
+    expect((await pass(f, mem(), [HIBERNATE_LIVE_MARKER]))[0]!.act)
+      .toEqual({ kind: 'held-at-act', verdict: { act: 'hold', reason: 'claim' } });
+    expect(l.argvs).toEqual([]);
+  });
+
+  it('AT THE ACT the mail queue is read again: mail queued inside the serialiser holds mail', async () => {
+    const { l, f } = atAct((inside) => ({
+      outstandingMailFor: (id, n) => (inside() ? [{ id: 1 }] : l.f.coord.outstandingMailFor(id, n)) as never,
+    }));
+    expect((await pass(f, mem(), [HIBERNATE_LIVE_MARKER]))[0]!.act)
+      .toEqual({ kind: 'held-at-act', verdict: { act: 'hold', reason: 'mail' } });
+    expect(l.argvs).toEqual([]);
+  });
+
   it('AT THE ACT, again: a turn that started since the pass read the marker holds marker', async () => {
     const l = live();
     let n = 0;

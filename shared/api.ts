@@ -8496,7 +8496,7 @@ export const LC_REFUSAL_WORD: Record<LcRefusalToken, string> = {
     'A workspace with this id, or what one left behind, still stands in the registry, so ccrc treats the temporary directory there as that workspace’s and will not clean it up. Nothing was removed; ccrc looks again once the id is free.',
   'changed-recently':
     'Something in this temporary directory changed recently, so ccrc leaves it alone for now. Nothing was removed; ccrc looks again once it has stayed unchanged long enough.',
-  // D-5242: a hibernated row is asleep, not dead — `ccd ensure` (or mail, a dispatch, an open screen) wakes it (D-5423).
+  // D-5242: a hibernated row is asleep, not dead — `ccd ensure` (or mail, a dispatch, a Restart) wakes it (D-5423).
   'hibernated':
     'This session is asleep, not gone: it wakes when it is opened, mailed or dispatched. Wake it (ccd ensure) or stop it (ccd stop) first. Nothing was removed.',
 };

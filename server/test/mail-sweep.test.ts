@@ -3540,6 +3540,24 @@ describe('sweepMail: a hibernated recipient is woken, never parked (D-5242)', ()
     expect(ensures(c.calls)).toEqual([ID, ID]);
   });
 
+  it('a `.hibernated` stamp beside a LIVE pane (ccd hibernate wrote it, its tmux kill failed) is delivered normally: no hibernated gate, no ensure', async () => {
+    const h = harness({ panes: HAPPY_PANES });
+    const coord = store(h.home);
+    const c = ccdRec();
+    const { w } = await primedWatcher(h, coord, { runCcd: c.runCcd });
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    seedLiveState(h.home);
+    seedStopped(h.home, ID);
+    writeFileSync(path.join(h.home, '.cc-sessions', `${ID}.hibernated`), `${Math.floor(NOW / 1000) - 7 * 3600} 7`);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+    await w.sweepMail();
+    expect(ensures(c.calls)).toEqual([]);
+    expect(deliveryRow(coord, id).lastGate).not.toBe('hibernated');
+    expect(literalSends(h.calls)).toEqual([NUDGE]);
+    expect(deliveryRow(coord, id).state).toBe('delivered');
+  });
+
   it('mail-disabled: no wake (the whole lane is off)', async () => {
     const h = harness({ hasSession: false });
     const coord = store(h.home);

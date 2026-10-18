@@ -261,6 +261,16 @@ describe('stopDonePass (D-5370)', () => {
     expect(f.argv).toEqual([]);
   });
 
+  it('no presence port handed over reads as a viewer, as hibernation\'s own sweep does (fail closed)', async () => {
+    const f = fake([ID]);
+    await stopDonePass(f.deps, mem(), [row(ID)], [rec(ID)], []);
+    expect(f.argv).toEqual([HIB(ID)]);
+    const g = fake([ID]);
+    const out = await stopDonePass({ ...g.deps, presence: undefined }, mem(), [row(ID)], [rec(ID)], []);
+    expect(out).toEqual([]);
+    expect(g.argv).toEqual([]);
+  });
+
   it('straight after a server start nothing is stopped: presence has not been re-established', async () => {
     const f = fake([ID]);
     await stopDonePass({ ...f.deps, startedAt: NOW - 1000 }, mem(), [row(ID)], [rec(ID)], []);
@@ -467,7 +477,8 @@ describe('the watcher\'s own pass, its deps unmocked (D-5370)', () => {
       if (args[0] === 'list-panes') return { code: 0, stdout: `${PANE}\n`, stderr: '' };
       return { code: 0, stdout: '', stderr: '' };
     };
-    const deps = { ...testDeps(home, run), cfg, coord, fleetState: { ccdVerbs: ['hibernate'] } };
+    // buildServer always hands the watcher a Presence; an absent port reads as a viewer (fail closed).
+    const deps = { ...testDeps(home, run), cfg, coord, fleetState: { ccdVerbs: ['hibernate'] }, presence: new Presence(() => Date.now()) };
     const w = new FleetWatcher(deps as never, new Bus(), 10_000);
     (w as unknown as { stopDoneStartedAt: number }).stopDoneStartedAt = startedAt;
     w.useStopDoneSerialiser({ serial: async (fn: () => Promise<unknown>) => fn() } as never);
