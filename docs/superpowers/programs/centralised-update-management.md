@@ -4116,6 +4116,12 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     D-5329: the watchdog's two passing-probe closes of a report abandoned at `restarting` write `died: abandoned`,
     and the doctor WARNs on it. F3's pin resolves the env to `ccrcContainedEnv(` (M6 reds). D3e pins the plain
     file. The suite word `green` is accepted: the required and Linux legs of 39105276781 were green.
+  - **07:45 UTC: the stable path may wait on #397's operator-run step.** #410 has not moved since 10-17 20:28,
+    though review 575 closed at 04:21. Path identity's order is #397 then #410 (5889), and #397's E9 is operator-run
+    and stopped (6051). #441 lands after #410 under the 5967 fence, so the chain to stable is #397's E9, #397, #410,
+    #441, a full run. I asked path identity (mail 6266) whether #410 still waits on #397, and whether it could land
+    first, since its only conflict is the stamp line. Both answers are theirs; an operator blocker goes to the
+    operator.
 
 ## Carried constraints
 
