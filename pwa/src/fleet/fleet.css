@@ -3280,3 +3280,50 @@ button.proj-card-pool::before {
     transition: none;
   }
 }
+
+/* D-5545: THE CARD IS A GLANCE, and no fact on it is cut by an ellipsis. The
+   name and the programme are shortened by whole tokens in `sessionFacts.ts`
+   (`shortenByToken`), the context fact sits on a line of its own
+   (`.sess-meta--context`), and every cell that used to ellipsise wraps at a
+   space instead — never inside a token — so a fact is either whole or, in the
+   rare row that still does not fit, on two lines. The cross-project chip drops
+   under the name rather than squeezing it. The same cells in the session
+   header's details (`.chat-facts`, chat.css) wrap the same way. Layout only:
+   no colour declaration here, so the contrast gate's census is unchanged. */
+.sess-open { flex-wrap: wrap; row-gap: 2px; }
+.sess-label { white-space: normal; text-overflow: clip; overflow: visible; }
+.sess-workson { max-width: 100%; }
+.sess-meta > * { min-width: 0; }
+.sess-meta > .sess-held,
+.sess-meta > .sess-context,
+.sess-meta > .sess-marker,
+.sess-held:has(> .sess-pw),
+.sess-child:has(> .sess-pw) {
+  flex: 0 1 auto;
+  min-width: 0;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+.sess-meta > .sess-marker { font-family: var(--family-mono); }
+.sess-meta .sess-pw { display: inline; }
+.sess-meta .sess-pw-prog { white-space: normal; overflow: visible; text-overflow: clip; }
+
+/* D-5545, verifier round 1: a FIXED character budget cut the name and the
+   programme to `…` at every width, desktop included. The card now draws both
+   forms (`Fit`, SessionMeta.tsx: the full text and the token-shortened one,
+   both aria-hidden, the full text spoken once) and the card's own column
+   picks: the shortened form only in a phone-narrow column (226px at 360,
+   256px at 390 — the widths the budget was measured at), the full text,
+   wrapping at a hyphen or a space, wherever the column is 320px or wider.
+   `.sess-body` already sits in a `minmax(0, 1fr)` track, so containing its
+   inline size changes nothing about its layout. Layout only: no colour. */
+.sess-body { container: sess-body / inline-size; }
+/* The long name's two forms sit in one flex item that takes `.sess-label`'s
+   place in the row (the TypedLabels inside keep `.sess-label` itself). */
+.sess-label-fit { display: block; flex: 1 1 auto; min-width: 0; }
+.fit-full { display: none; }
+@container sess-body (min-width: 320px) {
+  .fit-full { display: inline; }
+  .fit-short { display: none; }
+}

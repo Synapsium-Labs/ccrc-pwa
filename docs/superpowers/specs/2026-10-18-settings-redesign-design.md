@@ -46,7 +46,7 @@ and cites the code for each, by file and by function, constant or selector. Line
   until the plan is on `main`: the deviation-refs floor test refuses a tracked ref above the ledger's high-water.
 
 **Deviation numbers.** This spec defines D-5503 to D-5508, once each, in §14. D-5509 and D-5510 were reserved for this
-work and are unused.
+work; D-5509 is defined by the implementation plan (`2026-10-18-settings-redesign.md`), and D-5510 is unused.
 
 ## In short
 
@@ -1257,7 +1257,9 @@ the window into Updates' first card.
 | D-5507 | `settings-danger-confirmed`: danger-ghost plus a confirm for Roll back, Ack (both surfaces) and Revoke; the row-placement rule; Rotate now and Pause kept one tap; results in words under the control | §6.3, §6.4 |
 | D-5508 | `security-in-settings`: `AuthSection` split into two cards in Settings › Security, beside the gate and the box token (four cards); Revoke as `danger-ghost`; Accounts holds only lanes; and, once D-5512's step-up exists, the step-up guard on `DELETE /api/auth/passkey/:id` and `POST /api/auth/passkey/register/start` (R2s). The one definition of the sign-in move; the Accounts spec is asked to cite it in place of its D-5522 move clause. | §5.5, §11.1 |
 
-Unused: D-5509, D-5510.
+D-5509 (`security-compromise-disclosure`) is defined by the implementation plan, `2026-10-18-settings-redesign.md`, not here.
+
+Unused: D-5510.
 
 ## 15. Operator decisions (ruled 2026-10-18)
 

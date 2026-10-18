@@ -69,6 +69,45 @@
   overflow-wrap: anywhere;
 }
 .chat-coord-part { display: inline-block; max-width: 100%; }
+/* D-5545: THE HEADER IS THE FULL SET. The title wraps instead of ellipsising, so
+   the whole name is readable at 360 — it breaks at the crumb's own separators
+   and, only for a single token wider than the column, inside it. The
+   coordination row is clause boxes in a wrapping flex row with a gap and NO
+   separator glyph, so a wrapped line never starts with, or holds, a lone `·`
+   (#633's leftover). The details row (`SessionDetails`) is the meta row's last,
+   full-width item: every fact the card dropped, each in full, its cells
+   wrapping at spaces; the fleet row's middots are dropped here for the same
+   reason the coordination row has none. Layout only — no colour declaration. */
+.chat-title { white-space: normal; overflow-wrap: break-word; text-overflow: clip; }
+.chat-crumb { overflow: visible; text-overflow: clip; }
+.chat-coord { display: flex; flex-wrap: wrap; align-items: center; column-gap: var(--sp-2); row-gap: 2px; }
+@media (pointer: fine) {
+  .chat-coord .chat-coord-link,
+  .chat-meta .chat-details-toggle { min-height: 0; }
+}
+.chat-facts {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: var(--sp-3);
+  row-gap: 2px;
+  font-size: var(--fs-2xs);
+  min-width: 0;
+}
+.chat-facts .sess-meta { display: contents; }
+.chat-facts .sess-meta > *::before { content: none; }
+.chat-fact { font-family: var(--family-mono); overflow-wrap: break-word; min-width: 0; }
+.chat-facts .sess-subagent-list { flex-basis: 100%; }
+/* D-5546, phone: the keycaps took ~170 of 360px beside the title, leaving the
+   name, the coordination row and the meta row a 140px column that ellipsised
+   the name and broke every clause. Below 900 the back button and the keycaps
+   share the first row and the title block takes the full width under them. */
+@media (max-width: 899px) {
+  .chat-head { flex-wrap: wrap; row-gap: var(--sp-1); }
+  .chat-head > .chat-back { margin-right: auto; }
+  .chat-head > .chat-title-wrap { order: 1; flex-basis: 100%; }
+}
 /* ONE wrapping row: status, account, model, effort, branch. It was two fixed
    rows, which spent a line of chat height on every screen to say what fits
    comfortably on one. Narrow screens wrap it rather than reintroducing the row. */

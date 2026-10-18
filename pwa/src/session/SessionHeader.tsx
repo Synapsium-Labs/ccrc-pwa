@@ -8,7 +8,7 @@
 // The esc cap is touch-only: where a physical keyboard exists ((pointer:
 // fine)) it hides and the real Escape key takes over instead, guarded so it
 // never fires while focus is in a text field.
-import { Fragment, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   backgroundWork, backgroundWords, sessionWithCoordinator, substrateFault, withCoordinatorWords,
@@ -16,7 +16,7 @@ import {
 } from '../../../shared/api';
 import { restartWords } from '../lib/restart';
 import {
-  BackButton, Chip, Keycap, ListRow, Sheet, StatusDot, TypedLabel, cn, elapsedShort, statusLabel, useNow,
+  BackButton, Chip, Keycap, ListRow, Sheet, StatusDot, TypedLabel, cn, useNow,
 } from '@ccrc/ui';
 import { accountLabel } from '../lib/accounts';
 import { useMediaQuery } from '../lib/useMediaQuery';
@@ -29,7 +29,11 @@ import { PrSheet } from './PrSheet';
 import './chat.css';
 import { substrateFaultText } from '../fleet/substrateWords';
 import { hibernatedSince } from '../fleet/hibernated';
+import { headerStatusWord } from '../fleet/sessionFacts';
 import { chipTone, metaChipTone } from './chipTones';
+import { SessionCoordination, SessionDetails } from './SessionDetails';
+import type { Coordination } from '../fleet/fleetTree';
+import type { SessionFactSet } from '../fleet/sessionFacts';
 
 export interface SessionHeaderProps {
   session: FleetSession | null;
@@ -77,30 +81,13 @@ export interface SessionHeaderProps {
    *  shown whenever known, there is no card here to imply it. `null`/absent
    *  renders nothing. */
   repo?: string | null;
-  /** D-5527: who this session works for, in words — `working on <project> ·
-   *  coordinated from <coordinator> · <programme> · wave N of M · run #N`
-   *  (`fleetTree.ts`'s `coordinationLine`). `null` renders nothing. */
-  coordination?: { text: string; parts: readonly string[]; title: string } | null;
+  /** D-5527: who this session works for (`fleetTree.ts`'s `coordinationOf`) — its coordinator's id and
+   *  state and the run number, which the session's facts do not carry. `null`: nobody's worker. */
+  coordination?: Coordination | null;
+  /** D-5545: the session's facts, from the same model the fleet card reads (`sessionFacts`), so the header
+   *  holds every fact the card shows and the rest beside it. `null` before the first fleet frame. */
+  facts?: SessionFactSet | null;
 }
-
-/** '04:12' (or '1:04:12') elapsed — rendered in tabular-nums mono. */
-function clock(elapsedMs: number): string {
-  const total = Math.max(0, Math.floor(elapsedMs / 1000));
-  const h = Math.floor(total / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  const s = total % 60;
-  const pad = (n: number): string => String(n).padStart(2, '0');
-  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
-}
-
-/** '2m' | '3h' | '5d' — `elapsedShort`'s own ladder, and `null` under a
- *  minute because this header's sentences phrase that case themselves
- *  ("working…", "idle"). A FOURTH copy of those four lines lived here: the
- *  fold that collected `SessionLine`'s, `lifecycleWords`' and `PrKeycap`'s
- *  missed it, because this one took `(now, then)` rather than a span and so
- *  matched no signature the census was looking for. */
-const relShort = (now: number, then: number | null): string | null =>
-  then === null ? null : elapsedShort(now - then);
 
 /** One row of the session menu: a label, and — for the three that answer a
  *  slash command — the command itself, dimmed, read by nobody.
@@ -158,6 +145,7 @@ export function SessionHeader({
   queuedField = null,
   repo = null,
   coordination = null,
+  facts = null,
 }: SessionHeaderProps): ReactNode {
   const [menuOpen, setMenuOpen] = useState(false);
   const [prOpen, setPrOpen] = useState(false);
@@ -247,7 +235,6 @@ export function SessionHeader({
   // contradict itself either. The word is the bucket's, with the two facts
   // only this screen has — the live elapsed clock and the relative age —
   // spliced in; StatusDot supplies the glyph and the spoken label.
-  const rel = relShort(now, at);
   // D-5231: a `working` row whose last main Stop left delegated work running
   // reads `working · N in background` (the kinds in the title), as the card does.
   const bg = bucket === 'working' && session != null ? backgroundWork(session) : null;
@@ -259,34 +246,10 @@ export function SessionHeader({
   const wcWords = wc === null || session == null ? null : withCoordinatorWords(wc, session.project);
   // D-5237: "restarted · out of memory · 3m ago" for an hour after a process end.
   const restart = session != null ? restartWords(session, now) : null;
-  const word =
-    asleepAt !== null
-      ? 'hibernated'
-      : bucket === 'attention'
-      ? 'waiting on you'
-      : bucket === 'working'
-        ? bgWords !== null
-          ? `working · ${bgWords.text}`
-          : at !== null
-          ? `working · ${clock(now - at)}`
-          : 'working…'
-        : bucket === 'done'
-          ? rel
-            ? `done · ${rel} ago`
-            : 'done'
-          : bucket === 'idle'
-            ? rel
-              ? `idle · ${rel} ago`
-              : 'idle'
-            // THE THREE THAT ARE NOT COMPOSED take `StatusDot`'s own word
-            // (`statusLabel`, @ccrc/ui) rather than a second copy of it: the
-            // literal census found `merged, ready to clean up` written out
-            // here AND in the lamp's map. `done` and `idle` above stay spelled
-            // here, because this header composes them with an age the lamp
-            // knows nothing about.
-            : bucket === 'cleanup' || bucket === 'archived' || bucket === 'dead'
-              ? statusLabel(bucket)
-              : '';
+  // D-5545 (verifier round 1): the word is the MODEL's (`headerStatusWord`), from the bucket this strip paints —
+  // it always begins with the card's word (`exited` on both; the lamp still speaks `not running`), adding only
+  // what this screen knows: the live clock, the age, `on you`, `ready to clean up`.
+  const word = bucket === null ? '' : headerStatusWord({ bucket, asleepAt, background: bgWords, at, now });
   // Four tints for seven buckets, on purpose: `status-line--*` is the existing,
   // contrast-verified set (chat.css) and the glyph already carries the
   // distinction colour must not carry alone. done/cleanup/archived take idle's
@@ -347,15 +310,7 @@ export function SessionHeader({
         </h1>
         {/* D-5527: under the name, because it says what this session IS for —
             whose code, whose programme — before the meta row says how it is. */}
-        {coordination !== null && (
-          <p className="chat-coord" title={coordination.title}>
-            {/* Each clause an inline block, so the line wraps BETWEEN clauses at 360 and a clause wider than the line still wraps inside.
-                The separator rides INSIDE the clause it introduces, so a wrapped line never starts with, or holds, a lone `·`. */}
-            {coordination.parts.map((part, i) => (
-              <Fragment key={i}>{i > 0 && ' '}<span className="chat-coord-part">{i > 0 && '· '}{part}</span></Fragment>
-            ))}
-          </p>
-        )}
+        {facts !== null && <SessionCoordination facts={facts} coordination={coordination} />}
         <div className="chat-meta">
           {bucket !== null && (
             <>
@@ -372,7 +327,7 @@ export function SessionHeader({
             </>
           )}
           {wrapper !== '' && (
-            <Chip dot className={chipTone('active')}>
+            <Chip dot className={chipTone('active')} title={facts?.lane.label}>
               {accountLabel(roster, wrapper)}
             </Chip>
           )}
@@ -430,6 +385,8 @@ export function SessionHeader({
             )}
             </>
           )}
+          {/* D-5545: every other fact, in full — a details row from 900px, behind one door on a phone. */}
+          {facts !== null && <SessionDetails facts={facts} coordination={coordination} />}
         </div>
       </div>
       <Keycap className="keycap--term" aria-label="Terminal" onClick={onOpenTerminal}>
