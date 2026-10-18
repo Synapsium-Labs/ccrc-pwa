@@ -13,7 +13,7 @@ import path from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import {
   makeHistoryBox, runSweep, skipOnDarwin, openStoreRO, counters, journalRecords, plantSession, plantTranscript,
-  exportDirOf, segmentsOf, segmentRows, type HistoryBox,
+  exportDirOf, segmentsOf, segmentRows, runDriver, recoverRow, type HistoryBox,
 } from './historyHelpers.js';
 import { userRow } from './historyFixtures.js';
 import { removeTmpFixturesEachTest } from './tmpHelpers.js';
@@ -43,6 +43,7 @@ interface PassResult { state: string; segment: string | null; rows: number; blob
 /** The slice of sweep.mjs these tests call. It grows task by task; every member is a real export. */
 interface SweepExport {
   exportPass(db: DatabaseSync, ctx: Record<string, unknown>): Promise<PassResult>;
+  exportStep(db: DatabaseSync, ctx: Record<string, unknown>): Promise<PassResult | null>;
   newBudget(now?: () => number, limits?: { maxMs?: number; maxBytes?: number; chunkBytes?: number }): Record<string, unknown>;
 }
 let SW: SweepExport;
@@ -432,4 +433,120 @@ describe('the export pass, in-process (W1-B4 Task 5; spec §9.15 "What is due", 
     // Task 4's format-1 schema pages: 56 KiB on a prototype of its tables; 64 KiB allowed.
     expect(fs.statSync(path.join(exportDirOf(box), `1.${ids.writer}.db`)).size).toBeLessThanOrEqual(bound + 64 * 1024);
   }, 120_000);
+});
+
+/** One pass through the run-pass driver (B1 Task 24), its clock `min` minutes ahead of the real one. `preloads`, when
+ *  given, replaces the driver's default list, so it names the statfs preload itself. */
+const driverAt = (box: HistoryBox, min: number, o: { env?: Record<string, string>; preloads?: string[]; sizeBytes?: number } = {}) =>
+  runDriver(box, { offsetMs: min * MIN, sizeBytes: o.sizeBytes }, [], { env: o.env ?? {}, preloads: o.preloads });
+/** The same pass, which must exit 0. */
+const passAt = (box: HistoryBox, min: number, o: { env?: Record<string, string>; sizeBytes?: number } = {}): void => {
+  const r = driverAt(box, min, o);
+  expect(r.code, `${r.stdout}\n${r.stderr}`).toBe(0);
+};
+
+describe('the export in the tick (W1-B4 Task 6; spec §9.2 step 6, §9.15 "Preflight")', () => {
+
+  it('the cadence: no pass in the store\'s first hour, one after it, then at most hourly; a pass that finds nothing due still moves the clock', () => {
+    const { box, ids } = ingestedBox('ccrc-history-export-cadence-', [row(1, 'one', DAY), row(2, 'two', DAY)]);
+    passAt(box, 30);
+    expect(segmentsOf(box), 'a pass inside the first hour after the store\'s first tick').toEqual([]);
+    expect(metaOf(box, HEALTH_META.exportPassMs)).toBeNull();
+    const t65 = Date.now();
+    passAt(box, 65);
+    expect(segmentsOf(box)).toEqual([`1.${ids.writer}.db`]);
+    const first = Number(metaOf(box, HEALTH_META.exportPassMs));
+    expect(first).toBeGreaterThanOrEqual(t65 + 65 * MIN);
+    passAt(box, 95);
+    expect(metaOf(box, HEALTH_META.exportPassMs), 'a second pass inside the hour').toBe(String(first));
+    const t130 = Date.now();
+    passAt(box, 130);
+    expect(segmentsOf(box), 'nothing new was due').toEqual([`1.${ids.writer}.db`]);
+    expect(Number(metaOf(box, HEALTH_META.exportPassMs))).toBeGreaterThanOrEqual(t130 + 130 * MIN);
+  }, 300_000);
+
+  it('O40: below the home filesystem\'s own floor the pass is skipped (no segment, export_paused_low_disk +1, the pause in meta) and the same pass still ingests', () => {
+    const { box, transcript } = ingestedBox('ccrc-history-export-o40-', [row(1, 'one', DAY), row(2, 'two', DAY)]);
+    fs.appendFileSync(transcript, `${JSON.stringify(row(3, 'three, written after the last pass', HOUR))}\n`);
+    passAt(box, 65, { env: { HISTORY_TEST_STATFS_EXPORT: `1000:${10 * GIB}` } });
+    expect(segmentsOf(box)).toEqual([]);
+    expect(counters(box)['export_paused_low_disk']).toBe(1);
+    expect(metaOf(box, HEALTH_META.exportPaused)).toBe('low-disk');
+    expect(metaOf(box, HEALTH_META.exportPassMs), 'a pause is not a pass').toBeNull();
+    expect(q(box, 'SELECT count(*) AS n FROM entries')[0]!['n'], 'capture is unaffected: the appended row was ingested in the same pass').toBe(3);
+  }, 300_000);
+
+  it('O40: an export probe that never settles is a pause at its 5 s deadline, and the pass ends and exits 0', () => {
+    const { box } = ingestedBox('ccrc-history-export-hang-', [row(1, 'one', DAY)]);
+    const t = Date.now();
+    passAt(box, 65, { env: { HISTORY_TEST_STATFS_EXPORT: 'hang' } });
+    const ms = Date.now() - t;
+    expect(ms, 'the probe was not bounded by its deadline').toBeLessThan(60_000);
+    expect(ms, 'the export never probed').toBeGreaterThanOrEqual(4_500);
+    expect(segmentsOf(box)).toEqual([]);
+    expect(counters(box)['export_paused_low_disk']).toBe(1);
+    expect(metaOf(box, HEALTH_META.exportPaused)).toBe('unsettled');
+  }, 300_000);
+
+  it('O40 / RC9: the preflight statfs-es ~/.ccrc/history/export and never db/, even with db/ a link onto a roomier volume; a refusal writes nothing, and the next preflight that admits clears the pause, even when its pass is then held', async () => {
+    const { box, ids } = ingestedBox('ccrc-history-export-vol-', [row(1, 'one', DAY), row(2, 'two', DAY)], {
+      plant: (b) => {
+        // db/ a link onto a "volume", made before the first install as §9.3 "Store location" says, target 0700
+        const vol = path.join(b.home, 'vol', 'history-db');
+        fs.mkdirSync(vol, { recursive: true, mode: 0o700 });
+        fs.chmodSync(vol, 0o700);
+        fs.mkdirSync(b.root, { recursive: true, mode: 0o700 });
+        fs.symlinkSync(vol, path.join(b.root, 'db'));
+      },
+    });
+    expect(fs.lstatSync(path.join(box.root, 'db')).isSymbolicLink(), 'the fixture must store through a linked db/').toBe(true);
+    const seen: string[] = [];
+    const statfs = async (p: string): Promise<{ bsize: number; bavail: number; blocks: number }> => {
+      seen.push(p);
+      return p.endsWith('/export') ? { bsize: 1, bavail: 1000, blocks: 10 * GIB } : { bsize: 1, bavail: 4 * TIB, blocks: 8 * TIB };
+    };
+    const later = Date.now() + 2 * HOUR;
+    const r = await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, () => later, { deps: { statfs } })));
+    expect(seen, 'the export probed something other than its own directory').toEqual([path.join(box.root, 'export')]);
+    expect(r).toEqual({ state: 'paused', segment: null, rows: 0, blobs: 0, bytes: 0, complete: false });
+    expect(segmentsOf(box)).toEqual([]);
+    expect(counters(box)['export_paused_low_disk']).toBe(1);
+    expect(metaOf(box, HEALTH_META.exportPaused)).toBe('low-disk');
+    expect(fs.statSync(path.join(box.root, 'export')).mode & 0o777).toBe(0o700);
+    expect(fs.statSync(exportDirOf(box)).mode & 0o777).toBe(0o700);
+    const roomy = async (): Promise<{ bsize: number; bavail: number; blocks: number }> => ({ bsize: 1, bavail: 4 * TIB, blocks: 8 * TIB });
+    // Room is back, and history-off is set: the preflight admits, then the pass is held before its first row.
+    const off = historyPaths(box.home).off;
+    fs.writeFileSync(off, '');
+    const held = await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, () => later, { deps: { statfs: roomy } })));
+    expect(held).toEqual({ state: 'held', segment: null, rows: 0, blobs: 0, bytes: 0, complete: false });
+    expect(metaOf(box, HEALTH_META.exportPaused), 'an admitting preflight clears the pause, even when its pass is held').toBe('');
+    fs.rmSync(off);
+    const ok = await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, () => later, { deps: { statfs: roomy } })));
+    expect(ok).toMatchObject({ state: 'written', segment: `1.${ids.writer}.db` });
+    expect(metaOf(box, HEALTH_META.exportPaused)).toBe('');
+  }, 120_000);
+
+  it('outside the capture pause: a store at its cap pauses ingest and still exports', () => {
+    const { box, ids } = ingestedBox('ccrc-history-export-cap-', [row(1, 'one', DAY), row(2, 'two', DAY)]);
+    passAt(box, 65, { sizeBytes: 60 * GIB });   // over the default 50 GiB cap
+    expect(counters(box)['capture_paused_at_cap'], 'the fixture must put the store at its cap').toBeGreaterThanOrEqual(1);
+    expect(segmentsOf(box)).toEqual([`1.${ids.writer}.db`]);
+  }, 300_000);
+
+  it('never on the recover arm: while a recovery step is registered no export pass runs; the first tick after it completes exports', () => {
+    const { box, ids } = ingestedBox('ccrc-history-export-recover-', [row(1, 'one', DAY), row(2, 'two', DAY)]);
+    const db = openWriter(historyPaths(box.home).dbFile);
+    try {
+      // a recovery step as a restore's commit registers one (B2 Task 25's registerRecovery)
+      db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', ?, NULL, NULL)").run(Date.now());
+    } finally {
+      closeWriter(db);
+    }
+    passAt(box, 65);
+    expect(segmentsOf(box), 'an export pass ran on the recover arm').toEqual([]);
+    expect(recoverRow(box), 'the fixture\'s recovery step must complete in one pass').toMatchObject({ completed_ms: expect.any(Number) });
+    passAt(box, 66);
+    expect(segmentsOf(box)).toEqual([`1.${ids.writer}.db`]);
+  }, 300_000);
 });

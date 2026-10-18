@@ -61,7 +61,7 @@ import {
   RECOVER_PHASES, RECOVER_JOURNAL_PHASES, formatRecoverCursor, parseRecoverCursor, orderJournalFiles, indexRecord, replayStep, nextUnmovedTicks, HEALTH_META,
   mergeJournalByTime, decideBind, restoreNameOk,
   EXPORT_DIR, EXPORT_SEGMENT_MAX_BYTES, EXPORT_SEGMENT_FORMAT, segmentName, nextSegmentSeq, planSegment, CLAUDE_CODE_DEFAULT_RETENTION_DAYS,
-  shortestRetention, exportHorizonDays,
+  shortestRetention, exportHorizonDays, decideExportPass, planExportRoom,
 } from './lib.mjs';
 import {
   MIGRATIONS, OWED_INDEX, StoreError, bump, clearDoneMarkers, closeWriter, createStore, dropPending, finishPending, getMeta,
@@ -71,7 +71,7 @@ import {
   pruneApply, pruneDryRun, writeBackup, removeStaleBackupTemps,
   integrityCheck, foreignKeyRows, ftsMeasure, dropFtsTables, getStep, setStep, setCounter, adoptStore,
   peekStoreId, stageRestore, commitRestore, abortRestore,
-  ensureSegmentDir, createSegment, segmentInserts, publishSegment, listSegments,
+  ensureSegmentDir, createSegment, segmentInserts, publishSegment, listSegments, removeStaleSegmentTemps,
 } from './store.mjs';
 import { isBoundaryLine } from '../compact-card.mjs';
 import {
@@ -3032,7 +3032,9 @@ export async function bindingPass(home, P, op, args, deps, out) {
  * 20. `collectPurgedHistoryFiles`: at a due scan, the scope markers and card directories of purged sessions,
  *     7 days on (card.mjs; W1-B3 Task 7);
  * 21. `markScan`: a due scan is marked done, unless the roster was unreadable;
- * 22. `ensureHistoryDirs`: last, below the spool/ line the next sentence names, scope/ and card/ made 0700, a link
+ * 22. `exportStep`: §9.2 step 6, last (W1-B4): the export pass, at most once an hour, with a writer token only,
+ *     outside the ingest gate, behind its own floor on the home filesystem;
+ * 23. `ensureHistoryDirs`: last, below the spool/ line the next sentence names, scope/ and card/ made 0700, a link
  *     or a file there refused and counted (card.mjs; W1-B3 Task 5).
  *  Then spool/ is made unless something that is not a directory stands there (FU8) (the hook's gate is that directory, and
  *  the hook never makes it, §5.1, so a box with no bound store spools nothing) and an unreadable roster is counted, once per pass (FE4, O54); the scheduled pass runs
@@ -3135,6 +3137,10 @@ export async function tick(db, ctx) {
   // §9.4 (W1-B3 Task 7): the scope markers and card directories of purged sessions, 7 days on, at the periodic scan.
   if (scan) collectPurgedHistoryFiles(db, ctx.home, ctx.now());
   if (scan && !ctx.rosterUnreadable) markScan(db, ctx.now());
+  // §9.2 step 6, last (W1-B4): the export pass, after the ticks row and the tick record, at most once an hour (exportStep).
+  // It is OUTSIDE the ingest gate: under a cap or db-floor pause text keeps ageing toward its source's deletion, and the
+  // export has its own floor, on the home filesystem (D-4762 (history-export-outside-capture-pause)).
+  if (ctx.ids !== null) await exportStep(db, ctx);
   // <<< history tick steps
   // FU8 (D-4347 (history-planted-entries-never-wedge)): never over a planted entry, which the drain refused and counted; a
   // file or a dangling link there failed this mkdir on every pass (FP3).
@@ -7909,6 +7915,54 @@ export async function exportPass(db, ctx) {
     try { setMeta(db, EXPORT_ATTEMPT_META, String(nowMs)); } catch { /* busy: the next tick retries sooner, nothing is lost */ }
     return stop('failed');
   }
+}
+
+// ── W1-B4 Task 6: the export in the tick (spec §9.2 step 6, §9.15 "Preflight") ─────────────────────────────────────
+
+/** §9.2 step 6, last (W1-B4): the export pass, at most once an hour by its own clock, anchored on the store's first tick
+ *  (lib decideExportPass; D-4755 (history-export-cadence-from-first-tick)), behind a preflight on the HOME filesystem (§9.15
+ *  "Preflight"): statfs on ~/.ccrc/history/export under STATFS_DEADLINE_MS, then lib planExportRoom, which is planCopy
+ *  with that filesystem's own floor and the segment bound as the size (RC9; B2's D-4695 (history-backup-preflight-and-rename)).
+ *  Never db/, which may be a link onto a volume whose floor the tick already guards (§9.3; D-4179).
+ *  A refusal, or a probe that does not settle, skips the pass: counted export_paused_low_disk and kept in meta for doctor
+ *  (HEALTH_META.exportPaused, planExportRoom's word) until a preflight admits. Capture is unaffected, and the next tick
+ *  retries: a pause is not a pass. A stale temp is removed before the probe, so a pause never keeps one. A pass that
+ *  fails with a caught error counts for the cadence (Task 5's attempt clock), so it retries hourly. Null when the
+ *  cadence waits. */
+export async function exportStep(db, ctx) {
+  const nowMs = ctx.now();
+  const msOf = (k) => {
+    const v = getMeta(db, k);
+    return v !== null && /^[0-9]{1,16}$/.test(v) ? Number(v) : null;
+  };
+  const lastPass = msOf(HEALTH_META.exportPassMs);
+  const lastAttempt = msOf(EXPORT_ATTEMPT_META);
+  const first = db.prepare('SELECT ts_ms FROM ticks ORDER BY tick_id LIMIT 1').get();
+  const verdict = decideExportPass({
+    nowMs,
+    lastPassMs: lastPass === null ? lastAttempt : lastAttempt === null ? lastPass : Math.max(lastPass, lastAttempt),
+    firstTickMs: first === undefined ? null : Number(first.ts_ms),
+  });
+  if (verdict === 'wait') return null;
+  // A directory that cannot be made (EACCES, EROFS, ENOSPC on the home filesystem) is a pause, never a throw out of the
+  // tick: the probe below then fails on the missing directory, and planExportRoom answers low-disk.
+  try { ensureExportDirs(ctx.paths, ctx.ids.storeId); } catch { /* the probe decides */ }
+  // Every temp is stale here: only a pass under the shim's lock writes one (the lifecycle row's "the writer removes a
+  // stale .tmp itself"). It goes BEFORE the probe, so a pause never keeps a killed pass's temp on the filesystem whose
+  // room the probe measures. A removal that fails is counted and the step goes on.
+  try { removeStaleSegmentTemps(exportDirFor(ctx.paths, ctx.ids.storeId)); } catch { countOutside(db, 'export_write_failed'); }
+  const probe = await statfsWithDeadline(`${ctx.paths.root}/${EXPORT_DIR}`, STATFS_DEADLINE_MS, ctx.deps.statfs);
+  const room = planExportRoom(probe);
+  if (!room.admit) {
+    withTx(db, 'NORMAL', () => {
+      bump(db, 'export_paused_low_disk');
+      setMeta(db, HEALTH_META.exportPaused, room.word);
+    });
+    return { state: 'paused', segment: null, rows: 0, blobs: 0, bytes: 0, complete: false };
+  }
+  // An admitting preflight ends a pause, whatever the pass then answers (held, failed or no-horizon included).
+  if ((getMeta(db, HEALTH_META.exportPaused) ?? '') !== '') withTx(db, 'NORMAL', () => { setMeta(db, HEALTH_META.exportPaused, ''); });
+  return exportPass(db, ctx);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
