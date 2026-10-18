@@ -10629,3 +10629,29 @@ export function parseInterruptEventBody(body: string): { source: InterruptSource
   if (m === null) return null;
   return { source: isInterruptSource(m[1]) ? m[1] : 'unknown', outcome: isInterruptOutcome(m[2]) ? m[2] : 'unknown' };
 }
+
+/**
+ * The swap route's refusal codes (D-5240, working-state spec §5.9): every `error` word `POST /api/sessions/:id/swap`
+ * refuses a turn with, declared ONCE in `ARCHIVE_REFUSALS`' shape, and the same two words archive uses for the same
+ * two facts, so a code means one thing whichever door sent it. The server sends `SWAP_REFUSALS.<name>` and the PWA
+ * branches on it; neither spells one as a bare literal. ccd's own two refusals (`ccd: session-busy:` and `ccd:
+ * status-unknown:`, `cmd_swap`'s manual gate) are spelled from these too (`ccdSwapRefusal`, `server/src/swapguard.ts`).
+ *
+ *   - `sessionBusy` — a turn MEASURED in progress (the server's fail-closed `turnVerdictFor`, before the queue or
+ *     inside it, or ccd after both). `{interrupt:true}` consents; the turn in progress and its background tasks are lost.
+ *   - `statusUnknown` — nobody could read the turn. No consent covers it: stop the session first, then swap.
+ *
+ * Appended at the end of this file, like `ARCHIVE_REFUSALS`, so no line README or a contract cites moves.
+ */
+export const SWAP_REFUSALS = {
+  sessionBusy: ARCHIVE_REFUSALS.sessionBusy,
+  statusUnknown: ARCHIVE_REFUSALS.statusUnknown,
+} as const;
+export type SwapRefusal = (typeof SWAP_REFUSALS)[keyof typeof SWAP_REFUSALS];
+
+/** Every swap refusal code, DERIVED from `SWAP_REFUSALS` — never a second list. */
+export const SWAP_REFUSAL_CODES: readonly SwapRefusal[] = Object.values(SWAP_REFUSALS);
+
+export function isSwapRefusal(v: unknown): v is SwapRefusal {
+  return typeof v === 'string' && (SWAP_REFUSAL_CODES as readonly string[]).includes(v);
+}
