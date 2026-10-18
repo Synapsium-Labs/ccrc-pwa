@@ -303,7 +303,7 @@ const EXISTING = {
     ],
     SessionEnd: [
       { hooks: [{ type: 'command', command: "'/home/u/.claude/skills/code-usage/scripts/cron-upload.sh' --hook" }] },
-      { hooks: [{ type: 'command', command: '/home/u/.project-w/cloneme-session-end.sh' }] },
+      { hooks: [{ type: 'command', command: '/home/u/.project-w/project-w-session-end.sh' }] },
     ],
   },
   statusLine: { type: 'command', command: 'bash "$HOME/.claude/statusline-command.sh"' },

@@ -266,7 +266,7 @@ export class SessionStream {
       // for the life of the tab: `pwa/src/stores/session.ts`'s
       // `getSessionStore`, written by this frame and nothing else).
       //
-      // MEASURED 2026-09-10 on `expoAI-assistant-warm-cove`: a lane swap left
+      // MEASURED 2026-09-10 on `project-h-warm-cove`: a lane swap left
       // the pane gone for 4.8s, the client watching it was told `dead`, and
       // the socket that would have corrected it on its next poll was replaced
       // rather than kept (the screen reopened, the phone woke, the agent
@@ -1191,8 +1191,8 @@ export function registryCaughtUp(
  *
  * Read off `cfg.roster.accounts`, which `loadConfig` DERIVES from
  * `~/.ccrc/accounts.json` (see `config.ts`'s own comment on why: a hand-typed
- * copy is how `claude-dev0` was missing for the account's entire life — and
- * `~/.claude-dev0` is precisely where the incident's recovered transcript
+ * copy is how `claude-lab0` was missing for the account's entire life — and
+ * `~/.claude-lab0` is precisely where the incident's recovered transcript
  * sits today). Never a literal list of account names in this module
  * (architecture rule (a): config is data).
  *

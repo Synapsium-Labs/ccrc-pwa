@@ -58,7 +58,7 @@ export type ClaimantReading =
 // ── the journal clause ───────────────────────────────────────────────────────
 
 /** The acts that put a session down ON PURPOSE (spec §5.4): ccd's `stop`, `archive`, `reap`, `destroy`, `purge` and
- *  `forget` (`_LC_ACTS`), CCR-15's `reclaim` and stage 3's `expire`. An `unsupervise` counts when it carries a
+ *  `forget` (`_LC_ACTS`), #166's `reclaim` and stage 3's `expire`. An `unsupervise` counts when it carries a
  *  DECLARED surface — `_ws_unsupervise`'s `dec.surface`, which reads `none` when ccd acted on its own account. */
 export const DEAD_COORDINATOR_DELIBERATE_ACTS: readonly LifecycleAct[] =
   ['stop', 'archive', 'reap', 'destroy', 'purge', 'forget', 'reclaim', 'expire'];

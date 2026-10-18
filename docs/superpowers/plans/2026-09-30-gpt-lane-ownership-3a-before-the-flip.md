@@ -10649,7 +10649,7 @@ git log -1 --format='%an <%ae>'   # checked against the repository's identity ru
 **Why:**
 - **The spec is the authority the next two plans argue from.** Plans 3b and 4 argue from it, and several of its sentences are false once Tasks 1–10 land.
 - **Every amendment is appended (R9, critic #9).** The tree cites this document by line number: `ccd/ccgpt-usage.py` cites §5.4 line 333, `ccd/ccrc-models-probe:177` cites line ~497, and the Plan 2a plan cites lines 497 and 698. Any line above §20 that moved would silently re-aim one of those citations, so every correction is appended as §20, and the sentence it corrects gets a same-line pointer. Step 2 proves it mechanically.
-- **The residue class learns the GPT-lane labels (R10, critic #16).** `topology-clean`'s fleet-account-label class encodes only the four Anthropic labels and the employer name, so a GPT-lane label would ship green.
+- **The residue class learns the GPT-lane labels (R10, critic #16).** `topology-clean`'s fleet-account-label class encodes only the four Anthropic labels and the previous owner name, so a GPT-lane label would ship green.
   - One of the two live labels is byte-equal to a token the class's own `passes` list already pins. The class is a case-insensitive substring pattern over every tracked blob, so that token cannot join it (D-3722).
   - The hand-grep covers that label, together with the values no class expresses: lane 2's ports, the OAuth directory names, the per-lane config names, and the session codenames. All of them are measured read-only on the box at execution time (ruling F1).
   - **No real value is written to a tracked file in clear or printed, even transiently (F4).** The red-first proof uses a synthetic label in a disposable copy. Real values live only base64-encoded in 0600 scratch files, and every run that carries one is read by counts and exit codes.
@@ -11013,7 +11013,7 @@ node "$SCRATCH/t11-residue-insert.mjs" server/test/topology-clean.test.ts "$SCRA
 git diff -U0 -- server/test/topology-clean.test.ts | grep -c "^+  '[A-Za-z0-9+/=]*',$"   # expected: N, the joiner count
 ```
 
-  Expected: `ROSTER_RESIDUE: <5 + N> entries; N/N added entries present`, then `N`. Extend the docstring above the list (`:279-287`) in place, by hand and with no value in it: "…plus its operator's old employer name, and (Plan 3a) every GPT-lane label that this class's `passes` does not pin". Then the suite, output suppressed (F4):
+  Expected: `ROSTER_RESIDUE: <5 + N> entries; N/N added entries present`, then `N`. Extend the docstring above the list (`:279-287`) in place, by hand and with no value in it: "…plus its operator's previous owner name, and (Plan 3a) every GPT-lane label that this class's `passes` does not pin". Then the suite, output suppressed (F4):
 
 ```bash
 . "<abs scratch>/plan3a-env.sh"

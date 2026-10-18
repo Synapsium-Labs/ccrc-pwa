@@ -43,7 +43,7 @@ export interface ReleasedInput extends SessionRuns {
   readonly held: boolean;
   /** An archived workspace belongs to the `Archived (N)` fold, never to this one. */
   readonly archived: boolean;
-  /** The registry's CCR-15 child reading is `child` or `unreadable` (`ReleasedFrom.child`). */
+  /** The registry's #166 child reading is `child` or `unreadable` (`ReleasedFrom.child`). */
   readonly child: boolean;
 }
 

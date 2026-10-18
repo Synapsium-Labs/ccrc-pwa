@@ -413,7 +413,7 @@ async function ladder(io: FleetIO, o: ResolveOpts): Promise<Laddered> {
   // would present that unmeasured account as an empty one. That is the exact
   // error §5.5 names ("incomplete must never be read as absence"), one rung
   // upstream of the fallback arm it was written for: a foreign-glob `found`
-  // would tell the PWA "stranded history, held by claude2" and render a
+  // would tell the PWA "stranded history, held by claude9" and render a
   // months-old copy while the live transcript sits unread in the account
   // that was never actually searched.
   //

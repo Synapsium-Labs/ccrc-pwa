@@ -30,7 +30,7 @@ import { BASE_URL_OK } from './base-url.js';
  * The six colors an account can render in. Replaces today's hand-picked
  * `colorVar` per account (`shared/api.ts`'s `AccountDef.colorVar`) — a
  * free-form id (the whole point of Stage 2a) cannot name a bespoke CSS
- * token the way `claude`/`claude2`/`claude-corp` could, so accounts get a
+ * token the way `claude`/`claude9`/`claude-acme` could, so accounts get a
  * hue instead and `pwa/src/styles/tokens.css` supplies the `--acct-<hue>`
  * custom property. Declared as a runtime list, not just a type, because the
  * auto-assignment walk below needs an actual sequence to walk; exported because
@@ -246,7 +246,7 @@ export interface Roster {
   byId: ReadonlyMap<string, AccountDef>;
   /**
    * Longest-`id`-first, so a shorter id that happens to be a prefix of a
-   * longer one (`claude-` inside `claude-dev0-`) never wins a prefix match
+   * longer one (`claude-` inside `claude-lab0-`) never wins a prefix match
    * first. Sorted by `id.length` descending, `id` ascending as the
    * tie-break.
    *
@@ -255,7 +255,7 @@ export interface Roster {
    * fleet.ts's deleted `BY_ID_PREFIX_LENGTH_DESC`) had no secondary key, so
    * equal-length ids fell back to whatever order the JS engine's sort
    * happened to leave them in. Real ids collide on
-   * length today — `claude-corp` and `claude-dev0` are both 11 characters —
+   * length today — `claude-acme` and `claude-lab0` are both 11 characters —
    * so "engine-defined" was never hypothetical. Sorting by `id` ascending
    * as the second key makes the order total and deterministic.
    */
@@ -899,8 +899,8 @@ function parseAccount(raw: unknown, index: number, assumedProvider: string[]): D
   //
   // The safe set is deliberately conservative rather than "everything that
   // isn't a metacharacter": letters, digits, `.`, `-` and `_` cover every
-  // production suffix today (`.claude`, `.claude-personal`, `.claude-corp`,
-  // `.claude-gpt`, `.claude-dev0`) with room to spare, and a legitimate new
+  // production suffix today (`.claude`, `.claude-home`, `.claude-acme`,
+  // `.claude-gpt`, `.claude-lab0`) with room to spare, and a legitimate new
   // account name has no reason to need anything outside it.
   if (!/^\.[A-Za-z0-9._-]+$/.test(configDirSuffix)) {
     throw new RosterError(

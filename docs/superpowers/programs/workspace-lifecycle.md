@@ -4,7 +4,7 @@ Spec: `docs/superpowers/specs/2026-09-24-workspace-lifecycle-design.md`
 Plans: `docs/superpowers/plans/2026-09-2?-workspace-lifecycle-wave<N>-*.md` — each written once the waves it depends on
 have landed what it reads
 Home project: `ccrc-pwa`   Coordinator: `ccrc-pwa-quiet-river` (assigned by the operator 2026-10-02)   Workspace: **a fresh one per wave**
-Ticket: `#196` (Linear; mirrored as GitHub issue #196) — the coordinator is created from it
+Ticket: GitHub issue #196 (mirrored from the tracker) — the coordinator is created from it
 Companion programme: `docs/superpowers/programs/child-reclamation.md` (#166) — waves 2–4 here build on its waves 3–4
 
 **What this program is.** Released workers littered the fleet board: 29 of 56 registry rows on 2026-09-24 were

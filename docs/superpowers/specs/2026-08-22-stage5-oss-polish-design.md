@@ -2,7 +2,7 @@
 
 Written 2026-08-22 against main `c39eabc`, from the decision brief
 (`2026-08-21-stage5-oss-decision-brief.md`) under the operator rulings recorded there:
-**S1** — publish under **Synapsium-Labs** (the owner decision is recorded there);
+**S1** — publish under **Synapsium-Labs** (the owner decision is recorded outside this tree);
 **S2** — docs sanitise-and-ship, with the bar **verified by a mechanism, not a read-through**,
 and tailnet topology **cleared out, not masked** (it is noise to the public reader, not just
 a leak); **S10** — the setup must work with **no third-party DNS dependency**. Two pre-flip

@@ -463,7 +463,7 @@ _ct_read() {   # <path> -> CT_V ; rc 0 read, 1 absent, 2 unmeasurable
 # this repo already made. `server/src/coord/peers.ts` (D9): the peers route
 # "does NOT filter on `.archived` ... `archivedAt` is reported verbatim and
 # decides nothing", and it ships `archiveContradicted`/`archivedStale` to NAME
-# the contradiction. Measured on this box: `data-internal-still-prairie` has
+# the contradiction. Measured on this box: `project-e-still-prairie` has
 # carried `.archived` for 33 days beside a 4-second-old heartbeat, and the
 # server calls it `deliverable:"yes"`. In the other direction a main checkout
 # can never be archived at all, so an `.archived` filter over-counts a dead
@@ -2408,7 +2408,7 @@ CCRC_CARD_OFF="$HOME/.ccrc/ccrc-card-off"
 # TWO OF THE THREE COMPONENTS ARE MODELLED, NOT BOUNDED. `$id` carries a shape
 # gate but no length cap and appears more than once across these sentences, so
 # 1826 assumes a 40-character id rather than proving a ceiling (the longest id
-# live on this fleet today is 29, `expoAI-assistant-keen-prairie`); and
+# live on this fleet today is 29, `project-h-id-pad-keen-prairie`); and
 # `$CT_N` is interpolated un-padded, so each extra digit adds one character —
 # 244 at one co-tenant, 245 at the two-digit counts this fleet actually
 # carries (`coTenantN:15` in the pre-deploy baseline), 246 at three. The
@@ -2497,7 +2497,7 @@ COMPACT_LIVE_S=120
 # index) at roughly twice their sum, and RE-MEASURED on this box's real graphs
 # before it shipped — the p95 and peak RSS are recorded here by Task 6 of
 # plans/2026-09-10-graphify-compaction-card-plan-a.md: ccrc 9,543,597-byte graph
-# p95 0.36 s / 104,384 KiB RSS; largest admissible graph (MekWarLive,
+# p95 0.36 s / 104,384 KiB RSS; largest admissible graph (project-f,
 # 70,434,955 bytes) p95 1.05 s / 332,184 KiB RSS (five fresh-nonce runs each,
 # 2026-09-10).
 COMPACT_HELPER_TIMEOUT=8
@@ -2515,7 +2515,7 @@ COMPACT_WORKSET_MAX=12
 # bound), and `ccd`'s own row-creation, `_spawn_start` and `_reg_purge`
 # acquisitions, which carry a twinned literal of the same value.
 #
-# MEASURED, NOT ARGUED (Task 9, 2026-09-14, fleet box `openclaw`, load ~5.8,
+# MEASURED, NOT ARGUED (Task 9, 2026-09-14, fleet box `<fleet-host>`, load ~5.8,
 # fixture HOME — never the live one). What a waiter can be blocked behind is
 # ONE HELD SECTION, so each section is timed at its own acquire and release
 # rather than the arm being timed end to end, n=30 per section:

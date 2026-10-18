@@ -3734,7 +3734,7 @@ gone stale, a pass decides nothing at all. The act runs on the coordination seri
 immediately before each run's fleet act and again before its commit, and commits only while the run still names it, so
 a successor is never failed and a coordinator revived meanwhile keeps its programme — all but a revive that lands
 inside that last round trip.
-Each closed run's event says the sweep did it (`causedBy: sweep`), CCR-15 reclaims each marked worker whose run closed
+Each closed run's event says the sweep did it (`causedBy: sweep`), #166 reclaims each marked worker whose run closed
 (a worker mid-turn loses its turn; its work is pinned in the attic), an unmarked worker is released, and one feed row
 per programme says so. **The lane ships shadowed**: until the operator touches `$REG/dead-coordinator-lane-live` by
 hand in the registry the server reads (the fleet box's, through the agent, when the server runs `CCRC_FLEET=remote`;
@@ -5138,7 +5138,7 @@ the armed-gate sentence present) + held case A **860** (a 127-character workdir,
 reason names a run — the longer of the two case-A sentences the code can emit — and a 40-character id,
 **modelled**: `$id` carries a shape gate but no length bound and appears more than once across these
 sentences, so this is an assumption and not a ceiling; the longest id live on this fleet on 2026-09-08 was 29,
-`expoAI-assistant-keen-prairie`) + co-tenant 245 (a 64-character project and a two-digit count — `$CT_N`
+`project-h-id-pad-keen-prairie`) + co-tenant 245 (a 64-character project and a two-digit count — `$CT_N`
 is interpolated un-padded and the singular and plural halves are the same length, so the count's digits are
 the whole of the difference: 244 / 245 / 246 at one, two and three digits, and the fleet's live shape is
 two) + two joins = **1826**, not the fix wave's 1768 — its own 801 for held case A undercounted the true 860
@@ -5309,7 +5309,7 @@ is an instruction about one repo; the default is hygiene applied to repos that n
   (D-1451, narrowed by D-1458). detect() reads `.gitignore` only along the ancestor chain from the
   VCS root **down to** the scan root, so a **nested** `.gitignore` below the root is never applied
   and its build artifacts entered the corpus untracked — refusing that tree for ever, with no remedy
-  on the box (measured: synapsium-platform over `frontend/exposynapse-site/.astro/`, swift-harbor
+  on the box (measured: project-k over `frontend/site-k/.astro/`, swift-harbor
   over `.husky/_/`). So the guard runs in two steps: write the noise patterns, run detect() **once**,
   and compute the breach (corpus ∖ tracked) it would refuse on. Then ask git whether each **breach**
   path is ignored (`git check-ignore --no-index -z --stdin`, one call, NUL-framed so a non-ASCII or
@@ -5319,7 +5319,7 @@ is an instruction about one repo; the default is hygiene applied to repos that n
   directory** containing it when git's `--directory` census names one, so a whole ignored tree costs
   one line. Only if something was derived is it appended and detect() run a **second** time.
   D-1451..D-1453 derived git's WHOLE ignored census instead, and the cost was measured and then
-  accepted rather than removed: 308 entries on custom-tools, of which 22 covered a file detect would
+  accepted rather than removed: 308 entries on project-d, of which 22 covered a file detect would
   ingest at all — and on a 2000-file scratch fixture, 300 derived entries cost detect **43.3 s**
   against **1.4 s** with none, which is 1.4 s for a tree with no ignored files at all (D-1458). The
   second detect() is the one cost this shape ADDS, and it is measured too: on a tree that DOES derive

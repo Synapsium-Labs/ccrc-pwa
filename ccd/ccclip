@@ -3,7 +3,7 @@
 # Grabs the clipboard PNG, ships it to the box, and `ccd clip` injects its path into the
 # currently-attached session's input box (you then add your question and hit Enter).
 # Normally fired by a global hotkey (Hammerspoon); can also be run directly.
-# Optional arg: an explicit session id (e.g. claude2-expoAI-assistant) to override auto-detect.
+# Optional arg: an explicit session id (e.g. claude9-project-h) to override auto-detect.
 set -uo pipefail
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"  # hotkey launchers have a minimal PATH
 

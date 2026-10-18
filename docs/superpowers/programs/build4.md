@@ -151,7 +151,7 @@ worktree + full registry entries present, no session, no run binding.
 
 Cause, in order: `cmd_ws_add` writes the worktree and registry FIRST and runs
 `_spawn` + `_ws_supervise` LAST. `_ws_least_loaded` picked wrapper `claude-lab0` by
-session-count + disk only — it does NOT consider wrapper HEALTH. dev0 was rate-limited
+session-count + disk only — it does NOT consider wrapper HEALTH. lab0 was rate-limited
 (logged in, over limit), so the fresh session showed a usage-limit screen that
 `_accept_first_run_prompts` does not recognize — it matches ready banners and
 `_pane_login_screen`, nothing else — and its `for i in $(seq 1 450); sleep 2` loop polled
@@ -184,7 +184,7 @@ cannot be re-dispatched — you need a `planned` row.)
 ## Wave 2 dispatched 2026-08-12 — on amber-harbor, over the proven lane
 
 Run 3, wave 2/4, 8 declared items, on the EXISTING healthy session `ccrc-pwa-amber-harbor`
-(operator ruling: reuse the healthy box rather than block on dev0's recovery). Verified in
+(operator ruling: reuse the healthy box rather than block on lab0's recovery). Verified in
 the pane, not by response code: `/clear` landed, the reference nudge arrived within 60s, the
 worker fetched the brief and began executing its first instruction. Statusline: Opus 5,
 xhigh, ultracode.

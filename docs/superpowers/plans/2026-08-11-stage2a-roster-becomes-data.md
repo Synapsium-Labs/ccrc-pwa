@@ -72,7 +72,7 @@ Replace each stale sentence. The six edits, by line:
 - `1224-1226`: delete the "not ccd-valid, so ccd cannot mint an id under that prefix" clause; ccd mints `claude-lab0-*` ids for real.
 - `1253-1256`: "Three today, not four or five" → **four** today: `claude`, `claude9`, `claude-acme`, `claude-lab0`; only `gpt` is excluded.
 - `1260-1263`: delete "`claude-lab0` is false"; all five are ccd-valid, and the fixture test asserts exactly that.
-- `1319-1321`: `colorVar: '--ink-tertiary'` is no longer "the fallback for a wrapper it didn't recognise" — dev0 is recognised and simply has no hue assigned yet.
+- `1319-1321`: `colorVar: '--ink-tertiary'` is no longer "the fallback for a wrapper it didn't recognise" — lab0 is recognised and simply has no hue assigned yet.
 - `1341`/`1346`/`1353-1355`: "The three accounts" → four; and `claude-lab0` is no longer "a wrapper NOT in this list".
 
 - [ ] **Step 3: Fix `server/src/fleet.ts:71-80`**
@@ -684,7 +684,7 @@ git commit -m "feat(shared,server): the roster becomes runtime data, and placeme
 projectHome scored an account with no telemetry row as 0 and therefore picked
 it over every measured account — confirmed against the current tree, where
 {claude:5, claude9:6, claude-acme:7} projects onto claude-lab0 at score 0.
-Latent only because dev0 reports honestly and gpt is held out by homeAble.
+Latent only because lab0 reports honestly and gpt is held out by homeAble.
 Unknown now ranks below measured, with a first-home-able fallback so a fresh
 install with no telemetry anywhere still has somewhere to put work."
 ```
@@ -712,7 +712,7 @@ Expected: PASS with the four new rows (amber/green × dark/light) reporting real
 
 - [ ] **Step 2: Rename the tokens, keeping every hex and every ratio comment verbatim**
 
-`--acct-claude` → `--acct-cyan`, `--acct-claude9` → `--acct-violet`, `--acct-corp` → `--acct-blue`, `--acct-gpt` → `--acct-magenta`, plus each `-tint`, in the dark block (123-130) and the light block (329-336).
+`--acct-claude` → `--acct-cyan`, `--acct-claude9` → `--acct-violet`, `--acct-acme` → `--acct-blue`, `--acct-gpt` → `--acct-magenta`, plus each `-tint`, in the dark block (123-130) and the light block (329-336).
 
 Do **not** rename `--acct-active` / `--acct-active-tint` (136-137) — they are the alias layer components actually style against, and they are deliberately not redeclared in the light block. Update `--pr-merged` (95) to `var(--acct-violet)` and the rationale comment at 85-94 that names the old token twice.
 
@@ -720,7 +720,7 @@ Do **not** rename `--acct-active` / `--acct-active-tint` (136-137) — they are 
 
 - [ ] **Step 3: Rewrite the `[data-acct]` selectors to key on hue names**
 
-`tokens.css:371-374` currently keys on token *suffixes* (`claude-acme` → `--acct-corp` → `data-acct='corp'`), which works only by coincidence of naming. They become `[data-acct='cyan']`, `[data-acct='violet']`, `[data-acct='blue']`, `[data-acct='magenta']`, plus amber and green.
+`tokens.css:371-374` currently keys on token *suffixes* (`claude-acme` → `--acct-acme` → `data-acct='acme'`), which works only by coincidence of naming. They become `[data-acct='cyan']`, `[data-acct='violet']`, `[data-acct='blue']`, `[data-acct='magenta']`, plus amber and green.
 
 - [ ] **Step 4: Fix the two `--acct-` string inspections**
 
@@ -735,7 +735,7 @@ Eight component modules import these as pure synchronous functions. Thread the r
 ```bash
 cd pwa && ./node_modules/.bin/vitest run && npm run build
 git add -A pwa
-git commit -m "feat(pwa): account colours become hue names, and dev0 stops rendering in claude's cyan
+git commit -m "feat(pwa): account colours become hue names, and lab0 stops rendering in claude's cyan
 
 data-acct was derived by stripping --acct- off the colour token, so an account
 whose token was not an --acct-* name (claude-lab0, --ink-tertiary) fell through

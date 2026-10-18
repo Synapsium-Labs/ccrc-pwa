@@ -178,9 +178,9 @@ export const sevenOf = (l: AccountLimits | undefined): number | null =>
  * UNKNOWN IS NOT ZERO, and that is this function's one real defect fixed
  * (Stage 2a, Task 6). It used to score `max(five ?? 0, seven ?? 0)`, so an
  * account no telemetry had ever mentioned scored 0 and beat every measured
- * account on the box: against the live tree, `{claude: 5, claude2: 6,
- * 'claude-corp': 7}` projected onto `claude-dev0` at score 0 — the emptiest
- * account was simply the one nobody could see. Latent only because dev0
+ * account on the box: against the live tree, `{claude: 5, claude9: 6,
+ * 'claude-acme': 7}` projected onto `claude-lab0` at score 0 — the emptiest
+ * account was simply the one nobody could see. Latent only because lab0
  * reports honestly and gpt is held out by `homeAble`. An unmeasured account now
  * ranks BELOW every measured one instead of above them.
  *

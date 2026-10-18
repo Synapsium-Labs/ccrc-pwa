@@ -322,7 +322,7 @@ export interface CcrcConfig {
  * to check rather than a bare index into a map that might not have the key.
  *
  * The lookup is DATA, not a hand-typed table, and that is load-bearing: the
- * account roster's 5th member (`claude-dev0`) was once missing from a
+ * account roster's 5th member (`claude-lab0`) was once missing from a
  * hand-typed sibling of this map for its entire life (see this file's git
  * history), because that map used to be a second literal kept BESIDE the
  * roster instead of derived FROM it. Going through `cfg.roster.byId` — built

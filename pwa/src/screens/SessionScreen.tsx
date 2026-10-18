@@ -200,9 +200,9 @@ export function SessionScreen({
   // A direct roster lookup, not a re-parse of a colour-token NAME: this used
   // to derive `data-acct` by stripping `--acct-` off `accountColorVar`'s
   // return value, which worked only for a wrapper whose colour happened to be
-  // an `--acct-*` token. `claude-dev0`'s `colorVar` used to be the non-hue
+  // an `--acct-*` token. `claude-lab0`'s `colorVar` used to be the non-hue
   // `--ink-tertiary` (no account had it as a real hue), so the strip found no
-  // `--acct-` prefix, `acct` came back `undefined`, and dev0 rendered in
+  // `--acct-` prefix, `acct` came back `undefined`, and lab0 rendered in
   // `claude`'s cyan — a real user-visible bug this lookup closes, since
   // `accountHue` returns `undefined` for an unrostered wrapper and nothing
   // else.

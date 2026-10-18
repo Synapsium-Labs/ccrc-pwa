@@ -1,7 +1,7 @@
 // "Archive all (N)" inside a card's `Released (N)` fold (workspace lifecycle spec §5.1).
 //
 // PLAIN archives, one at a time: never `force`, and never any other option — the server's door decides every
-// refusal, and this loop only reports it. Children are skipped (CCR-15 reclaims them itself; its spec §5.9
+// refusal, and this loop only reports it. Children are skipped (#166 reclaims them itself; its spec §5.9
 // assumes a child is never archived), and every row is re-read from the CURRENT frame just before its own
 // request, because a row can stop being released while the loop is still working through the rows above it.
 import { releasedFromOf, type FleetSession } from '../../../shared/api';

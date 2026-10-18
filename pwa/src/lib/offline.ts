@@ -28,7 +28,7 @@ export interface FleetSnapshot {
    *  *something* instantly — without this, `accountLabel`/`accountColorVar`
    *  read an empty roster on a cold start exactly as they would before the
    *  first `/api/accounts` poll, and every account rendered as its raw
-   *  wrapper id (`claude2`, `claude-corp`) instead of the jargon-free label
+   *  wrapper id (`claude9`, `claude-acme`) instead of the jargon-free label
    *  this module exists to restore. Against the compile-time roster this
    *  replaced, that case never existed — labels were always available,
    *  synchronously, with no snapshot involved. `[]` for a pre-Task-7

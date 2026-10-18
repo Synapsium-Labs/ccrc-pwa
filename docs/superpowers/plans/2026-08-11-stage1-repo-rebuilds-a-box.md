@@ -107,7 +107,7 @@ Change to:
 ```bash
 homes=("$HOME/.claude" "$HOME/.claude-home" "$HOME/.claude-acme" "$HOME/.claude-gpt" "$HOME/.claude-lab0")
 ```
-(Quote the ACTUAL current line from the file — if it differs from the above, keep its shape and append the dev0 entry. The loop body already skips non-existent dirs: `[[ -d "$dir" ]] || continue`, so machines without dev0 are unaffected.)
+(Quote the ACTUAL current line from the file — if it differs from the above, keep its shape and append the lab0 entry. The loop body already skips non-existent dirs: `[[ -d "$dir" ]] || continue`, so machines without dev0 are unaffected.)
 
 - [ ] **Step 5: Syntax-check both scripts**
 

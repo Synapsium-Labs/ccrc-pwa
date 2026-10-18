@@ -129,13 +129,13 @@ const key = (project: string, name: string): string => `${project}/${name}`;
  * layouts on the box. `<project>/.git/worktrees/<name>/` takes its `<name>` from
  * the LAST SEGMENT OF THE CHECKOUT PATH, so:
  *
- *   ~/worktrees/custom-tools/brisk-ridge   admin name `brisk-ridge`
- *   ~/worktrees/custom-tools-alertwire     admin name `custom-tools-alertwire`
+ *   ~/worktrees/project-d/brisk-ridge   admin name `brisk-ridge`
+ *   ~/worktrees/project-d-alertpipe     admin name `project-d-alertpipe`
  *
  * — both measured live, in one project, on 2026-08-17. Composing
  * `${project}-${name}` is ccd's own `cmd_ws_add` rule (`local id="$project-$slug"`,
  * `local wt="$WORKTREES_ROOT/$project/$slug"`) and holds for the first; for the
- * second it yields `custom-tools-custom-tools-alertwire`, an id no registry row
+ * second it yields `project-d-project-d-alertpipe`, an id no registry row
  * can hold, so the any-field claim below could never match and the census named
  * that worktree on every sweep for ever — on the one kind whose repair deletes
  * worktrees.

@@ -231,7 +231,7 @@ export function AuthSection(): ReactNode {
     {/* THIS BLOCK IS NOT AN ACCOUNT (D-161). It used to be a `.accounts-row`
         whose label was an `.account-gauge-label` — the same two classes every
         Claude account row above wears — so "Passkeys" scanned as a fifth fleet
-        account named Passkeys, sitting in the same list as claude2 and gpt. It
+        account named Passkeys, sitting in the same list as claude9 and gpt. It
         gets its own class and a heading that says WHOSE it is; "Passkeys"
         survives one level down, where it belongs, as the label of the list of
         keys rather than as the block's identity. */}

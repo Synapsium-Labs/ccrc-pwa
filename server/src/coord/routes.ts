@@ -434,7 +434,7 @@ export interface CoordRoutesHandle {
   ) => Promise<T>): Promise<T>;
   /** The SAME hold, handed `closeRun`'s abandon arm as the DEAD-COORDINATOR LANE runs it (workspace lifecycle spec
    *  2026-09-24 §5.4): `causedBy: 'sweep'`, never the operator's word; the compare-and-set on `claimedBy` against the
-   *  crashed id; the lane's re-measure, which the arm runs before the fleet act and again before the commit; CCR-15 wave
+   *  crashed id; the lane's re-measure, which the arm runs before the fleet act and again before the commit; #166 wave
    *  3's `childReclaim` port wired exactly as the abandon route wires it. The lane's only way to end a run, so the
    *  reclaim door — which runs inside this serialiser — can never interleave with it. */
   withSweepAbandon<T>(coord: CoordStore, fn: (
@@ -523,7 +523,7 @@ export function registerCoordRoutes(
   const turnReads = turnReadDeps(deps, watcher);
 
   /** `closeRun`'s abandon arm exactly as `POST /api/runs/:id/abandon` runs it — `{intent:'abandon'}` built here and
-   *  never read off a body (D-280), `causedBy:'operator'`, CCR-15 wave 3's `childReclaim` port onto the session's own
+   *  never read off a body (D-280), `causedBy:'operator'`, #166 wave 3's `childReclaim` port onto the session's own
    *  queue — handed to `fn` INSIDE `coordMutex`. ONE spelling, two callers: that route, and the archive door's
    *  `{programme:'end'}` through the handle this function returns. */
   const withAbandon: CoordRoutesHandle['withAbandon'] = (coord, fn) => coordMutex.run(() => fn((runId) => closeRun(

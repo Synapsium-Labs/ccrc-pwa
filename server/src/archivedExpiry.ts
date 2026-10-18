@@ -4,7 +4,7 @@
 // these verdicts; `coord/expireArchived.ts` (the one executor) reads the box's two documents through the parsers
 // here. Nothing in this file reads a file, a row or a clock.
 //
-// THE POPULATION is an ARCHIVED WORKSPACE nobody claims, seven days after its archive — never a child (CCR-15's lane
+// THE POPULATION is an ARCHIVED WORKSPACE nobody claims, seven days after its archive — never a child (#166's lane
 // owns those) and never a main checkout (nothing archives one). THE THRESHOLD IS NEVER TYPED HERE: ccd's
 // `ws-audit --expire` document carries `expiresAt` (`archivedAt + WS_EXPIRE_AFTER_S`, from the one ccd definition),
 // and `expireAuditExpiresAt` is the ONE reader of that key. A document without it — an older ccd — is NO EVIDENCE,
@@ -212,7 +212,7 @@ function lockUnopenable(err: string): string | null {
 }
 
 /** One leaf the shared tail removes last (the clips directory, the per-session temp root), as the `expired` document
- *  reports it (`clipsKept`, `tmpRootKept`; CCR-15's 4462): ccd's word for a leaf it KEPT — `refused` (its removal
+ *  reports it (`clipsKept`, `tmpRootKept`; #166's 4462): ccd's word for a leaf it KEPT — `refused` (its removal
  *  helper refused it), `unmeasured` (whether it could be removed could not be measured) or `in-use` (a process still
  *  used it after the bounded wait) — or `null` when nothing was kept. A key that is ABSENT is an older ccd's document,
  *  which says nothing either way: `unreported`, never folded into `null` (that would read "removed"). A value this
@@ -238,7 +238,7 @@ export const expireKeptAny = (k: ExpireKept): boolean =>
   (k.clips !== null && k.clips !== 'unreported') || (k.tmpRoot !== null && k.tmpRoot !== 'unreported');
 
 /** The ws-expire `{"failed":…}` words that ccd prints before THIS attempt's tombstone and breadcrumb — so this attempt
- *  started nothing, and neither is retried from where it stopped (the reclaim side's twin is CCR-15's 4457). Since
+ *  started nothing, and neither is retried from where it stopped (the reclaim side's twin is #166's 4457). Since
  *  wave 6 this is the FALLBACK: a document that carries `crumb` is read by it (`parseExpireResult`), and these words
  *  decide only a document without it — an older ccd's. Each is READ its own way there:
  *   - `probe-unmeasured`: `_ws_expire_locked`'s unmeasured verdict, printed at its verdict point, before any intent —
@@ -262,7 +262,7 @@ export const EXPIRE_PRE_CRUMB_FAILED = ['probe-unmeasured', 'state-changed'] as 
 /** Is this `{"failed":…}` word one printed before this attempt's tombstone and breadcrumb (`EXPIRE_PRE_CRUMB_FAILED`)? */
 export const isExpirePreCrumbFailed = (word: string): boolean => (EXPIRE_PRE_CRUMB_FAILED as readonly string[]).includes(word);
 
-/** THE STUCK WORD on the expiry lane (workspace lifecycle wave 6, ruling B; CCR-15's R76 and R77, the reclaim side's
+/** THE STUCK WORD on the expiry lane (workspace lifecycle wave 6, ruling B; #166's R76 and R77, the reclaim side's
  *  ruling of the same word). The shared tail prints it, past the breadcrumb, when its removal-time re-ask PROVES that
  *  what it would remove is not only this workspace's own; it stopped there, and a retry finds the same thing until
  *  another tree or row moves. Read FIRST, whatever `crumb` says, as `stuck`: listed at once, asked again on the
@@ -315,7 +315,7 @@ export function parseExpireResult(sessionId: string, stdout: string, stderr: str
       const said = detail === '' ? v.failed : `${v.failed}: ${detail}`;
       // The WORD first (R76's order): the stuck word is stuck whatever `crumb` says (wave 6, ruling B).
       if (v.failed === EXPIRE_STUCK_WORD) return { kind: 'stuck', detail: said };
-      // `crumb` (CCR-15 spec §5.6; its R76 order, workspace lifecycle wave 6, question (k)): `false` — printed before this
+      // `crumb` (#166 spec §5.6; its R76 order, workspace lifecycle wave 6, question (k)): `false` — printed before this
       // attempt's breadcrumb, so nothing it started stands — audits afresh, whatever the word; `true` — printed past a
       // breadcrumb, the resumed arm's `probe-unmeasured` among them — is resumed. Only the two booleans are read: an
       // absent key (an older ccd) or any other value falls back to the word rule below, exactly as `main` reads it.
@@ -370,10 +370,10 @@ export type ArchivedExpiryVerdict =
  * IS THIS ROW AN ARCHIVED WORKSPACE THE SERVER MAY ASK TO EXPIRE NOW (spec §5.3, "A row is eligible when")? Every
  * conjunct in the spec's order, every doubt ineligible:
  *  - a workspace (a main checkout is never expired) with an archive;
- *  - no child marker — `child` or `unreadable` is CCR-15's lane's, never this one's;
+ *  - no child marker — `child` or `unreadable` is #166's lane's, never this one's;
  *  - identity measured;
  *  - the store read; no non-terminal run names it as `sessionId` or as `claimedBy`; it is not the `sessionId` of a
- *    review run whose reviewed run is not terminal (CCR-15 R16, applied to unmarked reviewers: the report lives in
+ *    review run whose reviewed run is not terminal (#166 R16, applied to unmarked reviewers: the report lives in
  *    this workspace's clips);
  *  - its expiry instant is KNOWN (ccd's, from the audit) and has come;
  *  - no hold. A row past its instant and still held is `held` — the attention list's, never acted on.
@@ -405,7 +405,7 @@ export function archivedExpiryStoreSkip(store: ExpiryStoreRead): ArchivedExpiryS
   return null;
 }
 
-/** A REVIEW run naming this row as `sessionId`, whose reviewed run is not terminal, keeps it (spec §5.3, CCR-15 R16).
+/** A REVIEW run naming this row as `sessionId`, whose reviewed run is not terminal, keeps it (spec §5.3, #166 R16).
  *  A reviewed run this pass could not read, or that is absent, is doubt — and doubt keeps. */
 export const reviewKeeps = (reviewed: { readonly kind: 'run'; readonly state: RunState } | { readonly kind: 'absent' } | { readonly kind: 'unreadable' }): boolean =>
   reviewed.kind !== 'run' || !(TERMINAL_RUN_STATES as readonly RunState[]).includes(reviewed.state);
@@ -470,7 +470,7 @@ export type ExpiryReport =
   | { readonly kind: 'kept'; readonly at: number; readonly clips: ExpireLeafKept; readonly tmpRoot: ExpireLeafKept }
   /** STUCK (wave 6, ruling B): ccd stopped the act part-way on `EXPIRE_STUCK_WORD`. Listed at once and STANDING — it
    *  outranks a failing entry and stands through every answer until an attempt completes, the archive changes, or a
-   *  terminal verdict (which outranks it, as on the reclaim side, CCR-15's R77). `at` is the first stuck answer,
+   *  terminal verdict (which outranks it, as on the reclaim side, #166's R77). `at` is the first stuck answer,
    *  `detail` the last, `attempts` how many. On the wire it is a `failing` entry (`expiryAttention`): no new word. */
   | { readonly kind: 'stuck'; readonly at: number; readonly detail: string; readonly attempts: number };
 
@@ -752,7 +752,7 @@ export function archivedExpiryNextEntry(
         ...(o.kind === 'audit-failed' ? standingThrough(entry) : {}) };
     }
     case 'stuck': {
-      // STUCK (wave 6, ruling B; CCR-15's R76 and R77): the act stopped part-way, and a retry finds the same until another
+      // STUCK (wave 6, ruling B; #166's R76 and R77): the act stopped part-way, and a retry finds the same until another
       // tree or row moves. Listed AT ONCE — never after the hour or the day — and on the persistent tier from the first
       // answer: one fresh audit every `EXPIRE_PERSISTENT_RETRY_MS`, never +∞, never stopping. It counts on both runs.
       const prev = entry.report?.kind === 'stuck' ? entry.report : null;

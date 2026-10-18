@@ -5242,7 +5242,7 @@ export class FleetWatcher {
 
   /**
    * THE DEAD-COORDINATOR LANE (workspace lifecycle spec 2026-09-24 §5.4, wave 4): a coordinator that CRASHED and has
-   * stayed dead an hour, with no successor, has its open runs closed `failed` — and CCR-15 then reclaims its marked
+   * stayed dead an hour, with no successor, has its open runs closed `failed` — and #166 then reclaims its marked
    * children. A THIRD SIBLING of `sweepChildReclaim` on the same tick, with its registry read, its cadence
    * (`CHILD_RECLAIM_SWEEP_MS`) and its switch (`reclaim-paused`, the fleet's one cleanup switch) — and nothing else:
    * its own memory, verdicts (`deadCoordinator.ts`, L1), executor (`endDeadCoordinator`), feed rows and attention list

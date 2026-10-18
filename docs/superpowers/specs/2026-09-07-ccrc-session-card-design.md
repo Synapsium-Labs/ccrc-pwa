@@ -412,7 +412,7 @@ subject exists for.
 > id, **modelled**: `$id` has a shape gate but no length bound and appears
 > more than once across these sentences, so this figure is an assumption and
 > not a ceiling; the longest id live on this fleet today is 29,
-> `project-h-keen-prairie`) + co-tenant **245** (a 64-character
+> `project-h-id-pad-keen-prairie`) + co-tenant **245** (a 64-character
 > project and a **two-digit count**, also modelled rather than bounded: `$CT_N`
 > is interpolated un-padded and the singular and plural halves are the same
 > length, so the count's digits are the whole of the difference — 244 / 245 /

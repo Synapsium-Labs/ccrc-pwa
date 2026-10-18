@@ -636,7 +636,7 @@ export function rosterFromJson(json) {
     accounts,
     homeAble: accounts.filter((a) => a.homeAble),
     // Longest id first, id ascending as the tie-break — `parseRoster`'s
-    // comparator, restated. `claude-corp` and `claude-dev0` tie at 11
+    // comparator, restated. `claude-acme` and `claude-lab0` tie at 11
     // characters today, so the second key is not decorative: without it the
     // arm order is whatever the engine's sort happened to leave behind.
     byIdLengthDesc: accounts.slice()

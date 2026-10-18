@@ -41,7 +41,7 @@
   - **I** = INFERRED.
   - *chosen* = a design value with no measurement behind it.
 - Claude Code binary facts are from 2.1.289. Minified names collide across the bundle, so each is cited with a string anchor beside it. 2.1.280–2.1.288 match byte-for-byte on every surface used here (**M**).
-- Upstream code is cited as `lossless-claw@e05d8d3:<path>:<line>` (MIT). The OpenClaw host is cited as `openclaw@ee578bc7:<path>:<line>`.
+- Upstream code is cited as `lossless-claw@e05d8d3:<path>:<line>` (MIT). The upstream host is cited as `openclaw@ee578bc7:<path>:<line>`.
 - Box identifiers are left out on purpose: hosts, devices, account and home names, session ids, workspace slugs.
 
 **Date:** 2026-10-05 · **Base:** `origin/main` `be93d159e` · rev 3.2 re-checked at `d12b5aba0`
@@ -125,7 +125,7 @@
 
 ### 1.4 Why capture plus recall is the plugin's own answer on a Claude Code host
 
-- **OpenClaw's Claude Code backend gives a context engine almost no hooks.** It advertises only bootstrap, after-turn and maintain (`openclaw@ee578bc7:src/context-engine/host-compat.ts:24-28`, **M**).
+- **The upstream host's Claude Code backend gives a context engine almost no hooks.** It advertises only bootstrap, after-turn and maintain (`openclaw@ee578bc7:src/context-engine/host-compat.ts:24-28`, **M**).
 - **So lossless-claw falls back to capture-only on that host.** It keeps the store plus recall tools, with no prompt assembly (`lossless-claw@e05d8d3:src/engine.ts:121-140`, **M**).
 - **ccrc is in the same position.** It cannot own Claude Code's per-turn message list, re-assemble before each tool-loop call, or replace the summary from a hook.
 - **The levers it does have:**
@@ -2907,7 +2907,7 @@ Slug `history-sole-copy-export`. Claude Code deletes a transcript some days afte
 **The verdict is to port its ideas.**
 - No npm dependency: its only export is the plugin bundle.
 - No vendored store:
-  - 16 of 21 tables are OpenClaw assembly machinery;
+  - 16 of 21 tables are the upstream host's assembly machinery;
   - it is async over a synchronous handle;
   - it has no `user_version`;
   - it churns heavily.
@@ -3020,7 +3020,7 @@ Slug `history-sole-copy-export`. Claude Code deletes a transcript some days afte
   - One sentence in it says this is third-party code provenance, **not** release provenance (`deploy/verify-provenance.mjs`, doctor's `provenance` check).
 - **Rationale comments.** Each copied function carries a one-line rationale comment: "derived from lossless-claw `<path>` @ e05d8d3, MIT, see LICENSE.lossless-claw". That is not a licence header, so it fits the S8 ruling (`server/test/license.test.ts:8-12`).
 - **README.** A "Third-party code" paragraph goes after `## License` (`README.md:5588`).
-- **OpenClaw code is never copied.** Row predicates are re-derived from Claude Code field names. If anything is ever copied, add `LICENSE.openclaw`.
+- **Upstream host code is never copied.** Row predicates are re-derived from Claude Code field names. If anything is ever copied, add the upstream host's `LICENSE` beside it.
 - **`license.test.ts` pins:**
   - the MIT hash;
   - a bijection between directories holding a "derived from lossless-claw" comment and sidecars;

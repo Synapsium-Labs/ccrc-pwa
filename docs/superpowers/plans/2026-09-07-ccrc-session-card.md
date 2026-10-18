@@ -1692,7 +1692,7 @@ prose. The floor is now 1923.
   A 860 (a 127-character workdir, a 127-character hold whose reason names a run — the longer of the two
   case-A sentences — and a 40-character id, modelled: `$id` has a shape gate but no length bound and
   appears more than once across these sentences, so this is an assumption, not a ceiling; the longest id
-  live on this fleet today is 29, `project-h-keen-prairie`) + co-tenant 245 (a 64-character project
+  live on this fleet today is 29, `project-h-id-pad-keen-prairie`) + co-tenant 245 (a 64-character project
   and a two-digit count) + two one-space joins = **1826** — not the fix wave's 1768: its own 801 for held
   case A undercounted the true 860 by 59. Against 1800 that is **not** headroom: 1826 exceeds it by 26
   characters, and the old bound truncates exactly this combination mid-word inside the co-tenant sentence
