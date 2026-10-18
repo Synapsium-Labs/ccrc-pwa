@@ -892,7 +892,7 @@ PLIST
 
 # `systemctl --user enable --now` — install the unit AND start it now.
 # On launchd those are one verb (`bootstrap` both loads and, with RunAtLoad,
-# starts), which is why `_svc_enable` below is the same call minus the start:
+# starts), which is why `_svc_enable` below drops the start (and, on systemd, the reload):
 # a plist in ~/Library/LaunchAgents IS boot persistence, exactly as an enable
 # symlink is under systemd.
 _svc_enable_now() {   # <unit>
@@ -907,8 +907,8 @@ _svc_enable_now() {   # <unit>
   _svc_launchctl bootstrap "$d" "$(_svc_plist "$1")" 2>/dev/null
   _svc_launchctl kickstart "$d/$(_svc_label "$1")" >/dev/null 2>&1
 }
-_svc_enable() {   # <unit> — boot persistence only, no start
-  if [ "$CCD_OS" != darwin ]; then systemctl --user enable "$1" 2>/dev/null; return $?; fi
+_svc_enable() {   # <unit> — boot persistence only, no start, no reload
+  if [ "$CCD_OS" != darwin ]; then systemctl --user enable --no-reload "$1" 2>/dev/null; return $?; fi
   case "$1" in claude-session@*) _svc_write_session_plist "$1" || return 1 ;; esac
   _svc_launchctl enable "$(_svc_domain)/$(_svc_label "$1")" 2>/dev/null
   return 0
