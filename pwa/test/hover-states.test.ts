@@ -48,6 +48,18 @@ describe('every interactive primitive carries a hover and a pressed state', () =
     expect(has(cls, 'active:bg-pressed'), `${_name}: no pressed ground`).toBe(true);
   });
 
+  // A disabled hairline button stands down (D-5448): its lift and press are
+  // gated on `enabled:`, so a disabled one neither lifts nor sinks (D-5495).
+  const hairline: Record<string, string> = {
+    'Button ghost': buttonVariants({ variant: 'ghost' }),
+    'Button danger-ghost': buttonVariants({ variant: 'danger-ghost', size: 'fit' }),
+  };
+  it.each(Object.entries(hairline))('%s gates its lift and press on enabled:', (_name, cls) => {
+    expect(cls, `${_name}: a disabled one lifts`).toMatch(/(^|\s)enabled:hover:bg-hover(\s|$)/);
+    expect(cls, `${_name}: a disabled one sinks`).toMatch(/(^|\s)enabled:active:bg-pressed(\s|$)/);
+    expect(cls, `${_name}: an ungated lift`).not.toMatch(/(^|\s)(hover:bg-hover|active:bg-pressed)(\s|$)/);
+  });
+
   // A door, the back chevron and a keycap are INK on chrome, not a ground: they
   // brighten to the primary ink under the mouse and keep the press they had.
   const inked: Record<string, [string, RegExp]> = {
