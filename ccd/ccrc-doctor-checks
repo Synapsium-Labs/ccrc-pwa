@@ -9179,7 +9179,8 @@ _check_update-sweep() {
     _dr_skip update-sweep "ccrc's own report reader is not loaded, so the last update's sweep was not read (a bug in ccrc: this table was sourced by something that is not ccrc)"
     return 3
   fi
-  local rrc=0 line phase pid word rest n id ans cut="" fix clears nr msg sh l
+  local rrc=0 line phase pid word rest n id ans cut="" fix clears nr msg sh l sw
+  local -a words=()
   local -a ids=() still=() unasked=() rst=()
   clears="; this WARN clears at the next ccrc update or rollback, which writes a new report"
   _upd_report_readable || rrc=$?
@@ -9214,16 +9215,25 @@ _check_update-sweep() {
     _dr_skip update-sweep "the last update's report (phase $phase) records no sweep: an older build wrote it, it moved nothing, or it stopped before its sweep — not measured"
     return 3
   fi
+  # The word is same-user-writable text (the report is, spec §8): what is PRINTED of it is
+  # cut and scrubbed, as `phase` and `pid` are above; what is MATCHED is the raw word.
+  sw="${word:0:60}"; sw="${sw//[![:print:]]/?}"
   case "$word" in
     ok)
       _dr_pass update-sweep "the last update's sweep found no supervisor already activating or failed before its restart"
       return 0 ;;
     'down: '*)
       rest="${word#down: }"; n="${rest%%:*}"; rest="${rest#*:}"
-      [[ "$n" =~ ^[0123456789]{1,4}$ ]] || { _dr_skip update-sweep "the last report's sweep word does not parse ('${word:0:60}'), so it was not read"; return 3; }
-      for id in $rest; do
+      [[ "$n" =~ ^[0123456789]{1,4}$ ]] || { _dr_skip update-sweep "the last report's sweep word does not parse ('$sw'), so it was not read"; return 3; }
+      # Split WITHOUT globbing: an unquoted `for id in $rest` expands a `*` in a hand-cut word
+      # against the cwd, and a file named like an id would then be read as one.
+      read -ra words <<<"$rest" || true
+      for id in ${words[@]+"${words[@]}"}; do
         [[ "$id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] && ids+=("$id")
       done
+      if [ "${#ids[@]}" -eq 0 ]; then
+        _dr_skip update-sweep "the last report's sweep word names no supervisor id this build can read ('$sw'), so it was not read"; return 3
+      fi
       [ "${#ids[@]}" -ge "$((10#$n))" ] || cut=" (the report names ${#ids[@]} of $((10#$n)); the rest did not fit in it)"
       # The bus defaults the `services` check sets, for the same reason: each check
       # runs in its own `$( )`, so that check's exports never reach this one, and
@@ -9302,18 +9312,18 @@ _check_update-sweep() {
         job-file) fix="ccd start <id> rewrites each session's job file; then restart each: launchctl kickstart -k <domain>/<label>" ;;
         *) fix="read the update's own output for the refusal, fix what it names, then restart the supervisors" ;;
       esac
-      _dr_warn update-sweep "the last update's supervisor sweep was REFUSED (${word#refused: }), so every live claude-session@ supervisor still ran the ccd it ran before that update; nothing re-sweeps" "${fix}${clears}"
+      _dr_warn update-sweep "the last update's supervisor sweep was REFUSED (${sw#refused: }), so every live claude-session@ supervisor still ran the ccd it ran before that update; nothing re-sweeps" "${fix}${clears}"
       return 2 ;;
     'unverified: '*)
-      _dr_warn update-sweep "the last update's post-restart listing was not read (${word#unverified: }), so no supervisor's state after its restart is known" \
+      _dr_warn update-sweep "the last update's post-restart listing was not read (${sw#unverified: }), so no supervisor's state after its restart is known" \
         "ccrc status lists each session's state; restart any that is not running with ccd start <id>${clears}"
       return 2 ;;
     'died: '*)
-      _dr_warn update-sweep "the last update's supervisor sweep died partway (${word#died: }; the report's detail says where), so some supervisors may run the previous ccd and the rest the new one" \
+      _dr_warn update-sweep "the last update's supervisor sweep died partway (${sw#died: }; the report's detail says where), so some supervisors may run the previous ccd and the rest the new one" \
         "read the detail in ~/.ccrc/update.json and follow its read: line; ccrc status lists each session's state${clears}"
       return 2 ;;
     *)
-      _dr_skip update-sweep "the last report's sweep word is not one this build knows ('${word:0:60}'), so it was not read"
+      _dr_skip update-sweep "the last report's sweep word is not one this build knows ('$sw'), so it was not read"
       return 3 ;;
   esac
 }

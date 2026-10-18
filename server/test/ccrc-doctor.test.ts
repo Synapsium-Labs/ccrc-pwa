@@ -684,8 +684,8 @@ function stubSystemctl(home: string): void {
     // D-5316 (ruling 12): `update-sweep` asks `show -p ActiveState -p NRestarts <unit>` and reads the two lines BY NAME. The
     // answer is the file's own text (a planted `ActiveState=` and `NRestarts=` line, in the order the test chose), and an
     // ABSENT file prints nothing, the manager not answering. The bus is part of the question: with `fixture-bus-required`
-    // present the stub answers only when XDG_RUNTIME_DIR is set, as a real user manager does from a bare context.
-    + '  if [ -f "$HOME/fixture-bus-required" ] && [ -z "${XDG_RUNTIME_DIR:-}" ]; then exit 1; fi\n'
+    // present the stub answers only when BOTH XDG_RUNTIME_DIR and DBUS_SESSION_BUS_ADDRESS are set, as a real user manager does from a bare context.
+    + '  if [ -f "$HOME/fixture-bus-required" ] && { [ -z "${XDG_RUNTIME_DIR:-}" ] || [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]; }; then exit 1; fi\n'
     + '  f="$HOME/fixture-show-$7"\n'
     + '  if [ -f "$f" ]; then while IFS= read -r l; do echo "$l"; done < "$f"; fi\n'
     + '  exit 0\n'
@@ -16082,11 +16082,11 @@ describe('update-sweep: the last update\'s sweep, read from its report, WARN nev
     writeFileSync(join(home, `fixture-show-claude-session@${id}.service`), lines.length === 0 ? '' : `${lines.join('\n')}\n`);
   const up = (home: string, id: string, restarts = 0): void => plantShow(home, id, [`NRestarts=${restarts}`, 'ActiveState=active']);
   /** `_check_update-sweep` alone, as `cmd_doctor` runs it (`runDh`'s shape). */
-  const runUs = (home: string, extraEnv: NodeJS.ProcessEnv = {}): Result => {
+  const runUs = (home: string, extraEnv: NodeJS.ProcessEnv = {}, cwd?: string): Result => {
     const ccd = join(home, 'ccrc', 'ccd');
     const r = spawnSync(BASH, ['-c',
       `set -uo pipefail; . ${shq(join(ccd, 'ccrc'))}; . ${shq(join(ccd, 'ccrc-doctor-checks'))}; _check_update-sweep`],
-    { env: { ...doctorEnv(home), ...extraEnv }, encoding: 'utf8' });
+    { env: { ...doctorEnv(home), ...extraEnv }, encoding: 'utf8', ...(cwd === undefined ? {} : { cwd }) });
     return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
   };
   const out = (r: Result): string[] => r.stdout.split('\n').filter((l) => l !== '');
@@ -16228,7 +16228,7 @@ describe('update-sweep: the last update\'s sweep, read from its report, WARN nev
       expect(verdict(runUs(home))).toMatch(/^WARN update-sweep: .*acct-e-demo \(active at this read, but restarted 1 times by its manager since\)/);
     });
 
-    itLinux('sets the bus defaults a bare context lacks: a manager that answers only with XDG_RUNTIME_DIR set is still asked', () => {
+    itLinux('sets the bus defaults a bare context lacks: a manager that answers only with XDG_RUNTIME_DIR and DBUS_SESSION_BUS_ADDRESS set is still asked', () => {
       const home = sweepBox('ccrc-doctor-us-down-bus-');
       writeFileSync(join(home, 'fixture-bus-required'), '');
       plantSweep(home, 'down: 1: acct-a-demo');
@@ -16284,6 +16284,67 @@ describe('update-sweep: the last update\'s sweep, read from its report, WARN nev
     const r = runUs(home);
     expect(verdict(r)).toMatch(/^WARN update-sweep: .*supervisor sweep died partway/);
     expect(r.code).toBe(2);
+  });
+
+  // The Darwin arm is ONE `_svc_is_active` read (no NRestarts under launchd), through the file's own `stubLaunchctl`, which
+  // answers from the same `fixture-unit-claude-session@<id>.service` file the systemctl stub reads: `active`, any other word
+  // (a loaded job that is not running: `inactive`) and an EMPTY file (the manager could not be asked). `failed` has no
+  // launchd source, so ccd's own `$HOME/.cc-sessions/<id>.svcfailed` stamp is what reads as `failed`. These skip on Linux
+  // (their arm is the `down` describe above) and run on the macOS leg; the plan's Task 4 as-built note says so.
+  describe('the `down` word on macOS (one `_svc_is_active` read through the launchctl fixture)', () => {
+    const unitFile = (home: string, id: string, text: string): void =>
+      writeFileSync(join(home, `fixture-unit-claude-session@${id}.service`), text);
+    itDarwin('D5: WARNs on a unit launchd holds as failed (the start-limit stamp), quoting the word, and the fix is ccd start', () => {
+      const home = sweepBox('ccrc-doctor-us-mac-down-');
+      plantSweep(home, 'down: 2: acct-a-demo acct-b-demo');
+      unitFile(home, 'acct-a-demo', 'active\n');
+      mkdirSync(join(home, '.cc-sessions'), { recursive: true });
+      writeFileSync(join(home, '.cc-sessions', 'acct-b-demo.svcfailed'), '');
+      const r = runUs(home);
+      expect(verdict(r)).toBe('WARN update-sweep: 1 supervisor(s) were already down before the last update\'s restart and are still not active: acct-b-demo (failed) — the update did not verify them and did not fail for them');
+      expect(remedy(r)).toMatch(/^ {2}remedy: ccd start <id> for each /);
+      expect(r.code).toBe(2);
+    });
+
+    itDarwin('D6: PASSes when the recorded unit reads active, and keeps the one-read parenthetical (a crash loop can read active between its restarts)', () => {
+      const home = sweepBox('ccrc-doctor-us-mac-back-');
+      plantSweep(home, 'down: 1: acct-a-demo');
+      unitFile(home, 'acct-a-demo', 'active\n');
+      const r = runUs(home);
+      expect(verdict(r)).toBe('PASS update-sweep: the 1 supervisor(s) the last update found already down before its restart read active at this read (one read: a unit that crash-loops can read active between its restarts)');
+      expect(r.code).toBe(0);
+    });
+
+    itDarwin('D13: SKIPs, never WARNs, when launchd could not be asked for the one recorded unit (an empty answer is not "down")', () => {
+      const home = sweepBox('ccrc-doctor-us-mac-unasked-');
+      plantSweep(home, 'down: 1: acct-c-demo');
+      unitFile(home, 'acct-c-demo', '\n');
+      const r = runUs(home);
+      expect(verdict(r)).toMatch(/^SKIP update-sweep: the service manager did not answer for acct-c-demo, .*not measured$/);
+      expect(r.code).toBe(3);
+    });
+  });
+
+  it('a `*` in a hand-cut down word is never expanded against the cwd: a file named like an id is not read as one, and a word with no readable id SKIPs rather than PASSes', () => {
+    const home = sweepBox('ccrc-doctor-us-glob-');
+    const cwd = mkTmp('ccrc-doctor-us-glob-cwd-');
+    writeFileSync(join(cwd, 'zz-decoy.txt'), '');
+    plantSweep(home, 'down: 1: *');
+    const r = runUs(home, {}, cwd);
+    expect(r.stdout + r.stderr).not.toContain('zz-decoy');
+    expect(verdict(r)).toMatch(/^SKIP update-sweep: .*names no supervisor id this build can read \('down: 1: \*'\)/);
+    expect(r.code).toBe(3);
+  });
+
+  it('prints the sweep word cut and scrubbed: a control character in it never reaches the output, in any arm that echoes it', () => {
+    const ESC = '\u001b';
+    for (const word of [`refused: bad${ESC}[31mx`, `unverified: bad${ESC}[31mx`, `died: bad${ESC}[31mx`, `later${ESC}[31mx`, `down: 1x${ESC}[31m: a`]) {
+      const home = sweepBox('ccrc-doctor-us-scrub-');
+      plantSweep(home, word, word.startsWith('died') ? 'failed' : 'done');
+      const r = runUs(home);
+      expect(verdict(r), `no verdict for ${JSON.stringify(word)}\n${r.stdout}`).toMatch(/bad\?\[31mx|later\?\[31mx|1x\?\[31m/);
+      expect(r.stdout, JSON.stringify(word)).not.toContain(ESC);
+    }
   });
 
   it('D12: the function has no FAIL arm and no `return 1` (a structural pin: Reading 9 was ruled warn only)', () => {
