@@ -16,6 +16,7 @@ import { spawn } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { Bus } from '../src/bus.js';
+import type { FleetSession } from '../../shared/api.js';
 import { loadConfig } from '../src/config.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import {
@@ -98,7 +99,11 @@ interface World {
 }
 interface WorldOptions { home?: string; ccdVerbs?: string[] | null; coord?: boolean }
 
-const sessionOf = (id: string, status: 'idle' | 'busy' | 'dead' = 'idle', project = 'demo') => ({ id, project, status });
+/** `stoppedBy` (epoch ms) and `archivedAt` (epoch seconds) are what a deliberate stop leaves on a fleet row; both are always present, null unless a row sets one. */
+const sessionOf = (
+  id: string, status: 'idle' | 'busy' | 'dead' = 'idle', project = 'demo',
+  over: Partial<{ stoppedBy: FleetSession['stoppedBy']; archivedAt: FleetSession['archivedAt'] }> = {},
+) => ({ id, project, status, stoppedBy: null as FleetSession['stoppedBy'], archivedAt: null as FleetSession['archivedAt'], ...over });
 const recordOf = (id: string, project = 'demo', child: { kind: 'none' | 'child' | 'unreadable' } = { kind: 'none' }) => ({ id, project, child });
 type Sess = ReturnType<typeof sessionOf>;
 type Rec = ReturnType<typeof recordOf>;
@@ -1257,6 +1262,86 @@ describe('the circuit breaker is the policy\'s, fed by deaths this process watch
     await censusPass(w, at(1), { demo: [] }, everyone([sessionOf('demo-x', 'dead'), sessionOf('demo-y')]));
     await censusPass(w, at(2), { demo: [] }, everyone([sessionOf('demo-x'), sessionOf('demo-y', 'dead')]));
     expect(w.watcher.delegationReport().breaker, 'x came back, so only y is a fresh death').toBe('clear');
+  });
+
+  // A deliberate stop leaves its stamp (`stoppedBy`, epoch ms) or, for an archive, `archivedAt` (epoch SECONDS) on the row before the pane dies.
+  const stopped = (id: string, atMs: number) => sessionOf(id, 'dead', 'demo', { stoppedBy: { at: atMs, surface: 'agent' } });
+  const archived = (id: string, atSeconds: number) => sessionOf(id, 'dead', 'demo', { archivedAt: atSeconds });
+  const crashed = (id: string) => sessionOf(id, 'dead');
+  const seconds = (ms: number): number => Math.floor(ms / 1000);
+  const census = { demo: [OLD, RAW] };
+
+  it('two parents stopped on purpose inside ten minutes are not a mass death: the breaker and the health read clear, and the lease is made', async () => {
+    const w = await rawTreeWorld();
+    await censusPass(w, at(0), census, everyone(extras));
+    await censusPass(w, at(1), census, everyone(extras));
+    await censusPass(w, at(2), census, everyone([stopped('demo-x', at(2) - 10_000), stopped('demo-y', at(2) - 20_000)]));
+    expect(w.watcher.delegationReport().breaker, 'a stopped parent was counted as a fresh death').toBe('clear');
+    expect(w.watcher.currentDelegationHealth()!.circuitBreaker).toBe('clear');
+    expect(leasesOf(w.home)).toHaveLength(1);
+  });
+
+  it('two archived parents (an archive stamps archivedAt, not stoppedBy) are not a mass death either', async () => {
+    const w = await rawTreeWorld();
+    await censusPass(w, at(0), census, everyone(extras));
+    await censusPass(w, at(1), census, everyone(extras));
+    await censusPass(w, at(2), census, everyone([archived('demo-x', seconds(at(2)) - 10), archived('demo-y', seconds(at(2)) - 20)]));
+    expect(w.watcher.delegationReport().breaker, 'an archived parent was counted as a fresh death').toBe('clear');
+  });
+
+  it('one parent stopped and one that crashed is one fresh death: clear', async () => {
+    const w = await rawTreeWorld();
+    await censusPass(w, at(0), census, everyone(extras));
+    await censusPass(w, at(1), census, everyone(extras));
+    await censusPass(w, at(2), census, everyone([stopped('demo-x', at(2) - 10_000), crashed('demo-y')]));
+    expect(w.watcher.delegationReport().breaker, 'only the crash is a fresh death').toBe('clear');
+  });
+
+  it('the torn tick: a stop that read as a crash on one pass and carries its stamp on the next (a stamp before the recorded death) erases that death', async () => {
+    const w = await rawTreeWorld();
+    await censusPass(w, at(0), census, everyone(extras));
+    await censusPass(w, at(1), census, everyone(extras));
+    await censusPass(w, at(2), census, everyone(deadExtras));          // x reads as a crash (no stamp yet) and y is one: two deaths recorded at at(2)
+    expect(w.watcher.delegationReport().breaker).toBe('suspended');
+    await censusPass(w, at(3), census, everyone([stopped('demo-x', at(2) - 5_000), crashed('demo-y')]));
+    expect(w.watcher.delegationReport().breaker, 'x\'s stamp is from before its recorded death: not a death').toBe('clear');
+  });
+
+  it('the torn tick with the fleet clock ahead: a stamp 30 s after the recorded death is inside the skew, so it still erases that death', async () => {
+    const w = await rawTreeWorld();
+    await censusPass(w, at(0), census, everyone(extras));
+    await censusPass(w, at(1), census, everyone(extras));
+    await censusPass(w, at(2), census, everyone(deadExtras));
+    expect(w.watcher.delegationReport().breaker).toBe('suspended');
+    await censusPass(w, at(3), census, everyone([stopped('demo-x', at(2) + 30_000), crashed('demo-y')]));
+    expect(w.watcher.delegationReport().breaker, 'x\'s stamp is within the clock skew of its recorded death').toBe('clear');
+  });
+
+  it('a stop stamped later than the recorded death plus the skew (an operator cleaning up after a crash) leaves the death counted', async () => {
+    const w = await rawTreeWorld();
+    await censusPass(w, at(0), census, everyone(extras));
+    await censusPass(w, at(1), census, everyone(extras));
+    await censusPass(w, at(2), census, everyone(deadExtras));
+    await censusPass(w, at(3), census, everyone([stopped('demo-x', at(2) + correlation.DELEGATION_CLOCK_SKEW_MS + 30_000), crashed('demo-y')]));
+    expect(w.watcher.delegationReport().breaker).toBe('suspended');
+  });
+
+  it('an unstamped archive later than the recorded death plus the skew leaves the death counted (archivedAt is read in seconds)', async () => {
+    const w = await rawTreeWorld();
+    await censusPass(w, at(0), census, everyone(extras));
+    await censusPass(w, at(1), census, everyone(extras));
+    await censusPass(w, at(2), census, everyone(deadExtras));
+    await censusPass(w, at(3), census, everyone([archived('demo-x', seconds(at(2) + correlation.DELEGATION_CLOCK_SKEW_MS) + 30), crashed('demo-y')]));
+    expect(w.watcher.delegationReport().breaker).toBe('suspended');
+  });
+
+  it('stamps more than the skew past this pass\'s own instant, on parents first seen dying, are not a stop: both count', async () => {
+    const w = await rawTreeWorld();
+    await censusPass(w, at(0), census, everyone(extras));
+    await censusPass(w, at(1), census, everyone(extras));
+    const future = at(2) + 2 * correlation.DELEGATION_CLOCK_SKEW_MS;
+    await censusPass(w, at(2), census, everyone([stopped('demo-x', future), stopped('demo-y', future)]));
+    expect(w.watcher.delegationReport().breaker).toBe('suspended');
   });
 });
 
