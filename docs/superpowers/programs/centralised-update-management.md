@@ -1970,6 +1970,9 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         server 27 passed; one backup pruned. v0.0.282 (#606) and v0.0.283 (#607, B2's follow-up) followed,
         unapplied. STATUS: fleet and server v0.0.281, newest v0.0.283, intent dev/auto=stable, backups fleet
         170M/server 1331M, disk free fleet 211G/work volume 92G/server 32G, no anomalies.
+      - 17:55: v0.0.284 (#616) and v0.0.285 (#608) followed, unapplied. STATUS: fleet and server v0.0.281, newest
+        v0.0.285, intent dev/auto=stable, backups fleet 170M/server 1331M, disk free fleet 211G/work volume
+        93G/server 32G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
