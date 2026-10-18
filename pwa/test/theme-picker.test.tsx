@@ -214,4 +214,31 @@ describe('the Theme picker follows a choice made anywhere', () => {
     expect(document.documentElement.getAttribute('data-theme')).toBe('dracula');
     expect(radio(/^Dracula/).checked).toBe(true);
   });
+
+  it('an unknown id asks for SYSTEM, and the Follow system row is the one checked', () => {
+    // The store holds resolveTheme(choice), what a reload would read back,
+    // never the raw id: a raw 'no-such-palette' would leave no row checked.
+    render(<AppearanceSection />);
+    fireEvent.click(radio(/^Nord/));
+    act(() => { setTheme('no-such-palette', media(false)); });
+    expect(radio(/^Follow system/).checked).toBe(true);
+    expect(radio(/^Nord/).checked).toBe(false);
+  });
+
+  it('with storage that throws, an OS light/dark flip keeps the palette the row says', () => {
+    // The media listener re-applies the choice in force, not a fresh storage
+    // read: blocked storage reads back SYSTEM, which would swap Nord for a
+    // Phosphor palette under a row still checked on Nord.
+    vi.stubGlobal('localStorage', {
+      getItem() { throw new Error('denied'); },
+      setItem() { throw new Error('denied'); },
+    });
+    let flip: (e: { matches: boolean }) => void = () => {};
+    initTheme({ matches: false, addEventListener: (_t, cb) => { flip = cb; } });
+    render(<AppearanceSection />);
+    viaPalette('Nord');
+    act(() => { flip({ matches: true }); });
+    expect(document.documentElement.getAttribute('data-theme')).toBe('nord');
+    expect(radio(/^Nord/).checked).toBe(true);
+  });
 });

@@ -87,8 +87,8 @@ export function setTheme(
 /** Wire the theme at boot (main.tsx).
  *
  *  The media subscription stays live even when a palette is PINNED, and that
- *  is deliberate rather than wasteful: the listener re-reads the stored choice
- *  each time, so a user who switches back to "System" later gets the current
+ *  is deliberate rather than wasteful: the listener re-applies the choice in
+ *  force each time (D-5572), so a user who switches back to "System" later gets the current
  *  OS answer without a reload, and a pinned palette simply ignores the event. */
 export function initTheme(
   mq: ThemeMedia = window.matchMedia('(prefers-color-scheme: light)'),
@@ -99,7 +99,10 @@ export function initTheme(
   chrome(root);
   choose(stored);
   mq.addEventListener('change', (e) => {
-    applyTheme(storedTheme(), root, e.matches);
+    // The choice in force, not a fresh storage read: with storage blocked a
+    // re-read says SYSTEM and would swap a pinned palette under its still-
+    // checked row (D-5572).
+    applyTheme(chosen, root, e.matches);
     chrome(root);
   });
 }
