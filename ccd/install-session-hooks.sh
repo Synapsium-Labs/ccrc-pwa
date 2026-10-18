@@ -177,7 +177,9 @@ _child_deny_json() {
 # runs `--remove --homes <one home>`, so deleting it here stripped every other account's
 # children of the deny layer. `ccrc uninstall`'s `_uninst_cc_sessions` is its one remover.
 if [[ "$MODE" != remove ]]; then
-  mkdir -p -- "$(dirname "$CHILD_DENY_FILE")" 2>/dev/null || :
+  # The parent by expansion, never `dirname`: `ccrc doctor --fix` re-runs this script on the
+  # doctor's own PATH, which carries no `dirname` (its delegation-hooks --fix fixture holds it).
+  mkdir -p -- "${CHILD_DENY_FILE%/*}" 2>/dev/null || :
   if ! deny_next=$(_child_deny_json) || ! jq empty <<<"$deny_next"; then
     echo "install-session-hooks: could not build $CHILD_DENY_FILE" >&2; rc=1
   # Byte-level converge, as the homes above: an unchanged file keeps its bytes (and so
