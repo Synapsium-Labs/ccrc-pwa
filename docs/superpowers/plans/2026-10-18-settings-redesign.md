@@ -4,31 +4,33 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-18-settings-redesign-design.md` (rev 3, approved 2026-10-18). Every section binds this plan; the ones each task builds are named in its header. This plan does not restate the spec's reasoning. Read the named section before the task.
 
-**Status:** DRAFT rev 0 (2026-10-18). Task R0 (this plan) is the docs PR. Nothing is dispatched until the operator approves it.
+**Status:** rev 1 (2026-10-18), after an adversarial review (§Review log). Task R0 (this plan) is the docs PR. Nothing is dispatched until the operator approves it.
 
 **Operator rulings this plan builds on** (2026-10-18, given on the mockups; the spec's §15):
 - **D1 to D11, all as recommended:** three rollback targets older than the running release, with Newer capped at three too (D1); older releases not offered in the app, a count plus the CLI command instead (D2); withdrawn releases offered, counted inside the three, and marked (D3); a Stable fleet rolls back to Stable releases plus the release it ran before its last update (D4); a fleet Roll back is a danger action (D5); the same Ack confirm on the node row and on the home screen's halt banner (D6); versions first, policy last (D7); Revoke passkey takes the step-up once it exists, and so does Add a passkey (D8); Security moves into Settings (D9); no Danger zone section (D10); build the "ran here" record (D11).
 - **The three visual calls stand as mocked** (§15.2): the Signed in glyph green without glow; Instrument's card head a title plus a scope tag; the release date on the meta line.
-- **The release-notes change.** The operator, 2026-10-18: "Fix to release notes sounds good!" This plan reads it as the go-ahead for the release-notes PR (#645, the notes plan's §A and §B) landing first, and for the spec's rev 3 alignment with it: the update banner keeps opening `WhatsNewSheet` in place, and Settings reuses `ReleaseNotes` and `WhatsNewSheet` rather than drawing its own. R1a is the first task that builds on it.
-- **The Accounts rulings that reach this plan** (the Accounts spec, `2026-10-18-accounts-connect-design.md`, rev 3): Q1's long-lived token default puts a year-valid token for every token lane on the fleet box, so that spec's §3.11 shows one all-provider "If this fleet host is ever compromised" disclosure in Settings › Security (Task R5, D-5509). Q4's management key stays on Accounts (its §8.7 "Provider keys" block); Security shows no line for it (the spec's §1.4 and §15.3 residue). Q6 and Q10 reach no Settings surface.
+- **The release-notes change.** The operator, 2026-10-18: "Fix to release notes sounds good!" This plan reads it as the go-ahead for the release-notes PR (#645, the notes plan's §A and §B) landing first, and for the spec's rev 3 alignment with it: the update banner keeps opening `WhatsNewSheet` in place, and Settings reuses `ReleaseNotes` and `WhatsNewSheet` rather than drawing its own. #645 has merged (`62db8d3b`, D-5548 and D-5549 among its four numbers). R1a is the first task that builds on it.
+- **The Accounts rulings that reach this plan** (the Accounts spec, `2026-10-18-accounts-connect-design.md`, rev 3): Q1's long-lived token default puts a year-valid token for every token lane on the fleet box, so that spec's §3.11 shows one all-provider "If this fleet host is ever compromised" disclosure in Settings › Security (Task R5, D-5509). Q4's management key (the OpenRouter provisioning key, whose minting and PKCE connect the operator asked to be designed now) is installed and shown on Accounts (its §8.7 "Provider keys" block); Security gains no control for it (the spec's §1.4 and §15.3 residue), but R5's disclosure names deleting it whenever the box may hold it, because it is the strongest credential the box can hold. Q6 and Q10 reach no Settings surface.
 
-**Base:** `origin/main` `f609f68c` (#644), with #645 measured at `174ca79c`. Code is cited by file and by function, constant or selector, with `≈` line hints. Step 0 of each task re-grounds them by content on the tree the task starts from, and re-reads the in-flight diffs (§In flight) before any edit.
+**Base:** `origin/main` `c1453e42` (#597), re-measured for rev 1; #645 merged at `62db8d3b`. Rev 0 was written at `f609f68c`. Code is cited by file and by function, constant or selector, with `≈` line hints. Step 0 of each task re-grounds them by content on the tree the task starts from, and re-reads the in-flight diffs (§In flight) before any edit.
 
-**Deploy class:** server lane. The PWA bundle ships inside the server's release. Three tasks change server code, each additive: R2b (`RELEASE_PUSH_URL`), R2s (two route guards) and R4 (one coord migration that adds tables only, one writer in the inventory sweep, one optional wire field). No task touches the agent, `ccd`, `deploy/`, a unit, a hook or a fleet frame, and none bumps `FLEET_PROTO`.
+**Deploy class:** server lane. The PWA bundle ships inside the server's release. Three tasks change server code, each additive: R2b1 (`RELEASE_PUSH_URL`), R2s (two route guards and the register challenge's session binding) and R4 (one coord migration that adds tables only, one writer in the inventory sweep, one optional wire field). No task touches the agent, `ccd`, `deploy/`, a unit, a hook or a fleet frame, and none bumps `FLEET_PROTO`.
 
-**Names.** Tasks here are **R0** to **R5**, after the spec's waves (§13): R1a to R1d on today's single page, R2a to R2e and R2s for the sections in Refined, R3a and R3b for Instrument, R4 for the record, R5 for the disclosure. Foundations-plan tasks are **F1** to **F17** (`2026-10-15-ccrc-skins-foundations.md`), W2-plan tasks **S0** to **S18** (`2026-10-18-ccrc-skins-w2-shells.md`), Accounts waves **AW0** to **AW3d** (the Accounts spec's §17 W0 to W3d, prefixed here so they never read as two-skins W-numbers). "Refined" is skin A, "Instrument" skin B.
+**Names.** Tasks here are **R0** to **R5**, after the spec's waves (§13): R1a to R1d on today's single page, R2a, R2b0 to R2b2, R2c to R2e and R2s for the sections in Refined, R3a and R3b for Instrument, R4 for the record, R5 for the disclosure. Foundations-plan tasks are **F1** to **F17** (`2026-10-15-ccrc-skins-foundations.md`), W2-plan tasks **S0** to **S18** (`2026-10-18-ccrc-skins-w2-shells.md`), Accounts waves **AW0** to **AW3d** (the Accounts spec's §17 W0 to W3d, prefixed here so they never read as two-skins W-numbers). "Refined" is skin A, "Instrument" skin B.
 
 **Goal, PR by PR.**
 
 | After | Refined | Instrument |
 |---|---|---|
-| `main` + #645 | today's single page; every release row drawn | the same |
-| R1a | the release window: at most three Newer, the running release (or "Update all to vX"), at most three Roll back to, a count and the CLI line; notes behind "Notes"; words for badges; "See what's new" in Updates | the same |
+| `main` (#645 merged) | today's single page; every release row drawn | the same |
+| R1a | the release window: at most three Newer, the running release (or "Update all to vX"), at most three Roll back to, a count and the CLI line; notes behind "Notes"; words for badges; "See what's new" in Updates; one halt line | the same |
 | R1b | Roll back and Ack are red hairlines that ask first; Cancel has the focus | the same |
 | R1c | sentence-case labels, a note under every option, result lines under the control instead of toasts | the same |
 | R1d | the box token card: its definition, one summary line, Details folded, Rotate's answer as a line | the same |
 | R2a | unchanged (five icons vendored) | the same |
-| R2b | `/settings` is a sections list on a phone and in a pane under 760; each section its own route and page; Updates' cards in D7's order; the release push opens `/settings/updates` | the sections list and the section pages render as Refined's until R3a (the phone pattern at every width) |
+| R2b0 (only if F11 lacks C3's slots) | unchanged (`Section`'s `scope` and `purpose`, `PageScaffold`'s `nav`) | the same |
+| R2b1 | `/settings` is a sections list on a phone and in a pane under 760; each section its own route and page holding today's bodies unchanged; the release push opens `/settings/updates` | the sections list and the section pages render as Refined's until R3a (the phone pattern at every width) |
+| R2b2 | Updates' cards in D7's order; Cleanup pause its own card; the gate card and banner; every card's purpose and scope words | the same |
 | R2c | a sticky 200 to 220 px section nav beside a 760 column on a pane of 760 or more | unchanged |
 | R2d | Settings › Security holds the sign-in gate, your passkeys, this session and the box token; Accounts holds only lanes | the same |
 | R2e | Theme is a preview grid of real palettes | the same |
@@ -36,78 +38,86 @@
 | R3a | unchanged | master-detail: the section index in the list column, the section in the detail pane; on a phone, the index as a page under the tab bar |
 | R3b | unchanged | the inspector holds a release's notes, a node's lines or the box token's detail |
 | R4 | each release row says when it ran here | the same, in the inspector too |
-| R5 | Security ends with the compromise disclosure, naming the providers in the roster | the same |
+| R5 | Security ends with the compromise disclosure: the providers in the roster, OpenRouter's steps whenever the management key may be present, and the rebuild step always | the same |
 
 ---
 
 ## Gates: what each task waits for, stated honestly
 
-The six things the brief named, measured on 2026-10-18:
+Measured on 2026-10-18 at `c1453e42` (rev 1; rev 0's measure at `f609f68c` is superseded):
 
-- **#627 (#402, reconciled):** `CONFLICTING` against `main`, 81 files. It holds `pwa/src/app.tsx`, `pwa/src/lib/api.ts` and the tests `contrast.test.ts`, `control-census.test.ts`, `design-system-boundary.test.ts`, `markup-census.test.ts`, `shell-css.test.ts`, `tap-targets.test.tsx` and `app.test.tsx`. It also gates F11 and every W2 task that renders. **The critical path for R2 runs #627 → F11 and S2a → S2b → R2b.**
-- **The release-notes change (#645):** `MERGEABLE`, in CI. It holds `pwa/src/screens/updates.tsx`, `SettingsScreen.tsx`, `pwa/src/fleet/UpdateBanner.tsx`, `fleet.css`, `shared/api.ts` (`UpdatesView.source`), `server/src/update/routes.ts` and `pwa/test/role-census.test.ts`, and adds `ReleaseNotes.tsx`, `WhatsNewSheet.tsx`, `TextLink` and `whats-new-sheet.test.tsx`. **Every R1 task waits for it.** This plan cites it by number and by the notes plan's parts (§A, §B), never by its two D-numbers, until it is on `main`: `deviation-refs`' floor case refuses a tracked ref above the ledger's high-water.
-- **Two-skins W1 (the foundations plan, and the W1 items no plan covers yet):** F6 (danger variants, #611), F8 (Icon, #608), F10 (the palette, #626), F12b (`SkinFieldset`, #632) and F14 (roles, #636) have merged. **F11** (`PageScaffold`, `Section`) is not built and gates R2b, R2c and R2d, with the spec's §15.3 C3 slots (`Section({ scope, title, purpose, children })`, a `PageScaffold` `nav` slot); if F11 ships without them, R2b extends the primitives itself. **F14b** has no PR yet; it rewrites `fleet.css`'s font roles, so R1b and R1c re-read it at Step 0 (below). The unplanned W1 items gate nothing here, but two shape what a task may show: `Sheet`'s desktop arm (until it lands, every confirm at 1280 and 1920 is today's bottom sheet, and each PR says so), and the `Popover` primitive (until it lands, Quiet time stays a native `<select>` capped at 320 px).
-- **Two-skins W2:** none of S2a to S18 has merged. **S2a** and **S2b** (the frame, `pwa/src/lib/routes.ts`, the door marks) gate R2b. **S4b** (Refined's desktop frame) gates R2c. **S9, S10 and S11** (Instrument's rail, list column and phone) and the shared list-column seam **W3-LC** (the spec's §15.3 C2, owned by the coordinator) gate R3a; **S12** (the inspector's permanent, overlay and sheet forms) gates R3b. **S17** (parity) reads R2b's routes once both have landed (§Coordinator items, C1).
+- **#627 (#402, reconciled):** open, `CONFLICTING` against `main` at rev 0's measure. It holds `pwa/src/app.tsx`, `pwa/src/lib/api.ts` and the tests `contrast.test.ts`, `control-census.test.ts`, `design-system-boundary.test.ts`, `markup-census.test.ts`, `shell-css.test.ts`, `tap-targets.test.tsx` and `app.test.tsx`. It also gates F11 and every W2 task that renders. **The critical path for R2 runs #627 → F11 and S2a → S2b → R2b1.**
+- **The release-notes change (#645): merged** (`62db8d3b`). Its parts are on `main` as D-5548 to D-5551; this plan cites D-5548 (notes written at release time) and D-5549 (`WhatsNewSheet` in place, `UpdatesView.source`). `ReleaseNotes.tsx`, `WhatsNewSheet.tsx`, `TextLink` and `whats-new-sheet.test.tsx` exist. **It gates nothing any more.**
+- **`fleet.css` is held twice.** **#650** is F14b (the foundations plan's Task 14b: the sheet body, `OptionRow` and the app sheets read the type and density roles). It rewrites `.settings-note`, `.settings-release-date`, `.settings-release-refused`, `.settings-release-running`, `.settings-node-detail` and their `role-census.test.ts` entries. **#647** (a session card is a glance) also edits `fleet.css`, plus `fleet-css.test.ts`. R1a and R1c add layout rules to `fleet.css`'s `.settings-release*` and `.settings-note` blocks (≈:2934–:3023), so **both wait for #650 and #647**. If either is still open at dispatch and the coordinator wants R1a first, that PR's author rebases over R1a, and the R1a PR body names the overlap; the R1 task never edits the file early. R1b no longer edits `fleet.css` (its move buttons size through `Button`'s `size="fit"`, Task R1b).
+- **#652** (the session page's running workflows) holds `pwa/test/tap-targets.test.tsx` and `shared/api.ts`. It gates **R2b1** (the index row floor in `tap-targets.test.tsx`) and **R4** (`shared/api.ts`). R2d and R2e only run `tap-targets.test.tsx`; they edit it only if a case moves, and then wait for #652 too.
+- **#597 (the delegation wave-3 follow-up): merged** (`c1453e42`). It gates nothing.
+- **Two-skins W1 (the foundations plan, and the W1 items no plan covers yet):** F6 (danger variants, #611), F8 (Icon, #608), F10 (the palette, #626), F12b (`SkinFieldset`, #632) and F14 (roles, #636) have merged; F14b is #650 (above). **F11** (`PageScaffold`, `Section`) is not built and gates R2b1, R2c and R2d, with the spec's §15.3 C3 slots (`Section({ scope, title, purpose, children })`, a `PageScaffold` `nav` slot); if F11 ships without them, R2b0 extends the primitives first. The unplanned W1 items gate nothing here, but two shape what a task may show: `Sheet`'s desktop arm (until it lands, every confirm at 900 and wider is today's bottom sheet, and each PR says so), and the `Popover` primitive (until it lands, Quiet time stays a native `<select>` capped at 320 px).
+- **Two-skins W2:** none of S2a to S18 has merged. **S2a** and **S2b** (the frame, `pwa/src/lib/routes.ts`, the door marks) gate R2b1. **S4b** (Refined's desktop frame) gates R2c. **S9, S10 and S11** (Instrument's rail, list column and phone) and the shared list-column seam **W3-LC** (the spec's §15.3 C2, owned by the coordinator) gate R3a; **S12** (the inspector's permanent, overlay and sheet forms) gates R3b. **S17** (parity) reads R2b1's routes once both have landed (§Coordinator items, C1).
 - **Hibernation:** its code has merged (#593, #594, #595, #598); only its Task 19 remains, the operator's shadow week and arming, which is no PR. **No task here waits for it.** No Settings surface reads a lifecycle, presence or `hibernatedAt`; R4's writer reads node stamps, not sessions. Settings gains **no** hibernation control: `hibernate-disabled` and `hibernate-after-hours` stay fleet-box files with no writer in the tree, as the spec's §1.4 rules for every CLI-only knob. A rollout that carries a task here during Task 19's arming week is the operator's call under that task's stop rule; nothing in this plan arms, disarms or measures it.
 - **Coordinator-first:** #646 (Task 14) holds `shared/api.ts`, and later coordinator-first tasks may too. **Only R4 waits for it**, for that file. No task here adds an ask, approval or coordination control, and none edits `server/src/coord/routes.ts`, `approvalguard.ts` or a skill.
+- **The Accounts waves.** AW0 adds `RosterWire.provider` and `kind` (the Accounts spec's §13.1, coordinated with #397); AW1a adds the step-up (D-5512); AW2a ships §3.11's disclosure component; AW3b adds `connect.openrouterManagement`. R2s waits for AW1a, R5 for AW0 and AW2a. R5 does not wait for AW3b (below, Task R5).
 
-| Task | #627 | #645 | Two-skins W1 | Two-skins W2 | Hibernation | Coordinator-first | Other |
+| Task | #627 | `fleet.css` (#650, #647) | Two-skins W1 | Two-skins W2 | Hibernation | Coordinator-first | Other |
 |---|---|---|---|---|---|---|---|
 | R0 (this plan) | no | no | — | — | no | no | — |
 | R1a release window | no | **yes** | — | — | no | no | — |
-| R1b danger confirms | no (its census row moves to R2b) | through R1a | F6 ✓; **F14b**, if it is open at dispatch (`fleet.css`) | — | no | no | R1a |
-| R1c words and result lines | no | through R1a | F14b, as R1b | **S2b**, if it has merged, rebases R1c (both edit `SettingsScreen.tsx`); otherwise S2b rebases | no | no | R1b |
-| R1d box token card | no | through R1a | — | the same as R1c | no | no | R1c |
+| R1b danger confirms | no (its census row moves to R2b2) | no (no `fleet.css` edit) | F6 ✓ | — | no | no | R1a |
+| R1c words and result lines | no | **yes** (through R1a, and again if either reopens the blocks) | — | **S2b**, if it has merged, rebases R1c (both edit `SettingsScreen.tsx`); otherwise S2b rebases | no | no | R1b |
+| R1d box token card | no | through R1c | — | the same as R1c | no | no | R1c |
 | R2a five icons | no | no | F8 ✓ | **S7c** also vendors `bot`: whichever lands second drops it from its own list | no | no | — |
-| R2b sections and routes | **yes** | through R1a | **F11** (with C3's slots, or R2b extends them) | **S2a**, **S2b**; the coordinator's ack of C1 | no | no | R1a to R1d, R2a |
-| R2c Refined desktop nav | through R2b | — | F11's `nav` slot | **S4b** | no | no | R2b |
-| R2d Security receives sign-in | through R2b | — | F11 on `AccountsScreen.tsx` first (C4's order) | — | no | no | R2b; **lands before AW0** (C4) |
-| R2e Appearance preview grid | through R2b | — | — | — | no | no | R2b |
-| R2s step-up on two passkey routes | — | — | — | — | no | no | R2d; **AW1a** (the step-up routes, `assertedAt`, `requireRecentAssertion`); **#397** (`server/src/server.ts`) |
-| R3a Instrument master-detail | through R2b | — | — | **S9, S10, S11**; **W3-LC** (C2) | no | no | R2b to R2e |
-| R3b Instrument inspector | — | — | — | **S12**; W3-LC's inspector slot | no | no | R3a |
-| R4 the "ran here" record | — | **yes** (`shared/api.ts`) | — | — | no | **#646** and any later task holding `shared/api.ts` | **#397**, **#597** (`shared/api.ts`); R1a |
-| R5 the compromise disclosure | — | — | — | — | no | no | R2d; the Accounts wave that first ships §3.11's disclosure component (AW2a as the Accounts spec stands) |
+| R2b0 F11 slots (conditional) | **yes** | no | F11 merged without C3's slots | — | no | no | **#650** (`role-census.test.ts`) |
+| R2b1 sections, routes, provider | **yes** | no | **F11** (with C3's slots, or R2b0) | **S2a**, **S2b**; the coordinator's ack of C1 | no | no | R1a to R1d, R2a; **#652** (`tap-targets.test.tsx`) |
+| R2b2 the cards' order and words | through R2b1 | no | — | — | no | no | R2b1 |
+| R2c Refined desktop nav | through R2b1 | no | F11's `nav` slot | **S4b** | no | no | R2b2 |
+| R2d Security receives sign-in | through R2b1 | no | F11 on `AccountsScreen.tsx` first (C4's order) | — | no | no | R2b2; **lands before AW0** (C4) |
+| R2e Appearance preview grid | through R2b1 | no | — | — | no | no | R2b2 |
+| R2s step-up on two passkey routes | — | no | — | — | no | no | R2d; **AW1a** (the step-up routes, `assertedAt`, `requireRecentAssertion`); **#397** (`server/src/server.ts`) |
+| R3a Instrument master-detail | through R2b1 | no | — | **S9, S10, S11**; **W3-LC** (C2) | no | no | R2b2 to R2e |
+| R3b Instrument inspector | — | no | — | **S12**; W3-LC's inspector slot | no | no | R3a |
+| R4 the "ran here" record | — | no | — | — | no | **#646** and any later task holding `shared/api.ts` | **#397**, **#652** (`shared/api.ts`); R1a |
+| R5 the compromise disclosure | — | no | — | — | no | no | R2d; **AW0** (`RosterWire.provider`, `kind`); **AW2a** (§3.11's disclosure component) |
 
 ## In flight, and what it fences off
 
-Measured on 2026-10-18 with `gh pr view <n> --json files` over every open PR, matched against every file this plan names. **A file in this table is frozen for this plan until its owner merges.** A task that needs one is gated above. Neither the task nor any of its steps edits a frozen file early.
+Measured on 2026-10-18 at `c1453e42` with `gh pr view <n> --json files` over every open PR, matched against every file this plan names. **A file in this table is frozen for this plan until its owner merges.** A task that needs one is gated above. Neither the task nor any of its steps edits a frozen file early. #645 and #597, in rev 0's table, have merged and left it.
 
 | In flight | Files it changes that this plan would otherwise touch | Tasks it gates |
 |---|---|---|
-| #645, the release-notes change (`MERGEABLE`) | `pwa/src/screens/updates.tsx`, `SettingsScreen.tsx`; `pwa/src/fleet/UpdateBanner.tsx`, `fleet.css`, `ReleaseNotes.tsx` (new), `WhatsNewSheet.tsx` (new); `shared/api.ts`; `server/src/update/routes.ts`; `pwa/test/role-census.test.ts`, `whats-new-sheet.test.tsx` (new) | R1a, and through it every R1 task; R4 |
-| #627 (#402 reconciled; `CONFLICTING`) | `pwa/src/app.tsx`, `pwa/src/lib/api.ts`; `pwa/test/contrast.test.ts`, `control-census.test.ts`, `design-system-boundary.test.ts`, `markup-census.test.ts`, `shell-css.test.ts`, `tap-targets.test.tsx`, `app.test.tsx` | R2b, and through it R2c to R2e and R3a |
+| #627 (#402 reconciled) | `pwa/src/app.tsx`, `pwa/src/lib/api.ts`; `pwa/test/contrast.test.ts`, `control-census.test.ts`, `design-system-boundary.test.ts`, `markup-census.test.ts`, `shell-css.test.ts`, `tap-targets.test.tsx`, `app.test.tsx` | R2b0, R2b1, and through them R2b2 to R2e and R3a |
+| #650, F14b | `pwa/src/fleet/fleet.css` (the `.settings-note`, `.settings-release-*` and `.settings-node-detail` rules); `pwa/test/role-census.test.ts` | R1a, R1c |
+| #647, the glanceable session card | `pwa/src/fleet/fleet.css`; `pwa/test/fleet-css.test.ts` | R1a, R1c |
+| #652, the session page's workflows | `pwa/test/tap-targets.test.tsx`, `shared/api.ts` | R2b1, R4 |
 | #397, Path identity W1a (`CONFLICTING`) | `server/src/server.ts`, `shared/api.ts` | R2s (`server.ts`), R4 (`shared/api.ts`) |
-| #597, the delegation wave-3 follow-up (`MERGEABLE`) | `shared/api.ts` | R4 |
-| #646, coordinator-first Task 14 (`MERGEABLE`) | `shared/api.ts` | R4 |
+| #646, coordinator-first Task 14 | `shared/api.ts` | R4 |
 
-No open PR holds `UpdateMoveSheet.tsx`, `ui/src/primitives/confirm.tsx`, `updateAck.ts`, `HaltBanner.tsx`, `CollectLaneSection.tsx`, `collectLaneWords.ts`, `StallWatchSection.tsx`, `settingsText.ts`, `AuthSection.tsx`, `AccountsScreen.tsx`, `server/src/update/notify.ts`, `server/src/update/inventory.ts`, `server/src/coord/schema.ts`, `server/src/coord/store.ts`, `ui/design/make-icons.mjs` or `ui/src/icons/lucide.ts`. #627's list can still grow when it rebases; each gated task re-reads it.
+No open PR holds `updates.tsx`, `SettingsScreen.tsx`, `UpdateBanner.tsx`, `UpdateMoveSheet.tsx`, `ui/src/primitives/confirm.tsx`, `updateAck.ts`, `HaltBanner.tsx`, `CollectLaneSection.tsx`, `collectLaneWords.ts`, `StallWatchSection.tsx`, `settingsText.ts`, `AuthSection.tsx`, `AccountsScreen.tsx`, `server/src/update/notify.ts`, `server/src/update/inventory.ts`, `server/src/update/routes.ts`, `server/src/coord/schema.ts`, `server/src/coord/store.ts`, `server/src/auth/webauthn.ts`, `ui/design/make-icons.mjs` or `ui/src/icons/lucide.ts`. #627's list can still grow when it rebases; each gated task re-reads every list at Step 0.
 
 **Two consequences, restated from the foundations plan for this plan's files.**
-1. **`contrast.test.ts` is frozen until #627 merges.** So R1a to R1d add no colour-bearing rule and rename or remove none. Their layout uses existing classes, `@ccrc/ui` primitives and non-colour declarations. Each runs `contrast.test.ts` alone before its PR, and a census red there is a STOP: the work moves behind #627, and the frozen file is never edited. R2b retires `.settings-title` and the `.settings-section*` rules and takes `.settings-title` out of `GRANDFATHERED_UNCOVERED` in the same PR.
-2. **The censuses are frozen until #627 merges.** R1b builds every control from `Button` and `QuickConfirm`, so no census needs an entry. Its one census row (spec §6.3: in a `.settings-move` group no `danger-ghost` precedes a `ghost`) is written by R2b, which waits for #627 anyway. R2d moves Revoke's `.accounts-session` entries in `control-census.test.ts` and `contrast.test.ts` with the control.
+1. **`contrast.test.ts` is frozen until #627 merges.** So R1a to R1d add no colour-bearing rule and rename or remove none. Their layout uses existing classes, `@ccrc/ui` primitives and non-colour declarations; a word's ink comes from a class that already carries it (R1a names them). Each runs `contrast.test.ts` alone before its PR, and a census red there is a STOP: the work moves behind #627, and the frozen file is never edited. R2b1 retires `.settings-title` and the `.settings-section*` rules and takes `.settings-title` out of `GRANDFATHERED_UNCOVERED` in the same PR.
+2. **The censuses are frozen until #627 merges.** R1b builds every control from `Button` and `QuickConfirm`, so no census needs an entry. Its one census row (spec §6.3: in a `.settings-move` group no `danger-ghost` precedes a `ghost`) is written by R2b2, which waits for #627 anyway. R2d moves Revoke's `.accounts-session` entries in `control-census.test.ts` and `contrast.test.ts` with the control.
 
 ## Landing order
 
 ```
---- now, after #645 merges ---
-R1a (window) ── R1b (danger; after F14b's PR if open) ── R1c (words, result lines) ── R1d (box token card)
+--- now, after #650 and #647 merge (#645 has merged) ---
+R1a (window) ── R1b (danger) ── R1c (words, result lines) ── R1d (box token card)
 R2a (icons): any time
 
---- after #627, F11, S2a and S2b ---
-R2b (sections, routes, provider) ─┬─ R2c (Refined nav; after S4b)
-                                  ├─ R2d (Security; before AW0) ──┬─ R2s (step-up; after AW1a and #397)
-                                  │                               └─ R5 (disclosure; after the Accounts wave that ships it)
-                                  └─ R2e (preview grid)
-R3a (Instrument; after S9 to S11 and W3-LC, and R2b to R2e) ── R3b (inspector; after S12)
+--- after #627, F11, S2a, S2b and #652 ---
+[R2b0 (F11 slots), only if F11 lacks them] ── R2b1 (provider, routes, frame, bodies moved) ── R2b2 (cards' order, words)
+R2b2 ─┬─ R2c (Refined nav; after S4b)
+      ├─ R2d (Security; before AW0) ──┬─ R2s (step-up; after AW1a and #397)
+      │                               └─ R5 (disclosure; after AW0 and AW2a)
+      └─ R2e (preview grid)
+R3a (Instrument; after S9 to S11 and W3-LC, and R2b2 to R2e) ── R3b (inspector; after S12)
 
---- after #397, #597, #645 and #646 ---
+--- after #397, #646 and #652 ---
 R4 (ran here; after R1a)
 ```
 
-R1a to R1d edit the same two screen files, so they land one at a time in that order; each absorbs `main` with `git merge` before its CI. R2c, R2d and R2e each edit `pwa/src/screens/settings/` in disjoint files and can run in parallel worktrees once R2b has merged; they meet only in `settings.css`, whose hunks are disjoint by construction (one block per section), so the later PR merges `main` and re-runs its suites. R4 is independent of R2 and R3 and may land at any point after its gates; if it lands before R2b, R2b carries its meta line into the section page unchanged.
+R1a to R1d edit the same two screen files, so they land one at a time in that order; each absorbs `main` with `git merge` before its CI. R2c, R2d and R2e each edit `pwa/src/screens/settings/` in disjoint files and can run in parallel worktrees once R2b2 has merged; they meet only in `settings.css`, whose hunks are disjoint by construction (one block per section), so the later PR merges `main` and re-runs its suites. R4 is independent of R2 and R3 and may land at any point after its gates; if it lands before R2b1, R2b1 carries its meta line into the section page unchanged.
 
-**Downstream readers of this plan.** The Claude Code binary lifecycle (`2026-10-18-claude-binary-lifecycle-design.md` §6.3, §6.4, decision 14) places a "Claude Code" card on `/settings/updates` after R2b, using R1b's `AckConfirm`, R1c's result lines and R2b's `SettingsDataProvider`. The Accounts plan's AW0 edits `AccountsScreen.tsx` after R2d (C4). Neither is built here.
+**Downstream readers of this plan.** The Claude Code binary lifecycle (`2026-10-18-claude-binary-lifecycle-design.md` §6.3, §6.4, decision 14) places a "Claude Code" card on `/settings/updates` after R2b2, using R1b's `AckConfirm`, R1c's result lines and R2b1's `SettingsDataProvider`. The Accounts plan's AW0 edits `AccountsScreen.tsx` after R2d (C4). Neither is built here.
 
 ## Global constraints
 
@@ -115,10 +125,10 @@ Every task's requirements include this section. `CLAUDE.md` is the authority; th
 
 - **Public repository.** Every line, fixture, screenshot, commit message and PR body is public. Fixtures use neutral names: nodes labelled `fleet` and `server`, `lane-a`, `project-a`, passkey labels such as `Mozilla/5.0 (fixture)`. No hostnames, IPs, account or lane names, emails, absolute home paths or people's names. `server/test/topology-clean.test.ts` stays green.
 - **No root runner.** Run cd'd into a package: `cd pwa && ./node_modules/.bin/vitest run test/<file>`; `cd server && ./node_modules/.bin/vitest run test/<file>`. **Never bare `npx vitest`.** `cd ui && npm ci` before `cd pwa && npm ci`. Suites run in the FOREGROUND with a timeout of at least 600000 ms, at `--maxWorkers=2` on a shared machine. A `CLAUDE.md` load flake is re-run alone before it is called a break.
-- **Both skins, every width, both modes, every PR** (spec §12; two-skins §9). Each task has a "Per width × skin × mode" step: Refined and Instrument × 360, 390, 1280 and 1920 × Phosphor & Ink (dark) and Phosphor Daylight (light), 16 cells, each marked ✓ or carrying a note in the PR body. Tasks whose layout changes at the narrow-pane widths add 900 and 1024 (R2b, R2c, R3a). Dracula and GitHub Light join when a rule reads palette values (R2e). Screens are checked in the app against a fixture `CCRC_HOME` **and** `HOME` on a machine that runs no fleet (README, "Run the server against a fixture home"), with the spec's fixture: 3 nodes, 22 releases, one withdrawn, mixed notes; plus a mixed-version fleet, an unmeasured node, an all-macOS fleet, a Stable fleet with newer Dev builds, and a box with one earlier release. A desktop-only interim is not acceptable.
+- **Both skins, every width, both modes, every PR** (spec §12; two-skins §9). Each task has a "Per width × skin × mode" step over spec §12's matrix, which binds every Settings PR: Refined and Instrument × **360, 390, 438, 900, 1024, 1280, 1440 and 1920** × Phosphor & Ink (dark) and Phosphor Daylight (light), **32 cells**, each marked ✓ or carrying a note in the PR body (the standing every-width ruling, spec §1.2 item 2). A task whose layout does not change at a width still checks it; "unchanged" is a note, not a skipped cell. Dracula and GitHub Light join when a rule reads palette values (R2e). **Every task that adds a confirm (R1b, R2d, R2s) also captures the confirm open at 390 and at 900 or wider**, in both skins and both modes. Screens are checked in the app against a fixture `CCRC_HOME` **and** `HOME` on a machine that runs no fleet (README, "Run the server against a fixture home"), with the spec's fixture: 3 nodes, 22 releases, one withdrawn, mixed notes; plus a mixed-version fleet, an unmeasured node, an all-macOS fleet, a Stable fleet with newer Dev builds, and a box with one earlier release. A desktop-only interim is not acceptable.
 - **No horizontal page scroll; the 44 px tap floor on coarse pointers** (`tap-targets.test.tsx`); `--row-h` is 32 only inside `(pointer: fine)`. The phone gutter is read from `--gutter` (16 Refined, 12 Instrument), never a literal.
 - **One data model** (two-skins §5.1). Section bodies, words, hooks and confirms are shared components. Only the navigation frame is skin-specific. A skin owns no colour (D-5094); a skin part never calls the network or imports the other skin (W2 S4a).
-- **TEXT IS TEXT.** Release notes, labels and details reach the DOM as text children only. After #645, notes render through `ReleaseNotes` and `NoteText`; the one link a note may carry is the `TextLink` built by `pullUrl` from a `#NNN` number and `UpdatesView.source`.
+- **TEXT IS TEXT.** Release notes, labels and details reach the DOM as text children only. Since #645 (D-5548, D-5549), notes render through `ReleaseNotes` and `NoteText`; the one link a note may carry is the `TextLink` built by `pullUrl` from a `#NNN` number and `UpdatesView.source`.
 - **The server's answer is what is shown.** A radio is checked from the poll or storage, never from the tap. Loading, not-configured, failed and stale are kept apart; nothing says "up to date"; unreadable is not off.
 - **Mutation discipline.** Every guard ships with a test that goes RED when the guard is deleted, AND when it is made wrong. Each task's mutation table is RUN, never read: apply the mutant, run the named suite alone, record the red line in the PR, restore with `git checkout -- <file>`. Never commit a mutant. "A comment is a request; a red suite is a mechanism."
 - **The boundary tests.** A class emitted by a `@ccrc/ui` cva joins `design-system-boundary.test.ts`'s OWNED list in the task that adds it. An app sheet may PLACE a ui component but never REDRESS one (`ui-package-boundary.test.ts`). A new ui primitive or slot is classified in `role-census.test.ts` in the task that adds it.
@@ -126,8 +136,8 @@ Every task's requirements include this section. `CLAUDE.md` is the authority; th
 - **coord.db** (R4 only). One `MIGRATIONS` entry that adds tables and nothing else, the shape that keeps a rollback bootable (`db.ts` rule 3: an older build opening a higher `user_version` reads as-is and migrates nothing). Synchronous `DatabaseSync`; never wrapped async.
 - **No new dependency.** No task edits a `package.json` or a lockfile. R2a fetches `lucide-static@1.59.0` into a temporary directory with `npm pack` for `make-icons.mjs --from`, and never installs it.
 - **No new setting** (spec §1.4). Nothing that is CLI-only today (`ccrc.env` knobs, the sign-in gate, the fleet-box marker files) gains a control.
-- **The security band.** R1d, R2d, R2s and R5 touch a credential path (the box token's rotation, the passkey list and its routes, the compromise steps). Each is **band 3**: written and reviewed natively, never handed off, and **reviewed by two reviewers**, one of them reading only the security lens (§Review focus items 6 to 9). The others are band 2 unless their header says otherwise, and R2a is band 1.
-- **Deviation ledger.** This plan defines D-5503 to D-5509 (§Deviations found) and never allocates. D-5510 is the one spare. No tracked file carries a concrete `D-TBD` placeholder (`dtbd.test.ts`).
+- **The security band.** R1d, R2d, R2s and R5 touch a credential path (the box token's rotation, the passkey list and its routes, the compromise steps). Each is **band 3**: written and reviewed natively, never handed off, and **reviewed by two reviewers**, one of them reading only the security lens (§Review focus items 6 to 9). The others are band 2 unless their header says otherwise, and R2a is band 1 (R2b0 to R2b2 are band 3, as their headers say).
+- **Deviation ledger.** This plan defines D-5503 to D-5509 (§Deviations found) and never allocates. D-5510 is the one spare. Rev 1's departures from the spec are "As planned" notes under the number they belong to, not new numbers. No tracked file carries a concrete `D-TBD` placeholder (`dtbd.test.ts`).
 - **Branch discipline.** One commit per task on the workspace's own branch, never a separate feature branch. Absorb `main` only with `git merge`. Every commit leaves the suites it touches green.
 - **SAFETY.** Nothing here runs `ccd`, touches tmux, a live fleet, `~/.cc-sessions`, `~/.cc-limits` or a unit, or reads a live pane. No task runs `ccrc update`, `ccrc rollback` or `ccrc rollout` against a real box: every move in a test is a fixture route answer. Secret file contents are never printed.
 
@@ -136,56 +146,58 @@ Every task's requirements include this section. `CLAUDE.md` is the authority; th
 1. **The cap failing open.** `releaseDirection` answers `install` for nearly every row on an unmeasured, unversioned, mixed or all-macOS fleet. Every state of `releaseWindow` must cap at three per group, and the tests prove it with 22 releases (R1a).
 2. **A Roll back offered from a guess.** No Roll back group in the Unmeasured or Unmanaged states; the node row's own Roll back to its measured `previousVersion` survives every state (R1a).
 3. **A withdrawn release hidden or installed.** Withdrawn rows count inside Roll back to's three and are never in Newer (R1a), and the rollback confirm says withdrawn (R1b).
-4. **One Ack becoming two.** `AckConfirm` lives beside `canAck` and `sendAck` in `updateAck.ts`; the node row and `HaltBanner` both import it, and no surface keeps a one-tap Ack (R1b).
-5. **A provider that remounts the frame.** `SettingsDataProvider` mounted only on Settings routes changes the element tree above `.app-shell` and loses the sidebar's scroll (D-161) and S2b's frame identity. It mounts unconditionally with `active` (R2b).
-6. **A credential read twice or lost in the move.** `YourSignInCard` and `ThisSessionCard` make no call of their own; the passkey list is read once, only while the gate is armed; the unreadable-store sentence (D-153) and the `ccrc passwd` sentence survive verbatim; a failed status read never says "on" (R2d).
-7. **The step-up guarding the wrong thing.** The guard is on `DELETE /api/auth/passkey/:id` and `POST /api/auth/passkey/register/start` only, only while the gate is armed, with the passphrase step-up as the fallback so a fresh box's first enrollment still works; `register/finish` stays bound to the challenge `start` issued (R2s).
+4. **One Ack becoming two, or hiding what it forgets.** `AckConfirm` lives beside `canAck`, `ackBranch` and `sendAck` in `updateAck.ts`; the node row and `HaltBanner` both import it, and no surface keeps a one-tap Ack. `canAck` is `ackBranch(...) !== null`, one definition, and the confirm names the refusals Ack forgets whatever the branch (R1b).
+5. **A provider that remounts the frame.** `SettingsDataProvider` mounted only on Settings routes changes the element tree above `.app-shell` and loses the sidebar's scroll (D-161) and S2b's frame identity. It mounts unconditionally with `active` (R2b1).
+6. **A credential read twice, gone stale, or lost in the move.** `YourSignInCard` and `ThisSessionCard` make no read of their own; the provider reads the passkey list only while the gate is armed, and re-reads status then passkeys through `refreshAuth()` after every Add and Revoke, so a revoked key leaves the list and the D-161 passphrase-only notice follows `authPostureChanged()`; the unreadable-store sentence (D-153) and the `ccrc passwd` sentence survive verbatim; a failed status read never says "on" (R2d).
+7. **The step-up guarding the wrong thing.** The guard is on `DELETE /api/auth/passkey/:id` and `POST /api/auth/passkey/register/start`, only while the gate is armed, with the passphrase step-up as the fallback so a fresh box's first enrollment still works. Guarding `start` alone does not guard the ceremony: today's `registerChallenges` store is global and `register/finish` accepts any outstanding challenge, which outlives the window by up to two minutes. So the register challenge is bound to the session that asked for it, and `register/finish` re-checks the window. The PWA never re-sends a refused act without a new tap (Accounts §3.2) (R2s).
 8. **Rotate now turned into a danger action.** It opens no 401 window and keeps the old key until the fleet box confirms (box-token design G3). It stays one tap, ghost, isolated at the card's foot (R1d).
-9. **A disclosure that is wrong or that leaks.** R5's steps are done from another device, name only the providers in the roster, and print no lane identity, path, key hint or email; they are text, not links built from data (R5).
+9. **A disclosure that is wrong, short, or that leaks.** R5's steps are done from another device and print no lane identity, path, key hint or email; they are text, not links built from data. It fails toward disclosure: the OpenRouter steps show whenever an OpenRouter lane exists **or** the management key may be present (present, or its read unavailable or failed), and the step that rotates the agent token and gateway keys always shows (R5).
 10. **A migration that strands a rollback.** R4 adds tables only. An `ALTER TABLE` on an existing table, a `NOT NULL` column an older build's `INSERT` does not name, or a CHECK on a token a newer build writes, is a STOP (R4).
-11. **The one resume door duplicated.** Settings' Cleanup pause card offers Pause only and links to Runs for Resume; the test "offers Pause only" is kept (R2b).
+11. **The one resume door duplicated.** Settings' Cleanup pause card offers Pause only and links to Runs for Resume; the test "offers Pause only" is kept (R2b2).
 12. **Toasts for a control still on screen.** A result line under the control, `role="status"`, amber on refusal; a toast only when the control is gone (R1c, R1d).
 
 ## Coordinator items (from the spec's §15.3, re-measured)
 
-- **C1. W2's door table and ROUTES.** `switch-layout` and `switch-theme` name `/settings/appearance` as their route, so S17(b) evaluates them there; ROUTES gains the five section entries (`top: false`) and the sixth, `settings-section` (`/^\/settings\/([^/]+)\/?$/`), which the palette's Go-to derivation leaves out, so S2b's both-way ROUTES test still holds. **Open:** the W2 plan does not say so yet. The coordinator acks it before R2b is dispatched, and R2b's PR amends the W2 plan's door table in the same commit.
+- **C1. W2's door table and ROUTES.** `switch-layout` and `switch-theme` name `/settings/appearance` as their route, so S17(b) evaluates them there; ROUTES gains the five section entries (`top: false`) and the sixth, `settings-section` (`/^\/settings\/([^/]+)\/?$/`), which the palette's Go-to derivation leaves out, so S2b's both-way ROUTES test still holds. **Open:** the W2 plan does not say so yet. The coordinator acks it before R2b1 is dispatched, and R2b1's PR amends the W2 plan's door table in the same commit.
 - **C2. W3-LC**, the shared list-column seam: a per-route list and a per-route inspector slot in `ListColumn`, owned once and used by R3a, R3b and the Accounts redesign. **Open:** unowned. R3a is not dispatched until it has an owner and has merged.
-- **C3. F11's primitives.** `Section({ scope, title, purpose, children })` with `scope` drawn per skin by CSS, and a `PageScaffold` `nav` slot. **Open:** F11 is unbuilt. If F11 ships without them, R2b extends the two primitives, their stories and the role census in its own PR.
+- **C3. F11's primitives.** `Section({ scope, title, purpose, children })` with `scope` drawn per skin by CSS, and a `PageScaffold` `nav` slot. **Open:** F11 is unbuilt. If F11 ships without them, R2b0 extends the two primitives, their stories and the role census in its own PR, before R2b1.
 - **C4. The order on `AccountsScreen.tsx` and `AuthSection`:** F11, then R2d, then AW0 and later. **Half answered:** the Accounts spec's rev 3 states that sign-in "moves to Settings › Security, … the Settings spec owns it" (its §1), but its D-5522 still names the move. This plan defines D-5508 as the one definition of the move; the Accounts plan, when written, defines D-5522 without the move clause and cites D-5508, and cites D-5508's two passkey routes beside D-5512's step-up list.
-- **C5 (new). The Claude Code card's slot.** The binary-lifecycle spec's decision 14 asks for a card on `/settings/updates` "agreed with that spec's author". This plan proposes it sits between Nodes and Update policy (versions first, policy last, D7), with its mode setting under Automation, and R2b renders Updates' cards from one ordered list so the insert is one line. The coordinator rules it; R2b builds only the ordered list.
+- **C5 (new). The Claude Code card's slot.** The binary-lifecycle spec's decision 14 asks for a card on `/settings/updates` "agreed with that spec's author". This plan proposes it sits between Nodes and Update policy (versions first, policy last, D7), with its mode setting under Automation, and R2b2 renders Updates' cards from one ordered list so the insert is one line. The coordinator rules it; R2b2 builds only the ordered list.
 - **C6 (new). The compromise disclosure's slot** (Task R5, D-5509): the last card of Security, after Box token. The spec reserves the slot before Box token for "Recent account changes", so this adds a slot at the end and moves nothing.
 
 ## File structure
 
 | File | Created / Modified | Its one responsibility | Task |
 |---|---|---|---|
-| `pwa/src/screens/updates.tsx` | Modified | `releaseWindow(releases, nodes, channel)` beside `sortReleases`, pure (spec §7.6); `ReleaseList` renders the window; `ReleaseItem`'s two-column row, summary, meta line and "Notes"; `MoveButton` gains `tone` | R1a, R1b, R1c, R4 |
-| `pwa/src/screens/SettingsScreen.tsx` | Modified, then retired | the "See what's new" button and sheet mount (R1a); words (R1c, R1d); retired into `settings/` (R2b) | R1a, R1c, R1d, R2b |
-| `pwa/src/screens/settingsText.ts` | Modified | the PWA's word tables: `AUTO_LABELS`, `NOTIFY_LABELS`, `CHANNEL_SENTENCES`, the new `STALL_LEVEL_NOTE`, the section purposes and when-lines | R1c, R2b |
+| `pwa/src/screens/updates.tsx` | Modified | `releaseWindow(releases, nodes, channel)` beside `sortReleases`, pure (spec §7.6); `ReleaseList` renders the window; `ReleaseItem`'s two-column row, summary, meta line and "Notes"; the one halt line; `MoveButton` gains `tone`, `size="fit"` for both | R1a, R1b, R1c, R4 |
+| `pwa/src/screens/SettingsScreen.tsx` | Modified, then retired | the "See what's new" button and sheet mount (R1a); words (R1c, R1d); retired into `settings/` (R2b1) | R1a, R1c, R1d, R2b1 |
+| `pwa/src/screens/settingsText.ts` | Modified | the PWA's word tables: `AUTO_LABELS`, `NOTIFY_LABELS`, `CHANNEL_SENTENCES`, the new `STALL_LEVEL_NOTE`, the section purposes and when-lines | R1c, R2b2 |
 | `pwa/src/fleet/UpdateMoveSheet.tsx` | Modified | `tone` prop; under `danger`, the confirm is `danger` and the consequence lines show | R1b |
-| `pwa/src/fleet/updateAck.ts` | Modified | `AckConfirm` beside `canAck` and `sendAck`; `sendAck` loses its toast (R1c) | R1b, R1c |
+| `pwa/src/fleet/updateAck.ts` | Modified | `ackBranch` and `AckConfirm` beside `canAck` and `sendAck`, `canAck` defined from `ackBranch`; `sendAck` loses its toast (R1c) | R1b, R1c |
 | `pwa/src/fleet/HaltBanner.tsx` | Modified | its Ack opens `AckConfirm`; it writes its own result line | R1b, R1c |
 | `ui/src/primitives/confirm.tsx` | Modified | `QuickConfirm`'s opt-in `defaultFocus: 'confirm' \| 'cancel'` | R1b |
-| `pwa/src/fleet/fleet.css` | Modified | `.btn-danger-ghost.settings-move` beside the ghost sizing rule (non-colour) | R1b |
+| `pwa/src/fleet/fleet.css` | Modified | non-colour layout rules in the `.settings-release*` and `.settings-note` blocks: the two-column release row, the summary's one-line ellipsis (R1a); the option note and result-line spacing (R1c). No colour-bearing rule before #627 | R1a, R1c |
 | `pwa/src/screens/StallWatchSection.tsx` | Modified | the cumulative lead, one note per option, the full sentence for the checked or focused option | R1c |
-| `pwa/src/fleet/CollectLaneSection.tsx`, `collectLaneWords.ts` | Modified | the purpose line, "Collector" legend, Off and Live notes; result lines; the Pause control exported for its own card | R1c, R2b |
+| `pwa/src/fleet/CollectLaneSection.tsx`, `collectLaneWords.ts` | Modified | the purpose line, "Collector" legend, Off and Live notes; result lines; the Pause control exported for its own card | R1c, R2b2 |
 | `ui/design/make-icons.mjs`, `ui/src/icons/lucide.ts` | Modified | five icons vendored | R2a |
-| `pwa/src/lib/routes.ts` | Modified (S2b creates it) | the five section entries and `settings-section` | R2b |
-| `pwa/src/app.tsx` | Modified | `SettingsDataProvider` mounted unconditionally with `active`; the route-table match for `/settings*` | R2b |
-| `pwa/src/screens/settings/SettingsDataProvider.tsx` | Created | the reads made once per mount, published as one `SettingsView` by context, `null` while inactive | R2b |
-| `pwa/src/screens/settings/SettingsIndex.tsx` | Created | the five index rows with icon, name, purpose and measured status; the one component every nav renders | R2b |
-| `pwa/src/screens/settings/sectionStatus.ts` | Created | each section's status line and tone from the view; pure | R2b |
-| `pwa/src/screens/settings/SettingsFrame.tsx` | Created | `/settings` and `/settings/<id>`: the index, a section page, the not-found line, focus on the `<h2>`; the pane-width container | R2b, R2c |
-| `pwa/src/screens/settings/{Updates,Appearance,Notifications,Automation,Security}Section.tsx` | Created | each section's cards in §3.3's order | R2b, R2d, R2e, R5 |
+| `pwa/src/lib/routes.ts` | Modified (S2b creates it) | the five section entries and `settings-section` | R2b1 |
+| `pwa/src/app.tsx` | Modified | `SettingsDataProvider` mounted unconditionally with `active`; the route-table match for `/settings*` | R2b1 |
+| `pwa/src/screens/settings/SettingsDataProvider.tsx` | Created | the reads made once per mount, published as one `SettingsView` by context, `null` while inactive; `refreshAuth()` (R2d); the management-key read (R5) | R2b1, R2d, R5 |
+| `pwa/src/screens/settings/SettingsIndex.tsx` | Created | the five index rows with icon, name, purpose and measured status; the one component every nav renders | R2b1 |
+| `pwa/src/screens/settings/sectionStatus.ts` | Created | each section's status line and tone from the view; pure | R2b1 |
+| `pwa/src/screens/settings/SettingsFrame.tsx` | Created | `/settings` and `/settings/<id>`: the index, a section page, the not-found line, focus on the `<h2>`; the pane-width container | R2b1, R2c |
+| `pwa/src/screens/settings/{Updates,Appearance,Notifications,Automation,Security}Section.tsx` | Created | today's bodies (R2b1), then each section's cards in §3.3's order | R2b1, R2b2, R2d, R2e, R5 |
 | `pwa/src/screens/settings/usePaneWidth.ts` | Created | the pane's width against `SETTINGS_NAV_MIN_PX`, for the frame's content choice | R2c |
-| `pwa/src/screens/settings/settings.css` | Created | the section pages' layout: the column caps, the pane container query, the nav (R2c), the preview grid (R2e) | R2b, R2c, R2e |
-| `pwa/src/screens/settings/SignInGateCard.tsx` | Created | the sign-in gate card per state, and the banner on every Settings page while exposed | R2b |
+| `pwa/src/screens/settings/settings.css` | Created | the section pages' layout: the column caps, the pane container query, the nav (R2c), the preview grid (R2e) | R2b1, R2c, R2e |
+| `pwa/src/screens/settings/SignInGateCard.tsx` | Created | the sign-in gate card per state, and the banner on every Settings page while exposed | R2b2 |
 | `pwa/src/screens/AuthSection.tsx` | Removed | split into the two cards below | R2d |
 | `pwa/src/screens/settings/YourSignInCard.tsx`, `ThisSessionCard.tsx` | Created | the prop-fed sign-in cards; "Confirm it's you" (R2s) | R2d, R2s |
 | `pwa/src/screens/AccountsScreen.tsx` | Modified | one import and one mount removed | R2d |
-| `server/src/update/notify.ts` | Modified | `RELEASE_PUSH_URL = '/settings/updates'` | R2b |
+| `server/src/update/notify.ts` | Modified | `RELEASE_PUSH_URL = '/settings/updates'` | R2b1 |
 | `server/src/update/routes.ts` | Modified | `GET /api/updates` composes `seen` and `seenSince` | R4 |
-| `server/src/server.ts` | Modified | two passkey routes call `requireRecentAssertion(5 min)` while armed | R2s |
+| `server/src/server.ts` | Modified | two passkey routes call `requireRecentAssertion(5 min)` while armed; `register/start` binds its challenge to the session, `register/finish` refuses another session's challenge and re-checks the window | R2s |
+| `server/src/auth/webauthn.ts` | Modified | `ChallengeStore` may carry the issuing session's `idHash` with a challenge (opt-in, so the assertion store does not change) | R2s |
+| `ui/src/primitives/section.tsx`, `page-scaffold.tsx` | Modified (only if F11 lacks C3's slots) | `Section`'s `scope` and `purpose`, `PageScaffold`'s `nav` | R2b0 |
 | `pwa/src/skins/instrument/settingsParts.tsx` | Created | `SettingsIndex` registered in the list column, the inspector parts | R3a, R3b |
 | `server/src/coord/schema.ts`, `store.ts` | Modified | `release_seen` and `release_seen_since`; the upsert and the read | R4 |
 | `server/src/update/inventory.ts` | Modified | `sweepInventory` upserts first and last seen for measured managed nodes | R4 |
@@ -198,22 +210,24 @@ Every task's requirements include this section. `CLAUDE.md` is the authority; th
 
 **Routing:** band 3 (the plan). **Needs:** nothing.
 
+- [ ] Amend the spec's §14 and its header note: D-5509 is defined by this plan (`security-compromise-disclosure`); D-5510 stays unused.
 - [ ] Run the doc suites (`cd server`, one at a time, `--maxWorkers=2`): `deviation-refs` (after `git fetch -q origin main`), `dtbd`, `topology-clean`, `single-definition`, `docs-grammar`. Open the PR; the operator approves it before any task is dispatched.
 
-### Task R1a: the release window of three (D-5505; spec §7, §4.1's "See what's new", §7.4) — GATED: after #645 merges
+### Task R1a: the release window of three (D-5505; spec §7, §4.1's "See what's new", §7.4, §5.1's halt line) — GATED: after #650 and #647 merge
 
-**Routing:** band 2 (a pure function with an enumerated test list; the review reads Review focus items 1 to 3). **Needs:** #645 merged, rebased onto it. **Frozen files touched:** none once #645 has merged.
+**Routing:** band 2 (a pure function with an enumerated test list; the review reads Review focus items 1 to 3). **Needs:** #645 (merged, `62db8d3b`); #650 and #647 merged, because R1a edits `fleet.css`'s `.settings-release*` block, which #650 rewrites. If the coordinator dispatches R1a first, #650's and #647's authors rebase over it, and R1a's PR body names the overlap. **Frozen files touched:** `pwa/src/fleet/fleet.css` until #650 and #647 merge.
 
 **Files:**
-- Modify `pwa/src/screens/updates.tsx`: `releaseWindow` beside `sortReleases` (≈:127); `ReleaseList` (≈:277) renders it; `ReleaseItem` (≈:229) becomes the two-column row (spec §7.4) with the summary line, the meta line ("Released …", then any role word), the words in place of the badges with their `title` glossary and the one-line "What these mean" disclosure, and `<details>` "Notes" wrapping `<ReleaseNotes notes source/>` (open for the waiting release); the closing line, the Newer count line and its "See every change since v*running*" link; the floor line on a Newer row at or below a node's floor; the Unmeasured and Unmanaged groups.
+- Modify `pwa/src/screens/updates.tsx`: `releaseWindow` beside `sortReleases` (≈:127); `ReleaseList` (≈:277) renders it; `ReleaseItem` (≈:229) becomes the two-column row (spec §7.4) with the summary line, the meta line ("Released …", then any role word), the words in place of the badges with their `title` glossary and the one-line "What these mean" disclosure, and `<details>` "Notes" wrapping `<ReleaseNotes notes source/>` (open for the waiting release); the closing line, the Newer count line and its "See every change since v*running*" link; the floor line on a Newer row at or below a node's floor; the Unmeasured and Unmanaged groups. Today's two `HaltedLine`s (in `ReleaseList` and `NodeList`, ≈:214) become **one** (spec §5.1, §11.1, Wave 19 UI-4): first in Fleet version, shown only while a control it gates is on screen, and the `aria-describedby` target of every gated Install and Update, with the added line "Clear it with Ack on that node, under Nodes, after you have fixed what made it fail." R1a owns it because the window changes which buttons are on screen to gate.
+- Modify `pwa/src/fleet/fleet.css`: non-colour layout only, in the `.settings-release*` block (≈:2934–:3023, as #650 leaves it): the two-column row (facts left, the action on the facts' first line) and the summary's one-line ellipsis. **No new colour-bearing rule** (`contrast.test.ts` is #627's). The words take their ink from classes that already carry it: the summary and the meta line from `.settings-release-date` (tertiary), the withdrawn and "Refused by" words from `.settings-release-refused`, the role words from `.settings-release-running`, and every note and lead line from `.settings-note` (secondary). If a word needs an ink no existing class carries, that word's colour moves to R2b2 and R1a ships it in the nearest existing class; the PR says which.
 - Modify `pwa/src/screens/SettingsScreen.tsx`: the Fleet version status gains **See what's new** beside "v*X* available", shown exactly when `bannerRelease(view)` (`UpdateBanner.tsx` ≈:65) names a tag, opening `WhatsNewSheet` for that tag; the sheet's footer "Update all" hands over to `UpdateMoveSheet` as the banner's does. It passes the fleet's channel (the `'*'` intent's) and `view.source` to `ReleaseList`.
-- Create `pwa/test/release-window.test.ts`. Modify `pwa/test/settings-screen.test.tsx` (the "every older release reads Roll back" pins ≈:847 and ≈:902 hold over the window only; the badge pin ≈:1004 reads "Signed bundle", "Checked on a node", "Withdrawn"; the source scan for TEXT IS TEXT names `ReleaseNotes.tsx` and `WhatsNewSheet.tsx` and allows exactly one link, the `TextLink` built by `pullUrl`) and `pwa/test/whats-new-sheet.test.tsx` (its "Settings → Updates renders a release row's notes the same way" case opens the row's Notes first, or reads the waiting release's, open by default).
+- Create `pwa/test/release-window.test.ts`. Modify `pwa/test/settings-screen.test.tsx` (the halt line's cases, "one halt line" replacing the two; the "every older release reads Roll back" pins ≈:847 and ≈:902 hold over the window only; the badge pin ≈:1004 reads "Signed bundle", "Checked on a node", "Withdrawn"; the source scan for TEXT IS TEXT names `ReleaseNotes.tsx` and `WhatsNewSheet.tsx` and allows exactly one link, the `TextLink` built by `pullUrl`) and `pwa/test/whats-new-sheet.test.tsx` (its "Settings → Updates renders a release row's notes the same way" case opens the row's Notes first, or reads the waiting release's, open by default).
 
 **The shape** (spec §7.6). `releaseWindow(releases, nodes, channel)` returns `{ state, newer, newerHidden, running, mixed, rollback, olderHidden, rule }`, built only from `sortReleases`, `releaseDirection`, `pendingTag` (through `bannerRelease`'s newest-across-nodes rule), `nodeVersion`, `previousVersion`, `highestVersion` with `floorRead`, `isManagedNode` (`fleet/movePlan.ts` ≈:57), each row's `channel` and `yanked`, and the fleet channel. "On the fleet's channel": Stable means `channel === 'stable'`; Dev means any release tag, a `null` channel included. The cap is a named constant, `RELEASE_WINDOW_MAX = 3`, used by both groups. The row summary is a pure helper, `releaseSummary(notes)`: the first item of the first non-empty group in `RELEASE_NOTE_GROUPS` order from `parseReleaseNotes()`, "No changes." for a grouped body with no items, a plain body's first non-empty line, or `NO_NOTES_TEXT`; never the "Changes since …" or "First release" header.
 
-**The withdrawn note, measured** (the spec's open item, §7.3 and §16). At `f609f68c`, `cmd_rollback` (`ccd/ccrc` ≈:17808–:17841) answers a complete kept version under `~/ccrc-versions` itself and asks the release host nothing (D-3442; pinned by `server/test/ccrc-update.test.ts`'s "no release-host question" case); any other tag asks for `SHA256SUMS` first, and a 404 exits 2, "not a published release". So the row's note reads: "Its publisher withdrew it from GitHub. A node that still keeps it on disk rolls back to it with no download; a node that does not will refuse, and the sheet will say so." Step 0 re-runs that case; if it no longer passes as described, the note follows what it finds and the PR says so.
+**The withdrawn note, measured** (the spec's open item, §7.3 and §16). At `f609f68c`, `cmd_rollback` (`ccd/ccrc` ≈:17808–:17841) answers a complete kept version under `~/ccrc-versions` itself and asks the release host nothing (D-3442; pinned by `server/test/ccrc-update.test.ts`'s "no release-host question" case); any other tag asks for `SHA256SUMS` first, and a 404 exits 2, "not a published release". So the row's note reads: "Its publisher withdrew it from GitHub. A node that still keeps it on disk rolls back to it with no download; a node that does not will refuse, and the sheet will say so." Re-measured at `c1453e42`: unchanged. Step 0 re-runs that case; if it no longer passes as described, the note follows what it finds and the PR says so.
 
-- [ ] **Step 0: Re-ground.** Read #645's merged diff: `ReleaseItem`'s `source` prop, `ReleaseNotes`' props, `whatsNewReleases`, `NO_NOTES_TEXT`, `parseReleaseNotes`, `RELEASE_NOTE_GROUPS`. Run `cd server && ./node_modules/.bin/vitest run test/ccrc-update.test.ts -t "no release-host question"` (fixture HOMEs only). Run `contrast.test.ts` alone on the untouched tree and keep its output for Step 4.
+- [ ] **Step 0: Re-ground.** Read #650's and #647's merged `fleet.css` hunks and the `role-census.test.ts` entries #650 left for the `.settings-release*` and `.settings-note` rules. Read #645's merged diff: `ReleaseItem`'s `source` prop, `ReleaseNotes`' props, `whatsNewReleases`, `NO_NOTES_TEXT`, `parseReleaseNotes`, `RELEASE_NOTE_GROUPS`. Run `cd server && ./node_modules/.bin/vitest run test/ccrc-update.test.ts -t "no release-host question"` (fixture HOMEs only). Run `contrast.test.ts` alone on the untouched tree and keep its output for Step 4.
 - [ ] **Step 1: Red.** `release-window.test.ts`, every case in spec §11.4's `releaseWindow` list, each against 22 fixture releases unless the case says otherwise:
   - measured, uniform: the three newest earlier rows, newest first, and `olderHidden` counting the rest;
   - a Stable fleet with 20 newer Dev builds: at most three Newer rows, all Stable, and `newerHidden`;
@@ -227,7 +241,11 @@ Every task's requirements include this section. `CLAUDE.md` is the authority; th
   - an all-macOS fleet: state `unmanaged`, at most three rows, no button;
   - a Newer row at or below a node's floor: Install disabled for that node, with the floor line;
   - `releaseSummary`: grouped notes give the first item of the first non-empty group, never "Changes since …"; an empty grouped body gives "No changes."; plain notes their first line; none gives "No notes for this release".
-  In `settings-screen.test.tsx`: "the node-row Roll back is offered when its previousVersion is outside the window"; "See what's new opens WhatsNewSheet with the waiting tag, and is absent when no tag is pending"; "the Newer count line's See every change opens the same sheet"; "no release group renders more than three rows" over all five fixture fleets; the source scan. Each is red against `main` + #645 (the list renders every row; no `releaseWindow` export).
+  - `pendingTag`'s release is first in Newer even when it is not the newest Newer row (§7.2);
+  - a withdrawn running release keeps its place as the running row and adds "Withdrawn by its publisher" in the withdrawn word's ink (§7.2);
+  - every earlier release withdrawn: Roll back to holds them, each marked, and the closing line counts them (§7.5);
+  - a Stable fleet whose only earlier releases are Dev builds: no Roll back to rows, the lead "No earlier Stable release…", and the closing line counting the Dev builds and naming the CLI (§7.5).
+  In `settings-screen.test.tsx`: "the node-row Roll back is offered when its previousVersion is outside the window"; "Refused by n of m nodes opens the refusals" (§7.4); "one halt line; every gated Install or Update names it in aria-describedby; absent when no gated control renders"; "See what's new opens WhatsNewSheet with the waiting tag, and is absent when no tag is pending"; "the Newer count line's See every change opens the same sheet"; "no release group renders more than three rows" over all five fixture fleets; the source scan. Each is red against `main` (the list renders every row; no `releaseWindow` export).
 - [ ] **Step 2: Green.** Build `releaseWindow`, `releaseSummary` and the row; mount the button and the sheet. Run the files of Step 1.
 - [ ] **Step 3: Mutation table, RUN.**
 
@@ -248,37 +266,43 @@ Every task's requirements include this section. `CLAUDE.md` is the authority; th
   | `ReleaseItem` renders the notes in a `<pre>` | settings-screen | the TEXT IS TEXT source scan |
   | See what's new rendered whenever the list is non-empty | settings-screen | "absent when no tag is pending" |
   | the node row's Roll back hidden when its version is outside the window | settings-screen | its case |
+  | `pendingTag` sorted with the rest instead of first | release-window | "`pendingTag`'s release is first in Newer" |
+  | the withdrawn running row loses its word | release-window | "a withdrawn running release … adds Withdrawn by its publisher" |
+  | the Stable-only lead dropped when every earlier row is Dev | release-window | "No earlier Stable release…" |
+  | `NodeList`'s `HaltedLine` restored beside the merged one | settings-screen | "one halt line" |
+  | the halt line drawn while no gated control renders | settings-screen | "absent when no gated control renders" |
+  | one gated Update loses its `describedBy` | settings-screen | "every gated Install or Update names it" |
 
-- [ ] **Step 4: Per width × skin × mode** (16 cells; the five fixture fleets). The window sits where the list sits today, so the page is still one column with no max-width (R2b adds it); record each section's height before and after at 390 in the PR. At 360 and 390 a release row holds its action on the facts' first line and never wraps it under the date; the summary ellipsises to one line; "Notes" and "What these mean" open without a height animation under reduced motion. At 1280 and 1920 the rows are long lines, unchanged in width; the PR notes it. `contrast.test.ts` alone is as Step 0 left it; any census red is a STOP (§In flight).
+- [ ] **Step 4: Per width × skin × mode** (32 cells, §Global constraints; the five fixture fleets). The window sits where the list sits today, so the page is still one column with no max-width (R2b1 adds it); record each section's height before and after at 390 in the PR. At 360, 390 and 438 a release row holds its action on the facts' first line and never wraps it under the date; the summary ellipsises to one line; "Notes" and "What these mean" open without a height animation under reduced motion. At 900 and 1024 (Refined's pane beside the sidebar) the rows wrap inside the pane with no horizontal scroll. At 1280, 1440 and 1920 the rows are long lines, unchanged in width; the PR notes it. `contrast.test.ts` alone is as Step 0 left it; any census red is a STOP (§In flight).
 - [ ] **Step 5: Verify.**
 
       cd pwa && ./node_modules/.bin/tsc --noEmit
-      cd pwa && ./node_modules/.bin/vitest run test/release-window.test.ts test/settings-screen.test.tsx test/whats-new-sheet.test.tsx test/update-banner.test.tsx test/update-move-sheet.test.tsx test/contrast.test.ts
+      cd pwa && ./node_modules/.bin/vitest run test/release-window.test.ts test/settings-screen.test.tsx test/whats-new-sheet.test.tsx test/update-banner.test.tsx test/update-move-sheet.test.tsx test/contrast.test.ts test/role-census.test.ts test/fleet-css.test.ts
       cd pwa && ./node_modules/.bin/vitest run --maxWorkers=2
 
 **Not in this task:** the danger tone (R1b), the label renames beyond the badges (R1c), the "ran here" words (R4), and any server or wire change: the window is the PWA's slice, and `GET /api/updates` still carries every row (the spec's §15.3 residue).
 
 ### Task R1b: danger, isolated and confirmed (D-5507; spec §6.3) — GATED: after R1a
 
-**Routing:** band 2 (the review reads Review focus item 4). **Needs:** R1a. F14b's PR, if it is open at dispatch, merges first; if it has not been opened, R1b goes ahead and names `fleet.css` in its PR body as the file F14b will rebase over. **Frozen files touched:** none; the markup-census row is R2b's.
+**Routing:** band 2 (the review reads Review focus item 4). **Needs:** R1a. **Frozen files touched:** none: R1b edits no `fleet.css` rule (so neither #650 nor #647 gates it), and the markup-census row is R2b2's.
 
 **Files:**
 - Modify `ui/src/primitives/confirm.tsx` and `confirm.stories.tsx`: `QuickConfirm` gains `defaultFocus?: 'confirm' | 'cancel'`, defaulting to today's behaviour, so its other callers do not change.
 - Modify `pwa/src/fleet/UpdateMoveSheet.tsx`: `tone?: 'move' | 'danger'`. Under `danger` the confirm (`variant="primary"` today, ≈:259) is `danger`, labelled with the verb ("Roll back 2 nodes"), Cancel takes the focus, and the sheet shows spec §6.3's consequence lines: a failed health check leaves the node on the target, it is not moved back; auto-install will not return to the release left; the withdrawn line when the target is withdrawn (R1a's measured wording); today's blocked line when unbundled.
-- Modify `pwa/src/screens/updates.tsx`: `MoveButton` (≈:187) takes `tone`; release-row and node-row Roll back and the node row's Ack are `danger-ghost`, at the row's end after the safe action and the row's action gap (a role token); Install and Update stay ghost; `.settings-move` stays on all of them.
-- Modify `pwa/src/fleet/updateAck.ts`: `AckConfirm`, a `QuickConfirm` wrapper with `tone="danger"` and `defaultFocus="cancel"` beside `canAck` (≈:17) and `sendAck` (≈:40), whose title, lines and button come from the `canAck` branch (spec §6.3's three Ack rows).
+- Modify `pwa/src/screens/updates.tsx`: `MoveButton` (≈:195) takes `tone`; release-row and node-row Roll back and the node row's Ack are `danger-ghost`, at the row's end after the safe action and the row's action gap (a role token); Install and Update stay ghost; `.settings-move` stays on all of them as a hook class only. **Both tones pass `size="fit"`**, as today's ghost does: on `main` the old `.btn-ghost.settings-move` sizing rule is gone (`fleet.css` ≈:3024–:3027 keeps only a comment; `settings-screen.test.tsx` ≈:1521 pins its absence), and `ui-package-boundary.test.ts` (≈:274) classes a `.btn-*.settings-move` selector as a reach-in, so the size comes from `Button`, never from an app rule.
+- Modify `pwa/src/fleet/updateAck.ts`: `ackBranch(n, releases): 'failed' | 'request' | 'refusal' | null` beside `canAck` (≈:17), holding today's first-match order (a busy or unnamed state `null`; `failed` or `reverted` → `'failed'`; a request → `'request'`; a refusal by the node → `'refusal'`), and `canAck` redefined as `ackBranch(n, releases) !== null`, so the rule is written once. `AckConfirm`, a `QuickConfirm` wrapper with `tone="danger"` and `defaultFocus="cancel"` beside them and `sendAck` (≈:40): its title, lines and button come from `ackBranch` (spec §6.3's three Ack rows), and **whenever the node holds any refusal, whatever the branch**, it adds the line that Ack forgets the tags it refused and auto-install may try them again, because `ackNode` clears every refusal the node holds. A request-only node with refusals therefore never reads "nothing moves" alone.
 - Modify `pwa/src/fleet/HaltBanner.tsx`: its Ack opens `AckConfirm`.
-- Modify `pwa/src/fleet/fleet.css`: `.btn-danger-ghost.settings-move` beside `.btn-ghost.settings-move`, with the same size declarations and no colour.
-- Tests: create `pwa/test/quick-confirm-focus.test.tsx`; modify `pwa/test/danger-buttons.test.tsx`, `settings-screen.test.tsx`, `halt-banner.test.tsx` (≈:105 now posts after the confirm), `update-move-sheet.test.tsx`.
+- Tests: create `pwa/test/quick-confirm-focus.test.tsx` and `pwa/test/update-ack.test.ts` (no suite holds `canAck`'s cases alone today; `halt-banner` and `settings-screen` reach it through the UI); modify `pwa/test/danger-buttons.test.tsx`, `settings-screen.test.tsx` (≈:1521's pin kept), `halt-banner.test.tsx` (≈:105 now posts after the confirm), `update-move-sheet.test.tsx`.
 
-- [ ] **Step 0: Re-ground.** Re-read `QuickConfirm`'s callers (`grep -rl QuickConfirm pwa/src`) and confirm none passes focus props today. Read F14b's diff if it exists.
+- [ ] **Step 0: Re-ground.** Re-read `QuickConfirm`'s callers (`grep -rl QuickConfirm pwa/src`) and confirm none passes focus props today. Confirm `MoveButton` passes `size="fit"` and that `ui-package-boundary.test.ts` still classes `.btn-*.settings-move` as a reach-in.
 - [ ] **Step 1: Red.**
   - `danger-buttons.test.tsx`: release Roll back, node Roll back, node Ack and `HaltBanner`'s Ack are `btn-danger-ghost`; each confirm's commit is `btn-danger`. Red: `btn-ghost`, and no confirm.
-  - `settings-screen.test.tsx` and `halt-banner.test.tsx`, per surface: the trigger opens a confirm; Cancel posts nothing; the commit posts once; Cancel has the focus; closing returns focus to the trigger. One case per `canAck` branch for the copy and the button label ("Ack", "Withdraw the request").
+  - `settings-screen.test.tsx` and `halt-banner.test.tsx`, per surface: the trigger opens a confirm; Cancel posts nothing; the commit posts once; Cancel has the focus; closing returns focus to the trigger. One case per `ackBranch` branch for the copy and the button label ("Ack", "Withdraw the request"); "request plus refusals names the refusals"; "a refusal-only node names the refusals".
+  - `update-ack.test.ts`: "canAck equals ackBranch !== null" over every fixture node (busy, failed, reverted, request, refusal, idle with nothing); each branch's first-match order.
   - `update-move-sheet.test.tsx`: under `tone="danger"`, the not-restored line and the floor line show, the withdrawn line shows for a withdrawn target, and the commit is `danger`; under the default tone, nothing changes (today's cases untouched).
   - `quick-confirm-focus.test.tsx`: an untouched caller (Archive all) focuses as today; `defaultFocus="cancel"` focuses Cancel.
-  - "in a row, no danger-ghost precedes a ghost": a DOM-order case over the rendered node and release rows (the census row follows in R2b).
-  - `danger-buttons.test.tsx`: "the danger move rule declares the ghost move rule's size properties", read from `fleet.css`'s text. Red: no `.btn-danger-ghost.settings-move` rule.
+  - "in a row, no danger-ghost precedes a ghost": a DOM-order case over the rendered node and release rows (the census row follows in R2b2).
+  - `danger-buttons.test.tsx`: "every move button, ghost or danger-ghost, carries `buttonVariants({ size: 'fit' })`'s classes". The ≈:1521 pin (no `.btn-ghost.settings-move` rule) stays as it is.
 - [ ] **Step 2: Green.**
 - [ ] **Step 3: Mutation table, RUN.**
 
@@ -289,27 +313,31 @@ Every task's requirements include this section. `CLAUDE.md` is the authority; th
   | the not-restored line dropped | update-move-sheet | its case |
   | `HaltBanner` calls `sendAck` directly | halt-banner | "opens a confirm; Cancel posts nothing" |
   | `AckConfirm` uses one copy for every branch | settings-screen | the request-only branch case |
+  | the refusal line dropped from the request branch | settings-screen | "request plus refusals names the refusals" |
+  | `canAck` keeps its own body instead of reading `ackBranch` (one branch changed in it) | update-ack | "canAck equals ackBranch !== null" |
   | `defaultFocus` defaults to `'cancel'` | quick-confirm-focus | the untouched-caller case |
   | `AckConfirm` omits `defaultFocus` | settings-screen | "Cancel has the focus" |
   | Ack placed before Update in the node row | settings-screen | "no danger-ghost precedes a ghost" |
-  | `.btn-danger-ghost.settings-move` deleted, or one size declaration dropped | danger-buttons (it reads `fleet.css`'s text, because jsdom applies no stylesheet and `tap-targets.test.tsx` is #627's) | "the danger move rule declares the ghost move rule's size properties" |
+  | `size` dropped on the danger tone in `MoveButton` | danger-buttons | "every move button, ghost or danger-ghost, carries buttonVariants({size:'fit'})" |
 
-- [ ] **Step 4: Per width × skin × mode** (16 cells). Both skins: Roll back and Ack are red hairlines in `--status-dead-text`, the same size as Update; their confirms commit in filled red, `--ink-on-danger` on `--status-dead`, Cancel focused. Phone: the confirm is the bottom sheet, full width, its commit at the foot. 1280 and 1920: still the bottom sheet, because `Sheet`'s desktop arm is W1 and unplanned; the PR says so. Check the home screen's halt banner at 360 and 1280 in both skins: its Ack is a red hairline that fits beside the message.
+- [ ] **Step 4: Per width × skin × mode** (32 cells). Both skins: Roll back and Ack are red hairlines in `--status-dead-text`, the same size as Update; their confirms commit in filled red, `--ink-on-danger` on `--status-dead`, Cancel focused. **Confirm open, captured at 390 and at 900 or wider** (both skins, both modes), for the rollback sheet and `AckConfirm`: on a phone the bottom sheet, full width, its commit at the foot; at 900 and wider still the bottom sheet, because `Sheet`'s desktop arm is W1 and unplanned; the PR says so. Check the home screen's halt banner at 360 and 1280 in both skins: its Ack is a red hairline that fits beside the message.
 - [ ] **Step 5: Verify.**
 
       cd ui && ./node_modules/.bin/tsc --noEmit
-      cd pwa && ./node_modules/.bin/vitest run test/danger-buttons.test.tsx test/quick-confirm-focus.test.tsx test/settings-screen.test.tsx test/halt-banner.test.tsx test/update-move-sheet.test.tsx test/design-system-boundary.test.ts test/contrast.test.ts test/markup-census.test.ts test/control-census.test.ts
+      cd pwa && ./node_modules/.bin/vitest run test/danger-buttons.test.tsx test/quick-confirm-focus.test.tsx test/update-ack.test.ts test/settings-screen.test.tsx test/halt-banner.test.tsx test/update-move-sheet.test.tsx test/design-system-boundary.test.ts test/ui-package-boundary.test.ts test/contrast.test.ts test/markup-census.test.ts test/control-census.test.ts
       cd pwa && ./node_modules/.bin/vitest run --maxWorkers=2
 
 ### Task R1c: the words, the notes and the result lines (D-5503's words, D-5507's results; spec §5, §6.4, §11.2, §11.4) — GATED: after R1b
 
-**Routing:** band 2. **Needs:** R1b. **S2b:** if it has merged, R1c rebases over its two `doorMark` hunks in `SettingsScreen.tsx`; if not, S2b rebases over R1c. The PR body says which happened. **Frozen files touched:** none.
+**Routing:** band 2. **Needs:** R1b; #650 and #647 merged (R1c edits `fleet.css`'s `.settings-note` block, which #650 rewrites; R1a's gate normally clears this first). **S2b:** if it has merged, R1c rebases over its two `doorMark` hunks in `SettingsScreen.tsx`; if not, S2b rebases over R1c. The PR body says which happened. **Frozen files touched:** `pwa/src/fleet/fleet.css` until #650 and #647 merge.
 
-**Files:** modify `pwa/src/screens/settingsText.ts`, `SettingsScreen.tsx`, `updates.tsx`, `StallWatchSection.tsx`; `pwa/src/fleet/CollectLaneSection.tsx`, `collectLaneWords.ts`, `updateAck.ts` (`sendAck` keeps its `AckOutcome` and loses its toast), `HaltBanner.tsx` (writes its line); tests `settings-screen.test.tsx`, `collect-lane-section.test.tsx`, `collect-lane-words.test.ts`, `halt-banner.test.tsx`.
+**Files:** modify `pwa/src/screens/settingsText.ts`, `SettingsScreen.tsx`, `updates.tsx`, `StallWatchSection.tsx`; `pwa/src/fleet/fleet.css` (non-colour spacing only: an option note under its option and a result line under its control, in the `.settings-note` block; no colour-bearing rule); `pwa/src/fleet/CollectLaneSection.tsx`, `collectLaneWords.ts`, `updateAck.ts` (`sendAck` keeps its `AckOutcome` and loses its toast), `HaltBanner.tsx` (writes its line); tests `settings-screen.test.tsx`, `collect-lane-section.test.tsx`, `collect-lane-words.test.ts`, `halt-banner.test.tsx`.
 
-**The words.** Spec §11.2's renames, exactly: the Auto-install options ("Off", "On the Stable channel only", "On any channel"), "Announce new releases" with "Every release on the fleet's channel / Stable releases only / None", the Channel labels and notes, the collector legend "Collector" with its Off and Live notes (Off is `shadowed`: "Watches and reports what it would remove, and removes nothing."), `MACOS_UNMANAGED_TEXT`. Spec §5's purpose lines, notes and when-lines for every row of §5.1, §5.3 and §5.4 that exists on today's page, Ack's per-branch note, and Quiet time's one line with "Built-in: 2 h · Range: 30 min to 12 h", its select capped at 320 px. The enum values on the wire do not change. The box token's words are R1d's.
+**The words.** Spec §11.2's renames, exactly: the Auto-install options ("Off", "On the Stable channel only", "On any channel"), "Announce new releases" with "Every release on the fleet's channel / Stable releases only / None", the Channel labels and notes, the collector legend "Collector" with its Off and Live notes (Off is `shadowed`: "Watches and reports what it would remove, and removes nothing."), `MACOS_UNMANAGED_TEXT`. Spec §5's purpose lines, notes and when-lines for every row of §5.1, §5.3 and §5.4 that exists on today's page, Ack's per-branch note, and Quiet time's one line with "Built-in: 2 h · Range: 30 min to 12 h", its select capped at 320 px by an inline `style={{ maxWidth: 320 }}` that carries no colour (no new rule, so no census entry).
 
-**The stall level notes, checked against `STALL_LEVEL_TEXT`** (`shared/api.ts` ≈:9920, measured at `f609f68c`). Three of the spec's §5.4 drafts read differently from the sentence they summarise, so the plan replaces them, as the spec asked:
+**Where the words take their ink.** Option notes and lead lines use `.settings-note` (secondary); when-lines use `.settings-release-date`'s tertiary only if they sit in a release row, and otherwise `.settings-note`, with the tertiary step moving to R2b2's cards. A result line uses `.settings-note` for an answer and the existing amber class the toasts' refusal sentence already maps to on the page (Step 0 names it; `.settings-release-refused` if nothing closer exists) for a refusal. No new colour-bearing rule. The enum values on the wire do not change. The box token's words are R1d's.
+
+**The stall level notes, checked against `STALL_LEVEL_TEXT`** (`shared/api.ts` ≈:9920, measured at `f609f68c`, unchanged at `c1453e42`). The plan replaces all six of the spec's §5.4 drafts, as the spec asked. Three of them (Log only, Alert coordinator and you, Everything) state a different fact from the sentence they summarise; the other three are reworded to say the same fact as an act or with its threshold or condition:
 
 | Level | Spec draft | Shipped note (this plan) | Why |
 |---|---|---|---|
@@ -324,6 +352,7 @@ They live in `settingsText.ts` as `STALL_LEVEL_NOTE: Record<StallLevel, string>`
 
 **The result lines.** Every server action on today's page writes one line under its control (`role="status"`, `aria-live="polite"`, amber for a refusal), holding the sentence it toasts today; a toast is used only when the control is gone (the confirm closed, or the screen left, while the request was in flight). The move 202 reads "Requested. The nodes report back within a minute."
 
+- [ ] **Step 0: Re-ground.** Read #650's merged `.settings-note` rules and role-census entries; name the existing amber class the refusal lines use.
 - [ ] **Step 1: Red.** The label tests (`NOTIFY_LABELS`, `AUTO_LABELS`, `CHANNEL_SENTENCES`, the collector legend) read §11.2's words; "every stall level has a note, and the notes are this table's"; "the full sentence shows for the focused option while the keyboard moves"; spec §11.4's toast pins become result-line pins, each keeping its sentence and tone and changing only its selector and name ("says, under the control"): `settings-screen.test.tsx` ≈:383, ≈:564, ≈:574, ≈:1471, ≈:1483, ≈:1794, ≈:2583, ≈:2633; `collect-lane-section.test.tsx` ≈:396; `halt-banner.test.tsx` ≈:190 (`sendAck` no longer toasts; its caller writes the line). New, per surface: "a confirm closed while the request was in flight still toasts". The pins that stay toasts stay as they are (≈:447, `collect-lane-section` ≈:248 and ≈:548).
 - [ ] **Step 2: Green.**
 - [ ] **Step 3: Mutation table, RUN.**
@@ -338,11 +367,11 @@ They live in `settingsText.ts` as `STALL_LEVEL_NOTE: Record<StallLevel, string>`
   | the in-flight-then-closed toast removed | settings-screen | "a confirm closed while the request was in flight still toasts" |
   | the collector's Off note says "removes nothing" without "reports" | collect-lane-words | the Off note case |
 
-- [ ] **Step 4: Per width × skin × mode** (16 cells). Every option note sits under its option in `--ink-secondary`, and each when-line under its control in `--ink-tertiary`, in sans, sentence case. At 360 the stall level's lead line, six options with notes and the full sentence fit with no horizontal scroll; at 1920 Quiet time's select is 320 px, not the page's width. Result lines sit directly under their control and wrap at 360. Light mode: amber lines clear the attention-ink pairs `contrast.test.ts` already covers.
+- [ ] **Step 4: Per width × skin × mode** (32 cells). Every option note sits under its option in `--ink-secondary`, and each when-line under its control in the ink its class carries (above), in sans, sentence case. At 360 the stall level's lead line, six options with notes and the full sentence fit with no horizontal scroll; at 900 and wider Quiet time's select is 320 px, not the page's width. Result lines sit directly under their control and wrap at 360. Light mode: amber lines clear the attention-ink pairs `contrast.test.ts` already covers.
 - [ ] **Step 5: Verify.**
 
       cd pwa && ./node_modules/.bin/tsc --noEmit
-      cd pwa && ./node_modules/.bin/vitest run test/settings-screen.test.tsx test/collect-lane-section.test.tsx test/collect-lane-words.test.ts test/halt-banner.test.tsx test/use-stall-watch-view.test.tsx test/contrast.test.ts
+      cd pwa && ./node_modules/.bin/vitest run test/settings-screen.test.tsx test/collect-lane-section.test.tsx test/collect-lane-words.test.ts test/halt-banner.test.tsx test/use-stall-watch-view.test.tsx test/contrast.test.ts test/role-census.test.ts test/fleet-css.test.ts
       cd pwa && ./node_modules/.bin/vitest run --maxWorkers=2
 
 ### Task R1d: the box token card (D-5503's words, D-5507's rule that Rotate stays one tap; spec §5.5's Box token card) — GATED: after R1c
@@ -353,7 +382,7 @@ They live in `settingsText.ts` as `STALL_LEVEL_NOTE: Record<StallLevel, string>`
 
 **The shape.** The card's purpose line is spec §5.5's definition, verbatim ("The key that sessions and tools on the fleet box use to call this server, for mail and coordination. …"), with the interval read from `TOKEN_ROTATION_INTERVAL_MS`, never typed. One summary sentence from the view: "Healthy · rotated 2 days ago · next in 5 days" in `idle` with the fleet confirmed; "Rotating: waiting for the fleet box to confirm. The old key still works." while handed out; amber for `held` or `behind`, red for `failed`, with today's sentences. Today's key/value lines move into a `<details>` "Details", unchanged in fact, sans keys and mono values. **Rotate now** is `ghost`, isolated at the card's foot after a hairline, with its note and when-line, its answer as the card's result line (`rotateAnswerText`, "At most one Rotate now a minute" included).
 
-- [ ] **Step 1: Red.** "the definition names the fleet box, mail and coordination, and the old key working until confirmed"; "the summary reads Healthy … only in idle with the fleet confirmed" (and never in `held`, `behind` or `failed`); "Details holds every key/value line today's card shows"; "Rotate now posts the rotate route once, on one tap, with no dialog" (kept: "posts the rotate route once"); "Rotate's answer is a line under it, not a toast".
+- [ ] **Step 1: Red.** "the definition names the fleet box, mail and coordination, and the old key working until confirmed"; "the definition's interval follows `TOKEN_ROTATION_INTERVAL_MS`": the case runs under `vi.mock('../../shared/box-token', …)` (spread the real module, override `TOKEN_ROTATION_INTERVAL_MS` with a 3-day value) and expects "3 days", so a typed "7 days" goes red. The card formats days from the import; it never re-derives the constant. "the summary reads Healthy … only in idle with the fleet confirmed" (and never in `held`, `behind` or `failed`); "Details holds every key/value line today's card shows"; "Rotate now posts the rotate route once, on one tap, with no dialog" (kept: "posts the rotate route once"); "Rotate's answer is a line under it, not a toast".
 - [ ] **Step 2: Green.**
 - [ ] **Step 3: Mutation table, RUN.**
 
@@ -362,14 +391,18 @@ They live in `settingsText.ts` as `STALL_LEVEL_NOTE: Record<StallLevel, string>`
   | Rotate now wrapped in `QuickConfirm` | box-token-card | "posts … on one tap, with no dialog" |
   | the summary reads Healthy for `held` | box-token-card | the summary case |
   | a key/value line left out of Details | box-token-card | "Details holds every key/value line" |
-  | the interval typed as "7 days" | box-token-card | the definition case, run against a fixture interval of 3 days |
+  | the interval typed as "7 days" | box-token-card | the definition case, run against a fixture interval of 3 days (below) |
   | Rotate's answer toasted | box-token-card | "not a toast" |
 
-- [ ] **Step 4: Per width × skin × mode** (16 cells). The card is one summary line plus a closed Details at every width; open, the mono values wrap at 360 and never scroll sideways. Rotate now is the card's only action, at its foot, ghost, 44 px on coarse pointers. Amber and red summaries carry a word as well as the tone.
+- [ ] **Step 4: Per width × skin × mode** (32 cells). The card is one summary line plus a closed Details at every width; open, the mono values wrap at 360 and never scroll sideways. Rotate now is the card's only action, at its foot, ghost, 44 px on coarse pointers. Amber and red summaries carry a word as well as the tone.
 - [ ] **Step 5: Verify.**
 
       cd pwa && ./node_modules/.bin/vitest run test/box-token-card.test.tsx test/settings-screen.test.tsx test/contrast.test.ts
+      cd server && ./node_modules/.bin/vitest run test/token-shared.test.ts
+      cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts
       cd pwa && ./node_modules/.bin/vitest run --maxWorkers=2
+
+`token-shared.test.ts`'s seven-day scan (by name and by value, across `server/src`, `pwa/src`, `shared/` and `agent/src`) and `single-definition.test.ts`'s regex bound which seven-day quantities may exist in the tree; the card adds none, because it reads the constant, and the 3-day mock lives in a test file outside the scanned roots.
 
 **Review.** Two reviewers: one on the screen, one on the security lens only (Review focus item 8), who also confirms no secret, hash or token prefix reaches the DOM through Details.
 
@@ -386,46 +419,65 @@ They live in `settingsText.ts` as `STALL_LEVEL_NOTE: Record<StallLevel, string>`
   | Mutant | Suite | Expected red |
   |---|---|---|
   | `shield` removed from `NAMES` and the file regenerated | icon | the vendored-icons case |
-  | a hand edit to one node in `lucide.ts` | icon | its regeneration check (the file equals the script's output) |
+  | a `<g>` wrapper, or a `stroke-width` attribute, hand-added to one of the five new icons in `lucide.ts` | icon | "every icon node's tag is in the closed set and every attr is geometric" (≈:62, the TAGS/ATTRS walk) |
 
-- [ ] **Step 4: Per width × skin × mode** (16 cells, in Storybook's Icon story): each icon at 16 and 20 px, stroke in `currentColor`, legible in both modes.
+  No case compares `lucide.ts` with `make-icons.mjs`'s output: that would need `lucide-static` in CI, which the no-new-dependency rule forbids. The PR body records the `--from` run instead.
+
+- [ ] **Step 4: Per width × skin × mode** (32 cells, in Storybook's Icon story; a glyph has no layout, so the PR captures 390 and 1280 and marks the other six widths "no layout" rather than leaving them blank): each icon at 16 and 20 px, stroke in `currentColor`, legible in both modes.
 - [ ] **Step 5: Verify.** `cd ui && ./node_modules/.bin/tsc --noEmit`; `cd pwa && ./node_modules/.bin/vitest run test/icon.test.tsx test/design-system-boundary.test.ts`.
 
-### Task R2b: the sections, their routes, and the reads made once (D-5503, D-5504; spec §3, §4.1, §4.2's phone and narrow-pane rows, §4.4, §5.4's Cleanup pause card, §5.5's gate card and banner, §11) — GATED: after #627, F11, S2a, S2b and C1
+### Task R2b0: F11's slots, only if F11 shipped without them (spec §15.3 C3) — GATED: after #627, F11 and #650
 
-**Routing:** band 3 (a new seam above the shell, and the frame identity it must not break; the review reads Review focus items 5 and 11). **Needs:** #627, F11 (with C3's slots, or this task adds them), S2a, S2b, the coordinator's ack of C1, and R1a to R1d and R2a. **Frozen files touched:** none once #627 has merged.
+**Routing:** band 2 (a primitive slot with its story and census row). **Needs:** #627; F11 merged **without** C3's slots (if it shipped with them, this task does not exist and the PR for R2b1 says so); #650 merged (it holds `role-census.test.ts`). **Frozen files touched:** none once those merge.
+
+**Files:** modify `ui/src/primitives/section.tsx` (`Section({ scope, title, purpose, children })`, `scope` drawn per skin by CSS, never by a skin branch), `ui/src/primitives/page-scaffold.tsx` (a `nav` slot that renders nothing when absent), their stories, and `pwa/test/role-census.test.ts` (each new slot classified); `design-system-boundary.test.ts`'s OWNED list gains any class a cva adds.
+
+- [ ] **Step 1: Red.** "Section renders scope, title and purpose in that order, and omits each when absent"; "PageScaffold renders its nav slot beside the body only when given"; "every new slot is classified in the role census"; "no Section or PageScaffold caller changes" (today's callers render byte-identical markup).
+- [ ] **Step 2: Green.**
+- [ ] **Step 3: Mutation table, RUN.**
+
+  | Mutant | Suite | Expected red |
+  |---|---|---|
+  | `purpose` rendered above `title` | the `Section` story test | the order case |
+  | the `nav` slot renders an empty wrapper when absent | the `PageScaffold` story test | "only when given" |
+  | the role-census entry for `scope` removed | role-census | its unclassified slot |
+
+- [ ] **Step 4: Per width × skin × mode** (32 cells, in Storybook): `scope` reads as Refined's eyebrow and as Instrument's right-aligned mono tag (§15.2 call 2); the `nav` slot's story at 390 shows no nav.
+- [ ] **Step 5: Verify.** `cd ui && ./node_modules/.bin/tsc --noEmit`; `cd pwa && ./node_modules/.bin/vitest run test/role-census.test.ts test/design-system-boundary.test.ts test/ui-package-boundary.test.ts` then the full pwa suite at `--maxWorkers=2`.
+
+### Task R2b1: the sections, their routes, and the reads made once (D-5503's order, D-5504; spec §3.1, §3.2, §4.1, §4.2's phone and narrow-pane rows, §4.4) — GATED: after #627, F11 (or R2b0), S2a, S2b, C1 and #652
+
+**Routing:** band 3 (a new seam above the shell, and the frame identity it must not break; the review reads Review focus item 5). **Needs:** #627, F11 with C3's slots (or R2b0), S2a, S2b, the coordinator's ack of C1, #652 merged (it holds `tap-targets.test.tsx`), and R1a to R1d and R2a. **Frozen files touched:** none once those merge.
+
+**The cut.** R2b1 moves today's page into five routed section pages **with each body unchanged**: the same cards, in today's order within each section, with today's words and today's top-of-page gate paragraph. Everything that changes what a card says or where it sits is R2b2. So R2b1's review reads one question, "did the move lose or duplicate anything", and its diff of each body is a move.
 
 **Files:**
 - Modify `pwa/src/lib/routes.ts`: five entries `{ id: 'settings-<section>', pattern: /^\/settings\/<section>\/?$/, title, top: false }`, for `updates`, `appearance`, `notifications`, `automation` and `security`, with titles from the section names; and `{ id: 'settings-section', pattern: /^\/settings\/([^/]+)\/?$/, top: false }`, which the palette's Go-to derivation leaves out.
 - Modify `pwa/src/app.tsx`: `<SettingsDataProvider active={…}>` mounted **unconditionally** where `app.tsx` holds its app-wide reads (≈:39–56), `active` true while the route matches `/settings*`; the ladder's Settings arm matches the route table, not today's `/^\/settings\/?$/` (≈:72).
-- Create `pwa/src/screens/settings/SettingsDataProvider.tsx`, `SettingsIndex.tsx`, `sectionStatus.ts`, `SettingsFrame.tsx`, `UpdatesSection.tsx`, `AppearanceSection.tsx`, `NotificationsSection.tsx`, `AutomationSection.tsx`, `SecuritySection.tsx`, `SignInGateCard.tsx` and `settings.css`. The `SettingsScreen` export moves to `SettingsFrame.tsx` under the same name, so the suites change their import path only; `pwa/src/screens/SettingsScreen.tsx` is deleted.
-- Modify `pwa/src/fleet/CollectLaneSection.tsx`: `PauseAllCleanup` (≈:220) is exported and mounted by Automation's Cleanup pause card, not inside the collector card; its paused line gains the link "Resume it from the cleanup row on Runs."
-- Modify `pwa/src/screens/settingsText.ts`: the five purpose lines (spec §3.1), the scope words, the not-found line, the gate banner's sentence.
+- Create `pwa/src/screens/settings/SettingsDataProvider.tsx`, `SettingsIndex.tsx`, `sectionStatus.ts`, `SettingsFrame.tsx`, `UpdatesSection.tsx`, `AppearanceSection.tsx`, `NotificationsSection.tsx`, `AutomationSection.tsx`, `SecuritySection.tsx` and `settings.css`. The `SettingsScreen` export moves to `SettingsFrame.tsx` under the same name, so the suites change their import path only; `pwa/src/screens/SettingsScreen.tsx` is deleted.
+- Modify `pwa/src/screens/settingsText.ts`: the five purpose lines (spec §3.1, for the index rows) and the not-found line.
 - Modify `server/src/update/notify.ts`: `RELEASE_PUSH_URL = '/settings/updates'` (≈:104). Modify `server/test/update-notify.test.ts`.
-- If F11 shipped without C3's slots: modify `ui/src/primitives/section.tsx`, `page-scaffold.tsx`, their stories, and `pwa/test/role-census.test.ts`.
-- Modify `pwa/test/contrast.test.ts` (`.settings-title` and the retired `.settings-section*` keys leave `GRANDFATHERED_UNCOVERED`; every new rule in `settings.css` is covered, never grandfathered), `markup-census.test.ts` (R1b's row: in a `.settings-move` group no `danger-ghost` precedes a `ghost`), `tap-targets.test.tsx` (the index rows' 64 px floor on a phone), `app.test.tsx` (the frame-identity cases and the routes), `command-layer.test.tsx` (the Go-to list), `settings-screen.test.tsx` (its pins kept by name, rendering the section page each pin is about). Create `pwa/test/settings-frame.test.tsx` (the index, the routes inside the frame, focus, the provider), `section-status.test.ts`, `settings-updates.test.tsx` (the card order) and `settings-security.test.tsx` (the gate card and banner; R2d and R5 extend it).
+- Modify `pwa/test/contrast.test.ts` (`.settings-title` and the retired `.settings-section*` keys leave `GRANDFATHERED_UNCOVERED`; every new rule in `settings.css` is covered, never grandfathered), `tap-targets.test.tsx` (the index rows' 64 px floor on a phone), `app.test.tsx` (the frame-identity cases and the routes), `command-layer.test.tsx` (the Go-to list), `settings-screen.test.tsx` (its pins kept by name, rendering the section page each pin is about). Create `pwa/test/settings-frame.test.tsx` (the index, the routes inside the frame, focus, the provider) and `section-status.test.ts`.
 - Modify `docs/superpowers/plans/2026-10-18-ccrc-skins-w2-shells.md`'s door table (C1): `switch-layout` and `switch-theme` name `/settings/appearance`.
 
 **The shape.**
-- **`SettingsDataProvider`** makes spec §4.4's reads once per mount while `active` and publishes one `SettingsView` (`updates`, `stall`, `collect`, `pause`, `auth`; R2d adds `passkeys`) by context; the value is `null` while inactive, and its hooks start their reads when `active` turns true and stop when it turns false. Sections read only the context. No section and no skin part imports `useUpdatesView`, `useStallWatchView`, `useCollectLaneView` or `readAuthStatus`.
+- **`SettingsDataProvider`** makes spec §4.4's reads once per mount while `active` and publishes one `SettingsView` (`updates`, `stall`, `collect`, `pause`, `auth`, `push`; R2d adds `passkeys` and `refreshAuth`) by context; the value is `null` while inactive, and its hooks start their reads when `active` turns true and stop when it turns false. Sections read only the context. No section and no skin part imports `useUpdatesView`, `useStallWatchView`, `useCollectLaneView`, `readAuthStatus`, `pushEnabled` or `pushSupported`.
+- **The push-state source** (the Notifications index status, "Pushes on in this browser"): the Bell's own reads, `pushSupported()` and `pushEnabled()` from `pwa/src/lib/push.ts`, plus `Notification.permission` for "Blocked in this browser". The provider reads them when `active` turns true and again whenever the index mounts, so a toggle on the Notifications page shows on the index after Back. An unsupported browser reads "Not available in this browser", never "off".
 - **`SettingsIndex`** renders five rows: `Icon` (`refresh-cw`, `palette`, `bell`, `bot`, `shield`), the name, the purpose line on the phone index, the status line from `sectionStatus.ts`, and `chevron-right` on the phone. `<nav aria-label="Settings sections">` of links, `aria-current="page"` on the open section. It is the one component R2c's nav and R3a's list column render.
-- **`sectionStatus.ts`** answers spec §3.2's table per section: the words and the tone. A read that has not landed is `skeleton`, a failed read "could not be read"; Updates leads with "v*X* available · fleet runs v*Y*" exactly when `bannerRelease` names a tag; Automation's pause part is `skeleton` until the first coord frame; Security is red only when `unarmedExposure`.
-- **`SettingsFrame`**, for Refined's phone and a pane under 760 (and, until R3a, Instrument everywhere, because today's shell gives Instrument no list column): `/settings` is the index under `PageScaffold` (Back to the fleet, `❯`, "Settings"), then the gate banner if open, then the rows; `/settings/<id>` is that section's page with Back to `/settings`; an unknown id is the index with "That section does not exist." above it. Moving to a section focuses its `<h2>` (`tabIndex=-1`); Back returns focus to the row it came from. `<h1>` is "Settings" on every route; `document.title` is "*Section* · Settings · ccrc".
-- **The section pages** hold spec §3.3's cards, in order, each a `Section({ scope, title, purpose, children })`: Updates (Fleet version with the halt line first, then Nodes, then Update policy; rendered from one ordered list, C5), Appearance (one card: Layout's `SkinFieldset` above Theme's today's rows, until R2e, and the fonts line), Notifications (This browser: the literal `<NotificationBell/>`; Whole fleet: Announce new releases), Automation (Stall watch, Temp root collector, Cleanup pause), Security (the Sign-in gate card and the Box token card until R2d). The door marks stay on the Layout and Theme fieldsets.
-- **The gate card and banner** (spec §5.5's gate rows): the card's words per `AuthStatus.mode` and reach; the compact banner on every Settings page while `unarmedExposure`, red, `role="alert"` once per mount, linking `/settings/security`; it replaces today's top-of-page paragraph.
+- **`sectionStatus.ts`** answers spec §3.2's table per section: the words and the tone. A read that has not landed is `skeleton`, a failed read "could not be read"; Updates leads with "v*X* available · fleet runs v*Y*" exactly when `bannerRelease` names a tag; Automation's pause part is `skeleton` until the first coord frame; Notifications from the push-state source above; Security is red only when `unarmedExposure`.
+- **`SettingsFrame`**, for Refined's phone and a pane under 760 (and, until R3a, Instrument everywhere, because today's shell gives Instrument no list column): `/settings` is the index under `PageScaffold` (Back to the fleet, `❯`, "Settings"), then today's gate paragraph if it shows, then the rows; `/settings/<id>` is that section's page with Back to `/settings`; an unknown id is the index with "That section does not exist." above it. Moving to a section focuses its `<h2>` (`tabIndex=-1`); Back returns focus to the row it came from. `<h1>` is "Settings" on every route; `document.title` is "*Section* · Settings · ccrc".
+- **The section pages, unchanged bodies**: Updates (Fleet version, Nodes, Update policy as today's page orders them), Appearance (Layout's `SkinFieldset`, Theme's rows, the fonts line), Notifications (`<NotificationBell/>`, Announce new releases), Automation (Stall watch, the temp root collector card with its Pause inside, as today), Security (the Box token card). The door marks stay on the Layout and Theme fieldsets.
 - **`settings.css`** caps the reading column at `--page-max` (760 Refined), pads by `--gutter`, and wraps release rows and key/value lines by a container query on the pane. Spacing uses roles, never `--sp-*`.
 
-- [ ] **Step 0: Re-ground.** Read F11's `Section` and `PageScaffold` as merged, S2b's `routes.ts` and frame, S2a's lifted reads in `app.tsx`, and #627's final census lists. Confirm C1's ack is recorded.
+- [ ] **Step 0: Re-ground.** Read F11's `Section` and `PageScaffold` as merged (or R2b0's), S2b's `routes.ts` and frame, S2a's lifted reads in `app.tsx`, #627's and #652's final census lists. Confirm C1's ack is recorded.
 - [ ] **Step 1: Red.**
   - routes: "ROUTES holds the five section routes with `top: false`, plus `settings-section`"; "the palette's Go-to list offers Settings › Updates and the others, and not `settings-section`"; S2b's both-way case: "`/settings/bogus` renders Settings with the not-found line, never `ScreenFallback`".
-  - frame: "`/settings` is the index; `/settings/<id>` renders that section's cards in §3.3's order; an unknown id renders the not-found line above the index"; "the index lists Updates, Appearance, Notifications, Automation, Security, in that order" (replacing ≈:2334); headings h1, h2, h3, h4; "moving to a section focuses its h2, and Back returns focus to its row".
-  - provider: "one `useUpdatesView` poll serves the index and every section across a walk of all five, and refetches nothing between them" (Refined, phone and 1280); "no Settings read starts while `active` is false"; a source scan: no file under `pwa/src/screens/settings/` but the provider imports a read hook.
+  - frame: "`/settings` is the index; `/settings/<id>` renders that section's bodies"; "an unknown id renders the not-found line above the index"; "the index lists Updates, Appearance, Notifications, Automation, Security, in that order" (replacing ≈:2334); headings h1, h2, h3, h4; "moving to a section focuses its h2, and Back returns focus to its row".
+  - the move: "every control today's page renders is rendered by exactly one section page" (a census over today's control labels, counted across the five routes: none lost, none twice).
+  - provider: "one `useUpdatesView` poll serves the index and every section across a walk of all five, and refetches nothing between them" (Refined, phone and 1280); "no Settings read starts while `active` is false"; a source scan: no file under `pwa/src/screens/settings/` but the provider imports a read hook or `lib/push`'s reads.
   - frame identity (`app.test.tsx`): "`/` → `/settings/updates` → `/` keeps the same `.app-shell` and sidebar nodes and the sidebar's `scrollTop`"; S2b's "the detail section is the same DOM node" across an entry to Settings.
-  - status: each row of spec §3.2's table, the skeleton and could-not-be-read cases, and "Updates leads with available exactly when a tag is pending".
-  - Automation: "Cleanup pause offers Pause only, one tap, and links to Runs for Resume" (keeping "offers Pause only"); "Cleanup pause's status is a skeleton before the first coord frame, never runs normally".
-  - Security: the gate card per state (passphrase, locked-out, off and exposed, off on loopback, unreadable); "the banner shows on every Settings page only while exposed, with `role="alert"` once".
+  - status: each row of spec §3.2's table, the skeleton and could-not-be-read cases, "Updates leads with available exactly when a tag is pending", and "Notifications reads Not available, never off, where push is unsupported".
   - server: "`RELEASE_PUSH_URL` is `/settings/updates`"; PWA: "a push landing on `/settings/updates` has the waiting release's notes open".
-  - markup census: R1b's row.
 - [ ] **Step 2: Green.**
 - [ ] **Step 3: Mutation table, RUN.**
 
@@ -434,37 +486,74 @@ They live in `settingsText.ts` as `STALL_LEVEL_NOTE: Record<StallLevel, string>`
   | the provider mounted only while `active` | app | "keeps the same `.app-shell` and sidebar nodes and the sidebar's scrollTop" |
   | the provider reads while inactive | settings-frame | "no Settings read starts while active is false" |
   | `UpdatesSection` calls `useUpdatesView` itself | settings-frame | the one-poll case and the import scan |
+  | the Stall watch card mounted in two sections | settings-frame | "every control … exactly one section page" |
   | `settings-section` removed from ROUTES | app | "`/settings/bogus` renders Settings … never ScreenFallback" |
   | `settings-section` left in the Go-to derivation | command-layer | "not settings-section" |
-  | Update policy rendered first | settings-updates | the card-order case |
   | the h2 focus dropped | settings-frame | the focus case |
   | Automation's status reads "runs normally" before the first frame | section-status | the skeleton case |
-  | Cleanup pause offers Resume | collect-lane-section | "offers Pause only" |
-  | the banner drawn for a loopback-only off gate | settings-security | the off-on-loopback case |
-  | the status read failing read as on | settings-security | the unreadable case |
+  | an unsupported push read as off | section-status | "Not available, never off" |
   | `RELEASE_PUSH_URL` back to `/settings` | update-notify | its case |
   | `.settings-title` kept in `GRANDFATHERED_UNCOVERED` | contrast | the stale-entry check |
   | an index row at 48 px on a coarse pointer | tap-targets | the index row floor |
-  | a `danger-ghost` placed before a `ghost` | markup-census | R1b's row |
 
-- [ ] **Step 4: Per width × skin × mode** (16 cells, plus 900 and 1024). Refined phone: `/settings` is five rows of at least 64 px with icon, name, purpose and status, the gutter 16; a section page leads with its `<h2>` at `--fs-page`; Back returns to the index. Refined at 900 and 1024 (a pane of 580 and 704): the same pattern inside the pane, release rows wrapping, no horizontal scroll. Refined at 1280 and 1920: until R2c lands, the same pattern in the pane, the column capped at 760; the PR says so. Instrument at every width: the same frame as Refined (today's shell), the gutter 12 on a phone, its card head the title plus a right-aligned mono scope tag (§15.2 call 2). Every section page at 390 under about 2,400 px with the fixture; record before and after heights per section in the PR. The gate banner: red, its sentence in `--ink-on-danger` on the danger surface, in both modes.
+- [ ] **Step 4: Per width × skin × mode** (32 cells). Refined at 360, 390 and 438: `/settings` is five rows of at least 64 px with icon, name, purpose and status, the gutter 16; a section page leads with its `<h2>` at `--fs-page`; Back returns to the index. Refined at 900 and 1024 (a pane of 580 and 704): the same pattern inside the pane, release rows wrapping, no horizontal scroll. Refined at 1280, 1440 and 1920: until R2c lands, the same pattern in the pane, the column capped at 760; the PR says so. Instrument at every width: the same frame as Refined (today's shell), the gutter 12 on a phone. Record before and after heights per section at 390 in the PR.
 - [ ] **Step 5: Verify.**
 
       cd ui && ./node_modules/.bin/tsc --noEmit
       cd pwa && ./node_modules/.bin/tsc --noEmit
-      cd pwa && ./node_modules/.bin/vitest run test/app.test.tsx test/command-layer.test.tsx test/settings-screen.test.tsx test/settings-frame.test.tsx test/section-status.test.ts test/settings-updates.test.tsx test/settings-security.test.tsx test/collect-lane-section.test.tsx test/box-token-card.test.tsx test/contrast.test.ts test/markup-census.test.ts test/control-census.test.ts test/tap-targets.test.tsx test/role-census.test.ts test/design-system-boundary.test.ts test/icon.test.tsx
+      cd pwa && ./node_modules/.bin/vitest run test/app.test.tsx test/command-layer.test.tsx test/settings-screen.test.tsx test/settings-frame.test.tsx test/section-status.test.ts test/collect-lane-section.test.tsx test/box-token-card.test.tsx test/contrast.test.ts test/tap-targets.test.tsx test/role-census.test.ts test/design-system-boundary.test.ts test/icon.test.tsx
       cd server && ./node_modules/.bin/vitest run test/update-notify.test.ts
+      cd pwa && ./node_modules/.bin/vitest run --maxWorkers=2
+
+**Not in this task:** any card's order, words, scope or split (R2b2), the desktop nav (R2c), the sign-in cards (R2d), the preview grid (R2e), Instrument's master-detail (R3a).
+
+### Task R2b2: the cards, in order and in words (D-5503; spec §3.3, §5.4's Cleanup pause card, §5.5's gate card and banner, §11) — GATED: after R2b1
+
+**Routing:** band 3 (the gate card's words describe a credential posture; the review reads Review focus item 11). **Needs:** R2b1. **Frozen files touched:** none once #627 has merged.
+
+**Files:**
+- Modify the five section files: each card a `Section({ scope, title, purpose, children })` in §3.3's order. Updates: Fleet version (the halt line first), then Nodes, then Update policy, rendered from **one ordered list** (C5). Appearance: one card, Layout above Theme, and the fonts line. Notifications: This browser (the literal `<NotificationBell/>`), Whole fleet (Announce new releases). Automation: Stall watch, Temp root collector, Cleanup pause. Security: the Sign-in gate card, then Box token (R2d inserts two between them).
+- Modify `pwa/src/fleet/CollectLaneSection.tsx`: `PauseAllCleanup` (≈:220) is exported and mounted by Automation's Cleanup pause card, not inside the collector card; its paused line gains the link "Resume it from the cleanup row on Runs."
+- Create `pwa/src/screens/settings/SignInGateCard.tsx`: the card's words per `AuthStatus.mode` and reach; the compact banner on every Settings page while `unarmedExposure`, red, `role="alert"` once per mount, linking `/settings/security`; it replaces today's top-of-page paragraph.
+- Modify `pwa/src/screens/settingsText.ts`: every card's purpose line, the scope words, the gate banner's sentence; the when-lines' tertiary ink (the step R1c deferred) as a covered rule in `settings.css`.
+- Modify `pwa/test/markup-census.test.ts` (R1b's row: in a `.settings-move` group no `danger-ghost` precedes a `ghost`), `contrast.test.ts` (the new tertiary rule, covered), `settings-screen.test.tsx`. Create `pwa/test/settings-updates.test.tsx` (the card order) and `settings-security.test.tsx` (the gate card and banner; R2d and R5 extend it).
+
+- [ ] **Step 1: Red.**
+  - Updates: "the cards are Fleet version, Nodes, Update policy, in that order, from one list"; "the halt line is Fleet version's first line".
+  - Automation: "Cleanup pause offers Pause only, one tap, and links to Runs for Resume" (keeping "offers Pause only"); "Cleanup pause's status is a skeleton before the first coord frame, never runs normally"; "the collector card holds no Pause control".
+  - Security: the gate card per state (passphrase, locked-out, off and exposed, off on loopback, unreadable); "the banner shows on every Settings page only while exposed, with `role="alert"` once"; "today's top-of-page paragraph is gone".
+  - every card: "each card carries its scope word and purpose line" (a census over the five pages).
+  - markup census: R1b's row.
+- [ ] **Step 2: Green.**
+- [ ] **Step 3: Mutation table, RUN.**
+
+  | Mutant | Suite | Expected red |
+  |---|---|---|
+  | Update policy rendered first | settings-updates | the card-order case |
+  | Cleanup pause offers Resume | collect-lane-section | "offers Pause only" |
+  | Pause left inside the collector card as well | collect-lane-section | "the collector card holds no Pause control" |
+  | the banner drawn for a loopback-only off gate | settings-security | the off-on-loopback case |
+  | the status read failing read as on | settings-security | the unreadable case |
+  | `role="alert"` on every render | settings-security | "once" |
+  | one card's `scope` dropped | settings-frame | the scope census |
+  | a `danger-ghost` placed before a `ghost` | markup-census | R1b's row |
+
+- [ ] **Step 4: Per width × skin × mode** (32 cells). Every section page at 390 under about 2,400 px with the fixture; record before and after heights per section. Instrument's card head is the title plus a right-aligned mono scope tag (§15.2 call 2); Refined's is the eyebrow. The gate banner: red, its sentence in `--ink-on-danger` on the danger surface, in both modes, at every width; at 900 and wider it spans the reading column, not the pane.
+- [ ] **Step 5: Verify.**
+
+      cd pwa && ./node_modules/.bin/tsc --noEmit
+      cd pwa && ./node_modules/.bin/vitest run test/settings-screen.test.tsx test/settings-frame.test.tsx test/settings-updates.test.tsx test/settings-security.test.tsx test/collect-lane-section.test.tsx test/contrast.test.ts test/markup-census.test.ts test/control-census.test.ts test/tap-targets.test.tsx test/role-census.test.ts
       cd pwa && ./node_modules/.bin/vitest run --maxWorkers=2
 
 **Not in this task:** the desktop nav (R2c), the sign-in cards (R2d), the preview grid (R2e), Instrument's master-detail (R3a).
 
-### Task R2c: Refined's section nav on a wide pane (D-5504; spec §4.2's pane ≥ 760 and wide rows) — GATED: after R2b and S4b
+### Task R2c: Refined's section nav on a wide pane (D-5504; spec §4.2's pane ≥ 760 and wide rows) — GATED: after R2b2 and S4b
 
-**Routing:** band 2. **Needs:** R2b, S4b (Refined's frame, the sidebar at `clamp(320px, 24vw, 400px)`), F11's `nav` slot (or R2b's extension of it). **Frozen files touched:** none.
+**Routing:** band 2. **Needs:** R2b2, S4b (Refined's frame, the sidebar at `clamp(320px, 24vw, 400px)`), F11's `nav` slot (or R2b0's). **Frozen files touched:** none.
 
 **Files:** modify `pwa/src/screens/settings/SettingsFrame.tsx` and `settings.css`; create `pwa/src/screens/settings/usePaneWidth.ts`; extend `pwa/test/settings-frame.test.tsx`.
 
-**The shape.** What `/settings` shows depends on the pane, so the content choice reads the pane width through one hook, `usePaneWidth(ref)` (a `ResizeObserver` on the pane), against `SETTINGS_NAV_MIN_PX = 760`. The column and the nav are drawn by `@container settings-pane (min-width: 760px)` in `settings.css`; a test reads that file's text and binds the literal to the constant. At ≥ 760: `SettingsIndex` as a sticky nav of 200 px (220 at a viewport ≥ 1600), under the 56 px scaffold header, rows 40 px with the tint and 2 px `--accent` rail on the current section (D-5101), each row the name plus a one-line ellipsised status, the purpose line in its `title`; beside it the reading column at `min(100%, 760px)`. `/settings` shows Updates with Updates current and the URL unchanged; an unknown id shows Updates with the not-found line above its `<h2>`. Under 760, R2b's pattern.
+**The shape.** What `/settings` shows depends on the pane, so the content choice reads the pane width through one hook, `usePaneWidth(ref)` (a `ResizeObserver` on the pane), against `SETTINGS_NAV_MIN_PX = 760`. The column and the nav are drawn by `@container settings-pane (min-width: 760px)` in `settings.css`; a test reads that file's text and binds the literal to the constant. At ≥ 760: `SettingsIndex` as a sticky nav of 200 px (220 at a viewport ≥ 1600), under the 56 px scaffold header, rows 40 px with the tint and 2 px `--accent` rail on the current section (D-5101), each row the name plus a one-line ellipsised status, the purpose line in its `title`; beside it the reading column at `min(100%, 760px)`. `/settings` shows Updates with Updates current and the URL unchanged; an unknown id shows Updates with the not-found line above its `<h2>`. Under 760, R2b1's pattern.
 
 - [ ] **Step 1: Red** (`ResizeObserver` mocked): "at a 960 pane, /settings shows Updates in the column, Updates current in the nav, and the URL unchanged"; "at a 960 pane an unknown id shows Updates with the not-found line"; "at a 704 pane, /settings is the index"; "the nav's current row has aria-current=page"; "settings.css's container query reads SETTINGS_NAV_MIN_PX".
 - [ ] **Step 2: Green.**
@@ -477,29 +566,33 @@ They live in `settingsText.ts` as `STALL_LEVEL_NOTE: Record<StallLevel, string>`
   | `/settings` at a wide pane navigates to `/settings/updates` | settings-frame | "the URL unchanged" |
   | `aria-current` dropped | settings-frame | its case |
 
-- [ ] **Step 4: Per width × skin × mode** (16 cells, plus 900, 1024 and 1440). Refined at 1280: the pane is about 960, the column about 688 after the nav, a 24 gap and 24 gutters; the nav stays put while the column scrolls. At 1920: the nav 220, the column capped at 760, the rest of the pane empty. At 900 and 1024: R2b's pattern, unchanged. Instrument: unchanged until R3a (the PR notes the Instrument cells as "Refined frame, by design until R3a").
+- [ ] **Step 4: Per width × skin × mode** (32 cells). Refined at 1280: the pane is about 960, the column about 688 after the nav, a 24 gap and 24 gutters; the nav stays put while the column scrolls. At 1920: the nav 220, the column capped at 760, the rest of the pane empty. At 1440: the nav 200, the column 760. At 360 to 1024: R2b1's pattern, unchanged. Instrument: unchanged until R3a (the PR notes the Instrument cells as "Refined frame, by design until R3a").
 - [ ] **Step 5: Verify.** `cd pwa && ./node_modules/.bin/vitest run test/settings-frame.test.tsx test/contrast.test.ts test/tap-targets.test.tsx` then the full pwa suite at `--maxWorkers=2`.
 
-### Task R2d: Security receives sign-in (D-5508; spec §5.5's Your sign-in and This session, §11.1) — GATED: after R2b; lands before AW0
+### Task R2d: Security receives sign-in (D-5508; spec §5.5's Your sign-in and This session, §11.1) — GATED: after R2b2; lands before AW0
 
-**Routing:** **band 3, two reviewers** (the passkey list and its revocation are a credential path; the review reads Review focus item 6). **Needs:** R2b, and F11 on `AccountsScreen.tsx` (C4's order). **Frozen files touched:** none once #627 has merged.
+**Routing:** **band 3, two reviewers** (the passkey list and its revocation are a credential path; the review reads Review focus item 6). **Needs:** R2b2, and F11 on `AccountsScreen.tsx` (C4's order). **Frozen files touched:** none once #627 has merged.
 
 **Files:**
-- Create `pwa/src/screens/settings/YourSignInCard.tsx` and `ThisSessionCard.tsx` from `AuthSection.tsx`'s two halves; they take the provider's `auth` and `passkeys` as props and make no call of their own. Delete `pwa/src/screens/AuthSection.tsx`.
-- Modify `SettingsDataProvider.tsx`: `api.passkeys()` once per mount, only while the status read says the gate is armed (`mode` not `off`), as `AuthSection` does today.
+- Create `pwa/src/screens/settings/YourSignInCard.tsx` and `ThisSessionCard.tsx` from `AuthSection.tsx`'s two halves; they take the provider's `auth`, `passkeys` and `refreshAuth` as props. **They make no read of their own**: the writes they make today stay theirs (`enrollPasskey`, `api.revokePasskey`, sign-out through `raiseAuthLost`), and after a successful Add or Revoke they call `refreshAuth()` and keep calling `authPostureChanged()` from the writer (D-161's passphrase-only notice retires and returns on that announcement, `lib/auth.ts`). Delete `pwa/src/screens/AuthSection.tsx`.
+- Modify `SettingsDataProvider.tsx`: the status read, then `api.passkeys()` **only while that read says the gate is armed** (`mode` not `off`). This is a change from today, not a copy: `AuthSection.refresh()` (≈:66–71) calls `api.passkeys()` unconditionally and lets the 401 or 501 leave the list `null`. `refreshAuth()` on the context re-reads status and then passkeys under the same mode guard; it is the one way the list is re-read.
 - Modify `SecuritySection.tsx`: four cards in order: Sign-in gate, Your sign-in, This session, Box token; Your sign-in and This session are absent, with the gate card's reason, while the gate is off or the status unreadable.
 - Modify `pwa/src/screens/AccountsScreen.tsx`: the `AuthSection` import and mount (≈:420) removed.
 - Tests: `pwa/test/auth-passkey.test.tsx` renders Security instead of `AccountsScreen`; `danger-buttons.test.tsx` gains Revoke as `btn-danger-ghost`; `control-census.test.ts` and `contrast.test.ts` move `.accounts-session`'s entries with the control (or drop them, if the Button leaves no hand-drawn rule); `settings-security.test.tsx` gains the sign-in cases.
 
 **The shape.** Passkeys is an `<h4>` under Your sign-in's `<h3>`. Each row shows the stored label as it is, ellipsised to one line with the full label as `title`, then "added 5 min ago" and ", last used three weeks ago" when the server has a use (today's words). **Revoke** is `danger-ghost` at the row's end and opens `QuickConfirm` (`tone="danger"`, `defaultFocus="cancel"`): "Revoke the passkey *label*? It will not sign in again."; when it is the last one: "This is your last passkey. After it, only the passphrase signs in." **Add a passkey on this device** stays primary, with its note. **Sign out** stays ghost with no confirm, with its note and the `ccrc passwd` sentence verbatim. The unreadable-store sentence stays verbatim (D-153). This retires the foundations plan's F6 note that gave `.accounts-session`'s Revoke to W1.
 
-- [ ] **Step 1: Red.** "Security renders four cards in order when the gate is armed"; "the passkey list is read once per mount, and not at all while the gate is off"; "the cards make no request of their own" (a fetch count with the provider stubbed); "Revoke opens a danger confirm whose Cancel posts nothing and whose commit sends one DELETE"; "revoking the last passkey adds the passphrase line"; "Accounts renders no sign-in, passkey or sign-out control"; "an unreadable status shows no Your sign-in or This session, and never says on"; the D-153 and `ccrc passwd` sentences verbatim.
+- [ ] **Step 1: Red.** "Security renders four cards in order when the gate is armed"; "the passkey list is read once per mount, and not at all while the gate is off"; "the cards make no read of their own" (a fetch count of GETs with the provider stubbed); "after Revoke the list re-reads once and the row is gone"; "after Add the new row appears"; "Add and Revoke each announce `authPostureChanged`"; "revoking the last passkey brings back the passphrase-only notice" (the D-161 sidebar, mounted beside the pane at 1280); "Sign out still goes through `raiseAuthLost`"; "Revoke opens a danger confirm whose Cancel posts nothing and whose commit sends one DELETE"; "revoking the last passkey adds the passphrase line"; "Accounts renders no sign-in, passkey or sign-out control"; "an unreadable status shows no Your sign-in or This session, and never says on"; the D-153 and `ccrc passwd` sentences verbatim.
 - [ ] **Step 2: Green.**
 - [ ] **Step 3: Mutation table, RUN.**
 
   | Mutant | Suite | Expected red |
   |---|---|---|
-  | `YourSignInCard` calls `api.passkeys()` | settings-security | "the cards make no request of their own" |
+  | `YourSignInCard` calls `api.passkeys()` | settings-security | "the cards make no read of their own" |
+  | `refreshAuth()` dropped after Revoke | settings-security | "after Revoke the list re-reads once and the row is gone" |
+  | `refreshAuth()` dropped after Add | settings-security | "after Add the new row appears" |
+  | `authPostureChanged()` dropped from Revoke | settings-security | "Add and Revoke each announce" and the last-passkey notice case |
+  | `refreshAuth()` re-reads passkeys while the gate is off | settings-security | "not at all while the gate is off" (run after a revoke) |
   | the provider reads passkeys while the gate is off | settings-security | "not at all while the gate is off" |
   | Revoke posts on one tap | danger-buttons / auth-passkey | the confirm case |
   | the last-passkey line dropped | auth-passkey | its case |
@@ -507,14 +600,14 @@ They live in `settingsText.ts` as `STALL_LEVEL_NOTE: Record<StallLevel, string>`
   | an unreadable status rendered as passphrase | settings-security | the unreadable case |
   | the D-153 sentence reworded | auth-passkey | its verbatim case |
 
-- [ ] **Step 4: Per width × skin × mode** (16 cells). Security in each gate state the fixture can produce (armed with two passkeys, armed with one, off on loopback, off and exposed). At 360 a long user-agent label ellipsises on one line and Revoke stays at the row's end with its 44 px target; the confirm is the bottom sheet. At 1280 and 1920 the four cards sit in the 760 column (Refined) or the shared frame (Instrument until R3a). Accounts, at the same widths, shows lanes only.
+- [ ] **Step 4: Per width × skin × mode** (32 cells). Security in each gate state the fixture can produce (armed with two passkeys, armed with one, off on loopback, off and exposed). At 360 a long user-agent label ellipsises on one line and Revoke stays at the row's end with its 44 px target. **Revoke's confirm open, captured at 390 and at 900 or wider**, both skins and both modes (the bottom sheet at both until `Sheet`'s desktop arm lands; the PR says so). At 1280, 1440 and 1920 the four cards sit in the 760 column (Refined) or the shared frame (Instrument until R3a). Accounts, at the same widths, shows lanes only.
 - [ ] **Step 5: Verify.** `cd pwa && ./node_modules/.bin/vitest run test/auth-passkey.test.tsx test/auth-login.test.tsx test/auth-door.test.tsx test/settings-security.test.tsx test/danger-buttons.test.tsx test/control-census.test.ts test/contrast.test.ts test/tap-targets.test.tsx` then the full pwa suite at `--maxWorkers=2`.
 
-**Review.** Two reviewers; the security reviewer confirms that no passkey id, credential id or public key reaches the DOM beyond today's, and that the DELETE still names the row's id exactly as `AuthSection` sent it.
+**Review.** Two reviewers; the security reviewer confirms that no passkey id, credential id or public key reaches the DOM beyond today's, that the DELETE still names the row's id exactly as `AuthSection` sent it, and that a revoked passkey never stays listed.
 
-### Task R2e: Appearance's preview grid (D-5503; spec §5.2) — GATED: after R2b
+### Task R2e: Appearance's preview grid (D-5503; spec §5.2) — GATED: after R2b2
 
-**Routing:** band 2. **Needs:** R2b. **Frozen files touched:** none once #627 has merged.
+**Routing:** band 2. **Needs:** R2b2. **Frozen files touched:** none once #627 has merged.
 
 **Files:** modify `pwa/src/screens/settings/AppearanceSection.tsx` and `settings.css`; modify `pwa/src/screens/AppearanceRow.tsx` only to export its option data, so the grid and any remaining caller read one list; tests `pwa/test/settings-appearance.test.tsx`, `contrast.test.ts`.
 
@@ -531,19 +624,21 @@ They live in `settingsText.ts` as `STALL_LEVEL_NOTE: Record<StallLevel, string>`
   | the checked state taken from the last tap | settings-appearance | the reload case |
   | Follow the system left out | settings-appearance | the 13-cards case |
 
-- [ ] **Step 4: Per width × skin × mode** (16 cells, plus Dracula and GitHub Light, because each card reads its palette's values). At 360 the grid is 5 rows, about 560 px, no horizontal scroll, each card a 44 px target. At 1280 and 1920 the 160 × 100 cards fill the capped column. The swatch name and note clear the contrast gate inside every palette, in both modes; the selected idiom is tint plus rail plus a check, never colour alone.
+- [ ] **Step 4: Per width × skin × mode** (32 cells, plus Dracula and GitHub Light, because each card reads its palette's values). At 360 the grid is 5 rows, about 560 px, no horizontal scroll, each card a 44 px target. At 900 and 1024 the grid reflows inside the pane; at 1280, 1440 and 1920 the 160 × 100 cards fill the capped column. The swatch name and note clear the contrast gate inside every palette, in both modes; the selected idiom is tint plus rail plus a check, never colour alone.
 - [ ] **Step 5: Verify.** `cd pwa && node design/contrast-check.mjs`; `cd pwa && ./node_modules/.bin/vitest run test/settings-appearance.test.tsx test/theme-catalogue.test.ts test/contrast.test.ts test/tap-targets.test.tsx` then the full pwa suite at `--maxWorkers=2`.
 
 ### Task R2s: the step-up before Revoke and Add a passkey (D-5508's route clause, spec D8; spec §5.5) — GATED: after R2d, AW1a and #397
 
 **Routing:** **band 3, two reviewers** (an untrusted-input credential route; the review reads Review focus item 7). **Needs:** R2d; AW1a merged (the step-up routes, `SessionRecord.assertedAt`, the session-bound `step-up` challenge purpose and `requireRecentAssertion`, defined by the Accounts plan under D-5512); #397 merged (`server/src/server.ts`). **Frozen files touched:** none once those merge.
 
-**Files:** modify `server/src/server.ts`: `POST /api/auth/passkey/register/start` (≈:853) and `DELETE /api/auth/passkey/:id` (≈:966) call `requireRecentAssertion(5 * 60_000)` while the gate is armed, before any other work; modify `pwa/src/screens/settings/YourSignInCard.tsx` ("Confirm it's you" before Revoke's confirm and before Add's ceremony); tests `server/test/auth-passkey-step-up.test.ts` (new), `pwa/test/auth-passkey.test.tsx`.
+**Files:** modify `server/src/server.ts`: `POST /api/auth/passkey/register/start` (≈:853) and `DELETE /api/auth/passkey/:id` (≈:966) call `requireRecentAssertion(5 * 60_000)` while the gate is armed, before any other work; `register/start` issues its challenge **bound to the requesting session's `idHash`**; `register/finish` (≈:875) refuses a challenge bound to another session and **re-runs `requireRecentAssertion(5 * 60_000)`** before it stores a credential. Modify `server/src/auth/webauthn.ts`: `ChallengeStore` gains an opt-in owner (`issue(now, owner?)`, and a consume that refuses a mismatched owner), so `assertChallenges` and every other caller do not change. Modify `pwa/src/screens/settings/YourSignInCard.tsx`. Tests: `server/test/auth-passkey-step-up.test.ts` (new), `server/test/auth-passkey.test.ts` (it holds `ChallengeStore`'s cases today), `pwa/test/auth-passkey.test.tsx`.
 
-**The shape.** The fallback is AW1a's passphrase step-up when no passkey is enrolled, so a fresh box's first enrollment still works. `register/finish` is unchanged: it is bound to the challenge `start` issued, so guarding `start` guards the ceremony. The PWA's step is the Accounts plan's shared step component if AW1a's PWA half has shipped one; otherwise R2s builds it in `pwa/src/screens/settings/` for the Accounts plan to reuse, and says so.
+**Why `start` alone is not enough** (measured at `c1453e42`, `server.ts` ≈:853–913). `register/start` calls `registerChallenges.issue(now)` with no session binding, and `register/finish` accepts any outstanding challenge in that global store (the Accounts spec's §2 names the same fact: "`ChallengeStore` is global, not tied to a session"). Freshness would be checked only at `start`, and a challenge lives 2 minutes, so it outlives the 5-minute window by up to 2 minutes, and nothing ties the `start` to the `finish` per session. Binding the challenge to the session and re-checking at `finish` closes both.
 
-- [ ] **Step 0: Re-ground.** Read AW1a as merged: the guard's signature, its refusal word and status, where `stepUpFreshUntil` is published. **If it is on `GET /api/auth/status`** (a read the provider already makes), the step shows before the act when it has lapsed, as the spec says. **If it is only on `GET /api/accounts`,** R2s adds no read: it shows the step when the route refuses with the guard's word, then retries the act once; the PR names that departure by slug, `settings-step-up-on-refusal`, for the spare number D-5510, and the coordinator rules it.
-- [ ] **Step 1: Red.** Server, each against a fixture gate: armed, no fresh assertion → `DELETE` and `register/start` refuse with the guard's word and change nothing (the passkey row survives; no challenge is issued); armed with an assertion 4 minutes old → both proceed; 6 minutes old → both refuse; an assertion from another session does not admit this one; armed, no passkey enrolled, a passphrase step-up → `register/start` proceeds (the first enrollment); the gate off → the routes behave exactly as today. PWA: Revoke and Add show "Confirm it's you" first when the freshness has passed, and go straight to the confirm or the ceremony while it is fresh.
+**The PWA flow, chosen now** (Accounts §3.2: "The sheet never retries a refused request on its own"). `stepUpFreshUntil` lives only on `GET /api/accounts` (Accounts §3.2, §13.1), which Settings does not read, so the refusal is the expected path, not an edge case. Revoke: the danger confirm's commit sends the DELETE; on the guard's refusal word the same sheet shows **Confirm it's you**; its tap calls `navigator.credentials.get` directly (AW1a's step-up, or the passphrase step-up when no passkey is enrolled); once it succeeds the sheet shows Revoke's commit again, and **a separate tap** sends the DELETE. Add: the tap sends `register/start`; on refusal the card shows Confirm it's you; once it succeeds, **a separate tap** on "Add a passkey on this device" runs the ceremony, because `navigator.credentials.create` needs a fresh user activation on iOS Safari, which the step-up's `get()` and its await have already spent. No act is re-sent without a new tap. The PWA's step is the Accounts plan's shared step component if AW1a's PWA half has shipped one; otherwise R2s builds it in `pwa/src/screens/settings/` for the Accounts plan to reuse, and says so.
+
+- [ ] **Step 0: Re-ground.** Read AW1a as merged: the guard's signature, its refusal word and status, the step-up component if any. Read `ChallengeStore` (`server/src/auth/webauthn.ts` ≈:439) and every caller of `issue`.
+- [ ] **Step 1: Red.** Server, each against a fixture gate: armed, no fresh assertion → `DELETE` and `register/start` refuse with the guard's word and change nothing (the passkey row survives; no challenge is issued); armed with an assertion 4 minutes old → both proceed; 6 minutes old → both refuse; an assertion from another session does not admit this one; **"a challenge issued to session A is refused when session B finishes it"**; **"finish after the window lapsed refuses"** (start at 4 min, finish at 6 min: no credential stored); armed, no passkey enrolled, a passphrase step-up → `register/start` and `finish` proceed (the first enrollment); the gate off → the routes behave exactly as today; `ChallengeStore`: "an unowned challenge still consumes as today" (the assertion path). PWA: "Revoke's commit, refused, shows Confirm it's you in the same sheet"; "after the step-up the DELETE waits for a new tap"; "Add, refused, shows Confirm it's you, and the ceremony waits for a new tap"; **"no act is re-sent without a new tap"** (a fetch count across refusal and step-up); while fresh, Revoke and Add go straight through.
 - [ ] **Step 2: Green.**
 - [ ] **Step 3: Mutation table, RUN.**
 
@@ -551,20 +646,24 @@ They live in `settingsText.ts` as `STALL_LEVEL_NOTE: Record<StallLevel, string>`
   |---|---|---|
   | the guard removed from `DELETE` | auth-passkey-step-up | "armed, no fresh assertion … the passkey row survives" |
   | the guard removed from `register/start` | auth-passkey-step-up | "… no challenge is issued" |
+  | the owner check removed from the challenge consume | auth-passkey-step-up | "a challenge issued to session A is refused when session B finishes it" |
+  | the window re-check removed from `register/finish` | auth-passkey-step-up | "finish after the window lapsed refuses" |
   | the window read as 50 minutes | auth-passkey-step-up | the 6-minute case |
   | the guard applied after the delete | auth-passkey-step-up | "change nothing" |
   | the passphrase fallback refused | auth-passkey-step-up | the first-enrollment case |
   | another session's assertion accepted | auth-passkey-step-up | its case |
-  | the PWA skips the step while lapsed | auth-passkey | its case |
+  | the owner made mandatory in `ChallengeStore` | server auth-passkey | "an unowned challenge still consumes as today" |
+  | the PWA retries the act once after the step-up | auth-passkey | "no act is re-sent without a new tap" |
+  | the PWA skips the step on a refusal | auth-passkey | "Revoke's commit, refused, shows Confirm it's you" |
 
-- [ ] **Step 4: Per width × skin × mode** (16 cells). "Confirm it's you" is a button step in the same sheet as Revoke's confirm, never a second sheet stacked on it; at 360 the passkey prompt's system dialog is the device's own. Both modes.
-- [ ] **Step 5: Verify.** `cd server && ./node_modules/.bin/vitest run test/auth-passkey-step-up.test.ts` and the existing auth suites (`ls server/test | grep -i auth`), one at a time; `cd pwa && ./node_modules/.bin/vitest run test/auth-passkey.test.tsx` then the full pwa suite at `--maxWorkers=2`; `cd server && ./node_modules/.bin/vitest run test/box-token-census.test.ts test/coord-pause-route.test.ts` (no door added or removed).
+- [ ] **Step 4: Per width × skin × mode** (32 cells). "Confirm it's you" is a button step in the same sheet as Revoke's confirm, never a second sheet stacked on it. **The confirm open, captured at 390 and at 900 or wider**, in its three states (the commit, Confirm it's you, the commit again), both skins and both modes. At 360 the passkey prompt's system dialog is the device's own.
+- [ ] **Step 5: Verify.** `cd server && ./node_modules/.bin/vitest run test/auth-passkey-step-up.test.ts`, `test/auth-passkey.test.ts` and the other existing auth suites (`ls server/test | grep -i auth`), one at a time; `cd pwa && ./node_modules/.bin/vitest run test/auth-passkey.test.tsx` then the full pwa suite at `--maxWorkers=2`; `cd server && ./node_modules/.bin/vitest run test/box-token-census.test.ts test/coord-pause-route.test.ts` (no door added or removed).
 
-**Review.** Two reviewers; the security reviewer reads the guard's placement in each handler, its armed-only condition, and that no refusal echoes the passkey id or label.
+**Review.** Two reviewers; the security reviewer reads the guard's placement in each handler, its armed-only condition, the challenge's owner check and the window re-check at `finish`, and that no refusal echoes the passkey id or label.
 
-### Task R3a: Instrument's master-detail (D-5504; spec §4.3) — GATED: after S9, S10, S11, W3-LC, and R2b to R2e
+### Task R3a: Instrument's master-detail (D-5504; spec §4.3) — GATED: after S9, S10, S11, W3-LC, and R2b2 to R2e
 
-**Routing:** band 2. **Needs:** S9 (the 340/420 list column), S10, S11 (the phone's five-tab bar and More), W3-LC (C2: the per-route list table), and R2b to R2e. **Frozen files touched:** none.
+**Routing:** band 2. **Needs:** S9 (the 340/420 list column), S10, S11 (the phone's five-tab bar and More), W3-LC (C2: the per-route list table), and R2b2 to R2e. **Frozen files touched:** none.
 
 **Files:** create `pwa/src/skins/instrument/settingsParts.tsx` (registers `SettingsIndex` for the six Settings route ids in W3-LC's list table); modify `pwa/src/skins/instrument/instrument.css`, `pwa/src/screens/settings/SettingsFrame.tsx`; tests `pwa/test/settings-instrument.test.tsx`, `skin-switch.test.tsx`.
 
@@ -582,7 +681,7 @@ They live in `settingsText.ts` as `STALL_LEVEL_NOTE: Record<StallLevel, string>`
   | the detail mounts its own `useUpdatesView` | settings-instrument | the one-poll case |
   | the phone section's bottom padding dropped | settings-instrument | "clears the tab bar" |
 
-- [ ] **Step 4: Per width × skin × mode** (16 cells, plus 900, 1024 and 1440). Instrument at 900: the detail about 560, release rows and key/value lines wrapping. At 1280: list 340, detail capped at 960. At 1920: list 420, detail, and the permanent 320 inspector reading "Nothing selected" until R3b. Phone: the index under the top bar, the section pages under it, the tab bar never covering a control. Refined: unchanged in every cell.
+- [ ] **Step 4: Per width × skin × mode** (32 cells). Instrument at 900: the detail about 560, release rows and key/value lines wrapping. At 1024 and 1280: list 340, detail capped at 960. At 1440: list 340, the inspector the `I` overlay. At 1920: list 420, detail, and the permanent 320 inspector reading "Nothing selected" until R3b. Phone (360, 390, 438): the index under the top bar, the section pages under it, the tab bar never covering a control. Refined: unchanged in every cell.
 - [ ] **Step 5: Verify.** `cd pwa && ./node_modules/.bin/vitest run test/settings-instrument.test.tsx test/skin-switch.test.tsx test/skin-boundary.test.ts test/skin-identity.test.ts test/contrast.test.ts test/tap-targets.test.tsx` then the full pwa suite at `--maxWorkers=2`.
 
 ### Task R3b: Instrument's inspector for Settings (D-5504; spec §4.5) — GATED: after R3a and S12
@@ -603,12 +702,12 @@ They live in `settingsText.ts` as `STALL_LEVEL_NOTE: Record<StallLevel, string>`
   | the selection survives a section change | settings-instrument | its case |
   | the node list in label order, not dispatch order | settings-instrument | the dispatch-order case |
 
-- [ ] **Step 4: Per width × skin × mode** (16 cells). At 1280 the inspector is the `I` overlay, at 1920 permanent, on a phone a sheet; the notes' groups and fold read as in `WhatsNewSheet`. Refined unchanged.
+- [ ] **Step 4: Per width × skin × mode** (32 cells). At 900 to 1440 the inspector is the `I` overlay, at 1920 permanent, on a phone a sheet; the notes' groups and fold read as in `WhatsNewSheet`. Refined unchanged.
 - [ ] **Step 5: Verify.** `cd pwa && ./node_modules/.bin/vitest run test/settings-instrument.test.tsx test/settings-screen.test.tsx test/whats-new-sheet.test.tsx` then the full pwa suite at `--maxWorkers=2`.
 
-### Task R4: "Ran here", the install record (D-5506; spec §8, §7.4's meta line) — GATED: after #397, #597, #645, #646, and R1a
+### Task R4: "Ran here", the install record (D-5506; spec §8, §7.4's meta line) — GATED: after #397, #646, #652, and R1a
 
-**Routing:** band 3 (a coord migration and a sweep writer, deep in the update plane; the review reads Review focus item 10). **Needs:** #397, #597, #645 and #646 merged, and no other open PR holding `shared/api.ts`, `server/src/coord/schema.ts`, `server/src/coord/store.ts`, `server/src/update/inventory.ts` or `server/src/update/routes.ts` at dispatch; R1a. **Frozen files touched:** none once those merge.
+**Routing:** band 3 (a coord migration and a sweep writer, deep in the update plane; the review reads Review focus item 10). **Needs:** #397, #646 and #652 merged (#597 and #645 have), and no other open PR holding `shared/api.ts`, `server/src/coord/schema.ts`, `server/src/coord/store.ts`, `server/src/update/inventory.ts` or `server/src/update/routes.ts` at dispatch; R1a. **Frozen files touched:** none once those merge.
 
 **Files:**
 - Modify `server/src/coord/schema.ts`: one `MIGRATIONS` entry that creates `release_seen (tag TEXT NOT NULL PRIMARY KEY, firstSeenAt INTEGER NOT NULL, lastSeenAt INTEGER NOT NULL)` and `release_seen_since (id INTEGER NOT NULL PRIMARY KEY, at INTEGER NOT NULL)`, and nothing else: no `ALTER`, no index on another table, no CHECK on a token.
@@ -616,11 +715,11 @@ They live in `settingsText.ts` as `STALL_LEVEL_NOTE: Record<StallLevel, string>`
 - Modify `server/src/update/inventory.ts`: `sweepInventory` (≈:747) calls `noteReleasesSeen` with the release tags of every live, managed node whose stamp was read this pass (the managed predicate dispatch already uses; Step 0 names it). Unmeasured, unreachable and unversioned nodes contribute nothing.
 - Modify `shared/api.ts`: `ReleaseWire.seen?: { firstAt: number; lastAt: number } | null` (absent = an older server; `null` = never seen since records began) and `UpdatesView.seenSince?: number`; one reader for each.
 - Modify `server/src/update/routes.ts`: `GET /api/updates` (≈:586) composes both.
-- Modify `pwa/src/screens/updates.tsx`: the meta line after "Released …": "Ran here 2 Oct to 9 Oct", "Running on fleet since 9 Oct", "No record of it running here (records start 18 Oct)", or nothing for an absent field; the inspector line (R3b) if it has landed.
+- Modify `pwa/src/screens/updates.tsx`: the meta line after "Released …": "Ran here 2 Oct to 9 Oct", "First seen running here 9 Oct" for the running release, "No record of it running here (records start 18 Oct)", or nothing for an absent field. The running case says "first seen", not "running since", because `firstSeenAt` is the first-ever sighting: a release that ran, was rolled back from and returned keeps its first date, and "since" would claim a continuity the record does not hold; the inspector line (R3b) if it has landed.
 - Tests: `server/test/coord-db.test.ts` (the migration), `update-inventory.test.ts` (the writer), `update-routes.test.ts` (the wire), `pwa/test/release-window.test.ts` or `settings-screen.test.tsx` (the words).
 
 - [ ] **Step 0: Re-ground.** Read the merged `shared/api.ts` around `ReleaseWire` and `UpdatesView`; the highest `MIGRATIONS` index; `db.ts`'s rule 3 and the test that pins it.
-- [ ] **Step 1: Red.** "the migration creates both tables and is idempotent"; "an older build's MIGRATIONS opening the new file reads as-is, migrates nothing, and its update reads and writes work" (rule 3, against this entry); "the sweep upserts first and last seen for a measured managed node only"; "an unmeasured or unreachable node writes nothing"; "firstSeenAt never moves later"; "the 51st tag drops the oldest lastSeenAt"; "the wire's seen is absent from an older fixture and null for a tag never seen"; PWA: each of the four meta-line rows, and "an absent seen adds nothing after Released".
+- [ ] **Step 1: Red.** "the migration creates both tables and is idempotent"; "an older build's MIGRATIONS opening the new file reads as-is, migrates nothing, and its update reads and writes work" (rule 3, against this entry); "the sweep upserts first and last seen for a measured managed node only"; "an unmeasured or unreachable node writes nothing"; "firstSeenAt never moves later"; "the 51st tag drops the oldest lastSeenAt"; "the wire's seen is absent from an older fixture and null for a tag never seen"; PWA: each of the four meta-line rows; "a release that returned after a rollback reads First seen running here, never running since"; and "an absent seen adds nothing after Released".
 - [ ] **Step 2: Green.**
 - [ ] **Step 3: Mutation table, RUN.**
 
@@ -632,8 +731,9 @@ They live in `settingsText.ts` as `STALL_LEVEL_NOTE: Record<StallLevel, string>`
   | the retention cap removed | update-inventory | the 51st-tag case |
   | the route sends `null` when the record is absent | update-routes | "absent from an older fixture" (run with the table dropped) |
   | the PWA reads absent as `null` | release-window | "an absent seen adds nothing after Released" |
+  | the running row worded "Running on fleet since" | release-window | the returned-after-rollback case |
 
-- [ ] **Step 4: Per width × skin × mode** (16 cells). The meta line "Released 2026-10-02 · Ran here 2 Oct to 9 Oct · Ran before the last update" ellipsises on one line at 360, with its full text in `title`; the row's action stays on the facts' line. Instrument's inspector carries the same words (if R3b has landed).
+- [ ] **Step 4: Per width × skin × mode** (32 cells). The meta line "Released 2026-10-02 · Ran here 2 Oct to 9 Oct · Ran before the last update" ellipsises on one line at 360, with its full text in `title`; the row's action stays on the facts' line. Instrument's inspector carries the same words (if R3b has landed).
 - [ ] **Step 5: Verify.**
 
       cd server && ./node_modules/.bin/vitest run test/coord-db.test.ts
@@ -645,15 +745,24 @@ They live in `settingsText.ts` as `STALL_LEVEL_NOTE: Record<StallLevel, string>`
 
 **Deploy note.** Additive and unread by any older peer: a server rolled back past R4 opens the file under rule 3 and never names the tables. The PR body says so, and names `ccrc update`'s snapshot as what carries the rows across a restore.
 
-### Task R5: the compromise disclosure in Security (D-5509; the Accounts spec's §3.11) — GATED: after R2d and the Accounts wave that ships the disclosure
+### Task R5: the compromise disclosure in Security (D-5509; the Accounts spec's §3.11) — GATED: after R2d, AW0 and AW2a
 
-**Routing:** **band 3, two reviewers** (the steps the operator follows after a credential compromise). **Needs:** R2d; the Accounts plan's wave that first ships §3.11's disclosure component for the token, Codex and OpenRouter result frames (AW2a as the Accounts spec stands). **Frozen files touched:** none.
+**Routing:** **band 3, two reviewers** (the steps the operator follows after a credential compromise). **Needs:** R2d; **AW0** (it adds `RosterWire.provider` and `kind`, the Accounts spec's §13.1, coordinated with #397: on `main` today `RosterWire` is `{id, label, hue, homeAble, hidden, pool, resolvedPool?}` and names no provider); **AW2a** (the first wave that ships §3.11's disclosure component, for the token, Codex and OpenRouter result frames, as the Accounts spec stands). Not AW3b: before AW3b no management key can be installed, and the read below then answers no `openrouterManagement`, which shows the step (it fails toward disclosure). **Frozen files touched:** none.
 
-**Files:** create `pwa/src/screens/settings/CompromiseCard.tsx`; modify `SecuritySection.tsx` (the card is last, after Box token), `SettingsDataProvider.tsx` (the roster's providers, from the fleet store's roster, which crosses the wire already; no new request); tests `pwa/test/settings-security.test.tsx`.
+**Files:** create `pwa/src/screens/settings/CompromiseCard.tsx`; modify `SecuritySection.tsx` (the card is last, after Box token), `SettingsDataProvider.tsx` (two inputs, below); tests `pwa/test/settings-security.test.tsx`.
 
-**The shape.** Scope "Your providers", title "If this fleet host is ever compromised", purpose "What to revoke, and where, if this box can no longer be trusted. Do every step from another device." The body is the Accounts component, folded behind a `<details>` by default, naming only the providers present in the roster (no OpenRouter step without an OpenRouter lane). It prints no lane id, label, path, key hint or email, and every link in it is a fixed provider URL in the component's own text, never one built from data. A roster with no credential lane shows no card.
+**The inputs.** (1) The roster's providers, from `RosterWire.provider` in the fleet store's roster (which crosses the wire already, after AW0). (2) The management key's presence, from `GET /api/accounts`' `connect.openrouterManagement.present` (Accounts §8.7, §13.1), which is answered **for the session verdict only**. That is a new read for Settings, stated here: the provider makes it once per mount while `active`, **only while the gate is armed** (the verdict needs it), and never stores more than the boolean. If the Accounts component already receives this read where R5 mounts it, R5 passes that value instead and makes no read; Step 0 says which.
 
-- [ ] **Step 1: Red.** "the card is Security's last"; "a roster with no OpenRouter lane shows no OpenRouter step"; "a roster with no credential lane shows no card"; "no lane id from the fixture roster appears in the card's text"; "every href in the card is one of the component's fixed URLs".
+**Which steps show** (failing toward disclosure; Review focus item 9):
+- step 1 (Anthropic) when the roster holds an Anthropic lane; step 2 (OpenAI) when it holds a Codex lane;
+- **step 3 (OpenRouter) when the roster holds an OpenRouter lane, or `openrouterManagement.present` is true, or that read is unavailable, was not made, or failed.** The management key is installed from the CLI independently of any lane (Accounts §8.7, where Provider keys can read "installed · 0 minted"), and it is the strongest credential the box can hold, so a filter on lanes alone would leave out the step that matters most;
+- **step 4 (rotate the agent token and the gateway keys, then add each lane again) always shows**, because the agent token exists on every box;
+- so **the card always shows**: there is no roster for which it is empty.
+
+**The shape.** Scope "Your providers", title "If this fleet host is ever compromised", purpose "What to revoke, and where, if this box can no longer be trusted. Do every step from another device." The body is the Accounts component, folded behind a `<details>` by default. It prints no lane id, label, path, key hint or email, and every link in it is a fixed provider URL in the component's own text, never one built from data.
+
+- [ ] **Step 0: Re-ground.** Read AW0's `RosterWire` and AW2a's disclosure component as merged: its props, and whether it already takes the management-key presence. Read `GET /api/accounts`' `connect` shape and its verdict rule.
+- [ ] **Step 1: Red.** "the card is Security's last"; "a roster with no OpenRouter lane and no management key shows no OpenRouter step"; **"management key present and no OpenRouter lane → step 3 shows"**; **"management read failed → step 3 shows"**; "the management read is not made while the gate is off, and step 3 then shows"; "step 4 shows for every roster, the empty one included"; "no lane id from the fixture roster appears in the card's text"; "every href in the card is one of the component's fixed URLs"; "the provider keeps only `present` from the read" (no hint, expiry or count in the context).
 - [ ] **Step 2: Green.**
 - [ ] **Step 3: Mutation table, RUN.**
 
@@ -661,26 +770,30 @@ They live in `settingsText.ts` as `STALL_LEVEL_NOTE: Record<StallLevel, string>`
   |---|---|---|
   | the card placed before Box token | settings-security | "the card is Security's last" |
   | every provider's steps shown | settings-security | the no-OpenRouter case |
+  | step 3 gated on the lane only | settings-security | "management key present and no OpenRouter lane → step 3 shows" |
+  | a failed read treated as absent | settings-security | "management read failed → step 3 shows" |
+  | step 4 gated on a credential lane | settings-security | "step 4 shows for every roster" |
   | a step names the lane id | settings-security | the no-lane-id case |
   | an href built from the roster | settings-security | the fixed-URL case |
+  | the provider keeps the whole `openrouterManagement` object | settings-security | "keeps only present" |
 
-- [ ] **Step 4: Per width × skin × mode** (16 cells). Folded, the card is one line under its head; open, its numbered steps wrap at 360. Both skins draw it as a card like the others; it is not a danger surface (nothing on it acts).
+- [ ] **Step 4: Per width × skin × mode** (32 cells). Folded, the card is one line under its head; open, its numbered steps wrap at 360. Both skins draw it as a card like the others; it is not a danger surface (nothing on it acts).
 - [ ] **Step 5: Verify.** `cd pwa && ./node_modules/.bin/vitest run test/settings-security.test.tsx test/contrast.test.ts` then the full pwa suite at `--maxWorkers=2`.
 
-**Review.** Two reviewers; the security reviewer checks each step against the Accounts spec's §3.11 and that the card leaks nothing the roster holds.
+**Review.** Two reviewers; the security reviewer checks each step against the Accounts spec's §3.11 (and this task's widening of its step 3 rule), and that the card leaks nothing the roster or `connect` holds.
 
 ## Acceptance (the matrix, per PR)
 
-Every task's PR body carries this table, each cell ✓ or a note, captured against the fixture home (§Global constraints). The surfaces are the ones the task changed: the Settings page or index, every section page it touched, and its confirm open. Tasks that change the narrow-pane rule add 900 and 1024 columns; R2e adds Dracula and GitHub Light rows.
+Every task's PR body carries this table, each cell ✓ or a note, captured against the fixture home (§Global constraints). The widths and modes are spec §12's, for every PR; a width the task does not change is checked and noted "unchanged", never left blank. The surfaces are the ones the task changed: the Settings page or index, every section page it touched, and, for R1b, R2d and R2s, its confirm open at 390 and at 900 or wider. R2e adds Dracula and GitHub Light rows.
 
-| Skin × mode | 360 | 390 | 1280 | 1920 |
-|---|---|---|---|---|
-| Refined, Phosphor & Ink | | | | |
-| Refined, Phosphor Daylight | | | | |
-| Instrument, Phosphor & Ink | | | | |
-| Instrument, Phosphor Daylight | | | | |
+| Skin × mode | 360 | 390 | 438 | 900 | 1024 | 1280 | 1440 | 1920 |
+|---|---|---|---|---|---|---|---|---|
+| Refined, Phosphor & Ink | | | | | | | | |
+| Refined, Phosphor Daylight | | | | | | | | |
+| Instrument, Phosphor & Ink | | | | | | | | |
+| Instrument, Phosphor Daylight | | | | | | | | |
 
-Each cell checks: no horizontal scroll; the gutter from `--gutter`; the column at or under 760 (Refined) or 960 (Instrument) once R2b has landed; release rows wrapping rather than overflowing; the last row clearing Instrument's tab bar on a phone; the identity core present; every amber or red state carrying a word and a glyph; reduced motion honoured. The PR also records each touched section's height at 390, before and after.
+Each cell checks: no horizontal scroll; the gutter from `--gutter`; the column at or under 760 (Refined) or 960 (Instrument) once R2b1 has landed; release rows wrapping rather than overflowing; the last row clearing Instrument's tab bar on a phone; the identity core present; every amber or red state carrying a word and a glyph; reduced motion honoured. The PR also records each touched section's height at 390, before and after.
 
 ## Deviations found
 
@@ -688,15 +801,18 @@ Each cell checks: no horizontal scroll; the gutter from `--gutter`; the column a
 
 D-5503 to D-5510 were given to the Settings redesign. The spec's §14 states D-5503 to D-5508 as a table; their ledger entries are here, once. D-5509 is this plan's. The spec and later plans cite them and never redefine them.
 
-- **D-5503** — `settings-five-sections` (Tasks R1c, R1d, R2b, R2e): Settings holds five sections by the kind of thing they hold, in this order: Updates (whole fleet), Appearance (this device), Notifications (this browser, and the whole fleet's release announcements), Automation (whole fleet: stall watch, the temp root collector, the cleanup pause) and Security (this box, you, this browser). Each section has a one-line purpose and a measured index status that is never optimistic; each card names its scope (Refined: the eyebrow; Instrument: a right-aligned mono tag); every setting and action carries a plain-language "what it does" and "when you would change it", taken from the measured effect and its code (spec §3, §5).
-  - **As planned:** three of the spec's draft stall-level notes read differently from `STALL_LEVEL_TEXT`'s sentences and are replaced by Task R1c's table; the notes live in the PWA's `STALL_LEVEL_NOTE`, a total record, and the sentences stay defined once in `shared/api.ts`.
-- **D-5504** — `settings-one-section-per-route` (Tasks R2b, R2c, R3a, R3b): each section is its own route, `/settings/<id>`, at every width and in both skins. Refined shows a sections list on a phone and in a pane under 760 px, and a sticky vertical nav beside a 760 column on a wider pane, the choice made by the pane's width, not the viewport's; Instrument is master-detail, with the index in the list column through the shared list-column seam and the inspector holding a release's notes, a node's lines or the box token's detail. A catch-all route, `settings-section`, keeps an unknown id inside the route table, rendering a not-found line instead of the fallback. `SettingsDataProvider` makes the Settings reads once, mounted unconditionally above the frame with an `active` prop, so the shell is never remounted. The release push opens `/settings/updates`; Updates' own "See what's new" opens #645's `WhatsNewSheet`, and the update banner's door stays #645's (spec §4).
+- **D-5503** — `settings-five-sections` (Tasks R1c, R1d, R2b1, R2b2, R2e): Settings holds five sections by the kind of thing they hold, in this order: Updates (whole fleet), Appearance (this device), Notifications (this browser, and the whole fleet's release announcements), Automation (whole fleet: stall watch, the temp root collector, the cleanup pause) and Security (this box, you, this browser). Each section has a one-line purpose and a measured index status that is never optimistic; each card names its scope (Refined: the eyebrow; Instrument: a right-aligned mono tag); every setting and action carries a plain-language "what it does" and "when you would change it", taken from the measured effect and its code (spec §3, §5).
+  - **As planned:** all six of the spec's draft stall-level notes are replaced by Task R1c's table, three of them because they stated a different fact from `STALL_LEVEL_TEXT`'s sentences; the notes live in the PWA's `STALL_LEVEL_NOTE`, a total record, and the sentences stay defined once in `shared/api.ts`.
+- **D-5504** — `settings-one-section-per-route` (Tasks R2b1, R2c, R3a, R3b): each section is its own route, `/settings/<id>`, at every width and in both skins. Refined shows a sections list on a phone and in a pane under 760 px, and a sticky vertical nav beside a 760 column on a wider pane, the choice made by the pane's width, not the viewport's; Instrument is master-detail, with the index in the list column through the shared list-column seam and the inspector holding a release's notes, a node's lines or the box token's detail. A catch-all route, `settings-section`, keeps an unknown id inside the route table, rendering a not-found line instead of the fallback. `SettingsDataProvider` makes the Settings reads once, mounted unconditionally above the frame with an `active` prop, so the shell is never remounted. The release push opens `/settings/updates`; Updates' own "See what's new" opens `WhatsNewSheet` (D-5549), and the update banner's door stays D-5549's (spec §4).
 - **D-5505** — `release-window-of-three` (Task R1a): the release list shows at most three rows in any group, in every fleet state: Measured (at most three Newer on the fleet's channel with a count line linking the whole range in `WhatsNewSheet`; the running release, or one "Update all to v*X*" line on a mixed fleet with no rows between its versions; at most three Roll back to on the fleet's channel, Stable releases only for a Stable fleet plus the fleet's shared previous version, withdrawn releases counted inside the three and marked; a closing line naming the count and the CLI command), Unmeasured and Unmanaged (the newest three and a count, no Roll back). Blocked rows keep their place. Each row's summary comes from `parseReleaseNotes()`, its notes through `ReleaseNotes` behind "Notes", the waiting release's open (spec §7).
   - **As planned:** the withdrawn note's second clause follows `cmd_rollback`'s measured order at `f609f68c`: a complete kept version is rolled back to with no release-host question (D-3442), and any other tag refuses on a missing `SHA256SUMS`.
 - **D-5506** — `release-ran-here` (Task R4): a coord record, `release_seen`, of when each release was first and last seen running on a live managed node, written only by the 60 s inventory sweep and capped at 50 tags, with `release_seen_since`; `ReleaseWire.seen?` (absent from an older server, `null` for never seen) and `UpdatesView.seenSince?`, additive. The words say "ran here", never "installed at" (spec §8).
 - **D-5507** — `settings-danger-confirmed` (Tasks R1b, R1c, R1d): Roll back (release and node), Ack (the node row and the home screen's halt banner, through one `AckConfirm` beside `canAck` and `sendAck`) and Revoke are `danger-ghost` controls that open a confirm naming what will change and what will not be undone, with Cancel focused (`QuickConfirm`'s opt-in `defaultFocus`); within a row the danger action comes after the safe one. Rotate now and Pause all cleanup stay one tap. Every server action answers in a line under the control that asked, and a toast only when that control is gone (spec §6.3, §6.4).
-- **D-5508** — `security-in-settings` (Tasks R2b, R2d, R2s): sign-in, passkeys and sign-out move from Accounts into Settings › Security, split into two prop-fed cards (`YourSignInCard`, `ThisSessionCard`) beside the sign-in gate and the box token, four cards in all; Revoke becomes `danger-ghost`; Accounts holds only lanes. Once the Accounts plan's step-up (D-5512) exists, `DELETE /api/auth/passkey/:id` and `POST /api/auth/passkey/register/start` require a step-up from the last 5 minutes while the gate is armed, with the passphrase step-up as the fallback. The one definition of the sign-in move; the Accounts plan's D-5522 cites it (spec §5.5, §11.1; C4).
-- **D-5509** — `security-compromise-disclosure` (Task R5): Settings › Security ends with a fifth card, "If this fleet host is ever compromised", which mounts the Accounts plan's all-provider disclosure (Accounts spec §3.11), folded, naming only the providers in the roster and printing nothing the roster holds. It sits after Box token, so the slot the spec reserves before Box token for "Recent account changes" is unchanged (C6). The Settings spec's §3.3 counts four Security cards; this plan adds the fifth because the Accounts spec's rev 3 placed the disclosure here after the Settings spec's rev 3 was written.
+  - **As planned (rev 1):** spec §6.1 adds a `.btn-danger-ghost.settings-move` sizing rule beside the ghost one. On `main` the ghost rule is gone (`settings-screen.test.tsx` pins its absence) and `ui-package-boundary.test.ts` classes that selector as a reach-in, so both tones size through `Button`'s `size="fit"` and no `fleet.css` rule is added. `AckConfirm`'s copy comes from `ackBranch`, and `canAck` is `ackBranch(...) !== null`; whenever the node holds a refusal the confirm says Ack forgets it, whatever the branch.
+- **D-5508** — `security-in-settings` (Tasks R2b2, R2d, R2s): sign-in, passkeys and sign-out move from Accounts into Settings › Security, split into two prop-fed cards (`YourSignInCard`, `ThisSessionCard`) beside the sign-in gate and the box token, four cards in all; Revoke becomes `danger-ghost`; Accounts holds only lanes. Once the Accounts plan's step-up (D-5512) exists, `DELETE /api/auth/passkey/:id` and `POST /api/auth/passkey/register/start` require a step-up from the last 5 minutes while the gate is armed, with the passphrase step-up as the fallback. The one definition of the sign-in move; the Accounts plan's D-5522 cites it (spec §5.5, §11.1; C4).
+  - **As planned (rev 1):** the cards make no read of their own; the provider reads passkeys only while armed (today's `AuthSection` reads them unconditionally) and re-reads status then passkeys through `refreshAuth()` after every Add and Revoke, with `authPostureChanged()` still announced by the writer. Guarding `register/start` alone does not guard the ceremony, because the register `ChallengeStore` is global: the challenge is bound to the requesting session's `idHash`, and `register/finish` refuses another session's challenge and re-checks the 5-minute window. Settings does not read `stepUpFreshUntil` (it is only on `GET /api/accounts`), so the refusal is the expected path: the sheet then shows "Confirm it's you", and once it succeeds the act waits for a separate tap, never an automatic retry (Accounts §3.2). This replaces rev 0's conditional `settings-step-up-on-refusal` slug, which took no number.
+- **D-5509** — `security-compromise-disclosure` (Task R5): Settings › Security ends with a fifth card, "If this fleet host is ever compromised", which mounts the Accounts plan's all-provider disclosure (Accounts spec §3.11), folded, naming the providers the box may hold credentials for and printing nothing the roster holds. It sits after Box token, so the slot the spec reserves before Box token for "Recent account changes" is unchanged (C6). The Settings spec's §3.3 counts four Security cards; this plan adds the fifth because the Accounts spec's rev 3 placed the disclosure here after the Settings spec's rev 3 was written.
+  - **As planned (rev 1):** the Accounts spec's §3.11 hides step 3 for a fleet with no OpenRouter lane. Settings widens that rule, failing toward disclosure: step 3 shows whenever an OpenRouter lane exists or the management key may be present (`connect.openrouterManagement.present`, or that read unavailable or failed), because the management key is installed from the CLI without any lane (Accounts §8.7) and is the strongest credential the box can hold; step 4 and the card always show. The coordinator carries the same widening to the Accounts plan, so its result-frame disclosures agree.
 
 ### Spare
 
@@ -704,4 +820,21 @@ D-5510
 
 ## Review log
 
-**Rev 0 (2026-10-18).** Written against `origin/main` `f609f68c` with #645 at `174ca79c`. Not yet reviewed.
+**Rev 0 (2026-10-18).** Written against `origin/main` `f609f68c` with #645 at `174ca79c`. Reviewed in rev 1, below.
+
+**Rev 1 (2026-10-18), after an adversarial review** against `origin/main` `c1453e42`, the open PRs' file lists, and the code (`updates.tsx`, `updateAck.ts`, `AuthSection.tsx`, `server.ts`'s passkey routes, `fleet.css`, `settings-screen.test.tsx` ≈:1517–1521, `ui-package-boundary.test.ts` ≈:274, `icon.test.tsx`, `make-icons.mjs`, `cmd_rollback`, `STALL_LEVEL_TEXT`, `RosterWire`, and the Accounts spec's §3.2, §3.10, §3.11 and §8.7). The verdict was "needs revision"; every finding above low severity and the cheap low ones are applied:
+
+| # | Severity | Finding | What changed |
+|---|---|---|---|
+| 1 | high | R1b added a `.btn-danger-ghost.settings-move` rule beside a ghost rule `main` had deleted on purpose; its test could not be written, and the selector is a reach-in to `ui-package-boundary.test.ts`. | R1b edits no CSS: `MoveButton` passes `size="fit"` for both tones; the test reads `buttonVariants({size:'fit'})`'s classes and keeps the ≈:1521 pin; the mutant drops `size` on the danger tone. The departure from spec §6.1 is an "As planned" note under D-5507. `fleet.css` and its gate leave R1b. |
+| 2 | high | The gates and frozen-file table were stale: #645 and #597 had merged; #650 (F14b) and #647 hold `fleet.css`; #652 holds `tap-targets.test.tsx` and `shared/api.ts`. R1a and R1c edit the rules #650 rewrites without naming the file or the gate. | §Gates and §In flight re-measured at `c1453e42`; #645 and #597 marked merged and cited by D-5548 and D-5549; #650, #647 and #652 added. R1a and R1c list `fleet.css` and gate on #650 and #647; R1a names the existing classes that carry each word's ink, and R1c defers the when-lines' tertiary step to R2b2, so no colour-bearing rule lands before #627. R2b1 and R4 gate on #652. |
+| 3 | high | R2d's "read once per mount" lost today's re-read after Add and Revoke and the `authPostureChanged()` call, and claimed the passkey read was armed-only "as today" when `AuthSection` reads it unconditionally. | The provider exposes `refreshAuth()`; the cards call it after a successful Add or Revoke and keep announcing `authPostureChanged()`; "no request of their own" is scoped to reads; the "as today" claim is corrected. Red cases and mutants added for the re-read, the announcement and sign-out through `raiseAuthLost`. |
+| 4 | high | The width matrix was narrower than spec §12. | Every PR checks 360, 390, 438, 900, 1024, 1280, 1440 and 1920 × both skins × both modes (32 cells), with Dracula and GitHub Light for R2e; R1b, R2d and R2s capture their confirm open at 390 and at 900 or wider. Every Step 4 and §Acceptance follow. |
+| 5 | medium | R2s claimed guarding `register/start` guards the ceremony, but the register `ChallengeStore` is global and its challenge outlives the window; its fallback auto-retried, against Accounts §3.2. | The register challenge is bound to the requesting session's `idHash`; `register/finish` refuses another session's challenge and re-checks the window; red cases for both. The PWA flow is chosen now: a refusal shows "Confirm it's you", and the act waits for a separate tap ("no act is re-sent without a new tap"), which also keeps iOS Safari's user activation for `credentials.create`. The conditional spare-number slug is gone. |
+| 6 | medium | R5 could leave out the management-key step, hid the rebuild step for some rosters, and rested on `RosterWire.provider`, which does not exist yet, and on a "no new request" claim that was false. | Step 3 shows for an OpenRouter lane or a management key that may be present (present, unavailable or failed); step 4 and the card always show. R5 gates on AW0 and AW2a and states the `GET /api/accounts` read (armed, session verdict, `present` only). "As planned" note under D-5509; the coordinator carries the widening to the Accounts plan. |
+| 7 | medium | `AckConfirm`'s copy came "from the `canAck` branch", which returns a boolean; and a request-only node's copy hid that Ack forgets every refusal. | `ackBranch` exported beside `canAck`, which becomes `ackBranch(...) !== null`; the refusal line shows whenever the node holds a refusal; a new `update-ack.test.ts`; red cases and a mutant. |
+| 8 | medium | R2b was far larger than one reviewable PR. | Split into R2b0 (F11's slots, conditional), R2b1 (provider, routes, frame, index, status, today's bodies moved unchanged, `RELEASE_PUSH_URL`) and R2b2 (the cards' order, Cleanup pause, the gate card and banner, purposes and scope words, the census row), each with its own mutation table. |
+| 9 | medium | R2a's "regeneration check" mutant pointed at a check that does not exist and could not without a new dependency. | Replaced with a mutant the TAGS/ATTRS walk catches; the PR records the `--from` run. |
+| 10 | low | R1a's tests missed spec cases (the pending tag first, a withdrawn running release, every earlier release withdrawn, a Stable fleet with only Dev earlier releases, "Refused by n of m"), and the one-halt-line merge had no task. | Added to R1a's red list and mutation table; R1a owns the halt-line merge. |
+| 11 | low | R1d's 3-day mutant named no mechanism; the seven-day census was not run. | `vi.mock` of `shared/box-token` with a 3-day value; Step 5 runs `token-shared.test.ts` and `single-definition.test.ts`. |
+| 12 | low | Smaller gaps: no push-state source for the Notifications status; R1c's 320 px cap and amber lines named no CSS; R1c said "three" drafts and replaced six; spec §14 still called D-5509 unused; "Running on fleet since" misreads a first-ever sighting. | The push state comes from `lib/push.ts`'s `pushSupported()` and `pushEnabled()` plus `Notification.permission` (R2b1); the cap is an inline style with no colour and the lines use named existing classes; the wording says all six are replaced; R0 amends spec §14; R4 says "First seen running here". |
