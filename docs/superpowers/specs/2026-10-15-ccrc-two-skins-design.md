@@ -168,7 +168,7 @@ The element half needs the shells to scan. Written before they exist, it would b
 
 **Specificity.** `:root[data-skin='instrument']` is (0,2,0). It outranks every `[data-theme='…']` block (0,1,0) wherever it appears in the cascade, so the order of `tokens.css` and `skins.css` cannot decide a tie. That is how B's `--elev-card: none` wins in every palette, even though palette blocks declare `--elev-card` themselves.
 
-**Load order.** `theme.css` imports `tokens.css`, then `skins.css`, then (D-5095) `fonts.css`, all before any rule, as its header requires.
+**Load order.** `theme.css` imports `tokens.css`, then `skins.css`, both before any rule, as its header requires. The Geist pair's two `@font-face` rules (D-5095) sit at the top of `tokens.css`, not in a sheet of their own (D-5450).
 
 ### 4.2 What a skin may override (`SKIN_TOKENS`)
 
