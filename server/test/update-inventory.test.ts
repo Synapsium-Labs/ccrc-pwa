@@ -16,7 +16,7 @@ import { Bus } from '../src/bus.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore, type NodeMeasurement, type NodeReport, type NodeRow } from '../src/coord/store.js';
 import type { FleetState } from '../src/fleetstate.js';
-import { localIO, type FleetIO, type MeasuredRead } from '../src/io.js';
+import { localIO, type FleetIO, type MeasuredPathKind, type MeasuredRead, type MeasuredStat } from '../src/io.js';
 import type { ConnectedFleet } from '../src/remote/client.js';
 import type { Deps } from '../src/server.js';
 import {
@@ -412,13 +412,28 @@ describe('the floor/previous carry-forward (fix round 1, D-3213, corrected by th
   it('the shared per-node deadline expiring reads the floor as unmeasured too (m-3), never absent', async () => {
     const b = box('ccrc-inv-floor-deadline-');
     plant(b.ccrcDir, FULL);
-    // Only the floor's own read hangs; every other file resolves normally,
-    // so this isolates the DEADLINE path (readNodeFile's own `deadline?.expired()`
-    // check, not an EACCES/chmod-based unreadable) from every other file.
+    // Only the floor's own read hangs, so this isolates the DEADLINE path (readNodeFile's own `deadline?.expired()`
+    // check, not an EACCES/chmod-based unreadable) from every other file. Every OTHER file answers from memory
+    // (centralised-update wave 19, B5): each of its lstat/stat/read promises settles in the microtask queue, which
+    // drains before any timer callback runs, so the 50 ms deadline cannot expire them first however loaded the box
+    // is. Over real fs they raced the one shared deadline, and under load node-id lost: the row was then keyed by
+    // label, and `node(U1)` answered null.
+    const planted = new Map<string, string>((Object.keys(FULL) as Measured[])
+      .map((k) => [NODE_FILES[k], readFileSync(path.join(b.ccrcDir, NODE_FILES[k]), 'utf8')]));
+    const bodyOf = (p: string): string | undefined => planted.get(path.basename(p));
     const hungFloor: FleetIO = {
       ...localIO,
-      readFileMeasured: async (p: string, t?: number, s?: AbortSignal): Promise<MeasuredRead> =>
-        (p.endsWith(`${path.sep}floor`) ? new Promise<MeasuredRead>(() => {}) : localIO.readFileMeasured(p, t, s)),
+      lstatMeasured: async (p: string): Promise<MeasuredPathKind> =>
+        (bodyOf(p) === undefined ? { ok: false, reason: 'absent' } : { ok: true, kind: 'regular' }),
+      statMeasured: async (p: string): Promise<MeasuredStat> => {
+        const body = bodyOf(p);
+        return body === undefined ? { ok: false, reason: 'absent' } : { ok: true, mtimeMs: 0, size: Buffer.byteLength(body, 'utf8') };
+      },
+      readFileMeasured: async (p: string): Promise<MeasuredRead> => {
+        if (path.basename(p) === NODE_FILES.floor) return new Promise<MeasuredRead>(() => {});
+        const body = bodyOf(p);
+        return body === undefined ? { ok: false, reason: 'absent' } : { ok: true, content: body };
+      },
     };
     const deps: InventoryDeps = { store: b.store, localIo: hungFloor, ccrcDir: b.ccrcDir, role: 'both', fleet: null, budgetMs: 50 };
     await sweepInventory(deps, NOW);

@@ -422,7 +422,11 @@ describe('selection is polarity, status is hue', () => {
                         // Child-reclamation wave 5's label: its own
                         // `color: var(--ink-tertiary)` strands on the slab exactly
                         // like `.sess-substrate`'s would without its entry here.
-                        '.sess-child']) {
+                        '.sess-child',
+                        // D-5301's coordinator badge: `.sess-repo`'s own
+                        // `--ink-tertiary`, on the label's line, strands the
+                        // same way without its entry here.
+                        '.sess-role']) {
       expect(group).toContain(`.sess-line--active ${cell}`);
     }
   });
@@ -1434,5 +1438,21 @@ describe('the fleet head holds one row, and the class chooser is not on it', () 
       }
     }
     expect(offenders).toEqual([]);
+  });
+});
+
+describe('the Accounts screen keeps its voices (the audit\'s quick wins)', () => {
+  it("the Accounts screen's prose is sans and its readouts stay mono", () => {
+    // The rule of voice: a sentence a person reads is set in the UI face, a
+    // value the machine reports is set in mono. "Next workspace lands on … —
+    // least-loaded" and "disabled on the fleet host" are sentences;
+    // "last reported 5m ago" is a readout beside a gauge.
+    for (const sel of ['.accounts-projection', '.accounts-disabled-note']) {
+      expect(declaredValues(css, sel, 'font-family'), `${sel} is prose`).toEqual(['var(--family-ui)']);
+      // A `font` shorthand would restate the family and pass a longhand read.
+      expect(declaredValues(css, sel, 'font'), `${sel} restates its family in a shorthand`).toEqual([]);
+    }
+    expect(declaredValues(css, '.accounts-fresh', 'font-family'), 'the freshness readout is mono')
+      .toEqual(['var(--family-mono)']);
   });
 });

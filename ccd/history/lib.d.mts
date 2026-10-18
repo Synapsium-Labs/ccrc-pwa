@@ -859,3 +859,65 @@ export const COUNTER_STANDING: Readonly<Record<string, 'item' | 'pass'>>;
 export function decideCounterResets(counters: Readonly<Record<string, number>>, standing: Readonly<Record<string, number | null>>):
   Array<{ name: string; n: number }>;
 export function decideIntegrity(rows: readonly string[]): { verdict: 'ok' | 'index' | 'store'; rows: string[] };
+
+// --- W1-B3 Task 1: the card line's vocabulary, paths and line (spec §8.6, §5.1, §5.2, §9.4)
+export const CARD_DIR: 'card';
+export const SCOPE_DIR: 'scope';
+export const CARD_LINE_MAX: 512;
+export const CARD_DESCRIBE_CMD: '~/.local/bin/ccrc history describe';
+export const CARD_LINE_PATTERN: string;
+export const CARD_LINE_RE: RegExp;
+export const PURGED_FILES_GRACE_MS: number;
+export function cardDirOf(home: string, id: string): string;
+export function cardFileOf(home: string, id: string, uuid: string): string;
+export function scopeMarkerOf(home: string, id: string): string;
+export function cardLine(i: { leaf: string; parent?: string | null }): string;
+
+// --- W1-B3 Task 2: the card prediction and the card file decision (spec §8.6, §6.1, §6.3)
+export interface CardBoundary { readonly uuid: string; readonly headUuid: string | null }
+export interface CardSlot { readonly nodeId: string | null; readonly parented: boolean }
+export interface CardPredictionInputs {
+  ccrcId: string | null; ccUuid: string; firstRowUuid: string | null; lastBoundary: CardBoundary | null;
+  plainBoundOther: boolean; slots: readonly CardSlot[]; newestCondensed: string | null; familyIds: readonly string[];
+}
+export type CardPrediction =
+  | { act: 'write'; line: string; leafId: string; parentId: string | null; parentKind: 'predicted' | 'newest-condensed' | null }
+  | { act: 'skip'; reason: 'fork-qualified'; plainLeafId: string }
+  | { act: 'skip'; reason: 'no-epoch' | 'no-rows' };
+export function predictedSpanStart(i: { firstRowUuid: string | null; lastBoundary: CardBoundary | null }): string | null;
+export function planCardPrediction(i: CardPredictionInputs): CardPrediction;
+export function decideCardFile(i: { current: Presence<string>; prediction: CardPrediction; atEof: boolean }):
+  { act: 'keep' | 'write' | 'delete' | 'none'; consumed: boolean };
+export function decideCardGenFile(i: {
+  current: Presence<string>; generation: string; card: 'keep' | 'write' | 'delete' | 'none'; mayWrite: boolean;
+}): 'keep' | 'write' | 'delete' | 'none';
+export function cardGenFileOf(home: string, id: string, uuid: string): string;
+
+
+// --- W1-B3 Task 3: card delivery, window and purge decisions (spec §8.6 RV17, §9.4, §10.7 W1-e)
+export const CARD_MEASURE_ROWS: 40;
+export const CARD_MEASURE_MAX_WAIT_MS: number;
+export const CARD_ATTACHMENT_MAX_BYTES: number;
+export function cardIdsIn(attachment: unknown): string[];
+export function cardWindowComplete(i: { live: boolean; rowsSeen: number; nextBoundary: boolean; eofAfter: boolean; waitedMs: number }): boolean;
+export function decideCardDelivery(i: { ids: readonly string[]; leafId: string; windowComplete: boolean }): 'served' | 'mismatch' | 'none' | 'wait';
+export function decidePurgedEntry(i: { reg: 'present' | 'absent' | 'unmeasured'; newestMtimeMs: number | null; nowMs: number }): 'keep' | 'remove';
+// rulings RC3 (the consumption's scope) and RC2 (the withdrawal)
+export const SCOPE_MARKER_MAX_AGE_MS: number;
+export type CardConsumedScope = 'main' | 'other' | 'unknown';
+export const CARD_CONSUMED_SCOPES: readonly CardConsumedScope[];
+export type CardWithdrawReason =
+  | 'at-cap' | 'low-disk' | 'floor-stop' | 'roster-unreadable' | 'budget' | 'recovering' | 'migrating' | 'held'
+  | 'unreachable' | 'refused' | 'unbound' | 'copy-skipped';
+export const CARD_WITHDRAW_REASONS: readonly CardWithdrawReason[];
+export interface CardBoundaryAt { readonly uuid: string; readonly headUuid: string | null; readonly tsMs: number | null }
+export type CardPassFacts =
+  | { arm: 'hold'; word: string }
+  | { arm: 'migrate' | 'recover'; word?: string | null }
+  | { arm: 'run'; pause: 'at-cap' | 'low-disk' | null; floorStop: boolean; ingested: boolean; budgetLeft: boolean }
+  | { arm: 'copy'; uuid: string; skipped: readonly string[] };
+export function consumedBoundaryTs(i: {
+  current: Presence<string>; ccrcId: string | null; ccUuid: string; firstRowUuid: string | null; boundaries: readonly CardBoundaryAt[];
+}): number | null;
+export function decideConsumedScope(i: { marker: Presence<string>; uuid: string; boundaryTsMs: number | null }): CardConsumedScope;
+export function decideCardWithdraw(p: CardPassFacts): { act: 'withdraw'; reason: CardWithdrawReason } | { act: 'keep' };

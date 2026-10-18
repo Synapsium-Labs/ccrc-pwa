@@ -150,6 +150,30 @@ describe('Stop — two sentences, because 409 is not a failure', () => {
     expect(said.closest('[role="status"]'), 'an idle pane is a status, not an alert').not.toBeNull();
   });
 
+  // D-5236: an idle main loop over background work is refused with zero keys,
+  // and the toast says why — Escape there would stop none of it.
+  it('a 409 background-only names the count and kinds still running, quietly', async () => {
+    vi.spyOn(apiModule.api, 'interrupt').mockRejectedValue(
+      new ApiError(409, { ok: false, error: 'background-only', count: 2, kinds: ['workflow'] }));
+    renderScreen();
+    act(() => { stores.store.setState({ status: 'busy' }); });
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop' }));
+    const said = await screen.findByText(
+      'The main turn has finished; 2 background tasks (workflow) are still running. Escape would not stop them.');
+    expect(said.closest('[role="status"]')).not.toBeNull();
+  });
+
+  it('a 409 background-only with no count says a background shell or monitor runs', async () => {
+    vi.spyOn(apiModule.api, 'interrupt').mockRejectedValue(
+      new ApiError(409, { ok: false, error: 'background-only', count: null, kinds: [] }));
+    renderScreen();
+    act(() => { stores.store.setState({ status: 'busy' }); });
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop' }));
+    const said = await screen.findByText(
+      'The main turn has finished; a background shell or monitor is still running. Escape would not stop it.');
+    expect(said.closest('[role="status"]')).not.toBeNull();
+  });
+
   it('anything else IS a failure, and names what ccd said', async () => {
     vi.spyOn(apiModule.api, 'interrupt')
       .mockRejectedValue(new Error('tmux: no server running'));

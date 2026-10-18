@@ -1,4 +1,4 @@
-import type { TailData, TailReset } from '../../../shared/agent-protocol.js';
+import { isReadFromRange, type TailData, type TailReset } from '../../../shared/agent-protocol.js';
 import type { FleetIO, ReadFailure } from '../io.js';
 import type { FleetClient } from './client.js';
 
@@ -30,6 +30,17 @@ import type { FleetClient } from './client.js';
 
 function isTailReset(msg: TailData | TailReset): msg is TailReset {
   return (msg as TailReset).reset === true;
+}
+
+/** The bytes of CANONICAL base64, or null. Node's decoder accepts far more than
+ *  the canonical form — the URL-safe letters, missing padding, interior
+ *  whitespace, junk it skips, a second spelling of the same bytes — so "it
+ *  decoded" proves nothing; the test is that encoding the decode gives the input
+ *  back, character for character. A plain `Uint8Array` (a copy), never a
+ *  pooled `Buffer` view. */
+function decodeCanonicalBase64(text: string): Uint8Array | null {
+  const bytes = Buffer.from(text, 'base64');
+  return bytes.toString('base64') === text ? new Uint8Array(bytes) : null;
 }
 
 export function createIo(client: FleetClient): FleetIO {
@@ -82,6 +93,39 @@ export function createIo(client: FleetClient): FleetIO {
       return r.ok ? { data: r.data, size: r.size } : null;
     },
 
+    /** The `readFrom` op's BYTE reader — the sibling of `readFileFromMeasured`
+     *  above, and the only one that wants bytes. It asks with `maxBytes` and
+     *  trusts `dataB64` ALONE: an agent that predates the field ignores
+     *  `maxBytes` and answers decoded `data`, and text is not bytes — a split
+     *  multibyte character has already been replaced by U+FFFD in it — so that
+     *  answer is `unreadable`, never re-encoded. `dataB64` must be canonical
+     *  base64, `size` a non-negative safe integer, and the decoded length
+     *  EXACTLY `min(maxBytes, size - offset)`; a size below `offset` makes that
+     *  negative and fails the same test, which is how a regression reads. Every
+     *  other shape, and every refusal, timeout or disconnect, is `unreadable`;
+     *  `absent` is the agent's own `data: null, absent: true` and nothing else. */
+    async readFileFromBytesMeasured(path, offset, maxBytes, timeoutMs, signal) {
+      if (!isReadFromRange(offset, maxBytes)) return { ok: false, reason: 'unreadable' };
+      try {
+        const res = await client.request({ t: 'req', op: 'readFrom', path, offset, maxBytes }, timeoutMs, signal);
+        const r = res as { data?: unknown; dataB64?: unknown; size?: unknown; absent?: unknown } | null;
+        if (r === null || typeof r !== 'object') return { ok: false, reason: 'unreadable' };
+        if (typeof r.dataB64 === 'string') {
+          const bytes = decodeCanonicalBase64(r.dataB64);
+          const size = r.size;
+          if (bytes === null || typeof size !== 'number' || !Number.isSafeInteger(size) || size < 0) {
+            return { ok: false, reason: 'unreadable' };
+          }
+          if (bytes.length !== Math.min(maxBytes, size - offset)) return { ok: false, reason: 'unreadable' };
+          return { ok: true, bytes, size };
+        }
+        if (r.data === null && r.absent === true) return { ok: false, reason: 'absent' };
+        return { ok: false, reason: 'unreadable' };
+      } catch {
+        return { ok: false, reason: 'unreadable' };
+      }
+    },
+
     async readFileB64Measured(path) {
       try {
         const res = await client.request({ t: 'req', op: 'readB64', path });
@@ -101,14 +145,33 @@ export function createIo(client: FleetClient): FleetIO {
       return r.ok ? r.dataB64 : null;
     },
 
-    async readdir(path, timeoutMs, signal) {
+    /** The `readdir` op's measured reader: it reads the wire's `absent` off a
+     *  directory listing, where `names: null` WITH `absent: true` is a proven
+     *  ENOENT. A bare `names: null` is what an older agent sends for every
+     *  failure, so it is `unreadable`, never `absent`. A listing — an empty one
+     *  included — is a positive answer and wins over a contradictory marker; a
+     *  `names` holding anything but strings is malformed, not a listing. */
+    async readdirMeasured(path, timeoutMs, signal) {
       try {
         const res = await client.request({ t: 'req', op: 'readdir', path }, timeoutMs, signal);
-        const names = (res as { names?: unknown }).names;
-        return Array.isArray(names) ? (names as string[]) : null;
+        const r = res as { names?: unknown; absent?: unknown } | null;
+        if (r !== null && typeof r === 'object') {
+          if (Array.isArray(r.names)) {
+            return r.names.every((n) => typeof n === 'string')
+              ? { ok: true, entries: r.names as string[] }
+              : { ok: false, reason: 'unreadable' };
+          }
+          if (r.names === null && r.absent === true) return { ok: false, reason: 'absent' };
+        }
+        return { ok: false, reason: 'unreadable' };
       } catch {
-        return null;
+        return { ok: false, reason: 'unreadable' };
       }
+    },
+
+    async readdir(path, timeoutMs, signal) {
+      const r = await this.readdirMeasured(path, timeoutMs, signal);
+      return r.ok ? [...r.entries] : null;
     },
 
     async statMeasured(path) {

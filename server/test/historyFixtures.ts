@@ -370,3 +370,14 @@ export function compactionSequence(o: CompactionSequenceOpts): CompactionSequenc
   }
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// W1-B3 Task 6: the attachment Claude Code records after a compaction for the context the SessionStart(compact) hook
+// printed (spec 2026-10-05 §8.6 RV17: "a SessionStart hook_additional_context attachment", found within 40 rows of the
+// boundary). Its `type` and its string-array `content` are what the measure reads. Plan-chosen: the `hookName` value;
+// nothing reads it, and the measure ignores every key but `type` and the strings.
+// ---------------------------------------------------------------------------
+export const sessionStartAttachment = (o: RowBase & { text: string }): Row => attachmentRow({
+  uuid: o.uuid, ts: o.ts, parentUuid: o.parentUuid ?? null, ...(o.sessionId === undefined ? {} : { sessionId: o.sessionId }),
+  attachment: { type: 'hook_additional_context', content: [o.text], hookName: 'SessionStart:compact' },
+});

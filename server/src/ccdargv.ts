@@ -314,6 +314,13 @@ export const CCD_ARGV = {
    *  plain sessions never had. ccd re-proves every gate on the box (not a
    *  workspace, not held, not alive); this argv carries nothing but the id. */
   forget:    (id: string) => argv(['forget', id]),
+  /** Put a long-idle session to sleep (`hibernate-long-idle-sessions` (D-5242)): ccd re-measures box-local idle at the
+   *  act (the live word, the pane, a draft, the turn marker's `bg` and `crons`, a hold, an opt-out, a fresh swap and an
+   *  attached terminal) and refuses `session-busy: <reason>` at exit 3 otherwise, touching nothing. ONE positional, the
+   *  id, then the dec — stripped by ccd before its arity rule, as `ws-archive`'s are (`ccdargv-dec-parity.test.ts`;
+   *  `hibernate-verb-dec-and-idempotence` (D-5424)).
+   *  Sent only behind `verbSupported` (the box's `ccd caps` lists `hibernate`); `ensure` wakes it. */
+  hibernate: (id: string, dec: ActorFlags | null) => argv(['hibernate', id, ...decFlags(dec)]),
   swap:      (id: string, w: string) => argv(['swap', id, w]),
   /** THE DELIBERATE CROSSING (account pools, spec §5.7). A SEPARATE ENTRY, not
    *  a parameter of `swap` above — `start`/`enable`'s rule, for its reason: a
@@ -330,11 +337,29 @@ export const CCD_ARGV = {
    *  gate that should stop it reaching an old box at all; this is the second
    *  lock. */
   swapCross: (id: string, w: string) => argv(['swap', '--cross-pool', id, w]),
+  /** `swap` and `swapCross` with the operator's consent to lose the turn in progress (D-5240). Separate entries, the
+   *  rule above, and the flag LEADS for its reason. Sent only behind `capSupported(state, SWAP_BUSY_CAP)`: an old ccd
+   *  would bind a leading `--interrupt` as the id and fail loudly, but it refuses nothing either, so the old argv is
+   *  the right one there. */
+  swapInterrupt: (id: string, w: string) => argv(['swap', '--interrupt', id, w]),
+  swapCrossInterrupt: (id: string, w: string) => argv(['swap', '--cross-pool', '--interrupt', id, w]),
   /** `route`, defaulted `null`: the PWA's ordinary add, from an operator who
    *  may have tapped a routing picker before creating the workspace — the
    *  `start`/`enable` rule above for the same reason (flags lead, the
-   *  default keeps every existing call site's argv unchanged). */
-  wsAdd:     (p: string, route: RouteFields | null = null) => argv(['ws-add', ...routeFlags(route), p]),
+   *  default keeps every existing call site's argv unchanged).
+   *
+   *  `dec` (D-5301, coordinator-first spec §8): the PWA "+" says who made the
+   *  workspace, so the lifecycle log's `create` row names the operator's
+   *  device rather than `declared: nothing`. It TRAILS the project, where
+   *  `wsAddWorker` puts its own; `cmd_ws_add`'s strip loop parses both
+   *  positions. The route handler passes `pwaDec(req)` (D-5369: the device
+   *  actually used, `device:<label>` or `unmeasured`, not spec §8's literal
+   *  `--actor operator`), which is `null` on a
+   *  box whose ccd does not advertise `actor-flags-v1` — and `null` is the
+   *  argv this builder shipped before, token for token, because an old
+   *  `cmd_ws_add` bound a flag's first token as the slug (D-410). */
+  wsAdd:     (p: string, route: RouteFields | null = null, dec: ActorFlags | null = null) =>
+               argv(['ws-add', ...routeFlags(route), p, ...decFlags(dec)]),
   /** The dispatch path's ws-add: a dispatched program worker spawns WITHOUT
    *  --remote-control (the 2026-08-13 ruling, task #37) — declared at
    *  creation, the only moment worker-ness is known (`hold` is written after
@@ -905,6 +930,13 @@ export const DOCS_CAP = 'docs-v1';
  *  to a box with no evidence it exists is the failure the capability reader was built to prevent. The collector's lane
  *  asks it before every audit and again in the act's own scope (`verb-gate.test.ts`, `collect-temp-root.test.ts`). */
 export const COLLECT_CAP = 'collect-v1';
+
+/** The `ccd caps` token that says this box's `cmd_swap` re-measures the turn at the act and takes `--interrupt`
+ *  (D-5240, Task 11). It gates ONE decision: whether the swap route may send `CCD_ARGV.swapInterrupt` or
+ *  `swapCrossInterrupt`. Without it the route sends the old argv, which an old ccd parses and which refuses nothing —
+ *  the server's own read is then the only guard, as it was before. ccd's `echo swap-busy-v1` and
+ *  `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS` are the other two spellings. */
+export const SWAP_BUSY_CAP = 'swap-busy-v1';
 
 /**
  * Whether the DEPLOYED ccd advertised a CAPABILITY token — a verb-shaped string

@@ -1,6 +1,7 @@
 // What the home screen says about a halted or skewed fleet (centralised-update design 2026-09-20 §10, §13;
-// programme wave 14, R15). Pure reads of FleetScreen's one /api/updates answer, with no poll of their own. Three
-// callers: the halt banner (HaltBanner.tsx), Update all (UpdateBanner.tsx) and the skew arm (FleetHostBanner.tsx).
+// programme wave 14, R15). Pure reads of FleetScreen's one /api/updates answer, with no poll of their own. Four
+// callers: the halt banner (HaltBanner.tsx), Update all (UpdateBanner.tsx), the skew arm (FleetHostBanner.tsx) and,
+// since wave 19 (R24(a)), Settings' release-row Install and per-node Update (screens/updates.tsx).
 //
 // WHO HALTS is the dispatcher's own rule, `isHaltingUpdate` (shared/update-move.ts, L0), the same predicate
 // `server/src/update/dispatch.ts`'s `isHalting` calls. The wire carries no "halted" word, so the PWA asks the rule
@@ -118,19 +119,25 @@ function autoArm(nodes: readonly NodeWire[], intent: readonly UpdateIntentWire[]
   if (pending.length === 0 || !pending.every((n) => autoWouldMove(n, auto))) return 'cli';
   // Every lagging node, not merely every tagged one (D-4271): a box with no tag to move to — rolled back past the
   // newest release, or hand-placed off the release lane — stays where it is while auto moves the others, so the
-  // skew would widen, not close. `auto` only when every node ends on the SAME release tag.
+  // skew would widen, not close. `auto` only when every node ends on the SAME release tag. So one EXTRA untagged
+  // inventory row (a hand-placed or unmeasured third node, with no desired tag and no release version) forces `cli`
+  // too (wave 19, R26(d)). That is the safe direction: the terminal verbs are never a false promise that the
+  // console will move the box.
   const ends = nodes.map(endTag);
   const first = ends[0];
   return typeof first === 'string' && ends.every((e) => e === first) ? 'auto' : 'cli';
 }
 
+/** `stale` (wave 19, R24(b)): a later poll failed, so `nodes` and `intent` are the last answer that landed. A
+ *  standing failure never vouches for auto: `then` (and so the arm) is `cli`. The halt is still said, because the
+ *  Ack is still the door; only the promise of what moves after it is withdrawn. */
 export function skewRemedy(
-  nodes: readonly NodeWire[] | null | undefined, intent: readonly UpdateIntentWire[] | null | undefined,
+  nodes: readonly NodeWire[] | null | undefined, intent: readonly UpdateIntentWire[] | null | undefined, stale = false,
 ): SkewRemedy {
   // An empty inventory needs no guard of its own: no node has a tag to move to, so autoArm answers `cli`.
   if (!Array.isArray(nodes)) return { kind: 'cli' };
   const halting = haltingNodes(nodes);
-  const then = nodes.some(leaseUnreadable) ? 'cli' : autoArm(nodes, intent);
+  const then = stale || nodes.some(leaseUnreadable) ? 'cli' : autoArm(nodes, intent);
   if (halting.length > 0) return { kind: 'halt', halting, then };
   return { kind: then };
 }

@@ -15,6 +15,9 @@ import { CCD, makeCcdHarness, type CcdHarness, WIDE_PANE } from './ccdWsHelpers.
 
 const TOOL = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../deploy/measure-continuity.py');
 
+/** A pane tmux cannot find (D-5350): D-5240's manual swap gate reads `_ws_status`, which
+ *  answers idle for it (a bare `tmux() { :; }` is an alive pane with no pid, unreadable). */
+const GONE_PANE = 'case "${1:-}" in has-session) echo "can\'t find session: x" >&2; return 1 ;; esac;';
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-measure-continuity-'); });
 afterEach(() => { h.cleanup(); });
@@ -204,7 +207,7 @@ describe('each regex is bound to the line the real ccd writes', () => {
     seedSession(t - 5, { quotaLimits: { status: 'rejected', resetsAt: t + 9000, rateLimitType: 'five_hour' } });
     h.sh(`${stubs('❯ ', 'claude-a')} HARD_BLOCK_TYPE=five_hour; HARD_BLOCK_RESET=${t + 300}; _rescuewait_open ${ID} claude near`, env(t));
     h.sh(`${stubs('❯ ', 'claude-a')} _auto_swap_check ${ID}`, env(t));   // logs the rescue; the near wait stays open
-    const SWAP = 'systemctl() { :; }; launchctl() { :; }; tmux() { :; }; sleep() { :; };';
+    const SWAP = `systemctl() { :; }; launchctl() { :; }; tmux() { ${GONE_PANE} }; sleep() { :; };`;
     h.sh(`${SWAP} CCD_SWAP_AUTO=1 cmd_swap ${ID} claude-a`, { TMUX: '' });   // the landing closes it as a swap
     h.sh(`_carried_in_note ${ID} pane ${t - 100} ${t}`);
     const r = run(h.home);                                                // the DEFAULT log: <home>/.cc-sessions/swap.log
@@ -254,7 +257,7 @@ describe('each regex is bound to the line the real ccd writes', () => {
   it('a rescue on a carried-in banner is counted against the landing line the real cmd_swap wrote', () => {
     const t = Math.floor(Date.now() / 1000); const born = t - 990;
     seedSession(t - 3000, { quotaLimits: { status: 'rejected', resetsAt: t + 300, rateLimitType: 'five_hour' } });
-    const SWAP = 'systemctl() { :; }; launchctl() { :; }; tmux() { :; }; sleep() { :; };';
+    const SWAP = `systemctl() { :; }; launchctl() { :; }; tmux() { ${GONE_PANE} }; sleep() { :; };`;
     h.sh(`${SWAP} cmd_swap ${ID} claude-a`, { TMUX: '' });                  // the real landing line
     expect(h.reg(ID, 'wrapper')).toBe('claude-a');
     h.sh(`_reg_set ${ID} lastswap ${t - 1000}; _reg_set ${ID} spawn "${born + 30} 4"`);   // a landing that never came up (D-3526)
@@ -283,7 +286,7 @@ describe('each regex is bound to the line the real ccd writes', () => {
     h.sh(`_reg_purge ${ID}`);
     const born = t - 990;
     seedSession(t - 3000, { quotaLimits: { status: 'rejected', resetsAt: t + 300, rateLimitType: 'five_hour' } });
-    const SWAP = 'systemctl() { :; }; launchctl() { :; }; tmux() { :; }; sleep() { :; };';
+    const SWAP = `systemctl() { :; }; launchctl() { :; }; tmux() { ${GONE_PANE} }; sleep() { :; };`;
     h.sh(`${SWAP} cmd_swap ${ID} claude-a`, { TMUX: '', TZ });
     h.sh(`_reg_set ${ID} lastswap ${t - 1000}; _reg_set ${ID} spawn "${born + 30} 4"`);
     h.sh(`${stubs('Usage limit reached · continuing automatically at 9:10pm · esc to cancel\n❯ ', 'claude-b')} _auto_swap_check ${ID}`,

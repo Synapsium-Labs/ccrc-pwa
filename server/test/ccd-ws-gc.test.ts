@@ -1046,7 +1046,7 @@ describe('ws-gc --prune', () => {
     // contract and is captured rather than allowed to throw (D-2605). The
     // fixture's whole mechanism is an `rm -f` that MUST fail, and since
     // `_reg_purge` began tracking its unlinks a failed one makes the function
-    // return nonzero; `h.sh` is `execFileSync` (ccdWsHelpers.ts:346), which
+    // return nonzero; `h.sh` is `execFileSync` (`sh` in `makeCcdHarness`), which
     // throws on a nonzero exit, so a bare call would die HERE and not one of
     // the six ordering assertions below would ever run. Measured: without this
     // capture the suite is `1 failed | 68 passed` with
