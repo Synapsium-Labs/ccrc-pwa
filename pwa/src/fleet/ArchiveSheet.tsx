@@ -283,12 +283,12 @@ export function ArchiveSheet({
         )}
         <div className={QC_ACTIONS}>
           {primary !== null && (
-            <Button variant="primary" disabled={busy} onClick={() => send(primary!.next)}>
+            <Button variant="danger" disabled={busy} onClick={() => send(primary!.next)}>
               {busy ? 'Archiving…' : primary.label}
             </Button>
           )}
           {stopOnly && (
-            <Button variant="primary" disabled={stopFault !== null}
+            <Button variant="danger" disabled={stopFault !== null}
                     title={stopFault === null ? undefined : substrateFaultText(stopFault)}
                     onClick={() => { onStopOnly!(sid); onClose(); }}>
               Stop only

@@ -245,7 +245,7 @@ export function ReapSheet({
               </p>
             )}
             {shown.verdict === 'reapable' && result === null && session.held === null && (
-              <Button variant="primary" className="reap-go" disabled={busy} onClick={confirm}>
+              <Button variant="danger" className="reap-go" disabled={busy} onClick={confirm}>
                 {/* The confirm this whole design exists to protect: it must
                     say "unknown size", never a number `du` could not stand
                     behind (finding F). `sizeText` rather than a third spelling

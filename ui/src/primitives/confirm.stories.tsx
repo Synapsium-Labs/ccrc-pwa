@@ -48,6 +48,20 @@ export const Stop: Story = {
   ),
 };
 
+/** `tone="danger"` (D-5099): a confirm that destroys something commits with
+ *  the filled red button instead of the phosphor. */
+export const Danger: Story = {
+  render: () => (
+    <Demo
+      title="Reboot the fleet host?"
+      consequence="Reboots the whole fleet box — everything else running on it goes down too, not just the fleet."
+      confirmLabel="Reboot the fleet host"
+      onConfirm={() => {}}
+      tone="danger"
+    />
+  ),
+};
+
 export const MoveAccount: Story = {
   render: () => (
     <Demo
