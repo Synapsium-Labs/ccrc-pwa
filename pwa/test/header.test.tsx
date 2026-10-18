@@ -130,7 +130,8 @@ describe('SessionHeader', () => {
       status: 'dead',
       session: fleetSession({ status: 'busy', dialogPending: true, bucket: 'attention' }),
     });
-    expect(screen.getByText('not running')).toBeInTheDocument();
+    // D-5545: the word is the card's (`exited`, headerStatusWord); the lamp still speaks `not running`.
+    expect(screen.getByText('exited')).toBeInTheDocument();
     expect(screen.queryByText('waiting on you')).not.toBeInTheDocument();
     expect(screen.getByRole('img', { name: 'not running' })).toBeInTheDocument();
   });
@@ -195,7 +196,8 @@ describe('SessionHeader', () => {
   it('still says not running for a dead session', () => {
     renderHeader({ status: 'dead', session: fleetSession({ status: 'dead', bucket: 'dead' }) });
     expect(screen.getByRole('img', { name: 'not running' })).toBeInTheDocument();
-    expect(screen.getByText('not running')).toBeInTheDocument();
+    // D-5545: the word is the card's (`exited`, headerStatusWord); the lamp still speaks `not running`.
+    expect(screen.getByText('exited')).toBeInTheDocument();
   });
 
   it('paints from the live status alone before the fleet snapshot lands', () => {
@@ -1296,9 +1298,10 @@ describe('the header of a hibernated row (D-5242)', () => {
     expect(screen.queryByRole('img', { name: 'not running' })).toBeNull();
   });
 
-  it('a dead row without hibernatedAt still reads "not running"', () => {
+  it('a dead row without hibernatedAt still reads "exited" (the lamp: "not running")', () => {
     renderHeader({ status: 'dead', session: fleetSession({ status: 'dead', bucket: 'dead' }) });
-    expect(screen.getByText('not running')).toBeInTheDocument();
+    // D-5545: the word is the card's (`exited`, headerStatusWord); the lamp still speaks `not running`.
+    expect(screen.getByText('exited')).toBeInTheDocument();
     expect(screen.queryByText('hibernated')).toBeNull();
   });
 });

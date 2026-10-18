@@ -72,6 +72,16 @@ export interface OrphanNote {
 // `Archived (N)` fold), just not among this card's LIVE rows, so a worker
 // left behind by one still reads as an orphan (and still says nothing about
 // home when that home is, measured, this card's own project).
+/** The orphan marker's guidance for a coordinator measured gone or asleep — the card's marker and the session
+ *  header's both carry it (`sessionFacts`' `coordinatorTitle`). `null` for any other presence. */
+export function orphanGuidance(parent: string, presence: CoordPresence): string | null {
+  return presence === 'dead'
+    ? `coordinator ${parent} is gone — reclaim this programme from the run board (the held cell opens it)`
+    : presence === 'hibernated'
+      ? `coordinator ${parent} is hibernated — mail or opening it wakes it`
+      : null;
+}
+
 export function orphanNote(
   row: FleetRow,
   runs: readonly RunSummary[],
@@ -94,11 +104,7 @@ export function orphanNote(
   const presence = coordPresence(parent, coordOf(parent), frameSeen);
   // D-5242: a sleeping coordinator is not gone, and nothing should be reclaimed
   // from it: mail or opening it wakes it.
-  const where = presence === 'dead'
-    ? `coordinator ${parent} is gone — reclaim this programme from the run board (the held cell opens it)`
-    : presence === 'hibernated'
-      ? `coordinator ${parent} is hibernated — mail or opening it wakes it`
-      : `this worker's coordinator is not among this card's live sessions`;
+  const where = orphanGuidance(parent, presence) ?? `this worker's coordinator is not among this card's live sessions`;
   // …AND IN WORDS, not only in `title` (final fix round): a `title` is
   // invisible on touch, so the row's marker itself says "coordinator gone"
   // (`sessionFacts.ts`, D-5545), and only for `dead` (or "coordinator

@@ -27,7 +27,7 @@ import {
   type FleetSession, type ProjectPoolWire, type RosterWire, type SessionBucket,
 } from '../../../shared/api';
 import { accountLabel, accountPool } from '../lib/accounts';
-import { elapsedWords } from '@ccrc/ui';
+import { elapsedShort, elapsedWords, statusLabel } from '@ccrc/ui';
 import { restartWords, type RestartWords } from '../lib/restart';
 import { humanBytes } from '../screens/ArchiveScreen';
 import { lifecycleQualifier } from './lifecycleWords';
@@ -71,9 +71,12 @@ export function shortenByToken(text: string, max: number): string {
   let out = '';
   for (const t of tokens) {
     const word = t.replace(/[-/_. ]+$/, '');
-    if (out !== '' && (out + word).length > max - 1) break;
+    // The first WORD is kept whole whatever the budget — a separator-led text (`.cache-…`) included — so the
+    // result is never a bare `…` (verifier round 1).
+    const hasWord = /[^-/_. ]/.test(out);
+    if (hasWord && (out + word).length > max - 1) break;
     out += t;
-    if (out.length >= max - 1) break;
+    if (/[^-/_. ]/.test(out) && out.length >= max - 1) break;
   }
   out = out.replace(/[-/_. ]+$/, '');
   return out.length >= text.length ? text : `${out}…`;
@@ -114,12 +117,16 @@ export interface FactInput {
   /** The presence of its coordinator when that coordinator is not a live row beside it
    *  (`orphanNote`'s `presence`): `dead` is "coordinator gone", `hibernated` says so. */
   readonly coordinator?: CoordPresence | null;
+  /** The orphan marker's guidance (`orphanGuidance`): the card and the header both put it on the marker. */
+  readonly coordinatorTitle?: string | null;
 }
 
 /** Everything the session's rows render, decided once. The cells read these values;
  *  `cardFacts` and `headerFacts` read the same set, so the two can never disagree. */
 export interface SessionFactSet {
   readonly session: FleetSession;
+  /** The clock these facts were decided at. */
+  readonly now: number;
   readonly dead: boolean;
   readonly asleepAt: number | null;
   readonly name: string;
@@ -156,6 +163,7 @@ export interface SessionFactSet {
   readonly lane: { readonly name: string; readonly away: boolean; readonly label: string | undefined };
   readonly offPool: string | null;
   readonly orphan: 'gone' | 'hibernated' | null;
+  readonly orphanTitle: string | null;
 }
 
 function askWords(ask: { state: string; parentId: string; answeredBy: string | null }):
@@ -192,7 +200,10 @@ const markerNote = (
 
 /** Decide every fact of one session. Pure: the clock comes in as `now`. */
 export function sessionFacts(input: FactInput): SessionFactSet {
-  const { session, now, roster = [], projectPool = null, childRun, workingOn = null, coordinator = null } = input;
+  const {
+    session, now, roster = [], projectPool = null, childRun, workingOn = null, coordinator = null,
+    coordinatorTitle = null,
+  } = input;
   const dead = session.status === 'dead';
   const asleepAt = hibernatedSince(session);
   const state = asleepAt !== null ? 'asleep' : STATE_WORD[session.bucket];
@@ -201,7 +212,7 @@ export function sessionFacts(input: FactInput): SessionFactSet {
   const activeRun = childRun?.run ?? null;
   const heldRun = session.held !== null && activeRun !== null && childOf?.data !== 'unreadable' ? activeRun : null;
   const heldTitle = heldRun === null || session.held === null ? session.held
-    : `${childOf?.title ?? runSentence(heldRun, childRun?.coordinator ?? null, false)} — hold: ${session.held}`;
+    : `${childOf?.title ?? runSentence(heldRun, childRun?.coordinator ?? null, false)} — ${heldWords(session.held)}`;
 
   const askRaw = sessionAsk(session);
   const wc = dead || state !== 'working' ? null : sessionWithCoordinator(session);
@@ -245,7 +256,7 @@ export function sessionFacts(input: FactInput): SessionFactSet {
   const role: unknown = (session as { role?: unknown }).role;
 
   return {
-    session, dead, asleepAt,
+    session, now, dead, asleepAt,
     name: sessionLabel(session),
     state,
     // The status word carries its own qualifiers, as it did on the one-line row: the hibernated age (D-5242),
@@ -269,15 +280,12 @@ export function sessionFacts(input: FactInput): SessionFactSet {
     withCoordinator: wcWords === null && !dead && heldAsk && askRaw !== null
       ? { text: 'with coordinator', title: askWords(askRaw).title } : null,
     needsYou: !dead && session.bucket === 'attention' && !heldAsk,
-    lifecycle: asleepAt !== null ? null : lifecycleQualifier(session),
+    lifecycle: asleepAt !== null ? null : lifecycleQualifier(session, now),
     swap: (() => { const m = markerNote(session.swapBlocked, 'swap blocked'); return m; })(),
     strand: dead ? null : markerNote(session.stranded, 'stranded'),
-    cleanup: session.bucket === 'cleanup'
-      ? [
-          session.pr?.number != null ? `#${session.pr.number}` : null,
-          session.archivedBytes !== null ? humanBytes(session.archivedBytes) : null,
-        ].filter((x): x is string => x !== null)
-      : [],
+    // The merged PR's number is the `pr` fact (the card's context, the header's detail); the cleanup bucket adds
+    // only its reclaimable size — the header used to print `#77` three times.
+    cleanup: session.bucket === 'cleanup' && session.archivedBytes !== null ? [humanBytes(session.archivedBytes)] : [],
     tasks: !dead && session.tasks !== null ? { done: session.tasks.done, total: session.tasks.total } : null,
     graph: reads === null ? null : { reads, gated: gateDenials !== null && gateDenials > 0 ? gateDenials : null },
     subagents: dead ? null : session.subagents,
@@ -299,6 +307,7 @@ export function sessionFacts(input: FactInput): SessionFactSet {
     },
     offPool,
     orphan: coordinator === 'dead' ? 'gone' : coordinator === 'hibernated' ? 'hibernated' : null,
+    orphanTitle: coordinator === 'dead' || coordinator === 'hibernated' ? coordinatorTitle : null,
   };
 }
 
@@ -310,7 +319,7 @@ export function markers(f: SessionFactSet): Fact[] {
     out.push({ key, text, short, ...(title === undefined ? {} : { title }) });
   };
   if (f.substrate !== null) add('unreachable', f.substrate.text, f.substrate.text, f.substrate.title);
-  if (f.orphan === 'gone') add('coordinator-gone', 'coordinator gone');
+  if (f.orphan === 'gone') add('coordinator-gone', 'coordinator gone', 'coordinator gone', f.orphanTitle ?? undefined);
   // A spawn that did not come up healthy (`login`, `blocked`, `vanished`, `unstarted`, …) asks the operator to act.
   if (f.spawn !== null) add('spawn', f.spawn.word, f.spawn.word, `last spawn: ${f.spawn.data}`);
   if (f.needsYou) add('needs-you', 'needs you');
@@ -323,7 +332,9 @@ export function markers(f: SessionFactSet): Fact[] {
   if (f.ctx !== null && f.ctx.wedged) add('stalled', f.ctx.text, f.ctx.text, f.ctx.title);
   if (f.limit !== null) add('limit', f.limit.text, f.limit.text, 'account limit near');
   if (f.ctx !== null && !f.ctx.wedged) add('ctx', f.ctx.text, f.ctx.text, f.ctx.title);
-  if (f.orphan === 'hibernated') add('coordinator-hibernated', 'coordinator hibernated');
+  if (f.orphan === 'hibernated') {
+    add('coordinator-hibernated', 'coordinator hibernated', 'coordinator hibernated', f.orphanTitle ?? undefined);
+  }
   if (f.restart !== null) add('restarted', f.restart.text, 'restarted', f.restart.title);
   if (f.unmeasured.length > 0) {
     add('unreadable', 'unreadable', 'unreadable', unmeasuredTitle(f.unmeasured));
@@ -377,17 +388,19 @@ export function headerFacts(f: SessionFactSet): Fact[] {
   const s = f.session;
   const out: Fact[] = [
     { key: 'name', text: f.name },
-    { key: 'status', text: f.statusText, ...(f.statusTitle === undefined ? {} : { title: f.statusTitle }) },
+    { key: 'status', text: headerStatusText(f), ...(f.statusTitle === undefined ? {} : { title: f.statusTitle }) },
     { key: 'lane', text: f.lane.name, ...(f.lane.label === undefined ? {} : { title: f.lane.label }) },
   ];
   if (f.coordinatorRole) out.push({ key: 'role', text: 'coordinator' });
   if (f.workingOn !== null) out.push({ key: 'working-on', text: f.workingOn });
   const ctx = contextFact(f);
   // The context fact under its own key — the programme and wave, the child marker, `held`, the PR or the branch.
-  if (ctx !== null) out.push({ key: ctx.key, text: ctx.text, ...(ctx.title === undefined ? {} : { title: ctx.title }) });
+  if (ctx !== null && ctx.key !== 'hold') {
+    out.push({ key: ctx.key, text: ctx.text, ...(ctx.title === undefined ? {} : { title: ctx.title }) });
+  }
   if (f.coordinatorName !== null) out.push({ key: 'coordinator', text: f.coordinatorName });
   // The verbatim hold, whenever there is one — the card's `held` or programme names it, the header spells it.
-  if (s.held !== null && ctx?.key !== 'hold') out.push({ key: 'hold', text: s.held });
+  if (s.held !== null) out.push({ key: 'hold', text: heldWords(s.held) });
   if (ctx?.key !== 'pr' && s.pr?.number != null) out.push({ key: 'pr', text: `PR #${s.pr.number}` });
   if (ctx?.key !== 'branch' && s.branch !== null && s.branch !== f.name) out.push({ key: 'branch', text: s.branch });
   if (f.tasks !== null) out.push({ key: 'tasks', text: `${f.tasks.done}/${f.tasks.total} tasks` });
@@ -407,5 +420,59 @@ export function headerFacts(f: SessionFactSet): Fact[] {
  *  fact has a header fact under its key carrying its FULL text. */
 export function cardWithinHeader(card: CardFacts, header: readonly Fact[]): Fact[] {
   const shown = [card.name, card.status, card.context, card.marker, card.workingOn].filter((x): x is Fact => x !== null);
-  return shown.filter((c) => !header.some((h) => h.key === c.key && h.text === c.text));
+  // The header's form BEGINS with the card's: the same words, the header adding what the glance leaves out
+  // (`waiting` → `waiting on you`, `idle` → `idle · 2m ago`, `held` → `held: <the verbatim hold>`).
+  return shown.filter((c) => !header.some((h) => h.key === c.key && h.text.startsWith(c.text)));
+}
+
+/** The verbatim hold, as the header spells it — one prefix wherever it is printed. */
+export const heldWords = (held: string): string => `held: ${held}`;
+
+/** '04:12' (or '1:04:12') elapsed — rendered in tabular-nums mono. */
+export function clock(elapsedMs: number): string {
+  const total = Math.max(0, Math.floor(elapsedMs / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const sec = total % 60;
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${pad(m)}:${pad(sec)}`;
+}
+
+/**
+ * THE HEADER'S STATUS WORD (verifier round 1: it was the header's own, and a dead row read `exited` on its card
+ * and `not running` above its chat). Decided here, from the bucket the header paints, and it always BEGINS with
+ * the card's word (`STATE_WORD`): the header only adds what this one screen knows — the live elapsed clock, the
+ * age, `on you`, `ready to clean up`. The lamp (`StatusDot`) keeps its own spoken label.
+ */
+export function headerStatusWord(input: {
+  readonly bucket: SessionBucket;
+  readonly asleepAt: number | null;
+  readonly background: { readonly text: string } | null;
+  /** When the status last changed, or `null`. */
+  readonly at: number | null;
+  readonly now: number;
+}): string {
+  const { bucket, asleepAt, background, at, now } = input;
+  if (asleepAt !== null) return hibernatedWords(asleepAt, now);
+  const rel = at === null ? null : elapsedShort(now - at);
+  switch (bucket) {
+    case 'attention': return `${STATE_WORD.attention} on you`;
+    case 'working':
+      return background !== null ? `working · ${background.text}` : at !== null ? `working · ${clock(now - at)}` : 'working…';
+    case 'done': return rel !== null ? `done · ${rel} ago` : 'done';
+    case 'idle': return rel !== null ? `idle · ${rel} ago` : 'idle';
+    // `statusLabel('cleanup')` is `merged, ready to clean up` — the card's `merged` and the reason it waits.
+    case 'cleanup': return statusLabel('cleanup');
+    case 'archived': return STATE_WORD.archived;
+    case 'dead': return STATE_WORD.dead;
+  }
+}
+
+/** The header's status fact for the model's own row: the clock-free form of `headerStatusWord`. The
+ *  with-coordinator words are the card's verbatim (the header draws them in two spans). */
+function headerStatusText(f: SessionFactSet): string {
+  if (f.asleepAt !== null || f.stateTone === 'coordinator') return f.statusText;
+  return headerStatusWord({
+    bucket: f.session.bucket, asleepAt: null, background: f.background, at: f.session.statusUpdatedAt, now: f.now,
+  });
 }

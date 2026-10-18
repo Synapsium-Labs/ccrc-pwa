@@ -30,6 +30,7 @@ import { SessionHeader } from '../session/SessionHeader';
 import { childRunContext, coordinationOf, parentIdOf } from '../fleet/fleetTree';
 import { sessionFacts } from '../fleet/sessionFacts';
 import { coordPresence } from '../fleet/coordWords';
+import { orphanGuidance } from '../fleet/orphanWords';
 import { placementOfRow, poolOfPlacement } from '../fleet/placementWords';
 import { isRunClosed } from '../fleet/runWords';
 import { HistoryTab } from '../session/HistoryTab';
@@ -262,12 +263,14 @@ export function SessionScreen({
   const lookup = (sid: string): FleetSession | null => fleetSessions.find((x) => x.id === sid) ?? null;
   const parentId = live === null ? null : parentIdOf(live, activeRuns);
   const factsNow = useNow(30_000);
+  const presence = parentId === null ? null : coordPresence(parentId, lookup(parentId), fleetFrameSeen);
   const facts = live === null ? null : sessionFacts({
     session: live, now: factsNow, roster,
     projectPool: poolOfPlacement(placementOfRow(projects?.find((r) => r.name === live.project))),
     childRun: childRunContext(live, activeRuns, lookup),
     workingOn: coordination?.workingOn ?? null,
-    coordinator: parentId === null ? null : coordPresence(parentId, lookup(parentId), fleetFrameSeen),
+    coordinator: presence,
+    coordinatorTitle: parentId === null || presence === null ? null : orphanGuidance(parentId, presence),
   });
 
   // Routing slice 6, Task 4: once `live.route` rides the wire, the pickers'

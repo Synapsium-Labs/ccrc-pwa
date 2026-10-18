@@ -101,7 +101,8 @@ describe('state', () => {
     expect(screen.getByText('PR #157')).toBeTruthy();
     cleanup();
     header(session);
-    expect(screen.getByText('#157')).toBeTruthy();
+    // The merged PR is named once in the details (its keycap aside) — no second bare `#157` cleanup cell.
+    expect(screen.getByText('PR #157')).toBeTruthy();
     expect(screen.getByText(/1\.2 GB/)).toBeTruthy();
     expect(screen.queryByRole('button', { name: /remove|delete/i })).toBeNull();
   });
@@ -631,7 +632,7 @@ describe('held chip', () => {
     expect(document.querySelector('[data-held]')).toHaveTextContent(/^held$/);
     cleanup();
     header(s({ held: 'program:agent-evals wave:2/4' }));
-    expect(screen.getByText('program:agent-evals wave:2/4')).toBeInTheDocument();
+    expect(screen.getByText('held: program:agent-evals wave:2/4')).toBeInTheDocument();
   });
 
   it('shows no chip when unheld — null is the wire default, not a state to render', () => {
@@ -1045,7 +1046,7 @@ describe('the spawn chip (§1.6b)', () => {
     expect(chip()?.textContent).toBe('blocked');
     cleanup();
     header(session);
-    expect(document.querySelector('.sess-held')?.textContent).toBe('program:build8 wave:2/4 run:17');
+    expect(document.querySelector('.sess-held')?.textContent).toBe('held: program:build8 wave:2/4 run:17');
   });
 
   it('reads both fields DEFENSIVELY — a live `fleet` frame is CAST, never revived', () => {
@@ -1626,12 +1627,14 @@ describe('a child workspace names its programme and wave (wave 5; operator rulin
       render(<SessionLine session={s({ child: { kind: 'child', runId: 39 }, held })} onOpenRun={() => {}}
                           onOpen={() => {}} onActions={() => {}}
                           childRun={{ run: { ...run, program: 'migrate-legacy-billing-reconciliation-pipeline', wave: 12, waveOf: 14 }, coordinator: null }} />);
-      expect(document.querySelector('.sess-pw-prog')?.textContent).toBe('migrate-legacy…');
+      // Both forms are drawn; fleet.css's container query shows the short one only in a phone-narrow column.
+      expect(document.querySelector('.sess-pw-prog .fit-short')?.textContent).toBe('migrate-legacy…');
+      expect(document.querySelector('.sess-pw-prog .fit-full')?.textContent).toBe('migrate-legacy-billing-reconciliation-pipeline');
       expect(document.querySelector('.sess-pw-wave')?.textContent).toBe(' · wave 12 of 14');
       cleanup();
       header(s({ child: { kind: 'child', runId: 39 }, held }),
         { childRun: { run: { ...run, program: 'migrate-legacy-billing-reconciliation-pipeline', wave: 12, waveOf: 14 }, coordinator: null } });
-      expect(screen.getByText('hold: program:port-api wave:5/7 run:41')).toBeInTheDocument();
+      expect(screen.getByText('held: program:port-api wave:5/7 run:41')).toBeInTheDocument();
     });
 
     it('a hold no active run explains reads `held` on the card and the raw text in the header', () => {
@@ -1639,7 +1642,7 @@ describe('a child workspace names its programme and wave (wave 5; operator rulin
       expect(document.querySelector('[data-held]')?.textContent).toBe('held');
       cleanup();
       header(s({ held }));
-      expect(document.querySelector('[data-held]')?.textContent).toBe(held);
+      expect(document.querySelector('[data-held]')?.textContent).toBe(`held: ${held}`);
     });
 
     it('an unreadable marker is the card\'s context; the header keeps both cells: its hedge, and the raw hold', () => {
@@ -1650,7 +1653,7 @@ describe('a child workspace names its programme and wave (wave 5; operator rulin
       cleanup();
       header(s({ child: { kind: 'unreadable' }, held }), { childRun: { run, coordinator: null } });
       expect(cell()?.textContent).toBe('child marker unreadable');
-      expect(document.querySelector('[data-held]')?.textContent).toBe(held);
+      expect(document.querySelector('[data-held]')?.textContent).toBe(`held: ${held}`);
     });
   });
 

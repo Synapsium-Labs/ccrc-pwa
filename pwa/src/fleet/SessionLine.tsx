@@ -116,7 +116,7 @@ export function SessionLine({
   const tick = useNow(30_000, busy && now === undefined);
   const facts = sessionFacts({
     session, now: now ?? tick, roster, projectPool, ...(childRun === undefined ? {} : { childRun }),
-    workingOn, coordinator,
+    workingOn, coordinator, coordinatorTitle: coordinatorTitle ?? null,
   });
   const glance = cardFacts(facts);
   const label = glance.name.text;
@@ -197,9 +197,19 @@ export function SessionLine({
           title={glance.name.short === undefined || glance.name.short === label ? undefined : label}
           onClick={open}
         >
-          {/* D-5545: shortened by whole tokens, never by an ellipsis mid-token; the full name in `title`
-              and in the session header's breadcrumb. */}
-          <TypedLabel className="sess-label" text={glance.name.short ?? label} />
+          {/* D-5545: the full name wherever the column holds it (wrapping at a hyphen, never an ellipsis), and
+              shortened by whole tokens only in a phone-narrow column (`Fit`, fleet.css's container query). The
+              button's accessible name is the FULL name either way (verifier round 1): both drawn forms are
+              `aria-hidden`, and the name is spoken once. */}
+          {glance.name.short === undefined || glance.name.short === label ? (
+            <TypedLabel className="sess-label" text={label} />
+          ) : (
+            <span className="sess-label">
+              <span className="sr-only">{label}</span>
+              <span className="fit-full" aria-hidden="true"><TypedLabel text={label} /></span>
+              <span className="fit-short" aria-hidden="true">{glance.name.short}</span>
+            </span>
+          )}
           {/* D-5527: whose code this row works on, when its card is another
               project's. An icon beside a WORD (nothing is read out of shape
               alone); the hidden lead makes the accessible name a sentence. */}
@@ -214,12 +224,7 @@ export function SessionLine({
               repo differs from its card's always carries the cross-project chip above, which already keeps two
               same-slug rows' accessible names apart. */}
         </button>
-        <SessionMeta
-          facts={facts}
-          mode="card"
-          onOpenRun={onOpenRun}
-          {...(coordinatorTitle === undefined ? {} : { markerTitle: coordinatorTitle })}
-        />
+        <SessionMeta facts={facts} mode="card" onOpenRun={onOpenRun} />
         {/* D-5545: the waiting question's summary (it was a third line, clipped to an ellipsis) and the subagent
             disclosure are the session header's now — the row says `needs you`, the header says what. */}
       </div>

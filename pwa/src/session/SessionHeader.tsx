@@ -16,7 +16,7 @@ import {
 } from '../../../shared/api';
 import { restartWords } from '../lib/restart';
 import {
-  BackButton, Chip, Keycap, ListRow, Sheet, StatusDot, TypedLabel, cn, elapsedShort, statusLabel, useNow,
+  BackButton, Chip, Keycap, ListRow, Sheet, StatusDot, TypedLabel, cn, useNow,
 } from '@ccrc/ui';
 import { accountLabel } from '../lib/accounts';
 import { useMediaQuery } from '../lib/useMediaQuery';
@@ -28,7 +28,8 @@ import { PrKeycap } from './PrKeycap';
 import { PrSheet } from './PrSheet';
 import './chat.css';
 import { substrateFaultText } from '../fleet/substrateWords';
-import { hibernatedSince, hibernatedWords } from '../fleet/hibernated';
+import { hibernatedSince } from '../fleet/hibernated';
+import { headerStatusWord } from '../fleet/sessionFacts';
 import { chipTone, metaChipTone } from './chipTones';
 import { SessionCoordination, SessionDetails } from './SessionDetails';
 import type { Coordination } from '../fleet/fleetTree';
@@ -87,25 +88,6 @@ export interface SessionHeaderProps {
    *  holds every fact the card shows and the rest beside it. `null` before the first fleet frame. */
   facts?: SessionFactSet | null;
 }
-
-/** '04:12' (or '1:04:12') elapsed — rendered in tabular-nums mono. */
-function clock(elapsedMs: number): string {
-  const total = Math.max(0, Math.floor(elapsedMs / 1000));
-  const h = Math.floor(total / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  const s = total % 60;
-  const pad = (n: number): string => String(n).padStart(2, '0');
-  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
-}
-
-/** '2m' | '3h' | '5d' — `elapsedShort`'s own ladder, and `null` under a
- *  minute because this header's sentences phrase that case themselves
- *  ("working…", "idle"). A FOURTH copy of those four lines lived here: the
- *  fold that collected `SessionLine`'s, `lifecycleWords`' and `PrKeycap`'s
- *  missed it, because this one took `(now, then)` rather than a span and so
- *  matched no signature the census was looking for. */
-const relShort = (now: number, then: number | null): string | null =>
-  then === null ? null : elapsedShort(now - then);
 
 /** One row of the session menu: a label, and — for the three that answer a
  *  slash command — the command itself, dimmed, read by nobody.
@@ -253,7 +235,6 @@ export function SessionHeader({
   // contradict itself either. The word is the bucket's, with the two facts
   // only this screen has — the live elapsed clock and the relative age —
   // spliced in; StatusDot supplies the glyph and the spoken label.
-  const rel = relShort(now, at);
   // D-5231: a `working` row whose last main Stop left delegated work running
   // reads `working · N in background` (the kinds in the title), as the card does.
   const bg = bucket === 'working' && session != null ? backgroundWork(session) : null;
@@ -265,34 +246,10 @@ export function SessionHeader({
   const wcWords = wc === null || session == null ? null : withCoordinatorWords(wc, session.project);
   // D-5237: "restarted · out of memory · 3m ago" for an hour after a process end.
   const restart = session != null ? restartWords(session, now) : null;
-  const word =
-    asleepAt !== null
-      ? hibernatedWords(asleepAt, now) // D-5545: the card's own words, age included
-      : bucket === 'attention'
-      ? 'waiting on you'
-      : bucket === 'working'
-        ? bgWords !== null
-          ? `working · ${bgWords.text}`
-          : at !== null
-          ? `working · ${clock(now - at)}`
-          : 'working…'
-        : bucket === 'done'
-          ? rel
-            ? `done · ${rel} ago`
-            : 'done'
-          : bucket === 'idle'
-            ? rel
-              ? `idle · ${rel} ago`
-              : 'idle'
-            // THE THREE THAT ARE NOT COMPOSED take `StatusDot`'s own word
-            // (`statusLabel`, @ccrc/ui) rather than a second copy of it: the
-            // literal census found `merged, ready to clean up` written out
-            // here AND in the lamp's map. `done` and `idle` above stay spelled
-            // here, because this header composes them with an age the lamp
-            // knows nothing about.
-            : bucket === 'cleanup' || bucket === 'archived' || bucket === 'dead'
-              ? statusLabel(bucket)
-              : '';
+  // D-5545 (verifier round 1): the word is the MODEL's (`headerStatusWord`), from the bucket this strip paints —
+  // it always begins with the card's word (`exited` on both; the lamp still speaks `not running`), adding only
+  // what this screen knows: the live clock, the age, `on you`, `ready to clean up`.
+  const word = bucket === null ? '' : headerStatusWord({ bucket, asleepAt, background: bgWords, at, now });
   // Four tints for seven buckets, on purpose: `status-line--*` is the existing,
   // contrast-verified set (chat.css) and the glyph already carries the
   // distinction colour must not carry alone. done/cleanup/archived take idle's

@@ -9,7 +9,7 @@ import { fleetSession } from './fleetFixture';
 import { SessionLine } from '../src/fleet/SessionLine';
 import { SessionHeader, type SessionHeaderProps } from '../src/session/SessionHeader';
 import {
-  MARKER_ORDER, cardFacts, cardWithinHeader, headerFacts, markers, sessionFacts, shortenByToken,
+  MARKER_ORDER, cardFacts, cardWithinHeader, headerFacts, headerStatusWord, markers, sessionFacts, shortenByToken,
   type FactInput,
 } from '../src/fleet/sessionFacts';
 import type { ChildRunContext } from '../src/fleet/runWords';
@@ -74,6 +74,29 @@ const CASES: Record<string, FactInput> = {
       hookState: 'waiting', askSummary: 'Keep the old migration path?' }),
     now: NOW,
   },
+  // Verifier round 1: the rows the first suite lacked.
+  'a dead session that is not hibernated': {
+    session: s({ workspace: 'still-pond', status: 'dead', bucket: 'dead' }), now: NOW,
+  },
+  'a hand-held workspace (held, no child mark)': {
+    session: s({ workspace: 'calm-bay', held: 'waiting on the schema decision' }), now: NOW,
+  },
+  'a working row whose coordinator holds its question': {
+    session: s({ workspace: 'dry-creek', status: 'busy', bucket: 'working', role: 'child',
+      withCoordinator: { kind: 'question', parentId: 'lane-a-project-a', since: NOW - 30_000, notifyAt: NOW + 150_000 },
+      ask: { state: 'held', parentId: 'lane-a-project-a' } } as Partial<FleetSession>),
+    now: NOW,
+  },
+  'a cleanup row with its merged PR': {
+    session: s({ workspace: 'wide-delta', bucket: 'cleanup', archivedBytes: 4_200_000,
+      pr: { phase: 'merged', number: 77, url: null, title: null, checks: 'pass', checkNames: null, ahead: 0, reason: null,
+        checkedAt: NOW, mergedAt: NOW - 60_000, retryAt: null } }),
+    now: NOW,
+  },
+  'a working row with work in the background': {
+    session: s({ workspace: 'soft-dune', status: 'idle', bucket: 'working', background: { count: 2, kinds: ['bash', 'agent'] } }),
+    now: NOW,
+  },
   'an unreachable pane with every other marker too': {
     session: s({ substrate: { at: NOW - 60_000, text: 'tmux socket gone' }, limits: { five: 99, seven: null },
       swapBlocked: { at: NOW, reason: 'no headroom' }, unmeasured: ['status'] }),
@@ -100,7 +123,7 @@ describe('the model (D-5545)', () => {
     const f = sessionFacts(CASES['a held dispatched child']!);
     expect(cardFacts(f).context).toMatchObject({ key: 'programme', text: 'port-api · wave 5 of 7' });
     const h = headerFacts(f);
-    expect(h).toContainEqual(expect.objectContaining({ key: 'hold', text: 'program:port-api wave:5/7 run:40' }));
+    expect(h).toContainEqual(expect.objectContaining({ key: 'hold', text: 'held: program:port-api wave:5/7 run:40' }));
     expect(h).toContainEqual(expect.objectContaining({ key: 'coordinator', text: 'programme coordinator' }));
     expect(h).toContainEqual(expect.objectContaining({ key: 'tasks', text: '2/5 tasks' }));
     expect(h).toContainEqual(expect.objectContaining({ key: 'subagents', text: '1 subagent' }));
@@ -178,9 +201,13 @@ const headerProps = (over: Partial<SessionHeaderProps>): SessionHeaderProps => (
   ...over,
 });
 
-/** The text a reader can reach in a subtree: its text and every `title`. */
-const reachable = (el: Element): string =>
-  `${el.textContent ?? ''} ${[...el.querySelectorAll('[title]')].map((x) => x.getAttribute('title')).join(' ')}`;
+/** The text a reader SEES in a subtree — never a `title`, which a phone cannot show, nor an `sr-only` span
+ *  (verifier round 1). `aria-hidden` text IS seen (TypedLabel's settled value is drawn that way). */
+const visible = (el: Element): string => {
+  const c = el.cloneNode(true) as Element;
+  for (const x of c.querySelectorAll('.sr-only')) x.remove();
+  return (c.textContent ?? '').replace(/\s+/g, ' ');
+};
 
 describe('the rendered card is a glance, and the rendered header holds all of it (both skins)', () => {
   for (const skin of ['refined', 'instrument'] as const) {
@@ -207,12 +234,109 @@ describe('the rendered card is a glance, and the rendered header holds all of it
         const head = document.querySelector('.chat-head')!;
         const toggle = screen.queryByRole('button', { name: /details/i });
         if (toggle !== null && toggle.getAttribute('aria-expanded') === 'false') fireEvent.click(toggle);
-        const text = reachable(head);
+        const text = visible(head);
+        // The card's status word as the CARD renders it, in the header's visible text.
+        const cardWord = visible(card.querySelector('.sess-state')!);
+        expect(text, 'the card\'s status word is missing from the header').toContain(cardWord);
         for (const fact of [c.name, c.status, c.context, c.marker, c.workingOn]) {
           if (fact !== null) expect(text, `${fact.key} missing from the header`).toContain(fact.text);
         }
+        // The verbatim hold — the card's `held` or programme names it, the header spells it.
+        if (input.session.held !== null) expect(text, 'the verbatim hold').toContain(`held: ${input.session.held}`);
         cleanup();
       });
     }
   }
+});
+
+describe('verifier round 1 — the gaps the first suite left open', () => {
+  it('the header status word comes from the model and begins with the card\'s word, for every bucket', () => {
+    for (const bucket of ['attention', 'working', 'done', 'idle', 'cleanup', 'archived', 'dead'] as const) {
+      const f = sessionFacts({ session: s({ bucket, status: bucket === 'dead' ? 'dead' : 'idle' }), now: NOW });
+      const head = headerStatusWord({ bucket, asleepAt: null, background: null, at: NOW - 120_000, now: NOW });
+      expect(head.startsWith(f.statusText), `${bucket}: "${head}" vs card "${f.statusText}"`).toBe(true);
+    }
+  });
+
+  it('a dead row reads `exited` on the card AND in the rendered header (the lamp still speaks "not running")', () => {
+    const input = CASES['a dead session that is not hibernated']!;
+    render(<SessionHeader {...headerProps({ session: input.session, status: 'dead', facts: sessionFacts(input) })} />);
+    expect(document.querySelector('.chat-head .status-line')?.textContent).toBe('exited');
+    expect(screen.getByRole('img', { name: 'not running' })).toBeInTheDocument();
+  });
+
+  it('shortenByToken never returns a bare ellipsis, even for a separator-led text', () => {
+    for (const text of ['.acb-', '-x-yyyy', '/_abc/def', '..hidden-file-name', '_a']) {
+      for (let max = 1; max <= text.length; max += 1) {
+        const out = shortenByToken(text, max);
+        expect(out, `${text} @${max}`).not.toBe('…');
+        if (out === text) continue;
+        expect(text.startsWith(out.slice(0, -1))).toBe(true);
+        expect(/[^-/_. ]/.test(out.slice(0, -1))).toBe(true);
+      }
+    }
+  });
+
+  it('the lifecycle qualifier reads the model\'s clock, never Date.now()', () => {
+    const f = sessionFacts({
+      session: s({ lifecycle: 'stopped', stoppedBy: { at: NOW - 5 * 60_000, surface: 'cli' } }), now: NOW,
+    });
+    expect(f.lifecycle).toBe('stopped by cli, 5m ago');
+  });
+
+  it('the orphan guidance rides the model, so the header\'s marker carries it as the card\'s does', () => {
+    const input = { ...CASES['an orphan whose coordinator is gone']!, coordinatorTitle: 'coordinator x is gone — reclaim this programme from the run board' };
+    const m = markers(sessionFacts(input)).find((x) => x.key === 'coordinator-gone')!;
+    expect(m.title).toContain('reclaim');
+    render(<SessionHeader {...headerProps({ session: input.session, status: 'idle', facts: sessionFacts(input) })} />);
+    const toggle = screen.queryByRole('button', { name: /details/i });
+    if (toggle !== null) fireEvent.click(toggle);
+    expect(document.querySelector('.chat-head [data-marker="coordinator-gone"]')?.getAttribute('title')).toContain('reclaim');
+  });
+
+  it('a cleanup row names its PR once in the header, not three times', () => {
+    const input = CASES['a cleanup row with its merged PR']!;
+    render(<SessionHeader {...headerProps({ session: input.session, status: 'idle', facts: sessionFacts(input) })} />);
+    const toggle = screen.queryByRole('button', { name: /details/i });
+    if (toggle !== null) fireEvent.click(toggle);
+    const facts = document.querySelector('.chat-facts')!;
+    expect(visible(facts).match(/#77/g)?.length ?? 0).toBe(1);
+  });
+
+  it('the card button\'s accessible name is the FULL name, never the shortened one', () => {
+    const input = CASES['a long name waiting on the operator']!;
+    render(<SessionLine session={input.session} onOpen={() => {}} onActions={() => {}} now={NOW} />);
+    const btn = screen.getByRole('button', { name: /^an-exceptionally-long-session-name-that-will-not-fit-on-a-phone-screen/ });
+    expect(btn.getAttribute('aria-current')).toBeNull();
+    expect(screen.queryByRole('button', { name: /…/ })).toBeNull();
+  });
+
+  it('a wide card can show a long name and a 31-character programme whole: both forms render, CSS picks by width', () => {
+    const long = { ...RUN, program: 'a-very-long-programme-slug-name' };
+    const input = { ...CASES['a held dispatched child']!, session: s({ name: 'an-exceptionally-long-session-name-that-will-not-fit',
+      role: 'child', child: { kind: 'child', runId: 40 }, held: 'program:a-very-long-programme-slug-name wave:4/9 run:40' }),
+      childRun: child({ ...long, wave: 4, waveOf: 9 }) };
+    const { container } = render(<SessionLine session={input.session} onOpen={() => {}} onActions={() => {}} now={NOW}
+      childRun={input.childRun} />);
+    const fulls = [...container.querySelectorAll('.fit-full')].map((x) => x.textContent);
+    expect(fulls).toContain('an-exceptionally-long-session-name-that-will-not-fit');
+    expect(fulls).toContain('a-very-long-programme-slug-name');
+    const shorts = [...container.querySelectorAll('.fit-short')].map((x) => x.textContent);
+    expect(shorts.every((x) => x?.endsWith('…'))).toBe(true);
+    // Both visual forms are hidden from the accessibility tree; the full text is spoken once.
+    for (const el of container.querySelectorAll('.fit-full, .fit-short')) expect(el.getAttribute('aria-hidden')).toBe('true');
+  });
+
+  it('on a phone the card\'s marker and its non-programme context sit in the header before the details door is opened', () => {
+    for (const name of ['a limit-hit session whose swap was refused', 'a hold whose run left the board',
+      'a busy session under context pressure'] as const) {
+      const input = CASES[name]!;
+      const c = cardFacts(sessionFacts(input));
+      render(<SessionHeader {...headerProps({ session: input.session, status: input.session.status, facts: sessionFacts(input) })} />);
+      const head = visible(document.querySelector('.chat-head')!);
+      if (c.marker !== null) expect(head, `${name}: marker`).toContain(c.marker.short ?? c.marker.text);
+      if (c.context !== null && c.context.key !== 'programme') expect(head, `${name}: context`).toContain(c.context.text);
+      cleanup();
+    }
+  });
 });

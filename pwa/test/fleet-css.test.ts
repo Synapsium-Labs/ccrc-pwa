@@ -132,13 +132,21 @@ describe('fleet density and alignment', () => {
     });
   });
 
-  it('has no @container query left — .sess-acct can no longer be hidden or squeezed', () => {
+  it('has no @container query that can hide or squeeze a cell — .sess-acct can no longer be hidden or squeezed', () => {
     // The query this repeatedly guarded (first hiding .sess-acct, then
     // hiding .sess-state, then discovered to compact .sess-acct into a
     // neighbour's track) is gone along with the one-line layout it existed
     // to rescue. .fleet-list's own container-type/-name went with it —
     // nothing else in this file uses them.
-    expect(css).not.toContain('@container');
+    // D-5545 (verifier round 1) brought back exactly ONE query, of a different kind: it reads `.sess-body`'s own
+    // width to pick between the two drawn forms of a long name or programme (`Fit`), and it may touch nothing
+    // but those two forms' `display` — never a cell's track, never `.sess-acct`/`.sess-state`.
+    const queries = css.match(/@container[^{]*\{(?:[^{}]*\{[^{}]*\})*\s*\}/g) ?? [];
+    expect(queries).toHaveLength(1);
+    expect(queries[0]).toMatch(/^@container sess-body \(min-width: \d+px\)/);
+    const selectors = [...queries[0]!.replace(/^@container[^{]*\{/, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => [m[1]!.trim(), m[2]!.trim()]);
+    expect(selectors).toEqual([['.fit-full', 'display: inline;'], ['.fit-short', 'display: none;']]);
+    expect(css).toMatch(/\.sess-body \{ container: sess-body \/ inline-size; \}/);
     expect(css).not.toContain('container-type');
     expect(css).not.toContain('container-name');
   });

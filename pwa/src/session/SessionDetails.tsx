@@ -19,7 +19,7 @@ import { Door, elapsedShort } from '@ccrc/ui';
 import { navigate } from '../lib/router';
 import { useMediaQuery } from '../lib/useMediaQuery';
 import { SessionMeta } from '../fleet/SessionMeta';
-import { contextFact, type SessionFactSet } from '../fleet/sessionFacts';
+import { cardFacts, contextFact, heldWords, type SessionFactSet } from '../fleet/sessionFacts';
 import { programmeWave } from '../fleet/runWords';
 import { coordinationLine, type Coordination } from '../fleet/fleetTree';
 
@@ -93,7 +93,7 @@ export function SessionDetails({ facts, coordination }: {
       {s.workspace === null && s.name !== null && <Detail title="this session's name">{s.name}</Detail>}
       {runId !== null && <Detail title="the run this wave belongs to — the run board names it">{`run #${runId}`}</Detail>}
       {facts.coordinatorRole && <Detail title="this session is its project's coordinator">coordinator</Detail>}
-      {s.held !== null && ctx?.key === 'programme' && <Detail title="the hold, verbatim">{`hold: ${s.held}`}</Detail>}
+      {s.held !== null && ctx?.key === 'programme' && <Detail title="the hold, verbatim">{heldWords(s.held)}</Detail>}
       {s.pr?.number != null && <Detail>{`PR #${s.pr.number}`}</Detail>}
       {facts.lane.away && facts.offPool === null && facts.lane.label !== undefined && <Detail>{facts.lane.label}</Detail>}
       {asking && <Detail title="the question it is waiting on">{`asks: ${s.askSummary ?? ''}`}</Detail>}
@@ -119,8 +119,26 @@ export function SessionDetails({ facts, coordination }: {
     </div>
   );
 
+  // On a phone, before the door is opened, the header still says at least what the CARD says (verifier round 1):
+  // the card's one marker and its context fact, unless the coordination row (the programme) or the status word
+  // (`waiting on you`, `with coordinator`) already does.
+  const glance = cardFacts(facts);
+  const liftMarker = glance.marker !== null && glance.marker.key !== 'needs-you' && glance.marker.key !== 'with-coordinator'
+    ? glance.marker : null;
+  const liftContext = glance.context !== null && glance.context.key !== 'programme' ? glance.context : null;
+  const lifted = !wide && !open ? [
+    ...(liftContext === null ? [] : [{ key: 'context', text: liftContext.text, title: liftContext.title }]),
+    ...(liftMarker === null ? [] : [{
+      key: liftMarker.key,
+      text: liftMarker.key === 'spawn' ? `spawn: ${liftMarker.short ?? liftMarker.text}` : (liftMarker.short ?? liftMarker.text),
+      title: liftMarker.title ?? liftMarker.text,
+    }]),
+  ] : [];
   return (
     <>
+      {lifted.map((x) => (
+        <span key={x.key} className="chat-fact chat-glance" data-glance={x.key} title={x.title}>{x.text}</span>
+      ))}
       {!wide && (
         <Door className="chat-details-toggle" glyph={open ? '▾' : '▸'}
           aria-label="Session details" aria-expanded={open} aria-controls={open ? detailsId : undefined}

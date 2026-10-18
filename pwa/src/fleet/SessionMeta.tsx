@@ -31,7 +31,7 @@ import { WARN_GLYPH } from '@ccrc/ui';
 import { programmeWaveTail, type ChildRunContext } from './runWords';
 import { GraphChip, LastSpawnChip } from './chips';
 import {
-  PROGRAMME_BUDGET, cardFacts, markers, shortenByToken, type Fact, type MarkerKey, type SessionFactSet,
+  PROGRAMME_BUDGET, cardFacts, heldWords, markers, shortenByToken, type Fact, type MarkerKey, type SessionFactSet,
 } from './sessionFacts';
 import './fleet.css';
 
@@ -54,10 +54,27 @@ const MARKER_CLASS: Record<MarkerKey, string> = {
   'off-pool': 'sess-offpool',
 };
 
+/**
+ * A card fact that may not fit (verifier round 1): its FULL text and its token-shortened form, both drawn and both
+ * `aria-hidden`, with the full text spoken once from an `sr-only` span. fleet.css's container query on
+ * `.sess-body` shows the full form wherever the card's column can hold it (it wraps at a space or a hyphen, never
+ * by an ellipsis) and the shortened one only in a phone-narrow column. Without a shorter form it is plain text.
+ */
+export function Fit({ full, short }: { full: string; short?: string | undefined }): ReactNode {
+  if (short === undefined || short === full) return full;
+  return (
+    <>
+      <span className="sr-only">{full}</span>
+      <span className="fit-full" aria-hidden="true">{full}</span>
+      <span className="fit-short" aria-hidden="true">{short}</span>
+    </>
+  );
+}
+
 /** One attention marker. `short` on the card, the full text in the header; the full text always in `title`. */
-function Marker({ fact, full, title }: { fact: Fact; full: boolean; title?: string }): ReactNode {
+function Marker({ fact, full }: { fact: Fact; full: boolean }): ReactNode {
   const key = fact.key as MarkerKey;
-  const tip = title ?? fact.title ?? fact.text;
+  const tip = fact.title ?? fact.text;
   return (
     <span
       className={`sess-marker ${MARKER_CLASS[key]}`}
@@ -82,12 +99,10 @@ export interface SessionMetaProps {
   subagentsOpen?: boolean;
   subagentsId?: string;
   onToggleSubagents?: () => void;
-  /** The orphan marker's guidance — the run board reclaims a dead coordinator's programme. */
-  markerTitle?: string;
 }
 
 export function SessionMeta({
-  facts: f, mode, onOpenRun, subagentsOpen = false, subagentsId, onToggleSubagents, markerTitle,
+  facts: f, mode, onOpenRun, subagentsOpen = false, subagentsId, onToggleSubagents,
 }: SessionMetaProps): ReactNode {
   const card = mode === 'card';
   const session = f.session;
@@ -104,7 +119,7 @@ export function SessionMeta({
   // (shortened by token) or the word `held`; the header shows the programme and wave in full, and the verbatim
   // reason in `title` and in the details (`SessionDetails`).
   const heldBody = f.heldRun !== null ? <ProgrammeWave run={f.heldRun} short={card} />
-    : card ? 'held' : session.held;
+    : card ? 'held' : session.held === null ? null : heldWords(session.held);
   const heldText = f.heldRun !== null ? (glance.context?.text ?? '') : (session.held ?? '');
   const held = session.held === null ? null : onOpenRun === null ? (
     <span className="sess-held" data-held="true" title={f.heldTitle ?? undefined}>
@@ -146,8 +161,7 @@ export function SessionMeta({
           <span className={`sess-state sess-state--${f.stateTone}`} title={glance.status.title}>{glance.status.text}</span>
           {glance.marker !== null && glance.marker.key === 'spawn' && <LastSpawnChip chip={f.spawn} />}
           {glance.marker !== null && glance.marker.key !== 'spawn' && (
-            <Marker fact={glance.marker} full={false}
-              {...(glance.marker.key === 'coordinator-gone' && markerTitle !== undefined ? { title: markerTitle } : {})} />
+            <Marker fact={glance.marker} full={false} />
           )}
         </span>
         {context !== null && <span className="sess-meta sess-meta--context" style={metaStyle}>{context}</span>}
@@ -197,8 +211,7 @@ export function SessionMeta({
       {/* Every marker, in full — but the last spawn and the restart, which the header already draws (the spawn chip
           above, the header's own restart chip). */}
       {markers(f).filter((m) => m.key !== 'spawn' && m.key !== 'restarted').map((m) => (
-        <Marker key={m.key} fact={m} full
-          {...(m.key === 'coordinator-gone' && markerTitle !== undefined ? { title: markerTitle } : {})} />
+        <Marker key={m.key} fact={m} full />
       ))}
     </span>
   );
@@ -206,7 +219,11 @@ export function SessionMeta({
 
 /** A plain context cell — a PR or a branch: its short form on the card, the full text in `title`. */
 function ContextCell({ fact }: { fact: Fact }): ReactNode {
-  return <span className="sess-context" data-context={fact.key} title={fact.title ?? fact.text}>{fact.short ?? fact.text}</span>;
+  return (
+    <span className="sess-context" data-context={fact.key} title={fact.title ?? fact.text}>
+      <Fit full={fact.text} short={fact.short} />
+    </span>
+  );
 }
 
 /** `<programme> · wave 5 of 7` as two spans: the wave never shortens (D-5528), and on the card the programme
@@ -215,7 +232,9 @@ function ContextCell({ fact }: { fact: Fact }): ReactNode {
 function ProgrammeWave({ run, short }: { run: NonNullable<ChildRunContext['run']>; short: boolean }): ReactNode {
   return (
     <span className="sess-pw">
-      <span className="sess-pw-prog">{short ? shortenByToken(run.program, PROGRAMME_BUDGET) : run.program}</span>
+      <span className="sess-pw-prog">
+        {short ? <Fit full={run.program} short={shortenByToken(run.program, PROGRAMME_BUDGET)} /> : run.program}
+      </span>
       <span className="sess-pw-wave">{programmeWaveTail(run)}</span>
     </span>
   );

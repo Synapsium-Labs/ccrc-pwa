@@ -444,3 +444,38 @@ describe('the keyboard, and the transcript banner with no path', () => {
     expect(path?.textContent, 'a path was invented for a transcript nothing measured').toBe('');
   });
 });
+
+// D-5545 (verifier round 1, mutation V7): the header's facts are wired at THIS screen — the run, its claimant and
+// the claimant's presence — so only a screen-level case catches a header that never learns its coordinator is gone.
+describe('the session header knows what the card knows (D-5545)', () => {
+  it('an orphan whose coordinator is gone reads "coordinator gone" in the header, with the reclaim guidance', () => {
+    const store = createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt } });
+    const fleet = createFleetStore();
+    const run = {
+      id: 44, program: 'tidy-docs', programTitle: 'Tidy the docs', wave: 3, waveOf: 5,
+      project: 'project-a', homeProject: null, sessionId: ID, workspace: null, branch: null,
+      state: 'dispatched', kind: 'work', reviews: null, claimedBy: 'claude:project-b', resumed: false, clearedAt: null,
+      openedAt: 1, dispatchStartedAt: null, dispatchedAt: null, closedAt: null, handoffCommit: null,
+      items: { done: 0, total: 0 }, unreadMail: 0,
+      health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0, lastRejectCode: null,
+        briefQueued: true, clearError: null, coordKickoffPendingSince: null }, childReclaim: null,
+    };
+    act(() => {
+      fleet.setState({
+        roster: TEST_ROSTER, conn: 'open', fleetFrameSeen: true, runsFrameSeen: true,
+        sessions: [
+          fleetSession({ held: 'program:tidy-docs wave:3/5 run:44', child: { kind: 'child', runId: 44 }, role: 'child' }),
+          baseSession({ id: 'claude:project-b', project: 'project-b', status: 'dead', bucket: 'dead', lifecycle: 'orphan' }),
+        ],
+        runs: [run],
+      } as never);
+    });
+    render(<><SessionScreen id={ID} store={store} fleet={fleet} /><ToastHost /></>);
+    act(() => { store.setState({ uuid: 'u1', status: 'idle' }); });
+    const toggle = screen.queryByRole('button', { name: /details/i });
+    if (toggle !== null && toggle.getAttribute('aria-expanded') === 'false') fireEvent.click(toggle);
+    const marker = document.querySelector('.chat-head [data-marker="coordinator-gone"]');
+    expect(marker?.textContent).toContain('coordinator gone');
+    expect(marker?.getAttribute('title')).toContain('reclaim');
+  });
+});
