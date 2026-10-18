@@ -6737,9 +6737,11 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
     expect(fn, 'ccd/ccrc has no _ver_newer').not.toBeNull();
     const list = ['v0.0.1', 'v0.0.10', 'v0.0.9', 'v0.1.0', 'v1.0.0', 'v1.9.9', 'v1.9.10', 'v2.0.0', 'v10.0.0'];
     const sorted = spawnSync('bash', ['-c', 'printf "%s\\n" "$@" | sort -V', '--', ...list], { encoding: 'utf8' }).stdout.trim().split('\n');
+    // The `_ver_newer` slice runs contained (wave 17, D-5322); the `sort -V` reference above runs no slice.
+    const verEnv = ccrcContainedEnv(mkTmp('ccrc-install-vernewer-'), process.env, { managers: true, curl: 'poison' });
     for (let i = 0; i < sorted.length; i += 1) {
       for (let j = 0; j < sorted.length; j += 1) {
-        const r = spawnSync('bash', ['-c', `${fn![0]}\n_ver_newer "$1" "$2"`, '--', sorted[i]!, sorted[j]!], { encoding: 'utf8' });
+        const r = spawnSync('bash', ['-c', `${fn![0]}\n_ver_newer "$1" "$2"`, '--', sorted[i]!, sorted[j]!], { encoding: 'utf8', env: verEnv });
         expect(r.status, `${sorted[i]} newer than ${sorted[j]}?`).toBe(i > j ? 0 : 1);
       }
     }
@@ -6926,9 +6928,12 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
       fn![0],
       '_inst_installed',
     ].join('\n');
+    // Contained (wave 17, D-5322). The function reads CCRC_UPDATE_VERIFIED and CCRC_UPDATE_SPINE from the env, and the
+    // builder starts from `process.env`, so they ride through exactly as they did when the spawn inherited it.
+    const env = ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' });
     let r: Result;
     try {
-      const p = spawnSync('bash', ['-c', harness], { encoding: 'utf8' });
+      const p = spawnSync('bash', ['-c', harness], { encoding: 'utf8', env });
       r = { code: p.status ?? -1, stdout: p.stdout ?? '', stderr: p.stderr ?? '' };
     } finally {
       chmodSync(join(home, '.ccrc'), 0o755);

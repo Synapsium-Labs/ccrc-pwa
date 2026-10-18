@@ -45,6 +45,7 @@ import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { ghContainedEnv, ghPoisonAt, plantPoolEpoch, seedAccountsSh } from './ccdWsHelpers.js';
+import { ccrcContainedEnv } from './ccrcContainment.js';
 import { plantAuthHelper, plantAuthModule, fixtureSecretLine, compiledSecretJs } from './authFixtures.js';
 // One home for the scratch-slug vocabulary (D-2375) — see scratchSlugs.ts
 // for the rule, and for why the /var/tmp control needs both spellings.
@@ -8500,10 +8501,13 @@ describe('ccrc status', () => {
   // and it is NOT "inactive" — the same distinction this whole file keeps
   // between a check that failed and a check that could not run.
   describe('_box_role never asserts a state it did not measure', () => {
+    // An EMPTY fixture HOME made at collection: `_box_role` reads only the preset BOX_UNITS array, so nothing is put in
+    // it; the env is contained so a stray systemctl, curl or ssh answers a poison (wave 17, D-5322).
+    const roleHome = mkTmp('ccrc-doctor-boxrole-');
     const roleFor = (ccrc: string, agent: string): string => {
       const r = spawnSync(BASH, ['-c',
         `source "${CCRC_SRC}"; BOX_UNITS=(${ccrc} ${agent}); _box_role; echo`],
-        { encoding: 'utf8', env: { ...process.env, HOME: join(REPO, 'no-such-home-for-box-role') } });
+        { encoding: 'utf8', env: ccrcContainedEnv(roleHome, process.env, { managers: true, curl: 'poison' }) });
       expect(r.status, `_box_role exited ${r.status}\n${r.stderr}`).toBe(0);
       expect(r.stderr).toBe('');
       return r.stdout.trim();
@@ -9868,7 +9872,7 @@ describe('ccrc doctor: update-exposure (design §12 — armed and reachable, eac
         `CCRC_EXPOSURE_FILE=${shq(real)}`, `BOX_AUTH_FILE=${shq(join(home, '.ccrc', 'auth.scrypt'))}`,
         fn![0],
         `_exp_env_write ${arm} https://box.example.com ${arm === 'ip' ? "''" : 'box.example.com'} ${arm === 'ip' ? '203.0.113.9' : 'box.example.com'} fixture-token ''`,
-      ].join('\n')], { env: { ...process.env, HOME: home }, encoding: 'utf8' });
+      ].join('\n')], { env: ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' }), encoding: 'utf8' });
       expect(w.status, `${arm}: ${w.stderr}`).toBe(0);
       const writerArms = readFileSync(real, 'utf8').split('\n').includes('CCRC_AUTH=on');
       const fx = mkTmp(`ccrc-doctor-expfixture-${arm}-`);
