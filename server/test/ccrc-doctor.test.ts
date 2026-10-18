@@ -16295,9 +16295,39 @@ describe('update-sweep: the last update\'s sweep, read from its report, WARN nev
     const home = sweepBox('ccrc-doctor-us-abandoned-');
     plantSweep(home, 'died: abandoned', 'failed');
     const r = runUs(home);
-    expect(verdict(r)).toBe("WARN update-sweep: the last update's updater was closed by the watchdog during or right after its supervisor sweep, so its outcome was never recorded and some supervisors may run the previous ccd");
+    expect(verdict(r)).toBe("WARN update-sweep: the watchdog closed the last update's report, abandoned during or right after its supervisor sweep, so its outcome was never recorded and some supervisors may run the previous ccd");
     expect(verdict(r)).not.toContain('died partway');
     expect(remedy(r)).toMatch(/^  remedy: ccrc status lists each session's state; restart any that is not running with ccd start <id>; this WARN clears at the next ccrc update or rollback, which writes a new report$/);
+    expect(r.code).toBe(2);
+  });
+
+  it('D16c: a server-role box SKIPs the whole check, `died: abandoned` and the dead-pid `restarting` arm included; role both WARNs, and an absent role keeps the check (D-5330, D-3111)', () => {
+    const roleBox = (prefix: string, role: string | null): string => {
+      const home = sweepBox(prefix);
+      if (role !== null) writeCcrcEnv(home, [`CCRC_ROLE=${role}`, 'CCRC_FLEET=local', 'CCRC_HOST=ccrc-fixture.invalid', 'CCRC_PORT=7788', ''].join('\n'));
+      return home;
+    };
+    const srv = roleBox('ccrc-doctor-us-role-server-', 'server');
+    plantSweep(srv, 'died: abandoned', 'failed');
+    let r = runUs(srv);
+    expect(verdict(r)).toBe('SKIP update-sweep: this box records CCRC_ROLE=server, so it hosts no supervisors and no update\'s supervisor sweep is its concern');
+    expect(r.code).toBe(3);
+    // The dead-pid `restarting` arm is gated too: the gate sits above the whole check.
+    plantReport(srv, { ...REPORT, pid: 999999999, phase: 'restarting' });
+    r = runUs(srv);
+    expect(verdict(r)).toMatch(/^SKIP update-sweep: this box records CCRC_ROLE=server/);
+    expect(r.code).toBe(3);
+    // Role both hosts supervisors: the same report WARNs.
+    const both = roleBox('ccrc-doctor-us-role-both-', 'both');
+    plantSweep(both, 'died: abandoned', 'failed');
+    r = runUs(both);
+    expect(verdict(r)).toMatch(/^WARN update-sweep: the watchdog closed the last update's report/);
+    expect(r.code).toBe(2);
+    // An absent role never folds into the skip.
+    const none = roleBox('ccrc-doctor-us-role-none-', null);
+    plantSweep(none, 'died: abandoned', 'failed');
+    r = runUs(none);
+    expect(verdict(r)).toMatch(/^WARN update-sweep: the watchdog closed the last update's report/);
     expect(r.code).toBe(2);
   });
 

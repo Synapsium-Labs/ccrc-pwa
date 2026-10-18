@@ -8391,7 +8391,7 @@ describe('ccrc watchdog: a re-measurement, never a timestamp alone (design §11)
     expect(lockFree(home)).toBe(true);
   });
 
-  itLinux('D-5329 (review 589 F1): a stale `restarting` report the watchdog closes on a passing probe carries `"sweep":"died: abandoned"`; a stale pre-sweep report closes with NO sweep key', () => {
+  itLinux('D-5329 (review 589 F1): a stale `restarting` report the watchdog closes on a passing probe carries `"sweep":"died: abandoned"`; a stale report in any other in-flight phase closes with NO sweep key', () => {
     // The one phase the supervisor sweep runs in: an updater closed there died
     // during or right after its sweep, and the doctor's update-sweep WARN reads
     // the word. Converged arm first.
@@ -8414,8 +8414,13 @@ describe('ccrc watchdog: a re-measurement, never a timestamp alone (design §11)
     expect(now.phase).toBe('failed');
     expect(String(now.detail)).toMatch(/^abandoned by its updater; box answers healthy on v2\.0\.0 but its install never completed/);
     expect(now.sweep).toBe('died: abandoned');
-    // A stale pre-sweep report closes keyless, on both arms.
-    for (const phase of ['installing', 'backing-up']) {
+    // A stale report in every other in-flight phase closes keyless, on both arms.
+    // Every in-flight phase but `restarting`, read from ccd/ccrc's own array (not a hand copy), so a phase added there
+    // is covered, and a condition widened to `checking` or `restoring` reds (review 593 F1).
+    const inFlight = /^UPD_IN_FLIGHT_PHASES=\(([^)]*)\)/m.exec(readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8'))?.[1]?.trim().split(/\s+/) ?? [];
+    expect(inFlight, 'ccd/ccrc\'s UPD_IN_FLIGHT_PHASES was not read').toContain('restarting');
+    expect(inFlight.length, 'the nine in-flight phases').toBe(9);
+    for (const phase of inFlight.filter((p) => p !== 'restarting')) {
       const h = watchBox(`ccrc-watchdog-nosweep-converged-${phase}-`);
       report(h, { phase, ageS: 90 });
       r = runWatchdog(h);

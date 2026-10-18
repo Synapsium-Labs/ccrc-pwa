@@ -9163,9 +9163,9 @@ _fix_delegation-hooks() {
 # ── update-sweep: the last update's supervisor sweep, as its report recorded it ──
 # Reading 9's doctor half (the operator, 2026-10-15: warn only) and R10k (wave 17,
 # D-5316). `ccrc update` and `ccrc rollback` record what their supervisor sweep did
-# as update.json's `sweep` key (D-5314, D-5315), and the watchdog's close of an
-# abandoned `restarting` report records `died: abandoned` (D-5329): `ok`, `down: <n>: <id> ...`,
-# `refused: <why>`, `unverified: <why>` or `died: <why>`. This check reads that
+# as update.json's `sweep` key (D-5314, D-5315): `ok`, `down: <n>: <id> ...`,
+# `refused: <why>`, `unverified: <why>` or `died: <why>`; and the watchdog's close of an
+# abandoned `restarting` report records `died: abandoned` (D-5329). This check reads that
 # record and NEVER FAILS, by the operator's ruling (warn only): a FAIL would turn a
 # state the update already recorded and reported into exit 1 for every bare
 # `ccrc doctor` and `ccrc install`, and into exit 3 with a changed detail for every
@@ -9174,15 +9174,25 @@ _fix_delegation-hooks() {
 # before wave 17 wrote the report, a converged no-op wrote it, or the run stopped
 # before its sweep), never "nothing was down". Nothing here, or anywhere, re-sweeps:
 # a recorded refusal is reported until the next update or rollback writes a new report.
+# A server-role box hosts no supervisors (D-3111), so no sweep result is its concern: the
+# whole check SKIPs there (D-5330), the `restarting` dead-pid arm included. An absent or
+# unreadable role keeps the check as it is; it never folds into that skip.
 _check_update-sweep() {
   if ! declare -F _upd_report_readable >/dev/null 2>&1 || ! declare -F _svc_is_active >/dev/null 2>&1 \
      || [ -z "${BOX_UPDATE_JSON:-}" ]; then
     _dr_skip update-sweep "ccrc's own report reader is not loaded, so the last update's sweep was not read (a bug in ccrc: this table was sourced by something that is not ccrc)"
     return 3
   fi
-  local rrc=0 line phase pid word rest n id ans cut="" fix clears nr msg sh l sw
+  local rrc=0 line phase pid word rest n id ans cut="" fix clears nr msg sh l sw _srv_role=""
   local -a words=()
   local -a ids=() still=() unasked=() rst=()
+  # `-f` before `-r` (D-3025), and `${BOX_ENV_FILE:-}` for a caller that sources this file bare, as
+  # `_check_accounts` does (D-3111).
+  [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && _srv_role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  if [ "$_srv_role" = server ]; then
+    _dr_skip update-sweep "this box records CCRC_ROLE=server, so it hosts no supervisors and no update's supervisor sweep is its concern"
+    return 3
+  fi
   clears="; this WARN clears at the next ccrc update or rollback, which writes a new report"
   _upd_report_readable || rrc=$?
   case "$rrc" in
@@ -9322,7 +9332,7 @@ _check_update-sweep() {
       return 2 ;;
     'died: abandoned')
       # D-5329 (review 589 F1): `cmd_watchdog` closes a stale `restarting` report with this word.
-      _dr_warn update-sweep "the last update's updater was closed by the watchdog during or right after its supervisor sweep, so its outcome was never recorded and some supervisors may run the previous ccd" \
+      _dr_warn update-sweep "the watchdog closed the last update's report, abandoned during or right after its supervisor sweep, so its outcome was never recorded and some supervisors may run the previous ccd" \
         "ccrc status lists each session's state; restart any that is not running with ccd start <id>${clears}"
       return 2 ;;
     'died: '*)
