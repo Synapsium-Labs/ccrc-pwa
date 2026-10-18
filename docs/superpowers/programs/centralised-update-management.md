@@ -1847,6 +1847,9 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     - **2026-10-18 00:58 UTC:** v0.0.252 released at 00:31 (#570, the swap route) and stays unapplied under
       `auto=stable`; no box moved. STATUS: fleet and server v0.0.244, newest v0.0.252, intent dev/auto=stable, backups
       fleet 131M/server 826M, disk free fleet 210G/work volume 75G/server 32G, no anomalies.
+    - **2026-10-18 01:58 UTC:** v0.0.253 to v0.0.255 released (#575, #564, #572; the last at 01:30) and stay
+      unapplied under `auto=stable`; no box moved. STATUS: fleet and server v0.0.244, newest v0.0.255, intent
+      dev/auto=stable, backups fleet 131M/server 826M, disk free fleet 213G/work volume 77G/server 32G, no anomalies.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
