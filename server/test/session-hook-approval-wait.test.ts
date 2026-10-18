@@ -369,7 +369,9 @@ describe('the hook ends itself when the pane answered (D-5439)', () => {
     put('stub/request.out', '{"id":41,"waitS":1}');
     const twin = 'toolu_000000000000000000000002';
     fs.appendFileSync(transcript, assistantRow(TOOLU, MAIN.tool_input) + assistantRow(twin, MAIN.tool_input));
-    arm(resultRow(TOOLU));
+    // The LAST open match is the one answered: a hook that tied itself to it anyway (the record's "last such entry",
+    // without the ambiguity rule) would end early, and must not.
+    arm(resultRow(twin));
     const r = fire(payloadFor(MAIN));
     expect(r.stdout).toBe('');
     expect(r.ms, 'it fell back to its window').toBeGreaterThanOrEqual(900);
