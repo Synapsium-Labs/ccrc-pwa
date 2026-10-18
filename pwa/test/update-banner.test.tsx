@@ -324,10 +324,14 @@ describe('UpdateBanner — its two buttons', () => {
     await waitFor(() => expect(updates).toHaveBeenCalledTimes(2));
   });
 
-  it("See what's new lands on /settings", () => {
+  // D-5549: it used to navigate to /settings, whose release list sits far
+  // below the fold, so the tap read as doing nothing. It opens the What's-new
+  // sheet in place (whats-new-sheet.test.tsx holds what the sheet says).
+  it("See what's new opens the What's new sheet in place, never leaving the screen", () => {
     render(<UpdateBanner updates={view()} />);
     fireEvent.click(screen.getByRole('button', { name: "See what's new" }));
-    expect(location.pathname).toBe('/settings');
+    expect(location.pathname).toBe('/');
+    expect(screen.getByRole('dialog')).toHaveTextContent("What's new since v0.0.7");
   });
 });
 

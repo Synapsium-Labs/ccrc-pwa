@@ -107,8 +107,18 @@ and the contrast gate measures each palette once, for both skins.
   renders as it did. In Instrument, buttons set at 13px from 900px wide,
   meta at 11px. `--row-h` is a list row's minimum height (44px, or 32px
   under a fine pointer), and the row's `py-2` plus its content set the drawn
-  height: 36px for a one-line row under a fine pointer (D-5461). The app
-  sheets, `Sheet`'s body and `OptionRow` follow in a later change.
+  height: 36px for a one-line row under a fine pointer (D-5461).
+- **So do the sheet body, `OptionRow` and the app sheets** (Task 14b).
+  `Sheet`'s panel pads its sides with `px-card` (`--pad-card`: 16px in
+  Refined, 12px in Instrument); the full drawer arm keeps `px-0`.
+  `OptionRow`'s label and cursor read `--fs-ui`, its index and enter hint
+  `--fs-meta`, and its minimum height `--row-h`. In the app sheets
+  (`fleet.css`, `shell.css`, `chat.css`) and the transcript's tool rows
+  (`tool-card.css`), a row's or a control's label and a sheet's copy read
+  `--fs-ui` where they said `--fs-base`, and timestamps, counts, chips and
+  meta lines read `--fs-meta` where they said `--fs-xs`. Page titles, prose,
+  screen statements, section heads and the fleet's session line stay on
+  their steps.
 
 ### The role census
 
@@ -128,6 +138,14 @@ The census also resolves each adopted role and the step it replaced in
 `tokens.css`'s `:root` and requires them equal, at every width. Retuning a
 Refined role reds it, and the adoption has to be measured again. Padding and
 gaps are a control's own rhythm and are not scanned.
+
+A primitive dressed by its own stylesheet (`OptionRow`, through
+`option-row.css`) names that sheet in its entry, and the census reads its
+sizes in CSS spelling: a `var(--fs-<step>)` or a `min-height` in px is a scale
+size, and a `var(--<role>)` is a role. The app sheets have a registry of their
+own, `APP_ROLE_RULES`, checked in both directions: a registered rule back on
+its step reds, and so does a rule that reads a type role without being
+registered.
 
 Storybook's **Skin** toolbar applies the skin through the same `applySkin`
 the app calls, and the token reference has a **Skin roles** page that shows

@@ -9443,8 +9443,19 @@ export const FLEET_SCOPE = '*';
 /** The poller's own state (§7). `{lastOkAt: null, lastError: null}` = never
  *  checked since this process started — never "up to date". */
 export interface CatalogueState { lastOkAt: number | null; lastError: { at: number; reason: string } | null }
-/** `GET /api/updates` (§12). */
-export interface UpdatesView { catalogue: CatalogueState; releases: ReleaseWire[]; nodes: NodeWire[]; intent: UpdateIntentWire[]; boxToken?: BoxTokenView }
+/** The GitHub owner/repo the catalogue lists releases from (D-5549) — the pair
+ *  the server's release source READ (`server/src/config.ts`), sent so the PWA
+ *  can link a release note's `#NNN` to that repo's pull request from the
+ *  number alone. No TS root spells the org (`single-definition.test.ts`), so
+ *  this is the only way a client learns it. */
+export interface ReleaseSourceWire { owner: string; repo: string }
+/** `GET /api/updates` (§12). `source` is ADDITIVE (D-5549): absent from an
+ *  older server and from one with no usable release source, and the PWA then
+ *  shows a `#NNN` as plain text — never a guessed link. */
+export interface UpdatesView {
+  catalogue: CatalogueState; releases: ReleaseWire[]; nodes: NodeWire[]; intent: UpdateIntentWire[]; boxToken?: BoxTokenView;
+  source?: ReleaseSourceWire;
+}
 
 /** Every refusal word an update route answers with (§12). */
 export type UpdateRouteError =
@@ -11094,18 +11105,18 @@ export interface DelegationHealthInput {
 }
 
 /** The size and shape bounds of one delegation spool line (delegation broker wave 3, spec §5.3), declared ONCE. The hook's
- *  jq program and shell block spell the same numbers in `ccd/session-hook.sh` (`def idmax:`, `def maxline:`, `def maxlabel:` and
- *  `def maxpath:` in the jq text, `CCRC_ID_MAX` for the owner, and the `DSP_` constants beside the append) because a hook cannot
- *  import this file; `delegation-spool.test.ts` reads both and fails on any drift, and the server's reader imports THIS object.
+ *  jq program and shell block spell the same numbers in `ccd/session-hook.sh` (`def idmax:`, `def maxlabel:` and `def maxpath:` in
+ *  the jq text, `CCRC_ID_MAX` for the owner, `DSP_LINE_BELOW` and `DSP_LINE_SMALL`, the jq's `maxline` among their readers, and the
+ *  other `DSP_` constants beside the append) because a hook cannot import this file; `delegation-spool.test.ts` reads both and fails on any drift, and the server's reader imports THIS object.
  *  Every byte count is UTF-8 bytes, never characters.
  *
  *  Each value is chosen from measurement, on the fixture corpus (`fixtures/delegation/<version>/`: 14 versions, 2.1.280 to
  *  2.1.299, 193 measured cells; its paths are sanitised and shorter than a real fleet's) and on the fleet's own transcript
  *  trees, never from a guess:
- *   - `lineBytesBelow`: the plan says LESS than 4096 bytes, not less than or equal, counting the LF. A line that is built
- *     in one buffered `printf` and so reaches the file in ONE `write(2)` must fit one 4096-byte stdio block, and 4095 is the
- *     most that block holds. An O_APPEND write of one block is the only append the hook can make that two hooks racing on
- *     one bucket never interleave.
+ *   - `lineBytesBelow`, and `lineBytesBelowSmall` off glibc Linux (D-5436): LESS than the cap, counting the LF. A builtin `printf`
+ *     goes through bash's stdout buffer, so a line reaches the file in ONE `write(2)` only if it fits: glibc with a distro bash
+ *     sizes it from st_blksize (4096 on the usual filesystems), bash's own malloc 1008 or 2016, BSD and macOS libc and musl 1024. One
+ *     O_APPEND write is the only append two hooks racing on one bucket never interleave. The server's reader bounds every line at 4096.
  *   - `idBytes`: the longest id in the corpus is 36 (a Claude session UUID; agent ids 17, task ids 9, run ids 15); a real
  *     `tool_use_id` is about 30 (the corpus's are shorter placeholders). 64 is the
  *     bound the hook's own agent-id grammar already uses (`idmax`), so one number covers agent, tool-use, task, run and
@@ -11124,18 +11135,19 @@ export interface DelegationHealthInput {
  *   - `listingNameBytes`: the longest admin record name on the fleet is 37 bytes (the busiest repos' longest are 23 to 37;
  *     Claude Code's own `agent-<17 hex>` is 23, which is also the corpus's longest). A name longer than 64 bytes, or outside
  *     `[A-Za-z0-9._@+-]`, drops the listing.
- *   A listing of 93 real names is about 2.6 KiB, so the line cap (not the count) is what usually drops a listing: the
- *   cap is reached at about 130 names of the usual length, which is the ~3.9 KiB case the plan measures.
+ *   A listing of 93 real names is about 2.6 KiB, so the line cap (not the count) is what usually drops a listing: the 4096
+ *   cap is reached at about 130 names of the usual length (the plan's ~3.9 KiB case), the small one at about 15 to 20 (D-5436).
  *
- *  When a line is over `lineBytesBelow` its optional fields are dropped in this order until it fits, and `truncated: true`
+ *  When a line is over its cap its optional fields are dropped in this order until it fits, and `truncated: true`
  *  is set: `listing`, `claudeVersion`, `cwd`, `agentType` (omitted where optional, null where the variant requires the key),
  *  `transcriptPath`. The required identity fields, `agentTranscriptPath` and a launch among them, are never dropped (the
  *  required-but-nullable ones are not nulled to fit; a line they alone push over the cap is not written). With every bound
- *  above at its maximum and nothing escaped they sum to under 3.2 KiB; a line whose required fields alone pass the cap
- *  (a launch whose paths are inflated six-fold by control-character escapes) is not written at all, because a lost line can
- *  delay a link and an over-cap line could tear one. */
+ *  above at its maximum and nothing escaped they sum to under 3.2 KiB, which only the 4096 cap holds (on 1008 a deep-path
+ *  Workflow launch is not written, D-5436); a line whose required fields alone pass the cap is not written at all, because a lost
+ *  line can delay a link and an over-cap line could tear one, so "a line that cannot fit is a bug" holds on the 4096 cap only. */
 export const DELEGATION_SPOOL_BOUNDS = {
   lineBytesBelow: 4096,
+  lineBytesBelowSmall: 1008,
   idBytes: 64,
   ownerIdBytes: 128,
   labelBytes: 128,
@@ -11193,3 +11205,146 @@ export type ChildShellMark =
 export const DENY_SETTINGS_DIGEST = /^[0-9a-f]{64}$/;
 /** A `.childshell` value: an absolute path of plain characters. */
 export const CHILD_SHELL_PATH = /^\/[A-Za-z0-9._/-]+$/;
+
+// ── approvals, the fleet half (plan Task 14, D-5297, D-5299, D-5439, D-5440, D-5441) ──────────────────────────────
+
+/** The ceiling on a child's PermissionRequest hook's wait for a ruling, in seconds (spec §6.3 step 4): under the managed
+ *  hook timeout (`HOOK_TIMEOUT_S`, 600, `ccd/install-session-hooks.sh`). The hook waits for the request's own window,
+ *  the `waitS` the server's `201` answers (D-5441), and never past this. The hook's bash copy is held equal by
+ *  `session-hook-approval-wait.test.ts`. */
+export const APPROVAL_HOOK_WAIT_S = 540;
+
+/** The Claude Code versions on which a recorded rig capture proved spec §6.9's criteria as restated on 2026-10-18
+ *  (D-5439, D-5440, D-5441): plan Task 13's Linux re-check record, read with its macOS record. 2.1.299 is out: it has
+ *  no Linux capture (D-5481). The server mints an approval request only for a child whose live version is listed. */
+export const APPROVAL_HOOK_VERSIONS: readonly string[] = ['2.1.296', '2.1.300', '2.1.301', '2.1.302'];
+
+/** The versions on which the rig proved that a PermissionRequest's `cwd` equals the shell's working directory after a
+ *  `cd` in an earlier Bash call, on the main thread and in a subagent (spec §6.9; Task 13's Linux re-check record, L6).
+ *  A subset of `APPROVAL_HOOK_VERSIONS`, never wider: elsewhere the classifier is given `cwd = null`. */
+export const APPROVAL_CWD_TRUSTED: readonly string[] = ['2.1.296', '2.1.300', '2.1.301', '2.1.302'];
+
+/** The pinned public key's file name under the fleet box's `~/.ccrc` (spec §6.4), and the server's private key's under
+ *  the server box's: both carry `approval-signing`, the word the child's PreToolUse deny and the classifier's forbidden
+ *  match refuse in any path (D-5297). */
+export const APPROVAL_SIGNING_PUB_FILE = 'approval-signing.pub';
+export const APPROVAL_SIGNING_KEY_FILE = 'approval-signing.key';
+
+/** A ruling-route answer whose row is in one of these states carries no ruling and never will for this wait: the hook
+ *  stops polling and prints nothing (D-5440; spec §6.3 hook step 4, amended). Task 16's `APPROVAL_STATE_MAP` holds
+ *  each of them; the hook's bash copy is held equal by iteration. */
+export const APPROVAL_HOOK_STOP_STATES: readonly string[] = ['declined', 'released', 'operator', 'stale'];
+
+/** The canonical JSON of a value (spec §6.3 "The canonical form, exactly"), or `null` when it has none: no whitespace;
+ *  object keys in Unicode code-point order (jq's `-S`; JavaScript's default sort is by UTF-16 code unit and differs
+ *  above U+FFFF); every UTF-16 code unit outside printable ASCII, U+007F included, as a lowercase `\uXXXX`, except
+ *  `\b \f \n \r \t`, `\"` and `\\`; `/` never escaped; a number only as an integer of magnitude at most 2^53 − 1, in
+ *  plain decimal (`1.0` and `1E+2` are `1` and `100`; `-0` is `0`). The hook's `jq -cSa` program and the verifier's
+ *  copy are held equal to it over `server/test/fixtures/approvals/digest-corpus.json` and a record corpus. */
+const codePoints = (s: string): number[] => Array.from(s, (c) => c.codePointAt(0) as number);
+const byCodePoint = (a: string, b: string): number => {
+  const x = codePoints(a), y = codePoints(b);
+  for (let i = 0; i < Math.min(x.length, y.length); i++) if (x[i] !== y[i]) return (x[i] as number) - (y[i] as number);
+  return x.length - y.length;
+};
+const CANON_ESC: Readonly<Record<number, string>> = { 8: '\\b', 9: '\\t', 10: '\\n', 12: '\\f', 13: '\\r', 34: '\\"', 92: '\\\\' };
+const canonString = (s: string): string => {
+  let out = '"';
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    const e = CANON_ESC[c];
+    if (e !== undefined) out += e;
+    else if (c < 0x20 || c >= 0x7f) out += `\\u${c.toString(16).padStart(4, '0')}`;
+    else out += s[i];
+  }
+  return `${out}"`;
+};
+export function canonicalJson(v: unknown): string | null {
+  if (v === null) return 'null';
+  if (typeof v === 'boolean') return v ? 'true' : 'false';
+  if (typeof v === 'number') return Number.isInteger(v) && Math.abs(v) <= Number.MAX_SAFE_INTEGER ? String(v === 0 ? 0 : v) : null;
+  if (typeof v === 'string') return canonString(v);
+  if (Array.isArray(v)) {
+    const parts: string[] = [];
+    for (const x of v) { const c = canonicalJson(x); if (c === null) return null; parts.push(c); }
+    return `[${parts.join(',')}]`;
+  }
+  if (typeof v === 'object') {
+    const parts: string[] = [];
+    for (const k of Object.keys(v as object).sort(byCodePoint)) {
+      const c = canonicalJson((v as Record<string, unknown>)[k]);
+      if (c === null) return null;
+      parts.push(`${canonString(k)}:${c}`);
+    }
+    return `{${parts.join(',')}}`;
+  }
+  return null;
+}
+
+/** A request's canonical array (spec §6.3 "Keying"): `[session_id, agent_id, tool_name, cwd, tool_input]` from the
+ *  PermissionRequest hook input, `agent_id` `""` on the main thread (absent, `null` or `false`, as jq's `//` reads it)
+ *  and `cwd` the input's own, `null` when absent. Its sha256 is the request's input digest. `null` when the input has
+ *  no canonical form: spec §6.3 spells the hook's program as the integer-only `walk` over the WHOLE input and then the
+ *  array, so a non-integer number anywhere in the input (not only inside the array) leaves the request unsent. The
+ *  hook's spelling is `APPROVAL_DIGEST_JQ` in `ccd/session-hook.sh`. */
+export function approvalDigestBytes(hookInput: Readonly<Record<string, unknown>>): string | null {
+  if (canonicalJson(hookInput) === null) return null;
+  const field = (k: string): unknown => (Object.prototype.hasOwnProperty.call(hookInput, k) ? hookInput[k] : null);
+  const aid = field('agent_id');
+  return canonicalJson([field('session_id'), aid === null || aid === false ? '' : aid, field('tool_name'),
+    field('cwd'), field('tool_input')]);
+}
+
+/** A signed ruling's record (spec §6.3 server half, step 5). `sessionId` is the child's REGISTRY id (the request
+ *  body's `sessionId`), not Claude Code's `session_id`; `rowId` is the row the `201` named, and the verifier checks
+ *  both (D-5488). `expiresAt` is epoch milliseconds, the request window's end (D-5441). */
+export interface ApprovalRulingRecord {
+  readonly v: 1;
+  readonly rowId: number;
+  readonly sessionId: string;
+  readonly agentId: string;
+  readonly digest: string;
+  readonly nonce: string;
+  /** An `ApprovalClass` word, as `approvalClass` (server/src/coord/approvalguard.ts) answered it; spelled there once. */
+  readonly class: string;
+  readonly verdict: 'allow' | 'deny';
+  readonly reason: string;
+  readonly expiresAt: number;
+}
+
+/** The bytes the server signs and the verifier checks: the record's ten fields, and only those, in canonical form.
+ *  `null` for a record with no canonical form. `ccd/approval-verify.mjs` carries the documented second copy, held
+ *  equal by `approval-verify.test.ts`. */
+export function approvalRulingBytes(r: ApprovalRulingRecord): string | null {
+  return canonicalJson({ v: r.v, rowId: r.rowId, sessionId: r.sessionId, agentId: r.agentId, digest: r.digest,
+    nonce: r.nonce, class: r.class, verdict: r.verdict, reason: r.reason, expiresAt: r.expiresAt });
+}
+
+/** `POST /api/approvals`'s body, as the child's hook sends it through `ccrc-api approvals request` (spec §6.3 hook
+ *  step 3). `canonical` is the request's canonical array (`approvalDigestBytes`), `digest` its lowercase hex sha256,
+ *  `nonce` 128 bits as 32 lowercase hex. A canonical string over `APPROVAL_REQUEST_MAX_BYTES` is not sent: the body
+ *  says `truncated` instead, and such a request can never be allowed. */
+export interface ApprovalRequestBody {
+  readonly v: 1;
+  readonly sessionId: string;
+  readonly sessionUuid: string;
+  readonly canonical?: string;
+  readonly truncated?: true;
+  readonly digest: string;
+  readonly nonce: string;
+}
+export const APPROVAL_REQUEST_MAX_BYTES = 64 * 1024;
+
+/** `201`'s answer to that request: the row id, and the window the hook waits for (D-5441). */
+export interface ApprovalRequestAccepted { readonly id: number; readonly waitS: number }
+
+/** `GET /api/approvals/:id/ruling?nonce=`'s answer: the row's state, and the signed ruling once one is taken. `sig` is
+ *  the base64 Ed25519 signature over `approvalRulingBytes(record)`. */
+export interface ApprovalRulingAnswer {
+  readonly state: string;
+  readonly ruling?: { readonly record: ApprovalRulingRecord; readonly sig: string };
+}
+
+/** `GET /api/approvals/key`'s answer: the server's public key, PEM SPKI, which the install spine pins once into the
+ *  fleet box's `~/.ccrc/approval-signing.pub` (spec §6.4). */
+export interface ApprovalKeyAnswer { readonly v: 1; readonly alg: 'ed25519'; readonly publicKey: string }

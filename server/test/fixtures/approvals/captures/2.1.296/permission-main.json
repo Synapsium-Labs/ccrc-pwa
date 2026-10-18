@@ -1,0 +1,683 @@
+{
+ "v": 1,
+ "version": "2.1.296",
+ "scenario": "permission-main",
+ "labels": [
+  "main-allow20-hook-allow",
+  "main-pane-answer-during-wait",
+  "main-deny20-hook-deny",
+  "main-cwd-after-cd-sub"
+ ],
+ "notes": [
+  "bypass-mode session spawned the Task 15 way: CLAUDE_CODE_SHELL=/bin/bash, one --settings (hooks + CHILD_DENY_RULES)",
+  "trigger: Dangerous rm operation on possibly-empty variable path (X=$(mktemp -d SIBLING-DIR-tmp.XXXXXX) && rm -rf \"$X\" glob-star)",
+  "allow20: menu painted during the 20 s wait; hook allow dismissed it; transcript permissionDecision {accept, hook, hook}",
+  "pane answer at ~6 s: won (transcript source user_temporary); the hook was NOT signalled and exited at 20 s; its allow was ignored",
+  "deny20: tool_result is_error, content = the hook message; pane line \"Denied by PermissionRequest hook\"",
+  "cwd: after `cd sub` in an earlier call, PermissionRequest cwd equals the later call pwd (the project subdirectory sub)",
+  "Task 14 (public corpus): every id field re-minted neutral (session, prompt and message ids, agent ids, tool-use ids), one tmp-root spelling (/rig/tmp/claude-1000), every last_assistant_message and every task-notification result stubbed; three rig commands respelt bash-equivalently for the corpus scan (a dirname substitution read through a variable D, and one quoted variable joined to its suffix inside the quotes) and the paste wrapper reduced to a plain tag"
+ ],
+ "events": [
+  {
+   "seq": 1,
+   "dtMs": 0,
+   "event": "UserPromptSubmit",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000002",
+    "permission_mode": "bypassPermissions",
+    "hook_event_name": "UserPromptSubmit",
+    "prompt": "Run exactly this one Bash command yourself, verbatim, as a single Bash tool call, nothing else: X=$(mktemp -d /rig/work/sibling/tmp.XXXXXX) && rm -rf \"$X\"/*"
+   }
+  },
+  {
+   "seq": 2,
+   "dtMs": 1184,
+   "event": "PreToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000002",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "X=$(mktemp -d /rig/work/sibling/tmp.XXXXXX) && rm -rf \"$X\"/*",
+     "description": "Create temp dir under sibling and clear its contents"
+    },
+    "tool_use_id": "toolu_000000000000000000000001"
+   }
+  },
+  {
+   "seq": 3,
+   "dtMs": 1223,
+   "event": "PermissionRequest",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000002",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PermissionRequest",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "X=$(mktemp -d /rig/work/sibling/tmp.XXXXXX) && rm -rf \"$X\"/*",
+     "description": "Create temp dir under sibling and clear its contents"
+    },
+    "permission_suggestions": []
+   }
+  },
+  {
+   "seq": 4,
+   "dtMs": 7242,
+   "event": "Notification",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000002",
+    "hook_event_name": "Notification",
+    "message": "Claude needs your permission",
+    "notification_type": "permission_prompt"
+   }
+  },
+  {
+   "seq": 5,
+   "dtMs": 21329,
+   "event": "PostToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000002",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "X=$(mktemp -d /rig/work/sibling/tmp.XXXXXX) && rm -rf \"$X\"/*",
+     "description": "Create temp dir under sibling and clear its contents"
+    },
+    "tool_response": {
+     "stdout": "",
+     "stderr": "",
+     "interrupted": false,
+     "isImage": false,
+     "noOutputExpected": false
+    },
+    "tool_use_id": "toolu_000000000000000000000001",
+    "duration_ms": 27
+   }
+  },
+  {
+   "seq": 6,
+   "dtMs": 22254,
+   "event": "Stop",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000002",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "Stop",
+    "stop_hook_active": false,
+    "last_assistant_message": "<model prose, stubbed for the public corpus>",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 7,
+   "dtMs": 23345,
+   "event": "SubagentStop",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000002",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000001",
+    "agent_type": "",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000001/subagents/agent-a0000000000000001.jsonl",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 8,
+   "dtMs": 89524,
+   "event": "UserPromptSubmit",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000003",
+    "permission_mode": "bypassPermissions",
+    "hook_event_name": "UserPromptSubmit",
+    "prompt": "Run exactly this one Bash command yourself, verbatim, as a single Bash tool call, nothing else: X=$(mktemp -d /rig/work/sibling/tmp.XXXXXX) && rm -rf \"$X\"/*"
+   }
+  },
+  {
+   "seq": 9,
+   "dtMs": 90773,
+   "event": "PreToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000003",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "X=$(mktemp -d /rig/work/sibling/tmp.XXXXXX) && rm -rf \"$X\"/*",
+     "description": "Create temp dir under sibling and clear its contents"
+    },
+    "tool_use_id": "toolu_000000000000000000000002"
+   }
+  },
+  {
+   "seq": 10,
+   "dtMs": 90804,
+   "event": "PermissionRequest",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000003",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PermissionRequest",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "X=$(mktemp -d /rig/work/sibling/tmp.XXXXXX) && rm -rf \"$X\"/*",
+     "description": "Create temp dir under sibling and clear its contents"
+    },
+    "permission_suggestions": []
+   }
+  },
+  {
+   "seq": 11,
+   "dtMs": 96642,
+   "event": "PostToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000003",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "X=$(mktemp -d /rig/work/sibling/tmp.XXXXXX) && rm -rf \"$X\"/*",
+     "description": "Create temp dir under sibling and clear its contents"
+    },
+    "tool_response": {
+     "stdout": "",
+     "stderr": "",
+     "interrupted": false,
+     "isImage": false,
+     "noOutputExpected": false
+    },
+    "tool_use_id": "toolu_000000000000000000000002",
+    "duration_ms": 33
+   }
+  },
+  {
+   "seq": 12,
+   "dtMs": 97469,
+   "event": "Stop",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000003",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "Stop",
+    "stop_hook_active": false,
+    "last_assistant_message": "<model prose, stubbed for the public corpus>",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 13,
+   "dtMs": 98766,
+   "event": "SubagentStop",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000003",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000002",
+    "agent_type": "",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000001/subagents/agent-a0000000000000002.jsonl",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 14,
+   "dtMs": 131081,
+   "event": "UserPromptSubmit",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000004",
+    "permission_mode": "bypassPermissions",
+    "hook_event_name": "UserPromptSubmit",
+    "prompt": "Run exactly this one Bash command yourself, verbatim, as a single Bash tool call, nothing else, then quote verbatim any error or message the tool result gave you: X=$(mktemp -d /rig/work/sibling/tmp.XXXXXX) && rm -rf \"$X\"/*"
+   }
+  },
+  {
+   "seq": 15,
+   "dtMs": 132171,
+   "event": "PreToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000004",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "X=$(mktemp -d /rig/work/sibling/tmp.XXXXXX) && rm -rf \"$X\"/*",
+     "description": "Create temp dir under sibling and clear its contents"
+    },
+    "tool_use_id": "toolu_000000000000000000000003"
+   }
+  },
+  {
+   "seq": 16,
+   "dtMs": 132213,
+   "event": "PermissionRequest",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000004",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PermissionRequest",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "X=$(mktemp -d /rig/work/sibling/tmp.XXXXXX) && rm -rf \"$X\"/*",
+     "description": "Create temp dir under sibling and clear its contents"
+    },
+    "permission_suggestions": []
+   }
+  },
+  {
+   "seq": 17,
+   "dtMs": 138215,
+   "event": "Notification",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000004",
+    "hook_event_name": "Notification",
+    "message": "Claude needs your permission",
+    "notification_type": "permission_prompt"
+   }
+  },
+  {
+   "seq": 18,
+   "dtMs": 153321,
+   "event": "Stop",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000004",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "Stop",
+    "stop_hook_active": false,
+    "last_assistant_message": "<model prose, stubbed for the public corpus>",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 19,
+   "dtMs": 154614,
+   "event": "SubagentStop",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000004",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000003",
+    "agent_type": "",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000001/subagents/agent-a0000000000000003.jsonl",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 20,
+   "dtMs": 534424,
+   "event": "UserPromptSubmit",
+   "envSid": "00000000-0000-4000-8000-000000000005",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000005",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000005.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000005/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000006",
+    "permission_mode": "bypassPermissions",
+    "hook_event_name": "UserPromptSubmit",
+    "prompt": "Test rig. Make exactly two separate Bash tool calls yourself, in order, each verbatim: first call: cd sub   second call (a separate, later Bash call): pwd && X=$(mktemp -d ./tmp.XXXXXX) && rm -rf \"$X\"/* && echo \"made $X\"   Then quote both tool results verbatim."
+   }
+  },
+  {
+   "seq": 21,
+   "dtMs": 536851,
+   "event": "PreToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000005",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000005",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000005.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000005/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000006",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "cd sub",
+     "description": "Change directory into sub"
+    },
+    "tool_use_id": "toolu_000000000000000000000004"
+   }
+  },
+  {
+   "seq": 22,
+   "dtMs": 536891,
+   "event": "PostToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000005",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000005",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000005.jsonl",
+    "cwd": "/rig/work/proj/sub",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000005/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000006",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "cd sub",
+     "description": "Change directory into sub"
+    },
+    "tool_response": {
+     "stdout": "",
+     "stderr": "",
+     "interrupted": false,
+     "isImage": false,
+     "noOutputExpected": true
+    },
+    "tool_use_id": "toolu_000000000000000000000004",
+    "duration_ms": 12
+   }
+  },
+  {
+   "seq": 23,
+   "dtMs": 538364,
+   "event": "PreToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000005",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000005",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000005.jsonl",
+    "cwd": "/rig/work/proj/sub",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000005/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000006",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "pwd && X=$(mktemp -d ./tmp.XXXXXX) && rm -rf \"$X\"/* && echo \"made $X\"",
+     "description": "Print working directory, create temp dir, and echo its name"
+    },
+    "tool_use_id": "toolu_000000000000000000000005"
+   }
+  },
+  {
+   "seq": 24,
+   "dtMs": 538396,
+   "event": "PermissionRequest",
+   "envSid": "00000000-0000-4000-8000-000000000005",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000005",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000005.jsonl",
+    "cwd": "/rig/work/proj/sub",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000005/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000006",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PermissionRequest",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "pwd && X=$(mktemp -d ./tmp.XXXXXX) && rm -rf \"$X\"/* && echo \"made $X\"",
+     "description": "Print working directory, create temp dir, and echo its name"
+    },
+    "permission_suggestions": []
+   }
+  },
+  {
+   "seq": 25,
+   "dtMs": 538479,
+   "event": "PostToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000005",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000005",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000005.jsonl",
+    "cwd": "/rig/work/proj/sub",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000005/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000006",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "pwd && X=$(mktemp -d ./tmp.XXXXXX) && rm -rf \"$X\"/* && echo \"made $X\"",
+     "description": "Print working directory, create temp dir, and echo its name"
+    },
+    "tool_response": {
+     "stdout": "/rig/work/proj/sub\nmade ./tmp.9iSkwZ",
+     "stderr": "",
+     "interrupted": false,
+     "isImage": false,
+     "noOutputExpected": false
+    },
+    "tool_use_id": "toolu_000000000000000000000005",
+    "duration_ms": 23
+   }
+  },
+  {
+   "seq": 26,
+   "dtMs": 539938,
+   "event": "Stop",
+   "envSid": "00000000-0000-4000-8000-000000000005",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000005",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000005.jsonl",
+    "cwd": "/rig/work/proj/sub",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000005/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000006",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "Stop",
+    "stop_hook_active": false,
+    "last_assistant_message": "<model prose, stubbed for the public corpus>",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 27,
+   "dtMs": 541809,
+   "event": "SubagentStop",
+   "envSid": "00000000-0000-4000-8000-000000000005",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000005",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000005.jsonl",
+    "cwd": "/rig/work/proj/sub",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000005/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000006",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000004",
+    "agent_type": "",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000005/subagents/agent-a0000000000000004.jsonl",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 28,
+   "dtMs": 583414,
+   "event": "SessionEnd",
+   "envSid": "00000000-0000-4000-8000-000000000005",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000005",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000005.jsonl",
+    "cwd": "/rig/work/proj/sub",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000005/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000007",
+    "hook_event_name": "SessionEnd",
+    "reason": "clear"
+   }
+  },
+  {
+   "seq": 29,
+   "dtMs": 583461,
+   "event": "SessionStart",
+   "envSid": "00000000-0000-4000-8000-000000000008",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000008",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000008.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000008/scratchpad",
+    "hook_event_name": "SessionStart",
+    "source": "clear"
+   }
+  }
+ ],
+ "disk": {
+  "admin": {},
+  "worktreesLeft": [],
+  "branches": [],
+  "worktreeList": "",
+  "metas": {},
+  "snapshots": {}
+ }
+}

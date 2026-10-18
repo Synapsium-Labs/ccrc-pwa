@@ -571,7 +571,7 @@ if [ "$TARGET" = "agent" ]; then
     && { [ ! -f ~/.local/libexec/ccrc/ccd ] || cp -a ~/.local/libexec/ccrc/ccd ~/ccrc-backups/$TS/ccd-body; } \
     && { [ ! -f ~/.cc-sessions/notify.sh ] || cp -a ~/.cc-sessions/notify.sh ~/ccrc-backups/$TS/notify.sh; } \
     && { [ ! -f ~/.cc-sessions/session-hook.sh ] || cp -a ~/.cc-sessions/session-hook.sh ~/ccrc-backups/$TS/session-hook.sh; } \
-    && { [ ! -f ~/.cc-sessions/compact-card.mjs ] || cp -a ~/.cc-sessions/compact-card.mjs ~/ccrc-backups/$TS/compact-card.mjs; } \
+    && { [ ! -f ~/.cc-sessions/compact-card.mjs ] || cp -a ~/.cc-sessions/compact-card.mjs ~/ccrc-backups/$TS/compact-card.mjs; } && { [ ! -f ~/.cc-sessions/approval-verify.mjs ] || cp -a ~/.cc-sessions/approval-verify.mjs ~/ccrc-backups/$TS/approval-verify.mjs; } \
     && { [ ! -f ~/.config/systemd/user/ccrc-agent.service ] || cp -a ~/.config/systemd/user/ccrc-agent.service ~/ccrc-backups/$TS/ccrc-agent.service; } \
     && { [ ! -f ~/.config/systemd/user/claude-session@.service ] || cp -a ~/.config/systemd/user/claude-session@.service ~/ccrc-backups/$TS/claude-session@.service; }"
   # `--exclude 'ccrc-mail.token'`: a checkout may still hold a gitignored
@@ -636,7 +636,7 @@ if [ "$TARGET" = "agent" ]; then
   # whole program (pinned — `ccrc-api-ship.test.ts`, and the shim's own header
   # above for what changes the day that stops being true).
   install_atomic ccd/ccrc-api .local/bin/ccrc-api 755
-  install_atomic deploy/notify.sh .cc-sessions/notify.sh 755
+  install_atomic deploy/notify.sh .cc-sessions/notify.sh 755; install_atomic ccd/approval-verify.mjs .cc-sessions/approval-verify.mjs 644   # the approval wait's verifier (plan Task 14), on this line so no cited anchor below moves
   # The compaction card's helper (compaction-card spec §2): plain node, no npm,
   # read by the hook's PreCompact and PostCompact arms under `_hook_timeout`.
   # 644 — `node` runs it; nothing executes it directly.

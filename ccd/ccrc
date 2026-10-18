@@ -14389,6 +14389,9 @@ _inst_files() {   # the artifacts the box RUNS that are not on PATH
   # hook's guard for it is silent, so only this order makes a half-finished
   # converge fail in the harmless direction.
   _inst_atomic "$tree/ccd/compact-card.mjs" "$HOME/.cc-sessions/compact-card.mjs" 644
+  # The approval wait's ruling verifier (coordinator-first routing, plan Task 14, D-5297), 0644 for the same reason:
+  # a script `node` runs, never executed directly. The hook sends no request without it, so either order is safe.
+  _inst_atomic "$tree/ccd/approval-verify.mjs" "$HOME/.cc-sessions/approval-verify.mjs" 644
   _inst_atomic "$tree/ccd/session-hook.sh" "$HOME/.cc-sessions/session-hook.sh" 755
   _inst_atomic "$tree/ccd/install-session-hooks.sh" "$HOME/.cc-sessions/install-session-hooks.sh" 755
   _inst_atomic "$tree/deploy/notify.sh" "$HOME/.cc-sessions/notify.sh" 755
@@ -14401,7 +14404,56 @@ _inst_files() {   # the artifacts the box RUNS that are not on PATH
   _inst_atomic "$tree/ccd/tmux.conf" "$HOME/.tmux.conf" 644
   _inst_keep_aside "$tree/ccd/statusline-command.sh" "$HOME/.claude/statusline-command.sh"
   _inst_atomic "$tree/ccd/statusline-command.sh" "$HOME/.claude/statusline-command.sh" 755
-  echo "install: files: session hooks, the compaction-card helper, notify.sh, tmux.conf and the statusline in place"
+  echo "install: files: session hooks, the compaction-card helper, the approval verifier, notify.sh, tmux.conf and the statusline in place"
+  _inst_approval_key
+}
+
+# ── _inst_approval_key — pin the server's approval key, once (plan Task 14, spec §6.4, D-5297, D-5487) ──
+# A child's permission hook acts only on a ruling signed by the server's Ed25519 key, verified against the copy
+# pinned HERE, `~/.ccrc/approval-signing.pub`. It is read from the server through the closed client
+# (`ccrc-api approvals key`, `GET /api/approvals/key`) and written ONCE, when absent. A later run that is offered a
+# DIFFERENT key never replaces the pinned one: it records the offer in `~/.ccrc/approval-key-offered` and says so,
+# and doctor's `approval-key` check reports `approval-key-changed` until the operator acts, so only the operator
+# rotates it (remove the pinned file by hand, then update again). An older server (no route: `404`), an unreachable
+# one, or a malformed answer pins nothing and fails nothing: the hook then sends no request, as today. Never fatal.
+# Called from `_inst_files`, not as a spine step (D-5487): under AGENT-FIRST a fleet box that moved before its server
+# served the key pins it on its NEXT update.
+_inst_approval_key() {
+  local api="$HOME/.local/bin/ccrc-api" pinned="$HOME/.ccrc/approval-signing.pub" offered="$HOME/.ccrc/approval-key-offered"
+  local out code body key tmp
+  if [ "$INST_ROLE" = server ]; then return 0; fi
+  if [ ! -x "$api" ]; then echo "install: approval key: not pinned — no ccrc-api at $api"; return 0; fi
+  out=$("$api" approvals key 2>&1) || { echo "install: approval key: not pinned — the server did not answer"; return 0; }
+  code="${out##*http }"; body="${out%http *}"
+  if [ "$code" != 200 ]; then
+    echo "install: approval key: not pinned — the server answered ${code:0:3} (a server before coordinator-first approvals has no key route)"
+    return 0
+  fi
+  key=$(jq -r 'if .v == 1 and .alg == "ed25519" and (.publicKey | type) == "string" then .publicKey else empty end' <<<"$body" 2>/dev/null) || key=""
+  case "$key" in
+    '-----BEGIN PUBLIC KEY-----'*'-----END PUBLIC KEY-----'*) : ;;
+    *) echo "install: approval key: not pinned — the server's answer is not an Ed25519 public key"; return 0 ;;
+  esac
+  key="${key%$'\n'}"$'\n'
+  mkdir -p "$HOME/.ccrc" || return 0
+  if [ ! -e "$pinned" ]; then
+    tmp="$pinned.tmp.$$"
+    if printf '%s' "$key" > "$tmp" && chmod 644 "$tmp" && mv -f "$tmp" "$pinned"; then
+      rm -f -- "$offered"
+      echo "install: approval key: pinned the server's key into ~/.ccrc/approval-signing.pub"
+    else
+      rm -f -- "$tmp"; echo "install: approval key: not pinned — could not write $pinned"
+    fi
+    return 0
+  fi
+  if [ "$(cat -- "$pinned" 2>/dev/null)"$'\n' = "$key" ]; then
+    rm -f -- "$offered"
+    echo "install: approval key: the pinned key is the server's"
+    return 0
+  fi
+  printf '%s' "$key" > "$offered" 2>/dev/null || :
+  echo "install: approval key: REFUSED — the server offers a different key than the one pinned in ~/.ccrc/approval-signing.pub (approval-key-changed); the pinned key stays, and only the operator rotates it: if the server's key was rotated on purpose, remove the pinned file by hand and update again"
+  return 0
 }
 
 # ── _inst_stamp_shipped — the release-artifact arm (stage 4, Task 6) ──────
@@ -20207,6 +20259,7 @@ _upd_backup_set() {
   _upd_backup_copy "$HOME/.local/bin/ccd"          ccd
   _upd_backup_copy "$HOME/.cc-sessions/session-hook.sh" session-hook.sh
   _upd_backup_copy "$HOME/.cc-sessions/compact-card.mjs" compact-card.mjs
+  _upd_backup_copy "$HOME/.cc-sessions/approval-verify.mjs" approval-verify.mjs
   _upd_backup_copy "$HOME/.cc-sessions/notify.sh"  notify.sh
   # R34 (final whole-branch review): since `ccrc memory --apply`,
   # `~/.ccrc/memory` is the SOLE live copy of every project's durable
@@ -23805,7 +23858,7 @@ _uninst_cc_sessions() {
   # `child-deny.settings.json` is the box's one children's deny file (D-5299); this is its
   # ONE remover (D-5392): `install-session-hooks.sh --remove` runs per account and leaves it.
   rm -f -- "$reg/session-hook.sh" "$reg/install-session-hooks.sh" "$reg/notify.sh" \
-    "$reg/compact-card.mjs" \
+    "$reg/compact-card.mjs" "$reg/approval-verify.mjs" \
     "$reg/install-coordinator-skill.sh" "$reg/install-worker-skill.sh" \
     "$reg/install-reviewer-skill.sh" "$reg/install-history-skill.sh" \
     "$reg/install-graphify-skill.sh" "$reg/child-deny.settings.json" \
