@@ -4041,6 +4041,8 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     daily's (`ccd-docs-index`, `ccd-docs-tree` row 64, which is B2, `session-hook-turnmark`, `ccrc-doctor`
     delegation-hooks), plus one `main` lacks: `ccrc-codex` L0a. L0a was green on macOS in three earlier runs, and
     the wave touches no codex or lane file; the worker classifies it.
+    Classified (mail 6190): no wave 17 hunk is on L0a's path. It is a macOS timing flake from the fixture's two
+    writes (R40); the plan records it and the Darwin rows at `71aa0cde4`.
 
 ## Carried constraints
 
@@ -4335,6 +4337,10 @@ merges. The ones marked **before stable** are fixed, reviewed and merged before 
   `$1`). Reviews 574 and 577 read all three as false positives. `CodeQL` is not a required check, but each alert's
   open review thread blocks the merge ("All comments must be resolved"), and dismissing an alert is the operator's
   act. So wave 18's fix round 3 fixes all three in code (2026-10-18 04:30 UTC).
+- **R40 (wave 17's full run; not this programme's file).** `codexLaneFixture.ts`'s `complete_inactive()` writes `state`
+  and then `pid` as two writes, and `ccrc-codex.test.ts`'s L0a reads `pid` as soon as `state` reads inactive. A slow
+  macOS runner read between them once (run 39096832066). One write (pid first, or a single rename), or reading
+  `pid` inside the same `eventually`, closes it. It belongs to the GPT lane's fixtures; tell their owner.
 
 ## Next-wave brief
 
