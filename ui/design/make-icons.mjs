@@ -57,7 +57,12 @@ for (const name of NAMES) {
   if (v === undefined) throw new Error(`${name}.svg: no lucide-static version in its licence comment`);
   if (version !== undefined && v !== version) throw new Error(`${name}.svg is ${v}, the others ${version}`);
   version = v;
-  const body = svg.replace(/<!--[\s\S]*?-->/g, '').replace(/^[\s\S]*?<svg[^>]*>/, '').replace(/<\/svg>[\s\S]*$/, '');
+  // The children between <svg ...> and </svg>, taken whole rather than by
+  // stripping comments: the licence comment sits before <svg>, and anything
+  // inside the body the node parser does not read (a comment included) fails
+  // the leftover check below.
+  const body = /<svg\b[^>]*>([\s\S]*)<\/svg>/.exec(svg)?.[1];
+  if (body === undefined) throw new Error(`${name}.svg: no <svg> element`);
   const nodes = [];
   for (const m of body.matchAll(/<([a-z]+)\s([^>]*?)\/>/g)) {
     const [, tag, rest] = m;
