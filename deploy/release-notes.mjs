@@ -45,9 +45,9 @@ const LINE_MAX = 240;
 const RELEASE_TAG = /^v(\d{1,9})\.(\d{1,9})\.(\d{1,9})$/;
 const PREFIX = /^([A-Za-z]+)(?:\([^()]*\))?!?:\s+/;
 const TRAILING_PR = /\s*\(#(\d{1,7})\)\s*$/;
-/** One deviation ref (`D-5523`, or a segmented one) or a range of them (`D-5466..D-5479`, `D-1–D-4`). */
-const DREF = 'D-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*';
-const DEVIATION = new RegExp(`^${DREF}(?:\\s*(?:\\.\\.|–|—)\\s*${DREF})?$`);
+/** A deviation ref anywhere in a string: `D-5523`, or a segmented one. It
+ *  starts a token and carries a digit, so a word (`D-day`, `CD-ROM`) never is one. */
+const DREF = /(?<![A-Za-z0-9])D-[A-Za-z]*\d[A-Za-z0-9]*(?:-[A-Za-z0-9]+)*/;
 
 /** Control characters, bidi overrides/isolates/marks and zero-width
  *  characters out (a title must not reorder or hide text), runs of
@@ -56,11 +56,14 @@ function clean(s) {
   return s.replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-/** Each parenthetical loses its deviation refs; one left empty goes entirely. */
+/** Each parenthetical loses every `,`/`;` part that names a deviation,
+ *  however it is spelled — a ref, a range or list of them (`D-1..D-4`,
+ *  `D-5533…`, `D-5511 to D-5522`, `D-1/D-2`), or an aside about one
+ *  (`D-12 withdrawn`) — and one left empty goes entirely. */
 function stripDeviations(s) {
   return s.replace(/\s*\(([^()]*)\)/g, (whole, inner) => {
     const parts = inner.split(/[,;]\s*/).map((p) => p.trim()).filter((p) => p !== '');
-    const kept = parts.filter((p) => !DEVIATION.test(p));
+    const kept = parts.filter((p) => !DREF.test(p));
     if (kept.length === parts.length) return whole;
     return kept.length === 0 ? '' : ` (${kept.join(', ')})`;
   }).trim();
