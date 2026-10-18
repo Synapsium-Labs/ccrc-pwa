@@ -162,17 +162,19 @@ describe('the claimant\'s mail (spec §6.3 server step 3, §6.7)', () => {
     expect(cls).toBeGreaterThanOrEqual(0);
     expect(cls).toBeLessThan(fenceAt);
     expect(body).toContain(`closes at ${new Date(T0 + 60_000).toISOString().slice(11, 19)} UTC`);
-    expect(body).toContain(`"$API" approvals rule ${ids[0]} --json - <<JSON`);
+    expect(body).toContain(`"$API" approvals rule ${ids[0]} --json -\n`);
+    expect(body).toContain("IFS= read -r reason <<'REASON'\n");     // the reason never expands (D-5489)
     expect(body).toContain(`"$API" approvals release ${ids[0]} --json - <<JSON`);
-    expect(body).toContain('"fromId":"$id","fromUuid":"$uuid"');
-    expect(body).not.toContain('"verdict":"allow"');   // escalate: no allow command is offered
+    expect(body).toContain('"fromId":"$id","fromUuid":"$uuid"');     // the hand-over's pair
+    expect(body).toContain('{fromId:$id,fromUuid:$uuid,verdict:"deny",reason:$reason}');
+    expect(body).not.toContain('verdict:"allow"');   // escalate: no allow command is offered
   });
 
   it('an ordinary row\'s mail offers the allow command too', async () => {
     const { ids } = await raise([hookInput({})]);
     const mail = f!.coord.db.prepare("SELECT body FROM mail WHERE subject = ?").get(`approval:${ids[0]}`) as { body: string };
-    expect(mail.body).toContain('"verdict":"allow"');
-    expect(mail.body).toContain('"verdict":"deny"');
+    expect(mail.body).toContain('verdict:"allow"');
+    expect(mail.body).toContain('verdict:"deny"');
   });
 
   it('the approval mail is recorded, never pushed: it must not buzz the operator during the window', async () => {

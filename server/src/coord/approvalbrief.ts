@@ -9,10 +9,10 @@
  *  - the deadline is the row's window end (`notifyAt`, D-5441), in UTC: after it the hook has returned, the operator
  *    has the prompt, and a ruling is refused `hook-gone`;
  *  - the commands are the coordinator skill's own client form, as the ask brief's are (D-5365): `"$API"`, `$id` and
- *    `$uuid` are the skill's preamble's names and the heredoc is unquoted so they expand into the attribution the rule
- *    route requires. Nothing the child wrote is inside a heredoc: the row id is an integer this server minted. The
- *    client's closed grammar takes the verdict and the reason in the `--json` body, never as positional words
- *    (D-5489), so the commands are written that way.
+ *    `$uuid` are the skill's preamble's names. The client's closed grammar takes the verdict and the reason in the
+ *    `--json` body, never as positional words (D-5489). The hand-over's heredoc is unquoted so the pair expands, and
+ *    holds only those names; the rule commands' reason is the coordinator's free text, which may quote the child's
+ *    command, so it never sits in an expanding context: a quoted heredoc reads it and jq builds the body (D-5489).
  *
  * L1, pure: strings in, a string out.
  */
@@ -29,8 +29,13 @@ export function renderApprovalBrief(a: {
   const deadline = new Date(a.notifyAt).toISOString().slice(11, 19);
   const cls = isApprovalClass(a.class) ? a.class : 'escalate';
   const who = '"fromId":"$id","fromUuid":"$uuid"';
+  // The reason is free text the coordinator types, and it naturally restates the child's untrusted command, so it is
+  // read through a QUOTED heredoc (nothing in it expands) and jq writes the JSON (a quote in it cannot break the body).
+  // A shell does not re-scan an expanded `$reason` for command substitution (D-5489, amended).
   const rule = (verdict: 'allow' | 'deny'): string =>
-    `"$API" approvals rule ${a.id} --json - <<JSON\n{${who},"verdict":"${verdict}","reason":"<one line, in plain words>"}\nJSON\n`;
+    'IFS= read -r reason <<\'REASON\'\n<one line, in plain words>\nREASON\n' +
+    `jq -nc --arg id "$id" --arg uuid "$uuid" --arg reason "$reason" '{fromId:$id,fromUuid:$uuid,verdict:"${verdict}",reason:$reason}' |\n` +
+    `  "$API" approvals rule ${a.id} --json -\n`;
   const thread = a.agentId === '' ? 'its main thread' : 'one of its subagents';
   return `You are the parent of session \`${a.childId}\`: ${thread} asks permission to run a ${toolWord(a.tool)} call.\n` +
     `Class (the server's, not the child's): ${cls} — ${APPROVAL_CLASS_MAP[cls]}.\n` +
