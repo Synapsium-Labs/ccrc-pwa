@@ -8,7 +8,7 @@
 // The esc cap is touch-only: where a physical keyboard exists ((pointer:
 // fine)) it hides and the real Escape key takes over instead, guarded so it
 // never fires while focus is in a text field.
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   backgroundWork, backgroundWords, sessionWithCoordinator, substrateFault, withCoordinatorWords,
@@ -77,6 +77,10 @@ export interface SessionHeaderProps {
    *  shown whenever known, there is no card here to imply it. `null`/absent
    *  renders nothing. */
   repo?: string | null;
+  /** D-5527: who this session works for, in words — `working on <project> ·
+   *  coordinated from <coordinator> · <programme> · wave N of M · run #N`
+   *  (`fleetTree.ts`'s `coordinationLine`). `null` renders nothing. */
+  coordination?: { text: string; parts: readonly string[]; title: string } | null;
 }
 
 /** '04:12' (or '1:04:12') elapsed — rendered in tabular-nums mono. */
@@ -153,6 +157,7 @@ export function SessionHeader({
   roster = [],
   queuedField = null,
   repo = null,
+  coordination = null,
 }: SessionHeaderProps): ReactNode {
   const [menuOpen, setMenuOpen] = useState(false);
   const [prOpen, setPrOpen] = useState(false);
@@ -340,6 +345,17 @@ export function SessionHeader({
             </>
           )}
         </h1>
+        {/* D-5527: under the name, because it says what this session IS for —
+            whose code, whose programme — before the meta row says how it is. */}
+        {coordination !== null && (
+          <p className="chat-coord" title={coordination.title}>
+            {/* Each clause an inline block, so the line wraps BETWEEN clauses at 360 and a clause wider than the line still wraps inside.
+                The separator rides INSIDE the clause it introduces, so a wrapped line never starts with, or holds, a lone `·`. */}
+            {coordination.parts.map((part, i) => (
+              <Fragment key={i}>{i > 0 && ' '}<span className="chat-coord-part">{i > 0 && '· '}{part}</span></Fragment>
+            ))}
+          </p>
+        )}
         <div className="chat-meta">
           {bucket !== null && (
             <>

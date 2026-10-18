@@ -40,7 +40,7 @@ import { restartWords } from '../lib/restart';
 import { humanBytes } from '../screens/ArchiveScreen';
 import { lifecycleQualifier } from './lifecycleWords';
 import { hibernatedWords } from './hibernated';
-import { childOfRunLabel } from './runWords';
+import { childOfRunLabel, programmeWave, programmeWaveTail, runSentence, type ChildRunContext } from './runWords';
 import { spawnChip } from './spawnWords';
 import { GraphChip, LastSpawnChip, UnmeasuredChip } from './chips';
 import './fleet.css';
@@ -140,6 +140,10 @@ export interface SessionMetaProps {
   subagentsOpen: boolean;
   subagentsId: string;
   onToggleSubagents: () => void;
+  /** The active run bound to this row and its coordinator's name (D-5527,
+   *  `fleetTree.ts`'s `childRunContext`), for the child label's programme and
+   *  wave. Absent: nothing known, and a child says its run is not on the board. */
+  childRun?: ChildRunContext;
 }
 
 /**
@@ -169,7 +173,7 @@ const markerNote = (
 
 export function SessionMeta({
   session, roster, projectPool, onOpenRun, state, dead, asleepAt = null,
-  subagentList, subagentsOpen, subagentsId, onToggleSubagents,
+  subagentList, subagentsOpen, subagentsId, onToggleSubagents, childRun,
 }: SessionMetaProps): ReactNode {
   // The cleanup bucket's own facts — the merged PR number and the size
   // ws-archive measured, both already on the wire (`pr.number`,
@@ -188,9 +192,30 @@ export function SessionMeta({
   // untouched, a dead row stays `exited`, and these are cells beside it.
   const qualifier = asleepAt !== null ? null : lifecycleQualifier(session);
 
-  // Child-reclamation wave 5: which run minted this workspace, when it is a
-  // child. `childOfRunLabel` is the one reader of `session.child`.
-  const childOf = childOfRunLabel(session);
+  // Child-reclamation wave 5, reworded by the operator's ruling of 2026-10-18:
+  // the programme and wave this child is doing, when it is a child.
+  // `childOfRunLabel` is the one reader of `session.child`.
+  const childOf = childOfRunLabel(session, childRun);
+  // D-5528: every dispatched child is ws-held with `program:<slug> wave:N/M
+  // run:<id>`, so the raw hold cell put the run number back on the row and said
+  // the programme and wave twice. When an ACTIVE run explains the hold, the
+  // programme-and-wave label takes the hold cell's place — the same element, the
+  // run-board door when there is one — and the hold text stays verbatim in its
+  // title (displayed, never parsed). An unreadable child marker keeps both
+  // cells: its hedge, and the raw hold.
+  const activeRun = childRun?.run ?? null;
+  const heldRun = session.held !== null && activeRun !== null && childOf?.data !== 'unreadable'
+    ? activeRun : null;
+  const heldText = heldRun === null ? session.held : programmeWave(heldRun);
+  const heldTitle = heldRun === null || session.held === null ? session.held
+    : `${childOf?.title ?? runSentence(heldRun, childRun?.coordinator ?? null, false)} — hold: ${session.held}`;
+  const heldBody = heldRun === null ? session.held : <ProgrammeWave run={heldRun} />;
+  // The row's programme-and-wave label, wherever it renders: its wave's width in
+  // mono characters is the cell's floor (fleet.css `--pw-wave`), so the cell gives
+  // up the programme on a narrow row and never the wave.
+  const labelRun = heldRun ?? (childOf?.data === 'child' ? activeRun : null);
+  const metaStyle = labelRun === null ? undefined
+    : ({ '--pw-wave': `${programmeWaveTail(labelRun).length}ch` } as CSSProperties);
 
   // Task 19: the ask pre-emption lane's chip. Through `sessionAsk`, never
   // `session.ask` directly — the live `fleet` frame is cast, not revived
@@ -345,7 +370,7 @@ export function SessionMeta({
   // to hold a track open (that was only ever a grid requirement, and this
   // is no longer a grid).
   return (
-        <span className="sess-meta">
+        <span className="sess-meta" style={metaStyle}>
           {wcWords !== null ? (
             <span className="sess-state sess-state--coordinator" title={wcWords.title}>
               {wcWords.text}
@@ -437,8 +462,8 @@ export function SessionMeta({
               is what stops one tap from ALSO opening the session. */}
           {session.held !== null && (
             onOpenRun === null ? (
-              <span className="sess-held" data-held="true" title={session.held}>
-                {session.held}
+              <span className="sess-held" data-held="true" title={heldTitle ?? undefined}>
+                {heldBody}
               </span>
             ) : (
               <button
@@ -446,22 +471,23 @@ export function SessionMeta({
                 className="sess-held"
                 data-held="true"
                 data-open="true"
-                title={session.held}
-                aria-label={`Open the run board — ${session.held}`}
+                title={heldTitle ?? undefined}
+                aria-label={`Open the run board — ${heldText}`}
                 onClick={onOpenRun}
               >
-                {session.held}
+                {heldBody}
               </button>
             )
           )}
 
-          {/* Wave 5: the child-of-run label. Informational only, in
+          {/* Wave 5: the child label — its programme and wave since the
+              operator's ruling of 2026-10-18. Informational only, in
               `.sess-substrate`'s shape: a short, fixed,
-              never-truncated ink-tertiary fact about which run this
-              workspace belongs to. The full sentence lives in `title`. */}
-          {childOf !== null && (
+              never-truncated ink-tertiary fact about which wave this
+              workspace is doing. The full sentence lives in `title`. */}
+          {childOf !== null && heldRun === null && (
             <span className="sess-child" data-child={childOf.data} title={childOf.title}>
-              {childOf.text}
+              {childOf.data === 'child' && activeRun !== null ? <ProgrammeWave run={activeRun} /> : childOf.text}
             </span>
           )}
 
@@ -635,5 +661,17 @@ export function SessionMeta({
           </span>
           {offPoolLabel !== null && <span className="sess-offpool">off-pool</span>}
         </span>
+  );
+}
+
+/** `<programme> · wave 5 of 7` as two spans: the programme slug ellipsises at
+ *  phone width, the wave never does (D-5528; fleet.css `.sess-pw`). The text
+ *  is `programmeWave`'s, character for character. */
+function ProgrammeWave({ run }: { run: NonNullable<ChildRunContext['run']> }): ReactNode {
+  return (
+    <span className="sess-pw">
+      <span className="sess-pw-prog">{run.program}</span>
+      <span className="sess-pw-wave">{programmeWaveTail(run)}</span>
+    </span>
   );
 }
