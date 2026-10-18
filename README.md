@@ -6437,9 +6437,9 @@ carrier, adoption, retention, promotion or cleanup. This section records what th
 
 **The path of one fact.** `ccd` creates `~/.cc-sessions/delegation/spool/<id>/` when it spawns a session and lists `delegation-events-v1`
 in `ccd caps`. `session-hook.sh` appends one line per delegation-relevant hook event to that directory's hourly bucket
-`<YYYYMMDDHH>.spool` (a strict UTF-8 JSON line plus LF, under 4096 bytes; a `listing` of git admin-record names rides a Bash call that
-names a worktree, and is the first field dropped to fit). The hook never makes the directory, never prunes outside its own, and keeps
-its own buckets for about 24 hours. The directory of a session that is removed, or never runs again, is not pruned by anything in
+`<YYYYMMDDHH>.spool` (a strict UTF-8 JSON line plus LF, under 4096 bytes where bash is built for glibc Linux and OSTYPE reads `linux-gnu*`, else 1008, D-5436; a
+`listing` of git admin-record names rides a Bash call that names a worktree, and is the first field dropped to fit). The hook never makes the directory, never
+prunes outside its own, and keeps its own buckets for about 24 hours. The directory of a session that is removed, or never runs again, is not pruned by anything in
 this wave. On the server the watcher's delegation lane, once per census cadence and never awaited by the poll, lists each live session's
 directory, reads the buckets as bounded byte ranges (the existing `readFrom` request with an optional `maxBytes` of at most 262144; an
 agent that answers without `dataB64` is unmeasured, never rebuilt from text) and applies them durably in this order: the journal
@@ -6458,13 +6458,13 @@ and an unmeasured hour is final: it is never read later as empty.
   complete UTC hours that ends at the start of the current hour; `measuredSessionHours` and `unmeasuredSessionHours` count its
   session-hours (a session-hour is unmeasured if any interval for it is); `unmeasuredRate` is a number only when `stageGate` has an
   answer and is `null` otherwise; `stageGate` is `eligible`, `ineligible` or `unmeasured`. `circuitBreaker` is `clear`, `suspended`
-  (the registry could not be listed, or two or more parents were first measured dead within ten minutes, so the pass makes no
-  ownership claim) or `unmeasured`, and `unresolved`, `conflicting` and `unmeasured` are the last reconciliation's
-  verdict counts, which read 0 and must be taken as unknown while the breaker is `unmeasured`. `lastJournalSequence`,
-  `lastCheckpointRevision` and `lastIngestedAt` are the checkpoint's own anchors. `lastTailHeal` (`at`, `bytes`, `quarantinePath`)
-  appears after this server process has healed a torn journal tail, and also at EVERY boot, with `foundAtBoot: true` and the kept file's
-  own time, for the newest tail an earlier process left in the quarantine (below), until an operator removes that file.
-  `tailQuarantineUnmeasured: true` appears when the quarantine, or a tail in it, could not be read (a time no instant can spell
+  (the registry could not be listed, or two or more parents were first measured dead within ten minutes, a deliberate stop or an archive
+  not being a death (D-5433), so the pass makes no ownership claim) or `unmeasured`, and `unresolved`, `conflicting` and `unmeasured` are
+  the last reconciliation's verdict counts, which read 0 and must be taken as unknown while the breaker is `unmeasured`.
+  `lastJournalSequence`, `lastCheckpointRevision` and `lastIngestedAt` are the checkpoint's own anchors. `lastTailHeal` (`at`, `bytes`,
+  `quarantinePath`) appears after this server process has healed a torn journal tail, and also at EVERY boot, with `foundAtBoot: true`
+  and the kept file's own time, for the newest tail an earlier process left in the quarantine (below), until an operator removes that
+  file. `tailQuarantineUnmeasured: true` appears when the quarantine, or a tail in it, could not be read (a time no instant can spell
   included), so whether a heal went unreported is unknown; recovery still proceeds. Nothing in the PWA reads any of it.
 - **A `ccrc-server:` warning line, once per UTC hour** while a project's dropped-evidence keys are held back or lost, the global flag is
   up, a mark held a verdict back, or lost evidence held a link back: it names the held-back and lost projects (names and counts, never a
@@ -6544,13 +6544,13 @@ while the root does not resolve (remote mode) that includes every main checkout,
   - *The installer does not register `PostToolUseFailure`*, so a Bash call that fails never closes its window: it keeps every later
     rung-4 candidate it may overlap unresolved until it leaves the slice, and holds a rung-3 link of a tree first listed within the
     margin after it began. Registering it is a wave-4 installer item.
-  - *Shedding.* The hook drops the WHOLE listing past 256 names, or when the line would reach 4096 bytes. On 2026-10-16 the largest
-    repository under the projects root had 124 linked worktrees, about 2,082 bytes as the quoted list. The name-list budget left under
-    the line cap is about 2,603 bytes at the hook's own path bounds (cwd and transcript path at 512 bytes each, a subagent's
-    PostToolUse), and about 3,390 to 3,550 bytes at typical paths, so that repository's listings do not shed today; at today's average
-    name length (about 16.8 bytes with quotes and comma) they would start to shed past about 155 names at the path bounds, or about 200
-    at typical paths. The live shed rate is unmeasured. Shedding and the census's missing main checkouts are the two reasons rung 4 may
-    read mostly unmeasured live; both are wave 4's.
+  - *Shedding.* The hook drops the WHOLE listing past 256 names, or when the line would reach its cap: 4096 bytes on a bash built for glibc
+    Linux whose OSTYPE reads `linux-gnu*`, 1008 otherwise, where a listing has room for about 15 to 20 names (D-5436). On 2026-10-16 the largest
+    repository under the projects root had 124 linked worktrees, about 2,082 bytes as the quoted list. On the 4096 cap the name-list budget left
+    is about 2,603 bytes at the hook's own path bounds (cwd and transcript path at 512 bytes each, a subagent's PostToolUse), and about 3,390 to
+    3,550 bytes at typical paths, so that repository's listings do not shed today; at today's average name length (about 16.8 bytes with quotes
+    and comma) they would start to shed past about 155 names at the path bounds, or about 200 at typical paths. The live shed rate is
+    unmeasured. Shedding and the census's missing main checkouts are the two reasons rung 4 may read mostly unmeasured live; both are wave 4's.
 - **Two closures contain it.** A tree named `agent-*` or `wf_*` is decided at rung 2 or not at all, and a tree a registry row or a
   `.child` names is a ccd workspace (rung 1), never a lease.
 - **Named honestly.** Spec §5.3 says a lost event can delay or prevent a link, never create one, and §5.1 that a parent that is not a

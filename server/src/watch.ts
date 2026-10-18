@@ -9230,8 +9230,9 @@ export interface DelegationLaneSeams {
 }
 
 /** `hibernatedAt` optional (D-5242): absent reads as not asleep, the old behaviour, so a caller that never knew the field
- *  is unchanged; the tick hands the assembled rows, which always carry it. */
-type LaneSession = Pick<FleetSession, 'id' | 'project' | 'status'> & Partial<Pick<FleetSession, 'hibernatedAt'>>;
+ *  is unchanged; the tick hands the assembled rows, which always carry it. `stoppedBy` and `archivedAt` are optional for the same
+ *  reason: absent reads as no stop evidence (D-5433). */
+type LaneSession = Pick<FleetSession, 'id' | 'project' | 'status'> & Partial<Pick<FleetSession, 'hibernatedAt' | 'stoppedBy' | 'archivedAt'>>;
 type LaneRecord = Pick<SessionRecord, 'id' | 'project' | 'child'>;
 type DelegationVerdictCounts = { unresolved: number; conflicting: number; unmeasured: number };
 
@@ -10065,18 +10066,38 @@ class DelegationLane {
     }
   }
 
-  /** Who died since the last pass, by what this process watched: a parent first seen DEAD is not a fresh death (a restart is not a
-   *  mass-death event), one seen alive and then dead is, and one seen alive again is not dead. */
+  /** Who died since the last pass, by what this process watched: a parent first seen DEAD is not a fresh death (a restart is not a mass-death
+   *  event), one seen alive and then dead is, and one seen alive again is not dead. D-5433: a deliberate stop or archive is not a fresh death
+   *  either. A dead row carrying stop evidence (`stoppedBy`, epoch ms, or `archivedAt`, epoch SECONDS, read when there is no stamp) is not counted,
+   *  and a death already recorded for it is erased, when that instant is no later than the recorded death plus `DELEGATION_CLOCK_SKEW_MS` (this
+   *  pass's instant plus the skew when none is recorded): the stamp is the fleet box's clock, and the torn tick (`assembleFleet` reads the registry
+   *  before it probes tmux) lets a stop read as a crash for one pass and show its stamp on the next. A stop stamped later than that leaves the
+   *  death counted (an operator cleaning up after a crash). Residual: a crash followed by a stop or an archive within one pass, or within the skew
+   *  of its recorded death, is not counted; the 60 s cadence and the clocks' sync bound it. The bound is from above only, so a stop stamp or an
+   *  archive marker that outlived its pane (a kill that failed after `_ws_unsupervise`) also hides that pane's later crash; a lower bound would be
+   *  a new ruling, and is not taken here. A hibernated row (D-5242) is excluded at any instant by its own conjunct; `ccd hibernate` writes
+   *  `.hibernated`, then `_ws_unsupervise` (the stop stamp), then kills the pane, so a torn tick can record a hibernation as a death with neither
+   *  field set, and the erasure above clears it on the next pass. Every other dead row (`restarting`, unmeasurable) counts as before. */
   private noteSessions(pass: LanePass): void {
     for (const r of pass.records) this.sessionProject.set(r.id, r.project);
     for (const s of pass.sessions) this.sessionProject.set(s.id, s.project);
     const alive = new Set(pass.sessions.filter((s) => s.status !== 'dead').map((s) => s.id));
     if (this.aliveSeen) {
       for (const s of pass.sessions) {
+        if (s.status !== 'dead') continue;
+        const stoppedBy = s.stoppedBy ?? null;
+        const archivedAt = s.archivedAt ?? null;
+        const stopAt = stoppedBy !== null ? stoppedBy.at : archivedAt !== null ? archivedAt * 1000 : null;
+        const recorded = this.firstDead.get(s.id);
+        if (stopAt !== null && recorded !== undefined) {
+          if (stopAt <= recorded + DELEGATION_CLOCK_SKEW_MS) { this.firstDead.delete(s.id); continue; }
+        } else if (stopAt !== null) {
+          if (stopAt <= pass.now + DELEGATION_CLOCK_SKEW_MS) continue;
+        }
         // D-5242: a HIBERNATED row went down on purpose (`ccd hibernate`, journalled as deliberate) — it is asleep, not a
         // death, so it never feeds the delegation breaker, which suspends at two fresh parent deaths in its window and
         // would otherwise trip on every burst of sleeps (the sweeps put up to six down in one window).
-        if (s.status === 'dead' && (s.hibernatedAt ?? null) === null && this.lastAlive.has(s.id) && !this.firstDead.has(s.id)) this.firstDead.set(s.id, pass.now);
+        if ((s.hibernatedAt ?? null) === null && this.lastAlive.has(s.id) && !this.firstDead.has(s.id)) this.firstDead.set(s.id, pass.now);
       }
     }
     for (const id of alive) this.firstDead.delete(id);

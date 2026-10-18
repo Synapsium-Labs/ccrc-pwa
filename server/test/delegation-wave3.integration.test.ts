@@ -49,7 +49,7 @@ import {
   type DelegationCheckpointV1,
   type DelegationLeaseRow,
 } from '../src/coord/delegation-model.js';
-import { FLEET_PROTO, FLEET_PROTO_MIN, type DelegationObservationHealth } from '../../shared/api.js';
+import { FLEET_PROTO, FLEET_PROTO_MIN, type DelegationObservationHealth, type FleetSession } from '../../shared/api.js';
 import { READ_FROM_MAX_BYTES } from '../../shared/agent-protocol.js';
 import { makeCcdHarness } from './ccdWsHelpers.js';
 import * as policy from '../src/coord/delegation-policy.js';
@@ -135,7 +135,10 @@ function world(opts: WorldOptions = {}): World {
   return made;
 }
 
-const sessionOf = (id: string, status: 'idle' | 'busy' | 'dead' = 'idle', project = 'demo') => ({ id, project, status });
+const sessionOf = (
+  id: string, status: 'idle' | 'busy' | 'dead' = 'idle', project = 'demo',
+  over: Partial<{ stoppedBy: FleetSession['stoppedBy']; archivedAt: FleetSession['archivedAt'] }> = {},
+) => ({ id, project, status, stoppedBy: null as FleetSession['stoppedBy'], archivedAt: null as FleetSession['archivedAt'], ...over });
 const recordOf = (id: string, project = 'demo', child: { kind: 'none' | 'child' | 'unreadable' } = { kind: 'none' }) => ({ id, project, child });
 type Sess = ReturnType<typeof sessionOf>;
 type Rec = ReturnType<typeof recordOf>;
