@@ -9,7 +9,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { makeCcdHarness, ghContainedEnv, harnessBin, CCD, WS_ADD, type CcdHarness } from './ccdWsHelpers.js';
 import { mungePath } from '../src/munge.js';
-import { ACCOUNT_POOLS_CAP, ACTOR_FLAGS_CAP, CHILD_ARGV_CAP, COLLECT_CAP, DOCS_CAP, EXPIRE_CAP, POOLS_CAP, RECLAIM_CAP, RECLAIM_PAUSE_CAP, ROUTE_APPLY_CAP, ROUTE_ARGV_CAP, ROUTE_CAP, WIN_SIZE_CAP } from '../src/ccdargv.js';
+import { ACCOUNT_POOLS_CAP, ACTOR_FLAGS_CAP, CHILD_ARGV_CAP, COLLECT_CAP, DOCS_CAP, EXPIRE_CAP, POOLS_CAP, RECLAIM_CAP, RECLAIM_PAUSE_CAP, ROUTE_APPLY_CAP, ROUTE_ARGV_CAP, ROUTE_CAP, SWAP_BUSY_CAP, WIN_SIZE_CAP } from '../src/ccdargv.js';
 
 /** sha256 of the empty string — what a failed read used to be indistinguishable
  *  from, and what a genuinely empty ignored set still legitimately hashes to. */
@@ -152,7 +152,7 @@ describe('ccd caps', () => {
   // added without updating this list is exactly as much a silent hole as an
   // undispatched verb would be.
   const KNOWN_CAPABILITY_TOKENS = ['account-pools', 'account-v1', 'actor-flags-v1', 'child-argv-v1', 'collect-v1', 'delegation-events-v1', 'docs-v1', 'expire-v1', 'lifecycle-v1', 'pools-v1', 'reclaim-pause-v1', 'reclaim-v1', 'route-apply-v1', 'route-argv-v1', 'route-v1', 'stop-surface', 'swap-busy-v1', 'win-size-v1'];
-  // `swap-busy-v1` (D-5240, Task 11; D-5350) is the string only; its server constant, `SWAP_BUSY_CAP`, and the `toContain` that holds the two equal arrive with the server half (Task 12).
+  // `swap-busy-v1` (D-5240, Task 11; D-5350): its server constant, `SWAP_BUSY_CAP`, arrived with the server half (Task 12), and the `toContain` below holds the two equal.
 
   it('advertises exactly the verbs the dispatcher implements, plus the known capability tokens', () => {
     // The THIRD spelling of this token, closing the parity gap `ccdargv.ts`'s
@@ -173,6 +173,7 @@ describe('ccd caps', () => {
     // without it `win-size-v1` would be the one known token whose three
     // spellings are free to drift, which is the drift this block exists for.
     expect(KNOWN_CAPABILITY_TOKENS).toContain(WIN_SIZE_CAP);
+    expect(KNOWN_CAPABILITY_TOKENS).toContain(SWAP_BUSY_CAP);
     // Child reclamation wave 3's token: the third spelling of `reclaim-v1`,
     // held equal to the constant the executor gates on (`capSupported`) and to
     // ccd's own `echo reclaim-v1`.

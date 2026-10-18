@@ -667,6 +667,9 @@ describe('the verification is actually wired into the deploy, and can observe a 
       // The pane-scope sweep's pair (session-continuity wave 4), shipped the same way.
       'systemd/ccd-scope-sweep.service',
       'systemd/ccd-scope-sweep.timer',
+      // D-5241: the victim policy's two OOMPolicy=continue scope drop-ins.
+      'systemd/tmux-spawn-.scope.d/50-oom-continue.conf',
+      'systemd/ccrc-tmux-server.scope.d/50-oom-continue.conf',
     ]) {
       expect(existsSync(path.join(deployDir, f)), `${f} is not in the repo`).toBe(true);
     }
@@ -686,6 +689,10 @@ describe('the verification is actually wired into the deploy, and can observe a 
       'the history sweep shim is not in the repo').toBe(true);
     expect(existsSync(path.join(deployDir, '..', 'ccd', 'ccd-scope-sweep')),
       'the pane-scope sweep is not in the repo').toBe(true);
+    expect(existsSync(path.join(deployDir, '..', 'ccd', 'ccd-tool-adj')),
+      'the tool-child priority prefix is not in the repo').toBe(true);
+    expect(deploySh.split('\n').filter((l) => l.trim() === 'install_atomic ccd/ccd-tool-adj .local/bin/ccd-tool-adj 755'),
+      'deploy.sh does not place ccd-tool-adj exactly once').toHaveLength(1);
 
     // Fix round 1, Finding 1 (Important, plan-mandated): measured on the
     // fleet host, read-only — every `systemd --user` unit's process carries a
@@ -751,6 +758,10 @@ describe('the verification is actually wired into the deploy, and can observe a 
       // The pane-scope sweep's pair, installed the same way.
       '_unit_atomic ~/ccrc/deploy/systemd/ccd-scope-sweep.service ~/.config/systemd/user/ccd-scope-sweep.service',
       '_unit_atomic ~/ccrc/deploy/systemd/ccd-scope-sweep.timer ~/.config/systemd/user/ccd-scope-sweep.timer',
+      // D-5241: the two scope drop-ins, the pane one in systemd's PREFIX form (trailing hyphen).
+      'mkdir -p ~/.config/systemd/user/tmux-spawn-.scope.d ~/.config/systemd/user/ccrc-tmux-server.scope.d',
+      '_unit_atomic ~/ccrc/deploy/systemd/tmux-spawn-.scope.d/50-oom-continue.conf ~/.config/systemd/user/tmux-spawn-.scope.d/50-oom-continue.conf',
+      '_unit_atomic ~/ccrc/deploy/systemd/ccrc-tmux-server.scope.d/50-oom-continue.conf ~/.config/systemd/user/ccrc-tmux-server.scope.d/50-oom-continue.conf',
     ]) {
       const at = buildLinks.findIndex((l) => l.includes(needle));
       expect(at, `AGENT_BUILD_CMD does not install: ${needle}`).toBeGreaterThan(-1);

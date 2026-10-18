@@ -4066,8 +4066,12 @@ export interface SlashCommand {
  *  'limit' — the assistant row Claude Code appends on a 429
  *  (`isApiErrorMessage:true, error:"rate_limit"`; D-2365).
  *  'idle-compact' — Claude Code's notice after an idle compaction that
- *  started no turn (D-5371). */
-export type SystemOrigin = 'resume-prompt' | 'no-response' | 'limit' | 'idle-compact';
+ *  started no turn (D-5371).
+ *  'idle-compact-nudge' — the server's own "continue" prompt, typed once after
+ *  an idle compaction left a fresh open task list (D-5373). A plain user row
+ *  whose whole text is `IDLE_COMPACT_NUDGE_PROMPT`, shown as a pill so the
+ *  operator sees why a turn started. */
+export type SystemOrigin = 'resume-prompt' | 'no-response' | 'limit' | 'idle-compact' | 'idle-compact-nudge';
 /** `stale-task-strip` (D-5372): a task list whose newest file is older than
  *  this is a plan left open, not running work — the strip says "N open" and
  *  "Plan · untouched <age>" rather than "N running". Claude Code rewrites a task
@@ -4090,6 +4094,16 @@ export const TASKS_STALE_MS = 6 * 60 * 60 * 1000;
 export const IDLE_COMPACT_NOTICE_PREFIXES = [
   'Compacted while idle',
 ] as const;
+/** `idle-compact-nudge` (D-5373): the one prompt the server types into a
+ *  session after an idle compaction when its task list is fresh and has open
+ *  items (operator ruling 2026-10-17, "Nudge if work is open"). Typed through
+ *  `sendPrompt` as a plain user row; the transcript parser reads a user row
+ *  whose whole trimmed text is this sentence as the `idle-compact-nudge`
+ *  system pill. The second sentence is the guard for the shape the ruling
+ *  names as the risk: a session that had ended its turn on a question to the
+ *  operator answers in one line and stops. */
+export const IDLE_COMPACT_NUDGE_PROMPT =
+  "Continue with your open tasks. If you were waiting for the operator's answer, say so in one line and stop.";
 /** The sentence Claude Code's default resume prompt is, and every variant —
  *  including ccd's RESUME_PROMPT — begins with. The parser matches the prefix. */
 export const RESUME_PROMPT_PREFIX = 'Continue from where you left off.';
@@ -4399,8 +4413,10 @@ export interface NotifyEvent {
    *  attribution row would land in `run_events` and be seen by nobody (D-1163). Additive: an
    *  older client degrades it to `unknown` through `reviveNotifyEvent`, which is the
    *  degradation this union was given `unknown` for. `update` is a move the update dispatcher
-   *  leased (wave 8 item A) — about no session and no run, recorded, never pushed; `queue` is the landing lane's dequeue notice; `interrupt` is an Escape or Ctrl-C the console sent, with its source and outcome (D-5237, `INTERRUPT_SOURCES`), recorded, never pushed. */
-  kind: 'ask' | 'done' | 'merged' | 'mail' | 'run' | 'coord' | 'update' | 'queue' | 'interrupt' | 'unknown';
+   *  leased (wave 8 item A) — about no session and no run, recorded, never pushed; `queue` is the landing lane's dequeue notice; `interrupt` is an Escape or Ctrl-C the console sent, with its source and outcome (D-5237, `INTERRUPT_SOURCES`), recorded, never pushed.
+   *  `nudge` is the idle-compaction nudge (D-5373): the server typed a "continue" prompt into the session, recorded,
+   *  never pushed; its body names the compaction, and the record is the lane's durable "already nudged" read. */
+  kind: 'ask' | 'done' | 'merged' | 'mail' | 'run' | 'coord' | 'update' | 'queue' | 'interrupt' | 'nudge' | 'unknown';
   sessionId: string; title: string; body: string;
   /**
    * WHICH RUN this notification is about, or `null` when it is about none.
@@ -4439,7 +4455,7 @@ export interface CatchUp { epoch: string; seq: number; resync: boolean; events: 
 /** The recognised `NotifyEvent.kind` tokens. Kept private; the door in is
  *  `isNotifyKind` below, the same split `PR_PHASES`/`isPrPhase` use and for
  *  the identical reason (that function's own docstring has the argument). */
-const NOTIFY_KINDS: readonly NotifyEvent['kind'][] = ['ask', 'done', 'merged', 'mail', 'run', 'coord', 'update', 'queue', 'interrupt', 'unknown'];
+const NOTIFY_KINDS: readonly NotifyEvent['kind'][] = ['ask', 'done', 'merged', 'mail', 'run', 'coord', 'update', 'queue', 'interrupt', 'nudge', 'unknown'];
 
 /**
  * Use THIS, never `NOTIFY_KINDS.includes(x as NotifyEvent['kind'])` — the
@@ -10558,6 +10574,32 @@ export function parseInterruptEventBody(body: string): { source: InterruptSource
   const m = /^source=(\S+) outcome=(\S+)$/.exec(body);
   if (m === null) return null;
   return { source: isInterruptSource(m[1]) ? m[1] : 'unknown', outcome: isInterruptOutcome(m[2]) ? m[2] : 'unknown' };
+}
+
+/**
+ * The swap route's refusal codes (D-5240, working-state spec §5.9): every `error` word `POST /api/sessions/:id/swap`
+ * refuses a turn with, declared ONCE in `ARCHIVE_REFUSALS`' shape, and the same two words archive uses for the same
+ * two facts, so a code means one thing whichever door sent it. The server sends `SWAP_REFUSALS.<name>` and the PWA
+ * branches on it; neither spells one as a bare literal. ccd's own two refusals (`ccd: session-busy:` and `ccd:
+ * status-unknown:`, `cmd_swap`'s manual gate) are spelled from these too (`ccdSwapRefusal`, `server/src/swapguard.ts`).
+ *
+ *   - `sessionBusy` — a turn MEASURED in progress (the server's fail-closed `turnVerdictFor`, before the queue or
+ *     inside it, or ccd after both). `{interrupt:true}` consents; the turn in progress and its background tasks are lost.
+ *   - `statusUnknown` — nobody could read the turn. No consent covers it: stop the session first, then swap.
+ *
+ * Appended at the end of this file, like `ARCHIVE_REFUSALS`, so no line README or a contract cites moves.
+ */
+export const SWAP_REFUSALS = {
+  sessionBusy: ARCHIVE_REFUSALS.sessionBusy,
+  statusUnknown: ARCHIVE_REFUSALS.statusUnknown,
+} as const;
+export type SwapRefusal = (typeof SWAP_REFUSALS)[keyof typeof SWAP_REFUSALS];
+
+/** Every swap refusal code, DERIVED from `SWAP_REFUSALS` — never a second list. */
+export const SWAP_REFUSAL_CODES: readonly SwapRefusal[] = Object.values(SWAP_REFUSALS);
+
+export function isSwapRefusal(v: unknown): v is SwapRefusal {
+  return typeof v === 'string' && (SWAP_REFUSAL_CODES as readonly string[]).includes(v);
 }
 
 // ── Delegation observation: the shared event and state vocabulary (delegation broker wave 3) ──────────────────────

@@ -14307,6 +14307,14 @@ _inst_bins() {   # what has to be ON PATH: ccrc's own executables, and the launc
     # `deploy/gen-wrappers.mjs`'s `TOOLCHAIN_EXECUTABLES` knows the name, or the
     # orphan scan in `_inst_wrappers` (every role) would report it.
     _inst_atomic "$tree/ccd/ccd-scope-sweep" "$bin/ccd-scope-sweep" 755
+    # D-5241: the tool-child priority's prefix, which `ccd`'s `_spawn_start`
+    # names in CLAUDE_CODE_SHELL_PREFIX on Linux only — so systemd only here
+    # too: macOS has no /proc/self/oom_score_adj to raise. Every role, on the
+    # sweeps' terms (inert where no session runs). Left behind by a rollback it
+    # is inert: nothing names it once the session respawns without the prefix.
+    # `deploy/gen-wrappers.mjs`'s `TOOLCHAIN_EXECUTABLES` knows the name, or the
+    # orphan scan in `_inst_wrappers` (every role) would report it.
+    _inst_atomic "$tree/ccd/ccd-tool-adj" "$bin/ccd-tool-adj" 755
     # The account-health probe, on the sweep's exact terms: every ROLE, but not
     # Darwin — its only runner is a systemd timer, and a binary whose runner
     # never fires would be the same no-op cap-scopes' own comment warns about.
@@ -14342,9 +14350,9 @@ _inst_bins() {   # what has to be ON PATH: ccrc's own executables, and the launc
   _inst_atomic "$gen" "$bin/ccrc" 755
   rm -f -- "$gen"
   if [ "$CCD_OS" = darwin ]; then
-    echo "install: bins: ccd, ccd-account-auth${lane_bins} and the ccrc launcher in \$HOME/.local/bin${lane_note} (no ccd-cap-scopes — it caps cgroup scopes, and macOS has none; no ccd-graph-sweep, no ccd-account-health, no ccd-telemetry-keepalive, no ccd-usage-sweep, no ccd-tmp-sweep, no ccd-scope-sweep, no ccd-history-sweep, no ccd-pool-sync and no ccd-update-sync — their timers are systemd-only)"
+    echo "install: bins: ccd, ccd-account-auth${lane_bins} and the ccrc launcher in \$HOME/.local/bin${lane_note} (no ccd-cap-scopes — it caps cgroup scopes, and macOS has none; no ccd-graph-sweep, no ccd-account-health, no ccd-telemetry-keepalive, no ccd-usage-sweep, no ccd-tmp-sweep, no ccd-scope-sweep, no ccd-tool-adj, no ccd-history-sweep, no ccd-pool-sync and no ccd-update-sync — their timers are systemd-only)"
   else
-    echo "install: bins: ccd, ccd-account-auth, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-usage-sweep, ccd-tmp-sweep, ccd-scope-sweep, ccd-pool-sync, ccd-update-sync${hist_bin}${lane_bins} and the ccrc launcher in \$HOME/.local/bin${lane_note}"
+    echo "install: bins: ccd, ccd-account-auth, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-usage-sweep, ccd-tmp-sweep, ccd-scope-sweep, ccd-tool-adj, ccd-pool-sync, ccd-update-sync${hist_bin}${lane_bins} and the ccrc launcher in \$HOME/.local/bin${lane_note}"
   fi
 }
 
@@ -14990,7 +14998,23 @@ _inst_units() {
     "$dir/claude-session@.service.d/limits.conf" 644
   _inst_atomic "$tree/deploy/systemd/app-claude-session.slice.d/limits.conf" \
     "$slice/limits.conf" 644
-  echo "install: units: $role_unit, claude-session@.service, ccd-cap-scopes.{service,timer} and both drop-ins in \$HOME/.config/systemd/user"
+  # D-5241 (spec 2026-10-16 §5.10): the victim policy's two OOMPolicy=continue
+  # drop-ins, Linux only (the Darwin arm returned above) and on every role, as
+  # the two limits.conf files are: a drop-in for a scope a box never creates
+  # applies to nothing. `tmux-spawn-.scope.d` IS SPELLED WITH ITS TRAILING
+  # HYPHEN: that is systemd's prefix form, the one name that reaches every
+  # `tmux-spawn-<uuid>.scope` (measured on throwaway scopes, plan Task 13 step
+  # 1). Without the hyphen it names a unit called `tmux-spawn.scope` that never
+  # exists. NOTHING HERE OR IN AN OLDER RELEASE DELETES THEM: a rollback below
+  # this release removes both by hand (the plan's Task 15, README's "Memory
+  # guardrails"), and `cmd_uninstall` removes them.
+  mkdir -p "$dir/tmux-spawn-.scope.d" "$dir/ccrc-tmux-server.scope.d" \
+    || _ccrc_die "cannot create the scope drop-in directories in $dir"
+  _inst_atomic "$tree/deploy/systemd/tmux-spawn-.scope.d/50-oom-continue.conf" \
+    "$dir/tmux-spawn-.scope.d/50-oom-continue.conf" 644
+  _inst_atomic "$tree/deploy/systemd/ccrc-tmux-server.scope.d/50-oom-continue.conf" \
+    "$dir/ccrc-tmux-server.scope.d/50-oom-continue.conf" 644
+  echo "install: units: $role_unit, claude-session@.service, ccd-cap-scopes.{service,timer}, both drop-ins and the two OOMPolicy=continue scope drop-ins in \$HOME/.config/systemd/user"
 }
 
 # ── _inst_codex_runtime — the Codex lanes' LiteLLM runtime (spec §5.2) ────
@@ -23323,11 +23347,18 @@ _uninst_units() {
     || _ccrc_die "removing the unit files under $dir failed"
   rm -rf -- "$dir/claude-session@.service.d" "$slice" \
     || _ccrc_die "removing the drop-in directories under $dir failed"
+  # D-5241: the two scope drop-ins, as FILES and never their directories whole:
+  # `ccrc-tmux-server.scope.d` may also hold an operator's own hand-placed
+  # drop-in (the 2026-10-12 recovery placed one), which is not ccrc's to remove.
+  # Each directory goes only if that leaves it empty.
+  rm -f -- "$dir/tmux-spawn-.scope.d/50-oom-continue.conf" "$dir/ccrc-tmux-server.scope.d/50-oom-continue.conf" \
+    || _ccrc_die "removing the scope drop-ins under $dir failed"
+  rmdir -- "$dir/tmux-spawn-.scope.d" "$dir/ccrc-tmux-server.scope.d" 2>/dev/null || :
   if command -v systemctl >/dev/null 2>&1; then
     systemctl --user daemon-reload \
       || echo "uninstall: units: daemon-reload failed — systemd may still list units whose files are gone until the next reload" >&2
   fi
-  echo "uninstall: units: stopped, disabled and removed (incl. both drop-ins and the slice escape)"
+  echo "uninstall: units: stopped, disabled and removed (incl. both drop-ins, the two OOMPolicy=continue scope drop-ins and the slice escape)"
 }
 
 # ── _uninst_codex — stop the Codex lanes' tiers, remove their runtime ─────
@@ -23649,7 +23680,7 @@ _uninst_wrappers() {
     # is another repository's unmarked launcher, which the marker test below
     # already keeps, and nothing here places it (D-3478). `ccd-update-sync`
     # joins on the same terms as the timer-bound binary from programme wave 4.
-    case "$name" in ccd|ccrc|ccd-cap-scopes|ccd-graph-sweep|ccd-account-health|ccd-telemetry-keepalive|ccd-account-auth|ccd-usage-sweep|ccd-tmp-sweep|ccd-scope-sweep|ccd-history-sweep|ccd-pool-sync|ccd-update-sync|ccgpt-runtime|ccrc-codex) continue ;; esac
+    case "$name" in ccd|ccrc|ccd-cap-scopes|ccd-graph-sweep|ccd-account-health|ccd-telemetry-keepalive|ccd-account-auth|ccd-usage-sweep|ccd-tmp-sweep|ccd-scope-sweep|ccd-tool-adj|ccd-history-sweep|ccd-pool-sync|ccd-update-sync|ccgpt-runtime|ccrc-codex) continue ;; esac
     [[ "$name" =~ $WRAPPER_ID_RE ]] || continue
     verdict="$(node --no-warnings --input-type=module -e '
 import { readFileSync, statSync } from "node:fs";
@@ -23850,6 +23881,9 @@ _uninst_tree_bins() {
   # non-Darwin role and only its timer is fleet-gated, so it is removed here
   # on every role.
   #
+  # `ccd-tool-adj` (D-5241, the tool-child priority's shell prefix) joins on
+  # `ccd-scope-sweep`'s terms: `_inst_bins` places it on every non-Darwin role.
+  #
   # THE ORDINALS ARE GONE, and that is the fix, not an omission. This census
   # was hand-kept and was caught stale THREE times (D-1347; again at the
   # account wave's merge, where main added `ccd-telemetry-keepalive` to the
@@ -23865,6 +23899,7 @@ _uninst_tree_bins() {
     "$HOME/.local/bin/ccd-telemetry-keepalive" "$HOME/.local/bin/ccd-account-auth" \
     "$HOME/.local/bin/ccd-usage-sweep" "$HOME/.local/bin/ccd-usage-sweep.py" \
     "$HOME/.local/bin/ccd-tmp-sweep" "$HOME/.local/bin/ccd-scope-sweep" "$HOME/.local/bin/ccd-pool-sync" \
+    "$HOME/.local/bin/ccd-tool-adj" \
     "$HOME/.local/bin/ccd-history-sweep" \
     "$HOME/.local/bin/ccd-update-sync" \
     "$HOME/.local/bin/ccgpt-proxy.py" "$HOME/.local/bin/ccgpt-usage.py" \
@@ -23876,7 +23911,7 @@ _uninst_tree_bins() {
   rm -f -- "$HOME/.local/libexec/ccrc/ccd" \
     || _ccrc_die "removing ccd's body from \$HOME/.local/libexec/ccrc failed"
   rmdir -- "$HOME/.local/libexec/ccrc" 2>/dev/null || :
-  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-scope-sweep, ccd-history-sweep, ccd-pool-sync, ccd-update-sync, ccgpt-proxy.py, ccgpt-usage.py, ccgpt-runtime, ccrc-codex and the ccrc launcher removed from \$HOME/.local/bin, and ccd's body from \$HOME/.local/libexec/ccrc; the completed-install record and the node's update state (~/.ccrc/previous, install-step, update.json, update.lock, update-intent) removed$vsaid$msaid$nsaid"
+  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-scope-sweep, ccd-tool-adj, ccd-history-sweep, ccd-pool-sync, ccd-update-sync, ccgpt-proxy.py, ccgpt-usage.py, ccgpt-runtime, ccrc-codex and the ccrc launcher removed from \$HOME/.local/bin, and ccd's body from \$HOME/.local/libexec/ccrc; the completed-install record and the node's update state (~/.ccrc/previous, install-step, update.json, update.lock, update-intent) removed$vsaid$msaid$nsaid"
   echo "uninstall: tree: the box token's node records (~/.ccrc/box-token-generation, token-sync.json) removed; its value and state files stay with ~/.ccrc/mail.token, and ~/.cc-secrets/ccrc-mail.token is not touched"
   # ── the one entry that is not ccrc's own binary ─────────────────────────
   # `_inst_graphify_engine` converges `$HOME/.local/bin/graphify` onto the
