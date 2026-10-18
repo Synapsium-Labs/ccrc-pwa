@@ -10,6 +10,7 @@ import { navigate } from '../src/lib/router';
 import { FleetScreen } from '../src/screens/FleetScreen';
 import { AccountsStrip } from '../src/fleet/AccountsStrip';
 import { ToastHost } from '@ccrc/ui';
+import { ICONS } from '../../ui/src/icons/lucide';
 import { TEST_ROSTER } from './rosterFixture';
 
 // foldState.ts persists to localStorage — clear it so one test's fold can
@@ -3121,6 +3122,11 @@ describe('the Docs door (docs design 4.8, M4.L1)', () => {
     const words = [...door.childNodes].filter((n) => n.nodeType === Node.TEXT_NODE).map((n) => n.textContent?.trim()).join('');
     expect(words).toBe('Docs');
     expect(door.querySelector('.docs-door-glyph')?.getAttribute('aria-hidden')).toBe('true');
+    // The glyph is `Icon file-text` (skins plan Task 8, "#402's 📄"; D-5500): an svg drawn from the vendored nodes,
+    // stroked in the door's ink, and no text of its own, so the platform's colour 📄 cannot come back here.
+    const glyph = door.querySelector('.docs-door-glyph')!;
+    expect(glyph.querySelector('svg')?.children.length).toBe(ICONS['file-text'].length);
+    expect(glyph.textContent).toBe('');
     fireEvent.click(door);
     expect(location.pathname).toBe('/docs');
   });

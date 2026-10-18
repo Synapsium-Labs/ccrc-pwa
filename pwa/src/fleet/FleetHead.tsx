@@ -12,7 +12,7 @@
 // rather than a fragment inlined in a screen: a reader looking for "how do I
 // reach settings" should land in a file that is only about that.
 import type { ReactNode } from 'react';
-import { Door, SETTINGS_GLYPH } from '@ccrc/ui';
+import { Door, Icon, SETTINGS_GLYPH } from '@ccrc/ui';
 import { MailBadge } from '../fleet/MailBadge';
 import { NotificationBell } from '../fleet/NotificationBell';
 import { navigate } from '../lib/router';
@@ -49,7 +49,7 @@ export function FleetHead(
             aria-label="Docs: specs, plans and design notes"
             onClick={() => navigate('/docs')}
           >
-            <span className="docs-door-glyph" aria-hidden="true">📄</span>
+            <span className="docs-door-glyph" aria-hidden="true"><Icon name="file-text" /></span>
             Docs
           </button>
           {/* THE DURABLE DOOR TO /accounts (D-161). The AccountsStrip tap

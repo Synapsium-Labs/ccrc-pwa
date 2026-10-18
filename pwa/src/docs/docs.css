@@ -34,7 +34,8 @@
   transition: transform var(--dur-press) var(--ease-swift), color var(--dur-fast) var(--ease-swift);
 }
 .docs-door:active { transform: scale(0.88); color: var(--ink-primary); }
-/* The glyph is decoration beside the word, aria-hidden in the markup, sized in the UI font as `Door`'s glyph is. */
+/* The glyph is `Icon file-text` (D-5500), decoration beside the word, aria-hidden in the markup; its box takes the UI
+   font as `Door`'s glyph does, so the word sits on the same line as its siblings'. */
 .docs-door-glyph { font-family: var(--font-ui); font-size: var(--text-xs); line-height: 1; }
 
 /* — the session links (section 4.8): overflow only. The tap floor stays the shared class's (`.btn-ghost`, `.menu-item`),
@@ -156,9 +157,21 @@
   background: none; color: var(--ink-primary);
   font: var(--weight-regular) var(--text-sm) / var(--leading-tight) var(--font-ui);
   text-align: left; cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease-swift);
 }
-.docs-row:active { background: var(--bg-surface); color: var(--ink-primary); }
 .docs-row-off { color: var(--ink-secondary); cursor: default; }
+/* — hover and pressed (D-5501, after the skins' D-5101): what `ListRow`, `Door` and `BackButton` now do, restated for
+   the Docs chrome's hand-drawn twins. A row that is a link lifts to --bg-hover under the mouse and sinks to
+   --bg-pressed while held; the door and the back chevron brighten to the primary ink. Hover only inside
+   `(hover: hover)`, so a phone's last tap leaves nothing stuck. A row that is not a link (`.docs-row-off`, a <div>)
+   neither lifts nor sinks. The press is declared after the hover at the same specificity, so a held row shows the
+   pressed ground under the mouse too. Every ink drawn on either ground (the neutral tiers) is held by
+   design/contrast-check.mjs in every palette; the badge inside a row paints its own. — */
+@media (hover: hover) {
+  .docs-row:not(.docs-row-off):hover { background: var(--bg-hover); color: var(--ink-primary); }
+  .docs-door:hover, .docs-back:hover { color: var(--ink-primary); }
+}
+.docs-row:not(.docs-row-off):active { background: var(--bg-pressed); color: var(--ink-primary); }
 .docs-row-name { min-width: 0; font-weight: var(--weight-medium); overflow-wrap: anywhere; }
 .docs-row-glyph { flex: none; font-family: var(--font-ui); }
 .docs-row-path, .docs-row-count, .docs-row-note, .docs-row-age, .docs-row-size, .docs-row-ref, .docs-row-state,
@@ -248,4 +261,10 @@
 .doc-plain {
   margin: 0; white-space: pre-wrap; overflow-wrap: anywhere;
   font: var(--weight-regular) var(--text-sm) / var(--leading-mono) var(--font-mono);
+}
+
+/* — reduced motion (D-5501): the door, the back chevron and a row each declare a transition, so each is named here,
+   after every rule it governs (motion-reduced.test.ts reads both halves). — */
+@media (prefers-reduced-motion: reduce) {
+  .docs-door, .docs-back, .docs-row { transition: none; }
 }

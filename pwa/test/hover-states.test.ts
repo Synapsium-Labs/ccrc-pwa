@@ -274,3 +274,42 @@ describe('the gate measures each new ground with exactly the inks drawn on it', 
     expect(gate).not.toMatch(/selected-row meta ink \/ slab/);
   });
 });
+
+// ── the Docs chrome's hand-drawn twins (D-5501) ──────────────────────────────
+//
+// docs.css draws its own door, back chevron and listing rows (a plain <button>
+// each, not `Door`, `BackButton` or `ListRow`), so the primitives' hover and
+// pressed classes never reach them. These pin the restatement: the same grounds
+// and inks, the same guard, the press winning over the hover while held, and
+// each moving rule stilled by a reduced-motion block placed after it.
+describe('the Docs chrome lifts, sinks and brightens as the primitives do (D-5501)', () => {
+  const docsCss = stripComments(read('pwa/src/docs/docs.css'));
+  const squash = (v: string | null): string => (v ?? '').replace(/\s+/g, '');
+
+  it('a link row lifts to --bg-hover and a door or chevron brightens, inside (hover: hover) only', () => {
+    const rules = hoverRules(docsCss);
+    expect(rules.map((r) => r.selector).sort())
+      .toEqual(['.docs-door:hover, .docs-back:hover', '.docs-row:not(.docs-row-off):hover'].sort());
+    expect(rules.every((r) => r.guarded)).toBe(true);
+    expect(docsCss).toMatch(/\.docs-row:not\(\.docs-row-off\):hover\s*\{\s*background:\s*var\(--bg-hover\);\s*color:\s*var\(--ink-primary\);/);
+    expect(docsCss).toMatch(/\.docs-door:hover,\s*\.docs-back:hover\s*\{\s*color:\s*var\(--ink-primary\);/);
+  });
+
+  it('a held link row sinks to --bg-pressed, declared after the hover at the same specificity', () => {
+    const press = docsCss.search(/\.docs-row:not\(\.docs-row-off\):active\s*\{\s*background:\s*var\(--bg-pressed\);/);
+    const hover = docsCss.search(/\.docs-row:not\(\.docs-row-off\):hover\s*\{/);
+    expect(press, 'the pressed rule').toBeGreaterThan(-1);
+    expect(hover, 'the hover rule').toBeGreaterThan(-1);
+    expect(press, 'the press must come after the hover, or a held row shows the hover ground').toBeGreaterThan(hover);
+    // The old press to --bg-surface is gone: one pressed ground across the app.
+    expect(docsCss).not.toMatch(/\.docs-row:active\s*\{/);
+  });
+
+  it('the row fades its ground at --dur-fast, and reduced motion stills the row, the door and the chevron', () => {
+    expect(squash(declValue(ruleIn(docsCss, '.docs-row'), 'transition')))
+      .toBe('background-colorvar(--dur-fast)var(--ease-swift)');
+    const block = docsCss.match(/@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{([^@]*)\}\s*$/);
+    expect(block, 'a reduced-motion block at the end of docs.css').not.toBeNull();
+    expect(block![1]).toMatch(/\.docs-door,\s*\.docs-back,\s*\.docs-row\s*\{\s*transition:\s*none;/);
+  });
+});

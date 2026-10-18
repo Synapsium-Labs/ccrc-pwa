@@ -970,6 +970,10 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-page)'],
     why: 'the pressed state of the same chevron, same ground; registered separately because it overrides `color` directly',
   },
+  '.docs-door:hover, .docs-back:hover': {
+    under: ['var(--bg-page)'],
+    why: "the hover ink of the door and the chevron (D-5501, the skins' D-5101 hover restated for the hand-drawn twins of Door and BackButton), inside `@media (hover: hover)`, on the same unpainted grounds as the two rules above; the door's second ground, the desktop sidebar's --bg-surface, is measured off this rule's own ink in contrast.test.ts as it is for .docs-door and .docs-door:active",
+  },
   '.docs-crumb, .docs-crumbs-more': {
     under: ['var(--bg-page)'],
     why: "the crumb links and the phone's leading … button, in .docs-crumbs on the same unpainted .docs-head-bar as .docs-back, so the same --bg-page",
@@ -1008,7 +1012,7 @@ export const INHERITED_GROUNDS = {
   },
   '.docs-row': {
     under: ['var(--bg-page)'],
-    why: "a listing row, a <button> with `background: none` in .docs-rows on .docs-screen, all unpainted, so --bg-page. Its pressed state paints --bg-surface and is measured on that as a self-grounded rule of its own",
+    why: "a listing row, a <button> with `background: none` in .docs-rows on .docs-screen, all unpainted, so --bg-page. Its hover and pressed states (D-5501) paint --bg-hover and --bg-pressed and are measured on those as self-grounded rules of their own",
   },
   '.docs-row-off': {
     under: ['var(--bg-page)'],
@@ -1016,7 +1020,7 @@ export const INHERITED_GROUNDS = {
   },
   '.docs-row-path, .docs-row-count, .docs-row-note, .docs-row-age, .docs-row-size, .docs-row-ref, .docs-row-state, .docs-row-mark, .docs-row-drafts': {
     under: ['var(--bg-page)'],
-    why: "a row's meta cells in --ink-tertiary, inside .docs-row on the same --bg-page. A pressed row puts them on --bg-surface for the press, where tokens.css gives --ink-tertiary 5.77:1 dark and 5.70:1 light; the auditor takes one ground per rule",
+    why: "a row's meta cells in --ink-tertiary, inside .docs-row on the same --bg-page. A hovered or pressed row puts them on --bg-hover or --bg-pressed (D-5501), where design/contrast-check.mjs holds --ink-tertiary in every palette (HOVER_INKS, PRESSED_INKS); the auditor takes one ground per rule",
   },
   '.doc-link-inert': {
     under: ['var(--bg-page)'],
