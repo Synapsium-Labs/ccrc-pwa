@@ -6584,6 +6584,38 @@ describe('the swap route spells its refusal words once (D-5240)', () => {
   });
 });
 
+// D-5301 (plan docs/superpowers/plans/2026-10-17-coordinator-first-routing.md, Task 10; spec §8). APPENDED. The
+// session role is enumerated once (`SESSION_ROLE_MAP`, its list derived by `Object.keys`), narrowed by one guard, and
+// DERIVED once, by `sessionRoleOf` from the registry's `.child` reading; `server/src/fleet.ts` is the one place the
+// wire field is computed, and it computes it through that function. Code lines only (`stallCode`).
+describe('the session role is enumerated, narrowed and derived once, in shared/api.ts (D-5301)', () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+
+  it('CONTROL: the patterns see a definition and pass over comment lines', () => {
+    expect(/\bSESSION_ROLE_MAP\s*[:=]/.test('const SESSION_ROLE_MAP: Record<SessionRole, true> = {')).toBe(true);
+    expect(/\bsessionRoleOf\s*=/.test('export const sessionRoleOf = (child) => x;')).toBe(true);
+    expect(stallCodeText('// const SESSION_ROLE_MAP = {}\nconst x = 1;')).not.toMatch(/\bSESSION_ROLE_MAP\s*[:=]/);
+  });
+
+  it('SESSION_ROLE_MAP, SESSION_ROLES, isSessionRole and sessionRoleOf are each defined in shared/api.ts and nowhere else', () => {
+    expect(holders(/\bSESSION_ROLE_MAP\s*[:=]/)).toEqual(['shared/api.ts']);
+    expect(holders(/\bSESSION_ROLES\s*[:=]/)).toEqual(['shared/api.ts']);
+    expect(holders(/\bfunction\s+isSessionRole\b|\bisSessionRole\s*=/)).toEqual(['shared/api.ts']);
+    expect(holders(/\bfunction\s+sessionRoleOf\b|\bsessionRoleOf\s*=/)).toEqual(['shared/api.ts']);
+  });
+
+  it('SESSION_ROLES is derived from its map, never a hand-kept list', () => {
+    const api = readFileSync(path.join(ccrcRoot, 'shared/api.ts'), 'utf8');
+    expect(api).toMatch(/export const SESSION_ROLES: readonly SessionRole\[\] =\s*\n?\s*Object\.keys\(SESSION_ROLE_MAP\)/);
+    expect(api).not.toMatch(/SESSION_ROLES[^=]*=\s*\[/);
+  });
+
+  it("the wire field is computed in server/src/fleet.ts only, through sessionRoleOf of the registry's child", () => {
+    expect(holders(/\brole:\s*sessionRoleOf\(/)).toEqual(['server/src/fleet.ts']);
+    expect(stallCode(path.join(ccrcRoot, 'server/src/fleet.ts'))).toMatch(/\brole:\s*sessionRoleOf\(r\.child\)/);
+  });
+});
+
 // D-5299 / D-5391 (plan docs/superpowers/plans/2026-10-17-coordinator-first-routing.md, Task 15). APPENDED. The
 // children's deny list (`CHILD_DENY_RULES`), its path-qualified switch (`CHILD_DENY_PATH_QUALIFIED`) and the spawn
 // record's two value shapes have one TypeScript home, `shared/api.ts`; the record's two readers have one,

@@ -422,7 +422,11 @@ describe('selection is polarity, status is hue', () => {
                         // Child-reclamation wave 5's label: its own
                         // `color: var(--ink-tertiary)` strands on the slab exactly
                         // like `.sess-substrate`'s would without its entry here.
-                        '.sess-child']) {
+                        '.sess-child',
+                        // D-5301's coordinator badge: `.sess-repo`'s own
+                        // `--ink-tertiary`, on the label's line, strands the
+                        // same way without its entry here.
+                        '.sess-role']) {
       expect(group).toContain(`.sess-line--active ${cell}`);
     }
   });
