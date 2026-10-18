@@ -112,8 +112,8 @@ describe('readRegistry', () => {
 
   it('reads sessions enumerated by *.uuid with optional fields', async () => {
     const reg = path.join(home, '.cc-sessions');
-    seed(reg, 'claude-a-MekWarLive', {
-      wrapper: 'claude-a', project: 'MekWarLive', workdir: '/data/projects/MekWarLive',
+    seed(reg, 'claude-a-project-f', {
+      wrapper: 'claude-a', project: 'project-f', workdir: '/data/projects/project-f',
       uuid: 'a0b5791d-0000-0000-0000-000000000001', started: '1',
       pool: 'claude claude-a', lastswap: '1784500000',
     });
@@ -125,7 +125,7 @@ describe('readRegistry', () => {
     writeFileSync(path.join(reg, 'swap.log'), 'x');      // noise
 
     const out = await readRegistry(localIO, loadConfig({ CCRC_HOME: home }));
-    expect(out.map((s) => s.id)).toEqual(['claude-a-MekWarLive', 'claude-b-demo-app-ts']);
+    expect(out.map((s) => s.id)).toEqual(['claude-a-project-f', 'claude-b-demo-app-ts']);
     const mek = out[0];
     expect(mek.pool).toEqual(['claude', 'claude-a']);
     expect(mek.lastswap).toBe(1784500000);
@@ -332,7 +332,7 @@ describe('the measured read reaching the registry ladder (Task 5)', () => {
   describe('held (D-112)', () => {
     it('a LISTED .hold whose measured read is absent reads null directly — no second listing', async () => {
       seed(reg, 'demo-quiet-basin', { wrapper: 'claude', project: 'demo', workdir: '/w', uuid: 'e'.repeat(36) });
-      writeFileSync(path.join(reg, 'demo-quiet-basin.hold'), 'program:agent-evals wave:1/4');
+      writeFileSync(path.join(reg, 'demo-quiet-basin.hold'), 'program:prog-j wave:1/4');
       let listings = 0;
       const io: FleetIO = {
         ...absentField('demo-quiet-basin', 'hold'),
@@ -464,7 +464,7 @@ describe('the measured read reaching the registry ladder (Task 5)', () => {
         branch: 'ws/quiet-basin', base: 'origin/main', prphase: 'merged', prnumber: '42',
         prcheckedat: '1785300000000', archived: '1785300123',
         archivemanifest: '{"worktreeBytes":123}',
-        hold: 'program:agent-evals wave:1/4',
+        hold: 'program:prog-j wave:1/4',
         stopped: '1785300000 pwa', supervised: '1785300100',
         swapblocked: '1785299000 no transcript found for uuid under claude', spawn: '1785299500 4',
         substrate: '1755620112 protocol version mismatch',
@@ -634,8 +634,8 @@ describe('readSessionRecord', () => {
 
   it('reads the same record readRegistry would, for one id among several', async () => {
     const reg = path.join(home, '.cc-sessions');
-    seed(reg, 'claude-a-MekWarLive', {
-      wrapper: 'claude-a', project: 'MekWarLive', workdir: '/data/projects/MekWarLive',
+    seed(reg, 'claude-a-project-f', {
+      wrapper: 'claude-a', project: 'project-f', workdir: '/data/projects/project-f',
       uuid: 'a0b5791d-0000-0000-0000-000000000001', started: '1',
       pool: 'claude claude-a', lastswap: '1784500000',
     });
@@ -646,9 +646,9 @@ describe('readSessionRecord', () => {
     const cfg = loadConfig({ CCRC_HOME: home });
 
     const whole = await readRegistry(localIO, cfg);
-    const single = await readSessionRecord(localIO, cfg, 'claude-a-MekWarLive');
+    const single = await readSessionRecord(localIO, cfg, 'claude-a-project-f');
 
-    expect(single).toEqual({ found: true, record: whole.find((r) => r.id === 'claude-a-MekWarLive') });
+    expect(single).toEqual({ found: true, record: whole.find((r) => r.id === 'claude-a-project-f') });
     expect(single.found && single.record.pool).toEqual(['claude', 'claude-a']);
     expect(single.found && single.record.lastswap).toBe(1784500000);
   });
@@ -660,8 +660,8 @@ describe('readSessionRecord', () => {
       ...localIO,
       readFileMeasured: async (p) => { fieldReads++; return localIO.readFileMeasured(p); },
     };
-    seed(reg, 'claude-a-MekWarLive', {
-      wrapper: 'claude-a', project: 'MekWarLive', workdir: '/data/projects/MekWarLive',
+    seed(reg, 'claude-a-project-f', {
+      wrapper: 'claude-a', project: 'project-f', workdir: '/data/projects/project-f',
       uuid: 'a'.repeat(36),
     });
     const cfg = loadConfig({ CCRC_HOME: home });
@@ -691,8 +691,8 @@ describe('readSessionRecord', () => {
 
   it('costs exactly one readdir plus the one id\'s buildRecord field reads — never a per-session Promise.all for a sibling', async () => {
     const reg = path.join(home, '.cc-sessions');
-    seed(reg, 'claude-a-MekWarLive', {
-      wrapper: 'claude-a', project: 'MekWarLive', workdir: '/data/projects/MekWarLive', uuid: 'a'.repeat(36),
+    seed(reg, 'claude-a-project-f', {
+      wrapper: 'claude-a', project: 'project-f', workdir: '/data/projects/project-f', uuid: 'a'.repeat(36),
     });
     seed(reg, 'claude-b-demo-app-ts', {
       wrapper: 'claude-b', project: 'demo-app-ts',
@@ -707,7 +707,7 @@ describe('readSessionRecord', () => {
     };
     const cfg = loadConfig({ CCRC_HOME: home });
 
-    await readSessionRecord(countingIO, cfg, 'claude-a-MekWarLive');
+    await readSessionRecord(countingIO, cfg, 'claude-a-project-f');
 
     expect(readdirCalls).toBe(1);
     // DERIVED, not typed: the census's own counter over `buildRecord`'s one
@@ -715,7 +715,7 @@ describe('readSessionRecord', () => {
     // second hard-coded copy by its red).
     expect(fieldReads).toHaveLength(buildRecordFieldReadCount(
       readFileSync(path.resolve(import.meta.dirname, '..', 'src', 'registry.ts'), 'utf8')));
-    expect(fieldReads.every((p) => p.includes('claude-a-MekWarLive'))).toBe(true);
+    expect(fieldReads.every((p) => p.includes('claude-a-project-f'))).toBe(true);
   });
 
   it('re-confirms a still-unreadable hold with one second listing, same as readRegistry', async () => {
@@ -723,7 +723,7 @@ describe('readSessionRecord', () => {
     seed(reg, 'demo-quiet-basin', {
       wrapper: 'claude', project: 'demo', workdir: '/w', uuid: 'd'.repeat(36),
     });
-    writeFileSync(path.join(reg, 'demo-quiet-basin.hold'), 'program:agent-evals wave:1/4');
+    writeFileSync(path.join(reg, 'demo-quiet-basin.hold'), 'program:prog-j wave:1/4');
     const holdUnreadableIO: FleetIO = {
       ...localIO,
       readFileMeasured: async (p) => (p.endsWith('.hold') ? { ok: false, reason: 'unreadable' } : localIO.readFileMeasured(p)),

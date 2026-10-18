@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { parseStatusline, promptBoxShowing } from '../src/pane/statusline.js';
 
-// Real captures from the fleet (cc-claude2-expoAI-assistant, cc-claude-corp-custom-tools).
+// Real captures from the fleet (cc-claude9-project-h, cc-claude-acme-project-d).
 const ULTRA_PANE = [
   '────────────────────────────────────────────────────────── ultracode ─',
   '',
-  '  👤 team·max │ 🤖 Opus 4.8 (1M context) · xhigh │ ⎇ fix/linear-go-live-completion │ 🎯 expoAI-assistant │ ▓ ctx ████░░░░ 48% │ 💲 $23.8743 │ +699 -44 │ ⏳ limits 5h ░░░░░ 5% · 7d ████░ 72%           /rc',
+  '  👤 team·max │ 🤖 Opus 4.8 (1M context) · xhigh │ ⎇ fix/linear-go-live-completion │ 🎯 project-h │ ▓ ctx ████░░░░ 48% │ 💲 $23.8743 │ +699 -44 │ ⏳ limits 5h ░░░░░ 5% · 7d ████░ 72%           /rc',
   '  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents',
 ].join('\n');
 
@@ -25,7 +25,7 @@ describe('parseStatusline', () => {
   it('ultracode is false when the mode divider is plain dashes', () => {
     const pane = [
       '──────────────────────────────────────────────────────────────────────',
-      '  👤 gpt │ 🤖 GPT 5.6 · high │ ⎇ main │ 🎯 rp-llm │ ▓ ctx ██░░ 20%',
+      '  👤 gpt │ 🤖 GPT 5.6 · high │ ⎇ main │ 🎯 project-j │ ▓ ctx ██░░ 20%',
     ].join('\n');
     const s = parseStatusline(pane);
     expect(s).toEqual({

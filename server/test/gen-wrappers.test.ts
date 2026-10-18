@@ -582,7 +582,7 @@ describe('gen-wrappers.mjs', () => {
       version: 1,
       accounts: [
         { id: 'claude', label: 'Claude', configDirSuffix: '.claude', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
-        { id: 'claude-a', label: 'Claude2', configDirSuffix: '.claude-a', exec: { kind: 'upstream' }, homeAble: true, hue: 'violet', telemetry: 'anthropic' },
+        { id: 'claude-a', label: 'claude9', configDirSuffix: '.claude-a', exec: { kind: 'upstream' }, homeAble: true, hue: 'violet', telemetry: 'anthropic' },
       ],
     };
     const { rosterFile, binDir, stagingDir } = fixture(twoUpstream);

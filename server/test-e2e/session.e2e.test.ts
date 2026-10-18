@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { BASE, post, get, pollUntil, wsCollect, eventsOf, sleep, waitIdle } from './helpers.js';
 
-const ID = 'claude2-cctest';
+const ID = 'claude9-cctest';
 
 // The suite drives a real cctest session through ccrc's public API only.
 // Guarded so `vitest run` stays green when CCRC_BASE_URL is unset.
@@ -12,7 +12,7 @@ describe.skipIf(!BASE)('ccrc live e2e (cctest)', () => {
   });
 
   it('1. create + reach ready (idle, gates cleared)', async () => {
-    await post('/api/sessions', { wrapper: 'claude2', project: 'cctest', enable: true });
+    await post('/api/sessions', { wrapper: 'claude9', project: 'cctest', enable: true });
     // Wait for genuinely ready — not just tmux-alive — so ccd's spawn automation
     // (trust gate, /effort injection) finishes before we drive the pane.
     await waitIdle(ID, 200_000);

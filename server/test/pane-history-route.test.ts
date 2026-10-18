@@ -21,7 +21,7 @@ import { KeyedQueue } from '../src/inject/queue.js';
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 
-const ID = 'claude-a-MekWarLive';
+const ID = 'claude-a-project-f';
 
 async function makeApp(
   capture: ExecResult,

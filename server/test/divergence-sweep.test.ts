@@ -144,12 +144,12 @@ const watcherFixture = async (cfg: FixtureCfg = {}) => {
     plantWorktreeRecord: (project: string, name: string, at: string, branch: string): void => {
       // GIT'S OWN INVARIANT, ASSERTED ON THE FIXTURE ITSELF: the admin
       // directory's name is the LAST SEGMENT OF THE CHECKOUT PATH — measured
-      // 2026-08-17 on `custom-tools`, where the nested `~/worktrees/custom-tools/
+      // 2026-08-17 on `project-d`, where the nested `~/worktrees/project-d/
       // brisk-ridge` is filed under `brisk-ridge` and the flat
-      // `~/worktrees/custom-tools-alertwire` under `custom-tools-alertwire`.
+      // `~/worktrees/project-d-alertpipe` under `project-d-alertpipe`.
       // A fixture free to disagree is how the id derivation stayed wrong for the
       // flat layout while a test called "finds a FLAT worktree" passed: it named
-      // the record `alertwire`, which git has never written for that path. This
+      // the record `alertpipe`, which git has never written for that path. This
       // planter refuses to write a record git could not have written.
       if (name !== path.basename(at)) {
         throw new Error(`fixture is not git: an admin record named ${name} cannot exist for a worktree at ${at} — git files it under ${path.basename(at)}`);
@@ -212,26 +212,26 @@ describe('sweepDivergences', () => {
   });
 
   describe('THE FLAT LAYOUT, end to end — the id the claim rule looks up comes off git\'s gitdir', () => {
-    /** `custom-tools` as the box actually holds it (measured 2026-08-17): one
+    /** `project-d` as the box actually holds it (measured 2026-08-17): one
      *  NESTED workspace ccd made, and one FLAT worktree filed under its whole
      *  directory name. The nested row is also what makes the project active —
      *  the sweep asks git only about projects the registry names. */
     const flatFixture = async (claim: boolean) => {
       const h = await watcherFixture();
-      h.plantRecord('custom-tools-brisk-ridge',
-        { project: 'custom-tools', workspace: 'brisk-ridge', branch: 'ws/brisk-ridge' });
-      h.plantWorktreeRecord('custom-tools', 'brisk-ridge',
-        '/data/worktrees/custom-tools/brisk-ridge', 'ws/brisk-ridge');
-      h.plantWorktreeRecord('custom-tools', 'custom-tools-alertwire',
-        '/data/worktrees/custom-tools-alertwire', 'ws/alertwire');
+      h.plantRecord('project-d-brisk-ridge',
+        { project: 'project-d', workspace: 'brisk-ridge', branch: 'ws/brisk-ridge' });
+      h.plantWorktreeRecord('project-d', 'brisk-ridge',
+        '/data/worktrees/project-d/brisk-ridge', 'ws/brisk-ridge');
+      h.plantWorktreeRecord('project-d', 'project-d-alertpipe',
+        '/data/worktrees/project-d-alertpipe', 'ws/alertpipe');
       // ONE registry field and no `.uuid` — `_ws_slug_free`'s any-field rule, so
       // `readRegistry` derives no row for it and the LISTING is the only evidence
-      // of the claim. Its id is `custom-tools-alertwire`: the flat directory IS
+      // of the claim. Its id is `project-d-alertpipe`: the flat directory IS
       // the id. Composing `${project}-${name}` off git's admin name asks the
-      // listing for `custom-tools-custom-tools-alertwire` and never finds it.
+      // listing for `project-d-project-d-alertpipe` and never finds it.
       if (claim) {
-        writeFileSync(path.join(h.home, '.cc-sessions', 'custom-tools-alertwire.workdir'),
-          '/data/worktrees/custom-tools-alertwire');
+        writeFileSync(path.join(h.home, '.cc-sessions', 'project-d-alertpipe.workdir'),
+          '/data/worktrees/project-d-alertpipe');
       }
       const frames: unknown[][] = [];
       h.bus.on('divergence', (d) => frames.push(d as unknown[]));
@@ -254,7 +254,7 @@ describe('sweepDivergences', () => {
       const frames = await flatFixture(false);
       expect(frames[1]).toEqual([
         { kind: 'unregistered-worktree', id: null,
-          path: '/data/worktrees/custom-tools-alertwire', detail: expect.any(String) },
+          path: '/data/worktrees/project-d-alertpipe', detail: expect.any(String) },
       ]);
     });
   });

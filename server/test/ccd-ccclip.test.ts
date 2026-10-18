@@ -243,10 +243,10 @@ describe('ccclip does not orphan its incoming file on the box', () => {
 
     // The ordinary id still goes through unchanged — a guard that refused
     // everything would pass the assertions above and break the tool.
-    const ok = runCcclip('claude2-expoAI-assistant');
+    const ok = runCcclip('claude9-project-h');
     expect(ok.code, `stderr: ${ok.stderr}`).toBe(0);
     expect(fs.readFileSync(path.join(home, 'ssh-cmd'), 'utf8'))
-      .toContain("'claude2-expoAI-assistant'");
+      .toContain("'claude9-project-h'");
   });
 
   it('the command it sends really does remove the file when the verb DIES', () => {

@@ -19,9 +19,9 @@ const fake = (responses: Record<string, ExecResult>): { run: Runner; calls: stri
 describe('Tmux', () => {
   it('hasSession true on code 0, false otherwise', async () => {
     const ok = new Tmux(fake({ 'has-session': { code: 0, stdout: '', stderr: '' } }).run);
-    expect(await ok.hasSession('claude2-MekWarLive')).toBe(true);
+    expect(await ok.hasSession('claude9-project-f')).toBe(true);
     const no = new Tmux(fake({ 'has-session': { code: 1, stdout: '', stderr: '' } }).run);
-    expect(await no.hasSession('claude2-MekWarLive')).toBe(false);
+    expect(await no.hasSession('claude9-project-f')).toBe(false);
   });
   it('panePid parses first pane pid', async () => {
     const t = new Tmux(fake({ 'list-panes': { code: 0, stdout: '40613\n', stderr: '' } }).run);

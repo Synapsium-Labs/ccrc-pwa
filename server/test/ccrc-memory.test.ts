@@ -37,24 +37,24 @@ describe('ccrc memory — the census', () => {
   });
 
   it('enumerates homes from the FILESYSTEM, not the roster', () => {
-    // `.claude-glm` is in no roster entry; it must still be reported.
-    seed('.claude-glm', '-p-demo', { 'a.md': 'x' });
-    expect(run(['memory']).out).toContain('.claude-glm');
+    // `.claude-alt1` is in no roster entry; it must still be reported.
+    seed('.claude-alt1', '-p-demo', { 'a.md': 'x' });
+    expect(run(['memory']).out).toContain('.claude-alt1');
   });
 
-  // `.claude-docserver` is NO LONGER special-cased (final whole-branch
+  // `.claude-docs-preview` is NO LONGER special-cased (final whole-branch
   // review): the old named skip in `_mem_homes` hard-coded a single
   // operator's box-local tool name into shipped, public-release-bound
   // source — identity residue CLAUDE.md bans — and it was provably dead code
   // (the very next `[ -d "${d}projects" ]` line already excludes a real
   // docserver home, which has no `projects/`). The doctor side of this is
   // pinned by an INVERTED test (`ccrc-doctor.test.ts`, "no longer
-  // special-cases .claude-docserver"); this is the matching census-side pin
-  // — a `.claude-docserver` home with a real `projects/` dir must be
+  // special-cases .claude-docs-preview"); this is the matching census-side pin
+  // — a `.claude-docs-preview` home with a real `projects/` dir must be
   // reported like any other home, not silently skipped.
-  it('no longer special-cases .claude-docserver — a projects/ dir there is reported like any other home', () => {
-    seed('.claude-docserver', '-p-demo', { 'a.md': 'x' });
-    expect(run(['memory']).out).toContain('.claude-docserver');
+  it('no longer special-cases .claude-docs-preview — a projects/ dir there is reported like any other home', () => {
+    seed('.claude-docs-preview', '-p-demo', { 'a.md': 'x' });
+    expect(run(['memory']).out).toContain('.claude-docs-preview');
   });
 
   it('reports a converged pair as converged, not as work to do', () => {
@@ -288,42 +288,42 @@ describe('ccrc memory --apply — the union', () => {
 
   it('unions two homes that hold different files', () => {
     seed('.claude', '-p-demo', { 'a.md': 'A' });
-    seed('.claude-corp', '-p-demo', { 'b.md': 'B' });
+    seed('.claude-acme', '-p-demo', { 'b.md': 'B' });
     run(['memory', '--apply']);
     expect(fs.readFileSync(path.join(storeDir(), 'a.md'), 'utf8')).toBe('A');
     expect(fs.readFileSync(path.join(storeDir(), 'b.md'), 'utf8')).toBe('B');
   });
 
   // I6 (review round 1): home order is glob-COLLATION order, not a fixed
-  // alphabetical order — `.claude` sorts before `.claude-corp` under
+  // alphabetical order — `.claude` sorts before `.claude-acme` under
   // `en_US.UTF-8`, but `-` (0x2D) sorts AFTER `/` (0x2F, the path separator
   // ending a glob candidate) is irrelevant here; what matters is that under
-  // `LC_ALL=C`, `.claude-corp` sorts BEFORE `.claude` (`-` 0x2D < nothing —
+  // `LC_ALL=C`, `.claude-acme` sorts BEFORE `.claude` (`-` 0x2D < nothing —
   // the shorter string is a prefix under byte-order too, but `C` and
   // `en_US.UTF-8` do not always agree on multi-byte/punctuation ordering in
   // general, and this suite's own `ccrc-doctor.test.ts` already runs its
   // `doctorEnv` under `LC_ALL: 'C'`). Measured: the original version of this
-  // test — asserting `n.includes('claude-corp')` on the suffixed name — went
+  // test — asserting `n.includes('claude-acme')` on the suffixed name — went
   // RED under `LC_ALL=C ./node_modules/.bin/vitest run test/ccrc-memory.test.ts
-  // -t 'KEEPS BOTH'`, because under `C` collation `.claude-corp` is absorbed
+  // -t 'KEEPS BOTH'`, because under `C` collation `.claude-acme` is absorbed
   // FIRST and the suffix names `.claude` instead. The RULE (both bodies
   // survive, never one silently) holds under either order; only the identity
   // of which home's copy is unsuffixed depends on order. Assert the rule, not
   // an order this test does not control.
   it('KEEPS BOTH when the same filename differs — never picks a winner', () => {
     seed('.claude', '-p-demo', { 'same.md': 'first' });
-    seed('.claude-corp', '-p-demo', { 'same.md': 'second' });
+    seed('.claude-acme', '-p-demo', { 'same.md': 'second' });
     run(['memory', '--apply']);
     const names = fs.readdirSync(storeDir()).filter((n) => n.startsWith('same.')).sort();
     expect(names).toHaveLength(2);
-    expect(names.every((n) => /^same\.(claude|claude-corp)\.md$/.test(n) || n === 'same.md')).toBe(true);
+    expect(names.every((n) => /^same\.(claude|claude-acme)\.md$/.test(n) || n === 'same.md')).toBe(true);
     const bodies = names.map((n) => fs.readFileSync(path.join(storeDir(), n), 'utf8')).sort();
     expect(bodies).toEqual(['first', 'second']);
   });
 
   it('deduplicates a byte-identical collision into ONE file', () => {
     seed('.claude', '-p-demo', { 'same.md': 'identical' });
-    seed('.claude-corp', '-p-demo', { 'same.md': 'identical' });
+    seed('.claude-acme', '-p-demo', { 'same.md': 'identical' });
     run(['memory', '--apply']);
     expect(fs.readdirSync(storeDir()).filter((n) => n.startsWith('same.')))
       .toEqual(['same.md']);
@@ -334,7 +334,7 @@ describe('ccrc memory --apply — the union', () => {
       'one.md': '---\nname: one\ndescription: the first\n---\nbody\n',
       'MEMORY.md': '- stale line that mentions nothing real\n',
     });
-    seed('.claude-corp', '-p-demo', {
+    seed('.claude-acme', '-p-demo', {
       'two.md': '---\nname: two\ndescription: the second\n---\nbody\n',
       'MEMORY.md': '- a different stale line\n',
     });
@@ -454,22 +454,22 @@ describe('ccrc memory --apply — the union', () => {
   // THE STAR ASSERTION, RESTORED (R27) — and the story of why it left is the
   // reason it is back. The previous round weakened this line from
   // `readlinkSync(...) === storeDir()` to `realpathSync` equality, reasoning
-  // that once `-ef` follows a chain, `.claude-corp`'s link "already resolves
+  // that once `-ef` follows a chain, `.claude-acme`'s link "already resolves
   // to the store" and `--apply` may leave it alone. That reasoning accepted a
-  // CHAIN as a spelling. It is not: `.claude` sorts before `.claude-corp`, so
+  // CHAIN as a spelling. It is not: `.claude` sorts before `.claude-acme`, so
   // `.claude`'s plain-directory pair converges first and turns `other` into a
-  // link to the store, and `.claude-corp` is then left pointing at
+  // link to the store, and `.claude-acme` is then left pointing at
   // `.claude`'s link — one account's link load-bearing for another's, exactly
   // the "`.claude` is the master" failure the spec names as the second defect
   // of the prior art. `realpathSync` equality cannot see the difference; it
-  // passes even if `--apply` touched `.claude-corp` at all. So the assertion
+  // passes even if `--apply` touched `.claude-acme` at all. So the assertion
   // that pins the SHAPE is the one that belongs here, and R27's normalise in
   // `_mem_apply` is what makes it true again.
   it('re-points a symlink that targets another HOME straight at the store (R27)', () => {
     const other = path.join(home, '.claude', 'projects', '-p-demo', 'memory');
     fs.mkdirSync(other, { recursive: true });
     fs.writeFileSync(path.join(other, 'a.md'), 'A');
-    const d = path.join(home, '.claude-corp', 'projects', '-p-demo');
+    const d = path.join(home, '.claude-acme', 'projects', '-p-demo');
     fs.mkdirSync(d, { recursive: true });
     fs.symlinkSync(other, path.join(d, 'memory'));
     run(['memory', '--apply']);
@@ -510,7 +510,7 @@ describe('ccrc memory --apply — the union', () => {
     fs.mkdirSync(b, { recursive: true });
     fs.symlinkSync(store, path.join(b, 'memory'));
     // A: a home whose link names B's LINK, not the store — the chain.
-    const a = path.join(home, '.claude-corp', 'projects', '-p-demo');
+    const a = path.join(home, '.claude-acme', 'projects', '-p-demo');
     fs.mkdirSync(a, { recursive: true });
     fs.symlinkSync(path.join(b, 'memory'), path.join(a, 'memory'));
     run(['memory', '--apply']);
@@ -659,9 +659,9 @@ describe('ccrc memory --apply — the union', () => {
   // order (I6's lesson, applied here too), so it deliberately involves only
   // ONE home: pre-populate the store as if an EARLIER absorption already
   // happened — a `same.md` from whoever converged first, and a
-  // `same.claude-corp.md` that already occupies the EXACT slot
-  // `.claude-corp`'s own differing `same.md` would compute below. Then let
-  // `.claude-corp` (forked — its `memory` entry is a plain, unconverted
+  // `same.claude-acme.md` that already occupies the EXACT slot
+  // `.claude-acme`'s own differing `same.md` would compute below. Then let
+  // `.claude-acme` (forked — its `memory` entry is a plain, unconverted
   // directory) absorb its differing `same.md`. The old code computed that
   // same destination and clobbered the pre-existing file with no check at
   // all; the fix must walk to the next free — or byte-identical — numbered
@@ -669,17 +669,17 @@ describe('ccrc memory --apply — the union', () => {
   it('C2: never overwrites a pre-existing suffixed file — the same rule, one filename later', () => {
     fs.mkdirSync(storeDir(), { recursive: true });
     fs.writeFileSync(path.join(storeDir(), 'same.md'), 'already-unioned');
-    fs.writeFileSync(path.join(storeDir(), 'same.claude-corp.md'), 'pre-existing, unrelated');
-    seed('.claude-corp', '-p-demo', { 'same.md': 'from-claude-corp' });
+    fs.writeFileSync(path.join(storeDir(), 'same.claude-acme.md'), 'pre-existing, unrelated');
+    seed('.claude-acme', '-p-demo', { 'same.md': 'from-claude-acme' });
     const r = run(['memory', '--apply']);
     expect(r.code).toBe(0);
     expect(fs.readFileSync(path.join(storeDir(), 'same.md'), 'utf8')).toBe('already-unioned');
     // the pre-existing file must survive completely untouched
-    expect(fs.readFileSync(path.join(storeDir(), 'same.claude-corp.md'), 'utf8'))
+    expect(fs.readFileSync(path.join(storeDir(), 'same.claude-acme.md'), 'utf8'))
       .toBe('pre-existing, unrelated');
-    // .claude-corp's differing same.md must still land somewhere — the next free slot
-    expect(fs.readFileSync(path.join(storeDir(), 'same.claude-corp.2.md'), 'utf8'))
-      .toBe('from-claude-corp');
+    // .claude-acme's differing same.md must still land somewhere — the next free slot
+    expect(fs.readFileSync(path.join(storeDir(), 'same.claude-acme.2.md'), 'utf8'))
+      .toBe('from-claude-acme');
   });
 
   // I3 (review round 1, Important): anything in the source directory that
@@ -950,13 +950,13 @@ describe('ccrc memory --apply — the union', () => {
   // above only ever reaches the primary arm (it seeds one home with one
   // file, so no conflict slot is ever computed). Force a real conflict
   // FIRST (two pre-existing store entries occupying `same.md` and
-  // `same.claude-corp.md`), so the incoming differing file must walk to the
+  // `same.claude-acme.md`), so the incoming differing file must walk to the
   // SUFFIXED `.2.md` slot, and let `ulimit -f` fail the copy there instead.
   it('R19b (second site): a failed copy to a SUFFIXED conflict slot does not leave debris either', () => {
     fs.mkdirSync(storeDir(), { recursive: true });
     fs.writeFileSync(path.join(storeDir(), 'same.md'), 'primary');
-    fs.writeFileSync(path.join(storeDir(), 'same.claude-corp.md'), 'already-taken-slot');
-    seed('.claude-corp', '-p-demo', { 'same.md': 'x'.repeat(5000) });
+    fs.writeFileSync(path.join(storeDir(), 'same.claude-acme.md'), 'already-taken-slot');
+    seed('.claude-acme', '-p-demo', { 'same.md': 'x'.repeat(5000) });
     const r = spawnSync(
       'bash',
       ['-c', 'ulimit -c 0; ulimit -f 1; exec bash "$1" memory --apply', 'wrapper', CCRC],
@@ -966,10 +966,10 @@ describe('ccrc memory --apply — the union', () => {
     expect(r.status).not.toBe(0);
     expect(out).toContain('could not copy');
     // no truncated debris at the NEXT free (suffixed, numbered) slot
-    expect(fs.existsSync(path.join(storeDir(), 'same.claude-corp.2.md'))).toBe(false);
+    expect(fs.existsSync(path.join(storeDir(), 'same.claude-acme.2.md'))).toBe(false);
     // the two pre-existing files survive completely untouched
     expect(fs.readFileSync(path.join(storeDir(), 'same.md'), 'utf8')).toBe('primary');
-    expect(fs.readFileSync(path.join(storeDir(), 'same.claude-corp.md'), 'utf8'))
+    expect(fs.readFileSync(path.join(storeDir(), 'same.claude-acme.md'), 'utf8'))
       .toBe('already-taken-slot');
   });
 });

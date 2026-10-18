@@ -127,7 +127,7 @@ describe('SessionRecord.child — three answers, never a boolean', () => {
 
 /** A complete fleet row — `fleet-wire-route.test.ts`'s `session()` shape. */
 const fleetRow = (id: string): FleetSession => ({
-  id, wrapper: 'claude', home: '/home/rc', project: id, workdir: `/data/projects/${id}`,
+  id, wrapper: 'claude', home: '/home/u', project: id, workdir: `/data/projects/${id}`,
   workspace: null, name: null, status: 'idle', statusUpdatedAt: null, limits: null,
   dialogPending: false, version: null, model: null, effort: null, ultracode: false,
   branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,

@@ -24,8 +24,8 @@ const SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   ensure: ['demo-quiet-basin'],
   stopId: ['demo-quiet-basin', 'pwa'],
   stopPair: ['claude', 'demo', 'pwa'],
-  forget: ['claude-corp-demo'],
-  swap: ['demo-quiet-basin', 'claude2'],
+  forget: ['claude-acme-demo'],
+  swap: ['demo-quiet-basin', 'claude9'],
   /** THE DELIBERATE CROSSING (account pools, spec §5.7). Three separate
    *  ENTRIES rather than an option on the three above — `start`/`enable`'s own
    *  rule, for its reason: a route picks the ENTRY, so both spellings are
@@ -33,7 +33,7 @@ const SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   swapCross: ['demo-quiet-basin', 'claude-b'],
   // D-5240: the operator's consent to lose the turn, LEADING like `--cross-pool`; the bare `['swap']` prefix grant
   // admits both with no widening.
-  swapInterrupt: ['demo-quiet-basin', 'claude2'],
+  swapInterrupt: ['demo-quiet-basin', 'claude9'],
   swapCrossInterrupt: ['demo-quiet-basin', 'claude-b'],
   startCross: ['claude', 'demo'],
   enableCross: ['claude', 'demo'],
@@ -80,7 +80,7 @@ const SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   // The one sample that carries a dec, so layer 2's `isExecAllowed` check
   // actually proves the FLAGGED shape is reachable under the granted
   // `['ws-hold','--session']` prefix rather than only the bare one.
-  wsHold: ['demo-quiet-basin', 'program:agent-evals wave:1/4',
+  wsHold: ['demo-quiet-basin', 'program:prog-j wave:1/4',
            { surface: 'pwa', actor: 'device:iPhone', reason: null }],
   wsRelease: ['demo-quiet-basin', null],
   wsRename: ['demo-quiet-basin', 'ws/brainstorm-helix-and-slide-notes', null],
@@ -538,15 +538,15 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     ensure: ['ensure', 'demo-quiet-basin'],
     stopId: ['stop', 'demo-quiet-basin', '--surface', 'pwa'],
     stopPair: ['stop', 'claude', 'demo', '--surface', 'pwa'],
-    forget: ['forget', 'claude-corp-demo'],
-    swap: ['swap', 'demo-quiet-basin', 'claude2'],
+    forget: ['forget', 'claude-acme-demo'],
+    swap: ['swap', 'demo-quiet-basin', 'claude9'],
     // LEADING flag, before the positionals — the token order is
     // parse-load-bearing and it is the SAFE direction under version skew (spec
     // §5.6): a TRAILING `--cross-pool` on an old ccd's `start w p wd` is a
     // silently ignored fourth positional, while a leading one is refused by
     // `_is_valid_wrapper` on every ccd that has ever shipped. Loud beats silent.
     swapCross: ['swap', '--cross-pool', 'demo-quiet-basin', 'claude-b'],
-    swapInterrupt: ['swap', '--interrupt', 'demo-quiet-basin', 'claude2'],
+    swapInterrupt: ['swap', '--interrupt', 'demo-quiet-basin', 'claude9'],
     swapCrossInterrupt: ['swap', '--cross-pool', '--interrupt', 'demo-quiet-basin', 'claude-b'],
     startCross: ['start', '--cross-pool', 'claude', 'demo'],
     enableCross: ['enable', '--cross-pool', 'claude', 'demo'],
@@ -583,7 +583,7 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     wsCollectAudit: ['ws-audit', '--session', 'demo-quiet-dune', '--collect'],
     wsCollect: ['ws-collect', '--expect', 'a'.repeat(64), '--session', 'demo-quiet-dune', '--surface', 'agent', '--actor', 'collect sweep'],
     wsAttic: ['ws-attic', '--session', 'demo-quiet-basin'],
-    wsHold: ['ws-hold', '--session', 'demo-quiet-basin', '--reason', 'program:agent-evals wave:1/4',
+    wsHold: ['ws-hold', '--session', 'demo-quiet-basin', '--reason', 'program:prog-j wave:1/4',
              '--surface', 'pwa', '--actor', 'device:iPhone'],
     wsRelease: ['ws-release', '--session', 'demo-quiet-basin'],
     wsRename: ['ws-rename', '--session', 'demo-quiet-basin', '--branch', 'ws/brainstorm-helix-and-slide-notes'],

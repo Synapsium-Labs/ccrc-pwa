@@ -1251,7 +1251,7 @@ describe('the read-back — a class the pane already runs is recorded, never typ
 });
 
 describe('the read-back\'s second witness — the transcript\'s own acknowledged /model (2026-10-07: an idle pane renders no sidecar)', () => {
-  // THE FLEET'S SHAPE (claude-synapsium-platform, measured 2026-10-07): record class=opus, `routeapplied`
+  // THE FLEET'S SHAPE (claude-project-k, measured 2026-10-07): record class=opus, `routeapplied`
   // empty since its spawn, three refused applies so `apply-gave-up` every 30 min; the operator's own
   // `/model opus`, acknowledged `Set model to Opus 5.5 and saved as your default`, ~22 h ago; the pane idle
   // since, so its sidecar — right model, right uuid, written by the render the switch itself caused — is

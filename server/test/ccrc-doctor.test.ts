@@ -6108,8 +6108,8 @@ describe('ccrc doctor: skills — every home carries the SHIPPED skills (release
 describe('ccrc doctor: wrappers', () => {
   it('fails when a generated account declares no secretsFile but its wrapper sources one', () => {
     // D-69, reproduced as a fixture: the exact live shape on the fleet host,
-    // where `claude-corp` is `{"kind":"generated"}` and its wrapper really does
-    // source .cc-secrets/claude-corp-oauth.env.
+    // where `claude-acme` is `{"kind":"generated"}` and its wrapper really does
+    // source .cc-secrets/claude-acme-oauth.env.
     const home = healthy('ccrc-doctor-wrappers-d69-');
     writeWrapper(home, 'acct-a', { cfgDir: '.acct-a', secrets: '.cc-secrets/acct-a.env' });
     writeRoster(home, [{ id: 'acct-a', configDirSuffix: '.acct-a', exec: { kind: 'generated' } }]);
@@ -6145,7 +6145,7 @@ describe('ccrc doctor: wrappers', () => {
     // credentials nobody wrote down reported as a healthy box.
     //
     // The two paths are a NEAR MISS on purpose (the live shape is
-    // `claude-corp-oauth.env`): unrelated names would also pass a comparison
+    // `claude-acme-oauth.env`): unrelated names would also pass a comparison
     // that had been loosened to a prefix or substring test.
     const home = healthy('ccrc-doctor-wrappers-secrets-differ-');
     writeWrapper(home, 'acct-a', { cfgDir: '.acct-a', secrets: '.cc-secrets/acct-a.env' });
@@ -11315,19 +11315,19 @@ describe('ccrc doctor: memory (spec 2026-09-08 §4, task 4)', () => {
 
   it('an unreachable-only box: exactly one FAIL memory line, no synthetic bug line, exit 1 (pins the unreachable rc=1 assignment)', () => {
     const home = healthy('ccrc-doctor-mem-rc-unreach-');
-    const h = join(home, '.claude-glm');
+    const h = join(home, '.claude-alt1');
     mkdirSync(join(h, 'projects'), { recursive: true });
     writeFileSync(join(h, 'settings.json'), '{}');
     const r = runDoctor(home);
     const failLines = r.stdout.split('\n').filter((l) => l.startsWith('FAIL memory:'));
-    expect(failLines).toEqual(['FAIL memory: agent homes the session hook cannot reach, so they will fork on first use: .claude-glm']);
+    expect(failLines).toEqual(['FAIL memory: agent homes the session hook cannot reach, so they will fork on first use: .claude-alt1']);
     expect(r.stdout).not.toMatch(/the check exited/);
     expect(r.code).toBe(1);
   });
 
   it('an unmeasured-only box: WARN, no synthetic bug line, exit 0 (pins the unmeasured rc=2 assignment)', () => {
     const home = healthy('ccrc-doctor-mem-rc-unmeasured-');
-    const h = join(home, '.claude-corp');
+    const h = join(home, '.claude-acme');
     mkdirSync(join(h, 'projects'), { recursive: true });
     const settings = join(h, 'settings.json');
     writeFileSync(settings, HOOKED_SETTINGS);
@@ -11345,11 +11345,11 @@ describe('ccrc doctor: memory (spec 2026-09-08 §4, task 4)', () => {
 
   it('FAILs differently for a home the session hook can never reach, and does not confuse it with a fork', () => {
     const home = healthy('ccrc-doctor-mem-unreach-');
-    const h = join(home, '.claude-glm');
+    const h = join(home, '.claude-alt1');
     mkdirSync(join(h, 'projects'), { recursive: true });
     writeFileSync(join(h, 'settings.json'), '{}');
     const r = runDoctor(home);
-    expect(r.stdout).toMatch(/^FAIL memory: agent homes the session hook cannot reach.*\.claude-glm/m);
+    expect(r.stdout).toMatch(/^FAIL memory: agent homes the session hook cannot reach.*\.claude-alt1/m);
     const i = r.stdout.split('\n').findIndex((l) => l.startsWith('FAIL memory:'));
     expect(r.stdout.split('\n')[i + 1]).toMatch(/^ {2}remedy: .*install-session-hooks\.sh/);
     // Pin that this is NOT the forked remedy — the two bodies must stay
@@ -11362,14 +11362,14 @@ describe('ccrc doctor: memory (spec 2026-09-08 §4, task 4)', () => {
   // `cur='{}'` and inserts the hook for ANY rostered home lacking a
   // settings.json at all — so absence itself proves the installer has never
   // touched this home, the MAXIMAL case of "will fork on first use". Measured
-  // before this fix: `.claude-kimi/projects/` with no settings.json at all
+  // before this fix: `.claude-alt2/projects/` with no settings.json at all
   // read as `PASS memory: … every agent home converged`.
   it('reports a home unreachable when it has projects/ but no settings.json at all (R22)', () => {
     const home = healthy('ccrc-doctor-mem-no-settings-');
-    const h = join(home, '.claude-kimi');
+    const h = join(home, '.claude-alt2');
     mkdirSync(join(h, 'projects'), { recursive: true });
     const r = runDoctor(home);
-    expect(r.stdout).toMatch(/^FAIL memory: agent homes the session hook cannot reach.*\.claude-kimi/m);
+    expect(r.stdout).toMatch(/^FAIL memory: agent homes the session hook cannot reach.*\.claude-alt2/m);
   });
 
   // R23 Minor (fix round 2): "I could not read it" and "it is definitely not
@@ -11392,7 +11392,7 @@ describe('ccrc doctor: memory (spec 2026-09-08 §4, task 4)', () => {
   // deleting `-r` reds only on the WARN and the leak rides along unmeasured.
   it('WARNs, not FAILs, when settings.json exists but cannot be read (R23)', () => {
     const home = healthy('ccrc-doctor-mem-unreadable-');
-    const h = join(home, '.claude-corp');
+    const h = join(home, '.claude-acme');
     mkdirSync(join(h, 'projects'), { recursive: true });
     const settings = join(h, 'settings.json');
     writeFileSync(settings, HOOKED_SETTINGS);
@@ -11400,8 +11400,8 @@ describe('ccrc doctor: memory (spec 2026-09-08 §4, task 4)', () => {
     try {
       const r = runDoctor(home);
       expect(r.stderr).not.toMatch(/Permission denied/);
-      expect(r.stdout).toMatch(/^WARN memory: could not tell whether the session hook reaches.*\.claude-corp/m);
-      expect(r.stdout).not.toMatch(/^FAIL memory: agent homes the session hook cannot reach.*\.claude-corp/m);
+      expect(r.stdout).toMatch(/^WARN memory: could not tell whether the session hook reaches.*\.claude-acme/m);
+      expect(r.stdout).not.toMatch(/^FAIL memory: agent homes the session hook cannot reach.*\.claude-acme/m);
     } finally {
       chmodSync(settings, 0o644);   // afterEach's rmSync must still be able to clean up
     }
@@ -11452,25 +11452,25 @@ describe('ccrc doctor: memory (spec 2026-09-08 §4, task 4)', () => {
     });
   }
 
-  // `.claude-docserver` is NO LONGER special-cased (Minor, whole-branch
+  // `.claude-preview` is NO LONGER special-cased (Minor, whole-branch
   // review round 3 — reached independently for this file's own reason, see
   // `_check_memory`'s comments in ccd/ccrc-doctor-checks): hard-coding a
   // single operator's box-local tool name into shipped, public-release-bound
   // source is the residue class CLAUDE.md bans, and on every measured box the
   // exclusion excluded nothing the generic `[ -d "${h}projects" ]` guard did
-  // not already exclude. So a `.claude-docserver`-named directory is now
+  // not already exclude. So a `.claude-preview`-named directory is now
   // examined like any other `.claude*` home — this test used to pin a PASS
   // here (the old guard test) and now pins the opposite: a `projects/` dir
   // under that name is real evidence, and doctor reports it like it would for
   // any other home.
-  it('no longer special-cases .claude-docserver — a forked pair there is reported like any other home', () => {
+  it('no longer special-cases .claude-preview — a forked pair there is reported like any other home', () => {
     const home = healthy('ccrc-doctor-mem-docserver-skip-');
-    const d = join(home, '.claude-docserver', 'projects', '-p-demo', 'memory');
+    const d = join(home, '.claude-preview', 'projects', '-p-demo', 'memory');
     mkdirSync(d, { recursive: true });
     writeFileSync(join(d, 'a.md'), 'x');
-    writeFileSync(join(home, '.claude-docserver', 'settings.json'), HOOKED_SETTINGS);
+    writeFileSync(join(home, '.claude-preview', 'settings.json'), HOOKED_SETTINGS);
     const r = runDoctor(home);
-    expect(r.stdout).toMatch(/^WARN memory: memory is forked across agent homes: .*\.claude-docserver:-p-demo/m);
+    expect(r.stdout).toMatch(/^WARN memory: memory is forked across agent homes: .*\.claude-preview:-p-demo/m);
   });
 
   // R21 (fix round 2, Important 2): round 1's "emit exactly one verdict line"
@@ -11492,7 +11492,7 @@ describe('ccrc doctor: memory (spec 2026-09-08 §4, task 4)', () => {
     mkdirSync(forkedDir, { recursive: true });
     writeFileSync(join(forkedDir, 'a.md'), 'x');
     writeFileSync(join(home, '.claude', 'settings.json'), HOOKED_SETTINGS);
-    const h = join(home, '.claude-glm');
+    const h = join(home, '.claude-alt1');
     mkdirSync(join(h, 'projects'), { recursive: true });
     writeFileSync(join(h, 'settings.json'), '{}');
     const r = runDoctor(home);
@@ -11504,7 +11504,7 @@ describe('ccrc doctor: memory (spec 2026-09-08 §4, task 4)', () => {
     expect(forkedIdx).toBeGreaterThanOrEqual(0);
     expect(unreachIdx).toBeGreaterThanOrEqual(0);
     expect(lines[forkedIdx]).toContain('.claude:-p-demo');
-    expect(lines[unreachIdx]).toContain('.claude-glm');
+    expect(lines[unreachIdx]).toContain('.claude-alt1');
     expect(lines[forkedIdx + 1]).toMatch(/^ {2}remedy: .*ccrc memory --apply/);
     expect(lines[unreachIdx + 1]).toMatch(/^ {2}remedy: .*install-session-hooks\.sh/);
     expect(r.stdout).not.toMatch(/the check exited/);
@@ -13508,7 +13508,7 @@ describe('ccrc doctor --fix: wrappers — a launcher is regenerated only when cc
    *  SKIPs and `_fix_codex` never runs on these boxes (the Codex case below is
    *  the one exception, and says so). */
   const UP = { id: 'claude', label: 'claude', configDirSuffix: '.claude', exec: { kind: 'upstream' }, homeAble: true, telemetry: 'anthropic' };
-  const GEN = { id: 'claude2', label: 'claude2', configDirSuffix: '.claude2', exec: { kind: 'generated' }, homeAble: true, telemetry: 'none' };
+  const GEN = { id: 'claude9', label: 'claude9', configDirSuffix: '.claude9', exec: { kind: 'generated' }, homeAble: true, telemetry: 'none' };
   const marked = (id: string, suffix: string, execKind: 'generated' | 'codex'): string =>
     markGenerated(generateWrapperBody({ id, configDirSuffix: suffix, execKind }, 'claude'));
   function launcherBox(prefix: string, accounts: object[] = [UP, GEN]): string {
@@ -13555,26 +13555,26 @@ describe('ccrc doctor --fix: wrappers — a launcher is regenerated only when cc
     const home = launcherBox('ccrc-doctor-fix-wrappers-absent-');
     const r0 = runDoctor(home);
     expect(lineFor(r0.stdout, 'wrappers')).toMatch(/^FAIL wrappers: /);
-    expect(existsSync(bin(home, 'claude2')), 'doctor without --fix wrote a launcher').toBe(false);
+    expect(existsSync(bin(home, 'claude9')), 'doctor without --fix wrote a launcher').toBe(false);
     const r = runDoctor(home, ['doctor', '--fix']);
-    expect(r.stdout).toMatch(/^FIX wrappers: WRITE claude2: /m);
+    expect(r.stdout).toMatch(/^FIX wrappers: WRITE claude9: /m);
     expect(second(r.stdout)).toMatch(/^PASS wrappers: /m);
-    expect(readFileSync(bin(home, 'claude2'), 'utf8')).toBe(marked('claude2', '.claude2', 'generated'));
-    expect(statSync(bin(home, 'claude2')).mode & 0o777).toBe(0o755);
+    expect(readFileSync(bin(home, 'claude9'), 'utf8')).toBe(marked('claude9', '.claude9', 'generated'));
+    expect(statSync(bin(home, 'claude9')).mode & 0o777).toBe(0o755);
   });
 
   it('a launcher whose ccrc marker still verifies, written for an older roster, is regenerated, and the one it replaced is kept', () => {
     const home = launcherBox('ccrc-doctor-fix-wrappers-stale-');
-    const old = marked('claude2', '.claude2-old', 'generated');
-    writeFileSync(bin(home, 'claude2'), old, { mode: 0o755 });
+    const old = marked('claude9', '.claude9-old', 'generated');
+    writeFileSync(bin(home, 'claude9'), old, { mode: 0o755 });
     const r0 = runDoctor(home);
     expect(lineFor(r0.stdout, 'wrappers')).toMatch(/^FAIL wrappers: /);
-    expect(readFileSync(bin(home, 'claude2'), 'utf8')).toBe(old);
+    expect(readFileSync(bin(home, 'claude9'), 'utf8')).toBe(old);
     const r = runDoctor(home, ['doctor', '--fix']);
-    expect(r.stdout).toMatch(/^FIX wrappers: REWRITE claude2: /m);
+    expect(r.stdout).toMatch(/^FIX wrappers: REWRITE claude9: /m);
     expect(second(r.stdout)).toMatch(/^PASS wrappers: /m);
-    expect(readFileSync(bin(home, 'claude2'), 'utf8')).toBe(marked('claude2', '.claude2', 'generated'));
-    const b = backups(home, 'claude2');
+    expect(readFileSync(bin(home, 'claude9'), 'utf8')).toBe(marked('claude9', '.claude9', 'generated'));
+    const b = backups(home, 'claude9');
     expect(b).toHaveLength(1);
     expect(readFileSync(bin(home, b[0]!), 'utf8')).toBe(old);
   });
@@ -13582,25 +13582,25 @@ describe('ccrc doctor --fix: wrappers — a launcher is regenerated only when cc
   it('a launcher ccrc did not write is never overwritten: its FAIL stands, byte for byte, with no backup', () => {
     const home = launcherBox('ccrc-doctor-fix-wrappers-foreign-');
     const foreign = ['#!/usr/bin/env bash', '# hand-written, and pointing somewhere else on purpose',
-      'export CLAUDE_CONFIG_DIR="$HOME/.claude2-elsewhere"', 'exec "$HOME/.local/bin/claude" "$@"', ''].join('\n');
-    writeFileSync(bin(home, 'claude2'), foreign, { mode: 0o755 });
+      'export CLAUDE_CONFIG_DIR="$HOME/.claude9-elsewhere"', 'exec "$HOME/.local/bin/claude" "$@"', ''].join('\n');
+    writeFileSync(bin(home, 'claude9'), foreign, { mode: 0o755 });
     const r = runDoctor(home, ['doctor', '--fix']);
-    expect(r.stdout).toMatch(/^FIX wrappers: REFUSE claude2: /m);
+    expect(r.stdout).toMatch(/^FIX wrappers: REFUSE claude9: /m);
     expect(second(r.stdout)).toMatch(/^FAIL wrappers: /m);
-    expect(readFileSync(bin(home, 'claude2'), 'utf8')).toBe(foreign);
-    expect(backups(home, 'claude2')).toEqual([]);
+    expect(readFileSync(bin(home, 'claude9'), 'utf8')).toBe(foreign);
+    expect(backups(home, 'claude9')).toEqual([]);
   });
 
   it('a launcher ccrc wrote and someone edited since is never overwritten either', () => {
     const home = launcherBox('ccrc-doctor-fix-wrappers-edited-');
-    const edited = marked('claude2', '.claude2', 'generated').replace('/.claude2"', '/.claude2-hand"');
-    expect(edited, 'the edit changed nothing — re-anchor it on the export line').not.toBe(marked('claude2', '.claude2', 'generated'));
-    writeFileSync(bin(home, 'claude2'), edited, { mode: 0o755 });
+    const edited = marked('claude9', '.claude9', 'generated').replace('/.claude9"', '/.claude9-hand"');
+    expect(edited, 'the edit changed nothing — re-anchor it on the export line').not.toBe(marked('claude9', '.claude9', 'generated'));
+    writeFileSync(bin(home, 'claude9'), edited, { mode: 0o755 });
     const r = runDoctor(home, ['doctor', '--fix']);
-    expect(r.stdout).toMatch(/^FIX wrappers: REFUSE claude2: /m);
+    expect(r.stdout).toMatch(/^FIX wrappers: REFUSE claude9: /m);
     expect(second(r.stdout)).toMatch(/^FAIL wrappers: /m);
-    expect(readFileSync(bin(home, 'claude2'), 'utf8')).toBe(edited);
-    expect(backups(home, 'claude2')).toEqual([]);
+    expect(readFileSync(bin(home, 'claude9'), 'utf8')).toBe(edited);
+    expect(backups(home, 'claude9')).toEqual([]);
   });
 
   it('a Codex lane\'s marker-verified launcher is regenerated the same way, to exec ccrc-codex', async () => {

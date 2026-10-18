@@ -103,7 +103,7 @@ const seedTranscript = (home: string, rows: readonly object[]): void => {
 
 /** A complete fleet row (stall-sweep.test.ts's `fleetRow`), alive, running and idle. */
 const fleetRow = (over: Partial<FleetSession> = {}): FleetSession => ({
-  id: ID, wrapper: 'claude', home: '/home/rc', project: 'demo', workdir: WORKDIR,
+  id: ID, wrapper: 'claude', home: '/home/u', project: 'demo', workdir: WORKDIR,
   workspace: `${ID}-ws`, name: null, status: 'idle', statusUpdatedAt: T_NOTICE, limits: null,
   dialogPending: false, version: null, model: null, effort: null, ultracode: false,
   branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,

@@ -23,7 +23,7 @@ import { KeyedQueue } from '../src/inject/queue.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 
-const ID = 'claude-a-MekWarLive';
+const ID = 'claude-a-project-f';
 
 const seedSession = (home: string, id: string, wrapper: string) => {
   const reg = path.join(home, '.cc-sessions');
@@ -1362,11 +1362,11 @@ describe('POST /api/sessions/:id/hold and /release', () => {
     const app = await buildServer(testDeps(home, run));
 
     const resHold = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/hold`,
-      payload: { reason: 'program:agent-evals wave:1/4' } });
+      payload: { reason: 'program:prog-j wave:1/4' } });
     expect(resHold.statusCode).toBe(200);
     expect(resHold.json()).toEqual({ ok: true });
     expect(calls.find((c) => c[1] === 'ws-hold')?.slice(1))
-      .toEqual(['ws-hold', '--session', ID, '--reason', 'program:agent-evals wave:1/4']);
+      .toEqual(['ws-hold', '--session', ID, '--reason', 'program:prog-j wave:1/4']);
 
     const resRelease = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/release` });
     expect(resRelease.statusCode).toBe(200);

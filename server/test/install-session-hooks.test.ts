@@ -10,7 +10,7 @@ const INSTALLER = path.resolve(__dirname, '../../ccd/install-session-hooks.sh');
 
 // The MEASURED real-world shape (2026-08-05): SessionStart with a compact
 // matcher + a matcher-less entry, SessionEnd; one home carries an extra
-// cloneme SessionEnd entry. Every foreign entry survives byte-identically; managed ones are appended after them.
+// project-w SessionEnd entry. Every foreign entry survives byte-identically; managed ones are appended after them.
 const EXISTING = {
   hooks: {
     SessionStart: [
@@ -19,7 +19,7 @@ const EXISTING = {
     ],
     SessionEnd: [
       { hooks: [{ type: 'command', command: "'/home/u/.claude/skills/code-usage/scripts/cron-upload.sh' --hook" }] },
-      { hooks: [{ type: 'command', command: '/home/u/.cloneme/cloneme-session-end.sh' }] },
+      { hooks: [{ type: 'command', command: '/home/u/.project-w/project-w-session-end.sh' }] },
     ],
   },
   statusLine: { type: 'command', command: 'bash "$HOME/.claude/statusline-command.sh"' },
@@ -29,7 +29,7 @@ let home: string;
 const cfg = (d: string): string => path.join(home, d, 'settings.json');
 beforeEach(() => {
   home = mkTmp('ccrc-hookinstall-');
-  for (const d of ['.claude', '.claude-personal']) {
+  for (const d of ['.claude', '.claude-home']) {
     fs.mkdirSync(path.join(home, d), { recursive: true });
     fs.writeFileSync(cfg(d), JSON.stringify(EXISTING, null, 2));
   }
@@ -38,7 +38,7 @@ beforeEach(() => {
 afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
 
 const run = (...args: string[]): void => {
-  execFileSync('bash', [INSTALLER, '--homes', path.join(home, '.claude'), path.join(home, '.claude-personal'), ...args],
+  execFileSync('bash', [INSTALLER, '--homes', path.join(home, '.claude'), path.join(home, '.claude-home'), ...args],
     { env: { ...process.env, HOME: home } });
 };
 
@@ -99,17 +99,17 @@ describe('install-session-hooks', () => {
     expect(after.statusLine).toEqual(EXISTING.statusLine);
   });
   it('refuses a home whose settings.json is broken JSON, touching nothing — but still processes the other home in the same run', () => {
-    fs.writeFileSync(cfg('.claude-personal'), '{broken');
+    fs.writeFileSync(cfg('.claude-home'), '{broken');
     expect(() => run()).toThrow();
-    expect(fs.readFileSync(cfg('.claude-personal'), 'utf8')).toBe('{broken');
+    expect(fs.readFileSync(cfg('.claude-home'), 'utf8')).toBe('{broken');
     const s = JSON.parse(fs.readFileSync(cfg('.claude'), 'utf8'));
     expect(s.hooks.Stop.some((e: any) => e.hooks?.some((h: any) => String(h.command).includes('/session-hook.sh'))))
       .toBe(true);
   });
   it('a home with NO settings.json gets one with only the managed hooks and the seeded statusLine', () => {
-    fs.rmSync(cfg('.claude-personal'));
+    fs.rmSync(cfg('.claude-home'));
     run();
-    const s = JSON.parse(fs.readFileSync(cfg('.claude-personal'), 'utf8'));
+    const s = JSON.parse(fs.readFileSync(cfg('.claude-home'), 'utf8'));
     expect(Object.keys(s).sort()).toEqual(['hooks', 'statusLine']);
     expect(s.statusLine).toEqual({ type: 'command', command: 'bash "$HOME/.claude/statusline-command.sh"' });
   });
@@ -171,7 +171,7 @@ describe('install-session-hooks.sh default homes are the roster, behaviourally',
   // There is no `hooksAble` subset any more, which is why the expectation is a
   // flat `true` rather than a per-account flag. That concept only ever meant
   // "in the hand-kept array", and its point — a sixth account that the array
-  // forgot, the silent mail hole `claude-dev0` had — is now impossible by
+  // forgot, the silent mail hole `claude-lab0` had — is now impossible by
   // construction rather than caught by a comparison.
   let rosterHome: string;
   beforeEach(() => {
@@ -216,7 +216,7 @@ describe('the installer registers the delegation events, and never a native work
   it('every kind of DELEGATION_EVENT_KINDS has exactly one managed entry in every home, and PreToolUse alone carries a matcher (*)', async () => {
     const { DELEGATION_EVENT_KINDS } = await import('../../shared/api.js');
     run();
-    for (const d of ['.claude', '.claude-personal']) {
+    for (const d of ['.claude', '.claude-home']) {
       const s = JSON.parse(fs.readFileSync(cfg(d), 'utf8'));
       for (const ev of DELEGATION_EVENT_KINDS) expect(managed(s, ev), `${d} ${ev}`).toHaveLength(1);
       for (const ev of wiredEvents(s)) {
@@ -256,7 +256,7 @@ describe('the installer registers the delegation events, and never a native work
 
   it('--remove takes every managed delegation entry out and leaves the operator\'s own hooks', () => {
     run();
-    execFileSync('bash', [INSTALLER, '--remove', '--homes', path.join(home, '.claude'), path.join(home, '.claude-personal')], { env: { ...process.env, HOME: home } });
+    execFileSync('bash', [INSTALLER, '--remove', '--homes', path.join(home, '.claude'), path.join(home, '.claude-home')], { env: { ...process.env, HOME: home } });
     const s = JSON.parse(fs.readFileSync(cfg('.claude'), 'utf8'));
     expect(wiredEvents(s)).toEqual([]);
     expect(s.hooks.SessionEnd).toEqual(EXISTING.hooks.SessionEnd);
@@ -312,7 +312,7 @@ describe('every managed hook entry but SessionEnd\'s carries HOOK_TIMEOUT_S, a b
   const timeoutS = (): number => Number(/^HOOK_TIMEOUT_S=(\d+)$/m.exec(SRC)![1]);
   /** `run`, with the session environment scrubbed (Global Constraints: test isolation). */
   const runScrubbed = (): void => {
-    execFileSync('bash', [INSTALLER, '--homes', path.join(home, '.claude'), path.join(home, '.claude-personal')], {
+    execFileSync('bash', [INSTALLER, '--homes', path.join(home, '.claude'), path.join(home, '.claude-home')], {
       env: { ...process.env, HOME: home, CLAUDECODE: '', CLAUDE_CONFIG_DIR: '', TMUX: '', TMUX_PANE: '',
         ...Object.fromEntries(Object.keys(process.env).filter((k) => k.startsWith('CCRC_RECALL_')).map((k) => [k, ''])) },
     });

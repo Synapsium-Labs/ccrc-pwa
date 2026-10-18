@@ -50,12 +50,12 @@ describe('divergences — the original three kinds, individually', () => {
     const out = divergences(input({
       worktrees: [
         { project: 'demo', name: 'quiet-basin', path: '/home/u/worktrees/demo/quiet-basin' },
-        { project: 'demo', name: 'alertwire', path: '/home/u/worktrees/alertwire' },
+        { project: 'demo', name: 'alertpipe', path: '/home/u/worktrees/alertpipe' },
       ],
-      unclaimedLastSweep: new Set(['demo/alertwire']),
+      unclaimedLastSweep: new Set(['demo/alertpipe']),
     }));
     expect(out).toEqual([{ kind: 'unregistered-worktree', id: null,
-      path: '/home/u/worktrees/alertwire', detail: expect.any(String) }]);
+      path: '/home/u/worktrees/alertpipe', detail: expect.any(String) }]);
   });
 
   it('THE FIRST SIGHTING IS NOT A FINDING — one interval of evidence, then the name', () => {
@@ -68,14 +68,14 @@ describe('divergences — the original three kinds, individually', () => {
     // record present and ccd's first `_reg_set` not yet run.
     const worktrees = [
       { project: 'demo', name: 'quiet-basin', path: '/home/u/worktrees/demo/quiet-basin' },
-      { project: 'demo', name: 'alertwire', path: '/home/u/worktrees/alertwire' },
+      { project: 'demo', name: 'alertpipe', path: '/home/u/worktrees/alertpipe' },
     ];
     expect(divergences(input({ worktrees })), 'a first sighting was reported as a finding').toEqual([]);
     const seen = unclaimedWorktrees(input({ worktrees }));
-    expect(seen).toEqual(['demo/alertwire']);
+    expect(seen).toEqual(['demo/alertpipe']);
     expect(divergences(input({ worktrees, unclaimedLastSweep: new Set(seen) })))
       .toEqual([{ kind: 'unregistered-worktree', id: null,
-                  path: '/home/u/worktrees/alertwire', detail: expect.any(String) }]);
+                  path: '/home/u/worktrees/alertpipe', detail: expect.any(String) }]);
   });
 
   describe('a workspace mid-ws-add is CLAIMED, though no parsed row says so', () => {
@@ -158,25 +158,25 @@ describe('divergences — the original three kinds, individually', () => {
   });
 
   describe('the FLAT layout, with GIT\'S OWN admin name — not the one a fixture wishes for', () => {
-    // MEASURED, 2026-08-17, `/…/projects/custom-tools/.git/worktrees/`:
+    // MEASURED, 2026-08-17, `/…/projects/project-d/.git/worktrees/`:
     //
-    //   brisk-ridge             gitdir -> /home/u/worktrees/custom-tools/brisk-ridge/.git
-    //   calm-river              gitdir -> /home/u/worktrees/custom-tools/calm-river/.git
-    //   dat30-consumer          gitdir -> /home/u/worktrees/custom-tools/dat30-consumer/.git
-    //   custom-tools-alertwire  gitdir -> /home/u/worktrees/custom-tools-alertwire/.git
+    //   brisk-ridge             gitdir -> /home/u/worktrees/project-d/brisk-ridge/.git
+    //   calm-river              gitdir -> /home/u/worktrees/project-d/calm-river/.git
+    //   dat30-consumer          gitdir -> /home/u/worktrees/project-d/dat30-consumer/.git
+    //   project-d-alertpipe  gitdir -> /home/u/worktrees/project-d-alertpipe/.git
     //
     // The admin directory's name is the LAST SEGMENT OF THE CHECKOUT PATH, whatever
     // that path is — `<slug>` under the nested layout ccd builds, and the WHOLE
     // `<project>-<slug>` directory under the flat one. These tests used to pass
-    // `name: 'alertwire'` for the flat row, which is not a name git has ever
+    // `name: 'alertpipe'` for the flat row, which is not a name git has ever
     // written; that fixture is what let the id derivation below stay wrong.
     const flat = (over: Partial<DivergenceInput> = {}) => input({
       records: [],
       headBranch: new Map(),
       registryNames: [],
-      worktrees: [{ project: 'custom-tools', name: 'custom-tools-alertwire',
-                    path: '/home/u/worktrees/custom-tools-alertwire' }],
-      unclaimedLastSweep: new Set(['custom-tools/custom-tools-alertwire']),
+      worktrees: [{ project: 'project-d', name: 'project-d-alertpipe',
+                    path: '/home/u/worktrees/project-d-alertpipe' }],
+      unclaimedLastSweep: new Set(['project-d/project-d-alertpipe']),
       ...over,
     });
 
@@ -188,18 +188,18 @@ describe('divergences — the original three kinds, individually', () => {
 
     it('a registry row DOES claim it, and the claim is seen — the id comes from the PATH', () => {
       // The defect this pins. Composing `${project}-${name}` out of git's admin
-      // name reads the flat worktree as `custom-tools-custom-tools-alertwire`,
+      // name reads the flat worktree as `project-d-project-d-alertpipe`,
       // an id no registry row can ever hold — so the claim below could never
       // match and the census named this worktree on EVERY sweep, for ever, on
       // the one kind whose repair deletes worktrees.
-      expect(divergences(flat({ registryNames: ['custom-tools-alertwire.uuid'] }))).toEqual([]);
+      expect(divergences(flat({ registryNames: ['project-d-alertpipe.uuid'] }))).toEqual([]);
     });
 
     it('and a stranger\'s id is still not a claim', () => {
       // The other direction, so the fix cannot be "match anything that looks
-      // close": `custom-tools-alertwire` is the id, and `custom-tools-alert` is
+      // close": `project-d-alertpipe` is the id, and `project-d-alert` is
       // a different workspace's.
-      expect(divergences(flat({ registryNames: ['custom-tools-alert.uuid'] }))
+      expect(divergences(flat({ registryNames: ['project-d-alert.uuid'] }))
         .map((d) => d.kind)).toEqual(['unregistered-worktree']);
     });
   });

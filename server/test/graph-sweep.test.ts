@@ -760,7 +760,7 @@ describe('graph-sweep: the guard compares git TRUTH, not git QUOTING (D-1449)', 
   // (`"J\303\240rn.py"`) unless core.quotepath is off, while detect() prints
   // raw UTF-8 relative paths. `comm -23` then reads a TRACKED file as
   // untracked and refuses the tree for ever, with no remedy on the box.
-  // MEASURED on the live fleet: mm-data was refused over two tracked files —
+  // MEASURED on the live fleet: project-t was refused over two tracked files —
   // a JSON named with a/o diacritics and a PNG named with an umlaut.
   const NON_ASCII = 'Jàrnbìtar.py';        // raw UTF-8; git would print "J\303\240rnb\303\254tar.py"
 
@@ -821,9 +821,9 @@ describe('graph-sweep: what git IGNORES never enters the corpus (D-1451)', () =>
   // NESTED `.gitignore` below the scan root is never read at all. So gitignored
   // build artifacts entered the corpus, were untracked, and the guard refused
   // the tree for ever, with no remedy on the box. MEASURED on the live fleet:
-  // synapsium-platform over `frontend/exposynapse-site/.astro/settings.json`
-  // (ignored by `frontend/exposynapse-site/.gitignore`) and
-  // MekWarLive/swift-harbor over `.husky/_/*` (ignored by `.husky/_/.gitignore`).
+  // project-k over `frontend/site-k/.astro/settings.json`
+  // (ignored by `frontend/site-k/.gitignore`) and
+  // project-f/swift-harbor over `.husky/_/*` (ignored by `.husky/_/.gitignore`).
   // The fix derives GIT'S OWN verdicts into the generated filter, so the two
   // sides answer with one authority instead of two.
   const captureFilter = 'cp .graphifyignore "$HOME/seen-ignore" 2>/dev/null || true';
@@ -894,7 +894,7 @@ describe('graph-sweep: what git IGNORES never enters the corpus (D-1451)', () =>
 
   // D-1458 — A MEASURED COST WAS ACCEPTED INSTEAD OF REMOVED. D-1451..D-1453
   // derived EVERY path git ignores. MEASURED on the live fleet (2026-09-04,
-  // custom-tools): 308 entries — 211 files under `.superpowers/`, 59 under
+  // project-d): 308 entries — 211 files under `.superpowers/`, 59 under
   // `tools/`, 24 under `.remember/` — against a 1938-file corpus, at ~50 us per
   // (pattern, path) with the path re-resolved inside the per-pattern loop
   // (detect.py:891-895): ~600k matches, ~30 s added to EVERY pass over that

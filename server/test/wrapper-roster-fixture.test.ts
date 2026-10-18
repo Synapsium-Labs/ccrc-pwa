@@ -254,15 +254,15 @@ describe('ccd _id_wrapper agrees with CCD_MIRROR.idPrefix, for the wrappers ccd 
   // guards against. `claude-d-` is a strict extension of `claude-`, and a
   // bash `case` takes the FIRST arm that matches, not the longest — so the
   // `claude-d-*)` arm only works while it sits ABOVE `claude-*)`. Move it
-  // below and every dev0 id silently comes back `claude`, re-attributing a
+  // below and every lab0 id silently comes back `claude`, re-attributing a
   // whole account's sessions with no error anywhere.
   //
   // This case used to assert the opposite (ccd was silent on claude-d, and
   // an id under that prefix resolved to `claude`) and was written to go red
-  // the day ccd learned the account. That day has come: dev0 is home-able and
+  // the day ccd learned the account. That day has come: lab0 is home-able and
   // ccd-valid, so ccd mints `claude-d-*` ids for real and this pins the
   // ARM ORDER that keeps them attributed correctly.
-  it('matches claude-d-* before the shorter claude-*, never attributing a dev0 id to claude', () => {
+  it('matches claude-d-* before the shorter claude-*, never attributing a lab0 id to claude', () => {
     expect(CCD_MIRROR['claude-d']!.ccdValid).toBe(true);
     const id = `${CCD_MIRROR['claude-d']!.idPrefix}fixture-slug`;
     expect(h.sh(`_id_wrapper '${id}'`)).toBe('claude-d');

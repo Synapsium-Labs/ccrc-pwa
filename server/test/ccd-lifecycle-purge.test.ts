@@ -29,7 +29,7 @@ const seed = (id = 'demo-still-river'): string => {
     _reg_set ${id} project demo
     _reg_set ${id} workspace still-river
     _reg_set ${id} branch ws/still-river
-    _reg_set ${id} wrapper claude-corp
+    _reg_set ${id} wrapper claude-acme
     _reg_set ${id} workdir /data/worktrees/demo/still-river
     _reg_set ${id} archived 1787000000
     _reg_set ${id} archivedreason merged:#42`);
@@ -51,7 +51,7 @@ describe('_reg_purge always journals, and journals BEFORE it unlinks', () => {
     expect.soft(m['project']).toBe('demo');
     expect.soft(m['workspace']).toBe('still-river');
     expect.soft(m['branch']).toBe('ws/still-river');
-    expect.soft(m['wrapper']).toBe('claude-corp');
+    expect.soft(m['wrapper']).toBe('claude-acme');
     expect.soft(m['uuid']).toBe('72be9ee2-0000-4bcc-b60b-0cfc0dc3d199');
     expect.soft(m['workdir']).toBe('/data/worktrees/demo/still-river');
     expect.soft(m['archivedAt']).toBe('1787000000');
@@ -740,9 +740,9 @@ const wsRow = (id = 'demo-still-river'): { main: string; wt: string } => {
 /** A dead WRAPPER session - uuid, project, workdir, wrapper and NO
  *  `.workspace`. `cmd_forget` refuses a workspace outright (`is-a-workspace`),
  *  so this is the only row shape that verb will act on. */
-const wrapperRow = (id = 'claude-corp-demo'): string => {
+const wrapperRow = (id = 'claude-acme-demo'): string => {
   h.sh(`_reg_set ${id} uuid u; _reg_set ${id} project demo
-    _reg_set ${id} workdir /data/projects/demo; _reg_set ${id} wrapper claude-corp`);
+    _reg_set ${id} workdir /data/projects/demo; _reg_set ${id} wrapper claude-acme`);
   return id;
 };
 const RM_STUB = '_ws_unsupervise() { :; }; _tmux() { echo t; }; tmux() { :; };';
@@ -1264,18 +1264,18 @@ describe('one terminal fact per minted transaction (spec §3.4)', () => {
   });
 
   it('forget closes its transaction once — completed, and purge-refused', async () => {
-    h.sh(`_reg_set claude-corp-demo uuid u; _reg_set claude-corp-demo project demo
-      _reg_set claude-corp-demo workdir /data/projects/demo; _reg_set claude-corp-demo wrapper claude-corp`);
-    h.sh(`${FORGET_STUB} cmd_forget claude-corp-demo 2>/dev/null || true`);
+    h.sh(`_reg_set claude-acme-demo uuid u; _reg_set claude-acme-demo project demo
+      _reg_set claude-acme-demo workdir /data/projects/demo; _reg_set claude-acme-demo wrapper claude-acme`);
+    h.sh(`${FORGET_STUB} cmd_forget claude-acme-demo 2>/dev/null || true`);
     assertGuard('forget, completed');
     expect(eventsOf(h.home, 'forget').map((e) => e['outcome'])).toEqual(['intent', 'done']);
 
     h = makeCcdHarness('ccrc-lc-purge-');
-    h.sh(`_reg_set claude-corp-demo uuid u; _reg_set claude-corp-demo project demo
-      _reg_set claude-corp-demo workdir /data/projects/demo; _reg_set claude-corp-demo wrapper claude-corp`);
-    const release = await hold('claude-corp-demo', 8);
+    h.sh(`_reg_set claude-acme-demo uuid u; _reg_set claude-acme-demo project demo
+      _reg_set claude-acme-demo workdir /data/projects/demo; _reg_set claude-acme-demo wrapper claude-acme`);
+    const release = await hold('claude-acme-demo', 8);
     try {
-      h.sh(`${FORGET_STUB} cmd_forget claude-corp-demo 2>/dev/null || true`);
+      h.sh(`${FORGET_STUB} cmd_forget claude-acme-demo 2>/dev/null || true`);
       assertGuard('forget, purge refused');
       expect(eventsOf(h.home, 'forget').map((e) => e['outcome'])).toEqual(['intent', 'failed']);
     } finally { release(); }
@@ -1539,9 +1539,9 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
       // every status-1 token; the legs below now read it, so `run` hands its
       // stdout back instead of discarding it.
       run: (shim: string): string => h.sh(`${shim} ${RM_STUB} ( cmd_ws_rm demo-still-river ) 2>/dev/null || true`) },
-    { verb: 'forget', act: 'forget', id: 'claude-corp-demo', slug: null,
+    { verb: 'forget', act: 'forget', id: 'claude-acme-demo', slug: null,
       plant: (): void => { wrapperRow(); },
-      run: (shim: string): string => h.sh(`${shim} ${FORGET_STUB} ( cmd_forget claude-corp-demo ) 2>/dev/null || true`) },
+      run: (shim: string): string => h.sh(`${shim} ${FORGET_STUB} ( cmd_forget claude-acme-demo ) 2>/dev/null || true`) },
     { verb: 'ws-gc --prune', act: 'destroy', id: 'demo-quiet-basin', slug: ['demo', 'quiet-basin'] as const,
       plant: (): void => { deadRow(); },
       run: (shim: string): string => h.sh(`${shim} _ws_gc_prune_row dead-reg demo quiet-basin /gone 0`) },

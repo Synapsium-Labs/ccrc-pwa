@@ -86,7 +86,7 @@ describe('fleet REST + WS', () => {
   beforeEach(() => {
     home = mkTmp('ccrc-');
     seedRoster(home);
-    seedSession(home, 'claude-a-MekWarLive', 'claude-a');
+    seedSession(home, 'claude-a-project-f', 'claude-a');
   });
 
   afterEach(async () => {
@@ -101,7 +101,7 @@ describe('fleet REST + WS', () => {
     const res = await app.inject({ method: 'GET', url: '/api/fleet' });
     expect(res.statusCode).toBe(200);
     const body = res.json() as { sessions: Array<{ id: string; status: string }> };
-    expect(body.sessions.map((s) => s.id)).toEqual(['claude-a-MekWarLive']);
+    expect(body.sessions.map((s) => s.id)).toEqual(['claude-a-project-f']);
     expect(body.sessions[0]!.status).toBe('dead');
   });
 
@@ -130,7 +130,7 @@ describe('fleet REST + WS', () => {
 
     const snapshot = await next();
     expect(snapshot.type).toBe('fleet');
-    expect(snapshot.sessions.map((s: { id: string }) => s.id)).toEqual(['claude-a-MekWarLive']);
+    expect(snapshot.sessions.map((s: { id: string }) => s.id)).toEqual(['claude-a-project-f']);
 
     // Build 4: the cold start's LAST frame — this watcher has ticked, so it has
     // measured the markers and says so. Consumed here rather than ignored,
@@ -142,14 +142,14 @@ describe('fleet REST + WS', () => {
     const pushed = await next();
     expect(pushed.type).toBe('fleet');
     expect(pushed.sessions.map((s: { id: string }) => s.id)).toEqual([
-      'claude-a-MekWarLive',
+      'claude-a-project-f',
       'claude-b-demo-app-ts',
     ]);
 
     await watcher.tick(); // no change -> must NOT emit; next message must be the notice below
-    bus.emit('notice', { message: 'cc swap: claude-a-MekWarLive moved claude-a -> claude' });
+    bus.emit('notice', { message: 'cc swap: claude-a-project-f moved claude-a -> claude' });
     const notice = await next();
-    expect(notice).toEqual({ type: 'notice', message: 'cc swap: claude-a-MekWarLive moved claude-a -> claude' });
+    expect(notice).toEqual({ type: 'notice', message: 'cc swap: claude-a-project-f moved claude-a -> claude' });
 
     ws.close();
   });
@@ -227,7 +227,7 @@ describe('fleet REST + WS', () => {
     expect((await next()).type).toBe('hello');
     const cold = await next();
     expect(cold.type).toBe('fleet');
-    expect(cold.sessions.map((s: { id: string }) => s.id)).toEqual(['claude-a-MekWarLive']);
+    expect(cold.sessions.map((s: { id: string }) => s.id)).toEqual(['claude-a-project-f']);
 
     ws.close();
   });
@@ -264,7 +264,7 @@ describe('fleet REST + WS', () => {
 
     const snapshot = await next();
     expect(snapshot.type).toBe('fleet');
-    const s = snapshot.sessions.find((x: { id: string }) => x.id === 'claude-a-MekWarLive');
+    const s = snapshot.sessions.find((x: { id: string }) => x.id === 'claude-a-project-f');
     // The bug: this was `false` — the initial push omitted pendingDialogs, so the
     // "needs you" marker never showed on the fleet overview for a pre-existing dialog.
     // The watcher has ticked, so this cold frame is its last broadcast
@@ -283,7 +283,7 @@ describe('fleet REST + WS', () => {
     await watcher.tick();
 
     const snap = await loadSnapshot(cachePath);
-    expect(snap?.sessions.map((s) => s.id)).toEqual(['claude-a-MekWarLive']);
+    expect(snap?.sessions.map((s) => s.id)).toEqual(['claude-a-project-f']);
     rmSync(cacheDir, { recursive: true, force: true });
   });
 
@@ -320,7 +320,7 @@ describe('fleet REST + WS', () => {
     await watcher.tick(); // both sessions readable — writes a 2-row cache
     let snap = await loadSnapshot(cachePath);
     expect(snap?.sessions.map((s) => s.id).sort()).toEqual(
-      ['claude-b-demo-app-ts', 'claude-a-MekWarLive'].sort(),
+      ['claude-b-demo-app-ts', 'claude-a-project-f'].sort(),
     );
 
     // One session's own `workdir` field goes unreadable — the exact shape a
@@ -334,7 +334,7 @@ describe('fleet REST + WS', () => {
     // The fuller 2-row snapshot survives; a 1-row assembly must never
     // clobber it.
     expect(snap?.sessions.map((s) => s.id).sort()).toEqual(
-      ['claude-b-demo-app-ts', 'claude-a-MekWarLive'].sort(),
+      ['claude-b-demo-app-ts', 'claude-a-project-f'].sort(),
     );
     rmSync(cacheDir, { recursive: true, force: true });
   });
@@ -413,7 +413,7 @@ describe('fleet REST + WS', () => {
       await watcher.tick(); // both sessions readable — writes a 2-row cache
       let snap = await loadSnapshot(cachePath);
       expect(snap?.sessions.map((s) => s.id).sort()).toEqual(
-        ['claude-b-demo-app-ts', 'claude-a-MekWarLive'].sort(),
+        ['claude-b-demo-app-ts', 'claude-a-project-f'].sort(),
       );
       const firstSavedAt = snap!.savedAt;
 
@@ -422,7 +422,7 @@ describe('fleet REST + WS', () => {
 
       await watcher.tick(); // 1 row now — confirmed absent from the listing, not just unreadable
       snap = await loadSnapshot(cachePath);
-      expect(snap?.sessions.map((s) => s.id)).toEqual(['claude-a-MekWarLive']);
+      expect(snap?.sessions.map((s) => s.id)).toEqual(['claude-a-project-f']);
       expect(snap!.savedAt).toBeGreaterThan(firstSavedAt);
       const secondSavedAt = snap!.savedAt;
 
@@ -458,7 +458,7 @@ describe('fleet REST + WS', () => {
       for (let i = 0; i < 5; i++) {
         await watcher.tick();
         const snap = await loadSnapshot(cachePath);
-        expect(snap?.sessions.map((s) => s.id)).toEqual(['claude-a-MekWarLive']);
+        expect(snap?.sessions.map((s) => s.id)).toEqual(['claude-a-project-f']);
       }
 
       rmSync(cacheDir, { recursive: true, force: true });
@@ -487,7 +487,7 @@ describe('fleet REST + WS', () => {
 
       const snap = await loadSnapshot(cachePath);
       expect(snap?.sessions.map((s) => s.id).sort()).toEqual(
-        ['claude-b-demo-app-ts', 'claude-a-MekWarLive'].sort(),
+        ['claude-b-demo-app-ts', 'claude-a-project-f'].sort(),
       );
       // Warned once across all three refused ticks, not once per tick — the
       // freeze must be visible in the logs, but not spammed forever.
@@ -527,13 +527,13 @@ describe('fleet REST + WS', () => {
       const cacheDir = mkTmp('ccrc-cache-');
       const cachePath = path.join(cacheDir, 'state-cache.json');
       const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
-      const { io, setDegraded } = degradableIO('claude-a-MekWarLive', 'workdir');
+      const { io, setDegraded } = degradableIO('claude-a-project-f', 'workdir');
       const deps: Deps = { ...testDeps(home), cfg, io, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }, stateCachePath: cachePath };
       const watcher = new FleetWatcher(deps, new Bus());
 
       await watcher.tick(); // clean read — writes a 1-row cache
       let snap = await loadSnapshot(cachePath);
-      expect(snap?.sessions.map((s) => s.id)).toEqual(['claude-a-MekWarLive']);
+      expect(snap?.sessions.map((s) => s.id)).toEqual(['claude-a-project-f']);
       expect(snap?.sessions[0]?.unmeasured).toEqual([]);
       const firstSavedAt = snap!.savedAt;
 
@@ -546,7 +546,7 @@ describe('fleet REST + WS', () => {
       // The write was SKIPPED: the cache is still the pre-degrade snapshot,
       // byte for byte (same savedAt), never a fresh write of the guess.
       expect(snap?.savedAt).toBe(firstSavedAt);
-      expect(snap?.sessions.map((s) => s.id)).toEqual(['claude-a-MekWarLive']);
+      expect(snap?.sessions.map((s) => s.id)).toEqual(['claude-a-project-f']);
 
       const skipWarnings = warnSpy.mock.calls.filter(
         ([msg]) => typeof msg === 'string' && msg.includes('snapshot write skipped') && msg.includes('unmeasured identity field'),
@@ -562,7 +562,7 @@ describe('fleet REST + WS', () => {
       const cacheDir = mkTmp('ccrc-cache-');
       const cachePath = path.join(cacheDir, 'state-cache.json');
       const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
-      const { io, setDegraded } = degradableIO('claude-a-MekWarLive', 'workdir');
+      const { io, setDegraded } = degradableIO('claude-a-project-f', 'workdir');
       const deps: Deps = { ...testDeps(home), cfg, io, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }, stateCachePath: cachePath };
       const watcher = new FleetWatcher(deps, new Bus());
 
@@ -598,7 +598,7 @@ describe('fleet REST + WS', () => {
       const cacheDir = mkTmp('ccrc-cache-');
       const cachePath = path.join(cacheDir, 'state-cache.json');
       const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
-      const { io, setDegraded } = degradableIO('claude-a-MekWarLive', 'workdir');
+      const { io, setDegraded } = degradableIO('claude-a-project-f', 'workdir');
       setDegraded(true);
       const deps: Deps = { ...testDeps(home), cfg, io, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }, stateCachePath: cachePath };
       const watcher = new FleetWatcher(deps, new Bus());
@@ -1532,7 +1532,7 @@ describe('fleet REST + WS', () => {
   });
 
   describe('the ask chip on the two cold paths', () => {
-    const CHILD = 'claude-a-MekWarLive';
+    const CHILD = 'claude-a-project-f';
     const CHIP = { state: 'held', parentId: 'coord-1', answeredBy: null };
 
     const heldAsk = (): CoordStore => {

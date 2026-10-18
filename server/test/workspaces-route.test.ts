@@ -91,8 +91,8 @@ describe('workspace routes', () => {
 
   it('passes a URL-encoded project through intact', async () => {
     const { app, calls } = await appWithCcdSpy();
-    await app.inject({ method: 'POST', url: '/api/projects/expoAI-assistant/workspaces' });
-    expect(calls).toContainEqual(['ws-add', 'expoAI-assistant']);
+    await app.inject({ method: 'POST', url: '/api/projects/project-h/workspaces' });
+    expect(calls).toContainEqual(['ws-add', 'project-h']);
     await app.close();
   });
 

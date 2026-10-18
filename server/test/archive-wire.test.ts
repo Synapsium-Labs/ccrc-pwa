@@ -7,7 +7,7 @@ import {
 } from '../../shared/api.js';
 
 const base: FleetSession = {
-  id: 'demo-amber', wrapper: 'claude', home: '/home/rc', project: 'demo', workdir: '/data/projects/demo',
+  id: 'demo-amber', wrapper: 'claude', home: '/home/u', project: 'demo', workdir: '/data/projects/demo',
   workspace: 'amber', name: null, status: 'idle', statusUpdatedAt: null, limits: null,
   dialogPending: false, version: null, model: null, effort: null, ultracode: false,
   branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,

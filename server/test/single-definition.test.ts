@@ -924,9 +924,9 @@ describe('the account roster — runtime data, no compile-time copies', () => {
   // two of them anywhere under the roots scores a hit exactly as it did before.
   //
   // Hand-typing the names HERE instead would make the scanner that exists to
-  // prevent hand-typed copies one itself: a 6th account (say `claude-dev1`)
+  // prevent hand-typed copies one itself: a 6th account (say `claude-lab1`)
   // added to the production roster and then restated as
-  // `['claude-dev1', 'claude2']` under some root must score a hit, and a
+  // `['claude-lab1', 'claude9']` under some root must score a hit, and a
   // scanner frozen at five names would stay green while that drift reopened.
   const WRAPPER_NAMES = DEFAULT_TEST_ROSTER.accounts.map((a) => a.id);
 
@@ -1820,7 +1820,7 @@ describe('the model files, and who reads each one', () => {
   });
 
   it('the ownership whitelist is read by exactly one thing in this repo', () => {
-    // `handoff-proxy` and `claude-glm` read it too — in the monorepo, which
+    // `handoff-proxy` and `claude-alt1` read it too — in the monorepo, which
     // this scan cannot see. Within this repo it must stay one reader, because
     // a second one would be a second opinion about which providers may serve.
     expect(spell('providers-whitelist.json')).toEqual(['deploy/models-op.mjs']);

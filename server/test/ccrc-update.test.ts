@@ -56,7 +56,7 @@ import { reportFrom, type NodeFileRead } from '../src/update/inventory.js';
 import { emptyDelegationCheckpoint } from '../src/coord/delegation-model.js';
 import { encodeDelegationCheckpoint } from '../src/coord/delegation-checkpoint.js';
 import { buildDelegationJournalRecord, encodeDelegationJournalRecord } from '../src/coord/delegation-journal.js';
-// CCR-15 wave 10: the collector's generation journal's ONE name (path-identity spec 2026-10-12 §5.3).
+// #166 wave 10: the collector's generation journal's ONE name (path-identity spec 2026-10-12 §5.3).
 import { COLLECT_LANE_JOURNAL_BASENAME } from '../src/coord/collectLaneJournal.js';
 import {
   SPINE_CONTAINMENT_PROBE, spineRunCalls, adoptPlantedSystemd, assertSpineFrontContained, spineSystemctlArms,

@@ -452,13 +452,13 @@ describe('_transcript_path', () => {
 
   it('never crosses into another account to answer', () => {
     // The one thing the ladder must NOT do. A session on `claude` whose only
-    // copy sits under `.claude-corp` gets the canonical unchecked address, not
+    // copy sits under `.claude-acme` gets the canonical unchecked address, not
     // another account's file — that is D4's bannered rung, and it belongs to a
     // surface that can show the banner, not to a tombstone that cannot.
     const wd = path.join(h.home, 'projects', 'lonely');
     fs.mkdirSync(wd, { recursive: true });
     h.sh(`_reg_set t5 wrapper claude; _reg_set t5 workdir '${wd}'; _reg_set t5 uuid u-5`);
-    plant('.claude-corp', mungePath(fs.realpathSync(wd)), 'u-5');
+    plant('.claude-acme', mungePath(fs.realpathSync(wd)), 'u-5');
     expect(h.sh('_transcript_path t5')).toBe(
       path.join(h.home, '.claude', 'projects', mungePath(fs.realpathSync(wd)), 'u-5.jsonl'),
     );
@@ -486,7 +486,7 @@ describe('_ws_ignored_digest', () => {
     fs.writeFileSync(path.join(wt, 'debug.log'), 'l\n');
     // `--ignored=matching` collapses `secrets/` to ONE entry — the whole reason
     // this is not `ls-files --others --ignored`, which enumerates per file
-    // (measured 210,070 entries / 24.6 MB in custom-tools against an 8 MB agent
+    // (measured 210,070 entries / 24.6 MB in project-d against an 8 MB agent
     // buffer). Pinning the exact preimage pins the collapse, the `!! ` filter and
     // the sort at once; asserting only "64 hex chars" would not.
     expect(h.sh(`_ws_ignored_digest "${wt}"`))

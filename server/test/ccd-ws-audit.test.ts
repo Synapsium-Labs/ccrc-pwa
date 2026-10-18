@@ -2519,7 +2519,7 @@ describe('the manifest', () => {
     expect(h.ghCalls().some((c) => /^timeout 60 git .* fetch --quiet origin$/.test(c)),
       `no bounded fetch in ${JSON.stringify(h.ghCalls())}`).toBe(true);
     // `_cfg_dir` maps the wrapper `_ws_least_loaded` picked to its config dir
-    // (claude -> ~/.claude, claude2 -> ~/.claude-personal, …), so the assertion
+    // (claude -> ~/.claude, claude9 -> ~/.claude-home, …), so the assertion
     // is derived, never hardcoded to `.claude`.
     expect(a.transcript).toContain(`${CFG_DIR[h.reg('demo-quiet-basin', 'wrapper')!]}/projects/`);
     expect(a.stashes).toBe(0);

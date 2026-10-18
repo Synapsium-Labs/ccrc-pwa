@@ -15,8 +15,8 @@ const tableOf = (t: Record<string, CoordStamp>) =>
   (id: string): CoordStamp | null => t[id] ?? null;
 
 const base = {
-  sessionId: 'custom-tools-amber-delta',
-  ownProject: 'custom-tools',
+  sessionId: 'project-d-amber-delta',
+  ownProject: 'project-d',
   held: true,
   stampOf: (_id: string): CoordStamp | null => null,
 };
@@ -25,19 +25,19 @@ describe('boardPlacement', () => {
   it('places a held worker on its run\u2019s stamped coordinator project', () => {
     expect(boardPlacement({
       ...base,
-      stampOf: tableOf({ 'custom-tools-amber-delta': stamp('intake-platform', 'intake-coord') }),
-    })).toBe('intake-platform');
+      stampOf: tableOf({ 'project-d-amber-delta': stamp('project-n', 'prog-h') }),
+    })).toBe('project-n');
   });
 
   it('falls back to its own project when the run carries no stamp', () => {
-    expect(boardPlacement({ ...base })).toBe('custom-tools');
+    expect(boardPlacement({ ...base })).toBe('project-d');
   });
 
   it('falls back to its own project when the workspace is NOT held', () => {
     expect(boardPlacement({
       ...base, held: false,
-      stampOf: tableOf({ 'custom-tools-amber-delta': stamp('intake-platform', 'intake-coord') }),
-    })).toBe('custom-tools');
+      stampOf: tableOf({ 'project-d-amber-delta': stamp('project-n', 'prog-h') }),
+    })).toBe('project-d');
   });
 
   it('never places a session under a run it coordinates ITSELF', () => {
@@ -58,10 +58,10 @@ describe('boardPlacement', () => {
     let calls = 0;
     const stampOf = (id: string): CoordStamp | null => {
       calls++;
-      return id === 'custom-tools-amber-delta'
-        ? stamp('somewhere-else', 'custom-tools-amber-delta') : null;
+      return id === 'project-d-amber-delta'
+        ? stamp('somewhere-else', 'project-d-amber-delta') : null;
     };
-    expect(boardPlacement({ ...base, stampOf })).toBe('custom-tools');
+    expect(boardPlacement({ ...base, stampOf })).toBe('project-d');
     expect(calls).toBe(1);          // 2 if the `seen` seed goes
   });
 
@@ -77,7 +77,7 @@ describe('boardPlacement', () => {
     expect(boardPlacement({
       ...base,
       stampOf: tableOf({
-        'custom-tools-amber-delta': stamp('ccrc-pwa', 'ccrc-pwa-amber-summit'),
+        'project-d-amber-delta': stamp('ccrc-pwa', 'ccrc-pwa-amber-summit'),
         // an ordinary ccrc-pwa programme: a ccrc-pwa worker, a ccrc-pwa
         // coordinator. Under a project-keyed hop this said "ccrc-pwa
         // coordinates ccrc-pwa" and sent the row home.
@@ -90,13 +90,13 @@ describe('boardPlacement', () => {
     expect(boardPlacement({
       ...base,
       stampOf: tableOf({
-        'custom-tools-amber-delta': stamp('intake-platform', 'intake-platform-keen-meadow'),
-        // an unrelated programme whose WORK is in intake-platform and whose
+        'project-d-amber-delta': stamp('project-n', 'project-n-keen-meadow'),
+        // an unrelated programme whose WORK is in project-n and whose
         // coordinator is in ccrc-pwa. Project-keyed, this read as "ccrc-pwa
-        // coordinates intake-platform" and walked the row one card too far.
-        'intake-worker': stamp('ccrc-pwa', 'ccrc-pwa-amber-summit'),
+        // coordinates project-n" and walked the row one card too far.
+        'project-n-worker': stamp('ccrc-pwa', 'ccrc-pwa-amber-summit'),
       }),
-    })).toBe('intake-platform');
+    })).toBe('project-n');
   });
 
   it('walks a chain to the ROOT coordinator', () => {
@@ -105,7 +105,7 @@ describe('boardPlacement', () => {
     expect(boardPlacement({
       ...base,
       stampOf: tableOf({
-        'custom-tools-amber-delta': stamp('mid', 'mid-session'),
+        'project-d-amber-delta': stamp('mid', 'mid-session'),
         'mid-session': stamp('root', 'root-session'),
       }),
     })).toBe('root');
@@ -116,8 +116,8 @@ describe('boardPlacement', () => {
     // question is not askable. Settling beats both guessing and going home.
     expect(boardPlacement({
       ...base,
-      stampOf: tableOf({ 'custom-tools-amber-delta': stamp('intake-platform', null) }),
-    })).toBe('intake-platform');
+      stampOf: tableOf({ 'project-d-amber-delta': stamp('project-n', null) }),
+    })).toBe('project-n');
   });
 
   it('a CYCLE falls back to its own project rather than looping', () => {
@@ -128,25 +128,25 @@ describe('boardPlacement', () => {
     expect(boardPlacement({
       ...base,
       stampOf: tableOf({
-        'custom-tools-amber-delta': stamp('pa', 'a'),
+        'project-d-amber-delta': stamp('pa', 'a'),
         a: stamp('pb', 'b'),
         b: stamp('pa', 'a'),
       }),
-    })).toBe('custom-tools');
+    })).toBe('project-d');
   });
 
   it('a chain longer than the hop cap falls back rather than walking forever', () => {
     expect(boardPlacement({
       ...base,
       stampOf: (id: string): CoordStamp => stamp(`p-${id}`, `${id}+`),
-    })).toBe('custom-tools');
+    })).toBe('project-d');
   });
 
   it('resolves a chain exactly as long as the hop cap', () => {
     // FIVE stampOf calls: the session's own, then a, b, c — and the fifth
     // (`d`) answers null, settling on `d`'s project as the root.
     const chain: Record<string, CoordStamp> = {
-      'custom-tools-amber-delta': stamp('pa', 'a'),
+      'project-d-amber-delta': stamp('pa', 'a'),
       a: stamp('pb', 'b'),
       b: stamp('pc', 'c'),
       c: stamp('pd', 'd'),
@@ -156,24 +156,24 @@ describe('boardPlacement', () => {
 
   it('falls back on a chain one hop past the cap', () => {
     const chain: Record<string, CoordStamp> = {
-      'custom-tools-amber-delta': stamp('pa', 'a'),
+      'project-d-amber-delta': stamp('pa', 'a'),
       a: stamp('pb', 'b'),
       b: stamp('pc', 'c'),
       c: stamp('pd', 'd'),
       d: stamp('pe', 'e'),
     };
-    expect(boardPlacement({ ...base, stampOf: tableOf(chain) })).toBe('custom-tools');
+    expect(boardPlacement({ ...base, stampOf: tableOf(chain) })).toBe('project-d');
   });
 
   it('stops ON REVISIT rather than walking to the cap', () => {
     const table: Record<string, CoordStamp> = {
-      'custom-tools-amber-delta': stamp('pa', 'a'),
+      'project-d-amber-delta': stamp('pa', 'a'),
       a: stamp('pb', 'b'),
       b: stamp('pa', 'a'),
     };
     let calls = 0;
     const stampOf = (id: string): CoordStamp | null => { calls++; return table[id] ?? null; };
-    expect(boardPlacement({ ...base, stampOf })).toBe('custom-tools');
+    expect(boardPlacement({ ...base, stampOf })).toBe('project-d');
     // 3, not MAX_HOPS: own -> a -> b, and b naming `a` is caught without a
     // fourth lookup.
     expect(calls).toBe(3);
@@ -183,12 +183,12 @@ describe('boardPlacement', () => {
     // A transitive self-placement. Same seed, same call-count pin as the
     // self-claimed case above: the return value is `ownProject` either way.
     const table: Record<string, CoordStamp> = {
-      'custom-tools-amber-delta': stamp('px', 'x'),
-      x: stamp('custom-tools', 'custom-tools-amber-delta'),
+      'project-d-amber-delta': stamp('px', 'x'),
+      x: stamp('project-d', 'project-d-amber-delta'),
     };
     let calls = 0;
     const stampOf = (id: string): CoordStamp | null => { calls++; return table[id] ?? null; };
-    expect(boardPlacement({ ...base, stampOf })).toBe('custom-tools');
+    expect(boardPlacement({ ...base, stampOf })).toBe('project-d');
     expect(calls).toBe(2);          // 3 if the `seen` seed goes
   });
 });

@@ -23,7 +23,7 @@ describe('_ws_branch_valid', () => {
   it('accepts the type/slug shape every repo here uses', () => {
     expect(ok('feat/int-7-mcp-image-attachments')).toBe(true);
     expect(ok('ccrc/attachment-tray')).toBe(true);
-    expect(ok('fix/MEK-995.cleanup')).toBe(true);
+    expect(ok('fix/ABC-123.cleanup')).toBe(true);
   });
 
   it('rejects a leading dash — git would read it as an option', () => {
@@ -141,11 +141,11 @@ describe('ws-rename', () => {
   });
 
   it('refuses a session that is not a workspace', () => {
-    h.sh(`_reg_set claude2-demo wrapper claude2
-          _reg_set claude2-demo project demo
-          _reg_set claude2-demo workdir ${path.join(h.home, 'projects', 'demo')}
-          _reg_set claude2-demo uuid abc`);
-    expect(refusal('claude2-demo', 'feat/real-name')).toBe('not-a-workspace');
+    h.sh(`_reg_set claude9-demo wrapper claude9
+          _reg_set claude9-demo project demo
+          _reg_set claude9-demo workdir ${path.join(h.home, 'projects', 'demo')}
+          _reg_set claude9-demo uuid abc`);
+    expect(refusal('claude9-demo', 'feat/real-name')).toBe('not-a-workspace');
   });
 
   it('refuses a registry row with no project or workdir', () => {
@@ -300,13 +300,13 @@ describe('ws-rename', () => {
   // prhistory is unchanged by either outcome and is still asserted here.
   it('refuses a HELD workspace, renames nothing, and leaves hold and prhistory alone', () => {
     const wt = addOne();
-    h.sh(`cmd_ws_hold --session demo-quiet-mesa --reason "program:agent-evals wave:1/4"`);
+    h.sh(`cmd_ws_hold --session demo-quiet-mesa --reason "program:prog-j wave:1/4"`);
     expect(refusal('demo-quiet-mesa', 'feat/real-name')).toBe('held');
     // The refusal is an ANSWER, not a fault: exit 0 (h.sh would throw otherwise,
     // which `refusal()` going through `rename()` already proves) and nothing moved.
     expect(h.git(wt, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('ws/quiet-mesa');
     expect(h.reg('demo-quiet-mesa', 'branch')).toBe('ws/quiet-mesa');
-    expect(h.reg('demo-quiet-mesa', 'hold')).toBe('program:agent-evals wave:1/4');
+    expect(h.reg('demo-quiet-mesa', 'hold')).toBe('program:prog-j wave:1/4');
     expect(h.reg('demo-quiet-mesa', 'prhistory')).toBeNull();
     expect(h.reg('demo-quiet-mesa', 'prnumber')).toBeNull();
   });
@@ -324,7 +324,7 @@ describe('ws-rename', () => {
   // The other direction, so the rung is a refusal rather than an outage.
   it('renames an UNHELD workspace exactly as before, and after a release', () => {
     const wt = addOne();
-    h.sh(`cmd_ws_hold --session demo-quiet-mesa --reason "program:agent-evals wave:1/4"`);
+    h.sh(`cmd_ws_hold --session demo-quiet-mesa --reason "program:prog-j wave:1/4"`);
     h.sh(`cmd_ws_release --session demo-quiet-mesa`);
     expect(rename('demo-quiet-mesa', 'feat/real-name').new).toBe('feat/real-name');
     expect(h.git(wt, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('feat/real-name');
@@ -338,7 +338,7 @@ describe('ws-rename', () => {
   // run at all.
   it('refuses before it touches git or the network', () => {
     addOne();
-    h.sh(`cmd_ws_hold --session demo-quiet-mesa --reason "program:agent-evals wave:1/4"`);
+    h.sh(`cmd_ws_hold --session demo-quiet-mesa --reason "program:prog-j wave:1/4"`);
     // A `git` that records every call and then refuses: if the rung is placed
     // after the worktree/upstream probes, one of them fires and this reds.
     const NOGIT = `git() { echo "git $*" >> "$HOME/ccd-calls"; return 1; };`;

@@ -1,7 +1,7 @@
 /**
  * `ccd forget <id>` — the end-of-life a non-workspace session never had.
  *
- * A dead wrapper session (`claude-corp-data-internal`, exited, tmux gone) was
+ * A dead wrapper session (`claude-acme-project-e`, exited, tmux gone) was
  * an IMMORTAL fleet row: the only removal flow in the design is archive→reap,
  * both workspace-only by contract, and `_reg_purge` was reachable solely from
  * `ws-rm`, `ws-reap`'s tail and `ws-gc`'s dead-reg arm — all workspace-scoped.
@@ -36,14 +36,14 @@ const shFail = (snippet: string): { code: number; stderr: string; stdout: string
 };
 
 /** A dead wrapper session on a project's main checkout — the exact registry
- *  shape `claude-corp-data-internal` had in production: uuid, project,
+ *  shape `claude-acme-project-e` had in production: uuid, project,
  *  workdir, wrapper, hookstate — and NO `.workspace`. Written with `_reg_set`
  *  (the same writer ccd uses) rather than `cmd_start`, which would want tmux. */
-const deadWrapperSession = (id = 'claude-corp-demo'): string => {
+const deadWrapperSession = (id = 'claude-acme-demo'): string => {
   h.sh(`_reg_set ${id} uuid 72be9ee2-0000-4bcc-b60b-0cfc0dc3d199
     _reg_set ${id} project demo
     _reg_set ${id} workdir /data/projects/demo
-    _reg_set ${id} wrapper claude-corp`);
+    _reg_set ${id} wrapper claude-acme`);
   fs.writeFileSync(path.join(h.home, '.cc-sessions', `${id}.hookstate.json`), '{"v":1}');
   return id;
 };
@@ -53,7 +53,7 @@ describe('ccd forget', () => {
     const id = deadWrapperSession();
     // The two things forget must NOT touch, planted so their survival is an
     // assertion rather than an accident: the transcript and the pasted images.
-    const tdir = path.join(h.home, '.claude-corp', 'projects', '-data-projects-demo');
+    const tdir = path.join(h.home, '.claude-acme', 'projects', '-data-projects-demo');
     fs.mkdirSync(tdir, { recursive: true });
     const transcript = path.join(tdir, '72be9ee2-0000-4bcc-b60b-0cfc0dc3d199.jsonl');
     fs.writeFileSync(transcript, '{"type":"message"}\n');

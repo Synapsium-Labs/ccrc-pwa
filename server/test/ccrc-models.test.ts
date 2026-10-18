@@ -63,8 +63,8 @@ const ROSTER = {
     // at `_models_run_probe`'s secrets-file branch) with a CHATGPT_TOKEN_DIR to scrub. The secrets file
     // this lane sources sets only ANTHROPIC_AUTH_TOKEN, the normal case: no
     // fleet secrets file sets CHATGPT_TOKEN_DIR.
-    { id: 'gpt2', label: 'gpt2', configDirSuffix: '.claude-gpt2',
-      exec: { kind: 'external', secretsFile: '.secrets/gpt2.env' }, homeAble: false, hue: 'amber',
+    { id: 'gpt7', label: 'gpt7', configDirSuffix: '.claude-gpt7',
+      exec: { kind: 'external', secretsFile: '.secrets/gpt7.env' }, homeAble: false, hue: 'amber',
       telemetry: 'none' },
   ],
 };
@@ -1324,7 +1324,7 @@ describe('ccrc models <id> discovery', () => {
   });
 
   // Round 3 re-review, M1: the test above only ever reaches the `else`
-  // (no-secrets-file) branch of `_models_run_probe` — `gpt` has none. `gpt2`
+  // (no-secrets-file) branch of `_models_run_probe` — `gpt` has none. `gpt7`
   // carries `exec.secretsFile`, sourcing a file that sets ONLY
   // ANTHROPIC_AUTH_TOKEN, so this drives the `if` branch (`_models_run_probe`'s `if [ -n "$secrets" ]` branch)
   // instead: the secrets file it sources never mentions CHATGPT_TOKEN_DIR, so
@@ -1335,7 +1335,7 @@ describe('ccrc models <id> discovery', () => {
   // stays green, because it never touches this branch at all.
   it('a codex lane with a secrets file that sets only ANTHROPIC_AUTH_TOKEN still scrubs an ambient CHATGPT_TOKEN_DIR', () => {
     fs.mkdirSync(join(home, '.secrets'), { recursive: true });
-    fs.writeFileSync(join(home, '.secrets', 'gpt2.env'), 'export ANTHROPIC_AUTH_TOKEN=lane-token\n');
+    fs.writeFileSync(join(home, '.secrets', 'gpt7.env'), 'export ANTHROPIC_AUTH_TOKEN=lane-token\n');
     const poisonedDir = join(home, 'someone-elses-chatgpt-auth-2');
     fs.mkdirSync(poisonedDir, { recursive: true });
     fs.writeFileSync(join(poisonedDir, 'auth.json'), JSON.stringify({ account_id: 'leaked-account-id' }));
@@ -1343,7 +1343,7 @@ describe('ccrc models <id> discovery', () => {
     fs.writeFileSync(join(home, '.local', 'bin', 'python'),
       '#!/bin/sh\nprintf \'%s\\n\' "$CHATGPT_TOKEN_DIR" >> "$HOME/python-poison"\nexit 1\n', { mode: 0o755 });
     seedCodex(LEGACY_SECRETS_EXTERNAL_ID);
-    const r = run(['models', 'refresh', 'gpt2'], { CHATGPT_TOKEN_DIR: poisonedDir });
+    const r = run(['models', 'refresh', 'gpt7'], { CHATGPT_TOKEN_DIR: poisonedDir });
     expect(r.code).toBe(1);
     expect(fs.existsSync(join(home, 'python-poison')),
       'a secrets file that sets a different credential must not leave CHATGPT_TOKEN_DIR for the codex fetch to inherit from the calling shell')

@@ -7418,11 +7418,11 @@ describe('deploy/account-op.mjs: lane and rotated, driven by hand', () => {
     seedRosterJson(home, [UPSTREAM,
       { id: 'gpt', label: 'gpt', hue: 'amber', configDirSuffix: '.claude-gpt',
         homeAble: false, telemetry: 'none', exec: { kind: 'external' } },
-      { id: 'gpt2', label: 'gpt2', hue: 'amber', configDirSuffix: '.claude-gpt2',
+      { id: 'gpt7', label: 'gpt7', hue: 'amber', configDirSuffix: '.claude-gpt7',
         homeAble: false, telemetry: 'none', exec: { kind: 'external', provider: 'openai' } }]);
     expect(node(['lane', '--file', rosterFile(home), '--id', 'gpt']).stdout.split('\n').slice(0, 4))
       .toEqual(['external', '', '', '']);
-    expect(node(['lane', '--file', rosterFile(home), '--id', 'gpt2']).stdout.split('\n').slice(0, 4))
+    expect(node(['lane', '--file', rosterFile(home), '--id', 'gpt7']).stdout.split('\n').slice(0, 4))
       .toEqual(['external', 'openai', '', '']);
   });
 

@@ -21,9 +21,9 @@
 // this fixture skips the exposure quartet, the roster's wrapper-shape
 // ceremony, the build stamp, and auth — none of it is graphify's subject —
 // and ADDS one thing `ccrc-doctor.test.ts`'s own roster never has: a SECOND
-// rostered home (`claude-personal` -> `.claude-personal`), because the
+// rostered home (`claude-home` -> `.claude-home`), because the
 // brief's own `graphifyHealthy()` fixture plants a skill stamp under
-// `.claude-personal` and the D-997 test needs that home to be ON THE
+// `.claude-home` and the D-997 test needs that home to be ON THE
 // ROSTER for condition (4) to ever look at it.
 //
 // ── THE TWO SAFETY BOUNDARIES, KEPT ────────────────────────────────────────
@@ -168,12 +168,12 @@ const lineFor = (out: string, name: string): string | undefined =>
   out.split('\n').find((l) => new RegExp(`^(PASS|WARN|FAIL|SKIP) ${name}: `).test(l));
 
 /** The roster this fixture's `healthy()` seeds: the upstream account plus
- *  ONE generated account whose `configDirSuffix` is `.claude-personal` — a
+ *  ONE generated account whose `configDirSuffix` is `.claude-home` — a
  *  real, documented production suffix (`shared/roster.ts`'s own
- *  `configDirSuffix` comment lists it alongside `.claude`, `.claude-corp`
+ *  `configDirSuffix` comment lists it alongside `.claude`, `.claude-acme`
  *  and `.claude-gpt`), and the one the brief's `graphifyHealthy()` fixture
  *  plants a skill stamp under. Without a roster entry naming it, condition
- *  (4) never looks at `.claude-personal` at all and the D-997 test would be
+ *  (4) never looks at `.claude-home` at all and the D-997 test would be
  *  asserting on a home nothing measures. */
 const GRAPHIFY_ROSTER = {
   version: 1,
@@ -183,7 +183,7 @@ const GRAPHIFY_ROSTER = {
       exec: { kind: 'upstream' as const }, homeAble: true, telemetry: 'anthropic' as const,
     },
     {
-      id: 'claude-personal', label: 'claude-personal', configDirSuffix: '.claude-personal',
+      id: 'claude-home', label: 'claude-home', configDirSuffix: '.claude-home',
       exec: { kind: 'generated' as const }, homeAble: true, telemetry: 'anthropic' as const,
     },
   ],
@@ -202,7 +202,7 @@ function seedGraphifyAccountsSh(home: string): void {
 /** A box where the `graphify` check specifically passes: `ccrc`/checks/
  *  wrapper-shape symlinked in, PATH contained, `git`/`jq`/`date`/`realpath`
  *  real (the check's own subject-adjacent tools), `df` stubbed, and a two-account
- *  roster naming `.claude` and `.claude-personal`. Every OTHER check in the
+ *  roster naming `.claude` and `.claude-home`. Every OTHER check in the
  *  table is free to FAIL here — `cmd_doctor` runs each in its own subshell,
  *  and this suite reads only the `graphify` verdict line. */
 function healthy(prefix: string): string {
@@ -223,7 +223,7 @@ function healthy(prefix: string): string {
 
 /** The brief's own fixture, verbatim (task-11-brief.md, "Step 1: Failing
  *  tests"): plants a working venv engine answering `graphify 0.9.9`, the pin
- *  stamp, both `.claude` and `.claude-personal` skill stamps, and a fresh
+ *  stamp, both `.claude` and `.claude-home` skill stamps, and a fresh
  *  `ok` census with an empty tree list. */
 function graphifyHealthy(home: string): void {
   const venvBin = join(home, '.ccrc', 'graphify-venv', 'bin');
@@ -237,7 +237,7 @@ function graphifyHealthy(home: string): void {
   mkdirSync(join(home, '.local', 'bin'), { recursive: true });
   rmSync(join(home, '.local', 'bin', 'graphify'), { force: true });
   symlinkSync(join(venvBin, 'graphify'), join(home, '.local', 'bin', 'graphify'));
-  for (const d of ['.claude', '.claude-personal']) {
+  for (const d of ['.claude', '.claude-home']) {
     const s = join(home, d, 'skills', 'graphify');
     mkdirSync(s, { recursive: true });
     writeFileSync(join(s, '.graphify_version'), '0.9.9');
@@ -261,10 +261,10 @@ describe('ccrc doctor: graphify', () => {
 
   it('FAILs naming the home when a rostered skill stamp is missing (D-997)', () => {
     const home = healthy('ccrc-doctor-gfx-drift-'); graphifyHealthy(home);
-    rmSync(join(home, '.claude-personal', 'skills', 'graphify'), { recursive: true });
+    rmSync(join(home, '.claude-home', 'skills', 'graphify'), { recursive: true });
     const line = lineFor(runDoctor(home).stdout, 'graphify');
     expect(line).toMatch(/^FAIL graphify:/);
-    expect(line).toContain('.claude-personal');
+    expect(line).toContain('.claude-home');
   });
 
   it('WARNs on version drift between engine and pin', () => {

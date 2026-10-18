@@ -953,7 +953,7 @@ describe('the lane’s memory of one row', () => {
       .toMatchObject({ kind: 'kept' });
     expect(archivedExpiryEntryFor(x, x.archivedAt + 60).report, 'a new archive').toBeNull();
     expect(archivedExpiryNextEntry(x, { kind: 'refused', token: 'containment-unproven', detail: 'd', inUse: [] }, t + PASS, PASS)!.report,
-      'a terminal refusal (CCR-15’s R77: terminal outranks stuck)').toMatchObject({ kind: 'refused' });
+      'a terminal refusal (#166’s R77: terminal outranks stuck)').toMatchObject({ kind: 'refused' });
     // Whole-branch review, item 1: the other two verdicts that end the row for this archive outrank a stuck entry too —
     // a failure the box says will not resume, and a call ccd rejected as composed. Final, and never asked again.
     const noResume = archivedExpiryNextEntry(x, { kind: 'failed', resumable: false, detail: 'd' }, t + PASS, PASS)!;

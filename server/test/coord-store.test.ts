@@ -61,11 +61,11 @@ describe('CoordStore: runs', () => {
 
   it('openRun stamps the coordinator project it is given, and it round-trips', () => {
     const s = store();
-    const opened = openRun(s, { coordProject: 'intake-platform' }) as { id: number };
+    const opened = openRun(s, { coordProject: 'project-n' }) as { id: number };
     expect('id' in opened).toBe(true);
     const row = okRuns(s.runs({ includeClosed: true })).find((r) => r.id === opened.id);
     expect(row).toBeDefined();
-    expect(row!.coordProject).toBe('intake-platform');
+    expect(row!.coordProject).toBe('project-n');
   });
 
   it('openRun leaves the stamp null when none is given — absence permits', () => {
@@ -81,12 +81,12 @@ describe('CoordStore: runs', () => {
   describe('CoordStore.coordPlacementStamps', () => {
     it('returns a stamp only for runs whose coordProject is set, id/sessionId/claimedBy carried verbatim', () => {
       const s = store();
-      const stamped = openRun(s, { coordProject: 'intake-platform' }) as { id: number };
+      const stamped = openRun(s, { coordProject: 'project-n' }) as { id: number };
       s.bindSession(stamped.id, 'demo-worker');
       openRun(s, { wave: 2 }); // unstamped — must not appear at all
       expect(s.coordPlacementStamps()).toEqual({
         ok: true,
-        stamps: [{ id: stamped.id, sessionId: 'demo-worker', claimedBy: 'ccrc-pwa-coordinator', coordProject: 'intake-platform' }],
+        stamps: [{ id: stamped.id, sessionId: 'demo-worker', claimedBy: 'ccrc-pwa-coordinator', coordProject: 'project-n' }],
       });
     });
 
@@ -97,12 +97,12 @@ describe('CoordStore: runs', () => {
     // it, so a change to this method's own WHERE clause reds HERE first.
     it("a CLOSED run's stamp remains visible — the wave-boundary guarantee, pinned at the store seam", () => {
       const s = store();
-      const stamped = openRun(s, { coordProject: 'intake-platform' }) as { id: number };
+      const stamped = openRun(s, { coordProject: 'project-n' }) as { id: number };
       s.bindSession(stamped.id, 'demo-worker');
       expect(s.advance(stamped.id, 'failed', 'test-close').ok).toBe(true);
       expect(s.coordPlacementStamps()).toEqual({
         ok: true,
-        stamps: [{ id: stamped.id, sessionId: 'demo-worker', claimedBy: 'ccrc-pwa-coordinator', coordProject: 'intake-platform' }],
+        stamps: [{ id: stamped.id, sessionId: 'demo-worker', claimedBy: 'ccrc-pwa-coordinator', coordProject: 'project-n' }],
       });
     });
   });
@@ -376,7 +376,7 @@ describe('CoordStore: runs', () => {
     // would then be pinning nothing.
     it('coordPlacementStamps() refuses an unrepresentable id, and answers [] when nothing is stamped', () => {
       const s = store();
-      plantUnsafe(s, 'id', { sessionId: 'demo-alpha', coordProject: 'intake-platform' });
+      plantUnsafe(s, 'id', { sessionId: 'demo-alpha', coordProject: 'project-n' });
       expect(s.coordPlacementStamps()).toEqual({
         ok: false, kind: 'run-unreadable', detail: 'run id is not a positive safe integer',
       });

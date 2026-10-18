@@ -1,7 +1,7 @@
 // Child reclamation wave 10 (path-identity spec 2026-10-12 §5): what the operator documents say about the temp-root
 // collector's switch in Settings. The lane has two arms, then one: the legacy file until its journaled retirement, and
 // Settings for the fleet node measured on the current connection. These rows pin the sentences that say so, the
-// whole-state restore boundary, the two as-built notes and the CCR-15 spec's wave 10 paragraph and row, CLAUDE.md's
+// whole-state restore boundary, the two as-built notes and the #166 spec's wave 10 paragraph and row, CLAUDE.md's
 // coord.db bullet, and the two carried retitles (inventory items 38 and 40). Wave 9's `collect-lane-prose.test.ts` keeps
 // its pins and is run, never edited. The marker's name and the journal's basename are imported from their definers, so
 // this file is a second holder of neither spelling.
@@ -107,7 +107,7 @@ describe("the switch's prose is true (path-identity spec §5)", () => {
 
   it('the path-identity spec carries §5 as built', () => {
     const spec = read(PI_SPEC);
-    const heading = '### §5 as built (CCR-15 wave 10, run 400)';
+    const heading = '### §5 as built (#166 wave 10, run 400)';
     expect(spec.indexOf('### 5.9 Proof'), 'the note sits after §5.9').toBeLessThan(spec.indexOf(heading));
     const note = flat(between('the path-identity spec, §5 as built', spec, heading, '## 6. The waves'));
     expect(note).not.toMatch(DEVIATION);
@@ -140,7 +140,7 @@ describe("the switch's prose is true (path-identity spec §5)", () => {
     expect(note).toContain('**Departures found while building.**');
   });
 
-  it('the CCR-15 spec carries wave 10 in §5.10 and in §8', () => {
+  it('the #166 spec carries wave 10 in §5.10 and in §8', () => {
     const s = flat(read(CCR_SPEC));
     const para = '**The Settings switch (wave 10), as built.** Wave 10 gives the lane two arms, then one';
     expect(s).toContain(para);

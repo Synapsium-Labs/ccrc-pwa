@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { generateWrapperBody, WrapperInvalid } from '../../shared/wrapper.mjs';
 
-const CLAUDE2 = { id: 'claude2', configDirSuffix: '.claude-personal', execKind: 'generated',
-  secretsFile: '.cc-secrets/claude2-oauth.env' };
+const CLAUDE9 = { id: 'claude9', configDirSuffix: '.claude-home', execKind: 'generated',
+  secretsFile: '.cc-secrets/claude9-oauth.env' };
 const NOSECRETS = { id: 'plain', configDirSuffix: '.claude-plain', execKind: 'generated' };
 const CODEX = { id: 'codex-a', configDirSuffix: '.claude-codex-a', execKind: 'codex',
   secretsFile: '.cc-secrets/codex-a.env' };
@@ -10,11 +10,11 @@ const INVALID_UPSTREAM_ID = 'not a legal id';
 
 describe('generateWrapperBody', () => {
   it('writes the three-line shape when the account has a secrets file', () => {
-    expect(generateWrapperBody(CLAUDE2, 'claude')).toBe(
+    expect(generateWrapperBody(CLAUDE9, 'claude')).toBe(
       '#!/usr/bin/env bash\n'
       + '# Generated from ~/.ccrc/accounts.json. Do not edit — `ccrc wrappers` rewrites it.\n'
-      + 'export CLAUDE_CONFIG_DIR="$HOME/.claude-personal"\n'
-      + '[ -r "$HOME/.cc-secrets/claude2-oauth.env" ] && . "$HOME/.cc-secrets/claude2-oauth.env"\n'
+      + 'export CLAUDE_CONFIG_DIR="$HOME/.claude-home"\n'
+      + '[ -r "$HOME/.cc-secrets/claude9-oauth.env" ] && . "$HOME/.cc-secrets/claude9-oauth.env"\n'
       + 'exec "$HOME/.local/bin/claude" "$@"\n',
     );
   });
@@ -74,7 +74,7 @@ describe('generateWrapperBody', () => {
   // wrapper's digest into that endpoint, and a reader sent to the wrong
   // mechanism when this test goes red would be looking at the wrong box.
   it('ends in exactly one newline', () => {
-    for (const a of [CLAUDE2, NOSECRETS]) {
+    for (const a of [CLAUDE9, NOSECRETS]) {
       const text = generateWrapperBody(a, 'claude');
       expect(text.endsWith('\n')).toBe(true);
       expect(text.endsWith('\n\n')).toBe(false);

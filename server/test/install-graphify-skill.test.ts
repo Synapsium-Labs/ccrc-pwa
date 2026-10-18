@@ -15,7 +15,7 @@ import { mkTmp } from './tmpHelpers.js';
 import { PKG_DESCRIPTION, skillMd } from './graphifySkillFixture.js';
 
 const INSTALLER = path.resolve(__dirname, '../../ccd/install-graphify-skill.sh');
-const HOMES = ['.claude', '.claude-personal', '.claude-corp', '.claude-gpt'];
+const HOMES = ['.claude', '.claude-home', '.claude-acme', '.claude-gpt'];
 let home: string; let pkg: string;
 const skill = (d: string, ...rest: string[]) => path.join(home, d, 'skills', 'graphify', ...rest);
 

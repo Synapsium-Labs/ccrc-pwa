@@ -1,4 +1,4 @@
-// CCR-15 wave 10 (path-identity spec 2026-10-12 §5.5, §5.9): the executor's FINAL RE-READ. After the job's last await
+// #166 wave 10 (path-identity spec 2026-10-12 §5.5, §5.9): the executor's FINAL RE-READ. After the job's last await
 // (the registry listing at step 5), with nothing awaited before the argv, the executor does four things:
 //   - it retires the marker's latch through its one helper;
 //   - it measures both capabilities;

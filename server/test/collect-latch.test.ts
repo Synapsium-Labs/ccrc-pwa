@@ -1,4 +1,4 @@
-// CCR-15 wave 10 (path-identity spec 2026-10-12 §5.4): the ONE latch helper, `collectRetireLatch`, and the control read
+// #166 wave 10 (path-identity spec 2026-10-12 §5.4): the ONE latch helper, `collectRetireLatch`, and the control read
 // it stands on, `collectControlNow`. The helper retires the legacy marker's latch through the store's one writer only
 // when L1's `collectLatchDue` says so. That needs a listing that is coherent, unpaused, listed, on the same epoch, and
 // that proves the marker absent while the latch is unset. The helper never heals a mismatch, writes its one row only on

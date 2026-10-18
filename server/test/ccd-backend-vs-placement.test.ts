@@ -143,7 +143,7 @@ describe('the four callers now ask the backend question', () => {
 // Codex's vocabulary — "Codex weekly cap reached (100%)", a 5h cooldown
 // countdown, the ccgpt-usage JSON shape. Until 2026-09-14 that trailer was a
 // single hardcoded line about `gpt`, which by then was wrong twice over: a
-// second Codex lane (`gpt2`) had existed since 2026-09-10 and had no line at
+// second Codex lane (`gpt7`) had existed since 2026-09-10 and had no line at
 // all, and both lanes had become home-able on 2026-09-11, so calling either an
 // "overflow lane" was false.
 //
@@ -171,7 +171,7 @@ describe('_is_codex_backend — and why it is not the complement of the other tw
     // `[[ "$w" == "$v" ]]` with an unquoted RHS would glob, and `"$v"*` would
     // prefix-match: both mutants survived the original suite, because no
     // fixture had a non-Codex account whose id extends a Codex one. The live
-    // roster is full of that shape (`claude` / `claude-corp` / `claude-dev1`),
+    // roster is full of that shape (`claude` / `claude-acme` / `claude-lab1`),
     // so this is one rename away from being real.
     const prefixy = parseRoster({ version: 1, accounts: [
       { id: 'an', label: 'AN', configDirSuffix: '.an', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },

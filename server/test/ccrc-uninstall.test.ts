@@ -56,7 +56,7 @@ import {
   plantLaneConfig, laneUnits, GPT_LANE_BINS, type StubRc, type LanePorts,
 } from './codexLaneFixture.js';
 import { psArgs } from './laneReaper.js';
-// CCR-15 wave 10: the collector's generation journal's ONE name (path-identity spec 2026-10-12 §5.3).
+// #166 wave 10: the collector's generation journal's ONE name (path-identity spec 2026-10-12 §5.3).
 import { COLLECT_LANE_JOURNAL_BASENAME } from '../src/coord/collectLaneJournal.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -331,11 +331,11 @@ function plantInstalledBox(home: string, opts: { versioned?: string[] } = {}): v
   writeFileSync(join(home, '.ccrc', 'accounts.json'), '{"fixture":"roster"}\n');
   writeFileSync(join(home, '.ccrc', 'accounts.sh'), [
     '# fixture projection — just enough for install-session-hooks.sh',
-    'CCRC_ACCOUNTS=(claude2 claude3)',
+    'CCRC_ACCOUNTS=(claude9 claude8)',
     '_ccrc_cfg_dir() {',
     '  case "$1" in',
-    '    claude2) printf \'%s\' "$HOME/.claude-claude2" ;;',
-    '    claude3) printf \'%s\' "$HOME/.claude-claude3" ;;',
+    '    claude9) printf \'%s\' "$HOME/.claude-claude9" ;;',
+    '    claude8) printf \'%s\' "$HOME/.claude-claude8" ;;',
     '  esac',
     '}',
     '',
@@ -365,25 +365,25 @@ function plantInstalledBox(home: string, opts: { versioned?: string[] } = {}): v
   writeFileSync(join(reg, 'reviewer-skill', 'SKILL.md'), '# the reviewer skill\n');
   writeFileSync(join(reg, 'history-skill', 'SKILL.md'), '# the history skill\n');
   writeFileSync(join(reg, 'history-skill', 'LICENSE.lossless-claw'), 'fixture licence\n');
-  // Two account homes. claude2: one managed entry per event shape the
-  // installer writes, one unmanaged entry, a CUSTOM statusLine. claude3:
+  // Two account homes. claude9: one managed entry per event shape the
+  // installer writes, one unmanaged entry, a CUSTOM statusLine. claude8:
   // no managed entry at all, hand-formatted.
-  mkdirSync(join(home, '.claude-claude2'), { recursive: true });
-  writeFileSync(join(home, '.claude-claude2', 'settings.json'), JSON.stringify({
+  mkdirSync(join(home, '.claude-claude9'), { recursive: true });
+  writeFileSync(join(home, '.claude-claude9', 'settings.json'), JSON.stringify({
     hooks: {
       Stop: [{ hooks: [MANAGED_HOOK] }, UNMANAGED_ENTRY],
       PreToolUse: [{ matcher: '*', hooks: [MANAGED_HOOK] }],
     },
     statusLine: { type: 'command', command: 'my-custom-statusline' },
   }, null, 2) + '\n');
-  mkdirSync(join(home, '.claude-claude3'), { recursive: true });
-  writeFileSync(join(home, '.claude-claude3', 'settings.json'), UNMANAGED_ONLY_SETTINGS);
+  mkdirSync(join(home, '.claude-claude8'), { recursive: true });
+  writeFileSync(join(home, '.claude-claude8', 'settings.json'), UNMANAGED_ONLY_SETTINGS);
   // Three wrapper-named files: MARKED (exactly what ccrc last wrote),
   // marker-less (somebody's hand-written launcher), and the upstream binary.
-  writeFileSync(join(bin, 'claude2'), markGenerated(
-    '#!/usr/bin/env bash\nexport CLAUDE_CONFIG_DIR="$HOME/.claude-claude2"\n'
+  writeFileSync(join(bin, 'claude9'), markGenerated(
+    '#!/usr/bin/env bash\nexport CLAUDE_CONFIG_DIR="$HOME/.claude-claude9"\n'
     + 'exec "$HOME/.local/bin/claude" "$@"\n'), { mode: 0o755 });
-  writeFileSync(join(bin, 'claude3'),
+  writeFileSync(join(bin, 'claude8'),
     '#!/usr/bin/env bash\n# hand-written launcher — NOT ccrc\'s\nexec /usr/bin/claude "$@"\n',
     { mode: 0o755 });
   writeFileSync(join(bin, 'claude'),
@@ -474,7 +474,7 @@ describe('ccrc uninstall: the live-session gate', () => {
     // Nothing was removed and no unit was touched: the gate runs FIRST.
     expect(existsSync(join(home, 'ccrc'))).toBe(true);
     expect(existsSync(join(home, '.local', 'bin', 'ccd'))).toBe(true);
-    expect(existsSync(join(home, '.local', 'bin', 'claude2'))).toBe(true);
+    expect(existsSync(join(home, '.local', 'bin', 'claude9'))).toBe(true);
     expect(existsSync(join(home, '.config', 'systemd', 'user', 'ccrc.service'))).toBe(true);
     expect(existsSync(join(home, 'systemctl-calls'))).toBe(false);
   });
@@ -665,7 +665,7 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     plantInstalledBox(home);
     const r = runVerb(home, 'uninstall');
     expect(r.code, r.stderr).toBe(0);
-    const s = settingsOf(home, 'claude2');
+    const s = settingsOf(home, 'claude9');
     const hooks = s['hooks'] as Record<string, unknown[]>;
     // The managed Stop entry is gone; the operator's own survives, deep-equal.
     expect(hooks['Stop']).toEqual([UNMANAGED_ENTRY]);
@@ -678,7 +678,7 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
       .filter((d) => d !== '20250101-000000');
     expect(backups.length).toBe(1);
     expect(readdirSync(join(home, 'ccrc-backups', backups[0]!)))
-      .toContain('.claude-claude2.settings.json');
+      .toContain('.claude-claude9.settings.json');
   });
 
   it('a settings.json with NO managed entry is not rewritten — byte-identical, hand formatting and all', () => {
@@ -686,34 +686,34 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     plantInstalledBox(home);
     const r = runVerb(home, 'uninstall');
     expect(r.code, r.stderr).toBe(0);
-    expect(readFileSync(join(home, '.claude-claude3', 'settings.json'), 'utf8'))
+    expect(readFileSync(join(home, '.claude-claude8', 'settings.json'), 'utf8'))
       .toBe(UNMANAGED_ONLY_SETTINGS);
   });
 
   it('wrappers: removes ONLY the marker-verified file — a marker-less file with a wrapper\'s name survives byte-identically, and so does the upstream binary', () => {
     const home = mkTmp('ccrc-uninst-wrappers-');
     plantInstalledBox(home);
-    const foreign = readFileSync(join(home, '.local', 'bin', 'claude3'), 'utf8');
+    const foreign = readFileSync(join(home, '.local', 'bin', 'claude8'), 'utf8');
     const r = runVerb(home, 'uninstall');
     expect(r.code, r.stderr).toBe(0);
-    expect(existsSync(join(home, '.local', 'bin', 'claude2')),
+    expect(existsSync(join(home, '.local', 'bin', 'claude9')),
       'the marker-verified wrapper survived').toBe(false);
-    expect(readFileSync(join(home, '.local', 'bin', 'claude3'), 'utf8'),
+    expect(readFileSync(join(home, '.local', 'bin', 'claude8'), 'utf8'),
       'the hand-written launcher was touched').toBe(foreign);
     expect(existsSync(join(home, '.local', 'bin', 'claude')),
       'the upstream binary was removed').toBe(true);
-    expect(r.stdout).toMatch(/uninstall: wrappers: removed .*claude2/);
+    expect(r.stdout).toMatch(/uninstall: wrappers: removed .*claude9/);
   });
 
   it('a marked-but-edited wrapper is KEPT and named — the edit is the operator\'s work', () => {
     const home = mkTmp('ccrc-uninst-edited-');
     plantInstalledBox(home);
-    const p = join(home, '.local', 'bin', 'claude2');
+    const p = join(home, '.local', 'bin', 'claude9');
     writeFileSync(p, readFileSync(p, 'utf8') + '# an operator\'s edit\n', { mode: 0o755 });
     const r = runVerb(home, 'uninstall');
     expect(r.code, r.stderr).toBe(0);
     expect(existsSync(p)).toBe(true);
-    expect(r.stdout).toMatch(/uninstall: wrappers: kept .*claude2.*edited/);
+    expect(r.stdout).toMatch(/uninstall: wrappers: kept .*claude9.*edited/);
   });
 
   it('~/.cc-sessions: ccrc\'s own artifacts go file-by-file; registry rows and operator switches stay', () => {
@@ -750,7 +750,7 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     // the proof the sweep is scoped to the one name, not a directory wipe.
     const home = mkTmp('ccrc-uninst-graphify-skills-');
     plantInstalledBox(home);
-    for (const acct of ['claude2', 'claude3']) {
+    for (const acct of ['claude9', 'claude8']) {
       const skills = join(home, `.claude-${acct}`, 'skills');
       mkdirSync(join(skills, 'graphify', 'references'), { recursive: true });
       writeFileSync(join(skills, 'graphify', 'SKILL.md'), '# the graphify skill\n');
@@ -760,7 +760,7 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     }
     const r = runVerb(home, 'uninstall');
     expect(r.code, r.stderr).toBe(0);
-    for (const acct of ['claude2', 'claude3']) {
+    for (const acct of ['claude9', 'claude8']) {
       const skills = join(home, `.claude-${acct}`, 'skills');
       expect(existsSync(join(skills, 'graphify')), `${acct}: graphify survived`).toBe(false);
       expect(existsSync(join(skills, 'ccrc-worker', 'SKILL.md')),

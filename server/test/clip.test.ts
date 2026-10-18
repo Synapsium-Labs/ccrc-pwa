@@ -10,7 +10,7 @@ import { CLIP_DOC_EXTS, CLIP_EXTS, CLIP_IMAGE_EXTS } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
 
-const ID = 'claude2-MekWarLive';
+const ID = 'claude9-project-f';
 const cfgFor = () => {
   const home = mkTmp('ccrc-');
   seedRoster(home);
@@ -83,8 +83,8 @@ describe('clipStem', () => {
     for (const raw of hostile) {
       const name = clipName('md', Date.parse('2026-07-26T15:03:40Z'), 'a1b2', clipStem(raw));
       expect(CLIP_NAME_RE.test(name), raw).toBe(true);
-      expect(clipPath('/home/u/.cc-clips', 'claude2-Proj', name))
-        .toBe(`/home/u/.cc-clips/claude2-Proj/${name}`);
+      expect(clipPath('/home/u/.cc-clips', 'claude9-Proj', name))
+        .toBe(`/home/u/.cc-clips/claude9-Proj/${name}`);
     }
   });
 });
@@ -137,7 +137,7 @@ describe('clipPath', () => {
   });
 
   it('accepts every real session id shape', () => {
-    for (const ok of ['claude2-OpenClawHetzner', 'claude-corp-data-internal', 'gpt-MekWarLive']) {
+    for (const ok of ['claude9-project-c', 'claude-acme-project-e', 'gpt-project-f']) {
       expect(clipPath('/home/u/.cc-clips', ok, 'clip-x.png')).toBe(`/home/u/.cc-clips/${ok}/clip-x.png`);
     }
   });
@@ -150,7 +150,7 @@ describe('clipPath', () => {
   it('refuses a name that could climb out of the session directory', () => {
     for (const bad of ['../../.ssh/authorized_keys', '../x.png', 'a/b.png', '..', '.', '',
                        'notaclip.png', 'clip-x.exe', 'clip-x.png/../../y.png']) {
-      expect(() => clipPath('/home/u/.cc-clips', 'claude2-Proj', bad)).toThrow(/bad-clip-name|bad-session-id/);
+      expect(() => clipPath('/home/u/.cc-clips', 'claude9-Proj', bad)).toThrow(/bad-clip-name|bad-session-id/);
     }
   });
 
@@ -158,8 +158,8 @@ describe('clipPath', () => {
     for (const ext of CLIP_EXTS) {
       const name = clipName(ext, Date.parse('2026-07-26T15:03:40Z'), 'a1b2');
       expect(CLIP_NAME_RE.test(name)).toBe(true);
-      expect(clipPath('/home/u/.cc-clips', 'claude2-Proj', name))
-        .toBe(`/home/u/.cc-clips/claude2-Proj/${name}`);
+      expect(clipPath('/home/u/.cc-clips', 'claude9-Proj', name))
+        .toBe(`/home/u/.cc-clips/claude9-Proj/${name}`);
     }
   });
 });

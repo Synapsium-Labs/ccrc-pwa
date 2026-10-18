@@ -1,4 +1,4 @@
-// CCR-15 wave 10, Task 13 (path-identity spec 2026-10-12 §5.3, §5.9): the temp-root collector's generation journal is
+// #166 wave 10, Task 13 (path-identity spec 2026-10-12 §5.3, §5.9): the temp-root collector's generation journal is
 // never backed up, restored or rolled back. A coord.db snapshot may move backward while the journal stays current, so a
 // restored database that disagrees with it stops the lane instead of re-arming it. These cases pin what the operator is
 // TOLD: both `CoordDbUnmigratable` restore sentences, `ccrc`'s update and backup usage, the one cross-side name, and the

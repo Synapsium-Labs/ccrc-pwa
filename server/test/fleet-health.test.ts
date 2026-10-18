@@ -47,7 +47,7 @@ function remoteDeps(
 // A COMPLETE FleetSession — the fixture was eight fields short of the type it
 // claims (server/tsconfig.json does not include test/, so nothing said so).
 const session = (id: string): FleetSession => ({
-  id, wrapper: 'claude', home: '/home/rc', project: id, workdir: `/data/projects/${id}`,
+  id, wrapper: 'claude', home: '/home/u', project: id, workdir: `/data/projects/${id}`,
   workspace: null, name: null, status: 'idle', statusUpdatedAt: null, limits: null,
   dialogPending: false, version: null, model: null, effort: null, ultracode: false,
   branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
@@ -245,7 +245,7 @@ describe('GET /api/fleet — degraded mode', () => {
     writeFileSync(cachePath, JSON.stringify({
       savedAt: 1785300000001,
       sessions: [{
-        id: 'claude-Cached', wrapper: 'claude', home: '/home/rc', project: 'claude-Cached',
+        id: 'claude-Cached', wrapper: 'claude', home: '/home/u', project: 'claude-Cached',
         workdir: '/data/projects/claude-Cached', workspace: null, name: null, status: 'idle',
         statusUpdatedAt: null, limits: null, dialogPending: false, version: null,
         model: null, effort: null, ultracode: false, branch: null,

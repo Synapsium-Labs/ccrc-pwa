@@ -516,7 +516,7 @@ describe('refusals are answers', () => {
     // The bound is a DEADLINE for the whole workspace rather than a per-entry
     // timeout, so 226 ignored entries cannot cost 226 timeouts. Measured on
     // this box against the tree `--ignored=matching` was chosen for
-    // (custom-tools: 226 collapsed entries, 355,392 entries beneath them) the
+    // (project-d: 226 collapsed entries, 355,392 entries beneath them) the
     // whole scan costs 3.4 s, so the 30 s budget is ~9x the largest real tree
     // here and does not fire in practice — which is exactly why the expiry path
     // needs a fixture rather than a real tree. `timeout` is a shell function in
@@ -749,7 +749,7 @@ describe('destruction order', () => {
     expect(t.pr).toBe(42);
     // ws-rm deleted $REG/<id>.uuid and with it the id->transcript mapping.
     // Derived from the wrapper, never hardcoded: _ws_least_loaded may pick
-    // claude2 (~/.claude-personal) and `.claude/projects/` would then be a
+    // claude9 (~/.claude-home) and `.claude/projects/` would then be a
     // substring that never appears.
     expect(String(t.transcript)).toContain(`${CFG_DIR[wrapper]!}/projects/`);
     expect(Array.isArray(t.ignored)).toBe(true);

@@ -2,8 +2,8 @@
 // Behaviour is asserted by running the GENERATED file in a real bash
 // subshell, never by comparing generated text to a hand-written expectation:
 // `_ccrc_id_wrapper`'s arm order is the point of this generator (today's
-// hand-written `ccd` equivalent is only correct by accident — `claude-corp-`
-// and `claude-dev0-` tie at 12 characters, and `claude2-` precedes `claude-`
+// hand-written `ccd` equivalent is only correct by accident — `claude-acme-`
+// and `claude-lab0-` tie at 12 characters, and `claude9-` precedes `claude-`
 // by hand-authoring luck, not a rule), so a test that pinned literal arm
 // text would fail against a correctly-sorted generator the moment two ids
 // happened to tie.

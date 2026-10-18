@@ -28,7 +28,7 @@ describe('ws-restore\'s supersede emit lives inside the reap flock region', () =
     const lockAt = body.indexOf('flock -n "$lfd"');
     const emitAt = body.indexOf('_lc_done restore');
     // THE ERASE, which is a helper call and no longer three open-coded
-    // `rm -f`s: `_ws_unarchive` owns what an archive consists of (CCR-10),
+    // `rm -f`s: `_ws_unarchive` owns what an archive consists of (#127),
     // and this landmark follows it so the ordering stays pinned.
     const rmAt = body.indexOf('_ws_unarchive "$id"');
     const closeAt = body.indexOf('exec {lfd}>&-', rmAt);

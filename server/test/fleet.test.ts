@@ -32,8 +32,8 @@ describe('idHomeWrapper', () => {
 
   it('longest prefix wins', () => {
     expect(idHomeWrapper(roster, 'claude-b-demo-app-ts')).toBe('claude-b');
-    expect(idHomeWrapper(roster, 'claude-a-MekWarLive')).toBe('claude-a');
-    expect(idHomeWrapper(roster, 'claude-synapsium-platform')).toBe('claude');
+    expect(idHomeWrapper(roster, 'claude-a-project-f')).toBe('claude-a');
+    expect(idHomeWrapper(roster, 'claude-project-k')).toBe('claude');
     expect(idHomeWrapper(roster, 'gpt-foo')).toBe('gpt');
   });
 
@@ -75,7 +75,7 @@ describe('idHomeWrapper', () => {
       { id: 'work', label: 'w', configDirSuffix: '.work', exec: { kind: 'generated' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
       { id: 'main', label: 'm', configDirSuffix: '.main', exec: { kind: 'upstream' }, homeAble: true, hue: 'violet', telemetry: 'anthropic' },
     ] });
-    expect(idHomeWrapper(r, 'OpenClawHetzner')).toBe('main');
+    expect(idHomeWrapper(r, 'project-c')).toBe('main');
   });
 });
 
@@ -83,27 +83,27 @@ describe('assembleFleet', () => {
   it('joins registry, live state, limits, and tmux aliveness', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
-    seedSession(home, 'claude-a-MekWarLive', 'claude-a');
+    seedSession(home, 'claude-a-project-f', 'claude-a');
     seedSession(home, 'claude-dead-proj', 'claude');
     mkdirSync(path.join(home, '.claude-a', 'sessions'), { recursive: true });
     writeFileSync(path.join(home, '.claude-a', 'sessions', '40613.json'), JSON.stringify({
-      pid: 40613, sessionId: '1'.repeat(36), cwd: '/data/projects/MekWarLive',
-      name: 'mekwar-a1', status: 'busy', statusUpdatedAt: 1784582728369, version: '2.1.210',
+      pid: 40613, sessionId: '1'.repeat(36), cwd: '/data/projects/project-f',
+      name: 'project-f-a1', status: 'busy', statusUpdatedAt: 1784582728369, version: '2.1.210',
     }));
     mkdirSync(path.join(home, '.cc-limits'), { recursive: true });
     const now = 1784600000;
     writeFileSync(path.join(home, '.cc-limits', 'claude-a.json'), JSON.stringify({ five: 55, seven: 70, ts: now - 60 }));
 
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: args.includes('=cc-claude-a-MekWarLive:') ? 0 : 1, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { code: args.includes('=cc-claude-a-project-f:') ? 0 : 1, stdout: '', stderr: '' };
       if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
       return { code: 0, stdout: '', stderr: '' };
     };
 
     const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), now);
-    const mek = fleet.find((s) => s.id === 'claude-a-MekWarLive')!;
+    const mek = fleet.find((s) => s.id === 'claude-a-project-f')!;
     expect(mek.status).toBe('busy');
-    expect(mek.name).toBe('mekwar-a1');
+    expect(mek.name).toBe('project-f-a1');
     expect(mek.limits).toEqual({ five: 55, seven: 70 });
     expect(mek.home).toBe('claude-a');
     const dead = fleet.find((s) => s.id === 'claude-dead-proj')!;
@@ -520,7 +520,7 @@ describe('a running Workflow reads busy over an idle pid.json', () => {
   const assemble = async (workflowActive: boolean | undefined, live: Record<string, unknown> | null = {}) => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
-    seedSession(home, 'claude-a-MekWarLive', 'claude-a');
+    seedSession(home, 'claude-a-project-f', 'claude-a');
     mkdirSync(path.join(home, '.claude-a', 'sessions'), { recursive: true });
     if (live) writeFileSync(
       path.join(home, '.claude-a', 'sessions', '40613.json'),
@@ -532,10 +532,10 @@ describe('a running Workflow reads busy over an idle pid.json', () => {
       return { code: 0, stdout: '', stderr: '' };
     };
     const sl = new Map<string, Statusline>([
-      ['claude-a-MekWarLive', { model: 'Opus 5.5', ultracode: false, workflowActive }],
+      ['claude-a-project-f', { model: 'Opus 5.5', ultracode: false, workflowActive }],
     ]);
     const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), undefined, undefined, sl);
-    return fleet.find((s) => s.id === 'claude-a-MekWarLive')!.status;
+    return fleet.find((s) => s.id === 'claude-a-project-f')!.status;
   };
 
   it('an idle session with a Workflow row on screen is busy', async () => {
@@ -581,7 +581,7 @@ describe('derived session handles', () => {
   const build = async (live: Record<string, unknown>) => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
-    seedSession(home, 'claude-a-MekWarLive', 'claude-a');
+    seedSession(home, 'claude-a-project-f', 'claude-a');
     mkdirSync(path.join(home, '.claude-a', 'sessions'), { recursive: true });
     writeFileSync(
       path.join(home, '.claude-a', 'sessions', '40613.json'),
@@ -593,11 +593,11 @@ describe('derived session handles', () => {
       return { code: 0, stdout: '', stderr: '' };
     };
     const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run));
-    return fleet.find((s) => s.id === 'claude-a-MekWarLive')!;
+    return fleet.find((s) => s.id === 'claude-a-project-f')!;
   };
 
   it('drops a name Claude Code declares derived', async () => {
-    expect((await build({ name: 'mekwarlive-e7', nameSource: 'derived' })).name).toBeNull();
+    expect((await build({ name: 'project-f-e7', nameSource: 'derived' })).name).toBeNull();
   });
 
   it('keeps a name with no nameSource at all — an older file, chosen by a human', async () => {
@@ -698,11 +698,11 @@ describe('PR state on the wire', () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
     seedSession(home, 'demo-quiet-basin', 'claude', {
-      workspace: 'quiet-basin', hold: 'program:agent-evals wave:2/4',
+      workspace: 'quiet-basin', hold: 'program:prog-j wave:2/4',
     });
     seedSession(home, 'demo-still-lake', 'claude', { workspace: 'still-lake' });
     const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })));
-    expect(fleet.find((x) => x.id === 'demo-quiet-basin')!.held).toBe('program:agent-evals wave:2/4');
+    expect(fleet.find((x) => x.id === 'demo-quiet-basin')!.held).toBe('program:prog-j wave:2/4');
     // Absence IS release — the verb unlinks — so no `.hold` file must reach
     // the wire as null, not as an empty string a chip would render blank.
     expect(fleet.find((x) => x.id === 'demo-still-lake')!.held).toBeNull();
@@ -967,21 +967,21 @@ describe('hook state on the wire', () => {
   it('status is IDENTICAL with and without a hookstate for the same fixture — status is frozen against hook data', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
-    seedSession(home, 'claude-a-MekWarLive', 'claude-a');
+    seedSession(home, 'claude-a-project-f', 'claude-a');
     mkdirSync(path.join(home, '.claude-a', 'sessions'), { recursive: true });
     writeFileSync(path.join(home, '.claude-a', 'sessions', '40613.json'), JSON.stringify({
-      pid: 40613, sessionId: '1'.repeat(36), cwd: '/data/projects/MekWarLive',
-      name: 'mekwar-a1', status: 'busy', statusUpdatedAt: 1784582728369, version: '2.1.210',
+      pid: 40613, sessionId: '1'.repeat(36), cwd: '/data/projects/project-f',
+      name: 'project-f-a1', status: 'busy', statusUpdatedAt: 1784582728369, version: '2.1.210',
     }));
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: args.includes('=cc-claude-a-MekWarLive:') ? 0 : 1, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { code: args.includes('=cc-claude-a-project-f:') ? 0 : 1, stdout: '', stderr: '' };
       if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
       return { code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
 
     const withoutHook = await assembleFleet(localIO, cfg, new Tmux(run), 1784600000);
-    const hookStates = new Map<string, HookState>([['claude-a-MekWarLive', mkHookState({ state: 'done' })]]);
+    const hookStates = new Map<string, HookState>([['claude-a-project-f', mkHookState({ state: 'done' })]]);
     const withHook = await assembleFleet(
       localIO, cfg, new Tmux(run), 1784600000, undefined, undefined, undefined, undefined, hookStates,
     );
@@ -991,14 +991,14 @@ describe('hook state on the wire', () => {
     // idle status to busy, or demoting this already-busy one) is the exact
     // regression this fixture exists to catch. `done` above cannot pin that:
     // it shares no vocabulary with anything status-adjacent.
-    const waitingHookStates = new Map<string, HookState>([['claude-a-MekWarLive', mkHookState({ state: 'waiting' })]]);
+    const waitingHookStates = new Map<string, HookState>([['claude-a-project-f', mkHookState({ state: 'waiting' })]]);
     const withWaitingHook = await assembleFleet(
       localIO, cfg, new Tmux(run), 1784600000, undefined, undefined, undefined, undefined, waitingHookStates,
     );
 
-    const before = withoutHook.find((x) => x.id === 'claude-a-MekWarLive')!;
-    const after = withHook.find((x) => x.id === 'claude-a-MekWarLive')!;
-    const afterWaiting = withWaitingHook.find((x) => x.id === 'claude-a-MekWarLive')!;
+    const before = withoutHook.find((x) => x.id === 'claude-a-project-f')!;
+    const after = withHook.find((x) => x.id === 'claude-a-project-f')!;
+    const afterWaiting = withWaitingHook.find((x) => x.id === 'claude-a-project-f')!;
     expect(before.status).toBe('busy');
     expect(after.status).toBe(before.status);
     expect(afterWaiting.status).toBe(before.status);
@@ -1368,34 +1368,34 @@ describe('board placement on the wire (Task 3, fix round 1 coverage)', () => {
   it('a stamped, held session boards on its COORDINATOR project, not its own — kills `stamped` forced to a constant', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
-    seedSession(home, 'demo-worker', 'claude', { hold: 'program:agent-evals wave:1/2' });
+    seedSession(home, 'demo-worker', 'claude', { hold: 'program:prog-j wave:1/2' });
     const coord = mkCoord();
     const opened = coord.openRun({
-      program: 'agent-evals', title: 'wave 1', project: 'demo-worker',
-      wave: 1, waveOf: 2, claimedBy: 'demo-coordinator', coordProject: 'intake-platform',
+      program: 'prog-j', title: 'wave 1', project: 'demo-worker',
+      wave: 1, waveOf: 2, claimedBy: 'demo-coordinator', coordProject: 'project-n',
     }) as { id: number };
     coord.bindSession(opened.id, 'demo-worker');
     const fleet = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home }), dead, NOW_S,
       undefined, undefined, undefined, undefined, undefined, undefined, coord,
     );
-    expect(fleet.find((x) => x.id === 'demo-worker')!.boardProject).toBe('intake-platform');
+    expect(fleet.find((x) => x.id === 'demo-worker')!.boardProject).toBe('project-n');
   });
 
   it('newest wins when two runs stamp the same session with different coordinators', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
-    seedSession(home, 'demo-worker', 'claude', { hold: 'program:agent-evals wave:2/2' });
+    seedSession(home, 'demo-worker', 'claude', { hold: 'program:prog-j wave:2/2' });
     const coord = mkCoord();
     const first = coord.openRun({
-      program: 'agent-evals', title: 'wave 1', project: 'demo-worker',
+      program: 'prog-j', title: 'wave 1', project: 'demo-worker',
       wave: 1, waveOf: 2, claimedBy: 'demo-coordinator', coordProject: 'old-coordinator',
     }) as { id: number };
     coord.bindSession(first.id, 'demo-worker');
     // Wave 2's run is opened before wave 1 closes (the coordinator protocol's
     // own shape) — its higher autoincrement id is what "newest" means here.
     const second = coord.openRun({
-      program: 'agent-evals', title: 'wave 2', project: 'demo-worker',
+      program: 'prog-j', title: 'wave 2', project: 'demo-worker',
       wave: 2, waveOf: 2, claimedBy: 'demo-coordinator', coordProject: 'new-coordinator',
     }) as { id: number };
     coord.bindSession(second.id, 'demo-worker');
@@ -1415,7 +1415,7 @@ describe('board placement on the wire (Task 3, fix round 1 coverage)', () => {
     // keyed on the session's id and hide exactly the bug this test exists to
     // catch.
     seedSession(home, 'demo-worker3', 'claude', {
-      project: 'demo-worker3-project', hold: 'program:agent-evals wave:1/1',
+      project: 'demo-worker3-project', hold: 'program:prog-j wave:1/1',
     });
     const coord = mkCoord();
     // A run whose WORK is in this session's own project and which is bound to
@@ -1429,7 +1429,7 @@ describe('board placement on the wire (Task 3, fix round 1 coverage)', () => {
     coord.bindSession(foreign.id, 'demo-worker3-project');
     // This session's OWN stamp, via a run whose `project` is unrelated.
     const sessionRun = coord.openRun({
-      program: 'agent-evals', title: 'wave 1', project: 'unrelated-project',
+      program: 'prog-j', title: 'wave 1', project: 'unrelated-project',
       wave: 1, waveOf: 1, claimedBy: 'demo-coordinator', coordProject: 'bysession-answer',
     }) as { id: number };
     coord.bindSession(sessionRun.id, 'demo-worker3');
@@ -1451,7 +1451,7 @@ describe('board placement on the wire (Task 3, fix round 1 coverage)', () => {
     seedSession(home, 'demo-worker4', 'claude', { project: 'demo-worker4-project' });
     const coord = mkCoord();
     const run = coord.openRun({
-      program: 'agent-evals', title: 'wave 1', project: 'unrelated-project',
+      program: 'prog-j', title: 'wave 1', project: 'unrelated-project',
       wave: 1, waveOf: 1, claimedBy: 'demo-coordinator', coordProject: 'should-be-ignored',
     }) as { id: number };
     coord.bindSession(run.id, 'demo-worker4');
@@ -1466,14 +1466,14 @@ describe('board placement on the wire (Task 3, fix round 1 coverage)', () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
     seedSession(home, 'demo-worker5', 'claude', {
-      project: 'demo-worker5-project', hold: 'program:agent-evals wave:1/1',
+      project: 'demo-worker5-project', hold: 'program:prog-j wave:1/1',
     });
     const coord = mkCoord();
     // A run exists and is stamped, but names a DIFFERENT session —
     // 'demo-worker5' is never `bindSession`-ed, so the stamp table has no
     // entry for it at all.
     const run = coord.openRun({
-      program: 'agent-evals', title: 'wave 1', project: 'other-project',
+      program: 'prog-j', title: 'wave 1', project: 'other-project',
       wave: 1, waveOf: 1, claimedBy: 'demo-coordinator', coordProject: 'not-this-one',
     }) as { id: number };
     coord.bindSession(run.id, 'someone-else');
@@ -1494,11 +1494,11 @@ describe('board placement on the wire (Task 3, fix round 1 coverage)', () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
     seedSession(home, 'demo-worker6', 'claude', {
-      project: 'demo-worker6-project', hold: 'program:agent-evals wave:1/1',
+      project: 'demo-worker6-project', hold: 'program:prog-j wave:1/1',
     });
     const coord = mkCoord();
     const run = coord.openRun({
-      program: 'agent-evals', title: 'wave 1', project: 'demo-worker6',
+      program: 'prog-j', title: 'wave 1', project: 'demo-worker6',
       wave: 1, waveOf: 1, claimedBy: 'demo-coordinator', coordProject: 'closed-wave-coordinator',
     }) as { id: number };
     coord.bindSession(run.id, 'demo-worker6');
@@ -1529,17 +1529,17 @@ describe('board placement on the wire (Task 3, fix round 1 coverage)', () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
     seedSession(home, 'demo-worker8', 'claude', {
-      project: 'demo-worker8-project', hold: 'program:agent-evals wave:2/2',
+      project: 'demo-worker8-project', hold: 'program:prog-j wave:2/2',
     });
     const coord = mkCoord();
     const stampedRun = coord.openRun({
-      program: 'agent-evals', title: 'wave 1', project: 'demo-worker8',
+      program: 'prog-j', title: 'wave 1', project: 'demo-worker8',
       wave: 1, waveOf: 2, claimedBy: 'demo-coordinator', coordProject: 'real-coordinator',
     }) as { id: number };
     coord.bindSession(stampedRun.id, 'demo-worker8');
     // Opened AFTER (higher id — "newer"), but no coordProject given at all.
     const unstampedRun = coord.openRun({
-      program: 'agent-evals', title: 'wave 2', project: 'demo-worker8',
+      program: 'prog-j', title: 'wave 2', project: 'demo-worker8',
       wave: 2, waveOf: 2, claimedBy: 'demo-coordinator',
     }) as { id: number };
     coord.bindSession(unstampedRun.id, 'demo-worker8');
@@ -1562,12 +1562,12 @@ describe('board placement on the wire (Task 3, fix round 1 coverage)', () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
     seedSession(home, 'ct-worker', 'claude', {
-      project: 'custom-tools', hold: 'program:qdrant wave:10/10',
+      project: 'project-d', hold: 'program:qdrant wave:10/10',
     });
     const coord = mkCoord();
-    // The cross-repo worker: work in custom-tools, coordinator in ccrc-pwa.
+    // The cross-repo worker: work in project-d, coordinator in ccrc-pwa.
     const crossRepo = coord.openRun({
-      program: 'qdrant', title: 'wave 10', project: 'custom-tools',
+      program: 'qdrant', title: 'wave 10', project: 'project-d',
       wave: 10, waveOf: 10, claimedBy: 'ccrc-pwa-amber-summit', coordProject: 'ccrc-pwa',
     }) as { id: number };
     coord.bindSession(crossRepo.id, 'ct-worker');
@@ -1622,34 +1622,34 @@ describe('board placement on the wire (Task 3, fix round 1 coverage)', () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
     seedSession(home, 'ct-worker2', 'claude', {
-      project: 'custom-tools', hold: 'program:qdrant wave:10/10',
+      project: 'project-d', hold: 'program:qdrant wave:10/10',
     });
     const coord = mkCoord();
-    // This worker's coordinator lives in intake-platform.
+    // This worker's coordinator lives in project-n.
     const mine = coord.openRun({
-      program: 'qdrant', title: 'wave 10', project: 'custom-tools',
-      wave: 10, waveOf: 10, claimedBy: 'intake-platform-keen-meadow', coordProject: 'intake-platform',
+      program: 'qdrant', title: 'wave 10', project: 'project-d',
+      wave: 10, waveOf: 10, claimedBy: 'project-n-keen-meadow', coordProject: 'project-n',
     }) as { id: number };
     coord.bindSession(mine.id, 'ct-worker2');
-    // An UNRELATED programme whose WORK happens in intake-platform, coordinated
+    // An UNRELATED programme whose WORK happens in project-n, coordinated
     // from ccrc-pwa. A project-keyed hop reads this as "ccrc-pwa coordinates
-    // intake-platform" and walks the row one card too far.
+    // project-n" and walks the row one card too far.
     const unrelated = coord.openRun({
-      program: 'intake-thing', title: 'wave 1', project: 'intake-platform',
+      program: 'prog-i', title: 'wave 1', project: 'project-n',
       wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-amber-summit', coordProject: 'ccrc-pwa',
     }) as { id: number };
-    coord.bindSession(unrelated.id, 'intake-worker');
+    coord.bindSession(unrelated.id, 'project-n-worker');
     const fleet = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home }), dead, NOW_S,
       undefined, undefined, undefined, undefined, undefined, undefined, coord,
     );
-    expect(fleet.find((x) => x.id === 'ct-worker2')!.boardProject).toBe('intake-platform');
+    expect(fleet.find((x) => x.id === 'ct-worker2')!.boardProject).toBe('project-n');
   });
 
   it('a REFUSED placement read emits null on every row — never a non-null that reads as "placed at home" (D-2875)', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
-    seedSession(home, 'demo-worker5', 'claude', { hold: 'program:agent-evals wave:1/1' });
+    seedSession(home, 'demo-worker5', 'claude', { hold: 'program:prog-j wave:1/1' });
     const coord = mkCoord();
     vi.spyOn(coord, 'coordPlacementStamps').mockReturnValue({ ok: false, kind: 'run-unreadable', detail: 'closed for the test' });
     const fleet = await assembleFleet(
@@ -1764,10 +1764,10 @@ describe('assembleFleet hands back the pane pids it read (worker stall watch wav
   const pidsFor = async (listPanes: { code: number; stdout: string }): Promise<Map<string, number | null>> => {
     const home = mkTmp('ccrc-fleet-pids-');
     seedRoster(home);
-    seedSession(home, 'claude-a-MekWarLive', 'claude-a');
+    seedSession(home, 'claude-a-project-f', 'claude-a');
     seedSession(home, 'claude-dead-proj', 'claude');
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: args.includes('=cc-claude-a-MekWarLive:') ? 0 : 1, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { code: args.includes('=cc-claude-a-project-f:') ? 0 : 1, stdout: '', stderr: '' };
       if (args[0] === 'list-panes') return { code: listPanes.code, stdout: listPanes.stdout, stderr: '' };
       return { code: 0, stdout: '', stderr: '' };
     };
@@ -1778,11 +1778,11 @@ describe('assembleFleet hands back the pane pids it read (worker stall watch wav
   };
 
   it('fills the map with the pid of every ALIVE row, and gives a row whose pane is not alive no entry', async () => {
-    expect([...await pidsFor({ code: 0, stdout: '40613\n' })]).toEqual([['claude-a-MekWarLive', 40613]]);
+    expect([...await pidsFor({ code: 0, stdout: '40613\n' })]).toEqual([['claude-a-project-f', 40613]]);
   });
 
   it('records null for an alive row whose pid tmux did not answer, never dropping the row', async () => {
-    expect([...await pidsFor({ code: 1, stdout: '' })]).toEqual([['claude-a-MekWarLive', null]]);
+    expect([...await pidsFor({ code: 1, stdout: '' })]).toEqual([['claude-a-project-f', null]]);
   });
 });
 

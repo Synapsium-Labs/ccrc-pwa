@@ -25,11 +25,11 @@ import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
 import { degradedReadIO, unreadableField, degradedStatIO } from './ioDoubles.js';
 
-const ID = 'claude-a-MekWarLive';
+const ID = 'claude-a-project-f';
 const UUID_A = 'a'.repeat(36);
 const UUID_B = 'b'.repeat(36);
-const WORKDIR = '/data/projects/MekWarLive';
-const MUNGED = '-data-projects-MekWarLive';
+const WORKDIR = '/data/projects/project-f';
+const MUNGED = '-data-projects-project-f';
 const PID = 40613;
 
 const userLine = (uuid: string, text: string): string =>
@@ -55,13 +55,13 @@ const turn = (text: string): string =>
 const seed = (home: string): void => {
   const reg = path.join(home, '.cc-sessions');
   mkdirSync(reg, { recursive: true });
-  const fields = { wrapper: 'claude-a', project: 'MekWarLive', workdir: WORKDIR, uuid: UUID_A, started: '1' };
+  const fields = { wrapper: 'claude-a', project: 'project-f', workdir: WORKDIR, uuid: UUID_A, started: '1' };
   for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${ID}.${k}`), v);
 
   const sess = path.join(home, '.claude-a', 'sessions');
   mkdirSync(sess, { recursive: true });
   writeFileSync(path.join(sess, `${PID}.json`), JSON.stringify({
-    pid: PID, sessionId: UUID_A, cwd: WORKDIR, name: 'mekwar-a1',
+    pid: PID, sessionId: UUID_A, cwd: WORKDIR, name: 'project-f-a1',
     status: 'idle', statusUpdatedAt: 1784582728369, version: '2.1.210',
   }));
 
@@ -2774,7 +2774,7 @@ describe('chat header: an unmeasured live status file is not a session at rest (
 // `status` is written by this frame and nothing else.
 //
 // So a status learned in an EARLIER connection outlived it. MEASURED
-// 2026-09-10 on `expoAI-assistant-warm-cove`: a swap into another lane left
+// 2026-09-10 on `project-h-warm-cove`: a swap into another lane left
 // the pane gone for 4.8s (`ccd swap` 10:20:19 -> re-spawn 10:20:23), a client
 // watching it was told `dead`, and the socket that would have corrected it on
 // its next poll was replaced instead (screen closed and reopened, phone
@@ -2941,7 +2941,7 @@ describe('registry ladder: a mid-stream degrade never interrupts the open tail (
 
 /**
  * THE SYMLINK-MUNGE MISMATCH, pinned at the stream level — the exact shape of
- * `claude-b-data-internal` in production. Claude Code munges its PHYSICAL
+ * `claude-b-project-e` in production. Claude Code munges its PHYSICAL
  * cwd; the registry keeps the path ccd wrote; when the workdir traverses a
  * symlink and the session is DEAD (no live cwd to paper over it), the chat
  * used to look under the registry munge and render "Can't find this session's
@@ -2953,14 +2953,14 @@ describe('session WS — dead session behind a symlinked workdir', () => {
     seedRoster(home);
     // The production chain in miniature: <home>/data-link -> <home>/volume,
     // registry workdir through the link, transcript under the physical munge.
-    const volumeDir = path.join(home, 'volume', 'projects', 'MekWarLive');
+    const volumeDir = path.join(home, 'volume', 'projects', 'project-f');
     mkdirSync(volumeDir, { recursive: true });
     symlinkSync(path.join(home, 'volume'), path.join(home, 'data-link'));
     const reg = path.join(home, '.cc-sessions');
     mkdirSync(reg, { recursive: true });
     const fields = {
-      wrapper: 'claude-a', project: 'MekWarLive',
-      workdir: path.join(home, 'data-link', 'projects', 'MekWarLive'),
+      wrapper: 'claude-a', project: 'project-f',
+      workdir: path.join(home, 'data-link', 'projects', 'project-f'),
       uuid: UUID_A, started: '1',
     };
     for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${ID}.${k}`), v);

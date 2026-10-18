@@ -70,10 +70,10 @@ const ARCH = `_ws_unsupervise() { echo "unsupervise $1" >> "$HOME/ccd-calls"; };
 describe('ccd ws-hold / ws-release', () => {
   it('holds a workspace: writes the reason verbatim', () => {
     const id = workspaceId();
-    const out = h.sh(`cmd_ws_hold --session ${id} --reason "program:agent-evals wave:1/4"`);
+    const out = h.sh(`cmd_ws_hold --session ${id} --reason "program:prog-j wave:1/4"`);
     expect(out).toContain(`held ${id}`);
     expect(fs.readFileSync(path.join(h.home, '.cc-sessions', `${id}.hold`), 'utf8'))
-      .toBe('program:agent-evals wave:1/4');
+      .toBe('program:prog-j wave:1/4');
   });
 
   it('re-hold updates the reason in place, exit 0', () => {
@@ -161,10 +161,10 @@ describe('ccd ws-hold / ws-release', () => {
     // this pins that it did not become "no spaces allowed" — the convention
     // the composer's own placeholder teaches has a space in it.
     const id = workspaceId();
-    expect(h.sh(`cmd_ws_hold --session ${id} --reason "program:agent-evals wave:2/4"`))
+    expect(h.sh(`cmd_ws_hold --session ${id} --reason "program:prog-j wave:2/4"`))
       .toContain(`held ${id}`);
     expect(fs.readFileSync(path.join(h.home, '.cc-sessions', `${id}.hold`), 'utf8'))
-      .toBe('program:agent-evals wave:2/4');
+      .toBe('program:prog-j wave:2/4');
   });
 
   it('a failed UNLINK refuses — never `released` on stdout with the hold still on disk', () => {

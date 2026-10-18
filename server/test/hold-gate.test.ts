@@ -125,7 +125,7 @@ describe('sweepMerged — a held merge is announced, never acted on', () => {
     // exactly ONE notification, whose reason clause is the hold verbatim.
     const home = seed(['demo-quiet-basin']);
     liveIdle(home);
-    hold(home, 'demo-quiet-basin', 'program:agent-evals wave:1/4');
+    hold(home, 'demo-quiet-basin', 'program:prog-j wave:1/4');
     const calls: string[][] = [];
     const notify = vi.fn(async (_p: PushPayload) => {});
     const deps = { ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), push: { notify } as never };
@@ -138,7 +138,7 @@ describe('sweepMerged — a held merge is announced, never acted on', () => {
     expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
     expect(notify).toHaveBeenCalledTimes(1);
     expect(notify.mock.calls[0]![0].body)
-      .toBe('PR #42 merged — program:agent-evals wave:1/4; nothing archived.');
+      .toBe('PR #42 merged — program:prog-j wave:1/4; nothing archived.');
     w.stop();
   });
 
@@ -151,7 +151,7 @@ describe('sweepMerged — a held merge is announced, never acted on', () => {
     // that has since gone; the alternative is saying the same merge twice.
     const home = seed(['demo-quiet-basin']);
     liveIdle(home);
-    hold(home, 'demo-quiet-basin', 'program:agent-evals wave:3/4');
+    hold(home, 'demo-quiet-basin', 'program:prog-j wave:3/4');
     const calls: string[][] = [];
     const notify = vi.fn(async (_p: PushPayload) => {});
     const deps = { ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), push: { notify } as never };
@@ -159,7 +159,7 @@ describe('sweepMerged — a held merge is announced, never acted on', () => {
     await w.tick();
     await sweepSettled(w);
     await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
-    expect(notify.mock.calls[0]![0].body).toContain('program:agent-evals wave:3/4');
+    expect(notify.mock.calls[0]![0].body).toContain('program:prog-j wave:3/4');
 
     release(home, 'demo-quiet-basin');
     forceDue(w);
@@ -175,7 +175,7 @@ describe('sweepMerged — a held merge is announced, never acted on', () => {
   it('the merged push says WHAT is in the way, verbatim, and collapses on the session', async () => {
     const home = seed(['demo-quiet-basin']);
     liveIdle(home);
-    hold(home, 'demo-quiet-basin', 'program:agent-evals wave:1/4');
+    hold(home, 'demo-quiet-basin', 'program:prog-j wave:1/4');
     const calls: string[][] = [];
     const notify = vi.fn(async (_p: PushPayload) => {});
     const deps = { ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), push: { notify } as never };
@@ -189,7 +189,7 @@ describe('sweepMerged — a held merge is announced, never acted on', () => {
     // body says plainly that nothing was destroyed. This wording is DELIBERATELY
     // unchanged from when the held branch was the only one that could produce
     // it: what changed underneath is that every merge now reads this way.
-    expect(payload.body).toContain('program:agent-evals wave:1/4');
+    expect(payload.body).toContain('program:prog-j wave:1/4');
     expect(payload.body).toContain('nothing archived');
     // `pushOne`'s default `${kind}-${sessionId}` collapse key, deliberately not
     // overridden: a later statement about this workspace REPLACES this one on
@@ -201,7 +201,7 @@ describe('sweepMerged — a held merge is announced, never acted on', () => {
   it('the merged push latch resets when the PR number changes', async () => {
     const home = seed(['demo-quiet-basin']);
     liveIdle(home);
-    hold(home, 'demo-quiet-basin', 'program:agent-evals wave:1/4');
+    hold(home, 'demo-quiet-basin', 'program:prog-j wave:1/4');
     const calls: string[][] = [];
     const notify = vi.fn(async (_p: PushPayload) => {});
     let prNumber = 591;
@@ -279,7 +279,7 @@ describe('sweepMerged — a held merge is announced, never acted on', () => {
     // a workspace this box could not read the hold of.
     const home = seed(['demo-quiet-basin', 'demo-still-cove']);
     liveIdle(home);
-    hold(home, 'demo-quiet-basin', 'program:agent-evals wave:2/4');
+    hold(home, 'demo-quiet-basin', 'program:prog-j wave:2/4');
     const cfg = loadConfig({ CCRC_HOME: home });
 
     const records = await readRegistry(holdUnreadableIO, cfg);
@@ -329,7 +329,7 @@ describe("sweepMerged — the reason comes from the sweep's own snapshot", () =>
     const inner = runnerFor(mergedLine('demo-quiet-basin'), calls);
     const run: Runner = async (cmd, args) => {
       const res = await inner(cmd, args);
-      if (args[0] === 'pr-state') hold(home, 'demo-quiet-basin', 'program:agent-evals wave:2/4');
+      if (args[0] === 'pr-state') hold(home, 'demo-quiet-basin', 'program:prog-j wave:2/4');
       return res;
     };
     const deps = { ...testDeps(home, run), push: { notify } as never };
@@ -375,7 +375,7 @@ describe('SessionRecord.held', () => {
     // announced corruption seconds after the operator tapped Release. One
     // second listing tells them apart.
     const home = seed(['demo-quiet-basin']);
-    hold(home, 'demo-quiet-basin', 'program:agent-evals wave:1/4');
+    hold(home, 'demo-quiet-basin', 'program:prog-j wave:1/4');
     const cfg = loadConfig({ CCRC_HOME: home });
     let listings = 0;
     const releasedMidReadIO: FleetIO = {
@@ -400,7 +400,7 @@ describe('SessionRecord.held', () => {
     // The confirmation must not become an escape hatch: when the second
     // listing still names the file, the fail-shut answer is unchanged.
     const home = seed(['demo-quiet-basin']);
-    hold(home, 'demo-quiet-basin', 'program:agent-evals wave:1/4');
+    hold(home, 'demo-quiet-basin', 'program:prog-j wave:1/4');
     const cfg = loadConfig({ CCRC_HOME: home });
     const records = await readRegistry(holdUnreadableIO, cfg);
     expect(records.find((r) => r.id === 'demo-quiet-basin')?.held).toBe(HOLD_UNREADABLE);
@@ -408,10 +408,10 @@ describe('SessionRecord.held', () => {
 
   it('carries the reason verbatim, null when absent', async () => {
     const home = seed(['demo-quiet-basin', 'demo-still-cove']);
-    hold(home, 'demo-quiet-basin', 'program:agent-evals wave:1/4');
+    hold(home, 'demo-quiet-basin', 'program:prog-j wave:1/4');
     const cfg = loadConfig({ CCRC_HOME: home });
     const records = await readRegistry(localIO, cfg);
-    expect(records.find((r) => r.id === 'demo-quiet-basin')?.held).toBe('program:agent-evals wave:1/4');
+    expect(records.find((r) => r.id === 'demo-quiet-basin')?.held).toBe('program:prog-j wave:1/4');
     expect(records.find((r) => r.id === 'demo-still-cove')?.held).toBeNull();
   });
 });

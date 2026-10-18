@@ -1,4 +1,4 @@
-// Workspace lifecycle wave 5 (spec 2026-09-24 §5.3; CCR-15 spec §5.5's consent rule): `ws-expire`'s consent BINDS THE
+// Workspace lifecycle wave 5 (spec 2026-09-24 §5.3; #166 spec §5.5's consent rule): `ws-expire`'s consent BINDS THE
 // BRANCH. The token is checked against the in-lock recompute's branch read, and the pin reads the branch again,
 // itself; a branch deleted (or made) between the two reads stops the act there — `failed` `state-changed`, exit 1 —
 // AFTER the pin, which only keeps, and BEFORE the tombstone and the breadcrumb, so nothing has started. A branch
