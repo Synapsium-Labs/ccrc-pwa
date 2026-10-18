@@ -185,7 +185,7 @@ CCRC_DOCTOR_CHECKS=(
   linger
   path
   services
-  scopes scope-sweep   # one line, as `flock timeout`: _check_scope-sweep is at the END of this file
+  scopes scope-sweep oom-policy   # one line, as `flock timeout`: _check_scope-sweep and _check_oom-policy are at the END of this file
   config
   auth box-token   # one line, as `flock timeout`: _check_box-token is at the END of this file
   rc
@@ -8718,6 +8718,68 @@ _check_server-caps() {
     _dr_pass server-caps "~/.ccrc/server-caps is current (written $((now - at))s ago by $writer) and lists: $words"
   else
     _dr_pass server-caps "~/.ccrc/server-caps is current (written $((now - at))s ago by $writer) and lists no words, so the server advertises nothing and the hook's gated arms stay off"
+  fi
+  return 0
+}
+
+# ── oom-policy: the victim policy's two scope drop-ins (D-5241) ───────────
+# Spec 2026-10-16 §5.10. Under the user manager's default `OOMPolicy=stop`, one
+# OOM kill of any process in a pane scope makes systemd stop the whole scope,
+# the session with it, and one in `ccrc-tmux-server.scope` stops every pane on
+# the box. The install spine places two `OOMPolicy=continue` drop-ins; this
+# check reads that they are on disk AND that systemd applied them: it asks
+# `OOMPolicy` of `ccrc-tmux-server.scope` and of ONE live `tmux-spawn-*.scope`
+# (a `daemon-reload` reaches running scopes, plan Task 13 step 5, so any live
+# pane scope speaks for all of them). READ-ONLY: `list-units` and `show`, never
+# `set-property` (refused at runtime on this systemd anyway, step 5).
+#
+# A scope is asked only while it is LISTED: `systemctl show` of a unit that is
+# not loaded answers the manager's default, which would read as a missing
+# drop-in on a box that merely has no tmux server up. WARN, never FAIL, for
+# `_check_scopes`' reason: `ccrc install` returns doctor's code.
+_check_oom-policy() {
+  if [ "${CCD_OS:-linux}" = darwin ]; then
+    _dr_skip oom-policy "OOMPolicy is a systemd mechanism, and this box runs launchd"
+    return 3
+  fi
+  if ! _have_systemctl; then
+    _dr_skip oom-policy "systemctl is not on PATH, so no scope's OOMPolicy can be read"
+    return 3
+  fi
+  local pane_d="$CCRC_UNIT_DIR/tmux-spawn-.scope.d/50-oom-continue.conf"
+  local srv_d="$CCRC_UNIT_DIR/ccrc-tmux-server.scope.d/50-oom-continue.conf"
+  local -a bad=() read_ok=()
+  local unit _rest pane="" srv="" v dropin
+  while read -r unit _rest; do
+    case "$unit" in tmux-spawn-*.scope) pane="$unit"; break ;; esac
+  done < <(systemctl --user list-units --no-legend 'tmux-spawn-*.scope' 2>/dev/null)
+  while read -r unit _rest; do
+    [ "$unit" = ccrc-tmux-server.scope ] && srv="$unit"
+  done < <(systemctl --user list-units --no-legend 'ccrc-tmux-server.scope' 2>/dev/null)
+  [ -f "$srv_d" ] || bad+=("${srv_d/#$HOME/\~} is missing")
+  [ -f "$pane_d" ] || bad+=("${pane_d/#$HOME/\~} is missing")
+  for unit in "$srv" "$pane"; do
+    [ -n "$unit" ] || continue
+    v="$(systemctl --user show "$unit" -p OOMPolicy --value 2>/dev/null || true)"
+    if [ "$v" = continue ]; then read_ok+=("$unit"); continue; fi
+    dropin="$pane_d"; [ "$unit" = ccrc-tmux-server.scope ] && dropin="$srv_d"
+    if [ -f "$dropin" ]; then
+      bad+=("$unit reads OOMPolicy=${v:-unknown} although ${dropin/#$HOME/\~} is in place (not reloaded)")
+    else
+      bad+=("$unit reads OOMPolicy=${v:-unknown}")
+    fi
+  done
+  if [ "${#bad[@]}" -gt 0 ]; then
+    _dr_warn oom-policy "$(_dr_join "${bad[@]}"): an OOM kill of one process can stop a whole pane (or, in the tmux server's scope, every pane)" \
+      "ccrc update (or ccrc install) places both drop-ins; then systemctl --user daemon-reload, which reaches running scopes too"
+    return 2
+  fi
+  if [ "${#read_ok[@]}" -eq 0 ]; then
+    _dr_pass oom-policy "both OOMPolicy=continue drop-ins are in place; no tmux scope is running to read"
+  else
+    local ok_txt="${read_ok[0]}"
+    [ "${#read_ok[@]}" -lt 2 ] || ok_txt+=" and ${read_ok[1]}"
+    _dr_pass oom-policy "both OOMPolicy=continue drop-ins are in place and $ok_txt read continue"
   fi
   return 0
 }

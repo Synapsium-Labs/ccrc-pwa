@@ -629,7 +629,8 @@ describe('a Stop that leaves delegated work running (D-5231)', () => {
       exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic',
     }] };
 
-    const rowAfterStop = async (tasks: unknown[]): Promise<FleetSession> => {
+    /** `after`: hook payloads run after the Stop; `caps`: a current `server-caps` listing those words first. */
+    const rowAfterStop = async (tasks: unknown[], after: object[] = [], caps: string[] = []): Promise<FleetSession> => {
       const home = mkTmp('ccrc-bg-');
       seedRoster(home, ROSTER);
       const reg = path.join(home, '.cc-sessions');
@@ -640,11 +641,17 @@ describe('a Stop that leaves delegated work running (D-5231)', () => {
       mkdirSync(bin, { recursive: true });
       writeFileSync(path.join(bin, 'tmux'), `#!/bin/sh\necho "cc-${ID}"\n`, { mode: 0o755 });
       const payload = { ...(JSON.parse(readFileSync(FIVE, 'utf8')) as Record<string, unknown>), background_tasks: tasks };
-      execFileSync('bash', [HOOK], {
-        input: JSON.stringify(payload), encoding: 'utf8',
-        env: { ...process.env, HOME: home, PATH: `${bin}:${process.env['PATH'] ?? ''}`, TMUX_PANE: '%1',
-          CLAUDE_CODE_SESSION_ID: UUID, CLAUDE_PID: '40613', CCRC_SESSION_GENERATION: GENERATION },
-      });
+      if (caps.length > 0) {
+        mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+        writeFileSync(path.join(home, '.ccrc', SERVER_CAPS_FILE), renderServerCaps(caps, Math.floor(Date.now() / 1000)));
+      }
+      for (const p of [payload, ...after]) {
+        execFileSync('bash', [HOOK], {
+          input: JSON.stringify(p), encoding: 'utf8',
+          env: { ...process.env, HOME: home, PATH: `${bin}:${process.env['PATH'] ?? ''}`, TMUX_PANE: '%1',
+            CLAUDE_CODE_SESSION_ID: UUID, CLAUDE_PID: '40613', CCRC_SESSION_GENERATION: GENERATION },
+        });
+      }
       const raw = await readHookStateRawMeasured(localIO, reg, ID, UUID);
       if (!raw.ok) throw new Error(`the hook wrote no readable hookstate: ${raw.reason}`);
       // the live file: busy, written a minute before the Stop, on a build whose word covers delegation
@@ -676,6 +683,25 @@ describe('a Stop that leaves delegated work running (D-5231)', () => {
     it('control: the same Stop with the subagent running keeps the row working', async () => {
       const row = await rowAfterStop([subagent('running')]);
       expect(row.background).toEqual({ count: 1, kinds: ['subagent'] });
+      expect(row.bucket).toBe('working');
+    });
+
+    // `compactions-write-no-hookstate` (D-5239): an idle compaction during a delegated run (Claude Code's idle timer
+    // fires it ~55 min after the Stop) leaves the hookstate as the Stop wrote it, behind the server's word, so the
+    // pair stands and Task 1's rung keeps the row working over the live `busy`. At base PreCompact and PostCompact
+    // rewrite the file without the pair, and PostCompact `manual`'s fresh `done` lets D-75 paint `done`.
+    const compaction = (trigger: 'auto' | 'manual'): object[] => ['PreCompact', 'PostCompact'].map((ev) => ({
+      session_id: UUID, transcript_path: `/rig/fixhome/cfg/projects/-rig-repo/${UUID}.jsonl`, cwd: '/rig/repo',
+      prompt_id: '00000000-0000-4000-8000-0000000000c1', hook_event_name: ev, trigger,
+      ...(ev === 'PreCompact' ? { custom_instructions: null } : { compact_summary: 'fixture summary' }),
+    }));
+    it('a delegated row stays working across an auto then a manual compaction, behind dispatch-live-gate-v1 (D-5239)', async () => {
+      const tasks = [{ id: 'w00000001', type: 'workflow', status: 'running', description: 'fixture workflow', name: 'fixwf' },
+        { id: 'w00000002', type: 'workflow', status: 'running', description: 'fixture workflow', name: 'fixwf' }];
+      const row = await rowAfterStop(tasks, [...compaction('auto'), ...compaction('manual')], ['dispatch-live-gate-v1']);
+      expect(row.status).toBe('busy');
+      expect(row.hookState).toBe('done');
+      expect(row.background).toEqual({ count: 2, kinds: ['workflow'] });
       expect(row.bucket).toBe('working');
     });
   });

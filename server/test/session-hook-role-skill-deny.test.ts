@@ -326,6 +326,8 @@ describe('the three names, written once (D-4934)', () => {
 // D-5232 (plan 2026-10-16 Task 2): behind the server's word `hook-main-state-v1`, an agent event with no hookstate file
 // to carry writes none, and is NOT a silent exit: the tail's one print is still reached, so a subagent's role-skill deny
 // is printed on a session that has no file yet. The server's words are written the way Task 9b's writers write them.
+// Red at base on "writes no file", not green as the plan expects (D-5377): base writes the file; the print half is
+// held by the no-file mutant (the skip turned back into an exit).
 describe('the deny prints on a session with no hookstate file (D-5232)', () => {
   it('a subagent\'s role-skill load with no hookstate file prints its deny and writes no file', () => {
     fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });

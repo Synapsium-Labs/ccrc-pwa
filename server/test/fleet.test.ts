@@ -1,13 +1,14 @@
 import { describe, it, expect, vi } from 'vitest';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { loadConfig } from '../src/config.js';
 import { assembleFleet, hookAskSummary, idHomeWrapper, liveStatus } from '../src/fleet.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { localIO } from '../src/io.js';
 import type { Statusline } from '../src/pane/statusline.js';
-import type { HookState } from '../src/hookstate.js';
-import { ASK_OPERATOR_PRINCIPAL, type PrState } from '../../shared/api.js';
+import { readHookStateRawMeasured, type HookState } from '../src/hookstate.js';
+import { ASK_OPERATOR_PRINCIPAL, SERVER_CAPS_FILE, renderServerCaps, type PrState } from '../../shared/api.js';
 import { parseRoster } from '../../shared/roster.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
@@ -1828,5 +1829,69 @@ describe('FleetSession.lastEnd (D-5237)', () => {
   });
   it('no lastend is null', async () => {
     expect((await row(null)).lastEnd).toBeNull();
+  });
+});
+
+// `compactions-write-no-hookstate` (D-5239; spec §5.8): an idle compaction behind the server's word leaves the Stop's
+// hookstate as it was, so the row's `bucketSince` stays the Stop's T0 (no fresh `done`, no badge). END TO END: the real
+// hook writes the file, the real reader parses it, `assembleFleet` ships the row. At base PostCompact `manual` writes a
+// fresh `done`, and `bucketSince` jumps to the compaction.
+describe('a compaction keeps bucketSince (D-5239)', () => {
+  const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
+  const FIVE = path.resolve(__dirname, 'fixtures/hook/stop-bg-five-kinds.json');
+  const ID = 'lane-a-project-a';
+  const UUID = '00000000-0000-4000-8000-000000000001';
+  const GENERATION = '0189abcd-1234-5678-9abc-0123456789ab';
+  const ROSTER = { version: 1, accounts: [{
+    id: 'lane-a', label: 'lane-a', configDirSuffix: '.lane-a',
+    exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic',
+  }] };
+  const compaction = (trigger: 'auto' | 'manual'): object[] => ['PreCompact', 'PostCompact'].map((ev) => ({
+    session_id: UUID, transcript_path: `/rig/fixhome/cfg/projects/-rig-repo/${UUID}.jsonl`, cwd: '/rig/repo',
+    prompt_id: '00000000-0000-4000-8000-0000000000c1', hook_event_name: ev, trigger,
+    ...(ev === 'PreCompact' ? { custom_instructions: null } : { compact_summary: 'fixture summary' }),
+  }));
+
+  it('a row done at T0, through an idle manual compaction, keeps bucketSince T0', async () => {
+    const home = mkTmp('ccrc-compact-since-');
+    seedRoster(home, ROSTER);
+    const reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    const fields = { wrapper: 'lane-a', project: 'project-a', workdir: '/data/projects/project-a', uuid: UUID, started: '1', generation: GENERATION };
+    for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${ID}.${k}`), v);
+    const bin = path.join(home, 'bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(path.join(bin, 'tmux'), `#!/bin/sh\necho "cc-${ID}"\n`, { mode: 0o755 });
+    mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    writeFileSync(path.join(home, '.ccrc', SERVER_CAPS_FILE), renderServerCaps(['dispatch-live-gate-v1'], Math.floor(Date.now() / 1000)));
+    const hook = (p: object): void => {
+      execFileSync('bash', [HOOK], {
+        input: JSON.stringify(p), encoding: 'utf8',
+        env: { ...process.env, HOME: home, PATH: `${bin}:${process.env['PATH'] ?? ''}`, TMUX_PANE: '%1',
+          CLAUDE_CODE_SESSION_ID: UUID, CLAUDE_PID: '40613', CCRC_SESSION_GENERATION: GENERATION },
+      });
+    };
+    hook({ ...(JSON.parse(readFileSync(FIVE, 'utf8')) as Record<string, unknown>), background_tasks: [] });
+    const hsFile = path.join(reg, `${ID}.hookstate.json`);
+    const T0 = Date.now() - 60_000;
+    writeFileSync(hsFile, JSON.stringify({ ...(JSON.parse(readFileSync(hsFile, 'utf8')) as object), updatedAt: T0 }) + '\n');
+    for (const p of compaction('manual')) hook(p);
+    const raw = await readHookStateRawMeasured(localIO, reg, ID, UUID);
+    if (!raw.ok) throw new Error(`the hook wrote no readable hookstate: ${raw.reason}`);
+    mkdirSync(path.join(home, '.lane-a', 'sessions'), { recursive: true });
+    writeFileSync(path.join(home, '.lane-a', 'sessions', '40613.json'), JSON.stringify({
+      pid: 40613, sessionId: UUID, cwd: '/data/projects/project-a',
+      status: 'idle', statusUpdatedAt: T0 - 60_000, version: '2.1.296',
+    }));
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return { code: args.includes(`=cc-${ID}:`) ? 0 : 1, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), Math.floor(Date.now() / 1000),
+      undefined, undefined, undefined, undefined, new Map([[ID, raw.state]]));
+    const r = fleet.find((x) => x.id === ID)!;
+    expect(r.bucket).toBe('done');
+    expect(r.bucketSince).toBe(T0);
   });
 });

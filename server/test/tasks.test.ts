@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, utimesSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { readTasks, taskProgress, tasksDir } from '../src/tasks/read.js';
 import { liveSessionStatus } from '../src/livestate.js';
 import { localIO } from '../src/io.js';
 import { mkTmp } from './tmpHelpers.js';
-import { absentReadIO, degradedReadIO } from './ioDoubles.js';
+import { absentReadIO, degradedReadIO, degradedStatIO } from './ioDoubles.js';
 
 const UUID = '72be9ee2-fe16-4bcc-b60b-0cfc0dc3d199';
 
@@ -203,5 +203,55 @@ describe('readTasks — the task file whose bytes never came back', () => {
     const io = degradedReadIO((p) => p === path.join(tasksDir(cfg, UUID), '3.json'));
     expect(taskProgress(await readTasks(io, cfg, UUID)))
       .toEqual({ total: 3, done: 1, running: 1, active: 'Doing two' });
+  });
+});
+
+// D-5372: the strip read "4 running" over a list last written three days
+// before (a plan the model left open while it talked to the operator). The
+// files' newest mtime is the one fact that tells a live plan from a stale one;
+// Claude Code rewrites a task file on every status change.
+describe('readTasks — touchedAt, the newest task file mtime (D-5372)', () => {
+  const T1 = new Date('2026-10-14T11:53:34Z');
+  const T2 = new Date('2026-10-14T12:10:00Z');
+  const T3 = new Date('2026-10-14T12:30:00Z');
+  // The newest file is the MIDDLE one by number, so neither "first" nor "last" is the max.
+  const two = (): string => {
+    const cfg = seed({
+      '1.json': task('1', 'one', 'completed'),
+      '2.json': task('2', 'two', 'in_progress', 'Doing two'),
+      '3.json': task('3', 'three', 'pending'),
+    });
+    utimesSync(path.join(tasksDir(cfg, UUID), '1.json'), T1, T1);
+    utimesSync(path.join(tasksDir(cfg, UUID), '2.json'), T3, T3);
+    utimesSync(path.join(tasksDir(cfg, UUID), '3.json'), T2, T2);
+    return cfg;
+  };
+  it('asked for, it is the max mtime over the task files — not the first, not the last by number', async () => {
+    const read = await readTasks(localIO, two(), UUID, { touchedAt: true });
+    expect(read.touchedAt).toBe(T3.getTime());
+  });
+  it('the bookkeeping files do not count', async () => {
+    const cfg = two();
+    const late = new Date('2026-10-17T00:00:00Z');
+    writeFileSync(path.join(tasksDir(cfg, UUID), '.lock'), '');
+    utimesSync(path.join(tasksDir(cfg, UUID), '.lock'), late, late);
+    expect((await readTasks(localIO, cfg, UUID, { touchedAt: true })).touchedAt).toBe(T3.getTime());
+  });
+  it('a stat that fails leaves that file out; none answering is null', async () => {
+    const cfg = two();
+    const dir = tasksDir(cfg, UUID);
+    const oneFails = degradedStatIO((p) => p === path.join(dir, '2.json'));
+    expect((await readTasks(oneFails, cfg, UUID, { touchedAt: true })).touchedAt).toBe(T2.getTime());
+    const allFail = degradedStatIO((p) => p.startsWith(dir));
+    expect((await readTasks(allFail, cfg, UUID, { touchedAt: true })).touchedAt).toBeNull();
+  });
+  it('a list with nothing open is not stat-ed — staleness only matters over open work', async () => {
+    const cfg = seed({ '1.json': task('1', 'one', 'completed') });
+    expect((await readTasks(localIO, cfg, UUID, { touchedAt: true })).touchedAt).toBeNull();
+  });
+  it('not asked for, the read is what it was — no field, no stat', async () => {
+    const cfg = two();
+    const read = await readTasks(degradedStatIO(() => { throw new Error('stat called'); }), cfg, UUID);
+    expect('touchedAt' in read).toBe(false);
   });
 });

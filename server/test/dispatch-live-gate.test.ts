@@ -24,7 +24,8 @@ import { COORDINATOR_PAUSE_MARKER } from '../src/coord/rundefs.js';
 import { configDirFor } from '../src/config.js';
 import type { Runner } from '../src/exec.js';
 import type { CcdResult } from '../src/lifecycle.js';
-import { SERVER_CAPS } from '../../shared/api.js';
+import { SERVER_CAPS, SERVER_CAPS_FILE, renderServerCaps } from '../../shared/api.js';
+import { execFileSync } from 'node:child_process';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -49,11 +50,15 @@ interface BoxCfg {
   /** Real wall time added before EVERY call of the box's `io` (the turn verdict's and the live file's reads among
    *  them): a loaded box, where the route's own I/O is still running when a fixed number of event-loop turns ends. */
   slowIoMs?: number;
+  /** Real wall time an `onRequest` hook spends before the route runs (D-5378): event-loop turns in which the
+   *  dispatch has begun but has nothing of the box in flight yet. */
+  requestDelayMs?: number;
 }
 
 let open: FastifyInstance[] = [];
 afterEach(async () => {
   vi.useRealTimers();
+  parkProbe = null;
   for (const a of open) await a.close();
   open = [];
 });
@@ -94,6 +99,13 @@ const box = async (cfg: BoxCfg = {}) => {
   const calls: string[][] = [];
   const n: Record<string, number> = {};
   let capIdx = 0;
+  const probe: ParkProbe = { started: false, inflight: 0 };
+  parkProbe = probe;
+  const tracked = async <T>(work: () => Promise<T>): Promise<T> => {
+    probe.started = true;
+    probe.inflight++;
+    try { return await work(); } finally { probe.inflight--; }
+  };
   const run: Runner = async (_cmd, args) => {
     calls.push(args);
     const verb = args[0] ?? '';
@@ -115,17 +127,19 @@ const box = async (cfg: BoxCfg = {}) => {
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const base0 = testDeps(home, run);
   const slow = cfg.slowIoMs;
-  const base = slow === undefined ? base0 : {
+  const base = {
     ...base0,
-    io: Object.fromEntries(Object.entries(base0.io).map(([k, f]) => [k, async (...a: unknown[]) => {
-      await realDelay(slow);
+    io: Object.fromEntries(Object.entries(base0.io).map(([k, f]) => [k, (...a: unknown[]) => tracked(async () => {
+      if (slow !== undefined) await realDelay(slow);
       return (f as (...x: unknown[]) => unknown).apply(base0.io, a);
-    }])) as unknown as typeof base0.io,
+    })])) as unknown as typeof base0.io,
   };
   const watcher = { currentPending: () => new Set(cfg.pending ?? []), currentStatuslines: () => new Map(),
     stop: () => {} } as unknown as FleetWatcher;
   const app = await buildServer({ ...base, mailToken: TOKEN, coord }, new Bus(), watcher);
   open.push(app);
+  const requestDelay = cfg.requestDelayMs;
+  if (requestDelay !== undefined) app.addHook('onRequest', async () => { await realDelay(requestDelay); });
   const opened = coord.openRun({ program: 'p', title: 't', project: PROJECT, wave: 2, waveOf: 3, claimedBy: 'c' });
   if (!('id' in opened)) throw new Error(`fixture openRun refused: ${JSON.stringify(opened)}`);
   coord.setSession(opened.id, ID);
@@ -141,9 +155,11 @@ const box = async (cfg: BoxCfg = {}) => {
 
 // The fake clock moves ONLY while the code under test is parked on a fake timer (D-5145). Only `setTimeout` is
 // faked, so `setImmediate` still turns the real event loop, poll phase included, and `Date` still reads real time.
-// Before every fake step the loop turns until a fake timer is pending (the route's own poll, re-armed after its read)
-// or the awaited request has settled. A fixed number of turns let fake time run ahead of the route's real I/O on a
-// loaded box: the route's read was still in flight, so the test stepped on, and the interleaving with its writes moved.
+// Before every fake step the loop turns until the route is parked on its own poll (`untilParked`: a timer pending and
+// nothing of the box in flight) or the awaited request has settled. A fixed number of turns let fake time run ahead of
+// the route's real I/O on a loaded box: the route's read was still in flight, so the test stepped on, and the
+// interleaving with its writes moved. A pending timer alone is no better a sign: any fake timer the route did not arm
+// reads as parked, and a case's write lands inside the first decision (the pause case pins this with one).
 
 /** Real wall time any one wait on the code under test may take before the case fails. */
 const REAL_BOUND_MS = 20_000;
@@ -162,9 +178,18 @@ const untilReal = async (ok: () => boolean, what: string): Promise<void> => {
     await turn();
   }
 };
-/** Turn the real event loop until the code under test is parked on a fake timer, or `isDone()`. */
+/** What the newest `box` has seen of its own io reads (D-5378): whether one has begun, and how many are in flight. */
+interface ParkProbe { started: boolean; inflight: number }
+let parkProbe: ParkProbe | null = null;
+/** Turn the real event loop until the code under test is parked on ITS OWN fake timer, or `isDone()` (D-5378).
+ *  A pending fake timer alone is not that: one the route did not arm (for example a case's own) is pending while the
+ *  route is still deciding. Parked is a pending timer, once the box has begun a read, with none of the box's io reads
+ *  in flight. Every real wait the route makes on its way to its wait is one of those reads (the box's runner answers
+ *  within microtasks), so between its first read and its wait no event-loop turn ends with nothing in flight. */
 const untilParked = (isDone: () => boolean = () => false): Promise<void> =>
-  untilReal(() => vi.getTimerCount() > 0 || isDone(), 'the code under test neither parked on a timer nor settled');
+  untilReal(() => isDone() || (vi.getTimerCount() > 0
+    && (parkProbe === null || (parkProbe.started && parkProbe.inflight === 0))),
+  'the code under test neither parked on a timer nor settled');
 /** Advance fake time by `ms`, in 100 ms steps, each taken only once the code under test is parked; and park again. */
 const advance = async (ms: number): Promise<void> => {
   for (let t = 0; t < ms; t += 100) {
@@ -368,8 +393,14 @@ describe('a pane this dispatch started is waited for outside coordMutex (D-5238)
 
   it('the re-run re-decides: a pause raised during the wait refuses `paused`, and the first ensure is the only act', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    const b = await box({ ensure: [`ensured ${ID}\n`] });
+    const b = await box({ ensure: [`ensured ${ID}\n`], requestDelayMs: 50 });
     hookDone(b.home);
+    // A fake timer that is not the route's, pending the whole case (D-5378): the pause must still land during the
+    // WAIT. Were "parked" any pending timer, the harness would step on while the first decision is still reading, the pause and
+    // the `idle` would land between its pause check and its verdict, and that first decision would clear (`ok: true`).
+    setTimeout(() => {}, 10 * DISPATCH_SPAWN_WAIT_MS);
+    // And real turns before the route's first read (`requestDelayMs`): a harness that took "nothing in flight" as
+    // parked before any read had begun would step through them, and the pause would land before the first decision.
     const p = b.dispatch();
     await advance(DISPATCH_SPAWN_POLL_MS / 2);
     writeFileSync(path.join(b.home, '.cc-sessions', COORDINATOR_PAUSE_MARKER), '');
@@ -447,6 +478,38 @@ describe('the bound has a basis in code (D-5238)', () => {
 describe('the gate\'s capability word (D-5238, advertised through D-5232\'s mechanism)', () => {
   it('SERVER_CAPS lists dispatch-live-gate-v1', () => {
     expect(SERVER_CAPS).toContain('dispatch-live-gate-v1');
+  });
+});
+
+// `compactions-write-no-hookstate` (D-5239): behind this gate's word the fleet's hook leaves a Stop's `done` standing
+// through an idle compaction, while the live file reads `busy` (it does during a compaction). The carry is safe only
+// because this gate reads the live word: the real hook writes the file, and the dispatch still refuses.
+describe('a hook done carried through an idle compaction, live busy, is worker-busy (D-5239 behind D-5238)', () => {
+  it('Stop, then PreCompact and PostCompact manual behind dispatch-live-gate-v1 → hook still done/Stop, worker-busy, no /clear', async () => {
+    const b = await box();
+    const bin = path.join(b.home, 'bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(path.join(bin, 'tmux'), `#!/bin/sh\necho "cc-${ID}"\n`, { mode: 0o755 });
+    mkdirSync(path.join(b.home, '.ccrc'), { recursive: true });
+    writeFileSync(path.join(b.home, '.ccrc', SERVER_CAPS_FILE), renderServerCaps(SERVER_CAPS, Math.floor(Date.now() / 1000)));
+    const stopPayload = { ...(JSON.parse(readFileSync(path.join(here, 'fixtures/hook/stop-bg-five-kinds.json'), 'utf8')) as object),
+      session_id: UUID, background_tasks: [] };
+    const compact = (ev: string): object => ({ session_id: UUID, transcript_path: '/rig/fixhome/cfg/projects/-rig-repo/x.jsonl',
+      cwd: '/rig/repo', prompt_id: '00000000-0000-4000-8000-0000000000c1', hook_event_name: ev, trigger: 'manual',
+      ...(ev === 'PreCompact' ? { custom_instructions: null } : { compact_summary: 'fixture summary' }) });
+    for (const p of [stopPayload, compact('PreCompact'), compact('PostCompact')]) {
+      execFileSync('bash', [path.join(ccrcRoot, 'ccd', 'session-hook.sh')], { input: JSON.stringify(p), encoding: 'utf8',
+        env: { ...process.env, HOME: b.home, PATH: `${bin}:${process.env['PATH'] ?? ''}`, TMUX_PANE: '%1',
+          CLAUDE_CODE_SESSION_ID: UUID, CLAUDE_PID: String(PANE) } });
+    }
+    const hs = JSON.parse(readFileSync(path.join(b.home, '.cc-sessions', `${ID}.hookstate.json`), 'utf8')) as Record<string, unknown>;
+    expect(hs).toMatchObject({ state: 'done', event: 'Stop', sessionId: UUID });
+    live(b.home, 'busy');
+    const res = await b.dispatch();
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, refused: 'worker-busy' });
+    expect(b.cleared()).toBe(false);
+    expect(b.acts()).toEqual([]);
   });
 });
 

@@ -44,8 +44,8 @@ const hookEnv = (): NodeJS.ProcessEnv => ({
   TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: SID, CLAUDE_PID: '4242',
   CCRC_SESSION_GENERATION: GENERATION,
 });
-const run = (payload: object): string =>
-  execFileSync('bash', [HOOK], { input: JSON.stringify(payload), encoding: 'utf8', env: hookEnv() });
+const run = (payload: object, env: NodeJS.ProcessEnv = {}): string =>
+  execFileSync('bash', [HOOK], { input: JSON.stringify(payload), encoding: 'utf8', env: { ...hookEnv(), ...env } });
 const reg = (): string => path.join(home, '.cc-sessions');
 const stateFile = (): string => path.join(reg(), `${ID}.hookstate.json`);
 const readState = (): Record<string, unknown> =>
@@ -123,9 +123,9 @@ const stopAtT0 = (): number => {
 const PAIR = { bgDelegated: 2, bgDelegatedKinds: 'subagent' };
 
 describe('the carry engages only behind the server\'s word (D-5232, spec §6.1)', () => {
-  const todays = (t0: number): void => {
+  const todays = (t0: number, env: NodeJS.ProcessEnv = {}): void => {
     const before = Date.now();
-    run(agentTool('PostToolUse'));
+    run(agentTool('PostToolUse'), env);
     const s = readState();
     expect(s).toMatchObject({ state: 'working', event: 'PostToolUse', ask: null });
     expect(s['updatedAt'] as number).toBeGreaterThanOrEqual(before);
@@ -154,6 +154,16 @@ describe('the carry engages only behind the server\'s word (D-5232, spec §6.1)'
     writeCapsText(`at ${nowS()}\ncaps ${WORD} Not_A_Word\nend\n`);
     todays(stopAtT0());
   });
+  // The gate is Task 10's `_hook_server_cap` (D-5239), its word class spelled letter by letter: under a UTF-8 locale a
+  // bash range may collate a non-ASCII lowercase letter into `a-z`, and the TypeScript grammar refuses such a word.
+  it('(f2) a non-ASCII lowercase word beside it, under LC_ALL=en_US.UTF-8: today\'s write', () => {
+    writeCapsText(`at ${nowS()}\ncaps ${WORD} caf\u00e9\nend\n`);
+    todays(stopAtT0(), { LC_ALL: 'en_US.UTF-8' });
+  });
+  it('(g2) a file listing only a prefix of the arm\'s word: today\'s write', () => {
+    writeCaps(['dispatch-live-gate-v1', 'hook-main-state']);
+    todays(stopAtT0());
+  });
   it('(g) a file listing only a word that merely starts with the arm\'s word: today\'s write (exact match, never a prefix)', () => {
     writeCaps(['dispatch-live-gate-v1', `${WORD}x`]);
     todays(stopAtT0());
@@ -174,8 +184,10 @@ describe('the carry engages only behind the server\'s word (D-5232, spec §6.1)'
     expect(words).toContain(WORD);
     for (const w of words) expect(SERVER_CAPS as readonly string[], w).toContain(w);
     expect(SERVER_CAPS).toContain(WORD);
-    expect(src).toMatch(new RegExp(`^HOOK_SERVER_CAPS_FILE="${SERVER_CAPS_FILE}"$`, 'm'));
-    expect(src).toMatch(new RegExp(`^HOOK_SERVER_CAPS_LEASE_S=${SERVER_CAPS_LEASE_S}$`, 'm'));
+    // One gate, Task 10's (D-5239), with the file name and the lease as its literals.
+    expect([...src.matchAll(/^_hook_server_cap\(\)/gm)]).toHaveLength(1);
+    expect(src).toContain(`"$HOME/.ccrc/${SERVER_CAPS_FILE}"`);
+    expect(src).toContain(`now - at <= ${SERVER_CAPS_LEASE_S} ))`);
   });
 });
 

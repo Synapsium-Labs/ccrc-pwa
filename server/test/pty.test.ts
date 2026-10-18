@@ -4,6 +4,10 @@ import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/server.js';
 import type { PtyLike } from '../src/pty.js';
 import { testDeps } from './helpers.js';
+import { NotifyLog } from '../src/notifylog.js';
+import type { PushService } from '../src/push.js';
+import { mkTmp } from './tmpHelpers.js';
+import path from 'node:path';
 
 /** node-pty's `spawn`, REPLACED for this file (D-3525): the real `attachPty`
  *  runs against it, so the argv it hands tmux is pinned at its own call site
@@ -186,5 +190,87 @@ describe('attachPty — the local drawer attaches EXACTLY one session (D-3525)',
     expect(call[0]).toBe('tmux');
     expect(call[1]).toEqual(['attach', '-t', '=cc-demo:']);
     expect(call[2]).toMatchObject({ cols: 120, rows: 40 });
+  });
+});
+
+// D-5237 (plan Task 7; spec §5.5): the drawer's raw input is recorded too. A frame that is EXACTLY ESC or EXACTLY
+// Ctrl-C records `drawer-escape` or `drawer-ctrl-c` (at most one per session every 2 s), the bytes pass through
+// unchanged, and nothing is pushed. A key sequence that merely starts with ESC (an arrow key) is not an interrupt.
+describe('pty drawer bridge records a lone Escape or Ctrl-C (D-5237)', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => {
+    vi.useRealTimers();
+    if (app) await app.close();
+    app = undefined;
+  });
+
+  const ID = 'lane-a-project-a';
+  const drawer = async () => {
+    const stub = new StubPty();
+    const notifyLog = new NotifyLog(path.join(mkTmp('ccrc-pty-interrupt-'), 'notify-log.json'));
+    await notifyLog.load();
+    const notify = vi.fn(async () => {});
+    app = await buildServer({
+      ...testDeps(undefined, async () => ({ code: 0, stdout: '', stderr: '' })),
+      spawnPty: () => stub, notifyLog, push: { notify } as unknown as PushService,
+    });
+    await app.listen({ host: '127.0.0.1', port: 0 });
+    const addr = app.server.address();
+    const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/pty/${ID}?cols=220&rows=51`);
+    await opened(ws);
+    /** Send one input frame and wait for it to reach the pty, so every record it makes has been made. */
+    const type = async (data: string): Promise<void> => {
+      const before = stub.written.length;
+      ws.send(JSON.stringify({ type: 'input', data }));
+      await vi.waitFor(() => expect(stub.written.length).toBe(before + 1), wait);
+    };
+    const recorded = () => notifyLog.catchUp(notifyLog.epoch, 0).events
+      .map((e) => ({ kind: e.kind, sessionId: e.sessionId, body: e.body }));
+    return { ws, stub, type, recorded, pushes: () => notify.mock.calls.length };
+  };
+
+  it('a lone ESC frame records one drawer-escape, passes through unchanged, and is never pushed', async () => {
+    const d = await drawer();
+    await d.type('\x1b');
+    expect(d.stub.written).toEqual(['\x1b']);
+    expect(d.recorded()).toEqual([{ kind: 'interrupt', sessionId: ID, body: 'source=drawer-escape outcome=sent' }]);
+    expect(d.pushes()).toBe(0);
+    d.ws.close();
+  });
+
+  it('an arrow key (ESC [ A) records nothing, and ordinary input records nothing', async () => {
+    const d = await drawer();
+    await d.type('\x1b[A');
+    await d.type('ls\r');
+    await d.type('\x1b\x1b');
+    expect(d.stub.written).toEqual(['\x1b[A', 'ls\r', '\x1b\x1b']);
+    expect(d.recorded()).toEqual([]);
+    d.ws.close();
+  });
+
+  it('a lone Ctrl-C frame records drawer-ctrl-c', async () => {
+    const d = await drawer();
+    await d.type('\x03');
+    expect(d.stub.written).toEqual(['\x03']);
+    expect(d.recorded()).toEqual([{ kind: 'interrupt', sessionId: ID, body: 'source=drawer-ctrl-c outcome=sent' }]);
+    d.ws.close();
+  });
+
+  it('two lone Escapes 500 ms apart record one; one 2 s after the first records again; both pass through', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(1_800_000_000_000);
+    const d = await drawer();
+    await d.type('\x1b');
+    vi.setSystemTime(1_800_000_000_500);
+    await d.type('\x1b');
+    vi.setSystemTime(1_800_000_001_000);
+    await d.type('\x03');
+    expect(d.recorded()).toHaveLength(1);
+    vi.setSystemTime(1_800_000_002_000);
+    await d.type('\x1b');
+    expect(d.stub.written).toEqual(['\x1b', '\x1b', '\x03', '\x1b']);
+    expect(d.recorded().map((e) => e.body)).toEqual(['source=drawer-escape outcome=sent', 'source=drawer-escape outcome=sent']);
+    d.ws.close();
   });
 });
