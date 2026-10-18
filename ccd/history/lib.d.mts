@@ -412,6 +412,12 @@ export interface HealthInputs {
   readonly exportOverdue: number;
   readonly exportWriterLive: boolean;
   readonly exportPausedLowDisk: boolean;
+  /** W1-B4 Task 9: the last completed export pass (meta HEALTH_META.exportPassMs); null before the first. */
+  readonly exportLastPassMs: number | null;
+  /** W1-B4 Task 9: when the oldest due blob the census counted became due (meta HEALTH_META.exportDueOldestMs, read by
+   *  readExportDueOldest): a time; null when the census counted nothing due; 'unmeasured' when no census of this build
+   *  has recorded it, or it could date none of the due blobs. Never a time at or before the epoch. */
+  readonly exportDueOldestMs: number | null | 'unmeasured';
   readonly retentionLowered: null | { readonly home: string; readonly days: number; readonly othersMin: number };
   readonly retentionUnmeasured: readonly string[];
   readonly journalGrowth30d: number;
@@ -960,3 +966,8 @@ export function planSegment(i: {
 
 // --- W1-B4 Task 3: export replay's decisions (spec §9.14 "Export replay")
 export function decideSegmentReplay(i: { meta: { storeId: string; format: number }; storeId: string }): 'replay' | 'newer' | 'foreign';
+
+// --- W1-B4 Task 9: the census's oldest due-since in meta, written and read back (no epoch, no overloaded null)
+export const EXPORT_DUE_OLDEST_UNMEASURED: 'unmeasured';
+export function exportDueOldestMeta(due: number, dueOldestMs: number | null): string;
+export function readExportDueOldest(v: string | undefined): number | null | 'unmeasured';

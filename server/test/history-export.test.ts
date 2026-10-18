@@ -7,7 +7,7 @@
 //     past the store's first hour), with the test-only preloads for faults.
 // Every store lives in a mkTmp fixture HOME (makeHistoryBox); nothing reads or writes the live ~/.ccrc, and each test's
 // fixture HOMEs are removed when it ends (removeTmpFixturesEachTest).
-import { describe, it, expect, beforeAll, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
@@ -20,6 +20,14 @@ import { removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { EXPORT_ROW_META_BYTES, HEALTH_META, historyPaths } from '../../ccd/history/lib.mjs';
 import { closeWriter, openSegment, openWriter, pruneDryRun, segmentMeta, setMeta } from '../../ccd/history/store.mjs';
 import { syncBuiltinESMExports } from 'node:module';
+// ── W1-B4 Task 9: imports under x9 aliases, so no binding collides with Tasks 5–8 above ───────────────────────
+import * as x9Fs from 'node:fs';
+import * as x9Path from 'node:path';
+import { createHash as x9Hash } from 'node:crypto';
+import { DatabaseSync as X9Db } from 'node:sqlite';
+import * as x9Lib from '../../ccd/history/lib.mjs';
+import * as x9Store from '../../ccd/history/store.mjs';
+import * as x9H from './historyHelpers.js';
 
 skipOnDarwin();
 removeTmpFixturesEachTest();
@@ -1118,4 +1126,200 @@ describe('marks that move (W1-B4 Task 8; spec §9.15 "Mark", "After a bind")', (
     expect(q(box, 'SELECT count(*) AS n FROM sidecars')[0]!['n'], 'the same bytes are no second row').toBe(1);
     expect(marks(box), 'a sidecar already stored cleared its entry\'s marks').toEqual({ [rid(1)]: s1, [rid(2)]: s2 });
   }, 300_000);
+});
+
+// ── W1-B4 Task 9: the census's oldest due-since, and status --json's export block (spec §9.6, §9.15) ─────────────
+// The census case runs sweep.mjs's exportCensus in-process against a real store; the status cases spawn the real
+// CLI, as doctor does. Every HOME is a fixture (makeHistoryBox); nothing reads or writes the live ~/.ccrc.
+interface X9Sweep {
+  exportCensus(db: X9Db, nowMs: number, budget: Record<string, unknown>): boolean;
+  newBudget(now?: () => number, limits?: { maxMs?: number; maxBytes?: number; chunkBytes?: number }): Record<string, unknown>;
+}
+interface X9Item { word: string; detail: string; remedy: string }
+interface X9Export {
+  due_blobs: number; segments: number | null; segment_bytes: number | null;
+  last_pass_ms: number | null; due_oldest_ms: number | null | 'unmeasured'; paused_low_disk: boolean;
+}
+interface X9Envelope { exit: number; export: Record<string, X9Export>; health: { pass: string | null; warn: X9Item[]; fail: X9Item[] } }
+const X9_MIN = 60_000;
+const X9_HOUR = 3_600_000;
+
+describe('W1-B4 Task 9: the census records when the oldest due blob became due (spec §9.15 "The gap guard")', () => {
+  beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
+
+  /** A store holding two due blobs, each with one referrer row in a transcript of its own whose one file is present
+   *  and was last written five and three hours ago (so neither is overdue), and a census in progress over one 30-day
+   *  home (horizon 0). Under the per-copy rule (B2's D-4735 (history-export-due-per-copy)) each row is due from its file's last
+   *  write, so the two rows need two files to fall due at two times. Each time is whole seconds, so a file's mtime
+   *  set by utimes reads back exactly. `cursor` is the census state as a pass left it. Runs exportCensus to its end;
+   *  answers the two meta values. */
+  async function x9Census(prefix: string, cursor: (ids: { a: number; b: number }, home: string) => Record<string, unknown>):
+    Promise<{ due: string | null; oldest: string | null; tA: number; tB: number }> {
+    const sw = (await import('../../ccd/history/sweep.mjs')) as unknown as X9Sweep;
+    const box = x9H.makeHistoryBox(prefix);
+    x9Store.createStore(box.home);
+    const home = box.homes[0]!;
+    const now = Date.now();
+    const tA = Math.floor((now - 5 * X9_HOUR) / 1000) * 1000;
+    const tB = Math.floor((now - 3 * X9_HOUR) / 1000) * 1000;
+    const db = x9Store.openWriter(x9Lib.historyPaths(box.home).dbFile);
+    try {
+      /** One transcript with one present file of `home`, last written at `atMs`: its rows' per-copy clock. */
+      const transcript = (uuid: string, name: string, ino: number, atMs: number): { t: number; f: number } => {
+        const file = x9Path.join(home, 'projects', '-home-u-tree-demo', name);
+        x9Fs.mkdirSync(x9Path.dirname(file), { recursive: true });
+        x9Fs.writeFileSync(file, '{}\n');
+        x9Fs.utimesSync(file, atMs / 1000, atMs / 1000);
+        const t = Number(db.prepare('INSERT INTO transcripts (cc_session_uuid) VALUES (?)').run(uuid).lastInsertRowid);
+        const f = Number(db.prepare("INSERT INTO ingest_files (dev, ino, source_key, transcript_pk, status, parser_version) VALUES (1, ?, '', ?, 'live', 1)")
+          .run(ino, t).lastInsertRowid);
+        db.prepare('INSERT INTO file_paths (path, file_id, last_seen_ms) VALUES (?, ?, ?)').run(file, f, now);
+        return { t, f };
+      };
+      const older = transcript('90909090-0000-4000-8000-000000000001', 'x9-census-a.jsonl', 2, tA);
+      const younger = transcript('90909090-0000-4000-8000-000000000002', 'x9-census-b.jsonl', 3, tB);
+      const blob = (text: string): number => Number(db.prepare('INSERT INTO blobs (sha256, codec, z, raw_len) VALUES (?, ?, ?, ?)')
+        .run(x9Hash('sha256').update(text).digest(), x9Store.CODEC, x9Store.brotli(Buffer.from(text)), Buffer.byteLength(text)).lastInsertRowid);
+      const a = blob('x9 the older due row');
+      const b = blob('x9 the younger due row');
+      const entry = (uuid: string, at: { t: number; f: number }, blobId: number, tsMs: number): void => {
+        db.prepare("INSERT INTO entries (uuid, transcript_pk, type, provenance, prov_version, struct_rank_ns, struct_file_id, blob_id, ts_ms) VALUES (?, ?, 'user', 'operator', 1, 1, ?, ?, ?)")
+          .run(uuid, at.t, at.f, blobId, tsMs);
+      };
+      entry('90909090-0000-4000-8000-0000000000a1', older, a, tA);
+      entry('90909090-0000-4000-8000-0000000000b1', younger, b, tB);
+      db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('export-census', 1, ?, NULL)")
+        .run(JSON.stringify(cursor({ a, b }, home)));
+      expect(sw.exportCensus(db, now, sw.newBudget(() => now)), 'the census ran to its end').toBe(true);
+      return { due: x9Store.getMeta(db, 'export_due'), oldest: x9Store.getMeta(db, x9Lib.HEALTH_META.exportDueOldestMs), tA, tB };
+    } finally {
+      x9Store.closeWriter(db);
+    }
+  }
+
+  it('over two due blobs, a census B4 started records the EARLIER due-since: with a horizon of 0, the older file\'s last write (the per-copy clock)', async () => {
+    const r = await x9Census('ccrc-hist-x9-census-', (_ids, home) => ({ last: 0, due: 0, overdue: 0, homeDays: { [home]: 30 }, startMs: Date.now(), dueOldest: null }));
+    expect(r.due).toBe('2');
+    expect(r.oldest).toBe(String(r.tA));
+  });
+
+  it('a census a B1 pass started carries no dueOldest: B4 resumes it, reads the field as null, and records the due-since of the blobs it counted', async () => {
+    const r = await x9Census('ccrc-hist-x9-census-b1-', (ids, home) => ({ last: ids.a, due: 1, overdue: 0, homeDays: { [home]: 30 }, startMs: Date.now() }));
+    expect(r.due).toBe('2');
+    expect(r.oldest).toBe(String(r.tB));
+  });
+
+  it('a due blob nothing on disk holds back dates by the last write its recorded files saw, never the epoch; one with no clock on record leaves the due-since unmeasured, never "nothing due"', async () => {
+    const sw = (await import('../../ccd/history/sweep.mjs')) as unknown as X9Sweep;
+    const box = x9H.makeHistoryBox('ccrc-hist-x9-census-gone-');
+    x9Store.createStore(box.home);
+    const home = box.homes[0]!;
+    const now = Date.now();
+    const tGone = Math.floor((now - 4 * X9_HOUR) / 1000) * 1000;
+    const db = x9Store.openWriter(x9Lib.historyPaths(box.home).dbFile);
+    try {
+      const t = Number(db.prepare('INSERT INTO transcripts (cc_session_uuid) VALUES (?)').run('90909090-0000-4000-8000-000000000003').lastInsertRowid);
+      // Ingested, then deleted out of band: its path no longer stats, and its recorded mtime is all that dates it.
+      const f = Number(db.prepare("INSERT INTO ingest_files (dev, ino, source_key, transcript_pk, mtime_ns, status, parser_version) VALUES (1, 4, '', ?, ?, 'live', 1)")
+        .run(t, BigInt(tGone) * 1_000_000n).lastInsertRowid);
+      db.prepare('INSERT INTO file_paths (path, file_id, last_seen_ms) VALUES (?, ?, ?)')
+        .run(x9Path.join(home, 'projects', '-home-u-tree-demo', 'x9-gone.jsonl'), f, now);
+      const b = Number(db.prepare('INSERT INTO blobs (sha256, codec, z, raw_len) VALUES (?, ?, ?, ?)')
+        .run(x9Hash('sha256').update('x9 gone').digest(), x9Store.CODEC, x9Store.brotli(Buffer.from('x9 gone')), 7).lastInsertRowid);
+      db.prepare("INSERT INTO entries (uuid, transcript_pk, type, provenance, prov_version, struct_rank_ns, struct_file_id, blob_id, ts_ms) VALUES (?, ?, 'user', 'operator', 1, 1, ?, ?, ?)")
+        .run('90909090-0000-4000-8000-0000000000c1', t, f, b, tGone);
+      /** One whole census over one 180-day home (horizon 150 days: only a file gone from disk makes this row due). */
+      const census = (): string | null => {
+        db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('export-census', 1, ?, NULL) ON CONFLICT (step, version) DO UPDATE SET cursor = excluded.cursor, completed_ms = NULL")
+          .run(JSON.stringify({ last: 0, due: 0, overdue: 0, homeDays: { [home]: 180 }, startMs: now, dueOldest: null }));
+        expect(sw.exportCensus(db, now, sw.newBudget(() => now)), 'the census ran to its end').toBe(true);
+        return x9Store.getMeta(db, x9Lib.HEALTH_META.exportDueOldestMs);
+      };
+      expect(census(), 'the recorded last write, 4 h ago: never \'0\' (1970)').toBe(String(tGone));
+      expect(x9Store.getMeta(db, 'export_due')).toBe('1');
+      // The same file with no mtime on record (B1's transcriptFiles reads it as 0): still due and counted, and undated.
+      db.prepare('UPDATE ingest_files SET mtime_ns = NULL WHERE file_id = ?').run(f);
+      expect(census(), 'due but undated is unmeasured, never \'\' (nothing due)').toBe('unmeasured');
+      expect(x9Store.getMeta(db, 'export_due')).toBe('1');
+    } finally {
+      x9Store.closeWriter(db);
+    }
+  });
+});
+
+describe('W1-B4 Task 9: status --json reads the export pass and counts segments; doctor\'s export-due waits for a gap (spec §9.6, §9.15)', () => {
+  beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
+
+  /** A bound store after B1's first-install pass (the export's hourly clock has not run out, so no pass wrote
+   *  anything), then `meta` planted as the pass and the census leave it. */
+  function x9Bound(prefix: string, meta: Record<string, string>): { box: x9H.HistoryBox; storeId: string } {
+    const box = x9H.makeHistoryBox(prefix, { role: 'fleet', shim: true });
+    const r = x9H.runSweep(box);
+    expect(r.code, `${r.stdout}\n${r.stderr}`).toBe(0);
+    const P = x9Lib.historyPaths(box.home);
+    const db = x9Store.openWriter(P.dbFile);
+    try { for (const [k, v] of Object.entries(meta)) x9Store.setMeta(db, k, v); } finally { x9Store.closeWriter(db); }
+    return { box, storeId: x9Fs.readFileSync(P.storeId, 'utf8').trim() };
+  }
+  /** `ccrc history status --json` as doctor runs it: exit 0 and a clean stderr. */
+  function x9Status(box: x9H.HistoryBox): X9Envelope {
+    const r = x9H.runCli(box, ['status', '--json']);
+    expect(r.code, `${r.stdout}\n${r.stderr}`).toBe(0);
+    expect(r.stderr).toBe('');
+    return r.json as unknown as X9Envelope;
+  }
+  const exportOf = (e: X9Envelope): X9Export => e.export[x9Lib.HARNESSES[0]!]!;
+
+  it('the export block names the last pass, the oldest due-since and the pause from meta, and counts segments by name and size without opening one', () => {
+    const now = Date.now();
+    const { box, storeId } = x9Bound('ccrc-hist-x9-env-', {
+      [x9Lib.HEALTH_META.exportPassMs]: String(now - 10 * X9_MIN),
+      [x9Lib.HEALTH_META.exportDueOldestMs]: String(now - 40 * X9_MIN),
+      [x9Lib.HEALTH_META.exportPaused]: 'low-disk',
+    });
+    const dir = x9Path.join(box.root, x9Lib.EXPORT_DIR, storeId);
+    x9Fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    // Not a database: status must count it by name and size. A read of it would fail on its first statement.
+    const body = 'not a database: status never opens a segment\n';
+    x9Fs.writeFileSync(x9Path.join(dir, '1.0a1b2c3d.db'), body, { mode: 0o600 });
+    x9Fs.writeFileSync(x9Path.join(dir, '.2.0a1b2c3d.db.tmp'), 'a writer\'s temp is no segment', { mode: 0o600 });
+    const e = x9Status(box);
+    expect(exportOf(e)).toMatchObject({
+      segments: 1, segment_bytes: Buffer.byteLength(body),
+      last_pass_ms: now - 10 * X9_MIN, due_oldest_ms: now - 40 * X9_MIN, paused_low_disk: true,
+    });
+    expect(e.health.warn.map((i) => i.word)).toContain('export-paused-low-disk');
+    // CONTROL: a store none of them touched. Its first pass's census counted nothing due, so meta holds '' and
+    // due_oldest_ms reads null: nothing due, which is not 'unmeasured'.
+    const bare = x9Bound('ccrc-hist-x9-env-bare-', {});
+    expect(exportOf(x9Status(bare.box))).toMatchObject({
+      segments: 0, segment_bytes: 0, last_pass_ms: null, due_oldest_ms: null, paused_low_disk: false,
+    });
+    // No overloaded null: a key no census of this build wrote reads 'unmeasured', never null ("nothing due").
+    const never = x9Bound('ccrc-hist-x9-env-never-', { export_due: '3', [x9Lib.HEALTH_META.exportPassMs]: String(now - 10 * X9_MIN) });
+    const ndb = x9Store.openWriter(x9Lib.historyPaths(never.box.home).dbFile);
+    try { ndb.prepare('DELETE FROM meta WHERE k = ?').run(x9Lib.HEALTH_META.exportDueOldestMs); } finally { x9Store.closeWriter(ndb); }
+    const ne = x9Status(never.box);
+    expect(exportOf(ne).due_oldest_ms).toBe('unmeasured');
+    expect(ne.health.warn.map((i) => i.word), 'an unmeasured due-since fires no wait arm').not.toContain('export-due');
+    // No epoch: a stored '0' is not a time, so status never relays 1970 and doctor never counts 29 million minutes.
+    const epoch = x9Bound('ccrc-hist-x9-env-epoch-', {
+      export_due: '3', [x9Lib.HEALTH_META.exportPassMs]: String(now - 10 * X9_MIN), [x9Lib.HEALTH_META.exportDueOldestMs]: '0',
+    });
+    const ee = x9Status(epoch.box);
+    expect(exportOf(ee).due_oldest_ms).toBe('unmeasured');
+    expect(ee.health.warn.map((i) => i.word)).not.toContain('export-due');
+  }, 120_000);
+
+  it('doctor\'s inputs through status: a due count with a fresh pass and a young due-since is no WARN; a due-since over two intervals, or a pass over 2 h old, WARNs export-due', () => {
+    const now = Date.now();
+    const passKey = x9Lib.HEALTH_META.exportPassMs;
+    const oldestKey = x9Lib.HEALTH_META.exportDueOldestMs;
+    const steady = x9Bound('ccrc-hist-x9-steady-', { export_due: '3', [passKey]: String(now - 10 * X9_MIN), [oldestKey]: String(now - 90 * X9_MIN) });
+    expect(x9Status(steady.box).health.warn.map((i) => i.word)).not.toContain('export-due');
+    const waited = x9Bound('ccrc-hist-x9-waited-', { export_due: '3', [passKey]: String(now - 10 * X9_MIN), [oldestKey]: String(now - 3 * X9_HOUR) });
+    expect(x9Status(waited.box).health.warn.find((i) => i.word === 'export-due')?.detail).toContain('3 unexported blob(s) are due, the oldest for');
+    const stale = x9Bound('ccrc-hist-x9-stale-', { export_due: '3', [passKey]: String(now - 3 * X9_HOUR) });
+    expect(x9Status(stale.box).health.warn.find((i) => i.word === 'export-due')?.detail).toContain('3 unexported blob(s) are due, and the last export pass completed');
+  }, 120_000);
 });

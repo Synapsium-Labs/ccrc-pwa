@@ -55,7 +55,7 @@ import {
   decideBelt, beltAfterGeneration, BELT_VERSION, beltWitnessMoved,
   REDERIVE_SLICE_MS, REDERIVE_SLICE_BYTES,
   REASONS, TMUX_DEADLINE_MS, decideOpGate, formOf, parseOpMarker, formatPassMarker, parsePassMarker, decidePassLive, parsePassDied, formatPassDied, procStartOf, bootIdOf, parseOpVerbArgs, BIND_KINDS, paneReadWanted,
-  HARNESS_TABLE, exportDates, dueTranscriptKeys, shortestRetentionHome, planExport, retentionLowered, parseJournalRecord,
+  HARNESS_TABLE, exportDates, dueTranscriptKeys, shortestRetentionHome, planExport, exportDueOldestMeta, retentionLowered, parseJournalRecord,
   decideRecallOff, recallOffPath, decideReparse, REPARSE_MAX_TARGETS, planCopy, STORE_DB_REL,
   diffForeignKeys, ftsTablesHealthy, FTS_REBUILD_STEP, decideCounterResets, decideIntegrity,
   RECOVER_PHASES, RECOVER_JOURNAL_PHASES, formatRecoverCursor, parseRecoverCursor, orderJournalFiles, indexRecord, replayStep, nextUnmovedTicks, HEALTH_META,
@@ -6344,6 +6344,11 @@ export function exportCensus(db, nowMs, budget) {
     const plan = planExport({ nowMs, homeRetentionDays: state.homeDays, blobs });
     state.due += plan.due.length;
     state.overdue += plan.overdue.length;
+    // W1-B4 Task 9: when the oldest due blob became due (§9.15 "The gap guard", "How long a due blob has waited"),
+    // on this census's own clock, the one the pass selects by (D-4248).
+    // A census a B1 pass started carries no dueOldest: it reads as null, never as a time.
+    const prevOldest = typeof state.dueOldest === 'number' ? state.dueOldest : null;
+    state.dueOldest = plan.oldestDueSinceMs === null ? prevOldest : (prevOldest === null ? plan.oldestDueSinceMs : Math.min(prevOldest, plan.oldestDueSinceMs));
     state.last = ids[ids.length - 1].blob_id;
     stepCursorSet(db, 'export-census', state);
   }
@@ -6354,6 +6359,7 @@ export function exportCensus(db, nowMs, budget) {
   const dates = exportDates({ homeRetentionDays: state.homeDays, holders, files: [...files.keys()].flatMap(filesOf) });
   setMeta(db, 'export_due', String(state.due));
   setMeta(db, 'export_overdue', String(state.overdue));
+  setMeta(db, HEALTH_META.exportDueOldestMs, exportDueOldestMeta(state.due, state.dueOldest));   // '', a time, or 'unmeasured': lib decides
   setMeta(db, 'export_census_ms', String(nowMs));
   setMeta(db, 'oldest_row_ms', oldest === null ? '' : String(oldest));
   setMeta(db, 'first_due_ms', dates.firstDueMs === null ? '' : String(dates.firstDueMs));
@@ -6520,7 +6526,7 @@ export function periodicCensus(db, ctx) {
   const last = Number(getMeta(db, 'census_ms') ?? 0);
   if (nowMs - last >= SCAN_INTERVAL_MS && stepCursorGet(db, 'export-census') === null) {
     const homeDays = retentionCensus(db, ctx.homes, ctx.deps.managedSettings ?? MANAGED_SETTINGS);
-    stepCursorSet(db, 'export-census', { last: 0, due: 0, overdue: 0, homeDays, startMs: nowMs });
+    stepCursorSet(db, 'export-census', { last: 0, due: 0, overdue: 0, homeDays, startMs: nowMs, dueOldest: null });
     setMeta(db, 'census_ms', String(nowMs));
     journalAudit(db, ctx, nowMs);
   }

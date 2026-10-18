@@ -3674,10 +3674,10 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     exportWriterLive: false, exportPausedLowDisk: false, retentionLowered: null, retentionUnmeasured: [],
     journalGrowth30d: 0, journalSkipped: 0, blobUndecodable: 0, drainRejected: 0, spoolDisplaced: 0, spoolBlocked: 0, spoolUnreadable: 0, spoolNotDirectory: false, spoolNodesRefused: 0, exportSegmentNewer: [], exportSegmentMissing: 0,
     journalUnwritable: false, dbPath: '/home/u/.ccrc/history/db', freeBytes: 100_000_000_000,
-    thresholdBytes: 20_000_000_000, copyBps: null, backupsDb: [], journalStoreDirs: [], extrasUnmeasured: [],
+    thresholdBytes: 20_000_000_000, copyBps: null, backupsDb: [], journalStoreDirs: [], extrasUnmeasured: [], exportLastPassMs: null, exportDueOldestMs: null,
     ...o,
   });
-  const words = (r: healthLib.HealthResult, cls: 'warn' | 'fail'): string[] => r[cls].map((i) => i.word);
+  const words =(r: healthLib.HealthResult, cls: 'warn' | 'fail'): string[] => r[cls].map((i) => i.word);
   const RECOVER = { step: 'recover/1', cursor: '2026-10.0a1b2c3d.jsonl:4096' };   // task 27's envelope spelling
   const WORD_CASES: Array<[string, 'pass' | 'warn' | 'fail', Partial<healthLib.HealthInputs>]> = [
     ['ok', 'pass', {}],
@@ -8355,5 +8355,109 @@ describe('W1-B4: the export phases\' cursor and the segment replay verdict (spec
     expect(libReplayExport.decideSegmentReplay({ meta: { storeId: STORE, format: 2 }, storeId: STORE })).toBe('newer');
     expect(libReplayExport.decideSegmentReplay({ meta: { storeId: other, format: 1 }, storeId: STORE })).toBe('foreign');
     expect(libReplayExport.decideSegmentReplay({ meta: { storeId: other, format: 2 }, storeId: STORE })).toBe('foreign');
+  });
+});
+
+// ── W1-B4 Task 9: export-due with the export writer live (spec §9.6, §9.15 "The gap guard"; O41's B4 cases) ─────
+// Pure, every input a parameter, the clock included. B1's arm (no export writer: WARN from the first due blob) is
+// Task 28's describe above; these are the arms a build with the writer adds.
+describe('deriveHealth, W1-B4: with the export writer live, export-due waits for a gap (O41\'s B4 cases)', () => {
+  const NOW = 1_800_000_000_000;
+  const MIN = 60_000;
+  const STORE = '5f0c2d3e-8a1b-4c2d-9e3f-0a1b2c3d4e5f';
+  const GAP = 2 * healthLib.EXPORT_PASS_INTERVAL_MS;
+  const gapMin = Math.round(GAP / MIN);
+  /** Task 28's healthy baseline on a build with the export writer: five blobs due, an hourly pass ten minutes ago,
+   *  the oldest due blob ninety minutes old. Every case breaks one leg of it. */
+  const live = (o: Partial<healthLib.HealthInputs> = {}): healthLib.HealthInputs => ({
+    nowMs: NOW, storeId: STORE, exit: 0, reason: null,
+    shimMtimeMs: NOW - 60 * MIN, lastTickMs: NOW - MIN, lagS: 5, sizeBytes: 1_000_000,
+    capGb: 50, capMalformed: false, capFile: '/home/u/.ccrc/cap-fixture', capturePause: '',
+    migration: 'none', userVersion: 1, codeVersion: 1, historyOff: false, recovering: null, op: null, pass: null,
+    bytesBehindLast3: [0, 0, 0], fts: 'ready', modesWrong: [], rootIsSymlink: false,
+    redactUnreadable: [], breakerOpen: false, rosterUnreadable: false, exportDue: 5, exportOverdue: 0,
+    exportWriterLive: true, exportPausedLowDisk: false, retentionLowered: null, retentionUnmeasured: [],
+    journalGrowth30d: 0, journalSkipped: 0, blobUndecodable: 0, drainRejected: 0, spoolDisplaced: 0, spoolBlocked: 0, spoolUnreadable: 0, spoolNotDirectory: false, spoolNodesRefused: 0,
+    exportSegmentNewer: [], exportSegmentMissing: 0,
+    journalUnwritable: false, dbPath: '/home/u/.ccrc/history/db', freeBytes: 100_000_000_000,
+    thresholdBytes: 20_000_000_000, copyBps: null, backupsDb: [], journalStoreDirs: [], extrasUnmeasured: [],
+    exportLastPassMs: NOW - 10 * MIN, exportDueOldestMs: NOW - 90 * MIN,
+    ...o,
+  });
+  const dueItem = (r: healthLib.HealthResult): healthLib.HealthItem | undefined => r.warn.find((i) => i.word === 'export-due');
+
+  it('steady state at every phase between a census, a pass and the next census: PASS ok, nothing to warn', () => {
+    for (const passAgo of [1, 30, 59, 61, 89]) {
+      for (const oldestAgo of [0, 45, 90, 119]) {
+        expect(healthLib.deriveHealth(live({ exportLastPassMs: NOW - passAgo * MIN, exportDueOldestMs: NOW - oldestAgo * MIN })),
+          `pass ${passAgo} min ago, oldest due ${oldestAgo} min ago`).toEqual({ pass: 'ok', warn: [], fail: [] });
+      }
+    }
+  });
+
+  it('a due blob that has waited more than two pass intervals WARNs export-due, naming the count and the wait', () => {
+    const r = healthLib.deriveHealth(live({ exportDueOldestMs: NOW - GAP - MIN }));
+    expect(r.warn.map((i) => i.word)).toEqual(['export-due']);
+    expect(dueItem(r)!.detail).toBe(
+      `store ${STORE}: 5 unexported blob(s) are due, the oldest for ${gapMin + 1} min (over ${gapMin} min, two export pass intervals)`);
+    expect(dueItem(r)!.remedy).toContain('one segment an hour');
+  });
+
+  it('a last pass more than two intervals old WARNs export-due naming its age; it outranks the wait, and its remedy reads the sweep', () => {
+    const r = healthLib.deriveHealth(live({ exportLastPassMs: NOW - GAP - 2 * MIN, exportDueOldestMs: NOW - GAP - MIN }));
+    expect(r.warn.map((i) => i.word)).toEqual(['export-due']);
+    expect(dueItem(r)!.detail).toBe(
+      `store ${STORE}: 5 unexported blob(s) are due, and the last export pass completed ${gapMin + 2} min ago (over ${gapMin} min)`);
+    expect(dueItem(r)!.remedy).toContain('read the sweep: journalctl --user -u ccd-history-sweep');
+  });
+
+  it('the threshold is strict: exactly two intervals is no gap, one minute past is', () => {
+    expect(healthLib.deriveHealth(live({ exportDueOldestMs: NOW - GAP })).pass).toBe('ok');
+    expect(healthLib.deriveHealth(live({ exportLastPassMs: NOW - GAP })).pass).toBe('ok');
+    expect(dueItem(healthLib.deriveHealth(live({ exportDueOldestMs: NOW - GAP - MIN })))).toBeDefined();
+    expect(dueItem(healthLib.deriveHealth(live({ exportLastPassMs: NOW - GAP - MIN })))).toBeDefined();
+  });
+
+  it('an unmeasured clock fires neither writer arm by itself: no pass yet and no census yet is no WARN', () => {
+    expect(healthLib.deriveHealth(live({ exportLastPassMs: null, exportDueOldestMs: 'unmeasured' })).pass).toBe('ok');
+    expect(dueItem(healthLib.deriveHealth(live({ exportLastPassMs: null, exportDueOldestMs: NOW - GAP - MIN })))).toBeDefined();
+    expect(dueItem(healthLib.deriveHealth(live({ exportLastPassMs: NOW - GAP - MIN, exportDueOldestMs: 'unmeasured' })))).toBeDefined();
+  });
+
+  it('the census\'s due-since meta: nothing due writes \'\' and reads null; due blobs it could date none of write unmeasured; a key never written reads unmeasured, never "nothing due"; no value at or before the epoch is a time', () => {
+    expect(healthLib.EXPORT_DUE_OLDEST_UNMEASURED).toBe('unmeasured');
+    expect(healthLib.exportDueOldestMeta(0, null)).toBe('');
+    expect(healthLib.exportDueOldestMeta(0, NOW - 90 * MIN), 'nothing due: no clock is carried').toBe('');
+    expect(healthLib.exportDueOldestMeta(3, NOW - 90 * MIN + 0.4), 'a file clock\'s fraction is rounded').toBe(String(NOW - 90 * MIN));
+    for (const t of [null, 0, 0.3, -5, Number.NaN, Number.NEGATIVE_INFINITY]) expect(healthLib.exportDueOldestMeta(3, t), String(t)).toBe('unmeasured');
+    expect(healthLib.readExportDueOldest('')).toBeNull();
+    expect(healthLib.readExportDueOldest(undefined)).toBe('unmeasured');
+    expect(healthLib.readExportDueOldest('unmeasured')).toBe('unmeasured');
+    for (const v of ['0', '-5', '1.5', 'NaN', ' 12']) expect(healthLib.readExportDueOldest(v), v).toBe('unmeasured');
+    expect(healthLib.readExportDueOldest(String(NOW - 90 * MIN))).toBe(NOW - 90 * MIN);
+    expect(healthLib.readExportDueOldest(healthLib.exportDueOldestMeta(3, NOW - 90 * MIN)), 'round trip').toBe(NOW - 90 * MIN);
+  });
+
+  it('an unmeasured due-since never fires the wait arm, so no export-due detail ever counts minutes from the epoch', () => {
+    expect(dueItem(healthLib.deriveHealth(live({ exportDueOldestMs: healthLib.readExportDueOldest('0') })))).toBeUndefined();
+    expect(dueItem(healthLib.deriveHealth(live({ exportDueOldestMs: 'unmeasured' })))).toBeUndefined();
+    // CONTROL: a real clock past two intervals fires it, its minutes counted from that clock.
+    expect(dueItem(healthLib.deriveHealth(live({ exportDueOldestMs: NOW - GAP - MIN })))!.detail).toContain(`the oldest for ${gapMin + 1} min`);
+  });
+
+  it('nothing due, whatever the clocks: no export-due', () => {
+    expect(healthLib.deriveHealth(live({ exportDue: 0, exportLastPassMs: NOW - 10 * GAP, exportDueOldestMs: NOW - 10 * GAP })).pass).toBe('ok');
+  });
+
+  it('with the pass paused for room, export-due\'s remedy is that room, beside its own export-paused-low-disk WARN', () => {
+    const r = healthLib.deriveHealth(live({ exportPausedLowDisk: true, exportLastPassMs: NOW - GAP - MIN }));
+    expect(r.warn.map((i) => i.word)).toEqual(['export-due', 'export-paused-low-disk']);
+    expect(dueItem(r)!.remedy).toContain('paused for room');
+  });
+
+  it('a build without the writer keeps B1\'s arm: a WARN from the first due blob, with B1\'s detail and remedy', () => {
+    const r = healthLib.deriveHealth(live({ exportWriterLive: false, exportDue: 1 }));
+    expect(dueItem(r)!.detail).toBe(`store ${STORE}: 1 unexported blob(s) are due by the horizon, and this build has no export writer`);
+    expect(dueItem(r)!.remedy).toBe(healthLib.HEALTH_REMEDIES['export-due']);
   });
 });

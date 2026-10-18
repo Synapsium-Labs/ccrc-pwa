@@ -3472,6 +3472,8 @@ function remedyFor(word, h) {
       return h.retentionLowered !== null
         ? `set cleanupPeriodDays in ${h.retentionLowered.home}/settings.json to at least ${h.retentionLowered.othersMin}`
         : HEALTH_REMEDIES['retention-lowered'];
+    case 'export-due':
+      return exportDueRemedy(h);
     default:
       return HEALTH_REMEDIES[word] ?? '';
   }
@@ -3681,7 +3683,8 @@ export function deriveHealth(h) {
   if (h.breakerOpen) warn.push(item('breaker-open', 'a breaker is open'));
   if (h.rosterUnreadable) warn.push(item('roster-unreadable', '~/.ccrc/accounts.sh cannot be read, so no account home is discovered'));
   if (h.rootIsSymlink) warn.push(item('root-is-symlink', '~/.ccrc/history is itself a symlink'));
-  if (h.exportDue > 0 && !h.exportWriterLive) warn.push(item('export-due', `${h.exportDue} unexported blob(s) are due by the horizon, and this build has no export writer`));
+  const exportGap = exportGapArm(h);   // W1-B4 Task 9: the gap guard's arms (§9.15), decided at the end of this file
+  if (exportGap !== null) warn.push(item('export-due', exportDueDetail(exportGap, h)));
   if (h.exportPausedLowDisk) warn.push(item('export-paused-low-disk', 'the export is paused for room on the home filesystem'));
   if (h.retentionUnmeasured.length > 0) warn.push(item('retention-unmeasured', `the retention of ${h.retentionUnmeasured.join(', ')} could not be read; each keeps its last measured value`));
   if (h.retentionLowered !== null) {
@@ -8396,4 +8399,78 @@ export function planSegment({ nowMs, homeRetentionDays, rows, boundBytes, reduce
 export function decideSegmentReplay({ meta, storeId }) {
   if (meta.storeId !== storeId) return 'foreign';
   return meta.format > EXPORT_SEGMENT_FORMAT ? 'newer' : 'replay';
+}
+
+// ── W1-B4 Task 9: export-due on a build with the export writer (spec §9.6, §9.15 "The gap guard") ──────────────
+// B1 shipped the ruled arm for a build without the writer: WARN from the first due blob. With the writer (this
+// build), rows cross the horizon continuously and the pass runs at most hourly, so a due count alone is the pass's
+// ordinary cadence, not a gap. export-due then WARNs only when the last completed pass is older than two pass
+// intervals, or the oldest due blob the census counted has waited longer than that (chosen: 2 h). Both clocks are
+// the store's own (meta the pass and the census keep), never a calendar date (O41; D-4207).
+// The census's due-since is its own measure of the rows, read at most one census interval late, which keeps a
+// steady store under the threshold (§9.15 "How long a due blob has waited").
+// The three helpers are function declarations: deriveHealth and remedyFor, above, call them at call time, and the
+// constant they read (EXPORT_PASS_INTERVAL_MS, Task 1) is initialised by then.
+
+/** Which arm of export-due fires, or null. `no-writer` is B1's ruled arm; `stale-pass` outranks `waited`. A clock
+ *  that is not a time fires neither writer arm by itself: a last pass of null (none since this build landed), and a
+ *  due-since of null (the census counted nothing due) or EXPORT_DUE_OLDEST_UNMEASURED (no census of this build has
+ *  recorded one, or it could date none of the due blobs). `over` reads only a number. */
+function exportGapArm(h) {
+  if (!(h.exportDue > 0)) return null;
+  if (!h.exportWriterLive) return 'no-writer';
+  const gapMs = 2 * EXPORT_PASS_INTERVAL_MS;
+  const over = (t) => typeof t === 'number' && h.nowMs - t > gapMs;
+  if (over(h.exportLastPassMs)) return 'stale-pass';
+  if (over(h.exportDueOldestMs)) return 'waited';
+  return null;
+}
+
+/** export-due's detail, one per arm. B1's arm keeps B1's text verbatim. */
+function exportDueDetail(arm, h) {
+  const gapMin = minutesOf(2 * EXPORT_PASS_INTERVAL_MS);
+  if (arm === 'stale-pass') {
+    return `${h.exportDue} unexported blob(s) are due, and the last export pass completed ${minutesOf(h.nowMs - h.exportLastPassMs)} min ago (over ${gapMin} min)`;
+  }
+  if (arm === 'waited') {
+    return `${h.exportDue} unexported blob(s) are due, the oldest for ${minutesOf(h.nowMs - h.exportDueOldestMs)} min (over ${gapMin} min, two export pass intervals)`;
+  }
+  return `${h.exportDue} unexported blob(s) are due by the horizon, and this build has no export writer`;
+}
+
+/** export-due's remedy, by arm: B1's for a build without the writer; the room first while the pass is paused for
+ *  it; the sweep's log for a pass that stopped completing; nothing to do while a backlog drains. */
+function exportDueRemedy(h) {
+  const arm = exportGapArm(h);
+  if (arm === null || arm === 'no-writer') return HEALTH_REMEDIES['export-due'];
+  if (h.exportPausedLowDisk) return 'free space on the home filesystem: the export pass is paused for room there, and the due text waits for it';
+  if (arm === 'stale-pass') return `read the sweep: ${SWEEP_LOG}; an export pass completes at least hourly, and none has for over two intervals`;
+  return `none needed while the backlog drains at one segment an hour; if the count does not fall, read the sweep: ${SWEEP_LOG}`;
+}
+
+// The census's oldest due-since in meta (HEALTH_META.exportDueOldestMs), written and read back here only, so the sweep
+// delivers and status relays, and neither decides (§9.15 "How long a due blob has waited"). Three values, never folded:
+//   ''                            the census counted nothing due (read back: null);
+//   a positive integer            when the oldest dated due blob fell due (read back: the number);
+//   EXPORT_DUE_OLDEST_UNMEASURED  blobs are due and the census could date none (no clock on record, or only the part a
+//                                 B1 pass started counted them); a key never written reads the same, never "nothing
+//                                 due". No value at or before the epoch is a time: it would render as 1970 and the
+//                                 wait arm would count some 29 million minutes from it.
+
+/** The word for a due-since the census has not measured (status --json's due_oldest_ms, HealthInputs). */
+export const EXPORT_DUE_OLDEST_UNMEASURED = 'unmeasured';
+
+/** What the census writes on completion, from its due count and its oldest dated due-since (planExport's
+ *  oldestDueSinceMs, min over chunks). A file clock's fraction of a ms is rounded. */
+export function exportDueOldestMeta(due, dueOldestMs) {
+  if (!(due > 0)) return '';
+  const ms = typeof dueOldestMs === 'number' && Number.isFinite(dueOldestMs) ? Math.round(dueOldestMs) : 0;
+  return ms > 0 ? String(ms) : EXPORT_DUE_OLDEST_UNMEASURED;
+}
+
+/** The census's due-since read back from meta: a time, null (nothing due), or EXPORT_DUE_OLDEST_UNMEASURED. */
+export function readExportDueOldest(v) {
+  if (v === undefined) return EXPORT_DUE_OLDEST_UNMEASURED;
+  if (v === '') return null;
+  return /^[1-9][0-9]*$/.test(v) ? Number(v) : EXPORT_DUE_OLDEST_UNMEASURED;
 }
