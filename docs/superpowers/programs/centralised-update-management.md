@@ -4368,6 +4368,26 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       (no live leak, bounded, the SIGKILL rule), the evidence by job id, the rows and mutations (M7, M9 or M10
       measured), the two diagnostics, the deferred notes and the records. Held-out panel plus a process-safety
       lens.
+  - **16:20 UTC: review 609 accepted B2's follow-up at `453170331`, with 5 minor findings** (swift-prairie,
+    mail 6455; 34 agents, none died). No lens, the process-safety lens included, found anything in the stop path.
+    - It found no live leak and the stop bounded by one grace period plus one poll, both driven against real
+      processes. Other EPERMs and errnos still raise, the SIGKILL absorbs nothing, and Linux is unchanged in effect.
+    - Every suite was green, T20-M7, M9 and M10 red as tabled, and the macOS proof was re-read by job id. The
+      probe ships as is, as the only pull-request-time Darwin witness of the stop.
+    - Run 609 closed `done`.
+    - Rulings, one fix round (mail 6457), and no review after it; I measure F1 myself:
+      - F1, measured by the reviewer: case 5's non-vacuity pin `leader=[RS]` reds on an unmutated tip under load,
+        1 in 6 runs at load about 12, reading `leader=D`. `D` is a live, unreaped leader, likely dash's vfork window.
+        The pin must accept every live state and refuse only `Z`, `X` and `gone`. T20-M7 must still red case 5.
+      - F2: the T20 describe's header ("row 64 stays byte-unchanged") and its title, widened to cover cases 5 and 6.
+      - F3: Step 3 records job 117707535560 (row 64's facts at `b6141d6f1`, `detail: spawn: Operation not
+        permitted`).
+      - F4: superseded markers on Reading 1 and the three "byte-unchanged" lines.
+      - F5: PR #607's body: 52 stops unexited of 92, 42 raised, 10 absorbed; Step 12's line becomes the full run's
+        job ids, and Step 12 is checked.
+    - Recorded only: case 6's 0.69 s margin is the likeliest timing candidate for the load-flake list; and "the
+      absorb never re-sends the SIGTERM" is new in this wave, with an outcome equal to the base's. A later
+      hardening could fall through to the SIGKILL instead of raising. That is residue for the next stop-path change.
 
 ## Carried constraints
 
