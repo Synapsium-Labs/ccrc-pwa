@@ -165,7 +165,7 @@ describe('AccountsStrip', () => {
   it('greys the fills of a sign-in-expired lane, keeping its band, and leaves a live lane coloured', async () => {
     stubAccounts([
       acct({ wrapper: 'claude', five: 91, seven: 40, authDead: true }),
-      acct({ wrapper: 'claude2', five: 91, seven: 40 }),
+      acct({ wrapper: 'claude9', five: 91, seven: 40 }),
     ]);
     const { container } = render(<AccountsStrip />);
     await screen.findAllByText('91%');

@@ -15,7 +15,7 @@ import type { Acks } from '../src/lib/seen';
 import { fleetSession } from './fleetFixture';
 
 const s = (over: Partial<FleetSession>): FleetSession =>
-  fleetSession({ id: 'x', wrapper: 'claude2', home: 'claude2', project: 'p', workdir: '/p', statusUpdatedAt: 0, ...over });
+  fleetSession({ id: 'x', wrapper: 'claude9', home: 'claude9', project: 'p', workdir: '/p', statusUpdatedAt: 0, ...over });
 
 afterEach(cleanup);
 
