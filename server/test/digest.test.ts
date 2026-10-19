@@ -181,9 +181,10 @@ describe('buildDigest (spec §10)', () => {
 
   it('a secret that straddles the 160th character leaves no head unmasked: the redaction runs before the cut', () => {
     const { coord } = store();
-    const head = "curl -H 'Authorization: Bearer ";
-    // The token starts at character 150, so a cut first would keep its first ten characters bare.
-    const cmd = `${'x'.repeat(150 - 1 - head.length)} ${head}${TOKEN_HEX}' https://example.invalid/x`;
+    // A bare token (masked as a long run, 32 characters or more) starting at character 150: a cut first would leave a
+    // ten-character run the redactor rightly lets through, the token's head bare.
+    const head = 'echo ok && curl https://example.invalid/x -d ';
+    const cmd = `${'x'.repeat(150 - 1 - head.length)} ${head}${TOKEN_HEX} --fail`;
     expect(cmd.indexOf(TOKEN_HEX)).toBe(150);
     const a = approval(coord, { t: at(0), input: cmd });
     rule(coord, a, 'allow', at(1));
