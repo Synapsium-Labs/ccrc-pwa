@@ -1720,6 +1720,23 @@ button.sess-held {
   box-shadow: inset 2px 0 0 var(--accent);
   border-radius: var(--r-sm);
   padding: 0 var(--sp-1) 0 calc(var(--sp-1) + 2px);
+  /* D-5574: a floor, so a long card meta can never crush the name again (it
+     drew at 10px, its own padding, beside five meta items at 1280). The floor
+     is the whole name, capped at the line less the chevron and its gap (the
+     chevron draws 6.84px of this 1em), where the base rule's ellipsis takes
+     over; capped at the full line, a long name wrapped away from its chevron.
+     Not a `min-width` length: that pads a short name's tint past its last
+     letter. */
+  flex-shrink: 0;
+  max-width: calc(100% - 1em - var(--sp-2));
+}
+
+/* D-5575: with the name floored, what does not fit beside it drops to a second
+   line inside the toggle, the way #647's cells wrap rather than squeeze
+   (D-5545). Before, the meta ran under the card's + button. Layout only. */
+.proj-card[data-holds-selection] .proj-card-toggle {
+  flex-wrap: wrap;
+  row-gap: 2px;
 }
 
 /* Pinned account — mono like every other machine value on this screen, and
