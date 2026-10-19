@@ -1471,7 +1471,7 @@ Issued 2026-10-18 to the session card and header change (#628), a block of three
 
 Issued and unused: 5547.
 
-### Found after landing: CCRCP-198
+### Found after landing: GitHub #746
 
 Issued 2026-10-19 to the stale-run fix, a block of four. D-5828 to D-5830 are defined here, once.
 
