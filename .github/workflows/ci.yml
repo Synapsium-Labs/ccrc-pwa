@@ -545,7 +545,8 @@ jobs:
   # like the other advisory legs. Pinned by server/test/ci-pipeline.test.ts.
   storybook-a11y:
     runs-on: ubuntu-latest
-    # The browser download dominates; the run itself is ~40s for 152 stories.
+    # The browser download dominates; each skin's build and axe run is ~40s
+    # for 180 stories, and the job runs one per skin.
     timeout-minutes: 20
     if: github.event_name != 'merge_group' && !((github.event_name == 'push' && !inputs.mode) || inputs.mode == 'rebuild')
     steps:
@@ -588,9 +589,12 @@ jobs:
           ./node_modules/.bin/vite preview --outDir storybook-static --host 127.0.0.1 --port 6006 --strictPort &
           ./node_modules/.bin/vite preview --outDir storybook-static-instrument --host 127.0.0.1 --port 6007 --strictPort &
           ./node_modules/.bin/wait-on tcp:127.0.0.1:6006 tcp:127.0.0.1:6007 -t 60000
+      # One axe run per skin. The second runs even when the first fails
+      # (`!cancelled()`), so a red Refined run never hides Instrument's result.
       - working-directory: ui
         run: npm run test-storybook -- --maxWorkers=2 --url http://127.0.0.1:6006
-      - working-directory: ui
+      - if: ${{ !cancelled() }}
+        working-directory: ui
         run: npm run test-storybook -- --maxWorkers=2 --url http://127.0.0.1:6007
 
   # The Darwin arms' standing mechanism (the macOS port's review, finding 3):

@@ -187,6 +187,12 @@ describe('ci.yml: the required checks cannot go missing (design 2026-09-23 §4.2
   // the job builds and tests it too. Each run is traced back through its port
   // to the build that port serves, and that build's STORYBOOK_SKIN must be the
   // run's id — Refined's is the unset default (`resolveSkin` of undefined).
+  // "Unset" is checked, not assumed: STORYBOOK_SKIN may appear in ci.yml only
+  // as an inline prefix on a build line, and the job never writes GITHUB_ENV,
+  // so no job- or step-level `env:` (nor an env-file write) can turn the
+  // default build into another skin. Each run must also come after the step
+  // that serves its port, and may be neither switched off nor told to ignore
+  // its result (`if:` other than `!cancelled()`, `continue-on-error`, `||`).
   it('storybook-a11y builds and tests once per skin in the catalogue', () => {
     const src = read('ui/src/styles/skins.ts');
     const consts = new Map([...src.matchAll(/^export const (\w+) = '([a-z][\w-]*)' as const;$/gm)]
@@ -208,7 +214,17 @@ describe('ci.yml: the required checks cannot go missing (design 2026-09-23 §4.2
     const served = new Map<string, string>(); // port -> outDir
     const waited = new Set<string>();
     const runs: string[] = []; // the port each test-storybook run reads
-    for (const st of s) {
+    const servedAt = new Map<string, number>(); // port -> index of the step serving it
+    const runAt = new Map<string, number>(); // port -> index of the step testing it
+    for (const [i, st] of s.entries()) {
+      if (/\btest-storybook\b/.test(st)) {
+        const cond = /^\s*-?\s*if: (.*)$/m.exec(st)?.[1].trim();
+        if (cond !== undefined) {
+          expect(cond, `a test-storybook step is conditional on something other than !cancelled():\n${st}`)
+            .toBe('${{ !cancelled() }}');
+        }
+        expect(st, `a test-storybook step ignores its own result:\n${st}`).not.toMatch(/\bcontinue-on-error\b|\|\|/);
+      }
       for (const line of st.split('\n')) {
         if (/\bbuild-storybook\b/.test(line)) {
           const skin = /\bSTORYBOOK_SKIN=([\w-]+)/.exec(line)?.[1] ?? unset!;
@@ -217,15 +233,21 @@ describe('ci.yml: the required checks cannot go missing (design 2026-09-23 §4.2
           builds.set(out, skin);
         }
         const pv = /vite preview --outDir (\S+) .*--port (\d+)/.exec(line);
-        if (pv) served.set(pv[2], pv[1]);
+        if (pv) { served.set(pv[2], pv[1]); servedAt.set(pv[2], i); }
         if (/\bwait-on\b/.test(line)) for (const w of line.matchAll(/\btcp:127\.0\.0\.1:(\d+)/g)) waited.add(w[1]);
         const t = /\btest-storybook\b.*--url http:\/\/127\.0\.0\.1:(\d+)/.exec(line);
-        if (t) runs.push(t[1]);
+        if (t) { runs.push(t[1]); runAt.set(t[1], i); }
       }
     }
+    const stray = code(read(CI)).split('\n')
+      .filter((l) => /\bSTORYBOOK_SKIN\b/.test(l) && !/^\s*run: STORYBOOK_SKIN=[\w-]+ npm run build-storybook\b/.test(l));
+    expect(stray, 'STORYBOOK_SKIN is set somewhere other than inline on a build line').toEqual([]);
+    expect(code(job('storybook-a11y')), 'storybook-a11y writes GITHUB_ENV').not.toMatch(/\bGITHUB_ENV\b/);
     expect(runs.length, 'storybook-a11y does not run test-storybook once per skin').toBe(ids.length);
     const tested = runs.map((port) => {
       expect(waited.has(port), `no wait-on for port ${port}`).toBe(true);
+      expect(runAt.get(port)! > (servedAt.get(port) ?? Infinity), `the run on port ${port} comes before the step serving it`)
+        .toBe(true);
       const out = served.get(port);
       expect(out, `test-storybook reads port ${port}, which no vite preview serves`).toBeDefined();
       const skin = builds.get(out!);
