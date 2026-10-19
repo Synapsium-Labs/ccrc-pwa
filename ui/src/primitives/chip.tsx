@@ -51,11 +51,12 @@ export const CHIP =
  *  own — see the header. Rendered `aria-hidden`: the label carries the
  *  meaning, and a screen reader announcing a bullet adds nothing.
  *
- *  NO `flex-none`, and no `block`. The rule had neither. `flex-none` would
- *  stop the dot shrinking when a long label squeezes the pill, which is a
- *  behaviour the original allowed; `block` is a no-op because a flex item is
- *  blockified anyway. Three utilities, which is what `.chip i` declared. */
-export const CHIP_DOT = 'size-[5px] rounded-full bg-current';
+ *  `shrink-0` (D-5578): a chip's dot never squeezes. `.chip i` let it shrink,
+ *  and a label of about 18 characters that wraps inside its pill at 360 or 390
+ *  drew the 5px dot 2 to 3px wide. `shrink-0` and not `flex-none`: the dot
+ *  never grew, so the shrink factor is the whole of the change. No `block`: a
+ *  flex item is blockified anyway. */
+export const CHIP_DOT = 'size-[5px] shrink-0 rounded-full bg-current';
 
 export interface ChipProps extends HTMLAttributes<HTMLSpanElement> {
   /** Show the leading dot. Off by default: two of the four shipped chips
