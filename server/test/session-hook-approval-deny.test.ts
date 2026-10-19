@@ -219,7 +219,7 @@ describe('the forbidden-verb deny: a child never runs a SAFETY verb or ccrc upda
       if (why === null || !why.startsWith('ccrc: ')) missed.push(c);
     }
     expect(missed).toEqual([]);
-  });
+  }, 90_000);  // every verb times every form is a real hook run each: ~14 s on a laptop, past the 20 s Linux default on CI
   it.each(THREADS)('%s: ws-gc with a quoted or escaped --prune is denied', (_t, extra) => {
     for (const c of ["ccd ws-gc '--prune'", 'ccd ws-gc "--prune"', 'ccd ws-gc \\--prune', 'P=ccd; $P ws-gc --prune']) {
       expect(bash(c, extra), c).toContain('ccd ws-gc --prune');
