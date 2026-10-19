@@ -202,10 +202,16 @@ describe('Settings → Updates renders a release row\'s notes the same way', () 
   it('grouped notes in the row: the groups, the fold, the links', () => {
     render(<ReleaseList releases={[release('v0.0.9', NOTES_9)]} nodes={[fleetNode()]} source={{ owner: 'owner-a', repo: 'repo-a' }} onMove={() => {}} />);
     const row = document.querySelector<HTMLElement>('.settings-release[data-tag="v0.0.9"]')!;
-    expect(within(row).getByText('Fixed')).toBeInTheDocument();
-    expect(within(row).getByRole('button', { name: 'Behind the scenes (2)' })).toBeInTheDocument();
-    expect(within(row).getAllByRole('link').map((a) => a.textContent)).toEqual(['#626', '#601', '#630']);
-    expect(row.textContent).toContain('Changes since');
+    // D-5505: the notes sit behind the row's "Notes" disclosure. v0.0.9 is the waiting release (the node's arrow),
+    // so its Notes are open by default and read inside.
+    const notes = row.querySelector<HTMLDetailsElement>('details.settings-release-notes-fold')!;
+    expect(notes.open).toBe(true);
+    expect(within(notes).getByText('Fixed')).toBeInTheDocument();
+    expect(within(notes).getByRole('button', { name: 'Behind the scenes (2)' })).toBeInTheDocument();
+    expect(within(notes).getAllByRole('link').map((a) => a.textContent)).toEqual(['#626', '#601', '#630']);
+    expect(notes.textContent).toContain('Changes since');
+    // The row's one-line summary is the first New item, through the same NoteText, never the "Changes since" line.
+    expect(row.querySelector('.settings-release-summary')!.textContent).toBe('The command palette and shortcuts #626');
   });
 });
 

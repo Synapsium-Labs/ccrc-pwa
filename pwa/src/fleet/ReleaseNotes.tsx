@@ -25,6 +25,9 @@ import {
 import { Button, RESET_LIST, TextLink } from '@ccrc/ui';
 import { openExternal } from '../lib/markdown';
 
+/** The one wording for a release with no body: the What's-new sheet's line and a release row's summary (D-5505). */
+export const NO_NOTES_TEXT = 'No notes for this release';
+
 /** One line of notes: its text, every `#NNN` a link when the source allows. */
 export function NoteText({ text, source }: { text: string; source: ReleaseSourceWire | null | undefined }): ReactNode {
   return splitPrRefs(text).map((p, i) => {
