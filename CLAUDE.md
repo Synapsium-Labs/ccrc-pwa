@@ -319,8 +319,10 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   "strengthens D-282 rather than reversing it"). Those prefixes are the bulk of the box-token surface, not the
   whole of it (D-1148, correcting a "whole box-token surface" claim this file carried for one wave): `POST
   /api/asks/:id/answer`, `POST /api/asks/:id/release`, `POST /api/claims`, `POST /api/claims/:id/release`,
-  `POST /api/coordinators/:session/intent`, `POST /api/ledger/deviations` and
-  `GET /api/ledger` all call `requireMailToken` outside both (the intent door, where a session declares its own coordinator
+  `POST /api/coordinators/:session/intent`, `POST /api/ledger/deviations`, `GET /api/ledger` and the approvals lane's
+  six (`POST /api/approvals`, `GET /api/approvals/:id/ruling`, `GET /api/approvals/key`, `POST /api/approvals/:id/rule`,
+  `POST /api/approvals/:id/release` and `GET /api/approvals/:id`, coordinator-first routing D-5298) all call
+  `requireMailToken` outside both (the intent door, where a session declares its own coordinator
   intent through `ccrc-api`, is attribution-checked and sits in `auth/gate.ts`'s EXEMPT table like the claim lanes: its only
   caller holds the token and has no cookie). The dual-credential reads, including `GET /api/feed`
   and the update projection read `GET /api/updates/intent/:nodeId` (a fleet node's timer pulls it cookieless from

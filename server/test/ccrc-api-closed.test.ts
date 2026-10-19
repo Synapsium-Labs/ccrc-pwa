@@ -325,11 +325,13 @@ describe('the client stays closed', () => {
     // it, and its row took the table from twenty-four to twenty-five on the merge.
     // The three approvals rows (coordinator-first routing, plan Task 14) took it to
     // twenty-eight; they fill nothing either: the hook builds its request body whole.
+    // The claimant's three (plan Task 16) took it to thirty-one: `rule` and `release` carry the caller's own body,
+    // and `show` derives its query from the pane as `asks list` does — a query, not a body fill.
     const code = clientCode();
     const filled = [...code.matchAll(/^\s*if \[\[ "\$key" == '([a-z.-]+)' && -n "\$body" \]\]; then$/gm)]
       .map((m) => m[1]!).sort();
     expect(filled).toEqual(['ledger.allocate', 'runs.open']);
-    expect(routeKeys().size).toBe(28);
+    expect(routeKeys().size).toBe(31);
     // The claimant's identity is the PANE's, derived, never a value the caller
     // passes as a flag: the runs.open fill splices `$DERIVED_UUID` and nothing else.
     expect(code).toMatch(/splice_body_field 'claimedByUuid' "\$DERIVED_UUID"/);

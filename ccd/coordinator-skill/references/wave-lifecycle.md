@@ -1146,3 +1146,24 @@ entire evidentiary surface — no rationale, no chat history, no transcript of t
 reasoning is readable through any route in this tree. Rule only from what you can already read
 elsewhere: the spec, the plan, the ledger, the branch, and your own prior rulings on this
 program. If answering would require guessing rather than reading, decline it.
+
+## The approval lane — a child's permission prompt (plan Task 16)
+
+Clause 11 licenses this too. A child's permission prompt reaches you as mail (subject
+`approval:<id>`), held for you as the recorded claimant of the child's run wherever you sit
+(D-5530), with the command fenced as untrusted data, the server's class, the window's end in
+UTC and the ready-to-run commands. Three routes are yours, each through the client:
+
+- `POST /api/approvals/:id/rule` — allow once (an `ordinary` row only) or deny, with a reason
+  the child reads. The mailed command reads your reason through a quoted heredoc and builds the
+  body with jq, so type the reason on its own line and nothing in it is run (D-5489).
+- `POST /api/approvals/:id/release` — hand it over: the operator is notified at once, and it is
+  final.
+- `GET /api/approvals/:id` (`"$API" approvals show <id>`) — the row, redacted, for the claimant
+  it was held for; anyone else is `403`.
+
+A ruling after the window is refused `hook-gone`: the child's hook has returned and the
+operator has the prompt. Any other caller is `403 not-parent`, wherever it sits. The other
+three routes of the lane are the child's hook's and the install's, never yours:
+`POST /api/approvals` (the hook's request), `GET /api/approvals/:id/ruling` (the hook's wait,
+by its nonce) and `GET /api/approvals/key` (the public key a fleet box pins).

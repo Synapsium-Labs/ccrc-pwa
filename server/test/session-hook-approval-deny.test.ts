@@ -130,6 +130,10 @@ describe('the approval-surface deny: a child cannot reach the approval surface (
     '$CCRC_API approvals rule 1 allow',
     '"$(command -v ccrc-api)" approvals rule 1 allow',
     "ccrc-a''pi approvals rule 1 allow",
+    // The claimant mail's own rule block (D-5489, amended): a quoted heredoc reads the reason, jq pipes the body in.
+    'IFS= read -r reason <<\'REASON\'\nfine\nREASON\n' +
+      'jq -nc --arg id "$id" --arg uuid "$uuid" --arg reason "$reason" \'{fromId:$id,fromUuid:$uuid,verdict:"allow",reason:$reason}\' |\n' +
+      '  "$API" approvals rule 1 --json -\n',
   ];
   it.each(THREADS)('%s: every invocation form is denied, naming the approval surface', (_t, extra) => {
     for (const c of surface) {

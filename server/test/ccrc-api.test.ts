@@ -233,10 +233,15 @@ describe('the closed route table', () => {
     [['approvals', 'request'], 'POST', '/api/approvals'],
     [['approvals', 'ruling', '41', '--nonce', '0123456789abcdef0123456789abcdef'], 'GET', '/api/approvals/41/ruling'],
     [['approvals', 'key'], 'GET', '/api/approvals/key'],
+    // The claimant's three rows (coordinator-first routing, plan Task 16, D-5298).
+    [['approvals', 'rule', '41'], 'POST', '/api/approvals/41/rule'],
+    [['approvals', 'release', '41'], 'POST', '/api/approvals/41/release'],
+    [['approvals', 'show', '41'], 'GET', '/api/approvals/41'],
   ];
 
   it.each(ROWS)('%s -> %s %s', async (args, method, url) => {
-    const paned = (args[0] === 'asks' && args[1] === 'list') || args[0] === 'coordinators';
+    const paned = (args[0] === 'asks' && args[1] === 'list') || args[0] === 'coordinators'
+      || (args[0] === 'approvals' && args[1] === 'show');
     if (paned) plantPane('demo-ws');
     await run(args as string[], undefined, paned ? { TMUX_PANE: '%7' } : undefined);
     expect(seen).toHaveLength(1);
@@ -263,7 +268,8 @@ describe('the closed route table', () => {
     // door) landed.
     // Twenty-five since `coordinators.intent` (delegation broker wave 3, Task 15).
     // Twenty-eight since the approvals rows (coordinator-first routing, plan Task 14).
-    expect(keys).toHaveLength(28);
+    // Thirty-one since the claimant's approvals rows (plan Task 16).
+    expect(keys).toHaveLength(31);
   });
 
   it('states the row count in prose as the number the table actually holds', () => {
@@ -272,7 +278,7 @@ describe('the closed route table', () => {
       15: 'fifteen', 16: 'sixteen', 17: 'seventeen', 18: 'eighteen',
       19: 'nineteen', 20: 'twenty', 21: 'twenty-one', 22: 'twenty-two',
       23: 'twenty-three', 24: 'twenty-four', 25: 'twenty-five', 26: 'twenty-six',
-      27: 'twenty-seven', 28: 'twenty-eight',
+      27: 'twenty-seven', 28: 'twenty-eight', 29: 'twenty-nine', 30: 'thirty', 31: 'thirty-one',
     };
     const want = WORDS[n];
     expect(want, `the ROUTES table outgrew this test's word list at ${n}`).toBeDefined();
