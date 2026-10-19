@@ -9,6 +9,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readmeSizeClaim } from './readmeSizeClaim.js';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const read = (rel: string): string => readFileSync(join(REPO, rel), 'utf8');
@@ -85,10 +86,6 @@ describe('CONTRIBUTING.md', () => {
   });
 });
 
-// "README.md (~6702 lines)", "README is 6,300 lines": README named, then a
-// line count within the same clause.
-const README_SIZE = /README(?:\.md)?`?[^.;]{0,40}?\b\d[\d,]*\s+lines\b/i;
-
 describe('claims that go stale', () => {
   it('CLAUDE.md states no README size (D-5892, #558)', () => {
     // It used to: "817 lines" while the file was 1,590, and this test pinned the
@@ -97,9 +94,8 @@ describe('claims that go stale', () => {
     // commits, one of which turned main red. A size is not a rule, so CLAUDE.md
     // no longer states one, and this asserts that it stays that way: README can
     // grow by any amount without a CLAUDE.md or test edit.
-    const flat = read('CLAUDE.md').replace(/\s+/g, ' ');
-    expect(flat, 'CLAUDE.md states a README line count again — drop the number')
-      .not.toMatch(README_SIZE);
+    expect(readmeSizeClaim(read('CLAUDE.md')),
+      'CLAUDE.md states a README line count again — drop the number').toBeNull();
   });
 });
 

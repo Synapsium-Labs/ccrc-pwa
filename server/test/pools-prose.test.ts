@@ -102,6 +102,7 @@ import { fileURLToPath } from 'node:url';
 // `single-definition.test.ts` enforces it — import the constant, never re-spell
 // it here (`readme-holds.test.ts` records the same rule).
 import { CCD } from './ccdWsHelpers.js';
+import { readmeSizeClaim } from './readmeSizeClaim.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const read = (rel: string): string => readFileSync(path.join(root, rel), 'utf8');
@@ -875,9 +876,8 @@ describe('CLAUDE.md: the account-pools bullet is GROUNDED where it can be, QUOTE
     // The bullet above is capped by its own line count; README's size is not a
     // rule about pools or anything else, so CLAUDE.md no longer states it
     // (`oss-metadata.test.ts` holds the same absence for the whole file).
-    const flat = read('CLAUDE.md').replace(/\s+/g, ' ');
-    expect(flat, 'CLAUDE.md states a README line count again — drop the number, do not re-measure it')
-      .not.toMatch(/README(?:\.md)?`?[^.;]{0,40}?\b\d[\d,]*\s+lines\b/i);
+    expect(readmeSizeClaim(read('CLAUDE.md')),
+      'CLAUDE.md states a README line count again — drop the number, do not re-measure it').toBeNull();
   });
 
   it('is grounded in the shipped mechanism it describes', () => {
