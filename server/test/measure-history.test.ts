@@ -730,3 +730,178 @@ describe('W2-3 Task 1: raw window rows', () => {
     expect(copyOf(fam, f.b1, f1).models).toEqual([null]);
   });
 });
+
+// ── W2-3 Task 2: the gate module is pure and its words are its own (W2-D11, W2-D12; D-5774, D-5775) ──────────
+// `deploy/history-gate.mjs` holds every W2 scoring decision (W2-D24) and must stay a pure function of its inputs:
+// its imports are `node:crypto` and lib.mjs only, and its text (comments and strings included) never spells a
+// clock, a random source, the environment or a dynamic load. Its closed word sets are frozen once, there, and
+// pinned here once. FACT_KINDS and LABELS have exactly one declaring file under deploy/ and server/test/ (W2-D12;
+// D-5774): importing them is allowed, so this describe reads them off the module and declares neither.
+describe('W2-3 Task 2: the gate module is pure and its words are its own', () => {
+  const GATE = path.join(ROOT, 'deploy', 'history-gate.mjs');
+  const LIB_SPEC = '../ccd/history/lib.mjs';
+  const gateSrc = (): string => readFileSync(GATE, 'utf8');
+  const gate = async () => import('../../deploy/history-gate.mjs');
+  /** Every specifier a static import or re-export names, single- or multi-line, and every bare `import '…'`. */
+  const specifiers = (text: string): string[] => [
+    ...[...text.matchAll(/^\s*(?:import|export)\b[^;'"]*?\bfrom\s*['"]([^'"]+)['"]/gm)].map((m) => m[1]!),
+    ...[...text.matchAll(/^\s*import\s*['"]([^'"]+)['"]/gm)].map((m) => m[1]!),
+  ];
+  /** W2-D11's banned spellings, read over the WHOLE text: a comment or a string that spells one is a red too. */
+  const FORBIDDEN: ReadonlyArray<readonly [string, RegExp]> = [
+    ['process.', /\bprocess\.[A-Za-z_$]/],
+    ['Date.now', /\bDate\.now\b/],
+    ['new Date', /\bnew\s+Date\b/],
+    ['Math.random', /\bMath\.random\b/],
+    ['performance.', /\bperformance\.[A-Za-z_$]/],
+    ['require(', /\brequire\s*\(/],
+    ['import(', /\bimport\s*\(/],
+  ];
+  /** Module-scope declarations only (column 0), the names a reader of the gate could import. */
+  const topLevelNames = (text: string): string[] =>
+    [...text.matchAll(/^(?:export\s+)?(?:const|let|var|class|(?:async\s+)?function\*?)\s+([A-Za-z_$][\w$]*)/gm)].map((m) => m[1]!);
+  /** single-definition.test.ts's O14 `declares`, rebuilt here; the names are assembled so this file never
+   *  spells a declaration of either one itself. */
+  const declares = (name: string): RegExp => new RegExp(`(?:^|[\\s;])(?:export\\s+)?(?:const|let|var)\\s+${name}\\b`);
+  const OWN_WORDS = ['FACT' + '_KINDS', 'LAB' + 'ELS'] as const;
+  /** A different vocabulary that happens to share the name, measured at 7d01973a2: collectLaneFixture.ts:58
+   *  declares a `LABELS` Set of collect-lane box labels from COLLECT_BOX_LABELS. Named, and checked live below. */
+  const NAMED_OTHERS: Record<string, { name: string; needle: string }> = {
+    'server/test/collectLaneFixture.ts': { name: 'LAB' + 'ELS', needle: 'COLLECT_BOX_LABELS' },
+  };
+  /** Comment lines dropped, single-definition.test.ts's `stallCodeText` rule: a sentence about a name is no declaration. */
+  const codeLinesOf = (text: string): string[] => text.split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l));
+  const filesUnder = (dir: string, ext: RegExp): string[] =>
+    (readdirSync(dir, { recursive: true, encoding: 'utf8' }) as string[])
+      .filter((p) => ext.test(p) && !p.split(path.sep).some((s) => s.startsWith('__') || s === 'node_modules'))
+      .map((p) => path.join(dir, p));
+  /** single-definition.test.ts's class scan (the four-class `enumerates`), restated: a file holding all four
+   *  class words is a holder there, and the gate must never become one. */
+  const CLASSES = ['haiku', 'sonnet', 'opus', 'fable'] as const;
+  const enumeratesClasses = (text: string): boolean => CLASSES.every((c) =>
+    new RegExp(`(?:'${c}'|"${c}"|(?<![\\w'-])${c}\\s*:|(?<![\\w-])${c}(?![\\w-]))`).test(text));
+
+  it('CONTROL: the specifier reader, the banned patterns, the declaration reader and the class scan each see what they look for', () => {
+    expect(specifiers("import {\n  a,\n  b,\n} from 'node:fs';\nimport 'node:path';\nexport { c } from './c.mjs';"))
+      .toEqual(['node:fs', './c.mjs', 'node:path']);
+    const planted: Record<string, string> = {
+      'process.': 'const h = process.env.HOME;', 'Date.now': 'const t = Date.now();', 'new Date': 'const d = new Date(0);',
+      'Math.random': 'const r = Math.random();', 'performance.': 'const p = performance.now();',
+      'require(': "const fs = require('node:fs');", 'import(': "const m = await import('node:fs');",
+    };
+    for (const [word, re] of FORBIDDEN) {
+      expect(re.test(planted[word]!), word).toBe(true);
+      expect(re.test('the sweep process. A new Dated row; imports are static'), word).toBe(false);
+    }
+    expect(topLevelNames('export const EXIT = 1;\nconst k = 2;\n  const inner = 3;\nexport function f() {}\nclass C {}'))
+      .toEqual(['EXIT', 'k', 'f', 'C']);
+    expect(declares(OWN_WORDS[0]).test(`export const ${OWN_WORDS[0]} = Object.freeze(['sha']);`)).toBe(true);
+    expect(declares(OWN_WORDS[0]).test(`import { ${OWN_WORDS[0]} } from '../deploy/history-gate.mjs';`)).toBe(false);
+    expect(declares(OWN_WORDS[1]).test(`const { ${OWN_WORDS[1]} } = gate;`)).toBe(false);
+    expect(enumeratesClasses(readFileSync(path.join(ROOT, 'deploy', 'models-op.mjs'), 'utf8')), 'a known holder').toBe(true);
+  });
+
+  it('imports only node:crypto and lib.mjs, and lib.mjs exactly as W2-D11 lists it', () => {
+    const specs = specifiers(gateSrc());
+    expect(specs).toContain(LIB_SPEC);
+    for (const s of specs) expect(['node:crypto', LIB_SPEC], s).toContain(s);
+    expect(gateSrc()).toContain(
+      "import { EXIT, UUID_RE, canonicalJson, pickHoldingCopy, producerOf, sha256Hex } from '../ccd/history/lib.mjs';");
+  });
+
+  it.each(FORBIDDEN)('the gate source never spells %s (comments and strings included)', (word, re) => {
+    const hits = gateSrc().split('\n').map((l, i) => [i + 1, l] as const).filter(([, l]) => re.test(l));
+    expect(hits, `${word} at deploy/history-gate.mjs:${hits.map(([n]) => n).join(',')}`).toEqual([]);
+  });
+
+  it('O14, local half: the gate declares no name lib.mjs exports', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    const names = topLevelNames(gateSrc());
+    expect(names, 'the reader found the gate\'s own declarations').toEqual(expect.arrayContaining(['K', OWN_WORDS[0], 'familyKey']));
+    expect(names.filter((n) => Object.prototype.hasOwnProperty.call(lib, n))).toEqual([]);
+  });
+
+  it('W2-D12 (D-5774): exactly one file under deploy/ and server/test/ declares each of the gate\'s own word lists, the gate', () => {
+    const corpus = [...filesUnder(path.join(ROOT, 'deploy'), /\.mjs$/), ...filesUnder(path.join(ROOT, 'server', 'test'), /\.ts$/)];
+    expect(corpus.map((f) => path.relative(ROOT, f))).toEqual(expect.arrayContaining(['deploy/history-gate.mjs', 'server/test/measure-history.test.ts']));
+    const texts = new Map(corpus.map((f) => [f, readFileSync(f, 'utf8')] as const));
+    for (const name of OWN_WORDS) {
+      const re = declares(name);
+      const holders = corpus.filter((f) => texts.get(f)!.includes(name) && codeLinesOf(texts.get(f)!).some((l) => re.test(l)))
+        .map((f) => path.relative(ROOT, f)).filter((r) => NAMED_OTHERS[r]?.name !== name).sort();
+      expect(holders, `${name}: a second declaration`).toEqual(['deploy/history-gate.mjs']);
+    }
+    for (const [rel, { name, needle }] of Object.entries(NAMED_OTHERS)) {
+      const line = codeLinesOf(readFileSync(path.join(ROOT, rel), 'utf8')).find((l) => declares(name).test(l));
+      expect(line, `${rel} no longer declares ${name}: remove it from NAMED_OTHERS`).toBeDefined();
+      expect(line, `${rel}'s ${name} is no longer the ${needle} set: rule on it`).toContain(needle);
+    }
+  });
+
+  it('the gate never spells the two small class words, so the class scan never counts it', () => {
+    const text = gateSrc();
+    expect(text.match(/haiku|sonnet/gi) ?? []).toEqual([]);
+    expect(enumeratesClasses(text)).toBe(false);
+  });
+
+  it('each constant and word set has its exact value, frozen, with no repeated member', async () => {
+    const g = await gate();
+    const expected: Record<string, unknown> = {
+      K: 10,
+      K_UNIT: 'assistant-turns',
+      X: { num: 1, den: 10 },
+      ROW_CAP: 400,
+      BOOTSTRAP: { B: 10000, ci: 95, method: 'percentile', percentile: 'nearest-rank', statistic: 'pooled', prng: 'xoshiro128**' },
+      SUBSTREAMS: ['quiz-ci', 'live-ci', 'q18', 'handcheck', 'quiz-sample', 'judge-order'],
+      PILOT_SUBSTREAM: 'pilot-sample',
+      ASSIGN_LABEL: 'assign',
+      FACT_KINDS: ['sha', 'path', 'command', 'error'],
+      LABELS: ['correct', 'uncertain', 'fabricated'],
+      RUBRIC_IDS: ['v1', 'v1-strict'],
+      WRITER_INPUTS: ['excerpt', 'leaf-span'],
+      SHA_MIN_PREFIXES: [7, 40],
+      ANSWER_STATES: ['value', 'unknown', 'absent'],
+      RUN_CLASSES: ['answered', 'infra-failed', 'not-run'],
+      QUESTION_OUTCOMES: ['answered', 'rerun', 'run-failed', 'not-run'],
+      VERDICTS: ['pass', 'fail', 'halt', 'incomplete'],
+      HALT_WORDS: ['absent-rate', 'run-failed', 'handcheck-agreement', 'empty-arm'],
+      WINDOW_STATES: ['measured', 'unmeasured'],
+      ASSIGNMENT_ARMS: ['treatment', 'control'],
+      ACTIVE_EXCLUSIONS: ['merged', 'legacy', 'not-newest', 'no-recent-entry'],
+      AMENDMENT_KINDS: ['version-move', 'freeze-exception', 'forced-act'],
+      GATE_CODE_FILES: ['deploy/history-gate.mjs', 'deploy/measure-history.py', 'deploy/history-replay.mjs', 'ccd/history/lib.mjs'],
+      GATE_REASONS: [
+        'store-id-null', 'store-id-duplicate', 'store-id-unlisted', 'family-unassigned', 'row-cap-mismatch', 'window-mismatch', 'code-changed', 'code-unmeasured',
+        'writer-malformed', 'writer-leak',
+        'question-not-run',
+        'field-missing', 'field-unknown', 'field-malformed', 'constant-mismatch', 'value-outside-set', 'model-alias', 'model-forbidden',
+        'signed-text-mismatch', 'release-mismatch', 'flag-rejected', 'seed-changed', 'pilot-drift', 'quiz-mismatch', 'quiz-holds-control',
+        'pilot-quiz-overlap', 'window-length', 'assignment-mismatch', 'draft-mismatch', 'chain-mismatch', 'post-start-change',
+        'amendment-kind', 'amendment-detail-mismatch', 'version-move-unpiloted',
+      ],
+    };
+    const mod = g as unknown as Record<string, unknown>;
+    for (const [name, value] of Object.entries(expected)) {
+      expect(mod[name], name).toEqual(value);
+      if (typeof value === 'object') {
+        expect(Object.isFrozen(mod[name]), `${name} is not frozen`).toBe(true);
+        if (Array.isArray(value)) expect(new Set(value).size, `${name} repeats a member`).toBe(value.length);
+      }
+    }
+    expect(g.FACT_KINDS, 'D-5775: decisions are not a fact kind').not.toContain('decision');
+    expect(g.SUBSTREAMS, 'the pilot\'s label is used only with the pilot\'s own seed').not.toContain(g.PILOT_SUBSTREAM);
+    expect(g.SUBSTREAMS, '\'assign\' is a hash label, not a substream').not.toContain(g.ASSIGN_LABEL);
+    expect(typeof g.METRIC_TEXT).toBe('string');
+    expect(g.METRIC_TEXT).toContain('recall calls per post-compaction turn');
+    expect(g.METRIC_TEXT).toContain('first K assistant turns');
+  });
+
+  it('familyKey is canonical JSON of (store_id, ccrc_id, generation): equal ids on two stores are two keys', async () => {
+    const g = await gate();
+    const lib = await import('../../ccd/history/lib.mjs');
+    expect(g.familyKey(OTHER_STORE, 'demo-id', G1)).toBe(`["${OTHER_STORE}","demo-id","${G1}"]`);
+    expect(g.familyKey(OTHER_STORE, 'demo-id', G1)).toBe(lib.canonicalJson([OTHER_STORE, 'demo-id', G1]));
+    expect(g.familyKey(OTHER_STORE, 'demo-id', G1)).not.toBe(g.familyKey('00000000-0000-4000-8000-000000000002', 'demo-id', G1));
+    expect(g.familyKey(OTHER_STORE, 'a","b', '')).toBe(`["${OTHER_STORE}","a\\",\\"b",""]`);
+  });
+});
