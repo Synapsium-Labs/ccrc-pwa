@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply } from 'fastify';
 import type { Deps } from '../server.js';
 import type { ClaimDoor } from './door.js';
 import { CLAIM_BODY_LIMIT_BYTES, type BoxTokenView, type ClaimRefusal, type RotateAnswer } from '../../../shared/box-token.js';
+import { REFUSAL_STATUS } from '../../../shared/refusal.js';
 
 /**
  * What the token routes need from the driver, declared here by its consumer
@@ -20,8 +21,13 @@ export interface TokenRouteDriver {
 
 const NO_STORE = 'no-store';
 
-const refuse = (reply: FastifyReply, status: number, error: ClaimRefusal): FastifyReply =>
-  reply.code(status).header('cache-control', NO_STORE).send({ ok: false, error });
+/** A claim refusal at its word's one status (D-5381: `REFUSAL_STATUS`, never a status argument). */
+const refuse = (reply: FastifyReply, error: ClaimRefusal): FastifyReply =>
+  reply.code(REFUSAL_STATUS[error]).header('cache-control', NO_STORE).send({ ok: false, error });
+/** The one claim refusal off the table (D-5381): Fastify refused an oversized body before the handler, and spec 4.6
+ *  reshapes its own 413 into the small claim body, so `bad-request` keeps Fastify's 413 here. */
+const refuseOversizedClaim = (reply: FastifyReply): FastifyReply =>
+  reply.code(413).header('cache-control', NO_STORE).send({ ok: false, error: 'bad-request' satisfies ClaimRefusal });
 
 /**
  * The box-token lifecycle's two routes (spec 4.6), registered from their own
@@ -57,25 +63,25 @@ export function registerTokenRoutes(app: FastifyInstance, deps: Pick<Deps, 'toke
         // the miss budget and logged like the door's other misses, exactly as a malformed body the handler sees (spec 4.6).
         // Past the budget it is a 429, as every other miss is. With no driver there is no door to charge.
         const step = deps.tokenDriver?.door.claimNow(null, Date.now());
-        if (step !== undefined && step.status === 429) return refuse(reply, 429, 'rate-limited');
-        return refuse(reply, status === 413 ? 413 : 400, 'bad-request');
+        if (step !== undefined && step.status === 429) return refuse(reply, 'rate-limited');
+        return status === 413 ? refuseOversizedClaim(reply) : refuse(reply, 'bad-request');
       }
       console.warn('ccrc-server: box token: the claim door failed unexpectedly; answered 503');
-      return refuse(reply, 503, 'unavailable');
+      return refuse(reply, 'unavailable');
     },
   }, async (req, reply) => {
     const driver = deps.tokenDriver;
-    if (!driver) return refuse(reply, 404, 'no-claim');
+    if (!driver) return refuse(reply, 'no-claim');
     const now = Date.now();
     const step = driver.door.claimNow(req.body, now);
-    if (step.status !== 200) return refuse(reply, step.status, step.error);
+    if (step.status !== 200) return refuse(reply, step.error);
     try {
       await driver.commitHandOut(step.generation, now);
     } catch {
       // Spec 7.1 (F11): the outcome's word and the node id (it passed NODE_ID_RE in the door), never a code or a value.
       console.warn(`ccrc-server: box token: claim door unavailable: the hand-out of generation ${step.generation} to node ` +
         `${step.nodeId} could not be recorded; answered 503 and the generation is discarded`);
-      return refuse(reply, 503, 'unavailable');
+      return refuse(reply, 'unavailable');
     }
     return reply.code(200).send({ ok: true, value: step.value, generation: step.generation });
   });

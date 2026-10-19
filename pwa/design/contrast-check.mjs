@@ -62,6 +62,7 @@ const palette = (theme) => {
     busy: of('--status-busy'), busyText: of('--status-busy-text'), idle: of('--status-idle'),
     att: of('--status-attention'), attText: of('--status-attention-text'), attTint: of('--status-attention-tint'),
     dead: of('--status-dead'), deadText: of('--status-dead-text'), deadTintSolid: of('--status-dead-tint-solid'),
+    dangerInk: of('--ink-on-danger'),
     done: of('--status-done'), doneText: of('--status-done-text'),
     cleanup: of('--status-cleanup'), cleanupText: of('--status-cleanup-text'),
     cyan: of('--acct-cyan'), cyanT: of('--acct-cyan-tint'),
@@ -79,8 +80,60 @@ const palette = (theme) => {
     // The scrollbar thumb (D-5159), derived in :root and re-resolved here per
     // palette like every other token.
     thumb: of('--scrollbar-thumb'),
+    // The interactive grounds (D-5101), opaque derivations of the ink over
+    // the card. `of` refuses a translucent one, which is the point.
+    hover: of('--bg-hover'), pressed: of('--bg-pressed'),
+    // The same two on the dead banner (D-5574), painted by the danger-ghost
+    // with `ground="dead"` (D-5688): the banner's tint mixed toward
+    // --ink-on-danger, 35/70 in :root and 60/95 in a light palette, so they
+    // are opaque here too.
+    hoverOnDead: of('--bg-hover-on-dead'), pressedOnDead: of('--bg-pressed-on-dead'),
+    // Any token by name, for the ground lists below.
+    of,
   };
 };
+
+// ── the row grounds (D-5101) ────────────────────────────────────────────────
+// EACH NEW GROUND GETS EXACTLY THE INKS DRAWN ON IT, as Task 9's Step 0
+// measured them on its base, read off the primitives' class strings and the
+// fleet row's meta rules. Named lists, so pwa/test/hover-states.test.ts and
+// fleet-css.test.ts can hold the gate to them.
+//
+// The selected fleet row is `--accent-tint` with a rail. Its meta keeps its
+// hues there, so it carries the three neutral tiers, every status text and
+// every lane hue, at the 4.5 body floor, and every lamp dot at 3:1.
+const SELECTED_ROW_INKS = [
+  '--ink-primary', '--ink-secondary', '--ink-tertiary',
+  '--status-busy-text', '--status-attention-text', '--status-dead-text',
+  '--status-done-text', '--status-cleanup-text',
+  '--acct-cyan', '--acct-violet', '--acct-blue', '--acct-magenta', '--acct-amber', '--acct-green',
+];
+const SELECTED_ROW_DOTS = [
+  '--status-busy', '--status-idle', '--status-attention', '--status-dead', '--status-done', '--status-cleanup',
+];
+// A hovered row, menu item, door or ghost button lifts to `--bg-hover`. The
+// fleet row keeps its meta while hovered, so this is the same set of inks.
+const HOVER_INKS = [
+  '--ink-primary', '--ink-secondary', '--ink-tertiary',
+  '--status-busy-text', '--status-attention-text', '--status-dead-text',
+  '--status-done-text', '--status-cleanup-text',
+  '--acct-cyan', '--acct-violet', '--acct-blue', '--acct-magenta', '--acct-amber', '--acct-green',
+];
+// A pressed primitive sinks to `--bg-pressed`. Only `ListRow`, `BareRow` and
+// the ghost, danger-ghost (D-5495) and quiet buttons press to a ground, and
+// what they draw is the neutral tiers plus one coloured ink: the session
+// menu's danger row (`.menu-item--danger .menu-label`) and the danger-ghost's
+// label, both --status-dead-text. The fleet row never
+// presses to a ground, and a chip inside a pressed row paints its own. The
+// danger row is the one ink beyond the plan's neutral list (D-5454).
+const PRESSED_INKS = ['--ink-primary', '--ink-secondary', '--ink-tertiary', '--status-dead-text'];
+
+const rowPairs = (T, name) => [
+  ...SELECTED_ROW_INKS.map((k) => [`${name} ${k.slice(2)} / accent-tint (selected row)`, T.of(k), T.accentTint, 4.5]),
+  ...SELECTED_ROW_DOTS.map((k) => [`${name} ${k.slice(2)} dot / accent-tint (selected row, UI 3:1)`, T.of(k), T.accentTint, 3]),
+  ...HOVER_INKS.map((k) => [`${name} ${k.slice(2)} / hover`, T.of(k), T.hover, 4.5]),
+  ...PRESSED_INKS.map((k) => [`${name} ${k.slice(2)} / pressed`, T.of(k), T.pressed, 4.5]),
+];
 
 const hex = (c) => '#' + [0, 1, 2].map((i) => Math.round(c[i]).toString(16).padStart(2, '0')).join('');
 
@@ -224,18 +277,9 @@ const pairs = (T, name) => [
   // BAR and the bar is on the well.
   [`${name} accent-on-well / well`, T.accentOnWell, T.well, 4.5],
   [`${name} accent focus ring / page (UI 3:1)`, T.accent, T.page, 3],
-  // The selected fleet row inverts (.sess-line--active: background
-  // --ink-primary), so its 12px meta line takes --edge-strong ON the slab — a
-  // hairline token used as text, which is the ONE genuinely new combination
-  // this treatment introduces. Everything else it needs is already gated and
-  // ratios are symmetric: the label's ink (--bg-page on --ink-primary) is
-  // `ink-primary / page`, the ··· glyph is `ink-secondary / page`, and the four
-  // dots on the lamp plate are the `* dot / lamp well` pairs.
-  // Do NOT add "dot on the selected slab" pairs: pairs() runs every entry in
-  // BOTH themes (line below), and those dots measure 1.55-2.87 in dark, which
-  // would redden the gate for a state that cannot occur — the plate is what
-  // they actually sit on.
-  [`${name} selected-row meta ink / slab`, T.edgeStrong, T.inkP, 4.5],
+  // The selected fleet row's pairs are `rowPairs` above (D-5101). The slab it
+  // replaced, and its one pair (--edge-strong on --ink-primary), are retired.
+  ...rowPairs(T, name),
 
   // A GHOST BUTTON'S LABEL ON A TINTED BANNER. Button's ghost variant paints
   // its own --ink-primary and its background is transparent, so it is neither
@@ -264,6 +308,41 @@ const pairs = (T, name) => [
   [`${name} scrollbar thumb / raised (UI 3:1)`, T.thumb, T.raised, 3],
   [`${name} scrollbar thumb / sheet (UI 3:1)`, T.thumb, T.sheet, 3],
   [`${name} scrollbar thumb / well (UI 3:1)`, T.thumb, T.well, 3],
+
+  // THE DANGER VARIANTS (D-5099). `danger` is a fill of --status-dead with
+  // --ink-on-danger on it: self-grounded, so utility-pairs.test.ts finds the
+  // pair in button.tsx, and this is its per-palette floor. `danger-ghost` is
+  // a --status-dead hairline around a --status-dead-text label on whatever
+  // the call site sits on: a sheet, a card or the page, and the fleet host's
+  // banner, whose ground is the 12% dead wash. Its label on that wash is the
+  // `dead-text / EXIT-badge pill` pair above; the hairline is a non-text
+  // boundary, 3:1 (WCAG 2.1 SC 1.4.11).
+  [`${name} ink-on-danger / status-dead`, T.dangerInk, T.dead, 4.5],
+  [`${name} dead-text / sheet`, T.deadText, T.sheet, 4.5],
+  [`${name} dead-text / page`, T.deadText, T.page, 4.5],
+  [`${name} danger hairline / sheet (UI 3:1)`, T.dead, T.sheet, 3],
+  [`${name} danger hairline / dead banner tint (UI 3:1)`, T.dead, T.deadTintSolid, 3],
+  // The danger-ghost lifts and sinks as `ghost` does (D-5495) on its default
+  // ground, a card (the Updates rows; the halt banner draws it too). Its label
+  // is in HOVER_INKS and PRESSED_INKS; its hairline is gated here. Nord's
+  // pressed pair is the thinnest, at 3.00.
+  [`${name} danger hairline / hover (UI 3:1)`, T.dead, T.hover, 3],
+  [`${name} danger hairline / pressed (UI 3:1)`, T.dead, T.pressed, 3],
+  // On the dead banner the two grounds are its own (D-5574): the danger-ghost
+  // paints them with `ground="dead"` (D-5688). Its label and hairline are
+  // gated on them, and so are the steps themselves, which are not text pairs:
+  // the lift must read as a ground against the tint, the press as a deeper
+  // one, and the press against the lift (the card's grounds measured 1.00 and
+  // 1.03 here). The light palettes mix further (60/95, D-5688), so the
+  // thinnest are now Phosphor & Ink's lift (1.08) and press (1.16), and
+  // Phosphor Daylight's press against the lift (1.06).
+  [`${name} dead-text / dead banner hover`, T.deadText, T.hoverOnDead, 4.5],
+  [`${name} dead-text / dead banner pressed`, T.deadText, T.pressedOnDead, 4.5],
+  [`${name} danger hairline / dead banner hover (UI 3:1)`, T.dead, T.hoverOnDead, 3],
+  [`${name} danger hairline / dead banner pressed (UI 3:1)`, T.dead, T.pressedOnDead, 3],
+  [`${name} dead banner hover / tint (a ground step)`, T.hoverOnDead, T.deadTintSolid, 1.05],
+  [`${name} dead banner pressed / tint (a ground step)`, T.pressedOnDead, T.deadTintSolid, 1.1],
+  [`${name} dead banner pressed / hover (a ground step)`, T.pressedOnDead, T.hoverOnDead, 1.05],
 ];
 
 let fail = 0, n = 0;

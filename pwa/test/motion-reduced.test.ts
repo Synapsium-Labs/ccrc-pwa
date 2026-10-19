@@ -28,8 +28,10 @@
 // a rule declared BEFORE it. Adding `.acct-fill` (fleet.css:804) to the block
 // at fleet.css:728 set `transition: none` and then the rule's own `transition`
 // re-declared it seventy lines later and won — measured: the change did
-// nothing at all. fleet.css carries a SECOND block at the end for exactly the
-// rules declared after the first one. So this file checks both halves: that a
+// nothing at all. fleet.css carried a SECOND block at the end for exactly the
+// rules declared after the first one, until the fill's motion became the
+// `Meter` primitive's `motion-reduce:` utility and the rule left the sheet
+// (D-5098); the component half below now holds it. So this file checks both halves: that a
 // moving selector is named, and that the block naming it sits later in the
 // file than the rule it governs.
 //

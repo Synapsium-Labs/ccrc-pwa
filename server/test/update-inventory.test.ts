@@ -1304,10 +1304,10 @@ describe('the fleet node over a real agent (the exact-basename read set, and the
     expect(Date.now() - t0).toBeLessThan(1000);
     const row = coord.node(FLEET_LABEL)!;
     expect(buildInfoOfRow(row)).toEqual(parseBuildInfo(stampJson()));
-    // `agentOps: ['update', 'token-sync']`: the real agent advertises the update op (programme wave 5 Task 2) and
-    // the token-sync op (box-token lifecycle wave 1), and the inventory stores what the one reader, `readReadyOps`,
+    // `agentOps: ['update', 'token-sync', 'account']`: the real agent advertises the update op (programme wave 5 Task
+    // 2), the token-sync op (box-token lifecycle wave 1) and the account op (accounts plan A8), and the inventory stores what the one reader, `readReadyOps`,
     // read off its ready frame.
-    expect(row).toMatchObject({ role: 'fleet', caps: ['verify', 'node-id', 'floor'], os: 'linux', highestVersion: 'v0.0.12', agentOps: ['update', 'token-sync'], reachable: true });
+    expect(row).toMatchObject({ role: 'fleet', caps: ['verify', 'node-id', 'floor'], os: 'linux', highestVersion: 'v0.0.12', agentOps: ['update', 'token-sync', 'account'], reachable: true });
   });
 
   it('a build.json symlinked onto a secret file is unreadable across the wire, and nothing of the secret arrives', async () => {

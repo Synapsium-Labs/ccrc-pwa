@@ -10,6 +10,7 @@ import {
   openCoordDb, shouldRemoveMigrationFailureArtifact, tx,
 } from '../src/coord/db.js';
 import { MIGRATIONS } from '../src/coord/schema.js';
+import { CoordStore } from '../src/coord/store.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const dbPathIn = (home: string): string => path.join(home, '.ccrc', 'coord.db');
@@ -660,8 +661,8 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     db.close();
   });
 
-  it('COORD_SCHEMA_VERSION derives to 20 — never hand-edited beside a growing array', () => {
-    // Bumped to 20 by ten migrations: MIGRATIONS[10] (runs.kind/runs.reviews,
+  it('COORD_SCHEMA_VERSION derives to 23 — never hand-edited beside a growing array', () => {
+    // Bumped to 23 by thirteen migrations: MIGRATIONS[10] (runs.kind/runs.reviews,
     // design 2026-09-14 §5.1), MIGRATIONS[11] (runs.coordProject, board
     // placement wave 1 Task 1), MIGRATIONS[12] (pool_edges/pool_epoch,
     // account-pool membership wave 1 Task 6), MIGRATIONS[13] (releases,
@@ -672,11 +673,18 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // §5.3), MIGRATIONS[16] (stall_settings and run_events_by_at — stall
     // watch settings design 2026-10-05 §8), MIGRATIONS[17] (dead_claimants,
     // workspace lifecycle spec §5.4), MIGRATIONS[18]
-    // (dead_coordinator_breaker_state, the breaker's typed state, §5.4/§12)
-    // and MIGRATIONS[19] (collect_lane_settings, the collector switch,
-    // path-identity spec 2026-10-12 §5.2).
-    expect(COORD_SCHEMA_VERSION).toBe(20);
-    expect(MIGRATIONS.length).toBe(20);
+    // (dead_coordinator_breaker_state, the breaker's typed state, §5.4/§12),
+    // MIGRATIONS[19] (collect_lane_settings, the collector switch,
+    // path-identity spec 2026-10-12 §5.2), MIGRATIONS[20]
+    // (asks.releaseReason, D-5290, coordinator-first routing §5.2),
+    // MIGRATIONS[21] (the six delegation_* tables, delegation broker wave 3,
+    // spec §5.2), MIGRATIONS[22] (runs.unattributed, D-5298,
+    // coordinator-first Task 11b), MIGRATIONS[23] (the approvals table,
+    // D-5298, coordinator-first Task 16) and MIGRATIONS[24] (the digests table
+    // and asks.corrected, D-5300, coordinator-first Task 17) and MIGRATIONS[25]
+    // (account_events, D-5516, accounts plan Task A7).
+    expect(COORD_SCHEMA_VERSION).toBe(26);
+    expect(MIGRATIONS.length).toBe(26);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -731,13 +739,16 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     const db = openCoordDb(p);
     expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
       .toBe(COORD_SCHEMA_VERSION);
-    // 20 since MIGRATIONS[14] (the stall read's indexes), MIGRATIONS[15]
+    // 22 since MIGRATIONS[14] (the stall read's indexes), MIGRATIONS[15]
     // (runs.sessionBornAt/sessionBornFor, child-reclamation spec §5.1, §5.3)
     // MIGRATIONS[16] (stall_settings and run_events_by_at, stall watch
     // settings §8), MIGRATIONS[17] (dead_claimants), MIGRATIONS[18]
-    // (dead_coordinator_breaker_state) and MIGRATIONS[19]
-    // (collect_lane_settings); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(20);
+    // (dead_coordinator_breaker_state), MIGRATIONS[19]
+    // (collect_lane_settings), MIGRATIONS[20] (asks.releaseReason),
+    // MIGRATIONS[21] (the six delegation_* tables), MIGRATIONS[22]
+    // (runs.unattributed), MIGRATIONS[23] (approvals), MIGRATIONS[24] (digests, asks.corrected) and MIGRATIONS[25]
+    // (account_events); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(26);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
@@ -820,6 +831,545 @@ describe('coord.db: dead_coordinator_breaker_state, the breaker\'s typed state (
     expect(db.prepare('SELECT count(*) AS n FROM dead_coordinator_breaker_state').get()).toEqual({ n: 0 });
     expect(db.prepare('SELECT claimantId, firstDeadAt, lastDeadAt FROM dead_claimants').get()).toEqual({ claimantId: 'c', firstDeadAt: 5, lastDeadAt: 6 });
     db.close();
+  });
+});
+
+describe('coord.db: the six delegation_* tables (delegation broker wave 3, spec §5.2)', () => {
+  /** This entry's slot, found by its DDL and never hard-coded (the dead_claimants case's rule): whichever of two branches
+   *  holding one slot merges second moves up, and that renumber must not edit a line here. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE delegation_sessions')) + 1;
+  /** Its predecessor at measurement time, also found by DDL: this entry was written after it. A later migration from
+   *  another branch lands AFTER this entry and needs no edit here: nothing below asks for "the newest" or for the version
+   *  a current build ends at, only for `SLOT` itself, `COORD_SCHEMA_VERSION` and a build cut at this entry. */
+  const PREDECESSOR = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE dead_coordinator_breaker_state')) + 1;
+  /** The REAL db.ts over a schema.ts that stops at entry `n`: a build whose newest migration is `MIGRATIONS[n - 1]`. */
+  const buildAt = async <T>(n: number, use: (m: typeof import('../src/coord/db.js')) => T | Promise<T>): Promise<T> => {
+    vi.resetModules();
+    vi.doMock('../src/coord/schema.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../src/coord/schema.js')>();
+      const cut = actual.MIGRATIONS.slice(0, n);
+      return { ...actual, MIGRATIONS: cut, COORD_SCHEMA_VERSION: cut.length };
+    });
+    try { return await use(await import('../src/coord/db.js')); } finally {
+      vi.doUnmock('../src/coord/schema.js');
+      vi.resetModules();
+    }
+  };
+  const userVersion = (d: DatabaseSync): number => (d.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
+  const TABLES = [
+    'delegation_activities', 'delegation_attempts', 'delegation_events', 'delegation_leases', 'delegation_lineage',
+    'delegation_sessions',
+  ];
+  const INDEXES = [
+    'delegation_activities_by_parent', 'delegation_attempts_by_parent', 'delegation_attempts_by_path',
+    'delegation_events_by_observed', 'delegation_events_by_parent', 'delegation_leases_by_activity',
+    'delegation_leases_by_cleanup', 'delegation_leases_by_parent', 'delegation_leases_identity_null_base',
+    'delegation_leases_identity_with_base', 'delegation_leases_one_active_path', 'delegation_lineage_by_activity',
+    'delegation_lineage_by_lease', 'delegation_lineage_by_parent', 'delegation_lineage_by_run',
+    'delegation_sessions_by_effective',
+  ];
+  interface ColumnInfo { name: string; type: string; notnull: number; pk: number }
+  interface FkInfo { table: string; from: string; to: string }
+  const masterNames = (db: DatabaseSync, type: 'table' | 'index'): string[] =>
+    (db.prepare("SELECT name FROM sqlite_master WHERE type = ? AND name LIKE 'delegation\\_%' ESCAPE '\\' AND sql IS NOT NULL ORDER BY name")
+      .all(type) as { name: string }[]).map((r) => r.name);
+  const cols = (db: DatabaseSync, table: string): Array<[string, string, number, number]> =>
+    (db.prepare(`SELECT name, type, "notnull", pk FROM pragma_table_info('${table}')`).all() as unknown as ColumnInfo[])
+      .map((c) => [c.name, c.type, c.notnull, c.pk]);
+  const fks = (db: DatabaseSync, table: string): string[] =>
+    (db.prepare(`SELECT "table", "from", "to" FROM pragma_foreign_key_list('${table}')`).all() as unknown as FkInfo[])
+      .map((f) => `${f.table}.${f.to}<-${f.from}`).sort();
+  /** 'ok' or the SQLite message: a constraint matrix reads as a table of verdicts. */
+  const verdict = (fn: () => unknown): string => {
+    try { fn(); return 'ok'; } catch (err) { return (err as Error).message; }
+  };
+  const put = (db: DatabaseSync, table: string, row: Record<string, string | number | null>): unknown =>
+    db.prepare(`INSERT INTO ${table} (${Object.keys(row).join(', ')}) VALUES (${Object.keys(row).map(() => '?').join(', ')})`)
+      .run(...Object.values(row));
+  const SESSION = { sessionId: 's1', parentIncarnation: 'g1', explicitIntentAt: null, effective: 0, effectiveBasisJson: '[]',
+    claudeSessionIdsJson: '[]', firstObservedAt: 10, lastObservedAt: 20 };
+  const ACTIVITY = { activityId: 'a1', parentId: 's1', parentIncarnation: 'g1', sourceKind: 'agent', upstreamId: 'u1',
+    identityJournalId: 'j'.repeat(64), displayName: null, executionState: 'active', openedAt: 10, endedAt: null, lastEventAt: 11 };
+  const LEASE = { leaseId: 'l1', generation: 0, creatingJournalSequence: 1, currentJournalSequence: 1, activityId: 'a1',
+    parentId: 's1', parentIncarnation: 'g1', project: 'p', adminRecord: 'wt', canonicalPath: '/w/one', creationBase: null,
+    sourceKind: 'agent', parentageState: 'linked', workspaceState: 'unmeasured', disposition: 'ephemeral',
+    cleanupState: 'not-due', cleanupPopulation: 'ephemeral-lease', firstObservedAt: 10, lastObservedAt: 11 };
+  /** A fresh store with one session and one activity, the parents every other row needs. */
+  const seeded = (): DatabaseSync => {
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    put(db, 'delegation_sessions', SESSION);
+    put(db, 'delegation_activities', ACTIVITY);
+    return db;
+  };
+  const lease = (over: Record<string, string | number | null>) => ({ ...LEASE, ...over });
+
+  it('comes after the dead-coordinator breaker entry, is one migration, and holds exactly the six spec tables and their sixteen indexes', () => {
+    expect(PREDECESSOR, 'no MIGRATIONS entry creates dead_coordinator_breaker_state').toBeGreaterThanOrEqual(19);
+    expect(SLOT, 'no MIGRATIONS entry creates delegation_sessions').toBeGreaterThan(PREDECESSOR);
+    expect(SLOT).toBeLessThanOrEqual(MIGRATIONS.length);
+    expect(MIGRATIONS.filter((m) => m.includes('delegation_')), 'one migration, not several').toHaveLength(1);
+    const ddl = MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '');
+    const statements = ddl.split(';').map((s) => s.trim()).filter((s) => s !== '');
+    expect(statements.every((s) => /^CREATE (UNIQUE )?(TABLE|INDEX) /.test(s)),
+      'the migration only CREATEs tables and indexes: it alters, seeds and drops nothing').toBe(true);
+    expect(statements.filter((s) => /^CREATE TABLE /.test(s)).map((s) => /^CREATE TABLE (\w+)/.exec(s)![1]).sort())
+      .toEqual(TABLES);
+    expect(statements.filter((s) => /^CREATE (UNIQUE )?INDEX /.test(s)).map((s) => /INDEX (\w+)/.exec(s)![1]).sort())
+      .toEqual(INDEXES);
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    expect(userVersion(db), 'a fresh database reaches this build’s version').toBe(COORD_SCHEMA_VERSION);
+    expect(masterNames(db, 'table')).toEqual(TABLES);
+    expect(masterNames(db, 'index')).toEqual(INDEXES);
+    db.close();
+  });
+
+  it('steps SLOT-1 -> SLOT: a build whose newest migration is this entry takes a fresh file to SLOT and a SLOT-1 file to SLOT', async () => {
+    expect(SLOT, 'no MIGRATIONS entry creates delegation_sessions').toBeGreaterThan(PREDECESSOR);
+    await buildAt(SLOT, (older) => {
+      expect(older.COORD_SCHEMA_VERSION).toBe(SLOT);
+      const fresh = older.openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+      expect(userVersion(fresh)).toBe(SLOT);
+      expect(masterNames(fresh, 'table')).toEqual(TABLES);
+      fresh.close();
+      const p = dbPathIn(mkTmp('ccrc-coord-'));
+      mkdirSync(path.dirname(p), { recursive: true });
+      const raw = new DatabaseSync(p);
+      tx(raw, () => { for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!); raw.exec(`PRAGMA user_version = ${SLOT - 1}`); });
+      expect(userVersion(raw)).toBe(SLOT - 1);
+      raw.close();
+      const stepped = older.openCoordDb(p);
+      expect(userVersion(stepped), 'exactly one step').toBe(SLOT);
+      expect(masterNames(stepped, 'table')).toEqual(TABLES);
+      stepped.close();
+    });
+  });
+
+  it('gives each table exactly its spec columns, types, nullability and keys', () => {
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    expect(cols(db, 'delegation_sessions')).toEqual([
+      ['sessionId', 'TEXT', 1, 1], ['parentIncarnation', 'TEXT', 1, 2], ['explicitIntentAt', 'INTEGER', 0, 0],
+      ['effective', 'INTEGER', 1, 0], ['effectiveBasisJson', 'TEXT', 1, 0], ['claudeSessionIdsJson', 'TEXT', 1, 0],
+      ['firstObservedAt', 'INTEGER', 1, 0], ['lastObservedAt', 'INTEGER', 1, 0],
+    ]);
+    expect(cols(db, 'delegation_attempts')).toEqual([
+      ['attemptId', 'TEXT', 1, 1], ['parentId', 'TEXT', 1, 0], ['parentIncarnation', 'TEXT', 1, 0], ['project', 'TEXT', 1, 0],
+      ['adminRecord', 'TEXT', 1, 0], ['canonicalPath', 'TEXT', 0, 0], ['attemptedAt', 'INTEGER', 1, 0], ['rung', 'INTEGER', 0, 0],
+      ['verdict', 'TEXT', 1, 0], ['evidenceJournalIdsJson', 'TEXT', 1, 0], ['detail', 'TEXT', 0, 0],
+    ]);
+    expect(cols(db, 'delegation_activities')).toEqual([
+      ['activityId', 'TEXT', 1, 1], ['parentId', 'TEXT', 1, 0], ['parentIncarnation', 'TEXT', 1, 0], ['sourceKind', 'TEXT', 1, 0],
+      ['upstreamId', 'TEXT', 1, 0], ['identityJournalId', 'TEXT', 1, 0], ['displayName', 'TEXT', 0, 0],
+      ['executionState', 'TEXT', 1, 0], ['openedAt', 'INTEGER', 1, 0], ['endedAt', 'INTEGER', 0, 0], ['lastEventAt', 'INTEGER', 1, 0],
+    ]);
+    expect(cols(db, 'delegation_leases')).toEqual([
+      ['leaseId', 'TEXT', 1, 1], ['generation', 'INTEGER', 1, 0], ['creatingJournalSequence', 'INTEGER', 1, 0],
+      ['currentJournalSequence', 'INTEGER', 1, 0], ['activityId', 'TEXT', 1, 0], ['parentId', 'TEXT', 1, 0],
+      ['parentIncarnation', 'TEXT', 1, 0], ['project', 'TEXT', 1, 0], ['adminRecord', 'TEXT', 1, 0], ['canonicalPath', 'TEXT', 1, 0],
+      ['creationBase', 'TEXT', 0, 0], ['sourceKind', 'TEXT', 1, 0], ['parentageState', 'TEXT', 1, 0], ['workspaceState', 'TEXT', 1, 0],
+      ['disposition', 'TEXT', 1, 0], ['cleanupState', 'TEXT', 1, 0], ['cleanupPopulation', 'TEXT', 1, 0],
+      ['firstObservedAt', 'INTEGER', 1, 0], ['lastObservedAt', 'INTEGER', 1, 0], ['terminalEvidenceAt', 'INTEGER', 0, 0],
+      ['adoptedAt', 'INTEGER', 0, 0], ['retainedAt', 'INTEGER', 0, 0], ['promotedAt', 'INTEGER', 0, 0],
+      ['cleanupDueAt', 'INTEGER', 0, 0], ['cleanupStartedAt', 'INTEGER', 0, 0], ['cleanupFinishedAt', 'INTEGER', 0, 0],
+      ['cleanupEvidenceJson', 'TEXT', 0, 0], ['carrierGenerationSeen', 'INTEGER', 0, 0], ['releasedAt', 'INTEGER', 0, 0],
+    ]);
+    expect(cols(db, 'delegation_lineage')).toEqual([
+      ['lineageId', 'TEXT', 1, 1], ['parentId', 'TEXT', 1, 0], ['parentIncarnation', 'TEXT', 1, 0], ['activityId', 'TEXT', 0, 0],
+      ['leaseId', 'TEXT', 0, 0], ['runId', 'INTEGER', 0, 0], ['openedAt', 'INTEGER', 1, 0], ['closedAt', 'INTEGER', 0, 0],
+      ['closeReason', 'TEXT', 0, 0],
+    ]);
+    expect(cols(db, 'delegation_events')).toEqual([
+      ['id', 'INTEGER', 0, 1], ['eventId', 'TEXT', 1, 0], ['journalSequence', 'INTEGER', 1, 0], ['journalDigest', 'TEXT', 1, 0],
+      ['acceptedAt', 'INTEGER', 1, 0], ['sessionId', 'TEXT', 1, 0], ['parentIncarnation', 'TEXT', 1, 0],
+      ['claudeSessionId', 'TEXT', 1, 0], ['eventKind', 'TEXT', 1, 0], ['observedAt', 'INTEGER', 1, 0], ['payloadJson', 'TEXT', 1, 0],
+    ]);
+    db.close();
+  });
+
+  it('declares every foreign key, and enforces them with the connection’s foreign_keys ON', () => {
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    const sessionsFk = ['delegation_sessions.parentIncarnation<-parentIncarnation', 'delegation_sessions.sessionId<-parentId'];
+    expect(fks(db, 'delegation_sessions')).toEqual([]);
+    expect(fks(db, 'delegation_attempts')).toEqual(sessionsFk);
+    expect(fks(db, 'delegation_activities')).toEqual(sessionsFk);
+    expect(fks(db, 'delegation_leases')).toEqual([...sessionsFk, 'delegation_activities.activityId<-activityId'].sort());
+    expect(fks(db, 'delegation_lineage')).toEqual([
+      ...sessionsFk, 'delegation_activities.activityId<-activityId', 'delegation_leases.leaseId<-leaseId', 'runs.id<-runId',
+    ].sort());
+    expect(fks(db, 'delegation_events')).toEqual([
+      'delegation_sessions.parentIncarnation<-parentIncarnation', 'delegation_sessions.sessionId<-sessionId',
+    ]);
+    expect((db.prepare('PRAGMA foreign_keys').get() as { foreign_keys: number }).foreign_keys).toBe(1);
+    expect(verdict(() => put(db, 'delegation_activities', ACTIVITY)), 'an activity needs its parent session').toMatch(/FOREIGN KEY/);
+    expect(verdict(() => put(db, 'delegation_attempts', { attemptId: 'x', parentId: 'no', parentIncarnation: 'g1', project: 'p',
+      adminRecord: 'a', canonicalPath: null, attemptedAt: 1, rung: null, verdict: 'unresolved', evidenceJournalIdsJson: '[]',
+      detail: null }))).toMatch(/FOREIGN KEY/);
+    db.close();
+  });
+
+  it('defines every index as the spec does: its table, uniqueness, partial predicate and column order', () => {
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    // [index, table, unique, partial predicate (or null), columns]
+    const spec: Array<[string, string, 0 | 1, string | null, string[]]> = [
+      ['delegation_sessions_by_effective', 'delegation_sessions', 0, null, ['effective', 'lastObservedAt']],
+      ['delegation_attempts_by_parent', 'delegation_attempts', 0, null, ['parentId', 'parentIncarnation', 'attemptedAt']],
+      ['delegation_attempts_by_path', 'delegation_attempts', 0, null, ['project', 'adminRecord', 'attemptedAt']],
+      ['delegation_activities_by_parent', 'delegation_activities', 0, null, ['parentId', 'parentIncarnation', 'executionState']],
+      ['delegation_leases_identity_null_base', 'delegation_leases', 1, 'creationBase IS NULL AND releasedAt IS NULL',
+        ['project', 'adminRecord', 'canonicalPath']],
+      ['delegation_leases_identity_with_base', 'delegation_leases', 1, 'creationBase IS NOT NULL AND releasedAt IS NULL',
+        ['project', 'adminRecord', 'creationBase', 'canonicalPath']],
+      ['delegation_leases_one_active_path', 'delegation_leases', 1, 'releasedAt IS NULL', ['canonicalPath']],
+      ['delegation_leases_by_parent', 'delegation_leases', 0, null, ['parentId', 'parentIncarnation', 'releasedAt']],
+      ['delegation_leases_by_activity', 'delegation_leases', 0, null, ['activityId']],
+      ['delegation_leases_by_cleanup', 'delegation_leases', 0, null, ['cleanupPopulation', 'cleanupState', 'cleanupDueAt']],
+      ['delegation_lineage_by_parent', 'delegation_lineage', 0, null, ['parentId', 'parentIncarnation', 'closedAt']],
+      ['delegation_lineage_by_activity', 'delegation_lineage', 0, null, ['activityId', 'closedAt']],
+      ['delegation_lineage_by_lease', 'delegation_lineage', 0, null, ['leaseId', 'closedAt']],
+      ['delegation_lineage_by_run', 'delegation_lineage', 0, null, ['runId', 'closedAt']],
+      ['delegation_events_by_parent', 'delegation_events', 0, null, ['sessionId', 'parentIncarnation', 'journalSequence']],
+      ['delegation_events_by_observed', 'delegation_events', 0, null, ['observedAt']],
+    ];
+    expect(spec.map((x) => x[0]).sort()).toEqual(INDEXES);
+    for (const [name, table, unique, predicate, columns] of spec) {
+      const listed = (db.prepare(`SELECT "unique", partial FROM pragma_index_list('${table}') WHERE name = ?`).get(name) as
+        { unique: number; partial: number } | undefined);
+      expect(listed, `${name} is on ${table}`).toBeDefined();
+      expect(listed!.unique, `${name} unique`).toBe(unique);
+      expect(listed!.partial, `${name} partial`).toBe(predicate === null ? 0 : 1);
+      expect((db.prepare(`SELECT name FROM pragma_index_info('${name}') ORDER BY seqno`).all() as { name: string }[]).map((c) => c.name),
+        `${name} columns`).toEqual(columns);
+      const sql = (db.prepare('SELECT sql FROM sqlite_master WHERE name = ?').get(name) as { sql: string }).sql.replace(/\s+/g, ' ');
+      if (predicate === null) expect(sql, `${name} has no predicate`).not.toMatch(/\bWHERE\b/);
+      else expect(sql, `${name} predicate`).toContain(`WHERE ${predicate}`);
+    }
+    db.close();
+  });
+
+  it('checks the table-level constraints: effective, observation order, activity order, the identity length', () => {
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    expect(verdict(() => put(db, 'delegation_sessions', { ...SESSION, effective: 2 }))).toMatch(/CHECK/);
+    expect(verdict(() => put(db, 'delegation_sessions', { ...SESSION, firstObservedAt: 30, lastObservedAt: 20 }))).toMatch(/CHECK/);
+    expect(verdict(() => put(db, 'delegation_sessions', SESSION))).toBe('ok');
+    expect(verdict(() => put(db, 'delegation_sessions', { ...SESSION, parentIncarnation: 'g2' })), 'a new incarnation is a new row').toBe('ok');
+    expect(verdict(() => put(db, 'delegation_sessions', SESSION)), 'the key is (sessionId, parentIncarnation)').toMatch(/UNIQUE|PRIMARY/);
+    const act = (over: Record<string, string | number | null>) => put(db, 'delegation_activities', { ...ACTIVITY, ...over });
+    expect(verdict(() => act({ executionState: 'running' }))).toMatch(/CHECK/);
+    expect(verdict(() => act({ identityJournalId: 'j'.repeat(63) }))).toMatch(/CHECK/);
+    expect(verdict(() => act({ identityJournalId: 'j'.repeat(65) }))).toMatch(/CHECK/);
+    expect(verdict(() => act({ endedAt: 5 }))).toMatch(/CHECK/);
+    expect(verdict(() => act({ lastEventAt: 9 }))).toMatch(/CHECK/);
+    expect(verdict(() => act({}))).toBe('ok');
+    expect(verdict(() => act({ activityId: 'a2' })), 'a natural key cannot mint a second activity').toMatch(/UNIQUE/);
+    expect(verdict(() => act({ activityId: 'a3', sourceKind: 'workflow' })), 'another source kind is another key').toBe('ok');
+    for (const sourceKind of ['agent', 'workflow', 'bash-worktree']) {
+      expect(verdict(() => act({ activityId: `k-${sourceKind}`, upstreamId: `u-${sourceKind}`, sourceKind })), sourceKind).toBe('ok');
+    }
+    for (const sourceKind of ['raw', 'attached', 'carrier']) {
+      expect(verdict(() => act({ activityId: `x-${sourceKind}`, upstreamId: `x-${sourceKind}`, sourceKind })),
+        `${sourceKind} is not an ACTIVITY source`).toMatch(/CHECK/);
+    }
+    db.close();
+  });
+
+  it('nullable-attempt-path: unresolved, conflicting and unmeasured may keep canonicalPath NULL; linked may not (W3-M67)', () => {
+    const db = seeded();
+    const attempt = (over: Record<string, string | number | null>) => put(db, 'delegation_attempts', {
+      attemptId: `x${Math.random()}`, parentId: 's1', parentIncarnation: 'g1', project: 'p', adminRecord: 'a', canonicalPath: null,
+      attemptedAt: 1, rung: null, verdict: 'unresolved', evidenceJournalIdsJson: '[]', detail: null, ...over,
+    });
+    for (const v of ['unresolved', 'conflicting', 'unmeasured']) {
+      expect(verdict(() => attempt({ verdict: v })), `${v} with no path`).toBe('ok');
+      expect(verdict(() => attempt({ verdict: v, canonicalPath: '/w/p' })), `${v} with a path`).toBe('ok');
+    }
+    expect(verdict(() => attempt({ verdict: 'linked', canonicalPath: '/w/p' })), 'linked with a path').toBe('ok');
+    expect(verdict(() => attempt({ verdict: 'linked', canonicalPath: null })), 'linked with NO path').toMatch(/CHECK/);
+    expect(verdict(() => attempt({ verdict: 'probably' }))).toMatch(/CHECK/);
+    for (const rung of [1, 2, 3, 4, null]) expect(verdict(() => attempt({ rung })), `rung ${rung}`).toBe('ok');
+    for (const rung of [0, 5, -1]) expect(verdict(() => attempt({ rung })), `rung ${rung}`).toMatch(/CHECK/);
+    db.close();
+  });
+
+  it('lease-sequence table: creating and current are separate columns, current may not fall below creating, creating is unique', () => {
+    const db = seeded();
+    expect(verdict(() => put(db, 'delegation_leases', lease({ creatingJournalSequence: 0, currentJournalSequence: 0 })))).toMatch(/CHECK/);
+    expect(verdict(() => put(db, 'delegation_leases', lease({ creatingJournalSequence: 5, currentJournalSequence: 4 })))).toMatch(/CHECK/);
+    expect(verdict(() => put(db, 'delegation_leases', lease({ generation: -1 })))).toMatch(/CHECK/);
+    expect(verdict(() => put(db, 'delegation_leases', lease({ creatingJournalSequence: 4, currentJournalSequence: 9, generation: 3 }))),
+      'the DDL is the complete future-facing shape: current may run ahead of creating').toBe('ok');
+    expect(db.prepare('SELECT creatingJournalSequence AS c, currentJournalSequence AS u, generation AS g FROM delegation_leases').get())
+      .toEqual({ c: 4, u: 9, g: 3 });
+    expect(verdict(() => put(db, 'delegation_leases', lease({ leaseId: 'l2', canonicalPath: '/w/two', creatingJournalSequence: 4,
+      currentJournalSequence: 4 }))), 'one journal record creates one lease').toMatch(/UNIQUE/);
+    db.close();
+  });
+
+  it('checks the lease vocabularies, the population, the carrier generation and every clock', () => {
+    const db = seeded();
+    let n = 0;
+    const l = (over: Record<string, string | number | null>) =>
+      put(db, 'delegation_leases', lease({ leaseId: `l${++n}`, canonicalPath: `/w/${n}`, creatingJournalSequence: n + 100,
+        currentJournalSequence: n + 100, ...over }));
+    for (const sourceKind of ['agent', 'workflow', 'raw', 'attached']) expect(verdict(() => l({ sourceKind })), sourceKind).toBe('ok');
+    expect(verdict(() => l({ sourceKind: 'bash-worktree' })), 'bash-worktree is an ACTIVITY word').toMatch(/CHECK/);
+    for (const c of ['parentageState', 'workspaceState', 'disposition', 'cleanupState']) {
+      expect(verdict(() => l({ [c]: 'nonsense' })), c).toMatch(/CHECK/);
+    }
+    for (const disposition of ['ephemeral', 'adopted', 'retained', 'promoted']) expect(verdict(() => l({ disposition })), disposition).toBe('ok');
+    for (const cleanupState of ['not-due', 'pending', 'running', 'refused', 'reclaimed', 'unmeasured']) {
+      expect(verdict(() => l({ cleanupState })), cleanupState).toBe('ok');
+    }
+    expect(verdict(() => l({ cleanupPopulation: 'persistent-lease' }))).toMatch(/CHECK/);
+    expect(verdict(() => l({ carrierGenerationSeen: 0 }))).toMatch(/CHECK/);
+    expect(verdict(() => l({ carrierGenerationSeen: 1 }))).toBe('ok');
+    expect(verdict(() => l({ carrierGenerationSeen: null }))).toBe('ok');
+    expect(verdict(() => l({ lastObservedAt: 5 }))).toMatch(/CHECK/);
+    for (const c of ['terminalEvidenceAt', 'adoptedAt', 'retainedAt', 'promotedAt', 'cleanupDueAt', 'cleanupStartedAt', 'cleanupFinishedAt', 'releasedAt']) {
+      expect(verdict(() => l({ [c]: 9, ...(c === 'cleanupFinishedAt' ? { cleanupStartedAt: 10 } : {}) })), `${c} before firstObservedAt`).toMatch(/CHECK/);
+      expect(verdict(() => l({ [c]: 10, ...(c === 'cleanupFinishedAt' ? { cleanupStartedAt: 10 } : {}) })), `${c} at firstObservedAt`).toBe('ok');
+    }
+    expect(verdict(() => l({ cleanupFinishedAt: 12 })), 'finished without started').toMatch(/CHECK/);
+    expect(verdict(() => l({ cleanupStartedAt: 12 })), 'started without finished').toBe('ok');
+    expect(verdict(() => put(db, 'delegation_leases', lease({ leaseId: 'orphan', activityId: 'nobody', canonicalPath: '/w/orphan',
+      creatingJournalSequence: 900, currentJournalSequence: 900 }))), 'a lease needs its activity').toMatch(/FOREIGN KEY/);
+    db.close();
+  });
+
+  /** The lease identity and path indexes are tested ONE AT A TIME: a scratch store drops the others, because the same
+   *  duplicate tuple would otherwise trip two indexes and the test could not tell which one did the work. */
+  const isolated = (keep: string): DatabaseSync => {
+    const db = seeded();
+    for (const idx of ['delegation_leases_identity_null_base', 'delegation_leases_identity_with_base', 'delegation_leases_one_active_path']) {
+      if (idx !== keep) db.exec(`DROP INDEX ${idx}`);
+    }
+    return db;
+  };
+  const dup = (db: DatabaseSync, over: Record<string, string | number | null>) =>
+    verdict(() => put(db, 'delegation_leases', lease({ leaseId: 'l2', creatingJournalSequence: 2, currentJournalSequence: 2, ...over })));
+
+  it('null-base identity: two UNRELEASED leases with a NULL creationBase cannot share (project, adminRecord, canonicalPath) (W3-M18B)', () => {
+    const db = isolated('delegation_leases_identity_null_base');
+    put(db, 'delegation_leases', LEASE);
+    expect(dup(db, {}), 'the exact tuple again').toMatch(/UNIQUE/);
+    expect(dup(db, { adminRecord: 'wt2' }), 'another admin record').toBe('ok');
+    expect(dup(db, { leaseId: 'l3', creatingJournalSequence: 3, currentJournalSequence: 3, project: 'p2' }), 'another project').toBe('ok');
+    expect(dup(db, { leaseId: 'l4', creatingJournalSequence: 4, currentJournalSequence: 4, canonicalPath: '/w/other' }), 'another path').toBe('ok');
+    db.close();
+  });
+
+  it('with-base identity: the same tuple with a non-null creationBase is unique, and a different base is a different identity', () => {
+    const db = isolated('delegation_leases_identity_with_base');
+    put(db, 'delegation_leases', lease({ creationBase: 'abc' }));
+    expect(dup(db, { creationBase: 'abc' }), 'the exact tuple again').toMatch(/UNIQUE/);
+    expect(dup(db, { leaseId: 'l3', creatingJournalSequence: 3, currentJournalSequence: 3, creationBase: 'def' }), 'another base').toBe('ok');
+    expect(dup(db, { leaseId: 'l4', creatingJournalSequence: 4, currentJournalSequence: 4, creationBase: null }),
+      'a NULL base is not covered by this index').toBe('ok');
+    db.close();
+  });
+
+  it('the null and non-null base indexes do not collapse through SQLite’s null-distinct UNIQUE', () => {
+    // One UNIQUE (project, adminRecord, creationBase, canonicalPath) would admit unlimited NULL-base duplicates; the
+    // partial pair exists so that it does not. Measured on the full migration, with the path index dropped.
+    const db = seeded();
+    db.exec('DROP INDEX delegation_leases_one_active_path');
+    put(db, 'delegation_leases', LEASE);
+    expect(dup(db, {}), 'NULL base, exact tuple').toMatch(/UNIQUE/);
+    db.close();
+  });
+
+  it('active path: one UNRELEASED lease per canonicalPath, whatever its identity', () => {
+    const db = isolated('delegation_leases_one_active_path');
+    put(db, 'delegation_leases', LEASE);
+    expect(dup(db, { adminRecord: 'other', project: 'q', creationBase: 'abc' }), 'a different identity on the same path').toMatch(/UNIQUE/);
+    expect(dup(db, { leaseId: 'l3', creatingJournalSequence: 3, currentJournalSequence: 3, canonicalPath: '/w/two' }), 'another path').toBe('ok');
+    db.close();
+  });
+
+  it('released-identity-reuse table: a RELEASED lease frees its identity tuple and its path (W3-M64)', () => {
+    const cases: Array<[string, string, Record<string, string | number | null>]> = [
+      ['null base', 'delegation_leases_identity_null_base', {}],
+      ['with base', 'delegation_leases_identity_with_base', { creationBase: 'abc' }],
+      ['active path', 'delegation_leases_one_active_path', {}],
+    ];
+    for (const [label, keep, over] of cases) {
+      const db = isolated(keep);
+      put(db, 'delegation_leases', lease(over));
+      expect(dup(db, over), `${label}: still unreleased`).toMatch(/UNIQUE/);
+      db.prepare("UPDATE delegation_leases SET releasedAt = 15 WHERE leaseId = 'l1'").run();
+      expect(dup(db, over), `${label}: reusable after release`).toBe('ok');
+      expect(dup(db, { ...over, leaseId: 'l3', creatingJournalSequence: 3, currentJournalSequence: 3 }),
+        `${label}: the reuse is itself unreleased and so unique again`).toMatch(/UNIQUE/);
+      db.close();
+    }
+  });
+
+  it('lineage owns exactly one of an activity, a lease or a run, and closes with a reason or not at all', () => {
+    const db = seeded();
+    put(db, 'delegation_leases', LEASE);
+    db.prepare("INSERT INTO programs (slug, title, createdAt, state) VALUES ('p', 'P', 1, 'active')").run();
+    db.prepare("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) VALUES ('p', 1, 1, 'demo', 'working', 'c', 1)").run();
+    const runId = (db.prepare('SELECT id FROM runs').get() as { id: number }).id;
+    const L = { lineageId: 'x', parentId: 's1', parentIncarnation: 'g1', activityId: null, leaseId: null, runId: null, openedAt: 10,
+      closedAt: null, closeReason: null };
+    const l = (over: Record<string, string | number | null>) => put(db, 'delegation_lineage', { ...L, lineageId: `x${Math.random()}`, ...over });
+    expect(verdict(() => l({ activityId: 'a1' }))).toBe('ok');
+    expect(verdict(() => l({ leaseId: 'l1' }))).toBe('ok');
+    expect(verdict(() => l({ runId }))).toBe('ok');
+    expect(verdict(() => l({})), 'owning nothing').toMatch(/CHECK/);
+    expect(verdict(() => l({ activityId: 'a1', leaseId: 'l1' })), 'owning two').toMatch(/CHECK/);
+    expect(verdict(() => l({ activityId: 'a1', leaseId: 'l1', runId })), 'owning three').toMatch(/CHECK/);
+    expect(verdict(() => l({ activityId: 'a1', closedAt: 12, closeReason: 'done' }))).toBe('ok');
+    expect(verdict(() => l({ activityId: 'a1', closedAt: 12 })), 'closed with no reason').toMatch(/CHECK/);
+    expect(verdict(() => l({ activityId: 'a1', closeReason: 'done' })), 'a reason with no close').toMatch(/CHECK/);
+    expect(verdict(() => l({ activityId: 'a1', closedAt: 9, closeReason: 'done' })), 'closed before opened').toMatch(/CHECK/);
+    expect(verdict(() => l({ activityId: 'nobody' }))).toMatch(/FOREIGN KEY/);
+    expect(verdict(() => l({ leaseId: 'nobody' }))).toMatch(/FOREIGN KEY/);
+    expect(verdict(() => l({ runId: runId + 99 }))).toMatch(/FOREIGN KEY/);
+    expect(verdict(() => l({ lineageId: 'x', activityId: 'a1' }))).toBe('ok');
+    expect(verdict(() => put(db, 'delegation_lineage', { ...L, lineageId: 'x', activityId: 'a1' })), 'the lineage id is the key').toMatch(/UNIQUE|PRIMARY/);
+    db.close();
+  });
+
+  it('events: eventId and journalSequence are each unique, the digest is 64 characters, the kind is one of seven', () => {
+    const db = seeded();
+    const E = { eventId: 'e1', journalSequence: 1, journalDigest: 'd'.repeat(64), acceptedAt: 10, sessionId: 's1',
+      parentIncarnation: 'g1', claudeSessionId: 'c', eventKind: 'PostToolUse', observedAt: 9, payloadJson: '{}' };
+    expect(verdict(() => put(db, 'delegation_events', E))).toBe('ok');
+    expect(verdict(() => put(db, 'delegation_events', { ...E, journalSequence: 2 })), 'the same eventId').toMatch(/UNIQUE/);
+    expect(verdict(() => put(db, 'delegation_events', { ...E, eventId: 'e2' })), 'the same journalSequence').toMatch(/UNIQUE/);
+    expect(verdict(() => put(db, 'delegation_events', { ...E, eventId: 'e2', journalSequence: 0 }))).toMatch(/CHECK/);
+    expect(verdict(() => put(db, 'delegation_events', { ...E, eventId: 'e2', journalSequence: 2, journalDigest: 'd'.repeat(63) }))).toMatch(/CHECK/);
+    expect(verdict(() => put(db, 'delegation_events', { ...E, eventId: 'e2', journalSequence: 2, eventKind: 'Stop' }))).toMatch(/CHECK/);
+    for (const [i, k] of ['SessionStart', 'PreToolUse', 'SubagentStart', 'SubagentStop', 'UserPromptSubmit', 'SessionEnd'].entries()) {
+      expect(verdict(() => put(db, 'delegation_events', { ...E, eventId: `k${i}`, journalSequence: 10 + i, eventKind: k })), k).toBe('ok');
+    }
+    expect(verdict(() => put(db, 'delegation_events', { ...E, eventId: 'e9', journalSequence: 9, sessionId: 'nobody' }))).toMatch(/FOREIGN KEY/);
+    db.close();
+  });
+
+  it('reaches a database ALREADY at the version before it: all six tables arrive in that one step, every older row untouched', async () => {
+    expect(SLOT, 'no MIGRATIONS entry creates delegation_sessions').toBeGreaterThan(PREDECESSOR);
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("INSERT INTO programs (slug, title, createdAt, state) VALUES ('p', 'P', 1, 'active')");
+      raw.exec("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) VALUES ('p', 1, 1, 'demo', 'working', 'c', 1)");
+      raw.exec("INSERT INTO dead_claimants (claimantId, firstDeadAt, lastDeadAt) VALUES ('c', 5, 6)");
+    });
+    expect(masterNames(raw, 'table'), 'none of the six exists before').toEqual([]);
+    raw.close();
+    await buildAt(SLOT, (older) => {
+      const db = older.openCoordDb(p);
+      expect(userVersion(db)).toBe(SLOT);
+      expect(masterNames(db, 'table')).toEqual(TABLES);
+      expect(masterNames(db, 'index')).toEqual(INDEXES);
+      for (const t of TABLES) expect(db.prepare(`SELECT count(*) AS n FROM ${t}`).get(), t).toEqual({ n: 0 });
+      expect(db.prepare('SELECT claimedBy, state FROM runs').get()).toEqual({ claimedBy: 'c', state: 'working' });
+      expect(db.prepare('SELECT claimantId, firstDeadAt FROM dead_claimants').get()).toEqual({ claimantId: 'c', firstDeadAt: 5 });
+      db.close();
+    });
+    // And the CURRENT build takes the same file to its own version, whatever has landed after this entry.
+    const p2 = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p2), { recursive: true });
+    const raw2 = new DatabaseSync(p2);
+    tx(raw2, () => { for (let v = 0; v < SLOT - 1; v++) raw2.exec(MIGRATIONS[v]!); raw2.exec(`PRAGMA user_version = ${SLOT - 1}`); });
+    raw2.close();
+    const current = openCoordDb(p2);
+    expect(userVersion(current)).toBe(COORD_SCHEMA_VERSION);
+    expect(masterNames(current, 'table')).toEqual(TABLES);
+    current.close();
+  });
+
+  it('a failure at ANY statement of the migration leaves the prior user_version and no partial table, then boots clean', () => {
+    expect(SLOT, 'no MIGRATIONS entry creates delegation_sessions').toBeGreaterThan(PREDECESSOR);
+    const original = MIGRATIONS[SLOT - 1]!;
+    const statements = original.replace(/--[^\n]*/g, '').split(';').map((s) => s.trim()).filter((s) => s !== '');
+    expect(statements.length, 'six tables and sixteen indexes').toBe(22);
+    const mutable = MIGRATIONS as unknown as string[];
+    for (let k = 0; k <= statements.length; k++) {
+      const p = dbPathIn(mkTmp('ccrc-coord-'));
+      mkdirSync(path.dirname(p), { recursive: true });
+      const raw = new DatabaseSync(p);
+      tx(raw, () => {
+        for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+        raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+        raw.exec("INSERT INTO programs (slug, title, createdAt, state) VALUES ('keep', 'Keep', 1, 'active')");
+      });
+      raw.close();
+      let caught: unknown;
+      try {
+        // The first k statements are the real DDL; the next one cannot run. `db.ts` executes the entry in its own tx().
+        mutable[SLOT - 1] = [...statements.slice(0, k), 'SELECT * FROM delegation_injected_fault'].join(';\n') + ';';
+        try { openCoordDb(p); } catch (err) { caught = err; }
+      } finally {
+        mutable[SLOT - 1] = original;
+      }
+      expect(caught, `fault after ${k} statements`).toBeInstanceOf(CoordDbUnmigratable);
+      const after = new DatabaseSync(p);
+      expect((after.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, `fault after ${k}`).toBe(SLOT - 1);
+      expect(masterNames(after, 'table'), `no partial table after ${k}`).toEqual([]);
+      expect(masterNames(after, 'index'), `no partial index after ${k}`).toEqual([]);
+      expect(after.prepare("SELECT slug FROM programs").get(), 'the older rows survive').toEqual({ slug: 'keep' });
+      after.close();
+      const db = openCoordDb(p);                                          // the cause is fixed: boot 2 migrates clean
+      expect(userVersion(db)).toBe(COORD_SCHEMA_VERSION);
+      expect(masterNames(db, 'table')).toEqual(TABLES);
+      db.close();
+    }
+  }, 120_000);
+
+  it('is ADDITIVE: every older table and index is byte-for-byte what the previous version wrote, so an older build’s SQL still works', async () => {
+    expect(SLOT, 'no MIGRATIONS entry creates delegation_sessions').toBeGreaterThan(PREDECESSOR);
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => { for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!); raw.exec(`PRAGMA user_version = ${SLOT - 1}`); });
+    const schemaOf = (d: DatabaseSync): Record<string, string> => Object.fromEntries(
+      (d.prepare("SELECT name, sql FROM sqlite_master WHERE name NOT LIKE 'delegation\\_%' ESCAPE '\\' AND sql IS NOT NULL").all() as
+        Array<{ name: string; sql: string }>).map((r) => [r.name, r.sql]));
+    const before = schemaOf(raw);
+    raw.close();
+    // Cut at THIS entry, so a migration that lands after it (and may alter older tables) is not blamed on it.
+    await buildAt(SLOT, (older) => {
+      const db = older.openCoordDb(p);
+      expect(schemaOf(db), 'no older table or index changed').toEqual(before);
+      // The statements an older build runs, naming only the columns it knows.
+      db.prepare("INSERT INTO programs (slug, title, createdAt, state) VALUES ('old', 'Old', 1, 'active')").run();
+      db.prepare("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) VALUES ('old', 1, 1, 'demo', 'working', 'c', 1)").run();
+      db.prepare("INSERT INTO dead_claimants (claimantId, firstDeadAt, lastDeadAt) VALUES ('x', 1, 2)").run();
+      db.prepare("UPDATE runs SET state = 'done' WHERE program = 'old'").run();
+      expect(db.prepare("SELECT state FROM runs WHERE program = 'old'").get()).toEqual({ state: 'done' });
+      db.close();
+    });
+  });
+
+  it('an OLDER build, meeting the file at this version, reads and writes its own tables and migrates nothing (rule 3)', async () => {
+    expect(SLOT, 'no MIGRATIONS entry creates delegation_sessions').toBeGreaterThan(PREDECESSOR);
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    const newer = openCoordDb(p);
+    put(newer, 'delegation_sessions', SESSION);
+    const newerVersion = userVersion(newer);
+    newer.close();
+    // The older build is the REAL db.ts over a schema.ts that stops one entry earlier, not a hand-written imitation.
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await buildAt(SLOT - 1, (older) => {
+        expect(older.COORD_SCHEMA_VERSION).toBe(SLOT - 1);
+        const db = older.openCoordDb(p);
+        expect(warnSpy).toHaveBeenCalledTimes(1);
+        expect(warnSpy.mock.calls[0]![0]).toMatch(/this build knows/i);
+        expect(userVersion(db), 'never written DOWN').toBe(newerVersion);
+        db.prepare("INSERT INTO programs (slug, title, createdAt, state) VALUES ('old', 'Old', 1, 'active')").run();
+        db.prepare("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) VALUES ('old', 1, 1, 'demo', 'working', 'c', 1)").run();
+        expect(db.prepare("SELECT claimedBy FROM runs WHERE program = 'old'").get()).toEqual({ claimedBy: 'c' });
+        expect(db.prepare('SELECT count(*) AS n FROM delegation_sessions').get(), 'the newer tables are still there').toEqual({ n: 1 });
+        db.close();
+      });
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });
 
@@ -1542,6 +2092,152 @@ describe('coord.db: stall_settings and run_events_by_at (stall watch settings W1
     expect(db.prepare('SELECT id, level, quietMs, updatedAt FROM stall_settings').all())
       .toEqual([{ id: 1, level: 'follow', quietMs: null, updatedAt: 0 }]);
     expect(db.prepare('SELECT runId, at, detail FROM run_events').all()).toEqual([{ runId: 1, at: 5, detail: 'x' }]);
+    db.close();
+  });
+});
+
+describe('coord.db: migration 21 — asks.releaseReason (D-5290, coordinator-first routing §5.2)', () => {
+  it('reaches a database ALREADY at user_version 20 and keeps its asks rows, each with no release reason', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < 20; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec('PRAGMA user_version = 20');
+      raw.exec('INSERT INTO asks (at, childId, parentId, runId, askKey, askAt, dialogId, question, options, state, releasedAt) ' +
+               "VALUES (1, 'project-a-quiet-basin', 'project-a-calm-mesa', NULL, 'k', 1, 'd', 'Which colour?', '[\"Red\"]', 'released', 2)");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    const rows = db.prepare('SELECT childId, state, releasedAt, releaseReason FROM asks').all();
+    expect(rows).toEqual([{ childId: 'project-a-quiet-basin', state: 'released', releasedAt: 2, releaseReason: null }]);
+    db.close();
+  });
+});
+
+describe('coord.db: migration 23 — runs.unattributed (D-5298, coordinator-first Task 11b)', () => {
+  it('reaches a database ALREADY at user_version 22 and keeps its runs rows, each not recorded unattributed', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < 22; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec('PRAGMA user_version = 22');
+      raw.exec("INSERT INTO programs (slug, title, createdAt, state) VALUES ('program-a', 'A', 1, 'active')");
+      raw.exec("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) " +
+               "VALUES ('program-a', 1, 1, 'project-a', 'planned', 'project-a-calm-mesa', 1)");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT program, claimedBy, unattributed FROM runs').all())
+      .toEqual([{ program: 'program-a', claimedBy: 'project-a-calm-mesa', unattributed: 0 }]);
+    db.close();
+  });
+
+  it('openRun journals an unattributed open as 1 and every other open as 0', () => {
+    const coord = new CoordStore(openCoordDb(dbPathIn(mkTmp('ccrc-coord-'))));
+    const a = coord.openRun({ program: 'program-a', title: 'A', project: 'project-a', wave: 1, waveOf: 2,
+      claimedBy: 'project-a-calm-mesa', unattributed: true });
+    const b = coord.openRun({ program: 'program-a', title: 'A', project: 'project-a', wave: 2, waveOf: 2,
+      claimedBy: 'project-a-calm-mesa' });
+    if (!('id' in a) || !('id' in b)) throw new Error('fixture: both opens must succeed');
+    expect(coord.db.prepare('SELECT id, unattributed FROM runs ORDER BY id').all())
+      .toEqual([{ id: a.id, unattributed: 1 }, { id: b.id, unattributed: 0 }]);
+  });
+});
+
+describe('coord.db: migration 24 — the approvals table (D-5298, coordinator-first Task 16)', () => {
+  it('reaches a database ALREADY at user_version 23 and keeps its runs and asks rows; the new table starts empty', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < 23; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec('PRAGMA user_version = 23');
+      raw.exec("INSERT INTO programs (slug, title, createdAt, state) VALUES ('program-a', 'A', 1, 'active')");
+      raw.exec("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) " +
+               "VALUES ('program-a', 1, 1, 'project-a', 'planned', 'project-a-calm-mesa', 1)");
+      raw.exec('INSERT INTO asks (at, childId, parentId, runId, askKey, askAt, dialogId, question, options, state) ' +
+               "VALUES (1, 'project-a-quiet-basin', 'project-a-calm-mesa', NULL, 'k', 1, 'd', 'Which colour?', '[\"Red\"]', 'held')");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    // The file reaches this build's version (26 since migration 26, D-5516), through 24 and 25.
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT program, claimedBy FROM runs').all())
+      .toEqual([{ program: 'program-a', claimedBy: 'project-a-calm-mesa' }]);
+    expect(db.prepare('SELECT childId, state FROM asks').all())
+      .toEqual([{ childId: 'project-a-quiet-basin', state: 'held' }]);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM approvals').get()).toEqual({ n: 0 });
+    const cols = (db.prepare("SELECT name FROM pragma_table_info('approvals')").all() as { name: string }[]).map((r) => r.name);
+    expect(cols).toEqual(['id', 'childId', 'parentId', 'runId', 'digest', 'nonce', 'agentId', 'tool', 'inputRedacted',
+      'truncated', 'class', 'state', 'releaseReason', 'askAt', 'notifyAt', 'ruledAt', 'verdict', 'reason', 'ruling',
+      'answeredBy', 'toolUseId', 'corrected']);
+    db.close();
+  });
+});
+
+describe('coord.db: migration 25 — the digests table and asks.corrected (D-5300, coordinator-first Task 17)', () => {
+  it('reaches a database ALREADY at user_version 24 and keeps its asks and approvals rows; digests starts empty', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < 24; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec('PRAGMA user_version = 24');
+      raw.exec('INSERT INTO asks (at, childId, parentId, runId, askKey, askAt, dialogId, question, options, state, answeredBy, answer, answeredAt) ' +
+               "VALUES (1, 'project-a-quiet-basin', 'project-a-calm-mesa', NULL, 'k', 1, 'd', 'Which colour?', '[\"Red\"]', 'answered', 'project-a-calm-mesa', 'Red', 2)");
+      raw.exec('INSERT INTO approvals (childId, parentId, runId, digest, nonce, agentId, tool, inputRedacted, class, state, askAt, notifyAt, corrected) ' +
+               `VALUES ('project-a-quiet-basin', 'project-a-calm-mesa', NULL, '${'a'.repeat(64)}', '${'0'.repeat(32)}', '', 'Bash', 'rm -rf build', 'ordinary', 'denied', 1, 60001, 1)`);
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT childId, state, answer, corrected FROM asks').all())
+      .toEqual([{ childId: 'project-a-quiet-basin', state: 'answered', answer: 'Red', corrected: 0 }]);
+    expect(db.prepare('SELECT state, corrected FROM approvals').all()).toEqual([{ state: 'denied', corrected: 1 }]);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM digests').get()).toEqual({ n: 0 });
+    const cols = (db.prepare("SELECT name FROM pragma_table_info('digests')").all() as { name: string }[]).map((r) => r.name);
+    expect(cols).toEqual(['day', 'sentAt', 'count']);
+    db.close();
+  });
+
+  it('the day is the key: a second claim of the same day changes nothing', () => {
+    const coord = new CoordStore(openCoordDb(dbPathIn(mkTmp('ccrc-coord-'))));
+    expect(coord.claimDigestDay('2026-10-18', 10, 3)).toBe(true);
+    expect(coord.claimDigestDay('2026-10-18', 20, 5)).toBe(false);
+    expect(coord.digestDay('2026-10-18')).toEqual({ day: '2026-10-18', sentAt: 10, count: 3 });
+  });
+});
+
+// D-5516 (accounts plan docs/superpowers/plans/2026-10-18-accounts-connect.md, Task A7). APPENDED. Its slot is found
+// by its DDL, never hard-coded, so a renumber at merge time edits no line here.
+describe('coord.db: account_events, the session-only account audit (D-5516, accounts plan Task A7)', () => {
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE account_events')) + 1;
+  it('is one new table and its index, reached from the slot before it with every earlier row kept', () => {
+    expect(SLOT).toBeGreaterThan(25);
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("INSERT INTO digests (day, sentAt, count) VALUES ('2026-10-18', 1, 0)");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT day FROM digests').all()).toEqual([{ day: '2026-10-18' }]);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM account_events').get()).toEqual({ n: 0 });
+    const cols = (db.prepare("SELECT name FROM pragma_table_info('account_events')").all() as { name: string }[]).map((r) => r.name);
+    expect(cols).toEqual(['id', 'at', 'actor', 'act', 'laneId', 'provider', 'method', 'outcome', 'code', 'keyName', 'fleetIdentity']);
+    const idx = (db.prepare("SELECT name FROM pragma_index_list('account_events')").all() as { name: string }[]).map((r) => r.name);
+    expect(idx).toContain('account_events_by_at');
+    // The outcome is closed in the table too: the one writer refuses first, and the CHECK is the floor under it.
+    expect(() => db.prepare("INSERT INTO account_events (at, actor, act, outcome) VALUES (1, 'a 00000000', 'check', 'maybe')").run())
+      .toThrow(/CHECK/);
     db.close();
   });
 });

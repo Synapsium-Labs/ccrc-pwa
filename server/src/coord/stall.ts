@@ -452,16 +452,29 @@ const LIVE_WORD_UNREAD_MAP: Record<Extract<LiveWordRead, { ok: false }>['reason'
 export type HookAskFact = { readonly kind: 'ask'; readonly at: number } | { readonly kind: 'approval'; readonly at: number } | { readonly kind: 'none' } | { readonly kind: 'unmeasured' };
 /** The raw hookstate (§5.1 "the one bounded exception"): no identity cut and no age cut. The `delegates` hold and the
  *  frozen clock read it. A `sessionId` of `''` is never current (Contract note 9). */
-export type HookRawFact = { readonly ok: true; readonly updatedAt: number; readonly event: string | null; readonly sessionId: string; readonly identity: 'current' | 'foreign' | 'unregistered' } | { readonly ok: false; readonly reason: 'absent' | 'unmeasured' | 'malformed' };
-/** The frozen arm's clock. It is the later of the turn's start and the newest current, non-plumbing hook event, or the
- *  turn's start alone when that event is plumbing. It is null (unmeasurable, never elapsed time) when the marker or
- *  the hook does not read, or when the hook is not the current session's. A null event is not plumbing: the spec
- *  names three events. */
+export type HookRawFact = { readonly ok: true; readonly updatedAt: number; readonly event: string | null; readonly sessionId: string; readonly identity: 'current' | 'foreign' | 'unregistered'; readonly aliveAt?: number } | { readonly ok: false; readonly reason: 'absent' | 'unmeasured' | 'malformed' };
+/** The newest non-plumbing hook activity (D-5232, `agent-events-keep-the-main-state`): the file's `updatedAt` unless
+ *  the event behind it is plumbing (`STALL_PLUMBING_EVENTS`), maxed with `aliveAt` when the file carries one; null when
+ *  neither counts. Behind the server's word `hook-main-state-v1` an agent event keeps the main thread's `updatedAt` and
+ *  writes only `aliveAt`, so subagent activity lives there, and the frozen clock and the `delegates` hold read it here.
+ *  `aliveAt` is NEVER plumbing: only agent events write it (a subagent's tool event, SubagentStart, SubagentStop, and
+ *  before this change D-4041's carried main-thread wait), and no compaction ever has: before Task 10 a compaction writes
+ *  a fresh `updatedAt` under a plumbing event and no `aliveAt`, and after Task 10 it writes no hookstate at all. So
+ *  reading `aliveAt` keeps the rule that plumbing never refreshes a hold. */
+export function stallHookActivityAt(hook: { readonly updatedAt: number; readonly event: string | null; readonly aliveAt?: number }): number | null {
+  const main = stallPlumbing(hook.event) ? null : hook.updatedAt;
+  const alive = hook.aliveAt ?? null;
+  if (main === null) return alive;
+  return alive === null ? main : Math.max(main, alive);
+}
+/** The frozen arm's clock. It is the later of the turn's start and the newest current, non-plumbing hook activity
+ *  (`stallHookActivityAt`: the main event's `updatedAt`, or subagent activity's `aliveAt`, D-5232), or the turn's start
+ *  alone when nothing counts. It is null (unmeasurable, never elapsed time) when the marker or the hook does not read,
+ *  or when the hook is not the current session's. A null event is not plumbing: the spec names three events. */
 export function stallFrozenSince(mark: TurnMarkRead, hook: HookRawFact): number | null {
   if (!mark.ok || !hook.ok || hook.identity !== 'current' || hook.sessionId === '') return null;
   const turnStart = mark.turnAt ?? mark.at;
-  if (hook.event !== null && STALL_PLUMBING_EVENTS.includes(hook.event)) return turnStart;
-  return Math.max(turnStart, hook.updatedAt);
+  return Math.max(turnStart, stallHookActivityAt(hook) ?? turnStart);
 }
 /** The marker-unreadable condition, in L1 once (the L1 ruling): the marker was read and could not be measured or
  *  parsed. `absent`, `foreign` and `stale` are not it: each has its own meaning to the verdicts. The verdict's step
@@ -887,9 +900,12 @@ function stallHookCurrent(hook: HookRawFact): hook is Extract<HookRawFact, { ok:
   return hook.ok && hook.identity === 'current' && hook.sessionId !== '';
 }
 
-/** `delegates` (§5.1): a current, non-plumbing hook event inside DELEGATE_WINDOW_MS, which is subagent activity. */
+/** `delegates` (§5.1): current, non-plumbing hook activity inside DELEGATE_WINDOW_MS, which is subagent activity. Since
+ *  D-5232 that activity is `aliveAt` beside the main event's stamp (`stallHookActivityAt`). */
 function stallHookFresh(hook: HookRawFact, now: number): boolean {
-  return stallHookCurrent(hook) && !stallPlumbing(hook.event) && now - hook.updatedAt < DELEGATE_WINDOW_MS;
+  if (!stallHookCurrent(hook)) return false;
+  const at = stallHookActivityAt(hook);
+  return at !== null && now - at < DELEGATE_WINDOW_MS;
 }
 
 /** The marker's quiet start (§5.1, "Quiet with the marker"): `stopAt`, maxed with the worker's last mail, the
@@ -1503,6 +1519,10 @@ export interface TurnMark {
   readonly bg: number; readonly bgKinds: readonly string[]; readonly bgIds: readonly string[];
   readonly err: string | null; readonly restartAt: number | null;
   readonly lostBg: number; readonly lostKinds: readonly string[]; readonly lostIds: readonly string[];
+  /** D-5242: the last Stop's `session_crons` length (Claude Code's session-scoped crons and wakeups), −1 when that
+   *  Stop carried no array. NULL when the line has no such field (an older hook) or one this reader cannot judge —
+   *  absent, never 0, so hibernation's `scheduled` hold keeps such a session awake. Never condemns the line. */
+  readonly crons: number | null;
   /** `restartAt + RESTART_GRACE_MS` when that restart cut a turn short (`turnMarkGraceUntil`), else null. */
   readonly graceUntil: number | null;
 }

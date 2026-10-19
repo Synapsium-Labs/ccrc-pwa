@@ -27,11 +27,17 @@
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
 import { cn } from '../lib/cn';
 import { FOCUS_RING } from '../lib/focus';
+import { GROUND_MOTION, PRESS_GROUND } from '../lib/press';
 
 /** The six, token for token as all five rules declared them. */
 export const BARE_ROW =
   'w-full min-h-tap border-0 bg-transparent text-left cursor-pointer'
   + ' disabled:cursor-default'
+  // D-5101: the row lifts under the mouse and sinks while held — the one
+  // ground this component does carry, because it is a state of the control
+  // rather than any one consumer's voice. A hook class that paints its own
+  // background still wins (an app sheet beats a utility).
+  + ` ${PRESS_GROUND} ${GROUND_MOTION}`
   + ` ${FOCUS_RING}`;
 
 export interface BareRowProps extends ButtonHTMLAttributes<HTMLButtonElement> {

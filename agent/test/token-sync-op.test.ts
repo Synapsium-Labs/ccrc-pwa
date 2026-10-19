@@ -11,7 +11,8 @@
 //  - At the bound the group gets SIGTERM (the verb's trap runs) before SIGKILL.
 //  - The child's answer maps to one closed word, by exit code AND first stderr line; success carries `transport`.
 //  - One gate per agent PROCESS: a second op while one runs is `busy`, on any connection.
-//  - The ready frame advertises ['update', 'token-sync'].
+//  - The ready frame advertises ['update', 'token-sync', 'account'] (the third word is the accounts plan's A8,
+//    pinned with its op in `account-op.test.ts`).
 //  - The op reaches no exec path (a SOURCE scan: no behavioural case sees an extra call whose answer is the same).
 import { describe, it, expect, afterEach } from 'vitest';
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -203,12 +204,12 @@ describe('the token-sync op', () => {
     });
   });
 
-  it("the ready frame advertises exactly ['update', 'token-sync']", async () => {
+  it("the ready frame advertises exactly ['update', 'token-sync', 'account']", async () => {
     fixture = makeFixture();
     agent = await boot(fixture, { spawnTokenSync: recorder().spawn });
     const c = new TestClient(agent.port);
     clients.push(c);
-    expect((await c.hello() as AgentReady).ops).toEqual(['update', 'token-sync']);
+    expect((await c.hello() as AgentReady).ops).toEqual(['update', 'token-sync', 'account']);
   });
 
   describe('the op reaches no exec path — read from the source', () => {
@@ -320,31 +321,35 @@ describe('the token-sync op', () => {
       fixture = makeFixture();
       contain(fixture.home);
       const h = fixture.home;
-      // Traps TERM and keeps running, so only the SIGKILL ends it: the trap's record proves TERM came first.
+      // Traps TERM and keeps running, so only the SIGKILL ends it: the trap's record proves TERM came first. The
+      // trap is the stub's first line and `ready` follows it; the 2 s bound is far past a loaded shell's start-up
+      // (the accounts plan's D-5623 (4) applies the same shape here).
       const file = plantLauncher(h, [
-        `touch '${h}/temp'`,
         `trap "echo TERM >> '${h}/sig'; rm -f '${h}/temp'" TERM`,
+        `touch '${h}/temp' '${h}/ready'`,
         'while :; do sleep 0.05; done',
       ].join('\n'));
+      const BOUND = 2_000;
       const spawnReal = makeTokenSyncSpawn(tokenSyncEnv(h));
       const t0 = Date.now();
-      const r = await spawnReal(file, tokenSyncSpawnArgv(), CODE, 300);
+      const r = await spawnReal(file, tokenSyncSpawnArgv(), CODE, BOUND);
       const took = Date.now() - t0;
       expect(r.killed).toBe(true);
+      expect(existsSync(path.join(h, 'ready')), 'the stub had not installed its trap when the bound ran out (load)').toBe(true);
       expect(readFileSync(path.join(h, 'sig'), 'utf8')).toBe('TERM\n');
       expect(existsSync(path.join(h, 'temp')), 'the trap did not remove its temp').toBe(false);
-      expect(took, 'SIGKILL came before the grace').toBeGreaterThanOrEqual(300 + TOKEN_SYNC_KILL_GRACE_MS - 100);
-      expect(took).toBeLessThan(300 + TOKEN_SYNC_KILL_GRACE_MS + 2_500);
+      expect(took, 'SIGKILL came before the grace').toBeGreaterThanOrEqual(BOUND + TOKEN_SYNC_KILL_GRACE_MS - 100);
+      expect(took).toBeLessThan(BOUND + TOKEN_SYNC_KILL_GRACE_MS + 2_500);
       expect(tokenSyncAnswer(r)).toEqual({ ok: false, err: 'spawn-failed', detail: 'stopped at the 40000 ms bound' });
-    });
+    }, 20_000);
 
     it('a child whose trap exits on SIGTERM answers at once, without waiting out the grace', async () => {
       fixture = makeFixture();
       contain(fixture.home);
       const h = fixture.home;
       const file = plantLauncher(h, [
-        `touch '${h}/temp'`,
         `trap "rm -f '${h}/temp'; exit 143" TERM`,
+        `touch '${h}/temp'`,
         'while :; do sleep 0.05; done',
       ].join('\n'));
       const t0 = Date.now();

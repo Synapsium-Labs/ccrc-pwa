@@ -156,7 +156,14 @@ export function FleetHostBanner(
         sticky
         action={(
           <Button
-            variant="primary"
+            // `danger-ghost` (D-5099): the most destructive control in the
+            // app, on a banner already painted in the dead tint, so a red
+            // hairline in the dead-text ink rather than a red fill on red.
+            // The commit is its confirm's, below: `tone="danger"`.
+            variant="danger-ghost"
+            // Its lift and press are the dead banner's own grounds, not the
+            // card's, which barely register on this tint (D-5574, D-5688).
+            ground="dead"
             // `size="fit"` IS THE FIX, and it is the axis the design system
             // already had. `Button`'s default size is `full` (`w-full`), so
             // `flex-none` alone kept this button at the row's full width: it
@@ -194,6 +201,7 @@ export function FleetHostBanner(
         consequence="Reboots the whole fleet box — everything else running on it goes down too, not just the fleet."
         confirmLabel="Reboot the fleet host"
         onConfirm={reboot}
+        tone="danger"
       />
     </>
   );

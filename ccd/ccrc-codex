@@ -6,8 +6,8 @@
 # exports CLAUDE_CONFIG_DIR and execs this file with the session's argv; ccd
 # execs that wrapper as a tmux pane's command. Nothing else should — an
 # operator types `<id>`, never `ccrc-codex`. The name is not `ccgpt` because
-# that path on a live box belongs to another repository's launcher, which the
-# live lanes still exec (D-3478).
+# a box may still carry another repository's `ccgpt` launcher at that path
+# (the fleet box's copy was removed by Plan 4), and D-3478 reserves that id.
 #
 # WHAT IT DOES, in order, and nothing else:
 #   1. requires CLAUDE_CONFIG_DIR: a lane's identity IS its config directory
@@ -20,9 +20,10 @@
 #      (D-3479): its service helper must sit in the platform
 #      region ccd/ccd and ccd/ccrc share byte for byte, and nothing under
 #      ccd/ sources either file;
-#   4. refuses a lane with no model class — the launcher this replaces made
-#      the same refusal, because without env.ANTHROPIC_MODEL in the lane's
-#      settings.json Claude Code asks the gateway for an Anthropic model id;
+#   4. refuses a lane with no model class — the launcher this replaces
+#      (retired by Plan 4) made the same refusal, because without
+#      env.ANTHROPIC_MODEL in the lane's settings.json Claude Code asks the
+#      gateway for an Anthropic model id;
 #   5. reads the shim's port from the lane's lane.json and the gateway key
 #      from its runtime.env — generated state, never re-derived here;
 #   6. exports the endpoint, the key and four fixed behaviour variables;
@@ -50,11 +51,11 @@
 # NO MODEL KEY IS EXPORTED. All eight model keys (`MODEL_ENV_KEYS`,
 # `shared/modelenv.mjs`) live in the lane's settings.json `env` block, which
 # `deploy/models-op.mjs`'s materialiser writes, and Claude Code applies that
-# block over the shell environment — the launcher this replaces records
+# block over the shell environment — the launcher this replaces recorded
 # measuring that on 2026-09-08. An export here would be dead at best and a
 # drifting second copy at worst.
 #
-# NOTHING IS UNSET. The launcher this replaces has no `unset` either
+# NOTHING IS UNSET. The launcher this replaces had no `unset` either
 # (measured); whatever the wrapper and ccd put in the environment reaches
 # Claude Code beside what step 6 adds.
 #

@@ -25,12 +25,19 @@ const SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   stopId: ['demo-quiet-basin', 'pwa'],
   stopPair: ['claude', 'demo', 'pwa'],
   forget: ['claude-corp-demo'],
+  // D-5242: the dec rides after the one positional, as an unattended lane sends it; the bare `['hibernate']` grant
+  // admits it with no widening.
+  hibernate: ['demo-quiet-basin', { surface: 'agent', actor: 'sweep:hibernate', reason: null }],
   swap: ['demo-quiet-basin', 'claude2'],
   /** THE DELIBERATE CROSSING (account pools, spec §5.7). Three separate
    *  ENTRIES rather than an option on the three above — `start`/`enable`'s own
    *  rule, for its reason: a route picks the ENTRY, so both spellings are
    *  enumerated here and neither can drift out of the agent's whitelist. */
   swapCross: ['demo-quiet-basin', 'claude-b'],
+  // D-5240: the operator's consent to lose the turn, LEADING like `--cross-pool`; the bare `['swap']` prefix grant
+  // admits both with no widening.
+  swapInterrupt: ['demo-quiet-basin', 'claude2'],
+  swapCrossInterrupt: ['demo-quiet-basin', 'claude-b'],
   startCross: ['claude', 'demo'],
   enableCross: ['claude', 'demo'],
   wsAdd: ['demo'],
@@ -539,6 +546,7 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     stopId: ['stop', '--surface', 'pwa', 'demo-quiet-basin'],
     stopPair: ['stop', '--surface', 'pwa', 'claude', 'demo'],
     forget: ['forget', 'claude-corp-demo'],
+    hibernate: ['hibernate', 'demo-quiet-basin', '--surface', 'agent', '--actor', 'sweep:hibernate'],
     swap: ['swap', 'demo-quiet-basin', 'claude2'],
     // LEADING flag, before the positionals — the token order is
     // parse-load-bearing and it is the SAFE direction under version skew (spec
@@ -546,6 +554,8 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     // silently ignored fourth positional, while a leading one is refused by
     // `_is_valid_wrapper` on every ccd that has ever shipped. Loud beats silent.
     swapCross: ['swap', '--cross-pool', 'demo-quiet-basin', 'claude-b'],
+    swapInterrupt: ['swap', '--interrupt', 'demo-quiet-basin', 'claude2'],
+    swapCrossInterrupt: ['swap', '--cross-pool', '--interrupt', 'demo-quiet-basin', 'claude-b'],
     startCross: ['start', '--cross-pool', 'claude', 'demo'],
     enableCross: ['enable', '--cross-pool', 'claude', 'demo'],
     wsAdd: ['ws-add', 'demo'],

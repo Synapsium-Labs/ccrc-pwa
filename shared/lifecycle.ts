@@ -80,6 +80,24 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
     creators: ['ccd/history/sweep.mjs (--op backup)'], collector: null,
     bound: 'until removed by hand', tier: 'one store size per backup',
     ruling: 'operator-made by `ccrc history doctor --backup`; remove by hand (the next --backup removes a stale .tmp first)' },
+  // ccrc history, W1-B4 (spec 2026-10-05 §9.4, §9.15): the sole-copy export, one immutable segment per pass on the home
+  // filesystem, never under db/; kept with the store like the journal.
+  { name: 'history-export', root: '~/.ccrc/history/export/<store_id>/<seq>.<writer>.db, and its .<seq>.<writer>.db.tmp while one is written', pattern: 'O',
+    creators: ['ccd/history/sweep.mjs (through store.mjs)'], collector: null,
+    bound: 'store lifetime', tier: 'about the store\'s growth rate once text nears its retention (inferred); at most one segment of about 256 MiB an hour; paused below the home filesystem\'s floor',
+    ruling: 'kept with the store; removed only with it, or by hand by segment (the writer removes a stale .tmp itself)' },
+  // ccrc history, W1-B3 (spec 2026-10-05 §9.4): the card line's two rolling classes. The hook rewrites a session's
+  // scope marker on every PreCompact; the sweep writes one card prediction per session id through card.mjs, deletes
+  // it once the boundary that consumed it is ingested, and withdraws them all on a pass that runs no card step; both
+  // are collected 7 days after their session is purged from the registry.
+  { name: 'history-scope-markers', root: '~/.ccrc/history/scope/<id>', pattern: 'R',
+    creators: ['ccd/session-hook.sh'],
+    collector: 'ccd-history-sweep (the files of purged sessions after 7 days)',
+    bound: 'one per session id, overwritten on each PreCompact; collected 7 days after its session is purged', tier: '<=64 B per session', ruling: null },
+  { name: 'history-card-files', root: '~/.ccrc/history/card/<id>/<uuid>.txt; beside it, its generation record <uuid>.gen (at most 37 B, coordinator ruling R-recalloff-parity), replaced with the id\'s next prediction', pattern: 'R',
+    creators: ['ccd/history/sweep.mjs (through card.mjs)'],
+    collector: 'ccd-history-sweep (deleted on consumption: when the boundary that consumed the prediction is ingested, or when the id\'s next prediction names another uuid; withdrawn by a pass that runs no card step; the files of purged sessions after 7 days, the record included)',
+    bound: 'one prediction per session id, until consumed or withdrawn, or 7 days after its session is purged', tier: '<=512 B per session', ruling: null },
   // #316: the server suite's one temp parent per vitest run, every fixture inside it. Ephemeral (E): its creator
   // collects it, and a later run collects one whose owner was SIGKILLed, once its socket refuses and it is quiet.
   // The window is named, not numbered: RUN_QUIET_S lives once, in the .mjs, which L0 cannot import.

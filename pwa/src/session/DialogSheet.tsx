@@ -139,15 +139,21 @@
 // sheet.
 import { Fragment, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { Dialog, HookAsk } from '../../../shared/api';
+import type { Dialog, DialogTabTarget, HookAsk } from '../../../shared/api';
+import { parseAskTabs, reviewRows } from '../../../shared/ask-menu';
 import { EYEBROW, OptionRow, Sheet, Well, toast } from '@ccrc/ui';
 import { EnvelopeSheet, TerminalCta } from './EnvelopeSheet';
 import {
-  AskEyebrow, AskReview, ChatRow, MultiPick, OwnWords, REVIEW_TITLE, ownWordsRow, picksBusy, wordsBusy,
-  type PickCall, type Picks, type Words, type WordsCall,
+  AskEyebrow, AskReview, AskTabs, ChatRow, MultiPick, OwnWords, REVIEW_TITLE, escapeHidesOnly, keyed, lit, ownWordsRow,
+  picksBusy, wordsBusy, type PickCall, type Picks, type Words, type WordsCall,
 } from './AskParts';
-import { chatRow, freeTextSlot, isAskReview, paneQuestion, paneTicks, questionKey, slotHolds } from './askLive';
-import { dialogMultiRefusal, dialogRefusal, dialogTextRefusal } from './askWords';
+import {
+  askScreen, chatRow, freeTextSlot, headerTab, paneQuestion, paneTicks, picksUncommitted, questionKey,
+  slotHolds,
+} from './askLive';
+import { keyTabs, multiKeys, questionKeys, reviewKeys, rowKey, type KeyScreen } from './askKeys';
+import { dialogMultiRefusal, dialogRefusal, dialogTabRefusal, dialogTextRefusal } from './askWords';
+import { useAskKeys } from './useAskKeys';
 import { api, ApiError } from '../lib/api';
 import { getSessionStore, type SessionStore } from '../stores/session';
 import './chat.css';
@@ -212,6 +218,8 @@ export interface DialogSheetProps {
 export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetProps): ReactNode {
   const useStore = store ?? getSessionStore(id);
   const dialog = useStore((s) => s.dialog);
+  /** Decision `ask-answer-returns-next-screen`: an answer route's `next`, into the store (`applyAnswered`). */
+  const applyAnswered = (answeredId: string, next: Dialog | null): void => useStore.getState().applyAnswered(answeredId, next);
   const hookAsk = useStore((s) => s.ask);
 
   // The option index whose answer is in flight (null = none).
@@ -229,12 +237,17 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
   // ever equals, so without this the hand-off on `ask_cleared` re-opened the
   // very question the operator had just waved away.
   const [dismissedDialogId, setDismissedDialogId] = useState<string | null>(null);
+  /** The envelope's screen (`askScreen`) the sheet was hidden on; meaningful only while `dismissedKey` is that ask. */
+  const [dismissedScreen, setDismissedScreen] = useState<string | null>(null);
   // D-5090: the own-words text and its call, one value so the two change together (see `WordsCall`).
   const [own, setOwn] = useState(NO_WORDS);
   // D-5091: a multiSelect question's set and its commit, one value for the same reason (see `PickCall`).
   const [pick, setPick] = useState(NO_PICK);
   // The raw "full question" view.
   const [details, setDetails] = useState(false);
+  // Decision `ask-dialog-tab-route`: a tab move (the arrow keys, or a tab-strip chip) is under way. It is a send like
+  // any other: it refuses the others and the dismissal while it runs.
+  const [tabbing, setTabbing] = useState(false);
 
   // Remember the last dialog so the sheet has content to animate out with
   // after dialog_cleared empties the store.
@@ -260,7 +273,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
 
   // Anything in flight: an option's answer, an own-words send or a multiSelect commit. Each refuses another send and
   // the dismissal.
-  const locked = answering !== null || wordsBusy(own.call) || picksBusy(pick.call);
+  const locked = answering !== null || wordsBusy(own.call) || picksBusy(pick.call) || tabbing;
   // One send at a time, held where a send STARTS. `locked` is render state, and React commits a tap's state only after
   // its handler returns, so a second tap handled in the same tick finds every row still enabled and `locked` still
   // false: an option and then `Chat about this` (which declines the whole ask) would both be sent. `sending` is set the
@@ -301,9 +314,12 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
   const answer = async (optionIndex: number): Promise<void> => {
     if (dialog === null || !claim()) return;
     setAnswering(optionIndex);
+    const answered = dialog.id;
     try {
-      await api.answerDialog(id, dialog.id, optionIndex);
-      // Stay in "answering…" — the sheet closes when dialog_cleared lands.
+      const res = await api.answerDialog(id, answered, optionIndex);
+      // Decision `ask-answer-returns-next-screen`: the route says which screen the pane moved to, so the next question
+      // or the review opens now, not on the stream's next poll. Without it, stay in "answering…" until a frame lands.
+      if (res.next !== undefined) applyAnswered(answered, res.next);
     } catch (err) {
       setAnswering(null);
       // Each refusal by its code (`dialogRefusal`, plan Task 5), where every 409 once read alike. A stale dialog is
@@ -326,7 +342,13 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
     const call = { row, question: questionKey(current, row) };
     setOwn({ text: kept, call: { ...call, state: 'flight' } });
     try {
-      await api.answerDialogText(id, current.id, row, kept.trim());
+      const res = await api.answerDialogText(id, current.id, row, kept.trim());
+      if (res.next !== undefined) {
+        // Typing changed the screen's id, so the store may hold the typed row by now: the same question by its key.
+        const held = useStore.getState().dialog;
+        const same = held !== null && held.parsed && questionKey(held, row) === call.question;
+        applyAnswered(same ? held.id : current.id, res.next);
+      }
       // Landed. Like a tapped option, the sheet stays busy until the pane moves on — unless it already has: the next
       // screen can reach the store before the call's answer does, and must not be held busy by it.
       const now = useStore.getState().dialog;
@@ -366,7 +388,8 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
     const call: PickCall = { dialogId: current.id, wanted, state: 'flight' };
     setPick((p) => ({ ...p, call }));
     try {
-      await api.answerDialogMulti(id, current.id, wanted);
+      const res = await api.answerDialogMulti(id, current.id, wanted);
+      if (res.next !== undefined) applyAnswered(current.id, res.next);
       const waiting = useStore.getState().dialog?.id === current.id;
       setPick(waiting ? { id: current.id, picked: wanted, call: { ...call, state: 'landed' } } : NO_PICK);
     } catch (err) {
@@ -381,11 +404,83 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
     onCommit: (wanted) => void commitPicks(wanted),
   };
 
+  // Decision `ask-dialog-tab-route`: move the PANE to another tab, and follow the screen it lands on (`next`), as an
+  // answer's. `from` is the 1-based tab the sheet believes is up, for a numbered target. A refusal says why and leaves
+  // the sheet where it is.
+  const moveTab = async (to: DialogTabTarget, from?: number): Promise<void> => {
+    const current = dialog;
+    if (current === null || !claim()) return;
+    setTabbing(true);
+    try {
+      const res = await api.answerDialogTab(id, { dialogId: current.id, to, ...(from === undefined ? {} : { from }) });
+      if (res.next !== undefined) applyAnswered(current.id, res.next);
+    } catch (err) {
+      toast(dialogTabRefusal(err), 'error');
+    } finally {
+      setTabbing(false);
+    }
+  };
+  // The boxes changed here and not committed: a tab move would lose them, so ←/→ and the strip wait.
+  const picksHeld = dialog?.multi !== undefined && pick.id === dialog.id && pick.call === null
+    && picksUncommitted(dialog.multi, pick.picked);
+
+  // The scraped sheet's keyboard (decision `ask-sheet-keyboard-model`), worked out before any branch below returns,
+  // since the hook runs on every render. The envelope sheet keys its own screen.
+  const enveloped = isUsableAsk(hookAsk);
+  const ask = shown?.ask;
+  // D-5090: the free-text row, under the question's n options. n is the transcript's option count when the server
+  // matched the question; else, after this sheet's own text call, that call's row less one, but only while the pane
+  // shows the question the call was made for (`questionKey`: its title and every other row; the stranded retry needs
+  // it, since only the placeholder tells itself apart from an option); else unknown, and only the empty placeholder
+  // row is the slot. A call never speaks for another question, so a refusal that outlives its own cannot hide a later
+  // question's option or offer its placeholder as a row. That row, and the `Chat about this` row, are never option
+  // rows here: own words go through `OwnWords`, and Chat is a row of its own saying what it does.
+  const n = ask !== undefined
+    ? ask.options.length
+    : own.call !== null && shown !== null && showsQuestion(shown, own.call) ? own.call.row - 1 : null;
+  const slot = shown !== null && shown.parsed ? freeTextSlot(shown, n) : { kind: 'none' as const };
+  const chat = shown !== null && shown.parsed ? chatRow(shown) : undefined;
+  const slotRow = slot.kind === 'none' ? null : slot.index;
+  const optionRows = shown === null ? [] : shown.options.filter((o) => o.index !== slotRow && o.index !== chat?.index);
+  const review = shown === null ? null : reviewRows(shown);
+  const tabRow = shown === null ? null : parseAskTabs(shown.raw);
+  // Where the sheet is in the ask: the review, or the question the transcript's header names on the tab row.
+  const place = review !== null || tabRow === null ? null : headerTab(tabRow.tabs, ask?.header);
+  const tabs = keyTabs(tabRow?.tabs.length ?? null, place, review !== null, picksHeld);
+  const boxed = shown !== null && !shown.parsed && shown.multi !== undefined && shown.title.trim() !== '';
+  const keyScreen: KeyScreen | null = enveloped || shown === null ? null
+    : review !== null ? reviewKeys(review.submit, review.cancel, tabs)
+      : boxed ? multiKeys(shown.multi!.options.map((o) => o.index), tabs)
+        : shown.parsed ? questionKeys(
+          optionRows.map((o) => o.index), ownWordsRow(slot, own.text, own.call), chat?.index ?? null, tabs,
+        ) : null;
+  const cursor = shown === null ? null : shown.multi !== undefined ? shown.multi.cursor : shown.selectedIndex;
+  const keys = useAskKeys({
+    screenId: shown?.id ?? null,
+    screen: keyScreen,
+    start: typeof cursor === 'number' ? rowKey(cursor) : cursor === 'commit' ? 'commit' : null,
+    open,
+    onAnswer: (k) => void answer(k),
+    onToggle: toggle,
+    onTab: (to) => void moveTab(to),
+  });
+  /** The strip over the scraped sheet's screen, where the pane paints a tab row. */
+  const strip = tabRow !== null && (
+    <AskTabs
+      tabs={tabRow.tabs}
+      active={place}
+      onReview={review !== null}
+      held={picksHeld}
+      busy={locked}
+      onGo={(to) => void moveTab(to, place === null ? undefined : place + 1)}
+    />
+  );
+
   // The hook envelope wins DISPLAY the moment it is USABLE — see the file
   // header (fix round 1's I4). It can be non-null while `shown` is still null
   // (the envelope arrived first), so this has to come before the
   // `shown === null` bailout.
-  if (isUsableAsk(hookAsk)) {
+  if (enveloped) {
     // A hash of the envelope's JSON stands in for an identity HookAsk
     // doesn't carry. Content equality is exactly what should reopen or stay
     // dismissed here: session-hook.sh rewrites the whole file on every
@@ -394,6 +489,8 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
     // genuinely new one always serializes differently (a new question
     // string, a new tool/summary pair, an added/removed option, …).
     const askKey = JSON.stringify(hookAsk);
+    // An approval is one screen; a question ask is one per question plus its review (`askScreen`).
+    const screenNow = 'approval' in hookAsk ? (dialog === null ? null : 'approval') : askScreen(hookAsk, dialog);
     return (
       <EnvelopeSheet
         id={id}
@@ -402,13 +499,24 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
         answering={answering}
         words={words}
         picks={picks}
-        open={askKey !== dismissedKey}
+        // Decision `ask-envelope-dismissal-per-screen`: a hide hides the SCREEN that was showing, never the rest of the
+        // ask. The envelope's JSON is the same for every question and the review (the hook writes them all at once), so
+        // keying on it alone kept a sheet hidden on question 2 hidden through the review: no Submit anywhere but the
+        // terminal. A screen is a QUESTION, or the review (`askScreen`), never a raw dialog id: typing into the
+        // free-text row in the terminal, or a mid-redraw grab, repaints the same question under a new id, and must not
+        // put a modal back over the terminal the operator is typing in. Only a different question or the review
+        // opens it again; a screen the sheet cannot place (no menu, an unparsed grab) never does.
+        open={!(askKey === dismissedKey && (screenNow === null || screenNow === dismissedScreen))}
         onHide={() => {
           setDismissedKey(askKey);
+          setDismissedScreen(screenNow);
           setDismissedDialogId(dialog?.id ?? null);
         }}
         onSelectOption={(optionIndex) => void answer(optionIndex)}
         onOpenTerminal={onOpenTerminal}
+        tabbing={tabbing}
+        picksHeld={picksHeld}
+        onTab={(to, from) => void moveTab(to, from)}
       />
     );
   }
@@ -422,19 +530,23 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
   // named it here, with the envelope's several-answers line.) One whose title
   // came back blank keeps the generic dead end below: a sheet with no
   // accessible name.
-  if (!shown.parsed && shown.multi !== undefined && shown.title.trim() !== '') {
+  if (boxed && shown.multi !== undefined) {
     return (
       <Sheet
         open={open}
         onClose={close}
+        onEscapeKeyDown={escapeHidesOnly}
         eyebrow={<AskEyebrow header={shown.ask?.header} />}
         title={paneQuestion(shown).question}
       >
+        <div ref={keys.root} hidden />
+        {strip}
         <MultiPick
           multi={shown.multi}
           dialogId={shown.id}
           picks={picks}
-          locked={answering !== null || wordsBusy(own.call)}
+          locked={answering !== null || wordsBusy(own.call) || tabbing}
+          keys={keys}
         />
       </Sheet>
     );
@@ -442,7 +554,13 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
 
   if (!shown.parsed) {
     return (
-      <Sheet open={open} onClose={close} eyebrow={<AskEyebrow />} title="Answer this one in the terminal">
+      <Sheet
+        open={open}
+        onClose={close}
+        onEscapeKeyDown={escapeHidesOnly}
+        eyebrow={<AskEyebrow />}
+        title="Answer this one in the terminal"
+      >
         <p className="dlg-copy">
           This question doesn't fit tappable options. Answer it in the terminal — the session picks up from there.
         </p>
@@ -462,16 +580,17 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
   // renders it (`AskReview`), so an ask whose envelope aged out can still be
   // submitted from here. Titled `Review your answers`, never the pane's title,
   // which on this screen is the tab row (or, on a tall review, an answer).
-  if (isAskReview(shown)) {
+  if (review !== null) {
     return (
-      <Sheet open={open} onClose={close} eyebrow={<AskEyebrow />} title={REVIEW_TITLE}>
-        <AskReview dialog={shown} answering={answering} locked={locked} onAnswer={(k) => void answer(k)} />
+      <Sheet open={open} onClose={close} onEscapeKeyDown={escapeHidesOnly} eyebrow={<AskEyebrow />} title={REVIEW_TITLE}>
+        <div ref={keys.root} hidden />
+        {strip}
+        <AskReview dialog={shown} answering={answering} locked={locked} onAnswer={(k) => void answer(k)} keys={keys} />
       </Sheet>
     );
   }
 
-  // The transcript's copy for this menu, when the two could be matched.
-  const ask = shown.ask;
+  // The transcript's copy for this menu (`ask`, above), when the two could be matched.
   // Nothing validates the question server-side beyond it being a string, so a
   // blank one has to degrade to the scraped pane rather than replace it: `??`
   // would keep the empty string and leave the sheet with no question on it at
@@ -480,27 +599,17 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
   // D-5089: without that copy, the pane's own question and what it painted above it, never the ask's raw tab row, and
   // never the question twice (a wrapped one titled whole, not by its last row).
   const painted = paneQuestion(shown);
-  // D-5090: the free-text row, under the question's n options. n is the transcript's option count when the server
-  // matched the question; else, after this sheet's own text call, that call's row less one, but only while the pane
-  // shows the question the call was made for (`questionKey`: its title and every other row; the stranded retry needs
-  // it, since only the placeholder tells itself apart from an option); else unknown, and only the empty placeholder
-  // row is the slot. A call never speaks for another question, so a refusal that outlives its own cannot hide a later
-  // question's option or offer its placeholder as a row. That row, and the `Chat about this` row, are never option
-  // rows here: own words go through `OwnWords`, and Chat is a row of its own saying what it does.
-  const n = ask !== undefined
-    ? ask.options.length
-    : own.call !== null && showsQuestion(shown, own.call) ? own.call.row - 1 : null;
-  const slot = freeTextSlot(shown, n);
-  const chat = chatRow(shown);
-  const slotRow = slot.kind === 'none' ? null : slot.index;
-  const rows = shown.options.filter((o) => o.index !== slotRow && o.index !== chat?.index);
+  const rows = optionRows;
   return (
     <Sheet
       open={open}
       onClose={close}
+      onEscapeKeyDown={escapeHidesOnly}
       eyebrow={<AskEyebrow header={ask?.header} />}
       title={question || painted.question}
     >
+      <div ref={keys.root} hidden />
+      {strip}
       {/* The scraped preamble is a lossy copy of the question — once the real
           one is the title it would only say it twice. Keyed off the question
           actually shown, so a blank one keeps the pane's copy. */}
@@ -509,7 +618,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
       )}
       <div className="opts">
         {rows.map((o) => {
-          const selected = o.index === shown.selectedIndex;
+          const selected = lit(keys, o.index);
           const waiting = answering === o.index;
           // By POSITION, never by matching text: the keystroke is o.index
           // whatever the transcript happens to call this row. `null` (the
@@ -526,6 +635,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
             // last one's folded state. The id is stable across arrow moves.
             <Fragment key={`${shown.id}:${o.index}`}>
               <OptionRow
+                {...keyed(keys, o.index)}
                 selected={selected}
                 glyph={selected ? '❯' : ''}
                 index={o.index}
@@ -554,7 +664,8 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
         slot={slot}
         chat={chat?.label ?? null}
         words={words}
-        locked={answering !== null || picksBusy(pick.call)}
+        locked={answering !== null || picksBusy(pick.call) || tabbing}
+        keys={keys}
       />
       {chat && (
         <ChatRow
@@ -563,6 +674,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
           answering={answering}
           disabled={locked}
           onAnswer={(k) => void answer(k)}
+          keys={keys}
         />
       )}
 

@@ -153,8 +153,8 @@ async function expirySwitches(deps: ExpireArchivedDeps): Promise<{ kind: 'paused
 
 /** THE REVIEW CONJUNCT for one row (spec §5.3, CCR-15 R16): is `id` the `sessionId` of a REVIEW run whose reviewed
  *  run is not terminal? An unreadable or absent reviewed run is doubt, and doubt keeps (`reviewKeeps`). Shared by the
- *  lane's pass and the act's re-read. */
-export function expiryReviewing(coord: CoordStore, id: string): { ok: true; reviewing: boolean } | { ok: false; detail: string } {
+ *  lane's pass and the act's re-read, and by the stop-done lane's (D-5370, `stopDoneSweep.ts`). */
+export function expiryReviewing(coord: Pick<CoordStore, 'runsNamingSession' | 'run'>, id: string): { ok: true; reviewing: boolean } | { ok: false; detail: string } {
   try {
     const naming = coord.runsNamingSession(id);
     if (!naming.ok) return { ok: false, detail: naming.detail };

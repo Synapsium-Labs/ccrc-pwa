@@ -2,6 +2,7 @@
 // each lived behind its own identical stylesheet rule.
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { Door } from './door';
+import { Icon } from './icon';
 
 const meta = {
   title: 'Primitives/Door',
@@ -28,14 +29,14 @@ type Story = StoryObj<typeof meta>;
  *  and accounts — because "Account" alone is what the strip already failed to
  *  communicate. */
 export const Account: Story = {
-  args: { glyph: '🔑', children: 'Account', 'aria-label': 'Your sign-in and accounts' },
+  args: { glyph: <Icon name="key-round" />, children: 'Account', 'aria-label': 'Your sign-in and accounts' },
 };
 
 /** The door to /settings. The name begins with the visible word, so a voice
  *  user saying what they see still reaches it. */
 export const Settings: Story = {
   args: {
-    glyph: '⚙',
+    glyph: <Icon name="settings" />,
     children: 'Settings',
     'aria-label': 'Settings — updates and notifications',
   },
@@ -46,11 +47,11 @@ export const Settings: Story = {
  *  `.shell-nav`'s `--bg-surface` in the desktop sidebar — and the token
  *  contract measures all four pairs rather than picking one. */
 export const InAHeaderGroup: Story = {
-  args: { glyph: '🔑', children: 'Account', 'aria-label': 'Your sign-in and accounts' },
+  args: { glyph: <Icon name="key-round" />, children: 'Account', 'aria-label': 'Your sign-in and accounts' },
   render: () => (
     <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
-      <Door glyph="🔑" aria-label="Your sign-in and accounts">Account</Door>
-      <Door glyph="⚙" aria-label="Settings — updates and notifications">Settings</Door>
+      <Door glyph={<Icon name="key-round" />} aria-label="Your sign-in and accounts">Account</Door>
+      <Door glyph={<Icon name="settings" />} aria-label="Settings — updates and notifications">Settings</Door>
     </div>
   ),
 };

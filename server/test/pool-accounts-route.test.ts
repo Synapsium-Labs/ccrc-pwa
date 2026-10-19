@@ -28,7 +28,7 @@ import { ACCOUNT_ID_RE } from '../../shared/roster.js';
 import { seedRoster } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { execFileSync } from 'node:child_process';
-import { CCD, ghContainedEnv, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { CCD, ghContainedEnv, makeCcdHarness, stubContainedTool, type CcdHarness } from './ccdWsHelpers.js';
 import { POOLS_DIR_NAME } from '../src/pools.js';
 
 const TOKEN = 'f'.repeat(64);
@@ -397,10 +397,10 @@ const CCD_POOL_SYNC = path.join(repoRootForSync, 'ccd', 'ccd-pool-sync');
  *  status to stdout, as a real curl does. The body rides in a data file the
  *  stub `cat`s, not a quoting chain, so a JSON body with quotes is safe. */
 const syncInto = (home: string, body: string): void => {
-  const bin = path.join(home, 'bin');
-  mkdirSync(bin, { recursive: true });
+  // Through the named door (wave 18, D-5249): INTO harnessBin, where the stub REPLACES the curl poison
+  // `makeCcdHarness` plants; a stub in a directory of its own loses to that poison on ordering.
   writeFileSync(path.join(home, 'curl-body.json'), body, 'utf8');
-  writeFileSync(path.join(bin, 'curl'), [
+  const bin = path.dirname(stubContainedTool(home, 'curl', [
     '#!/usr/bin/env bash',
     'cat > /dev/null',
     'outfile=""; prev=""',
@@ -411,14 +411,14 @@ const syncInto = (home: string, body: string): void => {
     '[ -n "$outfile" ] && cat "$HOME/curl-body.json" > "$outfile"',
     "printf '200'",
     '',
-  ].join('\n'), { mode: 0o755 });
+  ].join('\n')));
   mkdirSync(path.join(home, '.ccrc'), { recursive: true });
   writeFileSync(path.join(home, '.ccrc', 'agent.env'), 'CCRC_SERVER_URL=https://example.invalid\n', 'utf8');
   mkdirSync(path.join(home, '.cc-secrets'), { recursive: true });
   writeFileSync(path.join(home, '.cc-secrets', 'ccrc-mail.token'), 'tok\n', 'utf8');
   const env = ghContainedEnv(
     home, { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH ?? ''}` },
-    { systemd: true, tmux: true });
+    { systemd: true, tmux: true, net: true });
   execFileSync('bash', [CCD_POOL_SYNC], { encoding: 'utf8', env });
 };
 

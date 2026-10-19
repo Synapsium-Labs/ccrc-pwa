@@ -26,7 +26,7 @@ import {
 } from './rundefs.js';
 import {
   MAIL_BODY_MAX_BYTES, SPAWN_NOT_RECORDED, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX, armEventDetail, isRegistryId,
-  parseRouteFields, routeFieldsOrNull, routeParseDetail, spawnVerdict, transitionsFor,
+  parseRouteFields, WORKSPACE_SLUG_RE, routeFieldsOrNull, routeParseDetail, spawnVerdict, transitionsFor,
   type CoordCaps, type CoordCapsUsage, type RouteFields, type RunKind, type RunRefuseCode,
   type RunState, type SkillState, type SpawnVerdict,
 } from '../../../shared/api.js';
@@ -110,6 +110,9 @@ export interface DispatchRunDeps {
    * `unmeasured` on a healthy fleet for ever.
    */
   turnVerdict: (rec: SessionRecord, uuid: string) => Promise<TurnVerdict>;
+  /** The fleet-wide wake budget's one list (D-5242, `FleetWatcher.admitWake`): a resume onto a hibernated worker records
+   *  an ASKED wake there beside its `ensure`, and is never refused for it. Absent (no watcher): nothing is recorded. */
+  admitWake?: (kind: 'asked', id: string) => boolean;
 }
 
 /** What the dispatch route polls while a pane this dispatch's `ensure` started comes up (D-5238): the registry row
@@ -149,10 +152,12 @@ export type DispatchOutcome =
    *  it, and `POST /api/runs/:id/abandon` closes such a run with no fleet act. */
   | { ok: false; kind: 'bad-session' }
   | { ok: false; kind: 'bad-transition'; from: RunState; to: RunState }
-  /** `detail` is PRESENT only for the malformed-`route` refusal (routing spec
-   *  §5.3, slice 4: `route: <why>[ <field>]`) — every other `bad-request` on
-   *  this union carries none, so the field distinguishes by presence rather
-   *  than an empty string standing in for "nothing to say". */
+  /** `detail` is PRESENT for the malformed-`route` refusal (routing spec
+   *  §5.3, slice 4: `route: <why>[ <field>]`) and for the two `slug` refusals
+   *  (`slug: must match …` — rename it; `slug: this run resumes …` — drop it).
+   *  Every other `bad-request` on this union carries none, so the field
+   *  distinguishes by presence rather than an empty string standing in for
+   *  "nothing to say". */
   | { ok: false; kind: 'bad-request'; detail?: string }
   /** `detail` is the operator's own arithmetic, and it exists because the cap
    *  no longer measures the thing the sender is holding: the mail is
@@ -349,6 +354,7 @@ async function refuseSpentChild(
 
 export async function dispatchRun(
   deps: DispatchRunDeps, id: number, brief: unknown, items: unknown, route: unknown = undefined,
+  slug: unknown = undefined,
 ): Promise<DispatchOutcome> {
   const coord = deps.coord;
   const read = coord.run(id);
@@ -469,6 +475,26 @@ export async function dispatchRun(
       return { ok: false, kind: 'bad-request', detail: routeParseDetail(parsed) };
     }
     routeFields = routeFieldsOrNull(parsed.route);
+  }
+
+  // The coordinator may NAME the child a fresh spawn mints: the slug rides to
+  // `ws-add` as its `[slug]` positional, so the worktree, branch and session id
+  // carry that name from birth. Nothing renames them later: the path and the
+  // session id never move, and `cmd_ws_rename` (branch only) refuses a held
+  // workspace — so birth is the only moment a name can be given. `undefined` is "the caller never asked": the argv stays byte-for-byte
+  // what it was. Validated beside the other body checks, before anything is
+  // counted, spawned or held (D-46's ordering rule), against ccd's own grammar.
+  // A slug on a run that resumes its bound session names nothing — refused
+  // rather than silently dropped.
+  let childSlug: string | null = null;
+  if (slug !== undefined) {
+    if (typeof slug !== 'string' || !WORKSPACE_SLUG_RE.test(slug)) {
+      return { ok: false, kind: 'bad-request', detail: 'slug: must match ' + WORKSPACE_SLUG_RE.source };
+    }
+    if (run.sessionId !== null) {
+      return { ok: false, kind: 'bad-request', detail: 'slug: this run resumes its bound session; a slug names a fresh spawn only' };
+    }
+    childSlug = slug;
   }
 
   // The complete hold is known from the persisted run. Validate it after the
@@ -641,7 +667,7 @@ export async function dispatchRun(
       coord.recordRunEvent(id, 'coordinator', 'child-omitted:no-child-argv-cap');
     }
     const argv = CCD_ARGV.wsAddWorker(run.project, dispatchDec,
-      capSupported(deps.fleetState, ROUTE_ARGV_CAP) ? routeFields : null, child);
+      capSupported(deps.fleetState, ROUTE_ARGV_CAP) ? routeFields : null, child, childSlug);
     // BEFORE the call, never after: this is the only moment the run can say
     // "a dispatch is in flight" — the id does not exist yet, and a stamp
     // written once `runCcd` resolves would be null for the entire window it
@@ -702,8 +728,13 @@ export async function dispatchRun(
       return { ok: false, kind: 'registry-unmeasurable', ...(res.ok ? {} : { stderr: res.stderr }) };
     }
     const after = afterRead.records;
+    // A NAMED spawn has one acceptable identity, `<project>-<slug>` (ccd's id
+    // grammar): any other new row is a stranger — an operator's racing
+    // `ws-add` — and is never bound in its place.
+    const named = childSlug === null ? null : `${run.project}-${childSlug}`;
     const candidates = after.filter((r) =>
-      !beforeIds.has(r.id) && r.project === run.project && r.workspace !== null);
+      !beforeIds.has(r.id) && r.project === run.project && r.workspace !== null &&
+      (named === null || r.id === named));
     if (candidates.length !== 1) {
       // Nothing claimed on a guess: the run stays `planned`, no hold placed
       // — the operator resolves it.
@@ -811,6 +842,12 @@ export async function dispatchRun(
     // every workspace wave 1 did not mint.
     const childGate = await childBindGate(deps, coord, sessionId);
     if (!childGate.ok) return refuseSpentChild(deps, { id: run.id, sessionId }, childGate, dispatchDec);
+    // D-5242: resuming a hibernated worker WAKES it. The coordinator asked, so the wake budget never refuses it (its
+    // answer is not read), but the wake is recorded in the window the mail lane's automatic wakes are bounded by.
+    if (deps.admitWake !== undefined) {
+      const names = await deps.io.readdir(deps.cfg.registryDir);
+      if (names !== null && names.includes(`${sessionId}.hibernated`)) deps.admitWake('asked', sessionId);
+    }
     const argv = CCD_ARGV.ensure(sessionId);
     const res = await deps.runCcd(argv);
     if (!res.ok) return { ok: false, kind: 'fleetFailed', stderr: res.stderr };

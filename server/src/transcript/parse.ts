@@ -1,5 +1,5 @@
 import {
-  envelopeMembers, NO_RESPONSE_TEXT, RATE_LIMIT_ERROR, RESUME_PROMPT_PREFIX, SYNTHETIC_MODEL,
+  envelopeMembers, IDLE_COMPACT_NOTICE_PREFIXES, IDLE_COMPACT_NUDGE_PROMPT, NO_RESPONSE_TEXT, RATE_LIMIT_ERROR, RESUME_PROMPT_PREFIX, SYNTHETIC_MODEL,
   type ChatEvent,
 } from '../../../shared/api.js';
 
@@ -191,6 +191,8 @@ export function parseTranscriptLine(line: string): ChatEvent[] {
     error?: unknown;
     quotaLimits?: unknown;
     attachment?: unknown;
+    subtype?: unknown;
+    content?: unknown;
   };
   if (env.isSidechain === true) return [];
 
@@ -202,6 +204,16 @@ export function parseTranscriptLine(line: string): ChatEvent[] {
     const text = absorbedPrompt(env.attachment);
     return text === null ? [] : [{ kind: 'user', uuid, ts, text }];
   }
+  // D-5371: Claude Code's idle-compaction notice, the one system row kept.
+  // Read on the row's TOP-LEVEL `content` and its literal, not on `subtype`
+  // alone: `informational` carries every kind of harness notice. Every other
+  // system row (the boundary, turn_duration, stop_hook_summary) stays a drop.
+  if (env.type === 'system') {
+    const text = typeof env.content === 'string' ? env.content.trim() : '';
+    return env.subtype === 'informational' && IDLE_COMPACT_NOTICE_PREFIXES.some((p) => text.startsWith(p))
+      ? [{ kind: 'system', uuid, ts, text, origin: 'idle-compact' }]
+      : [];
+  }
   if (env.type !== 'user' && env.type !== 'assistant') return [];
   const content = env.message?.content;
   const out: ChatEvent[] = [];
@@ -211,6 +223,12 @@ export function parseTranscriptLine(line: string): ChatEvent[] {
     // is the sentence Claude Code's default is; ccd's longer prompt starts with it.
     if (env.isMeta === true && flattenContent(content).trim().startsWith(RESUME_PROMPT_PREFIX)) {
       return [{ kind: 'system', uuid, ts, text: RESUME_PROMPT_PREFIX, origin: 'resume-prompt' }];
+    }
+    // D-5373: the server's own nudge after an idle compaction. A PLAIN user row
+    // (`sendPrompt` writes no `isMeta`), so it is matched on its WHOLE trimmed
+    // text: a sentence the operator types around it stays the operator's.
+    if (env.isMeta !== true && flattenContent(content).trim() === IDLE_COMPACT_NUDGE_PROMPT) {
+      return [{ kind: 'system', uuid, ts, text: IDLE_COMPACT_NUDGE_PROMPT, origin: 'idle-compact-nudge' }];
     }
     if (typeof content === 'string') {
       // Claude Code's caveat banner is nobody's speech, and stays a drop. It is

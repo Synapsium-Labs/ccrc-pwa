@@ -148,8 +148,8 @@ export function isSafeProjectSegment(project: string): boolean {
 }
 
 /**
- * Absent and unreadable collapse in `readdir` — there is no measured variant,
- * and adding one is an agent protocol change (D-114, D-1019). So this walks the
+ * Absent and unreadable collapse in `readdir`, the read this calls (its measured
+ * sibling `readdirMeasured` tells them apart; this reader predates it). So this walks the
  * PARENT first and uses its listing as the evidence ladder, the same shape
  * `registry.ts` uses for a field that is listed but will not read: a dir the
  * parent does not name is genuinely absent and contributes nothing; a dir the

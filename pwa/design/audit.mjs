@@ -751,9 +751,17 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-surface)'],
     why: "the repo slug composed into .sess-open's accessible name (Task 6, board-placement wave 2), same ink-tertiary register as .sess-held next door — both sit directly on the project card's own ground. Its selector names no ancestor, so no route could ground it. The SELECTED row is answered by the achromatic group (--edge-strong), pinned separately in fleet-css.test.ts",
   },
+  '.sess-role': {
+    under: ['var(--bg-surface)'],
+    why: "D-5301's coordinator badge, composed into .sess-open's accessible name after .sess-repo and in its register (ink-tertiary on the project card's own ground). Its selector names no ancestor, so no route could ground it; without this entry it would join the uncovered census, which new rules may not do. The SELECTED row is answered by the achromatic group (--edge-strong), pinned separately in fleet-css.test.ts",
+  },
   '.sess-child': {
     under: ['var(--bg-surface)'],
     why: "child-reclamation wave 5's child-of-run label is a .sess-meta cell on an unselected .sess-line, whose ground is the project card, in the same ink-tertiary register as .sess-held next door. Its selector names no ancestor, so no route could ground it; without this entry it would join the uncovered census, which new rules may not do. The SELECTED row is answered by the achromatic group (--edge-strong), pinned separately in fleet-css.test.ts",
+  },
+  '.sess-restart': {
+    under: ['var(--bg-surface)'],
+    why: "D-5237's restart cell (\"restarted · out of memory · 3m ago\") is a .sess-meta cell on an unselected .sess-line, whose ground is the project card, in the same ink-tertiary register as .sess-held next door. Its selector names no ancestor, so no route could ground it; without this entry it would join the uncovered census, which new rules may not do. The SELECTED row is answered by the achromatic group (--edge-strong), pinned separately in fleet-css.test.ts",
   },
   '.sess-spawn': {
     under: ['var(--bg-surface)'],
@@ -762,6 +770,14 @@ export const INHERITED_GROUNDS = {
   '.sess-stranded': {
     under: ['var(--bg-surface)'],
     why: 'the stranded chip is a .sess-meta cell on an unselected .sess-line, whose ground is the project card. Its selector names no ancestor, so the auditor cannot recover that ground from CSS alone. The SELECTED row does not use this registered attention ink: .sess-line--active answers it through the achromatic group with --edge-strong, pinned separately in fleet-css.test.ts',
+  },
+  '.sess-state--coordinator': {
+    under: ['var(--bg-surface)'],
+    why: 'D-5296: the quiet "with coordinator" state word is the first .sess-meta cell on an unselected .sess-line, whose ground is the project card. Its selector names no ancestor, so the auditor cannot recover that ground from CSS alone. The SELECTED row is answered by the achromatic group (.sess-line--active .sess-state, --edge-strong), pinned separately in fleet-css.test.ts',
+  },
+  '.sess-state--asleep': {
+    under: ['var(--bg-surface)'],
+    why: 'D-5242: a hibernated row\'s state word (`hibernated · 6h`) is the first .sess-meta cell on an unselected .sess-line, whose ground is the project card, in exited\'s quiet secondary ink. Its selector names no ancestor, so the auditor cannot recover that ground from CSS alone. The SELECTED row is answered by the achromatic group (.sess-line--active .sess-state, --edge-strong), pinned separately in fleet-css.test.ts',
   },
   '.sess-offpool': {
     under: ['var(--bg-surface)'],
@@ -931,6 +947,96 @@ export const INHERITED_GROUNDS = {
   '.settings-node-detail': {
     under: ['var(--bg-page)'],
     why: "the muted role/os, desired-resolution, request, reachability and state lines of the same unfilled inventory row, in --ink-tertiary. Same ground and same reason as .settings-node-current--amber; registered separately because it sets its own colour",
+  },
+  // ── native Docs reader W5 part 1, Task 11: the Docs door and the Docs screen's chrome (docs/docs.css) ──
+  // The Docs screen renders into .shell-detail, and neither it nor .docs-screen nor any view inside paints a
+  // background, so body's --bg-page (styles/base.css) is behind every rule below: the .settings-title reasoning.
+  // No selector here names a painted ancestor, so no route could ground one, and the frozen census admits no new
+  // identity. The banners, the failure view, the badge, the filter, the image chip and a pressed row paint their own
+  // ground and are measured on it with no entry.
+  '.docs-door': {
+    under: ['var(--bg-page)'],
+    why: "the fleet header's door to /docs, in .fleet-head-right immediately before .accounts-door. .fleet, .fleet-head and .fleet-head-right paint nothing, so on a phone the ground is body's --bg-page. On the desktop sidebar it is .shell-nav's --bg-surface instead, which one layer stack cannot also say; contrast.test.ts measures this rule's own ink on that second ground in both themes, so this registration is not the whole claim (the two-ground argument the retired .settings-door entry made, above)",
+  },
+  '.docs-door:active': {
+    under: ['var(--bg-page)'],
+    why: 'the pressed state of the same door, with the same two grounds and the same second measurement in contrast.test.ts; registered separately because it overrides `color` directly (the .mail-chip[data-on] reason)',
+  },
+  '.docs-back': {
+    under: ['var(--bg-page)'],
+    why: "DocsHead's up-one-level chevron, in .docs-head-bar inside .docs-head inside .docs-screen inside .shell-detail; none of the four paints a background, so body's --bg-page is behind it, the .settings-title entry's ground and reason",
+  },
+  '.docs-back:active': {
+    under: ['var(--bg-page)'],
+    why: 'the pressed state of the same chevron, same ground; registered separately because it overrides `color` directly',
+  },
+  '.docs-door:hover, .docs-back:hover, .docs-crumb:hover, .docs-crumbs-more:hover': {
+    under: ['var(--bg-page)'],
+    why: "the hover ink of the door and the chevron (D-5501, the skins' D-5101 hover restated for the hand-drawn twins of Door and BackButton) and of the crumb links and the … button (D-5502), inside `@media (hover: hover)`, on the same unpainted grounds as the two rules above and .docs-crumb; the door's second ground, the desktop sidebar's --bg-surface, is measured off this rule's own ink in contrast.test.ts as it is for .docs-door and .docs-door:active",
+  },
+  '.docs-crumb, .docs-crumbs-more': {
+    under: ['var(--bg-page)'],
+    why: "the crumb links and the phone's leading … button, in .docs-crumbs on the same unpainted .docs-head-bar as .docs-back, so the same --bg-page",
+  },
+  '.docs-truth': {
+    under: ['var(--bg-page)'],
+    why: "the truth line (served ref, commit, how the ref was chosen, a leaf's source and size), a <p> in the unpainted .docs-head, so --bg-page",
+  },
+  ".docs-truth-relation[data-tone='warn']": {
+    under: ['var(--bg-page)'],
+    why: "the truth line's diverged relation, retinted to --status-attention-text on the same unpainted line; registered separately because it overrides `color` directly (the .build-line-side--warn reason)",
+  },
+  '.docs-fresh': {
+    under: ['var(--bg-page)'],
+    why: "the freshness chip, the truth line's last item: a bordered button with `background: none`, so the unpainted line's --bg-page is behind its ink",
+  },
+  ".docs-fresh[data-state='failed']": {
+    under: ['var(--bg-page)'],
+    why: "the chip's failed states (a failed fetch, a stale lock, a failed re-list or refresh) in --status-dead-text on the same ground; registered separately because it overrides `color` directly",
+  },
+  ".docs-fresh[data-state='none'], .docs-fresh[data-state='fetching']": {
+    under: ['var(--bg-page)'],
+    why: "the chip's quiet states in --ink-tertiary on the same ground: no origin (a static span) and a fetch in flight (the button disabled). Measured rather than exempted: the chip's words still say what is happening while it is disabled",
+  },
+  '.docs-copy, .docs-leaf-action, .doc-img-load, .doc-img-action, .doc-plain-action, .doc-gate-btn': {
+    under: ['var(--bg-page)'],
+    why: "the bordered controls: copy commit on the truth line, a leaf's Source and Download, Load image and an image's own action in the document, the plain text's Format anyway or Retry, and the gate's two choices. Each has `background: none` inside an unpainted container on .docs-screen (.doc-gate draws a border and no fill; .doc-body.msg-assist paints nothing), so --bg-page is behind each",
+  },
+  '.docs-note, .docs-loading, .docs-index-head, .doc-formatting': {
+    under: ['var(--bg-page)'],
+    why: "the screen's quiet lines (notes, loading words, the index head, the Formatting… line), each a <p> in an unpainted view on .docs-screen, so --bg-page",
+  },
+  '.docs-action-note, .docs-action-off, .docs-copy-said, .docs-updated, .doc-link-gh': {
+    under: ['var(--bg-page)'],
+    why: "the meta words in --ink-tertiary: an action's may-differ note or refusal and the copied/copy-failed word on the unpainted header, the Updated to line under it, and the GitHub mark inside a document link (.doc-body.msg-assist paints nothing), so --bg-page behind each",
+  },
+  '.docs-row': {
+    under: ['var(--bg-page)'],
+    why: "a listing row, a <button> with `background: none` in .docs-rows on .docs-screen, all unpainted, so --bg-page. Its hover and pressed states (D-5501) paint --bg-hover and --bg-pressed and are measured on those as self-grounded rules of their own",
+  },
+  '.docs-row-off': {
+    under: ['var(--bg-page)'],
+    why: 'a row that is not a link (a section the tree did not list as present, an index row that is not ready): the .docs-row box on a <div>, retinted to --ink-secondary on the same ground; registered separately because it overrides `color` directly',
+  },
+  '.docs-row-path, .docs-row-count, .docs-row-note, .docs-row-age, .docs-row-size, .docs-row-ref, .docs-row-state, .docs-row-mark, .docs-row-drafts': {
+    under: ['var(--bg-page)'],
+    why: "a row's meta cells in --ink-tertiary, inside .docs-row on the same --bg-page. A hovered or pressed row puts them on --bg-hover or --bg-pressed (D-5501), where design/contrast-check.mjs holds --ink-tertiary in every palette (HOVER_INKS, PRESSED_INKS); the auditor takes one ground per rule",
+  },
+  '.doc-link-inert': {
+    under: ['var(--bg-page)'],
+    why: "a document link Docs does not follow, a <span> in the document body: .doc-body.msg-assist paints nothing and neither do the leaf or .docs-screen, so --bg-page, the chat.css .msg-plain-note reasoning. One inside a table or callout sits on that block's tint instead; the auditor takes one ground per rule",
+  },
+  '.doc-img-refused, .doc-img-loading': {
+    under: ['var(--bg-page)'],
+    why: 'a refused or loading image, a dashed-border <span> in the document body or the raster leaf, both unpainted, so --bg-page',
+  },
+  '.doc-img-failed': {
+    under: ['var(--bg-page)'],
+    why: "a failed image's chip: the same box in --status-dead-text on the same ground; registered separately because it sets its own colour",
+  },
+  '.doc-plain-note': {
+    under: ['var(--bg-page)'],
+    why: "the note above a document shown as plain text (DocPlain), a <p> in the unpainted leaf, so --bg-page, as chat's .msg-plain-note",
   },
 };
 

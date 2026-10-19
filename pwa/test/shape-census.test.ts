@@ -497,11 +497,13 @@ describe('no app rule re-implements a shape that has already migrated', () => {
     for (const u of ['flex-wrap', 'min-h-tap', 'px-3', 'py-1', 'rounded-md', 'border-edge-subtle']) {
       expect(CONTROL_ROW, u).toContain(u);
     }
-    // The list row's two defining numbers: a hairline UNDER it, and 52px —
-    // eight above the tap floor, which is what separates neighbours a thumb is
-    // dragging over. Both were in both original rules; neither had a guard
-    // until a mutation removed each in turn and nothing went red.
-    for (const u of ['min-h-[52px]', 'border-b', 'border-edge-subtle', 'bg-transparent']) {
+    // The list row's two defining numbers: a hairline UNDER it, and its
+    // height — 52px in both original rules, eight above the tap floor, which
+    // is what separates neighbours a thumb is dragging over. Neither had a
+    // guard until a mutation removed each in turn and nothing went red. The
+    // height is now the `--row-h` role, Refined 52 (D-5093; the class follows
+    // it here, D-5460), and `role-census.test.ts` holds Refined's value.
+    for (const u of ['min-h-row', 'border-b', 'border-edge-subtle', 'bg-transparent']) {
       expect(LIST_ROW, u).toContain(u);
     }
     expect(LIST_ROW).not.toContain('min-h-tap');

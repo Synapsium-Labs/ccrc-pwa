@@ -701,23 +701,11 @@ function fanInLevels(db, ictx, level0, budget) {
  *  - A boundary no file holds has no leaf (Task 8 waits on it) and joins no list.
  *  - The split is read when a parent is minted. A parent minted earlier keeps its children: they read parented
  *    (parentOf), and planFanIn never regroups a parented slot.
- *  The lists run in ascending file_id. Returns the parents made and whether the complete epoch fit its budget. */
+ *  The lists run in ascending file_id. Returns the parents made and whether the complete epoch fit its budget.
+ *  The lists now come from `epochCopySlots` (W1-B3 Task 4). */
 function deriveEpochParents(db, ictx, sessionPk, epochSeq, top, budget) {
-  const s = parentStmts(db);
-  const ds = stmts(db);
-  const pass = { files: new Map() };
-  const copies = new Map();   // holding file_id → its level-0 slots, in ord
-  for (const t of s.epochTranscripts.all(sessionPk, epochSeq)) {
-    for (const b of s.bounds.all(t.transcript_pk)) {
-      if (!parentsBudgetLeft(budget)) return { made: 0, complete: false };
-      const holding = holdingCopy(ds, pass, b);
-      if (holding === null) continue;
-      const copyKey = holding.file_id;
-      if (!copies.has(copyKey)) copies.set(copyKey, []);
-      const leaf = s.leafAt.get(b.entry_id, top);
-      copies.get(copyKey).push(leaf === undefined ? null : leaf.node_id);
-    }
-  }
+  const copies = epochCopySlots(db, sessionPk, epochSeq, top, budget);
+  if (copies === null) return { made: 0, complete: false };
   let made = 0;
   for (const key of [...copies.keys()].sort((x, y) => Number(x) - Number(y))) {
     const r = fanInLevels(db, ictx, copies.get(key), budget);
@@ -1348,4 +1336,50 @@ export function beltNodesStep(db, ictx, slice) {
     withTx(db, 'NORMAL', () => { setStep(db, BELT_NODES_STEP, 1, String(after), null); });
   }
   return false;
+}
+
+// ── The slot lists and the holding copy, for the card line (W1-B3 Task 4; spec §6.3, §8.6) ─────────────────────
+// Extracted from deriveEpochParents with no change of behaviour, and exported so the card's parent prediction
+// (card.mjs, W1-B3 Task 5) and its delivery measure (Task 6) read exactly the lists and the copy fan-in and the
+// leaves read (the coordinator's ruling RB4).
+
+/** One epoch's level-0 slot lists, one per HOLDING COPY: each boundary of the epoch's main transcripts, in `ord`,
+ *  joins the list of the file holdingCopy picks for it (a live file first, then the smallest file_id, among the
+ *  files that hold it), as its leaf's id or null while it has none. A boundary no file holds joins no list. Keys are
+ *  the files' `file_id`s as the store answers them.
+ *  - `top`: a leaf counts only at a nodes rowid no later than it (deriveParents passes the top it captured at its
+ *    start); null reads the store's current max(rowid), so a caller with no captured top sees every leaf.
+ *  - `budget`: checked before every boundary, as B2's loop did; null checks none. Answers null only when a budget
+ *    is passed and spent, so deriveEpochParents stays resumable; card.mjs passes neither and never sees null. */
+export function epochCopySlots(db, sessionPk, epochSeq, top = null, budget = null) {
+  const s = parentStmts(db);
+  const ds = stmts(db);
+  const bound = top === null ? Number(s.maxRow.get().r ?? 0) : top;
+  const pass = { files: new Map() };
+  const copies = new Map();   // holding file_id → its level-0 slots, in ord
+  for (const t of s.epochTranscripts.all(sessionPk, epochSeq)) {
+    for (const b of s.bounds.all(t.transcript_pk)) {
+      if (budget !== null && !parentsBudgetLeft(budget)) return null;
+      const holding = holdingCopy(ds, pass, b);
+      if (holding === null) continue;
+      const copyKey = holding.file_id;
+      if (!copies.has(copyKey)) copies.set(copyKey, []);
+      const leaf = s.leafAt.get(b.entry_id, bound);
+      copies.get(copyKey).push(leaf === undefined ? null : leaf.node_id);
+    }
+  }
+  return copies;
+}
+
+/** The copy that holds one boundary (§6.1 "The copy"): holdingCopy over a fresh file cache, answering that file's
+ *  `{ file_id, eof_ms, source_key }`, or null. */
+export function holdingCopyOf(db, b) {
+  return holdingCopy(stmts(db), { files: new Map() }, b);
+}
+
+/** The epoch a Claude Code session uuid belongs to: the confirmed epoch of an unmerged family, the lowest session_pk
+ *  first, as `{ session_pk, seq, ccrc_id }`, or null. It is the one epoch rule that derivation (which hashes through
+ *  it) and the card (card.mjs, W1-B3 Task 5) share, so the card names the leaf ids derivation mints (D-5052). */
+export function epochOfUuid(db, ccUuid) {
+  return stmts(db).epochOf.get(ccUuid) ?? null;
 }

@@ -29,6 +29,9 @@ import { assertNoRealTool } from './containedTools.js';
 import { parseRoster } from '../../shared/roster.js';
 import { historyPaths } from '../../ccd/history/lib.mjs';
 import { createStore, V2_INDEXES } from '../../ccd/history/store.mjs';
+import * as b4SegStore from '../../ccd/history/store.mjs';
+import * as b4SegLib from '../../ccd/history/lib.mjs';
+import { createHash as b4SegHash } from 'node:crypto';
 
 export const REPO = path.resolve(__dirname, '..', '..');
 export const SWEEP = path.join(REPO, 'ccd', 'history', 'sweep.mjs');
@@ -297,6 +300,10 @@ export interface DriverDeps {
   /** The word an --op pass's store open answers instead of opening (FU4 M28), handed to sweep.mjs as deps.openStore. */
   openStoreWord?: string;
   extraMigrations?: string[]; heavy?: number[]; managedSettings?: string[];
+  /** A path suffix: every fs.readSync on a descriptor that names such a file throws EIO (D-4340's read error on one admitted copy). */
+  eioOnRead?: string;
+  /** A text: a sha256 hash fed bytes that hold it throws, so the transcript parser crashes on the chunk that holds it (D-5061's crash arm). */
+  parserCrashOn?: string;
   /** W1-B2 Task 25: the run budget's wall-clock limit in ms, handed to sweep.mjs as deps.budget.maxMs (default lib's RUN_BUDGET_MS). */
   budgetMs?: number;
   /** W1-B2 Task 25: the run budget's byte limit, handed to sweep.mjs as deps.budget.maxBytes (default lib's RUN_BUDGET_BYTES). */
@@ -573,4 +580,145 @@ export function recoverRow(box: HistoryBox): { version: number; cursor: string |
 export function boundEmptyStore(box: HistoryBox, storeId: string, version = Date.now()): { storeId: string; writer: string; version: number } {
   const got = createStore(box.home, { storeId, bind: { kind: 'rebuild', nowMs: version } });
   return { ...got, version };
+}
+
+// ── W1-B4 Task 5: the export's segments, read back ───────────────────────────────────────────────────────────────
+/** The bound store's export directory: `~/.ccrc/history/export/<store.id>` (spec §9.15 "Write"). */
+export function exportDirOf(box: HistoryBox): string {
+  return path.join(box.root, 'export', fs.readFileSync(path.join(box.root, 'store.id'), 'utf8').trim());
+}
+
+/** Every name in that directory, a writer's temp included, sorted; [] while the directory does not exist. */
+export function segmentsOf(box: HistoryBox): string[] {
+  const dir = exportDirOf(box);
+  return fs.existsSync(dir) ? fs.readdirSync(dir).sort() : [];
+}
+
+/** One table of a segment file, opened read-only, in write order (rowid: the shared `ord` of a row table, insertion
+ *  order for `blobs`). An integer comes back as a number when it is a safe integer and as a bigint otherwise (mtime_ns,
+ *  struct_rank_ns); a BLOB comes back as lowercase hex, so a sha256 compares with the store's `lower(hex(…))`. */
+export function segmentRows(file: string, table: string): Array<Record<string, unknown>> {
+  const db = new DatabaseSync(file, { readOnly: true });
+  try {
+    const st = db.prepare(`SELECT * FROM "${table}" ORDER BY rowid`);
+    st.setReadBigInts(true);
+    return (st.all() as Array<Record<string, unknown>>).map((r) => Object.fromEntries(Object.entries(r).map(([k, v]) => [k,
+      typeof v === 'bigint' && v >= BigInt(Number.MIN_SAFE_INTEGER) && v <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(v)
+        : v instanceof Uint8Array ? Buffer.from(v).toString('hex') : v])));
+  } finally {
+    db.close();
+  }
+}
+
+// ── W1-B4 Task 8 (review): one terminal runner for the verbs that need a TTY ─────────────────────────────────────
+/** A command on a REAL terminal (node-pty), so stdin IS a TTY: the irreversible history forms refuse without one (§8.4).
+ *  It runs in the box's env (HOME is the fixture) with `cwd` the box's home, the statfs preload answering 'plenty' and
+ *  `o.env` laid over that. A pty merges stdout and stderr. A pty child leads its own process group, so the safety timer
+ *  (`o.timeoutMs`, never the assertion) kills the group by `-pid`, the shim and the sweep under it too, and none outlives
+ *  its case holding the history lock; it never kills by pattern. Answers the exit code, or -1 when the timer fired.
+ *  node-pty is loaded on first use: most history cases never need a terminal. (Was history-recover.test.ts's `onPty`,
+ *  W1-B2 Task 25, and history-export.test.ts's `adoptOnPty`.) */
+export async function runOnPty(box: HistoryBox, argv: string[], o: { timeoutMs: number; env?: Record<string, string> }): Promise<{ code: number; out: string }> {
+  const pty = await import('node-pty');
+  const full: Record<string, string> = {};
+  const merged: NodeJS.ProcessEnv = {
+    ...box.env, HISTORY_TEST_STATFS: 'plenty', NODE_OPTIONS: preloadOptions([PRELOADS.statfs]), ...o.env,
+  };
+  for (const [k, v] of Object.entries(merged)) if (v !== undefined) full[k] = v;
+  return new Promise((resolve) => {
+    const p = pty.spawn(argv[0]!, argv.slice(1), { name: 'xterm-color', cols: 200, rows: 40, cwd: box.home, env: full });
+    let out = '';
+    let done = false;
+    const finish = (code: number): void => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve({ code, out });
+    };
+    const timer = setTimeout(() => {
+      try { process.kill(-p.pid, 'SIGKILL'); } catch { p.kill(); }
+      finish(-1);
+    }, o.timeoutMs);
+    p.onData((d) => { out += d; });
+    p.onExit(({ exitCode }) => finish(exitCode));
+  });
+}
+
+// ── W1-B4 Task 10: export segments planted through store.mjs, for the replay cases ─────────────────────────────
+/** The kinds of row a format-1 segment holds: Task 4's segmentInserts keys. */
+export type SegmentRowKind = 'family' | 'transcript' | 'epoch' | 'file' | 'entry' | 'variant' | 'boundary' | 'sidecar' | 'membership';
+/** One row as a segment carries it: its table's columns by name, natural keys only (Task 10's contract table). */
+export interface PlantSegmentRow { kind: SegmentRowKind; row: Record<string, unknown> }
+/** A blob as a segment stores it: `text` compressed with the store's codec, or a stub (`text: null`) for a blob
+ *  prune tombstoned, which carries its sha256 and length and no bytes. */
+export interface PlantSegmentBlob { text: string | null; sha256?: Buffer; rawLen?: number }
+export interface PlantSegmentSpec {
+  seq: number; writer: string; blobs: PlantSegmentBlob[]; rows: PlantSegmentRow[];
+  /** a newer one to plant a segment this build must refuse; the build's own by default */
+  format?: number;
+  cutoffMs?: number;
+  /** another store's id, to plant a foreign segment in this store's directory */
+  metaStoreId?: string;
+}
+
+/** A blob's key as the store and a segment hold it: the sha256 of its raw bytes. */
+export function segmentSha(text: string): Buffer {
+  return b4SegHash('sha256').update(text, 'utf8').digest();
+}
+
+/** One published segment, ~/.ccrc/history/export/<storeId>/<seq>.<writer>.db, written through store.mjs's
+ *  createSegment, segmentInserts and publishSegment (Task 4), so a planted segment and the export pass's share one
+ *  DDL. Returns its path. Throws when the name is already on disk: a case never means to plant one twice. */
+export function plantSegment(box: HistoryBox, storeId: string, s: PlantSegmentSpec): string {
+  const dir = path.join(box.root, b4SegLib.EXPORT_DIR, storeId);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const name = b4SegLib.segmentName({ seq: s.seq, writer: s.writer });
+  const seg = b4SegStore.createSegment(dir, name, {
+    storeId: s.metaStoreId ?? storeId, writer: s.writer, seq: s.seq, harnesses: [...b4SegLib.HARNESSES],
+    cutoffMs: s.cutoffMs ?? Date.now(), format: s.format ?? b4SegLib.EXPORT_SEGMENT_FORMAT,
+  });
+  const ins = b4SegStore.segmentInserts(seg) as unknown as Record<string, (row: Record<string, unknown>) => void>;
+  for (const b of s.blobs) {
+    if (b.text === null) {
+      if (b.sha256 === undefined) throw new Error('plantSegment: a stub blob needs its sha256');
+      ins['blob']!({ sha256: b.sha256, codec: b4SegStore.CODEC, raw_len: b.rawLen ?? 0, z: null, pruned: true });
+      continue;
+    }
+    const raw = Buffer.from(b.text, 'utf8');
+    ins['blob']!({ sha256: b.sha256 ?? segmentSha(b.text), codec: b4SegStore.CODEC, raw_len: raw.length, z: b4SegStore.brotli(raw), pruned: false });
+  }
+  for (const r of s.rows) ins[r.kind]!(r.row);
+  if (b4SegStore.publishSegment(seg, dir, name) !== 'linked') throw new Error(`plantSegment: ${name} is already in ${dir}`);
+  return path.join(dir, name);
+}
+
+// ── W1-B4 whole-branch review: the mark invariant (D-5395 (history-export-mark-needs-its-blobs)) ───────────────
+/** The pairs (blob, entry) of every reference an entry holds on a blob: its own blob, its variants', its LINKED
+ *  sidecars' and its boundary's kept blob. An unlinked sidecar references no entry, so it is no pair. */
+const ENTRY_BLOB_REFS_SQL = `SELECT blob_id, entry_id FROM entries
+  UNION SELECT blob_id, entry_id FROM entry_variants
+  UNION SELECT blob_id, entry_id FROM sidecars WHERE entry_id IS NOT NULL
+  UNION SELECT kept_blob_id, entry_id FROM boundaries WHERE kept_blob_id IS NOT NULL`;
+/** Live blobs no segment has carried (z held, exported_ms NULL) that some entry references and whose every referring
+ *  entry is marked: the pass offers only unmarked entries, so no pass would ever carry such a blob, the census counts
+ *  it due for good and its text stays store-only. The invariant (D-5395) is that there are none. It reads live blobs only
+ *  (z held): a pruned blob has no text to strand, and its stub is never marked, so the store holds no mark to measure it
+ *  by. What a pruned blob no mark names owes (D-5396) is a stub in the segment that marks each entry naming it (the pass
+ *  writes the stub in that segment, and replay marks an entry only from a segment that carries it and keeps the mark only
+ *  while no row of ANOTHER segment links the entry to a pruned, unmarked blob), measured on a rebuild from the live segments
+ *  alone (history-export.test.ts's D-5396 cases), not here. */
+const STRANDED_BLOBS_SQL = `WITH refs(blob_id, entry_id) AS (${ENTRY_BLOB_REFS_SQL})
+  SELECT lower(hex(b.sha256)) AS sha FROM blobs b
+  WHERE b.z IS NOT NULL AND b.exported_ms IS NULL
+    AND EXISTS (SELECT 1 FROM refs r WHERE r.blob_id = b.blob_id)
+    AND NOT EXISTS (SELECT 1 FROM refs r JOIN entries e ON e.entry_id = r.entry_id WHERE r.blob_id = b.blob_id AND e.exported_ms IS NULL)
+  ORDER BY sha`;
+/** The sha256 (hex) of every stranded blob in `db` (an empty list is the invariant holding). */
+export function strandedBlobsOn(db: DatabaseSync): string[] {
+  return (db.prepare(STRANDED_BLOBS_SQL).all() as Array<{ sha: string }>).map((r) => String(r.sha));
+}
+/** The same on the box's store, read-only. */
+export function strandedBlobs(box: HistoryBox): string[] {
+  const db = openStoreRO(box);
+  try { return strandedBlobsOn(db); } finally { db.close(); }
 }

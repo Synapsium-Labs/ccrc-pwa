@@ -132,13 +132,21 @@ describe('fleet density and alignment', () => {
     });
   });
 
-  it('has no @container query left — .sess-acct can no longer be hidden or squeezed', () => {
+  it('has no @container query that can hide or squeeze a cell — .sess-acct can no longer be hidden or squeezed', () => {
     // The query this repeatedly guarded (first hiding .sess-acct, then
     // hiding .sess-state, then discovered to compact .sess-acct into a
     // neighbour's track) is gone along with the one-line layout it existed
     // to rescue. .fleet-list's own container-type/-name went with it —
     // nothing else in this file uses them.
-    expect(css).not.toContain('@container');
+    // D-5545 (verifier round 1) brought back exactly ONE query, of a different kind: it reads `.sess-body`'s own
+    // width to pick between the two drawn forms of a long name or programme (`Fit`), and it may touch nothing
+    // but those two forms' `display` — never a cell's track, never `.sess-acct`/`.sess-state`.
+    const queries = css.match(/@container[^{]*\{(?:[^{}]*\{[^{}]*\})*\s*\}/g) ?? [];
+    expect(queries).toHaveLength(1);
+    expect(queries[0]).toMatch(/^@container sess-body \(min-width: \d+px\)/);
+    const selectors = [...queries[0]!.replace(/^@container[^{]*\{/, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => [m[1]!.trim(), m[2]!.trim()]);
+    expect(selectors).toEqual([['.fit-full', 'display: inline;'], ['.fit-short', 'display: none;']]);
+    expect(css).toMatch(/\.sess-body \{ container: sess-body \/ inline-size; \}/);
     expect(css).not.toContain('container-type');
     expect(css).not.toContain('container-name');
   });
@@ -306,8 +314,8 @@ describe('fleet density and alignment', () => {
       // silently changes typeface the moment it becomes a door.
       expect(declaredValues(css, 'button.sess-held', 'font-family')).toContain('var(--family-mono)');
       // `color` is deliberately NOT restated here — `.sess-held` answers for
-      // it, and `.sess-line--active .sess-held` (0,2,0) still outranks this
-      // rule on the selected slab. A copy would be one more place to forget.
+      // it, on the selected row's tint as everywhere else (D-5101). A copy
+      // would be one more place to forget.
       expect(declaredValues(css, 'button.sess-held', 'color')).toEqual([]);
     });
   });
@@ -338,19 +346,52 @@ describe('fleet density and alignment', () => {
   });
 });
 
-describe('selection is polarity, status is hue', () => {
-  // The law: selection is achromatic polarity (fill + ink flip), status keeps
-  // hue. Selection never owns a perimeter; status owns one only for attention.
-  // Forced, not chosen: --accent and --status-busy are the same hex (#45D67E)
-  // and the four account hues own the cool half of the wheel, so on THIS
-  // screen any coloured selection is a status or identity collision.
+describe('selection is tint plus rail, status is hue (D-5101)', () => {
+  // The law: selection is the accent tint with a 2px accent rail on the row's
+  // leading edge, and status keeps hue — on the selected row too. It used to be
+  // reverse video (background --ink-primary, ink --bg-page), which evicted the
+  // status and lane hues from the row and needed an achromatic override for
+  // every coloured meta cell, a lamp plate, a re-grounded ··· and a recoloured
+  // focus ring. Each of those pins is inverted below rather than deleted: the
+  // old rule "is gone", and the claim that replaces it is beside it. The rail,
+  // a shape no status uses, is what keeps selection from reading as a status:
+  // --accent and --status-busy are the same hex (#45D67E), so a hue fill alone
+  // would be a status collision, which is why the slab was chosen in the
+  // first place.
 
-  it('inverts the selected row instead of tinting it', () => {
+  /** The gate's own list of the inks it measures on the selected row. */
+  const gate = readFileSync(
+    path.join(import.meta.dirname, '..', 'design', 'contrast-check.mjs'), 'utf8');
+  const gateList = (name: string): string[] => {
+    const m = gate.match(new RegExp(`const ${name} = \\[([^\\]]*)\\]`));
+    expect(m, `${name} is not declared in contrast-check.mjs`).not.toBeNull();
+    return [...(m![1] ?? '').matchAll(/'(--[a-z0-9-]+)'/g)].map((x) => x[1]!);
+  };
+  /** Every rule in the sheet that names the selected row and sets a colour. */
+  const activeColourRules = (): string[] => {
+    const out: string[] = [];
+    for (const m of stripComments(css).matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      const [, selector, body] = m;
+      // A DESCENDANT of the selected row — the row's own rule is the ground.
+      if (/\.sess-line--active\s+\S/.test(selector!.trim()) && /(^|;)\s*(color|background)\s*:/.test(body!)) {
+        out.push(norm(selector!));
+      }
+    }
+    return out;
+  };
+
+  it('tints the selected row and rails it, instead of inverting it', () => {
     // The old signal was --bg-raised on --bg-surface: 1.10:1 dark / 1.17:1
     // light — less than the hairline that separates one card from the next.
+    // The slab answered that with polarity; the tint answers it with a hue
+    // ground plus a rail, and keeps the row's own ink.
     const rule = ruleFor('.sess-line--active');
-    expect(rule).toContain('background: var(--ink-primary)');
-    expect(rule).toContain('color: var(--bg-page)');
+    expect(rule).not.toContain('background: var(--ink-primary)');
+    expect(rule).not.toContain('color: var(--bg-page)');
+    expect(declValue(rule, 'background')).toBe('var(--accent-tint)');
+    expect(declValue(rule, 'box-shadow')).toBe('inset 2px 0 0 var(--accent)');
+    expect(declValue(ruleFor('.sess-line--active .sess-label'), 'font-weight'))
+      .toBe('var(--weight-semibold)');
   });
 
   it('leaves no busy perimeter, and keeps the amber one byte for byte', () => {
@@ -366,107 +407,40 @@ describe('selection is polarity, status is hue', () => {
       .toBe('var(--status-attention-text)');
   });
 
-  it('strips every status and account hue from the slab', () => {
-    // Every coloured cell on the row must be neutralised by the SAME rule —
-    // this is what catches a STRANDED cell when someone adds a new coloured
-    // element to .sess-meta and forgets it here.
-    //
-    // Fix round 4, controller item 1: the membership check used to slice the
-    // file between the previous `}` and a literal `${last} {`, so it demanded
-    // exactly one space before the brace — the very copy the shared reader
-    // replaced elsewhere in this file, left standing inside one test.
-    // `selectorsOf` returns the rule's own normalised list, so re-indenting or
-    // re-ordering the group is free and dropping a member is not.
-    const last = '.sess-line--active .sess-meta > *:not(:first-child)::before';
-    expect(declValue(ruleFor(last), 'color')).toBe('var(--edge-strong)');
-    const group = selectorsOf(css, last);
-    for (const cell of ['.sess-meta', '.sess-state', '.sess-tally', '.sess-warn',
-                        '.sess-acct', '.sess-acct-away',
-                        // Final review, Minor 3. These four take their OWN
-                        // `color: var(--ink-tertiary)` (one shared rule for
-                        // the first three, its own for .sess-unmeasured), and
-                        // a child's own colour beats the colour it would
-                        // inherit from .sess-meta — so being absent from this
-                        // group left them painting ink-tertiary on the
-                        // --ink-primary slab: 2.72:1 dark / 2.91:1 light,
-                        // against this repo's 4.5:1 body floor. Measured with
-                        // design/audit.mjs's own resolver, the same engine
-                        // the gate uses; --edge-strong gives 9.27 / 9.91.
-                        //
-                        // .sess-held was the original omission and shipped on
-                        // main; .sess-lifecycle and .sess-swapblocked joined
-                        // its rule on this branch and inherited the bug,
-                        // which widened it — .sess-lifecycle renders on every
-                        // non-running row, and the operator this branch
-                        // serves selects the dead row precisely to read
-                        // "stopped by agent, 2d ago".
-                        '.sess-held', '.sess-lifecycle', '.sess-swapblocked',
-                        // `.sess-stranded` and `.sess-offpool` take attention
-                        // ink of their own, so each would strand on the selected
-                        // slab without this achromatic membership.
-                        '.sess-stranded', '.sess-offpool', '.sess-unmeasured',
-                        // The substrate chip (spec §4) joined the same way:
-                        // its own `color: var(--ink-tertiary)` beats the
-                        // slab's inherited ink exactly like .sess-unmeasured
-                        // next to it, so absence here is the same stranding.
-                        '.sess-substrate',
-                        // §1.6b's chip: it sets its own `--status-dead-text`
-                        // (and `--ink-tertiary` on two variants), so it is a
-                        // coloured cell exactly like `.sess-warn` above and
-                        // strands the same way if it is left out of here.
-                        '.sess-spawn',
-                        // The context-pressure chip (D-2011): its own
-                        // `--status-attention-text` (and `--status-dead-text`
-                        // on the wedge variant, D-2016) strands the same way.
-                        '.sess-ctxpressure',
-                        // Child-reclamation wave 5's label: its own
-                        // `color: var(--ink-tertiary)` strands on the slab exactly
-                        // like `.sess-substrate`'s would without its entry here.
-                        '.sess-child']) {
-      expect(group).toContain(`.sess-line--active ${cell}`);
+  it('keeps every status and lane hue on the selected row: the achromatic group is gone', () => {
+    // Was: "strips every status and account hue from the slab" — one
+    // `color: var(--edge-strong)` rule naming 43 cells. Gone, and so is every
+    // other selected-row rule that repainted a cell.
+    expect(() => ruleFor('.sess-line--active .sess-meta > *:not(:first-child)::before')).toThrow();
+    expect(() => ruleFor('.sess-line--active .sess-meta')).toThrow();
+    expect(activeColourRules()).toEqual([]);
+    // The replacement: the gate measures every ink the meta draws ON the tint,
+    // the neutral tiers, every status text and every lane hue.
+    const inks = gateList('SELECTED_ROW_INKS');
+    for (const t of ['--ink-primary', '--ink-secondary', '--ink-tertiary',
+      '--status-busy-text', '--status-attention-text', '--status-dead-text',
+      '--acct-cyan', '--acct-blue', '--acct-magenta', '--acct-amber']) {
+      expect(inks, t).toContain(t);
     }
   });
 
-  it('beats the spawn chip\'s own [data-spawn] variants by SPECIFICITY, not by source order', () => {
-    // Membership in the achromatic group (asserted just above) is necessary and
-    // NOT sufficient for this one cell. `.sess-line--active .sess-spawn` is
-    // (0,2,0) — and so is `.sess-spawn[data-spawn='expired']`, which is declared
-    // LATER in this file. On a selected row carrying one of those variants the
-    // tie therefore goes to source order, the variant wins, and the chip paints
-    // --ink-tertiary on the --ink-primary slab: 2.72:1 dark / 2.91:1 light,
-    // against this file's 4.5:1 body floor. The group's
-    // `.sess-line--active .sess-spawn[data-spawn]` member (0,3,0) is what
-    // settles it by specificity instead — which is also what makes moving
-    // either rule free. Nothing tested that member: deleting it left the whole
-    // pwa suite green (measured 2026-08-17), so the one line standing between
-    // the selected row and a sub-floor contrast was a comment, not a mechanism.
-    //
-    // Counting classes + attributes + pseudo-classes is enough for a (0,x,0)
-    // comparison: there is no id and no element name anywhere near .sess-spawn,
-    // and both sides of this tie are pure class/attribute selectors.
-    const spec = (sel: string): number =>
-      (sel.match(/\.[A-Za-z0-9_-]+|\[[^\]]*\]|:[a-z-]+/g) ?? []).length;
-    const group = selectorsOf(css, '.sess-line--active .sess-meta > *:not(:first-child)::before')
-      .filter((s) => s.startsWith('.sess-line--active .sess-spawn'));
-    expect(group, 'the spawn chip left the achromatic group entirely').not.toEqual([]);
-    const scrubbed = stripComments(css);
-    const groupAt = scrubbed.indexOf('.sess-line--active .sess-spawn');
+  it('needs no selected-row member to out-specify the spawn and ctx-pressure variants', () => {
+    // Was: the achromatic group had to beat `.sess-spawn[data-spawn=…]` and
+    // `.sess-ctxpressure[data-wedge]` by specificity, or the variants painted
+    // their own ink on the slab. Gone: no selected-row rule names either chip,
+    // because the variants' own inks (--ink-tertiary, --status-dead-text) are
+    // what the row should show, and the gate holds both on the tint.
+    expect(() => ruleFor('.sess-line--active .sess-spawn')).toThrow();
+    expect(() => ruleFor('.sess-line--active .sess-spawn[data-spawn]')).toThrow();
+    expect(() => ruleFor('.sess-line--active .sess-ctxpressure')).toThrow();
+    expect(() => ruleFor('.sess-line--active .sess-ctxpressure[data-wedge]')).toThrow();
     for (const variant of ['expired', 'unrecognised', 'narrow-widened']) {
-      const sel = `.sess-spawn[data-spawn=${variant}]`;
-      // The variant really does paint a colour of its own — without that there
-      // is nothing to beat and everything below would be vacuous.
-      expect(declValue(ruleFor(sel), 'color'), `${sel} no longer sets its own colour`)
-        .toBe('var(--ink-tertiary)');
-      // …and it is declared AFTER the achromatic rule, which is precisely why
-      // an equal-specificity member cannot settle this.
-      const variantAt = scrubbed.search(new RegExp(`\\.sess-spawn\\[data-spawn=['"]?${variant}['"]?\\]`));
-      expect(variantAt, `${sel} is not in the stylesheet any more`).toBeGreaterThan(-1);
-      expect(variantAt, `${sel} now precedes the achromatic rule — this test no longer proves anything`)
-        .toBeGreaterThan(groupAt);
-      expect(Math.max(...group.map(spec)),
-        `no member of the achromatic group out-specifies ${sel}, so the selected row loses the tie to it`)
-        .toBeGreaterThan(spec(sel));
+      expect(declValue(ruleFor(`.sess-spawn[data-spawn=${variant}]`), 'color')).toBe('var(--ink-tertiary)');
     }
+    expect(declValue(ruleFor('.sess-ctxpressure[data-wedge]'), 'color')).toBe('var(--status-dead-text)');
+    const inks = gateList('SELECTED_ROW_INKS');
+    expect(inks).toContain('--ink-tertiary');
+    expect(inks).toContain('--status-dead-text');
   });
 
   it('paints a `narrow` spawn in the chip\'s LOUD default ink, never the quiet "we do not know" one', () => {
@@ -498,44 +472,6 @@ describe('selection is polarity, status is hue', () => {
     expect(declValue(ruleFor(".sess-spawn[data-spawn='narrow-widened']"), 'color')).toBe('var(--ink-tertiary)');
   });
 
-  it('beats the ctx-pressure chip\'s own [data-wedge] variant by SPECIFICITY, not by source order (Finding 4)', () => {
-    // Same shape as the spawn-chip test above, one cell over. Membership in
-    // the achromatic group (asserted in the earlier list test) is necessary
-    // and NOT sufficient here either: `.sess-line--active .sess-ctxpressure`
-    // is (0,2,0) — and so is `.sess-ctxpressure[data-wedge]` itself, which
-    // paints --status-dead-text and is declared LATER in this file. On a
-    // selected+wedged row the tie would go to source order, the standalone
-    // rule would win, and the chip strands --status-dead-text on the
-    // selected slab instead of the achromatic --edge-strong the group
-    // exists to guarantee. The group's OWN
-    // `.sess-line--active .sess-ctxpressure[data-wedge]` member (0,3,0) is
-    // what settles it by specificity instead. Nothing tested that member:
-    // deleting it left the whole pwa suite green (285 passed) — the bare
-    // `.sess-line--active .sess-ctxpressure` member two lines up only pins
-    // the UNwedged chip's colour, not the wedged one's.
-    const spec = (sel: string): number =>
-      (sel.match(/\.[A-Za-z0-9_-]+|\[[^\]]*\]|:[a-z-]+/g) ?? []).length;
-    const group = selectorsOf(css, '.sess-line--active .sess-meta > *:not(:first-child)::before')
-      .filter((s) => s.startsWith('.sess-line--active .sess-ctxpressure'));
-    expect(group, 'the ctx-pressure chip left the achromatic group entirely').not.toEqual([]);
-    const scrubbed = stripComments(css);
-    const groupAt = scrubbed.indexOf('.sess-line--active .sess-ctxpressure');
-    const sel = '.sess-ctxpressure[data-wedge]';
-    // The variant really does paint a colour of its own — without that there
-    // is nothing to beat and everything below would be vacuous.
-    expect(declValue(ruleFor(sel), 'color'), `${sel} no longer sets its own colour`)
-      .toBe('var(--status-dead-text)');
-    // …and it is declared AFTER the achromatic rule, which is precisely why
-    // an equal-specificity member cannot settle this.
-    const variantAt = scrubbed.search(/\.sess-ctxpressure\[data-wedge\]/);
-    expect(variantAt, `${sel} is not in the stylesheet any more`).toBeGreaterThan(-1);
-    expect(variantAt, `${sel} now precedes the achromatic rule — this test no longer proves anything`)
-      .toBeGreaterThan(groupAt);
-    expect(Math.max(...group.map(spec)),
-      `no member of the achromatic group out-specifies ${sel}, so the selected+wedged row loses the tie to it`)
-      .toBeGreaterThan(spec(sel));
-  });
-
   it('gives the spawn chip a flex: none cell so it cannot steal the hold reason\'s room', () => {
     // `.sess-held` is the ONE shrinkable cell in `.sess-meta` (overflow:hidden +
     // text-overflow:ellipsis, no `flex: none`), and §2.4 lengthens what it holds
@@ -559,46 +495,23 @@ describe('selection is polarity, status is hue', () => {
     const props = stripComments(child).split(';').map((d) => d.split(':')[0]!.trim()).filter((p) => p !== '');
     expect(props.sort(), 'no truncation, and nothing beyond the ruled shape').toEqual(['color', 'flex']);
     expect(selectorsOf(css, '.sess-child')).toEqual(['.sess-child']);
-    // No truncation from ANY rule that targets the label — the active-slab group
-    // and a later rule of the same name included, not only the one read above.
+    // No truncation from ANY rule that targets the label — a later rule of the
+    // same name included, not only the one read above.
     for (const prop of ['text-overflow', 'overflow', 'overflow-x', 'overflow-y', 'white-space']) {
       expect(declaredValues(css, '.sess-child', prop), prop).toEqual([]);
     }
   });
 
-  // The list above names cells; this names the RULE that keeps producing them.
-  // Three separate cells have now been stranded on the selected slab by the
-  // same move — add a meta cell, give it a colour, forget the achromatic
-  // group — and a hand-written membership list only ever catches the ones
-  // somebody remembered to type into it. contrast-check.mjs does not catch it
-  // either: it prices the group's own pair (--edge-strong on --ink-primary)
-  // and has no way to know a cell is missing FROM the group.
-  //
-  // So the census reads the row's own source. Every `sess-…` class
-  // SessionLine.tsx actually renders, that fleet.css gives a colour of its
-  // own, must be answered by a `.sess-line--active` rule that sets a colour —
-  // the achromatic group for most of them, .sess-actions' own dedicated rule
-  // for the ··· button. `color: inherit` is already an answer (the flip is
-  // what it inherits). A modifier is covered by its base class, and that is
-  // specificity, not hand-waving: `.sess-line--active .sess-state` is (0,2,0)
-  // and `.sess-state--waiting` is (0,1,0), so the ancestor-qualified rule wins
-  // wherever it sits in the file.
-  //
-  // What it cannot see is an INLINE style, which beats every selector short of
-  // !important — .sess-acct's account hue is dropped in the component for
-  // exactly that reason (SessionLine.tsx's `acctStyle`). That one is a TSX
-  // decision and stays pinned there.
-  it('leaves no coloured cell on the row without an answer on the slab', () => {
+  // The census that replaced the hand-written membership list, inverted with
+  // it. It used to demand that every coloured cell SessionLine renders be
+  // ANSWERED by a `.sess-line--active` rule; on the tint the answer is the
+  // opposite — no cell may be repainted, and every cell's own ink must be one
+  // the gate measures on the tint. A new coloured cell in a token the gate does
+  // not hold on the tint reds here, which is the same stranding the old census
+  // caught, one ground over.
+  it('paints every coloured cell on the row in an ink the gate measures on the tint', () => {
     // THE ROW'S OWN FILES, followed rather than named: `SessionLine.tsx` plus
-    // the local components it renders. This read was one named file until the
-    // meta line moved to `SessionMeta.tsx`, at which point the census saw 11
-    // cells instead of 26 and its own `> 15` tripwire below caught it.
-    //
-    // Following imports rather than walking `src/` is deliberate and was also
-    // measured: a whole-tree walk picks up `sess-hold-error` and
-    // `sess-sheet-note`, which are rendered by the actions SHEET. Those are
-    // not cells on the slab, and the rule this test enforces — every coloured
-    // cell has an answer under `.sess-line--active` — is about the slab.
+    // the local components it renders (the meta line lives in `SessionMeta.tsx`).
     const dir = path.join(import.meta.dirname, '..', 'src', 'fleet');
     const rowFiles = ['SessionLine.tsx'];
     for (const m of readFileSync(path.join(dir, 'SessionLine.tsx'), 'utf8')
@@ -609,80 +522,74 @@ describe('selection is polarity, status is hue', () => {
     expect(rowFiles.length, 'the row is at least SessionLine and its meta').toBeGreaterThan(1);
     const tsx = rowFiles.map((f) => readFileSync(path.join(dir, f), 'utf8')).join('\n');
 
-    // `className="a b"` and `` className={`a b--${x}`} `` alike; the
-    // interpolation is stripped, leaving the `sess-state--` PREFIX, which is
-    // expanded below into every modifier the stylesheet declares for it.
     const rendered = new Set<string>();
     for (const m of tsx.matchAll(/className=[{]?[`"']([^`"']*)[`"']/g)) {
       for (const c of (m[1] ?? '').replace(/\$\{[^}]*\}/g, '').split(/\s+/)) {
         if (c.startsWith('sess-')) rendered.add(c);
       }
     }
-    // A prefix left by an interpolation stands for every class the stylesheet
-    // actually declares under it, so the three .sess-state--* modifiers are
-    // censused rather than skipped.
     for (const prefix of [...rendered].filter((c) => c.endsWith('--'))) {
       rendered.delete(prefix);
       for (const m of css.matchAll(new RegExp(`\\.(${prefix}[a-z0-9-]+)`, 'g'))) {
         rendered.add(m[1] ?? '');
       }
     }
-    // The row itself is the ground, not a cell on it.
     rendered.delete('sess-line');
     rendered.delete('sess-line--active');
     expect(rendered.size).toBeGreaterThan(15); // the extraction still works
 
-    const colorOf = (sel: string): string | null => {
+    // `.sess-actions` (the ··· button) paints its own --bg-raised chip, so its
+    // ink sits on that, not on the tint (`ink-secondary / raised` is gated).
+    const selfGrounded = new Set(['sess-actions']);
+    const inks = new Set(gateList('SELECTED_ROW_INKS'));
+    const unmeasured: string[] = [];
+    for (const c of [...rendered].sort()) {
+      if (selfGrounded.has(c)) continue;
+      let colours: string[];
       try {
-        return declValue(ruleIn(css, sel), 'color');
+        colours = declaredValues(css, `.${c}`, 'color');
       } catch {
-        return null; // no such rule: nothing to strand
+        continue; // no rule of its own: nothing painted, nothing to measure
       }
-    };
-    const base = (c: string): string => c.slice(0, c.indexOf('--') + 2 || undefined);
-
-    const stranded = [...rendered].sort().filter((c) => {
-      const own = colorOf(`.${c}`);
-      if (own === null || own === 'inherit') return false;
-      const answered = colorOf(`.sess-line--active .${c}`)
-        ?? (c.includes('--') ? colorOf(`.sess-line--active .${base(c).slice(0, -2)}`) : null);
-      return answered === null;
-    });
-    expect(stranded).toEqual([]);
+      for (const v of colours) {
+        const tok = v.match(/^var\((--[a-z0-9-]+)\)$/)?.[1];
+        if (v === 'inherit' || v === 'currentColor') continue;
+        if (!tok || !inks.has(tok)) unmeasured.push(`.${c}: ${v}`);
+      }
+    }
+    expect(unmeasured).toEqual([]);
+    expect(activeColourRules(), 'a cell is repainted on the selected row').toEqual([]);
   });
 
-  it('gives the lamp a --bg-well plate so its dot keeps the hue it was gated on', () => {
-    // Every dot on this row must sit on --bg-well — the one background
-    // design/contrast-check.mjs already verifies all four dots against at 3:1
-    // in BOTH themes. Without it the dark dots die on the near-white slab
-    // (busy 1.63, attention 1.55). Absolutely positioned so the first grid
-    // column does not widen and push this row's label off the shared edge.
-    const plate = ruleFor('.sess-line--active .sess-lamp::before');
-    expect(plate).toContain('position: absolute');
-    expect(plate).toContain('width: var(--lamp-size)');
-    expect(plate).toContain('background: var(--bg-well)');
-    // The plate is positioned; without this it paints over the dot.
-    expect(ruleFor('.sess-line--active .sess-lamp > .dot')).toContain('position: relative');
+  it('needs no lamp plate: the dots are measured on the tint itself', () => {
+    // Was: a --bg-well plate under the lamp, because the dark dots died on the
+    // near-white slab (busy 1.63, attention 1.55). Gone, with its positioning.
+    expect(() => ruleFor('.sess-line--active .sess-lamp::before')).toThrow();
+    expect(() => ruleFor('.sess-line--active .sess-lamp > .dot')).toThrow();
+    expect(() => ruleFor('.sess-line--active .sess-lamp')).toThrow();
+    expect(gateList('SELECTED_ROW_DOTS').sort()).toEqual(
+      ['--status-attention', '--status-busy', '--status-cleanup', '--status-dead', '--status-done', '--status-idle']);
   });
 
-  it('keeps the focus ring visible on the row most likely to hold focus', () => {
-    // base.css draws :focus-visible in --accent, which measures 1.63:1 on the
-    // dark slab — an invisible ring exactly where focus lands.
-    expect(ruleFor('.sess-line--active :focus-visible')).toContain('outline-color: var(--bg-page)');
+  it('keeps base.css\'s accent focus ring on the selected row', () => {
+    // Was: the ring recoloured to --bg-page because the accent measured 1.63:1
+    // on the dark slab. Gone: the accent on the tint is the gated
+    // `ask header chip / accent-tint` pair, at the 4.5 text floor.
+    expect(() => ruleFor('.sess-line--active :focus-visible')).toThrow();
+    expect(gate).toMatch(/T\.accent, T\.accentTint, 4\.5\]/);
   });
 
-  it('flips the ··· with the row without touching its box', () => {
-    // Colour only: the 32×32 box, the hairline and the 44px ::before overlay
-    // stay on the base rule, so the matched pair with .proj-card-add survives.
-    const rule = ruleFor('.sess-line--active .sess-actions');
-    expect(rule).toContain('background: var(--bg-page)');
-    expect(rule).not.toContain('width');
-    expect(rule).not.toContain('height');
+  it('leaves the ··· as it is on every row', () => {
+    // Was: the ··· re-grounded to --bg-page so it did not punch a bright chip
+    // into the slab. Gone: on the tint its own --bg-raised chip is the one it
+    // wears everywhere, and its ink on that is `ink-secondary / raised`.
+    expect(() => ruleFor('.sess-line--active .sess-actions')).toThrow();
+    expect(declValue(ruleFor('.sess-actions'), 'background')).toBe('var(--bg-raised)');
   });
 
-  it('survives forced colours, where the polarity channel does not exist', () => {
-    // Canvas/CanvasText flatten fill AND ink, leaving font-weight alone. An
-    // inset border is the channel that survives.
+  it('survives forced colours, where neither the tint nor the rail exists', () => {
+    // Canvas/CanvasText flatten fill AND ink and drop the inset box-shadow,
+    // leaving font-weight alone. An inset outline is the channel that survives.
     // Fix round 4, controller item 1: `css.indexOf('@media (forced-colors:
     // active)')` then a slice to END OF FILE would have accepted a
     // `.sess-line--active` rule that had fallen OUT of the block, and pinned
@@ -690,6 +597,15 @@ describe('selection is polarity, status is hue', () => {
     // own body, so both go away at once.
     const forced = atBlock(css, '@media (forced-colors: active)');
     expect(declValue(ruleIn(forced, '.sess-line--active'), 'outline'))
+      .toBe('2px solid CanvasText');
+  });
+
+  it("a folded card's name keeps its selection mark under forced colours (D-5495)", () => {
+    // The fold hides the selected row and the name chip stands in for it with
+    // the same tint and rail, which forced colours drop; every card name is
+    // already semibold, so the row's inset outline is the channel left.
+    const forced = atBlock(css, '@media (forced-colors: active)');
+    expect(declValue(ruleIn(forced, '.proj-card[data-holds-selection] .proj-card-name'), 'outline'))
       .toBe('2px solid CanvasText');
   });
 });
@@ -1450,5 +1366,38 @@ describe('the Accounts screen keeps its voices (the audit\'s quick wins)', () =>
     }
     expect(declaredValues(css, '.accounts-fresh', 'font-family'), 'the freshness readout is mono')
       .toEqual(['var(--family-mono)']);
+  });
+});
+
+// D-5545: the card is a glance and NO cell on it ends in an ellipsis — the name and the programme are shortened by
+// whole tokens in `sessionFacts.ts`, and every cell that used to ellipsise wraps at a space instead. jsdom lays
+// nothing out, so the rule is held where it is decided: each cell's LAST declaration of each property.
+describe('no card cell ends in an ellipsis (D-5545)', () => {
+  for (const sel of ['.sess-label', '.sess-meta > .sess-held', '.sess-meta > .sess-context', '.sess-meta > .sess-marker', '.sess-pw-prog']) {
+    it(`${sel} clips nothing and wraps`, () => {
+      expect(declaredValues(css, sel, 'text-overflow').at(-1), sel).toBe('clip');
+      expect(declaredValues(css, sel, 'white-space').at(-1), sel).toBe('normal');
+    });
+  }
+  it('the cross-project chip drops under the name rather than squeezing it', () => {
+    expect(declaredValues(css, '.sess-open', 'flex-wrap').at(-1)).toBe('wrap');
+  });
+});
+
+// D-5528: the programme slug is variable-length and the wave — the fact the
+// operator asked for — stays whole. D-5545: the programme no longer ellipsises
+// either: the model shortens it by whole tokens (`shortenByToken`), and the
+// last rule lets it wrap at a space rather than cut a fragment.
+describe('the programme-and-wave label shrinks by its programme, never its wave (D-5528)', () => {
+  it('the wave half never shrinks', () => {
+    expect(declaredValues(css, '.sess-pw-wave', 'flex')).toEqual(['none']);
+  });
+  it('the programme half never ends in an ellipsis: its last rule clips nothing and wraps (D-5545)', () => {
+    expect(declaredValues(css, '.sess-pw-prog', 'text-overflow').at(-1)).toBe('clip');
+    expect(declaredValues(css, '.sess-pw-prog', 'overflow').at(-1)).toBe('visible');
+    expect(declaredValues(css, '.sess-pw-prog', 'white-space').at(-1)).toBe('normal');
+  });
+  it('the cell that carries it is never narrower than its wave', () => {
+    expect(ruleFor('.sess-held:has(> .sess-pw)')).toMatch(/min-width:\s*calc\(var\(--pw-wave/);
   });
 });

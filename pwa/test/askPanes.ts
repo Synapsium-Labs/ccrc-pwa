@@ -127,3 +127,21 @@ export const PETS_SIZE_MODE = envelope(
   q('Size', 'Which size?', false, labels('Small', 'Large')),
   q('Mode', 'Which mode?', false, labels('Fast', 'Safe')),
 );
+
+/** The recorded Claude Code 2.1.296 ask (`cc296-ask-2q-long-q1`, `-q2`, `-review`; 220x50): two long single-select
+ *  questions, 2 and 3 options with descriptions, the shape of the 2026-10-16 report, in unrelated made-up content
+ *  (a garden club). Its questions are the ask's own JSON (the recording's prompt carried it inline), and the options
+ *  are read off the screens. */
+export const CC296_LONG = envelope(
+  q('Water rota', 'The garden club waters the north beds from one shared tank. On hot weeks the tank runs dry by '
+    + 'Thursday, and the volunteers on the late shift find nothing left for the tomato rows near the fence. '
+    + 'A second tank would cost about two hundred pounds and needs a flat spot beside the shed, which the '
+    + 'parish council must approve first. Until then, how should the weekly watering rota cope?',
+    false, fromPane('cc296-ask-2q-long-q1', 2)),
+  q('Table supply', 'The spring seed swap is booked at the village hall on the second Saturday in April. The hall '
+    + 'committee now asks every group to bring its own folding tables, since theirs went to the school fete '
+    + 'and never came back. We own four tables, but the swap usually fills nine. Two neighbouring groups '
+    + 'have offered to lend theirs if we collect them on Friday evening in a hired van. Which arrangement '
+    + 'should the club confirm with the hall?',
+    false, fromPane('cc296-ask-2q-long-q2', 3)),
+);

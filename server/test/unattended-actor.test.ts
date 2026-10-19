@@ -420,3 +420,43 @@ describe('refuseSpentChild is called with the hoisted dispatchDec, not a fresh a
       .toBe('dispatchDec');
   });
 });
+
+// D-5242 (plan Task 17b): THE HIBERNATION LANES' UNATTENDED CALL SITES. Outside `BUILDERS`' five workspace verbs, so
+// pinned here by the code around each call, as `SITES` pins its own: hibernation's armed sweep and the stop-done lane
+// (D-5427) each compose `ccd hibernate` with no human in the path, declared through `sweepDec` under the lane's own name;
+// the mail lane wakes a sleeping recipient with `ccd ensure`, whose one positional takes no dec at all (`cmd_ensure`
+// journals its own `ensure` row), so that site is pinned as the ONE automatic ensure in the watcher.
+describe('the hibernation lanes name themselves (D-5242, D-5427)', () => {
+  const src = (rel: string): string => readFileSync(path.join(srcRoot, rel), 'utf8');
+
+  it('the armed hibernation sweep declares `sweep:hibernate`', async () => {
+    expect(src('hibernateSweep.ts')).toMatch(/const argv = CCD_ARGV\.hibernate\(id, sweepDec\(port\.fleetState, HIBERNATE_SWEEP_ACTOR\)\);[\s\S]{0,200}const res = await port\.runCcd\(argv\);/);
+    const { HIBERNATE_SWEEP_ACTOR } = await import('../src/coord/hibernate.js');
+    expect(HIBERNATE_SWEEP_ACTOR).toBe('sweep:hibernate');
+  });
+
+  it('the stop-done lane declares `sweep:stop-done`', async () => {
+    expect(src('stopDoneSweep.ts')).toMatch(/CCD_ARGV\.hibernate\(row\.id, sweepDec\(deps\.fleetState, STOP_DONE_ACTOR\)\)/);
+    const { STOP_DONE_ACTOR } = await import('../src/stopDone.js');
+    expect(STOP_DONE_ACTOR).toBe('sweep:stop-done');
+  });
+
+  it('every hibernate the lanes RUN is declared: one act site per lane, carrying `sweepDec`', () => {
+    const hib = src('hibernateSweep.ts');
+    expect((hib.match(/port\.runCcd\(/g) ?? []).length, 'hibernateSweep.ts runs ccd once').toBe(1);
+    const stop = src('stopDoneSweep.ts');
+    expect((stop.match(/deps\.runCcd\(/g) ?? []).length, 'stopDoneSweep.ts runs ccd once').toBe(1);
+    expect(stop).toMatch(/deps\.runCcd\(CCD_ARGV\.hibernate\(row\.id, sweepDec\(/);
+  });
+
+  it('the mail lane\'s wake is the watcher\'s ONE automatic `ccd ensure`, inside the hibernated rung', () => {
+    const w = src('watch.ts');
+    expect((w.match(/CCD_ARGV\.ensure\(/g) ?? []).length).toBe(1);
+    expect(w).toMatch(/gated\(d, 'hibernated'\);[\s\S]{0,400}this\.admitWake\('auto', d\.toId\)\) \{\n\s+const res = await this\.deps\.runCcd\(CCD_ARGV\.ensure\(d\.toId\)\);/);
+  });
+
+  it('a composed hibernate argv carries the declared lane to the flags', () => {
+    expect(CCD_ARGV.hibernate('project-a-quiet-basin', sweepDec(NEW, 'sweep:hibernate')))
+      .toEqual(['hibernate', 'project-a-quiet-basin', '--surface', 'agent', '--actor', 'sweep:hibernate']);
+  });
+});

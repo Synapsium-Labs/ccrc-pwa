@@ -7,14 +7,14 @@ import { readLimits } from './limits.js';
 import { liveSessionStatus, liveStatusCoversDelegation, readLiveState, readLiveStateMeasured } from './livestate.js';
 import type { Statusline } from './pane/statusline.js';
 import type { HookState } from './hookstate.js';
-import type { FleetSession, LifecycleInput, PrState, SessionStatus, SessionUsage, TaskProgress } from '../../shared/api.js';
+import type { FleetSession, HookAsk, LifecycleInput, PrState, SessionStatus, SessionUsage, TaskProgress } from '../../shared/api.js';
 // The ladder lives in `shared/` because `reviveFleetSession` is its second
 // producer and the two must not be able to disagree — see its own docstring.
-import { sessionBucket, sessionLifecycle, spawnVerdict } from '../../shared/api.js';
+import { sessionBucket, sessionLifecycle, sessionRoleOf, spawnVerdict } from '../../shared/api.js';
 import type { Roster } from '../../shared/roster.js';
 // Task 19: the chip's own read. No cycle — `coord/store.ts` imports nothing
 // from this file, the same pairing `watch.ts` already has with both.
-import type { AskRow, CoordStore } from './coord/store.js';
+import type { ApprovalRow, AskRow, CoordStore } from './coord/store.js';
 // Task 3: the pure board-placement decision (Task 2) — this file supplies its
 // ONE port (`stampOf`) from a `coord.db` read, placement.ts itself imports
 // nothing from here. D-2921 moved the fold that BUILDS that port into
@@ -25,10 +25,14 @@ import { foldLastRuns, releasedFrom, type ReleasedLookup } from './coord/release
 // F2(b): the `held` chip's ceiling, DERIVED from the lane's own two
 // windows. It lives in `askwindow.ts` because `watch.ts` (their first
 // reader) imports this module, so the constants could not stay there.
-import { ASK_HELD_CHIP_MAX_MS } from './askwindow.js';
+import { ASK_HELD_CHIP_MAX_MS, askNotifyAt } from './askwindow.js';
+import { redactCommand } from './coord/redact.js';
 
-/** `FleetSession.askSummary`'s ceiling — a fleet card row, not a transcript. */
-const ASK_SUMMARY_MAX_LEN = 80;
+/** `FleetSession.askSummary`'s ceiling — a fleet card row, not a transcript; an ask push's too (D-5356). */
+export const ASK_SUMMARY_MAX_LEN = 80;
+/** D-5231, D-5272: the hook events whose `done` can hold the delegated pair —
+ *  the main `Stop` that writes it, and the two subagent events that carry it. */
+const BACKGROUND_CARRIER_EVENTS: ReadonlySet<string> = new Set(['Stop', 'SubagentStart', 'SubagentStop']);
 
 /**
  * The fleet card's one-line summary of a `waiting` hook state.
@@ -61,7 +65,16 @@ const ASK_SUMMARY_MAX_LEN = 80;
  */
 export function hookAskSummary(hs: HookState | null, liveWaitingFor: string | null = null): string | null {
   const text = hookAskText(hs) ?? (liveWaitingFor?.trim() || null);
-  return text === null || text === '' ? null : text.slice(0, ASK_SUMMARY_MAX_LEN);
+  // D-5298 (spec §6.7): redacted where it enters the wire — an approval summary is a child's raw command (hookstate
+  // keeps it raw, cut to 200 characters), and a question can carry a token too. Redacted BEFORE the cut, so a mask is
+  // never split into a half-token.
+  return text === null || text === '' ? null : redactCommand(text).slice(0, ASK_SUMMARY_MAX_LEN);
+}
+
+/** D-5298 (spec §6.7): the hookstate envelope as it leaves this server on the session frame (`sessionws.ts`), with an
+ *  approval's `summary` redacted. A question envelope is the operator's answer sheet and is sent as read. */
+export function wireHookAsk(ask: HookAsk): HookAsk {
+  return 'approval' in ask ? { approval: { tool: ask.approval.tool, summary: redactCommand(ask.approval.summary) } } : ask;
 }
 
 function hookAskText(hs: HookState | null): string | null {
@@ -152,6 +165,50 @@ function fleetAsk(row: AskRow | null, nowMs: number): FleetSession['ask'] {
     return { state: 'answered', parentId: row.parentId, answeredBy: row.answeredBy };
   }
   return null;
+}
+
+/**
+ * `with-coordinator-state` (D-5296): `FleetSession.withCoordinator` from the
+ * session's NEWEST asks row (`currentAsksFor`, the same batched read
+ * `fleetAsk` takes). Set only while that row is `held` or `answering` (a
+ * principal is mid-answer) AND the assembly's clock is strictly before
+ * `notifyAt`; `released`, `declined`, `answered`, `stale` and `unknown` all
+ * give null, so a hand-over, the parent's own release, an answer and a gone
+ * dialog each return the row to the ladder's attention rung on the next
+ * assembly. `notifyAt` is `askNotifyAt(row.at)`, the mint time, NEVER
+ * `row.askAt` (hookstate's `updatedAt`, the instance guard): the sweep counts
+ * the window from the mint, so the fleet clears the state at the moment the
+ * operator's push fires (D-5364). Plan Task 16 adds the approvals source
+ * here, through this one function.
+ */
+function fleetWithCoordinator(row: AskRow | null, nowMs: number, approval: ApprovalRow | null = null): FleetSession['withCoordinator'] {
+  // D-5298 (plan Task 16): a held permission prompt first — the hook is waiting on it, inside its own window
+  // (`notifyAt`, D-5441), and a row minted released was held for nobody.
+  if (approval !== null && approval.state === 'held' && approval.releaseReason === null && nowMs < approval.notifyAt) {
+    return { kind: 'approval', parentId: approval.parentId, since: approval.askAt, notifyAt: approval.notifyAt };
+  }
+  if (row === null) return null;
+  if (row.state !== 'held' && row.state !== 'answering') return null;
+  const notifyAt = askNotifyAt(row.at);
+  if (nowMs >= notifyAt) return null;
+  return { kind: 'question', parentId: row.parentId, since: row.at, notifyAt };
+}
+
+/** `coord.heldApprovalsFor`'s guarded whole-frame read, `readCurrentAsks`' twin: a broken store degrades every row's
+ *  approval source to none (Needs-you, the safe direction), never a throw out of `assembleFleet`. */
+function readHeldApprovals(coord: CoordStore | undefined, childIds: readonly string[]): Map<string, ApprovalRow> {
+  if (!coord || childIds.length === 0) return new Map();
+  try {
+    const read = coord.heldApprovalsFor(childIds);
+    if (!read.ok) {
+      console.warn(`ccrc-server: heldApprovalsFor refused — ${read.detail} — one bad read must not kill the poll`);
+      return new Map();
+    }
+    return read.rows;
+  } catch (err) {
+    console.warn(`ccrc-server: heldApprovalsFor failed — ${err instanceof Error ? err.message : String(err)} — one bad read must not kill the poll`);
+    return new Map();
+  }
 }
 
 /**
@@ -314,12 +371,12 @@ export function idHomeWrapper(roster: Roster, id: string): string {
 
 /**
  * Authoritative live status for one session — the same signal the fleet uses:
- * dead if no tmux session, else busy/idle from the live status file. Used by
- * the interrupt route: a --remote-control pane never renders the busy marker
- * at all, and an RC-off pane does render it, but the same pane can ALSO be
- * showing a dialog painted right alongside it — either way busy-ness has to
- * come from the live status file, which also sees subagents the pane never
- * shows.
+ * dead if no tmux session, else busy/idle from the live status file. No route reads it since D-5236
+ * (the interrupt route takes the RAW word, `turnverdict.ts`'s `liveWordFor`); its D-115 pins stay.
+ * Why the file: a --remote-control pane never renders the busy marker at all, and an RC-off pane
+ * does render it, but the same pane can ALSO be showing a dialog painted right alongside it —
+ * either way busy-ness has to come from the live status file, which also sees subagents the pane
+ * never shows.
  */
 export async function liveStatus(io: FleetIO, cfg: CcrcConfig, tmux: Tmux, id: string): Promise<SessionStatus> {
   // C0.3: this only ever asks about ONE id — no uniqueness or subtraction
@@ -364,9 +421,9 @@ export async function liveStatus(io: FleetIO, cfg: CcrcConfig, tmux: Tmux, id: s
   // `assembleFleet` below takes `readLiveStateMeasured` and paints an
   // unreadable live file `busy`; this function must keep answering `'idle'`
   // for it, and the two are not drift. A card DISPLAYS, so its reassuring
-  // word is the dangerous one; this function's sole consumer is
-  // `POST /api/sessions/:id/interrupt`'s `… === 'busy'` check, which REFUSES
-  // on anything else — so here `'idle'` is what withholds the keystroke, and
+  // word is the dangerous one; this function's consumer was the interrupt
+  // route's `… === 'busy'` check (D-5236 keeps the same answer in `interruptVerdict`),
+  // which REFUSES on anything else — so `'idle'` is what withholds the keystroke, and
   // "fail toward busy" would GRANT an interrupt on a read that measured
   // nothing, inverting D-115's own intent one line from its remedy. Same
   // direction the `!cfgDir` fallback above already argues for, on the same
@@ -526,6 +583,7 @@ export async function assembleFleet(
   // rows carry millisecond timestamps (`settleAsk`'s callers all pass
   // `Date.now()`), so `nowMs` is computed once and threaded into `fleetAsk`.
   const asksByChild = readCurrentAsks(coord, recs.map((r) => r.id));
+  const approvalsByChild = readHeldApprovals(coord, recs.map((r) => r.id));
   // Task 3: ONE pass over the stamped runs, reused by every row below — see
   // `readCoordPlacements`'s own docstring for why this is batched rather than
   // a per-row query.
@@ -571,7 +629,7 @@ export async function assembleFleet(
         // on this display surface, declared unmeasured so `watch.ts` keeps
         // the row's previous status instead of spending an edge — an overload
         // tick that failed six busy rows' reads used to push six "Finished".
-        // `liveStatus` keeps answering `idle` here for the interrupt route.
+        // The interrupt route's verdict answers `not-busy` here (D-5236).
         status = 'busy';
         statusUnmeasured = true;
       } else if (cfgDir) {
@@ -610,8 +668,8 @@ export async function assembleFleet(
           // surface's: a card is read as permission to walk away, so the
           // reassuring word is the dangerous one here. `liveStatus` two
           // functions up answers `'idle'` on this identical failure ON
-          // PURPOSE — its sole consumer is the interrupt route's
-          // `… === 'busy'`, which REFUSES on idle, so "fail toward busy"
+          // PURPOSE, as the interrupt route's verdict does (D-5236): it
+          // REFUSES on an unread word, so "fail toward busy"
           // there would GRANT interrupts on a read that measured nothing.
           // Both are failing away from the act that cannot be taken back;
           // `fleet.test.ts` pins the pair together on ONE fixture so the
@@ -761,7 +819,27 @@ export async function assembleFleet(
       // coord.db degrades every row to null rather than throwing out of
       // `assembleFleet`, which neither caller wraps.
       ask: fleetAsk(asksByChild.get(r.id) ?? null, nowMs),
+      // D-5296: the quiet "with coordinator" state, from the same row.
+      withCoordinator: fleetWithCoordinator(asksByChild.get(r.id) ?? null, nowMs, approvalsByChild.get(r.id) ?? null),
       subagents: hs?.subagents ?? null,
+      // `background-aware-working` (D-5231): the delegated work a main Stop
+      // left running, and ONLY when the live file's own word covers that work
+      // (2.1.277 on, `liveCoversWorkflows`) — below that floor D-75 answers as
+      // before — and only while the hook state is that Stop's `done` with a
+      // count above zero. Null everywhere else, which is the ladder's old answer.
+      // A subagent event after that Stop carries the pair but, until D-5232's
+      // gated arm keeps the main event, rewrites `event`: so the `done` may
+      // read `SubagentStart`/`SubagentStop`, the two events that carry it
+      // (`BACKGROUND_CARRIER_EVENTS`, D-5272); no other event writes the pair.
+      background: liveCoversWorkflows && hs !== null && hs.state === 'done'
+        && hs.event !== null && BACKGROUND_CARRIER_EVENTS.has(hs.event)
+        && hs.background !== undefined && hs.background.count > 0
+        ? hs.background : null,
+      // D-5237: the registry's record of the last process end, carried as is;
+      // the PWA shows it for an hour (`recentLastEnd`).
+      lastEnd: r.lastEnd,
+      // D-5242: already epoch MS (`parseHibernated`), carried straight off the record like `lastEnd`.
+      hibernatedAt: r.hibernatedAt,
       // `?? null` and not `?? 0`: no hook data at all and a hook reporting
       // zero reads are two conditions, and `hookstate.ts` already keeps them
       // apart — collapsing them one layer out would undo that on the wire.
@@ -844,6 +922,10 @@ export async function assembleFleet(
       // three-way reading of `$REG/<id>.child` (`SessionRecord.child`). A
       // display value on this wire — the bind gate re-reads the registry.
       child: r.child,
+      // D-5301: the role, from `.child` and nothing else — `sessionRoleOf`,
+      // the one derivation, so the badge and the start card agree on the
+      // `.child` axis only (the card is also silent for a held row; see there).
+      role: sessionRoleOf(r.child),
       // Workspace lifecycle §5.1. `child` here is the registry's reading, `unreadable` counted as a child.
       releasedFrom: released.ok
         ? releasedFrom({

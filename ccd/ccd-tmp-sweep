@@ -47,6 +47,12 @@
 #       (`--resume <uuid>`) is live too. FAIL CLOSED: if claude processes are
 #       running and NOT ONE sessions dir can be read, the whole pass refuses
 #       rather than treating every session as dead.
+#       A HIBERNATED session is live too, though no process runs it: every
+#       registry row with `$HOME/.cc-sessions/<id>.hibernated` contributes its
+#       `<id>.uuid`, because its wake resumes that same uuid and must find its
+#       temp directory (scratchpad, task outputs) where it left it, however long
+#       it slept (`hibernate-long-idle-sessions` (D-5242)). A `.hibernated` row
+#       whose `.uuid` cannot be read refuses the pass (`hibernated-unreadable`).
 #   (b) NOT IN USE. No process has its cwd, or an open fd, at or under it
 #       (`/proc/*/cwd` and `/proc/*/fd/*` link targets — every session runs as
 #       this user, so no privilege is needed to see them).
@@ -205,6 +211,18 @@ _ts_collect_live() {
       { body="$(<"$f")"; } 2>/dev/null || continue
       [[ "$body" =~ \"sessionId\"[[:space:]]*:[[:space:]]*\"($UUID_ANY)\" ]] && LIVE[${BASH_REMATCH[1]}]=1
     done
+  done
+  # A sleeping session (D-5242): its uuid is live, read with builtins from the
+  # registry. Unreadable is a session this pass cannot protect, and that refuses.
+  local hf hid huuid
+  for hf in "$HOME/.cc-sessions"/*.hibernated; do
+    [ -e "$hf" ] || [ -L "$hf" ] || continue
+    hid="${hf##*/}"; hid="${hid%.hibernated}"; huuid=""
+    { [ -f "$HOME/.cc-sessions/$hid.uuid" ] && read -r huuid < "$HOME/.cc-sessions/$hid.uuid"; } 2>/dev/null
+    if [[ "$huuid" =~ ^$UUID_ANY$ ]]; then LIVE[$huuid]=1; else
+      REFUSE="hibernated-unreadable: $hid is hibernated and its .uuid cannot be read, so its temp directory cannot be protected"
+      return 1
+    fi
   done
   if [ "$CLAUDE_N" -gt 0 ] && [ "$READABLE" -eq 0 ]; then
     REFUSE="no-sessions-dir: $CLAUDE_N claude process(es) running but not one sessions dir is readable (tried ${#CFGS[@]} config dir(s)) — refusing rather than treat every session as dead"

@@ -77,6 +77,14 @@
   --color-well:    var(--bg-well);
   --color-sheet:   var(--bg-sheet);
   --color-scrim:   var(--scrim);
+  /* the interactive grounds (D-5101): a row or ghost button under the mouse,
+     and held. Opaque derivations, so the gate measures them as pairs. */
+  --color-hover:   var(--bg-hover);
+  --color-pressed: var(--bg-pressed);
+  /* the same two on the dead banner (D-5574), painted by the danger-ghost
+     with `ground="dead"` (D-5688), not re-scoped by the banner. */
+  --color-hover-on-dead:   var(--bg-hover-on-dead);
+  --color-pressed-on-dead: var(--bg-pressed-on-dead);
 
   /* --- hairlines ----------------------------------------------------- */
   --color-edge-subtle: var(--edge-subtle);
@@ -89,6 +97,7 @@
   --color-ink-disabled:  var(--ink-disabled);
   --color-ink-on-well:   var(--ink-on-well);
   --color-ink-on-phosphor: var(--ink-on-accent);
+  --color-ink-on-danger:   var(--ink-on-danger);   /* the danger fill's label (D-5099) */
 
   /* --- accent (the phosphor) ------------------------------------------ */
   /* THE BRAND HUE IS `phosphor`, NOT `accent`, and shadcn is the reason.

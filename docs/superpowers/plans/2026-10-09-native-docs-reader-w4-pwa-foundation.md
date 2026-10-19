@@ -11501,7 +11501,7 @@ Close the record: fill every `outcome` and `rows`, add a last line `Findings: ra
    "-t",
    "docs-sw"
   ],
-  "red": "server ccrc-doctor -t docs-sw: red — 'FAILs a worker it cannot read with ccrc update --force, never a WARN' (the unreadable arm; fix round 1, review 408 F8)"
+  "red": "server ccrc-doctor -t docs-sw: 1 failed | 20 passed | 892 skipped (913) — 'FAILs a worker it cannot read with ccrc update --force, never a WARN' (the unreadable arm; fix round 1, review 408 F8; measured at W5 part 1 Task 4's base, review 412 R4)"
  },
  {
   "id": "W4-T11-M53",
@@ -11514,7 +11514,7 @@ Close the record: fill every `outcome` and `rows`, add a last line `Findings: ra
    "-t",
    "docs-sw"
   ],
-  "red": "server ccrc-doctor -t docs-sw: red — 'WARNs on no denylist at all, and on one that never closes: neither is the shape it knows' (the never-closes WARN arm; fix round 1, review 408 F8)"
+  "red": "server ccrc-doctor -t docs-sw: 1 failed | 20 passed | 892 skipped (913) — 'WARNs on no denylist at all, and on one that never closes: neither is the shape it knows' (the never-closes WARN arm; fix round 1, review 408 F8; measured at W5 part 1 Task 4's base, review 412 R4)"
  },
  {
   "id": "W4-T11-M54",
@@ -11527,7 +11527,7 @@ Close the record: fill every `outcome` and `rows`, add a last line `Findings: ra
    "-t",
    "docs-sw"
   ],
-  "red": "server ccrc-doctor -t docs-sw: red — 'FAILs an entry under /docs, and a hand-built one with no end anchor; names every covering entry' (the tail's `/` alternative, an entry with no end anchor; fix round 1, review 408 F8)"
+  "red": "server ccrc-doctor -t docs-sw: 1 failed | 20 passed | 892 skipped (913) — 'FAILs an entry under /docs, and a hand-built one with no end anchor; names every covering entry' (the tail's `/` alternative, an entry with no end anchor; fix round 1, review 408 F8; measured at W5 part 1 Task 4's base, review 412 R4)"
  },
  {
   "id": "W4-T11-M55",
@@ -11540,7 +11540,7 @@ Close the record: fill every `outcome` and `rows`, add a last line `Findings: ra
    "-t",
    "docs-sw"
   ],
-  "red": "server ccrc-doctor -t docs-sw: red — 'FAILs a /docs entry with the spec's sentence and remedy, naming the entry' (the tail's knob alternative; fix round 1, review 408 F8)"
+  "red": "server ccrc-doctor -t docs-sw: 3 failed | 18 passed | 892 skipped (913) — 'FAILs a /docs entry with the spec's sentence and remedy, naming the entry'; 'runs on a server and on a both box: the role does not excuse either'; 'still FAILs a /docs entry when an invalid UTF-8 byte follows the denylist' (the tail's knob alternative; fix round 1, review 408 F8; measured at W5 part 1 Task 4's base, review 412 R4)"
  },
  {
   "id": "W4-T11-M56",
@@ -11577,7 +11577,7 @@ Close the record: fill every `outcome` and `rows`, add a last line `Findings: ra
    "-t",
    "Q1"
   ],
-  "red": "pwa chat-hardening -t Q1: 7 failed — 'an image whose source the transform empties (data:) renders its alt text as plain text, with no link' and the other six emptied-source cases (fix round 1, review 408 F6)"
+  "red": "pwa chat-hardening -t Q1: 8 failed | 10 passed | 96 skipped (114) — 'an image whose source the transform empties (an empty source) renders its alt text as plain text, with no link'; 'an image whose source the transform empties (data:) renders its alt text as plain text, with no link'; 'an image whose source the transform empties (javascript:) renders its alt text as plain text, with no link'; 'an image whose source the transform empties (vbscript:) renders its alt text as plain text, with no link'; 'on the worker path too, an image whose source the transform empties renders its alt text, with no link'; 'with no alt text, such an image (an empty source) renders nothing'; 'with no alt text, such an image (data:) renders nothing'; 'with no alt text, such an image (javascript:) renders nothing' (fix round 1, review 408 F6; measured at W5 part 1 Task 4's base, review 412 R3)"
  },
  {
   "id": "W4-T11-M59",
@@ -11588,7 +11588,7 @@ Close the record: fill every `outcome` and `rows`, add a last line `Findings: ra
   "tests": [
    "test/markdown-runner.test.ts"
   ],
-  "red": "pwa markdown-runner: 1 failed | 36 passed (37) — 'one signal shared by a running job and a queued one rejects both, with no respawn and no post' (fix round 1, review 408 F7)"
+  "red": "pwa markdown-runner: 1 failed | 37 passed (38) — 'one signal shared by a running job and a queued one rejects both, with no respawn and no post' (fix round 1, review 408 F7; measured at W5 part 1 Task 4's base, review 412 R3)"
  },
  {
   "id": "W4-T11-M60",
@@ -11623,7 +11623,7 @@ Close the record: fill every `outcome` and `rows`, add a last line `Findings: ra
   "tests": [
    "test/chat-hardening.test.tsx"
   ],
-  "red": "pwa chat-hardening: red — '![](/api/example/x) draws no image and renders the URL as a plain link' and the other refused-image cases (re-anchored on the img handler fix round 1's F6 re-spelled; same mutation, the refused branch dropped)"
+  "red": "pwa chat-hardening: 20 failed | 94 passed (114) — '![](/api/example/x) draws no image and renders the URL as a plain link'; 'a blank destination arrives percent-encoded, so it renders as the ordinary external link, never an invisible one'; 'a same-scheme special-relative https:/ source draws no image, as an img or as an auto-embed'; 'an image whose source the transform empties (an empty source) renders its alt text as plain text, with no link'; 'an image whose source the transform empties (data:) renders its alt text as plain text, with no link'; 'an image whose source the transform empties (javascript:) renders its alt text as plain text, with no link'; 'an image whose source the transform empties (vbscript:) renders its alt text as plain text, with no link'; 'an image with the source ../api/example/x draws no <img> and renders the ordinary external link'; 'an image with the source ./x.png draws no <img> and renders the ordinary external link'; 'an image with the source x.png draws no <img> and renders the ordinary external link'; 'an image, protocol-relative, draws no image: ![](//h.example/x.png)'; 'an image, root-relative with alt text, draws no image: ![a chart](/x.png)'; 'an image, slash then backslash, draws no image: ![](/\\h.example/x.png)'; 'on the worker path too, an image whose source the transform empties renders its alt text, with no link'; 'the parser percent-encodes a backslash, so the image source is path-relative: refused as any non-absolute source is'; 'the parser percent-encodes a leading tab, so the image source is path-relative: refused as any non-absolute source is'; 'the worker path refuses too'; 'with no alt text, such an image (an empty source) renders nothing'; 'with no alt text, such an image (data:) renders nothing'; 'with no alt text, such an image (javascript:) renders nothing' (re-anchored on the img handler fix round 1's F6 re-spelled; same mutation, the refused branch dropped; measured at W5 part 1 Task 4's base, review 412 R4)"
  },
  {
   "id": "W4-T5-M16",

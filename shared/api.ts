@@ -12,6 +12,7 @@ import type { Hue } from './roster.js';
 import type { AccountPoolWire } from './poolrule.js';
 import type { BuildInfo } from './buildinfo.js';
 import type { BoxTokenView } from './box-token.js';
+import type { WorkflowView } from './workflows.js';
 
 export type SessionStatus = 'busy' | 'idle' | 'dead';
 
@@ -52,6 +53,40 @@ export type ChildMark =
  *  match is exact. No `g` flag: `.test` must carry no `lastIndex` between
  *  calls. Anything else in a marker is `unreadable`, never a child. */
 export const CHILD_RUN_ID = /^[1-9][0-9]{0,9}$/;
+
+/** What a session IS to the routing (coordinator-first spec §8, D-5301): every
+ *  session the operator creates is its project's `coordinator`; a workspace a
+ *  dispatch minted is a `child`. DERIVED, never marked: `.child` is written only
+ *  by a dispatch (`ws-add --no-rc --child`), at the only moment worker-ness is
+ *  known, so every operator path — the PWA "+", the create sheets, the CLI — is
+ *  covered with no new marker, and a recycled slug cannot inherit a stale role
+ *  because `.child` is cleared with its row. Coordinator-ness is not parenthood:
+ *  a run still binds a parent (spec §4). */
+export type SessionRole = 'coordinator' | 'child';
+
+/** Derived-enumeration discipline (`SESSION_LIFECYCLE_MAP`'s): a member added
+ *  to the union with no key here fails LOUDLY (TS2741), and a stray key fails
+ *  the other way (TS2353). */
+const SESSION_ROLE_MAP: Record<SessionRole, true> = { coordinator: true, child: true };
+export const SESSION_ROLES: readonly SessionRole[] = Object.keys(SESSION_ROLE_MAP) as SessionRole[];
+
+/** The only way to narrow an untrusted value to a `SessionRole` — the
+ *  snapshot-revival path reads one out of a cache an older or newer build
+ *  wrote. The CONSTANT is cast, never the input (`isSessionLifecycle`'s rule). */
+export function isSessionRole(v: unknown): v is SessionRole {
+  return typeof v === 'string' && (SESSION_ROLES as readonly string[]).includes(v);
+}
+
+/** THE ONE DERIVATION of the role, from the registry's reading of `.child` and
+ *  nothing else. `unreadable` is a child: the marker file exists, which is what
+ *  the start card (`session-hook.sh`'s `_hook_role_card`) tests, so the badge
+ *  and the card agree on the `.child` axis, and ONLY that axis: a session whose
+ *  `.child` exists, parsed or not, is a child to both, and a dispatched child is
+ *  never told, or shown, that it coordinates. The card has further silences the
+ *  badge does not read: a held row (`$REG/<id>.hold`), the card-off switch, and
+ *  a `resume`/`fork` start. So a held row with no `.child` shows the coordinator
+ *  badge although it was never given the card; both are as spec §8 asks. */
+export const sessionRoleOf = (child: ChildMark): SessionRole => (child.kind === 'none' ? 'coordinator' : 'child');
 
 export interface FleetSession {
   id: string; wrapper: string; home: string; project: string; workdir: string;
@@ -159,7 +194,7 @@ export interface FleetSession {
    * this one through an HTTP call to the server's own route would be a new
    * pattern for no gain (ruling F5).
    *
-   * Only two of `AskState`'s six members ever reach this field: `held`
+   * Only two of `AskState`'s seven members ever reach this field: `held`
    * while a parent may still pre-empt the child's live question, and
    * `answered` once one has ruled AND recently (`fleet.ts`'s
    * `ASK_ANSWERED_CHIP_WINDOW_MS`, fix round 1 item 4 — past that window
@@ -172,12 +207,12 @@ export interface FleetSession {
    * may answer" and "ruled by <parent>" — and F1 made the second three,
    * because the OPERATOR can settle the same row from their own phone: see
    * `answeredBy` below, and `SessionLine.tsx`'s `askWords` for the wording
-   * of each. `assembleFleet` folds the other four
-   * (`answering`, `released`, `stale`, `unknown`) to `null` rather than
+   * of each. `assembleFleet` folds the other five
+   * (`answering`, `released`, `declined`, `stale`, `unknown`) to `null` rather than
    * pass them through raw: `answering` is the between-tick sliver while a
    * digit is in flight, so it is folded onto `held` (still, functionally,
    * "may answer") rather than shown as a state the design doc gives no
-   * words for; `released` and `stale` both mean the operator's own ordinary
+   * words for; `released`, `declined` and `stale` all mean the operator's own ordinary
    * push has already fired or the dialog itself is gone, so a chip
    * explaining why they were not asked would be explaining something no
    * longer true; `unknown` is an out-of-vocabulary token this build cannot
@@ -230,6 +265,40 @@ export interface FleetSession {
    *  subagents running — same null-vs-empty-array discipline as `WsAudit`'s
    *  array fields above. */
   subagents: { name: string; startedAt: number }[] | null;
+  /** `background-aware-working` (D-5231): the DELEGATED background work the
+   *  last main Stop listed and left running — `count` tasks, of the unique
+   *  `kinds` (sorted). Set only when the live file's build covers delegation
+   *  (`liveCoversWorkflows`), the hook state is a `Stop`'s `done`, and the
+   *  count is above zero (`fleet.ts`); null everywhere else, an older peer's
+   *  snapshot included (`reviveFleetSession`). While set, the bucket ladder
+   *  keeps a live `busy` on `working` (`sessionBucket`'s `!delegated`) and the
+   *  wedge qualifier stands down. ADDITIVE: no `FLEET_PROTO` bump. */
+  background: { count: number; kinds: string[] } | null;
+  /** `with-coordinator-state` (D-5296): this session's question is held by
+   *  its parent (the coordinator), which may answer before the operator is
+   *  notified. Set by `fleet.ts` from the session's NEWEST `asks` row while it
+   *  is `held` or `answering` and the assembly's clock is before `notifyAt`
+   *  (`askNotifyAt` of the row's mint time, D-5364); null in every other
+   *  case. While set, `sessionBucket` skips the attention rung and answers
+   *  `working`, dated `since`, so the child leaves Needs-you without a new
+   *  `SessionBucket` member. `kind` is `question` today; plan Task 16 adds
+   *  `approval` through the same computation. ADDITIVE: no `FLEET_PROTO`
+   *  bump. Read a live (cast) frame through `sessionWithCoordinator`; a cached
+   *  snapshot revives it as null (`reviveFleetSession`), which shows
+   *  Needs-you, the safe direction. */
+  withCoordinator: WithCoordinator | null;
+  /** `interrupt-and-restart-causes-recorded` (D-5237): when and why this
+   *  session's previous process ended, from `$REG/<id>.lastend` through
+   *  `parseLastEnd`; null when the registry holds none or it is malformed.
+   *  Read on a live frame through `recentLastEnd` (an older server omits the
+   *  key), which shows it for `LAST_END_SHOWN_MS`. ADDITIVE: no `FLEET_PROTO`
+   *  bump. */
+  lastEnd: LastEnd | null;
+  /** D-5242 (`hibernate-long-idle-sessions`): when `ccd hibernate` put this session to sleep, epoch MS, from
+   *  `$REG/<id>.hibernated` (read only when the registry listing names it). Null when it is not asleep, and on a
+   *  malformed marker. ADDITIVE: the row's lifecycle reads `stopped` and its bucket `dead` as for any deliberate stop
+   *  (no new `SessionBucket` member), and this field alone tells a sleeping session from one that is gone. */
+  hibernatedAt: number | null;
   /** How many graph READS this session has made — `hookstate.ts`'s
    *  `graphQueries`, carried through unchanged. ADDITIVE: no `FLEET_PROTO`
    *  bump, and an older peer that omits it revives as `null` below.
@@ -492,6 +561,21 @@ export interface FleetSession {
    */
   readonly child: ChildMark;
 
+  /**
+   * What this session is to the routing (D-5301, coordinator-first spec §8):
+   * `sessionRoleOf(child)` above, the one derivation, computed by
+   * `server/src/fleet.ts` from the registry's `.child` reading. The PWA shows a
+   * quiet "coordinator" badge from it before any run exists.
+   *
+   * ADDITIVE, absence-permits: `null` is "this record does not say" — an older
+   * persisted `FleetSession[]` revives with `null` (`reviveFleetSession`), and
+   * a live frame from an older server arrives with the key absent, so a PWA
+   * reader treats `undefined` and `null` alike as no role, and shows no badge.
+   * It is never re-derived from a revived `child`, which an older snapshot
+   * defaults to `none`: that would badge a pre-marker child a coordinator.
+   */
+  readonly role: SessionRole | null;
+
   /** Where this workspace was RELEASED from, or `null` — `ReleasedFrom`, at the end of this file, carries the
    *  contract; `releasedFromOf` there is the field's one reader. */
   readonly releasedFrom: ReleasedFrom | null;
@@ -628,7 +712,7 @@ export function graphGateCount(s: { graphGateDenials?: number | null }): number 
  * stance every sibling tolerant reader above takes.
  *
  * A present-but-broken shape (not an object, `parentId` not a non-empty
- * string, `state` not one of `AskState`'s six tokens) degrades to `null`
+ * string, `state` not one of `AskState`'s seven tokens) degrades to `null`
  * whole: unlike `substrateFault`'s per-half tolerance, the `(state,
  * parentId)` pair only means something TOGETHER — a state with no parent to
  * name, or a parent with a state this build cannot read, has nothing honest
@@ -639,7 +723,7 @@ export function graphGateCount(s: { graphGateDenials?: number | null }): number 
  * any later surface cannot drift onto two different fallbacks.
  * `SessionLine.tsx` then renders content for exactly `held`/`answered` —
  * the two the design doc gives words to (`FleetSession.ask`'s own
- * docstring) — so the other four valid-but-unrendered tokens read as "no
+ * docstring) — so the other five valid-but-unrendered tokens read as "no
  * chip" here too, the same fold `assembleFleet` already applies
  * server-side, now doubled client-side for a server ahead of this build.
  */
@@ -660,6 +744,52 @@ export function sessionAsk(
     state: raw.state,
     parentId: raw.parentId,
     answeredBy: typeof by === 'string' && by !== '' ? by : null,
+  };
+}
+
+/** `with-coordinator-state` (D-5296): what the quiet state carries. `since` is
+ *  the hold's start (the asks row's mint time, ms) and `notifyAt` the moment
+ *  the operator is notified (`askNotifyAt` of that same time), both epoch ms. */
+export interface WithCoordinator {
+  kind: 'question' | 'approval';
+  parentId: string;
+  since: number;
+  notifyAt: number;
+}
+
+/** D-5296: THE ONE reader of `FleetSession.withCoordinator` on a live (cast,
+ *  not revived) frame and in the bucket ladder. A server predating the field
+ *  omits the key: `undefined` reads as null. A present-but-malformed value
+ *  (not an object, an unknown `kind`, a blank `parentId`, a non-finite
+ *  `since` or `notifyAt`) also reads as null, never a throw: null is the old
+ *  answer, Needs-you, which is the safe direction for a state that hides a
+ *  question from the operator's list. */
+export function sessionWithCoordinator(s: { withCoordinator?: unknown }): WithCoordinator | null {
+  const v = s.withCoordinator;
+  if (v === undefined || v === null || typeof v !== 'object' || Array.isArray(v)) return null;
+  const o = v as { kind?: unknown; parentId?: unknown; since?: unknown; notifyAt?: unknown };
+  if (o.kind !== 'question' && o.kind !== 'approval') return null;
+  if (typeof o.parentId !== 'string' || o.parentId === '') return null;
+  if (typeof o.since !== 'number' || !Number.isFinite(o.since)) return null;
+  if (typeof o.notifyAt !== 'number' || !Number.isFinite(o.notifyAt)) return null;
+  return { kind: o.kind, parentId: o.parentId, since: o.since, notifyAt: o.notifyAt };
+}
+
+/** D-5296, D-5390: the words of the quiet state, for the card and the header alike:
+ *  `with coordinator · <parent's short name>`. The short name is the parent's
+ *  id less the child's own `<project>-` prefix (a held ask's parent is in the
+ *  child's project, D-5363), or the whole id when it does not carry that
+ *  prefix. `title` says why the operator was not asked, and when they will be. */
+export function withCoordinatorWords(wc: WithCoordinator, project: string): { text: string; short: string; title: string } {
+  const prefix = `${project}-`;
+  const short = project !== '' && wc.parentId.startsWith(prefix) && wc.parentId.length > prefix.length
+    ? wc.parentId.slice(prefix.length)
+    : wc.parentId;
+  const what = wc.kind === 'approval' ? 'permission prompt' : 'question';
+  return {
+    text: `with coordinator · ${short}`,
+    short,
+    title: `${wc.parentId} holds this ${what} and may answer it first; you are notified at ${new Date(wc.notifyAt).toISOString().slice(11, 19)} UTC unless it answers or hands it over. You can still answer it yourself.`,
   };
 }
 
@@ -1366,8 +1496,52 @@ export interface WsTombstone {
  *  without any of them needing to be the whole shape. */
 export type BucketInput = Pick<
   FleetSession,
-  'status' | 'statusUpdatedAt' | 'dialogPending' | 'hookState' | 'archivedAt' | 'pr'
->;
+  'status' | 'statusUpdatedAt' | 'dialogPending' | 'hookState' | 'archivedAt' | 'pr' | 'background'
+> & {
+  /** D-5296: optional here so a literal that predates the field still
+   *  buckets; absent reads as null through `sessionWithCoordinator`. */
+  withCoordinator?: FleetSession['withCoordinator'];
+};
+
+/** `background-aware-working` (D-5231) — THE DELEGATED-TASK RULE, its one home.
+ *  A task listed in a Stop's `background_tasks` is DELEGATED work (it can hold
+ *  Claude Code's live file `busy` after the main turn ended) unless its cleaned
+ *  kind is one of these six labels — Claude Code's own type labels, after the
+ *  hook's cleaning (lower-cased, spaces to `-`, anything outside `a-z_-`
+ *  dropped) — whose work never holds the live file `busy`: an idle main loop
+ *  over only shells or monitors writes `shell` or `idle`, and the other four are
+ *  outside the live file's delegation set. The hook's `jq` in
+ *  `ccd/session-hook.sh` is the documented second spelling, held equal by
+ *  `session-hook-background.test.ts`, which iterates over this list. */
+export const NON_DELEGATING_TASK_KINDS = ['shell', 'monitor', 'mcp-task', 'dream', 'auto-mode-scan', 'memory-import'] as const;
+/** D-5231: the terminal words of Claude Code's task code. A task whose status
+ *  is one of them is finished, whatever its kind; `running`, `pending` and any
+ *  status no build has shown count as running. The builder already leaves
+ *  finished tasks out, so this is a second wall: a finished task some later
+ *  build lists must not keep a wedged `busy` on `working`. */
+export const TERMINAL_TASK_STATUSES = ['completed', 'failed', 'killed'] as const;
+/** D-5231: is this listed task delegated work that is still running? `type` is
+ *  the CLEANED kind (as the hook records it); an unseen kind or status counts. */
+export function isDelegatedTask(t: { type: string; status: string }): boolean {
+  return !(NON_DELEGATING_TASK_KINDS as readonly string[]).includes(t.type)
+    && !(TERMINAL_TASK_STATUSES as readonly string[]).includes(t.status);
+}
+/** D-5231: the ONE reader of `FleetSession.background` for display. The live
+ *  `fleet` frame is cast, not revived, so a server predating the field omits
+ *  the key at runtime: `undefined` reads as null here, never as a TypeError.
+ *  A count of zero is no background work. */
+export function backgroundWork(s: Partial<Pick<FleetSession, 'background'>>): { count: number; kinds: string[] } | null {
+  const b = s.background;
+  return b != null && b.count > 0 ? b : null;
+}
+/** D-5231: the words `working · N in background` add, and the title naming
+ *  the kinds, for the card and the header alike. */
+export function backgroundWords(b: { count: number; kinds: string[] }): { text: string; title: string } {
+  return {
+    text: `${b.count} in background`,
+    title: b.kinds.length > 0 ? `in background: ${b.kinds.join(', ')}` : 'in background',
+  };
+}
 
 /**
  * One session → one bucket, plus when it entered.
@@ -1478,6 +1652,12 @@ export function sessionBucket(
   }
   if (s.status === 'dead') return { bucket: 'dead', bucketSince: s.statusUpdatedAt };
   if (s.dialogPending || s.hookState === 'waiting') {
+    // `with-coordinator-state` (D-5296): while the session's parent holds the
+    // question, the attention rung stands down and the row reads `working`,
+    // dated from the hold, so it leaves Needs-you. `fleet.ts` clears the field
+    // at `notifyAt` and on every hand-over, and the row returns here.
+    const wc = sessionWithCoordinator(s);
+    if (wc !== null) return { bucket: 'working', bucketSince: wc.since };
     // The hook's timestamp is the honest episode start ONLY when the hook is
     // why we are here; a pane-scraped dialog has no hook write behind it.
     const since = s.hookState === 'waiting' ? hookUpdatedAt ?? s.statusUpdatedAt : s.statusUpdatedAt;
@@ -1506,8 +1686,16 @@ export function sessionBucket(
   // finished", so it is not evidence that a turn ENDED and must not unseat a
   // live `busy` — a resuming session is legitimately working while that write
   // is the newest hook fact on disk.
+  //
+  // `background-aware-working` (D-5231): nor is a Stop that left DELEGATED
+  // work running (`background`, set only on a `Stop`'s `done` on a build whose
+  // live file covers delegation). From 2.1.277 Claude Code keeps the live file
+  // `busy` through delegated work, so after such a Stop a live `busy` is that
+  // work, not a wedge: the session stays `working` until the live file writes
+  // `idle`. D-75's wedge recovery is kept for a Stop with no delegated work.
+  const delegated = s.background !== null && s.background.count > 0;
   const finishedAfterStatus =
-    hookNewer && s.hookState === 'done' && hookEvent !== 'SessionStart';
+    hookNewer && s.hookState === 'done' && hookEvent !== 'SessionStart' && !delegated;
   // NOT the hook's timestamp: the hook rewrites `updatedAt` on every
   // PostToolUse, so a busy session would report a continuously-refreshed
   // "since" — permanently new, and permanently badged. That holds for the
@@ -1529,7 +1717,14 @@ export function sessionBucket(
     // the bucket a virgin session would report if `SessionStart` had never
     // touched `state` at all, which is the honest fact on the ground.
     if (hookEvent === 'SessionStart') return { bucket: 'idle', bucketSince: s.statusUpdatedAt };
-    return { bucket: 'done', bucketSince: hookUpdatedAt ?? s.statusUpdatedAt };
+    // D-5231: after a Stop that left delegated work running, `done` is reached
+    // only once the live file writes `idle` (the rung above held `working`
+    // until then), so it is dated from THAT write when it is the later one —
+    // the badge fires when the work ends, not at the Stop already seen.
+    const since = delegated
+      ? Math.max(hookUpdatedAt ?? 0, s.statusUpdatedAt ?? 0) || null
+      : hookUpdatedAt ?? s.statusUpdatedAt;
+    return { bucket: 'done', bucketSince: since };
   }
   return { bucket: 'idle', bucketSince: s.statusUpdatedAt };
 }
@@ -1825,15 +2020,23 @@ export function isReadyVerdict(v: unknown): v is ReadyVerdict {
  *  `held`      the push is deferred; the parent may answer.
  *  `answering` a principal has taken the row and is pressing a key (D-2171).
  *  `answered`  a digit landed. `answeredBy` says which principal.
- *  `released`  the parent declined, or the window lapsed. The push has fired.
+ *  `released`  the window lapsed. The push has fired, but the row is still
+ *              answerable by either principal until one of them acts (late
+ *              answer wins, D-5289): `takeAskForAnswer` and `heldAskFor` take
+ *              `held` or `released`, under the same `askAt` instance guard.
+ *  `declined`  the parent released the question itself (`POST
+ *              /api/asks/:id/release`): it handed the question over, the push
+ *              fired at once, and the parent's later answer is refused
+ *              `declined` (D-5289). Terminal. An older build reads this token
+ *              as `unknown` through `isAskState`.
  *  `stale`     the dialog went away unanswered — interrupted, cleared, swapped.
  *  `unknown`   a token this build does not know, read off disk after a deploy
  *              rollback. Never accepted at ingress; a writer claiming it is
  *              refused `bad-state`. */
-export type AskState = 'held' | 'answering' | 'answered' | 'released' | 'stale' | 'unknown';
+export type AskState = 'held' | 'answering' | 'answered' | 'released' | 'declined' | 'stale' | 'unknown';
 
 export const ASK_STATE_MAP: Record<AskState, true> = {
-  held: true, answering: true, answered: true, released: true, stale: true, unknown: true,
+  held: true, answering: true, answered: true, released: true, declined: true, stale: true, unknown: true,
 };
 
 export const ASK_STATES: readonly AskState[] = Object.keys(ASK_STATE_MAP) as AskState[];
@@ -1861,9 +2064,12 @@ export function isAskState(v: unknown): v is AskState {
  */
 export const ASK_OPERATOR_PRINCIPAL = 'operator';
 
-/** `answerAsk`'s ten typed refusals, plus the five route-level refusals the
+/** `answerAsk`'s ten typed refusals, plus the seven route-level refusals the
  *  ask pre-emption routes (server/src/coord) emit as their own literals —
- *  `unknown-ask`, `not-held`, `ask-moved`, `not-parent`, `child-unmeasurable`.
+ *  `unknown-ask`, `not-held`, `ask-moved`, `not-parent`, `child-unmeasurable`,
+ *  and D-5289's two: `declined` (the parent released this question itself and
+ *  may not answer it later) and `already-answered` (a principal already
+ *  answered it; late answer wins only until one of them acts).
  *  Both groups are the same refusal family (reasons an ask answer was
  *  refused), so they share this one union rather than splitting into two
  *  (D-2174, the `ReadFailure` precedent of D-1438). Map idiom: a code that
@@ -1884,7 +2090,7 @@ export const ASK_REFUSE_CODE_MAP: Record<AskRefuseCode, true> = {
   'multi-question': true, range: true, multiselect: true, 'duplicate-index': true,
   'no-menu': true, 'menu-mismatch': true,
   'unknown-ask': true, 'not-held': true, 'ask-moved': true, 'not-parent': true,
-  'child-unmeasurable': true,
+  'child-unmeasurable': true, declined: true, 'already-answered': true,
 };
 
 export const ASK_REFUSE_CODES: readonly AskRefuseCode[] =
@@ -1893,7 +2099,8 @@ export const ASK_REFUSE_CODES: readonly AskRefuseCode[] =
 export type AskRefuseCode =
   | 'not-alive' | 'not-waiting' | 'stale-ask' | 'ask-mismatch' | 'multi-question'
   | 'range' | 'multiselect' | 'duplicate-index' | 'no-menu' | 'menu-mismatch'
-  | 'unknown-ask' | 'not-held' | 'ask-moved' | 'not-parent' | 'child-unmeasurable';
+  | 'unknown-ask' | 'not-held' | 'ask-moved' | 'not-parent' | 'child-unmeasurable'
+  | 'declined' | 'already-answered';
 
 export function isAskRefuseCode(v: unknown): v is AskRefuseCode {
   return typeof v === 'string' && (ASK_REFUSE_CODES as readonly string[]).includes(v);
@@ -2793,6 +3000,31 @@ const optSubagents = (o: RawObj, k: string): SubagentEntry[] | null => {
   return (v as unknown[]).map((item, i) => reviveSubagentEntry(item, `${k}[${i}]`));
 };
 
+/** `FleetSession.background` (D-5231) — absent or malformed → null. */
+const reviveBackground = (o: RawObj, k: string): { count: number; kinds: string[] } | null => {
+  const v = o[k];
+  if (v === null || typeof v !== 'object' || Array.isArray(v)) return null;
+  const b = v as Record<string, unknown>;
+  const count = b['count'];
+  const kinds = b['kinds'];
+  if (typeof count !== 'number' || !Number.isInteger(count) || count < 0) return null;
+  if (!Array.isArray(kinds) || !kinds.every((x) => typeof x === 'string')) return null;
+  return { count, kinds: kinds as string[] };
+};
+
+/** D-5237. Absent → null (an older snapshot or server predates the field);
+ *  malformed → null too (`reviveBackground`'s rule: a display line, it gates
+ *  nothing); an unknown cause word → `unknown`. */
+const reviveLastEnd = (o: RawObj, k: string): LastEnd | null => {
+  const v = o[k];
+  if (v === null || typeof v !== 'object' || Array.isArray(v)) return null;
+  const e = v as Record<string, unknown>;
+  const at = e['at'];
+  const cause = e['cause'];
+  if (typeof at !== 'number' || !Number.isSafeInteger(at) || at <= 0 || typeof cause !== 'string') return null;
+  return { at, cause: isRestartCause(cause) ? cause : 'unknown' };
+};
+
 const IDENTITY_FIELDS: readonly string[] = ['uuid', 'wrapper', 'workdir'];
 
 /** `FleetSession.unmeasured` — split from every OTHER array field above on
@@ -2838,6 +3070,18 @@ const reviveChildMark = (o: RawObj, k: string): ChildMark => {
     const runId = s['runId'];
     if (isPositiveDecimalSafeInteger(runId) && CHILD_RUN_ID.test(String(runId))) return { kind: 'child', runId };
   }
+  throw new MalformedSnapshot(k);
+};
+
+/** `FleetSession.role`'s persistence contract (D-5301) — THE ONE READER of the
+ *  key off raw JSON. Absent or null → `null`: a snapshot written before the
+ *  field says nothing about the role. Present → one `SessionRole`, or the WHOLE
+ *  session is rejected (`reviveChildMark`'s stance): a value this build cannot
+ *  name is never laundered into either role. */
+const reviveSessionRole = (o: RawObj, k: string): SessionRole | null => {
+  const v = o[k];
+  if (v === undefined || v === null) return null;
+  if (isSessionRole(v)) return v;
   throw new MalformedSnapshot(k);
 };
 
@@ -3010,6 +3254,21 @@ export function reviveFleetSession(raw: unknown, unnamedSpawnWord: UnnamedSpawnW
       // the full argument.
       ask: reviveAsk(o, 'ask'),
       subagents: optSubagents(o, 'subagents'),
+      // D-5231. Absent → null: an older snapshot predates the field, and null
+      // is the ladder's old answer. Malformed also degrades to null
+      // (`reviveAsk`'s rule): the field is a display chip and one ladder
+      // conjunct, and a cached row is bucketed with no hook stamp anyway.
+      background: reviveBackground(o, 'background'),
+      // D-5296: ALWAYS null, whatever the snapshot carried. A cached row is
+      // old by definition, and a hold it recorded may have lapsed or been
+      // handed over since; null shows Needs-you, the safe direction.
+      withCoordinator: null,
+      // D-5237. Absent → null (an older snapshot predates the field);
+      // malformed → null (`reviveLastEnd`); an unknown cause → `unknown`.
+      lastEnd: reviveLastEnd(o, 'lastEnd'),
+      // D-5242. Absent → null: an older snapshot or server predates the field, and a session it did not know was
+      // asleep reads as the stopped row it showed then.
+      hibernatedAt: optNum(o, 'hibernatedAt'),
       // Absent → null, exactly as `optSubagents` degrades: a snapshot written
       // before this field existed is ignorant of the count, not a witness to
       // its being zero. Present-but-not-a-finite-number throws inside
@@ -3044,6 +3303,7 @@ export function reviveFleetSession(raw: unknown, unnamedSpawnWord: UnnamedSpawnW
       boardProject: optStr(o, 'boardProject'),
       route: reviveRoute(o, 'route'),
       child: reviveChildMark(o, 'child'),
+      role: reviveSessionRole(o, 'role'),
       releasedFrom: reviveReleasedFrom(o, 'releasedFrom'),
     };
 
@@ -3051,10 +3311,17 @@ export function reviveFleetSession(raw: unknown, unnamedSpawnWord: UnnamedSpawnW
     // that wrote it had `hookUpdatedAt` and we do not. An absent one is derived
     // and dated `null`: the ladder's bucket needs nothing this record lacks,
     // its `bucketSince` does.
+    // D-5389 (beside D-5296): a snapshot written while the session's parent
+    // held its question recorded the `working` that hold produced. That
+    // bucket is derived too,
+    // with the field now null, so the revived row shows Needs-you instead of
+    // a stale quiet state.
+    const wcRaw = o['withCoordinator'];
+    const derive = bucketRaw === null || (wcRaw !== undefined && wcRaw !== null);
     return {
       ...revived,
-      bucket: bucketRaw === null ? sessionBucket(revived, null).bucket : (bucketRaw as SessionBucket),
-      bucketSince: bucketRaw === null ? null : optNum(o, 'bucketSince'),
+      bucket: derive ? sessionBucket(revived, null).bucket : (bucketRaw as SessionBucket),
+      bucketSince: derive ? null : optNum(o, 'bucketSince'),
     };
   } catch (err) {
     if (err instanceof MalformedSnapshot) return null;
@@ -3349,6 +3616,14 @@ export interface FleetHealth {
    * `state: 'unknown'`, never as `'ok'` and never as an empty history.
    */
   lifecycle?: LifecycleHealth;
+  /**
+   * The delegation broker's report-only observation health (wave 3, Task 13): the seven-day rolling UTC session-hour window of
+   * spool intervals, the stage gate it decides, the breaker and the pass's verdict counts. Optional for the same absence-permits
+   * reason `roster` and `lifecycle` are: an older server omits it, and a reader must treat an absent block as UNKNOWN, never as
+   * healthy and never as zero. A present block can itself say `unmeasured` (`stageGate`), which is a measurement, not an absence.
+   * Wave 3 adds no fleet frame and no PWA state; nothing renders it yet.
+   */
+  delegation?: DelegationObservationHealth;
 }
 
 /**
@@ -3940,11 +4215,96 @@ export interface SlashCommand {
  *  was ignored" (the 2026-09-09 clip). Additive, optional: an older reader
  *  ignores it, an older writer omits it.
  *  'limit' — the assistant row Claude Code appends on a 429
- *  (`isApiErrorMessage:true, error:"rate_limit"`; D-2365). */
-export type SystemOrigin = 'resume-prompt' | 'no-response' | 'limit';
+ *  (`isApiErrorMessage:true, error:"rate_limit"`; D-2365).
+ *  'idle-compact' — Claude Code's notice after an idle compaction that
+ *  started no turn (D-5371).
+ *  'idle-compact-nudge' — the server's own "continue" prompt, typed once after
+ *  an idle compaction left a fresh open task list (D-5373). A plain user row
+ *  whose whole text is `IDLE_COMPACT_NUDGE_PROMPT`, shown as a pill so the
+ *  operator sees why a turn started. */
+export type SystemOrigin = 'resume-prompt' | 'no-response' | 'limit' | 'idle-compact' | 'idle-compact-nudge';
+/** `stale-task-strip` (D-5372): a task list whose newest file is older than
+ *  this is a plan left open, not running work — the strip says "N open" and
+ *  "Plan · untouched <age>" rather than "N running". Claude Code rewrites a task
+ *  file on every status change, so a live plan is seconds or minutes old; 6 h
+ *  outlasts any one turn measured. */
+export const TASKS_STALE_MS = 6 * 60 * 60 * 1000;
+/** `idle-compact-marker` (D-5371): the notice Claude Code writes after its
+ *  idle ("sleep") compaction — a `type:"system"`, `subtype:"informational"`
+ *  row whose TOP-LEVEL `content` starts with this sentence (Claude Code
+ *  2.1.302, `igs`, appended by the idle host's own compact callback, outside
+ *  any turn), followed by "turn off with "idleCompaction": false in
+ *  settings.json". That compaction runs on a turn that had already ended and
+ *  starts none, so the row is what says the session is waiting for the
+ *  operator rather than stalled (110 of 111 measured post-compaction
+ *  "stalls", 2026-10-17). Deliberately NOT "Compacted after an hour idle"
+ *  (`ags`): Claude Code yields that one inside the query loop when the
+ *  operator returns (compact_on_return), so it lands inside a turn the
+ *  operator just started and stays dropped as before. The parser matches the
+ *  prefix; a reworded notice degrades to today's drop, never to a false pill. */
+export const IDLE_COMPACT_NOTICE_PREFIXES = [
+  'Compacted while idle',
+] as const;
+/** `idle-compact-nudge` (D-5373): the one prompt the server types into a
+ *  session after an idle compaction when its task list is fresh and has open
+ *  items (operator ruling 2026-10-17, "Nudge if work is open"). Typed through
+ *  `sendPrompt` as a plain user row; the transcript parser reads a user row
+ *  whose whole trimmed text is this sentence as the `idle-compact-nudge`
+ *  system pill. The second sentence is the guard for the shape the ruling
+ *  names as the risk: a session that had ended its turn on a question to the
+ *  operator answers in one line and stops. */
+export const IDLE_COMPACT_NUDGE_PROMPT =
+  "Continue with your open tasks. If you were waiting for the operator's answer, say so in one line and stop.";
 /** The sentence Claude Code's default resume prompt is, and every variant —
  *  including ccd's RESUME_PROMPT — begins with. The parser matches the prefix. */
 export const RESUME_PROMPT_PREFIX = 'Continue from where you left off.';
+/** `interrupt-and-restart-causes-recorded` (D-5237, second half): how a
+ *  session's previous process ended, as `ccd` records it in
+ *  `$REG/<id>.lastend` (`<epoch seconds> <cause>`) and in `swap.log`
+ *  (`ended <id>: <cause>`). `oom` is the pane scope's journal naming an OOM
+ *  kill in the 120 s before the end; `tmux-server` the tmux server itself not
+ *  answering; `exited` neither; `unknown` a journal read that failed, and the
+ *  degrade for a word this build does not know. The swap words are written by
+ *  `cmd_swap` once its act-time gates have passed; `swap-auto` is the
+ *  automatic swap whose arm the dispatcher did not name. The value is the
+ *  PWA's words for the cause. ccd spells the same words in bash (it cannot
+ *  import this); `ccd-restart-cause.test.ts` loops over this list against it. */
+export const RESTART_CAUSE_WORDS = {
+  oom: 'out of memory',
+  'tmux-server': 'tmux server gone',
+  exited: 'process exited',
+  'swap-auto-home': 'swapped home',
+  'swap-auto-rescue': 'swapped off a blocked account',
+  'swap-auto': 'swapped automatically',   // D-5348: an automatic swap whose arm is not named
+  'swap-manual': 'swapped by hand',
+  unknown: 'cause unknown',
+} as const;
+export type RestartCause = keyof typeof RESTART_CAUSE_WORDS;
+export const RESTART_CAUSES = Object.keys(RESTART_CAUSE_WORDS) as RestartCause[];
+/** `FleetSession.lastEnd`: when (epoch ms) and why the previous process ended. */
+export interface LastEnd { at: number; cause: RestartCause }
+/** How long the header and the card name a restart (spec §5.6: an hour). */
+export const LAST_END_SHOWN_MS = 3_600_000;
+const isRestartCause = (v: string): v is RestartCause => Object.prototype.hasOwnProperty.call(RESTART_CAUSE_WORDS, v);
+/** `$REG/<id>.lastend`'s ONE parser: `<epoch seconds> <cause>` on one line.
+ *  Null for an absent file and for any line that is not that shape (the row
+ *  still parses); a well-formed line whose cause this build does not know
+ *  degrades to `unknown`, never to null — an end happened. */
+export function parseLastEnd(raw: string | null): LastEnd | null {
+  if (raw === null) return null;
+  const m = /^(\d{1,12}) ([a-z][a-z-]{0,39})$/.exec(raw.trim());
+  if (m === null) return null;
+  const at = Number(m[1]) * 1000;
+  if (!Number.isSafeInteger(at) || at <= 0) return null;
+  return { at, cause: isRestartCause(m[2]!) ? m[2]! as RestartCause : 'unknown' };
+}
+/** The one reader of a LIVE frame's `lastEnd`: null when absent (an older
+ *  server), malformed, or older than `LAST_END_SHOWN_MS`; otherwise the end. */
+export function recentLastEnd(s: Pick<FleetSession, 'lastEnd'>, now: number): LastEnd | null {
+  const e = reviveLastEnd(s as unknown as RawObj, 'lastEnd');
+  if (e === null || now - e.at > LAST_END_SHOWN_MS || now - e.at < -60_000) return null;
+  return e;
+}
 export const NO_RESPONSE_TEXT = 'No response requested.';
 export const SYNTHETIC_MODEL = '<synthetic>';
 /** The `error` Claude Code writes on the assistant row it appends for a 429
@@ -4125,7 +4485,21 @@ export type SessionStreamMsg =
    *  when both are present. */
   | { type: 'ask'; ask: HookAsk; key: string | null }   // key: answerable via POST /api/sessions/:id/ask; null for approval envelopes
   | { type: 'ask_cleared' }                       // the hook's ask went null, stale, or its hookstate file is gone
-  | { type: 'tasks'; tasks: TaskItem[] }          // the session's task list changed (or first read)
+  | { type: 'tasks'; tasks: TaskItem[];          // the session's task list changed (or first read)
+      /** D-5372: the newest task file `mtimeMs`, epoch ms. OPTIONAL: absent when
+       *  the list has no open item, no stat answered, or the server is older;
+       *  absence renders the strip as it always did. */
+      touchedAt?: number }
+  /** D-5560: the workflows Claude Code is running in this session, plus any
+   *  that finished in the last `WORKFLOW_EVICT_MS` (`shared/workflows.ts`).
+   *  Sent on connect whenever the session has a workflow directory (an empty
+   *  list included, so a reconnecting client drops rows that finished while it
+   *  was away), then on change only; never for a session that has run none.
+   *  `unreadable: true` — this box could not list the session's workflow
+   *  directory this pass: `workflows` is then the last rows it DID read (or
+   *  none), and the panel says so rather than reading an empty list as "nothing
+   *  running". Absent from an older server: no frame, no panel. */
+  | { type: 'workflows'; workflows: WorkflowView[]; unreadable?: true }
   /** This session's own OUTSTANDING mail — `state` restricted server-side to
    *  `queued` or `delivered`, never `acked`/`rejected` (`sessionws.ts`'s
    *  `checkMail`). Read directly off `CoordStore.outstandingMailFor` in-process,
@@ -4165,6 +4539,18 @@ export type SessionClientMsg = { type: 'visible'; visible: boolean };
  */
 export const PRESENCE_REFRESH_MS = 15_000;
 export const PRESENCE_TTL_MS = 45_000;
+/**
+ * The OPEN claim's lifetime (D-5242, spec §5.11's presence contract): how long the server believes a
+ * `/ws/session/:id` connection is still open after its last frame, visible or hidden. Every frame re-stamps it, and
+ * the client's heartbeat now beats whatever the visibility (`visible:false` while hidden, which `isVisible` reads
+ * exactly as before), so a hidden but running tab keeps its session from being put to sleep.
+ *
+ * Why it is so much longer than `PRESENCE_TTL_MS`: a browser throttles a hidden tab's timers, to about one wake-up a
+ * minute at the most, so the hidden beat arrives a minute apart rather than every `PRESENCE_REFRESH_MS`, and the claim
+ * must outlive several of those missed beats. A page the browser froze sends nothing, and its claim lapses after this
+ * long — the case the open screen's wake covers when the operator comes back.
+ */
+export const PRESENCE_OPEN_TTL_MS = 10 * 60_000;
 
 /** Wire protocol generation of the PWA↔server pair. Bump on a breaking
  *  wire change. FLEET_PROTO_MIN is the kill-switch: raise it above an
@@ -4200,8 +4586,10 @@ export interface NotifyEvent {
    *  attribution row would land in `run_events` and be seen by nobody (D-1163). Additive: an
    *  older client degrades it to `unknown` through `reviveNotifyEvent`, which is the
    *  degradation this union was given `unknown` for. `update` is a move the update dispatcher
-   *  leased (wave 8 item A) — about no session and no run, recorded, never pushed; `queue` is the landing lane's dequeue notice. */
-  kind: 'ask' | 'done' | 'merged' | 'mail' | 'run' | 'coord' | 'update' | 'queue' | 'unknown';
+   *  leased (wave 8 item A) — about no session and no run, recorded, never pushed; `queue` is the landing lane's dequeue notice; `interrupt` is an Escape or Ctrl-C the console sent, with its source and outcome (D-5237, `INTERRUPT_SOURCES`), recorded, never pushed.
+   *  `nudge` is the idle-compaction nudge (D-5373): the server typed a "continue" prompt into the session, recorded,
+   *  never pushed; its body names the compaction, and the record is the lane's durable "already nudged" read. */
+  kind: 'ask' | 'done' | 'merged' | 'mail' | 'run' | 'coord' | 'update' | 'queue' | 'interrupt' | 'nudge' | 'unknown';
   sessionId: string; title: string; body: string;
   /**
    * WHICH RUN this notification is about, or `null` when it is about none.
@@ -4240,7 +4628,7 @@ export interface CatchUp { epoch: string; seq: number; resync: boolean; events: 
 /** The recognised `NotifyEvent.kind` tokens. Kept private; the door in is
  *  `isNotifyKind` below, the same split `PR_PHASES`/`isPrPhase` use and for
  *  the identical reason (that function's own docstring has the argument). */
-const NOTIFY_KINDS: readonly NotifyEvent['kind'][] = ['ask', 'done', 'merged', 'mail', 'run', 'coord', 'update', 'queue', 'unknown'];
+const NOTIFY_KINDS: readonly NotifyEvent['kind'][] = ['ask', 'done', 'merged', 'mail', 'run', 'coord', 'update', 'queue', 'interrupt', 'nudge', 'unknown'];
 
 /**
  * Use THIS, never `NOTIFY_KINDS.includes(x as NotifyEvent['kind'])` — the
@@ -4721,6 +5109,12 @@ export const shapeProgramSlug = (raw: string): ProgramSlugShape => {
   }
   return { ok: true, slug };
 };
+
+/** The workspace slug grammar `ccd`'s `_ws_slug_valid` enforces (`ccd/ccd`), restated
+ *  for the one server ingress that forwards a caller's slug to `ws-add`: the
+ *  dispatch body's optional `slug`. Refused at that ingress so a bad name never
+ *  reaches the fleet; `workspace-slug-grammar.test.ts` holds the two spellings equal. */
+export const WORKSPACE_SLUG_RE = /^[a-z0-9][a-z0-9-]{1,30}$/;
 
 /** The path a program's ledger is expected to live at. It NAMES the path the
  *  operator is expected to have committed and asserts nothing about it: the
@@ -5647,7 +6041,7 @@ export type RunRefuseCode =
   | 'prhistory-unreadable' | 'bad-transition' | 'unknown-item' | 'item-terminal'
   | 'project-mismatch' | 'home-mismatch' | 'hold-oversize' | 'hold-invalid' | 'review-in-flight'
   | 'claimant-is-a-worker' | 'workspace-spent' | 'spent-unmeasured'
-  | 'status-unmeasurable' | 'worker-starting';
+  | 'status-unmeasurable' | 'worker-starting' | 'attribution-required' | 'not-a-child';   // the last two: D-5298
 
 const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'claimed-by-another': true, paused: true, 'mail-disabled': true, 'cap-concurrency': true,
@@ -5657,7 +6051,7 @@ const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'project-mismatch': true, 'home-mismatch': true, 'hold-oversize': true, 'hold-invalid': true,
   'review-in-flight': true, 'claimant-is-a-worker': true,
   'workspace-spent': true, 'spent-unmeasured': true,
-  'status-unmeasurable': true, 'worker-starting': true,
+  'status-unmeasurable': true, 'worker-starting': true, 'attribution-required': true, 'not-a-child': true,
 };
 export const RUN_REFUSE_CODES: readonly RunRefuseCode[] = Object.keys(RUN_REFUSE_CODE_MAP) as RunRefuseCode[];
 
@@ -5687,7 +6081,7 @@ export const RUN_REFUSE_CODES: readonly RunRefuseCode[] = Object.keys(RUN_REFUSE
 export type MailGate =
   | 'same-sweep' | 'in-flight' | 'cooldown'
   | 'registry-absent' | 'registry-unmeasurable'
-  | 'tmux-gone' | 'session-dead' | 'tmux-unknown'
+  | 'tmux-gone' | 'session-dead' | 'tmux-unknown' | 'hibernated'   // D-5242: asleep, never parked — the mail lane wakes it
   | 'pending-ask' | 'no-pane' | 'no-config-dir'
   | 'not-idle' | 'not-quiet' | 'turn-mark-unreadable';
 
@@ -5697,7 +6091,7 @@ export type MailGate =
 const MAIL_GATE_MAP: Record<MailGate, true> = {
   'same-sweep': true, 'in-flight': true, cooldown: true,
   'registry-absent': true, 'registry-unmeasurable': true,
-  'tmux-gone': true, 'session-dead': true, 'tmux-unknown': true,
+  'tmux-gone': true, 'session-dead': true, 'tmux-unknown': true, hibernated: true,
   'pending-ask': true, 'no-pane': true, 'no-config-dir': true,
   'not-idle': true, 'not-quiet': true, 'turn-mark-unreadable': true,
 };
@@ -7263,7 +7657,7 @@ export type LifecycleAct =
                     // carry who and why, `detail` carries "<field>: <from> ->
                     // <to>" (no new dec key — the dec vocabulary is pinned at
                     // four). Additive on the wire, as every act is.
-  | 'start' | 'ensure' | 'swap' | 'enable' | 'stop' | 'forget'
+  | 'start' | 'ensure' | 'swap' | 'enable' | 'stop' | 'forget' | 'hibernate'   // `hibernate` (D-5242): `ccd hibernate`, a DELIBERATE stop of a long-idle session journalled before its own `unsupervise` row (surface `none`, which alone reads as a crash); its own act so the journal never needs a filter to tell a sleep from a stop; `ensure` wakes it
   | 'unarchive'     // a return verb's gate (wave 3b) or `_spawn_start` cleared
                     // an archive stamp because a pane was asked for. DISTINCT
                     // FROM `restore`: that is the deliberate way back; this is
@@ -7279,7 +7673,7 @@ const LIFECYCLE_ACT_MAP: Record<LifecycleAct, true> = {
   create: true, claim: true, purge: true, supervise: true, unsupervise: true,
   destroy: true, rename: true, hold: true, release: true, archive: true, restore: true,
   'attic-drop': true, reap: true, reclaim: true, expire: true, collect: true, rehome: true, gc: true, spawn: true, route: true, start: true, ensure: true,
-  swap: true, enable: true, stop: true, forget: true, unarchive: true,
+  swap: true, enable: true, stop: true, forget: true, hibernate: true, unarchive: true,
   unknown: true,
 };
 export const LIFECYCLE_ACTS: readonly LifecycleAct[] =
@@ -7962,7 +8356,7 @@ export type LcRefusalToken =
   | 'lock-unopenable'          // the reap lock could not be opened
   | 'is-a-workspace'           // forget, aimed at a workspace: use the audited path
   | 'session-live'             // forget, on a running session
-  | 'session-verdict-unknown'  // tmux did not answer: fail-shut, nothing removed
+  | 'session-verdict-unknown' | 'hibernated'  // tmux did not answer: fail-shut, nothing removed; `hibernated` (D-5242): forget on a sleeping row, wake or stop it first
   | 'spawn-failed'             // _lc_fail: the undo landed, the session did not come back
   | 'purge-refused'            // D-2605: the row's compaction mutex was unavailable, so the registry row stands
   | 'purge-incomplete'         // D-2605: the purge RAN — the row is gone, the fact is journaled — and something beside it would not unlink
@@ -8119,6 +8513,9 @@ export const LC_REFUSAL_WORD: Record<LcRefusalToken, string> = {
     'A workspace with this id, or what one left behind, still stands in the registry, so ccrc treats the temporary directory there as that workspace’s and will not clean it up. Nothing was removed; ccrc looks again once the id is free.',
   'changed-recently':
     'Something in this temporary directory changed recently, so ccrc leaves it alone for now. Nothing was removed; ccrc looks again once it has stayed unchanged long enough.',
+  // D-5242: a hibernated row is asleep, not dead — `ccd ensure` (or mail, a dispatch, a Restart) wakes it (D-5423).
+  'hibernated':
+    'This session is asleep, not gone: it wakes when it is opened, mailed or dispatched. Wake it (ccd ensure) or stop it (ccd stop) first. Nothing was removed.',
 };
 
 /** Derived from the map — the `PR_REASON_MAP` idiom, so a member added to the
@@ -8343,6 +8740,9 @@ export interface PeerSummary {
   readonly archivedAt: number | null;
   /** Stamped archived AND measured live this pass. */
   readonly archivedStale: boolean;
+  /** D-5242: `FleetSession.hibernatedAt`, epoch MS, or null when the peer is not asleep. ADDITIVE: an older server sends
+   *  none. A sleeping peer reads `deliverable: yes` — the mail lane wakes it. */
+  readonly hibernatedAt: number | null;
   /** The `.hold` text verbatim, or null — `FleetSession.held`'s contract. */
   readonly held: string | null;
   readonly intent: string | null;
@@ -8946,6 +9346,19 @@ export function isNodeOs(v: unknown): v is NodeOs {
  *  refused. `deploy/release-main.sh`'s `SHAPE` is the bash twin, held equal
  *  by `update-states.test.ts`. */
 export const RELEASE_TAG = /^v[0-9]+\.[0-9]+\.[0-9]+$/;
+
+/**
+ * The first release tag that carries coordinator-first Task 11a (`ccrc-api`'s
+ * `runs open` sends `claimedByUuid`, D-5298) — ONE home. `POST /api/runs`
+ * requires attribution once the fleet's build stamp is at or past it, or
+ * agrees with this server's own (`fleetCarriesRunsAttribution`,
+ * `server/src/fleetstate.ts`). Measured, not chosen: the oldest tag
+ * `git tag --contains` names for 11a's merge commit (#508). A LABEL read off
+ * the stamp's `version` (the stamp's own docstring: never the truth about the
+ * code), which is why agreement is the other reading and a tagless dev build
+ * relies on it alone.
+ */
+export const RUNS_ATTRIBUTION_SINCE = 'v0.0.239';
 /** The ONE tag-shape guard: the routes, the resolver, the inventory's
  *  validators and the agent all call this, never the regex. */
 export function isReleaseTag(v: unknown): v is string {
@@ -9047,8 +9460,19 @@ export const FLEET_SCOPE = '*';
 /** The poller's own state (§7). `{lastOkAt: null, lastError: null}` = never
  *  checked since this process started — never "up to date". */
 export interface CatalogueState { lastOkAt: number | null; lastError: { at: number; reason: string } | null }
-/** `GET /api/updates` (§12). */
-export interface UpdatesView { catalogue: CatalogueState; releases: ReleaseWire[]; nodes: NodeWire[]; intent: UpdateIntentWire[]; boxToken?: BoxTokenView }
+/** The GitHub owner/repo the catalogue lists releases from (D-5549) — the pair
+ *  the server's release source READ (`server/src/config.ts`), sent so the PWA
+ *  can link a release note's `#NNN` to that repo's pull request from the
+ *  number alone. No TS root spells the org (`single-definition.test.ts`), so
+ *  this is the only way a client learns it. */
+export interface ReleaseSourceWire { owner: string; repo: string }
+/** `GET /api/updates` (§12). `source` is ADDITIVE (D-5549): absent from an
+ *  older server and from one with no usable release source, and the PWA then
+ *  shows a `#NNN` as plain text — never a guessed link. */
+export interface UpdatesView {
+  catalogue: CatalogueState; releases: ReleaseWire[]; nodes: NodeWire[]; intent: UpdateIntentWire[]; boxToken?: BoxTokenView;
+  source?: ReleaseSourceWire;
+}
 
 /** Every refusal word an update route answers with (§12). */
 export type UpdateRouteError =
@@ -9481,9 +9905,15 @@ export function archiveInterrupts(s: Pick<FleetSession, 'status' | 'bucket'>): b
  * workspace, no pane, and a stop stamp). A main checkout started again leaves the fold, because `cmd_start` and
  * `cmd_ensure` remove the stop stamp on the attempt; a stopped workspace that is not archived stays at the top level,
  * where Archive is offered again. `stoppedBy` is read `?? null`: the live frame is cast, not revived.
+ *
+ * A HIBERNATED main checkout (D-5242) is not in the fold: `ccd hibernate` leaves exactly the stopped-main-checkout
+ * shape (a stop stamp, no pane), but the row is asleep, not put away — it stays at the top level, where opening it
+ * wakes it. Only the second clause reads `hibernatedAt` (`?? null`, the same cast): an archived workspace stays in the
+ * fold whatever a stale `.hibernated` says.
  */
-export function inArchivedFold(s: Pick<FleetSession, 'bucket' | 'workspace' | 'status' | 'stoppedBy'>): boolean {
-  return s.bucket === 'archived' || (s.workspace === null && s.status === 'dead' && (s.stoppedBy ?? null) !== null);
+export function inArchivedFold(s: Pick<FleetSession, 'bucket' | 'workspace' | 'status' | 'stoppedBy' | 'hibernatedAt'>): boolean {
+  return s.bucket === 'archived'
+    || (s.workspace === null && s.status === 'dead' && (s.stoppedBy ?? null) !== null && (s.hibernatedAt ?? null) === null);
 }
 
 /** When a row entered the Archived fold, the fold's sort key (newest first): `bucketSince` for an archived workspace
@@ -10009,6 +10439,19 @@ export interface CollectLaneConfirmRequired {
   };
 }
 
+/** The 200 answer of the three answer routes (`POST /api/sessions/:id/dialog`, `/dialog/text`, `/dialog/multi`):
+ *  the screen the pane settled on after the answer's last key (decision `ask-answer-returns-next-screen`).
+ *  - `next` a Dialog: the pane moved to that menu (the next question, or the review screen an ask ends on);
+ *  - `next: null`: no menu is on screen any more (the ask was submitted or declined);
+ *  - `next` absent: the pane had not settled on another screen within the route's budget, or the route predates this
+ *    field. The caller then waits for the session stream's next `dialog` frame, as it always did.
+ *  Additive: a client that ignores it keeps the old behaviour. The answering sheet applies it at once, so the next
+ *  screen never waits on the stream's 2 s poll, or on a poll that captured nothing (the 2026-10-16 report). */
+export interface DialogAnswered {
+  readonly ok: true;
+  readonly next?: Dialog | null;
+}
+
 /** Every refusal `POST /api/sessions/:id/dialog` answers with (`answerDialog`, `server/src/inject/send.ts`), each a 409.
  *  Spelled once, as a total table's keys, and the list derived: a code that leaves the union and stays here, or joins it
  *  without a row here, is a compile error.
@@ -10109,3 +10552,1152 @@ const DIALOG_MULTI_REFUSE_CODE_MAP: Readonly<Record<DialogMultiRefuseCode, true>
 };
 export const DIALOG_MULTI_REFUSE_CODES: readonly DialogMultiRefuseCode[] =
   Object.keys(DIALOG_MULTI_REFUSE_CODE_MAP) as DialogMultiRefuseCode[];
+
+/** The most tabs `POST /api/sessions/:id/dialog/tab` will count to (decision `ask-dialog-tab-route`). Claude Code's
+ *  AskUserQuestion takes at most four questions; this is slack for a build that takes more, not a measured limit. */
+export const DIALOG_TAB_MAX = 16;
+
+/** Where `POST /api/sessions/:id/dialog/tab` moves the pane: one tab back or on (`prev`/`next`, the arrow keys), to the
+ *  review screen (`submit`, the `✔ Submit` tab), or to question tab `k` (1-based, a tab-strip chip). */
+export type DialogTabTarget = 'prev' | 'next' | 'submit' | number;
+
+/** The body of `POST /api/sessions/:id/dialog/tab`. `from` is the 1-based tab the caller believes is up, sent with a
+ *  numbered target: the pane marks its active tab by colour alone, so a plain capture cannot say. The server ignores it
+ *  on the review screen, which it can tell, and every step it takes is proved by a new screen either way. */
+export interface DialogTabRequest {
+  readonly dialogId: string;
+  readonly to: DialogTabTarget;
+  readonly from?: number;
+}
+
+const isTabNumber = (n: unknown): n is number =>
+  typeof n === 'number' && Number.isInteger(n) && n >= 1 && n <= DIALOG_TAB_MAX;
+
+/** Is `body` a `DialogTabRequest` the route will act on? A numbered target needs `from`, unless the pane is on the
+ *  review (the route checks that once it has captured). The route answers 400 `bad-request` otherwise. */
+export function isDialogTab(body: unknown): body is DialogTabRequest {
+  if (typeof body !== 'object' || body === null) return false;
+  const { dialogId, to, from } = body as Record<string, unknown>;
+  if (typeof dialogId !== 'string' || dialogId === '') return false;
+  if (from !== undefined && !isTabNumber(from)) return false;
+  return to === 'prev' || to === 'next' || to === 'submit' || isTabNumber(to);
+}
+
+/** Every refusal `POST /api/sessions/:id/dialog/tab` answers with (`moveDialogTab`, `server/src/inject/send.ts`), each a
+ *  409 except `bad-request` (400). No refusal ever pressed Enter: a tab move sends arrows only.
+ *  - `bad-request`: `isDialogTab` refuses the body, or a numbered target came with no `from` on a question screen, or
+ *    names a tab the row does not have. Nothing was pressed.
+ *  - `not-alive`: the pane could not be captured.
+ *  - `stale-dialog`: no menu is on screen, or not the one the caller was shown. Nothing was pressed.
+ *  - `no-tabs`: the screen paints no tab row (`parseAskTabs`): a one-question single-select ask, or no ask at all.
+ *  - `unparsed-dialog`: the screen did not parse and is no multiSelect question either, so nothing proves where the
+ *    cursor is. Nothing was pressed.
+ *  - `walk-failed`: the cursor sat on the free-text row or below it, where Claude Code swallows ←/→ (measured on 2.1.296
+ *    and 2.1.302), and a walk Up did not land it on row 1. No arrow across tabs was pressed.
+ *  - `no-move`: an arrow was pressed and no capture showed another screen within the budget: an edge (← on the first
+ *    question, measured as a no-op), a pane that ignored it, or two tabs that read exactly alike.
+ *  - `menu-gone`: a capture after an arrow showed no menu at all. */
+export type DialogTabRefuseCode =
+  | 'bad-request' | 'not-alive' | 'stale-dialog' | 'no-tabs' | 'unparsed-dialog' | 'walk-failed' | 'no-move'
+  | 'menu-gone';
+const DIALOG_TAB_REFUSE_CODE_MAP: Readonly<Record<DialogTabRefuseCode, true>> = {
+  'bad-request': true, 'not-alive': true, 'stale-dialog': true, 'no-tabs': true, 'unparsed-dialog': true,
+  'walk-failed': true, 'no-move': true, 'menu-gone': true,
+};
+export const DIALOG_TAB_REFUSE_CODES: readonly DialogTabRefuseCode[] =
+  Object.keys(DIALOG_TAB_REFUSE_CODE_MAP) as DialogTabRefuseCode[];
+
+/** The 200 answer of `POST /api/sessions/:id/dialog/tab`: the screen the pane settled on, always a menu. */
+export interface DialogTabMoved {
+  readonly ok: true;
+  readonly next: Dialog;
+}
+
+/** `POST /api/sessions/:id/interrupt`'s refusal codes, each a `409` with zero keys pressed (`interrupt`,
+ *  `server/src/inject/send.ts`):
+ *  - `not-alive`: no pane to press a key in.
+ *  - `not-busy`: no turn measured — an idle live word, or one that could not be read (D-115's asymmetry: an unread
+ *    word withholds the key).
+ *  - `background-only` (D-5236): the main loop is idle over background work Escape would not stop — the live word
+ *    `busy` after a main Stop that left delegated work running (the body carries its `count` and `kinds`), or the
+ *    live word `shell` (`count: null`, no kinds). Never with a pane menu pending. */
+export type InterruptRefusal = 'not-alive' | 'not-busy' | 'background-only';
+const INTERRUPT_REFUSAL_MAP: Readonly<Record<InterruptRefusal, true>> = {
+  'not-alive': true, 'not-busy': true, 'background-only': true,
+};
+export const INTERRUPT_REFUSALS: readonly InterruptRefusal[] = Object.keys(INTERRUPT_REFUSAL_MAP) as InterruptRefusal[];
+/** The interrupt route's refusal body. */
+export type InterruptRefusalBody =
+  | { ok: false; error: 'not-alive' | 'not-busy' }
+  | { ok: false; error: 'background-only'; count: number | null; kinds: string[] };
+/** D-5236: the ONE reader of a `background-only` refusal body, for the PWA. Anything else — another code, an older
+ *  server's body, a malformed count or kinds — is null, and the caller keeps its generic 409 words. */
+export function backgroundOnlyRefusal(body: unknown): { count: number | null; kinds: string[] } | null {
+  if (typeof body !== 'object' || body === null) return null;
+  const b = body as Record<string, unknown>;
+  if (b['error'] !== 'background-only') return null;
+  const count = b['count'];
+  const kinds = b['kinds'];
+  if (count !== null && !(typeof count === 'number' && Number.isInteger(count) && count > 0)) return null;
+  if (!Array.isArray(kinds) || !kinds.every((k) => typeof k === 'string')) return null;
+  return { count, kinds: kinds as string[] };
+}
+
+// ── The server's capability words (D-5232's mechanism; plan 2026-10-16, Task 9b; spec §6.1) ─────────────────────
+// APPENDED at the very end, because README and the specs cite this file by line.
+//
+// A fleet-side change that alters what an EXISTING hookstate field means is safe only behind the server half that
+// reads the new meaning (D-5232's carry, D-5239's compaction skip). No rollout form holds that order for every mover
+// (the `auto` dispatcher and the one-tap move fleet nodes first, `deploy.sh` and a hand-run `ccrc update` follow no
+// order, a server can be rolled back or restore itself after a failed health gate). So the server ADVERTISES what it
+// reads, as words in `GET /health`'s additive `caps`; the fleet box records them in `~/.ccrc/<SERVER_CAPS_FILE>`
+// (written every minute by `ccd/ccd-update-sync` on a `fleet` node, by the server process itself on a `server` or
+// `both` node, `server/src/update/serverCaps.ts`); and the hook engages a gated arm only while that file is whole,
+// current within `SERVER_CAPS_LEASE_S` by its own clock and lists the arm's word. Absent, stale, torn or unlisted
+// reads as "not advertised", and the arm writes exactly what it writes today.
+//
+// A WORD IS ADDED BY THE CHANGE THAT BUILDS WHAT IT NAMES (or, for what was built before this list existed, by the
+// change that creates the list), cut after everything the word promises, so a server cannot advertise a word without
+// all of it. A word is never reused for a different promise: a changed promise is a new word (`-v2`).
+//
+// The bash spellings are documented second copies, held equal by tests that iterate over these values: the word
+// grammar and the file's name in `ccd/ccd-update-sync` (`server-caps.test.ts`, `ccd-update-sync.test.ts`), and,
+// from Tasks 2 and 10, the file's name, the lease and the grammar in `ccd/session-hook.sh`.
+
+/** One capability word the server advertises. Spelled once, as the keys of `SERVER_CAP_MAP`. */
+export type ServerCap = 'dispatch-live-gate-v1' | 'hook-main-state-v1';
+
+/** Every word, with what it promises. The value is `true`; the promise is the comment, which a word's reader may
+ *  rely on and nothing weaker. `PR_REASON_MAP`'s idiom: a word added to `ServerCap` and not here is TS2741. */
+const SERVER_CAP_MAP: Readonly<Record<ServerCap, true>> = {
+  /** D-5238 (Task 9): the dispatch resume arm types `/clear` only when the fail-closed turn verdict
+   *  (`turnVerdictFor`, `server/src/turnverdict.ts`) reads `idle`, at the gate and again immediately before the act;
+   *  `busy` refuses `worker-busy`, `unmeasured` refuses `status-unmeasurable` (or `worker-starting` after an `ensure`
+   *  that started the pane). So a hook `done` standing over a busy pane (D-5239's compaction skip) can never be read
+   *  by this server as a session safe to `/clear`. Added by Task 9b (the change that creates this list), cut after
+   *  Task 9 merged; `dispatch-live-gate.test.ts` pins the word beside the gate it names. */
+  'dispatch-live-gate-v1': true,
+  /** D-5232 (Task 2): this server reads a hook `done` that stands through delegated work, which is what the fleet's
+   *  hook writes once it sees this word (an agent event keeps the main state and writes `aliveAt`). It promises three
+   *  readers together, on this server: Task 1's `!delegated` rung (D-5231: a `done` over delegated background work
+   *  shows `working · N in background`, never idle), Task 9's live dispatch gate (D-5238: such a `done` over a busy
+   *  pane is never `/clear`ed), and Task 2's stall clocks (`stallHookActivityAt`, `server/src/coord/stall.ts`: the
+   *  frozen arm and the `delegates` hold read `aliveAt`, so subagent activity still counts once agent events stop
+   *  moving `updatedAt`). The promise holds because the change adding this word is cut after Tasks 1 and 9 merged
+   *  (it edits `bucket.test.ts` on Task 1's `background` and Task 9's `dispatch-live-gate.test.ts`) and carries the
+   *  stall clocks itself; `stall-verdict.test.ts` pins them beside the word. */
+  'hook-main-state-v1': true,
+};
+
+/** The words this server advertises, in `GET /health`'s `caps`, and in the file a `server` or `both` node writes. */
+export const SERVER_CAPS: readonly ServerCap[] = Object.keys(SERVER_CAP_MAP) as ServerCap[];
+
+/** The file's name, under `~/.ccrc` (the node's ccrc directory). */
+export const SERVER_CAPS_FILE = 'server-caps';
+
+/** How old the file's `at` may be, in seconds by the READER's clock, before it reads as not advertised: three
+ *  periods of the one-minute writers, so one missed write never turns an arm off. A server rolled back below a word
+ *  turns its arm off within this lease on a `server` or `both` node (an older server never rewrites the file). */
+export const SERVER_CAPS_LEASE_S = 180;
+
+/** One word's grammar. The file is three `\n`-terminated lines: `at <1–11 digits>` (unix seconds, the writer's
+ *  clock), `caps` followed by zero or more words separated by single spaces, `end`. */
+const SERVER_CAP_WORD_RE = /^[a-z0-9-]{1,64}$/;
+const SERVER_CAPS_AT_RE = /^at ([0-9]{1,11})$/;
+const SERVER_CAPS_CAPS_RE = /^caps((?: [a-z0-9-]{1,64})*)$/;
+
+/** Is `w` a word the file's grammar admits? */
+export function isServerCapWord(w: string): boolean {
+  return SERVER_CAP_WORD_RE.test(w);
+}
+
+/** The file's three lines. Pure. Throws `RangeError` on a word the grammar refuses or an `atS` that is not a whole
+ *  number of 1–11 digits: a document the reader would refuse is never rendered. */
+export function renderServerCaps(words: readonly string[], atS: number): string {
+  if (!Number.isSafeInteger(atS) || atS < 0 || String(atS).length > 11) {
+    throw new RangeError(`server-caps: at ${String(atS)} is not unix seconds of 1 to 11 digits`);
+  }
+  for (const w of words) {
+    if (!isServerCapWord(w)) throw new RangeError(`server-caps: ${JSON.stringify(w)} is not a capability word`);
+  }
+  return `at ${atS}\ncaps${words.map((w) => ` ${w}`).join('')}\nend\n`;
+}
+
+/** `parseServerCaps`'s answer. Each refusal is its own reason, never folded into another:
+ *  - `torn`: fewer than three whole lines, every whole line on its grammar (a write cut short, `end` missing);
+ *  - `malformed`: a whole line off its grammar (a bad word, a 12-digit `at`), or anything after `end`;
+ *  - `stale`: `at` more than `SERVER_CAPS_LEASE_S` before `nowS`;
+ *  - `future`: `at` after `nowS`. */
+export type ServerCapsParse =
+  | { ok: true; at: number; words: string[] }
+  | { ok: false; why: 'torn' | 'malformed' | 'stale' | 'future' };
+
+/** The reader of the file's grammar, by `nowS` (unix seconds, the reader's own clock). Pure. */
+export function parseServerCaps(text: string, nowS: number): ServerCapsParse {
+  const parts = text.split('\n');
+  const whole = parts.slice(0, -1);          // every line that ended in `\n`
+  const rest = parts[parts.length - 1]!;     // what follows the last `\n` ('' in a whole document)
+  if (whole.length > 3 || (whole.length === 3 && rest !== '')) return { ok: false, why: 'malformed' };
+  const grammar = [SERVER_CAPS_AT_RE, SERVER_CAPS_CAPS_RE, /^end$/];
+  for (let i = 0; i < whole.length; i++) {
+    if (!grammar[i]!.test(whole[i]!)) return { ok: false, why: 'malformed' };
+  }
+  if (whole.length < 3) return { ok: false, why: 'torn' };
+  const at = Number(SERVER_CAPS_AT_RE.exec(whole[0]!)![1]);
+  const words = SERVER_CAPS_CAPS_RE.exec(whole[1]!)![1]!.split(' ').filter((w) => w !== '');
+  if (at > nowS) return { ok: false, why: 'future' };
+  if (nowS - at > SERVER_CAPS_LEASE_S) return { ok: false, why: 'stale' };
+  return { ok: true, at, words };
+}
+
+/** Why an ask row was MINTED `released` rather than held (D-5290,
+ *  coordinator-first routing spec §5.2) — the row's `releaseReason`, `null`
+ *  on every row the hold minted. Rides `GET /api/asks` as an additive field.
+ *
+ *  D-5530 (cross-project-claimant-holds-asks, the operator's ruling of
+ *  2026-10-18): an ask is held for the child's run's recorded claimant
+ *  wherever that claimant sits, so no reason compares projects. Every reason
+ *  below is a fail-closed release to the operator:
+ *
+ *  `parent-not-live`          the parent has no registry row, is archived or
+ *                             stopped, or the dead-coordinator predicate
+ *                             measures it dead.
+ *  `parent-unmeasured`        the parent could not be measured (the claimant
+ *                             ladder answered `unmeasurable`): doubt, never a
+ *                             hold.
+ *  `run-unclaimed`            the child's run records no claimant (a
+ *                             reconstructed programme's), so nobody is held for.
+ *  `run-other-programme`      the run the child's mark names is claimed by
+ *                             someone other than the claimant of the newest
+ *                             open run naming the child: the child belongs to
+ *                             another programme's coordinator.
+ *  `run-unattributed`         D-5531: the run the child's mark names records
+ *                             a claimant nobody ATTRIBUTED — journaled
+ *                             `unattributed` (opened with no `claimedByUuid`
+ *                             before the fleet carried the client), or with no
+ *                             `coordProject` stamp (opened before the
+ *                             attributed binding). A recorded claimedBy alone
+ *                             is not a parent.
+ *  `parent-project-mismatch`  READ ONLY since D-5530: an older build wrote it
+ *                             when the claimant was a session of another
+ *                             project. Never written again; a row carrying it
+ *                             stays refused to the parent and unlisted.
+ *  `unknown`                  a token this build does not know, read off disk;
+ *                             never written. */
+export type AskReleaseReason =
+  | 'parent-not-live' | 'parent-unmeasured' | 'run-unclaimed' | 'run-other-programme'
+  | 'run-unattributed' | 'parent-project-mismatch' | 'unknown';
+
+/** The reasons a mint may WRITE (D-5530): every `AskReleaseReason` but the
+ *  read-only legacy word and the reader's degrade. */
+export type AskMintReleaseReason = Exclude<AskReleaseReason, 'parent-project-mismatch' | 'unknown'>;
+
+export const ASK_RELEASE_REASON_MAP: Record<AskReleaseReason, true> = {
+  'parent-not-live': true, 'parent-unmeasured': true, 'run-unclaimed': true, 'run-other-programme': true,
+  'run-unattributed': true, 'parent-project-mismatch': true, unknown: true,
+};
+
+export function isAskReleaseReason(v: unknown): v is AskReleaseReason {
+  return typeof v === 'string' && (Object.keys(ASK_RELEASE_REASON_MAP) as string[]).includes(v);
+}
+
+// ── Interrupt sources (D-5237's first half; plan 2026-10-16, Task 7; spec §5.5) ────────────────────────────────────
+// APPENDED at the very end, for the reason the block above gives (README and the specs cite this file by line).
+//
+// Every Escape (or Ctrl-C) the console sends is recorded as a `NotifyEvent` of kind `interrupt`, recorded and never
+// pushed, whose body is `source=<InterruptSource> outcome=<InterruptOutcome>` (`interruptEventBody`, the one writer;
+// `parseInterruptEventBody`, the one reader). The route's three sources are the PWA's controls; the drawer's two are
+// raw pty input frames that are exactly ESC or exactly Ctrl-C (`server/src/interruptlog.ts`); `unknown` is what any
+// other or absent route `source` degrades to, and what a reader makes of a token it does not know.
+
+/** Who sent the interrupt, and through which door. The value says which door may claim it: `route` sources arrive as
+ *  `POST /api/sessions/:id/interrupt`'s optional `source`, `drawer` sources are only ever minted by the pty relay,
+ *  and `unknown` is the degrade. */
+const INTERRUPT_SOURCE_MAP = {
+  keycap: 'route', 'escape-key': 'route', deny: 'route',
+  'drawer-escape': 'drawer', 'drawer-ctrl-c': 'drawer',
+  unknown: 'degrade',
+} as const satisfies Record<string, 'route' | 'drawer' | 'degrade'>;
+export type InterruptSource = keyof typeof INTERRUPT_SOURCE_MAP;
+export const INTERRUPT_SOURCES: readonly InterruptSource[] = Object.keys(INTERRUPT_SOURCE_MAP) as InterruptSource[];
+/** The sources a client may name in the interrupt route's body. */
+export type InterruptRouteSource = { [K in InterruptSource]: (typeof INTERRUPT_SOURCE_MAP)[K] extends 'route' ? K : never }[InterruptSource];
+export function isInterruptSource(v: unknown): v is InterruptSource {
+  return typeof v === 'string' && Object.prototype.hasOwnProperty.call(INTERRUPT_SOURCE_MAP, v);
+}
+/** The route's reader of its body's `source`: a route source is kept, anything else (absent, another type, a token
+ *  this build does not know, or a drawer source no client may claim) is `unknown`, never a 400. */
+export function interruptRouteSource(v: unknown): InterruptSource {
+  return isInterruptSource(v) && INTERRUPT_SOURCE_MAP[v] === 'route' ? v : 'unknown';
+}
+
+/** What the interrupt did: `sent` (the key was pressed), or the route's refusal code (zero keys). */
+export type InterruptOutcome = 'sent' | InterruptRefusal;
+export function isInterruptOutcome(v: unknown): v is InterruptOutcome {
+  return v === 'sent' || (typeof v === 'string' && (INTERRUPT_REFUSALS as readonly string[]).includes(v));
+}
+/** The one writer of an `interrupt` event's body. */
+export function interruptEventBody(source: InterruptSource, outcome: InterruptOutcome): string {
+  return `source=${source} outcome=${outcome}`;
+}
+/** The one reader of an `interrupt` event's body: null off its grammar; a token this build does not know is
+ *  `unknown` (a newer server's source or outcome on an older client). */
+export function parseInterruptEventBody(body: string): { source: InterruptSource; outcome: InterruptOutcome | 'unknown' } | null {
+  const m = /^source=(\S+) outcome=(\S+)$/.exec(body);
+  if (m === null) return null;
+  return { source: isInterruptSource(m[1]) ? m[1] : 'unknown', outcome: isInterruptOutcome(m[2]) ? m[2] : 'unknown' };
+}
+
+/**
+ * The swap route's refusal codes (D-5240, working-state spec §5.9): every `error` word `POST /api/sessions/:id/swap`
+ * refuses a turn with, declared ONCE in `ARCHIVE_REFUSALS`' shape, and the same two words archive uses for the same
+ * two facts, so a code means one thing whichever door sent it. The server sends `SWAP_REFUSALS.<name>` and the PWA
+ * branches on it; neither spells one as a bare literal. ccd's own two refusals (`ccd: session-busy:` and `ccd:
+ * status-unknown:`, `cmd_swap`'s manual gate) are spelled from these too (`ccdSwapRefusal`, `server/src/swapguard.ts`).
+ *
+ *   - `sessionBusy` — a turn MEASURED in progress (the server's fail-closed `turnVerdictFor`, before the queue or
+ *     inside it, or ccd after both). `{interrupt:true}` consents; the turn in progress and its background tasks are lost.
+ *   - `statusUnknown` — nobody could read the turn. No consent covers it: stop the session first, then swap.
+ *   - `hibernated` (D-5242) — the row is asleep (`ccd hibernate`'s `.hibernated` stands): there is no running session to
+ *     move, and no consent covers it. Answered before any turn read, and ccd's own `ccd: hibernated:` maps to it too.
+ *
+ * Appended at the end of this file, like `ARCHIVE_REFUSALS`, so no line README or a contract cites moves.
+ */
+export const SWAP_REFUSALS = {
+  sessionBusy: ARCHIVE_REFUSALS.sessionBusy,
+  statusUnknown: ARCHIVE_REFUSALS.statusUnknown,
+  hibernated: 'hibernated',
+} as const;
+export type SwapRefusal = (typeof SWAP_REFUSALS)[keyof typeof SWAP_REFUSALS];
+
+/** Every swap refusal code, DERIVED from `SWAP_REFUSALS` — never a second list. */
+export const SWAP_REFUSAL_CODES: readonly SwapRefusal[] = Object.values(SWAP_REFUSALS);
+
+export function isSwapRefusal(v: unknown): v is SwapRefusal {
+  return typeof v === 'string' && (SWAP_REFUSAL_CODES as readonly string[]).includes(v);
+}
+
+// ── Delegation observation: the shared event and state vocabulary (delegation broker wave 3) ──────────────────────
+// Declared ONCE, here, and derived everywhere else: each closed set is an `as const` array with its type read from
+// it, and `single-definition.test.ts` fails the build on a second spelling. This block imports nothing (L0).
+// Names and shapes are a contract between the hook, the server's reader and the later projection; never rename a
+// property or collapse a union member.
+
+/** The seven hook events a delegation spool line may carry. A closed set: a line whose `eventKind` is not one of
+ *  these is not a delegation line. */
+export const DELEGATION_EVENT_KINDS = [
+  'SessionStart',
+  'PreToolUse',
+  'PostToolUse',
+  'SubagentStart',
+  'SubagentStop',
+  'UserPromptSubmit',
+  'SessionEnd',
+] as const;
+export type DelegationEventKind = (typeof DELEGATION_EVENT_KINDS)[number];
+
+/** Where an activity (a unit of delegated work the parent started) came from. `bash-worktree` is raw Bash use of
+ *  a worktree; it maps to lease provenance `raw`. */
+export const DELEGATION_ACTIVITY_SOURCE_KINDS = [
+  'agent',
+  'workflow',
+  'bash-worktree',
+] as const;
+export type DelegationActivitySourceKind =
+  (typeof DELEGATION_ACTIVITY_SOURCE_KINDS)[number];
+
+/** Provenance of a lease. `attached` is representable in the complete migration; wave 3 has no writer for it. */
+export const DELEGATION_LEASE_SOURCE_KINDS = [
+  'agent',
+  'workflow',
+  'raw',
+  'attached',
+] as const;
+export type DelegationLeaseSourceKind =
+  (typeof DELEGATION_LEASE_SOURCE_KINDS)[number];
+
+/** Whether the work is running. `unknown` is a measurement state, never a default for `ended`. */
+export const DELEGATION_EXECUTION_STATES = ['active', 'ended', 'unknown'] as const;
+export type DelegationExecutionState = (typeof DELEGATION_EXECUTION_STATES)[number];
+
+/** Whether an activity is tied to a parent. `unmeasured` means the evidence to decide was unreadable or missing, and
+ *  is never folded into `unresolved`. */
+export const DELEGATION_PARENTAGE_STATES = [
+  'linked', 'unresolved', 'conflicting', 'unmeasured',
+] as const;
+export type DelegationParentageState = (typeof DELEGATION_PARENTAGE_STATES)[number];
+
+export const DELEGATION_WORKSPACE_STATES = [
+  'none', 'provisioning', 'present', 'absent', 'unmeasured',
+] as const;
+export type DelegationWorkspaceState = (typeof DELEGATION_WORKSPACE_STATES)[number];
+
+export const DELEGATION_DISPOSITIONS = [
+  'ephemeral', 'adopted', 'retained', 'promoted',
+] as const;
+export type DelegationDisposition = (typeof DELEGATION_DISPOSITIONS)[number];
+
+/** Cleanup progress. Wave 3 is report-only: no state here authorises an action by itself. */
+export const DELEGATION_CLEANUP_STATES = [
+  'not-due', 'pending', 'running', 'refused', 'reclaimed', 'unmeasured',
+] as const;
+export type DelegationCleanupState = (typeof DELEGATION_CLEANUP_STATES)[number];
+
+export const DELEGATION_CLEANUP_POPULATIONS = [
+  'ephemeral-lease',
+] as const;
+export type DelegationCleanupPopulation =
+  (typeof DELEGATION_CLEANUP_POPULATIONS)[number];
+
+export const DELEGATION_INTENT_SOURCES = [
+  'explicit', 'run-owner', 'delegation-inferred', 'retained-lineage',
+] as const;
+export type DelegationIntentSource = (typeof DELEGATION_INTENT_SOURCES)[number];
+
+export const DELEGATION_ATTEMPT_VERDICTS = [
+  'linked', 'unresolved', 'conflicting', 'unmeasured',
+] as const;
+export type DelegationAttemptVerdict = (typeof DELEGATION_ATTEMPT_VERDICTS)[number];
+
+/** The keys every spool line carries. A line is evidence and never authority; the hook decides nothing about
+ *  parentage. `truncated` marks a line whose optional fields were dropped to fit its size bound. */
+export interface DelegationSpoolCommonV1 {
+  v: 1;
+  eventKind: DelegationEventKind;
+  observedAt: string;
+  sessionId: string;
+  parentIncarnation: string;
+  claudeSessionId: string;
+  claudeVersion?: string;
+  cwd?: string;
+  transcriptPath?: string;
+  agentId?: string;
+  agentType?: string | null;
+  truncated?: true;
+}
+
+export type DelegationPreToolUseEvidenceV1 =
+  | (DelegationSpoolCommonV1 & {
+      eventKind: 'PreToolUse';
+      toolName: 'Agent' | 'Task' | 'Workflow';
+      toolUseId: string;
+      isolation: string | null;
+    })
+  | (DelegationSpoolCommonV1 & {
+      eventKind: 'PreToolUse';
+      toolName: 'Bash';
+      toolUseId: string;
+      listing?: readonly string[];
+    });
+
+export interface DelegationAgentLaunchV1 {
+  status: 'async-launched' | 'completed';
+  agentId: string;
+  isAsync: boolean;
+}
+
+export interface DelegationWorkflowLaunchV1 {
+  status: 'async-launched' | 'completed';
+  taskId: string;
+  taskType: string;
+  workflowName: string;
+  runId: string;
+  transcriptDir: string;
+  scriptPath: string;
+}
+
+export type DelegationPostToolUseEvidenceV1 =
+  | (DelegationSpoolCommonV1 & {
+      eventKind: 'PostToolUse';
+      toolName: 'Agent' | 'Task';
+      toolUseId: string;
+      outcome: 'completed' | 'failed' | 'async-launched' | 'unknown';
+      launch: DelegationAgentLaunchV1 | null;
+    })
+  | (DelegationSpoolCommonV1 & {
+      eventKind: 'PostToolUse';
+      toolName: 'Workflow';
+      toolUseId: string;
+      outcome: 'completed' | 'failed' | 'async-launched' | 'unknown';
+      launch: DelegationWorkflowLaunchV1 | null;
+    })
+  | (DelegationSpoolCommonV1 & {
+      eventKind: 'PostToolUse';
+      toolName: 'Bash';
+      toolUseId: string;
+      outcome: 'completed' | 'failed' | 'unknown';
+      listing?: readonly string[];
+    });
+
+/** The raw spool line: a closed discriminated union, each variant accepting only its named keys. */
+export type DelegationSpoolLineV1 =
+  | (DelegationSpoolCommonV1 & {
+      eventKind: 'SessionStart';
+      source: string;
+    })
+  | DelegationPreToolUseEvidenceV1
+  | DelegationPostToolUseEvidenceV1
+  | (DelegationSpoolCommonV1 & {
+      eventKind: 'SubagentStart';
+      agentId: string;
+      agentType: string | null;
+    })
+  | (DelegationSpoolCommonV1 & {
+      eventKind: 'SubagentStop';
+      agentId: string;
+      agentType: string | null;
+      agentTranscriptPath: string | null;
+    })
+  | (DelegationSpoolCommonV1 & {
+      eventKind: 'UserPromptSubmit';
+      notification: {
+        taskId: string;
+        toolUseId: string;
+        status: 'completed' | 'failed' | 'cancelled' | 'unknown';
+      };
+    })
+  | (DelegationSpoolCommonV1 & {
+      eventKind: 'SessionEnd';
+      reason: string;
+    });
+
+/** A spool line as the server read it: the bucket and the byte range it occupied, from which `eventId` is derived. */
+export type DelegationEventEnvelopeV1 = DelegationSpoolLineV1 & {
+  eventId: string;
+  bucket: string;
+  startOffset: number;
+  endOffset: number;
+};
+
+/** The immutable identity of an activity; the activity id is minted once for it and never re-derived. */
+export interface DelegationActivityNaturalKey {
+  parentId: string;
+  parentIncarnation: string;
+  sourceKind: DelegationActivitySourceKind;
+  upstreamId: string;
+}
+
+/** The report-only health the server publishes. Absence on the wire means unknown. */
+export interface DelegationObservationHealth {
+  mode: 'report-only';
+  windowStartedAt: string | null;
+  windowEndedAt: string | null;
+  measuredSessionHours: number;
+  unmeasuredSessionHours: number;
+  unmeasuredRate: number | null;
+  stageGate: 'eligible' | 'ineligible' | 'unmeasured';
+  circuitBreaker: 'clear' | 'suspended' | 'unmeasured';
+  unresolved: number;
+  conflicting: number;
+  unmeasured: number;
+  lastJournalSequence: number | null;
+  lastCheckpointRevision: number | null;
+  lastIngestedAt: string | null;
+  /**
+   * The last torn journal tail this server process cut off and kept (D-4655). Absent until one has been: absence is not "healthy" or
+   * "unhealthy", it says no heal happened in this process. A heal is never a failure and never makes the health unmeasured by itself.
+   */
+  lastTailHeal?: DelegationTailHeal;
+  /**
+   * MUST 1 (coordinator 5424): the tail quarantine (`delegation-events.torn/`) could not be listed at the last boot or recovery, so
+   * whether a heal happened that no report of this process covers is UNKNOWN, never "no heal". Absent when it was listed.
+   */
+  tailQuarantineUnmeasured?: true;
+}
+
+/** A torn delegation-journal tail the server healed: a crash or a failed append left a partial last line, the server kept those bytes
+ *  under `quarantinePath` and cut the journal back to its last complete record. The spool still holds what the fragment carried. */
+export interface DelegationTailHeal {
+  /** When the cut was made, as a canonical UTC millisecond instant: this process's clock as the truncate returned, or, for a heal found
+   *  in the quarantine at boot (`foundAtBoot`), the kept file's own modification time (written just before the cut). */
+  at: string;
+  /** How many bytes were cut off and kept. */
+  bytes: number;
+  /** Where the kept bytes are, on the server box. */
+  quarantinePath: string;
+  /** True for a heal no report of this process made: found in the quarantine at a boot or a recovery (a process that died between its
+   *  cut and its report, or an earlier boot's). Absent for a heal this process made and reported itself. */
+  foundAtBoot?: true;
+}
+
+/** What the health projection is computed from; every field is a measurement the server already holds. */
+export interface DelegationHealthInput {
+  windowStartedAt: string | null;
+  windowEndedAt: string | null;
+  windowComplete: boolean;
+  measuredSessionHours: number;
+  unmeasuredSessionHours: number;
+  capabilityState: 'present' | 'absent' | 'unmeasured';
+  registryReadable: boolean;
+  recoveryPhase: 'reconstructing' | 'ready';
+  circuitBreaker: 'clear' | 'suspended' | 'unmeasured';
+  unresolved: number;
+  conflicting: number;
+  unmeasured: number;
+  lastJournalSequence: number | null;
+  lastCheckpointRevision: number | null;
+  lastIngestedAt: string | null;
+}
+
+/** The size and shape bounds of one delegation spool line (delegation broker wave 3, spec §5.3), declared ONCE. The hook's
+ *  jq program and shell block spell the same numbers in `ccd/session-hook.sh` (`def idmax:`, `def maxlabel:` and `def maxpath:` in
+ *  the jq text, `CCRC_ID_MAX` for the owner, `DSP_LINE_BELOW` and `DSP_LINE_SMALL`, the jq's `maxline` among their readers, and the
+ *  other `DSP_` constants beside the append) because a hook cannot import this file; `delegation-spool.test.ts` reads both and fails on any drift, and the server's reader imports THIS object.
+ *  Every byte count is UTF-8 bytes, never characters.
+ *
+ *  Each value is chosen from measurement, on the fixture corpus (`fixtures/delegation/<version>/`: 14 versions, 2.1.280 to
+ *  2.1.299, 193 measured cells; its paths are sanitised and shorter than a real fleet's) and on the fleet's own transcript
+ *  trees, never from a guess:
+ *   - `lineBytesBelow`, and `lineBytesBelowSmall` off glibc Linux (D-5436): LESS than the cap, counting the LF. A builtin `printf`
+ *     goes through bash's stdout buffer, so a line reaches the file in ONE `write(2)` only if it fits: glibc with a distro bash
+ *     sizes it from st_blksize (4096 on the usual filesystems), bash's own malloc 1008 or 2016, BSD and macOS libc and musl 1024. One
+ *     O_APPEND write is the only append two hooks racing on one bucket never interleave. The server's reader bounds every line at 4096.
+ *   - `idBytes`: the longest id in the corpus is 36 (a Claude session UUID; agent ids 17, task ids 9, run ids 15); a real
+ *     `tool_use_id` is about 30 (the corpus's are shorter placeholders). 64 is the
+ *     bound the hook's own agent-id grammar already uses (`idmax`), so one number covers agent, tool-use, task, run and
+ *     Claude session ids. An id outside `[A-Za-z0-9_-]{1,64}` is never recorded, and never cleaned into one that is.
+ *   - `ownerIdBytes`: the ccd session id, which is also the spool directory's name. 128 is the hook's `CCRC_ID_MAX`, which the
+ *     spool gate reads by name rather than restating.
+ *   - `labelBytes`: display-grade strings (agent type, workflow name, task type, `source`, `reason`, `isolation`, Claude
+ *     version). The longest in the corpus is 17 bytes (an agent type or a `reason`); a workflow's name is its author's choice,
+ *     so the bound is generous.
+ *   - `pathBytes`: the corpus's longest path is 138 bytes (an agent transcript); the longest transcript, workflow-directory,
+ *     workflow-script or agent-transcript path found under the fleet's account homes is 254 bytes (measured over 11,753
+ *     transcripts, 8,737 workflow directories, 7,098 scripts and 178,389 agent transcripts); 512 is twice that. A longer
+ *     path is dropped, never cut, because a cut path names a different place.
+ *   - `listingNames`: the busiest repository on the fleet carries 93 linked-worktree admin records; 256 is nearly three
+ *     times that. A listing over this count is dropped whole, never cut, because a partial listing reads as a complete one.
+ *   - `listingNameBytes`: the longest admin record name on the fleet is 37 bytes (the busiest repos' longest are 23 to 37;
+ *     Claude Code's own `agent-<17 hex>` is 23, which is also the corpus's longest). A name longer than 64 bytes, or outside
+ *     `[A-Za-z0-9._@+-]`, drops the listing.
+ *   A listing of 93 real names is about 2.6 KiB, so the line cap (not the count) is what usually drops a listing: the 4096
+ *   cap is reached at about 130 names of the usual length (the plan's ~3.9 KiB case), the small one at about 15 to 20 (D-5436).
+ *
+ *  When a line is over its cap its optional fields are dropped in this order until it fits, and `truncated: true`
+ *  is set: `listing`, `claudeVersion`, `cwd`, `agentType` (omitted where optional, null where the variant requires the key),
+ *  `transcriptPath`. The required identity fields, `agentTranscriptPath` and a launch among them, are never dropped (the
+ *  required-but-nullable ones are not nulled to fit; a line they alone push over the cap is not written). With every bound
+ *  above at its maximum and nothing escaped they sum to under 3.2 KiB, which only the 4096 cap holds (on 1008 a deep-path
+ *  Workflow launch is not written, D-5436); a line whose required fields alone pass the cap is not written at all, because a lost
+ *  line can delay a link and an over-cap line could tear one, so "a line that cannot fit is a bug" holds on the 4096 cap only. */
+export const DELEGATION_SPOOL_BOUNDS = {
+  lineBytesBelow: 4096,
+  lineBytesBelowSmall: 1008,
+  idBytes: 64,
+  ownerIdBytes: 128,
+  labelBytes: 128,
+  pathBytes: 512,
+  listingNames: 256,
+  listingNameBytes: 64,
+} as const;
+
+/** The SAFETY-forbidden `ccd` verbs a dispatched child's deny file names (plan Task 15, D-5299): Task 12's
+ *  `FORBIDDEN_CCD_VERBS` (`server/src/coord/approvalguard.ts`), every one of which has a stable prefix, held equal to
+ *  it by `ccd-spawn-child-settings.test.ts`. One `|`-joined string, not eight quoted literals, for the reason that
+ *  list gives: the verb censuses count a quoted verb as a composer of it, and this list composes nothing. */
+const CHILD_DENY_CCD_VERBS: readonly string[] =
+  'ws-rm|ws-reap|ws-gc --prune|ws-archive|ws-restore|ws-reclaim|ws-expire|ws-collect'.split('|');
+
+/** Whether the deny file also names each verb's path-qualified forms (`Bash(*\/ccd ws-rm:*)`,
+ *  `Bash(~/.local/bin/ccd ws-rm:*)` and the like). FALSE until plan Task 13 records, on the rig, that Claude Code's
+ *  deny matcher takes a leading wildcard; Task 13 decides, and turning them on is this one word here and its bash twin
+ *  `CHILD_DENY_PATH_QUALIFIED` in `ccd/install-session-hooks.sh` (D-5299). Invariant 10 does not rest on it: the
+ *  child's PreToolUse deny (Task 14) refuses every form whatever the matcher takes. */
+export const CHILD_DENY_PATH_QUALIFIED = false as boolean;
+
+/** The program heads a deny rule is written for: the bare name always, and the path-qualified forms only behind
+ *  `CHILD_DENY_PATH_QUALIFIED`. */
+const childDenyHeads = (prog: 'ccd' | 'ccrc'): readonly string[] =>
+  CHILD_DENY_PATH_QUALIFIED ? [prog, `*/${prog}`, `~/.local/bin/${prog}`] : [prog];
+
+/** The `permissions.deny` list of `~/.cc-sessions/child-deny.settings.json`, the one managed file every dispatched
+ *  child (a row with `.child`) spawns with through `--settings` (spec §6.6, plan Task 15, D-5299): the forbidden
+ *  `ccd` verbs, then `ccrc update` and `ccrc rollback`. No approval overrides a deny rule. The installer's bash copy
+ *  is held equal to this list by iteration (`install-session-hooks.test.ts`), never respelled in a test. */
+export const CHILD_DENY_RULES: readonly string[] = [
+  ...CHILD_DENY_CCD_VERBS.flatMap((v) => childDenyHeads('ccd').map((h) => `Bash(${h} ${v}:*)`)),
+  ...['update', 'rollback'].flatMap((v) => childDenyHeads('ccrc').map((h) => `Bash(${h} ${v}:*)`)),
+];
+
+/** `$REG/<id>.deny-settings` (plan Task 15, D-5299): the sha256 of the deny file the child was last spawned with,
+ *  written by `ccd`'s spawn of a `.child` row and only when it passed the file. Three answers, as `ChildMark`: Task
+ *  16's `409 deny-not-engaged` refuses both `none` and `unreadable`, and engages only on a digest equal to the managed
+ *  file's current one. */
+export type DenySettingsMark =
+  | { readonly kind: 'none' }                                  // no field: spawned without the deny file
+  | { readonly kind: 'digest'; readonly sha256: string }       // the file's lowercase hex sha256 at that spawn
+  | { readonly kind: 'unreadable' };                           // listed but unreadable, or not a sha256
+
+/** `$REG/<id>.childshell` (plan Task 15, D-5360's requirement, D-5391): the shell `ccd`'s spawn of a `.child` row
+ *  pinned the child's Bash tool to through `CLAUDE_CODE_SHELL`. Three answers again; Task 16 refuses a ruling for a
+ *  child whose record does not show the bash pin. */
+export type ChildShellMark =
+  | { readonly kind: 'none' }                                  // no field: no pin at that spawn
+  | { readonly kind: 'pinned'; readonly shell: string }        // an absolute path, as `ccd` wrote it
+  | { readonly kind: 'unreadable' };                           // listed but unreadable, or not an absolute path
+
+/** A `.deny-settings` value: 64 lowercase hex characters, as `sha256sum`/`shasum -a 256` print them. */
+export const DENY_SETTINGS_DIGEST = /^[0-9a-f]{64}$/;
+/** A `.childshell` value: an absolute path of plain characters. */
+export const CHILD_SHELL_PATH = /^\/[A-Za-z0-9._/-]+$/;
+
+// ── approvals, the fleet half (plan Task 14, D-5297, D-5299, D-5439, D-5440, D-5441) ──────────────────────────────
+
+/** The ceiling on a child's PermissionRequest hook's wait for a ruling, in seconds (spec §6.3 step 4): under the managed
+ *  hook timeout (`HOOK_TIMEOUT_S`, 600, `ccd/install-session-hooks.sh`). The hook waits for the request's own window,
+ *  the `waitS` the server's `201` answers (D-5441), and never past this. The hook's bash copy is held equal by
+ *  `session-hook-approval-wait.test.ts`. */
+export const APPROVAL_HOOK_WAIT_S = 540;
+
+/** The Claude Code versions on which a recorded rig capture proved spec §6.9's criteria as restated on 2026-10-18
+ *  (D-5439, D-5440, D-5441): plan Task 13's Linux re-check record, read with its macOS record. 2.1.299 is out: it has
+ *  no Linux capture (D-5481). The server mints an approval request only for a child whose live version is listed. */
+export const APPROVAL_HOOK_VERSIONS: readonly string[] = ['2.1.296', '2.1.300', '2.1.301', '2.1.302'];
+
+/** The versions on which the rig proved that a PermissionRequest's `cwd` equals the shell's working directory after a
+ *  `cd` in an earlier Bash call, on the main thread and in a subagent (spec §6.9; Task 13's Linux re-check record, L6).
+ *  A subset of `APPROVAL_HOOK_VERSIONS`, never wider: elsewhere the classifier is given `cwd = null`. */
+export const APPROVAL_CWD_TRUSTED: readonly string[] = ['2.1.296', '2.1.300', '2.1.301', '2.1.302'];
+
+/** The pinned public key's file name under the fleet box's `~/.ccrc` (spec §6.4), and the server's private key's under
+ *  the server box's: both carry `approval-signing`, the word the child's PreToolUse deny and the classifier's forbidden
+ *  match refuse in any path (D-5297). */
+export const APPROVAL_SIGNING_PUB_FILE = 'approval-signing.pub';
+export const APPROVAL_SIGNING_KEY_FILE = 'approval-signing.key';
+
+/** A ruling-route answer whose row is in one of these states carries no ruling and never will for this wait: the hook
+ *  stops polling and prints nothing (D-5440; spec §6.3 hook step 4, amended). Task 16's `APPROVAL_STATE_MAP` holds
+ *  each of them; the hook's bash copy is held equal by iteration. */
+export const APPROVAL_HOOK_STOP_STATES: readonly string[] = ['declined', 'released', 'operator', 'stale'];
+
+/** The canonical JSON of a value (spec §6.3 "The canonical form, exactly"), or `null` when it has none: no whitespace;
+ *  object keys in Unicode code-point order (jq's `-S`; JavaScript's default sort is by UTF-16 code unit and differs
+ *  above U+FFFF); every UTF-16 code unit outside printable ASCII, U+007F included, as a lowercase `\uXXXX`, except
+ *  `\b \f \n \r \t`, `\"` and `\\`; `/` never escaped; a number only as an integer of magnitude at most 2^53 − 1, in
+ *  plain decimal (`1.0` and `1E+2` are `1` and `100`; `-0` is `0`). The hook's `jq -cSa` program and the verifier's
+ *  copy are held equal to it over `server/test/fixtures/approvals/digest-corpus.json` and a record corpus. */
+const codePoints = (s: string): number[] => Array.from(s, (c) => c.codePointAt(0) as number);
+const byCodePoint = (a: string, b: string): number => {
+  const x = codePoints(a), y = codePoints(b);
+  for (let i = 0; i < Math.min(x.length, y.length); i++) if (x[i] !== y[i]) return (x[i] as number) - (y[i] as number);
+  return x.length - y.length;
+};
+const CANON_ESC: Readonly<Record<number, string>> = { 8: '\\b', 9: '\\t', 10: '\\n', 12: '\\f', 13: '\\r', 34: '\\"', 92: '\\\\' };
+const canonString = (s: string): string => {
+  let out = '"';
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    const e = CANON_ESC[c];
+    if (e !== undefined) out += e;
+    else if (c < 0x20 || c >= 0x7f) out += `\\u${c.toString(16).padStart(4, '0')}`;
+    else out += s[i];
+  }
+  return `${out}"`;
+};
+export function canonicalJson(v: unknown): string | null {
+  if (v === null) return 'null';
+  if (typeof v === 'boolean') return v ? 'true' : 'false';
+  if (typeof v === 'number') return Number.isInteger(v) && Math.abs(v) <= Number.MAX_SAFE_INTEGER ? String(v === 0 ? 0 : v) : null;
+  if (typeof v === 'string') return canonString(v);
+  if (Array.isArray(v)) {
+    const parts: string[] = [];
+    for (const x of v) { const c = canonicalJson(x); if (c === null) return null; parts.push(c); }
+    return `[${parts.join(',')}]`;
+  }
+  if (typeof v === 'object') {
+    const parts: string[] = [];
+    for (const k of Object.keys(v as object).sort(byCodePoint)) {
+      const c = canonicalJson((v as Record<string, unknown>)[k]);
+      if (c === null) return null;
+      parts.push(`${canonString(k)}:${c}`);
+    }
+    return `{${parts.join(',')}}`;
+  }
+  return null;
+}
+
+/** A request's canonical array (spec §6.3 "Keying"): `[session_id, agent_id, tool_name, cwd, tool_input]` from the
+ *  PermissionRequest hook input, `agent_id` `""` on the main thread (absent, `null` or `false`, as jq's `//` reads it)
+ *  and `cwd` the input's own, `null` when absent. Its sha256 is the request's input digest. `null` when the input has
+ *  no canonical form: spec §6.3 spells the hook's program as the integer-only `walk` over the WHOLE input and then the
+ *  array, so a non-integer number anywhere in the input (not only inside the array) leaves the request unsent. The
+ *  hook's spelling is `APPROVAL_DIGEST_JQ` in `ccd/session-hook.sh`. */
+export function approvalDigestBytes(hookInput: Readonly<Record<string, unknown>>): string | null {
+  if (canonicalJson(hookInput) === null) return null;
+  const field = (k: string): unknown => (Object.prototype.hasOwnProperty.call(hookInput, k) ? hookInput[k] : null);
+  const aid = field('agent_id');
+  return canonicalJson([field('session_id'), aid === null || aid === false ? '' : aid, field('tool_name'),
+    field('cwd'), field('tool_input')]);
+}
+
+/** A signed ruling's record (spec §6.3 server half, step 5). `sessionId` is the child's REGISTRY id (the request
+ *  body's `sessionId`), not Claude Code's `session_id`; `rowId` is the row the `201` named, and the verifier checks
+ *  both (D-5488). `expiresAt` is epoch milliseconds, the request window's end (D-5441). */
+export interface ApprovalRulingRecord {
+  readonly v: 1;
+  readonly rowId: number;
+  readonly sessionId: string;
+  readonly agentId: string;
+  readonly digest: string;
+  readonly nonce: string;
+  /** An `ApprovalClass` word, as `approvalClass` (server/src/coord/approvalguard.ts) answered it; spelled there once. */
+  readonly class: string;
+  readonly verdict: 'allow' | 'deny';
+  readonly reason: string;
+  readonly expiresAt: number;
+}
+
+/** The bytes the server signs and the verifier checks: the record's ten fields, and only those, in canonical form.
+ *  `null` for a record with no canonical form. `ccd/approval-verify.mjs` carries the documented second copy, held
+ *  equal by `approval-verify.test.ts`. */
+export function approvalRulingBytes(r: ApprovalRulingRecord): string | null {
+  return canonicalJson({ v: r.v, rowId: r.rowId, sessionId: r.sessionId, agentId: r.agentId, digest: r.digest,
+    nonce: r.nonce, class: r.class, verdict: r.verdict, reason: r.reason, expiresAt: r.expiresAt });
+}
+
+/** `POST /api/approvals`'s body, as the child's hook sends it through `ccrc-api approvals request` (spec §6.3 hook
+ *  step 3). `canonical` is the request's canonical array (`approvalDigestBytes`), `digest` its lowercase hex sha256,
+ *  `nonce` 128 bits as 32 lowercase hex. A canonical string over `APPROVAL_REQUEST_MAX_BYTES` is not sent: the body
+ *  says `truncated` instead, and such a request can never be allowed. */
+export interface ApprovalRequestBody {
+  readonly v: 1;
+  readonly sessionId: string;
+  readonly sessionUuid: string;
+  readonly canonical?: string;
+  readonly truncated?: true;
+  readonly digest: string;
+  readonly nonce: string;
+}
+export const APPROVAL_REQUEST_MAX_BYTES = 64 * 1024;
+
+/** `201`'s answer to that request: the row id, and the window the hook waits for (D-5441). */
+export interface ApprovalRequestAccepted { readonly id: number; readonly waitS: number }
+
+/** `GET /api/approvals/:id/ruling?nonce=`'s answer: the row's state, and the signed ruling once one is taken. `sig` is
+ *  the base64 Ed25519 signature over `approvalRulingBytes(record)`. */
+export interface ApprovalRulingAnswer {
+  readonly state: string;
+  readonly ruling?: { readonly record: ApprovalRulingRecord; readonly sig: string };
+}
+
+/** `GET /api/approvals/key`'s answer: the server's public key, PEM SPKI, which the install spine pins once into the
+ *  fleet box's `~/.ccrc/approval-signing.pub` (spec §6.4). */
+export interface ApprovalKeyAnswer { readonly v: 1; readonly alg: 'ed25519'; readonly publicKey: string }
+
+// ── approvals, the server half (plan Task 16, D-5298, D-5440, D-5441, D-5530, D-5531) ─────────────────────────────
+
+/**
+ * An `approvals` row's state (spec §6.3 server half, step 5), one home, read through `isApprovalState`:
+ *  `held`      minted for the run's attributed claimant, inside its window (`notifyAt`); the operator's push waits.
+ *  `allowed`   the held-for claimant allowed it, and the server signed the ruling (an `ordinary` row only).
+ *  `denied`    the held-for claimant denied it, signed the same way.
+ *  `declined`  the claimant handed it over (`POST /api/approvals/:id/release`): the operator's push fires at once,
+ *              and the hook stops (D-5440). Terminal.
+ *  `released`  minted released (a `releaseReason`: forbidden, truncated, unparseable, or no claimant to hold it for,
+ *              D-5530, D-5531), or held and lapsed at `notifyAt`. The hook has returned or stops; the operator has it.
+ *  `operator`  the operator answered the dialog (`POST /api/sessions/:id/dialog`), or the painted dialog closed with
+ *              no ruling taken: every approval has an answering principal. Terminal.
+ *  `stale`     the hook's ceiling passed (`askAt + APPROVAL_HOOK_WAIT_S`) with no principal. Terminal.
+ *  `unknown`   a token this build does not know, read off disk; never written.
+ * `declined`, `released`, `operator` and `stale` are `APPROVAL_HOOK_STOP_STATES`: the ruling route answers them with
+ * no ruling, and the hook stops on that answer (D-5440).
+ */
+export type ApprovalState = 'held' | 'allowed' | 'denied' | 'declined' | 'released' | 'operator' | 'stale' | 'unknown';
+
+export const APPROVAL_STATE_MAP: Readonly<Record<ApprovalState, true>> = {
+  held: true, allowed: true, denied: true, declined: true, released: true, operator: true, stale: true, unknown: true,
+};
+
+export const APPROVAL_STATES: readonly ApprovalState[] = Object.keys(APPROVAL_STATE_MAP) as ApprovalState[];
+
+export function isApprovalState(v: unknown): v is ApprovalState {
+  return typeof v === 'string' && (APPROVAL_STATES as readonly string[]).includes(v);
+}
+
+/** How long an approval row keeps its redacted input (spec §6.7): after this many days `pruneApprovalInputs` clears
+ *  the `inputRedacted` column and keeps the row as the journal. The asks' question text follows the same retention. */
+export const APPROVAL_INPUT_RETENTION_DAYS = 30;
+
+/** Why an approval row was minted `released` (spec §6.3 server steps 1 and 2): the asks lane's fail-closed words
+ *  (`AskMintReleaseReason`, D-5530, D-5531: no claimant to hold it for, or a parent this tick cannot vouch for), and
+ *  the request's own three: `forbidden` (the classifier's class), `truncated` (the hook sent no canonical string, over
+ *  `APPROVAL_REQUEST_MAX_BYTES`), `unparseable` (the canonical string is not a request's five-element array). The
+ *  parent is never asked about any of them, and the operator's push fires at once. `unknown` is the reader's degrade. */
+export type ApprovalReleaseReason = AskMintReleaseReason | 'forbidden' | 'truncated' | 'unparseable' | 'unknown';
+export type ApprovalMintReleaseReason = Exclude<ApprovalReleaseReason, 'unknown'>;
+
+export const APPROVAL_RELEASE_REASON_MAP: Readonly<Record<ApprovalReleaseReason, true>> = {
+  'parent-not-live': true, 'parent-unmeasured': true, 'run-unclaimed': true, 'run-other-programme': true,
+  'run-unattributed': true, forbidden: true, truncated: true, unparseable: true, unknown: true,
+};
+
+export function isApprovalReleaseReason(v: unknown): v is ApprovalReleaseReason {
+  return typeof v === 'string' && Object.prototype.hasOwnProperty.call(APPROVAL_RELEASE_REASON_MAP, v);
+}
+
+/**
+ * The words the approval routes refuse with in `error` (plan Task 16), each answered at its one status by
+ * `REFUSAL_STATUS` (`shared/refusal.ts`, D-5381), never spelled at a call site:
+ *  `not-a-child`         the session's `ChildMark` is not `{kind: 'child', runId}`, its run is gone, no open run names
+ *                        it, or it is its own claimant: nothing minted (spec §6.3 server step 1, amended by D-5530).
+ *  `approvals-disabled`  either kill switch is on (`$REG/approvals-disabled`, `~/.ccrc/approvals-disabled`).
+ *  `single-box`          this server's role is `both` and the operator has not placed `~/.ccrc/approvals-single-box`.
+ *  `deny-not-engaged`    the child's `.deny-settings` is not the managed deny file's digest, or its `.childshell`
+ *                        does not show the bash pin (D-5360's requirement, Task 15's two fields).
+ *  `digest-mismatch`     the digest is not sha256 over the canonical string sent, or that string does not
+ *                        re-canonicalise to itself. Journaled for doctor's `approval-digest-mismatch`.
+ *  `version-unverified`  the child's live Claude Code version is not in `APPROVAL_HOOK_VERSIONS`.
+ *  `approval-released`   the row was minted `released` (`releaseReason` in the body): the operator has it.
+ *  `unknown-approval`    no such row, or (on the ruling route) another nonce: answered alike, so a nonce is not probed.
+ *  `approval-unreadable` the row could not be read back.
+ *  `parent-changed`      the caller is the row's stored parent, but the child's binding no longer answers it.
+ *  `guard-forbidden`, `guard-escalate`  an allow of a row the classifier did not class `ordinary`.
+ *  `declined`            the claimant handed this row over and may not rule it later.
+ *  `hook-gone`           the row's window has passed: the hook has returned and cannot print a ruling (D-5441).
+ *  `already-ruled`       a principal (the claimant or the operator) already acted on the row.
+ */
+export const APPROVAL_REFUSALS = [
+  'not-a-child', 'approvals-disabled', 'single-box', 'deny-not-engaged', 'digest-mismatch',
+  'version-unverified', 'approval-released', 'unknown-approval', 'approval-unreadable', 'parent-changed',
+  'guard-forbidden', 'guard-escalate', 'declined', 'hook-gone', 'already-ruled',
+] as const;
+export type ApprovalRefusal = (typeof APPROVAL_REFUSALS)[number];
+
+export function isApprovalRefusal(v: unknown): v is ApprovalRefusal {
+  return typeof v === 'string' && (APPROVAL_REFUSALS as readonly string[]).includes(v);
+}
+
+/** `POST /api/approvals/:id/rule`'s body: the attribution pair, the verdict and a reason (at most
+ *  `APPROVAL_REASON_MAX_CHARS`, one line). Nothing else: `permanent`, `updatedPermissions` and `mode` are refused
+ *  `400`, because a ruling allows once only (spec §6.5 procedure rules). */
+export interface ApprovalRuleBody {
+  readonly fromId: string;
+  readonly fromUuid: string;
+  readonly verdict: 'allow' | 'deny';
+  readonly reason: string;
+}
+export const APPROVAL_REASON_MAX_CHARS = 1000;
+
+/** `GET /api/approvals/:id`'s row as the held-for claimant, or the operator, reads it: the redacted input only (null
+ *  after the retention prune), never the digest's unredacted text, which the server holds only for the request. */
+export interface ApprovalView {
+  readonly id: number;
+  readonly childId: string;
+  readonly parentId: string;
+  readonly runId: number | null;
+  readonly agentId: string;
+  readonly tool: string;
+  readonly input: string | null;
+  readonly truncated: boolean;
+  readonly class: string;
+  readonly state: ApprovalState;
+  readonly releaseReason: ApprovalReleaseReason | null;
+  readonly askAt: number;
+  readonly notifyAt: number;
+  readonly ruledAt: number | null;
+  readonly verdict: 'allow' | 'deny' | null;
+  readonly reason: string | null;
+  readonly answeredBy: string | null;
+  readonly toolUseId: string | null;
+}
+
+/** The managed deny file's name in the fleet box's `~/.cc-sessions` (plan Task 15): the server reads it to learn the
+ *  digest a child's `.deny-settings` must equal (`409 deny-not-engaged`). `ccd/install-session-hooks.sh` writes it. */
+export const CHILD_DENY_SETTINGS_FILE = 'child-deny.settings.json';
+
+/** The shell a `.child` spawn pins its Bash tool to (D-5360's requirement, D-5391): the server mints no ruling for a
+ *  child whose `.childshell` names anything else, because the classifier's grammar is bash's. */
+export const APPROVAL_CHILD_SHELL = '/bin/bash';
+
+/** The server box's journal of `409 digest-mismatch` refusals, under its `~/.ccrc` (D-5490): one line each,
+ *  `<epoch ms> digest-mismatch <session id>`. Doctor's `approval-digest-mismatch` counts the last seven days. */
+export const APPROVAL_REFUSALS_LOG = 'approval-refusals.log';
+
+// ── the daily digest (coordinator-first routing plan Task 17, spec §10, D-5300) ──────────────────────────────────
+
+/**
+ * One decision a coordinator took in the operator's name, as the digest lists it (spec §10). One line per row, its
+ * final coordinator decision:
+ *  `answer`     a question the held-for coordinator answered (late answers included, D-5289);
+ *  `allow`, `deny`  an approval the held-for coordinator ruled, signed by the server;
+ *  `hand-over`  the coordinator released the question or approval itself (`declined`);
+ *  `lapse`      the window passed with no ruling, so the operator was pushed (an ask or approval held for a
+ *               coordinator that the coordinator never answered, whoever acted after).
+ * A row the operator answered while it was still held is not a line, and neither is a row minted released.
+ */
+export const DIGEST_LINE_KINDS = ['answer', 'allow', 'deny', 'hand-over', 'lapse'] as const;
+export type DigestLineKind = (typeof DIGEST_LINE_KINDS)[number];
+
+/** Which table a digest line came from, and so which id space `id` is in. */
+export type DigestRowKind = 'ask' | 'approval';
+
+/** A digest line on the wire. Every text field is redacted (`redactCommand`) when the digest is built, whatever the
+ *  row stored: `text` is the question, or the command's first `DIGEST_COMMAND_CHARS` characters. */
+export interface DigestLine {
+  readonly rowKind: DigestRowKind;
+  readonly id: number;
+  readonly kind: DigestLineKind;
+  readonly at: number;
+  readonly coordinator: string;
+  readonly childId: string;
+  readonly text: string;
+  /** The approval's tool and class; null on a question. */
+  readonly tool: string | null;
+  readonly class: string | null;
+  /** The chosen option on an answered question; null otherwise. */
+  readonly answer: string | null;
+  /** The coordinator's reason on a ruled approval; null otherwise. */
+  readonly reason: string | null;
+  /** The operator has already sent a correction for this row (`POST /api/digest/correct`). */
+  readonly corrected: boolean;
+}
+
+/** The digest's totals. `decisions` is the line count; `guardForbidden` counts the requests the classifier classed
+ *  `forbidden` in the window, which went straight to the operator and are not lines (D-5492). */
+export interface DigestTotals {
+  readonly decisions: number;
+  readonly answers: number;
+  readonly allows: number;
+  readonly denies: number;
+  readonly handOvers: number;
+  readonly lapses: number;
+  readonly guardForbidden: number;
+}
+
+/** `GET /api/digest?day=` (session-gated): the digest for `day`, a UTC date, covering the 24 hours before that day's
+ *  digest hour (`fromMs` to `toMs`). `sentAt` is when the daily beat ran for that day (null: not yet, or never on this
+ *  box); `pushed` whether it sent the push (a day with no decisions sends none). */
+export interface DigestAnswer {
+  readonly v: 1;
+  readonly day: string;
+  readonly hourUtc: number;
+  readonly fromMs: number;
+  readonly toMs: number;
+  readonly totals: DigestTotals;
+  readonly byCoordinator: readonly { readonly coordinator: string; readonly decisions: number }[];
+  readonly lines: readonly DigestLine[];
+  readonly sentAt: number | null;
+  readonly pushed: boolean;
+}
+
+/** `POST /api/digest/correct`'s body: which row, and the operator's sentence, mailed verbatim to the coordinator. */
+export interface DigestCorrectBody {
+  readonly rowKind: DigestRowKind;
+  readonly id: number;
+  readonly text: string;
+}
+
+/** Its 200: the mail queued (its delivery id, which the coordinator acks) and the row now marked corrected. */
+export interface DigestCorrectAnswer {
+  readonly ok: true;
+  readonly mailId: number;
+  readonly deliveryId: number;
+}
+
+/** The longest correction accepted, in characters. */
+export const DIGEST_CORRECTION_MAX_CHARS = 2000;
+
+/** The first characters of an approval's redacted command a digest line carries (spec §10). */
+export const DIGEST_COMMAND_CHARS = 160;
+
+/** The digest routes' own refusal words, each answered at its one status by `REFUSAL_STATUS` (`shared/refusal.ts`):
+ *  `not-coordinator`    the row is not a coordinator's decision (the operator answered it while it was held, or it was
+ *                       minted released): there is no coordinator to correct.
+ *  `digest-unreadable`  the asks or approvals rows could not be read back. */
+export const DIGEST_REFUSALS = ['not-coordinator', 'digest-unreadable'] as const;
+export type DigestRefusal = (typeof DIGEST_REFUSALS)[number];
+
+/** The server box's override of the digest hour, under its `~/.ccrc`: one integer, 0 to 23 (UTC). */
+export const DIGEST_HOUR_FILE = 'digest-hour';
+
+/** The step-up routes' refusal words (D-5512, spec §3.2; plan Task A5), each answered at its one status by
+ *  `REFUSAL_STATUS` (`shared/refusal.ts`):
+ *  `step-up-required`  no step-up from the last five minutes on this session, or this attempt did not prove one
+ *                      (the body then carries `verdict: 'wrong'`); the sheet shows Confirm it's you again.
+ *  `step-up-locked`    this session spent its step-up budget; it stays locked until it ends or the operator
+ *                      signs in again. Another session keeps its own budget.
+ *  `passkey-enrolled`  the passphrase arm, refused because a passkey is enrolled: a stolen session may not step
+ *                      down to the weaker factor.
+ *  `auth-off`          the gate is dark, so there is no session to step up (D-5618: defined here, before the
+ *                      account gate that also answers it, A7). */
+export const STEP_UP_REFUSALS = ['step-up-required', 'step-up-locked', 'passkey-enrolled', 'auth-off'] as const;
+export type StepUpRefusal = (typeof STEP_UP_REFUSALS)[number];
+
+/** `POST /api/auth/step-up/start`'s 200: the passkey ceremony's challenge, bound to the requesting session,
+ *  with the configured `rpId` and the enrolled credential ids (the `PasskeyAssertStart` fields). */
+export interface StepUpStart {
+  readonly challengeB64url: string;
+  readonly rpId: string;
+  readonly allowCredentialIdsB64url: readonly string[];
+}
+
+/** `POST /api/auth/step-up/finish`'s and `/passphrase`'s 200: the requesting session's stamp, as the first
+ *  instant it is no longer fresh. No cookie, no new session, the same `generation` (D-5512). */
+export interface StepUpAnswer {
+  readonly ok: true;
+  readonly stepUpFreshUntil: number;
+}
+
+// ── Accounts: the account gate, the audit and the AccountOps port (D-5511, D-5516; plan Task A7) ─────────────────
+
+/** The `ccrc account` subs the `AccountOps` port may run (spec §13.2), and so the closed `sub` of the agent's
+ *  `account` op (A8). There is deliberately NO sub that installs or replaces the OpenRouter management key and none
+ *  that raises its ceiling (D-5554: CLI-only), and no `seed` (`check` runs the seed in-verb, D-5518). */
+export const ACCOUNT_SUBS = [
+  'add', 'auth-start', 'auth-code', 'auth-cancel', 'set', 'check', 'enable', 'disable', 'credential', 'remove',
+  'roster', 'or-management-remove', 'or-management-lower',
+] as const;
+export type AccountSub = (typeof ACCOUNT_SUBS)[number];
+
+/** Each sub's bound, after which the child gets SIGTERM, then SIGKILL `ACCOUNT_OP_KILL_GRACE_MS` later (spec §3.9,
+ *  §13.2): `check` 90 s (its probe turn), `add` 180 s, the rest 120 s. One home for both arms (A7's local spawn,
+ *  A8's agent op). */
+export const ACCOUNT_SUB_TIMEOUT_MS: Readonly<Record<AccountSub, number>> = {
+  'add': 180_000, 'auth-start': 120_000, 'auth-code': 120_000, 'auth-cancel': 120_000, 'set': 120_000,
+  'check': 90_000, 'enable': 120_000, 'disable': 120_000, 'credential': 120_000, 'remove': 120_000,
+  'roster': 120_000, 'or-management-remove': 120_000, 'or-management-lower': 120_000,
+};
+export const ACCOUNT_OP_KILL_GRACE_MS = 5_000;
+/** The most a sub's stdout may carry before the answer is cut and refused (spec §13.2's 8 MiB cap). */
+export const ACCOUNT_OP_OUTPUT_MAX_BYTES = 8 * 1024 * 1024;
+
+/** The acts `account_events` records (D-5516; spec §3.6), closed. `step-up-locked` (D-5512), `management-remove` and
+ *  `ceiling-lower` (D-5554) name no lane; every other act names the lane it touched. */
+export const ACCOUNT_ACTS = [
+  'add', 'auth-start', 'auth-code', 'auth-cancel', 'auth-url-untrusted', 'set', 'check', 'enable', 'disable',
+  'credential', 'retire-key', 'remove', 'discard', 'reconcile', 'management-remove', 'ceiling-lower',
+  'revoke-acknowledged', 'step-up-locked',
+] as const;
+export type AccountAct = (typeof ACCOUNT_ACTS)[number];
+
+/** The acts that name no lane, so their row's `laneId` is NULL (and only theirs). */
+export const ACCOUNT_LANELESS_ACTS: readonly AccountAct[] = ['step-up-locked', 'management-remove', 'ceiling-lower'];
+
+/** How an act ended (D-5516): `unknown` is the outcome-unknown state of D-5518, never retried on its own. */
+export const ACCOUNT_OUTCOMES = ['ok', 'refused', 'failed', 'unknown'] as const;
+export type AccountOutcome = (typeof ACCOUNT_OUTCOMES)[number];
+
+/** OpenRouter's key-plane outcomes, which ride an audit row's `code` beside the route refusal words (spec §3.6). */
+export const ACCOUNT_KEY_PLANE_CODES = [
+  'minted-deleted', 'minted-not-installed', 'pkce-minted-deleted', 'pkce-minted-not-installed', 'provider-delete-failed',
+] as const;
+export type AccountKeyPlaneCode = (typeof ACCOUNT_KEY_PLANE_CODES)[number];
+
+/** How long an `account_events` row is kept (D-5516): a row older than this is swept. */
+export const ACCOUNT_AUDIT_RETENTION_DAYS = 365;
+
+/** Every word the account gate (`server/src/accounts/gate.ts`, D-5511) answers, in the order it refuses, each at its
+ *  one status in `REFUSAL_STATUS` (`shared/refusal.ts`):
+ *  `auth-off`          the gate is dark (501, D-5618's definition, reused): no loopback exception, because a dark
+ *                      loopback box is the default deployment.
+ *  `insecure-origin`   the gate is armed and `cfg.origin` is plain HTTP on a host that is not loopback (403): the
+ *                      session cookie and the bundle are open to a man in the middle. Read from `cfg.origin` only.
+ *  `unauthenticated`   any verdict but `session` (401). A box token is never one.
+ *  `unsupported`       the fleet does not advertise the route's cap word, or the fleet state is unmeasured (501).
+ *  `step-up-required`  the route asked for a step-up and this session has none from the last five minutes (403). */
+export const ACCOUNT_GATE_REFUSALS = ['auth-off', 'insecure-origin', 'unauthenticated', 'unsupported', 'step-up-required'] as const;
+export type AccountGateRefusal = (typeof ACCOUNT_GATE_REFUSALS)[number];
+
+/** The class of `cfg.origin` the gate decides on, and `GET /api/accounts`'s `connect.origin` (A12): https, plain HTTP
+ *  on a loopback host, or anything else. */
+export type AccountOriginClass = 'https' | 'loopback' | 'insecure';

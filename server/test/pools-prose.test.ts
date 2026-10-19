@@ -565,13 +565,14 @@ describe('README: what a retag does, and when (spec §5.5.4, §5.8, §5.7, §5.1
     // The three exceptions to "it waits", each named.
     expect(s, 'hard-blocked sessions do not wait; the paragraph must say so').toMatch(/hard-blocked/);
     expect(s, 'a hold defers a retag; the paragraph must say so').toMatch(/held|hold/);
-    expect(s, 'the visible waiting state is the one an operator can act on').toContain('data-offpool');
-    // Grounded in the PWA cell that renders it.
-    // The row is `SessionLine` AND its meta line (`SessionMeta.tsx`), which is
-    // where this cell sits — read the family, not a path (`componentFamily`).
-    expect(componentFamily(root, 'pwa/src/fleet/SessionLine.tsx'),
-      'the PWA no longer marks an off-pool row — the README describes a cell that is gone')
-      .toContain('data-offpool');
+    expect(s, 'the visible waiting state is the one an operator can act on').toContain('data-marker="off-pool"');
+    // Grounded in the PWA cell that renders it. D-5545: the row's markers are decided in `sessionFacts.ts` and
+    // drawn by `SessionMeta.tsx`'s one `Marker` cell (`data-marker`, its ink from `MARKER_CLASS`); read the
+    // family, not a path.
+    const family = componentFamily(root, 'pwa/src/fleet/SessionLine.tsx');
+    expect(family, 'the PWA no longer marks an off-pool row — the README describes a cell that is gone')
+      .toContain("'off-pool': 'sess-offpool'");
+    expect(family).toContain('data-marker={key}');
   });
 
   it('describes the strand with the vocabulary ccd actually writes, and three remedies', () => {

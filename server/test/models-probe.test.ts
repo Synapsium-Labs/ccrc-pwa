@@ -670,25 +670,23 @@ describe('--endpoints: the ownership-whitelist question (§5, §8)', () => {
 });
 
 // ── Plan 3a Task 1: a codex lane's Codex arm reads only what its caller hands it
-// `ccrc`'s `_models_run_probe` exports CCRC_PROBE_LANE_KIND=codex,
-// CHATGPT_TOKEN_DIR (the row's own exec.authDir) and CCRC_CODEX_PYTHON (the
-// interpreter `ccgpt-runtime python` resolved) for an exec.kind "codex" row,
-// and neither the marker nor the interpreter for any other row. These cases
-// hand the probe those values directly, so what they pin is the PROBE's own
-// contract:
-//   - on the marker, no default for either input;
+// `ccrc`'s `_models_run_probe` exports CHATGPT_TOKEN_DIR (the row's own
+// exec.authDir) and CCRC_CODEX_PYTHON (the interpreter `ccgpt-runtime python`
+// resolved) for an exec.kind "codex" row, and neither for any other row.
+// These cases hand the probe those values directly, so what they pin is the
+// PROBE's own contract:
+//   - no default for either input;
 //   - three refusals before any interpreter runs;
 //   - the interpreter run isolated and scrubbed;
 //   - an Authenticator that may refresh a token and may never start a device
 //     sign-in;
-//   - and WITHOUT the marker, today's arm, byte for byte (operator ruling Z1,
-//     D-3706): the last two cases.
+//   - and every caller now takes the codex-lane arm (Plan 4): the last cases.
 // CONTAINMENT FIRST: every case plants a poisoned `litellm` and a poisoned
 // `python` beside it on the fixture PATH. An old or mutated probe that goes
 // looking for a PATH LiteLLM runs a recorder — never the runner's own LiteLLM,
 // whose real Authenticator would start a real device sign-in against a
 // fixture HOME.
-describe.skipIf(pythonOrSkip() === null)('the Codex arm: a codex lane gets no default token directory, its own runtime and never a device sign-in; every other caller keeps today\'s arm (Plan 3a Task 1)', () => {
+describe.skipIf(pythonOrSkip() === null)('the Codex arm: a codex lane gets no default token directory, its own runtime and never a device sign-in (Plan 3a Task 1)', () => {
   let pr: ProbeRuntime;
   let py: string;
   const authDir = (): string => path.join(home, codexAuthDir('codex-a'));
@@ -715,7 +713,7 @@ describe.skipIf(pythonOrSkip() === null)('the Codex arm: a codex lane gets no de
   });
 
   const codex = (extra: NodeJS.ProcessEnv = {}): Result =>
-    run(['codex-a', 'codex'], { CCRC_PROBE_LANE_KIND: 'codex', CHATGPT_TOKEN_DIR: authDir(), CCRC_CODEX_PYTHON: py, ...extra });
+    run(['codex-a', 'codex'], { CHATGPT_TOKEN_DIR: authDir(), CCRC_CODEX_PYTHON: py, ...extra });
 
   it('handed no CHATGPT_TOKEN_DIR it refuses no-token-dir — there is no default directory — and no interpreter runs', () => {
     const r = codex({ CHATGPT_TOKEN_DIR: '' });
@@ -871,33 +869,44 @@ describe.skipIf(pythonOrSkip() === null)('the Codex arm: a codex lane gets no de
     expect(body.includes('readlink'), 'readlink').toBe(false);
   });
 
-  // Z1 (operator ruling Z, D-3706): every caller that is not a codex lane
-  // keeps today's arm, byte for byte, until that lane's own flip. Both cases
-  // are GREEN before this task and after it. They bind through mutation rows
-  // 15-17, never through a red-first run.
-  it('without the codex-lane marker the arm is today\'s: the python beside the PATH litellm, run as `-`, on the directory it was handed; a handed CCRC_CODEX_PYTHON never runs', () => {
-    const pathPython = path.join(fs.realpathSync(path.join(home, '.local', 'bin')), 'python');
-    for (const marker of ['', 'external']) {
-      fs.rmSync(path.join(home, 'python-poison'), { force: true });
-      const r = run(['ext-a', 'codex'], { CCRC_PROBE_LANE_KIND: marker, CHATGPT_TOKEN_DIR: authDir(), CCRC_CODEX_PYTHON: py });
-      expect(r.code, `marker "${marker}"`).toBe(1);   // the PATH python is a recorder that exits 1
-      expect(fs.readFileSync(path.join(home, 'python-poison'), 'utf8'), `marker "${marker}"`)
-        .toBe(`${pathPython} -|${authDir()}\n`);
-    }
-    expect(probeArgv0(pr.rec), 'the handed runtime interpreter ran').toEqual([]);
+  // Review Focus 4 (Plan 4): the deleted external fetch used a default token
+  // directory, and a caller that carried no lane inputs reached it. Now nothing
+  // does: the one codex arm refuses first, and no interpreter runs.
+  it('a codex probe handed no lane inputs refuses no-token-dir, and never reads the retired default directory (Plan 4)', () => {
+    // The retired default is read off the spec's own code span (§9 item 1) and
+    // never spelled here: it is a real lane's directory (ruling R13).
+    const spec = fs.readFileSync(path.join(REPO, 'docs', 'superpowers', 'specs', '2026-09-20-gpt-lane-ownership-design.md'), 'utf8');
+    const m = /\$\{CHATGPT_TOKEN_DIR:-\$HOME\/([^}]+)\}/.exec(spec);
+    expect(m !== null, 'spec §9 item 1 names the retired default as a code span').toBe(true);
+    const retired = path.join(home, m![1]!);
+    fs.mkdirSync(retired, { recursive: true });
+    fs.writeFileSync(path.join(retired, 'auth.json'), '{}');
+    const r = run(['ext-a', 'codex'], { CHATGPT_TOKEN_DIR: '', CCRC_CODEX_PYTHON: '', CCRC_PROBE_LANE_KIND: '' });
+    expect(r.code).toBe(1);
+    // Booleans: a probe that still falls back to the default prints it.
+    expect(/no-token-dir/.test(r.stderr), 'the no-token-dir refusal').toBe(true);
+    expect(poisonRan(), 'the PATH litellm\'s python ran').toBe(false);
+    expect(probeArgv0(pr.rec), 'an interpreter ran with no token directory').toEqual([]);
+    expect(fs.existsSync(path.join(home, '.ccrc', 'models', 'ext-a.json'))).toBe(false);
     expect(curlCalls()).toEqual([]);
   });
 
-  it('without the codex-lane marker and handed no directory, the arm still falls back to its own default, and nothing runs where that holds no auth.json', () => {
-    // The default is read off the arm's own text and never spelled here: it
-    // is a real lane's directory (ruling R13).
-    const m = /\$\{CHATGPT_TOKEN_DIR:-\$HOME\/([^}]+)\}/.exec(extractFn('_fetch_codex'));
-    expect(m !== null, '_fetch_codex keeps a default token directory').toBe(true);
-    const r = run(['ext-a', 'codex'], { CHATGPT_TOKEN_DIR: '', CCRC_CODEX_PYTHON: py });
-    expect(r.code).toBe(1);
-    // A boolean: a failing `toContain` would print the default directory.
-    expect(r.stderr.includes(`not logged in (${home}/${m![1]})`), 'today\'s sentence, on the default directory').toBe(true);
-    expect(poisonRan(), 'an interpreter ran with no auth.json').toBe(false);
-    expect(probeArgv0(pr.rec)).toEqual([]);
+  it('the probe\'s code reads no auth.json and has no token-directory default or lane-kind marker (Plan 4)', () => {
+    const codeLines = (file: string): string[] =>
+      fs.readFileSync(file, 'utf8').split('\n').filter((l) => !/^\s*#/.test(l));
+    const probe = codeLines(PROBE);
+    // Exactly the three that remain: the existence test, its not-logged-in
+    // sentence and the login-required sentence. Counts and booleans, never the
+    // lines: a failing assertion prints its subject, and the default is a real
+    // lane's directory.
+    const authLines = probe.filter((l) => l.includes('auth.json'));
+    expect(authLines.length, 'code lines naming auth.json').toBe(3);
+    expect(authLines.filter((l) => l.includes('[ ! -f "$token_dir/auth.json" ]')), 'the existence test').toHaveLength(1);
+    expect(authLines.filter((l) => l.includes('not-logged-in:')), 'the not-logged-in sentence').toHaveLength(1);
+    expect(authLines.filter((l) => l.includes('sign-in (that would write auth.json')), 'the login-required sentence').toHaveLength(1);
+    expect(probe.some((l) => /CHATGPT_TOKEN_DIR:?-[^}]/.test(l)), 'a token-directory default').toBe(false);
+    for (const file of [PROBE, path.join(REPO, 'ccd', 'ccrc')]) {
+      expect(codeLines(file).some((l) => l.includes('CCRC_PROBE_LANE_KIND')), `${path.basename(file)} names the lane-kind marker`).toBe(false);
+    }
   });
 });

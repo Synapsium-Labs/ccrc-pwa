@@ -114,13 +114,14 @@ const seedTurnMark = (home: string, id: string, over: Record<string, unknown> = 
 
 /** A COMPLETE fleet row (fleet-health.test.ts's `session()` shape), alive and running. */
 const fleetRow = (id: string, over: Partial<FleetSession> = {}): FleetSession => ({
+  hibernatedAt: null,
   id, wrapper: 'claude', home: '/home/rc', project: 'demo', workdir: '/w/demo',
   workspace: `${id}-ws`, name: null, status: 'idle', statusUpdatedAt: IDLE_AT, limits: null,
   dialogPending: false, version: null, model: null, effort: null, ultracode: false,
   branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
-  hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null,
+  hookState: null, askSummary: null, subagents: null, background: null, lastEnd: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null,
   unmeasured: [], statusUnmeasured: false, lifecycle: 'running', stoppedBy: null, swapBlocked: null, stranded: null, substrate: null,
-  started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: null,
+  started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, role: 'coordinator', releasedFrom: null, withCoordinator: null,
   ...over,
 });
 
@@ -128,11 +129,12 @@ const store = (home: string): CoordStore => new CoordStore(openCoordDb(path.join
 
 /** A complete registry row (`hold-gate.test.ts`'s literal), measured unless `over` says otherwise. */
 const regRow = (id: string, uuid: string = UUID, over: Partial<SessionRecord> = {}): SessionRecord => ({
+  hibernatedAt: null,
   id, wrapper: 'claude', project: 'demo', workdir: '/w/demo', uuid,
   started: true, home: null, pool: null, lastswap: null,
   workspace: `${id}-ws`, branch: null, branchEvidence: 'absent', base: null,
   prPhase: null, prNumber: null, prCheckedAt: null, archivedAt: null, archivedBytes: null, held: null,
-  substrate: null, stopped: null, supervisedAt: null, swapBlocked: null, stranded: null, spawn: null, lifecycleUnmeasured: [],
+  substrate: null, stopped: null, supervisedAt: null, swapBlocked: null, stranded: null, spawn: null, lastEnd: null, lifecycleUnmeasured: [],
   unmeasured: [], route: null, child: { kind: 'none' },
   ...over,
 });
@@ -1646,6 +1648,8 @@ describe('sweepStalls: wave 2, the session arms on every subject kind and the la
     ['a current, non-plumbing hook event an hour old: frozen', { event: 'PreToolUse', updatedAt: TURN_AT + 60_000 }, TURN_AT + 60_000 + FROZEN_NO_EVENT_MS, true],
     ['a plumbing event five minutes ago does not refresh the clock: frozen from the turn start', { event: 'SessionStart', updatedAt: TURN_AT + FROZEN_NO_EVENT_MS - 300_000 }, TURN_AT + FROZEN_NO_EVENT_MS, true],
     ['another process\'s hookstate is no evidence: not frozen', { event: 'PreToolUse', updatedAt: TURN_AT + 60_000, sessionId: '2'.repeat(36) }, TURN_AT + 60_000 + FROZEN_NO_EVENT_MS, false],
+    // D-5232: the lane carries the file's `aliveAt` (subagent activity behind `hook-main-state-v1`) into L1's raw fact.
+    ['a main event an hour old with aliveAt a minute before the check (a foreground Agent call): not frozen (D-5232)', { event: 'PreToolUse', updatedAt: TURN_AT + 60_000, aliveAt: TURN_AT + FROZEN_NO_EVENT_MS }, TURN_AT + 60_000 + FROZEN_NO_EVENT_MS, false],
   ];
   it.each(FROZEN)('frozen, from the raw hookstate: %s', async (_name, hook, checkAt, frozen) => {
     const { h, coord, w } = await rig();

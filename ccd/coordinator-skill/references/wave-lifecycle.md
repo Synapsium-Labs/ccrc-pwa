@@ -22,7 +22,7 @@ row for the whole program. `$REG` is `$HOME/.cc-sessions` throughout — SKILL.m
 | refused | what it means | what you do |
 |---|---|---|
 | `claimed-by-another` | another coordinator holds this program; `by` names it | stop (clause 8) |
-| `project-mismatch` | the `sessionId` you passed belongs to a workspace in ANOTHER project; `by` names that project | do not retry with the same id. A wave that changes project opens WITHOUT `sessionId` and spawns fresh in the target repo. Nothing was opened and nothing was held |
+| `project-mismatch` | the `sessionId` you passed belongs to a workspace in ANOTHER project; `by` names that project. Or it names an EXISTING session of the run's project and you sit outside that project; `by` names YOUR project and a `detail` says a crossing spawns fresh. Or your own registry row records no project; a `detail` says so and there is no `by`. Where you sit never refuses an open by itself; it only stops you rebinding an existing session: a coordinator may sit in ANY project and run a programme whose home and runs are elsewhere (the operator's ruling of 2026-10-18) | do not retry with the same id. A wave that changes project, or any wave into a project you do not sit in, opens WITHOUT `sessionId` and spawns fresh in the target repo. The no-project case: stop and report. Nothing was opened and nothing was held |
 | `home-mismatch` | this programme already stores a DIFFERENT home project; `by` names the stored one | stop and report. A programme has one home — the repo holding its ledger, spec and plan — and it does not move. Either you are addressing the wrong programme or the `homeProject` you sent is wrong. Nothing was opened |
 | `claimant-is-a-worker` | the `claimedBy` you sent is itself the WORKER of an open run; `by` names that worker's coordinator | stop and report. A dispatched worker never opens a run — the board brackets one level and a chain would render its middle detached. This session is a worker until its own run is closed; nothing was opened and nothing was held |
 | `workspace-spent` | the `sessionId` you passed is a CHILD workspace — one carrying the `$REG/<id>.child` marker, ordinarily minted for a run — whose branch has already had a PR (open, draft, merged or closed); `pr` names it. A child carries at most one PR | open the wave again WITHOUT `sessionId`; its dispatch mints a fresh child (§5, "One PR per child"). Nothing was opened and nothing was held |
@@ -96,9 +96,10 @@ run row's own `wave`.
 ## 2 — Dispatch a wave
 
 `POST /api/runs/:id/dispatch`
-`{"brief":"<the wave brief, prose>","items":["<title>", …],"route":{"class":"…","effort":"…","subagent":"…","workflow":"…","compact":"…"}}`
+`{"brief":"<the wave brief, prose>","items":["<title>", …],"route":{"class":"…","effort":"…","subagent":"…","workflow":"…","compact":"…"},"slug":"<child name>"}`
 → `{"ok":true,"id":<run id>,"sessionId":…,"resumed":…,"clearedAt":…,"briefQueued":…}`
 with the run now `dispatched`, or a refusal:
+
 
 | refused | what it means | what you do |
 |---|---|---|
@@ -183,6 +184,23 @@ arrives within the wave's ordinary window, read the session's own screen before 
 provenance of the workspace survives the conversation. Every dispatch also writes its preflight
 there as `skill-preflight:<skillState>` — on all three answers, so a trail with no such line means
 an older build, never a healthy home.
+
+**`slug` — the child's name, chosen at birth.** `"slug"` is an optional
+WORKSPACE slug — not the programme slug of §1, which has its own grammar — for a
+fresh spawn only. It rides to `ws-add`, so the worktree, its `ws/<slug>` branch and
+the session id `<project>-<slug>` carry it from the first second; use it when the
+work keys on the workspace name (a ticket id, say). Nothing renames a child later:
+the path and the session id never move, and the branch-only `ws-rename` refuses a
+held workspace. It follows ccd's own slug grammar (`_ws_slug_valid`); a malformed one
+answers `error:'bad-request'` (400) with a `detail` reading `slug: must match …`, and
+a slug on a run that resumes its bound session answers 400 with `slug: this run
+resumes …` — drop it there, it names nothing. A named spawn binds ONLY
+`<project>-<slug>`: any other new workspace is never adopted in its place. A slug
+already in use — or one whose id outruns ccd's length cap with a long project
+name — fails the spawn with a 502 whose `stderr` carries ccd's own words: choose
+another name, never retry the same one. **Check the answer's `sessionId` equals
+`<project>-<slug>`**; an older server ignores the field and mints a random name, and
+that mismatch is a stop-and-report, not a retry.
 
 **`items` — the wave's declared ledger.** `"items"` is the machine-readable
 half of the wave plan whose other half is the brief: one title per unit of
@@ -1044,6 +1062,18 @@ a child's pane, and this session never does it by any other means. All three rou
 lane are named here — a coordinator IS a parent and calls all three, so this is the truthful
 entry, not an invitation like the operator-only doors above.
 
+**A cross-project coordinator receives its children's questions** (the operator's ruling of
+2026-10-18, D-5530). A child's question is held for the recorded claimant of the child's run
+wherever that claimant sits — no project is compared — so if you coordinate a programme whose
+runs are in another project, its children's questions are mailed to you and are yours to
+answer. The answer route admits exactly the session a row is held for: any other caller,
+whatever its project, is `403 not-parent`. A question the server could not hold for anyone (a
+run with no claimant, a run of another programme, or a parent it could not measure) goes to the
+operator at once, is never mailed to you, and is not in your `asks list`; an answer to one is
+refused (`not-held`, or `403 not-parent` when it was held for nobody). So does one whose run was
+opened without your attribution (D-5531): a run opened with no claimant uuid before the fleet
+carried `ccrc-api`, or before the attributed binding, holds nothing, wherever you sit.
+
 ```bash
 : "${ask_id:?set ask_id to the held ask row positive decimal id}"
 "$API" asks answer "$ask_id" --json - <<JSON
@@ -1051,19 +1081,39 @@ entry, not an invitation like the operator-only doors above.
 JSON
 ```
 
-Press an answer in with that body. A 409 from this route can come from three
-route/CAS guards before `answerAsk` (`not-held`, `ask-moved`, or
-`child-unmeasurable`) or from a downstream `answerAsk` refusal. No refusal path
-presses a digit when the eligible ask is single-select, which is the only shape
-this hold lane mints; after a downstream refusal the route rolls the row back to
-`held`.
-- `not-held` — the row has LEFT `held` and is no longer pre-emptible. That is FOUR different
-  endings, not one: another principal is mid-answer, the grace window lapsed and the operator
-  was notified after all, the child's dialog went away, or someone already ruled. Only the
-  first is a race a retry could win, and you cannot tell which from this code alone — read the
-  row (`GET /api/asks`, below) rather than retrying blind. (This entry said "a lost race
-  against another principal that already took the row" for one wave, naming one of the four:
-  the gloss came from `store.ts`, where it was equally wrong, and both were corrected together.)
+Press an answer in with that body. A LAPSE DOES NOT END YOUR TURN (late answer wins, D-5289):
+when the grace window lapses, the operator's notification fires and the row moves to
+`released`, but it stays answerable, by you or by the operator, until one of you acts. An
+answer you press after the lapse still lands, and the operator's notification is replaced by
+one saying you answered it. Only a ruling ends it: an answer from either principal, or your
+own release (below).
+
+A 409 from this route can come from six route/CAS guards before `answerAsk` (`not-held`,
+`ask-moved`, `child-unmeasurable`, `declined`, `already-answered`, or `ask-mismatch`) or from
+a downstream `answerAsk` refusal (D-5357, D-5368). No refusal path presses a digit when the eligible ask is
+single-select, which is the only shape this hold lane mints; after a downstream refusal the
+route puts the row back in the state it was taken from: `held`, or `released` if the window
+had already lapsed.
+- `not-held` — the row is in no state a principal can take it from, and no ruling is the
+  reason. That is THREE different endings, not one: another principal is mid-answer, the
+  child's dialog went away, or the row carries a state this build cannot read. Only the first
+  is a race a retry could win, and you cannot tell which from this code alone — read the row
+  (`GET /api/asks`, below) rather than retrying blind. A lapse is NOT one of them: a lapsed
+  row is still answerable (above). (This entry said "a lost race against another principal
+  that already took the row" for one wave, naming one of its endings: the gloss came from
+  `store.ts`, where it was equally wrong, and both were corrected together. It then said
+  `not-held` also covered a lapse and an answered row, until D-5289 made a lapsed row
+  answerable and named the two rulings below apart.)
+- `ask-mismatch` — your body carried an `askKey` (optional; the operator's route sends one)
+  that is not this row's key (D-5368). The route refuses it before it takes the row: nothing
+  is pressed and the row is unchanged. Re-read the ask (`GET /api/asks`, below) and answer
+  the question it shows, or send no `askKey`.
+- `declined` — YOU released this question yourself (`asks release`, below). A release is
+  final: you handed the question to the operator, and your later answer is refused. Do not
+  retry; the question is the operator's now.
+- `already-answered` — a principal already ruled: you earlier, or the operator from their own
+  phone, after the lapse or before it. Nothing is left to do; read the row (`GET /api/asks`)
+  for who answered if your ledger needs it.
 - `ask-moved` — the CHILD REPAINTED AN IDENTICAL QUESTION since this row was minted; the menu
   on its screen right now may be a different instance of what looks like the same question.
   This IS a reason to re-read the ask and answer the CURRENT one, never a reason to retry the
@@ -1078,7 +1128,7 @@ this hold lane mints; after a downstream refusal the route rolls the row back to
   `not-alive`, `no-menu`, and `menu-mismatch`. Each names the failed live-state,
   option, or pane guard; stop and re-read rather than treating 409 as three
   possible conditions or retrying blind. Counting both halves, this route answers
-  409 with thirteen (3 + 10) distinct codes.
+  409 with 15 distinct codes (6 + 10, `ask-mismatch` in both halves).
 ```bash
 : "${ask_id:?set ask_id to the held ask row positive decimal id}"
 "$API" asks release "$ask_id" --json - <<JSON
@@ -1089,8 +1139,11 @@ JSON
 Decline to rule on it with that body. A decline is not a failure: it is what turns the grace window
 into a CEILING rather than a flat tax on every question you cannot answer — the operator's
 notification fires AT ONCE on release, instead of the child's question sitting quiet until the
-window lapses on its own. Decline anything that would be a NEW decision (clause 11's own
-words — product intent, scope, a tradeoff nobody ruled on, anything irreversible) rather than
+window lapses on its own. A release is FINAL: the row moves to `declined`, a terminal state,
+and an answer you send for it afterwards is refused `declined` (D-5289) — releasing hands the
+question over, it does not defer it. Only a `held` row can be released; a release of a row
+that has already lapsed, or that a principal has taken or answered, is refused `not-held`.
+Decline anything that would be a NEW decision (clause 11's own words — product intent, scope, a tradeoff nobody ruled on, anything irreversible) rather than
 guessing at it.
 ```bash
 "$API" asks list
@@ -1111,3 +1164,24 @@ entire evidentiary surface — no rationale, no chat history, no transcript of t
 reasoning is readable through any route in this tree. Rule only from what you can already read
 elsewhere: the spec, the plan, the ledger, the branch, and your own prior rulings on this
 program. If answering would require guessing rather than reading, decline it.
+
+## The approval lane — a child's permission prompt (plan Task 16)
+
+Clause 11 licenses this too. A child's permission prompt reaches you as mail (subject
+`approval:<id>`), held for you as the recorded claimant of the child's run wherever you sit
+(D-5530), with the command fenced as untrusted data, the server's class, the window's end in
+UTC and the ready-to-run commands. Three routes are yours, each through the client:
+
+- `POST /api/approvals/:id/rule` — allow once (an `ordinary` row only) or deny, with a reason
+  the child reads. The mailed command reads your reason through a quoted heredoc and builds the
+  body with jq, so type the reason on its own line and nothing in it is run (D-5489).
+- `POST /api/approvals/:id/release` — hand it over: the operator is notified at once, and it is
+  final.
+- `GET /api/approvals/:id` (`"$API" approvals show <id>`) — the row, redacted, for the claimant
+  it was held for; anyone else is `403`.
+
+A ruling after the window is refused `hook-gone`: the child's hook has returned and the
+operator has the prompt. Any other caller is `403 not-parent`, wherever it sits. The other
+three routes of the lane are the child's hook's and the install's, never yours:
+`POST /api/approvals` (the hook's request), `GET /api/approvals/:id/ruling` (the hook's wait,
+by its nonce) and `GET /api/approvals/key` (the public key a fleet box pins).

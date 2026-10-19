@@ -150,6 +150,26 @@ export const EveryArm: Story = {
   },
 };
 
+/** D-5242: a delivery held for a SLEEPING recipient. CHECK that the held phrase reads as a wait the lane is handling
+ *  ("asleep — it is being woken"), never as the gone-for-good phrase a dead recipient gets, at every width. */
+export const HibernatedRecipient: Story = {
+  parameters: { layout: 'padded' },
+  args: {
+    mail: [
+      mail({
+        id: 1,
+        subject: 'wave 3 is merged; rebase onto main before wave 4',
+        state: 'queued',
+        attempts: 0,
+        lastGate: 'hibernated',
+        gateSince: NOW - MAIL_GATE_HELD_MS - 600_000,
+        gateCount: MAIL_GATE_HELD_COUNT + 2,
+        gateAt: NOW - 2_000,
+      }),
+    ],
+  },
+};
+
 /** Artifacts and overflow. CHECK that paths render as PATHS and nothing on the
  *  row is tappable to fetch one, and that a long subject wraps rather than
  *  pushing the count and chevron off the head. */

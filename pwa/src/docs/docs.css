@@ -1,0 +1,285 @@
+/* Docs (native Docs reader, design 2026-10-01 sections 4.8 and 4.14): the Docs door in the fleet header and the chrome
+   of the Docs screen. Imported by screens/DocsScreen.tsx, which app.tsx imports statically, so this sheet is part of
+   the one main stylesheet the door needs on the fleet screen (the build check in the W5 plan's Task 11 reads the
+   BUILT index css for it; vitest runs with `css: false` and evaluates no stylesheet).
+
+   TOKENS ONLY. No literal colour anywhere in this sheet (contrast.test.ts's docs describe scans for one), no
+   `repeat(<n>, 1fr)` (fleet-css.test.ts walks every sheet), and no `overflow` on `.shell-detail` (shell-css.test.ts):
+   the detail pane's scrolling is shell.css's, and the Docs screen scrolls inside it as /settings does.
+
+   GROUNDS. `.docs-screen` paints no background, and neither do `.shell-detail` or the fleet header, so every rule
+   here that sets a colour and no ground of its own sits on body's --bg-page and is registered on that ground in
+   design/audit.mjs's INHERITED_GROUNDS, each with its reason (the `.settings-*` precedent: the uncovered census is
+   frozen and admits no new identity). The door has a second ground, `.shell-nav`'s --bg-surface in the desktop
+   sidebar, which contrast.test.ts measures off its own ink. The banners, the failure view, the badge, the filter,
+   the image chip and a pressed row paint their own ground, so the audit measures them on it with no entry; the
+   failure view's coloured parts name `.docs-fail` and are measured through it. Links take `color: inherit`, so
+   they read in whatever measured ink their container has and set no colour of their own.
+
+   TAP FLOOR. Every control here has `min-height: var(--tap-min)` in its own rule, and tap-targets.test.tsx holds
+   both halves for each: the rule, and a rendered element with the class. The exemption is a link inside running text,
+   which sets no floor of its own (WCAG 2.5.8's inline exception): the failure view's "Did you mean …?" link
+   (`.docs-fail-suggest a`) and the links inside a rendered document. A Docs link that stands alone as a control
+   (`.docs-action`, `.docs-hint-link`, `.docs-owner-link`) carries the floor. The two `btn-ghost` controls take the
+   floor from @ccrc/ui's ghost `Button` (its `min-h-tap`) and restate it here beside the width they give back. */
+
+/* — the Docs door, in the fleet header before `.accounts-door` (section 4.8): the box `.settings-door` had before `Door` — */
+.docs-door {
+  display: inline-flex; align-items: center; gap: var(--sp-1); min-height: var(--tap-min);
+  padding: 0 var(--sp-1);
+  border: 0; border-radius: var(--r-sm);
+  background: none; color: var(--ink-secondary);
+  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
+  cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-swift), color var(--dur-fast) var(--ease-swift);
+}
+.docs-door:active { transform: scale(0.88); color: var(--ink-primary); }
+/* The glyph is `Icon file-text` (D-5500), decoration beside the word, aria-hidden in the markup; its box takes the UI
+   font as `Door`'s glyph does, so the word sits on the same line as its siblings'. */
+.docs-door-glyph { font-family: var(--font-ui); font-size: var(--text-xs); line-height: 1; }
+
+/* — the session links (section 4.8): overflow only. The tap floor stays the shared class's (`.btn-ghost`, `.menu-item`),
+   so neither rule below sets a min-height. A branch is not bounded by anything the sheet controls (up to
+   DOCS_REF_MAX_CHARS, no spaces). The session menu's hint is `flex: none` in chat.css, which would collapse the word
+   "Docs" beside a long branch: here it shrinks and ends in an ellipsis instead. The actions sheet's row carries its
+   label as bare text in a flex box, which has no break opportunity inside a branch: it may break anywhere. — */
+.docs-menu-item .menu-hint {
+  flex: 0 1 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.docs-session-row { min-width: 0; overflow-wrap: anywhere; }
+
+/* — the screen — */
+.docs-screen { display: grid; gap: var(--sp-3); padding: var(--sp-2); min-width: 0; }
+.docs-screen > * { min-width: 0; }
+.docs-index, .docs-project, .docs-listing, .docs-leaf, .docs-missing, .docs-invalid,
+.docs-svg, .docs-raster, .docs-standin, .docs-changing {
+  display: grid; gap: var(--sp-2); min-width: 0;
+}
+
+/* — the header: back, the crumbs, the truth line, the actions — */
+.docs-head { display: grid; gap: var(--sp-2); min-width: 0; }
+.docs-head-bar { display: flex; align-items: center; gap: var(--sp-1); min-width: 0; }
+.docs-back {
+  flex: none;
+  min-width: var(--tap-min); min-height: var(--tap-min);
+  border: none; border-radius: var(--r-sm);
+  background: none; color: var(--ink-secondary);
+  font: var(--weight-regular) var(--text-xl) / 1 var(--font-ui);
+  cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-swift), color var(--dur-fast) var(--ease-swift);
+}
+.docs-back:active { transform: scale(0.88); color: var(--ink-primary); }
+.docs-crumbs { min-width: 0; }
+.docs-crumbs ol {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0 var(--sp-1);
+  margin: 0; padding: 0; list-style: none; min-width: 0;
+}
+.docs-crumbs li { display: inline-flex; align-items: center; gap: var(--sp-1); min-width: 0; }
+.docs-crumbs li + li::before { content: '/'; }
+.docs-crumb, .docs-crumbs-more {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: var(--tap-min); min-height: var(--tap-min); padding: 0 var(--sp-1);
+  border: 0; border-radius: var(--r-sm);
+  background: none; color: var(--ink-secondary);
+  font: var(--weight-regular) var(--text-sm) / var(--leading-tight) var(--font-mono);
+  text-decoration: none; overflow-wrap: anywhere; cursor: pointer;
+}
+.docs-crumb-here { font: var(--weight-medium) var(--text-sm) / var(--leading-tight) var(--font-mono); overflow-wrap: anywhere; }
+
+.docs-truth {
+  margin: 0; min-width: 0;
+  font: var(--weight-regular) var(--text-xs) / var(--leading-normal) var(--font-mono);
+  color: var(--ink-secondary); overflow-wrap: anywhere;
+}
+.docs-truth-relation[data-tone='warn'] { color: var(--status-attention-text); }
+.docs-truth-commit { font: inherit; }
+
+/* The freshness chip: a button (a tap is one manual refresh), static text when the repository has no origin. */
+.docs-fresh {
+  display: inline-flex; align-items: center; vertical-align: middle;
+  min-height: var(--tap-min); padding: 0 var(--sp-2);
+  border: 1px solid var(--edge-strong); border-radius: var(--r-full);
+  background: none; color: var(--ink-secondary);
+  font: var(--weight-medium) var(--text-2xs) / var(--leading-tight) var(--font-mono);
+  text-align: left; cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease-swift);
+}
+.docs-fresh[data-state='failed'] { color: var(--status-dead-text); }
+.docs-fresh[data-state='none'], .docs-fresh[data-state='fetching'] { color: var(--ink-tertiary); cursor: default; }
+
+/* The bordered controls: copy commit, the leaf's Source and Download, Load image, the image's own action, the plain
+   text's Format anyway or Retry, and the gate's two choices. */
+.docs-copy, .docs-leaf-action, .doc-img-load, .doc-img-action, .doc-plain-action, .doc-gate-btn {
+  display: inline-flex; align-items: center; justify-content: center; vertical-align: middle;
+  min-height: var(--tap-min); padding: 0 var(--sp-3);
+  border: 1px solid var(--edge-strong); border-radius: var(--r-md);
+  background: none; color: var(--ink-secondary);
+  font: var(--weight-medium) var(--text-xs) / var(--leading-tight) var(--font-mono);
+  cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease-swift);
+}
+
+/* The link controls: View on GitHub, Open committed version, a banner's hint, the index's owner. Their ink is their
+   container's (`inherit` is not a colour of their own, so the audit reads none here). */
+.docs-action, .docs-hint-link, .docs-owner-link {
+  display: inline-flex; align-items: center;
+  min-height: var(--tap-min); padding: 0 var(--sp-1);
+  color: inherit; text-decoration: underline; text-underline-offset: 2px;
+  overflow-wrap: anywhere;
+}
+.docs-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); min-width: 0; }
+.docs-leaf-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
+
+/* The quiet lines: the notes, loading words, the index head, "Formatting…". */
+.docs-note, .docs-loading, .docs-index-head, .doc-formatting {
+  margin: 0;
+  font-size: var(--text-sm); line-height: var(--leading-normal);
+  color: var(--ink-secondary); overflow-wrap: anywhere;
+}
+/* The meta words: an action's note or refusal, "copied", "Updated to", the GitHub mark on an in-repo link. */
+.docs-action-note, .docs-action-off, .docs-copy-said, .docs-updated, .doc-link-gh {
+  margin: 0;
+  font: var(--weight-regular) var(--text-xs) / var(--leading-normal) var(--font-mono);
+  color: var(--ink-tertiary); overflow-wrap: anywhere;
+}
+
+/* — the rows: index, project, section and directory listings — */
+.docs-filter {
+  width: 100%; min-height: var(--tap-min); padding: 0 var(--sp-3);
+  border: 1px solid var(--edge-strong); border-radius: var(--r-md);
+  background: var(--bg-surface); color: var(--ink-primary);
+  font: var(--weight-regular) var(--text-input) / 1 var(--font-ui);
+}
+/* The filter's visible label (D-5502): the placeholder says what the box is; the preflight's half-strength
+   default is replaced by the tertiary ink, which design/contrast-check.mjs holds on --bg-surface. */
+.docs-filter::placeholder { color: var(--ink-tertiary); opacity: 1; }
+.docs-rows { display: grid; margin: 0; padding: 0; list-style: none; min-width: 0; }
+.docs-row {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-1) var(--sp-2);
+  width: 100%; min-width: 0; min-height: var(--tap-min); padding: var(--sp-2) var(--sp-1);
+  border: 0; border-bottom: 1px solid var(--edge-subtle); border-radius: 0;
+  background: none; color: var(--ink-primary);
+  font: var(--weight-regular) var(--text-sm) / var(--leading-tight) var(--font-ui);
+  text-align: left; cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease-swift);
+}
+.docs-row-off { color: var(--ink-secondary); cursor: default; }
+/* — hover and pressed (D-5501, after the skins' D-5101): what `ListRow`, `Door` and `BackButton` now do, restated for
+   the Docs chrome's hand-drawn twins. A row that is a link lifts to --bg-hover under the mouse and sinks to
+   --bg-pressed while held; the door and the back chevron brighten to the primary ink. Hover only inside
+   `(hover: hover)`, so a phone's last tap leaves nothing stuck. A row that is not a link (`.docs-row-off`, a <div>)
+   neither lifts nor sinks. The press is declared after the hover at the same specificity, so a held row shows the
+   pressed ground under the mouse too. Every ink drawn on either ground (the neutral tiers) is held by
+   design/contrast-check.mjs in every palette; the badge inside a row paints its own. — */
+@media (hover: hover) {
+  .docs-row:not(.docs-row-off):hover { background: var(--bg-hover); color: var(--ink-primary); }
+  .docs-door:hover, .docs-back:hover, .docs-crumb:hover, .docs-crumbs-more:hover { color: var(--ink-primary); }
+}
+.docs-row:not(.docs-row-off):active { background: var(--bg-pressed); color: var(--ink-primary); }
+/* — the bordered controls and the freshness chip (D-5502): twins of the ghost Button, so they lift to --bg-hover
+   under the mouse and sink to --bg-pressed while held, as it does (enabled:hover, enabled:active). A disabled chip
+   (a fetch in flight) and the no-origin <span> do neither (`:enabled`). Each keeps its own ink, so the failed
+   chip's --status-dead-text sits on both grounds; design/contrast-check.mjs holds it there in every palette
+   (HOVER_INKS, PRESSED_INKS), with the neutral tiers the other controls draw. — */
+@media (hover: hover) {
+  .docs-copy:enabled:hover, .docs-fresh:enabled:hover, .docs-leaf-action:enabled:hover, .doc-img-load:enabled:hover, .doc-img-action:enabled:hover, .doc-plain-action:enabled:hover, .doc-gate-btn:enabled:hover { background: var(--bg-hover); }
+}
+.docs-copy:enabled:active, .docs-fresh:enabled:active, .docs-leaf-action:enabled:active, .doc-img-load:enabled:active, .doc-img-action:enabled:active, .doc-plain-action:enabled:active, .doc-gate-btn:enabled:active { background: var(--bg-pressed); }
+.docs-row-name { min-width: 0; font-weight: var(--weight-medium); overflow-wrap: anywhere; }
+.docs-row-glyph { flex: none; font-family: var(--font-ui); }
+.docs-row-path, .docs-row-count, .docs-row-note, .docs-row-age, .docs-row-size, .docs-row-ref, .docs-row-state,
+.docs-row-mark, .docs-row-drafts {
+  font: var(--weight-regular) var(--text-xs) / var(--leading-tight) var(--font-mono);
+  color: var(--ink-tertiary); overflow-wrap: anywhere;
+}
+.docs-badge {
+  display: inline-block; padding: 0 var(--sp-1); border-radius: var(--r-sm);
+  background: var(--status-attention-tint); color: var(--status-attention-text);
+  font: var(--weight-medium) var(--text-2xs) / var(--leading-normal) var(--font-mono);
+}
+.docs-nodocs > summary { display: flex; align-items: center; min-height: var(--tap-min); cursor: pointer; }
+
+/* — the banners and the failure view: each paints its own ground — */
+.docs-banners { display: grid; gap: var(--sp-2); min-width: 0; }
+.docs-banner {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-left: 3px solid var(--edge-strong); border-radius: var(--r-md);
+  background: var(--bg-surface); color: var(--ink-primary);
+  font-size: var(--text-sm); line-height: var(--leading-normal); min-width: 0;
+}
+.docs-banner[data-tone='warn'] { border-left-color: var(--status-attention); background: var(--status-attention-tint); }
+.docs-banner-text { min-width: 0; overflow-wrap: anywhere; }
+.docs-banner-list { flex-basis: 100%; margin: 0; padding-left: var(--sp-4); overflow-wrap: anywhere; }
+.btn-ghost.docs-banner-action, .btn-ghost.docs-fail-action { width: auto; min-height: var(--tap-min); padding: 0 var(--sp-3); }
+
+.docs-fail {
+  display: grid; gap: var(--sp-2); min-width: 0;
+  padding: var(--sp-3);
+  border-left: 3px solid var(--status-dead); border-radius: var(--r-md);
+  background: var(--bg-surface); color: var(--ink-primary);
+}
+.docs-fail-sentence { margin: 0; font-size: var(--text-sm); line-height: var(--leading-normal); overflow-wrap: anywhere; }
+.docs-fail .docs-fail-suggest, .docs-fail .docs-fail-hint, .docs-fail .docs-fail-kind, .docs-fail .docs-fail-list {
+  margin: 0;
+  font-size: var(--text-xs); line-height: var(--leading-normal);
+  color: var(--ink-secondary); overflow-wrap: anywhere;
+}
+.docs-fail-suggest a { color: inherit; }
+.docs-fail .docs-fail-detail {
+  margin: 0; max-height: 12em; overflow: auto; padding: var(--sp-2);
+  border-radius: var(--r-sm);
+  background: var(--bg-well); color: var(--ink-on-well);
+  font: var(--weight-regular) var(--text-xs) / var(--leading-mono) var(--font-mono);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.docs-fail-actions { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+
+/* — the document: `.doc-body.msg-assist` keeps chat's measured Markdown rules (chat.css); these add the page's own — */
+.doc-body { min-width: 0; max-width: var(--measure-prose); }
+.doc-body :target { scroll-margin-top: var(--sp-4); }
+.doc-body .doc-img-link .msg-img { display: block; }
+.doc-link-inert { color: var(--ink-secondary); text-decoration: underline dotted; cursor: help; }
+
+.doc-img-link {
+  display: inline-flex; max-width: 100%;
+  min-width: var(--tap-min); min-height: var(--tap-min); padding: 0;
+  border: 0; background: none; cursor: pointer;
+}
+.doc-img-refused, .doc-img-loading {
+  display: inline-flex; align-items: center; padding: 0 var(--sp-2);
+  border: 1px dashed var(--edge-strong); border-radius: var(--r-sm);
+  font: var(--weight-regular) var(--text-xs) / var(--leading-normal) var(--font-mono);
+  color: var(--ink-secondary); overflow-wrap: anywhere;
+}
+.doc-img-failed {
+  display: inline-flex; align-items: center; padding: 0 var(--sp-2);
+  border: 1px dashed var(--status-dead); border-radius: var(--r-sm);
+  font: var(--weight-regular) var(--text-xs) / var(--leading-normal) var(--font-mono);
+  color: var(--status-dead-text); overflow-wrap: anywhere;
+}
+.doc-img-chip {
+  display: inline-block; padding: 0 var(--sp-1); border-radius: var(--r-sm);
+  background: var(--bg-raised); color: var(--ink-secondary);
+  font: var(--weight-medium) var(--text-2xs) / var(--leading-normal) var(--font-mono);
+}
+.docs-svg-img { max-width: 100%; height: auto; }
+
+.doc-gate {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2);
+  padding: var(--sp-3); border: 1px solid var(--edge-subtle); border-radius: var(--r-md);
+}
+.doc-gate-copy { flex-basis: 100%; margin: 0; font-size: var(--text-sm); line-height: var(--leading-normal); }
+.doc-plain-note { margin: 0; font-size: var(--text-xs); line-height: var(--leading-normal); color: var(--ink-secondary); }
+.doc-plain {
+  margin: 0; white-space: pre-wrap; overflow-wrap: anywhere;
+  font: var(--weight-regular) var(--text-sm) / var(--leading-mono) var(--font-mono);
+}
+
+/* — reduced motion (D-5501, D-5502): the door, the back chevron, a row, the chip and the bordered controls each
+   declare a transition, so each is named here, after every rule it governs (motion-reduced.test.ts reads both
+   halves). — */
+@media (prefers-reduced-motion: reduce) {
+  .docs-door, .docs-back, .docs-row, .docs-fresh, .docs-copy, .docs-leaf-action, .doc-img-load, .doc-img-action, .doc-plain-action, .doc-gate-btn { transition: none; }
+}

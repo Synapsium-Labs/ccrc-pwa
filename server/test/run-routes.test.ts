@@ -4,7 +4,7 @@
 // already enumerates; that suite (run unchanged, Step 4) is the proof this
 // task added none.
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
@@ -68,10 +68,22 @@ const seed = (home: string, id: string, over: Partial<Record<string, string>> = 
   mkdirSync(reg, { recursive: true });
   const fields: Record<string, string> = {
     wrapper: 'claude', project: PROJECT, workdir: `/w/${id}`, uuid: `u-${id}`, started: '1',
-    workspace: id, branch: `ws/${id}`, base: 'origin/main', ...over,
+    workspace: id, branch: `ws/${id}`, base: 'origin/main',
+    // D-5298: every session here other than the coordinator is a dispatched
+    // child, as `ws-add --child <run>` makes one — `POST /api/runs` binds only
+    // children (`409 not-a-child`). The marker names a run no case opens, so
+    // rule 3's child gate reads an unplaceable birth and asks `pr-state`, which
+    // `makeRunner` answers with no PR for a child. `child: ''` opts a row out.
+    ...(id === CLAIMED_BY ? {} : { child: '999' }), ...over,
   };
-  for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${id}.${k}`), v);
+  for (const [k, v] of Object.entries(fields)) {
+    if (k === 'child' && v === '') continue;
+    writeFileSync(path.join(reg, `${id}.${k}`), v);
+  }
 };
+/** `child-reclaim-refusals.test.ts`'s `noPrLine`: a child that has had no PR. */
+const noPrLine = (id: string): string =>
+  JSON.stringify({ id, rows: [], baseShort: 'main', branch: `ws/${id}`, ahead: 1, tip: 'f'.repeat(40), checkedAt: 1 });
 
 /** D-5238: the pane pid `makeRunner` answers, and the idle live file it names under the `claude` wrapper's config
  *  dir — what the resume arm's live `/clear` gate reads as a measured-idle pane. */
@@ -125,7 +137,14 @@ function makeRunner(home: string, cfg: RunnerConfig = {}): { run: Runner; calls:
       // from the registry diff, never from parsing this text.
       return { code: 0, stdout: 'workspace demo-decoy-sentence on claude — /w/x (branch ws/decoy)', stderr: '' };
     }
-    if (verb === 'pr-state') return cfg.prState ?? { code: 0, stdout: '', stderr: '' };
+    if (verb === 'pr-state') {
+      if (cfg.prState) return cfg.prState;
+      // D-5298: rule 3's child gate asks about a CHILD it is binding; a
+      // child here has had no PR. Anything else answers as before.
+      const id = args[1] === '--session' ? args[2] ?? '' : '';
+      const child = id !== '' && existsSync(path.join(home, '.cc-sessions', `${id}.child`));
+      return { code: 0, stdout: child ? `${noPrLine(id)}\n` : '', stderr: '' };
+    }
     if (verb === 'capture-pane') {
       const p = panes[Math.min(capIdx, panes.length - 1)]!;
       capIdx++;
@@ -157,6 +176,9 @@ const openApp = async (
   // session's fields.
   mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
   seedIdleLive(home);
+  // D-5298: the claimant every open names is a registry row of the run's
+  // project — unless the case already seeded it its own way.
+  if (!existsSync(path.join(home, '.cc-sessions', `${CLAIMED_BY}.uuid`))) seed(home, CLAIMED_BY);
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const base = testDeps(home, run);
   const app = await buildServer({ ...base, mailToken: TOKEN, coord, ...over, cfg: { ...base.cfg, ...(over.cfg ?? {}) } });
@@ -166,9 +188,17 @@ const openApp = async (
 const tokenHeaders = (token: string | null): Record<string, string> =>
   token === null ? {} : { 'x-ccrc-mail-token': token };
 
+/** D-5298 (coordinator-first Task 11b): an open is attributed against the
+ *  claimant's own registry row. Every open here sends the claimant's uuid —
+ *  `seed`'s `u-<id>` — unless the body names `claimedByUuid` itself (a case
+ *  about attribution passes the key, `undefined` included). */
+const attributed = (body: unknown): Record<string, unknown> => {
+  const b = body as Record<string, unknown>;
+  return typeof b?.claimedBy === 'string' && !('claimedByUuid' in b) ? { ...b, claimedByUuid: `u-${b.claimedBy}` } : b;
+};
 const postOpen = (app: FastifyInstance, body: unknown = OPEN_BODY, token: string | null = TOKEN) =>
   app.inject({ method: 'POST', url: '/api/runs', headers: tokenHeaders(token),
-    payload: body as Record<string, unknown> });
+    payload: attributed(body) });
 
 /** A `toId:'worker'` brief queued to `to` on `runId`, the shape a wave brief
  *  takes in the store — the mail row keeps the ROLE, the delivery the
@@ -223,65 +253,83 @@ describe('POST /api/runs', () => {
     expect(okRun(w.coord.run(id))?.state).toBe('planned');
   });
 
-  it('stamps the coordinator project read from the registry, never from the run\'s own project', async () => {
+  it('stamps the coordinator project read from the registry — of any project since D-5523', async () => {
     // `claimedBy`'s registry record names a DIFFERENT project than the run's
-    // own `project` field, deliberately, so a stamp that matched
-    // `OPEN_BODY.project` would prove the route read the wrong column rather
-    // than proving nothing at all.
+    // own `project` field and its home, deliberately: the stamp proves the
+    // route read the registry, not the run's column. D-5298 refused this open;
+    // since D-5523 (the operator's ruling of 2026-10-18, #601) a coordinator
+    // may sit in any project, so it is admitted and stamped with the REGISTRY
+    // value. An admitted open's stamp is the MEASURED (trimmed) registry value.
     const home = mkTmp('ccrc-runs-');
     seed(home, CLAIMED_BY, { project: 'intake-platform' });
     const { run } = makeRunner(home);
     const w = await openApp(home, run); app = w.app;
     const res = await postOpen(app, { ...OPEN_BODY, claimedBy: CLAIMED_BY });
     expect(res.statusCode).toBe(200);
-    const id = (res.json() as { id: number }).id;
-    expect(okRun(w.coord.run(id))?.coordProject).toBe('intake-platform');
-    expect(okRun(w.coord.run(id))?.coordProject).not.toBe(OPEN_BODY.project);
+    expect(okRun(w.coord.run((res.json() as { id: number }).id))?.coordProject).toBe('intake-platform');
+    seed(home, CLAIMED_BY, { project: `${PROJECT}\n` });
+    const ok = await postOpen(app, { ...OPEN_BODY, wave: 2, claimedBy: CLAIMED_BY });
+    expect(ok.statusCode).toBe(200);
+    expect(okRun(w.coord.run((ok.json() as { id: number }).id))?.coordProject).toBe(PROJECT);
   });
 
-  it('leaves the stamp null when the coordinator has no readable registry record — absence permits', async () => {
+  it('admits a crossing — a claimant of the programme\'s HOME opening a run elsewhere — and stamps the home (D-5388)', async () => {
+    // The cross-repo ruling: a programme's waves may run in ANY project, and
+    // the coordinator sits in the home. A fresh-spawn crossing is admitted and
+    // its stamp is the claimant's measured project, which is what the board's
+    // crossing marking reads. Binding an EXISTING child of the run's project
+    // from outside it is refused: a crossing spawns fresh.
+    const home = mkTmp('ccrc-runs-');
+    seed(home, CLAIMED_BY, { project: 'intake-platform' });
+    seed(home, 'demo-existing-child');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const res = await postOpen(app, { ...OPEN_BODY, claimedBy: CLAIMED_BY, homeProject: 'intake-platform' });
+    expect(res.statusCode).toBe(200);
+    const id = (res.json() as { id: number }).id;
+    expect(okRun(w.coord.run(id))?.coordProject).toBe('intake-platform');
+    expect(okRun(w.coord.run(id))?.project).toBe(PROJECT);
+    const bound = await postOpen(app, { ...OPEN_BODY, wave: 2, claimedBy: CLAIMED_BY, homeProject: 'intake-platform',
+      sessionId: 'demo-existing-child' });
+    expect([bound.statusCode, bound.json()]).toEqual([409, { ok: false, refused: 'project-mismatch', by: 'intake-platform',
+      detail: `demo-existing-child is an existing session of ${PROJECT} and the claimant is of intake-platform — a crossing wave opens without sessionId and spawns fresh` }]);
+  });
+
+  it('refuses a coordinator with no registry record — 403 unknown-sender, where the stamp once read "absence permits" (D-5298)', async () => {
     const home = mkTmp('ccrc-runs-');
     const { run } = makeRunner(home);
     const w = await openApp(home, run); app = w.app;
-    // CLAIMED_BY is never seeded: `<claimedBy>.project` does not exist, so
-    // `fieldMeasured` answers `{ ok: false, reason: 'absent' }`.
-    const res = await postOpen(app, { ...OPEN_BODY, claimedBy: CLAIMED_BY });
-    expect(res.statusCode).toBe(200);
-    const id = (res.json() as { id: number }).id;
-    expect(okRun(w.coord.run(id))?.coordProject).toBeNull();
+    const res = await postOpen(app, { ...OPEN_BODY, claimedBy: 'never-seeded-coordinator' });
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({ ok: false, error: 'unknown-sender' });
+    expect(okRuns(w.coord.runs())).toHaveLength(0);
   });
 
-  it('leaves the stamp null — never the session id, never the empty string — when .project is ' +
-     'unreadable or present-but-empty (fix round 1, Important finding)', async () => {
+  it('refuses — never stamps the session id or the empty string — when .project is ' +
+     'unreadable or present-but-empty (fix round 1, Important finding; D-5298)', async () => {
     // `SessionRecord.project`'s `project ?? id` default (`registry.ts`'s
     // `buildRecord`) would otherwise reach this PERMANENT, never-backfilled
-    // stamp as if it were a measurement (D-2342): an unreadable `.project`
-    // collapses to the session id there, and nullish coalescing does not
-    // catch an empty string either. The route must read `.project` MEASURED
-    // instead, through `fieldMeasured`, and treat both failure shapes the
-    // same as absence.
+    // stamp as if it were a measurement (D-2342). Before D-5298 both failure
+    // shapes left the stamp null; since coordinator-first Task 11b the
+    // claimant's project must be MEASURED and the run's, so an unreadable one
+    // is the transient 502 and an empty one is `project-mismatch`.
     const home = mkTmp('ccrc-runs-');
     const EMPTY_PROJECT_COORD = 'ccrc-pwa-coordinator-empty';
     seed(home, CLAIMED_BY, { project: 'intake-platform' });   // present, but reads UNREADABLE below
-    seed(home, EMPTY_PROJECT_COORD, { project: '' });         // present, zero bytes
+    seed(home, EMPTY_PROJECT_COORD, { project: '', child: '' });   // present, zero bytes
     const io = unreadableField(CLAIMED_BY, 'project');
     const { run } = makeRunner(home);
     const w = await openApp(home, run, { io }); app = w.app;
 
     const unreadableRes = await postOpen(app, { ...OPEN_BODY, program: 'unreadable-project', claimedBy: CLAIMED_BY });
-    expect(unreadableRes.statusCode).toBe(200);
-    const unreadableId = (unreadableRes.json() as { id: number }).id;
-    const unreadableRow = okRun(w.coord.run(unreadableId));
-    expect(unreadableRow?.coordProject).toBeNull();
-    expect(unreadableRow?.coordProject).not.toBe(CLAIMED_BY);
+    expect(unreadableRes.statusCode).toBe(502);
+    expect(unreadableRes.json()).toMatchObject({ ok: false, error: 'registry-unmeasurable' });
 
     const emptyRes = await postOpen(
       app, { ...OPEN_BODY, program: 'empty-project', claimedBy: EMPTY_PROJECT_COORD });
-    expect(emptyRes.statusCode).toBe(200);
-    const emptyId = (emptyRes.json() as { id: number }).id;
-    const emptyRow = okRun(w.coord.run(emptyId));
-    expect(emptyRow?.coordProject).toBeNull();
-    expect(emptyRow?.coordProject).not.toBe('');
+    expect([emptyRes.statusCode, emptyRes.json()]).toEqual([409, { ok: false, refused: 'project-mismatch',
+      detail: "the claimant's registry row records no project, so its project cannot be stamped" }]);
+    expect(okRuns(w.coord.runs())).toHaveLength(0);
   });
 
   it('maps the store seam\'s oversized open hold to 413 without narrowing its detail', async () => {
@@ -326,6 +374,7 @@ describe('POST /api/runs', () => {
   it('refuses a second coordinator rather than arbitrating', async () => {
     const home = mkTmp('ccrc-runs-');
     const { run } = makeRunner(home);
+    seed(home, 'ccrc-pwa-other', { child: '' });   // D-5298: an attributed second coordinator
     const w = await openApp(home, run); app = w.app;
     await postOpen(app);
     const res = await postOpen(app, { ...OPEN_BODY, wave: 2, claimedBy: 'ccrc-pwa-other' });
@@ -339,6 +388,9 @@ describe('POST /api/runs', () => {
     // this workspace lives in `demo`, and until this check nothing read it.
     const home = mkTmp('ccrc-runs-');
     seed(home, 'demo-existing');
+    // D-5298: the second coordinator is attributed and of the run's project,
+    // so F1's history check is the one that answers.
+    seed(home, 'ccrc-pwa-coordinator-two', { project: 'other-project', child: '' });
     const { run, calls } = makeRunner(home);
     const w = await openApp(home, run); app = w.app;
     const first = await postOpen(app, { ...OPEN_BODY, sessionId: 'demo-existing' });
@@ -669,6 +721,7 @@ describe('POST /api/runs', () => {
     // registry backstop at dispatch (Task 2) is the other rung.
     const home = mkTmp('ccrc-runs-');
     seed(home, 'demo-existing');
+    seed(home, CLAIMED_BY, { project: 'other-project' });   // D-5298: the claimant is of the run's project
     const { run } = makeRunner(home);
     const w = await openApp(home, run); app = w.app;
     const res = await postOpen(app, { ...OPEN_BODY, project: 'other-project',
@@ -996,7 +1049,10 @@ describe('POST /api/runs/:id/dispatch', () => {
     const home = mkTmp('ccrc-runs-');
     const { run, calls } = makeRunner(home);
     const w = await openApp(home, run, { io: unlistableIO }); app = w.app;
-    const opened = (await postOpen(app)).json() as { id: number };
+    // Opened through the store: since D-5298 the open route attributes its
+    // claimant against the registry, which this io cannot list.
+    const opened = w.coord.openRun({ program: OPEN_BODY.program, title: OPEN_BODY.title, project: PROJECT,
+      wave: OPEN_BODY.wave, waveOf: OPEN_BODY.waveOf, claimedBy: CLAIMED_BY }) as { id: number };
     const res = await postDispatch(app, opened.id);
     expect(res.statusCode).toBe(409);
     expect(res.json()).toMatchObject({ ok: false, refused: 'paused' });
@@ -1090,6 +1146,60 @@ describe('POST /api/runs/:id/dispatch', () => {
     const res = await postDispatch(app, opened.id);
     expect(res.statusCode).toBe(200);
     expect(calls.filter((c) => c[0] === 'ws-add')).toEqual([['ws-add', '--no-rc', PROJECT]]);
+  });
+
+  // A coordinator may NAME the child it dispatches. `cmd_ws_add` already binds
+  // `<project> [slug]`, so the slug rides as the positional straight after the
+  // project — the worktree, branch and session id then carry the name the
+  // coordinator chose (tooling that keys work on the workspace name, e.g. a
+  // ticket id, reads it from the start; a held child can never be renamed).
+  describe('slug — the coordinator names the child', () => {
+    it('rides as the positional after the project, and binds exactly <project>-<slug>', async () => {
+      const home = mkTmp('ccrc-runs-');
+      const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-task-42-login'] });
+      const w = await openApp(home, run); app = w.app;
+      const opened = (await postOpen(app)).json() as { id: number };
+      const res = await postDispatch(app, opened.id, { brief: 'do the thing', slug: 'task-42-login' });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ ok: true, sessionId: 'demo-task-42-login' });
+      expect(calls.filter((c) => c[0] === 'ws-add')).toEqual([['ws-add', '--no-rc', PROJECT, 'task-42-login']]);
+      expect(okRun(w.coord.run(opened.id))).toMatchObject({ sessionId: 'demo-task-42-login', state: 'dispatched' });
+    });
+
+    it.each([
+      ['uppercase', 'Task-42'],
+      ['leading dash', '-task-42'],
+      ['too long', 'a'.repeat(32)],
+      ['one character', 'a'],
+      ['a dot', 'task.42'],
+      ['empty', ''],
+      ['not a string', 42],
+      ['null', null],
+    ] as const)('refuses a %s slug with 400 before any fleet work', async (_label, slug) => {
+      const home = mkTmp('ccrc-runs-');
+      const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-fresh1'] });
+      const w = await openApp(home, run); app = w.app;
+      const opened = (await postOpen(app)).json() as { id: number };
+      const res = await postDispatch(app, opened.id, { brief: 'do the thing', slug });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ ok: false, error: 'bad-request', detail: expect.stringMatching(/^slug: must match /) });
+      expect(calls.some((c) => c[0] === 'ws-add')).toBe(false);
+      expect(okRun(w.coord.run(opened.id))).toMatchObject({ state: 'planned', sessionId: null });
+    });
+
+    it('binds nothing when the new workspace is not <project>-<slug>', async () => {
+      // ws-add answered 0 but the only new row carries another name: the slug is
+      // the identity the coordinator asked for, so a stranger is never bound.
+      const home = mkTmp('ccrc-runs-');
+      const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-someone-else'] });
+      const w = await openApp(home, run); app = w.app;
+      const opened = (await postOpen(app)).json() as { id: number };
+      const res = await postDispatch(app, opened.id, { brief: 'do the thing', slug: 'task-42-login' });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({ ok: false, refused: 'ambiguous-dispatch', candidates: 0 });
+      expect(calls.some((c) => c[0] === 'ws-hold')).toBe(false);
+      expect(okRun(w.coord.run(opened.id))).toMatchObject({ state: 'planned', sessionId: null });
+    });
   });
 
   // T2's attribution half, inverted by its review round (D-410) and RE-LANDED
@@ -1354,22 +1464,22 @@ describe('POST /api/runs/:id/dispatch', () => {
      async () => {
     const home = mkTmp('ccrc-runs-');
     seed(home, 'demo-existing');
-    // Succeeds on the open's child bind gate (call 1 — child-reclamation
-    // wave 2: `readSessionRecord` lists the registry once), on the
-    // pause-marker's own read (call 2) and on dispatch's own child bind gate
-    // (call 3, ahead of `ensure`), fails on the very next one — this route's
-    // own registry read for the resumed session (call 4) — never a fifth:
-    // nothing else touches `io.readdir` before those. `POST /api/runs`'
-    // own coordinator-project stamp read (Task 1) does NOT count against this:
-    // it reads `<claimedBy>.project` through `fieldMeasured`, a FILE read
-    // (`io.readFileMeasured`), never `io.readdir` — this fixture only
-    // overrides the latter.
-    let n = 0;
-    const io: FleetIO = { ...localIO, readdir: async (p) => { n += 1; return n === 4 ? null : localIO.readdir(p); } };
+    // Counted only once the OPEN is done (D-5298: the open's attribution,
+    // not-a-child and child gates each list the registry, and how many times
+    // is the open's business, not this case's). Then: succeeds on the
+    // pause-marker's own read (call 1) and on dispatch's own child bind gate,
+    // which lists twice for a CHILD (calls 2 and 3, ahead of `ensure`), fails
+    // on the very next one — this route's own registry read for the resumed
+    // session (call 4) — never a fifth: nothing else touches `io.readdir`
+    // before those.
+    let n = 0, armed = false;
+    const io: FleetIO = { ...localIO,
+      readdir: async (p) => { if (armed) n += 1; return armed && n === 4 ? null : localIO.readdir(p); } };
     const { run, calls } = makeRunner(home);
     const w = await openApp(home, run, { io }); app = w.app;
     const opened = (await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing' }))
       .json() as { id: number };
+    armed = true;
     const res = await postDispatch(app, opened.id);
     expect(res.statusCode).toBe(502);
     expect(res.json()).toMatchObject({ ok: false, error: 'registry-unmeasurable' });
@@ -1509,18 +1619,17 @@ describe('POST /api/runs/:id/dispatch', () => {
     // succeeds and the failure scopes to dispatch's own resumed-session
     // listing, the same idiom the wave-N>=2 `registry-unmeasurable` case above
     // this one already uses.
-    // `POST /api/runs`' own coordinator-project stamp read (Task 1) does NOT
-    // count against this: it reads `<claimedBy>.project` through
-    // `fieldMeasured`, a FILE read, never `io.readdir`. The open's child bind
-    // gate DOES (child-reclamation wave 2: `readSessionRecord` lists the
-    // registry once), and so does dispatch's own gate, ahead of `ensure` —
-    // the open's gate, dispatch's pause check, dispatch's gate — so the
-    // resumed session's own listing is the FOURTH.
-    let n = 0;
-    const io: FleetIO = { ...localIO, readdir: async (p) => { n += 1; return n === 4 ? null : localIO.readdir(p); } };
+    // Counted only once the OPEN is done (D-5298: the open's own registry
+    // gates list the registry, and how often is not this case's business):
+    // dispatch's pause check, dispatch's gate ahead of `ensure` (two listings
+    // for a CHILD), then the resumed session's own listing — the FOURTH.
+    let n = 0, armed = false;
+    const io: FleetIO = { ...localIO,
+      readdir: async (p) => { if (armed) n += 1; return armed && n === 4 ? null : localIO.readdir(p); } };
     const w = await openApp(home, run, { io }); app = w.app;
     const opened = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing' });
     expect(opened.statusCode).toBe(200);
+    armed = true;
     const id = (opened.json() as { id: number }).id;
     const res = await postDispatch(app, id);
     expect(res.statusCode).toBe(502);
@@ -2584,7 +2693,8 @@ describe('GET /api/runs', () => {
 
   it('lists open runs by default, and never leaks prLineage or coordProject onto the wire', async () => {
     const home = mkTmp('ccrc-runs-');
-    seed(home, CLAIMED_BY, { project: 'intake-platform' });
+    // D-5298: the claimant is of the run's project (`openApp`'s own seed), so
+    // the stamp it carries is that measured project.
     const { run } = makeRunner(home, { wsAddCreates: ['demo-list1'] });
     const w = await openApp(home, run); app = w.app;
     const opened = (await postOpen(app, { ...OPEN_BODY, claimedBy: CLAIMED_BY })).json() as { id: number };
@@ -2597,7 +2707,7 @@ describe('GET /api/runs', () => {
     // The stamp IS set on this row (proven directly against the store below),
     // so a passing `not.toHaveProperty` here proves the strip, not merely
     // that the field was never populated.
-    expect(okRun(w.coord.run(opened.id))?.coordProject).toBe('intake-platform');
+    expect(okRun(w.coord.run(opened.id))?.coordProject).toBe(PROJECT);
     expect(runs[0]).not.toHaveProperty('coordProject');
     expect(runs[0]).toMatchObject({ id: opened.id, state: 'dispatched' });
   });
@@ -4063,6 +4173,9 @@ describe('POST /api/runs kind:review (design 2026-09-14 §5.1)', () => {
   ])('refuses %s as bad-request, naming the field', async (_what, body, detailSubstring) => {
     const home = mkTmp('ccrc-runs-');
     const { workId } = await workAtReview(home);
+    // D-5298: the other coordinator is an attributed registry row, so the
+    // review arm's own refusal is the one that answers.
+    seed(home, 'ccrc-pwa-other', { child: '' });
     const res = await postOpen(app, body(workId));
     expect(res.statusCode).toBe(400);
     const j = res.json() as { ok: boolean; error: string; detail: string };
