@@ -39,7 +39,7 @@ Measured on 2026-10-20 at `4bc6c756d` (27 open PRs; `gh pr list -R Synapsium-Lab
 | FM1 | #435, #722, #740 (all edit `ccd/ccd`); #821 (edits `shared/api.ts`: rebase on it, or a line-disjointness check) | lifecycle W2 CB2b (adds the unit's `RestartPreventExitStatus=` line this task extends) | after #435, #722, #740 and CB2b; #821 checked |
 | FM2 | #435, #722, #740 | none | after #435, #722, #740 |
 | FM3 + FM4 (one PR) | none beyond FM1's | FM1, FM2; lifecycle CB2b (spawn-start stamp), CB2c (`recent-spawn`, `low-memory`, `roll-in-flight`, the roll node lock) and CB2d (`.rolling` and the roll's act, which FM3 waits for and which writes the pass) | after FM1, FM2, CB2c and CB2d |
-| FM5 | #722, #740 (both edit `ccd/ccrc`); #818 and #434 (both edit `CLAUDE.md`) | FM3 + FM4 (it calls them) | after FM3 + FM4, #722, #740; #818 and #434 checked for the SAFETY edit |
+| FM5 | #722, #740 (both edit `ccd/ccrc`); #434 (edits `CLAUDE.md`) | FM3 + FM4 (it calls them) | after FM3 + FM4, #722, #740; #434 checked for the SAFETY edit |
 | FM6 | #821 (edits `server/src/watch.ts` and `shared/api.ts`; consolidation rule 6: one `watch.ts` series at a time); #737 (edits `server/test/single-definition.test.ts`) | FM1 (the refusal word, the `maintenance` act); lifecycle CB2g if the roll route exists by then (its hold list gains `maintenance`); consolidation W1a if landed (the switch becomes a `SWITCHES` row) | after FM1 and #821; #737 checked |
 | FM7 | none | FM4 (the `maintenance` phase `resume` lifecycle row) and FM6 | after FM3 + FM4 and FM6 |
 | FP8 | #435, #722, #740 | none | after #435, #722, #740; independent of FM1 to FM7 |
@@ -55,10 +55,10 @@ Measured on 2026-10-20 at `4bc6c756d` (27 open PRs; `gh pr list -R Synapsium-Lab
 | #740 | `ccd/ccd`, `ccd/ccrc` | FM1, FM2, FM5, FP8 |
 | #821 | `server/src/watch.ts`, `shared/api.ts`, `server/src/hibernateSweep.ts`, `server/src/stopDoneSweep.ts`, `server/src/coord/store.ts` | FM6 (gate); FM1, FP9 (`shared/api.ts`, checked) |
 | #737 | `server/test/single-definition.test.ts` | FM6 (checked) |
-| #818, #434 | `CLAUDE.md` | FM5's SAFETY edit (checked) |
+| #434 | `CLAUDE.md` | FM5's SAFETY edit (checked) |
 | #813 | `server/src/coord/openRun.ts` and a tracked-files test refusing private tracker ids | none; every PR here must pass its test |
 
-The architecture aim (#816) has merged; FM5's CLAUDE.md edit builds on it. No open PR holds `ccd/claude-session@.service`, `deploy/systemd/*.timer`, `server/src/coord/rundefs.ts`, `server/src/coord/stall.ts`, `server/src/deadCoordinator.ts`, `server/src/coord/dispatch.ts`, `server/src/ccdargv.ts`, `server/src/limits.ts` or `pwa/src/screens/RunsScreen.tsx`.
+The architecture aim (#816) and the architecture direction (#818) have merged; FM5's CLAUDE.md edit builds on them. No open PR holds `ccd/claude-session@.service`, `deploy/systemd/*.timer`, `server/src/coord/rundefs.ts`, `server/src/coord/stall.ts`, `server/src/deadCoordinator.ts`, `server/src/coord/dispatch.ts`, `server/src/ccdargv.ts`, `server/src/limits.ts` or `pwa/src/screens/RunsScreen.tsx`.
 
 ## Landing order
 
@@ -234,7 +234,7 @@ The fleet half deploys before the server half. A server without FP9 never compos
 - Modify `CLAUDE.md` SAFETY: `ccd maintenance` and `ccrc maintenance` are the operator's acts, never a session's.
 - Create `server/test/ccrc-maintenance.test.ts`; modify `server/test/ccrc-update.test.ts` (an update under the switch refuses `maintenance`).
 
-- [ ] **Step 0: Re-ground.** Read `_upd_lock`, `_upd_lock_holder`, the update watchdog and the timer installer; read CLAUDE.md as merged (#816), and #818 and #434 if still open.
+- [ ] **Step 0: Re-ground.** Read `_upd_lock`, `_upd_lock_holder`, the update watchdog and the timer installer; read CLAUDE.md as merged (#816, #818), and #434 if still open.
 - [ ] **Step 1: Red.** "every shipped timer declares exactly one `X-Ccrc-Maintenance` value, and `ccd-pool-sync`, `ccd-cap-scopes`, `ccd-update-sync` and `ccd-telemetry-keepalive` declare `keep`"; "`on` stops exactly the `stop` timers and `off` restarts exactly those"; "`on` refuses while an update holds the lock"; "after `on` returns the lock is free, and `ccrc update` under the switch refuses `maintenance`"; "`ccrc update` with the switch absent behaves as today"; "a failed ccd half restarts the timers"; "`off` runs in its own unit".
 - [ ] **Step 2: Green.**
 - [ ] **Step 3: Mutation table, RUN.**
@@ -411,7 +411,7 @@ Rev 1 applies the first review of rev 0. Each finding was checked against the co
 | 6 | medium | A roll in flight at `on` could be cut and halt a build | CB2d's act calls `_supervised_start`; CB2e appends failed builds to `claude-halted` | Applied: the switch is written under the roll node lock, live `.rolling` rows are waited for, the roll's act writes the pass, FM3 gated on CB2d; a no-halt test (FM3) |
 | 7 | medium | The server cannot read since, phase, progress or per-row membership from a name-only listing | `watch.ts` reads `names.includes(COORDINATOR_PAUSE_MARKER)` | Applied: the one reader reads the switch and manifest through the watcher's io; `resumed` and `total` on the wire; the per-row header claim dropped (FM6, FM10) |
 | 8 | medium | New stall and dead-coordinator holds duplicate existing owners; the real gap is a failed resume reading `orphan` | `stall.ts` ≈:1087 `lifecycle-stopped`; `DEAD_COORDINATOR_DELIBERATE_ACTS` ≈:69 includes `stop`, not `maintenance` | Applied: the duplicate holds dropped and proved by tests instead; `maintenance` added to the deliberate acts (FM6) |
-| 9 | medium | Stale census: #821, #737, #818 missing | 27 open PRs; #821 edits `watch.ts` and `shared/api.ts`, #737 the single-definition test, #818 and #434 `CLAUDE.md`; #816 has merged | Applied: FM6 gated on #821; #821 checked for FM1 and FP9; #737 for FM6; #818 and #434 for FM5 |
+| 9 | medium | Stale census: #821, #737, #818 missing | 27 open PRs; #821 edits `watch.ts` and `shared/api.ts`, #737 the single-definition test, #818 and #434 `CLAUDE.md`; #816 and #818 have merged | Applied: FM6 gated on #821; #821 checked for FM1 and FP9; #737 for FM6; #434 for FM5 |
 | 10 | medium | FM3 could deploy before FM4: an `on` with no `off` | separate releases in rev 0 | Applied: FM3 and FM4 land in one PR; `maintenance` joins `cmd_caps` in FM4's commit |
 | 11 | medium | One tier triple does not reproduce `_ws_least_loaded`'s order | `_ws_least_loaded` ≈:6834-6890 falls back `firstm`, then `first`, then `condemned`, with no ceiling filter | Applied: per-walk tiers in spec §4.3 and FP8, and a mixed-tier parity fixture |
 | 12 | low | `ccd-update-sync` declared `stop` lets its lease lapse; telemetry staleness unmentioned | the unit describes a leased cache; the keepalive measures accounts | Applied: both declared `keep`, with reasons (spec §3.7, FM5) |
