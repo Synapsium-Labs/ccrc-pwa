@@ -4,8 +4,12 @@
 // palettes): in the new-session sheet every account row ran past
 // `.sheet-body`'s right edge, by 51.8px at 360 and 21.8px at 390 in Refined
 // and by 37.8px and 7.8px in Instrument, which cut the right side of the
-// keyboard ring by up to 55.8px. The swap picker fitted only because none of
-// its rows carried a pool tag.
+// keyboard ring by up to 55.8px. The same track bug hit the swap picker
+// (SwapSheet.tsx shares AccountRow) wherever a row wore a pool tag or the
+// "suggested" pill: the "show other pools" crossing rows ran over by 51.8 /
+// 21.8px (Refined 360 / 390) and 37.8 / 7.8px (Instrument), and a list with a
+// suggested row by 49.3 / 19.3px and 35.3 / 5.3px. Its plain list, with
+// neither, fitted. The fix moves those rows' phone pixels too.
 //
 // THE CAUSE IS THE LIST'S TRACK, NOT ONE ROW. `.acct-list` is a grid whose
 // single column was `auto`, which never sizes below its widest item's
@@ -76,6 +80,10 @@ describe('the account picker row fits the sheet body (D-5570)', () => {
     expect(declValue(rule, 'flex')).toBe('1 1 0');
     expect(declValue(rule, 'min-width')).toBe('0');
     expect(declValue(rule, 'flex-wrap')).toBe('wrap');
+    // Centred as the row centres its own children, so a row with room draws
+    // its pool tag and pill on the name's midline exactly as before; without
+    // it they stretch to the line's top at 1280 and 1920.
+    expect(declValue(rule, 'align-items')).toBe('center');
     // The column gap is the row's own `gap-3`, so a wide row draws exactly as
     // it did; the row gap is what a wrapped tag sits under the name by.
     expect(declValue(rule, 'column-gap')).toBe('var(--sp-3)');
