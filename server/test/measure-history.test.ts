@@ -1780,11 +1780,13 @@ describe('W2-3 Task 4: the census and the active rule', () => {
     expect(r.excluded.map((x) => x.reason)).toEqual(['no-recent-entry']);
   });
 
-  it('active rule edge: refuses a store id that is not a UUID and an as_of_ms that is not an integer', async () => {
+  it('active rule edge: refuses a store id that is not a UUID, an as_of_ms that is not an integer and a families list that is no list', async () => {
     const g = await gateT4();
     const c = pure([fam({ ccrc_id: 'demo-x', session_pk: 1 })]);
     expect(() => g.activeFamilies('not-a-store-id', c)).toThrow(TypeError);
     expect(() => g.activeFamilies(STORE, { ...c, as_of_ms: 1.5 })).toThrow(TypeError);
+    // The message names the missing list: without the explicit check the loop over it throws a TypeError of its own.
+    expect(() => g.activeFamilies(STORE, { ...c, families: {} } as unknown as Census)).toThrow(/no families list/);
     expect(() => g.activeFamilies(STORE, { ...c, as_of_ms: String(C_AS_OF) as unknown as number })).toThrow(TypeError);
   });
 
