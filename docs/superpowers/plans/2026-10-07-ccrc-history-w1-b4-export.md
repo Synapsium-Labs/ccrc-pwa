@@ -7827,11 +7827,16 @@ its CONTROLs). O41's B1 half and O38 stay B1's (O38's due cases as B2 re-pinned 
    `journal/<store_id>/` and `export/<store_id>/`, from a TTY outside any `cc-` pane, as §10.7's W1-l row describes.
    The live HOME is never written.
 7. **B3 merged first** (#425, `7284c8501`). B4 builds on its tick and changes none of its steps (B1's D-4246 (`history-w1b-three-prs`) allowed either order).
-8. **Before a restore or an adopt that carries `export/<store_id>/`,** compare the carried directory with its source
-   (names and sizes, `ls -l`). A zero-length or partial `<seq>.<writer>.db` left by an interrupted copy stalls the
-   recovery step, and capture with it, until it is moved aside under a non-segment name (its text then not replayed)
-   or replaced by a good copy; doctor FAILs `recovery-stalled` and the sweep's log names the segment
-   (D-4765 (history-export-segment-unreadable-stalls)).
+8. **Before a restore or an adopt that carries `export/<store_id>/`,** compare the carried directory with its source:
+   each segment's name and size, file by file (`ls -l`). For a restore or a rebuild, a zero-length or partial
+   `<seq>.<writer>.db` left by an interrupted copy stalls the recovery step, and capture with it, until it is moved
+   aside under a non-segment name (its text then not replayed) or replaced by a good copy; doctor FAILs
+   `recovery-stalled` and the sweep's log names the segment (D-4765 (history-export-segment-unreadable-stalls)).
+   For an adopt, that comparison is the only guard. An adopt registers no recovery step, and the check after its bind
+   lists segments by name without opening them, so a truncated segment counts as present and its marks stand: nothing
+   stalls, doctor does not FAIL, and the rows and blobs only it held are not exported again, which shows only at a
+   later restore or rebuild. Finish and verify the copy before the first tick after the adopt. The adopt prints its
+   "copy each to the same path here" line after its bind, so that copy, too, must be complete before that tick.
 
 ### Residuals, named
 
@@ -7877,6 +7882,11 @@ its CONTROLs). O41's B1 half and O38 stay B1's (O38's due cases as B2 re-pinned 
   whole (D-4760 (history-export-segment-bound-estimated)).
 - An export segment that cannot be read stalls the recovery step and holds capture until an operator acts (step 8
   above; D-4765 (history-export-segment-unreadable-stalls)).
+- An adopt does not open the segments carried with it or compare their sizes with anything: the check after its bind
+  compares names only, so a zero-length or partial segment copied in counts as present and its marks stand, and the
+  rows and blobs only it held are not exported again; the loss shows only at a later restore or rebuild, which stalls
+  on that segment (D-4765 (history-export-segment-unreadable-stalls)). Step 8's comparison is the only guard.
+  Checking each carried segment against what it should hold at an adopt is owed to wave 5h (review 623, F2).
 - A pass that is killed (the carrier's memory cap or its start timeout) records no attempt, so the next tick retries
   it; only a pass that fails with a caught error waits the hour, and one that published and could not mark backs
   off further (D-4757 (history-export-mark-failure-backs-off)).
