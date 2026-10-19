@@ -184,10 +184,12 @@ describe('§1.5 — adoption, and everything that must NOT adopt', () => {
     expect(await h.dispatch()).toMatchObject({ ok: true, adopted: true, sessionId: 'demo-task-42' });
   });
 
-  it('a slug ccd refuses as in use fails the spawn with ccd\'s own words, binding nothing', async () => {
-    const h = await harness({ ccd: { ok: false, killed: false, signal: null, stderr: 'slug in use: task-42' },
+  it('a named spawn ccd refuses fails with ccd\'s own words, binding nothing', async () => {
+    // The refusal TEXT is ccd's and is only carried, never parsed — the fixture's
+    // words are arbitrary on purpose (the real one is pinned in ccd's own suite).
+    const h = await harness({ ccd: { ok: false, killed: false, signal: null, stderr: 'ccd: refused (fixture words)' },
                               slug: 'task-42' });
-    expect(await h.dispatch()).toMatchObject({ ok: false, kind: 'fleetFailed', stderr: 'slug in use: task-42' });
+    expect(await h.dispatch()).toMatchObject({ ok: false, kind: 'fleetFailed', stderr: 'ccd: refused (fixture words)' });
     expect(okRun(h.coord.run(h.runId))).toMatchObject({ state: 'planned', sessionId: null });
   });
 
