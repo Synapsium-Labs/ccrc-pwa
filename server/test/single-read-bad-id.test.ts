@@ -243,7 +243,7 @@ describe('every absence-acting caller holds on bad-id (spec §2.3)', () => {
     expect(rec.calls.filter((c) => c[0] === 'stop' || c[0] === 'swap'), 'no stop or swap argv').toEqual([]);
   });
 
-  it('POST /api/runs/:id/reclaim with claimedBy --actor answers 400 bad-session', async () => {
+  it('POST /api/runs/:id/reclaim with claimedBy --actor answers 400 bad-session-id', async () => {
     const home = mkTmp('ccrc-bad-id-reclaim-');
     seedRow(home, CLAIMANT);
     const rec = recorder();
@@ -252,7 +252,7 @@ describe('every absence-acting caller holds on bad-id (spec §2.3)', () => {
     const id = storedRun(w.coord, { state: 'working', sessionId: WORKER, claimedBy: CLAIMANT });
     const res = await app.inject({ method: 'POST', url: `/api/runs/${id}/reclaim`, payload: { claimedBy: BAD } });
     expect(res.statusCode).toBe(400);
-    expect(res.json()).toEqual({ ok: false, error: 'bad-session', detail: 'claimedBy is not a registry id' });
+    expect(res.json()).toEqual({ ok: false, error: 'bad-session-id', detail: 'claimedBy is not a registry id' });
     expect(okRun(w.coord.run(id))!.claimedBy, "the run's claimant is unchanged").toBe(CLAIMANT);
     expect(rec.calls).toEqual([]);
   });

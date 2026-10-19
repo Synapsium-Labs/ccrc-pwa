@@ -75,6 +75,10 @@ const BAD_SLUG_DETAIL = ((): string => {
   return s.detail;
 })();
 const BAD_HOME_DETAIL = 'homeProject must be a single path segment, not "a/b"';
+/** Path identity (spec §2.3): the three id gates' refusals, and ids ccd could read as a flag. */
+const BAD_CLAIMANT = { error: 'bad-session-id', detail: 'claimedBy is not a registry id' } as const;
+const BAD_SESSION_ID = { error: 'bad-session-id', detail: 'sessionId is not a registry id' } as const;
+const BAD_PROJECT = { error: 'bad-request', detail: 'project must not begin with - or .' } as const;
 
 interface Row { name: string; gate: OpenRunGate; f: OpenRunFacts; refusal: Record<string, unknown> }
 
@@ -84,6 +88,12 @@ const SINGLE: Row[] = [
     refusal: { error: 'bad-request', detail: 'kind must be work or review' } },
   { name: 'an empty title', gate: 'shape', f: facts({ ...WORK, title: '' }),
     refusal: { error: 'bad-request' } },
+  { name: 'a claimedBy ccd could read as a flag', gate: 'claimedById', f: facts({ ...WORK, claimedBy: '-coord' }),
+    refusal: BAD_CLAIMANT },
+  { name: 'a sessionId ccd could read as a flag', gate: 'sessionIdId', f: facts({ ...WORK, sessionId: '-ws' }),
+    refusal: BAD_SESSION_ID },
+  { name: 'a work project that begins with a dash', gate: 'projectFlag', f: facts({ ...WORK, project: '-demo' }),
+    refusal: BAD_PROJECT },
   { name: 'reviews on a work run', gate: 'reviewsOnWork', f: facts({ ...WORK, reviews: 7 }),
     refusal: { error: 'bad-request', detail: 'reviews is only accepted with kind review' } },
   { name: 'a review naming no run id', gate: 'reviewsId', f: facts({ ...REVIEW, reviews: 0 }),
@@ -163,6 +173,14 @@ const PAIRS: (Row & { pair: [OpenRunGate, OpenRunGate] })[] = [
     refusal: { error: 'bad-request', detail: 'kind must be work or review' } },
   { name: 'empty title + reviews on work', pair: ['shape', 'reviewsOnWork'], gate: 'shape',
     f: facts({ ...WORK, title: '', reviews: 7 }), refusal: { error: 'bad-request' } },
+  { name: 'empty title + a dash-led claimedBy', pair: ['shape', 'claimedById'], gate: 'shape',
+    f: facts({ ...WORK, title: '', claimedBy: '-coord' }), refusal: { error: 'bad-request' } },
+  { name: 'a dash-led claimedBy + a dash-led sessionId', pair: ['claimedById', 'sessionIdId'], gate: 'claimedById',
+    f: facts({ ...WORK, claimedBy: '-coord', sessionId: '-ws' }), refusal: BAD_CLAIMANT },
+  { name: 'a dash-led sessionId + a dash-led project', pair: ['sessionIdId', 'projectFlag'], gate: 'sessionIdId',
+    f: facts({ ...WORK, sessionId: '-ws', project: '-demo' }), refusal: BAD_SESSION_ID },
+  { name: 'a dash-led project + reviews on work', pair: ['projectFlag', 'reviewsOnWork'], gate: 'projectFlag',
+    f: facts({ ...WORK, project: '-demo', reviews: 7 }), refusal: BAD_PROJECT },
   { name: 'reviews on work + bad slug (bridges the exclusive reviews-on-work/reviews-id pair)',
     pair: ['reviewsOnWork', 'program'], gate: 'reviewsOnWork',
     f: facts({ ...WORK, reviews: 7, program: BAD_SLUG }),

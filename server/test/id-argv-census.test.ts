@@ -6,18 +6,20 @@
 // `verb-gate.test.ts` and `routes.test.ts`'s knownId census. A new call, or a new builder key, must classify itself
 // here, or this suite goes red.
 //
-// THE CLAIM: 41 id-taking calls across 10 files.
+// THE CLAIM: 48 id-taking calls across 12 files.
 //
 // Origins:
 //   `request`   a route's own parameter or body;
 //   `stored`    a coord.db run row;
 //   `registry`  a name the registry listing produced;
-//   `collector` the collector's population.
+//   `collector` the collector's population;
+//   `literal`   a constant the source spells, composed only to ask `verbSupported` for its verb.
 // Gates: each names a check by its HOME (file, scope, text). When the home is the call's own scope, its text must
 // stand above the call. When the call's scope reaches a gate that lives elsewhere, the row's `entry` must stand above
 // the call. A gate in a caller (close's gates above `closeReviewRun` and `verifyDone`, dispatch's gate above
 // `refuseSpentChild`) is pinned at its home only. A row whose gate lives in another scope and that has no `entry` is
-// guarded through its callers: `stopArgvFor`'s three call sites and the `childSpent` helpers' callers have a case below.
+// guarded through its callers: `stopArgvFor`'s three call sites, the `childSpent` helpers' callers and
+// `holdAndBindSession`'s caller have a case below.
 //
 // WHAT THIS DOES NOT COVER, stated plainly:
 // - It recognises a call by the literal text `CCD_ARGV.<name>(`. An argv obtained any other way is invisible to it;
@@ -38,11 +40,13 @@ import { codeOnly } from './sourceScan.js';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const srcRoot = path.resolve(here, '..', 'src');
 
-/** Every `CCD_ARGV` key, classified by whether its argv carries a session or temp-root id (spec §2.3's 26). A new key
+/** Every `CCD_ARGV` key, classified by whether its argv carries a session or temp-root id (spec §2.3's 26, and the
+ *  three main added since: `hibernate`, `swapInterrupt` and `swapCrossInterrupt`). A new key
  *  is a tsc error here (`typecheck-tests`) and a red first case below, until someone decides which it is. */
 const ID_BUILDERS = {
   start: 'no-id', enable: 'no-id', startCross: 'no-id', enableCross: 'no-id',
   ensure: 'id', stopId: 'id', stopPair: 'id', forget: 'id', swap: 'id', swapCross: 'id',
+  swapInterrupt: 'id', swapCrossInterrupt: 'id', hibernate: 'id',
   wsAdd: 'no-id', wsAddWorker: 'no-id',
   prStateSession: 'id', prStateProject: 'no-id', prOpen: 'id',
   wsArchive: 'id', wsRestore: 'id', wsAudit: 'id', wsReap: 'id',
@@ -75,6 +79,9 @@ const ID_PROBE = {
   forget: [PROBE_ID],
   swap: [PROBE_ID, 'acct-a'],
   swapCross: [PROBE_ID, 'acct-a'],
+  swapInterrupt: [PROBE_ID, 'acct-a'],
+  swapCrossInterrupt: [PROBE_ID, 'acct-a'],
+  hibernate: [PROBE_ID, null],
   prStateSession: [PROBE_ID],
   prOpen: [PROBE_ID, 'a title', 'Ym9keQ==', false],
   wsArchive: [PROBE_ID, null],
@@ -108,6 +115,8 @@ const HEADS: readonly (readonly [RegExp, (m: RegExpExecArray) => string | null])
   [/^(?:export )?(?:async )?function (\w+)/, (m) => m[1]!],
   [/^ {2}(?:async )?function (\w+)/, (m) => m[1]!],
   [/^(?: {2})?(?:export )?const (\w+) = async \(/, (m) => m[1]!],
+  // A top-level table: `coord/openRun.ts`'s `GATES`, where `POST /api/runs`' id checks stand since D-5384.
+  [/^const (\w+) = \[$/, (m) => m[1]!],
   [/^ {2}(?:private |public |protected )?(?:static )?(?:async )?(\w+)\([^)]*\)[^{;]*\{\s*$/,
     (m) => (/^(?:if|for|while|switch|catch)$/.test(m[1]!) ? null : m[1]!)],
 ];
@@ -256,7 +265,7 @@ const GATES = {
   /** The cross-pool arm's first statement, ahead of its skew gate. */
   'cross-arm-head': {
     file: 'server.ts', scope: 'POST /api/sessions/:id/swap',
-    re: /if \(body\.crossPool === true\) \{\s*if \(!isRegistryId\(id\)\)/,
+    re: /const cross = body\.crossPool === true;\s*if \(cross\) \{\s*if \(!isRegistryId\(id\)\)/,
   },
   /** This refuses a legacy row whose stop-pair part is not a registry id, or whose pair is not its id, so the wrapper
    *  `stopPair` carries is always a prefix of a vetted id (the row's `.wrapper` fallback never reaches it), and the
@@ -273,10 +282,17 @@ const GATES = {
   },
   /** `readRegistryMeasured` refuses a non-registry name: it is never read, built or composed. */
   'registry-refused': { file: 'registry.ts', scope: 'readRegistryMeasured', re: /\bisRegistryId\(/ },
-  /** `POST /api/runs` checks `claimedBy`, then `sessionId`, as given. */
+  /** `POST /api/runs` checks `claimedBy`, then `sessionId`, as given: two gates of its decider's table (D-5384), right
+   *  after the shape gate, so a refusal comes before any registry read. */
   'run-open-checks': {
-    file: 'coord/routes.ts', scope: 'POST /api/runs',
-    re: /!isRegistryId\(claimedBy\)[\s\S]*?!isRegistryId\(sessionId\)/,
+    file: 'coord/openRun.ts', scope: 'GATES',
+    re: /\['shape', [\s\S]*?\['claimedById', \(c\) => isRegistryId\(c\.b\.claimedBy\)[\s\S]*?\['sessionIdId', \(c\) => \(c\.b\.sessionId === undefined \|\| isRegistryId\(c\.b\.sessionId\)\)[\s\S]*?\['attribution', /,
+  },
+  /** A capability probe: `'x'` is a constant `isRegistryId` accepts, and the argv only feeds `verbSupported`, which
+   *  reads its verb. It is never run. */
+  'verb-probe': {
+    file: 'hibernateSweep.ts', scope: 'armedPort',
+    re: /if \(!verbSupported\(a\.fleetState, CCD_ARGV\.hibernate\('x', null\)\)\) return null;/,
   },
   /** The routing door asks the predicate of the stored id it is about to write. */
   'routing-door': { file: 'coord/routes.ts', scope: 'POST /api/runs/:id/route', re: /if \(!isRegistryId\(sid\)\) \{/ },
@@ -333,7 +349,7 @@ const GATES = {
 
 type Gate = keyof typeof GATES;
 
-type Origin = 'request' | 'stored' | 'registry' | 'collector';
+type Origin = 'request' | 'stored' | 'registry' | 'collector' | 'literal';
 
 interface CensusRow {
   readonly file: string;
@@ -352,7 +368,10 @@ const KNOWN_ID = /\bknownId\(\s*id\s*\)/;
 /** `sweepNames` walks `readRegistry`'s own output, which never carries a refused row. */
 const SWEEP_NAMES_LISTING = /\bconst records = await readRegistry\(this\.deps\.io, this\.deps\.cfg\);\s*for \(const r of records\) \{/;
 
-/** The 41 calls. Rows of one key (file, scope, builder, id) are in source order. */
+/** The stop-done pass's population: fleet rows whose record the listing built (`byId`), so never a refused name. */
+const STOP_DONE_POPULATION = /\bconst byId = new Map\(records\.map\(\(r\) => \[r\.id, r\] as const\)\);[\s\S]*?byId\.has\(s\.id\)/;
+
+/** The 48 calls. Rows of one key (file, scope, builder, id) are in source order. */
 const CENSUS: readonly CensusRow[] = [
   // coord/childReclaim.ts: the close path's child gate (masked by close's gates) and the sweep both reach the one executor.
   { file: 'coord/childReclaim.ts', scope: 'childReclaimAudit', builder: 'wsReclaimAudit', id: 'req.sessionId', origin: ['stored', 'registry'], gate: ['child-reclaim-outcome'] },
@@ -384,8 +403,9 @@ const CENSUS: readonly CensusRow[] = [
   { file: 'coord/expireArchived.ts', scope: 'expireAct', builder: 'wsExpire', id: 'sessionId', origin: ['registry'], gate: ['expiry-step-0'] },
   // coord/fingerprint.ts: reached from close (below close's gate) and advance (below advance's gate).
   { file: 'coord/fingerprint.ts', scope: 'verifyDone', builder: 'prStateSession', id: 'run.sessionId', origin: ['stored'], gate: ['close-gate', 'advance-gate', 'fingerprint-check'], entry: /\bresolveDoneBranch\(deps, run\)/ },
-  // coord/routes.ts
-  { file: 'coord/routes.ts', scope: 'POST /api/runs', builder: 'wsHold', id: 'sessionId', origin: ['request'], gate: ['run-open-checks'] },
+  // coord/routes.ts: the open's hold, in the helper `POST /api/runs` calls once its decider admitted the open (the
+  // callers case pins that order).
+  { file: 'coord/routes.ts', scope: 'holdAndBindSession', builder: 'wsHold', id: 'sessionId', origin: ['request'], gate: ['run-open-checks'] },
   { file: 'coord/routes.ts', scope: 'POST /api/runs/:id/route', builder: 'route', id: 'sid', origin: ['stored'], gate: ['routing-door'] },
   { file: 'coord/routes.ts', scope: 'POST /api/runs/:id/route', builder: 'routeSet', id: 'sid', origin: ['stored'], gate: ['routing-door'] },
   // server.ts
@@ -399,6 +419,8 @@ const CENSUS: readonly CensusRow[] = [
   // ties what it vets (`stopPairWrapper(id, rec, identity)` and `rec.project`) to the two arguments composed here.
   { file: 'server.ts', scope: 'stopArgvFor', builder: 'stopPair', id: 'originalWrapper', origin: ['request', 'registry'], gate: ['stop-pair-refused'], entry: /\bconst originalWrapper = stopPairWrapper\(id, rec, identity\);\s*return CCD_ARGV\.stopPair\(originalWrapper, rec\.project, surface\);/ },
   { file: 'server.ts', scope: 'POST /api/sessions/:id/swap', builder: 'swapCross', id: 'id', origin: ['request'], gate: ['cross-arm-head'] },
+  { file: 'server.ts', scope: 'POST /api/sessions/:id/swap', builder: 'swapCrossInterrupt', id: 'id', origin: ['request'], gate: ['cross-arm-head'] },
+  { file: 'server.ts', scope: 'POST /api/sessions/:id/swap', builder: 'swapInterrupt', id: 'id', origin: ['request'], gate: ['readSessionRecord'], entry: /\breadSessionRecord\(deps\.io, deps\.cfg, id\)/ },
   { file: 'server.ts', scope: 'POST /api/sessions/:id/swap', builder: 'swap', id: 'id', origin: ['request'], gate: ['readSessionRecord'], entry: /\breadSessionRecord\(deps\.io, deps\.cfg, id\)/ },
   { file: 'server.ts', scope: 'GET /api/sessions/:id/pr', builder: 'prStateSession', id: 'id', origin: ['request'], gate: ['knownId'], entry: KNOWN_ID },
   { file: 'server.ts', scope: 'POST /api/sessions/:id/pr', builder: 'prOpen', id: 'id', origin: ['request'], gate: ['knownId'], entry: KNOWN_ID },
@@ -409,6 +431,14 @@ const CENSUS: readonly CensusRow[] = [
   { file: 'server.ts', scope: 'POST /api/sessions/:id/release', builder: 'wsRelease', id: 'id', origin: ['request'], gate: ['knownId'], entry: KNOWN_ID },
   { file: 'server.ts', scope: 'GET /api/sessions/:id/workspace/audit', builder: 'wsAudit', id: 'id', origin: ['request'], gate: ['knownId'], entry: KNOWN_ID },
   { file: 'server.ts', scope: 'POST /api/sessions/:id/workspace/reap', builder: 'wsReap', id: 'id', origin: ['request'], gate: ['knownId'], entry: KNOWN_ID },
+  // hibernateSweep.ts and stopDoneSweep.ts (D-5242, D-5370): each acts on a fleet row whose record the listing built,
+  // and re-reads it at the act through the watcher's `rowAtAct` (`readSessionRecord`, whose `bad-id` acts on nothing).
+  { file: 'hibernateSweep.ts', scope: 'armedPort', builder: 'hibernate', id: "' '", origin: ['literal'], gate: ['verb-probe'] },
+  { file: 'hibernateSweep.ts', scope: 'actOn', builder: 'hibernate', id: 'id', origin: ['registry'], gate: ['registry-refused', 'readSessionRecord'], entry: /\bconst id = row\.id;[\s\S]*?const fresh = await port\.rowAtAct\(rec\);\s*if \(!fresh\.ok\) return/ },
+  { file: 'stopDoneSweep.ts', scope: 'stopDonePass', builder: 'hibernate', id: 'pop[0]!.id', origin: ['registry'], gate: ['registry-refused'], entry: STOP_DONE_POPULATION },
+  { file: 'stopDoneSweep.ts', scope: 'stopDonePass', builder: 'hibernate', id: 'row.id', origin: ['registry'], gate: ['registry-refused', 'readSessionRecord'], entry: /\bconst fresh = await deps\.rowAtAct\(rec\);\s*if \(!fresh\.ok\) return/ },
+  // watch.ts: the mail lane wakes a hibernated recipient only through a record the listing built (D-5242).
+  { file: 'watch.ts', scope: 'sweepMail', builder: 'ensure', id: 'd.toId', origin: ['stored', 'registry'], gate: ['registry-refused'], entry: /\bconst rec = records\.find\(\(r\) => r\.id === d\.toId\);[\s\S]*?if \(rec === undefined \|\| identity === null\) \{/ },
   // watch.ts: the naming sweep's rows come from the listing, which never builds a refused name; the `entry` ties the
   // loop's `r` to `readRegistry`'s output.
   { file: 'watch.ts', scope: 'sweepNames', builder: 'wsRename', id: 'r.id', origin: ['registry'], gate: ['registry-refused'], entry: SWEEP_NAMES_LISTING },
@@ -418,7 +448,8 @@ const CENSUS: readonly CensusRow[] = [
 /** The files whose gates ask the predicate themselves. */
 const GATE_FILES = [
   'server.ts', 'registry.ts', 'watch.ts',
-  'coord/routes.ts', 'coord/dispatch.ts', 'coord/close.ts', 'coord/reclaim.ts', 'coord/fingerprint.ts', 'coord/expireArchived.ts',
+  'coord/routes.ts', 'coord/openRun.ts', 'coord/dispatch.ts', 'coord/close.ts', 'coord/reclaim.ts', 'coord/fingerprint.ts',
+  'coord/expireArchived.ts',
 ] as const;
 
 const IMPORTS_PREDICATE = /import\s*\{[^}]*\bisRegistryId\b[^}]*\}\s*from\s*'(?:\.\.\/)+shared\/api\.js'/;
@@ -440,7 +471,7 @@ function paired(): { readonly site: Site; readonly row: CensusRow }[] {
 describe('every id-taking argv call has an origin and a gate (spec §2.3)', () => {
   it('every CCD_ARGV key is classified id or no-id', () => {
     expect(Object.keys(ID_BUILDERS).sort()).toEqual(Object.keys(CCD_ARGV).sort());
-    expect(ID_KEYS).toHaveLength(26);
+    expect(ID_KEYS).toHaveLength(29);
     expect(Object.keys(ID_PROBE).sort()).toEqual([...ID_KEYS].sort());
     for (const k of ID_KEYS) {
       const args = ID_PROBE[k] as readonly unknown[];
@@ -459,7 +490,7 @@ describe('every id-taking argv call has an origin and a gate (spec §2.3)', () =
     }
   });
 
-  it('the header claim, "41 id-taking calls across 10 files", matches the scan', () => {
+  it('the header claim, "48 id-taking calls across 12 files", matches the scan', () => {
     const self = readFileSync(fileURLToPath(import.meta.url), 'utf8');
     const claim = /^\/\/ THE CLAIM: (\d+) id-taking calls across (\d+) files\b/m.exec(self);
     expect(claim, 'the census claim was removed or reworded without its guard').not.toBeNull();
@@ -544,6 +575,12 @@ describe('every id-taking argv call has an origin and a gate (spec §2.3)', () =
       collectAudit: ['coord/collectTempRoot.ts | collectTempRoot', 'coord/collectTempRoot.ts | learnCollect'],
       childSpent: ['coord/childBind.ts | childBindGate', 'coord/close.ts | childGateAtClose'],
       childSpentLive: ['coord/childSpent.ts | childSpent', 'coord/close.ts | childGateAtClose'],
+      holdAndBindSession: ['coord/routes.ts | POST /api/runs'],
+    };
+    /** `<callee> <- <file> | <scope>`: the caller's decider refuses first, and the call runs only on its admitted open. */
+    const DECIDED_ABOVE: Readonly<Record<string, RegExp>> = {
+      'holdAndBindSession <- coord/routes.ts | POST /api/runs':
+        /\bconst pre = await openRunPreconditions\(\{[\s\S]*?if \(!pre\.ok\) return sendOpenRunRefusal\(reply, pre\.refusal\);[\s\S]*\bholdAndBindSession\(coord, reply, opened, sessionId\)/,
     };
     /** `<callee> <- <file> | <scope>`: the caller reads the row first and passes the found read's `record`. */
     const READ_ABOVE: Readonly<Record<string, RegExp>> = {
@@ -575,13 +612,19 @@ describe('every id-taking argv call has an origin and a gate (spec §2.3)', () =
       expect(sites.map((s) => s.where).sort(), `${callee}'s callers`).toEqual([...want].sort());
       for (const s of sites) {
         const key = `${callee} <- ${s.where}`;
+        const decided = DECIDED_ABOVE[key];
+        if (decided !== undefined) {
+          readChecked.add(key);
+          expect(s.before, `${key} (line ${s.line}): its decider refuses above the call`).toMatch(decided);
+        }
         const need = READ_ABOVE[key];
         if (need === undefined) continue;
         readChecked.add(key);
         expect(s.before, `${key} (line ${s.line}): its readSessionRecord stands above the call, which passes read.record`).toMatch(need);
       }
     }
-    expect([...readChecked].sort(), 'every READ_ABOVE pin was exercised by a call').toEqual(Object.keys(READ_ABOVE).sort());
+    expect([...readChecked].sort(), 'every READ_ABOVE and DECIDED_ABOVE pin was exercised by a call')
+      .toEqual([...Object.keys(READ_ABOVE), ...Object.keys(DECIDED_ABOVE)].sort());
   });
 
   it('CONTROL: the scan sees a call, and ignores a comment, a string and a definition', () => {

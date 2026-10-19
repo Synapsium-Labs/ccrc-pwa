@@ -235,7 +235,7 @@ describe('fleet, projects and peers report what they could not measure (spec §2
     expect('refusedRows' in (res.json() as Record<string, unknown>), 'absence permits: the key rides only when > 0').toBe(false);
   });
 
-  it('GET /api/peers?of=--actor answers 400 bad-session with no listing', async () => {
+  it('GET /api/peers?of=--actor answers 400 bad-session-id with no listing', async () => {
     const home = mkTmp('ccrc-w1a-peers-');
     seed(home, 'demo-quiet-mesa', UUID_A);
     seed(home, '--actor', UUID_X);
@@ -243,18 +243,18 @@ describe('fleet, projects and peers report what they could not measure (spec §2
     app = await peersApp(home, io);
     const res = await app.inject({ method: 'GET', url: '/api/peers?of=--actor', headers: tok });
     expect(res.statusCode).toBe(400);
-    expect(res.json()).toEqual({ ok: false, error: 'bad-session' });
+    expect(res.json()).toEqual({ ok: false, error: 'bad-session-id' });
     expect(state.listings, 'refused before any read: a bad id never heals').toBe(0);
   });
 
-  it.each(REFUSED_IDS)('GET /api/peers?of=%j, no row planted, answers 400 bad-session with no listing', async (id) => {
+  it.each(REFUSED_IDS)('GET /api/peers?of=%j, no row planted, answers 400 bad-session-id with no listing', async (id) => {
     const home = mkTmp('ccrc-w1a-peers-');
     seed(home, 'demo-quiet-mesa', UUID_A);
     const { io, state } = registryIO(path.join(home, '.cc-sessions'));
     app = await peersApp(home, io);
     const res = await app.inject({ method: 'GET', url: `/api/peers?of=${encodeURIComponent(id)}`, headers: tok });
     expect(res.statusCode).toBe(400);
-    expect(res.json()).toEqual({ ok: false, error: 'bad-session' });
+    expect(res.json()).toEqual({ ok: false, error: 'bad-session-id' });
     expect(state.listings).toBe(0);
   });
 

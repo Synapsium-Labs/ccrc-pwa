@@ -67,26 +67,26 @@ describe('POST /api/runs refuses an id that is not a registry id (spec §2.3)', 
   let app: FastifyInstance | undefined;
   afterEach(async () => { if (app) await app.close(); app = undefined; });
 
-  it.each(REFUSED_IDS)('claimedBy %s answers 400 bad-session naming claimedBy', async (id) => {
+  it.each(REFUSED_IDS)('claimedBy %s answers 400 bad-session-id naming claimedBy', async (id) => {
     const home = mkTmp('ccrc-runopen-id-');
     if (id.length <= PLANTABLE_MAX) seedRow(home, id);
     const { run, calls } = recorder();
     const w = await openApp(home, run); app = w.app;
     const res = await postOpen(w.app, { ...OPEN_BODY, claimedBy: id });
     expect(res.statusCode).toBe(400);
-    expect(res.json()).toEqual({ ok: false, error: 'bad-session', detail: 'claimedBy is not a registry id' });
+    expect(res.json()).toEqual({ ok: false, error: 'bad-session-id', detail: 'claimedBy is not a registry id' });
     expect((await getRuns(w.app)).json()).toEqual({ runs: [] });
     expect(calls).toEqual([]);
   });
 
-  it.each(REFUSED_IDS)('sessionId %s, its row planted, answers 400 bad-session naming sessionId', async (id) => {
+  it.each(REFUSED_IDS)('sessionId %s, its row planted, answers 400 bad-session-id naming sessionId', async (id) => {
     const home = mkTmp('ccrc-runopen-id-');
     if (id.length <= PLANTABLE_MAX) seedRow(home, id);
     const { run, calls } = recorder();
     const w = await openApp(home, run); app = w.app;
     const res = await postOpen(w.app, { ...OPEN_BODY, wave: 2, sessionId: id });
     expect(res.statusCode).toBe(400);
-    expect(res.json()).toEqual({ ok: false, error: 'bad-session', detail: 'sessionId is not a registry id' });
+    expect(res.json()).toEqual({ ok: false, error: 'bad-session-id', detail: 'sessionId is not a registry id' });
     expect(calls.filter((c) => c[0] === 'ws-hold')).toEqual([]);
     expect((await getRuns(w.app)).json()).toEqual({ runs: [] });
   });
@@ -104,31 +104,38 @@ describe('POST /api/runs refuses an id that is not a registry id (spec §2.3)', 
 
   it('controls: claimedBy a--actor, sessionId a.--actor and a project with an inner dash all open', async () => {
     const home = mkTmp('ccrc-runopen-id-');
-    seedRow(home, 'a.--actor');
+    // D-5298 (landing round 3): each claimant has its own registry row and sends its uuid, as main's open tests do. The
+    // session stays row-less, as a dispatch's session is until `ws-add --child` makes it, because main's `notAChild`
+    // gate refuses a planted root row.
+    seedRow(home, 'a--actor');
+    seedRow(home, CLAIMED_BY);
     const { run, calls } = recorder();
     const w = await openApp(home, run); app = w.app;
-    const claimant = await postOpen(w.app, { ...OPEN_BODY, program: 'ctl-claimant', claimedBy: 'a--actor' });
+    const claimant = await postOpen(w.app,
+      { ...OPEN_BODY, program: 'ctl-claimant', claimedBy: 'a--actor', claimedByUuid: 'u-a--actor' });
     expect(claimant.statusCode).toBe(200);
-    const session = await postOpen(w.app, { ...OPEN_BODY, program: 'ctl-session', wave: 2, sessionId: 'a.--actor' });
+    const session = await postOpen(w.app,
+      { ...OPEN_BODY, program: 'ctl-session', wave: 2, sessionId: 'a.--actor', claimedByUuid: `u-${CLAIMED_BY}` });
     expect(session.statusCode).toBe(200);
     // `CCD_ARGV.wsHold` is `['ws-hold', '--session', <id>, …]`: the accepted id reaches its argv whole.
     expect(calls.filter((c) => c[0] === 'ws-hold').map((c) => c[2])).toEqual(['a.--actor']);
-    const project = await postOpen(w.app, { ...OPEN_BODY, program: 'ctl-project', project: 'demo-inner-dash' });
+    const project = await postOpen(w.app,
+      { ...OPEN_BODY, program: 'ctl-project', project: 'demo-inner-dash', claimedByUuid: `u-${CLAIMED_BY}` });
     expect(project.statusCode).toBe(200);
     expect(((await getRuns(w.app)).json() as { runs: unknown[] }).runs).toHaveLength(3);
   });
 
-  it('a padded claimedBy is checked as given, never trimmed, and answers 400 bad-session', async () => {
+  it('a padded claimedBy is checked as given, never trimmed, and answers 400 bad-session-id', async () => {
     const home = mkTmp('ccrc-runopen-id-');
     const { run } = recorder();
     const w = await openApp(home, run); app = w.app;
     const res = await postOpen(w.app, { ...OPEN_BODY, claimedBy: ` ${CLAIMED_BY}` });
     expect(res.statusCode).toBe(400);
-    expect(res.json()).toEqual({ ok: false, error: 'bad-session', detail: 'claimedBy is not a registry id' });
+    expect(res.json()).toEqual({ ok: false, error: 'bad-session-id', detail: 'claimedBy is not a registry id' });
     expect((await getRuns(w.app)).json()).toEqual({ runs: [] });
   });
 
-  it("a review open with a bad sessionId answers bad-session ahead of the review arm's checks", async () => {
+  it("a review open with a bad sessionId answers bad-session-id ahead of the review arm's checks", async () => {
     const home = mkTmp('ccrc-runopen-id-');
     seedRow(home, '--actor');
     const { run } = recorder();
@@ -137,7 +144,7 @@ describe('POST /api/runs refuses an id that is not a registry id (spec §2.3)', 
       kind: 'review', reviews: 9999 };
     const bad = await postOpen(w.app, { ...review, sessionId: '--actor' });
     expect(bad.statusCode).toBe(400);
-    expect(bad.json()).toEqual({ ok: false, error: 'bad-session', detail: 'sessionId is not a registry id' });
+    expect(bad.json()).toEqual({ ok: false, error: 'bad-session-id', detail: 'sessionId is not a registry id' });
     // The ordering, stated: a VALID sessionId still meets the review arm's own refusal.
     const valid = await postOpen(w.app, { ...review, sessionId: 'demo-worker' });
     expect(valid.statusCode).toBe(400);
@@ -185,7 +192,7 @@ describe('the reclaim door refuses a bad id on either side (spec §2.3)', () => 
     expect(calls, 'only the valid worker is named').toEqual([['ws-release', '--session', WORKER]]);
   });
 
-  it('the heir --actor answers 400 bad-session, and the stored claimant is unchanged', async () => {
+  it('the heir --actor answers 400 bad-session-id, and the stored claimant is unchanged', async () => {
     const home = mkTmp('ccrc-reclaim-id-');
     seedRow(home, '--actor');
     const { run, calls } = recorder();
@@ -194,7 +201,7 @@ describe('the reclaim door refuses a bad id on either side (spec §2.3)', () => 
     w.resetListings();
     const res = await postReclaim(w.app, id, '--actor');
     expect(res.statusCode).toBe(400);
-    expect(res.json()).toEqual({ ok: false, error: 'bad-session', detail: 'claimedBy is not a registry id' });
+    expect(res.json()).toEqual({ ok: false, error: 'bad-session-id', detail: 'claimedBy is not a registry id' });
     expect(okRun(w.coord.run(id))!.claimedBy).toBe(DEAD);
     expect(w.listings()).toBe(0);
     expect(calls).toEqual([]);

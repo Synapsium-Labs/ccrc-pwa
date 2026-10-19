@@ -239,7 +239,7 @@ describe('the registry listing carries the spawn record (plan Task 15, for Task 
       }
       const read = async () => {
         const r = await readSessionRecord(localIO, loadConfig({ CCRC_HOME: home }), id);
-        if (!r.found) throw new Error(r.reason);
+        if (r.kind !== 'found') throw new Error(r.kind);
         return r.record;
       };
       const bare = await read();
