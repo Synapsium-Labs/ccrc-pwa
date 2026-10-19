@@ -5098,13 +5098,13 @@ describe('D-5726: replay moves an export mark only within one writer; across wri
       expect(strandedBlobsOn(db)).toEqual([]);
       const live = await passAfterRebuild(box, ids, db);
       const fresh = live.filter((n) => n !== seg(5, W1) && n !== seg(5, W2));
-      expect(fresh, 'the pass wrote one segment').toHaveLength(1);
-      expect(fresh[0], 'of the current writer').toBe(`6.${ids.writer}.db`);
-      expect(segmentRows(path.join(exportDirOf(box), fresh[0]!), 'sidecars').map((r) => r['name']).sort(), 'carrying the orphan row and the linked one').toEqual(['d5726a-linked.txt', 'd5726a-orphan.txt']);
-      expect([blobMarkOf(db, out), ...marksOf(db)], 'the blob and the entry are marked by it').toEqual([fresh[0], fresh[0]]);
+      expect.soft(fresh, 'the pass wrote one segment').toHaveLength(1);
+      expect.soft(fresh[0], 'of the current writer').toBe(`6.${ids.writer}.db`);
+      if (fresh[0] !== undefined) expect.soft(segmentRows(path.join(exportDirOf(box), fresh[0]), 'sidecars').map((r) => r['name']).sort(), 'carrying the orphan row and the linked one').toEqual(['d5726a-linked.txt', 'd5726a-orphan.txt']);
+      expect.soft([blobMarkOf(db, out), ...marksOf(db)], 'the blob and the entry are marked by it').toEqual([fresh[0] ?? null, fresh[0] ?? null]);
       moveAside(box, seg(5, W1));
-      expect(checkAfterLoss(box, ids, db).segments, 'no mark names writer 1\'s lost segment, so the check clears nothing').toEqual([]);
-      expect([blobMarkOf(db, out), ...marksOf(db)], 'nothing named the lost segment: both marks stand').toEqual([fresh[0], fresh[0]]);
+      expect.soft(checkAfterLoss(box, ids, db).segments, 'no mark names writer 1\'s lost segment, so the check clears nothing').toEqual([]);
+      expect.soft([blobMarkOf(db, out), ...marksOf(db)], 'nothing named the lost segment: both marks stand').toEqual([fresh[0] ?? null, fresh[0] ?? null]);
       again = await rebuildAgain(box, ids);
       expect(sidecarNames(again.db), 'the second rebuild still finds the orphan row').toEqual(['d5726a-linked.txt', 'd5726a-orphan.txt']);
       expect(countersOn(again.db, 'export_row_blob_missing', 'export_row_unplaced')).toEqual({ export_row_blob_missing: 0, export_row_unplaced: 0 });
@@ -5114,7 +5114,7 @@ describe('D-5726: replay moves an export mark only within one writer; across wri
     }
   }, 2 * HEAVY);
 
-  it('(b) an entry variant only writer 1\'s segment carries: the entry and the variant\'s body are in both writers\' segments; the rebuild leaves the entry unmarked, and with writer 1\'s segment lost after a pass the second rebuild still finds the variant', async () => {
+  it('(b) an entry variant only writer 1\'s segment carries, a fork: the bodies\' bytes are in an earlier segment of writer 2 and neither fork segment carries them, so the entry take-off at writer 2\'s same-seq segment is the only thing that unmarks the entry; a pass writes it again, and with writer 1\'s segment lost the second rebuild still finds the variant', async () => {
     const { box, ids, db } = x10Store('ccrc-history-d5726-b-');
     let again: Awaited<ReturnType<typeof rebuildAgain>> | null = null;
     try {
@@ -5124,20 +5124,22 @@ describe('D-5726: replay moves an export mark only within one writer; across wri
       const variant: PlantSegmentRow = { kind: 'variant', row: {
         uuid: texts[0]!.uuid, blob_sha256: segmentSha(texts[1]!.text), first_path: fam.path, first_dev: X10_DEV, first_ino: fam.ino, first_seen_ms: t0 + 5, cause: 'unknown',
       } };
-      const blobs = texts.map((t) => ({ text: t.text }));
-      // Writer 1 carries E0 with the variant whose body is E1's; writer 2 carries both entries and both bodies, and no variant.
-      plantSegment(box, ids.storeId, { seq: 5, writer: W1, blobs, rows: [...x10Rows(fam), variant] });
-      plantSegment(box, ids.storeId, { seq: 5, writer: W2, blobs, rows: x10Rows(fam) });
+      // Writer 2's seq 4 carries both bodies and no row. Writer 1's seq 5 carries E0 and E1 with the variant whose body is E1\'s;
+      // writer 2\'s seq 5 carries both entries and no variant. The ranges interleave (w2 [4, 5], w1 [5, 5]): a fork. Every blob the
+      // entries reference is exported by writer 2\'s seq 4 and never taken off, so only the ENTRY arm can unmark the entries.
+      plantSegment(box, ids.storeId, { seq: 4, writer: W2, blobs: texts.map((t) => ({ text: t.text })), rows: [] });
+      plantSegment(box, ids.storeId, { seq: 5, writer: W1, blobs: [], rows: [...x10Rows(fam), variant] });
+      plantSegment(box, ids.storeId, { seq: 5, writer: W2, blobs: [], rows: x10Rows(fam) });
       expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
       expect(x10Count(db, 'entry_variants'), 'CONTROL: the variant is placed').toBe(1);
-      expect.soft(marksOf(db), 'D-5726: both entries are unmarked (D-5637 moved both marks to writer 2\'s segment, which lacks the variant)').toEqual([null, null]);
-      expect.soft(texts.map((t) => blobMarkOf(db, t.text)), 'and both bodies').toEqual([null, null]);
-      expect.soft(countersOn(db, 'export_mark_taken_off')['export_mark_taken_off'], 'two bodies taken off').toBe(2);
+      expect(texts.map((t) => blobMarkOf(db, t.text)), 'CONTROL: both bodies stay marked by writer 2\'s seq 4, no blob take-off').toEqual([seg(4, W2), seg(4, W2)]);
+      expect.soft(marksOf(db), 'D-5726: both entries are unmarked (marked by writer 1\'s segment, taken off at writer 2\'s)').toEqual([null, null]);
+      expect.soft(countersOn(db, 'export_mark_taken_off')['export_mark_taken_off'], 'two entry take-offs').toBe(2);
       expect(strandedBlobsOn(db)).toEqual([]);
       const live = await passAfterRebuild(box, ids, db);
-      const fresh = live.filter((n) => n !== seg(5, W1) && n !== seg(5, W2));
-      expect(fresh, 'the pass wrote one segment').toHaveLength(1);
-      expect(segmentRows(path.join(exportDirOf(box), fresh[0]!), 'variants'), 'carrying the variant').toHaveLength(1);
+      const fresh = live.filter((n) => ![seg(4, W2), seg(5, W1), seg(5, W2)].includes(n));
+      expect.soft(fresh, 'the pass wrote one segment').toHaveLength(1);
+      if (fresh[0] !== undefined) expect.soft(segmentRows(path.join(exportDirOf(box), fresh[0]), 'variants'), 'carrying the variant').toHaveLength(1);
       moveAside(box, seg(5, W1));
       checkAfterLoss(box, ids, db);
       again = await rebuildAgain(box, ids);
@@ -5170,8 +5172,8 @@ describe('D-5726: replay moves an export mark only within one writer; across wri
       expect(strandedBlobsOn(db)).toEqual([]);
       const live = await passAfterRebuild(box, ids, db);
       const fresh = live.filter((n) => ![seg(5, W1), seg(5, W2), seg(6, W1)].includes(n));
-      expect(fresh, 'the pass wrote one segment').toHaveLength(1);
-      expect(segmentRows(path.join(exportDirOf(box), fresh[0]!), 'sidecars').map((r) => r['name']).sort()).toEqual(['d5726c-linked.txt', 'd5726c-orphan.txt']);
+      expect.soft(fresh, 'the pass wrote one segment').toHaveLength(1);
+      if (fresh[0] !== undefined) expect.soft(segmentRows(path.join(exportDirOf(box), fresh[0]), 'sidecars').map((r) => r['name']).sort()).toEqual(['d5726c-linked.txt', 'd5726c-orphan.txt']);
       moveAside(box, seg(5, W2));
       checkAfterLoss(box, ids, db);
       again = await rebuildAgain(box, ids);
@@ -5182,7 +5184,7 @@ describe('D-5726: replay moves an export mark only within one writer; across wri
     }
   }, 2 * HEAVY);
 
-  it('(g) the operator\'s way out of the over-export: after the pass has re-exported what the two writers shared, moving both old writers\' segments out of export/ re-arms the check, clears the one mark that still names them, and the pass writes that row into the current writer\'s segment; the directory then holds one writer, and a rebuild from it takes nothing off and loses nothing', async () => {
+  it('(g) the operator\'s way out of the over-export of a forked directory: after the pass has re-exported what the two forked writers shared, moving both old writers\' segments out of export/ re-arms the check, clears the one mark that still names them, and the pass writes that row into the current writer\'s segment; the directory then holds one writer, and a rebuild from it takes nothing off and loses nothing', async () => {
     const { box, ids, db } = x10Store('ccrc-history-d5726-g-');
     let again: Awaited<ReturnType<typeof rebuildAgain>> | null = null;
     try {
@@ -5227,6 +5229,53 @@ describe('D-5726: replay moves an export mark only within one writer; across wri
       closeWriter(db);
     }
   }, 2 * HEAVY);
+
+  it('(h) CONTROL, a successor: a rebuild, a pass (the rebuild\'s new writer writes a segment), and a second rebuild: the second writer\'s seqs are all above the first\'s, so the mark moves to its segment, nothing is taken off, and a pass after the second rebuild writes nothing', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-d5726-h-');
+    let again: Awaited<ReturnType<typeof rebuildAgain>> | null = null;
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(0x2800, 2, 'zqd5726h', t0);
+      const fam: X10Family = { uuid: x10U(0x28), path: '/home/u/gone/d5726h.jsonl', ino: 9978, texts };
+      plantSegment(box, ids.storeId, { seq: 1, writer: W1, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(fam) });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(marksOf(db), 'CONTROL: the first rebuild marks both entries by the only segment').toEqual([seg(1), seg(1)]);
+      // E0 is due again, as a late variant's ingest makes it (its mark cleared): the pass writes it into the rebuild\'s writer\'s segment.
+      db.prepare('UPDATE entries SET exported_ms = NULL, exported_seg = NULL WHERE uuid = ?').run(texts[0]!.uuid);
+      const live = await passAfterRebuild(box, ids, db);
+      const s2 = `2.${ids.writer}.db`;
+      expect(live, 'CONTROL: the pass wrote the successor writer\'s first segment').toEqual([seg(1), s2]);
+      again = await rebuildAgain(box, ids);
+      expect(countersOn(again.db, 'export_mark_taken_off'), 'a successor takes nothing off').toEqual({ export_mark_taken_off: 0 });
+      expect(marksOf(again.db), 'E0 is marked by the successor\'s segment, E1 by the first writer\'s').toEqual([s2, seg(1)]);
+      expect(texts.map((t) => blobMarkOf(again!.db, t.text)), 'the bodies stay with the first writer, the only one that carries them').toEqual([seg(1), seg(1)]);
+      expect(strandedBlobsOn(again.db)).toEqual([]);
+      await passAfterRebuild(again.box2, again.ids2, again.db);
+      expect(fs.readdirSync(path.join(again.box2.root, 'export', ids.storeId)).sort(), 'and a pass after the second rebuild writes nothing').toEqual([seg(1), s2]);
+    } finally {
+      if (again !== null) closeWriter(again.db);
+      closeWriter(db);
+    }
+  }, 2 * HEAVY);
+
+  it('(i) a fork made by interleaved ranges, not an equal seq: writer 1 at seq 5 and 7 and writer 2 at seq 6 carry the blob; the mark comes off at writer 2\'s segment and writer 1\'s seq 7 cannot re-mark it', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-d5726-i-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(0x2900, 1, 'zqd5726i', t0);
+      const fam: X10Family = { uuid: x10U(0x29), path: '/home/u/gone/d5726i.jsonl', ino: 9979, texts };
+      const blobs = texts.map((t) => ({ text: t.text }));
+      plantSegment(box, ids.storeId, { seq: 5, writer: W1, blobs, rows: x10Rows(fam) });
+      plantSegment(box, ids.storeId, { seq: 6, writer: W2, blobs, rows: x10Rows(fam) });
+      plantSegment(box, ids.storeId, { seq: 7, writer: W1, blobs, rows: x10Rows(fam) });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect([blobMarkOf(db, texts[0]!.text), ...marksOf(db)], 'D-5726: the blob and the entry are unmarked, owed to the pass').toEqual([null, null]);
+      expect(countersOn(db, 'export_mark_taken_off')['export_mark_taken_off'], 'the blob take-off at writer 2\'s segment is counted').toBe(1);
+      expect(strandedBlobsOn(db)).toEqual([]);
+    } finally {
+      closeWriter(db);
+    }
+  });
 
   it('(d) CONTROL, one writer: two segments carry the blob and the entry; the marks move to the later segment as D-5637 rules, and nothing is taken off', async () => {
     const { box, ids, db } = x10Store('ccrc-history-d5726-d-');

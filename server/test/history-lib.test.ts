@@ -8024,38 +8024,59 @@ describe('W1-B4: segment names, their order and the next number (spec 9.15 "Writ
       for (let j = 0; j < names.length; j += 1) expect(libSeg.segmentOrdersAfter(names[i]!, names[j]!), `${names[i]!} after ${names[j]!}: one order with orderSegmentNames`).toBe(i > j);
     }
   });
-  it('decideReplayMark: a fresh row is marked; an unmarked held row is kept under more than one writer and marked under one; the same segment keeps; another writer\'s mark comes off whichever way the order runs; the same writer\'s moves only forward (D-5726 (history-export-replay-mark-one-writer))', () => {
+  it('replayWriterLayout: each writer\'s lowest and highest listed seq; a directory holds a fork when some pair of writers is neither one\'s successor (equal and interleaved seqs included), and a rebind\'s writer, wholly above the earlier one, is a successor (D-5726 (history-export-replay-mark-one-writer))', () => {
+    const lay = (names: string[]): { ranges: Array<[string, number, number]>; forked: boolean } => {
+      const l = libSeg.replayWriterLayout(names);
+      return { ranges: [...l.ranges.entries()].map(([w, r]: [string, { lo: number; hi: number }]) => [w, r.lo, r.hi] as [string, number, number]).sort(), forked: l.forked };
+    };
+    expect(lay([]), 'no segment').toEqual({ ranges: [], forked: false });
+    expect(lay(['1.0000000a.db', '4.0000000a.db']), 'one writer').toEqual({ ranges: [['0000000a', 1, 4]], forked: false });
+    expect(lay(['1.0000000a.db', '2.0000000a.db', '3.0000000b.db', '9.0000000b.db']).forked, 'a successor: wholly above').toBe(false);
+    expect(lay(['1.0000000a.db', '2.0000000a.db', '3.0000000b.db', '4.0000000c.db']).forked, 'a chain of successors').toBe(false);
+    expect(lay(['5.0000000a.db', '5.0000000b.db']).forked, 'an equal seq touches: a fork').toBe(true);
+    expect(lay(['5.0000000a.db', '7.0000000a.db', '6.0000000b.db']).forked, 'interleaved ranges: a fork').toBe(true);
+    expect(lay(['1.0000000a.db', '2.0000000b.db', '2.0000000c.db']).forked, 'a fork anywhere in the directory holds it, though b and c both succeed a').toBe(true);
+    expect(lay(['notes.db', '3.0000000a.db', '.3.0000000a.db.tmp']), 'names off the grammar are dropped').toEqual({ ranges: [['0000000a', 3, 3]], forked: false });
+  });
+  it('decideReplayMark: fresh marks; an unmarked held row is kept in a directory that holds a fork and marked otherwise; the same segment keeps; the same writer moves only forward; a successor writer moves the mark forward, a held mark of a later writer stays; a fork takes the mark off; a held writer that is not listed is judged by the order (D-5726 (history-export-replay-mark-one-writer))', () => {
+    type Layout = ReturnType<typeof libSeg.replayWriterLayout>;
+    const lay = (names: string[]): Layout => libSeg.replayWriterLayout(names);
     const seg = '5.0000000b.db';
-    const decide = (held: string | null, o: { fresh?: boolean; multiWriter?: boolean } = {}): string =>
-      libSeg.decideReplayMark({ seg, held, fresh: o.fresh ?? false, multiWriter: o.multiWriter ?? true });
-    // 1. fresh gives mark, whatever held is
-    for (const held of [null, seg, '9.0000000b.db', '1.0000000b.db', '1.0000000c.db', '9.0000000c.db', 'notes.db']) {
-      for (const multiWriter of [true, false]) expect(decide(held, { fresh: true, multiWriter }), `fresh over ${String(held)}`).toBe('mark');
+    // the writers: a [1,3] and b [5,6] (b succeeds a), c [5,9] (a fork with b), d [2,9] (a fork with a and with b)
+    const chain = lay(['1.0000000a.db', '3.0000000a.db', '5.0000000b.db', '6.0000000b.db']);
+    const fork = lay(['1.0000000a.db', '5.0000000b.db', '5.0000000c.db', '9.0000000c.db']);
+    const decide = (held: string | null, layout: Layout, fresh = false): string => libSeg.decideReplayMark({ seg, held, fresh, layout });
+    // 1. fresh gives mark, whatever held is and whether or not the directory holds a fork
+    for (const held of [null, seg, '3.0000000a.db', '9.0000000b.db', '5.0000000c.db', 'notes.db']) {
+      for (const layout of [chain, fork]) expect(decide(held, layout, true), `fresh over ${String(held)}`).toBe('mark');
     }
-    // 2. held null
-    expect(decide(null, { multiWriter: true }), 'unmarked, more than one writer: the row stays owed, a take-off is sticky').toBe('keep');
-    expect(decide(null, { multiWriter: false }), 'unmarked, one writer: Task 5\'s rule, mark').toBe('mark');
+    // 2. held null (or off the grammar): sticky only where a fork stands
+    expect(decide(null, fork), 'a fork in the directory: the row stays owed').toBe('keep');
+    expect(decide(null, chain), 'no fork: Task 5\'s rule').toBe('mark');
+    expect(decide('notes.db', fork), 'off the grammar counts as null: a fork').toBe('keep');
+    expect(decide('notes.db', chain), 'off the grammar counts as null: no fork').toBe('mark');
     // 3. the same segment
-    expect(decide(seg, { multiWriter: true }), 'the same page replayed again after a kill').toBe('keep');
-    expect(decide(seg, { multiWriter: false })).toBe('keep');
-    // 4. another writer's segment, after AND before seg: content order is unknown across writers
-    for (const multiWriter of [true, false]) {
-      expect(decide('9.0000000c.db', { multiWriter }), 'another writer, later seq').toBe('take-off');
-      expect(decide('1.0000000c.db', { multiWriter }), 'another writer, earlier seq').toBe('take-off');
-      expect(decide('5.0000000c.db', { multiWriter }), 'another writer, the same seq, later token').toBe('take-off');
-      expect(decide('5.0000000a.db', { multiWriter }), 'another writer, the same seq, earlier token').toBe('take-off');
-    }
-    // 5. the same writer: a move only forward
-    for (const multiWriter of [true, false]) {
-      expect(decide('1.0000000b.db', { multiWriter }), 'same writer, an earlier seq: the last carrier takes the mark').toBe('mark');
-      expect(decide('9.0000000b.db', { multiWriter }), 'same writer, a later seq: a restore\'s backup mark stays').toBe('keep');
-    }
-    // an off-grammar held counts as null
-    expect(decide('notes.db', { multiWriter: true }), 'off the grammar names no carrier: as null').toBe('keep');
-    expect(decide('notes.db', { multiWriter: false })).toBe('mark');
+    expect(decide(seg, chain)).toBe('keep');
+    expect(decide(seg, fork)).toBe('keep');
+    // 5. the same writer: forward only
+    expect(decide('1.0000000b.db', libSeg.replayWriterLayout(['1.0000000b.db', '5.0000000b.db'])), 'same writer, earlier seq').toBe('mark');
+    expect(decide('9.0000000b.db', libSeg.replayWriterLayout(['5.0000000b.db', '9.0000000b.db'])), 'same writer, later seq').toBe('keep');
+    // 6. a successor writer moves the mark forward; a held mark of a later writer stays
+    expect(decide('3.0000000a.db', chain), 'b succeeds a: the mark moves to the superset').toBe('mark');
+    const reverse = lay(['1.0000000a.db', '2.0000000a.db', '3.0000000b.db']);
+    expect(libSeg.decideReplayMark({ seg: '2.0000000a.db', held: '3.0000000b.db', fresh: false, layout: reverse }), 'the held mark names a successor: it stays').toBe('keep');
+    // 7. a fork takes the mark off, whichever way the order runs
+    expect(decide('5.0000000c.db', fork), 'b and c touch at seq 5').toBe('take-off');
+    expect(decide('9.0000000c.db', fork), 'b and c: held later').toBe('take-off');
+    const interleaved = lay(['5.0000000a.db', '7.0000000a.db', '6.0000000b.db']);
+    expect(libSeg.decideReplayMark({ seg: '6.0000000b.db', held: '5.0000000a.db', fresh: false, layout: interleaved }), 'interleaved ranges: held earlier').toBe('take-off');
+    expect(libSeg.decideReplayMark({ seg: '6.0000000b.db', held: '7.0000000a.db', fresh: false, layout: interleaved }), 'interleaved ranges: held later').toBe('take-off');
+    // 4. a held writer that is not in the layout cannot be ranged: judged by the (seq, writer) order, a choice (the check after a bind clears a mark naming a missing segment anyway)
+    expect(decide('3.0000000f.db', chain), 'an absent writer, held earlier in the order').toBe('mark');
+    expect(decide('9.0000000f.db', chain), 'an absent writer, held later in the order').toBe('keep');
     // an off-grammar seg is the caller's bug
-    expect(() => libSeg.decideReplayMark({ seg: '01.0000000b.db', held: null, fresh: true, multiWriter: true })).toThrow(TypeError);
-    expect(() => libSeg.decideReplayMark({ seg: 'notes.db', held: null, fresh: false, multiWriter: false })).toThrow(TypeError);
+    expect(() => libSeg.decideReplayMark({ seg: '01.0000000b.db', held: null, fresh: true, layout: chain })).toThrow(TypeError);
+    expect(() => libSeg.decideReplayMark({ seg: 'notes.db', held: null, fresh: false, layout: chain })).toThrow(TypeError);
   });
   it('O39: nextSegmentSeq is one past every seq on disk, of any writer, and past meta\'s; a counter behind the directory moves past it', () => {
     expect(libSeg.nextSegmentSeq({ onDisk: [], recorded: null })).toBe(1);

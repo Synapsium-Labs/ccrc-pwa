@@ -8213,30 +8213,71 @@ export function segmentOrdersAfter(a, b) {
   return pb === null ? true : segmentPartsOrder(pa, pb) > 0;
 }
 
+/** The writers of a replay's listed segments and where each one's seqs lie (D-5726 (history-export-replay-mark-one-writer), wave 5h-1).
+ *  `ranges` maps a writer token to its lowest and highest listed seq; a name off the segment grammar is dropped. A writer minted
+ *  by a rebind (rebuild, restore, adopt) is a SUCCESSOR of the earlier ones: nextSegmentSeq starts it one past the highest seq on
+ *  disk or recorded, so every seq of it lies above every seq of theirs, and its store held everything their segments carried.
+ *  Writer W2 succeeds W1 when W2's lowest listed seq is above W1's highest. Two writers neither of which succeeds the other are a
+ *  FORK: their ranges interleave or touch (an equal seq included), which only two writers running at once produce. `forked` is
+ *  whether any pair of the directory's writers is a fork. */
+export function replayWriterLayout(names) {
+  const ranges = new Map();
+  for (const n of names) {
+    const p = parseSegmentName(n);
+    if (p === null) continue;
+    const r = ranges.get(p.writer);
+    if (r === undefined) ranges.set(p.writer, { lo: p.seq, hi: p.seq });
+    else {
+      if (p.seq < r.lo) r.lo = p.seq;
+      if (p.seq > r.hi) r.hi = p.seq;
+    }
+  }
+  const all = [...ranges.values()];
+  let forked = false;
+  for (let i = 0; i < all.length && !forked; i += 1) {
+    for (let j = i + 1; j < all.length; j += 1) {
+      if (!(all[i].lo > all[j].hi || all[j].lo > all[i].hi)) { forked = true; break; }
+    }
+  }
+  return { ranges, forked };
+}
+
 /** What replay does with an export mark when the segment `seg` carries the row (D-5726 (history-export-replay-mark-one-writer),
- *  wave 5h-1, amending D-5637). A mark moves only WITHIN one writer: every export writes everything the store held of a row at
- *  the time and nothing deletes those rows, so one writer's later segment holds all its earlier ones did; across writers the
- *  content order is unknown, in either direction, so a mark moved to another writer's segment could name one that lacks a row
- *  only the earlier carrier holds. Answers, in this order:
+ *  wave 5h-1, amending D-5637). A mark moves within one writer, where every export writes everything the store held of a row at
+ *  the time and nothing deletes those rows, so a later segment holds all an earlier one did; and to a SUCCESSOR writer (a rebind's
+ *  new token), whose store held all its predecessor's segments carried. Across a FORK (two writers whose seqs interleave or
+ *  touch; replayWriterLayout) the content order is unknown in either direction, so a mark moved to the other writer's segment
+ *  could name one that lacks a row only the earlier carrier holds: it comes off instead, and the row exports again. Answers,
+ *  in this order:
  *  - `fresh` (this segment's row inserted the row): 'mark';
- *  - `held` null: 'keep' with `multiWriter` (the row stays unmarked and owed to the next pass, so a take-off is sticky for the
- *    rest of the replay: a later segment of either writer cannot re-mark a row whose earlier carriers disagree), else 'mark'
- *    (D-5637's rule, a single writer);
+ *  - `held` null: 'keep' when the directory holds a fork (the row stays unmarked and owed to the next pass, so a take-off is
+ *    sticky for the rest of the replay: a later segment of either writer cannot re-mark a row whose earlier carriers disagree),
+ *    else 'mark' (D-5637's rule);
  *  - `held` names `seg`: 'keep' (the same page replayed again after a kill);
- *  - `held` names another writer's segment: 'take-off' (the mark comes off, and the row exports again);
- *  - `held` names the same writer's: 'mark' (a move) when `seg` orders after it (segmentOrdersAfter), else 'keep'.
- *  `held` is the row's mark as the store holds it; a name off the segment grammar names no carrier and counts as null.
- *  `multiWriter` is whether the segments listed for this replay belong to more than one writer. `seg` is a listed name: off the
- *  grammar it is a caller's bug and throws, as segmentOrdersAfter does. */
-export function decideReplayMark({ seg, held, fresh, multiWriter }) {
+ *  - `held` names the same writer's segment: 'mark' when `seg` orders after it (segmentOrdersAfter), else 'keep';
+ *  - `seg`'s writer is a successor of the held one: 'mark' (the mark moves forward to the superset);
+ *  - the held writer is a successor of `seg`'s: 'keep' (the held mark already names the later superset, as a restore's backup
+ *    marked by a later writer's segment does);
+ *  - otherwise a fork: 'take-off'.
+ *  A held writer the layout does not list cannot be ranged: the choice here is to judge it by the (seq, writer) order, 'mark'
+ *  when `seg` orders after the held name and 'keep' otherwise (the segment is missing, so the check after a bind clears the
+ *  mark anyway). `held` is the row's mark as the store holds it; a name off the segment grammar names no carrier and counts as
+ *  null. `layout` is replayWriterLayout's answer for the segments listed for this replay. `seg` is a listed name: off the grammar
+ *  it is a caller's bug and throws, as segmentOrdersAfter does. */
+export function decideReplayMark({ seg, held, fresh, layout }) {
   const ps = parseSegmentName(seg);
   if (ps === null) throw new TypeError(`decideReplayMark: not a segment name: ${JSON.stringify(seg)}`);
   if (fresh) return 'mark';
   const ph = held === null ? null : parseSegmentName(held);
-  if (ph === null) return multiWriter ? 'keep' : 'mark';
+  if (ph === null) return layout.forked ? 'keep' : 'mark';
   if (held === seg) return 'keep';
-  if (ph.writer !== ps.writer) return 'take-off';
-  return segmentOrdersAfter(seg, held) ? 'mark' : 'keep';
+  if (ph.writer === ps.writer) return segmentOrdersAfter(seg, held) ? 'mark' : 'keep';
+  const rs = layout.ranges.get(ps.writer);
+  const rh = layout.ranges.get(ph.writer);
+  if (rs === undefined || rh === undefined) return segmentOrdersAfter(seg, held) ? 'mark' : 'keep';
+  if (rs.lo > rh.hi) return 'mark';
+  if (rh.lo > rs.hi) return 'keep';
+  return 'take-off';
 }
 
 /** The next segment number (§9.15 "Write"): one past the highest seq on disk under export/<store_id>/, of any
