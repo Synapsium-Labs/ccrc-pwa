@@ -292,6 +292,52 @@ export function inRoster(roster: Roster, v: unknown): boolean {
   return typeof v === 'string' && roster.byId.has(v);
 }
 
+/** What kind of credential a lane runs on, in the words the Accounts screen's kind chip reads (spec §4.1,
+ *  D-5517): `sign-in` (an Anthropic lane signed in through its config dir), `token` (an Anthropic lane on a
+ *  long-lived token), `codex` (a ChatGPT/Codex lane) and `key` (an API-key lane: OpenRouter or compatible).
+ *  Paste versus mint is NOT a roster fact and is not here: it lives in the lane state (`mintedAt`). */
+export type RosterKind = 'sign-in' | 'token' | 'codex' | 'key';
+
+/** The lane-kind half of `RosterWire` (`shared/api.ts`), with one home. Every field is a closed union or a
+ *  boolean, so none can carry free text (`test/types/bypasses/b8-roster-wire-open-string.ts` pins that). Every
+ *  field is OPTIONAL and ABSENT when the entry does not say, never defaulted: an older server omits all four, and
+ *  an undeclared lane omits `provider` and `kind`, so a reader shows no kind chip rather than a wrong one. */
+export interface RosterKindWire {
+  provider?: ProviderId;
+  kind?: RosterKind;
+  telemetry?: AccountDef['telemetry'];
+  /** Rides OpenAI lanes only: true for a lane ccrc owns end to end (`exec.kind: 'codex'`), false for an
+   *  `external` OpenAI launcher ccrc only records. Absent on every other provider. */
+  managed?: boolean;
+}
+
+/**
+ * The lane's kind, derived ONCE from a parsed roster entry (D-5517, D-5751). The one reader: the server's
+ * `RosterWire` builder spreads it, and nothing else re-derives a kind from `exec`.
+ *
+ * The provider is `exec.provider`, except on `upstream`, which is `anthropic` by construction (`ExecSpec`'s
+ * header) and never spells one. An `external` entry with no provider is UNDECLARED, a real third answer, so it
+ * gets no provider and no kind. The roster has no method field (`ACCOUNT_KEYS`), so an Anthropic lane's kind is
+ * read from `exec.secretsFile`: present is `token`, absent is `sign-in`.
+ */
+export function rosterKindOf(entry: Pick<AccountDef, 'exec' | 'telemetry'>): RosterKindWire {
+  const { exec } = entry;
+  const provider: ProviderId | undefined = exec.kind === 'upstream' ? 'anthropic' : exec.provider;
+  if (provider === undefined) return { telemetry: entry.telemetry };
+  switch (provider) {
+    case 'anthropic':
+      return { provider, kind: exec.secretsFile !== undefined ? 'token' : 'sign-in', telemetry: entry.telemetry };
+    case 'openai':
+      return { provider, kind: 'codex', telemetry: entry.telemetry, managed: exec.kind === 'codex' };
+    case 'openrouter':
+    case 'compatible':
+      return { provider, kind: 'key', telemetry: entry.telemetry };
+    default:
+      // A fifth provider in `PROVIDERS` is a compile error here before it is a lane with no kind.
+      return provider satisfies never;
+  }
+}
+
 /**
  * Thrown by `parseRoster`. `remedy` is required and never empty — every
  * throw site below names one explicitly.

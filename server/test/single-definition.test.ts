@@ -7227,3 +7227,24 @@ describe('docs section H, W5: GithubPermalink, githubPermalink and githubUrlAt a
     });
   }
 });
+
+// D-5517, D-5751 (plan docs/superpowers/plans/2026-10-18-accounts-connect.md, Task A1). APPENDED. The lane's kind on
+// the wire has one reader: `rosterKindOf` derives `provider`, `kind`, `telemetry` and `managed` from a parsed roster
+// entry, and its vocabulary (`RosterKind`, `RosterKindWire`) is declared beside it. A second derivation in the server's
+// handler or the PWA would be a second answer to "what kind of lane is this", free to disagree with the first.
+describe("the lane's kind is derived in one place, shared/roster.ts (D-5517)", () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  const decl = (c: string): RegExp => new RegExp(`\\b(?:const|let|var|function|class)\\s+${c}\\b|\\btype\\s+${c}\\s*=|\\binterface\\s+${c}\\b`);
+  it('CONTROL: the pattern sees a declaration and passes over a use', () => {
+    expect(decl('rosterKindOf').test('export function rosterKindOf(entry: AccountDef)')).toBe(true);
+    expect(decl('rosterKindOf').test('...rosterKindOf(a),')).toBe(false);
+  });
+  it('rosterKindOf and its vocabulary are declared once, in shared/roster.ts', () => {
+    for (const c of ['rosterKindOf', 'RosterKind', 'RosterKindWire']) {
+      expect(holders(decl(c)), c).toEqual(['shared/roster.ts']);
+    }
+  });
+  it("it is called by the accounts handler alone, which is the RosterWire builder", () => {
+    expect(holders(/\brosterKindOf\(/)).toEqual(['server/src/server.ts', 'shared/roster.ts']);
+  });
+});
