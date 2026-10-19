@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { ToastHost } from '@ccrc/ui';
 import type { EnableResult } from '../src/lib/push';
+import { ICONS } from '../../ui/src/icons/lucide';
 
 const push = vi.hoisted(() => ({
   pushSupported: vi.fn(() => true),
@@ -55,6 +56,22 @@ describe('the bell renders only where push can work', () => {
     await waitFor(() => expect(bell()).toHaveAttribute('aria-pressed', 'true'));
     expect(bell()).toHaveAccessibleName('Notifications on');
     expect(bell().className).toContain('bell--on');
+  });
+
+  it('draws Icon bell when on and Icon bell-off when off, never a colour emoji (D-5100)', async () => {
+    // The emoji 🔔/🔕 were drawn in the platform's colours; the icon is
+    // stroked in the button's ink, so `.bell`'s opacity states still read.
+    const drawn = () => [...bell().querySelectorAll('svg path')].map((p) => p.getAttribute('d'));
+    mount();
+    await waitFor(() => expect(bell()).toHaveAttribute('aria-pressed', 'false'));
+    expect(drawn()).toEqual(ICONS['bell-off'].map(([, a]) => a.d));
+    expect(bell().querySelector('svg')).toHaveAttribute('width', '20');
+    expect(bell().textContent).toBe('');
+    cleanup();
+    push.pushEnabled.mockResolvedValue(true);
+    mount();
+    await waitFor(() => expect(bell()).toHaveAttribute('aria-pressed', 'true'));
+    expect(drawn()).toEqual(ICONS.bell.map(([, a]) => a.d));
   });
 });
 

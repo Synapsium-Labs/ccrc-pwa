@@ -1,21 +1,23 @@
 // While any node halts, the dispatcher refuses every move but the Ack (spec §10; `moveRefusal`'s first clause), so
 // the release row's Install (`{all: true}`) and every node's Update wait, disabled, and say why with Update all's own
-// reason line (`updateAllHaltedText`, reused verbatim: no new sentence). The line shows only above a list where it
-// gates a control. Roll back is not gated (the residue names Install and Update). The Ack on a node's row keeps
+// reason line (`updateAllHaltedText`, reused verbatim, plus the settings spec §5.1 sentence naming the remedy). Since
+// D-5505 it is ONE line on the page, first, drawn while any control it gates is on screen, in either list. Roll back is not gated (the residue names Install and Update). The Ack on a node's row keeps
 // focus in that row when it disables (R26(a)), as the halt banner's does.
 //
-// It renders the exported `ReleaseList` and `NodeList` directly, so the screen's own suite (another run's claim)
-// is not edited; that suite's idle fixtures stay green beside these.
+// It renders the exported `HaltLine`, `ReleaseList` and `NodeList` composed as the screen composes them (the one
+// line from `haltLineText`, its id handed to both lists), so these cases stay off the screen's own poll.
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { useId } from 'react';
+import type { ReactNode } from 'react';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { NodeWire, ReleaseWire } from '../../shared/api';
 import type { BuildInfo } from '../../shared/buildinfo';
 import { api } from '../src/lib/api';
 import { ToastHost } from '@ccrc/ui';
 import { updateAllHaltedText } from '../src/fleet/updateHalt';
-import { NodeList, ReleaseList } from '../src/screens/updates';
+import { HaltLine, NodeList, ReleaseList, haltLineText, releaseWindow } from '../src/screens/updates';
 
 afterEach(() => {
   cleanup();
@@ -46,24 +48,44 @@ const release = (tag: string): ReleaseWire => ({
   bundleListed: true, yanked: false, refused: [], notes: null,
 });
 
-const ONE_HALT = 'Update all waits: nothing moves until fleet is acknowledged — tap Ack on it in the halt banner.';
+const UPDATE_ALL_HALT = 'Update all waits: nothing moves until fleet is acknowledged — tap Ack on it in the halt banner.';
+const ONE_HALT = `${UPDATE_ALL_HALT} Clear it with Ack on that node, under Nodes, after you have fixed what made it fail.`;
 
-const renderReleases = (nodes: NodeWire[], releases: ReleaseWire[] = [release('v0.0.10')]) => {
-  const onMove = vi.fn();
-  render(<ReleaseList releases={releases} nodes={nodes} onMove={onMove} />);
-  return { onMove, list: screen.getByRole('list', { name: 'Releases' }) };
-};
-const renderNodes = (nodes: NodeWire[], releases: ReleaseWire[] = [release('v0.0.10')]) => {
+/** The Updates page's composition: the one halt line first, its id handed to both lists (SettingsScreen's own). */
+function Page({ nodes, releases, onMove, onAcked }: {
+  nodes: NodeWire[]; releases: ReleaseWire[]; onMove: () => void; onAcked: () => void;
+}): ReactNode {
+  const id = useId();
+  const text = haltLineText(nodes, releaseWindow(releases, nodes, 'stable'));
+  return (
+    <>
+      <ToastHost />
+      {text !== null && <HaltLine id={id} text={text} />}
+      <ReleaseList releases={releases} nodes={nodes} channel="stable" haltedBy={text !== null ? id : null} onMove={onMove} />
+      <NodeList nodes={nodes} releases={releases} now={T0} catalogueLastOkAt={T0} haltedBy={text !== null ? id : null} onAcked={onAcked} onMove={onMove} />
+    </>
+  );
+}
+const renderPage = (nodes: NodeWire[], releases: ReleaseWire[]) => {
   const onMove = vi.fn();
   const onAcked = vi.fn();
-  render(<><ToastHost /><NodeList nodes={nodes} releases={releases} now={T0} catalogueLastOkAt={T0} onAcked={onAcked} onMove={onMove} /></>);
-  return { onMove, onAcked, list: screen.getByRole('list', { name: 'Nodes' }) };
+  render(<Page nodes={nodes} releases={releases} onMove={onMove} onAcked={onAcked} />);
+  return { onMove, onAcked };
+};
+const renderReleases = (nodes: NodeWire[], releases: ReleaseWire[] = [release('v0.0.10')]) => {
+  const r = renderPage(nodes, releases);
+  return { ...r, list: screen.getByRole('region', { name: 'Releases' }) };
+};
+const renderNodes = (nodes: NodeWire[], releases: ReleaseWire[] = [release('v0.0.10')]) => {
+  const r = renderPage(nodes, releases);
+  return { ...r, list: screen.getByRole('list', { name: 'Nodes' }) };
 };
 const rowOf = (list: HTMLElement, id: string): HTMLElement => list.querySelector(`li[data-node-id="${id}"]`) as HTMLElement;
 
 describe('Settings while a node halts — Install and Update wait, with Update all\'s reason (wave 19, R24(a))', () => {
-  it('the reason is updateAllHaltedText, verbatim', () => {
-    expect(updateAllHaltedText([node()])).toBe(ONE_HALT);
+  it('the reason is updateAllHaltedText, verbatim, then the remedy on this screen (settings spec §5.1)', () => {
+    expect(updateAllHaltedText([node()])).toBe(UPDATE_ALL_HALT);
+    expect(ONE_HALT.startsWith(updateAllHaltedText([node()]))).toBe(true);
   });
 
   it('a halting row disables the release row\'s Install, described by the one reason line', () => {
@@ -117,18 +139,20 @@ describe('Settings while a node halts — Install and Update wait, with Update a
   it('two halting rows name both, in inventory order', () => {
     renderReleases([node(failed()), server({ update: { state: 'reverted', target: 'v0.0.10', startedAt: T0, detail: null } })]);
     expect(screen.getByText(
-      'Update all waits: nothing moves until fleet, server are acknowledged — tap Ack on each in the halt banner.',
+      'Update all waits: nothing moves until fleet, server are acknowledged — tap Ack on each in the halt banner. '
+      + 'Clear it with Ack on each of them, under Nodes, after you have fixed what made it fail.',
     )).toBeInTheDocument();
   });
 
   // The CONTROL proves the fixture is an offered rollback row; if it reds, fix the fixture
   // (rollbackBlockers' inputs), never the assertion.
-  it('a halt with no Install on screen shows no reason line above Releases; Roll back stays enabled and undescribed (Reading 2)', () => {
+  it('a halt with no Install and no pending Update on screen shows no reason line; Roll back stays enabled and undescribed (Reading 2)', () => {
     const older = [release('v0.0.8')];
-    const c = renderReleases([node(), server()], older);
+    const none: Partial<NodeWire> = { desiredTag: null };   // no pending Update either: the line is one per page now
+    const c = renderReleases([node(none), server(none)], older);
     expect(within(c.list).getByRole('button', { name: 'Roll back' }), 'CONTROL: an offered rollback row').not.toBeDisabled();
     cleanup();
-    const { onMove, list } = renderReleases([node(failed()), server()], older);
+    const { onMove, list } = renderReleases([node({ ...failed(), ...none }), server(none)], older);
     const back = within(list).getByRole('button', { name: 'Roll back' });
     expect(back).not.toBeDisabled();
     expect(back).not.toHaveAttribute('aria-describedby');
@@ -161,8 +185,9 @@ describe('Settings while a node halts — Install and Update wait, with Update a
     expect(back(list)).not.toHaveAttribute('aria-describedby');
   });
 
-  it('a halt that gates no Update shows no reason line above Nodes', () => {
-    const { list } = renderNodes([node({ ...failed(), desiredTag: null }), server({ desiredTag: null })]);
+  it('a halt that gates no Update and no Install shows no reason line', () => {
+    // No release newer than the fleet in the catalogue, so the window draws no Install either.
+    const { list } = renderNodes([node({ ...failed(), desiredTag: null }), server({ desiredTag: null })], [release('v0.0.9')]);
     const updates = within(list).getAllByRole('button', { name: 'Update' });
     expect(updates, 'CONTROL: the rows still offer an Update control').toHaveLength(2);
     for (const b of updates) expect(b).toBeDisabled();
@@ -206,6 +231,7 @@ describe('Settings\' Ack keeps focus in its row when it disables (wave 19, R26(a
     const ack = within(row).getByRole('button', { name: 'Ack' });
     ack.focus();
     fireEvent.click(ack);
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Ack' }));   // through AckConfirm (D-5507)
     expect(ack).toBeDisabled();
     expect(document.activeElement, 'in flight: the row holds focus, not the disabled button').toBe(row);
     expect(row).toHaveAttribute('tabindex', '-1');
@@ -219,6 +245,7 @@ describe('Settings\' Ack keeps focus in its row when it disables (wave 19, R26(a
     try {
       other.focus();
       fireEvent.click(within(rowOf(list, FLEET_ID)).getByRole('button', { name: 'Ack' }));
+      fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Ack' }));   // through AckConfirm (D-5507)
       await waitFor(() => expect(onAcked).toHaveBeenCalledTimes(1));
       expect(document.activeElement).toBe(other);
     } finally {

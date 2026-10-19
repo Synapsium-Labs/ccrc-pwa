@@ -25,11 +25,14 @@ const UUID_B = '22222222-2222-4222-8222-222222222222';
 
 /** Everything cmd_swap reaches that must not leave the fixture: systemd, tmux,
  *  the flush sleep, and the ensure fallback. Each one LOGS, because half of
- *  these tests are assertions about which of them ran and which did not. */
+ *  these tests are assertions about which of them ran and which did not.
+ *  `has-session` answers GONE: D-5240's manual gate reads `_ws_status` before
+ *  anything else, and an alive pane with no pid is unreadable there; a gone
+ *  pane reads idle, so these cases reach the carry they are about. */
 const SWAP_STUBS = `
   systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; return 0; };
   launchctl() { echo "launchctl $*" >> "$HOME/ccd-calls"; return 0; };
-  tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${WIDE_PANE} return 0; };
+  tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${WIDE_PANE} case "\${1:-}" in has-session) echo "can't find session: x" >&2; return 1 ;; esac; return 0; };
   sleep() { :; };
   cmd_ensure() { echo "cmd_ensure $*" >> "$HOME/ccd-calls"; return 0; };
 `;
@@ -58,12 +61,20 @@ const AUTO_TICK_STUBS = `
   _dispatch_swap() { echo "dispatch $1 -> $2" >> "$HOME/ccd-calls"; };
 `;
 
+/** D-5240's manual gate, answered idle at its own seam. The fixtures below
+ *  model a dead pane whose `has-session` fails WITHOUT tmux's words, which
+ *  `_ws_status` reads as unreadable (status-unknown) — and they also drive
+ *  `cmd_ensure`, whose verdict those exact words decide, so the probe stays
+ *  as it is and the gate is stubbed instead. The gate's own cases live in
+ *  `ccd-swap-guards.test.ts`. */
+const GATE_IDLE = '_ws_status() { echo idle; };';
+
 /** The tmux a refusal fixture needs: the pane is DEAD — `cmd_swap` killed it
  *  before the carry — and a `kill-session` rotates the registry uuid exactly as
  *  `_sync_uuid` does after a /clear, which is what makes the post-flush look
  *  find nothing. */
 const deadRotate = (id: string): string =>
-  `tmux() { echo "tmux $*" >> "$HOME/ccd-calls"
+  `${GATE_IDLE} tmux() { echo "tmux $*" >> "$HOME/ccd-calls"
      ${DEAD_PANE}
      case "\${1:-}" in
        kill-session) _reg_set ${id} uuid ${UUID_B} ;;
@@ -180,7 +191,7 @@ describe('a swap that cannot carry the conversation', () => {
     const id = seed(UUID_A);
     plantTranscript('.claude', '-x-projects-demo', UUID_A);
     plantNotify();
-    const rotate = `tmux() { ${WIDE_PANE} [[ "\${1:-}" == kill-session ]] && _reg_set ${id} uuid ${UUID_B};
+    const rotate = `${GATE_IDLE} tmux() { ${WIDE_PANE} [[ "\${1:-}" == kill-session ]] && _reg_set ${id} uuid ${UUID_B};
       echo "tmux $*" >> "$HOME/ccd-calls"; return 0; };`;
     const r = shFail(`${SWAP_STUBS} ${rotate} cmd_swap ${id} claude-a`);
     expect(r.code).not.toBe(0);

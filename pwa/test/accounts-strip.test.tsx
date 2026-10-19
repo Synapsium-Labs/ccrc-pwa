@@ -157,4 +157,24 @@ describe('AccountsStrip', () => {
     const meters = container.querySelectorAll('.acct-meter');
     expect(meters[0]).toHaveAttribute('data-band', 'warn');
   });
+
+  // The strip hides a switched-off lane, but a lane whose sign-in expired stays
+  // on it. Its numbers are frozen at the last moment anything ran there, so its
+  // fills take the `off` band, as the Accounts screen's do (D-5494): a crit bar
+  // on a lane nothing can refresh reads as live pressure.
+  it('greys the fills of a sign-in-expired lane, keeping its band, and leaves a live lane coloured', async () => {
+    stubAccounts([
+      acct({ wrapper: 'claude', five: 91, seven: 40, authDead: true }),
+      acct({ wrapper: 'claude2', five: 91, seven: 40 }),
+    ]);
+    const { container } = render(<AccountsStrip />);
+    await screen.findAllByText('91%');
+    const gauges = container.querySelectorAll('.account-gauge');
+    expect(gauges).toHaveLength(2);
+    const fills = (g: Element) => [...g.querySelectorAll('.acct-fill')];
+    expect(fills(gauges[0]!).map((f) => f.classList.contains('limit-fill--off'))).toEqual([true, true]);
+    expect(gauges[0]!.querySelector('.acct-meter')).toHaveAttribute('data-band', 'crit');
+    expect(fills(gauges[1]!).map((f) => f.classList.contains('limit-fill--off'))).toEqual([false, false]);
+    expect(fills(gauges[1]!)[0]).toHaveClass('limit-fill--crit');
+  });
 });

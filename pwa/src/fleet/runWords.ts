@@ -802,21 +802,73 @@ export interface ChildOfRunLabel {
   readonly title: string;
 }
 
+/** What a child's label is told about its run: the ACTIVE run bound to the
+ *  session (`runForSession` — the current wave, so a workspace resumed for wave 5
+ *  answers wave 5, never the run its `.child` mark names), and its coordinator's
+ *  display name when the fleet carries it. `fleetTree.ts`'s `coordinationOf`
+ *  builds it; the default says nothing is known. */
+export interface ChildRunContext {
+  readonly run: { program: string; programTitle: string; wave: number; waveOf: number | null; kind?: RunKind } | null;
+  readonly coordinator: string | null;
+}
+
+const NO_RUN: ChildRunContext = { run: null, coordinator: null };
+
+/** `<programme> · wave 5 of 7`, or `<programme> · review of wave 5` on a review
+ *  run (which carries the wave it reviews). THE one spelling, read by the fleet
+ *  row's child label and the session header's coordination line. */
+export const programmeWave = (r: NonNullable<ChildRunContext['run']>): string =>
+  `${r.program}${programmeWaveTail(r)}`;
+
+/** The wave half of `programmeWave`, separator included (` · wave 5 of 7`) —
+ *  split out so the fleet row can ellipsise a long programme slug and keep the
+ *  wave, the fact the operator asked for, whole (D-5528). */
+export const programmeWaveTail = (r: NonNullable<ChildRunContext['run']>): string =>
+  ` · ${r.kind === 'review' ? `review of wave ${r.wave}`
+    : r.waveOf === null ? `wave ${r.wave}` : `wave ${r.wave} of ${r.waveOf}`}`;
+
+/** The plain-language sentence for a row an active run names (the label's and
+ *  the run-board door's title). `reclaimed` adds the lifecycle clause, true only
+ *  for a workspace the run minted. */
+export const runSentence = (
+  r: NonNullable<ChildRunContext['run']>, coordinator: string | null, reclaimed: boolean, whose: string | null = null,
+): string => {
+  const programme = r.programTitle !== '' ? r.programTitle : r.program;
+  const verb = r.kind === 'review' ? 'reviews' : 'does';
+  // `whose`: the session header names whose code the wave is done on (D-5527). ONE sentence for the fleet
+  // row's title and the header's (D-5545), so a review reads "reviews one wave" on both.
+  return `this workspace ${verb} one wave of ${programme}${whose === null ? '' : ` on ${whose} code`} for ${coordinator ?? 'its coordinator'}`
+    + (reclaimed ? '; it is stopped or reclaimed when the wave is done' : '');
+};
+
 /**
  * The fleet line's label, projected from `childMarkOf` (the one reader of
- * `FleetSession.child`). THREE answers and no boolean (spec §5.1). A child names
- * its minting run. An unreadable marker says so, because the server treats it as
- * neither "a child" nor "not a child": it refuses a second run and defers a
- * reclaim. No marker, or a shape this build cannot read, says nothing.
+ * `FleetSession.child`). THREE answers and no boolean (spec §5.1), worded by the
+ * operator's ruling of 2026-10-18: a child names its PROGRAMME and WAVE —
+ * `<programme> · wave 5 of 7`, or `<programme> · review of wave 5` for a review
+ * run (a review run carries the wave it reviews, `openRun`'s target) — because
+ * "child of run #N" was a number every worker had a different one of. The run
+ * number moves to the session header's details and the reclaim banner. A child
+ * no active run names says so in words ("run not on the board"; the run may have
+ * closed), and keeps its minting run's number in the title. An unreadable marker
+ * says so, because the server treats it as neither "a child" nor "not a child":
+ * it refuses a second run and defers a reclaim. No marker, or a shape this build
+ * cannot read, says nothing.
  */
-export const childOfRunLabel = (session: { child?: ChildMark }): ChildOfRunLabel | null => {
+export const childOfRunLabel = (
+  session: { child?: ChildMark }, ctx: ChildRunContext = NO_RUN,
+): ChildOfRunLabel | null => {
   const m = childMarkOf(session);
   if (m.kind === 'child') {
-    return {
-      text: `child of run #${m.runId}`,
-      data: 'child',
-      title: `minted by run #${m.runId} for one PR; the server reclaims it when nothing keeps it`,
-    };
+    const r = ctx.run;
+    if (r === null) {
+      return {
+        text: 'run not on the board',
+        data: 'child',
+        title: `minted by run #${m.runId}; no open run on the board names this workspace — the run may have closed, and the server reclaims the workspace when nothing keeps it`,
+      };
+    }
+    return { text: programmeWave(r), data: 'child', title: runSentence(r, ctx.coordinator, true) };
   }
   if (m.kind === 'unreadable') {
     return {

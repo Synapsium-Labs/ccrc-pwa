@@ -5,12 +5,32 @@
 import type { AccountsResponse, AckAnswer, ApplyUpdateBody, AutoMode, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, MoveSkipWhy, NotifyEvent, NotifyMode, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, RollbackUpdateBody, RouteField, RouteFields, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, UpdateChannel, UpdateRouteError, UpdatesView, WsAudit } from '../../../shared/api';
 import { raiseAuthLostFrom } from './auth';
 import { ARCHIVE_REFUSALS, isArchiveRefusal, type ArchiveAnswer, type ArchiveBody, type ArchiveRefusal } from '../../../shared/api';
+import { SWAP_REFUSALS, type SwapRefusal } from '../../../shared/api';
+import type { Dialog, DialogAnswered, DialogTabRequest, DigestAnswer, DigestCorrectAnswer, DigestCorrectBody, InterruptRouteSource } from '../../../shared/api';
+
 import { isNodeRole } from '../../../shared/node-role';
 import { TOKEN_TRANSPORTS } from '../../../shared/agent-protocol';
 import {
   BOX_TOKEN_PHASES, OWED_REASONS, TOKEN_FILE_PROBLEMS, TOKEN_HOLDS, TOKEN_ORIGINS, TOKEN_ROTATE_PATH, type BoxTokenView,
   type RotateAnswer,
 } from '../../../shared/box-token';
+
+/** An answer route's 200 that could not be read: the answer landed, and the next screen is unknown (`next` absent). */
+const ANSWERED: DialogAnswered = { ok: true };
+
+/** An answer route's 200 body, read (decision `ask-answer-returns-next-screen`): `next` kept only when it is null or
+ *  looks like a Dialog (a string id, a boolean `parsed`, an options array). Anything else reads as absent, which leaves
+ *  the sheet on the session stream's next frame, as before. */
+function answered(body: unknown): DialogAnswered {
+  if (body === null || typeof body !== 'object' || !('next' in body)) return ANSWERED;
+  const next = (body as { next: unknown }).next;
+  if (next === null) return { ok: true, next: null };
+  const d = next as Partial<Dialog> | undefined;
+  return d !== undefined && typeof d === 'object' && typeof d.id === 'string' && typeof d.parsed === 'boolean'
+    && Array.isArray(d.options) && typeof d.raw === 'string' && typeof d.title === 'string'
+    ? { ok: true, next: d as Dialog }
+    : ANSWERED;
+}
 
 export class ApiError extends Error {
   readonly status: number;
@@ -256,6 +276,19 @@ export const ARCHIVE_REFUSAL_TEXT: Readonly<Record<ArchiveRefusal, string>> = {
   [ARCHIVE_REFUSALS.worktreeGone]: 'Its worktree is gone, so it cannot be described for the archive record.',
   [ARCHIVE_REFUSALS.statusUnknown]: 'Its status cannot be read, so it will not be archived on a guess.',
   [ARCHIVE_REFUSALS.manifestUnbuildable]: 'It cannot be described truthfully for the archive record. Nothing was touched.',
+};
+
+/**
+ * The swap route's refusals in words (D-5240, working-state spec §5.9), keyed by `SWAP_REFUSALS`, never a second
+ * spelling. Not spread into `API_ERROR_TEXT`: the two codes are archive's too, and a toast that reads an archive
+ * sentence about a swap would be wrong, so `SwapSheet` reads this map itself. A first `sessionBusy` is answered with
+ * the "swap anyway" confirm, not with this sentence; the sentence is for a refusal no consent is left to answer.
+ */
+export const SWAP_REFUSAL_TEXT: Readonly<Record<SwapRefusal, string>> = {
+  [SWAP_REFUSALS.sessionBusy]: 'It is working — moving it now would lose the turn in progress and its background tasks.',
+  [SWAP_REFUSALS.statusUnknown]: 'Its status cannot be read, so it will not be moved on a guess. Stop it first, then move it.',
+  // D-5242: the row is asleep; nothing runs to move. Waking it is the session screen's (plan Task 18).
+  [SWAP_REFUSALS.hibernated]: 'It is asleep, so there is nothing running to move. Wake it, then move it.',
 };
 
 /**
@@ -922,9 +955,14 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  and an absent `opts` both keep the ordinary `{wrapper}` request shape.
      *  Not a checkbox anywhere in the UI: it is what a
      *  pick made under `SwapSheet`'s "show other pools" disclosure sends, after
-     *  a confirm sentence that names the crossing. */
-    swap: (id: string, wrapper: string, opts?: { crossPool?: boolean }) =>
-      post(`${sid(id)}/swap`, opts?.crossPool === true ? { wrapper, crossPool: true } : { wrapper }),
+     *  a confirm sentence that names the crossing. `{interrupt:true}` the same way (D-5240): ONLY when it is true, sent
+     *  only by `SwapSheet`'s "swap anyway", the second tap after the route answered `409 session-busy`. */
+    swap: (id: string, wrapper: string, opts?: { crossPool?: boolean; interrupt?: boolean }) =>
+      post(`${sid(id)}/swap`, {
+        wrapper,
+        ...(opts?.crossPool === true ? { crossPool: true } : {}),
+        ...(opts?.interrupt === true ? { interrupt: true } : {}),
+      }),
     /** The terminal drawer's scrollback — the pane's own history, read with
      *  `capture-pane`. `lines` is the server's number, echoed back: this side
      *  never names one, so there is nothing for the two to disagree about.
@@ -1041,22 +1079,27 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
       // rather than spelled inline the way that door spells it (D-1150).
       return { queued: answer.queued !== false };
     },
-    answerDialog: (id: string, dialogId: string, optionIndex: number) =>
-      post(`${sid(id)}/dialog`, { dialogId, optionIndex }),
+    answerDialog: async (id: string, dialogId: string, optionIndex: number): Promise<DialogAnswered> =>
+      answered(await postRead<unknown>(`${sid(id)}/dialog`, ANSWERED, { dialogId, optionIndex })),
     /** Answer an AskUserQuestion in your own words, through its free-text ("Type something.") row (D-5047). The server
      *  types `text` only once a capture proves the cursor on the empty row, and presses Enter only once a capture
      *  proves the row holds exactly `text`. It refuses 400 `bad-text` for a text it will not type (`isDialogText`,
      *  `shared/api.ts`), and 409 with a `DialogTextRefuseCode` otherwise. Typing changes the dialog's id, and a retry
      *  with the same text, under the id the stream then shows, submits text a refused attempt left in the row. */
-    answerDialogText: (id: string, dialogId: string, optionIndex: number, text: string) =>
-      post(`${sid(id)}/dialog/text`, { dialogId, optionIndex, text }),
+    answerDialogText: async (id: string, dialogId: string, optionIndex: number, text: string): Promise<DialogAnswered> =>
+      answered(await postRead<unknown>(`${sid(id)}/dialog/text`, ANSWERED, { dialogId, optionIndex, text })),
     /** Answer a multiSelect AskUserQuestion question (D-5048): `optionIndexes` are the printed digits of the boxes to
      *  leave ticked (`Dialog.multi`'s options), the whole set, never a toggle. The server sends a digit only for each
      *  box whose tick differs on the live pane, proves the ticks on a fresh capture, then commits with Tab and proves
      *  the screen moved on. It refuses 400 `bad-indexes` for a set it will not send (`isDialogMultiIndexes`,
      *  `shared/api.ts`: empty, repeated, or outside 1..9), and 409 with a `DialogMultiRefuseCode` otherwise. */
-    answerDialogMulti: (id: string, dialogId: string, optionIndexes: readonly number[]) =>
-      post(`${sid(id)}/dialog/multi`, { dialogId, optionIndexes }),
+    answerDialogMulti: async (id: string, dialogId: string, optionIndexes: readonly number[]): Promise<DialogAnswered> =>
+      answered(await postRead<unknown>(`${sid(id)}/dialog/multi`, ANSWERED, { dialogId, optionIndexes })),
+    /** Move an AskUserQuestion's PANE to another tab (decision `ask-dialog-tab-route`): `prev`/`next` (the arrow keys),
+     *  `submit` (the review), or question tab k with the tab the sheet believes is up as `from`. Arrows only, each step
+     *  proved by the server. The 200 carries the screen the pane landed on as `next`, read like an answer's. */
+    answerDialogTab: async (id: string, req: DialogTabRequest): Promise<DialogAnswered> =>
+      answered(await postRead<unknown>(`${sid(id)}/dialog/tab`, ANSWERED, req)),
     /** Answer a hook-reported question by option index. `askKey` is minted
      *  server-side and carried verbatim: the server re-reads the CURRENT
      *  envelope and refuses unless the key still matches, so this can only ever
@@ -1166,7 +1209,8 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     claims: (opts?: { all?: boolean }): Promise<{ claims: ClaimSummary[] }> =>
       getJson<{ claims: ClaimSummary[] }>(
         opts?.all === true ? '/api/claims?all=1' : '/api/claims'),
-    interrupt: (id: string) => post(`${sid(id)}/interrupt`),
+    /** D-5237: `source` names the control that sent it (the keycap, the Escape key, a Deny); the server records it. */
+    interrupt: (id: string, source: InterruptRouteSource) => post(`${sid(id)}/interrupt`, { source }),
     /** `POST /api/coord/pause` (spec §4.2) — request `{paused}`, response
      *  `{ok:true, requested}` on success (the field is `requested`, never
      *  `paused`: the route ran a verb, it did not read the marker back).
@@ -1234,6 +1278,16 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  happened". */
     setCollectLane: (body: CollectLaneRequest) =>
       postJsonOr<CollectLaneView | 'unreadable'>('/api/coord/collect-lane', 'unreadable', body),
+    /** `GET /api/digest?day=` (coordinator-first routing spec §10, D-5300): the digest of what coordinators decided
+     *  in the operator's name for one UTC day, or, with no day, the newest whose window has closed. The digest screen
+     *  reads it through `asDigestAnswer`, the wire guard. Session-gated when armed; no box token. */
+    digest: (day?: string) =>
+      getJson<DigestAnswer>(day === undefined ? '/api/digest' : `/api/digest?day=${encodeURIComponent(day)}`),
+    /** `POST /api/digest/correct` (D-5300): one line's correction, mailed verbatim to that line's coordinator. A 409
+     *  (`not-coordinator`, `duplicate`) rejects with `ApiError` like every non-2xx. `postJson`, not `postJsonOr`: the
+     *  screen reads nothing off the answer but its arrival, and a write whose answer was unreadable is shown as sent
+     *  only after the next read of the digest says `corrected`. */
+    correctDigest: (body: DigestCorrectBody) => postJson<DigestCorrectAnswer>('/api/digest/correct', body),
     commands: (id: string) =>
       getJson<{ builtins: SlashCommand[]; skills: SlashCommand[] }>(`${sid(id)}/commands`),
     upload: async (id: string, file: File): Promise<StagedClip> => {

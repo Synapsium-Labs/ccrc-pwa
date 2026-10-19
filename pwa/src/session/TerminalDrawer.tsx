@@ -842,8 +842,13 @@ export function TerminalDrawer({
                   <span className="term-overlay-word term-overlay-word--lost">
                     connection lost
                   </span>
+                  {/* D-5454: the ghost's hover ground is mixed over the CARD;
+                      this one sits on the terminal's well, where that ground is
+                      near-white in a light palette and --ink-on-well on it reads
+                      1.17:1. The well is held on hover, and the press stays the
+                      well's own (`.term-retry:active`, chat.css). */}
                   <Button
-                    variant="ghost" className="term-retry"
+                    variant="ghost" className="term-retry enabled:hover:bg-transparent"
                     onClick={() => setAttempt((a) => a + 1)}
                   >
                     Reconnect

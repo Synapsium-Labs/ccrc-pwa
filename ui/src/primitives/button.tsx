@@ -9,17 +9,18 @@
 // HOOK CLASSES. Each element also carries its original bare class name
 // (`dot`, `btn-primary`, `sheet-panel`, ...). Those carry no styling any more —
 // the utilities do that — they are STABLE SELECTORS other stylesheets and the
-// test suite key on (`.sess-line--active .sess-lamp > .dot`,
+// test suite key on (`.chat-meta .dot`,
 // `.sheet-panel .proj-ready`, `.block-screen .btn-primary`). Removing one
 // silently un-styles a descendant rule in another package with no build error,
 // so they stay until every consumer of that selector is migrated too.
 import { cva, type VariantProps } from 'class-variance-authority';
-import type { ButtonHTMLAttributes, ReactNode } from 'react';
+import type { ButtonHTMLAttributes, ReactNode, Ref } from 'react';
 import { cn } from '../lib/cn';
 import { FOCUS_RING } from '../lib/focus';
+import { GROUND_MOTION } from '../lib/press';
 
 export const buttonVariants = cva(
-  `flex min-h-tap cursor-pointer items-center justify-center rounded-md font-ui transition-transform duration-press ease-swift motion-reduce:transition-none enabled:active:scale-[0.97] disabled:cursor-default ${FOCUS_RING}`,
+  `flex min-h-tap cursor-pointer items-center justify-center rounded-md font-ui ${GROUND_MOTION} enabled:active:scale-[0.97] disabled:cursor-default ${FOCUS_RING}`,
   {
     variants: {
       variant: {
@@ -28,12 +29,32 @@ export const buttonVariants = cva(
            `text-base` also sets `line-height: var(--tw-leading,
            var(--text-base--line-height))`, the Tailwind default of 1.5 — a 15px
            line box became 22.5px, invisible on a one-line label inside
-           `min-h-tap` and +50% per line on a wrapped one.
+           `min-h-tap` and +50% per line on a wrapped one. The size is the
+           `text-ui` role (D-5093): Refined's `--fs-ui` is `--fs-base`, the
+           15px these said before, and Instrument sets 13 at ≥900
+           (`role-census.test.ts`).
            `button-line-height.test.ts` derives every Button the app renders. */
         primary:
-          'btn-primary border-0 bg-phosphor text-ink-on-phosphor text-base leading-none font-semibold disabled:bg-edge-subtle disabled:text-ink-disabled',
+          'btn-primary border-0 bg-phosphor text-ink-on-phosphor text-ui leading-none font-semibold disabled:bg-edge-subtle disabled:text-ink-disabled',
+        /** `danger` and `danger-ghost` (D-5099) — the commit that destroys
+         *  something, and its quieter twin. `danger` is `primary`'s shape on
+         *  the dead hue: a fill of `--status-dead` with `--ink-on-danger`, a
+         *  token fitted per palette to that fill (near-black on a dark
+         *  palette, white on a light one), and the same disabled stand-down.
+         *  `danger-ghost` is `ghost`'s shape: a `--status-dead` hairline
+         *  around a `--status-dead-text` label, for a trigger that sits on a
+         *  ground already painted red (the fleet host's banner), where a red
+         *  fill would be red on red. It takes `ghost`'s disabled stand-down
+         *  too (D-5448), and `ghost`'s lift and press (D-5495): `bg-hover`
+         *  under the mouse and `bg-pressed` while held, the grounds Task 9
+         *  gave every hairline button (D-5101). Both are gated per palette in
+         *  `pwa/design/contrast-check.mjs`, the hairline on both grounds too. */
+        danger:
+          'btn-danger border-0 bg-status-dead text-ink-on-danger text-ui leading-none font-semibold disabled:bg-edge-subtle disabled:text-ink-disabled',
+        'danger-ghost':
+          'btn-danger-ghost border border-status-dead bg-transparent text-status-dead-text text-ui leading-none font-medium enabled:hover:bg-hover enabled:active:bg-pressed disabled:text-ink-disabled disabled:border-edge-subtle',
         ghost:
-          'btn-ghost border border-edge-strong bg-transparent text-ink-primary text-base leading-none font-medium transition-[transform,background-color] motion-reduce:transition-none enabled:active:bg-raised disabled:text-ink-disabled disabled:border-edge-subtle',
+          'btn-ghost border border-edge-strong bg-transparent text-ink-primary text-ui leading-none font-medium enabled:hover:bg-hover enabled:active:bg-pressed disabled:text-ink-disabled disabled:border-edge-subtle',
         /** `quiet` — the raised mono control. FOUR app rules declared the same
          *  eleven declarations: `.coord-toggle`, `.child-reclaim-toggle` and
          *  `.caps-save` were byte-identical, and `.program-start-door`
@@ -51,7 +72,7 @@ export const buttonVariants = cva(
          *  keeps by passing it at the call site. Folding both to one number
          *  would be a visual change, and this wave has none. */
         quiet:
-          'border border-edge-subtle bg-raised text-ink-secondary font-mono text-2xs font-medium leading-none not-italic normal-nums enabled:active:scale-[0.96]',
+          'border border-edge-subtle bg-raised text-ink-secondary font-mono text-2xs font-medium leading-none not-italic normal-nums enabled:hover:bg-hover enabled:active:bg-pressed enabled:active:scale-[0.96]',
       },
       /** How wide. `full` is the sheet shape and the default — a sheet's
        *  commit button spans it. Its `px-4` is the room a WRAPPED label needs:
@@ -77,7 +98,10 @@ export const buttonVariants = cva(
 
 export interface ButtonProps
   extends ButtonHTMLAttributes<HTMLButtonElement>,
-    VariantProps<typeof buttonVariants> {}
+    VariantProps<typeof buttonVariants> {
+  /** React 19 passes `ref` as a prop; the spread hands it to the <button>. QuickConfirm holds its Cancel by it (D-5610). */
+  ref?: Ref<HTMLButtonElement>;
+}
 
 export function Button({ className, variant, size, type = 'button', ...props }: ButtonProps): ReactNode {
   return <button type={type} className={cn(buttonVariants({ variant, size }), className)} {...props} />;

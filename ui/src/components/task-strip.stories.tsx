@@ -102,3 +102,11 @@ export const Overflow: Story = {
     ),
   },
 };
+
+/** Stale (D-5372): the files say in_progress but nothing has written them for
+ *  three days. CHECK the headline reads "Plan · untouched 3d", the summary says
+ *  "1 open", never "1 running", and the asterisk does NOT breathe — a plan the
+ *  model left open is not work in flight. */
+export const Stale: Story = {
+  args: { tasks: PLAN, untouchedFor: 3 * 24 * 60 * 60 * 1000 },
+};

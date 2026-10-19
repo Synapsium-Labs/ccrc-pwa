@@ -13,6 +13,7 @@ import { act, cleanup, render, screen, fireEvent, waitFor } from '@testing-libra
 import type { NotifyEvent, RunSummary } from '../../shared/api';
 import { MailScreen } from '../src/screens/MailScreen';
 import { MailBadge } from '../src/fleet/MailBadge';
+import { SETTINGS_GLYPH } from '@ccrc/ui';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { api } from '../src/lib/api';
 import { ack, FEED_ACK_KEY, acksSnapshot, resetAcks } from '../src/lib/seen';
@@ -231,7 +232,7 @@ describe('the mail feed', () => {
     expect(await screen.findByText('caps changed')).toBeInTheDocument();
     const kind = container.querySelector('.mail-kind');
     expect(kind, 'the coord row rendered no kind cell at all').not.toBeNull();
-    expect(kind!.querySelector('.mail-kind-glyph')!.textContent, 'no glyph for coord').toBe('⚙');
+    expect(kind!.querySelector('.mail-kind-glyph')!.textContent, 'no glyph for coord').toBe(SETTINGS_GLYPH);
     expect(kind!.textContent, 'no word for coord').toContain('config');
   });
 
@@ -284,6 +285,58 @@ describe('the mail feed', () => {
     // how the sender knows WHICH of its messages is the blocked one.
     expect(screen.getByText(BLOCKED_BODY)).toBeInTheDocument();
   });
+
+  // D-5431 (operator ruling 2026-10-18). The rows copy the server's own shape (`server/src/interruptlog.ts`: title
+  // `interrupt · <source>`, body `interruptEventBody`, no run; the nudge's from `server/src/watch.ts`).
+  const INTERRUPT_SENT = { kind: 'interrupt' as const, sessionId: 'proj-a-s1', title: 'interrupt · keycap',
+    body: 'source=keycap outcome=sent', runId: null };
+  const INTERRUPT_REFUSED = { kind: 'interrupt' as const, sessionId: 'proj-a-s1', title: 'interrupt · escape-key',
+    body: 'source=escape-key outcome=background-only', runId: null };
+  const NUDGE_BODY = 'Nudging with a "continue" prompt after an idle compaction left open tasks (compaction k1)';
+
+  it('an interrupt row keeps its record but shows its title, never the raw source=… outcome=… body (D-5431)', async () => {
+    const store = makeStore();
+    act(() => { store.setState({ feed: [e({ seq: 1, ...INTERRUPT_SENT }), e({ seq: 2, ...INTERRUPT_REFUSED })] }); });
+    const { container } = render(<MailScreen store={store} loadFeed={vi.fn().mockResolvedValue({ events: [] })} />);
+    expect(await screen.findByText('⎋ interrupted · keycap')).toBeInTheDocument();
+    expect(screen.getByText('⎋ not interrupted · escape-key · background-only')).toBeInTheDocument();
+    expect(container.querySelectorAll('.mail-row'), 'both records are still on the screen').toHaveLength(2);
+    expect(container.textContent).not.toContain('source=');
+    expect(container.textContent).not.toContain('outcome=');
+    expect(container.querySelector('.mail-body'), 'an interrupt row printed a body line').toBeNull();
+  });
+
+  it('an interrupt body off its grammar is still printed — the title has nothing to stand in for it (D-5431)', async () => {
+    const store = makeStore();
+    act(() => { store.setState({ feed: [e({ seq: 1, ...INTERRUPT_SENT, body: 'from a newer build' })] }); });
+    render(<MailScreen store={store} loadFeed={vi.fn().mockResolvedValue({ events: [] })} />);
+    expect(await screen.findByText('interrupt · keycap')).toBeInTheDocument();
+    expect(screen.getByText('from a newer build')).toBeInTheDocument();
+  });
+
+  it('an interrupt row is never marked unseen; mail and every other record-only kind still are (D-5431)', () => {
+    const store = makeStore();
+    const now = Date.now();
+    act(() => {
+      store.setState({ feed: [
+        e({ seq: 1, at: now - 60_000, ...INTERRUPT_SENT }),
+        e({ seq: 2, at: now - 59_000, kind: 'nudge', title: '↻ Nudging after idle compaction', body: NUDGE_BODY }),
+        e({ seq: 3, at: now - 58_000 }),
+      ] });
+    });
+    // The mount ack has already floored the watermark to the newest row by the time `render()` returns; rolling it
+    // back after mount is how the suite reads the comparison's true branch (the case above has the argument).
+    const { container } = render(<MailScreen store={store} loadFeed={async () => ({ events: [] })} />);
+    act(() => { ack(FEED_ACK_KEY, now - 120_000); });
+    const rows = [...container.querySelectorAll('.mail-row')];
+    const unseenOf = (text: string): string | null =>
+      rows.find((r) => r.textContent?.includes(text))?.getAttribute('data-unseen') ?? null;
+    // The nudge's body still prints under its title: only the interrupt kind changes.
+    expect(screen.getByText(NUDGE_BODY)).toBeInTheDocument();
+    expect(unseenOf('⎋ interrupted · keycap')).toBe('false');
+    expect(unseenOf('↻ Nudging after idle compaction')).toBe('true');
+    expect(unseenOf('✉ finding › clear-cove')).toBe('true');
+  });
 });
 
 describe('the door', () => {
@@ -316,6 +369,14 @@ describe('the door', () => {
     render(<MailBadge unread={412} />);
     expect(screen.getByText('99+')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /mail — 412 unread/i })).toBeInTheDocument();
+  });
+
+  it('draws Icon mail in its glyph span, stroked in the door\'s ink (D-5100)', () => {
+    render(<MailBadge unread={0} />);
+    const glyph = document.querySelector('.mail-badge-glyph')!;
+    expect(glyph).toHaveAttribute('aria-hidden', 'true');
+    expect(glyph.textContent).toBe('');
+    expect(glyph.querySelector('svg')).toHaveAttribute('stroke', 'currentColor');
   });
 });
 

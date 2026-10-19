@@ -593,6 +593,26 @@ describe('a crash, and only a crash', () => {
     expect([f.anchorOf(A), f.anchorOf(B)]).toEqual([null, null]);
   });
 
+  // D-5242, A FAILED WAKE: the case the `hibernate` journal row protects. A claimant that still reads `stopped` is never
+  // counted at all, so this is the row after `ccd ensure` cleared `.stopped` and `.hibernated` and its spawn did not
+  // come up: it reads `orphan`. Its journal since its last good start holds `hibernate`, then `_ws_unsupervise`'s row
+  // with surface `none` (ccd acting on its own account), then the failed spawn — deliberate, never a crash. Written
+  // green (Task 16's act is in); its red is the mutation dropping `hibernate` from DEAD_COORDINATOR_DELIBERATE_ACTS.
+  it('a coordinator put to sleep whose wake FAILED is never ended: the hibernate row makes it deliberate (D-5242)', async () => {
+    const f = await fixture();
+    f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
+    f.plant(A);
+    const ra = f.working(A);
+    f.journal(A, 'spawn', { meas: { rc: '0' } });
+    f.journal(A, 'hibernate', { dec: { surface: 'agent' } });
+    f.journal(A, 'unsupervise', { dec: { surface: 'none' } });
+    f.journal(A, 'ensure');
+    f.journal(A, 'spawn', { meas: { rc: '1' } });
+    for (let k = 0; k < 3; k += 1) { await anHourDead(f); f.next(); }
+    expect(f.stateOf(ra)).toBe('working');
+    expect(f.anchorOf(A)).toBeNull();
+  });
+
   it('a journal the lane cannot TRUST keeps every coordinator: a read that throws, ccd that does not journal, a gap since its start', async () => {
     for (const how of ['throws', 'unavailable', 'gap'] as const) {
       const f = await fixture(how === 'unavailable' ? { ccdVerbs: ['ws-release'] } : {});

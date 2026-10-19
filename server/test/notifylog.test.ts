@@ -3,6 +3,9 @@ import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { NotifyLog } from '../src/notifylog.js';
+import { CoordStore } from '../src/coord/store.js';
+import { openCoordDb } from '../src/coord/db.js';
+import { recordInterrupt } from '../src/interruptlog.js';
 
 const dir = async () => mkdtemp(path.join(tmpdir(), 'notifylog-'));
 
@@ -96,5 +99,30 @@ describe('NotifyLog', () => {
     const raw = JSON.parse(await readFile(p, 'utf8')) as { epoch: string; seq: number };
     expect(raw.seq).toBe(5);
     expect(raw.epoch).toBe(log.epoch);
+  });
+});
+
+// D-5237 (plan Task 7): an `interrupt` is a kind of its own on both paths a client reads — the ring's catch-up tail and
+// the durable feed archive, whose kind column is read back through `isNotifyKind` (an unrecognised token there is
+// `unknown`, so a kind this build forgot to list would come back as `unknown`).
+describe('the interrupt kind (D-5237)', () => {
+  it('is recorded to the ring and the archive, and read back from both as `interrupt`', async () => {
+    const d = await dir();
+    const log = new NotifyLog(path.join(d, 'n.json'));
+    await log.load();
+    const coord = new CoordStore(openCoordDb(path.join(d, 'coord.db')));
+    recordInterrupt({ notifyLog: log, coord }, 'lane-a-project-a', 'keycap', 'sent');
+    const tail = log.catchUp(log.epoch, 0).events;
+    expect(tail.map((e) => [e.kind, e.sessionId, e.body])).toEqual([['interrupt', 'lane-a-project-a', 'source=keycap outcome=sent']]);
+    expect(coord.feedEvents(10).map((e) => [e.kind, e.sessionId, e.body]))
+      .toEqual([['interrupt', 'lane-a-project-a', 'source=keycap outcome=sent']]);
+  });
+
+  it('a failing archive write never throws out of the record, and the ring keeps the row', async () => {
+    const log = new NotifyLog(path.join(await dir(), 'n.json'));
+    await log.load();
+    const coord = { recordFeedEvent: () => { throw new Error('database is locked'); } };
+    expect(() => recordInterrupt({ notifyLog: log, coord }, 'lane-a-project-a', 'deny', 'not-busy')).not.toThrow();
+    expect(log.catchUp(log.epoch, 0).events.map((e) => e.body)).toEqual(['source=deny outcome=not-busy']);
   });
 });

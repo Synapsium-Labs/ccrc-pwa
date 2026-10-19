@@ -27,6 +27,7 @@ import {
   CHILD_RECLAIM_MARKER_GLYPH, CHILD_RECLAIM_MARKER_WORD, childReclaimAttentionOf, childReclaimMarker,
 } from './childReclaimWords';
 import { useMarkerToggle } from './useMarkerToggle';
+import { programmeWave, type ChildRunContext } from './runWords';
 import { AttentionList } from './AttentionList';
 import { ExpiryAttention } from './ExpiryAttention';
 import { DeadCoordinatorAttention } from './DeadCoordinatorAttention';
@@ -39,13 +40,26 @@ import './fleet.css';
 export function ChildReclaimBanner({
   store = useFleetStore,
   childReclaimPause = api.childReclaimPause,
+  runs,
 }: {
   store?: FleetStore;
   /** Injectable so a test drives the toggle without a server — `CoordBanner`'s
    *  `coordPause` seam. Defaults to `api.childReclaimPause`. */
   childReclaimPause?: (state: 'on' | 'off') => Promise<void>;
+  /** The runs the board holds — live AND finished, since a reclaim follows a
+   *  run's close (`RunsScreen` passes both). A target whose run is here leads
+   *  with its programme and wave (operator ruling 2026-10-18), and `run #N`
+   *  stays as the secondary key that names the reclaim target. Defaults to the
+   *  store's live runs. */
+  runs?: readonly (NonNullable<ChildRunContext['run']> & { id: number })[];
 }): ReactNode {
   const coord = store((s) => s.coord);
+  const liveRuns = store((s) => s.runs);
+  const known = runs ?? liveRuns;
+  const who = (runId: number, sessionId: string): string => {
+    const r = known.find((x) => x.id === runId);
+    return r === undefined ? `run #${runId} · ${sessionId}` : `${programmeWave(r)} · run #${runId} · ${sessionId}`;
+  };
   const coordFrameSeen = store((s) => s.coordFrameSeen);
   const marker = childReclaimMarker(coord);
   // The switch's whole behaviour is `useMarkerToggle`'s, shared with the pause
@@ -78,13 +92,13 @@ export function ChildReclaimBanner({
         lines={attention.map((a) => (!('sessionId' in a)
           ? {
             key: `kept-many ${a.word}`,
-            who: a.members.map((m) => `run #${m.runId} · ${m.sessionId}`),
+            who: a.members.map((m) => who(m.runId, m.sessionId)),
             sentence: a.sentence,
             sentenceFirst: true,
           }
           : {
             key: a.sessionId,
-            who: [a.runId === null ? a.sessionId : `run #${a.runId} · ${a.sessionId}`],
+            who: [a.runId === null ? a.sessionId : who(a.runId, a.sessionId)],
             sentence: a.sentence,
           }))}
       />

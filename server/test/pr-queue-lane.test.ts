@@ -26,6 +26,7 @@ import type { PushPayload } from '../src/push.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import type { RunState } from '../../shared/api.js';
+import { HIBERNATE_DISABLED_MARKER } from '../src/coord/hibernate.js';
 
 const ID = 'demo-quiet-basin';
 const T1 = '2026-09-23T11:30:00Z';
@@ -40,6 +41,9 @@ function seed(): string {
     ['project', 'demo'], ['workspace', 'quiet-basin'], ['branch', 'ws/' + ID], ['base', 'origin/main']]) {
     writeFileSync(path.join(reg, `${ID}.${f}`), v!);
   }
+  // D-5242: hibernation's shadow sweep, off. It reads this idle session's run rows on its own clock, and the spy on
+  // `openRunsForSession` below asks about THIS lane's re-reads only; hibernation is not under test here.
+  writeFileSync(path.join(reg, HIBERNATE_DISABLED_MARKER), '');
   return home;
 }
 

@@ -2,9 +2,10 @@
 //
 // The PWA is served at `/` with an SPA fallback, so by default every unknown
 // path renders ccrc. That is right for ccrc's own routes and wrong for anything
-// else living at the same origin. Two of ccrc's own prefixes are always denied
+// else living at the same origin. Three of ccrc's own prefixes are always denied
 // — `/api/` and `/ws/` are server state, and a cached shell answering an API
-// navigation is a page that looks fine and is lying.
+// navigation is a page that looks fine and is lying; `/licenses/` holds the
+// licence files the build ships verbatim (D-5095), which the shell would hide.
 //
 // CO-TENANTS ARE NOT CCRC'S BUSINESS TO KNOW. A box may put a wiki at `/wiki`
 // and a preview at `/fleet` behind the same reverse proxy; a release tarball
@@ -29,7 +30,7 @@ function escapePath(p: string): string {
  *
  * @param extra comma-separated absolute paths that belong to something else on
  *   this origin (`CCRC_SW_DENYLIST`, e.g. `"/wiki,/fleet"`). Empty, absent, or
- *   all-blank yields just ccrc's own two, the default for an origin ccrc has to
+ *   all-blank yields just ccrc's own three, the default for an origin ccrc has to
  *   itself. `/docs` is ccrc's own (its Docs pages): an entry covering it throws.
  *
  * Each extra path matches the path itself and everything under it (`/wiki`,
@@ -39,7 +40,9 @@ function escapePath(p: string): string {
  * nothing when you write `wiki` instead of `/wiki` is worse than no knob.
  */
 export function swDenylist(extra: string | undefined): RegExp[] {
-  const own = [/^\/api\//, /^\/ws\//];
+  // /licenses/ is ccrc's own too (D-5095): a file the build ships verbatim
+  // from pwa/public/, which the shell answering it would hide.
+  const own = [/^\/api\//, /^\/ws\//, /^\/licenses\//];
   const paths = (extra ?? '')
     .split(',')
     .map((s) => s.trim().replace(/\/+$/, '').replace(/^\/*/, '/'))

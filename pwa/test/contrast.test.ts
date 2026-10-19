@@ -257,6 +257,7 @@ const GRANDFATHERED_UNCOVERED = new Set([
   '.task-line',
   '.task-glyph',
   '.task-row--in_progress .task-glyph',
+  '.task-row--in_progress.task-row--stale .task-glyph',
   '.task-row--completed .task-subject',
   '.task-row--completed .task-glyph',
   '.task-detail',
@@ -266,6 +267,7 @@ const GRANDFATHERED_UNCOVERED = new Set([
   '.sys-divider--restart',
   '.sys-divider--stalled',
   '.sys-divider--limit',
+  '.sys-divider--idle',
   '.msg-receipt',
   '.msg-receipt--ok b',
   '.msg-receipt--failed',
@@ -1156,6 +1158,7 @@ describe('every stylesheet under src/ is audited', () => {
       );
     const APP_SHEETS = [
       'src/fleet/fleet.css',
+      'src/screens/digest.css',   // the daily digest screen (D-5300)
       'src/session/chat.css',
       'src/styles/base.css',
       'src/styles/shell.css',

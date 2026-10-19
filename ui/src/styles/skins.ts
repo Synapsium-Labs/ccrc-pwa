@@ -88,7 +88,7 @@ export interface SkinToken {
  *  with a `:root` default in tokens.css. Every value a skin picks is a scale
  *  step, a length, `none`, or an elevation recipe on `var(--edge-*)` — never a
  *  colour, never a new size. Holds exactly what this task declares; later
- *  tasks append their own (the meter's in Task 5, `--elev-pop` with the
+ *  tasks append their own (the meter's three came with Task 5, `--elev-pop` with the
  *  sheet's desktop arm).
  *
  *  THE IDENTITY CORE'S TOKEN GUARD (D-5094) holds every rule written beside a
@@ -149,8 +149,14 @@ export const SKIN_TOKENS: { readonly [C in SkinTokenClass]: readonly SkinToken[]
   elevation: [
     { name: '--elev-card' },
   ],
-  // METER. Lengths and counts, with no `var()`.
-  meter: [],
+  // METER. Lengths and counts, with no `var()`. Read by @ccrc/ui's Meter
+  // (meter.css): `--meter-h` its height, and a segment mask from the other two
+  // (D-5098). One segment and no gap is the continuous bar.
+  meter: [
+    { name: '--meter-h' },
+    { name: '--meter-segments' },
+    { name: '--meter-gap' },
+  ],
   // MOTION. Durations, with no `var()`, declared only inside
   // `@media (prefers-reduced-motion: no-preference)`. A skin block is (0,2,0)
   // and outranks tokens.css's reduced-motion `:root`, so a duration anywhere

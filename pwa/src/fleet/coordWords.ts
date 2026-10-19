@@ -25,6 +25,7 @@
 import {
   isMarkerState, lifecycleIsDead, substrateFault, type FleetSession, type MarkerState,
 } from '../../../shared/api';
+import { hibernatedSince } from './hibernated';
 
 export const MARKER_WORD: Record<MarkerState, string> = {
   clear: 'not paused',
@@ -64,7 +65,8 @@ export const COORD_CONFIRM_MS = 15_000;
 
 /** The client's answer to "is the run's coordinator there?" — program-leverage
  *  wave 5, D-1129. */
-export type CoordPresence = 'alive' | 'dead' | 'unknown';
+/** `hibernated` (D-5242): the coordinator is asleep, and wakes on mail or when opened. */
+export type CoordPresence = 'alive' | 'dead' | 'hibernated' | 'unknown';
 
 /** THREE answers, because the client cannot measure what the server measures.
  *
@@ -111,6 +113,12 @@ export function coordPresence(
   // state resolve on its own" — `restarting` does, `orphan` does not — and it
   // deliberately answers FALSE for `unmeasurable` ("doubt is not evidence",
   // LIFECYCLE_DEAD's own comment).
+  // D-5242: a coordinator `ccd hibernate` put to sleep is NOT gone — it reads
+  // `stopped`, which `lifecycleIsDead` calls dead, but mail and an open screen
+  // wake it, and the server's reclaim door refuses it (`measureClaimant`
+  // answers a sleeper `alive`). So it is its own answer, never `dead`: no
+  // Resume door, no "coordinator gone" (the fourth answer: D-5430).
+  if (hibernatedSince(session) !== null) return 'hibernated';
   if (session.status === 'dead' && lifecycleIsDead(lifecycle)) return 'dead';
   return 'alive';
 }

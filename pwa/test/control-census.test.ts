@@ -247,6 +247,7 @@ const CONTROLS: Record<string, string> = {
   'session/Composer.tsx <button> draft-cancel': 'TOKEN. The draft cancel.',
   'session/Composer.tsx <button> send-btn': 'TOKEN. Send.',
   'session/Composer.tsx <button> slash-item': 'TOKEN. A slash-command row — one of the six floors this wave converted from a literal.',
+  'session/AskParts.tsx <button> ask-tab': 'TOKEN. A tab-strip chip (AskTabs, decision ask-tab-strip), one per question and Submit, which both ask sheets render.',
   'session/AskParts.tsx <button> dlg-reply-send': 'TOKEN. Send, beside the own-words field (OwnWords, D-5090), which both ask sheets render.',
   'session/DialogSheet.tsx <button> dlg-details-toggle': 'TOKEN. The details disclosure.',
   'session/EnvelopeSheet.tsx <button> dlg-later': 'TOKEN. Both "Not now" rows, rendered by TerminalCta — which lives beside the envelope sheet and is imported back by the controller.',
@@ -287,6 +288,10 @@ const CONTROLS: Record<string, string> = {
   // wraps it" — is unchanged as an argument; what changed is where it is
   // enforced. `RADIO_OPTION` carries `min-h-tap` and `tap-targets.test.tsx`
   // reads it off the component, exactly as it reads `TEXT_INPUT`'s.
+  'screens/DigestScreen.tsx <textarea> digest-correct-input':
+    'TOKEN. The digest\'s correction box (D-5300): `.digest-correct-input` is '
+    + '`min-height: calc(var(--tap-min) * 2)`, two floors tall, because it '
+    + 'opens at three rows for a sentence and grows by its own resize handle.',
   'session/Composer.tsx <textarea> composer-input':
     'TOKEN by VALUE — see FLOOR_BY_VALUE. `padding: 10px 0` around '
     + '`--fs-input` (16px) at `--lh-normal` (1.5) is 10 + 24 + 10 = 44 exactly, '

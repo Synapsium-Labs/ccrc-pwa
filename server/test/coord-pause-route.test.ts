@@ -152,6 +152,46 @@ describe('POST /api/coord/pause', () => {
   });
 });
 
+// Delegation broker wave 3, Task 15. `POST /api/coordinators/:session/intent` is a box-token LANE: it sits in neither `UNGATED` (it
+// releases no wedge) nor `SESSION_ONLY` (a fleet session calls it, with the token and no cookie), so the scans in the next describe
+// hold its gate without a name for it. These rows pin what those scans cannot: that the sets stay disjoint from it BY NAME, and the
+// ORDER of its refusals, which is the design (plan Task 15 step 1): configured, token, closed body, attribution, incarnation, then
+// the one durable write.
+describe('the coordinator intent door is a box-token lane, and its refusals run in the design\'s order', () => {
+  const SRC_FILE = readFileSync(path.resolve(__dirname, '../src/coord/routes.ts'), 'utf8');
+  const ROUTE = '/api/coordinators/:session/intent';
+  const handler = (): string => {
+    const at = SRC_FILE.indexOf(`app.post('${ROUTE}'`);
+    expect(at, 'the intent route moved or was renamed').toBeGreaterThan(-1);
+    const next = SRC_FILE.slice(at + 1).search(/app\.(?:get|post)\('/);
+    return SRC_FILE.slice(at, next === -1 ? SRC_FILE.indexOf('return { withAbandon, withSweepAbandon };', at) : at + 1 + next);
+  };
+
+  it('is named in neither the UNGATED nor the SESSION_ONLY set', () => {
+    const self = readFileSync(__filename, 'utf8');
+    for (const name of ['UNGATED', 'SESSION_ONLY']) {
+      const m = new RegExp(`const ${name} = new Set\\(\\[([^\\]]*)\\]\\)`).exec(self);
+      expect(m, `the ${name} literal moved`).not.toBeNull();
+      expect(m![1], `${ROUTE} was added to ${name}: it is a box-token lane, not a door`).not.toContain(ROUTE);
+    }
+  });
+
+  it('checks the box token before its first await, with attribution after the cheap refusals', () => {
+    const body = handler();
+    const at = (needle: string): number => {
+      const i = body.indexOf(needle);
+      expect(i, `the intent handler no longer contains ${needle}`).toBeGreaterThan(-1);
+      return i;
+    };
+    const order = [
+      at('return notConfigured(reply)'), at('requireMailToken(req'), at('Object.keys(raw)'),
+      at('byId !== session'), at('requireAttribution('), at('settleParentIncarnations('), at('applyCheckpointChange('),
+    ];
+    expect(order, 'the intent refusals are no longer in the design\'s order').toEqual([...order].sort((a, b) => a - b));
+    expect(body.indexOf('await '), 'an await precedes the box-token gate').toBeGreaterThan(order[1]!);
+  });
+});
+
 // D-282. The gate is a property of the FILE, not of the routes anyone
 // remembers to check: `MAIL_REJECT_CODES`-excludes-`undeliverable` is the same
 // idiom — an exclusion written down by name, rather than a scanner quietly

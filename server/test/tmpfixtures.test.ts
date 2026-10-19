@@ -126,7 +126,7 @@ describe('removeTmpFixturesEachTest (R20a)', () => {
     expect(existsSync(fromBeforeAll), 'a home made in a beforeAll was removed after one test').toBe(true);
   });
 
-  it.each(['ccrc-update.test.ts', 'ccrc-install-graphify.test.ts'])('%s opts in, at its top level, outside any comment', (file) => {
+  it.each(['ccrc-update.test.ts', 'ccrc-install-graphify.test.ts', 'ccrc-doctor.test.ts'])('%s opts in, at its top level, outside any comment', (file) => {
     const src = readFileSync(path.join(__dirname, file), 'utf8').split('\n');
     expect(src.filter((l) => l === 'removeTmpFixturesEachTest();'),
       `${file} must call removeTmpFixturesEachTest() once, unindented`).toHaveLength(1);
@@ -137,7 +137,7 @@ describe('removeTmpFixturesEachTest (R20a)', () => {
   // a running test's home included. Refused here, by reading the file, rather than at run time: a runtime refusal
   // keyed on a still-open mark would also fire after any describe-level afterEach threw (vitest then skips the root
   // afterEach that closes the mark) and turn one red into a red for every later test in the file.
-  it.each(['ccrc-update.test.ts', 'ccrc-install-graphify.test.ts'])('%s runs no test concurrently', (file) => {
+  it.each(['ccrc-update.test.ts', 'ccrc-install-graphify.test.ts', 'ccrc-doctor.test.ts'])('%s runs no test concurrently', (file) => {
     const code = readFileSync(path.join(__dirname, file), 'utf8').split('\n')
       .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l));
     expect(code.filter((l) => /\.concurrent\b|concurrent:\s*true/.test(l)),

@@ -12,6 +12,9 @@
 export { Button, buttonVariants, type ButtonProps } from './primitives/button';
 export { StatusDot, dotVariants, type StatusDotProps, statusLabel } from './primitives/status-dot';
 export { LimitBar, limitBand, fillVariants, TRACK as LIMIT_TRACK, type LimitBand, type LimitBarProps } from './primitives/limit-bar';
+// The ONE usage meter (D-5098): LimitBar's rows, the accounts strip and screen,
+// and the pickers' gauges all draw through it.
+export { Meter, type MeterProps } from './primitives/meter';
 export { Skeleton, type SkeletonProps } from './primitives/skeleton';
 export { Sheet, type SheetProps } from './primitives/sheet';
 export { OptionRow, type OptionRowProps } from './primitives/option-row';
@@ -27,6 +30,7 @@ export {
 } from './primitives/radio';
 export { BackButton, BACK_BUTTON, type BackButtonProps } from './primitives/back-button';
 export { Door, DOOR, DOOR_GLYPH, type DoorProps } from './primitives/door';
+export { Icon, type IconName, type IconProps, type IconSize } from './primitives/icon';
 export { Well, WELL, type WellProps } from './primitives/well';
 export { Chip, CHIP, CHIP_DOT, type ChipProps } from './primitives/chip';
 export {
@@ -37,6 +41,15 @@ export { CoverScreen, COVER_SCREEN, type CoverScreenProps } from './primitives/c
 export { BareRow, BARE_ROW, type BareRowProps } from './primitives/bare-row';
 export { CountBadge, COUNT_BADGE, type CountBadgeProps } from './primitives/count-badge';
 export { Keycap, KEYCAP, type KeycapProps } from './primitives/keycap';
+// A link inside a line of text, opening another site (D-5550).
+export { TextLink, TEXT_LINK, type TextLinkProps } from './primitives/text-link';
+// The `❯ ccrc` mark, the identity core's first item (D-5094, D-5470).
+export { Wordmark, WORDMARK, type WordmarkProps } from './primitives/wordmark';
+// The ⌘K palette (D-5103): the overlay and its key hint. The commands are the
+// app's registry; this draws them.
+export {
+  CommandPalette, KeyHint, COMMAND_KEY, type CommandPaletteProps, type CommandPaletteOption,
+} from './primitives/command-palette';
 // Two constants with no component of their own: each is a handful of
 // utilities that two or three app rules spelled identically, and wrapping
 // either in a `<span>` would add an element nobody asked for.
@@ -45,7 +58,7 @@ export {
   MAIL_GLYPH, WARN_GLYPH, SETTINGS_GLYPH,
 } from './lib/text';
 export { PRESS_FEEDBACK, PRESS_TRANSFORM } from './lib/press';
-export { QuickConfirm, QC_CONSEQUENCE, QC_ACTIONS, type QuickConfirmProps } from './primitives/confirm';
+export { QuickConfirm, QC_CONSEQUENCE, QC_ACTIONS, useCancelFirst, type QuickConfirmProps } from './primitives/confirm';
 export {
   toast,
   ToastHost,
@@ -75,6 +88,7 @@ export {
   type ToolResultEvent,
 } from './components/tool-card';
 export { TaskStrip, orderTasks, summarize } from './components/task-strip';
+export { WorkflowStrip, formatElapsed, formatTokens, workflowFacts, workflowHeadline } from './components/workflow-strip';
 // `BuildLine` knows that a box whose version it cannot vouch for is the thing
 // to say loudly; it reads a `NodeWire[]` and nothing else.
 export { BuildLine } from './components/build-line';
