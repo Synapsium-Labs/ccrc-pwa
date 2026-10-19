@@ -2169,6 +2169,14 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         server's free disk is 30G. v0.0.335 (#565) to v0.0.339 (#701) followed, unapplied. STATUS: fleet and server
         v0.0.334, newest v0.0.339, stable v0.0.328, intent dev/auto=off, backups fleet 160M/server 2458M, disk free
         fleet 210G/work volume 92G/server 30G, no anomalies.
+      - 12:05: the broker's coordinator corrects its split (mail 6647). Run 629's bench puts correlation at 0.58 s
+        before its fix and 0.22 s after, at the live mix, so the 4 to 5 s is more likely the repair projection.
+        That is review 631's first-ranked candidate: every pass ends by deleting and re-inserting every lineage,
+        lease, attempt and activity row in one transaction. Run 632 adds a per-phase line for any pass over 1 s,
+        which settles it. Neither run changes the projection; if it is confirmed, the release that ends the block
+        is a later run, which is the operator's to rule on. At 13:35, beside the blackout sample, I read the
+        checkpoint's two counters per pass, `revision` and `appliedJournalSequence`: node parses the file on the
+        box and prints only the two numbers. At 12:05 they read 1302 and 43538.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
