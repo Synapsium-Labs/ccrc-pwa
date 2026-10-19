@@ -1208,6 +1208,46 @@ describe('W2-3 Task 3: windows over assistant turns', () => {
     expect(g.windowTotals([w])).toEqual({ windows: 0, with_call: 0, calls: 0, turns: 0, unmeasured: 1 });
   });
 
+  // Fix round 1 (review of Task 3; D-5770): W2-D14 rules in windowOf that no case above held.
+  it('fix round 1: a copy the row cap cut AFTER turn 11\'s first row was seen is measured, ending exclusive at that row', async () => {
+    const g = await t3Gate();
+    // 12 turns of one row each (1100..2200), cap 11: rows hold turns 1..11, so truncated is true and turn 11 (2100) is seen.
+    const fam = t3Family(turnStore([t3B(1000), t3S(1001), ...t3Turns(12, 1100)], [[2050, 0, 'expand'], [2100, 0, 'expand']]), 11);
+    const copy = fam.boundaries[0]!.copies[0]!;
+    expect(copy, 'CONTROL: cut at 11 rows, no next boundary').toMatchObject({ truncated: true, next_boundary_line: null });
+    expect(copy.rows).toHaveLength(11);
+    expect(W(g.buildWindows(fam))).toEqual([['measured', 1000, 2100, false, 10, 1]]);
+  });
+
+  it('fix round 1: a window opens INCLUSIVE at the boundary\'s ts_ms: a call at exactly that ts is counted, one a millisecond earlier is not', async () => {
+    const g = await t3Gate();
+    const fam = t3Family(turnStore([t3B(1000), t3S(1001), ...t3Turns(3, 1100)], [[999, 0, 'expand'], [1000, 0, 'expand']]));
+    expect(fam.calls.map((c) => c[0]), 'CONTROL: both calls reach Node').toEqual([999, 1000]);
+    expect(W(g.buildWindows(fam))).toEqual([['measured', 1000, 1300, true, 3, 1]]);
+  });
+
+  it('fix round 1: with no turn 11 and no next boundary the end is INCLUSIVE at the copy\'s last timed row: a call at exactly that ts is counted, one a millisecond later is not', async () => {
+    const g = await t3Gate();
+    const fam = t3Family(turnStore([t3B(1000), t3S(1001), ...t3Turns(3, 1100)], [[1300, 0, 'expand'], [1301, 0, 'expand']]));
+    expect(fam.boundaries[0]!.copies[0]!, 'CONTROL: last timed row 1300, nothing after').toMatchObject({ last_ts_ms: 1300, next_boundary_line: null, truncated: false });
+    expect(W(g.buildWindows(fam))).toEqual([['measured', 1000, 1300, true, 3, 1]]);
+  });
+
+  it('fix round 1: a family that is not found yields no window, though its report still carries a boundary', async () => {
+    const g = await t3Gate();
+    const fam = t3Family(turnStore([t3B(1000), t3S(1001), ...t3Turns(3, 1100)], [[1100, 0, 'expand']]));
+    expect(g.buildWindows(fam), 'CONTROL: found, it yields a window').toHaveLength(1);
+    expect(g.buildWindows({ ...fam, found: false })).toEqual([]);
+  });
+
+  it('fix round 1: exactly K turns and nothing after is measured, inclusive at the last row; exactly K+1 turns ends exclusive at turn 11\'s first row', async () => {
+    const g = await t3Gate();
+    const exactlyK = t3Family(turnStore([t3B(1000), t3S(1001), ...t3Turns(10, 1100)], [[2000, 0, 'expand']]));
+    expect(W(g.buildWindows(exactlyK))).toEqual([['measured', 1000, 2000, true, 10, 1]]);
+    const kPlus1 = t3Family(turnStore([t3B(1000), t3S(1001), ...t3Turns(11, 1100)], [[2000, 0, 'expand'], [2100, 0, 'expand']]));
+    expect(W(g.buildWindows(kPlus1))).toEqual([['measured', 1000, 2100, false, 10, 1]]);
+  });
+
   it('splitAtFirstExit8: the calls up to and including the first exit 8, and the rest apart (spec 10.2:2722, :2728)', async () => {
     const g = await t3Gate();
     const lib = await import('../../ccd/history/lib.mjs');
