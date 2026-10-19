@@ -30,6 +30,7 @@
  * a `working` or `done` hookstate's `ask` is the PREVIOUS question's, and naming it on this push would be wrong.
  */
 import { ASK_SUMMARY_MAX_LEN } from './fleet.js';
+import { redactCommand } from './coord/redact.js';
 import type { HookState } from './hookstate.js';
 
 /** The body of an ask push when neither the envelope nor the scraped title says anything. Spelled here only
@@ -53,7 +54,9 @@ function envelopeBody(hs: HookState | null): string | null {
   if ('questions' in hs.ask) {
     const q = hs.ask.questions[0];
     const text = q ? (q.question.trim() || q.header?.trim() || null) : null;
-    return text === null ? null : text.slice(0, ASK_SUMMARY_MAX_LEN);   // D-5356
+    // D-5356; D-5298 (spec §6.7): redacted before the cut, as the fleet's one-line glance is — a push body is stored
+    // in the NotifyLog ring and the feed as well as pushed.
+    return text === null ? null : redactCommand(text).slice(0, ASK_SUMMARY_MAX_LEN);
   }
   // D-5356: the tool name only — `summary` (the command) is not read until the redactor lands (Task 16). An approval
   // envelope decides the body even with no tool name: it never falls through to a scraped title, which on a

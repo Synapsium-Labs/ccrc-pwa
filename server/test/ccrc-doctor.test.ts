@@ -1671,8 +1671,14 @@ const anyVerdictFor = (out: string, name: string): string | undefined =>
  *
  *  RAISED BY ONE AGAIN, on every platform (coordinator-first routing, plan Task 14):
  *  `approval-verifier-runnable` SKIPs - `healthy()` creates no `~/.cc-sessions`, so
- *  the box hosts no session whose hook could wait. */
-const HEALTHY_SKIPS = (process.platform === 'darwin' ? 3 : 0) + 9;   // +1 server-caps (no role): its block at the end; +1 update-sweep (no update.json on a healthy box); +1 approval-verifier-runnable (no registry)
+ *  the box hosts no session whose hook could wait.
+ *
+ *  RAISED BY ONE AGAIN, on every platform (coordinator-first routing, plan Task 16):
+ *  `approval-key-colocated` SKIPs - `healthy()` writes no server signing key
+ *  (`~/.ccrc/approval-signing.key`), which only a server that started with
+ *  coordination creates. Its sibling `approval-digest-mismatch` PASSes there (no
+ *  refusals journal), so it moves no count. */
+const HEALTHY_SKIPS = (process.platform === 'darwin' ? 3 : 0) + 10;   // +1 server-caps (no role): its block at the end; +1 update-sweep (no update.json on a healthy box); +1 approval-verifier-runnable (no registry); +1 approval-key-colocated (no server key)
 
 // ── the table itself ──────────────────────────────────────────────────────
 

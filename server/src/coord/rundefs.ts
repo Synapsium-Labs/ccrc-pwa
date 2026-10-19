@@ -444,3 +444,18 @@ export function isAskNudgeMail(m: { fromId: string; runId: number | null; subjec
     m.subject.startsWith(ASK_NUDGE_SUBJECT_PREFIX) &&
     /^\d+$/.test(m.subject.slice(ASK_NUDGE_SUBJECT_PREFIX.length));
 }
+
+/** The approvals lane's nudge-mail subject prefix (plan Task 16, D-5298): the mail that wakes a child's claimant to
+ *  rule on its permission prompt. One source for the queue side (`approvalNudgeSubject`) and the reader side
+ *  (`isApprovalNudgeMail`), as the ask nudge's pair has. */
+const APPROVAL_NUDGE_SUBJECT_PREFIX = 'approval:';
+
+export const approvalNudgeSubject = (approvalId: number): string => `${APPROVAL_NUDGE_SUBJECT_PREFIX}${approvalId}`;
+
+/** Is this mail row an approval nudge? Recorded and never pushed, for the ask nudge's reason (`isAskNudgeMail`): it
+ *  exists to keep the prompt off the operator's phone during the window, so its own delivery must not buzz it. */
+export function isApprovalNudgeMail(m: { fromId: string; runId: number | null; subject: string }): boolean {
+  return m.fromId === 'operator' && m.runId === null &&
+    m.subject.startsWith(APPROVAL_NUDGE_SUBJECT_PREFIX) &&
+    /^\d+$/.test(m.subject.slice(APPROVAL_NUDGE_SUBJECT_PREFIX.length));
+}

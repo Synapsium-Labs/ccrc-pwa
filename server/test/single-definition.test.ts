@@ -6492,7 +6492,8 @@ describe('the ask push body is built once, in server/src/askbody.ts (D-5302)', (
   it("watch.ts's ask raise sites call askPushBody, and no body there reads dialog.title", () => {
     const watch = stallCode(path.join(ccrcRoot, 'server/src/watch.ts'));
     expect(watch).toMatch(/import\s*\{[^}]*\baskPushBody\b[^}]*\}\s*from\s*'\.\/askbody\.js'/);
-    expect(watch.match(/body:\s*askPushBody\(/g) ?? []).toHaveLength(2);
+    // Three since plan Task 16: the approval hold's snapshotted push (`tryHoldApproval`) is the third raise site.
+    expect(watch.match(/body:\s*askPushBody\(/g) ?? []).toHaveLength(3);
     expect(watch).not.toMatch(/body:\s*dialog\.title/);
   });
 
@@ -6538,10 +6539,14 @@ describe('one tryHold decides every ask hold (D-5290)', () => {
     const rest = watch.slice(0, start) + watch.slice(end);
     expect(body.match(/\bthis\.hold\(/g) ?? []).toHaveLength(1);
     expect(rest).not.toMatch(/\bthis\.hold\(/);
-    expect(body).toMatch(/\.parentOfSession\(/);
+    // D-5530 (plan Task 16): the claimant decision moved, whole, into `coord/heldFor.ts`, which the approvals mint
+    // reads too: `tryHold` calls it, and the watcher reads `parentOfSession` nowhere else.
+    expect(body).toMatch(/\bheldFor\(/);
     expect(rest).not.toMatch(/\.parentOfSession\(/);
     expect(rest.match(/\bthis\.tryHold\(/g) ?? []).toHaveLength(3);
-    expect(body).toMatch(/\bclaimantMeasuredDead\(/);
+    const heldForSrc = stallCode(path.join(ccrcRoot, 'server/src/coord/heldFor.ts'));
+    expect(heldForSrc).toMatch(/\.parentOfSession\(/);
+    expect(heldForSrc).toMatch(/\bclaimantMeasuredDead\(/);
   });
 
   it('claimantMeasuredDead is defined in server/src/coord/reclaim.ts and read by the dead-coordinator sweep', () => {
@@ -6982,5 +6987,40 @@ describe('the approval wait\'s constants and canonical forms each have one home 
       'approvalDigestBytes', 'approvalRulingBytes']) {
       expect(holders(decl(c)), c).toEqual(['shared/api.ts']);
     }
+  });
+});
+
+// D-5298 / D-5441 (plan docs/superpowers/plans/2026-10-17-coordinator-first-routing.md, Task 16). APPENDED. The
+// approvals server half's vocabulary and constants each have one TypeScript home: the state map, the retention, the
+// release reasons, the refusal words and the three file names in `shared/api.ts`; the countdown window and its one
+// selection in `server/src/askwindow.ts` beside `ASK_GRACE_MS`; the claimant decision both lanes read in
+// `server/src/coord/heldFor.ts`. The doctor's bash spelling of the journal's name and the deny file's are documented
+// second copies, held by `approvals-doctor.test.ts` and `approvals-routes.test.ts`, which import the TypeScript ones.
+describe('the approvals server half\'s vocabulary and windows each have one home (D-5298, D-5441)', () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  const decl = (c: string): RegExp => new RegExp(`\\b(?:const|let|var|function)\\s+${c}\\b|\\btype\\s+${c}\\s*=`);
+  it('CONTROL: the pattern sees a declaration and passes over a use', () => {
+    expect(decl('ApprovalState').test('import { type ApprovalState, isApprovalState } from')).toBe(false);
+    expect(decl('approvalWindowMs').test('export function approvalWindowMs(agentId: string): number {')).toBe(true);
+    expect(decl('approvalWindowMs').test('const notifyAt = now + approvalWindowMs(agentId);')).toBe(false);
+  });
+  it('the shared vocabulary is declared once, in shared/api.ts', () => {
+    for (const c of ['APPROVAL_STATE_MAP', 'ApprovalState', 'isApprovalState', 'APPROVAL_INPUT_RETENTION_DAYS',
+      'ApprovalReleaseReason', 'APPROVAL_RELEASE_REASON_MAP', 'ApprovalRefusal', 'APPROVAL_REASON_MAX_CHARS',
+      'CHILD_DENY_SETTINGS_FILE', 'APPROVAL_CHILD_SHELL', 'APPROVAL_REFUSALS_LOG']) {
+      expect(holders(decl(c)), c).toEqual(['shared/api.ts']);
+    }
+  });
+  it('the countdown window and its selection live beside ASK_GRACE_MS', () => {
+    for (const c of ['APPROVAL_COUNTDOWN_WINDOW_MS', 'approvalWindowMs', 'ASK_GRACE_MS']) {
+      expect(holders(decl(c)), c).toEqual(['server/src/askwindow.ts']);
+    }
+  });
+  it('the one claimant decision lives in coord/heldFor.ts, and the hold and the mint both read it', () => {
+    expect(holders(decl('heldFor'))).toEqual(['server/src/coord/heldFor.ts']);
+    expect(holders(/\bheldFor\(/)).toEqual(['server/src/coord/heldFor.ts', 'server/src/coord/routes.ts', 'server/src/watch.ts']);
+  });
+  it('the 60 000 ms window is spelled nowhere but its home', () => {
+    expect(holders(/\b60_000\b[^\n]*(?:approval|countdown)|(?:approval|countdown)[^\n]*\b60_000\b/i)).toEqual(['server/src/askwindow.ts']);
   });
 });

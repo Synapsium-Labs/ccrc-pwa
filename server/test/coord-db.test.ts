@@ -678,10 +678,11 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // path-identity spec 2026-10-12 §5.2), MIGRATIONS[20]
     // (asks.releaseReason, D-5290, coordinator-first routing §5.2),
     // MIGRATIONS[21] (the six delegation_* tables, delegation broker wave 3,
-    // spec §5.2) and MIGRATIONS[22] (runs.unattributed, D-5298,
-    // coordinator-first Task 11b).
-    expect(COORD_SCHEMA_VERSION).toBe(23);
-    expect(MIGRATIONS.length).toBe(23);
+    // spec §5.2), MIGRATIONS[22] (runs.unattributed, D-5298,
+    // coordinator-first Task 11b) and MIGRATIONS[23] (the approvals table,
+    // D-5298, coordinator-first Task 16).
+    expect(COORD_SCHEMA_VERSION).toBe(24);
+    expect(MIGRATIONS.length).toBe(24);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -742,9 +743,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // settings §8), MIGRATIONS[17] (dead_claimants), MIGRATIONS[18]
     // (dead_coordinator_breaker_state), MIGRATIONS[19]
     // (collect_lane_settings), MIGRATIONS[20] (asks.releaseReason),
-    // MIGRATIONS[21] (the six delegation_* tables) and MIGRATIONS[22]
-    // (runs.unattributed); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(23);
+    // MIGRATIONS[21] (the six delegation_* tables), MIGRATIONS[22]
+    // (runs.unattributed) and MIGRATIONS[23] (approvals); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(24);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
@@ -2126,7 +2127,7 @@ describe('coord.db: migration 23 — runs.unattributed (D-5298, coordinator-firs
     });
     raw.close();
     const db = openCoordDb(p);
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(23);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
     expect(db.prepare('SELECT program, claimedBy, unattributed FROM runs').all())
       .toEqual([{ program: 'program-a', claimedBy: 'project-a-calm-mesa', unattributed: 0 }]);
     db.close();
@@ -2141,5 +2142,35 @@ describe('coord.db: migration 23 — runs.unattributed (D-5298, coordinator-firs
     if (!('id' in a) || !('id' in b)) throw new Error('fixture: both opens must succeed');
     expect(coord.db.prepare('SELECT id, unattributed FROM runs ORDER BY id').all())
       .toEqual([{ id: a.id, unattributed: 1 }, { id: b.id, unattributed: 0 }]);
+  });
+});
+
+describe('coord.db: migration 24 — the approvals table (D-5298, coordinator-first Task 16)', () => {
+  it('reaches a database ALREADY at user_version 23 and keeps its runs and asks rows; the new table starts empty', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < 23; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec('PRAGMA user_version = 23');
+      raw.exec("INSERT INTO programs (slug, title, createdAt, state) VALUES ('program-a', 'A', 1, 'active')");
+      raw.exec("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) " +
+               "VALUES ('program-a', 1, 1, 'project-a', 'planned', 'project-a-calm-mesa', 1)");
+      raw.exec('INSERT INTO asks (at, childId, parentId, runId, askKey, askAt, dialogId, question, options, state) ' +
+               "VALUES (1, 'project-a-quiet-basin', 'project-a-calm-mesa', NULL, 'k', 1, 'd', 'Which colour?', '[\"Red\"]', 'held')");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(24);
+    expect(db.prepare('SELECT program, claimedBy FROM runs').all())
+      .toEqual([{ program: 'program-a', claimedBy: 'project-a-calm-mesa' }]);
+    expect(db.prepare('SELECT childId, state FROM asks').all())
+      .toEqual([{ childId: 'project-a-quiet-basin', state: 'held' }]);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM approvals').get()).toEqual({ n: 0 });
+    const cols = (db.prepare("SELECT name FROM pragma_table_info('approvals')").all() as { name: string }[]).map((r) => r.name);
+    expect(cols).toEqual(['id', 'childId', 'parentId', 'runId', 'digest', 'nonce', 'agentId', 'tool', 'inputRedacted',
+      'truncated', 'class', 'state', 'releaseReason', 'askAt', 'notifyAt', 'ruledAt', 'verdict', 'reason', 'ruling',
+      'answeredBy', 'toolUseId', 'corrected']);
+    db.close();
   });
 });

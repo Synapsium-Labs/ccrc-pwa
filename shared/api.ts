@@ -11359,3 +11359,132 @@ export interface ApprovalRulingAnswer {
 /** `GET /api/approvals/key`'s answer: the server's public key, PEM SPKI, which the install spine pins once into the
  *  fleet box's `~/.ccrc/approval-signing.pub` (spec §6.4). */
 export interface ApprovalKeyAnswer { readonly v: 1; readonly alg: 'ed25519'; readonly publicKey: string }
+
+// ── approvals, the server half (plan Task 16, D-5298, D-5440, D-5441, D-5530, D-5531) ─────────────────────────────
+
+/**
+ * An `approvals` row's state (spec §6.3 server half, step 5), one home, read through `isApprovalState`:
+ *  `held`      minted for the run's attributed claimant, inside its window (`notifyAt`); the operator's push waits.
+ *  `allowed`   the held-for claimant allowed it, and the server signed the ruling (an `ordinary` row only).
+ *  `denied`    the held-for claimant denied it, signed the same way.
+ *  `declined`  the claimant handed it over (`POST /api/approvals/:id/release`): the operator's push fires at once,
+ *              and the hook stops (D-5440). Terminal.
+ *  `released`  minted released (a `releaseReason`: forbidden, truncated, unparseable, or no claimant to hold it for,
+ *              D-5530, D-5531), or held and lapsed at `notifyAt`. The hook has returned or stops; the operator has it.
+ *  `operator`  the operator answered the dialog (`POST /api/sessions/:id/dialog`), or the painted dialog closed with
+ *              no ruling taken: every approval has an answering principal. Terminal.
+ *  `stale`     the hook's ceiling passed (`askAt + APPROVAL_HOOK_WAIT_S`) with no principal. Terminal.
+ *  `unknown`   a token this build does not know, read off disk; never written.
+ * `declined`, `released`, `operator` and `stale` are `APPROVAL_HOOK_STOP_STATES`: the ruling route answers them with
+ * no ruling, and the hook stops on that answer (D-5440).
+ */
+export type ApprovalState = 'held' | 'allowed' | 'denied' | 'declined' | 'released' | 'operator' | 'stale' | 'unknown';
+
+export const APPROVAL_STATE_MAP: Readonly<Record<ApprovalState, true>> = {
+  held: true, allowed: true, denied: true, declined: true, released: true, operator: true, stale: true, unknown: true,
+};
+
+export const APPROVAL_STATES: readonly ApprovalState[] = Object.keys(APPROVAL_STATE_MAP) as ApprovalState[];
+
+export function isApprovalState(v: unknown): v is ApprovalState {
+  return typeof v === 'string' && (APPROVAL_STATES as readonly string[]).includes(v);
+}
+
+/** How long an approval row keeps its redacted input (spec §6.7): after this many days `pruneApprovalInputs` clears
+ *  the `inputRedacted` column and keeps the row as the journal. The asks' question text follows the same retention. */
+export const APPROVAL_INPUT_RETENTION_DAYS = 30;
+
+/** Why an approval row was minted `released` (spec §6.3 server steps 1 and 2): the asks lane's fail-closed words
+ *  (`AskMintReleaseReason`, D-5530, D-5531: no claimant to hold it for, or a parent this tick cannot vouch for), and
+ *  the request's own three: `forbidden` (the classifier's class), `truncated` (the hook sent no canonical string, over
+ *  `APPROVAL_REQUEST_MAX_BYTES`), `unparseable` (the canonical string is not a request's five-element array). The
+ *  parent is never asked about any of them, and the operator's push fires at once. `unknown` is the reader's degrade. */
+export type ApprovalReleaseReason = AskMintReleaseReason | 'forbidden' | 'truncated' | 'unparseable' | 'unknown';
+export type ApprovalMintReleaseReason = Exclude<ApprovalReleaseReason, 'unknown'>;
+
+export const APPROVAL_RELEASE_REASON_MAP: Readonly<Record<ApprovalReleaseReason, true>> = {
+  'parent-not-live': true, 'parent-unmeasured': true, 'run-unclaimed': true, 'run-other-programme': true,
+  'run-unattributed': true, forbidden: true, truncated: true, unparseable: true, unknown: true,
+};
+
+export function isApprovalReleaseReason(v: unknown): v is ApprovalReleaseReason {
+  return typeof v === 'string' && Object.prototype.hasOwnProperty.call(APPROVAL_RELEASE_REASON_MAP, v);
+}
+
+/**
+ * The words the approval routes refuse with in `error` (plan Task 16), each answered at its one status by
+ * `REFUSAL_STATUS` (`shared/refusal.ts`, D-5381), never spelled at a call site:
+ *  `not-a-child`         the session's `ChildMark` is not `{kind: 'child', runId}`, its run is gone, no open run names
+ *                        it, or it is its own claimant: nothing minted (spec §6.3 server step 1, amended by D-5530).
+ *  `approvals-disabled`  either kill switch is on (`$REG/approvals-disabled`, `~/.ccrc/approvals-disabled`).
+ *  `single-box`          this server's role is `both` and the operator has not placed `~/.ccrc/approvals-single-box`.
+ *  `deny-not-engaged`    the child's `.deny-settings` is not the managed deny file's digest, or its `.childshell`
+ *                        does not show the bash pin (D-5360's requirement, Task 15's two fields).
+ *  `digest-mismatch`     the digest is not sha256 over the canonical string sent, or that string does not
+ *                        re-canonicalise to itself. Journaled for doctor's `approval-digest-mismatch`.
+ *  `version-unverified`  the child's live Claude Code version is not in `APPROVAL_HOOK_VERSIONS`.
+ *  `approval-released`   the row was minted `released` (`releaseReason` in the body): the operator has it.
+ *  `unknown-approval`    no such row, or (on the ruling route) another nonce: answered alike, so a nonce is not probed.
+ *  `approval-unreadable` the row could not be read back.
+ *  `parent-changed`      the caller is the row's stored parent, but the child's binding no longer answers it.
+ *  `guard-forbidden`, `guard-escalate`  an allow of a row the classifier did not class `ordinary`.
+ *  `declined`            the claimant handed this row over and may not rule it later.
+ *  `hook-gone`           the row's window has passed: the hook has returned and cannot print a ruling (D-5441).
+ *  `already-ruled`       a principal (the claimant or the operator) already acted on the row.
+ */
+export const APPROVAL_REFUSALS = [
+  'not-a-child', 'approvals-disabled', 'single-box', 'deny-not-engaged', 'digest-mismatch',
+  'version-unverified', 'approval-released', 'unknown-approval', 'approval-unreadable', 'parent-changed',
+  'guard-forbidden', 'guard-escalate', 'declined', 'hook-gone', 'already-ruled',
+] as const;
+export type ApprovalRefusal = (typeof APPROVAL_REFUSALS)[number];
+
+export function isApprovalRefusal(v: unknown): v is ApprovalRefusal {
+  return typeof v === 'string' && (APPROVAL_REFUSALS as readonly string[]).includes(v);
+}
+
+/** `POST /api/approvals/:id/rule`'s body: the attribution pair, the verdict and a reason (at most
+ *  `APPROVAL_REASON_MAX_CHARS`, one line). Nothing else: `permanent`, `updatedPermissions` and `mode` are refused
+ *  `400`, because a ruling allows once only (spec §6.5 procedure rules). */
+export interface ApprovalRuleBody {
+  readonly fromId: string;
+  readonly fromUuid: string;
+  readonly verdict: 'allow' | 'deny';
+  readonly reason: string;
+}
+export const APPROVAL_REASON_MAX_CHARS = 1000;
+
+/** `GET /api/approvals/:id`'s row as the held-for claimant, or the operator, reads it: the redacted input only (null
+ *  after the retention prune), never the digest's unredacted text, which the server holds only for the request. */
+export interface ApprovalView {
+  readonly id: number;
+  readonly childId: string;
+  readonly parentId: string;
+  readonly runId: number | null;
+  readonly agentId: string;
+  readonly tool: string;
+  readonly input: string | null;
+  readonly truncated: boolean;
+  readonly class: string;
+  readonly state: ApprovalState;
+  readonly releaseReason: ApprovalReleaseReason | null;
+  readonly askAt: number;
+  readonly notifyAt: number;
+  readonly ruledAt: number | null;
+  readonly verdict: 'allow' | 'deny' | null;
+  readonly reason: string | null;
+  readonly answeredBy: string | null;
+  readonly toolUseId: string | null;
+}
+
+/** The managed deny file's name in the fleet box's `~/.cc-sessions` (plan Task 15): the server reads it to learn the
+ *  digest a child's `.deny-settings` must equal (`409 deny-not-engaged`). `ccd/install-session-hooks.sh` writes it. */
+export const CHILD_DENY_SETTINGS_FILE = 'child-deny.settings.json';
+
+/** The shell a `.child` spawn pins its Bash tool to (D-5360's requirement, D-5391): the server mints no ruling for a
+ *  child whose `.childshell` names anything else, because the classifier's grammar is bash's. */
+export const APPROVAL_CHILD_SHELL = '/bin/bash';
+
+/** The server box's journal of `409 digest-mismatch` refusals, under its `~/.ccrc` (D-5490): one line each,
+ *  `<epoch ms> digest-mismatch <session id>`. Doctor's `approval-digest-mismatch` counts the last seven days. */
+export const APPROVAL_REFUSALS_LOG = 'approval-refusals.log';

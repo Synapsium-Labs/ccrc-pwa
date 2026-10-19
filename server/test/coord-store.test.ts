@@ -2432,6 +2432,18 @@ describe('CoordStore: feed (Task 10)', () => {
     }
     expect(s.feedEvents(10).map((e) => e.kind)).toEqual(['ask', 'done', 'merged', 'mail', 'run']);
   });
+
+  // D-5298: the writer archives every body redacted, so a body holding a token-shaped run (a commit SHA, a compaction
+  // uuid) is stored masked. `hasFeedEvent` is asked with the RAW body (sweepLanding, the idle nudge), so it must
+  // compare in the stored form, or an already-told record reads as never told and is announced again.
+  it('hasFeedEvent finds a record whose body the writer stored redacted, asked with the raw body', () => {
+    const s = store();
+    const body = 'removed from the queue at 12:00 (head 0123456789abcdef0123456789abcdef01234567)';
+    s.recordFeedEvent('epoch-1', { seq: 1, at: 1000, kind: 'queue', sessionId: 'cc-a', title: 't', body, runId: null });
+    expect(s.feedEvents(10)[0]!.body).not.toContain('0123456789abcdef0123456789abcdef01234567');
+    expect(s.hasFeedEvent('queue', 'cc-a', body)).toBe(true);
+    expect(s.hasFeedEvent('queue', 'cc-a', 'another body')).toBe(false);
+  });
 });
 
 // Fix round 1, findings 2/4: `mailForRecipient`'s LIMIT used to be applied

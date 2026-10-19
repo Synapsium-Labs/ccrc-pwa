@@ -2175,6 +2175,18 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (typeof body.dialogId !== 'string' || typeof body.optionIndex !== 'number') {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
+    // D-5298 (spec §6.3 server step 7): an approval dialog records the operator on the child's open approval rows
+    // BEFORE any key, so every approval has an answering principal and a claimant's later ruling is
+    // `409 already-ruled`. Read off the watcher's hookstate; with none to read, the rows are marked anyway — the
+    // operator answering is the one principal that always wins (D-5491).
+    const hs = watcher?.currentHookStates().get(id) ?? null;
+    if (hs === null || (hs.ask !== null && 'approval' in hs.ask)) {
+      try {
+        deps.coord?.markApprovalOperator(id, Date.now());
+      } catch (err) {
+        console.warn(`ccrc-server: recording the operator on ${id}'s approval rows failed (${err instanceof Error ? err.message : String(err)}) — answering anyway`);
+      }
+    }
     const res = await answerDialog(sendDeps, id, body.dialogId, body.optionIndex);
     answeredFrame(id, 'dialog', res);
     return res.ok ? res : reply.code(409).send(res);
