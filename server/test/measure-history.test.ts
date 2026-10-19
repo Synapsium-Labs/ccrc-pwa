@@ -742,10 +742,13 @@ describe('W2-3 Task 2: the gate module is pure and its words are its own', () =>
   const LIB_SPEC = '../ccd/history/lib.mjs';
   const gateSrc = (): string => readFileSync(GATE, 'utf8');
   const gate = async () => import('../../deploy/history-gate.mjs');
-  /** Every specifier a static import or re-export names, single- or multi-line, and every bare `import '…'`. */
+  /** Every specifier a static import or re-export names, and every bare `import '…'`. It is anchored at no line start
+   *  and skips no text between the keyword and the quote, so a comment (with an apostrophe in it) inside a brace list,
+   *  or an import after a `;` on the same line, cannot hide one. The gate's own text never spells a quote straight
+   *  after the word from, except in its one import line, so a hit that is no import is a red too. */
   const specifiers = (text: string): string[] => [
-    ...[...text.matchAll(/^\s*(?:import|export)\b[^;'"]*?\bfrom\s*['"]([^'"]+)['"]/gm)].map((m) => m[1]!),
-    ...[...text.matchAll(/^\s*import\s*['"]([^'"]+)['"]/gm)].map((m) => m[1]!),
+    ...[...text.matchAll(/\bfrom\s*['"]([^'"]+)['"]/g)].map((m) => m[1]!),
+    ...[...text.matchAll(/\bimport\s*['"]([^'"]+)['"]/g)].map((m) => m[1]!),
   ];
   /** W2-D11's banned spellings, read over the WHOLE text: a comment or a string that spells one is a red too. */
   const FORBIDDEN: ReadonlyArray<readonly [string, RegExp]> = [
@@ -756,6 +759,12 @@ describe('W2-3 Task 2: the gate module is pure and its words are its own', () =>
     ['performance.', /\bperformance\.[A-Za-z_$]/],
     ['require(', /\brequire\s*\(/],
     ['import(', /\bimport\s*\(/],
+    // No random source and no clock under another spelling either (W2-D11): the crypto helpers, the web-crypto fill,
+    // the module-qualified form, and a bare clock call (`Date(` without `new`).
+    ['randomBytes, randomInt, randomUUID, randomFill', /\brandom(?:Bytes|Int|UUID|Fill(?:Sync)?)\b/],
+    ['getRandomValues', /\bgetRandomValues\b/],
+    ['crypto.random', /\bcrypto\.random/],
+    ['a bare Date(', /(?<!new\s+)\bDate\s*\(/],
   ];
   /** Module-scope declarations only (column 0), the names a reader of the gate could import. */
   const topLevelNames = (text: string): string[] =>
@@ -784,15 +793,23 @@ describe('W2-3 Task 2: the gate module is pure and its words are its own', () =>
   it('CONTROL: the specifier reader, the banned patterns, the declaration reader and the class scan each see what they look for', () => {
     expect(specifiers("import {\n  a,\n  b,\n} from 'node:fs';\nimport 'node:path';\nexport { c } from './c.mjs';"))
       .toEqual(['node:fs', './c.mjs', 'node:path']);
+    // Bypass shapes the first reader missed: a comment with an apostrophe inside the brace list, and an import after a `;`.
+    expect(specifiers("import {\n  readFileSync, // the record's file\n} from 'node:fs';"), 'a comment with an apostrophe').toEqual(['node:fs']);
+    expect(specifiers("export const a = 1; import { readFileSync } from 'node:fs';"), 'an import after a semicolon').toEqual(['node:fs']);
     const planted: Record<string, string> = {
       'process.': 'const h = process.env.HOME;', 'Date.now': 'const t = Date.now();', 'new Date': 'const d = new Date(0);',
       'Math.random': 'const r = Math.random();', 'performance.': 'const p = performance.now();',
       'require(': "const fs = require('node:fs');", 'import(': "const m = await import('node:fs');",
+      'randomBytes, randomInt, randomUUID, randomFill': 'const b = randomBytes(8) + randomInt(9) + randomUUID() + randomFillSync(x);',
+      'getRandomValues': 'globalThis.crypto.getRandomValues(a);', 'crypto.random': 'const u = crypto.randomUUID();',
+      'a bare Date(': 'const t = Date();',
     };
     for (const [word, re] of FORBIDDEN) {
       expect(re.test(planted[word]!), word).toBe(true);
       expect(re.test('the sweep process. A new Dated row; imports are static'), word).toBe(false);
     }
+    // `new Date(0)` belongs to the `new Date` row, so the bare-call row must not double-count it.
+    expect(FORBIDDEN.find(([w]) => w === 'a bare Date(')![1].test('const d = new Date(0);')).toBe(false);
     expect(topLevelNames('export const EXIT = 1;\nconst k = 2;\n  const inner = 3;\nexport function f() {}\nclass C {}'))
       .toEqual(['EXIT', 'k', 'f', 'C']);
     expect(declares(OWN_WORDS[0]).test(`export const ${OWN_WORDS[0]} = Object.freeze(['sha']);`)).toBe(true);
@@ -822,8 +839,10 @@ describe('W2-3 Task 2: the gate module is pure and its words are its own', () =>
   });
 
   it('W2-D12 (D-5774): exactly one file under deploy/ and server/test/ declares each of the gate\'s own word lists, the gate', () => {
-    const corpus = [...filesUnder(path.join(ROOT, 'deploy'), /\.mjs$/), ...filesUnder(path.join(ROOT, 'server', 'test'), /\.ts$/)];
-    expect(corpus.map((f) => path.relative(ROOT, f))).toEqual(expect.arrayContaining(['deploy/history-gate.mjs', 'server/test/measure-history.test.ts']));
+    // W2-D12 says "a second file under deploy/ or server/test": every .ts, .mjs and .js file there, not .ts alone.
+    const corpus = [...filesUnder(path.join(ROOT, 'deploy'), /\.mjs$/), ...filesUnder(path.join(ROOT, 'server', 'test'), /\.(?:ts|mjs|js)$/)];
+    expect(corpus.map((f) => path.relative(ROOT, f))).toEqual(expect.arrayContaining([
+      'deploy/history-gate.mjs', 'server/test/measure-history.test.ts', 'server/test/run-tmp.globalsetup.mjs']));
     const texts = new Map(corpus.map((f) => [f, readFileSync(f, 'utf8')] as const));
     for (const name of OWN_WORDS) {
       const re = declares(name);
@@ -892,8 +911,9 @@ describe('W2-3 Task 2: the gate module is pure and its words are its own', () =>
     expect(g.SUBSTREAMS, 'the pilot\'s label is used only with the pilot\'s own seed').not.toContain(g.PILOT_SUBSTREAM);
     expect(g.SUBSTREAMS, '\'assign\' is a hash label, not a substream').not.toContain(g.ASSIGN_LABEL);
     expect(typeof g.METRIC_TEXT).toBe('string');
-    expect(g.METRIC_TEXT).toContain('recall calls per post-compaction turn');
-    expect(g.METRIC_TEXT).toContain('first K assistant turns');
+    // The ruled text, whole, built by concatenation as the module builds it; the open record's `metric` must equal it.
+    expect(g.METRIC_TEXT).toBe('recall calls per post-compaction turn, reported for both arms; gated: the share of treatment '
+      + 'windows with at least one ccrc history read-verb call over the first K assistant turns after a main boundary');
   });
 
   it('familyKey is canonical JSON of (store_id, ccrc_id, generation): equal ids on two stores are two keys', async () => {
