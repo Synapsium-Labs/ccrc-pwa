@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=1f967ea30991d4a1cd10ff278d8a6050c215ece8de55b5f5c0484881165c8ee9
+# ccrc:generated 1 sha256=97c92504fbbdb497d2437a33b4d057444c8538532a865ea6edec8c6811c3d31b
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -21009,12 +21009,12 @@ _route_type_model() {   # id class wrapper -> 0 acknowledged | 1 unconfirmed | 2
 # reader that failed) or could not recognise what it read (a /model or /effort
 # command with no acknowledgement in the wording this ccd knows). A choice IS
 # lost without a line in a few cases, each named in README: a command within
-# TYPED_MATCH_WINDOW after a rotated-out keystroke, a round trip through a
-# non-Anthropic lane, a /clear, an unrostered source account, a deploy-transition
-# /model whose journal a `route --apply` keystroke opened first, a route field
-# whose mtime cannot be read, and an INTERRUPTED stop (one that died between its
-# keep, which leaves the marker, and its kill: the pane survives marked, so its
-# next stop or revival does not read again).
+# TYPED_MATCH_WINDOW after a rotated-out keystroke, a round trip through a non-Anthropic
+# lane, a uuid that the background follow or a continuation chain moves without a promotion
+# (a pane-observed /clear does promote), an unrostered source account, a deploy-transition
+# /model whose journal a `route --apply` keystroke opened first, a route field whose mtime
+# cannot be read, and an INTERRUPTED stop (one that died between its keep, which leaves the
+# marker, and its kill: the pane survives marked, so its next stop or revival does not read again).
 #
 # ONE READ PER RESTART. Every call leaves `$REG/<id>.choicekept`, and every
 # `_spawn_start` removes it, so the marker means "a keep ran since the last

@@ -213,9 +213,9 @@ declare -A TICKS=() PARENT=() PSTATE=()
 # pid -> TICKS[pid], PARENT[pid], PSTATE[pid]; rc 1 means unreadable, or a state letter outside [A-Z] (Linux's `t`, a tracing
 # stop, included, though its stat reads fine). Callers differ on rc 1: the box and server checks read it as unmeasurable and so
 # fail safe (a `carry` row, never a stop); the dead scope's own process loop skips the process (the box check then covers it);
-# the live pane read, the live `old` listing and the parent walk treat it as "skip", reporting only, with no stop authority (a
-# traced process in a live scope is left out of the `old` lines; a traced pane leaves TICKS[pane] unset, so its MCP children
-# older than a day are listed). Fork-free: it runs per process per tick.
+# the live pane read and the live `old` listing skip it (a traced process in a live scope is left out of the `old` lines), but the
+# parent walk ENDS there: a descendant behind a traced process is never matched to the pane, so it is listed `old` when older than
+# a day (as are a traced pane's MCP children: TICKS[pane] stays unset). Reporting only, no stop authority. Fork-free, per tick.
 _ss_stat() {
   local s rest
   local -a f

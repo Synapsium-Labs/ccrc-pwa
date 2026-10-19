@@ -203,6 +203,12 @@ describe('well-formed notifications that are not pressure kills read as non-even
     ['a single-task killed envelope whose status carries an attribute', note('k1').replace('<status>killed</status>', '<status kind="bg">killed</status>')],
     ['a single-task killed envelope and a second, unreadable task id', note('k1').replace('<tool-use-id>', '<task-id>e.4</task-id>\n<tool-use-id>')],
     ['one plain event element and an unclosed event opener with an attribute', eventNote('ev1').replace('</event>', '</event>\n<event kind="x">')],
+    // The killed arm counts summary openers too: one readable non-pressure summary beside a second the scanner
+    // cannot read (the pressure text with raw markup inside it) is never the plain "not this event" reading.
+    ['a single-task killed envelope, one readable non-pressure summary and a second, unreadable summary (raw markup)',
+      note('k1', 'killed', 'stopped').replace('</summary>', `</summary>\n<summary>${PRESSURE}</summary>`)],
+    ['a single-task killed envelope, an unreadable pressure summary (raw markup) and then one readable non-pressure summary',
+      note('k1', 'killed', 'stopped').replace('<summary>', `<summary>${PRESSURE}</summary>\n<summary>`)],
   ])('stays unmeasured: %s', (_name, text) => {
     transcript(U1, [row(text), row(note('real'))]);
     expect(read()).toEqual({ ...clean(1, 1, 1), reading: 'partial', unmeasured_notifications: 1 });
