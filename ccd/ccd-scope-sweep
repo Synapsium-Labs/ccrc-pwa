@@ -120,7 +120,10 @@
 # `ccrc doctor` READS this record and never re-derives it.
 #
 # OUTPUT. Silent on an ordinary tick; one line when a scope is first seen dead,
-# first reaches `would-stop` or `held`, or is stopped. Refusals go to stderr,
+# when its measured verdict changes to `would-stop` or `held`, or when it is stopped.
+# A `carry` row keeps the bounded clock pair, never the verdict, so the next measured
+# `would-stop` or `held` after a carry is announced again on the carried clock: a
+# re-announcement, not a first reach and not "first seen now". Refusals go to stderr,
 # exit 1. A paused sweep is silent (it runs every minute: a line a tick is noise).
 # The record is written whole to a temporary beside it and renamed over it: a
 # failed open, header, body or rename exits 1, says `previous record retained`
@@ -204,7 +207,9 @@ fi
 
 # ── /proc readers: a process's start (ticks since boot), its age, its parent ──
 declare -A TICKS=() PARENT=() PSTATE=()
-_ss_stat() {   # pid -> TICKS[pid], PARENT[pid]; rc 1 unreadable. Fork-free: it runs per process per tick.
+# pid -> TICKS[pid], PARENT[pid]; rc 1 means unreadable, or a state letter outside [A-Z] (Linux's `t`, a tracing stop, included,
+# though its stat reads fine), which the box and server checks read as unmeasurable and so fail safe. Fork-free: it runs per process per tick.
+_ss_stat() {
   local s rest
   local -a f
   [[ -n "${TICKS[$1]+x}" ]] && return 0
@@ -362,7 +367,9 @@ while read -r u _; do
     if (( capped )); then _ss_carry parent-hop-cap live; elif (( ${#olds[@]} )); then OUT+=("${olds[@]}"); fi   # a chain it could not walk lists nothing
     continue
   fi
-  # DEAD. Every predicate measured; any one that cannot be carries the old line.
+  # DEAD. Every predicate measured; any one that cannot be writes a `carry` row (its reason and the bounded clock pair, never
+  # a verdict) and skips the scope: the next tick that measures all of them judges it on that carried clock, and a `would-stop`
+  # or `held` it then reaches is announced again (PREVV is `carry`, not the old verdict).
   youngest=-1 oldest=-1
   for p in "${procs[@]}"; do
     _ss_stat "$p" || continue   # unreadable: one that still exists makes _ss_box below unmeasurable, one that has gone has no ns/net to read

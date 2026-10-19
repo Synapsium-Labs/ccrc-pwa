@@ -65,7 +65,8 @@ function proc(pid: number, o: { age: number; comm?: string; ppid?: number; cg?: 
   const comm = o.comm ?? 'node';
   const ticks = (UP - o.age) * 100;
   const state = o.state ?? 'S';
-  if (!/^[A-Z]$/.test(state)) throw new Error(`invalid fixture process state ${state}`);
+  // `t` is Linux's tracing stop (a process under ptrace): readable, yet outside the sweep's `[A-Z]` states.
+  if (!/^[A-Z]$/.test(state) && state !== 't') throw new Error(`invalid fixture process state ${state}`);
   // `pid (comm) state ppid …` with the start time as field 22 — the comm carries a space and a paren, as real ones can
   fs.writeFileSync(path.join(d, 'stat'), `${pid} (${comm}) ${state} ${o.ppid ?? 1} ${pid} ${pid} 0 -1 4194560 0 0 0 0 0 0 0 0 20 0 1 0 ${ticks} 1000 10 0\n`);
   fs.writeFileSync(path.join(d, 'comm'), `${comm}\n`);
@@ -413,7 +414,7 @@ describe('what the sweep never stops, armed and inert or not', () => {
 
 // ── UNMEASURABLE SKIPS THE SCOPE (NOT THE TICK); LIVE RESETS ────────────────
 
-describe('a value it cannot measure skips that scope for the tick — the old line carried, the tick run to its end', () => {
+describe('a value it cannot measure skips that scope for the tick — a carry row keeps its clock pair, the tick run to its end', () => {
   /** A dead scope beside the unmeasurable one, measurable: first seen this tick (its server is gone). */
   const companion = (): string => {
     proc(3900, { age: 2 * 86400, cg: cgOf(unitName(9)) });
@@ -746,6 +747,123 @@ describe('wave 4b residue: carries, zombies and complete record writes', () => {
     expect(run().code).toBe(0);
     expect(rows('dead')[u]).toMatchObject({ first: String(UP), verdict: 'report', why: 'dead-under-6h' });
     expect(stops()).toEqual([]);
+  });
+
+  // F3 (fix round 1): the table above never shows the half-pair guard letting a half pair be TRUSTED. `08` and 17 digits are
+  // refused by CARRY_RE first, `123` is below the scope's start so the `first < born` bound resets it, and with the guard
+  // deleted `none cpu0=7` aborts the tick (`none` in `(( ))` under `set -u`: an exit-1 red, not a trusted clock). A numeric
+  // `first` INSIDE [born, UP] with the other half `none` reaches the guard alone: without it the pair is trusted (first kept,
+  // cpu0 `none` read as "moved"), whatever the regex, the age bounds or shell arithmetic do.
+  it('a malformed carry clock whose first is a number inside the scope\'s life and whose cpu0 is none is not trusted: the half-pair guard alone', () => {
+    const u = inert(1);
+    const born = Math.floor(Number(/^ActiveEnterTimestampMonotonic=(\d+)$/m.exec(fs.readFileSync(path.join(fx.base, 'show', u), 'utf8'))![1]) / 1_000_000);
+    const first = UP - 7 * HOUR;                      // the fixture scope's own clocks: born 9 days ago, now UP
+    expect(first, 'inside [born, UP]: no bound resets it').toBeGreaterThanOrEqual(born);
+    expect(first).toBeLessThanOrEqual(UP);
+    fs.writeFileSync(STATE(), `# ccd-scope-sweep v1 tick=1 up=1 mode=shadow\ncarry ${u} state=unknown first=${first} cpu0=none why=child-cgroup\n`);
+    arm();
+    expect(run().code).toBe(0);
+    expect(rows('dead')[u]).toMatchObject({ first: String(UP), verdict: 'report', why: 'dead-under-6h' });
+    expect(stops()).toEqual([]);
+  });
+
+  // F2 (fix round 1): `_ss_stat` refuses a state letter outside [A-Z] as unreadable, and Linux reports a ptrace-stopped
+  // process as `t` — a READABLE stat. The approved policy is fail-safe, kept as it is: a traced process anywhere on the box
+  // makes the box check unmeasurable, and a traced tmux server makes the server check unmeasurable. Either way the scope is
+  // carried and nothing is judged or stopped. A broader state vocabulary is not authorised here.
+  it.each(['S', 't'])('an unrelated process on the box in state %s: only the tracing stop makes the box check unmeasurable', (state) => {
+    const u = inert(1);
+    proc(3500, { age: 2 * 86400, state });
+    arm();
+    expect(run().code).toBe(0);
+    if (state === 't') {
+      expect(rows('carry')[u]).toEqual({ state: 'dead', first: String(UP - 7 * HOUR), cpu0: '7255660000', why: 'box-stat' });
+      expect(rows('dead')[u]).toBeUndefined();
+      expect(stops()).toEqual([]);
+    } else {
+      expect(rows('carry')[u]).toBeUndefined();
+      expect(rows('dead')[u]).toMatchObject({ verdict: 'stopped', why: 'none' });
+      expect(stops()).toEqual([`--user stop --no-block ${u}`]);
+    }
+  });
+
+  it('the scope\'s tmux server in a tracing stop (state t): carried as server-stat, unknown, never judged or stopped', () => {
+    proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)) });
+    proc(5000, { age: 30 * 86400, comm: 'tmux: server', cg: '/ccrc-tmux-server.scope', state: 't' });
+    const u = scope(1, { pane: 3001, server: 5000, procs: [3001] }); seen(u, 7 * HOUR, 7255660000);
+    arm();
+    expect(run().code).toBe(0);
+    expect(rows('carry')[u]).toEqual({ state: 'unknown', first: String(UP - 7 * HOUR), cpu0: '7255660000', why: 'server-stat' });
+    expect(rows('dead')[u]).toBeUndefined();
+    expect(stops()).toEqual([]);
+  });
+
+  // F4 (fix round 1): a carry row keeps the bounded clock pair, never the verdict (PREVV becomes `carry`), so the next
+  // measured `would-stop` or `held` after a carry is announced AGAIN on the carried clock. That is a re-announcement, not a
+  // first reach, and not "first seen now": the clock is the original one. Pinned as the approved behaviour.
+  const sayLines = (out: string, u: string): string[] => out.split('\n').filter((l) => l.includes(u));
+  const deadMinutes = (line: string): number => Number(/ — dead (\d+) min,/.exec(line)![1]);
+
+  it('would-stop -> carry -> would-stop (shadow): the carry tick is silent for it, the next would-stop is announced again on the ORIGINAL clock', () => {
+    const u = inert(1);
+    const orig = { first: String(UP - 7 * HOUR), cpu0: '7255660000' };
+    const t1 = run();
+    expect(t1.code, t1.err).toBe(0);
+    expect(rows('dead')[u]).toMatchObject({ verdict: 'would-stop', ...orig });
+    expect(sayLines(t1.out, u)).toHaveLength(1);
+    expect(sayLines(t1.out, u)[0]).toContain(`${u} would-stop`);
+
+    const child = path.join(fx.cg, cgOf(u), 'nested');
+    fs.mkdirSync(child);                              // one predicate unmeasurable this tick
+    const t2 = run();
+    expect(t2.code, t2.err).toBe(0);
+    expect(rows('carry')[u]).toEqual({ state: 'unknown', ...orig, why: 'child-cgroup' });
+    expect(rows('dead')[u]).toBeUndefined();
+    expect(sayLines(t2.out, u), 'a carry says nothing').toEqual([]);
+
+    fs.rmdirSync(child);                              // measurable again
+    const t3 = run();
+    expect(t3.code, t3.err).toBe(0);
+    expect(rows('dead')[u]).toMatchObject({ verdict: 'would-stop', ...orig });
+    const said = sayLines(t3.out, u);
+    expect(said, 'announced again').toHaveLength(1);
+    expect(said[0]).toContain(`${u} would-stop`);
+    expect(said[0]).not.toContain('first seen now');
+    expect(deadMinutes(said[0]!), 'measured from the original first').toBeGreaterThanOrEqual(360);
+    expect(deadMinutes(said[0]!)).toBe(7 * 60);
+    expect(stops()).toEqual([]);
+  });
+
+  it('held -> carry -> held (armed): the carry tick is silent for it, the next held is announced again on the ORIGINAL clock', () => {
+    const us = [1, 2, 3, 4].map((n) => inert(n));    // one more than the stop budget: the fourth is `held`
+    const u = us[3]!;
+    const orig = { first: String(UP - 7 * HOUR), cpu0: '7255660000' };
+    arm();
+    const t1 = run();
+    expect(t1.code, t1.err).toBe(0);
+    expect(rows('dead')[u]).toMatchObject({ verdict: 'held', ...orig });
+    expect(sayLines(t1.out, u)).toHaveLength(1);
+    expect(sayLines(t1.out, u)[0]).toContain(`${u} held`);
+
+    const child = path.join(fx.cg, cgOf(u), 'nested');
+    fs.mkdirSync(child);
+    const t2 = run();
+    expect(t2.code, t2.err).toBe(0);
+    expect(rows('carry')[u]).toEqual({ state: 'unknown', ...orig, why: 'child-cgroup' });
+    expect(rows('dead')[u]).toBeUndefined();
+    expect(sayLines(t2.out, u), 'a carry says nothing').toEqual([]);
+
+    fs.rmdirSync(child);
+    const t3 = run();
+    expect(t3.code, t3.err).toBe(0);
+    expect(rows('dead')[u]).toMatchObject({ verdict: 'held', ...orig });
+    const said = sayLines(t3.out, u);
+    expect(said, 'announced again').toHaveLength(1);
+    expect(said[0]).toContain(`${u} held`);
+    expect(said[0]).not.toContain('first seen now');
+    expect(deadMinutes(said[0]!), 'measured from the original first').toBeGreaterThanOrEqual(360);
+    expect(deadMinutes(said[0]!)).toBe(7 * 60);
+    expect(stops().filter((l) => l.endsWith(u)), 'held is never stopped').toEqual([]);
   });
 
   it.each(['Z', 'S'])('an outside child in state %s has the corresponding live-child verdict', (state) => {
