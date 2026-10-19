@@ -4,7 +4,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-18-claude-binary-lifecycle-design.md` (rev 3, approved by the operator 2026-10-19: "all cards accepted/answered"). §8 and §10.2, §10.5 bind this plan in full; §8.4 names what it supersedes.
 
-**Status:** rev 0 (2026-10-19), written with the spec's rev 3, the other wave plans and the ledger. Tasks dispatch as their gates open. The wave's deploy is one gated operator act (OA-4), because the launcher is on every lane's exec path.
+**Status:** rev 1 (2026-10-19): rev 0 with two reviews applied (§Review log); written with the spec's rev 3, the other wave plans and the ledger. Tasks dispatch as their gates open. The wave's deploy is one gated operator act (OA-4), because the launcher is on every lane's exec path.
 
 **Inputs.** The spec's §8.1 to §8.6, §10.1 (the approval half), §10.2, §10.5, §11 (W3), §11.1 (M4, M5); the operator's rulings 1, 11, 14 and 15; the centralised update design (`2026-09-20-centralised-update-management-design.md`: the leased intent, `writeOwnProjection`, `ccd-update-sync`, the journal `updateIntentLog`); the upstream launcher decision brief (`2026-08-21-upstream-launcher-decision-brief.md`, its §6 superseded) and the locks plan (`2026-08-21-upstream-launcher-locks.md`, its "Not done here" answered; lock 5, D-156, kept); D-159 (identity split from executable, implemented here); D-3478 (a file at a lane launcher's path cuts every lane over); the Settings plan's R1b `AckConfirm`, R1c result lines and C5; W1's §Global constraints, binding here in full.
 
@@ -50,7 +50,7 @@ Measured on 2026-10-19 at `f82d0c015` (26 open PRs).
 | CB3c intent routes, journal | no | **yes** (`shared/api.ts`) | — | CB2g | CB3a |
 | CB3d canary approves target | no | no | — | CB2e, CB2f | CB3a |
 | CB3e installer live | no | no | — | CB1d, CB2d (the shared lock) | CB3b, CB3d; **M5** |
-| CB3f launcher adopted | **yes** | no | — | CB2b | CB3e |
+| CB3f launcher adopted | **yes** | **yes** (`shared/api.ts`, the deny list) | — | CB2b | CB3e |
 | CB3g token on a descriptor | **yes** | no | — | — | CB3f; **M4** |
 | CB3h prune adopted | no | no | — | CB2d | CB3f |
 | CB3i bootstrap | no | no | — | — | CB3e |
@@ -61,7 +61,7 @@ Measured on 2026-10-19 at `f82d0c015` (26 open PRs).
 | In flight | Files it changes that this plan would otherwise touch | Tasks it gates |
 |---|---|---|
 | #435 | `ccd/ccd`, `ccd/ccrc-doctor-checks`, `ccrc-codex-launcher`, `ccrc-doctor` tests | CB3f, CB3g |
-| #397, #700 | `shared/api.ts` | CB3c |
+| #397, #700 | `shared/api.ts` | CB3c, CB3f |
 
 No open PR holds `ccd/ccrc`'s install path, `ccd/ccd-update-sync`, `ccd/ccrc-codex`, `shared/roster.ts`, `server/src/update/project.ts`, `server/src/update/routes.ts`, `server/src/coord/schema.ts`, `server/src/coord/store.ts` or `server/test/ccrc-wrappers.test.ts`.
 
@@ -77,7 +77,7 @@ CB3a (tables, projection) ─┬─ CB3b (pull; fleet) ────────�
 OA-4 (the adoption, AGENT-FIRST, gated) after CB3a to CB3h are merged; OA-5 only for a node with no build
 ```
 
-CB3e to CB3h are merged before OA-4 and deployed together by it: the installer may promote a target only once a launcher reads it, and the old prune timer must retire in the same step the new prune starts (spec §8.5).
+CB3e to CB3h are merged before OA-4, but **nothing relies on that order**: install mode and the new prune are gated at runtime on the adoption marker `~/.ccrc/claude-launcher-adopted`, which only OA-4's `ccrc install` writes, after the shipped launcher is in place and the old prune timer and service are gone (spec §8.1, §8.5). Until then a routine AGENT-FIRST deploy of `main` leaves the installer in measure mode, so it never installs a build today's launcher would serve through its "highest" rung, and two prunes never run side by side.
 
 ## Global constraints
 
@@ -107,13 +107,13 @@ W1's §Global constraints bind here in full. In addition:
 **Routing:** band 3 (the record that decides which build may run). **Lane:** server. **Needs:** CB1a.
 
 **Files:**
-- Modify `server/src/coord/schema.ts`: one `MIGRATIONS` entry adding tables only: `claude_intent` (`scope` `'*'` or a node id, `channel`, `pin`, `mode`, `setAt`), `claude_halts` (`build`, `reason`, `node`, `at`, `ackedAt`), `claude_canaries` (`node`, `kind`, `build`, `result`, `at`, `tx`), `claude_roll_failures` (`id`, `build`, `node`, `session`, `at`, `ackedAt`), `claude_intent_log` (`at`, `actor`, `what`, `before`, `after`). Seeds nothing: an absent `'*'` row is the defaults (`latest`, no pin, `manual`).
+- Modify `server/src/coord/schema.ts`: one `MIGRATIONS` entry adding tables only: `claude_intent` (`scope` `'*'` or a node id, `channel`, `pin`, `mode`, `setAt`), `claude_halts` (`build`, `reason`, `scope` `'candidate' | 'target'`, `node`, `at`, `ackedAt`), `claude_retreats` (`build`, `pointer`, `node`, `at`, `ackedAt`), `claude_canaries` (`node`, `kind`, `build`, `result`, `at`, `tx`), `claude_roll_failures` (`id`, `build`, `node`, `session`, `at`, `ackedAt`), `claude_intent_log` (`at`, `actor`, `what`, `before`, `after`). Seeds nothing: an absent `'*'` row is the defaults (`latest`, no pin, `manual`).
 - Modify `server/src/coord/store.ts`: their methods, one writer each.
-- Create `server/src/update/claudeIntent.ts`: `effectiveClaudeIntent(nodeId)` (node row over `'*'`) and `renderClaudeIntent(…)`: `{ at, channel, pin, mode, halts, approvedTarget, minBuild }`, `approvedTarget` per kind from `claude_canaries` (CB3d writes the rows).
+- Create `server/src/update/claudeIntent.ts`: `effectiveClaudeIntent(nodeId)` (node row over `'*'`) and `renderClaudeIntent(…)`: `{ at, channel, pin, mode, halts, retreats, approvedTarget, minBuild }` (`halts` with their scope; `retreats` a separate field that only candidate selection and automatic rolls read), `approvedTarget` per kind from `claude_canaries` (CB3d writes the rows).
 - Modify `server/src/update/project.ts`: `writeOwnProjection` (≈:68) also writes `~/.ccrc/claude-intent` (0600) on the server's own node; and `server/src/update/routes.ts`'s `GET /api/updates/intent/:nodeId` (≈:782) carries `claude` as an optional field of its answer.
 - Create `server/test/claude-intent.test.ts`; modify `server/test/update-projection.test.ts`.
 
-- [ ] **Step 1: Red.** "no row: the defaults"; "a node row wins over `'*'`"; "unacked halts are projected, acked ones are not"; "`approvedTarget` is empty until a canary row passes"; "`minBuild` is 2.1.277"; "the intent answer carries `claude`; an older parser ignores it"; "the migration adds tables only".
+- [ ] **Step 1: Red.** "no row: the defaults"; "a node row wins over `'*'`"; "unacked halts are projected, acked ones are not"; "a retreat is projected in `retreats`, never in `halts`"; "`approvedTarget` is empty until a canary row passes"; "`minBuild` is 2.1.277"; "the intent answer carries `claude`; an older parser ignores it"; "the migration adds tables only".
 - [ ] **Step 2: Green.**
 - [ ] **Step 3: Mutation table, RUN.**
 
@@ -152,11 +152,11 @@ W1's §Global constraints bind here in full. In addition:
 
 **Files:**
 - Modify `server/src/update/routes.ts`: `POST /api/claude/intent` (`channel`, `pin`, `mode`, scope `'*'` or a node id; `mode: 'auto'` refused here, `409 not-yet`, until CB5a), `POST /api/claude/unpin`. Each validates with CB1a's grammar and `minBuild`, writes, journals in `claude_intent_log` with `pwaDec(req)`, and re-projects.
-- Modify `server/src/server.ts`'s roll route (CB2g): `to` may now be the pair's target or the pin; `not-yet` only while no pair target exists for a non-canary.
+- Modify `server/src/server.ts`'s roll route (CB2g): `to` may now be the pair's target, the pin, or (as CB2g already admits in every wave) an un-canaried newer candidate as a canary; `not-yet` only while no pair target exists for a non-canary; `409 mode-off` for a node whose mode is `off`.
 - Modify `shared/api.ts`: the routes' wire types.
 - Modify `server/test/auth-gate.test.ts` (non-exempt both ways); create `server/test/claude-intent-routes.test.ts`; a case asserts `ccrc-api` has no command for them.
 
-- [ ] **Step 1: Red.** "the box token is refused"; "a pin below 2.1.277 is refused"; "every write journals its actor"; "`auto` answers `not-yet`"; "Unpin clears the pin, not a halt"; "after a target exists, the roll route admits the target".
+- [ ] **Step 1: Red.** "the box token is refused"; "a pin below 2.1.277 is refused"; "every write journals its actor"; "`auto` answers `not-yet`"; "Unpin clears the pin, not a halt"; "after a target exists, the roll route admits the target, and still admits a newer un-canaried candidate as a canary"; "mode `off` answers `409 mode-off`".
 - [ ] **Step 2: Green.**
 - [ ] **Step 3: Mutation table, RUN.**
 
@@ -194,12 +194,11 @@ W1's §Global constraints bind here in full. In addition:
 **Routing:** band 3, **two reviewers** (installs binaries). **Lane:** AGENT-FIRST (FLEET). **Needs:** CB3b, CB3d; **M5** in Step 0.
 
 **Files:**
-- Modify `ccd/ccrc-claude-install`: install mode (the unit's `ExecStart` drops `--measure`): the gates (the switch; the intent parsed with `jq`; `at` older than 15 min → install-only, `intent-stale`); resolve (pin, else the channel's pointer, default `latest`; `below-floor`, `halted`, `upstream-retreat`); space (2 × size + 2 GiB, `no-space`; staging and placeholders older than 1 h removed); install if absent with `<runner> install <want>`, each argument its own word, 600 s, `<runner>` a smoked build other than `<want>`, no `--force`, and nothing at all when no smoked build exists (`install-failed`, "bootstrap is the operator's", spec §8.6); verify by postcondition (CB1d's chain); smoke; publish the candidate; promote from the intent's `approvedTarget` only, writing `~/.ccrc/claude-target` (one line per kind) and `~/.ccrc/claude-prev-target`, the pin as both kinds' target by the same rule, `pin-unavailable` until it can; backoff on consecutive same-`why` failures (30 min, 1 h, 2 h, up to 6 h); the proven marker `~/.ccrc/claude-installer-proven` once it has itself installed and promoted one build it resolved, with no failed run in 24 h and 72 h live.
-- Modify `deploy/systemd/ccrc-claude-install.service`.
+- Modify `ccd/ccrc-claude-install`: install mode, **active only while `~/.ccrc/claude-launcher-adopted` exists** (without it every run behaves as `--measure`: installs nothing, writes no target, prunes nothing). The unit's `ExecStart` drops `--measure` in this task, which is harmless because the marker, not the flag, turns install mode on; `--measure` stays as an operator flag that always forces measure mode. Also modify `deploy/systemd/ccrc-claude-install.service`. The gates (the switch; the intent parsed with `jq`; `at` older than 15 min → install-only, `intent-stale`); resolve (pin, else the channel's pointer, default `latest`; `below-floor`, `halted`, `upstream-retreat`); space (2 × size + 2 GiB, `no-space`; staging and placeholders older than 1 h removed); install if absent with `<runner> install <want>`, each argument its own word, 600 s, `<runner>` a smoked build other than `<want>`, no `--force`, and nothing at all when no smoked build exists (`install-failed`, "bootstrap is the operator's", spec §8.6); verify by postcondition (CB1d's chain); smoke; publish the candidate; promote from the intent's `approvedTarget` only, writing `~/.ccrc/claude-target` (one line per kind) and `~/.ccrc/claude-prev-target`, the pin as both kinds' target by the same rule, `pin-unavailable` until it can; backoff on consecutive same-`why` failures (30 min, 1 h, 2 h, up to 6 h); the proven marker `~/.ccrc/claude-installer-proven` once it has itself installed and promoted one build it resolved, with no failed run in 24 h and 72 h live.
 - Create `server/test/claude-installer-live.test.ts`.
 
 - [ ] **Step 0: M5, in a development fixture.** A local HTTPS proxy serving a tampered manifest and a tampered binary for one build to `claude install` under a throwaway HOME: does it refuse; what does `manifestSignatureEnforcement: "flag"` control. Record the result in the PR body and the ledger. The design does not depend on the answer (ccrc's own `gpgv` check is independent), but the review needs it.
-- [ ] **Step 1: Red.** "stale intent: no candidate, no target, `intent-stale`, but a projected pin is still installed"; "a pointer below the approved target is `upstream-retreat` and selects nothing"; "`<runner>` is never `<want>`"; "no smoked build: nothing installed, `claude` never called"; "the candidate is never written to `claude-target`"; "an approved target is written for its kind only"; "a pin is both kinds' target"; "the backoff doubles to 6 h on one `why` and resets on another"; "the proven marker needs all three conditions"; "`--force` is never passed".
+- [ ] **Step 1: Red.** "stale intent: no candidate, no target, `intent-stale`, but a projected pin is still installed"; "a pointer below the approved target is `upstream-retreat` and selects nothing"; "`<runner>` is never `<want>`"; "no smoked build: nothing installed, `claude` never called"; "the candidate is never written to `claude-target`"; "an approved target is written for its kind only"; "a pin is both kinds' target"; "the backoff doubles to 6 h on one `why` and resets on another"; "the proven marker needs all three conditions"; "`--force` is never passed"; "no adoption marker: a run without `--measure` behaves as measure (no install, no target, no prune)"; "a retreat in `retreats` blocks selecting that build as a candidate and nothing else".
 - [ ] **Step 2: Green.**
 - [ ] **Step 3: Mutation table, RUN.**
 
@@ -211,6 +210,7 @@ W1's §Global constraints bind here in full. In addition:
   | the retreat selected | claude-installer-live | its case |
   | proven after 24 h | claude-installer-live | "all three conditions" |
   | the backoff never resets | claude-installer-live | its case |
+  | the adoption-marker gate removed | claude-installer-live | "no adoption marker" |
 
 - [ ] **Step 4: Verify.** The suite alone; `bash -n`.
 
@@ -219,12 +219,13 @@ W1's §Global constraints bind here in full. In addition:
 **Routing:** band 3, **two reviewers** (every lane's exec path; D-3478). **Lane:** AGENT-FIRST, deployed by **OA-4**. **Needs:** CB3e; #435 merged.
 
 **Files:**
-- Create `ccd/claude-launcher` (bash, provenance marker `ccrc-launcher`): kind from `CCRC_CLAUDE_KIND` (default `anthropic`); rungs: `CCRC_CLAUDE_VERSION` (validated, `-s -x`, smoked, not halted, else 127); `~/.ccrc/claude-target`'s line for the kind; `~/.ccrc/claude-prev-target`'s; before any `claude-smoked` exists, the newest `-s -x` build by `sort -V`; else 127. Bounded reads (`head -c 64`), no network, no roster, no secret, no `CLAUDE_CONFIG_DIR`. `exec versions/<v> "$@"`.
+- Create `ccd/claude-launcher` (bash, provenance marker `ccrc-launcher`): kind from `CCRC_CLAUDE_KIND` (default `anthropic`); rungs: `CCRC_CLAUDE_VERSION` (validated, `-s -x`, smoked, not in `~/.ccrc/claude-halted`, else 127); `~/.ccrc/claude-target`'s line for the kind; `~/.ccrc/claude-prev-target`'s; `~/.ccrc/claude-seed`'s (spec §8.3 rung 3a); before any `claude-smoked` exists, the newest `-s -x` build by `sort -V`; else 127. The launcher reads `~/.ccrc/claude-halted` only; a target-scope halt and a retreat are never written there (spec §10.3). Bounded reads (`head -c 64`), no network, no roster, no secret, no `CLAUDE_CONFIG_DIR`. `exec versions/<v> "$@"`.
 - Modify `ccd/ccrc-codex`: exports `CCRC_CLAUDE_KIND=codex`.
-- Modify `ccd/ccrc`: `_inst_bins` (≈:14129) places the launcher at `~/.local/bin/<upstream id>` (the roster's upstream id); adoption byte-compares; a different, non-ccrc file is kept aside (`_inst_keep_aside` ≈:13986) and replaced atomically only after the operator confirms, in `ccrc install`'s prompt, that its token-file reference becomes the roster's `exec.secretsFile` (the installer never reads or prints the token); `ccrc install` refuses over an existing `versions/.pinned`; `cmd_uninstall` (≈:23070) restores the kept copy; `cmd_doctor` (≈:3650) reports the provenance marker, the byte-compare and the mode only; `ACCT_OPERATOR_STEP_2` (≈:7040) is deleted; `cmd_wrappers` (≈:3959) still refuses to overwrite the launcher (lock 5).
+- Modify `ccd/ccrc`: `_inst_bins` (≈:14129) places the launcher at `~/.local/bin/<upstream id>` (the roster's upstream id); adoption byte-compares; a different, non-ccrc file is kept aside (`_inst_keep_aside` ≈:13986) and replaced atomically only after the operator confirms, in `ccrc install`'s prompt, that its token-file reference becomes the roster's `exec.secretsFile` (the installer never reads or prints the token); `ccrc install` refuses over an existing `versions/.pinned`; the adoption, once the launcher is in place and CB3h has retired the old timer, writes `~/.ccrc/claude-seed` (per kind with no approved target: the smoked, non-halted build that kind's live sessions run most, from the `exe` pid map) and then the adoption marker `~/.ccrc/claude-launcher-adopted`, last; a non-interactive `ccrc update` that meets a foreign launcher skips the adoption and reports it, never replacing it; `ccrc install --restore-launcher` (operator-only, refused without a TTY and inside a session) atomically puts the kept-aside copy back, re-enables the retired prune timer, removes the adoption marker and touches no session unit; `cmd_uninstall` (≈:23070) restores the kept copy; `cmd_doctor` (≈:3650) reports the provenance marker, the byte-compare and the mode only; `ACCT_OPERATOR_STEP_2` (≈:7040) is deleted; `cmd_wrappers` (≈:3959) still refuses to overwrite the launcher (lock 5).
+- Modify `server/src/coord/approvalguard.ts`, `shared/api.ts` and `ccd/install-session-hooks.sh` (CB1b's lists): `ccrc install --restore-launcher` is denied to sessions and children, the twins equal.
 - Modify `server/test/ccrc-wrappers.test.ts` (the modelled `vers=(versions/*)` launcher replaced by the shipped one); create `server/test/claude-launcher.test.ts`; modify `server/test/ccrc-codex-launcher.test.ts`, `server/test/install-census.test.ts`, `server/test/ccrc-uninstall.test.ts`, `server/test/ccrc-doctor.test.ts`.
 
-- [ ] **Step 1: Red.** "2.1.302 over 2.1.99"; "a 0-byte build is never served"; "an unsmoked target falls to the previous target"; "a halted target is not served"; "after `claude-smoked` exists, no highest rung"; "nothing admissible: 127"; "a codex lane reads the codex line"; "the launcher reads no file outside `~/.ccrc` and `versions/`" (an strace-free fixture: a `HOME` whose other files are unreadable); "adoption keeps a foreign launcher aside and uninstall restores it"; "`.pinned` refuses the adoption"; "`ccrc wrappers` refuses to overwrite it"; "doctor prints no body and no secrets path".
+- [ ] **Step 1: Red.** "2.1.302 over 2.1.99"; "a 0-byte build is never served"; "an unsmoked target falls to the previous target"; "a build in `claude-halted` is not served on any rung"; "a kind with no target and no prev-target serves the seeded build, never 127, while sessions of that kind are registered"; "a retreat leaves the launcher serving the current target"; "after `claude-smoked` exists, no highest rung"; "nothing admissible: 127"; "a codex lane reads the codex line"; "the launcher reads no file outside `~/.ccrc` and `versions/`" (an strace-free fixture: a `HOME` whose other files are unreadable); "adoption keeps a foreign launcher aside and uninstall restores it"; "`.pinned` refuses the adoption"; "`ccrc wrappers` refuses to overwrite it"; "doctor prints no body and no secrets path"; "the adoption writes the seed, then the marker, last"; "a non-interactive `ccrc update` on a foreign launcher skips and reports"; "`--restore-launcher` puts the kept copy back with sessions live, re-enables the old timer, removes the marker and touches no session unit"; "a child's `ccrc install --restore-launcher` is a deny".
 - [ ] **Step 2: Green.**
 - [ ] **Step 3: Mutation table, RUN.**
 
@@ -236,6 +237,9 @@ W1's §Global constraints bind here in full. In addition:
   | the smoked check dropped from rung 1 | claude-launcher | its case |
   | uninstall removes instead of restoring | ccrc-uninstall | its case |
   | lock 5's refusal removed | ccrc-wrappers | its case |
+  | the seed rung removed | claude-launcher | "serves the seeded build, never 127" |
+  | the marker written before the old timer is gone | ccrc-uninstall | "the seed, then the marker, last" |
+  | `--restore-launcher` refuses with live sessions | ccrc-uninstall | "with sessions live" |
 
 - [ ] **Step 4: Verify.** Each suite alone; `bash -n ccd/claude-launcher ccd/ccrc ccd/ccrc-codex`.
 
@@ -244,11 +248,12 @@ W1's §Global constraints bind here in full. In addition:
 **Routing:** band 3, **two reviewers**, one reading only the security lens (credential path). **Lane:** AGENT-FIRST (FLEET: `ccd`). **Needs:** CB3f; #435; **M4** in Step 0.
 
 **Files:**
-- Modify `ccd/ccd` `_spawn_start` (≈:22885): for a lane whose roster account is the upstream kind, under `set +x`, check `exec.secretsFile` is a regular file of mode 0600 owned by the user (else refuse the spawn with a named error and no path in it), open it on a descriptor, and add only the descriptor variable M4 names to the spawn's environment. Config-dir comparisons use `realpath -m`.
+- Create `ccd/ccrc-upstream-exec` (bash, placed by `_inst_bins` on `fleet` and `both` nodes): run **inside the pane**, given only the session id, it resolves `exec.secretsFile` from the roster for that id, checks under `set +x` that it is a regular file of mode 0600 owned by the user (else exits with a named error and no path in it), runs `exec 3<"$file"`, exports only the descriptor variable M4 names, then execs the wrapper with the original arguments.
+- Modify `ccd/ccd` `_spawn_start` (≈:22885): for a lane whose roster account is the upstream kind, the pane's command (the `_tmux_new_session` call ≈:23298) execs `ccrc-upstream-exec <id> …` in front of the wrapper. **ccd never opens the secrets file**: the tmux server forks the pane command, so a descriptor opened in ccd would never reach Claude Code, and, when this call creates the tmux server, the server and every later pane would inherit it (the comment above that call, ≈:23247, names the hazard). Config-dir comparisons use `realpath -m`.
 - Create `server/test/ccd-upstream-descriptor.test.ts`.
 
-- [ ] **Step 0: M4, in a development fixture.** Which descriptor variable Claude Code accepts for the upstream token kind (`CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR` or the API-key twin), with a dummy token against a local stub, no login, no `-p` turn. **If neither fits, STOP**: the ruling was the descriptor (decision 11); the alternatives were not taken, and the question returns to the operator through the coordinator.
-- [ ] **Step 1: Red.** "the dummy value appears in no argv, no environ, no tmux command line, no journal row and no log"; "mode 0644 refuses"; "another owner refuses"; "a non-upstream lane gets no descriptor"; "`set -x` around the spawn prints no value".
+- [ ] **Step 0: M4, in a development fixture.** Which descriptor variable Claude Code accepts for the upstream token kind (`CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR` or the API-key twin), with a dummy token against a local stub, no login, no `-p` turn; **and whether Claude Code closes the descriptor and unsets the variable after reading**, by `/proc/<tool child>/fd` and its `environ` in the fixture. **If neither variable fits, or a tool child, hook or MCP server inherits the descriptor or the variable, STOP**: the ruling was the descriptor (decision 11); the alternatives were not taken, and the question returns to the operator through the coordinator.
+- [ ] **Step 1: Red.** "the dummy value appears in no argv, no environ, no tmux command line, no journal row and no log"; "the secrets path appears in no pane command line, no `pane_start_command` and no `ps` line"; "the tmux server holds no descriptor on the secrets file (`/proc/<tmux pid>/fd`), even when this spawn created the server"; "a non-upstream pane holds no such descriptor"; "ccd itself never opens the file" (a stub `exec` trace); "mode 0644 refuses"; "another owner refuses"; "a non-upstream lane gets no descriptor"; "`set -x` around the spawn prints no value".
 - [ ] **Step 2: Green.**
 - [ ] **Step 3: Mutation table, RUN.**
 
@@ -257,19 +262,21 @@ W1's §Global constraints bind here in full. In addition:
   | the value exported instead of the descriptor | ccd-upstream-descriptor | "no environ" |
   | the mode check removed | ccd-upstream-descriptor | "0644 refuses" |
   | `set +x` removed | ccd-upstream-descriptor | its case |
+  | the descriptor opened in `_spawn_start` | ccd-upstream-descriptor | "the tmux server holds no descriptor" |
+  | the secrets path passed on the pane command | ccd-upstream-descriptor | "no pane command line" |
 
-- [ ] **Step 4: Verify.** The suite alone; `bash -n ccd/ccd`.
+- [ ] **Step 4: Verify.** The suite alone; `bash -n ccd/ccd ccd/ccrc-upstream-exec`.
 
 ### Task CB3h: the prune, adopted, and the old timer retired (D-5718; spec §8.5) — GATED: after CB3f
 
 **Routing:** band 3 (deletes builds). **Lane:** AGENT-FIRST. **Needs:** CB3f (the adoption step retires the old timer).
 
 **Files:**
-- Modify `ccd/ccrc-claude-install`: the prune at the end of every run under the exclusive lock, keeping spec §8.5's set (candidate, targets, previous targets, pin, every `.rolling`/`.claude-build`/`.claude-canary` build, every live `exe` and live lock pid, the 3 newest smoked non-halted by version); deleting halted builds no one runs or names, and removing them from `claude-smoked`; deleting nothing when the `/proc` scan fails or finds no Claude Code process while sessions are registered.
+- Modify `ccd/ccrc-claude-install`: the prune at the end of every run under the exclusive lock, **only while the adoption marker exists** (none before OA-4), keeping spec §8.5's set (candidate, targets, previous targets, seeded targets, pin, every `.rolling`/`.claude-build`/`.claude-canary` build, every live `exe` and live lock pid, the 3 newest smoked non-halted by version); deleting halted builds no one runs or names, and removing them from `claude-smoked`; deleting nothing when the `/proc` scan fails or finds no Claude Code process while sessions are registered.
 - Modify `ccd/ccrc`: adoption disables and removes the old prune timer and its service; `cmd_doctor` fails while it is active.
 - Create `server/test/claude-prune.test.ts`.
 
-- [ ] **Step 1: Red.** "a build a live process runs is kept"; "a build a record names is kept"; "the fourth-newest unreferenced build is deleted"; "a halted unreferenced build is deleted and unsmoked"; "a failed `/proc` scan deletes nothing"; "a roll holding the lock shared blocks the prune"; "doctor fails while the old timer is active".
+- [ ] **Step 1: Red.** "a build a live process runs is kept"; "a build a record names is kept"; "the fourth-newest unreferenced build is deleted"; "a halted unreferenced build is deleted and unsmoked"; "a failed `/proc` scan deletes nothing"; "a roll holding the lock shared blocks the prune"; "doctor fails while the old timer is active"; "no adoption marker: the prune deletes nothing"; "a seeded build is kept"; "a roll act holding the lock shared, after its caller exited, blocks the prune".
 - [ ] **Step 2: Green.**
 - [ ] **Step 3: Mutation table, RUN.**
 
@@ -279,6 +286,7 @@ W1's §Global constraints bind here in full. In addition:
   | the `exe` scan skipped | claude-prune | "a live process runs" |
   | fail-open on a failed scan | claude-prune | its case |
   | the lock not taken | claude-prune | its case |
+  | the adoption-marker gate removed | claude-prune | "no adoption marker" |
 
 - [ ] **Step 4: Verify.** The suite alone; `bash -n`.
 
@@ -326,8 +334,12 @@ W1's §Global constraints bind here in full. In addition:
 
 ## Operator acts in this wave
 
-- **OA-4: the adoption, AGENT-FIRST and gated** (spec §11's W3 deploy gate). After CB3a to CB3i have merged, the node file from W1 has been green for 24 h on every fleet node and OA-3 has passed for at least one pair: the operator approves the fleet-lane deploy, then `ccrc install` on each `fleet`/`both` node, where they confirm the kept-aside launcher's token-file reference becoming the roster's `exec.secretsFile` (nothing prints the token); `ccrc doctor`'s launcher and old-timer checks must be green before the server lane follows. Rollback: `ccrc uninstall` restores the kept-aside launcher.
+- **OA-4: the adoption, AGENT-FIRST and gated** (spec §11's W3 deploy gate). After CB3a to CB3i have merged, the node file from W1 has been green for 24 h on every fleet node, OA-3 has passed for at least one pair, and **on each node every (node, kind) pair with live sessions has a passed canary or will be seeded** (the adoption prints the seed it writes per kind, and the operator confirms it): the operator approves the fleet-lane deploy, then `ccrc install` on each `fleet`/`both` node, where they confirm the kept-aside launcher's token-file reference becoming the roster's `exec.secretsFile` (nothing prints the token); `ccrc doctor`'s launcher and old-timer checks must be green before the server lane follows. **Rollback:** `ccrc install --restore-launcher` on the node, which works with sessions live (`ccrc uninstall` refuses while sessions are live and orphans every supervisor under `--force`, so it is not the rollback).
 - **OA-5: the bootstrap, once, only for a node with no Claude Code build** (decision 15). Today's fleet node holds six builds, so OA-5 is for a new fleet node; the timer never bootstraps.
+
+## Rollback
+
+Per node, fleet before server is the deploy order; the rollback is the reverse where it matters. (1) The launcher: `ccrc install --restore-launcher` (OA-4's rollback), which puts the kept-aside launcher back with sessions live, re-enables the old prune timer and removes the adoption marker, so the installer and the prune fall back to measure mode at their next run; target, seed and candidate files stay on disk, inert. (2) The descriptor (CB3g): roll `ccd` back after (1), since the restored launcher sources its own token file again. (3) The server lane (CB3a, CB3c, CB3d, CB3j): the tables are additive; an older server ignores the projection's `claude` field, and a node keeps its last projection, which goes stale after 15 min, so the installer stops advancing. Never roll the fleet's `ccrc` back below CB3f while the adoption marker exists: run (1) first.
 
 ## Deviations and decisions
 
@@ -335,17 +347,32 @@ W1's §Global constraints bind here in full. In addition:
 
 From this programme's block, D-5695 to D-5724, this plan defines D-5711 to D-5720. The spec's §14 cites D-5711, D-5715 and D-5716.
 
-- **D-5711** — `claude-intent-vocabulary` (Task CB3a; spec slug): the Claude intent is a parallel vocabulary and parallel `coord.db` tables (`claude_intent`, `claude_halts`, `claude_canaries`, `claude_roll_failures`, `claude_intent_log`), never rows in `releases` or `update_intent`; the server resolves it per node (node row over `'*'`) and projects it, timestamped, as `~/.ccrc/claude-intent` with `halts`, `approvedTarget` per kind and `minBuild`, an optional field of the leased intent's answer; a projection older than 15 min stops a node advancing (spec §10.2, §10.5). Its shared lexicon is D-5695.
+- **D-5711** — `claude-intent-vocabulary` (Task CB3a; spec slug): the Claude intent is a parallel vocabulary and parallel `coord.db` tables (`claude_intent`, `claude_halts`, `claude_canaries`, `claude_roll_failures`, `claude_intent_log`), never rows in `releases` or `update_intent`; the server resolves it per node (node row over `'*'`) and projects it, timestamped, as `~/.ccrc/claude-intent` with `halts` (scoped `candidate` or `target`), `retreats` (a separate record, never a halt), `approvedTarget` per kind and `minBuild`, an optional field of the leased intent's answer; a projection older than 15 min stops a node advancing (spec §10.2, §10.5). Its shared lexicon is D-5695.
 - **D-5712** — `claude-intent-pull` (Task CB3b): `ccd-update-sync` writes the Claude intent from the answer it already pulls every 60 s, validated with `jq` and never sourced, keeping the last good projection on any failure, and starts the installer without blocking when the projection changes (spec §10.2, §8.1).
 - **D-5713** — `claude-intent-routes` (Task CB3c): `POST /api/claude/intent` and `POST /api/claude/unpin` are operator-cookie routes, non-exempt both ways and absent from `ccrc-api`, validating the pin against the grammar and `minBuild`, journalling every write with its actor; `auto` is refused until W5; the roll route then admits the pair's target or the pin (spec §10.5, §7.5).
 - **D-5714** — `canary-approves-target` (Task CB3d): only a passed canary on a (node, lane kind) approves a build for that pair; the server reads it from the lifecycle mirror, the W2a canary included, writes `claude_canaries`, and projects `approvedTarget[kind]`; an inconclusive canary approves nothing (spec §10.1; decision 8).
 - **D-5715** — `ccrc-claude-installer` (Tasks CB1d, CB3e; spec slug): one ccrc-owned installer per `fleet`/`both` node on a 30 min timer, under a scrubbed environment and an exclusive lock: install-only on a stale intent; the channel's pointer (default `latest`, decision 1) or the pin; the floor; the space check; install from a smoked build other than the wanted one, without `--force`; verification by `gpgv` against the committed keyring, then size and SHA-256, never by exit code; the smoke; the candidate; promotion only from the intent's `approvedTarget`; the backoff; the proven marker; and no bootstrap by the timer (spec §8.1, §8.6). CB1d's measure mode is D-5698.
-- **D-5716** — `launcher-and-prune-adopted` (Tasks CB3f, CB3h; spec slug): ccrc ships the launcher, a pure selector keyed by lane kind with fail-closed rungs (the explicit version, the target, the previous target, and "highest" only before any build is smoked), reading no roster, no secret and no network; the adoption byte-compares, keeps a foreign launcher aside, and is undone by `ccrc uninstall`; the prune runs inside the installer and the old daily timer is retired in the same step; the decision brief's §6 and the locks plan's "Not done here" are superseded; lock 5 is kept; D-159 is implemented, not superseded (spec §8.3 to §8.5).
-- **D-5717** — `upstream-token-by-descriptor` (Task CB3g): the upstream lane's token reaches Claude Code on a file descriptor ccd opens at spawn from the roster's `exec.secretsFile`, after an owner and mode check, with only the descriptor variable exported; the launcher reads no secret (decision 11). If M4 finds no descriptor variable that fits, the task stops and the question returns to the operator; `apiKeyHelper` and the environment were not taken.
-- **D-5718** — `prune-keeps-what-runs` (Task CB3h): the adopted prune keeps the candidate, every target and previous target, the pin, every build a roll record names and every build a live process executes, and the 3 newest smoked non-halted builds by version; it deletes nothing on a failed `/proc` scan; a roll holds the install lock shared, so no prune runs while a roll needs its `from` (spec §8.5).
+- **D-5716** — `launcher-and-prune-adopted` (Tasks CB3f, CB3h; spec slug): ccrc ships the launcher, a pure selector keyed by lane kind with fail-closed rungs (the explicit version, the target, the previous target, and "highest" only before any build is smoked), reading no roster, no secret and no network; a seeded target per kind with no approved target, so no pair exits 127 after the adoption; the adoption byte-compares, keeps a foreign launcher aside, writes the adoption marker last, and is undone with sessions live by `ccrc install --restore-launcher` (and on uninstall by `ccrc uninstall`); install mode and the prune run only while the adoption marker exists; the prune runs inside the installer and the old daily timer is retired in the same step; the decision brief's §6 and the locks plan's "Not done here" are superseded; lock 5 is kept; D-159 is implemented, not superseded (spec §8.3 to §8.5).
+- **D-5717** — `upstream-token-by-descriptor` (Task CB3g): the upstream lane's token reaches Claude Code on a file descriptor opened **inside the pane** by the ccrc helper `ccrc-upstream-exec` from the roster's `exec.secretsFile`, after an owner and mode check, with only the descriptor variable exported; ccd and the tmux server never hold it, and the secrets path is on no command line; the launcher reads no secret (decision 11). If M4 finds no descriptor variable that fits, or finds the descriptor or variable inherited by tool children, the task stops and the question returns to the operator; `apiKeyHelper` and the environment were not taken.
+- **D-5718** — `prune-keeps-what-runs` (Task CB3h): the adopted prune keeps the candidate, every target and previous target, the pin, every build a roll record names and every build a live process executes, and the 3 newest smoked non-halted builds by version; it deletes nothing on a failed `/proc` scan; a roll's detached act holds the install lock shared, so no prune runs while a roll needs its `from`; it runs only while the adoption marker exists, and keeps the seeded targets (spec §8.5).
 - **D-5719** — `claude-bootstrap-operator-act` (Task CB3i): a node with no Claude Code build is bootstrapped once, by the operator, interactively in `ccrc install`, from the signed manifest, verified and smoked before anything may select it; the timer never bootstraps (decision 15, spec §8.6).
 - **D-5720** — `claude-controls-in-settings` (Task CB3j): the Claude Code card gains channel, Pin and Unpin on Settings → Updates, and the Claude Code mode (`off`, `manual`) sits under Automation; each control is checked from the server's answer and answers in a result line, and Pin is a danger confirm (decision 14; the Settings plan's C5).
 
 ## Out of scope
 
 Lane self-update (W4); automatic rolls, halts and the retreat's one-tap pin (W5); a per-session pin; a version-keyed table of first-run gates.
+
+## Review log
+
+**rev 0 → rev 1 (2026-10-19).** Two reviews of the spec's rev 3 and the five plans, both NEEDS REVISION. Each finding was checked against `origin/main` `bd363a76b` (`_spawn_start`'s pane created by `_tmux_new_session`, with the inheritance warning above it; `cmd_uninstall` refusing while sessions are live). The rows below touch this plan; the spec's §17 carries all of them.
+
+| Finding | Verdict | What changed here |
+|---|---|---|
+| The CB3g descriptor was opened in ccd, never inherited by the pane and inherited by the tmux server | applied (both reviews) | CB3g: `ccrc-upstream-exec` opens it inside the pane; M4 also measures closing; red cases for the tmux server's fds, other panes and command lines |
+| A newer candidate could never be canaried once a target existed | applied | CB3c keeps the canary admission after a target exists |
+| An upstream retreat was a halt; a halt of a current target had no outcome | applied (both reviews) | CB3a: `claude_retreats` and the halt `scope`; CB3e and CB3f red cases: a retreat changes only candidate selection |
+| Install mode and the new prune were turned on by merge order | applied | CB3e and CB3h gate on the adoption marker; the landing note no longer relies on order; CB3f: a foreign launcher is skipped by non-interactive `ccrc update` |
+| A pair with no passed canary exited 127 after the adoption | applied | CB3f's seeded target, rung 3a; OA-4's gate per pair |
+| OA-4's only rollback was `ccrc uninstall` | applied | CB3f's `ccrc install --restore-launcher`, denied to sessions; OA-4 names it |
+| The shared lock was held by the exiting caller | applied | CB3h's red case asserts a lock held by the act after its caller exits |
+| No wave stated its rollback | applied | §Rollback |

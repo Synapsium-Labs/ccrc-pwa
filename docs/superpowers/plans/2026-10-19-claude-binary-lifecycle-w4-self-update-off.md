@@ -4,7 +4,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-18-claude-binary-lifecycle-design.md` (rev 3, approved by the operator 2026-10-19: "all cards accepted/answered"), §8.2 and §11 (W4).
 
-**Status:** rev 0 (2026-10-19), written with the spec's rev 3, the other wave plans and the ledger.
+**Status:** rev 1 (2026-10-19): rev 0 with its review row applied (§Review log); written with the spec's rev 3, the other wave plans and the ledger.
 
 **Inputs.** The spec's §8.2; the operator's ruling 5 (automatic once the installer is proven, visible in Settings, reversible); W1's CB1c (`ccd claude self-update keep | release`, the keep marker's only writer) and CB1d to CB1h (the node file's `selfUpdateOff` and `switches.selfUpdateKept`, the card that shows them); W3's CB3e (the proven marker's only writer); W1's §Global constraints, binding here in full.
 
@@ -63,6 +63,10 @@ W1's §Global constraints bind here in full. In addition: `DISABLE_AUTOUPDATER=1
 
 None is required: the switch is automatic once proven (decision 5). The operator may reverse it on any node at any time with `ccd claude self-update keep` and undo that with `release`; Settings shows the state.
 
+## Rollback
+
+`ccd claude self-update keep` on the node (CB1c, the operator's verb): every lane's own updater is live again from its next spawn, with no restart and no deploy. Only if the spawn line itself is at fault is `ccd` rolled back, fleet lane only; the keep marker stays until the operator runs `self-update release`.
+
 ## Deviations and decisions
 
 ### Issued for this work and defined here
@@ -74,3 +78,11 @@ From this programme's block, D-5695 to D-5724, this plan defines D-5721, which t
 ## Out of scope
 
 Codex lanes (already off through `ccrc-codex`); any wrapper edit; any session restart to apply it.
+
+## Review log
+
+**rev 0 → rev 1 (2026-10-19).** Two reviews of the spec's rev 3 and the five plans. One finding touches this plan.
+
+| Finding | Verdict | What changed here |
+|---|---|---|
+| No wave stated its rollback | applied | §Rollback: `ccd claude self-update keep` |
