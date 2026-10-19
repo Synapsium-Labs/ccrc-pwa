@@ -1,20 +1,21 @@
 # The Sheet's desktop arm, and workflow controls on the session page — Implementation Plan
 
-> **For agentic workers:** nine PRs, Tasks P3-1 to P3-9, one task per PR. REQUIRED SUB-SKILL: superpowers:subagent-driven-development, with superpowers:test-driven-development for every red-first step. Workers do not edit §Deviations and decisions. Band routing is per task. The orchestrator reviews every diff before it lands.
+> **For agentic workers:** ten PRs, Tasks P3-1 to P3-9 with P3-6 split into P3-6a and P3-6b, one task per PR. REQUIRED SUB-SKILL: superpowers:subagent-driven-development, with superpowers:test-driven-development for every red-first step. Workers do not edit §Deviations and decisions. Band routing is per task. The orchestrator reviews every diff before it lands.
 
-**Spec:** `docs/superpowers/specs/2026-10-20-sheet-desktop-arm-and-session-workflow-controls--design.md` (rev 0, approved by the coordinator under the operator's autonomous-backlog mandate of 2026-10-19; the operator may overrule any decision).
+**Spec:** `docs/superpowers/specs/2026-10-20-sheet-desktop-arm-and-session-workflow-controls--design.md` (rev 1, approved by the coordinator under the operator's autonomous-backlog mandate of 2026-10-19; the operator may overrule any decision).
 
 **Issues:** #649 (Part A) and #641 (Part B; its read-only half is #640, landed as #652).
 
-**Status:** rev 0 (2026-10-20). Nothing built.
+**Status:** rev 1 (2026-10-20): the review's findings are applied or rejected in §Review log. Nothing built.
 
 **Base:** `origin/main` `397be1ec5` (#735). The anchors are written `≈:` and checked again in each task's Step 0:
 - `ui/src/primitives/sheet.tsx`: 181 lines; `Drawer.Root` ≈:64, `handleOnly` ≈:75, the motion classes ≈:109, the grabber ≈:143–152, `.sheet-body` ≈:167;
 - `ui/src/primitives/confirm.tsx` `useCancelFirst` ≈:71;
 - `ui/src/primitives/command-palette.tsx` `PALETTE_MOTION` ≈:109;
 - `pwa/src/fleet/fleet.css` `.whats-new-panel` ≈:3240;
-- `pwa/src/lib/useMediaQuery.ts`;
-- `ui/design/make-themes.mjs` `--elev-sheet` ≈:633;
+- `pwa/src/lib/useMediaQuery.ts`; the `(min-width: 900px)` literals at `pwa/src/app.tsx` ≈:85, `pwa/src/docs/DocsHead.tsx` ≈:226 and `pwa/src/session/SessionDetails.tsx` ≈:79;
+- `ui/design/make-themes.mjs` `--elev-sheet` ≈:633; the generated block in `ui/src/styles/tokens.css` ≈:545–:1267, and the two hand-written default palettes' `--elev-sheet` ≈:412 and ≈:529;
+- `server/src/pane/dialog.ts`'s private `SGR` ≈:51;
 - `server/src/inject/send.ts` `interrupt` ≈:1937;
 - `server/src/server.ts` `/interrupt` ≈:2574;
 - `server/src/coord/approvalguard.ts` `FORBIDDEN_PATTERNS` ≈:194;
@@ -23,29 +24,30 @@
 
 ## Gates
 
-The open PRs at `397be1ec5` that touch a file in this plan were measured with `gh pr list --state open` and `gh api …/pulls/<n>/files` for #722, which lists 385 files:
+Re-measured for rev 1 against the 27 open PRs, with `gh pr list --state open` and `gh api …/pulls/<n>/files --paginate` for every one, filtered to the files this plan touches:
 
-| Task | #722 (vocabulary, 385 files) | #739 (ui deps) | #813 (private ids) | Other open PRs | Earlier tasks | Other plans |
-|---|---|---|---|---|---|---|
-| P3-1 motion | — | — | — | none | — | none |
-| P3-2 focus | — | — | — | none | P3-1 (same file) | none |
-| P3-3 footer | — | — | — | none | P3-2 (same file) | none |
-| P3-4 desktop arm | `pwa/src/fleet/fleet.css`: line-disjointness check, and the later of the two rebases | — | — | none | P3-3 (same file) | skins W2 S-tasks edit `pwa/src/app.tsx`: line-disjoint (the `useMediaQuery` line only) |
-| P3-5 Popover | — | `ui/package.json`, `ui/package-lock.json`: land after #739 or regenerate the lock on rebase | — | none | — | none |
-| P3-6 capture | — | — | — | none | — | **operator question O1** (whose scratch login) |
-| P3-7 guards | `shared/api.ts`: line-disjoint | — | — | none | — | coordinator-first plan: none open |
-| P3-8 server verb | `shared/api.ts`: line-disjoint | — | — | none | P3-6, P3-7 | none |
-| P3-9 PWA controls | `pwa/src/screens/SessionScreen.tsx`: line-disjoint (≈:603 only) | — | — | none | P3-3, P3-5, P3-8 | skins W2/W3 edit `SessionScreen.tsx`: line-disjoint |
+| Task | Open PRs on its files | Earlier tasks | Other plans |
+|---|---|---|---|
+| P3-1 motion | none | — | none |
+| P3-2 focus | #817 on `ui/src/index.ts` (only if the exports change): line-disjoint | P3-1 (same file) | none |
+| P3-3 footer | none | P3-2 (same file) | none |
+| P3-4 desktop arm | #722 on `pwa/src/fleet/fleet.css`: line-disjointness check, and the later of the two rebases | P3-3 (same file) | skins W2 S-tasks edit `pwa/src/app.tsx`: line-disjoint (the `useMediaQuery` line only); W2 width-gated mounts read `DESK_QUERY`. Skins W2 S3 regenerates `tokens.css`'s generated block through `make-themes.mjs`: whichever lands second **regenerates on rebase** (`npm run themes`), never hand-merges. Skins W3 adds `useMediaQuery('(min-width: 900px)')` in `pwa/src/skins/listColumn.ts`: it must import `DESK_QUERY` (the coordinator tells that plan), or this task's literal pin reds it |
+| P3-5 Popover | #739, #422, #423, #424 on `ui/package.json` and `ui/package-lock.json`: regenerate the lock on rebase; #817 on `ui/src/index.ts`: line-disjoint | — | none |
+| P3-6a types | none | — | none |
+| P3-6b capture | none | P3-6a | **operator question O1** (whose scratch login) |
+| P3-7 guards | #722 on `shared/api.ts`: line-disjoint | — | coordinator-first plan: none open |
+| P3-8 server verb | #821 on `server/src/inject/send.ts` (≈:1347, a read-only box probe) and `shared/api.ts`: line-disjoint; #722 on `server/src/sessionws.ts` and `shared/api.ts`: line-disjoint; #722 and #737 on `server/test/single-definition.test.ts`: add the row after theirs on rebase | P3-6b, P3-7 | the consolidation wave's ARCH-63 (stripper consolidation): this task exports `pane/dialog.ts`'s `SGR`, which the wave then owns |
+| P3-9 PWA controls | #722 on `pwa/src/screens/SessionScreen.tsx`: line-disjoint (≈:603 only); #817 on `ui/src/index.ts`: line-disjoint | P3-3, P3-5, P3-8 | skins W2/W3 edit `SessionScreen.tsx`: line-disjoint |
 
 **S18 (skins W2, D-5479).** Recorded here for the coordinator. The flip's "`Sheet`'s desktop arm" gate is met by **P3-4** alone; P3-3 and P3-5 do not gate it. This plan does not edit the W2 plan, because #813 holds that file.
 
-No open PR edits `sheet.tsx`, `confirm.tsx`, `command-palette.tsx`, `workflow-strip.tsx`, `inject/send.ts`, `server.ts`, `approvalguard.ts`, `gate.ts` or `shared/workflows.ts`.
+No open PR edits `sheet.tsx`, `confirm.tsx`, `command-palette.tsx`, `workflow-strip.tsx`, `server.ts`, `approvalguard.ts`, `gate.ts`, `pane/dialog.ts` or `shared/workflows.ts`. `inject/send.ts` is edited by #821 (above).
 
 ## Global constraints
 
 - **Public repo.** Fixture names only (`project-a`, `lane-a`, `wf_fixture…`). No hosts, accounts, home paths or private tracker ids in code, tests, captures, commits or PR text.
-- **SAFETY.** No `ccd` verb is added. No agent whitelist entry is added. No test runs `tmux` or `ccd` against a live `$HOME`. Part B's tests use the fake `Tmux` (`SendDeps`) and recorded fixture captures only. P3-6's capture runs on a machine that runs no fleet, with a throwaway `HOME` and a private `tmux -L` socket.
-- **One owner per job** (CLAUDE.md's architecture direction). Each task deletes the local copy it replaces in the same PR: `.whats-new-panel`, `useCancelFirst`'s give-back, `PALETTE_MOTION`'s private recipe, and the second `(min-width: 900px)` literal. No parallel mechanism lands.
+- **SAFETY.** No `ccd` verb is added. No agent whitelist entry is added. No test runs `tmux` or `ccd` against a live `$HOME`. Part B's tests use the fake `Tmux` (`SendDeps`) and recorded fixture captures only. P3-6b's capture runs on a machine that runs no fleet, with a throwaway `HOME` and a private `tmux -L` socket.
+- **One owner per job** (CLAUDE.md's architecture direction). Each task deletes the local copy it replaces in the same PR: `.whats-new-panel`, `useCancelFirst`'s give-back, `PALETTE_MOTION`'s private recipe, and the other `(min-width: 900px)` literals. No parallel mechanism lands.
 - **Wire:** additive only. `FLEET_PROTO` does not move. An absent `controls` means no controls are offered.
 - **Rulings that bind:**
   - Account switching and the auto-swap are never blocked.
@@ -54,14 +56,15 @@ No open PR edits `sheet.tsx`, `confirm.tsx`, `command-palette.tsx`, `workflow-st
   - Coordinator-first routing holds.
   - UI is judged at 360/390/1280/1920 × Refined/Instrument × dark/light, and every UI PR body carries that table.
   - A card is a glance and its header a superset, so no card changes.
-- **Tests:** vitest with `--maxWorkers=2`, one suite at a time. Generated palettes are never hand-edited (`npm run themes`, then `themes:check`).
+- **Tests:** vitest with `--maxWorkers=2`, one suite at a time. Generated palettes are never hand-edited (`npm run themes`, then `themes:check`); the two default palettes above the generated block are hand-written and are edited by hand. The browser leg runs as `npm run test:browser -- --maxWorkers=2`.
 - **Deploy class:** PWA/UI (P3-1 to P3-5, P3-9) and SERVER (P3-7, P3-8), each riding an ordinary release. Nothing touches the fleet box.
 
 ## Review focus
 
 1. **Keyboard on a phone.** No sheet may focus an input on open (P3-2).
 2. **A second owner.** Any surviving local centred-dialog rule, focus give-back or vaul motion recipe is a finding.
-3. **Escape in the main view** (P3-8). It interrupts a running turn. The executor may close only the workflow view, and only with the key the capture recorded.
+3. **Escape in the main view** (P3-8). It interrupts a running turn. The executor may close only the workflow view, only with the key the capture recorded, and only while a capture taken immediately before shows the view. A key not recorded inert in the main view is offered only while no turn is running.
+7. **What is typed** (P3-8). Command text is composed only from validated tokens; a raw label is never typed.
 4. **"Sent" collapsing into "refused" or "done".** `sent-unconfirmed` is its own word.
 5. **The operator-only layers** (P3-7). The route must not be exempt, the classifier must forbid it, and no `ccrc-api` verb may compose it.
 6. **Guessing a control.** No recipe may exist in `WORKFLOW_CONTROLS` without a capture that the replay test reads.
@@ -73,30 +76,33 @@ No open PR edits `sheet.tsx`, `confirm.tsx`, `command-palette.tsx`, `workflow-st
 **Routing:** band 2 (spec-able, small). **Lane:** PWA/UI.
 
 **Files:**
-- Create `ui/src/lib/motion.ts`: `vaulMotion({ open, openCurve, close, closeCurve })`, which returns the `data-[state=open|closed]:[animation-duration:…]!`/`[animation-timing-function:…]!` classes.
-- Modify `ui/src/primitives/command-palette.tsx` ≈:109: `PALETTE_MOTION = vaulMotion(--dur-base, --curve-swift, --dur-fast, --curve-swift)`, producing identical classes.
-- Modify `ui/src/primitives/sheet.tsx` ≈:109–110: replace the `duration-*!`/`ease-*!` transition utilities with `vaulMotion(--dur-sheet, --curve-spring, --dur-slow, --curve-swift)` on the panel, and a fade on the overlay.
-- Create `pwa/test/sheet-motion.test.tsx`.
+- Create `ui/src/lib/motion.ts`. Every class in it is written **literally**, because Tailwind v4 emits CSS only for literal class tokens (`@source '../**/*.{ts,tsx}'`); nothing is interpolated at runtime.
+  - `VAUL_MOTION`: `data-[state=open]:[animation-duration:var(--vaul-in-dur)]!`, `data-[state=open]:[animation-timing-function:var(--vaul-in-curve)]!`, and the closed pair on `--vaul-out-dur`/`--vaul-out-curve`.
+  - `SHEET_MOTION_VARS`: `[--vaul-in-dur:var(--dur-sheet)] [--vaul-in-curve:var(--curve-spring)] [--vaul-out-dur:var(--dur-slow)] [--vaul-out-curve:var(--curve-swift)]`.
+  - `PALETTE_MOTION_VARS`: the same four on `--dur-base`/`--dur-fast` and the swift curve.
+- Modify `ui/src/primitives/command-palette.tsx` ≈:109: `PALETTE_MOTION = VAUL_MOTION + ' ' + PALETTE_MOTION_VARS` (string concatenation of literals). Its four old literal classes leave the file, so the computed timing, not the class string, is what stays equal.
+- Modify `ui/src/primitives/sheet.tsx` ≈:109–110: replace the `duration-*!`/`ease-*!` transition utilities with `VAUL_MOTION` and `SHEET_MOTION_VARS` on the panel and the overlay.
+- Create `pwa/test/sheet-motion.test.tsx` (jsdom) and `pwa/browser/vaul-motion.browser.test.tsx` (the browser leg, `vitest.browser.config.ts`).
 
 - [ ] **Step 0: Re-ground.** Confirm that vaul 1.1.2 still animates by keyframes (`slideFromBottom`) and that `tokens.css`'s reduced-motion block sets `--dur-sheet: 1ms`.
 - [ ] **Step 1: Red.**
-  - "the open panel carries `animation-duration:var(--dur-sheet)` and `animation-timing-function:var(--curve-spring)`";
-  - "the closed panel carries `--dur-slow`";
-  - "no `duration-sheet!` transition utility remains on the panel";
-  - "`PALETTE_MOTION` is byte-equal to its value at base".
+  - jsdom: "the panel carries `VAUL_MOTION` and `SHEET_MOTION_VARS`"; "no `duration-sheet!` transition utility remains on the panel"; "`motion.ts` contains no template literal or `${`" (a source scan: the classes are literal);
+  - browser: "the open Sheet's computed `animationDuration` equals the resolved `--dur-sheet` under `no-preference` and is `0.001s` under `reduce`"; "the open palette's computed `animationDuration` equals `--dur-base` under `no-preference` (as at base) and `0.001s` under `reduce`"; "the closed panel's computed `animationTimingFunction` is the swift curve".
 - [ ] **Step 2: Green.**
 - [ ] **Step 3: Mutation table, RUN.**
 
   | Mutant | Suite | Expected red |
   |---|---|---|
-  | panel back on `duration-sheet!` | sheet-motion | "carries `animation-duration:var(--dur-sheet)`" |
-  | `vaulMotion` drops the `!` | sheet-motion | the open-panel class row |
-  | palette given its own recipe again | sheet-motion | "`PALETTE_MOTION` is byte-equal" (and `single-definition` if the recipe text is duplicated) |
+  | panel back on `duration-sheet!` | sheet-motion, vaul-motion (browser) | "carries `VAUL_MOTION`", and the computed-duration row |
+  | `VAUL_MOTION` drops the `!` | vaul-motion (browser) | the computed-duration rows (vaul's attribute selector wins) |
+  | a class built with `${…}` | sheet-motion | "contains no template literal", and the browser rows (no CSS emitted) |
+  | palette given its own recipe again | single-definition (the `animation-duration:var(--vaul-` text once) | the recipe row |
 
 - [ ] **Step 4: Verify.**
 
       cd pwa && ./node_modules/.bin/vitest run test/sheet-motion.test.tsx --maxWorkers=2
       cd pwa && ./node_modules/.bin/vitest run test/command-layer.test.tsx --maxWorkers=2
+      cd pwa && npm run test:browser -- --maxWorkers=2
       cd ui && npm test
 
 **Review focus:** the reduced-motion reading in the browser at 390 and 1280. Under `reduce`, the sheet appears without the slide.
@@ -108,13 +114,16 @@ No open PR edits `sheet.tsx`, `confirm.tsx`, `command-palette.tsx`, `workflow-st
 **Files:**
 - Modify `ui/src/primitives/sheet.tsx`:
   - a new `initialFocus?: RefObject<HTMLElement>` prop;
-  - on open, focus `initialFocus` or the panel (`tabIndex={-1}`, `aria-labelledby` the title), with `preventScroll`;
-  - capture the opener at open, and give it back in the effect cleanup after the trap releases. This is `useCancelFirst`'s measured order, moved here.
-- Modify `ui/src/primitives/confirm.tsx` ≈:44–90: `useCancelFirst` returns a ref and passes it as `initialFocus`, and its give-back half is deleted. Keep the reopen-reuses-Cancel path.
+  - an effect keyed on `open`: read the opener, then focus `initialFocus` or the panel (`tabIndex={-1}`, `aria-labelledby` the title), with `preventScroll`;
+  - give the focus back to the opener in that effect's cleanup, after the trap releases. This is `useCancelFirst`'s measured order, moved here. A text-field opener (`input`, `textarea`, contenteditable) gets it back only on a fine pointer (`(pointer: fine)`), so a phone keyboard never rises unasked;
+  - `onOpenAutoFocus` only calls `preventDefault` (Radix's default stays suppressed). It is not the focus mechanism: Radix fires it only when the focus scope mounts, which a reopen during the close transition skips.
+- Modify `ui/src/primitives/confirm.tsx` ≈:44–90: `useCancelFirst(open, on)` now returns a `RefObject<HTMLElement>` (it returned a callback ref). The Cancel button's `ref` and the Sheet's `initialFocus` both take it, and its give-back half is deleted. Keep the reopen-reuses-Cancel path.
+- Modify `pwa/src/fleet/UpdateMoveSheet.tsx` ≈:284: pass `cancelRef` to its `Sheet` as `initialFocus`.
+- Modify `pwa/src/fleet/updateAck.ts` ≈:147: the comment now says the parent effect runs after the **Sheet's** give-back. The order holds because React runs the child's cleanup before the parent's effect.
 - Modify `ui/src/index.ts` only if the exports change.
-- Create `pwa/test/sheet-focus.test.tsx`. Follow on in `pwa/test/quick-confirm-focus.test.tsx`, which must stay green unchanged except for imports.
+- Create `pwa/test/sheet-focus.test.tsx`. Follow on in `pwa/test/quick-confirm-focus.test.tsx`, which must stay green unchanged except for imports, `pwa/test/update-move-sheet.test.tsx`, and the `AckConfirm`/halt-banner focus tests (find them with `git grep -ln AckConfirm pwa/test`).
 
-- [ ] **Step 0: Re-ground.** Measure whether vaul 1.1.2's `Drawer.Content` forwards `onOpenAutoFocus`. If it does, use it. If it does not, move the focus in an effect after the portal mounts, which is the order `useCancelFirst`'s comment records.
+- [ ] **Step 0: Re-ground.** Confirm that vaul 1.1.2's `Drawer.Content` forwards `onOpenAutoFocus` and calls `preventDefault` when `autoFocus` is false (measured at rev 1: it does). Confirm that a reopen within the close transition keeps the content mounted (`quick-confirm-focus.test.tsx`'s reopen row). The focus moves in the `open`-keyed effect either way.
 - [ ] **Step 1: Red.**
   - "on open the active element is inside the panel";
   - "on open no `input` or `textarea` has focus (`NewSessionSheet`, `DialogSheet` with a free-text row)";
@@ -123,7 +132,12 @@ No open PR edits `sheet.tsx`, `confirm.tsx`, `command-palette.tsx`, `workflow-st
   - "on close the opener has focus";
   - "an opener removed while open is left alone";
   - "`initialFocus` wins";
-  - "`QuickConfirm` still opens on Cancel, scrolled to the top".
+  - "a reopen during the close transition focuses the panel, or `initialFocus` when given";
+  - "a sheet opened by state over a focused composer textarea: on a fine pointer the textarea has the focus after close; on a coarse pointer it does not";
+  - "`QuickConfirm` still opens on Cancel, scrolled to the top";
+  - "`UpdateMoveSheet` opens on Cancel";
+  - "after an Ack commit, the row has the focus, not the disabled Ack and not `body`";
+  - "`confirm.tsx` contains no `.focus(` call in a `useCancelFirst` effect cleanup" (a source scan: one give-back owner).
 - [ ] **Step 2: Green.**
 - [ ] **Step 3: Mutation table, RUN.**
 
@@ -132,7 +146,9 @@ No open PR edits `sheet.tsx`, `confirm.tsx`, `command-palette.tsx`, `workflow-st
   | no focus move on open | sheet-focus | "active element is inside the panel" |
   | vaul `autoFocus` set instead | sheet-focus | "no `input` … has focus" |
   | give-back removed | sheet-focus | "on close the opener has focus" |
-  | give-back left in `useCancelFirst` as well | review + quick-confirm-focus | a double give-back is pinned by "on close the opener has focus" with a moved opener |
+  | give-back left in `useCancelFirst` as well | sheet-focus | "`confirm.tsx` contains no `.focus(` call in a `useCancelFirst` effect cleanup" |
+  | focus moved through `onOpenAutoFocus` instead of the effect | sheet-focus | "a reopen during the close transition focuses …" |
+  | text-field give-back on every pointer | sheet-focus | the coarse-pointer textarea row |
   | `preventScroll` dropped | quick-confirm-focus | the 375×667 row |
 
 - [ ] **Step 4: Verify.**
@@ -140,6 +156,8 @@ No open PR edits `sheet.tsx`, `confirm.tsx`, `command-palette.tsx`, `workflow-st
       cd pwa && ./node_modules/.bin/vitest run test/sheet-focus.test.tsx --maxWorkers=2
       cd pwa && ./node_modules/.bin/vitest run test/quick-confirm-focus.test.tsx --maxWorkers=2
       cd pwa && ./node_modules/.bin/vitest run test/dialog-sheet.test.tsx --maxWorkers=2
+      cd pwa && ./node_modules/.bin/vitest run test/update-move-sheet.test.tsx --maxWorkers=2
+      cd pwa && ./node_modules/.bin/vitest run <each AckConfirm focus test> --maxWorkers=2
 
 **Review focus:** the terminal drawer, where focus belongs in the terminal. Its own focus handling must win, so `full` passes its terminal as `initialFocus` or keeps today's behaviour, and the test pins whichever is chosen.
 
@@ -152,7 +170,7 @@ No open PR edits `sheet.tsx`, `confirm.tsx`, `command-palette.tsx`, `workflow-st
 - Modify `ui/src/primitives/confirm.tsx` (`QuickConfirm`) and `pwa/src/fleet/{ArchiveConflictSheet,AbandonSheet,ArchiveSheet,WhatsNewSheet,UpdateMoveSheet,ResumeSheet}.tsx`: each `QC_ACTIONS` row moves into `footer`.
 - Create `pwa/test/sheet-footer.test.tsx`. Modify `pwa/test/sheet.test-d.tsx` for the exclusive props. Follow on in the seven sheets' tests and `shape-census.test.ts`/`role-census.test.ts` as measured.
 
-- [ ] **Step 0: Re-ground.** Run `git grep -l QC_ACTIONS pwa/src ui/src` and expect the seven files.
+- [ ] **Step 0: Re-ground.** Run `git grep -l QC_ACTIONS pwa/src ui/src` and expect eight files: the seven sheets' files plus `ui/src/index.ts`'s export.
 - [ ] **Step 1: Red.**
   - "the footer is not a descendant of `.sheet-body`";
   - "with a body taller than the panel, the footer's rect stays inside the panel" (jsdom layout is stubbed; the browser leg below is the real check);
@@ -181,21 +199,22 @@ No open PR edits `sheet.tsx`, `confirm.tsx`, `command-palette.tsx`, `workflow-st
 **Routing:** band 3 (it changes every sheet's container on every desktop). **Lane:** PWA/UI. **Gates:** #722 on `fleet.css` (line-disjointness).
 
 **Files:**
-- Create `ui/src/lib/use-media-query.ts`. It holds `useMediaQuery`, moved from `pwa/src/lib/useMediaQuery.ts`, plus `DESK_QUERY` and `useDesk()`. `pwa/src/lib/useMediaQuery.ts` becomes a re-export. Modify `pwa/src/app.tsx` ≈:85 and `pwa/src/docs/DocsHead.tsx` ≈:226 to read `DESK_QUERY`.
-- Modify `ui/design/make-themes.mjs` ≈:633: generate `--elev-pop`. Run `npm run themes`, which regenerates `ui/src/styles/tokens.css` and is never hand-edited.
-- Modify `ui/src/styles/theme.css` ≈:256 (`--shadow-pop: var(--elev-pop)`) and `ui/src/styles/skins.css` (Instrument `--elev-pop: 0 0 0 1px var(--edge-strong)`).
+- Create `ui/src/lib/use-media-query.ts`. It holds `useMediaQuery`, moved from `pwa/src/lib/useMediaQuery.ts`, plus `DESK_QUERY` and `useDesk()`. `pwa/src/lib/useMediaQuery.ts` becomes a re-export. Modify `pwa/src/app.tsx` ≈:85, `pwa/src/docs/DocsHead.tsx` ≈:226 and `pwa/src/session/SessionDetails.tsx` ≈:79 to read `DESK_QUERY`.
+- Modify `ui/design/make-themes.mjs` ≈:633: generate `--elev-pop` for the ten generated palettes. Run `npm run themes`, which regenerates `tokens.css`'s generated block; that block is never hand-edited.
+- Modify `ui/src/styles/tokens.css` by hand **above** the generated block only: add `--elev-pop` beside `--elev-sheet` in the two hand-written default palettes (≈:412 dark `:root`, ≈:529 `[data-theme='light']`), which `themes:check` does not own.
+- Modify `ui/src/styles/theme.css` ≈:256 (`--shadow-pop: var(--elev-pop)`, and the arm's two keyframes declared once: `sheet-pop-in`, a fade with a small rise, and `sheet-pop-out`, a fade) and `ui/src/styles/skins.css` (Instrument `--elev-pop: 0 0 0 1px var(--edge-strong)`).
 - Modify `ui/src/primitives/sheet.tsx`:
   - `size?: 'sm' | 'md' | 'lg'`;
   - at `useDesk()`: `handleOnly` with no handle, no grabber, a ✕ (`Icon` button, `aria-label="Close"`);
   - the `min-[900px]:` placement, the radius and `shadow-pop`;
   - the `::after` removal, which absorbs the `fleet.css` precedent;
-  - the fade-in motion through `vaulMotion`;
+  - the arm's motion: literal `min-[900px]:data-[state=open]:[animation-name:sheet-pop-in]!` and `min-[900px]:data-[state=closed]:[animation-name:sheet-pop-out]!` classes, timed by P3-1's `VAUL_MOTION` variables (at ≥900 the panel sets `--vaul-in-dur:var(--dur-base)` and `--vaul-out-dur:var(--dur-fast)` with literal `min-[900px]:` classes);
   - `full` unchanged.
 - Modify `pwa/src/fleet/fleet.css` ≈:3240–3255: delete `.whats-new-panel`. Modify `pwa/src/fleet/WhatsNewSheet.tsx` (`size="lg"`, drop the class) and `confirm.tsx` (`size="sm"`).
 - Modify `ui/src/primitives/sheet.stories.tsx`: one story per size at desk width.
-- Create `pwa/test/sheet-desktop-arm.test.tsx`. Follow on in `theme-catalogue.test.ts`, `contrast.test.ts`, `control-census.test.ts` (the ✕), `shape-census.test.ts`, `design-system-boundary.test.ts`, `ui-package-boundary.test.ts`, `fleet-css.test.ts` and `whats-new-sheet.test.tsx`, as measured.
+- Create `pwa/test/sheet-desktop-arm.test.tsx` and `pwa/browser/sheet-desktop-arm.browser.test.tsx`. Follow on in `theme-catalogue.test.ts`, `contrast.test.ts`, `control-census.test.ts` (the ✕), `shape-census.test.ts`, `design-system-boundary.test.ts`, `ui-package-boundary.test.ts`, `fleet-css.test.ts` and `whats-new-sheet.test.tsx`, as measured.
 
-- [ ] **Step 0: Re-ground.** Run `git grep -n "min-width: 900px" pwa/src ui/src` and record the hits. Confirm that `.whats-new-panel` is the only local centred-dialog rule: `git grep -n "margin: auto" pwa/src/**/*.css` near a `sheet-panel` class.
+- [ ] **Step 0: Re-ground.** Run `git grep -n "min-width: 900px" pwa/src ui/src` and record the hits (at rev 1: three in TS, plus CSS `@media` rules, which stay). Confirm that `.whats-new-panel` is the only local centred-dialog rule: `git grep -n "margin: auto" pwa/src/**/*.css` near a `sheet-panel` class.
 - [ ] **Step 1: Red.**
   - "≥900: no `.sheet-grabber`";
   - "≥900: a ✕ named Close closes";
@@ -205,10 +224,11 @@ No open PR edits `sheet.tsx`, `confirm.tsx`, `command-palette.tsx`, `workflow-st
   - "<900: the grabber is back and the drag closes";
   - "crossing 900 while open keeps the typed text in a child input";
   - "`full` is identical at both widths";
-  - "`--elev-pop` is generated in every palette";
+  - "every palette, including the two hand-written defaults, declares `--elev-pop`" (`theme-catalogue.test.ts`);
   - "Instrument's `--elev-pop` is the hairline";
   - "no `.whats-new-panel` rule exists";
-  - "`(min-width: 900px)` appears once in TS (`DESK_QUERY`)".
+  - "no `(min-width: 900px)` literal exists in TS outside `ui/src/lib/use-media-query.ts`" (CSS `@media` rules are out of its scope);
+  - browser: "at 1280 the open panel's computed `animation-name` is `sheet-pop-in`, not `slideFromBottom`, and under `reduce` its computed `animation-duration` is `0.001s`".
 - [ ] **Step 2: Green.**
 - [ ] **Step 3: Mutation table, RUN.**
 
@@ -218,7 +238,10 @@ No open PR edits `sheet.tsx`, `confirm.tsx`, `command-palette.tsx`, `workflow-st
   | `handleOnly` false at ≥900 | sheet-desktop-arm | "a pointer drag … does not close it" |
   | arm chosen by skin, not width | sheet-desktop-arm | the Refined-at-1280 row |
   | arm remounts on crossing | sheet-desktop-arm | "keeps the typed text" |
-  | `--elev-pop` hand-edited in `tokens.css` | theme-catalogue (`themes:check`) | the generated-block row |
+  | `--elev-pop` hand-edited in `tokens.css`'s generated block | theme-catalogue (`themes:check`) | the generated-block row |
+  | `--elev-pop` missing from a hand-written default | theme-catalogue | "every palette, including the two hand-written defaults" |
+  | the arm left on vaul's slide | sheet-desktop-arm (browser) | the `animation-name` row |
+  | `SessionDetails.tsx` keeps its literal | sheet-desktop-arm | "no `(min-width: 900px)` literal … outside" |
   | `.whats-new-panel` kept | sheet-desktop-arm | "no `.whats-new-panel` rule" |
 
 - [ ] **Step 4: Verify.**
@@ -228,7 +251,7 @@ No open PR edits `sheet.tsx`, `confirm.tsx`, `command-palette.tsx`, `workflow-st
       cd pwa && ./node_modules/.bin/vitest run test/contrast.test.ts --maxWorkers=2
       cd pwa && ./node_modules/.bin/vitest run test/control-census.test.ts --maxWorkers=2
       cd ui && npm run themes:check && npm test
-      cd pwa && npm run test:browser
+      cd pwa && npm run test:browser -- --maxWorkers=2
 
 - [ ] **Step 5: Renders.** 360/390/1280/1920 × Refined/Instrument × dark/light, for the update move sheet, What's new and one ask sheet (`DialogSheet`). Use the app on a fixture home (skins spec §9). The table goes in the PR body.
 
@@ -262,41 +285,67 @@ No open PR edits `sheet.tsx`, `confirm.tsx`, `command-palette.tsx`, `workflow-st
       cd pwa && ./node_modules/.bin/vitest run test/popover.test.tsx --maxWorkers=2
       cd ui && npm test
 
-### Task P3-6: record which workflow controls each Claude Code version has, and how each is driven (D-5935) — after nothing; **operator question O1**
+### Task P3-6a: the workflow-control types, an empty table and its replay test (D-5935) — after nothing
+
+**Routing:** band 2 (types and a test harness). **Lane:** SERVER.
+
+**Files:**
+- Modify `shared/workflows.ts`: `WorkflowControlAct = 'stop-run' | 'stop-agent' | 'skip-agent'` only. The table does not live in `shared/`, because it is server-only knowledge and `shared/` ships in the PWA bundle.
+- Create `server/src/workflows/controls.ts`:
+  - `WorkflowControlDrive`: `command` (a command template whose slots take only §4.3's validated tokens) or `view-keys` (the recorded keys);
+  - each recipe carries `midTurn: boolean` and, for `view-keys`, the keys recorded inert in the main view;
+  - `WORKFLOW_CONTROLS`, keyed by `"<version>|rc"` or `"<version>|plain"`, **empty** in this task.
+- Create `server/test/workflow-controls-table.test.ts`.
+
+- [ ] **Step 0: Re-ground.** `shared/workflows.ts` is 69 lines; `server/src/workflows/` holds `read.ts` and `model.ts`.
+- [ ] **Step 1: Red.**
+  - "every `WORKFLOW_CONTROLS` row names a `(version, mode)` with a capture directory";
+  - "every recipe's keys or command text appear in that version's captures";
+  - "every `view-keys` recipe either lists every key as inert in the main view or is marked not-mid-turn";
+  - "no act outside the three";
+  - "the table is defined once, in `server/src`" (`single-definition`; `topology-clean` keeps it out of `shared/` and `pwa/`).
+- [ ] **Step 2: Green**, with the table empty; the rows hold vacuously, and a fixture row in the test itself proves each one reds.
+- [ ] **Step 3: Mutation table, RUN.**
+
+  | Mutant | Suite | Expected red |
+  |---|---|---|
+  | a row with no capture directory | workflow-controls-table | "names a `(version, mode)` with a capture directory" |
+  | a recipe key absent from its captures | workflow-controls-table | "appear in that version's captures" |
+  | the table moved to `shared/workflows.ts` | single-definition / topology-clean | "defined once, in `server/src`" |
+
+- [ ] **Step 4: Verify.**
+
+      cd server && ./node_modules/.bin/vitest run test/workflow-controls-table.test.ts --maxWorkers=2
+      cd server && ./node_modules/.bin/vitest run test/topology-clean.test.ts --maxWorkers=2
+      cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts --maxWorkers=2
+
+### Task P3-6b: record which workflow controls each Claude Code version has, and how each is driven (D-5939) — after P3-6a; **operator question O1**
 
 **Routing:** band 3 (it is measurement, and it decides what is built). Native, done by a person or session with a scratch login on a machine that runs no fleet. Never on a fleet or server box.
 
 **Files:**
-- Create `server/test/fixtures/panes/workflow-view/<version>/*.txt`. These are captures with `-e`, fixture names only, and run ids rewritten to `wf_fixture…`.
-- Create `docs/superpowers/research/2026-10-workflow-controls-capture.md`, the version × act table (drive, confirm, outcome, works mid-turn) and the procedure as run.
-- Modify `shared/workflows.ts`:
-  - `WorkflowControlAct = 'stop-run' | 'stop-agent' | 'skip-agent'`;
-  - `WorkflowControlDrive` (`command` | `view-keys`, with the recorded keys or command text);
-  - `WORKFLOW_CONTROLS`, which holds only recorded rows. It is empty if O1 is unanswered.
-- Create `server/test/workflow-controls-table.test.ts`.
+- Create `server/test/fixtures/panes/workflow-view/<version>/<rc|plain>/*.txt`. These are captures with `-e`, fixture names only, and run ids rewritten to `wf_fixture…`.
+- Create `docs/superpowers/research/2026-10-workflow-controls-capture.md`: the version × mode × act table (drive, confirm, outcome, works mid-turn, each key's main-view effect idle and mid-turn) and the procedure as run.
+- Modify `server/src/workflows/controls.ts`: the recorded rows only.
 
-- [ ] **Step 0: The procedure in spec §4.2, run as written.** Steps 1 to 3 (a)–(f). Record every capture before reading it into the table.
-- [ ] **Step 1: Red.**
-  - "every `WORKFLOW_CONTROLS` row names a version with a capture directory";
-  - "every recipe's keys or command text appear in that version's captures";
-  - "no act outside the three";
-  - "the table is defined once" (`single-definition`).
+- [ ] **Step 0: The procedure in spec §4.2, run as written.** Steps 1 to 3 (a)–(f), including (e2), in both remote-control modes. Record every capture before reading it into the table.
+- [ ] **Step 1: Red.** P3-6a's table test, now over real rows: each new row first lands without its captures and must red.
 - [ ] **Step 2: Green.**
 - [ ] **Step 3: Mutation table, RUN.**
 
   | Mutant | Suite | Expected red |
   |---|---|---|
-  | a row with no capture directory | workflow-controls-table | "names a version with a capture directory" |
-  | a recipe key absent from its captures | workflow-controls-table | "appear in that version's captures" |
+  | a recorded row's capture deleted | workflow-controls-table | "names a `(version, mode)` with a capture directory" |
+  | a `view-keys` close key not recorded inert, recipe marked mid-turn | workflow-controls-table | the inert-or-not-mid-turn row |
 
 - [ ] **Step 4: Verify.**
 
       cd server && ./node_modules/.bin/vitest run test/workflow-controls-table.test.ts --maxWorkers=2
       cd server && ./node_modules/.bin/vitest run test/topology-clean.test.ts --maxWorkers=2
 
-**Operator acts:** O1 (spec §7), which settles whose scratch login runs the capture. Until it is answered, the task lands its types and an empty table, which keeps P3-7 unblocked. P3-8 and P3-9 wait.
+**Operator acts:** O1 (spec §7), which settles whose scratch login runs the capture. Until it is answered this task waits; P3-6a has already landed the empty table, so P3-7 is unblocked and P3-8 and P3-9 wait.
 
-**Review focus:** every capture is free of names, hosts and paths. A recipe must not rest on a single capture of a view that redraws.
+**Review focus:** every capture is free of names, hosts and paths. A recipe must not rest on a single capture of a view that redraws. Every recipe key's main-view effect is recorded.
 
 ### Task P3-7: the operator-only guards land before the door — classifier row, gate pin, no-composer census (D-5936) — after nothing
 
@@ -310,7 +359,7 @@ No open PR edits `sheet.tsx`, `confirm.tsx`, `command-palette.tsx`, `workflow-st
   - a read of `shared/workflows.ts` is unchanged.
 - Modify `server/test/auth-gate.test.ts`: "no `EXEMPT` key matches `POST /api/sessions/:id/workflows/:runId/control`". It is written now and goes live when P3-8 registers the route.
 - Create `server/test/workflow-control-census.test.ts`. Its rows:
-  - "`git grep` for the path shape finds composers only under `server/src` and `pwa/src` (and the tests)";
+  - "`git grep` for the path shape finds it only under `server/src`, `pwa/src`, `server/test`, `pwa/test` and `docs/`" (any other path reds, `ccd/` in particular);
   - "`ccd/ccrc-api` has no subcommand that composes it";
   - "`CHILD_DENY_RULES` needs no row while that holds". This row fails the day a `ccrc-api` verb composes the path, until a deny rule and a classifier row exist.
 
@@ -331,21 +380,24 @@ No open PR edits `sheet.tsx`, `confirm.tsx`, `command-palette.tsx`, `workflow-st
       cd server && ./node_modules/.bin/vitest run test/auth-gate.test.ts --maxWorkers=2
       cd server && ./node_modules/.bin/vitest run test/workflow-control-census.test.ts --maxWorkers=2
 
-### Task P3-8: the verb — pane reader, pure plan, queued executor, typed refusals, `controls` and `key` on the frame (D-5937) — after P3-6 (a non-empty table) and P3-7
+### Task P3-8: the verb — pane reader, pure plan, queued executor, typed refusals, `controls` and `key` on the frame (D-5937) — after P3-6b (a non-empty table) and P3-7
 
 **Routing:** band 3 (it sends keys into live sessions). Native, **two reviewers**. **Lane:** SERVER.
 
 **Files:**
-- Create `server/src/pane/workflowView.ts`. It reads the recorded view (rows, selection, footer, closed) and the act's outcome line, using `pane/dialog.ts`'s stripper and glyph. A failed capture is `unmeasurable`.
-- Create `server/src/workflows/control.ts` (L1): `controlPlan(table, version, view, target, pane)` returns the steps or a refusal word.
-- Modify `server/src/inject/send.ts`: `controlWorkflow(d, id, …)` inside `d.queue.run`. Before it acts it checks the dialog/menu, the draft and the box (`hasMenu`, `draftOfMeasured`). It then runs capture, verify, one key, up to a budget. It closes the view with its recorded key and never sends Escape in the main view.
+- Modify `server/src/pane/dialog.ts` ≈:51: export its `SGR` pattern and prompt glyph (both private today). This starts the consolidation wave's ARCH-63 stripper consolidation; the wave finishes it.
+- Create `server/src/pane/workflowView.ts`. It reads the recorded view (rows, selection, footer, closed) and the act's outcome line, importing `pane/dialog.ts`'s `SGR` and glyph. A failed capture is `unmeasurable`.
+- Create `server/src/workflows/control.ts` (L1): `controlPlan(table, version, rc, liveWord, view, target, pane)` returns the steps or a refusal word.
+  - **Tokens.** Command text is composed only from validated tokens: the run id against `^wf_[A-Za-z0-9_-]{1,64}$`, the agent key against `^[A-Za-z0-9_.:-]{1,64}$`, and a label only when it is printable with no C0/C1 control character and at most 64 characters. Anything else is `agent-ambiguous` (an agent) or `unknown-run` (a run), with zero keys. `:runId` and `agentKey` are matched against freshly read rows before any key.
+  - **Mid-turn.** With a running-turn `liveWord` (the reading `interruptVerdict` uses) and a recipe whose `midTurn` is false, the answer is `turn-running` with zero keys. A `view-keys` recipe with any key not recorded inert in the main view is planned only when `liveWord` is not a running turn.
+- Modify `server/src/inject/send.ts`: `controlWorkflow(d, id, …)` inside `d.queue.run`. Before it acts it checks the dialog/menu, the draft and the box (`hasMenu`, `draftOfMeasured`). It then runs capture, verify, one key, up to a budget. It closes the view with its recorded key, capturing immediately before that key and sending it only while the capture shows the view, so it never sends Escape in the main view.
 - Modify `server/src/server.ts` ≈:2597, beside `/interrupt`: `POST /api/sessions/:id/workflows/:runId/control`. The body check gives 400 on a missing or blank `expect`. The route answers 404 `unknown-session` and 409 for refusals, and records the outcome like `recordInterrupt`.
-- Modify `shared/api.ts`: the `WorkflowControlRefusal` union and its result type.
-- Modify `shared/workflows.ts` (`WorkflowAgentView.key`, `WorkflowView.controls?`), `server/src/workflows/model.ts` (`key` from `foldJournal`; `controls` in `workflowsFrame` from the version and the table) and `server/src/sessionws.ts` (pass the session's `FleetSession.version`).
-- Create `server/test/workflow-view-pane.test.ts`, `workflow-control-plan.test.ts` and `workflow-control-route.test.ts`. Modify `session-workflows-frame.test.ts` and `workflows-model.test.ts`.
+- Modify `shared/api.ts`: the `WorkflowControlRefusal` union (with `turn-running`) and its result type.
+- Modify `shared/workflows.ts` (`WorkflowAgentView.key`, `WorkflowView.controls?`), `server/src/workflows/model.ts` (`key` from `foldJournal`; `controls` in `workflowsFrame` from the version, the remote-control mode, the token rules and the table) and `server/src/sessionws.ts` (pass the session's `FleetSession.version` and its remote-control mode; an unreadable mode gives no controls).
+- Create `server/test/workflow-view-pane.test.ts`, `workflow-control-plan.test.ts` and `workflow-control-route.test.ts`. Modify `session-workflows-frame.test.ts`, `workflows-model.test.ts` and `single-definition.test.ts` (a file-scoped row: `pane/workflowView.ts` declares no SGR or escape regex of its own; five copies exist elsewhere today, so the row is scoped to the new file).
 
 - [ ] **Step 0: Re-ground.**
-  - Read P3-6's write-up. Confirm that each recipe's drive kind is `command` or `view-keys`. Stop and report if the record shows anything else.
+  - Read P3-6b's write-up. Confirm that each recipe's drive kind is `command` or `view-keys`. Stop and report if the record shows anything else.
   - Read `interrupt` and `submitEnter` as they stand.
   - If W1a's `notify` funnel has landed, record through it instead of a new recorder.
 - [ ] **Step 1: Red.**
@@ -354,7 +406,12 @@ No open PR edits `sheet.tsx`, `confirm.tsx`, `command-palette.tsx`, `workflow-st
   - "a draft in the box refuses `draft-present` with zero keys sent";
   - "an open ask refuses `dialog-open` with zero keys";
   - "a selection that does not move refuses `selection-lost` and closes the view";
-  - "no step sends `Escape` while the view is closed";
+  - "no `Escape` is sent when the capture shows no view";
+  - "race: the fake `Tmux` closes the view after the capture, and no Escape or other recipe key follows";
+  - "a label containing `\n`, `\r` or `\x1b[` gets no agent control on the frame, and the route sends zero `sendLiteral` calls";
+  - "a `:runId` outside the charset is refused with zero keys";
+  - "with the live word `busy` and a `midTurn: false` recipe, zero keys are sent and the answer is `turn-running`";
+  - "a recipe for the other remote-control mode is not offered";
   - "a sent act with no observed outcome answers `sent-unconfirmed`, not success";
   - "two acts on one session never interleave, and an `interrupt` queued between waits";
   - "an asleep session refuses `not-alive` and nothing calls ensure";
@@ -366,12 +423,14 @@ No open PR edits `sheet.tsx`, `confirm.tsx`, `command-palette.tsx`, `workflow-st
   | Mutant | Suite | Expected red |
   |---|---|---|
   | draft check removed | workflow-control-route | "refuses `draft-present` with zero keys" |
-  | Escape used to close | workflow-control-route | "no step sends `Escape` while the view is closed" |
+  | Escape sent when the capture shows no view | workflow-control-route | "no `Escape` is sent when the capture shows no view", and the race row |
+  | raw label typed | workflow-control-route | the control-character label row |
+  | `liveWord` ignored | workflow-control-plan | the `turn-running` row |
   | outcome check skipped (success on send) | workflow-control-route | "answers `sent-unconfirmed`" |
   | executor outside `queue.run` | workflow-control-route | "never interleave" |
   | per-key verify removed | workflow-control-route | "refuses `selection-lost`" |
   | `controls` offered on a null version | session-workflows-frame | "absent for … a null version" |
-  | a second SGR stripper in `workflowView.ts` | single-definition | the stripper row |
+  | a second SGR pattern in `workflowView.ts` | single-definition | the new file-scoped `workflowView.ts` row |
 
 - [ ] **Step 4: Verify.**
 
@@ -387,7 +446,7 @@ No open PR edits `sheet.tsx`, `confirm.tsx`, `command-palette.tsx`, `workflow-st
 
 ### Task P3-9: the controls on the session page — Stop workflow and the per-agent menu, danger confirms, refusal words, renders (D-5938) — after P3-3, P3-5 and P3-8
 
-**Routing:** band 2 for the UI, band 3 for the confirm wording (the orchestrator checks it against P3-6's record). **Lane:** PWA/UI.
+**Routing:** band 2 for the UI, band 3 for the confirm wording (the orchestrator checks it against P3-6b's record). **Lane:** PWA/UI.
 
 **Files:**
 - Modify `ui/src/components/workflow-strip.tsx` and `workflow-strip.css`:
@@ -396,10 +455,11 @@ No open PR edits `sheet.tsx`, `confirm.tsx`, `command-palette.tsx`, `workflow-st
   - every act through `QuickConfirm tone="danger"`, with the loss sentence from the row's counts and the recorded outcome;
   - an `onControl(runId, act, agentKey?)` prop.
 - Modify `ui/src/components/workflow-strip.stories.tsx`.
-- Modify `pwa/src/lib/api.ts` (`workflowControl(id, runId, body)` and the refusal-words table entries for every `WorkflowControlRefusal`) and `pwa/src/screens/SessionScreen.tsx` ≈:603 (pass `onControl`, then a toast for the result).
+- Create `pwa/src/session/workflowControlWords.ts`: words for every `WorkflowControlRefusal` (the PWA's `*Words.ts` convention; consolidation K14 is moving refusal tables out of `lib/api.ts`).
+- Modify `pwa/src/lib/api.ts` (only `workflowControl(id, runId, body)`, the fetch) and `pwa/src/screens/SessionScreen.tsx` ≈:603 (pass `onControl`, then a toast for the result).
 - Modify `pwa/test/workflow-strip.test.tsx`. Create `pwa/test/workflow-control-words.test.ts`.
 
-- [ ] **Step 0: Re-ground.** Read P3-6's recorded outcomes. The confirm sentence may claim only what they show.
+- [ ] **Step 0: Re-ground.** Read P3-6b's recorded outcomes. The confirm sentence may claim only what they show.
 - [ ] **Step 1: Red.**
   - "no control without `controls`";
   - "no agent menu for an agent with no `key`";
@@ -430,7 +490,7 @@ No open PR edits `sheet.tsx`, `confirm.tsx`, `command-palette.tsx`, `workflow-st
 
 ## Operator acts
 
-- **O1** (P3-6): whose scratch login runs the capture. Nothing else waits on the operator. P3-1 to P3-5 and P3-7 proceed without an answer.
+- **O1** (P3-6b): whose scratch login runs the capture. Nothing else waits on the operator. P3-1 to P3-5, P3-6a and P3-7 proceed without an answer.
 
 ## Rollback
 
@@ -443,25 +503,52 @@ Each task is a plain revert:
 
 ### Issued for this work and defined here
 
-The block 5930 to 5939 was issued to this programme. This plan defines D-5930 to D-5938, one per task; 5939 stays issued and unused.
+The block 5930 to 5939 was issued to this programme. This plan defines all ten, one per task: D-5930 to D-5938 for P3-1 to P3-9 (D-5935 for P3-6a), and D-5939 for P3-6b.
 
-- **D-5930** — `sheet-motion-on-keyframes` (Task P3-1): vaul animates by keyframes, so the Sheet and the palette retime `animation-duration`/`-timing-function` through one `vaulMotion` helper on the motion tokens, and the reduced-motion and Instrument values reach every vaul surface. The transition utilities that never moved vaul are removed.
-- **D-5931** — `sheet-owns-focus` (Task P3-2): the Sheet moves focus in on open (the caller's `initialFocus`, else the panel itself, never an input, so a phone keyboard never rises unasked), keeps Radix's trap, and returns focus to the opener on close. `useCancelFirst` keeps only the choice of Cancel, and its give-back half is deleted.
+- **D-5930** — `sheet-motion-on-keyframes` (Task P3-1): vaul animates by keyframes, so the Sheet and the palette retime `animation-duration`/`-timing-function` through one literal class set, `VAUL_MOTION`, read from per-surface variables set on the motion tokens (Tailwind emits CSS only for literal classes), and the reduced-motion and Instrument values reach every vaul surface. The transition utilities that never moved vaul are removed.
+- **D-5931** — `sheet-owns-focus` (Task P3-2): the Sheet moves focus in on open, in an effect keyed on `open` (the caller's `initialFocus`, else the panel itself, never an input, so a phone keyboard never rises unasked), keeps Radix's trap, and returns focus to the opener on close; a text-field opener gets it back only on a fine pointer. `useCancelFirst` keeps only the choice of Cancel, and its give-back half is deleted.
 - **D-5932** — `sheet-pinned-footer` (Task P3-3): `Sheet` gains a `footer` slot outside the scrolling body, pinned at every width and exclusive with `full`. The seven `QC_ACTIONS` rows move into it.
-- **D-5933** — `sheet-desktop-arm` (Task P3-4): at ≥900 (`DESK_QUERY`, written once in `ui/`), a sheet is a centred dialog in sm/md/lg (440/560/720) on the generated `--elev-pop` (Instrument: hairline), with a ✕, no grabber and no drag. The arm is chosen by width, never by skin, and the terminal drawer is unchanged. `.whats-new-panel` is deleted. This task alone meets skins S18's desktop-arm gate.
+- **D-5933** — `sheet-desktop-arm` (Task P3-4): at ≥900 (`DESK_QUERY`, written once in `ui/`), a sheet is a centred dialog in sm/md/lg (440/560/720) on `--elev-pop` (generated, and hand-written in the two default palettes; Instrument: hairline), with a ✕, no grabber, no drag, and its own fade-and-rise keyframes. The arm is chosen by width, never by skin, and the terminal drawer is unchanged. `.whats-new-panel` is deleted. This task alone meets skins S18's desktop-arm gate.
 - **D-5934** — `popover-on-radix` (Task P3-5): a `Popover` primitive on `@radix-ui/react-popover`, sharing the Radix layers vaul already brings in. Its first consumer is the workflow strip's per-agent menu at ≥900.
-- **D-5935** — `workflow-controls-measured` (Task P3-6): workflow controls exist in ccrc only as `WORKFLOW_CONTROLS` rows, keyed by Claude Code version, each backed by recorded captures from a scratch machine that a replay test reads. The acts are `stop-run`, `stop-agent` and `skip-agent`, and the drives are `command` (preferred, addressed by name) or `view-keys` (verified after every key).
+- **D-5935** — `workflow-controls-measured` (Task P3-6a): workflow controls exist in ccrc only as `WORKFLOW_CONTROLS` rows in `server/src/workflows/controls.ts` (server-only), keyed by Claude Code version and remote-control mode, each backed by recorded captures that a replay test reads. The acts are `stop-run`, `stop-agent` and `skip-agent`, and the drives are `command` (preferred, addressed by name) or `view-keys` (verified after every key). Each recipe records `midTurn` and which keys are inert in the main view. P3-6a lands the types, the empty table and the replay test.
+- **D-5939** — `workflow-controls-captured` (Task P3-6b): the captures from a scratch machine that runs no fleet (throwaway `HOME`, private tmux socket, both remote-control modes), the research write-up, and the table's rows. A version with no row is offered nothing and shown as not yet recorded; re-recording is the coordinator's on that trigger, and a row never covers a later version.
 - **D-5936** — `workflow-control-operator-only` (Task P3-7): the control verb is operator-only in three layers. It is absent from the auth gate's `EXEMPT`, the classifier forbids any request naming it, and no `ccrc-api` verb composes it. A census reds the day a session verb composes it without a deny rule.
-- **D-5937** — `workflow-control-verb` (Task P3-8): `POST /api/sessions/:id/workflows/:runId/control` drives Claude Code's own mechanism through the per-session key queue, with a pure plan, a capture/verify loop, a typed refusal for every failure, `sent-unconfirmed` kept apart from success, no Escape in the main view, no wake and no swap lock. `controls` and the agent `key` are additive frame fields computed by the server.
+- **D-5937** — `workflow-control-verb` (Task P3-8): `POST /api/sessions/:id/workflows/:runId/control` drives Claude Code's own mechanism through the per-session key queue, with a pure plan, a capture/verify loop, a typed refusal for every failure (including `turn-running`), `sent-unconfirmed` kept apart from success, command text only from validated tokens, no Escape in the main view, no wake and no swap lock. `controls` and the agent `key` are additive frame fields computed by the server.
 - **D-5938** — `workflow-controls-ui` (Task P3-9): the session page's workflow strip offers only the server's `controls`: Stop workflow and a per-agent menu (a popover at ≥900, a sheet below), each behind a danger confirm that names what is lost from recorded outcomes, with words for every refusal. Fleet cards are unchanged.
 
-Unused: 5939 (issued, not used)
+
+## Review log
+
+Rev 0 was reviewed before it landed. Each finding was checked against base `397be1ec5` and the open PRs, and then applied or rejected. All were applied.
+
+| # | Sev. | Finding | Checked | Outcome |
+|---|---|---|---|---|
+| 1 | high | A runtime `vaulMotion` builds interpolated Tailwind classes that get no CSS, and moving `PALETTE_MOTION` onto it silently stops the palette's working retiming; jsdom reds stay green | Tailwind ^4.3.3 with `@source`; `PALETTE_MOTION` is four literals today | Applied: one literal `VAUL_MOTION` set over per-surface variables, a no-template-literal scan, and a browser leg reading the computed duration (P3-1, spec §2.3) |
+| 2 | high | A `command` drive would type a raw script- or model-written label into a live pane | labels come from the journal or the meta `description`, unchecked | Applied: command text only from validated tokens, the route re-matches rows, and control-character reds (spec §4.3, P3-8) |
+| 3 | high | "Never Escape in the main view" cannot hold if the recorded close key is Escape (a race between capture and key) | — | Applied: (e2) records every key's main-view effect; a non-inert key only while no turn runs, captured right before; a race red replaces the mutant (spec §4.2–§4.4, P3-6a, P3-8) |
+| 4 | med | Only ten palettes are generated; the two defaults are hand-written | `tokens.css` ≈:412, ≈:529, block ≈:545–:1267 | Applied: hand-add `--elev-pop` to both; red covers every palette (P3-4, spec §1.1, §2.2) |
+| 5 | med | A third `(min-width: 900px)` literal, and W2/W3 collisions | `SessionDetails.tsx` ≈:79 | Applied: the file is added, the pin is scoped to "outside `use-media-query.ts`", and Gates rows are added for W2 S3 and W3 |
+| 6 | med | P3-2 misses `UpdateMoveSheet` and `AckConfirm`; `useCancelFirst` returns a callback ref | `UpdateMoveSheet.tsx` ≈:284, `updateAck.ts` ≈:147, `confirm.tsx` ≈:71 | Applied: both files, a `RefObject` return, and the Ack-commit red |
+| 7 | med | `onOpenAutoFocus` skips the reopen-during-close path | vaul 1.1.2 forwards it, then `preventDefault` when `autoFocus` is false | Applied: an effect keyed on `open`; `onOpenAutoFocus` only suppresses; a reopen red |
+| 8 | med | The centred arm still runs vaul's slide | — | Applied: `sheet-pop-in`/`-out` keyframes in `theme.css`, literal `animation-name` classes, and a browser red |
+| 9 | med | No mid-turn input or refusal | — | Applied: `midTurn` per recipe, `liveWord` into `controlPlan`, `turn-running` |
+| 10 | med | No launch mode for captures; RC panes render differently | `interrupt`'s RC note in `inject/send.ts` | Applied: both modes recorded, table keyed by `(version, mode)`, unreadable mode means no controls |
+| 11 | med | The Gates table is stale | re-measured all 27 open PRs | Applied: #821, #722 (`sessionws.ts`, `single-definition`), #737, #817, #422–#424 rows added; the sentence corrected |
+| 12 | med | `dialog.ts`'s SGR is private and `single-definition` has no stripper row | `dialog.ts` ≈:51, `send.ts` ≈:129 | Applied: export from `dialog.ts` (ARCH-63 overlap noted) and a file-scoped row |
+| 13 | med | A self-opened sheet over the composer moves focus and raises the keyboard on give-back | — | Applied: a text-field opener gets focus back only on a fine pointer; pinned both ways |
+| 14 | low | The double-give-back mutant cannot red | — | Applied: a source-scan red on `confirm.tsx` |
+| 15 | low | The recipe table in L0 `shared/` ships to the PWA | — | Applied: `server/src/workflows/controls.ts` |
+| 16 | low | Refusal words in `lib/api.ts` grow what K14 shrinks | — | Applied: `pwa/src/session/workflowControlWords.ts` |
+| 17 | low | No refresh policy for exact-version keys | — | Applied: spec §4.2 step 5 (the trigger, the owner, no range carry-over) |
+| 18 | low | The census reds on the docs that name the path | — | Applied: allowed set named exactly, including `docs/` |
+| 19 | low | An empty-table P3-6 breaks "one task, one PR" | — | Applied: split into P3-6a (D-5935) and P3-6b (D-5939, the issued spare) |
+| 20 | low | `test:browser` without `--maxWorkers=2`; `QC_ACTIONS` is in eight files | `git grep -l` gives 8 | Applied: both corrected |
 
 ## Out of scope
 
 - The toast and `QuickConfirm` polish that the skins W1 row orders after the arm.
 - Moving the ask sheet onto new chrome beyond the arm (skins W4).
-- Any non-interactive control surface P3-6 might find, which needs a spec revision.
+- Any non-interactive control surface P3-6b might find, which needs a spec revision.
 - Resuming a stopped workflow.
 - Workflow controls on fleet cards.
 - A `ccrc-api` verb for any of this.
