@@ -2605,7 +2605,7 @@ describe('store.mjs: export segments (W1-B4; spec 9.15 "Write", "Who reads it"; 
     expect(recordDirFsyncs(() => segStore.ensureSegmentDir(exportRoot, SID)).dirs).toEqual([]);
   });
 
-  it('modes: under an inherited umask 0002 the segment is 0600 and export/ and export/<store_id>/ are 0700; a hand-made export/ at 0755 is brought to 0700', () => {
+  it('modes: under umask 0002, which the child sets before it imports store.mjs, the segment is 0600 and export/ and export/<store_id>/ are 0700; a hand-made export/ at 0755 is brought to 0700', () => {
     const root = path.join(mkTmp('ccrc-history-seg-umask-'), segLib.EXPORT_DIR);
     const r = childPublish(root, 1, { umask: '0002' });
     expect(r.status, String(r.stderr)).toBe(0);

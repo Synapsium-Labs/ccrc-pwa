@@ -123,7 +123,7 @@ Before editing a B1, B2 or B4 function in place, re-read the merged code at the 
 - **D-numbers.** This plan's departures were issued by the allocator.
   - A task cites only the number(s) its own text names, and defines each in "Deviations found" in the em-dash form (``- **D-N** — `slug` (Task k): …``), in the commit that first cites it.
   - Never write a number that was not issued, and never write a range: cite each number on its own (D-5393, D-5394, …).
-  - Earlier plans' numbers are cited bare (for example D-4762, D-5395 or D-5399), or as "B4's D-N" or "B2's D-N" where the owner helps the reader; the namespace is global, and they are never defined here. This plan's own numbers are D-5632, D-5633, D-5634, D-5635, D-5636, D-5637 and D-5638, and no other.
+  - Earlier plans' numbers are cited bare (for example D-4762, D-5395 or D-5399), or as "B4's D-N" or "B2's D-N" where the owner helps the reader; the namespace is global, and they are never defined here. This plan's own numbers are D-5632, D-5633, D-5634, D-5635, D-5636, D-5637 and D-5638, and, found while executing and defined in "Deviations found" from the run's block, D-5639, D-5640, D-5641 and D-5725.
   - A departure this plan does not list takes a number only from a block the coordinator names in the brief; otherwise the worker writes `D-TBD-<slug>` and reports it.
   - Existing `D-N` refs in source comments are history: read them, never delete them. Where a task changes the behaviour a comment describes (Task 5's first-wins prose), it appends the new reading and keeps the old ref.
   - Before the PR: `git fetch origin main`, then `cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts`.
@@ -5246,7 +5246,7 @@ This plan's own departures, issued to it on 2026-10-19 and defined here in the p
   - **`budget` and `off` never escalate** (coordinator rulings R4 and R5 as amended): an ingest backlog that long already FAILs `lag-high`, and the off switch holds back every other freshness FAIL (D-4314), so it holds this one too.
   - **The age.** It counts from `sinceMs`, which Task 1 restarts when the word crosses between the escalating class and `budget`/`off`, so a check starved for a day that then stops on `wal-held` is a fresh WARN. A `sinceMs` recorded in the future reads as 0 min and never FAILs.
   - **An unparseable record** is named unmeasured (`status-unreadable`), never read as "no check".
-  - **Provisional.** The FAIL's class and threshold are provisional (R5), for the operator at plan approval.
+  - **Provisional.** The FAIL's class and threshold are provisional (R5), for the operator at plan approval. Taken as written on 2026-10-19 by the coordinator, under the operator's directive to proceed through the build waves (programme ledger); the operator has not ruled on R5 by name.
 - **D-5634** — `history-export-segment-whole-check` (Task 3): NEW departure (no spec §16 row).
   - **What the spec says.** §9.15 "After a bind" checks only that a segment a mark names is on this box.
   - **What B4 did.** Its check compared names only. A carried file under a marked name therefore counted as present, and its marks stood over text no segment on this box holds, when the file was cut short by a copy, was not SQLite at all, belonged to another store, or held another segment's bytes. A later `--restore` or `--rebuild` then stalls on it (D-4765 (`history-export-segment-unreadable-stalls`)).
