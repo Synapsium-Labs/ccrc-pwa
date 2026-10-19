@@ -22,11 +22,20 @@ import { PasskeyCeremonyError, assertStepUp, passkeyLoginSupported, type Credent
  *
  * The passphrase is never held here: the arm's field keeps it in its own state (`ConfirmItsYou`), and
  * {@link StepUp.submitPassphrase} takes it for one request.
+ *
+ * ONE INSTANCE PER SESSION AT A TIME. The box keeps one live step-up challenge per session, and each start replaces
+ * the last, so two mounted instances on one session (two tabs, or an installed window beside a tab) would invalidate
+ * each other's challenges. A host mounts one; a hidden page never refreshes on the timer, which keeps a background
+ * tab from taking the challenge from the one in front.
  */
 
-/** A held challenge is replaced after this long, before the box's own two-minute TTL (`CHALLENGE_TTL_MS`,
- *  `server/src/auth/webauthn.ts`) would refuse it and charge the session's budget for a stale one (D-5690). */
-export const CHALLENGE_REFRESH_MS = 90_000;
+/** A held challenge is replaced after this long, and is never signed once it is this old (D-5690 (2)). With
+ *  {@link STEP_UP_CEREMONY_MS} it stays inside the box's two-minute TTL (`CHALLENGE_TTL_MS`,
+ *  `server/src/auth/webauthn.ts`), with five seconds to spare for the round trips, so a challenge signed at the bound
+ *  by the slowest ceremony is still live when /finish reads it. The test pins the sum. */
+export const CHALLENGE_REFRESH_MS = 55_000;
+/** The passkey prompt's own timeout (`assertStepUp`). */
+export const STEP_UP_CEREMONY_MS = 60_000;
 
 /** The arms, and the states around them. `loading` is the challenge on its way; `unavailable` is a step the
  *  operator cannot take from here, with its sentence in {@link StepUp.notice}. */
@@ -71,6 +80,8 @@ export const CANCELLED_TEXT = 'The passkey prompt closed before it finished. Try
 export const NO_PASSKEY_HERE_TEXT =
   "This browser can't use a passkey, and this box asks for one. Confirm from a device that has your passkey.";
 export const UNREACHABLE_TEXT = "Couldn't reach the box. Try again.";
+/** A tap on a challenge past its bound: nothing is signed, a fresh one is fetched (D-5690 (2)). */
+export const STALE_CHALLENGE_TEXT = 'Getting a fresh check. Tap again in a moment.';
 
 /** The refusal words a step-up route answers, each with its sentence and whether another try could cure it. A word
  *  not listed reads as {@link UNREACHABLE_TEXT}'s sibling below, never as the server's own text. */
@@ -119,7 +130,11 @@ export function useStepUp(freshUntil: number | null, deps: StepUpDeps = {}): Ste
   // Bumped to fetch a new challenge: after every attempt (a challenge is single-use), on the refresh timer, and on
   // a retry.
   const [generation, setGeneration] = useState(0);
-  const challenge = useRef<StepUpStart | null>(null);
+  // The held challenge, with the client-clock time it arrived: its age is read at the tap and on return to the page.
+  const challenge = useRef<{ s: StepUpStart; fetchedAt: number } | null>(null);
+  // Start answered `not-configured` (the box's passkey settings are broken), so the passphrase arm is the step. A
+  // `passkey-enrolled` answer to it then means a key exists that this box cannot verify: not a loop back to start.
+  const notConfigured = useRef(false);
   const busyRef = useRef(false);
   const live = useRef(true);
   useEffect(() => {
@@ -148,8 +163,14 @@ export function useStepUp(freshUntil: number | null, deps: StepUpDeps = {}): Ste
       return undefined;
     }
     let current = true;
+    let refresh: ReturnType<typeof setTimeout> | undefined;
+    // A new generation: the superseded challenge is dead the moment the box issues the next, so it is never tappable
+    // while the new start is in flight.
+    challenge.current = null;
+    setHeld(false);
     void client.stepUpStart().then((s) => {
       if (!current || !live.current) return;
+      notConfigured.current = false;
       if (s.allowCredentialIdsB64url.length === 0) {
         challenge.current = null;
         setHeld(false);
@@ -164,25 +185,49 @@ export function useStepUp(freshUntil: number | null, deps: StepUpDeps = {}): Ste
         setCanRetry(false);
         return;
       }
-      challenge.current = s;
+      challenge.current = { s, fetchedAt: Date.now() };
       setHeld(true);
+      setNotice((n) => (n === STALE_CHALLENGE_TEXT ? null : n));
       setArm('passkey');
+      // Replace a held challenge at its bound (D-5690 (2)). Only the passkey arm holds one. A hidden page skips it
+      // (its timers may be suspended or throttled anyway): returning to the page replaces a stale one instead.
+      refresh = setTimeout(() => {
+        if (current && live.current && !busyRef.current && document.visibilityState !== 'hidden') {
+          setGeneration((g) => g + 1);
+        }
+      }, CHALLENGE_REFRESH_MS);
     }, (err: unknown) => {
       if (!current || !live.current) return;
-      challenge.current = null;
-      setHeld(false);
-      fail(wordOf(err));
+      const word = wordOf(err);
+      if (word === 'not-configured') {
+        // The box's passkey settings are broken, so no passkey can be verified: the passphrase is the door every box
+        // has, and its route refuses `passkey-enrolled` itself, so this is never a step down (D-5690 (6)).
+        notConfigured.current = true;
+        setNotice(null);
+        setCanRetry(false);
+        setArm('passphrase');
+        return;
+      }
+      fail(word);
     });
-    // Replace a held challenge before the box's TTL would refuse it (D-5690). The passphrase arm holds none, and a
-    // replaced one is simply the next generation.
-    const refresh = setTimeout(() => {
-      if (current && live.current && !busyRef.current) setGeneration((g) => g + 1);
-    }, CHALLENGE_REFRESH_MS);
     return () => {
       current = false;
-      clearTimeout(refresh);
+      if (refresh !== undefined) clearTimeout(refresh);
     };
   }, [needed, generation, client, canPasskey, fail]);
+
+  // Back on the page: a challenge that aged past its bound while timers were suspended is replaced now. The age is
+  // read on the client clock, which keeps running while timers do not.
+  useEffect(() => {
+    if (!needed) return undefined;
+    const onVisibility = (): void => {
+      const c = challenge.current;
+      if (document.visibilityState !== 'visible' || busyRef.current || c === null) return;
+      if (Date.now() - c.fetchedAt >= CHALLENGE_REFRESH_MS) setGeneration((g) => g + 1);
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, [needed]);
 
   const confirmed = useCallback((a: StepUpAnswer): void => {
     if (!live.current) return;
@@ -207,6 +252,11 @@ export function useStepUp(freshUntil: number | null, deps: StepUpDeps = {}): Ste
       setNotice(wrongText);
       setCanRetry(false);
     } else if (word === 'passkey-enrolled') {
+      if (notConfigured.current) {
+        // Start said the passkey settings are broken, and a passkey is enrolled: neither arm can confirm here.
+        fail('not-configured');
+        return;
+      }
       // A passkey was enrolled since the step was shown: the next start offers the passkey arm.
       setNotice(null);
       setCanRetry(false);
@@ -222,13 +272,22 @@ export function useStepUp(freshUntil: number | null, deps: StepUpDeps = {}): Ste
   }, [fail]);
 
   const confirm = useCallback((): void => {
-    const options = challenge.current;
-    if (options === null || busyRef.current) return;
+    const held = challenge.current;
+    if (held === null || busyRef.current) return;
     // Spent here: a challenge is single-use, and the next tap gets the next generation's.
     challenge.current = null;
+    if (Date.now() - held.fetchedAt >= CHALLENGE_REFRESH_MS) {
+      // Past its bound (a suspended page's timer never fired): signing it would spend one of the session's attempts
+      // on a refusal the operator did not earn. Nothing is signed; the next generation fetches a fresh one.
+      setHeld(false);
+      setNotice(STALE_CHALLENGE_TEXT);
+      setCanRetry(false);
+      setGeneration((g) => g + 1);
+      return;
+    }
     busyRef.current = true;
     // SYNCHRONOUS: `assertStepUp` calls `credentials.get` before it returns, inside this tap's user activation.
-    const ceremony = assertStepUp(options, credentials);
+    const ceremony = assertStepUp(held.s, credentials, STEP_UP_CEREMONY_MS);
     setHeld(false);
     setBusy(true);
     setNotice(null);

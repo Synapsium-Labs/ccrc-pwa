@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useId, useState, type FormEvent, type ReactNode } from 'react';
 import { Button, TextInput } from '@ccrc/ui';
 import type { StepUp } from './useStepUp';
 
@@ -44,6 +44,7 @@ export function ConfirmItsYou({ stepUp }: { stepUp: StepUp }): ReactNode {
  */
 function PassphraseStep({ stepUp }: { stepUp: StepUp }): ReactNode {
   const [passphrase, setPassphrase] = useState('');
+  const fieldId = useId();
   useEffect(() => {
     const onVisibility = (): void => {
       if (document.visibilityState === 'hidden') setPassphrase('');
@@ -59,9 +60,9 @@ function PassphraseStep({ stepUp }: { stepUp: StepUp }): ReactNode {
   };
   return (
     <form className="flex flex-col gap-2" onSubmit={submit}>
-      <label htmlFor="ccrc-step-up-passphrase">Passphrase</label>
+      <label htmlFor={fieldId}>Passphrase</label>
       <TextInput
-        id="ccrc-step-up-passphrase"
+        id={fieldId}
         type="password"
         autoComplete="current-password"
         spellCheck={false}

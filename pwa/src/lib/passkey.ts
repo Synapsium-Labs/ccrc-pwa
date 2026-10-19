@@ -293,7 +293,7 @@ export async function assertPasskey(
  * prompting for a key that cannot exist (the passphrase arm is the step on such a box).
  */
 export function assertStepUp(
-  options: StepUpStart, creds: CredentialsApi = realCredentials(),
+  options: StepUpStart, creds: CredentialsApi = realCredentials(), timeoutMs = 60_000,
 ): Promise<PasskeyAssertFinish> {
   if (options.allowCredentialIdsB64url.length === 0) {
     return Promise.reject(new PasskeyCeremonyError('no passkey is enrolled on this box', options.rpId));
@@ -305,7 +305,7 @@ export function assertStepUp(
       allowCredentials: options.allowCredentialIdsB64url.map((id) => ({ type: 'public-key' as const, id: fromB64url(id) })),
       // Matches the server, which refuses an assertion with the UV flag clear.
       userVerification: 'required',
-      timeout: 60_000,
+      timeout: timeoutMs,
     },
   }), options.rpId);
   return ceremony.then((got) => {

@@ -17,7 +17,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useState, type ReactNode } from 'react';
 import { ConfirmItsYou, LOCKED_TEXT } from '../src/accounts/ConfirmItsYou';
-import { useStepUp, type StepUpDeps } from '../src/accounts/useStepUp';
+import { CHALLENGE_REFRESH_MS, STEP_UP_CEREMONY_MS, STALE_CHALLENGE_TEXT, useStepUp, type StepUpDeps } from '../src/accounts/useStepUp';
 import { ApiError, createApi } from '../src/lib/api';
 import { toB64url, type CredentialsApi } from '../src/lib/passkey';
 
@@ -146,8 +146,12 @@ describe('Confirm it\'s you (D-5512, spec §3.2)', () => {
     expect(pk.rpId).toBe('box.example.invalid');
     expect(pk.userVerification).toBe('required');
 
-    // The assertion reaches /finish, and the stamp hides the step.
-    await waitFor(() => expect(screen.queryByRole('button', { name: /confirm it.s you/i })).toBeNull());
+    // The assertion reaches /finish, and the stamp it earns hides the step: checked AFTER the finish settles, since
+    // the button reads "Confirming…" while it is in flight (D-5690 (3): the earned stamp outranks the screen's read).
+    await waitFor(() => expect(box.bodies('/api/auth/step-up/finish')).toHaveLength(1));
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+    expect(screen.queryByRole('button', { name: /confirm/i })).toBeNull();
+    expect(screen.queryByRole('status')).toBeNull();
     expect(box.bodies('/api/auth/step-up/finish')).toEqual([{
       credentialIdB64url: CRED_ID,
       authenticatorDataB64url: b64([5]),
@@ -276,5 +280,137 @@ describe('Confirm it\'s you (D-5512, spec §3.2)', () => {
     render(<Sheet freshUntil={null} deps={{ client: createApi(box.fetch as unknown as typeof fetch) }} />);
     await waitFor(() => expect(screen.getByRole('status').textContent).toMatch(/passkey/i));
     expect(screen.queryByRole('button')).toBeNull();
+  });
+
+  // ---- Review round 1 (D-5690, amended) ----
+
+  it('start answers `not-configured` on a box with no passkey: the passphrase field shows (spec §3.2 fallback)', async () => {
+    const box = fakeBox({ start: () => json(501, { ok: false, error: 'not-configured' }) });
+    render(<Sheet freshUntil={null} deps={{ client: createApi(box.fetch as unknown as typeof fetch), credentials: fakeAuthenticator() }} />);
+    const field = await screen.findByLabelText(/passphrase/i) as HTMLInputElement;
+    fireEvent.change(field, { target: { value: 'pass-one' } });
+    fireEvent.submit(field.closest('form')!);
+    await waitFor(() => expect(box.bodies('/api/auth/step-up/passphrase')).toEqual([{ passphrase: 'pass-one' }]));
+    await waitFor(() => expect(screen.queryByLabelText(/passphrase/i)).toBeNull());
+  });
+
+  it('`not-configured` at start and `passkey-enrolled` from the passphrase: the not-configured sentence, no loop', async () => {
+    const box = fakeBox({
+      start: () => json(501, { ok: false, error: 'not-configured' }),
+      answer: () => json(409, { ok: false, error: 'passkey-enrolled' }),
+    });
+    render(<Sheet freshUntil={null} deps={{ client: createApi(box.fetch as unknown as typeof fetch), credentials: fakeAuthenticator() }} />);
+    const field = await screen.findByLabelText(/passphrase/i) as HTMLInputElement;
+    fireEvent.change(field, { target: { value: 'pass-one' } });
+    fireEvent.submit(field.closest('form')!);
+    await waitFor(() => expect(screen.getByRole('status').textContent).toMatch(/passkey settings are incomplete/i));
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+    expect(screen.queryByLabelText(/passphrase/i)).toBeNull();
+    expect(screen.queryByRole('button')).toBeNull();
+    expect(box.calls().filter((p) => p === '/api/auth/step-up/start')).toHaveLength(1);
+  });
+
+  it('`passkey-enrolled` from the passphrase arm reads start again, which offers the passkey button (D-5690 (4))', async () => {
+    let enrolled = false;
+    const box = fakeBox({
+      start: () => json(200, { challengeB64url: CHALLENGE, rpId: 'box.example.invalid', allowCredentialIdsB64url: enrolled ? [CRED_ID] : [] }),
+      answer: () => { enrolled = true; return json(409, { ok: false, error: 'passkey-enrolled' }); },
+    });
+    render(<Sheet freshUntil={null} deps={{ client: createApi(box.fetch as unknown as typeof fetch), credentials: fakeAuthenticator() }} />);
+    const field = await screen.findByLabelText(/passphrase/i) as HTMLInputElement;
+    fireEvent.change(field, { target: { value: 'pass-one' } });
+    fireEvent.submit(field.closest('form')!);
+    await waitFor(() => expect(confirmButton()).not.toBeDisabled());
+    expect(box.calls().filter((p) => p === '/api/auth/step-up/start')).toHaveLength(2);
+    expect(screen.queryByLabelText(/passphrase/i)).toBeNull();
+  });
+
+  it('`rate-limited` at start offers Try again, which is a new start (D-5690 (6))', async () => {
+    let n = 0;
+    const box = fakeBox({
+      start: () => (n++ === 0 ? json(429, { ok: false, error: 'rate-limited' })
+        : json(200, { challengeB64url: CHALLENGE, rpId: 'box.example.invalid', allowCredentialIdsB64url: [CRED_ID] })),
+    });
+    render(<Sheet freshUntil={null} deps={{ client: createApi(box.fetch as unknown as typeof fetch), credentials: fakeAuthenticator() }} />);
+    fireEvent.click(await screen.findByRole('button', { name: /try again/i }));
+    await waitFor(() => expect(confirmButton()).not.toBeDisabled());
+    expect(box.calls()).toEqual(['/api/auth/step-up/start', '/api/auth/step-up/start']);
+  });
+
+  it('an act refused with a 403 that is not step-up-required is rethrown, and the step stays hidden', async () => {
+    const box = fakeBox();
+    const err = new ApiError(403, { ok: false, error: 'insecure-origin' });
+    const errors: unknown[] = [];
+    function ActSheet(): ReactNode {
+      const stepUp = useStepUp(Date.now() + 60_000, { client: createApi(box.fetch as unknown as typeof fetch), credentials: fakeAuthenticator() });
+      return (
+        <div>
+          <ConfirmItsYou stepUp={stepUp} />
+          <button type="button" onClick={() => void stepUp.runAct(async () => { throw err; }).catch((e: unknown) => errors.push(e))}>Remove</button>
+        </div>
+      );
+    }
+    render(<ActSheet />);
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    await waitFor(() => expect(errors).toEqual([err]));
+    expect(screen.queryByRole('button', { name: /confirm it.s you/i })).toBeNull();
+    expect(box.calls()).toEqual([]);
+  });
+
+  it('a challenge held past its bound (timers suspended, laptop asleep) is never signed: a fresh start instead', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const box = fakeBox();
+    const auth = fakeAuthenticator();
+    render(<Sheet freshUntil={null} deps={{ client: createApi(box.fetch as unknown as typeof fetch), credentials: auth }} />);
+    await waitFor(() => expect(confirmButton()).not.toBeDisabled());
+    // Wall time moves five minutes; no timer runs (a suspended page).
+    vi.setSystemTime(Date.now() + 5 * 60_000);
+    tap(confirmButton());
+    expect(auth.calls).toBe(0);
+    expect(screen.getByRole('status').textContent).toBe(STALE_CHALLENGE_TEXT);
+    await waitFor(() => expect(box.calls()).toEqual(['/api/auth/step-up/start', '/api/auth/step-up/start']));
+    await waitFor(() => expect(confirmButton()).not.toBeDisabled());
+    tap(confirmButton());
+    expect(auth.syncCalls).toBe(1);
+  });
+
+  it('coming back to a page whose held challenge is past its bound fetches a fresh one', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const box = fakeBox();
+    render(<Sheet freshUntil={null} deps={{ client: createApi(box.fetch as unknown as typeof fetch), credentials: fakeAuthenticator() }} />);
+    await waitFor(() => expect(confirmButton()).not.toBeDisabled());
+    vi.setSystemTime(Date.now() + 5 * 60_000);
+    fireEvent(document, new Event('visibilitychange'));
+    await waitFor(() => expect(box.calls()).toEqual(['/api/auth/step-up/start', '/api/auth/step-up/start']));
+  });
+
+  it('while a replacement start is in flight the superseded challenge cannot be tapped', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let n = 0;
+    let release: () => void = () => undefined;
+    const box = fakeBox({
+      start: () => json(200, { challengeB64url: CHALLENGE, rpId: 'box.example.invalid', allowCredentialIdsB64url: [CRED_ID] }),
+    });
+    const inner = box.fetch.getMockImplementation() as (path: string, init?: RequestInit) => Promise<Response>;
+    box.fetch.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === '/api/auth/step-up/start' && n++ === 1) await new Promise<void>((r) => { release = r; });
+      return inner(path, init);
+    });
+    const auth = fakeAuthenticator();
+    render(<Sheet freshUntil={null} deps={{ client: createApi(box.fetch as unknown as typeof fetch), credentials: auth }} />);
+    await waitFor(() => expect(confirmButton()).not.toBeDisabled());
+    await act(async () => { await vi.advanceTimersByTimeAsync(CHALLENGE_REFRESH_MS + 1_000); });
+    await waitFor(() => expect(n).toBe(2));
+    expect(confirmButton()).toBeDisabled();
+    tap(confirmButton());
+    expect(auth.calls).toBe(0);
+    await act(async () => { release(); await Promise.resolve(); });
+    await waitFor(() => expect(confirmButton()).not.toBeDisabled());
+  });
+
+  it('the refresh bound plus the ceremony timeout stays inside the box\'s two-minute challenge TTL', () => {
+    // `CHALLENGE_TTL_MS`, server/src/auth/webauthn.ts. A challenge used at the bound and signed at the timeout must
+    // still be live when /finish reads it.
+    expect(CHALLENGE_REFRESH_MS + STEP_UP_CEREMONY_MS).toBeLessThanOrEqual(120_000 - 5_000);
   });
 });
