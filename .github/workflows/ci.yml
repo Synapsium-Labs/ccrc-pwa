@@ -931,6 +931,7 @@ jobs:
           test/history-derive.test.ts
           test/history-skill.test.ts
           test/history-card.test.ts
+          test/history-replay.test.ts
           EOF
           CCRC_TEST_LIST="$RUNNER_TEMP/tests.txt" ./node_modules/.bin/vitest run --config vitest.select.config.ts
 
