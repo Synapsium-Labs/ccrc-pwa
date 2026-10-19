@@ -8213,25 +8213,33 @@ export function segmentOrdersAfter(a, b) {
   return pb === null ? true : segmentPartsOrder(pa, pb) > 0;
 }
 
-/** The writers of a replay's listed segments and where each one's seqs lie (D-5726 (history-export-replay-mark-one-writer), wave 5h-1).
- *  `ranges` maps a writer token to its lowest and highest listed seq; a name off the segment grammar is dropped. A writer minted
- *  by a rebind (rebuild, restore, adopt) is a SUCCESSOR of the earlier ones: nextSegmentSeq starts it one past the highest seq on
- *  disk or recorded, so every seq of it lies above every seq of theirs, and its store held everything their segments carried.
- *  Writer W2 succeeds W1 when W2's lowest listed seq is above W1's highest. Two writers neither of which succeeds the other are a
- *  FORK: their ranges interleave or touch (an equal seq included), which only two writers running at once produce. `forked` is
- *  whether any pair of the directory's writers is a fork. */
-export function replayWriterLayout(names) {
+/** The writers of a replay's segments and where each one's seqs lie (D-5726 (history-export-replay-mark-one-writer), wave 5h-1).
+ *  `listed` is the segment names the directory holds; `marked` is the distinct segment names the store's marks hold
+ *  (blobs.exported_seg and entries.exported_seg), which may name a segment that is no longer listed (moved aside after a recovery).
+ *  `ranges` maps a writer token to its lowest and highest seq over BOTH sets, so a fork hidden by a missing segment reads as a fork
+ *  and not as succession; a name off the segment grammar is dropped. `listed` is the set of listed names (the grammar ones), so
+ *  that decideReplayMark can ask whether a held mark names a segment that is there. A writer minted by a rebind (rebuild, restore,
+ *  adopt) is a SUCCESSOR of the earlier ones: nextSegmentSeq starts it one past the highest seq on disk or recorded, so every seq of
+ *  it lies above every seq of theirs, and its store held everything their segments carried. Writer W2 succeeds W1 when W2's lowest
+ *  seq is above W1's highest. Two writers neither of which succeeds the other are a FORK: their ranges interleave or touch (an equal
+ *  seq included), which only two writers running at once produce. `forked` is whether any pair of the directory's writers is a
+ *  fork. */
+export function replayWriterLayout(listed, marked = []) {
   const ranges = new Map();
-  for (const n of names) {
+  const names = new Set();
+  const range = (n) => {
     const p = parseSegmentName(n);
-    if (p === null) continue;
+    if (p === null) return null;
     const r = ranges.get(p.writer);
     if (r === undefined) ranges.set(p.writer, { lo: p.seq, hi: p.seq });
     else {
       if (p.seq < r.lo) r.lo = p.seq;
       if (p.seq > r.hi) r.hi = p.seq;
     }
-  }
+    return p;
+  };
+  for (const n of listed) if (range(n) !== null) names.add(n);
+  for (const n of marked) range(n);
   const all = [...ranges.values()];
   let forked = false;
   for (let i = 0; i < all.length && !forked; i += 1) {
@@ -8239,7 +8247,7 @@ export function replayWriterLayout(names) {
       if (!(all[i].lo > all[j].hi || all[j].lo > all[i].hi)) { forked = true; break; }
     }
   }
-  return { ranges, forked };
+  return { ranges, forked, listed: names };
 }
 
 /** What replay does with an export mark when the segment `seg` carries the row (D-5726 (history-export-replay-mark-one-writer),
@@ -8254,16 +8262,22 @@ export function replayWriterLayout(names) {
  *    sticky for the rest of the replay: a later segment of either writer cannot re-mark a row whose earlier carriers disagree),
  *    else 'mark' (D-5637's rule);
  *  - `held` names `seg`: 'keep' (the same page replayed again after a kill);
- *  - `held` names the same writer's segment: 'mark' when `seg` orders after it (segmentOrdersAfter), else 'keep';
+ *  - `held` names the same writer's segment: 'mark' when `seg` orders after it (segmentOrdersAfter), else 'keep'. This holds
+ *    whether or not `held` is still listed: within one writer every export wrote all the store held, and nothing deletes it;
+ *  - `held` names a segment the listing does not hold (moved aside after a recovery) of ANOTHER writer: 'take-off' in a directory
+ *    that holds a fork, else 'keep'. The mark is not moved onto another writer's segment, which may lack what the missing one
+ *    carried; it stays on the missing name, so the check after a bind clears it and the row exports again (one re-export, even
+ *    when a successor carries the row). In a fork it comes off at once, as the fork rule below would, because a plain 'keep' there
+ *    would let a later segment of the held writer carry the mark past an intervening fork segment;
  *  - `seg`'s writer is a successor of the held one: 'mark' (the mark moves forward to the superset);
  *  - the held writer is a successor of `seg`'s: 'keep' (the held mark already names the later superset, as a restore's backup
  *    marked by a later writer's segment does);
  *  - otherwise a fork: 'take-off'.
- *  A held writer the layout does not list cannot be ranged: the choice here is to judge it by the (seq, writer) order, 'mark'
- *  when `seg` orders after the held name and 'keep' otherwise (the segment is missing, so the check after a bind clears the
- *  mark anyway). `held` is the row's mark as the store holds it; a name off the segment grammar names no carrier and counts as
- *  null. `layout` is replayWriterLayout's answer for the segments listed for this replay. `seg` is a listed name: off the grammar
- *  it is a caller's bug and throws, as segmentOrdersAfter does. */
+ *  From the unlisted-held rule on, `held` is listed, so its writer is ranged (replayWriterLayout ranges the listed names), as is
+ *  `seg`'s: a writer the layout does not range there is a caller's bug and throws, as an off-grammar `seg` does. `held` is the
+ *  row's mark as the store holds it; a name off the segment grammar names no carrier and counts as null. `layout` is
+ *  replayWriterLayout's answer for the segments listed for this replay and the names the store's marks hold. `seg` is a listed
+ *  name: off the grammar it is a caller's bug and throws, as segmentOrdersAfter does. */
 export function decideReplayMark({ seg, held, fresh, layout }) {
   const ps = parseSegmentName(seg);
   if (ps === null) throw new TypeError(`decideReplayMark: not a segment name: ${JSON.stringify(seg)}`);
@@ -8272,9 +8286,10 @@ export function decideReplayMark({ seg, held, fresh, layout }) {
   if (ph === null) return layout.forked ? 'keep' : 'mark';
   if (held === seg) return 'keep';
   if (ph.writer === ps.writer) return segmentOrdersAfter(seg, held) ? 'mark' : 'keep';
+  if (!layout.listed.has(held)) return layout.forked ? 'take-off' : 'keep';
   const rs = layout.ranges.get(ps.writer);
   const rh = layout.ranges.get(ph.writer);
-  if (rs === undefined || rh === undefined) return segmentOrdersAfter(seg, held) ? 'mark' : 'keep';
+  if (rs === undefined || rh === undefined) throw new TypeError(`decideReplayMark: a writer is not in the layout: ${JSON.stringify(seg)}, ${JSON.stringify(held)}`);
   if (rs.lo > rh.hi) return 'mark';
   if (rh.lo > rs.hi) return 'keep';
   return 'take-off';

@@ -2972,18 +2972,31 @@ function rowBytes(row) {
   return n;
 }
 
-/** This store's segment names in replay order, listed once per pass (the run object is the pass's). An absent
- *  directory is no segment; a listing that throws fails the chunk. */
-function exportReplayListing(run) {
+/** This store's segment names in replay order, listed once per pass (the run object is the pass's), with the writer layout lib
+ *  measures from them and from the segment names the store's marks hold. An absent directory is no segment; a listing that throws
+ *  fails the chunk. */
+function exportReplayListing(db, run) {
   if (run.exportListing === undefined) {
     const dir = `${run.P.root}/${EXPORT_DIR}/${run.storeId}`;
     const names = orderSegmentNames(listSegments(dir).map((s) => s.name));
-    // D-5726 (history-export-replay-mark-one-writer): each writer's lowest and highest listed seq, and whether some pair of writers
-    // is a fork (lib replayWriterLayout), measured once from the same listing (a replay that spans steps recomputes it from the
-    // listing it resumes on; no meta key). Lib's decideReplayMark decides with it; nothing here does.
-    run.exportListing = { dir, names, layout: replayWriterLayout(names) };
+    // D-5726 (history-export-replay-mark-one-writer): each writer's lowest and highest seq over the LISTED names and the distinct
+    // exported_seg names the store's marks hold (blobs, then entries: two DISTINCT scans, the check after a bind's own, markedSegmentNames),
+    // whether some pair of writers is a fork, and which names are listed (lib replayWriterLayout). A mark may name a segment that is
+    // no longer listed (moved aside after a recovery): a fork it evidences is a fork, and lib decideReplayMark asks whether a held
+    // mark is listed. Measured once from the same listing and marks (a replay that spans steps recomputes it from the listing and
+    // marks it resumes on; no meta key). Lib's decideReplayMark decides with it; nothing here does.
+    run.exportListing = { dir, names, layout: replayWriterLayout(names, [...markedSegmentNames(db)]) };
   }
   return run.exportListing;
+}
+
+/** The distinct segment names the store's marks hold: blobs.exported_seg and entries.exported_seg, two DISTINCT scans. The one
+ *  reader of them, for the check after a bind (which names the ones no segment is listed for) and for replay's writer layout. */
+function markedSegmentNames(db) {
+  const named = new Set();
+  for (const r of db.prepare('SELECT DISTINCT exported_seg AS seg FROM blobs WHERE exported_seg IS NOT NULL').all()) named.add(String(r.seg));
+  for (const r of db.prepare('SELECT DISTINCT exported_seg AS seg FROM entries WHERE exported_seg IS NOT NULL').all()) named.add(String(r.seg));
+  return named;
 }
 
 /** The failure of a segment that cannot be read, naming the segment and the way out: an unreadable segment fails its
@@ -3060,7 +3073,7 @@ function replayBlobPage(db, run, sdb, dir, name, after, stubs) {
   if (page.length === 0) return { pos: after, done: true, bytes: 0 };
   const s = replayStmts(db);
   const markMs = run.now();
-  const { layout } = exportReplayListing(run);
+  const { layout } = exportReplayListing(db, run);
   let bytes = 0;
   for (const b of page) {
     const ins = s.blobIns.run(b.sha256, b.codec, b.z, b.raw_len, b.z === null ? markMs : null);
@@ -3101,7 +3114,7 @@ function replayBlobPage(db, run, sdb, dir, name, after, stubs) {
 function replayRowPage(db, run, sdb, dir, name, meta, after) {
   const page = readSegmentPage(dir, name, () => segmentRowsAfter(sdb, after, EXPORT_REPLAY_PAGE));
   if (page.length === 0) return { pos: after, done: true, bytes: 0 };
-  const seg = { name, dir, sdb, markMs: run.now(), cutoffMs: meta.cutoffMs, layout: exportReplayListing(run).layout };   // sdb and dir: what segmentCarries reads (D-5396); layout: D-5726
+  const seg = { name, dir, sdb, markMs: run.now(), cutoffMs: meta.cutoffMs, layout: exportReplayListing(db, run).layout };   // sdb and dir: what segmentCarries reads (D-5396); layout: D-5726
   let bytes = 0;
   let pos = after;
   for (const r of page) {
@@ -3120,7 +3133,7 @@ function replayRowPage(db, run, sdb, dir, name, meta, after) {
  *  `rows` (export-rows). Each walks every segment in (seq, writer) order, so a replay that resumes across chunks, passes and
  *  a kill finishes every segment's bytes before it starts any segment's stubs (D-5397). */
 function exportPhaseChunk(db, run, cursor, kind) {
-  const { dir, names } = exportReplayListing(run);
+  const { dir, names } = exportReplayListing(db, run);
   // A cursor naming a segment this listing does not hold resumes at the first listed segment that orders after it, from its
   // start. The sweep never removes a segment, but D-4765's way out for one that cannot be read is to move it aside, and the
   // cursor at a stall always names that segment. Restarting the phase at the first segment would walk every earlier one again,
@@ -9041,9 +9054,7 @@ export function checkSegmentMarks(db, ctx, record, listing = null) {
   // treated as missing (its marks clear, its rows export again) and recorded for doctor, and stays where it is.
   const { present, damaged } = segmentsWholeAndOwn(dir, listed, ctx.ids.storeId);
   noteSegmentsDamaged(db, dir, damaged);
-  const named = new Set();
-  for (const r of db.prepare('SELECT DISTINCT exported_seg AS seg FROM blobs WHERE exported_seg IS NOT NULL').all()) named.add(String(r.seg));
-  for (const r of db.prepare('SELECT DISTINCT exported_seg AS seg FROM entries WHERE exported_seg IS NOT NULL').all()) named.add(String(r.seg));
+  const named = markedSegmentNames(db);
   const segments = missingSegmentNames({ named, present });
   const names = JSON.stringify(segments);
   // ctx.deps.exportBindBatch, exportBindBytes and exportBindWalCeiling are an in-process test's bounds (D-4247); shipped code

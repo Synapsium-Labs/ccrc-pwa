@@ -8037,8 +8037,17 @@ describe('W1-B4: segment names, their order and the next number (spec 9.15 "Writ
     expect(lay(['5.0000000a.db', '7.0000000a.db', '6.0000000b.db']).forked, 'interleaved ranges: a fork').toBe(true);
     expect(lay(['1.0000000a.db', '2.0000000b.db', '2.0000000c.db']).forked, 'a fork anywhere in the directory holds it, though b and c both succeed a').toBe(true);
     expect(lay(['notes.db', '3.0000000a.db', '.3.0000000a.db.tmp']), 'names off the grammar are dropped').toEqual({ ranges: [['0000000a', 3, 3]], forked: false });
+    // FR1 F1: the names the store's marks hold widen a writer's range, so a fork hidden by a missing segment reads as a fork
+    const listed = ['3.0000000b.db', '5.0000000a.db'];
+    expect(libSeg.replayWriterLayout(listed).forked, 'by the listing alone, b [3] and a [5] succeed one another').toBe(false);
+    const marked = libSeg.replayWriterLayout(listed, ['2.0000000a.db']);
+    expect(marked.forked, 'a mark names a [2] that is not listed: a [2, 5] and b [3] interleave').toBe(true);
+    expect(marked.ranges.get('0000000a'), 'the marked name widens the range').toEqual({ lo: 2, hi: 5 });
+    expect([...marked.listed].sort(), 'but only the listed names are listed').toEqual(listed);
+    expect(libSeg.replayWriterLayout(listed, ['notes.db', '9.0000000a.db']).ranges.get('0000000a'), 'a marked name off the grammar is dropped; one above widens the other way').toEqual({ lo: 5, hi: 9 });
+    expect(libSeg.replayWriterLayout(['1.0000000a.db'], ['1.0000000a.db']).listed.size, 'a name both listed and marked is one').toBe(1);
   });
-  it('decideReplayMark: fresh marks; an unmarked held row is kept in a directory that holds a fork and marked otherwise; the same segment keeps; the same writer moves only forward; a successor writer moves the mark forward, a held mark of a later writer stays; a fork takes the mark off; a held writer that is not listed is judged by the order (D-5726 (history-export-replay-mark-one-writer))', () => {
+  it('decideReplayMark: fresh marks; an unmarked held row is kept in a directory that holds a fork and marked otherwise; the same segment keeps; the same writer moves only forward; a successor writer moves the mark forward, a held mark of a later writer stays; a fork takes the mark off; a held name that is not listed, of another writer, stays for the check, or comes off in a forked directory (D-5726 (history-export-replay-mark-one-writer))', () => {
     type Layout = ReturnType<typeof libSeg.replayWriterLayout>;
     const lay = (names: string[]): Layout => libSeg.replayWriterLayout(names);
     const seg = '5.0000000b.db';
@@ -8071,9 +8080,25 @@ describe('W1-B4: segment names, their order and the next number (spec 9.15 "Writ
     const interleaved = lay(['5.0000000a.db', '7.0000000a.db', '6.0000000b.db']);
     expect(libSeg.decideReplayMark({ seg: '6.0000000b.db', held: '5.0000000a.db', fresh: false, layout: interleaved }), 'interleaved ranges: held earlier').toBe('take-off');
     expect(libSeg.decideReplayMark({ seg: '6.0000000b.db', held: '7.0000000a.db', fresh: false, layout: interleaved }), 'interleaved ranges: held later').toBe('take-off');
-    // 4. a held writer that is not in the layout cannot be ranged: judged by the (seq, writer) order, a choice (the check after a bind clears a mark naming a missing segment anyway)
-    expect(decide('3.0000000f.db', chain), 'an absent writer, held earlier in the order').toBe('mark');
-    expect(decide('9.0000000f.db', chain), 'an absent writer, held later in the order').toBe('keep');
+    // 4. a held mark naming a segment the listing does not hold (moved aside after a recovery), of ANOTHER writer: the mark is not moved
+    // onto this writer's segment (that one may lack what the missing one carried). It stays for the check after a bind, which clears a
+    // mark naming a missing segment, and comes off at once in a directory that holds a fork. (FR1 F1, D-5726 (history-export-replay-mark-one-writer))
+    // 4A. the held writer has no listed name at all (the layout is of the listed names and no marked ones)
+    expect(decide('3.0000000f.db', chain), 'A: an absent writer, held earlier in the order: it stays for the check').toBe('keep');
+    expect(decide('9.0000000f.db', chain), 'A: an absent writer, held later in the order').toBe('keep');
+    expect(decide('3.0000000f.db', fork), 'A: an absent writer, in a forked directory: it comes off').toBe('take-off');
+    expect(decide('9.0000000f.db', fork), 'A: an absent writer held later, in a forked directory').toBe('take-off');
+    // 4B. the held writer has a listed name but the held name is not listed
+    expect(decide('2.0000000a.db', chain), 'B: writer a lists 1 and 3, not 2; b is its successor: the mark stays, it does not move to b').toBe('keep');
+    expect(decide('4.0000000a.db', chain), 'B: held above a\'s listed range').toBe('keep');
+    expect(decide('2.0000000a.db', fork), 'B: the same in a forked directory: it comes off').toBe('take-off');
+    expect(decide('7.0000000a.db', fork), 'B: held later, in a forked directory').toBe('take-off');
+    // 4C. the same writer's unlisted held name still moves forward: the same-writer rule runs first, whether or not the name is listed
+    expect(decide('2.0000000b.db', chain), 'C: same writer, unlisted, earlier: it moves forward').toBe('mark');
+    expect(decide('2.0000000b.db', fork), 'C: the same in a forked directory').toBe('mark');
+    expect(decide('9.0000000b.db', chain), 'C: same writer, unlisted, later: it stays').toBe('keep');
+    // a writer the layout does not range, where the rules need it, is the caller\'s bug (seg is a listed name, so its writer is ranged)
+    expect(() => libSeg.decideReplayMark({ seg: '5.0000000e.db', held: '3.0000000a.db', fresh: false, layout: chain }), 'seg\'s writer is not in the layout').toThrow(TypeError);
     // an off-grammar seg is the caller's bug
     expect(() => libSeg.decideReplayMark({ seg: '01.0000000b.db', held: null, fresh: true, layout: chain })).toThrow(TypeError);
     expect(() => libSeg.decideReplayMark({ seg: 'notes.db', held: null, fresh: false, layout: chain })).toThrow(TypeError);
