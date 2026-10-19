@@ -104,8 +104,138 @@ describe("every card's name has a floor (D-5574, D-5576)", () => {
     // the two cards can never drift apart.
     expect(declaredValues(css, SELECTED_NAME, 'flex-shrink')).toEqual([]);
     expect(declaredValues(css, SELECTED_NAME, 'max-width')).toEqual([]);
-    // And nothing scoped to a fold, a selection or a skin shrinks it again.
-    expect(stripComments(css)).not.toMatch(/proj-card-name[^{]*\{[^}]*flex(-shrink)?:\s*(1|auto)/);
+    // And nothing scoped to a fold, a selection or a skin shrinks it again:
+    // see the shorthand guard below.
+  });
+});
+
+// THE SHORTHANDS (D-5576, the review's round). A later `flex: initial` on the
+// name (0 1 auto: it may shrink again), a `flex-basis: 0` from a
+// `.proj-card-head .proj-card-name` rule, a `.proj-card-toggle > *
+// { flex-shrink: 1 }`, or a `flex-flow: row nowrap` on the toggle each undid
+// the floor or the wrap while a literal regex stayed green. So every rule in
+// the file (every @media block included, stricter than the browser) that can
+// reach the name, or the toggle's items, or the toggle itself, is read through
+// its shorthands before the assertion.
+type Rule = { prelude: string; body: string };
+function everyRule(text: string): Rule[] {
+  const out: Rule[] = [];
+  const re = /([^{}]+)\{([^{}]*)\}/g;
+  const scan = stripComments(text);
+  for (let m = re.exec(scan); m !== null; m = re.exec(scan)) {
+    out.push({ prelude: (m[1] ?? '').trim(), body: m[2] ?? '' });
+  }
+  return out;
+}
+function decls(body: string): { prop: string; value: string }[] {
+  return body.split(';').flatMap((d) => {
+    const at = d.indexOf(':');
+    if (at < 0) return [];
+    return [{ prop: d.slice(0, at).trim().toLowerCase(), value: d.slice(at + 1).trim().replace(/\s+/g, ' ').replace(/\s*!important$/, '') }];
+  });
+}
+const NUMBER = /^[+]?(\d+\.?\d*|\.\d+)$/;
+/** `flex: <value>` as the [shrink, basis] it sets; anything it cannot place
+ *  (a global keyword, a var()) answers 'unknown', which the guard fails. */
+function flexShorthand(value: string): { shrink: string; basis: string } {
+  const v = value.toLowerCase();
+  if (v === 'none') return { shrink: '0', basis: 'auto' };
+  if (v === 'auto') return { shrink: '1', basis: 'auto' };
+  if (v === 'initial') return { shrink: '1', basis: 'auto' };
+  const parts = v.split(' ');
+  if (parts.some((x) => x.includes('var(') || ['inherit', 'unset', 'revert', 'revert-layer'].includes(x))) {
+    return { shrink: 'unknown', basis: 'unknown' };
+  }
+  const nums = parts.filter((x) => NUMBER.test(x));
+  const basis = parts.find((x) => !NUMBER.test(x)) ?? '0';
+  // One or two numbers: grow, then shrink (1 when left out); the basis is 0
+  // when only numbers are given, else the non-number.
+  return { shrink: nums[1] ?? '1', basis };
+}
+const ZERO_BASIS = /^0(px|%|em|rem|ch)?$/;
+/** Can this selector member style the name? Its subject names it, or is a
+ *  universal child or descendant of the toggle. */
+function reachesName(member: string): boolean {
+  const m = member.trim();
+  const subject = m.split(/[\s>+~]+/).filter(Boolean).pop() ?? '';
+  if (subject.includes('.proj-card-name')) return true;
+  return /\.proj-card-toggle\b[^,]*[\s>]\s*\*$/.test(m) || subject === '*' && m.includes('.proj-card-toggle');
+}
+function togglesItself(member: string): boolean {
+  const subject = member.trim().split(/[\s>+~]+/).filter(Boolean).pop() ?? '';
+  return /\.proj-card-toggle(?![\w-])/.test(subject);
+}
+function nameShrinkProblems(text: string): string[] {
+  const bad: string[] = [];
+  for (const { prelude, body } of everyRule(text)) {
+    if (!prelude.split(',').some(reachesName)) continue;
+    for (const { prop, value } of decls(body)) {
+      if (prop === 'flex') {
+        const f = flexShorthand(value);
+        if (f.shrink !== '0') bad.push(`${prelude} { flex: ${value} } shrinks`);
+        if (ZERO_BASIS.test(f.basis) || f.basis === 'unknown') bad.push(`${prelude} { flex: ${value} } zero basis`);
+      } else if (prop === 'flex-shrink' && value !== '0') {
+        bad.push(`${prelude} { flex-shrink: ${value} }`);
+      } else if (prop === 'flex-basis' && (ZERO_BASIS.test(value) || value.includes('var('))) {
+        bad.push(`${prelude} { flex-basis: ${value} }`);
+      }
+    }
+  }
+  return bad;
+}
+function toggleWrapProblems(text: string): string[] {
+  const bad: string[] = [];
+  for (const { prelude, body } of everyRule(text)) {
+    if (!prelude.split(',').some(togglesItself)) continue;
+    for (const { prop, value } of decls(body)) {
+      if (prop === 'flex-wrap' && value !== 'wrap') bad.push(`${prelude} { flex-wrap: ${value} }`);
+      if (prop === 'flex-flow') {
+        // flex-flow resets flex-wrap to nowrap when it names no wrap value.
+        const wrap = value.split(' ').find((x) => /^(no)?wrap(-reverse)?$/.test(x)) ?? 'nowrap';
+        if (wrap !== 'wrap') bad.push(`${prelude} { flex-flow: ${value} }`);
+      }
+    }
+  }
+  return bad;
+}
+
+describe('no shorthand takes the floor or the wrap back (D-5576)', () => {
+  it('reads the flex shorthand the way a browser does', () => {
+    expect(flexShorthand('none')).toEqual({ shrink: '0', basis: 'auto' });
+    expect(flexShorthand('initial').shrink).toBe('1');
+    expect(flexShorthand('auto').shrink).toBe('1');
+    expect(flexShorthand('1')).toEqual({ shrink: '1', basis: '0' });
+    expect(flexShorthand('0 1 auto').shrink).toBe('1');
+    expect(flexShorthand('0 0 auto')).toEqual({ shrink: '0', basis: 'auto' });
+    expect(flexShorthand('1 0 0').basis).toBe('0');
+  });
+
+  it('nothing that reaches the name lets it shrink or zeroes its basis', () => {
+    expect(nameShrinkProblems(css)).toEqual([]);
+    // The guard itself catches each shape the review planted.
+    for (const planted of [
+      '.proj-card-name { flex: initial; }',
+      '.proj-card-name { flex: 0 1 auto; }',
+      '.proj-card-name { flex: 1; }',
+      '.proj-card-name { flex: auto; }',
+      '.proj-card-toggle > * { flex-shrink: 1; }',
+      '.proj-card-head .proj-card-name { flex-basis: 0; }',
+      '[data-skin="instrument"] .proj-card-name { flex-shrink: 1; }',
+    ]) {
+      expect(nameShrinkProblems(`${css}\n${planted}`), planted).not.toEqual([]);
+    }
+  });
+
+  it("nothing turns the toggle's wrap off", () => {
+    expect(toggleWrapProblems(css)).toEqual([]);
+    for (const planted of [
+      '.proj-card-toggle { flex-flow: row nowrap; }',
+      '.proj-card-toggle { flex-flow: column; }',
+      '.proj-card-toggle { flex-wrap: nowrap; }',
+      '@media (min-width: 900px) { .proj-card-toggle { flex-wrap: nowrap; } }',
+    ]) {
+      expect(toggleWrapProblems(`${css}\n${planted}`), planted).not.toEqual([]);
+    }
   });
 });
 
