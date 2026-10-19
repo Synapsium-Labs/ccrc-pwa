@@ -1,7 +1,10 @@
 // ── every workflow and composite action PARSES, as YAML (D-5565) ───────────
 //
-// #645 put `release.yml: could not` inside a PLAIN `run:` scalar. YAML reads
-// `: ` there as a mapping indicator, so the file stopped parsing — and GitHub
+// #645 put a one-line PLAIN `run:` scalar carrying TWO `: ` — the message's
+// `release.yml: could not` and the shell no-op in `; : > "$RUNNER_TEMP/…"`.
+// YAML reads `: ` there as a mapping indicator, and either one alone breaks
+// the parse (measured: 6 errors as shipped, 5 without the first, 1 without
+// the second), so the file stopped parsing — and GitHub
 // answers an unparseable workflow with a jobless failed run on every push and
 // builds nothing on the tag that file exists for. Every other test of the
 // workflows (build-release, release-main, oss-metadata) pins them as TEXT, and
@@ -17,7 +20,16 @@
 // The second check is the SILENT sibling of the same class: a ` #` inside a
 // plain one-line `run:` starts a YAML comment, so the shell gets a truncated
 // command and the file still parses. YAML does not know shell quoting —
-// `run: echo "a #b"` hands the shell `echo "a`.
+// `run: echo "a #b"` hands the shell `echo "a`. A comment starts only after
+// whitespace at the END of the parsed value, so text that merely contains a
+// `#` later on the line (the next entry of a flow-map step) is not one.
+//
+// Its limit, by ruling (review 620, F2): only `run:` is held to it. A trailing
+// ` # comment` after any other plain value is ordinary YAML
+// (`timeout-minutes: 30 # deadline`), and `run:` is singled out because a
+// shell line's own `#` is the natural ambiguity there. So these parse and are
+// NOT caught: `env: X: a #b` (X = `a`), `if: github.ref == "a #b"` (the
+// condition `github.ref == "a`), and `with: k: v #c` (k = `v`).
 
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
@@ -63,10 +75,19 @@ function truncatedRuns(src: string): string[] {
       if (!isScalar(v) || v.type !== Scalar.PLAIN || v.range === undefined || v.range === null) return;
       const end = src.indexOf('\n', v.range[1]);
       const rest = src.slice(v.range[1], end === -1 ? undefined : end);
-      if (rest.includes('#')) out.push(`run: ${String(v.value)} ⟨dropped:${rest}⟩`);
+      if (/^\s+#/.test(rest)) out.push(`run: ${String(v.value)} ⟨dropped:${rest}⟩`);
     },
   });
   return out;
+}
+
+/** What a parsed file lacks to be usable: a mapping, with `jobs:` for a
+ *  workflow or `runs:` for a composite action — empty when it has both. */
+function shapeErrors(rel: string, src: string): string[] {
+  const doc = parseDocument(src, { uniqueKeys: true });
+  if (!isMap(doc.contents)) return [`${rel}: the document is not a mapping`];
+  const key = rel.startsWith('.github/workflows/') ? 'jobs' : 'runs';
+  return doc.has(key) ? [] : [`${rel}: no ${key}:`];
 }
 
 describe('every workflow and composite action parses as YAML (D-5565)', () => {
@@ -83,14 +104,7 @@ describe('every workflow and composite action parses as YAML (D-5565)', () => {
   it.each(files)('%s parses, to a mapping', (rel) => {
     const src = readFileSync(join(REPO, rel), 'utf8');
     expect(parseErrors(src), `${rel} does not parse — GitHub runs nothing from it`).toEqual([]);
-    const doc = parseDocument(src, { uniqueKeys: true });
-    expect(isMap(doc.contents), `${rel}: the document is not a mapping`).toBe(true);
-    const top = doc.toJS() as Record<string, unknown>;
-    if (rel.startsWith('.github/workflows/')) {
-      expect(top, `${rel}: no jobs:`).toHaveProperty('jobs');
-    } else {
-      expect(top, `${rel}: no runs:`).toHaveProperty('runs');
-    }
+    expect(shapeErrors(rel, src)).toEqual([]);
   });
 
   it.each(files)('%s: no one-line run: is cut short by a # comment', (rel) => {
@@ -121,5 +135,19 @@ describe('every workflow and composite action parses as YAML (D-5565)', () => {
   it('sees a plain run: that a # comment cut short, and not a block one', () => {
     expect(truncatedRuns(STEP('        run: echo "a #b"'))).toHaveLength(1);
     expect(truncatedRuns(STEP('        run: |\n          echo "a #b"'))).toEqual([]);
+  });
+
+  it('does not take a later # on the line for a comment: a flow-map step whose run: is whole', () => {
+    const flow = 'name: x\non:\n  push:\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - {run: echo a, name: "#z"}\n';
+    expect(parseErrors(flow)).toEqual([]);
+    expect(truncatedRuns(flow)).toEqual([]);
+    expect(truncatedRuns(STEP('        run: gh release create "$T" #x release-out/*'))).toHaveLength(1);
+  });
+
+  it('reds a parsed workflow with no jobs:, and an action with no runs:', () => {
+    expect(shapeErrors('.github/workflows/x.yml', 'name: x\non:\n  push:\njobz:\n  a: {}\n')).toEqual(['.github/workflows/x.yml: no jobs:']);
+    expect(shapeErrors('.github/actions/x/action.yml', 'name: x\nrunz:\n  using: composite\n')).toEqual(['.github/actions/x/action.yml: no runs:']);
+    expect(shapeErrors('.github/workflows/x.yml', '- a\n- b\n')).toEqual(['.github/workflows/x.yml: the document is not a mapping']);
+    expect(shapeErrors('.github/workflows/x.yml', STEP('        run: echo ok'))).toEqual([]);
   });
 });
