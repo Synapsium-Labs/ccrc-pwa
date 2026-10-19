@@ -687,6 +687,33 @@ describe('UpdateMoveSheet — tone danger (D-5507)', () => {
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Cancel' }));
   });
 
+  // D-5610 (extended): the danger sheet's Cancel is at the foot of its scroller; a plain focus scrolled the question
+  // and the plan out of view on a short phone (175 px at 360x640). The focus moves with `preventScroll`.
+  it('Cancel takes the focus without scrolling the sheet (preventScroll)', async () => {
+    const calls: Array<{ el: HTMLElement; opts: FocusOptions | undefined }> = [];
+    const real = HTMLElement.prototype.focus;
+    const spy = vi.spyOn(HTMLElement.prototype, 'focus').mockImplementation(function (this: HTMLElement, opts?: FocusOptions) {
+      calls.push({ el: this, opts });
+      real.call(this, opts);
+    });
+    try {
+      mountDanger(plan(DOWN));
+      await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+      const cancel = screen.getByRole('button', { name: 'Cancel' });
+      expect(document.activeElement).toBe(cancel);
+      const onCancel = calls.filter((c) => c.el === cancel);
+      expect(onCancel.length).toBeGreaterThan(0);
+      for (const c of onCancel) expect(c.opts?.preventScroll).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('a fleet rollback over one node says "Roll back 1 node"', () => {
+    mountDanger(plan(DOWN, [server()]));
+    expect(screen.getByRole('button', { name: 'Roll back 1 node' })).toHaveClass('btn-danger');
+  });
+
   it('the default tone is unchanged: primary, the headline, no danger lines, Cancel not focused', async () => {
     mount(plan(DOWN));
     await act(async () => { await new Promise((r) => setTimeout(r, 20)); });

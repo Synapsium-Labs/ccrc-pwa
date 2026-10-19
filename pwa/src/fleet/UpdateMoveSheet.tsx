@@ -281,7 +281,7 @@ export function UpdateMoveSheet({ open, plan, onClose, onDone, onAnswered, tone 
     return () => { gen.current += 1; };
   }, [open, plan]);
   const danger = tone === 'danger';
-  useCancelFirst(open && plan !== null, danger);
+  const cancelRef = useCancelFirst(open && plan !== null, danger);
 
   if (!open || plan === null) return null;
   const headline = danger ? rollbackQuestion(plan) : moveHeadline(plan.intent);
@@ -371,7 +371,7 @@ export function UpdateMoveSheet({ open, plan, onClose, onDone, onAnswered, tone 
               {busy ? 'Sending…' : danger ? rollbackCommitLabel(plan) : headline}
             </Button>
           )}
-          <Button variant="ghost" autoFocus={danger} disabled={busy} onClick={onClose}>
+          <Button ref={cancelRef} variant="ghost" disabled={busy} onClick={onClose}>
             {answered ? 'Close' : 'Cancel'}
           </Button>
         </div>
