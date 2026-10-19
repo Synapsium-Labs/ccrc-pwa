@@ -1,4 +1,4 @@
-// D-5828 (CCRCP-198): a run opened BEFORE a workspace's own run is never that workspace's run.
+// D-5828 (GitHub #746): a run opened BEFORE a workspace's own run is never that workspace's run.
 //
 // The measured shape: a planned wave-3 run (#83) still names a workspace id whose workspace was archived and
 // reaped long ago, and is claimed by a coordinator that was archived by hand. The id was later given to a NEW

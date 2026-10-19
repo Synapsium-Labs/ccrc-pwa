@@ -1,4 +1,4 @@
-// D-5384 (audit ticket ARCH-21, CCRCP-120): `POST /api/runs`' synchronous
+// D-5384 (audit ticket ARCH-21, GitHub #548): `POST /api/runs`' synchronous
 // preconditions — the body shape, the review arm, the home shaping, F1, the
 // home verdict and §12 — decided by one pure L1 decider,
 // `coord/openRun.ts`'s `openRunPreconditions`, before coordinator-first
