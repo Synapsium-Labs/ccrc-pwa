@@ -1308,6 +1308,184 @@ _models_answer() {
   return "$rc"
 }
 
+# ── the lane-files lock (auto-advance spec D21) ─────────────────────────────────────────────────────────────
+# `_models_lock <id>` — ONE exclusive `flock` per lane on `_models_lock_path <id>`, held by THIS shell until
+# `_models_unlock` or exit. EVERY write of a lane's model files takes it: the class registry, the advance file, the
+# windows file and every file `materialise` renders. Each writer reads, decides and writes, and two interleaved
+# would lose one's change; the automatic advance re-checks the hold and the pin under it, which is how a Hold
+# tapped during its canary wins. Reached only through `_models_answer_locked` (a verb arm) and
+# `_models_node_locked` (a `$( … )` capture site); `ccrc-models-lock.test.ts` forbids a bare `_models_answer` or
+# `_models_node` call of any op in MODELS_WRITE_OPS.
+# - WHAT IT DOES NOT COVER: the catalogue (`<id>.json`). `ccrc-models-probe` replaces it whole, by a rename,
+#   outside this lock, so a writer under the lock reads one complete catalogue, old or new, never a torn one; and
+#   a decision the automatic advance takes from it is taken again under the lock (its commit re-reads it, W2).
+# - WHERE (D-5187): `~/.ccrc/locks/models-<id>.lock`, never under `~/.ccrc/models/`: account
+#   removal lists `~/.ccrc/models/<id>.*` as leftovers, `rm` could not unlink a lock another writer may hold, and
+#   tests pin that directory's listing. The file is made 0600 and NEVER unlinked; `ccrc uninstall --purge` takes
+#   `~/.ccrc` whole.
+# - THE DIRECTORY IS 0700 AT EVERY LOCK, and never a symlink: made 0700 (under `umask 077`), or, when it already
+#   exists, `chmod 700`ed, whatever mode it was left with. A chmod that fails is `lock-unwritable`: that is how a
+#   directory another account owns answers, and a box with no `chmod` on PATH too (a directory whose mode cannot be
+#   set is not one to trust), so the lock never runs in a directory another account can write.
+# - THE PATH IS TESTED BEFORE IT IS OPENED: a symlink there, live or dangling, or anything but a regular file (a
+#   FIFO, a directory) is `lock-unwritable`, and is never opened. Opening a FIFO for writing blocks until a reader
+#   comes, which would hang this lock with no bound at all, and opening through a symlink would create or lock its
+#   target. The test and the open are two steps, and only this account can swap the file between them: the
+#   directory is its own, 0700.
+# - THE CONTRACT, `_codex_lock`'s (ruling R19): rc 0 with the lock HELD (MODELS_LOCK_FD and MODELS_LOCK_ID set);
+#   rc 0 with MODELS_LOCK_FD EMPTY where `flock` is missing; rc 1 with MODELS_LOCK_ERR and MODELS_LOCK_WHY set —
+#   `lock-busy` (held past the bound), `lock-unwritable` (the directory or the file cannot be made, made 0700 or
+#   opened, or the path is a symlink or not a regular file) or `install-incomplete` (the wrapper-shape contract is
+#   missing), three remedies never folded into one (D-5204); rc 2,
+#   MODELS_LOCK_ERR=bad-account-id, for an id no lock path may be built from. It prints nothing: each of its two
+#   callers prints the one refusal in its own shape.
+# - RE-ENTRANT for the lane this shell, or a subshell of it, already holds: a second `flock` on a new open of the
+#   path would wait on this very process's lock. A call for another lane releases the first (one lane per shell).
+#   The two wrappers release only what THEIR call took, so a wrapper called by a shell that already holds the
+#   lane's lock leaves it held for that holder.
+# - THE FD MUST NOT REACH A LONG-LIVED CHILD (`_codex_lock`'s rule): a process forked while the lock is held
+#   inherits the fd and holds the lock for its whole life. `_models_answer_locked`'s node inherits it and exits
+#   when its one op ends; `_models_node_locked` closes it before node and its bound's watcher start (below). Never
+#   start a tier, a canary or anything else that outlives the call while it is held.
+# - THE WAIT: `CCRC_MODELS_LOCK_S` whole seconds, default 20, falling back to 20 on anything but 1 to 300.
+# - THE ORDER: `_codex_lock` (the tier lock) may be held when this is taken — `ccrc doctor --fix` re-renders a lane
+#   inside its tier lock, the one sanctioned nesting — and the reverse never happens: none of these four
+#   functions takes `_codex_lock` (`ccrc-models-lock.test.ts` scans their bodies).
+# - NO `flock` (D-5201): a hand verb runs unserialised, as it did before this lock existed. The
+#   automatic advance's commit (W2) refuses instead, because it alone acts on a re-check.
+# - NO `mkdir`, BEFORE THE FIRST LOCK (D-5205): where `~/.ccrc/locks` does not exist
+#   yet and `mkdir` is not on PATH, the same rc 0 with nothing held. `ccrc doctor --fix` re-renders lane.json on
+#   the box doctor most needs to work on, one whose PATH has lost coreutils (the CCRC_HERE note below), and a lock
+#   it cannot make must not cost it that cure. Once the directory exists no `mkdir` is needed, and the lock is
+#   taken once `chmod 700` has run on it (a box with neither, past its first lock, refuses `lock-unwritable`). As
+#   with no `flock`, the automatic advance (W2) must not run where this degrades: its step checks for both before
+#   its first locked call.
+_models_lock_path() { printf '%s' "$HOME/.ccrc/locks/models-$1.lock"; }
+
+MODELS_LOCK_FD=''; MODELS_LOCK_ID=''; MODELS_LOCK_ERR=''; MODELS_LOCK_WHY=''
+_models_lock() {   # <id> -> rc 0 held, or nothing held (FD empty); rc 1 with MODELS_LOCK_ERR/WHY; rc 2 a bad id
+  local id="${1:-}" p d fd um bound why=''
+  MODELS_LOCK_ERR=''; MODELS_LOCK_WHY=''
+  if ! _codex_shape 2>/dev/null; then
+    MODELS_LOCK_ERR=install-incomplete
+    MODELS_LOCK_WHY="the wrapper shape contract $CCRC_HERE/ccrc-wrapper-shape is missing or older than this ccrc, so no lock path can be built from account '$id'. The files ship together: re-run the install. Nothing was written."
+    return 1
+  fi
+  if ! [[ "$id" =~ $WRAPPER_ID_RE ]]; then
+    MODELS_LOCK_ERR=bad-account-id
+    MODELS_LOCK_WHY="'$id' is not an account id, so no lane-files lock is built from it. Nothing was written."
+    return 2
+  fi
+  if [ -n "${MODELS_LOCK_FD:-}" ]; then
+    [ "${MODELS_LOCK_ID:-}" = "$id" ] && return 0
+    _models_unlock
+  fi
+  command -v flock >/dev/null 2>&1 || return 0
+  p="$(_models_lock_path "$id")"; d="${p%/*}"
+  [ -d "$d" ] || command -v mkdir >/dev/null 2>&1 || return 0
+  um="$(umask)"; umask 077
+  # The directory: never a symlink, and 0700, made so or chmod-ed so.
+  if [ -L "$d" ]; then
+    why="$d is a symlink, and the lane-files lock never follows one"
+  elif [ -d "$d" ]; then
+    chmod 700 -- "$d" 2>/dev/null \
+      || why="$d could not be made 0700 (chmod failed: another account owns it, or chmod is not on PATH)"
+  elif ! mkdir -p -- "$d" 2>/dev/null; then
+    why="$d could not be made"
+  fi
+  # The file: tested BEFORE it is opened, because opening a FIFO for writing would hang here, and opening through a
+  # symlink would create or lock its target.
+  if [ -z "$why" ] && { [ -L "$p" ] || { [ -e "$p" ] && [ ! -f "$p" ]; }; }; then
+    why="$p is not a regular file (a symlink, a FIFO or a directory there is never opened)"
+  fi
+  if [ -z "$why" ] && ! { exec {fd}>>"$p"; } 2>/dev/null; then
+    why="$p could not be opened"
+  fi
+  umask "$um"
+  if [ -n "$why" ]; then
+    MODELS_LOCK_ERR=lock-unwritable
+    MODELS_LOCK_WHY="$why, so this change to lane $id's model files cannot be serialised against another writer. Fix it, then re-run. Nothing was written."
+    return 1
+  fi
+  bound="${CCRC_MODELS_LOCK_S:-20}"
+  case "$bound" in ''|*[!0-9]*|????*) bound=20 ;; esac
+  bound=$(( 10#$bound ))
+  { [ "$bound" -ge 1 ] && [ "$bound" -le 300 ]; } || bound=20
+  if ! flock -w "$bound" "$fd"; then
+    exec {fd}>&-   # never held and never published, so this is no release
+    MODELS_LOCK_ERR=lock-busy
+    MODELS_LOCK_WHY="another writer has held lane $id's model files ($p) for ${bound}s without finishing: an hourly refresh, or another 'ccrc models $id' change. Re-run once it has ended. Nothing was written."
+    return 1
+  fi
+  MODELS_LOCK_FD="$fd"; MODELS_LOCK_ID="$id"
+  return 0
+}
+
+# THE ONLY RELEASE of `_models_lock`: closes MODELS_LOCK_FD when set, and clears it and MODELS_LOCK_ID. A no-op
+# when nothing is held.
+_models_unlock() {   # always rc 0
+  if [ -n "${MODELS_LOCK_FD:-}" ]; then exec {MODELS_LOCK_FD}>&-; fi
+  MODELS_LOCK_FD=''; MODELS_LOCK_ID=''
+  return 0
+}
+
+# A writing op from a VERB ARM: the lane lock, then `_models_answer` (its three clamps and its remedy line), then
+# the release of what THIS call took: a shell that already held this lane's lock keeps it, because the re-entrant
+# `_models_lock` took nothing for it. A lock failure is the verb's own refusal — one JSON object on stdout, the
+# sentence on stderr — and never reaches node. `<op> [--k v…]` is passed whole and names its own `--id`, the same
+# id (`ccrc-models-lock.test.ts` checks every call site for that).
+_models_answer_locked() {   # <id> <op> [--k v…]
+  local id="$1" rc=0 took=1; shift
+  [ -n "${MODELS_LOCK_FD:-}" ] && [ "${MODELS_LOCK_ID:-}" = "$id" ] && took=0
+  _models_lock "$id"; rc=$?
+  case "$rc" in
+    0) ;;
+    2) _models_refuse bad-account-id 2 "$MODELS_LOCK_WHY" ;;
+    *) _models_refuse "$MODELS_LOCK_ERR" 1 "$MODELS_LOCK_WHY" ;;
+  esac
+  rc=0
+  _models_answer "$@" || rc=$?
+  [ "$took" -eq 0 ] || _models_unlock
+  return "$rc"
+}
+
+# A writing op from a `$( … )` CAPTURE site (the hourly refresh's re-materialise, `_codex_lane_json_ensure`,
+# `ccrc doctor --fix`): node's raw answer under the lane lock, which the subshell's own exit releases too, and the
+# release of what this call took, as above. A lock failure prints the refusal object node would have,
+# `{"ok":false,"error":<word>,"detail":<sentence>}`, and returns 1 (2 for a bad id), so each caller's existing
+# reading of an answer handles it unchanged.
+# - THE BOUND, MODELS_NODE_BOUND_S (10 s). Every capture site runs unattended, so node runs under `_plat_timeout`:
+#   `_models_node`'s own command, spelled here because `_plat_timeout` runs a program, never a shell function.
+#   models-op's ops are a few file reads and renames, well under a second. 10 s plus `_plat_timeout`'s kill grace at
+#   its 8 s ceiling is 18 s, inside the 20 s another writer waits for this lock by default (`CCRC_MODELS_LOCK_S`), so
+#   a waiter outlasts a holder whose node hung rather than refusing lock-busy behind it; and in the hourly refresh
+#   (`ccrc-models.service`, `TimeoutStartSec=300`) a hung node costs its lane 18 s, never the rest of the run. An
+#   expired bound answers rc 124 with no body, which each capture site already reports as a models-op that exited
+#   with no answer. A box with no `timeout` and no `sleep` runs node unbounded (`_plat_timeout`'s own degrade). The
+#   verb arms (`_models_answer_locked`) stay unbounded: a person runs them, and sees one hang.
+# - THE FD STAYS IN THIS SHELL: node runs in a subshell that first closes MODELS_LOCK_FD, so neither node nor the
+#   bound's watcher holds the lock. On a box with no coreutils `timeout`, `_plat_timeout`'s watcher is a subshell
+#   whose orphaned `sleep` outlives node by up to the whole bound, and with the fd it would keep the lane locked
+#   that long after node had answered. The lock is held by this shell, which waits for node.
+MODELS_NODE_BOUND_S=10
+_models_node_locked() {   # <id> <op> [--k v…]
+  local id="$1" rc=0 took=1; shift
+  [ -n "${MODELS_LOCK_FD:-}" ] && [ "${MODELS_LOCK_ID:-}" = "$id" ] && took=0
+  _models_lock "$id"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf '{"ok":false,"error":"%s","detail":%s}\n' "$MODELS_LOCK_ERR" "$(printf '%s' "$MODELS_LOCK_WHY" | jq -Rs .)"
+    [ "$rc" -eq 2 ] && return 2
+    return 1
+  fi
+  rc=0
+  (
+    [ -z "${MODELS_LOCK_FD:-}" ] || exec {MODELS_LOCK_FD}>&-
+    _plat_timeout "$MODELS_NODE_BOUND_S" node "$CCRC_HERE/../deploy/models-op.mjs" "$@"
+  ) || rc=$?
+  [ "$took" -eq 0 ] || _models_unlock
+  return "$rc"
+}
+
 PROG=ccrc
 
 # Where the rest of the shipped tree is, relative to THIS FILE rather than to
@@ -2004,6 +2182,13 @@ INST_DEGRADED=()
 # the dispatcher and the refusal that lists what exists must read one string,
 # or a subcommand can dispatch while the refusal claims it does not exist.
 MODELS_SUBS="clear-window discovery init rm set-class set-effort set-subagent set-window show"
+
+# The node ops that WRITE a lane's model files (auto-advance spec D21). Every call of one of them goes through
+# `_models_answer_locked` or `_models_node_locked`, so it runs under the lane-files lock. The same list as
+# `deploy/models-op.mjs`'s `OPS` rows marked `writes: true`, which `single-definition.test.ts` checks in both
+# directions; `ccrc-models-lock.test.ts` forbids a bare call of any of them (`materialise --check true` excepted,
+# since it writes nothing).
+MODELS_WRITE_OPS="clear-window discovery init materialise rm set-class set-effort set-subagent set-window"
 
 # The BOX-WIDE subcommands this build implements — a different question from a
 # lane's own classes, on a different cadence (§5).
@@ -10061,9 +10246,9 @@ _models_lane_sub() {   # <accountId> <subcommand> [args…]
       [ "$ok" -eq 1 ] \
         || _models_refuse unknown-probe 2 "\"$probe\" is not a probe kind this build knows: use one of ${MODELS_PROBES// /, }"
       if [ -n "$base" ]; then
-        _models_answer init --file "$file" --id "$id" --probe "$probe" --base-url "$base" || exit $?
+        _models_answer_locked "$id" init --file "$file" --id "$id" --probe "$probe" --base-url "$base" || exit $?
       else
-        _models_answer init --file "$file" --id "$id" --probe "$probe" || exit $?
+        _models_answer_locked "$id" init --file "$file" --id "$id" --probe "$probe" || exit $?
       fi
       return 0
       ;;
@@ -10074,7 +10259,7 @@ _models_lane_sub() {   # <accountId> <subcommand> [args…]
       shift 2
       [ $# -eq 0 ] || _models_refuse unknown-argument 2 "ccrc models $id set-class takes a class and a model, and got \"$1\""
       _models_class_ok "$cls"
-      _models_answer set-class --file "$file" --id "$id" --class "$cls" --model "$model" || exit $?
+      _models_answer_locked "$id" set-class --file "$file" --id "$id" --class "$cls" --model "$model" || exit $?
       return 0
       ;;
     set-subagent)
@@ -10084,7 +10269,7 @@ _models_lane_sub() {   # <accountId> <subcommand> [args…]
       shift
       [ $# -eq 0 ] || _models_refuse unknown-argument 2 "ccrc models $id set-subagent takes one class, and got \"$1\""
       _models_class_ok "$cls"
-      _models_answer set-subagent --file "$file" --id "$id" --class "$cls" || exit $?
+      _models_answer_locked "$id" set-subagent --file "$file" --id "$id" --class "$cls" || exit $?
       return 0
       ;;
     set-effort)
@@ -10094,7 +10279,7 @@ _models_lane_sub() {   # <accountId> <subcommand> [args…]
       shift 2
       [ $# -eq 0 ] || _models_refuse unknown-argument 2 "ccrc models $id set-effort takes a class and a level, and got \"$1\""
       _models_class_ok "$cls"
-      _models_answer set-effort --file "$file" --id "$id" --class "$cls" --level "$level" || exit $?
+      _models_answer_locked "$id" set-effort --file "$file" --id "$id" --class "$cls" --level "$level" || exit $?
       return 0
       ;;
     set-window)
@@ -10107,7 +10292,7 @@ _models_lane_sub() {   # <accountId> <subcommand> [args…]
         || _models_refuse missing-argument 2 "ccrc models $id set-window needs a model and a token count: ccrc models $id set-window <modelId> <tokens>"
       shift 2
       [ $# -eq 0 ] || _models_refuse unknown-argument 2 "ccrc models $id set-window takes a model and a token count, and got \"$1\""
-      _models_answer set-window --file "$file" --id "$id" --model "$model" --tokens "$tokens" || exit $?
+      _models_answer_locked "$id" set-window --file "$file" --id "$id" --model "$model" --tokens "$tokens" || exit $?
       return 0
       ;;
     clear-window)
@@ -10116,7 +10301,7 @@ _models_lane_sub() {   # <accountId> <subcommand> [args…]
         || _models_refuse missing-argument 2 "ccrc models $id clear-window needs a model: ccrc models $id clear-window <modelId>"
       shift
       [ $# -eq 0 ] || _models_refuse unknown-argument 2 "ccrc models $id clear-window takes one model, and got \"$1\""
-      _models_answer clear-window --file "$file" --id "$id" --model "$model" || exit $?
+      _models_answer_locked "$id" clear-window --file "$file" --id "$id" --model "$model" || exit $?
       return 0
       ;;
     discovery)
@@ -10127,7 +10312,7 @@ _models_lane_sub() {   # <accountId> <subcommand> [args…]
       case "$action" in
         catalogue)
           [ $# -eq 0 ] || _models_refuse unknown-argument 2 "ccrc models $id discovery catalogue takes no model id, and got \"$1\" — it means the WHOLE advertised set"
-          _models_answer discovery --file "$file" --id "$id" --action catalogue || exit $?
+          _models_answer_locked "$id" discovery --file "$file" --id "$id" --action catalogue || exit $?
           ;;
         add|rm)
           local model="${1:-}"
@@ -10159,12 +10344,12 @@ _models_lane_sub() {   # <accountId> <subcommand> [args…]
           probe="$(printf '%s' "$showbody" | jq -r '.registry.probe // ""')"
           if [ "$action" = "add" ] && [ "$probe" = "openrouter" ]; then
             _models_endpoints "$id" "$model"
-            _models_answer discovery --file "$file" --id "$id" --action add --model "$model" --endpoints "$MODELS_ENDPOINTS_TMP"
+            _models_answer_locked "$id" discovery --file "$file" --id "$id" --action add --model "$model" --endpoints "$MODELS_ENDPOINTS_TMP"
             local rc=$?
             rm -f "$MODELS_ENDPOINTS_TMP"
             [ "$rc" -eq 0 ] || exit "$rc"
           else
-            _models_answer discovery --file "$file" --id "$id" --action "$action" --model "$model" || exit $?
+            _models_answer_locked "$id" discovery --file "$file" --id "$id" --action "$action" --model "$model" || exit $?
           fi
           ;;
         *) _models_refuse unknown-action 2 "ccrc models $id discovery has no action \"$action\": it takes add <modelId>, rm <modelId>, or catalogue" ;;
@@ -10177,7 +10362,7 @@ _models_lane_sub() {   # <accountId> <subcommand> [args…]
       # node op and answers with its own JSON, on an ORPHAN id exactly as much
       # as on one the roster has a row for.
       [ $# -eq 0 ] || _models_refuse unknown-argument 2 "ccrc models $id rm takes no arguments, and got \"$1\""
-      _models_answer rm --file "$file" --id "$id" || exit $?
+      _models_answer_locked "$id" rm --file "$file" --id "$id" || exit $?
       return 0
       ;;
     *) _models_refuse internal-no-arm 1 "ccrc models lists \"$sub\" as implemented and has no arm for it — this is a bug in ccrc, not a fact about your box, and nothing was written" ;;
@@ -10707,7 +10892,9 @@ _models_box_sub() {   # <subcommand> [args…]
           # stderr), and a failure here makes this row ok:false and skips the
           # LiteLLM step, which reads the same freshly-materialised state.
           local mreason="" mat_body mat_rc=0
-          mat_body="$(_models_node materialise --file "$file" --id "$id" 2>/dev/null)" || mat_rc=$?
+          # Under the lane-files lock (auto-advance spec D21): a refresh overlapping a hand verb, or another
+          # refresh, re-materialises after it, never interleaved. A held lock is this row's reason, never a hang.
+          mat_body="$(_models_node_locked "$id" materialise --file "$file" --id "$id" 2>/dev/null)" || mat_rc=$?
           if [ "$mat_rc" -ne 0 ]; then
             mreason="$(printf '%s' "$mat_body" | tail -n1 | jq -r '.detail // empty' 2>/dev/null)"
             [ -n "$mreason" ] || mreason="materialise exited $mat_rc with no answer"
@@ -11020,7 +11207,7 @@ _codex_lane_json_ensure() {   # <id>
   _codex_row "${1:-}" || return $?
   st="$(_codex_lane_json_state "$CX_ID")" || return 1
   [ "$st" = current ] && return 0
-  ans="$(_models_node materialise --file "$(_models_roster_path)" --id "$CX_ID" 2>/dev/null)"; rc=$?
+  ans="$(_models_node_locked "$CX_ID" materialise --file "$(_models_roster_path)" --id "$CX_ID" 2>/dev/null)"; rc=$?
   if [ "$rc" -ne 0 ] || ! printf '%s' "$ans" | jq -e '.ok == true' >/dev/null 2>&1; then
     err="$(printf '%s' "$ans" | jq -r '.error // empty' 2>/dev/null)"
     detail="$(printf '%s' "$ans" | jq -r '.detail // empty' 2>/dev/null)"

@@ -7306,3 +7306,31 @@ describe('the advance file and its clock, each spelled once (auto-advance spec �
     expect(readFileSync(path.join(ccrcRoot, 'shared', 'model-advance.mjs'), 'utf8')).toContain('export const REASON_MAX = 200;');
   });
 });
+
+// ── auto-advance spec D21: the lane-files lock, and the one list of ops that run under it ──────────────────────
+describe('the lane-files lock: one path outside ~/.ccrc/models, and one list of writing ops (auto-advance spec D21)', () => {
+  it('the lock path is spelled once, in ccd/ccrc, on _models_lock_path\'s one line, and by no node or TypeScript source', () => {
+    expect(holdersOf('.ccrc/locks')).toEqual(['ccd/ccrc']);
+    expect(codeLines(path.join(ccrcRoot, 'ccd', 'ccrc')).filter((l) => l.includes('.ccrc/locks')))
+      .toEqual(['_models_lock_path() { printf \'%s\' "$HOME/.ccrc/locks/models-$1.lock"; }']);
+    const mjs = (d: string): string[] => readdirSync(path.join(ccrcRoot, d)).filter((f) => f.endsWith('.mjs'))
+      .map((f) => path.join(ccrcRoot, d, f));
+    expect([...ALL, ...mjs('deploy'), ...mjs('shared')].filter((f) => readFileSync(f, 'utf8').includes('.ccrc/locks')).map(rel))
+      .toEqual([]);
+  });
+
+  it('MODELS_WRITE_OPS is exactly the OPS rows marked writes: true, in both directions, and every row says which', () => {
+    const bash = /^MODELS_WRITE_OPS="([^"]*)"$/m.exec(readFileSync(path.join(ccrcRoot, 'ccd', 'ccrc'), 'utf8'));
+    expect(bash, 'ccd/ccrc has no file-scope MODELS_WRITE_OPS').toBeTruthy();
+    const op = readFileSync(path.join(ccrcRoot, 'deploy', 'models-op.mjs'), 'utf8');
+    const start = op.indexOf('const OPS = {');
+    expect(start).toBeGreaterThan(0);
+    const block = op.slice(start, op.indexOf('\n};\n', start));
+    const rows = [...block.matchAll(/^ {2}'?([a-z][a-z-]*)'?: \{([^\n]*)\},$/gm)]
+      .map((m) => ({ op: m[1]!, writes: /\bwrites: (true|false)\b/.exec(m[2]!)?.[1] ?? null }));
+    expect(rows.length, 'the OPS scan found too few rows to be reading the table').toBeGreaterThanOrEqual(12);
+    expect(rows.filter((r) => r.writes === null).map((r) => r.op), 'an OPS row with no writes flag').toEqual([]);
+    expect(bash![1]!.split(' ').filter(Boolean).sort())
+      .toEqual(rows.filter((r) => r.writes === 'true').map((r) => r.op).sort());
+  });
+});

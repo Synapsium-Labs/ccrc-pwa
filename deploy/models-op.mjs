@@ -35,6 +35,13 @@
 //     The two window ops (`set-window`, `clear-window`) obey all three against
 //     their own sibling file (`windowOp`), and re-materialise the same way.
 //
+// ── THE LOCK (auto-advance spec D21) ─────────────────────────────────────
+// Every op whose `OPS` row says `writes: true` runs under the caller's
+// per-lane lock: `ccd/ccrc` reaches each of them only through
+// `_models_answer_locked` or `_models_node_locked`. This file takes no lock of
+// its own (node has no flock(2)) and depends on that one caller for it; a
+// direct `node deploy/models-op.mjs <op>` is unserialised, as before.
+//
 // `rm` (spec §4.1 Lifecycle, §10, §11) is a DELIBERATE exception to rules 2 and
 // 3: it is a REAP, not a mutation, and re-validating or materialising a
 // registry it is about to delete would be pointless — worse, it would refuse to
@@ -764,31 +771,34 @@ function whitelistCheck(endpointsFile) {
   return { servedBy };
 }
 
-/** DATA: one row per op naming the keys it takes and which of them are
- *  required. */
+/** DATA: one row per op naming the keys it takes, which of them are required, and whether it WRITES a lane file
+ *  (auto-advance spec D21). A `writes: true` row runs only under the caller's lane-files lock, and `ccd/ccrc`'s
+ *  MODELS_WRITE_OPS is exactly those rows, which `single-definition.test.ts` checks in both directions.
+ *  `materialise --check true` writes nothing but shares its row. `litellm` writes the TIER's config, under the
+ *  tier lock (`_codex_lock`), not a lane file, so it is `false` here. */
 const OPS = {
-  lanes: { keys: ['file'], required: ['file'] },
-  show: { keys: ['file', 'id'], required: ['file', 'id'] },
-  init: { keys: ['file', 'id', 'probe', 'base-url'], required: ['file', 'id', 'probe'] },
-  'set-class': { keys: ['file', 'id', 'class', 'model'], required: ['file', 'id', 'class', 'model'] },
-  'set-subagent': { keys: ['file', 'id', 'class'], required: ['file', 'id', 'class'] },
-  'set-effort': { keys: ['file', 'id', 'class', 'level'], required: ['file', 'id', 'class', 'level'] },
+  lanes: { keys: ['file'], required: ['file'], writes: false },
+  show: { keys: ['file', 'id'], required: ['file', 'id'], writes: false },
+  init: { keys: ['file', 'id', 'probe', 'base-url'], required: ['file', 'id', 'probe'], writes: true },
+  'set-class': { keys: ['file', 'id', 'class', 'model'], required: ['file', 'id', 'class', 'model'], writes: true },
+  'set-subagent': { keys: ['file', 'id', 'class'], required: ['file', 'id', 'class'], writes: true },
+  'set-effort': { keys: ['file', 'id', 'class', 'level'], required: ['file', 'id', 'class', 'level'], writes: true },
   // Codex-bridge spec §2.7: a lane's measured context windows, in their own
   // sibling file (`windowOp`). `tokens` is checked against WINDOW_MIN and
   // WINDOW_MAX here, never in bash.
-  'set-window': { keys: ['file', 'id', 'model', 'tokens'], required: ['file', 'id', 'model', 'tokens'] },
-  'clear-window': { keys: ['file', 'id', 'model'], required: ['file', 'id', 'model'] },
-  discovery: { keys: ['file', 'id', 'action', 'model', 'endpoints'], required: ['file', 'id', 'action'] },
+  'set-window': { keys: ['file', 'id', 'model', 'tokens'], required: ['file', 'id', 'model', 'tokens'], writes: true },
+  'clear-window': { keys: ['file', 'id', 'model'], required: ['file', 'id', 'model'], writes: true },
+  discovery: { keys: ['file', 'id', 'action', 'model', 'endpoints'], required: ['file', 'id', 'action'], writes: true },
   // `check` is OPTIONAL (Plan 3a Task 4): `--check true` is the check-only
   // form, which writes nothing and answers `changed`; omitted, the op writes,
   // as every caller before it expects. Any other value is refused.
-  materialise: { keys: ['file', 'id', 'check'], required: ['file', 'id'] },
-  rm: { keys: ['file', 'id'], required: ['file', 'id'] },
+  materialise: { keys: ['file', 'id', 'check'], required: ['file', 'id'], writes: true },
+  rm: { keys: ['file', 'id'], required: ['file', 'id'], writes: true },
   // `commit` is OPTIONAL and defaults to check-only (fix round 1): omitted or
   // any value other than the literal string "true" renders and reports
   // `changed` without writing; `--commit true` performs the write. See the
   // `litellm` arm's own comment for why the write is a second, explicit call.
-  litellm: { keys: ['file', 'id', 'template', 'out', 'commit'], required: ['file', 'id', 'template', 'out'] },
+  litellm: { keys: ['file', 'id', 'template', 'out', 'commit'], required: ['file', 'id', 'template', 'out'], writes: false },
 };
 
 /** The files `materialise` renders WHOLE, as `[key, path, text]` in write

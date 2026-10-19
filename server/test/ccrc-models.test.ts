@@ -226,7 +226,11 @@ function env(h: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   // arm honoured and a GPT-lane session can carry. Inherited, it would have
   // aimed a case's render and its `pgrep -f` at a real config. Plan 4 deleted
   // the arm and kept this drop: it costs nothing, and a return stays loud.
-  for (const k of ['CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S', 'CCGPT_CONFIG']) delete inherited[k];
+  // The lane-files lock's wait and the advance file's clock (auto-advance Codex arm): a runner's values never
+  // steer a case either.
+  for (const k of ['CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S', 'CCGPT_CONFIG', 'CCRC_MODELS_LOCK_S', 'CCRC_MODELS_NOW']) {
+    delete inherited[k];
+  }
   const e = ghContainedEnv(h, { ...inherited, HOME: h, ...extra }, { systemd: true });
   const poison = (name: string, says: string): void =>
     fs.writeFileSync(join(h, '.local', 'bin', name),

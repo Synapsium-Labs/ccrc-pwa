@@ -13186,6 +13186,14 @@ function runFixCodex(c: FixCodexCase = {}): {
       '  echo "{\\"ok\\":true,\\"op\\":\\"materialise\\",\\"id\\":\\"$id\\",\\"wrote\\":{\\"lane\\":\\"lane.json of $id\\"}}"',
       '}',
     ].join('\n'),
+    // auto-advance D21: `_fix_codex` re-renders a lane through the lane-files lock, inside its tier lock.
+    _models_node_locked: [
+      '_models_node_locked() {',
+      '  printf \'%s tier=%s\\n\' "$1" "${CX_LOCK_ID:-}" >> "$HOME/models-locks"',
+      '  shift',
+      '  _models_node "$@"',
+      '}',
+    ].join('\n'),
     _models_litellm_lane_held: [
       '_models_litellm_lane_held() {',
       '  printf \'%s %s lock=%s\\n\' _models_litellm_lane_held "$1" "${CX_LOCK_ID:-}" >> "$HOME/calls"',
@@ -13277,6 +13285,13 @@ describe('ccrc doctor --fix: codex, measured in isolation (_fix_codex, Plan 3a T
     expect(r.fix).toEqual([DONE(1)]);
     expect(r.tripwire).toEqual([]);
     expect(r.after).toBe('after rc=0 lockfd=');
+  });
+
+  it('a stale lane is re-rendered under BOTH locks, the tier lock first: the one sanctioned nesting (auto-advance D21)', () => {
+    const r = runFixCodex({ laneState: { 'codex-a': 'stale' } });
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.calls).toContain(commit(r.home, 'codex-a'));
+    expect(readFileSync(join(r.home, 'models-locks'), 'utf8').split('\n').filter(Boolean)).toEqual(['codex-a tier=codex-a']);
   });
 
   it('refuses, asking nothing, when a ccrc function it calls is not loaded', () => {

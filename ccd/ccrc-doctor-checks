@@ -6815,7 +6815,7 @@ _fix_codex() {
     local -a ids=() missing=()
     for n in _codex_lanes _codex_row _codex_lane_json_state _codex_lock _codex_unlock \
              _codex_shim_file _codex_runtime_cli _models_node _models_roster_path _models_litellm_lane_held \
-             _inst_atomic _inst_codex_tiers _box_env_value; do
+             _inst_atomic _inst_codex_tiers _box_env_value _models_node_locked; do
       declare -F "$n" >/dev/null 2>&1 || missing+=("$n")
     done
     declare -p CODEX_LANE_BINS >/dev/null 2>&1 || missing+=(CODEX_LANE_BINS)
@@ -6922,7 +6922,7 @@ _fix_codex() {
         chk="$(_models_node materialise --file "$roster" --id "$id" --check true 2>/dev/null)" || chk=""
         if [ "$st" != current ] \
            || ! printf '%s' "$chk" | jq -e '.ok == true and .check == true and .changed.lane == false' >/dev/null 2>&1; then
-          ans="$(_models_node materialise --file "$roster" --id "$id" 2>/dev/null)"; rc=$?
+          ans="$(_models_node_locked "$id" materialise --file "$roster" --id "$id" 2>/dev/null)"; rc=$?   # lane-files lock inside the tier lock (auto-advance D21)
           if [ "$rc" -eq 0 ] && printf '%s' "$ans" | jq -e '.ok == true and (.wrote.lane | type) == "string"' >/dev/null 2>&1; then
             echo "FIX codex: $id: lane.json re-rendered from the roster and this lane's class registry"
           elif [ "$rc" -eq 0 ] && printf '%s' "$ans" | jq -e '.ok == true and .wrote == null' >/dev/null 2>&1; then
