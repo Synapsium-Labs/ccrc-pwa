@@ -41,16 +41,17 @@ describe('connectFleet — connection lifecycle', () => {
     // `rosterFp`/`build`, a real agent NEVER omits this field — the fixture
     // home has no `~/.cc-sessions/pool-epoch`, so `readObservedEpoch` answers
     // "never synced" (`null`), sent on the wire explicitly, not "no evidence".
-    // `agentOps: ['update', 'token-sync']`: the REAL agent advertises the ops it
+    // `agentOps: ['update', 'token-sync', 'account']`: the REAL agent advertises the ops it
     // answers beyond the closed set (design 2026-09-20 §10, programme wave 5
-    // Task 2; `token-sync` from box-token lifecycle wave 1, spec 4.4), read
+    // Task 2; `token-sync` from box-token lifecycle wave 1, spec 4.4; `account`
+    // from the accounts plan's A8, spec §13.2), read
     // through `readReadyOps`. This literal read `[]` while the agent sent
     // no `ops`; a ready frame that stops sending the word reds HERE — §18 "an
     // agent without the op is never sent it", on the agent's side.
     await vi.waitFor(
       () => expect(fleet!.state).toEqual({
         connected: true, downSince: null, ccdVerbs: [], rosterFp: null, build: null, observedEpoch: null,
-        agentOps: ['update', 'token-sync'],
+        agentOps: ['update', 'token-sync', 'account'],
       }),
       { timeout: 3000 });
   });
@@ -238,6 +239,45 @@ describe('FleetClient.request — every settlement releases its pending resource
     await vi.waitFor(() => expect(requestSeen).toBe(true), { timeout: 3000 });
     replyLate();
     await new Promise((resolve) => setImmediate(resolve));
+    expect(reachable.pending.size).toBe(0);
+  });
+
+  it("drops the frame once sent: a pending account op holds its settlement handles and nothing of the frame (spec §13.2, D-5513)", async () => {
+    const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+    wss = server;
+    const frames: string[] = [];
+    let reply!: () => void;
+    server.on('connection', (ws) => {
+      ws.on('message', (raw) => {
+        const text = raw.toString();
+        const msg = JSON.parse(text) as { t?: unknown; id?: unknown };
+        if (msg.t === 'hello') ws.send(JSON.stringify({ t: 'ready', v: 1, ops: ['account'] }));
+        else if (msg.t === 'req' && typeof msg.id === 'number') {
+          frames.push(text);
+          reply = () => ws.send(JSON.stringify({ t: 'res', id: msg.id, ok: true, kind: 'not-started', fleetIdentity: null }));
+        }
+      });
+    });
+    await new Promise<void>((resolve) => server.once('listening', () => resolve()));
+    const address = server.address();
+    const port = typeof address === 'object' && address !== null ? address.port : 0;
+    fleet = connectFleet({ url: `ws://127.0.0.1:${port}`, token: TOKEN, heartbeatMs: 60_000 });
+    await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
+
+    const canary = ['CANARY', 'client', String(process.pid)].join('-');
+    const stdinB64 = Buffer.from(canary).toString('base64');
+    const request = fleet.client.request(
+      { t: 'req', op: 'account', sub: 'credential', laneId: 'lane-a', fields: {}, stdinB64 }, 60_000);
+    const reachable = fleet.client as unknown as { pending: Map<number, Record<string, unknown>> };
+    expect(reachable.pending.size).toBe(1);
+    const entry = [...reachable.pending.values()][0]!;
+    // The whole entry: four handles, no field that could hold the frame or its text.
+    expect(Object.keys(entry).sort()).toEqual(['dispose', 'reject', 'resolve', 'timer']);
+    for (const v of Object.values(entry)) expect(typeof v === 'string' ? v : '').not.toContain(stdinB64);
+    await vi.waitFor(() => expect(frames).toHaveLength(1), { timeout: 3000 });
+    expect(frames[0], 'the frame did reach the wire (the control)').toContain(stdinB64);
+    reply();
+    await expect(request).resolves.toMatchObject({ ok: true, kind: 'not-started' });
     expect(reachable.pending.size).toBe(0);
   });
 

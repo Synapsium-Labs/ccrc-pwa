@@ -54,6 +54,11 @@ type ResolvedConfig = Required<RemoteFleetConfig>;
 // here; deleting this export is therefore a TypeScript error.
 export type { FleetState };
 
+/** One request awaiting its answer: the settlement handles and NOTHING of the frame (accounts spec §13.2, D-5513).
+ *  An `account` op's frame carries a secret in `stdinB64`, so the frame is serialised, handed to the socket and
+ *  dropped; no entry here, no listener and no timer closure holds it or its text. A field added here that keeps the
+ *  frame would keep the secret for the request's whole life (up to `accountOpRequestTimeoutMs`), which
+ *  `remote-connect.test.ts` reds. */
 interface Pending {
   resolve: (v: ResOk) => void;
   reject: (e: Error) => void;
@@ -278,9 +283,10 @@ export class FleetClient {
         dispose,
       });
       signal?.addEventListener('abort', abort, { once: true });
-      const req = { ...payload, t: 'req', id } as AgentReq;
       try {
-        ws.send(JSON.stringify(req));
+        // Built and serialised inline, bound to no name a closure above could capture: once `send` returns, the
+        // frame (and an `account` op's `stdinB64`) is the socket's alone (see `Pending`).
+        ws.send(JSON.stringify({ ...payload, t: 'req', id } as AgentReq));
       } catch (e) {
         // D-3555: `JSON.stringify` or `ws.send` threw before queuing the frame (ws throws only at
         // CONNECTING, which the OPEN check above excludes), so undo the registration above and say so. After this
