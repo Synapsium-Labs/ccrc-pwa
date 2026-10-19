@@ -58,7 +58,7 @@ export {
   MAIL_GLYPH, WARN_GLYPH, SETTINGS_GLYPH,
 } from './lib/text';
 export { PRESS_FEEDBACK, PRESS_TRANSFORM } from './lib/press';
-export { QuickConfirm, QC_CONSEQUENCE, QC_ACTIONS, type QuickConfirmProps } from './primitives/confirm';
+export { QuickConfirm, QC_CONSEQUENCE, QC_ACTIONS, useCancelFirst, type QuickConfirmProps } from './primitives/confirm';
 export {
   toast,
   ToastHost,

@@ -47,6 +47,14 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+/** One Ack, through its confirm (D-5507): the banner's Ack opens `AckConfirm`, and only its danger commit sends. A
+ *  disabled trigger opens nothing, so the tap ends there, as it did before the confirm. */
+const tapAck = (trigger: HTMLElement): void => {
+  fireEvent.click(trigger);
+  const commit = document.querySelector<HTMLElement>('[role="dialog"] .qc-actions .btn-danger');
+  if (commit !== null) fireEvent.click(commit);
+};
+
 const FLEET_ID = '0b6e1c62-7a4f-4d0e-9c1a-3f2d5e8a9b10';
 const SERVER_ID = '5f3a9d21-2c8b-4e6f-a1d7-8b0c4e2f6a93';
 const node = (over: Partial<NodeWire> = {}): NodeWire => ({
@@ -105,7 +113,7 @@ describe('HaltBanner — the Ack in place is the Settings Ack', () => {
   it('sends POST /api/updates/ack for that node once, then re-polls', async () => {
     const ack = vi.spyOn(api, 'ackUpdateNode').mockResolvedValue({ ok: true, node: node() });
     const { onAcked } = mount(view([server(), failed()]));
-    fireEvent.click(screen.getByRole('button', { name: 'Ack fleet' }));
+    tapAck(screen.getByRole('button', { name: 'Ack fleet' }));
     expect(screen.getByRole('button', { name: 'Ack fleet' }), 'one tap while the answer is in flight').toBeDisabled();
     await waitFor(() => expect(onAcked).toHaveBeenCalledTimes(1));
     expect(ack.mock.calls).toEqual([[FLEET_ID]]);
@@ -115,7 +123,7 @@ describe('HaltBanner — the Ack in place is the Settings Ack', () => {
   it('an unreadable answer and a refusal are said as the Settings row says them, and re-poll either way', async () => {
     vi.spyOn(api, 'ackUpdateNode').mockResolvedValueOnce('unreadable');
     const first = mount(view([failed()]));
-    fireEvent.click(screen.getByRole('button', { name: 'Ack fleet' }));
+    tapAck(screen.getByRole('button', { name: 'Ack fleet' }));
     expect(await screen.findByText(ACK_UNREADABLE_TEXT)).toBeInTheDocument();
     await waitFor(() => expect(first.onAcked).toHaveBeenCalledTimes(1));
     const held = screen.getByRole('button', { name: 'Acked fleet' });
@@ -125,12 +133,12 @@ describe('HaltBanner — the Ack in place is the Settings Ack', () => {
     const busy = new ApiError(409, { ok: false, error: 'busy' });
     vi.spyOn(api, 'ackUpdateNode').mockRejectedValueOnce(busy).mockResolvedValue({ ok: true, node: node() });
     const second = mount(view([failed()]));
-    fireEvent.click(screen.getByRole('button', { name: 'Ack fleet' }));
+    tapAck(screen.getByRole('button', { name: 'Ack fleet' }));
     expect(await screen.findByText(updateErrorText(busy))).toBeInTheDocument();
     await waitFor(() => expect(second.onAcked).toHaveBeenCalledTimes(1));
     expect(screen.getByRole('button', { name: 'Ack fleet' }), 'a refused ack re-arms the button').not.toBeDisabled();
     // ... and a second tap goes out: a refusal is an answer the server gave, so nothing is in doubt.
-    fireEvent.click(screen.getByRole('button', { name: 'Ack fleet' }));
+    tapAck(screen.getByRole('button', { name: 'Ack fleet' }));
     await waitFor(() => expect(second.onAcked).toHaveBeenCalledTimes(2));
     expect(api.ackUpdateNode, 'the unreadable tap, the refused tap, and the tap after the re-arm').toHaveBeenCalledTimes(3);
   });
@@ -139,12 +147,12 @@ describe('HaltBanner — the Ack in place is the Settings Ack', () => {
     const ack = vi.spyOn(api, 'ackUpdateNode').mockResolvedValue({ ok: true, node: node() });
     const onAcked = vi.fn(() => 2); // the re-poll failed: the hook keeps the last good view, so the same lease stands
     const { rerender } = render(<><ToastHost /><HaltBanner updates={view([failed()])} seq={1} onAcked={onAcked} /></>);
-    fireEvent.click(screen.getByRole('button', { name: 'Ack fleet' }));
+    tapAck(screen.getByRole('button', { name: 'Ack fleet' }));
     await waitFor(() => expect(onAcked).toHaveBeenCalledTimes(1));
     const button = screen.getByRole('button', { name: 'Acked fleet' });
     expect(button).toBeDisabled();
     expect(button).toHaveTextContent('Acked');
-    fireEvent.click(button);
+    tapAck(button);
     expect(ack).toHaveBeenCalledTimes(1);
     // A NEW failure on the same node is a new lease: the button re-arms.
     rerender(<><ToastHost /><HaltBanner updates={view([failed({ update: { state: 'failed', target: 'v0.0.85', startedAt: 2, detail: 'gate: unit not up' } })])} seq={2} onAcked={onAcked} /></>);
@@ -180,7 +188,14 @@ describe('HaltBanner — the Ack in place is the Settings Ack', () => {
     expect(settingsSrc).not.toMatch(/function canAck\b/);
     expect(settingsSrc).not.toMatch(/api\.ackUpdateNode\(/);
     expect(settingsSrc).toMatch(/void sendAck\(n\.nodeId\)/);
-    expect(bannerSrc).toMatch(/import \{ canAck, keepFocusInRow, sendAck \} from '\.\/updateAck';/);   // + R26(a)'s focus hand-off (wave 19)
+    // + the one confirm (D-5507), which carries R26(a)'s focus hand-off (wave 19) since the tap only opens it.
+    expect(bannerSrc).toMatch(/import \{ AckConfirm, canAck, sendAck \} from '\.\/updateAck';/);
+    // No surface keeps a one-tap Ack: both open the one AckConfirm, and only its commit reaches sendAck.
+    for (const src of [bannerSrc, settingsSrc]) {
+      expect(src).toContain('<AckConfirm node={n} releases={releases} open={confirming}');
+      expect(src).toContain('onConfirm={ack}');
+      expect(src).not.toMatch(/onClick=\{ack\}/);
+    }
     // The gate is canAck on every row, though a halting row passes it by construction: no behaviour can red for it.
     expect(bannerSrc).toContain('disabled={!canAck(n, releases) || acking || held}');
     expect(bannerSrc).toContain('void sendAck(n.nodeId).then(');
@@ -236,14 +251,14 @@ describe('HaltBanner — an Ack with no answer holds until a read issued after t
     const onAcked = vi.fn(() => 2);
     const v1 = view([failed()]);
     const { rerender } = renderWith(v1, onAcked);
-    fireEvent.click(screen.getByRole('button', { name: 'Ack fleet' }));
+    tapAck(screen.getByRole('button', { name: 'Ack fleet' }));
     await waitFor(() => expect(onAcked).toHaveBeenCalledTimes(1));
     expect(await screen.findByText(updateErrorText(err))).toBeInTheDocument();
     rerender(v1, 1); // the re-poll failed: the hook keeps the very same view and the very same seq
     const held = screen.getByRole('button', { name: 'Ack fleet' });
     expect(held).toBeDisabled();
     expect(held, 'no 2xx was seen: it does not say Acked').toHaveTextContent(/^Ack$/);
-    fireEvent.click(held);
+    tapAck(held);
     expect(ack).toHaveBeenCalledTimes(1);
   });
 
@@ -253,7 +268,7 @@ describe('HaltBanner — an Ack with no answer holds until a read issued after t
     const onAcked = vi.fn(() => 2);
     const v1 = view([failed()]);
     const { rerender } = renderWith(v1, onAcked);
-    fireEvent.click(screen.getByRole('button', { name: 'Ack fleet' }));
+    tapAck(screen.getByRole('button', { name: 'Ack fleet' }));
     await waitFor(() => expect(onAcked).toHaveBeenCalledTimes(1));
     rerender(v1, 1);
     expect(screen.getByRole('button', { name: 'Ack fleet' })).toBeDisabled();
@@ -261,7 +276,7 @@ describe('HaltBanner — an Ack with no answer holds until a read issued after t
     const again = screen.getByRole('button', { name: 'Ack fleet' });
     expect(again).not.toBeDisabled();
     expect(again).toHaveTextContent(/^Ack$/);
-    fireEvent.click(again);
+    tapAck(again);
     await waitFor(() => expect(ack).toHaveBeenCalledTimes(2));
   });
 
@@ -270,7 +285,7 @@ describe('HaltBanner — an Ack with no answer holds until a read issued after t
     const onAcked = vi.fn(() => 2);
     const v1 = view([failed()]);
     const { rerender } = renderWith(v1, onAcked);
-    fireEvent.click(screen.getByRole('button', { name: 'Ack fleet' }));
+    tapAck(screen.getByRole('button', { name: 'Ack fleet' }));
     await waitFor(() => expect(onAcked).toHaveBeenCalledTimes(1));
     rerender(view([leaseOf({ startedAt: 2 })]), 2);
     expect(screen.getByRole('button', { name: 'Ack fleet' })).not.toBeDisabled();
@@ -281,7 +296,7 @@ describe('HaltBanner — an Ack with no answer holds until a read issued after t
     const onAcked = vi.fn(() => 2);
     const v1 = view([failed()]);
     const { rerender } = renderWith(v1, onAcked);
-    fireEvent.click(screen.getByRole('button', { name: 'Ack fleet' }));
+    tapAck(screen.getByRole('button', { name: 'Ack fleet' }));
     await waitFor(() => expect(onAcked).toHaveBeenCalledTimes(1));
     rerender(v1, 1);
     expect(screen.getByRole('button', { name: 'Acked fleet' }), 'a 2xx was seen: it says Acked').toBeDisabled();
@@ -296,14 +311,14 @@ describe('HaltBanner — an Ack with no answer holds until a read issued after t
     const ack = vi.spyOn(api, 'ackUpdateNode').mockImplementationOnce(() => new Promise((_res, rej) => { reject = rej; }));
     const onAcked = vi.fn(() => 3); // the mid-flight read was number 2, so the re-poll the outcome issues is number 3
     const { rerender } = renderWith(view([failed()]), onAcked);
-    fireEvent.click(screen.getByRole('button', { name: 'Ack fleet' }));
+    tapAck(screen.getByRole('button', { name: 'Ack fleet' }));
     const midFlight = view([failed()]); // a poll answered while the POST was out; it may predate the commit
     rerender(midFlight, 2);
     await act(async () => { reject(new TypeError('Failed to fetch')); });
     await waitFor(() => expect(onAcked).toHaveBeenCalledTimes(1));
     rerender(midFlight, 2);
     expect(screen.getByRole('button', { name: 'Ack fleet' })).toBeDisabled();
-    fireEvent.click(screen.getByRole('button', { name: 'Ack fleet' }));
+    tapAck(screen.getByRole('button', { name: 'Ack fleet' }));
     expect(ack).toHaveBeenCalledTimes(1);
     rerender(view([failed()]), 3);
     expect(screen.getByRole('button', { name: 'Ack fleet' })).not.toBeDisabled();
@@ -313,7 +328,7 @@ describe('HaltBanner — an Ack with no answer holds until a read issued after t
     vi.spyOn(api, 'ackUpdateNode').mockRejectedValueOnce(new ApiError(502, { ok: false, error: 'bad gateway' }));
     const onAcked = vi.fn(() => 5);
     const { rerender } = renderWith(view([failed()]), onAcked, 3);
-    fireEvent.click(screen.getByRole('button', { name: 'Ack fleet' }));
+    tapAck(screen.getByRole('button', { name: 'Ack fleet' }));
     await waitFor(() => expect(onAcked).toHaveBeenCalledTimes(1));
     rerender(view([leaseOf({ startedAt: 9 })]), 4); // a lower number, even with a new lease: not the read it waits for
     expect(screen.getByRole('button', { name: 'Ack fleet' })).toBeDisabled();
@@ -339,7 +354,7 @@ describe('HaltBanner — a parent that issues no read holds on the lease (D-4273
     arm();
     const onAcked = vi.fn(fn);
     const { rerender } = renderWith(view([failed()]), onAcked);
-    fireEvent.click(screen.getByRole('button', { name: /^Ack(ed)? fleet$/ }));
+    tapAck(screen.getByRole('button', { name: /^Ack(ed)? fleet$/ }));
     await waitFor(() => expect(onAcked).toHaveBeenCalledTimes(1));
     for (const seq of [1, 2, 7]) {
       rerender(view([failed()]), seq);
@@ -399,7 +414,7 @@ describe('HaltBanner — with the real poll, a read issued before the outcome ne
     await act(async () => { h.reads[0]!.resolve(view([failed()])); });
     const tapBtn = screen.getByRole('button', { name: 'Ack fleet' });
     if (cell === 'a') visibleRead();
-    fireEvent.click(tapBtn);
+    tapAck(tapBtn);
     if (cell === 'c') visibleRead();
     expect(h.updates, 'two reads issued before the outcome').toHaveBeenCalledTimes(2);
     expect(h.ackSpy).toHaveBeenCalledTimes(1);
@@ -410,7 +425,7 @@ describe('HaltBanner — with the real poll, a read issued before the outcome ne
     });
     const held = screen.getByRole('button', { name });
     expect(held, 'read 2 was issued before the outcome: it does not release').toBeDisabled();
-    fireEvent.click(held);
+    tapAck(held);
     expect(h.ackSpy, 'a click sends nothing').toHaveBeenCalledTimes(1);
     expect(h.updates, 'exactly one more read, issued inside the outcome callback').toHaveBeenCalledTimes(3);
     return h;
@@ -430,7 +445,7 @@ describe('HaltBanner — with the real poll, a read issued before the outcome ne
     const again = screen.getByRole('button', { name: 'Ack fleet' });
     expect(again).not.toBeDisabled();
     expect(again).toHaveTextContent(/^Ack$/);
-    fireEvent.click(again);
+    tapAck(again);
     expect(h.ackSpy, 'armed again: the tap sends the second POST').toHaveBeenCalledTimes(2);
   });
 
@@ -455,7 +470,7 @@ describe('HaltBanner — the accessible name follows the visible label (review 3
     const { onAcked } = mount(view([failed()]));
     const before = screen.getByRole('button', { name: 'Ack fleet' });
     expect(before).toHaveTextContent(/^Ack$/);
-    fireEvent.click(before);
+    tapAck(before);
     await waitFor(() => expect(onAcked).toHaveBeenCalledTimes(1));
     const after = screen.getByRole('button', { name: 'Acked fleet' });
     expect(after).toHaveTextContent(/^Acked$/);
@@ -468,7 +483,7 @@ describe('HaltBanner — each field of the lease key re-arms a held row (review 
     vi.spyOn(api, 'ackUpdateNode').mockResolvedValue({ ok: true, node: node() });
     const onAcked = vi.fn(() => 2);
     const { rerender } = renderWith(view([failed()]), onAcked);
-    fireEvent.click(screen.getByRole('button', { name: 'Ack fleet' }));
+    tapAck(screen.getByRole('button', { name: 'Ack fleet' }));
     await waitFor(() => expect(onAcked).toHaveBeenCalledTimes(1));
     expect(screen.getByRole('button', { name: 'Acked fleet' })).toBeDisabled();
     return rerender;
@@ -557,7 +572,7 @@ describe('HaltBanner — focus survives the Ack disabling (wave 19, R26(a))', ()
     const btn = screen.getByRole('button', { name: 'Ack fleet' });
     const row = btn.closest('li.halt-banner-node') as HTMLElement;
     btn.focus();
-    fireEvent.click(btn);
+    tapAck(btn);
     expect(btn).toBeDisabled();
     expect(document.activeElement, 'in flight: the row holds focus, not the disabled button').toBe(row);
     expect(row).toHaveAttribute('tabindex', '-1');
@@ -571,7 +586,7 @@ describe('HaltBanner — focus survives the Ack disabling (wave 19, R26(a))', ()
     const { onAcked } = mount(view([server({ update: { state: 'reverted', target: 'v0.0.84', startedAt: 1, detail: null } }), failed()]));
     const other = screen.getByRole('button', { name: 'Ack server' });
     other.focus();
-    fireEvent.click(screen.getByRole('button', { name: 'Ack fleet' }));
+    tapAck(screen.getByRole('button', { name: 'Ack fleet' }));
     await waitFor(() => expect(onAcked).toHaveBeenCalledTimes(1));
     expect(document.activeElement).toBe(other);
   });
@@ -583,7 +598,7 @@ describe('HaltBanner — focus survives the Ack disabling (wave 19, R26(a))', ()
     const { rerender } = render(<><ToastHost /><HaltBanner updates={view([reverted, failed()])} seq={1} onAcked={onAcked} /></>);
     const btn = screen.getByRole('button', { name: 'Ack fleet' });
     btn.focus();
-    fireEvent.click(btn);
+    tapAck(btn);
     await waitFor(() => expect(onAcked).toHaveBeenCalledTimes(1));
     // The re-poll's answer: fleet went back to idle on the ack, server still halts, so the banner stays.
     rerender(<><ToastHost /><HaltBanner updates={view([reverted, node()])} seq={2} onAcked={onAcked} /></>);
@@ -591,5 +606,57 @@ describe('HaltBanner — focus survives the Ack disabling (wave 19, R26(a))', ()
     const list = screen.getByRole('list', { name: 'Halted nodes' });
     expect(list).toHaveAttribute('tabindex', '-1');
     expect(document.activeElement, 'the list, not <body>').toBe(list);
+  });
+});
+
+// Settings spec §6.3 (D-5507): the banner's Ack is the Settings Ack, confirmed. It opens `AckConfirm` before any
+// request; Cancel posts nothing and holds the focus; the commit posts once; closing gives the focus back.
+describe('HaltBanner — Ack opens a confirm (D-5507)', () => {
+  const settle = async (): Promise<void> => { await act(async () => { await new Promise((r) => setTimeout(r, 20)); }); };
+
+  it('opens a confirm; Cancel posts nothing', async () => {
+    const ack = vi.spyOn(api, 'ackUpdateNode').mockResolvedValue({ ok: true, node: node() });
+    mount(view([failed()]));
+    fireEvent.click(screen.getByRole('button', { name: 'Ack fleet' }));
+    const sheet = screen.getByRole('dialog');
+    expect(within(sheet).getByText("Ack fleet's failed move?")).toBeInTheDocument();
+    expect(ack, 'the trigger sends nothing').not.toHaveBeenCalled();
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Cancel' }));
+    await settle();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(ack, 'Cancel posts nothing').not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Ack fleet' })).not.toBeDisabled();
+  });
+
+  it('the commit posts once', async () => {
+    const ack = vi.spyOn(api, 'ackUpdateNode').mockResolvedValue({ ok: true, node: node() });
+    const { onAcked } = mount(view([failed()]));
+    fireEvent.click(screen.getByRole('button', { name: 'Ack fleet' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Ack' }));
+    await waitFor(() => expect(onAcked).toHaveBeenCalledTimes(1));
+    expect(ack.mock.calls).toEqual([[FLEET_ID]]);
+  });
+
+  it('Cancel has the focus; closing returns focus to the trigger', async () => {
+    mount(view([failed()]));
+    const trigger = screen.getByRole('button', { name: 'Ack fleet' });
+    trigger.focus();
+    fireEvent.click(trigger);
+    await settle();
+    const cancel = within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' });
+    expect(document.activeElement).toBe(cancel);
+    fireEvent.click(cancel);
+    await settle();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it('the request plus refusals case names the refusals here too: the copy is the one AckConfirm', () => {
+    const halting = failed();
+    mount(view([halting], [{ tag: 'v0.0.84', version: 'v0.0.84', channel: 'stable', publishedAt: 1, commitSha: 'd'.repeat(40),
+      bundleListed: true, yanked: false, refused: [{ by: FLEET_ID, at: 1 }], notes: null }]));
+    fireEvent.click(screen.getByRole('button', { name: 'Ack fleet' }));
+    expect(within(screen.getByRole('dialog')).getByText(
+      'It also forgets that it refused v0.0.84. With auto-install on, the server may try it again on its next check.',
+    )).toBeInTheDocument();
   });
 });

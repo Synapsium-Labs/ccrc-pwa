@@ -47,10 +47,15 @@
 // busy before the rest is reached (MOVE_REST_TEXT points at the release list).
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { MoveRequestAnswer } from '../../../shared/api';
-import { Button, QC_ACTIONS, QC_CONSEQUENCE, RESET_LIST, Sheet, toast } from '@ccrc/ui';
-import { ApiError, api, moveSkipText, updateErrorText } from '../lib/api';
-import { moveEmptyText, moveHeadline, moveLabel, moveLines, moveRequests, rollbackHowText, type PlannedMove } from './movePlan';
+import type { MoveRequestAnswer, ReleaseWire } from '../../../shared/api';
+import { compareReleaseTags } from '../../../shared/semver';
+import { Button, QC_ACTIONS, QC_CONSEQUENCE, RESET_LIST, Sheet, toast, useCancelFirst } from '@ccrc/ui';
+import { ApiError, api, moveSkipText, noBundleRollbackText, updateErrorText } from '../lib/api';
+import {
+  moveEmptyText, moveHeadline, moveLabel, moveLines, moveRequests, rollbackBlockers, rollbackHowText,
+  type MoveIntent, type PlannedMove, type RollbackBlocker,
+} from './movePlan';
+import { nodeVersion } from './useUpdatesView';
 import './fleet.css';
 
 export const MOVE_UNREADABLE_TEXT = "Requested — the server's answer could not be read; the screen will re-check.";
@@ -162,8 +167,87 @@ function moveErrorText(err: unknown, plan: PlannedMove): string {
   return `${head} Already requested: ${requested.map((id) => moveLabel(plan, id)).join(', ')}. ${MOVE_REST_TEXT}`;
 }
 
-export function UpdateMoveSheet({ open, plan, onClose, onDone }: {
+/** Wave 8 item C: the reason a Roll back to `tag` is not offered, grouped by word. `no-bundle` is said with the tag
+ *  (noBundleRollbackText); any other word through the route's own copy (`moveSkipText` reads `UPDATE_ERROR_TEXT`,
+ *  and has a fallback for a word it does not know). Defined here since D-5611, because the rollback sheet says it
+ *  too (settings spec §6.3, "today's blocked line"); `screens/updates.tsx` re-exports it for the release rows. */
+export function rollbackBlockedText(blockers: readonly RollbackBlocker[], tag: string): string | null {
+  if (blockers.length === 0) return null;
+  const words = [...new Set(blockers.map((b) => b.word))];
+  return words.map((w) => {
+    const who = blockers.filter((b) => b.word === w).map((b) => b.label).join(', ');
+    return `Roll back not offered for ${who}: ${w === 'no-bundle' ? noBundleRollbackText(tag) : moveSkipText(w)}`;
+  }).join(' ');
+}
+
+// ── The danger tone (D-5507, settings spec §6.3) ─────────────────────────────────────────────────────────────────
+// A rollback is a danger action. Under `tone="danger"` the sheet asks the question, commits in the filled red
+// `danger` variant labelled with the verb, gives Cancel the focus (`useCancelFirst`, QuickConfirm's own; D-5610), and says what
+// a rollback will not undo. The default tone, `move`, is every Install and Update and is unchanged.
+
+/** The question a danger rollback asks (spec §6.3's title). */
+export function rollbackQuestion(plan: PlannedMove): string {
+  const i = plan.intent;
+  if (i.direction !== 'rollback') return moveHeadline(i);
+  return i.scope === 'node' ? `Roll back ${moveLabel(plan, i.nodeId)} to ${i.to}?` : `Roll back the fleet to ${i.to}?`;
+}
+
+/** The danger commit's label: the verb, and who moves ("Roll back 2 nodes", "Roll back fleet"). */
+export function rollbackCommitLabel(plan: PlannedMove): string {
+  const i = plan.intent;
+  if (i.direction !== 'rollback') return moveHeadline(i);
+  if (i.scope === 'node') return `Roll back ${moveLabel(plan, i.nodeId)}`;
+  return `Roll back ${plan.nodes.length} ${plan.nodes.length === 1 ? 'node' : 'nodes'}`;
+}
+
+/** What a failed health check does NOT do: move the node back. A gate that fails is not restored on a rollback
+ *  (`_upd_rollback_no_restore`, the note on `rollbackHowText`), so the node stays on the target. */
+export function rollbackNotRestoredText(intent: Extract<MoveIntent, { direction: 'rollback' }>): string {
+  return intent.scope === 'node'
+    ? `Only this node moves. If its health check fails, it stays on ${intent.to}; it is not moved back.`
+    : `Each node installs ${intent.to} and runs its health check. If a node's health check fails, it stays on ${intent.to}; it is not moved back.`;
+}
+
+/** The floor: auto-install never goes back to what a rollback left (`highestVersion` is never lowered). `left` is
+ *  every version the plan's nodes run, newest first. */
+export function rollbackFloorText(intent: Extract<MoveIntent, { direction: 'rollback' }>, left: readonly string[]): string {
+  const what = left.length <= 1 ? (left[0] ?? 'the release it leaves') : `${left.slice(0, -1).join(', ')} or ${left[left.length - 1]}`;
+  return `Auto-install will not return ${intent.scope === 'node' ? 'it ' : ''}to ${what}. It waits for a newer release.`;
+}
+
+/** A withdrawn target (D-5505's measured wording: a complete kept copy flips with no download; any other node asks
+ *  for the release's checksums and refuses a withdrawn one). */
+export function withdrawnRollbackText(to: string): string {
+  return `${to} was withdrawn by its publisher. ${WITHDRAWN_KEPT_CLAUSE} it, and the reason is shown.`;
+}
+
+/** The one measured fact both withdrawn lines state (this sheet's and the release row's `WITHDRAWN_NOTE`), spelled
+ *  once so the two cannot drift (D-5611). Each line ends it in its own words. */
+export const WITHDRAWN_KEPT_CLAUSE = 'A node that still keeps it on disk rolls back to it with no download; '
+  + 'a node that does not will refuse';
+
+/** The danger lines, in spec §6.3's order: not restored, the floor, withdrawn, and today's blocked line. */
+function dangerLines(plan: PlannedMove, release: ReleaseWire | undefined): string[] {
+  const i = plan.intent;
+  if (i.direction !== 'rollback') return [];
+  const left = [...new Set(plan.nodes.map(nodeVersion).filter((v): v is string => v !== null))]
+    .sort((a, b) => compareReleaseTags(b, a));
+  const blocked = rollbackBlockedText(rollbackBlockers(plan.nodes, release, i.to), i.to);
+  return [
+    rollbackNotRestoredText(i),
+    rollbackFloorText(i, left),
+    ...(release?.yanked === true ? [withdrawnRollbackText(i.to)] : []),
+    ...(blocked !== null ? [blocked] : []),
+  ];
+}
+
+export function UpdateMoveSheet({ open, plan, onClose, onDone, tone = 'move', release }: {
   open: boolean; plan: PlannedMove | null; onClose: () => void; onDone: () => void;
+  /** `danger` for a rollback (D-5507); `move`, the default, for Install and Update. */
+  tone?: 'move' | 'danger';
+  /** The target's catalogue row, when the caller has it: the danger tone reads its withdrawn mark and its bundle
+   *  (D-5611). */
+  release?: ReleaseWire;
 }): ReactNode {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -179,9 +263,11 @@ export function UpdateMoveSheet({ open, plan, onClose, onDone }: {
     setAnswered(false);
     return () => { gen.current += 1; };
   }, [open, plan]);
+  const danger = tone === 'danger';
+  useCancelFirst(open && plan !== null, danger);
 
   if (!open || plan === null) return null;
-  const headline = moveHeadline(plan.intent);
+  const headline = danger ? rollbackQuestion(plan) : moveHeadline(plan.intent);
   const lines = moveLines(plan);
 
   const confirm = (): void => {
@@ -254,13 +340,16 @@ export function UpdateMoveSheet({ open, plan, onClose, onDone }: {
         {plan.intent.direction === 'rollback' && lines.length > 0 && (
           <p className={QC_CONSEQUENCE}>{rollbackHowText(plan.intent.to)}</p>
         )}
+        {danger && lines.length > 0 && dangerLines(plan, release).map((line) => (
+          <p key={line} className={QC_CONSEQUENCE}>{line}</p>
+        ))}
         <div className={QC_ACTIONS}>
           {lines.length > 0 && !answered && (
-            <Button variant="primary" disabled={busy} onClick={confirm}>
-              {busy ? 'Sending…' : headline}
+            <Button variant={danger ? 'danger' : 'primary'} disabled={busy} onClick={confirm}>
+              {busy ? 'Sending…' : danger ? rollbackCommitLabel(plan) : headline}
             </Button>
           )}
-          <Button variant="ghost" disabled={busy} onClick={onClose}>
+          <Button variant="ghost" autoFocus={danger} disabled={busy} onClick={onClose}>
             {answered ? 'Close' : 'Cancel'}
           </Button>
         </div>
