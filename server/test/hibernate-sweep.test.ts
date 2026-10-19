@@ -294,7 +294,7 @@ describe('the watcher\'s own shadow pass, its deps unmocked', () => {
     (w as unknown as { hibernateStartedAt: number }).hibernateStartedAt = startedAt;
     const tick = async () => {
       const r = await readSessionRecord(deps.io, cfg, WID);
-      if (!r.found) throw new Error('fixture record not found');
+      if (r.kind !== 'found') throw new Error('fixture record not found');
       const row = await liveRowFor(turnReadDeps(deps as never, w), r.record, WUUID);
       if (row === null) throw new Error('fixture row not assembled');
       return { rows: [row], records: [r.record] };
