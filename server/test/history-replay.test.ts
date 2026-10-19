@@ -364,6 +364,11 @@ describe('W2-4 Task 2: the --out rule, created 0700 with its marker, reused only
     ['a marker holding another word', (b) => { const o = made(b); t2Fs.writeFileSync(t2Path.join(o, t2Drv.OUT_MARKER), 'something-else'); return o; }, 'marker-mismatch'],
     ['a marker holding OUT_KIND and a newline', (b) => { const o = made(b); t2Fs.writeFileSync(t2Path.join(o, t2Drv.OUT_MARKER), `${t2Drv.OUT_KIND}\n`); return o; }, 'marker-mismatch'],
     ['a marker that is a directory', (b) => { const o = made(b); const m = t2Path.join(o, t2Drv.OUT_MARKER); t2Fs.rmSync(m); t2Fs.mkdirSync(m); return o; }, 'marker-mismatch'],
+    // D-5814: a symlink is never followed, even to a file holding the right text (the isFile guard, W2-D53's marker rule).
+    ['a marker that is a symlink to a file holding OUT_KIND', (b) => {
+      const o = made(b); const m = t2Path.join(o, t2Drv.OUT_MARKER); const target = t2Path.join(b, 'marker-target');
+      t2Fs.writeFileSync(target, t2Drv.OUT_KIND); t2Fs.rmSync(m); t2Fs.symlinkSync(target, m); return o;
+    }, 'marker-mismatch'],
   ];
 
   it.each(REUSE)('W2-D53: %s is refused, and nothing is created in its place', (_what, plant, detail) => {
@@ -372,6 +377,31 @@ describe('W2-4 Task 2: the --out rule, created 0700 with its marker, reused only
     const before = t2Fs.readdirSync(b).sort();
     expect(refusalOf(() => t2Drv.prepareOut(o))).toEqual(out(detail));
     expect(t2Fs.readdirSync(b).sort(), 'the refusal created something').toEqual(before);
+  });
+
+  // D-5814: a FIFO marker must be refused without being opened, or readFileSync blocks the driver forever. The call runs
+  // in a child with a deadline (the FIFO cases of Task 3), and a CONTROL shows the same child accepts a regular marker.
+  const MARKER_CHILD = [
+    'const d = await import(process.env.MARKER_DRIVER_URL);',
+    'try { process.stdout.write("accepted " + d.prepareOut(process.env.MARKER_OUT)); }',
+    'catch (e) { if (!(e instanceof d.DriverRefusal)) throw e; process.stdout.write(e.word + " " + e.detail); }',
+  ].join('\n');
+  const markerChild = (o: string) => spawnSync(process.execPath, ['--input-type=module', '-e', MARKER_CHILD], {
+    env: { ...scrubbedEnv(process.env), MARKER_DRIVER_URL: pathToFileURL(T2_SCRIPT).href, MARKER_OUT: o }, encoding: 'utf8', timeout: 10_000,
+  });
+  it('D-5814: a marker that is a FIFO is refused marker-mismatch without being opened (child with a deadline); a regular marker is accepted by the same child', () => {
+    const o = made(base());
+    const marker = t2Path.join(o, t2Drv.OUT_MARKER);
+    const control = markerChild(o);
+    expect(control.status, control.stderr).toBe(0);
+    expect(control.stdout, 'CONTROL').toBe(`accepted ${o}`);
+    t2Fs.rmSync(marker);
+    const mk = spawnSync('mkfifo', [marker], { encoding: 'utf8' });
+    expect(mk.status, mk.stderr).toBe(0);
+    const r = markerChild(o);
+    expect(r.signal, `prepareOut blocked on the FIFO marker: ${r.stderr}`).toBeNull();
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toBe('out-refused marker-mismatch');
   });
 
   it('W2-D53: an --out another uid owns is refused foreign-owner (the uid is a parameter, so no second account is needed)', () => {
@@ -877,6 +907,16 @@ describe('W2-4 Task 4: spawned text, the stream-json reader and the spend ledger
     expect(refusalOf(() => t4Replay.spentSoFar(link))).toEqual(CLOSED);
   });
 
+  // D-5814: an --out whose search bit is gone makes the ledger's lstat fail with EACCES (not ENOENT): fail closed, never 0.
+  it.skipIf(process.getuid?.() === 0)('an --out that lost its search bit fails closed: the lstat error other than ENOENT is ledger-unreadable, never an empty ledger (skipped as root)', () => {
+    const out = t4MkTmp('ccrc-replay-t4-nosearch-');
+    t4Replay.recordSpend(out, 'r0', 500);
+    t4Fs.chmodSync(out, 0o600);
+    try { expect(refusalOf(() => t4Replay.spentSoFar(out))).toEqual(CLOSED); }
+    finally { t4Fs.chmodSync(out, 0o700); }
+    expect(t4Replay.spentSoFar(out), 'CONTROL: the mode restored, the ledger reads').toBe(500);
+  });
+
   it.skipIf(process.getuid?.() === 0)('an unreadable ledger fails closed (skipped as root, which reads it anyway)', () => {
     const out = t4MkTmp('ccrc-replay-t4-unreadable-');
     t4Fs.writeFileSync(ledger(out), GOOD);
@@ -1229,7 +1269,7 @@ describe('W2-4 Task 5: the batch runner, at most 2 at once, gated, resumable (W2
     const eleven = Array.from({ length: 11 }, (_, i) => t5job(b, b.up, 'box', `bound-${i}`));
     await expect(t5drv.runBatch(eleven, { gate: T5_NO_GATE })).rejects.toThrow(TypeError);
     await expect(t5drv.runBatch(eleven.slice(0, 2), { concurrency: 3, gate: T5_NO_GATE })).rejects.toThrow(TypeError);
-    await expect(t5drv.runBatch(eleven.slice(0, 2), {}), 'a batch with no gate never spawns ungated').rejects.toThrow(TypeError);
+    await expect(t5drv.runBatch(eleven.slice(0, 2), {}), 'a batch with no gate never spawns ungated').rejects.toThrow(/opts\.gate is required/);
     const { lang: _lang, ...noLang } = t5job(b, b.up, 'box', 'no-lang');
     await expect(t5drv.launchRun(noLang as T5Job), 'a caller that forgets lang fails loudly').rejects.toThrow(TypeError);
     expect(stubLog(b.home)).toBeNull();
@@ -1368,6 +1408,35 @@ describe('W2-4 Task 5: the batch runner, at most 2 at once, gated, resumable (W2
     }
   }, 60_000);
 
+  // D-5814: the first throw stops the batch at concurrency 2 too: the lane that did not throw takes no further job.
+  it('at concurrency 2 a job that refuses on resume stops the other lane: exactly the job already started runs', async () => {
+    const b = t5Box('ccrc-replay-t5-stoplane-');
+    const jobs = Array.from({ length: 4 }, (_, i) => t5job(b, b.up, 'box', `lane-${i}`));
+    t5fs.writeFileSync(t5path.join(b.out, 'lane-1.run.json'), JSON.stringify({
+      kind: 'ccrc-history-replay-run', name: 'lane-1', account: 'other-a', mode: 'box', model: 'fixture-model-box', settings_mode: 'restricted' }) + '\n');
+    await expect(t5drv.runBatch(jobs, { concurrency: 2, gate: T5_NO_GATE })).rejects.toMatchObject({ word: 'out-refused', detail: 'run-json-mismatch lane-1' });
+    expect(stubLog(b.home), 'lane-0 was already started; lanes 2 and 3 never start').toHaveLength(1);
+    expect(t5fs.existsSync(t5path.join(b.out, 'lane-2.jsonl.part')) || t5fs.existsSync(t5path.join(b.out, 'lane-2.jsonl'))).toBe(false);
+  }, 60_000);
+
+  // D-5814: spend before the completion marker. A run.json that cannot be written leaves the spawn charged already.
+  it('the spend line lands before run.json: a run.json write that fails leaves the spawn charged', async () => {
+    const b = t5Box('ccrc-replay-t5-spendbeforemarker-');
+    t5fs.mkdirSync(t5path.join(b.out, `marker-0.run.json.tmp-${process.pid}`));
+    await expect(t5drv.launchRun(t5job(b, b.up, 'box', 'marker-0'))).rejects.toThrow();
+    expect(t5fs.existsSync(t5path.join(b.out, 'marker-0.run.json'))).toBe(false);
+    expect(t5drv.spentSoFar(b.out), 'charged although run.json was never written').toBe(T5_TOKENS);
+  }, 60_000);
+
+  // D-5814: stderr is kept to STDERR_KEEP_BYTES (64 KiB); an unknown-option line past it is not read.
+  it('stderr is bounded: an unknown option named past 64 KiB is not kept, one named early is', async () => {
+    const b = t5Box('ccrc-replay-t5-stderrcap-');
+    t5fs.writeFileSync(t5path.join(b.home, T5_STUB_STDERR),
+      `error: unknown option '--early-flag'\n${'x'.repeat(70_000)}\nerror: unknown option '--beyond-cap'\n`);
+    const o = await t5drv.launchRun(t5job(b, b.up, 'box', 'cap-0'));
+    expect(o.unknownOptions).toEqual(['--early-flag']);
+  }, 60_000);
+
   it('resume refuses a stream changed after its run.json, a run.json that does not parse, and one recorded for another account, mode, model or settings mode', async () => {
     const b = t5Box('ccrc-replay-t5-tamper-');
     const job = t5job(b, b.up, 'box', 'tamper-0');
@@ -1445,9 +1514,22 @@ describe('W2-4 Task 5: makeRunCwd refuses a temp root inside a git tree (W2-D51)
     expect(err).toMatchObject({ word: 'out-refused', detail: `run-cwd-in-git-tree ${root}` });
     expect(t5fs.readdirSync(tmp)).toEqual([]);
   });
+
+  // D-5814: mkdtemp is subject to the umask, so a umask that strips the owner's write bit yields a directory that is not
+  // 0700. makeRunCwd refuses it and removes it. The umask is saved and restored around the call (a fork worker).
+  it('under umask 0o277 a run cwd made 0500 is refused out-refused run-cwd-mode 500 and removed', () => {
+    const tmp = t5MkTmp('ccrc-replay-t5-cwdmode-');
+    t5vi.stubEnv('TMPDIR', tmp);
+    const was = process.umask(0o277);
+    let err: unknown = null;
+    try { t5drv.makeRunCwd(); } catch (e) { err = e; } finally { process.umask(was); }
+    expect(err).toMatchObject({ word: 'out-refused', detail: 'run-cwd-mode 500' });
+    expect(t5fs.readdirSync(tmp), 'the refused directory is removed').toEqual([]);
+    expect(t5fs.statSync(t5drv.makeRunCwd()).mode & 0o777, 'CONTROL: under the default umask the cwd is 0700').toBe(0o700);
+  });
 });
 
-describe('W2-4 Task 5: the driver passes no env whole and reads only HOME, TMUX_PANE and LANG by name', () => {
+describe('W2-4 Task 5: the driver passes no env whole and names only HOME, TMUX_PANE and LANG on a process.env line (os.tmpdir() reads TMPDIR implicitly, for the run cwd)', () => {
   const SRC = t5path.resolve(__dirname, '..', '..', 'deploy', 'history-replay.mjs');
   /** The entry guard's by-name projection (Task 1): the driver's ONE process.env line. No line is exempt from the scan. */
   const PROJECTION = 'process.exitCode = await main(process.argv.slice(2), { HOME: process.env.HOME, TMUX_PANE: process.env.TMUX_PANE, LANG: process.env.LANG });';
@@ -1474,13 +1556,46 @@ describe('W2-4 Task 5: the driver passes no env whole and reads only HOME, TMUX_
     const text = t5fs.readFileSync(SRC, 'utf8');
     expect(envViolations(text)).toEqual([]);
     const envLines = text.split('\n').map((l) => l.trim()).filter((t) => !isComment(t) && /\bprocess\.env\b/.test(t));
-    expect(envLines, 'every other env read goes through main\'s env parameter').toEqual([PROJECTION]);
+    expect(envLines, 'no other process.env text; a handler\'s env arrives as main\'s parameter').toEqual([PROJECTION]);
   });
 
   it('deploy/history-replay.mjs spells no bypass flag and spawns through no shell', () => {
     const code = t5fs.readFileSync(SRC, 'utf8').split('\n').filter((l) => !/^\s*(?:\/\/|\*|\/\*)/.test(l));
     expect(code.filter((l) => /dangerously-skip-permissions|bypassPermissions/.test(l))).toEqual([]);
     expect(code.filter((l) => /\bshell\s*:|\b(?:exec|execSync|execFile|execFileSync)\s*\(/.test(l))).toEqual([]);
+  });
+
+  // D-5814: the import block is exactly the seven modules the plan names, and node:child_process brings in `spawn` only,
+  // so W2-D24's code hash covers the driver's whole scoring path and no later edit widens it unseen.
+  const EXPECTED_IMPORTS = ['node:fs', 'node:os', 'node:path', 'node:child_process', 'node:url', '../ccd/history/lib.mjs', '../shared/roster-json.mjs'];
+  const importViolations = (text: string): string[] => {
+    const found: string[] = [];
+    const froms = [...text.matchAll(/^import\s+([^;]*?)\s*from\s*'([^']+)';/gms)];
+    if (JSON.stringify(froms.map((m) => m[2])) !== JSON.stringify(EXPECTED_IMPORTS)) found.push(`imports ${froms.map((m) => m[2]).join(', ')}`);
+    for (const m of froms) if (m[2] === 'node:child_process' && m[1]!.trim() !== '{ spawn }') found.push(`child_process brings in ${m[1]}`);
+    for (const l of text.split('\n')) {
+      if (isComment(l.trim())) continue;
+      if (/^import\s*['"]/.test(l) || /\bimport\s*\(/.test(l) || /\brequire\s*\(/.test(l)) found.push(`side-effect or dynamic load ${l.trim()}`);
+    }
+    return found;
+  };
+  it('CONTROL: the import scan sees spawnSync, an import of history-gate.mjs, node:fs/promises, a dynamic import and a missing module', () => {
+    const real = t5fs.readFileSync(SRC, 'utf8');
+    expect(importViolations(real), 'the driver itself').toEqual([]);
+    const variants: Array<[string, string]> = [
+      ['spawnSync', real.replace("import { spawn } from 'node:child_process';", "import { spawn, spawnSync } from 'node:child_process';")],
+      ['history-gate', real.replace("import { rosterFromJson", "import { x } from '../deploy/history-gate.mjs';\nimport { rosterFromJson")],
+      ['fs/promises', real.replace("import os from 'node:os';", "import os from 'node:os';\nimport { readFile } from 'node:fs/promises';")],
+      ['dynamic', real + "\nconst m = await import('node:sqlite');\n"],
+      ['missing', real.replace("import os from 'node:os';\n", '')],
+    ];
+    for (const [label, text] of variants) {
+      expect(text, `${label}: the variant differs from the driver`).not.toBe(real);
+      expect(importViolations(text), label).not.toEqual([]);
+    }
+  });
+  it('deploy/history-replay.mjs imports exactly its seven modules, and node:child_process brings in spawn only', () => {
+    expect(importViolations(t5fs.readFileSync(SRC, 'utf8'))).toEqual([]);
   });
 });
 
@@ -1547,6 +1662,25 @@ describe('W2-4 Task 6: the limits row is read by readLimits\' rules, keeping its
     expect(inferredOf('win-seven-0').sevenInferred, 'seven at 604799 s is inside its window').toBe(false);
     expect(inferredOf('win-seven-2').sevenInferred, 'seven at 604801 s is past its window').toBe(true);
     inferredOf('win-seven-1');
+  });
+
+  // D-5814: a sample at exactly its resetAt second has rolled over, in readLimits (`now >= resetAt`) and in the driver.
+  it('a resetAt equal to now is a lapsed reset, held to readLimits: five alone, then seven alone', async () => {
+    const home = mkTmp('ccrc-replay-t6-resetedge-');
+    t6Fs.mkdirSync(t6Path.join(home, '.ccrc'), { recursive: true });
+    t6Fs.writeFileSync(t6Path.join(home, '.ccrc', 'accounts.json'), JSON.stringify(T6_ROSTER));
+    const dir = t6Path.join(home, '.cc-limits');
+    t6Fs.mkdirSync(dir, { recursive: true });
+    t6Fs.writeFileSync(t6Path.join(dir, 'edge-five.json'), JSON.stringify({ five: 80, seven: 30, ts: NOW_S - 60, fiveResetAt: NOW_S, sevenResetAt: NOW_S + 1000 }));
+    t6Fs.writeFileSync(t6Path.join(dir, 'edge-seven.json'), JSON.stringify({ five: 30, seven: 80, ts: NOW_S - 60, fiveResetAt: NOW_S + 1000, sevenResetAt: NOW_S }));
+    const theirs = await t6ReadLimits(t6LocalIO, t6LoadConfig({ CCRC_HOME: home }), NOW_S);
+    for (const id of ['edge-five', 'edge-seven']) {
+      const read = t6Driver.readLimitsRow(home, id, NOW_S);
+      expect(read.state, id).toBe('row');
+      expect(PICK((read as { row: ReturnType<typeof t6Driver.parseLimitsRow> }).row), id).toEqual(PICK(theirs[id]!));
+    }
+    expect([theirs['edge-five']!.fiveRolledOver, theirs['edge-five']!.five], 'CONTROL: readLimits rolls five over at resetAt === now').toEqual([true, 0]);
+    expect([theirs['edge-seven']!.sevenRolledOver, theirs['edge-seven']!.seven]).toEqual([true, 0]);
   });
 
   it('only the age path sets *Inferred: a lapsed resetAt is a measured reset, an age-inferred 0 is not', () => {
@@ -1687,6 +1821,8 @@ describe('W2-4 Task 6: the gate stops on every limits and budget condition (W2-D
     expect(stopOf(b)).toEqual({ word: 'limits-stale', detail: 'ts-null' });
     t6Fs.writeFileSync(b.row, fresh(10, 10, { ts: NOW_S + 60 }));
     expect(stopOf(b), 'a minute ahead is clock skew: admitted').toBeNull();
+    t6Fs.writeFileSync(b.row, fresh(10, 10, { ts: NOW_S + 61 }));
+    expect(stopOf(b), 'a minute and a second ahead is no longer skew (D-5814)').toEqual({ word: 'limits-stale', detail: 'ts-future 61000' });
     t6Fs.writeFileSync(b.row, fresh(10, 10, { ts: NOW_S + 3600 }));
     expect(stopOf(b)).toEqual({ word: 'limits-stale', detail: 'ts-future 3600000' });
   });
@@ -3069,8 +3205,10 @@ describe('W2-4 Task 9: step 0b mechanics without the seam, W2-D57', () => {
     const configDir = t9Path.join(mkTmp('ccrc-replay-t9-pl-input-'), '.claude');
     expect(() => t9Driver.persistenceLeft({ configDir: 'rel/.claude', sessionId: 'sess-a', cwd: '/tmp/run-a' }), 'relative configDir').toThrow(TypeError);
     expect(() => t9Driver.persistenceLeft({ configDir: undefined as never, sessionId: 'sess-a', cwd: '/tmp/run-a' }), 'configDir not a string').toThrow(TypeError);
-    for (const sessionId of ['', 'a/b', '.hidden', 42 as never, undefined as never]) {
-      expect(() => t9Driver.persistenceLeft({ configDir, sessionId, cwd: '/tmp/run-a' }), `sessionId ${JSON.stringify(sessionId)}`).toThrow(TypeError);
+    // D-5814: the message is asserted, so the `typeof` half of the guard has its own mutant: without it a number or
+    // undefined throws a runtime TypeError of another text, and a String object passes as a clean verdict.
+    for (const sessionId of ['', 'a/b', '.hidden', 42 as never, undefined as never, ['x'] as never, new String('x') as never]) {
+      expect(() => t9Driver.persistenceLeft({ configDir, sessionId, cwd: '/tmp/run-a' }), `sessionId ${JSON.stringify(sessionId)}`).toThrow(/is not a session id/);
     }
     expect(t9Driver.persistenceLeft({ configDir, sessionId: 'sess-a', cwd: '/tmp/run-a' }), 'CONTROL: a plain id on an absolute configDir answers').toEqual({ left: false, transcripts: [], projectDir: false });
   });
@@ -3105,7 +3243,7 @@ describe('W2-4 Task 9: step 0b mechanics without the seam, W2-D57', () => {
     t9Fs.writeFileSync(t9Path.join(home, STUB_STREAM), t9Stream({ sessionId: 'sess-clean', assistants: 12, result: { numTurns: 12 } }));
     const out = t9Driver.prepareOut(t9Path.join(base, 'out'));
     await expect(t9Driver.step0bMechanics({ launch: t9Launch(home), out, model: T9_MODEL_0B, settingsMode: 'restricted', lang: undefined } as never),
-      'no gate: a TypeError before any spawn (the stub log below still counts one run)').rejects.toThrow(TypeError);
+      'no gate: a TypeError before any spawn (the stub log below still counts one run)').rejects.toThrow(/opts\.gate is required/);
     const got = await t9Driver.step0bMechanics({ launch: t9Launch(home), out, model: T9_MODEL_0B, settingsMode: 'restricted', lang: undefined, gate: () => {} });
     expect(got).toEqual({ turn_bound: { held: 'unmeasured', turns: 12, num_turns: 12, subtype: 'success' }, persistence: { left: false, transcripts: [], project_dir: false } });
     const log = stubLog(home) as Array<{ argv: string[]; stdin: string }> | null;

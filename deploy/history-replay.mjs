@@ -12,7 +12,9 @@
 // Children: spawn with an argv array, never a shell, never a command string, and no env value in one (CodeQL's
 // js/shell-command-injection-from-environment opens a review thread that blocks the merge).
 // Environment: main gets the entry guard's by-name projection {HOME, TMUX_PANE, LANG}; nothing here passes
-// process.env whole, and every other env read goes through main's env parameter.
+// process.env whole, and every other env read goes through main's env parameter, with ONE exception: makeRunCwd's
+// os.tmpdir() reads TMPDIR itself for each run's cwd, as `mktemp -d` does in spec §10.2's cwd rule. The cwd is
+// still checked (outside any git tree, empty, mode 0700), so a TMPDIR that fails those refuses.
 // Never spelled here: the recall arm words, which reach a spawn as parameters (W2-D50), and the headless marker's
 // path, which W2-5b reaches through lib's historyPaths.
 // Its words: DRIVER_REASONS, frozen once here and nowhere else (W2-D59, W2-D12; D-5774). A refusal prints
@@ -893,7 +895,10 @@ export async function launchRun(job) {
 
 /** Run up to BATCH_MAX jobs, at most `concurrency` (<= CONCURRENCY_MAX) at once, calling `gate` before each spawn
  *  (Task 6's limits and budget stop). The gate is required: a missing one is a TypeError before any spawn, so the
- *  stop is never opt-in. A finished job is skipped without the gate. Before any lane starts, every job that has
+ *  stop is never opt-in. A finished job is skipped without the gate. A gate reads the ledger BEFORE its own spawn and
+ *  cannot see the runs in flight, so at concurrency c the ledger can pass the budget by up to c-1 runs' spend (the
+ *  first gate of each lane runs before any of them has recorded); step 0a runs at concurrency 1 for this reason, and a
+ *  caller that cannot tolerate that overshoot passes concurrency 1. Before any lane starts, every job that has
  *  no run.json and a `.part` leftover is charged to the ledger (D-5811), so the first gate reads that spend; a
  *  `.part` that is not a regular file refuses out-refused before any spawn. The first throw, the gate's
  *  included, stops the batch: no further spawn starts, a run already started finishes and is recorded, and the
@@ -1058,7 +1063,10 @@ export function decideBudget(spent, budget) {
   return spent >= budget ? { word: 'budget-exhausted', detail: `spent ${spent} of ${budget}` } : null;
 }
 
-/** The gate called before each batch and before each spawn: the budget first, then the limits row. Throws DriverRefusal. */
+/** The gate called before each batch and before each spawn: the budget first, then the limits row. Throws DriverRefusal.
+ *  It reads the ledger before its own spawn and cannot see a run in flight: with `concurrency` lanes at once, the ledger
+ *  can pass the budget by up to concurrency-1 runs' spend before the next gate refuses. Step 0a runs at concurrency 1
+ *  so that its gate sees each finished run's spend before the next starts. */
 export function batchGate({ out, home, accountId, budget, limits, now = Date.now }) {
   if (!Number.isSafeInteger(budget) || budget <= 0) throw new TypeError(`a budget is a positive integer: ${String(budget)}`);
   const thresholdPct = limits?.threshold_pct;
