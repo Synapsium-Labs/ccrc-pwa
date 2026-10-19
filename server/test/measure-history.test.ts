@@ -4705,6 +4705,84 @@ describe('W2-3 Task 9: the counter definitions and the open record', () => {
     });
   });
 
+  describe('fix round 1: step 0a per node, no backdating, a positive window, a first final with no amendments', () => {
+    const forcedAt = (at: number): Rec => amendment('forced-act', 'node-a', at, { act: 'reparse' });
+
+    it('step 0a is per node: no nodes, a node with no entry and a second entry for one store are each refused (decisions section 4)', () => {
+      expect(verdict(set(set(draft(), 'nodes', []), 'step0a', []))).toEqual([{ path: 'nodes', word: 'value-outside-set' }]);
+      expect(verdict(set(draft(), 'step0a', []))).toEqual([{ path: 'nodes[0]', word: 'field-missing' }, { path: 'nodes[1]', word: 'field-missing' }]);
+      const one = draft();
+      one.step0a.pop();
+      expect(verdict(one), 'a node with no entry').toEqual([{ path: 'nodes[1]', word: 'field-missing' }]);
+      expect(verdict(set(draft(), 'step0a[1].store_id', STORE_A)), 'a second entry for an already-bound store')
+        .toEqual([{ path: 'step0a[1].store_id', word: 'value-outside-set' }]);
+      expect(verdict(draft()), 'CONTROL: one entry per node').toEqual([]);
+    });
+
+    it('a successor stamped earlier than its valid predecessor is chain-mismatch at its own timestamp; an equal stamp passes', () => {
+      const d1 = draft();
+      const d2 = set(set(draft(), 'supersedes', gate9.recordSha256(d1)), 'drafted_ms', d1.drafted_ms - 1);
+      expect(verdict(d2, { draft: null, predecessor: d1, frozen: null })).toEqual([{ path: 'drafted_ms', word: 'chain-mismatch' }]);
+      const d3 = set(draft(), 'supersedes', gate9.recordSha256(d1));
+      expect(verdict(d3, { draft: null, predecessor: d1, frozen: null }), 'an equal drafted_ms passes').toEqual([]);
+      const f1 = final();
+      const f2 = { ...structuredClone(f1), supersedes: gate9.recordSha256(f1), finalized_ms: f1.finalized_ms - 1 };
+      expect(verdict(f2, { draft: draft(), predecessor: f1, frozen: FROZEN })).toEqual([{ path: 'finalized_ms', word: 'chain-mismatch' }]);
+      const f3 = { ...structuredClone(f1), supersedes: gate9.recordSha256(f1) };
+      expect(verdict(f3, { draft: draft(), predecessor: f1, frozen: FROZEN }), 'an equal finalized_ms passes').toEqual([]);
+    });
+
+    it('a predecessor that is itself invalid is never compared for its stamp: only supersedes is refused', () => {
+      const bad = set(final(), 'k', 11);
+      bad.finalized_ms = T0 + DAY;
+      const f2 = { ...structuredClone(final()), supersedes: gate9.recordSha256(bad), finalized_ms: T0 - DAY / 2 };
+      expect(verdict(f2, { draft: draft(), predecessor: bad, frozen: FROZEN })).toEqual([{ path: 'supersedes', word: 'chain-mismatch' }]);
+    });
+
+    it('probe A: backdating a successor below the predecessor\'s window start, to drop its amendments and move the window, is refused', () => {
+      const f1 = final();
+      const f2 = { ...structuredClone(f1), supersedes: gate9.recordSha256(f1), finalized_ms: T0 + 2 * DAY, amendments: [forcedAt(T0 + DAY)] };
+      const moved = { start_ms: T0 + DAY, end_ms: T0 + 15 * DAY };
+      const over = (at: number): Rec => ({ ...structuredClone(f2), supersedes: gate9.recordSha256(f2), finalized_ms: at, amendments: [], window: moved });
+      const ctx2: Ctx = { draft: draft(), predecessor: f2, frozen: FROZEN };
+      expect(verdict(over(T0 - 1), ctx2)).toEqual([{ path: 'finalized_ms', word: 'chain-mismatch' }]);
+      expect(verdict(over(T0 + 3 * DAY), ctx2), 'with the timestamp honest, the post-start rule refuses it as before')
+        .toEqual([{ path: 'window', word: 'post-start-change' }, { path: 'amendments', word: 'post-start-change' }]);
+    });
+
+    it('planned_days below 1 is value-outside-set, and a window that ends at or before its start is window-length', () => {
+      for (const days of [0, -1]) {
+        expect(verdict(set(draft(), 'window_plan.planned_days', days)), String(days))
+          .toEqual([{ path: 'window_plan.planned_days', word: 'value-outside-set' }]);
+      }
+      expect(verdict(set(draft(), 'window_plan.planned_days', 1)), 'CONTROL: one day is a window').toEqual([]);
+      expect(verdict(set(final(), 'window.end_ms', T0), chainOf(draft()))).toEqual([{ path: 'window', word: 'window-length' }]);
+      expect(verdict(set(final(), 'window.end_ms', T0 - DAY), chainOf(draft()))).toEqual([{ path: 'window', word: 'window-length' }]);
+    });
+
+    it('a first final carries no amendments (they are appended only by open --amend); an amended final carries its predecessor\'s', () => {
+      expect(verdict(set(final(), 'amendments', [forcedAt(T0 - DAY)]), chainOf(draft()))).toEqual([{ path: 'amendments', word: 'value-outside-set' }]);
+      const f1 = final();
+      const f2 = { ...structuredClone(f1), supersedes: gate9.recordSha256(f1), finalized_ms: T0 + 2 * DAY, amendments: [forcedAt(T0 + DAY)] };
+      expect(verdict(f2, { draft: draft(), predecessor: f1, frozen: FROZEN }), 'CONTROL: an amended final').toEqual([]);
+    });
+
+    it('a draft that fails validation never sets the planned length: the final\'s own window_plan does', () => {
+      const short = final();
+      short.window.end_ms = T0 + 3 * DAY;
+      expect(verdict(short, { draft: set(draft(), 'window_plan.planned_days', {}), predecessor: null, frozen: FROZEN }), 'a non-number gives NaN')
+        .toContainEqual({ path: 'window', word: 'window-length' });
+      expect(verdict(final(), { draft: set(draft(), 'window_plan.planned_days', '30'), predecessor: null, frozen: FROZEN }), 'a string coerces')
+        .not.toContainEqual({ path: 'window', word: 'window-length' });
+    });
+
+    it('a ctx.draft that is itself a final is chain-mismatch at supersedes, even when supersedes names it', () => {
+      const asDraft = final();
+      const f = { ...final(), supersedes: gate9.recordSha256(asDraft) };
+      expect(verdict(f, { draft: asDraft, predecessor: null, frozen: FROZEN })).toEqual([{ path: 'supersedes', word: 'chain-mismatch' }]);
+    });
+  });
+
   it('every word the validator spells is a GATE_REASONS word, and refuse throws on any other', () => {
     const src = readFileSync(path.join(ROOT, 'deploy', 'history-gate.mjs'), 'utf8');
     const section = src.slice(src.indexOf('// ── W2-3 Task 9:'));

@@ -2283,14 +2283,24 @@ function recValidate(record, ctx, checkLink) {
   // part 1's settings_mode binds step 0a; part 2's pilot_result.settings_mode is a later record, never read here.
   // A flag measured false is flag-rejected, with no exception: under spec §10.2's fallback settings mode step 0a
   // writes no --restricted key, so refusing every false loses nothing.
+  // Step 0a is per node (decisions section 4, review fix round 1): a part 1 names at least one node, each node has
+  // exactly one entry, and a second entry for a bound store_id is refused.
+  if (r.nodes.length === 0) refuse('nodes', 'value-outside-set');
   const nodeStores = new Set(r.nodes.map((n) => n.store_id));
+  const boundStores = new Set();
   r.step0a.forEach((s, i) => {
-    if (!nodeStores.has(s.store_id)) refuse(`step0a[${i}].store_id`, 'value-outside-set');
+    if (!nodeStores.has(s.store_id) || boundStores.has(s.store_id)) refuse(`step0a[${i}].store_id`, 'value-outside-set');
+    boundStores.add(s.store_id);
     if (s.settings_mode !== r.settings_mode) refuse(`step0a[${i}].settings_mode`, 'value-outside-set');
     for (const [flag, accepted] of Object.entries(s.flags_accepted)) {
       if (accepted === false) refuse(`step0a[${i}].flags_accepted.${flag}`, 'flag-rejected');
     }
   });
+  // A node is covered by an entry that names its store_id or, for the brief-pinned shape where an entry's label names a
+  // node whose store_id it re-bound to another node, its label (report: the ruling binds by store_id, the label is a hole).
+  const boundLabels = new Set(r.step0a.map((s) => s.label));
+  r.nodes.forEach((n, i) => { if (!boundStores.has(n.store_id) && !boundLabels.has(n.label)) refuse(`nodes[${i}]`, 'field-missing'); });
+  if (r.window_plan.planned_days < 1) refuse('window_plan.planned_days', 'value-outside-set');
 
   // The pilot section signed under part 1's own settings (W2-D76, W2-D71).
   const used = r.pilot.used;
@@ -2319,11 +2329,19 @@ function recValidate(record, ctx, checkLink) {
     predOk = pred.part === record.part && recValidate(pred, predCtx, false).ok;
     if (!predOk) refuse('supersedes', 'chain-mismatch');
     else if (pred.bootstrap.seed !== r.bootstrap.seed) refuse('bootstrap.seed', 'seed-changed');
+    // A successor is never stamped earlier than the valid record it supersedes (W2-D25 chain, review fix round 1): a
+    // backdated final would sit before a post-start predecessor's window start and escape W2-D90's append-only rule.
+    const stamp = final ? 'finalized_ms' : 'drafted_ms';
+    if (predOk && r[stamp] < pred[stamp]) refuse(stamp, 'chain-mismatch');
   }
   if (!final) return done();
+  // Amendments are [] at finalize and appended only by open --amend (decisions section 4): a first final carries none.
+  // An amended final is validated as a predecessor with its link taken as checked, so only a checked link is read here.
+  if (checkLink && pred === null && r.amendments.length > 0) refuse('amendments', 'value-outside-set');
 
   const draft = ctx.draft;
-  if (draft.part !== 'draft' || !recValidate(draft, { draft: null, predecessor: null, frozen: null }, false).ok) refuse('supersedes', 'chain-mismatch');
+  const draftOk = draft.part === 'draft' && recValidate(draft, { draft: null, predecessor: null, frozen: null }, false).ok;
+  if (!draftOk) refuse('supersedes', 'chain-mismatch');
   else if (draft.bootstrap.seed !== r.bootstrap.seed) refuse('bootstrap.seed', 'seed-changed');
   else {
     const mine = recPartOneView(r);
@@ -2332,9 +2350,10 @@ function recValidate(record, ctx, checkLink) {
   }
 
   // The window: planned_days long, up to one day more, of the draft it finalizes (W2-D25, a chosen tolerance).
-  const plannedMs = (draft.window_plan?.planned_days ?? r.window_plan.planned_days) * RECORD_DAY_MS;
+  // A draft that failed validation is never read: part 1 must equal the draft's anyway, so the final's own plan stands.
+  const plannedMs = (draftOk ? draft : r).window_plan.planned_days * RECORD_DAY_MS;
   const lengthMs = r.window.end_ms - r.window.start_ms;
-  if (lengthMs < plannedMs || lengthMs > plannedMs + RECORD_DAY_MS) refuse('window', 'window-length');
+  if (lengthMs <= 0 || lengthMs < plannedMs || lengthMs > plannedMs + RECORD_DAY_MS) refuse('window', 'window-length');
 
   // The assignment re-derives from the seed (W2-D19).
   const seed = r.bootstrap.seed;
