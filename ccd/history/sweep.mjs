@@ -9042,7 +9042,8 @@ function remeasureDamagedSegments(db, ctx) {
  *
  *  Outside db/'s free-space floor, as the export pass is (D-4762 (history-export-outside-capture-pause)): one batch's WAL is
  *  17.4 MiB for a full 16 MiB batch of 8 KiB blobs and 23.2 MiB for a batch of 50,000 blobs of 300 B with their referrers (both
- *  measured, truncated after each batch), under the writer's journal_size_limit. A directory that is absent (ENOENT) lists as none, so every
+ *  measured), truncated after each batch when no reader holds the WAL. While a reader does, the WAL can reach about
+ *  EXPORT_BIND_WAL_CEILING plus one batch (64 MiB plus the 17-23 MiB measured) before the check stops on `wal-held`. A directory that is absent (ENOENT) lists as none, so every
  *  mark naming a segment is missing; one that cannot be listed for any other reason throws SegmentsUnlistable before
  *  anything is cleared or recorded. Answers what it cleared in this step, the missing names, and the word it stopped with
  *  (null when it ran to its done stamp). */

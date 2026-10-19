@@ -4294,7 +4294,7 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     expect(r.fail[0]!.remedy).toContain('ccrc history doctor --adopt');
   });
   it('store-unbound\'s remedy says to carry before the adopt or to hold the ticks with history-off until the carry is whole (D-5635)', () => {
-    const hold = 'touch ~/.ccrc/history-off before the adopt and remove it only once both directories are here, complete and matching their source';
+    const hold = 'touch ~/.ccrc/history-off before the adopt and remove it only once both directories hold every source file at the same size';
     const loss = 'a tick before then clears the export mark of every segment not here whole, and its rows export again';
     const fallback = healthLib.HEALTH_REMEDIES['store-unbound']!;
     expect(fallback).toContain('; when ~/.ccrc/history/journal/<store_id>/ and ~/.ccrc/history/export/<store_id>/ are to come from the box the store left, copy them here before the adopt, or ');
@@ -4306,7 +4306,7 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     expect(r).toContain(loss);
     expect(r, 'the bind half is unchanged').toContain(`if store ${STORE} is another box's, remove the ~/.ccrc/history/db link or move the DB aside`);
     expect(healthLib.carryHoldAdvice('before you copy')).toBe(
-      `touch ~/.ccrc/history-off before you copy and before the next tick, which comes within minutes (the bind has armed the check) and remove it only once both directories are here, complete and matching their source: ${loss}`);
+      `touch ~/.ccrc/history-off before you copy and before the next tick, which comes within minutes (the bind has armed the check) and remove it only once both directories hold every source file at the same size: ${loss}`);
   });
   it('store-missing names --restore with the backup db/backups holds, and --rebuild', () => {
     const r = healthLib.deriveHealth(base({ exit: 5, reason: 'store-missing', backupsDb: ['20261001T000000Z.db'] }));
@@ -8893,7 +8893,7 @@ describe('deriveHealth, W5h-1: a check after a bind that cannot finish (D-5633)'
   /** One fragment of each word's own remedy. */
   const REMEDY: Record<Check['word'], string> = {
     budget: 'once ingest leaves it room',
-    off: `remove ~/${healthLib.SWITCHES.off} when capture should resume`,
+    off: `remove ~/${healthLib.SWITCHES.off} when capture should resume, once any carry is whole`,
     'wal-held': 'so a checkpoint can truncate the WAL',
     unlistable: `make ~/.ccrc/history/${healthLib.EXPORT_DIR}/${STORE} a directory this user can read`,
     failed: 'the check\'s error is logged there each tick it fails',
@@ -8909,7 +8909,7 @@ describe('deriveHealth, W5h-1: a check after a bind that cannot finish (D-5633)'
     expect(words(r, 'warn')).toEqual(['export-marks-unchecked']);
     expect(words(r, 'fail')).toEqual([]);
     expect(r.warn[0]!.detail).toBe(`store ${STORE}: the check of the export marks after a bind has not finished: it last stopped on budget `
-      + `(the run budget was spent before its next batch, ingest first), has stopped on budget or off for 30 min, and has cleared 4 mark(s) so far; ${TAIL}`);
+      + `(the run budget was spent before its next batch, ingest first), has stopped on budget or off for 30 min, and has cleared at least 4 mark(s) so far; ${TAIL}`);
   });
 
   it.each(ALL)('stopped on %s: the detail names the word, and the remedy is that word\'s own, then the prune hold', (word) => {
@@ -8917,6 +8917,12 @@ describe('deriveHealth, W5h-1: a check after a bind that cannot finish (D-5633)'
     expect(i?.detail).toContain(`it last stopped on ${word} (`);
     expect(i?.remedy).toContain(REMEDY[word]);
     expect(i?.remedy, 'prune --apply is not gated on the marks').toContain('; until the check finishes, hold any ccrc history prune --apply');
+  });
+
+  it.each(['off', 'wal-held', 'unlistable'] as const)('stopped on %s: the remedy says the check resumes at the next tick that runs it, and none runs while history-off stands (F4)', (word) => {
+    const own = healthLib.deriveHealth(clean(check(word, 30 * MIN))).warn.find((x) => x.word === 'export-marks-unchecked')!.remedy;
+    expect(own).toContain(`the check resumes at the next tick that runs it, and none runs while ~/${healthLib.SWITCHES.off} stands`);
+    expect(own).not.toContain('resumes with the next tick');
   });
 
   it('the five words carry five remedies, none of them the fallback text', () => {
@@ -8939,7 +8945,7 @@ describe('deriveHealth, W5h-1: a check after a bind that cannot finish (D-5633)'
     expect(words(r, 'fail')).toEqual(['export-marks-stalled']);
     expect(words(r, 'warn')).toEqual([]);
     expect(r.fail[0]!.detail).toContain(`has not finished: it last stopped on ${word} (`);
-    expect(r.fail[0]!.detail).toContain(`has stopped on wal-held, unlistable or failed for ${Math.round(STALL / MIN) + 60} min (over ${Math.round(STALL / MIN)} min), words no tick moves past by itself, and has cleared 7 mark(s) so far; ${TAIL}`);
+    expect(r.fail[0]!.detail).toContain(`has stopped on wal-held, unlistable or failed for ${Math.round(STALL / MIN) + 60} min (over ${Math.round(STALL / MIN)} min), words no tick moves past by itself, and has cleared at least 7 mark(s) so far; ${TAIL}`);
     expect(r.fail[0]!.remedy).toContain(REMEDY[word]);
   });
 

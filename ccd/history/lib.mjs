@@ -3320,7 +3320,7 @@ export const HEALTH_META = Object.freeze({
   // D-5027 (history-held-pass-is-fresh-for-tick-stale): the held arm of a scheduled pass stamps the time it ended (ms).
   heldPassMs: 'held_pass_ms',
   // W5h-1 Task 1 (D-5632 (history-export-bind-check-batched)): why the check after a bind stopped short, since when, and the
-  // marks it has cleared so far ('<word> <sinceMs> <cleared>', lib formatMarkCheckState); deleted by its done stamp.
+  // marks it has cleared so far, at least ('<word> <sinceMs> <cleared>', lib formatMarkCheckState; display only, and a thrown failure records 0); deleted by its done stamp.
   exportMarksCheck: 'export_marks_check',
 });
 
@@ -3386,7 +3386,7 @@ const SWEEP_LOG = 'journalctl --user -u ccd-history-sweep -n 50';
  *  SWITCHES and STORE_DB_REL are their one spellings (O13, O14), so a text
  *  naming the store's directory interpolates `~/${STORE_DB_REL}`. */
 export const HEALTH_REMEDIES = Object.freeze({
-  off: `remove ~/${SWITCHES.off} when capture should resume`,
+  off: `remove ~/${SWITCHES.off} when capture should resume, once any carry is whole`,
   recovering: 'none needed: the recovery step runs within each tick\'s budget, and FAILs recovery-stalled if its cursor stops moving',
   'op-running': 'none needed: an operator pass holds the sweep lock, and ticks resume when it exits',
   'catching-up': 'none needed: the backlog is falling every tick',
@@ -8849,8 +8849,7 @@ export function readExportDueOldest(v) {
 /** The stored bytes (length(z)) one batch of the check clears the marks of, at most. A cleared mark rewrites its whole row
  *  and z's overflow pages, so a batch's WAL is about 1.1 times this for 8 KiB blobs (measured: a full 16 MiB batch
  *  peaked at 17.4 MiB at its commit) and more per stored byte for small ones (measured: a batch of 50,000 blobs of 300 B,
- *  14.3 MiB stored, with their 50,000 referrers, peaked at 23.2 MiB), which keeps one batch under the writer's
- *  journal_size_limit of 64 MiB. A batch still takes its first row whatever its size. */
+ *  14.3 MiB stored, with their 50,000 referrers, peaked at 23.2 MiB), well under EXPORT_BIND_WAL_CEILING. A batch still takes its first row whatever its size. */
 export const EXPORT_BIND_BYTES = 16 * 1024 * 1024;
 /** The WAL left after a batch's checkpoint answered busy (bytes) past which the check stops, worded `wal-held`: a reader on
  *  an older snapshot keeps every frame, so batching alone bounds nothing while it stays (measured: the WAL grew to the
@@ -8993,7 +8992,7 @@ function markCheckDetail(arm, h) {
   const age = Math.max(0, minutesOf(h.nowMs - s.sinceMs));
   const why = `${s.word} (${MARK_CHECK_GLOSS[s.word] ?? 'a word this build does not know'})`;
   const since = `has stopped on ${markCheckClassWords(s.word)} for ${age} min`;
-  const tail = `has cleared ${s.cleared} mark(s) so far; until it finishes, a mark may still name a segment that is not on this box, and the gap guard cannot see those rows`;
+  const tail = `has cleared at least ${s.cleared} mark(s) so far; until it finishes, a mark may still name a segment that is not on this box, and the gap guard cannot see those rows`;
   if (arm === 'stalled') {
     return `the check of the export marks after a bind has not finished: it last stopped on ${why}, ${since} (over ${minutesOf(EXPORT_MARKS_STALL_MS)} min), words no tick moves past by itself, and ${tail}`;
   }
@@ -9011,6 +9010,10 @@ function markCheckRemedy(word, h) {
   return (h.exportMarksCheck ?? null) === null ? own : `${own}; ${MARK_CHECK_PRUNE_HOLD}`;
 }
 
+/** The clause the stop remedies of `off`, `wal-held` and `unlistable` share (F4): the check runs from the tick's export
+ *  step, and no scheduled tick runs while the history-off switch stands, so "the next tick" would be false under it. */
+const MARK_CHECK_RESUMES = `the check resumes at the next tick that runs it, and none runs while ~/${SWITCHES.off} stands`;
+
 /** The remedy of the word the check last stopped on alone. */
 function markCheckOwnRemedy(word, h) {
   const s = h.exportMarksCheck ?? null;
@@ -9018,11 +9021,11 @@ function markCheckOwnRemedy(word, h) {
     case 'budget':
       return `none needed: the check resumes within each tick's budget once ingest leaves it room; if it stands for days, read the sweep: ${SWEEP_LOG}`;
     case 'off':
-      return `remove ~/${SWITCHES.off} when capture should resume: the check resumes with the next tick`;
+      return `remove ~/${SWITCHES.off} when capture should resume, once any carry is whole: ${MARK_CHECK_RESUMES}`;
     case 'wal-held':
-      return 'end the long-running read of the store (a ccrc history verb or another reader left open), so a checkpoint can truncate the WAL: the check resumes with the next tick';
+      return 'end the long-running read of the store (a ccrc history verb or another reader left open), so a checkpoint can truncate the WAL: ' + MARK_CHECK_RESUMES;
     case 'unlistable':
-      return `make ~/.ccrc/history/${EXPORT_DIR}/${h.storeId ?? '<store_id>'} a directory this user can read: the check resumes with the next tick`;
+      return `make ~/.ccrc/history/${EXPORT_DIR}/${h.storeId ?? '<store_id>'} a directory this user can read: ${MARK_CHECK_RESUMES}`;
     case 'failed':
       return `read the sweep: ${SWEEP_LOG}; the check's error is logged there each tick it fails`;
     default:
@@ -9043,7 +9046,7 @@ export function carryHoldAdvice(when) {
   // After the bind (`'before you copy'`) the check is already armed, and the timer's next tick, within minutes, clears the
   // marks of every segment not here whole: the hold is needed NOW, so the line says so. Before the adopt nothing is armed yet.
   const timing = when === 'before you copy' ? `${when} and before the next tick, which comes within minutes (the bind has armed the check)` : when;
-  return `touch ~/${SWITCHES.off} ${timing} and remove it only once both directories are here, complete and matching their source: a tick before then clears the export mark of every segment not here whole, and its rows export again`;
+  return `touch ~/${SWITCHES.off} ${timing} and remove it only once both directories hold every source file at the same size: a tick before then clears the export mark of every segment not here whole, and its rows export again`;
 }
 
 /** The store-unbound remedy's carry half (D-5635): the two directories a store's id keys (`<store_id>` when the id is

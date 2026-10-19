@@ -3211,7 +3211,7 @@ describe('W5h-1 Task 2: status reads export_marks_check; a stopped check WARNs, 
     const item = warned.warn.find((i) => i.word === 'export-marks-unchecked');
     expect(item, JSON.stringify(warned)).toBeDefined();
     expect(item!.detail).toContain('it last stopped on budget (');
-    expect(item!.detail).toContain('has cleared 4 mark(s) so far');
+    expect(item!.detail).toContain('has cleared at least 4 mark(s) so far');
     expect(warned.fail.map((i) => i.word)).not.toContain('status-unreadable');
     w5Plant(box, `wal-held ${Date.now() - x9Lib.EXPORT_MARKS_STALL_MS - X9_HOUR} 4`);
     const failed = w5Health(box);

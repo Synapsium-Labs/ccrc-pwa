@@ -1203,7 +1203,7 @@ describe('C55: doctor --adopt (W1-B2 Task 26; spec §8.4)', () => {
       `the operator, from a terminal outside any session: if the box this store left still has ~/.ccrc/history/journal/${storeId}/`);
     // D-5635: a carry after the bind holds the ticks with history-off until it is whole, said where the operator reads it.
     expect(r.out.replace(/\r/g, '')).toContain(
-      "their file names never collide with this box's; if you copy them after this adopt, touch ~/.ccrc/history-off before you copy and before the next tick, which comes within minutes (the bind has armed the check) and remove it only once both directories are here, complete and matching their source");
+      "their file names never collide with this box's; if you copy them after this adopt, touch ~/.ccrc/history-off before you copy and before the next tick, which comes within minutes (the bind has armed the check) and remove it only once both directories hold every source file at the same size");
     expect(fs.readFileSync(P.storeId, 'utf8').trim()).toBe(storeId);
     const writer = fs.readFileSync(P.writer, 'utf8').trim();
     expect(writer).toMatch(/^[0-9a-f]{8}$/);
@@ -5878,7 +5878,7 @@ describe('a live copy keeps an entry\'s structure on a tie (wave 5h-1 Task 6; D-
   });
 
   // RV15's surviving arm (final fix FX1): between two LIVE copies an equal rank goes to the larger file_id. Deleting
-  // `excluded.struct_file_id > entries.struct_file_id OR` from ENTRY_UPSERT's ?21 arm left every suite green until this case.
+  // `excluded.struct_file_id > entries.struct_file_id OR` from ENTRY_UPSERT's tie arm (the bound flag, the 21st positional parameter) left every suite green until this case.
   it('ingest: between two live copies at one rank the larger file_id takes the structure; a smaller one does not take it back', () => {
     const { db } = x10Store('ccrc-history-5h-tie-live-');
     try {
