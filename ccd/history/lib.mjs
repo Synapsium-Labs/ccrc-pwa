@@ -3313,6 +3313,9 @@ export const HEALTH_META = Object.freeze({
   exportPaused: 'export_paused',                // W1-B4: the export's pause for room on the home filesystem
   // D-5027 (history-held-pass-is-fresh-for-tick-stale): the held arm of a scheduled pass stamps the time it ended (ms).
   heldPassMs: 'held_pass_ms',
+  // W5h-1 Task 1 (D-5632 (history-export-bind-check-batched)): why the check after a bind stopped short, since when, and the
+  // marks it has cleared so far ('<word> <sinceMs> <cleared>', lib formatMarkCheckState); deleted by its done stamp.
+  exportMarksCheck: 'export_marks_check',
 });
 
 /** Counters `status` reads for a health word, spelled once for the writer (sweep.mjs), the reader (cli.mjs) and the
@@ -8597,4 +8600,109 @@ export function readExportDueOldest(v) {
   if (v === undefined) return EXPORT_DUE_OLDEST_UNMEASURED;
   if (v === '') return null;
   return /^[1-9][0-9]*$/.test(v) ? Number(v) : EXPORT_DUE_OLDEST_UNMEASURED;
+}
+
+// ── W5h-1 Task 1: the check after a bind, in bounded batches (D-5632 (history-export-bind-check-batched)) ──────────
+// The check of §9.15 "After a bind" clears the marks naming a segment this box lacks a batch at a time, each batch one
+// NORMAL transaction with a TRUNCATE checkpoint after it, and may span steps: a step that stops records why
+// (HEALTH_META.exportMarksCheck) and the next step recomputes the missing set and starts again from the first row. lib
+// decides when a batch may start, what a batch takes and what a stop records (RD2); sweep.mjs measures and acts.
+
+/** The stored bytes (length(z)) one batch of the check clears the marks of, at most. A cleared mark rewrites its whole row
+ *  and z's overflow pages, so a batch's WAL is about 1.1 times this for 8 KiB blobs (measured: a full 16 MiB batch
+ *  peaked at 17.4 MiB at its commit) and more per stored byte for small ones (measured: a batch of 50,000 blobs of 300 B,
+ *  14.3 MiB stored, with their 50,000 referrers, peaked at 23.2 MiB), which keeps one batch under the writer's
+ *  journal_size_limit of 64 MiB. A batch still takes its first row whatever its size. */
+export const EXPORT_BIND_BYTES = 16 * 1024 * 1024;
+/** The WAL left after a batch's checkpoint answered busy (bytes) past which the check stops, worded `wal-held`: a reader on
+ *  an older snapshot keeps every frame, so batching alone bounds nothing while it stays (measured: the WAL grew to the
+ *  unbatched size). */
+export const EXPORT_BIND_WAL_CEILING = 64 * 1024 * 1024;
+/** Rows one batch reads at most (a page of the keyset): the check's memory bound and its row bound. Moved here from
+ *  sweep.mjs (D-5395's batch); an in-process test's ctx.deps.exportBindBatch overrides it (D-4247). */
+export const EXPORT_BIND_BATCH = 50_000;
+/** How long a check's escalating stop (MARK_CHECK_STALL_WORDS) may stand before doctor fails it (export-marks-stalled;
+ *  read by deriveHealth). */
+export const EXPORT_MARKS_STALL_MS = 24 * 60 * 60 * 1000;
+/** Why a check after a bind stopped short. `budget`: the run's budget was spent before a batch (it resumes each tick);
+ *  `off`: history-off was planted; `wal-held`: a checkpoint answered busy and the WAL stands past EXPORT_BIND_WAL_CEILING;
+ *  `unlistable`: export/<store_id>/ could not be listed; `failed`: another caught error. */
+export const MARK_CHECK_WORDS = Object.freeze(['budget', 'off', 'wal-held', 'unlistable', 'failed']);
+/** The escalating stop words (coordinator ruling R5, as amended): no later tick moves the check past them by itself, so
+ *  doctor FAILs one that has stood past EXPORT_MARKS_STALL_MS (Task 2's deriveHealth arm reads this list). `budget`
+ *  resumes each tick, and `off` is the operator's switch, which holds back every other freshness FAIL (D-4314), so
+ *  neither escalates. A stop's clock restarts when its word moves between this class and the other (nextMarkCheckState). */
+const MARK_CHECK_STALL_WORDS = Object.freeze(['wal-held', 'unlistable', 'failed']);
+
+/** Whether the check may start its next batch: null, or the word it stops with. A non-progress word wins over `budget`,
+ *  so a check that is both starved and blocked says what blocks it: `off` (history-off exists), then `wal-held` (the
+ *  WAL the last checkpoint could not truncate, `walBytes`, is past `walCeiling`), then `budget` (`budgetLeft` false). */
+export function markCheckStop({ budgetLeft, off, walBytes, walCeiling }) {
+  if (off) return 'off';
+  if (walBytes > walCeiling) return 'wal-held';
+  if (!budgetLeft) return 'budget';
+  return null;
+}
+
+/** One batch of the check from one page of its keyset (`rows`, ascending ids, each `{ id, bytes }` with `bytes` the
+ *  stored length of z, 0 for a pruned blob or an entry): rows in order while the stored bytes stay within `maxBytes` and
+ *  the rows within `maxRows`, always at least the first row. `after` is the LAST TAKEN id, where the next page starts
+ *  (null for an empty page: the phase is done). A row that is not two non-negative safe integers is a caller's bug and
+ *  throws, so a NULL length never reads as 0. */
+export function planMarkCheckBatch({ rows, maxBytes, maxRows }) {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || !Number.isSafeInteger(maxRows) || maxRows < 1) {
+    throw new TypeError(`planMarkCheckBatch: bounds must be positive integers, not ${JSON.stringify({ maxBytes, maxRows })}`);
+  }
+  for (const r of rows) {
+    if (!Number.isSafeInteger(r.id) || r.id < 1 || !Number.isSafeInteger(r.bytes) || r.bytes < 0) {
+      throw new TypeError(`planMarkCheckBatch: not a { id, bytes } row: ${JSON.stringify(r)}`);
+    }
+  }
+  const ids = [];
+  let bytes = 0;
+  for (const r of rows) {
+    if (ids.length >= maxRows) break;
+    if (ids.length > 0 && bytes + r.bytes > maxBytes) break;
+    ids.push(r.id);
+    bytes += r.bytes;
+  }
+  return { ids, bytes, after: ids.length === 0 ? null : ids[ids.length - 1] };
+}
+
+const MARK_CHECK_STATE_RE = new RegExp(`^(${MARK_CHECK_WORDS.join('|')}) ([0-9]{1,16}) ([0-9]{1,16})$`);
+const markCheckCount = (n) => Number.isSafeInteger(n) && n >= 0;
+
+/** HEALTH_META.exportMarksCheck's text: `<word> <sinceMs> <cleared>`. Anything else is a caller's bug and throws. */
+export function formatMarkCheckState({ word, sinceMs, cleared }) {
+  if (!MARK_CHECK_WORDS.includes(word) || !markCheckCount(sinceMs) || !markCheckCount(cleared)) {
+    throw new TypeError(`formatMarkCheckState: not a check state: ${JSON.stringify({ word, sinceMs, cleared })}`);
+  }
+  return `${word} ${sinceMs} ${cleared}`;
+}
+
+/** HEALTH_META.exportMarksCheck read back: null when the key is absent (the check is not stopped short), else its word,
+ *  since and cleared. A value off the grammar THROWS: it is never folded into absent, so status names it unmeasured. */
+export function parseMarkCheckState(v) {
+  if (v === null) return null;
+  const m = typeof v === 'string' ? MARK_CHECK_STATE_RE.exec(v) : null;
+  if (m === null || !markCheckCount(Number(m[2])) || !markCheckCount(Number(m[3]))) {
+    throw new TypeError(`export_marks_check: not '<word> <sinceMs> <cleared>': ${JSON.stringify(v)}`);
+  }
+  return { word: m[1], sinceMs: Number(m[2]), cleared: Number(m[3]) };
+}
+
+/** The state a stop records, from what meta holds (`recorded`, the text as read, or null) and this step's stop: the new
+ *  word; since when the check has stopped on words of this word's class (MARK_CHECK_STALL_WORDS, or `budget` and `off`):
+ *  kept while the word stays within one class, `nowMs` for the first stop and for a stop whose word crosses between the
+ *  classes (R5 as amended: doctor ages the escalating class alone); and the marks cleared so far (`cleared` added to the
+ *  recorded count). A recorded text off the grammar is the writer's to cure: the check restarts its record from this
+ *  stop rather than keep a value status cannot read. */
+export function nextMarkCheckState({ recorded, word, nowMs, cleared }) {
+  if (!markCheckCount(nowMs) || !markCheckCount(cleared)) {
+    throw new TypeError(`nextMarkCheckState: not a clock and a count: ${JSON.stringify({ nowMs, cleared })}`);
+  }
+  let prev;
+  try { prev = parseMarkCheckState(recorded); } catch { prev = null; }
+  const sameClass = prev !== null && MARK_CHECK_STALL_WORDS.includes(prev.word) === MARK_CHECK_STALL_WORDS.includes(word);
+  return { word, sinceMs: sameClass ? prev.sinceMs : nowMs, cleared: (prev === null ? 0 : prev.cleared) + cleared };
 }

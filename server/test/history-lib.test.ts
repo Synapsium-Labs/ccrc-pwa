@@ -8669,3 +8669,77 @@ describe('deriveHealth, W1-B4: with the export writer live, export-due waits for
     });
   });
 });
+
+// ===========================================================================
+// W5h-1 Task 1: the check after a bind in bounded, resumable batches, decided
+// in lib (D-5632 (history-export-bind-check-batched); RD2). Pure, on lib.mjs alone.
+// ===========================================================================
+import * as libBind from '../../ccd/history/lib.mjs';
+
+describe('W5h-1: the check after a bind in bounded batches, decided in lib (D-5632)', () => {
+  const MIB = 1024 * 1024;
+  it('the bounds are lib constants: 16 MiB of stored z a batch, a 64 MiB WAL ceiling, 50,000 rows a page, a 24 h stall; the stop words and the meta key are spelled once', () => {
+    expect(libBind.EXPORT_BIND_BYTES).toBe(16 * MIB);
+    expect(libBind.EXPORT_BIND_WAL_CEILING).toBe(64 * MIB);
+    expect(libBind.EXPORT_BIND_BATCH).toBe(50_000);
+    expect(libBind.EXPORT_MARKS_STALL_MS).toBe(24 * 3_600_000);
+    expect(libBind.MARK_CHECK_WORDS).toEqual(['budget', 'off', 'wal-held', 'unlistable', 'failed']);
+    expect(Object.isFrozen(libBind.MARK_CHECK_WORDS)).toBe(true);
+    expect(libBind.HEALTH_META.exportMarksCheck).toBe('export_marks_check');
+  });
+  it('markCheckStop: null while every gate is open; off, then wal-held past the ceiling (not at it), then budget', () => {
+    const open = { budgetLeft: true, off: false, walBytes: 0, walCeiling: 64 };
+    expect(libBind.markCheckStop(open)).toBeNull();
+    expect(libBind.markCheckStop({ ...open, walBytes: 64 }), 'at the ceiling is not past it').toBeNull();
+    expect(libBind.markCheckStop({ ...open, budgetLeft: false })).toBe('budget');
+    expect(libBind.markCheckStop({ ...open, off: true })).toBe('off');
+    expect(libBind.markCheckStop({ ...open, walBytes: 65 })).toBe('wal-held');
+    expect(libBind.markCheckStop({ budgetLeft: false, off: true, walBytes: 65, walCeiling: 64 }), 'a non-progress word wins').toBe('off');
+    expect(libBind.markCheckStop({ budgetLeft: false, off: false, walBytes: 65, walCeiling: 64 })).toBe('wal-held');
+  });
+  it('planMarkCheckBatch: rows in order until the stored bytes would pass the bound or the rows reach the cap; an exact fit is taken; the first row whatever its size; `after` is the last row TAKEN', () => {
+    const rows = [{ id: 3, bytes: 400 }, { id: 5, bytes: 400 }, { id: 9, bytes: 400 }, { id: 12, bytes: 1 }];
+    expect(libBind.planMarkCheckBatch({ rows, maxBytes: 1000, maxRows: 10 }), 'the byte cut').toEqual({ ids: [3, 5], bytes: 800, after: 5 });
+    expect(libBind.planMarkCheckBatch({ rows, maxBytes: 1200, maxRows: 10 }), 'an exact fit is taken').toEqual({ ids: [3, 5, 9], bytes: 1200, after: 9 });
+    expect(libBind.planMarkCheckBatch({ rows, maxBytes: 10_000, maxRows: 2 }), 'the row cap').toEqual({ ids: [3, 5], bytes: 800, after: 5 });
+    expect(libBind.planMarkCheckBatch({ rows: [{ id: 7, bytes: 5000 }, { id: 8, bytes: 1 }], maxBytes: 1000, maxRows: 10 }), 'one row over the bound is still taken, alone')
+      .toEqual({ ids: [7], bytes: 5000, after: 7 });
+    expect(libBind.planMarkCheckBatch({ rows: [{ id: 4, bytes: 0 }, { id: 6, bytes: 0 }], maxBytes: 1, maxRows: 10 }), 'pruned blobs and entries weigh nothing')
+      .toEqual({ ids: [4, 6], bytes: 0, after: 6 });
+    expect(libBind.planMarkCheckBatch({ rows: [], maxBytes: 1000, maxRows: 10 }), 'an empty page ends the phase').toEqual({ ids: [], bytes: 0, after: null });
+  });
+  it('planMarkCheckBatch: a row that is not two non-negative safe integers, or a bound that is not positive, throws (a NULL length never reads as 0)', () => {
+    expect(typeof libBind.planMarkCheckBatch, 'CONTROL: the function exists, so a throw below is its own').toBe('function');
+    for (const bad of [{ id: 1, bytes: null }, { id: 1, bytes: -1 }, { id: 0, bytes: 1 }, { id: 1.5, bytes: 1 }, { id: 2, bytes: '3' }]) {
+      expect(() => libBind.planMarkCheckBatch({ rows: [{ id: 1, bytes: 1 }, bad as unknown as { id: number; bytes: number }], maxBytes: 10, maxRows: 10 }), JSON.stringify(bad)).toThrow(TypeError);
+    }
+    expect(() => libBind.planMarkCheckBatch({ rows: [], maxBytes: 0, maxRows: 10 })).toThrow(TypeError);
+    expect(() => libBind.planMarkCheckBatch({ rows: [], maxBytes: 10, maxRows: 0 })).toThrow(TypeError);
+  });
+  it('the stop record: format and parse round-trip; absent is null; a value off the grammar throws, never null', () => {
+    const s = { word: 'wal-held' as const, sinceMs: 1_700_000_000_000, cleared: 42 };
+    expect(libBind.formatMarkCheckState(s)).toBe('wal-held 1700000000000 42');
+    expect(libBind.parseMarkCheckState(libBind.formatMarkCheckState(s))).toEqual(s);
+    for (const w of libBind.MARK_CHECK_WORDS) expect(libBind.parseMarkCheckState(`${w} 1 0`)!.word).toBe(w);
+    expect(libBind.parseMarkCheckState(null)).toBeNull();
+    for (const bad of ['', 'budget', 'budget x 1', 'nope 1 1', 'budget -1 0', 'budget 1 -1', 'budget 12345678901234567 0', 'budget 1 0 ', ' budget 1 0', 'budget 99999999999999999 1', 'budget 9007199254740993 0']) {
+      expect(() => libBind.parseMarkCheckState(bad), JSON.stringify(bad)).toThrow(TypeError);
+    }
+    expect(() => libBind.formatMarkCheckState({ word: 'started' as unknown as 'budget', sinceMs: 1, cleared: 0 })).toThrow(TypeError);
+    expect(() => libBind.formatMarkCheckState({ word: 'budget', sinceMs: -1, cleared: 0 })).toThrow(TypeError);
+  });
+  it('nextMarkCheckState: the first stop starts the clock; a later stop in the same class keeps it, takes the new word and adds what it cleared; a stop that crosses between the escalating words (wal-held, unlistable, failed) and the others (budget, off) restarts it; a record off the grammar restarts', () => {
+    expect(libBind.nextMarkCheckState({ recorded: null, word: 'budget', nowMs: 1000, cleared: 4 })).toEqual({ word: 'budget', sinceMs: 1000, cleared: 4 });
+    expect(libBind.nextMarkCheckState({ recorded: 'wal-held 1000 4', word: 'failed', nowMs: 5000, cleared: 3 }), 'since kept, cleared added')
+      .toEqual({ word: 'failed', sinceMs: 1000, cleared: 7 });
+    expect(libBind.nextMarkCheckState({ recorded: 'budget 1000 4', word: 'off', nowMs: 5000, cleared: 0 }), 'within budget and off: since kept')
+      .toEqual({ word: 'off', sinceMs: 1000, cleared: 4 });
+    expect(libBind.nextMarkCheckState({ recorded: 'budget 1000 4', word: 'wal-held', nowMs: 5000, cleared: 3 }), 'into the escalating class: since restarts')
+      .toEqual({ word: 'wal-held', sinceMs: 5000, cleared: 7 });
+    expect(libBind.nextMarkCheckState({ recorded: 'unlistable 1000 4', word: 'off', nowMs: 5000, cleared: 0 }), 'out of the escalating class: since restarts')
+      .toEqual({ word: 'off', sinceMs: 5000, cleared: 4 });
+    expect(libBind.nextMarkCheckState({ recorded: 'torn', word: 'off', nowMs: 5000, cleared: 2 }), 'the writer cures a record status cannot read')
+      .toEqual({ word: 'off', sinceMs: 5000, cleared: 2 });
+    expect(() => libBind.nextMarkCheckState({ recorded: null, word: 'off', nowMs: -1, cleared: 0 })).toThrow(TypeError);
+  });
+});

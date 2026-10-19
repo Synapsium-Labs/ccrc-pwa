@@ -32,6 +32,9 @@ import { DatabaseSync as X9Db } from 'node:sqlite';
 import * as x9Lib from '../../ccd/history/lib.mjs';
 import * as x9Store from '../../ccd/history/store.mjs';
 import * as x9H from './historyHelpers.js';
+// ── W5h-1 Task 1: imports under t1 aliases ───────────────────────────────────────────────────────────────────────
+import { spawnSync as t1Spawn } from 'node:child_process';
+import { randomBytes as t1Random } from 'node:crypto';
 
 skipOnDarwin();
 removeTmpFixturesEachTest();
@@ -64,7 +67,7 @@ interface SweepExport {
   exportStep(db: DatabaseSync, ctx: Record<string, unknown>): Promise<PassResult | null>;
   newBudget(now?: () => number, limits?: { maxMs?: number; maxBytes?: number; chunkBytes?: number }): Record<string, unknown>;
   writeChunk(db: DatabaseSync, chunk: Record<string, unknown>): { newEntries: number; minNewTsMs: number | null };
-  checkSegmentMarks(db: DatabaseSync, ctx: Record<string, unknown>, record: string): { cleared: number; segments: string[] };
+  checkSegmentMarks(db: DatabaseSync, ctx: Record<string, unknown>, record: string): { cleared: number; segments: string[]; stopped: string | null };
   makeIngestCtx(home: string, homes: string[], nowMs: number, ids: { storeId: string; writer: string }): Record<string, unknown>;
   ingestSidecars(db: DatabaseSync, ctx: Record<string, unknown>, budget: Record<string, unknown>, uuids: string[]): Promise<{ bytes: number; complete: boolean }>;
 }
@@ -1065,11 +1068,13 @@ describe('marks that move (W1-B4 Task 8; spec §9.15 "Mark", "After a bind")', (
       expect(counters(box)['export_segment_missing'], 'an unreadable directory is not a missing segment').toBeUndefined();
       expect(metaOf(box, 'export_marks_checked_ms'), 'a failed check is not a check').toBeNull();
       expect(metaOf(box, 'export_marks_checked_binds'), 'a failed check covers no bind fact').toBeNull();
+      expect(metaOf(box, HEALTH_META.exportMarksCheck), 'the stop is recorded unlistable, beside the count (D-5632)').toBe(`unlistable ${NOW + 2 * MIN} 0`);
       fs.rmSync(planted);
       fs.renameSync(`${planted}.kept`, planted);
       await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, at(3 * MIN))));
       expect(metaOf(box, 'export_marks_checked_ms'), 'the next step checks again').toBe(String(NOW + 3 * MIN));
       expect(Object.values(marks(box))).toEqual([name, name]);
+      expect(metaOf(box, HEALTH_META.exportMarksCheck), 'a check that ran to its done stamp deleted the stop').toBeNull();
     }, 120_000);
   }
 
@@ -2213,14 +2218,17 @@ describe('the selection reaches the due rows within its budget (W1-B4 whole-bran
       const name = `1.${ids.writer}.db`;
       await onStore(box, (db) => SW.exportPass(db, exportCtx(box, ids, () => NOW)));
       expect(marks(box)).toEqual({ [rid(1)]: name });
-      // the segment stays on the box it came from, and a restore's bind fact makes the next step check the marks
+      // the segment stays on the box it came from, and a restore's bind fact makes the next step check the marks. The check
+      // charges the stored bytes it rewrites to the run's budget (D-5632 (history-export-bind-check-batched)), so it runs in a
+      // step of its own, inside the hour after the pass at NOW, and the pass below has its small budget to itself.
       fs.rmSync(path.join(exportDirOf(box), name));
-      const T = NOW + 2 * HOUR;
-      const r = await onStore(box, (db) => {
+      await onStore(box, (db) => {
         setMeta(db, `bound:${NOW + MIN}`, 'restore');
-        return SW.exportStep(db, exportCtx(box, ids, () => T, { deps: { statfs: roomy }, limits: { maxBytes } }));
+        return SW.exportStep(db, exportCtx(box, ids, () => NOW + 2 * MIN));
       });
-      expect(counters(box)['export_segment_missing'], 'the check ran in this step and cleared the marks').toBe(1);
+      expect(counters(box)['export_segment_missing'], 'the check ran in its own step and cleared the marks').toBe(1);
+      const T = NOW + 2 * HOUR;
+      const r = await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, () => T, { deps: { statfs: roomy }, limits: { maxBytes } })));
       expect(r, 'the row went into the second segment, and nothing was left behind').toMatchObject({ state: 'written', segment: `2.${ids.writer}.db`, rows: 1, complete: true });
       expect(marks(box)).toEqual({ [rid(1)]: `2.${ids.writer}.db` });
       expect(metaOf(box, HEALTH_META.exportSegmentMissing), 'the pass left no due row behind, so the WARN resets at this pass').toBe('0');
@@ -2421,7 +2429,10 @@ describe('D-5395: the mark invariant adds no statement for a fresh blob and read
     }
   });
 
-  it('the bind check clears the entries that reference a blob whose mark it clears, through each of the four references (its own blob, a variant, a linked sidecar, a kept blob) and whether that blob is live or pruned since (D-5396), and keeps those whose blobs it did not clear', async () => {
+  // D-5632 (history-export-bind-check-batched): the same case in batches of one blob, so every batch boundary falls between
+  // two of the references and the pruned blob is a batch of its own (D-5396 under the keyset).
+  for (const bounds of [{ name: 'one batch', deps: {}, statements: 4 }, { name: 'one blob a batch', deps: { exportBindBytes: 1, exportBindBatch: 1 }, statements: 20 }] as const) {
+  it(`the bind check clears the entries that reference a blob whose mark it clears, through each of the four references (its own blob, a variant, a linked sidecar, a kept blob) and whether that blob is live or pruned since (D-5396), and keeps those whose blobs it did not clear: ${bounds.name}`, async () => {
     const { box, ids } = ingestedBox('ccrc-history-export-refs-', [row(1, 'a prompt', DAY)]);
     const S1 = `1.${ids.writer}.db`;                                                                // the segment this box no longer has
     const S2 = path.basename(plantSegment(box, ids.storeId, { seq: 2, writer: ids.writer, blobs: [], rows: [] }));   // one it has
@@ -2451,12 +2462,12 @@ describe('D-5395: the mark invariant adds no statement for a fresh blob and read
       db.prepare('INSERT INTO boundaries (entry_id, transcript_pk, ord, kept_blob_id) VALUES (?, ?, 1, ?)').run(eKept, tp, lost.kept);
       expect(strandedBlobsOn(db), 'CONTROL: marked blobs strand nobody').toEqual([]);
       const watch = counting(db);
-      const out = SW.checkSegmentMarks(watch.db, { paths: historyPaths(box.home), ids, now: () => Date.now() }, '["bound:1"]');
+      const out = SW.checkSegmentMarks(watch.db, { paths: historyPaths(box.home), ids, now: () => Date.now(), deps: bounds.deps, budget: SW.newBudget() }, '["bound:1"]');
       return { out, stranded: strandedBlobsOn(db), ran: watch.ran };
     });
     expect(r.out.segments).toEqual([S1]);
     expect(r.ran.filter((t) => /^UPDATE entries SET exported_ms = NULL, exported_seg = NULL WHERE exported_ms IS NOT NULL/.test(t)),
-      'the referrers of the five blobs whose marks went (four live, one pruned since) are cleared set-wise: four statements, one for each reference, however many blobs').toHaveLength(4);
+      'the referrers of the five blobs whose marks went (four live, one pruned since) are cleared set-wise: four statements a batch, one for each reference, however many blobs').toHaveLength(bounds.statements);
     const left = q(box, 'SELECT uuid, exported_seg FROM entries WHERE uuid >= ? ORDER BY uuid', rid(11)).map((e) => [e['uuid'], e['exported_seg']]);
     expect(left, 'the four that reference a live blob whose mark went are cleared, and so is the one whose lost blob was pruned since (D-5396), and the one marked with the missing segment itself; the one with a blob in a present segment keeps its mark').toEqual([
       [rid(11), null], [rid(12), null], [rid(13), null], [rid(14), null], [rid(15), S2], [rid(16), null], [rid(17), null]]);
@@ -2464,8 +2475,9 @@ describe('D-5395: the mark invariant adds no statement for a fresh blob and read
     expect(metaOf(box, HEALTH_META.exportSegmentMissing)).toBe('11');
     expect(r.stranded).toEqual([]);
   }, 120_000);
+  }
 
-  it('the bind check reads its lost blob ids by iteration and hands the referrer clears them in bounded batches (ctx.deps.exportBindBatch overrides the size): ceil(N/batch) rounds of four statements, and the same cleared count and end state as one unbounded batch', async () => {
+  it('the bind check pages its lost blob ids by a blob_id keyset, at most the row cap a page (ctx.deps.exportBindBatch overrides it), and hands each page to the referrer clears: ceil(N/cap) batches of four statements, and the same cleared count and end state as one batch', async () => {
     /** One box with the same fixture every time: five live blobs lost across TWO missing segments (S1, S3), one pruned stub S1
      *  marked and an entry that references it (D-5396), each live lost blob referenced by an entry that a PRESENT segment (S2)
      *  marked through a different reference, and one entry marked with the missing segment itself. With `lostCount` 4 the
@@ -2503,11 +2515,11 @@ describe('D-5395: the mark invariant adds no statement for a fresh blob and read
         void own; void own2; void stubbed;
         expect(strandedBlobsOn(db), 'CONTROL: marked blobs strand nobody').toEqual([]);
         const watch = counting(db);
-        const out = SW.checkSegmentMarks(watch.db, { paths: historyPaths(box.home), ids, now: () => 1, deps: batch === undefined ? {} : { exportBindBatch: batch } }, '["bound:1"]');
+        const out = SW.checkSegmentMarks(watch.db, { paths: historyPaths(box.home), ids, now: () => 1, deps: batch === undefined ? {} : { exportBindBatch: batch }, budget: SW.newBudget() }, '["bound:1"]');
         return { out, stranded: strandedBlobsOn(db), ran: watch.ran, calls: watch.calls };
       });
-      // how the lost-ids select ran: through iterate (never materialised), once, and never through all
-      const lostSelect = r.calls.filter((c) => c.text.startsWith('SELECT blob_id FROM blobs WHERE exported_seg IN'));
+      // how the lost ids were read (D-5632): a page of at most the row cap at a time, and one empty page that ends the phase
+      const lostSelect = r.calls.filter((c) => c.text.startsWith('SELECT blob_id AS id, coalesce(length(z), 0) AS bytes FROM blobs'));
       const arms = r.ran.filter((t) => /^UPDATE entries SET exported_ms = NULL, exported_seg = NULL WHERE exported_ms IS NOT NULL/.test(t)).length;
       const state = {
         blobs: q(box, 'SELECT lower(hex(sha256)) AS sha, exported_ms, exported_seg FROM blobs WHERE z IS NOT NULL OR pruned_ms IS NOT NULL ORDER BY sha'),
@@ -2518,8 +2530,8 @@ describe('D-5395: the mark invariant adds no statement for a fresh blob and read
     const one = await fixture('ccrc-history-export-batch-one-', undefined);
     const two = await fixture('ccrc-history-export-batch-two-', 2);
     expect(one.segments, 'two missing segments').toEqual([one.S1, one.S3]);
-    expect(one.lostSelect, 'the lost ids are read through iterate, once: a row at a time, never every lost blob materialised by all()').toEqual(['iterate']);
-    expect(two.lostSelect, 'and the same however small the batch').toEqual(['iterate']);
+    expect(one.lostSelect, 'six ids in one page of at most the default cap, then the empty page that ends the phase').toEqual(['all', 'all']);
+    expect(two.lostSelect, 'six ids at two a page: three pages, then the empty one').toEqual(['all', 'all', 'all', 'all']);
     expect(one.arms, 'six ids (five live and the pruned one, which a bind check hands over too: D-5396) fit one default batch: four statements, one for each reference').toBe(4);
     expect(two.arms, 'six ids in batches of two: exactly three batches (an exact multiple, so no empty fourth), four statements each').toBe(12);
     // blobs: five live + the stub = 6; entries: the six referrers (own x2, variant, sidecar, kept, and the stub's) + the one marked S1 itself = 7
@@ -2536,7 +2548,7 @@ describe('D-5395: the mark invariant adds no statement for a fresh blob and read
     const four = await fixture('ccrc-history-export-batch-four-two-', 2, 4);
     expect(fourOne.arms, 'five ids in one default batch').toBe(4);
     expect(four.arms, 'five ids in batches of two: two full batches and a last of one id, four statements each').toBe(12);
-    expect(four.lostSelect).toEqual(['iterate']);
+    expect(four.lostSelect, 'five ids at two a page: two full pages, a page of one, then the empty one').toEqual(['all', 'all', 'all', 'all']);
     // blobs: four live + the stub = 5; entries: the four live referrers, the stub's, and the one marked S1 itself = 6
     expect(fourOne.cleared).toBe(11);
     expect(four.cleared, 'the batch size moves no count').toBe(fourOne.cleared);
@@ -2696,4 +2708,408 @@ describe('a boundary that attaches a live kept blob to an exported entry clears 
       expect(strandedBlobs(box)).toEqual([]);
     }, 600_000);
   }
+});
+
+// ── W5h-1 Task 1: the check after a bind in bounded, resumable batches (D-5632 (history-export-bind-check-batched)) ─────
+describe('the check after a bind runs in bounded, resumable batches (W5h-1 Task 1; D-5632)', () => {
+  const roomy = async (): Promise<{ bsize: number; bavail: number; blocks: number }> => ({ bsize: 1, bavail: 4 * TIB, blocks: 8 * TIB });
+  /** A box whose store, besides the ingested row, holds `lost` live blobs of `zBytes` incompressible stored bytes, each marked
+   *  with a segment this box lacks (S1) and referenced by its own entry marked with one it has (S2); with `kept`, as many live
+   *  blobs marked S2 (each with its own S2 entry) interleaved by blob_id with the first lost ones; `stubs` pruned blobs marked
+   *  S1, each referenced the same way (D-5396); and one entry marked S1 itself over a blob S2 holds. No bind fact yet, and
+   *  every step here runs inside the store's first hour, so the export pass waits unless a case moves the clock past it. */
+  async function lostBox(prefix: string, o: { lost: number; zBytes: number; kept?: number; stubs?: number }):
+    Promise<{ box: HistoryBox; ids: { storeId: string; writer: string }; S1: string; S2: string }> {
+    const { box, ids } = ingestedBox(prefix, [row(1, 'a prompt', DAY)]);
+    const S1 = `1.${ids.writer}.db`;
+    const S2 = path.basename(plantSegment(box, ids.storeId, { seq: 2, writer: ids.writer, blobs: [], rows: [] }));
+    await onStore(box, (db) => {
+      const one = (sql: string): number => Number((db.prepare(sql).get() as { n: number }).n);
+      const tp = one('SELECT transcript_pk AS n FROM transcripts');
+      const file = one('SELECT file_id AS n FROM ingest_files');
+      const blob = (z: Buffer | null, seg: string): number => Number(db.prepare(
+        'INSERT INTO blobs (sha256, codec, z, raw_len, pruned_ms, exported_ms, exported_seg) VALUES (?, ?, ?, ?, ?, 1, ?)')
+        .run(t1Random(32), 'br5', z, z === null ? 4 : z.length, z === null ? 1 : null, seg).lastInsertRowid);
+      const entry = (n: number, blobId: number, seg: string): void => {
+        db.prepare("INSERT INTO entries (uuid, transcript_pk, type, provenance, prov_version, struct_rank_ns, struct_file_id, blob_id, ts_ms, exported_ms, exported_seg) VALUES (?, ?, 'user', 'x', 1, 0, ?, ?, 1, 1, ?)")
+          .run(rid(n), tp, file, blobId, seg);
+      };
+      db.exec('BEGIN');
+      let n = 100;
+      const held = blob(t1Random(64), S2);
+      for (let i = 0; i < o.lost; i += 1) {
+        entry(n++, blob(t1Random(o.zBytes), S1), S2);                                // its own blob lost
+        if (i < (o.kept ?? 0)) entry(n++, blob(t1Random(o.zBytes), S2), S2);           // a blob a present segment holds
+      }
+      for (let i = 0; i < (o.stubs ?? 0); i += 1) entry(n++, blob(null, S1), S2);     // pruned since S1 carried it
+      entry(n++, held, S1);                                                             // marked with the missing segment itself
+      db.exec('COMMIT');
+    });
+    expect(strandedBlobs(box), 'CONTROL: marked blobs strand nobody').toEqual([]);
+    return { box, ids, S1, S2 };
+  }
+  const bind = (box: HistoryBox, ms: number): Promise<void> => onStore(box, (db) => { setMeta(db, `bound:${ms}`, 'restore'); });
+  /** The marks, the check's meta and its counter, the box's own segment names normalised and no clock. */
+  const endState = (b: { box: HistoryBox; S1: string; S2: string }): Record<string, unknown> => {
+    const norm = (v: unknown): unknown => (v === b.S1 ? 'S1' : v === b.S2 ? 'S2' : v ?? null);
+    return {
+      blobs: q(b.box, 'SELECT exported_seg FROM blobs ORDER BY blob_id').map((r) => norm(r['exported_seg'])),
+      entries: q(b.box, 'SELECT uuid, exported_seg FROM entries ORDER BY uuid').map((r) => [r['uuid'], norm(r['exported_seg'])]),
+      missing: metaOf(b.box, HEALTH_META.exportSegmentMissing),
+      stop: metaOf(b.box, HEALTH_META.exportMarksCheck),
+      binds: metaOf(b.box, 'export_marks_checked_binds'),
+      counted: metaOf(b.box, 'export_marks_counted'),
+      counter: counters(b.box)['export_segment_missing'] ?? 0,
+    };
+  };
+  /** The test's writer connection answers its `nth` BEGIN IMMEDIATE with SQLITE_BUSY, the stand-in for another connection
+   *  holding the write lock (the idiom of the busy case above); shipped code reads no seam. */
+  const busyAt = (db: DatabaseSync, nth: number): void => {
+    let begins = 0;
+    const realExec = db.exec.bind(db);
+    (db as unknown as { exec: (sql: string) => void }).exec = (sql: string): void => {
+      if (sql === 'BEGIN IMMEDIATE' && (begins += 1) === nth) {
+        throw Object.assign(new Error(`database is locked (BEGIN ${nth})`), { code: 'ERR_SQLITE_ERROR', errcode: 5, errstr: 'database is locked' });
+      }
+      realExec(sql);
+    };
+  };
+  /** exportStep in a child of its own, SIGKILLed right after its `killAt`-th batch has committed and checkpointed: a kill,
+   *  not a throw, so no `finally` and no stop record runs (the faults preload's idiom). */
+  function killAfterBatch(box: HistoryBox, ids: { storeId: string; writer: string }, nowMs: number, bindBytes: number, killAt: number): ReturnType<typeof t1Spawn> {
+    const script = path.join(box.home, 'kill-after-batch.mjs');
+    fs.writeFileSync(script, [
+      'const [sweepUrl, storeUrl, libUrl, home, idsJson, nowText, bytesText, killText] = process.argv.slice(2);',
+      'const SW = await import(sweepUrl); const ST = await import(storeUrl); const L = await import(libUrl);',
+      'const P = L.historyPaths(home); const now = () => Number(nowText); let seen = 0;',
+      'const db = ST.openWriter(P.dbFile);',
+      'const die = () => { process.kill(process.pid, "SIGKILL"); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10_000); };',
+      'const deps = { exportBindBytes: Number(bytesText), afterMarkBatch: () => { if ((seen += 1) === Number(killText)) die(); } };',
+      'await SW.exportStep(db, { home, paths: P, ids: JSON.parse(idsJson), now, out: () => {}, deps, homes: [], rosterUnreadable: false, parsed: { secrets: [], homes: [], rosterUnreadable: false }, budget: SW.newBudget(now) });',
+      'process.exit(3);',
+    ].join('\n'));
+    const url = (rel: string): string => new URL(rel, import.meta.url).href;
+    return t1Spawn(process.execPath, ['--no-warnings', script, url('../../ccd/history/sweep.mjs'), url('../../ccd/history/store.mjs'),
+      url('../../ccd/history/lib.mjs'), box.home, JSON.stringify(ids), String(nowMs), String(bindBytes), String(killAt)],
+    { env: box.env, cwd: box.home, encoding: 'utf8', timeout: 60_000 });
+  }
+
+  it('a check the run budget stops resumes on the next step: no batch starts on a spent budget; the stop records its first time and the marks cleared so far; exportSegmentMissing accumulates; the done stamp comes after the last batch; the counter is bumped once; the end state is one uninterrupted check\'s', async () => {
+    const NOW = Date.now();
+    const at = (ms: number) => (): number => NOW + ms;
+    const step = { deps: { exportBindBytes: 2000 }, limits: { maxBytes: 2000 } };   // two 1000-byte blobs a batch, one batch a step
+    const a = await lostBox('ccrc-history-export-bindstep-', { lost: 6, zBytes: 1000 });
+    const b = await lostBox('ccrc-history-export-bindwhole-', { lost: 6, zBytes: 1000 });
+    for (const x of [a, b]) await bind(x.box, NOW + MIN);
+    await onStore(a.box, (db) => SW.exportStep(db, exportCtx(a.box, a.ids, at(2 * MIN), step)));
+    expect(metaOf(a.box, HEALTH_META.exportMarksCheck), 'step 1: one batch (two blobs and their two referrers), then the budget').toBe(`budget ${NOW + 2 * MIN} 4`);
+    expect(metaOf(a.box, HEALTH_META.exportSegmentMissing)).toBe('4');
+    expect(metaOf(a.box, 'export_marks_checked_binds'), 'the done stamp waits for the last batch').toBeNull();
+    expect(metaOf(a.box, 'export_marks_checked_ms')).toBeNull();
+    expect(counters(a.box)['export_segment_missing'], 'the first batch that clears counts the check').toBe(1);
+    expect(strandedBlobs(a.box), 'D-5395 at the commit').toEqual([]);
+    await onStore(a.box, (db) => SW.exportStep(db, exportCtx(a.box, a.ids, at(3 * MIN), step)));
+    expect(metaOf(a.box, HEALTH_META.exportMarksCheck), 'step 2 resumes: the first stop\'s time kept, the cleared marks added').toBe(`budget ${NOW + 2 * MIN} 8`);
+    expect(metaOf(a.box, HEALTH_META.exportSegmentMissing), 'accumulated, never overwritten').toBe('8');
+    expect(counters(a.box)['export_segment_missing'], 'once per check, however many steps').toBe(1);
+    expect(strandedBlobs(a.box)).toEqual([]);
+    await onStore(a.box, (db) => SW.exportStep(db, exportCtx(a.box, a.ids, at(4 * MIN), { deps: { exportBindBytes: 2000 } })));
+    expect(metaOf(a.box, HEALTH_META.exportMarksCheck), 'the done stamp deletes the stop').toBeNull();
+    expect(metaOf(a.box, 'export_marks_checked_ms')).toBe(String(NOW + 4 * MIN));
+    expect(metaOf(a.box, HEALTH_META.exportSegmentMissing), 'six blobs, their six referrers and the entry marked S1 itself').toBe('13');
+    await onStore(b.box, (db) => SW.exportStep(db, exportCtx(b.box, b.ids, at(2 * MIN), { deps: { exportBindBytes: 2000 } })));
+    expect(endState(b), 'CONTROL: one uninterrupted check').toMatchObject({ missing: '13', stop: null, counted: null, counter: 1 });
+    expect(endState(a), 'three steps end where one does').toEqual(endState(b));
+  }, 300_000);
+
+  it('a segment that arrives and one moved aside between two steps of one unfinished check: each step recomputes the missing set, what an earlier step cleared stays cleared, marks naming the arrived segment stand, the moved-aside segment\'s marks clear, D-5395 holds after every step, and the done stamp covers a bind fact written mid-check', async () => {
+    const NOW = Date.now();
+    const at = (ms: number) => (): number => NOW + ms;
+    const step = { deps: { exportBindBytes: 2000 }, limits: { maxBytes: 2000 } };   // two 1000-byte blobs a batch, one batch a step
+    const x = await lostBox('ccrc-history-export-bindmove-', { lost: 6, zBytes: 1000 });
+    const lost = q(x.box, 'SELECT blob_id FROM blobs WHERE exported_seg = ? ORDER BY blob_id', x.S1).map((r) => Number(r['blob_id']));
+    expect(lost, 'CONTROL: six lost blobs, marked with the segment this box lacks').toHaveLength(6);
+    const segOf = (id: number): unknown => q(x.box, 'SELECT exported_seg FROM blobs WHERE blob_id = ?', id)[0]!['exported_seg'] ?? null;
+    await bind(x.box, NOW + MIN);
+    await onStore(x.box, (db) => SW.exportStep(db, exportCtx(x.box, x.ids, at(2 * MIN), step)));
+    expect(metaOf(x.box, HEALTH_META.exportMarksCheck), 'step 1 stops at the budget after one batch').toBe(`budget ${NOW + 2 * MIN} 4`);
+    expect(lost.slice(0, 2).map(segOf), 'step 1 cleared the first two lost blobs').toEqual([null, null]);
+    expect(strandedBlobs(x.box)).toEqual([]);
+    // between the two steps: the carry of S1 finishes, S2 is moved aside, and a second bind fact is written
+    expect(path.basename(plantSegment(x.box, x.ids.storeId, { seq: 1, writer: x.ids.writer, blobs: [], rows: [] }))).toBe(x.S1);
+    fs.renameSync(path.join(exportDirOf(x.box), x.S2), path.join(x.box.home, 'moved-aside-segment'));
+    await bind(x.box, NOW + 2 * MIN + 30_000);
+    for (let n = 3; n < 10 && (n === 3 || metaOf(x.box, HEALTH_META.exportMarksCheck) !== null); n += 1) {
+      await onStore(x.box, (db) => SW.exportStep(db, exportCtx(x.box, x.ids, at(n * MIN), step)));
+      expect(strandedBlobs(x.box), `D-5395 after the step at minute ${n}`).toEqual([]);
+    }
+    expect(metaOf(x.box, HEALTH_META.exportMarksCheck), 'the check finished').toBeNull();
+    expect(lost.slice(0, 2).map(segOf), 'an earlier step\'s clears stay cleared: the arrived segment restores no mark').toEqual([null, null]);
+    expect(lost.slice(2).map(segOf), 'marks naming the segment that arrived stand').toEqual([x.S1, x.S1, x.S1, x.S1]);
+    expect(q(x.box, 'SELECT count(*) AS n FROM blobs WHERE exported_seg = ?', x.S2)[0]!['n'], 'the moved-aside segment\'s blob marks clear').toBe(0);
+    expect(q(x.box, 'SELECT count(*) AS n FROM entries WHERE exported_seg = ?', x.S2)[0]!['n'], 'and its entry marks').toBe(0);
+    expect(metaOf(x.box, 'export_marks_checked_binds'), 'the done stamp covers every bind fact seen, the one written mid-check too')
+      .toBe(JSON.stringify([`bound:${NOW + MIN}`, `bound:${NOW + 2 * MIN + 30_000}`].sort()));
+    expect(counters(x.box)['export_segment_missing'], 'one check, however many steps and however its missing set moved').toBe(1);
+  }, 300_000);
+
+  it('D-5395 at every commit: a busy at any BEGIN of the check leaves no live blob unmarked under marked entries, and the next step ends where an uninterrupted check does', async () => {
+    const NOW = Date.now();
+    const ctl = await lostBox('ccrc-history-export-bindtx-ctl-', { lost: 6, zBytes: 1000 });
+    await bind(ctl.box, NOW + MIN);
+    await onStore(ctl.box, (db) => SW.exportStep(db, exportCtx(ctl.box, ctl.ids, () => NOW + 2 * MIN, { deps: { exportBindBytes: 2000 } })));
+    for (const nth of [2, 3, 4, 5]) {
+      const x = await lostBox(`ccrc-history-export-bindtx${nth}-`, { lost: 6, zBytes: 1000 });
+      await bind(x.box, NOW + MIN);
+      const err = await onStore(x.box, (db) => {
+        busyAt(db, nth);
+        return SW.exportStep(db, exportCtx(x.box, x.ids, () => NOW + 2 * MIN, { deps: { exportBindBytes: 2000 } })).then(() => null, (e: unknown) => e);
+      }) as { errcode?: number } | null;
+      expect(err?.errcode, `busy at BEGIN ${nth} was not rethrown`).toBe(5);
+      expect(strandedBlobs(x.box), `D-5395 at every commit point (busy at BEGIN ${nth})`).toEqual([]);
+      expect(metaOf(x.box, 'export_marks_checked_binds'), `a check that met busy at BEGIN ${nth} is not done`).toBeNull();
+      await onStore(x.box, (db) => SW.exportStep(db, exportCtx(x.box, x.ids, () => NOW + 3 * MIN, { deps: { exportBindBytes: 2000 } })));
+      expect(endState(x), `busy at BEGIN ${nth}, then the next step`).toEqual(endState(ctl));
+    }
+  }, 300_000);
+
+  for (const killAt of [1, 4] as const) {
+    it(`a kill after batch ${killAt} of 4, then the next step: the same marks, meta and counter as one uninterrupted check, and D-5395 holds at the kill`, async () => {
+      const NOW = Date.now();
+      const a = await lostBox(`ccrc-history-export-bindkill${killAt}-`, { lost: 6, zBytes: 1000 });
+      const b = await lostBox(`ccrc-history-export-bindnokill${killAt}-`, { lost: 6, zBytes: 1000 });
+      for (const x of [a, b]) await bind(x.box, NOW + MIN);
+      const r = killAfterBatch(a.box, a.ids, NOW + 2 * MIN, 2000, killAt);
+      expect(r.signal, `${r.stdout}\n${r.stderr}`).toBe('SIGKILL');
+      expect(strandedBlobs(a.box), 'D-5395 at the kill').toEqual([]);
+      expect(metaOf(a.box, 'export_marks_checked_binds'), 'a killed check is not done').toBeNull();
+      expect(counters(a.box)['export_segment_missing'], 'the first batch that cleared counted the check before the kill').toBe(1);
+      for (const x of [a, b]) await onStore(x.box, (db) => SW.exportStep(db, exportCtx(x.box, x.ids, () => NOW + 3 * MIN, { deps: { exportBindBytes: 2000 } })));
+      expect(endState(a), 'killed, then resumed').toEqual(endState(b));
+      expect(endState(b)).toMatchObject({ missing: '13', stop: null, counted: null, counter: 1 });
+    }, 300_000);
+  }
+
+  it('each batch is one page of a blob_id keyset, then of an entry_id keyset, cut at the byte bound (always one row) and the row cap; marks a present segment holds stay; each page seeks by the primary key', async () => {
+    const NOW = Date.now();
+    const x = await lostBox('ccrc-history-export-bindkeyset-', { lost: 5, zBytes: 1000, kept: 5, stubs: 2 });
+    await bind(x.box, NOW + MIN);
+    const batches: Array<{ ids: number; bytes: number }> = [];
+    const plans = await onStore(x.box, async (db) => {
+      const watch = counting(db);
+      await SW.exportStep(watch.db, exportCtx(x.box, x.ids, () => NOW + 2 * MIN, {
+        deps: { exportBindBytes: 2500, exportBindBatch: 3, afterMarkBatch: (m: { ids: number; bytes: number }) => { batches.push({ ids: m.ids, bytes: m.bytes }); } },
+      }));
+      return { blobs: watch.calls.find((c) => c.text.startsWith('SELECT blob_id AS id'))!.text, entries: watch.calls.find((c) => c.text.startsWith('SELECT entry_id AS id'))!.text };
+    });
+    // The plans on the store's schema with no statistics: this fixture's own sqlite_stat1, taken while the store held one row,
+    // makes any plan a scan (measured), so the seek is read where only the SQL decides it.
+    const schema = new MemDb(':memory:');
+    let explained: { blobs: string; entries: string };
+    try {
+      for (const m of MIGRATIONS) schema.exec(m);
+      const plan = (sql: string): string => (schema.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(0, '[]', 1) as Array<{ detail: string }>).map((p) => p.detail).join(' | ');
+      explained = { blobs: plan(plans.blobs), entries: plan(plans.entries) };
+    } finally {
+      schema.close();
+    }
+    // lost blobs of 1000 bytes interleaved with kept ones, then two stubs: 2500 bytes take two lost blobs, twice; then the last
+    // lost blob and both stubs (0 bytes) fill the cap of three; then the entry marked S1 itself
+    expect(batches).toEqual([{ ids: 2, bytes: 2000 }, { ids: 2, bytes: 2000 }, { ids: 3, bytes: 1000 }, { ids: 1, bytes: 0 }]);
+    expect(explained.blobs, 'the blob page seeks by blob_id').toContain('SEARCH blobs USING INTEGER PRIMARY KEY (rowid>?)');
+    expect(explained.entries, 'the entry page seeks by entry_id').toContain('SEARCH entries USING INTEGER PRIMARY KEY (rowid>?)');
+    expect(q(x.box, 'SELECT count(*) AS n FROM blobs WHERE exported_seg = ?', x.S1)[0]!['n'], 'every lost blob mark is cleared').toBe(0);
+    expect(q(x.box, 'SELECT count(*) AS n FROM blobs WHERE exported_seg = ?', x.S2)[0]!['n'], 'every blob S2 holds keeps its mark').toBe(6);
+    expect(q(x.box, 'SELECT count(*) AS n FROM entries WHERE exported_seg = ?', x.S2)[0]!['n'], 'the entries over kept blobs keep theirs').toBe(5);
+    expect(metaOf(x.box, HEALTH_META.exportSegmentMissing), 'seven blob marks, their seven referrers and the entry marked S1').toBe('15');
+    expect(metaOf(x.box, HEALTH_META.exportMarksCheck)).toBeNull();
+    expect(strandedBlobs(x.box)).toEqual([]);
+  }, 120_000);
+
+  it('one TRUNCATE checkpoint after each batch keeps the WAL to about a batch: 2,000 blobs of 8 KiB at 1 MiB a batch peak under 2 MiB at a commit, and leave 0 bytes after each checkpoint', async () => {
+    const NOW = Date.now();
+    const x = await lostBox('ccrc-history-export-bindwal-', { lost: 2000, zBytes: 8192 });
+    await onStore(x.box, (db) => {
+      setMeta(db, `bound:${NOW + MIN}`, 'restore');
+      db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get();
+    });
+    const wal = historyPaths(x.box.home).wal;
+    const size = (): number => { try { return fs.statSync(wal).size; } catch { return 0; } };
+    const atCommit: number[] = [];
+    const afterBatch: number[] = [];
+    const checkpoints = await onStore(x.box, async (db) => {
+      const realExec = db.exec.bind(db);
+      (db as unknown as { exec: (sql: string) => void }).exec = (sql: string): void => { realExec(sql); if (sql === 'COMMIT') atCommit.push(size()); };
+      const watch = counting(db);
+      await SW.exportStep(watch.db, exportCtx(x.box, x.ids, () => NOW + 2 * MIN, { deps: { exportBindBytes: 1024 * 1024, afterMarkBatch: () => { afterBatch.push(size()); } } }));
+      return watch.ran.filter((t) => t === 'PRAGMA wal_checkpoint(TRUNCATE)').length;
+    });
+    expect(afterBatch, '16 batches of 128 blobs, then the entry marked S1').toHaveLength(17);
+    expect(Math.max(...atCommit), `the WAL at each commit: ${atCommit.join(',')}`).toBeLessThan(2 * 1024 * 1024);
+    expect(afterBatch.every((n) => n === 0), `the WAL after each checkpoint: ${afterBatch.join(',')}`).toBe(true);
+    expect(checkpoints, 'one checkpoint a batch, and one before the first').toBe(afterBatch.length + 1);
+    expect(metaOf(x.box, HEALTH_META.exportMarksCheck)).toBeNull();
+  }, 300_000);
+
+  it('a reader on an older snapshot: each checkpoint answers busy at once (busy_timeout 0 around it, the writer\'s restored after), the check stops wal-held once the WAL passes the ceiling, and the next step after the reader ends finishes', async () => {
+    const NOW = Date.now();
+    const x = await lostBox('ccrc-history-export-bindheld-', { lost: 40, zBytes: 8192 });
+    await bind(x.box, NOW + MIN);
+    const deps = { exportBindBytes: 16 * 1024, exportBindWalCeiling: 64 * 1024 };
+    const reader = new MemDb(historyPaths(x.box.home).dbFile, { readOnly: true });
+    let ms = 0;
+    let timeout = 0;
+    let firstStep: { record: string | null; left: number } = { record: null, left: -1 };
+    try {
+      reader.exec('BEGIN');
+      reader.prepare('SELECT count(*) AS n FROM blobs').get();   // holds its snapshot until it closes
+      const t0 = Date.now();
+      timeout = await onStore(x.box, async (db) => {
+        await SW.exportStep(db, exportCtx(x.box, x.ids, () => NOW + 2 * MIN, { deps }));
+        return Number((db.prepare('PRAGMA busy_timeout').get() as { timeout: number }).timeout);
+      });
+      ms = Date.now() - t0;
+      // D-5639: a second step with the reader STILL open, at a later now. The WAL the first step could not truncate stands past
+      // the ceiling, so the step's checkpoint before its first batch measures it and the check stops wal-held without writing
+      // one: the cleared count, the marks and the record's since all stay as the first step left them.
+      firstStep = { record: metaOf(x.box, HEALTH_META.exportMarksCheck), left: Number(q(x.box, 'SELECT count(*) AS n FROM blobs WHERE exported_seg = ?', x.S1)[0]!['n']) };
+      await onStore(x.box, (db) => SW.exportStep(db, exportCtx(x.box, x.ids, () => NOW + 2 * MIN + 30_000, { deps })));
+    } finally {
+      reader.close();
+    }
+    expect(firstStep.record ?? 'no stop', 'the first step stopped wal-held').toMatch(new RegExp(`^wal-held ${NOW + 2 * MIN} [1-9][0-9]*$`));
+    expect(q(x.box, 'SELECT count(*) AS n FROM blobs WHERE exported_seg = ?', x.S1)[0]!['n'], 'the second step, behind the held WAL, cleared nothing: no batch ran').toBe(firstStep.left);
+    expect(metaOf(x.box, HEALTH_META.exportMarksCheck), 'and its record keeps its since and its cleared count').toBe(firstStep.record);
+    expect(ms, 'a busy checkpoint waited for the reader').toBeLessThan(5000);
+    expect(timeout, 'the writer\'s busy_timeout is restored').toBe(x9Lib.BUSY_TIMEOUT_MS);
+    expect(metaOf(x.box, HEALTH_META.exportMarksCheck) ?? 'no stop', 'stopped at the WAL ceiling').toMatch(new RegExp(`^wal-held ${NOW + 2 * MIN} [1-9][0-9]*$`));
+    const left = Number(q(x.box, 'SELECT count(*) AS n FROM blobs WHERE exported_seg = ?', x.S1)[0]!['n']);
+    expect(left, 'some batches ran, and not all').toBeGreaterThan(0);
+    expect(left).toBeLessThan(40);
+    expect(metaOf(x.box, 'export_marks_checked_binds')).toBeNull();
+    expect(strandedBlobs(x.box)).toEqual([]);
+    await onStore(x.box, (db) => SW.exportStep(db, exportCtx(x.box, x.ids, () => NOW + 3 * MIN, { deps })));
+    expect(metaOf(x.box, HEALTH_META.exportMarksCheck), 'with the reader gone the check ends').toBeNull();
+    expect(q(x.box, 'SELECT count(*) AS n FROM blobs WHERE exported_seg = ?', x.S1)[0]!['n']).toBe(0);
+    expect(metaOf(x.box, HEALTH_META.exportSegmentMissing), 'forty blobs, forty referrers and the entry marked S1').toBe('81');
+  }, 300_000);
+
+  it('a stop record standing when no check is owed (a B4 build finished the check without deleting it, before a roll-forward) is deleted by the next step with the once-a-check flag, and status shows neither word', async () => {
+    const { box, ids } = ingestedBox('ccrc-history-export-bindstale-', [row(1, 'one', DAY)]);
+    const NOW = Date.now();
+    await onStore(box, (db) => {
+      // every bind fact covered by the last check's record, so lib decideMarkCheck owes no check
+      setMeta(db, `bound:${NOW - DAY}`, 'restore');
+      setMeta(db, 'export_marks_checked_binds', JSON.stringify([`bound:${NOW - DAY}`]));
+      setMeta(db, HEALTH_META.exportMarksCheck, `wal-held ${NOW - 2 * DAY} 5`);
+      setMeta(db, 'export_marks_counted', '1');
+    });
+    await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, () => NOW + 2 * MIN)));
+    expect(metaOf(box, 'export_marks_checked_ms'), 'CONTROL: no check was owed, so none ran').toBeNull();
+    expect(metaOf(box, HEALTH_META.exportMarksCheck), 'a stop record no owed check stands behind is deleted').toBeNull();
+    expect(metaOf(box, 'export_marks_counted'), 'and the once-a-check flag with it').toBeNull();
+    const st = runCli(box, ['status', '--json']);
+    expect(st.code, `${st.stdout}\n${st.stderr}`).toBe(0);
+    const health = (st.json as unknown as { health: { warn: Array<{ word: string }>; fail: Array<{ word: string }> } }).health;
+    const words = [...health.warn, ...health.fail].map((i) => i.word);
+    expect(words).not.toContain('export-marks-unchecked');
+    expect(words).not.toContain('export-marks-stalled');
+  }, 120_000);
+
+  it('a once-a-check flag standing alone when no check is owed (a check killed after a batch, then finished by a B4 build after a rollback) is deleted by the next step, so the next check counts once', async () => {
+    const { box, ids } = ingestedBox('ccrc-history-export-bindflag-', [row(1, 'one', DAY)]);
+    const NOW = Date.now();
+    const s1 = `1.${ids.writer}.db`;
+    await onStore(box, (db) => SW.exportPass(db, exportCtx(box, ids, () => NOW)));
+    expect(Object.values(marks(box))).toEqual([s1]);
+    await onStore(box, (db) => {
+      // every bind fact covered, no stop record, and the flag a killed check left
+      setMeta(db, `bound:${NOW - DAY}`, 'restore');
+      setMeta(db, 'export_marks_checked_binds', JSON.stringify([`bound:${NOW - DAY}`]));
+      setMeta(db, 'export_marks_counted', '1');
+    });
+    await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, () => NOW + 2 * MIN)));
+    expect(metaOf(box, 'export_marks_checked_ms'), 'CONTROL: no check was owed, so none ran').toBeNull();
+    expect(metaOf(box, 'export_marks_counted'), 'a once-a-check flag no owed check stands behind is deleted').toBeNull();
+    // a later bind with the segment gone: its check clears the mark and counts itself
+    fs.rmSync(path.join(exportDirOf(box), s1));
+    await bind(box, NOW + 3 * MIN);
+    await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, () => NOW + 4 * MIN)));
+    expect(Object.values(marks(box)), 'CONTROL: the later check cleared the gone segment\'s mark').toEqual([null]);
+    expect(counters(box)['export_segment_missing'], 'the later check counted itself once (O39)').toBe(1);
+  }, 120_000);
+
+  it('history-off planted between two batches stops the check before the next (off), keeping what it cleared; the next step after it goes finishes', async () => {
+    const NOW = Date.now();
+    const x = await lostBox('ccrc-history-export-bindoff-', { lost: 6, zBytes: 1000 });
+    await bind(x.box, NOW + MIN);
+    const off = historyPaths(x.box.home).off;
+    await onStore(x.box, (db) => SW.exportStep(db, exportCtx(x.box, x.ids, () => NOW + 2 * MIN, { deps: { exportBindBytes: 2000, afterMarkBatch: () => { fs.writeFileSync(off, ''); } } })));
+    expect(metaOf(x.box, HEALTH_META.exportMarksCheck), 'history-off stopped the check after its first batch').toBe(`off ${NOW + 2 * MIN} 4`);
+    expect(metaOf(x.box, 'export_marks_checked_binds')).toBeNull();
+    expect(strandedBlobs(x.box)).toEqual([]);
+    fs.rmSync(off);
+    await onStore(x.box, (db) => SW.exportStep(db, exportCtx(x.box, x.ids, () => NOW + 3 * MIN, { deps: { exportBindBytes: 2000 } })));
+    expect(metaOf(x.box, HEALTH_META.exportMarksCheck)).toBeNull();
+    expect(metaOf(x.box, HEALTH_META.exportSegmentMissing)).toBe('13');
+  }, 120_000);
+
+  it('any other error between batches is counted and recorded failed with one stderr line; the batch before it stays committed, and the next step finishes', async () => {
+    const NOW = Date.now();
+    const x = await lostBox('ccrc-history-export-bindfail-', { lost: 6, zBytes: 1000 });
+    await bind(x.box, NOW + MIN);
+    let seen = 0;
+    const err = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    let lines: string[] = [];
+    try {
+      await onStore(x.box, (db) => SW.exportStep(db, exportCtx(x.box, x.ids, () => NOW + 2 * MIN, {
+        deps: { exportBindBytes: 2000, afterMarkBatch: () => { if ((seen += 1) === 1) throw new Error('a fault between two batches'); } },
+      })));
+      lines = err.mock.calls.map((c) => String(c[0])).filter((l) => l.startsWith('history-sweep: the export marks could not be checked'));
+    } finally {
+      err.mockRestore();
+    }
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('a fault between two batches');
+    expect(counters(x.box)['export_marks_check_failed']).toBe(1);
+    expect(metaOf(x.box, HEALTH_META.exportMarksCheck), 'the stop is recorded with the count').toBe(`failed ${NOW + 2 * MIN} 0`);
+    expect(metaOf(x.box, HEALTH_META.exportSegmentMissing), 'the batch before the fault committed').toBe('4');
+    expect(strandedBlobs(x.box)).toEqual([]);
+    await onStore(x.box, (db) => SW.exportStep(db, exportCtx(x.box, x.ids, () => NOW + 3 * MIN, { deps: { exportBindBytes: 2000 } })));
+    expect(metaOf(x.box, HEALTH_META.exportMarksCheck)).toBeNull();
+    expect(metaOf(x.box, HEALTH_META.exportSegmentMissing)).toBe('13');
+  }, 120_000);
+
+  it('R3: the export pass still runs in a step whose check stopped short, and nothing is lost: the rows the check cleared go into the next segment, the rest after the check ends', async () => {
+    const { box, ids } = ingestedBox('ccrc-history-export-bindpass-', [row(1, 'one', DAY), row(2, 'two', DAY)]);
+    const NOW = Date.now();
+    const s1 = `1.${ids.writer}.db`;
+    const s2 = `2.${ids.writer}.db`;
+    const s3 = `3.${ids.writer}.db`;
+    await onStore(box, (db) => SW.exportPass(db, exportCtx(box, ids, () => NOW)));
+    expect(Object.values(marks(box))).toEqual([s1, s1]);
+    fs.rmSync(path.join(exportDirOf(box), s1));
+    await bind(box, NOW + MIN);
+    const T = NOW + 2 * HOUR;
+    const deps = { statfs: roomy, exportBindBytes: 1, exportBindWalCeiling: 1 };   // one blob a batch; any held WAL stops it
+    const reader = new MemDb(historyPaths(box.home).dbFile, { readOnly: true });
+    let r: PassResult | null;
+    try {
+      reader.exec('BEGIN');
+      reader.prepare('SELECT count(*) AS n FROM blobs').get();
+      r = await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, () => T, { deps })));
+    } finally {
+      reader.close();
+    }
+    expect(metaOf(box, HEALTH_META.exportMarksCheck) ?? 'no stop', 'the check stopped after one batch').toMatch(new RegExp(`^wal-held ${T} 2$`));
+    expect(r, 'R3: the pass ran behind a check that stopped short').toMatchObject({ state: 'written', segment: s2, rows: 1 });
+    expect(marks(box)).toEqual({ [rid(1)]: s2, [rid(2)]: s1 });
+    expect(strandedBlobs(box)).toEqual([]);
+    await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, () => T + MIN, { deps })));
+    expect(metaOf(box, HEALTH_META.exportMarksCheck), 'with the reader gone the check ends').toBeNull();
+    expect(marks(box), 'only the missing segment\'s marks go; the new segment\'s stay').toEqual({ [rid(1)]: s2, [rid(2)]: null });
+    await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, () => T + 61 * MIN, { deps })));
+    expect(marks(box)).toEqual({ [rid(1)]: s2, [rid(2)]: s3 });
+    expect(strandedBlobs(box)).toEqual([]);
+  }, 300_000);
 });

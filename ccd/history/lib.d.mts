@@ -454,6 +454,7 @@ export const HEALTH_META: Readonly<{
   exportDueOldestMs: 'export_due_oldest_ms';
   exportPaused: 'export_paused';
   heldPassMs: 'held_pass_ms';
+  exportMarksCheck: 'export_marks_check';
 }>;
 export const HEALTH_COUNTERS: Readonly<{
   blobUndecodable: 'blob_undecodable';
@@ -978,3 +979,17 @@ export function decideSegmentReplay(i: { meta: { storeId: string; format: number
 export const EXPORT_DUE_OLDEST_UNMEASURED: 'unmeasured';
 export function exportDueOldestMeta(due: number, dueOldestMs: number | null): string;
 export function readExportDueOldest(v: string | undefined): number | null | 'unmeasured';
+
+// --- W5h-1 Task 1: the check after a bind, in bounded batches (D-5632 (history-export-bind-check-batched))
+export const EXPORT_BIND_BYTES: number;
+export const EXPORT_BIND_WAL_CEILING: number;
+export const EXPORT_BIND_BATCH: number;
+export const EXPORT_MARKS_STALL_MS: number;
+export type MarkCheckWord = 'budget' | 'off' | 'wal-held' | 'unlistable' | 'failed';
+export const MARK_CHECK_WORDS: readonly MarkCheckWord[];
+export interface MarkCheckState { word: MarkCheckWord; sinceMs: number; cleared: number }
+export function markCheckStop(i: { budgetLeft: boolean; off: boolean; walBytes: number; walCeiling: number }): null | 'budget' | 'off' | 'wal-held';
+export function planMarkCheckBatch(i: { rows: readonly { id: number; bytes: number }[]; maxBytes: number; maxRows: number }): { ids: number[]; bytes: number; after: number | null };
+export function formatMarkCheckState(s: MarkCheckState): string;
+export function parseMarkCheckState(v: string | null): MarkCheckState | null;
+export function nextMarkCheckState(i: { recorded: string | null; word: MarkCheckWord; nowMs: number; cleared: number }): MarkCheckState;

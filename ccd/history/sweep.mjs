@@ -63,6 +63,7 @@ import {
   EXPORT_DIR, EXPORT_SEGMENT_MAX_BYTES, EXPORT_SEGMENT_FORMAT, segmentName, nextSegmentSeq, planSegment, budgetHeldPass, CLAUDE_CODE_DEFAULT_RETENTION_DAYS,
   shortestRetention, exportHorizonDays, decideExportPass, planExportRoom, exportPassIntervalMs, exportMarkFailsOf, decideMarkOutcome,
   decideMarkCheck, missingSegmentNames, deadFileSourceKey, decideSegmentReplay, orderSegmentNames, entryMayHoldMark, segmentMayMarkEntry,
+  BUSY_TIMEOUT_MS, EXPORT_BIND_BATCH, EXPORT_BIND_BYTES, EXPORT_BIND_WAL_CEILING, markCheckStop, planMarkCheckBatch, formatMarkCheckState, nextMarkCheckState,
 } from './lib.mjs';
 import {
   MIGRATIONS, OWED_INDEX, StoreError, bump, clearDoneMarkers, closeWriter, createStore, dropPending, finishPending, getMeta,
@@ -8675,8 +8676,26 @@ export async function exportStep(db, ctx) {
     try { checkSegmentMarks(db, ctx, markCheck.record); } catch (e) {
       if (isBusy(e)) throw e;
       process.stderr.write(`history-sweep: the export marks could not be checked against ${exportDirFor(ctx.paths, ctx.ids.storeId)}: ${e && e.message ? e.message : String(e)}\n`);
-      countOutside(db, 'export_marks_check_failed');
+      // D-5632 (history-export-bind-check-batched): counted, and the check's stop recorded beside the count (HEALTH_META.exportMarksCheck),
+      // `unlistable` for a listing that failed and `failed` for any other caught error; best effort, as countOutside is.
+      try {
+        withTx(db, 'NORMAL', () => {
+          bump(db, 'export_marks_check_failed');
+          noteMarkCheckStop(db, ctx, e instanceof SegmentsUnlistable ? 'unlistable' : 'failed', 0);
+        });
+      } catch { /* counted and recorded on the next step that meets it */ }
     }
+  }
+  // D-5632 (history-export-bind-check-batched): no check is owed, so no stop record and no once-a-check flag may stand.
+  // A build that finished the check without deleting them (B4, after a rollback and a roll-forward) leaves a record that
+  // would age into doctor's export-marks-stalled, or, after a check killed between two batches, the flag alone; both are
+  // deleted whichever of the two stands, so the next check counts once.
+  if (!markCheck.check && (getMeta(db, HEALTH_META.exportMarksCheck) !== null || getMeta(db, EXPORT_MARKS_COUNTED_META) !== null)) {
+    withTx(db, 'NORMAL', () => {
+      const del = db.prepare('DELETE FROM meta WHERE k = ?');
+      del.run(HEALTH_META.exportMarksCheck);
+      del.run(EXPORT_MARKS_COUNTED_META);
+    });
   }
   const nowMs = ctx.now();
   const msOf = (k) => {
@@ -8727,11 +8746,59 @@ const EXPORT_MARKS_CHECKED_META = 'export_marks_checked_ms';
 /** meta: the bind facts the last check covered, as lib decideMarkCheck's `record` gives them (a JSON list of
  *  `bound:<ms>` keys). */
 const EXPORT_MARKS_CHECKED_BINDS_META = 'export_marks_checked_binds';
-/** Lost live blob ids the bind check hands the referrer clears at a time (D-5395 (history-export-mark-needs-its-blobs)):
- *  bound as one JSON array a batch, so the check's memory is a batch and never every lost blob of a store (1,000,000 of them
- *  cost 609 MB of rows and 3,000,000 over 1.3 GB, past the unit's memory cap; a smaller old-space limit aborted the process
- *  inside the transaction). An in-process test's ctx.deps.exportBindBatch overrides it (D-4247). */
-const EXPORT_BIND_BATCH = 50_000;
+/** meta: set in the transaction of the first batch of a check after a bind that clears any mark, and deleted by the check's
+ *  done stamp: export_segment_missing is bumped once per check, however many batches and steps it takes, a kill between two
+ *  batches included (O39; D-5632 (history-export-bind-check-batched)). */
+const EXPORT_MARKS_COUNTED_META = 'export_marks_counted';
+/** One page of the check's blob keyset: the blobs whose mark names a missing segment, pruned ones too (D-5396), from
+ *  blob_id `after` on, with their stored length (0 for a pruned blob, so a NULL length never reaches lib). */
+const MARK_CHECK_BLOB_PAGE_SQL = 'SELECT blob_id AS id, coalesce(length(z), 0) AS bytes FROM blobs WHERE blob_id > ? AND exported_seg IN (SELECT value FROM json_each(?)) ORDER BY blob_id LIMIT ?';
+/** The same over the entries marked with a missing segment themselves; an entry is bounded by rows only. */
+const MARK_CHECK_ENTRY_PAGE_SQL = 'SELECT entry_id AS id, 0 AS bytes FROM entries WHERE entry_id > ? AND exported_seg IN (SELECT value FROM json_each(?)) ORDER BY entry_id LIMIT ?';
+
+/** export/<store_id>/ could not be listed (listSegments threw: ENOTDIR, EACCES and the rest, never ENOENT). Its message is
+ *  the listing's own, so the step's stderr line names the cause; exportStep records the stop as `unlistable`. */
+class SegmentsUnlistable extends Error {
+  constructor(cause) {
+    super(cause && cause.message ? cause.message : String(cause), { cause });
+    this.name = 'SegmentsUnlistable';
+  }
+}
+
+/** After a batch of the check commits: a TRUNCATE checkpoint under busy_timeout 0, so a reader on an older snapshot answers
+ *  busy at once instead of after BUSY_TIMEOUT_MS (measured: 30 s a batch), with the writer's timeout restored whatever
+ *  happened. A busy answer is tolerated, never thrown. Answers the WAL bytes the checkpoint could not truncate: 0 when it
+ *  did, the log's frames times the page size when it answered busy, which lib markCheckStop reads against the ceiling. */
+function truncateWalAfterBatch(db, pageSize) {
+  db.exec('PRAGMA busy_timeout = 0');
+  try {
+    const r = db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get();
+    return Number(r.busy) === 0 ? 0 : Math.max(0, Number(r.log)) * pageSize;
+  } finally {
+    db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
+  }
+}
+
+/** A batch's cleared marks, in the batch's transaction: HEALTH_META.exportSegmentMissing ACCUMULATES them (the marks
+ *  cleared since the last complete pass, which resets it to 0), and the first batch of a check that clears any bumps
+ *  export_segment_missing, once (EXPORT_MARKS_COUNTED_META). */
+function noteMarksCleared(db, n) {
+  if (n === 0) return;
+  const prev = getMeta(db, HEALTH_META.exportSegmentMissing);
+  setMeta(db, HEALTH_META.exportSegmentMissing, String((prev !== null && /^[0-9]{1,16}$/.test(prev) ? Number(prev) : 0) + n));
+  if (getMeta(db, EXPORT_MARKS_COUNTED_META) === null) {
+    bump(db, 'export_segment_missing');
+    setMeta(db, EXPORT_MARKS_COUNTED_META, '1');
+  }
+}
+
+/** A check that stopped short records why, in the caller's transaction: HEALTH_META.exportMarksCheck, lib's
+ *  nextMarkCheckState over what meta holds (the word; since when its class of word first stood, kept within a class and
+ *  restarted across classes; the marks cleared so far, added) in formatMarkCheckState's grammar. */
+function noteMarkCheckStop(db, ctx, word, cleared) {
+  const next = nextMarkCheckState({ recorded: getMeta(db, HEALTH_META.exportMarksCheck), word, nowMs: ctx.now(), cleared });
+  setMeta(db, HEALTH_META.exportMarksCheck, formatMarkCheckState(next));
+}
 
 /** The meta keys that may be bind facts: every adopt, restore and rebuild writes `bound:<ms>` inside its binding
  *  transaction (B2's D-4724 (history-binding-facts-before-link)). A measurement only: lib decideMarkCheck says which are facts.
@@ -8740,68 +8807,92 @@ function bindFactKeys(db) {
   return db.prepare("SELECT k FROM meta WHERE k LIKE 'bound:%'").all().map((r) => String(r.k));
 }
 
-/** §9.15 "After a bind": every blob and entry mark whose segment is not in export/<store_id>/ on THIS box is cleared,
- *  so its rows export again. A directory left on the box the store came from is the usual cause; carrying it before
- *  the verb avoids the re-export (§8.4). Which names are missing is lib missingSegmentNames' answer over the marked
- *  names and the listing measured here. One NORMAL transaction; when anything was cleared, export_segment_missing +1
- *  and HEALTH_META.exportSegmentMissing holds how many marks, which doctor WARNs on until a complete pass resets it.
- *  Either way it records its clock and `record`, the bind facts lib decideMarkCheck says it covers. Two DISTINCT scans
- *  of exported_seg per bind, blobs then entries, and one more of the blobs and one of the entries for the missing segments
- *  together (the blobs their marks name, then the marks themselves); neither column has an index and none is added. An entry
- *  that references a blob whose mark went, pruned or live, loses its own mark with it, whichever segment marked it
- *  (D-5395 (history-export-mark-needs-its-blobs), D-5396 (history-export-bind-clears-pruned-referrers)), and
- *  those entries count in the number cleared. A directory that is
- *  absent (ENOENT) lists as none, so every mark naming a segment is missing; one that cannot be listed for any other
- *  reason (ENOTDIR, EACCES) is NOT absent: listSegments throws, before anything is cleared or recorded, and exportStep
- *  counts it and tries again next step. */
+/** §9.15 "After a bind": every blob and entry mark whose segment is not in export/<store_id>/ on THIS box is cleared, so its
+ *  rows export again. A directory left on the box the store came from is the usual cause; carrying it before the verb avoids
+ *  the re-export (§8.4). Which names are missing is lib missingSegmentNames' answer over the marked names (two DISTINCT
+ *  scans of exported_seg, blobs then entries; no index, none added) and the listing measured here, recomputed on every step:
+ *  no cursor is kept, and rows a step already cleared no longer match.
+ *
+ *  In bounded batches (D-5632 (history-export-bind-check-batched)), blobs first and then entries, each paged by its primary
+ *  key from the first row. A blob batch is one NORMAL transaction that reads its page, takes what lib planMarkCheckBatch
+ *  says (EXPORT_BIND_BYTES of stored z, at most EXPORT_BIND_BATCH rows, always one), clears the marks of every entry that
+ *  references one of those blobs (the four referrer statements, D-5395 (history-export-mark-needs-its-blobs), pruned blobs
+ *  included, D-5396 (history-export-bind-clears-pruned-referrers)) and THEN the blobs' own marks, so no commit leaves a live
+ *  blob unmarked under marked entries. An entry batch clears the marks naming a missing segment on the entries themselves.
+ *  Each batch adds its count to HEALTH_META.exportSegmentMissing and its stored bytes to the run's budget, and is followed by
+ *  a TRUNCATE checkpoint that a reader may answer busy. Before each batch lib markCheckStop decides whether it may start:
+ *  history-off (`off`), a WAL the last checkpoint could not truncate past EXPORT_BIND_WAL_CEILING (`wal-held`) or a spent
+ *  run budget (`budget`) stops the check, recorded in HEALTH_META.exportMarksCheck, with no done stamp, so the next step
+ *  checks again. After the last batch, one transaction stamps export_marks_checked_ms and `record` (the bind facts lib
+ *  decideMarkCheck says this check covers) and deletes the stop record and the once-a-check flag.
+ *
+ *  Outside db/'s free-space floor, as the export pass is (D-4762 (history-export-outside-capture-pause)): one batch's WAL is
+ *  17.4 MiB for a full 16 MiB batch of 8 KiB blobs and 23.2 MiB for a batch of 50,000 blobs of 300 B with their referrers (both
+ *  measured, truncated after each batch), under the writer's journal_size_limit. A directory that is absent (ENOENT) lists as none, so every
+ *  mark naming a segment is missing; one that cannot be listed for any other reason throws SegmentsUnlistable before
+ *  anything is cleared or recorded. Answers what it cleared in this step, the missing names, and the word it stopped with
+ *  (null when it ran to its done stamp). */
 export function checkSegmentMarks(db, ctx, record) {
   const dir = exportDirFor(ctx.paths, ctx.ids.storeId);
-  const present = listSegments(dir).map((x) => x.name);   // [] only for a proven ENOENT; ENOTDIR, EACCES and the rest throw
+  let present;
+  try { present = listSegments(dir).map((x) => x.name); } catch (e) { throw new SegmentsUnlistable(e); }   // [] only for ENOENT
   const named = new Set();
   for (const r of db.prepare('SELECT DISTINCT exported_seg AS seg FROM blobs WHERE exported_seg IS NOT NULL').all()) named.add(String(r.seg));
   for (const r of db.prepare('SELECT DISTINCT exported_seg AS seg FROM entries WHERE exported_seg IS NOT NULL').all()) named.add(String(r.seg));
   const segments = missingSegmentNames({ named, present });
+  const names = JSON.stringify(segments);
+  // ctx.deps.exportBindBatch, exportBindBytes and exportBindWalCeiling are an in-process test's bounds (D-4247); shipped code
+  // reads lib's.
+  const seam = (v, d) => (Number.isSafeInteger(v) && v > 0 ? v : d);
+  const maxRows = seam(ctx.deps?.exportBindBatch, EXPORT_BIND_BATCH);
+  const maxBytes = seam(ctx.deps?.exportBindBytes, EXPORT_BIND_BYTES);
+  const walCeiling = seam(ctx.deps?.exportBindWalCeiling, EXPORT_BIND_WAL_CEILING);
+  const pageSize = Number(db.prepare('PRAGMA page_size').get().page_size);
   let cleared = 0;
+  let walBytes = 0;
+  /** One phase's batches until its keyset is spent (null) or a stop word. */
+  const phase = (pageSql, clearBatch) => {
+    const page = db.prepare(pageSql);
+    let after = 0;
+    for (;;) {
+      const word = markCheckStop({ budgetLeft: budgetLeft(ctx.budget), off: existsSync(ctx.paths.off), walBytes, walCeiling });
+      if (word !== null) return word;
+      const b = withTx(db, 'NORMAL', () => {
+        const plan = planMarkCheckBatch({ rows: page.all(after, names, maxRows), maxBytes, maxRows });
+        if (plan.ids.length === 0) return null;
+        const n = clearBatch(plan.ids);
+        noteMarksCleared(db, n);
+        return { ...plan, n };
+      });
+      if (b === null) return null;
+      cleared += b.n;
+      ctx.budget.bytes += b.bytes;
+      after = b.after;
+      walBytes = truncateWalAfterBatch(db, pageSize);
+      ctx.deps?.afterMarkBatch?.({ ids: b.ids.length, bytes: b.bytes, walBytes });   // an in-process test's hook (D-4247)
+    }
+  };
+  if (segments.length > 0) {
+    const blobClear = db.prepare('UPDATE blobs SET exported_ms = NULL, exported_seg = NULL WHERE blob_id IN (SELECT value FROM json_each(?)) AND exported_seg IN (SELECT value FROM json_each(?))');
+    const entryClear = db.prepare('UPDATE entries SET exported_ms = NULL, exported_seg = NULL WHERE entry_id IN (SELECT value FROM json_each(?)) AND exported_seg IN (SELECT value FROM json_each(?))');
+    // D-5639 (history-export-bind-check-wal-first): measure the WAL before the step's first batch too, with the same busy-tolerant
+    // checkpoint, so a step that starts behind a reader's held WAL past the ceiling stops `wal-held` without writing a batch.
+    walBytes = truncateWalAfterBatch(db, pageSize);
+    const stopped = phase(MARK_CHECK_BLOB_PAGE_SQL, (ids) => clearReferrerMarks(db, ids) + Number(blobClear.run(JSON.stringify(ids), names).changes))
+      ?? phase(MARK_CHECK_ENTRY_PAGE_SQL, (ids) => Number(entryClear.run(JSON.stringify(ids), names).changes));
+    if (stopped !== null) {
+      withTx(db, 'NORMAL', () => noteMarkCheckStop(db, ctx, stopped, cleared));
+      return { cleared, segments, stopped };
+    }
+  }
   withTx(db, 'NORMAL', () => {
-    if (segments.length > 0) {
-      // Set-wise, once for every missing segment (the names bound as one JSON array): one scan of the blobs for the ones
-      // whose marks go, four statements a batch of them for their referrers, then the two clears of the marks themselves. Per
-      // segment and per blob this took 6.7 s on 300,000 blobs and entries over 30 segments (measured), set-wise 1.7 to 2.0 s.
-      const names = JSON.stringify(segments);
-      // D-5395 (history-export-mark-needs-its-blobs), D-5396 (history-export-bind-clears-pruned-referrers): the blobs whose marks
-      // name a missing segment, pruned or live, collected BEFORE their marks go. An entry that references one of them stays
-      // marked with a segment that IS here, and its blob is exported no more, so the entries get their marks cleared with the
-      // blobs'. A pruned blob is no exception: its bytes are gone, but a mark on it means its bytes were exported, and they are
-      // held only by the segment the mark names (a stub is never marked), and an entry exported again later into another
-      // segment does not carry it again (planSegment carries only a live blob with no mark, and stubs every pruned blob with
-      // no mark, on every export of its entry, so a pruned blob with a mark gets neither). With that segment gone no live
-      // segment would hold the blob, and a rebuild from the live segments could not place the entry (export_row_blob_missing)
-      // or its variants. Clearing the entry lets the next pass that finds it due write it again, with a stub of the pruned
-      // blob (D-4759), in the segment that then marks it. Each entry is counted once, here or in the clear of its own
-      // segment's marks below.
-      // Iterated, never materialised, and handed to the clears a batch at a time: the referrer clears touch `entries` only and
-      // the blobs' marks go after the last of them, so the cursor over `blobs` is never written under.
-      const batch = Number.isSafeInteger(ctx.deps?.exportBindBatch) && ctx.deps.exportBindBatch > 0 ? ctx.deps.exportBindBatch : EXPORT_BIND_BATCH;
-      let ids = [];
-      for (const r of db.prepare('SELECT blob_id FROM blobs WHERE exported_seg IN (SELECT value FROM json_each(?))').iterate(names)) {
-        ids.push(Number(r.blob_id));
-        if (ids.length >= batch) {
-          cleared += clearReferrerMarks(db, ids);
-          ids = [];
-        }
-      }
-      cleared += clearReferrerMarks(db, ids);
-      cleared += Number(db.prepare('UPDATE blobs SET exported_ms = NULL, exported_seg = NULL WHERE exported_seg IN (SELECT value FROM json_each(?))').run(names).changes);
-      cleared += Number(db.prepare('UPDATE entries SET exported_ms = NULL, exported_seg = NULL WHERE exported_seg IN (SELECT value FROM json_each(?))').run(names).changes);
-    }
-    if (cleared > 0) {
-      bump(db, 'export_segment_missing');
-      setMeta(db, HEALTH_META.exportSegmentMissing, String(cleared));
-    }
     setMeta(db, EXPORT_MARKS_CHECKED_META, String(ctx.now()));
     setMeta(db, EXPORT_MARKS_CHECKED_BINDS_META, record);
+    const del = db.prepare('DELETE FROM meta WHERE k = ?');
+    del.run(HEALTH_META.exportMarksCheck);
+    del.run(EXPORT_MARKS_COUNTED_META);
   });
-  return { cleared, segments };
+  return { cleared, segments, stopped: null };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
