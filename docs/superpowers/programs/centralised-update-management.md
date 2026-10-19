@@ -2224,6 +2224,15 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         counts only, no behaviour change; it carries #698 too) followed, unapplied; the rollout is the operator's
         (mail 6809). STATUS: fleet and server v0.0.355, newest v0.0.360, stable v0.0.328, intent dev/auto=off,
         backups fleet 178M/server 2835M, disk free fleet 209G/work volume 103G/server 30G, no anomalies.
+      - **21:00 UTC: both boxes moved to v0.0.361 (#736, carrying #711 and #698) by the operator's console tap**,
+        fleet 20:32:44 to 20:34:05, then the server 20:34:23 to 20:35:17; both `done`, `from: pwa`, gates passed,
+        doctor 0 failed on either box; `ccrc.service` restarted 20:34:51. Server backups 3006M (newest 384M), so the
+        next tap trips the probe's 3G flag, as ruled growth. The broker's slow-pass line fires on every pass: after
+        the two boot passes, 19 passes with block mean 4.3 s (max 9.3 s), flush the largest block phase on all 19
+        and rising with events appended, repair at 0 passes (waiting, by the broker's reading rule). Read from the
+        journal only, counts and timings; mail 6833 to the broker's coordinator. STATUS: fleet and server v0.0.361,
+        newest v0.0.361, stable v0.0.328, intent dev/auto=off, backups fleet 179M/server 3006M, disk free fleet
+        207G/work volume 102G/server 30G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
