@@ -876,7 +876,7 @@ _svc_write_session_plist() {   # <unit> -> 0 iff its plist is on disk
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>3</integer>
   <key>AbandonProcessGroup</key><true/>
-  <key>ProcessType</key><string>Background</string>
+  <key>ProcessType</key><string>$(if declare -F _launchd_class >/dev/null; then _launchd_class; else printf Background; fi)</string>
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key><string>$(_svc_job_path)</string>
@@ -14715,8 +14715,8 @@ _inst_caps() {   # what THIS install's ccrc can do (design 2026-09-20 §9, decis
 #
 #   • the two limits.conf drop-ins (MemoryHigh/MemoryMax on the session unit,
 #     aggregate MemoryMax on app-claude\x2dsession.slice) — launchd has no
-#     memory ceiling of any kind. `ProcessType=Background` in the plists below
-#     is the nearest thing macOS offers and it governs CPU/IO scheduling, not
+#     memory ceiling of any kind. `ProcessType` in the plists below
+#     (`_launchd_class`) is the nearest thing macOS offers; it governs CPU/IO, not
 #     memory. A box
 #     running many sessions has no aggregate cap on this platform, and
 #     `ccrc doctor` says so rather than reporting a limit nobody enforces.
@@ -14766,7 +14766,7 @@ _inst_plist_server() {   # <label> <log> -> the plist bytes, on stdout
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>3</integer>
-  <key>ProcessType</key><string>Background</string>
+  <key>ProcessType</key><string>$(if declare -F _launchd_class >/dev/null; then _launchd_class; else printf Background; fi)</string>
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key><string>$(_svc_job_path)</string>
@@ -24284,6 +24284,37 @@ console.log("restamped");
     ccrc-unmodified) echo "restamp: $f: already current" ;;
     foreign)         _ccrc_die "restamp: $f carries no ccrc:generated marker — restamp re-stamps a generated file, it never adopts one" ;;
     *)               _ccrc_die "restamp: $f: unexpected verdict '$verdict'" ;;
+  esac
+}
+
+# THE LAUNCHD CLASS the server, agent and session jobs carry (macOS): the
+# first word of ~/.ccrc/launchd-class. `Background` — the default, and what
+# every box ran before this file — is launchd's lowest CPU and I/O class. On a
+# box saturated by other work it starves rather than slows: measured on a busy
+# fleet box, the server's own job took minutes to reach `listen` while a
+# hand-started copy answered /health in seconds, so every update's health gate
+# failed and restored, and the sessions (same class) ran behind everything
+# else. `Standard`, `Adaptive` or `Interactive` in the file changes it. A FILE,
+# not an env var and not ccrc.env, for `_rc_enabled`'s reasons: HOME is ccd's
+# only isolation boundary, ccrc.env carries tokens and a fleet box may have
+# none. OPERATOR-OWNED: nothing writes it. Absent or empty is Background; any
+# other word is named on stderr and reads as Background — each arm prints its
+# own literal, so nothing from the file can reach a plist. Held byte-identical
+# between ccd and ccrc by darwin-process-type.test.ts. Deliberately OUTSIDE the
+# platform block (no _svc_/_plat_ prefix) so the block's line citations stay
+# put; its plist writers call it behind `declare -F`, so a harness that sources
+# only the block still writes Background.
+_launchd_class() {
+  local f="$HOME/.ccrc/launchd-class" v=""
+  if [ -r "$f" ]; then { IFS= read -r v || true; } < "$f"; fi
+  v="${v%$'\r'}"; v="${v#"${v%%[![:space:]]*}"}"; v="${v%%[[:space:]]*}"
+  case "$v" in
+    ''|Background) printf 'Background' ;;
+    Standard)      printf 'Standard' ;;
+    Adaptive)      printf 'Adaptive' ;;
+    Interactive)   printf 'Interactive' ;;
+    *) printf "ccrc: %s names '%s', not Background, Standard, Adaptive or Interactive — using Background\n" "$f" "$v" >&2
+       printf 'Background' ;;
   esac
 }
 
