@@ -1616,6 +1616,51 @@ export const MIGRATIONS: readonly string[] = [
   `
   ALTER TABLE runs ADD COLUMN unattributed INTEGER NOT NULL DEFAULT 0;
   `,
+  // ── 24: user_version 23 -> 24 ─────────────────────────────────────────────
+  // D-5298 (coordinator-first routing spec 2026-10-17 §6.3 server half, plan Task 16): the `approvals` table, one row
+  // per permission-prompt request a dispatched child's hook sent, and the journal of every ruling made in the
+  // operator's name. `digest` is sha256 over the request's canonical array (the UNREDACTED input, held only for the
+  // request); `inputRedacted` is the only stored text, `redactCommand`ed and capped, and is cleared after
+  // `APPROVAL_INPUT_RETENTION_DAYS` while the row is kept. `askAt` is the mint time and `notifyAt` the window's end
+  // (`approvalWindowMs`, D-5441). `state` is an `ApprovalState`, read through `isApprovalState`, never a cast;
+  // `releaseReason` an `ApprovalReleaseReason`, set only on a row minted `released`. `ruling` is the signed record as
+  // the hook fetches it (`{record, sig}` JSON). `toolUseId` and `corrected` are the journal's later joins (the
+  // PostToolUse that followed, not built yet, D-5491; Task 17's correction mail), NULL and 0 until then.
+  //
+  // A NEW TABLE AND NOTHING ELSE: an older build opening a file at `user_version 24` takes rule 3 (it warns, reads
+  // as-is and migrates nothing) and never names it. Every earlier entry is frozen. RE-MEASURE the slot immediately
+  // before the PR and before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE approvals (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    childId       TEXT    NOT NULL,
+    parentId      TEXT    NOT NULL,     -- the held-for claimant, or 'operator' for a row held for nobody
+    runId         INTEGER,              -- the run the child's mark names
+    digest        TEXT    NOT NULL CHECK (length(digest) = 64),
+    nonce         TEXT    NOT NULL CHECK (length(nonce) = 32),
+    agentId       TEXT    NOT NULL,     -- '' on the main thread
+    tool          TEXT    NOT NULL,
+    inputRedacted TEXT,                 -- NULL once pruned
+    truncated     INTEGER NOT NULL DEFAULT 0,
+    class         TEXT    NOT NULL,
+    state         TEXT    NOT NULL,
+    releaseReason TEXT,
+    askAt         INTEGER NOT NULL,
+    notifyAt      INTEGER NOT NULL,
+    ruledAt       INTEGER,
+    verdict       TEXT,
+    reason        TEXT,
+    ruling        TEXT,
+    answeredBy    TEXT,
+    toolUseId     TEXT,
+    corrected     INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE INDEX approvals_by_child ON approvals(childId, state);
+  CREATE INDEX approvals_by_parent ON approvals(parentId, state);
+  CREATE INDEX approvals_by_state ON approvals(state, notifyAt);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

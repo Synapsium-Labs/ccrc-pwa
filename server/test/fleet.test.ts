@@ -2084,4 +2084,24 @@ describe('the quiet "with coordinator" state (D-5296)', () => {
     expect(lapsed.withCoordinator).toBeNull();
     expect(lapsed.bucket).toBe('attention');
   });
+  // D-5298 (plan Task 16): a HELD approvals row is the same state, kind 'approval', inside the row's own window
+  // (`notifyAt`, D-5441); a row minted released was held for nobody and never sets it; a ruled one clears it.
+  const mintApproval = (coord: CoordStore, askAt: number, o: { releaseReason?: 'run-unclaimed' } = {}): number => coord.insertApproval({
+    childId: 'project-a-quiet-basin', parentId: 'project-a-calm-mesa', runId: null, digest: 'd'.repeat(64),
+    nonce: 'e'.repeat(32), agentId: '', tool: 'Bash', inputRedacted: 'rm -rf build', truncated: false, class: 'ordinary',
+    askAt, notifyAt: askAt + 60_000, ...o,
+  });
+  it('D-5298: withCoordinator.kind is approval while the row is held, and null once it lapses, is ruled, or was minted released', async () => {
+    const coord = mkCoord();
+    const id = mintApproval(coord, NOW_MS - 10_000);
+    expect((await assemble(coord, NOW_S))('project-a-quiet-basin').withCoordinator).toEqual({
+      kind: 'approval', parentId: 'project-a-calm-mesa', since: NOW_MS - 10_000, notifyAt: NOW_MS + 50_000,
+    });
+    expect((await assemble(coord, NOW_S + 50))('project-a-quiet-basin').withCoordinator).toBeNull();
+    expect(coord.takeApprovalForRule(id, { by: 'project-a-calm-mesa', verdict: 'deny', reason: 'r', ruling: '{}', now: NOW_MS }).ok).toBe(true);
+    expect((await assemble(coord, NOW_S))('project-a-quiet-basin').withCoordinator).toBeNull();
+    const released = mkCoord();
+    mintApproval(released, NOW_MS - 10_000, { releaseReason: 'run-unclaimed' });
+    expect((await assemble(released, NOW_S))('project-a-quiet-basin').withCoordinator).toBeNull();
+  });
 });
