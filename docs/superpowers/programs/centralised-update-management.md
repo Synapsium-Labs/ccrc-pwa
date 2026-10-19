@@ -2031,6 +2031,19 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       - 02:55: v0.0.315 (#672) and v0.0.316 (#673) followed, unapplied. STATUS: fleet and server v0.0.294, newest
         v0.0.316, health answered, intent dev/auto=off, backups fleet 173M/server 1878M, disk free fleet 208G/work
         volume 82G/server 31G, no anomalies (the minute blackout is still recorded above, not re-measured here).
+      - **03:10: the blackout's cause, per the delegation broker (mail 6589), and three of its predictions hold.** Its
+        read-only diagnosis points away from the journal, to the delegation lane's reconcile, correlation rung 4. It
+        runs once per 60 s pass with no await between `readMetas` and `applyEffects` (`watch.ts:10729` to `:10833`).
+        For each linked worktree that is not a workspace or an agent's, it re-filters every listing window and
+        rebuilds that repository's whole worktree listing per window (`delegation-correlation.ts:996-1004`,
+        `:1075-1079`). Its cost grows with scratch and review checkouts times listing length, at about 13 us a pair
+        (synthetic), so 3 to 27 s. Journal compaction would not help; v0.0.299 and `main` leave the path unchanged.
+        Measured by me, 03:10:52 to 03:12:42:
+        - the checkpoint's mtime ticked at 03:12:03, the first second of a blackout (03:12:03 to 03:12:22);
+        - the main thread used 59.8 s of CPU over the window and four other threads about 1 s each. So it is one
+          thread at about 100%; my "185%" had come from a sampling interval stretched to 1.8 s in a blackout;
+        - no "outran its … budget" line in 24 h.
+        Its coordinator is putting the cause and the choices to the operator (mail 6590 carries these results).
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
