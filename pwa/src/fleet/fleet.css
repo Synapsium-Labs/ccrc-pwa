@@ -453,6 +453,11 @@
 }
 .acct-list {
   display: grid;
+  /* D-5570: one column that never sizes past the list. An `auto` track grows
+     to its widest row's min-content, and a pool tag's `nowrap` counts there at
+     full length whatever its `flex`, so one tagged row widened every row past
+     `.sheet-body` at 360 and 390 and cut the right of the focus ring. */
+  grid-template-columns: minmax(0, 1fr);
   border-top: 1px solid var(--edge-subtle);
 }
 /* Scoped to the list on purpose. `.acct-row` names two unrelated things: this
@@ -477,6 +482,22 @@
    wears its own name, `acct-pick`, which no rule here selects, and
    `hook-class-collision.test.ts` reds on any class name a @ccrc/ui component
    and another element both wear. */
+/* D-5570: the name and its secondary tags, as the part of the row that gives
+   way. It takes the room the gauges and chevron leave (`1 1 0`, floor 0) and
+   wraps, so on a phone the suggested pill and the pool tag sit under the name
+   rather than squeezing it. The column gap is the row's own `gap-3`, so a row
+   with room draws as before. `overflow-wrap: anywhere` reaches the chip's
+   label: a name longer than the group wraps inside its pill, and is never cut. */
+.acct-ident {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: var(--sp-3);
+  row-gap: var(--sp-1);
+  overflow-wrap: anywhere;
+}
 .acct-suggested {
   flex: none;
   font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
@@ -1875,6 +1896,15 @@ button.proj-card-pool::before {
   font-family: var(--family-mono);
   font-size: var(--fs-2xs);
   color: var(--ink-tertiary);
+}
+
+/* D-5570: inside an account row's identity group the tag keeps its own width,
+   so it wraps under the name when the line is full, and ellipses only when it
+   is longer than the whole group. `1 1 0` (above) would keep it on the name's
+   line at zero width. Project rows keep the base rule. */
+.acct-ident .acct-pool {
+  flex: 0 1 auto;
+  max-width: 100%;
 }
 
 .proj-row--selected .acct-pool {
