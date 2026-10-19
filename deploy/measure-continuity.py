@@ -592,15 +592,25 @@ def stage4(ctx):
 # `reap_class_oom`, never the direct count. Declared discovery limits: the
 # adapter skips stat failures silently and cannot enumerate unreadable roots,
 # the default largest-copy-per-uuid read can hide a divergent smaller copy
-# (`--all-copies` reads it; a task is still counted once), and subagent
-# transcripts are outside its pattern. A well-formed notification of the known
-# non-pressure statuses (`completed`, `failed`, `stopped`: a workflow that did not
-# finish before the previous session ended carries `stopped`) is read as not this
-# event; any OTHER status is unmeasured. A partial read (an unreadable file, a
-# malformed row, an envelope with an unreadable stamp or ambiguous fields) and
-# an absent roster are reported as such and are never a clean zero; a file's
-# hits count only once it was read to its end. The scanner and the comparison
-# only read: neither writes a marker or an environment assignment, or acts.
+# (`--all-copies` reads it; a task is still counted once), subagent transcripts
+# are outside its pattern, and a notification Claude Code delivers mid-turn as a
+# queued-command attachment row is never a user row, so it is not read (a kill
+# announced that way is outside this count). A KNOWN NON-EVENT is a well-formed
+# envelope read as not this event, adding no unmeasured count: exactly one status
+# that is a known non-killed one (`completed`, `failed`, `stopped`: a workflow that
+# did not finish before the previous session ended carries `stopped`), whatever its
+# task-id count (a batched envelope; the status is read BEFORE the id count); or no
+# status, exactly one task id and exactly one `<event>` element (an event-style
+# notification). An envelope is the whole `<task-notification>…</task-notification>`
+# text once trailing whitespace and whole trailing `<system-reminder>…</system-reminder>`
+# blocks are removed. Every other shape is unmeasured, a batched `killed` envelope
+# included.
+# A partial read (an unreadable file, a malformed row, an envelope with an
+# unreadable stamp or ambiguous fields) and an absent roster are reported as such
+# and are never a clean zero; a row whose stamp is no string, or whose JSON nests
+# deeper than the parser can read, is a malformed row; a file's hits count only
+# once it was read to its end. The scanner and the comparison only read: neither
+# writes a marker or an environment assignment, or acts.
 S6_IDLE = 1800
 S6_SPAWN_SLOP = 10
 S6_DAY = 86400
@@ -800,9 +810,17 @@ def s6_pressure_comparison(reading, baseline):
             "decision": "withdraw" if observed > baseline + 2 else "not-triggered"}
 
 
-S6_NOTIFICATION = re.compile(r"<task-notification>\s*(.*?)\s*</task-notification>", re.S)
+# An ENVELOPE is the whole `<task-notification>…</task-notification>` text once its
+# trailing whitespace and any whole trailing `<system-reminder>…</system-reminder>`
+# blocks (each complete, whitespace between them, nothing else) are removed; any
+# other text after the closing tag leaves it no envelope.
+S6_NOTIFICATION = re.compile(
+    r"<task-notification>\s*(.*?)\s*</task-notification>"
+    r"(?:\s*<system-reminder>(?:(?!</system-reminder>).)*</system-reminder>)*", re.S
+)
 S6_TASK_ID = re.compile(r"<task-id>([A-Za-z0-9_-]+)</task-id>")
 S6_STATUS = re.compile(r"<status>([^<>]*)</status>")
+S6_EVENT_TAGS = re.compile(r"</?event>")
 S6_SUMMARY = re.compile(r"<summary>([^<>]*)</summary>", re.S)
 S6_PRESSURE_SUMMARY = re.compile(
     r'Background command ".*" was stopped because the system is running low on memory', re.S
@@ -840,14 +858,20 @@ def s6_pressure_kills(ctx):
                 for raw in fh:
                     try:
                         row = json.loads(raw)
-                    except (ValueError, UnicodeError):
+                    except (ValueError, UnicodeError, RecursionError):
                         file_malformed += 1
                         continue
                     for text in s6_notification_texts(row):
                         text = text.strip()
                         if not text.startswith("<task-notification>"):
                             continue
-                        at = iso_epoch(row.get("timestamp"))
+                        stamp = row.get("timestamp")
+                        if stamp is not None and not isinstance(stamp, str):
+                            # A stamp that is no string (an object, a number) is a malformed
+                            # row, once per row however many notification texts it carries.
+                            file_malformed += 1
+                            break
+                        at = iso_epoch(stamp)
                         # A readable timestamp outside the requested window is no event in it.
                         if at is not None and not in_window(at, ctx):
                             continue
@@ -858,14 +882,25 @@ def s6_pressure_kills(ctx):
                         body = envelope.group(1)
                         ids = S6_TASK_ID.findall(body)
                         statuses = S6_STATUS.findall(body)
-                        if at is None or len(ids) != 1 or len(statuses) != 1:
+                        if at is None:
+                            file_unmeasured += 1
+                            continue
+                        if not statuses:
+                            # Event-style: exactly one task id and exactly one event element.
+                            if len(ids) == 1 and S6_EVENT_TAGS.findall(body) == ["<event>", "</event>"]:
+                                continue
                             file_unmeasured += 1
                             continue
                         status = statuses[0]
-                        if status not in ("completed", "failed", "killed", "stopped"):
+                        if len(statuses) != 1 or status not in ("completed", "failed", "killed", "stopped"):
                             file_unmeasured += 1
                             continue
+                        # A known non-killed status is read BEFORE the task-id count, so a
+                        # batched envelope (several ids, one status) is a known non-event.
                         if status != "killed":
+                            continue
+                        if len(ids) != 1:
+                            file_unmeasured += 1
                             continue
                         summaries = S6_SUMMARY.findall(body)
                         if len(summaries) != 1:
@@ -961,8 +996,8 @@ def s6_reap(ctx):
 
 # ── stage 7 (wave 3): the operator's choice survives a restart ──────────────
 # §9's stage-7 row, "restarts that revert an operator's /model", read off
-# swap.log. Before a stop that a spawn follows (and, since wave 4b, before a live
-# uuid rotation), ccd writes an operator's own
+# swap.log. Before a stop that a spawn follows (and, since wave 4b, before a
+# pane-observed uuid rotation (a `/clear`)), ccd writes an operator's own
 # `/model` or `/effort` to the route record (`route <id>: <field> <old> -> <new>
 # [actor=operator-session]`), or says why it could not: a value outside the
 # vocabulary, or one the record's own checks refused (`operator-choice <id>: …`).

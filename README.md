@@ -5507,7 +5507,8 @@ pressure-kill notifications in `direct_pressure_kills` (target 0 after the spawn
 pane-scope OOM stops in `reap_class_oom`, and NOW's fresh sweep record in `inert_scopes`. Direct kills are
 unique transcript-UUID/task-ID pairs, deduplicated across selected copies. The default reads the largest
 discovered main transcript per UUID; `--all-copies` includes divergent smaller copies but still counts
-one task once. Discovery can miss unreadable roots/stat failures and excludes subagent transcripts;
+one task once. Discovery can miss unreadable roots/stat failures, excludes subagent transcripts and does
+not read notifications delivered mid-turn as queued-command attachment rows;
 partial reads and absent input are reported, never claimed as a clean zero. Notification times are
 observations at delivery, not exact kill instants.
 

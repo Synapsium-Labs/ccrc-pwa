@@ -810,7 +810,10 @@ the task may have started earlier). It is a different measurement from the kerne
 (timed by the journal) and from the sweep's `inert_scopes` (read at the moment of the reading); none substitutes for
 another, and the B + 2 comparison consumes only the OOM class. Its coverage is the discovered main transcripts: the
 default largest copy per UUID can hide a divergent smaller one (`--all-copies` reads it), the adapter skips stat failures
-silently, and subagent transcripts are outside its pattern. A partial or absent read is reported, never a clean zero. The
+silently, and subagent transcripts are outside its pattern. A well-formed envelope carrying one known non-killed status
+(whatever its task-id count), or no status with one task id and one `<event>` element, is read as not this event, whole
+trailing `<system-reminder>` blocks being ignored; any other shape is unmeasured, and a notification delivered mid-turn as
+a queued-command attachment row is not read. A partial or absent read is reported, never a clean zero. The
 target stays 0 and the baseline cells above are historical: the 186 is not claimed as a replay of this scanner. Stage 7's
 keys now include live UUID promotions as the §5.7 annotation says, so its row reads as logged refusals, not restarts.
 
