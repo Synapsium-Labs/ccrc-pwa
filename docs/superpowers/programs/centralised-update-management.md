@@ -2242,6 +2242,18 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         operator. v0.0.362 (#741) to v0.0.368 (#753) followed, unapplied. STATUS: fleet and server v0.0.361, newest
         v0.0.368, stable v0.0.328, intent dev/auto=off, backups fleet 179M/server 3006M, disk free fleet 207G/work
         volume 98G/server 30G, no anomalies.
+      - **22:55 UTC: both boxes moved to v0.0.368 (#753) by the operator's console tap**, fleet 22:25:16 to 22:28:06,
+        then the server 22:28:40 to 22:29:41; both `done`, `from: pwa`, gates passed; `ccrc.service` restarted
+        22:29:12. The fleet's doctor read **2 failed** for the first time today, both the history programme's check
+        (`tick-stale`: two sweep passes ended without a tick; `lag-high`: 1849 s over 1800 s). The update handled it
+        as designed: the record names "doctor exited 1 - the box moved", and the server step went ahead. One history
+        sweep pass hit its unit's start timeout at 22:32:46; passes have finished since 22:41, each about 4.5 min on
+        a 2-minute timer. That programme's, not this one's; mail 6906 to its coordinator. The probe's one ANOMALY,
+        server backups 3203M over its 3G line, is the ruled growth: 10 kept, 233M to 424M each, as coord.db grew
+        from 231M at 15:01 to 297M. That 3G line was mine, so the probe's server line is now 5G; the operator's line
+        (server free disk under 15G) stands, and the server has 29.7G free. v0.0.369 to v0.0.378 followed,
+        unapplied. STATUS: fleet and server v0.0.368, newest v0.0.378, stable v0.0.328, intent dev/auto=off,
+        backups fleet 196M/server 3203M, disk free fleet 207G/work volume 92G/server 30G.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
