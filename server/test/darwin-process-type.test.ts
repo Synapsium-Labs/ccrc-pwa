@@ -11,12 +11,11 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ghContainedEnv, seedAccountsSh } from './ccdWsHelpers.js';
+import { CCD, ghContainedEnv, seedAccountsSh } from './ccdWsHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const CCRC = join(REPO, 'ccd', 'ccrc');
-const CCD = join(REPO, 'ccd', 'ccd');
 const IS_DARWIN = process.platform === 'darwin';
 
 /** A fixture HOME with a roster (ccd will not load without one) and, when
