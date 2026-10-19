@@ -2158,6 +2158,9 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         The broker's coordinator settled it (mail 6632): the 4 to 5 s is reconcile's per-tree CPU, which its run
         629 bounds; the projections are the smaller term and stay on its wave 4 list. I send the 13:35 sample, and
         re-measure on run 629's release.
+      - 10:55: v0.0.333 (#410) and v0.0.334 (#627) followed, unapplied. STATUS: fleet and server v0.0.331, newest v0.0.334,
+        stable v0.0.328, intent dev/auto=off, backups fleet 159M/server 2330M, disk free fleet 210G/work volume
+        93G/server 31G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
