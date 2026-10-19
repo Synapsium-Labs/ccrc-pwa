@@ -1380,7 +1380,10 @@ describe('marks that move (W1-B4 Task 8; spec §9.15 "Mark", "After a bind")', (
   // stub of the late body. A rebuild from both marked row 1 with segment 1 at its entry row, and segment 2's variant row on the
   // pruned, unmarked late body kept that mark, because segment 2 carries the stub: but segment 1 does not. With segment 2 gone,
   // nothing named it, no pass wrote row 1 again, and the (row 1, late body) link lived in the store alone: a later rebuild dropped it.
-  it('D-5396, F1c, end to end: a late variant pruned before the pass; a rebuild from segments 1 and 2 leaves row 1 unmarked (segment 2\'s variant row links the pruned late body, which segment 1 does not carry); with segment 2 moved aside a pass writes row 1 again with the link and a stub, and a second rebuild places the link', async () => {
+  // Since D-5637 (history-export-replay-last-carrier, wave 5h-1) the rebuild marks row 1 with segment 2, its last carrier, which
+  // holds the stub; segment 2's loss then clears that mark at the bind, and the over-clear F1c accepted (one more export per
+  // rebuild) is gone: the second rebuild marks row 1 with the segment the pass wrote, and nothing is due after it.
+  it('D-5396, F1c, end to end: a late variant pruned before the pass; a rebuild from segments 1 and 2 marks row 1 with segment 2, the last carrier, which holds the stub (D-5637); with segment 2 moved aside, a bind and a pass write row 1 again with the link and a stub, a second rebuild places the link and marks row 1 with that segment, and the next pass writes nothing', async () => {
     const { box, transcript, ids } = ingestedBox('ccrc-history-export-f1c-', [row(1, 'zqf1cfirst body one', 2 * DAY), row(2, 'zqf1cother row', 2 * DAY)]);
     const s1 = `1.${ids.writer}.db`;
     const s2 = `2.${ids.writer}.db`;
@@ -1414,8 +1417,8 @@ describe('marks that move (W1-B4 Task 8; spec §9.15 "Mark", "After a bind")', (
     fs.rmSync(transcript);
     await rebuildFromSegments(box);
     expectRowOneComplete('the first rebuild');
-    expect(marks(box), 'D-5396, F1c: row 1 is NOT marked by segment 1 (the entry row marked it there, and segment 2\'s variant row then linked a pruned, unmarked blob that segment 1 does not carry); row 2 is')
-      .toEqual({ [rid(1)]: null, [rid(2)]: s1 });
+    expect(marks(box), 'D-5637: row 1 is marked by segment 2, the last segment that carries it, and the one that holds the stub of its late body (first-wins left it unmarked: segment 1\'s mark, then segment 2\'s variant row cleared it); row 2 by segment 1')
+      .toEqual({ [rid(1)]: s2, [rid(2)]: s1 });
     // Segment 2 is moved aside (D-4765's own way out), a bind and a pass: nothing names segment 2, and row 1 is written again.
     const aside = path.join(box.home, 'export-aside');
     fs.mkdirSync(aside);
@@ -1433,21 +1436,11 @@ describe('marks that move (W1-B4 Task 8; spec §9.15 "Mark", "After a bind")', (
     expect(marks(box), 'row 1 is marked by it').toEqual({ [rid(1)]: live[1], [rid(2)]: s1 });
     await rebuildFromSegments(box);
     expectRowOneComplete('the second rebuild');
-    // The cost of the rule, measured: only the segment being replayed is open, so segment 1 (which marked row 1 at its entry row)
-    // and the new segment's variant row on the pruned late body meet again, and row 1 reads unmarked once more. It is one more
-    // export, never a loss: the new segment still holds the link and the stub.
-    expect(marks(box), 'the second rebuild: the same shape again (the new segment\'s variant row, row 1 marked by segment 1), so row 1 is unmarked once more')
-      .toEqual({ [rid(1)]: null, [rid(2)]: s1 });
-    passAt(box, 270);   // the pass writes row 1 a third time; its entry row now meets an unmarked entry in the segment that carries the stub
-    const third = segmentsOf(box);
-    expect(third, 'the live segments: the two before and the third').toHaveLength(3);
-    expect(segmentRows(path.join(exportDirOf(box), third[2]!), 'entries').map((e) => e['uuid']), 'the third carries row 1 again').toEqual([rid(1)]);
-    await rebuildFromSegments(box);
-    expectRowOneComplete('the third rebuild');
-    expect(marks(box), 'the third rebuild marks row 1 with the third segment: its entry row meets the unmarked entry the second segment\'s variant row left, and every variant row of it names a blob it carries')
-      .toEqual({ [rid(1)]: third[2], [rid(2)]: s1 });
-    passAt(box, 340);
-    expect(segmentsOf(box), 'and the next pass finds nothing due: the cost was one export').toEqual(third);
+    // D-5637: the new segment is row 1's last carrier and holds the link and the stub, so the second rebuild marks row 1 with it
+    // (first-wins read row 1 unmarked once more here, and a third pass and a third rebuild followed).
+    expect(marks(box), 'the second rebuild marks row 1 with the segment the pass wrote, its last carrier').toEqual({ [rid(1)]: live[1], [rid(2)]: s1 });
+    passAt(box, 270);
+    expect(segmentsOf(box), 'and the next pass finds nothing due: no export more than the lost segment cost').toEqual(live);
   }, 1_500_000);
 
   it('D-5395, a revived tombstone (writeChunk): a row whose blob prune tombstoned before its export went with a stub; a swap copy that stores the bytes again clears that row\'s mark, and an exported blob that was pruned and revived clears nothing; the next pass carries the bytes', async () => {
@@ -1518,7 +1511,7 @@ describe('marks that move (W1-B4 Task 8; spec §9.15 "Mark", "After a bind")', (
     expect(recoverRow(box)?.completed_ms, 'the recovery step finished').not.toBeNull();
     expect(q(box, 'SELECT z IS NULL AS stub, pruned_ms IS NOT NULL AS pruned, exported_seg FROM blobs WHERE lower(hex(sha256)) = ?', body),
       'the body holds its bytes, and segment 2 marked them').toEqual([{ stub: 0, pruned: 0, exported_seg: s2 }]);
-    expect(marks(box), 'row 2 is marked by the first segment that carries it').toEqual({ [rid(1)]: s1, [rid(2)]: s1 });
+    expect(marks(box), 'row 2 is marked by segment 2, the last segment that carries it (D-5637: first-wins gave segment 1)').toEqual({ [rid(1)]: s1, [rid(2)]: s2 });
     expect(counters(box)['export_row_blob_missing'] ?? 0).toBe(0);
     expect(counters(box)['export_row_unplaced'] ?? 0).toBe(0);
     expect(counters(box)['export_blob_tombstone_kept'] ?? 0, 'no tombstone was held before the replay').toBe(0);

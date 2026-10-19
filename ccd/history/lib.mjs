@@ -8189,8 +8189,28 @@ export function orderSegmentNames(names) {
     const p = parseSegmentName(n);
     if (p !== null) parsed.push({ n, ...p });
   }
-  parsed.sort((a, b) => a.seq - b.seq || (a.writer < b.writer ? -1 : a.writer > b.writer ? 1 : 0));
+  parsed.sort(segmentPartsOrder);
   return parsed.map((p) => p.n);
+}
+
+/** Replay's (seq, writer) order over two parsed names: seq numerically, then the writer token in code-unit order. One
+ *  comparator for orderSegmentNames and segmentOrdersAfter, so the order replay walks in and the order its marks follow
+ *  are one order. */
+function segmentPartsOrder(a, b) {
+  return a.seq - b.seq || (a.writer < b.writer ? -1 : a.writer > b.writer ? 1 : 0);
+}
+
+/** Whether segment `a` orders strictly after `b` in replay's (seq, writer) order (orderSegmentNames'), so that replay
+ *  moves a mark naming `b` to `a`, the later carrier (D-5637 (history-export-replay-last-carrier), wave 5h-1). `b` is
+ *  the mark the store holds: null (no mark) or a name off the segment grammar names no carrier, and any segment orders
+ *  after it. `a` is the segment being replayed, a name from the listing: off the grammar it is a caller's bug and
+ *  throws. The same name is not after itself, so a page replayed again after a kill moves nothing. */
+export function segmentOrdersAfter(a, b) {
+  const pa = parseSegmentName(a);
+  if (pa === null) throw new TypeError(`segmentOrdersAfter: not a segment name: ${JSON.stringify(a)}`);
+  if (b === null) return true;
+  const pb = parseSegmentName(b);
+  return pb === null ? true : segmentPartsOrder(pa, pb) > 0;
 }
 
 /** The next segment number (§9.15 "Write"): one past the highest seq on disk under export/<store_id>/, of any
@@ -8446,7 +8466,7 @@ export function entryMayHoldMark({ blobs }) {
  *  refining D-5395), from the states of the blobs the entry references as the store holds them now, each with `carried`:
  *  whether THAT segment's blobs hold the blob, as bytes or as a stub. entryMayHoldMark's rule, narrowed where a mark names a
  *  segment. An `exported` blob has its bytes where its own mark names, so it licenses the mark whichever segment is replayed
- *  (the entry is marked by the first segment that carries it), and the loss of that segment clears the blob's referrers with
+ *  (replay gives the mark to the entry's last carrier, D-5637), and the loss of that segment clears the blob's referrers with
  *  it (a bind check). A `pruned` blob that is not exported has no mark of its own, and its stub is held only by the segments
  *  that carry it: the entry's mark is the one thing that names a segment holding it, so the blob licenses the mark only when
  *  this segment carries it, as the pass's does (planSegment stubs every pruned, unmarked blob the entry names in the segment

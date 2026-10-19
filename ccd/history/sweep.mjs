@@ -66,6 +66,7 @@ import {
   decideSegmentWhole, decideSegmentOwn, readSegmentNameList,
   BUSY_TIMEOUT_MS, EXPORT_BIND_BATCH, EXPORT_BIND_BYTES, EXPORT_BIND_WAL_CEILING, markCheckStop, planMarkCheckBatch, formatMarkCheckState, nextMarkCheckState,
   segmentListingRecord, addSegmentToListing, segmentListingVanished,
+  segmentOrdersAfter,
 } from './lib.mjs';
 import {
   MIGRATIONS, OWED_INDEX, StoreError, bump, clearDoneMarkers, closeWriter, createStore, dropPending, finishPending, getMeta,
@@ -2629,7 +2630,8 @@ async function recoverReindexChunk(db, run, cursor) {
 // After the journal (index, apply), the step replays this store's export segments in three passes, so no row ever
 // waits on a blob in a later segment (BK21), and no stub swallows bytes (D-5397 (history-export-replay-bytes-before-stubs)):
 //   export-blobs  every segment's blobs that carry bytes, insert-or-ignore by sha256; each replayed blob is marked with
-//                 its segment, so it is never exported again. A body ignored over a prune tombstone the store held
+//                 the LAST segment that carries its bytes (D-5637 (history-export-replay-last-carrier)), so it is never
+//                 exported again while that segment is on the box. A body ignored over a prune tombstone the store held
 //                 before the replay began is counted export_blob_tombstone_kept: every tombstone this phase meets was held
 //                 before the replay began, because only the stubs phase, which comes after, makes one;
 //   export-stubs  every segment's stubs (D-4759), insert-or-ignore, dated by the replay: a blob the store already holds,
@@ -2646,8 +2648,9 @@ async function recoverReindexChunk(db, run, cursor) {
 //                   segmentMayMarkEntry says every blob it references, as the store holds them, is exported or is pruned and
 //                   carried by THIS segment (D-5395 (history-export-mark-needs-its-blobs), refined by D-5396
 //                   (history-export-bind-clears-pruned-referrers)): a live, unmarked blob licenses no mark, and a pruned blob no
-//                   mark names licenses one only in a segment that holds its stub or its bytes, as the pass writes them; an
-//                   entry an earlier segment marked already is not marked again;
+//                   mark names licenses one only in a segment that holds its stub or its bytes, as the pass writes them; the
+//                   LAST segment that carries the entry's row and may mark it takes the mark, and one that carries the row
+//                   but may not takes an earlier mark off (D-5637); a segment that does not order after the mark moves nothing;
 //                 - variants, boundaries (their carried ord), sidecars and memberships, idempotently; one that links such a
 //                   blob to its entry takes the entry's mark off, unless the entry is marked by THIS segment and this segment
 //                   carries a pruned blob (D-5396): an entry marked by another segment loses its mark over a pruned, unmarked
@@ -2677,7 +2680,10 @@ function replayStmts(db) {
   if (s !== undefined) return s;
   s = {
     blobIns: db.prepare('INSERT INTO blobs (sha256, codec, z, raw_len, pruned_ms) VALUES (?, ?, ?, ?, ?) ON CONFLICT (sha256) DO NOTHING'),
-    blobMark: db.prepare('UPDATE blobs SET exported_ms = ?, exported_seg = ? WHERE sha256 = ? AND z IS NOT NULL AND exported_ms IS NULL'),
+    // D-5637 (history-export-replay-last-carrier): a blob's mark moves to the LAST segment that carries its bytes; the sweep asks
+    // lib segmentOrdersAfter of blobMarkOf's answer before it runs, so the statement itself no longer keeps a mark.
+    blobMark: db.prepare('UPDATE blobs SET exported_ms = ?, exported_seg = ? WHERE sha256 = ? AND z IS NOT NULL'),
+    blobMarkOf: db.prepare('SELECT exported_seg AS seg FROM blobs WHERE sha256 = ? AND z IS NOT NULL'),
     // D-5397: asked only when a body's insert answered 0 changes, to tell a prune tombstone from a blob that holds bytes.
     blobTombstone: db.prepare('SELECT 1 AS x FROM blobs WHERE sha256 = ? AND z IS NULL'),
     blobId: db.prepare('SELECT blob_id FROM blobs WHERE sha256 = ?'),
@@ -2703,10 +2709,11 @@ function replayStmts(db) {
         status, eof_ms, parser_version) VALUES (?, ?, ?, ?, ?, ?, 0, 'exported', ?, ?)
       ON CONFLICT (dev, ino, source_key) DO UPDATE SET eof_ms = coalesce(ingest_files.eof_ms, excluded.eof_ms)`),
     deadFileId: db.prepare('SELECT file_id FROM ingest_files WHERE dev = ? AND ino = ? AND source_key = ?'),
-    // exported_ms and exported_seg: an entry's mark, which replay reads where it would mark or unmark it (D-5396): an entry already
-    // marked is not marked again, and a row of another segment than the one that marks it can only take the mark off.
+    // exported_ms and exported_seg: an entry's mark, which replay reads where it would mark or unmark it (D-5396): an entry row moves
+    // the mark only to a segment that orders after it (D-5637), and a row of another segment than the one that marks it can only take
+    // the mark off.
     entrySel: db.prepare('SELECT entry_id, struct_file_id, exported_ms, exported_seg FROM entries WHERE uuid = ?'),
-    entryMark: db.prepare('UPDATE entries SET exported_ms = ?, exported_seg = ? WHERE entry_id = ? AND exported_ms IS NULL'),
+    entryMark: db.prepare('UPDATE entries SET exported_ms = ?, exported_seg = ? WHERE entry_id = ?'),
     // B1's boundaryIns draws ord itself; replay carries the exporter's. It meets two uniqueness rules, PRIMARY KEY
     // (entry_id) and UNIQUE (transcript_pk, ord), and absorbs both: a repeated entry (a second segment of it) is the
     // ordinary case, silent; a collision on (transcript_pk, ord) with ANOTHER entry's boundary is a row the store cannot
@@ -2810,22 +2817,27 @@ function replayEntryRow(db, seg, r) {
   const e = s.entrySel.get(r.uuid);
   // D-5395: the segment holds this row's bytes, but the store may hold more of the entry than the segment did (a late
   // variant, a late-linked sidecar, a revived blob in the backup a restore started from): marked only when lib says every
-  // blob the entry references, as the store holds them now, is exported, or pruned and carried by THIS segment (D-5396). The
-  // entry is marked by the first segment that says so, as the pass marks it with the segment that holds what it needs: an
-  // exported blob's bytes are where its own mark names, and a pruned blob no mark names has its stub only in the segments
-  // that carry it, so a mark naming a segment without the stub would outlive the loss of the one that holds it (a rebuild
-  // from the live segments could not place the entry). A segment that lacks the stub leaves the entry unmarked for a later
-  // segment that carries it, or for the next pass, which writes the stub. An entry an earlier segment already marked is not
-  // this segment's to mark whatever lib answers (entryMark leaves it: the first segment's mark wins), so its pruned blobs read
-  // as not carried and cost no lookup in this segment. The rows of this segment that link a pruned blob to such an entry are
-  // judged by unmarkEntryOverBlobIn.
-  const states = s.entryBlobStates.all(e.entry_id, e.entry_id, t, e.entry_id, e.entry_id).map((b) => blobStateIn(seg, b, e.exported_ms === null));
+  // blob the entry references, as the store holds them now, is exported, or pruned and carried by THIS segment (D-5396).
+  // D-5637 (history-export-replay-last-carrier): the entry's mark goes to the LAST segment that carries its row, in replay's
+  // (seq, writer) order (lib segmentOrdersAfter), not the first. Every export of an entry writes all the store held of it
+  // then (every variant, its boundary, every linked sidecar, every membership), and nothing deletes those rows, so a later
+  // carrier holds all an earlier one did, and the mark names the segment whose loss would lose the most: the check after a
+  // bind then clears it with that segment, and the next pass writes the entry again. A segment that orders after the mark
+  // takes it when lib says it may (segmentMayMarkEntry, `carried` measured in this segment); when lib says it may not (a
+  // pruned blob no mark names that this segment lacks, or a live, unmarked one) the older mark goes too (exportClear), so
+  // the next pass writes the entry with all it needs: over-clearing, never a loss. A segment that does not order after the
+  // mark (the same one replayed again, or a restore's backup marked by a later segment) moves nothing and costs no lookup.
+  // The rows of this segment that link a blob to the entry are judged by unmarkEntryOverBlobIn.
+  if (!segmentOrdersAfter(seg.name, e.exported_seg === null ? null : String(e.exported_seg))) return;
+  const states = s.entryBlobStates.all(e.entry_id, e.entry_id, t, e.entry_id, e.entry_id).map((b) => blobStateIn(seg, b, true));
   if (segmentMayMarkEntry({ blobs: states })) s.entryMark.run(seg.markMs, seg.name, e.entry_id);
+  else stmts(db).exportClear.run(e.entry_id);
 }
 /** One blob's state as lib segmentMayMarkEntry reads it for an entry's mark and the segment being replayed (`seg`): `carried`
  *  is whether the segment THE ENTRY'S MARK NAMES holds the blob (D-5396). It is measured, by a lookup in `seg`'s blobs table,
  *  only of a pruned blob no mark names (`b.sha` is set only for such a blob) and only where `seg` is that segment
- *  (`markNamesSeg`: the entry's mark names `seg`, or, for an entry not marked yet, would). An entry marked by ANOTHER
+ *  (`markNamesSeg`: the entry's mark names `seg`, or, for an entry not marked yet, would; replayEntryRow passes it only where this
+ *  segment may take the entry's mark, an earlier mark included, D-5637). An entry marked by ANOTHER
  *  segment names one this is not, and what that one carries is not measured here (it is not open): the blob reads as not
  *  carried, so lib clears the mark and the next pass writes the entry with the stub, one more export in the worst case and
  *  never a loss. `carried` is false of any other blob, whose answer lib does not read from it. */
@@ -2856,7 +2868,7 @@ function unmarkEntryOverBlob(db, entryId, blobId) {
  *  row linked what the export that wrote it had not carried. The pruned arm is no rarity: an entry's variant rows include its
  *  first body, so a segment written after a late variant names that body without carrying it (an earlier segment held it when
  *  the pass wrote), and a store without that earlier segment holds it pruned and unmarked, its stub being in a later segment
- *  alone; and the entry itself is marked by whichever segment first carried its row. */
+ *  alone; and the entry itself is marked by the last segment that carries its row and may mark it (D-5637). */
 function unmarkEntryOverBlobIn(db, seg, entry, blobId) {
   const b = replayStmts(db).blobStateIn.get(blobId);
   if (b !== undefined && !segmentMayMarkEntry({ blobs: [blobStateIn(seg, b, entry.exported_seg === seg.name)] })) stmts(db).exportClear.run(entry.entry_id);
@@ -3009,7 +3021,7 @@ function noteSkippedSegment(db, name, verdict) {
 /** One page of one kind of one segment's blobs past `after` (a rowid), bounded by the chunk's bytes: `stubs` false is
  *  export-blobs' page (the blobs that carry bytes), true export-stubs' (D-5397 (history-export-replay-bytes-before-stubs)).
  *  insert-or-ignore by sha256 (§9.14) in both: a blob the store already holds, whole or pruned, keeps its row; one with
- *  bytes is marked with its segment. A body ignored over a prune tombstone is counted export_blob_tombstone_kept; the
+ *  bytes is marked with its last carrier (D-5637). A body ignored over a prune tombstone is counted export_blob_tombstone_kept; the
  *  probe runs only when the insert answered 0 changes, so a fresh blob costs no statement more, and no read's answer
  *  changes. A stub (no bytes) goes in pruned (D-4759 (history-export-pruned-row-stub)), dated by the replay. An empty
  *  page ends the segment. */
@@ -3022,8 +3034,15 @@ function replayBlobPage(db, run, sdb, dir, name, after, stubs) {
   for (const b of page) {
     const ins = s.blobIns.run(b.sha256, b.codec, b.z, b.raw_len, b.z === null ? markMs : null);
     if (b.z !== null) {
-      if (Number(ins.changes) === 0 && s.blobTombstone.get(b.sha256) !== undefined) bump(db, 'export_blob_tombstone_kept');
-      s.blobMark.run(markMs, name, b.sha256);
+      // D-5637 (history-export-replay-last-carrier): the blob's mark goes to the last segment that carries its bytes. A fresh
+      // row has no mark and costs no statement more; a blob the store held already is read once, and its mark moves only to
+      // a segment that orders after it (a restore's backup may hold a mark naming a later segment, which stays).
+      if (Number(ins.changes) === 1) s.blobMark.run(markMs, name, b.sha256);
+      else if (s.blobTombstone.get(b.sha256) !== undefined) bump(db, 'export_blob_tombstone_kept');
+      else {
+        const held = s.blobMarkOf.get(b.sha256);
+        if (held !== undefined && segmentOrdersAfter(name, held.seg === null ? null : String(held.seg))) s.blobMark.run(markMs, name, b.sha256);
+      }
       bytes += b.z.length;
     }
   }
@@ -5265,9 +5284,10 @@ export async function ingestSidecar(db, ctx, s, budget, cache) {
         // or revived the bytes in hand, so the guard is for a blob pruned between that probe and this insert, which the lock
         // rules out, and prune never takes a blob an unlinked row names: D-5399's residual is a row replay places against a
         // restore-held tombstone, never one stored here. Replay's replaySidecarRow does not do this: a replayed row travelled
-        // already. Replay marks the blob and its referrers by the first segment that carries them, so after a rebuild no mark
-        // on them names the later segment that carried them again with the new rows: once that segment is lost nothing carries
-        // those rows again, and a second rebuild drops them (the plan's first-wins residual).
+        // already. Replay marks the blob and its referrers by the LAST segment that carries them (D-5637
+        // (history-export-replay-last-carrier), wave 5h-1), the one that carried them again with the new rows, so once that
+        // segment is lost the check after a bind clears those marks and the next pass carries the rows again (closing the
+        // residual B4's plan named, review 621 F3).
         if (!fresh && Number(q.blobUnmark.run(blobId).changes) === 1) clearReferrerMarks(db, [Number(blobId)]);
       }
       // W1-B4 Task 8 (D-4763 (history-export-late-sidecar-clears-marks), NEW): a sidecar row first linked after its entry was

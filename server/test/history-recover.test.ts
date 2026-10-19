@@ -4447,6 +4447,45 @@ describe('F6 (D-5399): an unlinked sidecar whose blob another transcript exporte
       for (const r of reads.filter((x) => !x.asserted)) {
         expect([after[r.key]!.exit, after[r.key]!.hasS, after[r.key]!.hasShared], `${r.key} answers as before`).toEqual([before[r.key]!.exit, before[r.key]!.hasS, before[r.key]!.hasShared]);
       }
+
+      // ── Review 621 F3, the double fault, closed by D-5637 (history-export-replay-last-carrier). The rebuild marks the blob,
+      // and T1's tool_result row that segment 2 carried again, by segment 2: the LAST segment that carries them, and the only
+      // one that holds S's row. Then segment 2 is lost too (moved aside), an adopt binds the store again, its first tick checks
+      // the marks and runs a pass, and a second rebuild from the live segments alone must still place S. Under first-wins every
+      // mark named segment 1, so the check cleared nothing, no pass wrote S again (export_due 0), and after the second
+      // rebuild all six scoped greps missed S (review 621's measurement).
+      expect(rrQ(box, 'SELECT exported_seg AS seg FROM blobs WHERE lower(hex(sha256)) = ?', blobSha),
+        'D-5637: the rebuild marked the blob by its last carrier, the one segment that holds S\'s row').toEqual([{ seg: both[1]! }]);
+      expect(rrQ(box, 'SELECT exported_seg AS seg FROM entries WHERE uuid = ?', rrU(611)),
+        'D-5637: and T1\'s tool_result row, which segment 2 carried again with the blob').toEqual([{ seg: both[1]! }]);
+      expect(metaOf(box, 'export_marks_checked_binds'), 'CONTROL: the check after the rebuild\'s bind ran before segment 2 went, so its loss needs a bind of its own').not.toBeNull();
+      // Segment 2 is lost: the store is adopted on a box its export directory came to without that segment (§8.4's carry,
+      // not done for it).
+      const aside = path.join(box.home, 'export-aside');
+      fs.mkdirSync(aside);
+      fs.renameSync(seg2, path.join(aside, both[1]!));
+      fs.rmSync(rrRoot(box).storeId);
+      fs.rmSync(rrRoot(box).writer);
+      const adopted = await cliOnPty(box, ['doctor', '--adopt']);
+      expect(adopted.code, adopted.out).toBe(0);
+      const checked = runDriver(box, { offsetMs: 9 * F6_HOUR });   // the first tick after the adopt: the bind check, then the pass
+      expect(checked.code, `${checked.stdout}\n${checked.stderr}`).toBe(0);
+      expect(counters(box)['export_segment_missing'], 'the check found segment 2 missing and cleared the marks naming it').toBe(1);
+      const live = segmentsOf(box).map((n) => path.basename(n));
+      expect(live, 'segment 1 and the one the pass wrote').toHaveLength(2);
+      expect(live[0]).toBe(names[0]);
+      const seg3 = path.join(exportDirOf(box), live[1]!);
+      expect(segmentRows(seg3, 'sidecars').map((x) => [x['name'], x['uuid']]).sort(), 'the pass wrote S again, with the blob and T1\'s linked row')
+        .toEqual([[F6_ORPHAN, null], [F6_SHARED, rrU(611)]]);
+      expect(segmentRows(seg3, 'blobs').map((b) => b['sha256'])).toEqual([blobSha]);
+      // The second rebuild, from segment 1 and the segment the pass wrote.
+      rrLose(box, { binding: false, journal });
+      const again = await cliOnPty(box, ['doctor', '--rebuild']);
+      expect(again.code, again.out).toBe(0);
+      rrTickUntil(box, () => rrRecovered(box) && countOf(box, 'entries') === 8 && leafOf(F6_ID2).length === 1, 12);
+      const twice = ask();
+      const lost = reads.filter((r) => r.asserted && !twice[r.key]!.hasS).map((r) => r.key);
+      expect(lost, `scoped reads that no longer find S after the second rebuild:\n${reads.map((r) => `${r.key}: ${JSON.stringify(twice[r.key])}`).join('\n')}`).toEqual([]);
     }, 4 * HEAVY);
   }
 });
@@ -4713,9 +4752,11 @@ describe('D-5395: replay marks an entry only while every blob it references is e
 
   // D-5396 (history-export-bind-clears-pruned-referrers), refined: replay marks an entry from a segment only when that segment
   // carries each of the entry's pruned blobs that no mark names (its stub or its bytes), so a mark names a segment that holds
-  // what the entry needs, as the pass's does (planSegment stubs those blobs in the segment that marks the entry). First wins
-  // stays for what is exported: its bytes are where its own mark names, and losing that segment clears the entry with the blob.
-  it('D-5396, refined: an entry whose own blob is pruned and unmarked is marked by the first segment that carries that blob (its stub or its bytes), not by an earlier one that carries the row without it; one no segment carries stays unmarked; a pruned blob that was exported licenses the first segment whatever it carries', async () => {
+  // what the entry needs, as the pass's does (planSegment stubs those blobs in the segment that marks the entry). Among the
+  // segments that may mark it, the LAST takes the mark (D-5637 (history-export-replay-last-carrier), wave 5h-1, reversing the
+  // first-wins this case pinned for E4). An exported blob licenses any of them: its bytes are where its own mark names, and
+  // losing that segment clears the entry with the blob.
+  it('D-5396, refined: an entry whose own blob is pruned and unmarked is marked by the last segment that carries that blob (its stub or its bytes), never by one that carries the row without it; one no segment carries stays unmarked; a pruned blob that was exported licenses a segment whatever it carries', async () => {
     const { box, ids, db } = x10Store('ccrc-history-d5396-mark-');
     try {
       const t0 = Date.now() - 400 * X10_DAY;
@@ -4729,7 +4770,7 @@ describe('D-5395: replay marks an entry only while every blob it references is e
       // E0: its stub is in segment 2 alone, the rebuild's shape (segment 1 carries the row, not the blob). E1: a tombstone the
       // store held before the replay (a restore's), carried by no segment. E2: the same, and segment 1 carries its BYTES. E3: the
       // same but exported once (its mark names a segment this box lacks), carried by no segment. E4: its stub is in both
-      // segments (first wins among the carriers). E5: a live blob, carried by segment 1.
+      // segments (the last of the carriers takes it, D-5637). E5: a live blob, carried by segment 1.
       tombstone(texts[1]!.text, { exported: false });
       tombstone(texts[2]!.text, { exported: false });
       tombstone(texts[3]!.text, { exported: true });
@@ -4737,8 +4778,8 @@ describe('D-5395: replay marks an entry only while every blob it references is e
       plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, blobs: [stub(texts[0]!.text), stub(texts[4]!.text)], rows: x10Rows({ ...fam, texts: [texts[0]!, texts[4]!] }) });
       expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
       expect(x10Count(db, 'entries')).toBe(6);
-      expect(marksOf(db), 'E0 is marked by segment 2, which carries its stub, not by segment 1; E1 stays unmarked: no segment carries its blob; E2 is marked by segment 1, which carries its bytes; E3 by segment 1 (exported); E4 by the first of the two that carry its stub; E5 by segment 1')
-        .toEqual([`2.${X10_WRITER}.db`, null, D_SEG, D_SEG, D_SEG, D_SEG]);
+      expect(marksOf(db), 'E0 is marked by segment 2, which carries its stub, not by segment 1; E1 stays unmarked: no segment carries its blob; E2 is marked by segment 1, which carries its bytes; E3 by segment 1 (exported); E4 by segment 2, the last of the two that carry its stub (D-5637: first-wins gave segment 1); E5 by segment 1')
+        .toEqual([`2.${X10_WRITER}.db`, null, D_SEG, D_SEG, `2.${X10_WRITER}.db`, D_SEG]);
       expect(countersOn(db, 'export_row_blob_missing', 'export_row_unplaced'), 'every blob is in the store, every row placed')
         .toEqual({ export_row_blob_missing: 0, export_row_unplaced: 0 });
       expect(countersOn(db, 'export_blob_tombstone_kept'), 'segment 1\'s bytes of E2 met their tombstone').toEqual({ export_blob_tombstone_kept: 1 });
@@ -4753,8 +4794,11 @@ describe('D-5395: replay marks an entry only while every blob it references is e
   // linked a pruned late body that segment 2 carries as a stub and segment 1 does not. The shape is what a pass writes after a
   // late variant and a prune: segment 1 holds the row and its first body's bytes; segment 2 holds the row again, both variants
   // and the stub. Planted here for the three arms (a variant, a linked sidecar, a kept blob); the real flow is in
-  // history-export.test.ts.
-  it('D-5396, F1c: a row of a later segment that links a pruned, unmarked blob clears an entry an EARLIER segment marked, whichever of the three row kinds it is; one marked by that same segment keeps its mark when the segment carries the blob, and an exported blob clears nothing', async () => {
+  // history-export.test.ts. Since D-5637 (history-export-replay-last-carrier, wave 5h-1) segment 2's own entry row moves each
+  // entry's mark to segment 2 before its rows link the pruned bodies, so the rows meet an entry marked by the segment that
+  // carries their stubs, and the mark stays. The arm that clears an entry another segment marks is reached now only where the
+  // mark names a segment that does not order before the row's (a restore's backup): the D-5637 describe below pins it.
+  it('D-5396, F1c: a row of a later segment that links a pruned, unmarked blob it carries keeps the mark its own entry row moved to that segment (D-5637), whichever of the three row kinds it is, and an exported blob clears nothing', async () => {
     const { box, ids, db } = x10Store('ccrc-history-d5396-f1c-');
     try {
       const t0 = Date.now() - 400 * X10_DAY;
@@ -4784,8 +4828,8 @@ describe('D-5395: replay marks an entry only while every blob it references is e
       expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
       expect(x10Count(db, 'entries')).toBe(5);
       expect([x10Count(db, 'entry_variants'), x10Count(db, 'sidecars'), x10Count(db, 'boundaries')], 'the rows linked the blobs: E0 two variants, E3 and E4 one each').toEqual([4, 1, 1]);
-      expect(marksOf(db), 'E0 (a variant), E1 (a sidecar) and E2 (a kept blob): unmarked, each over a pruned blob segment 1 does not carry; E3 is marked by segment 2, which carries its stub; E4 keeps segment 1 over an exported blob')
-        .toEqual([null, null, null, `2.${X10_WRITER}.db`, D_SEG]);
+      expect(marksOf(db), 'E0 (a variant), E1 (a sidecar) and E2 (a kept blob): marked by segment 2, whose entry rows took the marks before its rows linked the pruned bodies it carries as stubs (D-5637: first-wins left segment 1\'s marks, and the rows cleared them); E3 by segment 2, which carries its stub; E4 by segment 2 too, over an exported blob')
+        .toEqual(Array(5).fill(`2.${X10_WRITER}.db`));
       expect(db.prepare('SELECT count(*) AS n FROM blobs WHERE z IS NULL AND exported_ms IS NULL').get(), 'the four late bodies are tombstones no mark names').toEqual({ n: 4 });
       expect(strandedBlobsOn(db)).toEqual([]);
       expect(countersOn(db, 'export_row_blob_missing', 'export_row_unplaced')).toEqual({ export_row_blob_missing: 0, export_row_unplaced: 0 });
@@ -4794,10 +4838,12 @@ describe('D-5395: replay marks an entry only while every blob it references is e
     }
   });
 
-  // Minor 6 of review 614 (an optimisation that must keep replay's answers): an entry an earlier segment marked already is not marked
-  // again (entryMark changes nothing on it), so the later segment's entry row asks that segment nothing; and a row that links a blob to
-  // an entry marked by ANOTHER segment measures nothing in this one (it cannot count as carried there).
-  it('D-5396, F1c: an entry an earlier segment marked is not looked up in a later segment: its entry row, and a row that links a pruned blob to it, cost no lookup in the later segment\'s blobs', async () => {
+  // Minor 6 of review 614 (an optimisation that must keep replay's answers), as D-5637 (history-export-replay-last-carrier, wave 5h-1)
+  // reshapes it: a segment is asked whether it carries a pruned, unmarked blob only where it may take or holds the entry's mark. A
+  // later segment's entry row may take the mark from an earlier one (the last carrier wins), so it is asked; a segment that orders
+  // before the mark is not (the D-5637 describe's restore case); and a row that links a blob to an entry marked by ANOTHER segment
+  // measures nothing in this one (it cannot count as carried there).
+  it('D-5396, F1c: a segment is looked up only where it may take or holds the entry\'s mark: segment 1 for E0\'s pruned own blob, segment 2 (the last carrier, D-5637) for it again and for the pruned late body its variant row links; an exported blob costs none', async () => {
     const proto = DatabaseSync.prototype;
     const realPrepare = proto.prepare;
     let lookups = 0;
@@ -4828,11 +4874,133 @@ describe('D-5395: replay marks an entry only while every blob it references is e
         { kind: 'variant', row: { uuid: texts[0]!.uuid, blob_sha256: segmentSha(late), first_path: fam.path, first_dev: X10_DEV, first_ino: fam.ino, first_seen_ms: t0 + 5, cause: 'unknown' } },
       ] });
       expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
-      expect(lookups, 'one lookup in all: segment 1 is asked whether it carries E0\'s pruned own blob; segment 2\'s entry rows (both entries already marked) and its variant row (E0 is marked by segment 1) ask segment 2 nothing').toBe(1);
-      expect(marksOf(db), 'the answers are unchanged by that: E0 was marked by segment 1, then its variant row on a pruned blob segment 1 does not carry took the mark off (F1c); E1 keeps segment 1')
-        .toEqual([null, D_SEG]);
+      expect(lookups, 'three lookups: segment 1 for E0\'s pruned own blob at its entry row; segment 2 for it again at E0\'s entry row there, which takes the mark (D-5637; first-wins asked nothing there); segment 2 for the pruned late body its variant row links to E0, now marked by segment 2; E1\'s exported blob costs none').toBe(3);
+      expect(marksOf(db), 'E0 is marked by segment 2, which carries both its pruned bodies as stubs; E1 by segment 2, over an exported blob (D-5637: first-wins left E0 unmarked and E1 on segment 1)')
+        .toEqual([`2.${X10_WRITER}.db`, `2.${X10_WRITER}.db`]);
     } finally {
       proto.prepare = realPrepare;
+      closeWriter(db);
+    }
+  });
+});
+
+// ── wave 5h-1: replay marks by the LAST carrier (D-5637 (history-export-replay-last-carrier)), closing review 621 F3 ────────
+// Every export of an entry writes all the store holds of it, and every export of a blob carries every unlinked row naming it,
+// and nothing deletes those rows, so a later segment that carries a row holds everything an earlier one did. Replay used to
+// mark by the FIRST carrier, so a row that only a later segment holds (a late variant over bytes another entry exported, a
+// later unlinked sidecar row) had no mark naming its one carrier: once that segment was lost, the check after a bind cleared
+// nothing and nothing exported the row again. In-process on planted segments; the real verbs are F6's double fault above.
+describe('D-5637: export replay marks an entry and a blob by the last segment that carries them (wave 5h-1; review 621 F3)', () => {
+  const seg = (n: number): string => `${n}.${X10_WRITER}.db`;
+  const marksOf = (db: DatabaseSync): Array<string | null> =>
+    db.prepare('SELECT exported_seg AS seg FROM entries ORDER BY ts_ms, entry_id').all().map((r) => (r as { seg: string | null }).seg);
+  const blobMarkOf = (db: DatabaseSync, text: string): string | null =>
+    (db.prepare('SELECT exported_seg AS seg FROM blobs WHERE sha256 = ?').get(segmentSha(text)) as { seg: string | null }).seg;
+  const stub = (text: string): PlantSegmentBlob => ({ text: null, sha256: segmentSha(text), rawLen: text.length });
+
+  it('the variant probe: segment 2 carries an entry again with a late variant over bytes segment 1 exported with another entry; the entry is marked by segment 2, the only one that holds that link', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-d5637-variant-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(0x1700, 2, 'zqd5637v', t0);
+      const fam: X10Family = { uuid: x10U(0x17), path: '/home/u/gone/d5637v.jsonl', ino: 9951, texts };
+      const variant = (i: number, text: string): PlantSegmentRow => ({ kind: 'variant', row: {
+        uuid: texts[i]!.uuid, blob_sha256: segmentSha(text), first_path: fam.path, first_dev: X10_DEV, first_ino: fam.ino, first_seen_ms: t0 + 5, cause: 'unknown',
+      } });
+      // Segment 1: E0 and E1 with their bytes. E0 then gains a variant whose body is E1's (already exported), so the pass
+      // writes E0 again with both its variants and no bytes: segment 2.
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(fam) });
+      plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, blobs: [], rows: [
+        ...x10Rows({ ...fam, texts: [texts[0]!] }), variant(0, texts[0]!.text), variant(0, texts[1]!.text),
+      ] });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(x10Count(db, 'entry_variants'), 'CONTROL: segment 2 linked E0 to the second body').toBe(2);
+      expect(marksOf(db), 'E0 is marked by segment 2, the last segment that carries it and the only one with its late variant; E1 by segment 1')
+        .toEqual([seg(2), seg(1)]);
+      expect([blobMarkOf(db, texts[0]!.text), blobMarkOf(db, texts[1]!.text)], 'segment 2 carries no bytes, so each blob keeps segment 1').toEqual([seg(1), seg(1)]);
+      expect(strandedBlobsOn(db)).toEqual([]);
+      expect(countersOn(db, 'export_row_blob_missing', 'export_row_unplaced')).toEqual({ export_row_blob_missing: 0, export_row_unplaced: 0 });
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('the unlinked-row probe: segment 2 carries a blob\'s bytes again with a new unlinked sidecar row (D-5399\'s re-export); the blob is marked by segment 2, and so is the entry segment 2 carried again', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-d5637-unlinked-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(0x1800, 2, 'zqd5637u', t0);
+      const fam: X10Family = { uuid: x10U(0x18), path: '/home/u/gone/d5637u.jsonl', ino: 9952, texts };
+      const out = 'zqd5637u the saved tool output';
+      const sidecar = (name: string, uuid: string | null): PlantSegmentRow => ({ kind: 'sidecar', row: {
+        cc_session_uuid: fam.uuid, agent_id: '', name, blob_sha256: segmentSha(out), uuid, first_seen_ms: t0 + 5,
+      } });
+      // Segment 1: E0 links the output through its sidecar, the bytes with it. Segment 2: an unlinked row naming the same bytes
+      // took the blob's mark off and its referrer's (D-5399), so the pass carried the bytes again, E0 with its linked row, and
+      // the unlinked row.
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: [...texts.map((t) => ({ text: t.text })), { text: out }],
+        rows: [...x10Rows(fam), sidecar('d5637u-linked.txt', texts[0]!.uuid)] });
+      plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, blobs: [{ text: out }],
+        rows: [...x10Rows({ ...fam, texts: [texts[0]!] }), sidecar('d5637u-linked.txt', texts[0]!.uuid), sidecar('d5637u-orphan.txt', null)] });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(db.prepare('SELECT name, entry_id IS NULL AS unlinked FROM sidecars ORDER BY name').all().map((r) => ({ ...(r as object) })), 'CONTROL: both rows placed')
+        .toEqual([{ name: 'd5637u-linked.txt', unlinked: 0 }, { name: 'd5637u-orphan.txt', unlinked: 1 }]);
+      expect(blobMarkOf(db, out), 'the blob is marked by segment 2, the last that carries its bytes and the only one with the unlinked row').toBe(seg(2));
+      expect(marksOf(db), 'E0, carried again by segment 2, is marked by it; E1 keeps segment 1').toEqual([seg(2), seg(1)]);
+      expect(strandedBlobsOn(db)).toEqual([]);
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('a mark naming a segment that orders AFTER the one being replayed stays, on an entry and on a blob, as a restore\'s backup holds it; a row of the earlier segment that links a pruned, unmarked blob to such an entry still takes its mark off (D-5396)', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-d5637-later-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(0x1900, 2, 'zqd5637l', t0);
+      const fam: X10Family = { uuid: x10U(0x19), path: '/home/u/gone/d5637l.jsonl', ino: 9953, texts };
+      const late = 'zqd5637l late body, pruned before the pass';
+      const variant: PlantSegmentRow = { kind: 'variant', row: {
+        uuid: texts[1]!.uuid, blob_sha256: segmentSha(late), first_path: fam.path, first_dev: X10_DEV, first_ino: fam.ino, first_seen_ms: t0 + 5, cause: 'unknown',
+      } };
+      const every = { blobs: [...texts.map((t) => ({ text: t.text })), stub(late)], rows: [...x10Rows(fam), variant] };
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(fam) });
+      plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, ...every });
+      plantSegment(box, ids.storeId, { seq: 3, writer: X10_WRITER, ...every });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(marksOf(db), 'CONTROL: the first replay marks both entries by segment 3, the last carrier').toEqual([seg(3), seg(3)]);
+      expect(texts.map((t) => blobMarkOf(db, t.text)), 'CONTROL: and both bodies').toEqual([seg(3), seg(3)]);
+      // The store now holds marks naming segment 3, as a backup taken after its pass does; segment 3 is not on this box, and a
+      // replay of segments 1 and 2 (a restore's) runs over those marks.
+      fs.renameSync(path.join(exportDirOf(box), seg(3)), path.join(box.home, seg(3)));
+      db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', ?, NULL, NULL)").run(Date.now() + 5000);
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(texts.map((t) => blobMarkOf(db, t.text)), 'a blob marked by a later segment keeps that mark: segments 1 and 2 order before it').toEqual([seg(3), seg(3)]);
+      expect(marksOf(db), 'E0 keeps segment 3; E1 loses it, because segment 2\'s variant row links the pruned late body and what segment 3 carries is not measured (D-5396\'s over-clear, never a loss): the check after the restore\'s bind clears E0 with the missing segment')
+        .toEqual([seg(3), null]);
+      expect(strandedBlobsOn(db)).toEqual([]);
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('a later carrier that lacks a pruned, unmarked blob the entry needs takes the earlier mark off too, so the next pass writes the entry with the stub: the same seq from two writers, a directory carried in from another box (over-clearing, never a loss)', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-d5637-lacks-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(0x1a00, 2, 'zqd5637k', t0);
+      const fam: X10Family = { uuid: x10U(0x1a), path: '/home/u/gone/d5637k.jsonl', ino: 9954, texts };
+      const OTHER = 'ffffffff';   // orders after X10_WRITER at the same seq
+      // E0's own body was pruned before any pass: segment 1 of this writer carries its stub; segment 1 of the other writer
+      // carries E0's row without it. E1 is live and carried by both.
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: [stub(texts[0]!.text), { text: texts[1]!.text }], rows: x10Rows(fam) });
+      plantSegment(box, ids.storeId, { seq: 1, writer: OTHER, blobs: [{ text: texts[1]!.text }], rows: x10Rows(fam) });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(countersOn(db, 'export_row_blob_missing', 'export_row_unplaced'), 'CONTROL: both rows placed').toEqual({ export_row_blob_missing: 0, export_row_unplaced: 0 });
+      expect(marksOf(db), 'E0 is unmarked: the later carrier holds its row without the stub, and the earlier mark goes with it; E1 is marked by the later carrier')
+        .toEqual([null, `1.${OTHER}.db`]);
+      expect(strandedBlobsOn(db)).toEqual([]);
+    } finally {
       closeWriter(db);
     }
   });
@@ -4948,7 +5116,7 @@ describe('D-5397: export replay applies every segment\'s bytes before any segmen
     return { texts, fam: { uuid: x10U(base >> 4), path: `/home/u/gone/${word}.jsonl`, ino: 9000 + base, texts } };
   };
 
-  it('a stub in an earlier segment and the same blob\'s bytes in a later one, the two in separate passes: the bytes land, marked by the later segment; the entry is marked by the first segment that carries it; the text reads', async () => {
+  it('a stub in an earlier segment and the same blob\'s bytes in a later one, the two in separate passes: the bytes land, marked by the later segment; the entry is marked by the last segment that carries it (D-5637); the text reads', async () => {
     const { box, ids, db } = x10Store('ccrc-history-b4-d5397a-');
     try {
       const { fam, texts } = family(0x1100, 2, 'zqd5397a');
@@ -4968,7 +5136,7 @@ describe('D-5397: export replay applies every segment\'s bytes before any segmen
       expect(r.done, `the step completed: ${seen.join(' | ')}`).toBe(true);
       expect(blobOf(db, texts[0]!.text), 'the bytes of segment 2 landed, and segment 2 marked them').toEqual({ stub: 0, pruned: 0, seg: segName(2) });
       expect(bodyOf(db, texts[0]!.text), 'a read of the blob answers its text').toBe(texts[0]!.text);
-      expect(markOf(db, texts[0]!.uuid), 'replay\'s first-wins entry mark is unchanged: the first segment that carries the row').toBe(segName(1));
+      expect(markOf(db, texts[0]!.uuid), 'the entry is marked by segment 2, the last segment that carries its row (D-5637: first-wins gave segment 1)').toBe(segName(2));
       expect(markOf(db, texts[1]!.uuid)).toBe(segName(1));
       const phases = seen.map((c) => c.replace(/[:+].*$/, ''));
       const lastBytes = phases.lastIndexOf('export-blobs');
@@ -4995,7 +5163,7 @@ describe('D-5397: export replay applies every segment\'s bytes before any segmen
       expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
       expect(blobOf(db, texts[0]!.text), 'segment 1\'s bytes stay, marked by it').toEqual({ stub: 0, pruned: 0, seg: segName(1) });
       expect(bodyOf(db, texts[0]!.text), 'a read of the blob answers its text').toBe(texts[0]!.text);
-      expect(markOf(db, texts[0]!.uuid)).toBe(segName(1));
+      expect(markOf(db, texts[0]!.uuid), 'the entry is marked by segment 2, the last that carries its row; its blob keeps segment 1, which holds the bytes (D-5637: first-wins gave segment 1)').toBe(segName(2));
       expect(countersOn(db, 'export_blob_tombstone_kept', 'export_row_blob_missing')).toEqual({ export_blob_tombstone_kept: 0, export_row_blob_missing: 0 });
       // the read itself, through the real verb: the stub of segment 2 hid nothing
       const ex = expandOf(box, fam, texts[0]!.uuid);
@@ -5021,7 +5189,7 @@ describe('D-5397: export replay applies every segment\'s bytes before any segmen
       expect(blobOf(db, texts[0]!.text), 'the tombstone keeps its date, gains no body and no mark').toEqual({ stub: 1, pruned: 1, seg: null });
       expect(db.prepare('SELECT pruned_ms FROM blobs WHERE sha256 = ?').get(segmentSha(texts[0]!.text))).toEqual({ pruned_ms: 12345 });
       expect(bodyOf(db, texts[0]!.text), 'a read of it answers no text').toBeNull();
-      expect(blobOf(db, texts[1]!.text)).toEqual({ stub: 0, pruned: 0, seg: segName(1) });
+      expect(blobOf(db, texts[1]!.text), 'row 1\'s body is marked by segment 2, the last that carries its bytes (D-5637: first-wins gave segment 1)').toEqual({ stub: 0, pruned: 0, seg: segName(2) });
       expect(countersOn(db, 'export_blob_tombstone_kept'), 'one body met the tombstone; row 1\'s repeat met a blob the replay stored').toEqual({ export_blob_tombstone_kept: 1 });
       // the reads, through the real verb: the tombstone answers that its content was pruned, the live blob its text
       const pruned = expandOf(box, fam, texts[0]!.uuid);

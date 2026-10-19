@@ -7995,6 +7995,20 @@ describe('W1-B4: segment names, their order and the next number (spec 9.15 "Writ
     expect(libSeg.orderSegmentNames(['10.0000000a.db', '9.ffffffff.db', '.9.0000000b.db.tmp', 'notes.db', '9.0000000b.db', '01.0000000a.db']))
       .toEqual(['9.0000000b.db', '9.ffffffff.db', '10.0000000a.db']);
   });
+  it('segmentOrdersAfter is orderSegmentNames\' order, strict: a later seq, or the same seq and a later writer; never itself or an earlier one; no mark, or a mark off the grammar, names no carrier (D-5637 (history-export-replay-last-carrier))', () => {
+    expect(libSeg.segmentOrdersAfter('10.0000000a.db', '9.ffffffff.db'), 'seq is numeric, never lexical').toBe(true);
+    expect(libSeg.segmentOrdersAfter('9.ffffffff.db', '10.0000000a.db')).toBe(false);
+    expect(libSeg.segmentOrdersAfter('9.ffffffff.db', '9.0000000b.db'), 'the same seq: the writer token decides').toBe(true);
+    expect(libSeg.segmentOrdersAfter('9.0000000b.db', '9.ffffffff.db')).toBe(false);
+    expect(libSeg.segmentOrdersAfter('9.0000000b.db', '9.0000000b.db'), 'never after itself: a page replayed again moves nothing').toBe(false);
+    expect(libSeg.segmentOrdersAfter('1.0000000a.db', null), 'no mark').toBe(true);
+    expect(libSeg.segmentOrdersAfter('1.0000000a.db', 'notes.db'), 'a mark off the grammar names no carrier').toBe(true);
+    expect(() => libSeg.segmentOrdersAfter('01.0000000a.db', null), 'the replayed name is the caller\'s, from the listing').toThrow(TypeError);
+    const names = libSeg.orderSegmentNames(['10.0000000a.db', '9.ffffffff.db', '9.0000000b.db', '2.0000000c.db', '2.0000000b.db']);
+    for (let i = 0; i < names.length; i += 1) {
+      for (let j = 0; j < names.length; j += 1) expect(libSeg.segmentOrdersAfter(names[i]!, names[j]!), `${names[i]!} after ${names[j]!}: one order with orderSegmentNames`).toBe(i > j);
+    }
+  });
   it('O39: nextSegmentSeq is one past every seq on disk, of any writer, and past meta\'s; a counter behind the directory moves past it', () => {
     expect(libSeg.nextSegmentSeq({ onDisk: [], recorded: null })).toBe(1);
     expect(libSeg.nextSegmentSeq({ onDisk: [3, 9, 4], recorded: 5 })).toBe(10);
@@ -8362,7 +8376,7 @@ describe('W1-B4 review 614, F1b: segmentMayMarkEntry, replay marks an entry with
     expect(may(b(true, false, true), b(false, true, true)), 'beside an exported one').toBe(true);
     expect(may(b(true, false, false), b(false, true, false)), 'beside an exported one, not carried').toBe(false);
   });
-  it('an exported blob licenses the mark whether or not the segment carries it, pruned since or not: first wins stays for what is exported', () => {
+  it('an exported blob licenses the mark whether or not the segment carries it, pruned since or not: any carrier of the row may take it (replay gives it to the last, D-5637)', () => {
     expect(may(b(true, false, false)), 'exported, not carried').toBe(true);
     expect(may(b(true, false, true)), 'exported, carried').toBe(true);
     expect(may(b(true, true, false)), 'exported, then pruned, not carried').toBe(true);
