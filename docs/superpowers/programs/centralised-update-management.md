@@ -2010,6 +2010,24 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       - 2026-10-19 00:55: v0.0.309 (#659), v0.0.310 (#663) and v0.0.311 (#666) followed, unapplied. STATUS: fleet
         and server v0.0.294, newest v0.0.311 (stable v0.0.299), intent dev/auto=off, backups fleet 173M/server
         1878M, disk free fleet 208G/work volume 81G/server 31G, no anomalies.
+      - **2026-10-19 02:40 UTC: ANOMALY, not of the update mechanism: the server's event loop blocks about 20 s once a
+        minute.** The 01:58 probe read an empty `/health`; re-probed at once, it answered 200 in 0.02 s on v0.0.294, and
+        `ccrc.service` has been up since 21:00:42 with 0 restarts. Then measured read-only on the server:
+        - `/health` every 2 s for 40 min (10 s timeout): every 60 to 72 s, one request times out and the next answers
+          after 5 to 10 s, a blackout of about 15 to 22 s each minute; otherwise 20 to 30 ms.
+        - The node process, sampled once a second from `/proc`: 185 to 198% CPU in state R through a blackout
+          (02:40:32 to 02:40:51), 10 to 30% between. A synchronous, allocation-heavy job on the main thread.
+        - The registry stalls in the journal ("could not be listed ... listable again after" 22 to 26 s, 46 in 24 h)
+          and the "listed but unreadable" lines at each block's end are its symptoms, not its cause.
+        - Sizes against day 0 of the soak (16:15 yesterday): `delegation-events.log` 75.6M (42.4M), the checkpoint
+          8.6M (4.8M), `coord.db` 198M (147M). The lead suspect is the delegation broker's per-tick work over its
+          growing journal; a read-only code diagnosis is running. Mail 6586 told its coordinator.
+        - For this programme: the post-update gate polls every 2 s for 90 s, so it rides a blackout. The
+          watchdog's three samples (5 s timeout, 5 s apart) span about 25 s, against a 22 s blackout; that margin
+          shrinks if the blackout grows. Nothing moved or reverted.
+        v0.0.312 (#664, wave 21), v0.0.313 (#667) and v0.0.314 (#668) followed, unapplied. STATUS: fleet and server
+        v0.0.294, newest v0.0.314, health `?` once at 01:58, intent dev/auto=off, backups fleet 173M/server
+        1878M, disk free fleet 208G/work volume 83G/server 31G.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
