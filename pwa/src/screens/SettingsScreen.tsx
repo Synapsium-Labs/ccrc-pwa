@@ -563,6 +563,8 @@ function UpdatesBody({ view, stale, now, reload }: {
   // landing while the sheet is open cannot change the list under a thumb.
   const [move, setMove] = useState<PlannedMove | null>(null);
   const openMove = (intent: MoveIntent): void => setMove(planMove(view, intent));
+  // D-5611: the rollback sheet's target, for its withdrawn and unbundled lines.
+  const rollbackTo = move !== null && move.intent.direction === 'rollback' ? move.intent.to : null;
   // Updates' own "See what's new" (settings spec §4.1, D-5505): the banner's sheet, the banner's tag
   // (`bannerRelease`), and its footer's Update all handing over to the one move sheet. One sheet at a time.
   const [whatsNew, setWhatsNew] = useState(false);
@@ -708,7 +710,13 @@ function UpdatesBody({ view, stale, now, reload }: {
           setMove(planMove(view, { scope: 'fleet', direction: 'update', tag: waiting.tag }));
         }}
       />
-      <UpdateMoveSheet open={move !== null} plan={move} onClose={() => setMove(null)} onDone={reload} />
+      {/* D-5507: a rollback is a danger action, so its sheet takes the danger tone and reads the target's catalogue
+          row (withdrawn, unbundled; D-5611). Install and Update keep the default. */}
+      <UpdateMoveSheet
+        open={move !== null} plan={move} onClose={() => setMove(null)} onDone={reload}
+        tone={move?.intent.direction === 'rollback' ? 'danger' : 'move'}
+        release={rollbackTo === null ? undefined : view?.releases.find((r) => r.tag === rollbackTo)}
+      />
     </>
   );
 }

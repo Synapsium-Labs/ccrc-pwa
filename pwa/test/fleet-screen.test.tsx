@@ -3012,6 +3012,7 @@ describe('the halt on the fleet screen (programme wave 14, R15)', () => {
     expect(order).toEqual(['banner', 'halt-banner', 'update-banner']);
     expect(updates, 'one poll for the whole screen').toHaveBeenCalledTimes(1);
     fireEvent.click(ackButton);
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Ack' }));   // through AckConfirm (D-5507)
     await waitFor(() => expect(updates).toHaveBeenCalledTimes(2));
     expect(ack.mock.calls).toEqual([[FLEET]]);
   });
@@ -3048,6 +3049,7 @@ describe('the halt on the fleet screen (programme wave 14, R15)', () => {
     const ack = vi.spyOn(api, 'ackUpdateNode').mockRejectedValue(new TypeError('Failed to fetch'));
     render(<FleetScreen store={makeStore()} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Ack fleet' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Ack' }));   // through AckConfirm (D-5507)
     await until(() => expect(updates).toHaveBeenCalledTimes(2));
     await until(() => expect(screen.getByRole('button', { name: 'Ack fleet' })).toBeDisabled());
     expect(ack).toHaveBeenCalledTimes(1);

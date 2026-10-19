@@ -917,7 +917,7 @@ describe('SettingsScreen — the release list: rendering (design 2026-09-20 §13
       '1. fleet (fleet) v0.0.10 → v0.0.9',
       '2. server (server) v0.0.10 → v0.0.9',
     ]);
-    fireEvent.click(screen.getByRole('button', { name: 'Roll back to v0.0.9' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Roll back 2 nodes' }));   // the danger commit names the verb (D-5507)
     await waitFor(() => expect(rollback).toHaveBeenCalledTimes(2));
     expect(rollback.mock.calls).toEqual([[{ nodeId: T8_NODE_A, to: 'v0.0.9' }], [{ nodeId: T8_NODE_B, to: 'v0.0.9' }]]);
     expect(apply).not.toHaveBeenCalled();
@@ -940,7 +940,7 @@ describe('SettingsScreen — the release list: rendering (design 2026-09-20 §13
       '1. fleet (fleet) v0.0.12 → v0.0.10',
       '2. server (server) v0.0.12 → v0.0.10',
     ]);
-    fireEvent.click(screen.getByRole('button', { name: 'Roll back to v0.0.10' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Roll back 2 nodes' }));   // the danger commit names the verb (D-5507)
     await waitFor(() => expect(rollback).toHaveBeenCalledTimes(2));
     expect(rollback.mock.calls).toEqual([[{ nodeId: T8_NODE_A, to: 'v0.0.10' }], [{ nodeId: T8_NODE_B, to: 'v0.0.10' }]]);
   });
@@ -955,11 +955,11 @@ describe('SettingsScreen — the release list: rendering (design 2026-09-20 §13
       [t8Server({ current: t8Stamp('v0.0.10') }), t8Node({ current: t8Stamp('v0.0.10') })],
     );
     fireEvent.click(within(rowOf(list, 'v0.0.9')).getByRole('button', { name: 'Roll back' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Roll back to v0.0.9' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Roll back 2 nodes' }));
     const said = await screen.findByText(updateErrorText(refusal));
     expect(said).toHaveAttribute('role', 'alert');
     expect(rollback.mock.calls).toEqual([[{ nodeId: T8_NODE_A, to: 'v0.0.9' }]]);
-    expect(screen.getByRole('button', { name: 'Roll back to v0.0.9' })).not.toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Roll back 2 nodes' })).not.toBeDisabled();
     expect(api.updates).toHaveBeenCalledTimes(1);   // nothing was requested — nothing to re-poll
   });
 
@@ -1358,7 +1358,7 @@ describe('SettingsScreen — the node inventory: rendering (design 2026-09-20 §
     fireEvent.click(within(rowOf(list, T9_NODE_A)).getByRole('button', { name: 'Roll back' }));
     const sheet = await screen.findByRole('list', { name: 'Nodes this moves, in order' });
     expect(within(sheet).getAllByRole('listitem').map((li) => li.textContent)).toEqual(['1. fleet (fleet) v0.0.9 → v0.0.8']);
-    fireEvent.click(screen.getByRole('button', { name: 'Roll back to v0.0.8' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Roll back fleet' }));   // the danger commit names the verb (D-5507)
     await waitFor(() => expect(rollback).toHaveBeenCalledTimes(1));
     expect(rollback).toHaveBeenCalledWith({ nodeId: T9_NODE_A, to: 'v0.0.8' });
   });
@@ -1444,6 +1444,8 @@ describe('SettingsScreen — the node inventory: rendering (design 2026-09-20 §
     const button = within(rowOf(list, T9_NODE_A)).getByRole('button', { name: 'Ack' });
     expect(button).toBeEnabled();
     fireEvent.click(button);
+    expect(ack, 'the Ack opens its confirm first (D-5507)').not.toHaveBeenCalled();
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Ack' }));
     expect(ack).toHaveBeenCalledTimes(1);
     expect(ack).toHaveBeenCalledWith(T9_NODE_A);
     await waitFor(() => expect(updates.mock.calls.length).toBeGreaterThan(before));
@@ -1484,6 +1486,7 @@ describe('SettingsScreen — the node inventory: rendering (design 2026-09-20 §
     const button = within(rowOf(list, T9_NODE_A)).getByRole('button', { name: 'Ack' });
     expect(button).toBeEnabled();
     fireEvent.click(button);
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Withdraw the request' }));
     const t = await screen.findByText(updateErrorText(busy), { selector: '.toast' });
     expect(t).toHaveClass('toast--error');
   });
@@ -1492,6 +1495,7 @@ describe('SettingsScreen — the node inventory: rendering (design 2026-09-20 §
     vi.spyOn(api, 'ackUpdateNode').mockResolvedValue('unreadable');
     const { list } = await renderNodes([t9Node({ update: { state: 'reverted', target: null, startedAt: null, detail: null } })]);
     fireEvent.click(within(rowOf(list, T9_NODE_A)).getByRole('button', { name: 'Ack' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Ack' }));
     const t = await screen.findByText(ACK_UNREADABLE_TEXT, { selector: '.toast' });
     expect(t).not.toHaveClass('toast--error');
   });
@@ -2988,5 +2992,124 @@ describe('SettingsScreen — the release window (D-5505)', () => {
     // The rows render notes through ReleaseNotes, never a <pre> of their own.
     expect(files[0]![1]).not.toMatch(/<pre[\s>]/);
     expect(files[0]![1]).toMatch(/<ReleaseNotes notes=\{r\.notes\} source=\{source\} \/>/);
+  });
+});
+
+// Settings spec §6.3 (D-5507): the node row's Ack opens `AckConfirm`, the one confirm beside `canAck`, `ackBranch`
+// and `sendAck`, before any request. Cancel posts nothing and holds the focus; the commit posts once; closing gives
+// the focus back. The copy and the button come from `ackBranch`, and the refusals Ack forgets are named whatever
+// the branch, because `ackNode` clears every refusal the node holds.
+describe('SettingsScreen — Ack is confirmed (D-5507)', () => {
+  const view = (nodes: NodeWire[], releases: ReleaseWire[] = [t9Release('v0.0.9')]): UpdatesView => ({
+    catalogue: { lastOkAt: T9_T0, lastError: null },
+    releases,
+    nodes,
+    intent: [{ scope: FLEET_SCOPE, channel: 'stable', pinnedTag: null, auto: 'off', notify: 'channel', setAt: T9_T0, setBy: 'test' }],
+  });
+  const renderNodes = async (nodes: NodeWire[], releases?: ReleaseWire[]) => {
+    const updates = vi.spyOn(api, 'updates').mockResolvedValue(view(nodes, releases));
+    render(<><ToastHost /><SettingsScreen /></>);
+    const list = await screen.findByRole('list', { name: 'Nodes' });
+    const row = list.querySelector<HTMLElement>(`li[data-node-id="${T9_NODE_A}"]`)!;
+    return { list, row, updates };
+  };
+  const settle = async (): Promise<void> => { await act(async () => { await new Promise((r) => setTimeout(r, 20)); }); };
+  const FAILED = { state: 'failed', target: 'v0.0.10', startedAt: T9_T0, detail: null } as const;
+  const REQUEST = { tag: 'v0.0.10', kind: 'update', at: T9_T0 } as const;
+
+  it('the trigger opens a confirm; Cancel posts nothing; Cancel has the focus; closing returns focus to the trigger', async () => {
+    const ack = vi.spyOn(api, 'ackUpdateNode').mockResolvedValue({ ok: true, node: t9Node() });
+    const { row } = await renderNodes([t9Node({ update: FAILED })]);
+    const trigger = within(row).getByRole('button', { name: 'Ack' });
+    trigger.focus();
+    fireEvent.click(trigger);
+    const sheet = await screen.findByRole('dialog');
+    await settle();
+    const cancel = within(sheet).getByRole('button', { name: 'Cancel' });
+    expect(document.activeElement, 'Cancel has the focus').toBe(cancel);
+    expect(ack, 'nothing is sent before the commit').not.toHaveBeenCalled();
+    fireEvent.click(cancel);
+    await settle();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(ack, 'Cancel posts nothing').not.toHaveBeenCalled();
+    expect(document.activeElement, 'closing returns focus to the trigger').toBe(trigger);
+  });
+
+  it('the commit posts once, and re-polls', async () => {
+    const ack = vi.spyOn(api, 'ackUpdateNode').mockResolvedValue({ ok: true, node: t9Node() });
+    const { row, updates } = await renderNodes([t9Node({ update: FAILED })]);
+    const before = updates.mock.calls.length;
+    fireEvent.click(within(row).getByRole('button', { name: 'Ack' }));
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Ack' }));
+    expect(ack.mock.calls).toEqual([[T9_NODE_A]]);
+    await waitFor(() => expect(updates.mock.calls.length).toBeGreaterThan(before));
+    expect(ack).toHaveBeenCalledTimes(1);
+  });
+
+  it('a failed move: "Ack fleet\'s failed move?", button "Ack"', async () => {
+    const { row } = await renderNodes([t9Node({ update: FAILED })]);
+    fireEvent.click(within(row).getByRole('button', { name: 'Ack' }));
+    const sheet = await screen.findByRole('dialog');
+    expect(within(sheet).getByText("Ack fleet's failed move?")).toBeInTheDocument();
+    expect(within(sheet).getByText('It returns to idle.')).toBeInTheDocument();
+    expect(within(sheet).getByRole('button', { name: 'Ack' })).toBeInTheDocument();
+  });
+
+  it('the request-only branch: "Withdraw the request on fleet?", button "Withdraw the request", nothing moves', async () => {
+    const { row } = await renderNodes([t9Node({ request: REQUEST })]);
+    fireEvent.click(within(row).getByRole('button', { name: 'Ack' }));
+    const sheet = await screen.findByRole('dialog');
+    expect(within(sheet).getByText('Withdraw the request on fleet?')).toBeInTheDocument();
+    expect(within(sheet).getByText('The request to update to v0.0.10 is cleared, and nothing moves.')).toBeInTheDocument();
+    expect(within(sheet).getByRole('button', { name: 'Withdraw the request' })).toHaveClass('btn-danger');
+    expect(within(sheet).queryByText(/forgets/)).toBeNull();
+  });
+
+  it('request plus refusals names the refusals', async () => {
+    const { row } = await renderNodes([t9Node({ request: REQUEST })], [t9Release('v0.0.10', { refused: [{ by: T9_NODE_A, at: T9_T0 }] })]);
+    fireEvent.click(within(row).getByRole('button', { name: 'Ack' }));
+    const sheet = await screen.findByRole('dialog');
+    expect(within(sheet).getByRole('button', { name: 'Withdraw the request' })).toBeInTheDocument();
+    expect(within(sheet).getByText(
+      'It also forgets that it refused v0.0.10. With auto-install on, the server may try it again on its next check.',
+    )).toBeInTheDocument();
+  });
+
+  it('a refusal-only node names the refusals', async () => {
+    const { row } = await renderNodes([t9Node()], [t9Release('v0.0.10', { refused: [{ by: T9_NODE_A, at: T9_T0 }] })]);
+    fireEvent.click(within(row).getByRole('button', { name: 'Ack' }));
+    const sheet = await screen.findByRole('dialog');
+    expect(within(sheet).getByText("Clear fleet's refusals?")).toBeInTheDocument();
+    expect(within(sheet).getByText(
+      'It forgets that it refused v0.0.10. With auto-install on, the server may try it again on its next check.',
+    )).toBeInTheDocument();
+    expect(within(sheet).getByRole('button', { name: 'Ack' })).toBeInTheDocument();
+  });
+
+  it('in a row, no danger-ghost precedes a ghost (the release rows and the node rows)', async () => {
+    vi.spyOn(api, 'updates').mockResolvedValue(view(
+      [t9Node({ previousVersion: 'v0.0.8', desiredTag: 'v0.0.10', update: FAILED }), t9Server({ previousVersion: 'v0.0.8' })],
+      [t9Release('v0.0.10'), t9Release('v0.0.9'), t9Release('v0.0.8')],
+    ));
+    render(<><ToastHost /><SettingsScreen /></>);
+    const releases = await screen.findByRole('region', { name: 'Releases' });
+    const nodes = await screen.findByRole('list', { name: 'Nodes' });
+    const groups = [
+      ...releases.querySelectorAll<HTMLElement>('.settings-release-actions'),
+      ...nodes.querySelectorAll<HTMLElement>('.settings-node-actions'),
+    ];
+    expect(groups.length).toBeGreaterThan(2);
+    let sawDanger = 0;
+    for (const g of groups) {
+      const tones = [...g.querySelectorAll<HTMLElement>('.settings-move')]
+        .map((b) => (b.classList.contains('btn-danger-ghost') ? 'danger' : 'ghost'));
+      const firstDanger = tones.indexOf('danger');
+      if (firstDanger >= 0) sawDanger += 1;
+      expect(firstDanger === -1 || !tones.slice(firstDanger).includes('ghost'), tones.join(' ')).toBe(true);
+    }
+    expect(sawDanger, 'the case reads rows that hold a danger action').toBeGreaterThan(0);
+    const nodeTones = [...nodes.querySelector<HTMLElement>(`li[data-node-id="${T9_NODE_A}"] .settings-node-actions`)!
+      .querySelectorAll<HTMLElement>('.settings-move')].map((b) => b.textContent);
+    expect(nodeTones).toEqual(['Update', 'Roll back', 'Ack']);
   });
 });

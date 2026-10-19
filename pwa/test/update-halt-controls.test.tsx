@@ -231,6 +231,7 @@ describe('Settings\' Ack keeps focus in its row when it disables (wave 19, R26(a
     const ack = within(row).getByRole('button', { name: 'Ack' });
     ack.focus();
     fireEvent.click(ack);
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Ack' }));   // through AckConfirm (D-5507)
     expect(ack).toBeDisabled();
     expect(document.activeElement, 'in flight: the row holds focus, not the disabled button').toBe(row);
     expect(row).toHaveAttribute('tabindex', '-1');
@@ -244,6 +245,7 @@ describe('Settings\' Ack keeps focus in its row when it disables (wave 19, R26(a
     try {
       other.focus();
       fireEvent.click(within(rowOf(list, FLEET_ID)).getByRole('button', { name: 'Ack' }));
+      fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Ack' }));   // through AckConfirm (D-5507)
       await waitFor(() => expect(onAcked).toHaveBeenCalledTimes(1));
       expect(document.activeElement).toBe(other);
     } finally {

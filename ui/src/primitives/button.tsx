@@ -14,7 +14,7 @@
 // silently un-styles a descendant rule in another package with no build error,
 // so they stay until every consumer of that selector is migrated too.
 import { cva, type VariantProps } from 'class-variance-authority';
-import type { ButtonHTMLAttributes, ReactNode } from 'react';
+import type { ButtonHTMLAttributes, ReactNode, Ref } from 'react';
 import { cn } from '../lib/cn';
 import { FOCUS_RING } from '../lib/focus';
 import { GROUND_MOTION } from '../lib/press';
@@ -98,7 +98,10 @@ export const buttonVariants = cva(
 
 export interface ButtonProps
   extends ButtonHTMLAttributes<HTMLButtonElement>,
-    VariantProps<typeof buttonVariants> {}
+    VariantProps<typeof buttonVariants> {
+  /** React 19 passes `ref` as a prop; the spread hands it to the <button>. QuickConfirm holds its Cancel by it (D-5610). */
+  ref?: Ref<HTMLButtonElement>;
+}
 
 export function Button({ className, variant, size, type = 'button', ...props }: ButtonProps): ReactNode {
   return <button type={type} className={cn(buttonVariants({ variant, size }), className)} {...props} />;
