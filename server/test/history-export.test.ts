@@ -3113,3 +3113,63 @@ describe('the check after a bind runs in bounded, resumable batches (W5h-1 Task 
     expect(strandedBlobs(box)).toEqual([]);
   }, 300_000);
 });
+
+// ── W5h-1 Task 2: status reads the check's stop record, and doctor's two words come from it (D-5633) ───────────────
+// The real CLI against a store B1's first scheduled pass made (fixture HOMEs only, as B4 Task 9's describes above). The
+// record is planted exactly as Task 1's check leaves it: '<word> <sinceMs> <cleared>' in HEALTH_META.exportMarksCheck.
+describe('W5h-1 Task 2: status reads export_marks_check; a stopped check WARNs, a stalled one FAILs, a malformed one is unmeasured (D-5633)', () => {
+  beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
+
+  /** A bound store after its first scheduled pass. */
+  function w5Bound(prefix: string): x9H.HistoryBox {
+    const box = x9H.makeHistoryBox(prefix, { role: 'fleet', shim: true });
+    const r = x9H.runSweep(box);
+    expect(r.code, `${r.stdout}\n${r.stderr}`).toBe(0);
+    return box;
+  }
+  /** The check's stop record set to `v`, or deleted when `v` is null (the done stamp's delete). */
+  function w5Plant(box: x9H.HistoryBox, v: string | null): void {
+    const db = x9Store.openWriter(x9Lib.historyPaths(box.home).dbFile);
+    try {
+      if (v === null) db.prepare('DELETE FROM meta WHERE k = ?').run(x9Lib.HEALTH_META.exportMarksCheck);
+      else x9Store.setMeta(db, x9Lib.HEALTH_META.exportMarksCheck, v);
+    } finally { x9Store.closeWriter(db); }
+  }
+  /** `ccrc history status --json`'s health, as doctor reads it. */
+  function w5Health(box: x9H.HistoryBox): X9Envelope['health'] {
+    const r = x9H.runCli(box, ['status', '--json']);
+    expect(r.code, `${r.stdout}\n${r.stderr}`).toBe(0);
+    return (r.json as unknown as X9Envelope).health;
+  }
+  const w5Words = (h: X9Envelope['health']): string[] => [...h.warn, ...h.fail].map((i) => i.word);
+
+  it('planted, the record WARNs export-marks-unchecked; an escalating word past the stall FAILs export-marks-stalled instead; deleted, neither', () => {
+    const box = w5Bound('ccrc-hist-w5h2-status-');
+    expect(w5Words(w5Health(box)), 'CONTROL: a fresh store has no check standing').not.toContain('export-marks-unchecked');
+    w5Plant(box, `budget ${Date.now() - 30 * X9_MIN} 4`);
+    const warned = w5Health(box);
+    const item = warned.warn.find((i) => i.word === 'export-marks-unchecked');
+    expect(item, JSON.stringify(warned)).toBeDefined();
+    expect(item!.detail).toContain('it last stopped on budget (');
+    expect(item!.detail).toContain('has cleared 4 mark(s) so far');
+    expect(warned.fail.map((i) => i.word)).not.toContain('status-unreadable');
+    w5Plant(box, `wal-held ${Date.now() - x9Lib.EXPORT_MARKS_STALL_MS - X9_HOUR} 4`);
+    const failed = w5Health(box);
+    expect(failed.fail.map((i) => i.word)).toContain('export-marks-stalled');
+    expect(failed.warn.map((i) => i.word), 'the FAIL replaces the WARN').not.toContain('export-marks-unchecked');
+    w5Plant(box, null);
+    const words = w5Words(w5Health(box));
+    expect(words).not.toContain('export-marks-unchecked');
+    expect(words).not.toContain('export-marks-stalled');
+  }, 120_000);
+
+  it('a record the parser refuses is unmeasured: FAIL status-unreadable naming export_marks_check, never "no check standing"', () => {
+    const box = w5Bound('ccrc-hist-w5h2-malformed-');
+    w5Plant(box, 'budget soon 4');
+    const h = w5Health(box);
+    const unread = h.fail.find((i) => i.word === 'status-unreadable');
+    expect(unread, JSON.stringify(h)).toBeDefined();
+    expect(unread!.detail).toContain(x9Lib.HEALTH_META.exportMarksCheck);
+    expect(w5Words(h)).not.toContain('export-marks-unchecked');
+  }, 120_000);
+});

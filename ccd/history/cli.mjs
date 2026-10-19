@@ -1159,7 +1159,7 @@ const listOf = (v) => {
  *  status never reads one fact twice or spells it two ways. A reading that
  *  throws is named in `unmeasured` (Task 28F: absent is not unreadable). */
 function readStoreExtras(p, nowMs) {
-  const x = { breakerOpen: false, recoverUnmovedTicks: 0, exportSegmentNewer: [], exportSegmentMissing: 0, copyBps: null, heldPassMs: null, unmeasured: [] };
+  const x = { breakerOpen: false, recoverUnmovedTicks: 0, exportSegmentNewer: [], exportSegmentMissing: 0, copyBps: null, heldPassMs: null, exportMarksCheck: null, unmeasured: [] };
   let db;
   try { db = healthStore.openReader(p.dbFile); } catch { x.unmeasured.push('store'); return x; }
   // Each reading is its own try: one that fails is named in `unmeasured` and keeps its default, which
@@ -1183,6 +1183,12 @@ function readStoreExtras(p, nowMs) {
       if (!/^[0-9]{1,16}$/.test(v)) throw new Error(`${healthLib.HEALTH_META.heldPassMs} is not an integer`);
       x.heldPassMs = Number(v);
     });
+    // D-5633 (history-export-bind-check-doctor): absent is no unfinished check; a value lib's parser refuses is unmeasured (read names
+    // it, and deriveHealth answers status-unreadable), never "no unfinished check".
+    read(healthLib.HEALTH_META.exportMarksCheck, () => {
+      const v = meta(healthLib.HEALTH_META.exportMarksCheck);
+      x.exportMarksCheck = v === null ? null : healthLib.parseMarkCheckState(v);
+    });
     read('copy_bps', () => {                                            // task 13's executor
       const bps = intOf(meta('copy_bps'));
       x.copyBps = bps > 0 ? bps : null;
@@ -1205,7 +1211,7 @@ async function readHealthExtras(home, env, nowMs) {
   } catch { dbPath = p.dbDir; }
   const store = env.exit === healthLib.EXIT.OK
     ? readStoreExtras(p, nowMs)
-    : { breakerOpen: false, recoverUnmovedTicks: 0, exportSegmentNewer: [], exportSegmentMissing: 0, copyBps: null, heldPassMs: null, unmeasured: [] };
+    : { breakerOpen: false, recoverUnmovedTicks: 0, exportSegmentNewer: [], exportSegmentMissing: 0, copyBps: null, heldPassMs: null, exportMarksCheck: null, unmeasured: [] };
   // FU8 (FP3): a link or a file at spool/ is measured by lstat, never followed, and no spool/.draining is read through it.
   let spoolNotDirectory = false;
   try { spoolNotDirectory = !healthFs.lstatSync(p.spool).isDirectory(); } catch { spoolNotDirectory = false; }
@@ -1266,6 +1272,7 @@ function healthInputsOf(env, x, nowMs) {
       ? { pid: env.pass_died.pid, startMs: env.pass_died.start_ms, foundMs: env.pass_died.found_ms, count: env.pass_died.count }
       : null,
     heldPassMs: x.heldPassMs ?? null,
+    exportMarksCheck: x.exportMarksCheck ?? null,   // D-5633: the check after a bind's stop record, or null when none stands
     // The envelope lists the newest tick first; deriveHealth's catching-up rule reads oldest first.
     bytesBehindLast3: [...(env.bytes_behind_last3 ?? [])].map(Number).reverse(),
     fts: env.fts ?? null,

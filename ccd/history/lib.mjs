@@ -333,7 +333,7 @@ export const PASS_WORDS = Object.freeze([
  *  `at-cap`, `capture-paused-low-disk`, `mode-wrong`, `schema-newer`,
  *  `cap-malformed`, `cap-near`, `breaker-open`, `roster-unreadable`,
  *  `root-is-symlink`, `fts-unavailable`, `status-unreadable`, D-4346's `blob-undecodable` and `drain-rejected`, and D-4347's
- *  `spool-planted`. */
+ *  `spool-planted`, and D-5633's `export-marks-unchecked` and `export-marks-stalled`. */
 const healthRows = (cls, words) => words.map((w) => [w, cls]);
 const healthEntries = [
   // D-4168: within the shim's grace with no tick yet, doctor answers PASS, not §9.6 step 3's WARN.
@@ -343,14 +343,14 @@ const healthEntries = [
     'redact-source-unreadable', 'cap-near', 'breaker-open', 'roster-unreadable', 'root-is-symlink',
     'export-due', 'export-paused-low-disk', 'retention-unmeasured', 'retention-lowered',
     'export-segment-missing', 'journal-record-skipped', 'journal-growth', 'blob-undecodable',
-    'drain-rejected', 'spool-planted',
+    'drain-rejected', 'spool-planted', 'export-marks-unchecked',
   ]),
   ...healthRows('fail', [
     'tick-stale', 'lag-high', 'at-cap', 'capture-paused-low-disk', 'mode-wrong', 'schema-newer',
     'store-not-wal', 'store-unmeasured', 'recovery-stalled', 'store-root-dangling', 'store-missing',
     'store-mismatch', 'store-unbound', 'store-unreachable', 'store-recoverable', 'store-wal-orphaned',
     'store-zero-byte', 'store-schema-missing', 'migration-refused', 'migration-needs-op', 'journal-unwritable',
-    'export-segment-newer', 'export-overdue', 'status-unreadable',
+    'export-segment-newer', 'export-overdue', 'export-marks-stalled', 'status-unreadable',
   ]),
 ];
 export const HEALTH_WORDS = Object.freeze(Object.fromEntries(healthEntries));
@@ -3421,6 +3421,9 @@ export const HEALTH_REMEDIES = Object.freeze({
   'retention-unmeasured': 'make cleanupPeriodDays readable in the named homes\' settings.json',
   'retention-lowered': 'set cleanupPeriodDays in the named home\'s settings.json to at least the others\' value',
   'export-segment-missing': 'carry the export directory from the box the store came from, or let the rows export again',
+  // D-5633 (history-export-bind-check-doctor): the fallback texts; remedyFor answers by the word the check stopped on.
+  'export-marks-unchecked': `none needed while the check resumes each tick; otherwise act on the word it stopped on (history off, a long-running reader, an unreadable export directory), or read the sweep: ${SWEEP_LOG}`,
+  'export-marks-stalled': `act on the word the check stopped on (history off, a long-running reader, an unreadable export directory), or read the sweep: ${SWEEP_LOG}`,
   'journal-record-skipped': `none needed if the journal came from a newer build; otherwise read the sweep: ${SWEEP_LOG} (no operator verb clears this count: the journal audit recounts it from the journal each time it runs)`,
   'journal-growth': `read the sweep: ${SWEEP_LOG}; the journal grows faster than twice its estimate`,
   'blob-undecodable': `the store's copy of that text is damaged (storage corruption) and nothing repairs it in place: keep ~/.ccrc/history as it is; the operator runs ccrc history doctor --repair, which checks the store's integrity and re-reads every blob to re-measure this count, from a terminal outside any session`,
@@ -3479,6 +3482,9 @@ function remedyFor(word, h) {
       return exportDueRemedy(h);
     case 'export-overdue':
       return exportOverdueRemedy(h);
+    case 'export-marks-unchecked':
+    case 'export-marks-stalled':
+      return markCheckRemedy(word, h);
     default:
       return HEALTH_REMEDIES[word] ?? '';
   }
@@ -3677,6 +3683,10 @@ export function deriveHealth(h) {
   if (h.exportSegmentNewer.length > 0) fail.push(item('export-segment-newer', `export segment(s) ${h.exportSegmentNewer.join(', ')} are in a newer format than this build reads`));
   // D-4207 (history-export-due-escalates): the overdue FAIL on measured source loss, and export-due below.
   if (h.exportOverdue > 0) fail.push(item('export-overdue', `${h.exportOverdue} unexported blob(s) whose source text is gone or past its deletion date: the store may be their only copy`));
+  // D-5633 (history-export-bind-check-doctor): a check after a bind that has stopped on escalating words (wal-held,
+  // unlistable, failed) for over EXPORT_MARKS_STALL_MS FAILs in place of its WARN below (coordinator ruling R5, as amended).
+  const markCheck = markCheckArm(h);
+  if (markCheck === 'stalled') fail.push(item('export-marks-stalled', markCheckDetail(markCheck, h)));
 
   // 5. the WARNs.
   if (h.fts === 'fts5-absent' || h.fts === 'probe-failed') warn.push(item('fts-unavailable', `search unavailable (${h.fts}); capture continues`));
@@ -3696,6 +3706,7 @@ export function deriveHealth(h) {
     warn.push(item('retention-lowered', `${h.retentionLowered.home} keeps ${h.retentionLowered.days} days, under the others' ${h.retentionLowered.othersMin}; rows held only in its files fall due ${exportHorizonDays(h.retentionLowered.days)} days after their file's last write (a reminder: each row is measured against its own files' homes)`));
   }
   if (h.exportSegmentMissing > 0) warn.push(item('export-segment-missing', `${h.exportSegmentMissing} export mark(s) named a segment not on this box and were cleared`));
+  if (markCheck === 'unchecked') warn.push(item('export-marks-unchecked', markCheckDetail(markCheck, h)));   // D-5633: the stalled FAIL above replaces it
   if (h.journalSkipped > 0) warn.push(item('journal-record-skipped', `${h.journalSkipped} journal record(s) were skipped as malformed or of an unknown kind`));
   if (h.journalGrowth30d > JOURNAL_GROWTH_BYTES) {
     warn.push(item('journal-growth', `the journal grew ${h.journalGrowth30d} bytes in 30 days (over ${JOURNAL_GROWTH_BYTES})`));
@@ -8705,4 +8716,89 @@ export function nextMarkCheckState({ recorded, word, nowMs, cleared }) {
   try { prev = parseMarkCheckState(recorded); } catch { prev = null; }
   const sameClass = prev !== null && MARK_CHECK_STALL_WORDS.includes(prev.word) === MARK_CHECK_STALL_WORDS.includes(word);
   return { word, sinceMs: sameClass ? prev.sinceMs : nowMs, cleared: (prev === null ? 0 : prev.cleared) + cleared };
+}
+
+// ── W5h-1 Task 2: doctor sees a check after a bind that cannot finish (D-5633 (history-export-bind-check-doctor)) ─
+// Task 1's check after a bind runs in bounded batches over as many ticks as it needs, and writes
+// HEALTH_META.exportMarksCheck ('<word> <sinceMs> <cleared>', parsed by parseMarkCheckState) each time it stops short;
+// its done stamp deletes the record. Until then a mark may still name a segment that is not on this box, so the gap
+// guard cannot see those rows. Two words (coordinator ruling R5 as amended, put to the operator at plan approval):
+//   export-marks-unchecked  WARN while the record stands;
+//   export-marks-stalled    FAIL in its place once the word is one no tick moves past by itself (Task 1's
+//                           MARK_CHECK_STALL_WORDS: wal-held, unlistable, failed) and the record's sinceMs is more than
+//                           EXPORT_MARKS_STALL_MS ago (a FAIL turns doctor red, and `ccrc update` exits 3 on it).
+// `budget` is progress: the check resumes as each tick's budget allows, and its starvation behind ingest is accepted
+// and made visible by the WARN (R4); it never escalates, since an ingest backlog that long already FAILs lag-high.
+// `off` never escalates either: the operator's switch holds back every other freshness FAIL (D-4314).
+// The age is the record's sinceMs, which Task 1 keeps while the word stays within one class and restarts when it
+// crosses between the escalating words and budget/off, so it is the escalating class's own. A sinceMs recorded in the
+// future (the clock stepped back) reads as 0 min, so it never reaches the FAIL.
+// These are function declarations and frozen consts read at call time: deriveHealth and remedyFor, above, call
+// them only after the module has loaded. MARK_CHECK_WORDS and MARK_CHECK_STALL_WORDS are Task 1's, declared once.
+
+/** The words of a stop word's class, for the detail: 'wal-held, unlistable or failed', or 'budget or off'. */
+function markCheckClassWords(word) {
+  const ws = MARK_CHECK_WORDS.filter((w) => MARK_CHECK_STALL_WORDS.includes(w) === MARK_CHECK_STALL_WORDS.includes(word));
+  return ws.length === 1 ? ws[0] : `${ws.slice(0, -1).join(', ')} or ${ws[ws.length - 1]}`;
+}
+
+/** What each stop word means, for the detail. */
+const MARK_CHECK_GLOSS = Object.freeze({
+  budget: 'the run budget was spent before its next batch, ingest first',
+  off: 'capture is off',
+  'wal-held': 'a reader held the store\'s WAL past its ceiling',
+  unlistable: 'the export directory could not be listed',
+  failed: 'an error the sweep logged',
+});
+
+/** Which of the two words the record raises, or null when no check stands unfinished. */
+function markCheckArm(h) {
+  const s = h.exportMarksCheck ?? null;
+  if (s === null) return null;
+  // Under history-off no tick can retry the check, so the switch holds the FAIL back as it holds every freshness FAIL (D-4314, D-5640).
+  if (!h.historyOff && MARK_CHECK_STALL_WORDS.includes(s.word) && h.nowMs - s.sinceMs > EXPORT_MARKS_STALL_MS) return 'stalled';
+  return 'unchecked';
+}
+
+/** The detail of either word. It says what is unfinished, never what was cleared: export-segment-missing says that. */
+function markCheckDetail(arm, h) {
+  const s = h.exportMarksCheck;
+  const age = Math.max(0, minutesOf(h.nowMs - s.sinceMs));
+  const why = `${s.word} (${MARK_CHECK_GLOSS[s.word] ?? 'a word this build does not know'})`;
+  const since = `has stopped on ${markCheckClassWords(s.word)} for ${age} min`;
+  const tail = `has cleared ${s.cleared} mark(s) so far; until it finishes, a mark may still name a segment that is not on this box, and the gap guard cannot see those rows`;
+  if (arm === 'stalled') {
+    return `the check of the export marks after a bind has not finished: it last stopped on ${why}, ${since} (over ${minutesOf(EXPORT_MARKS_STALL_MS)} min), words no tick moves past by itself, and ${tail}`;
+  }
+  return `the check of the export marks after a bind has not finished: it last stopped on ${why}, ${since}, and ${tail}`;
+}
+
+/** Said after every word's own remedy: until the check finishes, a mark may name a segment that is not on this box whole,
+ *  and prune --apply is not gated on the marks, so a blob it tombstones then keeps its bytes in no segment here. */
+const MARK_CHECK_PRUNE_HOLD = 'until the check finishes, hold any ccrc history prune --apply: a blob it tombstones while its mark names a segment not on this box whole keeps its bytes in no segment here';
+
+/** The remedy of either word, by the word the check last stopped on, with the prune hold; the fallback text when there
+ *  is no record. */
+function markCheckRemedy(word, h) {
+  const own = markCheckOwnRemedy(word, h);
+  return (h.exportMarksCheck ?? null) === null ? own : `${own}; ${MARK_CHECK_PRUNE_HOLD}`;
+}
+
+/** The remedy of the word the check last stopped on alone. */
+function markCheckOwnRemedy(word, h) {
+  const s = h.exportMarksCheck ?? null;
+  switch (s === null ? null : s.word) {
+    case 'budget':
+      return `none needed: the check resumes within each tick's budget once ingest leaves it room; if it stands for days, read the sweep: ${SWEEP_LOG}`;
+    case 'off':
+      return `remove ~/${SWITCHES.off} when capture should resume: the check resumes with the next tick`;
+    case 'wal-held':
+      return 'end the long-running read of the store (a ccrc history verb or another reader left open), so a checkpoint can truncate the WAL: the check resumes with the next tick';
+    case 'unlistable':
+      return `make ~/.ccrc/history/${EXPORT_DIR}/${h.storeId ?? '<store_id>'} a directory this user can read: the check resumes with the next tick`;
+    case 'failed':
+      return `read the sweep: ${SWEEP_LOG}; the check's error is logged there each tick it fails`;
+    default:
+      return HEALTH_REMEDIES[word];
+  }
 }

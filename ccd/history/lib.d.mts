@@ -401,6 +401,8 @@ export interface HealthInputs {
   readonly passDied?: PassDied | null;
   /** D-5027: when the last held scheduled pass ended (meta `held_pass_ms`, ms); null or absent when none was recorded. An unreadable value rides extrasUnmeasured. */
   readonly heldPassMs?: number | null;
+  /** D-5633 (W5h-1 Task 2): the check after a bind's stop record (meta HEALTH_META.exportMarksCheck, read by parseMarkCheckState); null or absent when no check stands unfinished. A value the parser refuses rides extrasUnmeasured. */
+  readonly exportMarksCheck?: ReturnType<typeof parseMarkCheckState> | null;
   readonly bytesBehindLast3: readonly number[];
   readonly fts: string | null;
   readonly modesWrong: readonly ModeWrong[];

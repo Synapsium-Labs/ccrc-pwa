@@ -3728,6 +3728,9 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     ['blob-undecodable', 'warn', { blobUndecodable: 2 }],
     ['drain-rejected', 'warn', { drainRejected: 3 }],
     ['spool-planted', 'warn', { spoolDisplaced: 2, spoolBlocked: 1 }],
+    // W5h-1 Task 2 (D-5633): a check after a bind that has not finished; stopped on an escalating word past EXPORT_MARKS_STALL_MS, it FAILs.
+    ['export-marks-unchecked', 'warn', { exportMarksCheck: { word: 'budget', sinceMs: NOW - MIN, cleared: 4 } }],
+    ['export-marks-stalled', 'fail', { exportMarksCheck: { word: 'failed', sinceMs: NOW - 25 * 60 * MIN, cleared: 0 } }],
   ];
 
   it('retention-lowered is a reminder under the per-copy rule: it names the home and when its own rows fall due, and claims no node-wide horizon (W1-B2 Task 35, ruled Q15)', () => {
@@ -8741,5 +8744,132 @@ describe('W5h-1: the check after a bind in bounded batches, decided in lib (D-56
     expect(libBind.nextMarkCheckState({ recorded: 'torn', word: 'off', nowMs: 5000, cleared: 2 }), 'the writer cures a record status cannot read')
       .toEqual({ word: 'off', sinceMs: 5000, cleared: 2 });
     expect(() => libBind.nextMarkCheckState({ recorded: null, word: 'off', nowMs: -1, cleared: 0 })).toThrow(TypeError);
+  });
+});
+
+// ── W5h-1 Task 2: doctor sees a check after a bind that cannot finish (D-5633 (history-export-bind-check-doctor)) ─
+// Pure, every input a parameter, the clock included. Task 1 writes HEALTH_META.exportMarksCheck ('<word> <sinceMs>
+// <cleared>') when the check stops short and deletes it with the done stamp; status reads it through Task 1's
+// parseMarkCheckState. This is the rule doctor relays (coordinator ruling R5, as amended): WARN export-marks-unchecked
+// while the record stands; FAIL export-marks-stalled IN ITS PLACE once an escalating word (wal-held, unlistable, failed)
+// has stood, by the record's sinceMs, more than EXPORT_MARKS_STALL_MS. `budget` and `off` never escalate (R4, R5, D-4314).
+describe('deriveHealth, W5h-1: a check after a bind that cannot finish (D-5633)', () => {
+  const NOW = 1_800_000_000_000;
+  const MIN = 60_000;
+  const STORE = '5f0c2d3e-8a1b-4c2d-9e3f-0a1b2c3d4e5f';
+  const STALL = healthLib.EXPORT_MARKS_STALL_MS;
+  const TAIL = 'until it finishes, a mark may still name a segment that is not on this box, and the gap guard cannot see those rows';
+  type Check = NonNullable<healthLib.HealthInputs['exportMarksCheck']>;
+  /** Task 28's healthy baseline: a bound store that ticked a minute ago, with no check standing. */
+  const clean = (o: Partial<healthLib.HealthInputs> = {}): healthLib.HealthInputs => ({
+    nowMs: NOW, storeId: STORE, exit: 0, reason: null,
+    shimMtimeMs: NOW - 60 * MIN, lastTickMs: NOW - MIN, lagS: 5, sizeBytes: 1_000_000,
+    capGb: 50, capMalformed: false, capFile: '/home/u/.ccrc/cap-fixture', capturePause: '',
+    migration: 'none', userVersion: 1, codeVersion: 1, historyOff: false, recovering: null, op: null, pass: null,
+    bytesBehindLast3: [0, 0, 0], fts: 'ready', modesWrong: [], rootIsSymlink: false,
+    redactUnreadable: [], breakerOpen: false, rosterUnreadable: false, exportDue: 0, exportOverdue: 0,
+    exportWriterLive: true, exportPausedLowDisk: false, retentionLowered: null, retentionUnmeasured: [],
+    journalGrowth30d: 0, journalSkipped: 0, blobUndecodable: 0, drainRejected: 0, spoolDisplaced: 0, spoolBlocked: 0, spoolUnreadable: 0, spoolNotDirectory: false, spoolNodesRefused: 0, exportSegmentNewer: [], exportSegmentMissing: 0,
+    journalUnwritable: false, dbPath: '/home/u/.ccrc/history/db', freeBytes: 100_000_000_000,
+    thresholdBytes: 20_000_000_000, copyBps: null, backupsDb: [], journalStoreDirs: [], extrasUnmeasured: [], exportLastPassMs: null, exportDueOldestMs: null,
+    ...o,
+  });
+  /** The stop record as status hands it over: `word`, its `sinceMs` `agoMs` before NOW, `cleared` marks so far. */
+  const check = (word: Check['word'], agoMs: number, cleared = 0): Partial<healthLib.HealthInputs> =>
+    ({ exportMarksCheck: { word, sinceMs: NOW - agoMs, cleared } });
+  const words = (r: healthLib.HealthResult, cls: 'warn' | 'fail'): string[] => r[cls].map((i) => i.word);
+  const ESCALATING = ['wal-held', 'unlistable', 'failed'] as const;
+  const NEVER = ['budget', 'off'] as const;
+  const ALL = healthLib.MARK_CHECK_WORDS;   // Task 1's shared name: the five stop words
+  /** One fragment of each word's own remedy. */
+  const REMEDY: Record<Check['word'], string> = {
+    budget: 'once ingest leaves it room',
+    off: `remove ~/${healthLib.SWITCHES.off} when capture should resume`,
+    'wal-held': 'so a checkpoint can truncate the WAL',
+    unlistable: `make ~/.ccrc/history/${healthLib.EXPORT_DIR}/${STORE} a directory this user can read`,
+    failed: 'the check\'s error is logged there each tick it fails',
+  };
+
+  it('no stop record, absent or null, is no word: the baseline stays PASS ok', () => {
+    expect(healthLib.deriveHealth(clean())).toEqual({ pass: 'ok', warn: [], fail: [] });
+    expect(healthLib.deriveHealth(clean({ exportMarksCheck: null }))).toEqual({ pass: 'ok', warn: [], fail: [] });
+  });
+
+  it('a check that stopped WARNs export-marks-unchecked, naming its last word, how long it has stopped on words of that class and the marks it cleared so far', () => {
+    const r = healthLib.deriveHealth(clean(check('budget', 30 * MIN, 4)));
+    expect(words(r, 'warn')).toEqual(['export-marks-unchecked']);
+    expect(words(r, 'fail')).toEqual([]);
+    expect(r.warn[0]!.detail).toBe(`store ${STORE}: the check of the export marks after a bind has not finished: it last stopped on budget `
+      + `(the run budget was spent before its next batch, ingest first), has stopped on budget or off for 30 min, and has cleared 4 mark(s) so far; ${TAIL}`);
+  });
+
+  it.each(ALL)('stopped on %s: the detail names the word, and the remedy is that word\'s own, then the prune hold', (word) => {
+    const i = healthLib.deriveHealth(clean(check(word, 30 * MIN))).warn.find((x) => x.word === 'export-marks-unchecked');
+    expect(i?.detail).toContain(`it last stopped on ${word} (`);
+    expect(i?.remedy).toContain(REMEDY[word]);
+    expect(i?.remedy, 'prune --apply is not gated on the marks').toContain('; until the check finishes, hold any ccrc history prune --apply');
+  });
+
+  it('the five words carry five remedies, none of them the fallback text', () => {
+    const remedies = ALL.map((w) => healthLib.deriveHealth(clean(check(w, 30 * MIN))).warn[0]!.remedy);
+    expect(new Set(remedies).size).toBe(ALL.length);
+    for (const r of remedies) expect(r).not.toBe(healthLib.HEALTH_REMEDIES['export-marks-unchecked']);
+  });
+
+  it('every MARK_CHECK_WORDS member has its own remedy text, and the table names no other word (Task 1\'s shared list, bound both ways)', () => {
+    expect(Object.keys(REMEDY).sort()).toEqual([...healthLib.MARK_CHECK_WORDS].sort());
+    for (const w of healthLib.MARK_CHECK_WORDS) {
+      const remedy = healthLib.deriveHealth(clean(check(w, 30 * MIN))).warn.find((x) => x.word === 'export-marks-unchecked')?.remedy;
+      expect(remedy, w).toContain(REMEDY[w]);
+      expect(remedy, w).not.toBe(healthLib.HEALTH_REMEDIES['export-marks-unchecked']);
+    }
+  });
+
+  it.each(ESCALATING)('%s standing past EXPORT_MARKS_STALL_MS FAILs export-marks-stalled, which replaces the WARN', (word) => {
+    const r = healthLib.deriveHealth(clean(check(word, STALL + 60 * MIN, 7)));
+    expect(words(r, 'fail')).toEqual(['export-marks-stalled']);
+    expect(words(r, 'warn')).toEqual([]);
+    expect(r.fail[0]!.detail).toContain(`has not finished: it last stopped on ${word} (`);
+    expect(r.fail[0]!.detail).toContain(`has stopped on wal-held, unlistable or failed for ${Math.round(STALL / MIN) + 60} min (over ${Math.round(STALL / MIN)} min), words no tick moves past by itself, and has cleared 7 mark(s) so far; ${TAIL}`);
+    expect(r.fail[0]!.remedy).toContain(REMEDY[word]);
+  });
+
+  it('the threshold is strict, and R5 ruled it 24 h: at EXPORT_MARKS_STALL_MS still the WARN, one ms past the FAIL', () => {
+    expect(STALL).toBe(24 * 60 * MIN);
+    const at = healthLib.deriveHealth(clean(check('failed', STALL)));
+    expect(words(at, 'warn')).toEqual(['export-marks-unchecked']);
+    expect(words(at, 'fail')).toEqual([]);
+    expect(words(healthLib.deriveHealth(clean(check('failed', STALL + 1))), 'fail')).toEqual(['export-marks-stalled']);
+  });
+
+  it.each(NEVER)('%s never escalates: a check stopped on it for thirty days stays a WARN (R4, R5 as amended; off holds back every freshness FAIL, D-4314)', (word) => {
+    const r = healthLib.deriveHealth(clean(check(word, 30 * 24 * 60 * MIN, 2)));
+    expect(words(r, 'fail')).toEqual([]);
+    expect(words(r, 'warn')).toEqual(['export-marks-unchecked']);
+    expect(r.warn[0]!.detail).toContain('has stopped on budget or off for 43200 min');
+  });
+
+  it('a first stop recorded in the future (the clock stepped back) reads 0 min and never FAILs', () => {
+    const r = healthLib.deriveHealth(clean(check('failed', -10 * MIN)));
+    expect(words(r, 'fail')).toEqual([]);
+    expect(r.warn[0]!.detail).toContain('has stopped on wal-held, unlistable or failed for 0 min');
+  });
+
+  it('beside export-segment-missing: two items with two sentences, what was cleared and that the check is unfinished, and two remedies', () => {
+    const r = healthLib.deriveHealth(clean({ exportSegmentMissing: 3, ...check('budget', 30 * MIN, 3) }));
+    expect(words(r, 'warn').sort()).toEqual(['export-marks-unchecked', 'export-segment-missing']);
+    const missing = r.warn.find((i) => i.word === 'export-segment-missing')!;
+    const unchecked = r.warn.find((i) => i.word === 'export-marks-unchecked')!;
+    const tag = `store ${STORE}: `;
+    expect(unchecked.detail).not.toContain(missing.detail.slice(tag.length));
+    expect(missing.detail).not.toContain('has not finished');
+    expect(unchecked.remedy).not.toBe(missing.remedy);
+  });
+
+  it('a check stopped on an escalating word past the stall threshold stays a WARN while history-off stands: no tick can retry it, and the switch holds the FAIL back (D-5640, D-4314)', () => {
+    const r = healthLib.deriveHealth(clean({ historyOff: true, ...check('failed', STALL + 60 * MIN) }));
+    expect(words(r, 'fail')).toEqual([]);
+    expect(words(r, 'warn')).toContain('off');
+    expect(words(r, 'warn')).toContain('export-marks-unchecked');
   });
 });
