@@ -29,6 +29,8 @@ import { readLocalCcdCaps } from './localcaps.js';
 import { localUpdateSpawnFor } from './update/converge.js';
 import { UPDATE_OP_TIMEOUT_MS } from '../../shared/agent-protocol.js';
 import { apiBaseProblem, createCataloguePoller } from './update/catalogue.js';
+import { AccountAudit } from './accounts/audit.js';
+import { accountOpsFor } from './accounts/ops.js';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 
@@ -263,6 +265,18 @@ const tokenDriver = new BoxTokenDriver({
   bothWriter: tokenBoot.bothWriterArmed ? fileBothRoleWriter(tokenStore.paths) : null,
 }, tokenBoot);
 deps.tokenDriver = tokenDriver;
+
+// The account audit (D-5516) over the one coord.db, and the ONE `AccountOps` arm (spec §13.2, G13), chosen by
+// `cfg.fleetMode` ONLY: in remote mode the local spawner is never constructed, so `ccrc account` can never run on
+// the controller. Built before `buildServer`, which hands the audit to the step-up lock and the arm to the account
+// routes (A14 onward).
+const accountAudit = new AccountAudit(coord.db);
+deps.accountAudit = accountAudit;
+deps.accountOps = accountOpsFor(cfg, { client: fleetClient });
+// The audit's 365-day retention, at boot and then daily on its own unref'd timer. Not a lane in `watch.ts`'s
+// coordination sweeps, which another branch holds (D-5620).
+accountAudit.sweep(Date.now());
+setInterval(() => accountAudit.sweep(Date.now()), 86_400_000).unref();
 
 const app = await buildServer(deps, bus, watcher);
 watcher.start();

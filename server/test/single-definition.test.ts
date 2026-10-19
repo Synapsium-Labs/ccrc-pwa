@@ -7062,3 +7062,44 @@ describe('the daily digest\'s hour, predicates and vocabulary each have one home
     expect(src.match(/\bapprovalDecision\(/g)).toHaveLength(3);
   });
 });
+
+// D-5511, D-5516 (plan docs/superpowers/plans/2026-10-18-accounts-connect.md, Task A7). APPENDED. The account gate,
+// the audit and the AccountOps port: the sub union, the acts, the outcomes, the key-plane codes, the gate's refusal
+// words, the retention, the sub bounds and the origin class each have one home in `shared/api.ts`; the gate, the audit
+// writer and the arm choice each have one home under `server/src/accounts/`; and the table's name is spelled only by
+// its migration and its writer.
+describe('the account gate, the audit and the AccountOps port each have one home (D-5511, D-5516)', () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  const decl = (c: string): RegExp => new RegExp(`\\b(?:const|let|var|function|class)\\s+${c}\\b|\\btype\\s+${c}\\s*=|\\binterface\\s+${c}\\b`);
+  it('CONTROL: the pattern sees a declaration and passes over a use', () => {
+    expect(decl('ACCOUNT_SUBS').test('export const ACCOUNT_SUBS = [')).toBe(true);
+    expect(decl('ACCOUNT_SUBS').test("import { ACCOUNT_SUBS } from '../../shared/api.js';")).toBe(false);
+    expect(decl('AccountAudit').test('export class AccountAudit {')).toBe(true);
+    expect(decl('AccountAudit').test('const audit = new AccountAudit(coord.db);')).toBe(false);
+  });
+  it('the vocabulary is declared once, in shared/api.ts', () => {
+    for (const c of ['ACCOUNT_SUBS', 'AccountSub', 'ACCOUNT_SUB_TIMEOUT_MS', 'ACCOUNT_OP_KILL_GRACE_MS', 'ACCOUNT_OP_OUTPUT_MAX_BYTES',
+      'ACCOUNT_ACTS', 'AccountAct', 'ACCOUNT_LANELESS_ACTS', 'ACCOUNT_OUTCOMES', 'AccountOutcome', 'ACCOUNT_KEY_PLANE_CODES',
+      'AccountKeyPlaneCode', 'ACCOUNT_AUDIT_RETENTION_DAYS', 'ACCOUNT_GATE_REFUSALS', 'AccountGateRefusal', 'AccountOriginClass']) {
+      expect(holders(decl(c)), c).toEqual(['shared/api.ts']);
+    }
+  });
+  it('the gate, the audit and the port each live in their one file', () => {
+    for (const c of ['createAccountGate', 'accountOriginClass', 'AccountGateDeps', 'AccountGate']) {
+      expect(holders(decl(c)), c).toEqual(['server/src/accounts/gate.ts']);
+    }
+    for (const c of ['AccountAudit', 'actorOf', 'AccountActor', 'knownFleetIdentity', 'AccountEventInput']) {
+      expect(holders(decl(c)), c).toEqual(['server/src/accounts/audit.ts']);
+    }
+    for (const c of ['AccountOps', 'accountOpsFor', 'accountSpawnEnv', 'localAccountOps', 'remoteAccountOps', 'AccountOpResult']) {
+      expect(holders(decl(c)), c).toEqual(['server/src/accounts/ops.ts']);
+    }
+  });
+  it('the table is named only by its migration and its writer', () => {
+    expect(holders(/\baccount_events\b/)).toEqual(['server/src/accounts/audit.ts', 'server/src/coord/schema.ts']);
+  });
+  it('the arm is chosen in one place, and constructed by the composition root alone', () => {
+    expect(holders(/\baccountOpsFor\(/)).toEqual(['server/src/accounts/ops.ts', 'server/src/index.ts']);
+    expect(holders(/\blocalAccountOps\(/)).toEqual(['server/src/accounts/ops.ts']);
+  });
+});

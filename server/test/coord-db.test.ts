@@ -681,9 +681,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // spec §5.2), MIGRATIONS[22] (runs.unattributed, D-5298,
     // coordinator-first Task 11b), MIGRATIONS[23] (the approvals table,
     // D-5298, coordinator-first Task 16) and MIGRATIONS[24] (the digests table
-    // and asks.corrected, D-5300, coordinator-first Task 17).
-    expect(COORD_SCHEMA_VERSION).toBe(25);
-    expect(MIGRATIONS.length).toBe(25);
+    // and asks.corrected, D-5300, coordinator-first Task 17) and MIGRATIONS[25]
+    // (account_events, D-5516, accounts plan Task A7).
+    expect(COORD_SCHEMA_VERSION).toBe(26);
+    expect(MIGRATIONS.length).toBe(26);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -745,9 +746,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // (dead_coordinator_breaker_state), MIGRATIONS[19]
     // (collect_lane_settings), MIGRATIONS[20] (asks.releaseReason),
     // MIGRATIONS[21] (the six delegation_* tables), MIGRATIONS[22]
-    // (runs.unattributed), MIGRATIONS[23] (approvals) and MIGRATIONS[24] (digests, asks.corrected); the migration
-    // above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(25);
+    // (runs.unattributed), MIGRATIONS[23] (approvals), MIGRATIONS[24] (digests, asks.corrected) and MIGRATIONS[25]
+    // (account_events); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(26);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
@@ -2163,8 +2164,8 @@ describe('coord.db: migration 24 — the approvals table (D-5298, coordinator-fi
     });
     raw.close();
     const db = openCoordDb(p);
-    // 25 since migration 25 (D-5300, Task 17): the file reaches this build's version, through 24 and 25.
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(25);
+    // The file reaches this build's version (26 since migration 26, D-5516), through 24 and 25.
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
     expect(db.prepare('SELECT program, claimedBy FROM runs').all())
       .toEqual([{ program: 'program-a', claimedBy: 'project-a-calm-mesa' }]);
     expect(db.prepare('SELECT childId, state FROM asks').all())
@@ -2193,7 +2194,7 @@ describe('coord.db: migration 25 — the digests table and asks.corrected (D-530
     });
     raw.close();
     const db = openCoordDb(p);
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(25);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
     expect(db.prepare('SELECT childId, state, answer, corrected FROM asks').all())
       .toEqual([{ childId: 'project-a-quiet-basin', state: 'answered', answer: 'Red', corrected: 0 }]);
     expect(db.prepare('SELECT state, corrected FROM approvals').all()).toEqual([{ state: 'denied', corrected: 1 }]);
@@ -2208,5 +2209,35 @@ describe('coord.db: migration 25 — the digests table and asks.corrected (D-530
     expect(coord.claimDigestDay('2026-10-18', 10, 3)).toBe(true);
     expect(coord.claimDigestDay('2026-10-18', 20, 5)).toBe(false);
     expect(coord.digestDay('2026-10-18')).toEqual({ day: '2026-10-18', sentAt: 10, count: 3 });
+  });
+});
+
+// D-5516 (accounts plan docs/superpowers/plans/2026-10-18-accounts-connect.md, Task A7). APPENDED. Its slot is found
+// by its DDL, never hard-coded, so a renumber at merge time edits no line here.
+describe('coord.db: account_events, the session-only account audit (D-5516, accounts plan Task A7)', () => {
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE account_events')) + 1;
+  it('is one new table and its index, reached from the slot before it with every earlier row kept', () => {
+    expect(SLOT).toBeGreaterThan(25);
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("INSERT INTO digests (day, sentAt, count) VALUES ('2026-10-18', 1, 0)");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT day FROM digests').all()).toEqual([{ day: '2026-10-18' }]);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM account_events').get()).toEqual({ n: 0 });
+    const cols = (db.prepare("SELECT name FROM pragma_table_info('account_events')").all() as { name: string }[]).map((r) => r.name);
+    expect(cols).toEqual(['id', 'at', 'actor', 'act', 'laneId', 'provider', 'method', 'outcome', 'code', 'keyName', 'fleetIdentity']);
+    const idx = (db.prepare("SELECT name FROM pragma_index_list('account_events')").all() as { name: string }[]).map((r) => r.name);
+    expect(idx).toContain('account_events_by_at');
+    // The outcome is closed in the table too: the one writer refuses first, and the CHECK is the floor under it.
+    expect(() => db.prepare("INSERT INTO account_events (at, actor, act, outcome) VALUES (1, 'a 00000000', 'check', 'maybe')").run())
+      .toThrow(/CHECK/);
+    db.close();
   });
 });

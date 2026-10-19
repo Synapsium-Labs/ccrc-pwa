@@ -76,6 +76,8 @@ import { AuthSecretUnusable, readAuthSecret, verifyPassphrase, type AuthSecret }
 import { ABSOLUTE_TTL_MS, SessionStore } from './auth/sessions.js';
 import { LoginRateLimiter, PASSKEY_MAX_FAILURES } from './auth/ratelimit.js';
 import { createStepUp } from './auth/stepup.js';
+import { knownFleetIdentity, type AccountAudit } from './accounts/audit.js';
+import type { AccountOps } from './accounts/ops.js';
 import {
   SESSION_COOKIE, cookiePolicyProblem, expireCookie, parseCookies, serializeCookie,
 } from './auth/cookie.js';
@@ -383,6 +385,12 @@ export interface Deps {
   /** Design 2026-09-20 §10 (wave 5): the fleet link's `request()` narrowed to the `update` op, with
    *  `UPDATE_OP_TIMEOUT_MS`. Remote mode only — in local mode no node is link-reached. */
   sendUpdateOp?: SendUpdateOp;
+  /** D-5516 (accounts plan Task A7): the account audit over this process's one coord.db, built in `index.ts`.
+   *  Absent → no row is written (a test, a script). */
+  accountAudit?: AccountAudit;
+  /** Spec §13.2, G13 (accounts plan Task A7): the ONE `AccountOps` arm, chosen in `index.ts` by `cfg.fleetMode` only
+   *  (`accountOpsFor`). The account routes (A14 onward) are its consumers. */
+  accountOps?: AccountOps;
 }
 
 /** dist-pwa/ lives at the server package root (next to dist/); walk up from this
@@ -1123,6 +1131,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   const stepUp = createStepUp({
     enabled: deps.cfg.authEnabled, store: authStore, passkeys, secretNow, rpProblem, rpId: deps.cfg.rpId,
     device: (req) => sessionAuth(req).device,
+    audit: deps.accountAudit, fleetIdentity: () => knownFleetIdentity(deps.fleetIdentity),
   });
   // `Cache-Control: no-store` on EVERY step-up answer, refusals included (spec
   // §3.3) — an `onSend` hook, so the gate's own 401 carries it too.
