@@ -84,9 +84,9 @@ describe('QuickConfirm — defaultFocus', () => {
     expect(document.activeElement).toBe(opener);
   });
 
-  // D-5610: `autoFocus` fires only when Cancel MOUNTS. In a browser the sheet keeps its closing content mounted for
+  // D-5610: a focus given on mount (as `autoFocus` was, and as `useCancelFirst`'s ref is) fires only when Cancel MOUNTS. In a browser the sheet keeps its closing content mounted for
   // the close transition (Radix's Presence waits for the exit animation it reads from the computed style), so a
-  // confirm reopened inside that window reuses the same Cancel node and `autoFocus` never runs again: measured, the
+  // confirm reopened inside that window reuses the same Cancel node and a mount-time focus never runs again: measured, the
   // focus stayed on the opener behind an open modal on 10 of 12 reopens at 1280. jsdom has no animations, so this
   // case gives the dialog a computed exit animation that never ends, which keeps the closed content mounted exactly
   // as the browser's transition does.
@@ -116,12 +116,52 @@ describe('QuickConfirm — defaultFocus', () => {
       expect(document.activeElement).toBe(opener);
       // The closing content is still in the document: the reopen reuses this very Cancel.
       expect(cancel.isConnected).toBe(true);
-      fireEvent.click(opener);
-      await settle();
+      const focusOpts: Array<FocusOptions | undefined> = [];
+      const realFocus = HTMLElement.prototype.focus;
+      const focusSpy = vi.spyOn(HTMLElement.prototype, 'focus').mockImplementation(function (this: HTMLElement, opts?: FocusOptions) {
+        if (this === cancel) focusOpts.push(opts);
+        realFocus.call(this, opts);
+      });
+      try {
+        fireEvent.click(opener);
+        await settle();
+      } finally {
+        focusSpy.mockRestore();
+      }
       const dialog = screen.getByRole('dialog');
       expect(screen.getByRole('button', { name: 'Cancel' })).toBe(cancel);
       expect(document.activeElement).toBe(cancel);
       expect(dialog.contains(document.activeElement)).toBe(true);
+      // D-5610 (extended): the reopen's focus does not scroll the sheet either.
+      expect(focusOpts.length).toBeGreaterThan(0);
+      for (const o of focusOpts) expect(o?.preventScroll).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  // D-5610 (extended): Cancel is focused without scrolling. The danger sheet's body is its own scroller, and Cancel
+  // sits at the foot of it, so a plain `focus()` (what `autoFocus` does) scrolls the question and the plan out of view
+  // on a short phone: measured at 375x667, the rollback sheet opened 172 px down with its title above the top. Every
+  // focus the confirm moves to Cancel passes `preventScroll`, on a first open and on a reopen.
+  it('defaultFocus="cancel": every focus moved to Cancel passes preventScroll, so the sheet opens at its top', async () => {
+    const calls: Array<{ el: HTMLElement; opts: FocusOptions | undefined }> = [];
+    const real = HTMLElement.prototype.focus;
+    const spy = vi.spyOn(HTMLElement.prototype, 'focus').mockImplementation(function (this: HTMLElement, opts?: FocusOptions) {
+      calls.push({ el: this, opts });
+      real.call(this, opts);
+    });
+    try {
+      render(<Host defaultFocus="cancel" />);
+      const opener = screen.getByRole('button', { name: 'Open it' });
+      opener.focus();
+      fireEvent.click(opener);
+      await settle();
+      const cancel = screen.getByRole('button', { name: 'Cancel' });
+      expect(document.activeElement).toBe(cancel);
+      const onCancel = calls.filter((c) => c.el === cancel);
+      expect(onCancel.length).toBeGreaterThan(0);
+      for (const c of onCancel) expect(c.opts?.preventScroll).toBe(true);
     } finally {
       spy.mockRestore();
     }
