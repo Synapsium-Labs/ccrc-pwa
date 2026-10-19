@@ -608,4 +608,125 @@ describe('W2-3 Task 1: raw window rows', () => {
     expect(src).toContain("'SELECT file_id, source_key FROM ingest_files WHERE transcript_pk = ? ORDER BY file_id'");
     expect(src).toContain("'SELECT 1 FROM memberships WHERE file_id = ? AND entry_id = ?'");
   });
+
+  // ── Fix round 1: each guard in the new SQL has a case that goes red when it is removed. Every case below plants
+  // its extra rows into its OWN plantedStore after planting, so no pinned value above moves. ──────────────────────
+  const U3 = '11111111-2222-4333-8444-777777777777';
+  /** Open the planted store writable and hand `fn` an insert helper, the main transcript's pk and demo-a's session pk. */
+  const extend = (f: Planted, fn: (x: {
+    ins: (sql: string, ...p: Array<string | number | null>) => number;
+    entry: (uuid: string, tpk: number, type: string, ts: number | null) => number;
+    mainTpk: number; sessionPk: number;
+  }) => void): void => {
+    const db = new DatabaseSync(f.db);
+    try {
+      const ins = (sql: string, ...p: Array<string | number | null>): number => Number(db.prepare(sql).run(...p).lastInsertRowid);
+      const blob = Number((db.prepare('SELECT blob_id FROM blobs LIMIT 1').get() as { blob_id: number }).blob_id);
+      const entry = (uuid: string, tpk: number, type: string, ts: number | null): number =>
+        ins('INSERT INTO entries (uuid, transcript_pk, type, ts_ms, is_compact_summary, provenance, prov_version, '
+          + "struct_rank_ns, struct_file_id, blob_id) VALUES (?, ?, ?, ?, 0, 'harness', 1, 1, 1, ?)", uuid, tpk, type, ts, blob);
+      const mainTpk = Number((db.prepare("SELECT transcript_pk FROM transcripts WHERE cc_session_uuid = ? AND agent_id = ''").get(U1) as { transcript_pk: number }).transcript_pk);
+      const sessionPk = Number((db.prepare("SELECT session_pk FROM sessions WHERE ccrc_id = 'demo-a' AND generation = ?").get(G1) as { session_pk: number }).session_pk);
+      fn({ ins, entry, mainTpk, sessionPk });
+    } finally {
+      db.close();
+    }
+  };
+  const argsFor = (f: Planted, start: string, end: string): string[] =>
+    ['--db', f.db, '--now', String(NOW), '--families', f.families, '--window-start', start, '--window-end', end, '--row-cap', '400'];
+
+  it('a copy with no next boundary keeps its assistant rows to the copy\'s end: B3 (f1:23) has next_boundary_line null and row 25', () => {
+    const f = plantedStore();
+    const [, f1] = fileIdsByIno(f.db);
+    const fam = demoA(report(argsFor(f, '1500', '8000')));
+    expect(fam.boundaries.map((b) => b.ts_ms)).toEqual([2000, 5000, 7000]);
+    const b3 = fam.boundaries[2]!.copies;
+    expect(b3).toEqual([{ file_id: f1, source_key: '', boundary_line: 23, after_count: 2, summary_line: 24, next_boundary_line: null,
+      next_boundary_ts_ms: null, last_ts_ms: 7100, rows: [[25, 7100, null, null, 'e-25', null]], models: [null], truncated: false }]);
+  });
+
+  it('calls are bounded below by --window-start: one below it is absent, one exactly at it is present', () => {
+    const f = plantedStore();
+    extend(f, ({ ins }) => {
+      for (const [key, ts] of [['kb', 1499], ['ke', 1500]] as const) {
+        ins("INSERT INTO recall_calls (event_key, ccrc_id, generation, ts_ms, verb, rc, ms, arm) VALUES (?, 'demo-a', ?, ?, 'expand', 0, 40, NULL)", key, G1, ts);
+      }
+    });
+    const calls = demoA(report(argsFor(f, '1500', '6000'))).calls;
+    expect(calls.map((c) => c[0])).toEqual([1500, 1999, 2500, 3900, 3950, 5200]);
+    expect(calls.map((c) => c[0])).not.toContain(1499);
+  });
+
+  it('a boundary with no summary row after it: summary_line null, and rows and models start after the boundary line itself', () => {
+    const f = plantedStore();
+    extend(f, ({ ins, entry, mainTpk }) => {
+      const [, f1] = fileIdsByIno(f.db);
+      const eb = entry('x-b', mainTpk, 'system', 7500);
+      ins('INSERT INTO boundaries (entry_id, transcript_pk, ord) VALUES (?, ?, 10)', eb, mainTpk);
+      ins('INSERT INTO memberships (file_id, entry_id, line) VALUES (?, ?, 26)', f1, eb);
+      for (const [uuid, line, ts, model] of [['x-1', 27, 7600, 'model-z'], ['x-2', 28, 7700, null]] as const) {
+        const e = entry(uuid, mainTpk, 'assistant', ts);
+        if (model !== null) ins('UPDATE entries SET model = ? WHERE entry_id = ?', model, e);
+        ins('INSERT INTO memberships (file_id, entry_id, line) VALUES (?, ?, ?)', f1, e, line);
+      }
+    });
+    const [, f1] = fileIdsByIno(f.db);
+    const fam = demoA(report(argsFor(f, '1500', '8000')));
+    const bx = fam.boundaries.find((b) => b.boundary_uuid === 'x-b');
+    expect(bx, JSON.stringify(fam.boundaries.map((b) => b.boundary_uuid))).toBeDefined();
+    const c = copyOf(fam, 'x-b', f1);
+    expect(c).toMatchObject({ boundary_line: 26, after_count: 2, summary_line: null, next_boundary_line: null, truncated: false });
+    expect(c.rows).toEqual([[27, 7600, null, null, 'x-1', 'model-z'], [28, 7700, null, null, 'x-2', null]]);
+    expect(c.models).toEqual(['model-z', null]);
+  });
+
+  it('a boundary is listed only inside [window_start, window_end) and only in a confirmed epoch', () => {
+    const f = plantedStore();
+    extend(f, ({ ins, entry, mainTpk, sessionPk }) => {
+      let ord = 10;
+      const bound = (uuid: string, tpk: number, ts: number, o: number): void => {
+        ins('INSERT INTO boundaries (entry_id, transcript_pk, ord) VALUES (?, ?, ?)', entry(uuid, tpk, 'system', ts), tpk, o);
+      };
+      bound('w-below', mainTpk, 1499, ord++);   // one under the start: absent
+      bound('w-start', mainTpk, 1500, ord++);   // exactly the start: present
+      bound('w-end', mainTpk, 6000, ord++);     // exactly the end: absent
+      // An epoch of the same family that was never confirmed, with a main transcript holding a boundary in the window.
+      ins("INSERT INTO epochs (session_pk, seq, cc_session_uuid, cause, declared_by, confirmed_ms) VALUES (?, 2, ?, 'startup', 'hook', NULL)", sessionPk, U3);
+      const t3 = ins("INSERT INTO transcripts (cc_session_uuid, agent_id) VALUES (?, '')", U3);
+      bound('w-unconfirmed', t3, 3000, 1);
+    });
+    const fam = demoA(report(argsFor(f, '1500', '6000')));
+    expect(fam.boundaries.map((b) => b.boundary_uuid)).toEqual(['w-start', f.b1, f.b2]);
+    // The ones listed without a copy are still listed, with copies: [] (no file holds them).
+    expect(fam.boundaries[0]).toEqual({ boundary_uuid: 'w-start', ts_ms: 1500, copies: [] });
+  });
+
+  it('merged_generations follow session_pk, not generation text and not descending pk', () => {
+    const f = plantedStore();
+    extend(f, ({ ins, sessionPk }) => {
+      for (const gen of ['zz', 'aa']) {
+        ins("INSERT INTO sessions (ccrc_id, generation, project, first_seen_ms, merged_into) VALUES ('demo-a', ?, 'demo', 1, ?)", gen, sessionPk);
+      }
+    });
+    expect(demoA(report(argsFor(f, '1500', '6000'))).merged_generations).toEqual(['', 'zz', 'aa']);
+  });
+
+  it('models and rows read assistant entries only: a user row carrying a model is in neither', () => {
+    const f = plantedStore();
+    const [, f1] = fileIdsByIno(f.db);
+    extend(f, ({ ins }) => {
+      ins("UPDATE entries SET model = 'model-user' WHERE uuid = 'e-22'");
+    });
+    const chk = new DatabaseSync(f.db, { readOnly: true });
+    try {
+      expect(chk.prepare("SELECT type, model FROM entries WHERE uuid = 'e-22'").get()).toEqual({ type: 'user', model: 'model-user' });
+    } finally {
+      chk.close();
+    }
+    const fam = demoA(report(argsFor(f, '1500', '6000')));
+    const b2 = copyOf(fam, f.b2, f1);
+    expect(b2.rows.map((r) => r[0])).toEqual([19, 20, 21]);
+    expect(b2.models).toEqual([null]);
+    expect(copyOf(fam, f.b1, f1).models).toEqual([null]);
+  });
 });
