@@ -4,7 +4,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-18-settings-redesign-design.md` (rev 3, approved 2026-10-18). Every section binds this plan; the ones each task builds are named in its header. This plan does not restate the spec's reasoning. Read the named section before the task.
 
-**Status:** rev 1 (2026-10-18), after an adversarial review (§Review log). Task R0 (this plan) is the docs PR. Nothing is dispatched until the operator approves it.
+**Status:** rev 1 (2026-10-18), after an adversarial review (§Review log). **Approved by the operator 2026-10-19**, in their words: "setings and accounts plans approved". Task R0 (this plan) was the docs PR (#656). Tasks dispatch as their gates open (§Gates), each only when its row is all green.
 
 **Operator rulings this plan builds on** (2026-10-18, given on the mockups; the spec's §15):
 - **D1 to D11, all as recommended:** three rollback targets older than the running release, with Newer capped at three too (D1); older releases not offered in the app, a count plus the CLI command instead (D2); withdrawn releases offered, counted inside the three, and marked (D3); a Stable fleet rolls back to Stable releases plus the release it ran before its last update (D4); a fleet Roll back is a danger action (D5); the same Ack confirm on the node row and on the home screen's halt banner (D6); versions first, policy last (D7); Revoke passkey takes the step-up once it exists, and so does Add a passkey (D8); Security moves into Settings (D9); no Danger zone section (D10); build the "ran here" record (D11).
@@ -16,7 +16,7 @@
 
 **Deploy class:** server lane. The PWA bundle ships inside the server's release. Three tasks change server code, each additive: R2b1 (`RELEASE_PUSH_URL`), R2s (two route guards and the register challenge's session binding) and R4 (one coord migration that adds tables only, one writer in the inventory sweep, one optional wire field). No task touches the agent, `ccd`, `deploy/`, a unit, a hook or a fleet frame, and none bumps `FLEET_PROTO`.
 
-**Names.** Tasks here are **R0** to **R5**, after the spec's waves (§13): R1a to R1d on today's single page, R2a, R2b0 to R2b2, R2c to R2e and R2s for the sections in Refined, R3a and R3b for Instrument, R4 for the record, R5 for the disclosure. Foundations-plan tasks are **F1** to **F17** (`2026-10-15-ccrc-skins-foundations.md`), W2-plan tasks **S0** to **S18** (`2026-10-18-ccrc-skins-w2-shells.md`), Accounts waves **AW0** to **AW3d** (the Accounts spec's §17 W0 to W3d, prefixed here so they never read as two-skins W-numbers). "Refined" is skin A, "Instrument" skin B.
+**Names.** Tasks here are **R0** to **R5**, after the spec's waves (§13): R1a to R1d on today's single page, R2a, R2b0 to R2b2, R2c to R2e and R2s for the sections in Refined, R3a and R3b for Instrument, R4 for the record, R5 for the disclosure. Foundations-plan tasks are **F1** to **F17** (`2026-10-15-ccrc-skins-foundations.md`), W2-plan tasks **S0** to **S18** (`2026-10-18-ccrc-skins-w2-shells.md`), Accounts waves **AW0** to **AW3d** (the Accounts spec's §17 W0 to W3d, prefixed here so they never read as two-skins W-numbers), and Accounts-plan tasks **A0** to **A38** (`2026-10-18-accounts-connect.md`, whose §Names maps each AW item this plan waits for to the task that delivers it). "Refined" is skin A, "Instrument" skin B.
 
 **Goal, PR by PR.**
 
@@ -69,7 +69,7 @@ Measured on 2026-10-18 at `c1453e42` (rev 1; rev 0's measure at `f609f68c` is su
 | R2b1 sections, routes, provider | **yes** | no | **F11** (with C3's slots, or R2b0) | **S2a**, **S2b**; the coordinator's ack of C1 | no | no | R1a to R1d, R2a; **#652** (`tap-targets.test.tsx`) |
 | R2b2 the cards' order and words | through R2b1 | no | — | — | no | no | R2b1 |
 | R2c Refined desktop nav | through R2b1 | no | F11's `nav` slot | **S4b** | no | no | R2b2 |
-| R2d Security receives sign-in | through R2b1 | no | F11 on `AccountsScreen.tsx` first (C4's order) | — | no | no | R2b2; **lands before AW0** (C4) |
+| R2d Security receives sign-in | through R2b1 | no | F11 on `AccountsScreen.tsx` first (C4's order) | — | no | no | R2b2; **lands before A2** (the first Accounts task that edits `AccountsScreen.tsx`; C4) |
 | R2e Appearance preview grid | through R2b1 | no | — | — | no | no | R2b2 |
 | R2s step-up on two passkey routes | — | no | — | — | no | no | R2d; **AW1a** (the step-up routes, `assertedAt`, `requireRecentAssertion`); **#397** (`server/src/server.ts`) |
 | R3a Instrument master-detail | through R2b1 | no | — | **S9, S10, S11**; **W3-LC** (C2) | no | no | R2b2 to R2e |
@@ -106,7 +106,7 @@ R2a (icons): any time
 --- after #627, F11, S2a, S2b and #652 ---
 [R2b0 (F11 slots), only if F11 lacks them] ── R2b1 (provider, routes, frame, bodies moved) ── R2b2 (cards' order, words)
 R2b2 ─┬─ R2c (Refined nav; after S4b)
-      ├─ R2d (Security; before AW0) ──┬─ R2s (step-up; after AW1a and #397)
+      ├─ R2d (Security; before A2) ───┬─ R2s (step-up; after AW1a and #397)
       │                               └─ R5 (disclosure; after AW0 and AW2a)
       └─ R2e (preview grid)
 R3a (Instrument; after S9 to S11 and W3-LC, and R2b2 to R2e) ── R3b (inspector; after S12)
@@ -117,7 +117,7 @@ R4 (ran here; after R1a)
 
 R1a to R1d edit the same two screen files, so they land one at a time in that order; each absorbs `main` with `git merge` before its CI. R2c, R2d and R2e each edit `pwa/src/screens/settings/` in disjoint files and can run in parallel worktrees once R2b2 has merged; they meet only in `settings.css`, whose hunks are disjoint by construction (one block per section), so the later PR merges `main` and re-runs its suites. R4 is independent of R2 and R3 and may land at any point after its gates; if it lands before R2b1, R2b1 carries its meta line into the section page unchanged.
 
-**Downstream readers of this plan.** The Claude Code binary lifecycle (`2026-10-18-claude-binary-lifecycle-design.md` §6.3, §6.4, decision 14) places a "Claude Code" card on `/settings/updates` after R2b2, using R1b's `AckConfirm`, R1c's result lines and R2b1's `SettingsDataProvider`. The Accounts plan's AW0 edits `AccountsScreen.tsx` after R2d (C4). Neither is built here.
+**Downstream readers of this plan.** The Claude Code binary lifecycle (`2026-10-18-claude-binary-lifecycle-design.md` §6.3, §6.4, decision 14) places a "Claude Code" card on `/settings/updates` after R2b2, using R1b's `AckConfirm`, R1c's result lines and R2b1's `SettingsDataProvider`. The Accounts plan's A2 (the first Accounts task that edits `AccountsScreen.tsx`) and every later Accounts edit of that file come after R2d (C4). Neither is built here.
 
 ## Global constraints
 
@@ -161,7 +161,7 @@ Every task's requirements include this section. `CLAUDE.md` is the authority; th
 - **C1. W2's door table and ROUTES.** `switch-layout` and `switch-theme` name `/settings/appearance` as their route, so S17(b) evaluates them there; ROUTES gains the five section entries (`top: false`) and the sixth, `settings-section` (`/^\/settings\/([^/]+)\/?$/`), which the palette's Go-to derivation leaves out, so S2b's both-way ROUTES test still holds. **Open:** the W2 plan does not say so yet. The coordinator acks it before R2b1 is dispatched, and R2b1's PR amends the W2 plan's door table in the same commit.
 - **C2. W3-LC**, the shared list-column seam: a per-route list and a per-route inspector slot in `ListColumn`, owned once and used by R3a, R3b and the Accounts redesign. **Open:** unowned. R3a is not dispatched until it has an owner and has merged.
 - **C3. F11's primitives.** `Section({ scope, title, purpose, children })` with `scope` drawn per skin by CSS, and a `PageScaffold` `nav` slot. **Open:** F11 is unbuilt. If F11 ships without them, R2b0 extends the two primitives, their stories and the role census in its own PR, before R2b1.
-- **C4. The order on `AccountsScreen.tsx` and `AuthSection`:** F11, then R2d, then AW0 and later. **Half answered:** the Accounts spec's rev 3 states that sign-in "moves to Settings › Security, … the Settings spec owns it" (its §1), but its D-5522 still names the move. This plan defines D-5508 as the one definition of the move; the Accounts plan, when written, defines D-5522 without the move clause and cites D-5508, and cites D-5508's two passkey routes beside D-5512's step-up list.
+- **C4. The order on `AccountsScreen.tsx` and `AuthSection`:** F11, then R2d, then A2 (the first Accounts task that edits `AccountsScreen.tsx`) and later. **Half answered:** the Accounts spec's rev 3 states that sign-in "moves to Settings › Security, … the Settings spec owns it" (its §1), but its D-5522 still names the move. This plan defines D-5508 as the one definition of the move; the Accounts plan, when written, defines D-5522 without the move clause and cites D-5508, and cites D-5508's two passkey routes beside D-5512's step-up list.
 - **C5 (new). The Claude Code card's slot.** The binary-lifecycle spec's decision 14 asks for a card on `/settings/updates` "agreed with that spec's author". This plan proposes it sits between Nodes and Update policy (versions first, policy last, D7), with its mode setting under Automation, and R2b2 renders Updates' cards from one ordered list so the insert is one line. The coordinator rules it; R2b2 builds only the ordered list.
 - **C6 (new). The compromise disclosure's slot** (Task R5, D-5509): the last card of Security, after Box token. The spec reserves the slot before Box token for "Recent account changes", so this adds a slot at the end and moves nothing.
 
@@ -569,7 +569,7 @@ They live in `settingsText.ts` as `STALL_LEVEL_NOTE: Record<StallLevel, string>`
 - [ ] **Step 4: Per width × skin × mode** (32 cells). Refined at 1280: the pane is about 960, the column about 688 after the nav, a 24 gap and 24 gutters; the nav stays put while the column scrolls. At 1920: the nav 220, the column capped at 760, the rest of the pane empty. At 1440: the nav 200, the column 760. At 360 to 1024: R2b1's pattern, unchanged. Instrument: unchanged until R3a (the PR notes the Instrument cells as "Refined frame, by design until R3a").
 - [ ] **Step 5: Verify.** `cd pwa && ./node_modules/.bin/vitest run test/settings-frame.test.tsx test/contrast.test.ts test/tap-targets.test.tsx` then the full pwa suite at `--maxWorkers=2`.
 
-### Task R2d: Security receives sign-in (D-5508; spec §5.5's Your sign-in and This session, §11.1) — GATED: after R2b2; lands before AW0
+### Task R2d: Security receives sign-in (D-5508; spec §5.5's Your sign-in and This session, §11.1) — GATED: after R2b2; lands before A2 (the first Accounts task that edits `AccountsScreen.tsx`)
 
 **Routing:** **band 3, two reviewers** (the passkey list and its revocation are a credential path; the review reads Review focus item 6). **Needs:** R2b2, and F11 on `AccountsScreen.tsx` (C4's order). **Frozen files touched:** none once #627 has merged.
 
