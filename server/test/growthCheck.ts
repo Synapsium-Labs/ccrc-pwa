@@ -145,7 +145,8 @@ export function codeLines(file: string, src: string): number {
   return b.code + b.heredoc;
 }
 
-export interface GrowthRow { file: string; base: number; head: number; delta: number }
+/** `atBoth`: the file exists at both shas, so a negative delta is a real shrink. */
+export interface GrowthRow { file: string; base: number; head: number; delta: number; atBoth: boolean }
 
 /** `file`'s blob at `sha`, or null when the file does not exist there. */
 function blobAt(file: string, sha: string, cwd: string): string | null {
@@ -159,13 +160,15 @@ function blobAt(file: string, sha: string, cwd: string): string | null {
 
 /** Net code lines of `file` at `baseSha` and `headSha` (0 where it is absent). */
 export function netGrowth(file: string, baseSha: string, headSha: string, cwd: string): GrowthRow {
-  const at = (sha: string): number => {
+  const at = (sha: string): number | null => {
     const text = blobAt(file, sha, cwd);
-    return text === null ? 0 : codeLines(file, text);
+    return text === null ? null : codeLines(file, text);
   };
   const base = at(baseSha);
   const head = headSha === baseSha ? base : at(headSha);
-  return { file, base, head, delta: head - base };
+  const b = base ?? 0;
+  const h = head ?? 0;
+  return { file, base: b, head: h, delta: h - b, atBoth: base !== null && head !== null };
 }
 
 /** Paths the diff `baseSha..headSha` adds. */
@@ -177,12 +180,13 @@ export function addedFiles(baseSha: string, headSha: string, cwd: string): strin
 
 /** The listed files that grew by more than GROWTH_LIMIT, minus the waived: the
  *  same diff adds a file under L1_L2_NEW_FILE_DIRS, or shrinks another listed
- *  file by at least as much as this one grew. */
+ *  file by at least as much as this one grew. A listed file absent at either
+ *  sha (deleted, renamed, new) is no shrink and waives nothing. */
 export function growthOver(rows: readonly GrowthRow[], added: readonly string[]): string[] {
   const newRingFile = added.some((p) => L1_L2_NEW_FILE_DIRS.some((d) => p.startsWith(d)));
   return rows
     .filter((r) => r.delta > GROWTH_LIMIT)
     .filter((r) => !newRingFile)
-    .filter((r) => !rows.some((o) => o.file !== r.file && -o.delta >= r.delta))
+    .filter((r) => !rows.some((o) => o.file !== r.file && o.atBoth && -o.delta >= r.delta))
     .map((r) => r.file);
 }

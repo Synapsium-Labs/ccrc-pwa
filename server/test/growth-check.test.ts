@@ -46,6 +46,13 @@ describe('growthCheck: the stripper (D-5848)', () => {
     expect(codeLines('x.ts', src)).toBe(1);
   });
 
+  it('a comment marker inside a string, template or regex does not swallow the next line', () => {
+    expect(codeLines('x.ts', "const s = '/*';\nconst b = 1;\n")).toBe(2);
+    expect(codeLines('x.ts', 'const t = `/* ${a} `;\nconst b = 1;\n')).toBe(2);
+    expect(codeLines('x.ts', 'const r = /[/*]/;\nconst b = 1;\n')).toBe(2);
+    expect(stripTs("const u = 'http://x'; // c\n")).toBe("const u = 'http://x'; \n");
+  });
+
   it('a `//` comment line is not code', () => {
     const src = '// one\n  // two\nconst a = 1; // trailing\n';
     expect(codeLines('x.ts', src)).toBe(1);
@@ -86,21 +93,39 @@ describe('growthCheck: the stripper (D-5848)', () => {
     expect(measureBash(src)).toEqual({ code: 3, heredoc: 1 });
   });
 
-  it('an empty diff is delta 0', () => {
-    const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).trim();
+  it('a `<<<` here-string opens no heredoc', () => {
+    expect(measureBash('x=$(cat <<<EOF)\necho a\nEOF\n')).toEqual({ code: 3, heredoc: 0 });
+  });
+
+  it('a plain `<<` heredoc ends only at its exact delimiter', () => {
+    expect(measureBash('cat <<EOF\n  EOF\nEOF\necho a\n')).toEqual({ code: 2, heredoc: 1 });
+  });
+
+  it('an empty diff is delta 0', (ctx) => {
+    let head: string;
+    try {
+      head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8', stdio: 'pipe' }).trim();
+    } catch {
+      console.log('growth-check: no git in this checkout, the empty-diff row skips');
+      ctx.skip();
+      return;
+    }
     expect(netGrowth('server/src/watch.ts', head, head, ROOT).delta).toBe(0);
   });
 
   it('over the limit is named unless a new L1/L2 file or a listed shrink waives it', () => {
     const rows = [
-      { file: 'server/src/watch.ts', base: 100, head: 100 + GROWTH_LIMIT + 1, delta: GROWTH_LIMIT + 1 },
-      { file: 'server/src/server.ts', base: 100, head: 100 + GROWTH_LIMIT, delta: GROWTH_LIMIT },
+      { file: 'server/src/watch.ts', base: 100, head: 100 + GROWTH_LIMIT + 1, delta: GROWTH_LIMIT + 1, atBoth: true },
+      { file: 'server/src/server.ts', base: 100, head: 100 + GROWTH_LIMIT, delta: GROWTH_LIMIT, atBoth: true },
     ];
     expect(growthOver(rows, [])).toEqual(['server/src/watch.ts']);
     expect(growthOver(rows, [`${L1_L2_NEW_FILE_DIRS[0]}decider.ts`])).toEqual([]);
     expect(growthOver(rows, ['server/src/elsewhere.ts'])).toEqual(['server/src/watch.ts']);
-    const shrunk = [...rows, { file: 'pwa/src/lib/api.ts', base: 200, head: 100, delta: -100 }];
+    const shrunk = [...rows, { file: 'pwa/src/lib/api.ts', base: 200, head: 100, delta: -100, atBoth: true }];
     expect(growthOver(shrunk, [])).toEqual([]);
+    // A listed file deleted or renamed away is no shrink: it waives nothing.
+    const gone = [...rows, { file: 'pwa/src/lib/api.ts', base: 200, head: 0, delta: -200, atBoth: false }];
+    expect(growthOver(gone, [])).toEqual(['server/src/watch.ts']);
   });
 });
 
