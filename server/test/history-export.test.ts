@@ -1412,7 +1412,10 @@ describe('marks that move (W1-B4 Task 8; spec §9.15 "Mark", "After a bind")', (
       WHERE e.uuid = ? AND b.blob_id <> e.blob_id`, rid(1));
     expect(late2, 'row 1\'s late variant is placed again').toHaveLength(1);
     expect(brotliDecompressSync(Buffer.from(late2[0]!['z'] as string, 'hex')).toString('utf8')).toContain('zqf1late body two');
-    expect(marks(box), 'both rows are marked by the segment that carries the stub').toEqual({ [rid(1)]: s4, [rid(2)]: s4 });
+    // D-5726 (history-export-replay-mark-one-writer) re-expects row 1: segment 2 (the first rebuild's predecessor writer) and segment 4
+    // (the writer the first rebuild minted) both carry it, and a mark moves only within one writer, so it comes off and the next
+    // pass writes row 1 again (the over-export D-5726 costs a directory of more than one writer). Row 2 is in segment 4 alone.
+    expect(marks(box), 'D-5726: row 1 is in two writers\' segments, so its mark comes off; row 2 is in the new one alone').toEqual({ [rid(1)]: null, [rid(2)]: s4 });
     const ex2 = runCli(box, ['expand', rid(1)], { env: withPane(box, ID) });
     expect(ex2.code, `${ex2.stdout}\n${ex2.stderr}`).toBe(0);
     expect(ex2.stdout, 'expand on the pruned first body says so').toContain('content pruned on');
@@ -1428,6 +1431,8 @@ describe('marks that move (W1-B4 Task 8; spec §9.15 "Mark", "After a bind")', (
   // Since D-5637 (history-export-replay-last-carrier, wave 5h-1) the rebuild marks row 1 with segment 2, its last carrier, which
   // holds the stub; segment 2's loss then clears that mark at the bind, and the over-clear F1c accepted (one more export per
   // rebuild) is gone: the second rebuild marks row 1 with the segment the pass wrote, and nothing is due after it.
+  // Since D-5726 (history-export-replay-mark-one-writer) that holds only within one writer: the first rebuild minted a new writer, so the
+  // second sees two, takes row 1's mark off, and one more pass writes it again.
   it('D-5396, F1c, end to end: a late variant pruned before the pass; a rebuild from segments 1 and 2 marks row 1 with segment 2, the last carrier, which holds the stub (D-5637); with segment 2 moved aside, a bind and a pass write row 1 again with the link and a stub, a second rebuild places the link and marks row 1 with that segment, and the next pass writes nothing', async () => {
     const { box, transcript, ids } = ingestedBox('ccrc-history-export-f1c-', [row(1, 'zqf1cfirst body one', 2 * DAY), row(2, 'zqf1cother row', 2 * DAY)]);
     const s1 = `1.${ids.writer}.db`;
@@ -1483,9 +1488,16 @@ describe('marks that move (W1-B4 Task 8; spec §9.15 "Mark", "After a bind")', (
     expectRowOneComplete('the second rebuild');
     // D-5637: the new segment is row 1's last carrier and holds the link and the stub, so the second rebuild marks row 1 with it
     // (first-wins read row 1 unmarked once more here, and a third pass and a third rebuild followed).
-    expect(marks(box), 'the second rebuild marks row 1 with the segment the pass wrote, its last carrier').toEqual({ [rid(1)]: live[1], [rid(2)]: s1 });
+    // D-5726 (history-export-replay-mark-one-writer) re-expects this: the new segment is a DIFFERENT WRITER's (the first rebuild minted
+    // a new writer token), and row 1 is also in segment 2's writer's segments, so the mark comes off instead of moving across
+    // writers, and the pass writes row 1 once more: the over-export D-5726 costs a directory of more than one writer.
+    expect(marks(box), 'D-5726: the second rebuild takes row 1\'s mark off (two writers carry it); row 2 keeps segment 1').toEqual({ [rid(1)]: null, [rid(2)]: s1 });
     passAt(box, 270);
-    expect(segmentsOf(box), 'and the next pass finds nothing due: no export more than the lost segment cost').toEqual(live);
+    const third = segmentsOf(box);
+    expect(third, 'the next pass writes row 1 again, in one more segment').toHaveLength(live.length + 1);
+    expect(marks(box), 'row 1 is marked by it').toEqual({ [rid(1)]: third[third.length - 1], [rid(2)]: s1 });
+    passAt(box, 340);
+    expect(segmentsOf(box), 'and the pass after finds nothing due').toEqual(third);
   }, 1_500_000);
 
   it('D-5395, a revived tombstone (writeChunk): a row whose blob prune tombstoned before its export went with a stub; a swap copy that stores the bytes again clears that row\'s mark, and an exported blob that was pruned and revived clears nothing; the next pass carries the bytes', async () => {
