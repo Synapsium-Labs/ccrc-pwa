@@ -119,12 +119,14 @@
 # started within SCOPE_SWEEP_MCP_SEC of it, and that child's descendants).
 # `ccrc doctor` READS this record and never re-derives it.
 #
-# OUTPUT. Silent on an ordinary tick; one line when a scope is first seen dead,
-# when its measured verdict changes to `would-stop` or `held`, or when it is stopped.
-# A `carry` row keeps the bounded clock pair, never the verdict, so the next measured
-# `would-stop` or `held` after a carry is announced again on the carried clock: a
-# re-announcement, not a first reach and not "first seen now". Refusals go to stderr,
-# exit 1. A paused sweep is silent (it runs every minute: a line a tick is noise).
+# OUTPUT. Silent on an ordinary tick; one line when a scope is first seen dead, and one
+# when its measured verdict is `would-stop`, `held`, `stopped` or `stop-failed` and differs
+# from the previous record's (an unchanged verdict is silent, and `report` is never
+# announced on its own). A `carry` row keeps the bounded clock pair, never the verdict (it
+# reads back as `carry`), so the next measured `would-stop` or `held` after a carry is
+# announced again on the carried clock: a re-announcement, not a first reach and not
+# "first seen now". Refusals go to stderr, exit 1. A paused sweep is silent (it runs
+# every minute: a line a tick is noise).
 # The record is written whole to a temporary beside it and renamed over it: a
 # failed open, header, body or rename exits 1, says `previous record retained`
 # and leaves the prior complete record untouched (an empty body is a valid record).
@@ -173,8 +175,9 @@ MODE=shadow
 [ -e "$REG/scope-sweep-live" ] && MODE=live
 
 # ── the previous record: first-seen clocks, the CPU then ──────────────────────
-# A `dead` line and a `carry` line both hand their bounded clock pair forward; only the pair, never the old
-# verdict, is read back (a carried line is never copied: it was one tick's inability to measure).
+# A `dead` line hands forward its bounded clock pair AND its verdict (PREVV: an unchanged verdict is not announced
+# again); a `carry` line hands forward only its pair, and its verdict reads back as `carry` (a carried line is never
+# copied: it was one tick's inability to measure).
 declare -A FIRST=() CPU0=() PREVV=()
 CARRY_RE='^carry (tmux-spawn-[^[:space:]]+\.scope) state=(dead|live|unknown) first=(none|[1-9][0-9]{0,15}) cpu0=(none|0|[1-9][0-9]{0,19}) why=(unit-show|description|control-group|cpu|scope-start|procs|cgroup-dir|child-cgroup|server-stat|server-comm|tmux-unknown|parent-hop-cap|socket-tables|socket-fd|box-stat)$'
 _ss_prev_clock() {
@@ -207,8 +210,12 @@ fi
 
 # ── /proc readers: a process's start (ticks since boot), its age, its parent ──
 declare -A TICKS=() PARENT=() PSTATE=()
-# pid -> TICKS[pid], PARENT[pid]; rc 1 means unreadable, or a state letter outside [A-Z] (Linux's `t`, a tracing stop, included,
-# though its stat reads fine), which the box and server checks read as unmeasurable and so fail safe. Fork-free: it runs per process per tick.
+# pid -> TICKS[pid], PARENT[pid], PSTATE[pid]; rc 1 means unreadable, or a state letter outside [A-Z] (Linux's `t`, a tracing
+# stop, included, though its stat reads fine). Callers differ on rc 1: the box and server checks read it as unmeasurable and so
+# fail safe (a `carry` row, never a stop); the dead scope's own process loop skips the process (the box check then covers it);
+# the live pane read, the live `old` listing and the parent walk treat it as "skip", reporting only, with no stop authority (a
+# traced process in a live scope is left out of the `old` lines; a traced pane leaves TICKS[pane] unset, so its MCP children
+# older than a day are listed). Fork-free: it runs per process per tick.
 _ss_stat() {
   local s rest
   local -a f

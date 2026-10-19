@@ -787,24 +787,39 @@ describe('wave 4b residue: carries, zombies and complete record writes', () => {
     }
   });
 
-  it('the scope\'s tmux server in a tracing stop (state t): carried as server-stat, unknown, never judged or stopped', () => {
-    proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)) });
-    proc(5000, { age: 30 * 86400, comm: 'tmux: server', cg: '/ccrc-tmux-server.scope', state: 't' });
-    const u = scope(1, { pane: 3001, server: 5000, procs: [3001] }); seen(u, 7 * HOUR, 7255660000);
+  // ccd's OWN tmux server (the one `tmux list-panes` answers from, CCD_SERVER) in a tracing stop: its stat file is rewritten
+  // in place, as the unreadable-stat case above chmods it, so no new fixture machinery is needed. The control leaves it
+  // untraced, so the same armed, inert scope is judged and stopped: the tracing stop alone decides.
+  it.each(['S', 't'])('ccd\'s own tmux server in state %s: only the tracing stop makes the server check unmeasurable', (state) => {
+    const u = inert(1);
+    if (state === 't') {
+      const stat = path.join(fx.proc, String(CCD_SERVER), 'stat');
+      const before = fs.readFileSync(stat, 'utf8');
+      fs.writeFileSync(stat, before.replace(') S ', ') t '));
+      expect(fs.readFileSync(stat, 'utf8'), 'the fixture server now reads as traced').not.toBe(before);
+    }
     arm();
     expect(run().code).toBe(0);
-    expect(rows('carry')[u]).toEqual({ state: 'unknown', first: String(UP - 7 * HOUR), cpu0: '7255660000', why: 'server-stat' });
-    expect(rows('dead')[u]).toBeUndefined();
-    expect(stops()).toEqual([]);
+    if (state === 't') {
+      expect(rows('carry')[u]).toEqual({ state: 'unknown', first: String(UP - 7 * HOUR), cpu0: '7255660000', why: 'server-stat' });
+      expect(rows('dead')[u]).toBeUndefined();
+      expect(stops()).toEqual([]);
+    } else {
+      expect(rows('carry')[u]).toBeUndefined();
+      expect(rows('dead')[u]).toMatchObject({ verdict: 'stopped', server: 'ccd', why: 'none' });
+      expect(stops()).toEqual([`--user stop --no-block ${u}`]);
+    }
   });
 
   // F4 (fix round 1): a carry row keeps the bounded clock pair, never the verdict (PREVV becomes `carry`), so the next
   // measured `would-stop` or `held` after a carry is announced AGAIN on the carried clock. That is a re-announcement, not a
-  // first reach, and not "first seen now": the clock is the original one. Pinned as the approved behaviour.
+  // first reach, and not "first seen now": the clock is the original one. Pinned as the approved behaviour. A CONTROL tick
+  // beside each pin shows that an unchanged `would-stop` or `held` is silent, so the line after the carry is announced
+  // because of the carry (PREVV is `carry`), not because every tick announces its verdict.
   const sayLines = (out: string, u: string): string[] => out.split('\n').filter((l) => l.includes(u));
   const deadMinutes = (line: string): number => Number(/ — dead (\d+) min,/.exec(line)![1]);
 
-  it('would-stop -> carry -> would-stop (shadow): the carry tick is silent for it, the next would-stop is announced again on the ORIGINAL clock', () => {
+  it('would-stop -> would-stop -> carry -> would-stop (shadow): an unchanged verdict and a carry are silent, the next would-stop is announced again on the ORIGINAL clock', () => {
     const u = inert(1);
     const orig = { first: String(UP - 7 * HOUR), cpu0: '7255660000' };
     const t1 = run();
@@ -812,6 +827,11 @@ describe('wave 4b residue: carries, zombies and complete record writes', () => {
     expect(rows('dead')[u]).toMatchObject({ verdict: 'would-stop', ...orig });
     expect(sayLines(t1.out, u)).toHaveLength(1);
     expect(sayLines(t1.out, u)[0]).toContain(`${u} would-stop`);
+
+    const control = run();                            // control: the same verdict again says nothing
+    expect(control.code, control.err).toBe(0);
+    expect(rows('dead')[u]).toMatchObject({ verdict: 'would-stop', ...orig });
+    expect(sayLines(control.out, u), 'an unchanged would-stop is silent').toEqual([]);
 
     const child = path.join(fx.cg, cgOf(u), 'nested');
     fs.mkdirSync(child);                              // one predicate unmeasurable this tick
@@ -834,7 +854,7 @@ describe('wave 4b residue: carries, zombies and complete record writes', () => {
     expect(stops()).toEqual([]);
   });
 
-  it('held -> carry -> held (armed): the carry tick is silent for it, the next held is announced again on the ORIGINAL clock', () => {
+  it('held -> held -> carry -> held (armed): an unchanged verdict and a carry are silent, the next held is announced again on the ORIGINAL clock', () => {
     const us = [1, 2, 3, 4].map((n) => inert(n));    // one more than the stop budget: the fourth is `held`
     const u = us[3]!;
     const orig = { first: String(UP - 7 * HOUR), cpu0: '7255660000' };
@@ -844,6 +864,11 @@ describe('wave 4b residue: carries, zombies and complete record writes', () => {
     expect(rows('dead')[u]).toMatchObject({ verdict: 'held', ...orig });
     expect(sayLines(t1.out, u)).toHaveLength(1);
     expect(sayLines(t1.out, u)[0]).toContain(`${u} held`);
+
+    const control = run();                            // control: the same verdict again says nothing
+    expect(control.code, control.err).toBe(0);
+    expect(rows('dead')[u]).toMatchObject({ verdict: 'held', ...orig });
+    expect(sayLines(control.out, u), 'an unchanged held is silent').toEqual([]);
 
     const child = path.join(fx.cg, cgOf(u), 'nested');
     fs.mkdirSync(child);
