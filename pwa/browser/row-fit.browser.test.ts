@@ -140,13 +140,13 @@ interface RowFit {
   readonly pools: number;
   readonly suggested: number;
   /** Per row: how far its right edge, and its keyboard ring's, run past the sheet body's right edge (<= 0 fits);
-   *  how far the furthest item of its identity group (the name, the pill, the pool tag) runs past the group, into
+   *  how far its own furthest item (the group, the gauges, the chevron) runs past its content box; how far the furthest item of its identity group (the name, the pill, the pool tag) runs past the group, into
    *  the gauges (<= 0 fits); whether the name chip draws all of its text; whether the name breaks over lines
    *  although its one-line chip is no wider than the group; and whether the pool tag is cut although its text is no
    *  wider than the group. Either of the last two means the group squeezed its items where it should have wrapped
    *  them: the pill and the tag drop under the name. */
   readonly over: readonly {
-    readonly label: string; readonly row: number; readonly ring: number; readonly ident: number;
+    readonly label: string; readonly row: number; readonly ring: number; readonly content: number; readonly ident: number;
     readonly nameWhole: boolean; readonly nameWrapsNeedlessly: boolean; readonly poolCutNeedlessly: boolean;
   }[];
 }
@@ -191,6 +191,7 @@ function measureRows(page: Page): Promise<RowFit> {
         label: chip?.textContent ?? '',
         row: right - edge,
         ring: right + reach - edge,
+        content: Math.max(...[...row.children].map((k) => k.getBoundingClientRect().right)) - (right - parseFloat(cs.paddingRight)),
         ident: group === null ? NaN : Math.max(...items) - group.getBoundingClientRect().right,
         nameWhole: chip !== null && chip.scrollWidth <= chip.clientWidth + 0.5,
         nameWrapsNeedlessly: chip !== null && group !== null && lines(chip) > 1 && oneLineWidth(chip) <= group.clientWidth,
@@ -213,6 +214,7 @@ function expectFits(fit: RowFit, where: string): void {
   for (const r of fit.over) {
     expect.soft(r.row, `${where}: ${r.label}'s row runs past the sheet body`).toBeLessThanOrEqual(0.5);
     expect.soft(r.ring, `${where}: ${r.label}'s keyboard ring is cut by the sheet body (or was not drawn)`).toBeLessThanOrEqual(0.5);
+    expect.soft(r.content, `${where}: ${r.label}'s gauges or chevron run out of the row`).toBeLessThanOrEqual(0.5);
     expect.soft(r.ident, `${where}: ${r.label}'s name or tags run out of their group into the gauges`).toBeLessThanOrEqual(0.5);
     expect.soft(r.nameWhole, `${where}: ${r.label}'s name is cut`).toBe(true);
     expect.soft(r.nameWrapsNeedlessly, `${where}: ${r.label}'s name breaks over lines beside a tag that could drop under it`).toBe(false);
