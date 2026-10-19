@@ -9835,7 +9835,7 @@ _models_summary() {   # <json body> — the human sentences, on STDERR
      elif .contextWindow.rule == "measured" then
        "  context window: \(.contextWindow.tokens) tokens, measured (the smallest across the class models)"
      else
-       "  context window: \(if .contextWindow.rule == "default" then "\(.contextWindow.tokens) tokens, from the catalogue" else "not set, the client default applies" end)\(if (.contextWindow.unmeasured | length) > 0 then "; not measured: \(.contextWindow.unmeasured | join(", "))" else "" end)"
+       "  context window: \(if .contextWindow.rule == "default" then "\(.contextWindow.tokens) tokens, by the default rule (the catalogue context of the default model, capped at 200000)" else "not set, the client default applies" end)\(if (.contextWindow.unmeasured | length) > 0 then "; not measured: \(.contextWindow.unmeasured | join(", "))" else "" end)"
      end),
     (if .windows.state == "ok" then
        (.windows.byModel | to_entries[] | "  measured window: \(.key) \(.value.tokens) tokens\(if .value.setAt == null then "" else " (set \(.value.setAt))" end)")

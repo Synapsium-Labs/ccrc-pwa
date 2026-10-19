@@ -1162,11 +1162,40 @@ describe('ccrc models <id> set-window and clear-window (codex-bridge spec §2.7)
     for (const m of CLASS_MODELS) expect(r.stderr).toContain(`measured window: ${m} 400000 tokens (set `);
   });
 
+  // The fixture catalogue lists 272000 for the default model, so this is the
+  // CAPPED case: the line must not credit the catalogue with the 200000.
   it('show on a lane part-way measured names the default rule and the models still unmeasured', () => {
     expect(run(['models', ID, 'set-window', OPUS, '400000']).code).toBe(0);
     const r = run(['models', ID, 'show']);
-    expect(r.stderr).toContain('context window: 200000 tokens, from the catalogue; not measured: '
-      + CLASS_MODELS.filter((m) => m !== OPUS).join(', '));
+    expect(r.stderr).toContain('context window: 200000 tokens, by the default rule (the catalogue context of the '
+      + 'default model, capped at 200000); not measured: ' + CLASS_MODELS.filter((m) => m !== OPUS).join(', '));
+  });
+
+  it('show on a lane with no catalogue: rule none prints its own line, naming the models still unmeasured', () => {
+    fs.rmSync(join(home, '.ccrc', 'models', `${ID}.json`));
+    const r = run(['models', ID, 'show']);
+    expect(r.code).toBe(0);
+    expect(oneObject(r)['contextWindow']).toMatchObject({ tokens: null, rule: 'none' });
+    expect(r.stderr.split('\n')).toContain(
+      `  context window: not set, the client default applies; not measured: ${CLASS_MODELS.join(', ')}`);
+  });
+
+  it('a lane with no registry, Anthropic or not, prints no context window line at all', () => {
+    for (const id of [ROSTER.accounts[1]!.id, ROSTER.accounts[4]!.id]) {
+      const r = run(['models', id, 'show']);
+      expect(r.code).toBe(0);
+      expect(oneObject(r)['contextWindow']).toBeNull();
+      expect(r.stderr).toMatch(new RegExp(`^account ${id}`));
+      expect(r.stderr).not.toMatch(/context window/);
+    }
+  });
+
+  it('a measured window with no setAt prints without the "(set …)" part', () => {
+    fs.writeFileSync(winPath(), JSON.stringify({ windows: { [OPUS]: { tokens: 400000 } } }));
+    const r = run(['models', ID, 'show']);
+    expect(r.code).toBe(0);
+    expect(r.stderr.split('\n')).toContain(`  measured window: ${OPUS} 400000 tokens`);
+    expect(r.stderr).not.toMatch(/\(set /);
   });
 
   it('show names an unreadable windows file and says the default rule applies', () => {
