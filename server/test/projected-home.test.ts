@@ -673,7 +673,7 @@ describe('ccd and projectHome agree about telemetry, not only about limits files
 
   afterEach(() => { if (h !== undefined) fs.rmSync(h, { recursive: true, force: true }); });
 
-  const acct = (id: string, label: string, telemetry: 'anthropic' | 'none' | 'openrouter', homeAble = true) => ({
+  const acct = (id: string, label: string, telemetry: 'anthropic' | 'codex' | 'none' | 'openrouter', homeAble = true) => ({
     id, label, configDirSuffix: `.claude-${id}`,
     exec: id === 'a' ? { kind: 'upstream' } : { kind: 'external' },
     homeAble, hue: id === 'a' ? 'cyan' : id === 'b' ? 'violet' : 'blue', telemetry,
@@ -769,6 +769,22 @@ describe('ccd and projectHome agree about telemetry, not only about limits files
     const projected = projectHome(cfg.roster, await readLimits(localIO, cfg), { state: 'untagged' }, NO_EDGES);
     expect(projected).toEqual({ wrapper: 'a', score: 0 });
     expect(shH('_ws_least_loaded'), 'ccd disagrees with projectHome').toBe('a');
+  });
+
+  it('a codex lane with a limits file stays scorable in projectHome: it beats a worse-scored anthropic lane (D-5754)', async () => {
+    // `reportsLimits` answers codex the same as before D-5754 (a Codex lane has a
+    // `~/.cc-limits` writer), and nothing else pins that arm: flip it and the codex
+    // lane drops out of the scored set, leaving the 90 % anthropic lane. TypeScript
+    // only: ccd's `_account_measured` reads CCRC_MEASURED (`anthropic` only) and
+    // names `a` here, the pre-existing difference D-5754 records and leaves as it was.
+    const roster = { version: 1, accounts: [
+      acct('a', 'team·max', 'anthropic'),
+      acct('c', 'team·codex', 'codex'),
+    ] };
+    seedBoth(roster, { a: L(90, 90), c: L(10, 10) });
+    const cfg = loadConfig({ CCRC_HOME: h });
+    const projected = projectHome(cfg.roster, await readLimits(localIO, cfg), { state: 'untagged' }, NO_EDGES);
+    expect(projected).toEqual({ wrapper: 'c', score: 10 });
   });
 
   it('an openrouter lane is not anthropic to serviceability: no Fable there (D-5521)', async () => {

@@ -100,4 +100,18 @@ describe('telemetry "openrouter" in both parsers (D-5521)', () => {
       expect((caught as { remedy?: string }).remedy).toMatch(/"anthropic", "codex", "openrouter" or "none"/);
     }
   });
+
+  it('a name the value set inherits from Object.prototype is refused by both (own keys only)', async () => {
+    // `telemetry in TELEMETRY_VALUES` would let these through; the check reads own keys.
+    const { parseRoster } = await import('../../shared/roster.js');
+    const { rosterFromJson } = await import('../../shared/roster-json.mjs');
+    for (const parse of [parseRoster, rosterFromJson] as const) {
+      for (const bad of ['toString', 'constructor', '__proto__', 'hasOwnProperty']) {
+        let caught: unknown;
+        try { parse(rosterWith(bad)); } catch (e) { caught = e; }
+        expect(String((caught as Error | undefined)?.message), `${parse.name} took "${bad}"`)
+          .toMatch(new RegExp(`invalid telemetry "${bad}"`));
+      }
+    }
+  });
 });

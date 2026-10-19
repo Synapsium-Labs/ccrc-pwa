@@ -766,4 +766,13 @@ describe('parseRoster — telemetry "openrouter" (D-5521)', () => {
     expect((caught as RosterError).message).toMatch(/invalid telemetry "OpenRouter": it must be "anthropic", "codex", "openrouter" or "none"\./);
     expect((caught as RosterError).remedy).toMatch(/to "anthropic", "codex", "openrouter" or "none"\./);
   });
+
+  it('refuses a name the value set inherits from Object.prototype (own keys only)', () => {
+    for (const bad of ['toString', 'constructor', '__proto__', 'hasOwnProperty']) {
+      let caught: unknown;
+      try { parseRoster(withKeyLane(bad)); } catch (e) { caught = e; }
+      expect(caught, `took "${bad}"`).toBeInstanceOf(RosterError);
+      expect((caught as RosterError).message).toMatch(new RegExp(`invalid telemetry "${bad}"`));
+    }
+  });
 });
