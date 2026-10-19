@@ -33,6 +33,8 @@ const bashPre = (n: number, toolUseId: string, listing: readonly string[]): Dele
 const bashPost = (n: number, toolUseId: string, listing: readonly string[]): DelegationEventEnvelopeV1 =>
   ({ ...mkBase(n), eventKind: 'PostToolUse', toolName: 'Bash', toolUseId, outcome: 'completed', listing });
 
+/** The listing array a Bash PreToolUse or PostToolUse carries, read off the event itself (the wide envelope type names it on those two only). */
+const listingOf = (e: DelegationEventEnvelopeV1): readonly string[] | undefined => (e as { listing?: readonly string[] }).listing;
 const projectOf = (sessionId: string): string | undefined => (sessionId === PARENT ? REPO : undefined);
 /** One lost hour of one owner: the interval row `delegationLostWindowsOf` turns into a window on every repository. */
 const lostHour = { sessionId: PARENT, parentIncarnation: INC, utcHour: '2026-10-14T10:00:00.000Z', state: 'unmeasured' as const, detail: 'range-unreadable: x', recordedAt: '2026-10-14T10:30:00.000Z' };
@@ -59,10 +61,10 @@ describe('D-5643 R1: the lane\'s windows, their listings and the pass\'s window 
     expect(Object.isFrozen(window), 'the window').toBe(true);
     expect(Object.isFrozen(window.before), 'its before').toBe(true);
     expect(Object.isFrozen(window.after), 'its after').toBe(true);
-    expect(window.before, 'before IS the PreToolUse listing').toBe(pre.listing);
-    expect(window.after, 'after IS the PostToolUse listing').toBe(post.listing);
-    expect(Object.isFrozen(pre.listing), 'the event\'s own PreToolUse listing').toBe(true);
-    expect(Object.isFrozen(post.listing), 'the event\'s own PostToolUse listing').toBe(true);
+    expect(window.before, 'before IS the PreToolUse listing').toBe(listingOf(pre));
+    expect(window.after, 'after IS the PostToolUse listing').toBe(listingOf(post));
+    expect(Object.isFrozen(listingOf(pre)), 'the event\'s own PreToolUse listing').toBe(true);
+    expect(Object.isFrozen(listingOf(post)), 'the event\'s own PostToolUse listing').toBe(true);
   });
 
   it('a window with no after-listing, and a shed one, are frozen too', () => {
