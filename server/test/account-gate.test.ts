@@ -17,7 +17,7 @@ import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import { ACCOUNT_GATE_REFUSALS } from '../../shared/api.js';
 import { REFUSAL_STATUS } from '../../shared/refusal.js';
 import { createAccountGate, accountOriginClass, type AccountGateDeps } from '../src/accounts/gate.js';
-import { measureSecret, sessionVerdict } from '../src/auth/gate.js';
+import { EXEMPT, measureSecret, sessionVerdict } from '../src/auth/gate.js';
 import { hashLine, type ScryptParams } from '../src/auth/secret.js';
 import { SESSION_COOKIE } from '../src/auth/cookie.js';
 import { SessionStore, sessionIdHash } from '../src/auth/sessions.js';
@@ -217,6 +217,13 @@ describe('the account gate (D-5511)', () => {
       expect(res.headers['cache-control'], JSON.stringify(o)).toBe('no-store');
       await r.app.close();
     }
+  });
+
+  it('no account route is ever in EXEMPT, so the install gate\'s Origin (CSRF) check always runs before it (D-5621)', () => {
+    // The account gate restates the session check but not the request-Origin check: that one is `installGate`'s,
+    // which skips the exempt routes. An account route in EXEMPT would therefore lean on SameSite=Lax alone.
+    const accountKeys = [...EXEMPT.keys()].filter((k) => /^[A-Z]+ \/api\/accounts?(\/|$)/.test(k.replace(/\?.*$/, '')));
+    expect(accountKeys).toEqual([]);
   });
 
   it('every gate refusal word has its one status', () => {

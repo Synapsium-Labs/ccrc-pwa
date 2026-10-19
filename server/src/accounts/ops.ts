@@ -81,8 +81,6 @@ export interface LocalAccountOpsOpts {
 
 /** The local arm: the verb spawned on this box, which in local fleet mode IS the fleet node. */
 export function localAccountOps(opts: LocalAccountOpsOpts): AccountOps {
-  // The same absolute shim the update op and the token sync spawn: the one spelling of the launcher's path.
-  const launcher = updateLauncherPath(opts.home);
   const env = accountSpawnEnv(opts.home);
   const timeoutOf = opts.timeoutMs ?? ((sub: AccountSub) => ACCOUNT_SUB_TIMEOUT_MS[sub]);
   const grace = opts.killGraceMs ?? ACCOUNT_OP_KILL_GRACE_MS;
@@ -97,18 +95,23 @@ export function localAccountOps(opts: LocalAccountOpsOpts): AccountOps {
     // will call that one builder; until it exists a sub with fields is refused rather than spelled twice (D-5620).
     if (Object.keys(fields).length > 0) return { kind: 'refused', why: 'fields-unbuilt' };
     const argv = id === null ? ['account', sub] : ['account', sub, `--id=${id}`];
+    // The same absolute shim the update op and the token sync spawn: the one spelling of the launcher's path.
+    // Resolved per call, as `localUpdateSpawnFor` does, so a home it refuses (relative, or ending in `/`) answers
+    // `not-started` here and never crashes the boot that builds this arm (D-5621).
+    let launcher: string;
+    try { launcher = updateLauncherPath(opts.home); } catch { return { kind: 'not-started' }; }
     return new Promise<AccountOpResult>((resolve) => {
       let settled = false;
       let child: ReturnType<typeof spawn>;
       const chunks: Buffer[] = [];
       let bytes = 0;
       let ended: AccountOpResult | null = null;
-      let killTimer: NodeJS.Timeout | undefined;
       const settle = (r: AccountOpResult): void => {
         if (settled) return;
         settled = true;
         clearTimeout(bound);
-        if (killTimer !== undefined) clearTimeout(killTimer);
+        // Once `stop` has fired, the group's KILL is NOT cancelled here (D-5621): the leader's exit raises `close`,
+        // but a group member that ignores TERM and closed its stdio is still running and still gets KILL.
         resolve(r);
       };
       /** SIGTERM to the whole group (the verb's `claude`, `curl`, `jq` too), then SIGKILL after the grace. */
@@ -120,7 +123,7 @@ export function localAccountOps(opts: LocalAccountOpsOpts): AccountOps {
           try { process.kill(-child.pid, s); } catch { /* the group is already gone */ }
         };
         signal('SIGTERM');
-        killTimer = setTimeout(() => signal('SIGKILL'), grace);
+        setTimeout(() => signal('SIGKILL'), grace).unref();
       };
       try {
         child = spawn(launcher, argv, { env: { ...env }, stdio: ['pipe', 'pipe', 'pipe'], detached: true });

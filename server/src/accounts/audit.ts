@@ -24,7 +24,8 @@ import type { CurrentFleetIdentity } from '../fleetidentity.js';
  *    (D-5555), which is what the operator needs to find it at openrouter.ai.
  *  - So no secret, code, URL, key hint, key hash or email can be written: there is no field that takes free text.
  *
- * AS BUILT (D-5620): `laneId` and `provider` are NULL only on the laneless acts (`ACCOUNT_LANELESS_ACTS`); `keyName`
+ * AS BUILT (D-5620): `laneId` is NULL only on the laneless acts (`ACCOUNT_LANELESS_ACTS`); `provider` is NULL when
+ * the act names none (a laneless act, or a refusal answered before the provider was read); `keyName`
  * is its own column, so the one string a row may carry beside the vocabularies has one grammar; `fleetIdentity` is
  * NULL when the node is not known; a `code` rides only a row that did not end `ok`.
  *
@@ -48,15 +49,17 @@ const MINTED_ACTORS = new WeakSet<AccountActor>();
 /** The longest device label a row carries. The session row keeps up to 120 characters of a user-agent. */
 const ACTOR_LABEL_MAX = 64;
 const ACTOR_UNKNOWN = 'unknown device';
-const C0_OR_DEL = /[\u0000-\u001f\u007f]+/g;
+/** C0, DEL and C1 controls (the 8-bit CSI among them), and the Unicode format characters a terminal or a viewer
+ *  would act on: zero-width and directional marks, bidi embeddings, overrides and isolates, and the BOM (D-5621). */
+const UNPRINTABLE = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]+/g;
 
 /**
  * The actor of a gated request: the device label of the session the gate verified (`GateDecision.device`) and the
  * first 8 hex characters of its `idHash`. The label is attribution, never authentication (`auth/gate.ts`); it is
- * stripped of control bytes and bounded, since a user-agent is attacker-chosen text.
+ * stripped of control and format characters and bounded, since a user-agent is attacker-chosen text.
  */
 export function actorOf(device: string | null, idHash: string): AccountActor {
-  const cleaned = (device ?? '').replace(C0_OR_DEL, ' ').replace(/\s+/g, ' ').trim().slice(0, ACTOR_LABEL_MAX).trim();
+  const cleaned = (device ?? '').replace(UNPRINTABLE, ' ').replace(/\s+/g, ' ').trim().slice(0, ACTOR_LABEL_MAX).trim();
   const label = cleaned === '' ? ACTOR_UNKNOWN : cleaned;
   const idHash8 = /^[0-9a-f]{8}/.test(idHash) ? idHash.slice(0, 8) : '00000000';
   const text = `${label} ${idHash8}`;
@@ -77,6 +80,7 @@ export interface AccountEventInput {
   act: AccountAct;
   /** The lane the act touched; NULL only for the laneless acts (`ACCOUNT_LANELESS_ACTS`). */
   laneId: string | null;
+  /** NULL when the act names no provider: a laneless act, or a refusal answered before the provider was read. */
   provider: ProviderId | null;
   method?: ConnectMethod;
   outcome: AccountOutcome;

@@ -1688,8 +1688,8 @@ export const MIGRATIONS: readonly string[] = [
   // account act. Its ONE writer is `AccountAudit.write` (`server/src/accounts/audit.ts`), which refuses any value
   // outside the closed vocabularies and grammars before the INSERT, so no column can carry a secret, a code, a URL, a
   // key hint, a key hash or an email. `at` is epoch ms; `actor` is `<device label> <8 hex of idHash>`, never an IP.
-  // `laneId` and `provider` are NULL only for the laneless acts (`step-up-locked`, `management-remove`,
-  // `ceiling-lower`); `method`, `code` and `keyName` (a minted key's fixed NAME, D-5555) are NULL when the act has
+  // `laneId` is NULL only for the laneless acts (`step-up-locked`, `management-remove`, `ceiling-lower`); `provider`
+  // is NULL when the act names none (D-5620); `method`, `code` and `keyName` (a minted key's fixed NAME, D-5555) are NULL when the act has
   // none; `fleetIdentity` is the node-id the act ran against, NULL when it was not known. Rows older than 365 days are
   // swept (`AccountAudit.sweep`), which the index on `at` serves. v1 ships no reader (spec §3.6).
   //

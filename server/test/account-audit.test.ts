@@ -13,7 +13,8 @@ import path from 'node:path';
 import Fastify, { type FastifyRequest } from 'fastify';
 import type { DatabaseSync } from 'node:sqlite';
 import { ACCOUNT_AUDIT_RETENTION_DAYS } from '../../shared/api.js';
-import { AccountAudit, actorOf, type AccountEventInput } from '../src/accounts/audit.js';
+import { AccountAudit, actorOf, knownFleetIdentity, type AccountEventInput } from '../src/accounts/audit.js';
+import { FleetIdentityCell, type CurrentFleetIdentity } from '../src/fleetidentity.js';
 import { createAccountGate } from '../src/accounts/gate.js';
 import { measureSecret, sessionVerdict } from '../src/auth/gate.js';
 import { hashLine, type ScryptParams } from '../src/auth/secret.js';
@@ -96,6 +97,19 @@ describe('account_events (D-5516)', () => {
     expect(actorOf(null, 'cd'.repeat(32)).toString()).toBe(`unknown device ${'cd'.repeat(4)}`);
     expect(actorOf('line\none\u0007', 'cd'.repeat(32)).toString()).toBe(`line one ${'cd'.repeat(4)}`);
     expect(actorOf('x'.repeat(500), 'cd'.repeat(32)).toString()).toBe(`${'x'.repeat(64)} ${'cd'.repeat(4)}`);
+    // C1 controls (the 8-bit CSI among them), bidi overrides and isolates, zero-width and BOM characters are
+    // stripped too (D-5621): the operator reads this column in a terminal.
+    expect(actorOf('\u009b31mevil\u202eabc\u200b\u2066x\u2069\ufeff\u0085y', 'cd'.repeat(32)).toString())
+      .toBe(`31mevil abc x y ${'cd'.repeat(4)}`);
+    expect(actorOf('\u202e\u200f\u009b', 'cd'.repeat(32)).toString()).toBe(`unknown device ${'cd'.repeat(4)}`);
+  });
+
+  it("knownFleetIdentity is the node-id only while the identity is known (D-5516)", () => {
+    const cell = (now: CurrentFleetIdentity) => ({ current: () => now });
+    expect(knownFleetIdentity(undefined)).toBeNull();
+    expect(knownFleetIdentity(cell({ kind: 'unmeasured', connectionEpoch: 1, why: 'no-ready' }))).toBeNull();
+    expect(knownFleetIdentity(cell({ kind: 'collision', connectionEpoch: 1, why: 'node-id-keys-another-live-row' }))).toBeNull();
+    expect(knownFleetIdentity(cell({ kind: 'known', connectionEpoch: 1, nodeId: NODE, measuredAt: 0 }))).toBe(NODE);
   });
 
   it('a canary written through write() in every free-text-shaped field is refused by the types, and the table never holds it', () => {
@@ -166,8 +180,11 @@ describe('account_events (D-5516)', () => {
     const base = testDeps(home);
     const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
     const stubPty = (): PtyLike => ({ onData: () => ({ dispose: () => {} }), write: () => {}, resize: () => {}, kill: () => {} });
+    // A known fleet identity: the lock row must carry its node-id (the server's own wiring, `knownFleetIdentity`).
+    const fleetIdentity = new FleetIdentityCell();
+    fleetIdentity.current = () => ({ kind: 'known', connectionEpoch: 1, nodeId: NODE, measuredAt: 0 });
     const deps: Deps = {
-      ...base, coord, accountAudit: new AccountAudit(coord.db), spawnPty: stubPty,
+      ...base, coord, accountAudit: new AccountAudit(coord.db), spawnPty: stubPty, fleetIdentity,
       cfg: { ...base.cfg, authEnabled: true, cookieSecure: false, rpId: 'localhost', origin: 'http://localhost:7788' },
     };
     const app = await buildServer(deps);
@@ -193,7 +210,7 @@ describe('account_events (D-5516)', () => {
       expect(rows).toHaveLength(1);
       expect(rows[0]).toMatchObject({
         act: 'step-up-locked', laneId: null, provider: null, method: null, outcome: 'refused', code: 'step-up-locked',
-        actor: `a test phone ${idHash.slice(0, 8)}`,
+        actor: `a test phone ${idHash.slice(0, 8)}`, fleetIdentity: NODE,
       });
       // Locked: a further attempt is refused before any count, and writes no second row.
       await attempt();

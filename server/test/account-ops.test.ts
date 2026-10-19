@@ -154,6 +154,35 @@ describe('the local arm (D-5513: the account spawn\'s environment is explicit)',
     expect(readFileSync(path.join(rec, 'signals'), 'utf8')).toContain('term');
   });
 
+  it('a group member that ignores TERM after closing its stdio still gets KILL after the grace (D-5621)', async () => {
+    // The leader exits on TERM; its backgrounded child traps TERM, closes its stdio and keeps running. The `close`
+    // that the leader's exit raises must not cancel the group's KILL.
+    const { home, rec } = fixtureHome([
+      'export rec',
+      '/bin/sh -c \'trap "" TERM; echo $$ > "$rec/grandchild.tmp"; mv "$rec/grandchild.tmp" "$rec/grandchild"; while :; do sleep 0.05; done\' </dev/null >/dev/null 2>&1 &',
+      'while [ ! -s "$rec/grandchild" ]; do sleep 0.02; done',
+      'while :; do sleep 0.05; done',
+    ].join('\n'));
+    const ops = localAccountOps({ home, timeoutMs: () => 800, killGraceMs: 300 });
+    expect(await ops.run('check', 'lane-a', {})).toEqual({ kind: 'timeout' });
+    const pid = Number(readFileSync(path.join(rec, 'grandchild'), 'utf8').trim());
+    expect(pid).toBeGreaterThan(1);
+    const alive = (): boolean => { try { process.kill(pid, 0); return true; } catch { return false; } };
+    const until = Date.now() + 3000;
+    while (alive() && Date.now() < until) await new Promise((r) => setTimeout(r, 50));
+    const survived = alive();
+    if (survived) process.kill(pid, 'SIGKILL');
+    expect(survived).toBe(false);
+  });
+
+  it('a home the launcher path refuses answers not-started on the call, and never throws when the arm is built (D-5621)', async () => {
+    for (const home of ['/fixture/home/', '', 'relative/home']) {
+      let ops: ReturnType<typeof localAccountOps> | undefined;
+      expect(() => { ops = localAccountOps({ home }); }, home).not.toThrow();
+      expect(await ops!.run('roster', null, {}), home).toEqual({ kind: 'not-started' });
+    }
+  });
+
   it('a launcher that is not there answers not-started', async () => {
     const home = mkTmp('ccrc-account-ops-none-');
     expect(await localAccountOps({ home }).run('roster', null, {})).toEqual({ kind: 'not-started' });
