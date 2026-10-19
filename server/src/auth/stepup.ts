@@ -202,8 +202,14 @@ export function createStepUp(deps: StepUpDeps): StepUp {
   };
 
   const noStore: StepUp['noStore'] = async (req, reply, payload) => {
+    // Keyed on the ROUTE fastify matched, not only the raw URL: the router decodes percent-escapes, so
+    // `/api/auth/step%2Dup/passphrase` reaches the passphrase handler (and the gate's 401) while its raw URL
+    // does not start with the prefix. The raw path is kept for answers no route matched (the 404s).
+    const routed = req.routeOptions.url;
     const pathOnly = req.url.split('?', 1)[0] ?? '';
-    if (pathOnly.startsWith(STEP_UP_PATH_PREFIX)) reply.header('cache-control', 'no-store');
+    if ((routed !== undefined && routed.startsWith(STEP_UP_PATH_PREFIX)) || pathOnly.startsWith(STEP_UP_PATH_PREFIX)) {
+      reply.header('cache-control', 'no-store');
+    }
     return payload;
   };
 

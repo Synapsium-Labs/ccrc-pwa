@@ -71,10 +71,12 @@ const stubPty = (): PtyLike => ({
   onData: () => ({ dispose: () => {} }), write: () => {}, resize: () => {}, kill: () => {},
 });
 
-const openApp = async (): Promise<{ app: FastifyInstance; home: string }> => {
+const openApp = async (opts: { passkeysFile?: string } = {}): Promise<{ app: FastifyInstance; home: string }> => {
   const home = mkTmp('ccrc-step-up-binding-');
   const base = testDeps(home);
   mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+  // A passkey file the server finds at boot, as bytes (a corrupt one, for the `unmeasured` case).
+  if (opts.passkeysFile !== undefined) writeFileSync(base.cfg.passkeysPath, opts.passkeysFile, { mode: 0o600 });
   writeFileSync(path.join(home, '.ccrc', 'auth.scrypt'), `${await hashLine(PASSPHRASE, FAST_PARAMS, 1)}\n`,
     { mode: 0o600 });
   const deps: Deps = {
@@ -179,6 +181,8 @@ describe('step-up keeps the session (D-5512)', () => {
     });
     expect(res.statusCode, res.body).toBe(403);
     expect(errorOf(res)).toBe('step-up-required');
+    // The foreign-challenge refusal is an answer of a step-up route too: no-store (spec §3.3).
+    expect(res.headers['cache-control']).toBe('no-store');
     expect(rowOf(w.home, a)!.assertedAt).toBeUndefined();
     expect(rowOf(w.home, b)!.assertedAt).toBeUndefined();
     // …and B's own challenge, finished by B, is accepted: the refusal was the binding.
@@ -206,6 +210,35 @@ describe('step-up keeps the session (D-5512)', () => {
     const refused = await passphraseStepUp(app, a);
     expect(refused.statusCode, refused.body).toBe(409);
     expect(errorOf(refused)).toBe('passkey-enrolled');
+  });
+
+  it('a passkey store this process cannot read refuses the passphrase arm `unmeasured` and stamps nothing', async () => {
+    // A corrupt passkeys.json reads as `count() === 0` (D-132), so without the state check this box, which
+    // HAS a passkey enrolled, would open the weaker factor: the step-down `passkey-enrolled` exists to stop.
+    const w = await openApp({ passkeysFile: '{"this is": "somebody\'s credentials, garbled' }); app = w.app;
+    const a = await login(app);
+    const res = await passphraseStepUp(app, a);
+    expect(res.statusCode, res.body).toBe(502);
+    expect(errorOf(res)).toBe('unmeasured');
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect(rowOf(w.home, a)!.assertedAt).toBeUndefined();
+  });
+
+  it('two concurrent passphrase step-ups on one session: one runs, the other is refused `rate-limited`', async () => {
+    const w = await openApp(); app = w.app;
+    const a = await login(app);
+    const [one, two] = await Promise.all([
+      passphraseStepUp(app, a, 'not the passphrase'),
+      passphraseStepUp(app, a, 'not the passphrase'),
+    ]);
+    const codes = [one, two].map((r) => [r.statusCode, errorOf(r)]);
+    expect(codes).toContainEqual([403, 'step-up-required']);
+    expect(codes).toContainEqual([429, 'rate-limited']);
+    // Only the one that ran was counted: four failures remain before the lock.
+    for (let i = 0; i < STEP_UP_MAX_FAILURES - 2; i++) {
+      expect((await passphraseStepUp(app, a, 'not the passphrase')).statusCode).toBe(403);
+    }
+    expect((await passphraseStepUp(app, a)).statusCode).toBe(200);
   });
 
   it('an exhausted step-up limiter locks this session (`step-up-locked`), and session B still steps up', async () => {
