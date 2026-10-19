@@ -4,7 +4,9 @@
 //
 // - D-5570: an account picker's row fits `.sheet-body`, and so does its keyboard ring. Measured in the new-session
 //   sheet (every row wears its pool tag) and in the swap picker, both its plain list (the measured lane wears
-//   "suggested") and its "show other pools" rows (each wears a pool tag), at 360, 390, 1280 and 1920.
+//   "suggested") and its "show other pools" rows (each wears a pool tag), at 360, 390, 1280 and 1920. Inside each
+//   row the gauges and chevron stay in the row, the name and its tags stay in their group, and a name wraps, or a tag
+//   is cut, only when it is wider than the whole group: otherwise the tag or the pill drops under the name.
 // - D-5576: every project card keeps its name. On a card that does not hold the selection (the fleet route on a
 //   phone; another project's session open from 900 up), open and folded, a name that fits the line draws whole on its
 //   chevron's line and the meta wraps inside the toggle; a name longer than the line is cut only at its cap, still on
