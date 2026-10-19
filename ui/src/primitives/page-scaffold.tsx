@@ -15,11 +15,16 @@
 //   - a body centred at `--page-max`, or `--page-max-wide` with `wide`, at
 //     `--gutter`. Never a literal: pwa/test/page-scaffold.test.tsx reds one.
 //
-// THE NAV SLOT (D-5666, the Settings spec's §15.3 C3). A screen with its own
-// section nav (Settings) hands it to `nav`: below a 960px pane it stacks above
-// the body; from 960 it is a 13rem sticky column beside a body that keeps its
-// `--page-max` cap. A container query, not a viewport one, because the pane's
-// width is what the sidebar leaves, not the window's.
+// THE NAV SLOT (D-5666, the Settings spec's §15.3 C3; its geometry D-5668). A
+// screen with its own section nav (Settings) hands it to `nav`. From a pane of
+// PAGE_NAV_MIN_PX (760) it is a sticky column 200px wide (220 from a 1600px
+// viewport) beside a body that keeps its `--page-max` cap; the gutter sits
+// outside the nav, and the body keeps only its right one, so at a 960 pane in
+// Refined the column is 688 (spec §4.2). Below the threshold the slot draws
+// nothing: a phone or a narrow pane shows the screen's own index instead, and
+// the body is centred as on a page with no nav. A container query, not a
+// viewport one, because the pane's width is what the sidebar leaves, not the
+// window's; the caller's hook reads PAGE_NAV_MIN_PX, the same number.
 //
 // NO STYLESHEET, so no contrast-gate key: utilities over tokens, whose pairs
 // design/contrast-check.mjs measures in every palette (`--ink-primary` and
@@ -47,6 +52,11 @@ export const PAGE_BODY = 'mx-auto grid w-full content-start gap-3 px-gutter pt-2
  *  and only this page has a header to clear. */
 export const PAGE_FOCUS_CLEAR = '[&_*]:scroll-mt-[calc(var(--head-h)+var(--sp-2))]';
 
+/** The pane width (px) from which the nav slot sits beside the body (D-5668).
+ *  Every `@min-[…]` below spells this number; page-scaffold.test.tsx reds a
+ *  drift. */
+export const PAGE_NAV_MIN_PX = 760;
+
 const COLUMN = { page: 'max-w-(--page-max)', wide: 'max-w-(--page-max-wide)' } as const;
 
 export interface PageScaffoldProps extends Omit<HTMLAttributes<HTMLDivElement>, 'title'> {
@@ -71,7 +81,10 @@ export function PageScaffold({
 }: PageScaffoldProps): ReactNode {
   const column = wide ? COLUMN.wide : COLUMN.page;
   const body = (
-    <div data-page-body="" className={cn(PAGE_BODY, PAGE_FOCUS_CLEAR, column, nav !== undefined && 'mx-0')}>
+    <div
+      data-page-body=""
+      className={cn(PAGE_BODY, PAGE_FOCUS_CLEAR, column, nav !== undefined && '@min-[760px]:mx-0 @min-[760px]:pl-0')}
+    >
       {children}
     </div>
   );
@@ -88,8 +101,19 @@ export function PageScaffold({
         </div>
       </header>
       {nav === undefined ? body : (
-        <div className="mx-auto grid w-full max-w-(--page-max-wide) @min-[60rem]:grid-cols-[13rem_minmax(0,1fr)] @min-[60rem]:gap-6">
-          <div className={cn(PAGE_FOCUS_CLEAR, 'min-w-0 px-gutter pt-2 @min-[60rem]:sticky @min-[60rem]:top-head @min-[60rem]:self-start @min-[60rem]:pr-0')}>
+        <div
+          className={cn(
+            'mx-auto grid w-full max-w-(--page-max-wide)',
+            '@min-[760px]:grid-cols-[200px_minmax(0,1fr)] min-[1600px]:@min-[760px]:grid-cols-[220px_minmax(0,1fr)]',
+            '@min-[760px]:gap-6 @min-[760px]:pl-gutter',
+          )}
+        >
+          <div
+            className={cn(
+              PAGE_FOCUS_CLEAR,
+              'hidden min-w-0 pt-2 @min-[760px]:block @min-[760px]:sticky @min-[760px]:top-head @min-[760px]:self-start',
+            )}
+          >
             {nav}
           </div>
           {body}

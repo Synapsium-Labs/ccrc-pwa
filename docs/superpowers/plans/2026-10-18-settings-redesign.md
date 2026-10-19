@@ -445,6 +445,8 @@ They live in `settingsText.ts` as `STALL_LEVEL_NOTE: Record<StallLevel, string>`
 - [ ] **Step 4: Per width × skin × mode** (32 cells, in Storybook): `scope` reads as Refined's eyebrow and as Instrument's right-aligned mono tag (§15.2 call 2); the `nav` slot's story at 390 shows no nav.
 - [ ] **Step 5: Verify.** `cd ui && ./node_modules/.bin/tsc --noEmit`; `cd pwa && ./node_modules/.bin/vitest run test/role-census.test.ts test/design-system-boundary.test.ts test/ui-package-boundary.test.ts` then the full pwa suite at `--maxWorkers=2`.
 
+**As run (2026-10-19, D-5668).** F11 (#765) shipped `Section`'s three slots and a `nav` slot, but the nav's geometry was not C3's: beside the body only from a 60rem (960 px) pane, at 13rem, stacked above the body below that. So R2b0 ran in reduced form: the slot moved to §4.2's measures (D-5668), and its contract gained the red cases F11 left unpinned (the purpose follows the head; each slot is omitted when absent; with no nav, the body is the scaffold's own child). `Section`'s DOM order is title, scope, purpose (D-5666): Refined lifts the scope above the title with `column-reverse`, so Step 1's "scope, title and purpose in that order" is the visual order in Refined, not the DOM's; later tasks assert the DOM order D-5666 pins.
+
 ### Task R2b1: the sections, their routes, and the reads made once (D-5503's order, D-5504; spec §3.1, §3.2, §4.1, §4.2's phone and narrow-pane rows, §4.4) — GATED: after #627, F11 (or R2b0), S2a, S2b, C1 and #652
 
 **Routing:** band 3 (a new seam above the shell, and the frame identity it must not break; the review reads Review focus item 5). **Needs:** #627, F11 with C3's slots (or R2b0), S2a, S2b, the coordinator's ack of C1, #652 merged (it holds `tap-targets.test.tsx`), and R1a to R1d and R2a. **Frozen files touched:** none once those merge.
@@ -549,20 +551,20 @@ They live in `settingsText.ts` as `STALL_LEVEL_NOTE: Record<StallLevel, string>`
 
 ### Task R2c: Refined's section nav on a wide pane (D-5504; spec §4.2's pane ≥ 760 and wide rows) — GATED: after R2b2 and S4b
 
-**Routing:** band 2. **Needs:** R2b2, S4b (Refined's frame, the sidebar at `clamp(320px, 24vw, 400px)`), F11's `nav` slot (or R2b0's). **Frozen files touched:** none.
+**Routing:** band 2. **Needs:** R2b2, S4b (Refined's frame, the sidebar at `clamp(320px, 24vw, 400px)`), R2b0's `nav` slot (D-5668). **Frozen files touched:** none.
 
 **Files:** modify `pwa/src/screens/settings/SettingsFrame.tsx` and `settings.css`; create `pwa/src/screens/settings/usePaneWidth.ts`; extend `pwa/test/settings-frame.test.tsx`.
 
-**The shape.** What `/settings` shows depends on the pane, so the content choice reads the pane width through one hook, `usePaneWidth(ref)` (a `ResizeObserver` on the pane), against `SETTINGS_NAV_MIN_PX = 760`. The column and the nav are drawn by `@container settings-pane (min-width: 760px)` in `settings.css`; a test reads that file's text and binds the literal to the constant. At ≥ 760: `SettingsIndex` as a sticky nav of 200 px (220 at a viewport ≥ 1600), under the 56 px scaffold header, rows 40 px with the tint and 2 px `--accent` rail on the current section (D-5101), each row the name plus a one-line ellipsised status, the purpose line in its `title`; beside it the reading column at `min(100%, 760px)`. `/settings` shows Updates with Updates current and the URL unchanged; an unknown id shows Updates with the not-found line above its `<h2>`. Under 760, R2b1's pattern.
+**The shape.** What `/settings` shows depends on the pane, so the content choice reads the pane width through one hook, `usePaneWidth(ref)` (a `ResizeObserver` on the pane), against `SETTINGS_NAV_MIN_PX`, which is `@ccrc/ui`'s `PAGE_NAV_MIN_PX` (760), imported, never re-spelled. The column and the nav are drawn by `PageScaffold`'s `nav` slot, whose container queries spell that number (D-5668; `page-scaffold.test.tsx` reds a drift), so Settings passes its nav at every width and the slot draws nothing under 760; `settings.css` adds no container query of its own. At ≥ 760: `SettingsIndex` as a sticky nav of 200 px (220 at a viewport ≥ 1600), under the 56 px scaffold header, rows 40 px with the tint and 2 px `--accent` rail on the current section (D-5101), each row the name plus a one-line ellipsised status, the purpose line in its `title`; beside it the reading column at `min(100%, 760px)`. `/settings` shows Updates with Updates current and the URL unchanged; an unknown id shows Updates with the not-found line above its `<h2>`. Under 760, R2b1's pattern.
 
-- [ ] **Step 1: Red** (`ResizeObserver` mocked): "at a 960 pane, /settings shows Updates in the column, Updates current in the nav, and the URL unchanged"; "at a 960 pane an unknown id shows Updates with the not-found line"; "at a 704 pane, /settings is the index"; "the nav's current row has aria-current=page"; "settings.css's container query reads SETTINGS_NAV_MIN_PX".
+- [ ] **Step 1: Red** (`ResizeObserver` mocked): "at a 960 pane, /settings shows Updates in the column, Updates current in the nav, and the URL unchanged"; "at a 960 pane an unknown id shows Updates with the not-found line"; "at an 800 pane, /settings shows Updates in the column and the nav beside it" (D-5668: the band from 760 to 959 the slot first missed); "at a 704 pane, /settings is the index"; "the nav's current row has aria-current=page"; "SETTINGS_NAV_MIN_PX is PAGE_NAV_MIN_PX".
 - [ ] **Step 2: Green.**
 - [ ] **Step 3: Mutation table, RUN.**
 
   | Mutant | Suite | Expected red |
   |---|---|---|
   | the threshold read as 700 in the hook | settings-frame | "at a 704 pane, /settings is the index" |
-  | the CSS literal changed to 720px | settings-frame | "the container query reads SETTINGS_NAV_MIN_PX" |
+  | `SETTINGS_NAV_MIN_PX` spelled as a literal 720 | settings-frame | "SETTINGS_NAV_MIN_PX is PAGE_NAV_MIN_PX" |
   | `/settings` at a wide pane navigates to `/settings/updates` | settings-frame | "the URL unchanged" |
   | `aria-current` dropped | settings-frame | its case |
 
@@ -835,9 +837,17 @@ The coordinator issued D-5612 and D-5613 for Task R1c's departures from its file
 
 - **D-5612** — `move-sheet-hands-its-answer` (Task R1c): the move's 202 line ("Requested. The nodes report back within a minute.", spec §6.4) is written under the control that opened the move sheet, which only the sheet can tell has answered. So `UpdateMoveSheet` (`pwa/src/fleet/UpdateMoveSheet.tsx`, not in R1c's file list) takes an optional `onAnswered(text)` and, when it is given, hands the caller `MOVE_REQUESTED_TEXT` (defined beside `MOVE_UNREADABLE_TEXT`), or `MOVE_UNREADABLE_TEXT` for a 2xx it could not read, as it closes on a request, instead of toasting. With `onAnswered`, an answer that lands after the sheet was dismissed (the scrim, Esc, a swipe) is toasted, the sentence it would have said, an error toast for a refusal, because the control that asked is gone: spec §6.4's one toast case. Without it (the update banner) the sheet behaves as before. Settings keys the line by the opener (`moveKey` of the intent, or the What's-new sheet's own Update all, whose line sits under "See what's new").
 
+### Issued for Task R2b0 and defined here
+
+The coordinator issued D-5668 and D-5669 for Task R2b0. D-5668 is defined once, here.
+
+- **D-5668** — `page-nav-at-760` (Task R2b0; spec §4.2, §15.3 C3): `PageScaffold`'s `nav` slot (D-5666) sits beside the body from a pane of `PAGE_NAV_MIN_PX` = 760 px, a sticky column 200 px wide, 220 from a 1600 px viewport, with the gutter outside the nav and only the body's right gutter beside it, so a 960 pane in Refined leaves the 688 px column §4.2 measures. Below the threshold the slot draws nothing and the body is centred as on a page with no nav, because a phone or a narrow pane shows the caller's own index (§4.2's phone and pane < 760 rows). `PAGE_NAV_MIN_PX` is exported from `@ccrc/ui` and is the only number the slot's container queries spell, so R2c's hook and the CSS cannot drift. This departs from F11's shipped slot (a 60rem pane, a 13rem column, stacked below), which put a pane of 760 to 959 px, and Refined's 1280 viewport with a classic scrollbar (a 945 px pane), on the stacked side.
+
 ### Issued and unused
 
 D-5613
+
+D-5669
 
 ### Spare
 
