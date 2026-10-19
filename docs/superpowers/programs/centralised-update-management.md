@@ -2220,6 +2220,10 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         run 632's slow-pass timing line follows. STATUS: fleet and server v0.0.355, newest v0.0.359, stable
         v0.0.328, intent dev/auto=off, backups fleet 178M/server 2835M, disk free fleet 209G/work volume 98G/server
         30G, no anomalies.
+      - 19:55: v0.0.360 (#711, the broker's run 632: one server log line per delegation pass that blocks over 1 s,
+        counts only, no behaviour change; it carries #698 too) followed, unapplied; the rollout is the operator's
+        (mail 6809). STATUS: fleet and server v0.0.355, newest v0.0.360, stable v0.0.328, intent dev/auto=off,
+        backups fleet 178M/server 2835M, disk free fleet 209G/work volume 103G/server 30G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
