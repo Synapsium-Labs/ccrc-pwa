@@ -163,6 +163,11 @@ describe('groupRuns (D-5587)', () => {
       expect(RUN_GROUP[state] === 'finished').toBe(isRunClosed({ state }));
     }
     expect(RUN_GROUP['awaiting-review']).toBe('needs');
+    // awaiting-review alone is Needs you; every other open state (merging and closing included) is Running (D-5650).
+    for (const state of RUN_STATES) {
+      expect(RUN_GROUP[state] === 'needs').toBe(state === 'awaiting-review');
+      if (!isRunClosed({ state })) expect(RUN_GROUP[state]).toBe(state === 'awaiting-review' ? 'needs' : 'running');
+    }
   });
 
   it('unknown sits under Running, never Needs you', () => {
