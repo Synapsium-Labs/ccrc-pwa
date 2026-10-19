@@ -2155,6 +2155,9 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         projection's transaction; mtimes cannot split those two. Other threads stay near 0 inside a block, so GC is
         not the story. The checkpoint is 9.6 MB (+1.03 MB since 02:41). Census trees on the fleet box: 367 across
         14 repositories (85 agent or workflow), unchanged since the morning. Mail 6630.
+        The broker's coordinator settled it (mail 6632): the 4 to 5 s is reconcile's per-tree CPU, which its run
+        629 bounds; the projections are the smaller term and stay on its wave 4 list. I send the 13:35 sample, and
+        re-measure on run 629's release.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
