@@ -18,7 +18,7 @@
 // Its words: DRIVER_REASONS, frozen once here and nowhere else (W2-D59, W2-D12; D-5774). A refusal prints
 // `ccrc history-replay: <word>: <detail>` on stderr and exits EXIT.REFUSED (2); a defect exits EXIT.INTERNAL (1).
 // They are never lib REASONS: §8.7's table and SKILL.md do not list them. EXIT is imported, never declared (O14).
-import { accessSync, appendFileSync, chmodSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { accessSync, appendFileSync, chmodSync, closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path, { join } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -1245,6 +1245,96 @@ export function refuseRecallOff(home, ids) {
   if (unmeasured.length > 0) parts.push(`unmeasured ${unmeasured.map((u) => `${u.id} ${u.code}`).join(', ')}`);
   refuse('family-recall-off', parts.join('; '));
 }
+
+// ── W2-4 Task 8: step 0a, end to end (W2-D57, W2-D55, W2-D24, W2-D52, W2-D51) ──────────────────────────────────
+// `step0a` runs once per named node before pilot sourcing (W2 decisions §5, act 7). It spends, so it takes every
+// refusal before its first spawn: the pane and the arguments (main), --out (Task 2), the account (Task 3), then the
+// required --budget (W2-D55: no default before part 1), the three model ids, and the settings mode. It then
+// measures what it records but never compares: codeShas() over the tree it runs from and the installed release
+// stamp (W2-D24; part 1's validator compares them with gate_code). Neither has an "unmeasured" spelling in the
+// record, so an unmeasured one refuses here, with the preflight's own word (Task 7's rule): code-unmeasured
+// or tree-unmeasured (coordinator rulings), its detail saying what could not be read. The wrapper sha is taken next,
+// before any spawn or spend, so a wrapper that cannot be read refuses wrapper-unmeasured here (Task 7's wrapperSha;
+// coordinator ruling). Then the limits and budget gate, the launcher's --version
+// (a spawn that spends nothing, gated all the same), and one batch of three runs on one prompt, one at a time so
+// the budget gate sees each finished run's spend before the next starts: the writer and the judge (--tools "")
+// and one box-mode run (--tools Bash,Agent and the three spellings), so every flag the contract uses reaches the
+// launcher once. A finished run is skipped on a re-run over the same --out (Task 5's run.json), and its facts are
+// re-read from its stream file. A run that fails or rejects a flag is a finding, recorded, not a refusal.
+// The record is canonicalJson + '\n' at <out>/step0a.json, written whole (tmp, then rename), and its sha256 is
+// printed over the bytes read back from that file, the bytes the operator hands pilot-source as --step0a-sha256.
+// STEP0A_KIND and STEP0A_FIELDS are Task 7's (loadStep0a reads them first); this section never declares them again.
+// HOME and LANG come from main's env parameter only, LANG threaded into each RunJob and into the --version spawn.
+export const STEP0A_FILE = 'step0a.json';
+export const STEP0A_PROMPT = 'Reply with the single word: ready. Do not use any tool.';
+const STEP0A_RUNS = Object.freeze([
+  Object.freeze({ key: 'writer', mode: 'writer', modelFlag: 'writer-model' }),
+  Object.freeze({ key: 'judge', mode: 'judge', modelFlag: 'judge-model' }),
+  Object.freeze({ key: 'box', mode: 'box', modelFlag: 'arm-model' }),
+]);
+
+/** A flag's value, or args-invalid '<flag>-required'. */
+function requireFlag(flags, name) {
+  if (flags[name] === undefined) refuse('args-invalid', `${name}-required`);
+  return flags[name];
+}
+
+/** Every flag the runs' argvs carry (a token that starts with '-'; no contract value does), each true unless a
+ *  run reported it as an unknown option. Pure.
+ *  @param {ReadonlyArray<readonly string[]>} argvs
+ *  @param {ReadonlyArray<{ unknownOptions: readonly string[] }>} outcomes
+ *  @returns {Record<string, boolean>} */
+export function flagsAccepted(argvs, outcomes) {
+  const unknown = new Set(outcomes.flatMap((o) => o.unknownOptions));
+  const out = {};
+  for (const argv of argvs) for (const t of argv) if (t.startsWith('-')) out[t] = !unknown.has(t);
+  return out;
+}
+
+export async function step0aCommand(flags, env) {
+  const home = env.HOME;
+  if (typeof home !== 'string' || !path.isAbsolute(home)) refuse('args-invalid', 'HOME is unset or not absolute');
+  const out = prepareOut(requireFlag(flags, 'out'));
+  const { json, roster } = readRoster(home);
+  const launch = admitAccount(json, roster, requireFlag(flags, 'account'), home);
+  const budget = requireFlag(flags, 'budget');
+  const models = Object.fromEntries(STEP0A_RUNS.map((r) => [r.key, requireFlag(flags, r.modelFlag)]));
+  const settingsMode = flags['settings-mode'] ?? 'restricted';
+  if (!SETTINGS_MODES.includes(settingsMode)) refuse('args-invalid', `settings-mode ${settingsMode}`);
+  const shas = codeShas();
+  if (shas.state !== 'measured') refuse('code-unmeasured', `${shas.path} is ${shas.cause}`);
+  const stamp = readReleaseStamp(home);
+  if (stamp.state !== 'value') refuse('tree-unmeasured', `stamp ${stamp.state}${stamp.code === undefined ? '' : ` ${stamp.code}`}`);
+  // Before any spawn or spend: an unreadable wrapper refuses wrapper-unmeasured here, never after the batch has spent.
+  const wrapperSha256 = wrapperSha(launch);
+  const gate = batchGate({ out, home, accountId: launch.accountId, budget, limits: LIMITS_DEFAULTS });
+  gate();
+  const version = await measureClaudeVersion(launch, out, env.LANG);
+  // A --version that cannot be measured is a refusal (coordinator ruling), never a guessed or recorded version.
+  if (version.state !== 'value') refuse('version-unmeasured', `${launch.launcher} --version failed (code ${version.code}, signal ${version.signal})`);
+  const dir = path.join(out, 'step0a');
+  if (!existsSync(dir)) mkdirSync(dir, { mode: 0o700 });
+  const jobs = STEP0A_RUNS.map((r) => ({
+    launch, mode: r.mode, model: models[r.key], settingsMode, stdin: STEP0A_PROMPT, out, name: `step0a/${r.key}`, lang: env.LANG,
+  }));
+  const outcomes = await runBatch(jobs, { concurrency: 1, gate });
+  const init = Object.fromEntries(jobs.map((j, i) => [
+    STEP0A_RUNS[i].key, readStreamJson(readFileSync(path.join(out, `${j.name}.jsonl`), 'utf8')).init,
+  ]));
+  const output = {
+    kind: STEP0A_KIND, v: 1, measured_ms: Date.now(), account: launch.accountId, settings_mode: settingsMode,
+    claude_code_version: version.version, wrapper_sha256: wrapperSha256,
+    flags_accepted: flagsAccepted(jobs.map((j) => spawnArgv({ mode: j.mode, model: j.model, settingsMode, home })), outcomes),
+    writer_init: init.writer, judge_init: init.judge, box_init: init.box,
+    code_shas: shas.files, release_stamp: stamp.tag, budget, spend: spentSoFar(out),
+  };
+  const file = path.join(out, STEP0A_FILE);
+  writeFileSync(`${file}.tmp`, canonicalJson(output) + '\n', { mode: 0o600 });
+  renameSync(`${file}.tmp`, file);
+  process.stdout.write(`sha256 ${sha256Hex(readFileSync(file))}\n`);
+  return EXIT.OK;
+}
+HANDLERS.set('step0a', step0aCommand);
 
 // The entry guard stays the LAST block of this file: a module-level declaration below it would still be uninitialised
 // when main runs. Importing the module (the tests do) runs nothing. The exit code is set, never forced, so stderr drains.

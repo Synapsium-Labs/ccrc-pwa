@@ -8,12 +8,12 @@
 // run time; no fixture names a real account, host or path.
 import { describe, it, expect, vi } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { REPO, scrubbedEnv } from './historyHelpers.js';
-import { EXIT, REASONS } from '../../ccd/history/lib.mjs';
+import { EXIT, REASONS, sha256Hex } from '../../ccd/history/lib.mjs';
 import * as replay from '../../deploy/history-replay.mjs';
 import { DriverRefusal, admitAccount, readRoster } from '../../deploy/history-replay.mjs';
 // W2-4 Task 2 (the --out rule, W2-D53, RP4): aliased, so no name here collides with an import above.
@@ -35,7 +35,8 @@ import * as t5path from 'node:path';
 import { spawnSync as t5spawnSync } from 'node:child_process';
 import { afterEach as t5afterEach, vi as t5vi } from 'vitest';
 import * as t5drv from '../../deploy/history-replay.mjs';
-import { generateWrapperBody as t5WrapperBody } from '../../shared/wrapper.mjs';
+import { generateWrapperBody, generateWrapperBody as t5WrapperBody } from '../../shared/wrapper.mjs';
+import { rosterFromJson } from '../../shared/roster-json.mjs';
 import { mkTmp as t5MkTmp } from './tmpHelpers.js';
 // W2-4 Task 6 (W2-D55): t6-prefixed bindings, so none collides with a named import Tasks 1–5 put in this block.
 import * as t6Driver from '../../deploy/history-replay.mjs';
@@ -2139,4 +2140,351 @@ t7describe('W2-4 Task 7: preflights, codeShas, the release stamp and recall-off 
       t7expect(spells(["  const p = path.join(root, 'recall-off', id);"])).toHaveLength(1);
     });
   });
+});
+
+// ── W2-4 Task 8: step 0a, end to end (W2-D57, W2-D55, W2-D24, W2-D52, W2-D51) ──────────────────────────────────
+// The subcommand as the operator runs it: a child process with a fixture HOME (t8Run, runDriver's env contract over
+// a driver copy) against Task 5's recording stub. Every rostered id's launcher is a stub and every id has a fresh
+// limits row, so a spawn of ANY account, admitted or not, leaves a log line, and only admission can stop it. Each
+// run uses a fixture tree (t8Tree): a copy of the driver beside fixture bytes for the two gate_code files this PR
+// does not own, so codeShas() is measured whichever of W2-3 and this PR merges first and the recorded shas can be
+// pinned exactly; lib.mjs is copied, and ccd/history's other entries and shared/ are symlinks to this checkout.
+describe('W2-4 Task 8: step0a end to end', () => {
+  const T8_SESSION = '00000000-0000-4000-8000-0000000000a8';
+  const T8_USAGE = { input_tokens: 100, cache_creation_input_tokens: 20, cache_read_input_tokens: 30, output_tokens: 50 };
+  const T8_PER_RUN = 200;   // the sum of T8_USAGE: what one run spends
+  const T8_STREAM = [
+    { type: 'system', subtype: 'init', session_id: T8_SESSION, model: 'fixture-model-writer', tools: [], mcp_servers: [], plugins: [], skills: [], slash_commands: [] },
+    { type: 'assistant', message: { id: 'msg-t8-1', role: 'assistant', content: [{ type: 'text', text: 'ready' }], usage: T8_USAGE } },
+    { type: 'result', subtype: 'success', is_error: false, num_turns: 1, result: 'ready', usage: T8_USAGE, permission_denials: [] },
+  ].map((e) => JSON.stringify(e)).join('\n') + '\n';
+  const T8_STAMP = 'v9.9.9';
+  const T8_GATE_BYTES = '// fixture bytes for deploy/history-gate.mjs (W2-4 Task 8)\n';
+  const T8_MEASURE_BYTES = '# fixture bytes for deploy/measure-history.py (W2-4 Task 8)\n';
+  const T8_CALLER_ENV = {
+    TMUX: '/tmp/fixture-tmux,1,0', CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 'fixture-session', CCRC_SESSION_GENERATION: 'fixture-generation',
+    CCRC_RECALL_SESSION: 'fixture-session', CCRC_RECALL_ARM: 'fixture-arm', CCRC_RECALL_ASOF: 'fixture-asof',
+  };
+  const T8_MODELS = { writer: 'fixture-model-writer', judge: 'fixture-model-judge', box: 'fixture-model-arm' } as const;
+  /** Step0aOutput's fifteen keys, sorted. */
+  const T8_STEP0A_KEYS = ['account', 'box_init', 'budget', 'claude_code_version', 'code_shas', 'flags_accepted', 'judge_init',
+    'kind', 'measured_ms', 'release_stamp', 'settings_mode', 'spend', 'v', 'wrapper_sha256', 'writer_init'];
+
+  /** A limits row read as fresh: `five` and `seven` as given, sampled a minute ago, both windows still running. */
+  function t8Limits(home: string, id: string, five: number, seven: number): void {
+    const nowS = Math.floor(Date.now() / 1000);
+    mkdirSync(path.join(home, '.cc-limits'), { recursive: true });
+    writeFileSync(path.join(home, '.cc-limits', `${id}.json`),
+      JSON.stringify({ five, seven, ts: nowS - 60, fiveResetAt: nowS + 3600, sevenResetAt: nowS + 86400 }));
+  }
+
+  /** A fixture HOME: Task 3's twelve rows (FIXTURE_ACCOUNTS); a stub at every id's launcher; gen-a's real wrapper (over its stub)
+   *  and its secrets file, whose token is assembled here; gen-r's secrets file at mode 000, gen-d's a directory; a fresh limits row
+   *  for every id, so only admission can stop a refused one; a tagged release stamp; the canned stream every stub prints. */
+  function t8Home(prefix: string): string {
+    const home = mkTmp(prefix);
+    writeRoster(home, FIXTURE_ACCOUNTS);
+    for (const a of FIXTURE_ACCOUNTS as Array<{ id: string }>) { plantStub(home, a.id); t8Limits(home, a.id, 10, 20); }
+    const flat = rosterFromJson(JSON.parse(readFileSync(path.join(home, '.ccrc', 'accounts.json'), 'utf8')));
+    const byId = new Map(flat.accounts.map((a) => [a.id, a]));
+    writeFileSync(path.join(home, '.local', 'bin', 'gen-a'), generateWrapperBody(byId.get('gen-a')!, flat.upstreamId), { mode: 0o755 });
+    for (const id of ['gen-a', 'gen-r']) {
+      const p = path.join(home, byId.get(id)!.secretsFile!);
+      mkdirSync(path.dirname(p), { recursive: true });
+      writeFileSync(p, `export CLAUDE_CODE_OAUTH_TOKEN=${['sk', 'ant', 'oat01', 'fixture', 't8'].join('-')}\n`, { mode: 0o600 });
+    }
+    chmodSync(path.join(home, byId.get('gen-r')!.secretsFile!), 0o000);
+    // D-5809: gen-d's declared secretsFile is a DIRECTORY (RP9), so admission alone can stop it.
+    mkdirSync(path.join(home, byId.get('gen-d')!.secretsFile!), { recursive: true });
+    writeFileSync(path.join(home, '.ccrc', 'build.json'),
+      JSON.stringify({ sha: 'fixture', ref: 'main', builtAt: '2026-10-19T00:00:00Z', dirty: false, version: T8_STAMP }));
+    writeFileSync(path.join(home, STUB_STREAM), T8_STREAM);
+    return home;
+  }
+
+  /** A tree the driver runs from: its own bytes copied (so TREE_ROOT is this tree), fixture bytes for the two
+   *  gate_code files this PR does not own (`gate: false` leaves deploy/history-gate.mjs out), lib.mjs copied and
+   *  ccd/history's other entries and shared/ symlinked to this checkout, so every import resolves. */
+  function t8Tree(opts: { gate?: boolean } = {}): string {
+    const repo = path.resolve(path.dirname(SCRIPT), '..');
+    const tree = mkTmp('ccrc-w2-t8-tree-');
+    mkdirSync(path.join(tree, 'deploy'));
+    copyFileSync(SCRIPT, path.join(tree, 'deploy', 'history-replay.mjs'));
+    if (opts.gate !== false) writeFileSync(path.join(tree, 'deploy', 'history-gate.mjs'), T8_GATE_BYTES);
+    writeFileSync(path.join(tree, 'deploy', 'measure-history.py'), T8_MEASURE_BYTES);
+    mkdirSync(path.join(tree, 'ccd', 'history'), { recursive: true });
+    for (const n of readdirSync(path.join(repo, 'ccd', 'history'))) {
+      const from = path.join(repo, 'ccd', 'history', n);
+      const to = path.join(tree, 'ccd', 'history', n);
+      if (n === 'lib.mjs') copyFileSync(from, to); else symlinkSync(from, to);
+    }
+    symlinkSync(path.join(repo, 'shared'), path.join(tree, 'shared'));
+    return tree;
+  }
+
+  /** runDriver's contract, for the driver copy in `tree`. */
+  function t8Run(tree: string, home: string, args: string[], extraEnv: Record<string, string> = {}) {
+    const r = spawnSync(process.execPath, [path.join(tree, 'deploy', 'history-replay.mjs'), ...args],
+      { env: { ...scrubbedEnv(process.env), HOME: home, ...extraEnv }, encoding: 'utf8', timeout: 120_000 });
+    return { code: r.status, stdout: r.stdout, stderr: r.stderr };
+  }
+
+  /** A fresh --out path whose parent exists (Task 2 creates it). */
+  const t8Out = (): string => path.join(mkTmp('ccrc-w2-t8-out-'), 'out');
+
+  /** step0a's argv: every flag it requires, `over` replacing a value or (null) leaving the flag out. */
+  function t8Argv(out: string, over: Record<string, string | null> = {}): string[] {
+    const base: Record<string, string | null> = {
+      out, account: 'up-a', budget: '100000', 'writer-model': T8_MODELS.writer, 'judge-model': T8_MODELS.judge,
+      'arm-model': T8_MODELS.box, ...over,
+    };
+    return ['step0a', ...Object.entries(base).flatMap(([k, v]) => (v === null ? [] : [`--${k}`, v]))];
+  }
+
+  /** The stub's log lines for the batch's runs (print mode), by the model each was given. */
+  function t8Runs(home: string): Array<Record<string, any>> {
+    return (stubLog(home) ?? []).filter((e) => (e.argv as string[]).includes('-p'));
+  }
+  const t8ModelOf = (e: Record<string, any>): string => (e.argv as string[])[(e.argv as string[]).indexOf('--model') + 1]!;
+
+  it('flagsAccepted: every flag the argvs carry, each true unless a run named it an unknown option', () => {
+    const argvs = [['--restricted', '-p', '--tools', '', '--model', 'm1'], ['--restricted', '-p', '--tools', 'Bash,Agent', '--allowedTools', 'Bash(x:*)']];
+    const ok = { unknownOptions: [] as string[] };
+    expect(replay.flagsAccepted(argvs, [ok, ok])).toEqual({ '--restricted': true, '-p': true, '--tools': true, '--model': true, '--allowedTools': true });
+    const named: Record<string, boolean> = replay.flagsAccepted(argvs, [ok, { unknownOptions: ['--allowedTools'] }]);
+    expect(named['--allowedTools']).toBe(false);
+    expect(Object.entries(named).filter(([, v]) => !v).map(([k]) => k)).toEqual(['--allowedTools']);
+  });
+
+  it('records the step 0a facts in step0a json under --out and prints the sha256 of its bytes, RP1-contract through the subcommand', async () => {
+    const home = t8Home('ccrc-w2-t8-green-');
+    const tree = t8Tree();
+    const out = t8Out();
+    // The caller's own session variables (all but TMUX_PANE, which refuses) must not reach a spawn.
+    const r = t8Run(tree, home, t8Argv(out), T8_CALLER_ENV);
+    expect(r.code, r.stderr).toBe(0);
+    const file = path.join(out, replay.STEP0A_FILE);
+    const bytes = readFileSync(file);
+    expect(r.stdout).toBe(`sha256 ${sha256Hex(bytes)}\n`);
+    const text = bytes.toString('utf8');
+    expect(text.endsWith('\n') && !text.endsWith('\n\n')).toBe(true);
+    const rec = JSON.parse(text);
+    expect(Object.keys(rec).sort()).toEqual(T8_STEP0A_KEYS);
+    expect(rec).toMatchObject({ kind: 'ccrc-history-w2-step0a', v: 1, account: 'up-a', settings_mode: 'restricted', wrapper_sha256: null,
+      release_stamp: T8_STAMP, budget: 100000, spend: 3 * T8_PER_RUN });
+    expect(replay.STEP0A_KIND).toBe('ccrc-history-w2-step0a');
+    expect(rec.code_shas).toEqual({
+      'deploy/history-gate.mjs': sha256Hex(T8_GATE_BYTES),
+      'deploy/measure-history.py': sha256Hex(T8_MEASURE_BYTES),
+      'deploy/history-replay.mjs': sha256Hex(readFileSync(SCRIPT)),
+      'ccd/history/lib.mjs': sha256Hex(readFileSync(path.join(path.dirname(SCRIPT), '..', 'ccd', 'history', 'lib.mjs'))),
+    });
+    const init = replay.readStreamJson(T8_STREAM).init;
+    expect(init).not.toBeNull();
+    expect([rec.writer_init, rec.judge_init, rec.box_init]).toEqual([init, init, init]);
+    expect(typeof rec.measured_ms).toBe('number');
+    expect(readdirSync(path.join(out, 'step0a')).filter((n) => n.endsWith('.jsonl')).sort()).toEqual(['box.jsonl', 'judge.jsonl', 'writer.jsonl']);
+
+    // RP1-contract through the subcommand: one run per mode, each exactly the contract's argv for its model.
+    const runs = t8Runs(home);
+    expect(runs.map(t8ModelOf).sort()).toEqual([T8_MODELS.box, T8_MODELS.judge, T8_MODELS.writer]);
+    const want = {
+      writer: replay.spawnArgv({ mode: 'writer', model: T8_MODELS.writer, settingsMode: 'restricted', home }),
+      judge: replay.spawnArgv({ mode: 'judge', model: T8_MODELS.judge, settingsMode: 'restricted', home }),
+      box: replay.spawnArgv({ mode: 'box', model: T8_MODELS.box, settingsMode: 'restricted', home }),
+    };
+    for (const e of runs) {
+      const key = (Object.keys(T8_MODELS) as Array<keyof typeof T8_MODELS>).find((k) => T8_MODELS[k] === t8ModelOf(e))!;
+      const argv = e.argv as string[];
+      expect(argv, key).toEqual(want[key]);
+      expect(e.stdin, key).toBe(replay.STEP0A_PROMPT);
+      expect(e.envKeys, key).toEqual(['CLAUDE_CONFIG_DIR', 'HOME', 'LANG', 'PATH']);
+      expect(argv.some((t) => /dangerously|bypassPermissions/.test(t)), key).toBe(false);
+      if (key === 'box') {
+        expect(argv.slice(argv.indexOf('--tools'), argv.indexOf('--tools') + 2)).toEqual(['--tools', 'Bash,Agent']);
+        for (const s of replay.allowedToolSpellings(home)) expect(argv).toContain(s);
+      } else {
+        expect(argv.slice(argv.indexOf('--tools'), argv.indexOf('--tools') + 2), key).toEqual(['--tools', '']);
+        expect(argv, key).not.toContain('--allowedTools');
+      }
+    }
+    // Every flag the three argvs carry is recorded, and the stub rejected none.
+    const flags = [...new Set(Object.values(want).flat().filter((t) => t.startsWith('-')))].sort();
+    expect(Object.keys(rec.flags_accepted).sort()).toEqual(flags);
+    expect(Object.values(rec.flags_accepted).every((v) => v === true)).toBe(true);
+    expect(flags).toEqual(expect.arrayContaining(['--restricted', '--no-session-persistence', '--strict-mcp-config', '--verbose', '--max-turns', '--model', '--tools', '--allowedTools']));
+
+    // The version is the one the launcher answers (measured last: it adds a line to the stub's log).
+    const { json, roster } = replay.readRoster(home);
+    const v = await replay.measureClaudeVersion(replay.admitAccount(json, roster, 'up-a', home), mkTmp('ccrc-w2-t8-version-'), undefined);
+    expect(v).toEqual({ state: 'value', version: rec.claude_code_version });
+    // Task 1's grammar cases use an unregistered name; this task pins its own registration (has, not the exact
+    // key list, which Task 9 extends).
+    expect(replay.HANDLERS.has('step0a'), 'step0a is registered').toBe(true);
+  }, 120_000);
+
+  // D-5809: the writer and its validator cannot drift. The file step0a wrote, loaded back through Task 7's loadStep0a with
+  // the sha256 step0a printed, comes back as the same object the file parses to.
+  it('the step0a json it wrote loads back through loadStep0a with the sha256 it printed, as the same object', () => {
+    const home = t8Home('ccrc-w2-t8-roundtrip-');
+    const out = t8Out();
+    const r = t8Run(t8Tree(), home, t8Argv(out));
+    expect(r.code, r.stderr).toBe(0);
+    const printed = /^sha256 ([0-9a-f]{64})\n$/.exec(r.stdout);
+    expect(printed, r.stdout).not.toBeNull();
+    const file = path.join(out, replay.STEP0A_FILE);
+    expect(replay.loadStep0a(file, printed![1]!)).toEqual(JSON.parse(readFileSync(file, 'utf8')));
+  }, 120_000);
+
+  it('the fallback settings mode is recorded, and its flags replace --restricted in flags_accepted', () => {
+    const home = t8Home('ccrc-w2-t8-fallback-');
+    const out = t8Out();
+    const r = t8Run(t8Tree(), home, t8Argv(out, { 'settings-mode': 'fallback' }));
+    expect(r.code, r.stderr).toBe(0);
+    const rec = JSON.parse(readFileSync(path.join(out, replay.STEP0A_FILE), 'utf8'));
+    expect(rec.settings_mode).toBe('fallback');
+    expect(rec.flags_accepted['--setting-sources']).toBe(true);
+    expect(rec.flags_accepted['--settings']).toBe(true);
+    expect(rec.flags_accepted).not.toHaveProperty('--restricted');
+    for (const e of t8Runs(home)) expect((e.argv as string[]).slice(0, 4)).toEqual(['--setting-sources', 'project,local', '--settings', '{"disableAllHooks":true}']);
+  }, 120_000);
+
+  it('a generated account runs through its own wrapper, and step0a records that wrapper sha256', () => {
+    const home = t8Home('ccrc-w2-t8-wrapper-');
+    const out = t8Out();
+    const r = t8Run(t8Tree(), home, t8Argv(out, { account: 'gen-a' }));
+    expect(r.code, r.stderr).toBe(0);
+    const rec = JSON.parse(readFileSync(path.join(out, replay.STEP0A_FILE), 'utf8'));
+    expect(rec.account).toBe('gen-a');
+    expect(rec.wrapper_sha256).toBe(sha256Hex(readFileSync(path.join(home, '.local', 'bin', 'gen-a'))));
+    const runs = t8Runs(home);
+    expect(runs).toHaveLength(3);
+    for (const e of runs) expect(e.envKeys).toContain('CLAUDE_CODE_OAUTH_TOKEN');   // by name only: the stub never logs its value
+  }, 120_000);
+
+  // RP3-admission and RP9 through the subcommand. gen-r's mode-000 file is readable to root, so as root its row is left out.
+  // gen-u is not a row: a generated account with no declared provider reads as anthropic (the admission ruling, Task 3).
+  const T8_REFUSED: Array<[string, string]> = ([
+    ['cx-a', 'kind-codex'], ['ext-n', 'kind-external'], ['ext-a', 'kind-external'], ['gen-o', 'provider-openai'],
+    ['gen-h', 'hidden'], ['gen-s', 'secrets-undeclared'], ['gen-m', 'secrets-absent'],
+    // D-5809: gen-d, a secretsFile that is a directory, is a row.
+    ['gen-r', 'secrets-unreadable'], ['gen-d', 'secrets-not-regular'], ['nobody-a', 'unknown-id'],
+  ] as Array<[string, string]>).filter(([id]) => id !== 'gen-r' || process.getuid?.() !== 0);
+  it.each(T8_REFUSED)('account %s is refused before any spawn: account-refused %s, no stub line, nothing under --out but its marker', (id, detail) => {
+    const home = t8Home('ccrc-w2-t8-refused-');
+    const out = t8Out();
+    const r = t8Run(t8Tree(), home, t8Argv(out, { account: id }));
+    expect(stubLog(home), 'a spawn reached the stub').toBeNull();
+    expect(r.code).toBe(2);
+    expect(r.stderr).toBe(`ccrc history-replay: account-refused: ${detail}\n`);
+    expect(readdirSync(out)).toEqual([replay.OUT_MARKER]);
+  }, 60_000);
+
+  // D-5809: an upstream account whose config dir is not exactly $HOME/.claude (Task 3's up-b, the roster's one upstream)
+  // is refused upstream-config-dir through the subcommand, with a stub and a fresh limits row planted so only admission stops it.
+  it('an upstream account whose config dir is not $HOME/.claude is refused account-refused upstream-config-dir before any spawn', () => {
+    const home = t8Home('ccrc-w2-t8-upconf-');
+    writeRoster(home, [fixtureAccount('up-b', { kind: 'upstream' }, { homeAble: true, telemetry: 'anthropic' })]);
+    plantStub(home, 'up-b');
+    t8Limits(home, 'up-b', 10, 20);
+    const out = t8Out();
+    const r = t8Run(t8Tree(), home, t8Argv(out, { account: 'up-b' }));
+    expect(stubLog(home), 'a spawn reached the stub').toBeNull();
+    expect(r.code).toBe(2);
+    expect(r.stderr).toBe('ccrc history-replay: account-refused: upstream-config-dir\n');
+    expect(readdirSync(out)).toEqual([replay.OUT_MARKER]);
+  }, 60_000);
+
+  it.each(['out', 'account', 'budget', 'writer-model', 'judge-model', 'arm-model'])('a missing --%s is refused args-invalid before any spawn', (flag) => {
+    const home = t8Home('ccrc-w2-t8-required-');
+    const out = t8Out();
+    const r = t8Run(t8Tree(), home, t8Argv(out, { [flag]: null }));
+    expect(r.code).toBe(2);
+    expect(r.stderr).toBe(`ccrc history-replay: args-invalid: ${flag}-required\n`);
+    expect(stubLog(home)).toBeNull();
+    expect(existsSync(path.join(out, replay.STEP0A_FILE))).toBe(false);
+    if (flag === 'out') expect(existsSync(out)).toBe(false);
+  }, 60_000);
+
+  it('an empty HOME is refused args-invalid before --out is made, as the probe refuses it', () => {
+    const home = t8Home('ccrc-w2-t8-home-');
+    const out = t8Out();
+    const r = t8Run(t8Tree(), home, t8Argv(out), { HOME: '' });
+    expect(r.code).toBe(2);
+    expect(r.stderr).toBe('ccrc history-replay: args-invalid: HOME is unset or not absolute\n');
+    expect(existsSync(out)).toBe(false);
+    expect(stubLog(home)).toBeNull();
+  }, 60_000);
+
+  it('a settings mode outside SETTINGS_MODES is refused args-invalid before any spawn', () => {
+    const home = t8Home('ccrc-w2-t8-settings-');
+    const r = t8Run(t8Tree(), home, t8Argv(t8Out(), { 'settings-mode': 'open' }));
+    expect(r.code).toBe(2);
+    expect(r.stderr).toBe('ccrc history-replay: args-invalid: settings-mode open\n');
+    expect(stubLog(home)).toBeNull();
+  }, 60_000);
+
+  it('an unmeasured code sha refuses code-unmeasured, and an untagged stamp tree-unmeasured, before any spawn', () => {
+    const home = t8Home('ccrc-w2-t8-unmeasured-');
+    const noGate = t8Run(t8Tree({ gate: false }), home, t8Argv(t8Out()));
+    expect(noGate.code).toBe(2);
+    expect(noGate.stderr).toBe('ccrc history-replay: code-unmeasured: deploy/history-gate.mjs is absent\n');
+    writeFileSync(path.join(home, '.ccrc', 'build.json'), JSON.stringify({ sha: 'fixture', ref: 'main', dirty: false }));
+    const untagged = t8Run(t8Tree(), home, t8Argv(t8Out()));
+    expect(untagged.code).toBe(2);
+    expect(untagged.stderr).toBe('ccrc history-replay: tree-unmeasured: stamp untagged\n');
+    expect(stubLog(home)).toBeNull();
+  }, 60_000);
+
+  it('a generated account whose wrapper cannot be read stops step0a with wrapper-unmeasured before any spawn or spend (coordinator ruling)', () => {
+    const home = t8Home('ccrc-w2-t8-wrapper-unread-');
+    const wrapper = path.join(home, '.local', 'bin', 'gen-a');
+    rmSync(wrapper);
+    const out = t8Out();
+    const r = t8Run(t8Tree(), home, t8Argv(out, { account: 'gen-a' }));
+    expect(stubLog(home), 'a spawn reached the stub').toBeNull();
+    expect(r.code).toBe(2);
+    expect(readdirSync(out), 'no spawn and no spend: nothing under --out but its marker').toEqual([replay.OUT_MARKER]);
+    expect(r.stderr).toBe(`ccrc history-replay: wrapper-unmeasured: ${wrapper}: ENOENT\n`);
+  }, 60_000);
+
+  it('a budget the first run exhausts stops before the second, and a larger budget resumes without re-spawning the first', () => {
+    const home = t8Home('ccrc-w2-t8-budget-');
+    const tree = t8Tree();
+    const out = t8Out();
+    const stopped = t8Run(tree, home, t8Argv(out, { budget: String(T8_PER_RUN) }));
+    expect(stopped.code).toBe(2);
+    expect(stopped.stderr.startsWith('ccrc history-replay: budget-exhausted: ')).toBe(true);
+    expect(t8Runs(home).map(t8ModelOf)).toEqual([T8_MODELS.writer]);
+    expect(existsSync(path.join(out, replay.STEP0A_FILE))).toBe(false);
+    const resumed = t8Run(tree, home, t8Argv(out, { budget: String(10 * T8_PER_RUN) }));
+    expect(resumed.code, resumed.stderr).toBe(0);
+    expect(t8Runs(home).map(t8ModelOf)).toEqual([T8_MODELS.writer, T8_MODELS.judge, T8_MODELS.box]);
+    const rec = JSON.parse(readFileSync(path.join(out, replay.STEP0A_FILE), 'utf8'));
+    expect(rec).toMatchObject({ budget: 10 * T8_PER_RUN, spend: 3 * T8_PER_RUN });
+    expect(rec.writer_init).toEqual(replay.readStreamJson(T8_STREAM).init);
+  }, 120_000);
+
+  it('a limits row at the threshold stops before any spawn, the version spawn included', () => {
+    const home = t8Home('ccrc-w2-t8-limits-');
+    t8Limits(home, 'up-a', 70, 20);
+    const out = t8Out();
+    const r = t8Run(t8Tree(), home, t8Argv(out));
+    expect(r.code).toBe(2);
+    expect(r.stderr.startsWith('ccrc history-replay: limits-threshold: ')).toBe(true);
+    expect(stubLog(home)).toBeNull();
+    expect(readdirSync(out)).toEqual([replay.OUT_MARKER]);
+  }, 60_000);
+
+  it('a launcher whose version cannot be measured stops step0a before its batch, refusing version-unmeasured, recording nothing', () => {
+    const home = t8Home('ccrc-w2-t8-version-');
+    chmodSync(path.join(home, '.local', 'bin', 'up-a'), 0o644);
+    const out = t8Out();
+    const r = t8Run(t8Tree(), home, t8Argv(out));
+    expect(r.code, r.stderr).toBe(2);
+    expect(r.stderr).toMatch(/^ccrc history-replay: version-unmeasured: \S+ --version failed \(code [^\n]*\)\n$/);
+    expect(existsSync(path.join(out, 'step0a'))).toBe(false);
+    expect(existsSync(path.join(out, replay.STEP0A_FILE))).toBe(false);
+    expect(stubLog(home)).toBeNull();
+  }, 60_000);
 });
