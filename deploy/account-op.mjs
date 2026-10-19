@@ -35,8 +35,11 @@
 // gate), and `base-url.mjs` imports nothing at all. So the closure is three
 // files and stays three.
 
-import { existsSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import {
+  chmodSync, closeSync, constants as fsConstants, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync,
+  readSync, renameSync, statSync, unlinkSync, writeFileSync,
+} from 'node:fs';
+import { basename, isAbsolute, join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 // FIVE CONSTANTS, IMPORTED AND NEVER RE-SPELLED (D-2004, D-2021, D-2022). They
 // are the constants `rosterFromJson` itself decides with, so `check-add`
@@ -702,6 +705,12 @@ const OPS = {
   // one JSON blob on argv would put a value bash built with `printf` back into
   // the JSON-shaped position this file owns.
   health: { keys: ['id', 'row', 'limits-touched', 'note'], repeat: ['note'] },
+  // THE LANE-STATE FILE'S ONE WRITER (accounts plan Task A11; D-5517, D-5518,
+  // D-5755). `opLaneState` below states the shape. Every `ccrc account` verb
+  // and `ccd-account-health` call this op, and nothing else writes the file.
+  'lane-state': {
+    keys: ['id', 'mode', 'check-verdict', 'check-at', 'key-hash', 'retired-key-hash'], repeat: [],
+  },
 };
 
 /** THE VERDICT TABLE, and the only copy of it in the tree. §8 puts the
@@ -1144,6 +1153,201 @@ function opDoctor(a) {
   return 0;
 }
 
+/** ── THE NODE'S `fleetIdentity` (accounts plan Task A11; D-5518, D-5755) ──
+ *  `~/.ccrc/node-id`'s first line, or `null` when the file is absent,
+ *  unreadable, not a regular file, too large or not a uuid. The agent's
+ *  `readFleetIdentity` (`agent/src/accountop.ts`) reads the same file the same
+ *  bounded way for the agent's answer; this is the verb's own copy, because
+ *  `deploy/` runs on a box with no built agent and cannot import TypeScript.
+ *  `NODE_ID_LINE_RE` is `shared/agent-protocol.ts`'s `NODE_ID_RE`, character for
+ *  character, and `ccrc-account-lane-state.test.ts` pins the two sources equal.
+ *  `null` is "not known", never a guess: `reloadRoster` (A12) refuses a roster
+ *  whose identity is not the connected node's, and a null never matches. */
+const NODE_ID_LINE_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const NODE_ID_FILE_MAX = 128;
+
+function readNodeIdentity(home) {
+  if (!isAbsolute(home)) return null;
+  let fd;
+  try {
+    fd = openSync(join(home, '.ccrc', 'node-id'),
+      fsConstants.O_RDONLY | fsConstants.O_NONBLOCK | fsConstants.O_NOFOLLOW);
+    const st = fstatSync(fd);
+    if (!st.isFile() || st.size > NODE_ID_FILE_MAX) return null;
+    const buf = Buffer.alloc(NODE_ID_FILE_MAX + 1);
+    const n = readSync(fd, buf, 0, buf.length, 0);
+    if (n > NODE_ID_FILE_MAX) return null;
+    const line = buf.subarray(0, n).toString('utf8').split('\n')[0];
+    return NODE_ID_LINE_RE.test(line) ? line : null;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) { try { closeSync(fd); } catch { /* already closed */ } }
+  }
+}
+
+/** ── THE LANE-STATE FILE (accounts plan Task A11; spec §3.4, G16) ─────────
+ *  `~/.cc-sessions/.accounts/<id>.json`, 0600 in a 0700 directory. It holds
+ *  what the screen may show about a lane and never a secret: this op takes no
+ *  stdin and has no field a credential could ride in. `.cc-sessions` is an
+ *  agent read root, so the 20 s poll reads it (A12); no reader of that
+ *  directory descends into a dot-directory (`ccrc-account-lane-state.test.ts`).
+ *
+ *  FOUR MODES, ONE WRITER.
+ *   - `merge` (the default): READ, MERGE, WRITE. Only the fields this call was
+ *     given change; every other field stands, `keyHash` and `retiredKeyHash`
+ *     above all, so a health-timer rewrite or a `check` never drops what a mint
+ *     wrote. A file that is not a JSON object is refused, never overwritten:
+ *     the fields it held cannot be preserved, so the operator moves it aside.
+ *   - `fresh`: a new lane (`add`, `declare`) starts its state over. A stale
+ *     file under a re-used id would otherwise lend the new lane an old
+ *     identity or key hash.
+ *   - `if-absent`: the backfill (`ccrc install`/`update`). A file that exists,
+ *     whatever it holds, is left byte for byte.
+ *   - `delete`: `remove`. A removed lane has no state.
+ *
+ *  UMASK 077, THEN DEFAULT MODES, AND THE UMASK IS THE GUARD. The temp is
+ *  created `wx` with no explicit mode, so 0600 comes from the umask alone, and
+ *  the directory likewise. A directory that already exists wider is tightened
+ *  to 0700; a file is only ever a new temp renamed into place. The temp is in
+ *  the same directory, so the rename is atomic.
+ *
+ *  A TERM CANNOT STRAND THE TEMP. Every step is synchronous, and with a TERM
+ *  listener installed node delivers the signal only after the write and rename
+ *  have finished, so a verb killed mid-write leaves either the old file or the
+ *  new one, never a temp. The exit status still says 143.
+ *
+ *  `keyHash` IS WRITTEN HERE AND NOWHERE ELSE (spec §3.4): it is OpenRouter's
+ *  name for a key ccrc minted, it never enters `accounts.json`, so it never
+ *  reaches the roster mirror or the offline snapshot. The mint verbs (A32)
+ *  pass it; this task ships the setter and the merge that keeps it. */
+const LANE_STATE_MODES = ['merge', 'fresh', 'if-absent', 'delete'];
+const CHECK_VERDICT_RE = /^[a-z][a-z-]{0,31}$/;
+const ISO_SECONDS_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
+const KEY_HASH_RE = /^[A-Za-z0-9_-]{1,128}$/;
+
+function laneStateDir(home) {
+  return join(home, '.cc-sessions', '.accounts');
+}
+
+function opLaneState(a) {
+  process.on('SIGTERM', () => { process.exitCode = 143; });
+  const id = a['id'];
+  if (id === undefined) { refuse('bad-argv', 'lane-state needs --id'); return 2; }
+  // A PATH GUARD, NOT A SECOND ID GRAMMAR. Every caller has already held the
+  // id to the roster's grammar (`_acct_id_or_refuse`, `AH_ID_RE`); this only
+  // refuses the shapes that would put the file somewhere else.
+  if (id === '' || id !== basename(id) || id.startsWith('.')) {
+    refuse('bad-argv', `--id ${JSON.stringify(id)} cannot name a file in the lane-state directory`);
+    return 2;
+  }
+  const mode = a['mode'] ?? 'merge';
+  if (!LANE_STATE_MODES.includes(mode)) {
+    refuse('bad-argv', `--mode must be one of ${LANE_STATE_MODES.join(', ')}`);
+    return 2;
+  }
+  const verdict = a['check-verdict'];
+  const at = a['check-at'];
+  if ((verdict === undefined) !== (at === undefined)) {
+    refuse('bad-argv', '--check-verdict and --check-at come together: a verdict with no time is not a measurement');
+    return 2;
+  }
+  if (verdict !== undefined && (!CHECK_VERDICT_RE.test(verdict) || !ISO_SECONDS_RE.test(at))) {
+    refuse('bad-argv', '--check-verdict must be a verdict word and --check-at a UTC time to the second');
+    return 2;
+  }
+  for (const k of ['key-hash', 'retired-key-hash']) {
+    if (a[k] !== undefined && !KEY_HASH_RE.test(a[k])) {
+      refuse('bad-argv', `--${k} is not a key hash`);
+      return 2;
+    }
+  }
+  if (mode === 'delete' && Object.keys(a).some((k) => k !== 'id' && k !== 'mode')) {
+    refuse('bad-argv', 'lane-state --mode delete takes no field');
+    return 2;
+  }
+  const home = process.env.HOME ?? '';
+  if (!isAbsolute(home)) { refuse('bad-argv', 'HOME is not an absolute path'); return 2; }
+  const dir = laneStateDir(home);
+  const file = join(dir, `${id}.json`);
+
+  if (mode === 'delete') {
+    try {
+      unlinkSync(file);
+    } catch (e) {
+      if (e.code !== 'ENOENT') {
+        refuse('lane-state-write', `removing ${file} failed: ${e.message}`);
+        return 1;
+      }
+    }
+    return 0;
+  }
+
+  process.umask(0o077);
+  try {
+    mkdirSync(dir, { recursive: true });
+    const d = lstatSync(dir);
+    if (!d.isDirectory()) {
+      refuse('lane-state-dir', `${dir} is not a directory, so no lane state can be written there. Move it aside.`);
+      return 1;
+    }
+    if ((d.mode & 0o077) !== 0) chmodSync(dir, 0o700);
+  } catch (e) {
+    refuse('lane-state-dir', `cannot prepare ${dir} (0700): ${e.message}`);
+    return 1;
+  }
+
+  let current = null;
+  try {
+    const f = lstatSync(file);
+    if (mode === 'if-absent') return 0;
+    if (!f.isFile()) {
+      refuse('lane-state-unreadable', `${file} is not a regular file, so its fields cannot be kept. Move it aside.`);
+      return 1;
+    }
+    if (mode === 'merge') {
+      let parsed;
+      try { parsed = JSON.parse(readFileSync(file, 'utf8')); } catch { parsed = null; }
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        refuse('lane-state-unreadable',
+          `${file} is not a JSON object, so the fields it holds cannot be kept through this write. `
+          + 'Move it aside; the next account verb writes a new one.');
+        return 1;
+      }
+      current = parsed;
+    }
+  } catch (e) {
+    if (e.code !== 'ENOENT') {
+      refuse('lane-state-unreadable', `${file} could not be read: ${e.message}`);
+      return 1;
+    }
+  }
+
+  const next = mode === 'merge' && current !== null ? { ...current } : {};
+  if (verdict !== undefined) next.check = { verdict, at };
+  if (a['key-hash'] !== undefined) next.keyHash = a['key-hash'];
+  if (a['retired-key-hash'] !== undefined) next.retiredKeyHash = a['retired-key-hash'];
+  next.fleetIdentity = readNodeIdentity(home);
+
+  const tmp = join(dir, `.${id}.json.tmp.${process.pid}.${randomBytes(6).toString('hex')}`);
+  try {
+    writeFileSync(tmp, `${JSON.stringify(next)}\n`, { flag: 'wx' });
+    if (mode === 'if-absent') {
+      // NO-CLOBBER, NOT CHECK-THEN-RENAME: `link` refuses an existing name, so
+      // a verb that wrote this lane's file after the check above keeps it.
+      try { linkSync(tmp, file); } catch (e) { if (e.code !== 'EEXIST') throw e; }
+      unlinkSync(tmp);
+    } else {
+      renameSync(tmp, file);
+    }
+  } catch (e) {
+    try { unlinkSync(tmp); } catch { /* never created, or already renamed */ }
+    refuse('lane-state-write', `writing ${file} failed: ${e.message}`);
+    return 1;
+  }
+  return 0;
+}
+
 function main(argv) {
   const op = argv[2];
   if (op === undefined || !Object.hasOwn(OPS, op)) {
@@ -1171,9 +1375,14 @@ function main(argv) {
     if (file === undefined) { refuse('bad-argv', 'roster needs --file'); return 2; }
     const json = readRoster(file);
     if (json === null) return 1;
-    out({ ok: true, roster: json });
+    // `fleetIdentity` (spec §13.3's `roster --json` row; D-5518): the node
+    // that read this roster, so the server's `reloadRoster` (A12) can refuse a
+    // roster that came from another box. `null` when the node-id is not known.
+    out({ ok: true, roster: json, fleetIdentity: readNodeIdentity(process.env.HOME ?? '') });
     return 0;
   }
+
+  if (op === 'lane-state') return opLaneState(a);
 
   if (op === 'check-add') {
     // EVERY REFUSAL IN THIS ARM FIRES BEFORE ANY CALLER HAS WRITTEN A BYTE, and

@@ -1613,3 +1613,38 @@ describe('a platform-asserting test title owes the other platform an answer (D-2
     ).toEqual([]);
   });
 });
+
+// Accounts plan Task A11 (D-5513's backups row; G33; D-5755). APPENDED. On darwin, the verb that creates
+// `~/.cc-secrets` excludes it from Time Machine with `tmutil addexclusion`; on Linux it calls nothing. The darwin arm
+// runs anywhere: `ccrc` is sourced and `CCD_OS` set after the source (this file's rule above), with a stub `tmutil`
+// first on PATH that records its argv. HOME is a throwaway directory and the credential a fixed non-secret string.
+describe('backups: creating ~/.cc-secrets excludes it from Time Machine on darwin (G33)', () => {
+  function writeTwice(os: 'darwin' | 'linux'): { home: string; calls: string[]; status: number | null; stderr: string } {
+    const home = mkTmp(`ccrc-a11-tmutil-${os}-`);
+    const bin = path.join(home, '.stub-bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(path.join(bin, 'tmutil'), '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/tmutil-calls"\nexit 0\n',
+      { mode: 0o755 });
+    const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, PATH: `${bin}:${process.env['PATH'] ?? ''}` };
+    for (const k of Object.keys(env)) if (k.startsWith('CCRC_')) delete env[k];
+    const r = spawnSync('bash', ['-c', `. "$1"; CCD_OS=${os}; `
+      + 'ACCT_CREDENTIAL=not-a-secret; _acct_write_secret lane-c compatible ANTHROPIC_AUTH_TOKEN; '
+      + 'ACCT_CREDENTIAL=not-a-secret; _acct_write_secret lane-c compatible ANTHROPIC_AUTH_TOKEN',
+    '_', path.join(ccdRoot, 'ccrc')], { env, encoding: 'utf8' });
+    const log = path.join(home, 'tmutil-calls');
+    return { home, calls: existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n') : [], status: r.status, stderr: r.stderr };
+  }
+
+  it('creating `~/.cc-secrets` calls `tmutil addexclusion` on it', () => {
+    const r = writeTwice('darwin');
+    expect(r.status, r.stderr).toBe(0);
+    // Once: the second write finds the directory already there and creates nothing.
+    expect(r.calls).toEqual([`addexclusion ${path.join(r.home, '.cc-secrets')}`]);
+  });
+
+  it('on Linux it calls nothing', () => {
+    const r = writeTwice('linux');
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.calls).toEqual([]);
+  });
+});

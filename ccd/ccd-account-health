@@ -177,6 +177,33 @@ _ah_mark() {   # <id> <reason>
 
 _ah_clear() { rm -f "$REG/$1-authdead"; }
 
+# THE LANE STATE (accounts plan Task A11; spec §3.4, G16; D-5517). A 401 is a
+# check verdict the Accounts screen shows, so it is also written to the lane's
+# `~/.cc-sessions/.accounts/<id>.json` as `check: {verdict: "auth-dead", at}`,
+# through the one writer every `ccrc account` verb uses (`deploy/account-op.mjs`
+# `lane-state`, read-merge-write, so `keyHash` and every field this timer does
+# not own survive). It takes that lane's lock as the verbs do, without waiting:
+# a lane a verb is acting on right now is left to that verb. Only the 401 is
+# written. A 403 scope answer proves the token, not the lane, and `enable`'s
+# readiness (A13) reads `check`, so this timer never writes `ok`.
+LANE_STATE_OP="$HOME/ccrc/deploy/account-op.mjs"
+_ah_lane_state() {   # <id> <verdict>
+  local at="" rc=0
+  [ -r "$LANE_STATE_OP" ] \
+    || { _ah_say "$1: lane state not written — the writer at \$HOME/ccrc/deploy/account-op.mjs is missing"; return 0; }
+  at="$(date -u +%Y-%m-%dT%H:%M:%SZ)" || { _ah_say "$1: lane state not written — no clock"; return 0; }
+  mkdir -p -m 0700 "$HOME/.ccrc/locks" \
+    || { _ah_say "$1: lane state not written — cannot create \$HOME/.ccrc/locks"; return 0; }
+  flock -n -E 75 "$HOME/.ccrc/locks/$1.lock" \
+    node "$LANE_STATE_OP" lane-state --id "$1" --check-verdict "$2" --check-at "$at" >/dev/null || rc=$?
+  case "$rc" in
+    0) : ;;
+    75) _ah_say "$1: lane state left to the account verb acting on it" ;;
+    *) _ah_say "$1: lane state not written (exit $rc)" ;;
+  esac
+  return 0
+}
+
 # ── the pass ──────────────────────────────────────────────────────────────
 # PREFLIGHT BEFORE THE LOCK, and `flock` is IN it. Taking the lock is the first
 # thing that USES a tool, so a tool check after it cannot report a missing one:
@@ -295,6 +322,7 @@ while IFS=$'\t' read -r id subject rel <&8; do
     _ah_say "$id: unmeasured — curl exited $rc"
   elif [ "$status" = 401 ]; then
     _ah_mark "$id" auth-401 && _ah_say "$id: dead (401)"
+    _ah_lane_state "$id" auth-dead
   elif [ "$status" = 403 ] && [[ "$body" == *oauth_scope_insufficient* ]]; then
     _ah_clear "$id"; _ah_say "$id: live (403 scope)"
   else

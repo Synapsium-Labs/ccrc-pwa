@@ -2339,6 +2339,9 @@ describe('ccrc account add: the ordered write', () => {
     const home = box('ccrc-account-add-rosterfail-');
     seedBoxRoster(home, FIXTURE_ROSTER);
     const before = readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8');
+    // The lane lock's directory (accounts plan Task A11) exists on any box that has run an account
+    // verb; without it this case would measure the lock refusing, not the write it is about.
+    mkdirSync(join(home, '.ccrc', 'locks'), { recursive: true, mode: 0o700 });
     chmodSync(join(home, '.ccrc'), 0o500);
     const r = run(home, addArgs(), `${CANARY}\n`);
     chmodSync(join(home, '.ccrc'), 0o700);
@@ -2357,6 +2360,9 @@ describe('ccrc account add: the ordered write', () => {
     seedBoxRoster(home, FIXTURE_ROSTER);
     plantUpstream(home);
     plantInstallers(home);
+    // The lane lock's directory (accounts plan Task A11) exists on any box that has run an account
+    // verb; without it this case would measure the lock refusing, not the write it is about.
+    mkdirSync(join(home, '.ccrc', 'locks'), { recursive: true, mode: 0o700 });
     chmodSync(join(home, '.ccrc'), 0o500);
     expect(run(home, addArgs(), 'first-token-value\n').code).toBe(1);
     chmodSync(join(home, '.ccrc'), 0o700);
@@ -3574,6 +3580,9 @@ describe('ccrc account add: the lane is off, and the verb says what it did not d
       plantInstallers(home);
       const marker = join(home, '.cc-sessions', 'lab-dev0-disabled');
       try {
+        // The lane lock's directory (accounts plan Task A11) exists on any box that has run an account
+        // verb; without it this case would measure the lock refusing, not the write it is about.
+        mkdirSync(join(home, '.ccrc', 'locks'), { recursive: true, mode: 0o700 });
         chmodSync(join(home, '.ccrc'), 0o500);
         const r = run(home, addArgs(), `${CANARY}\n`);
         expect(r.code, r.stderr).toBe(1);
@@ -4383,6 +4392,9 @@ describe('ccrc account declare: somebody else\'s launcher, and what it refuses',
       seedRosterJson(home, [UPSTREAM]);
       plantLauncher(home, 'lab-dev0');
       const dir = join(home, '.ccrc');
+      // The lane lock's directory (accounts plan Task A11) exists on any box that has run an account
+      // verb; without it this case would measure the lock refusing, not the write it is about.
+      mkdirSync(join(dir, 'locks'), { recursive: true, mode: 0o700 });
       chmodSync(dir, 0o500);
       try {
         const r = run(home, ['account', 'declare', '--id', 'lab-dev0',
@@ -5925,6 +5937,9 @@ describe('ccrc account remove', () => {
       // rehomed`'s lever: `drop` renames a tmp beside the roster, so an
       // unwritable `~/.ccrc` refuses THERE. The lane directory keeps its own
       // mode, so the lane lock and the stop above the drop still run.
+      // The lane lock's directory (accounts plan Task A11) exists on any box that has run an account
+      // verb; without it this case would measure the lock refusing, not the write it is about.
+      mkdirSync(join(home, '.ccrc', 'locks'), { recursive: true, mode: 0o700 });
       chmodSync(join(home, '.ccrc'), 0o500);
       const r = run(home, ['account', 'remove', '--id', 'codex-a']);
       expect(r.code, r.stderr).toBe(1);
@@ -6553,6 +6568,9 @@ describe('ccrc account remove', () => {
     const { link, row, ctl } = seedUsageWait(home, []);   // no word: the stand-in answers inactive, so nothing waits
     try {
       // `drop` renames a tmp beside the roster, so an unwritable `~/.ccrc` refuses THERE: the timer is already disabled.
+      // The lane lock's directory (accounts plan Task A11) exists on any box that has run an account
+      // verb; without it this case would measure the lock refusing, not the write it is about.
+      mkdirSync(join(home, '.ccrc', 'locks'), { recursive: true, mode: 0o700 });
       chmodSync(join(home, '.ccrc'), 0o500);
       const r = runWith(home, ctl);
       expect(r.code, r.stderr).toBe(1);
@@ -6852,6 +6870,9 @@ describe('ccrc account remove', () => {
       // `drop` writes a tmp beside the roster and renames it, so an unwritable
       // `~/.ccrc` refuses THERE and nowhere earlier: the rehome and the home
       // sweep have both already happened.
+      // The lane lock's directory (accounts plan Task A11) exists on any box that has run an account
+      // verb; without it this case would measure the lock refusing, not the write it is about.
+      mkdirSync(join(home, '.ccrc', 'locks'), { recursive: true, mode: 0o700 });
       chmodSync(join(home, '.ccrc'), 0o500);
       const r = run(home, ['account', 'remove', '--id', 'alt-max']);
       expect(r.code, r.stderr).toBe(1);
@@ -6965,15 +6986,20 @@ describe('ccrc account remove', () => {
     expect(roster.accounts.map((a) => a.id)).toContain('alt-max');
   });
 
-  it('revalidates same-target marker changes queued behind removal', () => {
+  it('refuses a marker change on the lane a removal holds, `lane-busy` (accounts plan Task A11)', () => {
+    // UNTIL TASK A11 the marker verb queued on the placement lock behind the
+    // removal and re-validated the regenerated projection after it (`unknown-id`).
+    // Since A11 one lane takes one act at a time: the removal holds lane
+    // alt-max's lock, so the marker verb on that lane is refused at once, before
+    // it reads anything, and never reaches the placement lock at all. The
+    // re-validation after the placement lock stays, for a removal by a ccrc that
+    // predates the lane lock.
     for (const verb of ['enable', 'disable']) {
       const home = box(`ccrc-account-remove-${verb}-queued-`);
       seedFull(home);
       plantTmux(home, []);
 
-      // Stop removal inside its locked drop. The marker verb validates once,
-      // queues on the same lock, then must validate the regenerated projection
-      // again before touching the removed account's marker.
+      // Stop removal inside its locked drop.
       const deploy = join(home, 'ccrc', 'deploy');
       rmSync(deploy);
       mkdirSync(deploy);
@@ -7000,24 +7026,26 @@ describe('ccrc account remove', () => {
         { encoding: 'utf8' }).stdout.trim();
       writeFileSync(join(home, '.local', 'bin', 'flock'), [
         '#!/bin/sh',
-        'if mkdir "$HOME/flock-first" 2>/dev/null; then :; else : > "$HOME/flock-second"; fi',
+        // Only the BLOCKING call counts: that is the placement lock. The lane lock
+      // (accounts plan Task A11) is `flock -n`, taken first, and is not the
+      // queue this case is about.
+      'case "$1" in -n) ;; *) if mkdir "$HOME/flock-first" 2>/dev/null; then :; else : > "$HOME/flock-second"; fi ;; esac',
         `exec ${JSON.stringify(realFlock)} "$@"`,
       ].join('\n') + '\n', { mode: 0o755 });
 
       const script = `"$1" account remove --id alt-max >"$HOME/remove.out" 2>"$HOME/remove.err" & p1=$!\n`
         + 'while [ ! -e "$HOME/drop-ready" ]; do sleep 0.01; done\n'
-        + `"$1" account ${verb} --id alt-max >"$HOME/marker.out" 2>"$HOME/marker.err" & p2=$!\n`
-        + 'while [ ! -e "$HOME/flock-second" ]; do sleep 0.01; done\n'
+        + `"$1" account ${verb} --id alt-max >"$HOME/marker.out" 2>"$HOME/marker.err"\n`
+        + 'printf \'%s\' "$?" > "$HOME/marker.status"\n'
         + ': > "$HOME/drop-release"\n'
-        + 'wait "$p1"; printf \'%s\' "$?" > "$HOME/remove.status"\n'
-        + 'wait "$p2"; printf \'%s\' "$?" > "$HOME/marker.status"\n';
+        + 'wait "$p1"; printf \'%s\' "$?" > "$HOME/remove.status"\n';
       const pair = spawnSync(BASH, ['-c', script, '_', ccrcIn(home)],
         { env: env(home), encoding: 'utf8', timeout: 10_000 });
       expect(pair.error, pair.stderr).toBeUndefined();
       expect(readFileSync(join(home, 'remove.status'), 'utf8')).toBe('0');
       expect(readFileSync(join(home, 'marker.status'), 'utf8')).toBe('1');
       expect(JSON.parse(readFileSync(join(home, 'marker.out'), 'utf8')))
-        .toMatchObject({ ok: false, error: 'unknown-id' });
+        .toMatchObject({ ok: false, error: 'lane-busy' });
       expect(existsSync(offMarker(home, 'alt-max'))).toBe(false);
     }
   });
@@ -7058,7 +7086,10 @@ describe('ccrc account remove', () => {
       { encoding: 'utf8' }).stdout.trim();
     writeFileSync(join(home, '.local', 'bin', 'flock'), [
       '#!/bin/sh',
-      'if mkdir "$HOME/flock-first" 2>/dev/null; then :; else : > "$HOME/flock-second"; fi',
+      // Only the BLOCKING call counts: that is the placement lock. The lane lock
+      // (accounts plan Task A11) is `flock -n`, taken first, and is not the
+      // queue this case is about.
+      'case "$1" in -n) ;; *) if mkdir "$HOME/flock-first" 2>/dev/null; then :; else : > "$HOME/flock-second"; fi ;; esac',
       `exec ${JSON.stringify(realFlock)} "$@"`,
     ].join('\n') + '\n', { mode: 0o755 });
 
@@ -7194,7 +7225,13 @@ describe('ccrc account: the roster transitions share one placement lock', () => 
     // directory, so this is a hardening rather than a live hole; what makes it
     // worth the line is that the same two properties are what stop two writers
     // of one roster colliding on one name.
-    const src = readFileSync(join(REPO, 'deploy', 'account-op.mjs'), 'utf8');
+    // THE LANE-STATE FILE'S WRITER IS NOT A ROSTER WRITER (accounts plan Task
+    // A11): it writes `~/.cc-sessions/.accounts/<id>.json` and never the roster,
+    // so its own rename is cut out before the count.
+    const whole = readFileSync(join(REPO, 'deploy', 'account-op.mjs'), 'utf8');
+    const ls = whole.indexOf('function opLaneState(');
+    expect(ls, 'the lane-state writer moved: re-derive this cut').toBeGreaterThan(-1);
+    const src = whole.slice(0, ls) + whole.slice(whole.indexOf('\n}\n', ls) + 3);
     const renames = [...src.matchAll(/\brenameSync\(/g)].length;
     expect(renames, `the roster is written from ${renames} places, not one`).toBe(1);
     expect(src, 'the temporary roster name carries nothing a reader of /proc could not derive')
@@ -8970,7 +9007,14 @@ describe('ccrc account check: why there was no verdict, and what bounds the answ
     const r = run(home, ['account', 'check', '--id', 'claude']);
     expect(r.code, r.stderr).toBe(0);
     expect((oneObject(r)['health'] as Record<string, unknown>)['verdict']).toBe('auth-dead');
-    expect(snapshotHome(home), 'ccrc account check wrote to the box').toEqual(before);
+    // EXCEPT THE TWO WRITES ACCOUNTS PLAN TASK A11 GIVES EVERY VERB: the lane's
+    // lock file and its lane-state file, each named exactly. Everything else on
+    // the box is still byte for byte what it was.
+    const a11 = (l: string): boolean => /^D \.ccrc\/locks$|^F \.ccrc\/locks\/claude\.lock |^D \.cc-sessions$|^D \.cc-sessions\/\.accounts$|^F \.cc-sessions\/\.accounts\/claude\.json /.test(l);
+    const after = snapshotHome(home);
+    expect(after.filter((l) => a11(l) && !before.includes(l)).map((l) => l.split(' ').slice(0, 2).join(' ')))
+      .toEqual(['D .cc-sessions', 'D .cc-sessions/.accounts', 'F .cc-sessions/.accounts/claude.json', 'D .ccrc/locks', 'F .ccrc/locks/claude.lock']);
+    expect(after.filter((l) => !a11(l) || before.includes(l)), 'ccrc account check wrote to the box').toEqual(before);
     // …and the listing is not vacuously empty: it saw the roster it read.
     expect(before.some((l) => l.startsWith('F .ccrc/accounts.json '))).toBe(true);
     expect(before.length).toBeGreaterThan(8);
@@ -10683,7 +10727,10 @@ describe('ccrc account check: the probe', () => {
     expect(r.code, r.stderr).toBe(0);
     const added = snapshotHome(home).filter((l) => !before.has(l))
       .map((l) => l.split(' ').slice(0, 2).join(' ')).sort();
-    expect(added).toEqual(['D .ccrc/probe', 'F claude-argv', 'F claude-env']);
+    // Since accounts plan Task A11, `check` also takes the lane's lock and
+    // records its verdict in the lane-state file: two writes, named here.
+    expect(added).toEqual(['D .cc-sessions', 'D .cc-sessions/.accounts', 'D .ccrc/locks', 'D .ccrc/probe',
+      'F .cc-sessions/.accounts/orchard-api.json', 'F .ccrc/locks/orchard-api.lock', 'F claude-argv', 'F claude-env']);
   });
 });
 
