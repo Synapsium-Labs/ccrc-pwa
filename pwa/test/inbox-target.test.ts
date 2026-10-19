@@ -48,6 +48,12 @@ describe('inboxTarget', () => {
     for (const kind of ['coord', 'update'] as const) {
       expect(inboxTarget(ev({ kind, sessionId: '', runId: null }), sessions(LISTED), runs(7))).toEqual({ kind: 'none', why: 'no target' });
     }
+    // '' names no session even when a map happens to hold a '' key: the empty
+    // id is checked before the lookup, never matched as a session (D-5585).
+    const blankKeyed = new Map<string, FleetSession>([['', fleetSession({ id: '' })], [LISTED.id, LISTED]]);
+    for (const kind of ['coord', 'update'] as const) {
+      expect(inboxTarget(ev({ kind, sessionId: '', runId: null }), blankKeyed, runs(7))).toEqual({ kind: 'none', why: 'no target' });
+    }
     // About no session but about a run the board shows: the board.
     expect(inboxTarget(ev({ kind: 'run', sessionId: '', runId: 7 }), sessions(LISTED), runs(7))).toEqual({ kind: 'runs', path: '/runs' });
   });
