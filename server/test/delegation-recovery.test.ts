@@ -3924,18 +3924,18 @@ describe('D-5836 R2: every case where the per-pass repair must still take the FU
    *  pass for the reason that the short path never exists. */
   async function expectShort(l: Lane, label: string): Promise<void> {
     const r = await pass(l);
-    expect(r.projected, `${label}: a short per-pass repair makes no port project call`).toBe(false);                                  // [dry-drop]
-    expect(r.report, `${label}: a short per-pass repair reports skipped`).toMatchObject({                                                // [dry-drop]
-      skipped: true, inserted: 0, duplicate: 0, healedSessions: 0, fullReplay: false, wipedAll: false, journalPasses: 0,                // [dry-drop]
-      resumedAfter: Number(l.h.store.delegationEventStats().maxSequence ?? 0),                                                          // [dry-drop]
-    });                                                                                                                                 // [dry-drop]
+    expect(r.projected, `${label}: a short per-pass repair makes no port project call`).toBe(false);
+    expect(r.report, `${label}: a short per-pass repair reports skipped`).toMatchObject({
+      skipped: true, inserted: 0, duplicate: 0, healedSessions: 0, fullReplay: false, wipedAll: false, journalPasses: 0,
+      resumedAfter: Number(l.h.store.delegationEventStats().maxSequence ?? 0),
+    });
   }
   /** The FULL path: the port's `project` is called by the repair, and the report says it was not skipped. */
   async function expectFull(l: Lane, label: string): Promise<PerPassReport> {
     const r = await pass(l);
     expect(r.projected, `${label}: the full path calls the port's project`).toBe(true);
     expect(r.report, `${label}: the repair completed`).not.toBeNull();
-    expect(r.report?.skipped, `${label}: the full path reports skipped:false`).toBe(false);                                            // [dry-drop]
+    expect(r.report?.skipped, `${label}: the full path reports skipped:false`).toBe(false);
     return r.report;
   }
   /** The lane's first per-pass repair after `open` is FULL; the second is the first control. */
@@ -3943,7 +3943,7 @@ describe('D-5836 R2: every case where the per-pass repair must still take the FU
     const first = await pass(l);
     expect(first.projected, 'the lane\'s first per-pass repair after open takes the full path').toBe(true);
     await expectShort(l, 'control (the second per-pass repair)');
-    expect(first.report?.skipped, 'the first per-pass repair reports skipped:false').toBe(false);                                      // [dry-drop]
+    expect(first.report?.skipped, 'the first per-pass repair reports skipped:false').toBe(false);
   }
   const stray = (l: Lane): void => {
     l.h.store.db.prepare(`INSERT INTO delegation_events (eventId, journalSequence, journalDigest, acceptedAt, sessionId, parentIncarnation, claudeSessionId, eventKind, observedAt, payloadJson)
@@ -4037,6 +4037,42 @@ describe('D-5836 R2: every case where the per-pass repair must still take the FU
     await expectShort(l, 'the second per-pass repair after the recover()');
   });
 
+  it('D-5836 R2: the forced-full period is the exported DELEGATION_REPAIR_FULL_MS, one hour', () => {
+    // The `?? 3_600_000` above keeps the other rows running before the export exists; this row is what a missing or renamed export fails.
+    const exported = (checkpointNs as unknown as Record<string, unknown>)['DELEGATION_REPAIR_FULL_MS'];
+    expect(typeof exported, 'delegation-checkpoint.ts exports DELEGATION_REPAIR_FULL_MS').toBe('number');
+    expect(exported).toBe(3_600_000);
+  });
+
+  it('D-5836 R2: recover() restarts the forced-full clock — measured from the recover, not from the earlier full repair', async () => {
+    const l = await lane();
+    await settle(l);
+    l.vclock.ms += FULL_MS - 1000;
+    await expectShort(l, 'just inside the interval of the earlier full repair');
+    const recovered = await l.dur.recover();
+    expect(recovered.failure).toBeNull();
+    // Not due measured from the recover (FULL_MS-1000 on), but long past due measured from the earlier full repair. The first per-pass
+    // repair is full by the first-after-recover rule alone, and the second, at that point, is short.
+    l.vclock.ms += FULL_MS - 1000;
+    await expectFull(l, 'the first per-pass repair after the recover, FULL_MS-1000 on');
+    await expectShort(l, 'the second per-pass repair at that point');
+  });
+
+  it('D-5836 R2: recover() restarts the forced-full clock — a per-pass repair just past FULL_MS from the recover is a forced full', async () => {
+    const l = await lane();
+    await settle(l);
+    l.vclock.ms += FULL_MS - 1000;
+    await expectShort(l, 'just inside the interval of the earlier full repair');
+    const recovered = await l.dur.recover();
+    expect(recovered.failure).toBeNull();
+    await expectFull(l, 'the first per-pass repair right after the recover');
+    await expectShort(l, 'the second, right after the recover (a clock still counting from the earlier full repair would force a full here)');
+    l.vclock.ms += FULL_MS - 1000;
+    await expectShort(l, 'just inside the interval counted from the recover');
+    l.vclock.ms += 2000;
+    await expectFull(l, 'just past DELEGATION_REPAIR_FULL_MS counted from the recover');
+  });
+
   it('D-5836 R2: the forced full after DELEGATION_REPAIR_FULL_MS on the virtual clock, and a full repair restarts the clock', async () => {
     const l = await lane();
     await settle(l);
@@ -4077,7 +4113,7 @@ describe('D-5836 R2: every case where the per-pass repair must still take the FU
     const report = await l.dur.repairProjection();
     expect(l.h.log.includes('project'), 'a bare repair is always the full path').toBe(true);
     expect(report).not.toBeNull();
-    expect((report as PerPassReport)?.skipped, 'a bare repair reports skipped:false').toBe(false);                                     // [dry-drop]
+    expect((report as PerPassReport)?.skipped, 'a bare repair reports skipped:false').toBe(false);
     expect(count(l, 'delegation_sessions'), 'the session row is back').toBe(1);
   });
 
