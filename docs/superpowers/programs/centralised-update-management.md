@@ -2124,6 +2124,10 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         `full-suite`, `full` skipped, `promote` green. v0.0.328 reads `prerelease=false`, and `releases/latest`
         answers v0.0.328. No box moved (auto off). The rehearsal and the broker's soak both start from a tap onto
         v0.0.328.
+      - 07:55: still "boxes differ" (fleet v0.0.326, server v0.0.325), the state recorded at 06:55; nothing moved,
+        and the question to the operator stands. v0.0.329 (#693) and v0.0.330 (#695) followed, unapplied. STATUS: newest
+        v0.0.330, stable v0.0.328, intent dev/auto=off, backups fleet 159M/server 2211M, disk free fleet 209G/work
+        volume 96G/server 31G.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
