@@ -77,6 +77,9 @@ const EXPECTED: Record<string, { what: string; codes: string[] }> = {
   'b5-aliased-namespace.ts':  { what: 'the CCD_ARGV namespace aliased, argv still raw', codes: ['TS2345'] },
   'b6-no-run-on-deps.ts':     { what: 'Deps carries no raw runner at all', codes: ['TS2339'] },
   'b7-collect-token-plain-string.ts': { what: "a plain string as ws-collect's token (spec §5.10)", codes: ['TS2345'] },
+  // D-5517, D-5751: not a CcdArgv bypass, but this is the suite that compiles `bypasses/` and holds each fixture to its
+  // codes; the per-field cases are in the describe at the end of this file.
+  'b8-roster-wire-open-string.ts': { what: "a plain string into RosterWire's lane-kind fields", codes: ['TS2322'] },
 };
 
 describe('the CcdArgv brand — every historical layer-2b bypass now fails to COMPILE', () => {
@@ -154,5 +157,22 @@ describe('the mint site freezes every argv — closing the Object.assign bypass 
     expect(copy).toEqual(['ws-reap', '--expect', 'a'.repeat(64), '--session', 'demo-quiet-basin', 'extra']);
     // The source argv is untouched by mutating its copy.
     expect([...argv]).toEqual(['ws-reap', '--expect', 'a'.repeat(64), '--session', 'demo-quiet-basin']);
+  });
+});
+
+// D-5517, D-5751 (plan docs/superpowers/plans/2026-10-18-accounts-connect.md, Task A1). APPENDED. "No new field can
+// carry a secret": `RosterWire`'s `provider`, `kind`, `telemetry` and `managed` are closed unions or a boolean, so a
+// plain string assigned to each fails to compile. The set of codes above cannot tell one failing line from four, so
+// each field is held to its own line: a field widened to `string` compiles, and its case goes red by name.
+describe("RosterWire's lane-kind fields refuse a plain string, field by field (D-5517)", () => {
+  const FIXTURE = 'b8-roster-wire-open-string.ts';
+  const text = readFileSync(path.join(bypassDir, FIXTURE), 'utf8').split('\n');
+  const errorLines = (code: string): number[] => bypasses.out.split('\n')
+    .filter((l) => l.startsWith(`test/types/bypasses/${FIXTURE}(`) && l.includes(`error ${code}:`))
+    .map((l) => Number(/\((\d+),/.exec(l)?.[1] ?? '-1'));
+  it.each(['provider', 'kind', 'telemetry', 'managed'])('%s', (field) => {
+    const line = text.findIndex((l) => l.endsWith(`// field: ${field}`)) + 1;
+    expect(line, `the fixture lost its ${field} line`).toBeGreaterThan(0);
+    expect(errorLines('TS2322'), `RosterWire['${field}'] accepted a plain string:\n${bypasses.out}`).toContain(line);
   });
 });

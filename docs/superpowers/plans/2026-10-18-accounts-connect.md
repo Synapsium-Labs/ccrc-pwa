@@ -274,27 +274,27 @@ Every task's header gives its **Routing** (band, and one or two reviewers), its 
 
 **The shape.** `RosterWire` gains four optional, non-secret fields: `provider` (`'anthropic' | 'openai' | 'openrouter' | 'compatible'`), `kind` (`'sign-in' | 'token' | 'codex' | 'key'`), `telemetry` and `managed` (true for a ccrc-owned Codex lane). Each is derived once, from the parsed roster entry, by `rosterKindOf(entry)` in `shared/roster.ts`. **The roster has no method field** (`ACCOUNT_KEYS` is id, label, configDirSuffix, exec, homeAble, hue, telemetry, hidden and pool; `ExecSpec` carries no method), so `kind` for an Anthropic lane is derived from `exec.secretsFile`: present is `token`, absent is `sign-in`. Paste versus mint is not a roster fact; it lives in the lane state (`mintedAt`, A20) and reaches the screen through A12's `LaneWire`. No `method` field rides `RosterWire`, and no roster key is added. An entry that does not say is **absent** on the wire, never defaulted: an older roster mirror read by a newer PWA shows no kind chip rather than a wrong one.
 
-- [ ] **Step 1: Red.** `roster-wire-kind.test.ts`:
+- [x] **Step 1: Red.** `roster-wire-kind.test.ts`:
   - "a codex lane, an openrouter lane and a compatible lane each carry the provider and kind the spec's §4.1 names". Red: no fields.
   - "an Anthropic lane with `exec.secretsFile` is token, and one without it is sign-in".
   - "an entry with no provider carries no provider or kind: absence is not anthropic". Red: undefined vs a default.
   - "no new field can carry a secret": the four fields' types are closed unions or booleans. Vitest does not typecheck and `server/tsconfig.json` excludes `test/`, so this is a fixture under `server/test/types/bypasses/` (that directory's bypass-fixture pattern, `tsconfig.bypasses.json`) (one assignment of a string per field, each asserted to fail to compile), run by `typecheck-tests.test.ts`.
   - "one reader": `single-definition` finds `rosterKindOf` in exactly `shared/roster.ts`.
-- [ ] **Step 2: Green.** Implement the shape.
-- [ ] **Step 3: Mutation table, RUN.**
+- [x] **Step 2: Green.** Implement the shape.
+- [x] **Step 3: Mutation table, RUN.**
 
   | Mutant | Suite | Expected red |
   |---|---|---|
   | `provider: entry.provider ?? 'anthropic'` | roster-wire-kind | "absence is not anthropic" |
   | a codex entry mapped to `kind: 'token'` | roster-wire-kind | "…each carry the provider and kind…" |
-  | `kind` typed `string` | typecheck-tests | the `test/types/bypasses/` fixture's case for `kind` |
+  | `kind` typed `string` | ccdargv-brand (D-5751 (4)) | the `test/types/bypasses/` fixture's case for `kind` |
   | `kind` read from a roster `method` key | roster-wire-kind | "…with `exec.secretsFile` is token…" |
   | a second `rosterKindOf` in `server/src` | single-definition | its registry row |
 
-- [ ] **Step 4: Per width × skin × mode.** No UI: "no UI" in all sixteen cells. A2 is the first screen that shows the kind.
-- [ ] **Step 5: Verify.**
+- [x] **Step 4: Per width × skin × mode.** No UI: "no UI" in all sixteen cells. A2 is the first screen that shows the kind.
+- [x] **Step 5: Verify.**
 
-      cd server && ./node_modules/.bin/vitest run test/roster-wire-kind.test.ts test/single-definition.test.ts test/roster.test.ts test/typecheck-tests.test.ts
+      cd server && ./node_modules/.bin/vitest run test/roster-wire-kind.test.ts test/single-definition.test.ts test/roster.test.ts test/typecheck-tests.test.ts test/ccdargv-brand.test.ts   # ccdargv-brand runs the b8 fixture (D-5751 (4))
       cd server && ./node_modules/.bin/tsc --noEmit
       cd pwa && ./node_modules/.bin/tsc --noEmit
 
@@ -1763,6 +1763,12 @@ Issued and unused (Task A8): none.
 - **D-5691** — `step-up-return-replaces` (Task A6's follow-up, after #705): **returning to the page always replaces the held challenge, whatever its age**, extending D-5690 (2), which replaced only a stale one. Two instances on one session (a tab and an installed window, or two tabs) each start in turn, and the box keeps one live challenge per session, so a tab brought back within 55 s of the other's start held a dead challenge, and its tap spent one of the session's step-up attempts on a refusal the operator did not earn (five such taps lock step-up until sign-in, with a false `step-up-locked` audit row). A start is not budgeted, so the replacement costs nothing. A prompt in flight keeps its challenge, and the replacement's start disables the button until it lands, as with every new generation. The timer's two guards (no refresh while a prompt is open, none on a hidden page) are pinned by tests in the same PR, as are the cancel sentence, the wrong-passkey sentence surviving the next challenge, an unknown refusal word offering Try again with neither its word nor its `message` on the page, and Enter on an empty passphrase field sending nothing.
 
 Issued and unused (Task A6): none.
+
+### Issued 2026-10-19 and defined here (Task A1)
+
+- **D-5751** — `roster-wire-kind-as-built` (Task A1): five decisions Task A1's Files list did not make. (1) **The vocabulary's one home.** `RosterKind` and `RosterKindWire` are declared in `shared/roster.ts` beside `rosterKindOf`, and `RosterWire` (`shared/api.ts`) `extends RosterKindWire`, so the four fields' types are written once. `telemetry` is typed `AccountDef['telemetry']`, so A26a's `openrouter` member reaches the wire with no edit here. (2) **Where the provider comes from.** `upstream` is `anthropic` by construction (`ExecSpec`'s header) and carries `sign-in`, or `token` if it declares a `secretsFile`. A `generated` entry with no provider is `anthropic`, because that is the parser's documented default (with its warning) and `rosterKindOf` reads the parsed entry. An `external` entry with no provider is undeclared: no `provider`, no `kind`, and `telemetry` still rides, because the roster requires it. (3) **`managed` rides OpenAI lanes only**: true for `exec.kind: 'codex'`, false for an `external` OpenAI launcher, which is `kind: 'codex'` too, and absent on every other provider. (4) **The closed-union fixture's runner.** The suite that compiles `server/test/types/bypasses/` and holds each fixture to its codes is `ccdargv-brand.test.ts`, not `typecheck-tests.test.ts`, which only asserts that the directory stays out of the test program. `b8-roster-wire-open-string.ts` is registered there, and because that suite compares a set of codes, an appended describe asserts TS2322 on each field's marked line, so the mutant that types `kind` as `string` goes red by the field's name. (5) **`accounts-route.test.ts` changes.** It pinned the exact `RosterWire` key list and said `telemetry` stays server-side. It now pins the kind fields per entry. Its comment, `server.ts`'s builder comment and `RosterWire`'s docstring now say that `telemetry` crossed on purpose, as a closed union with no path, and that `exec` and `configDirSuffix` still stay on the server.
+
+Issued and unused (Task A1): 5752.
 
 ### Departures defined here by slug, awaiting numbers
 

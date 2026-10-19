@@ -537,7 +537,7 @@ describe('the models dispatcher', () => {
     const m = /^MODELS_SUBS="([^"]*)"$/m.exec(src);
     expect(m, 'ccd/ccrc has no file-scope MODELS_SUBS').toBeTruthy();
     expect(m![1]!.split(' ').filter(Boolean).sort())
-      .toEqual(['discovery', 'init', 'rm', 'set-class', 'set-effort', 'set-subagent', 'show']);
+      .toEqual(['clear-window', 'discovery', 'init', 'rm', 'set-class', 'set-effort', 'set-subagent', 'set-window', 'show']);
   });
 
   it('spells the reserved first-token words once, at file scope', () => {
@@ -1093,6 +1093,121 @@ describe('ccrc models <id> set-effort', () => {
     const r = run(['models', 'gpt', 'set-effort', 'subagent', 'high']);
     expect(r.code).toBe(2);
     expect(oneObject(r)['error']).toBe('unknown-class');
+  });
+});
+
+describe('ccrc models <id> set-window and clear-window (codex-bridge spec §2.7)', () => {
+  // Model ids are read off SEEDED, and roster ids by position: this
+  // repository is public.
+  const ID = LEGACY_EXTERNAL_ID;
+  const OPUS = SEEDED.classes.opus!;
+  const CLASS_MODELS = [...new Set(Object.values(SEEDED.classes).filter((v): v is string => v !== null))];
+  const winPath = (): string => join(home, '.ccrc', 'models', `${ID}.windows.json`);
+  const settingsEnv = (): Record<string, string> =>
+    JSON.parse(fs.readFileSync(join(home, ROSTER.accounts[2]!.configDirSuffix, 'settings.json'), 'utf8')).env;
+
+  beforeEach(() => {
+    writeCatalogue(ID);
+    seedCodex(ID);
+  });
+
+  it('set-window reaches the op: one JSON object, the window recorded, the lane re-materialised', () => {
+    for (const m of CLASS_MODELS) {
+      const r = run(['models', ID, 'set-window', m, '400000']);
+      expect(r.code, r.stdout + r.stderr).toBe(0);
+      expect(oneObject(r)['op']).toBe('set-window');
+    }
+    expect(settingsEnv()['CLAUDE_CODE_MAX_CONTEXT_TOKENS']).toBe('400000');
+    expect(fs.existsSync(winPath())).toBe(true);
+  });
+
+  it('clear-window reaches the op and answers removed', () => {
+    expect(run(['models', ID, 'set-window', OPUS, '400000']).code).toBe(0);
+    const r = run(['models', ID, 'clear-window', OPUS]);
+    expect(r.code).toBe(0);
+    expect(oneObject(r)['removed']).toBe(true);
+  });
+
+  it.each([
+    [['set-window'], 'missing-argument'],
+    [['set-window', 'model-9-omega'], 'missing-argument'],
+    [['set-window', 'model-9-omega', '400000', 'extra'], 'unknown-argument'],
+    [['clear-window'], 'missing-argument'],
+    [['clear-window', 'model-9-omega', 'extra'], 'unknown-argument'],
+  ] as [string[], string][])('%j is a usage error at exit 2, answered before node', (args, error) => {
+    const r = run(['models', ID, ...args]);
+    expect(r.code).toBe(2);
+    expect(oneObject(r)['error']).toBe(error);
+    expect(fs.existsSync(winPath())).toBe(false);
+  });
+
+  it('a refusal from the op passes through unchanged, at exit 1, with its sentence on stderr', () => {
+    const r = run(['models', ID, 'set-window', OPUS, '400k']);
+    expect(r.code).toBe(1);
+    expect(oneObject(r)['error']).toBe('bad-window');
+    expect(r.stderr).toMatch(/digits only/);
+  });
+
+  it('an anthropic lane refuses, as it refuses every change', () => {
+    const r = run(['models', ROSTER.accounts[1]!.id, 'set-window', OPUS, '400000']);
+    expect(r.code).toBe(1);
+    expect(oneObject(r)['error']).toBe('anthropic-lane');
+  });
+
+  it('show summarises the effective window, its rule, and each measured window', () => {
+    for (const m of CLASS_MODELS) expect(run(['models', ID, 'set-window', m, '400000']).code).toBe(0);
+    const r = run(['models', ID, 'show']);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toMatch(/context window: 400000 tokens, measured \(the smallest across the class models\)/);
+    for (const m of CLASS_MODELS) expect(r.stderr).toContain(`measured window: ${m} 400000 tokens (set `);
+  });
+
+  // The fixture catalogue lists 272000 for the default model, so this is the
+  // CAPPED case: the line must not credit the catalogue with the 200000.
+  it('show on a lane part-way measured names the default rule and the models still unmeasured', () => {
+    expect(run(['models', ID, 'set-window', OPUS, '400000']).code).toBe(0);
+    const r = run(['models', ID, 'show']);
+    expect(r.stderr).toContain('context window: 200000 tokens, by the default rule (the catalogue context of the '
+      + 'default model, capped at 200000); not measured: ' + CLASS_MODELS.filter((m) => m !== OPUS).join(', '));
+  });
+
+  it('show on a lane with no catalogue: rule none prints its own line, naming the models still unmeasured', () => {
+    fs.rmSync(join(home, '.ccrc', 'models', `${ID}.json`));
+    const r = run(['models', ID, 'show']);
+    expect(r.code).toBe(0);
+    expect(oneObject(r)['contextWindow']).toMatchObject({ tokens: null, rule: 'none' });
+    expect(r.stderr.split('\n')).toContain(
+      `  context window: not set, the client default applies; not measured: ${CLASS_MODELS.join(', ')}`);
+  });
+
+  it('a lane with no registry, Anthropic or not, prints no context window line at all', () => {
+    for (const id of [ROSTER.accounts[1]!.id, ROSTER.accounts[4]!.id]) {
+      const r = run(['models', id, 'show']);
+      expect(r.code).toBe(0);
+      expect(oneObject(r)['contextWindow']).toBeNull();
+      expect(r.stderr).toMatch(new RegExp(`^account ${id}`));
+      expect(r.stderr).not.toMatch(/context window/);
+    }
+  });
+
+  it('a measured window with no setAt prints without the "(set …)" part', () => {
+    fs.writeFileSync(winPath(), JSON.stringify({ windows: { [OPUS]: { tokens: 400000 } } }));
+    const r = run(['models', ID, 'show']);
+    expect(r.code).toBe(0);
+    expect(r.stderr.split('\n')).toContain(`  measured window: ${OPUS} 400000 tokens`);
+    expect(r.stderr).not.toMatch(/\(set /);
+  });
+
+  it('show names an unreadable windows file and says the default rule applies', () => {
+    fs.writeFileSync(winPath(), '{ this is not json');
+    const r = run(['models', ID, 'show']);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toMatch(/the windows file cannot be read, so the default rule applies: .*is not valid JSON/);
+  });
+
+  it('show --json still prints nothing on stderr', () => {
+    expect(run(['models', ID, 'set-window', OPUS, '400000']).code).toBe(0);
+    expect(run(['models', ID, 'show', '--json']).stderr).toBe('');
   });
 });
 

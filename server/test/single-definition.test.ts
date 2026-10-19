@@ -1604,15 +1604,15 @@ describe('one bash spelling of ~/.ccrc/installed', () => {
 
 // — The model-class registry (spec §4.1, §4.2, §6.1, §6.4, §7) —
 describe('the model files, and who reads each one', () => {
-  // FIVE paths — measured 2026-09-08 by counting this describe's own
+  // SIX paths — five measured 2026-09-08 by counting this describe's own
   // writer/reader rows below (the models directory, the catalogue, the
-  // registry, the LiteLLM config, the ownership whitelist) — each with a
-  // writer and a set of readers, and the whole reason to register them here
-  // is that they cross LANGUAGES: the catalogue is written by bash-and-python
-  // and read by TypeScript; the TSV is written by node and read (from Plan 2)
-  // by bash; the effort map is written by node and read by python in another
-  // repository. None of those pairs can share a constant, so agreement has to
-  // be a red suite instead.
+  // registry, the LiteLLM config, the ownership whitelist), and the sixth, the
+  // lane's `<id>.windows.json` — each with a writer and a set of readers, and
+  // the whole reason to register them here is that most cross LANGUAGES: the
+  // catalogue is written by bash-and-python and read by TypeScript; the TSV is
+  // written by node and read (from Plan 2) by bash; the effort map is written
+  // by node and read by python in another repository. None of those pairs can
+  // share a constant, so agreement has to be a red suite instead.
   //
   // THIS DESCRIBE BUILDS ITS OWN CORPUS, and that is load-bearing. `ALL` comes
   // from `sources()`, which filters `/\.tsx?$/` — so `shared/models.mjs` and
@@ -1750,6 +1750,15 @@ describe('the model files, and who reads each one', () => {
     expect(spell('classes.json')).toEqual([
       'ccd/ccrc-doctor-checks', 'deploy/models-op.mjs', 'shared/models.mjs', 'shared/models.ts',
     ]);
+  });
+
+  it('the WINDOWS file is named by exactly two files, and only models-op can write it (codex-bridge spec §2.7)', () => {
+    // `<id>.windows.json`, the lane's measured context windows.
+    // `deploy/models-op.mjs` builds its path (`windowsPath`) and is its one
+    // writer; `shared/models.mjs` names it in `parseWindows`' docstring and
+    // holds no fs call (it imports nothing). A bash tool or a server module
+    // spelling it would be a second, unvalidated reader or editor.
+    expect(spell('.windows.json')).toEqual(['deploy/models-op.mjs', 'shared/models.mjs']);
   });
 
   it('the doctor\'s models check reads the registry file but never writes it', () => {
@@ -7217,4 +7226,25 @@ describe('docs section H, W5: GithubPermalink, githubPermalink and githubUrlAt a
       expect(holders(FN_DEF(name))).toEqual(['shared/docs.ts']);
     });
   }
+});
+
+// D-5517, D-5751 (plan docs/superpowers/plans/2026-10-18-accounts-connect.md, Task A1). APPENDED. The lane's kind on
+// the wire has one reader: `rosterKindOf` derives `provider`, `kind`, `telemetry` and `managed` from a parsed roster
+// entry, and its vocabulary (`RosterKind`, `RosterKindWire`) is declared beside it. A second derivation in the server's
+// handler or the PWA would be a second answer to "what kind of lane is this", free to disagree with the first.
+describe("the lane's kind is derived in one place, shared/roster.ts (D-5517)", () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  const decl = (c: string): RegExp => new RegExp(`\\b(?:const|let|var|function|class)\\s+${c}\\b|\\btype\\s+${c}\\s*=|\\binterface\\s+${c}\\b`);
+  it('CONTROL: the pattern sees a declaration and passes over a use', () => {
+    expect(decl('rosterKindOf').test('export function rosterKindOf(entry: AccountDef)')).toBe(true);
+    expect(decl('rosterKindOf').test('...rosterKindOf(a),')).toBe(false);
+  });
+  it('rosterKindOf and its vocabulary are declared once, in shared/roster.ts', () => {
+    for (const c of ['rosterKindOf', 'RosterKind', 'RosterKindWire']) {
+      expect(holders(decl(c)), c).toEqual(['shared/roster.ts']);
+    }
+  });
+  it("it is called by the accounts handler alone, which is the RosterWire builder", () => {
+    expect(holders(/\brosterKindOf\(/)).toEqual(['server/src/server.ts', 'shared/roster.ts']);
+  });
 });
