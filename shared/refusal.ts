@@ -41,7 +41,7 @@
  *     `refuseOversizedClaim`, not the table.
  */
 import type { ClaimRefusal } from './box-token.js';
-import type { ApprovalRefusal, CollectLaneRefusal, DoneRejectCode, MailRejectCode, RunRefuseCode, SwapRefusal, UpdateRouteError } from './api.js';
+import type { ApprovalRefusal, CollectLaneRefusal, DigestRefusal, DoneRejectCode, MailRejectCode, RunRefuseCode, SwapRefusal, UpdateRouteError } from './api.js';
 import { SWAP_REFUSALS } from './api.js';
 
 /** The mail codes a route answers in `error`. The done-authority codes travel
@@ -72,7 +72,7 @@ export type GenericRefusal = (typeof GENERIC_REFUSALS)[number];
 
 /** The approval routes' own words (plan Task 16, D-5298): typed from the start, as D-5381 set out to make them. */
 export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | CollectLaneRouteRefusal | SwapRefusal | GenericRefusal
-  | ApprovalRefusal;
+  | ApprovalRefusal | DigestRefusal;
 
 /** Each route refusal word's one status (D-5381). Measured from the sends on
  *  landing day, never chosen: changing one is a behaviour change. */
@@ -119,6 +119,8 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   'not-a-child': 409, 'approvals-disabled': 409, 'single-box': 409, 'deny-not-engaged': 409, 'digest-mismatch': 409,
   'version-unverified': 409, 'approval-released': 409, 'parent-changed': 409, 'guard-forbidden': 409,
   'guard-escalate': 409, 'declined': 409, 'hook-gone': 409, 'already-ruled': 409,
+  // The digest routes (plan Task 17, D-5300): CHOSEN, not measured — new words, the approval routes' statuses.
+  'not-coordinator': 409, 'digest-unreadable': 503,
 };
 
 /** The runtime list, derived from the table (`PR_REASONS`'s idiom). */

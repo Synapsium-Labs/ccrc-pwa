@@ -65,6 +65,7 @@ import { installDocsRequestPolicy, installDocsResponsePolicy } from './docs/hook
 import { registerTokenRoutes, type TokenRouteDriver } from './token/routes.js';
 import type { LocalUpdateSpawn, SendUpdateOp } from './update/converge.js';
 import { queueProgramKickoff } from './coord/kickoff.js';
+import { buildDigest, correctDigestRow, digestDayFor, digestWindow, parseDigestCorrectBody, parseDigestDay, readDigestHour } from './coord/digest.js';
 import { toRunSummary, type AskRow, type AskTakeResult, type CoordStore, type NodeRow } from './coord/store.js';
 import { buildInfoOfRow } from './update/inventory.js';
 import type { PoolEdgeLog } from './coord/pooledgelog.js';
@@ -98,7 +99,7 @@ import {
 import { ARCHIVE_REFUSALS, SERVER_CAPS, SWAP_REFUSALS, interruptRouteSource, type SwapRefusal } from '../../shared/api.js';
 import { refuseRoute } from './refuse.js';
 import { DrawerInterruptThrottle, drawerInterruptSource, recordInterrupt } from './interruptlog.js';
-import type { Dialog } from '../../shared/api.js';
+import type { Dialog, DigestAnswer, DigestCorrectAnswer } from '../../shared/api.js';
 import {
   archiveFlags, archiveOutcome, busyReadFailsClosed, decideArchive, frameRowVerdict, refusedAtStop, worktreeOf, type ArchiveMeasure,
   type TurnVerdict,
@@ -2056,6 +2057,48 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (!capSupported(deps.fleetState, ROUTE_APPLY_CAP)) return reply.code(501).send({ ok: false, error: 'unsupported' });
     const [field, value] = Object.entries(parsed.route)[0] as [string, string];
     return runCcdOr502(reply, CCD_ARGV.routeApply(id, field, value, pwaDec(req)));
+  });
+
+  /**
+   * `GET /api/digest?day=YYYY-MM-DD` (coordinator-first routing spec §10, plan Task 17, D-5300): the digest of what
+   * coordinators decided in the operator's name over the 24 hours before that day's digest hour, built from the
+   * durable `asks` and `approvals` tables, so any past day can be read and a missed push loses nothing. With no `day`,
+   * the newest day whose window has closed. Session-gated when armed (not EXEMPT); no box token. A read: it changes
+   * nothing, and it never sends the push (the beat in `watch.ts` does).
+   */
+  app.get('/api/digest', async (req, reply) => {
+    if (!deps.coord) return refuseRoute(reply, 'not-configured');
+    const q = (req.query ?? {}) as { day?: unknown };
+    const hourUtc = readDigestHour(deps.cfg.ccrcDir);
+    const day = q.day === undefined ? digestDayFor(Date.now(), hourUtc) : parseDigestDay(q.day);
+    if (day === null) return refuseRoute(reply, 'bad-request');
+    const { fromMs, toMs } = digestWindow(day, hourUtc);
+    const built = buildDigest(deps.coord, fromMs, toMs);
+    if (!built.ok) return refuseRoute(reply, 'digest-unreadable', { detail: built.detail });
+    const mark = deps.coord.digestDay(day);
+    const answer: DigestAnswer = {
+      v: 1, day, hourUtc, fromMs, toMs, ...built.digest,
+      sentAt: mark?.sentAt ?? null, pushed: mark !== null && mark.count > 0,
+    };
+    return answer;
+  });
+
+  /**
+   * `POST /api/digest/correct` (spec §10, D-5300): the operator's correction of one digest line, `{rowKind, id,
+   * text}`. Queues durable system mail from `operator` to the row's coordinator (kind `finding`, subject "Operator
+   * correction on ask N" or "... approval N", the text verbatim) and marks the row `corrected`, which spec §11 counts.
+   * Session-gated when armed (not EXEMPT); no box token: the operator's door, like the kickoff route below. A row that
+   * is no coordinator's decision is `409 not-coordinator`; a second correction while the first is undelivered is
+   * `409 duplicate`.
+   */
+  app.post('/api/digest/correct', async (req, reply) => {
+    if (!deps.coord) return refuseRoute(reply, 'not-configured');
+    const parsed = parseDigestCorrectBody(req.body);
+    if (!parsed.ok) return refuseRoute(reply, parsed.why);
+    const out = correctDigestRow(deps.coord, parsed.body);
+    if (!out.ok) return refuseRoute(reply, out.why);
+    const answer: DigestCorrectAnswer = { ok: true, mailId: out.mailId, deliveryId: out.deliveryId };
+    return answer;
   });
 
   /**

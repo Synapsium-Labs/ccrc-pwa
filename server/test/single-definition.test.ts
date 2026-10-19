@@ -7024,3 +7024,41 @@ describe('the approvals server half\'s vocabulary and windows each have one home
     expect(holders(/\b60_000\b[^\n]*(?:approval|countdown)|(?:approval|countdown)[^\n]*\b60_000\b/i)).toEqual(['server/src/askwindow.ts']);
   });
 });
+
+// D-5300 (plan docs/superpowers/plans/2026-10-17-coordinator-first-routing.md, Task 17). APPENDED. The daily digest
+// has one TypeScript home for each of its decisions: the default hour, its override reader, the window, the two
+// "is this a coordinator's decision" predicates the digest AND the correction route read, the build and the mail's
+// subject in `server/src/coord/digest.ts`; its wire vocabulary in `shared/api.ts`.
+describe('the daily digest\'s hour, predicates and vocabulary each have one home (D-5300)', () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  const decl = (c: string): RegExp => new RegExp(`\\b(?:const|let|var|function)\\s+${c}\\b|\\btype\\s+${c}\\s*=|\\binterface\\s+${c}\\b`);
+  it('CONTROL: the pattern sees a declaration and passes over a use', () => {
+    expect(decl('DigestLine').test('import { type DigestLine, type DigestTotals } from')).toBe(false);
+    expect(decl('DIGEST_HOUR_UTC').test('export const DIGEST_HOUR_UTC = 7;')).toBe(true);
+    expect(decl('DIGEST_HOUR_UTC').test('return DIGEST_HOUR_UTC;')).toBe(false);
+    expect(decl('DigestLine').test('export interface DigestLine {')).toBe(true);
+  });
+  it('the hour, the window and the predicates live in coord/digest.ts', () => {
+    for (const c of ['DIGEST_HOUR_UTC', 'readDigestHour', 'digestWindow', 'digestDayFor', 'parseDigestDay', 'askDecision',
+      'approvalDecision', 'buildDigest', 'digestPushCopy', 'digestCorrectionSubject', 'correctDigestRow', 'isDigestKebab']) {
+      expect(holders(decl(c)), c).toEqual(['server/src/coord/digest.ts']);
+    }
+  });
+  it('the wire vocabulary is declared once, in shared/api.ts', () => {
+    for (const c of ['DigestLine', 'DIGEST_LINE_KINDS', 'DigestLineKind', 'DigestRowKind', 'DigestTotals', 'DigestAnswer', 'DigestCorrectBody',
+      'DigestCorrectAnswer', 'DIGEST_REFUSALS', 'DigestRefusal', 'DIGEST_HOUR_FILE', 'DIGEST_CORRECTION_MAX_CHARS',
+      'DIGEST_COMMAND_CHARS']) {
+      expect(holders(decl(c)), c).toEqual(['shared/api.ts']);
+    }
+  });
+  it('the correction subject and the override file name are spelled nowhere but their homes', () => {
+    expect(holders(/Operator correction on/)).toEqual(['server/src/coord/digest.ts']);
+    expect(holders(/'digest-hour'/)).toEqual(['shared/api.ts']);
+  });
+  it('the digest and the correction read the same two predicates', () => {
+    expect(holders(/\baskDecision\(/)).toEqual(['server/src/coord/digest.ts']);
+    const src = stallCode(path.join(ccrcRoot, 'server', 'src', 'coord', 'digest.ts'));
+    expect(src.match(/\baskDecision\(/g)).toHaveLength(3);
+    expect(src.match(/\bapprovalDecision\(/g)).toHaveLength(3);
+  });
+});

@@ -98,6 +98,7 @@ import {
 import { claimExpiry, type LivenessProbe } from './coord/claims.js';
 import { claimantMeasuredDead, measureClaimant } from './coord/reclaim.js';
 import { heldFor } from './coord/heldFor.js';
+import { buildDigest, digestDayFor, digestPushCopy, digestWindow, readDigestHour } from './coord/digest.js';
 import { redactCommand } from './coord/redact.js';
 import {
   BACKLOG_HORIZON_MS, STALL_CHECK_PREFIX, STALL_QUIET_MS, STALL_REPLY_PREFIX, parseStallDetail, stallArmingOf,
@@ -803,6 +804,10 @@ export class FleetWatcher {
     ev: Parameters<FleetWatcher['pushOne']>[0] }>();
   /** The day the approval inputs and the asks' question text were last pruned (`sweepApprovals`). */
   private lastApprovalPrune = 0;
+  /** The digest beat's memory (D-5300): the last day it settled (sent, skipped at zero, or found already claimed),
+   *  and when it last looked. The `digests` row, not this, is what keeps a restart from sending twice. */
+  private lastDigestDay: string | null = null;
+  private lastDigestBeat = -Infinity;
   /** D-5290: dialogs whose FIRST raise is deferred, per child — the dialog id
    *  and how many ticks it has been seen while the child's hookstate was not
    *  yet `waiting` and no envelope made it answerable. Bounded by
@@ -2490,6 +2495,8 @@ export class FleetWatcher {
       void this.sweepAsks().catch(() => { /* one bad sweep must not kill the poll */ });
       // D-5298 (plan Task 16): the approvals lane's lapse, ceiling and retention, never awaited for the same reason.
       void this.sweepApprovals().catch(() => { /* one bad sweep must not kill the poll */ });
+      // D-5300 (plan Task 17): the daily digest's beat. Synchronous, guarded inside, and throttled to once a minute.
+      this.sweepDigest();
       // NEVER awaited, same reasoning as `sweepDivergences` above: in remote
       // mode this is one agent-WS `readdir` plus one `readFileFrom` per live
       // generation per sweep. Awaiting it would put the dialog detector and
@@ -3129,6 +3136,9 @@ export class FleetWatcher {
      *  ever exempted the RECORD from the presence gate above, never the push
      *  from firing at all. */
     recordOnly?: boolean;
+    /** A same-origin path the service worker opens on tap, ahead of `/s/<sessionId>` (`PushPayload.url`): the digest
+     *  push's deep link to its day's screen (D-5300). */
+    url?: string;
   }, projects: Set<string>): void {
     const visible = this.deps.presence?.isVisible(e.sessionId) === true;
     if (visible && !e.recordAlways) return;
@@ -3170,6 +3180,7 @@ export class FleetWatcher {
       title, body: e.body, sessionId: e.sessionId,
       tag: e.tag ?? `${e.kind}-${e.sessionId}`,
       ...(e.actions ? { actions: e.actions } : {}),
+      ...(e.url !== undefined ? { url: e.url } : {}),
     });
   }
 
@@ -8783,6 +8794,44 @@ export class FleetWatcher {
       }
     } catch (err) {
       console.warn(`ccrc-server: sweepApprovals failed (${err instanceof Error ? err.message : String(err)}) — the next sweep retries`);
+    }
+  }
+
+  /**
+   * The daily digest's beat (coordinator-first routing spec §10, plan Task 17, D-5300). Once a minute at most, it
+   * names the newest day whose window has closed (`digestDayFor`, at the hour `~/.ccrc/digest-hour` or
+   * `DIGEST_HOUR_UTC` gives) and, unless this beat already settled that day: builds the digest from the `asks` and `approvals`
+   * tables, CLAIMS the day in `digests` (inserted before the push, so a restart, or a second beat, finds it and sends
+   * nothing), and sends one `coord` push recorded in the feed, deep-linked to the day's screen. A day with no
+   * decisions is claimed with count 0 and sends no push (D-5493 (2)). A digest that cannot be built claims nothing and is retried
+   * at the next beat. Never throws: one bad read must not kill the poll.
+   */
+  sweepDigest(now: number = Date.now()): void {
+    const coord = this.deps.coord;
+    if (!coord) return;
+    if (now - this.lastDigestBeat < 60_000) return;
+    this.lastDigestBeat = now;
+    try {
+      const hour = readDigestHour(this.deps.cfg.ccrcDir);
+      const day = digestDayFor(now, hour);
+      if (this.lastDigestDay === day) return;
+      // D-5493 (3): no pre-read of the `digests` row: the claim below is the one check, so it cannot be skipped by a reader that
+      // agrees with it. After a restart the day is built once more and the claim refuses it.
+      const w = digestWindow(day, hour);
+      const built = buildDigest(coord, w.fromMs, w.toMs);
+      if (!built.ok) {
+        console.warn(`ccrc-server: digest for ${day} not built (${built.detail}) — the next beat retries`);
+        return;
+      }
+      const n = built.digest.totals.decisions;
+      const claimed = coord.claimDigestDay(day, now, n);
+      this.lastDigestDay = day;
+      if (!claimed || n === 0) return;
+      const copy = digestPushCopy(day, built.digest.totals);
+      this.pushOne({ kind: 'coord', sessionId: '', project: '', title: copy.title, body: copy.body, tag: copy.tag,
+        url: copy.url, recordAlways: true }, this.activeProjects);
+    } catch (err) {
+      console.warn(`ccrc-server: sweepDigest failed (${err instanceof Error ? err.message : String(err)}) — the next beat retries`);
     }
   }
 

@@ -18,7 +18,7 @@ import { eventRunId, interruptLine, raisesUnread, recordKey, reviveNotifyEvents 
 import { api } from '../lib/api';
 import { navigate } from '../lib/router';
 import { ack, acksSnapshot, FEED_ACK_KEY, isUnseenAt, subscribeAcks } from '../lib/seen';
-import { BackButton, MAIL_GLYPH, SETTINGS_GLYPH, useNow } from '@ccrc/ui';
+import { BackButton, Button, MAIL_GLYPH, SETTINGS_GLYPH, useNow } from '@ccrc/ui';
 import { formatAge } from '../fleet/formatReset';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import '../fleet/fleet.css';
@@ -183,6 +183,8 @@ export function MailScreen({
           ‹
         </BackButton>
         <h1 className="mail-title">Mail</h1>
+        {/* The digest's standing door (D-5300, D-5493 (5)): the daily push opens it too, but a missed push must lose nothing. */}
+        <Button variant="ghost" size="fit" className="mail-digest" onClick={() => navigate('/digest')}>Digest</Button>
       </header>
 
       {/* The presence-gate asymmetry, said once and permanently. A record is

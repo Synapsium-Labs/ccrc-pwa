@@ -288,6 +288,10 @@ const CONTROLS: Record<string, string> = {
   // wraps it" — is unchanged as an argument; what changed is where it is
   // enforced. `RADIO_OPTION` carries `min-h-tap` and `tap-targets.test.tsx`
   // reads it off the component, exactly as it reads `TEXT_INPUT`'s.
+  'screens/DigestScreen.tsx <textarea> digest-correct-input':
+    'TOKEN. The digest\'s correction box (D-5300): `.digest-correct-input` is '
+    + '`min-height: calc(var(--tap-min) * 2)`, two floors tall, because it '
+    + 'opens at three rows for a sentence and grows by its own resize handle.',
   'session/Composer.tsx <textarea> composer-input':
     'TOKEN by VALUE — see FLOOR_BY_VALUE. `padding: 10px 0` around '
     + '`--fs-input` (16px) at `--lh-normal` (1.5) is 10 + 24 + 10 = 44 exactly, '

@@ -7636,6 +7636,74 @@ export class CoordStore {
     return Number(res.changes);
   }
 
+  // ── the daily digest (coordinator-first routing plan Task 17, spec §10, D-5300) ────────────────────────────────
+  //
+  // The digest is built from the durable `asks` and `approvals` tables only (the feed ring is not a source). These
+  // reads hand back every row with an instant inside `[fromMs, toMs)`; `digest.ts`'s `buildDigest` decides which of
+  // them is a coordinator's decision. `digests` is the beat's once-a-day mark; `corrected` the correction's.
+
+  /** Every ask row answered or released inside `[fromMs, toMs)`, oldest first, each with its `corrected` mark.
+   *  All-or-failure, like every list read here. */
+  digestAsks(fromMs: number, toMs: number):
+    { ok: true; rows: { ask: AskRow; corrected: boolean }[] } | { ok: false; detail: string } {
+    const rows = this.db.prepare(
+      `SELECT ${CoordStore.ASK_COLS}, corrected FROM asks ` +
+      'WHERE (answeredAt >= ? AND answeredAt < ?) OR (releasedAt >= ? AND releasedAt < ?) ORDER BY id',
+    ).all(fromMs, toMs, fromMs, toMs) as (Parameters<CoordStore['hydrateAsk']>[0] & { corrected: number })[];
+    const out: { ask: AskRow; corrected: boolean }[] = [];
+    for (const r of rows) {
+      const h = this.hydrateAsk(r);
+      if (!h.ok) return { ok: false, detail: h.detail };
+      out.push({ ask: h.ask, corrected: r.corrected === 1 });
+    }
+    return { ok: true, rows: out };
+  }
+
+  /** Every approval row minted, ruled or lapsed inside `[fromMs, toMs)`, oldest first. All-or-failure. */
+  digestApprovals(fromMs: number, toMs: number): ApprovalsReadResult {
+    return this.approvalRows(
+      'WHERE (askAt >= ? AND askAt < ?) OR (notifyAt >= ? AND notifyAt < ?) OR (ruledAt >= ? AND ruledAt < ?) ORDER BY id',
+      fromMs, toMs, fromMs, toMs, fromMs, toMs);
+  }
+
+  /** One ask row and its `corrected` mark, for the correction route. `null`: no such row. */
+  askForCorrection(id: number):
+    { ok: true; row: { ask: AskRow; corrected: boolean } | null } | { ok: false; detail: string } {
+    const r = this.db.prepare(`SELECT ${CoordStore.ASK_COLS}, corrected FROM asks WHERE id = ?`).get(id) as
+      (Parameters<CoordStore['hydrateAsk']>[0] & { corrected: number }) | undefined;
+    if (r === undefined) return { ok: true, row: null };
+    const h = this.hydrateAsk(r);
+    return h.ok ? { ok: true, row: { ask: h.ask, corrected: r.corrected === 1 } } : { ok: false, detail: h.detail };
+  }
+
+  /** The correction's mark (spec §10, §11), in ONE transaction with the mail that carries it: `queue` inserts the
+   *  system mail (`insertSystemMailTx`, which opens no transaction of its own), then the row is marked `corrected`,
+   *  kept, and counted as a wrong ruling. A throw in either rolls both back, so a marked row always has its mail. */
+  correctWithMail<T>(rowKind: 'ask' | 'approval', id: number, queue: () => T): T {
+    return tx(this.db, () => {
+      const queued = queue();
+      // Two literal statements, never a table named by interpolation (`delegation-wave3`'s closed scope census reads
+      // every UPDATE's table off its text).
+      if (rowKind === 'ask') this.db.prepare('UPDATE asks SET corrected = 1 WHERE id = ?').run(id);
+      else this.db.prepare('UPDATE approvals SET corrected = 1 WHERE id = ?').run(id);
+      return queued;
+    });
+  }
+
+  /** The beat's mark for one UTC day, or `null` when the beat has not run for it. */
+  digestDay(day: string): { day: string; sentAt: number; count: number } | null {
+    const r = this.db.prepare('SELECT day, sentAt, count FROM digests WHERE day = ?').get(day) as
+      { day: string; sentAt: number; count: number } | undefined;
+    return r ?? null;
+  }
+
+  /** The beat claims its day BEFORE it pushes: true only for the one call that inserted the row, so a restart, or a
+   *  second beat racing this one, finds the day taken and sends nothing (spec §10, "a restart never sends two"). */
+  claimDigestDay(day: string, sentAt: number, count: number): boolean {
+    const res = this.db.prepare('INSERT OR IGNORE INTO digests (day, sentAt, count) VALUES (?, ?, ?)').run(day, sentAt, count);
+    return Number(res.changes) > 0;
+  }
+
   // ── pool edges ────────────────────────────────────────────────────────
   //
   // Account-pool membership. `setAccountPools` copies `allocateDeviations`'s

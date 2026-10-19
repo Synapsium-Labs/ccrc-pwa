@@ -6,7 +6,7 @@ import type { AccountsResponse, AckAnswer, ApplyUpdateBody, AutoMode, CatalogueS
 import { raiseAuthLostFrom } from './auth';
 import { ARCHIVE_REFUSALS, isArchiveRefusal, type ArchiveAnswer, type ArchiveBody, type ArchiveRefusal } from '../../../shared/api';
 import { SWAP_REFUSALS, type SwapRefusal } from '../../../shared/api';
-import type { Dialog, DialogAnswered, DialogTabRequest, InterruptRouteSource } from '../../../shared/api';
+import type { Dialog, DialogAnswered, DialogTabRequest, DigestAnswer, DigestCorrectAnswer, DigestCorrectBody, InterruptRouteSource } from '../../../shared/api';
 
 import { isNodeRole } from '../../../shared/node-role';
 import { TOKEN_TRANSPORTS } from '../../../shared/agent-protocol';
@@ -1278,6 +1278,16 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  happened". */
     setCollectLane: (body: CollectLaneRequest) =>
       postJsonOr<CollectLaneView | 'unreadable'>('/api/coord/collect-lane', 'unreadable', body),
+    /** `GET /api/digest?day=` (coordinator-first routing spec §10, D-5300): the digest of what coordinators decided
+     *  in the operator's name for one UTC day, or, with no day, the newest whose window has closed. The digest screen
+     *  reads it through `asDigestAnswer`, the wire guard. Session-gated when armed; no box token. */
+    digest: (day?: string) =>
+      getJson<DigestAnswer>(day === undefined ? '/api/digest' : `/api/digest?day=${encodeURIComponent(day)}`),
+    /** `POST /api/digest/correct` (D-5300): one line's correction, mailed verbatim to that line's coordinator. A 409
+     *  (`not-coordinator`, `duplicate`) rejects with `ApiError` like every non-2xx. `postJson`, not `postJsonOr`: the
+     *  screen reads nothing off the answer but its arrival, and a write whose answer was unreadable is shown as sent
+     *  only after the next read of the digest says `corrected`. */
+    correctDigest: (body: DigestCorrectBody) => postJson<DigestCorrectAnswer>('/api/digest/correct', body),
     commands: (id: string) =>
       getJson<{ builtins: SlashCommand[]; skills: SlashCommand[] }>(`${sid(id)}/commands`),
     upload: async (id: string, file: File): Promise<StagedClip> => {

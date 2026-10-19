@@ -1661,6 +1661,28 @@ export const MIGRATIONS: readonly string[] = [
   CREATE INDEX approvals_by_parent ON approvals(parentId, state);
   CREATE INDEX approvals_by_state ON approvals(state, notifyAt);
   `,
+  // ── 25: user_version 24 -> 25 ─────────────────────────────────────────────
+  // D-5300 (coordinator-first routing spec 2026-10-17 §10, plan Task 17): the daily digest's idempotence and its
+  // correction mark. `digests` holds one row per UTC day the digest beat ran for (`day` is `YYYY-MM-DD`), inserted
+  // BEFORE the push, so a restart at the digest hour finds the row and sends no second push; `count` is the decisions
+  // it listed (0: the day had none and no push went). `asks.corrected` is the asks' half of the mark the approvals
+  // table already carries (`approvals.corrected`, migration 24): 1 once the operator sent a correction on the row,
+  // which spec §11 counts as a wrong ruling.
+  //
+  // A NEW TABLE AND ONE ADDITIVE COLUMN with a constant default, and nothing else: an older build opening a file at
+  // `user_version 25` takes rule 3 (it warns, reads as-is and migrates nothing), never names the table, and its asks
+  // inserts, which never name the column, store 0. Every earlier entry is frozen. RE-MEASURE the slot immediately
+  // before the PR and before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE digests (
+    day    TEXT    PRIMARY KEY CHECK (length(day) = 10),
+    sentAt INTEGER NOT NULL,
+    count  INTEGER NOT NULL
+  );
+  ALTER TABLE asks ADD COLUMN corrected INTEGER NOT NULL DEFAULT 0;
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a
