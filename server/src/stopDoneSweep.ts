@@ -115,7 +115,11 @@ function storeReadFor(
       openWorker: last.openWorkers.includes(id),
       openClaimant: last.openClaimants.includes(id),
       claim: claimants.has(id),
-      mail: coord.outstandingMailFor(id, 1).length > 0,
+      // D-5838: a PARKED row does not veto (it waits on its box, up to 24 h, and
+      // would keep a finished worker resident that long). Stopping it leaves the
+      // row to the lifecycle rung, which rejects a stopped recipient's mail
+      // `recipient-stopped` exactly as before the park existed.
+      mail: coord.outstandingMailFor(id).some((m) => m.parkedAt == null),
       reviewing: (() => {
         const r = expiryReviewing(coord, id);
         if (!r.ok) throw new Error(r.detail);
