@@ -2525,6 +2525,38 @@ describe('W2-4 Task 8: step0a end to end', () => {
     expect(stubLog(home)).toBeNull();
   }, 60_000);
 
+  // D-5813: a model id the argv builder would throw on, and a ':' in HOME or --out (PATH's separator), are operator
+  // inputs: a driver word before --out is made, never exit 1 after the writer run has spent.
+  it.each(['writer-model', 'judge-model', 'arm-model'])('a malformed --%s is refused args-invalid before --out is made, with no spawn and no spend', (flag) => {
+    for (const bad of ['fx judge', '-x']) {
+      const home = t8Home('ccrc-w2-t8-badmodel-');
+      const out = t8Out();
+      const r = t8Run(t8Tree(), home, t8Argv(out, { [flag]: bad }));
+      expect(r.code, `${bad}: ${r.stderr}`).toBe(2);
+      expect(r.stderr, bad).toBe(`ccrc history-replay: args-invalid: ${flag} ${JSON.stringify(bad)} is not a model id\n`);
+      expect(stubLog(home), `${bad}: nothing spawned`).toBeNull();
+      expect(existsSync(out), `${bad}: --out not made`).toBe(false);
+    }
+    const home = t8Home('ccrc-w2-t8-goodmodel-');
+    const control = t8Run(t8Tree(), home, t8Argv(t8Out(), { [flag]: 'fixture-model-ok.1:x' }));
+    expect(control.code, `CONTROL: ${control.stderr}`).toBe(0);
+  }, 120_000);
+
+  it("a ':' in HOME or in --out is refused args-invalid before --out is made and before any spawn", () => {
+    const home = t8Home('ccrc-w2-t8-colon-');
+    const out = t8Out();
+    const inHome = t8Run(t8Tree(), home, t8Argv(out), { HOME: '/fixture/home:x' });
+    expect(inHome.code).toBe(2);
+    expect(inHome.stderr).toBe("ccrc history-replay: args-invalid: HOME contains ':'\n");
+    expect(existsSync(out)).toBe(false);
+    const colonOut = path.join(mkTmp('ccrc-w2-t8-colonout-'), 'out:x');
+    const inOut = t8Run(t8Tree(), home, t8Argv(colonOut));
+    expect(inOut.code).toBe(2);
+    expect(inOut.stderr).toBe("ccrc history-replay: args-invalid: out contains ':'\n");
+    expect(existsSync(colonOut)).toBe(false);
+    expect(stubLog(home)).toBeNull();
+  }, 60_000);
+
   it('a settings mode outside SETTINGS_MODES is refused args-invalid before any spawn', () => {
     const home = t8Home('ccrc-w2-t8-settings-');
     const r = t8Run(t8Tree(), home, t8Argv(t8Out(), { 'settings-mode': 'open' }));
@@ -2862,6 +2894,47 @@ describe('W2-4 Task 9: the probe, a box verb and an early check only, W2-D58', (
     const doc = JSON.parse(t9Fs.readFileSync(t9Path.join(out, 'probe.json'), 'utf8'));
     expect(doc.spellings.map((s: { ran: boolean; denied: boolean; result_seen: boolean }) => [s.ran, s.denied, s.result_seen]))
       .toEqual([[true, false, false], [false, false, false], [false, false, false]]);
+  });
+
+  // D-5813: operator inputs the probe refuses with a driver word, and one HOME spelling shared by argv and prompt.
+  it('a malformed --arm-model, a ":" in HOME or in --out, and an absent or non-executable launcher are driver refusals before any spawn', () => {
+    const rows: Array<{ name: string; line: string; env?: Record<string, string>; args?: (out: string) => string[]; prep?: (home: string) => void }> = [
+      { name: 'space in model', args: (out) => t9Args(out).map((a) => (a === T9_MODEL ? 'fx arm' : a)), line: 'ccrc history-replay: args-invalid: arm-model "fx arm" is not a model id\n' },
+      { name: 'leading dash model', args: (out) => t9Args(out).map((a) => (a === T9_MODEL ? '-x' : a)), line: 'ccrc history-replay: args-invalid: arm-model "-x" is not a model id\n' },
+      { name: 'colon in HOME', env: { HOME: '/fixture/home:x' }, line: "ccrc history-replay: args-invalid: HOME contains ':'\n" },
+      { name: 'colon in out', args: (out) => t9Args(`${out}:x`), line: "ccrc history-replay: args-invalid: out contains ':'\n" },
+      { name: 'absent launcher', prep: (home) => t9Fs.rmSync(t9Path.join(home, '.local', 'bin', 'up-a')), line: 'ccrc history-replay: account-refused: launcher-ENOENT\n' },
+      ...(process.getuid?.() === 0 ? [] : [{ name: 'non-executable launcher', prep: (home: string) => t9Fs.chmodSync(t9Path.join(home, '.local', 'bin', 'up-a'), 0o644), line: 'ccrc history-replay: account-refused: launcher-EACCES\n' }]),
+    ];
+    for (const c of rows) {
+      const { home, out } = t9Box(`ccrc-replay-t9-input-${c.name.replace(/[^a-z]/g, '-')}-`);
+      c.prep?.(home);
+      const r = runDriver(home, (c.args ?? t9Args)(out), c.env);
+      expect(r.code, `${c.name}: ${r.stderr}`).toBe(2);
+      expect(r.stderr, c.name).toBe(c.line);
+      expect(stubLog(home), `${c.name}: nothing was spawned`).toBeNull();
+      expect(t9Fs.existsSync(t9Path.join(out, 'probe')), `${c.name}: no stream file`).toBe(false);
+      expect(t9Fs.existsSync(t9Path.join(out, 'probe.json')), c.name).toBe(false);
+      if (!c.name.includes('colon in out')) continue;
+      expect(t9Fs.existsSync(`${out}:x`), 'the colon --out was not made').toBe(false);
+    }
+  });
+
+  it('a HOME with a trailing slash gives the probe one spelling: the first taught spelling in the argv is the one its prompt asks for', () => {
+    const { home, out } = t9Box('ccrc-replay-t9-trailing-');
+    t9Fs.writeFileSync(t9Path.join(home, STUB_STREAM), t9Stream({ sessionId: 'sess-probe', assistants: 1, result: { numTurns: 1 } }));
+    const r = runDriver(home, t9Args(out), { HOME: `${home}/` });
+    expect(r.code, r.stderr).toBe(0);
+    const log = stubLog(home) as T9Entry[];
+    expect(log).toHaveLength(3);
+    const first = `${home}/.local/bin/ccrc history status --json`;
+    for (const e of log) {
+      expect(e.argv).toContain(`Bash(${home}/.local/bin/ccrc history:*)`);
+      expect(e.stdin).not.toContain(`${home}//`);
+    }
+    expect(log.filter((e) => e.stdin.includes(first)), 'the prompt asks for the spelling the argv carries').toHaveLength(1);
+    const doc = JSON.parse(t9Fs.readFileSync(t9Path.join(out, 'probe.json'), 'utf8'));
+    expect(doc.spellings[0].spelling).toBe(`Bash(${home}/.local/bin/ccrc history:*)`);
   });
 
   it('refused before any spawn: an external account, a missing budget, a flag the probe never reads, a limits row at the threshold', () => {

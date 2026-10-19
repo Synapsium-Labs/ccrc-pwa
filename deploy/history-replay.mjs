@@ -1325,6 +1325,22 @@ function requireFlag(flags, name) {
   return flags[name];
 }
 
+/** D-5813: the operator inputs that would otherwise surface as a TypeError (exit 1) from spawnArgv or spawnEnv after
+ *  --out is made, or after step 0a's writer run has spent. HOME and the resolved --out must not hold ':' (PATH's
+ *  separator), and every model flag given must be a model id (MODEL_RE). A model flag that is absent is left to its
+ *  own `<flag>-required` refusal, in its handler's order. The TypeErrors stay as defence.
+ *  @param {string} home  @param {string} outArg
+ *  @param {ReadonlyArray<readonly [string, unknown]>} models flag name and value */
+function refuseUnusableInputs(home, outArg, models) {
+  if (home.includes(':')) refuse('args-invalid', "HOME contains ':'");
+  if (path.resolve(outArg).includes(':')) refuse('args-invalid', "out contains ':'");
+  for (const [flag, value] of models) {
+    if (value !== undefined && !MODEL_RE.test(value)) {
+      refuse('args-invalid', `${flag} ${JSON.stringify(value)} is not a model id`);
+    }
+  }
+}
+
 /** Every flag the runs' argvs carry (a token that starts with '-'; no contract value does). A flag is true only when
  *  no run reported it as an unknown option AND at least one run whose argv carries it emitted an init event
  *  (`facts.init !== null`): a flag whose every run died before Claude Code reached its init was not measured, and
@@ -1389,9 +1405,11 @@ function pinStep0aLaunch(dir, now) {
 }
 
 export async function step0aCommand(flags, env) {
-  const home = env.HOME;
-  if (typeof home !== 'string' || !path.isAbsolute(home)) refuse('args-invalid', 'HOME is unset or not absolute');
-  const out = prepareOut(requireFlag(flags, 'out'));
+  if (typeof env.HOME !== 'string' || !path.isAbsolute(env.HOME)) refuse('args-invalid', 'HOME is unset or not absolute');
+  const home = path.resolve(env.HOME);   // D-5813: one spelling of HOME for every path and every taught spelling below
+  const outArg = requireFlag(flags, 'out');
+  refuseUnusableInputs(home, outArg, STEP0A_RUNS.map((r) => [r.modelFlag, flags[r.modelFlag]]));
+  const out = prepareOut(outArg);
   const { json, roster } = readRoster(home);
   const launch = admitAccount(json, roster, requireFlag(flags, 'account'), home);
   const budget = requireFlag(flags, 'budget');
@@ -1538,12 +1556,19 @@ export async function probeCommand(flags, env) {
   for (const k of PROBE_REQUIRED) if (flags[k] === undefined) refuse('args-invalid', `${k}-required`);
   const settingsMode = flags['settings-mode'] ?? 'restricted';
   if (!SETTINGS_MODES.includes(settingsMode)) refuse('args-invalid', `settings-mode ${settingsMode}`);
-  const home = env.HOME;
-  if (typeof home !== 'string' || !path.isAbsolute(home)) refuse('args-invalid', 'HOME is unset or not absolute');
+  if (typeof env.HOME !== 'string' || !path.isAbsolute(env.HOME)) refuse('args-invalid', 'HOME is unset or not absolute');
+  const home = path.resolve(env.HOME);   // D-5813: one spelling of HOME for the argv, the prompts and probe.json
+  refuseUnusableInputs(home, flags.out, [['arm-model', flags['arm-model']]]);
   const out = prepareOut(flags.out);
   const { json, roster } = readRoster(home);
   const launch = admitAccount(json, roster, flags.account, home);
   if (flags.budget === undefined) refuse('args-invalid', 'budget-required');
+  // D-5813: an absent or non-executable launcher is an account that cannot be launched, a driver refusal, not a raw spawn error.
+  try {
+    accessSync(launch.launcher, constants.X_OK);
+  } catch (e) {
+    refuse('account-refused', `launcher-${e?.code ?? 'unknown'}`);
+  }
   const gate = batchGate({ out, home, accountId: launch.accountId, budget: flags.budget, limits: LIMITS_DEFAULTS });
   const spellings = allowedToolSpellings(home);
   const jobs = spellings.map((spelling, i) => ({
