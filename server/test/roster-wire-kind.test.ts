@@ -34,7 +34,7 @@ const ROSTER = {
     entry('lane-d', 'magenta', { kind: 'generated', provider: 'openrouter', secretsFile: '.cc-secrets/lane-d.env' }),
     entry('lane-e', 'amber', {
       kind: 'generated', provider: 'compatible', baseUrl: 'https://compatible.example.invalid', secretsFile: '.cc-secrets/lane-e.env',
-    }),
+    }, 'anthropic'), // a key lane whose telemetry is not 'none' pins the passthrough on the key branch (D-5517)
     entry('lane-f', 'green', { kind: 'external' }),
     entry('lane-g', 'cyan', { kind: 'external', provider: 'openai' }),
     // The file, not `exec.kind`, decides token vs sign-in: a generated Anthropic lane with no file is sign-in
@@ -65,7 +65,7 @@ describe('rosterKindOf: the lane kind, derived once from the parsed entry (D-551
     // §4.1's chips: `chatgpt · codex`, `openrouter · key`, `compatible · key`.
     expect(rosterKindOf(byId('lane-c'))).toEqual({ provider: 'openai', kind: 'codex', telemetry: 'codex', managed: true });
     expect(rosterKindOf(byId('lane-d'))).toEqual({ provider: 'openrouter', kind: 'key', telemetry: 'none' });
-    expect(rosterKindOf(byId('lane-e'))).toEqual({ provider: 'compatible', kind: 'key', telemetry: 'none' });
+    expect(rosterKindOf(byId('lane-e'))).toEqual({ provider: 'compatible', kind: 'key', telemetry: 'anthropic' });
   });
 
   it('an Anthropic lane with `exec.secretsFile` is token, and one without it is sign-in', () => {
@@ -121,7 +121,7 @@ describe('GET /api/accounts carries the kind on every roster entry (D-5517)', ()
       'lane-b': ['anthropic', 'token', 'anthropic', undefined],
       'lane-c': ['openai', 'codex', 'codex', true],
       'lane-d': ['openrouter', 'key', 'none', undefined],
-      'lane-e': ['compatible', 'key', 'none', undefined],
+      'lane-e': ['compatible', 'key', 'anthropic', undefined],
       'lane-f': [undefined, undefined, 'none', undefined],
       'lane-g': ['openai', 'codex', 'none', false],
       'lane-h': ['anthropic', 'sign-in', 'anthropic', undefined],
