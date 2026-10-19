@@ -257,6 +257,7 @@ const GRANDFATHERED_UNCOVERED = new Set([
   '.task-line',
   '.task-glyph',
   '.task-row--in_progress .task-glyph',
+  '.task-row--in_progress.task-row--stale .task-glyph',
   '.task-row--completed .task-subject',
   '.task-row--completed .task-glyph',
   '.task-detail',
@@ -266,6 +267,7 @@ const GRANDFATHERED_UNCOVERED = new Set([
   '.sys-divider--restart',
   '.sys-divider--stalled',
   '.sys-divider--limit',
+  '.sys-divider--idle',
   '.msg-receipt',
   '.msg-receipt--ok b',
   '.msg-receipt--failed',
@@ -1134,8 +1136,9 @@ describe('every stylesheet under src/ is audited', () => {
     //
     // THE TWO HALVES ARE PINNED DIFFERENTLY, ON PURPOSE.
     //
-    // The APP's stylesheets are a CLOSED set — four files, and a fifth is an
-    // architectural event worth a test edit. They stay an exact literal.
+    // The APP's stylesheets are a CLOSED set — five files (the fifth, docs.css,
+    // is the native Docs reader's), and a sixth is an architectural event worth
+    // a test edit. They stay an exact literal.
     //
     // @ccrc/ui's are OPEN: the design system gains a stylesheet every time it
     // gains a component, because each component's CSS is colocated with it.
@@ -1155,7 +1158,9 @@ describe('every stylesheet under src/ is audited', () => {
             : [],
       );
     const APP_SHEETS = [
+      'src/docs/docs.css',
       'src/fleet/fleet.css',
+      'src/screens/digest.css',   // the daily digest screen (D-5300)
       'src/session/chat.css',
       'src/styles/base.css',
       'src/styles/shell.css',
@@ -1354,7 +1359,7 @@ describe('every hand-typed copy of a tokens.css colour is bound to it', () => {
     'design/contrast-check.mjs': 'one hex inside a prose comment explaining why a pair takes attention-TEXT and not the dot hue; no colour is typed into the gate itself (palette() looks every one up by token)',
     'test/contrast.test.ts': 'the hand-computed arithmetic controls this file exists to carry, each already asserted against resolveColor',
     'test/fleet-css.test.ts': 'one hex inside a prose comment about --accent and --status-busy sharing a value',
-    'src/session/terminalFactory.ts': 'the xterm 16-colour ANSI palette. The four that matter (background, foreground, cursor, cursorAccent) already come from tokenValue(); the ANSI 16 are a separate table that reuses seven brand hues and adds eight bright variants that are not tokens. Reported, not bound — the file is outside the css lane',
+    'src/session/drawerModel.ts': 'the xterm 16-colour ANSI palette, GLASS_ANSI, moved out of terminalFactory.ts glass() so the terminal theme and the wrapped view read one table (D-5006). The four that matter (background, foreground, cursor, cursorAccent) already come from tokenValue() in glass(); the ANSI 16 are a separate table that reuses seven brand hues and adds eight bright variants that are not tokens. Reported, not bound — the file is outside the css lane',
   };
 
   const walk = (dir: string, out: string[] = []): string[] => {
@@ -2037,5 +2042,87 @@ describe('the child-of-run label is measured, not left in the blind spot (wave 5
     // .sess-spawn and .sess-repo are held to a few describes above.
     expect(rows, key).toHaveLength(THEME_COUNT);
     for (const row of rows) expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
+  });
+});
+
+// ── native Docs reader W5 part 1, Task 11: the Docs door and the Docs screen's chrome (M4.S1, its docs-chrome form) ──
+// Every rule in docs/docs.css that sets a colour is measured in both themes, on the ground it paints itself, through
+// a painted ancestor its selector names, or on a ground registered in INHERITED_GROUNDS with its reason; none joins
+// the frozen census and none is grandfathered. Every palette is measured (THEME_COUNT rows a rule, as its siblings
+// above), and a rule's key is its selector alone (`ruleKey`). The door has two grounds, as the retired `.settings-door`
+// entry did: registered on the page, and measured here on `.shell-nav`'s --bg-surface off the rule's own ink, so a
+// retint re-measures both (the `.build-line` precedent above, in the other direction).
+describe('the Docs chrome is measured, not left in the blind spot (M4.S1)', () => {
+  const docsRules = rulesOf(ROOT, 'src/docs/docs.css');
+  const NOT_A_COLOUR = /^(inherit|currentColor|unset|initial|revert)$/i;
+  const colourRules = docsRules.filter((r) => {
+    const ink = declOf(r.body, 'color');
+    return ink !== null && !NOT_A_COLOUR.test(ink);
+  });
+  /** The measured rows of one rule: the rule as a pair of its own (painted, or registered), or as a descendant
+   *  measured through the painter its selector names. */
+  const rowsOf = (key: string): typeof report.measured => report.measured.filter((m) => {
+    const label = m.label.replace(/^\S+\s+/, '');
+    return label === key || label.startsWith(`${key} [in `);
+  });
+  const inkOf = (key: string): string => {
+    const rule = docsRules.find((r) => ruleKey(r) === key);
+    expect(rule, key).toBeDefined();
+    const ink = declOf((rule as { body: string }).body, 'color');
+    expect(ink, key).not.toBeNull();
+    return ink as string;
+  };
+
+  it('finds the sheet and its colour rules (not a vacuous pass)', () => {
+    expect(report.sheets).toContain('src/docs/docs.css');
+    expect(colourRules.length).toBeGreaterThanOrEqual(28);
+  });
+
+  it('measures every docs rule that sets a colour in both themes, at or above its floor', () => {
+    for (const r of colourRules) {
+      const key = ruleKey(r);
+      expect(report.uncovered, key).not.toContain(key);
+      const rows = rowsOf(key);
+      expect(rows.map((m) => m.label.split(/\s+/)[0]), key).toContain('DARK');
+      expect(rows.map((m) => m.label.split(/\s+/)[0]), key).toContain('LIGHT');
+      expect(rows, key).toHaveLength(THEME_COUNT);
+      for (const row of rows) expect(row.ratio, row.label).toBeGreaterThanOrEqual(row.floor);
+    }
+  });
+
+  it('grandfathers nothing from docs.css, and every docs registration is on the page with a reason', () => {
+    const docsKeys = new Set(docsRules.map(ruleKey));
+    expect([...GRANDFATHERED_UNCOVERED].filter((k) => docsKeys.has(k))).toEqual([]);
+    const registered = Object.entries(INHERITED_GROUNDS).filter(([k]) => docsKeys.has(k));
+    expect(registered.length).toBeGreaterThanOrEqual(20);
+    for (const [key, entry] of registered) {
+      expect(entry.under, key).toEqual(['var(--bg-page)']);
+      expect(entry.why.length, key).toBeGreaterThan(40);
+      expect(docsRules.some((r) => ruleKey(r) === key), key).toBe(true);
+    }
+  });
+
+  it.each([
+    ['.docs-door'],
+    ['.docs-door:active'],
+    ['.docs-door:hover, .docs-back:hover, .docs-crumb:hover, .docs-crumbs-more:hover'],
+  ])('%s is registered on the page and also clears AA on the desktop sidebar it sits on', (key) => {
+    expect(INHERITED_GROUNDS[key]?.under).toEqual(['var(--bg-page)']);
+    for (const row of rowsOf(key)) expect(row.detail, row.label).toContain(`${inkOf(key)} on var(--bg-page)`);
+    for (const theme of [DARK, LIGHT]) {
+      expect(ratio(inkOf(key), ['var(--bg-surface)'], theme), key).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  // A text scan, NOT EXHAUSTIVE: it finds a hex colour, a colour function (`rgb(`, `rgba(`, `hsl(`, `hsla(`, `hwb(`,
+  // `lab(`, `lch(`, `oklab(`, `oklch(`, `color(`) and the named colours listed below, outside comments. It does not
+  // find a named colour missing from that list, a system colour (`Canvas`, `CanvasText`), or a colour that arrives
+  // through an image or an `@property` initial value; `currentColor` and `transparent` are allowed on purpose.
+  it('spells no literal colour (tokens only, section 4.14)', () => {
+    const text = docsRules.map((r) => r.body).join(';');
+    const NAMED = /:\s*[^;]*\b(black|white|red|green|blue|yellow|orange|purple|gray|grey|silver|maroon|navy|teal|olive|lime|aqua|fuchsia|pink|brown)\b/i;
+    expect(text).not.toMatch(/#[0-9a-f]{3,8}\b/i);
+    expect(text).not.toMatch(/(?<![\w-])(rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\(/i);
+    expect(text).not.toMatch(NAMED);
   });
 });

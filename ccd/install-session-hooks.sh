@@ -32,12 +32,19 @@ HOOK_CMD='bash "$HOME/.cc-sessions/session-hook.sh"'
 # card): an operator decision, not this fix's. SessionEnd's entry carries NONE: Claude Code
 # runs SessionEnd hooks under its own 1.5 s budget (CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS,
 # measured on 2.1.292), which a configured `timeout` RAISES, to min(timeout, 60 s), on every
-# exit and /clear; and the spool append never runs on SessionEnd.
+# exit and /clear; and the history spool append never runs on SessionEnd. The delegation spool's append does (delegation broker
+# wave 3): one `printf` to a regular file the hook has just tested, in builtins, so it fits that budget, and the FIFO hazard
+# above applies to it the same way (a SessionEnd killed at 1.5 s loses one hint, which the census backstops).
 HOOK_TIMEOUT_S=600
 # Same discipline as HOOK_CMD: $HOME left unexpanded, resolved per-session.
 STATUSLINE_CMD='bash "$HOME/.claude/statusline-command.sh"'
 # Events that get a matcher-less managed entry. PreToolUse is handled
-# separately below because it alone carries matcher "*".
+# separately below because it alone carries matcher "*", which reaches every tool: Agent, Task, Workflow and Bash for the
+# delegation spool (the hook decides what to record; ToolSearch is a tool name, not an event, and records nothing).
+# The delegation spool records SessionStart, PreToolUse, PostToolUse, SubagentStart, SubagentStop, UserPromptSubmit and
+# SessionEnd, every one of which is below. WorktreeCreate and WorktreeRemove are NEVER registered: a registered hook for
+# either REPLACES Claude Code's own worktree handling (spec 2026-10-04 §3.1), and creation and removal are measured by the
+# census instead. `install-session-hooks.test.ts` pins both halves.
 #
 # This list and session-hook.sh's `case "$event"` arms are the same set written
 # twice, and they DRIFTED: the hook grew a SessionStart arm (F1) that was never
@@ -141,4 +148,46 @@ for dir in "${homes[@]}"; do
   tmp="$f.tmp.$$"
   jq . <<<"$next" > "$tmp" && mv -f "$tmp" "$f" || { rm -f "$tmp"; rc=1; }
 done
+
+# THE CHILDREN'S DENY FILE (spec §6.6, plan Task 15, D-5299). ONE managed file per box,
+# `~/.cc-sessions/child-deny.settings.json`, whose `permissions.deny` is `CHILD_DENY_RULES`
+# (`shared/api.ts`); `ccd` passes it with `--settings` only when it spawns a row with
+# `.child`, so no home's own settings.json is touched and top-level sessions keep today's
+# settings ("Children only"). This is the documented second copy, held equal to the
+# TypeScript list by iteration in `install-session-hooks.test.ts`. The path-qualified
+# forms (`Bash(*/ccd ws-rm:*)` and the like) wait on plan Task 13's rig result:
+# CHILD_DENY_PATH_QUALIFIED is the bash twin of the TypeScript constant: turning them on is
+# two flips (the iteration test holds them equal) and one test update (the `false` pin).
+CHILD_DENY_PATH_QUALIFIED=0
+CHILD_DENY_FILE="$HOME/.cc-sessions/child-deny.settings.json"
+_child_deny_json() {
+  local heads_ccd=(ccd) heads_ccrc=(ccrc) v h rules=()
+  if (( CHILD_DENY_PATH_QUALIFIED )); then
+    heads_ccd+=('*/ccd' '~/.local/bin/ccd'); heads_ccrc+=('*/ccrc' '~/.local/bin/ccrc')
+  fi
+  for v in ws-rm ws-reap 'ws-gc --prune' ws-archive ws-restore ws-reclaim ws-expire ws-collect; do
+    for h in "${heads_ccd[@]}"; do rules+=("Bash($h $v:*)"); done
+  done
+  for v in update rollback; do
+    for h in "${heads_ccrc[@]}"; do rules+=("Bash($h $v:*)"); done
+  done
+  printf '%s\n' "${rules[@]}" | jq -R . | jq -s '{permissions:{deny:.}}'
+}
+# --remove leaves the file alone (D-5392): it is the BOX's, and `ccrc account remove`
+# runs `--remove --homes <one home>`, so deleting it here stripped every other account's
+# children of the deny layer. `ccrc uninstall`'s `_uninst_cc_sessions` is its one remover.
+if [[ "$MODE" != remove ]]; then
+  # The parent by expansion, never `dirname`: `ccrc doctor --fix` re-runs this script on the
+  # doctor's own PATH, which carries no `dirname` (its delegation-hooks --fix fixture holds it).
+  mkdir -p -- "${CHILD_DENY_FILE%/*}" 2>/dev/null || :
+  if ! deny_next=$(_child_deny_json) || ! jq empty <<<"$deny_next"; then
+    echo "install-session-hooks: could not build $CHILD_DENY_FILE" >&2; rc=1
+  # Byte-level converge, as the homes above: an unchanged file keeps its bytes (and so
+  # its digest, which every child's `.deny-settings` was recorded against).
+  elif [[ -L "$CHILD_DENY_FILE" || ! -f "$CHILD_DENY_FILE" || "$(cat "$CHILD_DENY_FILE")" != "$deny_next" ]]; then
+    deny_tmp="$CHILD_DENY_FILE.tmp.$$"
+    printf '%s\n' "$deny_next" > "$deny_tmp" && mv -f "$deny_tmp" "$CHILD_DENY_FILE" \
+      || { rm -f "$deny_tmp"; echo "install-session-hooks: could not write $CHILD_DENY_FILE" >&2; rc=1; }
+  fi
+fi
 exit "$rc"

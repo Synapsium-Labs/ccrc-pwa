@@ -2,21 +2,52 @@
 // WebSocket streams; every WRITE goes through here. Each function throws
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
-import type { AccountsResponse, AckAnswer, ApplyUpdateBody, AutoMode, CatalogueState, CatchUp, ClaimSummary, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, MoveSkipWhy, NotifyEvent, NotifyMode, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, RollbackUpdateBody, RouteField, RouteFields, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, UpdateChannel, UpdateRouteError, UpdatesView, WsAudit } from '../../../shared/api';
+import type { AccountsResponse, AckAnswer, ApplyUpdateBody, AutoMode, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, MoveSkipWhy, NotifyEvent, NotifyMode, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, RollbackUpdateBody, RouteField, RouteFields, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, StepUpAnswer, StepUpStart, UpdateChannel, UpdateRouteError, UpdatesView, WsAudit } from '../../../shared/api';
 import { raiseAuthLostFrom } from './auth';
 import { ARCHIVE_REFUSALS, isArchiveRefusal, type ArchiveAnswer, type ArchiveBody, type ArchiveRefusal } from '../../../shared/api';
+import { SWAP_REFUSALS, type SwapRefusal } from '../../../shared/api';
+import type { Dialog, DialogAnswered, DialogTabRequest, DigestAnswer, DigestCorrectAnswer, DigestCorrectBody, InterruptRouteSource } from '../../../shared/api';
+
 import { isNodeRole } from '../../../shared/node-role';
 import { TOKEN_TRANSPORTS } from '../../../shared/agent-protocol';
 import {
   BOX_TOKEN_PHASES, OWED_REASONS, TOKEN_FILE_PROBLEMS, TOKEN_HOLDS, TOKEN_ORIGINS, TOKEN_ROTATE_PATH, type BoxTokenView,
   type RotateAnswer,
 } from '../../../shared/box-token';
+import {
+  DOCS_REQUEST_HEADER, DOCS_REQUEST_HEADER_VALUE, contentClass, docsApi, type DocsFileResponse, type DocsProjectsResponse,
+  type DocsRefreshResponse, type DocsTreeResponse,
+} from '../../../shared/docs';
+import {
+  declaredRaster, docsAnswerFromError, readDocsEnvelope, readDocsRaster, type DocsAnswer, type DocsLoaders,
+} from '../docs/failures';
+
+/** An answer route's 200 that could not be read: the answer landed, and the next screen is unknown (`next` absent). */
+const ANSWERED: DialogAnswered = { ok: true };
+
+/** An answer route's 200 body, read (decision `ask-answer-returns-next-screen`): `next` kept only when it is null or
+ *  looks like a Dialog (a string id, a boolean `parsed`, an options array). Anything else reads as absent, which leaves
+ *  the sheet on the session stream's next frame, as before. */
+function answered(body: unknown): DialogAnswered {
+  if (body === null || typeof body !== 'object' || !('next' in body)) return ANSWERED;
+  const next = (body as { next: unknown }).next;
+  if (next === null) return { ok: true, next: null };
+  const d = next as Partial<Dialog> | undefined;
+  return d !== undefined && typeof d === 'object' && typeof d.id === 'string' && typeof d.parsed === 'boolean'
+    && Array.isArray(d.options) && typeof d.raw === 'string' && typeof d.title === 'string'
+    ? { ok: true, next: d as Dialog }
+    : ANSWERED;
+}
 
 export class ApiError extends Error {
   readonly status: number;
   readonly body: unknown;
+  /** The response's `content-type` header; `null` has one meaning: the response carried none (Docs W5, spec 4.3:
+   *  the docs client's `unexpected-response` names it). A header that is present but empty is `''`, which the docs
+   *  client folds with `null` as "absent or empty". Absent from the constructor's arguments, also `null`. */
+  readonly contentType: string | null;
 
-  constructor(status: number, body: unknown) {
+  constructor(status: number, body: unknown, contentType: string | null = null) {
     const serverError =
       typeof body === 'object' && body !== null && 'error' in body
         && typeof (body as { error: unknown }).error === 'string'
@@ -26,6 +57,7 @@ export class ApiError extends Error {
     this.name = 'ApiError';
     this.status = status;
     this.body = body;
+    this.contentType = contentType;
   }
 }
 
@@ -256,6 +288,19 @@ export const ARCHIVE_REFUSAL_TEXT: Readonly<Record<ArchiveRefusal, string>> = {
   [ARCHIVE_REFUSALS.worktreeGone]: 'Its worktree is gone, so it cannot be described for the archive record.',
   [ARCHIVE_REFUSALS.statusUnknown]: 'Its status cannot be read, so it will not be archived on a guess.',
   [ARCHIVE_REFUSALS.manifestUnbuildable]: 'It cannot be described truthfully for the archive record. Nothing was touched.',
+};
+
+/**
+ * The swap route's refusals in words (D-5240, working-state spec §5.9), keyed by `SWAP_REFUSALS`, never a second
+ * spelling. Not spread into `API_ERROR_TEXT`: the two codes are archive's too, and a toast that reads an archive
+ * sentence about a swap would be wrong, so `SwapSheet` reads this map itself. A first `sessionBusy` is answered with
+ * the "swap anyway" confirm, not with this sentence; the sentence is for a refusal no consent is left to answer.
+ */
+export const SWAP_REFUSAL_TEXT: Readonly<Record<SwapRefusal, string>> = {
+  [SWAP_REFUSALS.sessionBusy]: 'It is working — moving it now would lose the turn in progress and its background tasks.',
+  [SWAP_REFUSALS.statusUnknown]: 'Its status cannot be read, so it will not be moved on a guess. Stop it first, then move it.',
+  // D-5242: the row is asleep; nothing runs to move. Waking it is the session screen's (plan Task 18).
+  [SWAP_REFUSALS.hibernated]: 'It is asleep, so there is nothing running to move. Wake it, then move it.',
 };
 
 /**
@@ -606,7 +651,7 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
       // committed behind the login screen. What is suppressed is the NOISE, not
       // the failure: `toast()` drops anything fired while the screen is up.
       if (res.status === 401) raiseAuthLostFrom(body);
-      throw new ApiError(res.status, body);
+      throw new ApiError(res.status, body, res.headers.get('content-type'));
     }
     return res;
   };
@@ -747,6 +792,22 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
       postJson<PasskeyAssertStart>('/api/auth/passkey/assert/start'),
     passkeyAssertFinish: (b: PasskeyAssertFinish): Promise<void> =>
       post('/api/auth/passkey/assert/finish', b),
+
+    /**
+     * STEP-UP THAT KEEPS THE SESSION (D-5512, spec §3.2; accounts plan Tasks A5, A6). Wire shapes only: the
+     * ceremony's browser half is `lib/passkey.ts`'s `assertStepUp`, and the step's state is `accounts/useStepUp.ts`.
+     *
+     * Unlike the login doors these mint nothing: no cookie, no new session, the same `generation`. Each 200 is the
+     * requesting session's new `stepUpFreshUntil`. A refusal reaches the caller as an ordinary `ApiError` whose body
+     * names the word (`step-up-required`, with `verdict: 'wrong'` on a failed proof, at 403 and never 401, so the
+     * funnel above raises no login screen over a live session; `step-up-locked`; `passkey-enrolled`; `auth-off`).
+     * The passphrase travels in the BODY only, as `login`'s does.
+     */
+    stepUpStart: (): Promise<StepUpStart> => postJson<StepUpStart>('/api/auth/step-up/start'),
+    stepUpFinish: (b: PasskeyAssertFinish): Promise<StepUpAnswer> =>
+      postJson<StepUpAnswer>('/api/auth/step-up/finish', b),
+    stepUpPassphrase: (passphrase: string): Promise<StepUpAnswer> =>
+      postJson<StepUpAnswer>('/api/auth/step-up/passphrase', { passphrase }),
 
     /**
      * The enrolment screen's two gated calls (Task 8 review, MF-2).
@@ -922,9 +983,14 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  and an absent `opts` both keep the ordinary `{wrapper}` request shape.
      *  Not a checkbox anywhere in the UI: it is what a
      *  pick made under `SwapSheet`'s "show other pools" disclosure sends, after
-     *  a confirm sentence that names the crossing. */
-    swap: (id: string, wrapper: string, opts?: { crossPool?: boolean }) =>
-      post(`${sid(id)}/swap`, opts?.crossPool === true ? { wrapper, crossPool: true } : { wrapper }),
+     *  a confirm sentence that names the crossing. `{interrupt:true}` the same way (D-5240): ONLY when it is true, sent
+     *  only by `SwapSheet`'s "swap anyway", the second tap after the route answered `409 session-busy`. */
+    swap: (id: string, wrapper: string, opts?: { crossPool?: boolean; interrupt?: boolean }) =>
+      post(`${sid(id)}/swap`, {
+        wrapper,
+        ...(opts?.crossPool === true ? { crossPool: true } : {}),
+        ...(opts?.interrupt === true ? { interrupt: true } : {}),
+      }),
     /** The terminal drawer's scrollback — the pane's own history, read with
      *  `capture-pane`. `lines` is the server's number, echoed back: this side
      *  never names one, so there is nothing for the two to disagree about.
@@ -1041,22 +1107,27 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
       // rather than spelled inline the way that door spells it (D-1150).
       return { queued: answer.queued !== false };
     },
-    answerDialog: (id: string, dialogId: string, optionIndex: number) =>
-      post(`${sid(id)}/dialog`, { dialogId, optionIndex }),
+    answerDialog: async (id: string, dialogId: string, optionIndex: number): Promise<DialogAnswered> =>
+      answered(await postRead<unknown>(`${sid(id)}/dialog`, ANSWERED, { dialogId, optionIndex })),
     /** Answer an AskUserQuestion in your own words, through its free-text ("Type something.") row (D-5047). The server
      *  types `text` only once a capture proves the cursor on the empty row, and presses Enter only once a capture
      *  proves the row holds exactly `text`. It refuses 400 `bad-text` for a text it will not type (`isDialogText`,
      *  `shared/api.ts`), and 409 with a `DialogTextRefuseCode` otherwise. Typing changes the dialog's id, and a retry
      *  with the same text, under the id the stream then shows, submits text a refused attempt left in the row. */
-    answerDialogText: (id: string, dialogId: string, optionIndex: number, text: string) =>
-      post(`${sid(id)}/dialog/text`, { dialogId, optionIndex, text }),
+    answerDialogText: async (id: string, dialogId: string, optionIndex: number, text: string): Promise<DialogAnswered> =>
+      answered(await postRead<unknown>(`${sid(id)}/dialog/text`, ANSWERED, { dialogId, optionIndex, text })),
     /** Answer a multiSelect AskUserQuestion question (D-5048): `optionIndexes` are the printed digits of the boxes to
      *  leave ticked (`Dialog.multi`'s options), the whole set, never a toggle. The server sends a digit only for each
      *  box whose tick differs on the live pane, proves the ticks on a fresh capture, then commits with Tab and proves
      *  the screen moved on. It refuses 400 `bad-indexes` for a set it will not send (`isDialogMultiIndexes`,
      *  `shared/api.ts`: empty, repeated, or outside 1..9), and 409 with a `DialogMultiRefuseCode` otherwise. */
-    answerDialogMulti: (id: string, dialogId: string, optionIndexes: readonly number[]) =>
-      post(`${sid(id)}/dialog/multi`, { dialogId, optionIndexes }),
+    answerDialogMulti: async (id: string, dialogId: string, optionIndexes: readonly number[]): Promise<DialogAnswered> =>
+      answered(await postRead<unknown>(`${sid(id)}/dialog/multi`, ANSWERED, { dialogId, optionIndexes })),
+    /** Move an AskUserQuestion's PANE to another tab (decision `ask-dialog-tab-route`): `prev`/`next` (the arrow keys),
+     *  `submit` (the review), or question tab k with the tab the sheet believes is up as `from`. Arrows only, each step
+     *  proved by the server. The 200 carries the screen the pane landed on as `next`, read like an answer's. */
+    answerDialogTab: async (id: string, req: DialogTabRequest): Promise<DialogAnswered> =>
+      answered(await postRead<unknown>(`${sid(id)}/dialog/tab`, ANSWERED, req)),
     /** Answer a hook-reported question by option index. `askKey` is minted
      *  server-side and carried verbatim: the server re-reads the CURRENT
      *  envelope and refuses unless the key still matches, so this can only ever
@@ -1166,7 +1237,8 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     claims: (opts?: { all?: boolean }): Promise<{ claims: ClaimSummary[] }> =>
       getJson<{ claims: ClaimSummary[] }>(
         opts?.all === true ? '/api/claims?all=1' : '/api/claims'),
-    interrupt: (id: string) => post(`${sid(id)}/interrupt`),
+    /** D-5237: `source` names the control that sent it (the keycap, the Escape key, a Deny); the server records it. */
+    interrupt: (id: string, source: InterruptRouteSource) => post(`${sid(id)}/interrupt`, { source }),
     /** `POST /api/coord/pause` (spec §4.2) — request `{paused}`, response
      *  `{ok:true, requested}` on success (the field is `requested`, never
      *  `paused`: the route ran a verb, it did not read the marker back).
@@ -1217,6 +1289,33 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  read" may well have stored the value, and is not "the request never happened". */
     setStallWatch: (body: StallWatchRequest) =>
       postJsonOr<StallWatchView | 'unreadable'>('/api/coord/stall-watch', 'unreadable', body),
+    /** `GET /api/coord/collect-lane` (path-identity spec 2026-10-12 §5.6, §5.7): the Settings page's Temp root
+     *  collector section reads it through `useCollectLaneView`, whose `asCollectLaneView` is the wire guard, so the
+     *  type here is what the server promises, not what arrived. `getJson`, as `stallWatch` is: a read changes
+     *  nothing, so its failure is only a failure, which the hook classifies (404 and 501 through
+     *  `settingsReadFailure`, a 503 `state-unmeasurable` as its own kind). Session-gated when armed, open dark; no
+     *  box token. */
+    collectLane: () => getJson<CollectLaneView>('/api/coord/collect-lane'),
+    /** `POST /api/coord/collect-lane`: `{choice}`, plus `confirm` only as the key a 409 `confirm-required` or
+     *  `confirm-stale` answered with. The server decides the confirm, so a 409 rejects with `ApiError` like every
+     *  non-2xx, and the section reads its body through `collectLanePostRefusal`. Session-gated when armed, open dark,
+     *  with `live` refused while sign-in is dark; no box token.
+     *
+     *  `postJsonOr`, not `postJson`, for `setCoordCaps`' reason, stated in `postJsonOr`'s own docstring: after a
+     *  write, "the answer could not be read" may well have stored the choice, and is not "the request never
+     *  happened". */
+    setCollectLane: (body: CollectLaneRequest) =>
+      postJsonOr<CollectLaneView | 'unreadable'>('/api/coord/collect-lane', 'unreadable', body),
+    /** `GET /api/digest?day=` (coordinator-first routing spec §10, D-5300): the digest of what coordinators decided
+     *  in the operator's name for one UTC day, or, with no day, the newest whose window has closed. The digest screen
+     *  reads it through `asDigestAnswer`, the wire guard. Session-gated when armed; no box token. */
+    digest: (day?: string) =>
+      getJson<DigestAnswer>(day === undefined ? '/api/digest' : `/api/digest?day=${encodeURIComponent(day)}`),
+    /** `POST /api/digest/correct` (D-5300): one line's correction, mailed verbatim to that line's coordinator. A 409
+     *  (`not-coordinator`, `duplicate`) rejects with `ApiError` like every non-2xx. `postJson`, not `postJsonOr`: the
+     *  screen reads nothing off the answer but its arrival, and a write whose answer was unreadable is shown as sent
+     *  only after the next read of the digest says `corrected`. */
+    correctDigest: (body: DigestCorrectBody) => postJson<DigestCorrectAnswer>('/api/digest/correct', body),
     commands: (id: string) =>
       getJson<{ builtins: SlashCommand[]; skills: SlashCommand[] }>(`${sid(id)}/commands`),
     upload: async (id: string, file: File): Promise<StagedClip> => {
@@ -1225,6 +1324,51 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
       const res = await request(`${sid(id)}/upload`, { method: 'POST', body: form });
       return ((await res.json()) as { clip: StagedClip }).clip;
     },
+    /**
+     * The Docs reader's loaders (spec 2026-10-01 4.3, 5.4): `DocsScreen`'s default `DocsLoaders`. Every call goes
+     * through `request`, so a 401 still raises the one login overlay, and carries the marker header through
+     * `DOCS_REQUEST_HEADER`/`DOCS_REQUEST_HEADER_VALUE` to the URL L0's `docsApi` builds. Each resolves a union and
+     * never rejects for a server answer (`docs/failures.ts`): it rejects only when the caller's signal aborts, or for
+     * a defect. `file` and `raster` refuse each other's paths by throwing `wrong-representation` before any request.
+     */
+    docs: ((): DocsLoaders => {
+      const marker = { [DOCS_REQUEST_HEADER]: DOCS_REQUEST_HEADER_VALUE };
+      const read = async <T>(path: string, fields: readonly string[], init: RequestInit): Promise<DocsAnswer<T>> => {
+        try {
+          return await readDocsEnvelope<T>(await request(path, init), fields);
+        } catch (err) {
+          // `request` folds an unreadable error body to '' and throws ApiError, so an abort mid-body arrives as one.
+          if (init.signal?.aborted) throw init.signal.reason;
+          return docsAnswerFromError(err);
+        }
+      };
+      return {
+        projects: () => read<DocsProjectsResponse>(docsApi.projects(), ['index'], { headers: marker }),
+        tree: (project, ref) =>
+          read<DocsTreeResponse>(docsApi.tree(project, ref), ['tree', 'refreshDue'], { headers: marker }),
+        file: (project, pin, signal) => {
+          if (contentClass(pin.path) === 'raster') throw new Error('wrong-representation');
+          return read<DocsFileResponse>(docsApi.file(project, pin), ['contentClass', 'show'], { headers: marker, signal });
+        },
+        raster: (project, pin, signal) => {
+          const declared = declaredRaster(pin.path);
+          if (declared === null) throw new Error('wrong-representation');
+          return (async () => {
+            try {
+              return await readDocsRaster(await request(docsApi.file(project, pin), { headers: marker, signal }), declared);
+            } catch (err) {
+              if (signal?.aborted) throw signal.reason;
+              return docsAnswerFromError(err);
+            }
+          })();
+        },
+        refresh: (project, body) => read<DocsRefreshResponse>(docsApi.refresh(project), ['fetch', 'tree'], {
+          method: 'POST',
+          headers: { ...marker, 'content-type': 'application/json' },
+          body: JSON.stringify({ ref: body.ref, reason: body.reason }),
+        }),
+      };
+    })(),
   };
 }
 

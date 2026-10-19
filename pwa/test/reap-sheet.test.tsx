@@ -5,6 +5,9 @@ import type { FleetSession, WsAudit } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
 import { ToastHost } from '@ccrc/ui';
 import { ReapSheet } from '../src/session/ReapSheet';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { declValue, ruleIn } from './cssRule';
 
 const audit = (over: Partial<WsAudit> = {}): WsAudit => ({
   id: 'demo-quiet-basin', branch: 'ws/quiet-basin', registryBranch: 'ws/quiet-basin', drift: '',
@@ -1225,5 +1228,26 @@ describe('the confirmation names what it will actually remove', () => {
     render(<><ToastHost /><ReapSheet session={sess({ workspace: 'quiet-basin', branch: 'ws/fix-the-pr-sheet' })}
                                      open onClose={() => {}} onReaped={() => {}} /></>);
     expect(await screen.findAllByText(/quiet-basin/)).not.toHaveLength(0);
+  });
+});
+
+// The audit rows' notes are their own line (D-5495). A `.reap-note` inside a
+// `<dd>` is a `<span>` that follows the row's figure directly, and it was
+// inline: with nothing ignored, the not-in-git row read "0 entries, 0 BThese
+// are in no commit and cannot be recovered." (the ignored list, a block, is
+// what had kept the two apart whenever there was one). The clips row and the
+// branch row's drift note ran on the same way.
+describe('an audit row\'s note never runs into its figure (D-5495)', () => {
+  const chatCss = readFileSync(path.join(import.meta.dirname, '..', 'src', 'session', 'chat.css'), 'utf8');
+
+  it('the note follows the figure with no block between them, so its own rule must make it a line', async () => {
+    auditBody = audit({ ignored: [], ignoredCount: 0, ignoredBytes: 0 });
+    open();
+    const note = await screen.findByText('These are in no commit and cannot be recovered.');
+    const dd = note.closest('dd')!;
+    expect(dd.textContent).toMatch(/^0 entries, 0 B/);
+    // What sits before the note is the figure's text, not a block element.
+    expect(note.previousSibling?.nodeType).toBe(Node.TEXT_NODE);
+    expect(declValue(ruleIn(chatCss, '.reap-note'), 'display')).toBe('block');
   });
 });

@@ -3,6 +3,7 @@ import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { editHintShown, freeTextRow, hasMenu, parseDialog, paneOptionRows, paneState, turnRunning } from '../src/pane/dialog.js';
+import { reviewRows } from '../../shared/ask-menu.js';
 import { FleetWatcher } from '../src/watch.js';
 import { Bus } from '../src/bus.js';
 import { Tmux, type Runner } from '../src/exec.js';
@@ -1475,5 +1476,62 @@ describe('editHintShown (D-5047)', () => {
     const pane = derive(fixture('cc300-ask-same-labels-q2.txt'),
       'Afterwards reply with the raw answers only.', 'Press ctrl+g to edit in Vim if you like.');
     expect(editHintShown(pane)).toBe(false);
+  });
+});
+
+// D-5089 (plan docs/superpowers/plans/2026-10-15-ask-sheet-half.md, Task 1). The PWA does not import server code, so
+// the sheet's tests hand-build their `Dialog` objects from `pwa/test/ask-panes.json`: each recorded screen's reading,
+// keyed by its fixture's name, without `raw` (`pwa/test/askPanes.ts` attaches that from the fixture). Those readings
+// are COPIED from `parseDialog`, and this keeps them so: a parser change that reads a recorded screen differently fails
+// here, naming the screen, rather than leaving the sheet's tests passing on screens the server no longer sees.
+describe('the sheet half\'s hand-built readings are parseDialog\'s (D-5089)', () => {
+  const readingsFile = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'pwa', 'test', 'ask-panes.json');
+  const readings = JSON.parse(readFileSync(readingsFile, 'utf8')) as Record<string, Omit<Dialog, 'raw'>>;
+
+  it('names recorded screens, the review and multiSelect ones included', () => {
+    const names = Object.keys(readings);
+    expect(names.length).toBeGreaterThanOrEqual(30);
+    expect(names).toContain('cc300-ask-review-4q-long');
+    expect(names).toContain('cc300-ask-multiselect-next-open');
+  });
+
+  it('every entry equals parseDialog(<fixture>) without raw', () => {
+    for (const [name, reading] of Object.entries(readings)) {
+      const d = parseDialog(fixture(`${name}.txt`));
+      expect(d, name).not.toBeNull();
+      const { raw: _raw, ...fresh } = d!;
+      expect(fresh, name).toEqual(reading);
+    }
+  });
+});
+
+// Decision `ask-review-lenient-arm`: the review screen's two rows found by label (`reviewRows`, shared/ask-menu.ts),
+// strict first, then lenient on any screen that paints the ready line. Panes: a recorded Claude Code 2.1.296 ask,
+// in unrelated made-up content (`cc296-ask-2q-long-*`), and the 2.1.300 reviews.
+describe('reviewRows: the review screen and its Submit and Cancel rows', () => {
+  const panes = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'panes');
+  const read = (name: string): string => readFileSync(path.join(panes, `${name}.txt`), 'utf8');
+  const review = read('cc296-ask-2q-long-review');
+
+  it('every recorded review, 2.1.296 and 2.1.300, by the strict arm', () => {
+    for (const name of ['cc296-ask-2q-long-review', 'cc300-ask-review-same-labels', 'cc300-ask-review-4q-long', 'cc300-ask-review-skipped']) {
+      expect(reviewRows(parseDialog(read(name))), name).toEqual({ submit: 1, cancel: 2 });
+    }
+  });
+
+  it('a rule and a status row painted under the rows (DERIVED): parsed as a third option, still the review', () => {
+    const lines = review.replace(/\s+$/, '').split('\n');
+    const pane = [...lines, '─'.repeat(220), '  🤖 Opus · xhigh', ''].join('\n');
+    const d = parseDialog(pane)!;
+    expect(d.options.map((o) => o.label)).toEqual(['Submit answers', 'Cancel', '🤖 Opus · xhigh']);
+    expect(reviewRows(d)).toEqual({ submit: 1, cancel: 2 });
+  });
+
+  it('never a question screen, and never a screen without the ready line', () => {
+    expect(reviewRows(parseDialog(read('cc296-ask-2q-long-q1')))).toBeNull();
+    expect(reviewRows(parseDialog(read('cc296-ask-2q-long-q2')))).toBeNull();
+    const noReady = review.replace('Ready to submit your answers?', '');
+    expect(reviewRows(parseDialog(noReady))).toBeNull();
+    expect(reviewRows(null)).toBeNull();
   });
 });

@@ -172,6 +172,7 @@ function emptyEnvelope(P) {
       [HARNESSES[0]]: {
         horizon_days: null, retention_days: null, due_blobs: 0, overdue_blobs: 0, segments: 0, segment_bytes: 0,
         oldest_row_ms: null, first_due_ms: null, first_deletion_ms: null,
+        last_pass_ms: null, due_oldest_ms: healthLib.EXPORT_DUE_OLDEST_UNMEASURED, paused_low_disk: false,
       },
     },
     retention: { lowered: null, unmeasured: [] },
@@ -325,6 +326,16 @@ function readStore(env, P, nowMs) {
     ex.oldest_row_ms = num('oldest_row_ms');
     ex.first_due_ms = num('first_due_ms');
     ex.first_deletion_ms = num('first_deletion_ms');
+    // W1-B4 Task 9: the export pass's own record (HEALTH_META, Task 1), and its segments counted by name and size,
+    // never opened (§9.15 "Who reads it": only the recovery step).
+    ex.last_pass_ms = num(healthLib.HEALTH_META.exportPassMs);
+    // Never num(), which reads an absent key and '' as one null: lib's reader keeps "nothing due" (null) apart from
+    // "no census of this build measured it" ('unmeasured'), and reads no value at or before the epoch as a time.
+    ex.due_oldest_ms = healthLib.readExportDueOldest(meta.get(healthLib.HEALTH_META.exportDueOldestMs));
+    ex.paused_low_disk = (meta.get(healthLib.HEALTH_META.exportPaused) ?? '') !== '';
+    const segs = env.store_id === null ? { n: 0, bytes: 0 } : segmentCount(join(P.root, healthLib.EXPORT_DIR, String(env.store_id)));
+    ex.segments = segs.n;
+    ex.segment_bytes = segs.bytes;
     env.retention.lowered = parseJsonOr(meta.get('retention_lowered'), null);
     env.retention.unmeasured = [...meta]
       .filter(([k, v]) => k.startsWith(RETENTION_STATE_META) && v === 'unmeasured')
@@ -1266,8 +1277,10 @@ function healthInputsOf(env, x, nowMs) {
     // D-4207 (history-export-due-escalates): both counts are the sweep's census, read from the envelope.
     exportDue: exp.due_blobs ?? 0,
     exportOverdue: exp.overdue_blobs ?? 0,
-    exportWriterLive: false,       // B4 sets it with the export writer
-    exportPausedLowDisk: false,    // B4 sets it with the export writer
+    exportWriterLive: true,        // W1-B4: this build carries the export writer (a build fact, never measured)
+    exportPausedLowDisk: exp.paused_low_disk === true,
+    exportLastPassMs: typeof exp.last_pass_ms === 'number' ? exp.last_pass_ms : null,
+    exportDueOldestMs: exp.due_oldest_ms === undefined ? healthLib.EXPORT_DUE_OLDEST_UNMEASURED : exp.due_oldest_ms,   // lib's reader made it
     retentionLowered: (env.retention && env.retention.lowered) ?? null,
     retentionUnmeasured: (env.retention && env.retention.unmeasured) ?? [],
     journalGrowth30d: (env.journal && env.journal.growth_30d_bytes) ?? 0,
@@ -1296,6 +1309,14 @@ function healthInputsOf(env, x, nowMs) {
     backupsDb: x.backupsDb,
     journalStoreDirs: (env.journal && env.journal.other_store_dirs) ?? [],
   };
+}
+
+/** W1-B4 Task 9: the export's segments under `dir`, by name and size (store.mjs listSegments), never opened. A
+ *  listing that throws is unmeasured (null), never zero: an absent directory is listSegments' own [] (no export yet). */
+function segmentCount(dir) {
+  let list;
+  try { list = healthStore.listSegments(dir); } catch { return { n: null, bytes: null }; }
+  return { n: list.length, bytes: list.reduce((sum, s) => sum + s.bytes, 0) };
 }
 
 /** `statusEnvelope` with its `health` filled and the store's device named. */

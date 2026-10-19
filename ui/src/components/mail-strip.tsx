@@ -27,7 +27,7 @@ import {
 } from '../../../shared/api';
 import { useNow } from '../lib/use-now';
 import { elapsedWords } from '../lib/elapsed';
-import { MAIL_GLYPH } from '../lib/text';
+import { Icon } from '../primitives/icon';
 import './mail-strip.css';
 
 const PLURAL: Record<MailSummary['kind'], [string, string]> = {
@@ -112,6 +112,8 @@ const GATE_PHRASE: Record<MailGate, string> = {
   // row's own `lastError`, which carries the exact lifecycle word.
   'session-dead': 'the session is gone for good — nothing will bring it back on its own',
   'tmux-unknown': 'tmux could not be asked',
+  // D-5242: asleep, not gone — the lane wakes it (at most two wakes a minute fleet-wide) and delivers once it is up.
+  hibernated: 'the session is asleep — it is being woken to take this',
   'pending-ask': 'the session is waiting on a prompt of its own',
   'no-pane': 'the session has no pane',
   'no-config-dir': 'this wrapper resolves to no config dir',
@@ -283,7 +285,7 @@ export function MailStrip({ mail, now: nowProp }: { mail: MailSummary[]; now?: n
       root="mail-strip"
       part="mail-strip"
       label="Mail"
-      mark={MAIL_GLYPH}
+      mark={<Icon name="mail" />}
       headline={newest.subject}
       count={mail.length}
       summary={summarizeMail(mail)}

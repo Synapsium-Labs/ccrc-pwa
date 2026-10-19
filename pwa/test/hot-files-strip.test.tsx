@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import type { ClaimSummary } from '../../shared/api';
 import { HotFilesStrip } from '../src/fleet/HotFilesStrip';
 import { api } from '../src/lib/api';
+import { ICONS } from '../../ui/src/icons/lucide';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
@@ -39,6 +40,15 @@ describe('HotFilesStrip', () => {
     // Two live rows, two expiry spans — the *AllBy* variant, asserting the
     // expiry renders at all (each row carries its own).
     expect(screen.getAllByText(/expires in/).length).toBeGreaterThan(0);
+  });
+
+  it('marks the strip with Icon hand, never the ✋ emoji (D-5100)', async () => {
+    stub([claim()]);
+    const { container } = render(<HotFilesStrip />);
+    await waitFor(() => expect(screen.getByText('1 hot-file claim')).toBeInTheDocument());
+    const mark = container.querySelector('.hotfiles-mark')!;
+    expect(mark.textContent).toBe('');
+    expect([...mark.querySelectorAll('svg path')].map((p) => p.getAttribute('d'))).toEqual(ICONS.hand.map(([, a]) => a.d));
   });
 
   it('shows only LIVE claims — a lapsed row and a future state token both stay off the fleet screen', async () => {

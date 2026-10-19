@@ -191,14 +191,14 @@ describe('a partially purged registry never frees the slug', () => {
     // TAUTOLOGICAL — `LAST` is derived from this same measurement, so both
     // sides move together and a mutant adding one `rm` to `_reg_purge` stayed
     // GREEN (measured). The number that can actually change is the purge's own
-    // unlink count, so that is the one pinned: 28 today, which makes this `it`
-    // run 32 real `sh()` invocations, each taking the row's stable lock — one
+    // unlink count, so that is the one pinned: 29 today, which makes this `it`
+    // run 33 real `sh()` invocations, each taking the row's stable lock — one
     // for `measureRmCalls` plus the loop's `RM_CALLS + 3`, measured by counting
     // this file's own `sh` alias for one run of this `it`, not derived.
     // IT WAS 25 UNTIL `_reg_purge` GAINED `_usage_purge "$id"` (ccd/ccd), whose
     // two unconditional `rm -f` — the usage sidecar `$REG/usage/<id>.json` and
     // its `.<id>.*.tmp` partials — take the count 25 → 27; they run mid-purge,
-    // between the `hookstate.json`/`turn.json` unlinks (the stall watch's `turn.json` made it 27 → 28) and the `reaping`/`archived` tail, so
+    // between the `hookstate.json`/`turn.json` unlinks (the stall watch's `turn.json` made it 27 → 28, and the delegation join record's tail unlink after `generation` 28 → 29) and the `reaping`/`archived` tail, so
     // this is a claim about the TOTAL and not about which unlink goes last. The
     // function's third `rm`, `-rf` of `$REG/usage/<id>.agents`, stands behind a
     // `[[ -d ]]` no fixture here satisfies, so it does not count today and WILL
@@ -206,7 +206,7 @@ describe('a partially purged registry never frees the slug', () => {
     // lost an unlink: update the literal AND re-read this fixture's cost,
     // because it is the thing that pushed the test past vitest's 20 s default
     // and made it a load flake.
-    expect(RM_CALLS, 'the purge`s unlink count moved — this `it`s cost moved with it').toBe(28);
+    expect(RM_CALLS, 'the purge`s unlink count moved — this `it`s cost moved with it').toBe(29);
     const LAST = RM_CALLS + 2;
     const verdicts: string[] = [];
     for (let k = 0; k <= LAST; k++) {
@@ -371,7 +371,7 @@ describe('a partially purged registry never frees the slug', () => {
     fs.writeFileSync(path.join(REG, 'demo-quiet-basin-mesa.uuid'), 'x');
     // POSITIONAL, because `--slug` is not a flag `cmd_ws_add` has: its arg
     // loop's catch-all would bind `project` to the literal `--slug`, which
-    // `_ws_project_valid` accepts, so the verb would die at the not-a-git-repo
+    // `_ws_project_valid` refuses (a leading dash), so the verb would die at its
     // check long before the slug gate and this test would pass for the wrong
     // reason.
     const out = sh(`${WS_ADD} ( cmd_ws_add demo quiet-basin ) 2>&1 || echo REFUSED`);

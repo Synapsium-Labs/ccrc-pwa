@@ -101,3 +101,30 @@ import { syncBuiltinESMExports as syncS27 } from 'node:module';
     syncS27();
   }
 }
+
+// ── W1-B4 Task 6: the export's own filesystem (spec §9.15 "Preflight"; O40) ─────────────────────────────────────────
+// HISTORY_TEST_STATFS_EXPORT = hang | throw | <bavail>:<size>: a statfs whose path lies under /.ccrc/history/export
+//   answers as given; every other statfs answers as the blocks above say. So the export's probe on the home filesystem
+//   and the store's probe on db/ can disagree, as they do when db/ is a link onto a volume. Unset: the export's probe
+//   answers as every other call does (one filesystem). The real statfs runs first in the <bavail>:<size> mode, as in
+//   this file's first block, so a missing export directory still answers ENOENT.
+// This block reuses the file's top-level `fs`, `real`, `answer` and `syncBuiltinESMExports` (Task 19's precedent); its
+// own names carry the Exp suffix.
+{
+  const modeExp = process.env.HISTORY_TEST_STATFS_EXPORT ?? '';
+  if (modeExp !== '') {
+    const fixedExp = /^([0-9]+):([0-9]+)$/.exec(modeExp);
+    if (!fixedExp && modeExp !== 'hang' && modeExp !== 'throw') {
+      throw new Error(`preload-statfs: HISTORY_TEST_STATFS_EXPORT=${modeExp} is not hang, throw or <bavail>:<size>`);
+    }
+    const innerExp = fs.promises.statfs;
+    fs.promises.statfs = async function statfsExportExp(p, opts) {
+      if (!String(p).includes('/.ccrc/history/export')) return innerExp(p, opts);
+      if (modeExp === 'hang') return new Promise(() => {});
+      if (modeExp === 'throw') throw Object.assign(new Error(`EIO: i/o error, statfs '${p}'`), { code: 'EIO' });
+      await real(p, opts);
+      return answer(Number(fixedExp[1]), Number(fixedExp[2]));
+    };
+    syncBuiltinESMExports();
+  }
+}

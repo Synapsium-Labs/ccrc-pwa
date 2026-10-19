@@ -246,11 +246,12 @@ describe('sweepMerged — a held merge is announced, never acted on', () => {
     const deps = { ...testDeps(home), push: { notify } as never };
     const w = new FleetWatcher(deps, new Bus(), 10_000);
     const degraded: SessionRecord = {
+      hibernatedAt: null,
       id: 'demo-quiet-basin', wrapper: '', project: 'demo', workdir: '/w/demo-quiet-basin', uuid: 'u-demo-quiet-basin',
       started: true, home: null, pool: null, lastswap: null,
       workspace: 'quiet-basin', branch: 'ws/quiet-basin', branchEvidence: 'named', base: 'origin/main',
       prPhase: null, prNumber: null, prCheckedAt: null, archivedAt: null, archivedBytes: null, held: null,
-      substrate: null, stopped: null, supervisedAt: null, swapBlocked: null, stranded: null, spawn: null, lifecycleUnmeasured: [],
+      substrate: null, stopped: null, supervisedAt: null, swapBlocked: null, stranded: null, spawn: null, lastEnd: null, lifecycleUnmeasured: [],
       unmeasured: ['wrapper'], route: null, child: { kind: 'none' },
     };
     const merged: PrState = { phase: 'merged', number: 42, url: null, title: null, checks: null,

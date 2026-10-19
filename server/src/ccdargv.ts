@@ -314,6 +314,13 @@ export const CCD_ARGV = {
    *  plain sessions never had. ccd re-proves every gate on the box (not a
    *  workspace, not held, not alive); this argv carries nothing but the id. */
   forget:    (id: string) => argv(['forget', id]),
+  /** Put a long-idle session to sleep (`hibernate-long-idle-sessions` (D-5242)): ccd re-measures box-local idle at the
+   *  act (the live word, the pane, a draft, the turn marker's `bg` and `crons`, a hold, an opt-out, a fresh swap and an
+   *  attached terminal) and refuses `session-busy: <reason>` at exit 3 otherwise, touching nothing. ONE positional, the
+   *  id, then the dec — stripped by ccd before its arity rule, as `ws-archive`'s are (`ccdargv-dec-parity.test.ts`;
+   *  `hibernate-verb-dec-and-idempotence` (D-5424)).
+   *  Sent only behind `verbSupported` (the box's `ccd caps` lists `hibernate`); `ensure` wakes it. */
+  hibernate: (id: string, dec: ActorFlags | null) => argv(['hibernate', id, ...decFlags(dec)]),
   swap:      (id: string, w: string) => argv(['swap', id, w]),
   /** THE DELIBERATE CROSSING (account pools, spec §5.7). A SEPARATE ENTRY, not
    *  a parameter of `swap` above — `start`/`enable`'s rule, for its reason: a
@@ -330,11 +337,29 @@ export const CCD_ARGV = {
    *  gate that should stop it reaching an old box at all; this is the second
    *  lock. */
   swapCross: (id: string, w: string) => argv(['swap', '--cross-pool', id, w]),
+  /** `swap` and `swapCross` with the operator's consent to lose the turn in progress (D-5240). Separate entries, the
+   *  rule above, and the flag LEADS for its reason. Sent only behind `capSupported(state, SWAP_BUSY_CAP)`: an old ccd
+   *  would bind a leading `--interrupt` as the id and fail loudly, but it refuses nothing either, so the old argv is
+   *  the right one there. */
+  swapInterrupt: (id: string, w: string) => argv(['swap', '--interrupt', id, w]),
+  swapCrossInterrupt: (id: string, w: string) => argv(['swap', '--cross-pool', '--interrupt', id, w]),
   /** `route`, defaulted `null`: the PWA's ordinary add, from an operator who
    *  may have tapped a routing picker before creating the workspace — the
    *  `start`/`enable` rule above for the same reason (flags lead, the
-   *  default keeps every existing call site's argv unchanged). */
-  wsAdd:     (p: string, route: RouteFields | null = null) => argv(['ws-add', ...routeFlags(route), p]),
+   *  default keeps every existing call site's argv unchanged).
+   *
+   *  `dec` (D-5301, coordinator-first spec §8): the PWA "+" says who made the
+   *  workspace, so the lifecycle log's `create` row names the operator's
+   *  device rather than `declared: nothing`. It TRAILS the project, where
+   *  `wsAddWorker` puts its own; `cmd_ws_add`'s strip loop parses both
+   *  positions. The route handler passes `pwaDec(req)` (D-5369: the device
+   *  actually used, `device:<label>` or `unmeasured`, not spec §8's literal
+   *  `--actor operator`), which is `null` on a
+   *  box whose ccd does not advertise `actor-flags-v1` — and `null` is the
+   *  argv this builder shipped before, token for token, because an old
+   *  `cmd_ws_add` bound a flag's first token as the slug (D-410). */
+  wsAdd:     (p: string, route: RouteFields | null = null, dec: ActorFlags | null = null) =>
+               argv(['ws-add', ...routeFlags(route), p, ...decFlags(dec)]),
   /** The dispatch path's ws-add: a dispatched program worker spawns WITHOUT
    *  --remote-control (the 2026-08-13 ruling, task #37) — declared at
    *  creation, the only moment worker-ness is known (`hold` is written after
@@ -454,7 +479,7 @@ export const CCD_ARGV = {
    *  `CollectToken` (`shared/api.ts`, spec §5.10), which only the collect audit's reader casts to, so a string from
    *  anywhere else does not compile here. The confirmation token LEADS (`['ws-collect','--expect']` is the grant); the
    *  dec trails, and ccd strips it before it binds a positional. Its ONE composer is the collector's executor
-   *  (`coord/collectTempRoot.ts`), behind `COLLECT_CAP`, armed only by `$REG/collect-lane-live`;
+   *  (`coord/collectTempRoot.ts`), behind `COLLECT_CAP`, armed by the switch (path-identity spec 2026-10-12 §5.2);
    *  `ws-collect-wiring.test.ts` pins that no other server source composes it. */
   wsCollect: (token: CollectToken, id: string, dec: ActorFlags | null) =>
     argv(['ws-collect', '--expect', token, '--session', id, ...decFlags(dec)]),
@@ -824,16 +849,24 @@ export const ROUTE_APPLY_CAP = 'route-apply-v1';
  *  the other two spellings, and that test's `toContain` assertion is what keeps
  *  THIS one equal to them (`capsupported.test.ts` scans for the "once" half).
  *
- *  READ IT WITH `capSupported`, NEVER `verbSupported`, wherever wave 3 gates the
- *  un-pin. `verbSupported` PERMITS on no evidence ("an absent list must never
- *  grey out the fleet") — the right default for verbs that have always existed
- *  and the wrong one for a verb that never did: it would send `ccd win-size` to
+ *  NOTHING CALLS `ccd win-size` TODAY. The drawer wave that was to gate the
+ *  un-pin on this token was superseded unbuilt (spec 2026-10-14, D-5013): the
+ *  drawer now attaches a client the window's own size, so no drawer needs the
+ *  window moved, and the sizer that spec's stage 2 plans resizes through the
+ *  server's granted `resize-window`, not through this verb. The rule below
+ *  stands for any caller that ever does call it.
+ *
+ *  READ IT WITH `capSupported`, NEVER `verbSupported`, wherever a caller gates
+ *  `ccd win-size` on it. `verbSupported` PERMITS on no evidence ("an absent
+ *  list must never grey out the fleet") — the right default for verbs that
+ *  have always existed and the wrong one for a verb that never did: it would
+ *  send `ccd win-size` to
  *  an agent that grants no such prefix, and, worse, would treat a box whose
  *  readers have NOT learned to stand down as though they had. `capSupported`
  *  refuses on no evidence, so an un-upgraded agent simply leaves the window
  *  pinned: wave 1 behaviour, no fallback path, no second mechanism (spec §6.1).
  *  This is a note on the token, not a wrapper function — the gate belongs at
- *  wave 3's own seam, where its mutation test can red on it. */
+ *  that caller's own seam, where its mutation test can red on it. */
 export const WIN_SIZE_CAP = 'win-size-v1';
 
 /** The `ccd caps` token that says this box has child-workspace reclamation
@@ -897,6 +930,13 @@ export const DOCS_CAP = 'docs-v1';
  *  to a box with no evidence it exists is the failure the capability reader was built to prevent. The collector's lane
  *  asks it before every audit and again in the act's own scope (`verb-gate.test.ts`, `collect-temp-root.test.ts`). */
 export const COLLECT_CAP = 'collect-v1';
+
+/** The `ccd caps` token that says this box's `cmd_swap` re-measures the turn at the act and takes `--interrupt`
+ *  (D-5240, Task 11). It gates ONE decision: whether the swap route may send `CCD_ARGV.swapInterrupt` or
+ *  `swapCrossInterrupt`. Without it the route sends the old argv, which an old ccd parses and which refuses nothing —
+ *  the server's own read is then the only guard, as it was before. ccd's `echo swap-busy-v1` and
+ *  `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS` are the other two spellings. */
+export const SWAP_BUSY_CAP = 'swap-busy-v1';
 
 /**
  * Whether the DEPLOYED ccd advertised a CAPABILITY token — a verb-shaped string

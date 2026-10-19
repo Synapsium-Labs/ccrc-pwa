@@ -497,11 +497,12 @@ describe('ReconnectingSocket against a closed gate', () => {
 });
 
 describe('TerminalDrawer against a closed gate', () => {
-  const fakeTerm = (): { makeTerm: (host: HTMLElement) => DrawerTerm } => ({
+  const fakeTerm = (): { makeTerm: () => DrawerTerm } => ({
     makeTerm: () => ({
       write: () => {}, onData: () => {}, onWheel: () => {},
-      propose: () => ({ cols: 48, rows: 20 }), setFontSize: () => ({ cols: 48, rows: 20 }),
-      fit: () => ({ cols: 48, rows: 20 }), focus: () => {}, dispose: () => {},
+      pin: () => {}, propose: () => ({ cols: 48, rows: 20 }), setFontSize: () => {},
+      open: () => {}, isOpen: () => true, model: () => [], statusRow: () => [],
+      onParsed: () => () => {}, focus: () => {}, dispose: () => {},
     }),
   });
   const drawerSockets: FakeSocket[] = [];

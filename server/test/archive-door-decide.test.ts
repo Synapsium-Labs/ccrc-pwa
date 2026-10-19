@@ -2,7 +2,7 @@
 // refusals, the one act it takes, and how ccd's answer reaches the wire.
 import { describe, it, expect } from 'vitest';
 import {
-  archiveFlags, archiveOutcome, busyReadFailsClosed, ccdArchiveRefusal, decideArchive, refusedAtStop, stopVerdict, worktreeOf,
+  archiveFlags, archiveOutcome, busyReadFailsClosed, ccdArchiveRefusal, decideArchive, frameRowVerdict, refusedAtStop, stopVerdict, worktreeOf,
   type ArchiveCoordPort, type ArchiveMeasure, type StopReadings,
 } from '../src/coord/archiveDoor.js';
 import type { CloseOutcome } from '../src/coord/close.js';
@@ -331,6 +331,13 @@ describe('stopVerdict — a stop read fail-closed (D-3841), with "could not meas
     expect(stopVerdict(live({ row: { status: 'idle', bucket: 'attention' } }))).toBe('busy');
   });
 
+  // D-5274: a row whose `busy` is a failed read's display (`statusUnmeasured`) measured no turn — `interrupt` cannot
+  // consent past it, so the fail-closed read answers `unmeasured`, never `busy`.
+  it('a live pane whose frame row is busy only because a read failed is unmeasured (D-5274)', () => {
+    expect(stopVerdict(live({ row: { status: 'busy', bucket: 'idle', statusUnmeasured: true } }))).toBe('unmeasured');
+    expect(stopVerdict(live({ row: { status: 'busy', bucket: 'idle', statusUnmeasured: false } }))).toBe('busy');
+  });
+
   // ccd reads no frame row at all: this arm is the SERVER's own, stricter than ccd.
   it('a live pane with no frame row is unmeasured: no row is no measurement (the server\'s own arm, stricter than ccd)', () => {
     expect(stopVerdict(live({ row: 'missing' }))).toBe('unmeasured');
@@ -383,5 +390,23 @@ describe('refusedAtStop — the re-read at the stop, one word per verdict', () =
   it('carries `ended` only when a programme was ended, for either word', () => {
     expect(refusedAtStop('busy', [run(7)]).body).toEqual({ ok: false, error: 'session-busy', ended: [run(7)] });
     expect(refusedAtStop('unmeasured', [run(7)]).body).toEqual({ ok: false, error: 'status-unknown', ended: [run(7)] });
+  });
+});
+
+// D-5274: the ordinary workspace archive's read — the frame row alone, three-valued.
+describe('frameRowVerdict — the frame row, with an unmeasured row its own word (D-5274)', () => {
+  const row = (status: 'idle' | 'busy', bucket: 'idle' | 'working' | 'attention', statusUnmeasured = false) =>
+    ({ status, bucket, statusUnmeasured });
+  it('a row busy only because a read failed is unmeasured (status-unknown), never busy (session-busy)', () => {
+    expect(frameRowVerdict(row('busy', 'idle', true))).toBe('unmeasured');
+  });
+  it('a measured row answers archiveInterrupts: busy for a turn or a question, else idle', () => {
+    expect(frameRowVerdict(row('busy', 'idle'))).toBe('busy');
+    expect(frameRowVerdict(row('idle', 'working'))).toBe('busy');
+    expect(frameRowVerdict(row('idle', 'attention'))).toBe('busy');
+    expect(frameRowVerdict(row('idle', 'idle'))).toBe('idle');
+  });
+  it('no row is read busy, as before (unreachable by construction)', () => {
+    expect(frameRowVerdict(null)).toBe('busy');
   });
 });

@@ -29,6 +29,11 @@ set +x   # FIRST LINE OF CODE, and it is a SECRETS control — the box token bel
 #   - PORTABILITY: no bare `timeout` (curl's `--max-time` is the deadline), no
 #     `stat -c`, no template-less `mktemp`, no GNU `date`. `macos-platform.test.ts`
 #     scans this file WHOLE; it carries no platform-layer region either.
+#   - ALL OF THE ABOVE, ALSO for the server-caps pull (D-5232's mechanism, plan
+#     2026-10-16 Task 9b): its own section, right after the server URL is read,
+#     asks `/health` with NO token, writes nothing unless the whole answer
+#     arrived, installs by `os.rename`, and — unlike every other arm here —
+#     never exits: its failures fall through to the intent pull.
 #
 # DIFFERENT, and why:
 #   - VALIDATE, NEVER RENDER. `/api/pools/epoch` answers JSON that the pool
@@ -224,6 +229,87 @@ url=$(grep -E '^[[:space:]]*CCRC_SERVER_URL=' "$AGENT_ENV" | tail -n1 | cut -d= 
 url="${url/#ws:/http:}"; url="${url/#wss:/https:}"
 url="${url%/}"
 
+# ── THE SERVER'S CAPABILITY WORDS: a second, independent pull (D-5232's ────
+# mechanism; plan 2026-10-16 Task 9b; spec §6.1). `GET <CCRC_SERVER_URL>/health`
+# — the same address, NO TOKEN (`/health` is exempt from the auth gate, and the
+# box token is never sent where it is not needed), the same `--max-time` and
+# `--max-filesize` — rendered to the three lines of `~/.ccrc/server-caps`
+# (`SERVER_CAPS_FILE`, shared/api.ts) with THIS node's clock as `at`, which the
+# hook reads to engage an arm that changes an existing field's meaning only
+# behind a server that reads it. PLACED HERE, before the node-id and box-token
+# checks below (each of which exits 1), so a node with neither still records
+# its server's words; and before the intent pull, which it never stops: EVERY
+# FAILURE ARM WRITES NOTHING AND RETURNS, never `exit`s. The copied discipline,
+# applied to this section too: the body goes to a bounded FILE, never a bash
+# variable (D-3280); python reads at most the cap plus one byte, refuses a NUL
+# and anything at or over the cap before decoding; tmp-then-rename by python's
+# `os.rename`; 0600 under this file's `umask 077`; the temps cleaned by the
+# EXIT trap and on every arm. WRITE NOTHING UNLESS THE WHOLE ANSWER ARRIVED:
+# a JSON object, whose `caps` is absent (an older server: written as an empty
+# list, since the whole answer arrived and named nothing) or a list of words
+# on the grammar — anything else refuses the WHOLE answer. The word grammar
+# is the second copy of shared/api.ts's `isServerCapWord`, held equal by
+# `ccd-update-sync.test.ts`'s shared table. A previous file is left as it was:
+# its own `at` ages it out within the hook's 180 s lease.
+caps_dest="$HOME/.ccrc/server-caps"
+caps_body="${caps_dest%/*}/.server-caps.$$.body.tmp"
+caps_tmp="${caps_dest%/*}/.server-caps.$$.tmp"
+trap 'rm -f -- "$caps_body" "$caps_tmp"' EXIT
+_caps_pull() {
+  local code rc cerr
+  mkdir -p -- "${caps_dest%/*}" 2>/dev/null \
+    || { say "server-caps: could not create ~/.ccrc — not recorded"; return 0; }
+  rm -f -- "$caps_body" "$caps_tmp"
+  code="$(curl -sS -o "$caps_body" -w '%{http_code}' --max-filesize 65536 \
+    --max-time "$TIMEOUT" "$url/health" </dev/null 2>/dev/null)"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    rm -f -- "$caps_body"; say "server-caps: unmeasured — curl exited $rc on /health; not recorded"; return 0
+  fi
+  if [ "$code" != 200 ]; then
+    rm -f -- "$caps_body"; say "server-caps: unmeasured — /health answered HTTP $code; not recorded"; return 0
+  fi
+  cerr="$(LC_ALL=C.UTF-8 python3 -c '
+import json, re, sys, time
+CAP = 65536
+WORD = re.compile(r"[a-z0-9-]{1,64}")   # shared/api.ts isServerCapWord, the TypeScript copy
+body_path, dest_path = sys.argv[1], sys.argv[2]
+try:
+    with open(body_path, "rb") as f:
+        raw = f.read(CAP + 1)
+    if b"\x00" in raw:
+        raise ValueError("the /health body contains a NUL byte")
+    if len(raw) >= CAP:
+        raise ValueError("the /health body is at or over the %d-byte cap" % CAP)
+    doc = json.loads(raw.decode("utf-8"))
+    if not isinstance(doc, dict):
+        raise ValueError("the /health body is not a JSON object")
+    caps = doc.get("caps", [])
+    if not isinstance(caps, list) or not all(isinstance(w, str) and WORD.fullmatch(w) for w in caps):
+        raise ValueError("the /health caps is not a list of capability words")
+except Exception as ex:
+    sys.stderr.write((str(ex).splitlines() or ["refused"])[0][:200] + "\n"); sys.exit(1)
+try:
+    with open(dest_path, "w", encoding="ascii", newline="") as f:
+        f.write("at %d\ncaps%s\nend\n" % (int(time.time()), "".join(" " + w for w in caps)))
+except OSError as ex:
+    sys.stderr.write(str(ex) + "\n"); sys.exit(2)
+' "$caps_body" "$caps_tmp" 2>&1 >/dev/null)"; rc=$?
+  rm -f -- "$caps_body"
+  if [ "$rc" -ne 0 ]; then
+    rm -f -- "$caps_tmp"
+    if [ "$rc" -eq 2 ]; then say "server-caps: could not stage ~/.ccrc/server-caps — not recorded"
+    else say "server-caps: unmeasured — ${cerr:-the /health answer was refused}; not recorded"; fi
+    return 0
+  fi
+  if [ ! -L "$caps_dest" ] && [ -d "$caps_dest" ]; then
+    rm -f -- "$caps_tmp"; say "server-caps: a directory sits at ~/.ccrc/server-caps — not recorded"; return 0
+  fi
+  python3 -c 'import os, sys; os.rename(sys.argv[1], sys.argv[2])' "$caps_tmp" "$caps_dest" 2>/dev/null \
+    || { rm -f -- "$caps_tmp"; say "server-caps: could not install ~/.ccrc/server-caps — not recorded"; }
+  return 0
+}
+_caps_pull
+
 # THE NODE'S OWN NAME, before any request: the route is keyed by it, and a
 # request for an empty or guessed id is one the control plane can only refuse.
 if [[ ! -e "$NODE_ID_FILE" && ! -L "$NODE_ID_FILE" ]]; then
@@ -265,7 +351,7 @@ dir="${DEST%/*}"
 mkdir -p -- "$dir" || { say "could not create ~/.ccrc — nothing was synced"; exit 1; }
 body_tmp="$dir/.update-intent.$$.body.tmp"
 tmp="$dir/.update-intent.$$.tmp"
-trap 'rm -f -- "$body_tmp" "$tmp"' EXIT
+trap 'rm -f -- "$body_tmp" "$tmp" "$caps_body" "$caps_tmp"' EXIT
 rm -f -- "$body_tmp" "$tmp"
 
 # `-K -` reads the header from stdin: never argv, never environ. The BODY now

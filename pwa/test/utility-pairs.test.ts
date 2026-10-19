@@ -46,6 +46,7 @@ import path from 'node:path';
 import { loadThemes, ratio } from '../design/audit.mjs';
 import { cn } from '../../ui/src/lib/cn';
 import * as ui from '@ccrc/ui';
+import { colourStems } from './themeStems';
 
 const UI_SRC = path.join(import.meta.dirname, '..', '..', 'ui', 'src');
 
@@ -62,22 +63,7 @@ function componentFiles(dir: string): string[] {
   return out.sort();
 }
 
-/** theme.css's `@theme` block as `utility-stem -> css expression`, e.g.
- *  `accent -> var(--accent)`. This is the ONLY source of truth for whether a
- *  `text-*` names a colour or a font size: `--color-ink-primary` exists and
- *  `--color-base` does not, so `text-ink-primary` is ink and `text-base` is a
- *  size. A hand-kept exclusion list of size names would be the same drift
- *  this whole file exists to avoid. */
-function colourStems(): Map<string, string> {
-  const css = readFileSync(path.join(UI_SRC, 'styles', 'theme.css'), 'utf8')
-    .replace(/\/\*[\s\S]*?\*\//g, '');
-  const out = new Map<string, string>();
-  for (const m of css.matchAll(/--color-([\w-]+)\s*:\s*([^;]+);/g)) {
-    out.set(m[1] ?? '', (m[2] ?? '').trim());
-  }
-  return out;
-}
-
+// The stem map is shared with wordmark.test.tsx (themeStems.ts, D-5470).
 const STEMS = colourStems();
 
 /** Every class string literal in a component: cva bases, cva variant values,
@@ -188,6 +174,20 @@ describe('every self-grounded utility pair a component renders is measured', () 
       state: '',
       ink: 'var(--ink-on-accent)',
       ground: 'var(--accent)',
+    });
+  });
+
+  it('the danger button pairs ink-on-danger on status-dead', () => {
+    // D-5099. The filled red confirm on every destructive sheet: its ink is a
+    // token of its own, fitted per palette to the dead hue (near-black on a
+    // dark palette, white on a light one). Named here so a variant that drifts
+    // to the phosphor fill, or back to the accent's ink, is a decision someone
+    // has to make in this file rather than a class swap nobody measures.
+    expect(pairs).toContainEqual({
+      file: 'button.tsx',
+      state: '',
+      ink: 'var(--ink-on-danger)',
+      ground: 'var(--status-dead)',
     });
   });
 
@@ -327,8 +327,7 @@ describe('every class string survives the merge that renders it', () => {
     .filter(([, v]) => /(^|\s)(bg|text|border|font|min-h|w)-[a-z0-9]/.test(v));
   // `buttonVariants()` is deliberately NOT a source: a cva composes BASE then
   // VARIANT, and a variant overriding the base is the mechanism working —
-  // `ghost` replaces the base's `transition-transform`, `quiet` its `font-ui`
-  // and its press scale. A check over the composed string would read every
+  // `quiet` replaces the base's `font-ui` and its press scale. A check over the composed string would read every
   // intended override as a loss. What is checked here is each string ALONE.
   const strings: [string, string][] = [
     ...componentFiles(UI_SRC).flatMap((f) =>
@@ -352,6 +351,35 @@ describe('every class string survives the merge that renders it', () => {
       if (dropped.length > 0) lost.push(`${file}: ${dropped.join(' ')}  (in "${s}")`);
     }
     expect(lost).toEqual([]);
+  });
+
+  // THE SKIN ROLES ARE NEW KEYS, AND AN UNTAUGHT MERGE MISREADS THEM (D-5093).
+  // Measured with `cn.ts`'s own config on tailwind-merge 3.7.0 before it was
+  // taught: `cn('text-ink-primary', 'text-meta')` returned "text-meta" — the
+  // prefix rule read the role as a text COLOUR and deleted the ink — and the
+  // same for `text-ui` and the page title's role. The spacing roles failed the
+  // other way: `cn('p-4', 'p-gutter')` kept both, so a caller's role never
+  // replaced a component's step and Tailwind's emit order picked. Nothing
+  // reads a role yet (Task 14 adopts them), so these are the only places the
+  // loss shows. The page title's key is `title`, not `page`: `text-page` IS a
+  // colour (`--color-page`, the page ground), so the merge is right to read it
+  // as one (`skin-catalogue.test.ts` compiles every key to prove which).
+  it('an ink survives beside every new size key', () => {
+    for (const k of ['md', 'ui', 'prose', 'meta', 'title', 'section']) {
+      expect(cn('text-ink-primary', `text-${k}`).split(/\s+/), `text-${k}`)
+        .toEqual(['text-ink-primary', `text-${k}`]);
+    }
+  });
+
+  it('a new spacing key replaces its scale twin', () => {
+    expect(cn('p-4', 'p-gutter')).toBe('p-gutter');
+    expect(cn('px-4', 'px-gutter')).toBe('px-gutter');
+    expect(cn('min-h-[52px]', 'min-h-row')).toBe('min-h-row');
+    expect(cn('h-8', 'h-row')).toBe('h-row');
+    expect(cn('p-3', 'p-card')).toBe('p-card');
+    expect(cn('gap-2', 'gap-section')).toBe('gap-section');
+    // And back: a scale step after a role replaces the role.
+    expect(cn('p-gutter', 'p-4')).toBe('p-4');
   });
 
   it('still lets a caller override what a component set', () => {

@@ -146,7 +146,7 @@ Reviewers: do not raise these.
    - The census in the same file pins each name to one file. It also pins the exact spelling `startsWith(PROVENANCE_DETAIL_PREFIX)` on a code line to exactly three holders: `shared/update-move.ts`, `server/src/coord/store.ts` (the store's own JS form, residue) and `server/src/update/inventory.ts` (a different question).
    - **What the census does not see:** a copy spelled another way (a `'provenance:'` literal, `indexOf`, or a bare `failed || reverted`; `canAck` holds that pair legitimately). The census pins that one spelling, not every possible fourth spelling.
 2. **One Ack, sent once per lease.**
-   - The halt banner's button is `disabled={!canAck(n, releases) || acking || acked}`, and its tap is `sendAck`, the pair the Settings row calls.
+   - The halt banner's button is `disabled={!canAck(n, releases) || acking || held}` (this listing first named the flag `acked`), and its tap is `sendAck`, the pair the Settings row calls.
    - `canAck` is driven behaviourally: a pass-through `vi.fn` lets one case make it refuse, and the rendered Ack is then disabled (T4-1).
    - A property case pins that every row the halt rule names passes `canAck`, over every state × a detail spread (T4-11). This stops a settled state added later from halting the fleet while its Ack stays disabled.
    - After a clean 200 the row stays down, labelled `Acked`, until a poll shows a different lease. After an unreadable answer or no answer, it stays down until a read the screen issued after the outcome lands (D-4272, D-4273). A second tap against the same lease sends nothing (T4-8, T4-10). A refusal, a 4xx the server gave, re-arms the row (T4-9).
@@ -236,7 +236,7 @@ These are departures from R15 as ruled, from the brief's "PWA wave", or from wha
   - **Now:**
     - `UpdatesPoll` gains `seq`, set in the same `setState` as `view`, so the two always describe one read. It is 0 before a good read, and a failed, malformed or 501 read leaves it where it was (the view is kept, so is its number). `reload()` returns its issue number. The counter is a ref, so numbers stay monotonic across a `pollMs` change; the newest-issued guard and the kept view on failure are as before. The other callers (`UpdateBanner`, `SettingsScreen`) read neither, and a `() => number` is assignable where a `() => void` is expected.
     - `HaltRow` calls `onAcked()` INSIDE the outcome callback, so every read issued before the outcome has a lower number, and keeps the return as `after`. An `unreadable` or `unanswered` hold lasts while `seq < after`. Then the hold ends: the same lease re-arms the row, and a new lease arms it for that lease.
-    - When `onAcked()` returns no positive integer (the injected mode returns 0: no read was issued, and a read it cannot date must not release), the hold falls back to the lease, as a clean 200's does (ruling G).
+    - When `onAcked()` returns no positive integer (the injected mode returns 0: no read was issued, and a read it cannot date must not release), the hold falls back to the lease, as a clean 200's does (round 2's FIX item 1).
     - A clean 200 and a 4xx refusal are as D-4272 has them. No operator-visible string changes.
   - **Why (a), a number, not (b), a promise that settles when a read at or after it commits:** `seq` commits in the same `setState` as the view it describes, so the release is a pure function of one render. (b) needs a list of waiters, a hop from the settle to a `setState` (an async gap in which a render can pair a stale view with a settled hold), and a promise that never settles in the injected mode.
 
@@ -1146,9 +1146,9 @@ The worker's reserve: number 4274, written bare until defined (4270 to 4273 are 
     catalogue: { lastOkAt: 1, lastError: null }, releases, nodes, intent: [],
   });
   const banner = (): Element | null => document.querySelector('.halt-banner');
-  const mount = (v: UpdatesView | null) => {
-    const onAcked = vi.fn();
-    render(<><ToastHost /><HaltBanner updates={v} onAcked={onAcked} /></>);
+  const mount = (v: UpdatesView | null, seq = 1) => {
+    const onAcked = vi.fn(() => 2);
+    render(<><ToastHost /><HaltBanner updates={v} seq={seq} onAcked={onAcked} /></>);
     return { onAcked };
   };
 
@@ -1207,8 +1207,8 @@ The worker's reserve: number 4274, written bare until defined (4270 to 4273 are 
 
     it('after a clean 200 the row stays down until a poll shows a different lease — a second tap sends nothing', async () => {
       const ack = vi.spyOn(api, 'ackUpdateNode').mockResolvedValue({ ok: true, node: node() });
-      const onAcked = vi.fn(); // the re-poll failed: the hook keeps the last good view, so the same lease stands
-      const { rerender } = render(<><ToastHost /><HaltBanner updates={view([failed()])} onAcked={onAcked} /></>);
+      const onAcked = vi.fn(() => 2); // the re-poll failed: the hook keeps the last good view, so the same lease stands
+      const { rerender } = render(<><ToastHost /><HaltBanner updates={view([failed()])} seq={1} onAcked={onAcked} /></>);
       fireEvent.click(screen.getByRole('button', { name: 'Ack fleet' }));
       await waitFor(() => expect(onAcked).toHaveBeenCalledTimes(1));
       const button = screen.getByRole('button', { name: 'Ack fleet' });
@@ -1217,7 +1217,7 @@ The worker's reserve: number 4274, written bare until defined (4270 to 4273 are 
       fireEvent.click(button);
       expect(ack).toHaveBeenCalledTimes(1);
       // A NEW failure on the same node is a new lease: the button re-arms.
-      rerender(<><ToastHost /><HaltBanner updates={view([failed({ update: { state: 'failed', target: 'v0.0.85', startedAt: 2, detail: 'gate: unit not up' } })])} onAcked={onAcked} /></>);
+      rerender(<><ToastHost /><HaltBanner updates={view([failed({ update: { state: 'failed', target: 'v0.0.85', startedAt: 2, detail: 'gate: unit not up' } })])} seq={2} onAcked={onAcked} /></>);
       expect(screen.getByRole('button', { name: 'Ack fleet' })).not.toBeDisabled();
       expect(screen.getByRole('button', { name: 'Ack fleet' })).toHaveTextContent(/^Ack$/);
     });
@@ -1252,7 +1252,7 @@ The worker's reserve: number 4274, written bare until defined (4270 to 4273 are 
       expect(settingsSrc).toMatch(/void sendAck\(n\.nodeId\)/);
       expect(bannerSrc).toMatch(/import \{ canAck, sendAck \} from '\.\/updateAck';/);
       // The gate is canAck on every row, though a halting row passes it by construction: no behaviour can red for it.
-      expect(bannerSrc).toContain('disabled={!canAck(n, releases) || acking || acked}');
+      expect(bannerSrc).toContain('disabled={!canAck(n, releases) || acking || held}');
       expect(bannerSrc).toContain('void sendAck(n.nodeId).then(');
       expect(bannerSrc).not.toMatch(/SETTLED_UPDATE_STATES|ackUpdateNode/);
     });
@@ -1532,7 +1532,7 @@ The worker's reserve: number 4274, written bare until defined (4270 to 4273 are 
       <HaltBanner updates={updates.view} seq={updates.seq} onAcked={updates.reload} />
   ```
 - [ ] **Step 6: Run:**
-  - `halt-banner` (**13**);
+  - `halt-banner` (**13** in this listing; the shipped file has 51, after the two fix rounds' cases and wave 19's);
   - `fleet-screen` (**100**). Its wave-14 describe needs Tasks 5 and 6 for its Update-all and skew assertions, so run the file whole again after Task 6;
   - `contrast` (**256**) and `fleet-css` (**80**), run only;
   - `node design/contrast-check.mjs` (`ALL 628 PASS`, with `fleet.css .halt-banner` passing at 8.52 dark and 4.94 light).
@@ -1542,8 +1542,8 @@ The worker's reserve: number 4274, written bare until defined (4270 to 4273 are 
 
   | Row | File | Mutation | Command(s) | Measured red |
   |---|---|---|---|---|
-  | T4-1 | `HaltBanner.tsx` | `disabled={acking \|\| acked}` (no `canAck`) | `halt-banner` | 2 (`the rendered gate IS canAck: …`, `Settings re-exports the same function …`) |
-  | T4-2 | `HaltBanner.tsx` | `disabled={!canAck(n, releases) \|\| acked}` (no in-flight guard) | `halt-banner` | 2 (`sends POST /api/updates/ack for that node once, then re-polls`, the source pin) |
+  | T4-1 | `HaltBanner.tsx` | `disabled={acking \|\| acked}` (no `canAck`; at the shipped code the flag is `held`) | `halt-banner` | 2 (`the rendered gate IS canAck: …`, `Settings re-exports the same function …`) |
+  | T4-2 | `HaltBanner.tsx` | `disabled={!canAck(n, releases) \|\| acked}` (no in-flight guard; at the shipped code the flag is `held`) | `halt-banner` | 2 (`sends POST /api/updates/ack for that node once, then re-polls`, the source pin) |
   | T4-3 | `HaltBanner.tsx` | `void Promise.resolve('acked' as const).then(` in place of `sendAck` | `halt-banner`; `fleet-screen -t "programme wave 14"` | `halt-banner` 4 (`sends POST …`, `an unreadable answer and a refusal …`, `after a clean 200 the row stays down …`, the source pin); `fleet-screen` 1 (`names the halt, …, and acks in place`) |
   | T4-4 | `HaltBanner.tsx` | drop `onAcked();` | `halt-banner` | 3 (`sends POST …`, `an unreadable answer and a refusal …`, `after a clean 200 …`) |
   | T4-5 | `HaltBanner.tsx` | `const halting = view.nodes;` | `halt-banner` | 1 (`is silent with no view, and with no halting node …`) |
@@ -1576,7 +1576,7 @@ The worker's reserve: number 4274, written bare until defined (4270 to 4273 are 
   | R2-3 | `HaltBanner.tsx` | `after = seq + 1` from the committed seq; `onAcked()` called, its return ignored | `halt-banner` | 22 |
   | R2-4 | `useUpdatesView.ts` | a rejected read sets `seq: mine` | `use-updates-view`; `halt-banner` | `use-updates-view` 2; `halt-banner` 4 (the failed post-outcome read cells) |
   | R2-5 | `useUpdatesView.ts` | a malformed read sets `seq: mine` | `use-updates-view` | 1 |
-  | R2-6 | `HaltBanner.tsx` | `after: issued` with no positive-integer check (ruling G removed) | `halt-banner` | 4 (the `onAcked` answers 0 or undefined cases) |
+  | R2-6 | `HaltBanner.tsx` | `after: issued` with no positive-integer check (round 2's FIX item 1 removed) | `halt-banner` | 4 (the `onAcked` answers 0 or undefined cases) |
   | R2-7 | `HaltBanner.tsx` | `seq < hold.after` becomes `true` (never releases) | `halt-banner` | 17 |
   | R2-8 | `FleetScreen.tsx` | drop `seq={updates.seq}` | `tsc --noEmit -p .` | fails: `Property 'seq' is missing` |
 - [ ] **Step 8: Commit:** `feat(update): the halt banner — each halting node and its Ack on the home screen, held down until the lease changes (wave 14, R15a)`.

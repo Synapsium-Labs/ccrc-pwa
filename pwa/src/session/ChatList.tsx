@@ -46,6 +46,7 @@ function ChatItemBody({
   onRetry,
   onDiscard,
   askPending,
+  answerLabel,
   onAnswer,
 }: {
   item: ChatItem;
@@ -54,6 +55,8 @@ function ChatItemBody({
   onRetry?: (key: string) => void;
   onDiscard?: (key: string) => void;
   askPending?: boolean;
+  /** The transcript's Answer control's word (decision `ask-answer-control-says-submit`). */
+  answerLabel?: string;
   onAnswer?: () => void;
 }): ReactNode {
   switch (item.kind) {
@@ -63,7 +66,7 @@ function ChatItemBody({
       return <MessageBubble event={item.event} id={id} streaming={item.streaming} />;
     case 'tool':
       return (
-        <ToolCard use={item.use} result={item.result} askPending={askPending} onAnswer={onAnswer} />
+        <ToolCard use={item.use} result={item.result} askPending={askPending} answerLabel={answerLabel} onAnswer={onAnswer} />
       );
     case 'mail':
       return <MailCard envelope={item.envelope} />;
@@ -112,6 +115,8 @@ export interface ChatListProps {
    *  two sources the ask card's state axis is derived from; the other is the
    *  card's own `tool_result`. */
   askPending?: boolean;
+  /** The transcript's Answer control's word (decision `ask-answer-control-says-submit`). */
+  answerLabel?: string;
   /** Raise the answer sheet. The transcript never answers anything itself —
    *  `EnvelopeSheet` stays the one hardened sender. */
   onAnswer?: () => void;
@@ -127,6 +132,7 @@ export function ChatListInner({
   onRetry,
   onDiscard,
   askPending,
+  answerLabel,
   onAnswer,
 }: ChatListProps): ReactNode {
   const items = buildChatItems(events, pending, busy);
@@ -139,7 +145,7 @@ export function ChatListInner({
             id={id}
             onRetry={onRetry}
             onDiscard={onDiscard}
-            askPending={askPending}
+            askPending={askPending} answerLabel={answerLabel}
             onAnswer={onAnswer}
           />
         </div>
@@ -429,6 +435,33 @@ const PROBE_TEXT = 'the parser reads each record and the cache keeps the result 
  *  fewer was not laid out the way the rows are. */
 const MIN_MEASURE = 8;
 
+/** THE BAND JUMP TO LATEST COVERS (the audit's B12; D-5464). `.jump-latest`
+ *  sits `--sp-3` above the foot of the list and is at least `--tap-min` tall,
+ *  so it covers whatever is in the bottom `--tap-min + --sp-3` of it. While the
+ *  newest row's foot is inside that band, a failed send's Retry and Discard are
+ *  under the pill: measured at 390, a reader 6-40px above the end had Retry
+ *  covered. So the reader counts as AT the newest turn while within the band,
+ *  and the pill shows only once the row has left it.
+ *
+ *  Not a Footer the pill's size, the plan's first remedy: added below the
+ *  viewport it moves no row, and the row clears the pill only at the very end,
+ *  where the pill already hides (measured, D-5464).
+ *
+ *  Read from the two tokens the pill's rule is drawn with
+ *  (`jump-latest.test.tsx` binds the rule to them), never a copy of their
+ *  values. A token that does not read as pixels leaves virtuoso's own
+ *  threshold. */
+export function pillBandOf(column: HTMLElement): number | undefined {
+  // The tokens are `:root`'s (tokens.css; no skin redeclares either).
+  const style = getComputedStyle(column.ownerDocument.documentElement);
+  const px = (name: string): number => {
+    const v = style.getPropertyValue(name).trim();
+    return /^\d+(\.\d+)?px$/.test(v) ? Number.parseFloat(v) : Number.NaN;
+  };
+  const band = px('--tap-min') + px('--sp-3');
+  return Number.isFinite(band) ? band : undefined;
+}
+
 /**
  * THE COLUMN'S MEASURES (`Measures`), read the only way they can be: by laying
  * out, hidden, one assistant paragraph and one user bubble in the live column,
@@ -540,6 +573,11 @@ class Column {
     return (this.measured ??= measuresOf(this.el));
   }
 
+  /** The band Jump to latest covers at the foot of the list (D-5464). */
+  pillBand(): number | undefined {
+    return this.el === null ? undefined : pillBandOf(this.el);
+  }
+
   /** Whether the list is still moving on its own. */
   settling(): boolean {
     return performance.now() < this.settleUntil;
@@ -585,6 +623,7 @@ function ChatScroller({
   onRetry,
   onDiscard,
   askPending,
+  answerLabel,
   onAnswer,
   column,
 }: ChatListProps & { column: Column }): ReactNode {
@@ -623,6 +662,8 @@ function ChatScroller({
   // nothing it reads. The NEXT visit gets the benefit of this one.
   const [opened] = useState(() => openWith(items, column.measures()));
   const [meter] = useState(() => new RowMeter(() => column.measures()));
+  // The pill's band, read once per mount: no skin or palette moves either token.
+  const [band] = useState(() => column.pillBand());
 
   // THE SNAPSHOT GOES TO VIRTUOSO ON THE MOUNT RENDER ONLY. Virtuoso reads it
   // once, on mount, but re-publishes every prop it is handed on every render,
@@ -673,7 +714,7 @@ function ChatScroller({
                 id={id}
                 onRetry={onRetry}
                 onDiscard={onDiscard}
-                askPending={askPending}
+                askPending={askPending} answerLabel={answerLabel}
                 onAnswer={onAnswer}
               />
             </MeasuredItem>
@@ -696,6 +737,9 @@ function ChatScroller({
         // Stick to the bottom while the reader is there; never yank them back.
         followOutput={(isAtBottom) => (isAtBottom ? 'smooth' : false)}
         atBottomStateChange={onAtBottom}
+        // At the newest turn while its foot is inside the pill's band, so Jump
+        // to latest never sits on a failed send's Retry or Discard (D-5464).
+        {...(band !== undefined ? { atBottomThreshold: band } : {})}
         initialTopMostItemIndex={OPEN_AT_NEWEST}
         alignToBottom
       />

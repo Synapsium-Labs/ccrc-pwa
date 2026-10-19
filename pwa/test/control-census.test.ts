@@ -247,10 +247,21 @@ const CONTROLS: Record<string, string> = {
   'session/Composer.tsx <button> draft-cancel': 'TOKEN. The draft cancel.',
   'session/Composer.tsx <button> send-btn': 'TOKEN. Send.',
   'session/Composer.tsx <button> slash-item': 'TOKEN. A slash-command row — one of the six floors this wave converted from a literal.',
+  'session/AskParts.tsx <button> ask-tab': 'TOKEN. A tab-strip chip (AskTabs, decision ask-tab-strip), one per question and Submit, which both ask sheets render.',
+  'session/AskParts.tsx <button> dlg-reply-send': 'TOKEN. Send, beside the own-words field (OwnWords, D-5090), which both ask sheets render.',
   'session/DialogSheet.tsx <button> dlg-details-toggle': 'TOKEN. The details disclosure.',
   'session/EnvelopeSheet.tsx <button> dlg-later': 'TOKEN. Both "Not now" rows, rendered by TerminalCta — which lives beside the envelope sheet and is imported back by the controller.',
-  'session/DialogSheet.tsx <button> dlg-reply-send': 'TOKEN. Send, beside the reply field.',
   'session/DialogSheet.tsx <button> opt-preview-toggle': 'TOKEN. The option preview disclosure.',
+  'session/TerminalDrawer.tsx <button> term-view':
+    'TOKEN, and OVERLAY below. The terminal drawer\'s header chips — the view\'s '
+    + 'flip and the offer of the grid (D-5005) — one class, two buttons. The pill '
+    + 'is @ccrc/ui\'s Chip at about 20px; growing it to 44 would take that much '
+    + 'glass from a phone whose keyboard is up, so the ::before carries the floor.',
+  'session/WrappedView.tsx <div> term-wrap':
+    'TOKEN. The terminal drawer\'s wrapped view (D-5006): a `<div onClick>` because '
+    + 'the whole glass is the tap that focuses the terminal and types (operator '
+    + 'ruling R-LIVE). It is `inset: 0` over the glass, and declares the floor so '
+    + 'a glass a keyboard squeezes never leaves it under a tap.',
 
   // ── not buttons: the seventeen the first spelling of this census missed ──
   'fleet/AccountsStrip.tsx <div> accounts-strip':
@@ -277,6 +288,10 @@ const CONTROLS: Record<string, string> = {
   // wraps it" — is unchanged as an argument; what changed is where it is
   // enforced. `RADIO_OPTION` carries `min-h-tap` and `tap-targets.test.tsx`
   // reads it off the component, exactly as it reads `TEXT_INPUT`'s.
+  'screens/DigestScreen.tsx <textarea> digest-correct-input':
+    'TOKEN. The digest\'s correction box (D-5300): `.digest-correct-input` is '
+    + '`min-height: calc(var(--tap-min) * 2)`, two floors tall, because it '
+    + 'opens at three rows for a sentence and grows by its own resize handle.',
   'session/Composer.tsx <textarea> composer-input':
     'TOKEN by VALUE — see FLOOR_BY_VALUE. `padding: 10px 0` around '
     + '`--fs-input` (16px) at `--lh-normal` (1.5) is 10 + 24 + 10 = 44 exactly, '
@@ -383,12 +398,38 @@ const CONTROLS: Record<string, string> = {
     + 'session header up to 53px. An overlay stays barred: it would overhang the '
     + 'OTHER chip, and both are live choosers. The citation is REQUIRED because '
     + 'the class is computed: see CITES_A_RULE.',
+  // ── native Docs reader W5 part 1 (docs/ and the fleet header's door), which landed after this census ────────
+  // Every Docs control carries `min-height: var(--tap-min)` in its own docs.css rule (docs.css's TAP FLOOR header;
+  // tap-targets.test.tsx pins each rule and its rendered class); the exemption is a link in running text.
+  'fleet/FleetHead.tsx <button> docs-door': "TOKEN. The fleet header's door to /docs, a plain button whose box is docs.css's `.docs-door`, not `Door`.",
+  'docs/DocsHead.tsx <button> docs-back': 'TOKEN. The Docs header\'s up-one-level chevron.',
+  'docs/DocsHead.tsx <button> docs-crumbs-more': "TOKEN. The phone's leading … in the crumbs, which opens the full path.",
+  'docs/DocsHead.tsx <button> docs-fresh': "TOKEN. The freshness chip at the truth line's end, which fetches from origin.",
+  'docs/DocsHead.tsx <button> docs-copy': 'TOKEN. Copy commit, on the truth line.',
+  'docs/DocsHead.tsx <a> docs-action': 'TOKEN. View on GitHub and Open committed version, standalone links in the header.',
+  'docs/DocsIndexView.tsx <button> docs-row': 'TOKEN. A project row of the Docs index, one button per row (spec 4.4).',
+  'docs/DocsTreeView.tsx <button> docs-row': 'TOKEN. A section or entry row of a Docs directory, the same rule.',
+  'docs/DocsTreeView.tsx <a> (computed)':
+    'SELECTOR .docs-action, .docs-hint-link, .docs-owner-link. `DocsPageLink`, the in-app <a> every Docs view navigates through, takes its class from '
+    + 'the call site: each standalone use passes one whose rule carries the floor (`.docs-crumb`, `.docs-action`, '
+    + '`.docs-owner-link`, `.docs-hint-link`), and the one use with none is the failure view\'s "Did you mean …?" '
+    + 'link inside its sentence (`.docs-fail-suggest a`), the inline exception docs.css states.',
+  'docs/DocsLeaf.tsx <button> docs-leaf-action': "TOKEN. A leaf's Source and Download.",
+  'docs/DocMarkdown.tsx <button> doc-gate-btn': "TOKEN. The large-document gate's two choices.",
+  'docs/DocMarkdown.tsx <button> doc-plain-action': "TOKEN. Plain text's Format anyway or Retry.",
+  'docs/DocImage.tsx <button> doc-img-load': 'TOKEN. Load image, for an image the page budget held back.',
+  'docs/DocImage.tsx <button> doc-img-action': "TOKEN. A refused image's Open externally or Open in the viewer.",
+  'docs/DocImage.tsx <button> doc-img-link': "TOKEN. A loaded image's own button, which opens its leaf.",
+  'docs/DocLink.tsx <a> (none)':
+    'INLINE. The links inside a rendered document, react-markdown\'s `a` for Docs (in-app, fragment and external). '
+    + 'WCAG 2.2 SC 2.5.8 exempts a target in a sentence or block of text, as for chat\'s `lib/markdown.tsx <a> (none)`.',
 };
 
 /** OVERLAY entries name the pseudo-rule that reaches the floor. */
 const OVERLAYS: Record<string, string> = {
   'fleet/ProjectCardHead.tsx <button> proj-card-add': '.proj-card-add::before',
   'fleet/SessionLine.tsx <button> sess-actions': '.sess-actions::before',
+  'session/TerminalDrawer.tsx <button> term-view': '.term-view::before',
 };
 
 /** The TOKEN entries that reach the floor by VALUE rather than by name.

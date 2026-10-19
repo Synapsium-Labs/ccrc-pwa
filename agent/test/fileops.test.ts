@@ -200,6 +200,235 @@ describe('ccrc-agent file ops', () => {
     expect(res).toMatchObject({ ok: false, err: 'forbidden' });
   });
 
+  // ── delegation wave 3, Task 4 — the measured directory read ─────────────────
+  // `readdir` widens ADDITIVELY from `{names: string[] | null}` to `{names:
+  // string[]}` or `{names: null, absent?: true}`. Same fail-shut rule as every
+  // other `absent` on this wire: the marker rides ONLY a proven ENOENT, so an
+  // older server (which reads `names` and nothing else) is unaffected and a
+  // newer one reads a bare `names: null` as UNMEASURED.
+  describe('readdir: the measured answer', () => {
+    it('an EMPTY whitelisted directory is a POSITIVE answer — names [] and no absent key', async () => {
+      await open();
+      const dir = path.join(fixture!.home, '.cc-sessions', 'delegation-empty');
+      mkdirSync(dir, { recursive: true });
+      const res = await client!.req<Res>(nextId(), { op: 'readdir', path: dir });
+      expect(res).toMatchObject({ ok: true, names: [] });
+      expect(res).not.toHaveProperty('absent');
+    });
+
+    it('a genuinely missing directory answers names:null WITH absent:true', async () => {
+      await open();
+      const res = await client!.req<Res>(nextId(), {
+        op: 'readdir', path: path.join(fixture!.home, '.cc-sessions', 'delegation-nope'),
+      });
+      expect(res).toMatchObject({ ok: true, names: null, absent: true });
+    });
+
+    it('a FILE where a directory was expected (ENOTDIR) answers names:null with NO absent key', async () => {
+      await open();
+      const file = path.join(fixture!.home, '.cc-sessions', 'delegation-a-file');
+      writeFileSync(file, 'x');
+      const res = await client!.req<Res>(nextId(), { op: 'readdir', path: file });
+      expect(res).toMatchObject({ ok: true, names: null });
+      expect(res).not.toHaveProperty('absent');
+    });
+
+    it('a path THROUGH a file (ENOTDIR on the parent) answers names:null with NO absent key', async () => {
+      await open();
+      // ENOTDIR rather than `chmod 000`, for the reason the stat case below
+      // records: chmod does not deny root, so a root runner would assert the
+      // wrong thing.
+      const file = path.join(fixture!.home, '.cc-sessions', 'delegation-a-file-too');
+      writeFileSync(file, 'x');
+      const res = await client!.req<Res>(nextId(), { op: 'readdir', path: path.join(file, 'child') });
+      expect(res).toMatchObject({ ok: true, names: null });
+      expect(res).not.toHaveProperty('absent');
+    });
+
+    it('the whitelist decides BEFORE the filesystem: a missing path outside every root is forbidden, never absent', async () => {
+      await open();
+      // If the agent touched the disk first, this would answer
+      // `{names: null, absent: true}` — a refusal wearing the proof of absence.
+      const res = await client!.req<Res>(nextId(), {
+        op: 'readdir', path: path.join(fixture!.outside, 'delegation-no-such-dir'),
+      });
+      expect(res).toMatchObject({ ok: false, err: 'forbidden' });
+      expect(res).not.toHaveProperty('absent');
+      expect(res).not.toHaveProperty('names');
+    });
+  });
+
+  // ── delegation wave 3, Task 4 — the bounded byte-range read ─────────────────
+  // `readFrom` gains an OPTIONAL `maxBytes`. Present: the agent reads no more
+  // than that many bytes and answers `{data, dataB64, size}` — `data` for an
+  // older server, `dataB64` for a byte-exact one. Absent: the answer is the one
+  // it always was, key for key.
+  describe('readFrom: maxBytes bounds the read and adds dataB64; omitting it changes nothing', () => {
+    const SPOOL_MAX = 262144;
+    const limitsFile = (name: string): string => path.join(fixture!.home, '.cc-limits', name);
+    /** Deterministic non-text content: every byte value, so a lossy UTF-8 round trip cannot hide. */
+    const pattern = (n: number): Buffer => Buffer.from(Array.from({ length: n }, (_, i) => i % 251));
+
+    it('an old caller (no maxBytes) gets the whole remainder as decoded text, the exact old keys, and NO dataB64', async () => {
+      await open();
+      const file = limitsFile('old-caller.json');
+      writeFileSync(file, 'abcdefghij');
+      const res = await client!.req<Res>(nextId(), { op: 'readFrom', path: file, offset: 4 });
+      expect(res).toEqual({ t: 'res', id, ok: true, data: 'efghij', size: 10 });
+      expect(Object.keys(res).sort()).toEqual(['data', 'id', 'ok', 'size', 't']);
+    });
+
+    it('an old caller reading multibyte text keeps the decoded-string answer, and still gets no dataB64', async () => {
+      await open();
+      const file = limitsFile('old-caller-utf8.json');
+      writeFileSync(file, 'a€b');   // 5 bytes: 61 e2 82 ac 62
+      const res = await client!.req<Res>(nextId(), { op: 'readFrom', path: file, offset: 1 });
+      expect(res).toEqual({ t: 'res', id, ok: true, data: '€b', size: 5 });
+      expect(res).not.toHaveProperty('dataB64');
+    });
+
+    it('an old caller still reads the WHOLE remainder of a file larger than the largest maxBytes — omitting the field applies no default bound', async () => {
+      await open();
+      const file = limitsFile('old-caller-big.log');
+      writeFileSync(file, 'x'.repeat(SPOOL_MAX + 100));
+      const res = await client!.req<Res>(nextId(), { op: 'readFrom', path: file, offset: 0 });
+      expect(res.ok).toBe(true);
+      expect((res.data as string).length).toBe(SPOOL_MAX + 100);
+      expect(res.size).toBe(SPOOL_MAX + 100);
+      expect(res).not.toHaveProperty('dataB64');
+    });
+
+    it.each([
+      // [label, offset, maxBytes, expected bytes (as text)]
+      ['start, 1 byte', 0, 1, 'a'],
+      ['start, 4 bytes', 0, 4, 'abcd'],
+      ['middle, 3 bytes', 4, 3, 'efg'],
+      ['middle, the rest exactly', 6, 4, 'ghij'],
+      ['last byte, 1 byte', 9, 1, 'j'],
+      ['the remainder is shorter than maxBytes', 8, SPOOL_MAX, 'ij'],
+      ['the whole file under the largest bound', 0, SPOOL_MAX, 'abcdefghij'],
+    ] as const)('%s: reads exactly that range, with dataB64 = the same bytes and the real size', async (_label, offset, maxBytes, expected) => {
+      await open();
+      const file = limitsFile('range.txt');
+      writeFileSync(file, 'abcdefghij');
+      const res = await client!.req<Res>(nextId(), { op: 'readFrom', path: file, offset, maxBytes });
+      expect(res).toEqual({
+        t: 'res', id, ok: true,
+        data: expected, dataB64: Buffer.from(expected).toString('base64'), size: 10,
+      });
+    });
+
+    it.each([
+      ['exactly at EOF', 10],
+      ['past EOF (the cursor outran a shrunk file)', 12],
+    ] as const)('%s: a POSITIVE empty answer — data "", dataB64 "", the real size, no absent key', async (_label, offset) => {
+      await open();
+      const file = limitsFile('eof.txt');
+      writeFileSync(file, 'abcdefghij');
+      const res = await client!.req<Res>(nextId(), { op: 'readFrom', path: file, offset, maxBytes: 1 });
+      expect(res).toEqual({ t: 'res', id, ok: true, data: '', dataB64: '', size: 10 });
+    });
+
+    it('the largest bound (262144) returns exactly that many bytes of a larger file, byte-exact, at an offset', async () => {
+      await open();
+      const bytes = pattern(SPOOL_MAX + 10);
+      const file = limitsFile('big.bin');
+      writeFileSync(file, bytes);
+      const res = await client!.req<Res>(nextId(), { op: 'readFrom', path: file, offset: 10, maxBytes: SPOOL_MAX });
+      expect(res.ok).toBe(true);
+      expect(res.size).toBe(SPOOL_MAX + 10);
+      expect(Buffer.from(res.dataB64 as string, 'base64').equals(bytes.subarray(10, 10 + SPOOL_MAX))).toBe(true);
+    });
+
+    it('a bound of 1 returns one byte of a larger file and never more', async () => {
+      await open();
+      const bytes = pattern(SPOOL_MAX + 10);
+      const file = limitsFile('one.bin');
+      writeFileSync(file, bytes);
+      const res = await client!.req<Res>(nextId(), { op: 'readFrom', path: file, offset: 7, maxBytes: 1 });
+      expect(res).toMatchObject({ ok: true, dataB64: bytes.subarray(7, 8).toString('base64'), size: SPOOL_MAX + 10 });
+    });
+
+    it('a MULTIBYTE character split by the bound survives byte-exact in dataB64 while `data` is the lossy decode', async () => {
+      await open();
+      const file = limitsFile('euro.txt');
+      writeFileSync(file, '€');   // e2 82 ac
+      const first = await client!.req<Res>(nextId(), { op: 'readFrom', path: file, offset: 0, maxBytes: 1 });
+      expect(first).toMatchObject({ ok: true, dataB64: Buffer.from([0xe2]).toString('base64'), size: 3 });
+      expect(first.data).toBe('�');
+      const second = await client!.req<Res>(nextId(), { op: 'readFrom', path: file, offset: 1, maxBytes: 2 });
+      expect(second).toMatchObject({ ok: true, dataB64: Buffer.from([0x82, 0xac]).toString('base64'), size: 3 });
+      // The two halves rejoin into the character ONLY through the bytes.
+      const joined = Buffer.concat([
+        Buffer.from(first.dataB64 as string, 'base64'), Buffer.from(second.dataB64 as string, 'base64'),
+      ]);
+      expect(new TextDecoder('utf-8', { fatal: true }).decode(joined)).toBe('€');
+    });
+
+    it('bytes that are not UTF-8 at all come back exact in dataB64', async () => {
+      await open();
+      const file = limitsFile('not-utf8.bin');
+      writeFileSync(file, Buffer.from([0xff, 0xfe, 0x00, 0x80]));
+      const res = await client!.req<Res>(nextId(), { op: 'readFrom', path: file, offset: 0, maxBytes: 4 });
+      expect(res.dataB64).toBe('//4AgA==');
+    });
+
+    it.each([
+      ['zero', 0], ['negative', -1], ['fractional', 1.5], ['one past the largest bound', 262145],
+      ['a string', '5'], ['null', null], ['a boolean', true],
+    ] as const)('a maxBytes that is %s is a bad-request, not a read', async (_label, maxBytes) => {
+      await open();
+      const file = limitsFile('bad-bound.txt');
+      writeFileSync(file, 'abcdefghij');
+      const res = await client!.req<Res>(nextId(), { op: 'readFrom', path: file, offset: 0, maxBytes });
+      expect(res).toMatchObject({ ok: false, err: 'bad-request' });
+      expect(res).not.toHaveProperty('data');
+    });
+
+    it.each([['negative', -1], ['fractional', 1.5]] as const)(
+      'a %s offset WITH maxBytes is a bad-request (an old caller\'s clamp does not carry over to the byte arm)',
+      async (_label, offset) => {
+        await open();
+        const file = limitsFile('bad-offset.txt');
+        writeFileSync(file, 'abcdefghij');
+        const res = await client!.req<Res>(nextId(), { op: 'readFrom', path: file, offset, maxBytes: 4 });
+        expect(res).toMatchObject({ ok: false, err: 'bad-request' });
+      },
+    );
+
+    it('a missing file with maxBytes is data:null WITH absent:true and no dataB64', async () => {
+      await open();
+      const res = await client!.req<Res>(nextId(), {
+        op: 'readFrom', path: limitsFile('nope-absent.bin'), offset: 0, maxBytes: 4,
+      });
+      expect(res).toMatchObject({ ok: true, data: null, absent: true });
+      expect(res).not.toHaveProperty('dataB64');
+    });
+
+    it('a DIRECTORY with maxBytes is data:null with NO absent key and no dataB64', async () => {
+      await open();
+      const res = await client!.req<Res>(nextId(), {
+        op: 'readFrom', path: path.join(fixture!.home, '.cc-clips'), offset: 0, maxBytes: 4,
+      });
+      expect(res).toMatchObject({ ok: true, data: null });
+      expect(res).not.toHaveProperty('absent');
+      expect(res).not.toHaveProperty('dataB64');
+    });
+
+    it('the whitelist decides BEFORE the filesystem: outside every root is forbidden (existing or not), never absent, never bytes', async () => {
+      await open();
+      const existing = path.join(fixture!.outside, 'secret.txt');
+      writeFileSync(existing, 'secret');
+      for (const p of [existing, path.join(fixture!.outside, 'delegation-no-such-file')]) {
+        const res = await client!.req<Res>(nextId(), { op: 'readFrom', path: p, offset: 0, maxBytes: 4 });
+        expect(res).toMatchObject({ ok: false, err: 'forbidden' });
+        expect(res).not.toHaveProperty('absent');
+        expect(res).not.toHaveProperty('dataB64');
+        expect(res).not.toHaveProperty('data');
+      }
+    });
+  });
+
   it('stat reports size/mtimeMs for whitelisted files, missing:true otherwise', async () => {
     await open();
     const file = path.join(fixture!.home, '.cc-limits', 'claude.json');

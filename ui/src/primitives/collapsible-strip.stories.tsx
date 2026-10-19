@@ -9,6 +9,7 @@
 // unstyled boxes and prove nothing about how the shape actually reads.
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { CollapsibleStrip } from './collapsible-strip';
+import { Icon } from './icon';
 import '../components/mail-strip.css';
 
 const meta = {
@@ -52,7 +53,7 @@ const rows = (
  *  actually in, and the reason a signal that matters has to live in the head. */
 export const Collapsed: Story = {
   args: {
-    mark: '✉',
+    mark: <Icon name="mail" />,
     headline: 'Which wave owns the reviewer dispatch?',
     count: 2,
     summary: '1 question · 1 finding',
@@ -94,5 +95,5 @@ export const HeadMarks: Story = {
  *  counts ("3 hot-file claims"), so a count beside it would say the same
  *  number twice, and it has no summary line at all. */
 export const NoCountNoSummary: Story = {
-  args: { mark: '✋', headline: '3 hot-file claims', children: rows },
+  args: { mark: <Icon name="hand" />, headline: '3 hot-file claims', children: rows },
 };

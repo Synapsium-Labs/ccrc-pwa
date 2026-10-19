@@ -7,21 +7,106 @@
 // Ack is offered only on a SETTLED lease, because W2's ackNode acks from nothing else (D-3183; D-3310). The route
 // stays the authority: a row that went busy between the poll and the tap comes back as a 409 `busy`, rendered as
 // updateErrorText's sentence. The caller re-polls either way.
+import { createElement, useEffect, useLayoutEffect, useRef } from 'react';
+import type { ReactNode, RefObject } from 'react';
 import type { NodeWire, ReleaseWire } from '../../../shared/api';
 import { SETTLED_UPDATE_STATES } from '../../../shared/api';
-import { toast } from '@ccrc/ui';
+import { compareReleaseTags } from '../../../shared/semver';
+import { QuickConfirm } from '@ccrc/ui';
 import { ApiError, api, updateErrorText } from '../lib/api';
+import type { ResultTone } from '../screens/settingsText';
 
 export const ACK_UNREADABLE_TEXT = "Acknowledged — the server's answer could not be read; the screen will re-check.";
 
-export function canAck(n: NodeWire, releases: readonly ReleaseWire[]): boolean {
+/** Which Ack a node is offered (D-5507, settings spec §6.3), in today's first-match order: a busy or unnamed lease
+ *  offers none; a failed or reverted move is `failed`; then a standing request is `request`; then a refusal this
+ *  node made is `refusal`. The ONE rule: `canAck` is this `!== null`, and `AckConfirm`'s copy is chosen by it, so the
+ *  button's gate and the confirm's words cannot disagree about one row (`update-ack.test.ts`). */
+export type AckBranch = 'failed' | 'request' | 'refusal';
+
+export function ackBranch(n: NodeWire, releases: readonly ReleaseWire[]): AckBranch | null {
   const state = n.update?.state;
   // A busy lease (pending, applying, unknown), an absent state or a word this build cannot name: ackNode answers busy.
-  if (typeof state !== 'string' || !(SETTLED_UPDATE_STATES as readonly string[]).includes(state)) return false;
-  if (state === 'failed' || state === 'reverted') return true;
-  if (typeof n.request === 'object' && n.request !== null) return true;
-  return releases.some((r) => Array.isArray(r.refused) && r.refused.some((x: unknown) =>
-    typeof x === 'object' && x !== null && (x as { by?: unknown }).by === n.nodeId));
+  if (typeof state !== 'string' || !(SETTLED_UPDATE_STATES as readonly string[]).includes(state)) return null;
+  if (state === 'failed' || state === 'reverted') return 'failed';
+  if (typeof n.request === 'object' && n.request !== null) return 'request';
+  return refusedTags(n, releases).length > 0 ? 'refusal' : null;
+}
+
+export function canAck(n: NodeWire, releases: readonly ReleaseWire[]): boolean {
+  return ackBranch(n, releases) !== null;
+}
+
+/** The tags this node refused, newest first: what an Ack forgets, because `ackNode` clears every refusal the node
+ *  holds, whichever branch the Ack was offered for. */
+export function refusedTags(n: NodeWire, releases: readonly ReleaseWire[]): string[] {
+  return releases
+    .filter((r) => Array.isArray(r.refused) && r.refused.some((x: unknown) =>
+      typeof x === 'object' && x !== null && (x as { by?: unknown }).by === n.nodeId))
+    .map((r) => r.tag)
+    .sort((a, b) => compareReleaseTags(b, a));
+}
+
+/** What a node row's Ack does, by its branch (settings spec §5.1), and when to use it; null for a node with no Ack.
+ *  Chosen by `ackBranch`, the one rule, so the note cannot describe an Ack the row does not offer. */
+export function ackNote(n: NodeWire, releases: readonly ReleaseWire[]): string | null {
+  const branch = ackBranch(n, releases);
+  if (branch === null) return null;
+  const when = ' Use it after you have fixed what made the move fail.';
+  if (branch === 'failed') return `Clears this node's failed move, so it returns to idle.${when}`;
+  if (branch === 'request') {
+    const q = n.request as { tag?: unknown; kind?: unknown };
+    const kind = typeof q.kind === 'string' && q.kind !== '' ? q.kind : 'move';
+    const tag = typeof q.tag === 'string' && q.tag !== '' ? q.tag : 'its release';
+    return `Withdraws the request standing on this node (${kind} to ${tag}).${when}`;
+  }
+  return `Makes this node forget the releases it refused (${listWords(refusedTags(n, releases))}).${when}`;
+}
+
+/** `a`, `a and b`, `a, b and c`. */
+function listWords(items: readonly string[]): string {
+  return items.length <= 1 ? (items[0] ?? '') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
+}
+
+/** What `AckConfirm` says (settings spec §6.3's three Ack rows): the title is the question, the lines name what
+ *  changes, and the button is the verb. WHATEVER THE BRANCH, a node that holds a refusal gets the line that Ack
+ *  forgets it and that auto-install may try it again (Review focus item 4): a request-only node with refusals never
+ *  reads "nothing moves" alone. `null` for a node with no Ack. */
+export interface AckConfirmCopy { title: string; lines: string[]; confirmLabel: string }
+
+export function ackConfirmCopy(n: NodeWire, releases: readonly ReleaseWire[]): AckConfirmCopy | null {
+  const branch = ackBranch(n, releases);
+  if (branch === null) return null;
+  const tags = refusedTags(n, releases);
+  const them = tags.length === 1 ? 'it' : 'them';
+  const forgets = (also: boolean): string =>
+    `It ${also ? 'also ' : ''}forgets that it refused ${listWords(tags)}. `
+    + `With auto-install on, the server may try ${them} again on its next check.`;
+  if (branch === 'failed') {
+    const target = typeof n.update?.target === 'string' && n.update.target !== '' ? n.update.target : null;
+    return {
+      title: `Ack ${n.label}'s failed move?`,
+      lines: [
+        'It returns to idle.',
+        ...(tags.length > 0 ? [forgets(true)] : []),
+        // The failed target, unless the refusal line already named it.
+        ...(target !== null && !tags.includes(target)
+          ? [`With auto-install on, the server may try ${target} again on its next check.`] : []),
+      ],
+      confirmLabel: 'Ack',
+    };
+  }
+  if (branch === 'request') {
+    const q = n.request as { tag?: unknown; kind?: unknown };
+    const tag = typeof q.tag === 'string' && q.tag !== '' ? q.tag : 'its release';
+    const verb = q.kind === 'rollback' ? 'roll back' : typeof q.kind === 'string' && q.kind !== '' ? q.kind : 'move';
+    return {
+      title: `Withdraw the request on ${n.label}?`,
+      lines: [`The request to ${verb} to ${tag} is cleared, and nothing moves.`, ...(tags.length > 0 ? [forgets(true)] : [])],
+      confirmLabel: 'Withdraw the request',
+    };
+  }
+  return { title: `Clear ${n.label}'s refusals?`, lines: [forgets(false)], confirmLabel: 'Ack' };
 }
 
 /** How one Ack ended (D-4272):
@@ -32,20 +117,65 @@ export function canAck(n: NodeWire, releases: readonly ReleaseWire[]): boolean {
  *    an abort). The server gave no answer, so the Ack may have landed. */
 export type AckOutcome = 'acked' | 'unreadable' | 'refused' | 'unanswered';
 
-/** `POST /api/updates/ack` for one node, said as a toast: nothing on a clean 200, ACK_UNREADABLE_TEXT when the
- *  answer could not be read, and the error's sentence on a rejection. It never rejects, so the caller's `.finally`
- *  (clear its busy flag, re-poll) always runs; it answers the outcome, so a caller can hold its button down until
- *  a poll shows the row changed (ackNode acks ANY settled row, idle included, and clears its request). A rejection
- *  ends `refused` only for a 4xx `ApiError`; every other rejection ends `unanswered`. */
-export function sendAck(nodeId: string): Promise<AckOutcome> {
+/** `POST /api/updates/ack` for one node. It TOASTS NOTHING (D-5507, settings spec §6.4): the caller writes the line
+ *  under its Ack, through `say` — nothing on a clean 200, ACK_UNREADABLE_TEXT when the answer could not be read, and
+ *  the error's sentence, as a refusal, on a rejection. It never rejects, so the caller's `.finally` (clear its busy
+ *  flag, re-poll) always runs; it answers the outcome, so a caller can hold its button down until a poll shows the
+ *  row changed (ackNode acks ANY settled row, idle included, and clears its request). A rejection ends `refused` only
+ *  for a 4xx `ApiError`; every other rejection ends `unanswered`. */
+export function sendAck(nodeId: string, say: (text: string, tone?: ResultTone) => void): Promise<AckOutcome> {
   return api.ackUpdateNode(nodeId).then(
     (answer): AckOutcome => {
-      if (answer === 'unreadable') { toast(ACK_UNREADABLE_TEXT); return 'unreadable'; }
+      if (answer === 'unreadable') { say(ACK_UNREADABLE_TEXT); return 'unreadable'; }
       return 'acked';
     },
     (err: unknown): AckOutcome => {
-      toast(updateErrorText(err), 'error');
+      say(updateErrorText(err), 'refusal');
       return err instanceof ApiError && err.status >= 400 && err.status < 500 ? 'refused' : 'unanswered';
     },
   );
+}
+
+/** The ONE Ack confirm (D-5507, settings spec §6.3; Review focus item 4). The node row in Settings and the home
+ *  screen's halt banner both open it, so no surface keeps a one-tap Ack and the two cannot word one row apart. A
+ *  danger `QuickConfirm` with Cancel focused; its copy comes from `ackConfirmCopy`, so from `ackBranch`.
+ *
+ *  FOCUS (D-5610), wave 19's R26(a) carried through the confirm (it was `keepFocusInRow`, called on the tap; the tap now only
+ *  opens this, and focus is inside the confirm when the commit lands). The commit disables the Ack that opened it, so the focus the
+ *  confirm gives back would land on a disabled button and drop to <body>. When the Ack was opened from inside its
+ *  row, the row (focusable from script, `tabIndex={-1}`) takes the focus once the confirm has closed; this effect is
+ *  the parent's, so it runs after `useCancelFirst`'s give-back. Opened from elsewhere, the focus goes back there. A
+ *  Cancel gives it back to the Ack itself. */
+export function AckConfirm({ node, releases, open, onClose, onConfirm, rowRef }: {
+  node: NodeWire; releases: readonly ReleaseWire[]; open: boolean; onClose: () => void; onConfirm: () => void;
+  rowRef: RefObject<HTMLElement | null>;
+}): ReactNode {
+  const fromRow = useRef(false);
+  const committed = useRef(false);
+  useLayoutEffect(() => {
+    if (!open) return;
+    const row = rowRef.current;
+    fromRow.current = row !== null && row.contains(document.activeElement);
+    committed.current = false;
+  }, [open, rowRef]);
+  useEffect(() => {
+    if (open || !committed.current) return;
+    committed.current = false;
+    if (fromRow.current) rowRef.current?.focus();
+  }, [open, rowRef]);
+  const copy = ackConfirmCopy(node, releases);
+  // A poll that leaves the node with no Ack while this is open (it went busy, or another tap cleared it) closes it, so
+  // the caller's open flag cannot linger and reopen the confirm when a later Ack appears.
+  const gone = open && copy === null;
+  useEffect(() => { if (gone) onClose(); }, [gone, onClose]);
+  return createElement(QuickConfirm, {
+    open: open && copy !== null,
+    onClose,
+    title: copy?.title ?? '',
+    consequence: copy?.lines ?? [],
+    confirmLabel: copy?.confirmLabel ?? 'Ack',
+    tone: 'danger',
+    defaultFocus: 'cancel',
+    onConfirm: () => { committed.current = true; onConfirm(); },
+  });
 }

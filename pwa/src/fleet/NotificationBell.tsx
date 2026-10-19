@@ -3,7 +3,7 @@
 // where the browser can't do Web Push.
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import { toast } from '@ccrc/ui';
+import { Icon, toast } from '@ccrc/ui';
 import { pushSupported, pushEnabled, enablePush, disablePush } from '../lib/push';
 
 export function NotificationBell(): ReactNode {
@@ -59,7 +59,7 @@ export function NotificationBell(): ReactNode {
       disabled={busy}
       onClick={() => void toggle()}
     >
-      <span aria-hidden="true">{on ? '🔔' : '🔕'}</span>
+      <span aria-hidden="true"><Icon name={on ? 'bell' : 'bell-off'} size={20} /></span>
     </button>
   );
 }

@@ -545,7 +545,8 @@ jobs:
   # like the other advisory legs. Pinned by server/test/ci-pipeline.test.ts.
   storybook-a11y:
     runs-on: ubuntu-latest
-    # The browser download dominates; the run itself is ~40s for 152 stories.
+    # The browser download dominates; each skin's build and axe run is ~40s
+    # for 180 stories, and the job runs one per skin.
     timeout-minutes: 20
     if: github.event_name != 'merge_group' && !((github.event_name == 'push' && !inputs.mode) || inputs.mode == 'rebuild')
     steps:
@@ -568,8 +569,14 @@ jobs:
       # newest that day and runs it.
       - working-directory: ui
         run: ./node_modules/.bin/playwright install --with-deps chromium
+      # ONE BUILD PER SKIN (D-5093, its verification clause): the default
+      # build is Refined (STORYBOOK_SKIN unset, `resolveSkin` of undefined) and
+      # the second opens every story in Instrument. The catalogue's ids and
+      # these runs are pinned equal by server/test/ci-pipeline.test.ts.
       - working-directory: ui
         run: npm run build-storybook -- --quiet
+      - working-directory: ui
+        run: STORYBOOK_SKIN=instrument npm run build-storybook -- --quiet -o storybook-static-instrument
       # Served as static files rather than `storybook dev`: the dev server
       # compiles on demand, so a slow first story reads as a timeout. `vite
       # preview` is the static server already in the lock (vite is how
@@ -580,9 +587,15 @@ jobs:
       - working-directory: ui
         run: |
           ./node_modules/.bin/vite preview --outDir storybook-static --host 127.0.0.1 --port 6006 --strictPort &
-          ./node_modules/.bin/wait-on tcp:127.0.0.1:6006 -t 60000
+          ./node_modules/.bin/vite preview --outDir storybook-static-instrument --host 127.0.0.1 --port 6007 --strictPort &
+          ./node_modules/.bin/wait-on tcp:127.0.0.1:6006 tcp:127.0.0.1:6007 -t 60000
+      # One axe run per skin. The second runs even when the first fails
+      # (`!cancelled()`), so a red Refined run never hides Instrument's result.
       - working-directory: ui
         run: npm run test-storybook -- --maxWorkers=2 --url http://127.0.0.1:6006
+      - if: ${{ !cancelled() }}
+        working-directory: ui
+        run: npm run test-storybook -- --maxWorkers=2 --url http://127.0.0.1:6007
 
   # The Darwin arms' standing mechanism (the macOS port's review, finding 3):
   # every `describe.skipIf(!IS_DARWIN)` block and `itDarwin` case in the
@@ -804,6 +817,53 @@ jobs:
       - if: env.CCRC_LEG == 'run'
         run: test -f server/dist-pwa/index.html
 
+  # THE REAL-BROWSER LEG (native Docs reader spec 2026-10-01 §5.7, U4). pwa's
+  # second vitest config drives a real Chrome through playwright-core for the
+  # claims jsdom cannot show: what Chrome does with the docs response headers
+  # and with an SVG drawn as an image (M5.B5, M5.B6). ubuntu-latest ships
+  # /usr/bin/google-chrome, which the harness takes when CCRC_CHROME is unset;
+  # with neither, its beforeAll throws, so a missing browser is a red leg and
+  # never a skipped one.
+  #
+  # Not a branch-protection check (operator ruling 2026-10-13), but
+  # `full-suite` needs it, so a red browser leg fails the daily run and the
+  # stable gate. No job-level `if:` and no `needs:`: it skips by STEP on a
+  # refresh or a rebuild, like the required legs, because a job skipped by
+  # `if:` reads as red in full-suite. Pinned by ci-pipeline.test.ts.
+  browser-pwa:
+    name: browser (pwa)
+    runs-on: ubuntu-latest
+    # About a minute of tests after npm ci; 15 is headroom for a cold npm
+    # cache and a slow Chrome start, as build-pwa's is.
+    timeout-minutes: 15
+    env:
+      CCRC_LEG: ${{ ((github.event_name == 'push' && !inputs.mode) || inputs.mode == 'rebuild') && 'skip' || 'run' }}
+    steps:
+      - uses: actions/checkout@v4
+        if: env.CCRC_LEG == 'run'
+      - uses: actions/setup-node@v4
+        if: env.CCRC_LEG == 'run'
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: pwa/package-lock.json
+      - name: Install
+        if: env.CCRC_LEG == 'run'
+        working-directory: pwa
+        run: npm ci
+      # BEFORE the browser config runs, for the test matrix's reason above: pwa
+      # reads @ccrc/ui as SOURCE, and the leg's imports reach it (lib/router.ts,
+      # through DocImage), which resolves only from ui's own node_modules.
+      - name: Install @ccrc/ui
+        if: env.CCRC_LEG == 'run'
+        working-directory: ui
+        run: npm ci
+      # Local binary, never npx (see the test matrix above).
+      - name: Test
+        if: env.CCRC_LEG == 'run'
+        working-directory: pwa
+        run: ./node_modules/.bin/vitest run --config vitest.browser.config.ts
+
   # THE FLOOR ITSELF, on exactly its own version (ccrc history spec
   # 2026-10-05 §9.9; O18). Every other leg runs '22', which setup-node
   # resolves to the newest 22.x — far above `engines.node` — so no other leg
@@ -866,9 +926,11 @@ jobs:
           test/history-recall.test.ts
           test/history-maint.test.ts
           test/history-recover.test.ts
+          test/history-export.test.ts
           test/measure-history.test.ts
           test/history-derive.test.ts
           test/history-skill.test.ts
+          test/history-card.test.ts
           EOF
           CCRC_TEST_LIST="$RUNNER_TEMP/tests.txt" ./node_modules/.bin/vitest run --config vitest.select.config.ts
 
@@ -1077,15 +1139,15 @@ jobs:
 
   # THE STABLE GATE'S EVIDENCE (design 2026-09-23 §8). Exists only in `full`
   # mode, and is green iff every leg is — the Linux shards through their
-  # summary, the typecheck, agent, pwa, the build, the macOS shards, and the
-  # Node-floor leg.
+  # summary, the typecheck, agent, pwa, the build, the macOS shards, the
+  # Node-floor leg and the browser leg.
   # release-stable.yml looks for a successful job with this name in a trusted
   # run of the commit it promotes — this file's daily or manual full run on
   # main, or its own earlier call (`<caller job> / full-suite`), never a pull
   # request's run (main-artifact.mjs green-full-suite) — and reads the
   # `verdict` output when it called this file itself.
   full-suite:
-    needs: [select, server, server-shard, server-typecheck, test, build-pwa, test-macos, node-floor]
+    needs: [select, server, server-shard, server-typecheck, test, build-pwa, test-macos, node-floor, browser-pwa]
     # Never on a merge-queue run or a pull request: both skip test-macos, and a
     # run that fell back to `full` would read that skip as a red leg (landing-
     # order stage 2; amendment 2026-10-15). Neither is ever the stable gate's
@@ -1112,7 +1174,7 @@ jobs:
       - name: Verdict
         id: verdict
         env:
-          RESULTS: select=${{ needs.select.result }} server=${{ needs.server.result }} server-shard=${{ needs.server-shard.result }} server-typecheck=${{ needs.server-typecheck.result }} test=${{ needs.test.result }} build-pwa=${{ needs.build-pwa.result }} test-macos=${{ needs.test-macos.result }} node-floor=${{ needs.node-floor.result }}
+          RESULTS: select=${{ needs.select.result }} server=${{ needs.server.result }} server-shard=${{ needs.server-shard.result }} server-typecheck=${{ needs.server-typecheck.result }} test=${{ needs.test.result }} build-pwa=${{ needs.build-pwa.result }} test-macos=${{ needs.test-macos.result }} node-floor=${{ needs.node-floor.result }} browser-pwa=${{ needs.browser-pwa.result }}
         run: |
           node .github/ci/verdict.mjs full
           echo "verdict=green" >> "$GITHUB_OUTPUT"

@@ -1,4 +1,4 @@
-import { PRESENCE_TTL_MS } from '../../shared/api.js';
+import { PRESENCE_OPEN_TTL_MS, PRESENCE_TTL_MS } from '../../shared/api.js';
 
 /**
  * Which sessions a human is currently LOOKING AT.
@@ -24,12 +24,46 @@ import { PRESENCE_TTL_MS } from '../../shared/api.js';
  * Nothing here is persisted: presence is true only while someone is connected
  * and saying so, and a server that just restarted correctly believes nobody is
  * watching.
+ *
+ * TWO CLAIMS PER CONNECTION (D-5242, spec §5.11's presence contract):
+ *
+ *  - the VISIBLE claim (`setVisible`, `isVisible`): a screen on display. It
+ *    suppresses pushes, on `PRESENCE_TTL_MS`, exactly as it always has;
+ *  - the OPEN claim (`markOpen`, `touch`, `isOpen`): a `/ws/session/:id`
+ *    socket that is still there, visible or hidden. Stamped at connect,
+ *    re-stamped by EVERY frame the client sends (the heartbeat beats while
+ *    hidden too), dropped at close, believed for `PRESENCE_OPEN_TTL_MS` after
+ *    its last stamp. It is what keeps a session someone has open from being put
+ *    to sleep (hibernation's `viewer` hold, and the stop-done lane's, D-5370).
+ *
+ * A server that just restarted believes no screen is open either, which is
+ * wrong for a hidden tab that has not reconnected yet — so each reader of
+ * `isOpen` holds its own act for `PRESENCE_OPEN_TTL_MS` after the server
+ * starts.
  */
 export class Presence {
   private byToken = new Map<symbol, { id: string; at: number }>();
+  /** The open claims (D-5242), one per connection token, beside the visible ones and never mixed with them. */
+  private openByToken = new Map<symbol, { id: string; at: number }>();
 
   /** `now` is injectable so a test can age a claim without spending 45 s. */
-  constructor(private readonly now: () => number = Date.now, private readonly ttlMs = PRESENCE_TTL_MS) {}
+  constructor(
+    private readonly now: () => number = Date.now,
+    private readonly ttlMs = PRESENCE_TTL_MS,
+    private readonly openTtlMs = PRESENCE_OPEN_TTL_MS,
+  ) {}
+
+  /** A `/ws/session/:id` connection opened: its open claim, stamped now. */
+  markOpen(token: symbol, id: string): void {
+    this.openByToken.set(token, { id, at: this.now() });
+  }
+
+  /** A frame arrived on this connection, whatever it said: re-stamp its open claim (never its visible one — only a
+   *  visible frame says the screen is on display). A token never marked open opens nothing. */
+  touch(token: symbol): void {
+    const claim = this.openByToken.get(token);
+    if (claim !== undefined) claim.at = this.now();
+  }
 
   /** Record (or re-state) this connection's claim. Every call re-stamps it —
    *  the client's heartbeat sends the same frame, and it is the STAMP that
@@ -39,7 +73,23 @@ export class Presence {
     else this.byToken.set(token, { id, at: this.now() });
   }
 
-  drop(token: symbol): void { this.byToken.delete(token); }
+  /** The connection closed: both of its claims go at once. */
+  drop(token: symbol): void {
+    this.byToken.delete(token);
+    this.openByToken.delete(token);
+  }
+
+  /** Has anyone `id` open — on screen or in a hidden tab — with a frame inside `PRESENCE_OPEN_TTL_MS`? Sweeps expired
+   *  open claims as it walks, as `isVisible` does its own. */
+  isOpen(id: string): boolean {
+    const cutoff = this.now() - this.openTtlMs;
+    let seen = false;
+    for (const [token, claim] of this.openByToken) {
+      if (claim.at <= cutoff) { this.openByToken.delete(token); continue; }
+      if (claim.id === id) seen = true;
+    }
+    return seen;
+  }
 
   /** Is anyone looking at `id` right now? Sweeps expired claims as it walks,
    *  so a socket that vanished without a close frame stops costing this map an

@@ -208,7 +208,7 @@ export function ArchiveConflictSheet({
           {CLAIMED_CONSEQUENCE}
         </p>
         <div className={QC_ACTIONS}>
-          <Button variant="primary" disabled={busy} onClick={force}>
+          <Button variant="danger" disabled={busy} onClick={force}>
             {busy ? 'Archiving…' : 'Archive anyway'}
           </Button>
           {/* Two buttons, not three — see the `onOpenRun` note on

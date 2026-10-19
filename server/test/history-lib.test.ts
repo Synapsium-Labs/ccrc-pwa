@@ -111,6 +111,7 @@ describe('every ccd/history module and history test fixture keeps its ring (spec
     'cli.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' },
     // W1-B2 Task 8: node derivation, L4. sweep.mjs imports it, so it imports nothing of the sweep or the CLI back (§6.4).
     'derive.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' },
+    'card.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' },
     'recall.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' },
     'regex-worker.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' || s === './recall.mjs' },
   };
@@ -3673,7 +3674,7 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     exportWriterLive: false, exportPausedLowDisk: false, retentionLowered: null, retentionUnmeasured: [],
     journalGrowth30d: 0, journalSkipped: 0, blobUndecodable: 0, drainRejected: 0, spoolDisplaced: 0, spoolBlocked: 0, spoolUnreadable: 0, spoolNotDirectory: false, spoolNodesRefused: 0, exportSegmentNewer: [], exportSegmentMissing: 0,
     journalUnwritable: false, dbPath: '/home/u/.ccrc/history/db', freeBytes: 100_000_000_000,
-    thresholdBytes: 20_000_000_000, copyBps: null, backupsDb: [], journalStoreDirs: [], extrasUnmeasured: [],
+    thresholdBytes: 20_000_000_000, copyBps: null, backupsDb: [], journalStoreDirs: [], extrasUnmeasured: [], exportLastPassMs: null, exportDueOldestMs: null,
     ...o,
   });
   const words = (r: healthLib.HealthResult, cls: 'warn' | 'fail'): string[] => r[cls].map((i) => i.word);
@@ -5994,8 +5995,8 @@ function rpJournal() {
 }
 
 describe('RecoverCursor: the recovery step cursor grammar (spec 9.14; B4 adds export phases)', () => {
-  it('RECOVER_PHASES is index, apply, reindex, frozen', () => {
-    expect([...libReplay.RECOVER_PHASES]).toEqual(['index', 'apply', 'reindex']);
+  it('RECOVER_PHASES is index, apply, export-blobs, export-stubs, export-rows, reindex, frozen (D-5397)', () => {
+    expect([...libReplay.RECOVER_PHASES]).toEqual(['index', 'apply', 'export-blobs', 'export-stubs', 'export-rows', 'reindex']);
     expect(Object.isFrozen(libReplay.RECOVER_PHASES)).toBe(true);
   });
   it('H-95: the phases that read the journal are lib\'s one list, in RECOVER_PHASES\' order, and the cursor grammar parses exactly those', () => {
@@ -6050,12 +6051,12 @@ describe('RecoverCursor: the recovery step cursor grammar (spec 9.14; B4 adds ex
     expect(libReplay.parseRecoverCursor(null)).toEqual({ phase: 'index', file: null, offset: 0, blobId: null, groupSize: null, pairsAdded: false });
   });
   it('anything else is null, never a guess', () => {
-    for (const s of ['journal:120', 'index:2026-13.0a1b2c3d.jsonl:1', 'index:notes.jsonl:1', 'apply:2026-10.0a1b2c3d.jsonl:01', 'reindex:-1', 'export-blobs', '', 'index:2026-10.0a1b2c3d.jsonl:99999999999999999',
+    for (const s of ['journal:120', 'index:2026-13.0a1b2c3d.jsonl:1', 'index:notes.jsonl:1', 'apply:2026-10.0a1b2c3d.jsonl:01', 'reindex:-1', 'export-segments', '', 'index:2026-10.0a1b2c3d.jsonl:99999999999999999',
       'apply:2026-10.0a1b2c3d.jsonl:5/0', 'apply:2026-10.0a1b2c3d.jsonl:5/02', 'apply:2026-10.0a1b2c3d.jsonl:5/', 'apply:2026-10.0a1b2c3d.jsonl:5/x',
       'apply:2026-10.0a1b2c3d.jsonl:5/99999999999999999', 'apply:2026-10.0a1b2c3d.jsonl/2', 'apply/2', 'reindex:8/2']) {
       expect(libReplay.parseRecoverCursor(s), s).toBeNull();
     }
-    expect(() => libReplay.formatRecoverCursor({ phase: 'export-blobs', file: null, offset: 0, blobId: null, pairsAdded: false })).toThrow(TypeError);
+    expect(() => libReplay.formatRecoverCursor({ phase: 'export-segments', file: null, offset: 0, blobId: null, pairsAdded: false })).toThrow(TypeError);
   });
 });
 
@@ -7949,5 +7950,722 @@ describe('lib: HA2, the read verbs\' envelope, schema word, shared readers and s
       expect(() => t17lib.schemaAdditive(declared), JSON.stringify(bad)).not.toThrow();
       expect(lostOf(t17lib.schemaAdditive(declared)), JSON.stringify(bad)).toContain('v1 is no object');
     }
+  });
+});
+
+// ===========================================================================
+// W1-B4 Task 1: the sole-copy export's names, numbers, cadence, room and
+// dead-file key (spec §9.15 "The pass", §9.3, §6.2; O39's numbering half, O40's
+// pure half). Pure, on lib.mjs alone.
+// ===========================================================================
+import * as libSeg from '../../ccd/history/lib.mjs';
+
+describe('W1-B4: segment names, their order and the next number (spec 9.15 "Write"; O39 numbering half)', () => {
+  const W = '0a1b2c3d';
+  it('the constants are the spec\'s chosen values, and MODE_CHECKED_FILE_ROOTS judges a segment and its temp under EXPORT_DIR', () => {
+    expect(libSeg.EXPORT_DIR).toBe('export');
+    expect(libSeg.EXPORT_SEGMENT_MAX_BYTES).toBe(256 * 1024 * 1024);
+    expect(libSeg.EXPORT_PASS_INTERVAL_MS).toBe(3_600_000);
+    expect(libSeg.EXPORT_SEGMENT_FORMAT).toBe(1);
+    const sid = '0189abcd-1234-4678-9abc-0000000000e1';
+    const name = libSeg.segmentName({ seq: 7, writer: W });
+    expect(libSeg.modeWantOf(`${libSeg.EXPORT_DIR}/${sid}/${name}`, 'file')).toBe('0600');
+    expect(libSeg.modeWantOf(`${libSeg.EXPORT_DIR}/${sid}/${libSeg.segmentTempName(name)}`, 'file')).toBe('0600');
+    expect(libSeg.modeWantOf(`${libSeg.EXPORT_DIR}/${sid}`, 'dir')).toBe('0700');
+  });
+  it('segmentName, parseSegmentName and segmentTempName agree, and nothing off the grammar names a file', () => {
+    expect(libSeg.segmentName({ seq: 12, writer: W })).toBe('12.0a1b2c3d.db');
+    expect(libSeg.parseSegmentName('12.0a1b2c3d.db')).toEqual({ seq: 12, writer: W });
+    expect(libSeg.segmentTempName('12.0a1b2c3d.db')).toBe('.12.0a1b2c3d.db.tmp');
+    for (const bad of ['012.0a1b2c3d.db', '0.0a1b2c3d.db', '12.0A1B2C3D.db', '12.0a1b2c3.db', '.12.0a1b2c3d.db.tmp',
+      '12.0a1b2c3d.db-journal', '12.0a1b2c3d.jsonl', '9999999999999999.0a1b2c3d.db', '12345678901234567.0a1b2c3d.db', '']) {
+      expect(libSeg.parseSegmentName(bad), bad).toBeNull();
+    }
+    expect(libSeg.parseSegmentName('9007199254740991.0a1b2c3d.db')).toEqual({ seq: Number.MAX_SAFE_INTEGER, writer: W });
+    expect(() => libSeg.segmentName({ seq: 0, writer: W })).toThrow(TypeError);
+    expect(() => libSeg.segmentName({ seq: 1.5, writer: W })).toThrow(TypeError);
+    expect(() => libSeg.segmentName({ seq: 3, writer: '../x' })).toThrow(TypeError);
+    expect(() => libSeg.segmentTempName('../12.0a1b2c3d.db')).toThrow(TypeError);
+  });
+  it('orderSegmentNames is (seq, writer) with seq numeric, never the names\' lexical order; a non-segment is dropped', () => {
+    expect(libSeg.orderSegmentNames(['10.0000000a.db', '9.ffffffff.db', '.9.0000000b.db.tmp', 'notes.db', '9.0000000b.db', '01.0000000a.db']))
+      .toEqual(['9.0000000b.db', '9.ffffffff.db', '10.0000000a.db']);
+  });
+  it('O39: nextSegmentSeq is one past every seq on disk, of any writer, and past meta\'s; a counter behind the directory moves past it', () => {
+    expect(libSeg.nextSegmentSeq({ onDisk: [], recorded: null })).toBe(1);
+    expect(libSeg.nextSegmentSeq({ onDisk: [3, 9, 4], recorded: 5 })).toBe(10);
+    expect(libSeg.nextSegmentSeq({ onDisk: [3], recorded: 12 })).toBe(13);
+    expect(libSeg.nextSegmentSeq({ onDisk: [2], recorded: Number.NaN })).toBe(3);
+  });
+});
+
+describe('W1-B4: the hourly cadence, the room verdict and the dead-file key (spec 9.15 "The pass", 9.3, 6.2; O40 pure half)', () => {
+  const H = 3_600_000;
+  const T = Date.UTC(2026, 11, 1);
+  it('decideExportPass: within the hour of the last pass, or of the first tick before any pass, it waits; from the hour on it runs', () => {
+    expect(libSeg.decideExportPass({ nowMs: T, lastPassMs: T - H + 1, firstTickMs: T - 10 * H })).toBe('wait');
+    expect(libSeg.decideExportPass({ nowMs: T, lastPassMs: T - H, firstTickMs: T - 10 * H })).toBe('run');
+    expect(libSeg.decideExportPass({ nowMs: T, lastPassMs: null, firstTickMs: T - H + 1 })).toBe('wait');
+    expect(libSeg.decideExportPass({ nowMs: T, lastPassMs: null, firstTickMs: T - H })).toBe('run');
+    expect(libSeg.decideExportPass({ nowMs: T, lastPassMs: null, firstTickMs: null })).toBe('wait');
+  });
+  it('decideExportPass: a clock that went backwards runs the pass rather than wait for it to catch up', () => {
+    expect(libSeg.decideExportPass({ nowMs: T, lastPassMs: T + 24 * H, firstTickMs: T - 10 * H })).toBe('run');
+    expect(libSeg.decideExportPass({ nowMs: T, lastPassMs: null, firstTickMs: T + 1 })).toBe('run');
+  });
+  it('decideExportPass: the wait runs from the LATER of the last pass and the last caught-failure attempt (RD2: lib decides which clock governs); a null is absent', () => {
+    // an attempt after the pass, within the hour: the attempt governs, so the pass waits
+    expect(libSeg.decideExportPass({ nowMs: T, lastPassMs: T - 3 * H, lastAttemptMs: T - H + 1, firstTickMs: T - 10 * H }), 'attempt later, within the hour').toBe('wait');
+    // a pass after the attempt, the attempt over an hour old and the pass not: the pass governs
+    expect(libSeg.decideExportPass({ nowMs: T, lastPassMs: T - H + 1, lastAttemptMs: T - 3 * H, firstTickMs: T - 10 * H }), 'pass later, within the hour').toBe('wait');
+    // both over an hour old: run, from the later of the two (the boundary is the later one's)
+    expect(libSeg.decideExportPass({ nowMs: T, lastPassMs: T - 3 * H, lastAttemptMs: T - 2 * H, firstTickMs: T - 10 * H }), 'both over an hour').toBe('run');
+    expect(libSeg.decideExportPass({ nowMs: T, lastPassMs: T - 2 * H, lastAttemptMs: T - H, firstTickMs: T - 10 * H }), 'the later is exactly an hour old').toBe('run');
+    expect(libSeg.decideExportPass({ nowMs: T, lastPassMs: T - 2 * H, lastAttemptMs: T - H + 1, firstTickMs: T - 10 * H }), 'the later is a ms short of an hour').toBe('wait');
+    expect(libSeg.decideExportPass({ nowMs: T, lastPassMs: T - H, lastAttemptMs: T - 2 * H, firstTickMs: T - 10 * H }), 'the pass is the later, exactly an hour old').toBe('run');
+    // an attempt with no pass at all anchors the wait in place of the first tick; a null attempt leaves the pass alone
+    expect(libSeg.decideExportPass({ nowMs: T, lastPassMs: null, lastAttemptMs: T - H + 1, firstTickMs: T - 10 * H }), 'attempt alone, within the hour').toBe('wait');
+    expect(libSeg.decideExportPass({ nowMs: T, lastPassMs: null, lastAttemptMs: T - H, firstTickMs: T - 10 * H }), 'attempt alone, an hour old').toBe('run');
+    expect(libSeg.decideExportPass({ nowMs: T, lastPassMs: T - H + 1, lastAttemptMs: null, firstTickMs: T - 10 * H }), 'pass alone').toBe('wait');
+    // the other rules hold over the later clock: a clock that went backwards runs, and intervalMs is the wait
+    expect(libSeg.decideExportPass({ nowMs: T, lastPassMs: T - 3 * H, lastAttemptMs: T + H, firstTickMs: T - 10 * H }), 'an attempt dated after now runs').toBe('run');
+    expect(libSeg.decideExportPass({ nowMs: T, lastPassMs: T - 5 * H, lastAttemptMs: T - 2 * H + 1, firstTickMs: null, intervalMs: 2 * H }), 'a two-hour interval from the attempt').toBe('wait');
+    expect(libSeg.decideExportPass({ nowMs: T, lastPassMs: T - 5 * H, lastAttemptMs: T - 2 * H, firstTickMs: null, intervalMs: 2 * H })).toBe('run');
+  });
+  it('decideExportPass: with lastAttemptMs omitted (or null) the answers are exactly those of the pass clock and the first tick alone', () => {
+    const old = (lastPassMs: number | null, firstTickMs: number | null, intervalMs: number): 'run' | 'wait' => {
+      const since = lastPassMs ?? firstTickMs;
+      if (since === null) return 'wait';
+      const age = T - since;
+      return age < 0 || age >= intervalMs ? 'run' : 'wait';
+    };
+    let n = 0;
+    for (const lastPassMs of [null, T - 2 * H, T - H, T - H + 1, T, T + H]) {
+      for (const firstTickMs of [null, T - 10 * H, T - H, T - H + 1, T + 1]) {
+        for (const intervalMs of [H, 2 * H]) {
+          const want = old(lastPassMs, firstTickMs, intervalMs);
+          const at = `${lastPassMs === null ? 'null' : lastPassMs - T} ${firstTickMs === null ? 'null' : firstTickMs - T} ${intervalMs}`;
+          expect(libSeg.decideExportPass({ nowMs: T, lastPassMs, firstTickMs, intervalMs }), `omitted: ${at}`).toBe(want);
+          expect(libSeg.decideExportPass({ nowMs: T, lastPassMs, firstTickMs, lastAttemptMs: null, intervalMs }), `null: ${at}`).toBe(want);
+          n += 1;
+        }
+      }
+    }
+    expect(n, 'the grid ran').toBe(60);
+  });
+  it('exportPassIntervalMs: an hour, doubled for each pass in a row that published and could not mark, at most a day; decideExportPass waits that interval', () => {
+    expect([0, 1, 2, 3, 4, 5, 99].map((n) => libSeg.exportPassIntervalMs(n))).toEqual([H, 2 * H, 4 * H, 8 * H, 16 * H, 24 * H, 24 * H]);
+    for (const bad of [-1, 1.5, Number.NaN]) expect(libSeg.exportPassIntervalMs(bad), String(bad)).toBe(H);
+    expect(libSeg.EXPORT_MARK_BACKOFF_MAX_MS).toBe(24 * H);
+    expect(libSeg.decideExportPass({ nowMs: T, lastPassMs: T - 2 * H + 1, firstTickMs: null, intervalMs: 2 * H })).toBe('wait');
+    expect(libSeg.decideExportPass({ nowMs: T, lastPassMs: T - 2 * H, firstTickMs: null, intervalMs: 2 * H })).toBe('run');
+    expect(libSeg.decideExportPass({ nowMs: T, lastPassMs: T + H, firstTickMs: null, intervalMs: 2 * H }), 'a clock that went backwards still runs').toBe('run');
+  });
+  it('O40: planExportRoom admits only above the export filesystem\'s own floor plus one segment (RC9); a throw is low-disk, a hang unsettled', () => {
+    const size = 100 * 1024 ** 3;
+    const need = libSeg.floorThreshold(size) + libSeg.EXPORT_SEGMENT_MAX_BYTES;
+    expect(libSeg.planExportRoom({ state: 'ok', bytes: need, fsSize: size })).toEqual({ admit: false, word: 'low-disk', needBytes: need });
+    expect(libSeg.planExportRoom({ state: 'ok', bytes: need + 1, fsSize: size })).toEqual({ admit: true, word: 'ok', needBytes: need });
+    expect(libSeg.planExportRoom({ state: 'threw' })).toEqual({ admit: false, word: 'low-disk', needBytes: null });
+    expect(libSeg.planExportRoom({ state: 'unsettled' })).toEqual({ admit: false, word: 'unsettled', needBytes: null });
+  });
+  it('exportedSourceKey is exported: + hex(sha256(path NUL dev NUL ino)), dev and ino in decimal whatever their type', () => {
+    const p = '/home/u/.claude-a/projects/-home-u-tree-demo/0189abcd-1234-4678-9abc-0000000000e2.jsonl';
+    const want = `exported:${createHash('sha256').update(`${p}\0${'2049'}\0${'18446744073709551557'}`).digest('hex')}`;
+    expect(libSeg.exportedSourceKey(p, 2049, 18446744073709551557n)).toBe(want);
+    expect(libSeg.exportedSourceKey(p, 2049n, '18446744073709551557')).toBe(want);
+    expect(libSeg.exportedSourceKey(p, 2049, 7)).not.toBe(libSeg.exportedSourceKey(p, 2049, 8));
+    // '' is left to a file row with no path and no source_key (D-5393): its key is still (dev, ino)'s, and never ''.
+    expect(libSeg.exportedSourceKey('', 2049, 7)).toMatch(/^exported:[0-9a-f]{64}$/);
+    expect(libSeg.exportedSourceKey('', 2049, 7)).not.toBe(libSeg.exportedSourceKey('', 2049, 8));
+    for (const [path, dev, ino] of [['/a\0b', 1, 2], ['/a', -1, 2], ['/a', 1, 2.5], ['/a', 1, '0x1f']] as const) {
+      expect(() => libSeg.exportedSourceKey(path, dev, ino), `${JSON.stringify(path)} ${String(dev)} ${String(ino)}`).toThrow(TypeError);
+    }
+  });
+  it('deadFileSourceKey: a path already of the form exported:<64 lowercase hex> is the dead-file key itself; every other path, a near-miss included, keys through exportedSourceKey (D-5393)', () => {
+    const hex = 'ab12'.repeat(16);
+    const key = `exported:${hex}`;
+    expect(libSeg.deadFileSourceKey(key, 2049, 7), 'the key is its own key').toBe(key);
+    expect(libSeg.deadFileSourceKey(key, 99n, '5'), 'whatever its dev and ino').toBe(key);
+    // The round trip a re-exported replayed row takes: the key exportedSourceKey makes keys to itself.
+    const made = libSeg.exportedSourceKey('/home/u/gone/a.jsonl', 2049, 7);
+    expect(libSeg.deadFileSourceKey(made, 2049, 7)).toBe(made);
+    // Near misses go through the hash: 63 digits, an uppercase digit, a trailing character (a newline included), a leading one, a non-hex digit.
+    for (const near of [`exported:${hex.slice(1)}`, `exported:${hex.toUpperCase()}`, `${key}0`, `${key}\n`, ` ${key}`, `exported:${'g'.repeat(64)}`, `Exported:${hex}`]) {
+      expect(libSeg.deadFileSourceKey(near, 2049, 7), JSON.stringify(near)).toBe(libSeg.exportedSourceKey(near, 2049, 7));
+      expect(libSeg.deadFileSourceKey(near, 2049, 7), JSON.stringify(near)).not.toBe(near);
+    }
+    // A real path, B1's retire token and an empty path key through the hash too.
+    for (const p of ['/home/u/gone/a.jsonl', `retired:${'a1'.repeat(32)}`, '']) {
+      expect(libSeg.deadFileSourceKey(p, 2049, 7), JSON.stringify(p)).toBe(libSeg.exportedSourceKey(p, 2049, 7));
+    }
+    // A malformed dev or ino throws the same TypeError on both arms, and a NUL path still does.
+    expect(() => libSeg.deadFileSourceKey(key, -1, 7)).toThrow(TypeError);
+    expect(() => libSeg.deadFileSourceKey('/a', -1, 7)).toThrow(TypeError);
+    expect(() => libSeg.deadFileSourceKey('/a\0b', 1, 2)).toThrow(TypeError);
+  });
+  it('HEALTH_META names the export keys once each, and none reuses a key B1 or B2 writes', () => {
+    expect(libSeg.HEALTH_META.exportPassMs).toBe('export_pass_ms');
+    expect(libSeg.HEALTH_META.exportDueOldestMs).toBe('export_due_oldest_ms');
+    expect(libSeg.HEALTH_META.exportPaused).toBe('export_paused');
+    const values = Object.values(libSeg.HEALTH_META);
+    expect(new Set(values).size).toBe(values.length);
+    for (const taken of ['export_due', 'export_overdue', 'export_census_ms', 'oldest_row_ms', 'first_due_ms', 'first_deletion_ms', 'export_seq']) {
+      expect(values, taken).not.toContain(taken);
+    }
+  });
+});
+
+describe('W1-B4: the mark-failure backoff and the check after a bind, decided in lib (spec 9.15 "Mark", "After a bind"; RD2)', () => {
+  const H = 3_600_000;
+  const W = '0a1b2c3d';
+  it('exportMarkFailsOf: the count meta holds; text off the decimal grammar, or past the safe integers, is no failure', () => {
+    expect(['0', '1', '7', '12'].map((v) => libSeg.exportMarkFailsOf(v))).toEqual([0, 1, 7, 12]);
+    for (const bad of [null, '', '-1', '1.5', 'x', '01', ' 2', '9999999999999999', '99999999999999999']) {
+      expect(libSeg.exportMarkFailsOf(bad), String(bad)).toBe(0);
+    }
+  });
+  it('decideMarkOutcome: a pass that published and could not mark backs off one step more; a marked pass ends the backoff; a busy, or a failure before the link, leaves it as it stands', () => {
+    expect(libSeg.decideMarkOutcome({ outcome: 'mark-failed', recorded: null })).toEqual({ markFails: 1, write: '1', intervalMs: 2 * H });
+    expect(libSeg.decideMarkOutcome({ outcome: 'mark-failed', recorded: '2' })).toEqual({ markFails: 3, write: '3', intervalMs: 8 * H });
+    expect(libSeg.decideMarkOutcome({ outcome: 'mark-failed', recorded: 'torn' })).toEqual({ markFails: 1, write: '1', intervalMs: 2 * H });
+    expect(libSeg.decideMarkOutcome({ outcome: 'marked', recorded: '3' })).toEqual({ markFails: 0, write: '0', intervalMs: H });
+    expect(libSeg.decideMarkOutcome({ outcome: 'marked', recorded: 'torn' })).toEqual({ markFails: 0, write: '0', intervalMs: H });
+    expect(libSeg.decideMarkOutcome({ outcome: 'marked', recorded: '0' }), 'nothing to end: no write').toEqual({ markFails: 0, write: null, intervalMs: H });
+    expect(libSeg.decideMarkOutcome({ outcome: 'marked', recorded: null }), 'a store that never failed a mark gains no meta key')
+      .toEqual({ markFails: 0, write: null, intervalMs: H });
+    expect(libSeg.decideMarkOutcome({ outcome: 'mark-busy', recorded: '2' }), 'a busy is the lock\'s, not the volume\'s (RD3)')
+      .toEqual({ markFails: 2, write: null, intervalMs: 4 * H });
+    expect(libSeg.decideMarkOutcome({ outcome: 'write-failed', recorded: '2' }), 'nothing was published').toEqual({ markFails: 2, write: null, intervalMs: 4 * H });
+    expect(() => libSeg.decideMarkOutcome({ outcome: 'other' as unknown as 'marked', recorded: null })).toThrow(TypeError);
+  });
+  it('decideMarkCheck: a step checks when a bind fact exists that the last check did not cover, by KEY and never by clock, and records every fact it covers', () => {
+    expect(libSeg.decideMarkCheck({ metaKeys: [], checkedRecord: null })).toEqual({ check: false, facts: [], record: '[]' });
+    expect(libSeg.decideMarkCheck({ metaKeys: ['bound:1700000000000', 'export_seq'], checkedRecord: null }))
+      .toEqual({ check: true, facts: ['bound:1700000000000'], record: '["bound:1700000000000"]' });
+    expect(libSeg.decideMarkCheck({ metaKeys: ['bound:1700000000000'], checkedRecord: '["bound:1700000000000"]' }).check, 'a covered fact checks nothing').toBe(false);
+    // a bind stamped before the last check (a box whose clock is behind, or a clock stepped back) is still a new fact
+    expect(libSeg.decideMarkCheck({ metaKeys: ['bound:1700000500000', 'bound:1700000300000'], checkedRecord: '["bound:1700000500000"]' }),
+      'a bind stamped before the last check was never checked')
+      .toEqual({ check: true, facts: ['bound:1700000300000', 'bound:1700000500000'], record: '["bound:1700000300000","bound:1700000500000"]' });
+  });
+  it('decideMarkCheck: only bound:<ms> keys are bind facts, and a record that does not parse, or is not a list, covers nothing', () => {
+    expect(libSeg.decideMarkCheck({ metaKeys: ['bound:', 'bound:12a', 'bound:12345678901234567', 'unbound:5', 'bound:5:x'], checkedRecord: null }))
+      .toEqual({ check: false, facts: [], record: '[]' });
+    for (const rec of ['not json', '{"bound:5":1}', '"bound:5"']) {
+      expect(libSeg.decideMarkCheck({ metaKeys: ['bound:5'], checkedRecord: rec }).check, rec).toBe(true);
+    }
+    expect(libSeg.decideMarkCheck({ metaKeys: ['bound:5'], checkedRecord: '[5, "bound:5"]' }).check, 'a string entry still covers').toBe(false);
+  });
+  it('missingSegmentNames: the names the marks give that this box does not hold, once each, sorted', () => {
+    expect(libSeg.missingSegmentNames({ named: new Set([`3.${W}.db`, `1.${W}.db`, `2.${W}.db`]), present: [`1.${W}.db`] })).toEqual([`2.${W}.db`, `3.${W}.db`]);
+    expect(libSeg.missingSegmentNames({ named: [`2.${W}.db`, `2.${W}.db`], present: [] })).toEqual([`2.${W}.db`]);
+    expect(libSeg.missingSegmentNames({ named: [`1.${W}.db`], present: [`1.${W}.db`, `9.${W}.db`] })).toEqual([]);
+  });
+});
+
+// ===========================================================================
+// W1-B4 Task 2: what one export segment carries, and the census's oldest
+// due-since (spec §9.15 "What is due", "Write", "The gap guard"; O39's pure
+// halves, O58's B4 half, O41's B4 input). Pure, on lib.mjs alone. The due
+// rule is B2's per-copy reducer (ruled Q15, rev 3.4): a row is due when every
+// file holding a copy of it has passed its mtime plus its own home's
+// retention, minus 30 days, whatever the row's own time.
+// ===========================================================================
+import * as libCarry from '../../ccd/history/lib.mjs';
+
+describe('W1-B4: planSegment, the row-level due rule and what a segment carries (spec 9.15; O39 pure halves)', () => {
+  const DAY = 86_400_000;
+  const NOW = Date.UTC(2026, 11, 1);
+  const A = '/home/u/.claude-a';
+  const C = '/home/u/.claude-c';
+  const homes = { [A]: 180 };                          // home A's horizon: 150 days
+  const M = libCarry.EXPORT_ROW_META_BYTES;            // each taken row's metadata, counted beside its new blob bytes
+  const BOUND = 1_000 + 3 * M;                         // three rows' metadata and 1,000 blob bytes
+  /** A present holding file of home A, last written `ageDays` ago. */
+  const file = (ageDays: number): libCarry.ExportFile => ({ home: A, mtimeMs: NOW - ageDays * DAY, present: true });
+  /** The same in home C, which keeps Claude Code's 30-day default where a case rosters it: horizon 0. */
+  const inC = (ageDays: number): libCarry.ExportFile => ({ home: C, mtimeMs: NOW - ageDays * DAY, present: true });
+  const blob = (key: string, zBytes: number, o: { exported?: boolean; pruned?: boolean } = {}): libCarry.SegmentBlob =>
+    ({ key, zBytes, exported: o.exported ?? false, pruned: o.pruned ?? false });
+  /** A candidate row written `ageDays` ago and held, unless `files` says otherwise, by ONE file of home A last written
+   *  then: under the per-copy rule that file's clock decides, so a row's age here is its file's. */
+  const row = (key: string, ageDays: number | null, blobs: libCarry.SegmentBlob[], files: libCarry.ExportFile[] = [file(ageDays ?? 0)]): libCarry.SegmentCandidate =>
+    ({ key, tsMs: ageDays === null ? null : NOW - ageDays * DAY, files, blobs });
+  const plan = (rows: libCarry.SegmentCandidate[], boundBytes = BOUND) =>
+    libCarry.planSegment({ nowMs: NOW, homeRetentionDays: homes, rows, boundBytes });
+
+  it('BK12: a hot blob\'s old row is taken and carries the blob, while planExport still answers the blob not due', () => {
+    const hot = blob('b-hot', 40);
+    const r = plan([row('e-old', 151, [hot]), row('e-young', 1, [hot])]);
+    expect(r).toEqual({ take: ['e-old'], carry: ['b-hot'], stubs: [], bytes: 40 + M, leftDue: 0, oldestLeftDueSinceMs: null });
+    const census = libCarry.planExport({ nowMs: NOW, homeRetentionDays: homes, blobs: [{ key: 'b-hot', referrers: [row('e-old', 151, [hot]), row('e-young', 1, [hot])] }] });
+    expect(census.due).toEqual([]);
+  });
+  it('a row whose holding file has not passed its due date is neither taken nor counted', () => {
+    expect(plan([row('e-young', 149, [blob('b-1', 10)])])).toEqual({ take: [], carry: [], stubs: [], bytes: 0, leftDue: 0, oldestLeftDueSinceMs: null });
+  });
+  it('a blob already exported is never carried again, and one shared by several taken rows is carried and counted once', () => {
+    const shared = blob('b-shared', 300);
+    const r = plan([row('e-1', 160, [shared, blob('b-done', 500, { exported: true })]), row('e-2', 155, [shared])]);
+    expect(r).toEqual({ take: ['e-1', 'e-2'], carry: ['b-shared'], stubs: [], bytes: 300 + 2 * M, leftDue: 0, oldestLeftDueSinceMs: null });
+  });
+  it('a pruned blob is never carried and its size never counted: its row travels with a stub, once, and an exported one needs none', () => {
+    const pruned = blob('b-pruned', 900, { pruned: true });
+    const r = plan([row('e-1', 160, [pruned]), row('e-2', 159, [pruned, blob('b-gone', 700, { pruned: true, exported: true })])]);
+    expect(r).toEqual({ take: ['e-1', 'e-2'], carry: [], stubs: ['b-pruned'], bytes: 2 * M, leftDue: 0, oldestLeftDueSinceMs: null });
+  });
+  it('the bound: rows in input order until the next would pass it (its new blob bytes and its metadata); nothing after that is taken, not even a row that would fit; the rest are counted with their earliest due-since', () => {
+    const rows = [row('e-1', 170, [blob('b-1', 400)]), row('e-2', 165, [blob('b-2', 400)]), row('e-3', 160, [blob('b-3', 400)]),
+      row('e-4', 158, [blob('b-4', 1)])];
+    const r = plan(rows);
+    expect(r.take).toEqual(['e-1', 'e-2']);
+    expect(r.carry).toEqual(['b-1', 'b-2']);
+    expect(r.bytes).toBe(800 + 2 * M);
+    expect(r.leftDue).toBe(2);
+    expect(r.oldestLeftDueSinceMs).toBe(NOW - 160 * DAY + 150 * DAY);
+  });
+  it('the first due row of the pass is taken whatever its size, so every pass moves the export forward', () => {
+    expect(plan([row('e-big', 160, [blob('b-big', 5_000)]), row('e-next', 159, [blob('b-small', 1)])]))
+      .toEqual({ take: ['e-big'], carry: ['b-big'], stubs: [], bytes: 5_000 + M, leftDue: 1, oldestLeftDueSinceMs: NOW - 9 * DAY });
+  });
+  it('a later page\'s first due row is held to what is left of the bound: with takenBefore, a row past it is left due, never taken whatever its size', () => {
+    const big = [row('e-x', 160, [blob('b-x', 5_000)])];
+    expect(libCarry.planSegment({ nowMs: NOW, homeRetentionDays: homes, rows: big, boundBytes: 1, takenBefore: true }))
+      .toEqual({ take: [], carry: [], stubs: [], bytes: 0, leftDue: 1, oldestLeftDueSinceMs: NOW - 10 * DAY });
+    expect(libCarry.planSegment({ nowMs: NOW, homeRetentionDays: homes, rows: big, boundBytes: 1 }).take, 'the pass\'s first row still travels')
+      .toEqual(['e-x']);
+  });
+  it('each taken row counts EXPORT_ROW_META_BYTES beside its new blob bytes: rows that bring no new bytes (a stub, an exported blob) still fill a segment, so its row count is bounded', () => {
+    expect(M).toBe(1536);
+    const done = blob('b-done', 500, { exported: true });
+    const stub = blob('b-stub', 0, { pruned: true });
+    const rows = Array.from({ length: 10_000 }, (_, i) => row(`e-${i}`, 160, [i % 2 === 0 ? done : stub]));
+    const r = plan(rows, 10 * M);
+    expect(r.take).toHaveLength(10);
+    expect(r.carry).toEqual([]);
+    expect(r.bytes).toBe(10 * M);
+    expect(r.leftDue).toBe(9_990);
+  });
+  it('rows come back in input order, never re-sorted by age', () => {
+    expect(plan([row('e-c', 155, []), row('e-a', 170, []), row('e-b', 160, [])]).take).toEqual(['e-c', 'e-a', 'e-b']);
+  });
+  it('per copy: a row is due by its holding files, never by its own ts_ms; every file must pass; a file gone from disk has passed; a row with no holding file is due at once', () => {
+    const r = plan([
+      row('e-null-old', null, [], [file(200), file(160)]),            // both A copies past 150 days: due
+      row('e-null-young', null, [], [file(200), file(5)]),            // a copy written 5 days ago holds it back
+      row('e-long', 200, [], [file(1)]),                              // a 200-day-old row in an A file appended yesterday: not due
+      row('e-gone', 1, [], [{ ...file(1), present: false }, file(151)]), // its young copy is gone, its other passed: due
+      row('e-clockless', null, [], []),                               // no holding file on record: due at once
+    ]);
+    expect(r.take).toEqual(['e-null-old', 'e-gone', 'e-clockless']);
+  });
+  it('O58 (B4 half): with no reducer argument a row is due by its own copies (EXPORT_REDUCERS.perCopy): a 30-day home holding only swap copies brings no 180-day row forward, and its own rows are due from their file\'s last write; the reducer is one argument, never a signature', () => {
+    const lowered = { ...homes, [C]: 30 };                           // home C rostered on the 30-day default: horizon 0
+    const rows = [
+      row('e-swap', 1, [blob('b-1', 1)], [file(1), inC(1)]),          // a swap copy in C: A's copy waits 149 more days
+      row('e-a-only', 1, [blob('b-2', 1)]),                           // A alone: not due for 149 days
+      row('e-c-only', 1, [blob('b-3', 1)], [inC(1)]),                 // C alone: due from its file's last write
+    ];
+    expect(libCarry.planSegment({ nowMs: NOW, homeRetentionDays: lowered, rows, boundBytes: BOUND }).take).toEqual(['e-c-only']);
+    // The node-shortest reducer (B1's default, history since B2) would have taken all three: one home on the 30-day
+    // default set the whole node's horizon to 0. Passing it is one argument, and no signature changes.
+    expect(libCarry.planSegment({ nowMs: NOW, homeRetentionDays: lowered, rows, boundBytes: BOUND, reducer: libCarry.EXPORT_REDUCERS.shortestHome }).take)
+      .toEqual(['e-swap', 'e-a-only', 'e-c-only']);
+    const never: libCarry.ExportReducer = () => Number.POSITIVE_INFINITY;
+    expect(libCarry.planSegment({ nowMs: NOW, homeRetentionDays: lowered, rows, boundBytes: BOUND, reducer: never }).take).toEqual([]);
+  });
+  it('RD1\'s one clock: with no reducer argument, planSegment takes exactly the rows planExport (the census) answers due, each row a blob of its own', () => {
+    const lowered = { ...homes, [C]: 30 };
+    const rows = [
+      row('e-1', 151, []), row('e-2', 149, []), row('e-3', 1, [], [inC(1)]), row('e-4', 1, [], [file(1), inC(1)]),
+      row('e-5', 300, [], [file(2)]), row('e-6', null, [], []), row('e-7', 2, [], [{ ...file(2), present: false }]),
+    ];
+    const seg = libCarry.planSegment({ nowMs: NOW, homeRetentionDays: lowered, rows, boundBytes: 100 * M });
+    const census = libCarry.planExport({ nowMs: NOW, homeRetentionDays: lowered, blobs: rows.map((r) => ({ key: r.key, referrers: [r] })) });
+    expect(seg.take).toEqual(census.due);
+    expect(seg.take).toEqual(['e-1', 'e-3', 'e-6', 'e-7']);
+  });
+  it('a left-behind row due from the start dates by the last write its recorded files saw, never the epoch; one with no clock on record is counted but undated', () => {
+    const r = libCarry.planSegment({ nowMs: NOW, homeRetentionDays: homes, boundBytes: 1, rows: [
+      row('e-first', 160, [blob('b-first', 5_000)]),                                // the pass's first row: taken whatever its size
+      row('e-gone', 3, [blob('b-gone', 1)], [{ ...file(3), present: false }]),       // its one file deleted: due from the start, last written 3 days ago
+      row('e-clockless', null, [blob('b-none', 1)], []),                             // no file and no time on record: due, undated
+    ] });
+    expect(r.take).toEqual(['e-first']);
+    expect(r.leftDue).toBe(2);
+    expect(r.oldestLeftDueSinceMs, 'the recorded last write, never 0 (1970)').toBe(NOW - 3 * DAY);
+    const undated = libCarry.planSegment({ nowMs: NOW, homeRetentionDays: homes, boundBytes: 1, takenBefore: true,
+      rows: [row('e-clockless', null, [blob('b-none', 1)], [])] });
+    expect(undated).toMatchObject({ take: [], leftDue: 1, oldestLeftDueSinceMs: null });
+  });
+});
+
+describe('W1-B4 whole-branch review: entryMayHoldMark, an entry keeps its export mark only while every blob it references is exported or pruned (D-5395 (history-export-mark-needs-its-blobs))', () => {
+  const DAY = 86_400_000;
+  const NOW = Date.UTC(2026, 11, 1);
+  const A = '/home/u/.claude-a';
+  const homes = { [A]: 180 };
+  const b = (exported: boolean, pruned: boolean): { exported: boolean; pruned: boolean } => ({ exported, pruned });
+  it('every blob exported: the entry may hold its mark', () => {
+    expect(libCarry.entryMayHoldMark({ blobs: [b(true, false), b(true, false), b(true, false)] })).toBe(true);
+  });
+  it('one blob pruned and the rest exported: it may (a stub is all there is to export, and a stub is never marked)', () => {
+    expect(libCarry.entryMayHoldMark({ blobs: [b(true, false), b(false, true), b(true, false)] })).toBe(true);
+    expect(libCarry.entryMayHoldMark({ blobs: [b(false, true)] }), 'a pruned blob alone').toBe(true);
+    expect(libCarry.entryMayHoldMark({ blobs: [b(true, true)] }), 'exported, then pruned').toBe(true);
+  });
+  it('one blob live and unmarked, whatever the others are: it may not (the pass offers only unmarked entries, so that text would stay store-only)', () => {
+    expect(libCarry.entryMayHoldMark({ blobs: [b(true, false), b(false, false)] })).toBe(false);
+    expect(libCarry.entryMayHoldMark({ blobs: [b(false, false), b(true, false)] }), 'in either order').toBe(false);
+    expect(libCarry.entryMayHoldMark({ blobs: [b(false, true), b(false, false), b(true, false)] }), 'beside a pruned one').toBe(false);
+    expect(libCarry.entryMayHoldMark({ blobs: [b(false, false)] }), 'alone').toBe(false);
+  });
+  it('no blob at all: it may, because nothing is owed. Measured: planSegment takes such a row carrying nothing (the pass then marks it), so a no for it would never be settled by any pass', () => {
+    const file = { home: A, mtimeMs: NOW - 160 * DAY, present: true };
+    const seg = libCarry.planSegment({ nowMs: NOW, homeRetentionDays: homes, boundBytes: 100 * libCarry.EXPORT_ROW_META_BYTES,
+      rows: [{ key: 'e-none', tsMs: NOW - 160 * DAY, files: [file], blobs: [] }] });
+    expect(seg, 'the pass takes it and has nothing to carry or stub').toMatchObject({ take: ['e-none'], carry: [], stubs: [] });
+    expect(libCarry.entryMayHoldMark({ blobs: [] })).toBe(true);
+  });
+  it('the pass\'s own output satisfies it: a taken row\'s blobs, once the segment carries the live ones, are all exported or pruned', () => {
+    const file = { home: A, mtimeMs: NOW - 160 * DAY, present: true };
+    const blobs = [{ key: 'live', zBytes: 10, exported: false, pruned: false }, { key: 'done', zBytes: 10, exported: true, pruned: false },
+      { key: 'stub', zBytes: 0, exported: false, pruned: true }];
+    const seg = libCarry.planSegment({ nowMs: NOW, homeRetentionDays: homes, boundBytes: 100 * libCarry.EXPORT_ROW_META_BYTES,
+      rows: [{ key: 'e-1', tsMs: NOW - 160 * DAY, files: [file], blobs }] });
+    expect(seg.take).toEqual(['e-1']);
+    const after = blobs.map((x) => ({ exported: x.exported || seg.carry.includes(x.key), pruned: x.pruned }));
+    expect(libCarry.entryMayHoldMark({ blobs: after })).toBe(true);
+    expect(libCarry.entryMayHoldMark({ blobs: blobs.map((x) => ({ exported: x.exported, pruned: x.pruned })) }), 'before the segment carries the live one').toBe(false);
+  });
+  it('a list is required: anything else is a caller\'s bug and throws, never a quiet yes', () => {
+    expect(() => libCarry.entryMayHoldMark({ blobs: undefined as unknown as [] })).toThrow(/entryMayHoldMark: blobs must be a list, got undefined/);
+    expect(() => libCarry.entryMayHoldMark({ blobs: 'live' as unknown as [] })).toThrow(/entryMayHoldMark: blobs must be a list, got string/);
+  });
+});
+
+describe('W1-B4 review 614, F1b: segmentMayMarkEntry, replay marks an entry with a segment only when that segment carries each of the entry\'s pruned blobs that no mark names (D-5396 (history-export-bind-clears-pruned-referrers), refining D-5395)', () => {
+  const DAY = 86_400_000;
+  const NOW = Date.UTC(2026, 11, 1);
+  const A = '/home/u/.claude-a';
+  const homes = { [A]: 180 };
+  const b = (exported: boolean, pruned: boolean, carried: boolean): { exported: boolean; pruned: boolean; carried: boolean } => ({ exported, pruned, carried });
+  const may = (...blobs: Array<ReturnType<typeof b>>): boolean => libCarry.segmentMayMarkEntry({ blobs });
+  it('a pruned blob no mark names licenses the mark only when the segment carries it, as a stub or as bytes: carried yes, not carried no', () => {
+    expect(may(b(false, true, true)), 'pruned and carried').toBe(true);
+    expect(may(b(false, true, false)), 'pruned and not carried').toBe(false);
+    expect(may(b(true, false, true), b(false, true, true)), 'beside an exported one').toBe(true);
+    expect(may(b(true, false, false), b(false, true, false)), 'beside an exported one, not carried').toBe(false);
+  });
+  it('an exported blob licenses the mark whether or not the segment carries it, pruned since or not: first wins stays for what is exported', () => {
+    expect(may(b(true, false, false)), 'exported, not carried').toBe(true);
+    expect(may(b(true, false, true)), 'exported, carried').toBe(true);
+    expect(may(b(true, true, false)), 'exported, then pruned, not carried').toBe(true);
+    expect(may(b(true, true, true)), 'exported, then pruned, carried').toBe(true);
+  });
+  it('a live, unmarked blob never licenses it, carried or not, beside whatever else', () => {
+    expect(may(b(false, false, false)), 'alone').toBe(false);
+    expect(may(b(false, false, true)), 'carried: its bytes would be marked, and then it is exported').toBe(false);
+    expect(may(b(true, false, true), b(false, false, false)), 'beside an exported one').toBe(false);
+    expect(may(b(false, true, true), b(false, false, true)), 'beside a pruned, carried one').toBe(false);
+  });
+  it('every blob must license it: one pruned blob the segment lacks refuses, in either order, among licensed ones', () => {
+    expect(may(b(false, true, true), b(false, true, false))).toBe(false);
+    expect(may(b(false, true, false), b(false, true, true))).toBe(false);
+    expect(may(b(true, false, false), b(false, true, false), b(true, true, false))).toBe(false);
+    expect(may(b(true, false, false), b(false, true, true), b(true, true, false))).toBe(true);
+  });
+  it('no blob at all: it may, as entryMayHoldMark answers (nothing is owed)', () => {
+    expect(may()).toBe(true);
+    expect(libCarry.entryMayHoldMark({ blobs: [] })).toBe(true);
+  });
+  it('it narrows entryMayHoldMark in one place only: a pruned blob no mark names and the segment lacks; every other state answers alike', () => {
+    for (const exported of [false, true]) for (const pruned of [false, true]) for (const carried of [false, true]) {
+      const narrower = !exported && pruned && !carried;
+      expect(may(b(exported, pruned, carried)), JSON.stringify({ exported, pruned, carried }))
+        .toBe(libCarry.entryMayHoldMark({ blobs: [{ exported, pruned }] }) && !narrower);
+    }
+  });
+  it('the pass\'s own output satisfies it: a taken row\'s blobs, once the segment is replayed, are all exported or pruned and carried by it (a stub is written in the segment that marks the row)', () => {
+    const file = { home: A, mtimeMs: NOW - 160 * DAY, present: true };
+    const blobs = [{ key: 'live', zBytes: 10, exported: false, pruned: false }, { key: 'done', zBytes: 10, exported: true, pruned: false },
+      { key: 'stub', zBytes: 0, exported: false, pruned: true }, { key: 'gone', zBytes: 0, exported: true, pruned: true }];
+    const seg = libCarry.planSegment({ nowMs: NOW, homeRetentionDays: homes, boundBytes: 100 * libCarry.EXPORT_ROW_META_BYTES,
+      rows: [{ key: 'e-1', tsMs: NOW - 160 * DAY, files: [file], blobs }] });
+    expect(seg).toMatchObject({ take: ['e-1'], carry: ['live'], stubs: ['stub'] });
+    const held = (x: { key: string; exported: boolean; pruned: boolean }): ReturnType<typeof b> =>
+      b(x.exported || seg.carry.includes(x.key), x.pruned, seg.carry.includes(x.key) || seg.stubs.includes(x.key));
+    expect(may(...blobs.map(held)), 'the replayed segment holds everything its row needs').toBe(true);
+    expect(may(...blobs.map((x) => b(x.exported, x.pruned, false))), 'before the segment carries the live one and the stub').toBe(false);
+    const withoutStub = blobs.map((x) => (x.key === 'stub' ? b(false, true, false) : held(x)));
+    expect(may(...withoutStub), 'a segment without the stub is refused').toBe(false);
+  });
+  it('a blob that does not say whether the segment carries it is refused, never read as "not carried"; a list is required', () => {
+    expect(() => libCarry.segmentMayMarkEntry({ blobs: [{ exported: true, pruned: false } as unknown as ReturnType<typeof b>] }))
+      .toThrow(/segmentMayMarkEntry: every blob says whether the segment carries it, got undefined/);
+    expect(() => libCarry.segmentMayMarkEntry({ blobs: [{ exported: false, pruned: true, carried: 1 } as unknown as ReturnType<typeof b>] }))
+      .toThrow(/segmentMayMarkEntry: every blob says whether the segment carries it, got number/);
+    expect(() => libCarry.segmentMayMarkEntry({ blobs: [null as unknown as ReturnType<typeof b>] })).toThrow(/every blob says whether the segment carries it, got undefined/);
+    expect(() => libCarry.segmentMayMarkEntry({ blobs: undefined as unknown as [] })).toThrow(/segmentMayMarkEntry: blobs must be a list, got undefined/);
+    expect(() => libCarry.segmentMayMarkEntry({ blobs: 'live' as unknown as [] })).toThrow(/segmentMayMarkEntry: blobs must be a list, got string/);
+  });
+});
+
+describe('W1-B4 whole-branch review: budgetHeldPass, a pass the run\'s budget cut short before it wrote a segment is recorded as an attempt (D-5394 (history-export-select-due-transcripts))', () => {
+  const held = libCarry.budgetHeldPass;
+  it('nothing taken and the selection did not run to its end: the budget ended it before the first row (the bound cannot, planSegment takes a pass\'s first row whatever its size)', () => {
+    expect(held({ taken: 0, selectionComplete: false, written: 0, writeStopped: null })).toBe(true);
+  });
+  it('nothing taken and the selection ran to its end: nothing is due, which is a pass, not a hold', () => {
+    expect(held({ taken: 0, selectionComplete: true, written: 0, writeStopped: null })).toBe(false);
+  });
+  it('rows taken and none written because the writer found the budget spent before its first row: held, recorded like the nothing-taken shape', () => {
+    expect(held({ taken: 3, selectionComplete: false, written: 0, writeStopped: 'budget' })).toBe(true);
+    expect(held({ taken: 1, selectionComplete: true, written: 0, writeStopped: 'budget' }), 'whether or not the selection had finished').toBe(true);
+  });
+  it('rows taken and none written because history-off appeared: the operator\'s switch, never recorded', () => {
+    expect(held({ taken: 3, selectionComplete: true, written: 0, writeStopped: 'off' })).toBe(false);
+    expect(held({ taken: 3, selectionComplete: false, written: 0, writeStopped: 'off' })).toBe(false);
+  });
+  it('a segment written, whatever stopped the writer after its first row: the pass is published, marked and counted, never a hold', () => {
+    expect(held({ taken: 3, selectionComplete: false, written: 1, writeStopped: 'budget' })).toBe(false);
+    expect(held({ taken: 3, selectionComplete: true, written: 3, writeStopped: null })).toBe(false);
+    expect(held({ taken: 3, selectionComplete: true, written: 2, writeStopped: 'off' })).toBe(false);
+  });
+});
+
+describe('W1-B4: planExport\'s oldest due-since, the census input of doctor\'s wait rule (spec 9.15 "The gap guard"; O41 B4 input)', () => {
+  const DAY = 86_400_000;
+  const NOW = Date.UTC(2026, 11, 1);
+  const A = '/home/u/.claude-a';
+  const homes = { [A]: 180 };                          // home A's horizon: 150 days
+  /** A referrer written `ageDays` ago, held by ONE file of home A last written then (the per-copy clock reads that
+   *  file); null: no time and no holding file on record. */
+  const ref = (ageDays: number | null): libCarry.ExportCandidate =>
+    ({ tsMs: ageDays === null ? null : NOW - ageDays * DAY, files: ageDays === null ? [] : [{ home: A, mtimeMs: NOW - ageDays * DAY, present: true }] });
+  const census = (blobs: { key: string; referrers: libCarry.ExportCandidate[] }[]) =>
+    libCarry.planExport({ nowMs: NOW, homeRetentionDays: homes, blobs });
+  it('the earliest time any due blob fell due; a blob falls due when its LAST referrer does (its file\'s last write plus 150 days)', () => {
+    const r = census([
+      { key: 'b-late', referrers: [ref(200), ref(170)] },        // due since its 170-day referrer's file passed: 20 days ago
+      { key: 'b-early', referrers: [ref(190)] },                 // due 40 days ago
+      { key: 'b-young', referrers: [ref(190), ref(10)] },        // not due
+    ]);
+    expect(r.due).toEqual(['b-late', 'b-early']);
+    expect(r.oldestDueSinceMs).toBe(NOW - 40 * DAY);
+  });
+  it('null when nothing is due; a blob nothing on disk holds back is dated by the last write its recorded files saw, else its row\'s time, never the epoch (1970); one with no clock on record is due, counted and undated (null), and never hides a dated one', () => {
+    expect(census([{ key: 'b-young', referrers: [ref(1)] }])).toMatchObject({ due: [], oldestDueSinceMs: null });
+    /** Written `ageDays` ago, its one file of home A since deleted: due from the start under the per-copy rule. */
+    const gone = (ageDays: number): libCarry.ExportCandidate =>
+      ({ tsMs: NOW - ageDays * DAY, files: [{ home: A, mtimeMs: NOW - ageDays * DAY, present: false }] });
+    expect(libCarry.EXPORT_REDUCERS.perCopy(gone(3), homes), 'precondition: the reducer answers due from the start').toBe(Number.NEGATIVE_INFINITY);
+    expect(census([{ key: 'b-gone', referrers: [gone(3)] }])).toMatchObject({ due: ['b-gone'], oldestDueSinceMs: NOW - 3 * DAY });
+    expect(census([{ key: 'b-fileless', referrers: [{ tsMs: NOW - 2 * DAY, files: [] }] }]))
+      .toMatchObject({ due: ['b-fileless'], oldestDueSinceMs: NOW - 2 * DAY });
+    expect(census([{ key: 'b-clockless', referrers: [ref(null)] }])).toMatchObject({ due: ['b-clockless'], oldestDueSinceMs: null });
+    // A recorded mtime of 0 (B1's transcriptFiles reads a NULL mtime_ns as 0) is no clock either.
+    expect(census([{ key: 'b-zero', referrers: [{ tsMs: null, files: [{ home: A, mtimeMs: 0, present: false }] }] }]))
+      .toMatchObject({ due: ['b-zero'], oldestDueSinceMs: null });
+    // The dated blob first, so an undated one met after it must not overwrite it.
+    expect(census([{ key: 'b-early', referrers: [ref(190)] }, { key: 'b-clockless', referrers: [ref(null)] }]).oldestDueSinceMs)
+      .toBe(NOW - 40 * DAY);
+  });
+});
+
+// ===========================================================================
+// W1-B4 Task 3: the recovery step's export phases, their cursor, and the
+// segment replay verdict (spec §9.14 "Recovery", "Export replay"; O44's pure
+// half). Pure, on lib.mjs alone.
+// ===========================================================================
+import * as libReplayExport from '../../ccd/history/lib.mjs';
+
+describe('W1-B4: the export phases\' cursor and the segment replay verdict (spec 9.14; O44 pure half)', () => {
+  const STORE = '0189abcd-1234-4678-9abc-0000000000e1';
+  it('the export phases sit between apply and reindex, in that order: every segment\'s bytes, then every segment\'s stubs (D-5397), then the rows', () => {
+    const p = [...libReplayExport.RECOVER_PHASES];
+    expect(p.indexOf('export-blobs')).toBe(p.indexOf('apply') + 1);
+    expect(p.indexOf('export-stubs')).toBe(p.indexOf('export-blobs') + 1);
+    expect(p.indexOf('export-rows')).toBe(p.indexOf('export-stubs') + 1);
+    expect(p.indexOf('reindex')).toBe(p.indexOf('export-rows') + 1);
+  });
+  it('round-trips an export phase at its start, inside a segment, and with +pairs', () => {
+    for (const s of ['export-blobs', 'export-blobs:7.0a1b2c3d.db:0', 'export-rows:12.0a1b2c3d.db:4096+pairs', 'export-rows+pairs', 'export-blobs+pairs',
+      'export-stubs', 'export-stubs:7.0a1b2c3d.db:0', 'export-stubs:12.0a1b2c3d.db:4096+pairs', 'export-stubs+pairs']) {
+      const c = libReplayExport.parseRecoverCursor(s);
+      expect(c, s).not.toBeNull();
+      expect(libReplayExport.formatRecoverCursor(c!), s).toBe(s);
+    }
+    expect(libReplayExport.parseRecoverCursor('export-rows:12.0a1b2c3d.db:4096+pairs'))
+      .toEqual({ phase: 'export-rows', file: '12.0a1b2c3d.db', offset: 4096, blobId: null, groupSize: null, pairsAdded: true });
+    expect(libReplayExport.parseRecoverCursor('export-stubs:12.0a1b2c3d.db:4096+pairs'))
+      .toEqual({ phase: 'export-stubs', file: '12.0a1b2c3d.db', offset: 4096, blobId: null, groupSize: null, pairsAdded: true });
+  });
+  it('an export phase names a segment, never a journal file; a journal phase never names a segment; anything else is null', () => {
+    for (const s of ['export-rows:2026-10.0a1b2c3d.jsonl:1', 'export-blobs:01.0a1b2c3d.db:1', 'export-rows:notes.db:1',
+      'export-blobs:7.0a1b2c3d.db:01', 'export-blobs:7.0a1b2c3d.db', 'export-rows:7.0a1b2c3d.db:9999999999999999',
+      'index:7.0a1b2c3d.db:0', 'apply:7.0a1b2c3d.db:0', 'reindex:7.0a1b2c3d.db', 'export-segments', 'export-blobs:.7.0a1b2c3d.db.tmp:0',
+      'export-stubs:2026-10.0a1b2c3d.jsonl:1', 'export-stubs:01.0a1b2c3d.db:1', 'export-stubs:7.0a1b2c3d.db', 'export-stubs:7.0a1b2c3d.db:01']) {
+      expect(libReplayExport.parseRecoverCursor(s), s).toBeNull();
+    }
+  });
+  it('formatRecoverCursor writes a group size only beside a journal phase: beside an export phase (or reindex) it throws, because the cursor it would print is one parseRecoverCursor refuses (H-182)', () => {
+    const at = { file: '7.0a1b2c3d.db', offset: 12, blobId: null, pairsAdded: false };
+    for (const phase of ['export-blobs', 'export-stubs', 'export-rows']) {
+      expect(() => libReplayExport.formatRecoverCursor({ ...at, phase, groupSize: 2 }), `${phase} with a size`).toThrow(TypeError);
+      // CONTROL: with no size (null or absent) it prints, and the text reads back to the cursor it was made from.
+      for (const c of [{ ...at, phase, groupSize: null }, { ...at, phase }]) {
+        const text = libReplayExport.formatRecoverCursor(c);
+        expect(text).toBe(`${phase}:7.0a1b2c3d.db:12`);
+        expect(libReplayExport.parseRecoverCursor(text), text).toEqual({ ...at, phase, groupSize: null });
+      }
+    }
+    expect(() => libReplayExport.formatRecoverCursor({ phase: 'reindex', file: null, offset: 0, blobId: 5, groupSize: 2, pairsAdded: false }), 'reindex with a size').toThrow(TypeError);
+    // CONTROL: the journal phases still write theirs (H-93).
+    expect(libReplayExport.formatRecoverCursor({ phase: 'apply', file: '2026-10.0a1b2c3d.jsonl', offset: 7, blobId: null, groupSize: 2, pairsAdded: false }))
+      .toBe('apply:2026-10.0a1b2c3d.jsonl:7/2');
+  });
+  it('decideSegmentReplay: another store\'s segment is foreign whatever its format; this store\'s newer format is newer; format 1 replays', () => {
+    const other = '0189abcd-1234-4678-9abc-0000000000e9';
+    expect(libReplayExport.decideSegmentReplay({ meta: { storeId: STORE, format: 1 }, storeId: STORE })).toBe('replay');
+    expect(libReplayExport.decideSegmentReplay({ meta: { storeId: STORE, format: 2 }, storeId: STORE })).toBe('newer');
+    expect(libReplayExport.decideSegmentReplay({ meta: { storeId: other, format: 1 }, storeId: STORE })).toBe('foreign');
+    expect(libReplayExport.decideSegmentReplay({ meta: { storeId: other, format: 2 }, storeId: STORE })).toBe('foreign');
+  });
+});
+
+// ── W1-B4 Task 9: export-due with the export writer live (spec §9.6, §9.15 "The gap guard"; O41's B4 cases) ─────
+// Pure, every input a parameter, the clock included. B1's arm (no export writer: WARN from the first due blob) is
+// Task 28's describe above; these are the arms a build with the writer adds.
+describe('deriveHealth, W1-B4: with the export writer live, export-due waits for a gap (O41\'s B4 cases)', () => {
+  const NOW = 1_800_000_000_000;
+  const MIN = 60_000;
+  const STORE = '5f0c2d3e-8a1b-4c2d-9e3f-0a1b2c3d4e5f';
+  const GAP = 2 * healthLib.EXPORT_PASS_INTERVAL_MS;
+  const gapMin = Math.round(GAP / MIN);
+  /** Task 28's healthy baseline on a build with the export writer: five blobs due, an hourly pass ten minutes ago,
+   *  the oldest due blob ninety minutes old. Every case breaks one leg of it. */
+  const live = (o: Partial<healthLib.HealthInputs> = {}): healthLib.HealthInputs => ({
+    nowMs: NOW, storeId: STORE, exit: 0, reason: null,
+    shimMtimeMs: NOW - 60 * MIN, lastTickMs: NOW - MIN, lagS: 5, sizeBytes: 1_000_000,
+    capGb: 50, capMalformed: false, capFile: '/home/u/.ccrc/cap-fixture', capturePause: '',
+    migration: 'none', userVersion: 1, codeVersion: 1, historyOff: false, recovering: null, op: null, pass: null,
+    bytesBehindLast3: [0, 0, 0], fts: 'ready', modesWrong: [], rootIsSymlink: false,
+    redactUnreadable: [], breakerOpen: false, rosterUnreadable: false, exportDue: 5, exportOverdue: 0,
+    exportWriterLive: true, exportPausedLowDisk: false, retentionLowered: null, retentionUnmeasured: [],
+    journalGrowth30d: 0, journalSkipped: 0, blobUndecodable: 0, drainRejected: 0, spoolDisplaced: 0, spoolBlocked: 0, spoolUnreadable: 0, spoolNotDirectory: false, spoolNodesRefused: 0,
+    exportSegmentNewer: [], exportSegmentMissing: 0,
+    journalUnwritable: false, dbPath: '/home/u/.ccrc/history/db', freeBytes: 100_000_000_000,
+    thresholdBytes: 20_000_000_000, copyBps: null, backupsDb: [], journalStoreDirs: [], extrasUnmeasured: [],
+    exportLastPassMs: NOW - 10 * MIN, exportDueOldestMs: NOW - 90 * MIN,
+    ...o,
+  });
+  const dueItem = (r: healthLib.HealthResult): healthLib.HealthItem | undefined => r.warn.find((i) => i.word === 'export-due');
+
+  it('steady state at every phase between a census, a pass and the next census: PASS ok, nothing to warn', () => {
+    for (const passAgo of [1, 30, 59, 61, 89]) {
+      for (const oldestAgo of [0, 45, 90, 119]) {
+        expect(healthLib.deriveHealth(live({ exportLastPassMs: NOW - passAgo * MIN, exportDueOldestMs: NOW - oldestAgo * MIN })),
+          `pass ${passAgo} min ago, oldest due ${oldestAgo} min ago`).toEqual({ pass: 'ok', warn: [], fail: [] });
+      }
+    }
+  });
+
+  it('a due blob that has waited more than two pass intervals WARNs export-due, naming the count and the wait', () => {
+    const r = healthLib.deriveHealth(live({ exportDueOldestMs: NOW - GAP - MIN }));
+    expect(r.warn.map((i) => i.word)).toEqual(['export-due']);
+    expect(dueItem(r)!.detail).toBe(
+      `store ${STORE}: 5 unexported blob(s) are due, the oldest for ${gapMin + 1} min (over ${gapMin} min, two export pass intervals)`);
+    expect(dueItem(r)!.remedy).toContain('one segment an hour');
+  });
+
+  it('a last pass more than two intervals old WARNs export-due naming its age; it outranks the wait, and its remedy reads the sweep', () => {
+    const r = healthLib.deriveHealth(live({ exportLastPassMs: NOW - GAP - 2 * MIN, exportDueOldestMs: NOW - GAP - MIN }));
+    expect(r.warn.map((i) => i.word)).toEqual(['export-due']);
+    expect(dueItem(r)!.detail).toBe(
+      `store ${STORE}: 5 unexported blob(s) are due, and the last export pass completed ${gapMin + 2} min ago (over ${gapMin} min)`);
+    expect(dueItem(r)!.remedy).toContain('read the sweep: journalctl --user -u ccd-history-sweep');
+  });
+
+  it('the threshold is strict: exactly two intervals is no gap, one minute past is', () => {
+    expect(healthLib.deriveHealth(live({ exportDueOldestMs: NOW - GAP })).pass).toBe('ok');
+    expect(healthLib.deriveHealth(live({ exportLastPassMs: NOW - GAP })).pass).toBe('ok');
+    expect(dueItem(healthLib.deriveHealth(live({ exportDueOldestMs: NOW - GAP - MIN })))).toBeDefined();
+    expect(dueItem(healthLib.deriveHealth(live({ exportLastPassMs: NOW - GAP - MIN })))).toBeDefined();
+  });
+
+  it('an unmeasured clock fires neither writer arm by itself: no pass yet and no census yet is no WARN', () => {
+    expect(healthLib.deriveHealth(live({ exportLastPassMs: null, exportDueOldestMs: 'unmeasured' })).pass).toBe('ok');
+    expect(dueItem(healthLib.deriveHealth(live({ exportLastPassMs: null, exportDueOldestMs: NOW - GAP - MIN })))).toBeDefined();
+    expect(dueItem(healthLib.deriveHealth(live({ exportLastPassMs: NOW - GAP - MIN, exportDueOldestMs: 'unmeasured' })))).toBeDefined();
+  });
+
+  it('the census\'s due-since meta: nothing due writes \'\' and reads null; due blobs it could date none of write unmeasured; a key never written reads unmeasured, never "nothing due"; no value at or before the epoch is a time', () => {
+    expect(healthLib.EXPORT_DUE_OLDEST_UNMEASURED).toBe('unmeasured');
+    expect(healthLib.exportDueOldestMeta(0, null)).toBe('');
+    expect(healthLib.exportDueOldestMeta(0, NOW - 90 * MIN), 'nothing due: no clock is carried').toBe('');
+    expect(healthLib.exportDueOldestMeta(3, NOW - 90 * MIN + 0.4), 'a file clock\'s fraction is rounded').toBe(String(NOW - 90 * MIN));
+    for (const t of [null, 0, 0.3, -5, Number.NaN, Number.NEGATIVE_INFINITY]) expect(healthLib.exportDueOldestMeta(3, t), String(t)).toBe('unmeasured');
+    expect(healthLib.readExportDueOldest('')).toBeNull();
+    expect(healthLib.readExportDueOldest(undefined)).toBe('unmeasured');
+    expect(healthLib.readExportDueOldest('unmeasured')).toBe('unmeasured');
+    for (const v of ['0', '-5', '1.5', 'NaN', ' 12']) expect(healthLib.readExportDueOldest(v), v).toBe('unmeasured');
+    expect(healthLib.readExportDueOldest(String(NOW - 90 * MIN))).toBe(NOW - 90 * MIN);
+    expect(healthLib.readExportDueOldest(healthLib.exportDueOldestMeta(3, NOW - 90 * MIN)), 'round trip').toBe(NOW - 90 * MIN);
+  });
+
+  it('an unmeasured due-since never fires the wait arm, so no export-due detail ever counts minutes from the epoch', () => {
+    expect(dueItem(healthLib.deriveHealth(live({ exportDueOldestMs: healthLib.readExportDueOldest('0') })))).toBeUndefined();
+    expect(dueItem(healthLib.deriveHealth(live({ exportDueOldestMs: 'unmeasured' })))).toBeUndefined();
+    // CONTROL: a real clock past two intervals fires it, its minutes counted from that clock.
+    expect(dueItem(healthLib.deriveHealth(live({ exportDueOldestMs: NOW - GAP - MIN })))!.detail).toContain(`the oldest for ${gapMin + 1} min`);
+  });
+
+  it('nothing due, whatever the clocks: no export-due', () => {
+    expect(healthLib.deriveHealth(live({ exportDue: 0, exportLastPassMs: NOW - 10 * GAP, exportDueOldestMs: NOW - 10 * GAP })).pass).toBe('ok');
+  });
+
+  it('with the pass paused for room, export-due\'s remedy is that room, beside its own export-paused-low-disk WARN', () => {
+    const r = healthLib.deriveHealth(live({ exportPausedLowDisk: true, exportLastPassMs: NOW - GAP - MIN }));
+    expect(r.warn.map((i) => i.word)).toEqual(['export-due', 'export-paused-low-disk']);
+    expect(dueItem(r)!.remedy).toContain('paused for room');
+  });
+
+  it('a build without the writer keeps B1\'s arm: a WARN from the first due blob, with B1\'s detail and remedy', () => {
+    const r = healthLib.deriveHealth(live({ exportWriterLive: false, exportDue: 1 }));
+    expect(dueItem(r)!.detail).toBe(`store ${STORE}: 1 unexported blob(s) are due by the horizon, and this build has no export writer`);
+    expect(dueItem(r)!.remedy).toBe(healthLib.HEALTH_REMEDIES['export-due']);
+  });
+
+  // W1-B4 review 614, F9: export-due's remedy was rewritten by arm when the writer landed; export-overdue's still told an
+  // operator to raise cleanupPeriodDays "until the export writer ships" on a build that has it.
+  describe('export-overdue\'s remedy follows the build, as export-due\'s does (W1-B4 review 614)', () => {
+    const overdue = (o: Partial<healthLib.HealthInputs>): healthLib.HealthItem =>
+      healthLib.deriveHealth(live({ exportOverdue: 3, ...o })).fail.find((i) => i.word === 'export-overdue')!;
+    const SWEEP = 'journalctl --user -u ccd-history-sweep -n 50';
+
+    it('a build with the writer live: keep the store, the pass carries the text into export/<store_id>/ at one segment an hour, and the sweep log is where to look if the count does not fall', () => {
+      const item = overdue({});
+      expect(item.remedy).toBe(`the store may be the only copy of this text: keep ~/.ccrc/history (never --purge-history); the export pass copies it into ~/.ccrc/history/export/<store_id>/ at one segment an hour, and if the count does not fall, read the sweep: ${SWEEP}`);
+      expect(item.remedy, 'it no longer waits for a writer that has shipped').not.toMatch(/until the export writer ships|W1-B4/);
+      expect(item.remedy, 'and carries no line number').not.toMatch(/\.(mjs|ts|sh):\d/);
+      expect(item.detail).toBe(`store ${STORE}: 3 unexported blob(s) whose source text is gone or past its deletion date: the store may be their only copy`);
+    });
+
+    it('the pass paused for room: the room first, as export-due\'s remedy puts it, with the store kept', () => {
+      const item = overdue({ exportPausedLowDisk: true });
+      expect(item.remedy).toBe('the store may be the only copy of this text: keep ~/.ccrc/history (never --purge-history), and free space on the home filesystem: the export pass is paused for room there, and this text waits for it');
+      expect(item.remedy).toContain('--purge-history');
+    });
+
+    it('a build without the writer keeps B1\'s text verbatim, whether or not a pause stands', () => {
+      for (const exportPausedLowDisk of [false, true]) {
+        const item = overdue({ exportWriterLive: false, exportPausedLowDisk });
+        expect(item.remedy, `paused ${exportPausedLowDisk}`).toBe(healthLib.HEALTH_REMEDIES['export-overdue']);
+        expect(item.remedy).toContain('cleanupPeriodDays');
+        expect(item.remedy).toContain('W1-B4');
+      }
+    });
   });
 });

@@ -1,9 +1,9 @@
 // shared/litellm.mjs — §6.3's renderer: a Codex catalogue plus the template in
-// `deploy/` become `~/.handoff/litellm-config.yaml`.
+// `deploy/` become one lane's `~/.ccrc/codex/<id>/litellm.yaml`.
 //
 // PURE, and that is why it is a module rather than a block of `ccrc`: the whole
-// render can be measured without writing into `~/.handoff`, which is a live
-// directory on the box this suite runs on.
+// render can be measured without writing into `~/.ccrc/codex`, which holds the
+// live lanes' files on the box this suite runs on.
 //
 // `.mjs` because its caller is `deploy/models-op.mjs`, under a bare `node`.
 // It imports nothing at all.

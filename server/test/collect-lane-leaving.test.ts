@@ -8,7 +8,7 @@
 //   holds no ids, and stands while a listing is unmeasured;
 // - an id whose registry row stands again projects no per-id item, and its memory is kept: the item returns once the
 //   row goes;
-// - an answer older than the box-wide probes' latest change says nothing of them: an act job folds its observation 2 when
+// - an answer from before the box-wide probes were last rebuilt says nothing of them: an act job folds its observation 2 when
 //   the JOB settles, so a probe a later answer raised, or an act's own answer, is cleared by an older answer never.
 // FIXTURE HOME ONLY (`collectLaneFixture.ts`): ccd is a scripted model, the registry a fixture HOME's.
 import { describe, it, expect, vi, afterEach } from 'vitest';
@@ -152,7 +152,7 @@ describe('an id whose registry row stands again projects no item, and keeps its 
   });
 });
 
-describe('an answer older than the box-wide probes’ latest change says nothing of them (spec §5.10)', () => {
+describe('an answer from before the box-wide probes were last rebuilt says nothing of them (spec §5.10)', () => {
   /** A live lane past its hold-off where demo-a holds observation 1; its act is composed by the next pass. */
   const live = async (): Promise<CollectRig> => {
     const f = await collectRig();
@@ -228,7 +228,7 @@ describe('an answer older than the box-wide probes’ latest change says nothing
     expect(await boxWords(f)).not.toContain('box-probe');
   });
 
-  it('a forgotten id’s collected act still clears a probe raised while it was out: the act’s answer counts for the box before its id is looked up', async () => {
+  it('a forgotten id’s collected act still clears a probe raised while it was out: the act’s answer counts for the box ahead of the forgotten-id return', async () => {
     const f = await live();
     const act = f.hold('collect', 'demo-a');
     f.next(); await f.pass();                               // the act job: observation 2 answered, then ws-collect, held

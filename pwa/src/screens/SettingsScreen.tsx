@@ -8,7 +8,9 @@
 // plan; fix rounds 1–2 widened several of their guards in place — see the
 // plan's `## Deviations found`, D-3315/D-3316); and Stall watch (stall watch
 // settings, design 2026-10-05 §13), which lives in its own file,
-// `StallWatchSection.tsx`, with its own read. The update plane's READING
+// `StallWatchSection.tsx`, with its own read; and Temp root collector
+// (path-identity spec 2026-10-12 §5.7), in `fleet/CollectLaneSection.tsx`,
+// with its own read too, mounted after Stall watch. The update plane's READING
 // surface — the release list, the node inventory and the twenty pure helpers
 // that turn a wire row into a sentence — moved to `screens/updates.tsx`; this
 // file composes it, beside the Appearance section (the theme picker).
@@ -24,19 +26,26 @@ import type {
   UpdateRouteRefusal, UpdatesView,
 } from '../../../shared/api';
 import {
-  AUTO_MODES, FLEET_SCOPE, NOTIFY_MODES, UPDATE_CHANNELS, UPDATE_GATE_CAP, isNotifyMode,
+  AUTO_MODES, FLEET_SCOPE, NOTIFY_MODES, UPDATE_CHANNELS, isNotifyMode,
 } from '../../../shared/api';
+import { carriesUpdateGate } from '../../../shared/update-move';
 import { LOOPBACK_HOSTS } from '../../../shared/base-url';
 import {
-  BackButton, Button, PHOSPHOR, RADIO_FIELDSET, RADIO_LEGEND, Radio, RadioFieldset,
+  BackButton, Button, RadioFieldset,
   SYSTEM, Skeleton, THEMES, toast, useNow,
 } from '@ccrc/ui';
 import { NotificationBell } from '../fleet/NotificationBell';
 import { StallWatchSection } from './StallWatchSection';
-import { UNCONFIRMED_TEXT } from './settingsText';
+import { AppearanceFieldset, AppearanceGroup, AppearanceRow } from './AppearanceRow';
+import { SkinFieldset } from './SkinFieldset';
+import { CollectLaneSection } from '../fleet/CollectLaneSection';
+import {
+  CATALOGUE_EXPLAIN_TEXT, NOTIFICATIONS_TEXT, NotedRadioSet, ResultLine, UNCONFIRMED_TEXT, UPDATES_TEXT, autoGateNoteText,
+  useResultLine,
+} from './settingsText';
 import { planMove, type MoveIntent, type PlannedMove } from '../fleet/movePlan';
 import { UpdateMoveSheet } from '../fleet/UpdateMoveSheet';
-import { isPlaceableInstant, useUpdatesView, type UpdatesPoll } from '../fleet/useUpdatesView';
+import { UPDATES_STALE_TEXT, isPlaceableInstant, useUpdatesView, type UpdatesPoll } from '../fleet/useUpdatesView';
 import { ApiError, api, apiErrorText, readBoxTokenView, updateErrorText } from '../lib/api';
 // `dayClock` and `elapsedWords` come THROUGH the update plane's reading
 // surface, which is where the twenty wire-row-to-sentence helpers moved: the
@@ -45,12 +54,18 @@ import { ApiError, api, apiErrorText, readBoxTokenView, updateErrorText } from '
 import type { BoxTokenView, RotateAnswer, TokenHold } from '../../../shared/box-token';
 import { readAuthStatus } from '../lib/auth';
 import { pushSupported } from '../lib/push';
-import { setTheme, storedTheme } from '../lib/theme';
+import { setTheme, useThemeChoice } from '../lib/theme';
 import { navigate } from '../lib/router';
 // The update plane's reading surface moved to a file of its own; this screen
 // composes it. `ACK_UNREADABLE_TEXT`/`canAck` come THROUGH it because
 // `NodeItem` is their consumer — see that file's header.
-import { NodeList, ReleaseList, catalogueLine, dayClock, elapsedWords } from './updates';
+import {
+  HaltLine, NodeList, ReleaseList, WhatsNewButton, catalogueLine, dayClock, elapsedWords, haltLineText, moveKey,
+  releaseWindow, type MoveResult,
+} from './updates';
+import { bannerRelease } from '../fleet/UpdateBanner';
+import { WhatsNewSheet, whatsNewReleases } from '../fleet/WhatsNewSheet';
+import { haltingNodes, updateAllHaltedText } from '../fleet/updateHalt';
 import '../fleet/fleet.css';
 
 // ── The Updates section (spec §13; programme wave 3 Task 7) ──────────────────
@@ -76,43 +91,53 @@ import '../fleet/fleet.css';
 // the platform supplies the group's role, its name (the legend), arrow-key
 // movement and the checked state.
 
-/** Spec §13's two channel sentences, verbatim — one radio row each. */
+/** The channel labels (settings spec §11.2: the old "Stable — releases promoted after they've baked" became the label
+ *  "Stable" with its note), one radio row each. The name stays for its importers. */
 export const CHANNEL_SENTENCES: Record<UpdateChannel, string> = {
-  stable: "Stable — releases promoted after they've baked",
-  dev: 'Dev — every merge, minutes after it lands',
+  stable: 'Stable',
+  dev: 'Dev',
 };
 
-/** The auto-install choices (`AutoMode`, W2) in the operator's words. */
+/** Each channel's note, under its option (spec §5.1). */
+export const CHANNEL_NOTES: Record<UpdateChannel, string> = {
+  stable: 'Releases promoted only after they have baked.',
+  dev: 'Every merge, minutes after it lands.',
+};
+
+/** The auto-install choices (`AutoMode`, W2) in spec §11.2's words. The wire's values do not change. */
 export const AUTO_LABELS: Record<AutoMode, string> = {
   off: 'Off',
-  stable: 'Stable releases only',
-  channel: 'Every release on my channel',
+  stable: 'On the Stable channel only',
+  channel: 'On any channel',
 };
 
-/** The auto-install note's lead; the node labels follow, in `nodes()` order. */
-const AUTO_GATE_NOTE = 'Auto-install needs the rollback gate on every node — not yet on: ';
+/** Each auto-install choice's note, under its option (spec §5.1). */
+export const AUTO_NOTES: Record<AutoMode, string> = {
+  off: 'Nothing installs until you press Install or Update.',
+  stable: 'Installs each new stable release by itself. While the channel is Dev, nothing installs by itself.',
+  channel: 'Installs each new release on the chosen channel by itself, Dev included.',
+};
 // UNCONFIRMED_TEXT is defined in ./settingsText so the Stall watch section can import it without a cycle back to this
 // screen; re-exported here so this screen's callers and tests keep their import, and so the spec's citation of this
 // file (§13 step 3) still resolves to the re-export here.
 export { UNCONFIRMED_TEXT };
 /** The first poll never landed and was not a 501 — a read that failed, said as one, not a skeleton forever. */
 const UNREAD_TEXT = 'The update plane could not be read — the screen tries again every minute.';
-/** A later poll failed: what is shown is the last answer that landed, and it says so. */
-const STALE_TEXT = 'The latest read failed — this is the last answer that landed.';
 /** The update surface's own sentence for a box with no control plane — Task 5's table, read through its one
  *  translator, so this file holds no second copy of it. */
 const NOT_CONFIGURED_TEXT = updateErrorText(new ApiError(501, { ok: false, error: 'not-configured' }));
-/** The one intent refusal rendered in place (by node label) instead of toasted (W2 Task 13). */
+/** The one intent refusal rendered as the gate note (by node label) rather than as Auto-install's result line (W2
+ *  Task 13). */
 const AUTO_GATE_REFUSAL = 'auto-needs-rollback-gate' satisfies UpdateRouteError;
 
 export function autoGateMissing(nodes: readonly NodeWire[]): NodeWire[] {
   // Array.isArray, not a bare `.includes`: a caps field that arrived as a
   // STRING would answer by substring and read as gated.
-  return nodes.filter((n) => !(Array.isArray(n.caps) && n.caps.includes(UPDATE_GATE_CAP)));
+  return nodes.filter((n) => !(Array.isArray(n.caps) && carriesUpdateGate(n.caps)));
 }
 
 /** The node ids a `409 auto-needs-rollback-gate` names; null for any other failure, and for a 409 naming no id
- *  (the caller then toasts the route's own sentence rather than an empty "not yet on:"). */
+ *  (the caller then says the route's own sentence under Auto-install rather than an empty "Not yet:"). */
 // `RadioFieldset` LEFT THIS FILE — it is `@ccrc/ui`'s now, with the five
 // fleet.css rules that skinned it. The argument that kept it local was "this
 // file is their only consumer, so moving them anywhere would cost three rules
@@ -142,64 +167,9 @@ function gateRefusalOf(err: unknown): string[] | null {
 // `clockTime`, `dayClock`, `releaseDate` — so there is exactly one place, shared by both surfaces, that
 // decides "this build's Date cannot place it".
 
-function ThemeRow({ choice, current, onPick, swatch = true }: {
-  /** Structural, not `ThemeChoice`: "Follow system" is not a palette and
-   *  carries no `mode`, but it IS this row — same label over the same note,
-   *  same radio, in the same group. It was written out a second time instead,
-   *  and the markup census found it. */
-  choice: { id: string; label: string; note: string };
-  current: string;
-  onPick: (id: string) => void;
-  /** "Follow system" draws none: there is no single palette to preview, and
-   *  five swatches of whichever one happens to be applied would be a preview
-   *  of the wrong thing. */
-  swatch?: boolean;
-}): ReactNode {
-  const active = current === choice.id;
-  return (
-    <Radio
-      className="settings-theme"
-      data-active={active}
-      name="settings-theme"
-      value={choice.id}
-      checked={active}
-      onChange={() => onPick(choice.id)}
-      bare
-    >
-      <span className="settings-theme-body">
-        {/* THE SWATCH RIDES THE NAME'S LINE, not the row's far edge. As the
-            row's last flex item behind a `flex: 1` body it sat at the right
-            edge of the section — about 1400px from its own name at a 1920px
-            window — so a palette and its preview read as two columns that
-            happened to share a stripe of tint. Beside the name it is that
-            palette's preview at every width, phone to wide. */}
-        <span className="settings-theme-head">
-          <span className="settings-theme-name">{choice.label}</span>
-          {/* `data-theme` on the swatch itself: tokens.css's blocks are plain
-              attribute selectors, so they resolve on ANY element, not just the
-              root. The preview is therefore the real palette rather than a
-              hand-copied approximation of it. `phosphor` carries no block — it
-              is :root — so it deliberately stamps nothing and inherits the
-              default. */}
-          {swatch && (
-            <span
-              className="settings-theme-swatch"
-              aria-hidden="true"
-              {...(choice.id === PHOSPHOR ? {} : { 'data-theme': choice.id })}
-            >
-              <i style={{ background: 'var(--bg-surface)' }} />
-              <i style={{ background: 'var(--ink-primary)' }} />
-              <i style={{ background: 'var(--accent)' }} />
-              <i style={{ background: 'var(--status-attention)' }} />
-              <i style={{ background: 'var(--status-dead)' }} />
-            </span>
-          )}
-        </span>
-        <span className="settings-note">{choice.note}</span>
-      </span>
-    </Radio>
-  );
-}
+// The row the Theme fieldset draws moved to `AppearanceRow.tsx` (D-5458): the
+// Layout fieldset draws it too, and two copies of its markup are what the
+// markup census refuses.
 
 /** Not a palette, and deliberately not in `THEMES`: the generator writes that
  *  list and `themes:check` rules on it. This is the row that says "whichever
@@ -214,10 +184,11 @@ const FOLLOW_SYSTEM = {
  *  poll, and a test of a radio group should not need a control plane. */
 export function AppearanceSection(): ReactNode {
   const titleId = useId();
-  // Seeded from storage rather than defaulted, so the control opens showing
-  // what is actually applied — including on a reload into a pinned palette.
-  const [current, setCurrent] = useState(() => storedTheme());
-  const pick = (id: string): void => { setTheme(id); setCurrent(id); };
+  // The choice in force, as `initTheme` read it at boot or `setTheme` last
+  // made it — here or in the palette's "Switch theme…" — so the control opens
+  // on what is actually applied and never keeps a stale row (D-5572).
+  const current = useThemeChoice();
+  const pick = (id: string): void => { setTheme(id); };
 
   const dark = THEMES.filter((t) => t.mode === 'dark');
   const light = THEMES.filter((t) => t.mode === 'light');
@@ -225,17 +196,17 @@ export function AppearanceSection(): ReactNode {
   return (
     <section className="settings-section" aria-labelledby={titleId}>
       <h2 id={titleId} className="settings-section-title">Appearance</h2>
-      <fieldset className={RADIO_FIELDSET}>
-        <legend className={RADIO_LEGEND}>Theme</legend>
-        <ThemeRow choice={FOLLOW_SYSTEM} current={current} onPick={pick} swatch={false} />
+      <SkinFieldset />
+      <AppearanceFieldset legend="Theme">
+        <AppearanceRow choice={FOLLOW_SYSTEM} current={current} onPick={pick} group="settings-theme" swatch={false} />
         {/* Grouped by how the palette reads, because that is the first thing
             anyone is choosing between — and the ask was light AND dark, not a
             dark list with one light apology. */}
-        <p className={`${RADIO_LEGEND} settings-theme-group`}>Dark</p>
-        {dark.map((t) => <ThemeRow key={t.id} choice={t} current={current} onPick={pick} />)}
-        <p className={`${RADIO_LEGEND} settings-theme-group`}>Light</p>
-        {light.map((t) => <ThemeRow key={t.id} choice={t} current={current} onPick={pick} />)}
-      </fieldset>
+        <AppearanceGroup>Dark</AppearanceGroup>
+        {dark.map((t) => <AppearanceRow key={t.id} choice={t} current={current} onPick={pick} group="settings-theme" />)}
+        <AppearanceGroup>Light</AppearanceGroup>
+        {light.map((t) => <AppearanceRow key={t.id} choice={t} current={current} onPick={pick} group="settings-theme" />)}
+      </AppearanceFieldset>
     </section>
   );
 }
@@ -268,7 +239,12 @@ export function AppearanceSection(): ReactNode {
 // body without `mode` — because a red banner is a claim about this box, and a
 // status read that told us nothing is not evidence of an open gate.
 
-export const NOTIFY_LABELS: Record<NotifyMode, string> = { channel: 'on my channel', stable: 'stable only', off: 'off' };
+/** Announce new releases' choices in spec §11.2's words; the wire's `NotifyMode` values do not change. */
+export const NOTIFY_LABELS: Record<NotifyMode, string> = {
+  channel: "Every release on the fleet's channel",
+  stable: 'Stable releases only',
+  off: 'None',
+};
 
 /** The ONE spelling of the §12 sentence (the W4 doctor check will name the same route). */
 export const UNARMED_EXPOSURE_TEXT =
@@ -311,9 +287,12 @@ function NotificationsSection({ view, reload }: { view: UpdatesView | null; relo
   const caughtUp = shown !== null && shown.setAt !== null && row !== null && row.setAt >= shown.setAt;
   const checked = shown !== null && !caughtUp ? shown.notify : (row?.notify ?? null);
   const saving = shown !== null && shown.setAt === null;
+  // D-5507: the write's answer is a line under the group, a toast only once the section has gone (spec §6.4).
+  const result = useResultLine();
 
   const choose = async (notify: NotifyMode): Promise<void> => {
     if (saving) return;   // the disabled fieldset stops a finger; this stops a second call
+    result.clear();
     setShown({ notify, setAt: null });
     try {
       const answer = await api.setUpdateIntent({ scope: FLEET_SCOPE, notify });
@@ -321,13 +300,13 @@ function NotificationsSection({ view, reload }: { view: UpdatesView | null; relo
       if (stored === null || !isNotifyMode(stored.notify) || typeof stored.setAt !== 'number') {
         // The write may have landed: say so, and let the poll decide what is checked.
         setShown(null);
-        toast(UNCONFIRMED_TEXT);
+        result.say(UNCONFIRMED_TEXT);
       } else {
         setShown({ notify: stored.notify, setAt: stored.setAt });
       }
     } catch (err) {
       setShown(null);
-      toast(updateErrorText(err), 'error');
+      result.say(updateErrorText(err), 'refusal');
     }
     reload();
   };
@@ -344,15 +323,22 @@ function NotificationsSection({ view, reload }: { view: UpdatesView | null; relo
       ) : (
         <p className="settings-note">This browser cannot receive Web Push.</p>
       )}
+      <p className="settings-note">{NOTIFICATIONS_TEXT.browserPurpose}</p>
+      <p className="settings-note">{NOTIFICATIONS_TEXT.browserWhen}</p>
       {view !== null && (
-        <RadioFieldset
-          legend="Release notifications"
-          name="settings-notify"
-          options={NOTIFY_MODES.map((m) => ({ value: m, label: NOTIFY_LABELS[m] }))}
-          value={checked}
-          onPick={(m) => void choose(m)}
-          disabled={saving}
-        />
+        <>
+          <RadioFieldset
+            legend={NOTIFICATIONS_TEXT.announceLegend}
+            name="settings-notify"
+            options={NOTIFY_MODES.map((m) => ({ value: m, label: NOTIFY_LABELS[m] }))}
+            value={checked}
+            onPick={(m) => void choose(m)}
+            disabled={saving}
+          />
+          <ResultLine line={result.line} />
+          <p className="settings-note">{NOTIFICATIONS_TEXT.announcePurpose}</p>
+          <p className="settings-note">{NOTIFICATIONS_TEXT.announceWhen}</p>
+        </>
       )}
     </section>
   );
@@ -512,8 +498,10 @@ export function SettingsScreen(): ReactNode {
   // sections: all three read the same answer (Tasks 7–10; the card,
   // box-token lifecycle Task B6), so they can never disagree about the fleet.
   // ONE clock for the two that show an age, Updates and the Box token card.
-  // The Stall watch section is the one with its own read, of its own
-  // endpoint, through its own hook (useStallWatchView, design 2026-10-05 §13).
+  // The Stall watch and Temp root collector sections each have their own
+  // read, of their own endpoint, through their own hook (useStallWatchView,
+  // design 2026-10-05 §13; useCollectLaneView, path-identity spec 2026-10-12
+  // §5.7). The collector comes after Stall watch, as §5.7 places it.
   const poll = useUpdatesView();
   const now = useNow(30_000);
   return (
@@ -534,6 +522,7 @@ export function SettingsScreen(): ReactNode {
       {poll.view !== null && <BoxTokenSection view={poll.view} now={now} reload={poll.reload} />}
       <NotificationsSection view={poll.view} reload={poll.reload} />
       <StallWatchSection />
+      <CollectLaneSection />
     </div>
   );
 }
@@ -559,6 +548,9 @@ function UpdatesSection({ poll, now }: { poll: UpdatesPoll; now: number }): Reac
     </section>
   );
 }
+
+/** The opener key of the What's-new sheet's Update all: its line is drawn under "See what's new". */
+const WHATS_NEW_FROM = 'whats-new';
 
 /** The section over a landed view. `view` is the LAST GOOD answer (useUpdatesView keeps it across a failed
  *  poll); `stale` says a later poll failed. Tasks 8 and 9 render the release list and the node inventory
@@ -600,11 +592,31 @@ function UpdatesBody({ view, stale, now, reload }: {
   const viewRef = useRef(view);
   viewRef.current = view;
   const [gateRefusal, setGateRefusal] = useState<{ ids: string[]; view: UpdatesView } | null>(null);
-  const [refreshNote, setRefreshNote] = useState<string | null>(null);
+  // D-5507 (spec §6.4): every server action here answers in a line under the control that asked, a toast only once
+  // the control is gone. One line per control: Channel, Auto-install, Check now, and the move's opener.
+  const channelLine = useResultLine();
+  const autoLine = useResultLine();
+  const checkLine = useResultLine();
+  const moveLine = useResultLine();
+  // The control that opened the move sheet (`moveKey` of its intent, or `whats-new` for the sheet's own Update all),
+  // so the 202's line is drawn under it once the sheet has closed.
+  const [moveFrom, setMoveFrom] = useState<string | null>(null);
   // The move the operator is confirming — a plan taken at the tap, so a poll
   // landing while the sheet is open cannot change the list under a thumb.
   const [move, setMove] = useState<PlannedMove | null>(null);
-  const openMove = (intent: MoveIntent): void => setMove(planMove(view, intent));
+  const openMove = (intent: MoveIntent, from: string = moveKey(intent)): void => {
+    moveLine.clear();
+    setMoveFrom(from);
+    setMove(planMove(view, intent));
+  };
+  const moveResult: MoveResult | null = moveFrom !== null && moveLine.line !== null
+    ? { key: moveFrom, line: moveLine.line } : null;
+  // D-5611: the rollback sheet's target, for its withdrawn and unbundled lines.
+  const rollbackTo = move !== null && move.intent.direction === 'rollback' ? move.intent.to : null;
+  // Updates' own "See what's new" (settings spec §4.1, D-5505): the banner's sheet, the banner's tag
+  // (`bannerRelease`), and its footer's Update all handing over to the one move sheet. One sheet at a time.
+  const [whatsNew, setWhatsNew] = useState(false);
+  const haltId = useId();
 
   const fleet = view.intent.find((i) => i.scope === FLEET_SCOPE) ?? null;
   const missing = autoGateMissing(view.nodes);
@@ -628,8 +640,13 @@ function UpdatesBody({ view, stale, now, reload }: {
   const gateLabels = (gateRefusal !== null && gateRefusal.view === view)
     ? gateRefusal.ids.map(labelOf)
     : missing.map((n) => n.label);
-  const gateNote = gateLabels.length > 0 ? `${AUTO_GATE_NOTE}${gateLabels.join(', ')}` : null;
+  const gateNote = gateLabels.length > 0 ? autoGateNoteText(gateLabels) : null;
   const line = catalogueLine(view.catalogue, now);
+  const waiting = bannerRelease(view);
+  // THE ONE HALT LINE (settings spec §5.1): computed over what the window and the node rows will draw, so it shows
+  // only while a control it gates is on screen, and every such control names it.
+  const halt = haltLineText(view.nodes, releaseWindow(view.releases, view.nodes, fleet?.channel ?? null));
+  const halting = haltingNodes(view.nodes);
   // Wave 8 item F1: the same unplaceable-reads-as-null rule catalogueLine's own `lastOkAt` classification uses
   // (:136), so a node's resolveDetail is qualified on the same basis the catalogue line itself is.
   const catalogueLastOkAt = view.catalogue.lastOkAt !== null && isPlaceableInstant(view.catalogue.lastOkAt)
@@ -638,16 +655,18 @@ function UpdatesBody({ view, stale, now, reload }: {
   const writeIntent = (patch: { channel: UpdateChannel } | { auto: AutoMode }): void => {
     setBusy(true);
     if ('auto' in patch) setGateRefusal(null);
+    const line = 'auto' in patch ? autoLine : channelLine;
+    line.clear();
     void api.setUpdateIntent({ scope: FLEET_SCOPE, ...patch })
       .then(
-        (answer) => { if (answer === 'unreadable') toast(UNCONFIRMED_TEXT); },
+        (answer) => { if (answer === 'unreadable') line.say(UNCONFIRMED_TEXT); },
         (err: unknown) => {
           const refused = gateRefusalOf(err);
           // viewRef.current, not the closed-over `view` param (W5 F-A): the
           // view genuinely current when this 409 lands, never the one active
           // at the tap that started the write.
           if (refused !== null) setGateRefusal({ ids: refused, view: viewRef.current });
-          else toast(updateErrorText(err), 'error');
+          else line.say(updateErrorText(err), 'refusal');
         },
       )
       .finally(() => { setBusy(false); reload(); });
@@ -655,7 +674,7 @@ function UpdatesBody({ view, stale, now, reload }: {
 
   const checkNow = (): void => {
     setBusy(true);
-    setRefreshNote(null);
+    checkLine.clear();
     void api.refreshUpdates()
       .catch((err: unknown) => {
         // A 429 is the route's interval guard (W2 Task 13's
@@ -664,24 +683,41 @@ function UpdatesBody({ view, stale, now, reload }: {
         // failed (D-3203 counts every request), so the note claims the request
         // and never a "checked" (the catalogue line owns that word, and only
         // off a non-null lastOkAt).
-        if (err instanceof ApiError && err.status === 429) setRefreshNote(updateErrorText(err));
-        else toast(updateErrorText(err), 'error');
+        if (err instanceof ApiError && err.status === 429) checkLine.say(updateErrorText(err));
+        else checkLine.say(updateErrorText(err), 'refusal');
       })
       .finally(() => { setBusy(false); reload(); });
   };
 
   return (
     <>
-      {stale && <p className="settings-note">{STALE_TEXT}</p>}
-      <RadioFieldset
+      {/* A later poll failed: the update plane's one sentence for the last answer that landed (wave 19, R24(b)). */}
+      {stale && <p className="settings-note">{UPDATES_STALE_TEXT}</p>}
+      {halt !== null && <HaltLine id={haltId} text={halt} />}
+      {waiting !== null && (
+        <>
+          <div className="settings-release-actions">
+            <span className="settings-note">{`${waiting.tag} available`}</span>
+            <WhatsNewButton onClick={() => setWhatsNew(true)}>{"See what's new"}</WhatsNewButton>
+          </div>
+          {moveResult?.key === WHATS_NEW_FROM && <ResultLine line={moveResult.line} />}
+          <p className="settings-note">{UPDATES_TEXT.whatsNewNote}</p>
+          <p className="settings-note">{UPDATES_TEXT.whatsNewWhen}</p>
+        </>
+      )}
+      {/* Spec §5.1's options with their notes: each note under its option, read as its description. */}
+      <NotedRadioSet
         legend="Channel"
         name="settings-channel"
-        options={UPDATE_CHANNELS.map((c) => ({ value: c, label: CHANNEL_SENTENCES[c] }))}
+        options={UPDATE_CHANNELS.map((c) => ({ value: c, label: CHANNEL_SENTENCES[c], note: CHANNEL_NOTES[c] }))}
         value={fleet?.channel ?? null}
         onPick={(c) => writeIntent({ channel: c })}
         disabled={busy}
       />
-      <RadioFieldset
+      <ResultLine line={channelLine.line} />
+      <p className="settings-note">{UPDATES_TEXT.channelPurpose}</p>
+      <p className="settings-note">{UPDATES_TEXT.channelWhen}</p>
+      <NotedRadioSet
         legend="Auto-install"
         name="settings-auto"
         /* D-3315: only the non-'off' choices are gated on the node caps — the
@@ -691,6 +727,7 @@ function UpdatesBody({ view, stale, now, reload }: {
         options={AUTO_MODES.map((m) => ({
           value: m,
           label: AUTO_LABELS[m],
+          note: AUTO_NOTES[m],
           disabled: m !== 'off' && missing.length > 0,
         }))}
         value={fleet?.auto ?? null}
@@ -698,21 +735,56 @@ function UpdatesBody({ view, stale, now, reload }: {
         disabled={busy}
         describedBy={gateNote !== null ? gateNoteId : undefined}
       />
+      <ResultLine line={autoLine.line} />
       {gateNote !== null && <p id={gateNoteId} className="settings-note">{gateNote}</p>}
+      {gateNote !== null && <p className="settings-note">{UPDATES_TEXT.autoGateWhen}</p>}
+      <p className="settings-note">{UPDATES_TEXT.autoPurpose}</p>
+      <p className="settings-note">{UPDATES_TEXT.autoWhen}</p>
       <Button variant="ghost" className="settings-check" disabled={busy} onClick={checkNow}>
         Check now
       </Button>
-      {refreshNote !== null && <p className="settings-note" aria-live="polite">{refreshNote}</p>}
+      <ResultLine line={checkLine.line} />
+      <p className="settings-note">{UPDATES_TEXT.checkNowNote}</p>
+      <p className="settings-note">{UPDATES_TEXT.checkNowWhen}</p>
       <p className={line.tone === 'calm' ? 'settings-catalogue' : `settings-catalogue settings-catalogue--${line.tone}`}>
         {line.text}
       </p>
-      {view !== null && <ReleaseList releases={view.releases} nodes={view.nodes} onMove={openMove} />}
+      <p className="settings-note">{CATALOGUE_EXPLAIN_TEXT}</p>
       {view !== null && (
-        <NodeList
-          nodes={view.nodes} releases={view.releases} now={now} catalogueLastOkAt={catalogueLastOkAt} onAcked={reload} onMove={openMove}
+        <ReleaseList
+          releases={view.releases} nodes={view.nodes} channel={fleet?.channel ?? null} source={view.source}
+          haltedBy={halt !== null ? haltId : null}
+          onWhatsNew={waiting !== null ? () => setWhatsNew(true) : undefined}
+          whatsNewSince={waiting !== null ? whatsNewReleases(view, waiting.tag).since : null}
+          onMove={openMove} result={moveResult}
         />
       )}
-      <UpdateMoveSheet open={move !== null} plan={move} onClose={() => setMove(null)} onDone={reload} />
+      {view !== null && (
+        <NodeList
+          nodes={view.nodes} releases={view.releases} now={now} catalogueLastOkAt={catalogueLastOkAt}
+          haltedBy={halt !== null ? haltId : null} onAcked={reload} onMove={openMove} result={moveResult}
+        />
+      )}
+      <WhatsNewSheet
+        open={whatsNew && waiting !== null}
+        view={view}
+        tag={waiting?.tag ?? null}
+        halted={halting.length > 0 ? updateAllHaltedText(halting) : null}
+        onClose={() => setWhatsNew(false)}
+        onUpdateAll={() => {
+          if (waiting === null) return;
+          setWhatsNew(false);
+          openMove({ scope: 'fleet', direction: 'update', tag: waiting.tag }, WHATS_NEW_FROM);
+        }}
+      />
+      {/* D-5507: a rollback is a danger action, so its sheet takes the danger tone and reads the target's catalogue
+          row (withdrawn, unbundled; D-5611). Install and Update keep the default. */}
+      <UpdateMoveSheet
+        open={move !== null} plan={move} onClose={() => setMove(null)} onDone={reload}
+        onAnswered={(text) => moveLine.say(text)}
+        tone={move?.intent.direction === 'rollback' ? 'danger' : 'move'}
+        release={rollbackTo === null ? undefined : view?.releases.find((r) => r.tag === rollbackTo)}
+      />
     </>
   );
 }

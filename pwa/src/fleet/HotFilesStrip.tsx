@@ -17,7 +17,7 @@ import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { ClaimSummary } from '../../../shared/api';
 import { api } from '../lib/api';
-import { CollapsibleStrip, MONO_PATH, useNow } from '@ccrc/ui';
+import { CollapsibleStrip, Icon, MONO_PATH, useNow } from '@ccrc/ui';
 import './fleet.css';
 
 export const CLAIMS_POLL_MS = 30_000;
@@ -65,7 +65,7 @@ export function HotFilesStrip(): ReactNode {
       // (`CollapsibleStrip`'s `headFloor`).
       headFloor="content"
       label="Hot files"
-      mark="✋"
+      mark={<Icon name="hand" />}
       headline={liveClaims.length === 1 ? '1 hot-file claim' : `${liveClaims.length} hot-file claims`}
     >
       {liveClaims.map((c) => (

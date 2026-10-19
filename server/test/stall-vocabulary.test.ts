@@ -532,6 +532,7 @@ describe('wave 2: the kind and event sets, and the frozen clock', () => {
   });
   const TURN = 1_790_000_000_000;
   const mark = (over: Partial<Extract<TurnMarkRead, { ok: true }>> = {}): TurnMarkRead => ({
+    crons: null,
     ok: true, sessionId: 'uuid-1', state: 'working', event: 'PostToolUse', at: TURN + 5 * W2_MIN, turnAt: TURN, stopAt: null,
     bg: -1, bgKinds: [], bgIds: [], err: null, restartAt: null, lostBg: 0, lostKinds: [], lostIds: [], graceUntil: null, ...over,
   });
@@ -573,6 +574,7 @@ describe('wave 2: the marker-unreadable reasons and the dead-shaped lifecycles l
   });
   it('stallMarkUnreadable: a marker that reads is never unreadable', () => {
     expect(stallMarkUnreadable({
+      crons: null,
       ok: true, sessionId: 'uuid-1', state: 'working', event: 'PostToolUse', at: 1, turnAt: null, stopAt: null, bg: -1,
       bgKinds: [], bgIds: [], err: null, restartAt: null, lostBg: 0, lostKinds: [], lostIds: [], graceUntil: null,
     })).toBe(false);

@@ -54,8 +54,8 @@ get wrong when editing `src/whitelist.ts`.
   `auth.scrypt`, `coord.db` and `deploy.env`, and `test/whitelist.test.ts` reds the moment one becomes readable.
 - `ptyOpen` only ever spawns `tmux attach -t =cc-<sessionId>:` (exact — `tmuxTarget`, D-3525) with `sessionId` sanitized to `[A-Za-z0-9_-]+` —
   never an arbitrary command.
-- The **`update` op** (design 2026-09-20 §10) is one of the TWO wire-triggered spawns outside the exec whitelist (the
-  other is `token-sync`, below). It spawns
+- The **`update` op** (design 2026-09-20 §10) is one of the THREE wire-triggered spawns outside the exec whitelist (the
+  others are `token-sync` and `account`, below). It spawns
   exactly one of two argv templates — `$HOME/.local/bin/ccrc update|rollback --to <tag> --detach --from pwa`, built by
   `updateLauncherPath` + `updateSpawnArgv` (`shared/agent-protocol.ts`), `tag` the only variable token — validated by
   `isReleaseTag` in `validateReq` BEFORE any case body runs (`bad-tag`/`bad-kind`, never `bad-request`, which from this
@@ -74,6 +74,16 @@ get wrong when editing `src/whitelist.ts`.
   `CCRC_AGENT_TOKEN`), and at 40 s its process group gets SIGTERM, then SIGKILL 2 s later. One gate per agent process
   answers a second op `busy`. The agent still reads and writes no secret file: the verb, not the agent, claims and
   writes the token. `test/token-sync-op.test.ts`'s source scan reds the day the op reaches an exec path.
+- The **`account` op** (accounts spec §13.2, D-5513, D-5622) is the third. It spawns the absolute launcher
+  (`updateLauncherPath`) with `account <sub> …`, argv built ONLY by `buildAccountArgv` (`shared/account-argv.ts`, the
+  one builder the server's local arm calls too) from typed fields: no free argv, no `--force`, no sub that installs or
+  replaces the management key or raises its ceiling, no `seed`. The secret or code is `stdinB64`, decoded to the
+  child's stdin, never argv and never logged; the log line names the op, the sub and the lane only. Its port
+  (`src/accountop.ts`) is its own bounded body: an explicit `{HOME, PATH, LANG}`, an 8 MiB stdout cap (`too-large`),
+  and each sub's bound (`check` 90 s, `add` 180 s, the rest 120 s) ending SIGTERM to the group, then SIGKILL 5 s
+  later, never cancelled. Every answer, a refusal included, is `ok: true` with a `kind` and `fleetIdentity` (the
+  node-id); `bad-request` from it means the agent predates it. `test/account-op.test.ts`'s source scan reds the day
+  the op reaches an exec path.
 - The agent has **no HTTP routes** (its `createServer` carries only a WS upgrade), so the deploy's
   `verify-service.sh` (MainPID stability across a window > `RestartSec`) is its only post-restart check — it
   catches the `refuseToBoot` crash-loop that a `systemctl restart` exit-0 would otherwise hide.

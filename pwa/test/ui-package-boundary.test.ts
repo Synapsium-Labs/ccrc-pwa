@@ -205,7 +205,8 @@ const APPEARANCE_CENSUS: Record<string, string> = {
   // the pair would mean one ground in a variant and one in a sheet for the
   // same component.
   'chat.css .chat-head .keycap':
-    "the header keycap's ground — chrome fill, strong hairline, primary ink. "
+    "the header keycap's ground — chrome fill, strong hairline, its resting secondary ink, in "
+    + "@layer components so Keycap's hover lift outranks it (D-5462). "
     + 'Self-grounded so audit.mjs measures the pair; see the paragraph above.',
   'chat.css .chat-head .keycap:disabled':
     'its stand-down, measured as its own pair: surface fill under disabled ink.',

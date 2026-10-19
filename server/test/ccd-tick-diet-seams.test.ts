@@ -124,7 +124,11 @@ const SEAM_PATH = `__nt="$HOME/seam-path"; mkdir -p "$__nt"
  *  replaced: it logs its argv and runs the real body, so the cache the tick
  *  reads is the one the real call left. The pre-flight probe answers live, so
  *  `cmd_ensure` runs; tick 1 answers live; the next probe is the loop's own
- *  `gone` exit. */
+ *  `gone` exit. The exit's own helper, `_end_note_gone` (D-5237), is stubbed
+ *  with the rest: it runs AFTER the loop, and its bounded `tmux list-sessions`
+ *  (`_end_cause`, D-5345) is a post-loop call that is no part of the prime
+ *  these rows count; `ccd-restart-cause.test.ts` holds that call. The stub logs
+ *  `endnote`, so the rows still see the exit was reached after the loop. */
 const stubbedSupervise = (): string => `
   __src=$(declare -f _plat_timeout); eval "__real_plat_timeout\${__src#_plat_timeout}"
   _plat_timeout() { printf 'plat_timeout %s\\n' "$*" >> "$HOME/seam-log"; __real_plat_timeout "$@"; }
@@ -136,6 +140,7 @@ const stubbedSupervise = (): string => `
   _auto_stale_check() { printf 'cache %s\\n' "\${_CCD_TIMEOUT_K:-unset}" >> "$HOME/seam-log"
     bash -c 'printf "child %s\\n" "\${CCD_TICK_CTX:-unset}"' >> "$HOME/seam-log"; }
   _auto_swap_check() { :; }; _auto_compact_check() { :; }; _route_apply_check() { :; }
+  _end_note_gone() { printf 'endnote\\n' >> "$HOME/seam-log"; }
   ${SEAM_PATH}
   cmd_supervise ${ID}`;
 
@@ -162,6 +167,8 @@ const stubbed = (shape: PathShape): Stubbed => {
   expect(s.stderr, `the run did not end through the loop: ${s.stderr.slice(-400)}`).toContain(LOOP_EXIT);
   expect(s.status).toBe(1);
   expect(s.log.filter((l) => l.startsWith('sync ')), 'tick 1 never reached its helpers').toHaveLength(1);
+  expect(s.log.indexOf('endnote'), 'the loop\'s `gone` exit ran its end helper, after tick 1')
+    .toBeGreaterThan(s.log.findIndex((l) => l.startsWith('sync ')));
   return s;
 };
 

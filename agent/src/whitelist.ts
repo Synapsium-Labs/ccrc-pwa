@@ -419,6 +419,11 @@ export const EXEC_WHITELIST = {
     // down a WORKSPACE (worktree + branch), which is exactly what forget
     // refuses to touch.
     ['forget'],
+    // `hibernate` (D-5242) stops a long-idle session cleanly, journalled as deliberate; `ensure` wakes it. One token
+    // wide for `forget`'s reason: the verb takes the id and a dec, and every gate that decides it (live idle, no
+    // draft, the turn marker's `bg` and `crons` both 0, no hold, no opt-out, no fresh swap, nobody attached) is ccd's
+    // own, re-measured on the box at the act.
+    ['hibernate'],
     ['pr-state', '--session'],
     ['pr-state', '--project'],
     ['pr-open',  '--session'],

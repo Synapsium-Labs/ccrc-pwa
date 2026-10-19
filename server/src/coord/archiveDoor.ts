@@ -57,8 +57,8 @@ export function archiveFlags(raw: unknown): ArchiveFlags | null {
 
 /** What `server.ts` measured before deciding. `turn` is the turn verdict (`TurnVerdict`): from the fail-closed read
  *  (`stopVerdict`) where `busyReadFailsClosed` says so — a main checkout, a programme to end, or an `interrupt` — else
- *  `archiveInterrupts` of the row assembled on the request (`busy` or `idle` only — that path has no word for "could
- *  not measure"; `ws-archive`'s own `_ws_status` is behind it). `worktree` and `verbSupported` are read
+ *  `frameRowVerdict` of the row assembled on the request (`busy` or `idle`, and `unmeasured` for a row whose status
+ *  was not measured, D-5274; `ws-archive`'s own `_ws_status` is behind it). `worktree` and `verbSupported` are read
  *  for a workspace only (a main checkout never reaches `ws-archive`).
  *  `worktree: 'unmeasured'` is NOT a refusal: in remote mode — the live deployment — the fleet agent's read roots
  *  (`checkPath`) exclude `~/worktrees`, so this box can never stat a workspace's worktree there, and refusing on
@@ -98,9 +98,12 @@ export type LiveFileReading =
   | { readonly read: 'no-state' }
   | { readonly read: 'unmeasured' };
 
-/** The fleet frame's row for this session (`assembleFleet`, on the request): the two fields `archiveInterrupts` reads,
- *  or `'missing'` when the frame produced no row. */
-export type StopRowReading = Pick<FleetSession, 'status' | 'bucket'> | 'missing';
+/** The fleet frame's row for this session (`assembleFleet`, on the request): the two fields `archiveInterrupts` reads
+ *  and whether its status was measured at all (D-5274: a row `busy` only because a read failed is `unmeasured`), or
+ *  `'missing'` when the frame produced no row. */
+export type StopRowReading =
+  | (Pick<FleetSession, 'status' | 'bucket'> & { readonly statusUnmeasured?: boolean })
+  | 'missing';
 
 /** The turn verdict — THREE words, because the PWA answers two of them oppositely (D-3881). `idle`: nothing to lose.
  *  `busy`: a turn or a question was MEASURED in progress — `session-busy`, which the operator may consent to lose
@@ -113,8 +116,8 @@ export type TurnVerdict = 'idle' | 'busy' | 'unmeasured';
  * It is read this way because `cmd_stop` refuses nothing: for a main checkout this is the only guard there is, and for
  * a workspace under `programme:'end'` or `interrupt` it is the only read that can refuse BEFORE the programme ends or
  * the pane is stopped (`busyReadFailsClosed`, D-3877). The frame's own row cannot answer it alone: it folds what it
- * could not measure towards rest — tmux `unknown` reads dead (D-309), an unread pane pid or an absent live file leaves
- * `idle`.
+ * could not measure towards rest — tmux `unknown` reads dead (D-309), an absent live file leaves `idle` (an unread pane
+ * pid did too before D-5234).
  *
  * The arms run in ccd's order. A wrapper with no config dir is `unmeasured` FIRST, before the tmux verdict: ccd does
  * `cfg=$(_cfg_dir "$wrapper"); [[ -n "$cfg" ]] || return 1` ahead of `case "$(_session_verdict "$id")"`, so a pane that
@@ -133,8 +136,8 @@ export type TurnVerdict = 'idle' | 'busy' | 'unmeasured';
  * answer only for compact JSON: a spaced `"status": "idle"` reads `idle` here and nothing to ccd's grep, and a nested
  * `"status"` ahead of the top-level key is the one ccd's `head -1` takes — shapes no observed writer produces. Two arms
  * are the SERVER'S OWN and stricter than ccd: a missing frame row is `unmeasured` (no row is no measurement; ccd reads
- * none), and so is a live file that is PRESENT but malformed — not JSON, or no string `sessionId` — which
- * `readLiveStateMeasured` answers `no-state` while ccd's grep may still read a word from it (review 244, F3). And the
+ * none), and so is a live file that is PRESENT but malformed — not JSON (`unmeasured` there since D-5234), or no
+ * string `sessionId` (`no-state`) — from which ccd's grep may still read a word (review 244, F3). And the
  * config dir is read first for BOTH kinds of row: a main checkout whose wrapper the roster does not know is unmeasured
  * even with its pane proven gone, though `cmd_stop` reads no status at all (review 244, F2, ruled: it fails closed, and
  * "Stop only" remains). Folding these into `busy` told an operator "it is working",
@@ -149,7 +152,24 @@ export function stopVerdict(r: StopReadings): TurnVerdict {
   if (!STATUS_WORD.test(r.liveFile.status)) return 'unmeasured';
   if (r.liveFile.status !== 'idle') return 'busy';
   if (r.row === 'missing') return 'unmeasured';
+  // D-5274: a row whose `busy` is only a failed read's display (`statusUnmeasured`, D-115 / D-5234) measured no turn,
+  // so `interrupt` — consent to lose a MEASURED one — cannot cover it.
+  if (r.row.statusUnmeasured === true) return 'unmeasured';
   return archiveInterrupts(r.row) ? 'busy' : 'idle';
+}
+
+/**
+ * The turn verdict from the fleet frame's row alone — the read for an ordinary workspace archive (no `interrupt`, no
+ * programme end: `busyReadFailsClosed` is false), with `ws-archive`'s own `_ws_status` behind it. No row would be no
+ * measurement, read as `busy` (unreachable by construction: `assembleFleet` maps its records 1:1). D-5274: a row that
+ * is `busy` only because a read failed (`statusUnmeasured` — an unread pane pid since D-5234, an unreadable live file
+ * since D-115) measured nothing, so it is `unmeasured` — `409 status-unknown`, which no consent covers — never
+ * `session-busy`, which would invite an `interrupt` retry the fail-closed read then refuses anyway.
+ */
+export function frameRowVerdict(row: Pick<FleetSession, 'status' | 'bucket' | 'statusUnmeasured'> | null): TurnVerdict {
+  if (row === null) return 'busy';
+  if (row.statusUnmeasured) return 'unmeasured';
+  return archiveInterrupts(row) ? 'busy' : 'idle';
 }
 
 /** The words ccd's `_ws_status` can extract from a live file: `grep -oE '"status":"[a-z_-]+"'`. */
@@ -163,7 +183,7 @@ const STATUS_WORD = /^[a-z_-]+$/;
  * - A main checkout: always fail-closed. Its stop refuses nothing, so this read is the only guard it has.
  * - A workspace that is to END its programme: fail-closed too, with or without `interrupt` (3881). The end is the one
  *   act that cannot be undone, and the frame's row folds what it could not measure towards rest — tmux `unknown`, an
- *   unread pid, an absent live file — so reading it here would end the programme and THEN have `ws-archive`'s
+ *   absent live file (an unread pid did too before D-5234) — so reading it here would end the programme and THEN have `ws-archive`'s
  *   fail-closed status refuse `status-unknown`. `interrupt` consents to losing a turn that was MEASURED, so a `busy`
  *   verdict proceeds with it; an `unmeasured` one is refused whatever the consents, before anything ends.
  * - A workspace archived with `interrupt`: fail-closed too, programme or not (F7, ruled by the coordinator). The stop

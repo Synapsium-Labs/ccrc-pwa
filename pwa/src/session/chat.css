@@ -54,6 +54,60 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* D-5527 — the coordination line: whose code this session works on, who
+   coordinates it, and the programme, wave and run. Under the title, in the
+   crumb's ink; it WRAPS rather than ellipsising, because at 360 each clause is
+   a fact the operator came here to read, and the run number is the last of
+   them (it left the fleet row for this line). The header's own surface is
+   restated here so the contrast gate can measure the pair. */
+.chat-coord {
+  margin: 0 0 2px;
+  font-size: var(--fs-meta);
+  line-height: 1.35;
+  color: var(--ink-secondary);
+  background: var(--bg-surface);
+  overflow-wrap: anywhere;
+}
+.chat-coord-part { display: inline-block; max-width: 100%; }
+/* D-5545: THE HEADER IS THE FULL SET. The title wraps instead of ellipsising, so
+   the whole name is readable at 360 — it breaks at the crumb's own separators
+   and, only for a single token wider than the column, inside it. The
+   coordination row is clause boxes in a wrapping flex row with a gap and NO
+   separator glyph, so a wrapped line never starts with, or holds, a lone `·`
+   (#633's leftover). The details row (`SessionDetails`) is the meta row's last,
+   full-width item: every fact the card dropped, each in full, its cells
+   wrapping at spaces; the fleet row's middots are dropped here for the same
+   reason the coordination row has none. Layout only — no colour declaration. */
+.chat-title { white-space: normal; overflow-wrap: break-word; text-overflow: clip; }
+.chat-crumb { overflow: visible; text-overflow: clip; }
+.chat-coord { display: flex; flex-wrap: wrap; align-items: center; column-gap: var(--sp-2); row-gap: 2px; }
+@media (pointer: fine) {
+  .chat-coord .chat-coord-link,
+  .chat-meta .chat-details-toggle { min-height: 0; }
+}
+.chat-facts {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: var(--sp-3);
+  row-gap: 2px;
+  font-size: var(--fs-2xs);
+  min-width: 0;
+}
+.chat-facts .sess-meta { display: contents; }
+.chat-facts .sess-meta > *::before { content: none; }
+.chat-fact { font-family: var(--family-mono); overflow-wrap: break-word; min-width: 0; }
+.chat-facts .sess-subagent-list { flex-basis: 100%; }
+/* D-5546, phone: the keycaps took ~170 of 360px beside the title, leaving the
+   name, the coordination row and the meta row a 140px column that ellipsised
+   the name and broke every clause. Below 900 the back button and the keycaps
+   share the first row and the title block takes the full width under them. */
+@media (max-width: 899px) {
+  .chat-head { flex-wrap: wrap; row-gap: var(--sp-1); }
+  .chat-head > .chat-back { margin-right: auto; }
+  .chat-head > .chat-title-wrap { order: 1; flex-basis: 100%; }
+}
 /* ONE wrapping row: status, account, model, effort, branch. It was two fixed
    rows, which spent a line of chat height on every screen to say what fits
    comfortably on one. Narrow screens wrap it rather than reintroducing the row. */
@@ -71,6 +125,35 @@
 .chat-meta .status-line {
   font: var(--weight-regular) var(--fs-2xs) / 1 var(--family-mono);
   font-variant-numeric: tabular-nums;
+}
+/* D-5296, D-5390: `with coordinator · <parent>` is longer than the row's other
+   words. Left alone it wrapped mid-name ("calm-/mesa") with the dot stranded
+   on a row of its own (header 80 -> 104 px at 360 and 390, both skins, the
+   same growth `working · N in background` has on main). Clamping it to one
+   line kept 80 px but cut the phrase to "with…" at 360. So: it stays beside
+   the dot (`max-width` caps its size before the row wraps, and the title
+   column's grid track may shrink to the column), and it may break only before
+   `· <parent>`, never inside the name: two short lines at phone width, one at
+   laptop and wide. The full sentence is on `title`. */
+.chat-meta:has(.status-line--coordinator) {
+  min-width: 0;
+}
+.chat-meta .status-line--coordinator {
+  min-width: 0;
+  max-width: calc(100% - 8px - var(--sp-2)); /* the dot's 8 px box (StatusDot's min-w-2) and the row gap */
+  line-height: 1.2;
+}
+/* D-5390: the name never breaks, but a long parent id (a `<wrapper>-<project>`
+   main-checkout coordinator keeps its whole id) must not run past the column
+   under the keycaps either: it ellipsises inside the status line, whose
+   `title` carries the full id. */
+.chat-meta .status-line-name {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: top;
 }
 .chat .status-line--busy {
   color: var(--status-busy-text);
@@ -119,7 +202,7 @@ button.metachip:active {
 }
 .metachip-glyph {
   flex: none;
-  font-size: var(--fs-xs);
+  font-size: var(--fs-meta);
   line-height: 1;
 }
 .metachip-text {
@@ -171,7 +254,8 @@ button.metachip:active {
    (contrast-check.mjs), under the 4.5 floor. ink-tertiary/raised is already
    gated at 4.5+ in both themes, so this chip reuses that pairing rather than
    a third un-gated one. */
-.chip--archived {
+.chip--archived,
+.chip--restart {
   color: var(--ink-tertiary);
   background: var(--bg-raised);
 }
@@ -184,12 +268,40 @@ button.metachip:active {
 /* `<Keycap>` carries the ten declarations this rule shared with
    `.term-keys .keycap` below — the grid, the mono caps, the heavier bottom
    border, the `--r-sm` corner and the 1px press. What stays is the GROUND:
-   chrome fill, strong hairline, primary ink, and the stand-down. */
-.chat-head .keycap {
-  flex: none;
-  color: var(--ink-primary);
-  background: var(--bg-raised);
-  border-color: var(--edge-strong);
+   chrome fill, strong hairline, the resting ink, and the stand-down.
+
+   THE ONE LAYERED RULE IN THIS SHEET (D-5462). `<Keycap>` brightens to the
+   primary ink under the mouse (`enabled:hover:text-ink-primary`, D-5101), a
+   utility in `@layer utilities`. Unlayered, this rule beat it at every
+   specificity, and it rested on that same primary ink besides, so the header
+   caps never lifted. In `@layer components` the primitive's hover outranks
+   it. Where a pointer can hover, the cap rests on the secondary ink, as a
+   Door does, so the lift is one tier, to the ink it rested on before. On
+   touch the hover never fires, so there the cap keeps the primary ink it
+   always had and a phone renders exactly as before. The stand-down below
+   stays unlayered: the hover is `enabled:`-gated, so nothing contests it.
+   The terminal's caps (`.term-keys .keycap`) stay unlayered on purpose: on
+   the well the primary ink would be dark glass on dark glass in the light
+   theme, so there the well's ink holds under the mouse
+   (hover-states.test.ts). */
+@layer components {
+  .chat-head .keycap {
+    flex: none;
+    color: var(--ink-primary);
+    background: var(--bg-raised);
+    border-color: var(--edge-strong);
+  }
+  /* The ground is restated with the ink on purpose: the contrast gate reads
+     a colour-only rule as a variant of every `.keycap` rule it can reach,
+     the terminal's caps on the well included, and measures it there. A rule
+     that brings its own ground is measured on that ground, the one the
+     header cap actually paints. */
+  @media (hover: hover) {
+    .chat-head .keycap {
+      color: var(--ink-secondary);
+      background: var(--bg-raised);
+    }
+  }
 }
 .chat-head .keycap:disabled {
   color: var(--ink-disabled);
@@ -222,8 +334,8 @@ button.metachip:active {
 .keycap--pr[data-checks='pending'] .pr-dot { color: var(--status-attention); }
 
 .pr-sheet { display: grid; gap: var(--sp-3); }
-.pr-lede { color: var(--ink-primary); font-size: var(--fs-base); line-height: var(--lh-normal); }
-.pr-facts { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-secondary); }
+.pr-lede { color: var(--ink-primary); font-size: var(--fs-ui); line-height: var(--lh-normal); }
+.pr-facts { font-family: var(--family-mono); font-size: var(--fs-meta); color: var(--ink-secondary); }
 .pr-warn { color: var(--status-attention-text); font-size: var(--fs-sm); }
 /* `.pr-title-input` is `<TextInput>` wearing `TEXT_INPUT_INLINE`: nine
    declarations that `.pool-new-input` in fleet.css spelled out identically.
@@ -244,20 +356,22 @@ button.metachip:active {
   border: 1px solid var(--edge-subtle); border-radius: var(--r-sm); padding: var(--sp-2);
 }
 .pr-check-names { color: var(--status-dead-text); font-size: var(--fs-sm); word-break: break-word; }
-.pr-label { font-size: var(--fs-xs); color: var(--ink-tertiary); }
-.pr-title { font-size: var(--fs-base); color: var(--ink-primary); }
+.pr-label { font-size: var(--fs-meta); color: var(--ink-tertiary); }
+.pr-title { font-size: var(--fs-ui); color: var(--ink-primary); }
 .pr-checkline { font-size: var(--fs-sm); color: var(--ink-secondary); }
 .pr-note { font-size: var(--fs-sm); color: var(--ink-secondary); line-height: var(--lh-normal); }
 
 .reap-sheet { display: grid; gap: var(--sp-3); }
 .reap-rows { display: grid; grid-template-columns: 6.5rem minmax(0, 1fr); gap: var(--sp-1) var(--sp-2); }
-.reap-rows dt { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-tertiary); }
+.reap-rows dt { font-family: var(--family-mono); font-size: var(--fs-meta); color: var(--ink-tertiary); }
 .reap-rows dd { font-size: var(--fs-sm); color: var(--ink-primary); margin: 0; word-break: break-word; }
-.reap-note { font-size: var(--fs-xs); color: var(--ink-secondary); }
+/* A line of its own (D-5495): inside a `<dd>` the note is a span that follows
+   the row's figure directly, so inline it read "0 entries, 0 BThese are…". */
+.reap-note { display: block; font-size: var(--fs-meta); color: var(--ink-secondary); }
 /* The refusal is the whole content when there is one: no button sits beside it,
    because there is no override. */
 .reap-refusal { color: var(--status-attention-text); font-size: var(--fs-sm); line-height: var(--lh-normal); }
-.reap-sensitive { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--status-dead-text); list-style: none; padding: 0; }
+.reap-sensitive { font-family: var(--family-mono); font-size: var(--fs-meta); color: var(--status-dead-text); list-style: none; padding: 0; }
 /* `.reap-size`, `.reap-ignored` and fleet.css's `.hotfiles-path` declared the
    same four — a path that may be long. All three are `MONO_PATH` now, and the
    two that lacked `word-break` inherit the one that had it. */
@@ -268,7 +382,7 @@ button.metachip:active {
    naming what happens to these checkouts), `.reap-children-list` carries the
    look the plain `<ul>` used to carry alone. */
 .reap-children { display: grid; gap: var(--sp-1); }
-.reap-children-list { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-secondary); list-style: none; padding: 0; display: grid; gap: var(--sp-1); }
+.reap-children-list { font-family: var(--family-mono); font-size: var(--fs-meta); color: var(--ink-secondary); list-style: none; padding: 0; display: grid; gap: var(--sp-1); }
 .reap-child { word-break: break-word; }
 .reap-go { min-height: var(--tap-min); }
 
@@ -284,7 +398,7 @@ button.metachip:active {
    also what `design/audit.mjs` measures this row through, so it is not
    decoration to tidy away. */
 .menu-item {
-  font: var(--weight-regular) var(--fs-base) / var(--lh-tight) var(--family-ui);
+  font: var(--weight-regular) var(--fs-ui) / var(--lh-tight) var(--family-ui);
   color: var(--ink-primary);
 }
 .menu-label {
@@ -293,7 +407,7 @@ button.metachip:active {
 }
 .menu-hint {
   flex: none;
-  font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono);
+  font: var(--weight-regular) var(--fs-meta) / 1 var(--family-mono);
   color: var(--ink-tertiary);
 }
 .menu-item--danger .menu-label {
@@ -319,7 +433,7 @@ button.metachip:active {
 .chat-banner--offline {
   justify-content: center;
   min-height: var(--sp-8);
-  font: var(--weight-medium) var(--fs-xs) / 1 var(--family-mono);
+  font: var(--weight-medium) var(--fs-meta) / 1 var(--family-mono);
   letter-spacing: var(--ls-caps);
 }
 /* The 6px dot is `ATTENTION_DOT` — see fleet.css's `.offline-banner::before`. */
@@ -341,6 +455,12 @@ button.metachip:active {
   flex: 1;
   min-width: 0;
 }
+/* D-5242: a sleeping session. Nothing went wrong, so the banner keeps the base
+   banner's calm raised ground and secondary ink — never the dead tint. */
+.chat-banner--asleep .banner-copy {
+  flex: 1;
+  min-width: 0;
+}
 .chat-banner--missing {
   align-items: flex-start;
   flex-direction: column;
@@ -350,7 +470,7 @@ button.metachip:active {
   color: var(--status-attention-text);
 }
 .chat-banner--missing .banner-path {
-  font: var(--weight-regular) var(--fs-xs) / var(--lh-mono) var(--family-mono);
+  font: var(--weight-regular) var(--fs-meta) / var(--lh-mono) var(--family-mono);
   color: var(--ink-secondary);
   overflow-wrap: anywhere;
 }
@@ -445,6 +565,9 @@ button.metachip:active {
 /* D-2366: a limit is "waiting on the world", the same attention ink as the
    stall — the tree defines no third tone for it. */
 .sys-divider--limit { color: var(--status-attention-text); border-color: var(--status-attention-text); }
+/* D-5371: an idle compaction is the session at rest, not a stall — the
+   resume prompt's neutral ink, never the attention tone. */
+.sys-divider--idle { color: var(--ink-secondary); }
 
 /* ------------------------------------------------------------------ *
  *  User turns — input: right-aligned raised bubbles + mono receipts.  *
@@ -483,7 +606,7 @@ button.metachip:active {
 }
 .pending-error {
   justify-self: end;
-  font: var(--weight-regular) var(--fs-xs) / var(--lh-normal) var(--family-ui);
+  font: var(--weight-regular) var(--fs-meta) / var(--lh-normal) var(--family-ui);
   color: var(--status-dead-text);
   text-align: right;
   overflow-wrap: anywhere;
@@ -546,7 +669,7 @@ button.metachip:active {
    it is one quiet line; its ground is .chat's --bg-page (registered in design/audit.mjs INHERITED_GROUNDS). */
 .msg-plain { white-space: pre-wrap; overflow-wrap: anywhere; }
 .msg-assist .msg-plain { max-height: none; }
-.msg-plain-note { color: var(--ink-secondary); font-size: var(--fs-xs); }
+.msg-plain-note { color: var(--ink-secondary); font-size: var(--fs-meta); }
 
 /* COMPACTION CARD — a /compact recap ("This session is being continued…")
    folded to a quiet, expandable card so it doesn't bury the conversation. */
@@ -640,7 +763,7 @@ button.metachip:active {
   align-items: center;
   gap: var(--sp-2);
   padding: var(--sp-1) 0;
-  font: var(--weight-medium) var(--fs-xs) / 1 var(--family-mono);
+  font: var(--weight-medium) var(--fs-meta) / 1 var(--family-mono);
   color: var(--ink-tertiary);
   letter-spacing: var(--ls-caps);
 }
@@ -659,21 +782,29 @@ button.metachip:active {
 .msg-working-label {
   text-transform: uppercase;
 }
-.msg-working-dots {
+/* The three working dots are also the own-words Send's busy face
+   (`.dlg-reply-wait`, AskParts.tsx, D-5090): the same "in flight" mark, one
+   definition. There they paint in Send's busy ink (below, by the Send rules),
+   and they are narrower than the word Send, so a busy Send never widens. */
+.msg-working-dots,
+.dlg-reply-wait {
   display: inline-flex;
   gap: 3px;
 }
-.msg-working-dots i {
+.msg-working-dots i,
+.dlg-reply-wait i {
   width: 4px;
   height: 4px;
   border-radius: var(--r-full);
   background: var(--accent);
   animation: working-dot 1.2s ease-in-out infinite;
 }
-.msg-working-dots i:nth-child(2) {
+.msg-working-dots i:nth-child(2),
+.dlg-reply-wait i:nth-child(2) {
   animation-delay: 0.18s;
 }
-.msg-working-dots i:nth-child(3) {
+.msg-working-dots i:nth-child(3),
+.dlg-reply-wait i:nth-child(3) {
   animation-delay: 0.36s;
 }
 @keyframes working-dot {
@@ -690,7 +821,8 @@ button.metachip:active {
 }
 @media (prefers-reduced-motion: reduce) {
   .msg-working-glyph,
-  .msg-working-dots i {
+  .msg-working-dots i,
+  .dlg-reply-wait i {
     animation: none;
   }
   .msg-working-glyph {
@@ -822,7 +954,7 @@ button.metachip:active {
    four declarations of the type ramp for the same kind of sentence. */
 .draft-copy,
 .dlg-copy {
-  font-size: var(--fs-base);
+  font-size: var(--fs-ui);
   line-height: var(--lh-normal);
   color: var(--ink-secondary);
   margin-bottom: var(--sp-3);
@@ -851,7 +983,7 @@ button.metachip:active {
   border: none;
   background: none;
   color: var(--ink-secondary);
-  font: var(--weight-medium) var(--fs-base) / 1 var(--family-ui);
+  font: var(--weight-medium) var(--fs-ui) / 1 var(--family-ui);
   cursor: pointer;
   transition: color var(--dur-fast) var(--curve-swift);
 }
@@ -949,7 +1081,7 @@ button.metachip:active {
   color: var(--ink-tertiary);
 }
 .opt-wait {
-  font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono);
+  font: var(--weight-regular) var(--fs-meta) / 1 var(--family-mono);
   color: var(--status-busy-text);
   flex: none;
 }
@@ -960,12 +1092,31 @@ button.metachip:active {
   padding-top: var(--sp-3);
 }
 
-/* Answer in your own words (declines the menu, sends the text) + the raw
-   "show full question" view for menus whose detail the tappable rows can't hold. */
+/* Answer in your own words (AskParts.tsx's `OwnWords`, D-5090: typed into the
+   question's free-text row, never sent by declining the menu) + the raw "show
+   full question" view for menus whose detail the tappable rows can't hold.
+   `.dlg-words` is the whole region, the field and its lines or a line alone:
+   the same margin above and below, so the field sits as far from the Chat
+   row's rule under it as from the last option above it, and its 2px focus
+   ring (offset 1px) clears both; its lines follow the field at one gap. */
+.dlg-words {
+  display: grid;
+  gap: var(--sp-2);
+  margin: var(--sp-3) 0;
+}
+.dlg-words .dlg-copy {
+  margin: 0;
+}
+/* A one-line note straight under a list of rows (a multiSelect question's
+   notes under its boxes, AskParts.tsx's `MultiPick`, D-5091) sits as far
+   below the last row's rule as the own-words region does; `.dlg-copy` has
+   only a bottom margin, so without this the note sat flush on the rule. */
+.opts + .dlg-copy {
+  margin-top: var(--sp-3);
+}
 .dlg-reply {
   display: flex;
   gap: var(--sp-2);
-  margin-top: var(--sp-3);
 }
 .dlg-reply-input {
   flex: 1;
@@ -980,16 +1131,40 @@ button.metachip:active {
      on a #141715 well — 1.09:1, i.e. black on black. What you have typed is
      invisible. --ink-on-well reads 15.52 / 13.98. */
   color: var(--ink-on-well);
-  font: var(--weight-regular) var(--fs-base) / 1.3 var(--family-ui);
+  /* `--fs-input` (16px), not `--fs-base`: iOS Safari zooms the viewport on
+     focus below 16px, and this field is the phone's own-words path (D-5090). */
+  font: var(--weight-regular) var(--fs-input) / 1.3 var(--family-ui);
 }
 /* --syn-comment, not --ink-tertiary: the syntax palette is declared once in
    :root and never re-declared for light precisely because it renders on the
    (always dark) glass, so it is the only muted ink that survives here —
    6.41 dark / 5.77 light, against --ink-tertiary's 3.17 in light. */
 .dlg-reply-input::placeholder { color: var(--syn-comment); }
+/* Inert while a send is under way (its own, an option's, or a commit's): the
+   text stays legible in the placeholder's muted ink, which reads on the
+   always-dark well in both themes, and the frame goes dashed, so the field no
+   longer looks typeable. Safari paints a disabled field's text through
+   -webkit-text-fill-color and dims it with its own opacity; both are set so
+   every engine shows the same field. */
+.dlg-reply-input:disabled {
+  color: var(--syn-comment);
+  -webkit-text-fill-color: var(--syn-comment);
+  opacity: 1;
+  border-style: dashed;
+  cursor: default;
+}
 .dlg-reply-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-color: transparent; }
+/* Send and its busy face share one grid cell (AskParts.tsx), so the button is
+   as wide as the wider face whichever shows: its width never changes while
+   busy, and neither does the field's beside it. The busy face is the chat's
+   three working dots (named `Sending…` for a screen reader only), narrower
+   than the word Send, so the wider face is always the idle word and Send
+   never takes width from the field: at 360 the field's text box keeps its
+   whole placeholder (the arithmetic is pinned in dialog-sheet.test.tsx). */
 .dlg-reply-send {
   flex: none;
+  display: grid;
+  place-items: center;
   min-height: var(--tap-min);
   padding: 0 var(--sp-4);
   border: 1px solid var(--edge-subtle);
@@ -1000,7 +1175,17 @@ button.metachip:active {
   cursor: pointer;
   transition: color var(--dur-fast) var(--curve-swift), border-color var(--dur-fast) var(--curve-swift);
 }
+.dlg-reply-send > span {
+  grid-area: 1 / 1;
+}
+.dlg-reply-send > [aria-hidden='true'] {
+  visibility: hidden;
+}
 .dlg-reply-send:disabled { color: var(--ink-tertiary); cursor: default; }
+/* Busy is the answer in flight, in the ink `.opt-wait` says "answering…" in;
+   the dots take it from here rather than the chat's accent. */
+.dlg-reply-send[aria-busy='true'] { color: var(--status-busy-text); }
+.dlg-reply-wait i { background: currentColor; }
 .dlg-reply-send:not(:disabled):hover { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
 .dlg-details-toggle {
   margin-top: var(--sp-3);
@@ -1023,16 +1208,19 @@ button.metachip:active {
   gap: var(--sp-2);
 }
 
-/* The hook envelope (EnvelopeSheet in DialogSheet.tsx) — I3: carried no
+/* The hook envelope (EnvelopeSheet.tsx) — I3: carried no
    rules of its own before this. Its children (.dlg-copy/.opts/.dlg-actions
    above) already set their own spacing, so this exists as a stable
    selector, not a source of new layout. */
 .ask-envelope {
   display: block;
 }
-/* Further questions in a multi-question envelope: read-only (only the first
-   question is ever tappable — see DialogSheet's file header). I3: before
-   this they were visually identical to the live rows above them — muted by
+/* The other questions of a multi-question ask (AskParts.tsx's
+   `OtherQuestions`): one read-only row per question, its number, text and
+   header chip. D-5089: the tappable question is the one the PANE is
+   painting, not the first, so these are the ones the pane is not showing,
+   and each becomes tappable when it is. I3: before this they were visually
+   identical to the live rows above them — muted by
    .opt[aria-disabled='true'] now, but a colour change alone is easy to
    miss, so the section also gets its own separator and label. */
 .ask-envelope-more {
@@ -1100,19 +1288,59 @@ button.metachip:active {
   flex-direction: column;
   gap: var(--sp-2);
 }
-/* The drawer's header line: the session on the left and, while the window is
-   wider than the glass, the clip notice on the right. It wraps as two whole
-   pieces, so on a narrow phone the notice takes a line of its own instead of
-   breaking mid-word, and the drawer refits for the height it took. It wears
-   the header's own colour and type; nothing here paints. */
+/* The drawer's header line: the session on the left and the chips on the
+   right (the view, and while the wrapped view reports them `paused` and the
+   offer of the grid; D-5005). It wraps as whole pieces, so on a narrow phone
+   the chips take a line of their own instead of breaking mid-word, and the
+   drawer refits for the height they took. */
 .term-eyebrow {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   justify-content: space-between;
   gap: var(--sp-1) var(--sp-3);
 }
-.term-clip {
+.term-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
   white-space: nowrap;
+}
+/* A chip that is a control (the view's flip, the offer of the grid). The pill
+   is @ccrc/ui's `Chip`; this button around it is bare, and reaches the tap
+   floor through an invisible overlay rather than growing the header line,
+   which on a phone with its keyboard up is glass the terminal needs. The
+   overlay overhangs only the header's own space and the glass's top edge, and
+   what it triggers is a flip the same tap undoes. */
+.term-view {
+  position: relative;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.term-view::before {
+  content: '';
+  position: absolute;
+  inset: calc((100% - var(--tap-min)) / 2) calc(-1 * var(--sp-1));
+}
+/* Its pill, in the well's own ink, with the border that says "this runs no
+   bytes into the pane" — the history door's and `⋯`'s signal (D-5007). It
+   paints its own ground, the well it sits on, so the contrast gate measures
+   the pair rather than leaving it in its uncovered census. */
+.term-view-pill {
+  color: var(--ink-on-well);
+  background: var(--bg-well);
+  border: 1px solid color-mix(in srgb, var(--ink-on-well) 40%, transparent);
+}
+/* `paused` is a state the reader is in, not a control: inverted, the engaged
+   pair the history door uses, so it reads as "on" at a glance. */
+.term-paused {
+  color: var(--bg-well);
+  background: var(--ink-on-well);
 }
 .term-screen {
   position: relative;
@@ -1123,6 +1351,105 @@ button.metachip:active {
 .term-host {
   height: 100%;
   overflow: hidden;
+}
+/* The live terminal's host, in its visible position (D-5005). The client is
+   pinned at the window's own 220x51, so a glass of another size is answered
+   HERE rather than by tmux: a taller glass leaves a margin below the grid,
+   and a shorter or narrower one scrolls this box in the browser — tmux pans
+   nothing. The drawer holds it at its bottom, where the input box is, until
+   the operator scrolls it. Contained, so a scroll past either end does not
+   drag the sheet behind it. The history layer's host stays `hidden`: its
+   drag slides the terminal inside a box that must stay put and clip. */
+.term-host--grid,
+.term-host--off {
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+/* The same host, OFF-SCREEN, for the wrapped view (D-5005; operator ruling
+   R-LIVE, 2026-10-15): translated out past the glass's left edge and nothing
+   else, so it keeps the glass's own width and height and overflow. xterm
+   therefore still measures the same glass (`propose`, so the view chooser's
+   verdict cannot flip on the move), still renders, and still takes the
+   keyboard in its textarea, which a tap on the wrapped view focuses. Never
+   `display: none` or `visibility: hidden`: either would take the textarea
+   out of focus and the measurement with it. Measured on the spike in three
+   engines: no page, sheet or glass scroll moves when it has focus. */
+.term-host--off {
+  transform: translateX(calc(-100% - 100vw));
+}
+/* The wrapped view (D-5006): the terminal's screen re-wrapped to the glass at
+   14px (its size is the drawer's constant, set inline), as text. Over the glass
+   rather than in its flow, so the off-screen host keeps its box. It scrolls on
+   its own, follows its bottom (WrappedView's own anchoring, so the browser's
+   is off), and its text is selectable. It paints the well it sits on, so the
+   contrast gate measures its ink. The whole of it is the tap that types
+   (R-LIVE): it is the glass, and never less than a tap tall even on a glass a
+   keyboard has squeezed.
+
+   IT SITS ON THE KEY BAR (spec 2026-10-14 §5.3, D-5006): a column whose first
+   row takes the slack above it, so a screen that re-wraps shorter than the
+   glass (blank runs collapse, so it often does) rests at the bottom, beside
+   the keys, as the grid and the chat do. MEASURED before this: a plain block
+   scroller put it at the top, Claude Code's box 41px above the key bar at
+   430x932 and 166px at 1440x900, and the exit notice the ^C guard reads ~520px
+   from it at 390x844. An auto margin resolves to 0 once the rows overflow, so
+   the top stays reachable by a scroll; `justify-content: flex-end` would push
+   the overflow off the top, where no scroll reaches. */
+.term-wrap {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: var(--tap-min);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  overflow-anchor: none;
+  padding: 0 var(--sp-2);
+  font-family: var(--family-mono);
+  line-height: var(--lh-tight);
+  color: var(--ink-on-well);
+  background: var(--bg-well);
+  white-space: pre;
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
+}
+/* Every row keeps its line: a column would otherwise shrink rows to fit the
+   glass once they overflow it, and a table row, which scrolls sideways, has no
+   content minimum to stop it going to nothing. */
+.term-wrap-row {
+  flex-shrink: 0;
+}
+.term-wrap-row:first-child {
+  margin-top: auto;
+}
+/* A table row keeps its frame and scrolls sideways on its own, never wraps. */
+.term-wrap-row--table {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+.term-wrap-row--right {
+  text-align: right;
+}
+/* A rule is drawn as a rule, one line tall, in the colour its glyphs had. */
+.term-wrap-rule {
+  background: linear-gradient(currentColor, currentColor) center / 100% 1px no-repeat;
+}
+/* The composition in progress (a phone keyboard's word, an IME), shown at the
+   caret until it commits: provisional, so underlined and never sent. */
+.term-wrap-ime {
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+/* The cell probe W is measured with: in the view's own face, never seen. */
+.term-wrap-probe {
+  position: absolute;
+  top: 0;
+  left: 0;
+  visibility: hidden;
+  pointer-events: none;
 }
 /* The console history — the pane's own scrollback, read with capture-pane and
    laid over the live glass. Same well, same ink: scrolling back must read as
@@ -1141,8 +1468,7 @@ button.metachip:active {
 /* xterm's own viewport is the scroller here, not this element — and it is the
    first one in this app that ever scrolls, which is why nothing has styled it
    before. Contained so a flick past the oldest line drags the history and not
-   the sheet behind it (`.chat-scroller` and `.term-keys-seq` take the same
-   precaution). */
+   the sheet behind it (`.chat-scroller` takes the same precaution). */
 .term-history .xterm-viewport {
   overscroll-behavior: contain;
 }
@@ -1199,35 +1525,50 @@ button.metachip:active {
 /* Quick-key bar — mono keycaps for the phone keyboard's missing keys
    (DIRECTION: raised 6px-radius caps, 44px targets, 120ms press-compress).
    Cut from the well's own ink, not --bg-raised, so the caps read as keys
-   set into the glass in both themes. */
+   set into the glass in both themes.
+
+   THE BAR WRAPS WHEN IT DOES NOT FIT, AT ANY WIDTH (D-5007, amended by
+   D-5113). Its keys are two halves (`barBreak`
+   in keyBar.ts): the wrapped view's `esc ↑ ↓ ⏎` and `^C ⌫ ⋯` with the history
+   door, the grid's `esc ↑ ↓ ← →` and `tab ⇧tab ⏎ ^C` with the door. Where both
+   fit on one line they share it; where they do not, each takes a line of its
+   own, at whatever width that happens — the browser measures the space the bar
+   actually has, and nothing here names a width. It used to wrap below a fixed
+   420px, by a sum that came to 432px while the wrapped bar needs 439px (its
+   eight caps at 44px, the door's `hist` at 51px, seven gaps and this padding),
+   so from 421 to 438px (the iPhone Plus and Pro Max widths) it stayed one row
+   and clipped `⋯`, the only door to the overflow row. Centred on the cross
+   axis, so nothing in it stretches down a second line. */
 .term-keys {
   flex: none;
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: var(--sp-2);
   padding: 0 var(--sp-3);
 }
-/* The keys scroll; the action beside them does not. MEASURED: nine caps at
-   --tap-min, eight gaps and this padding come to 484px against a 390px phone,
-   and `.sheet-panel--full` zeroes the drawer's side padding — so this strip
-   has always overflowed. That was survivable while everything in it was a key
-   the phone's keyboard also lacks; it stops being survivable once the strip
-   carries the only door touch has to the console history. */
+/* A half. It grows by its keys (inline: the count of its caps that stretch), so
+   on a wide glass every key cap stretches by the same amount. It wraps its own
+   caps only on a glass narrower than any phone, and it never scrolls them: a
+   strip that scrolls is how a cap ends up off the edge — the history door was,
+   on a 390px phone, before it left the strip, and `⋯` was at 430px. */
 .term-keys-seq {
-  flex: 1;
+  flex: 1 1 auto;
   min-width: 0;
   display: flex;
+  flex-wrap: wrap;
   gap: var(--sp-2);
-  overflow-x: auto;
-  overscroll-behavior: contain;
-  /* NO GUTTER. A desktop scroll container reserves a classic scrollbar track
-     INSIDE itself, which made this half taller than the action cap beside it —
-     the two caps sat at different heights, measured on a desktop browser. A
-     phone paints an overlay scrollbar and loses nothing here, and the strip is
-     dragged rather than aimed at in either place. */
-  scrollbar-width: none;
 }
-.term-keys-seq::-webkit-scrollbar {
-  display: none;
+/* The second half and the history door, on ONE line: the door is as tall as
+   the keys beside it, never a slab down two rows, and it never wraps off onto
+   a line of its own. The door is beside the keys, never inside a half: it is
+   an action, not a key (`terminal-scrollback.test.tsx`). */
+.term-keys-tail {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
 }
 /* The ground only — see `.chat-head .keycap`. Every colour here is a
    `color-mix` over `--ink-on-well`, which is exactly why it did not travel
@@ -1246,7 +1587,8 @@ button.metachip:active {
 /* The history door. Cut from the same ink as the keys deliberately: --accent
    measures under the 4.5:1 a legend needs on the light theme's well, so it is
    the BORDER that says "this one runs no bytes into the pane" — the same move
-   `.term-retry` makes. Placement is load-bearing: this and `.term-keys
+   `.term-retry` makes, and the reason the wrapped view's `⋯` and `ctrl` caps
+   wear it too (D-5007): neither sends a byte of its own. Placement is load-bearing: this and `.term-keys
    .keycap` are both specificity (0,2,0), so source order is what makes `flex`
    and `border-color` win. */
 .term-keys .keycap--act {
@@ -1263,6 +1605,55 @@ button.metachip:active {
   color: var(--bg-well);
   background: var(--ink-on-well);
   border-color: var(--ink-on-well);
+}
+/* The row `⋯` opens (D-5007, spec 2026-10-14 §5.4): a line of its own under
+   the primary keys and the history door, in four groups (`quarters`) that wrap
+   whole rather than scroll, so no line is ever `ctrl` alone — it was, from 360
+   to 393px, when the thirteen caps wrapped one by one. */
+.term-keys-more {
+  flex: 1 0 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+/* The ^C/^D confirm (D-5007): in the keys' place while a tapped ^C or ^D is
+   held — the consequence, and right after it the two choices, `send ^C` and
+   `cancel`, side by side. It wraps rather than scrolls, so on a phone the
+   sentence keeps a line of its own and the two choices go under it together. */
+.term-confirm {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+/* The sentence paints its OWN ground, the well it sits on, so the contrast gate
+   measures it rather than leaving it in its uncovered census: --ink-on-well is
+   the one text token that holds on the glass in both themes. It takes its own
+   width and no more, so the choices sit beside the consequence they confirm. */
+.term-confirm-word {
+  flex: 0 1 auto;
+  font: var(--weight-medium) var(--fs-xs) / var(--lh-tight) var(--family-mono);
+  letter-spacing: var(--ls-caps);
+  color: var(--ink-on-well);
+  background: var(--bg-well);
+}
+/* The two choices: one line, together, and neither stretches. MEASURED before
+   this, `send ^C` took the bar's `flex: 1 0 auto` and stretched to 509px at
+   1280 and 829px at 1920 — the destructive choice the widest target on the
+   glass, ~760px from its sentence — and on a phone `cancel` wrapped alone onto
+   a second row. After `.term-keys .keycap`, whose specificity this matches, so
+   source order is what makes `flex: none` win. `send` wears no danger skin:
+   `@ccrc/ui` has no danger variant for a keycap or a button, and a colour
+   invented here would be measured by no gate (left for the design pass). */
+.term-confirm-choices {
+  flex: none;
+  display: flex;
+  gap: var(--sp-2);
+}
+.term-confirm-choices .keycap {
+  flex: none;
 }
 
 /* ------------------------------------------------------------------ *
@@ -1350,7 +1741,7 @@ button.metachip:active {
 }
 .slash-desc {
   font-family: var(--family-ui);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-meta);
   color: var(--ink-secondary);
   line-height: var(--lh-tight);
   overflow: hidden;
@@ -1443,16 +1834,60 @@ button.metachip:active {
   display: flex; flex-wrap: wrap; gap: var(--sp-2);
   padding: var(--sp-2) 0; border-top: 1px solid var(--edge-subtle);
 }
-.history-when { color: var(--ink-tertiary); font-variant-numeric: tabular-nums; font-size: var(--fs-xs); }
+.history-when { color: var(--ink-tertiary); font-variant-numeric: tabular-nums; font-size: var(--fs-meta); }
 .history-act { color: var(--ink-primary); }
 .history-verb { color: var(--ink-tertiary); }
-.history-outcome { color: var(--ink-secondary); font-size: var(--fs-xs); }
-.history-obs, .history-dec { flex-basis: 47%; color: var(--ink-secondary); font-family: var(--family-mono); font-size: var(--fs-xs); }
-.history-corr { color: var(--ink-tertiary); font-size: var(--fs-xs); border-radius: var(--r-sm); padding: 0 var(--sp-1); }
+.history-outcome { color: var(--ink-secondary); font-size: var(--fs-meta); }
+.history-obs, .history-dec { flex-basis: 47%; color: var(--ink-secondary); font-family: var(--family-mono); font-size: var(--fs-meta); }
+.history-corr { color: var(--ink-tertiary); font-size: var(--fs-meta); border-radius: var(--r-sm); padding: 0 var(--sp-1); }
 /* `disagrees` in its own colour (spec §2) — the attention pair, because a
    provenance mismatch is a fact for a human to read, not an error state. */
 .history-corr[data-corr='disagrees'] { color: var(--status-attention-text); background: var(--status-attention-tint); }
-.history-refusal { flex-basis: 100%; color: var(--status-dead-text); font-size: var(--fs-xs); }
-.history-row--gap, .history-gap { color: var(--status-dead-text); font-size: var(--fs-xs); }
+.history-refusal { flex-basis: 100%; color: var(--status-dead-text); font-size: var(--fs-meta); }
+.history-row--gap, .history-gap { color: var(--status-dead-text); font-size: var(--fs-meta); }
 .history-loading, .history-empty, .history-error { color: var(--ink-secondary); padding: var(--sp-3) 0; }
 
+
+/* The ask's tab strip (decision `ask-tab-strip`, `AskParts.tsx`'s `AskTabs`): one chip per question, then ✔ Submit.
+   One row at every width: a phone scrolls the chips sideways INSIDE the strip (`overflow-x: auto`, and
+   `overscroll-behavior-x: contain` so a fling never drags the sheet or the page), and each chip is 44px tall, the touch
+   floor (`--tap-min`). The 2px inset keeps the focus ring inside the strip's clip. Both skins colour it through their
+   own tokens. */
+.ask-tabs {
+  display: flex;
+  gap: var(--sp-2);
+  margin: 0 0 var(--sp-3);
+  padding: 2px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+}
+.ask-tab {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-height: var(--tap-min);
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-full);
+  background: var(--bg-surface);
+  color: var(--ink-secondary);
+  font: var(--weight-medium) var(--fs-sm) / 1 var(--family-ui);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.ask-tab[aria-current='step'] {
+  border-color: var(--accent);
+  background: var(--accent-tint);
+  color: var(--accent);
+}
+.ask-tab:disabled {
+  cursor: default;
+}
+/* A chip that waits (a send or move under way, uncommitted picks, or a tab the sheet cannot place) reads in the
+   tertiary ink, as the own-words Send does while it waits (`.dlg-reply-send:disabled`), which still clears the text
+   floor on the chip's ground; the current chip keeps its accent. */
+.ask-tab:disabled:not([aria-current]) {
+  color: var(--ink-tertiary);
+}

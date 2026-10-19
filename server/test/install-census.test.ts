@@ -1606,6 +1606,26 @@ describe('deploy/deploy.sh, the fallback installer, places everything `ccrc inst
       .toEqual([]);
   });
 
+  // THE OTHER WAY, for binaries only (wave 17, D-5313): a name the fallback
+  // deploy puts on PATH and the install spine does not is a file a box moved
+  // only by `ccrc update` keeps at whatever version the last fallback deploy
+  // left (`ccrc-api` was that name until wave 17). No exemption list: deploy.sh
+  // places nothing under .local/bin that the spine should not.
+  it('every binary deploy.sh places under .local/bin, _inst_bins places too (wave 17)', () => {
+    const placed = placedBins();
+    const deployed = deployPlacedBins();
+    expect(deployed.size,
+      'the deploy.sh `install_atomic` extractor found too few binaries under .local/bin — it has gone stale, unless deploy.sh really lost most of them')
+      .toBeGreaterThan(BIN_FLOOR);
+    expect([...deployed].filter((n) => !placed.has(n)).sort(),
+      `these are placed under .local/bin by an \`install_atomic\` in ${DEPLOY_WHERE} and by no \`_inst_atomic\` `
+      + `destination in _inst_bins, so a box moved only by \`ccrc update\` keeps whatever copy the last fallback deploy `
+      + 'left, or none. Place them in _inst_bins (and remove them in _uninst_tree_bins).')
+      .toEqual([]);
+    expect(deployed, 'this reader no longer sees `ccrc-api` in deploy.sh — the row checks a set that lost its reason')
+      .toContain('ccrc-api');
+  });
+
   it('every systemd unit file _inst_units places, deploy.sh places too (except DEPLOY_SH_WITHHOLDS.units)', () => {
     const placed = placedUnits();
     const deployed = deployPlaced('_unit_atomic', DEPLOY_UNIT_DIRS);
@@ -1943,6 +1963,84 @@ describe('every file `ccrc install` copies out of the tree rides the release tar
       expect([...sources].some((s) => path.posix.basename(s) === t),
         `${t} is placed by _inst_units and no tree source the release census read is that file`).toBe(true);
     }
+  });
+});
+
+// ── the coordination snapshot's helper (delegation broker wave 3, Task 8B) ──────────────────────────────────────────────
+// `deploy/coordination-snapshot.mjs` is RUN, never placed: `ccd/ccrc` reaches it as `$CCRC_HERE/../deploy/coordination-snapshot.mjs`
+// from the installed tree (so a release carries it with `deploy/`), and the fallback deploy ships it by `scp` beside
+// `backup-coord.mjs`. Neither installer copies it to a bin or unit directory, so the placement censuses above do not read it; this
+// describe is the census of the other kind of dependency: every deploy helper `ccd/ccrc`'s backup callers run exists, is tracked,
+// rides the release, and is shipped by the fallback. It also holds the verb's three registrations (usage line, dispatch, prose) together.
+describe('the coordination snapshot helper: run from the installed tree, shipped by both installers, registered as a verb (Task 8B)', () => {
+  const HELPER_REL = 'deploy/coordination-snapshot.mjs';
+  const callers = ['_upd_backup', '_bak_snap_class', 'cmd_coordination_snapshot'] as const;
+  const bodyOfFn = (name: string): string => {
+    const m = new RegExp(`^${name}\\(\\) \\{[\\s\\S]*?\\n\\}$`, 'm').exec(CCRC);
+    if (m === null) throw new Error(`install-census.test.ts: ccd/ccrc has no ${name}() — this reader has gone stale`);
+    return m[0].split('\n').map((l) => scanLine(l).code).join('\n');
+  };
+
+  it('each caller runs it as `$CCRC_HERE/../deploy/coordination-snapshot.mjs` under `node --no-warnings`, and the file is tracked and rides the release', () => {
+    for (const fn of callers) {
+      expect(bodyOfFn(fn), fn).toMatch(/\$CCRC_HERE\/\.\.\/deploy\/coordination-snapshot\.mjs/);
+    }
+    expect(bodyOfFn('_upd_backup'), '_upd_backup').toMatch(/node --no-warnings "\$CCRC_HERE\/\.\.\/deploy\/coordination-snapshot\.mjs"/);
+    // The two that name the path once, in a variable, and run `node --no-warnings "$helper"`.
+    for (const fn of ['_bak_snap_class', 'cmd_coordination_snapshot']) {
+      expect(bodyOfFn(fn), fn).toMatch(/helper="\$CCRC_HERE\/\.\.\/deploy\/coordination-snapshot\.mjs"/);
+      expect(bodyOfFn(fn), fn).toMatch(/node --no-warnings "\$helper"/);
+    }
+    expect(trackedFiles(), `${HELPER_REL} must be tracked`).toContain(HELPER_REL);
+    const spec = releasePathspec();
+    expect(spec.some((e) => HELPER_REL === e || HELPER_REL.startsWith(`${e}/`)), `PATHSPEC (${spec.join(' ')}) must carry ${HELPER_REL}`).toBe(true);
+  });
+
+  it('every deploy helper those callers (and `_upd_backup`\'s SQLite step) run exists and is tracked', () => {
+    const named = new Set<string>();
+    for (const fn of [...callers, 'cmd_backup']) {
+      for (const m of bodyOfFn(fn).matchAll(/\$CCRC_HERE\/\.\.\/(deploy\/[A-Za-z0-9._-]+\.mjs)/g)) named.add(m[1]!);
+    }
+    expect([...named].sort()).toEqual(['deploy/backup-coord.mjs', 'deploy/coordination-snapshot.mjs']);
+    const tracked = trackedFiles();
+    const spec = releasePathspec();
+    for (const f of named) {
+      expect(tracked, `${f} must be tracked`).toContain(f);
+      expect(spec.some((e) => f === e || f.startsWith(`${e}/`)), `${f} must ride the release`).toBe(true);
+    }
+  });
+
+  it('the fallback deploy ships it to the box before it runs it, as it ships backup-coord.mjs, and installs it nowhere', () => {
+    const deploy = readFileSync(DEPLOY_PATH, 'utf8').split('\n').map((l) => scanLine(l).code).join('\n');
+    const ship = /"\$\{SCP\[@\]\}" (deploy\/[a-z.-]+\.mjs) "\$BOX":ccrc-backups\/([a-z.-]+\.mjs)/g;
+    const shipped = [...deploy.matchAll(ship)].map((m) => `${m[1]} -> ${m[2]}`);
+    expect(shipped).toEqual(expect.arrayContaining([
+      'deploy/backup-coord.mjs -> backup-coord.mjs', 'deploy/coordination-snapshot.mjs -> coordination-snapshot.mjs',
+    ]));
+    expect(deploy).not.toMatch(/install_atomic[^\n]*coordination-snapshot/);
+    expect([...placedBins(), ...placedUnits()].join(' ')).not.toMatch(/coordination-snapshot/);
+  });
+
+  it('the verb is registered in all three places: the usage line, the dispatch table and the prose block', () => {
+    const usage = /^usage: \$PROG \{([^}]*)\}$/m.exec(CCRC);
+    expect(usage, 'ccd/ccrc has no usage line').not.toBeNull();
+    const verbs = usage![1]!.split('|');
+    expect(verbs).toContain('coordination-snapshot');
+    expect(verbs.indexOf('coordination-snapshot')).toBe(verbs.indexOf('backup') + 1);
+    expect(CCRC).toMatch(/^ {2}coordination-snapshot\) cmd_coordination_snapshot "\$@" ;;$/m);
+    expect(CCRC).toMatch(/^ {2}coordination-snapshot\n {12}validate --from /m);
+    // Every verb the dispatch names is in the usage line, and the reverse: the pair cannot drift.
+    const dispatch = [...CCRC.matchAll(/^ {2}([a-z][a-z-]*)\) +(?:cmd_[a-z_]+|exec node)[^\n]*;;$/gm)].map((m) => m[1]!);
+    expect(dispatch.length).toBeGreaterThan(15);
+    for (const v of dispatch) expect(verbs, `dispatch verb ${v}`).toContain(v);
+  });
+
+  it('the backup prose names the manifest and both sidecars wherever it says what ~/ccrc-backups/<ts>/ holds', () => {
+    const usageBackup = /^ {2}backup {4}take update's backup step standalone:[\s\S]*?\n {2}coordination-snapshot/m.exec(CCRC);
+    expect(usageBackup, 'the usage prose for `backup` moved').not.toBeNull();
+    expect(usageBackup![0]).toMatch(/coordination-snapshot\.json/);
+    expect(usageBackup![0]).toMatch(/delegation journal and checkpoint/);
+    expect(bodyOfFn('_upd_backup')).toMatch(/coordination sidecars and manifest/);
   });
 });
 

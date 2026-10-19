@@ -327,6 +327,26 @@ const REGISTERED_BLOCKS: Record<string, string> = {
     + 'move, and `QuickConfirm` — the component all of them are copying — '
     + 'renders exactly two with no busy state. A component for the pair would '
     + 'take one prop per difference and win nothing.',
+  'fieldset.{RADIO_FIELDSET}(legend.{RADIO_LEGEND},Radio)':
+    'DIFFERENT THINGS, in one attribute. Stall watch\'s level set and the Temp '
+    + 'root collector\'s choice set both hand-build the fieldset rather than take '
+    + '`RadioFieldset`. The collector does because its held Off option carries '
+    + 'ITS OWN description, `aria-describedby` on that radio alone and on no '
+    + 'other (`collect-lane-section.test.tsx` pins both halves), while '
+    + '`RadioFieldset` can describe only the whole set. Folding it would move '
+    + 'the note from the option it explains to every option in the group. '
+    + 'Stall watch\'s half is the other kind: its level set describes no single '
+    + 'option and could take `RadioFieldset` as it stands. It stays as #419 '
+    + 'wrote it, outside the collector\'s work; when it moves, this entry goes '
+    + 'stale and reds.',
+  // Native Docs reader W5 part 1 (docs/), which landed after this census; each is argued, not deferred.
+  'ul.docs-fail-list(li(code))':
+    'DIFFERENT THINGS, never both on one page: DocsFailureView renders the '
+    + 'refs an `unresolved-ref` answer TRIED (each `<code>` followed by what '
+    + 'that lookup found) or the worktrees an `ambiguous-worktree` answer '
+    + 'names as candidates (a bare `<code>`). The answers are two failure '
+    + 'words, so a list component would take the row\'s content as a prop, '
+    + 'which is the `<li>` with one more name.',
 };
 
 /** The same, for copied className literals. */
@@ -336,6 +356,15 @@ const REGISTERED_LITERALS: Record<string, string> = {
   // in the theme picker — is no longer a literal: `.settings-legend` is
   // `RADIO_LEGEND` (@ccrc/ui) and the two `<p>`s interpolate it. Nothing was
   // folded and nothing drifted; the string simply stopped being a string.
+  // Native Docs reader W5 part 1 (docs/), which landed after this census.
+  'docs-row docs-row-off':
+    'DIFFERENT ROWS, one look: a Docs row that cannot be opened. DocsTreeView '
+    + 'renders a SECTION that is absent or not a directory (`data-section`, '
+    + 'its path and why); DocsIndexView renders a PROJECT the index cannot '
+    + 'open as its own (part of another checkout, or another state it names: '
+    + '`data-state`, the state and any duplicate note). The pair '
+    + 'is `.docs-row` plus its disabled modifier, which docs.css styles once; '
+    + 'a constant would name a modifier, not a component.',
 };
 
 /** The same, for copied LEAVES. Five today, and the argument for each is
@@ -351,6 +380,10 @@ const REGISTERED_LEAVES: Record<string, string> = {
     + 'the same single-declaration override, and what differs is the whole of '
     + 'what either does. A component taking a label and a handler as props '
     + 'would be `Button` with two more names. '
+    + 'The Temp root collector adds two more in a third section, *Confirm Live '
+    + 'again* and *Pause all cleanup*, each a ghost Button wearing '
+    + '`.settings-check` for the same reason, so the key now counts four '
+    + 'Buttons in three sections. '
     + 'WORTH SAYING HOW IT GOT HERE: the box-token card landed on main writing '
     + '`className="btn-ghost settings-check"` on a raw <button>, six lines from '
     + 'its own sibling that uses the component — and this branch\'s two new '
@@ -391,6 +424,41 @@ const REGISTERED_LEAVES: Record<string, string> = {
     + 'the chip\'s text; the archive row renders ` · held` after the slug, '
     + 'with the reason in the title only, because that cell is already the '
     + 'workspace\'s name. One is a word, the other a suffix.',
+  // Native Docs reader W5 part 1 (docs/), which landed after this census; each is argued, not deferred.
+  'Button.docs-fail-action[onClick,variant]':
+    'DIFFERENT ACTIONS on one failure look: the failure view\'s Retry (when '
+    + 'the answer\'s retry plan allows one) and Fetch from origin (an '
+    + '`unresolved-ref` answer only), and '
+    + 'a leaf\'s Retry while its file is changing. Each is the ghost Button '
+    + 'wearing `.docs-fail-action`, the one class that gives the width back '
+    + 'inside a failure; what differs is the whole of what each does.',
+  'button.doc-gate-btn[onClick,type]':
+    'THE TWO HALVES OF ONE CHOICE: the large-document gate offers Format '
+    + 'anyway and Show as text side by side. They are the gate\'s answer '
+    + 'buttons, each setting a different choice; a component would be a '
+    + 'button taking its label and its choice.',
+  'button.doc-img-action[onClick,type]':
+    'DIFFERENT ACTIONS, mutually exclusive by construction: a refused image '
+    + 'offers Open externally (a new tab, `openExternal`) when its plan is '
+    + '`external`, or Open in the viewer (an in-app `navigate`) when it is '
+    + '`viewer`. The plan has one kind, so one is ever rendered.',
+  'button.doc-plain-action[onClick,type]':
+    'DIFFERENT ACTIONS, mutually exclusive by outcome: plain text that timed '
+    + 'out under the normal budget offers Format anyway; a failed worker '
+    + 'offers Retry. DocMarkdown assigns one `action` from the outcome, so '
+    + 'only one is ever rendered.',
+  'img.msg-img[alt,src,title]':
+    'ONE IMAGE, TWO PLACEMENTS: DocImage renders a loaded image bare inside a '
+    + 'document link (the link is the control, so the image adds none) or '
+    + 'inside its own `.doc-img-link` button that opens the image\'s leaf. '
+    + 'The `<img>` is the same; what wraps it is the decision, and the '
+    + 'wrapper is the part that differs.',
+  'input.docs-filter[aria-label,onChange,placeholder,type,value]':
+    'DIFFERENT LISTS, one control: the Docs index filters projects and a '
+    + 'directory view filters its entries, each a search input with its own '
+    + 'label (DOCS_VIEW_TEXT.filterProjects, filterEntries) and its own '
+    + 'state. A component taking the label, the value and the setter would '
+    + 'be the `<input>` with one more name.',
 };
 
 describe('markup census', () => {
