@@ -7227,3 +7227,75 @@ describe('docs section H, W5: GithubPermalink, githubPermalink and githubUrlAt a
     });
   }
 });
+
+// ── auto-advance spec §2.1, D21: the advance file has one writer and one clock ─────────────────────────────────
+describe('the advance file and its clock, each spelled once (auto-advance spec §2.1, D21)', () => {
+  const walkSrc = (dir: string): string[] => {
+    const out: string[] = [];
+    if (!existsSync(dir)) return out;
+    for (const e of readdirSync(dir)) {
+      if (e.startsWith('__') || e === 'node_modules' || e === 'dist') continue;
+      const p = path.join(dir, e);
+      if (statSync(p).isDirectory()) { out.push(...walkSrc(p)); continue; }
+      if (/\.(tsx?|mjs|mts)$/.test(p)) out.push(p);
+    }
+    return out;
+  };
+  /** Every shipped source a second spelling could hide in: the four TypeScript roots, `deploy/` and `shared/`
+   *  (their `.mjs`), and every bash tool, comments stripped. */
+  const SHIPPED = [...new Set([
+    ...['shared', 'deploy', 'server/src', 'pwa/src', 'agent/src'].flatMap((d) => walkSrc(path.join(ccrcRoot, d))),
+    ...BASH,
+  ])];
+  const textOf = (f: string): string => (BASH.includes(f) ? codeLines(f).join('\n') : readFileSync(f, 'utf8'));
+  const OP = path.join(ccrcRoot, 'deploy', 'models-op.mjs');
+  /** `deploy/models-op.mjs` cut at each top-level `function` line: name → that function's text, to the next. */
+  const functionsOf = (src: string): Map<string, string> => {
+    const starts = [...src.matchAll(/^(?:export\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(/gm)]
+      .map((m) => ({ name: m[1]!, at: m.index! }));
+    return new Map(starts.map((s, i) => [s.name, src.slice(s.at, i + 1 < starts.length ? starts[i + 1]!.at : src.length)]));
+  };
+
+  it('the corpus is real', () => {
+    const names = SHIPPED.map(rel);
+    for (const f of ['deploy/models-op.mjs', 'shared/model-advance.mjs', 'ccd/ccrc']) expect(names).toContain(f);
+  });
+
+  it('`.advance.json` is spelled by deploy/models-op.mjs alone, on advancePath\'s one line, and by no bash tool', () => {
+    expect(SHIPPED.filter((f) => textOf(f).includes('.advance.json')).map(rel).sort()).toEqual(['deploy/models-op.mjs']);
+    expect(readFileSync(OP, 'utf8').split('\n').filter((l) => l.includes('.advance.json')))
+      .toEqual(['const advancePath = (id) => path.join(modelsDir(), `${id}.advance.json`);']);
+  });
+
+  it('its bytes come from one place: writeAdvance writes through writeJsonFile (D-5783), and nothing else writes the file or spells its bytes', () => {
+    const src = readFileSync(OP, 'utf8');
+    const fns = functionsOf(src);
+    // The one writer: the only function that names both the path and the JSON write is writeAdvance, and it hands
+    // that write the path with its own error word.
+    const writesIt = (body: string): boolean => /\badvancePath\(/.test(body) && /\bwriteJsonFile\(/.test(body);
+    expect([...fns].filter(([, body]) => writesIt(body)).map(([n]) => n)).toEqual(['writeAdvance']);
+    expect(fns.get('writeAdvance')).toMatch(/\bwriteJsonFile\(advancePath\(id\), \w+, 'advance-unwritable'\)/);
+    // serializeAdvance spells writeJsonFile's bytes for readers and tests (model-advance-file.test.ts pins that the
+    // two agree), so a shipped call of it could only be a second writer's.
+    const CALL = /(?<!function )\bserializeAdvance\(/;
+    expect(SHIPPED.filter((f) => CALL.test(textOf(f))).map(rel)).toEqual([]);
+    expect(src.split('\n')
+      .filter((l) => /\badvancePath\(/.test(l) && /\b(?:writeFileSync|renameSync|appendFileSync)\(/.test(l))).toEqual([]);
+  });
+
+  it('CCRC_MODELS_NOW is read in one place, and models-op reads the wall clock on two named lines only', () => {
+    expect(SHIPPED.filter((f) => textOf(f).includes('CCRC_MODELS_NOW')).map(rel)).toEqual(['deploy/models-op.mjs']);
+    const lines = readFileSync(OP, 'utf8').split('\n');
+    expect(lines.filter((l) => l.includes("process.env['CCRC_MODELS_NOW']"))).toHaveLength(1);
+    expect(lines.filter((l) => /\bnew Date\(|\bDate\.now\(/.test(l)).map((l) => l.trim())).toEqual([
+      "const now = () => process.env['CCRC_MODELS_NOW'] ?? new Date().toISOString().replace(/\\.\\d{3}Z$/, 'Z');",
+      'raw.windows[a.model] = { ...prev, tokens, setAt: new Date().toISOString() };',
+    ]);
+  });
+
+  it("REASON_MAX is assigned once, in shared/model-advance.mjs: every other source that caps a reason imports it", () => {
+    const ASSIGN = /\bREASON_MAX\s*=(?!=)/;
+    expect(SHIPPED.filter((f) => ASSIGN.test(textOf(f))).map(rel)).toEqual(['shared/model-advance.mjs']);
+    expect(readFileSync(path.join(ccrcRoot, 'shared', 'model-advance.mjs'), 'utf8')).toContain('export const REASON_MAX = 200;');
+  });
+});

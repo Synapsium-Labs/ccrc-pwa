@@ -1428,7 +1428,8 @@ const CODEX_TOOLS = ['bash', 'readlink', 'cat', 'cmp', 'ps', 'awk', 'od', 'tr',
  *  path. A file missing here is not a degraded fixture: every Codex PASS case
  *  reds on the check's "printed no answer" FAIL. */
 const MODELS_OP_CLOSURE = ['deploy/models-op.mjs', 'deploy/litellm-config.template.yaml',
-  'shared/roster-json.mjs', 'shared/base-url.mjs', 'shared/models.mjs', 'shared/modelenv.mjs', 'shared/litellm.mjs'];
+  'shared/roster-json.mjs', 'shared/base-url.mjs', 'shared/models.mjs', 'shared/modelenv.mjs', 'shared/litellm.mjs',
+  'shared/model-advance.mjs'];
 
 function installModelsOp(home: string): void {
   for (const rel of MODELS_OP_CLOSURE) {

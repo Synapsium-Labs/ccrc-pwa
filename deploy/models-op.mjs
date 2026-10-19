@@ -67,17 +67,18 @@ import {
   MODEL_ENV_KEYS, ModelEnvInvalid, classesTsv, clearSettingsEnv, contextWindowFor, effortFile, mergeSettingsEnv,
   modelEnvBlock, readRegular,
 } from '../shared/modelenv.mjs';
+import { AdvanceInvalid, familyOf, parseAdvance } from '../shared/model-advance.mjs';
 import { LitellmTemplateInvalid, renderLitellmConfig } from '../shared/litellm.mjs';
 
 const SELF = 'models-op';
 
 /** The account-id shape (C6), spelled once, here — the same shape as
  *  `ccd/ccrc`'s `WRAPPER_ID_RE` (`shared/roster.ts`'s ID_RE, in bash). An
- *  account id becomes a path segment below, in SIX places (`registryPath`,
+ *  account id becomes a path segment below, in SEVEN places (`registryPath`,
  *  `cataloguePath`, `classesTsvPath`, `effortPath`, `laneJsonPath`,
- *  `windowsPath`), so this file validates its own `--id` at op entry rather
- *  than depending on `ccd/ccrc`'s `_models_id_ok` — a usage-level gate one
- *  layer up, not this file's own — to have run first. */
+ *  `windowsPath`, `advancePath`), so this file validates its own `--id` at op
+ *  entry rather than depending on `ccd/ccrc`'s `_models_id_ok` — a usage-level
+ *  gate one layer up, not this file's own — to have run first. */
 export const ACCOUNT_ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
 
 /** What `init` plants per probe kind.
@@ -111,6 +112,25 @@ const SEEDS = {
   },
 };
 
+/** The family each class follows when `init codex`, or the one-time backfill of a lane with no advance file,
+ *  seeds an EMPTY class (auto-advance spec §2.2 "Seeding"): written as DATA, because an empty class has no pin
+ *  to derive one from. The three classes `SEEDS.codex` pins take their pins' own families, DERIVED, so the two
+ *  tables cannot disagree; the fourth is the one literal word, the family the `SEEDS` docstring above names as
+ *  the next to classify. A pinned class's family always comes from its pin, never from here. */
+const SEED_FAMILIES = Object.freeze({
+  codex: Object.freeze({
+    haiku: familyOf(SEEDS.codex.classes.haiku),
+    sonnet: familyOf(SEEDS.codex.classes.sonnet),
+    opus: familyOf(SEEDS.codex.classes.opus),
+    fable: 'astra',
+  }),
+});
+
+/** The clock every advance-file time comes from, read ONCE, here: whole seconds with a `Z`, the form
+ *  `parseAdvance` accepts. `CCRC_MODELS_NOW` replaces it (tests only); a value not of that form is then refused by
+ *  `writeAdvance`'s read-back, never written. */
+const now = () => process.env['CCRC_MODELS_NOW'] ?? new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+
 const HOME = process.env['HOME'] ?? '';
 const modelsDir = () => path.join(HOME, '.ccrc', 'models');
 const cataloguePath = (id) => path.join(modelsDir(), `${id}.json`);
@@ -123,6 +143,11 @@ const effortPath = (id) => path.join(modelsDir(), `${id}.effort.json`);
  *  the registry, never a key in it — `shared/models.mjs`'s `parseWindows` says
  *  why. `readWindowsFile` reads it, `writeWindows` writes it, `rm` reaps it. */
 const windowsPath = (id) => path.join(modelsDir(), `${id}.windows.json`);
+/** The lane's advance file (auto-advance spec §2.1, D13): per class the family it follows, its hold, the pin
+ *  before its last automatic advance and its last moves. A SIBLING of the registry, never a key in it, so an
+ *  older ccrc keeps reading the registry after a rollback. `readAdvance` reads it, `writeAdvance` is its one
+ *  writer, `rm` reaps it. */
+const advancePath = (id) => path.join(modelsDir(), `${id}.advance.json`);
 /** Spec §4.3's "lane manifest" row, and §5.4's first line. */
 const laneJsonPath = (id) => path.join(HOME, '.ccrc', 'codex', id, 'lane.json');
 
@@ -319,14 +344,47 @@ function windowsReport(reading) {
   return { state: 'ok', byModel };
 }
 
+/** The lane's advance file, as EXACTLY ONE of three answers — never an overloaded null:
+ *   - `{ advance: null }`: no file, the normal state of a lane not yet backfilled (§2.1);
+ *   - `{ advance }`: `parseAdvance`'s copy, unknown keys and all;
+ *   - `{ err: [word, detail] }`: a file that exists and cannot be read (`advance-file-unreadable`; a FIFO or a
+ *     directory included, type-tested first and never a block), or that is not an advance file this build reads
+ *     (`advance-file-invalid`, the detail opening with the field). Only that blocks a lane (§2.8), and every
+ *     writer refuses it rather than overwrite a file it cannot read. */
+function readAdvance(id) {
+  const p = advancePath(id);
+  let text;
+  try {
+    text = readRegular(p);
+  } catch (e) {
+    if (e.code === 'ENOENT') return { advance: null };
+    return { err: ['advance-file-unreadable', `${p} could not be read: ${e.message}.`] };
+  }
+  let json;
+  try {
+    json = JSON.parse(text);
+  } catch (e) {
+    return { err: ['advance-file-invalid', `${p} is not valid JSON: ${e.message}.`] };
+  }
+  try {
+    return { advance: parseAdvance(json) };
+  } catch (e) {
+    if (e instanceof AdvanceInvalid) {
+      return { err: ['advance-file-invalid', `${e.message} (${p} is not an advance file this build reads)`] };
+    }
+    throw e;
+  }
+}
+
 /** The ONE write of a hand-editable JSON file here — the class registry
- *  (`writeRegistry`) and the measured windows (`writeWindows`): tmp + rename,
- *  0600, this repo's rule for any file another process reads. 2-space indent
- *  and a trailing newline, the shape every hand-editable ccrc file has. Returns
- *  null, or `[error, detail]` with the caller's own error word; a failed write
- *  unlinks its tmp, so it leaves nothing behind. One writer for both files,
- *  rather than a second copy of `writeRegistry`'s shape for the windows, is
- *  a ruled departure from the Stage 0 plan's Task 4 (D-5783). */
+ *  (`writeRegistry`), the measured windows (`writeWindows`) and the advance
+ *  file (`writeAdvance`): tmp + rename, 0600, this repo's rule for any file
+ *  another process reads. 2-space indent and a trailing newline, the shape
+ *  every hand-editable ccrc file has. Returns null, or `[error, detail]` with
+ *  the caller's own error word; a failed write unlinks its tmp, so it leaves
+ *  nothing behind. One writer for every such file, rather than a second copy
+ *  of `writeRegistry`'s shape for the windows, is a ruled departure from the
+ *  Stage 0 plan's Task 4 (D-5783); the advance file joins it the same way. */
 function writeJsonFile(p, value, error) {
   const tmp = `${p}.${process.pid}.tmp`;
   try {
@@ -351,6 +409,25 @@ function writeRegistry(id, registry) {
  *  does not know are written back as they were. */
 function writeWindows(id, raw) {
   return writeJsonFile(windowsPath(id), raw, 'windows-unwritable');
+}
+
+/** THE ONE WRITER of the lane's advance file (auto-advance spec D21). Rule 2 holds here too: the object goes
+ *  back through `parseAdvance` before it is written, so no caller can leave a file the next reader refuses. The
+ *  write itself is `writeJsonFile`'s — tmp + rename, 0600, 2-space JSON and a trailing newline, the bytes
+ *  `serializeAdvance` spells — never a copy of that shape of its own (D-5783). Every caller holds the
+ *  lane-files lock, taken by the bash that ran this op (`ccd/ccrc`'s `_models_lock`). */
+function writeAdvance(id, advance) {
+  let parsed;
+  try {
+    parsed = parseAdvance(advance);
+  } catch (e) {
+    if (e instanceof AdvanceInvalid) {
+      return ['advance-invalid', `the advance file for account "${id}" would not read back (${e.message}), so it `
+        + 'was not written. Nothing was changed.'];
+    }
+    throw e;
+  }
+  return writeJsonFile(advancePath(id), parsed, 'advance-unwritable');
 }
 
 /** Spec §5.4's lane manifest — "id, config dir, ports, auth dir, unit names,
@@ -932,7 +1009,7 @@ function main(argv) {
   if (pairs.err !== undefined) return refuse(2, 'bad-argv', pairs.err);
   const a = pairs.got;
 
-  // C6: at op entry, before any of the six per-account paths are built and
+  // C6: at op entry, before any of the seven per-account paths are built and
   // before the roster is even read — `rm`'s own unlink loop runs before the
   // no-such-account gate (an orphan is the expected case there), which used
   // to mean it ran before ANY id validation. A `..`-bearing id built a path
