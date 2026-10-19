@@ -1764,6 +1764,13 @@ Issued and unused (Task A8): none.
 
 Issued and unused (Task A6): none.
 
+### Issued 2026-10-19 and defined here (Task A6's verification follow-up)
+
+- **D-5826** — `step-up-late-assertion-unsent` (Task A6's verification follow-up, after #720): **an assertion that comes back after its challenge's life is dropped, never sent**, extending D-5690 (2), which checked the challenge's age only at the tap. `STEP_UP_CEREMONY_MS` is a hint the browser may clamp or ignore, so a prompt held open past it signs a challenge the box has already expired, and posting it to `/finish` would spend one of the session's step-up attempts. Once the ceremony resolves, an assertion whose challenge is older than `CHALLENGE_REFRESH_MS + STEP_UP_CEREMONY_MS` (the sum the TTL test pins) is discarded, the step says `STALE_CHALLENGE_TEXT` and the next generation fetches a fresh challenge. An assertion never sent costs nothing.
+- **D-5827** — `step-up-wrong-needs-verdict` (Task A6's verification follow-up): **the wrong-proof sentences need the box's `verdict: 'wrong'`** (D-5618). The box also answers `step-up-required` without a verdict when the session row went away between the gate and the stamp, or when the secret is not measured. In both cases the operator did nothing wrong, so the step reads the plain refusal sentence ("The box refused that. Try again.") rather than "Wrong passphrase" or "That didn't confirm it's you". The next generation is still the next try, and nothing is retried.
+
+Issued and unused (Task A6's verification follow-up): none.
+
 ### Departures defined here by slug, awaiting numbers
 
 These are decisions with no number yet: the spec's N1 and N2, and five this plan found (N7 at rev 2). Each takes a number from `POST /api/ledger/deviations` before the task that implements it is dispatched, and the PR that implements it replaces the label with the number here and in the spec, in the same act.

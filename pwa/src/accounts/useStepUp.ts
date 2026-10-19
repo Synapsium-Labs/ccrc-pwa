@@ -28,6 +28,12 @@ import { PasskeyCeremonyError, assertStepUp, passkeyLoginSupported, type Credent
  * each other's challenges. A host mounts one; a hidden page never refreshes on the timer, which keeps a background
  * tab from taking the challenge from the one in front, and a page coming back to the front always replaces its own
  * (D-5691), so switching between two tabs never signs a superseded challenge.
+ *
+ * WHAT A HOST MUST GIVE IT. `deps` must be stable across renders (a module constant, or memoised): the start effect
+ * reads `deps.client` and `deps.credentials` by identity, so a new object on every render would fetch a challenge on
+ * every render. And the stamp (`stepUpFreshUntil`, the box's clock) is compared with this device's `Date.now()`: a
+ * device clock far ahead of the box's shows the step again sooner than needed. That fails safe, because the box's
+ * own check is the authority.
  */
 
 /** A held challenge is replaced after this long, and is never signed once it is this old (D-5690 (2)). With
@@ -37,6 +43,9 @@ import { PasskeyCeremonyError, assertStepUp, passkeyLoginSupported, type Credent
 export const CHALLENGE_REFRESH_MS = 55_000;
 /** The passkey prompt's own timeout (`assertStepUp`). */
 export const STEP_UP_CEREMONY_MS = 60_000;
+/** The oldest a challenge may be when its assertion comes back and is still sent (D-5826): the two bounds above.
+ *  The prompt's timeout is a hint the browser may ignore, so an assertion that returns later is dropped unsent. */
+const CHALLENGE_LIFE_MS = CHALLENGE_REFRESH_MS + STEP_UP_CEREMONY_MS;
 
 /** The arms, and the states around them. `loading` is the challenge on its way; `unavailable` is a step the
  *  operator cannot take from here, with its sentence in {@link StepUp.notice}. */
@@ -96,11 +105,20 @@ const OTHER_TEXT = { text: "The box refused that. Try again.", retry: true };
 
 /** The refusal word an `ApiError` carries in its body, or null when it carries none. */
 function wordOf(err: unknown): string | null {
+  return bodyField(err, 'error');
+}
+
+/** The `verdict` a refusal carries (`'wrong'` on a failed proof, D-5618), or null. */
+function verdictOf(err: unknown): string | null {
+  return bodyField(err, 'verdict');
+}
+
+function bodyField(err: unknown, key: 'error' | 'verdict'): string | null {
   if (!(err instanceof ApiError)) return null;
   const b = err.body;
-  return typeof b === 'object' && b !== null && typeof (b as { error?: unknown }).error === 'string'
-    ? (b as { error: string }).error
-    : null;
+  if (typeof b !== 'object' || b === null) return null;
+  const v = (b as Record<string, unknown>)[key];
+  return typeof v === 'string' ? v : null;
 }
 
 export function useStepUp(freshUntil: number | null, deps: StepUpDeps = {}): StepUp {
@@ -241,7 +259,9 @@ export function useStepUp(freshUntil: number | null, deps: StepUpDeps = {}): Ste
     setStamp(a.stepUpFreshUntil);
   }, []);
 
-  /** One failed attempt: its sentence, and a new challenge for the next tap. Never a second attempt. */
+  /** One failed attempt: its sentence, and a new challenge for the next tap. Never a second attempt. `wrongText` is
+   *  said only when the box's verdict is `wrong` (D-5827): a `step-up-required` without it (the session row went
+   *  away, or the secret is not measured) is nothing the operator did. */
   const attemptFailed = useCallback((err: unknown, wrongText: string): void => {
     if (!live.current) return;
     busyRef.current = false;
@@ -251,7 +271,7 @@ export function useStepUp(freshUntil: number | null, deps: StepUpDeps = {}): Ste
       setNotice(CANCELLED_TEXT);
       setCanRetry(false);
     } else if (word === 'step-up-required') {
-      setNotice(wrongText);
+      setNotice(verdictOf(err) === 'wrong' ? wrongText : OTHER_TEXT.text);
       setCanRetry(false);
     } else if (word === 'passkey-enrolled') {
       if (notConfigured.current) {
@@ -293,8 +313,20 @@ export function useStepUp(freshUntil: number | null, deps: StepUpDeps = {}): Ste
     setHeld(false);
     setBusy(true);
     setNotice(null);
-    void ceremony.then((body) => client.stepUpFinish(body))
-      .then(confirmed, (err: unknown) => attemptFailed(err, WRONG_PASSKEY_TEXT));
+    void ceremony.then((body) => {
+      if (Date.now() - held.fetchedAt > CHALLENGE_LIFE_MS) {
+        // The prompt outlived its timeout (D-5826): the box has expired this challenge, and sending the assertion
+        // would spend an attempt. An assertion never sent costs nothing; the next generation is the next try.
+        if (!live.current) return;
+        busyRef.current = false;
+        setBusy(false);
+        setNotice(STALE_CHALLENGE_TEXT);
+        setCanRetry(false);
+        setGeneration((g) => g + 1);
+        return;
+      }
+      return client.stepUpFinish(body).then(confirmed);
+    }).then(undefined, (err: unknown) => attemptFailed(err, WRONG_PASSKEY_TEXT));
   }, [client, credentials, confirmed, attemptFailed]);
 
   const submitPassphrase = useCallback((passphrase: string): void => {
