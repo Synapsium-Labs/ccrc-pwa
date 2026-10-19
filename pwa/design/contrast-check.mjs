@@ -83,6 +83,9 @@ const palette = (theme) => {
     // The interactive grounds (D-5101), opaque derivations of the ink over
     // the card. `of` refuses a translucent one, which is the point.
     hover: of('--bg-hover'), pressed: of('--bg-pressed'),
+    // The same two as the dead banner re-scopes them (D-5574): its own tint
+    // mixed toward --ink-on-danger, so they are opaque here too.
+    hoverOnDead: of('--bg-hover-on-dead'), pressedOnDead: of('--bg-pressed-on-dead'),
     // Any token by name, for the ground lists below.
     of,
   };
@@ -322,6 +325,21 @@ const pairs = (T, name) => [
   // pressed pair is the thinnest, at 3.00.
   [`${name} danger hairline / hover (UI 3:1)`, T.dead, T.hover, 3],
   [`${name} danger hairline / pressed (UI 3:1)`, T.dead, T.pressed, 3],
+  // On the dead banner the two grounds are its own (D-5574, D-5575): the
+  // banner re-scopes --bg-hover and --bg-pressed to these for what it holds.
+  // The danger-ghost's label and hairline are gated on them, and so are the
+  // steps themselves, which are not text pairs: the lift must read as a ground
+  // against the tint, the press as a deeper one, and the press against the
+  // lift (the card's grounds measured 1.00 and 1.03 here). The thinnest are
+  // the light palettes' lift (1.07) and press (1.13) and their press against
+  // the lift (1.06).
+  [`${name} dead-text / dead banner hover`, T.deadText, T.hoverOnDead, 4.5],
+  [`${name} dead-text / dead banner pressed`, T.deadText, T.pressedOnDead, 4.5],
+  [`${name} danger hairline / dead banner hover (UI 3:1)`, T.dead, T.hoverOnDead, 3],
+  [`${name} danger hairline / dead banner pressed (UI 3:1)`, T.dead, T.pressedOnDead, 3],
+  [`${name} dead banner hover / tint (a ground step)`, T.hoverOnDead, T.deadTintSolid, 1.05],
+  [`${name} dead banner pressed / tint (a ground step)`, T.pressedOnDead, T.deadTintSolid, 1.1],
+  [`${name} dead banner pressed / hover (a ground step)`, T.pressedOnDead, T.hoverOnDead, 1.05],
 ];
 
 let fail = 0, n = 0;

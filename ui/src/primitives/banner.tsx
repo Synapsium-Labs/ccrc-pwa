@@ -51,7 +51,16 @@ export const bannerVariants = cva(
         // tint lets a darker ground through and the text pair falls to 4.44 in
         // light — under the floor. The -tint-solid token IS that wash
         // pre-composited on --bg-surface, which buys the measured ground back.
-        dead: 'border-status-dead bg-status-dead-tint-solid text-status-dead-text',
+        //
+        // It also redefines the lift and press grounds for what it holds
+        // (D-5574, D-5575): the card's `--bg-hover` and `--bg-pressed` measure
+        // 1.03 and 1.00 against this tint, so the danger-ghost's feedback was a
+        // hue shift. The utilities read the two names where they paint
+        // (`theme.css` bridges them `@theme inline`), so the button's own
+        // classes are unchanged. The grounds and their measurements are in
+        // tokens.css; pwa/test/dead-banner-grounds.test.ts holds them.
+        dead: 'border-status-dead bg-status-dead-tint-solid text-status-dead-text'
+          + ' [--bg-hover:var(--bg-hover-on-dead)] [--bg-pressed:var(--bg-pressed-on-dead)]',
         // The host is UP, so this is not the dead language — it is the amber
         // the fleet already uses for "waiting on you". Both tokens are solid in
         // both themes, so no pre-composition is needed on this side.
