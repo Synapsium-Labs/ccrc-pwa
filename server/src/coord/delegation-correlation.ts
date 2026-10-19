@@ -5,7 +5,8 @@
 // honest non-answers: `unresolved` (the evidence exists and does not decide), `conflicting` (it decides two ways; final until an
 // operator resolves it), `unmeasured` (something needed was unreadable or is not yet durably applied, so it is retried).
 //
-// THIS MODULE IS L1. It imports types, the model's pure helpers and nothing else: no filesystem, no clock, no randomness, no store.
+// THIS MODULE IS L1. It imports types, the model's pure helpers and nothing else: no filesystem, no clock, no randomness, no store
+// (and no state that outlives its inputs: D-5604's delta memo is keyed weakly by the window it describes).
 // Time comes only from the listing windows it is handed. It decides and emits NOTHING: no lease request, no journal entry, no effect.
 // Task 12's pure policy turns a `linked` verdict into a `DelegationLeaseCreationRequest` (and a `run-child-owned` one into a
 // `record-run-child-owned`, never a lease); Task 13 wires both to the watcher.
@@ -992,19 +993,42 @@ function rung3(input: DelegationCorrelationInput, canonical: string): Answer | n
 
 // ── Rung 4: the session's own creation delta ─────────────────────────────────────────────────────────────────────────
 
+/**
+ * D-5604: what one window's listings say, computed ONCE per window object. The reconcile lane hands every census tree, and every ladder
+ * rerun (`delegationMarkForced`, `delegationUnknownWindowForced`, `delegationLostEvidenceForced`), the SAME window objects, built afresh each
+ * pass (`delegationListingWindowsOf`), so rebuilding two Sets per window per tree cost seconds a pass on a busy repository. `added` is the
+ * distinct names the after-listing adds to the before-listing (compared as sets, as `new Set` does), `removes` whether it drops any. A window
+ * with no after-listing measured no delta: null. Keyed weakly by the window, so nothing outlives the windows it describes (the L1 header holds:
+ * no state that outlives its inputs). It relies on a window never being mutated after it is built, which no caller does.
+ */
+interface ListingDelta { readonly added: ReadonlySet<string>; readonly removes: boolean }
+const listingDeltas = new WeakMap<DelegationListingWindow, ListingDelta | null>();
+function listingDeltaOf(window: DelegationListingWindow): ListingDelta | null {
+  const known = listingDeltas.get(window);
+  if (known !== undefined) return known;
+  let delta: ListingDelta | null = null;
+  if (window.after !== null) {
+    const before = new Set(window.before);
+    const after = new Set(window.after);
+    const added = new Set<string>();
+    for (const name of after) if (!before.has(name)) added.add(name);
+    let removes = false;
+    for (const name of before) if (!after.has(name)) { removes = true; break; }
+    delta = { added, removes };
+  }
+  listingDeltas.set(window, delta);
+  return delta;
+}
+
 /** Did this window add exactly the one record, and remove none? A window with no after-listing measured no delta at all. */
 function addedExactly(window: DelegationListingWindow, adminRecord: string): boolean {
-  if (window.after === null) return false;
-  const before = new Set(window.before);
-  const after = new Set(window.after);
-  const added = [...after].filter((name) => !before.has(name));
-  const removed = [...before].filter((name) => !after.has(name));
-  return added.length === 1 && added[0] === adminRecord && removed.length === 0;
+  const delta = listingDeltaOf(window);
+  return delta !== null && delta.added.size === 1 && delta.added.has(adminRecord) && !delta.removes;
 }
 
 /** Did this window's listings add the record (among others, or alone)? A window with no after-listing measured no delta. */
 function addedIncludes(window: DelegationListingWindow, adminRecord: string): boolean {
-  return window.after !== null && window.after.includes(adminRecord) && !window.before.includes(adminRecord);
+  return listingDeltaOf(window)?.added.has(adminRecord) === true;
 }
 
 /** I-1 and 2c d: may this window be on `repository`? Its session's own repository, the repository its listing is attributed to, or
